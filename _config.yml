@@ -5,7 +5,7 @@ email: your-email@domain.com
 description: > # this means to ignore newlines until "baseurl:"
     Don't count . . . quantify
 baseurl: "" # the subpath of your site, e.g. /blog/
-url: "https://COMBINE-lab.github.io" # the base hostname & protocol for your site
+url: /salmon # the base hostname & protocol for your site
 #url: http://localhost:4000
 twitter_username: nomad421  
 github_username:  COMBINE-lab
