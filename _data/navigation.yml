@@ -1,0 +1,22 @@
+# Site navigation links
+
+- title: About
+  url: /about/
+
+- title: Documentation
+  url: http://sailfish.readthedocs.org/en/develop/salmon.html
+
+- title: Home
+  url: https://COMBINE-lab.github.io/salmon
+
+#- title: Blog
+#  url: /blog/
+
+#- title: Theme Setup
+#  url: /theme-setup/
+
+#- title: Made Mistakes
+#  url: http://mademistakes.com
+
+- title: Search
+  url: /search/
