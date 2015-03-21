@@ -35,13 +35,13 @@ exclude: ["lib", "config.rb", "Capfile", "config", "log", "Rakefile", "Rakefile.
 
 # Site owner
 owner:
-  name: Your Name
+  name: Rob Patro
   avatar: bio-photo.jpg
   email: you@email.com
   disqus-shortname:
-  twitter: #username
+  twitter: @nomad421 #username
   facebook: #username
-  github: #username
+  github: COMBINE-lab #username
   stackexchange: #http://stackoverflow.com/users/123456/username
   linkedin: #username
   instagram: #username
