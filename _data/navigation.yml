@@ -1,13 +1,15 @@
 # Site navigation links
+- title: Home
+  url: https://COMBINE-lab.github.io/salmon
 
 - title: About
   url: /about/
 
+- title: Contact
+  url: /contact/
+
 - title: Documentation
   url: http://sailfish.readthedocs.org/en/develop/salmon.html
-
-- title: Home
-  url: https://COMBINE-lab.github.io/salmon
 
 #- title: Blog
 #  url: /blog/
