@@ -1,9 +1,9 @@
 #whitelist
 branches:
     only:
+        - master
         - develop
-        - feature/fastio
-            
+
 language: cpp
 
 compiler: gcc
