@@ -1,0 +1,3 @@
+#!/bin/sh
+
+SCRAMBLE_ARGS=-t4 $srcdir/scram.test

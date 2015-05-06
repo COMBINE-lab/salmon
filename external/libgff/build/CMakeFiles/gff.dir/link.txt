@@ -1,0 +1,2 @@
+/usr/bin/ar cr libgff.a  CMakeFiles/gff.dir/src/codons.cpp.o CMakeFiles/gff.dir/src/GArgs.cpp.o CMakeFiles/gff.dir/src/GBase.cpp.o CMakeFiles/gff.dir/src/gdna.cpp.o CMakeFiles/gff.dir/src/GFaSeqGet.cpp.o CMakeFiles/gff.dir/src/GFastaIndex.cpp.o CMakeFiles/gff.dir/src/gff.cpp.o CMakeFiles/gff.dir/src/gff_utils.cpp.o CMakeFiles/gff.dir/src/GStr.cpp.o
+/usr/bin/ranlib libgff.a

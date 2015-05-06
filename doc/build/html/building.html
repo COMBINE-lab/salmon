@@ -1,0 +1,284 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    
+    <title>Requirements &mdash; Sailfish 0.6.4 documentation</title>
+    
+    <link rel="stylesheet" href="_static/default.css" type="text/css" />
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    
+    <script type="text/javascript">
+      var DOCUMENTATION_OPTIONS = {
+        URL_ROOT:    './',
+        VERSION:     '0.6.4',
+        COLLAPSE_INDEX: false,
+        FILE_SUFFIX: '.html',
+        HAS_SOURCE:  true
+      };
+    </script>
+    <script type="text/javascript" src="_static/jquery.js"></script>
+    <script type="text/javascript" src="_static/underscore.js"></script>
+    <script type="text/javascript" src="_static/doctools.js"></script>
+    <script type="text/javascript" src="http://cdn.mathjax.org/mathjax/latest/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+    <link rel="top" title="Sailfish 0.6.4 documentation" href="index.html" />
+    <link rel="prev" title="Welcome to Sailfish’s documentation!" href="index.html" /> 
+  </head>
+  <body>
+    <div class="related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="index.html" title="Welcome to Sailfish’s documentation!"
+             accesskey="P">previous</a> |</li>
+        <li><a href="index.html">Sailfish 0.6.4 documentation</a> &raquo;</li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body">
+            
+  <div class="section" id="requirements">
+<h1>Requirements<a class="headerlink" href="#requirements" title="Permalink to this headline">¶</a></h1>
+<ul class="simple">
+<li>A C++11 conformant compiler (currently tested with GCC&gt;=4.7 and Clang&gt;=3.4)</li>
+<li><a class="reference external" href="http://www.cmake.org">CMake</a>. Sailfish uses the CMake build system to check, fetch and install
+dependencies, and to compile and install Sailfish. CMake is available for all
+major platforms (though Sailfish is currently unsupported on Windows.)</li>
+</ul>
+</div>
+<div class="section" id="installation">
+<h1>Installation<a class="headerlink" href="#installation" title="Permalink to this headline">¶</a></h1>
+<p>After downloading the Sailfish source distribution and unpacking it, change into the top-level directory:</p>
+<div class="highlight-python"><div class="highlight"><pre>&gt; cd Sailfish
+</pre></div>
+</div>
+<p>Then, create and out-of-source build directory and change into it:</p>
+<div class="highlight-python"><div class="highlight"><pre>&gt; mkdir build
+&gt; cd build
+</pre></div>
+</div>
+<p>Sailfish makes extensive use of <a class="reference external" href="http://www.boost.org">Boost</a>.  We recommend installing the most
+recent version (1.55) systemwide if possible. If Boost is not installed on your
+system, the build process will fetch, compile and install it locally.  However,
+if you already have a recent version of Boost available on your system, it make
+sense to tell the build system to use that.</p>
+<p>If you have Boost installed you can tell CMake where to look for it. Likewise,
+if you already have <a class="reference external" href="http://threadingbuildingblocks.org/">Intel&#8217;s Threading Building Blocks</a> library installed, you can tell CMake
+where it is as well. The flags for CMake are as follows:</p>
+<ul class="simple">
+<li>-DFETCH_BOOST=TRUE &#8211;  If you don&#8217;t have Boost installed (or have an older
+version of it), you can provide the FETCH_BOOST flag instead of the
+BOOST_ROOT variable, which will cause CMake to fetch and build Boost locally.</li>
+<li>-DBOOST_ROOT=&lt;boostdir&gt; &#8211; Tells CMake where an existing installtion of Boost
+resides, and looks for the appropritate version in &lt;boostdir&gt;.  This is the
+top-level directory where Boost is installed (e.g. /opt/local).</li>
+<li>-DTBB_INSTALL_DIR=&lt;tbbroot&gt; &#8211; Tells CMake where an existing installation of
+Intel&#8217;s TBB is installed (&lt;tbbroot&gt;), and looks for the apropriate headers
+and libraries there. This is the top-level directory where TBB is installed
+(e.g. /opt/local).</li>
+<li>-DCMAKE_INSTALL_PREFIX=&lt;install_dir&gt; &#8211; &lt;install_dir&gt; is the directory to
+which you wish Sailfish to be installed.  If you don&#8217;t specify this option,
+it will be installed locally in the top-level directory (i.e. the directory
+directly above &#8220;build&#8221;).</li>
+</ul>
+<p>Setting the appropriate flags, you can then run the CMake configure step as
+follows:</p>
+<div class="highlight-python"><div class="highlight"><pre>&gt; cmake [FLAGS] ..
+</pre></div>
+</div>
+<p>The above command is the cmake configuration step, which <em>should</em> complain if
+anything goes wrong.  Next, you have to run the build step. Depending on what
+libraries need to be fetched and installed, this could take a while
+(specifically if the installation needs to install Boost).  To start the build,
+just run make.</p>
+<div class="highlight-python"><div class="highlight"><pre>&gt; make
+</pre></div>
+</div>
+<p>If the build is successful, the appropriate executables and libraries should be
+created. There are two points to note about the build process.  First, if the
+build system is downloading and compiling boost, you may see a large number of
+warnings during compilation; these are normal.  Second, note that CMake has
+colored output by default, and the steps which create or link libraries are
+printed in red.  This is the color chosen by CMake for linking messages, and
+does not denote an error in the build process.</p>
+<p>Finally, after everything is built, the libraries and executable can be
+installed with:</p>
+<div class="highlight-python"><div class="highlight"><pre>&gt; make install
+</pre></div>
+</div>
+<p>To ensure that Sailfish has access to the appropriate libraries you should
+ensure that the PATH variabile contains &lt;install_dir&gt;/bin, and that
+LD_LIBRARY_PATH (or DYLD_FALLBACK_LIBRARY_PATH on OSX) contains
+&lt;install_dir&gt;/lib.</p>
+<p>After the paths are set, you can test the installation by running</p>
+<div class="highlight-python"><div class="highlight"><pre>&gt; make test
+</pre></div>
+</div>
+<p>This should run a simple test and tell you if it succeeded or not.</p>
+</div>
+<div class="section" id="running-sailfish">
+<h1>Running Sailfish<a class="headerlink" href="#running-sailfish" title="Permalink to this headline">¶</a></h1>
+<p>Sailfish is a tool for transcript quantification from RNA-seq data.  It
+requires a set of target transcripts (either from a reference or _de-<a href="#id3"><span class="problematic" id="id4">novo_</span></a>
+assembly) to quantify.  All you need to run Sailfish is a fasta file containing
+your reference transcripts and a (set of) fasta/fastq file(s) containing your
+reads.  Sailfish runs in two phases; indexing and quantification.  The indexing
+step is independent of the reads, and only need to be run one for a particular
+set of reference transcripts and choice of k (the k-mer size). The
+quantification step, obviously, is specific to the set of RNA-seq reads and is
+thus run more frequently. For a more complete description of all available
+options in Sailfish, see the manual.</p>
+<div class="section" id="indexing">
+<h2>Indexing<a class="headerlink" href="#indexing" title="Permalink to this headline">¶</a></h2>
+<p>To generate the Sailfish index for your reference set of transcripts, you
+should run the following command:</p>
+<dl class="docutils">
+<dt>::</dt>
+<dd>&gt; sailfish index -t &lt;ref_transcripts&gt; -o &lt;out_dir&gt; -k &lt;kmer_len&gt;</dd>
+</dl>
+<p>This will build a Sailfish index for k-mers of length &lt;kmer_len&gt; for the
+reference transcripts  provided in the file &lt;ref_transcripts&gt; and place the
+index under the directory &lt;out_dir&gt;.  There  are additional options that can
+be passed to the Sailfish indexer (e.g. the number of threads to use).  These
+can be seen by executing the command &#8220;Sailfish index -h&#8221;.</p>
+</div>
+<div class="section" id="quantification">
+<h2>Quantification<a class="headerlink" href="#quantification" title="Permalink to this headline">¶</a></h2>
+<p>Now that you have generated the Sailfish index (say that it&#8217;s the directory
+&lt;index_dir&gt; &#8212; this corresponds to the &lt;out_dir&gt; argument provided in the
+previous step), you can quantify the transcript expression for a given set of
+reads.  To perform the quantification, you run a command like the following:</p>
+<div class="highlight-python"><div class="highlight"><pre>&gt; sailfish quant -i &lt;index_dir&gt; -l &quot;&lt;libtype&gt;&quot; {-r &lt;unmated&gt; | -1 &lt;mates1&gt; -2 &lt;mates2&gt;} -o &lt;quant_dir&gt;
+</pre></div>
+</div>
+<p>Where &lt;index_dir&gt; is, as described above, the location of the sailfish index,
+&lt;libtype&gt; is a string describing the format of the read library (see the
+[library string](#library-string) section below) &lt;unmated&gt; is a list of files
+containing unmated reads, &lt;mates{1,2}&gt; are lists of files containg,
+respectively, the first and second mates of paired-end reads.  Finally,
+&lt;quant_dir&gt; is the directory where the output should be written. Just like the
+indexing step, additional options are available, and can be viewed by running
+&#8220;sailfish quant -h&#8221;.</p>
+<p>When the quantification step is finished, the directory &lt;quant_dir&gt; will
+contain a file named &#8220;quant.sf&#8221; (and, if bias correction is enabled, an
+additional file names &#8220;quant_bias_corrected.sf&#8221;).  This file contains the
+result of the Sailfish quantification step.  This file contains a number of
+columns (which are listed in the last of the header lines beginning with &#8216;#&#8217;).
+Specifically, the columns are (1) Transcript ID, (2) Transcript Length, (3)
+Transcripts per Million (TPM), (4) Reads Per Kilobase per Million mapped reads
+(RPKM), (5) K-mers Per Kilobase per Million mapped k-mers (KPKM), (6) Estimated
+number of k-mers (an estimate of the number of k-mers drawn from this
+transcript given the transcript&#8217;s relative abundance and length) and (7)
+Estimated number of reads (an estimate of the number of reads drawn from this
+transcript given the transcript&#8217;s relative abnundance and length).  The first
+two columns are self-explanatory, the next four are measures of transcript
+abundance and the final is a commonly used input for differential expression
+tools.  The Transcripts per Million quantification number is computed as
+described in <a class="footnote-reference" href="#id2" id="id1">[1]</a>, and is meant as an estimate of the number of transcripts, per
+million observed transcripts, originating from each isoform.  Its benefit over
+the K/RPKM measure is that it is independent of the mean expressed transcript
+length (i.e. if the mean expressed transcript length varies between samples,
+for example, this alone can affect differential analysis based on the K/RPKM.)
+The RPKM is a classic measure of relative transcript abundance, and is an
+estimate of the number of reads per kilobase of transcript (per million mapped
+reads) originating from each transcript. The KPKM should closely track the
+RPKM, but is defined for very short features which are larger than the chosen
+k-mer length but may be shorter than the read length. Typically, you should
+prefer the KPKM measure to the RPKM measure, since the k-mer is the most
+natural unit of coverage for Sailfish.</p>
+</div>
+</div>
+<div class="section" id="license">
+<h1>License<a class="headerlink" href="#license" title="Permalink to this headline">¶</a></h1>
+<p>This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.</p>
+<p>This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE.  See the GNU General Public License for more details.</p>
+<p>You should have received a copy of the GNU General Public License along with
+this program.  If not, see &lt;<a class="reference external" href="http://www.gnu.org/licenses/">http://www.gnu.org/licenses/</a>&gt;.</p>
+</div>
+<div class="section" id="references">
+<h1>References<a class="headerlink" href="#references" title="Permalink to this headline">¶</a></h1>
+<table class="docutils footnote" frame="void" id="id2" rules="none">
+<colgroup><col class="label" /><col /></colgroup>
+<tbody valign="top">
+<tr><td class="label"><a class="fn-backref" href="#id1">[1]</a></td><td>Li, Bo, et al. &#8220;RNA-Seq gene expression estimation with read mapping uncertainty.&#8221;
+Bioinformatics 26.4 (2010): 493-500.i</td></tr>
+</tbody>
+</table>
+</div>
+
+
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar">
+        <div class="sphinxsidebarwrapper">
+  <h3><a href="index.html">Table Of Contents</a></h3>
+  <ul>
+<li><a class="reference internal" href="#">Requirements</a></li>
+<li><a class="reference internal" href="#installation">Installation</a></li>
+<li><a class="reference internal" href="#running-sailfish">Running Sailfish</a><ul>
+<li><a class="reference internal" href="#indexing">Indexing</a></li>
+<li><a class="reference internal" href="#quantification">Quantification</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#license">License</a></li>
+<li><a class="reference internal" href="#references">References</a></li>
+</ul>
+
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="index.html"
+                        title="previous chapter">Welcome to Sailfish&#8217;s documentation!</a></p>
+  <h3>This Page</h3>
+  <ul class="this-page-menu">
+    <li><a href="_sources/building.txt"
+           rel="nofollow">Show Source</a></li>
+  </ul>
+<div id="searchbox" style="display: none">
+  <h3>Quick search</h3>
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    <p class="searchtip" style="font-size: 90%">
+    Enter search terms or a module, class or function name.
+    </p>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="index.html" title="Welcome to Sailfish’s documentation!"
+             >previous</a> |</li>
+        <li><a href="index.html">Sailfish 0.6.4 documentation</a> &raquo;</li> 
+      </ul>
+    </div>
+    <div class="footer">
+        &copy; Copyright 2014, Rob Patro, Carl Kingsford and Steve Mount.
+      Created using <a href="http://sphinx-doc.org/">Sphinx</a> 1.2.2.
+    </div>
+  </body>
+</html>

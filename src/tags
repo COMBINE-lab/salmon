@@ -1,0 +1,429 @@
+Alignment	SalmonQuantify.cpp	126
+Alignment::Alignment	SalmonQuantify.cpp	/^        Alignment(TranscriptID transcriptIDIn, uin/
+Alignment::kmerCount	SalmonQuantify.cpp	132
+Alignment::logProb	SalmonQuantify.cpp	133
+Alignment::transcriptID	SalmonQuantify.cpp	/^        inline TranscriptID transcriptID() { retur/
+Alignment::transcriptID_	SalmonQuantify.cpp	136
+AlignmentBatch	TestBAMParser.cpp	54
+BamTools::BamAlignment	MultithreadedBAMParser.cpp	39
+BamTools::BamReader	MultithreadedBAMParser.cpp	38
+ClusterForest	TestBAMParser.cpp	163
+ClusterForest::ClusterForest	TestBAMParser.cpp	/^    ClusterForest(size_t numTranscripts, std::vect/
+ClusterForest::boost::disjoint_sets	TestBAMParser.cpp	255
+ClusterForest::clusterMutex_	TestBAMParser.cpp	257
+ClusterForest::clusters_	TestBAMParser.cpp	256
+ClusterForest::disjointSets_	TestBAMParser.cpp	255
+ClusterForest::getClusters	TestBAMParser.cpp	/^    std::vector<TranscriptCluster*> getClusters() /
+ClusterForest::mergeClusters	TestBAMParser.cpp	/^    void mergeClusters(typename AlignmentBatch<Fra/
+ClusterForest::parent_	TestBAMParser.cpp	254
+ClusterForest::rank_	TestBAMParser.cpp	253
+ClusterForest::updateCluster	TestBAMParser.cpp	/^    void updateCluster(size_t memberTranscript, si/
+ContainingTranscript	BuildLUT.cpp	74
+ContainingTranscript::kmerID	BuildLUT.cpp	75
+ContainingTranscript::transcriptID	BuildLUT.cpp	76
+DEFAULT_BOOTSTRAP	PerformBiasCorrection.cpp	62
+DEFAULT_BOOTSTRAP	PerformBiasCorrection_old.cpp	57
+DEFAULT_COMPUTE_IMPORTANCE	PerformBiasCorrection.cpp	63
+DEFAULT_COMPUTE_IMPORTANCE	PerformBiasCorrection_old.cpp	58
+DEFAULT_LEARN_RATE	PerformBiasCorrection.cpp	59
+DEFAULT_LEARN_RATE	PerformBiasCorrection_old.cpp	54
+DEFAULT_LOSS	PerformBiasCorrection.cpp	58
+DEFAULT_LOSS	PerformBiasCorrection_old.cpp	53
+DEFAULT_MAX_DEPTH	PerformBiasCorrection.cpp	55
+DEFAULT_MAX_DEPTH	PerformBiasCorrection_old.cpp	50
+DEFAULT_MAX_FEATURES_RATIO	PerformBiasCorrection.cpp	53
+DEFAULT_MAX_FEATURES_RATIO	PerformBiasCorrection_old.cpp	48
+DEFAULT_MIN_SAMPLE_LEAF	PerformBiasCorrection.cpp	54
+DEFAULT_MIN_SAMPLE_LEAF	PerformBiasCorrection_old.cpp	49
+DEFAULT_N_JOBS	PerformBiasCorrection.cpp	52
+DEFAULT_N_JOBS	PerformBiasCorrection_old.cpp	47
+DEFAULT_N_TREES	PerformBiasCorrection.cpp	51
+DEFAULT_N_TREES	PerformBiasCorrection_old.cpp	46
+DEFAULT_OOB	PerformBiasCorrection.cpp	60
+DEFAULT_OOB	PerformBiasCorrection_old.cpp	55
+DEFAULT_SPLIT_CRITERION	PerformBiasCorrection.cpp	57
+DEFAULT_SPLIT_CRITERION	PerformBiasCorrection_old.cpp	52
+DEFAULT_SUBSAMPLE	PerformBiasCorrection.cpp	56
+DEFAULT_SUBSAMPLE	PerformBiasCorrection_old.cpp	51
+DEFAULT_VERBOSE	PerformBiasCorrection.cpp	61
+DEFAULT_VERBOSE	PerformBiasCorrection_old.cpp	56
+ErrorModel::ErrorModel	ErrorModel.cpp	/^ErrorModel::ErrorModel(double alpha) :$/
+ErrorModel::burnedIn	ErrorModel.cpp	/^bool ErrorModel::burnedIn() { return burnedIn_; }$/
+ErrorModel::burnedIn	ErrorModel.cpp	/^void ErrorModel::burnedIn(bool burnedIn) { burnedI/
+ErrorModel::logLikelihood	ErrorModel.cpp	/^double ErrorModel::logLikelihood(bam1_t* read, Tra/
+ErrorModel::logLikelihood	ErrorModel.cpp	/^double ErrorModel::logLikelihood(const ReadPair& h/
+ErrorModel::logLikelihood	ErrorModel.cpp	/^double ErrorModel::logLikelihood(const UnpairedRea/
+ErrorModel::update	ErrorModel.cpp	/^void ErrorModel::update(const UnpairedRead& hit, T/
+ErrorModel::update	ErrorModel.cpp	/^void ErrorModel::update(bam1_t* read, Transcript& /
+ErrorModel::update	ErrorModel.cpp	/^void ErrorModel::update(const ReadPair& hit, Trans/
+ExpressionRecord	SailfishUtils.cpp	544
+ExpressionRecord::ExpressionRecord	SailfishUtils.cpp	/^        ExpressionRecord() : name(""), length(0), /
+ExpressionRecord::length	SailfishUtils.cpp	548
+ExpressionRecord::name	SailfishUtils.cpp	547
+ExpressionRecord::quants	SailfishUtils.cpp	549
+ExpressionResults	PerformBiasCorrection.cpp	104
+ExpressionResults	PerformBiasCorrection_old.cpp	101
+ExpressionResults::comments	PerformBiasCorrection.cpp	105
+ExpressionResults::comments	PerformBiasCorrection_old.cpp	102
+ExpressionResults::expressions	PerformBiasCorrection.cpp	106
+ExpressionResults::expressions	PerformBiasCorrection_old.cpp	103
+ExpressionResults::std::unordered_map	PerformBiasCorrection.cpp	106
+ExpressionResults::std::unordered_map	PerformBiasCorrection_old.cpp	103
+FASTAParser::populateTargets	FASTAParser.cpp	/^void FASTAParser::populateTargets(std::vector<Tran/
+FragmentLengthDistribution::FragmentLengthDistribution	FragmentLengthDistribution.cpp	/^FragmentLengthDistribution::FragmentLengthDistribu/
+FragmentLengthDistribution::addVal	FragmentLengthDistribution.cpp	/^void FragmentLengthDistribution::addVal(size_t len/
+FragmentLengthDistribution::cmf	FragmentLengthDistribution.cpp	/^double FragmentLengthDistribution::cmf(size_t len)/
+FragmentLengthDistribution::cmf	FragmentLengthDistribution.cpp	/^vector<double> FragmentLengthDistribution::cmf() c/
+FragmentLengthDistribution::maxVal	FragmentLengthDistribution.cpp	/^size_t FragmentLengthDistribution::maxVal() const /
+FragmentLengthDistribution::mean	FragmentLengthDistribution.cpp	/^double FragmentLengthDistribution::mean() const {$/
+FragmentLengthDistribution::minVal	FragmentLengthDistribution.cpp	/^size_t FragmentLengthDistribution::minVal() const /
+FragmentLengthDistribution::pmf	FragmentLengthDistribution.cpp	/^double FragmentLengthDistribution::pmf(size_t len)/
+FragmentLengthDistribution::totMass	FragmentLengthDistribution.cpp	/^double FragmentLengthDistribution::totMass() const/
+FragmentList::FragmentList	FragmentList.cpp	/^FragmentList::FragmentList(){$/
+FragmentList::addFragMatch	FragmentList.cpp	/^    void FragmentList::addFragMatch(uint32_t refSt/
+FragmentList::addFragMatch	FragmentList.cpp	/^    void FragmentList::addFragMatch(uint32_t refSt/
+FragmentList::addFragMatchRC	FragmentList.cpp	/^    void FragmentList::addFragMatchRC(uint32_t ref/
+FragmentList::addFragMatchRC	FragmentList.cpp	/^    void FragmentList::addFragMatchRC(uint32_t ref/
+FragmentList::computeBestChain	FragmentList.cpp	/^    void FragmentList::computeBestChain() {$/
+FragmentList::computeBestChain_	FragmentList.cpp	/^void FragmentList::computeBestChain_(Container* fr/
+FragmentList::freeFragList	FragmentList.cpp	/^void FragmentList::freeFragList(Container* frags) /
+FragmentList::~FragmentList	FragmentList.cpp	/^FragmentList::~FragmentList() {$/
+HeptamerIndex::HeptamerIndex	HeptamerIndex.cpp	/^HeptamerIndex::HeptamerIndex() :$/
+HeptamerIndex::incHeptamer	HeptamerIndex.cpp	/^HeptamerIndex::incHeptamer(uint64_t heptamer) {$/
+HeptamerIndex::index	HeptamerIndex.cpp	/^std::size_t HeptamerIndex::index(uint64_t heptamer/
+IndexPair	PartitionRefiner.cpp	84
+IndexPair::newIndex	PartitionRefiner.cpp	84
+IndexPair::oldIndex	PartitionRefiner.cpp	84
+K	cokus.cpp	59
+KSEQ_INIT	FASTAParser.cpp	/^KSEQ_INIT(int, read)$/
+Kmer	ComputeBiasFeatures.cpp	46
+Kmer	PerformBiasCorrection.cpp	66
+Kmer	PerformBiasCorrection_old.cpp	61
+KmerID	BuildLUT.cpp	69
+KmerIDMap	AnalyzeKmerTradeoff.cpp	59
+KmerIDMap	SalmonQuantify.cpp	113
+KmerVote	SalmonQuantify.cpp	289
+KmerVote::KmerVote	SalmonQuantify.cpp	/^        KmerVote(uint32_t vp, uint32_t rp, uint32_/
+KmerVote::readPos	SalmonQuantify.cpp	293
+KmerVote::voteLen	SalmonQuantify.cpp	294
+KmerVote::votePos	SalmonQuantify.cpp	292
+LIN	FragmentList.cpp	21
+LUTTools	LookUpTableUtils.cpp	47
+LUTTools::dumpKmerEquivClasses	LookUpTableUtils.cpp	/^void dumpKmerEquivClasses($/
+Length	BuildLUT.cpp	71
+LibraryFormat::LibraryFormat	LibraryFormat.cpp	/^LibraryFormat::LibraryFormat(ReadType type_in, Rea/
+LibraryFormat::check	LibraryFormat.cpp	/^bool LibraryFormat::check() {$/
+M	cokus.cpp	58
+MAnalyzeKmerTradeoff.cpp	AnalyzeKmerTradeoff.cpp	/^int main(int argc, char* argv[]) {$/
+MBiasCorrectionDriver.cpp	BiasCorrectionDriver.cpp	/^int main(int argc, char* argv[]) {$/
+MBuildTranscriptMap.cpp	BuildTranscriptMap.cpp	/^int main(int argc, char* argv[] ) {$/
+MPerformBiasCorrection_old.cpp	PerformBiasCorrection_old.cpp	/^int main(int argc, char* argv[]) {$/
+MSailfish.cpp	Sailfish.cpp	/^int main( int argc, char* argv[] ) {$/
+MSalmon.cpp	Salmon.cpp	/^int main( int argc, char* argv[] ) {$/
+MTestBAMParser.cpp	TestBAMParser.cpp	/^int main(int argc, char* argv[]) {$/
+MTestHeptamerIndex.cpp	TestHeptamerIndex.cpp	/^int main(int argc, char* argv[]) {$/
+MTestUtils.cpp	TestUtils.cpp	/^int main(int argc, char* argv[]) {$/
+MatchFragment	SalmonQuantify.cpp	297
+MatchFragment::MatchFragment	SalmonQuantify.cpp	/^        MatchFragment(uint32_t refStart_, uint32_t/
+MatchFragment::length	SalmonQuantify.cpp	302
+MatchFragment::queryStart	SalmonQuantify.cpp	302
+MatchFragment::refStart	SalmonQuantify.cpp	302
+MatchFragment::score	SalmonQuantify.cpp	304
+MatchFragment::weight	SalmonQuantify.cpp	303
+MerDirection	IndexedCounter.cpp	67
+MerDirection::BOTH	IndexedCounter.cpp	67
+MerDirection::FORWARD	IndexedCounter.cpp	67
+MerDirection::REVERSE	IndexedCounter.cpp	67
+MerIteratorType	JellyfishMerCounter.cpp	151
+MiniBatchQueue	TestBAMParser.cpp	57
+MultithreadedBAMParser::MultithreadedBAMParser	MultithreadedBAMParser.cpp	/^MultithreadedBAMParser::MultithreadedBAMParser(std/
+MultithreadedBAMParser::finishedWithAlignment	MultithreadedBAMParser.cpp	/^void MultithreadedBAMParser::finishedWithAlignment/
+MultithreadedBAMParser::nextAlignment	MultithreadedBAMParser.cpp	/^bool MultithreadedBAMParser::nextAlignment(BamAlig/
+MultithreadedBAMParser::start	MultithreadedBAMParser.cpp	/^bool MultithreadedBAMParser::start() {$/
+MultithreadedBAMParser::~MultithreadedBAMParser	MultithreadedBAMParser.cpp	/^MultithreadedBAMParser::~MultithreadedBAMParser() /
+N	cokus.cpp	57
+NODEBUG	PCA.cpp	23
+OPERATION	JellyfishMerCounter.cpp	150
+OPERATION::COUNT	JellyfishMerCounter.cpp	150
+OPERATION::PRIME	JellyfishMerCounter.cpp	150
+OPERATION::UPDATE	JellyfishMerCounter.cpp	150
+ParserT	SalmonQuantify.cpp	702
+PartitionRefiner::PartitionRefiner	PartitionRefiner.cpp	/^PartitionRefiner::PartitionRefiner(LUTTools::KmerI/
+PartitionRefiner::partitionMembership	PartitionRefiner.cpp	/^const std::vector<LUTTools::KmerID>& PartitionRefi/
+PartitionRefiner::relabel	PartitionRefiner.cpp	/^void PartitionRefiner::relabel() {$/
+PartitionRefiner::splitWith	PartitionRefiner.cpp	/^void PartitionRefiner::splitWith(std::vector<LUTTo/
+PathIterator	JellyfishMerCounter.cpp	151
+Pca::Calculate	PCA.cpp	/^int Pca::Calculate(vector<float> &x,$/
+Pca::Pca	PCA.cpp	/^Pca::Pca(void) {$/
+Pca::cum_prop	PCA.cpp	/^std::vector<float> Pca::cum_prop(void) { return _c/
+Pca::eliminated_columns	PCA.cpp	/^std::vector<unsigned int> Pca::eliminated_columns(/
+Pca::is_center	PCA.cpp	/^bool Pca::is_center(void) { return _is_center; }$/
+Pca::is_scale	PCA.cpp	/^bool Pca::is_scale(void) {  return _is_scale; }$/
+Pca::kaiser	PCA.cpp	/^unsigned int Pca::kaiser(void) { return _kaiser; }/
+Pca::method	PCA.cpp	/^string Pca::method(void) { return _method; }$/
+Pca::ncols	PCA.cpp	/^unsigned int Pca::ncols(void) { return _ncols; }$/
+Pca::nrows	PCA.cpp	/^unsigned int Pca::nrows(void) { return _nrows; }$/
+Pca::prop_of_var	PCA.cpp	/^std::vector<float> Pca::prop_of_var(void) {return /
+Pca::scores	PCA.cpp	/^std::vector<float> Pca::scores(void) { return _sco/
+Pca::sd	PCA.cpp	/^std::vector<float> Pca::sd(void) { return _sd; };$/
+Pca::thresh95	PCA.cpp	/^unsigned int Pca::thresh95(void) { return _thresh9/
+Pca::~Pca	PCA.cpp	/^Pca::~Pca(void) {$/
+PosteriorAbundanceVector	TestBAMParser.cpp	60
+PriorAbundanceVector	TestBAMParser.cpp	59
+ReadLength	BuildLUT.cpp	70
+RefSeq	TestBAMParser.cpp	62
+RefSeq::RefLength	TestBAMParser.cpp	65
+RefSeq::RefName	TestBAMParser.cpp	64
+RefSeq::RefSeq	TestBAMParser.cpp	/^    RefSeq(char* name, uint32_t len) : RefName(nam/
+SOP	FragmentList.cpp	20
+Sailfish::TranscriptFeatures	ComputeBiasFeatures.cpp	47
+Sailfish::TranscriptFeatures	PerformBiasCorrection.cpp	67
+StrandHasher	IndexedCounter.cpp	431
+StrandHasher::operator()	IndexedCounter.cpp	/^              size_t operator()(const ReadStranded/
+StreamingReadParser::StreamingReadParser	StreamingSequenceParser.cpp	/^StreamingReadParser::StreamingReadParser( std::vec/
+StreamingReadParser::finishedWithRead	StreamingSequenceParser.cpp	/^void StreamingReadParser::finishedWithRead(ReadSeq/
+StreamingReadParser::nextRead	StreamingSequenceParser.cpp	/^bool StreamingReadParser::nextRead(ReadSeq*& seq) /
+StreamingReadParser::start	StreamingSequenceParser.cpp	/^bool StreamingReadParser::start() {$/
+StreamingReadParser::~StreamingReadParser	StreamingSequenceParser.cpp	/^StreamingReadParser::~StreamingReadParser() {$/
+TranscriptCluster	TestBAMParser.cpp	76
+TranscriptCluster::TranscriptCluster	TestBAMParser.cpp	/^    TranscriptCluster() : members_(std::list<size_/
+TranscriptCluster::TranscriptCluster	TestBAMParser.cpp	/^    TranscriptCluster(size_t initialMember) : memb/
+TranscriptCluster::active_	TestBAMParser.cpp	/^    TranscriptCluster() : members_(std::list<size_/
+TranscriptCluster::active_	TestBAMParser.cpp	/^                                              logM/
+TranscriptCluster::active_	TestBAMParser.cpp	159
+TranscriptCluster::addMass	TestBAMParser.cpp	/^    void addMass(double logNewMass) { logMass_ = l/
+TranscriptCluster::count_	TestBAMParser.cpp	157
+TranscriptCluster::deactivate	TestBAMParser.cpp	/^    void deactivate() { active_ = false; }$/
+TranscriptCluster::incrementCount	TestBAMParser.cpp	/^    void incrementCount(size_t num) { count_ += nu/
+TranscriptCluster::isActive	TestBAMParser.cpp	/^    bool isActive() { return active_; }$/
+TranscriptCluster::logMass	TestBAMParser.cpp	/^    double logMass() { return logMass_; }$/
+TranscriptCluster::logMass_	TestBAMParser.cpp	/^    TranscriptCluster() : members_(std::list<size_/
+TranscriptCluster::logMass_	TestBAMParser.cpp	/^                                              logM/
+TranscriptCluster::logMass_	TestBAMParser.cpp	158
+TranscriptCluster::members	TestBAMParser.cpp	/^    std::list<size_t>& members() { return members_/
+TranscriptCluster::members_	TestBAMParser.cpp	156
+TranscriptCluster::merge	TestBAMParser.cpp	/^    void merge(TranscriptCluster& other) {$/
+TranscriptCluster::numHits	TestBAMParser.cpp	/^    size_t numHits() { return count_.load(); }$/
+TranscriptCluster::projectToPolytope	TestBAMParser.cpp	/^    void projectToPolytope(std::vector<Transcript>/
+TranscriptFeatures	PerformBiasCorrection_old.cpp	63
+TranscriptFeatures::diNucleotides	PerformBiasCorrection_old.cpp	67
+TranscriptFeatures::gcContent	PerformBiasCorrection_old.cpp	66
+TranscriptFeatures::length	PerformBiasCorrection_old.cpp	65
+TranscriptFeatures::name	PerformBiasCorrection_old.cpp	64
+TranscriptFeatures::std::array	PerformBiasCorrection_old.cpp	67
+TranscriptHitList	SalmonQuantify.cpp	313
+TranscriptHitList::VoteInfo	SalmonQuantify.cpp	337
+TranscriptHitList::VoteInfo::coverage	SalmonQuantify.cpp	338
+TranscriptHitList::VoteInfo::rightmostBase	SalmonQuantify.cpp	339
+TranscriptHitList::addFragMatch	SalmonQuantify.cpp	/^        void addFragMatch(uint32_t tpos, uint32_t /
+TranscriptHitList::addFragMatchRC	SalmonQuantify.cpp	/^        void addFragMatchRC(uint32_t tpos, uint32_/
+TranscriptHitList::bestHitPos	SalmonQuantify.cpp	315
+TranscriptHitList::bestHitScore	SalmonQuantify.cpp	316
+TranscriptHitList::computeBestChain	SalmonQuantify.cpp	/^        bool computeBestChain() {$/
+TranscriptHitList::computeBestLoc_	SalmonQuantify.cpp	/^        void computeBestLoc_(std::vector<KmerVote>/
+TranscriptHitList::rcVotes	SalmonQuantify.cpp	319
+TranscriptHitList::targetID	SalmonQuantify.cpp	321
+TranscriptHitList::totalNumHits	SalmonQuantify.cpp	/^        uint32_t totalNumHits() { return std::max(/
+TranscriptHitList::votes	SalmonQuantify.cpp	318
+TranscriptID	AnalyzeKmerTradeoff.cpp	57
+TranscriptID	BuildLUT.cpp	68
+TranscriptID	SalmonQuantify.cpp	111
+TranscriptIDVector	AnalyzeKmerTradeoff.cpp	58
+TranscriptIDVector	SalmonQuantify.cpp	112
+TranscriptKey	SailfishUtils.cpp	336
+TranscriptKey::DYNAMIC	SailfishUtils.cpp	336
+TranscriptKey::GENE_ID	SailfishUtils.cpp	336
+TranscriptKey::GENE_NAME	SailfishUtils.cpp	336
+TranscriptKeyPair	SailfishUtils.cpp	327
+TranscriptKeyPair::TranscriptKeyPair	SailfishUtils.cpp	/^        TranscriptKeyPair(const char* t, const cha/
+TranscriptKeyPair::key	SailfishUtils.cpp	329
+TranscriptKeyPair::transcript_id	SailfishUtils.cpp	328
+TranscriptList	BuildLUT.cpp	72
+TranscriptResult	PerformBiasCorrection.cpp	95
+TranscriptResult	PerformBiasCorrection_old.cpp	95
+TranscriptResult::approxCount	PerformBiasCorrection.cpp	101
+TranscriptResult::approxKmerCount	PerformBiasCorrection.cpp	100
+TranscriptResult::kpkm	PerformBiasCorrection.cpp	99
+TranscriptResult::length	PerformBiasCorrection.cpp	96
+TranscriptResult::length	PerformBiasCorrection_old.cpp	96
+TranscriptResult::rpkm	PerformBiasCorrection.cpp	98
+TranscriptResult::rpkm	PerformBiasCorrection_old.cpp	98
+TranscriptResult::tpm	PerformBiasCorrection.cpp	97
+TranscriptResult::tpm	PerformBiasCorrection_old.cpp	97
+VersionChecker::VersionChecker	VersionChecker.cpp	/^VersionChecker::VersionChecker(boost::asio::io_ser/
+VersionChecker::cancel_upgrade_check	VersionChecker.cpp	/^void VersionChecker::cancel_upgrade_check(const bo/
+VersionChecker::handle_connect	VersionChecker.cpp	/^void VersionChecker::handle_connect(const boost::s/
+VersionChecker::handle_read_content	VersionChecker.cpp	/^void VersionChecker::handle_read_content(const boo/
+VersionChecker::handle_read_headers	VersionChecker.cpp	/^void VersionChecker::handle_read_headers(const boo/
+VersionChecker::handle_read_status_line	VersionChecker.cpp	/^void VersionChecker::handle_read_status_line(const/
+VersionChecker::handle_resolve	VersionChecker.cpp	/^void VersionChecker::handle_resolve(const boost::s/
+VersionChecker::handle_write_request	VersionChecker.cpp	/^void VersionChecker::handle_write_request(const bo/
+VersionChecker::message	VersionChecker.cpp	/^std::string VersionChecker::message() {$/
+_GNU_SOURCE	IndexedCounter.cpp	48
+aggregateEstimatesToGeneLevel	SailfishUtils.cpp	/^void aggregateEstimatesToGeneLevel(TranscriptGeneM/
+args	JellyfishMerCounter.cpp	73
+as_seconds	JellyfishMerCounter.cpp	/^inline double as_seconds(DtnType dtn) { return dur/
+assert_file_good	PCAUtils.cpp	/^void assert_file_good(const bool& is_file_good, co/
+basesCovered	SalmonQuantify.cpp	/^uint32_t basesCovered(std::vector<uint32_t>& kmerH/
+basesCovered	SalmonQuantify.cpp	/^uint32_t basesCovered(std::vector<uint32_t>& posLe/
+boost::asio::ip::tcp	VersionChecker.cpp	14
+buildLUTs	BuildLUT.cpp	/^int buildLUTs($/
+buildPerfectHashIndex	PerfectHashIndexer.cpp	/^void buildPerfectHashIndex(bool canonical, std::ve/
+buildTLUTIndex	LookUpTableUtils.cpp	/^std::vector<Offset> buildTLUTIndex(const std::stri/
+bwa_pg	SalmonQuantify.cpp	105
+computeBiasFeatures	ComputeBiasFeatures.cpp	/^int computeBiasFeatures($/
+computeBiasFeaturesHelper	ComputeBiasFeatures.cpp	/^bool computeBiasFeaturesHelper(ParserT& parser,$/
+compute_column_means	PCAUtils.cpp	/^arma::Col<double> compute_column_means(const arma:/
+compute_column_rms	PCAUtils.cpp	/^arma::Col<double> compute_column_rms(const arma::M/
+countKmers	IndexedCounter.cpp	/^bool countKmers(std::vector<std::string> readFiles/
+dumpKmerLUT	LookUpTableUtils.cpp	/^void dumpKmerLUT($/
+eigen_pair	PCA.cpp	198
+encode	SailfishUtils.cpp	/^uint64_t encode(uint64_t tid, uint64_t offset) {$/
+enforce_positive_sign_by_column	PCAUtils.cpp	/^void enforce_positive_sign_by_column(arma::Mat<dou/
+extractReadLibraries	SailfishUtils.cpp	/^std::vector<ReadLibrary> extractReadLibraries(boos/
+extract_column_vector	PCAUtils.cpp	/^std::vector<double> extract_column_vector(const ar/
+extract_row_vector	PCAUtils.cpp	/^std::vector<double> extract_row_vector(const arma:/
+fifoRead	StreamingSequenceParser.cpp	/^int fifoRead(int f, void* buf, int n) {$/
+file_vector	JellyfishMerCounter.cpp	85
+file_vector::const_iterator	JellyfishMerCounter.cpp	209
+file_vector::const_iterator	JellyfishMerCounter.cpp	210
+filter	JellyfishMerCounter.cpp	116
+filter::and_res	JellyfishMerCounter.cpp	/^  bool and_res(bool r, const mer_dna& x) const {$/
+filter::filter	JellyfishMerCounter.cpp	/^  filter(filter* prev = 0) : prev_(prev) { }$/
+filter::operator()	JellyfishMerCounter.cpp	/^  virtual bool operator()(const mer_dna& x) { retu/
+filter::prev_	JellyfishMerCounter.cpp	117
+filter::~filter	JellyfishMerCounter.cpp	/^  virtual ~filter() { }$/
+filter_bc	JellyfishMerCounter.cpp	126
+filter_bc::counter_	JellyfishMerCounter.cpp	127
+filter_bc::filter_bc	JellyfishMerCounter.cpp	/^  filter_bc(const mer_dna_bloom_counter& counter, /
+filter_bc::operator()	JellyfishMerCounter.cpp	/^  bool operator()(const mer_dna& m) {$/
+filter_bf	JellyfishMerCounter.cpp	138
+filter_bf::bf_	JellyfishMerCounter.cpp	139
+filter_bf::filter_bf	JellyfishMerCounter.cpp	/^  filter_bf(mer_dna_bloom_filter& bf, filter* prev/
+filter_bf::operator()	JellyfishMerCounter.cpp	/^  bool operator()(const mer_dna& m) {$/
+futureIsReady	IndexedCounter.cpp	/^bool futureIsReady(std::future<R>& f) {$/
+getHitsForFragment	SalmonQuantify.cpp	/^void getHitsForFragment(std::pair<header_sequence_/
+getHitsForFragment	SalmonQuantify.cpp	/^void getHitsForFragment(jellyfish::header_sequence/
+getVersionMessage	VersionChecker.cpp	/^std::string getVersionMessage() {$/
+get_mean	PCAUtils.cpp	/^double get_mean(const std::vector<double>& iter) {/
+get_sigma	PCAUtils.cpp	/^double get_sigma(const std::vector<double>& iter) /
+help	Sailfish.cpp	/^int help(int argc, char* argv[]) {$/
+help	Salmon.cpp	/^int help(int argc, char* argv[]) {$/
+hiBit	cokus.cpp	/^#define hiBit(u)       ((u) & 0x80000000U)   \/\/ ma/
+jellyfish::mer_dna	JellyfishMerCounter.cpp	82
+jellyfish::mer_dna_bloom_counter	JellyfishMerCounter.cpp	83
+jellyfish::mer_dna_bloom_filter	JellyfishMerCounter.cpp	84
+jellyfish_count_main	JellyfishMerCounter.cpp	/^int jellyfish_count_main(int argc, char *argv[])$/
+left	cokus.cpp	67
+loBit	cokus.cpp	/^#define loBit(u)       ((u) & 0x00000001U)   \/\/ ma/
+loBits	cokus.cpp	/^#define loBits(u)      ((u) & 0x7FFFFFFFU)   \/\/ ma/
+load_bloom_filter	JellyfishMerCounter.cpp	/^mer_dna_bloom_counter* load_bloom_filter(const cha/
+mainBuildLUT	BuildLUT.cpp	/^int mainBuildLUT(int argc, char* argv[] ) {$/
+mainCount	IndexedCounter.cpp	/^int mainCount( uint32_t numThreads,$/
+mainIndex	PerfectHashIndexer.cpp	/^int mainIndex( int argc, char *argv[] ) {$/
+mainQuantify	QuantificationDriver.cpp	/^int mainQuantify( int argc, char *argv[] ) {$/
+mainSailfish	Sailfish.cpp	/^int mainSailfish(int argc, char* argv[]) {$/
+make_shuffled_matrix	PCAUtils.cpp	/^arma::Mat<double> make_shuffled_matrix(const arma:/
+manager_pid	JellyfishMerCounter.cpp	230
+mer_counter	JellyfishMerCounter.cpp	209
+mer_counter_base	JellyfishMerCounter.cpp	152
+mer_counter_base::ary_	JellyfishMerCounter.cpp	154
+mer_counter_base::filter_	JellyfishMerCounter.cpp	157
+mer_counter_base::mer_counter_base	JellyfishMerCounter.cpp	/^  mer_counter_base(int nb_threads, mer_hash& ary,$/
+mer_counter_base::nb_threads_	JellyfishMerCounter.cpp	153
+mer_counter_base::op_	JellyfishMerCounter.cpp	158
+mer_counter_base::parser_	JellyfishMerCounter.cpp	156
+mer_counter_base::start	JellyfishMerCounter.cpp	/^  virtual void start(int thid) {$/
+mer_counter_base::streams_	JellyfishMerCounter.cpp	155
+mer_iterator	JellyfishMerCounter.cpp	89
+mer_iterator	JellyfishMerCounter.cpp	209
+mer_qual_counter	JellyfishMerCounter.cpp	210
+mer_qual_iterator	JellyfishMerCounter.cpp	105
+mer_qual_iterator	JellyfishMerCounter.cpp	210
+mer_qual_iterator::mer_qual_iterator	JellyfishMerCounter.cpp	/^  mer_qual_iterator(sequence_qual_parser& parser, /
+mer_qual_iterator::sequence_qual_parser	JellyfishMerCounter.cpp	106
+mer_qual_iterator::super	JellyfishMerCounter.cpp	106
+mixBits	cokus.cpp	/^#define mixBits(u, v)  (hiBit(u)|loBits(v))  \/\/ mo/
+mpdec	PerformBiasCorrection.cpp	68
+mute	FragmentList.cpp	23
+my_mer	BuildSalmonIndex.cpp	58
+my_mer	SalmonQuantify.cpp	114
+next	cokus.cpp	66
+normalize_by_column	PCAUtils.cpp	/^void normalize_by_column(arma::Mat<double>& data, /
+numberOfReadsInFastaFile	SailfishUtils.cpp	/^size_t numberOfReadsInFastaFile(const std::string&/
+offset	SailfishUtils.cpp	/^uint32_t offset(uint64_t enc) {$/
+offset	SalmonQuantify.cpp	/^uint32_t offset(uint64_t enc) {$/
+operator<<	GenomicFeature.cpp	/^std::ostream& operator<< ( std::ostream& out, cons/
+operator<<	GenomicFeature.cpp	/^std::ostream& operator<< ( std::ostream& out, cons/
+operator<<	LibraryFormat.cpp	/^std::ostream& operator<<(std::ostream& os, Library/
+operator>>	GenomicFeature.cpp	/^std::istream& operator>> ( std::istream& in, Genom/
+overlap	SailfishUtils.cpp	/^bool overlap( const S<T> &a, const S<T> &b ) {$/
+paired_parser	SalmonQuantify.cpp	107
+parseExpressionRecord	SailfishUtils.cpp	/^ExpressionRecord parseExpressionRecord(std::string/
+parseFeature	PerformBiasCorrection.cpp	/^TranscriptFeatures parseFeature(std::ifstream& ifs/
+parseFeature	PerformBiasCorrection_old.cpp	/^TranscriptFeatures parseFeature(std::ifstream& ifs/
+parseFeatureFile	PerformBiasCorrection.cpp	/^std::vector<TranscriptFeatures> parseFeatureFile(c/
+parseFeatureFile	PerformBiasCorrection_old.cpp	/^std::vector<TranscriptFeatures> parseFeatureFile(c/
+parseLibraryFormatString	SailfishUtils.cpp	/^LibraryFormat parseLibraryFormatString(std::string/
+parseLibraryFormatString	TestBAMParser.cpp	/^LibraryFormat parseLibraryFormatString(std::string/
+parseSailfishFile	PerformBiasCorrection.cpp	/^ExpressionResults parseSailfishFile(const bfs::pat/
+parseSailfishFile	PerformBiasCorrection_old.cpp	/^ExpressionResults parseSailfishFile(const bfs::pat/
+parseTranscripts	BuildTranscriptMap.cpp	/^bool parseTranscripts(boost::filesystem::path& tpa/
+performBiasCorrection	PerformBiasCorrection.cpp	/^int performBiasCorrection($/
+populateFromTPMs	PerformBiasCorrection.cpp	/^void populateFromTPMs(vector<mpdec>& tpms,$/
+precedes	SalmonQuantify.cpp	/^bool precedes(const MatchFragment& a, const MatchF/
+processMiniBatch	SalmonQuantify.cpp	/^void processMiniBatch($/
+processMiniBatch	TestBAMParser.cpp	/^void processMiniBatch(MiniBatchQueue<AlignmentGrou/
+processReadsMEM	SalmonQuantify.cpp	/^void processReadsMEM(ParserT* parser,$/
+quantifyLibrary	TestBAMParser.cpp	/^void quantifyLibrary(LibraryFormat libFmt,$/
+randomMT	cokus.cpp	/^uint32 randomMT(void)$/
+readKmerEquivClasses	LookUpTableUtils.cpp	/^std::vector<KmerID> readKmerEquivClasses(const std/
+readKmerLUT	LookUpTableUtils.cpp	/^void readKmerLUT($/
+readKmerOrder	SailfishUtils.cpp	/^bool readKmerOrder( const std::string& fname, std:/
+readTranscriptInfo	LookUpTableUtils.cpp	/^std::unique_ptr<TranscriptInfo> readTranscriptInfo/
+readTranscriptToGeneMap	SailfishUtils.cpp	/^TranscriptGeneMap readTranscriptToGeneMap( std::if/
+reloadMT	cokus.cpp	/^uint32 reloadMT(void)$/
+remove_column_means	PCAUtils.cpp	/^void remove_column_means(arma::Mat<double>& data, /
+runIterativeOptimizer	QuantificationDriver.cpp	/^int runIterativeOptimizer(int argc, char* argv[] )/
+runJellyfish	PerfectHashIndexer.cpp	/^int runJellyfish(bool canonical,$/
+runKmerCounter	QuantificationDriver.cpp	/^int runKmerCounter(const std::string& sfCommand,$/
+runSailfishEstimation	QuantificationDriver.cpp	/^int runSailfishEstimation(const std::string& sfCom/
+sailfish	SailfishUtils.cpp	44
+salmon::math::LOG_0	TestBAMParser.cpp	48
+salmon::math::LOG_1	TestBAMParser.cpp	49
+salmon::math::logAdd	TestBAMParser.cpp	50
+salmon::math::logSub	TestBAMParser.cpp	51
+salmon::stringtools::encodeSequenceInSAM	SailfishStringUtils.cpp	/^uint8_t* salmon::stringtools::encodeSequenceInSA/
+salmon::utils	SailfishUtils.cpp	45
+salmon::utils::parseLibraryFormatStringNew	SailfishUtils.cpp	/^LibraryFormat parseLibraryFormatStringNew(std::str/
+salmon::utils::std::string	SailfishUtils.cpp	46
+salmonIndex	BuildSalmonIndex.cpp	/^int salmonIndex(int argc, char* argv[]) {$/
+salmonQuantify	SalmonQuantify.cpp	/^int salmonQuantify(int argc, char *argv[]) {$/
+salmonSwim	Salmon.cpp	/^int salmonSwim(int argc, char* argv[]) {$/
+scaleBy	TestBAMParser.cpp	/^void scaleBy(std::vector<T>& vec, T scale) {$/
+seedMT	cokus.cpp	/^void seedMT(uint32 seed)$/
+sequence_parser	BuildSalmonIndex.cpp	61
+sequence_parser	JellyfishMerCounter.cpp	88
+sequence_parser	JellyfishMerCounter.cpp	89
+sequence_qual_parser	JellyfishMerCounter.cpp	93
+sequence_qual_parser::StreamIterator	JellyfishMerCounter.cpp	96
+sequence_qual_parser::sequence_qual_parser	JellyfishMerCounter.cpp	/^  sequence_qual_parser(uint16_t mer_len, uint32_t /
+sequence_qual_parser::super	JellyfishMerCounter.cpp	97
+signal_handler	JellyfishMerCounter.cpp	/^static void signal_handler(int sig) {$/
+single_parser	SalmonQuantify.cpp	109
+state	cokus.cpp	65
+stats	PCAUtils.cpp	28
+stats::utils	PCAUtils.cpp	29
+stats::utils::make_covariance_matrix	PCAUtils.cpp	/^arma::Mat<double> make_covariance_matrix(const arm/
+std::chrono::duration	JellyfishMerCounter.cpp	76
+std::chrono::duration_cast	JellyfishMerCounter.cpp	77
+std::chrono::system_clock	JellyfishMerCounter.cpp	75
+std::string	QuantificationDriver.cpp	56
+stream_manager	BuildSalmonIndex.cpp	60
+stream_manager	SalmonQuantify.cpp	108
+transcript	SailfishUtils.cpp	/^uint32_t transcript(uint64_t enc) {$/
+transcript	SalmonQuantify.cpp	/^uint32_t transcript(uint64_t enc) {$/
+transcriptGeneMapFromGTF	SailfishUtils.cpp	/^TranscriptGeneMap transcriptGeneMapFromGTF(const s/
+transcriptToGeneMapFromFasta	SailfishUtils.cpp	/^TranscriptGeneMap transcriptToGeneMapFromFasta( co/
+uint32	cokus.cpp	55
+writeTranscriptInfo	LookUpTableUtils.cpp	/^void writeTranscriptInfo (TranscriptInfo *ti, std:/

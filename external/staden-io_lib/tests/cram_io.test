@@ -1,0 +1,3 @@
+#!/bin/sh
+
+$top_builddir/tests/cram_io_test $outdir/aux#aux.full.cram

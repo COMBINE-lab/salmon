@@ -1,0 +1,98 @@
+Installation
+============
+
+% ./configure
+% make
+# As root:
+% make install
+
+To install in a custom directory:
+
+% ./configure --prefix=/my/dir
+% make
+% make install
+
+Then make sure the following environment variables contain the correct
+paths:
+
+PATH            -> /my/dir/bin
+LD_LIBRARY_PATH -> /my/dir/lib
+MANPATH         -> /my/dir/share/man
+PKG_CONFIG_PATH -> /my/dir/lib/pkgconfig
+
+Only the PATH environment variables is necessary to run
+jellyfish. MANPATH is used by the man command. PKG_CONFIG_PATH and
+LD_LIBRARY_PATH are used to compile software against the jellyfish
+shared library.
+
+GCC requirement
+===============
+
+GCC version 4.4 or higher is required to compile Jellyfish. Most
+current Linux distribution provides a version of gcc current
+enough. On RedHat 5.x, install the packages gcc44 and gcc44-c++.
+
+To install on Mac OS X: Jellyfish 2.0 does not compile with Apple's
+Xcode GCC 4.2. Instead, the easiest thing to do is to install GCC 4.8
+using MacPorts (http://www.macports.org) using the following commands:
+
+        sudo port install gcc48
+        sudo port install gcc_select
+        sudo port select -set gcc mp-gcc48
+
+The first command installs GCC version 4.8. The third command makes
+that version of GCC the default, and the second installs a package that
+makes the third command work. After the above, you should be able to
+run './configure ; make' as normal.
+
+Tests
+=====
+
+To run the built-in tests, do:
+
+% make check
+
+All tests should pass and 1 test should be skipped (big.sh). Running
+'make check' will use about 50MB of disk space and will use every CPUs
+found on the machine. On our test machine with 32 cores, it takes a
+few minutes to run.
+
+To tests also on large data set, do:
+
+% make check BIG=1
+
+WARNING: this uses >40GB of disk space and takes 30 minutes to run (20
+to create the data, 10 to run jellyfish).
+
+Notes
+=====
+
+* Jellyfish has been devellopped and tested on x86-64 GNU/Linux. It
+  compiles and runs correctly the tests on MacOS X (Intel) and
+  FreeBSD. It should be fairly easy to port on other *NIX platform
+  with the gcc compiler, but no guarantee is made. Support for 32-bits
+  platform has not been tested.
+
+License
+=======
+
+* The Mersenne Twister random generator is copyrighted by Agner Fog
+  and distributed under the GPL version 3 or
+  higher. http://www.agner.org.
+
+* The Half float implementation is copyrighted by Industrial Light &
+  Magic and is distributed under the license described in the
+  HalfLICENSE file.
+
+*   This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.

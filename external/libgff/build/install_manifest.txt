@@ -1,0 +1,13 @@
+/home/robp/SoftwareStaging/salmon/external/install/lib/libgff.a
+/home/robp/SoftwareStaging/salmon/external/install/include/GVec.hh
+/home/robp/SoftwareStaging/salmon/external/install/include/GFastaIndex.h
+/home/robp/SoftwareStaging/salmon/external/install/include/GList.hh
+/home/robp/SoftwareStaging/salmon/external/install/include/gdna.h
+/home/robp/SoftwareStaging/salmon/external/install/include/GBase.h
+/home/robp/SoftwareStaging/salmon/external/install/include/GArgs.h
+/home/robp/SoftwareStaging/salmon/external/install/include/gff_utils.h
+/home/robp/SoftwareStaging/salmon/external/install/include/GHash.hh
+/home/robp/SoftwareStaging/salmon/external/install/include/gff.h
+/home/robp/SoftwareStaging/salmon/external/install/include/GStr.h
+/home/robp/SoftwareStaging/salmon/external/install/include/codons.h
+/home/robp/SoftwareStaging/salmon/external/install/include/GFaSeqGet.h

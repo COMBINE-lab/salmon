@@ -1,0 +1,11 @@
+#define __TBB_VERSION_STRINGS(N) \
+#N": BUILD_HOST		ocean (x86_64)" ENDL \
+#N": BUILD_OS		Ubuntu 14.04 LTS" ENDL \
+#N": BUILD_KERNEL	Linux 3.13.0-43-generic #72-Ubuntu SMP Mon Dec 8 19:35:06 UTC 2014" ENDL \
+#N": BUILD_GCC		gcc version 4.8.2 (Ubuntu 4.8.2-19ubuntu1) " ENDL \
+#N": BUILD_LIBC	2.19" ENDL \
+#N": BUILD_LD		" ENDL \
+#N": BUILD_TARGET	intel64 on cc4.8_libc2.19_kernel3.13.0" ENDL \
+#N": BUILD_COMMAND	g++ -DDO_ITT_NOTIFY -g -O2 -DUSE_PTHREAD -m64 -mrtm -fPIC -D__TBB_BUILD=1 -Wall -Wno-parentheses -Wno-non-virtual-dtor -UDO_ITT_NOTIFY -std=c++0x -D_TBB_CPP0X -I../../src -I../../src/rml/include -I../../include -I." ENDL \
+
+#define __TBB_DATETIME "Wed May 6 06:46:20 UTC 2015"
