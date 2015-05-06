@@ -4,7 +4,7 @@
 Chat live about Salmon
 ======================
 
-You can chat with developers and other users via Gitter!
+You can chat with the Salmon developers and other users via Gitter!
 
 [![Join the chat at https://gitter.im/COMBINE-lab/salmon](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/COMBINE-lab/salmon?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
