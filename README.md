@@ -1,4 +1,5 @@
-[![Build Status](https://travis-ci.org/kingsfordgroup/sailfish.svg?branch=develop)](https://travis-ci.org/kingsfordgroup/sailfish)
+[![Build Status](https://travis-ci.org/COMBINE-lab/salmon.svg?branch=master)](https://travis-ci.org/COMBINE-lab/salmon)
+
 [![Documentation Status](https://readthedocs.org/projects/sailfish/badge/?version=develop)](https://readthedocs.org/projects/sailfish/?badge=develop)
 
 Chat live about Salmon
