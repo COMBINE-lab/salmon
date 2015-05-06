@@ -4,13 +4,12 @@
 Chat live about Salmon
 ======================
 
-[![Join the chat at https://gitter.im/COMBINE-lab/salmon](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/COMBINE-lab/salmon?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
-
 You can chat with developers and other users via Gitter!
+
+[![Join the chat at https://gitter.im/COMBINE-lab/salmon](https://badges.gitter.im/Join%20Chat.svg)](https://gitter.im/COMBINE-lab/salmon?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 
 
 Documentation
 ==============
 
-The documentation for Salmon and Sailfish is being migrated to [ReadTheDocs](http://readthedocs.org).
-To see [the latest documentation there](http://sailfish.readthedocs.org).
+The documentation for Salmon is available on [ReadTheDocs](http://readthedocs.org), check it out [here](http://sailfish.readthedocs.org).
