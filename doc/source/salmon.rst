@@ -1,20 +1,22 @@
 Salmon
 ================
 
-Salmon is a tool for **wicked** transcript quantification from RNA-seq data.  It
-requires a set of target transcripts (either from a reference or *de-novo*
-assembly) to quantify.  All you need to run Salmon is a fasta file containing
-your reference transcripts and a (set of) fasta/fastq file(s) containing your
-reads.  Optinonally, Salmon can make use of pre-computed alignments (in the 
-form of a SAM/BAM file) to the transcripts rather than the raw reads.
+Salmon is a tool for **wicked-fast** transcript quantification from RNA-seq
+data.  It requires a set of target transcripts (either from a reference or
+*de-novo* assembly) to quantify.  All you need to run Salmon is a FASTA file
+containing your reference transcripts and a (set of) FASTA/FASTQ file(s)
+containing your reads.  Optionally, Salmon can make use of pre-computed
+alignments (in the form of a SAM/BAM file) to the transcripts rather than the
+raw reads.
 
-The read-based mode of Salmon runs in two phases; indexing and quantification.
-The indexing step is independent of the reads, and only need to be run one for
-a particular set of reference transcripts. The quantification step, obviously,
-is specific to the set of RNA-seq reads and is thus run more frequently. For a
-more complete description of all available options in Salmon, see below.
+The **lightweight-alignment**-based mode of Salmon runs in two phases; indexing and
+quantification. The indexing step is independent of the reads, and only need to
+be run one for a particular set of reference transcripts. The quantification
+step, obviously, is specific to the set of RNA-seq reads and is thus run more
+frequently. For a more complete description of all available options in Salmon,
+see below.
 
-The alignment-based mode of Salmon does not require indexing.  Rather, you can 
+The **alignment**-based mode of Salmon does not require indexing.  Rather, you can 
 simply provide Salmon with a FASTA file of the transcripts and a SAM/BAM file
 containing the alignments you wish to use for quantification.
 
@@ -22,10 +24,10 @@ Using Salmon
 ------------
 
 As mentioned above, there are two "modes" of operation for Salmon.  The first,
-like Sailfish, requires you to build an index for the transcriptome, but then
-subsequently processes reads directly.  The second mode simply requires you to
-provide a FASTA file of the transcriptome and a ``.sam`` or ``.bam`` file
-containing a set of alignments.
+requires you to build an index for the transcriptome, but then subsequently
+processes reads directly.  The second mode simply requires you to provide a
+FASTA file of the transcriptome and a ``.sam`` or ``.bam`` file containing a
+set of alignments.
 
 .. note:: Read / alignment order
 
@@ -36,11 +38,11 @@ containing a set of alignments.
     **not** be sorted by target or position.  If your reads or alignments 
     do not appear in a random order with respect to the target transcripts,
     please randomize / shuffle them before performing quantification with 
-    salmon.
+    Salmon.
 
 .. note:: Number of Threads
 
-    The number of threads that salmon can effectively make use of depends 
+    The number of threads that Salmon can effectively make use of depends 
     upon the mode in which it is being run.  In alignment-based mode, the
     main bottleneck is in parsing and decompressing the input BAM file.
     We make use of the `Staden IO <http://sourceforge.net/projects/staden/files/io_lib/>`_ 
@@ -48,7 +50,7 @@ containing a set of alignments.
     thorougly tested).  This means that multiple threads can be effectively used
     to aid in BAM decompression.  However, we find that throwing more than a 
     few threads at file decompression does not result in increased processing
-    speed.  Thus, alignment-based salmon will only ever allocate up to 4 threads
+    speed.  Thus, alignment-based Salmon will only ever allocate up to 4 threads
     to file decompression, with the rest being allocated to quantification.
     If these threads are starved, they will sleep (the quantification threads 
     do not busy wait), but there is a point beyond which allocating more threads
@@ -56,20 +58,54 @@ containing a set of alignments.
     8 --- 12 threads results in the maximum speed, threads allocated above this
     limit will likely spend most of their time idle / sleeping.
 
-    For read-based salmon, the story is somewhat different.  Generally,
-    performance continues to improve as more threads are made available.  This
-    is because the determiniation of the potential mapping locations of each
-    read is, generally, the slowest step in read-based quantification.  Since
-    this process is trivially parallelizable (and well-parallelized within
-    salmon), more threads generally equates to faster quantification. However,
-    there may still be a limit to the return on invested threads. Specifically,
-    writing to the mapping cache (see `Misc`_ below) is done via a single
-    thread.  With a huge number of quantification threads or in environments
-    with a very slow disk, this may become the limiting step. If you're certain
-    that you have more than the required number of observations, or if you have
-    reason to suspect that your disk is particularly slow on writes, then you
-    can disable the mapping cache (``--disableMappingCache``), and potentially
-    increase the parallelizability of read-based salmon.
+    For lightweight-alignment-based Salmon, the story is somewhat different.
+    Generally, performance continues to improve as more threads are made
+    available.  This is because the determiniation of the potential mapping
+    locations of each read is, generally, the slowest step in
+    lightweight-alignment-based quantification.  Since this process is
+    trivially parallelizable (and well-parallelized within Salmon), more
+    threads generally equates to faster quantification. However, there may
+    still be a limit to the return on invested threads. Specifically, writing
+    to the mapping cache (see `Misc`_ below) is done via a single thread.  With
+    a huge number of quantification threads or in environments with a very slow
+    disk, this may become the limiting step. If you're certain that you have
+    more than the required number of observations, or if you have reason to
+    suspect that your disk is particularly slow on writes, then you can disable
+    the mapping cache (``--disableMappingCache``), and potentially increase the
+    parallelizability of lightweight-alignment-based Salmon.
+
+Lightweight-alignment-based mode
+--------------------------------
+
+One of the novel and innovative features of Salmon is its ability to accurately
+quantify transcripts using *lightweight* alignments.  Lightweight alignments
+are mappings of reads to transcript positions that are computed without
+performing a base-to-base alignment of the read to the transcript.  Lightweight 
+alignments are typically much faster to compute than traditional (or full)
+alignments, and can sometimes provide superior accuracy by being more robust 
+to errors in the read or genomic variation from the reference sequence.
+If you want to use Salmon in lightweight alignment-based mode, then you first
+have to build an Salmon index for your transcriptome.  Assume that
+``transcripts.fa`` contains the set of transcripts you wish to quantify. First,
+you run the Salmon indexer:
+
+::
+    
+    > ./bin/salmon index -t transcripts.fa -i transcripts_index
+
+Then, you can quantify any set of reads (say, paired-end reads in files
+`reads1.fa` and `reads2.fa`) directly against this index using the Salmon
+``quant`` command as follows:
+
+::
+
+    > ./bin/salmon quant -i transcripts_index -l <LIBTYPE> -1 reads1.fa -2 reads2.fa -o transcripts_quant
+
+You can, of course, pass a number of options to control things such as the
+number of threads used or the different cutoffs used for counting reads.
+Just as with the alignment-based mode, after Salmon has finished running, there
+will be a directory called ``salmon_quant``, that contains a file called
+``quant.sf`` containing the quantification results.
 
 Alignment-based mode
 --------------------
@@ -95,15 +131,15 @@ mode, and a description of each, run ``salmon quant --help-alignment``.
 .. note:: Genomic vs. Transcriptomic alignments
 
     Salmon expects that the alignment files provided are with respect to the
-    transcripts given in the corresponding fasta file.  That is, salmon expects
+    transcripts given in the corresponding fasta file.  That is, Salmon expects
     that the reads have been aligned directly to the transcriptome (like RSEM,
     eXpress, etc.) rather than to the genome (as does, e.g. Cufflinks).  If you
     have reads that have already been aligned to the genome, there are
     currently 3 options for converting them for use with Salmon.  First, you
     could convert the SAM/BAM file to a FAST{A/Q} file and then use the
-    read-based mode of salmon described below.  Second, given the converted
+    lightweight-alignment-based mode of Salmon described below.  Second, given the converted
     FASTA{A/Q} file, you could re-align these converted reads directly to the
-    transcripts with your favorite aligner and run salmon in alignment-based
+    transcripts with your favorite aligner and run Salmon in alignment-based
     mode as described above.  Third, you could use a tool like `sam-xlate <https://github.com/mozack/ubu/wiki>`_
     to try and convert the genome-coordinate BAM files directly into transcript 
     coordinates.  This avoids the necessity of having to re-map the reads. However,
@@ -112,7 +148,7 @@ mode, and a description of each, run ``salmon quant --help-alignment``.
 .. topic:: Multiple alignment files
     
     If your alignments for the sample you want to quantify appear in multiple 
-    .bam/.sam files, then you can simply provide the salmon ``-a`` parameter 
+    .bam/.sam files, then you can simply provide the Salmon ``-a`` parameter 
     with a (space-separated) list of these files.  Salmon will automatically 
     read through these one after the other quantifying transcripts using the 
     alignments contained therein.  However, it is currently the case that these
@@ -120,31 +156,6 @@ mode, and a description of each, run ``salmon quant --help-alignment``.
     aligned with respect to the same reference (i.e. the @SQ records in the 
     header sections must be identical).
 
-Read-based mode
----------------
-
-If you want to use salmon like sailfish, then you first have to build an salmon
-index for your transcriptome.  Again, assume that ``transcripts.fa`` contains
-the set of transcripts you wish to quantify.  First, you run the salmon
-indexer:
-
-::
-    
-    > ./bin/salmon index -t transcripts.fa -i transcripts_index
-
-Then, you can quantify any set of reads (say, paired-end reads in files
-reads1.fa and reads2.fa) directly against this index using the salmon ``quant``
-command as follows:
-
-::
-
-    > ./bin/salmon quant -i transcripts_index -l <LIBTYPE> -1 reads1.fa -2 reads2.fa -o transcripts_quant
-
-You can, of course, pass a number of options to control things such as the
-number of threads used or the different cutoffs used for counting reads.
-Just as with the alignment-based mode, after salmon has finished running, there
-will be a directory called ``salmon_quant``, that contains a file called
-``quant.sf`` containing the quantification results.
 
 What's this ``LIBTYPE``?
 ------------------------
@@ -257,10 +268,10 @@ Misc
 ----
 
 Salmon deals with reading from compressed read files in the same way as
-sailfish --- by using process substitution.  Say in the read-based salmon
-example above, the reads were actually in the files ``reads1.fa.gz`` and
-``reads2.fa.gz``, then you'd run the following command to decompress the reads
-"on-the-fly":
+sailfish --- by using process substitution.  Say in the
+lightweigh-alignment-based salmon example above, the reads were actually in the
+files ``reads1.fa.gz`` and ``reads2.fa.gz``, then you'd run the following
+command to decompress the reads "on-the-fly":
 
 ::
 
