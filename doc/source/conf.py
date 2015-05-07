@@ -181,7 +181,7 @@ html_static_path = ['_static']
 #html_file_suffix = None
 
 # Output file base name for HTML help builder.
-htmlhelp_basename = 'Sailfishdoc'
+htmlhelp_basename = 'Salmondoc'
 
 
 # -- Options for LaTeX output ---------------------------------------------
@@ -201,7 +201,7 @@ latex_elements = {
 # (source start file, target name, title,
 #  author, documentclass [howto, manual, or own class]).
 latex_documents = [
-  ('index', 'Sailfish.tex', u'Sailfish Documentation',
+  ('index', 'Salmon.tex', u'Salmon Documentation',
    u'Rob Patro, Carl Kingsford and Steve Mount', 'manual'),
 ]
 
@@ -231,7 +231,7 @@ latex_documents = [
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
 man_pages = [
-    ('index', 'salmon', u'Sailfish Documentation',
+    ('index', 'salmon', u'Salmon Documentation',
      [u'Rob Patro, Carl Kingsford and Steve Mount'], 1)
 ]
 
