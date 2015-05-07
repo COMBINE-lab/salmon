@@ -3,7 +3,7 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Welcome to Salmon & Sailfish's documentation!
+Welcome to Salmon's documentation!
 =============================================
 
 Contents:
@@ -12,7 +12,6 @@ Contents:
    :maxdepth: 2
    
    building.rst
-   sailfish.rst
    salmon.rst
    library_type.rst
 

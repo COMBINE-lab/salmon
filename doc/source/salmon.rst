@@ -1,7 +1,7 @@
 Salmon
 ================
 
-Salmon is a tool for transcript quantification from RNA-seq data.  It
+Salmon is a tool for **wicked** transcript quantification from RNA-seq data.  It
 requires a set of target transcripts (either from a reference or *de-novo*
 assembly) to quantify.  All you need to run Salmon is a fasta file containing
 your reference transcripts and a (set of) fasta/fastq file(s) containing your

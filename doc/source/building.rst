@@ -2,18 +2,18 @@ Requirements
 ============
 
 * A C++11 conformant compiler (currently tested with GCC>=4.7 and Clang>=3.4)
-* CMake_. Sailfish uses the CMake build system to check, fetch and install
-  dependencies, and to compile and install Sailfish. CMake is available for all
-  major platforms (though Sailfish is currently unsupported on Windows.)
+* CMake_. Salmon uses the CMake build system to check, fetch and install
+  dependencies, and to compile and install Salmon. CMake is available for all
+  major platforms (though Salmon is currently unsupported on Windows.)
   
 Installation
 ============
 
-After downloading the Sailfish source distribution and unpacking it, change into the top-level directory:
+After downloading the Salmon source distribution and unpacking it, change into the top-level directory:
 
 ::
 
-    > cd Sailfish
+    > cd salmon
 
 Then, create and out-of-source build directory and change into it:
 
@@ -23,7 +23,7 @@ Then, create and out-of-source build directory and change into it:
     > cd build
 
 
-Sailfish makes extensive use of Boost_.  We recommend installing the most
+Salmon makes extensive use of Boost_.  We recommend installing the most
 recent version (1.55) systemwide if possible. If Boost is not installed on your
 system, the build process will fetch, compile and install it locally.  However,
 if you already have a recent version of Boost available on your system, it make
@@ -48,10 +48,13 @@ where it is as well. The flags for CMake are as follows:
   (e.g. /opt/local).
 
 * -DCMAKE_INSTALL_PREFIX=<install_dir> -- <install_dir> is the directory to
-  which you wish Sailfish to be installed.  If you don't specify this option,
+  which you wish Salmon to be installed.  If you don't specify this option,
   it will be installed locally in the top-level directory (i.e. the directory
   directly above "build").
-                                  
+
+There are a number of other libraries upon which Salmon depends, but CMake 
+should fetch these for you automatically.
+
 Setting the appropriate flags, you can then run the CMake configure step as
 follows:
 
@@ -84,12 +87,7 @@ installed with:
                                   
     > make install
 
-To ensure that Sailfish has access to the appropriate libraries you should
-ensure that the PATH variabile contains <install_dir>/bin, and that
-LD_LIBRARY_PATH (or DYLD_FALLBACK_LIBRARY_PATH on OSX) contains
-<install_dir>/lib.
-
-After the paths are set, you can test the installation by running
+You can test the installation by running
 
 ::
 
