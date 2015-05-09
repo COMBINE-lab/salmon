@@ -1037,7 +1037,9 @@ inline void collectHitsForRead(const bwaidx_t *idx, const bwtintv_v* a, smem_aux
             // If the hit is reversed --- swap the start and end
             if (isRev) {
                 if (endPos > startPos) {
-                    std::cerr << "DANGER WILL ROBINSON! Hit is supposedly reversed, but startPos = " << startPos << " < endPos = " << endPos << "\n";
+                    salmonOpts.jointLog->warn("Hit is supposedly reversed, "
+                                              "but startPos = {} < endPos = {}",
+                                              startPos, endPos);
                 }
                 auto temp = startPos;
                 startPos = endPos;
@@ -1050,6 +1052,7 @@ inline void collectHitsForRead(const bwaidx_t *idx, const bwtintv_v* a, smem_aux
             if (refID < 0) { continue; } // bridging multiple reference sequences or the forward-reverse boundary;
 
             auto tlen = idx->bns->anns[refID].len;
+
             // The refence sequence-relative (e.g. transcript-relative) position of the MEM
             long hitLoc = static_cast<long>(isRev ? endPos : startPos) - idx->bns->anns[refID].offset;
 

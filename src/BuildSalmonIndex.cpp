@@ -69,6 +69,7 @@ int salmonIndex(int argc, char* argv[]) {
 
     bool useStreamingParser = true;
 
+    uint32_t saSampInterval = 1;
     uint32_t maxThreads = std::thread::hardware_concurrency();
     uint32_t numThreads;
 
@@ -80,6 +81,10 @@ int salmonIndex(int argc, char* argv[]) {
     ("index,i", po::value<string>()->required(), "Salmon index.")
     ("threads,p", po::value<uint32_t>(&numThreads)->default_value(maxThreads)->required(),
                             "Number of threads to use (only used for computing bias features)")
+    ("sasamp,s", po::value<uint32_t>(&saSampInterval)->default_value(1)->required(),
+                            "The interval at which the suffix array should be sampled. "
+                            "Smaller values are faster, but produce a larger index. "
+                            "The default should be OK, unless your transcriptome is huge.")
     ;
 
     po::variables_map vm;
@@ -100,8 +105,12 @@ Creates a salmon index.
         }
         po::notify(vm);
 
+        fmt::MemoryWriter optWriter;
+        optWriter << vm["sasamp"].as<uint32_t>();
+
         string transcriptFile = vm["transcripts"].as<string>();
         bfs::path indexDirectory(vm["index"].as<string>());
+
 
         if (!bfs::exists(indexDirectory)) {
             std::cerr << "index [" << indexDirectory << "] did not previously exist "
@@ -139,15 +148,20 @@ Creates a salmon index.
 
         bfs::path outputPrefix = indexDirectory / "bwaidx";
 
-        std::vector<char const*> bwaArgVec{ "index", "-p",
+        std::vector<char const*> bwaArgVec{ "index",
+                                    "-s",
+                                    optWriter.str().c_str(),
+                                    "-p",
                                     outputPrefix.string().c_str(),
-                                    transcriptFile.c_str()};
+                                    transcriptFile.c_str() };
 
         char* bwaArgv[] = { const_cast<char*>(bwaArgVec[0]),
                             const_cast<char*>(bwaArgVec[1]),
                             const_cast<char*>(bwaArgVec[2]),
-                            const_cast<char*>(bwaArgVec[3]) };
-        int bwaArgc = 4;
+                            const_cast<char*>(bwaArgVec[3]),
+                            const_cast<char*>(bwaArgVec[4]),
+                            const_cast<char*>(bwaArgVec[5]) };
+        int bwaArgc = 6;
 
         ret = bwa_index(bwaArgc, bwaArgv);
 

@@ -190,10 +190,11 @@ int bwa_index(int argc, char *argv[]) // the "index" command
 
 	char *prefix = 0, *str, *str2, *str3;
 	int c, algo_type = 0, is_64 = 0, block_size = 10000000;
+	int sa_sample_interval = 32;
 	clock_t t;
 	int64_t l_pac;
 
-	while ((c = getopt(argc, argv, "6a:p:b:")) >= 0) {
+	while ((c = getopt(argc, argv, "6a:p:b:s:")) >= 0) {
 		switch (c) {
 		case 'a': // if -a is not set, algo_type will be determined later
 			if (strcmp(optarg, "div") == 0) algo_type = 1;
@@ -203,6 +204,7 @@ int bwa_index(int argc, char *argv[]) // the "index" command
 			break;
 		case 'p': prefix = strdup(optarg); break;
 		case '6': is_64 = 1; break;
+		case 's': sa_sample_interval = atoi(optarg); break;
 		case 'b':
 			block_size = strtol(optarg, &str, 10);
 			if (*str == 'G' || *str == 'g') block_size *= 1024 * 1024 * 1024;
@@ -283,7 +285,7 @@ int bwa_index(int argc, char *argv[]) // the "index" command
 		t = clock();
 		fprintf(stderr, "[bwa_index] Construct SA from BWT and Occ... ");
 		bwt = bwt_restore_bwt(str);
-		bwt_cal_sa(bwt, 32);
+		bwt_cal_sa(bwt, sa_sample_interval);
 		bwt_dump_sa(str3, bwt);
 		bwt_destroy(bwt);
 		fprintf(stderr, "%.2f sec\n", (float)(clock() - t) / CLOCKS_PER_SEC);
