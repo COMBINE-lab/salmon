@@ -16,6 +16,7 @@ extern "C" {
 #include "LibraryFormat.hpp"
 #include "SalmonOpts.hpp"
 #include "FragmentLengthDistribution.hpp"
+#include "FragmentStartPositionDistribution.hpp"
 #include "AlignmentGroup.hpp"
 #include "ErrorModel.hpp"
 #include "AlignmentModel.hpp"
@@ -53,6 +54,7 @@ class AlignmentLibrary {
         transcriptFile_(transcriptFile),
         libFmt_(libFmt),
         transcripts_(std::vector<Transcript>()),
+	fragStartDists_(5),
         quantificationPasses_(0) {
             namespace bfs = boost::filesystem;
 
@@ -104,6 +106,26 @@ class AlignmentLibrary {
             fmt::print(stderr, "Populating targets from aln = {}, fasta = {} . . .",
                        alnFiles.front(), transcriptFile_);
             fp.populateTargets(transcripts_);
+	    for (auto& txp : transcripts_) {
+		    // Length classes taken from
+		    // ======
+		    // Roberts, Adam, et al.
+		    // "Improving RNA-Seq expression estimates by correcting for fragment bias."
+		    // Genome Biol 12.3 (2011): R22.
+		    // ======
+		    // perhaps, define these in a more data-driven way
+		    if (txp.RefLength <= 1334) {
+			    txp.lengthClassIndex(0);
+		    } else if (txp.RefLength <= 2104) {
+			    txp.lengthClassIndex(0);
+		    } else if (txp.RefLength <= 2988) {
+			    txp.lengthClassIndex(0);
+		    } else if (txp.RefLength <= 4389) {
+			    txp.lengthClassIndex(0);
+		    } else {
+			    txp.lengthClassIndex(0);
+		    }
+	    }
             fmt::print(stderr, "done\n");
 
             // Create the cluster forest for this set of transcripts
@@ -139,6 +161,10 @@ class AlignmentLibrary {
     //inline t_pool* threadPool() { return threadPool_.get(); }
 
     inline SAM_hdr* header() { return bq->header(); }
+
+    inline std::vector<FragmentStartPositionDistribution>& fragmentStartPositionDistributions() {
+	    return fragStartDists_;
+    }
 
     inline FragmentLengthDistribution& fragmentLengthDistribution() {
         return *flDist_.get();
@@ -224,6 +250,12 @@ class AlignmentLibrary {
      * in the same cluster.
      */
     std::unique_ptr<ClusterForest> clusters_;
+
+    /**
+      * The emperical fragment start position distribution
+      */
+    std::vector<FragmentStartPositionDistribution> fragStartDists_;
+
     /**
      * The emperical fragment length distribution.
      *

@@ -477,12 +477,13 @@ void processMiniBatch(
                     ++libTypeCounts[aln.libFormat().formatID()];
 
                     // pre FSPD
+		    /*
                     aln.logProb = (transcriptLogCount - logRefLength) +
                                   logFragProb + logAlignCompatProb;
-                    /*
+		    */
                     aln.logProb = (transcriptLogCount + startPosProb) +
                                   logFragProb + logAlignCompatProb;
-                                  */
+                                  
 
                     if (std::abs(aln.logProb) == LOG_0) { continue; }
 

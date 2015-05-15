@@ -146,8 +146,14 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     auto& fragmentQueue = alnLib.fragmentQueue();
     auto& alignmentGroupQueue = alnLib.alignmentGroupQueue();
 
+    std::vector<FragmentStartPositionDistribution>& fragStartDists =
+        alnLib.fragmentStartPositionDistributions();
+
     auto& fragLengthDist = alnLib.fragmentLengthDistribution();
     auto& alnMod = alnLib.alignmentModel();
+
+    bool useFSPD{!salmonOpts.noFragStartPosDist};
+    bool useFragLengthDist{!salmonOpts.noFragLengthDist};
 
     double startingCumulativeMass = fmCalc.cumulativeLogMassAt(firstTimestepOfRound);
     const auto expectedLibraryFormat = alnLib.format();
@@ -318,10 +324,25 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                             errLike = alnMod.logLikelihood(*aln, transcript);
                         }
 
+			// Allow for a non-uniform fragment start position distribution
+                        double startPosProb = -logRefLength;
+                        auto hitPos = aln->left();
+			if (useFSPD and burnedIn and hitPos < refLength) {
+			  auto& fragStartDist =
+				  fragStartDists[transcript.lengthClassIndex()];
+			  startPosProb = fragStartDist(hitPos, refLength, logRefLength);
+			}
+			
+			// Pre FSPD 
+			/*
                         double qualProb = -logRefLength + logFragProb +
                                           aln->logQualProb() +
                                           errLike + logAlignCompatProb;
-
+		        */	
+			double qualProb = startPosProb + logFragProb +
+                                          aln->logQualProb() +
+                                          errLike + logAlignCompatProb;
+			
 
 
                         // The overall mass of this transcript, which is used to
@@ -380,13 +401,24 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
                         double r = uni(eng);
                         if (!burnedIn and r < std::exp(aln->logProb)) {
+			    // Update the error model
                             if (salmonOpts.useErrorModel) {
                                 alnMod.update(*aln, transcript, LOG_1, logForgettingMass);
                             }
+			    // Update the fragment length distribution 
                             if (aln->isPaired() and !salmonOpts.noFragLengthDist) {
                                 double fragLength = aln->fragLen();
                                 fragLengthDist.addVal(fragLength, logForgettingMass);
                             }
+			    // Update the fragment start position distribution 
+			    if (useFSPD) {
+				    auto hitPos = aln->left();
+				    auto& fragStartDist =
+					    fragStartDists[transcript.lengthClassIndex()];
+				    fragStartDist.addVal(hitPos,
+						    transcript.RefLength,
+						    logForgettingMass);
+			    }
                         }
                     }
 
@@ -792,6 +824,9 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                          "unlikely lengths will be assigned a smaller relative probability than those with more likely "
                         "lengths.  When this flag is passed in, the observed fragment length has no effect on that fragment's "
                         "a priori probability.")
+    ("noFragStartPosDist", po::bool_switch(&(sopt.noFragStartPosDist))->default_value(false), "[Currently Experimental] : "
+                        "Don't consider / model non-uniformity in the fragment start positions "
+                        "across the transcript.")
     ("numErrorBins", po::value<uint32_t>(&(sopt.numErrorBins))->default_value(6), "The number of bins into which to divide "
                         "each read when learning and applying the error model.  For example, a value of 10 would mean that "
                         "effectively, a separate error model is leared and applied to each 10th of the read, while a value of "
