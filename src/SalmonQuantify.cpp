@@ -1380,7 +1380,7 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
     uint32_t firstTranscriptID = std::numeric_limits<uint32_t>::max();
     double bestScore = -std::numeric_limits<double>::max();
     if (BOOST_UNLIKELY(isOrphan)) {
-        //return;
+        return;
         bool foundValidHit{false};
         // search for a hit on the left
         for (auto& tHitList : leftHits) {
