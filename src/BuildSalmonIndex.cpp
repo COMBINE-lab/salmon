@@ -137,6 +137,12 @@ bool buildAuxKmerIndex(boost::filesystem::path& outputPrefix, uin32_t k,
 }
 */
 
+// Cool way to do this from 
+// http://stackoverflow.com/questions/108318/whats-the-simplest-way-to-test-whether-a-number-is-a-power-of-2-in-c
+bool isPowerOfTwo(uint32_t n) {
+  return (n > 0 and (n & (n-1)) == 0);
+}
+
 int salmonIndex(int argc, char* argv[]) {
 
     using std::string;
@@ -160,7 +166,8 @@ int salmonIndex(int argc, char* argv[]) {
     ("sasamp,s", po::value<uint32_t>(&saSampInterval)->default_value(1)->required(),
                             "The interval at which the suffix array should be sampled. "
                             "Smaller values are faster, but produce a larger index. "
-                            "The default should be OK, unless your transcriptome is huge.")
+                            "The default should be OK, unless your transcriptome is huge. "
+			    "This value should be a power of 2.")
     ;
 
     po::variables_map vm;
@@ -180,6 +187,14 @@ Creates a salmon index.
             std::exit(1);
         }
         po::notify(vm);
+
+	uint32_t sasamp = vm["sasamp"].as<uint32_t>();
+	if (!isPowerOfTwo(sasamp)) {
+	  fmt::MemoryWriter errWriter;
+	  errWriter << "Error: The suffix array sampling interval must be "
+		       "a power of 2. The value provided, " << sasamp << ", is not.";
+	  throw(std::logic_error(errWriter.str()));
+	}
 
         fmt::MemoryWriter optWriter;
         optWriter << vm["sasamp"].as<uint32_t>();

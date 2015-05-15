@@ -1250,7 +1250,7 @@ template <typename CoverageCalculator>
 inline bool nearEndOfTranscript(
             CoverageCalculator& hit,
             Transcript& txp,
-            uint32_t cutoff=200) {
+            int32_t cutoff=std::numeric_limits<int32_t>::max()) {
 	// check if hit appears close to the end of the given transcript
 	auto hitPos = hit.bestHitPos;
 	return (hitPos < cutoff or std::abs(txp.RefLength - hitPos) < cutoff);
@@ -1380,7 +1380,7 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
     uint32_t firstTranscriptID = std::numeric_limits<uint32_t>::max();
     double bestScore = -std::numeric_limits<double>::max();
     if (BOOST_UNLIKELY(isOrphan)) {
-        return;
+        //return;
         bool foundValidHit{false};
         // search for a hit on the left
         for (auto& tHitList : leftHits) {

@@ -98,14 +98,19 @@ double FragmentStartPositionDistribution::operator()(
         int32_t hitPos,
         uint32_t txpLen,
         double logEffLen) {
+    
+    if (hitPos < 0) { hitPos = 0; }
     assert(hitPos < txpLen);
+    if (hitPos >= txpLen) {
+	    std::cerr << "\n\nhitPos = " << hitPos << ", txpLen = " << txpLen << "!!\n\n\n";
+	    return salmon::math::LOG_0;
+    }
     // If we haven't updated the CDF yet, then
     // just return log(1 / effLen);
     if (!isUpdated_) {
         return -logEffLen;
     }
 
-    if (hitPos < 0) { hitPos = 0; }
     double a = hitPos * (1.0 / txpLen);
 
     double effLen = std::exp(logEffLen);
