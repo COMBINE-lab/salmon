@@ -39,6 +39,8 @@ struct SalmonOpts {
                                       // account when computing the probability that a
                                      // fragment was generated from a transcript.
 
+    bool noFragStartPosDist; // Don't learn a non-uniform start distribution
+
     bool useReadCompat; // Give a fragment assignment a likelihood based on the compatibility
                         // between the manner in which it mapped and the expected read
                         // librarry format.

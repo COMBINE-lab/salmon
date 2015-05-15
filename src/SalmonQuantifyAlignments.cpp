@@ -131,6 +131,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
     // Whether or not we are using "banking"
     bool useMassBanking = (!initialRound and salmonOpts.useMassBanking);
+    bool useReadCompat = salmonOpts.incompatPrior != salmon::math::LOG_0;
 
     // Create a random uniform distribution
     std::default_random_engine eng(rd());
@@ -299,7 +300,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
                         // The probability that the fragments align to the given strands in the
                         // given orientations.
-                        double logAlignCompatProb = (salmonOpts.useReadCompat) ?
+                        double logAlignCompatProb = (useReadCompat) ?
                                 (salmon::utils::logAlignFormatProb(aln->libFormat(), expectedLibraryFormat, salmonOpts.incompatPrior)) :
                                 LOG_1;
 
@@ -745,16 +746,12 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                                             "so until there is a faster multi-threaded SAM/BAM parser to feed the "
                                             "quantification threads, one should not expect much of a speed-up beyond "
                                             "~6 threads.")
-    ("useReadCompat,e", po::bool_switch(&(sopt.useReadCompat))->default_value(false), "[Currently Experimental] : "
-                        "Use the orientation in which fragments were \"mapped\"  to assign them a probability.  For "
-                        "example, fragments with an incorrect relative oritenation with respect  to the provided library "
-                        "format string will be assigned a 0 probability.")
-    ("incompatPrior", po::value<double>(&(sopt.incompatPrior))->default_value(1e-5), "This option can only be used in conjunction "
-                        "with --useReadCompat.  It sets the prior probability that an alignment that disagrees with the specified "
-                        "library type (--libType) results from the true fragment origin.  Setting this to 0 says that alignments "
-                        "that disagree with the library type should be \"impossible\", while setting it to 1 says that alignments "
-                        "that disagree with the library type are no less likely than those that do (in this case, though, there "
-                        "is no reason to even use --useReadCompat)")
+    ("incompatPrior", po::value<double>(&(sopt.incompatPrior))->default_value(1e-20), "This option "
+                        "sets the prior probability that an alignment that disagrees with the specified "
+                        "library type (--libType) results from the true fragment origin.  Setting this to 0 "
+                        "specifies that alignments that disagree with the library type should be \"impossible\", "
+                        "while setting it to 1 says that alignments that disagree with the library type are no "
+                        "less likely than those that do")
     ("useErrorModel", po::bool_switch(&(sopt.useErrorModel))->default_value(false), "[Currently Experimental] : "
                         "Learn and apply an error model for the aligned reads.  This takes into account the "
                         "the observed frequency of different types of mismatches when computing the likelihood of "
@@ -953,14 +950,12 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
             jointLog->warn() << wstr.str();
         }
 
-        if (sopt.useReadCompat) {
-            // maybe arbitrary, but if it's smaller than this, consider it
-            // equal to LOG_0
-            if (sopt.incompatPrior < 1e-320) {
-                sopt.incompatPrior = salmon::math::LOG_0;
-            } else {
-                sopt.incompatPrior = std::log(sopt.incompatPrior);
-            }
+        // maybe arbitrary, but if it's smaller than this, consider it
+        // equal to LOG_0
+        if (sopt.incompatPrior < 1e-320) {
+            sopt.incompatPrior = salmon::math::LOG_0;
+        } else {
+            sopt.incompatPrior = std::log(sopt.incompatPrior);
         }
 
         // If we made it this far, the output directory exists

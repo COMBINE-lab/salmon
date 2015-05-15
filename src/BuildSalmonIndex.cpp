@@ -41,6 +41,7 @@
 #include "tbb/task_scheduler_init.h"
 #include "tbb/parallel_sort.h"
 
+#include "Transcript.hpp"
 #include "SalmonUtils.hpp"
 #include "GenomicFeature.hpp"
 #include "format.h"
@@ -60,6 +61,81 @@ int computeBiasFeatures(
     boost::filesystem::path outFilePath,
     bool useStreamingParser,
     size_t numThreads);
+
+/*
+bool buildAuxKmerIndex(boost::filesystem::path& outputPrefix, uin32_t k,
+                       std::shared_ptr<spdlog::logger>& logger){
+    namespace bfs = boost::filesystem;
+
+    bfs::path indexPath = outputPrefix / "bwaindex";
+    // Load the bwa index
+    bwaidx_t *idx_{nullptr};
+    {
+        logger->info("Reading BWT index from file");
+        if ((idx_ = bwa_idx_load(indexPath.string().c_str(), BWA_IDX_BWT|BWA_IDX_BNS|BWA_IDX_PAC)) == 0) {
+            logger->error("Couldn't open index [{}] --- ", indexPath);
+            logger->error("Please make sure that 'salmon index' has been run successfully");
+            std::exit(1);
+        }
+    }
+
+    size_t numRecords = idx_->bns->n_seqs;
+    std::vector<Transcript> transcripts_tmp;
+    { // Load transcripts from file
+
+            logger->info("Index contained {} targets; loading them", numRecords);
+            //transcripts_.resize(numRecords);
+            for (auto i : boost::irange(size_t(0), numRecords)) {
+                uint32_t id = i;
+                char* name = idx_->bns->anns[i].name;
+                uint32_t len = idx_->bns->anns[i].len;
+                // copy over the length, then we're done.
+                transcripts_tmp.emplace_back(id, name, len);
+            }
+
+            std::sort(transcripts_tmp.begin(), transcripts_tmp.end(),
+                    [](const Transcript& t1, const Transcript& t2) -> bool {
+                    return t1.id < t2.id;
+                    });
+            double alpha = 0.005;
+            char nucTab[256];
+            nucTab[0] = 'A'; nucTab[1] = 'C'; nucTab[2] = 'G'; nucTab[3] = 'T';
+            for (size_t i = 4; i < 256; ++i) { nucTab[i] = 'N'; }
+
+            // Load the transcript sequence from file
+            for (auto& t : transcripts_tmp) {
+                transcripts_.emplace_back(t.id, t.RefName.c_str(), t.RefLength, alpha);
+                // from BWA
+                uint8_t* rseq = nullptr;
+                int64_t tstart, tend, compLen, l_pac = idx_->bns->l_pac;
+                tstart  = idx_->bns->anns[t.id].offset;
+                tend = tstart + t.RefLength;
+                rseq = bns_get_seq(l_pac, idx_->pac, tstart, tend, &compLen);
+                if (compLen != t.RefLength) {
+                    fmt::print(stderr,
+                               "For transcript {}, stored length ({}) != computed length ({}) --- index may be corrupt. exiting\n",
+                               t.RefName, compLen, t.RefLength);
+                    std::exit(1);
+                }
+
+                std::string seq(t.RefLength, ' ');
+                if (rseq != 0) {
+                    for (size_t i = 0; i < compLen; ++i) {
+                        seq[i] = rseq[i];
+                                 //nst_nt4_table[static_cast<int>(nucTab[rseq[i]])];
+                    }
+                }
+                transcripts_.back().Sequence = salmon::stringtools::encodeSequenceInSAM(seq.c_str(), t.RefLength);
+                free(rseq);
+                // end BWA code
+            }
+            // Since we have the de-coded reference sequences, we no longer need
+            // the encoded sequences, so free them.
+            free(idx_->pac); idx_->pac = nullptr;
+            transcripts_tmp.clear();
+            // ====== Done loading the transcripts from file
+}
+*/
 
 int salmonIndex(int argc, char* argv[]) {
 
@@ -120,7 +196,7 @@ Creates a salmon index.
 
         bfs::path logPath = indexDirectory / "indexing.log";
         size_t max_q_size = 2097152;
-        spdlog::set_async_mode(max_q_size);
+        //spdlog::set_async_mode(max_q_size);
 
         auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(logPath.string(), true);
         auto consoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
@@ -165,7 +241,13 @@ Creates a salmon index.
 
         ret = bwa_index(bwaArgc, bwaArgv);
 
-        jointLog->info("done\n");
+        jointLog->info("done building BWT Index");
+
+        // If we want to build the auxiliary k-mer index, do it here.
+        /*
+        uint32_t k = 15;
+        buildAuxKmerIndex(outputPrefix, k, jointLog);
+        */
 
     } catch (po::error &e) {
         std::cerr << "exception : [" << e.what() << "]. Exiting.\n";

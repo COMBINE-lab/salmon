@@ -7,6 +7,7 @@ Salmon.cpp
 BuildSalmonIndex.cpp
 SalmonQuantify.cpp
 FragmentLengthDistribution.cpp 
+FragmentStartPositionDistribution.cpp
 SalmonUtils.cpp
 StadenUtils.cpp
 )

@@ -3,7 +3,7 @@
  * This class is similar to and inspired by the FragmentLengthDistribution
  * class, which was itself modified from lengthdistribution.h ---
  * originally written by Adam Roberts as part of the eXpress software.
- * Rob Patro; 2014
+ * updated by Rob Patro; 2014, 2015
  */
 
 #ifndef FRAGMENT_START_POSITION_DISTRIBUTION
@@ -13,6 +13,7 @@
 #include <atomic>
 #include <vector>
 #include <string>
+#include <mutex>
 
 /**
  * The FragmentStartPositionDistribution class keeps track of the observed fragment
@@ -23,87 +24,76 @@
  */
 class FragmentStartPositionDistribution {
   /**
-   * A private vector that stores the (logged) kernel values.
-   **/
-  std::vector<double> kernel_;
-  /**
    * A private vector that stores the observed (logged) mass for each length.
    */
-    std::vector<tbb::atomic<double>> hist_;
+  std::vector<tbb::atomic<double>> pmf_;
+  std::vector<tbb::atomic<double>> cmf_;
   /**
    * A private double that stores the total observed (logged) mass.
    */
-    tbb::atomic<double> totMass_;
+  tbb::atomic<double> totMass_;
   /**
    * A private double that stores the (logged) sum of the product of observed
    * lengths and masses for quick mean calculations.
    */
-    tbb::atomic<double> sum_;
+   tbb::atomic<double> sum_;
   /**
    * The number of bins we consider within each transcript.
    */
   size_t numBins_;
 
+  // Mutex for this distribution
+  std::mutex fspdMut_;
+  bool isUpdated_;
+
 public:
   /**
-   * LengthDistribution Constructor.
-   * @param alpha double that sets the average pseudo-counts (logged).
-   * @param max_val an integer that sets the maximum allowable length.
-   * @param prior_mu a size_t for the mean of the prior gaussian distribution.
-            If 0, a uniform distribution is used instead.
-   * @param prior_sigma a size_t for the standard deviation of the prior
-   *        gaussian distribution.
-   * @param kernel_n a size_t specifying the number of trials in the kernel
-   *        binomial distribution. Must be odd.
-   * @param kernel_p a double specifying the success probability for the kernel
-   *        binomial distribution.
-   * @param bin_size a size_t specifying the size of bins to use internally to
-   *        reduce the number of parameters in the distribution.
+   * FragmentStartPositionDistribution constructor:
+   * @param numBins The number of bins to consider for
+   *                each transcript.
+   *
    */
-  FragmentLengthDistribution(double alpha, size_t max_val, size_t prior_mu,
-                             size_t prior_sigma, size_t kernel_n, double kernel_p,
-                             size_t bin_size = 1);
-  /**
-   * An accessor for the maximum allowed length.
-   * @return Max allowed length.
-   */
-  size_t maxVal() const;
-  /**
-   * An accessor for the minimum observed length (1 initially).
-   * @return Minimum observed length.
-   */
-  size_t minVal() const;
-  /**
-   * An accessor for the mean length in the distribution.
-   * @return Mean observed length.
-   */
-  double mean() const;
-  /**
+  FragmentStartPositionDistribution(uint32_t numBins=20);
+
+   /**
    * A member function that updates the distribution based on a new length
    * observation.
    * @param len an integer for the observed length.
    * @param mass a double for the mass (logged) to add.
    */
-  void addVal(size_t len, double mass);
+  void addVal(int32_t hitPos, uint32_t txpLen, double mass);
+  /**
+   * A member function that returns the probability that a hit
+   * starts at the specified position within the given transcript length.
+   * @param hitPos The position where the fragment begins
+   * @param txpLen The length of the transcript
+   */
+  double operator()(int32_t hitPos, uint32_t txpLen, double effLen);
+  // Evaluate the CDF between two points
+  double evalCDF(int32_t hitPos, uint32_t txpLen);
+  // Update the distribution (compute the CDF) and
+  // set isUpdated_;
+  void update();
+
   /**
    * An accessor for the (logged) probability of a given length.
    * @param len an integer for the length to return the probability of.
    * @return (logged) probability of observing the given length.
    */
-  double pmf(size_t len) const;
+  //double pmf(size_t len) const;
   /**
    * A member function that returns a (logged) cumulative mass for a given
    * length.
    * @param len an integer for the length to return the cmf value of.
    * @return (Logged) cmf value of length.
    */
-  double cmf(size_t len) const;
+  //double cmf(size_t len) const;
   /**
    * A member function that returns a vector containing the (logged) cumulative
    * mass function *for the bins*.
    * @return (Logged) cmf of bins.
    */
-  std::vector<double> cmf() const;
+  //std::vector<double> cmf() const;
   /**
    * An accessor for the (logged) observation mass (including pseudo-counts).
    * @return Total observation mass.

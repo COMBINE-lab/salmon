@@ -35,6 +35,7 @@ public:
         mass_.store(other.mass_.load());
         lastUpdate_.store(other.lastUpdate_.load());
         cachedEffectiveLength_.store(other.cachedEffectiveLength_.load());
+        lengthClassIndex_ = other.lengthClassIndex_;
         logPerBasePrior_ = other.logPerBasePrior_;
         priorMass_ = other.priorMass_;
     }
@@ -52,6 +53,7 @@ public:
         mass_.store(other.mass_.load());
         lastUpdate_.store(other.lastUpdate_.load());
         cachedEffectiveLength_.store(other.cachedEffectiveLength_.load());
+        lengthClassIndex_ = other.lengthClassIndex_;
         logPerBasePrior_ = other.logPerBasePrior_;
         priorMass_ = other.priorMass_;
         return *this;
@@ -186,6 +188,9 @@ public:
     double perBasePrior() { return std::exp(logPerBasePrior_); }
     inline size_t lastTimestepUpdated() { return lastTimestepUpdated_.load(); }
 
+    void lengthClassIndex(uint32_t ind) { lengthClassIndex_ = ind; }
+    uint32_t lengthClassIndex() { return lengthClassIndex_; }
+
     std::string RefName;
     uint32_t RefLength;
     uint32_t id;
@@ -207,6 +212,7 @@ private:
     tbb::atomic<double> sharedCount_;
     tbb::atomic<double> cachedEffectiveLength_;
     tbb::atomic<size_t> lastUpdate_;
+    uint32_t lengthClassIndex_;
     double logPerBasePrior_;
 };
 

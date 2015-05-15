@@ -13,6 +13,7 @@ extern "C" {
 #include "Transcript.hpp"
 #include "ReadLibrary.hpp"
 #include "FragmentLengthDistribution.hpp"
+#include "FragmentStartPositionDistribution.hpp"
 
 // Logger includes
 #include "spdlog/spdlog.h"
@@ -42,7 +43,8 @@ class ReadExperiment {
         readLibraries_(readLibraries),
         //transcriptFile_(transcriptFile),
         transcripts_(std::vector<Transcript>()),
-        totalAssignedFragments_(0) {
+        totalAssignedFragments_(0),
+        fragStartDists_(5){
             namespace bfs = boost::filesystem;
 
             // Make sure the read libraries are valid.
@@ -57,7 +59,6 @@ class ReadExperiment {
                     meanFragLen, fragLenStd,
                     fragLenKernelN,
                     fragLenKernelP, 1));
-
 
             // Make sure the transcript file exists.
             /*
@@ -120,7 +121,26 @@ class ReadExperiment {
                 if (rseq != 0) {
                     for (size_t i = 0; i < compLen; ++i) { seq[i] = nucTab[rseq[i]]; }
                 }
-                transcripts_.back().Sequence = salmon::stringtools::encodeSequenceInSAM(seq.c_str(), t.RefLength);
+                auto& txp = transcripts_.back();
+                txp.Sequence = salmon::stringtools::encodeSequenceInSAM(seq.c_str(), t.RefLength);
+                // Length classes taken from
+                // ======
+                // Roberts, Adam, et al.
+                // "Improving RNA-Seq expression estimates by correcting for fragment bias."
+                // Genome Biol 12.3 (2011): R22.
+                // ======
+                // perhaps, define these in a more data-driven way
+                if (t.RefLength <= 1334) {
+                    txp.lengthClassIndex(0);
+                } else if (t.RefLength <= 2104) {
+                    txp.lengthClassIndex(0);
+                } else if (t.RefLength <= 2988) {
+                    txp.lengthClassIndex(0);
+                } else if (t.RefLength <= 4389) {
+                    txp.lengthClassIndex(0);
+                } else {
+                    txp.lengthClassIndex(0);
+                }
                 /*
                 std::cerr << "TS = " << t.RefName << " : \n";
                 std::cerr << seq << "\n VS \n";
@@ -147,6 +167,8 @@ class ReadExperiment {
     uint64_t numAssignedFragments() { return numAssignedFragments_; }
     uint64_t numMappedReads() { return numAssignedFragments_; }
 
+    uint64_t upperBoundHits() { return upperBoundHits_; }
+    void setUpperBoundHits(uint64_t ubh) { upperBoundHits_ = ubh; }
 
     std::atomic<uint64_t>& numAssignedFragmentsAtomic() { return numAssignedFragments_; }
 
@@ -198,6 +220,9 @@ class ReadExperiment {
         return numObservedFragsInFirstPass_;
     }
 
+    std::vector<FragmentStartPositionDistribution>& fragmentStartPositionDistributions() {
+        return fragStartDists_;
+    }
 
     bool softReset() {
         if (quantificationPasses_ == 0) {
@@ -384,6 +409,11 @@ class ReadExperiment {
      * in the same cluster.
      */
     std::unique_ptr<ClusterForest> clusters_;
+    /**
+      *
+      *
+      */
+    std::vector<FragmentStartPositionDistribution> fragStartDists_;
     /** Keeps track of the number of passes that have been
      *  made through the alignment file.
      */
@@ -393,6 +423,7 @@ class ReadExperiment {
     size_t quantificationPasses_{0};
     uint64_t numAssignedFragsInFirstPass_{0};
     uint64_t numObservedFragsInFirstPass_{0};
+    uint64_t upperBoundHits_{0};
     std::unique_ptr<FragmentLengthDistribution> fragLengthDist_;
 };
 

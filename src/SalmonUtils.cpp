@@ -107,6 +107,8 @@ namespace utils {
                 if (expected.strandedness == observed.strandedness) {
                     return salmon::math::LOG_1;
                 } else {
+		    std::cerr << "expected = " << expected << "\n";
+		    std::cerr << "observed = " << observed << "\n";
                     return incompatPrior;
                 }
             }
@@ -135,12 +137,14 @@ namespace utils {
         const double logBillion = std::log(1000000000.0);
         const double million = 1000000.0;
         const double logNumFragments = std::log(static_cast<double>(numMappedReads));
+        const double upperBoundFactor = static_cast<double>(alnLib.upperBoundHits()) /
+                                        numMappedReads;
         auto clusters = alnLib.clusterForest().getClusters();
         size_t clusterID = 0;
         for(auto cptr : clusters) {
 
             double logClusterMass = cptr->logMass();
-            double logClusterCount = std::log(static_cast<double>(cptr->numHits()));
+            double logClusterCount = std::log(upperBoundFactor * static_cast<double>(cptr->numHits()));
 
             if (logClusterMass == LOG_0) {
                 std::cerr << "Warning: cluster " << clusterID << " has 0 mass!\n";
@@ -209,8 +213,8 @@ namespace utils {
 
     }
 
-    LibraryFormat hitType(uint32_t end1Start, bool end1Fwd,
-                          uint32_t end2Start, bool end2Fwd) {
+    LibraryFormat hitType(int32_t end1Start, bool end1Fwd,
+                          int32_t end2Start, bool end2Fwd) {
 
         // If the reads come from opposite strands
         if (end1Fwd != end2Fwd) {
@@ -249,7 +253,56 @@ namespace utils {
     }
 
 
-    LibraryFormat hitType(uint32_t start, bool isForward) {
+
+    LibraryFormat hitType(int32_t end1Start, bool end1Fwd, uint32_t len1,
+                          int32_t end2Start, bool end2Fwd, uint32_t len2, bool canDovetail) {
+
+        // If the reads come from opposite strands
+        if (end1Fwd != end2Fwd) {
+            // and if read 1 comes from the forward strand
+            if (end1Fwd) {
+                // then if read 1 start < read 2 start ==> ISF
+                // NOTE: We can't really delineate between inward facing reads that stretch
+                // past each other and outward facing reads --- the purpose of stretch is to help
+                // make this determinateion.
+                int32_t stretch = canDovetail ? len2 : 0;
+                if (end1Start <= end2Start + stretch) {
+                    return LibraryFormat(ReadType::PAIRED_END, ReadOrientation::TOWARD, ReadStrandedness::SA);
+                } // otherwise read 2 start < read 1 start ==> OSF
+                else {
+                    return LibraryFormat(ReadType::PAIRED_END, ReadOrientation::AWAY, ReadStrandedness::SA);
+                }
+            }
+            // and if read 2 comes from the forward strand
+            if (end2Fwd) {
+                // then if read 2 start <= read 1 start ==> ISR
+                // NOTE: We can't really delineate between inward facing reads that stretch
+                // past each other and outward facing reads --- the purpose of stretch is to help
+                // make this determinateion.
+                int32_t stretch = canDovetail ? len1 : 0;
+                if (end2Start <= end1Start + stretch) {
+                    return LibraryFormat(ReadType::PAIRED_END, ReadOrientation::TOWARD, ReadStrandedness::AS);
+                } // otherwise, read 2 start > read 1 start ==> OSR
+                else {
+                    return LibraryFormat(ReadType::PAIRED_END, ReadOrientation::AWAY, ReadStrandedness::AS);
+                }
+            }
+        } else { // Otherwise, the reads come from the same strand
+            if (end1Fwd) { // if it's the forward strand ==> MSF
+                return LibraryFormat(ReadType::PAIRED_END, ReadOrientation::SAME, ReadStrandedness::S);
+            } else { // if it's the reverse strand ==> MSR
+                return LibraryFormat(ReadType::PAIRED_END, ReadOrientation::SAME, ReadStrandedness::A);
+            }
+        }
+        // SHOULD NOT GET HERE
+        spdlog::get("jointLog")->error("ERROR: Could not associate any known library type with read! "
+                                       "Please report this bug!\n");
+        std::exit(-1);
+        return LibraryFormat(ReadType::PAIRED_END, ReadOrientation::NONE, ReadStrandedness::U);
+    }
+
+
+    LibraryFormat hitType(int32_t start, bool isForward) {
         // If the read comes from the forward strand
         if (isForward) {
             return LibraryFormat(ReadType::SINGLE_END, ReadOrientation::NONE, ReadStrandedness::S);

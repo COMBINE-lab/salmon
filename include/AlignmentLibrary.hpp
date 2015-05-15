@@ -160,6 +160,7 @@ class AlignmentLibrary {
 
     inline BAMQueue<FragT>& getAlignmentGroupQueue() { return *bq.get(); }
 
+    inline size_t upperBoundHits() { return bq->numMappedReads(); }
     inline size_t numMappedReads() { return bq->numMappedReads(); }
     inline size_t numUniquelyMappedReads() { return bq->numUniquelyMappedReads(); }
 

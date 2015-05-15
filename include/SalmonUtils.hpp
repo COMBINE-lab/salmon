@@ -160,14 +160,16 @@ void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
     *  Given the information about the position and strand from which a paired-end
     *  read originated, return the library format with which it is compatible.
     */
-    LibraryFormat hitType(uint32_t end1Start, bool end1Fwd,
-                          uint32_t end2Start, bool end2Fwd);
+    LibraryFormat hitType(int32_t end1Start, bool end1Fwd,
+                          int32_t end2Start, bool end2Fwd);
+    LibraryFormat hitType(int32_t end1Start, bool end1Fwd, uint32_t len1,
+                          int32_t end2Start, bool end2Fwd, uint32_t len2, bool canDovetail);
     /**
     *  Given the information about the position and strand from which the
     *  single-end read originated, return the library format with which it
     *  is compatible.
     */
-    LibraryFormat hitType(uint32_t readStart, bool isForward);
+    LibraryFormat hitType(int32_t readStart, bool isForward);
 
 }
 }
