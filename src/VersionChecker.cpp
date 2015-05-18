@@ -30,7 +30,7 @@ VersionChecker::VersionChecker(boost::asio::io_service& io_service,
     request_stream << "Connection: close\r\n\r\n";
 
     deadline_.async_wait(boost::bind(&VersionChecker::cancel_upgrade_check, this, boost::asio::placeholders::error));
-    deadline_.expires_from_now(boost::posix_time::seconds(5));
+    deadline_.expires_from_now(boost::posix_time::seconds(7));
 
     // Start an asynchronous resolve to translate the server and service names
     // into a list of endpoints.
@@ -50,7 +50,7 @@ void VersionChecker::cancel_upgrade_check(const boost::system::error_code& err) 
   if ( err != boost::asio::error::operation_aborted ) {
     deadline_.cancel();
     messageStream_ << "Could not resolve upgrade information in the alotted time.\n";
-    messageStream_ << "Check for upgrades manually at www.cs.cmu.edu/~ckingsf/sailfish.\n";
+    messageStream_ << "Check for upgrades manually at https://combine-lab.github.io/salmon\n";
     socket_.close();
   }
 }
@@ -166,8 +166,8 @@ void VersionChecker::handle_read_content(const boost::system::error_code& err) {
 }
 
 std::string getVersionMessage() {
-  std::string baseSite{"www.cs.cmu.edu"};
-  std::string path{"/~ckingsf/software/sailfish/version_info/"};
+  std::string baseSite{"combine-lab.github.io"};
+  std::string path{"/salmon/version_info/"};
   path += salmon::version;
 
   std::stringstream ss;
