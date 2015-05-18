@@ -12,6 +12,8 @@ into many differnt pipelines.  For example, you can choose to make use of our *l
 computed with your favorite aligner), and it will use the same **wicked**-fast, state-of-the-art inference algorithm 
 to estimate transcript-level abundances for your experiment.
 
+Give salmon a try!  You can find the latest binary releases [here](https://github.com/COMBINE-lab/salmon/releases).
+
 Documentation
 ==============
 
