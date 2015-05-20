@@ -2739,18 +2739,15 @@ int salmonQuantify(int argc, char *argv[]) {
     po::options_description advanced("\n"
 		    		     "advanced options");
     advanced.add_options()
-    ("maxOcc,m", po::value<int>(&(memOptions->max_occ))->default_value(200), "(S)MEMs occuring more than this many times won't be considered.")
-    ("maxReadOcc,w", po::value<uint32_t>(&(sopt.maxReadOccs))->default_value(100), "Reads \"mapping\" to more than this many places won't be considered.")
-    ("splitWidth,s", po::value<int>(&(memOptions->split_width))->default_value(0), "If (S)MEM occurs fewer than this many times, search for smaller, contained MEMs. "
-                                        "The default value will not split (S)MEMs, a higher value will result in more MEMs being explore and, thus, will "
-                                        "result in increased running time.")
-    ("splitSpanningSeeds,b", po::bool_switch(&(sopt.splitSpanningSeeds))->default_value(false), "Attempt to split seeds that happen to fall on the "
-                                        "boundary between two transcripts.  This can improve the  fragment hit-rate, but is usually not necessary.")
     ("disableMappingCache", po::bool_switch(&(sopt.disableMappingCache))->default_value(false), "Setting this option disables the creation and use "
                                         "of the \"mapping cache\" file.  The mapping cache can speed up quantification significantly for smaller read "
                                         "libraries (i.e. where the number of mapped fragments is less than the required number of observations). However, "
                                         "for very large read libraries, the mapping cache is unnecessary, and disabling it may allow salmon to more effectively "
                                         "make use of a very large number of threads.")
+    ("fldMax" , po::value<size_t>(&(sopt.fragLenDistMax))->default_value(800), "The maximum fragment length to consider when building the empirical "
+     											      "distribution")
+    ("fldMean", po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(200), "The mean used in the fragment length distribution prior")
+    ("fldSD" , po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(80), "The standard deviation used in the fragment length distribution prior")
     ("forgettingFactor,f", po::value<double>(&(sopt.forgettingFactor))->default_value(0.65), "The forgetting factor used "
                         "in the online learning schedule.  A smaller value results in quicker learning, but higher variance "
                         "and may be unstable.  A larger value results in slower learning but may be more stable.  Value should "
@@ -2759,6 +2756,8 @@ int salmonQuantify(int argc, char *argv[]) {
                                         "many reads, then just keep the data in memory for subsequent rounds of inference. Obviously, this value should "
                                         "not be too large if you wish to keep a low memory usage, but setting it large enough can substantially speed up "
                                         "inference on \"small\" files that contain only a few million reads.")
+    ("maxOcc,m", po::value<int>(&(memOptions->max_occ))->default_value(200), "(S)MEMs occuring more than this many times won't be considered.")
+    ("maxReadOcc,w", po::value<uint32_t>(&(sopt.maxReadOccs))->default_value(100), "Reads \"mapping\" to more than this many places won't be considered.")
     ("noEffectiveLengthCorrection", po::bool_switch(&(sopt.noEffectiveLengthCorrection))->default_value(false), "Disables "
                         "effective length correction when computing the probability that a fragment was generated "
                         "from a transcript.  If this flag is passed in, the fragment length distribution is not taken "
@@ -2772,17 +2771,22 @@ int salmonQuantify(int argc, char *argv[]) {
     ("noFragStartPosDist", po::bool_switch(&(sopt.noFragStartPosDist))->default_value(false), "[Currently Experimental] : "
                         "Don't consider / model non-uniformity in the fragment start positions "
                         "across the transcript.")
-    ("useMassBanking", po::bool_switch(&(sopt.useMassBanking))->default_value(false), "[Currently Experimental] : "
-                        "Use mass \"banking\" in subsequent epoch of inference.  Rather than re-observing uniquely "
-                        "mapped reads, simply remember the ratio of uniquely to ambiguously mapped reads for each "
-                        "transcript and distribute the unique mass uniformly throughout the epoch.")
     ("numAuxModelSamples", po::value<uint32_t>(&(sopt.numBurninFrags))->default_value(5000000), "The first <numAuxModelSamples> are used to train the "
      			"auxiliary model parameters (e.g. fragment length distribution, bias, etc.).  After ther first <numAuxModelSamples> observations "
 			"the auxiliary model parameters will be assumed to have converged and will be fixed.")
     ("numPreAuxModelSamples", po::value<uint32_t>(&(sopt.numPreBurninFrags))->default_value(1000000), "The first <numPreAuxModelSamples> will have their "
      			"assignment likelihoods and contributions to the transcript abundances computed without applying any auxiliary models.  The purpose "
 			"of ignoring the auxiliary models for the first <numPreAuxModelSamples> observations is to avoid applying these models before thier "
-			"parameters have been learned sufficiently well.");
+			"parameters have been learned sufficiently well.")
+    ("splitWidth,s", po::value<int>(&(memOptions->split_width))->default_value(0), "If (S)MEM occurs fewer than this many times, search for smaller, contained MEMs. "
+                                        "The default value will not split (S)MEMs, a higher value will result in more MEMs being explore and, thus, will "
+                                        "result in increased running time.")
+    ("splitSpanningSeeds,b", po::bool_switch(&(sopt.splitSpanningSeeds))->default_value(false), "Attempt to split seeds that happen to fall on the "
+                                        "boundary between two transcripts.  This can improve the  fragment hit-rate, but is usually not necessary.")
+    ("useMassBanking", po::bool_switch(&(sopt.useMassBanking))->default_value(false), "[Currently Experimental] : "
+                        "Use mass \"banking\" in subsequent epoch of inference.  Rather than re-observing uniquely "
+                        "mapped reads, simply remember the ratio of uniquely to ambiguously mapped reads for each "
+                        "transcript and distribute the unique mass uniformly throughout the epoch.");
 
     po::options_description all("salmon quant options");
     all.add(generic).add(advanced);
@@ -2893,7 +2897,7 @@ transcript abundance from RNA-seq reads
         jointLog->info() << "parsing read library format";
 
         vector<ReadLibrary> readLibraries = salmon::utils::extractReadLibraries(orderedOptions);
-        ReadExperiment experiment(readLibraries, indexDirectory);
+        ReadExperiment experiment(readLibraries, indexDirectory, sopt);
         uint32_t nbThreads = vm["threads"].as<uint32_t>();
 
         quantifyLibrary(experiment, greedyChain, memOptions, sopt, coverageThresh,

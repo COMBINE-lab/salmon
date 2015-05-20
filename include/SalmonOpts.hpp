@@ -77,9 +77,16 @@ struct SalmonOpts {
 
     bool useMassBanking; // Bank unique mass in subsequent epochs of inference
 
+    // Related to the fragment length distribution
+    size_t fragLenDistMax;
+    size_t fragLenDistPriorMean;
+    size_t fragLenDistPriorSD;
+
+    // Related to the logger
     std::shared_ptr<spdlog::logger> jointLog{nullptr};
     std::shared_ptr<spdlog::logger> fileLog{nullptr};
 
+    // Related to caching and threading
     uint32_t mappingCacheMemoryLimit;
     uint32_t numThreads;
     uint32_t numQuantThreads;

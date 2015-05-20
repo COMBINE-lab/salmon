@@ -132,9 +132,9 @@ class AlignmentLibrary {
             clusters_.reset(new ClusterForest(transcripts_.size(), transcripts_));
 
             // Initialize the fragment length distribution
-            size_t maxFragLen = 800;
-            size_t meanFragLen = 200;
-            size_t fragLenStd = 80;
+            size_t maxFragLen = salmonOpts.fragLenDistMax;
+            size_t meanFragLen = salmonOpts.fragLenDistPriorMean;
+            size_t fragLenStd = salmonOpts.fragLenDistPriorSD;
             size_t fragLenKernelN = 4;
             double fragLenKernelP = 0.5;
             flDist_.reset(new

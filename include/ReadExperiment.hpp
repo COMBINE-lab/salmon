@@ -14,6 +14,7 @@ extern "C" {
 #include "ReadLibrary.hpp"
 #include "FragmentLengthDistribution.hpp"
 #include "FragmentStartPositionDistribution.hpp"
+#include "SalmonOpts.hpp"
 
 // Logger includes
 #include "spdlog/spdlog.h"
@@ -39,7 +40,8 @@ class ReadExperiment {
 
     ReadExperiment(std::vector<ReadLibrary>& readLibraries,
                    //const boost::filesystem::path& transcriptFile,
-                   const boost::filesystem::path& indexDirectory) :
+                   const boost::filesystem::path& indexDirectory,
+		   SalmonOpts& sopt) :
         readLibraries_(readLibraries),
         //transcriptFile_(transcriptFile),
         transcripts_(std::vector<Transcript>()),
@@ -50,9 +52,9 @@ class ReadExperiment {
             // Make sure the read libraries are valid.
             for (auto& rl : readLibraries_) { rl.checkValid(); }
 
-            size_t maxFragLen = 800;
-            size_t meanFragLen = 200;
-            size_t fragLenStd = 80;
+            size_t maxFragLen = sopt.fragLenDistMax;
+            size_t meanFragLen = sopt.fragLenDistPriorMean;
+            size_t fragLenStd = sopt.fragLenDistPriorSD;
             size_t fragLenKernelN = 4;
             double fragLenKernelP = 0.5;
             fragLengthDist_.reset(new FragmentLengthDistribution(1.0, maxFragLen,
