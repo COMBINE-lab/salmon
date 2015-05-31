@@ -74,10 +74,11 @@ endif()
 set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 
 # Build the Salmon library
-add_library(salmon_core STATIC ${SALMON_LIB_SRCS} )
+# add_library(salmon_core STATIC ${SALMON_LIB_SRCS} )
 
 # Build the salmon executable
-add_executable(salmon ${SALMON_MAIN_SRCS} ${SALMON_ALIGN_SRCS})
+add_executable(salmon ${SALMON_MAIN_SRCS} ${SALMON_ALIGN_SRCS}
+                      ${SALMON_LIB_SRCS})
 
 #add_executable(salmon-read ${SALMON_READ_SRCS})
 #set_target_properties(salmon-read PROPERTIES COMPILE_FLAGS "${CMAKE_CXX_FLAGS} -DHAVE_LIBPTHREAD -D_PBGZF_USE -fopenmp"
@@ -103,7 +104,7 @@ endif()
 
 # Link the executable
 target_link_libraries(salmon
-    salmon_core 
+    #salmon_core 
     gff
     ${PTHREAD_LIB}
     ${Boost_LIBRARIES} 
@@ -161,7 +162,7 @@ endif()
 # install(FILES ${Boost_LIBRARIES}
 # 	           DESTINATION ${INSTALL_LIB_DIR})
 
-install(TARGETS salmon salmon_core
+install(TARGETS salmon #salmon_core
                 RUNTIME DESTINATION bin 
                 LIBRARY DESTINATION lib
                 ARCHIVE DESTINATION lib

@@ -16,8 +16,8 @@ class ClusterForest;
 class TranscriptCluster {
     friend class ClusterForest;
 public:
-    TranscriptCluster() : members_(std::list<size_t>()), count_({0}), logMass_(salmon::math::LOG_0), active_(true) {}
-    TranscriptCluster(size_t initialMember) : members_(std::list<size_t>(1,initialMember)), count_({0}),
+    TranscriptCluster() : members_(std::list<size_t>()), count_(0), logMass_(salmon::math::LOG_0), active_(true) {}
+    TranscriptCluster(size_t initialMember) : members_(std::list<size_t>(1,initialMember)), count_(0),
                                               logMass_(salmon::math::LOG_0), active_(true) {
     }
 

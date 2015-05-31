@@ -1342,7 +1342,8 @@ inline bool nearEndOfTranscript(
             int32_t cutoff=std::numeric_limits<int32_t>::max()) {
 	// check if hit appears close to the end of the given transcript
 	auto hitPos = hit.bestHitPos;
-	return (hitPos < cutoff or std::abs(txp.RefLength - hitPos) < cutoff);
+	return (hitPos < cutoff or
+            std::abs(static_cast<int32_t>(txp.RefLength) - hitPos) < cutoff);
 
 }
 
