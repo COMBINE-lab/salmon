@@ -2830,12 +2830,13 @@ int salmonQuantify(int argc, char *argv[]) {
 
     bool biasCorrect{false};
     bool optChain{false};
-    uint32_t maxThreads = std::thread::hardware_concurrency();
     size_t requiredObservations;
 
     SalmonOpts sopt;
     mem_opt_t* memOptions = mem_opt_init();
     memOptions->split_factor = 1.5;
+
+    sopt.numThreads = std::thread::hardware_concurrency();
 
     double coverageThresh;
     vector<string> unmatedReadFiles;
@@ -2855,7 +2856,7 @@ int salmonQuantify(int argc, char *argv[]) {
         "File containing the #1 mates")
     ("mates2,2", po::value<vector<string>>(&mate2ReadFiles)->multitoken(),
         "File containing the #2 mates")
-    ("threads,p", po::value<uint32_t>()->default_value(maxThreads), "The number of threads to use concurrently.")
+    ("threads,p", po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads), "The number of threads to use concurrently.")
     ("incompatPrior", po::value<double>(&(sopt.incompatPrior))->default_value(1e-20), "This option "
                         "sets the prior probability that an alignment that disagrees with the specified "
                         "library type (--libType) results from the true fragment origin.  Setting this to 0 "
@@ -3056,13 +3057,12 @@ transcript abundance from RNA-seq reads
 
         vector<ReadLibrary> readLibraries = salmon::utils::extractReadLibraries(orderedOptions);
         ReadExperiment experiment(readLibraries, indexDirectory, sopt);
-        uint32_t nbThreads = vm["threads"].as<uint32_t>();
 
         // EQCLASS
         experiment.equivalenceClassBuilder().start();
 
         quantifyLibrary(experiment, greedyChain, memOptions, sopt, coverageThresh,
-                        requiredObservations, nbThreads);
+                        requiredObservations, sopt.numThreads);
 
         // EQCLASS
         CollapsedEMOptimizer optimizer;
@@ -3125,7 +3125,7 @@ transcript abundance from RNA-seq reads
 
             auto biasFeatPath = indexDirectory / "bias_feats.txt";
             auto biasCorrectedFile = outputDirectory / "quant_bias_corrected.sf";
-            performBiasCorrectionSalmon(biasFeatPath, estFilePath, biasCorrectedFile, maxThreads);
+            performBiasCorrectionSalmon(biasFeatPath, estFilePath, biasCorrectedFile, sopt.numThreads);
         }
 
         /** If the user requested gene-level abundances, then compute those now **/

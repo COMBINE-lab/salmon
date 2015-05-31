@@ -793,7 +793,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     bool sampleOutput{false};
     bool sampleUnaligned{false};
     bool biasCorrect{false};
-    uint32_t numThreads{4};
+    sopt.numThreads = 6;
     size_t requiredObservations{50000000};
 
     po::options_description basic("\nbasic options");
@@ -803,7 +803,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     ("libType,l", po::value<std::string>()->required(), "Format string describing the library type.")
     ("alignments,a", po::value<vector<string>>()->multitoken()->required(), "input alignment (BAM) file(s).")
     ("targets,t", po::value<std::string>()->required(), "FASTA format file containing target transcripts.")
-    ("threads,p", po::value<uint32_t>(&numThreads)->default_value(6), "The number of threads to use concurrently. "
+    ("threads,p", po::value<uint32_t>(&(sopt.numThreads))->default_value(6), "The number of threads to use concurrently. "
                                             "The alignment-based quantification mode of salmon is usually I/O bound "
                                             "so until there is a faster multi-threaded SAM/BAM parser to feed the "
                                             "quantification threads, one should not expect much of a speed-up beyond "
@@ -903,12 +903,11 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         }
         po::notify(vm);
 
-        if (numThreads < 2) {
+        if (sopt.numThreads < 2) {
             fmt::print(stderr, "salmon requires at least 2 threads --- "
                                "setting # of threads = 2\n");
-            numThreads = 2;
+            sopt.numThreads = 2;
         }
-        sopt.numThreads = numThreads;
 
         if (sopt.forgettingFactor <= 0.5 or
             sopt.forgettingFactor > 1.0) {
@@ -1051,9 +1050,10 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         // being, however, the number of quantification threads is the
         // total number of threads - 1.
         uint32_t numParseThreads = std::min(uint32_t(6),
-                                            std::max(uint32_t(2), uint32_t(std::ceil(numThreads/2.0))));
-        numThreads = std::max(numThreads, numParseThreads);
-        uint32_t numQuantThreads = std::max(uint32_t(2), uint32_t(numThreads - numParseThreads));
+                                            std::max(uint32_t(2), uint32_t(std::ceil(sopt.numThreads/2.0))));
+        sopt.numThreads = std::max(sopt.numThreads, numParseThreads);
+
+        uint32_t numQuantThreads = std::max(uint32_t(2), uint32_t(sopt.numThreads - numParseThreads));
         sopt.numQuantThreads = numQuantThreads;
         sopt.numParseThreads = numParseThreads;
         std::cerr << "numQuantThreads = " << numQuantThreads << "\n";
@@ -1181,8 +1181,8 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
             for (auto& tf : transcriptFiles) {
                 std::cerr << "[" << tf << "] ";
             }
-            std::cerr << ", " << transcriptBiasFile << ", " << useStreamingParser << ", " << numThreads << ")\n";
-            computeBiasFeatures(transcriptFiles, transcriptBiasFile, useStreamingParser, numThreads);
+            std::cerr << ", " << transcriptBiasFile << ", " << useStreamingParser << ", " << sopt.numThreads << ")\n";
+            computeBiasFeatures(transcriptFiles, transcriptBiasFile, useStreamingParser, sopt.numThreads);
 
             auto origExpressionFile = estFilePath;
 
@@ -1190,7 +1190,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
             outputDirectory.remove_filename();
 
             auto biasCorrectedFile = outputDirectory / "quant_bias_corrected.sf";
-            performBiasCorrectionSalmon(transcriptBiasFile, estFilePath, biasCorrectedFile, numThreads);
+            performBiasCorrectionSalmon(transcriptBiasFile, estFilePath, biasCorrectedFile, sopt.numThreads);
         }
 
         /** If the user requested gene-level abundances, then compute those now **/

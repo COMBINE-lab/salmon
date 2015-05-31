@@ -1,12 +1,12 @@
 #include <vector>
 #include <unordered_map>
+#include <atomic>
 
 #include "tbb/task_scheduler_init.h"
 #include "tbb/parallel_for.h"
 #include "tbb/parallel_for_each.h"
 #include "tbb/parallel_reduce.h"
 #include "tbb/blocked_range.h"
-#include "tbb/task_scheduler_init.h"
 #include "tbb/partitioner.h"
 
 //#include "fastapprox.h"
@@ -29,25 +29,51 @@
 
 
 using BlockedIndexRange =  tbb::blocked_range<size_t>;
+
 // intelligently chosen value adopted from
 // https://github.com/pachterlab/kallisto/blob/master/src/EMAlgorithm.h#L18
 constexpr double minEQClassWeight = std::numeric_limits<double>::denorm_min();
+constexpr double minWeight = std::numeric_limits<double>::denorm_min();
 
-void EMUpdate_(
+double normalize(std::vector<tbb::atomic<double>>& vec) {
+    double sum{0.0};
+    for (auto& v : vec) {
+        sum += v;
+    }
+
+    // too small!
+    if (sum < minWeight) {
+        return sum;
+    }
+
+    double invSum  = 1.0 / sum;
+    for (auto& v : vec) {
+        v.store(v.load() * invSum);
+    }
+
+    return sum;
+}
+
+void incLoop(tbb::atomic<double>& val, double inc) {
+        double oldMass = val.load();
+        double returnedMass = oldMass;
+        double newMass{oldMass + inc};
+        do {
+            oldMass = returnedMass;
+            newMass = oldMass + inc;
+            returnedMass = val.compare_and_swap(newMass, oldMass);
+        } while (returnedMass != oldMass);
+}
+
+void CollapsedEMOptimizer::EMUpdate_(
         std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
         std::vector<Transcript>& transcripts,
         Eigen::VectorXd& effLens,
-        const Eigen::VectorXd& alphaIn,
-        Eigen::VectorXd& alphaOut) {
+        const CollapsedEMOptimizer::VecType& alphaIn,
+        CollapsedEMOptimizer::VecType& alphaOut) {
 
     assert(alphaIn.size() == alphaOut.size());
     /*
-    if (!tbbInit.is_active()) {
-        tbbInit.initialize(numThreads);
-    }
-    */
-
-
     // for each equivalence class
     for (auto& kv : eqVec) {
 
@@ -83,52 +109,55 @@ void EMUpdate_(
             }
         }
     }
+    */
 
-    /*
+
     tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(eqVec.size())),
-          [&eqVec, &alphaIn, &alphaOut](const BlockedIndexRange& range) -> void {
+            [&eqVec, &alphaIn, &alphaOut](const BlockedIndexRange& range) -> void {
             for (auto eqID : boost::irange(range.begin(), range.end())) {
-                auto& kv = eqVec[eqID];
+            auto& kv = eqVec[eqID];
 
-                uint64_t count = kv.second.count;
-                // for each transcript in this class
-                const TranscriptGroup& tgroup = kv.first;
-                if (tgroup.valid) {
-                const std::vector<uint32_t>& txps = tgroup.txps;
-                const std::vector<double>& auxs = kv.second.weights;
+            uint64_t count = kv.second.count;
+            // for each transcript in this class
+            const TranscriptGroup& tgroup = kv.first;
+            if (tgroup.valid) {
+            const std::vector<uint32_t>& txps = tgroup.txps;
+            const std::vector<double>& auxs = kv.second.weights;
 
-                double denom = 0.0;
-                for (size_t i = 0; i < txps.size(); ++i) {
-                    auto tid = txps[i];
-                    auto aux = auxs[i];
-                    //double el = effLens(tid);
-                    //if (el <= 0) { el = 1.0; }
-                    double v = alphaIn(tid) * aux;
-                    denom += v;
-                }
+            double denom = 0.0;
+            for (size_t i = 0; i < txps.size(); ++i) {
+            auto tid = txps[i];
+            auto aux = auxs[i];
+            //double el = effLens(tid);
+            //if (el <= 0) { el = 1.0; }
+            double v = alphaIn[tid] * aux;
+            denom += v;
+            }
 
-                if (denom <= minEQClassWeight) {
-                  // tgroup.setValid(false);
-                } else {
+            if (denom <= minEQClassWeight) {
+                // tgroup.setValid(false);
+            } else {
 
                 double invDenom = 1.0 / denom;
                 for (size_t i = 0; i < txps.size(); ++i) {
                     auto tid = txps[i];
                     auto aux = auxs[i];
-                    double v = alphaIn(tid) * aux;
+                    double v = alphaIn[tid] * aux;
                     if (!std::isnan(v)) {
-                        alphaOut(tid) += count * v * invDenom;
+                        incLoop(alphaOut[tid], count * v * invDenom);
                     }
                 }
-                }
-                }
             }
-      });
-    */
+            }
+            }
+            });
+
     // normalize
+    double aos = normalize(alphaOut);
+    /*
     double aos = alphaOut.sum();
     alphaOut /= aos;
-
+    */
 }
 
 void VBEMUpdate_(
@@ -201,7 +230,7 @@ void VBEMUpdate_(
 
 size_t markDegenerateClasses(
         std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
-        Eigen::VectorXd& alphaIn,
+        CollapsedEMOptimizer::VecType& alphaIn,
         std::shared_ptr<spdlog::logger> jointLog,
         bool verbose=false) {
 
@@ -218,12 +247,12 @@ size_t markDegenerateClasses(
         for (size_t i = 0; i < txps.size(); ++i) {
             auto tid = txps[i];
             auto aux = auxs[i];
-            double v = alphaIn(tid) * aux;
+            double v = alphaIn[tid] * aux;
             if (!std::isnan(v)) {
                 denom += v;
             } else {
                 std::cerr << "val is NAN; alpha( "
-                          << tid << " ) = " << alphaIn(tid)
+                          << tid << " ) = " << alphaIn[tid]
                           << ", aux = " << aux << "\n";
             }
         }
@@ -241,7 +270,7 @@ size_t markDegenerateClasses(
             errstream << "}\n";
             errstream << "alphas = { ";
             for (auto e : txps) {
-                errstream << alphaIn(e) << " ";
+                errstream << alphaIn[e] << " ";
             }
             errstream << "}\n";
             errstream << "weights = { ";
@@ -259,6 +288,7 @@ size_t markDegenerateClasses(
     return numDropped;
 }
 
+
 CollapsedEMOptimizer::CollapsedEMOptimizer() {}
 
 template <typename ExpT>
@@ -267,15 +297,24 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
         double relDiffTolerance,
         uint32_t maxIter) {
 
-
-    //tbb::task_scheduler_init tbbInit(tbb::task_scheduler_init::deferred);
+    tbb::task_scheduler_init tbbScheduler(sopt.numThreads);
     std::vector<Transcript>& transcripts = readExp.transcripts();
+
+    using VecT = CollapsedEMOptimizer::VecType;
+    // With Eigen
+    /*
     Eigen::VectorXd alphas(transcripts.size());
     Eigen::VectorXd alphasPrime(transcripts.size());
     alphasPrime.setZero();
 
     Eigen::VectorXd effLens(transcripts.size());
     Eigen::VectorXd expTheta(transcripts.size());
+    */
+    // With atomics
+    VecType alphas(transcripts.size(), 0.0);
+    VecType alphasPrime(transcripts.size(), 0.0);
+    Eigen::VectorXd effLens(transcripts.size());
+
     std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec =
         readExp.equivalenceClassBuilder().eqVec();
 
@@ -289,14 +328,15 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
         if (std::isnan(m)) {
             std::cerr << "FOUND NAN for txp " << i << "\n";
         }
-        alphas(i) = (m == salmon::math::LOG_0) ? 0.0 : m;
+        alphas[i] = (m == salmon::math::LOG_0) ? 0.0 : m;
         effLens(i) = std::exp(transcripts[i].getCachedEffectiveLength());
     }
 
     //std::cerr << "alphas = " << alphas << "\n";
 
     if (!useVBEM){
-        alphas /= alphas.sum();
+        double asum = normalize(alphas);
+        //alphas /= alphas.sum();
     }
 
     auto numRemoved = markDegenerateClasses(eqVec, alphas, sopt.jointLog);
@@ -312,7 +352,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
     while (itNum < maxIter and !converged) {
 
         if (useVBEM) {
-            VBEMUpdate_(eqVec, transcripts, effLens, alphas, expTheta, alphasPrime);
+            //VBEMUpdate_(eqVec, transcripts, effLens, alphas, expTheta, alphasPrime);
         } else {
             EMUpdate_(eqVec, transcripts, effLens, alphas, alphasPrime);
         }
@@ -320,15 +360,15 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
         converged = true;
         maxRelDiff = -std::numeric_limits<double>::max();
         for (size_t i = 0; i < transcripts.size(); ++i) {
-            if (alphas(i) > minAlpha) {
-                double relDiff = std::abs(alphas(i) - alphasPrime(i)) / alphas(i);
+            if (alphas[i] > minAlpha) {
+                double relDiff = std::abs(alphas[i] - alphasPrime[i]) / alphas[i];
                 maxRelDiff = (relDiff > maxRelDiff) ? relDiff : maxRelDiff;
                 if (relDiff > relDiffTolerance) {
                     converged = false;
                 }
             }
-            alphas(i) = alphasPrime(i);
-            alphasPrime(i) = 0.0;
+            alphas[i] = alphasPrime[i];
+            alphasPrime[i] = 0.0;
         }
 
         if (itNum % 100 == 0) {
@@ -345,21 +385,28 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
     // If we used the VBEM, turn counts
     // into relative nucleotide fractions
     if (useVBEM) {
-        alphas /= alphas.sum();
+        //alphas /= alphas.sum();
     }
 
     // Truncate tiny expression values
+    double alphaSum = 0.0;
     for (size_t i = 0; i < alphas.size(); ++i) {
-        if (alphas(i) <= minAlpha) { alphas(i) = 0.0; }
+        if (alphas[i] <= minAlpha) { alphas[i] = 0.0; }
+        alphaSum += alphas[i];
     }
 
-    // Re-normalize the expression after truncation
-    alphas /= alphas.sum();
+    if (alphaSum < minWeight) {
+        jointLog->error("Total alpha weight was too small! "
+                        "Make sure you ran salmon correclty.");
+        return false;
+    }
 
     // Set the mass of each transcript using the
     // computed alphas.
     for (size_t i = 0; i < transcripts.size(); ++i) {
-        transcripts[i].setMass(alphas(i));
+        // Set the mass to the normalized (after truncation)
+        // relative abundance
+        transcripts[i].setMass(alphas[i] / alphaSum);
     }
 
     return true;
