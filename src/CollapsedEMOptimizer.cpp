@@ -34,7 +34,6 @@ using BlockedIndexRange =  tbb::blocked_range<size_t>;
 constexpr double minEQClassWeight = std::numeric_limits<double>::denorm_min();
 
 void EMUpdate_(
-        tbb::task_scheduler_init& tbbInit,
         std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
         std::vector<Transcript>& transcripts,
         Eigen::VectorXd& effLens,
@@ -42,9 +41,12 @@ void EMUpdate_(
         Eigen::VectorXd& alphaOut) {
 
     assert(alphaIn.size() == alphaOut.size());
+    /*
     if (!tbbInit.is_active()) {
-        tbbInit.initialize(20);
+        tbbInit.initialize(numThreads);
     }
+    */
+
 
     // for each equivalence class
     for (auto& kv : eqVec) {
@@ -67,7 +69,7 @@ void EMUpdate_(
             }
 
             if (denom <= minEQClassWeight) {
-                tgroup.setValid(false);
+                // tgroup.setValid(false);
             } else {
                 double invDenom = 1.0 / denom;
                 for (size_t i = 0; i < txps.size(); ++i) {
@@ -91,6 +93,7 @@ void EMUpdate_(
                 uint64_t count = kv.second.count;
                 // for each transcript in this class
                 const TranscriptGroup& tgroup = kv.first;
+                if (tgroup.valid) {
                 const std::vector<uint32_t>& txps = tgroup.txps;
                 const std::vector<double>& auxs = kv.second.weights;
 
@@ -104,12 +107,20 @@ void EMUpdate_(
                     denom += v;
                 }
 
+                if (denom <= minEQClassWeight) {
+                  // tgroup.setValid(false);
+                } else {
+
                 double invDenom = 1.0 / denom;
                 for (size_t i = 0; i < txps.size(); ++i) {
                     auto tid = txps[i];
                     auto aux = auxs[i];
                     double v = alphaIn(tid) * aux;
-                    alphaOut(tid) += count * v * invDenom;
+                    if (!std::isnan(v)) {
+                        alphaOut(tid) += count * v * invDenom;
+                    }
+                }
+                }
                 }
             }
       });
@@ -257,7 +268,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
         uint32_t maxIter) {
 
 
-    tbb::task_scheduler_init tbbInit(tbb::task_scheduler_init::deferred);
+    //tbb::task_scheduler_init tbbInit(tbb::task_scheduler_init::deferred);
     std::vector<Transcript>& transcripts = readExp.transcripts();
     Eigen::VectorXd alphas(transcripts.size());
     Eigen::VectorXd alphasPrime(transcripts.size());
@@ -303,7 +314,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
         if (useVBEM) {
             VBEMUpdate_(eqVec, transcripts, effLens, alphas, expTheta, alphasPrime);
         } else {
-            EMUpdate_(tbbInit, eqVec, transcripts, effLens, alphas, alphasPrime);
+            EMUpdate_(eqVec, transcripts, effLens, alphas, alphasPrime);
         }
 
         converged = true;
@@ -314,20 +325,22 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
                 maxRelDiff = (relDiff > maxRelDiff) ? relDiff : maxRelDiff;
                 if (relDiff > relDiffTolerance) {
                     converged = false;
-                    continue;
                 }
             }
+            alphas(i) = alphasPrime(i);
+            alphasPrime(i) = 0.0;
         }
 
         if (itNum % 100 == 0) {
-            jointLog->info("iteration = {} | max rel diff. seen = {}",
+            jointLog->info("iteration = {} | max rel diff. = {}",
                             itNum, maxRelDiff);
         }
 
-        std::swap(alphas, alphasPrime);
-        alphasPrime.setZero();
         ++itNum;
     }
+
+    jointLog->info("iteration = {} | max rel diff. = {}",
+                    itNum, maxRelDiff);
 
     // If we used the VBEM, turn counts
     // into relative nucleotide fractions
