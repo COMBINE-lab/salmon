@@ -58,6 +58,8 @@ extern "C" {
 #include "NullFragmentFilter.hpp"
 #include "Sampler.hpp"
 #include "spdlog/spdlog.h"
+#include "EquivalenceClassBuilder.hpp"
+#include "CollapsedEMOptimizer.hpp"
 
 namespace bfs = boost::filesystem;
 using salmon::math::LOG_0;
@@ -137,6 +139,9 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     std::default_random_engine eng(rd());
     std::uniform_real_distribution<> uni(0.0, 1.0 + std::numeric_limits<double>::min());
 
+    //EQClass
+    EquivalenceClassBuilder& eqBuilder = alnLib.equivalenceClassBuilder();
+
     using salmon::math::LOG_0;
     using salmon::math::logAdd;
     using salmon::math::logSub;
@@ -183,6 +188,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
 	    // If we actually got some work
         if (miniBatch != nullptr) {
+
             useAuxParams = (processedReads > salmonOpts.numPreBurninFrags);
             ++activeBatches;
             size_t batchReads{0};
@@ -269,6 +275,14 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                 // for a single read).  Distribute the read's mass proportionally dependent on the
                 // current
                 for (auto alnGroup : alignmentGroups) {
+
+                    // EQCLASS
+                    std::vector<uint32_t> txpIDs;
+                    std::vector<double> auxProbs;
+                    size_t txpIDsHash{0};
+                    double auxDenom = salmon::math::LOG_0;
+                    alnGroup->sortHits();
+
                     double sumOfAlignProbs{LOG_0};
                     // update the cluster-level properties
                     bool transcriptUnique{true};
@@ -310,12 +324,6 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                                 (salmon::utils::logAlignFormatProb(aln->libFormat(), expectedLibraryFormat, salmonOpts.incompatPrior)) :
                                 LOG_1;
 
-                        // P(Fn | Tn) = Probability of selecting a fragment of this length, given the transcript is t
-                        // d(Fn) / sum_x = 1^{lt} d(x)
-                        //double logConditionalFragLengthProb = logFragProb  - fragLengthDist.cmf(refLength);
-                        //double logProbStartPos = logStartPosProb + logConditionalFragLengthProb;
-                        //double qualProb = logProbStartPos + aln.logQualProb();
-
                         // Adjustment to the likelihood due to the
                         // error model
                         double errLike = salmon::math::LOG_1;
@@ -332,17 +340,17 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 				  fragStartDists[transcript.lengthClassIndex()];
 			  startPosProb = fragStartDist(hitPos, refLength, logRefLength);
 			}
-			
-			// Pre FSPD 
+
+			// Pre FSPD
 			/*
-                        double qualProb = -logRefLength + logFragProb +
+                        double auxProb = -logRefLength + logFragProb +
                                           aln->logQualProb() +
                                           errLike + logAlignCompatProb;
-		        */	
-			double qualProb = startPosProb + logFragProb +
-                                          aln->logQualProb() +
-                                          errLike + logAlignCompatProb;
-			
+		        */
+            double auxProb = startPosProb + logFragProb +
+                             aln->logQualProb() +
+                             errLike + logAlignCompatProb;
+
 
 
                         // The overall mass of this transcript, which is used to
@@ -362,8 +370,8 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         // END: DOUBLY-COLLAPSED TESTING
 
                         if ( transcriptLogCount != LOG_0 and
-                             qualProb != LOG_0) {
-                           aln->logProb = transcriptLogCount + qualProb;
+                             auxProb != LOG_0) {
+                           aln->logProb = transcriptLogCount + auxProb;
 
                             sumOfAlignProbs = logAdd(sumOfAlignProbs, aln->logProb);
                             if (updateCounts and
@@ -371,6 +379,12 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                                 refs[transcriptID].addTotalCount(1);
                                 observedTranscripts.insert(transcriptID);
                             }
+                            // EQCLASS
+                            txpIDs.push_back(transcriptID);
+                            auxProbs.push_back(auxProb);
+                            auxDenom = salmon::math::logAdd(auxDenom, auxProb);
+                            boost::hash_combine(txpIDsHash, transcriptID);
+
                         } else {
                             aln->logProb = LOG_0;
                         }
@@ -383,6 +397,14 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                                   "encountered \n", aln->getName());
                         continue;
                     }
+
+                    // EQCLASS
+                    TranscriptGroup tg(txpIDs, txpIDsHash);
+                    for (auto& p : auxProbs) {
+                        p -= auxDenom;
+                    }
+                    eqBuilder.addGroup(std::move(tg), auxProbs);
+
 
                     // Normalize the scores
                     for (auto& aln : alnGroup->alignments()) {
@@ -405,12 +427,12 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                             if (salmonOpts.useErrorModel) {
                                 alnMod.update(*aln, transcript, LOG_1, logForgettingMass);
                             }
-			    // Update the fragment length distribution 
+			    // Update the fragment length distribution
                             if (aln->isPaired() and !salmonOpts.noFragLengthDist) {
                                 double fragLength = aln->fragLen();
                                 fragLengthDist.addVal(fragLength, logForgettingMass);
                             }
-			    // Update the fragment start position distribution 
+			    // Update the fragment start position distribution
 			    if (useFSPD) {
 				    auto hitPos = aln->left();
 				    auto& fragStartDist =
@@ -551,7 +573,10 @@ bool quantifyLibrary(
     // Give ourselves some space
     fmt::print(stderr, "\n\n\n\n");
 
-    while (numObservedFragments < numRequiredFragments) {
+    // EQCLASS
+    bool terminate{false};
+
+    while (numObservedFragments < numRequiredFragments and !terminate) {
         if (!initialRound) {
 
     	    size_t numToCache = (useMassBanking) ?
@@ -717,6 +742,11 @@ bool quantifyLibrary(
         if (!initialRound and processedCachePtr != nullptr) {
             haveCache = true;
         }
+        //EQCLASS
+        bool done = alnLib.equivalenceClassBuilder().finish();
+        // skip the extra online rounds
+        terminate = true;
+        // END EQCLASS
     }
 
     fmt::print(stderr, "\n\n\n\n");
@@ -803,6 +833,9 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                                         "should be parsed.  Files ending in \'.gtf\' or \'.gff\' are assumed to be in GTF "
                                         "format; files with any other extension are assumed to be in the simple format.");
 
+    // no sequence bias for now
+    sopt.noSeqBiasModel = true;
+
     po::options_description advanced("\nadvanced options");
     advanced.add_options()
     ("fldMax" , po::value<size_t>(&(sopt.fragLenDistMax))->default_value(800), "The maximum fragment length to consider when building the empirical distribution")
@@ -855,7 +888,6 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 
     po::options_description all("salmon quant options");
     all.add(basic).add(advanced);
-
 
     po::variables_map vm;
     try {
@@ -1033,10 +1065,38 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                                                           transcriptFile,
                                                           libFmt,
                                                           sopt);
+                    // EQCLASS
+                    alnLib.equivalenceClassBuilder().start();
+
                     bool burnedIn = quantifyLibrary<UnpairedRead>(alnLib, requiredObservations, sopt);
+
+                    // EQCLASS
+                    CollapsedEMOptimizer optimizer;
+                    jointLog->info("starting optimizer");
+                    salmon::utils::normalizeAlphas(sopt, alnLib);
+                    optimizer.optimize(alnLib, sopt, 0.01, 5000);
+                    jointLog->info("finished optimizer");
+
+                    // EQCLASS
                     fmt::print(stderr, "\n\nwriting output \n");
-                    salmon::utils::writeAbundances(sopt, alnLib, outputFile, commentString);
+                    salmon::utils::writeAbundancesFromCollapsed(
+                        sopt, alnLib, outputFile, commentString);
+
+                    //fmt::print(stderr, "\n\nwriting output \n");
+                    //salmon::utils::writeAbundances(sopt, alnLib, outputFile, commentString);
+
+
                     if (sampleOutput) {
+                        // In this case, we should "re-convert" transcript
+                        // masses to be counts in log space
+                        auto nr = alnLib.numMappedReads();
+                        for (auto& t : alnLib.transcripts()) {
+                            double m = t.mass(false) * nr;
+                            if (m > 0.0) {
+                                t.setMass(std::log(m));
+                            }
+                        }
+
                         bfs::path sampleFilePath = outputDirectory / "postSample.bam";
                         bool didSample = salmon::sampler::sampleLibrary<UnpairedRead>(alnLib, sopt, burnedIn, sampleFilePath, sampleUnaligned);
                         if (!didSample) {
@@ -1051,11 +1111,29 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                                                       transcriptFile,
                                                       libFmt,
                                                       sopt);
+                    // EQCLASS
+                    alnLib.equivalenceClassBuilder().start();
+
                     bool burnedIn = quantifyLibrary<ReadPair>(alnLib, requiredObservations, sopt);
+
+                    // EQCLASS
+                    CollapsedEMOptimizer optimizer;
+                    jointLog->info("starting optimizer");
+                    salmon::utils::normalizeAlphas(sopt, alnLib);
+                    optimizer.optimize(alnLib, sopt, 0.01, 5000);
+                    jointLog->info("finished optimizer");
+
+                    fmt::print(stderr, "\n\nwriting output \n");
+                    // EQCLASS
+                    salmon::utils::writeAbundancesFromCollapsed(
+                        sopt, alnLib, outputFile, commentString);
+
+                    /*
                     fmt::print(stderr, "\n\nwriting output \n");
                     salmon::utils::writeAbundances(sopt, alnLib, outputFile, commentString);
+                    */
 
-                    // Test writing out the fragment length distribution
+                                        // Test writing out the fragment length distribution
                     if (!sopt.noFragLengthDist) {
                         bfs::path distFileName = paramsDir / "flenDist.txt";
                         {
@@ -1065,6 +1143,16 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                     }
 
                     if (sampleOutput) {
+                        // In this case, we should "re-convert" transcript
+                        // masses to be counts in log space
+                        auto nr = alnLib.numMappedReads();
+                        for (auto& t : alnLib.transcripts()) {
+                            double m = t.mass(false) * nr;
+                            if (m > 0.0) {
+                                t.setMass(std::log(m));
+                            }
+                        }
+
                         bfs::path sampleFilePath = outputDirectory / "postSample.bam";
                         bool didSample = salmon::sampler::sampleLibrary<ReadPair>(alnLib, sopt, burnedIn, sampleFilePath, sampleUnaligned);
                         if (!didSample) {

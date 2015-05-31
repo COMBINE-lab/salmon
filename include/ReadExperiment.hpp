@@ -14,7 +14,9 @@ extern "C" {
 #include "ReadLibrary.hpp"
 #include "FragmentLengthDistribution.hpp"
 #include "FragmentStartPositionDistribution.hpp"
+#include "SequenceBiasModel.hpp"
 #include "SalmonOpts.hpp"
+#include "EquivalenceClassBuilder.hpp"
 
 // Logger includes
 #include "spdlog/spdlog.h"
@@ -26,6 +28,7 @@ extern "C" {
 // Standard includes
 #include <vector>
 #include <memory>
+#include <fstream>
 
 /**
   *  This class represents a library of alignments used to quantify
@@ -46,7 +49,9 @@ class ReadExperiment {
         //transcriptFile_(transcriptFile),
         transcripts_(std::vector<Transcript>()),
         totalAssignedFragments_(0),
-        fragStartDists_(5){
+        fragStartDists_(5),
+        seqBiasModel_(1.0),
+	eqBuilder_(sopt.jointLog) {
             namespace bfs = boost::filesystem;
 
             // Make sure the read libraries are valid.
@@ -164,6 +169,10 @@ class ReadExperiment {
             clusters_.reset(new ClusterForest(transcripts_.size(), transcripts_));
         }
 
+    EquivalenceClassBuilder& equivalenceClassBuilder() {
+        return eqBuilder_;
+    }
+
     std::vector<Transcript>& transcripts() { return transcripts_; }
 
     uint64_t numAssignedFragments() { return numAssignedFragments_; }
@@ -224,6 +233,10 @@ class ReadExperiment {
 
     std::vector<FragmentStartPositionDistribution>& fragmentStartPositionDistributions() {
         return fragStartDists_;
+    }
+
+    SequenceBiasModel& sequenceBiasModel() {
+        return seqBiasModel_;
     }
 
     bool softReset() {
@@ -416,6 +429,9 @@ class ReadExperiment {
       *
       */
     std::vector<FragmentStartPositionDistribution> fragStartDists_;
+
+    SequenceBiasModel seqBiasModel_;
+
     /** Keeps track of the number of passes that have been
      *  made through the alignment file.
      */
@@ -427,6 +443,7 @@ class ReadExperiment {
     uint64_t numObservedFragsInFirstPass_{0};
     uint64_t upperBoundHits_{0};
     std::unique_ptr<FragmentLengthDistribution> fragLengthDist_;
+    EquivalenceClassBuilder eqBuilder_;
 };
 
 #endif // EXPERIMENT_HPP

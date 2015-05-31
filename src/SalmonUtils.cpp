@@ -119,6 +119,55 @@ namespace utils {
     }
 
     template <typename ExpLib>
+    void writeAbundancesFromCollapsed(
+                         const SalmonOpts& sopt,
+                         ExpLib& alnLib,
+                         boost::filesystem::path& fname,
+                         std::string headerComments) {
+        using salmon::math::LOG_0;
+        using salmon::math::LOG_1;
+
+        std::unique_ptr<std::FILE, int (*)(std::FILE *)> output(std::fopen(fname.c_str(), "w"), std::fclose);
+
+        fmt::print(output.get(), "{}", headerComments);
+        fmt::print(output.get(), "# Name\tLength\tTPM\tNumReads\n");
+
+        double numMappedFrags = alnLib.upperBoundHits();
+
+        std::vector<Transcript>& transcripts_ = alnLib.transcripts();
+        for (auto& transcript : transcripts_) {
+            transcript.projectedCounts =
+                transcript.mass(false) * numMappedFrags;
+        }
+
+        double tfracDenom{0.0};
+        for (auto& transcript : transcripts_) {
+            double refLength = sopt.noEffectiveLengthCorrection ?
+                               transcript.RefLength :
+                               std::exp(transcript.getCachedEffectiveLength());
+            tfracDenom += (transcript.projectedCounts / numMappedFrags) / refLength;
+        }
+
+        double million = 1000000.0;
+        // Now posterior has the transcript fraction
+        for (auto& transcript : transcripts_) {
+            double logLength = sopt.noEffectiveLengthCorrection ?
+                               std::log(transcript.RefLength) :
+                               transcript.getCachedEffectiveLength();
+            double count = transcript.projectedCounts;
+            double npm = (transcript.projectedCounts / numMappedFrags);
+            double refLength = std::exp(logLength);
+            double tfrac = (npm / refLength) / tfracDenom;
+            double tpm = tfrac * million;
+
+            fmt::print(output.get(), "{}\t{}\t{}\t{}\n",
+                    transcript.RefName, transcript.RefLength,
+                    tpm, count);
+        }
+
+    }
+
+    template <typename ExpLib>
     void writeAbundances(const SalmonOpts& sopt,
                          ExpLib& alnLib,
                          boost::filesystem::path& fname,
@@ -139,16 +188,15 @@ namespace utils {
         const double logNumFragments = std::log(static_cast<double>(numMappedReads));
         const double upperBoundFactor = static_cast<double>(alnLib.upperBoundHits()) /
                                         numMappedReads;
+
         auto clusters = alnLib.clusterForest().getClusters();
         size_t clusterID = 0;
         for(auto cptr : clusters) {
 
-            double logClusterMass = cptr->logMass();
+            //double logClusterMass = cptr->logMass();
+            // EDIT
+            double logClusterMass = salmon::math::LOG_0;
             double logClusterCount = std::log(upperBoundFactor * static_cast<double>(cptr->numHits()));
-
-            if (logClusterMass == LOG_0) {
-                std::cerr << "Warning: cluster " << clusterID << " has 0 mass!\n";
-            }
 
             bool requiresProjection{false};
 
@@ -158,12 +206,24 @@ namespace utils {
                 Transcript& t = refs[transcriptID];
                 t.uniqueCounts = t.uniqueCount();
                 t.totalCounts = t.totalCount();
+                logClusterMass = salmon::math::logAdd(logClusterMass,
+                                    t.mass(false));
                 ++clusterSize;
+            }
+
+            if (logClusterMass == LOG_0) {
+                // std::cerr << "Warning: cluster " << clusterID << " has 0 mass!\n";
             }
 
             for (auto transcriptID : members) {
                 Transcript& t = refs[transcriptID];
                 double logTranscriptMass = t.mass(false);
+                // Try bias
+                /*
+                double logBias = t.bias();
+                logTranscriptMass += t.bias();
+                */
+
                 if (logTranscriptMass == LOG_0) {
                     t.projectedCounts = 0;
                 } else {
@@ -195,6 +255,13 @@ namespace utils {
             double logLength = sopt.noEffectiveLengthCorrection ?
                                std::log(transcript.RefLength) :
                                transcript.getCachedEffectiveLength();
+            /*
+            if (!sopt.noSeqBiasModel) {
+                double avgLogBias = transcript.getAverageSequenceBias(
+                                    alnLib.sequenceBiasModel());
+                logLength += avgLogBias;
+            }
+            */
             //logLength = std::log(transcript.RefLength);
             double fpkmFactor = std::exp(logBillion - logLength - logNumFragments);
             double count = transcript.projectedCounts;
@@ -212,6 +279,83 @@ namespace utils {
         }
 
     }
+
+
+
+    template <typename AlnLibT>
+    void normalizeAlphas(const SalmonOpts& sopt,
+                         AlnLibT& alnLib) {
+
+        using salmon::math::LOG_0;
+        using salmon::math::LOG_1;
+
+        auto& refs = alnLib.transcripts();
+        auto numMappedReads = alnLib.numMappedReads();
+        const double logNumFragments = std::log(static_cast<double>(numMappedReads));
+        auto clusters = alnLib.clusterForest().getClusters();
+        size_t clusterID = 0;
+        for(auto cptr : clusters) {
+
+            //double logClusterMass = cptr->logMass();
+            // EDIT
+            double logClusterMass = salmon::math::LOG_0;
+            double logClusterCount = std::log(static_cast<double>(cptr->numHits()));
+
+            bool requiresProjection{false};
+
+            auto& members = cptr->members();
+            size_t clusterSize{0};
+            for (auto transcriptID : members) {
+                Transcript& t = refs[transcriptID];
+                t.uniqueCounts = t.uniqueCount();
+                t.totalCounts = t.totalCount();
+                logClusterMass = salmon::math::logAdd(logClusterMass,
+                                    t.mass(false));// + t.bias());
+                ++clusterSize;
+            }
+
+            if (logClusterMass == LOG_0) {
+                // std::cerr << "Warning: cluster " << clusterID << " has 0 mass!\n";
+            }
+
+            for (auto transcriptID : members) {
+                Transcript& t = refs[transcriptID];
+                double logTranscriptMass = t.mass(false);
+                // Try bias
+                // double logBias = t.bias();
+                // logTranscriptMass += t.bias();
+
+                if (logTranscriptMass == LOG_0) {
+                    t.projectedCounts = 0;
+                } else {
+                    double logClusterFraction = logTranscriptMass - logClusterMass;
+                    t.projectedCounts = std::exp(logClusterFraction + logClusterCount);
+                    requiresProjection |= t.projectedCounts > static_cast<double>(t.totalCounts) or
+                        t.projectedCounts < static_cast<double>(t.uniqueCounts);
+                }
+            }
+
+            if (clusterSize > 1 and requiresProjection) {
+                cptr->projectToPolytope(refs);
+            }
+            ++clusterID;
+        }
+
+        auto& transcripts_ = refs;
+        double nFracDenom{0.0};
+        for (auto& transcript : transcripts_) {
+            nFracDenom += (transcript.projectedCounts / numMappedReads);
+        }
+
+	double invNFracTotal = 1.0 / nFracDenom;
+        for (auto& transcript : transcripts_) {
+		double v = transcript.projectedCounts / numMappedReads;
+		//transcript.setMass(v * invNFracTotal);
+		transcript.setMass(transcript.projectedCounts);
+        }
+
+    }
+
 
     LibraryFormat hitType(int32_t end1Start, bool end1Fwd,
                           int32_t end2Start, bool end2Fwd) {
@@ -987,4 +1131,36 @@ void salmon::utils::writeAbundances<ReadExperiment>(
                                                   ReadExperiment& alnLib,
                                                   boost::filesystem::path& fname,
                                                   std::string headerComments);
+template
+void salmon::utils::writeAbundancesFromCollapsed<AlignmentLibrary<ReadPair>>(
+                                              const SalmonOpts& opts,
+                                              AlignmentLibrary<ReadPair>& alnLib,
+                                              boost::filesystem::path& fname,
+                                              std::string headerComments);
+
+template
+void salmon::utils::writeAbundancesFromCollapsed<AlignmentLibrary<UnpairedRead>>(
+                                                  const SalmonOpts& opts,
+                                                  AlignmentLibrary<UnpairedRead>& alnLib,
+                                                  boost::filesystem::path& fname,
+                                                  std::string headerComments);
+template
+void salmon::utils::writeAbundancesFromCollapsed<ReadExperiment>(
+                                                  const SalmonOpts& opts,
+                                                  ReadExperiment& alnLib,
+                                                  boost::filesystem::path& fname,
+                                                  std::string headerComments);
+
+template
+void salmon::utils::normalizeAlphas<ReadExperiment>(const SalmonOpts& sopt,
+                         	     ReadExperiment& alnLib);
+
+template
+void salmon::utils::normalizeAlphas<AlignmentLibrary<UnpairedRead>>(const SalmonOpts& sopt,
+                         	     AlignmentLibrary<UnpairedRead>& alnLib);
+template
+void salmon::utils::normalizeAlphas<AlignmentLibrary<ReadPair>>(const SalmonOpts& sopt,
+                         	     AlignmentLibrary<ReadPair>& alnLib);
+
+
 

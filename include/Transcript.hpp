@@ -6,6 +6,7 @@
 #include <limits>
 #include "SalmonStringUtils.hpp"
 #include "SalmonMath.hpp"
+#include "SequenceBiasModel.hpp"
 #include "FragmentLengthDistribution.hpp"
 #include "tbb/atomic.h"
 
@@ -15,7 +16,8 @@ public:
         RefName(name), RefLength(len), id(idIn), Sequence(nullptr),
         logPerBasePrior_(std::log(alpha)),
         priorMass_(std::log(alpha*len)),
-        mass_(salmon::math::LOG_0), sharedCount_(0.0) {
+        mass_(salmon::math::LOG_0), sharedCount_(0.0),
+        avgMassBias_(salmon::math::LOG_0) {
             uniqueCount_.store(0);
             lastUpdate_.store(0);
             lastTimestepUpdated_.store(0);
@@ -38,6 +40,7 @@ public:
         lengthClassIndex_ = other.lengthClassIndex_;
         logPerBasePrior_ = other.logPerBasePrior_;
         priorMass_ = other.priorMass_;
+        avgMassBias_.store(other.avgMassBias_.load());
     }
 
     Transcript& operator=(Transcript&& other) {
@@ -56,6 +59,7 @@ public:
         lengthClassIndex_ = other.lengthClassIndex_;
         logPerBasePrior_ = other.logPerBasePrior_;
         priorMass_ = other.priorMass_;
+        avgMassBias_.store(other.avgMassBias_.load());
         return *this;
     }
 
@@ -122,6 +126,17 @@ public:
         }
     }
 
+    inline void addBias(double bias) {
+        double oldVal = avgMassBias_;
+        double returnedVal = oldVal;
+        double newVal{0.0};
+        do {
+            oldVal = returnedVal;
+            newVal = salmon::math::logAdd(oldVal, bias);
+            returnedVal = avgMassBias_.compare_and_swap(newVal, oldVal);
+        } while (returnedVal != oldVal);
+    }
+
     inline void addMass(double mass) {
         double oldMass = mass_;
         double returnedMass = oldMass;
@@ -133,9 +148,29 @@ public:
         } while (returnedMass != oldMass);
     }
 
+    inline void setMass(double mass) {
+        mass_.store(mass);
+    }
+
     inline double mass(bool withPrior=true) {
         return (withPrior) ? salmon::math::logAdd(priorMass_, mass_.load()) : mass_.load();
     }
+
+    inline double bias() {
+        return (totalCount_.load() > 0) ?
+                    avgMassBias_ - std::log(totalCount_.load()) :
+                    salmon::math::LOG_1;
+    }
+
+    /*
+    double getAverageSequenceBias(SequenceBiasModel& m) {
+        double bias = salmon::math::LOG_0;
+        for (int32_t i = 0; i < RefLength; ++i) {
+            bias = salmon::math::logAdd(bias, m.biasFactor(*this, i));
+        }
+        return bias - std::log(RefLength);
+    }
+    */
 
     /**
       *  NOTE: Adopted from "est_effective_length" at (https://github.com/adarob/eXpress/blob/master/src/targets.cpp)
@@ -212,6 +247,7 @@ private:
     tbb::atomic<double> sharedCount_;
     tbb::atomic<double> cachedEffectiveLength_;
     tbb::atomic<size_t> lastUpdate_;
+    tbb::atomic<double> avgMassBias_;
     uint32_t lengthClassIndex_;
     double logPerBasePrior_;
 };

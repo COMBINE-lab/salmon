@@ -47,6 +47,16 @@ class AlignmentGroup {
             archive(alignments_);
         }
 
+        /**
+         *  Sort the alignments by their transcript ids
+         */
+        inline void sortHits() {
+            std::sort(alignments_.begin(), alignments_.end(),
+                    [](FragT& x, FragT& y) -> bool {
+                        return x->transcriptID() < y->transcriptID();
+                     });
+        }
+
     private:
         std::vector<FragT> alignments_;
         std::string* read_;

@@ -108,6 +108,8 @@ extern "C" {
 #include "FragmentLengthDistribution.hpp"
 #include "ReadExperiment.hpp"
 #include "SalmonOpts.hpp"
+#include "EquivalenceClassBuilder.hpp"
+#include "CollapsedEMOptimizer.hpp"
 
 /* This allows us to use CLASP for optimal MEM
  * chaining.  However, this seems to be neither
@@ -224,7 +226,8 @@ class SMEMAlignment {
             score_(0.0),
             hitPos_(0),
             fragLength_(0),
-            logProb(salmon::math::LOG_0) {}
+            logProb(salmon::math::LOG_0),
+            logBias(salmon::math::LOG_0){}
 
         SMEMAlignment(TranscriptID transcriptIDIn, LibraryFormat format,
                   double scoreIn = 0.0,
@@ -239,6 +242,7 @@ class SMEMAlignment {
         SMEMAlignment& operator=(SMEMAlignment& o) = default;
         SMEMAlignment& operator=(SMEMAlignment&& o) = default;
 
+
         inline TranscriptID transcriptID() { return transcriptID_; }
         inline uint32_t fragLength() { return fragLength_; }
         inline LibraryFormat libFormat() { return format_; }
@@ -247,7 +251,7 @@ class SMEMAlignment {
         // inline double coverage() {  return static_cast<double>(kmerCount) / fragLength_; };
         uint32_t kmerCount;
         double logProb;
-
+        double logBias;
         template <typename Archive>
         void save(Archive& archive) const {
             archive(transcriptID_, format_.formatID(), score_, hitPos_, fragLength_);
@@ -309,14 +313,19 @@ void processMiniBatch(
 
     std::vector<FragmentStartPositionDistribution>& fragStartDists =
         readExp.fragmentStartPositionDistributions();
+    auto& biasModel = readExp.sequenceBiasModel();
 
     bool updateCounts = initialRound;
     bool useReadCompat = salmonOpts.incompatPrior != salmon::math::LOG_1;
     bool useFSPD{!salmonOpts.noFragStartPosDist};
     bool useFragLengthDist{!salmonOpts.noFragLengthDist};
+    bool useSequenceBiasModel{!salmonOpts.noSeqBiasModel};
+
     const auto expectedLibraryFormat = readLib.format();
     uint64_t zeroProbFrags{0};
 
+    //EQClass
+    EquivalenceClassBuilder& eqBuilder = readExp.equivalenceClassBuilder();
 
     // Build reverse map from transcriptID => hit id
     using HitID = uint32_t;
@@ -378,7 +387,7 @@ void processMiniBatch(
     } // end initial round
     // END: DOUBLY-COLLAPSED TESTING
 
-
+    int i{0};
     {
         // Iterate over each group of alignments (a group consists of all alignments reported
         // for a single read).  Distribute the read's mass to the transcripts
@@ -393,6 +402,15 @@ void processMiniBatch(
 
             auto firstTranscriptID = alnGroup->alignments().front().transcriptID();
             std::unordered_set<size_t> observedTranscripts;
+
+            // EQCLASS
+            std::vector<uint32_t> txpIDs;
+            std::vector<double> auxProbs;
+            double auxDenom = salmon::math::LOG_0;
+	        size_t txpIDsHash{0};
+
+            double avgLogBias = salmon::math::LOG_0;
+            uint32_t numInGroup{0};
             // For each alignment of this read
             for (auto& aln : alnGroup->alignments()) {
                 auto transcriptID = aln.transcriptID();
@@ -473,6 +491,28 @@ void processMiniBatch(
                         startPosProb = fragStartDist(hitPos, refLength, logRefLength);
                     }
 
+                    double logBiasProb = salmon::math::LOG_1;
+                    if (useSequenceBiasModel and burnedIn) {
+                        double fragLength = aln.fragLength();
+                        if (fragLength > 0) {
+                            int32_t leftHitPos = hitPos;
+                            int32_t rightHitPos = hitPos + fragLength;
+                            logBiasProb = biasModel.biasFactor(transcript,
+                                                               leftHitPos,
+                                                               rightHitPos,
+                                                               aln.libFormat());
+                        } else {
+                            logBiasProb = biasModel.biasFactor(transcript,
+                                                               hitPos,
+                                                               aln.libFormat());
+                        }
+                        /*
+                        if ( i % 1000 == 0 ) {
+                            std::cerr << "biasProb = " << std::exp(logBiasProb) << "\n";
+                        }
+                        */
+                    }
+
                     // Increment the count of this type of read that we've seen
                     ++libTypeCounts[aln.libFormat().formatID()];
 
@@ -481,11 +521,22 @@ void processMiniBatch(
                     aln.logProb = (transcriptLogCount - logRefLength) +
                                   logFragProb + logAlignCompatProb;
 		    */
-                    aln.logProb = (transcriptLogCount + startPosProb) +
-                                  logFragProb + logAlignCompatProb;
-                                  
+                    double auxProb = startPosProb + logFragProb +
+                                     logAlignCompatProb + logBiasProb;
+
+                    aln.logProb = transcriptLogCount + auxProb;
 
                     if (std::abs(aln.logProb) == LOG_0) { continue; }
+
+                    if (useSequenceBiasModel and burnedIn) {
+                        avgLogBias = salmon::math::logAdd(avgLogBias, logBiasProb);
+                        numInGroup++;
+                        aln.logBias = logBiasProb;
+                    } else {
+                        avgLogBias = salmon::math::logAdd(avgLogBias, logBiasProb);
+                        numInGroup++;
+                        aln.logBias = salmon::math::LOG_1;
+                    }
 
                     sumOfAlignProbs = logAdd(sumOfAlignProbs, aln.logProb);
 
@@ -494,6 +545,11 @@ void processMiniBatch(
                         transcripts[transcriptID].addTotalCount(1);
                         observedTranscripts.insert(transcriptID);
                     }
+                    // EQCLASS
+                    txpIDs.push_back(transcriptID);
+                    auxProbs.push_back(auxProb);
+                    auxDenom = salmon::math::logAdd(auxDenom, auxProb);
+    	            boost::hash_combine(txpIDsHash, transcriptID);
                 } else {
                     aln.logProb = LOG_0;
                 }
@@ -508,8 +564,20 @@ void processMiniBatch(
                 ++localNumAssignedFragments;
             }
 
+            if (numInGroup > 0){
+                avgLogBias = avgLogBias - std::log(numInGroup);
+            }
+            // EQCLASS
+            TranscriptGroup tg(txpIDs, txpIDsHash);
+            for (auto& p : auxProbs) {
+                p -= auxDenom;
+            }
+            eqBuilder.addGroup(std::move(tg), auxProbs);
+
+
             // normalize the hits
             for (auto& aln : alnGroup->alignments()) {
+                if (std::abs(aln.logProb) == LOG_0) { continue; }
                 // Normalize the log-probability of this alignment
                 aln.logProb -= sumOfAlignProbs;
                 // Get the transcript referenced in this alignment
@@ -525,6 +593,7 @@ void processMiniBatch(
                     newMass = salmon::math::logAdd(newMass, hitInfo[transcriptID].newUniqueMass);
                 }
                 transcript.addMass( newMass );
+                transcript.addBias( aln.logBias );
 
                 double r = uni(randEng);
                 if (!burnedIn and r < std::exp(aln.logProb)) {
@@ -542,18 +611,38 @@ void processMiniBatch(
                                              transcript.RefLength,
                                              logForgettingMass);
                     }
+                    if (useSequenceBiasModel) {
+                        if (fragLength > 0.0) {
+                            int32_t leftPos = aln.hitPos();
+                            int32_t rightPos = leftPos + fragLength;
+                            biasModel.update(transcript, leftPos, rightPos,
+                                             aln.libFormat(), logForgettingMass, LOG_1);
+                        } else {
+                            int32_t hitPos = aln.hitPos();
+                            biasModel.update(transcript, hitPos,
+                                             aln.libFormat(),
+                                             logForgettingMass, LOG_1);
+                        }
+                    }
                 }
             } // end normalize
 
+            double avgBias = std::exp(avgLogBias);
             // update the single target transcript
             if (transcriptUnique) {
                 if (updateCounts) {
                     transcripts[firstTranscriptID].addUniqueCount(1);
                 }
-                clusterForest.updateCluster(firstTranscriptID, 1, logForgettingMass, updateCounts);
+                clusterForest.updateCluster(
+                        firstTranscriptID,
+                        1.0,
+                        logForgettingMass, updateCounts);
             } else { // or the appropriate clusters
                 clusterForest.mergeClusters<SMEMAlignment>(alnGroup->alignments().begin(), alnGroup->alignments().end());
-                clusterForest.updateCluster(alnGroup->alignments().front().transcriptID(), 1, logForgettingMass, updateCounts);
+                clusterForest.updateCluster(
+                        alnGroup->alignments().front().transcriptID(),
+                        1.0,
+                        logForgettingMass, updateCounts);
             }
 
             } // end read group
@@ -1379,6 +1468,9 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
 
     uint32_t firstTranscriptID = std::numeric_limits<uint32_t>::max();
     double bestScore = -std::numeric_limits<double>::max();
+    bool sortedByTranscript = true;
+    int32_t lastTranscriptId = std::numeric_limits<int32_t>::min();
+
     if (BOOST_UNLIKELY(isOrphan)) {
         return;
         bool foundValidHit{false};
@@ -1404,6 +1496,10 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
                     firstTranscriptID = transcriptID;
                 } else if (hitList.isUniquelyMapped() and transcriptID != firstTranscriptID) {
                     hitList.isUniquelyMapped() = false;
+                }
+
+                if (transcriptID  < lastTranscriptId) {
+                    sortedByTranscript = false;
                 }
 
                 alnList.emplace_back(transcriptID, fmt, score, hitPos);
@@ -1445,11 +1541,17 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
         }
 
         if (alnList.size() > 0) {
-            auto newEnd = std::partition(alnList.begin(), alnList.end(),
-                           [bestScore](SMEMAlignment& aln) -> bool {
-                                return aln.score() >= 0.95 * bestScore;
+            auto newEnd = std::stable_partition(alnList.begin(), alnList.end(),
+                           [bestScore, fOpt](SMEMAlignment& aln) -> bool {
+                                return aln.score() >= fOpt * bestScore;
                            });
             alnList.resize(std::distance(alnList.begin(), newEnd));
+            if (!sortedByTranscript) {
+                std::sort(alnList.begin(), alnList.end(),
+                          [](SMEMAlignment& x, SMEMAlignment& y) -> bool {
+                           return x.transcriptID() < y.transcriptID();
+                          });
+            }
         }
 
     } else {
@@ -1490,17 +1592,26 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
                 }
 
                 int32_t minHitPos = std::min(end1Pos, end2Pos);
+                if (transcriptID  < lastTranscriptId) {
+                    sortedByTranscript = false;
+                }
                 alnList.emplace_back(transcriptID, fmt, score, minHitPos, fragLength);
                 ++readHits;
                 ++hitListCount;
             }
         } // end for jointHits
         if (alnList.size() > 0) {
-            auto newEnd = std::partition(alnList.begin(), alnList.end(),
-                           [bestScore](SMEMAlignment& aln) -> bool {
-                                return aln.score() >= 0.95 * bestScore;
+            auto newEnd = std::stable_partition(alnList.begin(), alnList.end(),
+                           [bestScore, fOpt](SMEMAlignment& aln) -> bool {
+                                return aln.score() >= fOpt * bestScore;
                            });
             alnList.resize(std::distance(alnList.begin(), newEnd));
+            if (!sortedByTranscript) {
+                std::sort(alnList.begin(), alnList.end(),
+                          [](SMEMAlignment& x, SMEMAlignment& y) -> bool {
+                           return x.transcriptID() < y.transcriptID();
+                          });
+            }
         }
     } // end else
 
@@ -1601,6 +1712,11 @@ void getHitsForFragment(jellyfish::header_sequence_qual& frag,
 
     upperBoundHits += (hits.size() > 0) ? 1 : 0;
 
+    int32_t lastTranscriptId = std::numeric_limits<int32_t>::min();
+    bool sortedByTranscript{true};
+    double fOpt{0.9};
+    double bestScore = -std::numeric_limits<double>::max();
+
     size_t readHits{0};
     auto& alnList = hitList.alignments();
     hitList.isUniquelyMapped() = true;
@@ -1612,12 +1728,15 @@ void getHitsForFragment(jellyfish::header_sequence_qual& frag,
         // Coverage score
         Transcript& t = transcripts[tHitList.first];
         tHitList.second.computeBestChain(t, frag.seq);
+        double score = tHitList.second.bestHitScore;
         // DEBUG -- process ALL HITS
         //if (true) {
-        if (tHitList.second.bestHitScore >= cutoff) {
+        if (score >= fOpt * bestScore and tHitList.second.bestHitScore >= cutoff) {
 
-            double score = tHitList.second.bestHitScore;
             bool isForward = tHitList.second.isForward();
+            if (score < fOpt * bestScore) { continue; }
+
+        	if (score > bestScore) { bestScore = score; }
 
             auto hitPos = tHitList.second.bestHitPos;
             auto fmt = salmon::utils::hitType(hitPos, isForward);
@@ -1628,12 +1747,33 @@ void getHitsForFragment(jellyfish::header_sequence_qual& frag,
                 hitList.isUniquelyMapped() = false;
             }
 
-            alnList.emplace_back(tHitList.first, fmt, score, hitPos);
+            auto transcriptID = tHitList.first;
+
+            if (transcriptID  < lastTranscriptId) {
+                sortedByTranscript = false;
+            }
+
+            alnList.emplace_back(transcriptID, fmt, score, hitPos);
             readHits += score;
             ++hitListCount;
             ++leftHitCount;
         }
     }
+    if (alnList.size() > 0) {
+        auto newEnd = std::stable_partition(alnList.begin(), alnList.end(),
+                [bestScore, fOpt](SMEMAlignment& aln) -> bool {
+                return aln.score() >= fOpt * bestScore;
+                });
+        alnList.resize(std::distance(alnList.begin(), newEnd));
+        if (!sortedByTranscript) {
+            std::sort(alnList.begin(), alnList.end(),
+                    [](SMEMAlignment& x, SMEMAlignment& y) -> bool {
+                     return x.transcriptID() < y.transcriptID();
+                    });
+        }
+    }
+
+
 
 }
 
@@ -2464,7 +2604,10 @@ void quantifyLibrary(
     size_t maxReadGroup{miniBatchSize};
     uint32_t structCacheSize = numQuantThreads * maxReadGroup * 10;
 
-    while (numObservedFragments < numRequiredFragments) {
+    // EQCLASS
+    bool terminate{false};
+
+    while (numObservedFragments < numRequiredFragments and !terminate) {
         prevNumObservedFragments = numObservedFragments;
         if (!initialRound) {
             bool didReset = (salmonOpts.disableMappingCache) ?
@@ -2577,6 +2720,11 @@ void quantifyLibrary(
             // TBB
             while (groupCache.try_pop(ag)) { delete ag; }
 #endif
+            //EQCLASS
+            bool done = experiment.equivalenceClassBuilder().finish();
+            // skip the extra online rounds
+            terminate = true;
+            // END EQCLASS
         } else {
             uint32_t libNum{0};
             auto processReadLibraryCallback =  [&](
@@ -2736,14 +2884,21 @@ int salmonQuantify(int argc, char *argv[]) {
                                         "format; files with any other extension are assumed to be in the simple format.");
     //("optChain", po::bool_switch(&optChain)->default_value(false), "Chain MEMs optimally rather than greedily")
 
+    //EQCLASS
+    sopt.disableMappingCache = true;
+    // no sequence bias for now
+    sopt.noSeqBiasModel = true;
+
     po::options_description advanced("\n"
 		    		     "advanced options");
     advanced.add_options()
+    /*
     ("disableMappingCache", po::bool_switch(&(sopt.disableMappingCache))->default_value(false), "Setting this option disables the creation and use "
                                         "of the \"mapping cache\" file.  The mapping cache can speed up quantification significantly for smaller read "
                                         "libraries (i.e. where the number of mapped fragments is less than the required number of observations). However, "
                                         "for very large read libraries, the mapping cache is unnecessary, and disabling it may allow salmon to more effectively "
                                         "make use of a very large number of threads.")
+    */
     ("fldMax" , po::value<size_t>(&(sopt.fragLenDistMax))->default_value(800), "The maximum fragment length to consider when building the empirical "
      											      "distribution")
     ("fldMean", po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(200), "The mean used in the fragment length distribution prior")
@@ -2771,6 +2926,8 @@ int salmonQuantify(int argc, char *argv[]) {
     ("noFragStartPosDist", po::bool_switch(&(sopt.noFragStartPosDist))->default_value(false), "[Currently Experimental] : "
                         "Don't consider / model non-uniformity in the fragment start positions "
                         "across the transcript.")
+    //("noSeqBiasModel", po::bool_switch(&(sopt.noSeqBiasModel))->default_value(false),
+    //                    "Don't learn and apply a model of sequence-specific bias")
     ("numAuxModelSamples", po::value<uint32_t>(&(sopt.numBurninFrags))->default_value(5000000), "The first <numAuxModelSamples> are used to train the "
      			"auxiliary model parameters (e.g. fragment length distribution, bias, etc.).  After ther first <numAuxModelSamples> observations "
 			"the auxiliary model parameters will be assumed to have converged and will be fixed.")
@@ -2900,8 +3057,18 @@ transcript abundance from RNA-seq reads
         ReadExperiment experiment(readLibraries, indexDirectory, sopt);
         uint32_t nbThreads = vm["threads"].as<uint32_t>();
 
+        // EQCLASS
+        experiment.equivalenceClassBuilder().start();
+
         quantifyLibrary(experiment, greedyChain, memOptions, sopt, coverageThresh,
                         requiredObservations, nbThreads);
+
+        // EQCLASS
+        CollapsedEMOptimizer optimizer;
+        jointLog->info("starting optimizer");
+    	salmon::utils::normalizeAlphas(sopt, experiment);
+        optimizer.optimize(experiment, sopt, 0.01, 5000);
+        jointLog->info("finished optimizer");
 
         free(memOptions);
         size_t tnum{0};
@@ -2912,7 +3079,11 @@ transcript abundance from RNA-seq reads
 
         commentStream << "# [ mapping rate ] => { " << experiment.mappingRate() * 100.0 << "\% }\n";
         commentString = commentStream.str();
-        salmon::utils::writeAbundances(sopt, experiment, estFilePath, commentString);
+
+        //salmon::utils::writeAbundances(sopt, experiment, estFilePath, commentString);
+        // EQCLASS
+        salmon::utils::writeAbundancesFromCollapsed(
+                sopt, experiment, estFilePath, commentString);
 
         // Now create a subdirectory for any parameters of interest
         bfs::path paramsDir = outputDirectory / "libParams";
@@ -2935,6 +3106,13 @@ transcript abundance from RNA-seq reads
             {
                 std::unique_ptr<std::FILE, int (*)(std::FILE *)> distOut(std::fopen(distFileName.c_str(), "w"), std::fclose);
                 fmt::print(distOut.get(), "{}\n", experiment.fragmentLengthDistribution()->toString());
+            }
+        }
+        if (!sopt.noSeqBiasModel) {
+            bfs::path biasFileName = paramsDir / "seqBias.txt";
+            {
+                std::unique_ptr<std::FILE, int (*)(std::FILE *)> biasOut(std::fopen(biasFileName.c_str(), "w"), std::fclose);
+                fmt::print(biasOut.get(), "{}\n", experiment.sequenceBiasModel().toString());
             }
         }
 

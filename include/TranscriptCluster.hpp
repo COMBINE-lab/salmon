@@ -21,7 +21,8 @@ public:
                                               logMass_(salmon::math::LOG_0), active_(true) {
     }
 
-    void incrementCount(size_t num) { count_ += num; }
+    //void incrementCount(size_t num) { count_ += num; }
+    void incrementCount(double num) { count_ += num; }
     void addMass(double logNewMass) { logMass_ = salmon::math::logAdd(logMass_, logNewMass); }
     void merge(TranscriptCluster& other) {
         members_.splice(members_.begin(), other.members_);
@@ -30,7 +31,8 @@ public:
     }
 
     std::list<size_t>& members() { return members_; }
-    size_t numHits() { return count_.load(); }
+    //size_t numHits() { return count_.load(); }
+    double numHits() { return count_; }
     bool isActive() { return active_; }
     void deactivate() { active_ = false; }
     double logMass() { return logMass_; }
@@ -101,7 +103,8 @@ public:
 
 private:
     std::list<size_t> members_;
-    std::atomic<size_t> count_;
+    //std::atomic<size_t> count_;
+    double count_;
     double logMass_;
     bool active_;
 };

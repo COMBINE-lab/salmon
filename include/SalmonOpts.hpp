@@ -41,9 +41,11 @@ struct SalmonOpts {
 
     bool noFragStartPosDist; // Don't learn a non-uniform start distribution
 
+    bool noSeqBiasModel; // Don't learn and use a sequence-specific bias model.
+
     bool useReadCompat; // Give a fragment assignment a likelihood based on the compatibility
                         // between the manner in which it mapped and the expected read
-                        // librarry format.
+                        // library format.
 
     double incompatPrior; // The prior probability that an alignment that disagrees with
                           // the provided library type could correspond to the true

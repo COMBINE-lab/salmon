@@ -22,6 +22,7 @@ extern "C" {
 #include "AlignmentModel.hpp"
 #include "FASTAParser.hpp"
 #include "concurrentqueue.h"
+#include "EquivalenceClassBuilder.hpp"
 
 // Boost includes
 #include <boost/filesystem.hpp>
@@ -54,7 +55,9 @@ class AlignmentLibrary {
         transcriptFile_(transcriptFile),
         libFmt_(libFmt),
         transcripts_(std::vector<Transcript>()),
-	fragStartDists_(5),
+    	fragStartDists_(5),
+        seqBiasModel_(1.0),
+    	eqBuilder_(salmonOpts.jointLog),
         quantificationPasses_(0) {
             namespace bfs = boost::filesystem;
 
@@ -154,6 +157,10 @@ class AlignmentLibrary {
            bq->start(nff, onlyProcessAmbiguousAlignments);
         }
 
+    EquivalenceClassBuilder& equivalenceClassBuilder() {
+        return eqBuilder_;
+    }
+
     std::vector<Transcript>& transcripts() { return transcripts_; }
 
     inline bool getAlignmentGroup(AlignmentGroup<FragT>*& ag) { return bq->getAlignmentGroup(ag); }
@@ -172,6 +179,10 @@ class AlignmentLibrary {
 
     inline AlignmentModel& alignmentModel() {
         return *alnMod_.get();
+    }
+
+    SequenceBiasModel& sequenceBiasModel() {
+        return seqBiasModel_;
     }
 
 //    inline tbb::concurrent_queue<FragT*>& fragmentQueue() {
@@ -243,6 +254,8 @@ class AlignmentLibrary {
     //std::unique_ptr<t_pool, std::function<void(t_pool*)>> threadPool_;
     std::unique_ptr<BAMQueue<FragT>> bq;
 
+    SequenceBiasModel seqBiasModel_;
+
     /**
      * The cluster forest maintains the dynamic relationship
      * defined by transcripts and reads --- if two transcripts
@@ -270,6 +283,8 @@ class AlignmentLibrary {
      *  made through the alignment file.
      */
     size_t quantificationPasses_;
+
+    EquivalenceClassBuilder eqBuilder_;
 };
 
 #endif // ALIGNMENT_LIBRARY_HPP

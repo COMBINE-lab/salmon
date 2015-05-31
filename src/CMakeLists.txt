@@ -3,13 +3,16 @@ QSufSort.c
 is.c
 bwt_gen.c
 bwtindex.c
+CollapsedEMOptimizer.cpp
 Salmon.cpp
 BuildSalmonIndex.cpp
 SalmonQuantify.cpp
 FragmentLengthDistribution.cpp 
 FragmentStartPositionDistribution.cpp
+SequenceBiasModel.cpp
 SalmonUtils.cpp
 StadenUtils.cpp
+TranscriptGroup.cpp
 )
 
 set (SALMON_ALIGN_SRCS

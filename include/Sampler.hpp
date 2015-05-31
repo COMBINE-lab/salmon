@@ -99,12 +99,16 @@ namespace salmon {
                 using salmon::math::logAdd;
                 using salmon::math::logSub;
 
+                bool useFSPD{!salmonOpts.noFragStartPosDist};
                 auto& refs = alnLib.transcripts();
                 auto& clusterForest = alnLib.clusterForest();
                 auto& fragmentQueue = alnLib.fragmentQueue();
                 auto& alignmentGroupQueue = alnLib.alignmentGroupQueue();
                 auto& fragLengthDist = alnLib.fragmentLengthDistribution();
-                auto& errMod = alnLib.alignmentModel();
+                auto& alnMod = alnLib.alignmentModel();
+
+                std::vector<FragmentStartPositionDistribution>& fragStartDists =
+                    alnLib.fragmentStartPositionDistributions();
 
                 const auto expectedLibraryFormat = alnLib.format();
 
@@ -180,21 +184,34 @@ namespace salmon {
                                         (salmon::utils::logAlignFormatProb(aln->libFormat(), expectedLibraryFormat, salmonOpts.incompatPrior)) :
                                         LOG_1;
 
-                                    // P(Fn | Tn) = Probability of selecting a fragment of this length, given the transcript is t
-                                    // d(Fn) / sum_x = 1^{lt} d(x)
-                                    double qualProb = -logRefLength + logFragProb + aln->logQualProb() + logAlignCompatProb;
+                                    // Adjustment to the likelihood due to the
+                                    // error model
+                                    double errLike = salmon::math::LOG_1;
+                                    if (burnedIn and salmonOpts.useErrorModel) {
+                                        errLike = alnMod.logLikelihood(*aln, transcript);
+                                    }
+
+                                    // Allow for a non-uniform fragment start position distribution
+                                    double startPosProb = -logRefLength;
+                                    auto hitPos = aln->left();
+                                    if (useFSPD and burnedIn and hitPos < refLength) {
+                                        auto& fragStartDist =
+                                            fragStartDists[transcript.lengthClassIndex()];
+                                        startPosProb = fragStartDist(hitPos, refLength, logRefLength);
+                                    }
+
+                                    double auxProb = startPosProb + logFragProb +
+                                        aln->logQualProb() +
+                                        errLike + logAlignCompatProb;
+
                                     double transcriptLogCount = transcript.mass(false);
 
-                                    if ( transcriptLogCount != LOG_0 ) {
-                                        double errLike = salmon::math::LOG_1;
+                                    if ( transcriptLogCount != LOG_0 and
+                                         auxProb != LOG_0 ) {
 
-                                        if (burnedIn and salmonOpts.useErrorModel) {
-                                            errLike = errMod.logLikelihood(*aln, transcript);
-                                        }
-
-                                        aln->logProb = transcriptLogCount + qualProb + errLike;
-
+                                        aln->logProb = transcriptLogCount + auxProb;
                                         sumOfAlignProbs = logAdd(sumOfAlignProbs, aln->logProb);
+
                                     } else {
                                         aln->logProb = LOG_0;
                                     }

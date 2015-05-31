@@ -153,6 +153,17 @@ void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
                          boost::filesystem::path& fname,
                          std::string headerComments="");
 
+    template <typename AlnLibT>
+    void writeAbundancesFromCollapsed(const SalmonOpts& sopt,
+                         AlnLibT& alnLib,
+                         boost::filesystem::path& fname,
+                         std::string headerComments="");
+
+    template <typename AlnLibT>
+    void normalizeAlphas(const SalmonOpts& sopt,
+                         AlnLibT& alnLib);
+
+
     double logAlignFormatProb(const LibraryFormat observed, const LibraryFormat expected, double incompatPrior);
 
     std::ostream& operator<<(std::ostream& os, OrphanStatus s);
