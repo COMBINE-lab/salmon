@@ -135,7 +135,7 @@ void CollapsedEMOptimizer::EMUpdate_(
                 denom += v;
                 }
 
-                if (denom <= minEQClassWeight) {
+                if (denom <= ::minEQClassWeight) {
                     // tgroup.setValid(false);
                 } else {
 
@@ -177,14 +177,14 @@ void VBEMUpdate_(
     double logNorm = boost::math::digamma(alphaSum);
 
     tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(transcripts.size())),
-            [minWeight, logNorm, totLen, &effLens, &alphaIn,
+            [logNorm, totLen, &effLens, &alphaIn,
              &alphaOut, &expTheta]( const BlockedIndexRange& range) -> void {
 
              double prior = 0.01;
              double priorNorm = prior * totLen;
 
              for (auto i : boost::irange(range.begin(), range.end())) {
-                if (alphaIn[i] > minWeight) {
+                if (alphaIn[i] > ::minWeight) {
                     expTheta[i] = std::exp(boost::math::digamma(alphaIn[i].load()) - logNorm);
                 } else {
                     expTheta[i] = 0.0;
@@ -218,7 +218,7 @@ void VBEMUpdate_(
                         denom += v;
                    }
                 }
-                if (denom <= minEQClassWeight) {
+                if (denom <= ::minEQClassWeight) {
                     // tgroup.setValid(false);
                 } else {
                     double invDenom = 1.0 / denom;
