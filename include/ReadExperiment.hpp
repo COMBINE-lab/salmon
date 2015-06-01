@@ -231,6 +231,14 @@ class ReadExperiment {
         return numObservedFragsInFirstPass_;
     }
 
+    double effectiveMappingRate() {
+        return effectiveMappingRate_;
+    }
+
+    void setEffetiveMappingRate(double emr) {
+        effectiveMappingRate_ = emr;
+    }
+
     std::vector<FragmentStartPositionDistribution>& fragmentStartPositionDistributions() {
         return fragStartDists_;
     }
@@ -442,6 +450,7 @@ class ReadExperiment {
     uint64_t numAssignedFragsInFirstPass_{0};
     uint64_t numObservedFragsInFirstPass_{0};
     uint64_t upperBoundHits_{0};
+    double effectiveMappingRate_{0.0};
     std::unique_ptr<FragmentLengthDistribution> fragLengthDist_;
     EquivalenceClassBuilder eqBuilder_;
 };

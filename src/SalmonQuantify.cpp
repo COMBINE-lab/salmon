@@ -567,6 +567,7 @@ void processMiniBatch(
             if (numInGroup > 0){
                 avgLogBias = avgLogBias - std::log(numInGroup);
             }
+
             // EQCLASS
             TranscriptGroup tg(txpIDs, txpIDsHash);
             for (auto& p : auxProbs) {
@@ -1484,7 +1485,7 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
 
             if (score >= fOpt * bestScore and score >= cutoffLeft) {
     	    	// make sure orphaned fragment is near the end of the transcript
-	    	    if (!nearEndOfTranscript(tHitList.second, t)) { continue; }
+	    	    if (!nearEndOfTranscript(tHitList.second, t, 200)) { continue; }
 
                 foundValidHit = true;
 
@@ -1510,7 +1511,7 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
             }
         }
 
-        if (!foundValidHit) {
+        //if (!foundValidHit) {
             // search for a hit on the right
             for (auto& tHitList : rightHits) {
                 auto transcriptID = tHitList.first;
@@ -1520,7 +1521,7 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
 
                 if (score >= fOpt * bestScore and score >= cutoffRight) {
         		    // make sure orphaned fragment is near the end of the transcript
-	        	    if (!nearEndOfTranscript(tHitList.second, t)) { continue; }
+	        	    if (!nearEndOfTranscript(tHitList.second, t, 200)) { continue; }
 
                     if (score > bestScore) { bestScore = score; }
                     foundValidHit = true;
@@ -1539,7 +1540,7 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
                     ++leftHitCount;
                 }
             }
-        }
+        //}
 
         if (alnList.size() > 0) {
             auto newEnd = std::stable_partition(alnList.begin(), alnList.end(),
@@ -1548,6 +1549,7 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
                            });
             alnList.resize(std::distance(alnList.begin(), newEnd));
             if (!sortedByTranscript) {
+
                 std::sort(alnList.begin(), alnList.end(),
                           [](SMEMAlignment& x, SMEMAlignment& y) -> bool {
                            return x.transcriptID() < y.transcriptID();
@@ -2807,12 +2809,19 @@ void quantifyLibrary(
             "of the mapping rate.  The recorded ratio is likely wrong.  Please "
             "file this as a bug report.\n";
     } else {
+        double upperBoundMappingRate =
+            upperBoundHits.load() /
+            static_cast<double>(numObservedFragments.load());
         experiment.setNumObservedFragments(numObservedFragments - prevNumObservedFragments);
         experiment.setUpperBoundHits(upperBoundHits.load());
+        experiment.setEffetiveMappingRate(upperBoundMappingRate);
     }
 
-    jointLog->info("Overall mapping rate = {}\%\n", experiment.mappingRate() * 100.0);
-    jointLog->info("finished quantifyLibrary()\n");
+        jointLog->info("Overall mapping rate = {}\%; "
+                   "Effective mapping rate = {}\%\n",
+                   experiment.mappingRate() * 100.0,
+                   experiment.effectiveMappingRate() * 100.0);
+    jointLog->info("finished quantifyLibrary()");
 }
 
 int performBiasCorrectionSalmon(
@@ -2945,7 +2954,9 @@ int salmonQuantify(int argc, char *argv[]) {
     ("useMassBanking", po::bool_switch(&(sopt.useMassBanking))->default_value(false), "[Currently Experimental] : "
                         "Use mass \"banking\" in subsequent epoch of inference.  Rather than re-observing uniquely "
                         "mapped reads, simply remember the ratio of uniquely to ambiguously mapped reads for each "
-                        "transcript and distribute the unique mass uniformly throughout the epoch.");
+                        "transcript and distribute the unique mass uniformly throughout the epoch.")
+    ("useVBOpt,v", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
+     			"traditional EM algorithm for optimization in the batch passes.");
 
     po::options_description all("salmon quant options");
     all.add(generic).add(advanced);
@@ -3068,7 +3079,7 @@ transcript abundance from RNA-seq reads
         CollapsedEMOptimizer optimizer;
         jointLog->info("starting optimizer");
     	salmon::utils::normalizeAlphas(sopt, experiment);
-        optimizer.optimize(experiment, sopt, 0.01, 5000);
+        optimizer.optimize(experiment, sopt, 0.01, 10000);
         jointLog->info("finished optimizer");
 
         free(memOptions);

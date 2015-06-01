@@ -5,6 +5,7 @@
 #include <vector>
 #include <thread>
 #include <memory>
+#include <mutex>
 
 // Logger includes
 #include "spdlog/spdlog.h"
@@ -52,10 +53,20 @@ class EquivalenceClassBuilder {
 
         bool finish() {
             active_ = false;
+            /*
+            // unordered_map implementation
+            for (auto& kv : countMap_) {
+                kv.second.normalizeAux();
+                countVec_.push_back(kv);
+            }
+            */
+
             for (auto kv = countMap_.begin(); !kv.is_end(); ++kv) {
                 kv->second.normalizeAux();
+                countVec_.push_back(*kv);
             }
-            countVec_ = countMap_.snapshot_table();
+            //countVec_ = countMap_.snapshot_table();
+
     	    logger_->info("Computed {} weighted equivalence classes "
 			  "for further processing", countVec_.size());
             return true;
@@ -64,23 +75,37 @@ class EquivalenceClassBuilder {
         inline void addGroup(TranscriptGroup&& g,
                              std::vector<double>& weights) {
 
-            auto upfn = [&weights](TGValue& g) -> TGValue& {
+            /*
+            // unordered_map implementation
+            std::lock_guard<std::mutex> lock(mapMut_);
+            auto it = countMap_.find(g);
+            if (it == countMap_.end()) {
+                TGValue v(weights, 1);
+                countMap_.emplace(g, v);
+            } else {
+                auto& x = it->second;
+                x.count++;
+                for (size_t i = 0; i < x.weights.size(); ++i) {
+                    x.weights[i] =
+                        salmon::math::logAdd(x.weights[i], weights[i]);
+                }
+            }
+            */
 
-                g.count++;
+            auto upfn = [&weights](TGValue& x) -> TGValue& {
 
-                for (size_t i = 0; i < g.weights.size(); ++i) {
-                    g.weights[i] =
-                        salmon::math::logAdd(g.weights[i], weights[i]);
+                x.count++;
+
+                for (size_t i = 0; i < x.weights.size(); ++i) {
+                    x.weights[i] =
+                        salmon::math::logAdd(x.weights[i], weights[i]);
                 }
 
-                return g;
+                return x;
             };
             TGValue v(weights, 1);
             countMap_.upsert(g, upfn, v);
-        }
 
-	    cuckoohash_map<TranscriptGroup, TGValue, TranscriptGroupHasher>& eqMap() {
-            return countMap_;
         }
 
         std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec() {
@@ -90,8 +115,11 @@ class EquivalenceClassBuilder {
     private:
         std::atomic<bool> active_;
 	    cuckoohash_map<TranscriptGroup, TGValue, TranscriptGroupHasher> countMap_;
+        //std::unordered_map<TranscriptGroup, TGValue, TranscriptGroupHasher> countMap_;
+
         std::vector<std::pair<const TranscriptGroup, TGValue>> countVec_;
     	std::shared_ptr<spdlog::logger> logger_;
+        std::mutex mapMut_;
 };
 
 #endif // EQUIVALENCE_CLASS_BUILDER_HPP

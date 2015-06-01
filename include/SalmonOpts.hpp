@@ -79,6 +79,8 @@ struct SalmonOpts {
 
     bool useMassBanking; // Bank unique mass in subsequent epochs of inference
 
+    bool useVBOpt; // Use Variational Bayesian EM instead of "regular" EM in the batch passes
+
     // Related to the fragment length distribution
     size_t fragLenDistMax;
     size_t fragLenDistPriorMean;

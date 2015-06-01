@@ -37,9 +37,9 @@ bool operator==(const TranscriptGroup& lhs, const TranscriptGroup& rhs);
 struct TranscriptGroupHasher {
     std::size_t operator()(const TranscriptGroup & k) const
   {
-	  return k.hash;
-	  /*
-      std::size_t seed{0};
+	return k.hash;
+    /*
+    std::size_t seed{0};
     for (auto e : k.txps) {
         boost::hash_combine(seed, e);
     }

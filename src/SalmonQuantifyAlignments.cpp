@@ -793,7 +793,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     bool sampleOutput{false};
     bool sampleUnaligned{false};
     bool biasCorrect{false};
-    sopt.numThreads = 6;
+    uint32_t numThreads{4};
     size_t requiredObservations{50000000};
 
     po::options_description basic("\nbasic options");
@@ -803,7 +803,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     ("libType,l", po::value<std::string>()->required(), "Format string describing the library type.")
     ("alignments,a", po::value<vector<string>>()->multitoken()->required(), "input alignment (BAM) file(s).")
     ("targets,t", po::value<std::string>()->required(), "FASTA format file containing target transcripts.")
-    ("threads,p", po::value<uint32_t>(&(sopt.numThreads))->default_value(6), "The number of threads to use concurrently. "
+    ("threads,p", po::value<uint32_t>(&numThreads)->default_value(6), "The number of threads to use concurrently. "
                                             "The alignment-based quantification mode of salmon is usually I/O bound "
                                             "so until there is a faster multi-threaded SAM/BAM parser to feed the "
                                             "quantification threads, one should not expect much of a speed-up beyond "
@@ -884,7 +884,9 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     ("useMassBanking", po::bool_switch(&(sopt.useMassBanking))->default_value(false), "[Currently Experimental] : "
                         "Use mass \"banking\" in subsequent epoch of inference.  Rather than re-observing uniquely "
                         "mapped reads, simply remember the ratio of uniquely to ambiguously mapped reads for each "
-                        "transcript and distribute the unique mass uniformly throughout the epoch.");
+                        "transcript and distribute the unique mass uniformly throughout the epoch.")
+    ("useVBOpt,v", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
+     			"traditional EM algorithm for optimization in the batch passes.");
 
     po::options_description all("salmon quant options");
     all.add(basic).add(advanced);
@@ -903,11 +905,12 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         }
         po::notify(vm);
 
-        if (sopt.numThreads < 2) {
+        if (numThreads < 2) {
             fmt::print(stderr, "salmon requires at least 2 threads --- "
                                "setting # of threads = 2\n");
-            sopt.numThreads = 2;
+            numThreads = 2;
         }
+        sopt.numThreads = numThreads;
 
         if (sopt.forgettingFactor <= 0.5 or
             sopt.forgettingFactor > 1.0) {
@@ -1050,10 +1053,9 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         // being, however, the number of quantification threads is the
         // total number of threads - 1.
         uint32_t numParseThreads = std::min(uint32_t(6),
-                                            std::max(uint32_t(2), uint32_t(std::ceil(sopt.numThreads/2.0))));
-        sopt.numThreads = std::max(sopt.numThreads, numParseThreads);
-
-        uint32_t numQuantThreads = std::max(uint32_t(2), uint32_t(sopt.numThreads - numParseThreads));
+                                            std::max(uint32_t(2), uint32_t(std::ceil(numThreads/2.0))));
+        numThreads = std::max(numThreads, numParseThreads);
+        uint32_t numQuantThreads = std::max(uint32_t(2), uint32_t(numThreads - numParseThreads));
         sopt.numQuantThreads = numQuantThreads;
         sopt.numParseThreads = numParseThreads;
         std::cerr << "numQuantThreads = " << numQuantThreads << "\n";
@@ -1074,7 +1076,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                     CollapsedEMOptimizer optimizer;
                     jointLog->info("starting optimizer");
                     salmon::utils::normalizeAlphas(sopt, alnLib);
-                    optimizer.optimize(alnLib, sopt, 0.01, 5000);
+                    optimizer.optimize(alnLib, sopt, 0.01, 10000);
                     jointLog->info("finished optimizer");
 
                     // EQCLASS
@@ -1120,7 +1122,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                     CollapsedEMOptimizer optimizer;
                     jointLog->info("starting optimizer");
                     salmon::utils::normalizeAlphas(sopt, alnLib);
-                    optimizer.optimize(alnLib, sopt, 0.01, 5000);
+                    optimizer.optimize(alnLib, sopt, 0.01, 10000);
                     jointLog->info("finished optimizer");
 
                     fmt::print(stderr, "\n\nwriting output \n");
@@ -1181,8 +1183,8 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
             for (auto& tf : transcriptFiles) {
                 std::cerr << "[" << tf << "] ";
             }
-            std::cerr << ", " << transcriptBiasFile << ", " << useStreamingParser << ", " << sopt.numThreads << ")\n";
-            computeBiasFeatures(transcriptFiles, transcriptBiasFile, useStreamingParser, sopt.numThreads);
+            std::cerr << ", " << transcriptBiasFile << ", " << useStreamingParser << ", " << numThreads << ")\n";
+            computeBiasFeatures(transcriptFiles, transcriptBiasFile, useStreamingParser, numThreads);
 
             auto origExpressionFile = estFilePath;
 
@@ -1190,7 +1192,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
             outputDirectory.remove_filename();
 
             auto biasCorrectedFile = outputDirectory / "quant_bias_corrected.sf";
-            performBiasCorrectionSalmon(transcriptBiasFile, estFilePath, biasCorrectedFile, sopt.numThreads);
+            performBiasCorrectionSalmon(transcriptBiasFile, estFilePath, biasCorrectedFile, numThreads);
         }
 
         /** If the user requested gene-level abundances, then compute those now **/
