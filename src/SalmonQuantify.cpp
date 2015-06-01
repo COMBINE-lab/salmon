@@ -3034,6 +3034,7 @@ transcript abundance from RNA-seq reads
         std::cerr << "Logs will be written to " << logDirectory.string() << "\n";
 
         bfs::path logPath = logDirectory / "salmon_quant.log";
+	// must be a power-of-two
         size_t max_q_size = 2097152;
         spdlog::set_async_mode(max_q_size);
 
@@ -3069,18 +3070,22 @@ transcript abundance from RNA-seq reads
         vector<ReadLibrary> readLibraries = salmon::utils::extractReadLibraries(orderedOptions);
         ReadExperiment experiment(readLibraries, indexDirectory, sopt);
 
-        // EQCLASS
+        // This will be the class in charge of maintaining our 
+	// rich equivalence classes
         experiment.equivalenceClassBuilder().start();
 
         quantifyLibrary(experiment, greedyChain, memOptions, sopt, coverageThresh,
                         requiredObservations, sopt.numThreads);
 
-        // EQCLASS
+        // Now that the streaming pass is complete, we have
+	// our initial estimates, and our rich equivalence 
+	// classes.  Perform further optimization until 
+	// convergence.
         CollapsedEMOptimizer optimizer;
-        jointLog->info("starting optimizer");
+        jointLog->info("Starting optimizer");
     	salmon::utils::normalizeAlphas(sopt, experiment);
         optimizer.optimize(experiment, sopt, 0.01, 10000);
-        jointLog->info("finished optimizer");
+        jointLog->info("Finished optimizer");
 
         free(memOptions);
         size_t tnum{0};
@@ -3092,8 +3097,6 @@ transcript abundance from RNA-seq reads
         commentStream << "# [ mapping rate ] => { " << experiment.mappingRate() * 100.0 << "\% }\n";
         commentString = commentStream.str();
 
-        //salmon::utils::writeAbundances(sopt, experiment, estFilePath, commentString);
-        // EQCLASS
         salmon::utils::writeAbundancesFromCollapsed(
                 sopt, experiment, estFilePath, commentString);
 

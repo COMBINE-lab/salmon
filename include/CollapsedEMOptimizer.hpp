@@ -22,13 +22,6 @@ class CollapsedEMOptimizer {
                       SalmonOpts& sopt,
                       double tolerance = 0.01,
                       uint32_t maxIter = 1000);
-    private:
-        void EMUpdate_(
-        std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
-        std::vector<Transcript>& transcripts,
-        Eigen::VectorXd& effLens,
-        const VecType& alphaIn,
-        VecType& alphaOut);
 
 };
 

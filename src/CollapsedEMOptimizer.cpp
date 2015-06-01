@@ -54,6 +54,11 @@ double normalize(std::vector<tbb::atomic<double>>& vec) {
     return sum;
 }
 
+/*
+ * Use atomic compare-and-swap to update val to 
+ * val + inc.  Update occurs in a loop in case other
+ * threads update in the meantime.
+ */
 void incLoop(tbb::atomic<double>& val, double inc) {
         double oldMass = val.load();
         double returnedMass = oldMass;
@@ -65,7 +70,12 @@ void incLoop(tbb::atomic<double>& val, double inc) {
         } while (returnedMass != oldMass);
 }
 
-void CollapsedEMOptimizer::EMUpdate_(
+/*
+ * Use the "standard" EM algorithm over equivalence 
+ * classes to estimate the latent variables (alphaOut)
+ * given the current estimates (alphaIn).
+ */
+void EMUpdate_(
         std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
         std::vector<Transcript>& transcripts,
         Eigen::VectorXd& effLens,
@@ -73,45 +83,6 @@ void CollapsedEMOptimizer::EMUpdate_(
         CollapsedEMOptimizer::VecType& alphaOut) {
 
     assert(alphaIn.size() == alphaOut.size());
-    /*
-    // serial implementation
-    // for each equivalence class
-    for (auto& kv : eqVec) {
-
-        // for each transcript in this class
-        const TranscriptGroup& tgroup = kv.first;
-        if (tgroup.valid) {
-            uint64_t count = kv.second.count;
-            const std::vector<uint32_t>& txps = tgroup.txps;
-            const std::vector<double>& auxs = kv.second.weights;
-
-            double denom = 0.0;
-            for (size_t i = 0; i < txps.size(); ++i) {
-                auto tid = txps[i];
-                auto aux = auxs[i];
-                // double el = effLens(tid);
-                // if (el <= 0) { el = 1.0; }
-                double v = alphaIn(tid) * aux;
-                denom += v;
-            }
-
-            if (denom <= minEQClassWeight) {
-                // tgroup.setValid(false);
-            } else {
-                double invDenom = 1.0 / denom;
-                for (size_t i = 0; i < txps.size(); ++i) {
-                    auto tid = txps[i];
-                    auto aux = auxs[i];
-                    double v = alphaIn(tid) * aux;
-                    if (!std::isnan(v)) {
-                        alphaOut(tid) += count * v * invDenom;
-                    }
-                }
-            }
-        }
-    }
-    */
-
 
     tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(eqVec.size())),
             [&eqVec, &alphaIn, &alphaOut](const BlockedIndexRange& range) -> void {
@@ -153,14 +124,13 @@ void CollapsedEMOptimizer::EMUpdate_(
     }
     });
 
-    /*
-    // normalize
-    //double aos = normalize(alphaOut);
-    double aos = alphaOut.sum();
-    alphaOut /= aos;
-    */
 }
 
+/*
+ * Use the Variational Bayesian EM algorithm over equivalence 
+ * classes to estimate the latent variables (alphaOut)
+ * given the current estimates (alphaIn).
+ */
 void VBEMUpdate_(
         std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
         std::vector<Transcript>& transcripts,
@@ -233,9 +203,6 @@ void VBEMUpdate_(
                 }
             }
         }});
-    // normalize
-    //double aos = alphaOut.sum();
-    //alphaOut /= aos;
 
 }
 
@@ -432,3 +399,56 @@ bool CollapsedEMOptimizer::optimize<AlignmentLibrary<ReadPair>>(
         SalmonOpts& sopt,
         double relDiffTolerance,
         uint32_t maxIter);
+
+
+// Unused / old
+//
+/*
+ * Serial implementation of EM update
+ *
+void EMUpdate_(
+        std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
+        std::vector<Transcript>& transcripts,
+        Eigen::VectorXd& effLens,
+        const CollapsedEMOptimizer::VecType& alphaIn,
+        CollapsedEMOptimizer::VecType& alphaOut) {
+
+    assert(alphaIn.size() == alphaOut.size());
+    // serial implementation
+    // for each equivalence class
+    for (auto& kv : eqVec) {
+
+        // for each transcript in this class
+        const TranscriptGroup& tgroup = kv.first;
+        if (tgroup.valid) {
+            uint64_t count = kv.second.count;
+            const std::vector<uint32_t>& txps = tgroup.txps;
+            const std::vector<double>& auxs = kv.second.weights;
+
+            double denom = 0.0;
+            for (size_t i = 0; i < txps.size(); ++i) {
+                auto tid = txps[i];
+                auto aux = auxs[i];
+                // double el = effLens(tid);
+                // if (el <= 0) { el = 1.0; }
+                double v = alphaIn(tid) * aux;
+                denom += v;
+            }
+
+            if (denom <= minEQClassWeight) {
+                // tgroup.setValid(false);
+            } else {
+                double invDenom = 1.0 / denom;
+                for (size_t i = 0; i < txps.size(); ++i) {
+                    auto tid = txps[i];
+                    auto aux = auxs[i];
+                    double v = alphaIn(tid) * aux;
+                    if (!std::isnan(v)) {
+                        alphaOut(tid) += count * v * invDenom;
+                    }
+                }
+            }
+        }
+    }
+}
+*/
