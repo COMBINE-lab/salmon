@@ -243,11 +243,11 @@ class SMEMAlignment {
         SMEMAlignment& operator=(SMEMAlignment&& o) = default;
 
 
-        inline TranscriptID transcriptID() { return transcriptID_; }
-        inline uint32_t fragLength() { return fragLength_; }
-        inline LibraryFormat libFormat() { return format_; }
-        inline double score() { return score_; }
-        inline int32_t hitPos() { return hitPos_; }
+        inline TranscriptID transcriptID() const { return transcriptID_; }
+        inline uint32_t fragLength() const { return fragLength_; }
+        inline LibraryFormat libFormat() const { return format_; }
+        inline double score() const { return score_; }
+        inline int32_t hitPos() const { return hitPos_; }
         // inline double coverage() {  return static_cast<double>(kmerCount) / fragLength_; };
         uint32_t kmerCount;
         double logProb;
@@ -1551,7 +1551,7 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
             if (!sortedByTranscript) {
 
                 std::sort(alnList.begin(), alnList.end(),
-                          [](SMEMAlignment& x, SMEMAlignment& y) -> bool {
+                          [](const SMEMAlignment& x, const SMEMAlignment& y) -> bool {
                            return x.transcriptID() < y.transcriptID();
                           });
             }
@@ -1611,7 +1611,7 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
             alnList.resize(std::distance(alnList.begin(), newEnd));
             if (!sortedByTranscript) {
                 std::sort(alnList.begin(), alnList.end(),
-                          [](SMEMAlignment& x, SMEMAlignment& y) -> bool {
+                          [](const SMEMAlignment& x, const SMEMAlignment& y) -> bool {
                            return x.transcriptID() < y.transcriptID();
                           });
             }
@@ -1770,7 +1770,7 @@ void getHitsForFragment(jellyfish::header_sequence_qual& frag,
         alnList.resize(std::distance(alnList.begin(), newEnd));
         if (!sortedByTranscript) {
             std::sort(alnList.begin(), alnList.end(),
-                    [](SMEMAlignment& x, SMEMAlignment& y) -> bool {
+                    [](const SMEMAlignment& x, const SMEMAlignment& y) -> bool {
                      return x.transcriptID() < y.transcriptID();
                     });
         }
@@ -3070,7 +3070,7 @@ transcript abundance from RNA-seq reads
         vector<ReadLibrary> readLibraries = salmon::utils::extractReadLibraries(orderedOptions);
         ReadExperiment experiment(readLibraries, indexDirectory, sopt);
 
-        // This will be the class in charge of maintaining our 
+        // This will be the class in charge of maintaining our
 	// rich equivalence classes
         experiment.equivalenceClassBuilder().start();
 
@@ -3078,8 +3078,8 @@ transcript abundance from RNA-seq reads
                         requiredObservations, sopt.numThreads);
 
         // Now that the streaming pass is complete, we have
-	// our initial estimates, and our rich equivalence 
-	// classes.  Perform further optimization until 
+	// our initial estimates, and our rich equivalence
+	// classes.  Perform further optimization until
 	// convergence.
         CollapsedEMOptimizer optimizer;
         jointLog->info("Starting optimizer");
