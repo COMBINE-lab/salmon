@@ -52,7 +52,7 @@ class AlignmentGroup {
          */
         inline void sortHits() {
             std::sort(alignments_.begin(), alignments_.end(),
-                    [](FragT& x, FragT& y) -> bool {
+                    [](const FragT& x, const FragT& y) -> bool {
                         return x->transcriptID() < y->transcriptID();
                      });
         }

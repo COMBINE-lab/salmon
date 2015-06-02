@@ -120,7 +120,7 @@ struct ReadPair {
     }
 
     inline ReadType fragType() { return ReadType::PAIRED_END; }
-    inline int32_t transcriptID() { return bam_ref(read1); }
+    inline int32_t transcriptID() const { return bam_ref(read1); }
 
     inline double logQualProb() {
         return salmon::math::LOG_1;

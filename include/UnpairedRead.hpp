@@ -73,7 +73,7 @@ struct UnpairedRead {
    inline int32_t right() { return left() + bam_seq_len(read); }
    inline uint32_t fragLen() { return 0; }
    inline ReadType fragType() { return ReadType::SINGLE_END; }
-   inline int32_t transcriptID() { return bam_ref(read); }
+   inline int32_t transcriptID() const { return bam_ref(read); }
 
     inline double logQualProb() {
         return salmon::math::LOG_1;
