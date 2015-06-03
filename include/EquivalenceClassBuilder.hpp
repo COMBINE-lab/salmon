@@ -58,7 +58,7 @@ class EquivalenceClassBuilder {
                 countVec_.push_back(*kv);
             }
 
-    	    logger_->info("Computed {} weighted equivalence classes "
+    	    logger_->info("Computed {} rich equivalence classes "
 			  "for further processing", countVec_.size());
             return true;
         }
