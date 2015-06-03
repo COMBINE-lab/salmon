@@ -821,7 +821,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     ("output,o", po::value<std::string>()->required(), "Output quantification directory.")
     ("biasCorrect", po::value(&biasCorrect)->zero_tokens(), "[Experimental]: Output both bias-corrected and non-bias-corrected ")
     ("numRequiredObs,n", po::value(&requiredObservations)->default_value(50000000),
-                                        "The minimum number of observations (mapped reads) that must be observed before "
+                                        "[Deprecated]: The minimum number of observations (mapped reads) that must be observed before "
                                         "the inference procedure will terminate.  If fewer mapped reads exist in the "
                                         "input file, then it will be read through multiple times.")
     ("geneMap,g", po::value<std::string>(), "File containing a mapping of transcripts to genes.  If this file is provided "
@@ -890,7 +890,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "fragment assignment ambiguity into account, you should use this output.")
     ("sampleUnaligned,u", po::bool_switch(&sampleUnaligned)->default_value(false), "In addition to sampling the aligned reads, also write "
                         "the un-aligned reads to \"posSample.bam\".")
-    ("useMassBanking", po::bool_switch(&(sopt.useMassBanking))->default_value(false), "[Currently Experimental] : "
+    ("useMassBanking", po::bool_switch(&(sopt.useMassBanking))->default_value(false), "[Deprecated] : "
                         "Use mass \"banking\" in subsequent epoch of inference.  Rather than re-observing uniquely "
                         "mapped reads, simply remember the ratio of uniquely to ambiguously mapped reads for each "
                         "transcript and distribute the unique mass uniformly throughout the epoch.")

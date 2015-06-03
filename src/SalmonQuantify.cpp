@@ -2864,7 +2864,7 @@ int salmonQuantify(int argc, char *argv[]) {
                         "while setting it to 1 says that alignments that disagree with the library type are no "
                         "less likely than those that do")
     ("numRequiredObs,n", po::value(&requiredObservations)->default_value(50000000),
-                                        "The minimum number of observations (mapped reads) that must be observed before "
+                                        "[Deprecated]: The minimum number of observations (mapped reads) that must be observed before "
                                         "the inference procedure will terminate.  If fewer mapped reads exist in the "
                                         "input file, then it will be read through multiple times.")
     ("minLen,k", po::value<int>(&(memOptions->min_seed_len))->default_value(19), "(S)MEMs smaller than this size won't be considered.")
@@ -2886,11 +2886,11 @@ int salmonQuantify(int argc, char *argv[]) {
                                         "format; files with any other extension are assumed to be in the simple format.");
     //("optChain", po::bool_switch(&optChain)->default_value(false), "Chain MEMs optimally rather than greedily")
 
-    //EQCLASS
-    sopt.disableMappingCache = true;
     // no sequence bias for now
     sopt.noSeqBiasModel = true;
     sopt.noRichEqClasses = false;
+    // mapping cache has been deprecated
+    sopt.disableMappingCache = true;
 
     po::options_description advanced("\n"
 		    		     "advanced options");
@@ -2951,7 +2951,7 @@ int salmonQuantify(int argc, char *argv[]) {
                                         "result in increased running time.")
     ("splitSpanningSeeds,b", po::bool_switch(&(sopt.splitSpanningSeeds))->default_value(false), "Attempt to split seeds that happen to fall on the "
                                         "boundary between two transcripts.  This can improve the  fragment hit-rate, but is usually not necessary.")
-    ("useMassBanking", po::bool_switch(&(sopt.useMassBanking))->default_value(false), "[Currently Experimental] : "
+    ("useMassBanking", po::bool_switch(&(sopt.useMassBanking))->default_value(false), "[Deprecated] : "
                         "Use mass \"banking\" in subsequent epoch of inference.  Rather than re-observing uniquely "
                         "mapped reads, simply remember the ratio of uniquely to ambiguously mapped reads for each "
                         "transcript and distribute the unique mass uniformly throughout the epoch.")
