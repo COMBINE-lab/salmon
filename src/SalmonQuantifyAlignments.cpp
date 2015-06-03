@@ -835,6 +835,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 
     // no sequence bias for now
     sopt.noSeqBiasModel = true;
+    sopt.noRichEqClasses = false;
 
     po::options_description advanced("\nadvanced options");
     advanced.add_options()
@@ -863,6 +864,14 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     ("noFragStartPosDist", po::bool_switch(&(sopt.noFragStartPosDist))->default_value(false), "[Currently Experimental] : "
                         "Don't consider / model non-uniformity in the fragment start positions "
                         "across the transcript.")
+    /*
+    // Don't expose this yet
+    ("noRichEqClasses", po::bool_switch(&(sopt.noRichEqClasses))->default_value(false),
+                        "Disable \"rich\" equivalent classes.  If this flag is passed, then "
+                        "all information about the relative weights for each transcript in the "
+                        "label of an equivalence class will be ignored, and only the relative "
+                        "abundance and effective length of each transcript will be considered.")
+                        */
     ("numErrorBins", po::value<uint32_t>(&(sopt.numErrorBins))->default_value(6), "The number of bins into which to divide "
                         "each read when learning and applying the error model.  For example, a value of 10 would mean that "
                         "effectively, a separate error model is leared and applied to each 10th of the read, while a value of "

@@ -87,7 +87,7 @@ struct ReadPair {
         return l;//bam_name_len(read1);
     }
 
-    inline uint32_t fragLen() {
+    inline uint32_t fragLen() const {
         if (!isPaired()) { return 0; }
         auto leftmost1 = bam_pos(read1);
         auto leftmost2 = bam_pos(read2);
@@ -99,10 +99,10 @@ struct ReadPair {
         //return std::abs(read1->core.isize) + std::abs(read1->core.l_qseq) + std::abs(read2->core.l_qseq);
     }
 
-     inline bool isRight() { return isPaired() ? false : (isRightOrphan() ? true : false) ; }
-     inline bool isLeft() { return isPaired() ? false : (isLeftOrphan() ? true : false); }
+     inline bool isRight() const { return isPaired() ? false : (isRightOrphan() ? true : false) ; }
+     inline bool isLeft() const { return isPaired() ? false : (isLeftOrphan() ? true : false); }
 
-     inline int32_t left() {
+     inline int32_t left() const {
          if (isPaired()) {
              return std::min(bam_pos(read1), bam_pos(read2));
          } else {
@@ -110,7 +110,7 @@ struct ReadPair {
          }
      }
 
-    inline int32_t right() {
+    inline int32_t right() const {
         if (isPaired()) {
             return std::max(bam_pos(read1) + bam_seq_len(read1),
                     bam_pos(read2) + bam_seq_len(read2));
@@ -119,7 +119,7 @@ struct ReadPair {
         }
     }
 
-    inline ReadType fragType() { return ReadType::PAIRED_END; }
+    inline ReadType fragType() const { return ReadType::PAIRED_END; }
     inline int32_t transcriptID() const { return bam_ref(read1); }
 
     inline double logQualProb() {

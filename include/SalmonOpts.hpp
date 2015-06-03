@@ -43,6 +43,10 @@ struct SalmonOpts {
 
     bool noSeqBiasModel; // Don't learn and use a sequence-specific bias model.
 
+    bool noRichEqClasses; // Don't use rich equivalence classes --- forget the
+                          // aggregate weights for each transcript to each
+                          // equivalence class of fragments.
+
     bool useReadCompat; // Give a fragment assignment a likelihood based on the compatibility
                         // between the manner in which it mapped and the expected read
                         // library format.

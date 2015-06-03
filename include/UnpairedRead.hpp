@@ -67,15 +67,15 @@ struct UnpairedRead {
         return bam_name_len(read);
     }
 
-   inline bool isRight() { return bam_flag(read) & BAM_FREVERSE; }
-   inline bool isLeft()  { return !isRight(); }
-   inline int32_t left() { return bam_pos(read); }
-   inline int32_t right() { return left() + bam_seq_len(read); }
-   inline uint32_t fragLen() { return 0; }
-   inline ReadType fragType() { return ReadType::SINGLE_END; }
+   inline bool isRight() const { return bam_flag(read) & BAM_FREVERSE; }
+   inline bool isLeft()  const { return !isRight(); }
+   inline int32_t left() const { return bam_pos(read); }
+   inline int32_t right() const { return left() + bam_seq_len(read); }
+   inline uint32_t fragLen() const { return 0; }
+   inline ReadType fragType() const { return ReadType::SINGLE_END; }
    inline int32_t transcriptID() const { return bam_ref(read); }
 
-    inline double logQualProb() {
+    inline double logQualProb() const {
         return salmon::math::LOG_1;
         /*
         int q = bam_map_qual(read);

@@ -55,7 +55,7 @@ double normalize(std::vector<tbb::atomic<double>>& vec) {
 }
 
 /*
- * Use atomic compare-and-swap to update val to 
+ * Use atomic compare-and-swap to update val to
  * val + inc.  Update occurs in a loop in case other
  * threads update in the meantime.
  */
@@ -71,7 +71,7 @@ void incLoop(tbb::atomic<double>& val, double inc) {
 }
 
 /*
- * Use the "standard" EM algorithm over equivalence 
+ * Use the "standard" EM algorithm over equivalence
  * classes to estimate the latent variables (alphaOut)
  * given the current estimates (alphaIn).
  */
@@ -127,7 +127,7 @@ void EMUpdate_(
 }
 
 /*
- * Use the Variational Bayesian EM algorithm over equivalence 
+ * Use the Variational Bayesian EM algorithm over equivalence
  * classes to estimate the latent variables (alphaOut)
  * given the current estimates (alphaIn).
  */
@@ -176,13 +176,10 @@ void VBEMUpdate_(
                 const std::vector<uint32_t>& txps = tgroup.txps;
                 const std::vector<double>& auxs = kv.second.weights;
 
-
                 double denom = 0.0;
                 for (size_t i = 0; i < txps.size(); ++i) {
                     auto tid = txps[i];
                     auto aux = auxs[i];
-                    //double el = effLens(tid);
-                    //if (el <= 0) { el = 1.0; }
                     if (expTheta[tid] > 0.0) {
                         double v = expTheta[tid] * aux;
                         denom += v;
@@ -279,15 +276,6 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
     std::vector<Transcript>& transcripts = readExp.transcripts();
 
     using VecT = CollapsedEMOptimizer::VecType;
-    // With Eigen
-    /*
-    Eigen::VectorXd alphas(transcripts.size());
-    Eigen::VectorXd alphasPrime(transcripts.size());
-    alphasPrime.setZero();
-
-    Eigen::VectorXd effLens(transcripts.size());
-    Eigen::VectorXd expTheta(transcripts.size());
-    */
     // With atomics
     VecType alphas(transcripts.size(), 0.0);
     VecType alphasPrime(transcripts.size(), 0.0);
@@ -300,7 +288,6 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
     bool useVBEM{sopt.useVBOpt};
     auto jointLog = sopt.jointLog;
 
-    double logTotalMass = salmon::math::LOG_0;
     double totalLen{0.0};
 
     for (size_t i = 0; i < transcripts.size(); ++i) {
@@ -311,6 +298,34 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
         alphas[i] = (m == salmon::math::LOG_0) ? 0.0 : m;
         effLens(i) = std::exp(transcripts[i].getCachedEffectiveLength());
         totalLen += effLens(i);
+    }
+
+    // If the user requested *not* to use "rich" equivalence classes,
+    // then wipe out all of the weight information here and simply replace
+    // the weights with the effective length terms (here, the *inverse* of
+    // the effective length).
+    if (sopt.noRichEqClasses) {
+        tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(eqVec.size())),
+                [&eqVec, &effLens]( const BlockedIndexRange& range) -> void {
+                // For each index in the equivalence class vector
+                for (auto eqID : boost::irange(range.begin(), range.end())) {
+                    // The vector entry
+                    auto& kv = eqVec[eqID];
+                    // The label of the equivalence class
+                    const TranscriptGroup& k = kv.first;
+                    // The size of the label
+                    size_t classSize = k.txps.size();
+                    // The weights of the label
+                    TGValue& v = kv.second;
+
+                    // Iterate over each weight and set it equal to
+                    // 1 / effLen of the corresponding transcript
+                    for (size_t i = 0; i < classSize; ++i) {
+                        double el = effLens(k.txps[i]);
+                        v.weights[i] = (el <= 0.0) ? 1.0 : (1.0 / el);
+                    }
+                }
+        });
     }
 
     auto numRemoved = markDegenerateClasses(eqVec, alphas, sopt.jointLog);
@@ -403,6 +418,17 @@ bool CollapsedEMOptimizer::optimize<AlignmentLibrary<ReadPair>>(
 
 // Unused / old
 //
+
+// With Eigen
+/*
+   Eigen::VectorXd alphas(transcripts.size());
+   Eigen::VectorXd alphasPrime(transcripts.size());
+   alphasPrime.setZero();
+
+   Eigen::VectorXd effLens(transcripts.size());
+   Eigen::VectorXd expTheta(transcripts.size());
+*/
+
 /*
  * Serial implementation of EM update
  *
