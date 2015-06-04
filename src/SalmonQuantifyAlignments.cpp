@@ -889,7 +889,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "going to perform downstream analysis of the alignments with tools which don't, themselves, take "
                         "fragment assignment ambiguity into account, you should use this output.")
     ("sampleUnaligned,u", po::bool_switch(&sampleUnaligned)->default_value(false), "In addition to sampling the aligned reads, also write "
-                        "the un-aligned reads to \"posSample.bam\".")
+                        "the un-aligned reads to \"postSample.bam\".")
     ("useMassBanking", po::bool_switch(&(sopt.useMassBanking))->default_value(false), "[Deprecated] : "
                         "Use mass \"banking\" in subsequent epoch of inference.  Rather than re-observing uniquely "
                         "mapped reads, simply remember the ratio of uniquely to ambiguously mapped reads for each "
