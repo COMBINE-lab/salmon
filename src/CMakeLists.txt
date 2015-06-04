@@ -128,6 +128,7 @@ if (APPLE)
 	add_custom_command(TARGET salmon
 		POST_BUILD
 		COMMAND install_name_tool -add_rpath ${GAT_SOURCE_DIR}/external/install/lib salmon 
+		COMMAND install_name_tool -add_rpath @executable_path/../lib salmon 
 		)
 endif()
 
