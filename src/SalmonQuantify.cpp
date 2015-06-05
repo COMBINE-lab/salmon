@@ -2935,14 +2935,6 @@ int salmonQuantify(int argc, char *argv[]) {
     ("noFragStartPosDist", po::bool_switch(&(sopt.noFragStartPosDist))->default_value(false), "[Currently Experimental] : "
                         "Don't consider / model non-uniformity in the fragment start positions "
                         "across the transcript.")
-    /*
-    // Don't expose this yet
-    ("noRichEqClasses", po::bool_switch(&(sopt.noRichEqClasses))->default_value(false),
-                        "Disable \"rich\" equivalent classes.  If this flag is passed, then "
-                        "all information about the relative weights for each transcript in the "
-                        "label of an equivalence class will be ignored, and only the relative "
-                        "abundance and effective length of each transcript will be considered.")
-    */
     //("noSeqBiasModel", po::bool_switch(&(sopt.noSeqBiasModel))->default_value(false),
     //                    "Don't learn and apply a model of sequence-specific bias")
     ("numAuxModelSamples", po::value<uint32_t>(&(sopt.numBurninFrags))->default_value(5000000), "The first <numAuxModelSamples> are used to train the "
