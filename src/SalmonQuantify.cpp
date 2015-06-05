@@ -2973,7 +2973,7 @@ int salmonQuantify(int argc, char *argv[]) {
     all.add(generic).add(advanced).add(testing);
 
     po::options_description visible("salmon quant options");
-    all.add(generic).add(advanced);
+    visible.add(generic).add(advanced);
 
     po::variables_map vm;
     try {

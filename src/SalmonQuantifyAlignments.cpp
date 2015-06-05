@@ -920,7 +920,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     all.add(basic).add(advanced).add(testing);
 
     po::options_description visible("salmon quant options");
-    all.add(basic).add(advanced);
+    visible.add(basic).add(advanced);
 
     po::variables_map vm;
     try {
