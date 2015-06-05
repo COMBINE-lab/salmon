@@ -159,6 +159,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
     bool useFSPD{!salmonOpts.noFragStartPosDist};
     bool useFragLengthDist{!salmonOpts.noFragLengthDist};
+    bool noFragLenFactor{salmonOpts.noFragLenFactor};
 
     double startingCumulativeMass = fmCalc.cumulativeLogMassAt(firstTimestepOfRound);
     const auto expectedLibraryFormat = alnLib.format();
@@ -308,6 +309,9 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                                 logFragProb = fragLengthDist.pmf(static_cast<size_t>(aln->fragLen()));
                             }
                         }
+
+                        // TESTING
+                        if (noFragLenFactor) { logFragProb = LOG_1; }
 
                         // @TODO: handle this case better
                         //double fragProb = cdf(fragLengthDist, fragLength + 0.5) - cdf(fragLengthDist, fragLength - 0.5);
@@ -889,7 +893,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "going to perform downstream analysis of the alignments with tools which don't, themselves, take "
                         "fragment assignment ambiguity into account, you should use this output.")
     ("sampleUnaligned,u", po::bool_switch(&sampleUnaligned)->default_value(false), "In addition to sampling the aligned reads, also write "
-                        "the un-aligned reads to \"postSample.bam\".")
+                        "the un-aligned reads to \"posSample.bam\".")
     ("useMassBanking", po::bool_switch(&(sopt.useMassBanking))->default_value(false), "[Deprecated] : "
                         "Use mass \"banking\" in subsequent epoch of inference.  Rather than re-observing uniquely "
                         "mapped reads, simply remember the ratio of uniquely to ambiguously mapped reads for each "
@@ -897,7 +901,25 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     ("useVBOpt,v", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
      			"traditional EM algorithm for optimization in the batch passes.");
 
+
+    po::options_description testing("\n"
+            "testing options");
+    testing.add_options()
+        ("noRichEqClasses", po::bool_switch(&(sopt.noRichEqClasses))->default_value(false),
+                        "[TESTING OPTION]: Disable \"rich\" equivalent classes.  If this flag is passed, then "
+                        "all information about the relative weights for each transcript in the "
+                        "label of an equivalence class will be ignored, and only the relative "
+                        "abundance and effective length of each transcript will be considered.")
+        ("noFragLenFactor", po::bool_switch(&(sopt.noFragLenFactor))->default_value(false),
+                        "[TESTING OPTION]: Disable the factor in the likelihood that takes into account the "
+                        "goodness-of-fit of an alignment with the empirical fragment length "
+                        "distribution");
+
+
     po::options_description all("salmon quant options");
+    all.add(basic).add(advanced).add(testing);
+
+    po::options_description visible("salmon quant options");
     all.add(basic).add(advanced);
 
     po::variables_map vm;
@@ -909,7 +931,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 
         if (vm.count("help")) {
             std::cout << "Salmon quant (alignment-based)\n";
-            std::cout << all << std::endl;
+            std::cout << visible << std::endl;
             std::exit(0);
         }
         po::notify(vm);

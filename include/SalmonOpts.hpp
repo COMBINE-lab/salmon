@@ -47,6 +47,9 @@ struct SalmonOpts {
                           // aggregate weights for each transcript to each
                           // equivalence class of fragments.
 
+    bool noFragLenFactor; // Don't account for the fragment length term in the
+                          // likelihood.
+
     bool useReadCompat; // Give a fragment assignment a likelihood based on the compatibility
                         // between the manner in which it mapped and the expected read
                         // library format.

@@ -320,6 +320,7 @@ void processMiniBatch(
     bool useFSPD{!salmonOpts.noFragStartPosDist};
     bool useFragLengthDist{!salmonOpts.noFragLengthDist};
     bool useSequenceBiasModel{!salmonOpts.noSeqBiasModel};
+    bool noFragLenFactor{salmonOpts.noFragLenFactor};
 
     const auto expectedLibraryFormat = readLib.format();
     uint64_t zeroProbFrags{0};
@@ -419,7 +420,7 @@ void processMiniBatch(
 
                 double refLength = transcript.RefLength > 0 ? transcript.RefLength : 1.0;
                 double coverage = aln.score();
-                double logFragProb = (coverage > 0) ? std::log(coverage) : LOG_0;
+                double logFragCov = (coverage > 0) ? std::log(coverage) : LOG_0;
 
                 // The alignment probability is the product of a
                 // transcript-level term (based on abundance and) an
@@ -460,6 +461,11 @@ void processMiniBatch(
                          fragLengthDist.pmf(static_cast<size_t>(aln.fragLength())) :
                          LOG_1) :
                          LOG_1;
+
+                    // TESTING
+                    if (noFragLenFactor) { logFragProb = LOG_1; }
+
+
                     // TODO: Take the fragment length distribution into account
                     // for single-end fragments as in the alignment-based code below
                     /*
@@ -512,7 +518,7 @@ void processMiniBatch(
                     // Increment the count of this type of read that we've seen
                     ++libTypeCounts[aln.libFormat().formatID()];
 
-                    double auxProb = startPosProb + logFragProb +
+                    double auxProb = startPosProb + logFragProb + logFragCov +
                                      logAlignCompatProb + logBiasProb;
 
                     aln.logProb = transcriptLogCount + auxProb;
@@ -2958,9 +2964,24 @@ int salmonQuantify(int argc, char *argv[]) {
     ("useVBOpt,v", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
      			"traditional EM algorithm for optimization in the batch passes.");
 
-    po::options_description all("salmon quant options");
-    all.add(generic).add(advanced);
+    po::options_description testing("\n"
+            "testing options");
+    testing.add_options()
+        ("noRichEqClasses", po::bool_switch(&(sopt.noRichEqClasses))->default_value(false),
+                        "[TESTING OPTION]: Disable \"rich\" equivalent classes.  If this flag is passed, then "
+                        "all information about the relative weights for each transcript in the "
+                        "label of an equivalence class will be ignored, and only the relative "
+                        "abundance and effective length of each transcript will be considered.")
+        ("noFragLenFactor", po::bool_switch(&(sopt.noFragLenFactor))->default_value(false),
+                        "[TESTING OPTION]: Disable the factor in the likelihood that takes into account the "
+                        "goodness-of-fit of an alignment with the empirical fragment length "
+                        "distribution");
 
+    po::options_description all("salmon quant options");
+    all.add(generic).add(advanced).add(testing);
+
+    po::options_description visible("salmon quant options");
+    all.add(generic).add(advanced);
 
     po::variables_map vm;
     try {
@@ -2977,7 +2998,7 @@ Perform streaming SMEM-based estimation of
 transcript abundance from RNA-seq reads
 )";
             std::cout << hstring << std::endl;
-            std::cout << all << std::endl;
+            std::cout << visible << std::endl;
             std::exit(1);
         }
 
