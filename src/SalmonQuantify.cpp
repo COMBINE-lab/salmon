@@ -569,6 +569,7 @@ void processMiniBatch(
             TranscriptGroup tg(txpIDs, txpIDsHash);
             for (auto& p : auxProbs) {
                 p -= auxDenom;
+                //p = std::exp(p - auxDenom);
             }
             eqBuilder.addGroup(std::move(tg), auxProbs);
 

@@ -150,7 +150,7 @@ void VBEMUpdate_(
             [logNorm, totLen, &effLens, &alphaIn,
              &alphaOut, &expTheta]( const BlockedIndexRange& range) -> void {
 
-             double prior = 0.01;
+             double prior = 0.1;
              double priorNorm = prior * totLen;
 
              for (auto i : boost::irange(range.begin(), range.end())) {
@@ -159,7 +159,7 @@ void VBEMUpdate_(
                 } else {
                     expTheta[i] = 0.0;
                 }
-                alphaOut[i] = (prior * effLens(i)) / priorNorm;
+                alphaOut[i] = prior;
             }
         });
 
@@ -288,6 +288,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
     bool useVBEM{sopt.useVBOpt};
     auto jointLog = sopt.jointLog;
 
+    double totalNumFrags{readExp.numMappedReads()};
     double totalLen{0.0};
 
     for (size_t i = 0; i < transcripts.size(); ++i) {
@@ -369,6 +370,15 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
 
     jointLog->info("iteration = {} | max rel diff. = {}",
                     itNum, maxRelDiff);
+
+    if (useVBEM) {
+        double priorAlpha = 0.1;
+        double totPrior = priorAlpha * transcripts.size();
+        double denom = totPrior + totalNumFrags;
+        for (size_t i = 0; i < transcripts.size(); ++i) {
+            alphas[i] = alphas[i] / denom;
+        }
+    }
 
     // Truncate tiny expression values
     double alphaSum = 0.0;
