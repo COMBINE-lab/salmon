@@ -106,8 +106,12 @@ namespace utils {
                 if (expected.strandedness == observed.strandedness) {
                     return salmon::math::LOG_1;
                 } else {
-		    std::cerr << "expected = " << expected << "\n";
-		    std::cerr << "observed = " << observed << "\n";
+                    /**
+                    * Let's not complain about this for now, but find
+                    * a different way to report it.
+                    * std::cerr << "expected = " << expected << "\n";
+                    * std::cerr << "observed = " << observed << "\n";
+                    */
                     return incompatPrior;
                 }
             }
