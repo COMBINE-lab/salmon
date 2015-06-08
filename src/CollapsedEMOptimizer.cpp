@@ -115,13 +115,13 @@ void EMUpdate_(
                         // tgroup.setValid(false);
                     } else {
 
-                        double invDenom = 1.0 / denom;
+                        double invDenom = count / denom;
                         for (size_t i = 0; i < groupSize; ++i) {
                             auto tid = txps[i];
                             auto aux = auxs[i];
                             double v = alphaIn[tid] * aux;
                             if (!std::isnan(v)) {
-                                incLoop(alphaOut[tid], count * v * invDenom);
+                                incLoop(alphaOut[tid], v * invDenom);
                             }
                         }
                     }
@@ -202,13 +202,13 @@ void VBEMUpdate_(
                     if (denom <= ::minEQClassWeight) {
                         // tgroup.setValid(false);
                     } else {
-                        double invDenom = 1.0 / denom;
+                        double invDenom = count / denom;
                         for (size_t i = 0; i < groupSize; ++i) {
                             auto tid = txps[i];
                             auto aux = auxs[i];
                             if (expTheta[tid] > 0.0) {
                               double v = expTheta[tid] * aux;
-                              incLoop(alphaOut[tid], count * v * invDenom);
+                              incLoop(alphaOut[tid], v * invDenom);
                             }
                         }
                     }
