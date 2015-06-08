@@ -567,9 +567,15 @@ void processMiniBatch(
 
             // EQCLASS
             TranscriptGroup tg(txpIDs, txpIDsHash);
+            double auxProbSum{0.0};
             for (auto& p : auxProbs) {
-                p -= auxDenom;
-                //p = std::exp(p - auxDenom);
+                //p -= auxDenom;
+                p = std::exp(p - auxDenom);
+                auxProbSum += p;
+            }
+            if (std::abs(auxProbSum - 1.0) > 0.01) {
+                std::cerr << "weights had sum of " << auxProbSum
+                          << " but it should be 1!!\n\n";
             }
             eqBuilder.addGroup(std::move(tg), auxProbs);
 

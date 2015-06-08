@@ -26,6 +26,15 @@ struct TGValue {
 
     // const is a lie
     void normalizeAux() const {
+        double sumOfAux{0.0};
+        for (size_t i = 0; i < weights.size(); ++i) {
+            sumOfAux += weights[i];
+        }
+        double norm = 1.0 / sumOfAux;
+        for (size_t i = 0; i < weights.size(); ++i) {
+            weights[i] *= norm;
+        }
+        /* LOG SPACE
         double sumOfAux = salmon::math::LOG_0;
         for (size_t i = 0; i < weights.size(); ++i) {
             sumOfAux = salmon::math::logAdd(sumOfAux, weights[i]);
@@ -33,6 +42,7 @@ struct TGValue {
         for (size_t i = 0; i < weights.size(); ++i) {
             weights[i] = std::exp(weights[i] - sumOfAux);
         }
+        */
     }
 
     // forget synchronizing this for the time being
@@ -71,8 +81,12 @@ class EquivalenceClassBuilder {
                 x.count++;
                 // update the weights
                 for (size_t i = 0; i < x.weights.size(); ++i) {
+                    // Possibly atomicized in the future
+                    weights[i] += x.weights[i];
+                    /* LOG SPACE
                     x.weights[i] =
                         salmon::math::logAdd(x.weights[i], weights[i]);
+                    */
                 }
                 return x;
             };

@@ -73,6 +73,8 @@ TranscriptGeneMap readTranscriptToGeneMap( std::ifstream &ifile );
 
 TranscriptGeneMap transcriptToGeneMapFromFasta( const std::string& transcriptsFile );
 
+void incLoop(tbb::atomic<double>& val, double inc);
+
 void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm, boost::filesystem::path& inputPath);
 
 // NOTE: Throws an invalid_argument exception of the quant or quant_bias_corrected files do

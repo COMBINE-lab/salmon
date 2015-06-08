@@ -97,28 +97,36 @@ void EMUpdate_(
                 const std::vector<double>& auxs = kv.second.weights;
 
                 double denom = 0.0;
-                for (size_t i = 0; i < txps.size(); ++i) {
-                auto tid = txps[i];
-                auto aux = auxs[i];
-                //double el = effLens(tid);
-                //if (el <= 0) { el = 1.0; }
-                double v = alphaIn[tid] * aux;
-                denom += v;
-                }
+                size_t groupSize = txps.size();
+                // If this is a single-transcript group,
+                // then it gets the full count.  Otherwise,
+                // update according to our VBEM rule.
+                if (BOOST_LIKELY(groupSize > 1)) {
+                    for (size_t i = 0; i < groupSize; ++i) {
+                    auto tid = txps[i];
+                    auto aux = auxs[i];
+                    //double el = effLens(tid);
+                    //if (el <= 0) { el = 1.0; }
+                    double v = alphaIn[tid] * aux;
+                    denom += v;
+                    }
 
-                if (denom <= ::minEQClassWeight) {
-                    // tgroup.setValid(false);
-                } else {
+                    if (denom <= ::minEQClassWeight) {
+                        // tgroup.setValid(false);
+                    } else {
 
-                    double invDenom = 1.0 / denom;
-                    for (size_t i = 0; i < txps.size(); ++i) {
-                        auto tid = txps[i];
-                        auto aux = auxs[i];
-                        double v = alphaIn[tid] * aux;
-                        if (!std::isnan(v)) {
-                            incLoop(alphaOut[tid], count * v * invDenom);
+                        double invDenom = 1.0 / denom;
+                        for (size_t i = 0; i < groupSize; ++i) {
+                            auto tid = txps[i];
+                            auto aux = auxs[i];
+                            double v = alphaIn[tid] * aux;
+                            if (!std::isnan(v)) {
+                                incLoop(alphaOut[tid], count * v * invDenom);
+                            }
                         }
                     }
+                } else {
+                    incLoop(alphaOut[txps.front()], count);
                 }
             }
     }
@@ -135,6 +143,7 @@ void VBEMUpdate_(
         std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
         std::vector<Transcript>& transcripts,
         Eigen::VectorXd& effLens,
+        double priorAlpha,
         double totLen,
         const CollapsedEMOptimizer::VecType& alphaIn,
         CollapsedEMOptimizer::VecType& alphaOut,
@@ -147,10 +156,10 @@ void VBEMUpdate_(
     double logNorm = boost::math::digamma(alphaSum);
 
     tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(transcripts.size())),
-            [logNorm, totLen, &effLens, &alphaIn,
+            [logNorm, priorAlpha, totLen, &effLens, &alphaIn,
              &alphaOut, &expTheta]( const BlockedIndexRange& range) -> void {
 
-             double prior = 0.1;
+             double prior = priorAlpha;
              double priorNorm = prior * totLen;
 
              for (auto i : boost::irange(range.begin(), range.end())) {
@@ -177,26 +186,35 @@ void VBEMUpdate_(
                 const std::vector<double>& auxs = kv.second.weights;
 
                 double denom = 0.0;
-                for (size_t i = 0; i < txps.size(); ++i) {
-                    auto tid = txps[i];
-                    auto aux = auxs[i];
-                    if (expTheta[tid] > 0.0) {
-                        double v = expTheta[tid] * aux;
-                        denom += v;
-                   }
-                }
-                if (denom <= ::minEQClassWeight) {
-                    // tgroup.setValid(false);
-                } else {
-                    double invDenom = 1.0 / denom;
-                    for (size_t i = 0; i < txps.size(); ++i) {
+                size_t groupSize = txps.size();
+                // If this is a single-transcript group,
+                // then it gets the full count.  Otherwise,
+                // update according to our VBEM rule.
+                if (BOOST_LIKELY(groupSize > 1)) {
+                    for (size_t i = 0; i < groupSize; ++i) {
                         auto tid = txps[i];
                         auto aux = auxs[i];
-                	    if (expTheta[tid] > 0.0) {
-                          double v = expTheta[tid] * aux;
-                          incLoop(alphaOut[tid], count * v * invDenom);
-	                    }
+                        if (expTheta[tid] > 0.0) {
+                            double v = expTheta[tid] * aux;
+                            denom += v;
+                       }
                     }
+                    if (denom <= ::minEQClassWeight) {
+                        // tgroup.setValid(false);
+                    } else {
+                        double invDenom = 1.0 / denom;
+                        for (size_t i = 0; i < groupSize; ++i) {
+                            auto tid = txps[i];
+                            auto aux = auxs[i];
+                            if (expTheta[tid] > 0.0) {
+                              double v = expTheta[tid] * aux;
+                              incLoop(alphaOut[tid], count * v * invDenom);
+                            }
+                        }
+                    }
+
+                } else {
+                    incLoop(alphaOut[txps.front()], count);
                 }
             }
         }});
@@ -286,6 +304,9 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
         readExp.equivalenceClassBuilder().eqVec();
 
     bool useVBEM{sopt.useVBOpt};
+    // If we use VBEM, we'll need the prior parameters
+    double priorAlpha = 0.1;
+
     auto jointLog = sopt.jointLog;
 
     double totalNumFrags{readExp.numMappedReads()};
@@ -341,7 +362,8 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
     while (itNum < maxIter and !converged) {
 
         if (useVBEM) {
-            VBEMUpdate_(eqVec, transcripts, effLens, totalLen, alphas, alphasPrime, expTheta);
+            VBEMUpdate_(eqVec, transcripts, effLens,
+                        priorAlpha, totalLen, alphas, alphasPrime, expTheta);
         } else {
             EMUpdate_(eqVec, transcripts, effLens, alphas, alphasPrime);
         }
@@ -372,7 +394,9 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
                     itNum, maxRelDiff);
 
     if (useVBEM) {
-        double priorAlpha = 0.1;
+        // The expected value of the posterior is
+        // E[\eta_{i}] = (\alpha^{0}_{i} + \alpha_{i}) /
+        //               (\sum_{j} \alpha^{0}_{j} + \alpha_{j})
         double totPrior = priorAlpha * transcripts.size();
         double denom = totPrior + totalNumFrags;
         for (size_t i = 0; i < transcripts.size(); ++i) {
