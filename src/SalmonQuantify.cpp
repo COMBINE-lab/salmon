@@ -110,6 +110,7 @@ extern "C" {
 #include "SalmonOpts.hpp"
 #include "EquivalenceClassBuilder.hpp"
 #include "CollapsedEMOptimizer.hpp"
+#include "CollapsedGibbsSampler.hpp"
 
 /* This allows us to use CLASP for optimal MEM
  * chaining.  However, this seems to be neither
@@ -2961,7 +2962,13 @@ int salmonQuantify(int argc, char *argv[]) {
                         "mapped reads, simply remember the ratio of uniquely to ambiguously mapped reads for each "
                         "transcript and distribute the unique mass uniformly throughout the epoch.")
     ("useVBOpt,v", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
-     			"traditional EM algorithm for optimization in the batch passes.");
+     			"traditional EM algorithm for optimization in the batch passes.")
+    ("useGSOpt", po::bool_switch(&(sopt.useGSOpt))->default_value(false), "[*super*-experimental]: After the initial optimization has finished, "
+                "use collapsed Gibbs sampling to refine estimates even further (and obtain variance)")
+    ("numGibbsSamples", po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(500), "[*super*-experimental]: Number of Gibbs sampling rounds to "
+     		"perform.");
+
+
 
     po::options_description testing("\n"
             "testing options");
@@ -3106,6 +3113,14 @@ transcript abundance from RNA-seq reads
     	salmon::utils::normalizeAlphas(sopt, experiment);
         optimizer.optimize(experiment, sopt, 0.01, 10000);
         jointLog->info("Finished optimizer");
+
+        if (sopt.useGSOpt) {
+            jointLog->info("Starting Gibbs Sampler");
+            CollapsedGibbsSampler sampler;
+            sampler.sample(experiment, sopt, sopt.numGibbsSamples);
+            jointLog->info("Finished Gibbs Sampler");
+        }
+
 
         free(memOptions);
         size_t tnum{0};

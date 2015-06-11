@@ -267,7 +267,7 @@ double AlignmentModel::logLikelihood(bam_seq_t* read, Transcript& ref,
                 // Shouldn't happen!
                 if (readIdx >= readLen) {
                     if (logger_) {
-                        logger_->warn("CIGAR string for read [{}] "
+                        logger_->warn("(in logLikelihood()) CIGAR string for read [{}] "
                             "seems inconsistent. It refers to non-existant "
                             "positions in the read!", bam_name(read));
                         std::stringstream cigarStream;
@@ -276,7 +276,7 @@ double AlignmentModel::logLikelihood(bam_seq_t* read, Transcript& ref,
                             enum cigar_op op = static_cast<enum cigar_op>(cigar[j] & BAM_CIGAR_MASK);
                             cigarStream << opLen << opToChr(op);
                         }
-                        logger_->warn("CIGAR = {}", cigarStream.str());
+                        logger_->warn("(in logLikelihood()) CIGAR = {}", cigarStream.str());
                     }
                     return logLike;
                 }
@@ -288,9 +288,11 @@ double AlignmentModel::logLikelihood(bam_seq_t* read, Transcript& ref,
                 // Shouldn't happen!
                 if (uTranscriptIdx >= transcriptLen) {
                     if (logger_) {
-                        logger_->warn("CIGAR string for read [{}] "
-                            "seems inconsistent. It refers to non-existant "
-                            "positions in the reference!", bam_name(read));
+			    logger_->warn("(in logLikelihood()) CIGAR string for read [{}] "
+					    "seems inconsistent. It refers to non-existant "
+					    "positions in the reference! Transcript name "
+	    				    "is {}, length is {}, id is {}. Read things refid is {}",  
+					    bam_name(read), ref.RefName, transcriptLen, ref.id, bam_ref(read));
                     }
                     return logLike;
                 }
@@ -346,14 +348,6 @@ double AlignmentModel::logLikelihood(const ReadPair& hit, Transcript& ref){
 
     size_t leftLen = static_cast<size_t>(bam_seq_len(leftRead));
     size_t rightLen = static_cast<size_t>(bam_seq_len(rightRead));
-
-    // NOTE: Raise a warning in this case?
-    /*
-    if (BOOST_UNLIKELY((leftLen > maxExpectedLen_) or
-                       (rightLen > maxExpectedLen_))) {
-        return logLike;
-    }
-    */
 
     if (leftRead) {
         logLike += logLikelihood(leftRead, ref, transitionProbsLeft_);
@@ -451,7 +445,7 @@ void AlignmentModel::update(bam_seq_t* read, Transcript& ref, double p, double m
                     // Shouldn't happen!
                     if (readIdx >= readLen) {
                         if (logger_) {
-                            logger_->warn("CIGAR string for read [{}] "
+                            logger_->warn("(in update()) CIGAR string for read [{}] "
                                 "seems inconsistent. It refers to non-existant "
                                 "positions in the read!", bam_name(read));
                             std::stringstream cigarStream;
@@ -472,10 +466,12 @@ void AlignmentModel::update(bam_seq_t* read, Transcript& ref, double p, double m
                     // Shouldn't happen!
                     if (uTranscriptIdx >= transcriptLen) {
                         if (logger_) {
-                            logger_->warn("CIGAR string for read [{}] "
-                                "seems inconsistent. It refers to non-existant "
-                                "positions in the reference!", bam_name(read));
-                        }
+			    logger_->warn("(in update()) CIGAR string for read [{}] "
+					    "seems inconsistent. It refers to non-existant "
+					    "positions in the reference! Transcript name "
+	    				    "is {}, length is {}, id is {}. Read things refid is {}",  
+					    bam_name(read), ref.RefName, transcriptLen, ref.id, bam_ref(read));
+                               }
                         return;
                     }
                     curRefBase = samToTwoBit[ref.baseAt(uTranscriptIdx, readStrand)];
@@ -528,15 +524,17 @@ void AlignmentModel::update(const ReadPair& hit, Transcript& ref, double p, doub
     if (mass == salmon::math::LOG_0) { return; }
     if (BOOST_UNLIKELY(!isEnabled_)) { return; }
 
-    bam_seq_t* leftRead = (bam_pos(hit.read1) < bam_pos(hit.read2)) ? hit.read1 : hit.read2;
-    bam_seq_t* rightRead = (bam_pos(hit.read1) < bam_pos(hit.read2)) ? hit.read2 : hit.read1;
-
-    if (leftRead) {
-        update(leftRead, ref, p, mass, transitionProbsLeft_);
-    }
-
-    if (rightRead) {
+    if (hit.isPaired()){
+        bam_seq_t* leftRead = (bam_pos(hit.read1) < bam_pos(hit.read2)) ? hit.read1 : hit.read2;
+        bam_seq_t* rightRead = (bam_pos(hit.read1) < bam_pos(hit.read2)) ? hit.read2 : hit.read1;
+	update(leftRead, ref, p, mass, transitionProbsLeft_);
         update(rightRead, ref, p, mass, transitionProbsRight_);
+    } else if (hit.isLeftOrphan()) {
+	bam_seq_t* read = hit.read1;
+	update(read, ref, p, mass, transitionProbsLeft_);
+    } else if (hit.isRightOrphan()) {
+	bam_seq_t* read = hit.read1;
+	update(read, ref, p, mass, transitionProbsRight_);
     }
 }
 

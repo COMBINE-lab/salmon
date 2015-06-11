@@ -990,23 +990,6 @@ std::vector<std::string> split(const std::string& str, int delimiter(int) = ::is
     return result;
 }
 
-/*
- * Use atomic compare-and-swap to update val to
- * val + inc.  Update occurs in a loop in case other
- * threads update in the meantime.
- */
-void incLoop(tbb::atomic<double>& val, double inc) {
-        double oldMass = val.load();
-        double returnedMass = oldMass;
-        double newMass{oldMass + inc};
-        do {
-            oldMass = returnedMass;
-            newMass = oldMass + inc;
-            returnedMass = val.compare_and_swap(newMass, oldMass);
-        } while (returnedMass != oldMass);
-}
-
-
 void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm, boost::filesystem::path& inputPath) {
 
     using std::vector;

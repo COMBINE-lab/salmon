@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include "SalmonStringUtils.hpp"
+#include "SalmonUtils.hpp"
 #include "SalmonMath.hpp"
 #include "SequenceBiasModel.hpp"
 #include "FragmentLengthDistribution.hpp"
@@ -109,14 +110,7 @@ public:
     }
 
     inline void addSharedCount(double sc) {
-        double oldMass = sharedCount_;
-        double returnedMass = oldMass;
-        double newMass{0.0};
-        do {
-            oldMass = returnedMass;
-            newMass = oldMass + sc;
-            returnedMass = sharedCount_.compare_and_swap(newMass, oldMass);
-        } while (returnedMass != oldMass);
+	salmon::utils::incLoop(sharedCount_, sc);
     }
 
     inline void setLastTimestepUpdated(uint64_t currentTimestep) {
@@ -127,25 +121,11 @@ public:
     }
 
     inline void addBias(double bias) {
-        double oldVal = avgMassBias_;
-        double returnedVal = oldVal;
-        double newVal{0.0};
-        do {
-            oldVal = returnedVal;
-            newVal = salmon::math::logAdd(oldVal, bias);
-            returnedVal = avgMassBias_.compare_and_swap(newVal, oldVal);
-        } while (returnedVal != oldVal);
+	salmon::utils::incLoopLog(avgMassBias_, bias);
     }
 
     inline void addMass(double mass) {
-        double oldMass = mass_;
-        double returnedMass = oldMass;
-        double newMass{0.0};
-        do {
-            oldMass = returnedMass;
-            newMass = salmon::math::logAdd(oldMass, mass);
-            returnedMass = mass_.compare_and_swap(newMass, oldMass);
-        } while (returnedMass != oldMass);
+	salmon::utils::incLoopLog(mass_, mass);
     }
 
     inline void setMass(double mass) {

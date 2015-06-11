@@ -87,6 +87,9 @@ struct SalmonOpts {
     bool useMassBanking; // Bank unique mass in subsequent epochs of inference
 
     bool useVBOpt; // Use Variational Bayesian EM instead of "regular" EM in the batch passes
+    bool useGSOpt; // Do Gibbs Sampling after optimization
+
+    uint32_t numGibbsSamples; // Number of rounds of Gibbs sampling to perform 
 
     // Related to the fragment length distribution
     size_t fragLenDistMax;

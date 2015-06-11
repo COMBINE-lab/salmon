@@ -4,6 +4,7 @@ is.c
 bwt_gen.c
 bwtindex.c
 CollapsedEMOptimizer.cpp
+CollapsedGibbsSampler.cpp
 Salmon.cpp
 BuildSalmonIndex.cpp
 SalmonQuantify.cpp

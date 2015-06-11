@@ -22,7 +22,9 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs) {
     using std::unordered_map;
 
     unordered_map<string, size_t> nameToID;
-    for (size_t idx = 0; idx < refs.size(); ++idx) { nameToID[refs[idx].RefName] = idx; }
+    for (auto& ref : refs) {
+	nameToID[ref.RefName] = ref.id;
+    }
 
     std::vector<std::string> readFiles{fname_};
     size_t maxReadGroup{1000}; // Number of files to read simultaneously

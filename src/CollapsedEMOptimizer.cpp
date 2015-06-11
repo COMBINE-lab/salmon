@@ -153,6 +153,7 @@ void VBEMUpdate_(
 
     double alphaSum = {0.0};
     for (auto& e : alphaIn) { alphaSum += e; }
+
     double logNorm = boost::math::digamma(alphaSum);
 
     tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(transcripts.size())),
@@ -305,7 +306,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
 
     bool useVBEM{sopt.useVBOpt};
     // If we use VBEM, we'll need the prior parameters
-    double priorAlpha = 0.1;
+    double priorAlpha = 0.01;
 
     auto jointLog = sopt.jointLog;
 
@@ -356,6 +357,8 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
 
     size_t itNum{0};
     double minAlpha = 1e-8;
+    double cutoff = (useVBEM) ? (priorAlpha + minAlpha) : minAlpha;
+
 
     bool converged{false};
     double maxRelDiff = -std::numeric_limits<double>::max();
@@ -371,8 +374,8 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
         converged = true;
         maxRelDiff = -std::numeric_limits<double>::max();
         for (size_t i = 0; i < transcripts.size(); ++i) {
-            if (alphas[i] > minAlpha) {
-                double relDiff = std::abs(alphas[i] - alphasPrime[i]) / alphas[i];
+            if (alphas[i] > cutoff) {
+                double relDiff = std::abs(alphas[i] - alphasPrime[i]) / alphasPrime[i];
                 maxRelDiff = (relDiff > maxRelDiff) ? relDiff : maxRelDiff;
                 if (relDiff > relDiffTolerance) {
                     converged = false;
@@ -393,23 +396,15 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
     jointLog->info("iteration = {} | max rel diff. = {}",
                     itNum, maxRelDiff);
 
-    if (useVBEM) {
-        // The expected value of the posterior is
-        // E[\eta_{i}] = (\alpha^{0}_{i} + \alpha_{i}) /
-        //               (\sum_{j} \alpha^{0}_{j} + \alpha_{j})
-        double totPrior = priorAlpha * transcripts.size();
-        double denom = totPrior + totalNumFrags;
-        for (size_t i = 0; i < transcripts.size(); ++i) {
-            alphas[i] = alphas[i] / denom;
-        }
-    }
-
     // Truncate tiny expression values
     double alphaSum = 0.0;
+
+    alphaSum = 0.0;
     for (size_t i = 0; i < alphas.size(); ++i) {
-        if (alphas[i] <= minAlpha) { alphas[i] = 0.0; }
-        alphaSum += alphas[i];
+      if (alphas[i] <= cutoff) { alphas[i] = 0.0; }
+      alphaSum += alphas[i];
     }
+
 
     if (alphaSum < minWeight) {
         jointLog->error("Total alpha weight was too small! "
@@ -451,64 +446,4 @@ bool CollapsedEMOptimizer::optimize<AlignmentLibrary<ReadPair>>(
 
 
 // Unused / old
-//
 
-// With Eigen
-/*
-   Eigen::VectorXd alphas(transcripts.size());
-   Eigen::VectorXd alphasPrime(transcripts.size());
-   alphasPrime.setZero();
-
-   Eigen::VectorXd effLens(transcripts.size());
-   Eigen::VectorXd expTheta(transcripts.size());
-*/
-
-/*
- * Serial implementation of EM update
- *
-void EMUpdate_(
-        std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
-        std::vector<Transcript>& transcripts,
-        Eigen::VectorXd& effLens,
-        const CollapsedEMOptimizer::VecType& alphaIn,
-        CollapsedEMOptimizer::VecType& alphaOut) {
-
-    assert(alphaIn.size() == alphaOut.size());
-    // serial implementation
-    // for each equivalence class
-    for (auto& kv : eqVec) {
-
-        // for each transcript in this class
-        const TranscriptGroup& tgroup = kv.first;
-        if (tgroup.valid) {
-            uint64_t count = kv.second.count;
-            const std::vector<uint32_t>& txps = tgroup.txps;
-            const std::vector<double>& auxs = kv.second.weights;
-
-            double denom = 0.0;
-            for (size_t i = 0; i < txps.size(); ++i) {
-                auto tid = txps[i];
-                auto aux = auxs[i];
-                // double el = effLens(tid);
-                // if (el <= 0) { el = 1.0; }
-                double v = alphaIn(tid) * aux;
-                denom += v;
-            }
-
-            if (denom <= minEQClassWeight) {
-                // tgroup.setValid(false);
-            } else {
-                double invDenom = 1.0 / denom;
-                for (size_t i = 0; i < txps.size(); ++i) {
-                    auto tid = txps[i];
-                    auto aux = auxs[i];
-                    double v = alphaIn(tid) * aux;
-                    if (!std::isnan(v)) {
-                        alphaOut(tid) += count * v * invDenom;
-                    }
-                }
-            }
-        }
-    }
-}
-*/

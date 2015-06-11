@@ -343,6 +343,7 @@ include(ExternalProject)
 ExternalProject_Add(libbwa
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
     DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/bwa/archive/0.7.12.3.tar.gz -o bwa-master.tar.gz &&
+                     mkdir -p bwa-master && 
                      tar -xzvf bwa-master.tar.gz --strip-components=1 -C bwa-master 
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/bwa-master
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
@@ -464,10 +465,11 @@ message("Build system will compile Staden IOLib")
 message("==================================================================")
 ExternalProject_Add(libstadenio 
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/staden-io_lib/releases/download/v1.13.9/staden-io_lib-1.13.9.tar.gz -o staden-io_lib-v1.13.9.tar.gz &&
-                     tar -xzf staden-io_lib-v1.13.9.tar.gz &&
+    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/staden-io_lib/releases/download/v1.13.10/io_lib-1.13.10.tar.gz -o staden-io_lib-v1.13.10.tar.gz &&
+                     mkdir -p staden-io_lib-1.13.10 &&
+                     tar -xzf staden-io_lib-v1.13.10.tar.gz --strip-components=1 -C staden-io_lib-1.13.10 &&
                      rm -fr staden-io_lib &&
-                     mv -f staden-io_lib-1.13.9 staden-io_lib
+                     mv -f staden-io_lib-1.13.10 staden-io_lib
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/staden-io_lib
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ./configure --enable-shared=no --without-libcurl --prefix=<INSTALL_DIR> LDFLAGS=${LIBSTADEN_LDFLAGS} CFLAGS=${LIBSTADEN_CFLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}

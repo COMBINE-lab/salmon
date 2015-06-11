@@ -74,7 +74,7 @@ struct ReadPair {
         }
     }
 
-    inline char* getName() {
+    inline char* getName() const {
         return bam_name(read1);
     }
 
