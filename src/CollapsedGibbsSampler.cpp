@@ -216,7 +216,7 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
 
     std::vector<std::vector<int>> allSamples(numSamples,
                                         std::vector<int>(transcripts.size(),0));
-    double priorAlpha = 0.0;
+    double priorAlpha = 1e-8;
     auto numMappedReads = readExp.numMappedReads();
 
 
