@@ -12,6 +12,7 @@
 
 //#include "fastapprox.h"
 #include <boost/math/special_functions/digamma.hpp>
+#include <boost/filesystem.hpp>
 
 // C++ string formatting library
 #include "format.h"
@@ -62,7 +63,7 @@ void initCountMap_(
                 for (size_t i = 0; i < groupSize; ++i) {
                     auto tid = txps[i];
                     auto aux = auxs[i];
-                    denom += (transcriptsIn[tid].mass(false)) * aux;
+                    denom += (priorAlpha + transcriptsIn[tid].mass(false)) * aux;
                     countMap[offset + i] = 0;
                 }
 
@@ -73,7 +74,7 @@ void initCountMap_(
 		     auto tid = txps[i];
 		     auto aux = auxs[i];
 		     probMap[offset + i] = norm *
-                        ((transcriptsIn[tid].mass(false)) * aux);
+                        ((priorAlpha + transcriptsIn[tid].mass(false)) * aux);
 		    }
 
 	   	    // re-sample
@@ -204,6 +205,7 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
         SalmonOpts& sopt,
         uint32_t numSamples) {
 
+    namespace bfs = boost::filesystem;
     tbb::task_scheduler_init tbbScheduler(sopt.numThreads);
     std::vector<Transcript>& transcripts = readExp.transcripts();
 
@@ -214,7 +216,7 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
 
     std::vector<std::vector<int>> allSamples(numSamples,
                                         std::vector<int>(transcripts.size(),0));
-    double priorAlpha = 0.01;
+    double priorAlpha = 0.0;
     auto numMappedReads = readExp.numMappedReads();
 
 
@@ -283,15 +285,26 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
                 }
     });
 
-    std::ofstream statStream("GibbsStats.txt");
-    statStream << "# txpName\tmeanVal\tminVal\tmaxVal\n";
-    for (size_t i = 0; i < ds.size(); ++i) {
-	statStream << transcripts[i].RefName << '\t'
+    bfs::path gibbsSampleFile = sopt.outputDirectory / "samples.txt";
+    sopt.jointLog->info("Writing posterior samples to {}", gibbsSampleFile.string());
+
+    std::ofstream statStream(gibbsSampleFile.string());
+    statStream << "# txpName\tsample_1\tsample_2\t...\tsample_n\n";
+
+    for (size_t i = 0; i < numTranscripts; ++i) {
+	    statStream << transcripts[i].RefName;
+        for (size_t s = 0; s < allSamples.size(); ++s) {
+            statStream << '\t' << allSamples[s][i];
+            /*
 		   << ds[i].meanVal << '\t'
 		   << ds[i].minVal << '\t'
 		   << ds[i].maxVal << '\n';
+           */
+        }
+        statStream << '\n';
     }
     statStream.close();
+    sopt.jointLog->info("done writing posterior samples");
 
     double cutoff = priorAlpha + 1e-8;
     // Truncate tiny expression values
