@@ -310,7 +310,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
 
     auto jointLog = sopt.jointLog;
 
-    double totalNumFrags{readExp.numMappedReads()};
+    double totalNumFrags{static_cast<double>(readExp.numMappedReads())};
     double totalLen{0.0};
 
     for (size_t i = 0; i < transcripts.size(); ++i) {
