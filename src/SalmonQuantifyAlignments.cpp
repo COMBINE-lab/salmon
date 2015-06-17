@@ -60,6 +60,7 @@ extern "C" {
 #include "spdlog/spdlog.h"
 #include "EquivalenceClassBuilder.hpp"
 #include "CollapsedEMOptimizer.hpp"
+#include "CollapsedGibbsSampler.hpp"
 
 namespace bfs = boost::filesystem;
 using salmon::math::LOG_0;
@@ -904,6 +905,10 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "Use mass \"banking\" in subsequent epoch of inference.  Rather than re-observing uniquely "
                         "mapped reads, simply remember the ratio of uniquely to ambiguously mapped reads for each "
                         "transcript and distribute the unique mass uniformly throughout the epoch.")
+    ("useGSOpt", po::bool_switch(&(sopt.useGSOpt))->default_value(false), "[*super*-experimental]: After the initial optimization has finished, "
+                "use collapsed Gibbs sampling to refine estimates even further (and obtain variance)")
+    ("numGibbsSamples", po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(500), "[*super*-experimental]: Number of Gibbs sampling rounds to "
+     		"perform.")
     ("useVBOpt,v", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
      			"traditional EM algorithm for optimization in the batch passes.");
 
@@ -1166,6 +1171,13 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                     // EQCLASS
                     salmon::utils::writeAbundancesFromCollapsed(
                         sopt, alnLib, outputFile, commentString);
+
+                    if (sopt.useGSOpt) {
+                        jointLog->info("Starting Gibbs Sampler");
+                        CollapsedGibbsSampler sampler;
+                        sampler.sample(alnLib, sopt, sopt.numGibbsSamples);
+                        jointLog->info("Finished Gibbs Sampler");
+                    }
 
                     /*
                     fmt::print(stderr, "\n\nwriting output \n");

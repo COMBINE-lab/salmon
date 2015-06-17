@@ -3114,14 +3114,6 @@ transcript abundance from RNA-seq reads
         optimizer.optimize(experiment, sopt, 0.01, 10000);
         jointLog->info("Finished optimizer");
 
-        if (sopt.useGSOpt) {
-            jointLog->info("Starting Gibbs Sampler");
-            CollapsedGibbsSampler sampler;
-            sampler.sample(experiment, sopt, sopt.numGibbsSamples);
-            jointLog->info("Finished Gibbs Sampler");
-        }
-
-
         free(memOptions);
         size_t tnum{0};
 
@@ -3134,6 +3126,14 @@ transcript abundance from RNA-seq reads
 
         salmon::utils::writeAbundancesFromCollapsed(
                 sopt, experiment, estFilePath, commentString);
+
+        if (sopt.useGSOpt) {
+            jointLog->info("Starting Gibbs Sampler");
+            CollapsedGibbsSampler sampler;
+            sampler.sample(experiment, sopt, sopt.numGibbsSamples);
+            jointLog->info("Finished Gibbs Sampler");
+        }
+
 
         // Now create a subdirectory for any parameters of interest
         bfs::path paramsDir = outputDirectory / "libParams";
