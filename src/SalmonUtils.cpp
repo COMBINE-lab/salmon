@@ -140,7 +140,9 @@ namespace utils {
         std::vector<Transcript>& transcripts_ = alnLib.transcripts();
         for (auto& transcript : transcripts_) {
             transcript.projectedCounts =
-                transcript.mass(false) * numMappedFrags;
+                //transcript.mass(false) * numMappedFrags;
+                // June 23 edit
+                transcript.sharedCount();
         }
 
         double tfracDenom{0.0};
@@ -162,7 +164,6 @@ namespace utils {
             double refLength = std::exp(logLength);
             double tfrac = (npm / refLength) / tfracDenom;
             double tpm = tfrac * million;
-
             fmt::print(output.get(), "{}\t{}\t{}\t{}\n",
                     transcript.RefName, transcript.RefLength,
                     tpm, count);
@@ -350,7 +351,7 @@ namespace utils {
             nFracDenom += (transcript.projectedCounts / numMappedReads);
         }
 
-	double invNFracTotal = 1.0 / nFracDenom;
+	    double invNFracTotal = 1.0 / nFracDenom;
         for (auto& transcript : transcripts_) {
 		double v = transcript.projectedCounts / numMappedReads;
 		//transcript.setMass(v * invNFracTotal);

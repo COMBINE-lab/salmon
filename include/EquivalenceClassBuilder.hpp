@@ -63,13 +63,17 @@ class EquivalenceClassBuilder {
 
         bool finish() {
             active_ = false;
+            size_t totalCount{0};
             for (auto kv = countMap_.begin(); !kv.is_end(); ++kv) {
                 kv->second.normalizeAux();
+                totalCount += kv->second.count;
                 countVec_.push_back(*kv);
             }
 
     	    logger_->info("Computed {} rich equivalence classes "
 			  "for further processing", countVec_.size());
+            logger_->info("Counted {} total reads in the equivalence classes ",
+                    totalCount);
             return true;
         }
 

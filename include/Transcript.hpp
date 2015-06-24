@@ -109,8 +109,12 @@ public:
         return std::numeric_limits<uint8_t>::max();
     }
 
+    inline void setSharedCount(double sc) {
+        sharedCount_.store(sc);
+    }
+
     inline void addSharedCount(double sc) {
-	salmon::utils::incLoop(sharedCount_, sc);
+	    salmon::utils::incLoop(sharedCount_, sc);
     }
 
     inline void setLastTimestepUpdated(uint64_t currentTimestep) {
