@@ -130,6 +130,8 @@ namespace utils {
         using salmon::math::LOG_0;
         using salmon::math::LOG_1;
 
+        bool useScaledCounts = (sopt.allowOrphans == false);
+
         std::unique_ptr<std::FILE, int (*)(std::FILE *)> output(std::fopen(fname.c_str(), "w"), std::fclose);
 
         fmt::print(output.get(), "{}", headerComments);
@@ -139,8 +141,8 @@ namespace utils {
 
         std::vector<Transcript>& transcripts_ = alnLib.transcripts();
         for (auto& transcript : transcripts_) {
-            transcript.projectedCounts =
-                transcript.mass(false) * numMappedFrags;
+            transcript.projectedCounts = useScaledCounts ? 
+                (transcript.mass(false) * numMappedFrags) : transcript.sharedCount();
         }
 
         double tfracDenom{0.0};
@@ -162,7 +164,6 @@ namespace utils {
             double refLength = std::exp(logLength);
             double tfrac = (npm / refLength) / tfracDenom;
             double tpm = tfrac * million;
-
             fmt::print(output.get(), "{}\t{}\t{}\t{}\n",
                     transcript.RefName, transcript.RefLength,
                     tpm, count);
@@ -350,7 +351,7 @@ namespace utils {
             nFracDenom += (transcript.projectedCounts / numMappedReads);
         }
 
-	double invNFracTotal = 1.0 / nFracDenom;
+	    double invNFracTotal = 1.0 / nFracDenom;
         for (auto& transcript : transcripts_) {
 		double v = transcript.projectedCounts / numMappedReads;
 		//transcript.setMass(v * invNFracTotal);

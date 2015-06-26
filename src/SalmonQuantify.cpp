@@ -29,6 +29,7 @@
 #include <map>
 #include <vector>
 #include <unordered_set>
+#include <iterator>
 #include <mutex>
 #include <thread>
 #include <sstream>
@@ -1146,7 +1147,8 @@ class TranscriptHitList {
 template <typename CoverageCalculator>
 inline void collectHitsForRead(const bwaidx_t *idx, const bwtintv_v* a, smem_aux_t* auxHits,
                         mem_opt_t* memOptions, const SalmonOpts& salmonOpts, const uint8_t* read, uint32_t readLen,
-                        std::unordered_map<uint64_t, CoverageCalculator>& hits) {
+                        std::vector<CoverageCalculator>& hits) {
+                        //std::unordered_map<uint64_t, CoverageCalculator>& hits) {
 
     mem_collect_intv(salmonOpts, memOptions, idx->bwt, readLen, read, auxHits);
 
@@ -1290,10 +1292,27 @@ inline void collectHitsForRead(const bwaidx_t *idx, const bwtintv_v* a, smem_aux
 
             }
 
+            auto hitIt = std::find_if(hits.begin(), hits.end(), [refID](CoverageCalculator& c) -> bool { return c.targetID == refID; });
             if (isRev) {
-                hits[refID].addFragMatchRC(hitLoc, queryStart , slen, rlen);
+                if (hitIt == hits.end()) {
+                    CoverageCalculator hit;
+                    hit.targetID = refID;
+                    hit.addFragMatchRC(hitLoc, queryStart, slen, rlen);
+                    hits.emplace_back(hit);
+                } else {
+                    hitIt->addFragMatchRC(hitLoc, queryStart , slen, rlen);
+                    //hits[refID].addFragMatchRC(hitLoc, queryStart , slen, rlen);
+                }
             } else {
-                hits[refID].addFragMatch(hitLoc, queryStart, slen);
+                if (hitIt == hits.end()) {
+                    CoverageCalculator hit;
+                    hit.targetID = refID;
+                    hit.addFragMatch(hitLoc, queryStart, slen);
+                    hits.emplace_back(hit);
+                } else {
+                    hitIt->addFragMatch(hitLoc, queryStart , slen);
+                    //hits[refID].addFragMatch(hitLoc, queryStart, slen);
+                }
             }
         } // for k
     }
@@ -1347,9 +1366,9 @@ inline bool nearEndOfTranscript(
             Transcript& txp,
             int32_t cutoff=std::numeric_limits<int32_t>::max()) {
 	// check if hit appears close to the end of the given transcript
-	auto hitPos = hit.bestHitPos;
+	int32_t hitPos = static_cast<int32_t>(hit.bestHitPos);
 	return (hitPos < cutoff or
-            std::abs(static_cast<int32_t>(txp.RefLength) - hitPos) < cutoff);
+            std::abs(hitPos - static_cast<int32_t>(txp.RefLength)) < cutoff);
 
 }
 
@@ -1360,6 +1379,7 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
                         const bwtintv_v *a,
                         smem_aux_t* auxHits,
                         mem_opt_t* memOptions,
+                        ReadExperiment& readExp,
                         const SalmonOpts& salmonOpts,
                         double coverageThresh,
                         uint64_t& upperBoundHits,
@@ -1367,12 +1387,18 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
                         uint64_t& hitListCount,
                         std::vector<Transcript>& transcripts) {
 
-    std::unordered_map<uint64_t, CoverageCalculator> leftHits;
+    //std::unordered_map<uint64_t, CoverageCalculator> leftHits;
+    //std::unordered_map<uint64_t, CoverageCalculator> rightHits;
 
-    std::unordered_map<uint64_t, CoverageCalculator> rightHits;
+    std::vector<CoverageCalculator> leftHits;
+    std::vector<CoverageCalculator> rightHits;
+
 
     uint32_t leftReadLength{0};
     uint32_t rightReadLength{0};
+
+    auto& eqBuilder = readExp.equivalenceClassBuilder();
+    bool allowOrphans{salmonOpts.allowOrphans};
 
     /**
     * As soon as we can decide on an acceptable way to validate read names,
@@ -1433,14 +1459,15 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
                             rightHits);
      } // end right
 
+    size_t numTrivialHits = (leftHits.size() + rightHits.size() > 0) ? 1 : 0;
+    // nothing more to do
+    if (numTrivialHits == 0) { return; }
+
     upperBoundHits += (leftHits.size() + rightHits.size() > 0) ? 1 : 0;
     size_t readHits{0};
     auto& alnList = hitList.alignments();
     hitList.isUniquelyMapped() = true;
     alnList.clear();
-
-    //std::cerr << "leftHits.size() = " << leftHits.size() << ", leftHitsOld.size() = " << leftHitsOld.size() <<
-    //             "rightHits.size() = " << rightHits.size() << ", rightHitsOld.size() = "<< rightHitsOld.size() << "\n";
 
     double cutoffLeft{ coverageThresh };//* leftReadLength};
     double cutoffRight{ coverageThresh };//* rightReadLength};
@@ -1449,16 +1476,56 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
 
     // Fraction of the optimal coverage that a lightweight alignment
     // must obtain in order to be retained.
-    float fOpt{0.9};
+    float fOpt{0.95};
 
     // First, see if there are transcripts where both ends of the
     // fragments map
     auto& minHitList = (leftHits.size() < rightHits.size()) ? leftHits : rightHits;
     auto& maxHitList = (leftHits.size() < rightHits.size()) ? rightHits : leftHits;
 
-    std::vector<uint64_t> jointHits; // haha (variable name)!
+    struct JointHitPtr {
+        uint32_t transcriptID;
+        size_t leftIndex;
+        size_t rightIndex;
+    };
+
+    std::vector<JointHitPtr> jointHits; // haha (variable name)!
     jointHits.reserve(minHitList.size());
 
+    // vector-based code -- June 23
+    // Sort the left and right hits
+    std::sort(leftHits.begin(), leftHits.end(), 
+              [](CoverageCalculator& c1, CoverageCalculator& c2) -> bool {
+                return c1.targetID < c2.targetID;
+               });
+    std::sort(rightHits.begin(), rightHits.end(), 
+              [](CoverageCalculator& c1, CoverageCalculator& c2) -> bool {
+                return c1.targetID < c2.targetID;
+               });
+    // Take the intersection of these two hit lists
+    // Adopted from : http://en.cppreference.com/w/cpp/algorithm/set_intersection
+    {
+        auto leftIt = leftHits.begin(); 
+        auto leftEnd = leftHits.end();
+        auto rightIt = rightHits.begin();
+        auto rightEnd = rightHits.end();
+        while (leftIt != leftEnd && rightIt != rightEnd) {
+            if (leftIt->targetID < rightIt->targetID) {
+                ++leftIt;
+            } else {
+                if (!(rightIt->targetID < leftIt->targetID)) {
+                    jointHits.push_back({leftIt->targetID, 
+                                           std::distance(leftHits.begin(), leftIt), 
+                                           std::distance(rightHits.begin(), rightIt)});
+                    ++leftIt;
+                }
+                ++rightIt;
+            }
+        }
+    }
+    // End June 23     
+    
+    /* map based code
     {
         auto notFound = maxHitList.end();
         for (auto& kv : minHitList) {
@@ -1468,6 +1535,7 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
             }
         }
     }
+    */
 
     // Check if the fragment generated orphaned
     // lightweight alignments.
@@ -1478,25 +1546,28 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
     bool sortedByTranscript = true;
     int32_t lastTranscriptId = std::numeric_limits<int32_t>::min();
 
-    if (BOOST_UNLIKELY(isOrphan)) {
-        return;
+    if (BOOST_UNLIKELY(isOrphan and allowOrphans)) {
+        //std::vector<CoverageCalculator> allHits;
+        //allHits.reserve(totalHits);
         bool foundValidHit{false};
+        
         // search for a hit on the left
         for (auto& tHitList : leftHits) {
-            auto transcriptID = tHitList.first;
+            auto transcriptID = tHitList.targetID;
+            auto& covChain = tHitList;
             Transcript& t = transcripts[transcriptID];
-            tHitList.second.computeBestChain(t, frag.first.seq);
-            double score = tHitList.second.bestHitScore;
+            covChain.computeBestChain(t, frag.first.seq);
+            double score = covChain.bestHitScore;
+
+    	    // make sure orphaned fragment is near the end of the transcript
+	    	// if (!nearEndOfTranscript(covChain, t, 200)) { continue; }
 
             if (score >= fOpt * bestScore and score >= cutoffLeft) {
-    	    	// make sure orphaned fragment is near the end of the transcript
-	    	    if (!nearEndOfTranscript(tHitList.second, t, 200)) { continue; }
-
                 foundValidHit = true;
 
         		if (score > bestScore) { bestScore = score; }
-                bool isForward = tHitList.second.isForward();
-                int32_t hitPos = tHitList.second.bestHitPos;
+                bool isForward = covChain.isForward();
+                int32_t hitPos = covChain.bestHitPos;
                 auto fmt = salmon::utils::hitType(hitPos, isForward);
 
                 if (leftHitCount == 0) {
@@ -1513,39 +1584,41 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
                 readHits += score;
                 ++hitListCount;
                 ++leftHitCount;
-            }
+            } 
         }
 
-        //if (!foundValidHit) {
-            // search for a hit on the right
-            for (auto& tHitList : rightHits) {
-                auto transcriptID = tHitList.first;
-                Transcript& t = transcripts[transcriptID];
-                tHitList.second.computeBestChain(t, frag.second.seq);
-                double score = tHitList.second.bestHitScore;
+        // search for a hit on the right
+        for (auto& tHitList : rightHits) {
+            // Prior
+            // auto transcriptID = tHitList.first;
+            // June 23 
+            auto transcriptID = tHitList.targetID;
+            auto& covChain = tHitList;
+            Transcript& t = transcripts[transcriptID];
+            covChain.computeBestChain(t, frag.second.seq);
+            double score = covChain.bestHitScore;
 
-                if (score >= fOpt * bestScore and score >= cutoffRight) {
-        		    // make sure orphaned fragment is near the end of the transcript
-	        	    if (!nearEndOfTranscript(tHitList.second, t, 200)) { continue; }
+            // make sure orphaned fragment is near the end of the transcript
+            //if (!nearEndOfTranscript(covChain, t, 200)) { continue; }
 
-                    if (score > bestScore) { bestScore = score; }
-                    foundValidHit = true;
-                    bool isForward = tHitList.second.isForward();
-                    int32_t hitPos = tHitList.second.bestHitPos;
-                    auto fmt = salmon::utils::hitType(hitPos, isForward);
-                    if (leftHitCount == 0) {
-                        firstTranscriptID = tHitList.first;
-                    } else if (hitList.isUniquelyMapped() and transcriptID != firstTranscriptID) {
-                        hitList.isUniquelyMapped() = false;
-                    }
-
-                    alnList.emplace_back(transcriptID, fmt, score, hitPos);
-                    readHits += score;
-                    ++hitListCount;
-                    ++leftHitCount;
+            if (score >= fOpt * bestScore and score >= cutoffRight) {
+                if (score > bestScore) { bestScore = score; }
+                foundValidHit = true;
+                bool isForward = covChain.isForward();
+                int32_t hitPos = covChain.bestHitPos;
+                auto fmt = salmon::utils::hitType(hitPos, isForward);
+                if (leftHitCount == 0) {
+                    firstTranscriptID = transcriptID;
+                } else if (hitList.isUniquelyMapped() and transcriptID != firstTranscriptID) {
+                    hitList.isUniquelyMapped() = false;
                 }
+
+                alnList.emplace_back(transcriptID, fmt, score, hitPos);
+                readHits += score;
+                ++hitListCount;
+                ++leftHitCount;
             }
-        //}
+        }
 
         if (alnList.size() > 0) {
             auto newEnd = std::stable_partition(alnList.begin(), alnList.end(),
@@ -1554,21 +1627,58 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
                            });
             alnList.resize(std::distance(alnList.begin(), newEnd));
             if (!sortedByTranscript) {
-
                 std::sort(alnList.begin(), alnList.end(),
                           [](const SMEMAlignment& x, const SMEMAlignment& y) -> bool {
                            return x.transcriptID() < y.transcriptID();
                           });
             }
-        }
+        } else {
+            return;
+            // If we didn't have any *significant* hits --- add any *trivial* orphan hits
+            size_t totalHits = leftHits.size() + rightHits.size();
+            std::vector<uint32_t> txpIDs;
+            txpIDs.reserve(totalHits);
+            std::vector<double> auxProbs;
+            auxProbs.reserve(totalHits);
 
-    } else {
-        for (auto transcriptID : jointHits) {
+            size_t txpIDsHash{0};
+            std::vector<CoverageCalculator> allHits;
+            allHits.reserve(totalHits);
+            std::merge(leftHits.begin(), leftHits.end(),
+                       rightHits.begin(), rightHits.end(),
+                       std::back_inserter(allHits),
+                       [](CoverageCalculator& c1, CoverageCalculator& c2) -> bool {
+                        return c1.targetID < c2.targetID;
+                       });
+            double totProb{0.0};
+            for (auto& h : allHits) { 
+                boost::hash_combine(txpIDsHash, h.targetID); 
+                txpIDs.push_back(h.targetID);
+                double refLen =  std::max(1.0, static_cast<double>(transcripts[h.targetID].RefLength));
+                double startProb = 1.0 / refLen; 
+                auxProbs.push_back(startProb);
+                totProb += startProb;
+            }
+            if (totProb > 0.0) {
+                double norm = 1.0 / totProb;
+                for (auto& p : auxProbs) { p *= norm; }
+
+                TranscriptGroup tg(txpIDs, txpIDsHash);
+                eqBuilder.addGroup(std::move(tg), auxProbs);
+            } else {
+                salmonOpts.jointLog->warn("Unexpected empty hit group [orphaned]");           
+            }
+        }
+    } else { // Not an orphan
+        for (auto jhp : jointHits) {
+            auto& jointHitPtr = jhp;
+            auto transcriptID = jhp.transcriptID;
             Transcript& t = transcripts[transcriptID];
-            auto& leftHitList = leftHits[transcriptID];
+            auto& leftHitList = leftHits[jhp.leftIndex];
             leftHitList.computeBestChain(t, frag.first.seq);
             if (leftHitList.bestHitScore >= cutoffLeft) {
-                auto& rightHitList = rightHits[transcriptID];
+                auto& rightHitList = rightHits[jhp.rightIndex];
+
                 rightHitList.computeBestChain(t, frag.second.seq);
                 if (rightHitList.bestHitScore < cutoffRight) { continue; }
 
@@ -1620,7 +1730,35 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
                            return x.transcriptID() < y.transcriptID();
                           });
             }
+        } else {
+            // If we didn't have any *significant* hits --- add any *trivial* joint hits
+            return;
+            std::vector<uint32_t> txpIDs;
+            txpIDs.reserve(jointHits.size());
+            std::vector<double> auxProbs;
+            auxProbs.reserve(jointHits.size());
+
+            size_t txpIDsHash{0};
+            double totProb{0.0};
+            for (auto& h : jointHits) { 
+                boost::hash_combine(txpIDsHash, h.transcriptID); 
+                txpIDs.push_back(h.transcriptID);
+                double refLen =  std::max(1.0, static_cast<double>(transcripts[h.transcriptID].RefLength));
+                double startProb = 1.0 / refLen; 
+                auxProbs.push_back(startProb);
+                totProb += startProb;
+            }
+            if (totProb > 0.0) {
+            double norm = 1.0 / totProb;
+            for (auto& p : auxProbs) { p *= norm; }
+
+            TranscriptGroup tg(txpIDs, txpIDsHash);
+            eqBuilder.addGroup(std::move(tg), auxProbs);
+            } else {
+                salmonOpts.jointLog->warn("Unexpected empty hit group [paired]");           
+            } 
         }
+
     } // end else
 
     /*
@@ -1682,6 +1820,7 @@ void getHitsForFragment(jellyfish::header_sequence_qual& frag,
                         const bwtintv_v *a,
                         smem_aux_t* auxHits,
                         mem_opt_t* memOptions,
+                        ReadExperiment& readExp,
                         const SalmonOpts& salmonOpts,
                         double coverageThresh,
                         uint64_t& upperBoundHits,
@@ -1691,8 +1830,11 @@ void getHitsForFragment(jellyfish::header_sequence_qual& frag,
 
     uint64_t leftHitCount{0};
 
-    //std::unordered_map<uint64_t, TranscriptHitList> hits;
-    std::unordered_map<uint64_t, CoverageCalculator> hits;
+    //std::unordered_map<uint64_t, CoverageCalculator> hits;
+    std::vector<CoverageCalculator> hits;
+
+    // June 23
+    auto& eqBuilder = readExp.equivalenceClassBuilder();
 
     uint32_t readLength{0};
 
@@ -1722,7 +1864,7 @@ void getHitsForFragment(jellyfish::header_sequence_qual& frag,
 
     int32_t lastTranscriptId = std::numeric_limits<int32_t>::min();
     bool sortedByTranscript{true};
-    double fOpt{0.9};
+    double fOpt{0.95};
     double bestScore = -std::numeric_limits<double>::max();
 
     size_t readHits{0};
@@ -1733,29 +1875,34 @@ void getHitsForFragment(jellyfish::header_sequence_qual& frag,
     uint32_t firstTranscriptID = std::numeric_limits<uint32_t>::max();
     double cutoff{ coverageThresh };//* readLength};
     for (auto& tHitList : hits) {
-        // Coverage score
-        Transcript& t = transcripts[tHitList.first];
-        tHitList.second.computeBestChain(t, frag.seq);
-        double score = tHitList.second.bestHitScore;
-        // DEBUG -- process ALL HITS
-        //if (true) {
-        if (score >= fOpt * bestScore and tHitList.second.bestHitScore >= cutoff) {
+        // Prior
+        // auto hitID = tHitList.first;
+        // auto& covVec = tHitList.second;
+        // June23
+        auto hitID = tHitList.targetID;
+        auto& covVec = tHitList;
 
-            bool isForward = tHitList.second.isForward();
+        // Coverage score
+        Transcript& t = transcripts[hitID];
+        covVec.computeBestChain(t, frag.seq);
+        double score = covVec.bestHitScore;
+        if (score >= fOpt * bestScore and covVec.bestHitScore >= cutoff) {
+
+            bool isForward = covVec.isForward();
             if (score < fOpt * bestScore) { continue; }
 
         	if (score > bestScore) { bestScore = score; }
 
-            auto hitPos = tHitList.second.bestHitPos;
+            auto hitPos = covVec.bestHitPos;
             auto fmt = salmon::utils::hitType(hitPos, isForward);
 
             if (leftHitCount == 0) {
-                firstTranscriptID = tHitList.first;
-            } else if (hitList.isUniquelyMapped() and tHitList.first != firstTranscriptID) {
+                firstTranscriptID = hitID;
+            } else if (hitList.isUniquelyMapped() and hitID != firstTranscriptID) {
                 hitList.isUniquelyMapped() = false;
             }
 
-            auto transcriptID = tHitList.first;
+            auto transcriptID = hitID;
 
             if (transcriptID  < lastTranscriptId) {
                 sortedByTranscript = false;
@@ -1780,7 +1927,25 @@ void getHitsForFragment(jellyfish::header_sequence_qual& frag,
                     });
         }
     }
+    // June 23
+    else {
+        // If we didn't have any *significant* hits --- add any *trivial* joint hits
+        // EQCLASS
+        std::vector<uint32_t> txpIDs;
+        txpIDs.reserve(hits.size());
+        double uniProb = 1.0 / hits.size();
+        std::vector<double> auxProbs(hits.size(), uniProb);
 
+        size_t txpIDsHash{0};
+        for (auto& h : hits) { 
+            boost::hash_combine(txpIDsHash, h.targetID); 
+            txpIDs.push_back(h.targetID);
+        }
+
+        TranscriptGroup tg(txpIDs, txpIDsHash);
+        eqBuilder.addGroup(std::move(tg), auxProbs);
+    }
+    // End June 23
 
 
 }
@@ -1859,6 +2024,7 @@ void processReadsMEM(ParserT* parser,
         getHitsForFragment<CoverageCalculator>(j->data[i], idx, itr, a,
                                                auxHits,
                                                memOptions,
+                                               readExp,
                                                salmonOpts,
                                                coverageThresh,
                                                localUpperBoundHits,
@@ -2870,6 +3036,10 @@ int salmonQuantify(int argc, char *argv[]) {
         "File containing the #1 mates")
     ("mates2,2", po::value<vector<string>>(&mate2ReadFiles)->multitoken(),
         "File containing the #2 mates")
+    ("allowOrphans", po::value<bool>(&(sopt.allowOrphans))->default_value(false), "Consider orphaned reads as valid hits when "
+                        "performing lightweight-alignment.  This option will increase sensitivity (allow more reads to map and "
+                        "more transcripts to be detected), but may decrease specificity as orphaned alignments are more likely "
+                        "to be spurious.") 
     ("threads,p", po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads), "The number of threads to use concurrently.")
     ("incompatPrior", po::value<double>(&(sopt.incompatPrior))->default_value(1e-20), "This option "
                         "sets the prior probability that an alignment that disagrees with the specified "
@@ -2877,10 +3047,6 @@ int salmonQuantify(int argc, char *argv[]) {
                         "specifies that alignments that disagree with the library type should be \"impossible\", "
                         "while setting it to 1 says that alignments that disagree with the library type are no "
                         "less likely than those that do")
-    ("numRequiredObs,n", po::value(&requiredObservations)->default_value(50000000),
-                                        "[Deprecated]: The minimum number of observations (mapped reads) that must be observed before "
-                                        "the inference procedure will terminate.  If fewer mapped reads exist in the "
-                                        "input file, then it will be read through multiple times.")
     ("minLen,k", po::value<int>(&(memOptions->min_seed_len))->default_value(19), "(S)MEMs smaller than this size won't be considered.")
     ("extraSensitive", po::bool_switch(&(sopt.extraSeedPass))->default_value(false), "Setting this option enables an extra pass of \"seed\" search. "
                                         "Enabling this option may improve sensitivity (the number of reads having sufficient coverage), but will "
@@ -2952,6 +3118,10 @@ int salmonQuantify(int argc, char *argv[]) {
      			"assignment likelihoods and contributions to the transcript abundances computed without applying any auxiliary models.  The purpose "
 			"of ignoring the auxiliary models for the first <numPreAuxModelSamples> observations is to avoid applying these models before thier "
 			"parameters have been learned sufficiently well.")
+    ("numRequiredObs,n", po::value(&requiredObservations)->default_value(50000000),
+                                        "[Deprecated]: The minimum number of observations (mapped reads) that must be observed before "
+                                        "the inference procedure will terminate.  If fewer mapped reads exist in the "
+                                        "input file, then it will be read through multiple times.")
     ("splitWidth,s", po::value<int>(&(memOptions->split_width))->default_value(0), "If (S)MEM occurs fewer than this many times, search for smaller, contained MEMs. "
                                         "The default value will not split (S)MEMs, a higher value will result in more MEMs being explore and, thus, will "
                                         "result in increased running time.")
@@ -2961,7 +3131,7 @@ int salmonQuantify(int argc, char *argv[]) {
                         "Use mass \"banking\" in subsequent epoch of inference.  Rather than re-observing uniquely "
                         "mapped reads, simply remember the ratio of uniquely to ambiguously mapped reads for each "
                         "transcript and distribute the unique mass uniformly throughout the epoch.")
-    ("useVBOpt,v", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
+    ("useVBOpt", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
      			"traditional EM algorithm for optimization in the batch passes.")
     ("useGSOpt", po::bool_switch(&(sopt.useGSOpt))->default_value(false), "[*super*-experimental]: After the initial optimization has finished, "
                 "use collapsed Gibbs sampling to refine estimates even further (and obtain variance)")
@@ -3096,6 +3266,21 @@ transcript abundance from RNA-seq reads
 
         vector<ReadLibrary> readLibraries = salmon::utils::extractReadLibraries(orderedOptions);
         ReadExperiment experiment(readLibraries, indexDirectory, sopt);
+
+        // Parameter validation
+        // If we're allowing orphans, make sure that the read libraries are paired-end.
+        // Otherwise, this option makes no sense. 
+        if (sopt.allowOrphans) {
+            for (auto& rl : readLibraries) {
+                if (!rl.isPairedEnd()) {
+                    jointLog->error("You cannot specify the --allowOrphans argument "
+                                    "for single-end libraries; exiting!");
+                    std::exit(1);
+                }
+            }
+        }
+        // end parameter validation
+
 
         // This will be the class in charge of maintaining our
 	// rich equivalence classes

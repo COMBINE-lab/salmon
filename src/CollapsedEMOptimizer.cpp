@@ -274,7 +274,10 @@ size_t markDegenerateClasses(
             errstream << "}\n";
             errstream << "============================\n\n";
 
-            jointLog->info(errstream.str());
+            bool verbose{false};
+            if (verbose) {
+                jointLog->info(errstream.str());
+            }
             ++numDropped;
             kv.first.setValid(false);
         }
@@ -405,7 +408,6 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
       alphaSum += alphas[i];
     }
 
-
     if (alphaSum < minWeight) {
         jointLog->error("Total alpha weight was too small! "
                         "Make sure you ran salmon correclty.");
@@ -417,9 +419,9 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
     for (size_t i = 0; i < transcripts.size(); ++i) {
         // Set the mass to the normalized (after truncation)
         // relative abundance
+        transcripts[i].setSharedCount(alphas[i]);
         transcripts[i].setMass(alphas[i] / alphaSum);
     }
-
     return true;
 }
 
