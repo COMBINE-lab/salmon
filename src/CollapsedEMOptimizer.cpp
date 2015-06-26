@@ -416,15 +416,12 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
 
     // Set the mass of each transcript using the
     // computed alphas.
-    tm = 0.0;
     for (size_t i = 0; i < transcripts.size(); ++i) {
         // Set the mass to the normalized (after truncation)
         // relative abundance
         transcripts[i].setSharedCount(alphas[i]);
-        tm += alphas[i];
         transcripts[i].setMass(alphas[i] / alphaSum);
     }
-    std::cerr << "TOTAL MASS OUT = " << tm << "\n";
     return true;
 }
 

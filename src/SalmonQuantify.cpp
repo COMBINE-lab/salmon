@@ -1398,6 +1398,7 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
     uint32_t rightReadLength{0};
 
     auto& eqBuilder = readExp.equivalenceClassBuilder();
+    bool allowOrphans{salmonOpts.allowOrphans};
 
     /**
     * As soon as we can decide on an acceptable way to validate read names,
@@ -1545,16 +1546,13 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
     bool sortedByTranscript = true;
     int32_t lastTranscriptId = std::numeric_limits<int32_t>::min();
 
-    if (BOOST_UNLIKELY(isOrphan)) {
-       //std::vector<CoverageCalculator> allHits;
+    if (BOOST_UNLIKELY(isOrphan and allowOrphans)) {
+        //std::vector<CoverageCalculator> allHits;
         //allHits.reserve(totalHits);
         bool foundValidHit{false};
         
         // search for a hit on the left
         for (auto& tHitList : leftHits) {
-            // Prior
-            // auto transcriptID = tHitList.first;
-            // June 23 
             auto transcriptID = tHitList.targetID;
             auto& covChain = tHitList;
             Transcript& t = transcripts[transcriptID];
@@ -1634,13 +1632,9 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
                            return x.transcriptID() < y.transcriptID();
                           });
             }
-        }
-        // New June 23!
-        else {
-            // If we didn't have any *significant* hits --- add any *trivial* orphan hits
+        } else {
             return;
-            std::cerr << "HERE1\n";
-            // EQCLASS
+            // If we didn't have any *significant* hits --- add any *trivial* orphan hits
             size_t totalHits = leftHits.size() + rightHits.size();
             std::vector<uint32_t> txpIDs;
             txpIDs.reserve(totalHits);
@@ -1666,29 +1660,23 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
                 totProb += startProb;
             }
             if (totProb > 0.0) {
-            double norm = 1.0 / totProb;
-            for (auto& p : auxProbs) { p *= norm; }
+                double norm = 1.0 / totProb;
+                for (auto& p : auxProbs) { p *= norm; }
 
-            TranscriptGroup tg(txpIDs, txpIDsHash);
-            eqBuilder.addGroup(std::move(tg), auxProbs);
+                TranscriptGroup tg(txpIDs, txpIDsHash);
+                eqBuilder.addGroup(std::move(tg), auxProbs);
             } else {
-                std::cerr << "WARNING1\n"; 
-                std::cerr << "allHits.size() = " << allHits.size() << "\n";
+                salmonOpts.jointLog->warn("Unexpected empty hit group [orphaned]");           
             }
         }
     } else { // Not an orphan
         for (auto jhp : jointHits) {
-            //Transcript& t = transcripts[transcriptID];
-            // auto& leftHitList = leftHits[transcriptID];
-            // June 23
             auto& jointHitPtr = jhp;
             auto transcriptID = jhp.transcriptID;
             Transcript& t = transcripts[transcriptID];
             auto& leftHitList = leftHits[jhp.leftIndex];
             leftHitList.computeBestChain(t, frag.first.seq);
             if (leftHitList.bestHitScore >= cutoffLeft) {
-                //auto& rightHitList = rightHits[transcriptID];
-                // June 23
                 auto& rightHitList = rightHits[jhp.rightIndex];
 
                 rightHitList.computeBestChain(t, frag.second.seq);
@@ -1742,14 +1730,9 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
                            return x.transcriptID() < y.transcriptID();
                           });
             }
-        } 
-        
-        // New June 23!
-        else {
+        } else {
             // If we didn't have any *significant* hits --- add any *trivial* joint hits
-            // EQCLASS
             return;
-            std::cerr << "HERE2\n";
             std::vector<uint32_t> txpIDs;
             txpIDs.reserve(jointHits.size());
             std::vector<double> auxProbs;
@@ -1772,11 +1755,9 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
             TranscriptGroup tg(txpIDs, txpIDsHash);
             eqBuilder.addGroup(std::move(tg), auxProbs);
             } else {
-                std::cerr << "WARNING2\n";
+                salmonOpts.jointLog->warn("Unexpected empty hit group [paired]");           
             } 
         }
-        // End June 23!
-        
 
     } // end else
 
@@ -3055,6 +3036,10 @@ int salmonQuantify(int argc, char *argv[]) {
         "File containing the #1 mates")
     ("mates2,2", po::value<vector<string>>(&mate2ReadFiles)->multitoken(),
         "File containing the #2 mates")
+    ("allowOrphans", po::value<bool>(&(sopt.allowOrphans))->default_value(false), "Consider orphaned reads as valid hits when "
+                        "performing lightweight-alignment.  This option will increase sensitivity (allow more reads to map and "
+                        "more transcripts to be detected), but may decrease specificity as orphaned alignments are more likely "
+                        "to be spurious.") 
     ("threads,p", po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads), "The number of threads to use concurrently.")
     ("incompatPrior", po::value<double>(&(sopt.incompatPrior))->default_value(1e-20), "This option "
                         "sets the prior probability that an alignment that disagrees with the specified "
@@ -3062,10 +3047,6 @@ int salmonQuantify(int argc, char *argv[]) {
                         "specifies that alignments that disagree with the library type should be \"impossible\", "
                         "while setting it to 1 says that alignments that disagree with the library type are no "
                         "less likely than those that do")
-    ("numRequiredObs,n", po::value(&requiredObservations)->default_value(50000000),
-                                        "[Deprecated]: The minimum number of observations (mapped reads) that must be observed before "
-                                        "the inference procedure will terminate.  If fewer mapped reads exist in the "
-                                        "input file, then it will be read through multiple times.")
     ("minLen,k", po::value<int>(&(memOptions->min_seed_len))->default_value(19), "(S)MEMs smaller than this size won't be considered.")
     ("extraSensitive", po::bool_switch(&(sopt.extraSeedPass))->default_value(false), "Setting this option enables an extra pass of \"seed\" search. "
                                         "Enabling this option may improve sensitivity (the number of reads having sufficient coverage), but will "
@@ -3137,6 +3118,10 @@ int salmonQuantify(int argc, char *argv[]) {
      			"assignment likelihoods and contributions to the transcript abundances computed without applying any auxiliary models.  The purpose "
 			"of ignoring the auxiliary models for the first <numPreAuxModelSamples> observations is to avoid applying these models before thier "
 			"parameters have been learned sufficiently well.")
+    ("numRequiredObs,n", po::value(&requiredObservations)->default_value(50000000),
+                                        "[Deprecated]: The minimum number of observations (mapped reads) that must be observed before "
+                                        "the inference procedure will terminate.  If fewer mapped reads exist in the "
+                                        "input file, then it will be read through multiple times.")
     ("splitWidth,s", po::value<int>(&(memOptions->split_width))->default_value(0), "If (S)MEM occurs fewer than this many times, search for smaller, contained MEMs. "
                                         "The default value will not split (S)MEMs, a higher value will result in more MEMs being explore and, thus, will "
                                         "result in increased running time.")
@@ -3146,7 +3131,7 @@ int salmonQuantify(int argc, char *argv[]) {
                         "Use mass \"banking\" in subsequent epoch of inference.  Rather than re-observing uniquely "
                         "mapped reads, simply remember the ratio of uniquely to ambiguously mapped reads for each "
                         "transcript and distribute the unique mass uniformly throughout the epoch.")
-    ("useVBOpt,v", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
+    ("useVBOpt", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
      			"traditional EM algorithm for optimization in the batch passes.")
     ("useGSOpt", po::bool_switch(&(sopt.useGSOpt))->default_value(false), "[*super*-experimental]: After the initial optimization has finished, "
                 "use collapsed Gibbs sampling to refine estimates even further (and obtain variance)")
@@ -3281,6 +3266,21 @@ transcript abundance from RNA-seq reads
 
         vector<ReadLibrary> readLibraries = salmon::utils::extractReadLibraries(orderedOptions);
         ReadExperiment experiment(readLibraries, indexDirectory, sopt);
+
+        // Parameter validation
+        // If we're allowing orphans, make sure that the read libraries are paired-end.
+        // Otherwise, this option makes no sense. 
+        if (sopt.allowOrphans) {
+            for (auto& rl : readLibraries) {
+                if (!rl.isPairedEnd()) {
+                    jointLog->error("You cannot specify the --allowOrphans argument "
+                                    "for single-end libraries; exiting!");
+                    std::exit(1);
+                }
+            }
+        }
+        // end parameter validation
+
 
         // This will be the class in charge of maintaining our
 	// rich equivalence classes

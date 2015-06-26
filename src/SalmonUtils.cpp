@@ -130,6 +130,8 @@ namespace utils {
         using salmon::math::LOG_0;
         using salmon::math::LOG_1;
 
+        bool useScaledCounts = (sopt.allowOrphans == false);
+
         std::unique_ptr<std::FILE, int (*)(std::FILE *)> output(std::fopen(fname.c_str(), "w"), std::fclose);
 
         fmt::print(output.get(), "{}", headerComments);
@@ -139,10 +141,8 @@ namespace utils {
 
         std::vector<Transcript>& transcripts_ = alnLib.transcripts();
         for (auto& transcript : transcripts_) {
-            transcript.projectedCounts =
-                //transcript.mass(false) * numMappedFrags;
-                // June 23 edit
-                transcript.sharedCount();
+            transcript.projectedCounts = useScaledCounts ? 
+                (transcript.mass(false) * numMappedFrags) : transcript.sharedCount();
         }
 
         double tfracDenom{0.0};

@@ -26,10 +26,13 @@ struct SalmonOpts {
     bool maxMEMIntervals; // If true, don't split (S)MEMs into MEMs
     */
 
-    SalmonOpts() : splitSpanningSeeds(false), noFragLengthDist(false),
+    SalmonOpts() : allowOrphans(false), splitSpanningSeeds(false), noFragLengthDist(false),
                    noEffectiveLengthCorrection(false), useReadCompat(false),
                    maxReadOccs(200), extraSeedPass(false),
                    mappingCacheMemoryLimit(5000000) {}
+
+    bool allowOrphans; // Consider orphaned reads when performing lightweight alignemnt.
+
     bool splitSpanningSeeds; // Attempt to split seeds that span multiple transcripts.
 
     bool noFragLengthDist; // Do not give a fragment assignment a likelihood based on an emperically
