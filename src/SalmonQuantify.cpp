@@ -1494,18 +1494,18 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
 
     // vector-based code -- June 23
     // Sort the left and right hits
-    std::sort(leftHits.begin(), leftHits.end(), 
+    std::sort(leftHits.begin(), leftHits.end(),
               [](CoverageCalculator& c1, CoverageCalculator& c2) -> bool {
                 return c1.targetID < c2.targetID;
                });
-    std::sort(rightHits.begin(), rightHits.end(), 
+    std::sort(rightHits.begin(), rightHits.end(),
               [](CoverageCalculator& c1, CoverageCalculator& c2) -> bool {
                 return c1.targetID < c2.targetID;
                });
     // Take the intersection of these two hit lists
     // Adopted from : http://en.cppreference.com/w/cpp/algorithm/set_intersection
     {
-        auto leftIt = leftHits.begin(); 
+        auto leftIt = leftHits.begin();
         auto leftEnd = leftHits.end();
         auto rightIt = rightHits.begin();
         auto rightEnd = rightHits.end();
@@ -1514,8 +1514,8 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
                 ++leftIt;
             } else {
                 if (!(rightIt->targetID < leftIt->targetID)) {
-                    jointHits.push_back({leftIt->targetID, 
-                                           std::distance(leftHits.begin(), leftIt), 
+                    jointHits.push_back({leftIt->targetID,
+                                           std::distance(leftHits.begin(), leftIt),
                                            std::distance(rightHits.begin(), rightIt)});
                     ++leftIt;
                 }
@@ -1523,8 +1523,8 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
             }
         }
     }
-    // End June 23     
-    
+    // End June 23
+
     /* map based code
     {
         auto notFound = maxHitList.end();
@@ -1550,12 +1550,14 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
         //std::vector<CoverageCalculator> allHits;
         //allHits.reserve(totalHits);
         bool foundValidHit{false};
-        
+
         // search for a hit on the left
         for (auto& tHitList : leftHits) {
             auto transcriptID = tHitList.targetID;
             auto& covChain = tHitList;
             Transcript& t = transcripts[transcriptID];
+            if (!t.hasAnchorFragment()) { continue; }
+
             covChain.computeBestChain(t, frag.first.seq);
             double score = covChain.bestHitScore;
 
@@ -1584,17 +1586,19 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
                 readHits += score;
                 ++hitListCount;
                 ++leftHitCount;
-            } 
+            }
         }
 
         // search for a hit on the right
         for (auto& tHitList : rightHits) {
             // Prior
             // auto transcriptID = tHitList.first;
-            // June 23 
+            // June 23
             auto transcriptID = tHitList.targetID;
             auto& covChain = tHitList;
             Transcript& t = transcripts[transcriptID];
+            if (!t.hasAnchorFragment()) { continue; }
+
             covChain.computeBestChain(t, frag.second.seq);
             double score = covChain.bestHitScore;
 
@@ -1651,11 +1655,11 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
                         return c1.targetID < c2.targetID;
                        });
             double totProb{0.0};
-            for (auto& h : allHits) { 
-                boost::hash_combine(txpIDsHash, h.targetID); 
+            for (auto& h : allHits) {
+                boost::hash_combine(txpIDsHash, h.targetID);
                 txpIDs.push_back(h.targetID);
                 double refLen =  std::max(1.0, static_cast<double>(transcripts[h.targetID].RefLength));
-                double startProb = 1.0 / refLen; 
+                double startProb = 1.0 / refLen;
                 auxProbs.push_back(startProb);
                 totProb += startProb;
             }
@@ -1666,7 +1670,7 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
                 TranscriptGroup tg(txpIDs, txpIDsHash);
                 eqBuilder.addGroup(std::move(tg), auxProbs);
             } else {
-                salmonOpts.jointLog->warn("Unexpected empty hit group [orphaned]");           
+                salmonOpts.jointLog->warn("Unexpected empty hit group [orphaned]");
             }
         }
     } else { // Not an orphan
@@ -1713,6 +1717,8 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
                 if (transcriptID  < lastTranscriptId) {
                     sortedByTranscript = false;
                 }
+                // ANCHOR TEST
+                t.setAnchorFragment();
                 alnList.emplace_back(transcriptID, fmt, score, minHitPos, fragLength);
                 ++readHits;
                 ++hitListCount;
@@ -1740,11 +1746,11 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
 
             size_t txpIDsHash{0};
             double totProb{0.0};
-            for (auto& h : jointHits) { 
-                boost::hash_combine(txpIDsHash, h.transcriptID); 
+            for (auto& h : jointHits) {
+                boost::hash_combine(txpIDsHash, h.transcriptID);
                 txpIDs.push_back(h.transcriptID);
                 double refLen =  std::max(1.0, static_cast<double>(transcripts[h.transcriptID].RefLength));
-                double startProb = 1.0 / refLen; 
+                double startProb = 1.0 / refLen;
                 auxProbs.push_back(startProb);
                 totProb += startProb;
             }
@@ -1755,8 +1761,8 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
             TranscriptGroup tg(txpIDs, txpIDsHash);
             eqBuilder.addGroup(std::move(tg), auxProbs);
             } else {
-                salmonOpts.jointLog->warn("Unexpected empty hit group [paired]");           
-            } 
+                salmonOpts.jointLog->warn("Unexpected empty hit group [paired]");
+            }
         }
 
     } // end else
@@ -1937,8 +1943,8 @@ void getHitsForFragment(jellyfish::header_sequence_qual& frag,
         std::vector<double> auxProbs(hits.size(), uniProb);
 
         size_t txpIDsHash{0};
-        for (auto& h : hits) { 
-            boost::hash_combine(txpIDsHash, h.targetID); 
+        for (auto& h : hits) {
+            boost::hash_combine(txpIDsHash, h.targetID);
             txpIDs.push_back(h.targetID);
         }
 
@@ -3036,10 +3042,10 @@ int salmonQuantify(int argc, char *argv[]) {
         "File containing the #1 mates")
     ("mates2,2", po::value<vector<string>>(&mate2ReadFiles)->multitoken(),
         "File containing the #2 mates")
-    ("allowOrphans", po::value<bool>(&(sopt.allowOrphans))->default_value(false), "Consider orphaned reads as valid hits when "
+    ("allowOrphans", po::bool_switch(&(sopt.allowOrphans))->default_value(false), "Consider orphaned reads as valid hits when "
                         "performing lightweight-alignment.  This option will increase sensitivity (allow more reads to map and "
                         "more transcripts to be detected), but may decrease specificity as orphaned alignments are more likely "
-                        "to be spurious.") 
+                        "to be spurious.")
     ("threads,p", po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads), "The number of threads to use concurrently.")
     ("incompatPrior", po::value<double>(&(sopt.incompatPrior))->default_value(1e-20), "This option "
                         "sets the prior probability that an alignment that disagrees with the specified "
@@ -3269,7 +3275,7 @@ transcript abundance from RNA-seq reads
 
         // Parameter validation
         // If we're allowing orphans, make sure that the read libraries are paired-end.
-        // Otherwise, this option makes no sense. 
+        // Otherwise, this option makes no sense.
         if (sopt.allowOrphans) {
             for (auto& rl : readLibraries) {
                 if (!rl.isPairedEnd()) {

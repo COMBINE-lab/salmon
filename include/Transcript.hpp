@@ -42,6 +42,7 @@ public:
         logPerBasePrior_ = other.logPerBasePrior_;
         priorMass_ = other.priorMass_;
         avgMassBias_.store(other.avgMassBias_.load());
+        hasAnchorFragment_.store(other.hasAnchorFragment_.load());
     }
 
     Transcript& operator=(Transcript&& other) {
@@ -61,6 +62,7 @@ public:
         logPerBasePrior_ = other.logPerBasePrior_;
         priorMass_ = other.priorMass_;
         avgMassBias_.store(other.avgMassBias_.load());
+        hasAnchorFragment_.store(other.hasAnchorFragment_.load());
         return *this;
     }
 
@@ -210,6 +212,14 @@ public:
     void lengthClassIndex(uint32_t ind) { lengthClassIndex_ = ind; }
     uint32_t lengthClassIndex() { return lengthClassIndex_; }
 
+    void setAnchorFragment() {
+        hasAnchorFragment_.store(true);
+    }
+
+    bool hasAnchorFragment() {
+        return hasAnchorFragment_.load();
+    }
+
     std::string RefName;
     uint32_t RefLength;
     uint32_t id;
@@ -234,6 +244,10 @@ private:
     tbb::atomic<double> avgMassBias_;
     uint32_t lengthClassIndex_;
     double logPerBasePrior_;
+    // In a paired-end protocol, a transcript has
+    // an "anchor" fragment if it has a proper
+    // pair of reads mapping to it.
+    std::atomic<bool> hasAnchorFragment_{false};
 };
 
 #endif //TRANSCRIPT
