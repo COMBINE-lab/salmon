@@ -11,13 +11,10 @@ image:
 Contact
 -------
 
-The Salmon software is developed by [Rob Patro](http://www.robpatro.com) at 
-[Stony Brook University](http://www.cs.stonybrook.edu) in collaboration
-with [Carl Kingsford](http://www.cs.cmu.edu/~ckingsf) at the 
-[Computational Biology Department](http://www.compbio.cmu.edu) at 
-[Carnegie Mellon University](http://www.cmu.edu) and 
-[Steve Mount](http://www.clfs.umd.edu/labs/mount/) at the 
-[Center for Bioinformatics and Computational Biology](http://www.cbcb.umd.edu/)
+The Salmon software is developed by [Rob Patro](http://www.robpatro.com) at
+[Stony Brook University](http://www.cs.stonybrook.edu) in collaboration with
+[Geet Duggal](http://www.geetduggal.com) and [Carl Kingsford](http://www.cs.cmu.edu/~ckingsf) at the [Computational Biology Department](http://www.compbio.cmu.edu) at [Carnegie Mellon University](http://www.cmu.edu), with contributions from [Steve
+Mount](http://www.clfs.umd.edu/labs/mount/) at the [Center for Bioinformatics and Computational Biology](http://www.cbcb.umd.edu/) 
 at the [University of Maryland, College Park](http://www.umd.edu/).
 
 We're very interested to hear others' feedback about using Salmon for their
