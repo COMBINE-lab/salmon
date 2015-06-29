@@ -47,6 +47,9 @@
 #include "format.h"
 #include "spdlog/spdlog.h"
 
+#include "cereal/archives/json.hpp"
+#include "cereal/types/vector.hpp"
+
 using my_mer = jellyfish::mer_dna_ns::mer_base_static<uint64_t, 1>;
 
 typedef jellyfish::stream_manager<char**>                stream_manager;
@@ -236,6 +239,8 @@ Creates a salmon index.
         jointLog->info() << infostr.str();
         computeBiasFeatures(transcriptFiles, transcriptBiasFile, useStreamingParser, numThreads);
         // ==== finished computing bias fetures
+    
+        bfs::path versionFile = indexDirectory / "indexVersion";
 
         bfs::path outputPrefix = indexDirectory / "bwaidx";
 

@@ -1366,10 +1366,9 @@ inline bool nearEndOfTranscript(
             Transcript& txp,
             int32_t cutoff=std::numeric_limits<int32_t>::max()) {
 	// check if hit appears close to the end of the given transcript
+    bool isForward = hit.isForward();
 	int32_t hitPos = static_cast<int32_t>(hit.bestHitPos);
-	return (hitPos < cutoff or
-            std::abs(hitPos - static_cast<int32_t>(txp.RefLength)) < cutoff);
-
+    return (hitPos <= cutoff or std::abs(static_cast<int32_t>(txp.RefLength) - hitPos) <= cutoff);
 }
 
 template <typename CoverageCalculator>
@@ -1562,7 +1561,7 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
             double score = covChain.bestHitScore;
 
     	    // make sure orphaned fragment is near the end of the transcript
-	    	// if (!nearEndOfTranscript(covChain, t, 200)) { continue; }
+	    	// if (!nearEndOfTranscript(covChain, t, 1000)) { continue; }
 
             if (score >= fOpt * bestScore and score >= cutoffLeft) {
                 foundValidHit = true;
@@ -1603,7 +1602,7 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
             double score = covChain.bestHitScore;
 
             // make sure orphaned fragment is near the end of the transcript
-            //if (!nearEndOfTranscript(covChain, t, 200)) { continue; }
+            // if (!nearEndOfTranscript(covChain, t, 1000)) { continue; }
 
             if (score >= fOpt * bestScore and score >= cutoffRight) {
                 if (score > bestScore) { bestScore = score; }
@@ -3206,7 +3205,7 @@ transcript abundance from RNA-seq reads
             // Make sure the provided file exists
             geneMapPath = vm["geneMap"].as<std::string>();
             if (!bfs::exists(geneMapPath)) {
-                std::cerr << "Could not fine transcript <=> gene map file " << geneMapPath << "\n";
+                std::cerr << "Could not find transcript <=> gene map file " << geneMapPath << "\n";
                 std::cerr << "Exiting now: please either omit the \'geneMap\' option or provide a valid file\n";
                 std::exit(1);
             }
