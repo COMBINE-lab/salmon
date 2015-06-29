@@ -20,4 +20,3 @@ at the [University of Maryland, College Park](http://www.umd.edu/).
 We're very interested to hear others' feedback about using Salmon for their
 projects and in their pipelines.  To this end, Salmon is actively developed on
 GitHub and we interact regularly with users on our [Google Group](http://ongen.us/SForum).
-
