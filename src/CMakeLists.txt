@@ -3,6 +3,7 @@ QSufSort.c
 is.c
 bwt_gen.c
 bwtindex.c
+xxhash.c
 CollapsedEMOptimizer.cpp
 CollapsedGibbsSampler.cpp
 Salmon.cpp
@@ -24,6 +25,7 @@ SalmonQuantifyAlignments.cpp
 )
 
 set (SALMON_LIB_SRCS
+BWAUtils.cpp
 LibraryFormat.cpp
 GenomicFeature.cpp
 VersionChecker.cpp

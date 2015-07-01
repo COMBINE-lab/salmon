@@ -43,12 +43,10 @@
 
 #include "Transcript.hpp"
 #include "SalmonUtils.hpp"
+#include "SalmonIndex.hpp"
 #include "GenomicFeature.hpp"
 #include "format.h"
 #include "spdlog/spdlog.h"
-
-#include "cereal/archives/json.hpp"
-#include "cereal/types/vector.hpp"
 
 using my_mer = jellyfish::mer_dna_ns::mer_base_static<uint64_t, 1>;
 
@@ -155,6 +153,7 @@ int salmonIndex(int argc, char* argv[]) {
     bool useStreamingParser = true;
 
     uint32_t saSampInterval = 1;
+    uint32_t auxKmerLen = 0;
     uint32_t maxThreads = std::thread::hardware_concurrency();
     uint32_t numThreads;
 
@@ -163,6 +162,9 @@ int salmonIndex(int argc, char* argv[]) {
     ("version,v", "print version string")
     ("help,h", "produce help message")
     ("transcripts,t", po::value<string>()->required(), "Transcript fasta file.")
+    ("auxKmerLen,k", po::value<uint32_t>(&auxKmerLen)->default_value(0)->required(),
+                    "The size of k-mers that should be used for the auxiliary k-mer index. "
+                    "A value of 0 (the default), disables the auxliliary index.")
     ("index,i", po::value<string>()->required(), "Salmon index.")
     ("threads,p", po::value<uint32_t>(&numThreads)->default_value(maxThreads)->required(),
                             "Number of threads to use (only used for computing bias features)")
@@ -198,9 +200,6 @@ Creates a salmon index.
 		       "a power of 2. The value provided, " << sasamp << ", is not.";
 	  throw(std::logic_error(errWriter.str()));
 	}
-
-        fmt::MemoryWriter optWriter;
-        optWriter << vm["sasamp"].as<uint32_t>();
 
         string transcriptFile = vm["transcripts"].as<string>();
         bfs::path indexDirectory(vm["index"].as<string>());
@@ -240,9 +239,10 @@ Creates a salmon index.
         computeBiasFeatures(transcriptFiles, transcriptBiasFile, useStreamingParser, numThreads);
         // ==== finished computing bias fetures
     
-        bfs::path versionFile = indexDirectory / "indexVersion";
+       bfs::path outputPrefix = indexDirectory / "bwaidx";
 
-        bfs::path outputPrefix = indexDirectory / "bwaidx";
+       fmt::MemoryWriter optWriter;
+       optWriter << vm["sasamp"].as<uint32_t>();
 
         std::vector<char const*> bwaArgVec{ "index",
                                     "-s",
@@ -250,19 +250,10 @@ Creates a salmon index.
                                     "-p",
                                     outputPrefix.string().c_str(),
                                     transcriptFile.c_str() };
-
-        char* bwaArgv[] = { const_cast<char*>(bwaArgVec[0]),
-                            const_cast<char*>(bwaArgVec[1]),
-                            const_cast<char*>(bwaArgVec[2]),
-                            const_cast<char*>(bwaArgVec[3]),
-                            const_cast<char*>(bwaArgVec[4]),
-                            const_cast<char*>(bwaArgVec[5]) };
-        int bwaArgc = 6;
-
-        ret = bwa_index(bwaArgc, bwaArgv);
+        SalmonIndex sidx(jointLog);
+        sidx.build(indexDirectory, bwaArgVec, auxKmerLen);
 
         jointLog->info("done building BWT Index");
-
         // If we want to build the auxiliary k-mer index, do it here.
         /*
         uint32_t k = 15;

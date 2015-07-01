@@ -51,7 +51,7 @@ typedef int64_t sbgint_t;
 
 #define BITS_PER_OCC_VALUE			16
 #define OCC_VALUE_PER_WORD			2
-#define OCC_INTERVAL				256
+#define OCC_INTERVAL			    32	
 #define OCC_INTERVAL_MAJOR			65536
 
 #define TRUE    1

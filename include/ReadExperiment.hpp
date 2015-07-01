@@ -16,6 +16,7 @@ extern "C" {
 #include "FragmentStartPositionDistribution.hpp"
 #include "SequenceBiasModel.hpp"
 #include "SalmonOpts.hpp"
+#include "SalmonIndex.hpp"
 #include "EquivalenceClassBuilder.hpp"
 
 // Logger includes
@@ -44,7 +45,7 @@ class ReadExperiment {
     ReadExperiment(std::vector<ReadLibrary>& readLibraries,
                    //const boost::filesystem::path& transcriptFile,
                    const boost::filesystem::path& indexDirectory,
-		   SalmonOpts& sopt) :
+		           SalmonOpts& sopt) :
         readLibraries_(readLibraries),
         //transcriptFile_(transcriptFile),
         transcripts_(std::vector<Transcript>()),
@@ -76,17 +77,9 @@ class ReadExperiment {
                 throw std::invalid_argument(ss.str());
             }
             */
-
-            // ====== Load the transcripts from file
-            { // mem-based
-                bfs::path indexPath = indexDirectory / "bwaidx";
-                if ((idx_ = bwa_idx_load(indexPath.string().c_str(), BWA_IDX_BWT|BWA_IDX_BNS|BWA_IDX_PAC)) == 0) {
-                    fmt::print(stderr, "Couldn't open index [{}] --- ", indexPath);
-                    fmt::print(stderr, "Please make sure that 'salmon index' has been run successfully\n");
-                    std::exit(1);
-                }
-            }
-
+            salmonIndex_.reset(new SalmonIndex(sopt.jointLog));
+            salmonIndex_->load(indexDirectory);
+            bwaidx_t* idx_ = salmonIndex_->bwaIndex();            
             size_t numRecords = idx_->bns->n_seqs;
             std::vector<Transcript> transcripts_tmp;
 
@@ -197,7 +190,7 @@ class ReadExperiment {
     bool processReads(const uint32_t& numThreads, CallbackT& processReadLibrary) {
         bool burnedIn = (totalAssignedFragments_ + numAssignedFragments_ > 5000000);
         for (auto& rl : readLibraries_) {
-            processReadLibrary(rl, idx_, transcripts_, clusterForest(),
+            processReadLibrary(rl, salmonIndex_.get(), transcripts_, clusterForest(),
                                *(fragLengthDist_.get()), numAssignedFragments_,
                                numThreads, burnedIn);
         }
@@ -206,7 +199,7 @@ class ReadExperiment {
 
     ~ReadExperiment() {
         // ---- Get rid of things we no longer need --------
-        bwa_idx_destroy(idx_);
+        // bwa_idx_destroy(idx_);
     }
 
     ClusterForest& clusterForest() { return *clusters_.get(); }
@@ -424,7 +417,8 @@ class ReadExperiment {
     /**
      * The index we've built on the set of transcripts.
      */
-    bwaidx_t *idx_{nullptr};
+    std::unique_ptr<SalmonIndex> salmonIndex_{nullptr};
+    //bwaidx_t *idx_{nullptr};
     /**
      * The cluster forest maintains the dynamic relationship
      * defined by transcripts and reads --- if two transcripts
