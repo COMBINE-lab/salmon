@@ -79,6 +79,10 @@ struct SalmonOpts {
 
     uint32_t maxExpectedReadLen; // Maximum expected length of an observed read.
 
+    bool useMassBanking; // DEPRECATED
+
+    bool sensitive; // Perform splitting of long SMEMs into MEMs 
+    
     bool extraSeedPass; // Perform extra pass trying to find seeds to cover the read
 
     bool disableMappingCache; // Don't write mapping results to temporary mapping cache file
@@ -86,8 +90,6 @@ struct SalmonOpts {
     boost::filesystem::path outputDirectory; // Quant output directory
 
     boost::filesystem::path indexDirectory; // Index directory
-
-    bool useMassBanking; // Bank unique mass in subsequent epochs of inference
 
     bool useVBOpt; // Use Variational Bayesian EM instead of "regular" EM in the batch passes
     bool useGSOpt; // Do Gibbs Sampling after optimization

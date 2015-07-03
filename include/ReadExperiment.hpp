@@ -154,7 +154,9 @@ class ReadExperiment {
             }
             // Since we have the de-coded reference sequences, we no longer need
             // the encoded sequences, so free them.
-            free(idx_->pac); idx_->pac = nullptr;
+            /** TEST OPT **/
+            // free(idx_->pac); idx_->pac = nullptr;
+            /** END TEST OPT **/
             transcripts_tmp.clear();
             // ====== Done loading the transcripts from file
 

@@ -65,7 +65,8 @@ class SalmonIndex{
                 // Read the actual BWA index
                 { // mem-based
                     boost::filesystem::path indexPath = indexDir / "bwaidx";
-                    if ((idx_ = bwa_idx_load(indexPath.string().c_str(), BWA_IDX_BWT|BWA_IDX_BNS|BWA_IDX_PAC)) == 0) {
+                    //if ((idx_ = bwa_idx_load(indexPath.string().c_str(), BWA_IDX_BWT|BWA_IDX_BNS|BWA_IDX_PAC)) == 0) {
+                    if ((idx_ = bwa_idx_load(indexPath.string().c_str(), BWA_IDX_ALL)) == 0) {
                         fmt::print(stderr, "Couldn't open index [{}] --- ", indexPath);
                         fmt::print(stderr, "Please make sure that 'salmon index' has been run successfully\n");
                         std::exit(1);

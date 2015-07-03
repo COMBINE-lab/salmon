@@ -280,7 +280,7 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
                       if (val > ds[tid].maxVal) { ds[tid].maxVal = val; }
                       meanNumReads += (1.0 / numSamples) * val;
                     }
-		    ds[tid].meanVal = meanNumReads;
+        		    ds[tid].meanVal = meanNumReads;
                     transcripts[tid].setMass(ds[tid].meanVal);
                 }
     });
