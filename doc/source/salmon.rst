@@ -94,12 +94,20 @@ you run the Salmon indexer:
     > ./bin/salmon index -t transcripts.fa -i transcripts_index
 
 Then, you can quantify any set of reads (say, paired-end reads in files
-`reads1.fa` and `reads2.fa`) directly against this index using the Salmon
+`reads1.fq` and `reads2.fq`) directly against this index using the Salmon
 ``quant`` command as follows:
 
 ::
 
-    > ./bin/salmon quant -i transcripts_index -l <LIBTYPE> -1 reads1.fa -2 reads2.fa -o transcripts_quant
+    > ./bin/salmon quant -i transcripts_index -l <LIBTYPE> -1 reads1.fq -2 reads2.fq -o transcripts_quant
+
+If you are using single-end reads, then you pass them to Salmon with 
+the ``-r`` flag like:
+
+::
+
+    > ./bin/salmon quant -i transcripts_index -l <LIBTYPE> -r reads.fq -o transcripts_quant
+
 
 You can, of course, pass a number of options to control things such as the
 number of threads used or the different cutoffs used for counting reads.
