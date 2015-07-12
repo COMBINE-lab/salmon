@@ -107,6 +107,25 @@ Just as with the alignment-based mode, after Salmon has finished running, there
 will be a directory called ``salmon_quant``, that contains a file called
 ``quant.sf`` containing the quantification results.
 
+.. note:: Multiple input files
+
+    Salmon expects that there should be 1 argument to each of the ``-1``, ``-2``
+    and ``-r`` flags.  If your input consists of multiple FASTA/FASTQ files, then 
+    you can use process substitution syntax to join them together appropriately 
+    on the command line.  For example, say you had 2 pairs of paired end files,
+    ``a1.fq``, ``a2.fq`` and ``b1.fq``, ``b2.fq``.  Then you could 
+    have Salmon process them all via a command like the following:
+    
+    ::
+    
+    
+        > ./bin/salmon quant -i transcripts_index -l <LIBTYPE> -1 <(cat a1.fq b1.fq) -2 <(cat a2.fq b2.fq) -o transcripts_quant
+
+    This will have the effect of concatenating ``b1.fq`` to ``a1.fq`` and ``b2.fq`` to ``a2.fq`` 
+    in a streaming fashion, presenting each to Salmon as a single large file which it 
+    will process appropriately.
+
+
 Alignment-based mode
 --------------------
 
