@@ -63,81 +63,6 @@ int computeBiasFeatures(
     bool useStreamingParser,
     size_t numThreads);
 
-/*
-bool buildAuxKmerIndex(boost::filesystem::path& outputPrefix, uin32_t k,
-                       std::shared_ptr<spdlog::logger>& logger){
-    namespace bfs = boost::filesystem;
-
-    bfs::path indexPath = outputPrefix / "bwaindex";
-    // Load the bwa index
-    bwaidx_t *idx_{nullptr};
-    {
-        logger->info("Reading BWT index from file");
-        if ((idx_ = bwa_idx_load(indexPath.string().c_str(), BWA_IDX_BWT|BWA_IDX_BNS|BWA_IDX_PAC)) == 0) {
-            logger->error("Couldn't open index [{}] --- ", indexPath);
-            logger->error("Please make sure that 'salmon index' has been run successfully");
-            std::exit(1);
-        }
-    }
-
-    size_t numRecords = idx_->bns->n_seqs;
-    std::vector<Transcript> transcripts_tmp;
-    { // Load transcripts from file
-
-            logger->info("Index contained {} targets; loading them", numRecords);
-            //transcripts_.resize(numRecords);
-            for (auto i : boost::irange(size_t(0), numRecords)) {
-                uint32_t id = i;
-                char* name = idx_->bns->anns[i].name;
-                uint32_t len = idx_->bns->anns[i].len;
-                // copy over the length, then we're done.
-                transcripts_tmp.emplace_back(id, name, len);
-            }
-
-            std::sort(transcripts_tmp.begin(), transcripts_tmp.end(),
-                    [](const Transcript& t1, const Transcript& t2) -> bool {
-                    return t1.id < t2.id;
-                    });
-            double alpha = 0.005;
-            char nucTab[256];
-            nucTab[0] = 'A'; nucTab[1] = 'C'; nucTab[2] = 'G'; nucTab[3] = 'T';
-            for (size_t i = 4; i < 256; ++i) { nucTab[i] = 'N'; }
-
-            // Load the transcript sequence from file
-            for (auto& t : transcripts_tmp) {
-                transcripts_.emplace_back(t.id, t.RefName.c_str(), t.RefLength, alpha);
-                // from BWA
-                uint8_t* rseq = nullptr;
-                int64_t tstart, tend, compLen, l_pac = idx_->bns->l_pac;
-                tstart  = idx_->bns->anns[t.id].offset;
-                tend = tstart + t.RefLength;
-                rseq = bns_get_seq(l_pac, idx_->pac, tstart, tend, &compLen);
-                if (compLen != t.RefLength) {
-                    fmt::print(stderr,
-                               "For transcript {}, stored length ({}) != computed length ({}) --- index may be corrupt. exiting\n",
-                               t.RefName, compLen, t.RefLength);
-                    std::exit(1);
-                }
-
-                std::string seq(t.RefLength, ' ');
-                if (rseq != 0) {
-                    for (size_t i = 0; i < compLen; ++i) {
-                        seq[i] = rseq[i];
-                                 //nst_nt4_table[static_cast<int>(nucTab[rseq[i]])];
-                    }
-                }
-                transcripts_.back().Sequence = salmon::stringtools::encodeSequenceInSAM(seq.c_str(), t.RefLength);
-                free(rseq);
-                // end BWA code
-            }
-            // Since we have the de-coded reference sequences, we no longer need
-            // the encoded sequences, so free them.
-            free(idx_->pac); idx_->pac = nullptr;
-            transcripts_tmp.clear();
-            // ====== Done loading the transcripts from file
-}
-*/
-
 // Cool way to do this from
 // http://stackoverflow.com/questions/108318/whats-the-simplest-way-to-test-whether-a-number-is-a-power-of-2-in-c
 bool isPowerOfTwo(uint32_t n) {
@@ -163,13 +88,12 @@ int salmonIndex(int argc, char* argv[]) {
     ("version,v", "print version string")
     ("help,h", "produce help message")
     ("transcripts,t", po::value<string>()->required(), "Transcript fasta file.")
-    ("auxKmerLen,k", po::value<uint32_t>(&auxKmerLen)->default_value(0)->required(),
-                    "The size of k-mers that should be used for the auxiliary k-mer index. "
-                    "A value of 0 (the default), disables the auxliliary index.")
+    ("kmerLen,k", po::value<uint32_t>(&auxKmerLen)->default_value(31)->required(),
+                    "The size of k-mers that should be used for the quasi index.")
     ("index,i", po::value<string>()->required(), "Salmon index.")
     ("threads,p", po::value<uint32_t>(&numThreads)->default_value(maxThreads)->required(),
                             "Number of threads to use (only used for computing bias features)")
-    ("quasi,q", po::bool_switch(&useQuasi)->default_value(true), "Build quasi-mapping index instead of FMD-based index")
+    ("quasi,q", po::bool_switch(&useQuasi)->default_value(false), "Build quasi-mapping index instead of FMD-based index")
     ("sasamp,s", po::value<uint32_t>(&saSampInterval)->default_value(1)->required(),
                             "The interval at which the suffix array should be sampled. "
                             "Smaller values are faster, but produce a larger index. "
@@ -276,6 +200,8 @@ Creates a salmon index.
             argVec->push_back(outputPrefix.string().c_str());
             argVec->push_back(transcriptFile.c_str());
             sidx.reset(new SalmonIndex(jointLog, IndexType::FMD));
+	    // Disable the auxiliary k-mer index for now
+	    auxKmerLen = 0;
         }
 
         jointLog->info("building index");

@@ -177,6 +177,7 @@ static void mem_collect_intv(const SalmonOpts& sopt, const mem_opt_t *opt, Salmo
 
     // first pass: find all SMEMs
     if (sidx->hasAuxKmerIndex()) {
+	std::cerr << "HERE1\n";
         KmerIntervalMap& auxIdx = sidx->auxIndex();
         uint32_t klen = auxIdx.k();
         while (x < len) {
@@ -2455,82 +2456,93 @@ void processReadLibrary(
             // ------ Paired-end --------
             if (rl.format().type == ReadType::PAIRED_END) {
 
-                char* readFiles[] = { const_cast<char*>(rl.mates1().front().c_str()),
-                    const_cast<char*>(rl.mates2().front().c_str()) };
 
-                size_t maxReadGroup{miniBatchSize}; // Number of reads in each "job"
-                size_t concurrentFile{2}; // Number of files to read simultaneously
-                pairedParserPtr.reset(new
-                        paired_parser(4 * numThreads, maxReadGroup,
-                                      concurrentFile, readFiles, readFiles + 2));
+		    if (rl.mates1().size() != rl.mates2().size()) {
+			    salmonOpts.jointLog->error("The number of provided files for "
+					    "-1 and -2 must be the same!");
+			    std::exit(1);
+		    }
 
-                switch (indexType) {
-                    case IndexType::FMD:
-                        {
-                            for(int i = 0; i < numThreads; ++i)  {
-                                // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
-                                // change value before the lambda below is evaluated --- crazy!
-                                auto threadFun = [&,i]() -> void {
-                                    processReadsMEM<paired_parser, TranscriptHitList>(
-                                            pairedParserPtr.get(),
-                                            readExp,
-                                            rl,
-                                            structureVec[i],
-                                            numObservedFragments,
-                                            numAssignedFragments,
-                                            numValidHits,
-                                            upperBoundHits,
-                                            sidx,
-                                            transcripts,
-                                            fmCalc,
-                                            clusterForest,
-                                            fragLengthDist,
-                                            memOptions,
-                                            salmonOpts,
-                                            coverageThresh,
-                                            iomutex,
-                                            initialRound,
-                                            burnedIn,
-                                            writeToCache);
-                                };
-                                threads.emplace_back(threadFun);
-                            }
-                            break;
-                    case IndexType::QUASI:
-                        {
-                            for(int i = 0; i < numThreads; ++i)  {
-                                // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
-                                // change value before the lambda below is evaluated --- crazy!
-                                auto threadFun = [&,i]() -> void {
-                                    processReadsQuasi(
-                                            pairedParserPtr.get(),
-                                            readExp,
-                                            rl,
-                                            structureVec[i],
-                                            numObservedFragments,
-                                            numAssignedFragments,
-                                            numValidHits,
-                                            upperBoundHits,
-                                            sidx,
-                                            transcripts,
-                                            fmCalc,
-                                            clusterForest,
-                                            fragLengthDist,
-                                            memOptions,
-                                            salmonOpts,
-                                            coverageThresh,
-                                            iomutex,
-                                            initialRound,
-                                            burnedIn,
-                                            writeToCache);
-                                };
-                                threads.emplace_back(threadFun);
-                            }
-                        }
-                            break;
-                    } // end switch
-                }
-                for(int i = 0; i < numThreads; ++i) { threads[i].join(); }
+		    size_t numFiles = rl.mates1().size() + rl.mates2().size();
+		    char** pairFileList = new char*[numFiles];
+		    for (size_t i = 0; i < rl.mates1().size(); ++i) {
+			    pairFileList[2*i] = const_cast<char*>(rl.mates1()[i].c_str());
+			    pairFileList[2*i+1] = const_cast<char*>(rl.mates2()[i].c_str());
+		    }
+
+		    size_t maxReadGroup{miniBatchSize}; // Number of reads in each "job"
+		    size_t concurrentFile{2}; // Number of files to read simultaneously
+		    pairedParserPtr.reset(new
+				    paired_parser(4 * numThreads, maxReadGroup,
+					    concurrentFile, pairFileList, pairFileList+numFiles));
+
+		    switch (indexType) {
+			case IndexType::FMD:
+			    {
+				for(int i = 0; i < numThreads; ++i)  {
+				    // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
+				    // change value before the lambda below is evaluated --- crazy!
+				    auto threadFun = [&,i]() -> void {
+					processReadsMEM<paired_parser, TranscriptHitList>(
+						pairedParserPtr.get(),
+						readExp,
+						rl,
+						structureVec[i],
+						numObservedFragments,
+						numAssignedFragments,
+						numValidHits,
+						upperBoundHits,
+						sidx,
+						transcripts,
+						fmCalc,
+						clusterForest,
+						fragLengthDist,
+						memOptions,
+						salmonOpts,
+						coverageThresh,
+						iomutex,
+						initialRound,
+						burnedIn,
+						writeToCache);
+				    };
+				    threads.emplace_back(threadFun);
+				}
+				break;
+				case IndexType::QUASI:
+				{
+				    for(int i = 0; i < numThreads; ++i)  {
+					// NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
+					// change value before the lambda below is evaluated --- crazy!
+					auto threadFun = [&,i]() -> void {
+					    processReadsQuasi(
+						    pairedParserPtr.get(),
+						    readExp,
+						    rl,
+						    structureVec[i],
+						    numObservedFragments,
+						    numAssignedFragments,
+						    numValidHits,
+						    upperBoundHits,
+						    sidx,
+						    transcripts,
+						    fmCalc,
+						    clusterForest,
+						    fragLengthDist,
+						    memOptions,
+						    salmonOpts,
+						    coverageThresh,
+						    iomutex,
+						    initialRound,
+						    burnedIn,
+						    writeToCache);
+					};
+					threads.emplace_back(threadFun);
+				    }
+				}
+				break;
+			    } // end switch
+		    }
+		    for(int i = 0; i < numThreads; ++i) { threads[i].join(); }
 
             } // ------ Single-end --------
             else if (rl.format().type == ReadType::SINGLE_END) {

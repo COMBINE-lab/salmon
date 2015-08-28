@@ -130,7 +130,7 @@ namespace utils {
         using salmon::math::LOG_0;
         using salmon::math::LOG_1;
 
-        bool useScaledCounts = (sopt.allowOrphans == false);
+        bool useScaledCounts = false;//(sopt.allowOrphans == false);
 
         std::unique_ptr<std::FILE, int (*)(std::FILE *)> output(std::fopen(fname.c_str(), "w"), std::fclose);
 

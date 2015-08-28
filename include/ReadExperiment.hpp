@@ -204,6 +204,8 @@ class ReadExperiment {
 			    [](const Transcript& t1, const Transcript& t2) -> bool {
 			    return t1.id < t2.id;
 			    });
+
+
 	    double alpha = 0.005;
 	    char nucTab[256];
 	    nucTab[0] = 'A'; nucTab[1] = 'C'; nucTab[2] = 'G'; nucTab[3] = 'T';
@@ -259,6 +261,7 @@ class ReadExperiment {
 		    free(rseq);
 		    /* end BWA code */
 	    }
+
 	    // Since we have the de-coded reference sequences, we no longer need
 	    // the encoded sequences, so free them.
 	    /** TEST OPT **/

@@ -237,7 +237,7 @@ class SalmonIndex{
                   std::string indexStr = indexDir.string();
                   if (indexStr.back() != '/') { indexStr.push_back('/'); }
                   quasiIndex_.reset(new RapMapSAIndex);
-                  if (!quasiIndex_->load(indexDir.string())) {
+                  if (!quasiIndex_->load(indexStr)) {
                       fmt::print(stderr, "Couldn't open index [{}] --- ", indexPath);
                       fmt::print(stderr, "Please make sure that 'salmon index' has been run successfully\n");
                       std::exit(1);
