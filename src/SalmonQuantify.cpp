@@ -2253,7 +2253,7 @@ void processReadsQuasi(paired_parser* parser,
         validHits += jointHits.size();
         locRead++;
         ++numObservedFragments;
-        if (numObservedFragments % 50000 == 0) {
+        if (numObservedFragments % 500000 == 0) {
     	    iomutex.lock();
             const char RESET_COLOR[] = "\x1b[0m";
             char green[] = "\x1b[30m";
@@ -2376,7 +2376,7 @@ void processReadsQuasi(single_parser* parser,
         validHits += jointHits.size();
         locRead++;
         ++numObservedFragments;
-        if (numObservedFragments % 50000 == 0) {
+        if (numObservedFragments % 500000 == 0) {
     	    iomutex.lock();
             const char RESET_COLOR[] = "\x1b[0m";
             char green[] = "\x1b[30m";
