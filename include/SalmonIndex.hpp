@@ -13,11 +13,11 @@ extern "C" {
 #include <boost/filesystem.hpp>
 #include <boost/range/irange.hpp>
 
-#include "format.h"
 #include "spdlog/spdlog.h"
 #include "cereal/archives/json.hpp"
 #include "cereal/types/vector.hpp"
 
+#include "RapMapSAIndex.hpp"
 #include "BWAUtils.hpp"
 #include "SalmonConfig.hpp"
 #include "SalmonIndexVersionInfo.hpp"
@@ -26,60 +26,48 @@ extern "C" {
 extern "C" {
 int bwa_index(int argc, char* argv[]);
 }
+// declaration of quasi index function
+int rapMapSAIndex(int argc, char* argv[]);
+
 
 class SalmonIndex{
         public:
-            SalmonIndex(std::shared_ptr<spdlog::logger>& logger) : 
-                loaded_(false), versionInfo_(0, false, 0), logger_(logger) {}
+            SalmonIndex(std::shared_ptr<spdlog::logger>& logger, IndexType indexType) :
+                loaded_(false), versionInfo_(0, false, 0, indexType), logger_(logger) {}
 
             ~SalmonIndex() {
                 if (idx_) { bwa_idx_destroy(idx_); }
             }
-           
-            void load(const boost::filesystem::path& indexDir) { 
+
+            void load(const boost::filesystem::path& indexDir) {
                 namespace bfs = boost::filesystem;
 
                 // Check if version file exists and, if so, read it.
                 boost::filesystem::path versionPath = indexDir / "versionInfo.json";
-                versionInfo_.load(versionPath); 
+                versionInfo_.load(versionPath);
                 if (versionInfo_.indexVersion() == 0) {
                     fmt::MemoryWriter infostr;
-                    infostr << "Error: The index version file " << versionPath.string() 
+                    infostr << "Error: The index version file " << versionPath.string()
                             << " doesn't seem to exist.  Please try re-building the salmon "
                                "index.";
                     throw std::invalid_argument(infostr.str());
                 }
-                // Check index version compatibility here 
+                // Check index version compatibility here
 
-                if (versionInfo_.hasAuxKmerIndex()) {
-                    // Read the aux index
-                    logger_->info("Loading auxiliary index");
-                    bfs::path auxIdxFile = indexDir / "aux.idx";
-                    auxIdx_.setK(versionInfo_.auxKmerLength());
-                    auxIdx_.load(auxIdxFile);
-                    logger_->info("Auxiliary index contained {} k-mers", auxIdx_.size());
-                    logger_->info("done");
+                auto indexType = versionInfo_.indexType();
+                // Load the appropriate index type
+                if (indexType == IndexType::FMD) {
+                    loadFMDIndex_(indexDir);
+                } else {
+                    loadQuasiIndex_(indexDir);
                 }
-
-                logger_->info("Loading BWA index");
-                // Read the actual BWA index
-                { // mem-based
-                    boost::filesystem::path indexPath = indexDir / "bwaidx";
-                    //if ((idx_ = bwa_idx_load(indexPath.string().c_str(), BWA_IDX_BWT|BWA_IDX_BNS|BWA_IDX_PAC)) == 0) {
-                    if ((idx_ = bwa_idx_load(indexPath.string().c_str(), BWA_IDX_ALL)) == 0) {
-                        fmt::print(stderr, "Couldn't open index [{}] --- ", indexPath);
-                        fmt::print(stderr, "Please make sure that 'salmon index' has been run successfully\n");
-                        std::exit(1);
-                    }
-                }
-                logger_->info("done");
 
                 loaded_ = true;
             }
-            
+
             bool buildAux_(boost::filesystem::path indexDir, uint32_t k) {
                        namespace bfs = boost::filesystem;
-                       
+
                        bfs::path indexPath = indexDir / "bwaidx";
                        // Load the bwa index
                        {
@@ -127,18 +115,44 @@ class SalmonIndex{
                           // Since we have the de-coded reference sequences, we no longer need
                           // the encoded sequences, so free them.
                           free(idx_->pac); idx_->pac = nullptr;
-                          // ====== Done streaming through transcripts 
+                          // ====== Done streaming through transcripts
                        }
-                      
-                       bfs::path auxIndexFile = indexDir / "aux.idx"; 
+
+                       bfs::path auxIndexFile = indexDir / "aux.idx";
                        auxIdx_.save(auxIndexFile);
                        return true;
             }
 
 
-            bool build(boost::filesystem::path indexDir, 
-                       std::vector<const char*>& bwaArgVec,
+            bool build(boost::filesystem::path indexDir,
+                       std::vector<const char*>& argVec,
                        uint32_t k) {
+                namespace bfs = boost::filesystem;
+                switch (versionInfo_.indexType()) {
+                    case IndexType::QUASI:
+                        return buildQuasiIndex_(indexDir, argVec, k);
+                    case IndexType::FMD:
+                        return buildFMDIndex_(indexDir, argVec, k);
+                    default:
+                        logger_->warn("Unexpected index type; cannot build");
+                        return false;
+                }
+            }
+
+            bool loaded() { return loaded_; }
+            bwaidx_t* bwaIndex() { return idx_; }
+
+            RapMapSAIndex* quasiIndex() { return quasiIndex_.get(); }
+
+            bool hasAuxKmerIndex() { return versionInfo_.hasAuxKmerIndex(); }
+            KmerIntervalMap& auxIndex() { return auxIdx_; }
+
+            IndexType indexType() { return versionInfo_.indexType(); }
+
+        private:
+            bool buildFMDIndex_(boost::filesystem::path indexDir,
+                                std::vector<const char*>& bwaArgVec,
+                                uint32_t k) {
                 namespace bfs = boost::filesystem;
                 char* bwaArgv[] = { const_cast<char*>(bwaArgVec[0]),
                     const_cast<char*>(bwaArgVec[1]),
@@ -155,21 +169,88 @@ class SalmonIndex{
                 }
 
                 bfs::path versionFile = indexDir / "versionInfo.json";
-                versionInfo_.indexVersion(salmon::indexVersion); 
+                versionInfo_.indexVersion(salmon::indexVersion);
                 versionInfo_.hasAuxKmerIndex(buildAux);
                 versionInfo_.auxKmerLength(k);
                 versionInfo_.save(versionFile);
                 return (ret == 0);
             }
 
-            bool loaded() { return loaded_; }
-            bwaidx_t* bwaIndex() { return idx_; }
+            bool buildQuasiIndex_(boost::filesystem::path indexDir,
+                                  std::vector<const char*>& quasiArgVec,
+                                  uint32_t k) {
+                namespace bfs = boost::filesystem;
+                char* quasiArgv[] = { const_cast<char*>(quasiArgVec[0]),
+                    const_cast<char*>(quasiArgVec[1]),
+                    const_cast<char*>(quasiArgVec[2]),
+                    const_cast<char*>(quasiArgVec[3]),
+                    const_cast<char*>(quasiArgVec[4]),
+                    const_cast<char*>(quasiArgVec[5]),
+                    const_cast<char*>(quasiArgVec[6])
+                };
+                int quasiArgc = 7;
 
-            bool hasAuxKmerIndex() { return versionInfo_.hasAuxKmerIndex(); }
-            KmerIntervalMap& auxIndex() { return auxIdx_; }
-        private:
+                int ret = rapMapSAIndex(quasiArgc, quasiArgv);
+
+                bfs::path versionFile = indexDir / "versionInfo.json";
+                versionInfo_.indexVersion(salmon::indexVersion);
+                versionInfo_.hasAuxKmerIndex(false);
+                versionInfo_.auxKmerLength(k);
+                versionInfo_.indexType(IndexType::QUASI);
+                versionInfo_.save(versionFile);
+                return (ret == 0);
+            }
+
+          bool loadFMDIndex_(const boost::filesystem::path& indexDir) {
+              namespace bfs = boost::filesystem;
+              if (versionInfo_.hasAuxKmerIndex()) {
+                  // Read the aux index
+                  logger_->info("Loading auxiliary index");
+                  bfs::path auxIdxFile = indexDir / "aux.idx";
+                  auxIdx_.setK(versionInfo_.auxKmerLength());
+                  auxIdx_.load(auxIdxFile);
+                  logger_->info("Auxiliary index contained {} k-mers", auxIdx_.size());
+                  logger_->info("done");
+              }
+
+              logger_->info("Loading BWA index");
+              // Read the actual BWA index
+              { // mem-based
+                  boost::filesystem::path indexPath = indexDir / "bwaidx";
+                  //if ((idx_ = bwa_idx_load(indexPath.string().c_str(), BWA_IDX_BWT|BWA_IDX_BNS|BWA_IDX_PAC)) == 0) {
+                  if ((idx_ = bwa_idx_load(indexPath.string().c_str(), BWA_IDX_ALL)) == 0) {
+                      fmt::print(stderr, "Couldn't open index [{}] --- ", indexPath);
+                      fmt::print(stderr, "Please make sure that 'salmon index' has been run successfully\n");
+                      std::exit(1);
+                  }
+              }
+              logger_->info("done");
+              return true;
+          }
+
+          bool loadQuasiIndex_(const boost::filesystem::path& indexDir) {
+              namespace bfs = boost::filesystem;
+              logger_->info("Loading Quasi index");
+              // Read the actual Quasi index
+              { // quasi-based
+                  boost::filesystem::path indexPath = indexDir;
+                  std::string indexStr = indexDir.string();
+                  if (indexStr.back() != '/') { indexStr.push_back('/'); }
+                  quasiIndex_.reset(new RapMapSAIndex);
+                  if (!quasiIndex_->load(indexDir.string())) {
+                      fmt::print(stderr, "Couldn't open index [{}] --- ", indexPath);
+                      fmt::print(stderr, "Please make sure that 'salmon index' has been run successfully\n");
+                      std::exit(1);
+                  }
+              }
+              logger_->info("done");
+              return true;
+          }
+
+
           bool loaded_;
           SalmonIndexVersionInfo versionInfo_;
+    	  std::unique_ptr<RapMapSAIndex> quasiIndex_{nullptr};
           bwaidx_t *idx_{nullptr};
           KmerIntervalMap auxIdx_;
           std::shared_ptr<spdlog::logger> logger_;

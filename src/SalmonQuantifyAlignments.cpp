@@ -5,7 +5,7 @@ extern "C" {
 }
 
 // for cpp-format
-#include "format.h"
+#include "spdlog/details/format.h"
 
 // are these used?
 #include <boost/dynamic_bitset.hpp>

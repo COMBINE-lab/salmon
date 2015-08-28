@@ -3,7 +3,7 @@
 
 #include <boost/config.hpp> // for BOOST_LIKELY/BOOST_UNLIKELY
 
-#include "format.h"
+#include "spdlog/details/format.h"
 #include "SequenceBiasModel.hpp"
 #include "LibraryFormat.hpp"
 #include "Transcript.hpp"

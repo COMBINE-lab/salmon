@@ -65,6 +65,8 @@ XXH32        6.8 GB/s            6.0 GB/s
 */
 
 #pragma once
+#ifndef XXHASH_H
+#define XXHASH_H
 
 #if defined (__cplusplus)
 extern "C" {
@@ -190,3 +192,5 @@ When you are done, don't forget to free XXH state space, using typically XXHnn_f
 #if defined (__cplusplus)
 }
 #endif
+
+#endif // XXHASH_H

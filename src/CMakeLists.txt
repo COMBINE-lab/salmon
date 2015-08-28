@@ -1,3 +1,17 @@
+include_directories( 
+${GAT_SOURCE_DIR}/include
+${GAT_SOURCE_DIR}/include/eigen3
+${GAT_SOURCE_DIR}/external
+${GAT_SOURCE_DIR}/external/cereal/include
+${GAT_SOURCE_DIR}/external/install/include
+${GAT_SOURCE_DIR}/external/install/include/jellyfish-2.1.3
+${GAT_SOURCE_DIR}/external/install/include/bwa
+${ZLIB_INCLUDE_DIR}
+${TBB_INCLUDE_DIRS}
+${Boost_INCLUDE_DIRS}
+${GAT_SOURCE_DIR}/external/install/include/rapmap
+)
+
 set ( SALMON_MAIN_SRCS
 QSufSort.c
 is.c
@@ -14,6 +28,15 @@ FragmentStartPositionDistribution.cpp
 SequenceBiasModel.cpp
 StadenUtils.cpp
 TranscriptGroup.cpp
+${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapFileSystem.cpp
+${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndexer.cpp
+${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndex.cpp
+${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAMapper.cpp
+${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapUtils.cpp
+${GAT_SOURCE_DIR}/external/install/src/rapmap/HitManager.cpp
+${GAT_SOURCE_DIR}/external/install/src/rapmap/rank9b.cpp
+${GAT_SOURCE_DIR}/external/install/src/rapmap/bit_array.c
+${GAT_SOURCE_DIR}/external/install/src/rapmap/sais.c
 )
 
 set (SALMON_ALIGN_SRCS
@@ -35,20 +58,7 @@ ComputeBiasFeatures.cpp
 PerformBiasCorrection.cpp
 cokus.cpp
 merge_files.cc
-format.cc
-)
-
-include_directories( 
-${GAT_SOURCE_DIR}/include
-${GAT_SOURCE_DIR}/include/eigen3
-${GAT_SOURCE_DIR}/external
-${GAT_SOURCE_DIR}/external/cereal/include
-${GAT_SOURCE_DIR}/external/install/include
-${GAT_SOURCE_DIR}/external/install/include/jellyfish-2.1.3
-${GAT_SOURCE_DIR}/external/install/include/bwa
-${ZLIB_INCLUDE_DIR}
-${TBB_INCLUDE_DIRS}
-${Boost_INCLUDE_DIRS}
+#format.cc
 )
 
 link_directories( 

@@ -6,7 +6,7 @@
 #include "LibraryFormat.hpp"
 #include "SalmonUtils.hpp"
 
-#include "format.h"
+#include "spdlog/details/format.h"
 
 struct ReadPair {
     bam_seq_t* read1 = nullptr;

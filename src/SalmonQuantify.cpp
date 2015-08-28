@@ -41,7 +41,7 @@
 #include "btree_set.h"
 
 // C++ string formatting library
-#include "format.h"
+#include "spdlog/details/format.h"
 
 // C Includes for BWA
 #include <cstdio>
@@ -116,6 +116,10 @@ extern "C" {
 #include "EquivalenceClassBuilder.hpp"
 #include "CollapsedEMOptimizer.hpp"
 #include "CollapsedGibbsSampler.hpp"
+#include "RapMapUtils.hpp"
+#include "HitManager.hpp"
+#include "SASearcher.hpp"
+#include "SACollector.hpp"
 
 /* This allows us to use CLASP for optimal MEM
  * chaining.  However, this seems to be neither
@@ -131,6 +135,11 @@ extern "C" {
 
 extern unsigned char nst_nt4_table[256];
 char const* bwa_pg = "cha";
+
+/****** QUASI MAPPING DECLARATIONS *********/
+using MateStatus = rapmap::utils::MateStatus;
+using QuasiAlignment = rapmap::utils::QuasiAlignment;
+/****** QUASI MAPPING DECLARATIONS  *******/
 
 
 /******* STUFF THAT IS STATIC IN BWAMEM THAT WE NEED HERE --- Just re-define it *************/
@@ -172,13 +181,13 @@ static void mem_collect_intv(const SalmonOpts& sopt, const mem_opt_t *opt, Salmo
         uint32_t klen = auxIdx.k();
         while (x < len) {
             if (seq[x] < 4) {
-                // Make sure there are at least k bases left 
-                if (len - x < klen) { x = len; continue; } 
+                // Make sure there are at least k bases left
+                if (len - x < klen) { x = len; continue; }
                 // search for this key in the auxiliary index
                 KmerKey kmer(const_cast<uint8_t*>(&(seq[x])), klen);
                 auto it = auxIdx.find(kmer);
                 // if we can't find it, move to the next key
-                if (it == auxIdx.end()) { ++x; continue; } 
+                if (it == auxIdx.end()) { ++x; continue; }
                 // otherwise, start the search using the initial interval @it->second from the hash
                 int xb = x;
                 x = bwautils::bwt_smem1_with_kmer(bwt, len, seq, x, start_width, it->second, &a->mem1, a->tmpv);
@@ -204,7 +213,7 @@ static void mem_collect_intv(const SalmonOpts& sopt, const mem_opt_t *opt, Salmo
         }
     }
 
-    // For sensitive / extra-sensitive mode only 
+    // For sensitive / extra-sensitive mode only
     if (sopt.sensitive or sopt.extraSeedPass) {
         // second pass: find MEMs inside a long SMEM
         old_n = a->mem.n;
@@ -220,8 +229,8 @@ static void mem_collect_intv(const SalmonOpts& sopt, const mem_opt_t *opt, Salmo
                     kv_push(bwtintv_t, a->mem, a->mem1.a[i]);
         }
     }
-    
-    // For extra-sensitive mode only 
+
+    // For extra-sensitive mode only
     // third pass: LAST-like
     if (sopt.extraSeedPass and opt->max_mem_intv > 0) {
         x = 0;
@@ -311,24 +320,30 @@ class SMEMAlignment {
         uint32_t fragLength_;
 };
 
-using AlnGroupVec = std::vector<AlignmentGroup<SMEMAlignment>>;
-using AlnGroupVecRange = boost::iterator_range<AlnGroupVec::iterator>;
+template <typename AlnT>
+using AlnGroupVec = std::vector<AlignmentGroup<AlnT>>;
+
+template <typename AlnT>
+using AlnGroupVecRange = boost::iterator_range<typename AlnGroupVec<AlnT>::iterator>;
 
 #define __MOODYCAMEL__
 #if defined(__MOODYCAMEL__)
- using AlnGroupQueue = moodycamel::ConcurrentQueue<AlignmentGroup<SMEMAlignment>*>;
+ template <typename AlnT>
+ using AlnGroupQueue = moodycamel::ConcurrentQueue<AlignmentGroup<AlnT>*>;
 #else
- using AlnGroupQueue = tbb::concurrent_queue<AlignmentGroup<SMEMAlignment>*>;
+ template <typename AlnT>
+ using AlnGroupQueue = tbb::concurrent_queue<AlignmentGroup<AlnT>*>;
 #endif
 
+template <typename AlnT>
 void processMiniBatch(
         ReadExperiment& readExp,
         ForgettingMassCalculator& fmCalc,
         uint64_t firstTimestepOfRound,
         ReadLibrary& readLib,
         const SalmonOpts& salmonOpts,
-        //std::vector<AlignmentGroup<SMEMAlignment>*>& batchHits,
-        AlnGroupVecRange batchHits,
+        //std::vector<AlignmentGroup<AlnT>*>& batchHits,
+        AlnGroupVecRange<AlnT> batchHits,
         std::vector<Transcript>& transcripts,
         ClusterForest& clusterForest,
         FragmentLengthDistribution& fragLengthDist,
@@ -630,7 +645,7 @@ void processMiniBatch(
                         1.0,
                         logForgettingMass, updateCounts);
             } else { // or the appropriate clusters
-                clusterForest.mergeClusters<SMEMAlignment>(alnGroup.alignments().begin(), alnGroup.alignments().end());
+                clusterForest.mergeClusters<AlnT>(alnGroup.alignments().begin(), alnGroup.alignments().end());
                 clusterForest.updateCluster(
                         alnGroup.alignments().front().transcriptID(),
                         1.0,
@@ -776,13 +791,13 @@ class TranscriptHitList {
 
             uint32_t cov = isRC ? revCov : fwdCov;
             if (cov > maxClusterCount) {
-                maxClusterCount = cov; 
+                maxClusterCount = cov;
                 maxClusterPos = votePos;
                 maxClusterScore = maxClusterCount / static_cast<double>(readLen);
                 updatedMaxScore = true;
             }
             return updatedMaxScore;
- 
+
         }
 
         bool computeBestLoc_(std::vector<KmerVote>& sVotes, Transcript& transcript,
@@ -1170,7 +1185,7 @@ inline void collectHitsForRead(SalmonIndex* sidx, const bwtintv_v* a, smem_aux_t
         int qstart = p->info>>32;
         uint32_t qend = static_cast<uint32_t>(p->info);
         int step, count, slen = (qend - qstart); // seed length
-        
+
         /*
         if (firstSeedLen > -1) {
             if (slen < firstSeedLen) { return; }
@@ -1509,7 +1524,7 @@ inline void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_q
     std::vector<JointHitPtr> jointHits; // haha (variable name)!
     jointHits.reserve(minHitList.size());
 
-    // vector-based code 
+    // vector-based code
     // Sort the left and right hits
     std::sort(leftHits.begin(), leftHits.end(),
               [](CoverageCalculator& c1, CoverageCalculator& c2) -> bool {
@@ -1540,7 +1555,7 @@ inline void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_q
             }
         }
     }
-    // End vector-based code 
+    // End vector-based code
 
     /* map based code
     {
@@ -1929,7 +1944,33 @@ template <typename ParserT, typename CoverageCalculator>
 void processReadsMEM(ParserT* parser,
                ReadExperiment& readExp,
                ReadLibrary& rl,
-               AlnGroupVec& structureVec,
+               AlnGroupVec<QuasiAlignment>& structureVec,
+               std::atomic<uint64_t>& numObservedFragments,
+               std::atomic<uint64_t>& numAssignedFragments,
+               std::atomic<uint64_t>& validHits,
+               std::atomic<uint64_t>& upperBoundHits,
+               SalmonIndex* sidx,
+               std::vector<Transcript>& transcripts,
+               ForgettingMassCalculator& fmCalc,
+               ClusterForest& clusterForest,
+               FragmentLengthDistribution& fragLengthDist,
+               mem_opt_t* memOptions,
+               const SalmonOpts& salmonOpts,
+               double coverageThresh,
+	           std::mutex& iomutex,
+               bool initialRound,
+               bool& burnedIn,
+               volatile bool& writeToCache) {
+    	// ERROR
+	salmonOpts.jointLog->error("Quasimapping cannot be used with the FMD index --- please report this bug on GitHub");
+	std::exit(1);
+}
+
+template <typename ParserT, typename CoverageCalculator>
+void processReadsMEM(ParserT* parser,
+               ReadExperiment& readExp,
+               ReadLibrary& rl,
+               AlnGroupVec<SMEMAlignment>& structureVec,
                std::atomic<uint64_t>& numObservedFragments,
                std::atomic<uint64_t>& numAssignedFragments,
                std::atomic<uint64_t>& validHits,
@@ -1969,7 +2010,7 @@ void processReadsMEM(ParserT* parser,
   size_t locRead{0};
   uint64_t localUpperBoundHits{0};
   size_t rangeSize{0};
- 
+
   while(true) {
     typename ParserT::job j(*parser); // Get a job from the parser: a bunch of read (at most max_read_group)
     if(j.is_empty()) break;           // If got nothing, quit
@@ -2025,13 +2066,349 @@ void processReadsMEM(ParserT* parser,
     } // end for i < j->nb_filled
 
     prevObservedFrags = numObservedFragments;
-    AlnGroupVecRange hitLists = boost::make_iterator_range(structureVec.begin(), structureVec.begin() + rangeSize); 
-    processMiniBatch(readExp, fmCalc,firstTimestepOfRound, rl, salmonOpts, hitLists, transcripts, clusterForest,
+    AlnGroupVecRange<SMEMAlignment> hitLists = boost::make_iterator_range(structureVec.begin(), structureVec.begin() + rangeSize);
+    processMiniBatch<SMEMAlignment>(readExp, fmCalc,firstTimestepOfRound, rl, salmonOpts, hitLists, transcripts, clusterForest,
                      fragLengthDist, numAssignedFragments, eng, initialRound, burnedIn);
   }
   smem_aux_destroy(auxHits);
   smem_itr_destroy(itr);
 }
+
+
+
+/// START QUASI
+
+// To use the parser in the following, we get "jobs" until none is
+// available. A job behaves like a pointer to the type
+// jellyfish::sequence_list (see whole_sequence_parser.hpp).
+void processReadsQuasi(paired_parser* parser,
+               ReadExperiment& readExp,
+               ReadLibrary& rl,
+               AlnGroupVec<SMEMAlignment>& structureVec,
+               std::atomic<uint64_t>& numObservedFragments,
+               std::atomic<uint64_t>& numAssignedFragments,
+               std::atomic<uint64_t>& validHits,
+               std::atomic<uint64_t>& upperBoundHits,
+               SalmonIndex* sidx,
+               std::vector<Transcript>& transcripts,
+               ForgettingMassCalculator& fmCalc,
+               ClusterForest& clusterForest,
+               FragmentLengthDistribution& fragLengthDist,
+               mem_opt_t* memOptions,
+               const SalmonOpts& salmonOpts,
+               double coverageThresh,
+	           std::mutex& iomutex,
+               bool initialRound,
+               bool& burnedIn,
+               volatile bool& writeToCache) {
+
+    	// ERROR
+	salmonOpts.jointLog->error("MEM-mapping cannot be used with the Quasi index --- please report this bug on GitHub");
+	std::exit(1);
+}
+
+void processReadsQuasi(single_parser* parser,
+               ReadExperiment& readExp,
+               ReadLibrary& rl,
+               AlnGroupVec<SMEMAlignment>& structureVec,
+               std::atomic<uint64_t>& numObservedFragments,
+               std::atomic<uint64_t>& numAssignedFragments,
+               std::atomic<uint64_t>& validHits,
+               std::atomic<uint64_t>& upperBoundHits,
+               SalmonIndex* sidx,
+               std::vector<Transcript>& transcripts,
+               ForgettingMassCalculator& fmCalc,
+               ClusterForest& clusterForest,
+               FragmentLengthDistribution& fragLengthDist,
+               mem_opt_t* memOptions,
+               const SalmonOpts& salmonOpts,
+               double coverageThresh,
+	           std::mutex& iomutex,
+               bool initialRound,
+               bool& burnedIn,
+               volatile bool& writeToCache) {
+    	// ERROR
+	salmonOpts.jointLog->error("MEM-mapping cannot be used with the Quasi index --- please report this bug on GitHub");
+	std::exit(1);
+}
+
+
+void processReadsQuasi(paired_parser* parser,
+               ReadExperiment& readExp,
+               ReadLibrary& rl,
+               AlnGroupVec<QuasiAlignment>& structureVec,
+               std::atomic<uint64_t>& numObservedFragments,
+               std::atomic<uint64_t>& numAssignedFragments,
+               std::atomic<uint64_t>& validHits,
+               std::atomic<uint64_t>& upperBoundHits,
+               SalmonIndex* sidx,
+               std::vector<Transcript>& transcripts,
+               ForgettingMassCalculator& fmCalc,
+               ClusterForest& clusterForest,
+               FragmentLengthDistribution& fragLengthDist,
+               mem_opt_t* memOptions,
+               const SalmonOpts& salmonOpts,
+               double coverageThresh,
+	           std::mutex& iomutex,
+               bool initialRound,
+               bool& burnedIn,
+               volatile bool& writeToCache) {
+  uint64_t count_fwd = 0, count_bwd = 0;
+  // Seed with a real random value, if available
+  std::random_device rd;
+
+  // Create a random uniform distribution
+  std::default_random_engine eng(rd());
+
+  uint64_t prevObservedFrags{1};
+  uint64_t leftHitCount{0};
+  uint64_t hitListCount{0};
+
+  auto expectedLibType = rl.format();
+
+  uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
+
+  size_t locRead{0};
+  uint64_t localUpperBoundHits{0};
+  size_t rangeSize{0};
+
+  bool tooManyHits{false};
+  size_t maxNumHits{salmonOpts.maxReadOccs};
+  size_t readLen{0};
+  SACollector hitCollector(sidx->quasiIndex());
+  SASearcher saSearcher(sidx->quasiIndex());
+  std::vector<QuasiAlignment> leftHits;
+  std::vector<QuasiAlignment> rightHits;
+  rapmap::utils::HitCounters hctr;
+
+  while(true) {
+    typename paired_parser::job j(*parser); // Get a job from the parser: a bunch of read (at most max_read_group)
+    if(j.is_empty()) break;           // If got nothing, quit
+
+    rangeSize = j->nb_filled;
+    if (rangeSize > structureVec.size()) {
+        salmonOpts.jointLog->error("rangeSize = {}, but structureVec.size() = {} --- this shouldn't happen.\n"
+                                   "Please report this bug on GitHub", rangeSize, structureVec.size());
+        std::exit(1);
+    }
+
+    for(size_t i = 0; i < j->nb_filled; ++i) { // For all the read in this batch
+        readLen = j->data[i].first.seq.length();
+        tooManyHits = false;
+        localUpperBoundHits = 0;
+        auto& jointHitGroup = structureVec[i];
+        auto& jointHits = jointHitGroup.alignments();
+        jointHitGroup.clearAlignments();
+        leftHits.clear();
+        rightHits.clear();
+
+        bool lh = hitCollector(j->data[i].first.seq,
+                               leftHits, saSearcher,
+                               MateStatus::PAIRED_END_LEFT);
+        bool rh = hitCollector(j->data[i].second.seq,
+                               rightHits, saSearcher,
+                               MateStatus::PAIRED_END_RIGHT);
+
+        rapmap::utils::mergeLeftRightHits(
+                               leftHits, rightHits, jointHits,
+                               readLen, maxNumHits, tooManyHits, hctr);
+
+        if (initialRound) {
+            upperBoundHits += (jointHits.size() > 0);;
+        }
+
+        // If the read mapped to > maxReadOccs places, discard it
+        if (jointHits.size() > salmonOpts.maxReadOccs ) { jointHitGroup.clearAlignments(); }
+
+        if (!salmonOpts.allowOrphans) {
+            if (jointHits.size() > 0 and jointHits.front().mateStatus != MateStatus::PAIRED_END_PAIRED) {
+                jointHitGroup.clearAlignments();
+            }
+        }
+
+        for (auto& h : jointHits) {
+            switch (h.mateStatus) {
+                case MateStatus::PAIRED_END_LEFT:
+                    {
+                        h.format = salmon::utils::hitType(h.pos, h.fwd);
+                    }
+                    break;
+                case MateStatus::PAIRED_END_RIGHT:
+                    {
+                        h.format = salmon::utils::hitType(h.pos, h.fwd);
+                    }
+                    break;
+                case MateStatus::PAIRED_END_PAIRED:
+                    {
+                        uint32_t end1Pos = (h.fwd) ? h.pos : h.pos + h.readLen;
+                        uint32_t end2Pos = (h.mateIsFwd) ? h.matePos : h.matePos + h.mateLen;
+                		bool canDovetail = false;
+                        h.format = salmon::utils::hitType(end1Pos, h.fwd, h.readLen,
+                                                          end2Pos, h.mateIsFwd, h.mateLen, canDovetail);
+                    }
+                    break;
+            }
+        }
+
+        validHits += jointHits.size();
+        locRead++;
+        ++numObservedFragments;
+        if (numObservedFragments % 50000 == 0) {
+    	    iomutex.lock();
+            const char RESET_COLOR[] = "\x1b[0m";
+            char green[] = "\x1b[30m";
+            green[3] = '0' + static_cast<char>(fmt::GREEN);
+            char red[] = "\x1b[30m";
+            red[3] = '0' + static_cast<char>(fmt::RED);
+            if (initialRound) {
+                fmt::print(stderr, "\033[A\r\r{}processed{} {} {}fragments{}\n", green, red, numObservedFragments, green, RESET_COLOR);
+                fmt::print(stderr, "hits per frag:  {}; hit upper bound: {}",
+                           validHits / static_cast<float>(prevObservedFrags),
+                           upperBoundHits.load());
+            } else {
+                fmt::print(stderr, "\r\r{}processed{} {} {}fragments{}", green, red, numObservedFragments, green, RESET_COLOR);
+            }
+    	    iomutex.unlock();
+        }
+
+
+    } // end for i < j->nb_filled
+
+    prevObservedFrags = numObservedFragments;
+    AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(structureVec.begin(), structureVec.begin() + rangeSize);
+    processMiniBatch<QuasiAlignment>(readExp, fmCalc,firstTimestepOfRound, rl, salmonOpts, hitLists, transcripts, clusterForest,
+                     fragLengthDist, numAssignedFragments, eng, initialRound, burnedIn);
+  }
+}
+
+// SINGLE END
+
+// To use the parser in the following, we get "jobs" until none is
+// available. A job behaves like a pointer to the type
+// jellyfish::sequence_list (see whole_sequence_parser.hpp).
+void processReadsQuasi(single_parser* parser,
+               ReadExperiment& readExp,
+               ReadLibrary& rl,
+               AlnGroupVec<QuasiAlignment>& structureVec,
+               std::atomic<uint64_t>& numObservedFragments,
+               std::atomic<uint64_t>& numAssignedFragments,
+               std::atomic<uint64_t>& validHits,
+               std::atomic<uint64_t>& upperBoundHits,
+               SalmonIndex* sidx,
+               std::vector<Transcript>& transcripts,
+               ForgettingMassCalculator& fmCalc,
+               ClusterForest& clusterForest,
+               FragmentLengthDistribution& fragLengthDist,
+               mem_opt_t* memOptions,
+               const SalmonOpts& salmonOpts,
+               double coverageThresh,
+	           std::mutex& iomutex,
+               bool initialRound,
+               bool& burnedIn,
+               volatile bool& writeToCache) {
+  uint64_t count_fwd = 0, count_bwd = 0;
+  // Seed with a real random value, if available
+  std::random_device rd;
+
+  // Create a random uniform distribution
+  std::default_random_engine eng(rd());
+
+  uint64_t prevObservedFrags{1};
+  uint64_t leftHitCount{0};
+  uint64_t hitListCount{0};
+
+  auto expectedLibType = rl.format();
+
+
+  uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
+
+  size_t locRead{0};
+  uint64_t localUpperBoundHits{0};
+  size_t rangeSize{0};
+
+  bool tooManyHits{false};
+  size_t readLen{0};
+  size_t maxNumHits{salmonOpts.maxReadOccs};
+  SACollector hitCollector(sidx->quasiIndex());
+  SASearcher saSearcher(sidx->quasiIndex());
+  rapmap::utils::HitCounters hctr;
+
+  while(true) {
+    typename single_parser::job j(*parser); // Get a job from the parser: a bunch of read (at most max_read_group)
+    if(j.is_empty()) break;           // If got nothing, quit
+
+    rangeSize = j->nb_filled;
+    if (rangeSize > structureVec.size()) {
+        salmonOpts.jointLog->error("rangeSize = {}, but structureVec.size() = {} --- this shouldn't happen.\n"
+                                   "Please report this bug on GitHub", rangeSize, structureVec.size());
+        std::exit(1);
+    }
+
+    for(size_t i = 0; i < j->nb_filled; ++i) { // For all the read in this batch
+        readLen = j->data[i].seq.length();
+        tooManyHits = false;
+        localUpperBoundHits = 0;
+        auto& jointHitGroup = structureVec[i];
+        auto& jointHits = jointHitGroup.alignments();
+        jointHitGroup.clearAlignments();
+
+        bool lh = hitCollector(j->data[i].seq,
+                               jointHits, saSearcher,
+                               MateStatus::SINGLE_END);
+
+        if (initialRound) {
+            upperBoundHits += (jointHits.size() > 0);;
+        }
+
+        // If the read mapped to > maxReadOccs places, discard it
+        if (jointHits.size() > salmonOpts.maxReadOccs ) { jointHitGroup.clearAlignments(); }
+
+        for (auto& h : jointHits) {
+            switch (h.mateStatus) {
+                case MateStatus::SINGLE_END:
+                    {
+                        h.format = salmon::utils::hitType(h.pos, h.fwd);
+                    }
+                    break;
+            }
+        }
+
+        validHits += jointHits.size();
+        locRead++;
+        ++numObservedFragments;
+        if (numObservedFragments % 50000 == 0) {
+    	    iomutex.lock();
+            const char RESET_COLOR[] = "\x1b[0m";
+            char green[] = "\x1b[30m";
+            green[3] = '0' + static_cast<char>(fmt::GREEN);
+            char red[] = "\x1b[30m";
+            red[3] = '0' + static_cast<char>(fmt::RED);
+            if (initialRound) {
+                fmt::print(stderr, "\033[A\r\r{}processed{} {} {}fragments{}\n", green, red, numObservedFragments, green, RESET_COLOR);
+                fmt::print(stderr, "hits per frag:  {}; hit upper bound: {}",
+                           validHits / static_cast<float>(prevObservedFrags),
+                           upperBoundHits.load());
+            } else {
+                fmt::print(stderr, "\r\r{}processed{} {} {}fragments{}", green, red, numObservedFragments, green, RESET_COLOR);
+            }
+    	    iomutex.unlock();
+        }
+
+
+    } // end for i < j->nb_filled
+
+    prevObservedFrags = numObservedFragments;
+    AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(structureVec.begin(), structureVec.begin() + rangeSize);
+    processMiniBatch<QuasiAlignment>(readExp, fmCalc,firstTimestepOfRound, rl, salmonOpts, hitLists, transcripts, clusterForest,
+                     fragLengthDist, numAssignedFragments, eng, initialRound, burnedIn);
+  }
+}
+
+/// DONE QUASI
+
+
+
+
 
 int performBiasCorrection(boost::filesystem::path featPath,
                           boost::filesystem::path expPath,
@@ -2042,6 +2419,7 @@ int performBiasCorrection(boost::filesystem::path featPath,
                           boost::filesystem::path outPath,
                           size_t numThreads);
 
+template <typename AlnT>
 void processReadLibrary(
         ReadExperiment& readExp,
         ReadLibrary& rl,
@@ -2061,13 +2439,15 @@ void processReadLibrary(
         bool greedyChain,
         std::mutex& iomutex,
         size_t numThreads,
-        std::vector<AlnGroupVec>& structureVec,
+        std::vector<AlnGroupVec<AlnT>>& structureVec,
         volatile bool& writeToCache){
 
             std::vector<std::thread> threads;
 
             std::atomic<uint64_t> numValidHits{0};
             rl.checkValid();
+
+            auto indexType = sidx->indexType();
 
             std::unique_ptr<paired_parser> pairedParserPtr{nullptr};
             std::unique_ptr<single_parser> singleParserPtr{nullptr};
@@ -2084,33 +2464,71 @@ void processReadLibrary(
                         paired_parser(4 * numThreads, maxReadGroup,
                                       concurrentFile, readFiles, readFiles + 2));
 
-                for(int i = 0; i < numThreads; ++i)  {
-                    // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
-                    // change value before the lambda below is evaluated --- crazy!
-                    auto threadFun = [&,i]() -> void {
-                                processReadsMEM<paired_parser, TranscriptHitList>(
-                                pairedParserPtr.get(),
-                                readExp,
-                                rl,
-                                structureVec[i],
-                                numObservedFragments,
-                                numAssignedFragments,
-                                numValidHits,
-                                upperBoundHits,
-                                sidx,
-                                transcripts,
-                                fmCalc,
-                                clusterForest,
-                                fragLengthDist,
-                                memOptions,
-                                salmonOpts,
-                                coverageThresh,
-                                iomutex,
-                                initialRound,
-                                burnedIn,
-                                writeToCache);
-                    };
-                    threads.emplace_back(threadFun);
+                switch (indexType) {
+                    case IndexType::FMD:
+                        {
+                            for(int i = 0; i < numThreads; ++i)  {
+                                // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
+                                // change value before the lambda below is evaluated --- crazy!
+                                auto threadFun = [&,i]() -> void {
+                                    processReadsMEM<paired_parser, TranscriptHitList>(
+                                            pairedParserPtr.get(),
+                                            readExp,
+                                            rl,
+                                            structureVec[i],
+                                            numObservedFragments,
+                                            numAssignedFragments,
+                                            numValidHits,
+                                            upperBoundHits,
+                                            sidx,
+                                            transcripts,
+                                            fmCalc,
+                                            clusterForest,
+                                            fragLengthDist,
+                                            memOptions,
+                                            salmonOpts,
+                                            coverageThresh,
+                                            iomutex,
+                                            initialRound,
+                                            burnedIn,
+                                            writeToCache);
+                                };
+                                threads.emplace_back(threadFun);
+                            }
+                            break;
+                    case IndexType::QUASI:
+                        {
+                            for(int i = 0; i < numThreads; ++i)  {
+                                // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
+                                // change value before the lambda below is evaluated --- crazy!
+                                auto threadFun = [&,i]() -> void {
+                                    processReadsQuasi(
+                                            pairedParserPtr.get(),
+                                            readExp,
+                                            rl,
+                                            structureVec[i],
+                                            numObservedFragments,
+                                            numAssignedFragments,
+                                            numValidHits,
+                                            upperBoundHits,
+                                            sidx,
+                                            transcripts,
+                                            fmCalc,
+                                            clusterForest,
+                                            fragLengthDist,
+                                            memOptions,
+                                            salmonOpts,
+                                            coverageThresh,
+                                            iomutex,
+                                            initialRound,
+                                            burnedIn,
+                                            writeToCache);
+                                };
+                                threads.emplace_back(threadFun);
+                            }
+                        }
+                            break;
+                    } // end switch
                 }
                 for(int i = 0; i < numThreads; ++i) { threads[i].join(); }
 
@@ -2128,37 +2546,77 @@ void processReadLibrary(
                                       concurrentFile,
                                       streams));
 
-                for(int i = 0; i < numThreads; ++i)  {
-                    // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
-                    // change value before the lambda below is evaluated --- crazy!
-                    auto threadFun = [&,i]() -> void {
-                                processReadsMEM<single_parser, TranscriptHitList>(
-                                singleParserPtr.get(),
-                                readExp,
-                                rl,
-                                structureVec[i],
-                                numObservedFragments,
-                                numAssignedFragments,
-                                numValidHits,
-                                upperBoundHits,
-                                sidx,
-                                transcripts,
-                                fmCalc,
-                                clusterForest,
-                                fragLengthDist,
-                                memOptions,
-                                salmonOpts,
-                                coverageThresh,
-                                iomutex,
-                                initialRound,
-                                burnedIn,
-                                writeToCache);
-                    };
-                    threads.emplace_back(threadFun);
+                switch (indexType) {
+                    case IndexType::FMD:
+                        {
+                            for(int i = 0; i < numThreads; ++i)  {
+                                // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
+                                // change value before the lambda below is evaluated --- crazy!
+                                auto threadFun = [&,i]() -> void {
+                                    processReadsMEM<single_parser, TranscriptHitList>(
+                                            singleParserPtr.get(),
+                                            readExp,
+                                            rl,
+                                            structureVec[i],
+                                            numObservedFragments,
+                                            numAssignedFragments,
+                                            numValidHits,
+                                            upperBoundHits,
+                                            sidx,
+                                            transcripts,
+                                            fmCalc,
+                                            clusterForest,
+                                            fragLengthDist,
+                                            memOptions,
+                                            salmonOpts,
+                                            coverageThresh,
+                                            iomutex,
+                                            initialRound,
+                                            burnedIn,
+                                            writeToCache);
+                                };
+                                threads.emplace_back(threadFun);
+                            }
+                        }
+                        break;
+
+                    case IndexType::QUASI:
+                        {
+                            for(int i = 0; i < numThreads; ++i)  {
+                                // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
+                                // change value before the lambda below is evaluated --- crazy!
+                                auto threadFun = [&,i]() -> void {
+                                    processReadsQuasi(
+                                            singleParserPtr.get(),
+                                            readExp,
+                                            rl,
+                                            structureVec[i],
+                                            numObservedFragments,
+                                            numAssignedFragments,
+                                            numValidHits,
+                                            upperBoundHits,
+                                            sidx,
+                                            transcripts,
+                                            fmCalc,
+                                            clusterForest,
+                                            fragLengthDist,
+                                            memOptions,
+                                            salmonOpts,
+                                            coverageThresh,
+                                            iomutex,
+                                            initialRound,
+                                            burnedIn,
+                                            writeToCache);
+                                };
+                                threads.emplace_back(threadFun);
+                            }
+                        }
+                        break;
                 }
                 for(int i = 0; i < numThreads; ++i) { threads[i].join(); }
             } // ------ END Single-end --------
 }
+
 
 /**
   *  Quantify the targets given in the file `transcriptFile` using the
@@ -2167,6 +2625,7 @@ void processReadLibrary(
   *  specified by `libFmt`.
   *
   */
+template <typename AlnT>
 void quantifyLibrary(
         ReadExperiment& experiment,
         bool greedyChain,
@@ -2204,7 +2663,7 @@ void quantifyLibrary(
 
     size_t maxReadGroup{miniBatchSize};
     uint32_t structCacheSize = numQuantThreads * maxReadGroup * 10;
-    
+
     // EQCLASS
     bool terminate{false};
 
@@ -2237,15 +2696,15 @@ void quantifyLibrary(
             numPrevObservedFragments = numObservedFragments;
         }
 
-        // This structure is a vector of vectors of alignment 
+        // This structure is a vector of vectors of alignment
         // groups.  Each thread will get its own vector, so we
-        // allocate these up front to save time and allow 
-        // reuse. 
-        std::vector<AlnGroupVec> groupVec;
+        // allocate these up front to save time and allow
+        // reuse.
+        std::vector<AlnGroupVec<AlnT>> groupVec;
         for (size_t i = 0; i < numQuantThreads; ++i) {
             groupVec.emplace_back(maxReadGroup);
         }
-        
+
 
         bool writeToCache = !salmonOpts.disableMappingCache;
         auto processReadLibraryCallback =  [&](
@@ -2254,8 +2713,8 @@ void quantifyLibrary(
                 FragmentLengthDistribution& fragLengthDist,
                 std::atomic<uint64_t>& numAssignedFragments,
                 size_t numQuantThreads, bool& burnedIn) -> void  {
-            
-            processReadLibrary(experiment, rl, sidx, transcripts, clusterForest,
+
+            processReadLibrary<AlnT>(experiment, rl, sidx, transcripts, clusterForest,
                     numObservedFragments, totalAssignedFragments, upperBoundHits,
                     initialRound, burnedIn, fmCalc, fragLengthDist,
                     memOptions, salmonOpts, coverageThresh, greedyChain,
@@ -2369,7 +2828,7 @@ int salmonQuantify(int argc, char *argv[]) {
     ("sensitive", po::bool_switch(&(sopt.sensitive))->default_value(false), "Setting this option enables the splitting of SMEMs that are larger "
                                         "than 1.5 times the minimum seed length (minLen/k above).  This may reveal high scoring chains of MEMs "
                                         "that are masked by long SMEMs.  However, this option makes lightweight-alignment a bit slower and is "
-                                        "usually not necessary if the reference is of reasonable quality.") 
+                                        "usually not necessary if the reference is of reasonable quality.")
     ("extraSensitive", po::bool_switch(&(sopt.extraSeedPass))->default_value(false), "Setting this option enables an extra pass of \"seed\" search. "
                                         "Enabling this option may improve sensitivity (the number of reads having sufficient coverage), but will "
                                         "typically slow down quantification by ~40%.  Consider enabling this option if you find the mapping rate to "
@@ -2551,7 +3010,7 @@ transcript abundance from RNA-seq reads
 
         auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(logPath.string(), true);
         auto consoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
-        auto consoleLog = spdlog::create("consoleLog", {consoleSink});
+        auto consoleLog = spdlog::create("stderrLog", {consoleSink});
         auto fileLog = spdlog::create("fileLog", {fileSink});
         auto jointLog = spdlog::create("jointLog", {fileSink, consoleSink});
 
@@ -2579,6 +3038,12 @@ transcript abundance from RNA-seq reads
         jointLog->info() << "parsing read library format";
 
         vector<ReadLibrary> readLibraries = salmon::utils::extractReadLibraries(orderedOptions);
+
+        SalmonIndexVersionInfo versionInfo;
+        boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
+        versionInfo.load(versionPath);
+        versionInfo.indexType();
+
         ReadExperiment experiment(readLibraries, indexDirectory, sopt);
 
         // Parameter validation
@@ -2600,8 +3065,18 @@ transcript abundance from RNA-seq reads
     	// rich equivalence classes
         experiment.equivalenceClassBuilder().start();
 
-        quantifyLibrary(experiment, greedyChain, memOptions, sopt, coverageThresh,
-                        requiredObservations, sopt.numThreads);
+        auto indexType = experiment.getIndex()->indexType();
+
+        switch (indexType) {
+            case IndexType::FMD:
+                quantifyLibrary<SMEMAlignment>(experiment, greedyChain, memOptions, sopt, coverageThresh,
+                                                requiredObservations, sopt.numThreads);
+                break;
+            case IndexType::QUASI:
+                quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions, sopt, coverageThresh,
+                                                requiredObservations, sopt.numThreads);
+                break;
+        }
 
         // Now that the streaming pass is complete, we have
         // our initial estimates, and our rich equivalence

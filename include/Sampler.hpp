@@ -9,9 +9,8 @@ extern "C" {
 }
 
 // for cpp-format
-#include "format.h"
-
 #include "spdlog/spdlog.h"
+#include "spdlog/details/format.h"
 
 #include <tbb/atomic.h>
 #include <iostream>

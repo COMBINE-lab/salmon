@@ -45,8 +45,8 @@
 #include "SalmonUtils.hpp"
 #include "SalmonIndex.hpp"
 #include "GenomicFeature.hpp"
-#include "format.h"
 #include "spdlog/spdlog.h"
+#include "spdlog/details/format.h"
 
 using my_mer = jellyfish::mer_dna_ns::mer_base_static<uint64_t, 1>;
 
@@ -138,7 +138,7 @@ bool buildAuxKmerIndex(boost::filesystem::path& outputPrefix, uin32_t k,
 }
 */
 
-// Cool way to do this from 
+// Cool way to do this from
 // http://stackoverflow.com/questions/108318/whats-the-simplest-way-to-test-whether-a-number-is-a-power-of-2-in-c
 bool isPowerOfTwo(uint32_t n) {
   return (n > 0 and (n & (n-1)) == 0);
@@ -156,6 +156,7 @@ int salmonIndex(int argc, char* argv[]) {
     uint32_t auxKmerLen = 0;
     uint32_t maxThreads = std::thread::hardware_concurrency();
     uint32_t numThreads;
+    bool useQuasi{false};
 
     po::options_description generic("Command Line Options");
     generic.add_options()
@@ -168,6 +169,7 @@ int salmonIndex(int argc, char* argv[]) {
     ("index,i", po::value<string>()->required(), "Salmon index.")
     ("threads,p", po::value<uint32_t>(&numThreads)->default_value(maxThreads)->required(),
                             "Number of threads to use (only used for computing bias features)")
+    ("quasi,q", po::bool_switch(&useQuasi)->default_value(true), "Build quasi-mapping index instead of FMD-based index")
     ("sasamp,s", po::value<uint32_t>(&saSampInterval)->default_value(1)->required(),
                             "The interval at which the suffix array should be sampled. "
                             "Smaller values are faster, but produce a larger index. "
@@ -193,13 +195,13 @@ Creates a salmon index.
         }
         po::notify(vm);
 
-	uint32_t sasamp = vm["sasamp"].as<uint32_t>();
-	if (!isPowerOfTwo(sasamp)) {
-	  fmt::MemoryWriter errWriter;
-	  errWriter << "Error: The suffix array sampling interval must be "
-		       "a power of 2. The value provided, " << sasamp << ", is not.";
-	  throw(std::logic_error(errWriter.str()));
-	}
+        uint32_t sasamp = vm["sasamp"].as<uint32_t>();
+        if (!isPowerOfTwo(sasamp) and !useQuasi) {
+          fmt::MemoryWriter errWriter;
+          errWriter << "Error: The suffix array sampling interval must be "
+                   "a power of 2. The value provided, " << sasamp << ", is not.";
+          throw(std::logic_error(errWriter.str()));
+        }
 
         string transcriptFile = vm["transcripts"].as<string>();
         bfs::path indexDirectory(vm["index"].as<string>());
@@ -238,22 +240,47 @@ Creates a salmon index.
         jointLog->info() << infostr.str();
         computeBiasFeatures(transcriptFiles, transcriptBiasFile, useStreamingParser, numThreads);
         // ==== finished computing bias fetures
-    
-       bfs::path outputPrefix = indexDirectory / "bwaidx";
 
-       fmt::MemoryWriter optWriter;
-       optWriter << vm["sasamp"].as<uint32_t>();
+        bfs::path outputPrefix;
+        std::unique_ptr<std::vector<char const*>> argVec(new std::vector<char const*>);
+	    fmt::MemoryWriter optWriter;
 
-        std::vector<char const*> bwaArgVec{ "index",
-                                    "-s",
-                                    optWriter.str().c_str(),
-                                    "-p",
-                                    outputPrefix.string().c_str(),
-                                    transcriptFile.c_str() };
-        SalmonIndex sidx(jointLog);
-        sidx.build(indexDirectory, bwaArgVec, auxKmerLen);
+        std::unique_ptr<SalmonIndex> sidx = nullptr;
+        // Build a quasi-mapping index
+        if (useQuasi) {
+            outputPrefix = indexDirectory;
+            argVec->push_back("dummy");
+            argVec->push_back("-k");
 
-        jointLog->info("done building BWT Index");
+            if (auxKmerLen == 0) {
+                jointLog->info("You cannot have a k-mer length of 0 with the quasi-index.");
+                jointLog->info("Setting to the default value of 31.");
+                auxKmerLen = 31;
+            }
+
+            optWriter << auxKmerLen;
+            argVec->push_back(optWriter.str().c_str());
+            argVec->push_back("-t");
+            argVec->push_back(transcriptFile.c_str());
+            argVec->push_back("-i");
+            argVec->push_back(outputPrefix.string().c_str());
+            sidx.reset(new SalmonIndex(jointLog, IndexType::QUASI));
+        } else {
+            // Build the FMD-based index
+            bfs::path outputPrefix = indexDirectory / "bwaidx";
+            argVec->push_back("index");
+            argVec->push_back("-s");
+	        optWriter << vm["sasamp"].as<uint32_t>();
+            argVec->push_back(optWriter.str().c_str());
+            argVec->push_back("-p");
+            argVec->push_back(outputPrefix.string().c_str());
+            argVec->push_back(transcriptFile.c_str());
+            sidx.reset(new SalmonIndex(jointLog, IndexType::FMD));
+        }
+
+        jointLog->info("building index");
+	    sidx->build(indexDirectory, *(argVec.get()), auxKmerLen);
+        jointLog->info("done building index");
         // If we want to build the auxiliary k-mer index, do it here.
         /*
         uint32_t k = 15;
