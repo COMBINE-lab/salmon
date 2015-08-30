@@ -98,6 +98,7 @@ have to build an Salmon index for your transcriptome.  Assume that
 you run the Salmon indexer:
 
 ::
+    
     > ./bin/salmon index -q -k 31 -t transcripts.fa -i transcripts_index
     
 This will build the quasi-mapping-based index, using an auxiliary k-mer hash
