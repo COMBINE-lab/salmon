@@ -74,8 +74,8 @@ set of alignments.
     the mapping cache (``--disableMappingCache``), and potentially increase the
     parallelizability of lightweight-alignment-based Salmon.
 
-Lightweight-alignment-based mode
---------------------------------
+Lightweight-alignment-based mode (including quasimapping)
+---------------------------------------------------------
 
 One of the novel and innovative features of Salmon is its ability to accurately
 quantify transcripts using *lightweight* alignments.  Lightweight alignments
@@ -84,6 +84,14 @@ performing a base-to-base alignment of the read to the transcript.  Lightweight
 alignments are typically much faster to compute than traditional (or full)
 alignments, and can sometimes provide superior accuracy by being more robust 
 to errors in the read or genomic variation from the reference sequence.
+
+Salmon currently supports two different methods for lightweight-alignment; 
+SMEM-based mapping and quasi-mapping.  SMEM-based mapping is the original 
+lightweight-alignment method used by Salmon, and quasi-mapping is a newer and 
+considerably faster alternative.  Both methods are currently exposed via the 
+same ``quant`` command, but the methods require different indices so that 
+SMEM-based mapping cannot be used with a quasi-mapping index and vice-versa.
+
 If you want to use Salmon in lightweight alignment-based mode, then you first
 have to build an Salmon index for your transcriptome.  Assume that
 ``transcripts.fa`` contains the set of transcripts you wish to quantify. First,
@@ -91,7 +99,27 @@ you run the Salmon indexer:
 
 ::
     
+    > ./bin/salmon index -q -k 31 -t transcripts.fa -i transcripts_index
+    
+This will build the quasi-mapping-based index, using an auxiliary k-mer hash
+over k-mers of length 31.  While quasi-mapping will make used of arbitrarily 
+long matches between the query and reference, the `k` size selected here will 
+act as the *minimum* acceptable length for a valid match.  Thus, a smaller 
+value of `k` may slightly improve sensitivty.  We find that a `k` of 31 seems
+to work well for reads of 75bp or longer, but you might consider a smaller 
+`k` if you plan to deal with shorter reads. Note that there is also a 
+`k` parameter that can be passed to the ``quant`` command.  However, this has
+no effect if one is using a quasi-mapping index, as the `k` value provided
+during the index building phase overrides any `k` provided during
+quantification in this case.
+
+::
+    
     > ./bin/salmon index -t transcripts.fa -i transcripts_index
+
+This will build the SMEM-based mapping index.  Note that no value of `k` 
+is given here.  However, the SMEM-based mapping index makes use of a parameter 
+`k` that is passed in during the ``quant`` phase (the default value is `19`). 
 
 Then, you can quantify any set of reads (say, paired-end reads in files
 `reads1.fa` and `reads2.fa`) directly against this index using the Salmon
@@ -101,11 +129,16 @@ Then, you can quantify any set of reads (say, paired-end reads in files
 
     > ./bin/salmon quant -i transcripts_index -l <LIBTYPE> -1 reads1.fa -2 reads2.fa -o transcripts_quant
 
+This same ``quant`` command will work with either index (quasi-mapping or
+SMEM-based), and Salmon will automatically determine the type of index being 
+read and perform the appropriate lightweight mapping accordingly.
+
 You can, of course, pass a number of options to control things such as the
 number of threads used or the different cutoffs used for counting reads.
 Just as with the alignment-based mode, after Salmon has finished running, there
 will be a directory called ``salmon_quant``, that contains a file called
 ``quant.sf`` containing the quantification results.
+
 
 Alignment-based mode
 --------------------
