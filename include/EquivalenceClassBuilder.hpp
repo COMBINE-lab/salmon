@@ -64,10 +64,11 @@ class EquivalenceClassBuilder {
         bool finish() {
             active_ = false;
             size_t totalCount{0};
-            for (auto kv = countMap_.begin(); !kv.is_end(); ++kv) {
-                kv->second.normalizeAux();
-                totalCount += kv->second.count;
-                countVec_.push_back(*kv);
+            auto lt = countMap_.lock_table();
+            for (auto& kv : lt) {
+                kv.second.normalizeAux();
+                totalCount += kv.second.count;
+                countVec_.push_back(kv);
             }
 
     	    logger_->info("Computed {} rich equivalence classes "
@@ -80,7 +81,7 @@ class EquivalenceClassBuilder {
         inline void addGroup(TranscriptGroup&& g,
                              std::vector<double>& weights) {
 
-            auto upfn = [&weights](TGValue& x) -> TGValue& {
+            auto upfn = [&weights](TGValue& x) -> void {
                 // update the count
                 x.count++;
                 // update the weights
@@ -92,7 +93,6 @@ class EquivalenceClassBuilder {
                         salmon::math::logAdd(x.weights[i], weights[i]);
                     */
                 }
-                return x;
             };
             TGValue v(weights, 1);
             countMap_.upsert(g, upfn, v);
