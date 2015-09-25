@@ -1,7 +1,7 @@
 #ifndef __FORGETTING_MASS_CALCULATOR__
 #define __FORGETTING_MASS_CALCULATOR__
 
-#include "SpinLock.hpp"
+#include "SalmonSpinLock.hpp"
 #include "SalmonMath.hpp"
 #include "spdlog/spdlog.h"
 

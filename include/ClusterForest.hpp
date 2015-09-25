@@ -6,7 +6,7 @@
 
 #include "Transcript.hpp"
 #include "TranscriptCluster.hpp"
-#include "SpinLock.hpp"
+#include "SalmonSpinLock.hpp"
 
 #include <unordered_set>
 #include <vector>
@@ -155,4 +155,3 @@ private:
 };
 
 #endif // __CLUSTER_FOREST_HPP__
-
