@@ -77,6 +77,7 @@ int salmonIndex(int argc, char* argv[]) {
 
     bool useStreamingParser = true;
 
+    string indexTypeStr;
     uint32_t saSampInterval = 1;
     uint32_t auxKmerLen = 0;
     uint32_t maxThreads = std::thread::hardware_concurrency();
@@ -93,7 +94,7 @@ int salmonIndex(int argc, char* argv[]) {
     ("index,i", po::value<string>()->required(), "Salmon index.")
     ("threads,p", po::value<uint32_t>(&numThreads)->default_value(maxThreads)->required(),
                             "Number of threads to use (only used for computing bias features)")
-    ("quasi,q", po::bool_switch(&useQuasi)->default_value(false), "Build quasi-mapping index instead of FMD-based index")
+    ("type", po::value<string>(&indexTypeStr)->default_value("quasi"), "Build quasi-mapping index instead of FMD-based index")
     ("sasamp,s", po::value<uint32_t>(&saSampInterval)->default_value(1)->required(),
                             "The interval at which the suffix array should be sampled. "
                             "Smaller values are faster, but produce a larger index. "
@@ -118,6 +119,15 @@ Creates a salmon index.
             std::exit(1);
         }
         po::notify(vm);
+
+        if (!(indexTypeStr == "quasi" or indexTypeStr == "fmd")) {
+            fmt::MemoryWriter errWriter;
+            errWriter << "Error: The index type must be either "
+                "\"fmd\" or \"quasi\", but " << indexTypeStr << ", was "
+                "provided.";
+            throw(std::logic_error(errWriter.str()));
+        }
+        bool useQuasi = (indexTypeStr == "quasi");
 
         uint32_t sasamp = vm["sasamp"].as<uint32_t>();
         if (!isPowerOfTwo(sasamp) and !useQuasi) {

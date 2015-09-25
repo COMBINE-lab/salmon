@@ -1,5 +1,5 @@
-#ifndef __SPIN_LOCK_HPP__
-#define __SPIN_LOCK_HPP__
+#ifndef __SALMON_SPIN_LOCK_HPP__
+#define __SALMON_SPIN_LOCK_HPP__
 
 #include <atomic>
 
@@ -35,4 +35,4 @@ public:
   };
 };
 
-#endif // __SPIN_LOCK_HPP__
+#endif // __SALMON_SPIN_LOCK_HPP__

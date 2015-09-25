@@ -1548,8 +1548,8 @@ inline void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_q
             } else {
                 if (!(rightIt->targetID < leftIt->targetID)) {
                     jointHits.push_back({leftIt->targetID,
-                                           std::distance(leftHits.begin(), leftIt),
-                                           std::distance(rightHits.begin(), rightIt)});
+                                         static_cast<size_t>(std::distance(leftHits.begin(), leftIt)),
+                                         static_cast<size_t>(std::distance(rightHits.begin(), rightIt))});
                     ++leftIt;
                 }
                 ++rightIt;
@@ -2221,54 +2221,61 @@ void processReadsQuasi(paired_parser* parser,
         // If the read mapped to > maxReadOccs places, discard it
         if (jointHits.size() > salmonOpts.maxReadOccs ) { jointHitGroup.clearAlignments(); }
 
-        if (!salmonOpts.allowOrphans) {
-            if (jointHits.size() > 0 and jointHits.front().mateStatus != MateStatus::PAIRED_END_PAIRED) {
-                jointHitGroup.clearAlignments();
-            }
-        } else {
-            bool isPaired = jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED;
-            // If these aren't paired-end reads --- so that
-            // we have orphans --- make sure we sort the
-            // mappings so that they are in transcript order
-            if (!isPaired) {
-                // Find the end of the hits for the left read
-                auto leftHitEndIt = std::partition_point(
-                        jointHits.begin(), jointHits.end(),
-                        [](const QuasiAlignment& q) -> bool {
-                        return q.mateStatus == rapmap::utils::MateStatus::PAIRED_END_LEFT;
-                        });
-                // Merge the hits so that the entire list is in order
-                // by transcript ID.
-                std::inplace_merge(jointHits.begin(), leftHitEndIt, jointHits.end(),
-                        [](const QuasiAlignment& a, const QuasiAlignment& b) -> bool {
-                        return a.transcriptID() < b.transcriptID();
-                        });
-            }
-        }
 
-            for (auto& h : jointHits) {
-                switch (h.mateStatus) {
-                    case MateStatus::PAIRED_END_LEFT:
-                        {
-                            h.format = salmon::utils::hitType(h.pos, h.fwd);
-                        }
-                    break;
-                case MateStatus::PAIRED_END_RIGHT:
-                    {
-                        h.format = salmon::utils::hitType(h.pos, h.fwd);
-                    }
-                    break;
-                case MateStatus::PAIRED_END_PAIRED:
-                    {
-                        uint32_t end1Pos = (h.fwd) ? h.pos : h.pos + h.readLen;
-                        uint32_t end2Pos = (h.mateIsFwd) ? h.matePos : h.matePos + h.mateLen;
-                		bool canDovetail = false;
-                        h.format = salmon::utils::hitType(end1Pos, h.fwd, h.readLen,
-                                                          end2Pos, h.mateIsFwd, h.mateLen, canDovetail);
-                    }
-                    break;
-            }
-        }
+		// If we have mappings, then process them.
+		if (jointHits.size() > 0) {
+			bool isPaired = jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED;
+			// If we are ignoring orphans
+			if (!salmonOpts.allowOrphans) {
+				// If the mappings for the current read are not properly-paired (i.e. are orphans)
+				// then just clear the group.
+				if (!isPaired) {
+					jointHitGroup.clearAlignments();
+				}
+			} else {
+				// If these aren't paired-end reads --- so that
+				// we have orphans --- make sure we sort the
+				// mappings so that they are in transcript order
+				if (!isPaired) {
+					// Find the end of the hits for the left read
+					auto leftHitEndIt = std::partition_point(
+							jointHits.begin(), jointHits.end(),
+							[](const QuasiAlignment& q) -> bool {
+							return q.mateStatus == rapmap::utils::MateStatus::PAIRED_END_LEFT;
+							});
+					// Merge the hits so that the entire list is in order
+					// by transcript ID.
+					std::inplace_merge(jointHits.begin(), leftHitEndIt, jointHits.end(),
+							[](const QuasiAlignment& a, const QuasiAlignment& b) -> bool {
+							return a.transcriptID() < b.transcriptID();
+							});
+				}
+			}
+
+			for (auto& h : jointHits) {
+				switch (h.mateStatus) {
+					case MateStatus::PAIRED_END_LEFT:
+						{
+							h.format = salmon::utils::hitType(h.pos, h.fwd);
+						}
+						break;
+					case MateStatus::PAIRED_END_RIGHT:
+						{
+							h.format = salmon::utils::hitType(h.pos, h.fwd);
+						}
+						break;
+					case MateStatus::PAIRED_END_PAIRED:
+						{
+							uint32_t end1Pos = (h.fwd) ? h.pos : h.pos + h.readLen;
+							uint32_t end2Pos = (h.mateIsFwd) ? h.matePos : h.matePos + h.mateLen;
+							bool canDovetail = false;
+							h.format = salmon::utils::hitType(end1Pos, h.fwd, h.readLen,
+									end2Pos, h.mateIsFwd, h.mateLen, canDovetail);
+						}
+						break;
+				}
+			}
+		} // If we have no mappings --- then there's nothing to do
 
         validHits += jointHits.size();
         locRead++;
@@ -2377,7 +2384,7 @@ void processReadsQuasi(single_parser* parser,
                                MateStatus::SINGLE_END);
 
         if (initialRound) {
-            upperBoundHits += (jointHits.size() > 0);;
+            upperBoundHits += (jointHits.size() > 0);
         }
 
         // If the read mapped to > maxReadOccs places, discard it
