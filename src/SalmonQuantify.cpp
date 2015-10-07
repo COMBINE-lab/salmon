@@ -120,6 +120,7 @@ extern "C" {
 #include "HitManager.hpp"
 #include "SASearcher.hpp"
 #include "SACollector.hpp"
+#include "TextBootstrapWriter.hpp"
 
 /* This allows us to use CLASP for optimal MEM
  * chaining.  However, this seems to be neither
@@ -2944,11 +2945,10 @@ int salmonQuantify(int argc, char *argv[]) {
                                         "boundary between two transcripts.  This can improve the  fragment hit-rate, but is usually not necessary.")
     ("useVBOpt", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
      			"traditional EM algorithm for optimization in the batch passes.")
-    ("useGSOpt", po::bool_switch(&(sopt.useGSOpt))->default_value(false), "[*super*-experimental]: After the initial optimization has finished, "
-                "use collapsed Gibbs sampling to refine estimates even further (and obtain variance)")
-    ("numGibbsSamples", po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(500), "[*super*-experimental]: Number of Gibbs sampling rounds to "
-     		"perform.");
-
+    ("numGibbsSamples", po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0), "[*super*-experimental]: Number of Gibbs sampling rounds to "
+     "perform.")
+    ("numBootstraps", po::value<uint32_t>(&(sopt.numBootstraps))->default_value(0), "[experimental]: Number of bootstrap samples to generate. Note: "
+      "This is mutually exclusive with Gibbs sampling.");
 
 
     po::options_description testing("\n"
@@ -2990,6 +2990,8 @@ transcript abundance from RNA-seq reads
         }
 
         po::notify(vm);
+
+
 
         std::stringstream commentStream;
         commentStream << "# salmon (smem-based) v" << salmon::version << "\n";
@@ -3056,10 +3058,18 @@ transcript abundance from RNA-seq reads
         sopt.fileLog = fileLog;
 
         // Verify that no inconsistent options were provided
+        if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {
+            jointLog->error("You cannot perform both Gibbs sampling and bootstrapping. "
+                            "Please choose one.");
+            jointLog->flush();
+            std::exit(1);
+        }
+
         {
             if (sopt.noFragLengthDist and !sopt.noEffectiveLengthCorrection) {
                 jointLog->info() << "Error: You cannot enable --noFragLengthDist without "
                                  << "also enabling --noEffectiveLengthCorrection; exiting!\n";
+                jointLog->flush();
                 std::exit(1);
             }
         }
@@ -3139,11 +3149,28 @@ transcript abundance from RNA-seq reads
         salmon::utils::writeAbundancesFromCollapsed(
                 sopt, experiment, estFilePath, commentString);
 
-        if (sopt.useGSOpt) {
+        {
+          bfs::path statPath = outputDirectory / "stats.tsv";
+          std::ofstream statStream(statPath.string(), std::ofstream::out);
+          statStream << "numObservedFragments\t" << experiment.numObservedFragsInFirstPass() << '\n';
+          for (auto& t : experiment.transcripts()) {
+              auto l = (sopt.noEffectiveLengthCorrection) ? t.RefLength : t.getCachedEffectiveLength();
+              statStream << t.RefName << '\t' << l << '\n';
+          }
+          statStream.close();
+        }
+
+        if (sopt.numGibbsSamples > 0) {
             jointLog->info("Starting Gibbs Sampler");
             CollapsedGibbsSampler sampler;
             sampler.sample(experiment, sopt, sopt.numGibbsSamples);
             jointLog->info("Finished Gibbs Sampler");
+        } else if (sopt.numBootstraps > 0) {
+            bfs::path bspath = outputDirectory / "quant_bootstraps.sf";
+            std::unique_ptr<BootstrapWriter> bsWriter(new TextBootstrapWriter(bspath, jointLog));
+            bsWriter->writeHeader(commentString, experiment.transcripts());
+            optimizer.gatherBootstraps(experiment, sopt,
+                    bsWriter.get(), 0.01, 10000);
         }
 
 

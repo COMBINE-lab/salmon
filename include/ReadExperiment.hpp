@@ -120,7 +120,7 @@ class ReadExperiment {
     std::vector<Transcript>& transcripts() { return transcripts_; }
 
     uint64_t numAssignedFragments() { return numAssignedFragments_; }
-    uint64_t numMappedReads() { return numAssignedFragments_; }
+    uint64_t numMappedFragments() { return numAssignedFragments_; }
 
     uint64_t upperBoundHits() { return upperBoundHits_; }
     void setUpperBoundHits(uint64_t ubh) { upperBoundHits_ = ubh; }

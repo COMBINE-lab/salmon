@@ -18,7 +18,8 @@ public:
         logPerBasePrior_(std::log(alpha)),
         priorMass_(std::log(alpha*len)),
         mass_(salmon::math::LOG_0), sharedCount_(0.0),
-        avgMassBias_(salmon::math::LOG_0) {
+        avgMassBias_(salmon::math::LOG_0),
+        active_(false) {
             uniqueCount_.store(0);
             lastUpdate_.store(0);
             lastTimestepUpdated_.store(0);
@@ -43,6 +44,7 @@ public:
         priorMass_ = other.priorMass_;
         avgMassBias_.store(other.avgMassBias_.load());
         hasAnchorFragment_.store(other.hasAnchorFragment_.load());
+        active_ = other.active_;
     }
 
     Transcript& operator=(Transcript&& other) {
@@ -63,6 +65,7 @@ public:
         priorMass_ = other.priorMass_;
         avgMassBias_.store(other.avgMassBias_.load());
         hasAnchorFragment_.store(other.hasAnchorFragment_.load());
+        active_ = other.active_;
         return *this;
     }
 
@@ -141,6 +144,9 @@ public:
     inline double mass(bool withPrior=true) {
         return (withPrior) ? salmon::math::logAdd(priorMass_, mass_.load()) : mass_.load();
     }
+
+    void setActive() { active_ = true; }
+    bool getActive() { return active_; }
 
     inline double bias() {
         return (totalCount_.load() > 0) ?
@@ -248,6 +254,7 @@ private:
     // an "anchor" fragment if it has a proper
     // pair of reads mapping to it.
     std::atomic<bool> hasAnchorFragment_{false};
+    bool active_;
 };
 
 #endif //TRANSCRIPT

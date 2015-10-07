@@ -468,7 +468,7 @@ namespace salmon {
                 fmt::print(stderr, "\n");
                 consumedAllInput = true;
 
-                numObservedFragments += alnLib.numMappedReads();
+                numObservedFragments += alnLib.numMappedFragments();
                 fmt::print(stderr, "# observed = {} mapped fragments.\033[F\033[F\033[F\033[F",
                         numObservedFragments);
 

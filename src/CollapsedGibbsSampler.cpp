@@ -42,7 +42,7 @@ void initCountMap_(
 	std::vector<Transcript>& transcriptsIn,
 	double priorAlpha,
         MultinomialSampler& msamp,
-        std::vector<int>& countMap,
+        std::vector<uint64_t>& countMap,
         std::vector<double>& probMap,
 	std::vector<int>& txpCounts) {
 
@@ -100,7 +100,7 @@ void initCountMap_(
 
 void sampleRound_(
         std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
-        std::vector<int>& countMap,
+        std::vector<uint64_t>& countMap,
         std::vector<double>& probMap,
         double priorAlpha,
         std::vector<int>& txpCount,
@@ -113,7 +113,7 @@ void sampleRound_(
     // Choose a fraction of this class to re-sample
 
     // The count substracted from each transcript
-    std::vector<int> txpResamp;
+    std::vector<uint64_t> txpResamp;
 
     for (auto& eqClass : eqVec) {
         uint64_t classCount = eqClass.second.count;
@@ -217,11 +217,11 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
     std::vector<std::vector<int>> allSamples(numSamples,
                                         std::vector<int>(transcripts.size(),0));
     double priorAlpha = 1e-8;
-    auto numMappedReads = (sopt.allowOrphans) ? readExp.numMappedReads() : readExp.upperBoundHits();
+    auto numMappedFragments = (sopt.allowOrphans) ? readExp.numMappedFragments() : readExp.upperBoundHits();
 
 
     for (auto& txp : transcripts) {
-        txp.setMass(priorAlpha + (txp.mass(false) * numMappedReads));
+        txp.setMass(priorAlpha + (txp.mass(false) * numMappedFragments));
     }
 
     tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(numSamples)),
@@ -239,7 +239,7 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
                     }
                 }
 
-                std::vector<int> countMap(countMapSize, 0);
+                std::vector<uint64_t> countMap(countMapSize, 0);
                 std::vector<double> probMap(countMapSize, 0.0);
 
                 initCountMap_(eqVec, transcripts, priorAlpha, ms, countMap, probMap, allSamples[range.begin()]);
@@ -268,7 +268,7 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
 
     // get posterior means
     tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(numTranscripts)),
-                [&allSamples, &transcripts, &ds, numMappedReads,
+                [&allSamples, &transcripts, &ds, numMappedFragments,
                  numSamples]( const BlockedIndexRange& range) -> void {
 
                 // For each sample this thread should generate

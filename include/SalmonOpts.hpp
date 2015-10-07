@@ -81,8 +81,8 @@ struct SalmonOpts {
 
     bool useMassBanking; // DEPRECATED
 
-    bool sensitive; // Perform splitting of long SMEMs into MEMs 
-    
+    bool sensitive; // Perform splitting of long SMEMs into MEMs
+
     bool extraSeedPass; // Perform extra pass trying to find seeds to cover the read
 
     bool disableMappingCache; // Don't write mapping results to temporary mapping cache file
@@ -92,9 +92,9 @@ struct SalmonOpts {
     boost::filesystem::path indexDirectory; // Index directory
 
     bool useVBOpt; // Use Variational Bayesian EM instead of "regular" EM in the batch passes
-    bool useGSOpt; // Do Gibbs Sampling after optimization
 
-    uint32_t numGibbsSamples; // Number of rounds of Gibbs sampling to perform 
+    uint32_t numGibbsSamples; // Number of rounds of Gibbs sampling to perform
+    uint32_t numBootstraps; // Number of bootstrap samples to draw
 
     // Related to the fragment length distribution
     size_t fragLenDistMax;
