@@ -3186,6 +3186,7 @@ transcript abundance from RNA-seq reads
             case SalmonIndexType::QUASI:
                 {
                     sopt.allowOrphans = true;
+                    sopt.useQuasi = true;
                      quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions, sopt, coverageThresh,
                                                      requiredObservations, sopt.numThreads);
                 }
@@ -3228,15 +3229,25 @@ transcript abundance from RNA-seq reads
 
         if (sopt.numGibbsSamples > 0) {
             jointLog->info("Starting Gibbs Sampler");
+
+            bfs::path gibbsSampleFile = sopt.outputDirectory / "quant_gibbs_samples.sf";
+            sopt.jointLog->info("Writing posterior samples to {}", gibbsSampleFile.string());
+            std::unique_ptr<BootstrapWriter> bsWriter(new TextBootstrapWriter(gibbsSampleFile, jointLog));
+            bsWriter->writeHeader(commentString, experiment.transcripts());
             CollapsedGibbsSampler sampler;
-            sampler.sample(experiment, sopt, sopt.numGibbsSamples);
+            sampler.sample(experiment, sopt, bsWriter.get(), sopt.numGibbsSamples);
+
             jointLog->info("Finished Gibbs Sampler");
         } else if (sopt.numBootstraps > 0) {
+            jointLog->info("Staring Bootstrapping");
+
             bfs::path bspath = outputDirectory / "quant_bootstraps.sf";
             std::unique_ptr<BootstrapWriter> bsWriter(new TextBootstrapWriter(bspath, jointLog));
             bsWriter->writeHeader(commentString, experiment.transcripts());
             optimizer.gatherBootstraps(experiment, sopt,
                     bsWriter.get(), 0.01, 10000);
+
+            jointLog->info("Finished Bootstrapping");
         }
 
 

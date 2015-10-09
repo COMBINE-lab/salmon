@@ -68,8 +68,8 @@ public:
         std::lock_guard<std::mutex> lock(clusterMutex_);
 #endif
 
-        size_t firstCluster, otherCluster;
         auto firstTranscriptID = (*start)->transcriptID();
+        decltype(firstTranscriptID) firstCluster, otherCluster;
         ++start;
 
         for (auto it = start; it != finish; ++it) {

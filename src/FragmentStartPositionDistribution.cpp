@@ -28,7 +28,7 @@ FragmentStartPositionDistribution::FragmentStartPositionDistribution(uint32_t nu
 
   using salmon::math::logAdd;
   double uniMass = log(1.0 / numBins_);
-  for (auto i = 1; i <= numBins_; ++i) {
+  for (size_t i = 1; i <= numBins_; ++i) {
     pmf_[i] = uniMass;
     cmf_[i] = log(static_cast<double>(i)) + uniMass;
   }
@@ -52,13 +52,13 @@ void FragmentStartPositionDistribution::addVal(
         double mass) {
 
     using salmon::math::logAdd;
-    if (hitPos >= txpLen) return; // hit should happen within the transcript
+    if (hitPos >= static_cast<int32_t>(txpLen)) return; // hit should happen within the transcript
 
     if (hitPos < 0) { hitPos = 0; }
     double logLen = log(txpLen);
 
     // Modified from: https://github.com/deweylab/RSEM/blob/master/RSPD.h
-    int i;
+    uint32_t i;
     // Fraction along the transcript where this hit occurs
     double a = hitPos * 1.0 / txpLen;
     double b;
@@ -86,7 +86,7 @@ double FragmentStartPositionDistribution::evalCDF(int32_t hitPos, uint32_t txpLe
 void FragmentStartPositionDistribution::update() {
     std::lock_guard<std::mutex> lg(fspdMut_);
     if (!isUpdated_) {
-        for (int i = 1; i <= numBins_; i++) {
+        for (uint32_t i = 1; i <= numBins_; i++) {
             pmf_[i] = pmf_[i] - totMass_;
             cmf_[i] = salmon::math::logAdd(cmf_[i - 1], pmf_[i]);
         }
@@ -98,7 +98,7 @@ double FragmentStartPositionDistribution::operator()(
         int32_t hitPos,
         uint32_t txpLen,
         double logEffLen) {
-    
+
     if (hitPos < 0) { hitPos = 0; }
     assert(hitPos < txpLen);
     if (hitPos >= txpLen) {
@@ -120,7 +120,7 @@ double FragmentStartPositionDistribution::operator()(
     double denom = evalCDF(static_cast<int32_t>(effLen), txpLen);
     return ((denom >= salmon::math::LOG_EPSILON) ?
             salmon::math::logSub(evalCDF(hitPos + 1, txpLen), evalCDF(hitPos, txpLen)) -
-	    denom : 0.0); 
+	    denom : 0.0);
 
     //return salmon::math::logSub(evalCDF(hitPos + 1, txpLen), evalCDF(hitPos, txpLen));
 }

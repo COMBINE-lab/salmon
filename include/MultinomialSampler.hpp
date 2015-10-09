@@ -16,12 +16,12 @@ class MultinomialSampler {
                 uint32_t k,
                 std::vector<double>::iterator probsBegin,
                 bool clearCounts = true) {
-            int i, j;
+            uint32_t i, j;
             double u, sum;
             std::vector<double> z(k+1, 0.0);
 
             if (clearCounts) {
-                for (uint32_t i = 0; i < k; i++) {
+                for (i = 0; i < k; i++) {
                     *(sampleBegin + i) = 0;
                 }
             }

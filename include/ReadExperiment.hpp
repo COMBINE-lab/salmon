@@ -225,7 +225,7 @@ class ReadExperiment {
 		    }
 		    std::string seq(t.RefLength, ' ');
 		    if (rseq != 0) {
-			    for (size_t i = 0; i < compLen; ++i) { seq[i] = nucTab[rseq[i]]; }
+			    for (int64_t i = 0; i < compLen; ++i) { seq[i] = nucTab[rseq[i]]; }
 		    }
 		    auto& txp = transcripts_.back();
 		    txp.Sequence = salmon::stringtools::encodeSequenceInSAM(seq.c_str(), t.RefLength);

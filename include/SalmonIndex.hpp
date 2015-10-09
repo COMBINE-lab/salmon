@@ -99,7 +99,7 @@ class SalmonIndex{
                                   std::exit(1);
                               }
                               if (len < k) { continue; }
-                              for (int s = 0; s < len - k + 1; ++s) {
+                              for (uint32_t s = 0; s < len - k + 1; ++s) {
                                   bwtintv_t resInterval;
                                   KmerKey key(&(rseq[s]), k);
                                   if (!auxIdx_.hasKmer(key)) {

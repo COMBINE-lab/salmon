@@ -55,6 +55,19 @@ double normalize(std::vector<tbb::atomic<double>>& vec) {
     return sum;
 }
 
+
+template <typename VecT>
+double truncateCountVector(VecT& alphas, double cutoff) {
+    // Truncate tiny expression values
+    double alphaSum = 0.0;
+
+    for (size_t i = 0; i < alphas.size(); ++i) {
+        if (alphas[i] <= cutoff) { alphas[i] = 0.0; }
+        alphaSum += alphas[i];
+    }
+    return alphaSum;
+}
+
 /*
  * Use atomic compare-and-swap to update val to
  * val + inc.  Update occurs in a loop in case other
@@ -438,6 +451,7 @@ bool doBootstrap(
         Eigen::VectorXd& effLens,
         std::vector<double>& sampleWeights,
         uint64_t totalNumFrags,
+        uint64_t numMappedFrags,
         double uniformTxpWeight,
         std::atomic<uint32_t>& bsNum,
         SalmonOpts& sopt,
@@ -445,7 +459,8 @@ bool doBootstrap(
         double relDiffTolerance,
         uint32_t maxIter) {
 
-
+    // Determine up front if we're going to use scaled counts.
+    bool useScaledCounts = !(sopt.useQuasi or sopt.allowOrphans);
     bool useVBEM{sopt.useVBOpt};
     size_t numClasses = txpGroups.size();
     CollapsedEMOptimizer::SerialVecType alphas(transcripts.size(), 0.0);
@@ -454,6 +469,8 @@ bool doBootstrap(
     std::vector<uint64_t> sampCounts(numClasses, 0);
 
     uint32_t numBootstraps = sopt.numBootstraps;
+
+    auto& jointLog = sopt.jointLog;
 
     std::random_device rd;
     MultinomialSampler msamp(rd);
@@ -472,17 +489,17 @@ bool doBootstrap(
         double maxRelDiff = -std::numeric_limits<double>::max();
         size_t itNum = 0;
 
-	// If we use VBEM, we'll need the prior parameters
-	double priorAlpha = 0.01;
+        // If we use VBEM, we'll need the prior parameters
+        double priorAlpha = 0.01;
         double minAlpha = 1e-8;
         double cutoff = (useVBEM) ? (priorAlpha + minAlpha) : minAlpha;
 
-	while (itNum < maxIter and !converged) {
+        while (itNum < maxIter and !converged) {
 
             if (useVBEM) {
-		VBEMUpdate_(txpGroups, txpGroupWeights, sampCounts, transcripts,
-			effLens, priorAlpha, totalLen, alphas, alphasPrime, expTheta);
-	    } else {
+                VBEMUpdate_(txpGroups, txpGroupWeights, sampCounts, transcripts,
+                        effLens, priorAlpha, totalLen, alphas, alphasPrime, expTheta);
+            } else {
                 EMUpdate_(txpGroups, txpGroupWeights, sampCounts, transcripts,
                         effLens, alphas, alphasPrime);
             }
@@ -504,6 +521,30 @@ bool doBootstrap(
             ++itNum;
         }
 
+        double alphaSum = truncateCountVector(alphas, cutoff);
+
+        if (alphaSum < minWeight) {
+            jointLog->error("Total alpha weight was too small! "
+                    "Make sure you ran salmon correclty.");
+            return false;
+        }
+
+        if (useScaledCounts) {
+            double mappedFragsDouble = static_cast<double>(numMappedFrags);
+            double alphaSum = 0.0;
+            for (auto a : alphas) { alphaSum += a; }
+            if (alphaSum > ::minWeight) {
+                double scaleFrac = 1.0 / alphaSum;
+                // scaleFrac converts alpha to nucleotide fraction,
+                // and multiplying by numMappedFrags scales by the total
+                // number of mapped fragments to provide an estimated count.
+                for (auto& a : alphas) { a = mappedFragsDouble * (a * scaleFrac); }
+            } else { // This shouldn't happen!
+                sopt.jointLog->error("Bootstrap had insufficient number of fragments!"
+                                     "Something is probably wrong; please check that you "
+                                     "have run salmon correctly and report this to GitHub.");
+            }
+        }
         bootstrapWriter->writeBootstrap(alphas);
     }
     return true;
@@ -524,6 +565,9 @@ bool CollapsedEMOptimizer::gatherBootstraps(
     VecT alphasPrime(transcripts.size(), 0.0);
     VecT expTheta(transcripts.size());
     Eigen::VectorXd effLens(transcripts.size());
+
+    bool scaleCounts = (!sopt.useQuasi and !sopt.allowOrphans);
+    uint64_t numMappedFrags = scaleCounts ? readExp.upperBoundHits() : readExp.numMappedFragments();
 
     uint32_t numBootstraps = sopt.numBootstraps;
 
@@ -642,6 +686,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
                 std::ref(effLens),
                 std::ref(samplingWeights),
                 totalCount,
+                numMappedFrags,
                 scale,
                 std::ref(bsCounter),
                 std::ref(sopt),
@@ -769,13 +814,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
                     itNum, maxRelDiff);
 
     // Truncate tiny expression values
-    double alphaSum = 0.0;
-
-    alphaSum = 0.0;
-    for (size_t i = 0; i < alphas.size(); ++i) {
-      if (alphas[i] <= cutoff) { alphas[i] = 0.0; }
-      alphaSum += alphas[i];
-    }
+    double alphaSum = truncateCountVector(alphas, cutoff);
 
     if (alphaSum < minWeight) {
         jointLog->error("Total alpha weight was too small! "

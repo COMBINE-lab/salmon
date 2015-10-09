@@ -1191,15 +1191,25 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 
                     if (sopt.numGibbsSamples > 0) {
                         jointLog->info("Starting Gibbs Sampler");
+
+                        bfs::path gibbsSampleFile = sopt.outputDirectory / "quant_gibbs_samples.sf";
+                        sopt.jointLog->info("Writing posterior samples to {}", gibbsSampleFile.string());
+                        std::unique_ptr<BootstrapWriter> bsWriter(new TextBootstrapWriter(gibbsSampleFile, jointLog));
+                        bsWriter->writeHeader(commentString, alnLib.transcripts());
                         CollapsedGibbsSampler sampler;
-                        sampler.sample(alnLib, sopt, sopt.numGibbsSamples);
+                        sampler.sample(alnLib, sopt, bsWriter.get(), sopt.numGibbsSamples);
+
                         jointLog->info("Finished Gibbs Sampler");
                     } else if (sopt.numBootstraps > 0) {
+                        jointLog->info("Staring Bootstrapping");
+
                         bfs::path bspath = outputDirectory / "quant_bootstraps.sf";
                         std::unique_ptr<BootstrapWriter> bsWriter(new TextBootstrapWriter(bspath, jointLog));
                         bsWriter->writeHeader(commentString, alnLib.transcripts());
                         optimizer.gatherBootstraps(alnLib, sopt,
                                 bsWriter.get(), 0.01, 10000);
+
+                        jointLog->info("Finished Bootstrapping");
                     }
 
 

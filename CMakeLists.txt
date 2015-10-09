@@ -26,7 +26,7 @@ SET(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
 
 ## Set the standard required compile flags
 # Nov 18th --- removed -DHAVE_CONFIG_H
-set (CMAKE_CXX_FLAGS "-pthread -funroll-loops -fPIC -fomit-frame-pointer -Ofast -DRAPMAP_SALMON_SUPPORT -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -std=c++11 -Wreturn-type -Werror=return-type")
+set (CMAKE_CXX_FLAGS "-pthread -funroll-loops -fPIC -fomit-frame-pointer -Ofast -DRAPMAP_SALMON_SUPPORT -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -Wno-reorder -Wno-unused-variable -std=c++11 -Wreturn-type -Werror=return-type")
 
 ##
 # OSX is strange (some might say, stupid in this regard).  Deal with it's quirkines here.

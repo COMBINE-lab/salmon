@@ -31,7 +31,7 @@ public:
         mateOneFilenames_(rl.mateOneFilenames_),
         mateTwoFilenames_(rl.mateTwoFilenames_),
         libTypeCounts_(std::vector<std::atomic<uint64_t>>(LibraryFormat::maxLibTypeID() + 1)) {
-            auto mc = LibraryFormat::maxLibTypeID() + 1;
+            size_t mc = LibraryFormat::maxLibTypeID() + 1;
             for (size_t i = 0; i < mc; ++i) { libTypeCounts_[i].store(rl.libTypeCounts_[i].load()); }
         }
 
@@ -44,7 +44,7 @@ public:
         mateOneFilenames_(std::move(rl.mateOneFilenames_)),
         mateTwoFilenames_(std::move(rl.mateTwoFilenames_)),
         libTypeCounts_(std::vector<std::atomic<uint64_t>>(LibraryFormat::maxLibTypeID() + 1)) {
-            auto mc = LibraryFormat::maxLibTypeID() + 1;
+            size_t mc = LibraryFormat::maxLibTypeID() + 1;
             for (size_t i = 0; i < mc; ++i) { libTypeCounts_[i].store(rl.libTypeCounts_[i].load()); }
         }
 
