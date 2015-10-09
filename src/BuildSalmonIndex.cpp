@@ -198,7 +198,7 @@ Creates a salmon index.
             argVec->push_back(transcriptFile.c_str());
             argVec->push_back("-i");
             argVec->push_back(outputPrefix.string().c_str());
-            sidx.reset(new SalmonIndex(jointLog, IndexType::QUASI));
+            sidx.reset(new SalmonIndex(jointLog, SalmonIndexType::QUASI));
         } else {
             // Build the FMD-based index
             bfs::path outputPrefix = indexDirectory / "bwaidx";
@@ -209,7 +209,7 @@ Creates a salmon index.
             argVec->push_back("-p");
             argVec->push_back(outputPrefix.string().c_str());
             argVec->push_back(transcriptFile.c_str());
-            sidx.reset(new SalmonIndex(jointLog, IndexType::FMD));
+            sidx.reset(new SalmonIndex(jointLog, SalmonIndexType::FMD));
 	    // Disable the auxiliary k-mer index for now
 	    auxKmerLen = 0;
         }
@@ -235,4 +235,3 @@ Creates a salmon index.
     }
     return ret;
 }
-

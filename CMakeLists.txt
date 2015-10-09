@@ -6,12 +6,12 @@ project (Salmon)
 
 set(CPACK_PACKAGE_VERSION "0.4.2")
 set(CPACK_PACKAGE_VERSION_MAJOR "0")
-set(CPACK_PACKAGE_VERSION_MINOR 4")
-set(CPACK_PACKAGE_VERSION_PATCH 2")
+set(CPACK_PACKAGE_VERSION_MINOR "4")
+set(CPACK_PACKAGE_VERSION_PATCH "2")
 set(CPACK_GENERATOR "TGZ")
 set(CPACK_SOURCE_GENERATOR "TGZ")
-set(CPACK_PACKAGE_VENDOR Stony Brook University")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY Salmon - Wicked-fast RNA-seq isoform quantification using lightweight alignments")
+set(CPACK_PACKAGE_VENDOR "Stony Brook University")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Salmon - Wicked-fast RNA-seq isoform quantification using lightweight alignments")
 set(CPACK_PACKAGE_NAME
   "${CMAKE_PROJECT_NAME}-${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
 set(CPACK_SOURCE_PACKAGE_FILE_NAME
@@ -153,6 +153,16 @@ set (GAT_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Have CMake tell us what it's doing
 set (CMAKE_VERBOSE_MAKEFILE true)
+
+###
+#
+#  Grab RapMap sources for quasi-mapping code --- DURING CONFIGURE TIME!
+#
+####
+if(NOT FETCHED_RAPMAP)
+  exec_program(${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetchRapMap.sh)
+  set(FETCHED_RAPMAP TRUE CACHE BOOL "Has RapMap been fetched?" FORCE)
+endif()
 
 ##
 # Super-secret override
@@ -321,6 +331,20 @@ message("BOOST LIB DIR = ${Boost_LIBRARY_DIRS}")
 message("BOOST LIBRAREIS = ${Boost_LIBRARIES}")
 
 set(EXTERNAL_LIBRARY_PATH $CMAKE_CURRENT_SOURCE_DIR/lib)
+
+message("Build system will build libdivsufsort")
+message("==================================================================")
+include(ExternalProject)
+ExternalProject_Add(libdivsufsort
+    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+    URL ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort.zip
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master
+    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
+    UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
+    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master/build
+    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DBUILD_DIVSUFSORT64=TRUE -DUSE_OPENMP=TRUE -DBUILD_SHARED_LIBS=FALSE
+)
+set(SUFFARRAY_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
 
 message("Build system will fetch and build the Cereal serialization library")
 message("==================================================================")
@@ -562,16 +586,6 @@ ExternalProject_Add(libsparsehash
 # Done building external dependencies.
 #
 ###
-
-###
-#
-#  Grab RapMap sources for quasi-mapping code --- DURING CONFIGURE TIME!
-#
-####
-if(NOT FETCHED_RAPMAP)
-  exec_program(${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetchRapMap.sh)
-  set(FETCHED_RAPMAP TRUE CACHE BOOL "Has RapMap been fetched?" FORCE)
-endif()
 
 set (CPACK_SOURCE_IGNORE_FILES
 "/src/PCA.cpp"

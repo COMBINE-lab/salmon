@@ -100,10 +100,14 @@ class ReadExperiment {
 	    // dispatch on the correct type.
 
 	    switch (salmonIndex_->indexType()) {
-            case IndexType::QUASI:
-                loadTranscriptsFromQuasi();
+            case SalmonIndexType::QUASI:
+                if (salmonIndex_->is64BitQuasi()) {
+                  loadTranscriptsFromQuasi(salmonIndex_->quasiIndex64());
+                } else {
+                  loadTranscriptsFromQuasi(salmonIndex_->quasiIndex32());
+                }
                 break;
-            case IndexType::FMD:
+            case SalmonIndexType::FMD:
                 loadTranscriptsFromFMD();
                 break;
 	    }
@@ -139,8 +143,8 @@ class ReadExperiment {
 
     SalmonIndex* getIndex() { return salmonIndex_.get(); }
 
-    void loadTranscriptsFromQuasi() {
-	    RapMapSAIndex* idx_ = salmonIndex_->quasiIndex();
+    template <typename QuasiIndexT>
+    void loadTranscriptsFromQuasi(QuasiIndexT* idx_) {
 	    size_t numRecords = idx_->txpNames.size();
 
 	    fmt::print(stderr, "Index contained {} targets\n", numRecords);
@@ -163,25 +167,18 @@ class ReadExperiment {
 		    // Genome Biol 12.3 (2011): R22.
 		    // ======
 		    // perhaps, define these in a more data-driven way
-		    if (txp.RefLength <= 1334) {
-			txp.lengthClassIndex(0);
-		    } else if (txp.RefLength <= 2104) {
-			txp.lengthClassIndex(0);
-		    } else if (txp.RefLength <= 2988) {
-			txp.lengthClassIndex(0);
-		    } else if (txp.RefLength <= 4389) {
-			txp.lengthClassIndex(0);
-		    } else {
-			txp.lengthClassIndex(0);
-		    }
-	    }
-
-        /*
-	    std::sort(transcripts_tmp.begin(), transcripts_tmp.end(),
-			    [](const Transcript& t1, const Transcript& t2) -> bool {
-			    return t1.id < t2.id;
-			    });
-        */
+        if (txp.RefLength <= 1334) {
+          txp.lengthClassIndex(0);
+        } else if (txp.RefLength <= 2104) {
+          txp.lengthClassIndex(0);
+        } else if (txp.RefLength <= 2988) {
+          txp.lengthClassIndex(0);
+        } else if (txp.RefLength <= 4389) {
+          txp.lengthClassIndex(0);
+        } else {
+          txp.lengthClassIndex(0);
+        }
+      }
 	    // ====== Done loading the transcripts from file
     }
 

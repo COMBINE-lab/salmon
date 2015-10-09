@@ -1155,8 +1155,8 @@ class TranscriptHitList {
             double maxClusterScore{0.0};
 
             // we don't need the return value from the first call
-            static_cast<void>(computeBestLocFast_(votes, transcript, read, false, maxClusterPos, maxClusterCount, maxClusterScore));
-            bool revIsBest = computeBestLocFast_(rcVotes, transcript, read, true, maxClusterPos, maxClusterCount, maxClusterScore);
+            static_cast<void>(computeBestLoc_(votes, transcript, read, false, maxClusterPos, maxClusterCount, maxClusterScore));
+            bool revIsBest = computeBestLoc_(rcVotes, transcript, read, true, maxClusterPos, maxClusterCount, maxClusterScore);
             isForward_ = not revIsBest;
 
             bestHitPos = maxClusterPos;
@@ -2083,6 +2083,7 @@ void processReadsMEM(ParserT* parser,
 // To use the parser in the following, we get "jobs" until none is
 // available. A job behaves like a pointer to the type
 // jellyfish::sequence_list (see whole_sequence_parser.hpp).
+template <typename RapMapIndexT>
 void processReadsQuasi(paired_parser* parser,
                ReadExperiment& readExp,
                ReadLibrary& rl,
@@ -2091,7 +2092,7 @@ void processReadsQuasi(paired_parser* parser,
                std::atomic<uint64_t>& numAssignedFragments,
                std::atomic<uint64_t>& validHits,
                std::atomic<uint64_t>& upperBoundHits,
-               SalmonIndex* sidx,
+               RapMapIndexT* idx,
                std::vector<Transcript>& transcripts,
                ForgettingMassCalculator& fmCalc,
                ClusterForest& clusterForest,
@@ -2109,6 +2110,7 @@ void processReadsQuasi(paired_parser* parser,
 	std::exit(1);
 }
 
+template <typename RapMapIndexT>
 void processReadsQuasi(single_parser* parser,
                ReadExperiment& readExp,
                ReadLibrary& rl,
@@ -2117,7 +2119,7 @@ void processReadsQuasi(single_parser* parser,
                std::atomic<uint64_t>& numAssignedFragments,
                std::atomic<uint64_t>& validHits,
                std::atomic<uint64_t>& upperBoundHits,
-               SalmonIndex* sidx,
+               RapMapIndexT* sidx,
                std::vector<Transcript>& transcripts,
                ForgettingMassCalculator& fmCalc,
                ClusterForest& clusterForest,
@@ -2134,7 +2136,7 @@ void processReadsQuasi(single_parser* parser,
 	std::exit(1);
 }
 
-
+template <typename RapMapIndexT>
 void processReadsQuasi(paired_parser* parser,
                ReadExperiment& readExp,
                ReadLibrary& rl,
@@ -2143,7 +2145,7 @@ void processReadsQuasi(paired_parser* parser,
                std::atomic<uint64_t>& numAssignedFragments,
                std::atomic<uint64_t>& validHits,
                std::atomic<uint64_t>& upperBoundHits,
-               SalmonIndex* sidx,
+               RapMapIndexT* qidx,
                std::vector<Transcript>& transcripts,
                ForgettingMassCalculator& fmCalc,
                ClusterForest& clusterForest,
@@ -2177,8 +2179,8 @@ void processReadsQuasi(paired_parser* parser,
   bool tooManyHits{false};
   size_t maxNumHits{salmonOpts.maxReadOccs};
   size_t readLen{0};
-  SACollector hitCollector(sidx->quasiIndex());
-  SASearcher saSearcher(sidx->quasiIndex());
+  SACollector<RapMapIndexT> hitCollector(qidx);
+  SASearcher<RapMapIndexT> saSearcher(qidx);
   std::vector<QuasiAlignment> leftHits;
   std::vector<QuasiAlignment> rightHits;
   rapmap::utils::HitCounters hctr;
@@ -2314,6 +2316,7 @@ void processReadsQuasi(paired_parser* parser,
 // To use the parser in the following, we get "jobs" until none is
 // available. A job behaves like a pointer to the type
 // jellyfish::sequence_list (see whole_sequence_parser.hpp).
+template <typename RapMapIndexT>
 void processReadsQuasi(single_parser* parser,
                ReadExperiment& readExp,
                ReadLibrary& rl,
@@ -2322,7 +2325,7 @@ void processReadsQuasi(single_parser* parser,
                std::atomic<uint64_t>& numAssignedFragments,
                std::atomic<uint64_t>& validHits,
                std::atomic<uint64_t>& upperBoundHits,
-               SalmonIndex* sidx,
+               RapMapIndexT* qidx,
                std::vector<Transcript>& transcripts,
                ForgettingMassCalculator& fmCalc,
                ClusterForest& clusterForest,
@@ -2357,8 +2360,8 @@ void processReadsQuasi(single_parser* parser,
   bool tooManyHits{false};
   size_t readLen{0};
   size_t maxNumHits{salmonOpts.maxReadOccs};
-  SACollector hitCollector(sidx->quasiIndex());
-  SASearcher saSearcher(sidx->quasiIndex());
+  SACollector<RapMapIndexT> hitCollector(qidx);
+  SASearcher<RapMapIndexT> saSearcher(qidx);
   rapmap::utils::HitCounters hctr;
 
   while(true) {
@@ -2504,7 +2507,7 @@ void processReadLibrary(
 					    concurrentFile, pairFileList, pairFileList+numFiles));
 
 		    switch (indexType) {
-			case IndexType::FMD:
+			case SalmonIndexType::FMD:
 			    {
 				for(int i = 0; i < numThreads; ++i)  {
 				    // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
@@ -2535,35 +2538,65 @@ void processReadLibrary(
 				    threads.emplace_back(threadFun);
 				}
 				break;
-				case IndexType::QUASI:
+				case SalmonIndexType::QUASI:
 				{
+            // True if we have a 64-bit SA index, false otherwise
+            bool largeIndex = sidx->is64BitQuasi();
 				    for(int i = 0; i < numThreads; ++i)  {
 					// NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
 					// change value before the lambda below is evaluated --- crazy!
-					auto threadFun = [&,i]() -> void {
-					    processReadsQuasi(
-						    pairedParserPtr.get(),
-						    readExp,
-						    rl,
-						    structureVec[i],
-						    numObservedFragments,
-						    numAssignedFragments,
-						    numValidHits,
-						    upperBoundHits,
-						    sidx,
-						    transcripts,
-						    fmCalc,
-						    clusterForest,
-						    fragLengthDist,
-						    memOptions,
-						    salmonOpts,
-						    coverageThresh,
-						    iomutex,
-						    initialRound,
-						    burnedIn,
-						    writeToCache);
-					};
-					threads.emplace_back(threadFun);
+          if (largeIndex) {
+            auto threadFun = [&,i]() -> void {
+              processReadsQuasi<RapMapSAIndex<int64_t>>(
+                pairedParserPtr.get(),
+                readExp,
+                rl,
+                structureVec[i],
+                numObservedFragments,
+                numAssignedFragments,
+                numValidHits,
+                upperBoundHits,
+                sidx->quasiIndex64(),
+                transcripts,
+                fmCalc,
+                clusterForest,
+                fragLengthDist,
+                memOptions,
+                salmonOpts,
+                coverageThresh,
+                iomutex,
+                initialRound,
+                burnedIn,
+                writeToCache);
+              };
+              threads.emplace_back(threadFun);
+            } else {
+              auto threadFun = [&,i]() -> void {
+              processReadsQuasi<RapMapSAIndex<int32_t>>(
+                pairedParserPtr.get(),
+                readExp,
+                rl,
+                structureVec[i],
+                numObservedFragments,
+                numAssignedFragments,
+                numValidHits,
+                upperBoundHits,
+                sidx->quasiIndex32(),
+                transcripts,
+                fmCalc,
+                clusterForest,
+                fragLengthDist,
+                memOptions,
+                salmonOpts,
+                coverageThresh,
+                iomutex,
+                initialRound,
+                burnedIn,
+                writeToCache);
+              };
+              threads.emplace_back(threadFun);
+            }
+
 				    }
 				}
 				break;
@@ -2586,7 +2619,7 @@ void processReadLibrary(
                                       streams));
 
                 switch (indexType) {
-                    case IndexType::FMD:
+                    case SalmonIndexType::FMD:
                         {
                             for(int i = 0; i < numThreads; ++i)  {
                                 // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
@@ -2619,38 +2652,68 @@ void processReadLibrary(
                         }
                         break;
 
-                    case IndexType::QUASI:
-                        {
-                            for(int i = 0; i < numThreads; ++i)  {
-                                // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
-                                // change value before the lambda below is evaluated --- crazy!
-                                auto threadFun = [&,i]() -> void {
-                                    processReadsQuasi(
-                                            singleParserPtr.get(),
-                                            readExp,
-                                            rl,
-                                            structureVec[i],
-                                            numObservedFragments,
-                                            numAssignedFragments,
-                                            numValidHits,
-                                            upperBoundHits,
-                                            sidx,
-                                            transcripts,
-                                            fmCalc,
-                                            clusterForest,
-                                            fragLengthDist,
-                                            memOptions,
-                                            salmonOpts,
-                                            coverageThresh,
-                                            iomutex,
-                                            initialRound,
-                                            burnedIn,
-                                            writeToCache);
-                                };
-                                threads.emplace_back(threadFun);
+                    case SalmonIndexType::QUASI:
+                    {
+                      // True if we have a 64-bit SA index, false otherwise
+                      bool largeIndex = sidx->is64BitQuasi();
+                      for(int i = 0; i < numThreads; ++i)  {
+                        // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
+                        // change value before the lambda below is evaluated --- crazy!
+                        if (largeIndex) {
+                          auto threadFun = [&,i]() -> void {
+                            processReadsQuasi<RapMapSAIndex<int64_t>>(
+                              singleParserPtr.get(),
+                              readExp,
+                              rl,
+                              structureVec[i],
+                              numObservedFragments,
+                              numAssignedFragments,
+                              numValidHits,
+                              upperBoundHits,
+                              sidx->quasiIndex64(),
+                              transcripts,
+                              fmCalc,
+                              clusterForest,
+                              fragLengthDist,
+                              memOptions,
+                              salmonOpts,
+                              coverageThresh,
+                              iomutex,
+                              initialRound,
+                              burnedIn,
+                              writeToCache);
+                            };
+                            threads.emplace_back(threadFun);
+                          } else {
+                            auto threadFun = [&,i]() -> void {
+                              processReadsQuasi<RapMapSAIndex<int32_t>>(
+                                singleParserPtr.get(),
+                                readExp,
+                                rl,
+                                structureVec[i],
+                                numObservedFragments,
+                                numAssignedFragments,
+                                numValidHits,
+                                upperBoundHits,
+                                sidx->quasiIndex32(),
+                                transcripts,
+                                fmCalc,
+                                clusterForest,
+                                fragLengthDist,
+                                memOptions,
+                                salmonOpts,
+                                coverageThresh,
+                                iomutex,
+                                initialRound,
+                                burnedIn,
+                                writeToCache);
+                              };
+                              threads.emplace_back(threadFun);
                             }
+
                         }
-                        break;
+                      }
+                      break;
                 }
                 for(int i = 0; i < numThreads; ++i) { threads[i].join(); }
             } // ------ END Single-end --------
@@ -3116,11 +3179,11 @@ transcript abundance from RNA-seq reads
         auto indexType = experiment.getIndex()->indexType();
 
         switch (indexType) {
-            case IndexType::FMD:
+            case SalmonIndexType::FMD:
                 quantifyLibrary<SMEMAlignment>(experiment, greedyChain, memOptions, sopt, coverageThresh,
                                                 requiredObservations, sopt.numThreads);
                 break;
-            case IndexType::QUASI:
+            case SalmonIndexType::QUASI:
                 quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions, sopt, coverageThresh,
                                                 requiredObservations, sopt.numThreads);
                 break;
@@ -3245,4 +3308,3 @@ transcript abundance from RNA-seq reads
 
     return 0;
 }
-

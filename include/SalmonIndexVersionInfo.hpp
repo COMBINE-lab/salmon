@@ -5,7 +5,7 @@
 #include "boost/filesystem.hpp"
 #include "cereal/archives/json.hpp"
 
-enum class IndexType : uint8_t { FMD, QUASI };
+enum class SalmonIndexType : uint8_t { FMD, QUASI };
 
 
 class SalmonIndexVersionInfo {
@@ -14,10 +14,10 @@ class SalmonIndexVersionInfo {
          * default constructor(s)
          */
        SalmonIndexVersionInfo() : indexVersion_(0), hasAuxKmerIndex_(false),
-                                  auxKmerLength_(0), indexType_(IndexType::FMD) {}
+                                  auxKmerLength_(0), indexType_(SalmonIndexType::FMD) {}
 
        SalmonIndexVersionInfo(uint32_t indexVersionIn, bool hasAuxKmerIndexIn,
-                              uint32_t auxKmerLengthIn, IndexType indexTypeIn) :
+                              uint32_t auxKmerLengthIn, SalmonIndexType indexTypeIn) :
 			      indexVersion_(indexVersionIn),
                               hasAuxKmerIndex_(hasAuxKmerIndexIn), auxKmerLength_(auxKmerLengthIn),
 			      indexType_(indexTypeIn) {}
@@ -68,14 +68,13 @@ class SalmonIndexVersionInfo {
        uint32_t auxKmerLength() { return auxKmerLength_; }
        void auxKmerLength(uint32_t len) { auxKmerLength_ = len; };
 
-       IndexType indexType() { return indexType_; }
-       void indexType(IndexType indexTypeIn) { indexType_ = indexTypeIn; };
+       SalmonIndexType indexType() { return indexType_; }
+       void indexType(SalmonIndexType indexTypeIn) { indexType_ = indexTypeIn; };
     private:
         uint32_t indexVersion_;
         bool hasAuxKmerIndex_;
         uint32_t auxKmerLength_;
-        IndexType indexType_;
+        SalmonIndexType indexType_;
 };
 
 #endif // __SALMON_INDEX_VERSION_INFO_HPP__
-

@@ -18,6 +18,7 @@ extern "C" {
 #include "cereal/types/vector.hpp"
 
 #include "RapMapSAIndex.hpp"
+#include "IndexHeader.hpp"
 #include "BWAUtils.hpp"
 #include "SalmonConfig.hpp"
 #include "SalmonIndexVersionInfo.hpp"
@@ -32,7 +33,7 @@ int rapMapSAIndex(int argc, char* argv[]);
 
 class SalmonIndex{
         public:
-            SalmonIndex(std::shared_ptr<spdlog::logger>& logger, IndexType indexType) :
+            SalmonIndex(std::shared_ptr<spdlog::logger>& logger, SalmonIndexType indexType) :
                 loaded_(false), versionInfo_(0, false, 0, indexType), logger_(logger) {}
 
             ~SalmonIndex() {
@@ -56,7 +57,7 @@ class SalmonIndex{
 
                 auto indexType = versionInfo_.indexType();
                 // Load the appropriate index type
-                if (indexType == IndexType::FMD) {
+                if (indexType == SalmonIndexType::FMD) {
                     loadFMDIndex_(indexDir);
                 } else {
                     loadQuasiIndex_(indexDir);
@@ -129,9 +130,9 @@ class SalmonIndex{
                        uint32_t k) {
                 namespace bfs = boost::filesystem;
                 switch (versionInfo_.indexType()) {
-                    case IndexType::QUASI:
+                    case SalmonIndexType::QUASI:
                         return buildQuasiIndex_(indexDir, argVec, k);
-                    case IndexType::FMD:
+                    case SalmonIndexType::FMD:
                         return buildFMDIndex_(indexDir, argVec, k);
                     default:
                         logger_->warn("Unexpected index type; cannot build");
@@ -142,12 +143,14 @@ class SalmonIndex{
             bool loaded() { return loaded_; }
             bwaidx_t* bwaIndex() { return idx_; }
 
-            RapMapSAIndex* quasiIndex() { return quasiIndex_.get(); }
+            bool is64BitQuasi() { return largeQuasi_; }
+            RapMapSAIndex<int32_t>* quasiIndex32() { return quasiIndex32_.get(); }
+            RapMapSAIndex<int64_t>* quasiIndex64() { return quasiIndex64_.get(); }
 
             bool hasAuxKmerIndex() { return versionInfo_.hasAuxKmerIndex(); }
             KmerIntervalMap& auxIndex() { return auxIdx_; }
 
-            IndexType indexType() { return versionInfo_.indexType(); }
+            SalmonIndexType indexType() { return versionInfo_.indexType(); }
 
         private:
             bool buildFMDIndex_(boost::filesystem::path indexDir,
@@ -196,7 +199,7 @@ class SalmonIndex{
                 versionInfo_.indexVersion(salmon::indexVersion);
                 versionInfo_.hasAuxKmerIndex(false);
                 versionInfo_.auxKmerLength(k);
-                versionInfo_.indexType(IndexType::QUASI);
+                versionInfo_.indexType(SalmonIndexType::QUASI);
                 versionInfo_.save(versionFile);
                 return (ret == 0);
             }
@@ -236,11 +239,38 @@ class SalmonIndex{
                   boost::filesystem::path indexPath = indexDir;
                   std::string indexStr = indexDir.string();
                   if (indexStr.back() != '/') { indexStr.push_back('/'); }
-                  quasiIndex_.reset(new RapMapSAIndex);
-                  if (!quasiIndex_->load(indexStr)) {
+
+                  IndexHeader h;
+                  std::ifstream indexStream(indexStr + "header.json");
+                  {
+                    cereal::JSONInputArchive ar(indexStream);
+                    ar(h);
+                  }
+                  indexStream.close();
+
+                  if (h.indexType() != IndexType::QUASI) {
+                    fmt::print(stderr, "The index {} does not appear to be of the "
+                                        "appropriate type (quasi)", indexStr);
+                    std::exit(1);
+                  }
+
+                  if (h.bigSA()) {
+                    largeQuasi_ = true;
+                    fmt::print(stderr, "Loading 64-bit quasi index");
+                    quasiIndex64_.reset(new RapMapSAIndex<int64_t>);
+                    if (!quasiIndex64_->load(indexStr)) {
                       fmt::print(stderr, "Couldn't open index [{}] --- ", indexPath);
                       fmt::print(stderr, "Please make sure that 'salmon index' has been run successfully\n");
                       std::exit(1);
+                    }
+                  } else {
+                    fmt::print(stderr, "Loading 32-bit quasi index");
+                    quasiIndex32_.reset(new RapMapSAIndex<int32_t>);
+                    if(!quasiIndex32_->load(indexStr)) {
+                      fmt::print(stderr, "Couldn't open index [{}] --- ", indexPath);
+                      fmt::print(stderr, "Please make sure that 'salmon index' has been run successfully\n");
+                      std::exit(1);
+                    }
                   }
               }
               logger_->info("done");
@@ -250,7 +280,12 @@ class SalmonIndex{
 
           bool loaded_;
           SalmonIndexVersionInfo versionInfo_;
-    	  std::unique_ptr<RapMapSAIndex> quasiIndex_{nullptr};
+          // Can't think of a generally better way to do this now
+          // without making the entire code-base look crazy
+          bool largeQuasi_{false};
+      	  std::unique_ptr<RapMapSAIndex<int32_t>> quasiIndex32_{nullptr};
+      	  std::unique_ptr<RapMapSAIndex<int64_t>> quasiIndex64_{nullptr};
+
           bwaidx_t *idx_{nullptr};
           KmerIntervalMap auxIdx_;
           std::shared_ptr<spdlog::logger> logger_;
