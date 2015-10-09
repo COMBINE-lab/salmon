@@ -77,7 +77,7 @@ int salmonIndex(int argc, char* argv[]) {
 
     bool useStreamingParser = true;
 
-    string indexTypeStr;
+    string indexTypeStr = "fmd";
     uint32_t saSampInterval = 1;
     uint32_t auxKmerLen = 0;
     uint32_t maxThreads = std::thread::hardware_concurrency();
@@ -94,7 +94,7 @@ int salmonIndex(int argc, char* argv[]) {
     ("index,i", po::value<string>()->required(), "Salmon index.")
     ("threads,p", po::value<uint32_t>(&numThreads)->default_value(maxThreads)->required(),
                             "Number of threads to use (only used for computing bias features)")
-    ("type", po::value<string>(&indexTypeStr)->default_value("quasi"), "Build quasi-mapping index instead of FMD-based index")
+    ("type", po::value<string>(&indexTypeStr)->required(), "The type of index to build; options are \"fmd\" and \"quasi\"")
     ("sasamp,s", po::value<uint32_t>(&saSampInterval)->default_value(1)->required(),
                             "The interval at which the suffix array should be sampled. "
                             "Smaller values are faster, but produce a larger index. "
