@@ -2218,7 +2218,7 @@ void processReadsQuasi(paired_parser* parser,
                                readLen, maxNumHits, tooManyHits, hctr);
 
         if (initialRound) {
-            upperBoundHits += (jointHits.size() > 0);;
+            upperBoundHits += (jointHits.size() > 0);
         }
 
         // If the read mapped to > maxReadOccs places, discard it
@@ -2867,9 +2867,7 @@ void quantifyLibrary(
         experiment.setEffetiveMappingRate(upperBoundMappingRate);
     }
 
-        jointLog->info("Overall mapping rate = {}\%; "
-                   "Effective mapping rate = {}\%\n",
-                   experiment.mappingRate() * 100.0,
+        jointLog->info("Mapping rate = {}\%\n",
                    experiment.effectiveMappingRate() * 100.0);
     jointLog->info("finished quantifyLibrary()");
 }
@@ -2918,7 +2916,7 @@ int salmonQuantify(int argc, char *argv[]) {
     ("allowOrphans", po::bool_switch(&(sopt.allowOrphans))->default_value(false), "Consider orphaned reads as valid hits when "
                         "performing lightweight-alignment.  This option will increase sensitivity (allow more reads to map and "
                         "more transcripts to be detected), but may decrease specificity as orphaned alignments are more likely "
-                        "to be spurious.")
+                        "to be spurious -- this option is *always* set to true when using quasi-mapping.")
     ("threads,p", po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads), "The number of threads to use concurrently.")
     ("incompatPrior", po::value<double>(&(sopt.incompatPrior))->default_value(1e-20), "This option "
                         "sets the prior probability that an alignment that disagrees with the specified "
@@ -3044,7 +3042,7 @@ int salmonQuantify(int argc, char *argv[]) {
             auto hstring = R"(
 Quant
 ==========
-Perform streaming SMEM-based estimation of
+Perform streaming mapping-based estimation of
 transcript abundance from RNA-seq reads
 )";
             std::cout << hstring << std::endl;
@@ -3057,7 +3055,7 @@ transcript abundance from RNA-seq reads
 
 
         std::stringstream commentStream;
-        commentStream << "# salmon (smem-based) v" << salmon::version << "\n";
+        commentStream << "# salmon (mapping-based) v" << salmon::version << "\n";
         commentStream << "# [ program ] => salmon \n";
         commentStream << "# [ command ] => quant \n";
         for (auto& opt : orderedOptions.options) {
@@ -3160,6 +3158,7 @@ transcript abundance from RNA-seq reads
         // Parameter validation
         // If we're allowing orphans, make sure that the read libraries are paired-end.
         // Otherwise, this option makes no sense.
+        /*
         if (sopt.allowOrphans) {
             for (auto& rl : readLibraries) {
                 if (!rl.isPairedEnd()) {
@@ -3169,6 +3168,7 @@ transcript abundance from RNA-seq reads
                 }
             }
         }
+        */
         // end parameter validation
 
 
@@ -3184,8 +3184,11 @@ transcript abundance from RNA-seq reads
                                                 requiredObservations, sopt.numThreads);
                 break;
             case SalmonIndexType::QUASI:
-                quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions, sopt, coverageThresh,
-                                                requiredObservations, sopt.numThreads);
+                {
+                    sopt.allowOrphans = true;
+                     quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions, sopt, coverageThresh,
+                                                     requiredObservations, sopt.numThreads);
+                }
                 break;
         }
 
@@ -3206,7 +3209,7 @@ transcript abundance from RNA-seq reads
 
         bfs::path estFilePath = outputDirectory / "quant.sf";
 
-        commentStream << "# [ mapping rate ] => { " << experiment.mappingRate() * 100.0 << "\% }\n";
+        commentStream << "# [ mapping rate ] => { " << experiment.effectiveMappingRate() * 100.0 << "\% }\n";
         commentString = commentStream.str();
 
         salmon::utils::writeAbundancesFromCollapsed(

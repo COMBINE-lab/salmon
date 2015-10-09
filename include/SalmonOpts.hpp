@@ -29,7 +29,7 @@ struct SalmonOpts {
     SalmonOpts() : allowOrphans(false), splitSpanningSeeds(false), noFragLengthDist(false),
                    noEffectiveLengthCorrection(false), useReadCompat(false),
                    maxReadOccs(200), extraSeedPass(false),
-                   mappingCacheMemoryLimit(5000000) {}
+                   mappingCacheMemoryLimit(5000000), useQuasi(false) {}
 
     bool allowOrphans; // Consider orphaned reads when performing lightweight alignemnt.
 
@@ -92,6 +92,8 @@ struct SalmonOpts {
     boost::filesystem::path indexDirectory; // Index directory
 
     bool useVBOpt; // Use Variational Bayesian EM instead of "regular" EM in the batch passes
+
+    bool useQuasi; // Are we using the quasi-mapping based index or not.
 
     uint32_t numGibbsSamples; // Number of rounds of Gibbs sampling to perform
     uint32_t numBootstraps; // Number of bootstrap samples to draw
