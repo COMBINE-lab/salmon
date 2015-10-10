@@ -1529,11 +1529,11 @@ inline void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_q
     // vector-based code
     // Sort the left and right hits
     std::sort(leftHits.begin(), leftHits.end(),
-              [](CoverageCalculator& c1, CoverageCalculator& c2) -> bool {
+              [](const CoverageCalculator& c1, const CoverageCalculator& c2) -> bool {
                 return c1.targetID < c2.targetID;
                });
     std::sort(rightHits.begin(), rightHits.end(),
-              [](CoverageCalculator& c1, CoverageCalculator& c2) -> bool {
+              [](const CoverageCalculator& c1, const CoverageCalculator& c2) -> bool {
                 return c1.targetID < c2.targetID;
                });
     // Take the intersection of these two hit lists
