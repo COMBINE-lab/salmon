@@ -130,7 +130,9 @@ namespace utils {
         using salmon::math::LOG_0;
         using salmon::math::LOG_1;
 
-        bool useScaledCounts = (sopt.allowOrphans == false);
+        // If we're using lightweight-alignment (FMD)
+        // and not allowing orphans.
+        bool useScaledCounts = (!sopt.useQuasi and sopt.allowOrphans == false);
 
         std::unique_ptr<std::FILE, int (*)(std::FILE *)> output(std::fopen(fname.c_str(), "w"), std::fclose);
 
@@ -141,7 +143,7 @@ namespace utils {
 
         std::vector<Transcript>& transcripts_ = alnLib.transcripts();
         for (auto& transcript : transcripts_) {
-            transcript.projectedCounts = useScaledCounts ? 
+            transcript.projectedCounts = useScaledCounts ?
                 (transcript.mass(false) * numMappedFrags) : transcript.sharedCount();
         }
 
@@ -186,12 +188,12 @@ namespace utils {
 
 
         auto& refs = alnLib.transcripts();
-        auto numMappedReads = alnLib.numMappedReads();
+        auto numMappedFragments = alnLib.numMappedFragments();
         const double logBillion = std::log(1000000000.0);
         const double million = 1000000.0;
-        const double logNumFragments = std::log(static_cast<double>(numMappedReads));
+        const double logNumFragments = std::log(static_cast<double>(numMappedFragments));
         const double upperBoundFactor = static_cast<double>(alnLib.upperBoundHits()) /
-                                        numMappedReads;
+                                        numMappedFragments;
 
         auto clusters = alnLib.clusterForest().getClusters();
         size_t clusterID = 0;
@@ -251,7 +253,7 @@ namespace utils {
                                transcript.RefLength :
                                std::exp(transcript.getCachedEffectiveLength());
             //refLength = transcript.RefLength;
-            tfracDenom += (transcript.projectedCounts / numMappedReads) / refLength;
+            tfracDenom += (transcript.projectedCounts / numMappedFragments) / refLength;
         }
 
         // Now posterior has the transcript fraction
@@ -272,7 +274,7 @@ namespace utils {
             //double countTotal = transcripts_[transcriptID].totalCounts;
             //double countUnique = transcripts_[transcriptID].uniqueCounts;
             double fpkm = count > 0 ? fpkmFactor * count : 0.0;
-            double npm = (transcript.projectedCounts / numMappedReads);
+            double npm = (transcript.projectedCounts / numMappedFragments);
             double refLength = std::exp(logLength);
             double tfrac = (npm / refLength) / tfracDenom;
             double tpm = tfrac * million;
@@ -294,8 +296,8 @@ namespace utils {
         using salmon::math::LOG_1;
 
         auto& refs = alnLib.transcripts();
-        auto numMappedReads = alnLib.numMappedReads();
-        const double logNumFragments = std::log(static_cast<double>(numMappedReads));
+        auto numMappedFragments = alnLib.numMappedFragments();
+        const double logNumFragments = std::log(static_cast<double>(numMappedFragments));
         auto clusters = alnLib.clusterForest().getClusters();
         size_t clusterID = 0;
         for(auto cptr : clusters) {
@@ -348,12 +350,12 @@ namespace utils {
         auto& transcripts_ = refs;
         double nFracDenom{0.0};
         for (auto& transcript : transcripts_) {
-            nFracDenom += (transcript.projectedCounts / numMappedReads);
+            nFracDenom += (transcript.projectedCounts / numMappedFragments);
         }
 
 	    double invNFracTotal = 1.0 / nFracDenom;
         for (auto& transcript : transcripts_) {
-		double v = transcript.projectedCounts / numMappedReads;
+		double v = transcript.projectedCounts / numMappedFragments;
 		//transcript.setMass(v * invNFracTotal);
 		transcript.setMass(transcript.projectedCounts);
         }

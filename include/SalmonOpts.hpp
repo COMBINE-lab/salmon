@@ -29,7 +29,7 @@ struct SalmonOpts {
     SalmonOpts() : allowOrphans(false), splitSpanningSeeds(false), noFragLengthDist(false),
                    noEffectiveLengthCorrection(false), useReadCompat(false),
                    maxReadOccs(200), extraSeedPass(false),
-                   mappingCacheMemoryLimit(5000000) {}
+                   mappingCacheMemoryLimit(5000000), useQuasi(false) {}
 
     bool allowOrphans; // Consider orphaned reads when performing lightweight alignemnt.
 
@@ -79,6 +79,10 @@ struct SalmonOpts {
 
     uint32_t maxExpectedReadLen; // Maximum expected length of an observed read.
 
+    bool useMassBanking; // DEPRECATED
+
+    bool sensitive; // Perform splitting of long SMEMs into MEMs
+
     bool extraSeedPass; // Perform extra pass trying to find seeds to cover the read
 
     bool disableMappingCache; // Don't write mapping results to temporary mapping cache file
@@ -87,12 +91,12 @@ struct SalmonOpts {
 
     boost::filesystem::path indexDirectory; // Index directory
 
-    bool useMassBanking; // Bank unique mass in subsequent epochs of inference
-
     bool useVBOpt; // Use Variational Bayesian EM instead of "regular" EM in the batch passes
-    bool useGSOpt; // Do Gibbs Sampling after optimization
 
-    uint32_t numGibbsSamples; // Number of rounds of Gibbs sampling to perform 
+    bool useQuasi; // Are we using the quasi-mapping based index or not.
+
+    uint32_t numGibbsSamples; // Number of rounds of Gibbs sampling to perform
+    uint32_t numBootstraps; // Number of bootstrap samples to draw
 
     // Related to the fragment length distribution
     size_t fragLenDistMax;

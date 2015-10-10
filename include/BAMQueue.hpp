@@ -72,9 +72,9 @@ public:
   inline bool getAlignmentGroup(AlignmentGroup<FragT*>*& group);
 
   // Return the number of reads processed so far by the queue
-  size_t numObservedReads();
-  size_t numMappedReads();
-  size_t numUniquelyMappedReads();
+  size_t numObservedFragments();
+  size_t numMappedFragments();
+  size_t numUniquelyMappedFragments();
 
   void reset();
 

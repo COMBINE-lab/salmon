@@ -4,29 +4,29 @@ enable_testing()
 
 project (Salmon)
 
-set(CPACK_PACKAGE_VERSION "0.4.2")
+set(CPACK_PACKAGE_VERSION "0.5.0")
 set(CPACK_PACKAGE_VERSION_MAJOR "0")
-set(CPACK_PACKAGE_VERSION_MINOR 4")
-set(CPACK_PACKAGE_VERSION_PATCH 2")
+set(CPACK_PACKAGE_VERSION_MINOR "5")
+set(CPACK_PACKAGE_VERSION_PATCH "0")
 set(CPACK_GENERATOR "TGZ")
 set(CPACK_SOURCE_GENERATOR "TGZ")
-set(CPACK_PACKAGE_VENDOR Stony Brook University")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY Salmon - Wicked-fast RNA-seq isoform quantification using lightweight alignments")
-set(CPACK_PACKAGE_NAME 
+set(CPACK_PACKAGE_VENDOR "Stony Brook University")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Salmon - Wicked-fast RNA-seq isoform quantification using lightweight mapping")
+set(CPACK_PACKAGE_NAME
   "${CMAKE_PROJECT_NAME}-${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
 set(CPACK_SOURCE_PACKAGE_FILE_NAME
   "${CMAKE_PROJECT_NAME}-${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}-Source")
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 
-set (WARNING_IGNORE_FLAGS "-Wno-deprecated-register") 
+set (WARNING_IGNORE_FLAGS "-Wno-deprecated-register")
 set (BOOST_CXX_FLAGS "-Wno-deprecated-register -std=c++11")
 ## Prefer static to dynamic libraries
 SET(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
 
 ## Set the standard required compile flags
-# Nov 18th --- removed -DHAVE_CONFIG_H 
-set (CMAKE_CXX_FLAGS "-pthread -funroll-loops -fPIC -fomit-frame-pointer -Ofast -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -std=c++11 -Wreturn-type -Werror=return-type")
+# Nov 18th --- removed -DHAVE_CONFIG_H
+set (CMAKE_CXX_FLAGS "-pthread -funroll-loops -fPIC -fomit-frame-pointer -Ofast -DRAPMAP_SALMON_SUPPORT -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -Wno-reorder -Wno-unused-variable -std=c++11 -Wreturn-type -Werror=return-type")
 
 ##
 # OSX is strange (some might say, stupid in this regard).  Deal with it's quirkines here.
@@ -46,7 +46,7 @@ else()
 endif()
 
 set( BOOST_EXTRA_FLAGS "--layout=tagged" )
-## this get's set differently below if we 
+## this get's set differently below if we
 ## are on clang & apple
 set (NON_APPLECLANG_LIBS gomp rt)
 set (PTHREAD_LIB)
@@ -70,7 +70,7 @@ if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
     endif ()
 
     set (GCC TRUE)
-    
+
     # Put complete static linking on hold for the time-being
     # If we're not on OSX, make an attempt to compile everything statically
     #if (NOT APPLE)
@@ -79,9 +79,9 @@ if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
     set (PTHREAD_LIB "pthread")
     #endif()
 
-    # If we're on Linux (i.e. not OSX) and we're using 
+    # If we're on Linux (i.e. not OSX) and we're using
     # gcc, then set the -static-libstdc++ flag
-    if (NOT APPLE) 
+    if (NOT APPLE)
         set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static-libstdc++")
     endif()
 
@@ -93,7 +93,7 @@ if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
 # Tentatively, we support clang now
 elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
     set(CLANG TRUE)
-    # If we have libc++, then try and use it 
+    # If we have libc++, then try and use it
     include(CheckCXXCompilerFlag)
     check_cxx_compiler_flag(-stdlib=libc++ HAVE_LIBCPP)
     if (HAVE_LIBCPP)
@@ -104,14 +104,14 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
 	    set (BCXX_FLAGS "-stdlib=libc++ -DBOOST_HAS_INT128")
 	    set (BOOST_EXTRA_FLAGS toolset=clang cxxflags=${BCXX_FLAGS} linkflags="-stdlib=libc++")
         set (JELLYFISH_CXX_FLAGS "-stdlib=libc++")
-    # Otherwise, use libstdc++ (and make it static) 
+    # Otherwise, use libstdc++ (and make it static)
     else()
         set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static-libstdc++")
     endif()
     # There's currently a bug with clang-3.4 & Boost 1.55 -- this hack fixes it
     # but we should do something better (does this break things if CPU doesn't
     # have 128-bit support)?
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DBOOST_HAS_INT128") 
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DBOOST_HAS_INT128")
 
     if (APPLE)
         set (NON_APPLECLANG_LIBS "")
@@ -123,7 +123,7 @@ else ()
 endif ()
 
 ## TODO: Figure out how to detect this automatically
-# If the "assembler" is too old, tell TBB not to compile 
+# If the "assembler" is too old, tell TBB not to compile
 # with -mrtm
 if (NO_RTM)
     set (TBB_CXXFLAGS "-mno-rtm")
@@ -154,6 +154,16 @@ set (GAT_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 # Have CMake tell us what it's doing
 set (CMAKE_VERBOSE_MAKEFILE true)
 
+###
+#
+#  Grab RapMap sources for quasi-mapping code --- DURING CONFIGURE TIME!
+#
+####
+if(NOT FETCHED_RAPMAP)
+  exec_program(${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetchRapMap.sh)
+  set(FETCHED_RAPMAP TRUE CACHE BOOL "Has RapMap been fetched?" FORCE)
+endif()
+
 ##
 # Super-secret override
 ##
@@ -180,7 +190,7 @@ if (NOT LIBLZMA_FOUND)
     message ("=======================================")
 ExternalProject_Add(liblzma
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    URL http://tukaani.org/xz/xz-5.2.0.tar.gz 
+    URL http://tukaani.org/xz/xz-5.2.0.tar.gz
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/xz-5.2.0
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     BUILD_IN_SOURCE TRUE
@@ -242,11 +252,11 @@ if (BOOST_RECONFIGURE)
     unset(Boost_FOUND CACHE)
     unset(Boost_INCLUDE_DIR CACHE)
     unset(Boost_INCLUDE_DIRS CACHE)
-    unset(Boost_LIBRARY_DIRS CACHE) 
+    unset(Boost_LIBRARY_DIRS CACHE)
     unset(Boost_LIBRARIES CACHE)
     unset(BOOST_ROOT CACHE)
     unset(CMAKE_PREFIX_PATH CACHE)
-    
+
     set(BOOST_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
     set(CMAKE_PREFIX_PATH ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
     set(Boost_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
@@ -262,7 +272,7 @@ endif()
 # option, go and grab it for them.
 ##
 if ((NOT Boost_FOUND) AND (NOT FETCH_BOOST))
-	message(FATAL_ERROR 
+	message(FATAL_ERROR
         "Salmon cannot be compiled without Boost.\n"
         "It is recommended to visit http://www.boost.org/ and install Boost according to those instructions.\n"
         "This build system can also download and install a local version of boost for you (this takes a lot of time).\n"
@@ -270,8 +280,8 @@ if ((NOT Boost_FOUND) AND (NOT FETCH_BOOST))
     )
 elseif(FETCH_BOOST)
     ## Let the rest of the build process know we're going to be fetching boost
-    set (BOOST_LIB_SUBSET --with-atomic --with-chrono --with-container --with-date_time --with-exception 
-                          --with-filesystem --with-graph --with-graph_parallel --with-math 
+    set (BOOST_LIB_SUBSET --with-atomic --with-chrono --with-container --with-date_time --with-exception
+                          --with-filesystem --with-graph --with-graph_parallel --with-math
                           --with-program_options --with-system --with-thread
                           --with-timer)
     set (BOOST_WILL_RECONFIGURE TRUE)
@@ -280,7 +290,7 @@ elseif(FETCH_BOOST)
     message("==================================================================")
     ExternalProject_Add(libboost
         DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-        DOWNLOAD_COMMAND curl -k -L http://fossies.org/linux/misc/boost_1_57_0.tar.gz -o boost_1_57_0.tar.gz && 
+        DOWNLOAD_COMMAND curl -k -L http://fossies.org/linux/misc/boost_1_57_0.tar.gz -o boost_1_57_0.tar.gz &&
                 tar xzf boost_1_57_0.tar.gz
         #URL http://downloads.sourceforge.net/project/boost/boost/1.57.0/boost_1_57_0.tar.gz
         SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_57_0
@@ -293,7 +303,7 @@ elseif(FETCH_BOOST)
     )
 
     ##
-    # After we've installed boost, 
+    # After we've installed boost,
     ##
     SET( RECONFIG_FLAGS ${RECONFIG_FLAGS} -DBOOST_WILL_RECONFIGURE=FALSE -DBOOST_RECONFIGURE=TRUE -DFETCH_BOOST=FALSE)
     ExternalProject_Add_Step(libboost reconfigure
@@ -310,7 +320,7 @@ if (BOOST_WILL_RECONFIGURE)
     message("Setting Temporary Boost paths")
     set(Boost_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
     set(Boost_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
-    set(Boost_LIBRARY_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib)        
+    set(Boost_LIBRARY_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib)
     set(Boost_FOUND TRUE)
 endif()
 
@@ -319,19 +329,34 @@ message("BOOST INCLUDE DIR = ${Boost_INCLUDE_DIR}")
 message("BOOST INCLUDE DIRS = ${Boost_INCLUDE_DIRS}")
 message("BOOST LIB DIR = ${Boost_LIBRARY_DIRS}")
 message("BOOST LIBRAREIS = ${Boost_LIBRARIES}")
-	
+
 set(EXTERNAL_LIBRARY_PATH $CMAKE_CURRENT_SOURCE_DIR/lib)
+
+message("Build system will build libdivsufsort")
+message("==================================================================")
+include(ExternalProject)
+ExternalProject_Add(libdivsufsort
+    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+    URL ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort.zip
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master
+    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
+    UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
+    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master/build
+    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DBUILD_DIVSUFSORT64=TRUE -DUSE_OPENMP=TRUE -DBUILD_SHARED_LIBS=FALSE
+)
+set(SUFFARRAY_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
 
 message("Build system will fetch and build the Cereal serialization library")
 message("==================================================================")
 include(ExternalProject)
 ExternalProject_Add(libcereal
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    URL http://www.cs.cmu.edu/~robp/files/cereal-v1.0.0.tgz
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.0.0
+    DOWNLOAD_COMMAND curl -k -L https://github.com/USCiLab/cereal/archive/v1.1.2.tar.gz -o cereal-v1.1.2.tar.gz &&
+		tar -xzvf cereal-v1.1.2.tar.gz
+	SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.1.2
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
-    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.0.0/build
+    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.1.2/build
     CONFIGURE_COMMAND ""
     BUILD_COMMAND ""
     INSTALL_COMMAND sh -c "mkdir -p <INSTALL_DIR>/include && cp -r <SOURCE_DIR>/include/cereal <INSTALL_DIR>/include"
@@ -343,8 +368,8 @@ include(ExternalProject)
 ExternalProject_Add(libbwa
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
     DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/bwa/archive/0.7.12.3.tar.gz -o bwa-master.tar.gz &&
-                     mkdir -p bwa-master && 
-                     tar -xzvf bwa-master.tar.gz --strip-components=1 -C bwa-master 
+                     mkdir -p bwa-master &&
+                     tar -xzvf bwa-master.tar.gz --strip-components=1 -C bwa-master
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/bwa-master
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ""
@@ -357,14 +382,16 @@ message("Build system will fetch and build Jellyfish")
 message("==================================================================")
 ExternalProject_Add(libjellyfish
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    URL ftp://ftp.genome.umd.edu/pub/jellyfish/jellyfish-2.1.3.tar.gz
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jellyfish-2.1.3
+    DOWNLOAD_COMMAND curl -k -L https://github.com/gmarcais/Jellyfish/releases/download/v2.2.3/jellyfish-2.2.3.tar.gz -o jellyfish-2.2.3.tgz &&
+        rm -fr jellyfish-2.2.3 &&
+        tar -xzvf jellyfish-2.2.3.tgz
+   SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jellyfish-2.2.3
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    CONFIGURE_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/external/jellyfish-2.1.3/configure --prefix=<INSTALL_DIR> CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CXXFLAGS=${JELLYFISH_CXX_FLAGS}
+    CONFIGURE_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/external/jellyfish-2.2.3/configure --prefix=<INSTALL_DIR> CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CXXFLAGS=${JELLYFISH_CXX_FLAGS}
     BUILD_COMMAND ${MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CXXFLAGS=${JELLYFISH_CXX_FLAGS}
     BUILD_IN_SOURCE 1
-    INSTALL_COMMAND make install && 
-                    cp config.h <INSTALL_DIR>/include/jellyfish-2.1.3/jellyfish/ &&
+    INSTALL_COMMAND make install &&
+                    cp config.h <INSTALL_DIR>/include/jellyfish-2.2.3/jellyfish/ &&
                     cp config.h <INSTALL_DIR>/include/
 )
 
@@ -391,10 +418,10 @@ message("==================================================================")
 set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb43_20140724oss)
 set(TBB_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
 
-if ("${TBB_COMPILER}" STREQUAL "gcc") 
+if ("${TBB_COMPILER}" STREQUAL "gcc")
     ## Don't know why it's a problem yet, but if we're using
     ## GCC, get rid of the DO_ITT_NOTIFY flag
-    set(TBB_CXXFLAGS "${TBB_CXXFLAGS} -UDO_ITT_NOTIFY")  
+    set(TBB_CXXFLAGS "${TBB_CXXFLAGS} -UDO_ITT_NOTIFY")
 endif()
 
 ExternalProject_Add(libtbb
@@ -406,7 +433,7 @@ ExternalProject_Add(libtbb
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     PATCH_COMMAND "${TBB_PATCH_STEP}"
     CONFIGURE_COMMAND ""
-    BUILD_COMMAND make CXXFLAGS=${TBB_CXXFLAGS} lambdas=1 compiler=${TBB_COMPILER} cfg=release tbb_build_prefix=LIBS 
+    BUILD_COMMAND make CXXFLAGS=${TBB_CXXFLAGS} lambdas=1 compiler=${TBB_COMPILER} cfg=release tbb_build_prefix=LIBS
     INSTALL_COMMAND sh -c "cp ${TBB_SOURCE_DIR}/build/LIBS_release/*.${SHARED_LIB_EXTENSION}* ${TBB_INSTALL_DIR}/lib && cp -r ${TBB_SOURCE_DIR}/include/* ${TBB_INSTALL_DIR}/include"
     BUILD_IN_SOURCE 1
 )
@@ -453,7 +480,10 @@ message("Build system will compile libgff")
 message("==================================================================")
 ExternalProject_Add(libgff
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    URL http://www.cs.cmu.edu/~robp/files/libgff.tgz
+    DOWNLOAD_COMMAND curl -k -L https://github.com/Kingsford-Group/libgff/archive/v1.0.tar.gz -o libgff.tgz &&
+    tar -xzvf libgff.tgz &&
+    rm -fr libgff &&
+    mv libgff-1.0 libgff
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff
     UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
@@ -463,7 +493,7 @@ ExternalProject_Add(libgff
 
 message("Build system will compile Staden IOLib")
 message("==================================================================")
-ExternalProject_Add(libstadenio 
+ExternalProject_Add(libstadenio
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
     DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/staden-io_lib/releases/download/v1.13.10/io_lib-1.13.10.tar.gz -o staden-io_lib-v1.13.10.tar.gz &&
                      mkdir -p staden-io_lib-1.13.10 &&
@@ -482,10 +512,10 @@ message("Build system will fetch SPDLOG")
 message("==================================================================")
 ExternalProject_Add(libspdlog
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/spdlog/archive/v1.5.tar.gz -o spdlog-v1.5.tar.gz &&
-                     tar -xzf spdlog-v1.5.tar.gz &&
+    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/spdlog/archive/v1.6.tar.gz -o spdlog-v1.6.tar.gz &&
+                     tar -xzf spdlog-v1.6.tar.gz &&
                      rm -fr spdlog &&
-                     mv -f  spdlog-1.5 spdlog
+                     mv -f  spdlog-1.6 spdlog
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/spdlog
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ""
@@ -522,7 +552,7 @@ if (NOT HAVE_FAST_MALLOC)
     ExternalProject_Add(libjemalloc
         DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
         DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/jemalloc/archive/3.6.0.tar.gz -o jemalloc-3.6.0.tar.gz &&
-        tar -xzf jemalloc-3.6.0.tar.gz 
+        tar -xzf jemalloc-3.6.0.tar.gz
         SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-3.6.0
         BUILD_IN_SOURCE TRUE
         INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
@@ -534,13 +564,30 @@ if (NOT HAVE_FAST_MALLOC)
     set (HAVE_FAST_MALLOC TRUE)
 endif ()
 
+
+##
+## This depenency is for RapMap
+##
+message("Build system will fetch and build SparseHash")
+message("==================================================================")
+ExternalProject_Add(libsparsehash
+    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/sparsehash/archive/sparsehash-2.0.2.tar.gz -o sparsehash-2.0.2.tar.gz &&
+        tar -xzf sparsehash-2.0.2.tar.gz
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/sparsehash-sparsehash-2.0.2
+    BUILD_IN_SOURCE TRUE
+    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
+    CONFIGURE_COMMAND sh -c "CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure --prefix=<INSTALL_DIR>"
+    INSTALL_COMMAND make install
+)
+
 ###
 #
 # Done building external dependencies.
 #
 ###
 
-set (CPACK_SOURCE_IGNORE_FILES 
+set (CPACK_SOURCE_IGNORE_FILES
 "/src/PCA.cpp"
 "/src/PCAUtils.cpp"
 "/build/"
@@ -567,7 +614,7 @@ message("CPACK_SOURCE_IGNORE_FILES = ${CPACK_SOURCE_IGNORE_FILES}")
 
 # Recurse into Salmon source directory
 add_subdirectory ( src )
+#add_dependencies(salmon RapMap)
 
 # build a CPack driven installer package
 include (CPack)
-

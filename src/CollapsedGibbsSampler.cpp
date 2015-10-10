@@ -15,7 +15,7 @@
 #include <boost/filesystem.hpp>
 
 // C++ string formatting library
-#include "format.h"
+#include "spdlog/details/format.h"
 
 #include "cuckoohash_map.hh"
 #include "Eigen/Dense"
@@ -29,6 +29,7 @@
 #include "UnpairedRead.hpp"
 #include "ReadExperiment.hpp"
 #include "MultinomialSampler.hpp"
+#include "BootstrapWriter.hpp"
 
 using BlockedIndexRange =  tbb::blocked_range<size_t>;
 
@@ -39,12 +40,12 @@ constexpr double minWeight = std::numeric_limits<double>::denorm_min();
 
 void initCountMap_(
         std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
-	std::vector<Transcript>& transcriptsIn,
-	double priorAlpha,
+        std::vector<Transcript>& transcriptsIn,
+        double priorAlpha,
         MultinomialSampler& msamp,
-        std::vector<int>& countMap,
+        std::vector<uint64_t>& countMap,
         std::vector<double>& probMap,
-	std::vector<int>& txpCounts) {
+        std::vector<int>& txpCounts) {
 
     size_t offset{0};
     for (auto& eqClass : eqVec) {
@@ -100,7 +101,7 @@ void initCountMap_(
 
 void sampleRound_(
         std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
-        std::vector<int>& countMap,
+        std::vector<uint64_t>& countMap,
         std::vector<double>& probMap,
         double priorAlpha,
         std::vector<int>& txpCount,
@@ -113,7 +114,7 @@ void sampleRound_(
     // Choose a fraction of this class to re-sample
 
     // The count substracted from each transcript
-    std::vector<int> txpResamp;
+    std::vector<uint64_t> txpResamp;
 
     for (auto& eqClass : eqVec) {
         uint64_t classCount = eqClass.second.count;
@@ -129,59 +130,59 @@ void sampleRound_(
             double denom = 0.0;
             // If this is a single-transcript group,
             // then it gets the full count --- otherwise,
-	    // sample!
+            // sample!
             if (BOOST_LIKELY(groupSize > 1)) {
 
                 // Subtract some fraction of the current equivalence
                 // class' contribution from each transcript.
-		uint64_t numResampled{0};
-		if (groupSize > txpResamp.size()) {
-			txpResamp.resize(groupSize, 0);
-		}
+                uint64_t numResampled{0};
+                if (groupSize > txpResamp.size()) {
+                    txpResamp.resize(groupSize, 0);
+                }
 
-		// For each transcript in the group
+                // For each transcript in the group
                 for (size_t i = 0; i < groupSize; ++i) {
                     auto tid = txps[i];
                     auto aux = auxs[i];
                     auto currCount = countMap[offset + i];
-		    uint64_t currResamp = std::round(sampleFrac * currCount);
-		    numResampled += currResamp;
-		    txpResamp[i] = currResamp;
+                    uint64_t currResamp = std::round(sampleFrac * currCount);
+                    numResampled += currResamp;
+                    txpResamp[i] = currResamp;
                     txpCount[tid] -= currResamp;
                     countMap[offset + i] -= currResamp;
                     denom += (priorAlpha + txpCount[tid]) * aux;
                 }
 
-		if (denom > ::minEQClassWeight) {
-			// Get the multinomial probabilities
-			double norm = 1.0 / denom;
-			for (size_t i = 0; i < groupSize; ++i) {
-			    auto tid = txps[i];
-			    auto aux = auxs[i];
-			    probMap[offset + i] = norm * ((priorAlpha + txpCount[tid]) * aux);
-			}
+                if (denom > ::minEQClassWeight) {
+                    // Get the multinomial probabilities
+                    double norm = 1.0 / denom;
+                    for (size_t i = 0; i < groupSize; ++i) {
+                        auto tid = txps[i];
+                        auto aux = auxs[i];
+                        probMap[offset + i] = norm * ((priorAlpha + txpCount[tid]) * aux);
+                    }
 
-			// re-sample
-			msamp(txpResamp.begin(),        // count array to fill in
-			      numResampled,		// multinomial n
-			      groupSize,		// multinomial k
-			      probMap.begin() + offset  // where to find multinomial probs
-			      );
+                    // re-sample
+                    msamp(txpResamp.begin(),        // count array to fill in
+                            numResampled,		// multinomial n
+                            groupSize,		// multinomial k
+                            probMap.begin() + offset  // where to find multinomial probs
+                         );
 
-			for (size_t i = 0; i < groupSize; ++i) {
-				auto tid = txps[i];
-				countMap[offset + i] += txpResamp[i];
-				txpCount[tid] += txpResamp[i];
-			}
+                    for (size_t i = 0; i < groupSize; ++i) {
+                        auto tid = txps[i];
+                        countMap[offset + i] += txpResamp[i];
+                        txpCount[tid] += txpResamp[i];
+                    }
 
-		} else { // We didn't sample
-			// add back to txp-count!
-			for (size_t i = 0; i < groupSize; ++i) {
-			    auto tid = txps[i];
-			    txpCount[tid] += txpResamp[i];
-			    countMap[offset + i] += txpResamp[i];
-			}
-		}
+                } else { // We didn't sample
+                    // add back to txp-count!
+                    for (size_t i = 0; i < groupSize; ++i) {
+                        auto tid = txps[i];
+                        txpCount[tid] += txpResamp[i];
+                        countMap[offset + i] += txpResamp[i];
+                    }
+                }
             }
 
             offset += groupSize;
@@ -203,9 +204,11 @@ class DistStats {
 template <typename ExpT>
 bool CollapsedGibbsSampler::sample(ExpT& readExp,
         SalmonOpts& sopt,
+        BootstrapWriter* bootstrapWriter,
         uint32_t numSamples) {
 
     namespace bfs = boost::filesystem;
+    auto& jointLog = sopt.jointLog;
     tbb::task_scheduler_init tbbScheduler(sopt.numThreads);
     std::vector<Transcript>& transcripts = readExp.transcripts();
 
@@ -217,16 +220,18 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
     std::vector<std::vector<int>> allSamples(numSamples,
                                         std::vector<int>(transcripts.size(),0));
     double priorAlpha = 1e-8;
-    auto numMappedReads = readExp.numMappedReads();
+    bool useScaledCounts = (!sopt.useQuasi and !sopt.allowOrphans);
+    auto numMappedFragments = (useScaledCounts) ? readExp.upperBoundHits() : readExp.numMappedFragments();
 
 
     for (auto& txp : transcripts) {
-        txp.setMass(priorAlpha + (txp.mass(false) * numMappedReads));
+        txp.setMass(priorAlpha + (txp.mass(false) * numMappedFragments));
     }
 
     tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(numSamples)),
                 [&eqVec, &transcripts, priorAlpha,
-                 &allSamples]( const BlockedIndexRange& range) -> void {
+                 &allSamples, bootstrapWriter, useScaledCounts,
+                 &jointLog, numMappedFragments]( const BlockedIndexRange& range) -> void {
 
 
                 std::random_device rd;
@@ -235,40 +240,101 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
                 size_t countMapSize{0};
                 for (size_t i = 0; i < eqVec.size(); ++i) {
                     if (eqVec[i].first.valid) {
-                        countMapSize += eqVec[i].first.txps.size();
+                    countMapSize += eqVec[i].first.txps.size();
                     }
                 }
 
-                std::vector<int> countMap(countMapSize, 0);
+                size_t numTranscripts{transcripts.size()};
+
+                // will hold estimated counts
+                std::vector<double> alphas(numTranscripts, 0.0);
+                std::vector<uint64_t> countMap(countMapSize, 0);
                 std::vector<double> probMap(countMapSize, 0.0);
 
                 initCountMap_(eqVec, transcripts, priorAlpha, ms, countMap, probMap, allSamples[range.begin()]);
 
                 // For each sample this thread should generate
                 bool isFirstSample{true};
-		bool numInternalRounds = 10;
+                bool numInternalRounds = 10;
                 for (auto sampleID : boost::irange(range.begin(), range.end())) {
                     if (sampleID % 100 == 0) {
                         std::cerr << "gibbs sampling " << sampleID << "\n";
                     }
+
                     if (!isFirstSample) {
                         // the counts start at what they were last round.
                         allSamples[sampleID] = allSamples[sampleID-1];
                     }
-		    for (size_t i = 0; i < numInternalRounds; ++i){
-			    sampleRound_(eqVec, countMap, probMap, priorAlpha,
-					 allSamples[sampleID], ms);
-		    }
+
+                    // Thin the chain by a factor of (numInternalRounds)
+                    for (size_t i = 0; i < numInternalRounds; ++i){
+                        sampleRound_(eqVec, countMap, probMap, priorAlpha,
+                                allSamples[sampleID], ms);
+                    }
+
+                    // If we're scaling the counts, do it here.
+                    if (useScaledCounts) {
+                        double numMappedFrags = static_cast<double>(numMappedFragments);
+                        double alphaSum = 0.0;
+                        for (auto c : allSamples[sampleID]) { alphaSum += static_cast<double>(c); }
+                        if (alphaSum > ::minWeight) {
+                            double scaleFrac = 1.0 / alphaSum;
+                            // scaleFrac converts alpha to nucleotide fraction,
+                            // and multiplying by numMappedFrags scales by the total
+                            // number of mapped fragments to provide an estimated count.
+                            for (size_t tn = 0; tn < numTranscripts; ++tn) {
+                                alphas[tn] = numMappedFrags *
+                                            (static_cast<double>(allSamples[sampleID][tn]) * scaleFrac);
+                            }
+                        } else { // This shouldn't happen!
+                            jointLog->error("Gibbs sampler had insufficient number of fragments!"
+                                    "Something is probably wrong; please check that you "
+                                    "have run salmon correctly and report this to GitHub.");
+                        }
+                    } else { // otherwise, just copy over from the sampled counts
+                        for (size_t tn = 0; tn < numTranscripts; ++tn) {
+                            alphas[tn] = static_cast<double>(allSamples[sampleID][tn]);
+                        }
+                    }
+
+                    bootstrapWriter->writeBootstrap(alphas);
                     isFirstSample = false;
                 }
     });
+    return true;
+}
 
+template
+bool CollapsedGibbsSampler::sample<ReadExperiment>(ReadExperiment& readExp,
+        SalmonOpts& sopt,
+        BootstrapWriter* bootstrapWriter,
+        uint32_t maxIter);
+
+template
+bool CollapsedGibbsSampler::sample<AlignmentLibrary<UnpairedRead>>(
+        AlignmentLibrary<UnpairedRead>& readExp,
+        SalmonOpts& sopt,
+        BootstrapWriter* bootstrapWriter,
+        uint32_t maxIter);
+
+
+template
+bool CollapsedGibbsSampler::sample<AlignmentLibrary<ReadPair>>(
+        AlignmentLibrary<ReadPair>& readExp,
+        SalmonOpts& sopt,
+        BootstrapWriter* bootstrapWriter,
+        uint32_t maxIter);
+
+
+
+/*
+    // Deprecated Gibbs output code
     auto numTranscripts = transcripts.size();
     std::vector<DistStats> ds(numTranscripts);
 
     // get posterior means
     tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(numTranscripts)),
-                [&allSamples, &transcripts, &ds, numMappedReads,
+                [&allSamples, &transcripts, &ds, numMappedFragments,
                  numSamples]( const BlockedIndexRange& range) -> void {
 
                 // For each sample this thread should generate
@@ -280,7 +346,7 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
                       if (val > ds[tid].maxVal) { ds[tid].maxVal = val; }
                       meanNumReads += (1.0 / numSamples) * val;
                     }
-		    ds[tid].meanVal = meanNumReads;
+        		    ds[tid].meanVal = meanNumReads;
                     transcripts[tid].setMass(ds[tid].meanVal);
                 }
     });
@@ -295,11 +361,6 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
 	    statStream << transcripts[i].RefName;
         for (size_t s = 0; s < allSamples.size(); ++s) {
             statStream << '\t' << allSamples[s][i];
-            /*
-		   << ds[i].meanVal << '\t'
-		   << ds[i].minVal << '\t'
-		   << ds[i].maxVal << '\n';
-           */
         }
         statStream << '\n';
     }
@@ -322,24 +383,4 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
         transcripts[i].setMass(transcripts[i].mass(false) / txpSumTrunc);
     }
 
-    return true;
-}
-
-template
-bool CollapsedGibbsSampler::sample<ReadExperiment>(ReadExperiment& readExp,
-        SalmonOpts& sopt,
-        uint32_t maxIter);
-
-template
-bool CollapsedGibbsSampler::sample<AlignmentLibrary<UnpairedRead>>(
-        AlignmentLibrary<UnpairedRead>& readExp,
-        SalmonOpts& sopt,
-        uint32_t maxIter);
-
-
-template
-bool CollapsedGibbsSampler::sample<AlignmentLibrary<ReadPair>>(
-        AlignmentLibrary<ReadPair>& readExp,
-        SalmonOpts& sopt,
-        uint32_t maxIter);
-
+*/

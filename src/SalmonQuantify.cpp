@@ -41,7 +41,7 @@
 #include "btree_set.h"
 
 // C++ string formatting library
-#include "format.h"
+#include "spdlog/details/format.h"
 
 // C Includes for BWA
 #include <cstdio>
@@ -71,6 +71,7 @@ extern "C" {
 #include <boost/program_options.hpp>
 #include <boost/lockfree/queue.hpp>
 #include <boost/thread/thread.hpp>
+#include <boost/range/iterator_range.hpp>
 
 // TBB Includes
 #include "tbb/concurrent_unordered_set.h"
@@ -102,7 +103,10 @@ extern "C" {
 #include "ReadLibrary.hpp"
 #include "SalmonConfig.hpp"
 #include "IOUtils.hpp"
+#include "SalmonIndex.hpp"
 
+#include "BWAUtils.hpp"
+#include "KmerIntervalMap.hpp"
 #include "AlignmentGroup.hpp"
 #include "PairSequenceParser.hpp"
 #include "ForgettingMassCalculator.hpp"
@@ -112,6 +116,11 @@ extern "C" {
 #include "EquivalenceClassBuilder.hpp"
 #include "CollapsedEMOptimizer.hpp"
 #include "CollapsedGibbsSampler.hpp"
+#include "RapMapUtils.hpp"
+#include "HitManager.hpp"
+#include "SASearcher.hpp"
+#include "SACollector.hpp"
+#include "TextBootstrapWriter.hpp"
 
 /* This allows us to use CLASP for optimal MEM
  * chaining.  However, this seems to be neither
@@ -127,6 +136,11 @@ extern "C" {
 
 extern unsigned char nst_nt4_table[256];
 char const* bwa_pg = "cha";
+
+/****** QUASI MAPPING DECLARATIONS *********/
+using MateStatus = rapmap::utils::MateStatus;
+using QuasiAlignment = rapmap::utils::QuasiAlignment;
+/****** QUASI MAPPING DECLARATIONS  *******/
 
 
 /******* STUFF THAT IS STATIC IN BWAMEM THAT WE NEED HERE --- Just re-define it *************/
@@ -154,37 +168,71 @@ static void smem_aux_destroy(smem_aux_t *a)
     free(a);
 }
 
-static void mem_collect_intv(const SalmonOpts& sopt, const mem_opt_t *opt, const bwt_t *bwt, int len, const uint8_t *seq, smem_aux_t *a)
+static void mem_collect_intv(const SalmonOpts& sopt, const mem_opt_t *opt, SalmonIndex* sidx, int len, const uint8_t *seq, smem_aux_t *a)
 {
+    const bwt_t* bwt = sidx->bwaIndex()->bwt;
     int i, k, x = 0, old_n;
     int start_width = (opt->flag & MEM_F_SELF_OVLP)? 2 : 1;
     int split_len = (int)(opt->min_seed_len * opt->split_factor + .499);
     a->mem.n = 0;
+
     // first pass: find all SMEMs
-    while (x < len) {
-        if (seq[x] < 4) {
-            x = bwt_smem1(bwt, len, seq, x, start_width, &a->mem1, a->tmpv);
-            // EDIT
-            // x += 8;
-            for (i = 0; i < a->mem1.n; ++i) {
-                bwtintv_t *p = &a->mem1.a[i];
-                int slen = (uint32_t)p->info - (p->info>>32); // seed length
-                if (slen >= opt->min_seed_len)
-                    kv_push(bwtintv_t, a->mem, *p);
-            }
-        } else ++x;
+    if (sidx->hasAuxKmerIndex()) {
+	std::cerr << "HERE1\n";
+        KmerIntervalMap& auxIdx = sidx->auxIndex();
+        uint32_t klen = auxIdx.k();
+        while (x < len) {
+            if (seq[x] < 4) {
+                // Make sure there are at least k bases left
+                if (len - x < klen) { x = len; continue; }
+                // search for this key in the auxiliary index
+                KmerKey kmer(const_cast<uint8_t*>(&(seq[x])), klen);
+                auto it = auxIdx.find(kmer);
+                // if we can't find it, move to the next key
+                if (it == auxIdx.end()) { ++x; continue; }
+                // otherwise, start the search using the initial interval @it->second from the hash
+                int xb = x;
+                x = bwautils::bwt_smem1_with_kmer(bwt, len, seq, x, start_width, it->second, &a->mem1, a->tmpv);
+                for (i = 0; i < a->mem1.n; ++i) {
+                    bwtintv_t *p = &a->mem1.a[i];
+                    int slen = (uint32_t)p->info - (p->info>>32); // seed length
+                    if (slen >= opt->min_seed_len)
+                        kv_push(bwtintv_t, a->mem, *p);
+                }
+            } else ++x;
+        }
+    } else {
+        while (x < len) {
+            if (seq[x] < 4) {
+                x = bwt_smem1(bwt, len, seq, x, start_width, &a->mem1, a->tmpv);
+                for (i = 0; i < a->mem1.n; ++i) {
+                    bwtintv_t *p = &a->mem1.a[i];
+                    int slen = (uint32_t)p->info - (p->info>>32); // seed length
+                    if (slen >= opt->min_seed_len)
+                        kv_push(bwtintv_t, a->mem, *p);
+                }
+            } else ++x;
+        }
     }
-    // second pass: find MEMs inside a long SMEM
-    old_n = a->mem.n;
-    for (k = 0; k < old_n; ++k) {
-        bwtintv_t *p = &a->mem.a[k];
-        int start = p->info>>32, end = (int32_t)p->info;
-        if (end - start < split_len || p->x[2] > opt->split_width) continue;
-        bwt_smem1(bwt, len, seq, (start + end)>>1, p->x[2]+1, &a->mem1, a->tmpv);
-        for (i = 0; i < a->mem1.n; ++i)
-            if ((uint32_t)a->mem1.a[i].info - (a->mem1.a[i].info>>32) >= opt->min_seed_len)
-                kv_push(bwtintv_t, a->mem, a->mem1.a[i]);
+
+    // For sensitive / extra-sensitive mode only
+    if (sopt.sensitive or sopt.extraSeedPass) {
+        // second pass: find MEMs inside a long SMEM
+        old_n = a->mem.n;
+        for (k = 0; k < old_n; ++k) {
+            bwtintv_t *p = &a->mem.a[k];
+            int start = p->info>>32, end = (int32_t)p->info;
+            if (end - start < split_len || p->x[2] > opt->split_width) continue;
+
+            //int idx = (start + end) >> 1;
+            bwt_smem1(bwt, len, seq, (start + end)>>1, p->x[2]+1, &a->mem1, a->tmpv);
+            for (i = 0; i < a->mem1.n; ++i)
+                if ((uint32_t)a->mem1.a[i].info - (a->mem1.a[i].info>>32) >= opt->min_seed_len)
+                    kv_push(bwtintv_t, a->mem, a->mem1.a[i]);
+        }
     }
+
+    // For extra-sensitive mode only
     // third pass: LAST-like
     if (sopt.extraSeedPass and opt->max_mem_intv > 0) {
         x = 0;
@@ -218,7 +266,7 @@ using TranscriptIDVector = std::vector<TranscriptID>;
 using KmerIDMap = std::vector<TranscriptIDVector>;
 using my_mer = jellyfish::mer_dna_ns::mer_base_static<uint64_t, 1>;
 
-constexpr uint32_t miniBatchSize{1000};
+constexpr uint32_t miniBatchSize{5000};
 
 class SMEMAlignment {
     public:
@@ -274,20 +322,30 @@ class SMEMAlignment {
         uint32_t fragLength_;
 };
 
+template <typename AlnT>
+using AlnGroupVec = std::vector<AlignmentGroup<AlnT>>;
+
+template <typename AlnT>
+using AlnGroupVecRange = boost::iterator_range<typename AlnGroupVec<AlnT>::iterator>;
+
 #define __MOODYCAMEL__
 #if defined(__MOODYCAMEL__)
- using AlnGroupQueue = moodycamel::ConcurrentQueue<AlignmentGroup<SMEMAlignment>*>;
+ template <typename AlnT>
+ using AlnGroupQueue = moodycamel::ConcurrentQueue<AlignmentGroup<AlnT>*>;
 #else
- using AlnGroupQueue = tbb::concurrent_queue<AlignmentGroup<SMEMAlignment>*>;
+ template <typename AlnT>
+ using AlnGroupQueue = tbb::concurrent_queue<AlignmentGroup<AlnT>*>;
 #endif
 
+template <typename AlnT>
 void processMiniBatch(
         ReadExperiment& readExp,
         ForgettingMassCalculator& fmCalc,
         uint64_t firstTimestepOfRound,
         ReadLibrary& readLib,
         const SalmonOpts& salmonOpts,
-        std::vector<AlignmentGroup<SMEMAlignment>*>& batchHits,
+        //std::vector<AlignmentGroup<AlnT>*>& batchHits,
+        AlnGroupVecRange<AlnT> batchHits,
         std::vector<Transcript>& transcripts,
         ClusterForest& clusterForest,
         FragmentLengthDistribution& fragLengthDist,
@@ -304,7 +362,6 @@ void processMiniBatch(
     using salmon::math::logSub;
 
     const uint64_t numBurninFrags = salmonOpts.numBurninFrags;
-    bool useMassBanking = (!initialRound and salmonOpts.useMassBanking);
 
     auto log = spdlog::get("jointLog");
     size_t numTranscripts{transcripts.size()};
@@ -356,54 +413,20 @@ void processMiniBatch(
         double newUniqueMass = LOG_0;
     };
 
-    std::unordered_map<TranscriptID, HitInfo> hitInfo;
-    // We only need to fill this in if it's not the first round
-    if (useMassBanking) {
-        for (auto& alnGroup : batchHits) {
-            for (auto a : alnGroup->alignments()) {
-                auto transcriptID = a.transcriptID();
-                if (transcriptID < 0 or transcriptID >= transcripts.size()) {
-                    salmonOpts.jointLog->warn("Invalid Transcript ID [{}] encountered", transcriptID);
-                }
-                auto& info = hitInfo[transcriptID];
-                auto& txp = transcripts[transcriptID];
-                if(!info.observed) {
-                    info.observed = true;
-
-                    if (txp.uniqueCount() > 0) {
-                        double dormantInterval = static_cast<double>(currentMinibatchTimestep -
-                                    firstTimestepOfRound + 1);
-                        // The cumulative mass last time this was updated
-                        double prevUpdateMass = startingCumulativeMass;//fmCalc.cumulativeLogMassAt(startTime);
-                        double currentUpdateMass = fmCalc.cumulativeLogMassAt(currentMinibatchTimestep);
-                        double updateFraction = std::log(txp.uniqueUpdateFraction());
-
-                        // The new unique mass to be added to this transcript
-                        double newUniqueMass = salmon::math::logSub(currentUpdateMass, prevUpdateMass) +
-                            updateFraction - std::log(dormantInterval);
-                        info.newUniqueMass = newUniqueMass;
-                    }
-                }
-                info.numHits++;
-            } // end alignments in group
-        } // end batch hits
-    } // end initial round
-    // END: DOUBLY-COLLAPSED TESTING
-
     int i{0};
     {
         // Iterate over each group of alignments (a group consists of all alignments reported
         // for a single read).  Distribute the read's mass to the transcripts
         // where it potentially aligns.
         for (auto& alnGroup : batchHits) {
-            if (alnGroup->size() == 0) { continue; }
+            if (alnGroup.size() == 0) { continue; }
 
             // We start out with probability 0
             double sumOfAlignProbs{LOG_0};
             // Record whether or not this read is unique to a single transcript.
             bool transcriptUnique{true};
 
-            auto firstTranscriptID = alnGroup->alignments().front().transcriptID();
+            auto firstTranscriptID = alnGroup.alignments().front().transcriptID();
             std::unordered_set<size_t> observedTranscripts;
 
             // EQCLASS
@@ -415,7 +438,7 @@ void processMiniBatch(
             double avgLogBias = salmon::math::LOG_0;
             uint32_t numInGroup{0};
             // For each alignment of this read
-            for (auto& aln : alnGroup->alignments()) {
+            for (auto& aln : alnGroup.alignments()) {
                 auto transcriptID = aln.transcriptID();
                 auto& transcript = transcripts[transcriptID];
                 transcriptUnique = transcriptUnique and (transcriptID == firstTranscriptID);
@@ -435,21 +458,6 @@ void processMiniBatch(
                 }
 
                 double transcriptLogCount = transcript.mass(initialRound);
-
-                // BEGIN: DOUBLY-COLLAPSED TESTING
-                // If this is not the initial round, then add the
-                // appropriate proportion of unique read mass for
-                // every ambiguous alignment we encounter. We do
-                // this before the line (below) where we
-                // retrieve this transcript's mass.
-                if (useMassBanking and transcript.uniqueCount() > 0) {
-                    auto txpHitInfo = hitInfo[transcriptID];
-                    transcriptLogCount = salmon::math::logAdd(
-                            transcriptLogCount,
-                            txpHitInfo.newUniqueMass);
-                }
-                // END: DOUBLY-COLLAPSED TESTING
-
 
                 if ( transcriptLogCount != LOG_0 ) {
                     double errLike = salmon::math::LOG_1;
@@ -571,19 +579,19 @@ void processMiniBatch(
             TranscriptGroup tg(txpIDs, txpIDsHash);
             double auxProbSum{0.0};
             for (auto& p : auxProbs) {
-                //p -= auxDenom;
                 p = std::exp(p - auxDenom);
                 auxProbSum += p;
             }
+            /*
             if (std::abs(auxProbSum - 1.0) > 0.01) {
                 std::cerr << "weights had sum of " << auxProbSum
                           << " but it should be 1!!\n\n";
             }
+            */
             eqBuilder.addGroup(std::move(tg), auxProbs);
 
-
             // normalize the hits
-            for (auto& aln : alnGroup->alignments()) {
+            for (auto& aln : alnGroup.alignments()) {
                 if (std::abs(aln.logProb) == LOG_0) { continue; }
                 // Normalize the log-probability of this alignment
                 aln.logProb -= sumOfAlignProbs;
@@ -593,14 +601,8 @@ void processMiniBatch(
 
                 // Add the new mass to this transcript
                 double newMass = logForgettingMass + aln.logProb;
-
-                // If this is not the initial round, and we need to
-                // add "banked" mass for this hit, do it now.
-                if (useMassBanking and transcript.uniqueCount() > 0) {
-                    newMass = salmon::math::logAdd(newMass, hitInfo[transcriptID].newUniqueMass);
-                }
                 transcript.addMass( newMass );
-                transcript.addBias( aln.logBias );
+                //transcript.addBias( aln.logBias );
 
                 double r = uni(randEng);
                 if (!burnedIn and r < std::exp(aln.logProb)) {
@@ -634,7 +636,7 @@ void processMiniBatch(
                 }
             } // end normalize
 
-            double avgBias = std::exp(avgLogBias);
+            //double avgBias = std::exp(avgLogBias);
             // update the single target transcript
             if (transcriptUnique) {
                 if (updateCounts) {
@@ -645,9 +647,9 @@ void processMiniBatch(
                         1.0,
                         logForgettingMass, updateCounts);
             } else { // or the appropriate clusters
-                clusterForest.mergeClusters<SMEMAlignment>(alnGroup->alignments().begin(), alnGroup->alignments().end());
+                clusterForest.mergeClusters<AlnT>(alnGroup.alignments().begin(), alnGroup.alignments().end());
                 clusterForest.updateCluster(
-                        alnGroup->alignments().front().transcriptID(),
+                        alnGroup.alignments().front().transcriptID(),
                         1.0,
                         logForgettingMass, updateCounts);
             }
@@ -761,21 +763,44 @@ class TranscriptHitList {
         std::vector<KmerVote> rcVotes;
 
         uint32_t targetID;
+        uint32_t fwdCov{0};
+        uint32_t revCov{0};
 
         bool isForward_{true};
 
         void addFragMatch(uint32_t tpos, uint32_t readPos, uint32_t voteLen) {
             int32_t votePos = static_cast<int32_t>(tpos) - static_cast<int32_t>(readPos);
             votes.emplace_back(votePos, readPos, voteLen);
+            fwdCov += voteLen;
         }
 
         void addFragMatchRC(uint32_t tpos, uint32_t readPos, uint32_t voteLen, uint32_t readLen) {
             //int32_t votePos = static_cast<int32_t>(tpos) - (readPos) + voteLen;
             int32_t votePos = static_cast<int32_t>(tpos) - (readLen - readPos);
             rcVotes.emplace_back(votePos, readPos, voteLen);
+            revCov += voteLen;
         }
 
         uint32_t totalNumHits() { return std::max(votes.size(), rcVotes.size()); }
+
+        bool computeBestLocFast_(std::vector<KmerVote>& sVotes, Transcript& transcript,
+                                 std::string& read, bool isRC,
+                                 int32_t& maxClusterPos, uint32_t& maxClusterCount, double& maxClusterScore) {
+            bool updatedMaxScore{true};
+            if (sVotes.size() == 0) { return updatedMaxScore; }
+            uint32_t readLen = read.length();
+            uint32_t votePos = sVotes.front().votePos;
+
+            uint32_t cov = isRC ? revCov : fwdCov;
+            if (cov > maxClusterCount) {
+                maxClusterCount = cov;
+                maxClusterPos = votePos;
+                maxClusterScore = maxClusterCount / static_cast<double>(readLen);
+                updatedMaxScore = true;
+            }
+            return updatedMaxScore;
+
+        }
 
         bool computeBestLoc_(std::vector<KmerVote>& sVotes, Transcript& transcript,
                              std::string& read, bool isRC,
@@ -1145,14 +1170,16 @@ class TranscriptHitList {
 };
 
 template <typename CoverageCalculator>
-inline void collectHitsForRead(const bwaidx_t *idx, const bwtintv_v* a, smem_aux_t* auxHits,
+inline void collectHitsForRead(SalmonIndex* sidx, const bwtintv_v* a, smem_aux_t* auxHits,
                         mem_opt_t* memOptions, const SalmonOpts& salmonOpts, const uint8_t* read, uint32_t readLen,
                         std::vector<CoverageCalculator>& hits) {
                         //std::unordered_map<uint64_t, CoverageCalculator>& hits) {
 
-    mem_collect_intv(salmonOpts, memOptions, idx->bwt, readLen, read, auxHits);
+    bwaidx_t* idx = sidx->bwaIndex();
+    mem_collect_intv(salmonOpts, memOptions, sidx, readLen, read, auxHits);
 
     // For each MEM
+    int firstSeedLen{-1};
     for (int i = 0; i < auxHits->mem.n; ++i ) {
         // A pointer to the interval of the MEMs occurences
         bwtintv_t* p = &auxHits->mem.a[i];
@@ -1160,6 +1187,14 @@ inline void collectHitsForRead(const bwaidx_t *idx, const bwtintv_v* a, smem_aux
         int qstart = p->info>>32;
         uint32_t qend = static_cast<uint32_t>(p->info);
         int step, count, slen = (qend - qstart); // seed length
+
+        /*
+        if (firstSeedLen > -1) {
+            if (slen < firstSeedLen) { return; }
+        } else {
+            firstSeedLen = slen;
+        }
+        */
 
         int64_t k;
         step = p->x[2] > memOptions->max_occ? p->x[2] / memOptions->max_occ : 1;
@@ -1372,8 +1407,8 @@ inline bool nearEndOfTranscript(
 }
 
 template <typename CoverageCalculator>
-void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& frag,
-                        bwaidx_t *idx,
+inline void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& frag,
+                        SalmonIndex* sidx,
                         smem_i *itr,
                         const bwtintv_v *a,
                         smem_aux_t* auxHits,
@@ -1431,7 +1466,7 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
             readStr[p] = nst_nt4_table[static_cast<int>(readStr[p])];
         }
 
-        collectHitsForRead(idx, a, auxHits,
+        collectHitsForRead(sidx, a, auxHits,
                             memOptions,
                             salmonOpts,
                             reinterpret_cast<const uint8_t*>(readStr.c_str()),
@@ -1450,7 +1485,7 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
             readStr[p] = nst_nt4_table[static_cast<int>(readStr[p])];
         }
 
-        collectHitsForRead(idx, a, auxHits,
+        collectHitsForRead(sidx, a, auxHits,
                             memOptions,
                             salmonOpts,
                             reinterpret_cast<const uint8_t*>(readStr.c_str()),
@@ -1459,14 +1494,14 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
      } // end right
 
     size_t numTrivialHits = (leftHits.size() + rightHits.size() > 0) ? 1 : 0;
-    // nothing more to do
-    if (numTrivialHits == 0) { return; }
-
     upperBoundHits += (leftHits.size() + rightHits.size() > 0) ? 1 : 0;
     size_t readHits{0};
     auto& alnList = hitList.alignments();
     hitList.isUniquelyMapped() = true;
     alnList.clear();
+    // nothing more to do
+    if (numTrivialHits == 0) { return; }
+
 
     double cutoffLeft{ coverageThresh };//* leftReadLength};
     double cutoffRight{ coverageThresh };//* rightReadLength};
@@ -1491,7 +1526,7 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
     std::vector<JointHitPtr> jointHits; // haha (variable name)!
     jointHits.reserve(minHitList.size());
 
-    // vector-based code -- June 23
+    // vector-based code
     // Sort the left and right hits
     std::sort(leftHits.begin(), leftHits.end(),
               [](CoverageCalculator& c1, CoverageCalculator& c2) -> bool {
@@ -1514,15 +1549,15 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
             } else {
                 if (!(rightIt->targetID < leftIt->targetID)) {
                     jointHits.push_back({leftIt->targetID,
-                                           std::distance(leftHits.begin(), leftIt),
-                                           std::distance(rightHits.begin(), rightIt)});
+                                         static_cast<size_t>(std::distance(leftHits.begin(), leftIt)),
+                                         static_cast<size_t>(std::distance(rightHits.begin(), rightIt))});
                     ++leftIt;
                 }
                 ++rightIt;
             }
         }
     }
-    // End June 23
+    // End vector-based code
 
     /* map based code
     {
@@ -1592,7 +1627,6 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
         for (auto& tHitList : rightHits) {
             // Prior
             // auto transcriptID = tHitList.first;
-            // June 23
             auto transcriptID = tHitList.targetID;
             auto& covChain = tHitList;
             Transcript& t = transcripts[transcriptID];
@@ -1765,52 +1799,6 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
         }
 
     } // end else
-
-    /*
-    for (auto& tHitList : leftHits) {
-        // Coverage score
-        Transcript& t = transcripts[tHitList.first];
-        tHitList.second.computeBestChain(t, frag.first.seq);
-        ++leftHitCount;
-    }
-
-    uint32_t firstTranscriptID = std::numeric_limits<uint32_t>::max();
-
-    for (auto& tHitList : rightHits) {
-
-        auto it = leftHits.find(tHitList.first);
-        // Coverage score
-        if (it != leftHits.end() and it->second.bestHitScore >= cutoffLeft) {
-            Transcript& t = transcripts[tHitList.first];
-            tHitList.second.computeBestChain(t, frag.second.seq);
-            if (tHitList.second.bestHitScore < cutoffRight) { continue; }
-
-            auto end1Start = it->second.bestHitPos;
-            auto end2Start = tHitList.second.bestHitPos;
-
-            double score = (it->second.bestHitScore + tHitList.second.bestHitScore) * 0.5;
-            uint32_t fragLength = std::abs(static_cast<int32_t>(end1Start) -
-                                           static_cast<int32_t>(end2Start)) + rightReadLength;
-
-            bool end1IsForward = it->second.isForward();
-            bool end2IsForward = tHitList.second.isForward();
-
-            uint32_t end1Pos = (end1IsForward) ? it->second.bestHitPos : it->second.bestHitPos + leftReadLength;
-            uint32_t end2Pos = (end2IsForward) ? tHitList.second.bestHitPos : tHitList.second.bestHitPos + rightReadLength;
-            auto fmt = salmon::utils::hitType(end1Pos, end1IsForward, end2Pos, end2IsForward);
-
-            if (readHits == 0) {
-                firstTranscriptID = tHitList.first;
-            } else if (hitList.isUniquelyMapped() and tHitList.first != firstTranscriptID) {
-                hitList.isUniquelyMapped() = false;
-            }
-
-            alnList.emplace_back(tHitList.first, fmt, score, fragLength);
-            ++readHits;
-            ++hitListCount;
-        }
-    }
-    */
 }
 
 /**
@@ -1819,8 +1807,8 @@ void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& f
   *
   */
 template <typename CoverageCalculator>
-void getHitsForFragment(jellyfish::header_sequence_qual& frag,
-                        bwaidx_t *idx,
+inline void getHitsForFragment(jellyfish::header_sequence_qual& frag,
+                        SalmonIndex* sidx,
                         smem_i *itr,
                         const bwtintv_v *a,
                         smem_aux_t* auxHits,
@@ -1838,7 +1826,6 @@ void getHitsForFragment(jellyfish::header_sequence_qual& frag,
     //std::unordered_map<uint64_t, CoverageCalculator> hits;
     std::vector<CoverageCalculator> hits;
 
-    // June 23
     auto& eqBuilder = readExp.equivalenceClassBuilder();
 
     uint32_t readLength{0};
@@ -1856,7 +1843,7 @@ void getHitsForFragment(jellyfish::header_sequence_qual& frag,
 
         char* readPtr = const_cast<char*>(readStr.c_str());
 
-        collectHitsForRead(idx, a, auxHits,
+        collectHitsForRead(sidx, a, auxHits,
                             memOptions,
                             salmonOpts,
                             reinterpret_cast<const uint8_t*>(readStr.c_str()),
@@ -1883,7 +1870,6 @@ void getHitsForFragment(jellyfish::header_sequence_qual& frag,
         // Prior
         // auto hitID = tHitList.first;
         // auto& covVec = tHitList.second;
-        // June23
         auto hitID = tHitList.targetID;
         auto& covVec = tHitList;
 
@@ -1932,10 +1918,9 @@ void getHitsForFragment(jellyfish::header_sequence_qual& frag,
                     });
         }
     }
-    // June 23
     else {
         // If we didn't have any *significant* hits --- add any *trivial* joint hits
-        // EQCLASS
+        return;
         std::vector<uint32_t> txpIDs;
         txpIDs.reserve(hits.size());
         double uniProb = 1.0 / hits.size();
@@ -1950,7 +1935,6 @@ void getHitsForFragment(jellyfish::header_sequence_qual& frag,
         TranscriptGroup tg(txpIDs, txpIDsHash);
         eqBuilder.addGroup(std::move(tg), auxProbs);
     }
-    // End June 23
 
 
 }
@@ -1962,13 +1946,38 @@ template <typename ParserT, typename CoverageCalculator>
 void processReadsMEM(ParserT* parser,
                ReadExperiment& readExp,
                ReadLibrary& rl,
-               AlnGroupQueue& structureCache,
-               AlnGroupQueue& outputGroups,
+               AlnGroupVec<QuasiAlignment>& structureVec,
                std::atomic<uint64_t>& numObservedFragments,
                std::atomic<uint64_t>& numAssignedFragments,
                std::atomic<uint64_t>& validHits,
                std::atomic<uint64_t>& upperBoundHits,
-               bwaidx_t *idx,
+               SalmonIndex* sidx,
+               std::vector<Transcript>& transcripts,
+               ForgettingMassCalculator& fmCalc,
+               ClusterForest& clusterForest,
+               FragmentLengthDistribution& fragLengthDist,
+               mem_opt_t* memOptions,
+               const SalmonOpts& salmonOpts,
+               double coverageThresh,
+	           std::mutex& iomutex,
+               bool initialRound,
+               bool& burnedIn,
+               volatile bool& writeToCache) {
+    	// ERROR
+	salmonOpts.jointLog->error("Quasimapping cannot be used with the FMD index --- please report this bug on GitHub");
+	std::exit(1);
+}
+
+template <typename ParserT, typename CoverageCalculator>
+void processReadsMEM(ParserT* parser,
+               ReadExperiment& readExp,
+               ReadLibrary& rl,
+               AlnGroupVec<SMEMAlignment>& structureVec,
+               std::atomic<uint64_t>& numObservedFragments,
+               std::atomic<uint64_t>& numAssignedFragments,
+               std::atomic<uint64_t>& validHits,
+               std::atomic<uint64_t>& upperBoundHits,
+               SalmonIndex* sidx,
                std::vector<Transcript>& transcripts,
                ForgettingMassCalculator& fmCalc,
                ClusterForest& clusterForest,
@@ -1987,16 +1996,12 @@ void processReadsMEM(ParserT* parser,
   // Create a random uniform distribution
   std::default_random_engine eng(rd());
 
-  std::vector<AlignmentGroup<SMEMAlignment>*> hitLists;
-  //std::vector<std::vector<Alignment>> hitLists;
   uint64_t prevObservedFrags{1};
-  hitLists.resize(miniBatchSize);
-
   uint64_t leftHitCount{0};
   uint64_t hitListCount{0};
 
   // Super-MEM iterator
-  smem_i *itr = smem_itr_init(idx->bwt);
+  smem_i *itr = smem_itr_init(sidx->bwaIndex()->bwt);
   const bwtintv_v *a = nullptr;
   smem_aux_t* auxHits = smem_aux_init();
 
@@ -2006,27 +2011,24 @@ void processReadsMEM(ParserT* parser,
 
   size_t locRead{0};
   uint64_t localUpperBoundHits{0};
+  size_t rangeSize{0};
+
   while(true) {
     typename ParserT::job j(*parser); // Get a job from the parser: a bunch of read (at most max_read_group)
     if(j.is_empty()) break;           // If got nothing, quit
 
-    hitLists.resize(j->nb_filled);
-    //structureCache.try_dequeue_bulk(hitLists.begin() , j->nb_filled);
+    rangeSize = j->nb_filled;
+    if (rangeSize > structureVec.size()) {
+        salmonOpts.jointLog->error("rangeSize = {}, but structureVec.size() = {} --- this shouldn't happen.\n"
+                                   "Please report this bug on GitHub", rangeSize, structureVec.size());
+        std::exit(1);
+    }
 
     for(size_t i = 0; i < j->nb_filled; ++i) { // For all the read in this batch
         localUpperBoundHits = 0;
-        //hitLists[i].setRead(&j->data[i]);
 
-#if defined(__MOODYCAMEL__)
-        // Moody camel
-        while (!structureCache.try_dequeue(hitLists[i])) {}
-#else
-        // TBB
-        while (!structureCache.try_pop(hitLists[i])) {}
-#endif
-        auto& hitList = *(hitLists[i]);
-
-        getHitsForFragment<CoverageCalculator>(j->data[i], idx, itr, a,
+        auto& hitList = structureVec[i];
+        getHitsForFragment<CoverageCalculator>(j->data[i], sidx, itr, a,
                                                auxHits,
                                                memOptions,
                                                readExp,
@@ -2065,150 +2067,224 @@ void processReadsMEM(ParserT* parser,
 
     } // end for i < j->nb_filled
 
-
-    // NOT DOUBLY-COLLAPSED
-    // double logForgettingMass = fmCalc();
-
-    // BEGIN: DOUBLY-COLLAPSED TESTING
-   // double logForgettingMass{0.0};
-   // uint64_t currentMinibatchTimestep{0};
-   // fmCalc.getLogMassAndTimestep(logForgettingMass, currentMinibatchTimestep);
-    // END: DOUBLE-COLLAPSED TESTING
-
     prevObservedFrags = numObservedFragments;
-
-   processMiniBatch(readExp, fmCalc,firstTimestepOfRound, rl, salmonOpts, hitLists, transcripts, clusterForest,
+    AlnGroupVecRange<SMEMAlignment> hitLists = boost::make_iterator_range(structureVec.begin(), structureVec.begin() + rangeSize);
+    processMiniBatch<SMEMAlignment>(readExp, fmCalc,firstTimestepOfRound, rl, salmonOpts, hitLists, transcripts, clusterForest,
                      fragLengthDist, numAssignedFragments, eng, initialRound, burnedIn);
-    if (writeToCache) {
-
-#if defined(__MOODYCAMEL__)
-        // Moody camel
-        if (!outputGroups.enqueue_bulk(hitLists.begin(), hitLists.size())) {
-            salmonOpts.jointLog->critical("Could not enqueue items in "
-                                          "outputGroups queue\n");
-            std::exit(1);
-        }
-#else
-        // TBB
-        for (auto hl : hitLists) { outputGroups.push(hl); }
-#endif
-    } else {
-
-#if defined(__MOODYCAMEL__)
-        // Moody camel
-        if (!structureCache.enqueue_bulk(hitLists.begin(), hitLists.size())) {
-            salmonOpts.jointLog->critical("Could not enqueue items in "
-                                          "structureCache queue\n");
-            std::exit(1);
-        }
-#else
-        // TBB
-        for (auto hl : hitLists) { structureCache.push(hl); }
-#endif
-    }
-    // At this point, the parser can re-claim the strings
   }
   smem_aux_destroy(auxHits);
   smem_itr_destroy(itr);
 }
 
+
+
+/// START QUASI
+
 // To use the parser in the following, we get "jobs" until none is
 // available. A job behaves like a pointer to the type
 // jellyfish::sequence_list (see whole_sequence_parser.hpp).
-void processCachedAlignmentsHelper(
-        ReadExperiment& readExp,
-        ReadLibrary& rl,
-        AlnGroupQueue& structureCache,
-        AlnGroupQueue& alignmentCache,
-        std::atomic<uint64_t>& numObservedFragments,
-        std::atomic<uint64_t>& numAssignedFragments,
-        std::atomic<uint64_t>& validHits,
-        std::vector<Transcript>& transcripts,
-        ForgettingMassCalculator& fmCalc,
-        ClusterForest& clusterForest,
-        FragmentLengthDistribution& fragLengthDist,
-        const SalmonOpts& salmonOpts,
-        std::mutex& iomutex,
-        bool initialRound,
-        volatile bool& cacheExhausted,
-        bool& burnedIn) {
+template <typename RapMapIndexT>
+void processReadsQuasi(paired_parser* parser,
+               ReadExperiment& readExp,
+               ReadLibrary& rl,
+               AlnGroupVec<SMEMAlignment>& structureVec,
+               std::atomic<uint64_t>& numObservedFragments,
+               std::atomic<uint64_t>& numAssignedFragments,
+               std::atomic<uint64_t>& validHits,
+               std::atomic<uint64_t>& upperBoundHits,
+               RapMapIndexT* idx,
+               std::vector<Transcript>& transcripts,
+               ForgettingMassCalculator& fmCalc,
+               ClusterForest& clusterForest,
+               FragmentLengthDistribution& fragLengthDist,
+               mem_opt_t* memOptions,
+               const SalmonOpts& salmonOpts,
+               double coverageThresh,
+	           std::mutex& iomutex,
+               bool initialRound,
+               bool& burnedIn,
+               volatile bool& writeToCache) {
 
-    // Seed with a real random value, if available
-    std::random_device rd;
+    	// ERROR
+	salmonOpts.jointLog->error("MEM-mapping cannot be used with the Quasi index --- please report this bug on GitHub");
+	std::exit(1);
+}
 
-    // Create a random uniform distribution
-    std::default_random_engine eng(rd());
+template <typename RapMapIndexT>
+void processReadsQuasi(single_parser* parser,
+               ReadExperiment& readExp,
+               ReadLibrary& rl,
+               AlnGroupVec<SMEMAlignment>& structureVec,
+               std::atomic<uint64_t>& numObservedFragments,
+               std::atomic<uint64_t>& numAssignedFragments,
+               std::atomic<uint64_t>& validHits,
+               std::atomic<uint64_t>& upperBoundHits,
+               RapMapIndexT* sidx,
+               std::vector<Transcript>& transcripts,
+               ForgettingMassCalculator& fmCalc,
+               ClusterForest& clusterForest,
+               FragmentLengthDistribution& fragLengthDist,
+               mem_opt_t* memOptions,
+               const SalmonOpts& salmonOpts,
+               double coverageThresh,
+	           std::mutex& iomutex,
+               bool initialRound,
+               bool& burnedIn,
+               volatile bool& writeToCache) {
+    	// ERROR
+	salmonOpts.jointLog->error("MEM-mapping cannot be used with the Quasi index --- please report this bug on GitHub");
+	std::exit(1);
+}
 
-    std::vector<AlignmentGroup<SMEMAlignment>*> hitLists;
+template <typename RapMapIndexT>
+void processReadsQuasi(paired_parser* parser,
+               ReadExperiment& readExp,
+               ReadLibrary& rl,
+               AlnGroupVec<QuasiAlignment>& structureVec,
+               std::atomic<uint64_t>& numObservedFragments,
+               std::atomic<uint64_t>& numAssignedFragments,
+               std::atomic<uint64_t>& validHits,
+               std::atomic<uint64_t>& upperBoundHits,
+               RapMapIndexT* qidx,
+               std::vector<Transcript>& transcripts,
+               ForgettingMassCalculator& fmCalc,
+               ClusterForest& clusterForest,
+               FragmentLengthDistribution& fragLengthDist,
+               mem_opt_t* memOptions,
+               const SalmonOpts& salmonOpts,
+               double coverageThresh,
+	           std::mutex& iomutex,
+               bool initialRound,
+               bool& burnedIn,
+               volatile bool& writeToCache) {
+  uint64_t count_fwd = 0, count_bwd = 0;
+  // Seed with a real random value, if available
+  std::random_device rd;
 
-    uint64_t prevObservedFrags{1};
-    auto expectedLibType = rl.format();
+  // Create a random uniform distribution
+  std::default_random_engine eng(rd());
 
-    uint32_t batchCount{miniBatchSize};
-    uint64_t locRead{0};
-    uint64_t locValidHits{0};
-    uint32_t numConsumed{0};
-#if defined(__MOODYCAMEL__)
-    uint32_t obtained{0};
-#else
-    bool obtained{false};
-#endif
+  uint64_t prevObservedFrags{1};
+  uint64_t leftHitCount{0};
+  uint64_t hitListCount{0};
 
-    uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
-    hitLists.resize(batchCount);
-    auto it = hitLists.begin();
+  auto expectedLibType = rl.format();
 
-    while(!cacheExhausted or
-#if defined(__MOODYCAMEL__)
-    // Moody camel
-          (obtained = alignmentCache.try_dequeue_bulk(it, batchCount - numConsumed)) > 0) {
-      numConsumed += obtained;
-#else
-    // TBB
-            (obtained = alignmentCache.try_pop(*it))) {
-        numConsumed += obtained ? 1 : 0;
-#endif
+  uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
 
-        /** Get alignment groups from the queue while they still exist
-         * once the cacheExhausted variable is true, there will be
-         * no more alignment groups written in this round.  If cacheExhausted
-         * is true and the alignment cache is empty, then there are no
-         * more alignments to process (am I certain about this in concurrent
-         * crazy multi-threaded land?).
-         */
-        while (numConsumed < batchCount) {
-#if defined(__MOODYCAMEL__)
-            // Moody camel
-            it += obtained;
-            obtained = alignmentCache.try_dequeue_bulk(it, batchCount - numConsumed);
-            numConsumed += obtained;
-            if (cacheExhausted and obtained == 0) {
-#else
-            // TBB
-            it += obtained ? 1 : 0;
-            obtained = alignmentCache.try_pop(*it);
-            numConsumed += obtained ? 1 : 0;
-            if (cacheExhausted and !obtained) {
-#endif
-                break;
-            }
+  size_t locRead{0};
+  uint64_t localUpperBoundHits{0};
+  size_t rangeSize{0};
+
+  bool tooManyHits{false};
+  size_t maxNumHits{salmonOpts.maxReadOccs};
+  size_t readLen{0};
+  SACollector<RapMapIndexT> hitCollector(qidx);
+  SASearcher<RapMapIndexT> saSearcher(qidx);
+  std::vector<QuasiAlignment> leftHits;
+  std::vector<QuasiAlignment> rightHits;
+  rapmap::utils::HitCounters hctr;
+
+  while(true) {
+    typename paired_parser::job j(*parser); // Get a job from the parser: a bunch of read (at most max_read_group)
+    if(j.is_empty()) break;           // If got nothing, quit
+
+    rangeSize = j->nb_filled;
+    if (rangeSize > structureVec.size()) {
+        salmonOpts.jointLog->error("rangeSize = {}, but structureVec.size() = {} --- this shouldn't happen.\n"
+                                   "Please report this bug on GitHub", rangeSize, structureVec.size());
+        std::exit(1);
+    }
+
+    for(size_t i = 0; i < j->nb_filled; ++i) { // For all the read in this batch
+        readLen = j->data[i].first.seq.length();
+        tooManyHits = false;
+        localUpperBoundHits = 0;
+        auto& jointHitGroup = structureVec[i];
+        auto& jointHits = jointHitGroup.alignments();
+        jointHitGroup.clearAlignments();
+        leftHits.clear();
+        rightHits.clear();
+
+        bool lh = hitCollector(j->data[i].first.seq,
+                               leftHits, saSearcher,
+                               MateStatus::PAIRED_END_LEFT);
+        bool rh = hitCollector(j->data[i].second.seq,
+                               rightHits, saSearcher,
+                               MateStatus::PAIRED_END_RIGHT);
+
+        rapmap::utils::mergeLeftRightHits(
+                               leftHits, rightHits, jointHits,
+                               readLen, maxNumHits, tooManyHits, hctr);
+
+        if (initialRound) {
+            upperBoundHits += (jointHits.size() > 0);
         }
-        // At this point, we either have the requested # of alignemnts, or
-        // have exhausted the alignment queue.
 
-        hitLists.resize(numConsumed);
-        for (auto hitList : hitLists) {
-            locValidHits += hitList->size();
-        }
-        validHits += locValidHits;
-        locRead += numConsumed;
+        // If the read mapped to > maxReadOccs places, discard it
+        if (jointHits.size() > salmonOpts.maxReadOccs ) { jointHitGroup.clearAlignments(); }
 
-        uint32_t updateRate = 500000;
-        uint64_t prevMod = numObservedFragments % updateRate;
-        numObservedFragments += numConsumed;
-        uint64_t newMod = numObservedFragments % updateRate;
-        if (newMod < prevMod) {
-            iomutex.lock();
+
+		// If we have mappings, then process them.
+		if (jointHits.size() > 0) {
+			bool isPaired = jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED;
+			// If we are ignoring orphans
+			if (!salmonOpts.allowOrphans) {
+				// If the mappings for the current read are not properly-paired (i.e. are orphans)
+				// then just clear the group.
+				if (!isPaired) {
+					jointHitGroup.clearAlignments();
+				}
+			} else {
+				// If these aren't paired-end reads --- so that
+				// we have orphans --- make sure we sort the
+				// mappings so that they are in transcript order
+				if (!isPaired) {
+					// Find the end of the hits for the left read
+					auto leftHitEndIt = std::partition_point(
+							jointHits.begin(), jointHits.end(),
+							[](const QuasiAlignment& q) -> bool {
+							return q.mateStatus == rapmap::utils::MateStatus::PAIRED_END_LEFT;
+							});
+					// Merge the hits so that the entire list is in order
+					// by transcript ID.
+					std::inplace_merge(jointHits.begin(), leftHitEndIt, jointHits.end(),
+							[](const QuasiAlignment& a, const QuasiAlignment& b) -> bool {
+							return a.transcriptID() < b.transcriptID();
+							});
+				}
+			}
+
+			for (auto& h : jointHits) {
+				switch (h.mateStatus) {
+					case MateStatus::PAIRED_END_LEFT:
+						{
+							h.format = salmon::utils::hitType(h.pos, h.fwd);
+						}
+						break;
+					case MateStatus::PAIRED_END_RIGHT:
+						{
+							h.format = salmon::utils::hitType(h.pos, h.fwd);
+						}
+						break;
+					case MateStatus::PAIRED_END_PAIRED:
+						{
+							uint32_t end1Pos = (h.fwd) ? h.pos : h.pos + h.readLen;
+							uint32_t end2Pos = (h.mateIsFwd) ? h.matePos : h.matePos + h.mateLen;
+							bool canDovetail = false;
+							h.format = salmon::utils::hitType(end1Pos, h.fwd, h.readLen,
+									end2Pos, h.mateIsFwd, h.mateLen, canDovetail);
+						}
+						break;
+				}
+			}
+		} // If we have no mappings --- then there's nothing to do
+
+        validHits += jointHits.size();
+        locRead++;
+        ++numObservedFragments;
+        if (numObservedFragments % 500000 == 0) {
+    	    iomutex.lock();
             const char RESET_COLOR[] = "\x1b[0m";
             char green[] = "\x1b[30m";
             green[3] = '0' + static_cast<char>(fmt::GREEN);
@@ -2216,38 +2292,151 @@ void processCachedAlignmentsHelper(
             red[3] = '0' + static_cast<char>(fmt::RED);
             if (initialRound) {
                 fmt::print(stderr, "\033[A\r\r{}processed{} {} {}fragments{}\n", green, red, numObservedFragments, green, RESET_COLOR);
-                fmt::print(stderr, "hits per frag:  {}", validHits / static_cast<float>(prevObservedFrags));
+                fmt::print(stderr, "hits per frag:  {}; hit upper bound: {}",
+                           validHits / static_cast<float>(prevObservedFrags),
+                           upperBoundHits.load());
             } else {
                 fmt::print(stderr, "\r\r{}processed{} {} {}fragments{}", green, red, numObservedFragments, green, RESET_COLOR);
             }
-            salmonOpts.fileLog->info("processed {} fragments\n", numObservedFragments);
-            iomutex.unlock();
+    	    iomutex.unlock();
         }
 
-        // NOT DOUBLY-COLLAPSED
-        // double logForgettingMass = fmCalc();
 
-        processMiniBatch(readExp, fmCalc,firstTimestepOfRound, rl, salmonOpts, hitLists, transcripts, clusterForest,
-                fragLengthDist, numAssignedFragments, eng, initialRound, burnedIn);
-#if defined(__MOODYCAMEL__)
-        if (!structureCache.enqueue_bulk(std::make_move_iterator(hitLists.begin()), hitLists.size())) {
-            salmonOpts.jointLog->error("Could not enqueue structures in "
-                                       "structureCache; exiting\n\n");
-            std::exit(1);
-        }
-#else
-        // TBB
-        for (auto& hl : hitLists) { structureCache.push(hl); }
-#endif
-        numConsumed = 0;
-        obtained = 0;
-        hitLists.clear();
-        hitLists.resize(batchCount);
-        it = hitLists.begin();
-        // At this point, the parser can re-claim the strings
+    } // end for i < j->nb_filled
+
+    prevObservedFrags = numObservedFragments;
+    AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(structureVec.begin(), structureVec.begin() + rangeSize);
+    processMiniBatch<QuasiAlignment>(readExp, fmCalc,firstTimestepOfRound, rl, salmonOpts, hitLists, transcripts, clusterForest,
+                     fragLengthDist, numAssignedFragments, eng, initialRound, burnedIn);
+  }
+}
+
+// SINGLE END
+
+// To use the parser in the following, we get "jobs" until none is
+// available. A job behaves like a pointer to the type
+// jellyfish::sequence_list (see whole_sequence_parser.hpp).
+template <typename RapMapIndexT>
+void processReadsQuasi(single_parser* parser,
+               ReadExperiment& readExp,
+               ReadLibrary& rl,
+               AlnGroupVec<QuasiAlignment>& structureVec,
+               std::atomic<uint64_t>& numObservedFragments,
+               std::atomic<uint64_t>& numAssignedFragments,
+               std::atomic<uint64_t>& validHits,
+               std::atomic<uint64_t>& upperBoundHits,
+               RapMapIndexT* qidx,
+               std::vector<Transcript>& transcripts,
+               ForgettingMassCalculator& fmCalc,
+               ClusterForest& clusterForest,
+               FragmentLengthDistribution& fragLengthDist,
+               mem_opt_t* memOptions,
+               const SalmonOpts& salmonOpts,
+               double coverageThresh,
+	           std::mutex& iomutex,
+               bool initialRound,
+               bool& burnedIn,
+               volatile bool& writeToCache) {
+  uint64_t count_fwd = 0, count_bwd = 0;
+  // Seed with a real random value, if available
+  std::random_device rd;
+
+  // Create a random uniform distribution
+  std::default_random_engine eng(rd());
+
+  uint64_t prevObservedFrags{1};
+  uint64_t leftHitCount{0};
+  uint64_t hitListCount{0};
+
+  auto expectedLibType = rl.format();
+
+
+  uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
+
+  size_t locRead{0};
+  uint64_t localUpperBoundHits{0};
+  size_t rangeSize{0};
+
+  bool tooManyHits{false};
+  size_t readLen{0};
+  size_t maxNumHits{salmonOpts.maxReadOccs};
+  SACollector<RapMapIndexT> hitCollector(qidx);
+  SASearcher<RapMapIndexT> saSearcher(qidx);
+  rapmap::utils::HitCounters hctr;
+
+  while(true) {
+    typename single_parser::job j(*parser); // Get a job from the parser: a bunch of read (at most max_read_group)
+    if(j.is_empty()) break;           // If got nothing, quit
+
+    rangeSize = j->nb_filled;
+    if (rangeSize > structureVec.size()) {
+        salmonOpts.jointLog->error("rangeSize = {}, but structureVec.size() = {} --- this shouldn't happen.\n"
+                                   "Please report this bug on GitHub", rangeSize, structureVec.size());
+        std::exit(1);
     }
 
+    for(size_t i = 0; i < j->nb_filled; ++i) { // For all the read in this batch
+        readLen = j->data[i].seq.length();
+        tooManyHits = false;
+        localUpperBoundHits = 0;
+        auto& jointHitGroup = structureVec[i];
+        auto& jointHits = jointHitGroup.alignments();
+        jointHitGroup.clearAlignments();
+
+        bool lh = hitCollector(j->data[i].seq,
+                               jointHits, saSearcher,
+                               MateStatus::SINGLE_END);
+
+        if (initialRound) {
+            upperBoundHits += (jointHits.size() > 0);
+        }
+
+        // If the read mapped to > maxReadOccs places, discard it
+        if (jointHits.size() > salmonOpts.maxReadOccs ) { jointHitGroup.clearAlignments(); }
+
+        for (auto& h : jointHits) {
+            switch (h.mateStatus) {
+                case MateStatus::SINGLE_END:
+                    {
+                        h.format = salmon::utils::hitType(h.pos, h.fwd);
+                    }
+                    break;
+            }
+        }
+
+        validHits += jointHits.size();
+        locRead++;
+        ++numObservedFragments;
+        if (numObservedFragments % 500000 == 0) {
+    	    iomutex.lock();
+            const char RESET_COLOR[] = "\x1b[0m";
+            char green[] = "\x1b[30m";
+            green[3] = '0' + static_cast<char>(fmt::GREEN);
+            char red[] = "\x1b[30m";
+            red[3] = '0' + static_cast<char>(fmt::RED);
+            if (initialRound) {
+                fmt::print(stderr, "\033[A\r\r{}processed{} {} {}fragments{}\n", green, red, numObservedFragments, green, RESET_COLOR);
+                fmt::print(stderr, "hits per frag:  {}; hit upper bound: {}",
+                           validHits / static_cast<float>(prevObservedFrags),
+                           upperBoundHits.load());
+            } else {
+                fmt::print(stderr, "\r\r{}processed{} {} {}fragments{}", green, red, numObservedFragments, green, RESET_COLOR);
+            }
+    	    iomutex.unlock();
+        }
+
+
+    } // end for i < j->nb_filled
+
+    prevObservedFrags = numObservedFragments;
+    AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(structureVec.begin(), structureVec.begin() + rangeSize);
+    processMiniBatch<QuasiAlignment>(readExp, fmCalc,firstTimestepOfRound, rl, salmonOpts, hitLists, transcripts, clusterForest,
+                     fragLengthDist, numAssignedFragments, eng, initialRound, burnedIn);
+  }
 }
+
+/// DONE QUASI
+
 
 
 
@@ -2261,53 +2450,11 @@ int performBiasCorrection(boost::filesystem::path featPath,
                           boost::filesystem::path outPath,
                           size_t numThreads);
 
-void processCachedAlignments(
-        ReadExperiment& readExp,
-        ReadLibrary& rl,
-        AlnGroupQueue& structureCache,
-        AlnGroupQueue& alignmentCache,
-        std::atomic<uint64_t>& numObservedFragments,
-        std::atomic<uint64_t>& numAssignedFragments,
-        std::vector<Transcript>& transcripts,
-        ForgettingMassCalculator& fmCalc,
-        ClusterForest& clusterForest,
-        FragmentLengthDistribution& fragLengthDist,
-        const SalmonOpts& salmonOpts,
-        std::mutex& ioMutex,
-        bool initialRound,
-        volatile bool& cacheExhausted,
-        bool& burnedIn,
-        size_t numQuantThreads) {
-
-        std::atomic<uint64_t> numValidHits{0};
-        std::vector<std::thread> quantThreads;
-        for (size_t i = 0; i < numQuantThreads; ++i) {
-                quantThreads.emplace_back(processCachedAlignmentsHelper,
-                        std::ref(readExp),
-                        std::ref(rl),
-                        std::ref(structureCache),
-                        std::ref(alignmentCache),
-                        std::ref(numObservedFragments),
-                        std::ref(numAssignedFragments),
-                        std::ref(numValidHits),
-                        std::ref(transcripts),
-                        std::ref(fmCalc),
-                        std::ref(clusterForest),
-                        std::ref(fragLengthDist),
-                        std::ref(salmonOpts),
-                        std::ref(ioMutex),
-                        initialRound,
-                        std::ref(cacheExhausted),
-                        std::ref(burnedIn));
-
-        }
-        for (auto& t : quantThreads) { t.join(); }
-}
-
+template <typename AlnT>
 void processReadLibrary(
         ReadExperiment& readExp,
         ReadLibrary& rl,
-        bwaidx_t* idx,
+        SalmonIndex* sidx,
         std::vector<Transcript>& transcripts,
         ClusterForest& clusterForest,
         std::atomic<uint64_t>& numObservedFragments, // total number of reads we've looked at
@@ -2323,8 +2470,7 @@ void processReadLibrary(
         bool greedyChain,
         std::mutex& iomutex,
         size_t numThreads,
-        AlnGroupQueue& structureCache,
-        AlnGroupQueue& outputGroups,
+        std::vector<AlnGroupVec<AlnT>>& structureVec,
         volatile bool& writeToCache){
 
             std::vector<std::thread> threads;
@@ -2332,78 +2478,131 @@ void processReadLibrary(
             std::atomic<uint64_t> numValidHits{0};
             rl.checkValid();
 
+            auto indexType = sidx->indexType();
+
             std::unique_ptr<paired_parser> pairedParserPtr{nullptr};
             std::unique_ptr<single_parser> singleParserPtr{nullptr};
             // If the read library is paired-end
             // ------ Paired-end --------
             if (rl.format().type == ReadType::PAIRED_END) {
 
-                char* readFiles[] = { const_cast<char*>(rl.mates1().front().c_str()),
-                    const_cast<char*>(rl.mates2().front().c_str()) };
 
-                size_t maxReadGroup{miniBatchSize}; // Number of reads in each "job"
-                size_t concurrentFile{2}; // Number of files to read simultaneously
-                pairedParserPtr.reset(new
-                        paired_parser(4 * numThreads, maxReadGroup,
-                                      concurrentFile, readFiles, readFiles + 2));
+		    if (rl.mates1().size() != rl.mates2().size()) {
+			    salmonOpts.jointLog->error("The number of provided files for "
+					    "-1 and -2 must be the same!");
+			    std::exit(1);
+		    }
 
+		    size_t numFiles = rl.mates1().size() + rl.mates2().size();
+		    char** pairFileList = new char*[numFiles];
+		    for (size_t i = 0; i < rl.mates1().size(); ++i) {
+			    pairFileList[2*i] = const_cast<char*>(rl.mates1()[i].c_str());
+			    pairFileList[2*i+1] = const_cast<char*>(rl.mates2()[i].c_str());
+		    }
 
-                for(int i = 0; i < numThreads; ++i)  {
-                    if (greedyChain) {
-                        auto threadFun = [&]() -> void {
-                                    processReadsMEM<paired_parser, TranscriptHitList>(
-                                    pairedParserPtr.get(),
-                                    readExp,
-                                    rl,
-                                    structureCache,
-                                    outputGroups,
-                                    numObservedFragments,
-                                    numAssignedFragments,
-                                    numValidHits,
-                                    upperBoundHits,
-                                    idx,
-                                    transcripts,
-                                    fmCalc,
-                                    clusterForest,
-                                    fragLengthDist,
-                                    memOptions,
-                                    salmonOpts,
-                                    coverageThresh,
-                                    iomutex,
-                                    initialRound,
-                                    burnedIn,
-                                    writeToCache);
-                        };
-                        threads.emplace_back(threadFun);
-                    } else {
-                        /*
-                        auto threadFun = [&]() -> void {
-                                    processReadsMEM<paired_parser, FragmentList>(
-                                    &parser,
-                                    rl,
-                                    numObservedFragments,
-                                    numAssignedFragments,
-                                    idx,
-                                    transcripts,
-                                    batchNum,
-                                    logForgettingMass,
-                                    ffMutex,
-                                    clusterForest,
-                                    fragLengthDist,
-                                    memOptions,
-                                    salmonOpts,
-                                    coverageThresh,
-                                    iomutex,
-                                    initialRound,
-                                    burnedIn);
-                        };
-                        threads.emplace_back(threadFun);
-                        */
-                    }
-                }
+		    size_t maxReadGroup{miniBatchSize}; // Number of reads in each "job"
+		    size_t concurrentFile{2}; // Number of files to read simultaneously
+		    pairedParserPtr.reset(new
+				    paired_parser(4 * numThreads, maxReadGroup,
+					    concurrentFile, pairFileList, pairFileList+numFiles));
 
-                for(int i = 0; i < numThreads; ++i)
-                    threads[i].join();
+		    switch (indexType) {
+			case SalmonIndexType::FMD:
+			    {
+				for(int i = 0; i < numThreads; ++i)  {
+				    // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
+				    // change value before the lambda below is evaluated --- crazy!
+				    auto threadFun = [&,i]() -> void {
+					processReadsMEM<paired_parser, TranscriptHitList>(
+						pairedParserPtr.get(),
+						readExp,
+						rl,
+						structureVec[i],
+						numObservedFragments,
+						numAssignedFragments,
+						numValidHits,
+						upperBoundHits,
+						sidx,
+						transcripts,
+						fmCalc,
+						clusterForest,
+						fragLengthDist,
+						memOptions,
+						salmonOpts,
+						coverageThresh,
+						iomutex,
+						initialRound,
+						burnedIn,
+						writeToCache);
+				    };
+				    threads.emplace_back(threadFun);
+				}
+				break;
+				case SalmonIndexType::QUASI:
+				{
+            // True if we have a 64-bit SA index, false otherwise
+            bool largeIndex = sidx->is64BitQuasi();
+				    for(int i = 0; i < numThreads; ++i)  {
+					// NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
+					// change value before the lambda below is evaluated --- crazy!
+          if (largeIndex) {
+            auto threadFun = [&,i]() -> void {
+              processReadsQuasi<RapMapSAIndex<int64_t>>(
+                pairedParserPtr.get(),
+                readExp,
+                rl,
+                structureVec[i],
+                numObservedFragments,
+                numAssignedFragments,
+                numValidHits,
+                upperBoundHits,
+                sidx->quasiIndex64(),
+                transcripts,
+                fmCalc,
+                clusterForest,
+                fragLengthDist,
+                memOptions,
+                salmonOpts,
+                coverageThresh,
+                iomutex,
+                initialRound,
+                burnedIn,
+                writeToCache);
+              };
+              threads.emplace_back(threadFun);
+            } else {
+              auto threadFun = [&,i]() -> void {
+              processReadsQuasi<RapMapSAIndex<int32_t>>(
+                pairedParserPtr.get(),
+                readExp,
+                rl,
+                structureVec[i],
+                numObservedFragments,
+                numAssignedFragments,
+                numValidHits,
+                upperBoundHits,
+                sidx->quasiIndex32(),
+                transcripts,
+                fmCalc,
+                clusterForest,
+                fragLengthDist,
+                memOptions,
+                salmonOpts,
+                coverageThresh,
+                iomutex,
+                initialRound,
+                burnedIn,
+                writeToCache);
+              };
+              threads.emplace_back(threadFun);
+            }
+
+				    }
+				}
+				break;
+			    } // end switch
+		    }
+		    for(int i = 0; i < numThreads; ++i) { threads[i].join(); }
 
             } // ------ Single-end --------
             else if (rl.format().type == ReadType::SINGLE_END) {
@@ -2419,323 +2618,107 @@ void processReadLibrary(
                                       concurrentFile,
                                       streams));
 
-                for(int i = 0; i < numThreads; ++i)  {
-                    if (greedyChain) {
-                        auto threadFun = [&]() -> void {
+                switch (indexType) {
+                    case SalmonIndexType::FMD:
+                        {
+                            for(int i = 0; i < numThreads; ++i)  {
+                                // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
+                                // change value before the lambda below is evaluated --- crazy!
+                                auto threadFun = [&,i]() -> void {
                                     processReadsMEM<single_parser, TranscriptHitList>(
-                                    singleParserPtr.get(),
-                                    readExp,
-                                    rl,
-                                    structureCache,
-                                    outputGroups,
-                                    numObservedFragments,
-                                    numAssignedFragments,
-                                    numValidHits,
-                                    upperBoundHits,
-                                    idx,
-                                    transcripts,
-                                    fmCalc,
-                                    clusterForest,
-                                    fragLengthDist,
-                                    memOptions,
-                                    salmonOpts,
-                                    coverageThresh,
-                                    iomutex,
-                                    initialRound,
-                                    burnedIn,
-                                    writeToCache);
-                        };
-                        threads.emplace_back(threadFun);
-                    } else {
-                        /*
-                        auto threadFun = [&]() -> void {
-                                    processReadsMEM<single_parser, FragmentList>( &parser,
-                                    rl,
-                                    numObservedFragments,
-                                    numAssignedFragments,
-                                    idx,
-                                    transcripts,
-                                    batchNum,
-                                    logForgettingMass,
-                                    ffMutex,
-                                    clusterForest,
-                                    fragLengthDist,
-                                    coverageThresh,
-                                    iomutex,
-                                    initialRound,
-                                    burnedIn);
-                        };
-                        threads.emplace_back(threadFun);
-                        */
-                    }
+                                            singleParserPtr.get(),
+                                            readExp,
+                                            rl,
+                                            structureVec[i],
+                                            numObservedFragments,
+                                            numAssignedFragments,
+                                            numValidHits,
+                                            upperBoundHits,
+                                            sidx,
+                                            transcripts,
+                                            fmCalc,
+                                            clusterForest,
+                                            fragLengthDist,
+                                            memOptions,
+                                            salmonOpts,
+                                            coverageThresh,
+                                            iomutex,
+                                            initialRound,
+                                            burnedIn,
+                                            writeToCache);
+                                };
+                                threads.emplace_back(threadFun);
+                            }
+                        }
+                        break;
+
+                    case SalmonIndexType::QUASI:
+                    {
+                      // True if we have a 64-bit SA index, false otherwise
+                      bool largeIndex = sidx->is64BitQuasi();
+                      for(int i = 0; i < numThreads; ++i)  {
+                        // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
+                        // change value before the lambda below is evaluated --- crazy!
+                        if (largeIndex) {
+                          auto threadFun = [&,i]() -> void {
+                            processReadsQuasi<RapMapSAIndex<int64_t>>(
+                              singleParserPtr.get(),
+                              readExp,
+                              rl,
+                              structureVec[i],
+                              numObservedFragments,
+                              numAssignedFragments,
+                              numValidHits,
+                              upperBoundHits,
+                              sidx->quasiIndex64(),
+                              transcripts,
+                              fmCalc,
+                              clusterForest,
+                              fragLengthDist,
+                              memOptions,
+                              salmonOpts,
+                              coverageThresh,
+                              iomutex,
+                              initialRound,
+                              burnedIn,
+                              writeToCache);
+                            };
+                            threads.emplace_back(threadFun);
+                          } else {
+                            auto threadFun = [&,i]() -> void {
+                              processReadsQuasi<RapMapSAIndex<int32_t>>(
+                                singleParserPtr.get(),
+                                readExp,
+                                rl,
+                                structureVec[i],
+                                numObservedFragments,
+                                numAssignedFragments,
+                                numValidHits,
+                                upperBoundHits,
+                                sidx->quasiIndex32(),
+                                transcripts,
+                                fmCalc,
+                                clusterForest,
+                                fragLengthDist,
+                                memOptions,
+                                salmonOpts,
+                                coverageThresh,
+                                iomutex,
+                                initialRound,
+                                burnedIn,
+                                writeToCache);
+                              };
+                              threads.emplace_back(threadFun);
+                            }
+
+                        }
+                      }
+                      break;
                 }
-                for(int i = 0; i < numThreads; ++i)
-                    threads[i].join();
+                for(int i = 0; i < numThreads; ++i) { threads[i].join(); }
             } // ------ END Single-end --------
 }
 
-bool writeAlignmentCacheToFile(
-        AlnGroupQueue& outputGroups,
-        AlnGroupQueue& structureCache,
-        uint64_t& numWritten,
-        std::atomic<uint64_t>& numObservedFragments,
-        uint64_t numRequiredFragments,
-        SalmonOpts& salmonOpts,
-        volatile bool& writeToCache,
-        cereal::BinaryOutputArchive& outputStream ) {
-
-        size_t blockSize{miniBatchSize};
-        size_t numDequed{0};
-        bool cacheUniqueReads = !salmonOpts.useMassBanking;
-#if defined(__MOODYCAMEL__)
-        // Moody camel
-        AlignmentGroup<SMEMAlignment>* alnGroups[blockSize];
-#else
-        // TBB
-        AlignmentGroup<SMEMAlignment>* alnGroups[1];
-#endif
-
-        while (writeToCache) {
-#if defined(__MOODYCAMEL__)
-            // MOODY CAMEL QUEUE
-            while ( (numDequed = outputGroups.try_dequeue_bulk(alnGroups, blockSize)) > 0) {
-                for (size_t i = 0; i < numDequed; ++i) {
-                    // only write ambigously mapped fragments to the cache
-                    // for processing in subsequent rounds
-                    if (cacheUniqueReads or !alnGroups[i]->isUniquelyMapped()) {
-                        outputStream((*alnGroups[i]));
-                        ++numWritten;
-                    }
-                }
-
-                structureCache.enqueue_bulk(alnGroups, numDequed);
-
-                // If, at any point, we've seen the required number of
-                // fragments, then we don't need the cache any longer.
-                if (numObservedFragments > numRequiredFragments) {
-                    writeToCache = false;
-                }
-            }
-#else
-            // TBB QUEUE
-            while (outputGroups.try_pop(alnGroups[0])) {
-                if (cacheUniqueReads or !alnGroups[0]->isUniquelyMapped()) {
-                    outputStream(*alnGroups[0]);
-                    ++numWritten;
-                }
-
-                structureCache.push(alnGroups[0]);
-
-                // If, at any point, we've seen the required number of
-                // fragments, then we don't need the cache any longer.
-                if (numObservedFragments > numRequiredFragments) {
-                    writeToCache = false;
-                }
-            }
-#endif
-        }
-
-#if defined(__MOODYCAMEL__)
-        // Moody camel
-        while (outputGroups.try_dequeue(alnGroups[0])) {
-            if (cacheUniqueReads or !alnGroups[0]->isUniquelyMapped()) {
-                outputStream((*alnGroups[0]));
-                ++numWritten;
-            }
-            structureCache.enqueue(alnGroups[0]);
-        }
-#else
-        // TBB
-        while (outputGroups.try_pop(alnGroups[0])) {
-            outputStream((*alnGroups[0]));
-            ++numWritten;
-            structureCache.push(alnGroups[0]);
-        }
-#endif
-        return true;
-}
-
-bool readAlignmentCache(
-        AlnGroupQueue& alnGroupQueue,
-        AlnGroupQueue& structureCache,
-        uint64_t numWritten,
-        volatile bool& finishedParsing,
-        boost::filesystem::path& cacheFilePath) {
-
-        std::ifstream alnCacheFile(cacheFilePath.c_str(), std::ios::binary);
-        cereal::BinaryInputArchive alnCacheArchive(alnCacheFile);
-
-        uint64_t numRead{0};
-        AlignmentGroup<SMEMAlignment>* alnGroup;
-        while (numRead < numWritten) {
-#if defined(__MOODYCAMEL__)
-            // Moody camel
-            while (!structureCache.try_dequeue(alnGroup)) {}
-#else
-            // TBB
-            while (!structureCache.try_pop(alnGroup)) {}
-#endif
-
-            alnCacheArchive((*alnGroup));
-#if defined(__MOODYCAMEL__)
-            // Moody camel
-            alnGroupQueue.enqueue(alnGroup);
-#else
-            // TBB
-            alnGroupQueue.push(alnGroup);
-#endif
-            ++numRead;
-        }
-        finishedParsing = true;
-
-        alnCacheFile.close();
-        return true;
-}
-
-struct CacheFile {
-    CacheFile(boost::filesystem::path& pathIn, uint64_t numWrittenIn) :
-        filePath(pathIn), numWritten(numWrittenIn), inMemory(false){}
-
-    bool populateCache(volatile bool& finishedParsing,
-                       uint32_t buffQueueSize) {
-
-        if (inMemory) {
-            // If the queue already exists, then just
-            // swap the processed and unprocessed structs
-            // and return
-             if (toProcess) {
-                std::swap(toProcess, processed);
-                finishedParsing = true;
-                return true;
-             } else {
-                // otherwise, create the queues and fill them as we
-                // normally would (i.e. if we weren't holding every thing
-                // in memory).
-#if defined(__MOODYCAMEL__)
-                 // Moody camel
-                toProcess.reset(new AlnGroupQueue(numWritten));
-                initCache.reset(new AlnGroupQueue(numWritten));
-#else
-                 // TBB
-                toProcess.reset(new AlnGroupQueue);
-                initCache.reset(new AlnGroupQueue);
-#endif
-                for (size_t i = 0; i < numWritten; ++i) {
-#if defined(__MOODYCAMEL__)
-                    // Moody camel
-                    initCache->enqueue( new AlignmentGroup<SMEMAlignment>() );
-#else
-                    // TBB
-                    initCache->push( new AlignmentGroup<SMEMAlignment>() );
-#endif
-                }
-                processed.reset(new AlnGroupQueue);
-             }
-        } else {
-            // If we won't be keeping everything in memory
-            // determine whether or not we need to create "working space"
-            // queues (this is only necessary the first time).
-            if (!toProcess) {
-#if defined(__MOODYCAMEL__)
-                // Moody camel
-                toProcess.reset(new AlnGroupQueue(buffQueueSize));
-                processed.reset(new AlnGroupQueue(buffQueueSize));
-#else
-                // TBB
-                toProcess.reset(new AlnGroupQueue);
-                processed.reset(new AlnGroupQueue);
-#endif
-                for (size_t i = 0; i < buffQueueSize; ++i) {
-#if defined(__MOODYCAMEL__)
-                    // Moody camel
-                    processed->enqueue( new AlignmentGroup<SMEMAlignment>() );
-#else
-                    // TBB
-                    processed->push( new AlignmentGroup<SMEMAlignment>() );
-#endif
-                }
-            }
-        }
-
-        // At this point, the queues exist, and we're either reading the
-        // information from file and using the queue as a buffer, or we're
-        // making our first "in memory" pass and we have to fill the buffers
-        // anyway
-        if (inMemory) {
-            cacheReaderThread_.reset(new std::thread (readAlignmentCache,
-                        std::ref(*toProcess),
-                        std::ref(*initCache),
-                        numWritten,
-                        std::ref(finishedParsing),
-                        std::ref(filePath)));
-        } else {
-            cacheReaderThread_.reset(new std::thread (readAlignmentCache,
-                        std::ref(*toProcess),
-                        std::ref(*processed),
-                        numWritten,
-                        std::ref(finishedParsing),
-                        std::ref(filePath)));
-        }
-        return true;
-    }
-
-    bool flushCache() {
-        if (cacheReaderThread_) {
-            cacheReaderThread_->join();
-            cacheReaderThread_.reset(nullptr);
-        }
-        return true;
-    }
-
-    void clearQueues() {
-        AlignmentGroup<SMEMAlignment>* ag;
-
-        if (toProcess) {
-#if defined(__MOODYCAMEL__)
-            // Moody camel
-            while (toProcess->try_dequeue(ag)) { delete ag; }
-#else
-            // TBB
-            while (toProcess->try_pop(ag)) { delete ag; }
-#endif
-        }
-        if (processed) {
-#if defined(__MOODYCAMEL__)
-            // Moody camel
-            while (processed->try_dequeue(ag)) { delete ag; }
-#else
-            // TBB
-            while (processed->try_pop(ag)) { delete ag; }
-#endif
-        }
-        if (initCache) {
-#if defined(__MOODYCAMEL__)
-            // Moody camel
-            while (initCache->try_dequeue(ag)) { delete ag; }
-#else
-            // TBB
-            while (initCache->try_pop(ag)) { delete ag; }
-#endif
-        }
-    }
-
-
-    boost::filesystem::path filePath;
-    uint64_t numWritten{0};
-    bool inMemory;
-
-    std::unique_ptr<AlnGroupQueue> toProcess{nullptr};
-    std::unique_ptr<AlnGroupQueue> processed{nullptr};
-    std::unique_ptr<AlnGroupQueue> initCache{nullptr};
-
-    // If the file is small enough, we'll make the mapping cache reside "in memory"
-    // that's what this guy is for.
-    // std::vector<char> inMemoryMappingCache;
-
-    private:
-        // The thread that will read the mapping cache
-        std::unique_ptr<std::thread> cacheReaderThread_{nullptr};
-};
 
 /**
   *  Quantify the targets given in the file `transcriptFile` using the
@@ -2744,6 +2727,7 @@ struct CacheFile {
   *  specified by `libFmt`.
   *
   */
+template <typename AlnT>
 void quantifyLibrary(
         ReadExperiment& experiment,
         bool greedyChain,
@@ -2778,7 +2762,6 @@ void quantifyLibrary(
     std::mutex ioMutex;
 
     size_t numPrevObservedFragments = 0;
-    std::vector<CacheFile> cacheFiles;
 
     size_t maxReadGroup{miniBatchSize};
     uint32_t structCacheSize = numQuantThreads * maxReadGroup * 10;
@@ -2812,145 +2795,46 @@ void quantifyLibrary(
                 break;
             }
 
-            if (numObservedFragments - numPrevObservedFragments <= salmonOpts.mappingCacheMemoryLimit
-                and roundNum < 2) {
-                for (auto& cf : cacheFiles) { cf.inMemory = true; }
-            }
             numPrevObservedFragments = numObservedFragments;
         }
 
-        if (initialRound or salmonOpts.disableMappingCache) {
-#if defined(__MOODYCAMEL__)
-            // Moody camel
-            AlnGroupQueue outputGroups(structCacheSize);
-            AlnGroupQueue groupCache(structCacheSize);
-#else
-            // TBB
-            AlnGroupQueue outputGroups;
-            AlnGroupQueue groupCache;
-#endif
-
-            for (size_t i = 0; i < structCacheSize; ++i) {
- #if defined(__MOODYCAMEL__)
-                // Moody camel
-                groupCache.enqueue( new AlignmentGroup<SMEMAlignment>() );
-#else
-                // TBB
-                groupCache.push( new AlignmentGroup<SMEMAlignment>() );
-#endif
-            }
-
-            volatile bool writeToCache = !salmonOpts.disableMappingCache;
-            auto processReadLibraryCallback =  [&](
-                    ReadLibrary& rl, bwaidx_t* idx,
-                    std::vector<Transcript>& transcripts, ClusterForest& clusterForest,
-                    FragmentLengthDistribution& fragLengthDist,
-                    std::atomic<uint64_t>& numAssignedFragments,
-                    size_t numQuantThreads, bool& burnedIn) -> void  {
-
-                // The file where the alignment cache was / will be written
-                fmt::MemoryWriter fname;
-                fname << "alnCache_" << cacheFiles.size() << ".bin";
-                boost::filesystem::path alnCacheFilename = salmonOpts.outputDirectory / fname.str();
-                cacheFiles.emplace_back(alnCacheFilename, uint64_t(0));
-
-                std::unique_ptr<std::ofstream> alnCacheFile{nullptr};
-                std::unique_ptr<std::thread> cacheWriterThread{nullptr};
-                if (writeToCache) {
-                    alnCacheFile.reset(new std::ofstream(alnCacheFilename.c_str(), std::ios::binary));
-                    cereal::BinaryOutputArchive alnCacheArchive(*alnCacheFile);
-                    cacheWriterThread.reset(new std::thread(writeAlignmentCacheToFile,
-                        std::ref(outputGroups),
-                        std::ref(groupCache),
-                        std::ref(cacheFiles.back().numWritten),
-                        std::ref(numObservedFragments),
-                        numRequiredFragments,
-                        std::ref(salmonOpts),
-                        std::ref(writeToCache),
-                        std::ref(alnCacheArchive)));
-                }
-
-                processReadLibrary(experiment, rl, idx, transcripts, clusterForest,
-                        numObservedFragments, totalAssignedFragments, upperBoundHits,
-                        initialRound, burnedIn, fmCalc, fragLengthDist,
-                        memOptions, salmonOpts, coverageThresh, greedyChain,
-                        ioMutex, numQuantThreads,
-                        groupCache, outputGroups, writeToCache);
-
-                numAssignedFragments = totalAssignedFragments - prevNumAssignedFragments;
-                prevNumAssignedFragments = totalAssignedFragments;
-
-                // join the thread the writes the file
-                writeToCache = false;
-                if (cacheWriterThread) { cacheWriterThread->join(); }
-                if (alnCacheFile) { alnCacheFile->close(); }
-            };
-
-            // Process all of the reads
-            experiment.processReads(numQuantThreads, processReadLibraryCallback);
-            experiment.setNumObservedFragments(numObservedFragments);
-
-            // Empty the structure cache here
-            AlignmentGroup<SMEMAlignment>* ag;
-#if defined(__MOODYCAMEL__)
-            // Moody camel
-            while (groupCache.try_dequeue(ag)) { delete ag; }
-#else
-            // TBB
-            while (groupCache.try_pop(ag)) { delete ag; }
-#endif
-            //EQCLASS
-            bool done = experiment.equivalenceClassBuilder().finish();
-            // skip the extra online rounds
-            terminate = true;
-            // END EQCLASS
-        } else {
-            uint32_t libNum{0};
-            auto processReadLibraryCallback =  [&](
-                    ReadLibrary& rl, bwaidx_t* idx,
-                    std::vector<Transcript>& transcripts, ClusterForest& clusterForest,
-                    FragmentLengthDistribution& fragLengthDist,
-                    std::atomic<uint64_t>& numAssignedFragments,
-                    size_t numQuantThreads, bool& burnedIn) -> void  {
-
-                volatile bool finishedParsing{false};
-
-                // The file where the alignment cache was / will be written
-                auto& cf = cacheFiles[libNum];
-                ++libNum;
-
-                cf.populateCache(finishedParsing, structCacheSize);
-
-                uint64_t priorTotalAssignedFragments = totalAssignedFragments;
-                uint64_t priorTotalObservedFragments = numObservedFragments;
-                processCachedAlignments(
-                        experiment,
-                        rl,
-                        //groupCache, alnGroupQueue,
-                        *(cf.processed.get()),
-                        *(cf.toProcess.get()),
-                        numObservedFragments, totalAssignedFragments,
-                        transcripts, fmCalc, clusterForest, fragLengthDist,
-                        salmonOpts, ioMutex, initialRound, finishedParsing,
-                        burnedIn, numQuantThreads);
-
-                cf.flushCache();
-
-               if (salmonOpts.useMassBanking) {
-                   // If we're using mass banking
-                   // Regardless of what we count, we see the same total number
-                   // of fragments we did in the first round
-                   totalAssignedFragments = priorTotalAssignedFragments + experiment.numAssignedFragsInFirstPass();
-                   numObservedFragments = priorTotalObservedFragments + experiment.numAssignedFragsInFirstPass();
-               }
-                // Before mass banking
-                numAssignedFragments = totalAssignedFragments - prevNumAssignedFragments;
-                prevNumAssignedFragments = totalAssignedFragments;
-            };
-
-            // Process all of the reads
-            experiment.processReads(numQuantThreads, processReadLibraryCallback);
+        // This structure is a vector of vectors of alignment
+        // groups.  Each thread will get its own vector, so we
+        // allocate these up front to save time and allow
+        // reuse.
+        std::vector<AlnGroupVec<AlnT>> groupVec;
+        for (size_t i = 0; i < numQuantThreads; ++i) {
+            groupVec.emplace_back(maxReadGroup);
         }
+
+
+        bool writeToCache = !salmonOpts.disableMappingCache;
+        auto processReadLibraryCallback =  [&](
+                ReadLibrary& rl, SalmonIndex* sidx,
+                std::vector<Transcript>& transcripts, ClusterForest& clusterForest,
+                FragmentLengthDistribution& fragLengthDist,
+                std::atomic<uint64_t>& numAssignedFragments,
+                size_t numQuantThreads, bool& burnedIn) -> void  {
+
+            processReadLibrary<AlnT>(experiment, rl, sidx, transcripts, clusterForest,
+                    numObservedFragments, totalAssignedFragments, upperBoundHits,
+                    initialRound, burnedIn, fmCalc, fragLengthDist,
+                    memOptions, salmonOpts, coverageThresh, greedyChain,
+                    ioMutex, numQuantThreads,
+                    groupVec, writeToCache);
+
+            numAssignedFragments = totalAssignedFragments - prevNumAssignedFragments;
+            prevNumAssignedFragments = totalAssignedFragments;
+        };
+
+        // Process all of the reads
+        experiment.processReads(numQuantThreads, processReadLibraryCallback);
+        experiment.setNumObservedFragments(numObservedFragments);
+
+        //EQCLASS
+        bool done = experiment.equivalenceClassBuilder().finish();
+        // skip the extra online rounds
+        terminate = true;
 
         initialRound = false;
         ++roundNum;
@@ -2970,16 +2854,6 @@ void quantifyLibrary(
     }
     fmt::print(stderr, "\n\n\n\n");
 
-    // delete any temporary alignment cache files
-    for (auto& cf : cacheFiles) {
-        if (boost::filesystem::exists(cf.filePath)) {
-            boost::filesystem::remove(cf.filePath);
-        }
-        // TODO: clear any queues allocated by
-        // the cache files.
-        cf.clearQueues();
-    }
-
     if (numObservedFragments <= prevNumObservedFragments) {
         jointLog->warn() << "Something seems to be wrong with the calculation "
             "of the mapping rate.  The recorded ratio is likely wrong.  Please "
@@ -2993,9 +2867,7 @@ void quantifyLibrary(
         experiment.setEffetiveMappingRate(upperBoundMappingRate);
     }
 
-        jointLog->info("Overall mapping rate = {}\%; "
-                   "Effective mapping rate = {}\%\n",
-                   experiment.mappingRate() * 100.0,
+        jointLog->info("Mapping rate = {}\%\n",
                    experiment.effectiveMappingRate() * 100.0);
     jointLog->info("finished quantifyLibrary()");
 }
@@ -3044,7 +2916,7 @@ int salmonQuantify(int argc, char *argv[]) {
     ("allowOrphans", po::bool_switch(&(sopt.allowOrphans))->default_value(false), "Consider orphaned reads as valid hits when "
                         "performing lightweight-alignment.  This option will increase sensitivity (allow more reads to map and "
                         "more transcripts to be detected), but may decrease specificity as orphaned alignments are more likely "
-                        "to be spurious.")
+                        "to be spurious -- this option is *always* set to true when using quasi-mapping.")
     ("threads,p", po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads), "The number of threads to use concurrently.")
     ("incompatPrior", po::value<double>(&(sopt.incompatPrior))->default_value(1e-20), "This option "
                         "sets the prior probability that an alignment that disagrees with the specified "
@@ -3053,6 +2925,10 @@ int salmonQuantify(int argc, char *argv[]) {
                         "while setting it to 1 says that alignments that disagree with the library type are no "
                         "less likely than those that do")
     ("minLen,k", po::value<int>(&(memOptions->min_seed_len))->default_value(19), "(S)MEMs smaller than this size won't be considered.")
+    ("sensitive", po::bool_switch(&(sopt.sensitive))->default_value(false), "Setting this option enables the splitting of SMEMs that are larger "
+                                        "than 1.5 times the minimum seed length (minLen/k above).  This may reveal high scoring chains of MEMs "
+                                        "that are masked by long SMEMs.  However, this option makes lightweight-alignment a bit slower and is "
+                                        "usually not necessary if the reference is of reasonable quality.")
     ("extraSensitive", po::bool_switch(&(sopt.extraSeedPass))->default_value(false), "Setting this option enables an extra pass of \"seed\" search. "
                                         "Enabling this option may improve sensitivity (the number of reads having sufficient coverage), but will "
                                         "typically slow down quantification by ~40%.  Consider enabling this option if you find the mapping rate to "
@@ -3095,10 +2971,6 @@ int salmonQuantify(int argc, char *argv[]) {
                         "in the online learning schedule.  A smaller value results in quicker learning, but higher variance "
                         "and may be unstable.  A larger value results in slower learning but may be more stable.  Value should "
                         "be in the interval (0.5, 1.0].")
-    ("mappingCacheMemoryLimit", po::value<uint32_t>(&(sopt.mappingCacheMemoryLimit))->default_value(5000000), "If the file contained fewer than this "
-                                        "many reads, then just keep the data in memory for subsequent rounds of inference. Obviously, this value should "
-                                        "not be too large if you wish to keep a low memory usage, but setting it large enough can substantially speed up "
-                                        "inference on \"small\" files that contain only a few million reads.")
     ("maxOcc,m", po::value<int>(&(memOptions->max_occ))->default_value(200), "(S)MEMs occuring more than this many times won't be considered.")
     ("maxReadOcc,w", po::value<uint32_t>(&(sopt.maxReadOccs))->default_value(100), "Reads \"mapping\" to more than this many places won't be considered.")
     ("noEffectiveLengthCorrection", po::bool_switch(&(sopt.noEffectiveLengthCorrection))->default_value(false), "Disables "
@@ -3132,17 +3004,12 @@ int salmonQuantify(int argc, char *argv[]) {
                                         "result in increased running time.")
     ("splitSpanningSeeds,b", po::bool_switch(&(sopt.splitSpanningSeeds))->default_value(false), "Attempt to split seeds that happen to fall on the "
                                         "boundary between two transcripts.  This can improve the  fragment hit-rate, but is usually not necessary.")
-    ("useMassBanking", po::bool_switch(&(sopt.useMassBanking))->default_value(false), "[Deprecated] : "
-                        "Use mass \"banking\" in subsequent epoch of inference.  Rather than re-observing uniquely "
-                        "mapped reads, simply remember the ratio of uniquely to ambiguously mapped reads for each "
-                        "transcript and distribute the unique mass uniformly throughout the epoch.")
     ("useVBOpt", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
      			"traditional EM algorithm for optimization in the batch passes.")
-    ("useGSOpt", po::bool_switch(&(sopt.useGSOpt))->default_value(false), "[*super*-experimental]: After the initial optimization has finished, "
-                "use collapsed Gibbs sampling to refine estimates even further (and obtain variance)")
-    ("numGibbsSamples", po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(500), "[*super*-experimental]: Number of Gibbs sampling rounds to "
-     		"perform.");
-
+    ("numGibbsSamples", po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0), "[*super*-experimental]: Number of Gibbs sampling rounds to "
+     "perform.")
+    ("numBootstraps", po::value<uint32_t>(&(sopt.numBootstraps))->default_value(0), "[experimental]: Number of bootstrap samples to generate. Note: "
+      "This is mutually exclusive with Gibbs sampling.");
 
 
     po::options_description testing("\n"
@@ -3175,7 +3042,7 @@ int salmonQuantify(int argc, char *argv[]) {
             auto hstring = R"(
 Quant
 ==========
-Perform streaming SMEM-based estimation of
+Perform streaming mapping-based estimation of
 transcript abundance from RNA-seq reads
 )";
             std::cout << hstring << std::endl;
@@ -3185,8 +3052,10 @@ transcript abundance from RNA-seq reads
 
         po::notify(vm);
 
+
+
         std::stringstream commentStream;
-        commentStream << "# salmon (smem-based) v" << salmon::version << "\n";
+        commentStream << "# salmon (mapping-based) v" << salmon::version << "\n";
         commentStream << "# [ program ] => salmon \n";
         commentStream << "# [ command ] => quant \n";
         for (auto& opt : orderedOptions.options) {
@@ -3236,13 +3105,13 @@ transcript abundance from RNA-seq reads
         std::cerr << "Logs will be written to " << logDirectory.string() << "\n";
 
         bfs::path logPath = logDirectory / "salmon_quant.log";
-	// must be a power-of-two
+	    // must be a power-of-two
         size_t max_q_size = 2097152;
         spdlog::set_async_mode(max_q_size);
 
         auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(logPath.string(), true);
         auto consoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
-        auto consoleLog = spdlog::create("consoleLog", {consoleSink});
+        auto consoleLog = spdlog::create("stderrLog", {consoleSink});
         auto fileLog = spdlog::create("fileLog", {fileSink});
         auto jointLog = spdlog::create("jointLog", {fileSink, consoleSink});
 
@@ -3250,10 +3119,18 @@ transcript abundance from RNA-seq reads
         sopt.fileLog = fileLog;
 
         // Verify that no inconsistent options were provided
+        if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {
+            jointLog->error("You cannot perform both Gibbs sampling and bootstrapping. "
+                            "Please choose one.");
+            jointLog->flush();
+            std::exit(1);
+        }
+
         {
             if (sopt.noFragLengthDist and !sopt.noEffectiveLengthCorrection) {
                 jointLog->info() << "Error: You cannot enable --noFragLengthDist without "
                                  << "also enabling --noEffectiveLengthCorrection; exiting!\n";
+                jointLog->flush();
                 std::exit(1);
             }
         }
@@ -3270,11 +3147,18 @@ transcript abundance from RNA-seq reads
         jointLog->info() << "parsing read library format";
 
         vector<ReadLibrary> readLibraries = salmon::utils::extractReadLibraries(orderedOptions);
+
+        SalmonIndexVersionInfo versionInfo;
+        boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
+        versionInfo.load(versionPath);
+        versionInfo.indexType();
+
         ReadExperiment experiment(readLibraries, indexDirectory, sopt);
 
         // Parameter validation
         // If we're allowing orphans, make sure that the read libraries are paired-end.
         // Otherwise, this option makes no sense.
+        /*
         if (sopt.allowOrphans) {
             for (auto& rl : readLibraries) {
                 if (!rl.isPairedEnd()) {
@@ -3284,20 +3168,35 @@ transcript abundance from RNA-seq reads
                 }
             }
         }
+        */
         // end parameter validation
 
 
         // This will be the class in charge of maintaining our
-	// rich equivalence classes
+    	// rich equivalence classes
         experiment.equivalenceClassBuilder().start();
 
-        quantifyLibrary(experiment, greedyChain, memOptions, sopt, coverageThresh,
-                        requiredObservations, sopt.numThreads);
+        auto indexType = experiment.getIndex()->indexType();
+
+        switch (indexType) {
+            case SalmonIndexType::FMD:
+                quantifyLibrary<SMEMAlignment>(experiment, greedyChain, memOptions, sopt, coverageThresh,
+                                                requiredObservations, sopt.numThreads);
+                break;
+            case SalmonIndexType::QUASI:
+                {
+                    sopt.allowOrphans = true;
+                    sopt.useQuasi = true;
+                     quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions, sopt, coverageThresh,
+                                                     requiredObservations, sopt.numThreads);
+                }
+                break;
+        }
 
         // Now that the streaming pass is complete, we have
-	// our initial estimates, and our rich equivalence
-	// classes.  Perform further optimization until
-	// convergence.
+        // our initial estimates, and our rich equivalence
+        // classes.  Perform further optimization until
+        // convergence.
         CollapsedEMOptimizer optimizer;
         jointLog->info("Starting optimizer");
     	salmon::utils::normalizeAlphas(sopt, experiment);
@@ -3311,17 +3210,44 @@ transcript abundance from RNA-seq reads
 
         bfs::path estFilePath = outputDirectory / "quant.sf";
 
-        commentStream << "# [ mapping rate ] => { " << experiment.mappingRate() * 100.0 << "\% }\n";
+        commentStream << "# [ mapping rate ] => { " << experiment.effectiveMappingRate() * 100.0 << "\% }\n";
         commentString = commentStream.str();
 
         salmon::utils::writeAbundancesFromCollapsed(
                 sopt, experiment, estFilePath, commentString);
 
-        if (sopt.useGSOpt) {
+        {
+          bfs::path statPath = outputDirectory / "stats.tsv";
+          std::ofstream statStream(statPath.string(), std::ofstream::out);
+          statStream << "numObservedFragments\t" << experiment.numObservedFragsInFirstPass() << '\n';
+          for (auto& t : experiment.transcripts()) {
+              auto l = (sopt.noEffectiveLengthCorrection) ? t.RefLength : t.getCachedEffectiveLength();
+              statStream << t.RefName << '\t' << l << '\n';
+          }
+          statStream.close();
+        }
+
+        if (sopt.numGibbsSamples > 0) {
             jointLog->info("Starting Gibbs Sampler");
+
+            bfs::path gibbsSampleFile = sopt.outputDirectory / "quant_gibbs_samples.sf";
+            sopt.jointLog->info("Writing posterior samples to {}", gibbsSampleFile.string());
+            std::unique_ptr<BootstrapWriter> bsWriter(new TextBootstrapWriter(gibbsSampleFile, jointLog));
+            bsWriter->writeHeader(commentString, experiment.transcripts());
             CollapsedGibbsSampler sampler;
-            sampler.sample(experiment, sopt, sopt.numGibbsSamples);
+            sampler.sample(experiment, sopt, bsWriter.get(), sopt.numGibbsSamples);
+
             jointLog->info("Finished Gibbs Sampler");
+        } else if (sopt.numBootstraps > 0) {
+            jointLog->info("Staring Bootstrapping");
+
+            bfs::path bspath = outputDirectory / "quant_bootstraps.sf";
+            std::unique_ptr<BootstrapWriter> bsWriter(new TextBootstrapWriter(bspath, jointLog));
+            bsWriter->writeHeader(commentString, experiment.transcripts());
+            optimizer.gatherBootstraps(experiment, sopt,
+                    bsWriter.get(), 0.01, 10000);
+
+            jointLog->info("Finished Bootstrapping");
         }
 
 
@@ -3396,4 +3322,3 @@ transcript abundance from RNA-seq reads
 
     return 0;
 }
-

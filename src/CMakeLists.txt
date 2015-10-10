@@ -1,29 +1,54 @@
+include_directories(
+${GAT_SOURCE_DIR}/include
+${GAT_SOURCE_DIR}/include/eigen3
+${GAT_SOURCE_DIR}/external
+${GAT_SOURCE_DIR}/external/cereal/include
+${GAT_SOURCE_DIR}/external/install/include
+${GAT_SOURCE_DIR}/external/install/include/jellyfish-2.2.3
+${GAT_SOURCE_DIR}/external/install/include/bwa
+${ZLIB_INCLUDE_DIR}
+${TBB_INCLUDE_DIRS}
+${Boost_INCLUDE_DIRS}
+${GAT_SOURCE_DIR}/external/install/include/rapmap
+)
+
 set ( SALMON_MAIN_SRCS
 QSufSort.c
 is.c
 bwt_gen.c
 bwtindex.c
+xxhash.c
 CollapsedEMOptimizer.cpp
 CollapsedGibbsSampler.cpp
 Salmon.cpp
 BuildSalmonIndex.cpp
 SalmonQuantify.cpp
-FragmentLengthDistribution.cpp 
+FragmentLengthDistribution.cpp
 FragmentStartPositionDistribution.cpp
 SequenceBiasModel.cpp
 StadenUtils.cpp
 TranscriptGroup.cpp
+${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapFileSystem.cpp
+${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndexer.cpp
+${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndex.cpp
+${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAMapper.cpp
+${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapUtils.cpp
+${GAT_SOURCE_DIR}/external/install/src/rapmap/HitManager.cpp
+${GAT_SOURCE_DIR}/external/install/src/rapmap/rank9b.cpp
+${GAT_SOURCE_DIR}/external/install/src/rapmap/bit_array.c
+#${GAT_SOURCE_DIR}/external/install/src/rapmap/sais.c
 )
 
 set (SALMON_ALIGN_SRCS
-FASTAParser.cpp 
-ErrorModel.cpp 
+FASTAParser.cpp
+ErrorModel.cpp
 AlignmentModel.cpp
-FragmentLengthDistribution.cpp 
-SalmonQuantifyAlignments.cpp 
+FragmentLengthDistribution.cpp
+SalmonQuantifyAlignments.cpp
 )
 
 set (SALMON_LIB_SRCS
+BWAUtils.cpp
 LibraryFormat.cpp
 GenomicFeature.cpp
 VersionChecker.cpp
@@ -32,24 +57,11 @@ SalmonStringUtils.cpp
 ComputeBiasFeatures.cpp
 PerformBiasCorrection.cpp
 cokus.cpp
-merge_files.cc
-format.cc
+#merge_files.cc
+#format.cc
 )
 
-include_directories( 
-${GAT_SOURCE_DIR}/include
-${GAT_SOURCE_DIR}/include/eigen3
-${GAT_SOURCE_DIR}/external
-${GAT_SOURCE_DIR}/external/cereal/include
-${GAT_SOURCE_DIR}/external/install/include
-${GAT_SOURCE_DIR}/external/install/include/jellyfish-2.1.3
-${GAT_SOURCE_DIR}/external/install/include/bwa
-${ZLIB_INCLUDE_DIR}
-${TBB_INCLUDE_DIRS}
-${Boost_INCLUDE_DIRS}
-)
-
-link_directories( 
+link_directories(
 ${GAT_SOURCE_DIR}/lib
 ${GAT_SOURCE_DIR}/external/install/lib
 ${Boost_LIBRARY_DIRS}
@@ -61,10 +73,10 @@ ${BLAS_LIBRARY_DIR}
 message("TBB_LIBRARIES = ${TBB_LIBRARIES}")
 message("Boost_LIBRARIES = ${Boost_LIBRARIES}")
 
-# Set the RPATH 
+# Set the RPATH
 if (APPLE)
-    ## This DOES NOT do what I / any one sane, expects.  Setting the 
-    ## linker path on OSX is messed up.  Just tell the user to use 
+    ## This DOES NOT do what I / any one sane, expects.  Setting the
+    ## linker path on OSX is messed up.  Just tell the user to use
     ## DYLD_FALLBACK_LIBRARY_PATH for now
     set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 else()
@@ -97,19 +109,26 @@ if (APPLE)
     endif()
 
 else()
-    # related to complete static linking --- on hold	
+    # related to complete static linking --- on hold
     set (BOOST_THREAD_LIBRARY)
 endif()
 
+# our suffix array construction libraries
+set (SUFFARRAY_LIB ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort.a)
+set (SUFFARRAY64_LIB ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort64.a)
+
+
 # Link the executable
 target_link_libraries(salmon
-    salmon_core 
+    salmon_core
     gff
     ${PTHREAD_LIB}
-    ${Boost_LIBRARIES} 
+    ${Boost_LIBRARIES}
     ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
-    ${ZLIB_LIBRARY} 
-    ${GAT_SOURCE_DIR}/external/install/lib/libjellyfish-2.0.a 
+    ${ZLIB_LIBRARY}
+    ${SUFFARRAY_LIB}
+    ${SUFFARRAY64_LIB}
+    ${GAT_SOURCE_DIR}/external/install/lib/libjellyfish-2.0.a
     ${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
     m
     ${LIBLZMA_LIBRARIES}
@@ -128,8 +147,8 @@ add_dependencies(salmon libbwa)
 if (APPLE)
 	add_custom_command(TARGET salmon
 		POST_BUILD
-		COMMAND install_name_tool -add_rpath ${GAT_SOURCE_DIR}/external/install/lib salmon 
-		COMMAND install_name_tool -add_rpath @executable_path/../lib salmon 
+		COMMAND install_name_tool -add_rpath ${GAT_SOURCE_DIR}/external/install/lib salmon
+		COMMAND install_name_tool -add_rpath @executable_path/../lib salmon
 		)
 endif()
 
@@ -145,14 +164,14 @@ set(INSTALL_LIB_DIR lib )
 set(INSTALL_BIN_DIR bin )
 set(INSTALL_INCLUDE_DIR include )
 
-install(DIRECTORY 
-        ${GAT_SOURCE_DIR}/external/install/lib/ 
+install(DIRECTORY
+        ${GAT_SOURCE_DIR}/external/install/lib/
         DESTINATION ${INSTALL_LIB_DIR}
 	    FILES_MATCHING PATTERN "libtbb*.${SHARED_LIB_EXTENSION}*"
     )
 if (APPLE)
-install(DIRECTORY 
-        ${GAT_SOURCE_DIR}/external/install/lib/ 
+install(DIRECTORY
+        ${GAT_SOURCE_DIR}/external/install/lib/
         DESTINATION ${INSTALL_LIB_DIR}
 	    FILES_MATCHING PATTERN "libcmph*.${SHARED_LIB_EXTENSION}*"
        )
@@ -163,7 +182,7 @@ endif()
 # 	           DESTINATION ${INSTALL_LIB_DIR})
 
 install(TARGETS salmon salmon_core
-                RUNTIME DESTINATION bin 
+                RUNTIME DESTINATION bin
                 LIBRARY DESTINATION lib
                 ARCHIVE DESTINATION lib
         )
@@ -171,17 +190,19 @@ install(TARGETS salmon salmon_core
 set(POST_INSTALL_SCRIPT ${GAT_SOURCE_DIR}/cmake/PostInstall.cmake)
 
 install(
-    CODE 
+    CODE
     "
     execute_process(COMMAND \"${CMAKE_COMMAND}\"
                             -DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}
-                            -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX} 
+                            -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
                             -P \"${POST_INSTALL_SCRIPT}\")
     "
 )
 
 include(InstallRequiredSystemLibraries)
-add_test( NAME salmon_read_test COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/TestSalmon.cmake )
+add_test( NAME salmon_read_test_fmd COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/TestSalmonFMD.cmake )
+add_test( NAME salmon_read_test_quasi COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/TestSalmonQuasi.cmake )
+
 
 ####
 #
@@ -195,7 +216,7 @@ add_test( NAME salmon_read_test COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SO
 
 # # when building, don't use the install RPATH already
 # # (but later on when installing)
-# SET(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE) 
+# SET(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
 # MESSAGE( "LINK DIRECTORIES : ${CMAKE_LIBRARY_PATH}")
 # SET(CMAKE_INSTALL_RPATH "${CMAKE_LIBRARY_PATH}")
 
@@ -211,24 +232,24 @@ add_test( NAME salmon_read_test COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SO
 # ENDIF("${isSystemDir}" STREQUAL "-1")
 
 
-# set( BUILD_LUT_SRCS 
+# set( BUILD_LUT_SRCS
 # BuildLUT.cpp
 # IndexedCounter.cpp
 # PerfectHashIndexer.cpp
 # )
 
 # add_executable( BuildLUT ${BUILD_LUT_SRCS} )
-# target_link_libraries( BuildLUT 
-# 	${Boost_LIBRARIES} ${ZLIB_LIBRARY} 
+# target_link_libraries( BuildLUT
+# 	${Boost_LIBRARIES} ${ZLIB_LIBRARY}
 # 	cmph # perfect hashing library
-# 	jellyfish-2.0 pthread 
+# 	jellyfish-2.0 pthread
 #     gomp lib_activeobject lib_g2logger m tbb)
 
 # INSTALL(TARGETS BuildLUT DESTINATION ${PROJECT_SOURCE_DIR}/bin COMPONENT comp_buildlut)
 
 # set ( BUILD_INDEX_SRCS Indexer.cpp )
 
-# set( ANALYZE_TRANSCRIPT_GRAPH 
+# set( ANALYZE_TRANSCRIPT_GRAPH
 # AnalyzeTranscriptGraph.cpp
 # IndexedCounter.cpp
 # PerfectHashIndexer.cpp
@@ -243,17 +264,17 @@ add_test( NAME salmon_read_test COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SO
 
 # add_executable( ComputeTranscriptGraph ${COMPUTE_TGRAPH_SRCS} )
 # target_link_libraries( ComputeTranscriptGraph
-# 	${Boost_LIBRARIES} ${ZLIB_LIBRARY} 
+# 	${Boost_LIBRARIES} ${ZLIB_LIBRARY}
 # 	cmph # perfect hashing library
-# 	jellyfish pthread 
+# 	jellyfish pthread
 #     gomp lib_activeobject lib_g2logger blas m tbb nnls)
 
 
 # add_executable( AnalyzeTranscriptGraph ${ANALYZE_TRANSCRIPT_GRAPH} )
-# target_link_libraries( AnalyzeTranscriptGraph 
-# 	${Boost_LIBRARIES} ${ZLIB_LIBRARY} 
+# target_link_libraries( AnalyzeTranscriptGraph
+# 	${Boost_LIBRARIES} ${ZLIB_LIBRARY}
 # 	cmph # perfect hashing library
-# 	jellyfish pthread 
+# 	jellyfish pthread
 #     gomp lib_activeobject lib_g2logger blas m tbb)
 
 
@@ -263,4 +284,3 @@ add_test( NAME salmon_read_test COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SO
 
 #add_executable( TestTsnnls ${TEST_SRCS} )
 #target_link_libraries( TestTsnnls ${Boost_LIBRARIES} ${ZLIB_LIBRARY} blas lapack gomp lib_activeobject lib_g2logger tsnnls )
-

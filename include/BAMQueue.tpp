@@ -567,15 +567,15 @@ inline bool BAMQueue<FragT>::getFrag_(UnpairedRead& sread, FilterT filt) {
 }
 
 template <typename FragT>
-size_t BAMQueue<FragT>::numObservedReads(){ return totalReads_; }
+size_t BAMQueue<FragT>::numObservedFragments(){ return totalReads_; }
 
 template <typename FragT>
-size_t BAMQueue<FragT>::numMappedReads(){ 
+size_t BAMQueue<FragT>::numMappedFragments(){ 
     return numMappedReads_;
 }
 
 template <typename FragT>
-size_t BAMQueue<FragT>::numUniquelyMappedReads(){ 
+size_t BAMQueue<FragT>::numUniquelyMappedFragments(){ 
     return numUniquelyMappedReads_;
 }
 

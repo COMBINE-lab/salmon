@@ -5,7 +5,7 @@ extern "C" {
 }
 
 // for cpp-format
-#include "format.h"
+#include "spdlog/details/format.h"
 
 // are these used?
 #include <boost/dynamic_bitset.hpp>
@@ -61,6 +61,7 @@ extern "C" {
 #include "EquivalenceClassBuilder.hpp"
 #include "CollapsedEMOptimizer.hpp"
 #include "CollapsedGibbsSampler.hpp"
+#include "TextBootstrapWriter.hpp"
 
 namespace bfs = boost::filesystem;
 using salmon::math::LOG_0;
@@ -591,8 +592,8 @@ bool quantifyLibrary(
         if (!initialRound) {
 
     	    size_t numToCache = (useMassBanking) ?
-				(alnLib.numMappedReads() - alnLib.numUniquelyMappedReads()) :
-				(alnLib.numMappedReads());
+				(alnLib.numMappedFragments() - alnLib.numUniquelyMappedFragments()) :
+				(alnLib.numMappedFragments());
 
             if (haveCache) {
                 std::swap(workQueuePtr, processedCachePtr);
@@ -730,7 +731,7 @@ bool quantifyLibrary(
         }
         fmt::print(stderr, "\n\n");
 
-        numObservedFragments += alnLib.numMappedReads();
+        numObservedFragments += alnLib.numMappedFragments();
 
         fmt::print(stderr, "# observed = {} / # required = {}\033[A\033[A\033[A\033[A\033[A",
                    numObservedFragments, numRequiredFragments);
@@ -740,10 +741,10 @@ bool quantifyLibrary(
                                       "Total # of mapped reads : {}\n"
                                       "# of uniquely mapped reads : {}\n"
                                       "# ambiguously mapped reads : {}\n\n\n",
-                                      alnLib.numMappedReads(),
-                                      alnLib.numUniquelyMappedReads(),
-                                      alnLib.numMappedReads() -
-                                      alnLib.numUniquelyMappedReads());
+                                      alnLib.numMappedFragments(),
+                                      alnLib.numUniquelyMappedFragments(),
+                                      alnLib.numMappedFragments() -
+                                      alnLib.numUniquelyMappedFragments());
         }
 
         initialRound = false;
@@ -905,13 +906,10 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "Use mass \"banking\" in subsequent epoch of inference.  Rather than re-observing uniquely "
                         "mapped reads, simply remember the ratio of uniquely to ambiguously mapped reads for each "
                         "transcript and distribute the unique mass uniformly throughout the epoch.")
-    ("useGSOpt", po::bool_switch(&(sopt.useGSOpt))->default_value(false), "[*super*-experimental]: After the initial optimization has finished, "
-                "use collapsed Gibbs sampling to refine estimates even further (and obtain variance)")
-    ("numGibbsSamples", po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(500), "[*super*-experimental]: Number of Gibbs sampling rounds to "
-     		"perform.")
-    ("useVBOpt,v", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
-     			"traditional EM algorithm for optimization in the batch passes.");
-
+    ("numGibbsSamples", po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0), "[*super*-experimental]: Number of Gibbs sampling rounds to "
+     "perform.")
+    ("numBootstraps", po::value<uint32_t>(&(sopt.numBootstraps))->default_value(0), "[experimental]: Number of bootstrap samples to generate. Note: "
+      "This is mutually exclusive with Gibbs sampling.");
 
     po::options_description testing("\n"
             "testing options");
@@ -1057,6 +1055,14 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         sopt.jointLog = jointLog;
         sopt.fileLog = fileLog;
 
+        // Verify that no inconsistent options were provided
+        if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {
+            jointLog->error("You cannot perform both Gibbs sampling and bootstrapping. "
+                            "Please choose one.");
+            jointLog->flush();
+            std::exit(1);
+        }
+
         if (!sampleOutput and sampleUnaligned) {
             fmt::MemoryWriter wstr;
             wstr << "WARNING: you passed in the (-u/--sampleUnaligned) flag, but did not request a sampled "
@@ -1133,7 +1139,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                     if (sampleOutput) {
                         // In this case, we should "re-convert" transcript
                         // masses to be counts in log space
-                        auto nr = alnLib.numMappedReads();
+                        auto nr = alnLib.numMappedFragments();
                         for (auto& t : alnLib.transcripts()) {
                             double m = t.mass(false) * nr;
                             if (m > 0.0) {
@@ -1172,12 +1178,41 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                     salmon::utils::writeAbundancesFromCollapsed(
                         sopt, alnLib, outputFile, commentString);
 
-                    if (sopt.useGSOpt) {
-                        jointLog->info("Starting Gibbs Sampler");
-                        CollapsedGibbsSampler sampler;
-                        sampler.sample(alnLib, sopt, sopt.numGibbsSamples);
-                        jointLog->info("Finished Gibbs Sampler");
+                    {
+                        bfs::path statPath = outputDirectory / "stats.tsv";
+                        std::ofstream statStream(statPath.string(), std::ofstream::out);
+                        statStream << "numObservedFragments\t" << alnLib.numObservedFragments() << '\n';
+                        for (auto& t : alnLib.transcripts()) {
+                            auto l = (sopt.noEffectiveLengthCorrection) ? t.RefLength : t.getCachedEffectiveLength();
+                            statStream << t.RefName << '\t' << l << '\n';
+                        }
+                        statStream.close();
                     }
+
+                    if (sopt.numGibbsSamples > 0) {
+                        jointLog->info("Starting Gibbs Sampler");
+
+                        bfs::path gibbsSampleFile = sopt.outputDirectory / "quant_gibbs_samples.sf";
+                        sopt.jointLog->info("Writing posterior samples to {}", gibbsSampleFile.string());
+                        std::unique_ptr<BootstrapWriter> bsWriter(new TextBootstrapWriter(gibbsSampleFile, jointLog));
+                        bsWriter->writeHeader(commentString, alnLib.transcripts());
+                        CollapsedGibbsSampler sampler;
+                        sampler.sample(alnLib, sopt, bsWriter.get(), sopt.numGibbsSamples);
+
+                        jointLog->info("Finished Gibbs Sampler");
+                    } else if (sopt.numBootstraps > 0) {
+                        jointLog->info("Staring Bootstrapping");
+
+                        bfs::path bspath = outputDirectory / "quant_bootstraps.sf";
+                        std::unique_ptr<BootstrapWriter> bsWriter(new TextBootstrapWriter(bspath, jointLog));
+                        bsWriter->writeHeader(commentString, alnLib.transcripts());
+                        optimizer.gatherBootstraps(alnLib, sopt,
+                                bsWriter.get(), 0.01, 10000);
+
+                        jointLog->info("Finished Bootstrapping");
+                    }
+
+
 
                     /*
                     fmt::print(stderr, "\n\nwriting output \n");
@@ -1196,7 +1231,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                     if (sampleOutput) {
                         // In this case, we should "re-convert" transcript
                         // masses to be counts in log space
-                        auto nr = alnLib.numMappedReads();
+                        auto nr = alnLib.numMappedFragments();
                         for (auto& t : alnLib.transcripts()) {
                             double m = t.mass(false) * nr;
                             if (m > 0.0) {

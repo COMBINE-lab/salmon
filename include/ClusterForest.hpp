@@ -6,7 +6,7 @@
 
 #include "Transcript.hpp"
 #include "TranscriptCluster.hpp"
-#include "SpinLock.hpp"
+#include "SalmonSpinLock.hpp"
 
 #include <unordered_set>
 #include <vector>
@@ -68,8 +68,8 @@ public:
         std::lock_guard<std::mutex> lock(clusterMutex_);
 #endif
 
-        size_t firstCluster, otherCluster;
         auto firstTranscriptID = (*start)->transcriptID();
+        decltype(firstTranscriptID) firstCluster, otherCluster;
         ++start;
 
         for (auto it = start; it != finish; ++it) {
@@ -155,4 +155,3 @@ private:
 };
 
 #endif // __CLUSTER_FOREST_HPP__
-

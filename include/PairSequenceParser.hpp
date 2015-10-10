@@ -130,9 +130,9 @@ protected:
     if(type1 == DONE_TYPE || type2 == DONE_TYPE)
       return open_next_files(st);
     if(type1 != type2)
-      eraise(std::runtime_error) << "Paired files are of different format";
+      throw std::runtime_error("Paired files are of different format");
     if(type1 == ERROR_TYPE || type2 == ERROR_TYPE)
-      eraise(std::runtime_error) << "Unsupported format";
+      throw std::runtime_error("Unsupported format");
     st.type = type1;
   }
 
@@ -165,7 +165,7 @@ protected:
       hsq.seq.append(tmp);             // two lines avoiding copying
     }
     if(!is.good())
-      eraise(std::runtime_error) << "Truncated fastq file";
+      throw std::runtime_error("Truncated fastq file");
     is.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
     hsq.qual.clear();
     while(hsq.qual.size() < hsq.seq.size() && is.good()) {
@@ -173,9 +173,9 @@ protected:
       hsq.qual.append(tmp);
     }
     if(hsq.qual.size() != hsq.seq.size())
-      eraise(std::runtime_error) << "Invalid fastq file: wrong number of quals";
+      throw std::runtime_error("Invalid fastq file: wrong number of quals");
     if(is.peek() != EOF && is.peek() != '@')
-      eraise(std::runtime_error) << "Invalid fastq file: header missing";
+      throw std::runtime_error("Invalid fastq file: header missing");
 
   }
 

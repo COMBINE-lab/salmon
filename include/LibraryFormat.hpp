@@ -35,9 +35,9 @@ public:
     }
 
     inline static LibraryFormat formatFromID(uint8_t id) {
-        ReadType rt;
-        ReadOrientation ro;
-        ReadStrandedness rs;
+        ReadType rt = ReadType::SINGLE_END;
+        ReadOrientation ro = ReadOrientation::NONE;
+        ReadStrandedness rs = ReadStrandedness::U;
 
         switch (id & 0x01) {
             case 0:

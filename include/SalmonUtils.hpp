@@ -18,7 +18,7 @@ extern "C" {
 #include <boost/filesystem.hpp>
 #include <boost/program_options.hpp>
 
-#include "format.h"
+#include "spdlog/details/format.h"
 
 #include "SalmonOpts.hpp"
 #include "SalmonMath.hpp"

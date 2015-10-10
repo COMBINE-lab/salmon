@@ -22,7 +22,7 @@ class AlignmentGroup {
     public:
         AlignmentGroup() : read_(nullptr), isUniquelyMapped_(true) { alignments_.reserve(10); }
         AlignmentGroup(AlignmentGroup& other) = delete;
-        AlignmentGroup(AlignmentGroup&& other) = delete;
+        AlignmentGroup(AlignmentGroup&& other) = default;
         AlignmentGroup& operator=(AlignmentGroup& other) = delete;
         AlignmentGroup& operator=(AlignmentGroup&& other) = delete;
 

@@ -27,8 +27,9 @@ class PCA {
             Eigen::VectorXd means(dat_.cols());
             means = dat_.colwise().mean();
             Eigen::VectorXd stdDev(dat_.cols());
-            for (size_t i = 0; i < dat_.cols(); ++i) {
-                for (size_t j = 0; j < dat_.rows(); ++j) {
+            decltype(dat_.cols()) i, j;
+            for (i = 0; i < dat_.cols(); ++i) {
+                for (j = 0; j < dat_.rows(); ++j) {
                     dat_(j,i) -= means(i);
                 }
                 auto x = dat_.col(i).dot(dat_.col(i));
@@ -45,7 +46,8 @@ class PCA {
             if (droppedCols.size() > 0) {
                 Eigen::MatrixXd tmpDat(dat_.rows(), dat_.cols() - droppedCols.size());
                 size_t curCol{0};
-                for (size_t i = 0; i < dat_.cols(); ++i) {
+                decltype(dat_.cols()) i;
+                for (i = 0; i < dat_.cols(); ++i) {
                     if (droppedCols.find(i) == droppedCols.end()) {
                         tmpDat.col(curCol) = dat_.col(i);
                         ++curCol;

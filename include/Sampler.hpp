@@ -9,9 +9,8 @@ extern "C" {
 }
 
 // for cpp-format
-#include "format.h"
-
 #include "spdlog/spdlog.h"
+#include "spdlog/details/format.h"
 
 #include <tbb/atomic.h>
 #include <iostream>
@@ -469,7 +468,7 @@ namespace salmon {
                 fmt::print(stderr, "\n");
                 consumedAllInput = true;
 
-                numObservedFragments += alnLib.numMappedReads();
+                numObservedFragments += alnLib.numMappedFragments();
                 fmt::print(stderr, "# observed = {} mapped fragments.\033[F\033[F\033[F\033[F",
                         numObservedFragments);
 
