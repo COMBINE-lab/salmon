@@ -99,7 +99,7 @@ you run the Salmon indexer:
 
 ::
     
-    > ./bin/salmon index -q -k 31 -t transcripts.fa -i transcripts_index
+    > ./bin/salmon index -t transcripts.fa -i transcripts_index --type quasi -k 31 
     
 This will build the quasi-mapping-based index, using an auxiliary k-mer hash
 over k-mers of length 31.  While quasi-mapping will make used of arbitrarily 
@@ -115,7 +115,7 @@ quantification in this case.
 
 ::
     
-    > ./bin/salmon index -t transcripts.fa -i transcripts_index
+    > ./bin/salmon index -t transcripts.fa -i transcripts_index --type fmd
 
 This will build the SMEM-based mapping index.  Note that no value of `k` 
 is given here.  However, the SMEM-based mapping index makes use of a parameter 
@@ -196,6 +196,64 @@ mode, and a description of each, run ``salmon quant --help-alignment``.
     separate files must (1) all be of the same library type and (2) all be
     aligned with respect to the same reference (i.e. the @SQ records in the 
     header sections must be identical).
+
+
+Description of important options
+--------------------------------
+
+Sailfish exposes a number of useful optional command-line parameters to the user.
+The particularly important ones are explained here, but you can always run
+``sailfish quant -h`` to see them all.
+
+""""""""""""""""""""""""""
+``-p`` / ``--numThreads``
+""""""""""""""""""""""""""
+
+The number of threads that will be used for quasi-mapping, quantification, and
+bootstrapping / posterior sampling (if enabled).  Sailfish is designed to work
+well with many threads, so, if you have a sufficient number of processors, larger
+values here can speed up the run substantially.
+
+
+""""""""""""""
+``--useVBOpt``
+""""""""""""""
+
+Use the variational Bayesian EM algorithm rather than the "standard" EM algorithm
+to optimize abundance estimates.  The details of the VBEM algorithm can be found
+in [2]_, and the details of the variant over fragment equivalence classes that
+we use can be found in [3]_.  While both the standard EM and the VBEM produce
+accurate abundance estimates, those produced by the VBEM seem, generally, to be
+a bit more accurate.  Further, the VBEM tends to converge after fewer iterations,
+so it may result in a shorter runtime; especially if you are computing many
+bootstrap samples. 
+
+"""""""""""""""""""
+``--numBootstraps``
+"""""""""""""""""""
+
+Sailfish has the ability to optionally compute bootstrapped abundance estimates.
+This is done by resampling (with replacement) from the counts assigned to
+the fragment equivalence classes, and then re-running the optimization procedure,
+either the EM or VBEM, for each such sample.  The values of these different
+bootstraps allows us to assess technical variance in the main abundance estimates
+we produce.  Such estimates can be useful for downstream (e.g. differential
+expression) tools that can make use of such uncertainty estimates.  This option
+takes a positive integer that dictates the number of bootstrap samples to compute.
+The more samples computed, the better the estimates of varaiance, but the
+more computation (and time) required.
+
+"""""""""""""""""""""
+``--numGibbsSamples``
+"""""""""""""""""""""
+
+Just as with the bootstrap procedure above, this option produces samples that allow
+us to estimate the variance in abundance estimates.  However, in this case the
+samples are generated using posterior Gibbs sampling over the fragment equivalence
+classes rather than bootstrapping.  We are currently analyzing these different approaches
+to assess the potential trade-offs in time / accuracy.  The ``--numBootstraps`` and
+``--numGibbsSamples`` options are mutually exclusive (i.e. in a given run, you must
+set at most one of these options to a positive integer.)
 
 
 What's this ``LIBTYPE``?
@@ -294,10 +352,7 @@ the following interpretation.
 * **NumReads** --- 
   This is salmon's estimate of the number of reads mapping to each transcript that was quantified.  It is an "estimate" 
   insofar as it is the expected number of reads that have originated from each transcript given the structure of the uniquely 
-  mapping and multi-mapping reads and the relative abundance estimates for each transcript.  You can round these values 
-  to the nearest integer and use them directly as input to count-based methods like 
-  `Deseq2 <http://www.bioconductor.org/packages/release/bioc/html/DESeq2.html>`_ and 
-  `EdgeR <http://master.bioconductor.org/packages/release/bioc/html/edgeR.html>`_, among others.
+  mapping and multi-mapping reads and the relative abundance estimates for each transcript.
 
 Misc
 ----
@@ -315,43 +370,9 @@ command to decompress the reads "on-the-fly":
 and the gzipped files will be decompressed via separate processes and the raw
 reads will be fed into salmon.
 
-.. note:: The Mapping Cache 
-
-    Salmon requires a specific number of observations (fragments) to
-    be observed before it will report its quantification results.  If it 
-    doesn't see enough fragments when reading through the read files the 
-    first time, it will process the information again (don't worry; it's not 
-    double counting. The results from the first pass essentially become 
-    a "prior" for assigning the proper read counts in subsequent passes).
-
-    The first time the file is processed, the set of potential mappings for
-    each fragment is written to a temporary file in an efficient binary format
-    --- this file is called the mapping cache.  As soon as the required number
-    of obvservations have been seen, salmon stops writing to the mapping cache
-    (ensuring that the file size will not grow too large).  However, for
-    experiments with fewer than the required number of observations, the
-    mapping cache is a significant optimization over reading through the raw
-    set of reads multiple times.  First, the work of determining the potential
-    mapping locations for a read is only performed once, during the inital pass
-    through the file.  Second, since the mapping cache is implemented as a
-    regular file on disk, the information contained within a file can be
-    processed multiple times, even if the file itself is being produced via
-    e.g. process substitution as in the example above.
-    
-    You can control the required number of observations and thus, indirectly,
-    the maximum size of the mapping cache file, via the ``-n`` argument.
-    Note that the cache itself is considered a "temporary" file, and it is
-    removed from disk by salmon before the program terminates.  If you are
-    certain that your read library is large enough that you will observe the
-    required number of fragments in the first pass, or if you have some other 
-    reason to avoid creating the temporary mapping cache, it can disabled with
-    the ``--disableMappingCache`` flag.
-
-**Finally**, the purpose of making this beta executable (as well as the Salmon
-code) available is for people to use it and provide feedback.  A pre-print and
-manuscript are in the works, but the earlier we get feedback, thoughts,
-suggestions and ideas, the better!  So, if you have something useful to report
-or just some interesting ideas or suggestions, please contact us
-(`rob.patro@cs.stonybrook.edu` and/or `carlk@cs.cmu.edu`).  Also, please use
-the same e-mail addresses to contact us with any *detailed* bug-reports (though
-bug-support for these early beta versions may be slow).
+**Finally**, the purpose of making this software available is for people to use
+it and provide feedback.  The `pre-print describing this method is on bioRxiv <http://biorxiv.org/content/early/2015/10/03/021592>`_.
+If you have something useful to report or just some interesting ideas or
+suggestions, please contact us (`rob.patro@cs.stonybrook.edu` and/or
+`carlk@cs.cmu.edu`).  If you encounter any bugs, please file a *detailed*
+bug report at the `Salmon GitHub repository <https://github.com/COMBINE-lab/salmon>`_. 
