@@ -1510,7 +1510,7 @@ inline void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_q
 
     // Fraction of the optimal coverage that a lightweight alignment
     // must obtain in order to be retained.
-    float fOpt{0.99};
+    float fOpt{0.95};
 
     // First, see if there are transcripts where both ends of the
     // fragments map
