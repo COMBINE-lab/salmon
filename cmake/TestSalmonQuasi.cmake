@@ -1,4 +1,4 @@
-set(SALMON_QUASI_INDEX_CMD ${TOPLEVEL_DIR}/build/src/salmon index -t transcripts.fasta -i sample_salmon_quasi_index --type quasi)
+set(SALMON_QUASI_INDEX_CMD ${CMAKE_BINARY_DIR}/salmon index -t transcripts.fasta -i sample_salmon_quasi_index --type quasi)
 execute_process(COMMAND ${SALMON_QUASI_INDEX_CMD}
                 WORKING_DIRECTORY ${TOPLEVEL_DIR}/sample_data
                 RESULT_VARIABLE SALMON_QUASI_INDEX_RESULT
@@ -8,7 +8,7 @@ if (SALMON_QUASI_INDEX_RESULT)
     message(FATAL_ERROR "Error running ${SALMON_QUASI_INDEX_COMMAND}")
 endif()
 
-set(SALMON_QUANT_COMMAND ${TOPLEVEL_DIR}/build/src/salmon quant -i sample_salmon_quasi_index -l IU -1 reads_1.fastq -2 reads_2.fastq -o sample_salmon_quasi_quant)
+set(SALMON_QUANT_COMMAND ${CMAKE_BINARY_DIR}/salmon quant -i sample_salmon_quasi_index -l IU -1 reads_1.fastq -2 reads_2.fastq -o sample_salmon_quasi_quant)
 execute_process(COMMAND ${SALMON_QUANT_COMMAND}
 	            WORKING_DIRECTORY ${TOPLEVEL_DIR}/sample_data
                 RESULT_VARIABLE SALMON_QUASI_QUANT_RESULT
