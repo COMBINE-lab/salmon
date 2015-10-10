@@ -126,7 +126,7 @@ class SalmonIndex{
 
 
             bool build(boost::filesystem::path indexDir,
-                       std::vector<const char*>& argVec,
+                       std::vector<std::string>& argVec,
                        uint32_t k) {
                 namespace bfs = boost::filesystem;
                 switch (versionInfo_.indexType()) {
@@ -154,15 +154,16 @@ class SalmonIndex{
 
         private:
             bool buildFMDIndex_(boost::filesystem::path indexDir,
-                                std::vector<const char*>& bwaArgVec,
+                                std::vector<std::string>& bwaArgVec,
                                 uint32_t k) {
                 namespace bfs = boost::filesystem;
-                char* bwaArgv[] = { const_cast<char*>(bwaArgVec[0]),
-                    const_cast<char*>(bwaArgVec[1]),
-                    const_cast<char*>(bwaArgVec[2]),
-                    const_cast<char*>(bwaArgVec[3]),
-                    const_cast<char*>(bwaArgVec[4]),
-                    const_cast<char*>(bwaArgVec[5]) };
+                char* bwaArgv[] = {
+                    const_cast<char*>(bwaArgVec[0].c_str()),
+                    const_cast<char*>(bwaArgVec[1].c_str()),
+                    const_cast<char*>(bwaArgVec[2].c_str()),
+                    const_cast<char*>(bwaArgVec[3].c_str()),
+                    const_cast<char*>(bwaArgVec[4].c_str()),
+                    const_cast<char*>(bwaArgVec[5].c_str()) };
                 int bwaArgc = 6;
                 int ret = bwa_index(bwaArgc, bwaArgv);
 
@@ -180,16 +181,17 @@ class SalmonIndex{
             }
 
             bool buildQuasiIndex_(boost::filesystem::path indexDir,
-                                  std::vector<const char*>& quasiArgVec,
+                                  std::vector<std::string>& quasiArgVec,
                                   uint32_t k) {
                 namespace bfs = boost::filesystem;
-                char* quasiArgv[] = { const_cast<char*>(quasiArgVec[0]),
-                    const_cast<char*>(quasiArgVec[1]),
-                    const_cast<char*>(quasiArgVec[2]),
-                    const_cast<char*>(quasiArgVec[3]),
-                    const_cast<char*>(quasiArgVec[4]),
-                    const_cast<char*>(quasiArgVec[5]),
-                    const_cast<char*>(quasiArgVec[6])
+                char* quasiArgv[] = {
+                    const_cast<char*>(quasiArgVec[0].c_str()),
+                    const_cast<char*>(quasiArgVec[1].c_str()),
+                    const_cast<char*>(quasiArgVec[2].c_str()),
+                    const_cast<char*>(quasiArgVec[3].c_str()),
+                    const_cast<char*>(quasiArgVec[4].c_str()),
+                    const_cast<char*>(quasiArgVec[5].c_str()),
+                    const_cast<char*>(quasiArgVec[6].c_str())
                 };
                 int quasiArgc = 7;
 

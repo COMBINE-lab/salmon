@@ -176,7 +176,7 @@ Creates a salmon index.
         // ==== finished computing bias fetures
 
         bfs::path outputPrefix;
-        std::unique_ptr<std::vector<char const*>> argVec(new std::vector<char const*>);
+        std::unique_ptr<std::vector<std::string>> argVec(new std::vector<std::string>);
 	    fmt::MemoryWriter optWriter;
 
         std::unique_ptr<SalmonIndex> sidx = nullptr;
@@ -193,25 +193,26 @@ Creates a salmon index.
             }
 
             optWriter << auxKmerLen;
-            argVec->push_back(optWriter.str().c_str());
+            argVec->push_back(optWriter.str());
             argVec->push_back("-t");
-            argVec->push_back(transcriptFile.c_str());
+            argVec->push_back(transcriptFile);
             argVec->push_back("-i");
-            argVec->push_back(outputPrefix.string().c_str());
+            argVec->push_back(outputPrefix.string());
             sidx.reset(new SalmonIndex(jointLog, SalmonIndexType::QUASI));
         } else {
             // Build the FMD-based index
             bfs::path outputPrefix = indexDirectory / "bwaidx";
+            std::cerr << "outputPrefix = " << outputPrefix << "\n";
             argVec->push_back("index");
             argVec->push_back("-s");
 	        optWriter << vm["sasamp"].as<uint32_t>();
-            argVec->push_back(optWriter.str().c_str());
+            argVec->push_back(optWriter.str());
             argVec->push_back("-p");
-            argVec->push_back(outputPrefix.string().c_str());
-            argVec->push_back(transcriptFile.c_str());
+            argVec->push_back(outputPrefix.string());
+            argVec->push_back(transcriptFile);
             sidx.reset(new SalmonIndex(jointLog, SalmonIndexType::FMD));
-	    // Disable the auxiliary k-mer index for now
-	    auxKmerLen = 0;
+    	    // Disable the auxiliary k-mer index for now
+	        auxKmerLen = 0;
         }
 
         jointLog->info("building index");
