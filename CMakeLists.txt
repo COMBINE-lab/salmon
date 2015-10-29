@@ -190,11 +190,11 @@ if (NOT LIBLZMA_FOUND)
     message ("=======================================")
 ExternalProject_Add(liblzma
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    URL http://tukaani.org/xz/xz-5.2.0.tar.gz
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/xz-5.2.0
+    URL http://tukaani.org/xz/xz-5.2.2.tar.gz
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/xz-5.2.2
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     BUILD_IN_SOURCE TRUE
-    CONFIGURE_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/external/xz-5.2.0/configure --prefix=<INSTALL_DIR> CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
+    CONFIGURE_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/external/xz-5.2.2/configure --prefix=<INSTALL_DIR> CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
     BUILD_COMMAND make
     INSTALL_COMMAND make install
 )
