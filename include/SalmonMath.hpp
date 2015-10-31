@@ -1,6 +1,14 @@
 #ifndef SALMON_MATH_HPP
 #define SALMON_MATH_HPP
 
+#ifndef BOOST_LIKELY
+#define BOOST_LIKELY(x) (x)
+#endif
+
+#ifndef BOOST_UNLIKELY
+#define BOOST_UNLIKELY(x) (x)
+#endif
+
 #include <cmath>
 #include <cassert>
 
