@@ -290,7 +290,7 @@ elseif(FETCH_BOOST)
     message("==================================================================")
     ExternalProject_Add(libboost
         DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-        DOWNLOAD_COMMAND curl -k -L https://github.com/boostorg/boost/archive/boost-1.59.0.tar.gz -o boost_1_59_0.tar.gz &&
+        DOWNLOAD_COMMAND curl -k -L http://fossies.org/linux/misc/boost_1_59_0.tar.gz -o boost_1_59_0.tar.gz &&
                 tar xzf boost_1_59_0.tar.gz
         #URL http://downloads.sourceforge.net/project/boost/boost/1.57.0/boost_1_57_0.tar.gz
         SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_59_0
