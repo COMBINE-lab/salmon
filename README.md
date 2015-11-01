@@ -1,5 +1,5 @@
 [![Build Status](https://travis-ci.org/COMBINE-lab/salmon.svg?branch=master)](https://travis-ci.org/COMBINE-lab/salmon)
-[![Documentation Status](https://readthedocs.org/projects/salmon/badge/?version=latest)](https://readthedocs.org/projects/salmon/?badge=latest)
+[![Documentation Status](https://readthedocs.org/projects/salmon/badge/?version=latest)](http://salmon.readthedocs.org/en/latest)
 
 What is Salmon?
 ===============
