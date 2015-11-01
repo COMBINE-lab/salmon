@@ -1,6 +1,26 @@
 #ifndef SALMON_MATH_HPP
 #define SALMON_MATH_HPP
 
+// If we have built-ins, do as Boost does
+
+#ifndef BOOST_LIKELY
+#if defined(__has_builtin)
+#if __has_builtin(__builtin_expect)
+#define BOOST_LIKELY(x) __builtin_expect(x, 1)
+#endif
+#endif
+#endif
+
+#ifndef BOOST_UNLIKELY
+#if defined(__has_builtin)
+#if __has_builtin(__builtin_expect)
+#define BOOST_UNLIKELY(x) __builtin_expect(x, 0)
+#endif
+#endif
+#endif
+
+// If we didn't have those built-ins fall back to this
+
 #ifndef BOOST_LIKELY
 #define BOOST_LIKELY(x) (x)
 #endif
@@ -8,6 +28,7 @@
 #ifndef BOOST_UNLIKELY
 #define BOOST_UNLIKELY(x) (x)
 #endif
+
 
 #include <cmath>
 #include <cassert>
