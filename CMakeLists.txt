@@ -290,14 +290,14 @@ elseif(FETCH_BOOST)
     message("==================================================================")
     ExternalProject_Add(libboost
         DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-        DOWNLOAD_COMMAND curl -k -L http://fossies.org/linux/misc/boost_1_57_0.tar.gz -o boost_1_57_0.tar.gz &&
-                tar xzf boost_1_57_0.tar.gz
+        DOWNLOAD_COMMAND curl -k -L http://fossies.org/linux/misc/boost_1_59_0.tar.gz -o boost_1_59_0.tar.gz &&
+                tar xzf boost_1_59_0.tar.gz
         #URL http://downloads.sourceforge.net/project/boost/boost/1.57.0/boost_1_57_0.tar.gz
-        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_57_0
+        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_59_0
         INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
         #PATCH_COMMAND patch -p2 < ${CMAKE_CURRENT_SOURCE_DIR}/external/boost156.patch
-	CONFIGURE_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_57_0/bootstrap.sh ${BOOST_CONFIGURE_TOOLSET} ${BOOST_BUILD_LIBS} --prefix=<INSTALL_DIR>
-	BUILD_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_57_0/b2 -d0 -j2 ${BOOST_LIB_SUBSET} toolset=${BOOST_TOOLSET} ${BOOST_EXTRA_FLAGS} cxxflags=${BOOST_CXX_FLAGS} install
+	CONFIGURE_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_59_0/bootstrap.sh ${BOOST_CONFIGURE_TOOLSET} ${BOOST_BUILD_LIBS} --prefix=<INSTALL_DIR>
+	BUILD_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_59_0/b2 -d0 -j2 ${BOOST_LIB_SUBSET} toolset=${BOOST_TOOLSET} ${BOOST_EXTRA_FLAGS} cxxflags=${BOOST_CXX_FLAGS} install
         BUILD_IN_SOURCE 1
         INSTALL_COMMAND ""
     )
