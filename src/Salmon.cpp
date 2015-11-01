@@ -51,7 +51,7 @@ int help(int argc, char* argv[]) {
     ===============
 
     Please invoke salmon with one of the following commands {index, quant, swim}.
-    For more inforation on the options for theses particular methods, use the -h
+    For more information on the options for these particular methods, use the -h
     flag along with the method name.  For example:
 
     salmon index -h
