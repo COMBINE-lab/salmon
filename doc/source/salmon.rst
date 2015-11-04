@@ -141,6 +141,13 @@ This same ``quant`` command will work with either index (quasi-mapping or
 SMEM-based), and Salmon will automatically determine the type of index being 
 read and perform the appropriate lightweight mapping accordingly.
 
+.. note:: Order of command-line parameters
+
+    The library type ``-l`` should be specified on the command line **before** the 
+    read files (i.e. the parameters to ``-1`` and ``-2``, or ``-r``).  This is because
+    the contents of the library type flag is used to determine how the reads should 
+    be interpreted.
+    
 You can, of course, pass a number of options to control things such as the
 number of threads used or the different cutoffs used for counting reads.
 Just as with the alignment-based mode, after Salmon has finished running, there
