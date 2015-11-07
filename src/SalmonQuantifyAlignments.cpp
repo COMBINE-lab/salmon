@@ -282,7 +282,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                     // EQCLASS
                     std::vector<uint32_t> txpIDs;
                     std::vector<double> auxProbs;
-                    size_t txpIDsHash{0};
+                    //size_t txpIDsHash{0};
                     double auxDenom = salmon::math::LOG_0;
                     alnGroup->sortHits();
 
@@ -389,7 +389,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                             txpIDs.push_back(transcriptID);
                             auxProbs.push_back(auxProb);
                             auxDenom = salmon::math::logAdd(auxDenom, auxProb);
-                            boost::hash_combine(txpIDsHash, transcriptID);
+                            //boost::hash_combine(txpIDsHash, transcriptID);
 
                         } else {
                             aln->logProb = LOG_0;
@@ -405,7 +405,6 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                     }
 
                     // EQCLASS
-                    TranscriptGroup tg(txpIDs, txpIDsHash);
                     double auxProbSum{0.0};
                     for (auto& p : auxProbs) {
                         p = std::exp(p - auxDenom);
@@ -415,7 +414,10 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         std::cerr << "weights had sum of " << auxProbSum
                                   << " but it should be 1!!\n\n";
                     }
-                    eqBuilder.addGroup(std::move(tg), auxProbs);
+                    if (txpIDs.size() > 0) {
+                        TranscriptGroup tg(txpIDs);
+                        eqBuilder.addGroup(std::move(tg), auxProbs);
+                    }
 
 
                     // Normalize the scores

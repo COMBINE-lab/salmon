@@ -433,7 +433,7 @@ void processMiniBatch(
             std::vector<uint32_t> txpIDs;
             std::vector<double> auxProbs;
             double auxDenom = salmon::math::LOG_0;
-	        size_t txpIDsHash{0};
+	        //size_t txpIDsHash{0};
 
             double avgLogBias = salmon::math::LOG_0;
             uint32_t numInGroup{0};
@@ -556,7 +556,7 @@ void processMiniBatch(
                     txpIDs.push_back(transcriptID);
                     auxProbs.push_back(auxProb);
                     auxDenom = salmon::math::logAdd(auxDenom, auxProb);
-    	            boost::hash_combine(txpIDsHash, transcriptID);
+    	            //boost::hash_combine(txpIDsHash, transcriptID);
                 } else {
                     aln.logProb = LOG_0;
                 }
@@ -576,7 +576,6 @@ void processMiniBatch(
             }
 
             // EQCLASS
-            TranscriptGroup tg(txpIDs, txpIDsHash);
             double auxProbSum{0.0};
             for (auto& p : auxProbs) {
                 p = std::exp(p - auxDenom);
@@ -588,7 +587,10 @@ void processMiniBatch(
                           << " but it should be 1!!\n\n";
             }
             */
-            eqBuilder.addGroup(std::move(tg), auxProbs);
+            if (txpIDs.size() > 0) {
+               TranscriptGroup tg(txpIDs);
+                eqBuilder.addGroup(std::move(tg), auxProbs);
+            }
 
             // normalize the hits
             for (auto& aln : alnGroup.alignments()) {
@@ -1671,6 +1673,7 @@ inline void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_q
             }
         } else {
             return;
+            /*
             // If we didn't have any *significant* hits --- add any *trivial* orphan hits
             size_t totalHits = leftHits.size() + rightHits.size();
             std::vector<uint32_t> txpIDs;
@@ -1705,6 +1708,7 @@ inline void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_q
             } else {
                 salmonOpts.jointLog->warn("Unexpected empty hit group [orphaned]");
             }
+            */
         }
     } else { // Not an orphan
         for (auto jhp : jointHits) {
@@ -1772,6 +1776,7 @@ inline void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_q
         } else {
             // If we didn't have any *significant* hits --- add any *trivial* joint hits
             return;
+            /*
             std::vector<uint32_t> txpIDs;
             txpIDs.reserve(jointHits.size());
             std::vector<double> auxProbs;
@@ -1796,6 +1801,7 @@ inline void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_q
             } else {
                 salmonOpts.jointLog->warn("Unexpected empty hit group [paired]");
             }
+            */
         }
 
     } // end else
@@ -1921,6 +1927,7 @@ inline void getHitsForFragment(jellyfish::header_sequence_qual& frag,
     else {
         // If we didn't have any *significant* hits --- add any *trivial* joint hits
         return;
+        /*
         std::vector<uint32_t> txpIDs;
         txpIDs.reserve(hits.size());
         double uniProb = 1.0 / hits.size();
@@ -1934,6 +1941,7 @@ inline void getHitsForFragment(jellyfish::header_sequence_qual& frag,
 
         TranscriptGroup tg(txpIDs, txpIDsHash);
         eqBuilder.addGroup(std::move(tg), auxProbs);
+        */
     }
 
 
