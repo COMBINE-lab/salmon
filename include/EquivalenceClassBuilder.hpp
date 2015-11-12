@@ -80,7 +80,7 @@ class EquivalenceClassBuilder {
                 for (size_t i = 0; i < x.weights.size(); ++i) {
                     // conflicts are rare, but atomic is import here for small
 		    // datasets!
-		    salmon::utils::incLoop(weights[i], x.weights[i]);
+		    salmon::utils::incLoop(x.weights[i], weights[i]);
                 }
             };
             TGValue v(weights, 1);
