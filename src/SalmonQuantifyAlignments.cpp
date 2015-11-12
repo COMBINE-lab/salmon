@@ -981,7 +981,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         bfs::path logDirectory = outputDirectory / "logs";
 
         // Create the logger and the logging directory
-        bfs::create_directory(logDirectory);
+        bfs::create_directories(logDirectory);
         if (!(bfs::exists(logDirectory) and bfs::is_directory(logDirectory))) {
             std::cerr << "Couldn't create log directory " << logDirectory << "\n";
             std::cerr << "exiting\n";
@@ -1030,7 +1030,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         // Now create a subdirectory for any parameters of interest
         bfs::path paramsDir = outputDirectory / "libParams";
         if (!boost::filesystem::exists(paramsDir)) {
-            if (!boost::filesystem::create_directory(paramsDir)) {
+            if (!boost::filesystem::create_directories(paramsDir)) {
                 fmt::print(stderr, "{}ERROR{}: Could not create "
                            "output directory for experimental parameter "
                            "estimates [{}]. exiting.", ioutils::SET_RED,

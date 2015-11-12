@@ -3121,7 +3121,7 @@ transcript abundance from RNA-seq reads
 
         bool greedyChain = !optChain;
         bfs::path outputDirectory(vm["output"].as<std::string>());
-        bfs::create_directory(outputDirectory);
+        bfs::create_directories(outputDirectory);
         if (!(bfs::exists(outputDirectory) and bfs::is_directory(outputDirectory))) {
             std::cerr << "Couldn't create output directory " << outputDirectory << "\n";
             std::cerr << "exiting\n";
@@ -3135,7 +3135,7 @@ transcript abundance from RNA-seq reads
         sopt.outputDirectory = outputDirectory;
 
         // Create the logger and the logging directory
-        bfs::create_directory(logDirectory);
+        bfs::create_directories(logDirectory);
         if (!(bfs::exists(logDirectory) and bfs::is_directory(logDirectory))) {
             std::cerr << "Couldn't create log directory " << logDirectory << "\n";
             std::cerr << "exiting\n";
@@ -3294,7 +3294,7 @@ transcript abundance from RNA-seq reads
         // Now create a subdirectory for any parameters of interest
         bfs::path paramsDir = outputDirectory / "libParams";
         if (!boost::filesystem::exists(paramsDir)) {
-            if (!boost::filesystem::create_directory(paramsDir)) {
+            if (!boost::filesystem::create_directories(paramsDir)) {
                 fmt::print(stderr, "{}ERROR{}: Could not create "
                            "output directory for experimental parameter "
                            "estimates [{}]. exiting.", ioutils::SET_RED,
