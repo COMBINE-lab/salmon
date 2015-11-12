@@ -178,7 +178,6 @@ static void mem_collect_intv(const SalmonOpts& sopt, const mem_opt_t *opt, Salmo
 
     // first pass: find all SMEMs
     if (sidx->hasAuxKmerIndex()) {
-	std::cerr << "HERE1\n";
         KmerIntervalMap& auxIdx = sidx->auxIndex();
         uint32_t klen = auxIdx.k();
         while (x < len) {
@@ -256,6 +255,9 @@ static void mem_collect_intv(const SalmonOpts& sopt, const mem_opt_t *opt, Salmo
 
 
 /******* END OF STUFF THAT IS STATIC IN BWAMEM THAT WE NEED HERE --- Just re-define it *************/
+
+
+
 
 using paired_parser = pair_sequence_parser<char**>;
 using stream_manager = jellyfish::stream_manager<std::vector<std::string>::const_iterator>;
@@ -344,7 +346,6 @@ void processMiniBatch(
         uint64_t firstTimestepOfRound,
         ReadLibrary& readLib,
         const SalmonOpts& salmonOpts,
-        //std::vector<AlignmentGroup<AlnT>*>& batchHits,
         AlnGroupVecRange<AlnT> batchHits,
         std::vector<Transcript>& transcripts,
         ClusterForest& clusterForest,
@@ -389,40 +390,25 @@ void processMiniBatch(
 
     // Build reverse map from transcriptID => hit id
     using HitID = uint32_t;
-    /* This isn't used anymore!!!
-    btree::btree_map<TranscriptID, std::vector<SMEMAlignment*>> hitsForTranscript;
-    size_t hitID{0};
-    for (auto& hv : batchHits) {
-        for (auto& tid : hv->alignments()) {
-            hitsForTranscript[tid.transcriptID()].push_back(&tid);
-        }
-        ++hitID;
-    }
-    double clustTotal = std::log(batchHits.size()) + logForgettingMass;
-    */
 
     double logForgettingMass{0.0};
     uint64_t currentMinibatchTimestep{0};
+    // logForgettingMass and currentMinibatchTimestep are OUT parameters!
     fmCalc.getLogMassAndTimestep(logForgettingMass, currentMinibatchTimestep);
 
     double startingCumulativeMass = fmCalc.cumulativeLogMassAt(firstTimestepOfRound);
-    // BEGIN: DOUBLY-COLLAPSED TESTING
-    struct HitInfo {
-        uint32_t numHits = 0;
-        bool observed = false;
-        double newUniqueMass = LOG_0;
-    };
-
     int i{0};
     {
         // Iterate over each group of alignments (a group consists of all alignments reported
         // for a single read).  Distribute the read's mass to the transcripts
         // where it potentially aligns.
         for (auto& alnGroup : batchHits) {
+	    // If we had no alignments for this read, then skip it
             if (alnGroup.size() == 0) { continue; }
 
             // We start out with probability 0
             double sumOfAlignProbs{LOG_0};
+
             // Record whether or not this read is unique to a single transcript.
             bool transcriptUnique{true};
 
@@ -433,10 +419,11 @@ void processMiniBatch(
             std::vector<uint32_t> txpIDs;
             std::vector<double> auxProbs;
             double auxDenom = salmon::math::LOG_0;
-	        //size_t txpIDsHash{0};
 
             double avgLogBias = salmon::math::LOG_0;
             uint32_t numInGroup{0};
+            uint32_t prevTxpID{0};
+
             // For each alignment of this read
             for (auto& aln : alnGroup.alignments()) {
                 auto transcriptID = aln.transcriptID();
@@ -445,7 +432,7 @@ void processMiniBatch(
 
                 double refLength = transcript.RefLength > 0 ? transcript.RefLength : 1.0;
                 double coverage = aln.score();
-                double logFragCov = (coverage > 0) ? std::log(coverage) : LOG_0;
+                double logFragCov = (coverage > 0) ? std::log(coverage) : LOG_1;
 
                 // The alignment probability is the product of a
                 // transcript-level term (based on abundance and) an
@@ -454,27 +441,28 @@ void processMiniBatch(
                 if (salmonOpts.noEffectiveLengthCorrection or !burnedIn) {
                     logRefLength = std::log(transcript.RefLength);
                 } else {
-                    logRefLength = transcript.getCachedEffectiveLength();
+                    logRefLength = transcript.getCachedLogEffectiveLength();
                 }
 
                 double transcriptLogCount = transcript.mass(initialRound);
 
-                if ( transcriptLogCount != LOG_0 ) {
+		// If the transcript had a non-zero count (including pseudocount)
+                if (std::abs(transcriptLogCount) != LOG_0 ) {
+
                     double errLike = salmon::math::LOG_1;
                     if (burnedIn) {
-                        // TODO: Make error model for smem-based quantification
+                        // TODO: Make error model for mapping-based quantification
                         //errLike = errMod.logLikelihood(aln, transcript);
                     }
 
-                    double logFragProb = (useFragLengthDist) ?
-                        ((aln.fragLength() > 0) ?
-                         fragLengthDist.pmf(static_cast<size_t>(aln.fragLength())) :
-                         LOG_1) :
-                         LOG_1;
+		    // The probability of drawing a fragment of this length;
+                    double logFragProb = LOG_1;
+		    if (burnedIn and useFragLengthDist and aln.fragLength() > 0) {
+		    	logFragProb = fragLengthDist.pmf(static_cast<size_t>(aln.fragLength()));
+		    }
 
                     // TESTING
                     if (noFragLenFactor) { logFragProb = LOG_1; }
-
 
                     // TODO: Take the fragment length distribution into account
                     // for single-end fragments as in the alignment-based code below
@@ -508,6 +496,7 @@ void processMiniBatch(
                     }
 
                     double logBiasProb = salmon::math::LOG_1;
+		    /* TODO: Decide on sequence-specific bias model
                     if (useSequenceBiasModel and burnedIn) {
                         double fragLength = aln.fragLength();
                         if (fragLength > 0) {
@@ -524,17 +513,26 @@ void processMiniBatch(
                         }
 
                     }
+		    */
 
                     // Increment the count of this type of read that we've seen
                     ++libTypeCounts[aln.libFormat().formatID()];
 
+		    // The total auxiliary probabilty is the product (sum in log-space) of
+		    // The start position probability
+		    // The fragment length probabilty
+		    // The mapping score (coverage) probability
+		    // The fragment compatibility probability
+		    // The bias probability
                     double auxProb = startPosProb + logFragProb + logFragCov +
                                      logAlignCompatProb + logBiasProb;
 
                     aln.logProb = transcriptLogCount + auxProb;
 
+		    // If this alignment had a zero probability, then skip it
                     if (std::abs(aln.logProb) == LOG_0) { continue; }
 
+		    /* TODO: Relates to sequence-specific bias
                     if (useSequenceBiasModel and burnedIn) {
                         avgLogBias = salmon::math::logAdd(avgLogBias, logBiasProb);
                         numInGroup++;
@@ -544,6 +542,7 @@ void processMiniBatch(
                         numInGroup++;
                         aln.logBias = salmon::math::LOG_1;
                     }
+		    */
 
                     sumOfAlignProbs = logAdd(sumOfAlignProbs, aln.logProb);
 
@@ -553,10 +552,11 @@ void processMiniBatch(
                         observedTranscripts.insert(transcriptID);
                     }
                     // EQCLASS
+                    if (transcriptID < prevTxpID) { std::cerr << "[ERROR] Transcript IDs are not in sorted order; please report this bug on GitHub!\n"; }
+                    prevTxpID = transcriptID;
                     txpIDs.push_back(transcriptID);
                     auxProbs.push_back(auxProb);
                     auxDenom = salmon::math::logAdd(auxDenom, auxProb);
-    	            //boost::hash_combine(txpIDsHash, transcriptID);
                 } else {
                     aln.logProb = LOG_0;
                 }
@@ -571,9 +571,11 @@ void processMiniBatch(
                 ++localNumAssignedFragments;
             }
 
+	    /* TODO: Relates to sequence-specific bias
             if (numInGroup > 0){
                 avgLogBias = avgLogBias - std::log(numInGroup);
             }
+	    */
 
             // EQCLASS
             double auxProbSum{0.0};
@@ -581,15 +583,16 @@ void processMiniBatch(
                 p = std::exp(p - auxDenom);
                 auxProbSum += p;
             }
-            /*
+            /* 
             if (std::abs(auxProbSum - 1.0) > 0.01) {
                 std::cerr << "weights had sum of " << auxProbSum
                           << " but it should be 1!!\n\n";
             }
-            */
+	    */
+            
             if (txpIDs.size() > 0) {
                TranscriptGroup tg(txpIDs);
-                eqBuilder.addGroup(std::move(tg), auxProbs);
+               eqBuilder.addGroup(std::move(tg), auxProbs);
             }
 
             // normalize the hits
@@ -697,7 +700,7 @@ void processMiniBatch(
         numAssignedFragments += localNumAssignedFragments;
         if (numAssignedFragments >= numBurninFrags and !burnedIn) {
             burnedIn = true;
-            for (auto& t : transcripts) {  t.updateEffectiveLength(fragLengthDist); }
+            for (auto& t : transcripts) { t.getLogEffectiveLength(fragLengthDist, numAssignedFragments, numBurninFrags); }
             if (useFSPD) {
                 // update all of the fragment start position
                 // distributions
@@ -2063,9 +2066,9 @@ void processReadsMEM(ParserT* parser,
             red[3] = '0' + static_cast<char>(fmt::RED);
             if (initialRound) {
                 fmt::print(stderr, "\033[A\r\r{}processed{} {} {}fragments{}\n", green, red, numObservedFragments, green, RESET_COLOR);
-                fmt::print(stderr, "hits per frag:  {}; hit upper bound: {}",
-                           validHits / static_cast<float>(prevObservedFrags),
-                           upperBoundHits.load());
+                fmt::print(stderr, "hits: {}; hits per frag:  {}",
+                           validHits,
+                           validHits / static_cast<float>(prevObservedFrags));
             } else {
                 fmt::print(stderr, "\r\r{}processed{} {} {}fragments{}", green, red, numObservedFragments, green, RESET_COLOR);
             }
@@ -2183,6 +2186,7 @@ void processReadsQuasi(paired_parser* parser,
   size_t locRead{0};
   uint64_t localUpperBoundHits{0};
   size_t rangeSize{0};
+  uint64_t  localNumAssignedFragments{0};
 
   bool tooManyHits{false};
   size_t maxNumHits{salmonOpts.maxReadOccs};
@@ -2209,17 +2213,19 @@ void processReadsQuasi(paired_parser* parser,
         tooManyHits = false;
         localUpperBoundHits = 0;
         auto& jointHitGroup = structureVec[i];
-        auto& jointHits = jointHitGroup.alignments();
         jointHitGroup.clearAlignments();
+        auto& jointHits = jointHitGroup.alignments();
         leftHits.clear();
         rightHits.clear();
 
         bool lh = hitCollector(j->data[i].first.seq,
                                leftHits, saSearcher,
-                               MateStatus::PAIRED_END_LEFT);
+                               MateStatus::PAIRED_END_LEFT,
+                               true);
         bool rh = hitCollector(j->data[i].second.seq,
                                rightHits, saSearcher,
-                               MateStatus::PAIRED_END_RIGHT);
+                               MateStatus::PAIRED_END_RIGHT,
+                               true);
 
         rapmap::utils::mergeLeftRightHits(
                                leftHits, rightHits, jointHits,
@@ -2289,6 +2295,7 @@ void processReadsQuasi(paired_parser* parser,
 		} // If we have no mappings --- then there's nothing to do
 
         validHits += jointHits.size();
+        localNumAssignedFragments += (jointHits.size() > 0);
         locRead++;
         ++numObservedFragments;
         if (numObservedFragments % 500000 == 0) {
@@ -2300,9 +2307,9 @@ void processReadsQuasi(paired_parser* parser,
             red[3] = '0' + static_cast<char>(fmt::RED);
             if (initialRound) {
                 fmt::print(stderr, "\033[A\r\r{}processed{} {} {}fragments{}\n", green, red, numObservedFragments, green, RESET_COLOR);
-                fmt::print(stderr, "hits per frag:  {}; hit upper bound: {}",
-                           validHits / static_cast<float>(prevObservedFrags),
-                           upperBoundHits.load());
+                fmt::print(stderr, "hits: {}, hits per frag:  {}",
+                        validHits,
+                        validHits / static_cast<float>(prevObservedFrags));
             } else {
                 fmt::print(stderr, "\r\r{}processed{} {} {}fragments{}", green, red, numObservedFragments, green, RESET_COLOR);
             }
@@ -2393,7 +2400,8 @@ void processReadsQuasi(single_parser* parser,
 
         bool lh = hitCollector(j->data[i].seq,
                                jointHits, saSearcher,
-                               MateStatus::SINGLE_END);
+                               MateStatus::SINGLE_END,
+                               true);
 
         if (initialRound) {
             upperBoundHits += (jointHits.size() > 0);
@@ -2424,9 +2432,9 @@ void processReadsQuasi(single_parser* parser,
             red[3] = '0' + static_cast<char>(fmt::RED);
             if (initialRound) {
                 fmt::print(stderr, "\033[A\r\r{}processed{} {} {}fragments{}\n", green, red, numObservedFragments, green, RESET_COLOR);
-                fmt::print(stderr, "hits per frag:  {}; hit upper bound: {}",
-                           validHits / static_cast<float>(prevObservedFrags),
-                           upperBoundHits.load());
+                fmt::print(stderr, "hits: {}; hits per frag:  {}",
+                        validHits,
+                        validHits / static_cast<float>(prevObservedFrags));
             } else {
                 fmt::print(stderr, "\r\r{}processed{} {} {}fragments{}", green, red, numObservedFragments, green, RESET_COLOR);
             }
@@ -2836,7 +2844,7 @@ void quantifyLibrary(
         };
 
         // Process all of the reads
-        experiment.processReads(numQuantThreads, processReadLibraryCallback);
+        experiment.processReads(numQuantThreads, salmonOpts, processReadLibraryCallback);
         experiment.setNumObservedFragments(numObservedFragments);
 
         //EQCLASS
@@ -2862,6 +2870,23 @@ void quantifyLibrary(
     }
     fmt::print(stderr, "\n\n\n\n");
 
+    // If we didn't achieve burnin, then at least compute effective
+    // lengths and mention this to the user.
+    if (totalAssignedFragments < salmonOpts.numBurninFrags) {
+	
+	FragmentLengthDistribution& fld = *(experiment.fragmentLengthDistribution()); 
+
+	// Compute the effective length of each transcript
+	for (auto& t : experiment.transcripts()) {
+	  // force the re-computation of the effective lengths
+	  t.getLogEffectiveLength(fld, totalAssignedFragments, salmonOpts.numBurninFrags, true);
+	}
+
+	jointLog->warn("Only {} fragments were mapped, but the number of burn-in fragments was set to {}.\n"
+		       "The effective lengths have been computed using the observed mappings.\n", 
+		       totalAssignedFragments, salmonOpts.numBurninFrags);
+    }
+    
     if (numObservedFragments <= prevNumObservedFragments) {
         jointLog->warn() << "Something seems to be wrong with the calculation "
             "of the mapping rate.  The recorded ratio is likely wrong.  Please "
@@ -2872,7 +2897,13 @@ void quantifyLibrary(
             static_cast<double>(numObservedFragments.load());
         experiment.setNumObservedFragments(numObservedFragments - prevNumObservedFragments);
         experiment.setUpperBoundHits(upperBoundHits.load());
-        experiment.setEffetiveMappingRate(upperBoundMappingRate);
+        if (salmonOpts.allowOrphans) {
+           double mappingRate = totalAssignedFragments.load() /
+               static_cast<double>(numObservedFragments.load());
+           experiment.setEffectiveMappingRate(mappingRate);
+        } else {
+            experiment.setEffectiveMappingRate(upperBoundMappingRate);
+        }
     }
 
         jointLog->info("Mapping rate = {}\%\n",
@@ -3227,9 +3258,10 @@ transcript abundance from RNA-seq reads
         {
           bfs::path statPath = outputDirectory / "stats.tsv";
           std::ofstream statStream(statPath.string(), std::ofstream::out);
-          statStream << "numObservedFragments\t" << experiment.numObservedFragsInFirstPass() << '\n';
+          statStream << "numObservedFragments\t" << experiment.numMappedFragments() << '\n';
           for (auto& t : experiment.transcripts()) {
-              auto l = (sopt.noEffectiveLengthCorrection) ? t.RefLength : t.getCachedEffectiveLength();
+              auto l = (sopt.noEffectiveLengthCorrection) ? t.RefLength :
+                  std::exp(t.getCachedLogEffectiveLength());
               statStream << t.RefName << '\t' << l << '\n';
           }
           statStream.close();

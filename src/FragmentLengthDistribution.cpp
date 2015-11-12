@@ -126,6 +126,9 @@ void FragmentLengthDistribution::addVal(size_t len, double mass) {
   }
 }
 
+/**
+ * Returns the *LOG* probability of observing a fragment of length *len*.
+ */
 double FragmentLengthDistribution::pmf(size_t len) const {
     len /= binSize_;
     if (len > maxVal()) {

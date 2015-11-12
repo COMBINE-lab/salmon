@@ -270,8 +270,8 @@ class ReadExperiment {
 
 
     template <typename CallbackT>
-    bool processReads(const uint32_t& numThreads, CallbackT& processReadLibrary) {
-        bool burnedIn = (totalAssignedFragments_ + numAssignedFragments_ > 5000000);
+    bool processReads(const uint32_t& numThreads, const SalmonOpts& sopt, CallbackT& processReadLibrary) {
+        bool burnedIn = (totalAssignedFragments_ + numAssignedFragments_ > sopt.numBurninFrags);
         for (auto& rl : readLibraries_) {
             processReadLibrary(rl, salmonIndex_.get(), transcripts_, clusterForest(),
                                *(fragLengthDist_.get()), numAssignedFragments_,
@@ -311,7 +311,7 @@ class ReadExperiment {
         return effectiveMappingRate_;
     }
 
-    void setEffetiveMappingRate(double emr) {
+    void setEffectiveMappingRate(double emr) {
         effectiveMappingRate_ = emr;
     }
 

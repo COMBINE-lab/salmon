@@ -56,7 +56,7 @@ void initCountMap_(
         const size_t groupSize = tgroup.txps.size();
         if (tgroup.valid) {
             const std::vector<uint32_t>& txps = tgroup.txps;
-            const std::vector<double>& auxs = eqClass.second.weights;
+            const auto& auxs = eqClass.second.weights;
 
             double denom = 0.0;
             if (BOOST_LIKELY(groupSize > 1)) {
@@ -125,7 +125,7 @@ void sampleRound_(
         const size_t groupSize = tgroup.txps.size();
         if (tgroup.valid) {
             const std::vector<uint32_t>& txps = tgroup.txps;
-            const std::vector<double>& auxs = eqClass.second.weights;
+            const auto& auxs = eqClass.second.weights;
 
             double denom = 0.0;
             // If this is a single-transcript group,

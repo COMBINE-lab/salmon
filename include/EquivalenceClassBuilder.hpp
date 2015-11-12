@@ -12,6 +12,7 @@
 
 #include "cuckoohash_map.hh"
 #include "concurrentqueue.h"
+#include "SalmonUtils.hpp"
 #include "TranscriptGroup.hpp"
 
 
@@ -22,7 +23,7 @@ struct TGValue {
     }
 
     TGValue(std::vector<double>& weightIn, uint64_t countIn) :
-        weights(weightIn) { count.store(countIn); }
+        weights(weightIn.begin(), weightIn.end()) { count.store(countIn); }
 
     // const is a lie
     void normalizeAux() const {
@@ -32,21 +33,12 @@ struct TGValue {
         }
         double norm = 1.0 / sumOfAux;
         for (size_t i = 0; i < weights.size(); ++i) {
-            weights[i] *= norm;
+            weights[i].store(weights[i].load() * norm);
         }
-        /* LOG SPACE
-        double sumOfAux = salmon::math::LOG_0;
-        for (size_t i = 0; i < weights.size(); ++i) {
-            sumOfAux = salmon::math::logAdd(sumOfAux, weights[i]);
-        }
-        for (size_t i = 0; i < weights.size(); ++i) {
-            weights[i] = std::exp(weights[i] - sumOfAux);
-        }
-        */
     }
 
     // forget synchronizing this for the time being
-    mutable std::vector<double> weights;
+    mutable std::vector<tbb::atomic<double>> weights;
     std::atomic<uint64_t> count{0};
 };
 
@@ -86,12 +78,9 @@ class EquivalenceClassBuilder {
                 x.count++;
                 // update the weights
                 for (size_t i = 0; i < x.weights.size(); ++i) {
-                    // Possibly atomicized in the future
-                    weights[i] += x.weights[i];
-                    /* LOG SPACE
-                    x.weights[i] =
-                        salmon::math::logAdd(x.weights[i], weights[i]);
-                    */
+                    // conflicts are rare, but atomic is import here for small
+		    // datasets!
+		    salmon::utils::incLoop(weights[i], x.weights[i]);
                 }
             };
             TGValue v(weights, 1);

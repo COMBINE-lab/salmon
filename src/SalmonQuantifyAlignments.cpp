@@ -199,6 +199,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
             // double logForgettingMass = fmCalc();
             double logForgettingMass{0.0};
             uint64_t currentMinibatchTimestep{0};
+	    // logForgettingMass and currentMinibatchTimestep are OUT parameters!	
             fmCalc.getLogMassAndTimestep(logForgettingMass, currentMinibatchTimestep);
             miniBatch->logForgettingMass = logForgettingMass;
 
@@ -208,72 +209,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
             using HitIDVector = std::vector<size_t>;
             using HitProbVector = std::vector<double>;
 
-            // BEGIN: DOUBLY-COLLAPSED TESTING
-            struct HitInfo {
-                uint32_t numHits = 0;
-                bool observed = false;
-                double newUniqueMass = LOG_0;
-            };
-
-            std::unordered_map<TranscriptID, HitInfo> hitInfo;
-            // We only need to fill this in if it's not the first round
-            if (useMassBanking) {
-                for (auto& alnGroup : alignmentGroups) {
-                    for (auto a : alnGroup->alignments()) {
-                        auto transcriptID = a->transcriptID();
-                        if (transcriptID < 0 or transcriptID >= refs.size()) {
-                            salmonOpts.jointLog->warn("Invalid Transcript ID [{}] encountered", transcriptID);
-                        }
-                        auto& info = hitInfo[transcriptID];
-                        auto& txp =refs[transcriptID];
-                        if(!info.observed) {
-                            info.observed = true;
-
-                            if (txp.uniqueCount() > 0) {
-                                /*
-                                double dormantInterval = static_cast<double>(currentMinibatchTimestep -
-                                        firstTimestepOfRound + 1);
-                                        */
-                                // The cumulative mass last time this was updated
-                                // double prevUpdateMass = startingCumulativeMass;
-
-                                double updateFraction = std::log(txp.uniqueUpdateFraction());
-                                auto lastUpdate = txp.lastTimestepUpdated();
-                                double newUniqueMass = 0.0;
-                                if (lastUpdate >= currentMinibatchTimestep) {
-                                    newUniqueMass = logForgettingMass + updateFraction;
-                                } else {
-                                    double dormantInterval = static_cast<double>(currentMinibatchTimestep) - lastUpdate;
-                                    double prevUpdateMass = fmCalc.cumulativeLogMassAt(lastUpdate - 1);
-                                    double currentUpdateMass = fmCalc.cumulativeLogMassAt(currentMinibatchTimestep);
-                                    newUniqueMass = salmon::math::logSub(currentUpdateMass, prevUpdateMass) +
-                                        updateFraction - std::log(dormantInterval);
-                                }
-                                info.newUniqueMass = newUniqueMass;
-
-                                // The new unique mass to be added to this transcript
-				/*
-                                double newUniqueMass =
-                                    salmon::math::logSub(currentUpdateMass, prevUpdateMass) +
-                                    updateFraction - std::log(dormantInterval);
-				*/
-                                /*
-				double newUniqueMass = logForgettingMass + updateFraction;
-                                info.newUniqueMass = newUniqueMass;
-                                */
-                            }
-                        }
-                        info.numHits++;
-                    } // end alignments in group
-                } // end batch hits
-            } // end initial round
-            // END: DOUBLY-COLLAPSED TESTING
-
-
-            {
-                // The cumulative forgetting mass up through and including the current timestep.
-                double currentCumulativeMass = fmCalc.cumulativeLogMassAt(currentMinibatchTimestep);
-
+	    {
                 // Iterate over each group of alignments (a group consists of all alignments reported
                 // for a single read).  Distribute the read's mass proportionally dependent on the
                 // current
@@ -282,22 +218,24 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                     // EQCLASS
                     std::vector<uint32_t> txpIDs;
                     std::vector<double> auxProbs;
-                    //size_t txpIDsHash{0};
                     double auxDenom = salmon::math::LOG_0;
+
+		    // The alignments must be sorted by transcript id
                     alnGroup->sortHits();
 
                     double sumOfAlignProbs{LOG_0};
+
                     // update the cluster-level properties
                     bool transcriptUnique{true};
                     auto firstTranscriptID = alnGroup->alignments().front()->transcriptID();
                     std::unordered_set<size_t> observedTranscripts;
+
                     for (auto& aln : alnGroup->alignments()) {
                         auto transcriptID = aln->transcriptID();
                         auto& transcript = refs[transcriptID];
                         transcriptUnique = transcriptUnique and (transcriptID == firstTranscriptID);
 
                         double refLength = transcript.RefLength > 0 ? transcript.RefLength : 1.0;
-
                         double logFragProb = salmon::math::LOG_1;
 
                         if (!salmonOpts.noFragLengthDist and useAuxParams) {
@@ -353,9 +291,14 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                                           aln->logQualProb() +
                                           errLike + logAlignCompatProb;
 		        */
-            double auxProb = startPosProb + logFragProb +
-                             aln->logQualProb() +
-                             errLike + logAlignCompatProb;
+
+			// The total auxiliary probabilty is the product (sum in log-space) of
+			// The start position probability
+			// The fragment length probabilty
+			// The mapping score (under error model) probability
+			// The fragment compatibility probability
+	                double auxProb = startPosProb + logFragProb +
+           	                         errLike + logAlignCompatProb;
 
 
 
@@ -363,19 +306,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         // account for this transcript's relaive abundance
                         double transcriptLogCount = transcript.mass(initialRound);
 
-                        // BEGIN: DOUBLY-COLLAPSED TESTING
-                        // If this is not the initial round, then add the
-                        // appropriate proportion of unique read mass for
-                        // every ambiguous alignment we encounter.  Here,
-                        // we're not assigning the extra mass yet, but just
-                        // adding it to the transcriptLogCount.
-                        if (useMassBanking and transcript.uniqueCount() > 0) {
-                            auto txpHitInfo = hitInfo[transcriptID];
-                            transcriptLogCount = salmon::math::logAdd(transcriptLogCount, txpHitInfo.newUniqueMass);
-                        }
-                        // END: DOUBLY-COLLAPSED TESTING
-
-                        if ( transcriptLogCount != LOG_0 and
+			if ( transcriptLogCount != LOG_0 and
                              auxProb != LOG_0) {
                            aln->logProb = transcriptLogCount + auxProb;
 
@@ -389,7 +320,6 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                             txpIDs.push_back(transcriptID);
                             auxProbs.push_back(auxProb);
                             auxDenom = salmon::math::logAdd(auxDenom, auxProb);
-                            //boost::hash_combine(txpIDsHash, transcriptID);
 
                         } else {
                             aln->logProb = LOG_0;
@@ -410,10 +340,12 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         p = std::exp(p - auxDenom);
                         auxProbSum += p;
                     }
+		    /*
                     if (std::abs(auxProbSum - 1.0) > 0.01) {
                         std::cerr << "weights had sum of " << auxProbSum
                                   << " but it should be 1!!\n\n";
                     }
+		    */
                     if (txpIDs.size() > 0) {
                         TranscriptGroup tg(txpIDs);
                         eqBuilder.addGroup(std::move(tg), auxProbs);
@@ -429,9 +361,6 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         auto& transcript = refs[transcriptID];
 
                         double newMass = logForgettingMass + aln->logProb;
-                        if (useMassBanking and transcript.uniqueCount() > 0) {
-                            newMass = salmon::math::logAdd(newMass, hitInfo[transcriptID].newUniqueMass);
-                        }
                         transcript.addMass(newMass);
                         transcript.setLastTimestepUpdated(currentMinibatchTimestep);
 
@@ -765,6 +694,25 @@ bool quantifyLibrary(
 
     fmt::print(stderr, "\n\n\n\n");
 
+
+    // If we didn't achieve burnin, then at least compute effective
+    // lengths and mention this to the user.
+    if (alnLib.numMappedFragments() < salmonOpts.numBurninFrags) {
+	
+	auto& fld = alnLib.fragmentLengthDistribution();
+
+	// Compute the effective length of each transcript
+	for (auto& t : alnLib.transcripts()) {
+	  // force the re-computation of the effective lengths
+	  t.getLogEffectiveLength(fld, alnLib.numMappedFragments(), salmonOpts.numBurninFrags, true);
+	}
+
+	salmonOpts.jointLog->warn("Only {} fragments were mapped, but the number of burn-in fragments was set to {}.\n"
+		       "The effective lengths have been computed using the observed mappings.\n", 
+		       alnLib.numMappedFragments(), salmonOpts.numBurninFrags);
+    }
+
+
     // In this case, we have to give the structures held
     // in the cache back to the appropriate queues
     if (haveCache) {
@@ -848,6 +796,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                                         "format; files with any other extension are assumed to be in the simple format.");
 
     // no sequence bias for now
+    sopt.useMassBanking = false;
     sopt.noSeqBiasModel = true;
     sopt.noRichEqClasses = false;
 
@@ -904,10 +853,6 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "fragment assignment ambiguity into account, you should use this output.")
     ("sampleUnaligned,u", po::bool_switch(&sampleUnaligned)->default_value(false), "In addition to sampling the aligned reads, also write "
                         "the un-aligned reads to \"posSample.bam\".")
-    ("useMassBanking", po::bool_switch(&(sopt.useMassBanking))->default_value(false), "[Deprecated] : "
-                        "Use mass \"banking\" in subsequent epoch of inference.  Rather than re-observing uniquely "
-                        "mapped reads, simply remember the ratio of uniquely to ambiguously mapped reads for each "
-                        "transcript and distribute the unique mass uniformly throughout the epoch.")
     ("numGibbsSamples", po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0), "[*super*-experimental]: Number of Gibbs sampling rounds to "
      "perform.")
     ("numBootstraps", po::value<uint32_t>(&(sopt.numBootstraps))->default_value(0), "[experimental]: Number of bootstrap samples to generate. Note: "
@@ -1185,7 +1130,8 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         std::ofstream statStream(statPath.string(), std::ofstream::out);
                         statStream << "numObservedFragments\t" << alnLib.numObservedFragments() << '\n';
                         for (auto& t : alnLib.transcripts()) {
-                            auto l = (sopt.noEffectiveLengthCorrection) ? t.RefLength : t.getCachedEffectiveLength();
+                            auto l = (sopt.noEffectiveLengthCorrection) ? t.RefLength : 
+				    					  std::exp(t.getCachedLogEffectiveLength());
                             statStream << t.RefName << '\t' << l << '\n';
                         }
                         statStream.close();

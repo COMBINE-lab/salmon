@@ -83,6 +83,8 @@ namespace utils {
         return os;
     }
 
+
+
     double logAlignFormatProb(const LibraryFormat observed, const LibraryFormat expected, double incompatPrior) {
         // Allow orphaned reads in a paired-end library, but
         // decrease their a priori probability.
@@ -151,7 +153,7 @@ namespace utils {
         for (auto& transcript : transcripts_) {
             double refLength = sopt.noEffectiveLengthCorrection ?
                                transcript.RefLength :
-                               std::exp(transcript.getCachedEffectiveLength());
+                               std::exp(transcript.getCachedLogEffectiveLength());
             tfracDenom += (transcript.projectedCounts / numMappedFrags) / refLength;
         }
 
@@ -160,7 +162,7 @@ namespace utils {
         for (auto& transcript : transcripts_) {
             double logLength = sopt.noEffectiveLengthCorrection ?
                                std::log(transcript.RefLength) :
-                               transcript.getCachedEffectiveLength();
+                               transcript.getCachedLogEffectiveLength();
             double count = transcript.projectedCounts;
             double npm = (transcript.projectedCounts / numMappedFrags);
             double refLength = std::exp(logLength);
@@ -251,7 +253,7 @@ namespace utils {
         for (auto& transcript : transcripts_) {
             double refLength = sopt.noEffectiveLengthCorrection ?
                                transcript.RefLength :
-                               std::exp(transcript.getCachedEffectiveLength());
+                               std::exp(transcript.getCachedLogEffectiveLength());
             //refLength = transcript.RefLength;
             tfracDenom += (transcript.projectedCounts / numMappedFragments) / refLength;
         }
@@ -260,7 +262,7 @@ namespace utils {
         for (auto& transcript : transcripts_) {
             double logLength = sopt.noEffectiveLengthCorrection ?
                                std::log(transcript.RefLength) :
-                               transcript.getCachedEffectiveLength();
+                               transcript.getCachedLogEffectiveLength();
             /*
             if (!sopt.noSeqBiasModel) {
                 double avgLogBias = transcript.getAverageSequenceBias(

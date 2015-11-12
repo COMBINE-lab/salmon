@@ -90,6 +90,15 @@ inline void incLoopLog(tbb::atomic<double>& val, double inc) {
 	} while (returnedMass != oldMass);
 }
 
+
+/*
+ * Same as above, but overloaded for "plain" doubles
+ */
+inline void incLoop(double& val, double inc) {
+	val += inc;
+}
+
+
 /*
  * Use atomic compare-and-swap to update val to
  * val + inc.  Update occurs in a loop in case other

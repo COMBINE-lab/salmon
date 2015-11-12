@@ -170,13 +170,13 @@ public:
       *
       *
       */
-    double updateEffectiveLength(const FragmentLengthDistribution& fragLengthDist) {
+    double computeLogEffectiveLength(const FragmentLengthDistribution& fragLengthDist) {
 
         double effectiveLength = salmon::math::LOG_0;
         double refLen = static_cast<double>(RefLength);
         double logLength = std::log(refLen);
 
-        if (logLength < fragLengthDist.mean()) {
+        if (refLen < fragLengthDist.mean()) {
             effectiveLength = logLength;
         } else {
             uint32_t mval = fragLengthDist.maxVal();
@@ -190,18 +190,27 @@ public:
         return effectiveLength;
     }
 
-    double getCachedEffectiveLength() {
+    /**
+     * Return the cached value for the log of the effective length.
+     */
+    double getCachedLogEffectiveLength() {
         return cachedEffectiveLength_.load();
     }
 
-    double getEffectiveLength(const FragmentLengthDistribution& fragLengthDist,
+    /**
+     * If we should update the effective length, then do it and cache the result.
+     * Otherwise, return the cached result.
+     */
+    double getLogEffectiveLength(const FragmentLengthDistribution& fragLengthDist,
                               size_t currObs,
-                              size_t burnInObs) {
-        if (lastUpdate_ == 0 or
+                              size_t burnInObs,
+			      bool forceUpdate=false) {
+        if (forceUpdate or 
+	    (lastUpdate_ == 0) or
             (currObs - lastUpdate_ >= 250000) or
             (lastUpdate_ < burnInObs and currObs > burnInObs)) {
             // compute new number
-            double cel = updateEffectiveLength(fragLengthDist);
+            double cel = computeLogEffectiveLength(fragLengthDist);
             cachedEffectiveLength_.store(cel);
             lastUpdate_.store(currObs);
             //priorMass_ = cel + logPerBasePrior_;

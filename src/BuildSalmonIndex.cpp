@@ -144,7 +144,7 @@ Creates a salmon index.
         if (!bfs::exists(indexDirectory)) {
             std::cerr << "index [" << indexDirectory << "] did not previously exist "
                       << " . . . creating it\n";
-            bfs::create_directory(indexDirectory);
+            bfs::create_directories(indexDirectory);
         }
 
         bfs::path logPath = indexDirectory / "indexing.log";
