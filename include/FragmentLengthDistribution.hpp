@@ -127,6 +127,15 @@ public:
    * @return (Logged) cmf of bins.
    */
   std::vector<double> cmf() const;
+
+
+  /**
+   * A member function that fills in a a vector containing the (logged) probability
+   * mass function *for the bins*, and the min and max values
+   * @return (Logged) pmf of bins.
+   */
+  void dumpPMF(std::vector<double>& pmfOut, size_t& minV, size_t& maxV) const;
+
   /**
    * An accessor for the (logged) observation mass (including pseudo-counts).
    * @return Total observation mass.

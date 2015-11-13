@@ -353,7 +353,7 @@ void processMiniBatch(
         std::atomic<uint64_t>& numAssignedFragments,
         std::default_random_engine& randEng,
         bool initialRound,
-        bool& burnedIn
+        std::atomic<bool>& burnedIn
         ) {
 
     using salmon::math::LOG_0;
@@ -437,7 +437,7 @@ void processMiniBatch(
                 // The alignment probability is the product of a
                 // transcript-level term (based on abundance and) an
                 // alignment-level term.
-                double logRefLength;
+                double logRefLength{salmon::math::LOG_0};
                 if (salmonOpts.noEffectiveLengthCorrection or !burnedIn) {
                     logRefLength = std::log(transcript.RefLength);
                 } else {
@@ -446,7 +446,7 @@ void processMiniBatch(
 
                 double transcriptLogCount = transcript.mass(initialRound);
 
-		// If the transcript had a non-zero count (including pseudocount)
+                // If the transcript had a non-zero count (including pseudocount)
                 if (std::abs(transcriptLogCount) != LOG_0 ) {
 
                     double errLike = salmon::math::LOG_1;
@@ -455,11 +455,11 @@ void processMiniBatch(
                         //errLike = errMod.logLikelihood(aln, transcript);
                     }
 
-		    // The probability of drawing a fragment of this length;
+                    // The probability of drawing a fragment of this length;
                     double logFragProb = LOG_1;
-		    if (burnedIn and useFragLengthDist and aln.fragLength() > 0) {
-		    	logFragProb = fragLengthDist.pmf(static_cast<size_t>(aln.fragLength()));
-		    }
+                    if (burnedIn and useFragLengthDist and aln.fragLength() > 0) {
+                        logFragProb = fragLengthDist.pmf(static_cast<size_t>(aln.fragLength()));
+                    }
 
                     // TESTING
                     if (noFragLenFactor) { logFragProb = LOG_1; }
@@ -487,62 +487,32 @@ void processMiniBatch(
                                                 LOG_1;
 
                     // Allow for a non-uniform fragment start position distribution
-                    double startPosProb = -logRefLength;
+                    double startPosProb{-logRefLength};
                     auto hitPos = aln.hitPos();
                     if (useFSPD and burnedIn and hitPos < refLength) {
                         auto& fragStartDist =
-                            fragStartDists[transcript.lengthClassIndex()];
+                        fragStartDists[transcript.lengthClassIndex()];
                         startPosProb = fragStartDist(hitPos, refLength, logRefLength);
                     }
 
                     double logBiasProb = salmon::math::LOG_1;
-		    /* TODO: Decide on sequence-specific bias model
-                    if (useSequenceBiasModel and burnedIn) {
-                        double fragLength = aln.fragLength();
-                        if (fragLength > 0) {
-                            int32_t leftHitPos = hitPos;
-                            int32_t rightHitPos = hitPos + fragLength;
-                            logBiasProb = biasModel.biasFactor(transcript,
-                                                               leftHitPos,
-                                                               rightHitPos,
-                                                               aln.libFormat());
-                        } else {
-                            logBiasProb = biasModel.biasFactor(transcript,
-                                                               hitPos,
-                                                               aln.libFormat());
-                        }
-
-                    }
-		    */
 
                     // Increment the count of this type of read that we've seen
                     ++libTypeCounts[aln.libFormat().formatID()];
 
-		    // The total auxiliary probabilty is the product (sum in log-space) of
-		    // The start position probability
-		    // The fragment length probabilty
-		    // The mapping score (coverage) probability
-		    // The fragment compatibility probability
-		    // The bias probability
-                    double auxProb = startPosProb + logFragProb + logFragCov +
-                                     logAlignCompatProb + logBiasProb;
+                    // The total auxiliary probabilty is the product (sum in log-space) of
+                    // The start position probability
+                    // The fragment length probabilty
+                    // The mapping score (coverage) probability
+                    // The fragment compatibility probability
+                    // The bias probability
+                    double auxProb =  logFragProb + logFragCov +
+                                      logAlignCompatProb;
 
-                    aln.logProb = transcriptLogCount + auxProb;
+                    aln.logProb = transcriptLogCount + auxProb + startPosProb;
 
-		    // If this alignment had a zero probability, then skip it
+                    // If this alignment had a zero probability, then skip it
                     if (std::abs(aln.logProb) == LOG_0) { continue; }
-
-		    /* TODO: Relates to sequence-specific bias
-                    if (useSequenceBiasModel and burnedIn) {
-                        avgLogBias = salmon::math::logAdd(avgLogBias, logBiasProb);
-                        numInGroup++;
-                        aln.logBias = logBiasProb;
-                    } else {
-                        avgLogBias = salmon::math::logAdd(avgLogBias, logBiasProb);
-                        numInGroup++;
-                        aln.logBias = salmon::math::LOG_1;
-                    }
-		    */
 
                     sumOfAlignProbs = logAdd(sumOfAlignProbs, aln.logProb);
 
@@ -559,6 +529,7 @@ void processMiniBatch(
                     auxDenom = salmon::math::logAdd(auxDenom, auxProb);
                 } else {
                     aln.logProb = LOG_0;
+
                 }
             }
 
@@ -571,25 +542,12 @@ void processMiniBatch(
                 ++localNumAssignedFragments;
             }
 
-	    /* TODO: Relates to sequence-specific bias
-            if (numInGroup > 0){
-                avgLogBias = avgLogBias - std::log(numInGroup);
-            }
-	    */
-
             // EQCLASS
             double auxProbSum{0.0};
             for (auto& p : auxProbs) {
                 p = std::exp(p - auxDenom);
                 auxProbSum += p;
             }
-            /* 
-            if (std::abs(auxProbSum - 1.0) > 0.01) {
-                std::cerr << "weights had sum of " << auxProbSum
-                          << " but it should be 1!!\n\n";
-            }
-	    */
-            
             if (txpIDs.size() > 0) {
                TranscriptGroup tg(txpIDs);
                eqBuilder.addGroup(std::move(tg), auxProbs);
@@ -641,7 +599,6 @@ void processMiniBatch(
                 }
             } // end normalize
 
-            //double avgBias = std::exp(avgLogBias);
             // update the single target transcript
             if (transcriptUnique) {
                 if (updateCounts) {
@@ -699,8 +656,6 @@ void processMiniBatch(
 
         numAssignedFragments += localNumAssignedFragments;
         if (numAssignedFragments >= numBurninFrags and !burnedIn) {
-            burnedIn = true;
-            for (auto& t : transcripts) { t.getLogEffectiveLength(fragLengthDist, numAssignedFragments, numBurninFrags); }
             if (useFSPD) {
                 // update all of the fragment start position
                 // distributions
@@ -708,6 +663,9 @@ void processMiniBatch(
                     fspd.update();
                 }
             }
+            // NOTE: only one thread should succeed here, and that
+            // thread will set burnedIn to true.
+            readExp.updateTranscriptLengthsAtomic(burnedIn);
         }
         if (initialRound) {
             readLib.updateLibTypeCounts(libTypeCounts);
@@ -1972,7 +1930,7 @@ void processReadsMEM(ParserT* parser,
                double coverageThresh,
 	           std::mutex& iomutex,
                bool initialRound,
-               bool& burnedIn,
+               std::atomic<bool>& burnedIn,
                volatile bool& writeToCache) {
     	// ERROR
 	salmonOpts.jointLog->error("Quasimapping cannot be used with the FMD index --- please report this bug on GitHub");
@@ -1998,7 +1956,7 @@ void processReadsMEM(ParserT* parser,
                double coverageThresh,
 	           std::mutex& iomutex,
                bool initialRound,
-               bool& burnedIn,
+               std::atomic<bool>& burnedIn,
                volatile bool& writeToCache) {
   uint64_t count_fwd = 0, count_bwd = 0;
   // Seed with a real random value, if available
@@ -2113,7 +2071,7 @@ void processReadsQuasi(paired_parser* parser,
                double coverageThresh,
 	           std::mutex& iomutex,
                bool initialRound,
-               bool& burnedIn,
+               std::atomic<bool>& burnedIn,
                volatile bool& writeToCache) {
 
     	// ERROR
@@ -2140,7 +2098,7 @@ void processReadsQuasi(single_parser* parser,
                double coverageThresh,
 	           std::mutex& iomutex,
                bool initialRound,
-               bool& burnedIn,
+               std::atomic<bool>& burnedIn,
                volatile bool& writeToCache) {
     	// ERROR
 	salmonOpts.jointLog->error("MEM-mapping cannot be used with the Quasi index --- please report this bug on GitHub");
@@ -2166,7 +2124,7 @@ void processReadsQuasi(paired_parser* parser,
                double coverageThresh,
 	           std::mutex& iomutex,
                bool initialRound,
-               bool& burnedIn,
+               std::atomic<bool>& burnedIn,
                volatile bool& writeToCache) {
   uint64_t count_fwd = 0, count_bwd = 0;
   // Seed with a real random value, if available
@@ -2350,7 +2308,7 @@ void processReadsQuasi(single_parser* parser,
                double coverageThresh,
 	           std::mutex& iomutex,
                bool initialRound,
-               bool& burnedIn,
+               std::atomic<bool>& burnedIn,
                volatile bool& writeToCache) {
   uint64_t count_fwd = 0, count_bwd = 0;
   // Seed with a real random value, if available
@@ -2477,7 +2435,7 @@ void processReadLibrary(
         std::atomic<uint64_t>& numAssignedFragments, // total number of assigned reads
         std::atomic<uint64_t>& upperBoundHits, // upper bound on # of mapped frags
         bool initialRound,
-        bool& burnedIn,
+        std::atomic<bool>& burnedIn,
         ForgettingMassCalculator& fmCalc,
         FragmentLengthDistribution& fragLengthDist,
         mem_opt_t* memOptions,
@@ -2830,7 +2788,7 @@ void quantifyLibrary(
                 std::vector<Transcript>& transcripts, ClusterForest& clusterForest,
                 FragmentLengthDistribution& fragLengthDist,
                 std::atomic<uint64_t>& numAssignedFragments,
-                size_t numQuantThreads, bool& burnedIn) -> void  {
+                size_t numQuantThreads, std::atomic<bool>& burnedIn) -> void  {
 
             processReadLibrary<AlnT>(experiment, rl, sidx, transcripts, clusterForest,
                     numObservedFragments, totalAssignedFragments, upperBoundHits,
@@ -2873,20 +2831,14 @@ void quantifyLibrary(
     // If we didn't achieve burnin, then at least compute effective
     // lengths and mention this to the user.
     if (totalAssignedFragments < salmonOpts.numBurninFrags) {
-	
-	FragmentLengthDistribution& fld = *(experiment.fragmentLengthDistribution()); 
+        std::atomic<bool> dummyBool{false};
+        experiment.updateTranscriptLengthsAtomic(dummyBool);
 
-	// Compute the effective length of each transcript
-	for (auto& t : experiment.transcripts()) {
-	  // force the re-computation of the effective lengths
-	  t.getLogEffectiveLength(fld, totalAssignedFragments, salmonOpts.numBurninFrags, true);
-	}
-
-	jointLog->warn("Only {} fragments were mapped, but the number of burn-in fragments was set to {}.\n"
-		       "The effective lengths have been computed using the observed mappings.\n", 
-		       totalAssignedFragments, salmonOpts.numBurninFrags);
+        jointLog->warn("Only {} fragments were mapped, but the number of burn-in fragments was set to {}.\n"
+                "The effective lengths have been computed using the observed mappings.\n",
+                totalAssignedFragments, salmonOpts.numBurninFrags);
     }
-    
+
     if (numObservedFragments <= prevNumObservedFragments) {
         jointLog->warn() << "Something seems to be wrong with the calculation "
             "of the mapping rate.  The recorded ratio is likely wrong.  Please "
@@ -3050,7 +3002,6 @@ int salmonQuantify(int argc, char *argv[]) {
     ("numBootstraps", po::value<uint32_t>(&(sopt.numBootstraps))->default_value(0), "[experimental]: Number of bootstrap samples to generate. Note: "
       "This is mutually exclusive with Gibbs sampling.");
 
-
     po::options_description testing("\n"
             "testing options");
     testing.add_options()
@@ -3106,6 +3057,9 @@ transcript abundance from RNA-seq reads
         }
         std::string commentString = commentStream.str();
         fmt::print(stderr, "{}", commentString);
+
+        // TODO: Fix fragment start pos dist
+        sopt.noFragStartPosDist = true;
 
         // Verify the geneMap before we start doing any real work.
         bfs::path geneMapPath;

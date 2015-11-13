@@ -84,7 +84,7 @@ void FragmentLengthDistribution::addVal(size_t len, double mass) {
     //assert(!isnan(mass));
     //assert(kernel_.size());
 
-//  len /= binSize_;
+  len /= binSize_;
 
   if (len > maxVal()) {
       len = maxVal();
@@ -136,6 +136,24 @@ double FragmentLengthDistribution::pmf(size_t len) const {
     }
     return hist_[len]-totMass_;
 }
+
+/**
+ * Dumps the PMF to the provided vector.
+ */
+void FragmentLengthDistribution::dumpPMF(
+        std::vector<double>& pmfOut,
+        size_t& minV,
+        size_t& maxV) const {
+
+    minV = minVal();
+    maxV = maxVal();
+    pmfOut.clear();
+    pmfOut.reserve(maxV - minV + 1);
+    for (size_t i = minV; i <= maxV; ++i) {
+        pmfOut.push_back(pmf(i));
+    }
+}
+
 
 double FragmentLengthDistribution::cmf(size_t len) const {
     if(haveCachedCMF_) {

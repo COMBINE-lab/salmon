@@ -170,21 +170,32 @@ public:
       *
       *
       */
-    double computeLogEffectiveLength(const FragmentLengthDistribution& fragLengthDist) {
+    double computeLogEffectiveLength(
+            std::vector<double>& logPMF,
+            double logFLDMean,
+            size_t minVal,
+            size_t maxVal) {
 
         double effectiveLength = salmon::math::LOG_0;
         double refLen = static_cast<double>(RefLength);
-        double logLength = std::log(refLen);
+        double logRefLength = std::log(refLen);
 
-        if (refLen < fragLengthDist.mean()) {
-            effectiveLength = logLength;
+        if (logRefLength <= logFLDMean) {
+            effectiveLength = logRefLength;
         } else {
-            uint32_t mval = fragLengthDist.maxVal();
-            for (size_t l = fragLengthDist.minVal(); l <= std::min(RefLength, mval); ++l) {
+            uint32_t mval = maxVal;
+            size_t clen = minVal;
+            size_t maxLen = std::min(RefLength, mval);
+            while (clen <= maxLen) {
+                size_t i = clen - minVal;
                 effectiveLength = salmon::math::logAdd(
                         effectiveLength,
-                        fragLengthDist.pmf(l) + std::log(refLen - l + 1));
+                        logPMF[i] + std::log(refLen - clen + 1));
+                ++clen;
             }
+        }
+        if (std::exp(effectiveLength) <= 1.0) {
+            effectiveLength = salmon::math::LOG_1;
         }
 
         return effectiveLength;
@@ -197,22 +208,30 @@ public:
         return cachedEffectiveLength_.load();
     }
 
+    void updateEffectiveLength(
+            std::vector<double>& logPMF,
+            double logFLDMean,
+            size_t minVal,
+            size_t maxVal) {
+        double cel = computeLogEffectiveLength(logPMF, logFLDMean, minVal, maxVal);
+        cachedEffectiveLength_.store(cel);
+    }
+
     /**
      * If we should update the effective length, then do it and cache the result.
      * Otherwise, return the cached result.
      */
+    /*
     double getLogEffectiveLength(const FragmentLengthDistribution& fragLengthDist,
-                              size_t currObs,
-                              size_t burnInObs,
-			      bool forceUpdate=false) {
-        if (forceUpdate or 
-	    (lastUpdate_ == 0) or
+                                 size_t currObs, size_t burnInObs, bool forceUpdate=false) {
+        if (forceUpdate or
+            (lastUpdate_ == 0) or
             (currObs - lastUpdate_ >= 250000) or
             (lastUpdate_ < burnInObs and currObs > burnInObs)) {
             // compute new number
+            lastUpdate_.store(currObs);
             double cel = computeLogEffectiveLength(fragLengthDist);
             cachedEffectiveLength_.store(cel);
-            lastUpdate_.store(currObs);
             //priorMass_ = cel + logPerBasePrior_;
             return cachedEffectiveLength_.load();
         } else {
@@ -220,6 +239,7 @@ public:
             return cachedEffectiveLength_.load();
         }
     }
+    */
 
     double perBasePrior() { return std::exp(logPerBasePrior_); }
     inline size_t lastTimestepUpdated() { return lastTimestepUpdated_.load(); }

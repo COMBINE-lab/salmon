@@ -24,7 +24,8 @@ FragmentStartPositionDistribution::FragmentStartPositionDistribution(uint32_t nu
       pmf_(numBins+2),
       cmf_(numBins+2),
       totMass_(salmon::math::LOG_1),
-      isUpdated_(false) {
+      isUpdated_(false),
+      allowUpdates_(true){
 
   using salmon::math::logAdd;
   double uniMass = log(1.0 / numBins_);
@@ -51,6 +52,7 @@ void FragmentStartPositionDistribution::addVal(
         uint32_t txpLen,
         double mass) {
 
+    if (!allowUpdates_) { return; }
     using salmon::math::logAdd;
     if (hitPos >= static_cast<int32_t>(txpLen)) return; // hit should happen within the transcript
 
@@ -79,11 +81,14 @@ void FragmentStartPositionDistribution::addVal(
 
 double FragmentStartPositionDistribution::evalCDF(int32_t hitPos, uint32_t txpLen) {
     int i = (static_cast<long long>(hitPos) * numBins_) / txpLen;
-    double val = hitPos * 1.0 / txpLen * numBins_;
+    double val = hitPos * (1.0 / txpLen) * numBins_;
     return salmon::math::logAdd(cmf_[i], std::log(val - i) + pmf_[i+1]);
 }
 
 void FragmentStartPositionDistribution::update() {
+    if (isUpdated_) { return; }
+    // TODO: This still doesn't seem *safe*
+    allowUpdates_ = false;
     std::lock_guard<std::mutex> lg(fspdMut_);
     if (!isUpdated_) {
         for (uint32_t i = 1; i <= numBins_; i++) {
@@ -117,12 +122,14 @@ double FragmentStartPositionDistribution::operator()(
     if (effLen >= txpLen) {
 	    effLen = txpLen - 1;
     }
-    double denom = evalCDF(static_cast<int32_t>(effLen), txpLen);
-    return ((denom >= salmon::math::LOG_EPSILON) ?
-            salmon::math::logSub(evalCDF(hitPos + 1, txpLen), evalCDF(hitPos, txpLen)) -
-	    denom : 0.0);
 
-    //return salmon::math::logSub(evalCDF(hitPos + 1, txpLen), evalCDF(hitPos, txpLen));
+    double denom = evalCDF(static_cast<int32_t>(effLen), txpLen);
+    double cdfNext = evalCDF(hitPos + 1, txpLen);
+    double cdfCurr = evalCDF(hitPos, txpLen);
+
+    return ((denom >= salmon::math::LOG_EPSILON) ?
+            salmon::math::logSub(cdfNext, cdfCurr) - denom :
+            salmon::math::LOG_0);
 }
 
 double FragmentStartPositionDistribution::totMass() const {

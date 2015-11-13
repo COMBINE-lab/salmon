@@ -18,6 +18,7 @@ extern "C" {
 #include "SalmonOpts.hpp"
 #include "SalmonIndex.hpp"
 #include "EquivalenceClassBuilder.hpp"
+#include "SpinLock.hpp" // RapMap's with try_lock
 
 // Logger includes
 #include "spdlog/spdlog.h"
@@ -122,6 +123,34 @@ class ReadExperiment {
     }
 
     std::vector<Transcript>& transcripts() { return transcripts_; }
+
+    void updateTranscriptLengthsAtomic(std::atomic<bool>& done) {
+        if (sl_.try_lock()) {
+            if (!done) {
+                auto& fld = *(fragLengthDist_.get());
+
+                std::vector<double> logPMF;
+                size_t minVal;
+                size_t maxVal;
+                double logFLDMean = fld.mean();
+                fld.dumpPMF(logPMF, minVal, maxVal);
+                double sum = salmon::math::LOG_0;
+                for (auto v : logPMF) {
+                    sum = salmon::math::logAdd(sum, v);
+                }
+                for (auto& v : logPMF) {
+                    v -= sum;
+                }
+                // Update the effective length of *every* transcript
+                for( auto& t : transcripts_ ) {
+                    t.updateEffectiveLength(logPMF, logFLDMean, minVal, maxVal);
+                }
+                // then declare that we are done
+                done = true;
+                sl_.unlock();
+            }
+        }
+    }
 
     uint64_t numAssignedFragments() { return numAssignedFragments_; }
     uint64_t numMappedFragments() { return numAssignedFragments_; }
@@ -271,7 +300,7 @@ class ReadExperiment {
 
     template <typename CallbackT>
     bool processReads(const uint32_t& numThreads, const SalmonOpts& sopt, CallbackT& processReadLibrary) {
-        bool burnedIn = (totalAssignedFragments_ + numAssignedFragments_ > sopt.numBurninFrags);
+        std::atomic<bool> burnedIn{totalAssignedFragments_ + numAssignedFragments_ > sopt.numBurninFrags};
         for (auto& rl : readLibraries_) {
             processReadLibrary(rl, salmonIndex_.get(), transcripts_, clusterForest(),
                                *(fragLengthDist_.get()), numAssignedFragments_,
@@ -528,6 +557,7 @@ class ReadExperiment {
     uint64_t numObservedFragsInFirstPass_{0};
     uint64_t upperBoundHits_{0};
     double effectiveMappingRate_{0.0};
+    SpinLock sl_;
     std::unique_ptr<FragmentLengthDistribution> fragLengthDist_;
     EquivalenceClassBuilder eqBuilder_;
 };

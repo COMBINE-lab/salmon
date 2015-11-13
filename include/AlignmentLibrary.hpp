@@ -23,6 +23,7 @@ extern "C" {
 #include "FASTAParser.hpp"
 #include "concurrentqueue.h"
 #include "EquivalenceClassBuilder.hpp"
+#include "SpinLock.hpp" // RapMap's with try_lock
 
 // Boost includes
 #include <boost/filesystem.hpp>
@@ -161,6 +162,33 @@ class AlignmentLibrary {
         return eqBuilder_;
     }
 
+    void updateTranscriptLengthsAtomic(std::atomic<bool>& done) {
+        if (sl_.try_lock()) {
+            if (!done) {
+                auto& fld = *(flDist_.get());
+                std::vector<double> logPMF;
+                size_t minVal;
+                size_t maxVal;
+                double logFLDMean = fld.mean();
+                fld.dumpPMF(logPMF, minVal, maxVal);
+                double sum = salmon::math::LOG_0;
+                for (auto v : logPMF) {
+                    sum = salmon::math::logAdd(sum, v);
+                }
+                for (auto& v : logPMF) {
+                    v -= sum;
+                }
+                // Update the effective length of *every* transcript
+                for( auto& t : transcripts_ ) {
+                    t.updateEffectiveLength(logPMF, logFLDMean, minVal, maxVal);
+                }
+                // then declare that we are done
+                done = true;
+                sl_.unlock();
+            }
+        }
+    }
+
     std::vector<Transcript>& transcripts() { return transcripts_; }
 
     inline bool getAlignmentGroup(AlignmentGroup<FragT>*& ag) { return bq->getAlignmentGroup(ag); }
@@ -284,7 +312,7 @@ class AlignmentLibrary {
      *  made through the alignment file.
      */
     size_t quantificationPasses_;
-
+    SpinLock sl_;
     EquivalenceClassBuilder eqBuilder_;
 };
 

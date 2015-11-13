@@ -44,7 +44,8 @@ class FragmentStartPositionDistribution {
 
   // Mutex for this distribution
   std::mutex fspdMut_;
-  bool isUpdated_;
+  std::atomic<bool> isUpdated_;
+  std::atomic<bool> allowUpdates_;
 
 public:
   /**

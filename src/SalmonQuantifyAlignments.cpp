@@ -125,7 +125,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                       volatile bool& doneParsing,
                       std::atomic<size_t>& activeBatches,
                       const SalmonOpts& salmonOpts,
-                      bool& burnedIn,
+                      std::atomic<bool>& burnedIn,
                       bool initialRound,
                       std::atomic<size_t>& processedReads) {
 
@@ -199,7 +199,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
             // double logForgettingMass = fmCalc();
             double logForgettingMass{0.0};
             uint64_t currentMinibatchTimestep{0};
-	    // logForgettingMass and currentMinibatchTimestep are OUT parameters!	
+	    // logForgettingMass and currentMinibatchTimestep are OUT parameters!
             fmCalc.getLogMassAndTimestep(logForgettingMass, currentMinibatchTimestep);
             miniBatch->logForgettingMass = logForgettingMass;
 
@@ -276,43 +276,34 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                             errLike = alnMod.logLikelihood(*aln, transcript);
                         }
 
-			// Allow for a non-uniform fragment start position distribution
+                        // Allow for a non-uniform fragment start position distribution
                         double startPosProb = -logRefLength;
                         auto hitPos = aln->left();
-			if (useFSPD and burnedIn and hitPos < refLength) {
-			  auto& fragStartDist =
-				  fragStartDists[transcript.lengthClassIndex()];
-			  startPosProb = fragStartDist(hitPos, refLength, logRefLength);
-			}
+                        if (useFSPD and burnedIn and hitPos < refLength) {
+                            auto& fragStartDist =
+                                fragStartDists[transcript.lengthClassIndex()];
+                            startPosProb = fragStartDist(hitPos, refLength, logRefLength);
+                        }
 
-			// Pre FSPD
-			/*
-                        double auxProb = -logRefLength + logFragProb +
-                                          aln->logQualProb() +
-                                          errLike + logAlignCompatProb;
-		        */
-
-			// The total auxiliary probabilty is the product (sum in log-space) of
-			// The start position probability
-			// The fragment length probabilty
-			// The mapping score (under error model) probability
-			// The fragment compatibility probability
-	                double auxProb = startPosProb + logFragProb +
-           	                         errLike + logAlignCompatProb;
-
-
+                        // The total auxiliary probabilty is the product (sum in log-space) of
+                        // The start position probability
+                        // The fragment length probabilty
+                        // The mapping score (under error model) probability
+                        // The fragment compatibility probability
+                        double auxProb = logFragProb + errLike + logAlignCompatProb;
 
                         // The overall mass of this transcript, which is used to
                         // account for this transcript's relaive abundance
                         double transcriptLogCount = transcript.mass(initialRound);
 
-			if ( transcriptLogCount != LOG_0 and
-                             auxProb != LOG_0) {
-                           aln->logProb = transcriptLogCount + auxProb;
+                        if ( transcriptLogCount != LOG_0 and
+                              auxProb != LOG_0 and
+                              startPosProb != LOG_0 ) {
+                            aln->logProb = transcriptLogCount + auxProb + startPosProb;
 
                             sumOfAlignProbs = logAdd(sumOfAlignProbs, aln->logProb);
                             if (updateCounts and
-                                observedTranscripts.find(transcriptID) == observedTranscripts.end()) {
+                                    observedTranscripts.find(transcriptID) == observedTranscripts.end()) {
                                 refs[transcriptID].addTotalCount(1);
                                 observedTranscripts.insert(transcriptID);
                             }
@@ -340,12 +331,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         p = std::exp(p - auxDenom);
                         auxProbSum += p;
                     }
-		    /*
-                    if (std::abs(auxProbSum - 1.0) > 0.01) {
-                        std::cerr << "weights had sum of " << auxProbSum
-                                  << " but it should be 1!!\n\n";
-                    }
-		    */
+
                     if (txpIDs.size() > 0) {
                         TranscriptGroup tg(txpIDs);
                         eqBuilder.addGroup(std::move(tg), auxProbs);
@@ -366,24 +352,24 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
                         double r = uni(eng);
                         if (!burnedIn and r < std::exp(aln->logProb)) {
-			    // Update the error model
+                            // Update the error model
                             if (salmonOpts.useErrorModel) {
                                 alnMod.update(*aln, transcript, LOG_1, logForgettingMass);
                             }
-			    // Update the fragment length distribution
+                            // Update the fragment length distribution
                             if (aln->isPaired() and !salmonOpts.noFragLengthDist) {
                                 double fragLength = aln->fragLen();
                                 fragLengthDist.addVal(fragLength, logForgettingMass);
                             }
-			    // Update the fragment start position distribution
-			    if (useFSPD) {
-				    auto hitPos = aln->left();
-				    auto& fragStartDist =
-					    fragStartDists[transcript.lengthClassIndex()];
-				    fragStartDist.addVal(hitPos,
-						    transcript.RefLength,
-						    logForgettingMass);
-			    }
+                            // Update the fragment start position distribution
+                            if (useFSPD) {
+                                auto hitPos = aln->left();
+                                auto& fragStartDist =
+                                    fragStartDists[transcript.lengthClassIndex()];
+                                fragStartDist.addVal(hitPos,
+                                        transcript.RefLength,
+                                        logForgettingMass);
+                            }
                         }
                     }
 
@@ -462,8 +448,17 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
             --activeBatches;
             processedReads += batchReads;
             if (processedReads >= numBurninFrags and !burnedIn) {
-                burnedIn = true;
+                if (useFSPD) {
+                    // update all of the fragment start position
+                    // distributions
+                    for (auto& fspd : fragStartDists) {
+                        fspd.update();
+                    }
+                }
                 fragLengthDist.cacheCMF();
+                // NOTE: only one thread should succeed here, and that
+                // thread will set burnedIn to true
+                alnLib.updateTranscriptLengthsAtomic(burnedIn);
             }
         }
         miniBatch = nullptr;
@@ -483,7 +478,7 @@ bool quantifyLibrary(
         size_t numRequiredFragments,
         const SalmonOpts& salmonOpts) {
 
-    bool burnedIn{false};
+    std::atomic<bool> burnedIn{false};
 
     auto& refs = alnLib.transcripts();
     size_t numTranscripts = refs.size();
@@ -698,18 +693,11 @@ bool quantifyLibrary(
     // If we didn't achieve burnin, then at least compute effective
     // lengths and mention this to the user.
     if (alnLib.numMappedFragments() < salmonOpts.numBurninFrags) {
-	
-	auto& fld = alnLib.fragmentLengthDistribution();
-
-	// Compute the effective length of each transcript
-	for (auto& t : alnLib.transcripts()) {
-	  // force the re-computation of the effective lengths
-	  t.getLogEffectiveLength(fld, alnLib.numMappedFragments(), salmonOpts.numBurninFrags, true);
-	}
-
-	salmonOpts.jointLog->warn("Only {} fragments were mapped, but the number of burn-in fragments was set to {}.\n"
-		       "The effective lengths have been computed using the observed mappings.\n", 
-		       alnLib.numMappedFragments(), salmonOpts.numBurninFrags);
+        std::atomic<bool> dummyBool{false};
+        alnLib.updateTranscriptLengthsAtomic(dummyBool);
+        salmonOpts.jointLog->warn("Only {} fragments were mapped, but the number of burn-in fragments was set to {}.\n"
+                "The effective lengths have been computed using the observed mappings.\n",
+                alnLib.numMappedFragments(), salmonOpts.numBurninFrags);
     }
 
 
@@ -728,7 +716,7 @@ bool quantifyLibrary(
         }
     }
 
-    return burnedIn;
+    return burnedIn.load();
 }
 
 int computeBiasFeatures(
@@ -919,6 +907,9 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         }
         std::string commentString = commentStream.str();
         fmt::print(stderr, "{}", commentString);
+
+        // TODO: Fix fragment start pos dist
+        sopt.noFragStartPosDist = true;
 
         // Verify the geneMap before we start doing any real work.
         bfs::path geneMapPath;
@@ -1130,7 +1121,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         std::ofstream statStream(statPath.string(), std::ofstream::out);
                         statStream << "numObservedFragments\t" << alnLib.numObservedFragments() << '\n';
                         for (auto& t : alnLib.transcripts()) {
-                            auto l = (sopt.noEffectiveLengthCorrection) ? t.RefLength : 
+                            auto l = (sopt.noEffectiveLengthCorrection) ? t.RefLength :
 				    					  std::exp(t.getCachedLogEffectiveLength());
                             statStream << t.RefName << '\t' << l << '\n';
                         }

@@ -581,7 +581,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
         //double m = transcripts[i].mass(false);
         alphas[i] = transcripts[i].getActive() ? scale * totalNumFrags : 0.0;
         effLens(i) = (sopt.noEffectiveLengthCorrection) ?
-                      transcripts[i].RefLength : 
+                      transcripts[i].RefLength :
 											std::exp(transcripts[i].getCachedLogEffectiveLength());
         totalLen += effLens(i);
     }
@@ -593,30 +593,6 @@ bool CollapsedEMOptimizer::gatherBootstraps(
     size_t itNum{0};
     double minAlpha = 1e-8;
     double cutoff = (useVBEM) ? (priorAlpha + minAlpha) : minAlpha;
-
-    if (sopt.noRichEqClasses) {
-        tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(eqVec.size())),
-                [&eqVec, &effLens]( const BlockedIndexRange& range) -> void {
-                    // For each index in the equivalence class vector
-                    for (auto eqID : boost::irange(range.begin(), range.end())) {
-                        // The vector entry
-                        auto& kv = eqVec[eqID];
-                        // The label of the equivalence class
-                        const TranscriptGroup& k = kv.first;
-                        // The size of the label
-                        size_t classSize = k.txps.size();
-                        // The weights of the label
-                        TGValue& v = kv.second;
-
-                        // Iterate over each weight and set it equal to
-                        // 1 / effLen of the corresponding transcript
-                        for (size_t i = 0; i < classSize; ++i) {
-                                double el = effLens(k.txps[i]);
-                                v.weights[i] = (el <= 1.0) ? 1.0 : (1.0 / el);
-                            }
-                        }
-                    });
-    }
 
     // Since we will use the same weights and transcript groups for each
     // of the bootstrap samples (only the count vector will change), it
@@ -722,30 +698,41 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
     // If the user requested *not* to use "rich" equivalence classes,
     // then wipe out all of the weight information here and simply replace
     // the weights with the effective length terms (here, the *inverse* of
-    // the effective length).
-    if (sopt.noRichEqClasses) {
-        tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(eqVec.size())),
-                [&eqVec, &effLens]( const BlockedIndexRange& range) -> void {
-                // For each index in the equivalence class vector
-                for (auto eqID : boost::irange(range.begin(), range.end())) {
-                    // The vector entry
-                    auto& kv = eqVec[eqID];
-                    // The label of the equivalence class
-                    const TranscriptGroup& k = kv.first;
-                    // The size of the label
-                    size_t classSize = k.txps.size();
-                    // The weights of the label
-                    TGValue& v = kv.second;
+    // the effective length).  Otherwise, multiply the existing weight terms
+    // by the effective length term.
+    bool noRichEq = sopt.noRichEqClasses;
+    tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(eqVec.size())),
+            [&eqVec, &effLens, noRichEq]( const BlockedIndexRange& range) -> void {
+            // For each index in the equivalence class vector
+            for (auto eqID : boost::irange(range.begin(), range.end())) {
+                // The vector entry
+                auto& kv = eqVec[eqID];
+                // The label of the equivalence class
+                const TranscriptGroup& k = kv.first;
+                // The size of the label
+                size_t classSize = k.txps.size();
+                // The weights of the label
+                TGValue& v = kv.second;
 
-                    // Iterate over each weight and set it equal to
-                    // 1 / effLen of the corresponding transcript
-                    for (size_t i = 0; i < classSize; ++i) {
-                        double el = effLens(k.txps[i]);
-                        v.weights[i] = (el <= 1.0) ? 1.0 : (1.0 / el);
+                // Iterate over each weight and set it equal to
+                // 1 / effLen of the corresponding transcript
+                double wsum{0.0};
+                for (size_t i = 0; i < classSize; ++i) {
+                    double el = effLens(k.txps[i]);
+                    if (el <= 1.0) { el = 1.0; }
+                    if (noRichEq) {
+                        v.weights[i] = 1.0 / el;
+                    } else {
+                        v.weights[i].store(v.weights[i] / el);
                     }
+                    wsum += v.weights[i];
                 }
-        });
-    }
+                double wnorm = 1.0 / wsum;
+                for (size_t i = 0; i < classSize; ++i) {
+                    v.weights[i].store(v.weights[i] * wnorm);
+                }
+            }
+    });
 
     auto numRemoved = markDegenerateClasses(eqVec, alphas, sopt.jointLog);
     sopt.jointLog->info("Marked {} weighted equivalence classes as degenerate",
