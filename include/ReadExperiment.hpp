@@ -162,6 +162,10 @@ class ReadExperiment {
 
     void setNumObservedFragments(uint64_t numObserved) { numObservedFragments_ = numObserved; }
 
+    uint64_t numObservedFragments() {
+        return numObservedFragments_;
+    }
+
     double mappingRate() {
         if (quantificationPasses_ > 0) {
             return static_cast<double>(numAssignedFragsInFirstPass_) / numObservedFragsInFirstPass_;

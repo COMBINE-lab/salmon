@@ -3212,7 +3212,7 @@ transcript abundance from RNA-seq reads
         {
           bfs::path statPath = outputDirectory / "stats.tsv";
           std::ofstream statStream(statPath.string(), std::ofstream::out);
-          statStream << "numObservedFragments\t" << experiment.numMappedFragments() << '\n';
+          statStream << "numObservedFragments\t" << experiment.numObservedFragments() << '\n';
           for (auto& t : experiment.transcripts()) {
               auto l = (sopt.noEffectiveLengthCorrection) ? t.RefLength :
                   std::exp(t.getCachedLogEffectiveLength());
