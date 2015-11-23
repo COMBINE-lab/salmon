@@ -208,16 +208,16 @@ mode, and a description of each, run ``salmon quant --help-alignment``.
 Description of important options
 --------------------------------
 
-Sailfish exposes a number of useful optional command-line parameters to the user.
+Salmon exposes a number of useful optional command-line parameters to the user.
 The particularly important ones are explained here, but you can always run
-``sailfish quant -h`` to see them all.
+``salmon quant -h`` to see them all.
 
 """"""""""""""""""""""""""
 ``-p`` / ``--numThreads``
 """"""""""""""""""""""""""
 
 The number of threads that will be used for quasi-mapping, quantification, and
-bootstrapping / posterior sampling (if enabled).  Sailfish is designed to work
+bootstrapping / posterior sampling (if enabled).  Salmon is designed to work
 well with many threads, so, if you have a sufficient number of processors, larger
 values here can speed up the run substantially.
 
@@ -239,7 +239,7 @@ bootstrap samples.
 ``--numBootstraps``
 """""""""""""""""""
 
-Sailfish has the ability to optionally compute bootstrapped abundance estimates.
+Salmon has the ability to optionally compute bootstrapped abundance estimates.
 This is done by resampling (with replacement) from the counts assigned to
 the fragment equivalence classes, and then re-running the optimization procedure,
 either the EM or VBEM, for each such sample.  The values of these different
