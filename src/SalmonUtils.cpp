@@ -139,7 +139,7 @@ namespace utils {
         std::unique_ptr<std::FILE, int (*)(std::FILE *)> output(std::fopen(fname.c_str(), "w"), std::fclose);
 
         fmt::print(output.get(), "{}", headerComments);
-        fmt::print(output.get(), "# Name\tLength\tTPM\tNumReads\n");
+	fmt::print(output.get(), "Name\tLength\tEffectiveLength\tTPM\tNumReads\n");
 
         double numMappedFrags = alnLib.upperBoundHits();
 
@@ -165,11 +165,11 @@ namespace utils {
                                transcript.getCachedLogEffectiveLength();
             double count = transcript.projectedCounts;
             double npm = (transcript.projectedCounts / numMappedFrags);
-            double refLength = std::exp(logLength);
-            double tfrac = (npm / refLength) / tfracDenom;
+            double effLength = std::exp(logLength);
+            double tfrac = (npm / effLength) / tfracDenom;
             double tpm = tfrac * million;
-            fmt::print(output.get(), "{}\t{}\t{}\t{}\n",
-                    transcript.RefName, transcript.RefLength,
+            fmt::print(output.get(), "{}\t{}\t{}\t{}\t{}\n",
+                    transcript.RefName, transcript.RefLength, effLength,
                     tpm, count);
         }
 
@@ -948,36 +948,41 @@ TranscriptGeneMap transcriptToGeneMapFromFasta( const std::string& transcriptsFi
     return TranscriptGeneMap(transcriptNames, geneNames, t2g);
 }
 
+
 class ExpressionRecord {
-    public:
-        ExpressionRecord(const std::string& targetIn, uint32_t lengthIn,
-                         std::vector<double>& expValsIn) :
-            target(targetIn), length(lengthIn), expVals(expValsIn) {}
+  public:
+    ExpressionRecord(const std::string& targetIn, uint32_t lengthIn, double effLengthIn,
+	std::vector<double>& expValsIn) :
+      target(targetIn), length(lengthIn), effLength(effLengthIn), expVals(expValsIn) {}
 
-        ExpressionRecord( ExpressionRecord&& other ) {
-            std::swap(target, other.target);
-            length = other.length;
-            std::swap(expVals, other.expVals);
-        }
+    ExpressionRecord( ExpressionRecord&& other ) {
+      std::swap(target, other.target);
+      length = other.length;
+      effLength = other.effLength;
+      std::swap(expVals, other.expVals);
+    }
 
-        ExpressionRecord(std::vector<std::string>& inputLine) {
-            if (inputLine.size() < 3) {
-                std::string err ("Any expression line must contain at least 3 tokens");
-                throw std::invalid_argument(err);
-            } else {
-                auto it = inputLine.begin();
-                target = *it; ++it;
-                length = std::stoi(*it); ++it;
-                for (; it != inputLine.end(); ++it) {
-                    expVals.push_back(std::stod(*it));
-                }
-            }
-        }
+    ExpressionRecord(std::vector<std::string>& inputLine) {
+      if (inputLine.size() < 3) {
+	std::string err ("Any expression line must contain at least 3 tokens");
+	throw std::invalid_argument(err);
+      } else {
+	auto it = inputLine.begin();
+	target = *it; ++it;
+	length = std::stoi(*it); ++it;
+	effLength = std::stod(*it); ++it;
+	for (; it != inputLine.end(); ++it) {
+	  expVals.push_back(std::stod(*it));
+	}
+      }
+    }
 
-        std::string target;
-        uint32_t length;
-        std::vector<double> expVals;
+    std::string target;
+    uint32_t length;
+    double effLength;
+    std::vector<double> expVals;
 };
+
 
 // From : http://stackoverflow.com/questions/9435385/split-a-string-using-c11
 std::vector<std::string> split(const std::string& str, int delimiter(int) = ::isspace){
@@ -995,80 +1000,116 @@ std::vector<std::string> split(const std::string& str, int delimiter(int) = ::is
     return result;
 }
 
+
 void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm, boost::filesystem::path& inputPath) {
+  using std::vector;
+  using std::string;
+  using std::ofstream;
+  using std::unordered_map;
+  using std::move;
+  using std::cerr;
+  using std::max;
 
-    using std::vector;
-    using std::string;
-    using std::ofstream;
-    using std::unordered_map;
-    using std::move;
-    using std::cerr;
-    using std::max;
+  constexpr double minTPM = std::numeric_limits<double>::denorm_min();
+  std::ifstream expFile(inputPath.string());
 
-    std::ifstream expFile(inputPath.string());
+  if (!expFile.is_open()) {
+    perror("Error reading file");
+  }
 
-    if (!expFile.is_open()) {
-        perror("Error reading file");
+  //====================== From GeneSum ====================
+  vector<string> comments;
+  unordered_map<string, vector<ExpressionRecord>> geneExps;
+  string l;
+  size_t ln{0};
+
+
+  bool headerLine{true};
+  while (getline(expFile, l)) {
+    if (++ln % 1000 == 0) {
+      cerr << "\r\rParsed " << ln << " expression lines";
+    }
+    auto it = find_if(l.begin(), l.end(),
+	[](char c) -> bool {return !isspace(c);});
+    if (it != l.end()) {
+      if (*it == '#') {
+	comments.push_back(l);
+      } else {
+	// If this isn't the first non-comment line
+	if (!headerLine) {
+	  vector<string> toks = split(l);
+	  ExpressionRecord er(toks);
+	  auto gn = tgm.geneName(er.target);
+	  geneExps[gn].push_back(move(er));
+	} else { // treat the header line as a comment
+	  comments.push_back(l);
+	  headerLine = false;
+	}
+      }
+    }
+  }
+  cerr << "\ndone\n";
+  expFile.close();
+
+  cerr << "Aggregating expressions to gene level . . .";
+  boost::filesystem::path outputFilePath(inputPath);
+  outputFilePath.replace_extension(".genes.sf");
+  ofstream outFile(outputFilePath.string());
+
+  // preserve any comments in the output
+  for (auto& c : comments) {
+    outFile << c << '\n';
+  }
+
+  for (auto& kv : geneExps) {
+    auto& gn = kv.first;
+
+    double geneLength = kv.second.front().length;
+    double geneEffLength = kv.second.front().effLength;
+    vector<double> expVals(kv.second.front().expVals.size(), 0);
+    const size_t NE{expVals.size()};
+
+    size_t tpmIdx{0};
+    double totalTPM{0.0};
+    for (auto& tranExp : kv.second) {
+      // expVals[0] = TPM
+      // expVals[1] = count
+      for (size_t i = 0; i < NE; ++i) { expVals[i] += tranExp.expVals[i]; }
+      totalTPM += expVals[tpmIdx];
     }
 
-    //====================== From GeneSum ====================
-    vector<string> comments;
-    unordered_map<string, vector<ExpressionRecord>> geneExps;
-    string l;
-    size_t ln{0};
-
-    while (getline(expFile, l)) {
-        if (++ln % 1000 == 0) {
-            cerr << "\r\rParsed " << ln << " expression lines";
-        }
-        auto it = find_if(l.begin(), l.end(),
-                    [](char c) -> bool {return !isspace(c);});
-        if (it != l.end()) {
-            if (*it == '#') {
-                comments.push_back(l);
-            } else {
-                vector<string> toks = split(l);
-                ExpressionRecord er(toks);
-                auto gn = tgm.geneName(er.target);
-                geneExps[gn].push_back(move(er));
-            }
-        }
-    }
-    cerr << "\ndone\n";
-    expFile.close();
-
-    cerr << "Aggregating expressions to gene level . . .";
-    boost::filesystem::path outputFilePath(inputPath);
-    outputFilePath.replace_extension(".genes.sf");
-    ofstream outFile(outputFilePath.string());
-
-    // preserve any comments in the output
-    for (auto& c : comments) {
-        outFile << c << '\n';
+    // If this gene was expressed
+    if (totalTPM > minTPM) {
+      geneLength = 0.0;
+      geneEffLength = 0.0;
+      for (auto& tranExp : kv.second) {
+	double frac = tranExp.expVals[tpmIdx] / totalTPM;
+	geneLength += tranExp.length * frac;
+	geneEffLength += tranExp.effLength * frac;
+      }
+    } else {
+      geneLength = 0.0;
+      geneEffLength = 0.0;
+      double frac = 1.0 / kv.second.size();
+      for (auto& tranExp : kv.second) {
+	geneLength += tranExp.length * frac;
+	geneEffLength += tranExp.effLength * frac;
+      }
     }
 
-    for (auto& kv : geneExps) {
-        auto& gn = kv.first;
+    // Otherwise, if the gene wasn't expressed, the length
+    // is reported as the longest transcript length.
 
-        uint32_t geneLength{kv.second.front().length};
-        vector<double> expVals(kv.second.front().expVals.size(), 0);
-        const size_t NE{expVals.size()};
-
-        for (auto& tranExp : kv.second) {
-            geneLength = max(geneLength, tranExp.length);
-            for (size_t i = 0; i < NE; ++i) { expVals[i] += tranExp.expVals[i]; }
-        }
-
-        outFile << gn << '\t' << geneLength;
-        for (size_t i = 0; i < NE; ++i) {
-            outFile << '\t' << expVals[i];
-        }
-        outFile << '\n';
+    outFile << gn << '\t' << geneLength << '\t' << geneEffLength;
+    for (size_t i = 0; i < NE; ++i) {
+      outFile << '\t' << expVals[i];
     }
+    outFile << '\n';
+  }
 
-    outFile.close();
-    cerr << " done\n";
-    //====================== From GeneSum =====================
+  outFile.close();
+  cerr << " done\n";
+  //====================== From GeneSum =====================
 }
 
 void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
