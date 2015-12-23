@@ -31,7 +31,7 @@ public:
       // Free the sequence if it belongs to us
       if (freeSeqOnDestruct) { delete [] Sequence; }
       // Free the SAMSequence if it exists
-      if (SAMSequence) { delete [] SamSequence; }
+      if (SAMSequence) { delete [] SAMSequence; }
     }
 
     Transcript(Transcript&& other) {
