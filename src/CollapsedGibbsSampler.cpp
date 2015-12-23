@@ -204,7 +204,7 @@ class DistStats {
 template <typename ExpT>
 bool CollapsedGibbsSampler::sample(ExpT& readExp,
         SalmonOpts& sopt,
-        BootstrapWriter* bootstrapWriter,
+        std::function<bool(const std::vector<int>&)>& writeBootstrap,
         uint32_t numSamples) {
 
     namespace bfs = boost::filesystem;
@@ -230,7 +230,7 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
 
     tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(numSamples)),
                 [&eqVec, &transcripts, priorAlpha,
-                 &allSamples, bootstrapWriter, useScaledCounts,
+                 &allSamples, &writeBootstrap, useScaledCounts,
                  &jointLog, numMappedFragments]( const BlockedIndexRange& range) -> void {
 
 
@@ -247,7 +247,7 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
                 size_t numTranscripts{transcripts.size()};
 
                 // will hold estimated counts
-                std::vector<double> alphas(numTranscripts, 0.0);
+                std::vector<int> alphas(numTranscripts, 0.0);
                 std::vector<uint64_t> countMap(countMapSize, 0);
                 std::vector<double> probMap(countMapSize, 0.0);
 
@@ -283,8 +283,10 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
                             // and multiplying by numMappedFrags scales by the total
                             // number of mapped fragments to provide an estimated count.
                             for (size_t tn = 0; tn < numTranscripts; ++tn) {
-                                alphas[tn] = numMappedFrags *
-                                            (static_cast<double>(allSamples[sampleID][tn]) * scaleFrac);
+                                alphas[tn] = static_cast<int>(
+                                        std::round(
+                                            numMappedFrags *
+                                            (static_cast<double>(allSamples[sampleID][tn]) * scaleFrac)));
                             }
                         } else { // This shouldn't happen!
                             jointLog->error("Gibbs sampler had insufficient number of fragments!"
@@ -293,11 +295,12 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
                         }
                     } else { // otherwise, just copy over from the sampled counts
                         for (size_t tn = 0; tn < numTranscripts; ++tn) {
-                            alphas[tn] = static_cast<double>(allSamples[sampleID][tn]);
+                            alphas[tn] = static_cast<int>(allSamples[sampleID][tn]);
                         }
                     }
 
-                    bootstrapWriter->writeBootstrap(alphas);
+                    writeBootstrap(alphas);
+                    //bootstrapWriter->writeBootstrap(alphas);
                     isFirstSample = false;
                 }
     });
@@ -307,14 +310,14 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
 template
 bool CollapsedGibbsSampler::sample<ReadExperiment>(ReadExperiment& readExp,
         SalmonOpts& sopt,
-        BootstrapWriter* bootstrapWriter,
+        std::function<bool(const std::vector<int>&)>& writeBootstrap,
         uint32_t maxIter);
 
 template
 bool CollapsedGibbsSampler::sample<AlignmentLibrary<UnpairedRead>>(
         AlignmentLibrary<UnpairedRead>& readExp,
         SalmonOpts& sopt,
-        BootstrapWriter* bootstrapWriter,
+        std::function<bool(const std::vector<int>&)>& writeBootstrap,
         uint32_t maxIter);
 
 
@@ -322,7 +325,7 @@ template
 bool CollapsedGibbsSampler::sample<AlignmentLibrary<ReadPair>>(
         AlignmentLibrary<ReadPair>& readExp,
         SalmonOpts& sopt,
-        BootstrapWriter* bootstrapWriter,
+        std::function<bool(const std::vector<int>&)>& writeBootstrap,
         uint32_t maxIter);
 
 

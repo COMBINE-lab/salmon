@@ -430,7 +430,7 @@ bool doBootstrap(
         double uniformTxpWeight,
         std::atomic<uint32_t>& bsNum,
         SalmonOpts& sopt,
-        BootstrapWriter* bootstrapWriter,
+        std::function<bool(const std::vector<double>&)>& writeBootstrap,
         double relDiffTolerance,
         uint32_t maxIter) {
 
@@ -521,7 +521,7 @@ bool doBootstrap(
                                      "have run salmon correctly and report this to GitHub.");
             }
         }
-        bootstrapWriter->writeBootstrap(alphas);
+        writeBootstrap(alphas);
     }
     return true;
 }
@@ -530,7 +530,7 @@ template <typename ExpT>
 bool CollapsedEMOptimizer::gatherBootstraps(
         ExpT& readExp,
         SalmonOpts& sopt,
-        BootstrapWriter* bootstrapWriter,
+        std::function<bool(const std::vector<double>&)>& writeBootstrap,
         double relDiffTolerance,
         uint32_t maxIter) {
 
@@ -644,7 +644,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
                 scale,
                 std::ref(bsCounter),
                 std::ref(sopt),
-                bootstrapWriter,
+                std::ref(writeBootstrap),
                 relDiffTolerance,
                 maxIter);
     }
@@ -825,7 +825,7 @@ template
 bool CollapsedEMOptimizer::gatherBootstraps<ReadExperiment>(
         ReadExperiment& readExp,
         SalmonOpts& sopt,
-        BootstrapWriter* bootstrapWriter,
+        std::function<bool(const std::vector<double>&)>& writeBootstrap,
         double relDiffTolerance,
         uint32_t maxIter);
 
@@ -834,7 +834,7 @@ template
 bool CollapsedEMOptimizer::gatherBootstraps<AlignmentLibrary<UnpairedRead>>(
         AlignmentLibrary<UnpairedRead>& readExp,
         SalmonOpts& sopt,
-        BootstrapWriter* bootstrapWriter,
+        std::function<bool(const std::vector<double>&)>& writeBootstrap,
         double relDiffTolerance,
         uint32_t maxIter);
 
@@ -843,7 +843,7 @@ template
 bool CollapsedEMOptimizer::gatherBootstraps<AlignmentLibrary<ReadPair>>(
         AlignmentLibrary<ReadPair>& readExp,
         SalmonOpts& sopt,
-        BootstrapWriter* bootstrapWriter,
+        std::function<bool(const std::vector<double>&)>& writeBootstrap,
         double relDiffTolerance,
         uint32_t maxIter);
 

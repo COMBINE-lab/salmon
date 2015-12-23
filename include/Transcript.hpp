@@ -14,23 +14,33 @@
 class Transcript {
 public:
     Transcript(size_t idIn, const char* name, uint32_t len, double alpha = 0.05) :
-        RefName(name), RefLength(len), id(idIn), Sequence(nullptr),
+        RefName(name), RefLength(len), EffectiveLength(-1.0), id(idIn), SAMSequence(nullptr), Sequence(nullptr),
         logPerBasePrior_(std::log(alpha)),
         priorMass_(std::log(alpha*len)),
         mass_(salmon::math::LOG_0), sharedCount_(0.0),
         avgMassBias_(salmon::math::LOG_0),
-        active_(false) {
+        active_(false),
+	freeSeqOnDestruct(false){
             uniqueCount_.store(0);
             lastUpdate_.store(0);
             lastTimestepUpdated_.store(0);
             cachedEffectiveLength_.store(std::log(static_cast<double>(RefLength)));
         }
 
+    ~Transcript() {
+      // Free the sequence if it belongs to us
+      if (freeSeqOnDestruct) { delete [] Sequence; }
+      // Free the SAMSequence if it exists
+      if (SAMSequence) { delete [] SamSequence; }
+    }
+
     Transcript(Transcript&& other) {
         id = other.id;
         //std::swap(RefName, other.RefName);
         RefName = std::move(other.RefName);
         RefLength = other.RefLength;
+        EffectiveLength = other.EffectiveLength;
+        SAMSequence = other.SAMSequence;
         Sequence = other.Sequence;
         uniqueCount_.store(other.uniqueCount_);
         totalCount_.store(other.totalCount_.load());
@@ -45,6 +55,7 @@ public:
         avgMassBias_.store(other.avgMassBias_.load());
         hasAnchorFragment_.store(other.hasAnchorFragment_.load());
         active_ = other.active_;
+	freeSeqOnDestruct = other.freeSeqOnDestruct;
     }
 
     Transcript& operator=(Transcript&& other) {
@@ -52,6 +63,8 @@ public:
         //std::swap(RefName, other.RefName);
         RefName = std::move(other.RefName);
         RefLength = other.RefLength;
+        EffectiveLength = other.EffectiveLength;
+        SAMSequence = other.SAMSequence;
         Sequence = other.Sequence;
         uniqueCount_.store(other.uniqueCount_);
         totalCount_.store(other.totalCount_.load());
@@ -66,6 +79,7 @@ public:
         avgMassBias_.store(other.avgMassBias_.load());
         hasAnchorFragment_.store(other.hasAnchorFragment_.load());
         active_ = other.active_;
+	freeSeqOnDestruct = other.freeSeqOnDestruct;
         return *this;
     }
 
@@ -97,16 +111,16 @@ public:
         switch(dir) {
         case strand::forward:
             if (nibble) {
-                return Sequence[byte] & 0x0F;
+                return SAMSequence[byte] & 0x0F;
             } else {
-                return ((Sequence[byte] & 0xF0) >> 4) & 0x0F;
+                return ((SAMSequence[byte] & 0xF0) >> 4) & 0x0F;
             }
             break;
         case strand::reverse:
             if (nibble) {
-                return encodedRevComp[Sequence[byte] & 0x0F];
+                return encodedRevComp[SAMSequence[byte] & 0x0F];
             } else {
-                return encodedRevComp[((Sequence[byte] & 0xF0) >> 4) & 0x0F];
+                return encodedRevComp[((SAMSequence[byte] & 0xF0) >> 4) & 0x0F];
             }
             break;
         }
@@ -257,6 +271,7 @@ public:
 
     std::string RefName;
     uint32_t RefLength;
+    double EffectiveLength;
     uint32_t id;
 
     double uniqueCounts{0.0};
@@ -264,7 +279,9 @@ public:
     double projectedCounts{0.0};
     double sharedCounts{0.0};
 
-    uint8_t* Sequence;
+    uint8_t* SAMSequence;
+    const char* Sequence;
+    bool freeSeqOnDestruct;
 
 private:
     std::atomic<size_t> uniqueCount_;

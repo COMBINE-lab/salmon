@@ -19,6 +19,8 @@ extern "C" {
 #include "SalmonIndex.hpp"
 #include "EquivalenceClassBuilder.hpp"
 #include "SpinLock.hpp" // RapMap's with try_lock
+#include "UtilityFunctions.hpp"
+#include "ReadKmerDist.hpp"
 
 // Logger includes
 #include "spdlog/spdlog.h"
@@ -31,6 +33,7 @@ extern "C" {
 #include <vector>
 #include <memory>
 #include <fstream>
+
 
 /**
   *  This class represents a library of alignments used to quantify
@@ -53,7 +56,8 @@ class ReadExperiment {
         totalAssignedFragments_(0),
         fragStartDists_(5),
         seqBiasModel_(1.0),
-	eqBuilder_(sopt.jointLog) {
+	eqBuilder_(sopt.jointLog),
+        expectedBias_(constExprPow(4, readBias_.getK()), 1.0) {
             namespace bfs = boost::filesystem;
 
             // Make sure the read libraries are valid.
@@ -123,6 +127,7 @@ class ReadExperiment {
     }
 
     std::vector<Transcript>& transcripts() { return transcripts_; }
+    const std::vector<Transcript>& transcripts() const { return transcripts_; }
 
     void updateTranscriptLengthsAtomic(std::atomic<bool>& done) {
         if (sl_.try_lock()) {
@@ -153,7 +158,7 @@ class ReadExperiment {
     }
 
     uint64_t numAssignedFragments() { return numAssignedFragments_; }
-    uint64_t numMappedFragments() { return numAssignedFragments_; }
+    uint64_t numMappedFragments() const { return numAssignedFragments_; }
 
     uint64_t upperBoundHits() { return upperBoundHits_; }
     void setUpperBoundHits(uint64_t ubh) { upperBoundHits_ = ubh; }
@@ -162,7 +167,7 @@ class ReadExperiment {
 
     void setNumObservedFragments(uint64_t numObserved) { numObservedFragments_ = numObserved; }
 
-    uint64_t numObservedFragments() {
+    uint64_t numObservedFragments() const {
         return numObservedFragments_;
     }
 
@@ -191,8 +196,10 @@ class ReadExperiment {
 		    transcripts_.emplace_back(id, name, len, alpha);
 		    auto& txp = transcripts_.back();
 		    // The transcript sequence
-		    auto txpSeq = idx_->seq.substr(idx_->txpOffsets[i], len);
-		    txp.Sequence = salmon::stringtools::encodeSequenceInSAM(txpSeq.c_str(), len);
+		    //auto txpSeq = idx_->seq.substr(idx_->txpOffsets[i], len);
+
+		    // Set the transcript sequence 
+		    txp.Sequence = idx_->seq.c_str() + idx_->txpOffsets[i]; 
 		    // Length classes taken from
 		    // ======
 		    // Roberts, Adam, et al.
@@ -261,7 +268,7 @@ class ReadExperiment {
 			    for (int64_t i = 0; i < compLen; ++i) { seq[i] = nucTab[rseq[i]]; }
 		    }
 		    auto& txp = transcripts_.back();
-		    txp.Sequence = salmon::stringtools::encodeSequenceInSAM(seq.c_str(), t.RefLength);
+		    txp.SAMSequence = salmon::stringtools::encodeSequenceInSAM(seq.c_str(), t.RefLength);
 		    // Length classes taken from
 		    // ======
 		    // Roberts, Adam, et al.
@@ -340,7 +347,7 @@ class ReadExperiment {
         return numObservedFragsInFirstPass_;
     }
 
-    double effectiveMappingRate() {
+    double effectiveMappingRate() const {
         return effectiveMappingRate_;
     }
 
@@ -514,6 +521,17 @@ class ReadExperiment {
     std::vector<ReadLibrary>& readLibraries() { return readLibraries_; }
     FragmentLengthDistribution* fragmentLengthDistribution() { return fragLengthDist_.get(); }
 
+    std::vector<double>& expectedBias() {
+        return expectedBias_;
+    }
+
+    const std::vector<double>& expectedBias() const {
+        return expectedBias_;
+    }
+
+    ReadKmerDist<6, std::atomic<uint32_t>>& readBias() { return readBias_; }
+    const ReadKmerDist<6, std::atomic<uint32_t>>& readBias() const { return readBias_; }
+
     private:
     /**
      * The file from which the alignments will be read.
@@ -564,6 +582,12 @@ class ReadExperiment {
     SpinLock sl_;
     std::unique_ptr<FragmentLengthDistribution> fragLengthDist_;
     EquivalenceClassBuilder eqBuilder_;
+
+    /** Sequence specific bias things **/
+    // Since multiple threads can touch this dist, we
+    // need atomic counters.
+    ReadKmerDist<6, std::atomic<uint32_t>> readBias_;
+    std::vector<double> expectedBias_;
 };
 
 #endif // EXPERIMENT_HPP

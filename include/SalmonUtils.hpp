@@ -18,6 +18,8 @@ extern "C" {
 #include <boost/filesystem.hpp>
 #include <boost/program_options.hpp>
 
+#include <Eigen/Dense>
+
 #include "spdlog/details/format.h"
 
 #include "SalmonOpts.hpp"
@@ -38,6 +40,16 @@ using std::string;
 using NameVector = std::vector<string>;
 using IndexVector = std::vector<size_t>;
 using KmerVector = std::vector<uint64_t>;
+
+
+// An enum class for direction to avoid potential errors
+// with keeping everything as a bool
+enum class Direction { FORWARD = 0, REVERSE_COMPLEMENT = 1 };
+
+// Returns FORWARD if isFwd is true and REVERSE_COMPLEMENT otherwise
+constexpr inline Direction boolToDirection(bool isFwd) {
+  return isFwd ? Direction::FORWARD : Direction::REVERSE_COMPLEMENT;
+}
 
 // Returns a uint64_t where the upper 32-bits
 // contain tid and the lower 32-bits contain offset
@@ -73,6 +85,12 @@ TranscriptGeneMap transcriptGeneMapFromGTF(const std::string& fname, std::string
 TranscriptGeneMap readTranscriptToGeneMap( std::ifstream &ifile );
 
 TranscriptGeneMap transcriptToGeneMapFromFasta( const std::string& transcriptsFile );
+
+template <typename AbundanceVecT, typename ReadExpT>
+Eigen::VectorXd updateEffectiveLengths(ReadExpT& readExp,
+    Eigen::VectorXd& effLensIn,
+    AbundanceVecT& alphas,
+    std::vector<double>& transcriptKmerDist);
 
 /*
  * Use atomic compare-and-swap to update val to

@@ -190,6 +190,7 @@ class AlignmentLibrary {
     }
 
     std::vector<Transcript>& transcripts() { return transcripts_; }
+    const std::vector<Transcript>& transcripts() const { return transcripts_; }
 
     inline bool getAlignmentGroup(AlignmentGroup<FragT>*& ag) { return bq->getAlignmentGroup(ag); }
 
@@ -226,9 +227,12 @@ class AlignmentLibrary {
     inline BAMQueue<FragT>& getAlignmentGroupQueue() { return *bq.get(); }
 
     inline size_t upperBoundHits() { return bq->numMappedFragments(); }
-    inline size_t numObservedFragments() { return bq->numObservedFragments(); }
-    inline size_t numMappedFragments() { return bq->numMappedFragments(); }
+    inline size_t numObservedFragments() const { return bq->numObservedFragments(); }
+    inline size_t numMappedFragments() const { return bq->numMappedFragments(); }
     inline size_t numUniquelyMappedFragments() { return bq->numUniquelyMappedFragments(); }
+    inline double effectiveMappingRate() const {
+        return static_cast<double>(numMappedFragments()) / numObservedFragments();
+    }
 
     //const boost::filesystem::path& alignmentFile() { return alignmentFile_; }
 

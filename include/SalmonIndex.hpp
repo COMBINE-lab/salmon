@@ -152,6 +152,31 @@ class SalmonIndex{
 
             SalmonIndexType indexType() { return versionInfo_.indexType(); }
 
+	    const char* transcriptomeSeq() {
+	      if (loaded_) {
+		if (is64BitQuasi()) {
+		  return quasiIndex64_->seq.c_str();
+		} else {
+		  return quasiIndex32_->seq.c_str();
+		}
+	      } else {
+		return nullptr;
+	      }
+	    }
+
+	    uint64_t transcriptOffset(uint64_t id) {
+	      if (loaded_) {
+		if (is64BitQuasi()) {
+		  return quasiIndex64_->txpOffsets[id];
+		} else {
+		  return quasiIndex32_->txpOffsets[id];
+		}
+	      } else {
+		return std::numeric_limits<uint64_t>::max();
+	      }
+	    }
+
+
         private:
             bool buildFMDIndex_(boost::filesystem::path indexDir,
                                 std::vector<std::string>& bwaArgVec,

@@ -61,6 +61,7 @@ extern "C" {
 #include "EquivalenceClassBuilder.hpp"
 #include "CollapsedEMOptimizer.hpp"
 #include "CollapsedGibbsSampler.hpp"
+#include "GZipWriter.hpp"
 #include "TextBootstrapWriter.hpp"
 
 namespace bfs = boost::filesystem;
@@ -911,6 +912,11 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         // TODO: Fix fragment start pos dist
         sopt.noFragStartPosDist = true;
 
+        // Get the time at the start of the run
+        std::time_t result = std::time(NULL);
+        std::string runStartTime(std::asctime(std::localtime(&result)));
+        runStartTime.pop_back(); // remove the newline
+
         // Verify the geneMap before we start doing any real work.
         bfs::path geneMapPath;
         if (vm.count("geneMap")) {
@@ -1016,8 +1022,6 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
             sopt.incompatPrior = std::log(sopt.incompatPrior);
         }
 
-        // If we made it this far, the output directory exists
-        bfs::path outputFile = outputDirectory / "quant.sf";
         // Now create a subdirectory for any parameters of interest
         bfs::path paramsDir = outputDirectory / "libParams";
         if (!boost::filesystem::exists(paramsDir)) {
@@ -1027,6 +1031,22 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                            "estimates [{}]. exiting.", ioutils::SET_RED,
                            ioutils::RESET_COLOR, paramsDir);
                 std::exit(-1);
+            }
+        }
+
+
+        // Write out information about the command / run
+        {
+            bfs::path cmdInfoPath = outputDirectory / "cmd_info.json";
+            std::ofstream os(cmdInfoPath.string());
+            cereal::JSONOutputArchive oa(os);
+            oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
+            for (auto& opt : orderedOptions.options) {
+                if (opt.value.size() == 1) {
+                    oa(cereal::make_nvp(opt.string_key, opt.value.front()));
+                } else {
+                    oa(cereal::make_nvp(opt.string_key, opt.value));
+                }
             }
         }
 
@@ -1065,13 +1085,61 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                     optimizer.optimize(alnLib, sopt, 0.01, 10000);
                     jointLog->info("finished optimizer");
 
+		    /**
+		     * Fill in the effective lengths 
+		     */
+		    for (auto& t : alnLib.transcripts()) {
+		      t.EffectiveLength = (sopt.noEffectiveLengthCorrection) ? t.RefLength : std::exp(t.getCachedLogEffectiveLength());
+		    }
+
                     // EQCLASS
                     fmt::print(stderr, "\n\nwriting output \n");
-                    salmon::utils::writeAbundancesFromCollapsed(
-                        sopt, alnLib, outputFile, commentString);
+                    GZipWriter gzw(outputDirectory, jointLog);
+                    // Write the main results
+                    gzw.writeAbundances(sopt, alnLib);
+                    // Write meta-information about the run
+                    gzw.writeMeta(sopt, alnLib, runStartTime);
 
-                    //fmt::print(stderr, "\n\nwriting output \n");
-                    //salmon::utils::writeAbundances(sopt, alnLib, outputFile, commentString);
+                    if (sopt.numGibbsSamples > 0) {
+
+                        jointLog->info("Starting Gibbs Sampler");
+                        CollapsedGibbsSampler sampler;
+                        // The function we'll use as a callback to write samples
+                        std::function<bool(const std::vector<int>&)> bsWriter =
+                            [&gzw](const std::vector<int>& alphas) -> bool {
+                                return gzw.writeBootstrap(alphas);
+                            };
+
+                        bool sampleSuccess = sampler.sample(alnLib, sopt,
+                                bsWriter,
+                                sopt.numGibbsSamples);
+                        if (!sampleSuccess) {
+                            jointLog->error("Encountered error during Gibb sampling .\n"
+                                    "This should not happen.\n"
+                                    "Please file a bug report on GitHub.\n");
+                            return 1;
+                        }
+                        jointLog->info("Finished Gibbs Sampler");
+                    } else if (sopt.numBootstraps > 0) {
+                        // The function we'll use as a callback to write samples
+                        std::function<bool(const std::vector<double>&)> bsWriter =
+                            [&gzw](const std::vector<double>& alphas) -> bool {
+                                return gzw.writeBootstrap(alphas);
+                            };
+
+                        jointLog->info("Staring Bootstrapping");
+                        bool bootstrapSuccess = optimizer.gatherBootstraps(
+                                alnLib, sopt,
+                                bsWriter, 0.01, 10000);
+                        jointLog->info("Finished Bootstrapping");
+                        if (!bootstrapSuccess) {
+                            jointLog->error("Encountered error during bootstrapping.\n"
+                                    "This should not happen.\n"
+                                    "Please file a bug report on GitHub.\n");
+                            return 1;
+                        }
+                    }
+
 
 
                     if (sampleOutput) {
@@ -1111,47 +1179,62 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                     optimizer.optimize(alnLib, sopt, 0.01, 10000);
                     jointLog->info("finished optimizer");
 
-                    fmt::print(stderr, "\n\nwriting output \n");
-                    // EQCLASS
-                    salmon::utils::writeAbundancesFromCollapsed(
-                        sopt, alnLib, outputFile, commentString);
 
-                    {
-                        bfs::path statPath = outputDirectory / "stats.tsv";
-                        std::ofstream statStream(statPath.string(), std::ofstream::out);
-                        statStream << "numObservedFragments\t" << alnLib.numObservedFragments() << '\n';
-                        for (auto& t : alnLib.transcripts()) {
-                            auto l = (sopt.noEffectiveLengthCorrection) ? t.RefLength :
-				    					  std::exp(t.getCachedLogEffectiveLength());
-                            statStream << t.RefName << '\t' << l << '\n';
-                        }
-                        statStream.close();
-                    }
+		    /**
+		     * Fill in the effective lengths 
+		     */
+		    for (auto& t : alnLib.transcripts()) {
+		      t.EffectiveLength = (sopt.noEffectiveLengthCorrection) ? t.RefLength : std::exp(t.getCachedLogEffectiveLength());
+		    }
+
+
+                    // EQCLASS
+                    fmt::print(stderr, "\n\nwriting output \n");
+                    GZipWriter gzw(outputDirectory, jointLog);
+                    // Write the main results
+                    gzw.writeAbundances(sopt, alnLib);
+                    // Write meta-information about the run
+                    gzw.writeMeta(sopt, alnLib, runStartTime);
 
                     if (sopt.numGibbsSamples > 0) {
+
                         jointLog->info("Starting Gibbs Sampler");
-
-                        bfs::path gibbsSampleFile = sopt.outputDirectory / "quant_gibbs_samples.sf";
-                        sopt.jointLog->info("Writing posterior samples to {}", gibbsSampleFile.string());
-                        std::unique_ptr<BootstrapWriter> bsWriter(new TextBootstrapWriter(gibbsSampleFile, jointLog));
-                        bsWriter->writeHeader(commentString, alnLib.transcripts());
                         CollapsedGibbsSampler sampler;
-                        sampler.sample(alnLib, sopt, bsWriter.get(), sopt.numGibbsSamples);
+                        // The function we'll use as a callback to write samples
+                        std::function<bool(const std::vector<int>&)> bsWriter =
+                            [&gzw](const std::vector<int>& alphas) -> bool {
+                                return gzw.writeBootstrap(alphas);
+                            };
 
+                        bool sampleSuccess = sampler.sample(alnLib, sopt,
+                                bsWriter,
+                                sopt.numGibbsSamples);
+                        if (!sampleSuccess) {
+                            jointLog->error("Encountered error during Gibb sampling .\n"
+                                    "This should not happen.\n"
+                                    "Please file a bug report on GitHub.\n");
+                            return 1;
+                        }
                         jointLog->info("Finished Gibbs Sampler");
                     } else if (sopt.numBootstraps > 0) {
+                        // The function we'll use as a callback to write samples
+                        std::function<bool(const std::vector<double>&)> bsWriter =
+                            [&gzw](const std::vector<double>& alphas) -> bool {
+                                return gzw.writeBootstrap(alphas);
+                            };
+
                         jointLog->info("Staring Bootstrapping");
-
-                        bfs::path bspath = outputDirectory / "quant_bootstraps.sf";
-                        std::unique_ptr<BootstrapWriter> bsWriter(new TextBootstrapWriter(bspath, jointLog));
-                        bsWriter->writeHeader(commentString, alnLib.transcripts());
-                        optimizer.gatherBootstraps(alnLib, sopt,
-                                bsWriter.get(), 0.01, 10000);
-
+                        bool bootstrapSuccess = optimizer.gatherBootstraps(
+                                alnLib, sopt,
+                                bsWriter, 0.01, 10000);
                         jointLog->info("Finished Bootstrapping");
+                        if (!bootstrapSuccess) {
+                            jointLog->error("Encountered error during bootstrapping.\n"
+                                    "This should not happen.\n"
+                                    "Please file a bug report on GitHub.\n");
+                            return 1;
+                        }
                     }
-
-
 
                     /*
                     fmt::print(stderr, "\n\nwriting output \n");

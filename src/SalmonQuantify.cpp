@@ -37,6 +37,7 @@
 #include <random>
 #include <queue>
 #include <unordered_map>
+#include <functional>
 #include "btree_map.h"
 #include "btree_set.h"
 
@@ -120,7 +121,8 @@ extern "C" {
 #include "HitManager.hpp"
 #include "SASearcher.hpp"
 #include "SACollector.hpp"
-#include "TextBootstrapWriter.hpp"
+#include "GZipWriter.hpp"
+//#include "TextBootstrapWriter.hpp"
 
 /****** QUASI MAPPING DECLARATIONS *********/
 using MateStatus = rapmap::utils::MateStatus;
@@ -509,7 +511,7 @@ void processReadsQuasi(paired_parser* parser,
                ClusterForest& clusterForest,
                FragmentLengthDistribution& fragLengthDist,
                mem_opt_t* memOptions,
-               const SalmonOpts& salmonOpts,
+               SalmonOpts& salmonOpts,
                double coverageThresh,
 	           std::mutex& iomutex,
                bool initialRound,
@@ -536,7 +538,7 @@ void processReadsQuasi(single_parser* parser,
                ClusterForest& clusterForest,
                FragmentLengthDistribution& fragLengthDist,
                mem_opt_t* memOptions,
-               const SalmonOpts& salmonOpts,
+               SalmonOpts& salmonOpts,
                double coverageThresh,
 	           std::mutex& iomutex,
                bool initialRound,
@@ -562,7 +564,7 @@ void processReadsQuasi(paired_parser* parser,
                ClusterForest& clusterForest,
                FragmentLengthDistribution& fragLengthDist,
                mem_opt_t* memOptions,
-               const SalmonOpts& salmonOpts,
+               SalmonOpts& salmonOpts,
                double coverageThresh,
 	           std::mutex& iomutex,
                bool initialRound,
@@ -579,6 +581,8 @@ void processReadsQuasi(paired_parser* parser,
   uint64_t leftHitCount{0};
   uint64_t hitListCount{0};
 
+  auto& readBias = readExp.readBias();
+  
   auto expectedLibType = rl.format();
 
   uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
@@ -598,7 +602,7 @@ void processReadsQuasi(paired_parser* parser,
   rapmap::utils::HitCounters hctr;
 
   while(true) {
-    typename paired_parser::job j(*parser); // Get a job from the parser: a bunch of read (at most max_read_group)
+    typename paired_parser::job j(*parser); // Get a job from the parser: a bunch of reads (at most max_read_group)
     if(j.is_empty()) break;           // If got nothing, quit
 
     rangeSize = j->nb_filled;
@@ -639,60 +643,89 @@ void processReadsQuasi(paired_parser* parser,
         if (jointHits.size() > salmonOpts.maxReadOccs ) { jointHitGroup.clearAlignments(); }
 
 
-		// If we have mappings, then process them.
-		if (jointHits.size() > 0) {
-			bool isPaired = jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED;
-			// If we are ignoring orphans
-			if (!salmonOpts.allowOrphans) {
-				// If the mappings for the current read are not properly-paired (i.e. are orphans)
-				// then just clear the group.
-				if (!isPaired) {
-					jointHitGroup.clearAlignments();
-				}
-			} else {
-				// If these aren't paired-end reads --- so that
-				// we have orphans --- make sure we sort the
-				// mappings so that they are in transcript order
-				if (!isPaired) {
-					// Find the end of the hits for the left read
-					auto leftHitEndIt = std::partition_point(
-							jointHits.begin(), jointHits.end(),
-							[](const QuasiAlignment& q) -> bool {
-							return q.mateStatus == rapmap::utils::MateStatus::PAIRED_END_LEFT;
-							});
-					// Merge the hits so that the entire list is in order
-					// by transcript ID.
-					std::inplace_merge(jointHits.begin(), leftHitEndIt, jointHits.end(),
-							[](const QuasiAlignment& a, const QuasiAlignment& b) -> bool {
-							return a.transcriptID() < b.transcriptID();
-							});
-				}
-			}
+	// If we have mappings, then process them.
+	if (jointHits.size() > 0) {
+	  bool isPaired = jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED;
+	  // If we are ignoring orphans
+	  if (!salmonOpts.allowOrphans) {
+	    // If the mappings for the current read are not properly-paired (i.e. are orphans)
+	    // then just clear the group.
+	    if (!isPaired) { jointHitGroup.clearAlignments(); }
+	  } else {
+	    // If these aren't paired-end reads --- so that
+	    // we have orphans --- make sure we sort the
+	    // mappings so that they are in transcript order
+	    if (!isPaired) {
+	      // Find the end of the hits for the left read
+	      auto leftHitEndIt = std::partition_point(
+		  jointHits.begin(), jointHits.end(),
+		  [](const QuasiAlignment& q) -> bool {
+		  return q.mateStatus == rapmap::utils::MateStatus::PAIRED_END_LEFT;
+		  });
+	      // Merge the hits so that the entire list is in order
+	      // by transcript ID.
+	      std::inplace_merge(jointHits.begin(), leftHitEndIt, jointHits.end(),
+		  [](const QuasiAlignment& a, const QuasiAlignment& b) -> bool {
+		  return a.transcriptID() < b.transcriptID();
+		  });
+	    }
+	  }
 
-			for (auto& h : jointHits) {
-				switch (h.mateStatus) {
-					case MateStatus::PAIRED_END_LEFT:
-						{
-							h.format = salmon::utils::hitType(h.pos, h.fwd);
-						}
-						break;
-					case MateStatus::PAIRED_END_RIGHT:
-						{
-							h.format = salmon::utils::hitType(h.pos, h.fwd);
-						}
-						break;
-					case MateStatus::PAIRED_END_PAIRED:
-						{
-							uint32_t end1Pos = (h.fwd) ? h.pos : h.pos + h.readLen;
-							uint32_t end2Pos = (h.mateIsFwd) ? h.matePos : h.matePos + h.mateLen;
-							bool canDovetail = false;
-							h.format = salmon::utils::hitType(end1Pos, h.fwd, h.readLen,
-									end2Pos, h.mateIsFwd, h.mateLen, canDovetail);
-						}
-						break;
-				}
-			}
-		} // If we have no mappings --- then there's nothing to do
+	  bool needBiasSample = salmonOpts.biasCorrect;
+
+	  for (auto& h : jointHits) {
+	    
+	    // ---- Collect bias samples ------ // 
+	    int32_t pos = static_cast<int32_t>(h.pos);
+	    auto dir = salmon::utils::boolToDirection(h.fwd);
+
+	    // If bias correction is turned on, and we haven't sampled a mapping
+	    // for this read yet, and we haven't collected the required number of
+	    // samples overall.
+	    if(needBiasSample and salmonOpts.numBiasSamples > 0){
+	      // the "start" position is the leftmost position if
+	      // we hit the forward strand, and the leftmost
+	      // position + the read length if we hit the reverse complement
+	      int32_t startPos = h.fwd ? pos : pos + h.readLen;
+
+	      auto& t = transcripts[h.tid];
+	      if (startPos > 0 and startPos < t.RefLength) {
+		const char* txpStart = t.Sequence; 
+		const char* readStart = txpStart + startPos; 
+		const char* txpEnd = txpStart + t.RefLength; 
+		bool success = readBias.update(txpStart, readStart, txpEnd, dir);
+		if (success) {
+		  salmonOpts.numBiasSamples -= 1;
+		  needBiasSample = false;
+		}
+	      }
+	    }
+	    // ---- Collect bias samples ------ // 
+
+
+	    switch (h.mateStatus) {
+	      case MateStatus::PAIRED_END_LEFT:
+		{
+		  h.format = salmon::utils::hitType(h.pos, h.fwd);
+		}
+		break;
+	      case MateStatus::PAIRED_END_RIGHT:
+		{
+		  h.format = salmon::utils::hitType(h.pos, h.fwd);
+		}
+		break;
+	      case MateStatus::PAIRED_END_PAIRED:
+		{
+		  uint32_t end1Pos = (h.fwd) ? h.pos : h.pos + h.readLen;
+		  uint32_t end2Pos = (h.mateIsFwd) ? h.matePos : h.matePos + h.mateLen;
+		  bool canDovetail = false;
+		  h.format = salmon::utils::hitType(end1Pos, h.fwd, h.readLen,
+		      end2Pos, h.mateIsFwd, h.mateLen, canDovetail);
+		}
+		break;
+	    }
+	  }
+	} // If we have no mappings --- then there's nothing to do
 
         validHits += jointHits.size();
         localNumAssignedFragments += (jointHits.size() > 0);
@@ -746,7 +779,7 @@ void processReadsQuasi(single_parser* parser,
                ClusterForest& clusterForest,
                FragmentLengthDistribution& fragLengthDist,
                mem_opt_t* memOptions,
-               const SalmonOpts& salmonOpts,
+               SalmonOpts& salmonOpts,
                double coverageThresh,
 	           std::mutex& iomutex,
                bool initialRound,
@@ -762,6 +795,9 @@ void processReadsQuasi(single_parser* parser,
   uint64_t prevObservedFrags{1};
   uint64_t leftHitCount{0};
   uint64_t hitListCount{0};
+
+  auto& readBias = readExp.readBias();
+  const char* txomeStr = qidx->seq.c_str();
 
   auto expectedLibType = rl.format();
 
@@ -810,7 +846,40 @@ void processReadsQuasi(single_parser* parser,
         // If the read mapped to > maxReadOccs places, discard it
         if (jointHits.size() > salmonOpts.maxReadOccs ) { jointHitGroup.clearAlignments(); }
 
+	bool needBiasSample = salmonOpts.biasCorrect;
+
         for (auto& h : jointHits) {
+
+	    // ---- Collect bias samples ------ // 
+	    int32_t pos = static_cast<int32_t>(h.pos);
+	    auto dir = salmon::utils::boolToDirection(h.fwd);
+
+	    // If bias correction is turned on, and we haven't sampled a mapping
+	    // for this read yet, and we haven't collected the required number of
+	    // samples overall.
+	    if(needBiasSample and salmonOpts.numBiasSamples > 0){
+	      // the "start" position is the leftmost position if
+	      // we hit the forward strand, and the leftmost
+	      // position + the read length if we hit the reverse complement
+	      int32_t startPos = h.fwd ? pos : pos + h.readLen;
+
+
+	      auto& t = transcripts[h.tid];
+	      if (startPos > 0 and startPos < t.RefLength) {
+		const char* txpStart = t.Sequence; 
+		const char* readStart = txpStart + startPos; 
+		const char* txpEnd = txpStart + t.RefLength; 
+		bool success = readBias.update(txpStart, readStart, txpEnd, dir);
+		if (success) {
+		  salmonOpts.numBiasSamples -= 1;
+		  needBiasSample = false;
+		}
+	      }
+	    }
+	    // ---- Collect bias samples ------ // 
+
+
+
             switch (h.mateStatus) {
                 case MateStatus::SINGLE_END:
                     {
@@ -854,18 +923,6 @@ void processReadsQuasi(single_parser* parser,
 /// DONE QUASI
 
 
-
-
-
-int performBiasCorrection(boost::filesystem::path featPath,
-                          boost::filesystem::path expPath,
-                          double estimatedReadLength,
-                          double kmersPerRead,
-                          uint64_t mappedKmers,
-                          uint32_t merLen,
-                          boost::filesystem::path outPath,
-                          size_t numThreads);
-
 template <typename AlnT>
 void processReadLibrary(
         ReadExperiment& readExp,
@@ -881,7 +938,7 @@ void processReadLibrary(
         ForgettingMassCalculator& fmCalc,
         FragmentLengthDistribution& fragLengthDist,
         mem_opt_t* memOptions,
-        const SalmonOpts& salmonOpts,
+        SalmonOpts& salmonOpts,
         double coverageThresh,
         bool greedyChain,
         std::mutex& iomutex,
@@ -1305,12 +1362,6 @@ void quantifyLibrary(
     jointLog->info("finished quantifyLibrary()");
 }
 
-int performBiasCorrectionSalmon(
-        boost::filesystem::path featureFile,
-        boost::filesystem::path expressionFile,
-        boost::filesystem::path outputFile,
-        size_t numThreads);
-
 int salmonQuantify(int argc, char *argv[]) {
     using std::cerr;
     using std::vector;
@@ -1321,6 +1372,7 @@ int salmonQuantify(int argc, char *argv[]) {
     bool biasCorrect{false};
     bool optChain{false};
     size_t requiredObservations;
+    int32_t numBiasSamples{0};
 
     SalmonOpts sopt;
     mem_opt_t* memOptions = mem_opt_init();
@@ -1350,6 +1402,7 @@ int salmonQuantify(int argc, char *argv[]) {
                         "performing lightweight-alignment.  This option will increase sensitivity (allow more reads to map and "
                         "more transcripts to be detected), but may decrease specificity as orphaned alignments are more likely "
                         "to be spurious -- this option is *always* set to true when using quasi-mapping.")
+    ("biasCorrect", po::value(&(sopt.biasCorrect))->zero_tokens(), "Perform sequence-specific bias correction.")
     ("threads,p", po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads), "The number of threads to use concurrently.")
     ("incompatPrior", po::value<double>(&(sopt.incompatPrior))->default_value(1e-20), "This option "
                         "sets the prior probability that an alignment that disagrees with the specified "
@@ -1419,8 +1472,8 @@ int salmonQuantify(int argc, char *argv[]) {
     ("noFragStartPosDist", po::bool_switch(&(sopt.noFragStartPosDist))->default_value(false), "[Currently Experimental] : "
                         "Don't consider / model non-uniformity in the fragment start positions "
                         "across the transcript.")
-    //("noSeqBiasModel", po::bool_switch(&(sopt.noSeqBiasModel))->default_value(false),
-    //                    "Don't learn and apply a model of sequence-specific bias")
+    ("numBiasSamples", po::value<int32_t>(&numBiasSamples)->default_value(1000000),
+            "Number of fragment mappings to use when learning the sequence-specific bias model.")
     ("numAuxModelSamples", po::value<uint32_t>(&(sopt.numBurninFrags))->default_value(5000000), "The first <numAuxModelSamples> are used to train the "
      			"auxiliary model parameters (e.g. fragment length distribution, bias, etc.).  After ther first <numAuxModelSamples> observations "
 			"the auxiliary model parameters will be assumed to have converged and will be fixed.")
@@ -1503,6 +1556,14 @@ transcript abundance from RNA-seq reads
         // TODO: Fix fragment start pos dist
         sopt.noFragStartPosDist = true;
 
+	// Set the atomic variable numBiasSamples from the local version
+	sopt.numBiasSamples.store(numBiasSamples);
+
+        // Get the time at the start of the run
+        std::time_t result = std::time(NULL);
+        std::string runStartTime(std::asctime(std::localtime(&result)));
+        runStartTime.pop_back(); // remove the newline
+
         // Verify the geneMap before we start doing any real work.
         bfs::path geneMapPath;
         if (vm.count("geneMap")) {
@@ -1579,6 +1640,21 @@ transcript abundance from RNA-seq reads
         }
         // END: option checking
 
+        // Write out information about the command / run
+        {
+            bfs::path cmdInfoPath = outputDirectory / "cmd_info.json";
+            std::ofstream os(cmdInfoPath.string());
+            cereal::JSONOutputArchive oa(os);
+            oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
+            for (auto& opt : orderedOptions.options) {
+                if (opt.value.size() == 1) {
+                    oa(cereal::make_nvp(opt.string_key, opt.value.front()));
+                } else {
+                    oa(cereal::make_nvp(opt.string_key, opt.value));
+                }
+            }
+        }
+
         jointLog->info() << "parsing read library format";
 
         vector<ReadLibrary> readLibraries = salmon::utils::extractReadLibraries(orderedOptions);
@@ -1645,9 +1721,24 @@ transcript abundance from RNA-seq reads
 
         bfs::path estFilePath = outputDirectory / "quant.sf";
 
+	/**
+	 * Fill in the effective lengths 
+	 */
+	for (auto& t : experiment.transcripts()) {
+	  t.EffectiveLength = (sopt.noEffectiveLengthCorrection) ? t.RefLength : std::exp(t.getCachedLogEffectiveLength());
+	}
+ 
+
         commentStream << "# [ mapping rate ] => { " << experiment.effectiveMappingRate() * 100.0 << "\% }\n";
         commentString = commentStream.str();
 
+
+        GZipWriter gzw(outputDirectory, jointLog);
+        // Write the main results
+        gzw.writeAbundances(sopt, experiment);
+        // Write meta-information about the run
+        gzw.writeMeta(sopt, experiment, runStartTime);
+        /*
         salmon::utils::writeAbundancesFromCollapsed(
                 sopt, experiment, estFilePath, commentString);
 
@@ -1662,28 +1753,46 @@ transcript abundance from RNA-seq reads
           }
           statStream.close();
         }
+        */
 
         if (sopt.numGibbsSamples > 0) {
+
             jointLog->info("Starting Gibbs Sampler");
-
-            bfs::path gibbsSampleFile = sopt.outputDirectory / "quant_gibbs_samples.sf";
-            sopt.jointLog->info("Writing posterior samples to {}", gibbsSampleFile.string());
-            std::unique_ptr<BootstrapWriter> bsWriter(new TextBootstrapWriter(gibbsSampleFile, jointLog));
-            bsWriter->writeHeader(commentString, experiment.transcripts());
             CollapsedGibbsSampler sampler;
-            sampler.sample(experiment, sopt, bsWriter.get(), sopt.numGibbsSamples);
+            // The function we'll use as a callback to write samples
+            std::function<bool(const std::vector<int>&)> bsWriter =
+                [&gzw](const std::vector<int>& alphas) -> bool {
+                    return gzw.writeBootstrap(alphas);
+                };
 
+            bool sampleSuccess = sampler.sample(experiment, sopt,
+                    bsWriter,
+                    sopt.numGibbsSamples);
+            if (!sampleSuccess) {
+                jointLog->error("Encountered error during Gibb sampling .\n"
+                        "This should not happen.\n"
+                        "Please file a bug report on GitHub.\n");
+                return 1;
+            }
             jointLog->info("Finished Gibbs Sampler");
         } else if (sopt.numBootstraps > 0) {
+            // The function we'll use as a callback to write samples
+            std::function<bool(const std::vector<double>&)> bsWriter =
+                [&gzw](const std::vector<double>& alphas) -> bool {
+                    return gzw.writeBootstrap(alphas);
+                };
+
             jointLog->info("Staring Bootstrapping");
-
-            bfs::path bspath = outputDirectory / "quant_bootstraps.sf";
-            std::unique_ptr<BootstrapWriter> bsWriter(new TextBootstrapWriter(bspath, jointLog));
-            bsWriter->writeHeader(commentString, experiment.transcripts());
-            optimizer.gatherBootstraps(experiment, sopt,
-                    bsWriter.get(), 0.01, 10000);
-
+            bool bootstrapSuccess = optimizer.gatherBootstraps(
+                    experiment, sopt,
+                    bsWriter, 0.01, 10000);
             jointLog->info("Finished Bootstrapping");
+            if (!bootstrapSuccess) {
+                jointLog->error("Encountered error during bootstrapping.\n"
+                        "This should not happen.\n"
+                        "Please file a bug report on GitHub.\n");
+                return 1;
+            }
         }
 
 
@@ -1716,17 +1825,6 @@ transcript abundance from RNA-seq reads
                 std::unique_ptr<std::FILE, int (*)(std::FILE *)> biasOut(std::fopen(biasFileName.c_str(), "w"), std::fclose);
                 fmt::print(biasOut.get(), "{}\n", experiment.sequenceBiasModel().toString());
             }
-        }
-
-        if (biasCorrect) {
-            auto origExpressionFile = estFilePath;
-
-            auto outputDirectory = estFilePath;
-            outputDirectory.remove_filename();
-
-            auto biasFeatPath = indexDirectory / "bias_feats.txt";
-            auto biasCorrectedFile = outputDirectory / "quant_bias_corrected.sf";
-            performBiasCorrectionSalmon(biasFeatPath, estFilePath, biasCorrectedFile, sopt.numThreads);
         }
 
         /** If the user requested gene-level abundances, then compute those now **/

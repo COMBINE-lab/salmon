@@ -1000,6 +1000,154 @@ std::vector<std::string> split(const std::string& str, int delimiter(int) = ::is
     return result;
 }
 
+/**
+ * Computes (and returns) new effective lengths for the transcripts
+ * based on the current abundance estimates (alphas) and the current
+ * effective lengths (effLensIn).  This approach is based on the one 
+ * taken in Kallisto, and seems to work well given its low computational
+ * requirements.
+ */
+template <typename AbundanceVecT, typename ReadExpT>
+Eigen::VectorXd updateEffectiveLengths(ReadExpT& readExp,
+    Eigen::VectorXd& effLensIn,
+    AbundanceVecT& alphas,
+    std::vector<double>& transcriptKmerDist) {
+  using std::vector;
+  double minAlpha = 1e-8;
+
+  // calculate read bias normalization factor -- total count in read
+  // distribution.
+  auto& readBias = readExp.readBias();
+  int32_t K = readBias.getK();
+  double readNormFactor = static_cast<double>(readBias.totalCount());
+
+  // Reset the transcript (normalized) counts
+  transcriptKmerDist.clear();
+  transcriptKmerDist.resize(constExprPow(4, K), 1.0);
+
+  // Make this const so there are no shenanigans
+  const auto& transcripts = readExp.transcripts();
+
+  // The effective lengths adjusted for bias
+  Eigen::VectorXd effLensOut(effLensIn.size());
+
+  for(size_t it=0; it < transcripts.size(); ++it) {
+
+    // First in the forward direction
+    int32_t refLen = static_cast<int32_t>(transcripts[it].RefLength);
+    int32_t elen = static_cast<int32_t>(transcripts[it].EffectiveLength);
+
+    // How much of this transcript (beginning and end) should
+    // not be considered
+    int32_t unprocessedLen = std::max(0, refLen - elen);
+
+    // Skip transcripts with trivial expression or that are too
+    // short.
+    if (alphas[it] < minAlpha or unprocessedLen <= 0) {
+      continue;
+    }
+
+    // Otherwise, proceed with the following weight.
+    double contribution = 0.5*(alphas[it]/effLensIn(it));
+
+    // From the start of the transcript up until the last valid
+    // kmer.
+    bool firstKmer{true};
+    uint32_t idx{0};
+
+    // This transcript's sequence
+    const char* tseq = transcripts[it].Sequence; 
+
+    // From the start of the transcript through the effective length
+    for (int32_t i = 0; i < elen - K; ++i) {
+      if (firstKmer) {
+	idx = indexForKmer(tseq, K, Direction::FORWARD);
+	firstKmer = false;
+      } else {
+	idx = nextKmerIndex(idx, tseq[i-1+K], K, Direction::FORWARD);
+      }
+      transcriptKmerDist[idx] += contribution;
+    }
+
+    // Then in the reverse complement direction
+    firstKmer = true;
+    idx = 0;
+    // Start from the end and go until the fragment length
+    // distribution says we should stop
+    for (int32_t i = refLen - K - 1; i >= unprocessedLen; --i) {
+      if (firstKmer) {
+	idx = indexForKmer(tseq + i, K, Direction::REVERSE_COMPLEMENT);
+	firstKmer = false;
+      } else {
+	idx = nextKmerIndex(idx, tseq[i], K, Direction::REVERSE_COMPLEMENT);
+      }
+      transcriptKmerDist[idx] += contribution;
+    }
+  }
+
+  // The total mass of the transcript distribution
+  double txomeNormFactor = 0.0;
+  for(auto m : transcriptKmerDist) { txomeNormFactor += m; }
+
+  // Now, compute the effective length of each transcript using
+  // the k-mer biases
+  for(size_t it = 0; it < transcripts.size(); ++it) {
+    // Starts out as 0
+    double effLength = 0.0;
+
+    // First in the forward direction, from the start of the
+    // transcript up until the last valid kmer.
+    int32_t refLen = static_cast<int32_t>(transcripts[it].RefLength);
+    int32_t elen = static_cast<int32_t>(transcripts[it].EffectiveLength);
+
+    // How much of this transcript (beginning and end) should
+    // not be considered
+    int32_t unprocessedLen = std::max(0, refLen - elen);
+
+    if (alphas[it] >= minAlpha and unprocessedLen > 0) {
+      bool firstKmer{true};
+      uint32_t idx{0};
+      // This transcript's sequence
+      const char* tseq = transcripts[it].Sequence; 
+
+      for (int32_t i = 0; i < elen - K; ++i) {
+	if (firstKmer) {
+	  idx = indexForKmer(tseq, K, Direction::FORWARD);
+	  firstKmer = false;
+	} else {
+	  idx = nextKmerIndex(idx, tseq[i-1+K], K, Direction::FORWARD);
+	}
+	effLength += (readBias.counts[idx]/transcriptKmerDist[idx]);
+      }
+
+      // Then in the reverse complement direction
+      firstKmer = true;
+      idx = 0;
+      // Start from the end and go until the fragment length
+      // distribution says we should stop
+      for (int32_t i = refLen - K - 1; i >= unprocessedLen; --i) {
+	if (firstKmer) {
+	  idx = indexForKmer(tseq + i, K, Direction::REVERSE_COMPLEMENT);
+	  firstKmer = false;
+	} else {
+	  idx = nextKmerIndex(idx, tseq[i], K, Direction::REVERSE_COMPLEMENT);
+	}
+	effLength += (readBias.counts[idx]/transcriptKmerDist[idx]);
+      }
+
+      effLength *= 0.5 * (txomeNormFactor / readNormFactor);
+    }
+
+    if(unprocessedLen > 0.0 and effLength > unprocessedLen) {
+      effLensOut(it) = effLength;
+    } else {
+      effLensOut(it) = effLensIn(it);
+    }
+  }
+
+  return effLensOut;
+}
+
 
 void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm, boost::filesystem::path& inputPath) {
   using std::vector;
@@ -1161,6 +1309,9 @@ void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
 }
 }
 
+
+// === Explicit instantiations
+
 template
 void salmon::utils::writeAbundances<AlignmentLibrary<ReadPair>>(
                                               const SalmonOpts& opts,
@@ -1210,6 +1361,22 @@ void salmon::utils::normalizeAlphas<AlignmentLibrary<UnpairedRead>>(const Salmon
 template
 void salmon::utils::normalizeAlphas<AlignmentLibrary<ReadPair>>(const SalmonOpts& sopt,
                          	     AlignmentLibrary<ReadPair>& alnLib);
+
+
+template Eigen::VectorXd salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>, ReadExperiment>(
+                ReadExperiment& readExp,
+                Eigen::VectorXd& effLensIn,
+                std::vector<tbb::atomic<double>>& alphas,
+                std::vector<double>& expectedBias
+                );
+
+template Eigen::VectorXd salmon::utils::updateEffectiveLengths<std::vector<double>, ReadExperiment>(
+                ReadExperiment& readExp,
+                Eigen::VectorXd& effLensIn,
+                std::vector<double>& alphas,
+                std::vector<double>& expectedBias
+                );
+
 
 // Old / unused code
 

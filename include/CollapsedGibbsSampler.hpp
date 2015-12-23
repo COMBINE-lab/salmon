@@ -2,6 +2,7 @@
 #define COLLAPSED_GIBBS_SAMPLER_HPP
 
 #include <unordered_map>
+#include <functional>
 
 #include "tbb/atomic.h"
 #include "tbb/task_scheduler_init.h"
@@ -21,7 +22,7 @@ class CollapsedGibbsSampler {
         template <typename ExpT>
         bool sample(ExpT& readExp,
                       SalmonOpts& sopt,
-                      BootstrapWriter* bwriter,
+                      std::function<bool(const std::vector<int>&)>& writeBootstrap,
                       uint32_t numSamples = 500);
 
 };

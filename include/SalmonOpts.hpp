@@ -98,6 +98,10 @@ struct SalmonOpts {
     uint32_t numGibbsSamples; // Number of rounds of Gibbs sampling to perform
     uint32_t numBootstraps; // Number of bootstrap samples to draw
 
+    bool biasCorrect{false}; // Perform sequence-specific bias correction
+    std::atomic<int32_t> numBiasSamples{1000000}; // The number of fragment mappings to consider when building 
+						  // the sequence-specific "foreground" distribution.
+
     // Related to the fragment length distribution
     size_t fragLenDistMax;
     size_t fragLenDistPriorMean;

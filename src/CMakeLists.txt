@@ -28,6 +28,7 @@ FragmentStartPositionDistribution.cpp
 SequenceBiasModel.cpp
 StadenUtils.cpp
 TranscriptGroup.cpp
+GZipWriter.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapFileSystem.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndexer.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndex.cpp
