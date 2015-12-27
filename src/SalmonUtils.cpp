@@ -1003,7 +1003,7 @@ std::vector<std::string> split(const std::string& str, int delimiter(int) = ::is
 /**
  * Computes (and returns) new effective lengths for the transcripts
  * based on the current abundance estimates (alphas) and the current
- * effective lengths (effLensIn).  This approach is based on the one 
+ * effective lengths (effLensIn).  This approach is based on the one
  * taken in Kallisto, and seems to work well given its low computational
  * requirements.
  */
@@ -1056,7 +1056,7 @@ Eigen::VectorXd updateEffectiveLengths(ReadExpT& readExp,
     uint32_t idx{0};
 
     // This transcript's sequence
-    const char* tseq = transcripts[it].Sequence; 
+    const char* tseq = transcripts[it].Sequence;
 
     // From the start of the transcript through the effective length
     for (int32_t i = 0; i < elen - K; ++i) {
@@ -1108,7 +1108,7 @@ Eigen::VectorXd updateEffectiveLengths(ReadExpT& readExp,
       bool firstKmer{true};
       uint32_t idx{0};
       // This transcript's sequence
-      const char* tseq = transcripts[it].Sequence; 
+      const char* tseq = transcripts[it].Sequence;
 
       for (int32_t i = 0; i < elen - K; ++i) {
 	if (firstKmer) {
@@ -1261,8 +1261,7 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm, boost::filesystem::pa
 }
 
 void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
-                                boost::filesystem::path& estDir,
-                                bool haveBiasCorrectedFile) {
+                                boost::filesystem::path& estDir) {
     namespace bfs = boost::filesystem;
     std::cerr << "Computing gene-level abundance estimates\n";
     bfs::path gtfExtension(".gtf");
@@ -1293,6 +1292,7 @@ void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
     }
 
     /** Create a gene-level summary of the bias-corrected estimates as well if these exist **/
+    /*
     if (haveBiasCorrectedFile) {
         bfs::path biasCorrectEstFilePath = estDir / "quant_bias_corrected.sf";
         if (!bfs::exists(biasCorrectEstFilePath)) {
@@ -1304,6 +1304,7 @@ void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
             salmon::utils::aggregateEstimatesToGeneLevel(tranGeneMap, biasCorrectEstFilePath);
         }
     }
+    */
 }
 
 }
@@ -1377,6 +1378,33 @@ template Eigen::VectorXd salmon::utils::updateEffectiveLengths<std::vector<doubl
                 std::vector<double>& expectedBias
                 );
 
+template Eigen::VectorXd salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>, AlignmentLibrary<ReadPair>>(
+                AlignmentLibrary<ReadPair>& readExp,
+                Eigen::VectorXd& effLensIn,
+                std::vector<tbb::atomic<double>>& alphas,
+                std::vector<double>& expectedBias
+                );
+
+template Eigen::VectorXd salmon::utils::updateEffectiveLengths<std::vector<double>, AlignmentLibrary<ReadPair>>(
+                AlignmentLibrary<ReadPair>& readExp,
+                Eigen::VectorXd& effLensIn,
+                std::vector<double>& alphas,
+                std::vector<double>& expectedBias
+                );
+
+template Eigen::VectorXd salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>, AlignmentLibrary<UnpairedRead>>(
+                AlignmentLibrary<UnpairedRead>& readExp,
+                Eigen::VectorXd& effLensIn,
+                std::vector<tbb::atomic<double>>& alphas,
+                std::vector<double>& expectedBias
+                );
+
+template Eigen::VectorXd salmon::utils::updateEffectiveLengths<std::vector<double>, AlignmentLibrary<UnpairedRead>>(
+                AlignmentLibrary<UnpairedRead>& readExp,
+                Eigen::VectorXd& effLensIn,
+                std::vector<double>& alphas,
+                std::vector<double>& expectedBias
+                );
 
 // Old / unused code
 

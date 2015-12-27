@@ -57,12 +57,6 @@ extern "C" {
 int bwa_index(int argc, char* argv[]);
 }
 
-int computeBiasFeatures(
-    std::vector<std::string>& transcriptFiles,
-    boost::filesystem::path outFilePath,
-    bool useStreamingParser,
-    size_t numThreads);
-
 // Cool way to do this from
 // http://stackoverflow.com/questions/108318/whats-the-simplest-way-to-test-whether-a-number-is-a-power-of-2-in-c
 bool isPowerOfTwo(uint32_t n) {
@@ -157,23 +151,8 @@ Creates a salmon index.
         auto fileLog = spdlog::create("fileLog", {fileSink});
         auto jointLog = spdlog::create("jointLog", {fileSink, consoleSink});
 
-        // First, compute the transcript features in case the user
-        // ever wants to bias-correct his / her results
-        // NOTE: Currently, we're using the same bias correction technique here that
-        // we use in Sailfish. In the future, test more "traditional" bias correction
-        // techniques to see if we should adopt them instead
-        bfs::path transcriptBiasFile(indexDirectory); transcriptBiasFile /= "bias_feats.txt";
-
         std::vector<std::string> transcriptFiles = {transcriptFile};
         fmt::MemoryWriter infostr;
-        infostr << "computeBiasFeatures( {";
-        for (auto& tf : transcriptFiles) {
-            infostr << "[" << tf << "] ";
-        }
-        infostr << ", " << transcriptBiasFile.c_str() << ", " << useStreamingParser << ", " << numThreads << ")\n";
-        jointLog->info() << infostr.str();
-        computeBiasFeatures(transcriptFiles, transcriptBiasFile, useStreamingParser, numThreads);
-        // ==== finished computing bias fetures
 
         bfs::path outputPrefix;
         std::unique_ptr<std::vector<std::string>> argVec(new std::vector<std::string>);

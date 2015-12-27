@@ -53,6 +53,7 @@ struct UnpairedRead {
    inline bool isPaired() const { return false; }
    inline bool isLeftOrphan() const { return false; }
    inline bool isRightOrphan() const { return false; }
+   inline bam_seq_t* get5PrimeRead() { return read; }
 
     // return 0 on success, -1 on failure
     int writeToFile(scram_fd* fp) {

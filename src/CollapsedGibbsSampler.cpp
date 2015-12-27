@@ -45,6 +45,7 @@ void initCountMap_(
         MultinomialSampler& msamp,
         std::vector<uint64_t>& countMap,
         std::vector<double>& probMap,
+        Eigen::VectorXd& effLens,
         std::vector<int>& txpCounts) {
 
     size_t offset{0};
@@ -63,7 +64,7 @@ void initCountMap_(
 
                 for (size_t i = 0; i < groupSize; ++i) {
                     auto tid = txps[i];
-                    auto aux = auxs[i];
+                    auto aux = auxs[i] * (1.0 / effLens(tid));
                     denom += (priorAlpha + transcriptsIn[tid].mass(false)) * aux;
                     countMap[offset + i] = 0;
                 }
@@ -73,7 +74,7 @@ void initCountMap_(
 		   double norm = 1.0 / denom;
 		   for (size_t i = 0; i < groupSize; ++i) {
 		     auto tid = txps[i];
-		     auto aux = auxs[i];
+		     auto aux = auxs[i] * (1.0 / effLens(tid));
 		     probMap[offset + i] = norm *
                         ((priorAlpha + transcriptsIn[tid].mass(false)) * aux);
 		    }
@@ -103,6 +104,7 @@ void sampleRound_(
         std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
         std::vector<uint64_t>& countMap,
         std::vector<double>& probMap,
+        Eigen::VectorXd& effLens,
         double priorAlpha,
         std::vector<int>& txpCount,
         MultinomialSampler& msamp) {
@@ -143,7 +145,7 @@ void sampleRound_(
                 // For each transcript in the group
                 for (size_t i = 0; i < groupSize; ++i) {
                     auto tid = txps[i];
-                    auto aux = auxs[i];
+                    auto aux = auxs[i] * (1.0 / effLens(tid));
                     auto currCount = countMap[offset + i];
                     uint64_t currResamp = std::round(sampleFrac * currCount);
                     numResampled += currResamp;
@@ -158,7 +160,7 @@ void sampleRound_(
                     double norm = 1.0 / denom;
                     for (size_t i = 0; i < groupSize; ++i) {
                         auto tid = txps[i];
-                        auto aux = auxs[i];
+                        auto aux = auxs[i] * (1.0 / effLens(tid));
                         probMap[offset + i] = norm * ((priorAlpha + txpCount[tid]) * aux);
                     }
 
@@ -212,6 +214,9 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
     tbb::task_scheduler_init tbbScheduler(sopt.numThreads);
     std::vector<Transcript>& transcripts = readExp.transcripts();
 
+    // Fill in the effective length vector
+    Eigen::VectorXd effLens(transcripts.size());
+
     std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec =
         readExp.equivalenceClassBuilder().eqVec();
 
@@ -224,12 +229,14 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
     auto numMappedFragments = (useScaledCounts) ? readExp.upperBoundHits() : readExp.numMappedFragments();
 
 
-    for (auto& txp : transcripts) {
+    for (size_t i = 0; i < transcripts.size(); ++i) {
+        auto& txp = transcripts[i];
         txp.setMass(priorAlpha + (txp.mass(false) * numMappedFragments));
+        effLens(i) = txp.EffectiveLength;
     }
 
     tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(numSamples)),
-                [&eqVec, &transcripts, priorAlpha,
+                [&eqVec, &transcripts, priorAlpha, &effLens,
                  &allSamples, &writeBootstrap, useScaledCounts,
                  &jointLog, numMappedFragments]( const BlockedIndexRange& range) -> void {
 
@@ -251,7 +258,7 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
                 std::vector<uint64_t> countMap(countMapSize, 0);
                 std::vector<double> probMap(countMapSize, 0.0);
 
-                initCountMap_(eqVec, transcripts, priorAlpha, ms, countMap, probMap, allSamples[range.begin()]);
+                initCountMap_(eqVec, transcripts, priorAlpha, ms, countMap, probMap, effLens, allSamples[range.begin()]);
 
                 // For each sample this thread should generate
                 bool isFirstSample{true};
@@ -268,7 +275,7 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
 
                     // Thin the chain by a factor of (numInternalRounds)
                     for (size_t i = 0; i < numInternalRounds; ++i){
-                        sampleRound_(eqVec, countMap, probMap, priorAlpha,
+                        sampleRound_(eqVec, countMap, probMap, effLens, priorAlpha,
                                 allSamples[sampleID], ms);
                     }
 

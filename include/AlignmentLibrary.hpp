@@ -24,6 +24,7 @@ extern "C" {
 #include "concurrentqueue.h"
 #include "EquivalenceClassBuilder.hpp"
 #include "SpinLock.hpp" // RapMap's with try_lock
+#include "ReadKmerDist.hpp"
 
 // Boost includes
 #include <boost/filesystem.hpp>
@@ -59,7 +60,8 @@ class AlignmentLibrary {
     	fragStartDists_(5),
         seqBiasModel_(1.0),
     	eqBuilder_(salmonOpts.jointLog),
-        quantificationPasses_(0) {
+        quantificationPasses_(0),
+        expectedBias_(constExprPow(4, readBias_.getK()), 1.0) {
             namespace bfs = boost::filesystem;
 
             // Make sure the alignment file exists.
@@ -259,6 +261,22 @@ class AlignmentLibrary {
 
     inline LibraryFormat format() { return libFmt_; }
 
+    void setExpectedBias(const std::vector<double>& expectedBiasIn) {
+        expectedBias_ = expectedBiasIn;
+    }
+
+    std::vector<double>& expectedBias() {
+        return expectedBias_;
+    }
+
+    const std::vector<double>& expectedBias() const {
+        return expectedBias_;
+    }
+
+    ReadKmerDist<6, std::atomic<uint32_t>>& readBias() { return readBias_; }
+    const ReadKmerDist<6, std::atomic<uint32_t>>& readBias() const { return readBias_; }
+
+
     private:
     /**
      * The file from which the alignments will be read.
@@ -318,6 +336,11 @@ class AlignmentLibrary {
     size_t quantificationPasses_;
     SpinLock sl_;
     EquivalenceClassBuilder eqBuilder_;
+
+    // Since multiple threads can touch this dist, we
+    // need atomic counters.
+    ReadKmerDist<6, std::atomic<uint32_t>> readBias_;
+    std::vector<double> expectedBias_;
 };
 
 #endif // ALIGNMENT_LIBRARY_HPP

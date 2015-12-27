@@ -24,7 +24,6 @@ class CollapsedGibbsSampler {
                       SalmonOpts& sopt,
                       std::function<bool(const std::vector<int>&)>& writeBootstrap,
                       uint32_t numSamples = 500);
-
 };
 
 #endif // COLLAPSED_EM_OPTIMIZER_HPP

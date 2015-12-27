@@ -70,7 +70,7 @@ using salmon::math::LOG_1;
 using salmon::math::logAdd;
 using salmon::math::logSub;
 
-constexpr uint32_t miniBatchSize{250};
+constexpr uint32_t miniBatchSize{1000};
 
 template <typename FragT>
 using AlignmentBatch = std::vector<FragT>;
@@ -125,7 +125,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                       std::mutex& cvmutex,
                       volatile bool& doneParsing,
                       std::atomic<size_t>& activeBatches,
-                      const SalmonOpts& salmonOpts,
+                      SalmonOpts& salmonOpts,
                       std::atomic<bool>& burnedIn,
                       bool initialRound,
                       std::atomic<size_t>& processedReads) {
@@ -144,6 +144,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
     //EQClass
     EquivalenceClassBuilder& eqBuilder = alnLib.equivalenceClassBuilder();
+    auto& readBias = alnLib.readBias();
 
     using salmon::math::LOG_0;
     using salmon::math::logAdd;
@@ -181,7 +182,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
         // Try up to numTries times to get work from the queue before
         // giving up and waiting on the condition variable
     	constexpr uint32_t numTries = 100;
-        bool foundWork = tryToGetWork(workQueue, miniBatch, 100);
+        bool foundWork = tryToGetWork(workQueue, miniBatch, numTries);
 
         // If work wasn't immediately available, then wait for it using
     	// a condition variable to avoid burning CPU cycles for no reason.
@@ -287,10 +288,12 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         }
 
                         // The total auxiliary probabilty is the product (sum in log-space) of
-                        // The start position probability
                         // The fragment length probabilty
                         // The mapping score (under error model) probability
                         // The fragment compatibility probability
+
+                        // The auxProb does *not* account for the start position
+                        // probability!
                         double auxProb = logFragProb + errLike + logAlignCompatProb;
 
                         // The overall mass of this transcript, which is used to
@@ -339,6 +342,9 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                     }
 
 
+                    // Are we doing bias correction?
+                    bool needBiasSample = salmonOpts.biasCorrect;
+
                     // Normalize the scores
                     for (auto& aln : alnGroup->alignments()) {
                         if (aln->logProb == LOG_0) { continue; }
@@ -351,8 +357,38 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         transcript.addMass(newMass);
                         transcript.setLastTimestepUpdated(currentMinibatchTimestep);
 
+                        /**
+                         * Update the auxiliary models.
+                         **/
                         double r = uni(eng);
                         if (!burnedIn and r < std::exp(aln->logProb)) {
+                            /**
+                             * Update the bias sequence-specific bias model
+                             **/
+                            if (needBiasSample and salmonOpts.numBiasSamples > 0) {
+                                // the "start" position is the leftmost position if
+                                // we hit the forward strand, and the leftmost
+                                // position + the read length if we hit the reverse complement
+                                bam_seq_t* r = aln->get5PrimeRead();
+                                if (r) {
+                                    bool fwd{!(bam_flag((r)) & BAM_FREVERSE)};
+                                    int32_t pos{bam_pos(r)};
+                                    int32_t startPos = fwd ? pos : pos + bam_seq_len(r);
+                                    auto dir = salmon::utils::boolToDirection(fwd);
+
+                                    if (startPos > 0 and startPos < transcript.RefLength) {
+                                        const char* txpStart = transcript.Sequence;
+                                        const char* readStart = txpStart + startPos; // is this correct?
+                                        const char* txpEnd = txpStart + transcript.RefLength;
+                                        bool success = readBias.update(txpStart, readStart, txpEnd, dir);
+                                        if (success) {
+                                            salmonOpts.numBiasSamples -= 1;
+                                            needBiasSample = false;
+                                        }
+                                    }
+                                }
+                            }
+
                             // Update the error model
                             if (salmonOpts.useErrorModel) {
                                 alnMod.update(*aln, transcript, LOG_1, logForgettingMass);
@@ -477,7 +513,7 @@ template <typename FragT>
 bool quantifyLibrary(
         AlignmentLibrary<FragT>& alnLib,
         size_t numRequiredFragments,
-        const SalmonOpts& salmonOpts) {
+        SalmonOpts& salmonOpts) {
 
     std::atomic<bool> burnedIn{false};
 
@@ -508,12 +544,10 @@ bool quantifyLibrary(
     size_t maxCacheSize{salmonOpts.mappingCacheMemoryLimit};
 
     NullFragmentFilter<FragT>* nff = nullptr;
+    bool terminate{false};
 
     // Give ourselves some space
     fmt::print(stderr, "\n\n\n\n");
-
-    // EQCLASS
-    bool terminate{false};
 
     while (numObservedFragments < numRequiredFragments and !terminate) {
         if (!initialRound) {
@@ -720,18 +754,6 @@ bool quantifyLibrary(
     return burnedIn.load();
 }
 
-int computeBiasFeatures(
-    std::vector<std::string>& transcriptFiles,
-    boost::filesystem::path outFilePath,
-    bool useStreamingParser,
-    size_t numThreads);
-
-int performBiasCorrectionSalmon(
-        boost::filesystem::path featureFile,
-        boost::filesystem::path expressionFile,
-        boost::filesystem::path outputFile,
-        size_t numThreads);
-
 int salmonAlignmentQuantify(int argc, char* argv[]) {
     using std::cerr;
     using std::vector;
@@ -743,7 +765,6 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 
     bool sampleOutput{false};
     bool sampleUnaligned{false};
-    bool biasCorrect{false};
     uint32_t numThreads{4};
     size_t requiredObservations{50000000};
 
@@ -759,6 +780,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                                             "so until there is a faster multi-threaded SAM/BAM parser to feed the "
                                             "quantification threads, one should not expect much of a speed-up beyond "
                                             "~6 threads.")
+    ("biasCorrect", po::value(&(sopt.biasCorrect))->zero_tokens(), "Perform sequence-specific bias correction.")
     ("incompatPrior", po::value<double>(&(sopt.incompatPrior))->default_value(1e-20), "This option "
                         "sets the prior probability that an alignment that disagrees with the specified "
                         "library type (--libType) results from the true fragment origin.  Setting this to 0 "
@@ -770,7 +792,6 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "the observed frequency of different types of mismatches when computing the likelihood of "
                         "a given alignment.")
     ("output,o", po::value<std::string>()->required(), "Output quantification directory.")
-    ("biasCorrect", po::value(&biasCorrect)->zero_tokens(), "[Experimental]: Output both bias-corrected and non-bias-corrected ")
     ("numRequiredObs,n", po::value(&requiredObservations)->default_value(50000000),
                                         "[Deprecated]: The minimum number of observations (mapped reads) that must be observed before "
                                         "the inference procedure will terminate.  If fewer mapped reads exist in the "
@@ -1079,18 +1100,14 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                     bool burnedIn = quantifyLibrary<UnpairedRead>(alnLib, requiredObservations, sopt);
 
                     // EQCLASS
+                    // NOTE: A side-effect of calling the optimizer is that
+                    // the `EffectiveLength` field of each transcript is
+                    // set to its final value.
                     CollapsedEMOptimizer optimizer;
                     jointLog->info("starting optimizer");
                     salmon::utils::normalizeAlphas(sopt, alnLib);
                     optimizer.optimize(alnLib, sopt, 0.01, 10000);
                     jointLog->info("finished optimizer");
-
-		    /**
-		     * Fill in the effective lengths 
-		     */
-		    for (auto& t : alnLib.transcripts()) {
-		      t.EffectiveLength = (sopt.noEffectiveLengthCorrection) ? t.RefLength : std::exp(t.getCachedLogEffectiveLength());
-		    }
 
                     // EQCLASS
                     fmt::print(stderr, "\n\nwriting output \n");
@@ -1173,20 +1190,14 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                     bool burnedIn = quantifyLibrary<ReadPair>(alnLib, requiredObservations, sopt);
 
                     // EQCLASS
+                    // NOTE: A side-effect of calling the optimizer is that
+                    // the `EffectiveLength` field of each transcript is
+                    // set to its final value.
                     CollapsedEMOptimizer optimizer;
                     jointLog->info("starting optimizer");
                     salmon::utils::normalizeAlphas(sopt, alnLib);
                     optimizer.optimize(alnLib, sopt, 0.01, 10000);
                     jointLog->info("finished optimizer");
-
-
-		    /**
-		     * Fill in the effective lengths 
-		     */
-		    for (auto& t : alnLib.transcripts()) {
-		      t.EffectiveLength = (sopt.noEffectiveLengthCorrection) ? t.RefLength : std::exp(t.getCachedLogEffectiveLength());
-		    }
-
 
                     // EQCLASS
                     fmt::print(stderr, "\n\nwriting output \n");
@@ -1278,35 +1289,11 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 
         bfs::path estFilePath = outputDirectory / "quant.sf";
 
-        if (biasCorrect) {
-            // First, compute the transcript features in case the user
-            // ever wants to bias-correct his / her results
-            bfs::path transcriptBiasFile(outputDirectory); transcriptBiasFile /= "bias_feats.txt";
-
-            bool useStreamingParser{true};
-            std::vector<std::string> transcriptFiles{transcriptFile.string()};
-            std::cerr << "computeBiasFeatures( {";
-            for (auto& tf : transcriptFiles) {
-                std::cerr << "[" << tf << "] ";
-            }
-            std::cerr << ", " << transcriptBiasFile << ", " << useStreamingParser << ", " << numThreads << ")\n";
-            computeBiasFeatures(transcriptFiles, transcriptBiasFile, useStreamingParser, numThreads);
-
-            auto origExpressionFile = estFilePath;
-
-            auto outputDirectory = estFilePath;
-            outputDirectory.remove_filename();
-
-            auto biasCorrectedFile = outputDirectory / "quant_bias_corrected.sf";
-            performBiasCorrectionSalmon(transcriptBiasFile, estFilePath, biasCorrectedFile, numThreads);
-        }
-
         /** If the user requested gene-level abundances, then compute those now **/
         if (vm.count("geneMap")) {
             try {
                 salmon::utils::generateGeneLevelEstimates(geneMapPath,
-                                                            outputDirectory,
-                                                            biasCorrect);
+                                                            outputDirectory);
             } catch (std::exception& e) {
                 fmt::print(stderr, "Error: [{}] when trying to compute gene-level "\
                                    "estimates. The gene-level file(s) may not exist",

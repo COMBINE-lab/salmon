@@ -61,7 +61,9 @@ struct ReadPair {
     inline bool isPaired() const { return (orphanStatus == salmon::utils::OrphanStatus::Paired); }
     inline bool isLeftOrphan() const { return (orphanStatus == salmon::utils::OrphanStatus::LeftOrphan); }
     inline bool isRightOrphan() const { return (orphanStatus == salmon::utils::OrphanStatus::RightOrphan); }
-
+    inline bam_seq_t* get5PrimeRead() {
+        return (isPaired() or isLeftOrphan()) ? read1 : nullptr;
+    }
     /**
       * returns 0 on success, -1 on failure.
       */

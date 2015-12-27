@@ -197,7 +197,6 @@ void processMiniBatch(
     bool useReadCompat = salmonOpts.incompatPrior != salmon::math::LOG_1;
     bool useFSPD{!salmonOpts.noFragStartPosDist};
     bool useFragLengthDist{!salmonOpts.noFragLengthDist};
-    bool useSequenceBiasModel{!salmonOpts.noSeqBiasModel};
     bool noFragLenFactor{salmonOpts.noFragLenFactor};
 
     const auto expectedLibraryFormat = readLib.format();
@@ -401,6 +400,7 @@ void processMiniBatch(
                                              transcript.RefLength,
                                              logForgettingMass);
                     }
+                    /*
                     if (useSequenceBiasModel) {
                         if (fragLength > 0.0) {
                             int32_t leftPos = aln.hitPos();
@@ -414,6 +414,7 @@ void processMiniBatch(
                                              logForgettingMass, LOG_1);
                         }
                     }
+                    */
                 }
             } // end normalize
 
@@ -582,7 +583,7 @@ void processReadsQuasi(paired_parser* parser,
   uint64_t hitListCount{0};
 
   auto& readBias = readExp.readBias();
-  
+
   auto expectedLibType = rl.format();
 
   uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
@@ -674,8 +675,8 @@ void processReadsQuasi(paired_parser* parser,
 	  bool needBiasSample = salmonOpts.biasCorrect;
 
 	  for (auto& h : jointHits) {
-	    
-	    // ---- Collect bias samples ------ // 
+
+	    // ---- Collect bias samples ------ //
 	    int32_t pos = static_cast<int32_t>(h.pos);
 	    auto dir = salmon::utils::boolToDirection(h.fwd);
 
@@ -690,9 +691,9 @@ void processReadsQuasi(paired_parser* parser,
 
 	      auto& t = transcripts[h.tid];
 	      if (startPos > 0 and startPos < t.RefLength) {
-		const char* txpStart = t.Sequence; 
-		const char* readStart = txpStart + startPos; 
-		const char* txpEnd = txpStart + t.RefLength; 
+		const char* txpStart = t.Sequence;
+		const char* readStart = txpStart + startPos;
+		const char* txpEnd = txpStart + t.RefLength;
 		bool success = readBias.update(txpStart, readStart, txpEnd, dir);
 		if (success) {
 		  salmonOpts.numBiasSamples -= 1;
@@ -700,7 +701,7 @@ void processReadsQuasi(paired_parser* parser,
 		}
 	      }
 	    }
-	    // ---- Collect bias samples ------ // 
+	    // ---- Collect bias samples ------ //
 
 
 	    switch (h.mateStatus) {
@@ -850,7 +851,7 @@ void processReadsQuasi(single_parser* parser,
 
         for (auto& h : jointHits) {
 
-	    // ---- Collect bias samples ------ // 
+	    // ---- Collect bias samples ------ //
 	    int32_t pos = static_cast<int32_t>(h.pos);
 	    auto dir = salmon::utils::boolToDirection(h.fwd);
 
@@ -866,9 +867,9 @@ void processReadsQuasi(single_parser* parser,
 
 	      auto& t = transcripts[h.tid];
 	      if (startPos > 0 and startPos < t.RefLength) {
-		const char* txpStart = t.Sequence; 
-		const char* readStart = txpStart + startPos; 
-		const char* txpEnd = txpStart + t.RefLength; 
+		const char* txpStart = t.Sequence;
+		const char* readStart = txpStart + startPos;
+		const char* txpEnd = txpStart + t.RefLength;
 		bool success = readBias.update(txpStart, readStart, txpEnd, dir);
 		if (success) {
 		  salmonOpts.numBiasSamples -= 1;
@@ -876,7 +877,7 @@ void processReadsQuasi(single_parser* parser,
 		}
 	      }
 	    }
-	    // ---- Collect bias samples ------ // 
+	    // ---- Collect bias samples ------ //
 
 
 
@@ -1369,7 +1370,6 @@ int salmonQuantify(int argc, char *argv[]) {
     namespace bfs = boost::filesystem;
     namespace po = boost::program_options;
 
-    bool biasCorrect{false};
     bool optChain{false};
     size_t requiredObservations;
     int32_t numBiasSamples{0};
@@ -1421,8 +1421,6 @@ int salmonQuantify(int argc, char *argv[]) {
                                         "be significantly lower than expected.")
     ("coverage,c", po::value<double>(&coverageThresh)->default_value(0.70), "required coverage of read by union of SMEMs to consider it a \"hit\".")
     ("output,o", po::value<std::string>()->required(), "Output quantification file.")
-    ("biasCorrect", po::value(&biasCorrect)->zero_tokens(), "[Experimental: Output both bias-corrected and non-bias-corrected "
-                                                               "qunatification estimates.")
     ("geneMap,g", po::value<string>(), "File containing a mapping of transcripts to genes.  If this file is provided "
                                         "Salmon will output both quant.sf and quant.genes.sf files, where the latter "
                                         "contains aggregated gene-level abundance estimates.  The transcript to gene mapping "
@@ -1433,8 +1431,6 @@ int salmonQuantify(int argc, char *argv[]) {
                                         "format; files with any other extension are assumed to be in the simple format.");
     //("optChain", po::bool_switch(&optChain)->default_value(false), "Chain MEMs optimally rather than greedily")
 
-    // no sequence bias for now
-    sopt.noSeqBiasModel = true;
     sopt.noRichEqClasses = false;
     // mapping cache has been deprecated
     sopt.disableMappingCache = true;
@@ -1691,8 +1687,16 @@ transcript abundance from RNA-seq reads
 
         switch (indexType) {
             case SalmonIndexType::FMD:
-                quantifyLibrary<SMEMAlignment>(experiment, greedyChain, memOptions, sopt, coverageThresh,
-                                                requiredObservations, sopt.numThreads);
+                {
+                    /** Currently no seq-specific bias correction with
+                     *  FMD index.
+                     */
+                    sopt.biasCorrect = false;
+                    jointLog->warn("Sequence-specific bias correction requires "
+                            "use of the quasi-index. Disabling bias correction");
+                    quantifyLibrary<SMEMAlignment>(experiment, greedyChain, memOptions, sopt, coverageThresh,
+                            requiredObservations, sopt.numThreads);
+                }
                 break;
             case SalmonIndexType::QUASI:
                 {
@@ -1708,6 +1712,9 @@ transcript abundance from RNA-seq reads
         // our initial estimates, and our rich equivalence
         // classes.  Perform further optimization until
         // convergence.
+        // NOTE: A side-effect of calling the optimizer is that
+        // the `EffectiveLength` field of each transcript is
+        // set to its final value.
         CollapsedEMOptimizer optimizer;
         jointLog->info("Starting optimizer");
     	salmon::utils::normalizeAlphas(sopt, experiment);
@@ -1721,39 +1728,14 @@ transcript abundance from RNA-seq reads
 
         bfs::path estFilePath = outputDirectory / "quant.sf";
 
-	/**
-	 * Fill in the effective lengths 
-	 */
-	for (auto& t : experiment.transcripts()) {
-	  t.EffectiveLength = (sopt.noEffectiveLengthCorrection) ? t.RefLength : std::exp(t.getCachedLogEffectiveLength());
-	}
- 
-
         commentStream << "# [ mapping rate ] => { " << experiment.effectiveMappingRate() * 100.0 << "\% }\n";
         commentString = commentStream.str();
-
 
         GZipWriter gzw(outputDirectory, jointLog);
         // Write the main results
         gzw.writeAbundances(sopt, experiment);
         // Write meta-information about the run
         gzw.writeMeta(sopt, experiment, runStartTime);
-        /*
-        salmon::utils::writeAbundancesFromCollapsed(
-                sopt, experiment, estFilePath, commentString);
-
-        {
-          bfs::path statPath = outputDirectory / "stats.tsv";
-          std::ofstream statStream(statPath.string(), std::ofstream::out);
-          statStream << "numObservedFragments\t" << experiment.numObservedFragments() << '\n';
-          for (auto& t : experiment.transcripts()) {
-              auto l = (sopt.noEffectiveLengthCorrection) ? t.RefLength :
-                  std::exp(t.getCachedLogEffectiveLength());
-              statStream << t.RefName << '\t' << l << '\n';
-          }
-          statStream.close();
-        }
-        */
 
         if (sopt.numGibbsSamples > 0) {
 
@@ -1819,20 +1801,12 @@ transcript abundance from RNA-seq reads
                 fmt::print(distOut.get(), "{}\n", experiment.fragmentLengthDistribution()->toString());
             }
         }
-        if (!sopt.noSeqBiasModel) {
-            bfs::path biasFileName = paramsDir / "seqBias.txt";
-            {
-                std::unique_ptr<std::FILE, int (*)(std::FILE *)> biasOut(std::fopen(biasFileName.c_str(), "w"), std::fclose);
-                fmt::print(biasOut.get(), "{}\n", experiment.sequenceBiasModel().toString());
-            }
-        }
 
         /** If the user requested gene-level abundances, then compute those now **/
         if (vm.count("geneMap")) {
             try {
                 salmon::utils::generateGeneLevelEstimates(geneMapPath,
-                                                            outputDirectory,
-                                                            biasCorrect);
+                                                          outputDirectory);
             } catch (std::invalid_argument& e) {
                 fmt::print(stderr, "Error: [{}] when trying to compute gene-level "\
                                    "estimates. The gene-level file(s) may not exist",

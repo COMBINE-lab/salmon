@@ -55,11 +55,6 @@ GenomicFeature.cpp
 VersionChecker.cpp
 SalmonUtils.cpp
 SalmonStringUtils.cpp
-ComputeBiasFeatures.cpp
-PerformBiasCorrection.cpp
-cokus.cpp
-#merge_files.cc
-#format.cc
 )
 
 link_directories(

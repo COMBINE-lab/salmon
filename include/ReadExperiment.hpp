@@ -198,8 +198,8 @@ class ReadExperiment {
 		    // The transcript sequence
 		    //auto txpSeq = idx_->seq.substr(idx_->txpOffsets[i], len);
 
-		    // Set the transcript sequence 
-		    txp.Sequence = idx_->seq.c_str() + idx_->txpOffsets[i]; 
+		    // Set the transcript sequence
+		    txp.Sequence = idx_->seq.c_str() + idx_->txpOffsets[i];
 		    // Length classes taken from
 		    // ======
 		    // Roberts, Adam, et al.
@@ -520,6 +520,10 @@ class ReadExperiment {
 
     std::vector<ReadLibrary>& readLibraries() { return readLibraries_; }
     FragmentLengthDistribution* fragmentLengthDistribution() { return fragLengthDist_.get(); }
+
+    void setExpectedBias(const std::vector<double>& expectedBiasIn) {
+        expectedBias_ = expectedBiasIn;
+    }
 
     std::vector<double>& expectedBias() {
         return expectedBias_;
