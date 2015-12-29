@@ -1057,6 +1057,12 @@ Eigen::VectorXd updateEffectiveLengths(ReadExpT& readExp,
 
     // This transcript's sequence
     const char* tseq = transcripts[it].Sequence;
+    if (!tseq) {
+        std::cerr << "Transcript " << transcripts[it].RefName << " had no sequence available.\n";
+        std::cerr << "To enable sequence-specific bias correction, you must provide a "
+                  << "reference file with sequences for all transcripts.\n";
+        return effLensIn;
+    }
 
     // From the start of the transcript through the effective length
     for (int32_t i = 0; i < elen - K; ++i) {

@@ -371,7 +371,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                                 // position + the read length if we hit the reverse complement
                                 bam_seq_t* r = aln->get5PrimeRead();
                                 if (r) {
-                                    bool fwd{!(bam_flag((r)) & BAM_FREVERSE)};
+                                    bool fwd{bam_strand(r) == 0};
                                     int32_t pos{bam_pos(r)};
                                     int32_t startPos = fwd ? pos : pos + bam_seq_len(r);
                                     auto dir = salmon::utils::boolToDirection(fwd);
