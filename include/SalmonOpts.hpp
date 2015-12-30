@@ -95,11 +95,15 @@ struct SalmonOpts {
 
     bool useQuasi; // Are we using the quasi-mapping based index or not.
 
+    bool sampleOutput; // Sample alignments according to posterior estimates of transcript abundance.
+    bool sampleUnaligned; // Pass along un-aligned reads in the sampling.
+
     uint32_t numGibbsSamples; // Number of rounds of Gibbs sampling to perform
     uint32_t numBootstraps; // Number of bootstrap samples to draw
 
+    bool alnMode{false};     // true if we're in alignment based mode, false otherwise
     bool biasCorrect{false}; // Perform sequence-specific bias correction
-    std::atomic<int32_t> numBiasSamples{1000000}; // The number of fragment mappings to consider when building 
+    std::atomic<int32_t> numBiasSamples{1000000}; // The number of fragment mappings to consider when building
 						  // the sequence-specific "foreground" distribution.
 
     // Related to the fragment length distribution

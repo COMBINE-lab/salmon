@@ -32,6 +32,7 @@ extern "C" {
 
 class ReadExperiment;
 class LibraryFormat;
+class FragmentLengthDistribution;
 
 namespace salmon{
 namespace utils {
@@ -135,6 +136,8 @@ inline void incLoop(tbb::atomic<double>& val, double inc) {
 
 
 void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm, boost::filesystem::path& inputPath);
+
+std::vector<int32_t> samplesFromLogPMF(FragmentLengthDistribution* fld, int32_t numSamples);
 
 // NOTE: Throws an invalid_argument exception of the quant or quant_bias_corrected files do
 // not exist!

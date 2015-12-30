@@ -519,7 +519,7 @@ class ReadExperiment {
     }
 
     std::vector<ReadLibrary>& readLibraries() { return readLibraries_; }
-    FragmentLengthDistribution* fragmentLengthDistribution() { return fragLengthDist_.get(); }
+    FragmentLengthDistribution* fragmentLengthDistribution() const { return fragLengthDist_.get(); }
 
     void setExpectedBias(const std::vector<double>& expectedBiasIn) {
         expectedBias_ = expectedBiasIn;

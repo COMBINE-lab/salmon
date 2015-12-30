@@ -204,8 +204,8 @@ class AlignmentLibrary {
 	    return fragStartDists_;
     }
 
-    inline FragmentLengthDistribution& fragmentLengthDistribution() {
-        return *flDist_.get();
+    inline FragmentLengthDistribution* fragmentLengthDistribution() const {
+        return flDist_.get();
     }
 
     inline AlignmentModel& alignmentModel() {

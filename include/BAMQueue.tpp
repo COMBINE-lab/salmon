@@ -7,7 +7,7 @@ template <typename FragT>
 BAMQueue<FragT>::BAMQueue(std::vector<boost::filesystem::path>& fnames, LibraryFormat& libFmt,
                           uint32_t numParseThreads, uint32_t cacheSize):
     files_(std::vector<AlignmentFile>()),
-    libFmt_(libFmt), totalReads_(0),
+    libFmt_(libFmt), totalAlignments_(0),
     numUnaligned_(0), numMappedReads_(0), 
     numUniquelyMappedReads_(0),
     //fragmentQueue_(2000000),
@@ -105,7 +105,7 @@ void BAMQueue<FragT>::reset() {
   scram_set_option(file.fp, CRAM_OPT_NTHREADS, file.numParseThreads);
 
   fmt::print(stderr, "] . . . done\n");
-  totalReads_ = 0;
+  totalAlignments_ = 0;
   numUnaligned_ = 0;
   numMappedReads_ = 0;
   numUniquelyMappedReads_ = 0;
@@ -342,6 +342,8 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
     bool didRead1{false};
     bool didRead2{false};
     rpair.orphanStatus = salmon::utils::OrphanStatus::LeftOrphan;
+
+    // Until we get a valid pair of reads
     while (!haveValidPair) {
         // Consume a single read
         didRead1 = (scram_get_seq(fp_, &rpair.read1) >= 0);
@@ -368,10 +370,10 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
                     break;
                     // === end of UnmappedOrphan case
                 case AlignmentType::MappedOrphan:
-                    isFwd = !(bam_flag(rpair.read1) & BAM_FREVERSE);
+                    isFwd = !(bam_strand(rpair.read1));
                     startPos = bam_pos(rpair.read1); 
                     rpair.libFmt = salmon::utils::hitType(startPos, isFwd);
-                    rpair.orphanStatus = (!isFwd) ?
+                    rpair.orphanStatus = (bam_flag(rpair.read1) & BAM_FREAD1) ?
                         salmon::utils::OrphanStatus::LeftOrphan :
                         salmon::utils::OrphanStatus::RightOrphan;
                     rpair.logProb = salmon::math::LOG_0;
@@ -519,7 +521,7 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
                 std::exit(1);
                 break;
         }
-        ++totalReads_;
+        ++totalAlignments_;
     }
     rpair.logProb = salmon::math::LOG_0;
     return true;
@@ -559,7 +561,7 @@ inline bool BAMQueue<FragT>::getFrag_(UnpairedRead& sread, FilterT filt) {
             }
             ++numUnaligned_; 
         }
-        ++totalReads_;
+        ++totalAlignments_;
     }
 
     sread.logProb = salmon::math::LOG_0;
@@ -567,7 +569,10 @@ inline bool BAMQueue<FragT>::getFrag_(UnpairedRead& sread, FilterT filt) {
 }
 
 template <typename FragT>
-size_t BAMQueue<FragT>::numObservedFragments(){ return totalReads_; }
+size_t BAMQueue<FragT>::numObservedAlignments(){ return totalAlignments_; }
+
+template <typename FragT>
+size_t BAMQueue<FragT>::numObservedFragments(){ return numMappedReads_ + numUnaligned_; }
 
 template <typename FragT>
 size_t BAMQueue<FragT>::numMappedFragments(){ 

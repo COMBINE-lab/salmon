@@ -72,6 +72,7 @@ public:
   inline bool getAlignmentGroup(AlignmentGroup<FragT*>*& group);
 
   // Return the number of reads processed so far by the queue
+  size_t numObservedAlignments();
   size_t numObservedFragments();
   size_t numMappedFragments();
   size_t numUniquelyMappedFragments();
@@ -111,7 +112,7 @@ private:
   SAM_hdr* hdr_ = nullptr;
 
   //htsFile* fp_ = nullptr;
-  size_t totalReads_;
+  size_t totalAlignments_;
   size_t numUnaligned_;
   size_t numMappedReads_;
   size_t numUniquelyMappedReads_;

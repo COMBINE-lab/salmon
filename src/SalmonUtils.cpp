@@ -1000,6 +1000,39 @@ std::vector<std::string> split(const std::string& str, int delimiter(int) = ::is
     return result;
 }
 
+std::vector<int32_t> samplesFromLogPMF(FragmentLengthDistribution* fld, int32_t numSamples) {
+    std::vector<double> logPMF;
+    size_t minVal;
+    size_t maxVal;
+    double logFLDMean = fld->mean();
+    fld->dumpPMF(logPMF, minVal, maxVal);
+    double sum = salmon::math::LOG_0;
+    for (auto v : logPMF) {
+        sum = salmon::math::logAdd(sum, v);
+    }
+    for (auto& v : logPMF) {
+        v -= sum;
+    }
+
+    // Create the non-logged pmf
+    std::vector<double> pmf(maxVal + 1, 0.0);
+    for (size_t i = minVal; i < maxVal; ++i) {
+        pmf[i] = std::exp(logPMF[i-minVal]);
+    }
+
+    // generate samples
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::discrete_distribution<int32_t> dist(pmf.begin(), pmf.end());
+
+    std::vector<int32_t> samples(pmf.size());
+    for (int32_t i = 0; i < numSamples; ++i) {
+        ++samples[dist(gen)];
+    }
+    return samples;
+}
+
+
 /**
  * Computes (and returns) new effective lengths for the transcripts
  * based on the current abundance estimates (alphas) and the current

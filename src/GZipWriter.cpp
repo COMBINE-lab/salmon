@@ -94,9 +94,11 @@ bool GZipWriter::writeMeta(
   }
 
   // TODO v0.6.0: Write these out
-  /*
   bfs::path fldPath = auxDir / "fld.gz";
-  writeVectorToFile(fldPath, experiment.fragLengthDist());
+  int32_t numFLDSamples{10000};
+  auto fldSamples = salmon::utils::samplesFromLogPMF(
+                        experiment.fragmentLengthDistribution(), numFLDSamples);
+  writeVectorToFile(fldPath, fldSamples);
 
   bfs::path normBiasPath = auxDir / "expected_bias.gz";
   writeVectorToFile(normBiasPath, experiment.expectedBias());
@@ -106,7 +108,6 @@ bool GZipWriter::writeMeta(
   std::vector<int32_t> observedBias(bcounts.size(), 0);
   std::copy(bcounts.begin(), bcounts.end(), observedBias.begin());
   writeVectorToFile(obsBiasPath, observedBias);
-  */
 
   bfs::path info = auxDir / "meta_info.json";
 
@@ -126,9 +127,12 @@ bool GZipWriter::writeMeta(
       oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
       oa(cereal::make_nvp("samp_type", sampType));
       // TODO v0.6.0: Write these out
-      //oa(cereal::make_nvp("frag_dist_length", experiment.fragLengthDist().size()));
-      //oa(cereal::make_nvp("bias_correct", opts.biasCorrect));
-      //oa(cereal::make_nvp("num_bias_bins", bcounts.size()));
+      oa(cereal::make_nvp("frag_dist_length", fldSamples.size()));
+      oa(cereal::make_nvp("bias_correct", opts.biasCorrect));
+      oa(cereal::make_nvp("num_bias_bins", bcounts.size()));
+
+      std::string mapTypeStr = opts.alnMode ? "alignment" : "mapping";
+      oa(cereal::make_nvp("mapping_type", mapTypeStr));
 
       oa(cereal::make_nvp("num_targets", transcripts.size()));
       oa(cereal::make_nvp("num_bootstraps", numBootstraps));
@@ -179,7 +183,7 @@ bool GZipWriter::writeAbundances(
   for (auto& transcript : transcripts_) {
       double count = transcript.projectedCounts;
       double npm = (transcript.projectedCounts / numMappedFrags);
-      double effLength = transcript.EffectiveLength; 
+      double effLength = transcript.EffectiveLength;
       double tfrac = (npm / effLength) / tfracDenom;
       double tpm = tfrac * million;
       fmt::print(output.get(), "{}\t{}\t{}\t{}\t{}\n",

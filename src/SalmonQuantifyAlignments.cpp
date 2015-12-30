@@ -158,7 +158,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     std::vector<FragmentStartPositionDistribution>& fragStartDists =
         alnLib.fragmentStartPositionDistributions();
 
-    auto& fragLengthDist = alnLib.fragmentLengthDistribution();
+    auto& fragLengthDist = *(alnLib.fragmentLengthDistribution());
     auto& alnMod = alnLib.alignmentModel();
 
     bool useFSPD{!salmonOpts.noFragStartPosDist};
@@ -241,6 +241,8 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         double logFragProb = salmon::math::LOG_1;
 
                         if (!salmonOpts.noFragLengthDist and useAuxParams) {
+                            /** Forget reads that are not paired **/
+                            /*
                             if(aln->fragLen() == 0) {
                                 if (aln->isLeft() and transcript.RefLength - aln->left() < fragLengthDist.maxVal()) {
                                     logFragProb = fragLengthDist.cmf(transcript.RefLength - aln->left());
@@ -248,6 +250,9 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                                     logFragProb = fragLengthDist.cmf(aln->right());
                                 }
                             } else {
+                            }
+                            */
+                            if(aln->isPaired() and aln->fragLen() > 0) {
                                 logFragProb = fragLengthDist.pmf(static_cast<size_t>(aln->fragLen()));
                             }
                         }
@@ -378,7 +383,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
                                     if (startPos > 0 and startPos < transcript.RefLength) {
                                         const char* txpStart = transcript.Sequence;
-                                        const char* readStart = txpStart + startPos; // is this correct?
+                                        const char* readStart = txpStart + startPos;
                                         const char* txpEnd = txpStart + transcript.RefLength;
                                         bool success = readBias.update(txpStart, readStart, txpEnd, dir);
                                         if (success) {
@@ -754,6 +759,101 @@ bool quantifyLibrary(
     return burnedIn.load();
 }
 
+template <typename ReadT>
+bool processSample(AlignmentLibrary<ReadT>& alnLib,
+                   const std::string& runStartTime,
+                   size_t requiredObservations,
+                   SalmonOpts& sopt,
+                   boost::filesystem::path outputDirectory) {
+
+    auto& jointLog = sopt.jointLog;
+    // EQCLASS
+    alnLib.equivalenceClassBuilder().start();
+
+    bool burnedIn = quantifyLibrary<ReadT>(alnLib, requiredObservations, sopt);
+
+    // EQCLASS
+    // NOTE: A side-effect of calling the optimizer is that
+    // the `EffectiveLength` field of each transcript is
+    // set to its final value.
+    CollapsedEMOptimizer optimizer;
+    jointLog->info("starting optimizer");
+    salmon::utils::normalizeAlphas(sopt, alnLib);
+    optimizer.optimize(alnLib, sopt, 0.01, 10000);
+    jointLog->info("finished optimizer");
+
+    // EQCLASS
+    fmt::print(stderr, "\n\nwriting output \n");
+    GZipWriter gzw(outputDirectory, jointLog);
+    // Write the main results
+    gzw.writeAbundances(sopt, alnLib);
+    // Write meta-information about the run
+    gzw.writeMeta(sopt, alnLib, runStartTime);
+
+    if (sopt.numGibbsSamples > 0) {
+
+        jointLog->info("Starting Gibbs Sampler");
+        CollapsedGibbsSampler sampler;
+        // The function we'll use as a callback to write samples
+        std::function<bool(const std::vector<int>&)> bsWriter =
+            [&gzw](const std::vector<int>& alphas) -> bool {
+                return gzw.writeBootstrap(alphas);
+            };
+
+        bool sampleSuccess = sampler.sample(alnLib, sopt,
+                bsWriter,
+                sopt.numGibbsSamples);
+        if (!sampleSuccess) {
+            jointLog->error("Encountered error during Gibb sampling .\n"
+                    "This should not happen.\n"
+                    "Please file a bug report on GitHub.\n");
+            return false;
+        }
+        jointLog->info("Finished Gibbs Sampler");
+    } else if (sopt.numBootstraps > 0) {
+        // The function we'll use as a callback to write samples
+        std::function<bool(const std::vector<double>&)> bsWriter =
+            [&gzw](const std::vector<double>& alphas) -> bool {
+                return gzw.writeBootstrap(alphas);
+            };
+
+        jointLog->info("Staring Bootstrapping");
+        bool bootstrapSuccess = optimizer.gatherBootstraps(
+                alnLib, sopt,
+                bsWriter, 0.01, 10000);
+        jointLog->info("Finished Bootstrapping");
+        if (!bootstrapSuccess) {
+            jointLog->error("Encountered error during bootstrapping.\n"
+                    "This should not happen.\n"
+                    "Please file a bug report on GitHub.\n");
+            return false;
+        }
+    }
+
+
+
+    if (sopt.sampleOutput) {
+        // In this case, we should "re-convert" transcript
+        // masses to be counts in log space
+        auto nr = alnLib.numMappedFragments();
+        for (auto& t : alnLib.transcripts()) {
+            double m = t.mass(false) * nr;
+            if (m > 0.0) {
+                t.setMass(std::log(m));
+            }
+        }
+
+        bfs::path sampleFilePath = outputDirectory / "postSample.bam";
+        bool didSample = salmon::sampler::sampleLibrary<ReadT>(alnLib, sopt, burnedIn, sampleFilePath, sopt.sampleUnaligned);
+        if (!didSample) {
+            jointLog->warn("There may have been a problem generating the sampled output file; please check the log\n");
+        }
+    }
+
+    return true;
+}
+
+
 int salmonAlignmentQuantify(int argc, char* argv[]) {
     using std::cerr;
     using std::vector;
@@ -763,8 +863,6 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 
     SalmonOpts sopt;
 
-    bool sampleOutput{false};
-    bool sampleUnaligned{false};
     uint32_t numThreads{4};
     size_t requiredObservations{50000000};
 
@@ -857,11 +955,11 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     ("numAuxModelSamples", po::value<uint32_t>(&(sopt.numBurninFrags))->default_value(5000000), "The first <numAuxModelSamples> are used to train the "
      			"auxiliary model parameters (e.g. fragment length distribution, bias, etc.).  After ther first <numAuxModelSamples> observations "
 			"the auxiliary model parameters will be assumed to have converged and will be fixed.")
-    ("sampleOut,s", po::bool_switch(&sampleOutput)->default_value(false), "Write a \"postSample.bam\" file in the output directory "
+    ("sampleOut,s", po::bool_switch(&(sopt.sampleOutput))->default_value(false), "Write a \"postSample.bam\" file in the output directory "
                         "that will sample the input alignments according to the estimated transcript abundances. If you're "
                         "going to perform downstream analysis of the alignments with tools which don't, themselves, take "
                         "fragment assignment ambiguity into account, you should use this output.")
-    ("sampleUnaligned,u", po::bool_switch(&sampleUnaligned)->default_value(false), "In addition to sampling the aligned reads, also write "
+    ("sampleUnaligned,u", po::bool_switch(&(sopt.sampleUnaligned))->default_value(false), "In addition to sampling the aligned reads, also write "
                         "the un-aligned reads to \"posSample.bam\".")
     ("numGibbsSamples", po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0), "[*super*-experimental]: Number of Gibbs sampling rounds to "
      "perform.")
@@ -901,6 +999,8 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
             std::exit(0);
         }
         po::notify(vm);
+
+        sopt.alnMode = true;
 
         if (numThreads < 2) {
             fmt::print(stderr, "salmon requires at least 2 threads --- "
@@ -954,7 +1054,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         vector<string> alignmentFileNames = vm["alignments"].as<vector<string>>();
         vector<bfs::path> alignmentFiles;
         for (auto& alignmentFileName : alignmentFileNames) {
-            bfs::path alignmentFile(alignmentFileName);//vm["alignments"].as<std::string>());
+            bfs::path alignmentFile(alignmentFileName);
             if (!bfs::exists(alignmentFile)) {
                 std::stringstream ss;
                 ss << "The provided alignment file: " << alignmentFile <<
@@ -1028,7 +1128,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
             std::exit(1);
         }
 
-        if (!sampleOutput and sampleUnaligned) {
+        if (!sopt.sampleOutput and sopt.sampleUnaligned) {
             fmt::MemoryWriter wstr;
             wstr << "WARNING: you passed in the (-u/--sampleUnaligned) flag, but did not request a sampled "
                  << "output file (-s/--sampleOut).  This flag will be ignored!\n";
@@ -1087,6 +1187,8 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         sopt.numParseThreads = numParseThreads;
         std::cerr << "numQuantThreads = " << numQuantThreads << "\n";
 
+        bool success{false};
+
         switch (libFmt.type) {
             case ReadType::SINGLE_END:
                 {
@@ -1094,88 +1196,10 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                                                           transcriptFile,
                                                           libFmt,
                                                           sopt);
-                    // EQCLASS
-                    alnLib.equivalenceClassBuilder().start();
 
-                    bool burnedIn = quantifyLibrary<UnpairedRead>(alnLib, requiredObservations, sopt);
-
-                    // EQCLASS
-                    // NOTE: A side-effect of calling the optimizer is that
-                    // the `EffectiveLength` field of each transcript is
-                    // set to its final value.
-                    CollapsedEMOptimizer optimizer;
-                    jointLog->info("starting optimizer");
-                    salmon::utils::normalizeAlphas(sopt, alnLib);
-                    optimizer.optimize(alnLib, sopt, 0.01, 10000);
-                    jointLog->info("finished optimizer");
-
-                    // EQCLASS
-                    fmt::print(stderr, "\n\nwriting output \n");
-                    GZipWriter gzw(outputDirectory, jointLog);
-                    // Write the main results
-                    gzw.writeAbundances(sopt, alnLib);
-                    // Write meta-information about the run
-                    gzw.writeMeta(sopt, alnLib, runStartTime);
-
-                    if (sopt.numGibbsSamples > 0) {
-
-                        jointLog->info("Starting Gibbs Sampler");
-                        CollapsedGibbsSampler sampler;
-                        // The function we'll use as a callback to write samples
-                        std::function<bool(const std::vector<int>&)> bsWriter =
-                            [&gzw](const std::vector<int>& alphas) -> bool {
-                                return gzw.writeBootstrap(alphas);
-                            };
-
-                        bool sampleSuccess = sampler.sample(alnLib, sopt,
-                                bsWriter,
-                                sopt.numGibbsSamples);
-                        if (!sampleSuccess) {
-                            jointLog->error("Encountered error during Gibb sampling .\n"
-                                    "This should not happen.\n"
-                                    "Please file a bug report on GitHub.\n");
-                            return 1;
-                        }
-                        jointLog->info("Finished Gibbs Sampler");
-                    } else if (sopt.numBootstraps > 0) {
-                        // The function we'll use as a callback to write samples
-                        std::function<bool(const std::vector<double>&)> bsWriter =
-                            [&gzw](const std::vector<double>& alphas) -> bool {
-                                return gzw.writeBootstrap(alphas);
-                            };
-
-                        jointLog->info("Staring Bootstrapping");
-                        bool bootstrapSuccess = optimizer.gatherBootstraps(
-                                alnLib, sopt,
-                                bsWriter, 0.01, 10000);
-                        jointLog->info("Finished Bootstrapping");
-                        if (!bootstrapSuccess) {
-                            jointLog->error("Encountered error during bootstrapping.\n"
-                                    "This should not happen.\n"
-                                    "Please file a bug report on GitHub.\n");
-                            return 1;
-                        }
-                    }
-
-
-
-                    if (sampleOutput) {
-                        // In this case, we should "re-convert" transcript
-                        // masses to be counts in log space
-                        auto nr = alnLib.numMappedFragments();
-                        for (auto& t : alnLib.transcripts()) {
-                            double m = t.mass(false) * nr;
-                            if (m > 0.0) {
-                                t.setMass(std::log(m));
-                            }
-                        }
-
-                        bfs::path sampleFilePath = outputDirectory / "postSample.bam";
-                        bool didSample = salmon::sampler::sampleLibrary<UnpairedRead>(alnLib, sopt, burnedIn, sampleFilePath, sampleUnaligned);
-                        if (!didSample) {
-                            jointLog->warn("There may have been a problem generating the sampled output file; please check the log\n");
-                        }
-                    }
+                    success = processSample<UnpairedRead>(alnLib, runStartTime,
+                                                          requiredObservations, sopt,
+                                                          outputDirectory);
                 }
                 break;
             case ReadType::PAIRED_END:
@@ -1184,107 +1208,24 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                                                       transcriptFile,
                                                       libFmt,
                                                       sopt);
-                    // EQCLASS
-                    alnLib.equivalenceClassBuilder().start();
 
-                    bool burnedIn = quantifyLibrary<ReadPair>(alnLib, requiredObservations, sopt);
-
-                    // EQCLASS
-                    // NOTE: A side-effect of calling the optimizer is that
-                    // the `EffectiveLength` field of each transcript is
-                    // set to its final value.
-                    CollapsedEMOptimizer optimizer;
-                    jointLog->info("starting optimizer");
-                    salmon::utils::normalizeAlphas(sopt, alnLib);
-                    optimizer.optimize(alnLib, sopt, 0.01, 10000);
-                    jointLog->info("finished optimizer");
-
-                    // EQCLASS
-                    fmt::print(stderr, "\n\nwriting output \n");
-                    GZipWriter gzw(outputDirectory, jointLog);
-                    // Write the main results
-                    gzw.writeAbundances(sopt, alnLib);
-                    // Write meta-information about the run
-                    gzw.writeMeta(sopt, alnLib, runStartTime);
-
-                    if (sopt.numGibbsSamples > 0) {
-
-                        jointLog->info("Starting Gibbs Sampler");
-                        CollapsedGibbsSampler sampler;
-                        // The function we'll use as a callback to write samples
-                        std::function<bool(const std::vector<int>&)> bsWriter =
-                            [&gzw](const std::vector<int>& alphas) -> bool {
-                                return gzw.writeBootstrap(alphas);
-                            };
-
-                        bool sampleSuccess = sampler.sample(alnLib, sopt,
-                                bsWriter,
-                                sopt.numGibbsSamples);
-                        if (!sampleSuccess) {
-                            jointLog->error("Encountered error during Gibb sampling .\n"
-                                    "This should not happen.\n"
-                                    "Please file a bug report on GitHub.\n");
-                            return 1;
-                        }
-                        jointLog->info("Finished Gibbs Sampler");
-                    } else if (sopt.numBootstraps > 0) {
-                        // The function we'll use as a callback to write samples
-                        std::function<bool(const std::vector<double>&)> bsWriter =
-                            [&gzw](const std::vector<double>& alphas) -> bool {
-                                return gzw.writeBootstrap(alphas);
-                            };
-
-                        jointLog->info("Staring Bootstrapping");
-                        bool bootstrapSuccess = optimizer.gatherBootstraps(
-                                alnLib, sopt,
-                                bsWriter, 0.01, 10000);
-                        jointLog->info("Finished Bootstrapping");
-                        if (!bootstrapSuccess) {
-                            jointLog->error("Encountered error during bootstrapping.\n"
-                                    "This should not happen.\n"
-                                    "Please file a bug report on GitHub.\n");
-                            return 1;
-                        }
-                    }
-
-                    /*
-                    fmt::print(stderr, "\n\nwriting output \n");
-                    salmon::utils::writeAbundances(sopt, alnLib, outputFile, commentString);
-                    */
-
-                                        // Test writing out the fragment length distribution
-                    if (!sopt.noFragLengthDist) {
-                        bfs::path distFileName = paramsDir / "flenDist.txt";
-                        {
-                            std::unique_ptr<std::FILE, int (*)(std::FILE *)> distOut(std::fopen(distFileName.c_str(), "w"), std::fclose);
-                            fmt::print(distOut.get(), "{}\n", alnLib.fragmentLengthDistribution().toString());
-                        }
-                    }
-
-                    if (sampleOutput) {
-                        // In this case, we should "re-convert" transcript
-                        // masses to be counts in log space
-                        auto nr = alnLib.numMappedFragments();
-                        for (auto& t : alnLib.transcripts()) {
-                            double m = t.mass(false) * nr;
-                            if (m > 0.0) {
-                                t.setMass(std::log(m));
-                            }
-                        }
-
-                        bfs::path sampleFilePath = outputDirectory / "postSample.bam";
-                        bool didSample = salmon::sampler::sampleLibrary<ReadPair>(alnLib, sopt, burnedIn, sampleFilePath, sampleUnaligned);
-                        if (!didSample) {
-                            jointLog->warn("There may have been a problem generating the sampled output file; please check the log\n");
-                        }
-
-                    }
+                    success = processSample<ReadPair>(alnLib, runStartTime,
+                                                      requiredObservations, sopt,
+                                                      outputDirectory);
                 }
                 break;
             default:
                 std::cerr << "Cannot quantify library of unknown format "
                           << libFmt << "\n";
                 std::exit(1);
+        }
+
+        // Make sure the quantification was successful.
+        if (!success) {
+            jointLog->error("Quantification was un-successful.  Please check the log "
+                            "for information about why quantification failed. If this "
+                            "problem persists, please report this issue on GitHub.");
+            return 1;
         }
 
         bfs::path estFilePath = outputDirectory / "quant.sf";

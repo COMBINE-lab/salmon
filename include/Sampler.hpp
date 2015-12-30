@@ -103,7 +103,7 @@ namespace salmon {
                 auto& clusterForest = alnLib.clusterForest();
                 auto& fragmentQueue = alnLib.fragmentQueue();
                 auto& alignmentGroupQueue = alnLib.alignmentGroupQueue();
-                auto& fragLengthDist = alnLib.fragmentLengthDistribution();
+                auto& fragLengthDist = *(alnLib.fragmentLengthDistribution());
                 auto& alnMod = alnLib.alignmentModel();
 
                 std::vector<FragmentStartPositionDistribution>& fragStartDists =
