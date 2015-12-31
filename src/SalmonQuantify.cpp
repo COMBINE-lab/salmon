@@ -210,6 +210,7 @@ void processMiniBatch(
 
     double logForgettingMass{0.0};
     uint64_t currentMinibatchTimestep{0};
+
     // logForgettingMass and currentMinibatchTimestep are OUT parameters!
     fmCalc.getLogMassAndTimestep(logForgettingMass, currentMinibatchTimestep);
 
@@ -266,12 +267,6 @@ void processMiniBatch(
                 // If the transcript had a non-zero count (including pseudocount)
                 if (std::abs(transcriptLogCount) != LOG_0 ) {
 
-                    double errLike = salmon::math::LOG_1;
-                    if (burnedIn) {
-                        // TODO: Make error model for mapping-based quantification
-                        //errLike = errMod.logLikelihood(aln, transcript);
-                    }
-
                     // The probability of drawing a fragment of this length;
                     double logFragProb = LOG_1;
                     if (burnedIn and useFragLengthDist and aln.fragLength() > 0) {
@@ -281,21 +276,8 @@ void processMiniBatch(
                     // TESTING
                     if (noFragLenFactor) { logFragProb = LOG_1; }
 
-                    // TODO: Take the fragment length distribution into account
-                    // for single-end fragments as in the alignment-based code below
-                    /*
-                    if (!salmonOpts.noFragLengthDist) {
-                        if(aln->fragLen() == 0) {
-                            if (aln->isLeft() and transcript.RefLength - aln->left() < fragLengthDist.maxVal()) {
-                                logFragProb = fragLengthDist.cmf(transcript.RefLength - aln->left());
-                            } else if (aln->isRight() and aln->right() < fragLengthDist.maxVal()) {
-                                logFragProb = fragLengthDist.cmf(aln->right());
-                            }
-                        } else {
-                            logFragProb = fragLengthDist.pmf(static_cast<size_t>(aln->fragLen()));
-                        }
-                    }
-                    */
+                    // TODO: Maybe take the fragment length distribution into account
+                    // for single-end fragments?
 
                     // The probability that the fragments align to the given strands in the
                     // given orientations.
@@ -307,12 +289,9 @@ void processMiniBatch(
                     double startPosProb{-logRefLength};
                     auto hitPos = aln.hitPos();
                     if (useFSPD and burnedIn and hitPos < refLength) {
-                        auto& fragStartDist =
-                        fragStartDists[transcript.lengthClassIndex()];
+                        auto& fragStartDist = fragStartDists[transcript.lengthClassIndex()];
                         startPosProb = fragStartDist(hitPos, refLength, logRefLength);
                     }
-
-                    double logBiasProb = salmon::math::LOG_1;
 
                     // Increment the count of this type of read that we've seen
                     ++libTypeCounts[aln.libFormat().formatID()];
@@ -382,7 +361,6 @@ void processMiniBatch(
                 // Add the new mass to this transcript
                 double newMass = logForgettingMass + aln.logProb;
                 transcript.addMass( newMass );
-                //transcript.addBias( aln.logBias );
 
                 double r = uni(randEng);
                 if (!burnedIn and r < std::exp(aln.logProb)) {
@@ -394,27 +372,11 @@ void processMiniBatch(
                     }
                     if (useFSPD) {
                         auto hitPos = aln.hitPos();
-                        auto& fragStartDist =
-                            fragStartDists[transcript.lengthClassIndex()];
+                        auto& fragStartDist = fragStartDists[transcript.lengthClassIndex()];
                         fragStartDist.addVal(hitPos,
                                              transcript.RefLength,
                                              logForgettingMass);
                     }
-                    /*
-                    if (useSequenceBiasModel) {
-                        if (fragLength > 0.0) {
-                            int32_t leftPos = aln.hitPos();
-                            int32_t rightPos = leftPos + fragLength;
-                            biasModel.update(transcript, leftPos, rightPos,
-                                             aln.libFormat(), logForgettingMass, LOG_1);
-                        } else {
-                            int32_t hitPos = aln.hitPos();
-                            biasModel.update(transcript, hitPos,
-                                             aln.libFormat(),
-                                             logForgettingMass, LOG_1);
-                        }
-                    }
-                    */
                 }
             } // end normalize
 
@@ -1302,6 +1264,7 @@ void quantifyLibrary(
         };
 
         // Process all of the reads
+        fmt::print(stderr, "\n\n\n\n");
         experiment.processReads(numQuantThreads, salmonOpts, processReadLibraryCallback);
         experiment.setNumObservedFragments(numObservedFragments);
 
@@ -1312,6 +1275,8 @@ void quantifyLibrary(
 
         initialRound = false;
         ++roundNum;
+        fmt::print(stderr, "\n\n\n\n");
+        /*
         fmt::print(stderr, "\n# observed = {} / # required = {}\n",
                    numObservedFragments, numRequiredFragments);
         fmt::print(stderr, "hard # assigned = {} / # observed (this round) = {} : "
@@ -1319,6 +1284,7 @@ void quantifyLibrary(
                    experiment.numAssignedFragments(),
                    numObservedFragments - numPrevObservedFragments,
                    upperBoundHits);
+        */
         salmonOpts.fileLog->info("\nAt end of round {}\n"
                                    "==================\n"
                                    "Observed {} total fragments ({} in most recent round)\n",
@@ -1550,7 +1516,7 @@ transcript abundance from RNA-seq reads
         fmt::print(stderr, "{}", commentString);
 
         // TODO: Fix fragment start pos dist
-        sopt.noFragStartPosDist = true;
+        // sopt.noFragStartPosDist = true;
 
 	// Set the atomic variable numBiasSamples from the local version
 	sopt.numBiasSamples.store(numBiasSamples);
@@ -1727,7 +1693,7 @@ transcript abundance from RNA-seq reads
 	  return 1;
 	}
         jointLog->info("Finished optimizer");
-		
+
         free(memOptions);
         size_t tnum{0};
 

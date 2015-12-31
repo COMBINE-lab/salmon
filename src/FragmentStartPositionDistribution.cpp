@@ -25,10 +25,13 @@ FragmentStartPositionDistribution::FragmentStartPositionDistribution(uint32_t nu
       cmf_(numBins+2),
       totMass_(salmon::math::LOG_1),
       isUpdated_(false),
-      allowUpdates_(true){
+      allowUpdates_(true),
+      performingUpdate_(0){
 
   using salmon::math::logAdd;
   double uniMass = log(1.0 / numBins_);
+  pmf_[0] = salmon::math::LOG_0;
+  cmf_[0] = salmon::math::LOG_0;
   for (size_t i = 1; i <= numBins_; ++i) {
     pmf_[i] = uniMass;
     cmf_[i] = log(static_cast<double>(i)) + uniMass;
@@ -52,44 +55,58 @@ void FragmentStartPositionDistribution::addVal(
         uint32_t txpLen,
         double mass) {
 
-    if (!allowUpdates_) { return; }
-    using salmon::math::logAdd;
-    if (hitPos >= static_cast<int32_t>(txpLen)) return; // hit should happen within the transcript
+    ++performingUpdate_;
+    {
+        if (!allowUpdates_) {
+            --performingUpdate_;
+            return;
+        }
 
-    if (hitPos < 0) { hitPos = 0; }
-    double logLen = log(txpLen);
+        using salmon::math::logAdd;
+        if (hitPos >= static_cast<int32_t>(txpLen)) {
+            --performingUpdate_;
+            return; // hit should happen within the transcript
+        }
 
-    // Modified from: https://github.com/deweylab/RSEM/blob/master/RSPD.h
-    uint32_t i;
-    // Fraction along the transcript where this hit occurs
-    double a = hitPos * 1.0 / txpLen;
-    double b;
+        if (hitPos < 0) { hitPos = 0; }
+        double logLen = log(txpLen);
 
-    for (i = ((long long)hitPos) * numBins_ / txpLen + 1;
-         i < (((long long)hitPos + 1) * numBins_ - 1) / txpLen + 1; i++) {
-        b = i * 1.0 / numBins_;
+        // Modified from: https://github.com/deweylab/RSEM/blob/master/RSPD.h
+        uint32_t i;
+        // Fraction along the transcript where this hit occurs
+        double a = hitPos * 1.0 / txpLen;
+        double b;
+
+        for (i = ((long long)hitPos) * numBins_ / txpLen + 1;
+             i < (((long long)hitPos + 1) * numBins_ - 1) / txpLen + 1; i++) {
+            b = i * 1.0 / numBins_;
+            double updateMass = log(b - a) + logLen + mass;
+            logAddMass(pmf_[i], updateMass);
+            logAddMass(totMass_, updateMass);
+            a = b;
+        }
+        b = (hitPos + 1.0) / txpLen;
         double updateMass = log(b - a) + logLen + mass;
         logAddMass(pmf_[i], updateMass);
         logAddMass(totMass_, updateMass);
-        a = b;
     }
-    b = (hitPos + 1.0) / txpLen;
-    double updateMass = log(b - a) + logLen + mass;
-    logAddMass(pmf_[i], updateMass);
-    logAddMass(totMass_, updateMass);
+    --performingUpdate_;
 }
 
 double FragmentStartPositionDistribution::evalCDF(int32_t hitPos, uint32_t txpLen) {
-    int i = (static_cast<long long>(hitPos) * numBins_) / txpLen;
+    int i = static_cast<int>((static_cast<double>(hitPos) * numBins_) / txpLen);
     double val = hitPos * (1.0 / txpLen) * numBins_;
-    return salmon::math::logAdd(cmf_[i], std::log(val - i) + pmf_[i+1]);
+    return (val - i < 1e-7) ? cmf_[i].load() :
+            salmon::math::logAdd(cmf_[i], std::log(val - i) + pmf_[i+1]);
 }
 
 void FragmentStartPositionDistribution::update() {
     if (isUpdated_) { return; }
-    // TODO: This still doesn't seem *safe*
+    // TODO: Is this (thread)-safe yet?
     allowUpdates_ = false;
     std::lock_guard<std::mutex> lg(fspdMut_);
+    // Make sure an update isn't being performed
+    while (performingUpdate_) {}
     if (!isUpdated_) {
         for (uint32_t i = 1; i <= numBins_; i++) {
             pmf_[i] = pmf_[i] - totMass_;
@@ -111,9 +128,9 @@ double FragmentStartPositionDistribution::operator()(
 	    return salmon::math::LOG_0;
     }
     // If we haven't updated the CDF yet, then
-    // just return log(1 / effLen);
+    // just return log(1);
     if (!isUpdated_) {
-        return -logEffLen;
+        return salmon::math::LOG_1;
     }
 
     double a = hitPos * (1.0 / txpLen);
@@ -123,9 +140,10 @@ double FragmentStartPositionDistribution::operator()(
 	    effLen = txpLen - 1;
     }
 
-    double denom = evalCDF(static_cast<int32_t>(effLen), txpLen);
+    double denom = evalCDF(static_cast<int32_t>(effLen), txpLen); // cmf_[numBins_];
     double cdfNext = evalCDF(hitPos + 1, txpLen);
     double cdfCurr = evalCDF(hitPos, txpLen);
+    //return salmon::math::logSub(cdfNext, cdfCurr);
 
     return ((denom >= salmon::math::LOG_EPSILON) ?
             salmon::math::logSub(cdfNext, cdfCurr) - denom :

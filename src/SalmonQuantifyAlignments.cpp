@@ -780,7 +780,7 @@ bool processSample(AlignmentLibrary<ReadT>& alnLib,
     jointLog->info("starting optimizer");
     salmon::utils::normalizeAlphas(sopt, alnLib);
     bool optSuccess = optimizer.optimize(alnLib, sopt, 0.01, 10000);
-    // If the optimizer didn't work, then bail out here. 
+    // If the optimizer didn't work, then bail out here.
     if (!optSuccess) { return false; }
     jointLog->info("finished optimizer");
 
@@ -1033,7 +1033,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         fmt::print(stderr, "{}", commentString);
 
         // TODO: Fix fragment start pos dist
-        sopt.noFragStartPosDist = true;
+        // sopt.noFragStartPosDist = true;
 
         // Get the time at the start of the run
         std::time_t result = std::time(NULL);
