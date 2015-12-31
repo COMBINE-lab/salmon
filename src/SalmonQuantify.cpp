@@ -1718,9 +1718,16 @@ transcript abundance from RNA-seq reads
         CollapsedEMOptimizer optimizer;
         jointLog->info("Starting optimizer");
     	salmon::utils::normalizeAlphas(sopt, experiment);
-        optimizer.optimize(experiment, sopt, 0.01, 10000);
-        jointLog->info("Finished optimizer");
+        bool optSuccess = optimizer.optimize(experiment, sopt, 0.01, 10000);
 
+	if (!optSuccess) {
+	  jointLog->error("The optimization algorithm failed. This is likely the result of "
+			  "bad input (or a bug). If you cannot track down the cause, please "
+			  "report this issue on GitHub.");
+	  return 1;
+	}
+        jointLog->info("Finished optimizer");
+		
         free(memOptions);
         size_t tnum{0};
 

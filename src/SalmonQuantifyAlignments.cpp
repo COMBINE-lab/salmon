@@ -779,7 +779,9 @@ bool processSample(AlignmentLibrary<ReadT>& alnLib,
     CollapsedEMOptimizer optimizer;
     jointLog->info("starting optimizer");
     salmon::utils::normalizeAlphas(sopt, alnLib);
-    optimizer.optimize(alnLib, sopt, 0.01, 10000);
+    bool optSuccess = optimizer.optimize(alnLib, sopt, 0.01, 10000);
+    // If the optimizer didn't work, then bail out here. 
+    if (!optSuccess) { return false; }
     jointLog->info("finished optimizer");
 
     // EQCLASS

@@ -88,7 +88,8 @@ int salmonIndex(int argc, char* argv[]) {
     ("index,i", po::value<string>()->required(), "Salmon index.")
     ("threads,p", po::value<uint32_t>(&numThreads)->default_value(maxThreads)->required(),
                             "Number of threads to use (only used for computing bias features)")
-    ("type", po::value<string>(&indexTypeStr)->required(), "The type of index to build; options are \"fmd\" and \"quasi\"")
+    ("type", po::value<string>(&indexTypeStr)->default_value("quasi")->required(), "The type of index to build; options are \"fmd\" and \"quasi\" "
+    							   			   "\"quasi\" is recommended, and \"fmd\" may be removed in the future")
     ("sasamp,s", po::value<uint32_t>(&saSampInterval)->default_value(1)->required(),
                             "The interval at which the suffix array should be sampled. "
                             "Smaller values are faster, but produce a larger index. "
@@ -127,7 +128,7 @@ Creates a salmon index.
         if (!isPowerOfTwo(sasamp) and !useQuasi) {
           fmt::MemoryWriter errWriter;
           errWriter << "Error: The suffix array sampling interval must be "
-                   "a power of 2. The value provided, " << sasamp << ", is not.";
+                       "a power of 2. The value provided, " << sasamp << ", is not.";
           throw(std::logic_error(errWriter.str()));
         }
 
@@ -156,7 +157,7 @@ Creates a salmon index.
 
         bfs::path outputPrefix;
         std::unique_ptr<std::vector<std::string>> argVec(new std::vector<std::string>);
-	    fmt::MemoryWriter optWriter;
+	fmt::MemoryWriter optWriter;
 
         std::unique_ptr<SalmonIndex> sidx = nullptr;
         // Build a quasi-mapping index

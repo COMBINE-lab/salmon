@@ -338,7 +338,7 @@ void VBEMUpdate_(
                             auto aux = auxs[i] * (1.0 / effLens(tid));
                             if (expTheta[tid] > 0.0) {
                               double v = expTheta[tid] * aux;
-															salmon::utils::incLoop(alphaOut[tid], v * invDenom);
+			      salmon::utils::incLoop(alphaOut[tid], v * invDenom);
                             }
                         }
                     }
@@ -691,15 +691,16 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
     double totalNumFrags{static_cast<double>(readExp.numMappedFragments())};
     double totalLen{0.0};
 
+    // If effective length correction isn't turned off, then use effective
+    // lengths rather than reference lengths.
+    bool useEffectiveLengths = !sopt.noEffectiveLengthCorrection;
+
     double uniformPrior = 1.0 / transcripts.size();
+
     for (size_t i = 0; i < transcripts.size(); ++i) {
         auto& txp = transcripts[i];
-        double m = txp.mass(false);
-        if (std::isnan(m)) {
-            std::cerr << "FOUND NAN for txp " << i << "\n";
-        }
-        alphas[i] = (m == salmon::math::LOG_0) ? 0.0 : m;
-        effLens(i) = std::exp(txp.getCachedLogEffectiveLength());
+	alphas[i] = txp.projectedCounts;
+        effLens(i) = useEffectiveLengths ? std::exp(txp.getCachedLogEffectiveLength()) : txp.RefLength;
         txp.EffectiveLength = effLens(i);
         totalLen += effLens(i);
     }
@@ -726,20 +727,23 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
                 // Iterate over each weight set it
                 double wsum{0.0};
                 for (size_t i = 0; i < classSize; ++i) {
-                    double el = effLens(k.txps[i]);
+        	    auto tid = k.txps[i];
+                    double el = effLens(tid);
                     if (el <= 1.0) { el = 1.0; }
                     if (noRichEq) {
-                        // v.weights[i] = 1.0 / el;
-                        // Keep length factor separate for the time ok
+                        // Keep length factor separate for the time being
                         v.weights[i] = 1.0;
+			// If the length is folded into the weight
+                        // v.weights[i] = 1.0 / el;
                     } else {
                         v.weights[i].store(v.weights[i]);
                     }
                     wsum += v.weights[i];
                 }
+
                 double wnorm = 1.0 / wsum;
                 for (size_t i = 0; i < classSize; ++i) {
-                    v.weights[i].store(v.weights[i] * wnorm);
+                  v.weights[i].store(v.weights[i] * wnorm);
                 }
             }
     });
@@ -776,8 +780,8 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
                     jointLog->warn("Transcript {} had length {}", i, effLens(i));
                 }
             }
-            // Since weight factors are separate --- we
-            // needn't update the weights here.
+            // Since the effective length factors are separate, we needn't update 
+	    // the weights here.
             // updateEqClassWeights(eqVec, effLens);
         }
 
