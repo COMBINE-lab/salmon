@@ -19,26 +19,46 @@
 struct TGValue {
     TGValue(const TGValue& o) {
         weights = o.weights;
+	posWeights = o.posWeights;
+	combinedWeights = o.combinedWeights;
         count.store(o.count.load());
     }
 
-    TGValue(std::vector<double>& weightIn, uint64_t countIn) :
-        weights(weightIn.begin(), weightIn.end()) { count.store(countIn); }
+    TGValue(std::vector<double>& weightIn, 
+	    std::vector<double>& posWeightsIn, 
+	    uint64_t countIn) :
+        weights(weightIn.begin(), weightIn.end()),
+	posWeights(posWeightsIn.begin(), posWeightsIn.end()) { 
+	  count.store(countIn); 
+	}
 
     // const is a lie
     void normalizeAux() const {
-        double sumOfAux{0.0};
-        for (size_t i = 0; i < weights.size(); ++i) {
-            sumOfAux += weights[i];
-        }
-        double norm = 1.0 / sumOfAux;
-        for (size_t i = 0; i < weights.size(); ++i) {
-            weights[i].store(weights[i].load() * norm);
-        }
+      double sumOfAux{0.0};
+      for (size_t i = 0; i < weights.size(); ++i) {
+	sumOfAux += weights[i];
+      }
+      double norm = 1.0 / sumOfAux;
+      for (size_t i = 0; i < weights.size(); ++i) {
+	weights[i].store(weights[i].load() * norm);
+
+      }
+
+      // If we have positional weights, normalize them.
+      if (posWeights.size() > 0) {
+	double posNorm = 1.0 / count.load();
+	for (size_t i = 0; i < posWeights.size(); ++i) {
+	  posWeights[i].store(posWeights[i].load() * posNorm);
+	}
+      }
     }
 
-    // forget synchronizing this for the time being
     mutable std::vector<tbb::atomic<double>> weights;
+    mutable std::vector<tbb::atomic<double>> posWeights;
+
+    // The combined auxiliary and position weights.  These
+    // are filled in by the inference algorithm.
+    mutable std::vector<double> combinedWeights;
     std::atomic<uint64_t> count{0};
 };
 
@@ -71,19 +91,28 @@ class EquivalenceClassBuilder {
         }
 
         inline void addGroup(TranscriptGroup&& g,
-                             std::vector<double>& weights) {
+                             std::vector<double>& weights,
+			     std::vector<double>& posWeights) {
 
-            auto upfn = [&weights](TGValue& x) -> void {
+            auto upfn = [&weights, &posWeights](TGValue& x) -> void {
                 // update the count
                 x.count++;
                 // update the weights
-                for (size_t i = 0; i < x.weights.size(); ++i) {
-                    // conflicts are rare, but atomic is import here for small
-		    // datasets!
+
+		// If we have positional weights
+		if (weights.size() == posWeights.size()) {
+		  for (size_t i = 0; i < x.weights.size(); ++i) {
 		    salmon::utils::incLoop(x.weights[i], weights[i]);
-                }
+		    salmon::utils::incLoop(x.posWeights[i], posWeights[i]);
+		  }
+		} else {
+	        // With no positional weights
+		  for (size_t i = 0; i < x.weights.size(); ++i) {
+		    salmon::utils::incLoop(x.weights[i], weights[i]);
+		  }
+		}
             };
-            TGValue v(weights, 1);
+            TGValue v(weights, posWeights, 1);
             countMap_.upsert(g, upfn, v);
         }
 

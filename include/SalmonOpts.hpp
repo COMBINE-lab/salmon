@@ -35,14 +35,14 @@ struct SalmonOpts {
 
     bool splitSpanningSeeds; // Attempt to split seeds that span multiple transcripts.
 
-    bool noFragLengthDist; // Do not give a fragment assignment a likelihood based on an emperically
-                           // observed fragment length distribution.
+    bool noFragLengthDist ; // Don't give a fragment assignment a likelihood based on an emperically
+	                    // observed fragment length distribution.
 
     bool noEffectiveLengthCorrection; // Don't take the fragment length distribution into
                                       // account when computing the probability that a
                                      // fragment was generated from a transcript.
 
-    bool noFragStartPosDist; // Don't learn a non-uniform start distribution
+    bool useFSPD; // Learn a non-uniform start distribution
 
     bool noSeqBiasModel; // Don't learn and use a sequence-specific bias model.
 

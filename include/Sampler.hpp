@@ -98,7 +98,7 @@ namespace salmon {
                 using salmon::math::logAdd;
                 using salmon::math::logSub;
 
-                bool useFSPD{!salmonOpts.noFragStartPosDist};
+                bool useFSPD{salmonOpts.useFSPD};
                 auto& refs = alnLib.transcripts();
                 auto& clusterForest = alnLib.clusterForest();
                 auto& fragmentQueue = alnLib.fragmentQueue();

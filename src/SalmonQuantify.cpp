@@ -195,7 +195,7 @@ void processMiniBatch(
 
     bool updateCounts = initialRound;
     bool useReadCompat = salmonOpts.incompatPrior != salmon::math::LOG_1;
-    bool useFSPD{!salmonOpts.noFragStartPosDist};
+    bool useFSPD{salmonOpts.useFSPD};
     bool useFragLengthDist{!salmonOpts.noFragLengthDist};
     bool noFragLenFactor{salmonOpts.noFragLenFactor};
 
@@ -236,6 +236,7 @@ void processMiniBatch(
             // EQCLASS
             std::vector<uint32_t> txpIDs;
             std::vector<double> auxProbs;
+	    std::vector<double> posProbs;
             double auxDenom = salmon::math::LOG_0;
 
             double avgLogBias = salmon::math::LOG_0;
@@ -287,10 +288,21 @@ void processMiniBatch(
 
                     // Allow for a non-uniform fragment start position distribution
                     double startPosProb{-logRefLength};
+		    double fragStartLogNumerator{salmon::math::LOG_1};
+		    double fragStartLogDenominator{salmon::math::LOG_1};
+
                     auto hitPos = aln.hitPos();
                     if (useFSPD and burnedIn and hitPos < refLength) {
                         auto& fragStartDist = fragStartDists[transcript.lengthClassIndex()];
-                        startPosProb = fragStartDist(hitPos, refLength, logRefLength);
+			// Get the log(numerator) and log(denominator) for the fragment start position
+			// probability.
+			bool nonZeroProb = fragStartDist.logNumDenomMass(hitPos, refLength, logRefLength, 
+						      fragStartLogNumerator, fragStartLogDenominator);
+			// Set the overall probability.
+			startPosProb = (nonZeroProb) ? 
+					fragStartLogNumerator - fragStartLogDenominator : 
+					salmon::math::LOG_0;
+                        //startPosProb = fragStartDist(hitPos, refLength, logRefLength);
                     }
 
                     // Increment the count of this type of read that we've seen
@@ -323,6 +335,11 @@ void processMiniBatch(
                     txpIDs.push_back(transcriptID);
                     auxProbs.push_back(auxProb);
                     auxDenom = salmon::math::logAdd(auxDenom, auxProb);
+
+		    // If we're using the fragment start position distribution
+		    // remember *the numerator* of (x / cdf(effLen / len)) where 
+		    // x = cdf(p+1 / len) - cdf(p / len)
+		    if (useFSPD) { posProbs.push_back(std::exp(fragStartLogNumerator)); }
                 } else {
                     aln.logProb = LOG_0;
 
@@ -346,7 +363,7 @@ void processMiniBatch(
             }
             if (txpIDs.size() > 0) {
                TranscriptGroup tg(txpIDs);
-               eqBuilder.addGroup(std::move(tg), auxProbs);
+               eqBuilder.addGroup(std::move(tg), auxProbs, posProbs);
             }
 
             // normalize the hits
@@ -400,37 +417,7 @@ void processMiniBatch(
             } // end read group
         }// end timer
 
-        double individualTotal = LOG_0;
-        {
-            /*
-            // M-step
-            double totalMass{0.0};
-            for (auto kv = hitsForTranscript.begin(); kv != hitsForTranscript.end(); ++kv) {
-                auto transcriptID = kv->first;
-                // The target must be a valid transcript
-                if (transcriptID >= numTranscripts or transcriptID < 0) {std::cerr << "index " << transcriptID << " out of bounds\n"; }
-
-                auto& transcript = transcripts[transcriptID];
-
-                // The prior probability
-                double hitMass{LOG_0};
-
-                // The set of alignments that match transcriptID
-                auto& hits = kv->second;
-                std::for_each(hits.begin(), hits.end(), [&](SMEMAlignment* aln) -> void {
-                        if (!std::isfinite(aln->logProb)) { std::cerr << "hitMass = " << aln->logProb << "\n"; }
-                        hitMass = logAdd(hitMass, aln->logProb);
-                        });
-
-                double updateMass = logForgettingMass + hitMass;
-                individualTotal = logAdd(individualTotal, updateMass);
-                totalMass = logAdd(totalMass, updateMass);
-                transcript.addMass(updateMass);
-            } // end for
-            */
-        } // end timer
-
-        if (zeroProbFrags > 0) {
+	if (zeroProbFrags > 0) {
             log->warn("Minibatch contained {} "
                       "0 probability fragments", zeroProbFrags);
         }
@@ -1303,6 +1290,16 @@ void quantifyLibrary(
         jointLog->warn("Only {} fragments were mapped, but the number of burn-in fragments was set to {}.\n"
                 "The effective lengths have been computed using the observed mappings.\n",
                 totalAssignedFragments, salmonOpts.numBurninFrags);
+
+	// If we didn't have a sufficient number of samples for burnin,
+	// then also ignore modeling of the fragment start position 
+	// distribution.
+	if (salmonOpts.useFSPD) {
+	  salmonOpts.useFSPD = false;
+	  jointLog->warn("Since only {} (< {}) fragments were observed, modeling of the fragment start position "
+			 "distribution has been disabled", totalAssignedFragments, salmonOpts.numBurninFrags);
+
+	}
     }
 
     if (numObservedFragments <= prevNumObservedFragments) {
@@ -1431,9 +1428,8 @@ int salmonQuantify(int argc, char *argv[]) {
                          "unlikely lengths will be assigned a smaller relative probability than those with more likely "
                         "lengths.  When this flag is passed in, the observed fragment length has no effect on that fragment's "
                         "a priori probability.")
-    ("noFragStartPosDist", po::bool_switch(&(sopt.noFragStartPosDist))->default_value(false), "[Currently Experimental] : "
-                        "Don't consider / model non-uniformity in the fragment start positions "
-                        "across the transcript.")
+    ("useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(false), "[Currently Experimental] : "
+                        "Consider / model non-uniformity in the fragment start positions across the transcript.")
     ("numBiasSamples", po::value<int32_t>(&numBiasSamples)->default_value(1000000),
             "Number of fragment mappings to use when learning the sequence-specific bias model.")
     ("numAuxModelSamples", po::value<uint32_t>(&(sopt.numBurninFrags))->default_value(5000000), "The first <numAuxModelSamples> are used to train the "
@@ -1516,7 +1512,7 @@ transcript abundance from RNA-seq reads
         fmt::print(stderr, "{}", commentString);
 
         // TODO: Fix fragment start pos dist
-        // sopt.noFragStartPosDist = true;
+        // sopt.useFSPD = false;
 
 	// Set the atomic variable numBiasSamples from the local version
 	sopt.numBiasSamples.store(numBiasSamples);

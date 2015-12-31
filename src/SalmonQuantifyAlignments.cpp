@@ -161,7 +161,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     auto& fragLengthDist = *(alnLib.fragmentLengthDistribution());
     auto& alnMod = alnLib.alignmentModel();
 
-    bool useFSPD{!salmonOpts.noFragStartPosDist};
+    bool useFSPD{salmonOpts.useFSPD};
     bool useFragLengthDist{!salmonOpts.noFragLengthDist};
     bool noFragLenFactor{salmonOpts.noFragLenFactor};
 
@@ -220,6 +220,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                     // EQCLASS
                     std::vector<uint32_t> txpIDs;
                     std::vector<double> auxProbs;
+                    std::vector<double> posProbs;
                     double auxDenom = salmon::math::LOG_0;
 
 		    // The alignments must be sorted by transcript id
@@ -283,14 +284,23 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                             errLike = alnMod.logLikelihood(*aln, transcript);
                         }
 
-                        // Allow for a non-uniform fragment start position distribution
-                        double startPosProb = -logRefLength;
+			// Allow for a non-uniform fragment start position distribution
+			double startPosProb{-logRefLength};
+			double fragStartLogNumerator{salmon::math::LOG_1};
+			double fragStartLogDenominator{salmon::math::LOG_1};
+
                         auto hitPos = aln->left();
-                        if (useFSPD and burnedIn and hitPos < refLength) {
-                            auto& fragStartDist =
-                                fragStartDists[transcript.lengthClassIndex()];
-                            startPosProb = fragStartDist(hitPos, refLength, logRefLength);
-                        }
+			if (useFSPD and burnedIn and hitPos < refLength) {
+			  auto& fragStartDist = fragStartDists[transcript.lengthClassIndex()];
+			  // Get the log(numerator) and log(denominator) for the fragment start position
+			  // probability.
+			  bool nonZeroProb = fragStartDist.logNumDenomMass(hitPos, refLength, logRefLength, 
+			      fragStartLogNumerator, fragStartLogDenominator);
+			  // Set the overall probability.
+			  startPosProb = (nonZeroProb) ? 
+			    fragStartLogNumerator - fragStartLogDenominator : 
+			    salmon::math::LOG_0;
+			}
 
                         // The total auxiliary probabilty is the product (sum in log-space) of
                         // The fragment length probabilty
@@ -320,6 +330,10 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                             txpIDs.push_back(transcriptID);
                             auxProbs.push_back(auxProb);
                             auxDenom = salmon::math::logAdd(auxDenom, auxProb);
+			    
+			    if (useFSPD) {
+			      posProbs.push_back(fragStartLogNumerator);
+			    }
 
                         } else {
                             aln->logProb = LOG_0;
@@ -343,7 +357,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
                     if (txpIDs.size() > 0) {
                         TranscriptGroup tg(txpIDs);
-                        eqBuilder.addGroup(std::move(tg), auxProbs);
+                        eqBuilder.addGroup(std::move(tg), auxProbs, posProbs);
                     }
 
 
@@ -738,6 +752,16 @@ bool quantifyLibrary(
         salmonOpts.jointLog->warn("Only {} fragments were mapped, but the number of burn-in fragments was set to {}.\n"
                 "The effective lengths have been computed using the observed mappings.\n",
                 alnLib.numMappedFragments(), salmonOpts.numBurninFrags);
+
+	// If we didn't have a sufficient number of samples for burnin,
+	// then also ignore modeling of the fragment start position 
+	// distribution.
+	if (salmonOpts.useFSPD) {
+	  salmonOpts.useFSPD = false;
+	  salmonOpts.jointLog->warn("Since only {} (< {}) fragments were observed, modeling of the fragment start position "
+			 "distribution has been disabled", alnLib.numMappedFragments() , salmonOpts.numBurninFrags);
+
+	}
     }
 
 
@@ -934,8 +958,8 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                          "unlikely lengths will be assigned a smaller relative probability than those with more likely "
                         "lengths.  When this flag is passed in, the observed fragment length has no effect on that fragment's "
                         "a priori probability.")
-    ("noFragStartPosDist", po::bool_switch(&(sopt.noFragStartPosDist))->default_value(false), "[Currently Experimental] : "
-                        "Don't consider / model non-uniformity in the fragment start positions "
+    ("useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(false), "[Currently Experimental] : "
+                        "Consider / model non-uniformity in the fragment start positions "
                         "across the transcript.")
     /*
     // Don't expose this yet
@@ -1033,7 +1057,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         fmt::print(stderr, "{}", commentString);
 
         // TODO: Fix fragment start pos dist
-        // sopt.noFragStartPosDist = true;
+        // sopt.useFSPD = false;
 
         // Get the time at the start of the run
         std::time_t result = std::time(NULL);

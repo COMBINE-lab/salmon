@@ -71,6 +71,27 @@ public:
    * @param txpLen The length of the transcript
    */
   double operator()(int32_t hitPos, uint32_t txpLen, double effLen);
+
+
+   /**
+   * A member function that computes the probability that a hit
+   * starts at the specified position within the given transcript length.
+   * The overall log probability is given by logNum - logDenom. The function
+   * returns true if the probability is non-zero and false otherwise.
+   * @param hitPos The position where the fragment begins
+   * @param txpLen The length of the transcript
+   * @param logEffLen the log of the effective length of the transcript
+   * @param logNum the log of the numerator
+   * @param logDenom the log of the denominator
+   * @return true if the probaility is non-zero, false otherwise.
+   */
+  bool logNumDenomMass(
+        int32_t hitPos,
+        uint32_t txpLen,
+        double logEffLen,
+	double& logNum,
+	double& logDenom);
+
   // Evaluate the CDF between two points
   double evalCDF(int32_t hitPos, uint32_t txpLen);
   // Update the distribution (compute the CDF) and

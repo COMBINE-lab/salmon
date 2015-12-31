@@ -130,7 +130,7 @@ double FragmentStartPositionDistribution::operator()(
     // If we haven't updated the CDF yet, then
     // just return log(1);
     if (!isUpdated_) {
-        return salmon::math::LOG_1;
+        return -logEffLen; 
     }
 
     double a = hitPos * (1.0 / txpLen);
@@ -143,11 +143,52 @@ double FragmentStartPositionDistribution::operator()(
     double denom = evalCDF(static_cast<int32_t>(effLen), txpLen); // cmf_[numBins_];
     double cdfNext = evalCDF(hitPos + 1, txpLen);
     double cdfCurr = evalCDF(hitPos, txpLen);
-    //return salmon::math::logSub(cdfNext, cdfCurr);
 
     return ((denom >= salmon::math::LOG_EPSILON) ?
             salmon::math::logSub(cdfNext, cdfCurr) - denom :
             salmon::math::LOG_0);
+}
+
+
+bool FragmentStartPositionDistribution::logNumDenomMass(
+        int32_t hitPos,
+        uint32_t txpLen,
+        double logEffLen,
+	double& logNum,
+	double& logDenom) {
+
+    if (hitPos < 0) { hitPos = 0; }
+    assert(hitPos < txpLen);
+    if (hitPos >= txpLen) {
+	    std::cerr << "\n\nhitPos = " << hitPos << ", txpLen = " << txpLen << "!!\n\n\n";
+	    logNum = salmon::math::LOG_0;
+	    logDenom = salmon::math::LOG_0;
+	    return false;
+    }
+    // If we haven't updated the CDF yet, then
+    // just return log(1);
+    if (!isUpdated_) {
+	logNum = std::log(1.0 / static_cast<double>(txpLen)); 
+	logDenom = salmon::math::LOG_1;
+        return true; 
+    }
+
+    double effLen = std::exp(logEffLen);
+    if (effLen >= txpLen) { effLen = txpLen - 1; }
+
+    double denom = evalCDF(static_cast<int32_t>(effLen), txpLen); 
+    double cdfNext = evalCDF(hitPos + 1, txpLen);
+    double cdfCurr = evalCDF(hitPos, txpLen);
+
+    if (denom >= salmon::math::LOG_EPSILON) {
+	logNum = salmon::math::logSub(cdfNext, cdfCurr);
+	logDenom = denom;
+	return true;
+    } else {
+	logNum = salmon::math::LOG_0;
+	logDenom = salmon::math::LOG_0;
+	return false;
+    }
 }
 
 double FragmentStartPositionDistribution::totMass() const {
