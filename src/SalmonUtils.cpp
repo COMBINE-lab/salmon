@@ -6,6 +6,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <vector>
+#include <random>
 #include <boost/filesystem.hpp>
 #include <boost/range/join.hpp>
 

@@ -60,8 +60,6 @@ SalmonStringUtils.cpp
 set ( UNIT_TESTS_SRCS
     ${GAT_SOURCE_DIR}/tests/UnitTests.cpp
     FragmentLengthDistribution.cpp
-    SalmonUtils.cpp
-    LibraryFormat.cpp
 )
 
 
