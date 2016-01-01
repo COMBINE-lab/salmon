@@ -57,14 +57,14 @@ void initCountMap_(
         const size_t groupSize = tgroup.txps.size();
         if (tgroup.valid) {
             const std::vector<uint32_t>& txps = tgroup.txps;
-            const auto& auxs = eqClass.second.weights;
+            const auto& auxs = eqClass.second.combinedWeights;
 
             double denom = 0.0;
             if (BOOST_LIKELY(groupSize > 1)) {
 
                 for (size_t i = 0; i < groupSize; ++i) {
                     auto tid = txps[i];
-                    auto aux = auxs[i] * (1.0 / effLens(tid));
+                    auto aux = auxs[i];
                     denom += (priorAlpha + transcriptsIn[tid].mass(false)) * aux;
                     countMap[offset + i] = 0;
                 }
@@ -74,7 +74,7 @@ void initCountMap_(
 		   double norm = 1.0 / denom;
 		   for (size_t i = 0; i < groupSize; ++i) {
 		     auto tid = txps[i];
-		     auto aux = auxs[i] * (1.0 / effLens(tid));
+		     auto aux = auxs[i];
 		     probMap[offset + i] = norm *
                         ((priorAlpha + transcriptsIn[tid].mass(false)) * aux);
 		    }
@@ -127,7 +127,7 @@ void sampleRound_(
         const size_t groupSize = tgroup.txps.size();
         if (tgroup.valid) {
             const std::vector<uint32_t>& txps = tgroup.txps;
-            const auto& auxs = eqClass.second.weights;
+            const auto& auxs = eqClass.second.combinedWeights;
 
             double denom = 0.0;
             // If this is a single-transcript group,
@@ -145,7 +145,7 @@ void sampleRound_(
                 // For each transcript in the group
                 for (size_t i = 0; i < groupSize; ++i) {
                     auto tid = txps[i];
-                    auto aux = auxs[i] * (1.0 / effLens(tid));
+                    auto aux = auxs[i];
                     auto currCount = countMap[offset + i];
                     uint64_t currResamp = std::round(sampleFrac * currCount);
                     numResampled += currResamp;
@@ -160,7 +160,7 @@ void sampleRound_(
                     double norm = 1.0 / denom;
                     for (size_t i = 0; i < groupSize; ++i) {
                         auto tid = txps[i];
-                        auto aux = auxs[i] * (1.0 / effLens(tid));
+                        auto aux = auxs[i];
                         probMap[offset + i] = norm * ((priorAlpha + txpCount[tid]) * aux);
                     }
 

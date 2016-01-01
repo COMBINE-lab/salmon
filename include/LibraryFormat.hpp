@@ -96,6 +96,14 @@ public:
         id |= (0x7 &static_cast<uint8_t>(strandedness)) << 3;
         return id;
     }
+
 };
+
+inline bool operator==(const LibraryFormat& lhs,
+        const LibraryFormat& rhs) {
+    return ((lhs.type == rhs.type) and
+            (lhs.orientation == rhs.orientation) and
+            (lhs.strandedness == rhs.strandedness));
+}
 
 #endif // LIBRARY_FORMAT_HPP

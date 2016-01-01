@@ -233,13 +233,33 @@ void processMiniBatch(
             auto firstTranscriptID = alnGroup.alignments().front().transcriptID();
             std::unordered_set<size_t> observedTranscripts;
 
-            // EQCLASS
+            // New incompat. handling.
+            /**
+            // The equivalence class information for
+            // compatible fragments
+            std::vector<uint32_t> txpIDsCompat;
+            std::vector<double> auxProbsCompat;
+	        std::vector<double> posProbsCompat;
+            double auxDenomCompat = salmon::math::LOG_0;
+
+            // The equivalence class information for
+            // all fragments (if there is no compatible fragment)
+            std::vector<uint32_t> txpIDsAll;
+            std::vector<double> auxProbsAll;
+            std::vector<double> posProbsAll;
+            double auxDenomAll = salmon::math::LOG_0;
+
+            std::vector<uint32_t>* txpIDsFinal = nullptr;
+            std::vector<uint32_t>* txpIDsFinal = nullptr;
+            std::vector<uint32_t>* txpIDsFinal = nullptr;
+            double auxDenomFinal = salmon::math::LOG_0;
+            **/
+
             std::vector<uint32_t> txpIDs;
             std::vector<double> auxProbs;
-	    std::vector<double> posProbs;
-            double auxDenom = salmon::math::LOG_0;
+	        std::vector<double> posProbs;
+            double auxDenom= salmon::math::LOG_0;
 
-            double avgLogBias = salmon::math::LOG_0;
             uint32_t numInGroup{0};
             uint32_t prevTxpID{0};
 
@@ -282,27 +302,48 @@ void processMiniBatch(
 
                     // The probability that the fragments align to the given strands in the
                     // given orientations.
-                    double logAlignCompatProb = (useReadCompat) ?
-                                                (salmon::utils::logAlignFormatProb(aln.libFormat(), expectedLibraryFormat, salmonOpts.incompatPrior)) :
-                                                LOG_1;
+                    double logAlignCompatProb =
+                        (useReadCompat) ?
+                        (salmon::utils::logAlignFormatProb(
+                            aln.libFormat(),
+                            expectedLibraryFormat,
+                            static_cast<int32_t>(aln.pos),
+                            aln.fwd, aln.mateStatus, salmonOpts.incompatPrior)
+                         ) : LOG_1;
+
+                    /** New compat handling
+                    // True if the read is compatible with the
+                    // expected library type; false otherwise.
+                    bool compat = ignoreCompat;
+                    if (!compat) {
+                        if (aln.mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
+                            compat = salmon::utils::compatibleHit(
+                                    expectedLibType, observedLibType);
+                        } else {
+                            int32_t pos = static_cast<int32_t>(aln.pos);
+                            compat = salmon::utils::compatibleHit(
+                                    expectedLibraryFormat, pos,
+                                    aln.fwd, aln.mateStatus);
+                        }
+                    }
+                    **/
 
                     // Allow for a non-uniform fragment start position distribution
                     double startPosProb{-logRefLength};
-		    double fragStartLogNumerator{salmon::math::LOG_1};
-		    double fragStartLogDenominator{salmon::math::LOG_1};
+                    double fragStartLogNumerator{salmon::math::LOG_1};
+                    double fragStartLogDenominator{salmon::math::LOG_1};
 
                     auto hitPos = aln.hitPos();
                     if (useFSPD and burnedIn and hitPos < refLength) {
                         auto& fragStartDist = fragStartDists[transcript.lengthClassIndex()];
-			// Get the log(numerator) and log(denominator) for the fragment start position
-			// probability.
-			bool nonZeroProb = fragStartDist.logNumDenomMass(hitPos, refLength, logRefLength, 
-						      fragStartLogNumerator, fragStartLogDenominator);
-			// Set the overall probability.
-			startPosProb = (nonZeroProb) ? 
-					fragStartLogNumerator - fragStartLogDenominator : 
-					salmon::math::LOG_0;
-                        //startPosProb = fragStartDist(hitPos, refLength, logRefLength);
+                        // Get the log(numerator) and log(denominator) for the fragment start position
+                        // probability.
+                        bool nonZeroProb = fragStartDist.logNumDenomMass(hitPos, refLength, logRefLength,
+                                fragStartLogNumerator, fragStartLogDenominator);
+                        // Set the overall probability.
+                        startPosProb = (nonZeroProb) ?
+                            fragStartLogNumerator - fragStartLogDenominator :
+                            salmon::math::LOG_0;
                     }
 
                     // Increment the count of this type of read that we've seen
@@ -336,10 +377,10 @@ void processMiniBatch(
                     auxProbs.push_back(auxProb);
                     auxDenom = salmon::math::logAdd(auxDenom, auxProb);
 
-		    // If we're using the fragment start position distribution
-		    // remember *the numerator* of (x / cdf(effLen / len)) where 
-		    // x = cdf(p+1 / len) - cdf(p / len)
-		    if (useFSPD) { posProbs.push_back(std::exp(fragStartLogNumerator)); }
+                    // If we're using the fragment start position distribution
+                    // remember *the numerator* of (x / cdf(effLen / len)) where
+                    // x = cdf(p+1 / len) - cdf(p / len)
+                    if (useFSPD) { posProbs.push_back(std::exp(fragStartLogNumerator)); }
                 } else {
                     aln.logProb = LOG_0;
 
@@ -1292,7 +1333,7 @@ void quantifyLibrary(
                 totalAssignedFragments, salmonOpts.numBurninFrags);
 
 	// If we didn't have a sufficient number of samples for burnin,
-	// then also ignore modeling of the fragment start position 
+	// then also ignore modeling of the fragment start position
 	// distribution.
 	if (salmonOpts.useFSPD) {
 	  salmonOpts.useFSPD = false;
@@ -1653,9 +1694,11 @@ transcript abundance from RNA-seq reads
                     /** Currently no seq-specific bias correction with
                      *  FMD index.
                      */
-                    sopt.biasCorrect = false;
-                    jointLog->warn("Sequence-specific bias correction requires "
-                            "use of the quasi-index. Disabling bias correction");
+                    if (sopt.biasCorrect) {
+                        sopt.biasCorrect = false;
+                        jointLog->warn("Sequence-specific bias correction requires "
+                                "use of the quasi-index. Disabling bias correction");
+                    }
                     quantifyLibrary<SMEMAlignment>(experiment, greedyChain, memOptions, sopt, coverageThresh,
                             requiredObservations, sopt.numThreads);
                 }

@@ -29,6 +29,7 @@ extern "C" {
 #include "ReadLibrary.hpp"
 #include "TranscriptGeneMap.hpp"
 #include "GenomicFeature.hpp"
+#include "RapMapUtils.hpp"
 
 class ReadExperiment;
 class LibraryFormat;
@@ -41,7 +42,7 @@ using std::string;
 using NameVector = std::vector<string>;
 using IndexVector = std::vector<size_t>;
 using KmerVector = std::vector<uint64_t>;
-
+using MateStatus = rapmap::utils::MateStatus;
 
 // An enum class for direction to avoid potential errors
 // with keeping everything as a bool
@@ -166,8 +167,14 @@ void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
     void normalizeAlphas(const SalmonOpts& sopt,
                          AlnLibT& alnLib);
 
+    double logAlignFormatProb(const LibraryFormat observed,
+                              const LibraryFormat expected,
+                              int32_t start, bool isForward,
+                              rapmap::utils::MateStatus ms,
+                              double incompatPrior);
 
-    double logAlignFormatProb(const LibraryFormat observed, const LibraryFormat expected, double incompatPrior);
+    bool compatibleHit(const LibraryFormat expected, int32_t start, bool isForward, MateStatus ms);
+    bool compatibleHit(const LibraryFormat expected, const LibraryFormat observed);
 
     std::ostream& operator<<(std::ostream& os, OrphanStatus s);
     /**

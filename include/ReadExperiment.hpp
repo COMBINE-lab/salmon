@@ -226,6 +226,8 @@ class ReadExperiment {
 	    bwaidx_t* idx_ = salmonIndex_->bwaIndex();
 	    size_t numRecords = idx_->bns->n_seqs;
 	    std::vector<Transcript> transcripts_tmp;
+        //transcripts_tmp.reserve(numRecords);
+        //transcripts_.reserve(numRecords);
 
 	    fmt::print(stderr, "Index contained {} targets\n", numRecords);
 	    //transcripts_.resize(numRecords);
@@ -248,6 +250,7 @@ class ReadExperiment {
 	    nucTab[0] = 'A'; nucTab[1] = 'C'; nucTab[2] = 'G'; nucTab[3] = 'T';
 	    for (size_t i = 4; i < 256; ++i) { nucTab[i] = 'N'; }
 
+        size_t tnum = 0;
 	    // Load the transcript sequence from file
 	    for (auto& t : transcripts_tmp) {
 		    transcripts_.emplace_back(t.id, t.RefName.c_str(), t.RefLength, alpha);
@@ -267,7 +270,15 @@ class ReadExperiment {
 		    if (rseq != 0) {
 			    for (int64_t i = 0; i < compLen; ++i) { seq[i] = nucTab[rseq[i]]; }
 		    }
-		    auto& txp = transcripts_.back();
+
+            auto& txp = transcripts_.back();
+
+            // allocate space for the new copy
+            char* seqCopy = new char[seq.length()+1];
+            std::strcpy(seqCopy, seq.c_str());
+            txp.Sequence = seqCopy;
+            txp.freeSeqOnDestruct = false;
+
 		    txp.SAMSequence = salmon::stringtools::encodeSequenceInSAM(seq.c_str(), t.RefLength);
 		    // Length classes taken from
 		    // ======
@@ -297,6 +308,7 @@ class ReadExperiment {
 		       */
 		    free(rseq);
 		    /* end BWA code */
+            ++tnum;
 	    }
 
 	    // Since we have the de-coded reference sequences, we no longer need

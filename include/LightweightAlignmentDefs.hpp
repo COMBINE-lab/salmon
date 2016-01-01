@@ -3,14 +3,17 @@
 
 
 #include "BWAMemStaticFuncs.hpp"
+#include "RapMapUtils.hpp"
 
 class SMEMAlignment {
     public:
         SMEMAlignment() :
+            pos(0),
+            fwd(false),
+            mateIsFwd(false),
             transcriptID_(std::numeric_limits<TranscriptID>::max()),
             format_(LibraryFormat::formatFromID(0)),
             score_(0.0),
-            hitPos_(0),
             fragLength_(0),
             logProb(salmon::math::LOG_0),
             logBias(salmon::math::LOG_0){}
@@ -20,8 +23,9 @@ class SMEMAlignment {
                   int32_t hitPosIn = 0,
                   uint32_t fragLengthIn= 0,
                   double logProbIn = salmon::math::LOG_0) :
-            transcriptID_(transcriptIDIn), format_(format), score_(scoreIn),
-            hitPos_(hitPosIn), fragLength_(fragLengthIn), logProb(logProbIn) {}
+            pos(hitPosIn), fwd(false), mateIsFwd(false), transcriptID_(transcriptIDIn),
+            format_(format), score_(scoreIn),
+            fragLength_(fragLengthIn), logProb(logProbIn) {}
 
         SMEMAlignment(const SMEMAlignment& o) = default;
         SMEMAlignment(SMEMAlignment&& o) = default;
@@ -33,28 +37,31 @@ class SMEMAlignment {
         inline uint32_t fragLength() const { return fragLength_; }
         inline LibraryFormat libFormat() const { return format_; }
         inline double score() const { return score_; }
-        inline int32_t hitPos() const { return hitPos_; }
+        inline int32_t hitPos() const { return pos; }
         // inline double coverage() {  return static_cast<double>(kmerCount) / fragLength_; };
         uint32_t kmerCount;
         double logProb;
         double logBias;
         template <typename Archive>
         void save(Archive& archive) const {
-            archive(transcriptID_, format_.formatID(), score_, hitPos_, fragLength_);
+            archive(transcriptID_, format_.formatID(), score_, pos, fragLength_);
         }
 
         template <typename Archive>
         void load(Archive& archive) {
             uint8_t formatID;
-            archive(transcriptID_, formatID, score_, hitPos_, fragLength_);
+            archive(transcriptID_, formatID, score_, pos, fragLength_);
             format_ = LibraryFormat::formatFromID(formatID);
         }
 
+        rapmap::utils::MateStatus mateStatus;
+        int32_t pos;
+        bool fwd;
+        bool mateIsFwd;
     private:
         TranscriptID transcriptID_;
         LibraryFormat format_;
         double score_;
-        int32_t hitPos_;
         uint32_t fragLength_;
 };
 
@@ -534,7 +541,7 @@ void processMiniBatch(
         std::default_random_engine& randEng,
         bool initialRound,
         std::atomic<bool>& burnedIn
-        ); 
+        );
 
 template <typename CoverageCalculator>
 inline void collectHitsForRead(SalmonIndex* sidx, const bwtintv_v* a, smem_aux_t* auxHits,
@@ -984,6 +991,8 @@ inline void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_q
                 }
 
                 alnList.emplace_back(transcriptID, fmt, score, hitPos);
+                alnList.back().fwd = isForward;
+                alnList.back().mateStatus = rapmap::utils::MateStatus::PAIRED_END_LEFT;
                 readHits += score;
                 ++hitListCount;
                 ++leftHitCount;
@@ -1018,6 +1027,8 @@ inline void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_q
                 }
 
                 alnList.emplace_back(transcriptID, fmt, score, hitPos);
+                alnList.back().fwd = isForward;
+                alnList.back().mateStatus = rapmap::utils::MateStatus::PAIRED_END_RIGHT;
                 readHits += score;
                 ++hitListCount;
                 ++leftHitCount;
@@ -1122,6 +1133,9 @@ inline void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_q
                 // ANCHOR TEST
                 t.setAnchorFragment();
                 alnList.emplace_back(transcriptID, fmt, score, minHitPos, fragLength);
+                alnList.back().fwd = end1IsForward;
+                alnList.back().mateIsFwd = end2IsForward;
+                alnList.back().mateStatus = rapmap::utils::MateStatus::PAIRED_END_PAIRED;
                 ++readHits;
                 ++hitListCount;
             }
@@ -1271,6 +1285,8 @@ inline void getHitsForFragment(jellyfish::header_sequence_qual& frag,
             }
 
             alnList.emplace_back(transcriptID, fmt, score, hitPos);
+            alnList.back().fwd = isForward;
+            alnList.back().mateStatus = rapmap::utils::MateStatus::SINGLE_END;
             readHits += score;
             ++hitListCount;
             ++leftHitCount;

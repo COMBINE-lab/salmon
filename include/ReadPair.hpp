@@ -5,6 +5,7 @@
 #include "SalmonMath.hpp"
 #include "LibraryFormat.hpp"
 #include "SalmonUtils.hpp"
+#include "RapMapUtils.hpp"
 
 #include "spdlog/details/format.h"
 
@@ -43,7 +44,6 @@ struct ReadPair {
         return *this;
     }
 
-
    ReadPair(ReadPair& other) = default;
 
    ReadPair& operator=(ReadPair& other) = default;
@@ -64,6 +64,25 @@ struct ReadPair {
     inline bam_seq_t* get5PrimeRead() {
         return (isPaired() or isLeftOrphan()) ? read1 : nullptr;
     }
+
+    inline rapmap::utils::MateStatus mateStatus() const {
+        if (isPaired()) {
+            return rapmap::utils::MateStatus::PAIRED_END_PAIRED;
+        } else if (isLeftOrphan()) {
+            return rapmap::utils::MateStatus::PAIRED_END_LEFT;
+        } else if (isRightOrphan()) {
+            return rapmap::utils::MateStatus::PAIRED_END_RIGHT;
+        }
+
+        std::cerr << "ReadPair.hpp : mateStatus() --- should not get here ";
+        std::cerr << "this may be a bug.  Please report it\n";
+
+        return rapmap::utils::MateStatus::PAIRED_END_PAIRED;
+    }
+
+    inline int32_t pos() const { return left(); }
+    inline bool fwd() const { return !bam_strand(read1); }
+
     /**
       * returns 0 on success, -1 on failure.
       */

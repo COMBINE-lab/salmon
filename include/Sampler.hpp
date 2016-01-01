@@ -175,13 +175,25 @@ namespace salmon {
                                         }
                                     }
 
-                                    // The alignment probability is the product of a transcript-level term (based on abundance and) an alignment-level
-                                    // term below which is P(Q_1) * P(Q_2) * P(F | T)
-                                    double logRefLength = std::log(refLength);
+                                    // The alignment probability is the product of a
+                                    // transcript-level term (based on abundance and) an
+                                    // alignment-level term.
+                                    double logRefLength{salmon::math::LOG_0};
+                                    if (salmonOpts.noEffectiveLengthCorrection or !burnedIn) {
+                                        logRefLength = std::log(transcript.RefLength);
+                                    } else {
+                                        logRefLength = transcript.getCachedLogEffectiveLength();
+                                    }
 
-                                    double logAlignCompatProb = (salmonOpts.useReadCompat) ?
-                                        (salmon::utils::logAlignFormatProb(aln->libFormat(), expectedLibraryFormat, salmonOpts.incompatPrior)) :
-                                        LOG_1;
+
+                                    double logAlignCompatProb =
+                                        (salmonOpts.useReadCompat) ?
+                                        (salmon::utils::logAlignFormatProb(
+                                                  aln->libFormat(),
+                                                  expectedLibraryFormat,
+                                                  aln->pos(),
+                                                  aln->fwd(), aln->mateStatus(), salmonOpts.incompatPrior)
+                                        ) : LOG_1;
 
                                     // Adjustment to the likelihood due to the
                                     // error model

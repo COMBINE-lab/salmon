@@ -41,7 +41,18 @@ public:
         RefLength = other.RefLength;
         EffectiveLength = other.EffectiveLength;
         SAMSequence = other.SAMSequence;
+        // If this is an owned-resource, then move it
+        if (other.SAMSequence) {
+            other.SAMSequence = nullptr;
+        }
+
         Sequence = other.Sequence;
+        // If this is an owned-resource, then move it
+        if (other.freeSeqOnDestruct) {
+            freeSeqOnDestruct = true;
+            other.freeSeqOnDestruct = false;
+        }
+
         uniqueCount_.store(other.uniqueCount_);
         totalCount_.store(other.totalCount_.load());
         lastTimestepUpdated_.store(other.lastTimestepUpdated_.load());
@@ -55,7 +66,6 @@ public:
         avgMassBias_.store(other.avgMassBias_.load());
         hasAnchorFragment_.store(other.hasAnchorFragment_.load());
         active_ = other.active_;
-	freeSeqOnDestruct = other.freeSeqOnDestruct;
     }
 
     Transcript& operator=(Transcript&& other) {
@@ -65,7 +75,18 @@ public:
         RefLength = other.RefLength;
         EffectiveLength = other.EffectiveLength;
         SAMSequence = other.SAMSequence;
+        // If this is an owned-resource, then move it
+        if (other.SAMSequence) {
+            other.SAMSequence = nullptr;
+        }
+
         Sequence = other.Sequence;
+        // If this is an owned-resource, then move it
+        if (other.freeSeqOnDestruct) {
+            freeSeqOnDestruct = true;
+            other.freeSeqOnDestruct = false;
+        }
+
         uniqueCount_.store(other.uniqueCount_);
         totalCount_.store(other.totalCount_.load());
         lastTimestepUpdated_.store(other.lastTimestepUpdated_.load());
@@ -79,7 +100,6 @@ public:
         avgMassBias_.store(other.avgMassBias_.load());
         hasAnchorFragment_.store(other.hasAnchorFragment_.load());
         active_ = other.active_;
-	freeSeqOnDestruct = other.freeSeqOnDestruct;
         return *this;
     }
 

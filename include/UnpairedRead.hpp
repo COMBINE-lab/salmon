@@ -15,6 +15,7 @@ extern "C" {
 #include "StadenUtils.hpp"
 #include "SalmonMath.hpp"
 #include "LibraryFormat.hpp"
+#include "RapMapUtils.hpp"
 
 struct UnpairedRead {
    bam_seq_t* read = nullptr;
@@ -54,6 +55,14 @@ struct UnpairedRead {
    inline bool isLeftOrphan() const { return false; }
    inline bool isRightOrphan() const { return false; }
    inline bam_seq_t* get5PrimeRead() { return read; }
+
+
+   inline rapmap::utils::MateStatus mateStatus() const {
+       return rapmap::utils::MateStatus::SINGLE_END;
+   }
+
+   inline int32_t pos() const { return left(); }
+   inline bool fwd() const { return !bam_strand(read); }
 
     // return 0 on success, -1 on failure
     int writeToFile(scram_fd* fp) {

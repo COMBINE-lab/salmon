@@ -85,9 +85,20 @@ namespace utils {
 
 
 
-    double logAlignFormatProb(const LibraryFormat observed, const LibraryFormat expected, double incompatPrior) {
-        // Allow orphaned reads in a paired-end library, but
-        // decrease their a priori probability.
+    double logAlignFormatProb(const LibraryFormat observed,
+                              const LibraryFormat expected,
+                              int32_t start, bool isForward,
+                              rapmap::utils::MateStatus ms,
+                              double incompatPrior) {
+        // If we're dealing with a single end read.
+        bool compat {false};
+        if (ms != rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
+            compat = compatibleHit(expected, start, isForward, ms);
+        } else {
+            compat = compatibleHit(expected, observed);
+        }
+        return (compat) ? salmon::math::LOG_1 : incompatPrior;
+        /** Old compat code
         if (expected.type == ReadType::PAIRED_END and
             observed.type == ReadType::SINGLE_END) {
             double logOrphanProb = salmon::math::LOG_ORPHAN_PROB;
@@ -108,12 +119,6 @@ namespace utils {
                 if (expected.strandedness == observed.strandedness) {
                     return salmon::math::LOG_1;
                 } else {
-                    /**
-                    * Let's not complain about this for now, but find
-                    * a different way to report it.
-                    * std::cerr << "expected = " << expected << "\n";
-                    * std::cerr << "observed = " << observed << "\n";
-                    */
                     return incompatPrior;
                 }
             }
@@ -121,6 +126,92 @@ namespace utils {
 
         fmt::print(stderr, "WARNING: logAlignFormatProb --- should not get here");
         return salmon::math::LOG_0;
+        */
+    }
+
+    // for single end reads or orphans
+    bool compatibleHit(const LibraryFormat expected,
+            int32_t start, bool isForward, MateStatus ms) {
+        auto expectedStrand = expected.strandedness;
+        switch (ms) {
+            case MateStatus::SINGLE_END:
+                if (isForward) { // U, SF
+                    return (expectedStrand == ReadStrandedness::U or
+                            expectedStrand == ReadStrandedness::S);
+                } else { // U, SR
+                    return (expectedStrand == ReadStrandedness::U or
+                            expectedStrand == ReadStrandedness::A);
+                }
+                break;
+            case MateStatus::PAIRED_END_LEFT:
+                // "M"atching or same orientation is a special case
+                if (expected.orientation == ReadOrientation::SAME) {
+                    return (expectedStrand == ReadStrandedness::U
+                            or
+                            (expectedStrand == ReadStrandedness::S and isForward)
+                            or
+                            (expectedStrand == ReadStrandedness::A and !isForward));
+                } else if (isForward) { // IU, ISF, OU, OSF, MU, MSF
+                    return (expectedStrand == ReadStrandedness::U or
+                            expectedStrand == ReadStrandedness::S);
+                } else { // IU, ISR, OU, OSR, MU, MSR
+                    return (expectedStrand == ReadStrandedness::U or
+                            expectedStrand == ReadStrandedness::A);
+                }
+                break;
+            case MateStatus::PAIRED_END_RIGHT:
+                // "M"atching or same orientation is a special case
+                if (expected.orientation == ReadOrientation::SAME) {
+                    return (expectedStrand == ReadStrandedness::U
+                            or
+                            (expectedStrand == ReadStrandedness::S and isForward)
+                            or
+                            (expectedStrand == ReadStrandedness::A and !isForward));
+                } else if (isForward) { // IU, ISR, OU, OSR, MU, MSR
+                    return (expectedStrand == ReadStrandedness::U or
+                            expectedStrand == ReadStrandedness::A);
+                } else { // IU, ISF, OU, OSF, MU, MSF
+                    return (expectedStrand == ReadStrandedness::U or
+                            expectedStrand == ReadStrandedness::S);
+                }
+                break;
+            default:
+                // SHOULD NOT GET HERE
+                fmt::print(stderr, "WARNING: Could not associate known library type with read!\n");
+                return false;
+                break;
+        }
+        // SHOULD NOT GET HERE
+        fmt::print(stderr, "WARNING: Could not associate known library type with read!\n");
+        return false;
+    }
+
+
+    // for paired-end reads
+    bool compatibleHit(const LibraryFormat expected, const LibraryFormat observed) {
+        if (observed.type != ReadType::PAIRED_END) {
+            // SHOULD NOT GET HERE
+            fmt::print(stderr, "WARNING: PE compatibility function called with SE read!\n");
+            return false;
+        }
+
+        auto es = expected.strandedness;
+        auto eo = expected.orientation;
+
+        auto os = observed.strandedness;
+        auto oo = observed.orientation;
+
+        // If the orientations are different, they are incompatible
+        if (eo != oo) {
+            return false;
+        } else { // In this branch, the orientations are always compatible
+            return (es == ReadStrandedness::U or
+                    es == os);
+        }
+        // SHOULD NOT GET HERE
+        fmt::print(stderr, "WARNING: Could not determine strand compatibility!");
+        fmt::print(stderr, "please report this.\n");
+        return false;
     }
 
     template <typename ExpLib>

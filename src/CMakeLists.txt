@@ -57,6 +57,14 @@ SalmonUtils.cpp
 SalmonStringUtils.cpp
 )
 
+set ( UNIT_TESTS_SRCS
+    ${GAT_SOURCE_DIR}/tests/UnitTests.cpp
+    FragmentLengthDistribution.cpp
+    SalmonUtils.cpp
+    LibraryFormat.cpp
+)
+
+
 link_directories(
 ${GAT_SOURCE_DIR}/lib
 ${GAT_SOURCE_DIR}/external/install/lib
@@ -86,6 +94,8 @@ add_library(salmon_core STATIC ${SALMON_LIB_SRCS} )
 
 # Build the salmon executable
 add_executable(salmon ${SALMON_MAIN_SRCS} ${SALMON_ALIGN_SRCS})
+
+add_executable(unitTests ${UNIT_TESTS_SRCS})
 
 #add_executable(salmon-read ${SALMON_READ_SRCS})
 #set_target_properties(salmon-read PROPERTIES COMPILE_FLAGS "${CMAKE_CXX_FLAGS} -DHAVE_LIBPTHREAD -D_PBGZF_USE -fopenmp"
@@ -137,16 +147,61 @@ target_link_libraries(salmon
 
 add_dependencies(salmon libbwa)
 
+# Link the executable
+target_link_libraries(unitTests
+    salmon_core
+    gff
+    ${PTHREAD_LIB}
+    ${Boost_LIBRARIES}
+    ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
+    ${ZLIB_LIBRARY}
+    ${SUFFARRAY_LIB}
+    ${SUFFARRAY64_LIB}
+    ${GAT_SOURCE_DIR}/external/install/lib/libjellyfish-2.0.a
+    ${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
+    m
+    ${LIBLZMA_LIBRARIES}
+    ${BZIP2_LIBRARIES}
+    ${TBB_LIBRARIES}
+    ${LIBSALMON_LINKER_FLAGS}
+    ${NON_APPLECLANG_LIBS}
+    ${FAST_MALLOC_LIB}
+    )
+
 ##
 #  This ensures that the salmon executable should work with or without `make install`
 ##
+# Grumble grumble . . . OSX
 if (APPLE)
-	add_custom_command(TARGET salmon
-		POST_BUILD
-		COMMAND install_name_tool -add_rpath ${GAT_SOURCE_DIR}/external/install/lib salmon
-		COMMAND install_name_tool -add_rpath @executable_path/../lib salmon
-		)
+    # only attempt install_name_tool for tbb if we installed it
+    if (${TBB_LIBRARY_DIRS} MATCHES ${GAT_SOURCE_DIR}/external/install/lib)
+        add_custom_command(TARGET salmon
+            POST_BUILD
+            COMMAND install_name_tool -change libtbb.dylib @rpath/libtbb.dylib ${GAT_SOURCE_DIR}/build/src/salmon
+            COMMAND install_name_tool -change libtbbmalloc.dylib @rpath/libtbbmalloc.dylib ${GAT_SOURCE_DIR}/build/src/salmon
+            COMMAND install_name_tool -change libtbbmalloc_proxy.dylib @rpath/libtbbmalloc_proxy.dylib ${GAT_SOURCE_DIR}/build/src/salmon
+            COMMAND install_name_tool -add_rpath  ${GAT_SOURCE_DIR}/external/install/lib ${GAT_SOURCE_DIR}/build/src/salmon
+            )
+        add_custom_command(TARGET unitTests
+            POST_BUILD
+            COMMAND install_name_tool -change libtbb.dylib @rpath/libtbb.dylib ${GAT_SOURCE_DIR}/build/src/unitTests
+            COMMAND install_name_tool -change libtbbmalloc.dylib @rpath/libtbbmalloc.dylib ${GAT_SOURCE_DIR}/build/src/unitTests
+            COMMAND install_name_tool -change libtbbmalloc_proxy.dylib @rpath/libtbbmalloc_proxy.dylib ${GAT_SOURCE_DIR}/build/src/unitTests
+            COMMAND install_name_tool -add_rpath  ${GAT_SOURCE_DIR}/external/install/lib ${GAT_SOURCE_DIR}/build/src/unitTests
+            )
+    endif()
+else()
+    # related to complete static linking --- on hold    
+    set (BOOST_THREAD_LIBRARY)
 endif()
+
+#if (APPLE)
+#	add_custom_command(TARGET salmon
+#		POST_BUILD
+#		COMMAND install_name_tool -add_rpath ${GAT_SOURCE_DIR}/external/install/lib salmon
+#	COMMAND install_name_tool -add_rpath @executable_path/../lib salmon
+#		)
+#endif()
 
 ##### ======================================
 
@@ -165,14 +220,6 @@ install(DIRECTORY
         DESTINATION ${INSTALL_LIB_DIR}
 	    FILES_MATCHING PATTERN "libtbb*.${SHARED_LIB_EXTENSION}*"
     )
-if (APPLE)
-install(DIRECTORY
-        ${GAT_SOURCE_DIR}/external/install/lib/
-        DESTINATION ${INSTALL_LIB_DIR}
-	    FILES_MATCHING PATTERN "libcmph*.${SHARED_LIB_EXTENSION}*"
-       )
-endif()
-
 
 # install(FILES ${Boost_LIBRARIES}
 # 	           DESTINATION ${INSTALL_LIB_DIR})
@@ -182,6 +229,10 @@ install(TARGETS salmon salmon_core
                 LIBRARY DESTINATION lib
                 ARCHIVE DESTINATION lib
         )
+
+install(TARGETS unitTests
+        RUNTIME DESTINATION tests
+)
 
 set(POST_INSTALL_SCRIPT ${GAT_SOURCE_DIR}/cmake/PostInstall.cmake)
 
@@ -196,9 +247,9 @@ install(
 )
 
 include(InstallRequiredSystemLibraries)
+add_test( NAME unit_tests COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${CMAKE_INSTALL_PREFIX} -P ${GAT_SOURCE_DIR}/cmake/UnitTests.cmake )
 add_test( NAME salmon_read_test_fmd COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/TestSalmonFMD.cmake )
 add_test( NAME salmon_read_test_quasi COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/TestSalmonQuasi.cmake )
-
 
 ####
 #

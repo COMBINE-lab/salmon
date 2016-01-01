@@ -266,15 +266,26 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         //fragProb = std::max(fragProb, 1e-3);
                         //fragProb /= cdf(fragLengthDist, refLength);
 
-                        // The alignment probability is the product of a transcript-level term (based on abundance and) an alignment-level
-                        // term below which is P(Q_1) * P(Q_2) * P(F | T)
-                        double logRefLength = std::log(refLength);
+                        // The alignment probability is the product of a
+                        // transcript-level term (based on abundance and) an
+                        // alignment-level term.
+                        double logRefLength{salmon::math::LOG_0};
+                        if (salmonOpts.noEffectiveLengthCorrection or !burnedIn) {
+                            logRefLength = std::log(transcript.RefLength);
+                        } else {
+                            logRefLength = transcript.getCachedLogEffectiveLength();
+                        }
 
                         // The probability that the fragments align to the given strands in the
                         // given orientations.
-                        double logAlignCompatProb = (useReadCompat) ?
-                                (salmon::utils::logAlignFormatProb(aln->libFormat(), expectedLibraryFormat, salmonOpts.incompatPrior)) :
-                                LOG_1;
+                        double logAlignCompatProb =
+                            (useReadCompat) ?
+                            (salmon::utils::logAlignFormatProb(
+                                  aln->libFormat(),
+                                  expectedLibraryFormat,
+                                  aln->pos(),
+                                  aln->fwd(), aln->mateStatus(), salmonOpts.incompatPrior)
+                            ) : LOG_1;
 
                         // Adjustment to the likelihood due to the
                         // error model
@@ -294,11 +305,11 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 			  auto& fragStartDist = fragStartDists[transcript.lengthClassIndex()];
 			  // Get the log(numerator) and log(denominator) for the fragment start position
 			  // probability.
-			  bool nonZeroProb = fragStartDist.logNumDenomMass(hitPos, refLength, logRefLength, 
+			  bool nonZeroProb = fragStartDist.logNumDenomMass(hitPos, refLength, logRefLength,
 			      fragStartLogNumerator, fragStartLogDenominator);
 			  // Set the overall probability.
-			  startPosProb = (nonZeroProb) ? 
-			    fragStartLogNumerator - fragStartLogDenominator : 
+			  startPosProb = (nonZeroProb) ?
+			    fragStartLogNumerator - fragStartLogDenominator :
 			    salmon::math::LOG_0;
 			}
 
@@ -330,7 +341,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                             txpIDs.push_back(transcriptID);
                             auxProbs.push_back(auxProb);
                             auxDenom = salmon::math::logAdd(auxDenom, auxProb);
-			    
+
 			    if (useFSPD) {
 			      posProbs.push_back(fragStartLogNumerator);
 			    }
@@ -754,7 +765,7 @@ bool quantifyLibrary(
                 alnLib.numMappedFragments(), salmonOpts.numBurninFrags);
 
 	// If we didn't have a sufficient number of samples for burnin,
-	// then also ignore modeling of the fragment start position 
+	// then also ignore modeling of the fragment start position
 	// distribution.
 	if (salmonOpts.useFSPD) {
 	  salmonOpts.useFSPD = false;
