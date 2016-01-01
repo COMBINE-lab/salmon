@@ -1463,13 +1463,13 @@ int salmonQuantify(int argc, char *argv[]) {
                         "effective length correction when computing the probability that a fragment was generated "
                         "from a transcript.  If this flag is passed in, the fragment length distribution is not taken "
                         "into account when computing this probability.")
-    ("noFragLengthDist", po::bool_switch(&(sopt.noFragLengthDist))->default_value(false), "[Currently Experimental] : "
+    ("noFragLengthDist", po::bool_switch(&(sopt.noFragLengthDist))->default_value(false), "[experimental] : "
                         "Don't consider concordance with the learned fragment length distribution when trying to determine "
                         "the probability that a fragment has originated from a specified location.  Normally, Fragments with "
                          "unlikely lengths will be assigned a smaller relative probability than those with more likely "
                         "lengths.  When this flag is passed in, the observed fragment length has no effect on that fragment's "
                         "a priori probability.")
-    ("useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(false), "[Currently Experimental] : "
+    ("useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(false), "[experimental] : "
                         "Consider / model non-uniformity in the fragment start positions across the transcript.")
     ("numBiasSamples", po::value<int32_t>(&numBiasSamples)->default_value(1000000),
             "Number of fragment mappings to use when learning the sequence-specific bias model.")
@@ -1491,9 +1491,9 @@ int salmonQuantify(int argc, char *argv[]) {
                                         "boundary between two transcripts.  This can improve the  fragment hit-rate, but is usually not necessary.")
     ("useVBOpt", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
      			"traditional EM algorithm for optimization in the batch passes.")
-    ("numGibbsSamples", po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0), "[*super*-experimental]: Number of Gibbs sampling rounds to "
+    ("numGibbsSamples", po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0), "Number of Gibbs sampling rounds to "
      "perform.")
-    ("numBootstraps", po::value<uint32_t>(&(sopt.numBootstraps))->default_value(0), "[experimental]: Number of bootstrap samples to generate. Note: "
+    ("numBootstraps", po::value<uint32_t>(&(sopt.numBootstraps))->default_value(0), "Number of bootstrap samples to generate. Note: "
       "This is mutually exclusive with Gibbs sampling.");
 
     po::options_description testing("\n"
