@@ -83,8 +83,6 @@ namespace utils {
         return os;
     }
 
-
-
     double logAlignFormatProb(const LibraryFormat observed,
                               const LibraryFormat expected,
                               int32_t start, bool isForward,
@@ -1304,27 +1302,27 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm, boost::filesystem::pa
 
   bool headerLine{true};
   while (getline(expFile, l)) {
-    if (++ln % 1000 == 0) {
-      cerr << "\r\rParsed " << ln << " expression lines";
-    }
-    auto it = find_if(l.begin(), l.end(),
-	[](char c) -> bool {return !isspace(c);});
-    if (it != l.end()) {
-      if (*it == '#') {
-	comments.push_back(l);
-      } else {
-	// If this isn't the first non-comment line
-	if (!headerLine) {
-	  vector<string> toks = split(l);
-	  ExpressionRecord er(toks);
-	  auto gn = tgm.geneName(er.target);
-	  geneExps[gn].push_back(move(er));
-	} else { // treat the header line as a comment
-	  comments.push_back(l);
-	  headerLine = false;
-	}
+      if (++ln % 1000 == 0) {
+          cerr << "\r\rParsed " << ln << " expression lines";
       }
-    }
+      auto it = find_if(l.begin(), l.end(),
+              [](char c) -> bool {return !isspace(c);});
+      if (it != l.end()) {
+          if (*it == '#') {
+              comments.push_back(l);
+          } else {
+              // If this isn't the first non-comment line
+              if (!headerLine) {
+                  vector<string> toks = split(l);
+                  ExpressionRecord er(toks);
+                  auto gn = tgm.geneName(er.target);
+                  geneExps[gn].push_back(move(er));
+              } else { // treat the header line as a comment
+                  comments.push_back(l);
+                  headerLine = false;
+              }
+          }
+      }
   }
   cerr << "\ndone\n";
   expFile.close();
@@ -1358,21 +1356,21 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm, boost::filesystem::pa
 
     // If this gene was expressed
     if (totalTPM > minTPM) {
-      geneLength = 0.0;
-      geneEffLength = 0.0;
-      for (auto& tranExp : kv.second) {
-	double frac = tranExp.expVals[tpmIdx] / totalTPM;
-	geneLength += tranExp.length * frac;
-	geneEffLength += tranExp.effLength * frac;
-      }
+        geneLength = 0.0;
+        geneEffLength = 0.0;
+        for (auto& tranExp : kv.second) {
+            double frac = tranExp.expVals[tpmIdx] / totalTPM;
+            geneLength += tranExp.length * frac;
+            geneEffLength += tranExp.effLength * frac;
+        }
     } else {
-      geneLength = 0.0;
-      geneEffLength = 0.0;
-      double frac = 1.0 / kv.second.size();
-      for (auto& tranExp : kv.second) {
-	geneLength += tranExp.length * frac;
-	geneEffLength += tranExp.effLength * frac;
-      }
+        geneLength = 0.0;
+        geneEffLength = 0.0;
+        double frac = 1.0 / kv.second.size();
+        for (auto& tranExp : kv.second) {
+            geneLength += tranExp.length * frac;
+            geneEffLength += tranExp.effLength * frac;
+        }
     }
 
     // Otherwise, if the gene wasn't expressed, the length

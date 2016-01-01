@@ -922,7 +922,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "specifies that alignments that disagree with the library type should be \"impossible\", "
                         "while setting it to 1 says that alignments that disagree with the library type are no "
                         "less likely than those that do")
-    ("useErrorModel", po::bool_switch(&(sopt.useErrorModel))->default_value(false), "[Currently Experimental] : "
+    ("useErrorModel", po::bool_switch(&(sopt.useErrorModel))->default_value(false), "[experimental] : "
                         "Learn and apply an error model for the aligned reads.  This takes into account the "
                         "the observed frequency of different types of mismatches when computing the likelihood of "
                         "a given alignment.")
@@ -963,13 +963,13 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "effective length correction when computing the probability that a fragment was generated "
                         "from a transcript.  If this flag is passed in, the fragment length distribution is not taken "
                         "into account when computing this probability.")
-    ("noFragLengthDist", po::bool_switch(&(sopt.noFragLengthDist))->default_value(false), "[Currently Experimental] : "
+    ("noFragLengthDist", po::bool_switch(&(sopt.noFragLengthDist))->default_value(false), "[experimental] : "
                         "Don't consider concordance with the learned fragment length distribution when trying to determine "
                         "the probability that a fragment has originated from a specified location.  Normally, Fragments with "
                          "unlikely lengths will be assigned a smaller relative probability than those with more likely "
                         "lengths.  When this flag is passed in, the observed fragment length has no effect on that fragment's "
                         "a priori probability.")
-    ("useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(false), "[Currently Experimental] : "
+    ("useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(false), "[experimental] : "
                         "Consider / model non-uniformity in the fragment start positions "
                         "across the transcript.")
     /*
@@ -998,9 +998,9 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "fragment assignment ambiguity into account, you should use this output.")
     ("sampleUnaligned,u", po::bool_switch(&(sopt.sampleUnaligned))->default_value(false), "In addition to sampling the aligned reads, also write "
                         "the un-aligned reads to \"posSample.bam\".")
-    ("numGibbsSamples", po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0), "[*super*-experimental]: Number of Gibbs sampling rounds to "
+    ("numGibbsSamples", po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0), "Number of Gibbs sampling rounds to "
      "perform.")
-    ("numBootstraps", po::value<uint32_t>(&(sopt.numBootstraps))->default_value(0), "[experimental]: Number of bootstrap samples to generate. Note: "
+    ("numBootstraps", po::value<uint32_t>(&(sopt.numBootstraps))->default_value(0), "Number of bootstrap samples to generate. Note: "
       "This is mutually exclusive with Gibbs sampling.");
 
     po::options_description testing("\n"
