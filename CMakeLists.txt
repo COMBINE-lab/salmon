@@ -560,9 +560,9 @@ if (NOT HAVE_FAST_MALLOC)
     message("==================================================================")
     ExternalProject_Add(libjemalloc
         DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-        DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/jemalloc/archive/3.6.0.tar.gz -o jemalloc-3.6.0.tar.gz &&
-        tar -xzf jemalloc-3.6.0.tar.gz
-        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-3.6.0
+        DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/jemalloc/archive/4.0.4.tar.gz -o jemalloc-4.0.4.tar.gz &&
+        tar -xzf jemalloc-4.0.4.tar.gz
+        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-4.0.4
         BUILD_IN_SOURCE TRUE
         INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
         CONFIGURE_COMMAND sh -c "CC=${CMAKE_C_COMPILER} ./autogen.sh --prefix=<INSTALL_DIR>"

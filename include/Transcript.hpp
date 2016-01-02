@@ -20,7 +20,7 @@ public:
         mass_(salmon::math::LOG_0), sharedCount_(0.0),
         avgMassBias_(salmon::math::LOG_0),
         active_(false),
-	freeSeqOnDestruct(false){
+    	freeSeqOnDestruct(false){
             uniqueCount_.store(0);
             lastUpdate_.store(0);
             lastTimestepUpdated_.store(0);
@@ -51,6 +51,7 @@ public:
         if (other.freeSeqOnDestruct) {
             freeSeqOnDestruct = true;
             other.freeSeqOnDestruct = false;
+            other.Sequence = nullptr;
         }
 
         uniqueCount_.store(other.uniqueCount_);
@@ -85,6 +86,7 @@ public:
         if (other.freeSeqOnDestruct) {
             freeSeqOnDestruct = true;
             other.freeSeqOnDestruct = false;
+            other.Sequence = nullptr;
         }
 
         uniqueCount_.store(other.uniqueCount_);
