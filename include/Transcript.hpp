@@ -13,6 +13,15 @@
 
 class Transcript {
 public:
+    Transcript() : RefName(""), RefLength(0), EffectiveLength(-1.0), id(std::numeric_limits<uint32_t>::max()), 
+	SAMSequence(nullptr), Sequence(nullptr),
+        logPerBasePrior_(salmon::math::LOG_0),
+        priorMass_(salmon::math::LOG_0),
+        mass_(salmon::math::LOG_0), sharedCount_(0.0),
+        avgMassBias_(salmon::math::LOG_0),
+        active_(false),
+    	freeSeqOnDestruct(false){}
+    
     Transcript(size_t idIn, const char* name, uint32_t len, double alpha = 0.05) :
         RefName(name), RefLength(len), EffectiveLength(-1.0), id(idIn), SAMSequence(nullptr), Sequence(nullptr),
         logPerBasePrior_(std::log(alpha)),
