@@ -9,7 +9,7 @@ containing your reads.  Optionally, Salmon can make use of pre-computed
 alignments (in the form of a SAM/BAM file) to the transcripts rather than the
 raw reads.
 
-The **lightweight-alignment**-based mode of Salmon runs in two phases; indexing and
+The **quasi-mapping**-based mode of Salmon runs in two phases; indexing and
 quantification. The indexing step is independent of the reads, and only need to
 be run one for a particular set of reference transcripts. The quantification
 step, obviously, is specific to the set of RNA-seq reads and is thus run more
@@ -58,11 +58,11 @@ set of alignments.
     8 --- 12 threads results in the maximum speed, threads allocated above this
     limit will likely spend most of their time idle / sleeping.
 
-    For lightweight-alignment-based Salmon, the story is somewhat different.
+    For quasi-mapping-based Salmon, the story is somewhat different.
     Generally, performance continues to improve as more threads are made
     available.  This is because the determiniation of the potential mapping
     locations of each read is, generally, the slowest step in
-    lightweight-alignment-based quantification.  Since this process is
+    quasi-mapping-based quantification.  Since this process is
     trivially parallelizable (and well-parallelized within Salmon), more
     threads generally equates to faster quantification. However, there may
     still be a limit to the return on invested threads. Specifically, writing
@@ -72,27 +72,27 @@ set of alignments.
     more than the required number of observations, or if you have reason to
     suspect that your disk is particularly slow on writes, then you can disable
     the mapping cache (``--disableMappingCache``), and potentially increase the
-    parallelizability of lightweight-alignment-based Salmon.
+    parallelizability of quasi-mapping-based Salmon.
 
-Lightweight-alignment-based mode (including quasimapping)
+Quasi-mapping-based mode (including lightweight alignment)
 ---------------------------------------------------------
 
 One of the novel and innovative features of Salmon is its ability to accurately
-quantify transcripts using *lightweight* alignments.  Lightweight alignments
+quantify transcripts using *quasi-mappings*. Quasi-mappings 
 are mappings of reads to transcript positions that are computed without
-performing a base-to-base alignment of the read to the transcript.  Lightweight 
-alignments are typically much faster to compute than traditional (or full)
+performing a base-to-base alignment of the read to the transcript.  Quasi-mapping
+is typically **much** faster to compute than traditional (or full)
 alignments, and can sometimes provide superior accuracy by being more robust 
 to errors in the read or genomic variation from the reference sequence.
 
-Salmon currently supports two different methods for lightweight-alignment; 
-SMEM-based mapping and quasi-mapping.  SMEM-based mapping is the original 
+Salmon currently supports two different methods for mapping reads to transcriptomes;
+(SMEM-based) lightweight-alignment and quasi-mapping.  SMEM-based mapping is the original 
 lightweight-alignment method used by Salmon, and quasi-mapping is a newer and 
 considerably faster alternative.  Both methods are currently exposed via the 
 same ``quant`` command, but the methods require different indices so that 
 SMEM-based mapping cannot be used with a quasi-mapping index and vice-versa.
 
-If you want to use Salmon in lightweight alignment-based mode, then you first
+If you want to use Salmon in quasi-mapping-based mode, then you first
 have to build an Salmon index for your transcriptome.  Assume that
 ``transcripts.fa`` contains the set of transcripts you wish to quantify. First,
 you run the Salmon indexer:
@@ -111,15 +111,18 @@ to work well for reads of 75bp or longer, but you might consider a smaller
 `k` parameter that can be passed to the ``quant`` command.  However, this has
 no effect if one is using a quasi-mapping index, as the `k` value provided
 during the index building phase overrides any `k` provided during
-quantification in this case.
+quantification in this case.  Since quasi-mapping is the default index type in 
+Salmon, you can actually leave off the ``--type quasi`` parameter when building 
+the index.  To build a lightweight-alignment (FMD-based) index instead, one
+would use the following command:
 
 ::
     
     > ./bin/salmon index -t transcripts.fa -i transcripts_index --type fmd
 
-This will build the SMEM-based mapping index.  Note that no value of `k` 
-is given here.  However, the SMEM-based mapping index makes use of a parameter 
-`k` that is passed in during the ``quant`` phase (the default value is `19`). 
+Note that no value of `k` is given here.  However, the SMEM-based mapping index
+makes use of a parameter `k` that is passed in during the ``quant`` phase (the
+default value is `19`). 
 
 Then, you can quantify any set of reads (say, paired-end reads in files
 `reads1.fq` and `reads2.fq`) directly against this index using the Salmon
@@ -261,6 +264,36 @@ classes rather than bootstrapping.  We are currently analyzing these different a
 to assess the potential trade-offs in time / accuracy.  The ``--numBootstraps`` and
 ``--numGibbsSamples`` options are mutually exclusive (i.e. in a given run, you must
 set at most one of these options to a positive integer.)
+
+"""""""""""""""""""""
+``--biasCorrect``
+"""""""""""""""""""""
+
+Passing the ``--biasCorrect`` flag to Salmon will enable it to learn and correct 
+for sequence-specific biases in the input data.  Specifically, this model will 
+attempt to correct for random hexamer priming bias, which results in the preferential
+sequencing of fragments starting with certain nucleotide motifs.  By default, Salmon
+learns the sequence-specific bias parameters using 1,000,000 reads from the beginning
+of the input.  If you wish to change the number of samples from which the model is 
+learned, you can use the ``--numBiasSamples`` parameter. *Note*: This sequence-specific
+bias model is substantially different from the bias-correction methodology that 
+was used in Salmon versions prior to 0.6.0 (and Sailfish versions prior to 0.9.0).
+This model specifically accounts for sequence-specific bias, and should not be 
+prone to the over-fitting problem that was sometimes observed using the previous 
+bias-correction methodology.
+
+"""""""""""""""""""""
+``--useFSPD``
+"""""""""""""""""""""
+
+Passing the ``--useFSPD`` flag to Salmon will enable modeling of a position-specific 
+fragment start distribution.  This is meant to model non-uniform coverage biases
+that are sometimes present in RNA-seq data (e.g. 5' or 3' positional bias).  Currently, 
+a single global model is learned and applied to all transcripts, as there is typically 
+not enough information to learn a separate model for each transcript.  However, modeling 
+the effect in this manner can still be helpful when there is a global bias in coverage.
+In the future, we will potentially be exploring more fine-grained positional bias 
+models.
 
 
 What's this ``LIBTYPE``?
