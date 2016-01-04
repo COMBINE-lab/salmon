@@ -126,7 +126,7 @@ protected:
     // Update the type of the current file and move past first header
     // to beginning of sequence.
     file_type type1 = peek_file_type(*st.stream1);
-    file_type type2 = peek_file_type(*st.stream1);
+    file_type type2 = peek_file_type(*st.stream2);
     if(type1 == DONE_TYPE || type2 == DONE_TYPE)
       return open_next_files(st);
     if(type1 != type2)
