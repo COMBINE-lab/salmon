@@ -51,12 +51,12 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs) {
             if (it == nameToID.end()) {
                 std::cerr << "WARNING: Transcript " << name << " appears in the reference but did not appear in the BAM\n";
             } else {
-	      
+
 	      std::string& seq = j->data[i].seq;
               size_t readLen = seq.length();
 
-	      refs[it->second].SAMSequence = salmon::stringtools::encodeSequenceInSAM(seq.c_str(), readLen);
-	      
+	      refs[it->second].setSAMSequenceOwned(salmon::stringtools::encodeSequenceInSAM(seq.c_str(), readLen));
+
 	      // Replace non-ACGT bases
 	      for (size_t b = 0; b < readLen; ++b) {
 		seq[b] = ::toupper(seq[b]);
@@ -71,10 +71,9 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs) {
 	      }
 
 	      // allocate space for the new copy
-	      char* seqCopy = new char[seq.length()+1]; 
-	      std::strcpy(seqCopy, seq.c_str()); 
-	      refs[it->second].Sequence = seqCopy;
-	      refs[it->second].freeSeqOnDestruct = true;
+	      char* seqCopy = new char[seq.length()+1];
+	      std::strcpy(seqCopy, seq.c_str());
+	      refs[it->second].setSequenceOwned(seqCopy);
 	      // seqCopy will only be freed when the transcript is destructed!
             }
         }

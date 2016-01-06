@@ -407,7 +407,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                                     auto dir = salmon::utils::boolToDirection(fwd);
 
                                     if (startPos > 0 and startPos < transcript.RefLength) {
-                                        const char* txpStart = transcript.Sequence;
+                                        const char* txpStart = transcript.Sequence();
                                         const char* readStart = txpStart + startPos;
                                         const char* txpEnd = txpStart + transcript.RefLength;
                                         bool success = readBias.update(txpStart, readStart, txpEnd, dir);

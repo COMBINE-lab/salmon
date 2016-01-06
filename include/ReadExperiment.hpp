@@ -199,7 +199,7 @@ class ReadExperiment {
 		    //auto txpSeq = idx_->seq.substr(idx_->txpOffsets[i], len);
 
 		    // Set the transcript sequence
-		    txp.Sequence = idx_->seq.c_str() + idx_->txpOffsets[i];
+		    txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i]);
 		    // Length classes taken from
 		    // ======
 		    // Roberts, Adam, et al.
@@ -276,10 +276,9 @@ class ReadExperiment {
             // allocate space for the new copy
             char* seqCopy = new char[seq.length()+1];
             std::strcpy(seqCopy, seq.c_str());
-            txp.Sequence = seqCopy;
-            txp.freeSeqOnDestruct = false;
+            txp.setSequenceOwned(seqCopy);
+		    txp.setSAMSequenceOwned(salmon::stringtools::encodeSequenceInSAM(seq.c_str(), t.RefLength));
 
-		    txp.SAMSequence = salmon::stringtools::encodeSequenceInSAM(seq.c_str(), t.RefLength);
 		    // Length classes taken from
 		    // ======
 		    // Roberts, Adam, et al.
