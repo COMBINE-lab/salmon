@@ -1178,7 +1178,7 @@ Eigen::VectorXd updateEffectiveLengths(ReadExpT& readExp,
     uint32_t idx{0};
 
     // This transcript's sequence
-    const char* tseq = transcripts[it].Sequence;
+    const char* tseq = transcripts[it].Sequence();
     if (!tseq) {
         std::cerr << "Transcript " << transcripts[it].RefName << " had no sequence available.\n";
         std::cerr << "To enable sequence-specific bias correction, you must provide a "
@@ -1236,7 +1236,7 @@ Eigen::VectorXd updateEffectiveLengths(ReadExpT& readExp,
       bool firstKmer{true};
       uint32_t idx{0};
       // This transcript's sequence
-      const char* tseq = transcripts[it].Sequence;
+      const char* tseq = transcripts[it].Sequence();
 
       for (int32_t i = 0; i < elen - K; ++i) {
 	if (firstKmer) {

@@ -681,7 +681,7 @@ void processReadsQuasi(paired_parser* parser,
 
 	      auto& t = transcripts[h.tid];
 	      if (startPos > 0 and startPos < t.RefLength) {
-		const char* txpStart = t.Sequence;
+		const char* txpStart = t.Sequence();
 		const char* readStart = txpStart + startPos;
 		const char* txpEnd = txpStart + t.RefLength;
 		bool success = readBias.update(txpStart, readStart, txpEnd, dir);
@@ -857,7 +857,7 @@ void processReadsQuasi(single_parser* parser,
 
 	      auto& t = transcripts[h.tid];
 	      if (startPos > 0 and startPos < t.RefLength) {
-		const char* txpStart = t.Sequence;
+		const char* txpStart = t.Sequence();
 		const char* readStart = txpStart + startPos;
 		const char* txpEnd = txpStart + t.RefLength;
 		bool success = readBias.update(txpStart, readStart, txpEnd, dir);

@@ -7,7 +7,7 @@ There are numerous library preparation protocols for RNA-seq that result in
 sequencing reads with different characteristics.  For example, reads can be
 single end (only one side of a fragment is recorded as a read) or paired-end
 (reads are generated from both ends of a fragment).  Further, the sequencing
-reads themselves may be unstraned or strand-specific.  Finally, paired-end
+reads themselves may be unstranded or strand-specific.  Finally, paired-end
 protocols will have a specified relative orientation.  To characterize the
 various different typs of sequencing libraries, we've created a miniature
 "language" that allows for the succinct description of the many different types

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include "SalmonStringUtils.hpp"
 #include "SalmonUtils.hpp"
 #include "SalmonMath.hpp"
@@ -13,45 +14,48 @@
 
 class Transcript {
 public:
+
+    Transcript() :
+        RefName(nullptr), RefLength(std::numeric_limits<uint32_t>::max()),
+        EffectiveLength(-1.0), id(std::numeric_limits<uint32_t>::max()),
+        logPerBasePrior_(salmon::math::LOG_0),
+        priorMass_(salmon::math::LOG_0),
+        mass_(salmon::math::LOG_0), sharedCount_(0.0),
+        avgMassBias_(salmon::math::LOG_0),
+        active_(false){
+            uniqueCount_.store(0);
+            lastUpdate_.store(0);
+            lastTimestepUpdated_.store(0);
+            cachedEffectiveLength_.store(salmon::math::LOG_0);
+        }
+
+
     Transcript(size_t idIn, const char* name, uint32_t len, double alpha = 0.05) :
-        RefName(name), RefLength(len), EffectiveLength(-1.0), id(idIn), SAMSequence(nullptr), Sequence(nullptr),
+        RefName(name), RefLength(len), EffectiveLength(-1.0), id(idIn),
         logPerBasePrior_(std::log(alpha)),
         priorMass_(std::log(alpha*len)),
         mass_(salmon::math::LOG_0), sharedCount_(0.0),
         avgMassBias_(salmon::math::LOG_0),
-        active_(false),
-	freeSeqOnDestruct(false){
+        active_(false){
             uniqueCount_.store(0);
             lastUpdate_.store(0);
             lastTimestepUpdated_.store(0);
             cachedEffectiveLength_.store(std::log(static_cast<double>(RefLength)));
         }
 
-    ~Transcript() {
-      // Free the sequence if it belongs to us
-      if (freeSeqOnDestruct) { delete [] Sequence; }
-      // Free the SAMSequence if it exists
-      if (SAMSequence) { delete [] SAMSequence; }
-    }
+    // We cannot copy; only move
+    Transcript(Transcript& other) = delete;
+    Transcript& operator=(Transcript& other) = delete;
 
     Transcript(Transcript&& other) {
         id = other.id;
-        //std::swap(RefName, other.RefName);
+
         RefName = std::move(other.RefName);
         RefLength = other.RefLength;
         EffectiveLength = other.EffectiveLength;
-        SAMSequence = other.SAMSequence;
-        // If this is an owned-resource, then move it
-        if (other.SAMSequence) {
-            other.SAMSequence = nullptr;
-        }
 
-        Sequence = other.Sequence;
-        // If this is an owned-resource, then move it
-        if (other.freeSeqOnDestruct) {
-            freeSeqOnDestruct = true;
-            other.freeSeqOnDestruct = false;
-        }
+        SAMSequence_ = std::move(other.SAMSequence_);
+        Sequence_ = std::move(other.Sequence_);
 
         uniqueCount_.store(other.uniqueCount_);
         totalCount_.store(other.totalCount_.load());
@@ -70,22 +74,12 @@ public:
 
     Transcript& operator=(Transcript&& other) {
         id = other.id;
-        //std::swap(RefName, other.RefName);
+
         RefName = std::move(other.RefName);
         RefLength = other.RefLength;
         EffectiveLength = other.EffectiveLength;
-        SAMSequence = other.SAMSequence;
-        // If this is an owned-resource, then move it
-        if (other.SAMSequence) {
-            other.SAMSequence = nullptr;
-        }
-
-        Sequence = other.Sequence;
-        // If this is an owned-resource, then move it
-        if (other.freeSeqOnDestruct) {
-            freeSeqOnDestruct = true;
-            other.freeSeqOnDestruct = false;
-        }
+        SAMSequence_ = std::move(other.SAMSequence_);
+        Sequence_ = std::move(other.Sequence_);
 
         uniqueCount_.store(other.uniqueCount_);
         totalCount_.store(other.totalCount_.load());
@@ -127,20 +121,21 @@ public:
         using salmon::stringtools::encodedRevComp;
         size_t byte = idx >> 1;
         size_t nibble = idx & 0x1;
+        uint8_t* sseq = SAMSequence_.get();
 
         switch(dir) {
         case strand::forward:
             if (nibble) {
-                return SAMSequence[byte] & 0x0F;
+                return sseq[byte] & 0x0F;
             } else {
-                return ((SAMSequence[byte] & 0xF0) >> 4) & 0x0F;
+                return ((sseq[byte] & 0xF0) >> 4) & 0x0F;
             }
             break;
         case strand::reverse:
             if (nibble) {
-                return encodedRevComp[SAMSequence[byte] & 0x0F];
+                return encodedRevComp[sseq[byte] & 0x0F];
             } else {
-                return encodedRevComp[((SAMSequence[byte] & 0xF0) >> 4) & 0x0F];
+                return encodedRevComp[((sseq[byte] & 0xF0) >> 4) & 0x0F];
             }
             break;
         }
@@ -289,6 +284,47 @@ public:
         return hasAnchorFragment_.load();
     }
 
+    // Will *not* delete seq on destruction
+    void setSequenceBorrowed(const char* seq) {
+        Sequence_ = std::unique_ptr<const char, void(*)(const char*)>(
+                seq,                 // store seq
+                [](const char* p) {} // do nothing deleter
+                );
+    }
+
+    // Will delete seq on destruction
+    void setSequenceOwned(const char* seq) {
+        Sequence_ = std::unique_ptr<const char, void(*)(const char*)>(
+                seq,                 // store seq
+                [](const char* p) { delete [] p; } // do nothing deleter
+                );
+    }
+
+    // Will *not* delete seq on destruction
+    void setSAMSequenceBorrowed(uint8_t* seq) {
+        SAMSequence_ = std::unique_ptr<uint8_t, void(*)(uint8_t*)>(
+                seq,                 // store seq
+                [](uint8_t* p) {} // do nothing deleter
+                );
+    }
+
+    // Will delete seq on destruction
+    void setSAMSequenceOwned(uint8_t* seq) {
+        SAMSequence_ = std::unique_ptr<uint8_t, void(*)(uint8_t*)>(
+                seq,                 // store seq
+                [](uint8_t* p) { delete [] p; } // do nothing deleter
+                );
+    }
+
+    const char* Sequence() const {
+        return Sequence_.get();
+    }
+
+    uint8_t* SAMSequence() const {
+        return SAMSequence_.get();
+    }
+
+
     std::string RefName;
     uint32_t RefLength;
     double EffectiveLength;
@@ -299,11 +335,12 @@ public:
     double projectedCounts{0.0};
     double sharedCounts{0.0};
 
-    uint8_t* SAMSequence;
-    const char* Sequence;
-    bool freeSeqOnDestruct;
-
 private:
+    std::unique_ptr<uint8_t, void(*)(uint8_t*)> SAMSequence_ =
+        std::unique_ptr<uint8_t, void(*)(uint8_t*)> (nullptr, [](uint8_t*){});
+
+    std::unique_ptr<const char, void(*)(const char*)> Sequence_ =
+        std::unique_ptr<const char, void(*)(const char*)> (nullptr, [](const char*){});
     std::atomic<size_t> uniqueCount_;
     std::atomic<size_t> totalCount_;
     // The most recent timestep at which this transcript's mass was updated.

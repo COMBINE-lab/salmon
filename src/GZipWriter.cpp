@@ -93,7 +93,6 @@ bool GZipWriter::writeMeta(
 
   }
 
-  // TODO v0.6.0: Write these out
   bfs::path fldPath = auxDir / "fld.gz";
   int32_t numFLDSamples{10000};
   auto fldSamples = salmon::utils::samplesFromLogPMF(
@@ -126,7 +125,6 @@ bool GZipWriter::writeMeta(
       auto& transcripts = experiment.transcripts();
       oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
       oa(cereal::make_nvp("samp_type", sampType));
-      // TODO v0.6.0: Write these out
       oa(cereal::make_nvp("frag_dist_length", fldSamples.size()));
       oa(cereal::make_nvp("bias_correct", opts.biasCorrect));
       oa(cereal::make_nvp("num_bias_bins", bcounts.size()));
