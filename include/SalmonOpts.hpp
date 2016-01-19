@@ -33,6 +33,8 @@ struct SalmonOpts {
 
     bool allowOrphans; // Consider orphaned reads when performing lightweight alignemnt.
 
+    std::string auxDir; // The directory where auxiliary files will be written.
+
     bool splitSpanningSeeds; // Attempt to split seeds that span multiple transcripts.
 
     bool noFragLengthDist ; // Don't give a fragment assignment a likelihood based on an emperically

@@ -1449,6 +1449,8 @@ int salmonQuantify(int argc, char *argv[]) {
                                         "for very large read libraries, the mapping cache is unnecessary, and disabling it may allow salmon to more effectively "
                                         "make use of a very large number of threads.")
     */
+    ("auxDir", po::value<std::string>(&(sopt.auxDir))->default_value("aux"), "The sub-directory of the quantification directory where auxiliary information "
+     			"e.g. bootstraps, bias parameters, etc. will be written.")
     ("fldMax" , po::value<size_t>(&(sopt.fragLenDistMax))->default_value(800), "The maximum fragment length to consider when building the empirical "
      											      "distribution")
     ("fldMean", po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(200), "The mean used in the fragment length distribution prior")
