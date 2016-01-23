@@ -444,7 +444,6 @@ void processMiniBatch(
                 }
 
 
-		// If we're doing fragment GC bias correction. 
                 if (gcBiasCorrect and aln.libFormat().type == ReadType::PAIRED_END) {
                     int32_t start = std::min(aln.pos, aln.matePos);
                     int32_t stop = start + aln.fragLen;
@@ -713,24 +712,24 @@ void processReadsQuasi(paired_parser* parser,
 	    // If bias correction is turned on, and we haven't sampled a mapping
 	    // for this read yet, and we haven't collected the required number of
 	    // samples overall.
-	    if(needBiasSample and salmonOpts.numBiasSamples > 0){
-	      // the "start" position is the leftmost position if
-	      // we hit the forward strand, and the leftmost
-	      // position + the read length if we hit the reverse complement
-	      int32_t startPos = h.fwd ? pos : pos + h.readLen;
+        if(needBiasSample and salmonOpts.numBiasSamples > 0){
+            // the "start" position is the leftmost position if
+            // we hit the forward strand, and the leftmost
+            // position + the read length if we hit the reverse complement
+            int32_t startPos = h.fwd ? pos : pos + h.readLen;
 
-	      auto& t = transcripts[h.tid];
-	      if (startPos > 0 and startPos < t.RefLength) {
-		const char* txpStart = t.Sequence();
-		const char* readStart = txpStart + startPos;
-		const char* txpEnd = txpStart + t.RefLength;
-		bool success = readBias.update(txpStart, readStart, txpEnd, dir);
-		if (success) {
-		  salmonOpts.numBiasSamples -= 1;
-		  needBiasSample = false;
-		}
-	      }
-	    }
+            auto& t = transcripts[h.tid];
+            if (startPos > 0 and startPos < t.RefLength) {
+                const char* txpStart = t.Sequence();
+                const char* readStart = txpStart + startPos;
+                const char* txpEnd = txpStart + t.RefLength;
+                bool success = readBias.update(txpStart, readStart, txpEnd, dir);
+                if (success) {
+                    salmonOpts.numBiasSamples -= 1;
+                    needBiasSample = false;
+                }
+            }
+        }
 	    // ---- Collect bias samples ------ //
 
 
@@ -880,7 +879,7 @@ void processReadsQuasi(single_parser* parser,
         // If the read mapped to > maxReadOccs places, discard it
         if (jointHits.size() > salmonOpts.maxReadOccs ) { jointHitGroup.clearAlignments(); }
 
-	bool needBiasSample = salmonOpts.biasCorrect;
+        bool needBiasSample = salmonOpts.biasCorrect;
 
         for (auto& h : jointHits) {
 
@@ -891,25 +890,25 @@ void processReadsQuasi(single_parser* parser,
 	    // If bias correction is turned on, and we haven't sampled a mapping
 	    // for this read yet, and we haven't collected the required number of
 	    // samples overall.
-	    if(needBiasSample and salmonOpts.numBiasSamples > 0){
-	      // the "start" position is the leftmost position if
-	      // we hit the forward strand, and the leftmost
-	      // position + the read length if we hit the reverse complement
-	      int32_t startPos = h.fwd ? pos : pos + h.readLen;
+        if(needBiasSample and salmonOpts.numBiasSamples > 0){
+            // the "start" position is the leftmost position if
+            // we hit the forward strand, and the leftmost
+            // position + the read length if we hit the reverse complement
+            int32_t startPos = h.fwd ? pos : pos + h.readLen;
 
 
-	      auto& t = transcripts[h.tid];
-	      if (startPos > 0 and startPos < t.RefLength) {
-		const char* txpStart = t.Sequence();
-		const char* readStart = txpStart + startPos;
-		const char* txpEnd = txpStart + t.RefLength;
-		bool success = readBias.update(txpStart, readStart, txpEnd, dir);
-		if (success) {
-		  salmonOpts.numBiasSamples -= 1;
-		  needBiasSample = false;
-		}
-	      }
-	    }
+            auto& t = transcripts[h.tid];
+            if (startPos > 0 and startPos < t.RefLength) {
+                const char* txpStart = t.Sequence();
+                const char* readStart = txpStart + startPos;
+                const char* txpEnd = txpStart + t.RefLength;
+                bool success = readBias.update(txpStart, readStart, txpEnd, dir);
+                if (success) {
+                    salmonOpts.numBiasSamples -= 1;
+                    needBiasSample = false;
+                }
+            }
+        }
 	    // ---- Collect bias samples ------ //
 
 
@@ -1293,10 +1292,10 @@ void quantifyLibrary(
         mem_opt_t* memOptions,
         SalmonOpts& salmonOpts,
         double coverageThresh,
-        size_t numRequiredFragments,
         uint32_t numQuantThreads) {
 
     bool burnedIn{false};
+    uint64_t numRequiredFragments = salmonOpts.numRequiredFragments;
     std::atomic<uint64_t> upperBoundHits{0};
     //ErrorModel errMod(1.00);
     auto& refs = experiment.transcripts();
@@ -1547,8 +1546,6 @@ int salmonQuantify(int argc, char *argv[]) {
     */
     ("auxDir", po::value<std::string>(&(sopt.auxDir))->default_value("aux"), "The sub-directory of the quantification directory where auxiliary information "
      			"e.g. bootstraps, bias parameters, etc. will be written.")
-    ("dumpEq", po::bool_switch(&(sopt.dumpEq))->default_value(false), "Dump the equivalence class counts "
-            "that were computed during quasi-mapping")
     ("fldMax" , po::value<size_t>(&(sopt.fragLenDistMax))->default_value(800), "The maximum fragment length to consider when building the empirical "
      											      "distribution")
     ("fldMean", po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(200), "The mean used in the fragment length distribution prior")
@@ -1580,7 +1577,7 @@ int salmonQuantify(int argc, char *argv[]) {
      			"assignment likelihoods and contributions to the transcript abundances computed without applying any auxiliary models.  The purpose "
 			"of ignoring the auxiliary models for the first <numPreAuxModelSamples> observations is to avoid applying these models before thier "
 			"parameters have been learned sufficiently well.")
-    ("numRequiredObs,n", po::value(&requiredObservations)->default_value(50000000),
+    ("numRequiredObs,n", po::value(&(sopt.numRequiredFragments))->default_value(50000000),
                                         "[Deprecated]: The minimum number of observations (mapped reads) that must be observed before "
                                         "the inference procedure will terminate.  If fewer mapped reads exist in the "
                                         "input file, then it will be read through multiple times.")
@@ -1730,22 +1727,38 @@ transcript abundance from RNA-seq reads
             }
         }
 
-	// maybe arbitrary, but if it's smaller than this, consider it
+        // maybe arbitrary, but if it's smaller than this, consider it
         // equal to LOG_0
         if (sopt.incompatPrior < 1e-320) {
             sopt.incompatPrior = salmon::math::LOG_0;
         } else {
             sopt.incompatPrior = std::log(sopt.incompatPrior);
         }
+        // END: option checking
 
-	jointLog->info() << "parsing read library format";
+        // Write out information about the command / run
+        {
+            bfs::path cmdInfoPath = outputDirectory / "cmd_info.json";
+            std::ofstream os(cmdInfoPath.string());
+            cereal::JSONOutputArchive oa(os);
+            oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
+            for (auto& opt : orderedOptions.options) {
+                if (opt.value.size() == 1) {
+                    oa(cereal::make_nvp(opt.string_key, opt.value.front()));
+                } else {
+                    oa(cereal::make_nvp(opt.string_key, opt.value));
+                }
+            }
+        }
+
+        jointLog->info() << "parsing read library format";
 
         vector<ReadLibrary> readLibraries = salmon::utils::extractReadLibraries(orderedOptions);
 
         SalmonIndexVersionInfo versionInfo;
         boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
         versionInfo.load(versionPath);
-        auto idxType = versionInfo.indexType();
+        versionInfo.indexType();
 
         ReadExperiment experiment(readLibraries, indexDirectory, sopt);
 
@@ -1778,59 +1791,23 @@ transcript abundance from RNA-seq reads
                     /** Currently no seq-specific bias correction with
                      *  FMD index.
                      */
-                    if (sopt.biasCorrect or sopt.gcBiasCorrect) {
+                    if (sopt.biasCorrect) {
                         sopt.biasCorrect = false;
-                        jointLog->warn("Sequence-specific or fragment GC bias correction require "
-                                "use of the quasi-index. Disabling all bias correction");
+                        jointLog->warn("Sequence-specific bias correction requires "
+                                "use of the quasi-index. Disabling bias correction");
                     }
                     quantifyLibrary<SMEMAlignment>(experiment, greedyChain, memOptions, sopt, coverageThresh,
-                            requiredObservations, sopt.numThreads);
+                                                   sopt.numThreads);
                 }
                 break;
             case SalmonIndexType::QUASI:
                 {
-		    // We can only do fragment GC bias correction, for the time being, with paired-end reads
-		    if (sopt.gcBiasCorrect) {
-		      for (auto& rl : readLibraries) {
-		        if (rl.format().type != ReadType::PAIRED_END) {
-			  jointLog->warn("Fragment GC bias correction is currently only "
-					 "implemented for paired-end libraries.  Disabling "
-					 "fragment GC bias correction for this run");
-			  sopt.gcBiasCorrect = false;
-			}
-		      }
-		    }
                     sopt.allowOrphans = true;
                     sopt.useQuasi = true;
                      quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions, sopt, coverageThresh,
-                                                     requiredObservations, sopt.numThreads);
+                                                     sopt.numThreads);
                 }
                 break;
-        }
-        // END: option checking
-
-        // Write out information about the command / run
-        {
-            bfs::path cmdInfoPath = outputDirectory / "cmd_info.json";
-            std::ofstream os(cmdInfoPath.string());
-            cereal::JSONOutputArchive oa(os);
-            oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
-            for (auto& opt : orderedOptions.options) {
-                if (opt.value.size() == 1) {
-                    oa(cereal::make_nvp(opt.string_key, opt.value.front()));
-                } else {
-                    oa(cereal::make_nvp(opt.string_key, opt.value));
-                }
-            }
-        }
-
-
-	GZipWriter gzw(outputDirectory, jointLog);
-
-        // If we are dumping the equivalence classes, then
-        // do it here.
-        if (sopt.dumpEq) {
-            gzw.writeEquivCounts(sopt, experiment);
         }
 
         // Now that the streaming pass is complete, we have
@@ -1863,6 +1840,7 @@ transcript abundance from RNA-seq reads
         commentStream << "# [ mapping rate ] => { " << experiment.effectiveMappingRate() * 100.0 << "\% }\n";
         commentString = commentStream.str();
 
+        GZipWriter gzw(outputDirectory, jointLog);
         // Write the main results
         gzw.writeAbundances(sopt, experiment);
         // Write meta-information about the run

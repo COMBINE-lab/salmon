@@ -35,7 +35,6 @@ struct SalmonOpts {
 
     std::string auxDir; // The directory where auxiliary files will be written.
 
-    bool dumpEq; 	     // Dump the equivalence classes and counts to file.
     bool splitSpanningSeeds; // Attempt to split seeds that span multiple transcripts.
 
     bool noFragLengthDist ; // Don't give a fragment assignment a likelihood based on an emperically
@@ -81,6 +80,8 @@ struct SalmonOpts {
     uint32_t maxReadOccs; // Discard reads  mapping to more than this many places.
 
     uint32_t maxExpectedReadLen; // Maximum expected length of an observed read.
+
+    uint64_t numRequiredFragments; //
 
     bool useMassBanking; // DEPRECATED
 

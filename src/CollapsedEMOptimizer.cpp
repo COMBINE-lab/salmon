@@ -728,24 +728,41 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
     // lengths rather than reference lengths.
     bool useEffectiveLengths = !sopt.noEffectiveLengthCorrection;
 
-    double uniformPrior = 1.0 / transcripts.size();
+    int64_t numActive{0};
+    double totalWeight{0.0};
 
     for (size_t i = 0; i < transcripts.size(); ++i) {
         auto& txp = transcripts[i];
-	alphas[i] = txp.projectedCounts;
+        alphas[i] = txp.projectedCounts;
+
+        if (txp.projectedCounts > 0) {
+            totalWeight += txp.projectedCounts;
+            alphasPrime[i] = 1.0;
+            ++numActive;
+        }
+
         effLens(i) = useEffectiveLengths ? std::exp(txp.getCachedLogEffectiveLength()) : txp.RefLength;
         txp.EffectiveLength = effLens(i);
 
-	if (noRichEq or !useFSPD) {
-	  posWeightInvDenoms(i) = 1.0;
-	} else {
-	  auto& fragStartDist = fragStartDists[txp.lengthClassIndex()];
-	  double denomFactor = fragStartDist.evalCDF(static_cast<int32_t>(txp.EffectiveLength), txp.RefLength);
-	  posWeightInvDenoms(i) = (denomFactor >= salmon::math::LOG_EPSILON) ?
-	    std::exp(-denomFactor) : (1e-5);
-	}
+        if (noRichEq or !useFSPD) {
+            posWeightInvDenoms(i) = 1.0;
+        } else {
+            auto& fragStartDist = fragStartDists[txp.lengthClassIndex()];
+            double denomFactor = fragStartDist.evalCDF(static_cast<int32_t>(txp.EffectiveLength), txp.RefLength);
+            posWeightInvDenoms(i) = (denomFactor >= salmon::math::LOG_EPSILON) ?
+                std::exp(-denomFactor) : (1e-5);
+        }
 
         totalLen += effLens(i);
+    }
+
+    // Based on the number of observed reads, use
+    // a linear combination of the online estimates
+    // and the uniform distribution.
+    double uniformPrior = totalWeight / static_cast<double>(numActive);
+    double fracObserved = std::min(1.0, totalWeight / sopt.numRequiredFragments);
+    for (size_t i = 0; i < alphas.size(); ++i) {
+        alphas[i] = (alphas[i] * fracObserved) + (uniformPrior * (1.0 - fracObserved));
     }
 
     // If the user requested *not* to use "rich" equivalence classes,
