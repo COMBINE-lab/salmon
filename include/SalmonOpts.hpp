@@ -35,6 +35,7 @@ struct SalmonOpts {
 
     std::string auxDir; // The directory where auxiliary files will be written.
 
+    bool dumpEq; 	     // Dump the equivalence classes and counts to file.
     bool splitSpanningSeeds; // Attempt to split seeds that span multiple transcripts.
 
     bool noFragLengthDist ; // Don't give a fragment assignment a likelihood based on an emperically
@@ -105,6 +106,7 @@ struct SalmonOpts {
 
     bool alnMode{false};     // true if we're in alignment based mode, false otherwise
     bool biasCorrect{false}; // Perform sequence-specific bias correction
+    bool gcBiasCorrect{false}; // Perform gc-fragment bias correction
     std::atomic<int32_t> numBiasSamples{1000000}; // The number of fragment mappings to consider when building
 						  // the sequence-specific "foreground" distribution.
 

@@ -89,10 +89,11 @@ TranscriptGeneMap readTranscriptToGeneMap( std::ifstream &ifile );
 TranscriptGeneMap transcriptToGeneMapFromFasta( const std::string& transcriptsFile );
 
 template <typename AbundanceVecT, typename ReadExpT>
-Eigen::VectorXd updateEffectiveLengths(ReadExpT& readExp,
-    Eigen::VectorXd& effLensIn,
-    AbundanceVecT& alphas,
-    std::vector<double>& transcriptKmerDist);
+Eigen::VectorXd updateEffectiveLengths(
+        SalmonOpts& sopt,
+        ReadExpT& readExp,
+        Eigen::VectorXd& effLensIn,
+        AbundanceVecT& alphas);
 
 /*
  * Use atomic compare-and-swap to update val to

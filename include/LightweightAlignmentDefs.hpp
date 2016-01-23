@@ -25,7 +25,7 @@ class SMEMAlignment {
                   double logProbIn = salmon::math::LOG_0) :
             pos(hitPosIn), fwd(false), mateIsFwd(false), transcriptID_(transcriptIDIn),
             format_(format), score_(scoreIn),
-            fragLength_(fragLengthIn), logProb(logProbIn) {}
+            fragLength_(fragLengthIn), fragLen(fragLengthIn), logProb(logProbIn) {}
 
         SMEMAlignment(const SMEMAlignment& o) = default;
         SMEMAlignment(SMEMAlignment&& o) = default;
@@ -56,8 +56,10 @@ class SMEMAlignment {
 
         rapmap::utils::MateStatus mateStatus;
         int32_t pos;
+        int32_t matePos; // JUST FOR COMPATIBILITY WITH QUASI!
         bool fwd;
         bool mateIsFwd;
+        uint32_t fragLen;
     private:
         TranscriptID transcriptID_;
         LibraryFormat format_;
@@ -537,6 +539,7 @@ void processMiniBatch(
         std::vector<Transcript>& transcripts,
         ClusterForest& clusterForest,
         FragmentLengthDistribution& fragLengthDist,
+        GCBiasParams& observedGCParams,
         std::atomic<uint64_t>& numAssignedFragments,
         std::default_random_engine& randEng,
         bool initialRound,
@@ -1345,6 +1348,7 @@ void processReadsMEM(ParserT* parser,
                ForgettingMassCalculator& fmCalc,
                ClusterForest& clusterForest,
                FragmentLengthDistribution& fragLengthDist,
+               GCBiasParams& observedGCParams,
                mem_opt_t* memOptions,
                const SalmonOpts& salmonOpts,
                double coverageThresh,
@@ -1371,6 +1375,7 @@ void processReadsMEM(ParserT* parser,
                ForgettingMassCalculator& fmCalc,
                ClusterForest& clusterForest,
                FragmentLengthDistribution& fragLengthDist,
+               GCBiasParams& observedGCParams,
                mem_opt_t* memOptions,
                const SalmonOpts& salmonOpts,
                double coverageThresh,
@@ -1459,7 +1464,7 @@ void processReadsMEM(ParserT* parser,
     prevObservedFrags = numObservedFragments;
     AlnGroupVecRange<SMEMAlignment> hitLists = boost::make_iterator_range(structureVec.begin(), structureVec.begin() + rangeSize);
     processMiniBatch<SMEMAlignment>(readExp, fmCalc,firstTimestepOfRound, rl, salmonOpts, hitLists, transcripts, clusterForest,
-                     fragLengthDist, numAssignedFragments, eng, initialRound, burnedIn);
+                     fragLengthDist, observedGCParams, numAssignedFragments, eng, initialRound, burnedIn);
   }
   smem_aux_destroy(auxHits);
   smem_itr_destroy(itr);

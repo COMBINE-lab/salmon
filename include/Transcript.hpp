@@ -56,6 +56,7 @@ public:
 
         SAMSequence_ = std::move(other.SAMSequence_);
         Sequence_ = std::move(other.Sequence_);
+        GCCount_ = std::move(other.GCCount_);
 
         uniqueCount_.store(other.uniqueCount_);
         totalCount_.store(other.totalCount_.load());
@@ -80,6 +81,7 @@ public:
         EffectiveLength = other.EffectiveLength;
         SAMSequence_ = std::move(other.SAMSequence_);
         Sequence_ = std::move(other.Sequence_);
+        GCCount_ = std::move(other.GCCount_);
 
         uniqueCount_.store(other.uniqueCount_);
         totalCount_.store(other.totalCount_.load());
@@ -284,36 +286,45 @@ public:
         return hasAnchorFragment_.load();
     }
 
+    // NOTE: Is it worth it to check if we have GC here?
+    // we should never access these without bias correction.
+    uint32_t gcCount(int32_t p) { return GCCount_[p]; }
+    uint32_t gcCount(int32_t p) const { return GCCount_[p]; }
+
     // Will *not* delete seq on destruction
-    void setSequenceBorrowed(const char* seq) {
+    void setSequenceBorrowed(const char* seq, bool needGC=false) {
         Sequence_ = std::unique_ptr<const char, void(*)(const char*)>(
                 seq,                 // store seq
                 [](const char* p) {} // do nothing deleter
                 );
+        if (needGC) { computeGCContent_(); }
     }
 
     // Will delete seq on destruction
-    void setSequenceOwned(const char* seq) {
+    void setSequenceOwned(const char* seq, bool needGC=false) {
         Sequence_ = std::unique_ptr<const char, void(*)(const char*)>(
                 seq,                 // store seq
                 [](const char* p) { delete [] p; } // do nothing deleter
                 );
+        if (needGC) { computeGCContent_(); }
     }
 
     // Will *not* delete seq on destruction
-    void setSAMSequenceBorrowed(uint8_t* seq) {
+    void setSAMSequenceBorrowed(uint8_t* seq, bool needGC=false) {
         SAMSequence_ = std::unique_ptr<uint8_t, void(*)(uint8_t*)>(
                 seq,                 // store seq
                 [](uint8_t* p) {} // do nothing deleter
                 );
+        if (needGC) { computeGCContent_(); }
     }
 
     // Will delete seq on destruction
-    void setSAMSequenceOwned(uint8_t* seq) {
+    void setSAMSequenceOwned(uint8_t* seq, bool needGC=false) {
         SAMSequence_ = std::unique_ptr<uint8_t, void(*)(uint8_t*)>(
                 seq,                 // store seq
                 [](uint8_t* p) { delete [] p; } // do nothing deleter
                 );
+        if (needGC) { computeGCContent_(); }
     }
 
     const char* Sequence() const {
@@ -336,11 +347,27 @@ public:
     double sharedCounts{0.0};
 
 private:
+    void computeGCContent_() {
+        const char* seq = Sequence_.get();
+        GCCount_.clear();
+        GCCount_.resize(RefLength, 0);
+        size_t totGC{0};
+        for (size_t i = 0; i < RefLength; ++i) {
+            auto c = std::toupper(seq[i]);
+            if (c == 'G' or c == 'C') {
+                totGC++;
+            }
+            GCCount_[i] = totGC;
+        }
+    }
+
     std::unique_ptr<uint8_t, void(*)(uint8_t*)> SAMSequence_ =
         std::unique_ptr<uint8_t, void(*)(uint8_t*)> (nullptr, [](uint8_t*){});
 
     std::unique_ptr<const char, void(*)(const char*)> Sequence_ =
         std::unique_ptr<const char, void(*)(const char*)> (nullptr, [](const char*){});
+
+    std::vector<uint32_t> GCCount_;
     std::atomic<size_t> uniqueCount_;
     std::atomic<size_t> totalCount_;
     // The most recent timestep at which this transcript's mass was updated.

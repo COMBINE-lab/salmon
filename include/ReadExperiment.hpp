@@ -57,7 +57,9 @@ class ReadExperiment {
         fragStartDists_(5),
         seqBiasModel_(1.0),
 	eqBuilder_(sopt.jointLog),
-        expectedBias_(constExprPow(4, readBias_.getK()), 1.0) {
+        expectedBias_(constExprPow(4, readBias_.getK()), 1.0),
+        expectedGC_(101, 0.0),
+        observedGC_(101, 1e-5) {
             namespace bfs = boost::filesystem;
 
             // Make sure the read libraries are valid.
@@ -199,7 +201,7 @@ class ReadExperiment {
 		    //auto txpSeq = idx_->seq.substr(idx_->txpOffsets[i], len);
 
 		    // Set the transcript sequence
-		    txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i]);
+		    txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i], true);
 		    // Length classes taken from
 		    // ======
 		    // Roberts, Adam, et al.
@@ -532,16 +534,41 @@ class ReadExperiment {
     std::vector<ReadLibrary>& readLibraries() { return readLibraries_; }
     FragmentLengthDistribution* fragmentLengthDistribution() const { return fragLengthDist_.get(); }
 
-    void setExpectedBias(const std::vector<double>& expectedBiasIn) {
+    void setGCFracForward(double fracForward) { gcFracFwd_ = fracForward; }
+
+    double gcFracFwd() const { return gcFracFwd_; }
+    double gcFracRC() const { return 1.0 - gcFracFwd_; }
+
+    void setExpectedSeqBias(const std::vector<double>& expectedBiasIn) {
         expectedBias_ = expectedBiasIn;
     }
 
-    std::vector<double>& expectedBias() {
+    std::vector<double>& expectedSeqBias() {
         return expectedBias_;
     }
 
-    const std::vector<double>& expectedBias() const {
+    const std::vector<double>& expectedSeqBias() const {
         return expectedBias_;
+    }
+
+    void setExpectedGCBias(const std::vector<double>& expectedBiasIn) {
+        expectedGC_ = expectedBiasIn;
+    }
+
+    std::vector<double>& expectedGCBias() {
+        return expectedGC_;
+    }
+
+    const std::vector<double>& expectedGCBias() const {
+        return expectedGC_;
+    }
+
+    const std::vector<double>& observedGC() const {
+        return observedGC_;
+    }
+
+    std::vector<double>& observedGC() {
+        return observedGC_;
     }
 
     ReadKmerDist<6, std::atomic<uint32_t>>& readBias() { return readBias_; }
@@ -597,6 +624,12 @@ class ReadExperiment {
     SpinLock sl_;
     std::unique_ptr<FragmentLengthDistribution> fragLengthDist_;
     EquivalenceClassBuilder eqBuilder_;
+
+    /** GC-fragment bias things **/
+    // One bin for each percentage GC content
+    double gcFracFwd_{-1.0};
+    std::vector<double> observedGC_;
+    std::vector<double> expectedGC_;
 
     /** Sequence specific bias things **/
     // Since multiple threads can touch this dist, we

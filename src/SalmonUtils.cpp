@@ -6,6 +6,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <vector>
+#include <fstream>
 #include <boost/filesystem.hpp>
 #include <boost/range/join.hpp>
 
@@ -1130,150 +1131,327 @@ std::vector<int32_t> samplesFromLogPMF(FragmentLengthDistribution* fld, int32_t 
  * requirements.
  */
 template <typename AbundanceVecT, typename ReadExpT>
-Eigen::VectorXd updateEffectiveLengths(ReadExpT& readExp,
-    Eigen::VectorXd& effLensIn,
-    AbundanceVecT& alphas,
-    std::vector<double>& transcriptKmerDist) {
-  using std::vector;
-  double minAlpha = 1e-8;
+Eigen::VectorXd updateEffectiveLengths(
+        SalmonOpts& sopt,
+        ReadExpT& readExp,
+        Eigen::VectorXd& effLensIn,
+        AbundanceVecT& alphas) {
 
-  // calculate read bias normalization factor -- total count in read
-  // distribution.
-  auto& readBias = readExp.readBias();
-  int32_t K = readBias.getK();
-  double readNormFactor = static_cast<double>(readBias.totalCount());
+    using std::vector;
+    double minAlpha = 1e-8;
 
-  // Reset the transcript (normalized) counts
-  transcriptKmerDist.clear();
-  transcriptKmerDist.resize(constExprPow(4, K), 1.0);
+    bool gcBiasCorrect{sopt.gcBiasCorrect};
+    bool seqBiasCorrect{sopt.biasCorrect};
 
-  // Make this const so there are no shenanigans
-  const auto& transcripts = readExp.transcripts();
+    double probFwd = readExp.gcFracFwd();
+    double probRC = readExp.gcFracRC();
 
-  // The effective lengths adjusted for bias
-  Eigen::VectorXd effLensOut(effLensIn.size());
-
-  for(size_t it=0; it < transcripts.size(); ++it) {
-
-    // First in the forward direction
-    int32_t refLen = static_cast<int32_t>(transcripts[it].RefLength);
-    int32_t elen = static_cast<int32_t>(transcripts[it].EffectiveLength);
-
-    // How much of this transcript (beginning and end) should
-    // not be considered
-    int32_t unprocessedLen = std::max(0, refLen - elen);
-
-    // Skip transcripts with trivial expression or that are too
-    // short.
-    if (alphas[it] < minAlpha or unprocessedLen <= 0) {
-      continue;
-    }
-
-    // Otherwise, proceed with the following weight.
-    double contribution = 0.5*(alphas[it]/effLensIn(it));
-
-    // From the start of the transcript up until the last valid
-    // kmer.
-    bool firstKmer{true};
-    uint32_t idx{0};
-
-    // This transcript's sequence
-    const char* tseq = transcripts[it].Sequence();
-    if (!tseq) {
-        std::cerr << "Transcript " << transcripts[it].RefName << " had no sequence available.\n";
-        std::cerr << "To enable sequence-specific bias correction, you must provide a "
-                  << "reference file with sequences for all transcripts.\n";
+    if (gcBiasCorrect and probFwd < 0.0) {
+        sopt.jointLog->warn("Had no fragments from which to estimate "
+                "fwd vs. rev-comp mapping rate.  Skipping "
+                "bias / gc-bias correction");
         return effLensIn;
     }
 
-    // From the start of the transcript through the effective length
-    for (int32_t i = 0; i < elen - K; ++i) {
-      if (firstKmer) {
-	idx = indexForKmer(tseq, K, Direction::FORWARD);
-	firstKmer = false;
-      } else {
-	idx = nextKmerIndex(idx, tseq[i-1+K], K, Direction::FORWARD);
-      }
-      transcriptKmerDist[idx] += contribution;
+    // This should not happen for the time being
+    if (gcBiasCorrect and seqBiasCorrect) {
+      sopt.jointLog->warn("Enabling both sequence-specific and fragment GC bias correction "
+	  "simultaneously is not yet supported.  Skipping effective length "
+	  "correction");
+      return effLensIn;
     }
 
-    // Then in the reverse complement direction
-    firstKmer = true;
-    idx = 0;
-    // Start from the end and go until the fragment length
-    // distribution says we should stop
-    for (int32_t i = refLen - K - 1; i >= unprocessedLen; --i) {
-      if (firstKmer) {
-	idx = indexForKmer(tseq + i, K, Direction::REVERSE_COMPLEMENT);
-	firstKmer = false;
-      } else {
-	idx = nextKmerIndex(idx, tseq[i], K, Direction::REVERSE_COMPLEMENT);
-      }
-      transcriptKmerDist[idx] += contribution;
+    // calculate read bias normalization factor -- total count in read
+    // distribution.
+    auto& readBias = readExp.readBias();
+    int32_t K = readBias.getK();
+    double readNormFactor = static_cast<double>(readBias.totalCount());
+
+    // The *expected* biases from sequence-specific effects
+    auto& transcriptKmerDist = readExp.expectedSeqBias();
+
+    // Reset the transcript (normalized) counts
+    transcriptKmerDist.clear();
+    transcriptKmerDist.resize(constExprPow(4, K), 0.0);
+
+    FragmentLengthDistribution& fld = *(readExp.fragmentLengthDistribution());
+
+    // The *expected* biases from GC effects
+    auto& transcriptGCDist = readExp.expectedGCBias();
+    auto& gcCounts = readExp.observedGC();
+    double readGCNormFactor = 0.0;
+    int32_t fldLow{0};
+    int32_t fldHigh{1};
+
+    std::vector<double> cdf(fld.maxVal()+1, 0.0);
+    std::vector<double> pdf(fld.maxVal()+1, 0.0);
+
+    {
+        transcriptGCDist.clear();
+        transcriptGCDist.resize(101, 0.0);
+
+        bool first{false};
+        bool second{false};
+        for (size_t i = 0; i <= fld.maxVal(); ++i) {
+            pdf[i] = std::exp(fld.pmf(i));
+            cdf[i] = (i > 0) ? cdf[i-1] + pdf[i] : pdf[i];
+            auto density = cdf[i];
+
+            if (!first and density >= 0.005) {
+                first = true;
+                fldLow = i;
+            }
+            if (!second and density >= 0.995) {
+                second = true;
+                fldHigh = i;
+            }
+        }
+
+        if (gcBiasCorrect) {
+            for (auto& c : gcCounts) { readGCNormFactor += c; }
+        }
     }
-  }
 
-  // The total mass of the transcript distribution
-  double txomeNormFactor = 0.0;
-  for(auto m : transcriptKmerDist) { txomeNormFactor += m; }
+    // Make this const so there are no shenanigans
+    const auto& transcripts = readExp.transcripts();
 
-  // Now, compute the effective length of each transcript using
-  // the k-mer biases
-  for(size_t it = 0; it < transcripts.size(); ++it) {
-    // Starts out as 0
-    double effLength = 0.0;
+    // The effective lengths adjusted for bias
+    Eigen::VectorXd effLensOut(effLensIn.size());
 
-    // First in the forward direction, from the start of the
-    // transcript up until the last valid kmer.
-    int32_t refLen = static_cast<int32_t>(transcripts[it].RefLength);
-    int32_t elen = static_cast<int32_t>(transcripts[it].EffectiveLength);
+    // How much to cut off
+    int32_t trunc = K;
 
-    // How much of this transcript (beginning and end) should
-    // not be considered
-    int32_t unprocessedLen = std::max(0, refLen - elen);
+    for(size_t it=0; it < transcripts.size(); ++it) {
+        auto& txp = transcripts[it];
 
-    if (alphas[it] >= minAlpha and unprocessedLen > 0) {
-      bool firstKmer{true};
-      uint32_t idx{0};
-      // This transcript's sequence
-      const char* tseq = transcripts[it].Sequence();
+        // First in the forward direction
+        int32_t refLen = static_cast<int32_t>(txp.RefLength);
+        int32_t elen = static_cast<int32_t>(txp.EffectiveLength);
 
-      for (int32_t i = 0; i < elen - K; ++i) {
-	if (firstKmer) {
-	  idx = indexForKmer(tseq, K, Direction::FORWARD);
-	  firstKmer = false;
-	} else {
-	  idx = nextKmerIndex(idx, tseq[i-1+K], K, Direction::FORWARD);
+        // How much of this transcript (beginning and end) should
+        // not be considered
+        int32_t unprocessedLen = std::max(0, refLen - elen);
+
+        // Skip transcripts with trivial expression or that are too
+        // short.
+        if (alphas[it] < minAlpha or unprocessedLen <= 0) {
+            continue;
+        }
+
+        // Otherwise, proceed with the following weight.
+        double contribution = (alphas[it]/effLensIn(it));
+
+        // This transcript's sequence
+        const char* tseq = txp.Sequence();
+
+        // From the start of the transcript up until the last valid
+        // kmer.
+        bool firstKmer{true};
+        uint32_t idx{0};
+
+        // For each position along the transcript
+	// (considering the forward direction for sequence-specific bias).
+        for (int32_t i = refLen - trunc - 1; i >= 0; --i) {
+	  // Seq bias
+	  if (seqBiasCorrect) {
+	    int32_t kmerStartPos = i;
+	    int32_t fragStartPos = i + 2;
+	    if (firstKmer) {
+	      idx = indexForKmer(tseq + i, K, Direction::REVERSE_COMPLEMENT);
+	      firstKmer = false;
+	    } else {
+	      idx = nextKmerIndex(idx, tseq[kmerStartPos], K, Direction::REVERSE_COMPLEMENT);
+	    }
+
+	    int32_t maxFragLen = refLen - fragStartPos + 1;
+	    if (maxFragLen >= 0 and maxFragLen < refLen) {
+	      auto cdensity = (maxFragLen >= cdf.size()) ? 1.0 : cdf[maxFragLen];
+	      transcriptKmerDist[idx] += probFwd * contribution * cdensity;
+	    }
+	  }
+
+	  // fragment GC bias
+	  if (gcBiasCorrect) {
+	    for (int32_t fl = fldLow; fl <= fldHigh; ++fl) {
+	      int32_t fragStart = i;
+	      int32_t fragEnd = i + fl - 1; // -1 because the interval is closed on both sides
+	      if (fragEnd < refLen) {
+		auto startGC = txp.gcCount(fragStart);
+		auto stopGC = txp.gcCount(fragEnd);
+		auto gcFrac = std::lrint(100.0 * static_cast<double>(stopGC - startGC) / fl);
+		transcriptGCDist[gcFrac] += contribution * pdf[fl];
+	      } else { break; } // no more valid positions
+	    } // for each fragment  length
+	  } // end fragment GC bias
+	} // for every position a fragment could start
+
+
+
+	// Then in the reverse complement direction
+	firstKmer = true;
+	idx = 0;
+	if (seqBiasCorrect) {
+	  for (int32_t i = 0; i <= refLen - trunc - 1; ++i) {
+	    int32_t kmerStartPos = i;
+	    int32_t kmerEndPos = kmerStartPos + K - 1; // -1 because pos is *inclusive*
+	    int32_t fragStartPos = kmerStartPos + 4;
+	    if (firstKmer) {
+	      idx = indexForKmer(tseq, K, Direction::FORWARD);
+	      firstKmer = false;
+	    } else {
+	      idx = nextKmerIndex(idx, tseq[kmerEndPos], K, Direction::FORWARD);
+	    }
+
+	    int32_t maxFragLen = fragStartPos + 1;
+	    if (maxFragLen >= 0 and maxFragLen < refLen) {
+	      auto cdensity = (maxFragLen >= cdf.size()) ? 1.0 : cdf[maxFragLen];
+	      transcriptKmerDist[idx] += probRC * contribution * cdensity;
+	    }
+	  } // end for pos in transcript
 	}
-	effLength += (readBias.counts[idx]/transcriptKmerDist[idx]);
-      }
 
-      // Then in the reverse complement direction
-      firstKmer = true;
-      idx = 0;
-      // Start from the end and go until the fragment length
-      // distribution says we should stop
-      for (int32_t i = refLen - K - 1; i >= unprocessedLen; --i) {
-	if (firstKmer) {
-	  idx = indexForKmer(tseq + i, K, Direction::REVERSE_COMPLEMENT);
-	  firstKmer = false;
-	} else {
-	  idx = nextKmerIndex(idx, tseq[i], K, Direction::REVERSE_COMPLEMENT);
-	}
-	effLength += (readBias.counts[idx]/transcriptKmerDist[idx]);
-      }
+    } // end for each transcript
 
-      effLength *= 0.5 * (txomeNormFactor / readNormFactor);
+
+    // Compute appropriate priors and normalization factors
+    double txomeGCNormFactor = 0.0;
+    double gcPrior = 0.0;
+    if (gcBiasCorrect) {
+        for (auto m : transcriptGCDist) { txomeGCNormFactor += m; }
+        auto pmass = 1e-5 * 101.0;
+        gcPrior = ((pmass / (readGCNormFactor - pmass)) * txomeGCNormFactor) / 101.0;
     }
 
-    if(unprocessedLen > 0.0 and effLength > unprocessedLen) {
-      effLensOut(it) = effLength;
-    } else {
-      effLensOut(it) = effLensIn(it);
+    double txomeNormFactor = 0.0;
+    double seqPrior = 0.0;
+    if (seqBiasCorrect) {
+        for(auto m : transcriptKmerDist) { txomeNormFactor += m; }
+        double pmass = static_cast<double>(constExprPow(4, K));
+        seqPrior = ((pmass / (readNormFactor - pmass)) * txomeNormFactor) / pmass;
     }
-  }
 
-  return effLensOut;
+    size_t numCorrected = 0;
+    size_t numUncorrected = 0;
+
+    // Now, compute the effective length of each transcript using
+    // the k-mer biases
+    for(size_t it = 0; it < transcripts.size(); ++it) {
+        // Starts out as 0
+        double effLength = 0.0;
+
+        auto& txp = transcripts[it];
+        // First in the forward direction, from the start of the
+        // transcript up until the last valid kmer.
+        int32_t refLen = static_cast<int32_t>(txp.RefLength);
+        int32_t elen = static_cast<int32_t>(txp.EffectiveLength);
+
+	// How much of this transcript (beginning and end) should
+        // not be considered
+        int32_t unprocessedLen = std::max(0, refLen - elen);
+
+	Eigen::VectorXd seqFactors(refLen);
+	seqFactors.setZero();
+	Eigen::VectorXd gcFactors(refLen);
+	gcFactors.setZero();
+
+        if (alphas[it] >= minAlpha and unprocessedLen > 0) {
+            bool firstKmer{true};
+            uint32_t idx{0};
+            // This transcript's sequence
+            const char* tseq = txp.Sequence();
+
+            for (int32_t i = refLen - trunc - 1; i >= 0; --i) {
+                /** Seq-specific bias **/
+                if (seqBiasCorrect) {
+                    int32_t kmerStartPos = i;
+                    int32_t fragStartPos = kmerStartPos + 2;
+                    if (firstKmer) {
+                        idx = indexForKmer(tseq + i, K, Direction::REVERSE_COMPLEMENT);
+                        firstKmer = false;
+                    } else {
+                        idx = nextKmerIndex(idx, tseq[kmerStartPos], K, Direction::REVERSE_COMPLEMENT);
+                    }
+
+                    int32_t maxFragLen = refLen - fragStartPos + 1;
+                    if (fragStartPos >=0 and fragStartPos < refLen) {
+                        auto cdensity = (maxFragLen >= cdf.size()) ? 1.0 : cdf[maxFragLen];
+                        seqFactors[fragStartPos] +=
+                            probFwd *
+                            (readBias.counts[idx]/ (transcriptKmerDist[idx] + seqPrior)) *
+                            cdensity;
+                    }
+                }
+                if (gcBiasCorrect) {
+                    for (int32_t fl = fldLow; fl <= fldHigh; ++fl) {
+                        int32_t fragStart = i;
+                        int32_t fragEnd = i + fl - 1; // -1 because the interval is closed on both sides
+                        if (fragEnd < refLen) {
+                            auto startGC = txp.gcCount(fragStart);
+                            auto stopGC = txp.gcCount(fragEnd);
+                            auto gcFrac = std::lrint(100.0 * static_cast<double>(stopGC - startGC) / fl);
+
+                            double sampleProb = (gcCounts[gcFrac] / (gcPrior + transcriptGCDist[gcFrac])) * pdf[fl];
+
+                            // count it in the forward orientation
+                            gcFactors[fragStart] += sampleProb * probFwd;
+                            // count it in the reverse compliment orientation
+                            gcFactors[fragEnd] += sampleProb * probRC;
+                        } else { break; } // no more valid positions
+                    }
+                } // end GC bias
+            } // end checkFwd
+
+            // Then in the reverse complement direction
+            double seqNormFactor{0.0};
+            firstKmer = true;
+            idx = 0;
+            if (seqBiasCorrect) {
+                for (int32_t i = 0; i <= refLen - trunc - 1; ++i) {
+                    int32_t kmerStartPos = i;
+                    int32_t kmerEndPos = kmerStartPos + K - 1; // -1 because pos is *inclusive*
+                    int32_t fragStartPos = kmerStartPos + 4;
+                    if (firstKmer) {
+                        idx = indexForKmer(tseq, K, Direction::FORWARD);
+                        firstKmer = false;
+                    } else {
+                        idx = nextKmerIndex(idx, tseq[kmerEndPos], K, Direction::FORWARD);
+                    }
+
+                    int32_t maxFragLen = fragStartPos + 1;
+                    if (fragStartPos >= 0 and fragStartPos < refLen) {
+                        auto cdensity = (maxFragLen >= cdf.size()) ? 1.0 : cdf[maxFragLen];
+                        seqFactors[fragStartPos] +=
+                            probRC *
+                            (readBias.counts[idx]/(transcriptKmerDist[idx]+seqPrior)) *
+                            cdensity;
+                    }
+                }
+                seqNormFactor = txomeNormFactor / readNormFactor;
+            }
+
+            if (seqBiasCorrect and gcBiasCorrect) {
+                effLength = seqFactors.dot(gcFactors);
+                effLength *= (txomeNormFactor / readNormFactor);
+                effLength *= (txomeGCNormFactor / readGCNormFactor);
+            } else if (seqBiasCorrect) {
+                effLength = seqFactors.sum();
+                effLength *= (txomeNormFactor / readNormFactor);
+            } else if (gcBiasCorrect) {
+                effLength = gcFactors.sum();
+                effLength *= (txomeGCNormFactor / readGCNormFactor);
+            }
+
+        } // for the processed transcript
+
+        if(unprocessedLen > 0.0 and effLength > unprocessedLen) {
+	    ++numCorrected;
+            effLensOut(it) = effLength;
+        } else {
+	    ++numUncorrected;
+            effLensOut(it) = effLensIn(it);
+        }
+    }
+    return effLensOut;
 }
 
 
@@ -1493,46 +1671,40 @@ void salmon::utils::normalizeAlphas<AlignmentLibrary<ReadPair>>(const SalmonOpts
 
 
 template Eigen::VectorXd salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>, ReadExperiment>(
+                SalmonOpts& sopt,
                 ReadExperiment& readExp,
                 Eigen::VectorXd& effLensIn,
-                std::vector<tbb::atomic<double>>& alphas,
-                std::vector<double>& expectedBias
-                );
+                std::vector<tbb::atomic<double>>& alphas);
 
 template Eigen::VectorXd salmon::utils::updateEffectiveLengths<std::vector<double>, ReadExperiment>(
+                SalmonOpts& sopt,
                 ReadExperiment& readExp,
                 Eigen::VectorXd& effLensIn,
-                std::vector<double>& alphas,
-                std::vector<double>& expectedBias
-                );
+                std::vector<double>& alphas);
 
 template Eigen::VectorXd salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>, AlignmentLibrary<ReadPair>>(
+                SalmonOpts& sopt,
                 AlignmentLibrary<ReadPair>& readExp,
                 Eigen::VectorXd& effLensIn,
-                std::vector<tbb::atomic<double>>& alphas,
-                std::vector<double>& expectedBias
-                );
+                std::vector<tbb::atomic<double>>& alphas);
 
 template Eigen::VectorXd salmon::utils::updateEffectiveLengths<std::vector<double>, AlignmentLibrary<ReadPair>>(
+                SalmonOpts& sopt,
                 AlignmentLibrary<ReadPair>& readExp,
                 Eigen::VectorXd& effLensIn,
-                std::vector<double>& alphas,
-                std::vector<double>& expectedBias
-                );
+                std::vector<double>& alphas);
 
 template Eigen::VectorXd salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>, AlignmentLibrary<UnpairedRead>>(
+                SalmonOpts& sopt,
                 AlignmentLibrary<UnpairedRead>& readExp,
                 Eigen::VectorXd& effLensIn,
-                std::vector<tbb::atomic<double>>& alphas,
-                std::vector<double>& expectedBias
-                );
+                std::vector<tbb::atomic<double>>& alphas);
 
 template Eigen::VectorXd salmon::utils::updateEffectiveLengths<std::vector<double>, AlignmentLibrary<UnpairedRead>>(
+                SalmonOpts& sopt,
                 AlignmentLibrary<UnpairedRead>& readExp,
                 Eigen::VectorXd& effLensIn,
-                std::vector<double>& alphas,
-                std::vector<double>& expectedBias
-                );
+                std::vector<double>& alphas);
 
 // Old / unused code
 
