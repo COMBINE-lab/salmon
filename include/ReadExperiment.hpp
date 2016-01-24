@@ -109,9 +109,9 @@ class ReadExperiment {
 	    switch (salmonIndex_->indexType()) {
             case SalmonIndexType::QUASI:
                 if (salmonIndex_->is64BitQuasi()) {
-                  loadTranscriptsFromQuasi(salmonIndex_->quasiIndex64());
+                  loadTranscriptsFromQuasi(salmonIndex_->quasiIndex64(), sopt);
                 } else {
-                  loadTranscriptsFromQuasi(salmonIndex_->quasiIndex32());
+                  loadTranscriptsFromQuasi(salmonIndex_->quasiIndex32(), sopt);
                 }
                 break;
             case SalmonIndexType::FMD:
@@ -184,7 +184,7 @@ class ReadExperiment {
     SalmonIndex* getIndex() { return salmonIndex_.get(); }
 
     template <typename QuasiIndexT>
-    void loadTranscriptsFromQuasi(QuasiIndexT* idx_) {
+    void loadTranscriptsFromQuasi(QuasiIndexT* idx_, const SalmonOpts& sopt) {
 	    size_t numRecords = idx_->txpNames.size();
 
 	    fmt::print(stderr, "Index contained {} targets\n", numRecords);
@@ -201,7 +201,8 @@ class ReadExperiment {
 		    //auto txpSeq = idx_->seq.substr(idx_->txpOffsets[i], len);
 
 		    // Set the transcript sequence
-		    txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i], true);
+		    txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i],
+                                    sopt.gcBiasCorrect, sopt.gcSampFactor);
 		    // Length classes taken from
 		    // ======
 		    // Roberts, Adam, et al.

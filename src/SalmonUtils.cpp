@@ -1140,6 +1140,7 @@ Eigen::VectorXd updateEffectiveLengths(
     using std::vector;
     double minAlpha = 1e-8;
 
+    uint32_t gcSamp{sopt.pdfSampFactor};
     bool gcBiasCorrect{sopt.gcBiasCorrect};
     bool seqBiasCorrect{sopt.biasCorrect};
 
@@ -1272,14 +1273,19 @@ Eigen::VectorXd updateEffectiveLengths(
 
 	  // fragment GC bias
 	  if (gcBiasCorrect) {
-	    for (int32_t fl = fldLow; fl <= fldHigh; ++fl) {
+	    //for (int32_t fl = fldLow; fl <= fldHigh; ++fl) {
+        double prevFLMass = cdf[0];
+	    for (int32_t fl = fldLow; fl <= fldHigh; fl += gcSamp) {
 	      int32_t fragStart = i;
 	      int32_t fragEnd = i + fl - 1; // -1 because the interval is closed on both sides
 	      if (fragEnd < refLen) {
-		auto startGC = txp.gcCount(fragStart);
-		auto stopGC = txp.gcCount(fragEnd);
-		auto gcFrac = std::lrint(100.0 * static_cast<double>(stopGC - startGC) / fl);
-		transcriptGCDist[gcFrac] += contribution * pdf[fl];
+        auto gcFrac = txp.gcFrac(fragStart, fragEnd);
+		//transcriptGCDist[gcFrac] += contribution * pdf[fl];
+        // TEST
+        {
+        transcriptGCDist[gcFrac] += contribution * (cdf[fl] - prevFLMass);
+        prevFLMass = cdf[fl];
+        }
 	      } else { break; } // no more valid positions
 	    } // for each fragment  length
 	  } // end fragment GC bias
@@ -1382,15 +1388,17 @@ Eigen::VectorXd updateEffectiveLengths(
                     }
                 }
                 if (gcBiasCorrect) {
-                    for (int32_t fl = fldLow; fl <= fldHigh; ++fl) {
+                    double prevFLMass = cdf[0];
+                    //for (int32_t fl = fldLow; fl <= fldHigh; ++fl) {
+                    for (int32_t fl = fldLow; fl <= fldHigh; fl += gcSamp) {
                         int32_t fragStart = i;
                         int32_t fragEnd = i + fl - 1; // -1 because the interval is closed on both sides
                         if (fragEnd < refLen) {
-                            auto startGC = txp.gcCount(fragStart);
-                            auto stopGC = txp.gcCount(fragEnd);
-                            auto gcFrac = std::lrint(100.0 * static_cast<double>(stopGC - startGC) / fl);
-
-                            double sampleProb = (gcCounts[gcFrac] / (gcPrior + transcriptGCDist[gcFrac])) * pdf[fl];
+                            auto gcFrac = txp.gcFrac(fragStart, fragEnd);
+                            //double sampleProb = (gcCounts[gcFrac] / (gcPrior + transcriptGCDist[gcFrac])) * pdf[fl];
+                            // TEST
+                            double sampleProb = (gcCounts[gcFrac] / (gcPrior + transcriptGCDist[gcFrac])) * (cdf[fl] - prevFLMass);
+                            prevFLMass = cdf[fl];
 
                             // count it in the forward orientation
                             gcFactors[fragStart] += sampleProb * probFwd;

@@ -448,9 +448,7 @@ void processMiniBatch(
                     int32_t start = std::min(aln.pos, aln.matePos);
                     int32_t stop = start + aln.fragLen;
                     if (start > 0 and stop < transcript.RefLength) {
-                        uint32_t gcStart = transcript.gcCount(start);
-                        uint32_t gcStop = transcript.gcCount(stop);
-                        int32_t gcFrac = std::lrint(100.0 * static_cast<double>(gcStop - gcStart) / aln.fragLen);
+                        int32_t gcFrac = transcript.gcFrac(start, stop);
                         // Add this fragment's contribution
                         observedGCMass[gcFrac] = salmon::math::logAdd(
                                 observedGCMass[gcFrac], aln.logProb + logForgettingMass);
@@ -1546,6 +1544,12 @@ int salmonQuantify(int argc, char *argv[]) {
     */
     ("auxDir", po::value<std::string>(&(sopt.auxDir))->default_value("aux"), "The sub-directory of the quantification directory where auxiliary information "
      			"e.g. bootstraps, bias parameters, etc. will be written.")
+    ("dumpEq", po::bool_switch(&(sopt.dumpEq))->default_value(false), "Dump the equivalence class counts "
+             "that were computed during quasi-mapping")
+    ("gcSizeSamp", po::value<std::uint32_t>(&(sopt.gcSampFactor))->default_value(1), "The value by which to down-sample transcripts when representing the "
+                "GC content.  Larger values will reduce memory usage, but may decrease the fidelity of bias modeling results.")
+    ("gcSpeedSamp", po::value<std::uint32_t>(&(sopt.pdfSampFactor))->default_value(1), "The value at which the fragment length PMF is down-sampled "
+                "when evaluating GC fragment bias.  Larger values speed up effective length correction, but may decrease the fidelity of bias modeling results.")
     ("fldMax" , po::value<size_t>(&(sopt.fragLenDistMax))->default_value(800), "The maximum fragment length to consider when building the empirical "
      											      "distribution")
     ("fldMean", po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(200), "The mean used in the fragment length distribution prior")
@@ -1736,21 +1740,6 @@ transcript abundance from RNA-seq reads
         }
         // END: option checking
 
-        // Write out information about the command / run
-        {
-            bfs::path cmdInfoPath = outputDirectory / "cmd_info.json";
-            std::ofstream os(cmdInfoPath.string());
-            cereal::JSONOutputArchive oa(os);
-            oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
-            for (auto& opt : orderedOptions.options) {
-                if (opt.value.size() == 1) {
-                    oa(cereal::make_nvp(opt.string_key, opt.value.front()));
-                } else {
-                    oa(cereal::make_nvp(opt.string_key, opt.value));
-                }
-            }
-        }
-
         jointLog->info() << "parsing read library format";
 
         vector<ReadLibrary> readLibraries = salmon::utils::extractReadLibraries(orderedOptions);
@@ -1758,7 +1747,7 @@ transcript abundance from RNA-seq reads
         SalmonIndexVersionInfo versionInfo;
         boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
         versionInfo.load(versionPath);
-        versionInfo.indexType();
+        auto idxType = versionInfo.indexType();
 
         ReadExperiment experiment(readLibraries, indexDirectory, sopt);
 
@@ -1778,7 +1767,6 @@ transcript abundance from RNA-seq reads
         */
         // end parameter validation
 
-
         // This will be the class in charge of maintaining our
     	// rich equivalence classes
         experiment.equivalenceClassBuilder().start();
@@ -1791,10 +1779,11 @@ transcript abundance from RNA-seq reads
                     /** Currently no seq-specific bias correction with
                      *  FMD index.
                      */
-                    if (sopt.biasCorrect) {
+                    if (sopt.biasCorrect or sopt.gcBiasCorrect) {
                         sopt.biasCorrect = false;
-                        jointLog->warn("Sequence-specific bias correction requires "
-                                "use of the quasi-index. Disabling bias correction");
+                        sopt.gcBiasCorrect = false;
+                        jointLog->warn("Sequence-specific or fragment GC bias correction require "
+                                       "use of the quasi-index. Disabling all bias correction");
                     }
                     quantifyLibrary<SMEMAlignment>(experiment, greedyChain, memOptions, sopt, coverageThresh,
                                                    sopt.numThreads);
@@ -1802,12 +1791,46 @@ transcript abundance from RNA-seq reads
                 break;
             case SalmonIndexType::QUASI:
                 {
+                    // We can only do fragment GC bias correction, for the time being, with paired-end reads
+                    if (sopt.gcBiasCorrect) {
+                        for (auto& rl : readLibraries) {
+                            if (rl.format().type != ReadType::PAIRED_END) {
+                                jointLog->warn("Fragment GC bias correction is currently only "
+                                        "implemented for paired-end libraries.  Disabling "
+                                        "fragment GC bias correction for this run");
+                                sopt.gcBiasCorrect = false;
+                            }
+                        }
+                    }
                     sopt.allowOrphans = true;
                     sopt.useQuasi = true;
                      quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions, sopt, coverageThresh,
                                                      sopt.numThreads);
                 }
                 break;
+        }
+
+        // Write out information about the command / run
+        {
+            bfs::path cmdInfoPath = outputDirectory / "cmd_info.json";
+            std::ofstream os(cmdInfoPath.string());
+            cereal::JSONOutputArchive oa(os);
+            oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
+            for (auto& opt : orderedOptions.options) {
+                if (opt.value.size() == 1) {
+                    oa(cereal::make_nvp(opt.string_key, opt.value.front()));
+                } else {
+                    oa(cereal::make_nvp(opt.string_key, opt.value));
+                }
+            }
+        }
+
+        GZipWriter gzw(outputDirectory, jointLog);
+
+        // If we are dumping the equivalence classes, then
+        // do it here.
+        if (sopt.dumpEq) {
+            gzw.writeEquivCounts(sopt, experiment);
         }
 
         // Now that the streaming pass is complete, we have
@@ -1822,12 +1845,12 @@ transcript abundance from RNA-seq reads
     	salmon::utils::normalizeAlphas(sopt, experiment);
         bool optSuccess = optimizer.optimize(experiment, sopt, 0.01, 10000);
 
-	if (!optSuccess) {
-	  jointLog->error("The optimization algorithm failed. This is likely the result of "
-			  "bad input (or a bug). If you cannot track down the cause, please "
-			  "report this issue on GitHub.");
-	  return 1;
-	}
+        if (!optSuccess) {
+            jointLog->error("The optimization algorithm failed. This is likely the result of "
+                    "bad input (or a bug). If you cannot track down the cause, please "
+                    "report this issue on GitHub.");
+            return 1;
+        }
         jointLog->info("Finished optimizer");
 
         free(memOptions);
@@ -1837,10 +1860,6 @@ transcript abundance from RNA-seq reads
 
         bfs::path estFilePath = outputDirectory / "quant.sf";
 
-        commentStream << "# [ mapping rate ] => { " << experiment.effectiveMappingRate() * 100.0 << "\% }\n";
-        commentString = commentStream.str();
-
-        GZipWriter gzw(outputDirectory, jointLog);
         // Write the main results
         gzw.writeAbundances(sopt, experiment);
         // Write meta-information about the run
