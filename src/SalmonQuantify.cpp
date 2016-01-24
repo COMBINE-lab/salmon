@@ -619,6 +619,7 @@ void processReadsQuasi(paired_parser* parser,
   uint64_t localUpperBoundHits{0};
   size_t rangeSize{0};
   uint64_t  localNumAssignedFragments{0};
+  bool strictIntersect = salmonOpts.strictIntersect;
 
   bool tooManyHits{false};
   size_t maxNumHits{salmonOpts.maxReadOccs};
@@ -659,9 +660,16 @@ void processReadsQuasi(paired_parser* parser,
                                MateStatus::PAIRED_END_RIGHT,
                                true);
 
-        rapmap::utils::mergeLeftRightHits(
-                               leftHits, rightHits, jointHits,
-                               readLen, maxNumHits, tooManyHits, hctr);
+        if (strictIntersect) {
+          rapmap::utils::mergeLeftRightHits(
+              leftHits, rightHits, jointHits,
+              readLen, maxNumHits, tooManyHits, hctr);
+        } else {
+          rapmap::utils::mergeLeftRightHitsFuzzy(
+              lh, rh,
+              leftHits, rightHits, jointHits,
+              readLen, maxNumHits, tooManyHits, hctr);
+        }
 
         if (initialRound) {
             upperBoundHits += (jointHits.size() > 0);
@@ -1550,6 +1558,10 @@ int salmonQuantify(int argc, char *argv[]) {
                 "GC content.  Larger values will reduce memory usage, but may decrease the fidelity of bias modeling results.")
     ("gcSpeedSamp", po::value<std::uint32_t>(&(sopt.pdfSampFactor))->default_value(1), "The value at which the fragment length PMF is down-sampled "
                 "when evaluating GC fragment bias.  Larger values speed up effective length correction, but may decrease the fidelity of bias modeling results.")
+    ("strictIntersect", po::bool_switch(&(sopt.strictIntersect))->default_value(false), "Modifies how orphans are "
+     "assigned.  When this flag is set, if the intersection of the quasi-mappings for the left and right "
+     "is empty, then all mappings for the left and all mappings for the right read are reported as orphaned "
+     "quasi-mappings")
     ("fldMax" , po::value<size_t>(&(sopt.fragLenDistMax))->default_value(800), "The maximum fragment length to consider when building the empirical "
      											      "distribution")
     ("fldMean", po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(200), "The mean used in the fragment length distribution prior")
@@ -1729,6 +1741,12 @@ transcript abundance from RNA-seq reads
                 jointLog->flush();
                 std::exit(1);
             }
+        }
+
+        if (sopt.biasCorrect and sopt.gcBiasCorrect) {
+            sopt.jointLog->error("Enabling both sequence-specific and fragment GC bias correction "
+                    "simultaneously is not yet supported. Please disable one of these options.");
+            return 1;
         }
 
         // maybe arbitrary, but if it's smaller than this, consider it
