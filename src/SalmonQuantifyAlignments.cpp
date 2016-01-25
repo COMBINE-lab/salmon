@@ -972,6 +972,8 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     ("useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(false), "[experimental] : "
                         "Consider / model non-uniformity in the fragment start positions "
                         "across the transcript.")
+    ("useVBOpt,v", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
+                           "traditional EM algorithm for optimization in the batch passes.")
     /*
     // Don't expose this yet
     ("noRichEqClasses", po::bool_switch(&(sopt.noRichEqClasses))->default_value(false),
