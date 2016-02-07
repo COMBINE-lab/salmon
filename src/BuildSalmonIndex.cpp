@@ -74,7 +74,6 @@ int salmonIndex(int argc, char* argv[]) {
     string indexTypeStr = "fmd";
     uint32_t saSampInterval = 1;
     uint32_t auxKmerLen = 0;
-    uint32_t maxThreads = std::thread::hardware_concurrency();
     uint32_t numThreads;
     bool useQuasi{false};
 
@@ -86,7 +85,7 @@ int salmonIndex(int argc, char* argv[]) {
     ("kmerLen,k", po::value<uint32_t>(&auxKmerLen)->default_value(31)->required(),
                     "The size of k-mers that should be used for the quasi index.")
     ("index,i", po::value<string>()->required(), "Salmon index.")
-    ("threads,p", po::value<uint32_t>(&numThreads)->default_value(maxThreads)->required(),
+    ("threads,p", po::value<uint32_t>(&numThreads)->default_value(2)->required(),
                             "Number of threads to use (only used for computing bias features)")
     ("type", po::value<string>(&indexTypeStr)->default_value("quasi")->required(), "The type of index to build; options are \"fmd\" and \"quasi\" "
     							   			   "\"quasi\" is recommended, and \"fmd\" may be removed in the future")
