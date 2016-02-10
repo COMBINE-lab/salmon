@@ -10,6 +10,9 @@
 #include <boost/filesystem.hpp>
 #include <boost/range/join.hpp>
 
+#include "tbb/combinable.h"
+#include "tbb/parallel_for.h"
+
 #include "SalmonUtils.hpp"
 #include "AlignmentLibrary.hpp"
 #include "ReadPair.hpp"
@@ -1138,6 +1141,8 @@ Eigen::VectorXd updateEffectiveLengths(
         AbundanceVecT& alphas) {
 
     using std::vector;
+    using BlockedIndexRange =  tbb::blocked_range<size_t>;
+
     double minAlpha = 1e-8;
 
     uint32_t gcSamp{sopt.pdfSampFactor};
@@ -1222,7 +1227,40 @@ Eigen::VectorXd updateEffectiveLengths(
     // How much to cut off
     int32_t trunc = K;
 
-    for(size_t it=0; it < transcripts.size(); ++it) {
+    using GCBiasVecT = std::vector<double>;
+    using SeqBiasVecT = std::vector<double>;
+
+    /**
+     * These will store "thread local" parameters
+     * for the appropriate bias terms.
+     */
+    class CombineableBiasParams {
+        public:
+        CombineableBiasParams() {
+            expectSeq = std::vector<double>(constExprPow(4, 6), 0.0);
+            expectGC = std::vector<double>(101, 0.0);
+        }
+
+        std::vector<double> expectSeq;
+        std::vector<double> expectGC;
+    };
+
+    /**
+     * The local bias terms from each thread can be combined
+     * via simple summation.
+     */
+    tbb::combinable<CombineableBiasParams> expectedDist;
+
+    tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(transcripts.size())),
+            [&]( const BlockedIndexRange& range) -> void {
+
+            auto& expectSeq = expectedDist.local().expectSeq;
+            auto& expectGC = expectedDist.local().expectGC;
+
+                // For each index in the equivalence class vector
+                for (auto it : boost::irange(range.begin(), range.end())) {
+
+    //for(size_t it=0; it < transcripts.size(); ++it) {
         auto& txp = transcripts[it];
 
         // First in the forward direction
@@ -1267,7 +1305,8 @@ Eigen::VectorXd updateEffectiveLengths(
 	    int32_t maxFragLen = refLen - fragStartPos + 1;
 	    if (maxFragLen >= 0 and maxFragLen < refLen) {
 	      auto cdensity = (maxFragLen >= cdf.size()) ? 1.0 : cdf[maxFragLen];
-	      transcriptKmerDist[idx] += probFwd * contribution * cdensity;
+	      //transcriptKmerDist[idx] += probFwd * contribution * cdensity;
+          expectSeq[idx] += probFwd * contribution * cdensity;
 	    }
 	  }
 
@@ -1283,7 +1322,8 @@ Eigen::VectorXd updateEffectiveLengths(
 		//transcriptGCDist[gcFrac] += contribution * pdf[fl];
         // TEST
         {
-        transcriptGCDist[gcFrac] += contribution * (cdf[fl] - prevFLMass);
+        //transcriptGCDist[gcFrac] += contribution * (cdf[fl] - prevFLMass);
+        expectGC[gcFrac] += contribution * (cdf[fl] - prevFLMass);
         prevFLMass = cdf[fl];
         }
 	      } else { break; } // no more valid positions
@@ -1311,13 +1351,36 @@ Eigen::VectorXd updateEffectiveLengths(
 	    int32_t maxFragLen = fragStartPos + 1;
 	    if (maxFragLen >= 0 and maxFragLen < refLen) {
 	      auto cdensity = (maxFragLen >= cdf.size()) ? 1.0 : cdf[maxFragLen];
-	      transcriptKmerDist[idx] += probRC * contribution * cdensity;
+	      //transcriptKmerDist[idx] += probRC * contribution * cdensity;
+          expectSeq[idx] += probRC * contribution * cdensity;
 	    }
 	  } // end for pos in transcript
 	}
 
     } // end for each transcript
 
+    }// end tbb for function
+    );
+
+    /**
+     * The local bias terms from each thread can be combined
+     * via simple summation.
+     */
+    auto combinedBiasParams = expectedDist.combine(
+            [](const CombineableBiasParams& p1,
+               const CombineableBiasParams& p2) -> CombineableBiasParams {
+               CombineableBiasParams p;
+               for (size_t i = 0; i < p1.expectSeq.size(); ++i) {
+                 p.expectSeq[i] = p1.expectSeq[i] + p2.expectSeq[i];
+               }
+               for (size_t i = 0; i < p1.expectGC.size(); ++i) {
+                 p.expectGC[i] = p1.expectGC[i] + p2.expectGC[i];
+               }
+               return p;
+            });
+
+    transcriptKmerDist = combinedBiasParams.expectSeq;
+    transcriptGCDist = combinedBiasParams.expectGC;
 
     // Compute appropriate priors and normalization factors
     double txomeGCNormFactor = 0.0;
@@ -1336,29 +1399,38 @@ Eigen::VectorXd updateEffectiveLengths(
         seqPrior = ((pmass / (readNormFactor - pmass)) * txomeNormFactor) / pmass;
     }
 
-    size_t numCorrected = 0;
-    size_t numUncorrected = 0;
+    std::atomic<size_t> numCorrected{0};
+    std::atomic<size_t> numUncorrected{0};
 
-    // Now, compute the effective length of each transcript using
-    // the k-mer biases
-    for(size_t it = 0; it < transcripts.size(); ++it) {
-        // Starts out as 0
-        double effLength = 0.0;
+    /**
+     * Compute the effective lengths of each transcript (in parallel)
+     */
+    tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(transcripts.size())),
+            [&]( const BlockedIndexRange& range) -> void {
 
-        auto& txp = transcripts[it];
-        // First in the forward direction, from the start of the
-        // transcript up until the last valid kmer.
-        int32_t refLen = static_cast<int32_t>(txp.RefLength);
-        int32_t elen = static_cast<int32_t>(txp.EffectiveLength);
+            // For each index in the equivalence class vector
+            for (auto it : boost::irange(range.begin(), range.end())) {
 
-	// How much of this transcript (beginning and end) should
-        // not be considered
-        int32_t unprocessedLen = std::max(0, refLen - elen);
+            // Now, compute the effective length of each transcript using
+            // the bias distributions
+        //for(size_t it = 0; it < transcripts.size(); ++it) {
+            // Starts out as 0
+            double effLength = 0.0;
 
-	Eigen::VectorXd seqFactors(refLen);
-	seqFactors.setZero();
-	Eigen::VectorXd gcFactors(refLen);
-	gcFactors.setZero();
+            auto& txp = transcripts[it];
+            // First in the forward direction, from the start of the
+            // transcript up until the last valid kmer.
+            int32_t refLen = static_cast<int32_t>(txp.RefLength);
+            int32_t elen = static_cast<int32_t>(txp.EffectiveLength);
+
+            // How much of this transcript (beginning and end) should
+            // not be considered
+            int32_t unprocessedLen = std::max(0, refLen - elen);
+
+            Eigen::VectorXd seqFactors(refLen);
+            seqFactors.setZero();
+            Eigen::VectorXd gcFactors(refLen);
+            gcFactors.setZero();
 
         if (alphas[it] >= minAlpha and unprocessedLen > 0) {
             bool firstKmer{true};
@@ -1459,6 +1531,8 @@ Eigen::VectorXd updateEffectiveLengths(
             effLensOut(it) = effLensIn(it);
         }
     }
+    } // end parallel_for lambda
+    );
     return effLensOut;
 }
 
