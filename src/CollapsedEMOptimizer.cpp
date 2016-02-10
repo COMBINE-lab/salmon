@@ -762,7 +762,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
     double uniformPrior = totalWeight / static_cast<double>(numActive);
     double fracObserved = std::min(1.0, totalWeight / sopt.numRequiredFragments);
     for (size_t i = 0; i < alphas.size(); ++i) {
-        alphas[i] = (alphas[i] * fracObserved) + (uniformPrior * (1.0 - fracObserved));
+        alphas[i] = (alphasPrime[i] == 1.0) ? ((alphas[i] * fracObserved) + (uniformPrior * (1.0 - fracObserved))) : 0.0;
     }
 
     // If the user requested *not* to use "rich" equivalence classes,

@@ -1159,11 +1159,13 @@ void processReadLibrary(
             }
             /** END GC-fragment bias **/
 
+	    /** To dump the GC content
 	    std::ofstream gc_cont("gc_obs_salmon.tsv");
 	    for (size_t i = 0; i < globalGCMass.size(); ++i) {
 	      gc_cont << i << '\t' << globalGCMass[i] << '\n';
 	    }
 	    gc_cont.close();
+	    */
 
             } // ------ Single-end --------
             else if (rl.format().type == ReadType::SINGLE_END) {
