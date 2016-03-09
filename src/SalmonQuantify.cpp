@@ -608,12 +608,14 @@ void processReadsQuasi(paired_parser* parser,
   uint64_t prevObservedFrags{1};
   uint64_t leftHitCount{0};
   uint64_t hitListCount{0};
+  salmon::utils::ShortFragStats shortFragStats;
 
   auto& readBias = readExp.readBias();
 
   auto expectedLibType = rl.format();
 
   uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
+  size_t minK = rapmap::utils::my_mer::k();
 
   size_t locRead{0};
   uint64_t localUpperBoundHits{0};
@@ -623,7 +625,8 @@ void processReadsQuasi(paired_parser* parser,
 
   bool tooManyHits{false};
   size_t maxNumHits{salmonOpts.maxReadOccs};
-  size_t readLen{0};
+  size_t readLenLeft{0};
+  size_t readLenRight{0};
   SACollector<RapMapIndexT> hitCollector(qidx);
   SASearcher<RapMapIndexT> saSearcher(qidx);
   std::vector<QuasiAlignment> leftHits;
@@ -642,7 +645,10 @@ void processReadsQuasi(paired_parser* parser,
     }
 
     for(size_t i = 0; i < j->nb_filled; ++i) { // For all the read in this batch
-        readLen = j->data[i].first.seq.length();
+        readLenLeft = j->data[i].first.seq.length();
+        readLenRight = j->data[i].second.seq.length();
+        bool tooShortLeft = (readLenLeft <  minK);
+        bool tooShortRight = (readLenRight <  minK);
         tooManyHits = false;
         localUpperBoundHits = 0;
         auto& jointHitGroup = structureVec[i];
@@ -651,32 +657,43 @@ void processReadsQuasi(paired_parser* parser,
         leftHits.clear();
         rightHits.clear();
 
-        bool lh = hitCollector(j->data[i].first.seq,
-                               leftHits, saSearcher,
-                               MateStatus::PAIRED_END_LEFT,
-                               true);
-        bool rh = hitCollector(j->data[i].second.seq,
-                               rightHits, saSearcher,
-                               MateStatus::PAIRED_END_RIGHT,
-                               true);
+        bool lh = tooShortLeft ? false :
+                   hitCollector(j->data[i].first.seq,
+                                leftHits, saSearcher,
+                                MateStatus::PAIRED_END_LEFT,
+                                true);
 
-        if (strictIntersect) {
-          rapmap::utils::mergeLeftRightHits(
-              leftHits, rightHits, jointHits,
-              readLen, maxNumHits, tooManyHits, hctr);
-        } else {
-          rapmap::utils::mergeLeftRightHitsFuzzy(
-              lh, rh,
-              leftHits, rightHits, jointHits,
-              readLen, maxNumHits, tooManyHits, hctr);
+        bool rh = tooShortRight ? false : 
+                   hitCollector(j->data[i].second.seq,
+                                rightHits, saSearcher,
+                                MateStatus::PAIRED_END_RIGHT,
+                                true);
+
+        // Consider a read as too short if both ends are too short
+        if (tooShortLeft and tooShortRight) { 
+            ++shortFragStats.numTooShort; 
+            shortFragStats.shortest = std::min(shortFragStats.shortest, std::max(readLenLeft, readLenRight));
+        } else { 
+            // If we actually attempted to map the fragment (it wasn't too short), then 
+            // do the intersection.
+            if (strictIntersect) {
+                rapmap::utils::mergeLeftRightHits(
+                                                  leftHits, rightHits, jointHits,
+                                                  readLenLeft, maxNumHits, tooManyHits, hctr);
+            } else {
+                rapmap::utils::mergeLeftRightHitsFuzzy(
+                                                       lh, rh,
+                                                       leftHits, rightHits, jointHits,
+                                                       readLenLeft, maxNumHits, tooManyHits, hctr);
+            }
+
+            if (initialRound) {
+                upperBoundHits += (jointHits.size() > 0);
+            }
+
+            // If the read mapped to > maxReadOccs places, discard it
+            if (jointHits.size() > salmonOpts.maxReadOccs ) { jointHitGroup.clearAlignments(); }
         }
-
-        if (initialRound) {
-            upperBoundHits += (jointHits.size() > 0);
-        }
-
-        // If the read mapped to > maxReadOccs places, discard it
-        if (jointHits.size() > salmonOpts.maxReadOccs ) { jointHitGroup.clearAlignments(); }
 
 
 	// If we have mappings, then process them.
@@ -795,6 +812,8 @@ void processReadsQuasi(paired_parser* parser,
     processMiniBatch<QuasiAlignment>(readExp, fmCalc,firstTimestepOfRound, rl, salmonOpts, hitLists, transcripts, clusterForest,
                      fragLengthDist, observedGCParams, numAssignedFragments, eng, initialRound, burnedIn);
   }
+  
+  readExp.updateShortFrags(shortFragStats);
 }
 
 // SINGLE END
@@ -834,6 +853,8 @@ void processReadsQuasi(single_parser* parser,
   uint64_t prevObservedFrags{1};
   uint64_t leftHitCount{0};
   uint64_t hitListCount{0};
+  salmon::utils::ShortFragStats shortFragStats;
+  bool tooShort{false};
 
   auto& readBias = readExp.readBias();
   const char* txomeStr = qidx->seq.c_str();
@@ -842,6 +863,7 @@ void processReadsQuasi(single_parser* parser,
 
 
   uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
+  size_t minK = rapmap::utils::my_mer::k();
 
   size_t locRead{0};
   uint64_t localUpperBoundHits{0};
@@ -867,16 +889,24 @@ void processReadsQuasi(single_parser* parser,
 
     for(size_t i = 0; i < j->nb_filled; ++i) { // For all the read in this batch
         readLen = j->data[i].seq.length();
+        tooShort = (readLen <  minK);
         tooManyHits = false;
         localUpperBoundHits = 0;
         auto& jointHitGroup = structureVec[i];
         auto& jointHits = jointHitGroup.alignments();
         jointHitGroup.clearAlignments();
 
-        bool lh = hitCollector(j->data[i].seq,
-                               jointHits, saSearcher,
-                               MateStatus::SINGLE_END,
-                               true);
+        bool lh = tooShort ? false :
+            hitCollector(j->data[i].seq,
+                         jointHits, saSearcher,
+                         MateStatus::SINGLE_END,
+                         true);
+
+        // If the fragment was too short, record it
+        if (tooShort) { 
+            ++shortFragStats.numTooShort; 
+            shortFragStats.shortest = std::min(shortFragStats.shortest, readLen);
+        }
 
         if (initialRound) {
             upperBoundHits += (jointHits.size() > 0);
@@ -957,6 +987,7 @@ void processReadsQuasi(single_parser* parser,
     processMiniBatch<QuasiAlignment>(readExp, fmCalc,firstTimestepOfRound, rl, salmonOpts, hitLists, transcripts, clusterForest,
                      fragLengthDist, observedGCParams, numAssignedFragments, eng, initialRound, burnedIn);
   }
+  readExp.updateShortFrags(shortFragStats);
 }
 
 /// DONE QUASI
@@ -1180,6 +1211,7 @@ void processReadLibrary(
 			    } // end switch
 		    }
 		    for(int i = 0; i < numThreads; ++i) { threads[i].join(); }
+
 
             /** GC-fragment bias **/
             // Set the global distribution based on the sum of local
@@ -1539,6 +1571,27 @@ void quantifyLibrary(
                                    numObservedFragments - numPrevObservedFragments);
     }
     fmt::print(stderr, "\n\n\n\n");
+
+    // Report statistics about short fragments
+    salmon::utils::ShortFragStats shortFragStats = experiment.getShortFragStats();
+    if (shortFragStats.numTooShort > 0) {
+        double tooShortFrac = (numObservedFragments > 0) ? 
+            (static_cast<double>(shortFragStats.numTooShort) / numObservedFragments) : 0.0; 
+        if (tooShortFrac > 0.0) {
+            size_t minK = rapmap::utils::my_mer::k();
+            fmt::print(stderr, "\n\n");
+            salmonOpts.jointLog->warn("{}% of fragments were shorter than the k used to build the index ({}).\n"
+                                      "If this fraction is too large, consider re-building the index with a smaller k.\n"
+                                      "The minimum read size found was {}.\n\n",
+                                      tooShortFrac * 100.0, minK, shortFragStats.shortest);
+            // If *all* fragments were too short, then halt now
+            if (shortFragStats.numTooShort == numObservedFragments) {
+                salmonOpts.jointLog->error("All fragments were too short to quasi-map.  I won't proceed.");
+                std::exit(1);  
+            }
+        }
+    }
+
 
     // If we didn't achieve burnin, then at least compute effective
     // lengths and mention this to the user.

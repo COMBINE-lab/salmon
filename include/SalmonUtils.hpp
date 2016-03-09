@@ -44,6 +44,13 @@ using IndexVector = std::vector<size_t>;
 using KmerVector = std::vector<uint64_t>;
 using MateStatus = rapmap::utils::MateStatus;
 
+// To keep track of short fragments (shorter than the k-mer length)
+// on which the index was built.
+struct ShortFragStats {
+    size_t numTooShort{0};
+    size_t shortest{std::numeric_limits<size_t>::max()};
+};
+
 // An enum class for direction to avoid potential errors
 // with keeping everything as a bool
 enum class Direction { FORWARD = 0, REVERSE_COMPLEMENT = 1 };

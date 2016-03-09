@@ -17,6 +17,7 @@ extern "C" {
 #include "SequenceBiasModel.hpp"
 #include "SalmonOpts.hpp"
 #include "SalmonIndex.hpp"
+#include "SalmonUtils.hpp"
 #include "EquivalenceClassBuilder.hpp"
 #include "SpinLock.hpp" // RapMap's with try_lock
 #include "UtilityFunctions.hpp"
@@ -176,6 +177,15 @@ class ReadExperiment {
     std::atomic<uint64_t>& numAssignedFragmentsAtomic() { return numAssignedFragments_; }
 
     void setNumObservedFragments(uint64_t numObserved) { numObservedFragments_ = numObserved; }
+    
+    void updateShortFrags(salmon::utils::ShortFragStats& fs) { 
+        sl_.lock();
+        shortFragStats_.numTooShort += fs.numTooShort; 
+        shortFragStats_.shortest = (fs.shortest < shortFragStats_.shortest) ? fs.shortest : shortFragStats_.shortest; 
+        sl_.unlock();
+    }
+
+    salmon::utils::ShortFragStats getShortFragStats() const { return shortFragStats_; }
 
     uint64_t numObservedFragments() const {
         return numObservedFragments_;
@@ -622,6 +632,7 @@ class ReadExperiment {
     /** Keeps track of the number of passes that have been
      *  made through the alignment file.
      */
+    salmon::utils::ShortFragStats shortFragStats_;
     std::atomic<uint64_t> numObservedFragments_{0};
     std::atomic<uint64_t> numAssignedFragments_{0};
     uint64_t totalAssignedFragments_{0};
