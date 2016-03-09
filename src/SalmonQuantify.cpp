@@ -1590,7 +1590,7 @@ void quantifyLibrary(
                 salmonOpts.jointLog->error("All fragments were too short to quasi-map.  I won't proceed.");
                 std::exit(1);  
             }
-        }
+        } // end tooShortFrac > 0.0
     }
 
 
