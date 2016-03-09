@@ -1,6 +1,6 @@
 /**
 >HEADER
-    Copyright (c) 2013, 2014, 2015 Rob Patro rob.patro@cs.stonybrook.edu
+    Copyright (c) 2013, 2014, 2015, 2016 Rob Patro rob.patro@cs.stonybrook.edu
 
     This file is part of Salmon.
 
@@ -1056,69 +1056,127 @@ void processReadLibrary(
 				}
 				break;
 				case SalmonIndexType::QUASI:
-				{
-            // True if we have a 64-bit SA index, false otherwise
-            bool largeIndex = sidx->is64BitQuasi();
-				    for(int i = 0; i < numThreads; ++i)  {
-					// NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
-					// change value before the lambda below is evaluated --- crazy!
-          if (largeIndex) {
-            auto threadFun = [&,i]() -> void {
-              processReadsQuasi<RapMapSAIndex<int64_t>>(
-                pairedParserPtr.get(),
-                readExp,
-                rl,
-                structureVec[i],
-                numObservedFragments,
-                numAssignedFragments,
-                numValidHits,
-                upperBoundHits,
-                sidx->quasiIndex64(),
-                transcripts,
-                fmCalc,
-                clusterForest,
-                fragLengthDist,
-                observedGCParams[i],
-                memOptions,
-                salmonOpts,
-                coverageThresh,
-                iomutex,
-                initialRound,
-                burnedIn,
-                writeToCache);
-              };
-              threads.emplace_back(threadFun);
-            } else {
-              auto threadFun = [&,i]() -> void {
-              processReadsQuasi<RapMapSAIndex<int32_t>>(
-                pairedParserPtr.get(),
-                readExp,
-                rl,
-                structureVec[i],
-                numObservedFragments,
-                numAssignedFragments,
-                numValidHits,
-                upperBoundHits,
-                sidx->quasiIndex32(),
-                transcripts,
-                fmCalc,
-                clusterForest,
-                fragLengthDist,
-                observedGCParams[i],
-                memOptions,
-                salmonOpts,
-                coverageThresh,
-                iomutex,
-                initialRound,
-                burnedIn,
-                writeToCache);
-              };
-              threads.emplace_back(threadFun);
-            }
+                    {
+                        // True if we have a 64-bit SA index, false otherwise
+                        bool largeIndex = sidx->is64BitQuasi();
+                        bool perfectHashIndex = sidx->isPerfectHashQuasi();
+                        for(int i = 0; i < numThreads; ++i)  {
+                            // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
+                            // change value before the lambda below is evaluated --- crazy!
+                            if (largeIndex) {
+                                if (perfectHashIndex) { // Perfect Hash
+                                    auto threadFun = [&,i]() -> void {
+                                        processReadsQuasi<RapMapSAIndex<int64_t, PerfectHash<int64_t>>>(
+                                                                                  pairedParserPtr.get(),
+                                                                                  readExp,
+                                                                                  rl,
+                                                                                  structureVec[i],
+                                                                                  numObservedFragments,
+                                                                                  numAssignedFragments,
+                                                                                  numValidHits,
+                                                                                  upperBoundHits,
+                                                                                  sidx->quasiIndexPerfectHash64(),
+                                                                                  transcripts,
+                                                                                  fmCalc,
+                                                                                  clusterForest,
+                                                                                  fragLengthDist,
+                                                                                  observedGCParams[i],
+                                                                                  memOptions,
+                                                                                  salmonOpts,
+                                                                                  coverageThresh,
+                                                                                  iomutex,
+                                                                                  initialRound,
+                                                                                  burnedIn,
+                                                                                  writeToCache);
+                                    };
+                                    threads.emplace_back(threadFun);
+                                } else { // Dense Hash
+                                    auto threadFun = [&,i]() -> void {
+                                        processReadsQuasi<RapMapSAIndex<int64_t, DenseHash<int64_t>>>(
+                                                                                                        pairedParserPtr.get(),
+                                                                                                        readExp,
+                                                                                                        rl,
+                                                                                                        structureVec[i],
+                                                                                                        numObservedFragments,
+                                                                                                        numAssignedFragments,
+                                                                                                        numValidHits,
+                                                                                                        upperBoundHits,
+                                                                                                        sidx->quasiIndex64(),
+                                                                                                        transcripts,
+                                                                                                        fmCalc,
+                                                                                                        clusterForest,
+                                                                                                        fragLengthDist,
+                                                                                                        observedGCParams[i],
+                                                                                                        memOptions,
+                                                                                                        salmonOpts,
+                                                                                                        coverageThresh,
+                                                                                                        iomutex,
+                                                                                                        initialRound,
+                                                                                                        burnedIn,
+                                                                                                        writeToCache);
+                                    };
+                                    threads.emplace_back(threadFun);
+                                }
+                            } else {
+                                if (perfectHashIndex) { // Perfect Hash
+                                    auto threadFun = [&,i]() -> void {
+                                        processReadsQuasi<RapMapSAIndex<int32_t, PerfectHash<int32_t>>>(
+                                                                                  pairedParserPtr.get(),
+                                                                                  readExp,
+                                                                                  rl,
+                                                                                  structureVec[i],
+                                                                                  numObservedFragments,
+                                                                                  numAssignedFragments,
+                                                                                  numValidHits,
+                                                                                  upperBoundHits,
+                                                                                  sidx->quasiIndexPerfectHash32(),
+                                                                                  transcripts,
+                                                                                  fmCalc,
+                                                                                  clusterForest,
+                                                                                  fragLengthDist,
+                                                                                  observedGCParams[i],
+                                                                                  memOptions,
+                                                                                  salmonOpts,
+                                                                                  coverageThresh,
+                                                                                  iomutex,
+                                                                                  initialRound,
+                                                                                  burnedIn,
+                                                                                  writeToCache);
+                                    };
+                                    threads.emplace_back(threadFun);
+                                } else { // Dense Hash
+                                    auto threadFun = [&,i]() -> void {
+                                        processReadsQuasi<RapMapSAIndex<int32_t, DenseHash<int32_t>>>(
+                                                                                                        pairedParserPtr.get(),
+                                                                                                        readExp,
+                                                                                                        rl,
+                                                                                                        structureVec[i],
+                                                                                                        numObservedFragments,
+                                                                                                        numAssignedFragments,
+                                                                                                        numValidHits,
+                                                                                                        upperBoundHits,
+                                                                                                        sidx->quasiIndex32(),
+                                                                                                        transcripts,
+                                                                                                        fmCalc,
+                                                                                                        clusterForest,
+                                                                                                        fragLengthDist,
+                                                                                                        observedGCParams[i],
+                                                                                                        memOptions,
+                                                                                                        salmonOpts,
+                                                                                                        coverageThresh,
+                                                                                                        iomutex,
+                                                                                                        initialRound,
+                                                                                                        burnedIn,
+                                                                                                        writeToCache);
+                                    };
+                                    threads.emplace_back(threadFun);
+                                }
 
-				    }
-				}
-				break;
+                            } // End spawn current thread  
+
+                        } // End spawn all threads
+                    } // End Quasi index
+                    break;
 			    } // end switch
 		    }
 		    for(int i = 0; i < numThreads; ++i) { threads[i].join(); }
@@ -1218,69 +1276,127 @@ void processReadLibrary(
 
                     case SalmonIndexType::QUASI:
                     {
-                      // True if we have a 64-bit SA index, false otherwise
-                      bool largeIndex = sidx->is64BitQuasi();
-                      for(int i = 0; i < numThreads; ++i)  {
-                        // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
-                        // change value before the lambda below is evaluated --- crazy!
-                        if (largeIndex) {
-                          auto threadFun = [&,i]() -> void {
-                            processReadsQuasi<RapMapSAIndex<int64_t>>(
-                              singleParserPtr.get(),
-                              readExp,
-                              rl,
-                              structureVec[i],
-                              numObservedFragments,
-                              numAssignedFragments,
-                              numValidHits,
-                              upperBoundHits,
-                              sidx->quasiIndex64(),
-                              transcripts,
-                              fmCalc,
-                              clusterForest,
-                              fragLengthDist,
-                              observedGCParams[i],
-                              memOptions,
-                              salmonOpts,
-                              coverageThresh,
-                              iomutex,
-                              initialRound,
-                              burnedIn,
-                              writeToCache);
-                            };
-                            threads.emplace_back(threadFun);
-                          } else {
-                            auto threadFun = [&,i]() -> void {
-                              processReadsQuasi<RapMapSAIndex<int32_t>>(
-                                singleParserPtr.get(),
-                                readExp,
-                                rl,
-                                structureVec[i],
-                                numObservedFragments,
-                                numAssignedFragments,
-                                numValidHits,
-                                upperBoundHits,
-                                sidx->quasiIndex32(),
-                                transcripts,
-                                fmCalc,
-                                clusterForest,
-                                fragLengthDist,
-                                observedGCParams[i],
-                                memOptions,
-                                salmonOpts,
-                                coverageThresh,
-                                iomutex,
-                                initialRound,
-                                burnedIn,
-                                writeToCache);
-                              };
-                              threads.emplace_back(threadFun);
-                            }
+                        // True if we have a 64-bit SA index, false otherwise
+                        bool largeIndex = sidx->is64BitQuasi();
+                        bool perfectHashIndex = sidx->isPerfectHashQuasi();
+                        for(int i = 0; i < numThreads; ++i)  {
+                            // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
+                            // change value before the lambda below is evaluated --- crazy!
+                            if (largeIndex) {
+                                if (perfectHashIndex) { // Perfect Hash
+                                    auto threadFun = [&,i]() -> void {
+                                        processReadsQuasi<RapMapSAIndex<int64_t, PerfectHash<int64_t>>>(
+                                                                                  pairedParserPtr.get(),
+                                                                                  readExp,
+                                                                                  rl,
+                                                                                  structureVec[i],
+                                                                                  numObservedFragments,
+                                                                                  numAssignedFragments,
+                                                                                  numValidHits,
+                                                                                  upperBoundHits,
+                                                                                  sidx->quasiIndexPerfectHash64(),
+                                                                                  transcripts,
+                                                                                  fmCalc,
+                                                                                  clusterForest,
+                                                                                  fragLengthDist,
+                                                                                  observedGCParams[i],
+                                                                                  memOptions,
+                                                                                  salmonOpts,
+                                                                                  coverageThresh,
+                                                                                  iomutex,
+                                                                                  initialRound,
+                                                                                  burnedIn,
+                                                                                  writeToCache);
+                                    };
+                                    threads.emplace_back(threadFun);
+                                } else { // Dense Hash
+                                    auto threadFun = [&,i]() -> void {
+                                        processReadsQuasi<RapMapSAIndex<int64_t, DenseHash<int64_t>>>(
+                                                                                                        singleParserPtr.get(),
+                                                                                                        readExp,
+                                                                                                        rl,
+                                                                                                        structureVec[i],
+                                                                                                        numObservedFragments,
+                                                                                                        numAssignedFragments,
+                                                                                                        numValidHits,
+                                                                                                        upperBoundHits,
+                                                                                                        sidx->quasiIndex64(),
+                                                                                                        transcripts,
+                                                                                                        fmCalc,
+                                                                                                        clusterForest,
+                                                                                                        fragLengthDist,
+                                                                                                        observedGCParams[i],
+                                                                                                        memOptions,
+                                                                                                        salmonOpts,
+                                                                                                        coverageThresh,
+                                                                                                        iomutex,
+                                                                                                        initialRound,
+                                                                                                        burnedIn,
+                                                                                                        writeToCache);
+                                    };
+                                    threads.emplace_back(threadFun);
+                                }
+                            } else {
+                                if (perfectHashIndex) { // Perfect Hash
+                                    auto threadFun = [&,i]() -> void {
+                                        processReadsQuasi<RapMapSAIndex<int32_t, PerfectHash<int32_t>>>(
+                                                                                  singleParserPtr.get(),
+                                                                                  readExp,
+                                                                                  rl,
+                                                                                  structureVec[i],
+                                                                                  numObservedFragments,
+                                                                                  numAssignedFragments,
+                                                                                  numValidHits,
+                                                                                  upperBoundHits,
+                                                                                  sidx->quasiIndexPerfectHash32(),
+                                                                                  transcripts,
+                                                                                  fmCalc,
+                                                                                  clusterForest,
+                                                                                  fragLengthDist,
+                                                                                  observedGCParams[i],
+                                                                                  memOptions,
+                                                                                  salmonOpts,
+                                                                                  coverageThresh,
+                                                                                  iomutex,
+                                                                                  initialRound,
+                                                                                  burnedIn,
+                                                                                  writeToCache);
+                                    };
+                                    threads.emplace_back(threadFun);
+                                } else { // Dense Hash
+                                    auto threadFun = [&,i]() -> void {
+                                        processReadsQuasi<RapMapSAIndex<int32_t, DenseHash<int32_t>>>(
+                                                                                                        singleParserPtr.get(),
+                                                                                                        readExp,
+                                                                                                        rl,
+                                                                                                        structureVec[i],
+                                                                                                        numObservedFragments,
+                                                                                                        numAssignedFragments,
+                                                                                                        numValidHits,
+                                                                                                        upperBoundHits,
+                                                                                                        sidx->quasiIndex32(),
+                                                                                                        transcripts,
+                                                                                                        fmCalc,
+                                                                                                        clusterForest,
+                                                                                                        fragLengthDist,
+                                                                                                        observedGCParams[i],
+                                                                                                        memOptions,
+                                                                                                        salmonOpts,
+                                                                                                        coverageThresh,
+                                                                                                        iomutex,
+                                                                                                        initialRound,
+                                                                                                        burnedIn,
+                                                                                                        writeToCache);
+                                    };
+                                    threads.emplace_back(threadFun);
+                                }
 
-                        }
-                      }
-                      break;
-                }
+                            } // End spawn current thread  
+
+                        } // End spawn all threads
+		    } // End Quasi index
+		    break;
+		}
                 for(int i = 0; i < numThreads; ++i) { threads[i].join(); }
             } // ------ END Single-end --------
 }
@@ -1564,7 +1680,7 @@ int salmonQuantify(int argc, char *argv[]) {
      "assigned.  When this flag is set, if the intersection of the quasi-mappings for the left and right "
      "is empty, then all mappings for the left and all mappings for the right read are reported as orphaned "
      "quasi-mappings")
-    ("fldMax" , po::value<size_t>(&(sopt.fragLenDistMax))->default_value(800), "The maximum fragment length to consider when building the empirical "
+    ("fldMax" , po::value<size_t>(&(sopt.fragLenDistMax))->default_value(1000), "The maximum fragment length to consider when building the empirical "
      											      "distribution")
     ("fldMean", po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(200), "The mean used in the fragment length distribution prior")
     ("fldSD" , po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(80), "The standard deviation used in the fragment length distribution prior")
@@ -1745,11 +1861,14 @@ transcript abundance from RNA-seq reads
             }
         }
 
+	// FEB 18
+	/*
         if (sopt.biasCorrect and sopt.gcBiasCorrect) {
             sopt.jointLog->error("Enabling both sequence-specific and fragment GC bias correction "
                     "simultaneously is not yet supported. Please disable one of these options.");
             return 1;
         }
+	*/
 
         // maybe arbitrary, but if it's smaller than this, consider it
         // equal to LOG_0

@@ -697,7 +697,9 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
     std::vector<Transcript>& transcripts = readExp.transcripts();
 
     uint32_t minIter = 50;
-    bool doBiasCorrect = sopt.biasCorrect or sopt.gcBiasCorrect;
+    bool seqBiasCorrect = sopt.biasCorrect;
+    bool gcBiasCorrect = sopt.gcBiasCorrect;
+    bool doBiasCorrect = seqBiasCorrect or gcBiasCorrect;
 
     using VecT = CollapsedEMOptimizer::VecType;
     // With atomics
@@ -833,13 +835,37 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
 
     // Iterations in which we will allow re-computing the effective lengths
     // if bias-correction is enabled.
-    std::vector<uint32_t> recomputeIt{50, 500, 1000};
+    std::vector<uint32_t> recomputeGCIt{550, 1000};
+    std::vector<uint32_t> recomputeSeqIt{50, 500};
+    std::vector<uint32_t> recomputeIt;
+
+    // If we've enabled sequence bias correction
+    if (seqBiasCorrect) {
+	minIter = recomputeSeqIt.front();
+	recomputeIt.insert(recomputeIt.end(), recomputeSeqIt.begin(), recomputeSeqIt.end()); 
+    }
+    if (gcBiasCorrect) {
+	minIter = recomputeGCIt.front();
+	recomputeIt.insert(recomputeIt.end(), recomputeGCIt.begin(), recomputeGCIt.end());
+    }
+
 
     bool converged{false};
     double maxRelDiff = -std::numeric_limits<double>::max();
     while (itNum < minIter or (itNum < maxIter and !converged)) {
         if (doBiasCorrect and
             (find(recomputeIt.begin(), recomputeIt.end(), itNum) != recomputeIt.end())) {
+
+	    // check if this round is sequence bias 
+	    /*
+	    if (find(recomputeSeqIt.begin(), recomputeSeqIt.end(), itNum) != recomputeSeqIt.end()) {
+		sopt.gcBiasCorrect = false;
+		sopt.biasCorrect = true;
+	    } else {
+		sopt.gcBiasCorrect = true;
+		sopt.biasCorrect = false;
+	    }
+	    */
 
             jointLog->info("iteration {}, recomputing effective lengths", itNum);
             effLens = salmon::utils::updateEffectiveLengths(
@@ -892,6 +918,10 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
 
         ++itNum;
     }
+
+    // Reset the original bias correction options
+    sopt.gcBiasCorrect = gcBiasCorrect;
+    sopt.biasCorrect = seqBiasCorrect;
 
     jointLog->info("iteration = {} | max rel diff. = {}",
                     itNum, maxRelDiff);

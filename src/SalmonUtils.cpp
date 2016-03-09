@@ -1161,12 +1161,14 @@ Eigen::VectorXd updateEffectiveLengths(
     }
 
     // This should not happen for the time being
+    /*
     if (gcBiasCorrect and seqBiasCorrect) {
       sopt.jointLog->warn("Enabling both sequence-specific and fragment GC bias correction "
 	  "simultaneously is not yet supported.  Skipping effective length "
 	  "correction");
       return effLensIn;
     }
+    */
 
     // calculate read bias normalization factor -- total count in read
     // distribution.
@@ -1441,9 +1443,10 @@ Eigen::VectorXd updateEffectiveLengths(
 
             for (int32_t i = refLen - trunc - 1; i >= 0; --i) {
                 /** Seq-specific bias **/
+		int32_t fragStart = i;
                 if (seqBiasCorrect) {
                     int32_t kmerStartPos = i;
-                    int32_t fragStartPos = kmerStartPos + 2;
+                    fragStart = kmerStartPos + 2;
                     if (firstKmer) {
                         idx = indexForKmer(tseq + i, K, Direction::REVERSE_COMPLEMENT);
                         firstKmer = false;
@@ -1451,10 +1454,10 @@ Eigen::VectorXd updateEffectiveLengths(
                         idx = nextKmerIndex(idx, tseq[kmerStartPos], K, Direction::REVERSE_COMPLEMENT);
                     }
 
-                    int32_t maxFragLen = refLen - fragStartPos + 1;
-                    if (fragStartPos >=0 and fragStartPos < refLen) {
+                    int32_t maxFragLen = refLen - fragStart + 1;
+                    if (fragStart >=0 and fragStart < refLen) {
                         auto cdensity = (maxFragLen >= cdf.size()) ? 1.0 : cdf[maxFragLen];
-                        seqFactors[fragStartPos] +=
+                        seqFactors[fragStart] +=
                             probFwd *
                             (readBias.counts[idx]/ (transcriptKmerDist[idx] + seqPrior)) *
                             cdensity;
@@ -1464,7 +1467,7 @@ Eigen::VectorXd updateEffectiveLengths(
                     double prevFLMass = cdf[0];
                     //for (int32_t fl = fldLow; fl <= fldHigh; ++fl) {
                     for (int32_t fl = fldLow; fl <= fldHigh; fl += gcSamp) {
-                        int32_t fragStart = i;
+                        //fragStart = i;
                         int32_t fragEnd = i + fl - 1; // -1 because the interval is closed on both sides
                         if (fragEnd < refLen) {
                             auto gcFrac = txp.gcFrac(fragStart, fragEnd);

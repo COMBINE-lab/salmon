@@ -109,9 +109,17 @@ class ReadExperiment {
 	    switch (salmonIndex_->indexType()) {
             case SalmonIndexType::QUASI:
                 if (salmonIndex_->is64BitQuasi()) {
-                  loadTranscriptsFromQuasi(salmonIndex_->quasiIndex64(), sopt);
+                    if (salmonIndex_->isPerfectHashQuasi()) {
+                        loadTranscriptsFromQuasi(salmonIndex_->quasiIndexPerfectHash64(), sopt);
+                    } else {
+                        loadTranscriptsFromQuasi(salmonIndex_->quasiIndex64(), sopt);
+                    }
                 } else {
-                  loadTranscriptsFromQuasi(salmonIndex_->quasiIndex32(), sopt);
+                    if (salmonIndex_->isPerfectHashQuasi()) {
+                        loadTranscriptsFromQuasi(salmonIndex_->quasiIndexPerfectHash32(), sopt);
+                    } else {
+                        loadTranscriptsFromQuasi(salmonIndex_->quasiIndex32(), sopt);
+                    }
                 }
                 break;
             case SalmonIndexType::FMD:

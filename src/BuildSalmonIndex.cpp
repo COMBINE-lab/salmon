@@ -77,6 +77,7 @@ int salmonIndex(int argc, char* argv[]) {
     uint32_t maxThreads = std::thread::hardware_concurrency();
     uint32_t numThreads;
     bool useQuasi{false};
+    bool perfectHash{false};
 
     po::options_description generic("Command Line Options");
     generic.add_options()
@@ -88,6 +89,9 @@ int salmonIndex(int argc, char* argv[]) {
     ("index,i", po::value<string>()->required(), "Salmon index.")
     ("threads,p", po::value<uint32_t>(&numThreads)->default_value(maxThreads)->required(),
                             "Number of threads to use (only used for computing bias features)")
+    ("perfectHash", po::bool_switch(&perfectHash)->default_value(false), 
+                             "[quasi index only] Build the index using a perfect hash rather than a dense hash.  This "
+                             "will require less memory (especially during quantification), but will take longer to construct")
     ("type", po::value<string>(&indexTypeStr)->default_value("quasi")->required(), "The type of index to build; options are \"fmd\" and \"quasi\" "
     							   			   "\"quasi\" is recommended, and \"fmd\" may be removed in the future")
     ("sasamp,s", po::value<uint32_t>(&saSampInterval)->default_value(1)->required(),
@@ -149,8 +153,8 @@ Creates a salmon index.
         auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(logPath.string(), true);
         auto consoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
         auto consoleLog = spdlog::create("consoleLog", {consoleSink});
-        auto fileLog = spdlog::create("fileLog", {fileSink});
-        auto jointLog = spdlog::create("jointLog", {fileSink, consoleSink});
+        auto fileLog = spdlog::create("fLog", {fileSink});
+        auto jointLog = spdlog::create("jLog", {fileSink, consoleSink});
 
         std::vector<std::string> transcriptFiles = {transcriptFile};
         fmt::MemoryWriter infostr;
@@ -178,6 +182,9 @@ Creates a salmon index.
             argVec->push_back(transcriptFile);
             argVec->push_back("-i");
             argVec->push_back(outputPrefix.string());
+            if (perfectHash) {
+                argVec->push_back("--perfectHash");
+            }
             sidx.reset(new SalmonIndex(jointLog, SalmonIndexType::QUASI));
         } else {
             // Build the FMD-based index
