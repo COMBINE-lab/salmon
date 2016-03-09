@@ -68,7 +68,6 @@ def main(args):
     logging.info("wrote {} bootstrap samples".format(numBoot))
     logging.info("converted bootstraps successfully.")
 
-
 if __name__ == "__main__":
    parser = argparse.ArgumentParser(description="Convert bootstrap results to text format") 
    parser.add_argument('quantDir', type=str, help="path to (sailfish / salmon) quantification directory")
