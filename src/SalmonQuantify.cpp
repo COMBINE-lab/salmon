@@ -1584,6 +1584,7 @@ void quantifyLibrary(
                                       "If this fraction is too large, consider re-building the index with a smaller k.\n"
                                       "The minimum read size found was {}.\n\n",
                                       tooShortFrac * 100.0, minK, shortFragStats.shortest);
+            
             // If *all* fragments were too short, then halt now
             if (shortFragStats.numTooShort == numObservedFragments) {
                 salmonOpts.jointLog->error("All fragments were too short to quasi-map.  I won't proceed.");
