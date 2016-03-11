@@ -21,7 +21,6 @@
 #include "cereal/types/vector.hpp"
 #include "cereal/archives/binary.hpp"
 
-#include "jellyfish/config.h"
 #include "jellyfish/err.hpp"
 #include "jellyfish/misc.hpp"
 #include "jellyfish/jellyfish.hpp"

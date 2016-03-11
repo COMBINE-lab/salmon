@@ -36,7 +36,7 @@ class ReadKmerDist {
 	salmon::utils::Direction dir) {
       using salmon::utils::Direction;
       int posBeforeHit = 2;
-      int posAfterHit = 4;
+      int posAfterHit = 3;
       bool success{false};
       switch (dir) {
 	case Direction::FORWARD :

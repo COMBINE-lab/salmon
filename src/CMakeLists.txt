@@ -4,13 +4,19 @@ ${GAT_SOURCE_DIR}/include/eigen3
 ${GAT_SOURCE_DIR}/external
 ${GAT_SOURCE_DIR}/external/cereal/include
 ${GAT_SOURCE_DIR}/external/install/include
-${GAT_SOURCE_DIR}/external/install/include/jellyfish-2.2.3
+${GAT_SOURCE_DIR}/external/install/include/jellyfish-2.2.5
 ${GAT_SOURCE_DIR}/external/install/include/bwa
 ${ZLIB_INCLUDE_DIR}
 ${TBB_INCLUDE_DIRS}
 ${Boost_INCLUDE_DIRS}
 ${GAT_SOURCE_DIR}/external/install/include/rapmap
 )
+
+if (JELLYFISH_FOUND)
+    include_directories(${JELLYFISH_INCLUDE_DIR})
+else()
+    include_directories(${GAT_SOURCE_DIR}/external/install/include/jellyfish-2.2.5)
+endif()
 
 set ( SALMON_MAIN_SRCS
 QSufSort.c
