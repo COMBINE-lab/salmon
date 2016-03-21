@@ -835,20 +835,8 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
 
     // Iterations in which we will allow re-computing the effective lengths
     // if bias-correction is enabled.
-    std::vector<uint32_t> recomputeGCIt{550, 1000};
-    std::vector<uint32_t> recomputeSeqIt{50, 500};
-    std::vector<uint32_t> recomputeIt;
-
-    // If we've enabled sequence bias correction
-    if (seqBiasCorrect) {
-	minIter = recomputeSeqIt.front();
-	recomputeIt.insert(recomputeIt.end(), recomputeSeqIt.begin(), recomputeSeqIt.end()); 
-    }
-    if (gcBiasCorrect) {
-	minIter = recomputeGCIt.front();
-	recomputeIt.insert(recomputeIt.end(), recomputeGCIt.begin(), recomputeGCIt.end());
-    }
-
+    std::vector<uint32_t> recomputeIt{50, 500, 1000};
+    minIter = recomputeIt.front();
 
     bool converged{false};
     double maxRelDiff = -std::numeric_limits<double>::max();
@@ -856,23 +844,13 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
         if (doBiasCorrect and
             (find(recomputeIt.begin(), recomputeIt.end(), itNum) != recomputeIt.end())) {
 
-	    // check if this round is sequence bias 
-	    /*
-	    if (find(recomputeSeqIt.begin(), recomputeSeqIt.end(), itNum) != recomputeSeqIt.end()) {
-		sopt.gcBiasCorrect = false;
-		sopt.biasCorrect = true;
-	    } else {
-		sopt.gcBiasCorrect = true;
-		sopt.biasCorrect = false;
-	    }
-	    */
-
             jointLog->info("iteration {}, recomputing effective lengths", itNum);
             effLens = salmon::utils::updateEffectiveLengths(
                     sopt,
                     readExp,
                     effLens,
                     alphas);
+
             // Check for strangeness with the lengths.
             for (size_t i = 0; i < effLens.size(); ++i) {
                 if (effLens(i) <= 0.0) {

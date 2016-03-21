@@ -1756,6 +1756,9 @@ int salmonQuantify(int argc, char *argv[]) {
                         "a priori probability.")
     ("useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(false), "[experimental] : "
                         "Consider / model non-uniformity in the fragment start positions across the transcript.")
+    ("noBiasLengthThreshold", po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(false), "[experimental] : "
+                        "If this option is enabled, then bias correction will be allowed to estimate effective lengths "
+                        "shorter than the approximate mean fragment length")
     ("numBiasSamples", po::value<int32_t>(&numBiasSamples)->default_value(1000000),
             "Number of fragment mappings to use when learning the sequence-specific bias model.")
     ("numAuxModelSamples", po::value<uint32_t>(&(sopt.numBurninFrags))->default_value(5000000), "The first <numAuxModelSamples> are used to train the "

@@ -36,7 +36,9 @@ class ReadKmerDist {
 	salmon::utils::Direction dir) {
       using salmon::utils::Direction;
       int posBeforeHit = 2;
-      int posAfterHit = 3;
+      // This is 4 insted of 3, b/c the last
+      // position is 1 past the end of the read.
+      int posAfterHit = 4; 
       bool success{false};
       switch (dir) {
 	case Direction::FORWARD :
@@ -47,8 +49,8 @@ class ReadKmerDist {
 	      p -= posBeforeHit;
 	      // If the read matches in the forward direction, we take
 	      // the RC sequence.
-	      auto idx = indexForKmer(p, K, Direction::REVERSE_COMPLEMENT);
-	      if (idx > counts.size()) { return false; }
+	      auto idx = indexForKmer(p, K, Direction::FORWARD);
+	      if (idx >= counts.size()) { return false; }
 	      counts[idx]++;
 	      success = true;
 	    }
@@ -59,8 +61,8 @@ class ReadKmerDist {
 	    if ((p - start) >= posAfterHit and
 		((p - posAfterHit + K) < end) ) {
 	      p -= posAfterHit;
-	      auto idx = indexForKmer(p, K, Direction::FORWARD);
-	      if (idx > counts.size()) { return false; }
+	      auto idx = indexForKmer(p, K, Direction::REVERSE_COMPLEMENT);
+	      if (idx >= counts.size()) { return false; }
 	      counts[idx]++;
 	      success = true;
 	    }

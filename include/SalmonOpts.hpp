@@ -46,6 +46,9 @@ struct SalmonOpts {
                                       // account when computing the probability that a
                                      // fragment was generated from a transcript.
 
+    bool noBiasLengthThreshold; // Don't require that the recomputed effective length for a target
+                                // be above a threshold before applying it.
+
     bool useFSPD; // Learn a non-uniform start distribution
 
     bool noSeqBiasModel; // Don't learn and use a sequence-specific bias model.

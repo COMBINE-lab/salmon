@@ -41,7 +41,7 @@ inline uint32_t nextKmerIndex(uint32_t idx, char n, uint32_t K,
                               salmon::utils::Direction dir) {
     using salmon::utils::Direction;
     idx = idx << 2;
-    if(dir == Direction::REVERSE_COMPLEMENT) {
+    if(dir == Direction::REVERSE or dir == Direction::REVERSE_COMPLEMENT) {
         switch(n) {
             case 'A':
             case 'a':

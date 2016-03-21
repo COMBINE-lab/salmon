@@ -99,7 +99,7 @@ SCENARIO("The next k-mer index function works correctly") {
             }
         }
         for (int32_t i = s.size() - K - 2; i >= 0; --i) {
-            idx = nextKmerIndex(idx, s[i], 6, Direction::REVERSE_COMPLEMENT);
+            idx = nextKmerIndex(idx, s[i], 6, Direction::REVERSE);
             k = rc(s.substr(i, 6));
             WHEN("kmer is [" + k + "]") {
                 auto kp = kmerForIndex(idx, 6);
