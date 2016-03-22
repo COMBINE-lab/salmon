@@ -1167,7 +1167,7 @@ Eigen::VectorXd updateEffectiveLengths(
     // calculate read bias normalization factor -- total count in read
     // distribution.
     auto& readBias = readExp.readBias();
-    int32_t K = readBias.getK();
+    int32_t K = static_cast<int32_t>(readBias.getK());
     double readNormFactor = static_cast<double>(readBias.totalCount());
 
     // The *expected* biases from sequence-specific effects
@@ -1312,7 +1312,7 @@ Eigen::VectorXd updateEffectiveLengths(
                         double prevFLMass = cdf[sp];
                         int32_t fragStart = fragStartPos;
                         for (int32_t fl = fldLow; fl <= fldHigh; fl += gcSamp) {
-                            int32_t fragEnd = fragStart + fl;
+                            int32_t fragEnd = fragStart + fl - 1;
                             if (fragEnd < refLen) {
                                 // The GC fraction for this putative fragment
                                 auto gcFrac = txp.gcFrac(fragStart, fragEnd);
@@ -1353,7 +1353,7 @@ Eigen::VectorXd updateEffectiveLengths(
      * bias terms.
      */
     auto combinedBiasParams = expectedDist.combine(
-            [](const CombineableBiasParams& p1,
+	    [](const CombineableBiasParams& p1,
                const CombineableBiasParams& p2) -> CombineableBiasParams {
                CombineableBiasParams p;
                for (size_t i = 0; i < p1.expectSeq.size(); ++i) {
@@ -1467,7 +1467,7 @@ Eigen::VectorXd updateEffectiveLengths(
                                     prevFLMass = cdf[fl];
                                     // count it in the forward orientation
                                     gcFactors[fragStart] += sampleProb * probFwd;
-                                    gcFactors[fragStart] += sampleProb * probRC;
+                                    gcFactors[fragEnd] += sampleProb * probRC;
                                 } else { break; } // no more valid positions
 
                             }
