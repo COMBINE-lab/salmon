@@ -223,16 +223,13 @@ class SalmonIndex{
                                   std::vector<std::string>& quasiArgVec,
                                   uint32_t k) {
                 namespace bfs = boost::filesystem;
-                char* quasiArgv[] = {
-                    const_cast<char*>(quasiArgVec[0].c_str()),
-                    const_cast<char*>(quasiArgVec[1].c_str()),
-                    const_cast<char*>(quasiArgVec[2].c_str()),
-                    const_cast<char*>(quasiArgVec[3].c_str()),
-                    const_cast<char*>(quasiArgVec[4].c_str()),
-                    const_cast<char*>(quasiArgVec[5].c_str()),
-                    const_cast<char*>(quasiArgVec[6].c_str())
-                };
-                int quasiArgc = 7;
+		int quasiArgc = static_cast<int>(quasiArgVec.size());
+		char** quasiArgv = new char*[quasiArgc];
+		for (size_t i = 0; i < quasiArgc; ++i) {
+		  auto& arg = quasiArgVec[i];
+		  quasiArgv[i] = new char[arg.size() + 1];
+		  std::strcpy(quasiArgv[i], arg.c_str());
+		}
 
                 int ret = rapMapSAIndex(quasiArgc, quasiArgv);
 
@@ -242,7 +239,14 @@ class SalmonIndex{
                 versionInfo_.auxKmerLength(k);
                 versionInfo_.indexType(SalmonIndexType::QUASI);
                 versionInfo_.save(versionFile);
-                return (ret == 0);
+	
+		// Free the memory used for the arg vector
+		for (size_t i = 0; i < quasiArgc; ++i) {
+		  delete quasiArgv[i];
+		}
+		delete [] quasiArgv;
+	
+		return (ret == 0);
             }
 
           bool loadFMDIndex_(const boost::filesystem::path& indexDir) {
