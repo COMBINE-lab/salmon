@@ -1375,7 +1375,7 @@ Eigen::VectorXd updateEffectiveLengths(
         for (auto m : transcriptGCDist) { txomeGCNormFactor += m; }
         auto pmass = 1e-5 * 101.0;
         gcPrior = ((pmass / (readGCNormFactor - pmass)) * txomeGCNormFactor) / 101.0;
-        //txomeGCNormFactor += gcPrior * 101.0;
+        txomeGCNormFactor += gcPrior * 101.0;
     }
 
     double txomeNormFactor = 0.0;
@@ -1384,7 +1384,7 @@ Eigen::VectorXd updateEffectiveLengths(
         for(auto m : transcriptKmerDist) { txomeNormFactor += m; }
         double pmass = static_cast<double>(constExprPow(4, K));
         seqPrior = ((pmass / (readNormFactor - pmass)) * txomeNormFactor) / pmass;
-        //txomeNormFactor += seqPrior * pmass;
+        txomeNormFactor += seqPrior * pmass;
     }
 
     std::atomic<size_t> numCorrected{0};
