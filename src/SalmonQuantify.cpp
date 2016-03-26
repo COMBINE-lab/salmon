@@ -444,14 +444,14 @@ void processMiniBatch(
                 }
 
 
+		
                 if (gcBiasCorrect and aln.libFormat().type == ReadType::PAIRED_END) {
                     int32_t start = std::min(aln.pos, aln.matePos);
-                    int32_t stop = start + aln.fragLen;
+                    int32_t stop = start + aln.fragLen - 1;
                     if (start > 0 and stop < transcript.RefLength) {
                         int32_t gcFrac = transcript.gcFrac(start, stop);
                         // Add this fragment's contribution
-                        observedGCMass[gcFrac] = salmon::math::logAdd(
-                                observedGCMass[gcFrac], aln.logProb + logForgettingMass);
+                        observedGCMass[gcFrac] = salmon::math::logAdd(observedGCMass[gcFrac], LOG_1);//aln.logProb + logForgettingMass);
                     }
                 }
 		double r = uni(randEng);
@@ -469,12 +469,25 @@ void processMiniBatch(
 						transcript.RefLength,
 						logForgettingMass);
 			}
+			// Try sampling rather than considering all.
+			/*
+			if (gcBiasCorrect and aln.libFormat().type == ReadType::PAIRED_END) {
+			  int32_t start = std::min(aln.pos, aln.matePos);
+			  int32_t stop = start + aln.fragLen - 1;
+			  if (start > 0 and stop < transcript.RefLength) {
+			    int32_t gcFrac = transcript.gcFrac(start, stop);
+			    // Add this fragment's contribution
+			    observedGCMass[gcFrac] = salmon::math::logAdd(
+									  observedGCMass[gcFrac], logForgettingMass);
+			  }
+			}
+			*/
 		}
-            } // end normalize
+	    } // end normalize
 
-            // update the single target transcript
-            if (transcriptUnique) {
-                if (updateCounts) {
+	    // update the single target transcript
+	    if (transcriptUnique) {
+		if (updateCounts) {
                     transcripts[firstTranscriptID].addUniqueCount(1);
                 }
                 clusterForest.updateCluster(

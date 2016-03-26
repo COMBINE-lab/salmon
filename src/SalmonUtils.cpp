@@ -1192,19 +1192,19 @@ Eigen::VectorXd updateEffectiveLengths(
         transcriptGCDist.clear();
         transcriptGCDist.resize(101, 0.0);
 
-        bool first{false};
-        bool second{false};
+        bool lb{false};
+        bool ub{false};
         for (size_t i = 0; i <= fld.maxVal(); ++i) {
             pdf[i] = std::exp(fld.pmf(i));
             cdf[i] = (i > 0) ? cdf[i-1] + pdf[i] : pdf[i];
             auto density = cdf[i];
 
-            if (!first and density >= 0.005) {
-                first = true;
+            if (!lb and density >= 0.005) {
+                lb = true;
                 fldLow = i;
             }
-            if (!second and density >= 0.995) {
-                second = true;
+            if (!ub and density >= 0.995) {
+                ub = true;
                 fldHigh = i;
             }
         }
@@ -1481,9 +1481,8 @@ Eigen::VectorXd updateEffectiveLengths(
 
                     if (seqBiasCorrect) {
                         for (int32_t kmerStartPos = refLen - trunc - 1; kmerStartPos >= 0; --kmerStartPos) {
-                            int32_t fragStart = kmerStartPos;
+                            int32_t fragStart = kmerStartPos + 3;
                             int32_t kmerEndPos = kmerStartPos + K - 1; // -1 because pos is *inclusive*
-                            fragStart = kmerStartPos + 3;
                             idx = firstKmer ? indexForKmer(tseq + kmerStartPos, K, Direction::REVERSE) :
                                               nextKmerIndex(idx, tseq[kmerStartPos], K, Direction::REVERSE);
                             firstKmer = false;
@@ -1514,6 +1513,8 @@ Eigen::VectorXd updateEffectiveLengths(
                 
                 // throw caution to the wind
                 double thresh = noThreshold ? 0.0 : unprocessedLen;
+                //bool cond2 = (elen > 1.0 and effLength > 1.0); 
+                //if(unprocessedLen > 0.0 and cond2) {//}effLength > thresh) {
                 if(unprocessedLen > 0.0 and effLength > thresh) {
                     ++numCorrected;
                     effLensOut(it) = effLength;

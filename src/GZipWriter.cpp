@@ -158,6 +158,15 @@ bool GZipWriter::writeMeta(
   std::copy(bcounts.begin(), bcounts.end(), observedBias.begin());
   writeVectorToFile(obsBiasPath, observedBias);
 
+  bfs::path normGCPath = auxDir / "expected_gc.gz";
+  writeVectorToFile(normGCPath, experiment.expectedGCBias());
+
+  bfs::path obsGCPath = auxDir / "observed_gc.gz";
+  const auto& gcCounts = experiment.observedGC();
+  std::vector<double> observedGC(gcCounts.size(), 0.0);
+  std::copy(gcCounts.begin(), gcCounts.end(), observedGC.begin());
+  writeVectorToFile(obsGCPath, observedGC);
+  
   bfs::path info = auxDir / "meta_info.json";
 
   {
