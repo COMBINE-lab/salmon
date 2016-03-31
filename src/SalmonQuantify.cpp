@@ -435,7 +435,7 @@ void processMiniBatch(
                         obsRC = salmon::math::logAdd(obsRC, aln.logProb);
                     }
                 } else if (aln.libFormat().type == ReadType::SINGLE_END) {
-                // Single-end or orphan
+		  // Single-end or orphan
                     if (aln.libFormat().strandedness == ReadStrandedness::S) {
                         obsFwd = salmon::math::logAdd(obsFwd, aln.logProb);
                     } else {
@@ -451,7 +451,7 @@ void processMiniBatch(
                     if (start > 0 and stop < transcript.RefLength) {
                         int32_t gcFrac = transcript.gcFrac(start, stop);
                         // Add this fragment's contribution
-                        observedGCMass[gcFrac] = salmon::math::logAdd(observedGCMass[gcFrac], LOG_1);//aln.logProb + logForgettingMass);
+                        observedGCMass[gcFrac] = salmon::math::logAdd(observedGCMass[gcFrac], aln.logProb + logForgettingMass);
                     }
                 }
 		double r = uni(randEng);

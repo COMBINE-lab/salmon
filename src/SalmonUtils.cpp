@@ -1512,10 +1512,11 @@ Eigen::VectorXd updateEffectiveLengths(
                 } // for the processed transcript
                 
                 // throw caution to the wind
-                double thresh = noThreshold ? 0.0 : unprocessedLen;
-                //bool cond2 = (elen > 1.0 and effLength > 1.0); 
-                //if(unprocessedLen > 0.0 and cond2) {//}effLength > thresh) {
-                if(unprocessedLen > 0.0 and effLength > thresh) {
+                double thresh = noThreshold ? 1.0 : unprocessedLen;
+
+                // To correct the transcript length, we require it to be 
+                // "sufficiently" long to begin with.
+                if(unprocessedLen > 0.0 and elen > thresh and effLength > thresh) {
                     ++numCorrected;
                     effLensOut(it) = effLength;
                 } else {
@@ -1693,6 +1694,7 @@ void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
 
 // === Explicit instantiations
 
+// explicit instantiations for writing abundances ---
 template
 void salmon::utils::writeAbundances<AlignmentLibrary<ReadPair>>(
                                               const SalmonOpts& opts,
@@ -1732,6 +1734,7 @@ void salmon::utils::writeAbundancesFromCollapsed<ReadExperiment>(
                                                   boost::filesystem::path& fname,
                                                   std::string headerComments);
 
+// explicit instantiations for normalizing alpha vectors ---
 template
 void salmon::utils::normalizeAlphas<ReadExperiment>(const SalmonOpts& sopt,
                          	     ReadExperiment& alnLib);
@@ -1744,6 +1747,7 @@ void salmon::utils::normalizeAlphas<AlignmentLibrary<ReadPair>>(const SalmonOpts
                          	     AlignmentLibrary<ReadPair>& alnLib);
 
 
+// explicit instantiations for effective length updates ---
 template Eigen::VectorXd salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>, ReadExperiment>(
                 SalmonOpts& sopt,
                 ReadExperiment& readExp,
@@ -1779,73 +1783,5 @@ template Eigen::VectorXd salmon::utils::updateEffectiveLengths<std::vector<doubl
                 AlignmentLibrary<UnpairedRead>& readExp,
                 Eigen::VectorXd& effLensIn,
                 std::vector<double>& alphas);
-
-// Old / unused code
-
-/*
-template< typename T >
-TranscriptGeneMap transcriptToGeneMapFromFeatures(std::vector<GenomicFeature<T>> &feats ) {
-    using std::unordered_set;
-    using std::unordered_map;
-    using std::vector;
-    using std::tuple;
-    using std::string;
-    using std::get;
-
-    using NameID = tuple<string, size_t>;
-
-    IndexVector t2g;
-    NameVector transcriptNames;
-    NameVector geneNames;
-
-    // holds the mapping from transcript ID to gene ID
-    IndexVector t2gUnordered;
-    // holds the set of gene IDs
-    unordered_map<string, size_t> geneNameToID;
-
-    // To read the input and assign ids
-    size_t geneCounter = 0;
-    string transcript;
-    string gene;
-
-    std::sort( feats.begin(), feats.end(),
-	    []( const GenomicFeature<T> & a, const GenomicFeature<T> & b) -> bool {
-	    return a.sattr.transcript_id < b.sattr.transcript_id;
-	    } );
-
-    std::string currentTranscript = "";
-    for ( auto & feat : feats ) {
-
-	auto &gene = feat.sattr.gene_id;
-	auto &transcript = feat.sattr.transcript_id;
-
-	if ( transcript != currentTranscript ) {
-	    auto geneIt = geneNameToID.find(gene);
-	    size_t geneID = 0;
-
-	    if ( geneIt == geneNameToID.end() ) {
-		// If we haven't seen this gene yet, give it a new ID
-		geneNameToID[gene] = geneCounter;
-		geneID = geneCounter;
-		geneNames.push_back(gene);
-		++geneCounter;
-	    } else {
-		// Otherwise lookup the ID
-		geneID = geneIt->second;
-	    }
-
-	    transcriptNames.push_back(transcript);
-	    t2g.push_back(geneID);
-
-	    //++transcriptID;
-	    currentTranscript = transcript;
-	}
-
-    }
-
-    return TranscriptGeneMap(transcriptNames, geneNames, t2g);
-}
-*/
-
 
 
