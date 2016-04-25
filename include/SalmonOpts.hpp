@@ -34,6 +34,8 @@ struct SalmonOpts {
     bool allowOrphans; // Consider orphaned reads when performing lightweight alignemnt.
 
     std::string auxDir; // The directory where auxiliary files will be written.
+    
+    bool consistentHits;  // Enforce consistency of hits gathered during quasi-mapping.
 
     bool dumpEq; 	     // Dump the equivalence classes and counts to file
 
@@ -104,6 +106,8 @@ struct SalmonOpts {
     boost::filesystem::path outputDirectory; // Quant output directory
 
     boost::filesystem::path indexDirectory; // Index directory
+    
+    bool quiet; // Be quiet during quantification.
 
     bool useVBOpt; // Use Variational Bayesian EM instead of "regular" EM in the batch passes
 

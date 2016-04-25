@@ -435,7 +435,7 @@ void processMiniBatch(
                         obsRC = salmon::math::logAdd(obsRC, aln.logProb);
                     }
                 } else if (aln.libFormat().type == ReadType::SINGLE_END) {
-		  // Single-end or orphan
+                    // Single-end or orphan
                     if (aln.libFormat().strandedness == ReadStrandedness::S) {
                         obsFwd = salmon::math::logAdd(obsFwd, aln.logProb);
                     } else {
@@ -451,7 +451,7 @@ void processMiniBatch(
                     if (start > 0 and stop < transcript.RefLength) {
                         int32_t gcFrac = transcript.gcFrac(start, stop);
                         // Add this fragment's contribution
-                        observedGCMass[gcFrac] = salmon::math::logAdd(observedGCMass[gcFrac], aln.logProb + logForgettingMass);
+                        observedGCMass[gcFrac] = salmon::math::logAdd(observedGCMass[gcFrac], newMass); 
                     }
                 }
 		double r = uni(randEng);
@@ -623,7 +623,8 @@ void processReadsQuasi(paired_parser* parser,
   uint64_t hitListCount{0};
   salmon::utils::ShortFragStats shortFragStats;
 
-  auto& readBias = readExp.readBias();
+  auto& readBiasFW = readExp.readBias(salmon::utils::Direction::FORWARD);
+  auto& readBiasRC = readExp.readBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
 
   auto expectedLibType = rl.format();
 
@@ -635,6 +636,8 @@ void processReadsQuasi(paired_parser* parser,
   size_t rangeSize{0};
   uint64_t  localNumAssignedFragments{0};
   bool strictIntersect = salmonOpts.strictIntersect;
+  bool consistentHits = salmonOpts.consistentHits;
+  bool quiet = salmonOpts.quiet;
 
   bool tooManyHits{false};
   size_t maxNumHits{salmonOpts.maxReadOccs};
@@ -674,13 +677,17 @@ void processReadsQuasi(paired_parser* parser,
                    hitCollector(j->data[i].first.seq,
                                 leftHits, saSearcher,
                                 MateStatus::PAIRED_END_LEFT,
-                                true);
+                                true,
+                                consistentHits
+                                );
 
         bool rh = tooShortRight ? false : 
                    hitCollector(j->data[i].second.seq,
                                 rightHits, saSearcher,
                                 MateStatus::PAIRED_END_RIGHT,
-                                true);
+                                true,
+                                consistentHits
+                                );
 
         // Consider a read as too short if both ends are too short
         if (tooShortLeft and tooShortRight) { 
@@ -710,6 +717,7 @@ void processReadsQuasi(paired_parser* parser,
 
 
 	// If we have mappings, then process them.
+    bool isPaired{false};
 	if (jointHits.size() > 0) {
 	  bool isPaired = jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED;
 	  // If we are ignoring orphans
@@ -739,33 +747,98 @@ void processReadsQuasi(paired_parser* parser,
 
 	  bool needBiasSample = salmonOpts.biasCorrect;
 
+      auto revcomplement = [](const std::string& s) -> std::string {
+          std::string o("-", s.length());
+          int32_t j = 0;
+          for (int32_t i = s.length()-1; i >= 0; --i, ++j) {
+              switch(s[i]) {
+              case 'A':
+              case 'a':
+                  o[j] = 'T';
+                  break;
+              case 'C':
+              case 'c':
+                  o[j] = 'G';
+                  break;
+              case 'T':
+              case 't':
+                  o[j] = 'A';
+                  break;
+              case 'G':
+              case 'g':
+                  o[j] = 'C';
+                  break;
+              default:
+                  o[j] = 'N';
+                  break;
+              } 
+          }
+          return o;
+      };
+
 	  for (auto& h : jointHits) {
 
 	    // ---- Collect bias samples ------ //
-	    int32_t pos = static_cast<int32_t>(h.pos);
-	    auto dir = salmon::utils::boolToDirection(h.fwd);
 
 	    // If bias correction is turned on, and we haven't sampled a mapping
 	    // for this read yet, and we haven't collected the required number of
 	    // samples overall.
-        if(needBiasSample and salmonOpts.numBiasSamples > 0){
-            // the "start" position is the leftmost position if
-            // we hit the forward strand, and the leftmost
-            // position + the read length if we hit the reverse complement
-            int32_t startPos = h.fwd ? pos : pos + h.readLen;
-
+	    if(needBiasSample and salmonOpts.numBiasSamples > 0 and isPaired){
             auto& t = transcripts[h.tid];
-            if (startPos > 0 and startPos < t.RefLength) {
+
+            // read 1 
+		    int32_t pos1 = static_cast<int32_t>(h.pos);
+            auto dir1 = salmon::utils::boolToDirection(h.fwd);
+            // the "start" position is the leftmost position if
+            // map to the forward strand, and the leftmost
+            // position + the read length if we map to the reverse complement
+            int32_t startPos1 = h.fwd ? pos1 : (pos1 + h.readLen - 1);
+            
+            // read 2
+            int32_t pos2 = static_cast<int32_t>(h.matePos);
+            auto dir2 = salmon::utils::boolToDirection(h.mateIsFwd);
+            auto startPos2 = h.mateIsFwd ? pos2 : (pos2 + h.mateLen - 1);
+            
+
+            if ((dir1 != dir2) and // Shouldn't be from the same strand
+                (startPos1 > 0 and startPos1 < t.RefLength) and 
+                (startPos2 > 0 and startPos2 < t.RefLength)) {
+
                 const char* txpStart = t.Sequence();
-                const char* readStart = txpStart + startPos;
                 const char* txpEnd = txpStart + t.RefLength;
-                bool success = readBias.update(txpStart, readStart, txpEnd, dir);
+
+                const char* readStart1 = txpStart + startPos1;
+                auto& readBias1 = (h.fwd) ? readBiasFW : readBiasRC;
+                bool success = readBias1.update(txpStart, readStart1, txpEnd, dir1);
+                
+                const char* readStart2 = txpStart + startPos2;
+                auto& readBias2 = (h.mateIsFwd) ? readBiasFW : readBiasRC;
+                success = success and readBias2.update(txpStart, readStart2, txpEnd, dir2);
+                
+                /*
+                if (dir1 == salmon::utils::Direction::REVERSE_COMPLEMENT) {
+                    auto x = readLenLeft;
+                    if (pos1 - x >= 0 and pos1 + x < t.RefLength) {
+                        salmonOpts.jointLog->info("\nr1\nref  = {}\nread = XX{}\n", revcomplement(std::string(readStart1 - 3, 6)),
+                                                                                      j->data[i].first.seq.substr(0, 4));
+                    }
+                } else if (dir2 == salmon::utils::Direction::REVERSE_COMPLEMENT) {
+                    auto x = readLenRight;
+                    if (pos2 - x >= 0 and pos2 + x < t.RefLength) {
+                        salmonOpts.jointLog->info("\nr2\nref  = {}\nread = XX{}\n", revcomplement(std::string(readStart2 - 3, 6)),
+                                                                                      j->data[i].second.seq.substr(0, 4));
+                    }
+                }
+                */
+
                 if (success) {
                     salmonOpts.numBiasSamples -= 1;
                     needBiasSample = false;
+                    //if (salmonOpts.numBiasSamples <= 990000) { std::exit(1); }
                 }
+
             }
-        }
+	    }
 	    // ---- Collect bias samples ------ //
 
 
@@ -799,7 +872,7 @@ void processReadsQuasi(paired_parser* parser,
         localNumAssignedFragments += (jointHits.size() > 0);
         locRead++;
         ++numObservedFragments;
-        if (numObservedFragments % 500000 == 0) {
+        if (!quiet and numObservedFragments % 500000 == 0) {
     	    iomutex.lock();
             const char RESET_COLOR[] = "\x1b[0m";
             char green[] = "\x1b[30m";
@@ -869,7 +942,9 @@ void processReadsQuasi(single_parser* parser,
   salmon::utils::ShortFragStats shortFragStats;
   bool tooShort{false};
 
-  auto& readBias = readExp.readBias();
+  auto& readBiasFW = readExp.readBias(salmon::utils::Direction::FORWARD);
+  auto& readBiasRC = readExp.readBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
+
   const char* txomeStr = qidx->seq.c_str();
 
   auto expectedLibType = rl.format();
@@ -885,6 +960,9 @@ void processReadsQuasi(single_parser* parser,
   bool tooManyHits{false};
   size_t readLen{0};
   size_t maxNumHits{salmonOpts.maxReadOccs};
+  bool consistentHits{salmonOpts.consistentHits};
+  bool quiet{salmonOpts.quiet};
+
   SACollector<RapMapIndexT> hitCollector(qidx);
   SASearcher<RapMapIndexT> saSearcher(qidx);
   rapmap::utils::HitCounters hctr;
@@ -913,7 +991,9 @@ void processReadsQuasi(single_parser* parser,
             hitCollector(j->data[i].seq,
                          jointHits, saSearcher,
                          MateStatus::SINGLE_END,
-                         true);
+                         true,
+                         consistentHits
+                         );
 
         // If the fragment was too short, record it
         if (tooShort) { 
@@ -948,6 +1028,7 @@ void processReadsQuasi(single_parser* parser,
 
             auto& t = transcripts[h.tid];
             if (startPos > 0 and startPos < t.RefLength) {
+                auto& readBias = (h.fwd) ? readBiasFW : readBiasRC;
                 const char* txpStart = t.Sequence();
                 const char* readStart = txpStart + startPos;
                 const char* txpEnd = txpStart + t.RefLength;
@@ -974,7 +1055,7 @@ void processReadsQuasi(single_parser* parser,
         validHits += jointHits.size();
         locRead++;
         ++numObservedFragments;
-        if (numObservedFragments % 500000 == 0) {
+        if (!quiet and numObservedFragments % 500000 == 0) {
     	    iomutex.lock();
             const char RESET_COLOR[] = "\x1b[0m";
             char green[] = "\x1b[30m";
@@ -1555,7 +1636,7 @@ void quantifyLibrary(
         };
 
         // Process all of the reads
-        fmt::print(stderr, "\n\n\n\n");
+        if (!salmonOpts.quiet) { fmt::print(stderr, "\n\n\n\n"); }
         experiment.processReads(numQuantThreads, salmonOpts, processReadLibraryCallback);
         experiment.setNumObservedFragments(numObservedFragments);
 
@@ -1566,7 +1647,8 @@ void quantifyLibrary(
 
         initialRound = false;
         ++roundNum;
-        fmt::print(stderr, "\n\n\n\n");
+
+        if (!salmonOpts.quiet) { fmt::print(stderr, "\n\n\n\n"); }
         /*
         fmt::print(stderr, "\n# observed = {} / # required = {}\n",
                    numObservedFragments, numRequiredFragments);
@@ -1583,7 +1665,7 @@ void quantifyLibrary(
                                    numObservedFragments,
                                    numObservedFragments - numPrevObservedFragments);
     }
-    fmt::print(stderr, "\n\n\n\n");
+    if (!salmonOpts.quiet) { fmt::print(stderr, "\n\n\n\n"); }
 
     // Report statistics about short fragments
     salmon::utils::ShortFragStats shortFragStats = experiment.getShortFragStats();
@@ -1737,6 +1819,8 @@ int salmonQuantify(int argc, char *argv[]) {
     */
     ("auxDir", po::value<std::string>(&(sopt.auxDir))->default_value("aux"), "The sub-directory of the quantification directory where auxiliary information "
      			"e.g. bootstraps, bias parameters, etc. will be written.")
+    ("consistentHits,c", po::bool_switch(&(sopt.consistentHits))->default_value(false), "Force hits gathered during "
+         "quasi-mapping to be \"consistent\" (i.e. co-linear and approximately the right distance apart).")
     ("dumpEq", po::bool_switch(&(sopt.dumpEq))->default_value(false), "Dump the equivalence class counts "
              "that were computed during quasi-mapping")
     ("gcSizeSamp", po::value<std::uint32_t>(&(sopt.gcSampFactor))->default_value(1), "The value by which to down-sample transcripts when representing the "
@@ -1795,7 +1879,9 @@ int salmonQuantify(int argc, char *argv[]) {
     ("numGibbsSamples", po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0), "Number of Gibbs sampling rounds to "
      "perform.")
     ("numBootstraps", po::value<uint32_t>(&(sopt.numBootstraps))->default_value(0), "Number of bootstrap samples to generate. Note: "
-      "This is mutually exclusive with Gibbs sampling.");
+      "This is mutually exclusive with Gibbs sampling.")
+    ("quiet,q", po::bool_switch(&(sopt.quiet))->default_value(false), "Be quiet while doing quantification (don't write informative "
+     "output to the console unless something goes wrong).");
 
     po::options_description testing("\n"
             "testing options");
@@ -1898,7 +1984,10 @@ transcript abundance from RNA-seq reads
             std::cerr << "exiting\n";
             std::exit(1);
         }
-        std::cerr << "Logs will be written to " << logDirectory.string() << "\n";
+        
+        if (!sopt.quiet) {
+            std::cerr << "Logs will be written to " << logDirectory.string() << "\n";
+        }
 
         bfs::path logPath = logDirectory / "salmon_quant.log";
 	    // must be a power-of-two
@@ -1911,9 +2000,14 @@ transcript abundance from RNA-seq reads
         auto fileLog = spdlog::create("fileLog", {fileSink});
         auto jointLog = spdlog::create("jointLog", {fileSink, consoleSink});
 
+        // If we're being quiet, the only emit errors.
+        if (sopt.quiet) { 
+            jointLog->set_level(spdlog::level::err);
+        }
+
         sopt.jointLog = jointLog;
         sopt.fileLog = fileLog;
-
+        
         // Verify that no inconsistent options were provided
         if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {
             jointLog->error("You cannot perform both Gibbs sampling and bootstrapping. "

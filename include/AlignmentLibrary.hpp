@@ -61,7 +61,7 @@ class AlignmentLibrary {
         seqBiasModel_(1.0),
     	eqBuilder_(salmonOpts.jointLog),
         quantificationPasses_(0),
-        expectedBias_(constExprPow(4, readBias_.getK()), 1.0),
+        expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0),
         expectedGC_(101, 1.0),
         observedGC_(101, 1e-5) {
             namespace bfs = boost::filesystem;
@@ -300,10 +300,12 @@ class AlignmentLibrary {
         return observedGC_;
     }
 
-
-    ReadKmerDist<6, std::atomic<uint32_t>>& readBias() { return readBias_; }
-    const ReadKmerDist<6, std::atomic<uint32_t>>& readBias() const { return readBias_; }
-
+    ReadKmerDist<6, std::atomic<uint32_t>>& readBias(salmon::utils::Direction dir) { 
+        return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0] : readBias_[1]; 
+    }
+    const ReadKmerDist<6, std::atomic<uint32_t>>& readBias(salmon::utils::Direction dir) const { 
+        return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0] : readBias_[1]; 
+    }
 
     private:
     /**
@@ -373,7 +375,8 @@ class AlignmentLibrary {
 
     // Since multiple threads can touch this dist, we
     // need atomic counters.
-    ReadKmerDist<6, std::atomic<uint32_t>> readBias_;
+    std::array<ReadKmerDist<6, std::atomic<uint32_t>>, 2> readBias_;
+    //ReadKmerDist<6, std::atomic<uint32_t>> readBias_;
     std::vector<double> expectedBias_;
 };
 

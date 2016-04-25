@@ -144,7 +144,8 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
     //EQClass
     EquivalenceClassBuilder& eqBuilder = alnLib.equivalenceClassBuilder();
-    auto& readBias = alnLib.readBias();
+    auto& readBiasFW = alnLib.readBias(salmon::utils::Direction::FORWARD);
+    auto& readBiasRC = alnLib.readBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
 
     using salmon::math::LOG_0;
     using salmon::math::logAdd;
@@ -407,6 +408,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                                     auto dir = salmon::utils::boolToDirection(fwd);
 
                                     if (startPos > 0 and startPos < transcript.RefLength) {
+                                        auto& readBias = (fwd) ? readBiasFW : readBiasRC;
                                         const char* txpStart = transcript.Sequence();
                                         const char* readStart = txpStart + startPos;
                                         const char* txpEnd = txpStart + transcript.RefLength;
