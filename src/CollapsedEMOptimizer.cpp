@@ -849,7 +849,8 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
                     sopt,
                     readExp,
                     effLens,
-                    alphas);
+                    alphas,
+		    (itNum == recomputeIt.front()));
 
             // Check for strangeness with the lengths.
             for (size_t i = 0; i < effLens.size(); ++i) {

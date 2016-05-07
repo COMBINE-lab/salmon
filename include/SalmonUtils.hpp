@@ -100,7 +100,8 @@ Eigen::VectorXd updateEffectiveLengths(
         SalmonOpts& sopt,
         ReadExpT& readExp,
         Eigen::VectorXd& effLensIn,
-        AbundanceVecT& alphas);
+        AbundanceVecT& alphas,
+	bool finalRound = false);
 
 /*
  * Use atomic compare-and-swap to update val to

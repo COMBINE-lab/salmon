@@ -122,7 +122,7 @@ extern "C" {
 #include "SASearcher.hpp"
 #include "SACollector.hpp"
 #include "GZipWriter.hpp"
-#include "GCBiasParams.hpp"
+#include "BiasParams.hpp"
 //#include "TextBootstrapWriter.hpp"
 
 /****** QUASI MAPPING DECLARATIONS *********/
@@ -169,7 +169,7 @@ void processMiniBatch(
         std::vector<Transcript>& transcripts,
         ClusterForest& clusterForest,
         FragmentLengthDistribution& fragLengthDist,
-        GCBiasParams& observedGCParams,
+        BiasParams& observedBiasParams,
         std::atomic<uint64_t>& numAssignedFragments,
         std::default_random_engine& randEng,
         bool initialRound,
@@ -194,9 +194,9 @@ void processMiniBatch(
     std::vector<FragmentStartPositionDistribution>& fragStartDists =
         readExp.fragmentStartPositionDistributions();
     auto& biasModel = readExp.sequenceBiasModel();
-    auto& observedGCMass = observedGCParams.observedGCMass;
-    auto& obsFwd = observedGCParams.massFwd;
-    auto& obsRC = observedGCParams.massRC;
+    auto& observedGCMass = observedBiasParams.observedGCMass;
+    auto& obsFwd = observedBiasParams.massFwd;
+    auto& obsRC = observedBiasParams.massRC;
 
     bool gcBiasCorrect = salmonOpts.gcBiasCorrect;
     bool updateCounts = initialRound;
@@ -548,7 +548,7 @@ void processReadsQuasi(paired_parser* parser,
                ForgettingMassCalculator& fmCalc,
                ClusterForest& clusterForest,
                FragmentLengthDistribution& fragLengthDist,
-               GCBiasParams& observedGCParams,
+               BiasParams& observedBiasParams,
                mem_opt_t* memOptions,
                SalmonOpts& salmonOpts,
                double coverageThresh,
@@ -576,7 +576,7 @@ void processReadsQuasi(single_parser* parser,
                ForgettingMassCalculator& fmCalc,
                ClusterForest& clusterForest,
                FragmentLengthDistribution& fragLengthDist,
-               GCBiasParams& observedGCParams,
+               BiasParams& observedBiasParams,
                mem_opt_t* memOptions,
                SalmonOpts& salmonOpts,
                double coverageThresh,
@@ -603,7 +603,7 @@ void processReadsQuasi(paired_parser* parser,
                ForgettingMassCalculator& fmCalc,
                ClusterForest& clusterForest,
                FragmentLengthDistribution& fragLengthDist,
-               GCBiasParams& observedGCParams,
+               BiasParams& observedBiasParams,
                mem_opt_t* memOptions,
                SalmonOpts& salmonOpts,
                double coverageThresh,
@@ -623,8 +623,8 @@ void processReadsQuasi(paired_parser* parser,
   uint64_t hitListCount{0};
   salmon::utils::ShortFragStats shortFragStats;
 
-  auto& readBiasFW = readExp.readBias(salmon::utils::Direction::FORWARD);
-  auto& readBiasRC = readExp.readBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
+  auto& readBiasFW = observedBiasParams.seqBiasModelFW;//readExp.readBias(salmon::utils::Direction::FORWARD);
+  auto& readBiasRC = observedBiasParams.seqBiasModelRC;//readExp.readBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
 
   auto expectedLibType = rl.format();
 
@@ -648,7 +648,7 @@ void processReadsQuasi(paired_parser* parser,
   std::vector<QuasiAlignment> leftHits;
   std::vector<QuasiAlignment> rightHits;
   rapmap::utils::HitCounters hctr;
-
+    
   while(true) {
     typename paired_parser::job j(*parser); // Get a job from the parser: a bunch of reads (at most max_read_group)
     if(j.is_empty()) break;           // If got nothing, quit
@@ -747,35 +747,11 @@ void processReadsQuasi(paired_parser* parser,
 
 	  bool needBiasSample = salmonOpts.biasCorrect;
 
-      auto revcomplement = [](const std::string& s) -> std::string {
-          std::string o("-", s.length());
-          int32_t j = 0;
-          for (int32_t i = s.length()-1; i >= 0; --i, ++j) {
-              switch(s[i]) {
-              case 'A':
-              case 'a':
-                  o[j] = 'T';
-                  break;
-              case 'C':
-              case 'c':
-                  o[j] = 'G';
-                  break;
-              case 'T':
-              case 't':
-                  o[j] = 'A';
-                  break;
-              case 'G':
-              case 'g':
-                  o[j] = 'C';
-                  break;
-              default:
-                  o[j] = 'N';
-                  break;
-              } 
-          }
-          return o;
-      };
-
+	  std::uniform_int_distribution<> dis(0, jointHits.size());
+	  // Randomly select a hit from which to draw the bias sample.
+	  int32_t hitSamp{dis(eng)};
+	  int32_t hn{0};
+	  
 	  for (auto& h : jointHits) {
 
 	    // ---- Collect bias samples ------ //
@@ -783,64 +759,70 @@ void processReadsQuasi(paired_parser* parser,
 	    // If bias correction is turned on, and we haven't sampled a mapping
 	    // for this read yet, and we haven't collected the required number of
 	    // samples overall.
-	    if(needBiasSample and salmonOpts.numBiasSamples > 0 and isPaired){
+	    if (needBiasSample and salmonOpts.numBiasSamples > 0 and isPaired and hn == hitSamp) {
             auto& t = transcripts[h.tid];
 
-            // read 1 
-		    int32_t pos1 = static_cast<int32_t>(h.pos);
-            auto dir1 = salmon::utils::boolToDirection(h.fwd);
-            // the "start" position is the leftmost position if
+            // The "start" position is the leftmost position if
             // map to the forward strand, and the leftmost
-            // position + the read length if we map to the reverse complement
+            // position + the read length if we map to the reverse complement.
+
+            // read 1 
+            int32_t pos1 = static_cast<int32_t>(h.pos);
+            auto dir1 = salmon::utils::boolToDirection(h.fwd);
             int32_t startPos1 = h.fwd ? pos1 : (pos1 + h.readLen - 1);
             
             // read 2
             int32_t pos2 = static_cast<int32_t>(h.matePos);
             auto dir2 = salmon::utils::boolToDirection(h.mateIsFwd);
-            auto startPos2 = h.mateIsFwd ? pos2 : (pos2 + h.mateLen - 1);
+            int32_t startPos2 = h.mateIsFwd ? pos2 : (pos2 + h.mateLen - 1);
             
-
+            bool success = false;
+	    
             if ((dir1 != dir2) and // Shouldn't be from the same strand
                 (startPos1 > 0 and startPos1 < t.RefLength) and 
-                (startPos2 > 0 and startPos2 < t.RefLength)) {
+                (startPos2 > 0 and startPos2 < t.RefLength)) { 
 
                 const char* txpStart = t.Sequence();
                 const char* txpEnd = txpStart + t.RefLength;
 
                 const char* readStart1 = txpStart + startPos1;
                 auto& readBias1 = (h.fwd) ? readBiasFW : readBiasRC;
-                bool success = readBias1.update(txpStart, readStart1, txpEnd, dir1);
-                
+
                 const char* readStart2 = txpStart + startPos2;
                 auto& readBias2 = (h.mateIsFwd) ? readBiasFW : readBiasRC;
-                success = success and readBias2.update(txpStart, readStart2, txpEnd, dir2);
                 
-                /*
-                if (dir1 == salmon::utils::Direction::REVERSE_COMPLEMENT) {
-                    auto x = readLenLeft;
-                    if (pos1 - x >= 0 and pos1 + x < t.RefLength) {
-                        salmonOpts.jointLog->info("\nr1\nref  = {}\nread = XX{}\n", revcomplement(std::string(readStart1 - 3, 6)),
-                                                                                      j->data[i].first.seq.substr(0, 4));
-                    }
-                } else if (dir2 == salmon::utils::Direction::REVERSE_COMPLEMENT) {
-                    auto x = readLenRight;
-                    if (pos2 - x >= 0 and pos2 + x < t.RefLength) {
-                        salmonOpts.jointLog->info("\nr2\nref  = {}\nread = XX{}\n", revcomplement(std::string(readStart2 - 3, 6)),
-                                                                                      j->data[i].second.seq.substr(0, 4));
+                int32_t fwPre = readBias1.contextBefore(!h.fwd);
+                int32_t fwPost = readBias1.contextAfter(!h.fwd);
+
+                int32_t rcPre = readBias2.contextBefore(!h.mateIsFwd);
+                int32_t rcPost = readBias2.contextAfter(!h.mateIsFwd); 
+
+                bool read1RC = !h.fwd;
+                bool read2RC = !h.mateIsFwd;
+
+                if ( (startPos1 >= readBias1.contextBefore(read1RC) and 
+                      startPos1 + readBias1.contextAfter(read1RC )< t.RefLength) 
+                     and
+                     (startPos2 >= readBias2.contextBefore(read2RC) and
+                      startPos2 + readBias2.contextAfter(read2RC)) ) {
+                    
+                    int32_t fwPos = (h.fwd) ? startPos1 : startPos2; 
+                    int32_t rcPos = (h.fwd) ? startPos2 : startPos1;
+                    if (fwPos < rcPos) {
+                        success = readBias1.addSequence(txpStart + startPos1 - readBias1.contextBefore(read1RC), read1RC);
+                        success = readBias2.addSequence(txpStart + startPos2 - readBias2.contextBefore(read2RC), read2RC);
                     }
                 }
-                */
-
+                
                 if (success) {
                     salmonOpts.numBiasSamples -= 1;
                     needBiasSample = false;
-                    //if (salmonOpts.numBiasSamples <= 990000) { std::exit(1); }
                 }
 
             }
 	    }
 	    // ---- Collect bias samples ------ //
-
+	    ++hn;
 
 	    switch (h.mateStatus) {
             case MateStatus::PAIRED_END_LEFT:
@@ -896,7 +878,7 @@ void processReadsQuasi(paired_parser* parser,
     prevObservedFrags = numObservedFragments;
     AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(structureVec.begin(), structureVec.begin() + rangeSize);
     processMiniBatch<QuasiAlignment>(readExp, fmCalc,firstTimestepOfRound, rl, salmonOpts, hitLists, transcripts, clusterForest,
-                     fragLengthDist, observedGCParams, numAssignedFragments, eng, initialRound, burnedIn);
+                     fragLengthDist, observedBiasParams, numAssignedFragments, eng, initialRound, burnedIn);
   }
   
   readExp.updateShortFrags(shortFragStats);
@@ -921,7 +903,7 @@ void processReadsQuasi(single_parser* parser,
                ForgettingMassCalculator& fmCalc,
                ClusterForest& clusterForest,
                FragmentLengthDistribution& fragLengthDist,
-               GCBiasParams& observedGCParams,
+               BiasParams& observedBiasParams,
                mem_opt_t* memOptions,
                SalmonOpts& salmonOpts,
                double coverageThresh,
@@ -942,8 +924,8 @@ void processReadsQuasi(single_parser* parser,
   salmon::utils::ShortFragStats shortFragStats;
   bool tooShort{false};
 
-  auto& readBiasFW = readExp.readBias(salmon::utils::Direction::FORWARD);
-  auto& readBiasRC = readExp.readBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
+  auto& readBiasFW = observedBiasParams.seqBiasFW;
+  auto& readBiasRC = observedBiasParams.seqBiasRC;
 
   const char* txomeStr = qidx->seq.c_str();
 
@@ -1079,7 +1061,7 @@ void processReadsQuasi(single_parser* parser,
     prevObservedFrags = numObservedFragments;
     AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(structureVec.begin(), structureVec.begin() + rangeSize);
     processMiniBatch<QuasiAlignment>(readExp, fmCalc,firstTimestepOfRound, rl, salmonOpts, hitLists, transcripts, clusterForest,
-                     fragLengthDist, observedGCParams, numAssignedFragments, eng, initialRound, burnedIn);
+                     fragLengthDist, observedBiasParams, numAssignedFragments, eng, initialRound, burnedIn);
   }
   readExp.updateShortFrags(shortFragStats);
 }
@@ -1121,7 +1103,7 @@ void processReadLibrary(
             std::unique_ptr<single_parser> singleParserPtr{nullptr};
 
             /** GC-fragment bias vectors --- each thread gets it's own **/
-            std::vector<GCBiasParams> observedGCParams(numThreads);
+            std::vector<BiasParams> observedBiasParams(numThreads);
 
             // If the read library is paired-end
             // ------ Paired-end --------
@@ -1168,7 +1150,7 @@ void processReadLibrary(
 						fmCalc,
 						clusterForest,
 						fragLengthDist,
-                        observedGCParams[i],
+                        observedBiasParams[i],
 						memOptions,
 						salmonOpts,
 						coverageThresh,
@@ -1205,7 +1187,7 @@ void processReadLibrary(
                                                                                   fmCalc,
                                                                                   clusterForest,
                                                                                   fragLengthDist,
-                                                                                  observedGCParams[i],
+                                                                                  observedBiasParams[i],
                                                                                   memOptions,
                                                                                   salmonOpts,
                                                                                   coverageThresh,
@@ -1231,7 +1213,7 @@ void processReadLibrary(
                                                                                                         fmCalc,
                                                                                                         clusterForest,
                                                                                                         fragLengthDist,
-                                                                                                        observedGCParams[i],
+                                                                                                        observedBiasParams[i],
                                                                                                         memOptions,
                                                                                                         salmonOpts,
                                                                                                         coverageThresh,
@@ -1259,7 +1241,7 @@ void processReadLibrary(
                                                                                   fmCalc,
                                                                                   clusterForest,
                                                                                   fragLengthDist,
-                                                                                  observedGCParams[i],
+                                                                                  observedBiasParams[i],
                                                                                   memOptions,
                                                                                   salmonOpts,
                                                                                   coverageThresh,
@@ -1285,7 +1267,7 @@ void processReadLibrary(
                                                                                                         fmCalc,
                                                                                                         clusterForest,
                                                                                                         fragLengthDist,
-                                                                                                        observedGCParams[i],
+                                                                                                        observedBiasParams[i],
                                                                                                         memOptions,
                                                                                                         salmonOpts,
                                                                                                         coverageThresh,
@@ -1314,12 +1296,26 @@ void processReadLibrary(
             double globalMass{salmon::math::LOG_0};
             double globalFwdMass{salmon::math::LOG_0};
             auto& globalGCMass = readExp.observedGC();
-            for (auto& gcp : observedGCParams) {
+            for (auto& gcp : observedBiasParams) {
                 auto& gcm = gcp.observedGCMass;
                 double totMass = salmon::math::LOG_0;
                 for (auto e : gcm) {
                     totMass = salmon::math::logAdd(totMass, e);
                 }
+                
+                auto& fw = readExp.readBiasModel(salmon::utils::Direction::FORWARD);
+                auto& rc = readExp.readBiasModel(salmon::utils::Direction::REVERSE_COMPLEMENT);
+                
+                auto& fwloc = gcp.seqBiasModelFW;
+                auto& rcloc = gcp.seqBiasModelRC;
+		fw.combineCounts(fwloc);
+		rc.combineCounts(rcloc);
+		/*
+                for (size_t i = 0; i < fwloc.counts.size(); ++i) {
+                    fw.counts[i] += fwloc.counts[i];
+                    rc.counts[i] += rcloc.counts[i];
+                }
+		*/
 
                 globalMass = salmon::math::logAdd(globalMass, gcp.massFwd);
                 globalMass = salmon::math::logAdd(globalMass, gcp.massRC);
@@ -1342,14 +1338,6 @@ void processReadLibrary(
                 readExp.setGCFracForward(gcFracFwd);
             }
             /** END GC-fragment bias **/
-
-	    /** To dump the GC content
-	    std::ofstream gc_cont("gc_obs_salmon.tsv");
-	    for (size_t i = 0; i < globalGCMass.size(); ++i) {
-	      gc_cont << i << '\t' << globalGCMass[i] << '\n';
-	    }
-	    gc_cont.close();
-	    */
 
             } // ------ Single-end --------
             else if (rl.format().type == ReadType::SINGLE_END) {
@@ -1386,7 +1374,7 @@ void processReadLibrary(
                                             fmCalc,
                                             clusterForest,
                                             fragLengthDist,
-                                            observedGCParams[i],
+                                            observedBiasParams[i],
                                             memOptions,
                                             salmonOpts,
                                             coverageThresh,
@@ -1425,7 +1413,7 @@ void processReadLibrary(
                                                                                   fmCalc,
                                                                                   clusterForest,
                                                                                   fragLengthDist,
-                                                                                  observedGCParams[i],
+                                                                                  observedBiasParams[i],
                                                                                   memOptions,
                                                                                   salmonOpts,
                                                                                   coverageThresh,
@@ -1451,7 +1439,7 @@ void processReadLibrary(
                                                                                                         fmCalc,
                                                                                                         clusterForest,
                                                                                                         fragLengthDist,
-                                                                                                        observedGCParams[i],
+                                                                                                        observedBiasParams[i],
                                                                                                         memOptions,
                                                                                                         salmonOpts,
                                                                                                         coverageThresh,
@@ -1479,7 +1467,7 @@ void processReadLibrary(
                                                                                   fmCalc,
                                                                                   clusterForest,
                                                                                   fragLengthDist,
-                                                                                  observedGCParams[i],
+                                                                                  observedBiasParams[i],
                                                                                   memOptions,
                                                                                   salmonOpts,
                                                                                   coverageThresh,
@@ -1505,7 +1493,7 @@ void processReadLibrary(
                                                                                                         fmCalc,
                                                                                                         clusterForest,
                                                                                                         fragLengthDist,
-                                                                                                        observedGCParams[i],
+                                                                                                        observedBiasParams[i],
                                                                                                         memOptions,
                                                                                                         salmonOpts,
                                                                                                         coverageThresh,
@@ -1524,6 +1512,30 @@ void processReadLibrary(
 		    break;
 		}
                 for(int i = 0; i < numThreads; ++i) { threads[i].join(); }
+                
+            // Set the global distribution based on the sum of local
+            // distributions.
+            for (auto& gcp : observedBiasParams) {
+		/*
+                auto& fw = readExp.readBias(salmon::utils::Direction::FORWARD);
+                auto& rc = readExp.readBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
+                
+                auto& fwloc = gcp.seqBiasFW;
+                auto& rcloc = gcp.seqBiasRC;
+                for (size_t i = 0; i < fwloc.counts.size(); ++i) {
+                    fw.counts[i] += fwloc.counts[i];
+                    rc.counts[i] += rcloc.counts[i];
+                }
+		*/
+                auto& fw = readExp.readBiasModel(salmon::utils::Direction::FORWARD);
+                auto& rc = readExp.readBiasModel(salmon::utils::Direction::REVERSE_COMPLEMENT);
+                
+                auto& fwloc = gcp.seqBiasModelFW;
+                auto& rcloc = gcp.seqBiasModelRC;
+		fw.combineCounts(fwloc);
+		rc.combineCounts(rcloc);
+            }
+
             } // ------ END Single-end --------
 }
 
@@ -1856,7 +1868,7 @@ int salmonQuantify(int argc, char *argv[]) {
     ("noBiasLengthThreshold", po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(false), "[experimental] : "
                         "If this option is enabled, then bias correction will be allowed to estimate effective lengths "
                         "shorter than the approximate mean fragment length")
-    ("numBiasSamples", po::value<int32_t>(&numBiasSamples)->default_value(1000000),
+    ("numBiasSamples", po::value<int32_t>(&numBiasSamples)->default_value(2000000),
             "Number of fragment mappings to use when learning the sequence-specific bias model.")
     ("numAuxModelSamples", po::value<uint32_t>(&(sopt.numBurninFrags))->default_value(5000000), "The first <numAuxModelSamples> are used to train the "
      			"auxiliary model parameters (e.g. fragment length distribution, bias, etc.).  After ther first <numAuxModelSamples> observations "

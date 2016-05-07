@@ -60,6 +60,7 @@ BWAUtils.cpp
 LibraryFormat.cpp
 GenomicFeature.cpp
 VersionChecker.cpp
+SBModel.cpp
 SalmonUtils.cpp
 SalmonStringUtils.cpp
 )

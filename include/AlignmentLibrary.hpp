@@ -9,6 +9,7 @@ extern "C" {
 }
 
 // Our includes
+#include "SBModel.hpp"
 #include "ClusterForest.hpp"
 #include "Transcript.hpp"
 #include "BAMQueue.hpp"
@@ -307,6 +308,13 @@ class AlignmentLibrary {
         return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0] : readBias_[1]; 
     }
 
+    SBModel& readBiasModel(salmon::utils::Direction dir) { 
+        return (dir == salmon::utils::Direction::FORWARD) ? readBiasModel_[0] : readBiasModel_[1]; 
+    }
+    const SBModel& readBiasModel(salmon::utils::Direction dir) const { 
+        return (dir == salmon::utils::Direction::FORWARD) ? readBiasModel_[0] : readBiasModel_[1]; 
+    }
+
     private:
     /**
      * The file from which the alignments will be read.
@@ -376,6 +384,8 @@ class AlignmentLibrary {
     // Since multiple threads can touch this dist, we
     // need atomic counters.
     std::array<ReadKmerDist<6, std::atomic<uint32_t>>, 2> readBias_;
+    std::array<SBModel, 2> readBiasModel_;
+
     //ReadKmerDist<6, std::atomic<uint32_t>> readBias_;
     std::vector<double> expectedBias_;
 };
