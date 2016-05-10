@@ -625,6 +625,9 @@ void processReadsQuasi(paired_parser* parser,
 
   auto& readBiasFW = observedBiasParams.seqBiasModelFW;//readExp.readBias(salmon::utils::Direction::FORWARD);
   auto& readBiasRC = observedBiasParams.seqBiasModelRC;//readExp.readBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
+  // k-mers for sequence bias context
+  Mer leftMer;
+  Mer rightMer;
 
   auto expectedLibType = rl.format();
 
@@ -801,16 +804,22 @@ void processReadsQuasi(paired_parser* parser,
                 bool read2RC = !h.mateIsFwd;
 
                 if ( (startPos1 >= readBias1.contextBefore(read1RC) and 
-                      startPos1 + readBias1.contextAfter(read1RC )< t.RefLength) 
+                      startPos1 + readBias1.contextAfter(read1RC ) < t.RefLength) 
                      and
                      (startPos2 >= readBias2.contextBefore(read2RC) and
-                      startPos2 + readBias2.contextAfter(read2RC)) ) {
+                      startPos2 + readBias2.contextAfter(read2RC) < t.RefLength) ) {
                     
                     int32_t fwPos = (h.fwd) ? startPos1 : startPos2; 
                     int32_t rcPos = (h.fwd) ? startPos2 : startPos1;
                     if (fwPos < rcPos) {
-                        success = readBias1.addSequence(txpStart + startPos1 - readBias1.contextBefore(read1RC), read1RC);
-                        success = readBias2.addSequence(txpStart + startPos2 - readBias2.contextBefore(read2RC), read2RC);
+                        //success = readBias1.addSequence(txpStart + startPos1 - readBias1.contextBefore(read1RC), read1RC);
+                        //success = readBias2.addSequence(txpStart + startPos2 - readBias2.contextBefore(read2RC), read2RC);
+                        leftMer.from_chars(txpStart + startPos1 - readBias1.contextBefore(read1RC));
+                        rightMer.from_chars(txpStart + startPos2 - readBias2.contextBefore(read2RC));
+                        if (read1RC) { leftMer.reverse_complement(); } else { rightMer.reverse_complement(); }
+
+                        success = readBias1.addSequence(leftMer, 1.0);
+                        success = readBias2.addSequence(rightMer, 1.0);
                     }
                 }
                 

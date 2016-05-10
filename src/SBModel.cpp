@@ -1,9 +1,15 @@
 #include "SBModel.hpp"
+#include <sstream>
+#include <utility>
 
 SBModel::SBModel() : _trained(false) {
   // Roberts et al. model
-  _order = {0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 0, 0};
+  //_order = {0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 0, 0};
   //       -8 -7 -6 -5 -4 -3 -2 -1  0  1  2  3  4  5  6  7  8  9  10 11 12
+
+  // Roberts et al. model (eXpress)
+  _order = {0, 1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3};
+  //      -10 -9 -8 -7 -6 -5 -4 -3 -2 -1  0  1  2  3  4  5  6  7  8  9 10
 
   //_order = {0, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1};
   //         -5 -4 -3 -2 -1  0  1  2  3  4  5  6  7  8  9
@@ -17,9 +23,9 @@ SBModel::SBModel() : _trained(false) {
   //         -2 -1  0 1  2  3    
 
   // The number of bases before the read start position.
-  _contextLeft = 8;
+  _contextLeft = 10;
   // The number of bases after the read start position.
-  _contextRight = 12;
+  _contextRight = 10;
 
   // The total length of the contexts we'll consider
   _contextLength = _order.size();
@@ -49,6 +55,27 @@ SBModel::SBModel() : _trained(false) {
   _probs.setZero();
 }
   
+double SBModel::evaluateLog(const char* seqIn) {
+    double p = 0;
+    Mer mer;
+    mer.from_chars(seqIn);
+
+    for (int32_t i = 0; i < _contextLength; ++i) {
+        uint64_t idx = mer.get_bits(_shifts[i], _widths[i]);
+        p += _probs(idx, i);
+    }
+    return p;
+}
+
+double SBModel::evaluateLog(const Mer& mer) {
+    double p = 0;
+
+    for (int32_t i = 0; i < _contextLength; ++i) {
+        uint64_t idx = mer.get_bits(_shifts[i], _widths[i]);
+        p += _probs(idx, i);
+    }
+    return p;
+}
 
  
 /** inlined member functions 
@@ -66,6 +93,50 @@ Eigen::MatrixXd& SBModel::counts() { return _probs; }
 
 Eigen::MatrixXd& SBModel::marginals() { return _marginals; }
 
+void SBModel::dumpConditionalProbabilities(std::ostream& os) {
+    typedef jellyfish::mer_dna_ns::mer_base_dynamic<uint64_t> mer64;
+    // For each position
+    for (size_t i = 0; i < _contextLength; ++i) {
+        mer64 k(_order[i]+1);
+        size_t nbit = 2 * (_order[i] + 1);
+        uint32_t N = constExprPow(4, _order[i] + 1);
+        // header
+        for (size_t j = 0; j < N; ++j) {
+            k.set_bits(0, nbit, j);
+            std::string s = k.to_str();
+            if (s.length() > 1) {
+                os << s.substr(0, s.length()-1) << " -> "; 
+                os << s.back();
+            } else {
+                os << "\'\' -> " << s.front();
+            }
+            if (j < N-1) { os << '\t'; }
+        }
+        os << '\n';
+        // probs 
+        for (size_t j = 0; j < N; ++j) {
+            auto p = _probs(j, i);
+            os << std::exp(p);
+            if (j < N-1) { os << '\t'; }
+        }
+        os << '\n';
+    }
+}
+
+bool SBModel::addSequence(const char* seqIn, bool revCmp, double weight) {
+    _mer.from_chars(seqIn);
+    if (revCmp) { _mer.reverse_complement(); }
+    return addSequence(_mer, weight);
+}
+
+bool SBModel::addSequence(const Mer& mer, double weight) {
+    for (int32_t i = 0; i < _contextLength; ++i) {
+        uint64_t idx = mer.get_bits(_shifts[i], _widths[i]);
+        _probs(idx, i) += weight;
+    }
+    return true;
+}
+
 /**
  * Once the _prob matrix has been filled out with observations, calling
  * this function will normalize all counts so that the entries of _prob 
@@ -78,19 +149,23 @@ bool SBModel::normalize() {
   if (_trained) { return false; }
 
   // now normalize the rest of the sub-contexts in groups
-  // each consecutive group of 4 rows shares the same 2-mer prefix
+  // each consecutive group of 4 rows shares the same prefix
   for (int32_t pos = 0; pos < _contextLength; ++pos) {
     size_t numStates = constExprPow(4, _order[pos]);
     size_t rowsPerNode = 4; 
     size_t nodeStart = 0;
     for (int32_t i = 0; i < numStates; ++i) {
-      auto tot = _probs.col(pos).segment(nodeStart, rowsPerNode).sum();
-      _probs.col(pos).segment(nodeStart, rowsPerNode) /= tot;
-     _marginals(0, pos) += _probs(nodeStart, pos);
-     _marginals(1, pos) += _probs(nodeStart+1, pos);
-     _marginals(2, pos) += _probs(nodeStart+2, pos);
-     _marginals(3, pos) += _probs(nodeStart+3, pos);
-      nodeStart += rowsPerNode;
+        // Group the transition probabilities corresponding to
+        // the current context.  Normalize them so they are 
+        // conditional probabilities.
+        auto tot = _probs.col(pos).segment(nodeStart, rowsPerNode).sum();
+        _probs.col(pos).segment(nodeStart, rowsPerNode) /= tot;
+
+        _marginals(0, pos) += _probs(nodeStart, pos);
+        _marginals(1, pos) += _probs(nodeStart+1, pos);
+        _marginals(2, pos) += _probs(nodeStart+2, pos);
+        _marginals(3, pos) += _probs(nodeStart+3, pos);
+        nodeStart += rowsPerNode;
     }
     _marginals.col(pos) /= numStates;
     //std::cerr << "pos = " << pos << ", marginals = " << _marginals.col(pos) << '\n';

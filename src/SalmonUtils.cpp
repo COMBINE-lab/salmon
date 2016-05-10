@@ -1172,7 +1172,13 @@ Eigen::VectorXd updateEffectiveLengths(
     auto& obs3 = readExp.readBiasModel(salmon::utils::Direction::REVERSE_COMPLEMENT);
     obs5.normalize();
     obs3.normalize();
-    
+    auto takeExp = [](double x) -> double {
+        return std::exp(x) ;
+    };
+
+  std::cerr << "5' observed = " << obs5.counts().unaryExpr(takeExp) << '\n';
+  std::cerr << "3' observed = " << obs3.counts().unaryExpr(takeExp) << '\n';
+       
     bool ok5 = obs5.checkTransitionProbabilities();
     bool ok3 = obs3.checkTransitionProbabilities();
     if (!(ok5 and ok3)) {
@@ -1181,9 +1187,6 @@ Eigen::VectorXd updateEffectiveLengths(
 
     int32_t K = static_cast<int32_t>(obs5.getContextLength());
 
-    SBModel expectedSeqFW;
-    SBModel expectedSeqRC;
-    
     FragmentLengthDistribution& fld = *(readExp.fragmentLengthDistribution());
 
     // The *expected* biases from GC effects
@@ -1314,8 +1317,6 @@ Eigen::VectorXd updateEffectiveLengths(
 			  }
 		
 			  // Otherwise, proceed giving this transcript the following weight
-
-
               double weight = (alphas[it]/effLensIn(it));
 			  //double weight = 1.0;//(alphas[it]/effLensIn(it));
 
@@ -1323,10 +1324,14 @@ Eigen::VectorXd updateEffectiveLengths(
 			  const char* tseq = txp.Sequence();
 			  auto rcSeq = revComp(tseq, refLen);
 			  const char* rseq = rcSeq.c_str();
-		
+              
+              Mer fwmer; fwmer.from_chars(tseq);
+              Mer rcmer; rcmer.from_chars(rseq);
+              int32_t contextLength{expectSeqFW.getContextLength()};
+
 			  // For each position along the transcript
 			  // Starting from the 5' end and moving toward the 3' end
-			  for (int32_t fragStartPos = 0; fragStartPos < refLen - fldLow; ++fragStartPos) {
+			  for (int32_t fragStartPos = 0; fragStartPos < refLen - K; ++fragStartPos) {
                   //for (int32_t fragStartPos = 0; fragStartPos < refLen; ++fragStartPos) {
                   // Seq-specific bias
                   if (seqBiasCorrect) {
@@ -1336,32 +1341,37 @@ Eigen::VectorXd updateEffectiveLengths(
                           int32_t maxFragLen = refLen - (fragStartPos + expectSeqFW.contextBefore(false));
                           if (maxFragLen >= 0 and maxFragLen < refLen) {
                               auto cdensity = (maxFragLen >= cdf.size()) ? 1.0 : cdf[maxFragLen];
-                              //auto cdensity = 1.0;
-                              expectSeqFW.addSequence(tseq + fragStartPos, false, weight * cdensity);
-                              expectSeqRC.addSequence(rseq + fragStartPos, false, weight * cdensity);
+                              expectSeqFW.addSequence(fwmer, weight * cdensity);
+                              expectSeqRC.addSequence(rcmer, weight * cdensity);
+                              //expectSeqFW.addSequence(tseq + fragStartPos, false, weight * cdensity);
+                              //expectSeqRC.addSequence(rseq + fragStartPos, false, weight * cdensity);
                           }
                       }
+
+                      // shift the context one nucleotide to the right
+                      fwmer.shift_left(tseq[fragStartPos + contextLength]);
+                      rcmer.shift_left(rseq[fragStartPos + contextLength]);
                   } // end: Seq-specific bias
 
-			    // fragment-GC bias
-			    if (gcBiasCorrect) {
-			      size_t sp = static_cast<size_t>((fldLow > 0) ? fldLow - 1 : 0);
-			      double prevFLMass = cdf[sp];
-			      int32_t fragStart = fragStartPos;
-			      for (int32_t fl = fldLow; fl <= fldHigh; fl += gcSamp) {
-				int32_t fragEnd = fragStart + fl - 1;
-				if (fragEnd < refLen) {
-				  // The GC fraction for this putative fragment
-				  auto gcFrac = txp.gcFrac(fragStart, fragEnd);
-				  expectGC[gcFrac] += weight * (cdf[fl] - prevFLMass);
-				  prevFLMass = cdf[fl];
-				} else { break; } // no more valid positions
-			      } // end: for each fragment length
-			    } // end: fragment GC bias
+                  // fragment-GC bias
+                  if (gcBiasCorrect) {
+                      size_t sp = static_cast<size_t>((fldLow > 0) ? fldLow - 1 : 0);
+                      double prevFLMass = cdf[sp];
+                      int32_t fragStart = fragStartPos;
+                      for (int32_t fl = fldLow; fl <= fldHigh; fl += gcSamp) {
+                          int32_t fragEnd = fragStart + fl - 1;
+                          if (fragEnd < refLen) {
+                              // The GC fraction for this putative fragment
+                              auto gcFrac = txp.gcFrac(fragStart, fragEnd);
+                              expectGC[gcFrac] += weight * (cdf[fl] - prevFLMass);
+                              prevFLMass = cdf[fl];
+                          } else { break; } // no more valid positions
+                      } // end: for each fragment length
+                  } // end: fragment GC bias
 			  } // end: for every fragment start position 
 			} // end for each transcript
 
-		      }// end tbb for function
+                      }// end tbb for function
 	);
 
     /**
@@ -1372,9 +1382,9 @@ Eigen::VectorXd updateEffectiveLengths(
     SBModel exp5;
     SBModel exp3;
     auto combineBiasParams = [seqBiasCorrect, gcBiasCorrect, &exp5, &exp3, &transcriptGCDist](const CombineableBiasParams& p) -> void {
-	if (seqBiasCorrect) {
-	    exp5.combineCounts(p.expectSeqFW);
-	    exp3.combineCounts(p.expectSeqRC);
+        if (seqBiasCorrect) {
+            exp5.combineCounts(p.expectSeqFW);
+            exp3.combineCounts(p.expectSeqRC);
         }
         if (gcBiasCorrect) {
             for (size_t i = 0; i < p.expectGC.size(); ++i) {
@@ -1454,19 +1464,26 @@ Eigen::VectorXd updateEffectiveLengths(
         exp3f << exp3m;
         exp3f.close();
 
-        auto obs5fn = sopt.outputDirectory / "obs5_marginals.txt";
-        auto& obs5m = obs5.marginals();
-        std::ofstream obs5f(obs5fn.string());
-        obs5f << obs5m.rows() << '\t' << obs5m.cols() << '\n'; 
-        obs5f << obs5m;
-        obs5f.close();
+        auto obs5fnc = sopt.outputDirectory / "obs5_conditionals.txt";
+        std::ofstream obs5fc(obs5fnc.string());
+        obs5.dumpConditionalProbabilities(obs5fc);
+        obs5fc.close();
 
-        auto obs3fn = sopt.outputDirectory / "obs3_marginals.txt";
-        auto& obs3m = obs3.marginals();
-        std::ofstream obs3f(obs3fn.string());
-        obs3f << obs3m.rows() << '\t' << obs3m.cols() << '\n'; 
-        obs3f << obs3m;
-        obs3f.close();
+        auto obs3fnc = sopt.outputDirectory / "obs3_conditionals.txt";
+        std::ofstream obs3fc(obs3fnc.string());
+        obs3.dumpConditionalProbabilities(obs3fc);
+        obs3fc.close();
+        
+
+        auto exp5fnc = sopt.outputDirectory / "exp5_conditionals.txt";
+        std::ofstream exp5fc(exp5fnc.string());
+        exp5.dumpConditionalProbabilities(exp5fc);
+        exp5fc.close();
+
+        auto exp3fnc = sopt.outputDirectory / "exp3_conditionals.txt";
+        std::ofstream exp3fc(exp3fnc.string());
+        exp3.dumpConditionalProbabilities(exp3fc);
+        exp3fc.close();
     }
 
 
@@ -1479,9 +1496,7 @@ Eigen::VectorXd updateEffectiveLengths(
     tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(transcripts.size())),
             [&]( const BlockedIndexRange& range) -> void {
 
-            std::random_device rd;
-            std::mt19937 gen(rd());
-            std::uniform_int_distribution<> dis(0, constExprPow(4,K)-1);
+
             // For each transcript  
             for (auto it : boost::irange(range.begin(), range.end())) {
 
@@ -1522,17 +1537,26 @@ Eigen::VectorXd updateEffectiveLengths(
                     // seqFactorsFW will contain the sequence-specific bias for each position on the 5' strand
                     // and seqFactorsRC will contain the sequence-specific bias for each position on the 3' strand.
                     if (seqBiasCorrect) {
-                        for (int32_t fragStart = 0; fragStart < refLen - fl; ++fragStart) {
+                        Mer mer;
+                        Mer rcmer;
+                        mer.from_chars(tseq);
+                        rcmer.from_chars(rseq);
+                        int32_t contextLength{exp5.getContextLength()};
+
+                        for (int32_t fragStart = 0; fragStart < refLen - K; ++fragStart) {
                             int32_t readStart = fragStart + obs5.contextBefore(false);
                             int32_t kmerEndPos = fragStart + K - 1; // -1 because pos is *inclusive*
 			    
                             if (kmerEndPos >= 0 and kmerEndPos < refLen and readStart < refLen) {
-                                seqFactorsFW[readStart] = std::exp(obs5.evaluateLog(tseq + fragStart) - exp5.evaluateLog(tseq + fragStart));
-                                seqFactorsRC[readStart] = std::exp(obs3.evaluateLog(rseq + fragStart) - exp3.evaluateLog(rseq + fragStart));
+                                seqFactorsFW[readStart] = std::exp(obs5.evaluateLog(mer) - exp5.evaluateLog(mer));
+                                seqFactorsRC[readStart] = std::exp(obs3.evaluateLog(rcmer) - exp3.evaluateLog(rcmer));
                             }
+                            // shift the context one nucleotide to the right
+                            mer.shift_left(tseq[fragStart + contextLength]);
+                            rcmer.shift_left(rseq[fragStart + contextLength]);
                         }
                         // Reverse
-                        seqFactorsRC = seqFactorsRC.reverse(); 
+                        seqFactorsRC.reverseInPlace(); 
                     } // end sequence-specific factor calculation 
 		     
 		    if (numProcessed % 1000 == 0) {
@@ -1540,22 +1564,22 @@ Eigen::VectorXd updateEffectiveLengths(
 		    }
 		    ++numProcessed;
 		    if (finalRound) {
-			if (it <= 3000) {
-			    std::lock_guard<std::mutex> lg(rwmut);
-			    (*bfile) << txp.RefName << '\n';
-                            for (size_t i = 0; i < refLen; ++i) {
-                                (*bfile) << seqFactorsFW[i] ;
-                                if (i < refLen - 1) { (*bfile) << '\t'; }
-                            }
-                            (*bfile) << '\n';
-                            for (size_t i = 0; i < refLen; ++i) {
-                                (*bfile) << seqFactorsRC[i] ;
-                                if (i < refLen - 1) { (*bfile) << '\t'; }
-                            }
-                            (*bfile) << '\n';
-                        }
+                if (it <= 3000) {
+                    std::lock_guard<std::mutex> lg(rwmut);
+                    (*bfile) << txp.RefName << '\n';
+                    for (size_t i = 0; i < refLen; ++i) {
+                        (*bfile) << seqFactorsFW[i] ;
+                        if (i < refLen - 1) { (*bfile) << '\t'; }
                     }
-		   
+                    (*bfile) << '\n';
+                    for (size_t i = 0; i < refLen; ++i) {
+                        (*bfile) << seqFactorsRC[i] ;
+                        if (i < refLen - 1) { (*bfile) << '\t'; }
+                    }
+                    (*bfile) << '\n';
+                }
+            }
+
                     size_t sp = static_cast<size_t>((fl > 0) ? fl - 1 : 0);
                     double prevFLMass = cdf[sp];
                     double unbiasedMass{0.0};
@@ -1566,9 +1590,7 @@ Eigen::VectorXd updateEffectiveLengths(
                             done = true;
                             fl = maxLen - 1;
                         }
-                        double flWeight = (fl >= cdf.size()) ? 
-                            (cdf.back() - cdf[std::max(static_cast<int64_t>(0), static_cast<int64_t>(cdf.size()) - 1 - gcSamp)]) : 
-                            cdf[fl] - prevFLMass;
+                        double flWeight = cdf[fl] - prevFLMass;
                         prevFLMass = cdf[fl];
 
                         // For every position a fragment of length fl could start
@@ -1591,7 +1613,7 @@ Eigen::VectorXd updateEffectiveLengths(
                         fl += gcSamp;
                     }
                     effLength = flMasses.sum();
-
+                    
                 } // for the processed transcript
                 
                 // throw caution to the wind

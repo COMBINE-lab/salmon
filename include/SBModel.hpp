@@ -14,37 +14,23 @@ public:
   inline int32_t contextBefore(bool rc) { return rc ? _contextRight : _contextLeft; }
   inline int32_t contextAfter(bool rc) { return rc ? _contextLeft : _contextRight; }
 
-  inline bool addSequence(const char* seqIn, bool revCmp, double weight = 1.0) {
-    _mer.from_chars(seqIn);
-    if (revCmp) { _mer.reverse_complement(); }
-    for (int32_t i = 0; i < _contextLength; ++i) {
-      uint32_t idx = _mer.get_bits(_shifts[i], _widths[i]);
-      _probs(idx, i) += weight;
-    }
-    return true;
-  }
+    bool addSequence(const char* seqIn, bool revCmp, double weight = 1.0);
+    bool addSequence(const Mer& mer, double weight); 
 
-  Eigen::MatrixXd& counts();
-  Eigen::MatrixXd& marginals();
+    Eigen::MatrixXd& counts();
+    Eigen::MatrixXd& marginals();
   
-  inline double evaluateLog(const char* seqIn) {
-    double p = 0;
-    Mer mer;
-    mer.from_chars(seqIn);
-
-    for (int32_t i = 0; i < _contextLength; ++i) {
-      uint32_t idx = mer.get_bits(_shifts[i], _widths[i]);
-      p += _probs(idx, i);
-    }
-    return p;
-  }
-
+    double evaluateLog(const char* seqIn); 
+    double evaluateLog(const Mer& mer);
+ 
   bool normalize();
 
   bool checkTransitionProbabilities();
   
   void combineCounts(const SBModel& other);
- 
+
+  void dumpConditionalProbabilities(std::ostream& os);
+
   int32_t getContextLength(); 
 
   template <typename CountVecT>
