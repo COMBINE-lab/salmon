@@ -835,7 +835,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
 
     // Iterations in which we will allow re-computing the effective lengths
     // if bias-correction is enabled.
-    std::vector<uint32_t> recomputeIt{50, 150};
+    std::vector<uint32_t> recomputeIt{100};// 150, 500, 1000};
     minIter = recomputeIt.front();
 
     bool converged{false};

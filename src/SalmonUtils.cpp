@@ -1172,19 +1172,14 @@ Eigen::VectorXd updateEffectiveLengths(
     auto& obs3 = readExp.readBiasModel(salmon::utils::Direction::REVERSE_COMPLEMENT);
     obs5.normalize();
     obs3.normalize();
-    auto takeExp = [](double x) -> double {
-        return std::exp(x) ;
-    };
 
-  std::cerr << "5' observed = " << obs5.counts().unaryExpr(takeExp) << '\n';
-  std::cerr << "3' observed = " << obs3.counts().unaryExpr(takeExp) << '\n';
-       
+  /* 
     bool ok5 = obs5.checkTransitionProbabilities();
     bool ok3 = obs3.checkTransitionProbabilities();
     if (!(ok5 and ok3)) {
       std::exit(1);
     }
-
+  */
     int32_t K = static_cast<int32_t>(obs5.getContextLength());
 
     FragmentLengthDistribution& fld = *(readExp.fragmentLengthDistribution());
@@ -1311,14 +1306,12 @@ Eigen::VectorXd updateEffectiveLengths(
 
 			  // Skip transcripts with trivial expression or that are too
 			  // short
-			  //if (unprocessedLen <= 0) {
               if (alphas[it] < minAlpha or unprocessedLen <= 0) {
 			    continue;
 			  }
 		
 			  // Otherwise, proceed giving this transcript the following weight
               double weight = (alphas[it]/effLensIn(it));
-			  //double weight = 1.0;//(alphas[it]/effLensIn(it));
 
 			  // This transcript's sequence
 			  const char* tseq = txp.Sequence();
@@ -1332,7 +1325,6 @@ Eigen::VectorXd updateEffectiveLengths(
 			  // For each position along the transcript
 			  // Starting from the 5' end and moving toward the 3' end
 			  for (int32_t fragStartPos = 0; fragStartPos < refLen - K; ++fragStartPos) {
-                  //for (int32_t fragStartPos = 0; fragStartPos < refLen; ++fragStartPos) {
                   // Seq-specific bias
                   if (seqBiasCorrect) {
                       int32_t contextEndPos = fragStartPos + K - 1; // -1 because pos is *inclusive*
@@ -1343,8 +1335,6 @@ Eigen::VectorXd updateEffectiveLengths(
                               auto cdensity = (maxFragLen >= cdf.size()) ? 1.0 : cdf[maxFragLen];
                               expectSeqFW.addSequence(fwmer, weight * cdensity);
                               expectSeqRC.addSequence(rcmer, weight * cdensity);
-                              //expectSeqFW.addSequence(tseq + fragStartPos, false, weight * cdensity);
-                              //expectSeqRC.addSequence(rseq + fragStartPos, false, weight * cdensity);
                           }
                       }
 
@@ -1409,23 +1399,11 @@ Eigen::VectorXd updateEffectiveLengths(
 
     exp5.normalize();
     exp3.normalize();
+    /*
     ok5 = exp5.checkTransitionProbabilities();
     ok3 = exp3.checkTransitionProbabilities();
     if (!(ok5 and ok3)) {
       std::exit(1);
-    }
-
-
-    // Compute the 5' and 3' bias weights for each k-mer
-    /* 
-    auto nb = constExprPow(4, K);
-    Eigen::VectorXd seqBias5p(nb);
-    Eigen::VectorXd seqBias3p(nb);
-    if (seqBiasCorrect) {
-        for (uint32_t i = 0; i < constExprPow(4, K); ++i) {
-            seqBias5p[i] = obs5.evaluate(i, K) / exp5.evaluate(i, K);
-            seqBias3p[i] = obs3.evaluate(i, K) / exp3.evaluate(i, K);
-        }
     }
     */
 
@@ -1559,26 +1537,26 @@ Eigen::VectorXd updateEffectiveLengths(
                         seqFactorsRC.reverseInPlace(); 
                     } // end sequence-specific factor calculation 
 		     
-		    if (numProcessed % 1000 == 0) {
-		      sopt.jointLog->info("processing transcript {}", numProcessed);
-		    }
-		    ++numProcessed;
-		    if (finalRound) {
-                if (it <= 3000) {
-                    std::lock_guard<std::mutex> lg(rwmut);
-                    (*bfile) << txp.RefName << '\n';
-                    for (size_t i = 0; i < refLen; ++i) {
-                        (*bfile) << seqFactorsFW[i] ;
-                        if (i < refLen - 1) { (*bfile) << '\t'; }
+                    if (numProcessed % 1000 == 0) {
+                        sopt.jointLog->info("processing transcript {}", numProcessed);
                     }
-                    (*bfile) << '\n';
-                    for (size_t i = 0; i < refLen; ++i) {
-                        (*bfile) << seqFactorsRC[i] ;
-                        if (i < refLen - 1) { (*bfile) << '\t'; }
+                    ++numProcessed;
+                    if (finalRound) {
+                        if (it <= 3000) {
+                            std::lock_guard<std::mutex> lg(rwmut);
+                            (*bfile) << txp.RefName << '\n';
+                            for (size_t i = 0; i < refLen; ++i) {
+                                (*bfile) << seqFactorsFW[i] ;
+                                if (i < refLen - 1) { (*bfile) << '\t'; }
+                            }
+                            (*bfile) << '\n';
+                            for (size_t i = 0; i < refLen; ++i) {
+                                (*bfile) << seqFactorsRC[i] ;
+                                if (i < refLen - 1) { (*bfile) << '\t'; }
+                            }
+                            (*bfile) << '\n';
+                        }
                     }
-                    (*bfile) << '\n';
-                }
-            }
 
                     size_t sp = static_cast<size_t>((fl > 0) ? fl - 1 : 0);
                     double prevFLMass = cdf[sp];

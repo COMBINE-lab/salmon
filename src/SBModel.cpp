@@ -4,12 +4,13 @@
 
 SBModel::SBModel() : _trained(false) {
   // Roberts et al. model
-  //_order = {0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 0, 0};
+  _order = {0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 0, 0};
   //       -8 -7 -6 -5 -4 -3 -2 -1  0  1  2  3  4  5  6  7  8  9  10 11 12
 
   // Roberts et al. model (eXpress)
-  _order = {0, 1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3};
+  // _order = {0, 1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3};
   //      -10 -9 -8 -7 -6 -5 -4 -3 -2 -1  0  1  2  3  4  5  6  7  8  9 10
+  _order = {0, 1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3};
 
   //_order = {0, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1};
   //         -5 -4 -3 -2 -1  0  1  2  3  4  5  6  7  8  9
@@ -23,7 +24,7 @@ SBModel::SBModel() : _trained(false) {
   //         -2 -1  0 1  2  3    
 
   // The number of bases before the read start position.
-  _contextLeft = 10;
+  _contextLeft = 13;
   // The number of bases after the read start position.
   _contextRight = 10;
 
