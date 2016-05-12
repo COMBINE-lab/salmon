@@ -1127,7 +1127,7 @@ std::vector<int32_t> samplesFromLogPMF(FragmentLengthDistribution* fld, int32_t 
         ++samples[dist(gen)];
     }
     return samples;
-}
+} 
 
 
 /**
@@ -1246,9 +1246,9 @@ Eigen::VectorXd updateEffectiveLengths(
       SBModel expectSeqRC;
       std::vector<double> expectGC;
     };
-
-    auto revComp = [](const char* s, int32_t l) -> std::string {
-        std::string o(l, 'A');
+    
+    auto revComplement = [](const char* s, int32_t l, std::string& o) -> void {
+        if (l > o.size()) { o.resize(l, 'A'); }
         int32_t j = 0;
         for (int32_t i = l-1; i >= 0; --i, ++j) {
             switch(s[i]) {
@@ -1273,9 +1273,8 @@ Eigen::VectorXd updateEffectiveLengths(
                 break;
             } 
         }
-        return o;
     };
-    
+
     /**
      * The local bias terms from each thread can be combined
      * via simple summation.
@@ -1289,12 +1288,12 @@ Eigen::VectorXd updateEffectiveLengths(
 			auto& expectSeqFW = expectedDist.local().expectSeqFW;
 			auto& expectSeqRC = expectedDist.local().expectSeqRC;
 			auto& expectGC = expectedDist.local().expectGC;
-
+            std::string rcSeq;
 			// For each transcript 
 			for (auto it : boost::irange(range.begin(), range.end())) {
 
 			  // Get the transcript
-			  auto& txp = transcripts[it];
+			  const auto& txp = transcripts[it];
 
 			  // Get the reference length and the 
 			  // "initial" effective length (not considering any biases)
@@ -1306,7 +1305,7 @@ Eigen::VectorXd updateEffectiveLengths(
 
 			  // Skip transcripts with trivial expression or that are too
 			  // short
-              if (alphas[it] < minAlpha or unprocessedLen <= 0) {
+              if (alphas[it] < minAlpha or unprocessedLen <= 0 or txp.uniqueUpdateFraction() < 0.95) {
 			    continue;
 			  }
 		
@@ -1315,7 +1314,7 @@ Eigen::VectorXd updateEffectiveLengths(
 
 			  // This transcript's sequence
 			  const char* tseq = txp.Sequence();
-			  auto rcSeq = revComp(tseq, refLen);
+			  revComplement(tseq, refLen, rcSeq);
 			  const char* rseq = rcSeq.c_str();
               
               Mer fwmer; fwmer.from_chars(tseq);
@@ -1423,9 +1422,16 @@ Eigen::VectorXd updateEffectiveLengths(
     //finalRound = false;
     std::mutex rwmut;
     std::unique_ptr<std::ofstream> bfile{nullptr};
+    // for effective lengths
+    std::unique_ptr<std::ofstream> lfile{nullptr};
     if (finalRound) {
         auto fname = sopt.outputDirectory / "biasterms.txt";
         bfile.reset(new std::ofstream(fname.string()));
+        auto lfname = sopt.outputDirectory / "effective_lengths.tsv";
+        lfile.reset(new std::ofstream(lfname.string(), std::ios::trunc));
+    } else {
+        auto lfname = sopt.outputDirectory / "effective_lengths.tsv";
+        lfile.reset(new std::ofstream(lfname.string(), std::ios::app));
     }
     if (finalRound) {
         auto exp5fn = sopt.outputDirectory / "exp5_marginals.txt";
@@ -1474,7 +1480,7 @@ Eigen::VectorXd updateEffectiveLengths(
     tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(transcripts.size())),
             [&]( const BlockedIndexRange& range) -> void {
 
-
+             std::string rcSeq;
             // For each transcript  
             for (auto it : boost::irange(range.begin(), range.end())) {
 
@@ -1499,12 +1505,12 @@ Eigen::VectorXd updateEffectiveLengths(
                     seqFactorsFW.setOnes();
                     seqFactorsRC.setOnes();
 
-                    Eigen::VectorXd flMasses(refLen);
-                    flMasses.setZero();
+                    //Eigen::VectorXd flMasses(refLen);
+                    //flMasses.setZero();
 
                     // This transcript's sequence
                     const char* tseq = txp.Sequence();
-                    auto rcSeq = revComp(tseq, refLen);
+                    revComplement(tseq, refLen, rcSeq);
                     const char* rseq = rcSeq.c_str();
 
                     int32_t fl = fldLow;
@@ -1571,6 +1577,7 @@ Eigen::VectorXd updateEffectiveLengths(
                         double flWeight = cdf[fl] - prevFLMass;
                         prevFLMass = cdf[fl];
 
+                        double flMassTotal{0.0};
                         // For every position a fragment of length fl could start
                         for (int32_t kmerStartPos = 0; kmerStartPos < refLen - fl; ++kmerStartPos) {
                             int32_t fragStart = kmerStartPos;
@@ -1583,14 +1590,14 @@ Eigen::VectorXd updateEffectiveLengths(
                                     auto gcFrac = txp.gcFrac(fragStart, fragEnd);
                                     fragFactor *= gcBias[gcFrac];
                                 }
-                                flMasses[fl] += fragFactor; 
+                                flMassTotal += fragFactor; 
                             } else { break; }
                         }
 		
-                        flMasses[fl] *= flWeight;
+                        effLength += (flWeight * flMassTotal);
                         fl += gcSamp;
                     }
-                    effLength = flMasses.sum();
+                    //effLength = flMassTotal;//flMasses.sum();
                     
                 } // for the processed transcript
                 
@@ -1610,6 +1617,7 @@ Eigen::VectorXd updateEffectiveLengths(
     } // end parallel_for lambda
     );
     if (finalRound) { bfile->close(); }
+    (*lfile) << effLensOut.transpose() << '\n';
     return effLensOut;
 }
 

@@ -767,6 +767,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
         alphas[i] = (alphasPrime[i] == 1.0) ? ((alphas[i] * fracObserved) + (uniformPrior * (1.0 - fracObserved))) : 0.0;
     }
 
+    
     // If the user requested *not* to use "rich" equivalence classes,
     // then wipe out all of the weight information here and simply replace
     // the weights with the effective length terms (here, the *inverse* of
@@ -835,14 +836,16 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
 
     // Iterations in which we will allow re-computing the effective lengths
     // if bias-correction is enabled.
-    std::vector<uint32_t> recomputeIt{100};// 150, 500, 1000};
+    std::vector<uint32_t> recomputeIt{100, 500, 1000};
     minIter = recomputeIt.front();
 
     bool converged{false};
     double maxRelDiff = -std::numeric_limits<double>::max();
-    while (itNum < minIter or (itNum < maxIter and !converged)) {
-        if (doBiasCorrect and
-            (find(recomputeIt.begin(), recomputeIt.end(), itNum) != recomputeIt.end())) {
+    bool needBias = doBiasCorrect;
+    while (itNum < minIter or (itNum < maxIter and !converged) or needBias) {
+        if (needBias and (itNum > 10 or converged)) { 
+            //if (doBiasCorrect and
+            //(find(recomputeIt.begin(), recomputeIt.end(), itNum) != recomputeIt.end())) {
 
             jointLog->info("iteration {}, recomputing effective lengths", itNum);
             effLens = salmon::utils::updateEffectiveLengths(
@@ -850,7 +853,8 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
                     readExp,
                     effLens,
                     alphas,
-		    (itNum == recomputeIt.front()));
+                    true);
+                    //(itNum == recomputeIt.front()));
 
             // Check for strangeness with the lengths.
             for (size_t i = 0; i < effLens.size(); ++i) {
@@ -868,6 +872,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
 		}
             }
 	   updateEqClassWeights(eqVec, posWeightInvDenoms, effLens);
+       needBias = false;
         }
 
         if (useVBEM) {

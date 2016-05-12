@@ -812,8 +812,6 @@ void processReadsQuasi(paired_parser* parser,
                     int32_t fwPos = (h.fwd) ? startPos1 : startPos2; 
                     int32_t rcPos = (h.fwd) ? startPos2 : startPos1;
                     if (fwPos < rcPos) {
-                        //success = readBias1.addSequence(txpStart + startPos1 - readBias1.contextBefore(read1RC), read1RC);
-                        //success = readBias2.addSequence(txpStart + startPos2 - readBias2.contextBefore(read2RC), read2RC);
                         leftMer.from_chars(txpStart + startPos1 - readBias1.contextBefore(read1RC));
                         rightMer.from_chars(txpStart + startPos2 - readBias2.contextBefore(read2RC));
                         if (read1RC) { leftMer.reverse_complement(); } else { rightMer.reverse_complement(); }
@@ -933,8 +931,9 @@ void processReadsQuasi(single_parser* parser,
   salmon::utils::ShortFragStats shortFragStats;
   bool tooShort{false};
 
-  auto& readBiasFW = observedBiasParams.seqBiasFW;
-  auto& readBiasRC = observedBiasParams.seqBiasRC;
+  auto& readBiasFW = observedBiasParams.seqBiasModelFW;
+  auto& readBiasRC = observedBiasParams.seqBiasModelRC;
+  Mer context;
 
   const char* txomeStr = qidx->seq.c_str();
 
@@ -1023,7 +1022,18 @@ void processReadsQuasi(single_parser* parser,
                 const char* txpStart = t.Sequence();
                 const char* readStart = txpStart + startPos;
                 const char* txpEnd = txpStart + t.RefLength;
-                bool success = readBias.update(txpStart, readStart, txpEnd, dir);
+                
+
+                bool success{false};
+                // If the context exists around the read, add it to the observed 
+                // read start sequences.
+                if ( startPos >= readBias.contextBefore(!h.fwd) and 
+                     startPos + readBias.contextAfter(!h.fwd) < t.RefLength)  {
+                    context.from_chars(txpStart + startPos - readBias.contextBefore(!h.fwd));
+                    if (!h.fwd) { context.reverse_complement(); } 
+                    success = readBias.addSequence(context, 1.0);
+                }
+
                 if (success) {
                     salmonOpts.numBiasSamples -= 1;
                     needBiasSample = false;
@@ -1541,8 +1551,8 @@ void processReadLibrary(
                 
                 auto& fwloc = gcp.seqBiasModelFW;
                 auto& rcloc = gcp.seqBiasModelRC;
-		fw.combineCounts(fwloc);
-		rc.combineCounts(rcloc);
+                fw.combineCounts(fwloc);
+                rc.combineCounts(rcloc);
             }
 
             } // ------ END Single-end --------

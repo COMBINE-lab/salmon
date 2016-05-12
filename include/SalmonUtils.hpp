@@ -160,6 +160,40 @@ void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
 
     bool headersAreConsistent(std::vector<SAM_hdr*>&& headers);
 
+    inline void reverseComplement(const char* s, int32_t l, std::string& o) {
+        if (l > o.size()) { o.resize(l, 'A'); }
+        int32_t j = 0;
+        for (int32_t i = l-1; i >= 0; --i, ++j) {
+            switch(s[i]) {
+            case 'A':
+            case 'a':
+                o[j] = 'T';
+                break;
+            case 'C':
+            case 'c':
+                o[j] = 'G';
+                break;
+            case 'T':
+            case 't':
+                o[j] = 'A';
+                break;
+            case 'G':
+            case 'g':
+                o[j] = 'C';
+                break;
+            default:
+                o[j] = 'N';
+                break;
+            } 
+        }
+    }
+
+    inline std::string reverseComplement(const char* s, int32_t l) {
+        std::string o(l, 'A');
+        reverseComplement(s, l, o);
+        return o;
+    }
+   
     template <typename AlnLibT>
     void writeAbundances(const SalmonOpts& sopt,
                          AlnLibT& alnLib,

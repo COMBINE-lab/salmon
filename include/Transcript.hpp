@@ -113,7 +113,7 @@ public:
     inline void addUniqueCount(size_t newCount) { uniqueCount_ += newCount; }
     inline void addTotalCount(size_t newCount) { totalCount_ += newCount; }
 
-    inline double uniqueUpdateFraction() {
+    inline double uniqueUpdateFraction() const {
         double ambigCount = static_cast<double>(totalCount_ - uniqueCount_);
         return uniqueCount_ / ambigCount;
     }
