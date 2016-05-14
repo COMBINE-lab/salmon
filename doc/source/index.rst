@@ -13,6 +13,7 @@ Contents:
    
    building.rst
    salmon.rst
+   file_formats.rst
    library_type.rst
 
 Indices and tables
