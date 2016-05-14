@@ -63,6 +63,7 @@ extern "C" {
 #include "CollapsedGibbsSampler.hpp"
 #include "GZipWriter.hpp"
 #include "TextBootstrapWriter.hpp"
+#include "BiasParams.hpp"
 
 namespace bfs = boost::filesystem;
 using salmon::math::LOG_0;
@@ -126,6 +127,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                       volatile bool& doneParsing,
                       std::atomic<size_t>& activeBatches,
                       SalmonOpts& salmonOpts,
+		      BiasParams& observedBiasParams,
                       std::atomic<bool>& burnedIn,
                       bool initialRound,
                       std::atomic<size_t>& processedReads) {
@@ -144,13 +146,23 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
     //EQClass
     EquivalenceClassBuilder& eqBuilder = alnLib.equivalenceClassBuilder();
-    auto& readBiasFW = alnLib.readBias(salmon::utils::Direction::FORWARD);
-    auto& readBiasRC = alnLib.readBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
+    auto& readBiasFW = observedBiasParams.seqBiasModelFW;
+    auto& readBiasRC = observedBiasParams.seqBiasModelRC;
+    auto& observedGCMass = observedBiasParams.observedGCMass;
+    auto& obsFwd = observedBiasParams.massFwd;
+    auto& obsRC = observedBiasParams.massRC;
+
+    bool gcBiasCorrect = salmonOpts.gcBiasCorrect;
 
     using salmon::math::LOG_0;
     using salmon::math::logAdd;
     using salmon::math::logSub;
 
+    // k-mers for sequence bias
+    Mer leftMer;
+    Mer rightMer;
+    Mer context;
+    
     auto& refs = alnLib.transcripts();
     auto& clusterForest = alnLib.clusterForest();
     auto& fragmentQueue = alnLib.fragmentQueue();
@@ -405,8 +417,10 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
        
                         bool success = false;
                         if(needBiasSample and salmonOpts.numBiasSamples > 0) {
-                            if (aln->isPaired()){
-                                ReadPair* alnp = reinterpret_cast<ReadPair*>(aln);
+			  const char* txpStart = transcript.Sequence();
+			  const char* txpEnd = txpStart + transcript.RefLength;
+			    if (aln->isPaired()){
+				ReadPair* alnp = reinterpret_cast<ReadPair*>(aln);
                                 bam_seq_t* r1 = alnp->read1; 
                                 bam_seq_t* r2 = alnp->read2; 
                                 if (r1 != nullptr and r2 != nullptr) {
@@ -418,23 +432,43 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                                     bool fwd2{bam_strand(r2) == 0};
                                     int32_t startPos2 = fwd2 ? pos2 : pos2 + getCIGARLength(r2) - 1;
 
-		    
-                                    if ((fwd1 != fwd2) and // Shouldn't be from the same strand
-                                        (startPos1 > 0 and startPos1 < transcript.RefLength) and 
-                                        (startPos2 > 0 and startPos2 < transcript.RefLength)) {
+				    // Shouldn't be from the same strand and they should be in the right order
+				    if ((fwd1 != fwd2) and // Shouldn't be from the same strand
+					(startPos1 > 0 and startPos1 < transcript.RefLength) and 
+					(startPos2 > 0 and startPos2 < transcript.RefLength)) { 
 
-                                        const char* txpStart = transcript.Sequence();
-                                        const char* txpEnd = txpStart + transcript.RefLength;
+				      const char* readStart1 = txpStart + startPos1;
+				      auto& readBias1 = (fwd1) ? readBiasFW : readBiasRC;
 
-                                        const char* readStart1 = txpStart + startPos1;
-                                        auto& readBias1 = (fwd1) ? readBiasFW : readBiasRC;
-
-                                        const char* readStart2 = txpStart + startPos2;
-                                        auto& readBias2 = (fwd2) ? readBiasFW : readBiasRC;
+				      const char* readStart2 = txpStart + startPos2;
+				      auto& readBias2 = (fwd2) ? readBiasFW : readBiasRC;
 		
-			
-                                        success = readBias2.update(txpStart, readStart2, txpEnd, salmon::utils::boolToDirection(fwd2));
-                                        success = success and readBias1.update(txpStart, readStart1, txpEnd, salmon::utils::boolToDirection(fwd1));
+				      int32_t fwPre = readBias1.contextBefore(!fwd1);
+				      int32_t fwPost = readBias1.contextAfter(!fwd1);
+
+				      int32_t rcPre = readBias2.contextBefore(!fwd2);
+				      int32_t rcPost = readBias2.contextAfter(!fwd2); 
+
+				      bool read1RC = !fwd1;
+				      bool read2RC = !fwd2;
+
+				      if ( (startPos1 >= readBias1.contextBefore(read1RC) and 
+					    startPos1 + readBias1.contextAfter(read1RC ) < transcript.RefLength) 
+					   and
+					   (startPos2 >= readBias2.contextBefore(read2RC) and
+					    startPos2 + readBias2.contextAfter(read2RC) < transcript.RefLength) ) {
+		    
+					int32_t fwPos = (fwd1) ? startPos1 : startPos2; 
+					int32_t rcPos = (fwd1) ? startPos2 : startPos1;
+					if (fwPos < rcPos) {
+					  leftMer.from_chars(txpStart + startPos1 - readBias1.contextBefore(read1RC));
+					  rightMer.from_chars(txpStart + startPos2 - readBias2.contextBefore(read2RC));
+					  if (read1RC) { leftMer.reverse_complement(); } else { rightMer.reverse_complement(); }
+
+					  success = readBias1.addSequence(leftMer, 1.0);
+					  success = readBias2.addSequence(rightMer, 1.0);
+					}
+				      }
                                     }
                                 }
                             } else {  // unpaired read
@@ -453,7 +487,12 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                                         const char* readStart1 = txpStart + startPos1;
                                         auto& readBias1 = (fwd1) ? readBiasFW : readBiasRC;
 
-                                        success = readBias1.update(txpStart, readStart1, txpEnd, salmon::utils::boolToDirection(fwd1));
+                                        if (startPos1 >= readBias1.contextBefore(!fwd1) and 
+                                            startPos1 + readBias1.contextAfter(!fwd1) < transcript.RefLength) {
+                                            context.from_chars(txpStart + startPos1 - readBias1.contextBefore(!fwd1));
+                                            if (!fwd1) { context.reverse_complement(); } 
+                                            success = readBias1.addSequence(context, 1.0);
+                                        }
                                     }
 
                                 }
@@ -470,6 +509,43 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 			/**
 			 * Update the auxiliary models.
 			 **/
+			// Paired-end
+			if (aln->isPaired()) {
+			  // TODO: Is this right for *all* library types?
+			  if (aln->fwd()) {
+			    obsFwd = salmon::math::logAdd(obsFwd, aln->logProb);
+			  } else {
+			    obsRC = salmon::math::logAdd(obsRC, aln->logProb);
+			  }
+			} else if (aln->libFormat().type == ReadType::SINGLE_END) {
+			  // Single-end or orphan
+			  if (aln->libFormat().strandedness == ReadStrandedness::S) {
+			    obsFwd = salmon::math::logAdd(obsFwd, aln->logProb);
+			  } else {
+			    obsRC = salmon::math::logAdd(obsRC, aln->logProb);
+			  }
+			}
+
+			// Collect the GC-fragment bias samples
+			if (gcBiasCorrect and aln->isPaired()) {
+			  ReadPair* alnp = reinterpret_cast<ReadPair*>(aln);
+			  bam_seq_t* r1 = alnp->read1; 
+			  bam_seq_t* r2 = alnp->read2; 
+			  if (r1 != nullptr and r2 != nullptr) {
+                  bool fwd1{bam_strand(r1) == 0};
+                  bool fwd2{bam_strand(r2) == 0};
+                  int32_t start = alnp->left(); 
+                  int32_t stop = alnp->right(); 
+
+			    if (start >= 0 and stop < transcript.RefLength) {
+			      int32_t gcFrac = transcript.gcFrac(start, stop);
+			      // Add this fragment's contribution
+			      observedGCMass[gcFrac] = salmon::math::logAdd(observedGCMass[gcFrac], newMass); 
+			    }
+			  }
+			}
+			// END: GC-fragment bias
+			
 			double r = uni(eng);
 			if (!burnedIn and r < std::exp(aln->logProb)) {
 			    /**
@@ -656,6 +732,7 @@ bool quantifyLibrary(
     bool initialRound{true};
     bool haveCache{false};
     bool doReset{true};
+    bool gcBiasCorrect{salmonOpts.gcBiasCorrect};
     size_t maxCacheSize{salmonOpts.mappingCacheMemoryLimit};
 
     NullFragmentFilter<FragT>* nff = nullptr;
@@ -715,7 +792,10 @@ bool quantifyLibrary(
             firstTimestepOfRound -= 1;
         }
 
-        for (uint32_t i = 0; i < currentQuantThreads; ++i) {
+	/** sequence-specific and GC-fragment bias vectors --- each thread gets it's own **/
+	std::vector<BiasParams> observedBiasParams(currentQuantThreads);
+
+	for (uint32_t i = 0; i < currentQuantThreads; ++i) {
             workers.emplace_back(processMiniBatch<FragT>,
                     std::ref(alnLib),
                     std::ref(fmCalc),
@@ -725,6 +805,7 @@ bool quantifyLibrary(
                     std::ref(workAvailable), std::ref(cvmutex),
                     std::ref(doneParsing), std::ref(activeBatches),
                     std::ref(salmonOpts),
+		    std::ref(observedBiasParams[i]),
                     std::ref(burnedIn),
                     initialRound,
                     std::ref(totalProcessedReads));
@@ -809,6 +890,58 @@ bool quantifyLibrary(
 
         numObservedFragments += alnLib.numMappedFragments();
 
+	/**
+	 *
+	 * Aggregate thread-local bias parameters 
+	 *
+	 **/
+            // Set the global distribution based on the sum of local
+            // distributions.
+            double gcFracFwd{0.0};
+            double globalMass{salmon::math::LOG_0};
+            double globalFwdMass{salmon::math::LOG_0};
+            auto& globalGCMass = alnLib.observedGC();
+            for (auto& gcp : observedBiasParams) {
+                auto& gcm = gcp.observedGCMass;
+                double totMass = salmon::math::LOG_0;
+                for (auto e : gcm) {
+                    totMass = salmon::math::logAdd(totMass, e);
+                }
+                
+                auto& fw = alnLib.readBiasModel(salmon::utils::Direction::FORWARD);
+                auto& rc = alnLib.readBiasModel(salmon::utils::Direction::REVERSE_COMPLEMENT);
+                
+                auto& fwloc = gcp.seqBiasModelFW;
+                auto& rcloc = gcp.seqBiasModelRC;
+		fw.combineCounts(fwloc);
+		rc.combineCounts(rcloc);
+
+                globalMass = salmon::math::logAdd(globalMass, gcp.massFwd);
+                globalMass = salmon::math::logAdd(globalMass, gcp.massRC);
+                globalFwdMass = salmon::math::logAdd(globalFwdMass, gcp.massFwd);
+
+		if (gcBiasCorrect and totMass != salmon::math::LOG_0) {
+		  for (size_t i = 0; i < gcm.size(); ++i) {
+		    if (gcm[i] != salmon::math::LOG_0) {
+		      double val = std::exp(gcm[i] - totMass);
+		      globalGCMass[i] += val;
+		    }
+		  }
+		}
+
+	    }
+	    if (globalMass != salmon::math::LOG_0) {
+		if (globalFwdMass != salmon::math::LOG_0) {
+                  gcFracFwd = std::exp(globalFwdMass - globalMass);
+                }
+                alnLib.setGCFracForward(gcFracFwd);
+            }
+
+           /** END: aggregate thread-local bias parameters **/
+
+
+
+	
         fmt::print(stderr, "# observed = {} / # required = {}\033[A\033[A\033[A\033[A\033[A",
                    numObservedFragments, numRequiredFragments);
 
@@ -1001,6 +1134,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                                             "quantification threads, one should not expect much of a speed-up beyond "
                                             "~6 threads.")
     ("biasCorrect", po::value(&(sopt.biasCorrect))->zero_tokens(), "Perform sequence-specific bias correction.")
+    ("gcBiasCorrect", po::value(&(sopt.gcBiasCorrect))->zero_tokens(), "[experimental] Perform fragment GC bias correction")
     ("incompatPrior", po::value<double>(&(sopt.incompatPrior))->default_value(1e-20), "This option "
                         "sets the prior probability that an alignment that disagrees with the specified "
                         "library type (--libType) results from the true fragment origin.  Setting this to 0 "
@@ -1034,6 +1168,9 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     advanced.add_options()
     ("auxDir", po::value<std::string>(&(sopt.auxDir))->default_value("aux"), "The sub-directory of the quantification directory where auxiliary information "
      			"e.g. bootstraps, bias parameters, etc. will be written.")
+    ("useBiasLengthThreshold", po::bool_switch(&(sopt.useBiasLengthThreshold))->default_value(false), "[experimental] : "
+                        "If this option is enabled, then bias correction will only be allowed to estimate effective lengths "
+                        "longer than the approximate mean fragment length")
     ("fldMax" , po::value<size_t>(&(sopt.fragLenDistMax))->default_value(800), "The maximum fragment length to consider when building the empirical distribution")
     ("fldMean", po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(200), "The mean used in the fragment length distribution prior")
     ("fldSD" , po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(80), "The standard deviation used in the fragment length distribution prior")
@@ -1170,7 +1307,8 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 
         // Set the atomic variable numBiasSamples from the local version
         sopt.numBiasSamples.store(numBiasSamples);
-
+	sopt.noBiasLengthThreshold = !sopt.useBiasLengthThreshold;
+	
         // Get the time at the start of the run
         std::time_t result = std::time(NULL);
         std::string runStartTime(std::asctime(std::localtime(&result)));
@@ -1333,10 +1471,17 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         switch (libFmt.type) {
             case ReadType::SINGLE_END:
                 {
-                    AlignmentLibrary<UnpairedRead> alnLib(alignmentFiles,
-                                                          transcriptFile,
-                                                          libFmt,
-                                                          sopt);
+		  // We can only do fragment GC bias correction, for the time being, with paired-end reads
+		  if (sopt.gcBiasCorrect) {
+		    jointLog->warn("Fragment GC bias correction is currently only "
+				   "implemented for paired-end libraries.  Disabling "
+				   "fragment GC bias correction for this run");
+		    sopt.gcBiasCorrect = false;
+		  }
+		    AlignmentLibrary<UnpairedRead> alnLib(alignmentFiles,
+							  transcriptFile,
+							  libFmt,
+							  sopt);
 
                     success = processSample<UnpairedRead>(alnLib, runStartTime,
                                                           requiredObservations, sopt,

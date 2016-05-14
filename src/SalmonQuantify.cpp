@@ -451,7 +451,7 @@ void processMiniBatch(
                     if (start > 0 and stop < transcript.RefLength) {
                         int32_t gcFrac = transcript.gcFrac(start, stop);
                         // Add this fragment's contribution
-                        observedGCMass[gcFrac] = salmon::math::logAdd(observedGCMass[gcFrac], newMass); 
+                        observedGCMass[gcFrac] = salmon::math::logAdd(observedGCMass[gcFrac], aln.logProb); 
                     }
                 }
 		double r = uni(randEng);
@@ -1121,7 +1121,7 @@ void processReadLibrary(
             std::unique_ptr<paired_parser> pairedParserPtr{nullptr};
             std::unique_ptr<single_parser> singleParserPtr{nullptr};
 
-            /** GC-fragment bias vectors --- each thread gets it's own **/
+            /** sequence-specific and GC-fragment bias vectors --- each thread gets it's own **/
             std::vector<BiasParams> observedBiasParams(numThreads);
 
             // If the read library is paired-end
@@ -1884,8 +1884,8 @@ int salmonQuantify(int argc, char *argv[]) {
                         "a priori probability.")
     ("useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(false), "[experimental] : "
                         "Consider / model non-uniformity in the fragment start positions across the transcript.")
-    ("noBiasLengthThreshold", po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(false), "[experimental] : "
-                        "If this option is enabled, then bias correction will be allowed to estimate effective lengths "
+    ("useBiasLengthThreshold", po::bool_switch(&(sopt.useBiasLengthThreshold))->default_value(false), "[experimental] : "
+                        "If this option is enabled, then bias correction will not be allowed to estimate effective lengths "
                         "shorter than the approximate mean fragment length")
     ("numBiasSamples", po::value<int32_t>(&numBiasSamples)->default_value(2000000),
             "Number of fragment mappings to use when learning the sequence-specific bias model.")
@@ -2056,6 +2056,7 @@ transcript abundance from RNA-seq reads
             }
         }
 
+	sopt.noBiasLengthThreshold = !sopt.useBiasLengthThreshold;
 	// FEB 18
 	/*
         if (sopt.biasCorrect and sopt.gcBiasCorrect) {

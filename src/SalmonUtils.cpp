@@ -1305,7 +1305,7 @@ Eigen::VectorXd updateEffectiveLengths(
 
 			  // Skip transcripts with trivial expression or that are too
 			  // short
-              if (alphas[it] < minAlpha or unprocessedLen <= 0 or txp.uniqueUpdateFraction() < 0.95) {
+              if (alphas[it] < minAlpha or unprocessedLen <= 0 or txp.uniqueUpdateFraction() < 0.90) {
 			    continue;
 			  }
 		
@@ -1419,20 +1419,7 @@ Eigen::VectorXd updateEffectiveLengths(
     std::atomic<size_t> numCorrected{0};
     std::atomic<size_t> numUncorrected{0};
 
-    //finalRound = false;
     std::mutex rwmut;
-    std::unique_ptr<std::ofstream> bfile{nullptr};
-    // for effective lengths
-    std::unique_ptr<std::ofstream> lfile{nullptr};
-    if (finalRound) {
-        auto fname = sopt.outputDirectory / "biasterms.txt";
-        bfile.reset(new std::ofstream(fname.string()));
-        auto lfname = sopt.outputDirectory / "effective_lengths.tsv";
-        lfile.reset(new std::ofstream(lfname.string(), std::ios::trunc));
-    } else {
-        auto lfname = sopt.outputDirectory / "effective_lengths.tsv";
-        lfile.reset(new std::ofstream(lfname.string(), std::ios::app));
-    }
     if (finalRound) {
         auto exp5fn = sopt.outputDirectory / "exp5_marginals.txt";
         auto& exp5m = exp5.marginals();
@@ -1547,22 +1534,6 @@ Eigen::VectorXd updateEffectiveLengths(
                         sopt.jointLog->info("processing transcript {}", numProcessed);
                     }
                     ++numProcessed;
-                    if (finalRound) {
-                        if (it <= 3000) {
-                            std::lock_guard<std::mutex> lg(rwmut);
-                            (*bfile) << txp.RefName << '\n';
-                            for (size_t i = 0; i < refLen; ++i) {
-                                (*bfile) << seqFactorsFW[i] ;
-                                if (i < refLen - 1) { (*bfile) << '\t'; }
-                            }
-                            (*bfile) << '\n';
-                            for (size_t i = 0; i < refLen; ++i) {
-                                (*bfile) << seqFactorsRC[i] ;
-                                if (i < refLen - 1) { (*bfile) << '\t'; }
-                            }
-                            (*bfile) << '\n';
-                        }
-                    }
 
                     size_t sp = static_cast<size_t>((fl > 0) ? fl - 1 : 0);
                     double prevFLMass = cdf[sp];
@@ -1616,8 +1587,6 @@ Eigen::VectorXd updateEffectiveLengths(
         }
     } // end parallel_for lambda
     );
-    if (finalRound) { bfile->close(); }
-    (*lfile) << effLensOut.transpose() << '\n';
     return effLensOut;
 }
 

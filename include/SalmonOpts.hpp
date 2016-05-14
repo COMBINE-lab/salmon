@@ -50,6 +50,8 @@ struct SalmonOpts {
 
     bool noBiasLengthThreshold; // Don't require that the recomputed effective length for a target
                                 // be above a threshold before applying it.
+    bool useBiasLengthThreshold; // Don't require that the recomputed effective length for a target
+                                // be above a threshold before applying it.
 
     bool useFSPD; // Learn a non-uniform start distribution
 

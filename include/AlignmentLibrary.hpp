@@ -114,7 +114,7 @@ class AlignmentLibrary {
 
             fmt::print(stderr, "Populating targets from aln = {}, fasta = {} . . .",
                        alnFiles.front(), transcriptFile_);
-            fp.populateTargets(transcripts_);
+            fp.populateTargets(transcripts_, salmonOpts);
 	    for (auto& txp : transcripts_) {
 		    // Length classes taken from
 		    // ======

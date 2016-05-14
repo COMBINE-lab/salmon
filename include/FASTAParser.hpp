@@ -4,11 +4,13 @@
 #include <vector>
 
 class Transcript;
+class SalmonOpts;
 
 class FASTAParser {
 public:
     FASTAParser(const std::string& fname);
-    void populateTargets(std::vector<Transcript>& transcripts);
+    void populateTargets(std::vector<Transcript>& transcripts, SalmonOpts& sopt);
+
 private:
     std::string fname_;
 };
