@@ -1134,10 +1134,12 @@ std::vector<int32_t> samplesFromLogPMF(FragmentLengthDistribution* fld, int32_t 
  * Computes (and returns) new effective lengths for the transcripts
  * based on the current abundance estimates (alphas) and the current
  * effective lengths (effLensIn).  This approach to sequence-specifc bias is 
- * based on the one taken in Kallisto [Bray et al 2016, doi:10.1038/nbt.3519], 
- * and seems to work well given its low computational requirements.  
+ * based on the one taken in Roberts et al. (2011) [1].
  * Here, we also consider fragment-GC bias which uses a novel method extending 
  * the idea of adjusting the effective lengths.
+ *
+ * [1] Roberts, Adam, et al. "Improving RNA-Seq expression estimates by correcting for fragment bias." 
+ *     Genome Biol 12.3 (2011): R22.
  */
 template <typename AbundanceVecT, typename ReadExpT>
 Eigen::VectorXd updateEffectiveLengths(

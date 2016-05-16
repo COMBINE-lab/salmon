@@ -762,7 +762,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
     // a linear combination of the online estimates
     // and the uniform distribution.
     double uniformPrior = totalWeight / static_cast<double>(numActive);
-    double fracObserved = std::min(1.0, totalWeight / sopt.numRequiredFragments);
+    double fracObserved = 1.0;//std::min(1.0, totalWeight / sopt.numRequiredFragments);
     for (size_t i = 0; i < alphas.size(); ++i) {
         alphas[i] = (alphasPrime[i] == 1.0) ? ((alphas[i] * fracObserved) + (uniformPrior * (1.0 - fracObserved))) : 0.0;
     }
@@ -849,30 +849,30 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
 
             jointLog->info("iteration {}, recomputing effective lengths", itNum);
             effLens = salmon::utils::updateEffectiveLengths(
-                    sopt,
-                    readExp,
-                    effLens,
-                    alphas,
-                    true);
-                    //(itNum == recomputeIt.front()));
+                                                            sopt,
+                                                            readExp,
+                                                            effLens,
+                                                            alphas,
+                                                            true);
+            //(itNum == recomputeIt.front()));
 
             // Check for strangeness with the lengths.
             for (size_t i = 0; i < effLens.size(); ++i) {
                 if (effLens(i) <= 0.0) {
                     jointLog->warn("Transcript {} had length {}", i, effLens(i));
                 }
-		if (noRichEq or !useFSPD) {
-		  posWeightInvDenoms(i) = 1.0;
-		} else {
-		  auto& txp = transcripts[i];
-		  auto& fragStartDist = fragStartDists[txp.lengthClassIndex()];
-		  double denomFactor = fragStartDist.evalCDF(static_cast<int32_t>(effLens(i)), txp.RefLength);
-		  posWeightInvDenoms(i) = (denomFactor >= salmon::math::LOG_EPSILON) ?
-		    std::exp(-denomFactor) : 1e-5;
-		}
+                if (noRichEq or !useFSPD) {
+                    posWeightInvDenoms(i) = 1.0;
+                } else {
+                    auto& txp = transcripts[i];
+                    auto& fragStartDist = fragStartDists[txp.lengthClassIndex()];
+                    double denomFactor = fragStartDist.evalCDF(static_cast<int32_t>(effLens(i)), txp.RefLength);
+                    posWeightInvDenoms(i) = (denomFactor >= salmon::math::LOG_EPSILON) ?
+                        std::exp(-denomFactor) : 1e-5;
+                }
             }
-	   updateEqClassWeights(eqVec, posWeightInvDenoms, effLens);
-       needBias = false;
+            updateEqClassWeights(eqVec, posWeightInvDenoms, effLens);
+            needBias = false;
         }
 
         if (useVBEM) {
