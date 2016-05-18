@@ -500,7 +500,6 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                             if (success) {
                                 salmonOpts.numBiasSamples -= 1;
                                 needBiasSample = false;
-                                //if (salmonOpts.numBiasSamples <= 990000) { std::exit(1); }
                             }
                         }
                         // ---- Collect seq-specific bias samples ------ //
@@ -1133,8 +1132,8 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                                             "so until there is a faster multi-threaded SAM/BAM parser to feed the "
                                             "quantification threads, one should not expect much of a speed-up beyond "
                                             "~6 threads.")
-    ("biasCorrect", po::value(&(sopt.biasCorrect))->zero_tokens(), "Perform sequence-specific bias correction.")
-    ("gcBiasCorrect", po::value(&(sopt.gcBiasCorrect))->zero_tokens(), "[experimental] Perform fragment GC bias correction")
+    ("seqBias", po::value(&(sopt.biasCorrect))->zero_tokens(), "Perform sequence-specific bias correction.")
+    ("gcBias", po::value(&(sopt.gcBiasCorrect))->zero_tokens(), "[experimental] Perform fragment GC bias correction")
     ("incompatPrior", po::value<double>(&(sopt.incompatPrior))->default_value(1e-20), "This option "
                         "sets the prior probability that an alignment that disagrees with the specified "
                         "library type (--libType) results from the true fragment origin.  Setting this to 0 "

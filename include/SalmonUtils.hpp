@@ -144,6 +144,9 @@ inline void incLoop(tbb::atomic<double>& val, double inc) {
         } while (returnedMass != oldMass);
 }
 
+bool processQuantOptions(SalmonOpts& sopt, boost::program_options::variables_map& vm, int32_t numBiasSamples);
+
+
 
 void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm, boost::filesystem::path& inputPath);
 

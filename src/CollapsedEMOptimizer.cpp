@@ -762,7 +762,8 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
     // a linear combination of the online estimates
     // and the uniform distribution.
     double uniformPrior = totalWeight / static_cast<double>(numActive);
-    double fracObserved = 1.0;//std::min(1.0, totalWeight / sopt.numRequiredFragments);
+    double fracObserved = 1.0;
+    //double fracObserved = std::min(1.0, totalWeight / sopt.numRequiredFragments);
     for (size_t i = 0; i < alphas.size(); ++i) {
         alphas[i] = (alphasPrime[i] == 1.0) ? ((alphas[i] * fracObserved) + (uniformPrior * (1.0 - fracObserved))) : 0.0;
     }
@@ -836,8 +837,9 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
 
     // Iterations in which we will allow re-computing the effective lengths
     // if bias-correction is enabled.
-    std::vector<uint32_t> recomputeIt{100, 500, 1000};
-    minIter = recomputeIt.front();
+    // std::vector<uint32_t> recomputeIt{100, 500, 1000};
+
+    minIter = 100;
 
     bool converged{false};
     double maxRelDiff = -std::numeric_limits<double>::max();

@@ -1129,6 +1129,112 @@ std::vector<int32_t> samplesFromLogPMF(FragmentLengthDistribution* fld, int32_t 
     return samples;
 } 
 
+/**
+ * Validate the options for quasi-mapping-based salmon, and create the necessary output directories and 
+ * logging infrastructure.
+ **/
+  bool processQuantOptions(SalmonOpts& sopt, boost::program_options::variables_map& vm, int32_t numBiasSamples) {
+    using std::cerr;
+    using std::vector;
+    using std::string;
+    namespace bfs = boost::filesystem;
+    namespace po = boost::program_options;
+    // Set the atomic variable numBiasSamples from the local version
+    sopt.numBiasSamples.store(numBiasSamples);
+
+    // Get the time at the start of the run
+    std::time_t result = std::time(NULL);
+    sopt.runStartTime = std::string(std::asctime(std::localtime(&result)));
+    sopt.runStartTime.pop_back(); // remove the newline
+
+    // Verify the geneMap before we start doing any real work.
+    bfs::path geneMapPath;
+    if (vm.count("geneMap")) {
+      // Make sure the provided file exists
+      geneMapPath = vm["geneMap"].as<std::string>();
+      if (!bfs::exists(geneMapPath)) {
+	std::cerr << "Could not find transcript <=> gene map file " << geneMapPath << "\n";
+	std::cerr << "Exiting now: please either omit the \'geneMap\' option or provide a valid file\n";
+	return false;
+      }
+      sopt.geneMapPath = geneMapPath;
+    }
+
+    bfs::path outputDirectory(vm["output"].as<std::string>());
+    bfs::create_directories(outputDirectory);
+    if (!(bfs::exists(outputDirectory) and bfs::is_directory(outputDirectory))) {
+      std::cerr << "Couldn't create output directory " << outputDirectory << "\n";
+      std::cerr << "exiting\n";
+      return false;
+    }
+
+    bfs::path indexDirectory(vm["index"].as<string>());
+    bfs::path logDirectory = outputDirectory / "logs";
+
+    sopt.indexDirectory = indexDirectory;
+    sopt.outputDirectory = outputDirectory;
+
+    // Create the logger and the logging directory
+    bfs::create_directories(logDirectory);
+    if (!(bfs::exists(logDirectory) and bfs::is_directory(logDirectory))) {
+      std::cerr << "Couldn't create log directory " << logDirectory << "\n";
+      std::cerr << "exiting\n";
+      return false;
+    }
+	
+    if (!sopt.quiet) {
+      std::cout << "Logs will be written to " << logDirectory.string() << "\n";
+    }
+
+    bfs::path logPath = logDirectory / "salmon_quant.log";
+    // must be a power-of-two
+    size_t max_q_size = 2097152;
+    spdlog::set_async_mode(max_q_size);
+
+    auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(logPath.string(), true);
+    auto rawConsoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
+    auto consoleSink = std::make_shared<spdlog::sinks::ansicolor_sink>(rawConsoleSink);
+    auto consoleLog = spdlog::create("stderrLog", {consoleSink});
+    auto fileLog = spdlog::create("fileLog", {fileSink});
+    auto jointLog = spdlog::create("jointLog", {fileSink, consoleSink});
+
+    // If we're being quiet, the only emit errors.
+    if (sopt.quiet) { 
+      jointLog->set_level(spdlog::level::err);
+    }
+
+    sopt.jointLog = jointLog;
+    sopt.fileLog = fileLog;
+	
+    // Verify that no inconsistent options were provided
+    if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {
+      jointLog->error("You cannot perform both Gibbs sampling and bootstrapping. "
+		      "Please choose one.");
+      jointLog->flush();
+      return false;
+    }
+
+    {
+      if (sopt.noFragLengthDist and !sopt.noEffectiveLengthCorrection) {
+	jointLog->info() << "Error: You cannot enable --noFragLengthDist without "
+			 << "also enabling --noEffectiveLengthCorrection; exiting!\n";
+	jointLog->flush();
+	return false;
+      }
+    }
+
+    sopt.noBiasLengthThreshold = !sopt.useBiasLengthThreshold;
+
+    // maybe arbitrary, but if it's smaller than this, consider it
+    // equal to LOG_0
+    if (sopt.incompatPrior < 1e-320) {
+      sopt.incompatPrior = salmon::math::LOG_0;
+    } else {
+      sopt.incompatPrior = std::log(sopt.incompatPrior);
+    }
+    return true;
+  }
+  
 
 /**
  * Computes (and returns) new effective lengths for the transcripts
@@ -1147,7 +1253,7 @@ Eigen::VectorXd updateEffectiveLengths(
         ReadExpT& readExp,
         Eigen::VectorXd& effLensIn,
         AbundanceVecT& alphas,
-	bool finalRound) {
+	bool writeBias) {
 
     using std::vector;
     using BlockedIndexRange =  tbb::blocked_range<size_t>;
@@ -1421,42 +1527,48 @@ Eigen::VectorXd updateEffectiveLengths(
     std::atomic<size_t> numCorrected{0};
     std::atomic<size_t> numUncorrected{0};
 
-    std::mutex rwmut;
-    if (finalRound) {
-        auto exp5fn = sopt.outputDirectory / "exp5_marginals.txt";
-        auto& exp5m = exp5.marginals();
-        std::ofstream exp5f(exp5fn.string());
-        exp5f << exp5m.rows() << '\t' << exp5m.cols() << '\n'; 
-        exp5f << exp5m;
-        exp5f.close();
+    // Write out the bias model parameters we learned
+    if (writeBias) {
+      boost::filesystem::path auxDir = sopt.outputDirectory / sopt.auxDir;
+      bool auxSuccess = boost::filesystem::create_directories(auxDir);
+      if (auxSuccess) {
+          auto exp5fn = auxDir / "exp5_marginals.txt";
+          auto& exp5m = exp5.marginals();
+          std::ofstream exp5f(exp5fn.string());
+          exp5f << exp5m.rows() << '\t' << exp5m.cols() << '\n'; 
+          exp5f << exp5m;
+          exp5f.close();
 
-        auto exp3fn = sopt.outputDirectory / "exp3_marginals.txt";
-        auto& exp3m = exp3.marginals();
-        std::ofstream exp3f(exp3fn.string());
-        exp3f << exp3m.rows() << '\t' << exp3m.cols() << '\n'; 
-        exp3f << exp3m;
-        exp3f.close();
+          auto exp3fn = auxDir / "exp3_marginals.txt";
+          auto& exp3m = exp3.marginals();
+          std::ofstream exp3f(exp3fn.string());
+          exp3f << exp3m.rows() << '\t' << exp3m.cols() << '\n'; 
+          exp3f << exp3m;
+          exp3f.close();
 
-        auto obs5fnc = sopt.outputDirectory / "obs5_conditionals.txt";
-        std::ofstream obs5fc(obs5fnc.string());
-        obs5.dumpConditionalProbabilities(obs5fc);
-        obs5fc.close();
+          auto obs5fnc = auxDir / "obs5_conditionals.txt";
+          std::ofstream obs5fc(obs5fnc.string());
+          obs5.dumpConditionalProbabilities(obs5fc);
+          obs5fc.close();
 
-        auto obs3fnc = sopt.outputDirectory / "obs3_conditionals.txt";
-        std::ofstream obs3fc(obs3fnc.string());
-        obs3.dumpConditionalProbabilities(obs3fc);
-        obs3fc.close();
-        
+          auto obs3fnc = auxDir / "obs3_conditionals.txt";
+          std::ofstream obs3fc(obs3fnc.string());
+          obs3.dumpConditionalProbabilities(obs3fc);
+          obs3fc.close();
+	
 
-        auto exp5fnc = sopt.outputDirectory / "exp5_conditionals.txt";
-        std::ofstream exp5fc(exp5fnc.string());
-        exp5.dumpConditionalProbabilities(exp5fc);
-        exp5fc.close();
+          auto exp5fnc = auxDir / "exp5_conditionals.txt";
+          std::ofstream exp5fc(exp5fnc.string());
+          exp5.dumpConditionalProbabilities(exp5fc);
+          exp5fc.close();
 
-        auto exp3fnc = sopt.outputDirectory / "exp3_conditionals.txt";
-        std::ofstream exp3fc(exp3fnc.string());
-        exp3.dumpConditionalProbabilities(exp3fc);
-        exp3fc.close();
+          auto exp3fnc = auxDir / "exp3_conditionals.txt";
+          std::ofstream exp3fc(exp3fnc.string());
+          exp3.dumpConditionalProbabilities(exp3fc);
+          exp3fc.close();
+      } else {
+          sopt.jointLog->warn("Couldn't create auxiliary directory {} to write bias parameters", auxDir);
+      }
     }
 
 
@@ -1494,9 +1606,6 @@ Eigen::VectorXd updateEffectiveLengths(
                     seqFactorsFW.setOnes();
                     seqFactorsRC.setOnes();
 
-                    //Eigen::VectorXd flMasses(refLen);
-                    //flMasses.setZero();
-
                     // This transcript's sequence
                     const char* tseq = txp.Sequence();
                     revComplement(tseq, refLen, rcSeq);
@@ -1528,7 +1637,7 @@ Eigen::VectorXd updateEffectiveLengths(
                             mer.shift_left(tseq[fragStart + contextLength]);
                             rcmer.shift_left(rseq[fragStart + contextLength]);
                         }
-                        // Reverse
+                        // We need these in 5' -> 3' order, so reverse them 
                         seqFactorsRC.reverseInPlace(); 
                     } // end sequence-specific factor calculation 
 		     

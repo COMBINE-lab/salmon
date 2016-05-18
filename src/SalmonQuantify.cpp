@@ -1773,7 +1773,6 @@ int salmonQuantify(int argc, char *argv[]) {
     namespace po = boost::program_options;
 
     bool optChain{false};
-    size_t requiredObservations;
     int32_t numBiasSamples{0};
 
     SalmonOpts sopt;
@@ -1804,8 +1803,8 @@ int salmonQuantify(int argc, char *argv[]) {
                         "performing lightweight-alignment.  This option will increase sensitivity (allow more reads to map and "
                         "more transcripts to be detected), but may decrease specificity as orphaned alignments are more likely "
                         "to be spurious -- this option is *always* set to true when using quasi-mapping.")
-    ("biasCorrect", po::value(&(sopt.biasCorrect))->zero_tokens(), "Perform sequence-specific bias correction.")
-    ("gcBiasCorrect", po::value(&(sopt.gcBiasCorrect))->zero_tokens(), "[experimental] Perform fragment GC bias correction")
+    ("seqBias", po::value(&(sopt.biasCorrect))->zero_tokens(), "Perform sequence-specific bias correction.")
+    ("gcBias", po::value(&(sopt.gcBiasCorrect))->zero_tokens(), "[experimental] Perform fragment GC bias correction")
     ("threads,p", po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads), "The number of threads to use concurrently.")
     ("incompatPrior", po::value<double>(&(sopt.incompatPrior))->default_value(1e-20), "This option "
                         "sets the prior probability that an alignment that disagrees with the specified "
@@ -1832,7 +1831,6 @@ int salmonQuantify(int argc, char *argv[]) {
                                         "separated by a tab.  The extension of the file is used to determine how the file "
                                         "should be parsed.  Files ending in \'.gtf\' or \'.gff\' are assumed to be in GTF "
                                         "format; files with any other extension are assumed to be in the simple format.");
-    //("optChain", po::bool_switch(&optChain)->default_value(false), "Chain MEMs optimally rather than greedily")
 
     sopt.noRichEqClasses = false;
     // mapping cache has been deprecated
@@ -1972,108 +1970,14 @@ transcript abundance from RNA-seq reads
 
         // TODO: Fix fragment start pos dist
         // sopt.useFSPD = false;
+        bool optionsOK = salmon::utils::processQuantOptions(sopt, vm, numBiasSamples);
+        if (!optionsOK) { std::exit(1); }
 
-	// Set the atomic variable numBiasSamples from the local version
-	sopt.numBiasSamples.store(numBiasSamples);
-
-        // Get the time at the start of the run
-        std::time_t result = std::time(NULL);
-        std::string runStartTime(std::asctime(std::localtime(&result)));
-        runStartTime.pop_back(); // remove the newline
-
-        // Verify the geneMap before we start doing any real work.
-        bfs::path geneMapPath;
-        if (vm.count("geneMap")) {
-            // Make sure the provided file exists
-            geneMapPath = vm["geneMap"].as<std::string>();
-            if (!bfs::exists(geneMapPath)) {
-                std::cerr << "Could not find transcript <=> gene map file " << geneMapPath << "\n";
-                std::cerr << "Exiting now: please either omit the \'geneMap\' option or provide a valid file\n";
-                std::exit(1);
-            }
-        }
-
-        bool greedyChain = !optChain;
-        bfs::path outputDirectory(vm["output"].as<std::string>());
-        bfs::create_directories(outputDirectory);
-        if (!(bfs::exists(outputDirectory) and bfs::is_directory(outputDirectory))) {
-            std::cerr << "Couldn't create output directory " << outputDirectory << "\n";
-            std::cerr << "exiting\n";
-            std::exit(1);
-        }
-
-        bfs::path indexDirectory(vm["index"].as<string>());
-        bfs::path logDirectory = outputDirectory / "logs";
-
-        sopt.indexDirectory = indexDirectory;
-        sopt.outputDirectory = outputDirectory;
-
-        // Create the logger and the logging directory
-        bfs::create_directories(logDirectory);
-        if (!(bfs::exists(logDirectory) and bfs::is_directory(logDirectory))) {
-            std::cerr << "Couldn't create log directory " << logDirectory << "\n";
-            std::cerr << "exiting\n";
-            std::exit(1);
-        }
-        
-        if (!sopt.quiet) {
-            std::cerr << "Logs will be written to " << logDirectory.string() << "\n";
-        }
-
-        bfs::path logPath = logDirectory / "salmon_quant.log";
-	    // must be a power-of-two
-        size_t max_q_size = 2097152;
-        spdlog::set_async_mode(max_q_size);
-
-        auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(logPath.string(), true);
-        auto consoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
-        auto consoleLog = spdlog::create("stderrLog", {consoleSink});
-        auto fileLog = spdlog::create("fileLog", {fileSink});
-        auto jointLog = spdlog::create("jointLog", {fileSink, consoleSink});
-
-        // If we're being quiet, the only emit errors.
-        if (sopt.quiet) { 
-            jointLog->set_level(spdlog::level::err);
-        }
-
-        sopt.jointLog = jointLog;
-        sopt.fileLog = fileLog;
-        
-        // Verify that no inconsistent options were provided
-        if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {
-            jointLog->error("You cannot perform both Gibbs sampling and bootstrapping. "
-                            "Please choose one.");
-            jointLog->flush();
-            std::exit(1);
-        }
-
-        {
-            if (sopt.noFragLengthDist and !sopt.noEffectiveLengthCorrection) {
-                jointLog->info() << "Error: You cannot enable --noFragLengthDist without "
-                                 << "also enabling --noEffectiveLengthCorrection; exiting!\n";
-                jointLog->flush();
-                std::exit(1);
-            }
-        }
-
-	sopt.noBiasLengthThreshold = !sopt.useBiasLengthThreshold;
-	// FEB 18
-	/*
-        if (sopt.biasCorrect and sopt.gcBiasCorrect) {
-            sopt.jointLog->error("Enabling both sequence-specific and fragment GC bias correction "
-                    "simultaneously is not yet supported. Please disable one of these options.");
-            return 1;
-        }
-	*/
-
-        // maybe arbitrary, but if it's smaller than this, consider it
-        // equal to LOG_0
-        if (sopt.incompatPrior < 1e-320) {
-            sopt.incompatPrior = salmon::math::LOG_0;
-        } else {
-            sopt.incompatPrior = std::log(sopt.incompatPrior);
-        }
-        // END: option checking
+        auto fileLog = sopt.fileLog;
+        auto jointLog = sopt.jointLog; 
+        auto indexDirectory = sopt.indexDirectory;
+        auto outputDirectory = sopt.outputDirectory;
+        bool greedyChain = true;
 
         jointLog->info() << "parsing read library format";
 
@@ -2085,23 +1989,7 @@ transcript abundance from RNA-seq reads
         auto idxType = versionInfo.indexType();
 
         ReadExperiment experiment(readLibraries, indexDirectory, sopt);
-
-        // Parameter validation
-        // If we're allowing orphans, make sure that the read libraries are paired-end.
-        // Otherwise, this option makes no sense.
-        /*
-        if (sopt.allowOrphans) {
-            for (auto& rl : readLibraries) {
-                if (!rl.isPairedEnd()) {
-                    jointLog->error("You cannot specify the --allowOrphans argument "
-                                    "for single-end libraries; exiting!");
-                    std::exit(1);
-                }
-            }
-        }
-        */
-        // end parameter validation
-
+        
         // This will be the class in charge of maintaining our
     	// rich equivalence classes
         experiment.equivalenceClassBuilder().start();
@@ -2198,7 +2086,7 @@ transcript abundance from RNA-seq reads
         // Write the main results
         gzw.writeAbundances(sopt, experiment);
         // Write meta-information about the run
-        gzw.writeMeta(sopt, experiment, runStartTime);
+        gzw.writeMeta(sopt, experiment, sopt.runStartTime);
 
         if (sopt.numGibbsSamples > 0) {
 
@@ -2268,7 +2156,7 @@ transcript abundance from RNA-seq reads
         /** If the user requested gene-level abundances, then compute those now **/
         if (vm.count("geneMap")) {
             try {
-                salmon::utils::generateGeneLevelEstimates(geneMapPath,
+                salmon::utils::generateGeneLevelEstimates(sopt.geneMapPath,
                                                           outputDirectory);
             } catch (std::invalid_argument& e) {
                 fmt::print(stderr, "Error: [{}] when trying to compute gene-level "\
