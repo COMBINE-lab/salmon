@@ -35,6 +35,7 @@ using BlockedIndexRange =  tbb::blocked_range<size_t>;
 // https://github.com/pachterlab/kallisto/blob/master/src/EMAlgorithm.h#L18
 constexpr double minEQClassWeight = std::numeric_limits<double>::denorm_min();
 constexpr double minWeight = std::numeric_limits<double>::denorm_min();
+constexpr double digammaMin = 1e-10;
 
 double normalize(std::vector<tbb::atomic<double>>& vec) {
     double sum{0.0};
@@ -144,12 +145,11 @@ void VBEMUpdate_(
 
 	double logNorm = boost::math::digamma(alphaSum);
 
-
 	double prior = priorAlpha;
 	double priorNorm = prior * totLen;
 
 	for (size_t i = 0; i < transcripts.size(); ++i) {
-	  if (alphaIn[i] > ::minWeight) {
+	  if (alphaIn[i] > ::digammaMin) {
 	    expTheta[i] = std::exp(boost::math::digamma(alphaIn[i]) - logNorm);
 	  } else {
 	    expTheta[i] = 0.0;
@@ -286,7 +286,7 @@ void VBEMUpdate_(
              double priorNorm = prior * totLen;
 
              for (auto i : boost::irange(range.begin(), range.end())) {
-                if (alphaIn[i] > ::minWeight) {
+                if (alphaIn[i] > ::digammaMin) {
                     expTheta[i] = std::exp(boost::math::digamma(alphaIn[i].load()) - logNorm);
                 } else {
                     expTheta[i] = 0.0;

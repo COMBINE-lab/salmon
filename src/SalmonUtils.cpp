@@ -1192,7 +1192,7 @@ std::vector<int32_t> samplesFromLogPMF(FragmentLengthDistribution* fld, int32_t 
     spdlog::set_async_mode(max_q_size);
 
     auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(logPath.string(), true);
-    auto rawConsoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
+    auto rawConsoleSink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
     auto consoleSink = std::make_shared<spdlog::sinks::ansicolor_sink>(rawConsoleSink);
     auto consoleLog = spdlog::create("stderrLog", {consoleSink});
     auto fileLog = spdlog::create("fileLog", {fileSink});
