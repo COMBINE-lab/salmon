@@ -762,8 +762,8 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp,
     // a linear combination of the online estimates
     // and the uniform distribution.
     double uniformPrior = totalWeight / static_cast<double>(numActive);
-    double fracObserved = 1.0;
-    //double fracObserved = std::min(1.0, totalWeight / sopt.numRequiredFragments);
+    //double fracObserved = 1.0;
+    double fracObserved = std::min(1.0, totalWeight / sopt.numRequiredFragments);
     for (size_t i = 0; i < alphas.size(); ++i) {
         alphas[i] = (alphasPrime[i] == 1.0) ? ((alphas[i] * fracObserved) + (uniformPrior * (1.0 - fracObserved))) : 0.0;
     }

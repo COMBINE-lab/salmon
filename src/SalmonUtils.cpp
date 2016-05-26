@@ -1259,7 +1259,6 @@ Eigen::VectorXd updateEffectiveLengths(
     using BlockedIndexRange =  tbb::blocked_range<size_t>;
 
     double minAlpha = 1e-8;
-
     uint32_t gcSamp{sopt.pdfSampFactor};
     bool gcBiasCorrect{sopt.gcBiasCorrect};
     bool seqBiasCorrect{sopt.biasCorrect};
@@ -1389,7 +1388,9 @@ Eigen::VectorXd updateEffectiveLengths(
      */
     auto getBiasParams = [K]() -> CombineableBiasParams { return CombineableBiasParams(K); };
     tbb::combinable<CombineableBiasParams> expectedDist(getBiasParams);
-
+    std::atomic<size_t>  numBackgroundTranscripts{0};
+    std::atomic<size_t>  numExpressedTranscripts{0};
+      
     tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(transcripts.size())),
             [&]( const BlockedIndexRange& range) -> void {
 
@@ -1413,12 +1414,14 @@ Eigen::VectorXd updateEffectiveLengths(
 
 			  // Skip transcripts with trivial expression or that are too
 			  // short
-              if (alphas[it] < minAlpha or unprocessedLen <= 0 or txp.uniqueUpdateFraction() < 0.90) {
+			  if (alphas[it] < minAlpha or unprocessedLen <= 0 or txp.uniqueUpdateFraction() < 0.90) {
+			    if (alphas[it] >= minAlpha) { ++numExpressedTranscripts; }
 			    continue;
 			  }
+			  ++numBackgroundTranscripts;
 		
 			  // Otherwise, proceed giving this transcript the following weight
-              double weight = (alphas[it]/effLensIn(it));
+			  double weight =  (alphas[it]/effLensIn(it));
 
 			  // This transcript's sequence
 			  const char* tseq = txp.Sequence();
@@ -1471,6 +1474,15 @@ Eigen::VectorXd updateEffectiveLengths(
                       }// end tbb for function
 	);
 
+    size_t bgCutoff = std::min(static_cast<size_t>(1000), static_cast<size_t>(numExpressedTranscripts * 0.1));
+    if (numBackgroundTranscripts < bgCutoff) {
+      sopt.jointLog->warn("I found only {} transcripts meeting the necessary conditions to contribute to "
+			  "the bias background distribution.  This is likely too small to safely do bias correction. "
+			  "I'm skipping bias correction", numBackgroundTranscripts.load());
+      sopt.biasCorrect = false;
+      sopt.gcBiasCorrect = false;
+      return effLensIn;
+    }
     /**
      * The local bias terms from each thread can be combined
      * via simple summation.  Here, we combine the locally-computed
@@ -1530,7 +1542,10 @@ Eigen::VectorXd updateEffectiveLengths(
     // Write out the bias model parameters we learned
     if (writeBias) {
       boost::filesystem::path auxDir = sopt.outputDirectory / sopt.auxDir;
-      bool auxSuccess = boost::filesystem::create_directories(auxDir);
+      bool auxSuccess = boost::filesystem::is_directory(auxDir);
+      if (!auxSuccess) {
+	auxSuccess = boost::filesystem::create_directories(auxDir);
+      }
       if (auxSuccess) {
           auto exp5fn = auxDir / "exp5_marginals.txt";
           auto& exp5m = exp5.marginals();
@@ -1574,7 +1589,11 @@ Eigen::VectorXd updateEffectiveLengths(
 
 
     std::atomic<uint32_t> numProcessed{0};
+    size_t numTranscripts = transcripts.size();
+    size_t stepSize = static_cast<size_t>(transcripts.size() * 0.1);
+    size_t nextUpdate{0};
     
+    std::mutex updateMutex;
     /**
      * Compute the effective lengths of each transcript (in parallel)
      */
@@ -1641,8 +1660,12 @@ Eigen::VectorXd updateEffectiveLengths(
                         seqFactorsRC.reverseInPlace(); 
                     } // end sequence-specific factor calculation 
 		     
-                    if (numProcessed % 1000 == 0) {
-                        sopt.jointLog->info("processing transcript {}", numProcessed);
+                    if (numProcessed > nextUpdate) {
+		      updateMutex.try_lock();
+                      sopt.jointLog->info("processed bias for {:3.1f}% of the transcripts", 100.0 * (numProcessed / static_cast<double>(numTranscripts)));
+		      nextUpdate += stepSize;
+		      if (nextUpdate > numTranscripts) { nextUpdate = numTranscripts - 1; }
+		      updateMutex.unlock();
                     }
                     ++numProcessed;
 
@@ -1698,6 +1721,7 @@ Eigen::VectorXd updateEffectiveLengths(
         }
     } // end parallel_for lambda
     );
+    sopt.jointLog->info("processed bias for 100.0% of the transcripts");
     return effLensOut;
 }
 
