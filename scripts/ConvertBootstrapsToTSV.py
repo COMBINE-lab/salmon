@@ -5,8 +5,7 @@ import os
 import logging
 import logging.handlers
 import sys
-import errno
-import json
+import errno   
 
 # from: http://stackoverflow.com/questions/600268/mkdir-p-functionality-in-python
 def mkdir_p(path):
@@ -37,17 +36,7 @@ def main(args):
     ntxp = len(txpNames)
     logging.info("Expecting bootstrap info for {} transcripts".format(ntxp))
     
-    with open(os.path.sep.join([quantDir, "aux", "meta_info.json"])) as fh:
-        meta_info = json.load(fh)
-        
-    if meta_info['samp_type'] == 'gibbs':
-        s = struct.Struct('<' + 'i' * ntxp)
-    elif meta_info['samp_type'] == 'bootstrap':
-        s = struct.Struct('@' + 'd' * ntxp)
-    else:
-        logging.error("Unknown sampling method: {}".format(meta_info['samp_type']))
-        sys.exit(1)
-        
+    s = struct.Struct('@' + 'd' * ntxp)
     numBoot = 0
     outDir = args.outDir
     if os.path.exists(outDir):
