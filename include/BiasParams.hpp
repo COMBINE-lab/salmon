@@ -4,6 +4,7 @@
 #include "SBModel.hpp"
 #include "ReadKmerDist.hpp"
 #include "SalmonMath.hpp"
+#include "SimplePosBias.hpp"
 #include <vector>
 
 struct BiasParams {
@@ -30,7 +31,8 @@ struct BiasParams {
     SBModel seqBiasModelFW;
     SBModel seqBiasModelRC;
 
-    BiasParams(bool seqBiasPseudocount=false) : seqBiasFW(seqBiasPseudocount), seqBiasRC(seqBiasPseudocount) {}
+    BiasParams(bool seqBiasPseudocount=false) : seqBiasFW(seqBiasPseudocount), seqBiasRC(seqBiasPseudocount),
+                                                posBiasFW(5), posBiasRC(5) {}
 };
 
 #endif //__GC_BIAS_PARAMS__

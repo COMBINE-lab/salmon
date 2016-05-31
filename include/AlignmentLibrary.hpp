@@ -26,6 +26,7 @@ extern "C" {
 #include "EquivalenceClassBuilder.hpp"
 #include "SpinLock.hpp" // RapMap's with try_lock
 #include "ReadKmerDist.hpp"
+#include "SimplePosBias.hpp"
 
 // Boost includes
 #include <boost/filesystem.hpp>
@@ -59,6 +60,8 @@ class AlignmentLibrary {
         libFmt_(libFmt),
         transcripts_(std::vector<Transcript>()),
     	fragStartDists_(5),
+        posBiasFW_(5),
+        posBiasRC_(5),
         seqBiasModel_(1.0),
     	eqBuilder_(salmonOpts.jointLog),
         quantificationPasses_(0),
@@ -301,6 +304,13 @@ class AlignmentLibrary {
         return observedGC_;
     }
 
+    std::vector<SimplePosBias>& posBias(salmon::utils::Direction dir) { 
+        return (dir == salmon::utils::Direction::FORWARD) ? posBiasFW_ : posBiasRC_; 
+    }
+    const std::vector<SimplePosBias>& posBias(salmon::utils::Direction dir) const { 
+        return (dir == salmon::utils::Direction::FORWARD) ? posBiasFW_ : posBiasRC_; 
+    }
+
     ReadKmerDist<6, std::atomic<uint32_t>>& readBias(salmon::utils::Direction dir) { 
         return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0] : readBias_[1]; 
     }
@@ -375,6 +385,10 @@ class AlignmentLibrary {
     SpinLock sl_;
     EquivalenceClassBuilder eqBuilder_;
 
+    /** Positional bias things**/
+    std::vector<SimplePosBias> posBiasFW_;
+    std::vector<SimplePosBias> posBiasRC_;
+ 
     /** GC-fragment bias things **/
     // One bin for each percentage GC content
     double gcFracFwd_;

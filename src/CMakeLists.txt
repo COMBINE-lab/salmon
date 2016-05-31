@@ -63,6 +63,7 @@ VersionChecker.cpp
 SBModel.cpp
 SalmonUtils.cpp
 SalmonStringUtils.cpp
+SimplePosBias.cpp
 )
 
 set ( UNIT_TESTS_SRCS

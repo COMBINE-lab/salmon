@@ -282,7 +282,7 @@ public:
     inline size_t lastTimestepUpdated() { return lastTimestepUpdated_.load(); }
 
     void lengthClassIndex(uint32_t ind) { lengthClassIndex_ = ind; }
-    uint32_t lengthClassIndex() { return lengthClassIndex_; }
+    uint32_t lengthClassIndex() const { return lengthClassIndex_; }
 
     void setAnchorFragment() {
         hasAnchorFragment_.store(true);

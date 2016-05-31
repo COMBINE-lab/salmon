@@ -23,6 +23,7 @@ extern "C" {
 #include "UtilityFunctions.hpp"
 #include "ReadKmerDist.hpp"
 #include "SBModel.hpp"
+#include "SimplePosBias.hpp"
 
 // Logger includes
 #include "spdlog/spdlog.h"
@@ -57,6 +58,8 @@ class ReadExperiment {
         transcripts_(std::vector<Transcript>()),
         totalAssignedFragments_(0),
         fragStartDists_(5),
+        posBiasFW_(5),
+        posBiasRC_(5),
         seqBiasModel_(1.0),
 	eqBuilder_(sopt.jointLog),
         expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0),
@@ -223,23 +226,24 @@ class ReadExperiment {
 		    txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i],
                                     sopt.gcBiasCorrect, sopt.gcSampFactor);
 		    // Length classes taken from
+            // https://github.com/cole-trapnell-lab/cufflinks/blob/master/src/biascorrection.cpp
 		    // ======
 		    // Roberts, Adam, et al.
 		    // "Improving RNA-Seq expression estimates by correcting for fragment bias."
 		    // Genome Biol 12.3 (2011): R22.
 		    // ======
 		    // perhaps, define these in a more data-driven way
-        if (txp.RefLength <= 1334) {
-          txp.lengthClassIndex(0);
-        } else if (txp.RefLength <= 2104) {
-          txp.lengthClassIndex(0);
-        } else if (txp.RefLength <= 2988) {
-          txp.lengthClassIndex(0);
-        } else if (txp.RefLength <= 4389) {
-          txp.lengthClassIndex(0);
-        } else {
-          txp.lengthClassIndex(0);
-        }
+            if (txp.RefLength <= 791) {
+                txp.lengthClassIndex(0);
+            } else if (txp.RefLength <= 1265) {
+                txp.lengthClassIndex(1);
+            } else if (txp.RefLength <= 1707) {
+                txp.lengthClassIndex(2);
+            } else if (txp.RefLength <= 2433) {
+                txp.lengthClassIndex(3);
+            } else {
+                txp.lengthClassIndex(4);
+            }
       }
 	    // ====== Done loading the transcripts from file
     }
@@ -301,32 +305,25 @@ class ReadExperiment {
             txp.setSequenceOwned(seqCopy);
 		    txp.setSAMSequenceOwned(salmon::stringtools::encodeSequenceInSAM(seq.c_str(), t.RefLength));
 
-		    // Length classes taken from
+            // Length classes taken from
+            // https://github.com/cole-trapnell-lab/cufflinks/blob/master/src/biascorrection.cpp
 		    // ======
 		    // Roberts, Adam, et al.
 		    // "Improving RNA-Seq expression estimates by correcting for fragment bias."
 		    // Genome Biol 12.3 (2011): R22.
 		    // ======
 		    // perhaps, define these in a more data-driven way
-		    if (t.RefLength <= 1334) {
-			    txp.lengthClassIndex(0);
-		    } else if (t.RefLength <= 2104) {
-			    txp.lengthClassIndex(0);
-		    } else if (t.RefLength <= 2988) {
-			    txp.lengthClassIndex(0);
-		    } else if (t.RefLength <= 4389) {
-			    txp.lengthClassIndex(0);
-		    } else {
-			    txp.lengthClassIndex(0);
-		    }
-		    /*
-		       std::cerr << "TS = " << t.RefName << " : \n";
-		       std::cerr << seq << "\n VS \n";
-		       for (size_t i = 0; i < t.RefLength; ++i) {
-		       std::cerr << transcripts_.back().charBaseAt(i);
-		       }
-		       std::cerr << "\n\n";
-		       */
+            if (txp.RefLength <= 791) {
+                txp.lengthClassIndex(0);
+            } else if (txp.RefLength <= 1265) {
+                txp.lengthClassIndex(1);
+            } else if (txp.RefLength <= 1707) {
+                txp.lengthClassIndex(2);
+            } else if (txp.RefLength <= 2433) {
+                txp.lengthClassIndex(3);
+            } else {
+                txp.lengthClassIndex(4);
+            }
 		    free(rseq);
 		    /* end BWA code */
             ++tnum;
@@ -591,6 +588,13 @@ class ReadExperiment {
         return observedGC_;
     }
 
+    std::vector<SimplePosBias>& posBias(salmon::utils::Direction dir) { 
+        return (dir == salmon::utils::Direction::FORWARD) ? posBiasFW_ : posBiasRC_; 
+    }
+    const std::vector<SimplePosBias>& posBias(salmon::utils::Direction dir) const { 
+        return (dir == salmon::utils::Direction::FORWARD) ? posBiasFW_ : posBiasRC_; 
+    }
+
     ReadKmerDist<6, std::atomic<uint32_t>>& readBias(salmon::utils::Direction dir) { 
         return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0] : readBias_[1]; 
     }
@@ -658,6 +662,10 @@ class ReadExperiment {
     std::unique_ptr<FragmentLengthDistribution> fragLengthDist_;
     EquivalenceClassBuilder eqBuilder_;
 
+    /** Positional bias things**/
+    std::vector<SimplePosBias> posBiasFW_;
+    std::vector<SimplePosBias> posBiasRC_;
+ 
     /** GC-fragment bias things **/
     // One bin for each percentage GC content
     double gcFracFwd_{-1.0};

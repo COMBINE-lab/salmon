@@ -128,6 +128,7 @@ struct SalmonOpts {
     bool alnMode{false};     // true if we're in alignment based mode, false otherwise
     bool biasCorrect{false}; // Perform sequence-specific bias correction
     bool gcBiasCorrect{false}; // Perform gc-fragment bias correction
+    bool posBiasCorrect{false}; // Perform positional bias correction
     std::atomic<int32_t> numBiasSamples{1000000}; // The number of fragment mappings to consider when building
 						  // the sequence-specific "foreground" distribution.
 
