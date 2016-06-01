@@ -32,6 +32,9 @@ extern "C" {
 #include <boost/filesystem.hpp>
 #include <boost/range/irange.hpp>
 
+// Cereal includes
+#include "cereal/archives/json.hpp"
+
 // Standard includes
 #include <vector>
 #include <memory>
@@ -427,7 +430,10 @@ class ReadExperiment {
         LibraryFormat fmt1(ReadType::SINGLE_END, ReadOrientation::NONE, ReadStrandedness::U);
         LibraryFormat fmt2(ReadType::SINGLE_END, ReadOrientation::NONE, ReadStrandedness::U);
 
-        std::ofstream ofile(opath.string());
+        std::ofstream os(opath.string());
+        cereal::JSONOutputArchive oa(os);
+
+        //std::ofstream ofile(opath.string());
 
         fmt::MemoryWriter errstr;
 
@@ -485,13 +491,27 @@ class ReadExperiment {
 
                 if ( std::abs(ratio - 0.5) > 0.01) {
                     errstr << "NOTE: Read Lib [" << rl.readFilesAsString() << "] :\n";
-                    errstr << "\nDetected a strand bias > 1\% in an unstranded protocol "
+                    errstr << "\nDetected a *potential* strand bias > 1\% in an unstranded protocol "
                            << "check the file: " << opath.string() << " for details\n";
 
                     log->warn() << errstr.str();
                     errstr.clear();
                 }
+                
 
+                oa(cereal::make_nvp("read_files", rl.readFilesAsString()));
+                std::string expectedFormat = rl.format().toString();
+                oa(cereal::make_nvp("expected_format", expectedFormat));
+
+                double compatFragmentRatio = rl.numCompat() / static_cast<double>(numAssignedFragments_);
+                oa(cereal::make_nvp("compatible_fragment_ratio", compatFragmentRatio));
+                oa(cereal::make_nvp("num_compatible_fragments", rl.numCompat()));
+                oa(cereal::make_nvp("num_assigned_fragments", numAssignedFragments_.load()));
+
+                oa(cereal::make_nvp("num_consistent_mappings", numAgree));
+                oa(cereal::make_nvp("num_inconsistent_mappings", numDisagree));
+                oa(cereal::make_nvp("strand_mapping_bias", ratio));
+                    /*
                 ofile << "========\n"
                       << "Read library consisting of files: "
                       << rl.readFilesAsString()
@@ -504,6 +524,7 @@ class ReadExperiment {
                       << "# alignments with format " << fmt1 << ": " << numFmt1 << "\n"
                       << "# alignments with format " << fmt2 << ": " << numFmt2 << "\n"
                       << "\n========\n";
+                    */
             } else {
                 numAgree = 0;
                 numDisagree = 0;
@@ -516,6 +537,19 @@ class ReadExperiment {
                     }
                 } // end for
 
+                oa(cereal::make_nvp("read_files", rl.readFilesAsString()));
+                std::string expectedFormat = rl.format().toString();
+                oa(cereal::make_nvp("expected_format", expectedFormat));
+
+                double compatFragmentRatio = rl.numCompat() / static_cast<double>(numAssignedFragments_);
+                oa(cereal::make_nvp("compatible_fragment_ratio", compatFragmentRatio));
+                oa(cereal::make_nvp("num_compatible_fragments", rl.numCompat()));
+                oa(cereal::make_nvp("num_assigned_fragments", numAssignedFragments_.load()));
+
+                oa(cereal::make_nvp("num_consistent_mappings", numAgree));
+                oa(cereal::make_nvp("num_inconsistent_mappings", numDisagree));
+
+                /*
                 ofile << "========\n"
                       << "Read library consisting of files: "
                       << rl.readFilesAsString()
@@ -525,13 +559,15 @@ class ReadExperiment {
                       << "# of consistent alignments: " << numAgree << "\n"
                       << "# of inconsistent alignments: " << numDisagree << "\n"
                       << "\n========\n";
-
+                */
             } //end else
 
-            double disagreeRatio = static_cast<double>(numDisagree) / (numAgree + numDisagree);
+
+            double compatFragmentRatio = rl.numCompat() / static_cast<double>(numAssignedFragments_);
+            double disagreeRatio = 1.0 - compatFragmentRatio;
             if (disagreeRatio > 0.05) {
                 errstr << "NOTE: Read Lib [" << rl.readFilesAsString() << "] :\n";
-                errstr << "\nGreater than 5\% of the alignments (but not, necessarily reads) "
+                errstr << "\nGreater than 5\% of the fragments "
                        << "disagreed with the provided library type; "
                        << "check the file: " << opath.string() << " for details\n";
 
@@ -539,13 +575,17 @@ class ReadExperiment {
                 errstr.clear();
             }
 
-            ofile << "---- counts for each format type ---\n";
+            //ofile << "---- counts for each format type ---\n";
             for (size_t i = 0; i < counts.size(); ++i) {
-                ofile << LibraryFormat::formatFromID(i) << " : " << counts[i] << "\n";
+                //ofile << LibraryFormat::formatFromID(i) << " : " << counts[i] << "\n";
+                std::string desc = LibraryFormat::formatFromID(i).toString();
+                if (!desc.empty()) {
+                    oa(cereal::make_nvp(desc, counts[i].load()));
+                }
             }
-            ofile << "------------------------------------\n\n";
+            //ofile << "------------------------------------\n\n";
         }
-        ofile.close();
+        //ofile.close();
     }
 
     std::vector<ReadLibrary>& readLibraries() { return readLibraries_; }

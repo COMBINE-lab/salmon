@@ -84,6 +84,76 @@ public:
         return LibraryFormat(rt, ro, rs);
     }
 
+    std::string toString() const {
+        std::string desc;
+        if (type == ReadType::SINGLE_END) {
+            if (orientation != ReadOrientation::NONE) {
+                return desc;
+            }
+        }
+        if (type == ReadType::PAIRED_END) {
+            if (orientation == ReadOrientation::NONE) {
+                return desc;
+            }
+        }
+        
+        /*
+        switch (type) {
+        case ReadType::SINGLE_END:
+            desc += "single:";
+            break;
+        case ReadType::PAIRED_END:
+            desc += "paired:";
+            break;
+        }
+        */
+        
+
+        switch (orientation)  {
+        case ReadOrientation::TOWARD:
+            desc += "I";
+            break;
+        case ReadOrientation::AWAY:
+            desc += "O";
+            break;
+        case ReadOrientation::SAME:
+            desc += "M";
+            break;
+        case ReadOrientation::NONE:
+            break;
+        }
+
+        switch (strandedness)  {
+        case ReadStrandedness::SA:
+            desc += "SF";
+            break;
+        case ReadStrandedness::AS:
+            desc += "SR";
+            break;
+        case ReadStrandedness::S:
+            desc += "F";
+            break;
+        case ReadStrandedness::A:
+            desc += "R";
+            break;
+        case ReadStrandedness::U:
+            desc += "U";
+            break;
+        }
+        /*
+        if (type == ReadType::PAIRED_END) {
+            if (desc == "SF" or 
+                desc == "SR" or
+                desc == "F" or
+                desc == "R" or 
+                desc == "U" ) { 
+                desc.clear();
+            }
+        }
+        */
+        return desc;
+    }
+
     // Assigns a unique ID to each potential library
     // type.  The IDs are such that 0 <= formatID(lib) < num possible formats
     inline uint8_t formatID() const {

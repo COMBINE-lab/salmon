@@ -1520,7 +1520,7 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
 
           // Skip transcripts with trivial expression or that are too
           // short
-          if (alphas[it] < minAlpha or unprocessedLen <= 0) {// or txp.uniqueUpdateFraction() < 0.90) {
+          if (alphas[it] < minAlpha or unprocessedLen <= 0) { //} or txp.uniqueUpdateFraction() < 0.90) {
             if (alphas[it] >= minAlpha) {
               ++numExpressedTranscripts;
             }

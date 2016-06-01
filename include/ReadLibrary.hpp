@@ -20,7 +20,9 @@ public:
      * Construct a new ReadLibrary of the given format
      */
     ReadLibrary(LibraryFormat& fmt) : fmt_(fmt),
-        libTypeCounts_(std::vector<std::atomic<uint64_t>>(LibraryFormat::maxLibTypeID() + 1)){}
+                                      libTypeCounts_(std::vector<std::atomic<uint64_t>>(LibraryFormat::maxLibTypeID() + 1)),
+                                      numCompat_(0)
+    {}
 
     /**
      * Copy constructor
@@ -33,6 +35,7 @@ public:
         libTypeCounts_(std::vector<std::atomic<uint64_t>>(LibraryFormat::maxLibTypeID() + 1)) {
             size_t mc = LibraryFormat::maxLibTypeID() + 1;
             for (size_t i = 0; i < mc; ++i) { libTypeCounts_[i].store(rl.libTypeCounts_[i].load()); }
+            numCompat_.store(rl.numCompat());
         }
 
     /**
@@ -46,6 +49,7 @@ public:
         libTypeCounts_(std::vector<std::atomic<uint64_t>>(LibraryFormat::maxLibTypeID() + 1)) {
             size_t mc = LibraryFormat::maxLibTypeID() + 1;
             for (size_t i = 0; i < mc; ++i) { libTypeCounts_[i].store(rl.libTypeCounts_[i].load()); }
+            numCompat_.store(rl.numCompat());
         }
 
     /**
@@ -215,6 +219,15 @@ public:
     const LibraryFormat& format() const { return fmt_; }
 
     /**
+     * Update the number of fragments compatible with this library type
+     */
+    inline void updateCompatCounts(uint64_t numCompat) {
+        numCompat_ += numCompat;
+    }
+
+    uint64_t numCompat() const { return numCompat_; }
+
+    /**
     * Update the library type counts for this read library given the counts
     * in the vector `counts` which has been passed in.
     */
@@ -233,6 +246,7 @@ private:
     std::vector<std::string> mateOneFilenames_;
     std::vector<std::string> mateTwoFilenames_;
     std::vector<std::atomic<uint64_t>> libTypeCounts_;
+    std::atomic<uint64_t> numCompat_;
 };
 
 #endif // READ_LIBRARY_HPP

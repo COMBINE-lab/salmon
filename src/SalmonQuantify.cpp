@@ -186,6 +186,8 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
   std::uniform_real_distribution<> uni(
       0.0, 1.0 + std::numeric_limits<double>::min());
   std::vector<uint64_t> libTypeCounts(LibraryFormat::maxLibTypeID() + 1);
+  bool hasCompatibleMapping{false};
+  uint64_t numCompatibleFragments{0};
 
   std::vector<FragmentStartPositionDistribution>& fragStartDists =
       readExp.fragmentStartPositionDistributions();
@@ -272,6 +274,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
       uint32_t numInGroup{0};
       uint32_t prevTxpID{0};
 
+      hasCompatibleMapping = false;
       // For each alignment of this read
       for (auto& aln : alnGroup.alignments()) {
         auto transcriptID = aln.transcriptID();
@@ -364,6 +367,8 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 
           // Increment the count of this type of read that we've seen
           ++libTypeCounts[aln.libFormat().formatID()];
+          //
+          if (!hasCompatibleMapping and logAlignCompatProb == LOG_1) { hasCompatibleMapping = true; }
 
           // The total auxiliary probabilty is the product (sum in log-space) of
           // The start position probability
@@ -416,6 +421,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
         continue;
       } else { // otherwise, count it as assigned
         ++localNumAssignedFragments;
+        if (hasCompatibleMapping) { ++numCompatibleFragments; }
       }
 
       // EQCLASS
@@ -583,6 +589,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
   }
   if (initialRound) {
     readLib.updateLibTypeCounts(libTypeCounts);
+    readLib.updateCompatCounts(numCompatibleFragments);
   }
 }
 
@@ -2258,7 +2265,7 @@ transcript abundance from RNA-seq reads
       }
     }
 
-    bfs::path libCountFilePath = outputDirectory / "libFormatCounts.txt";
+    bfs::path libCountFilePath = outputDirectory / "lib_format_counts.json";
     experiment.summarizeLibraryTypeCounts(libCountFilePath);
 
     // Test writing out the fragment length distribution
