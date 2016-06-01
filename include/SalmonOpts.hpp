@@ -119,6 +119,8 @@ struct SalmonOpts {
 
     bool useQuasi; // Are we using the quasi-mapping based index or not.
 
+  std::unique_ptr<std::ofstream> unmappedFile{nullptr};
+    bool writeUnmappedNames; // write the names of unmapped reads
     bool sampleOutput; // Sample alignments according to posterior estimates of transcript abundance.
     bool sampleUnaligned; // Pass along un-aligned reads in the sampling.
 

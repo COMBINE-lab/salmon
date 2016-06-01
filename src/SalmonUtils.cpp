@@ -25,6 +25,8 @@
 #include "UnpairedRead.hpp"
 
 #include "spdlog/spdlog.h"
+#include "spdlog/sinks/ostream_sink.h"
+#include "spdlog/details/format.h"
 
 #include "gff.h"
 
@@ -1271,6 +1273,33 @@ bool processQuantOptions(SalmonOpts& sopt,
   sopt.jointLog = jointLog;
   sopt.fileLog = fileLog;
 
+  // Create the file (and logger) for outputting unmapped reads, if the user has asked for it.
+  if (sopt.writeUnmappedNames) {
+    boost::filesystem::path auxDir = sopt.outputDirectory / sopt.auxDir;
+    bool auxSuccess = boost::filesystem::is_directory(auxDir);
+    if (!auxSuccess) {
+      auxSuccess = boost::filesystem::create_directories(auxDir);
+    }
+    if (auxSuccess) {
+        bfs::path unmappedNameFile = auxDir / "unmapped_names.txt";
+        std::ofstream* outFile = new std::ofstream(unmappedNameFile.string());
+
+        // Must be a power of 2
+        size_t queueSize{268435456};
+
+        spdlog::set_async_mode(queueSize);
+        auto outputSink = std::make_shared<spdlog::sinks::ostream_sink_mt>(*outFile);
+
+        std::shared_ptr<spdlog::logger> outLog = std::make_shared<spdlog::logger>("unmappedLog", outputSink);
+        spdlog::register_logger(outLog);
+        outLog->set_pattern("%v");  								 
+        sopt.unmappedFile.reset(outFile);
+    } else {
+      jointLog->error("Couldn't create auxiliary directory in which to place \"unmapped_names.txt\"");
+    }
+  }
+
+  
   // Verify that no inconsistent options were provided
   if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {
     jointLog->error("You cannot perform both Gibbs sampling and bootstrapping. "

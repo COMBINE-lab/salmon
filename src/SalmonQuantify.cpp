@@ -655,6 +655,11 @@ void processReadsQuasi(
   uint64_t hitListCount{0};
   salmon::utils::ShortFragStats shortFragStats;
 
+  // Write unmapped reads
+  fmt::MemoryWriter unmappedNames;
+  auto unmappedLogger = spdlog::get("unmappedLog");
+  bool writeUnmapped = (unmappedLogger.get() == nullptr) ? false : true;
+
   auto& readBiasFW =
       observedBiasParams
           .seqBiasModelFW; // readExp.readBias(salmon::utils::Direction::FORWARD);
@@ -677,7 +682,7 @@ void processReadsQuasi(
   bool strictIntersect = salmonOpts.strictIntersect;
   bool consistentHits = salmonOpts.consistentHits;
   bool quiet = salmonOpts.quiet;
-
+  
   bool tooManyHits{false};
   size_t maxNumHits{salmonOpts.maxReadOccs};
   size_t readLenLeft{0};
@@ -902,8 +907,12 @@ void processReadsQuasi(
           } break;
           }
         }
-      } // If we have no mappings --- then there's nothing to do
-
+      } else if (writeUnmapped) {
+          // If we have no mappings --- then there's nothing to do
+          // unless we're outputting names for un-mapped reads
+          unmappedNames << j->data[i].first.header << '\n';
+      }
+      
       validHits += jointHits.size();
       localNumAssignedFragments += (jointHits.size() > 0);
       locRead++;
@@ -928,6 +937,17 @@ void processReadsQuasi(
       }
 
     } // end for i < j->nb_filled
+
+    if (writeUnmapped) {
+        std::string outStr(unmappedNames.str());
+        // Get rid of last newline
+        if (!outStr.empty()) {
+            outStr.pop_back();
+            unmappedLogger->info(std::move(outStr));
+        }
+        unmappedNames.clear();
+    }
+	    
 
     prevObservedFrags = numObservedFragments;
     AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(
@@ -971,6 +991,11 @@ void processReadsQuasi(
   uint64_t hitListCount{0};
   salmon::utils::ShortFragStats shortFragStats;
   bool tooShort{false};
+
+  // Write unmapped reads
+  fmt::MemoryWriter unmappedNames;
+  auto unmappedLogger = spdlog::get("unmappedLog");
+  bool writeUnmapped = (unmappedLogger.get() == nullptr) ? false : true;
 
   auto& readBiasFW = observedBiasParams.seqBiasModelFW;
   auto& readBiasRC = observedBiasParams.seqBiasModelRC;
@@ -1095,6 +1120,12 @@ void processReadsQuasi(
         }
       }
 
+      if (writeUnmapped and jointHits.empty()) {
+          // If we have no mappings --- then there's nothing to do
+          // unless we're outputting names for un-mapped reads
+          unmappedNames << j->data[i].header << '\n';
+      }
+
       validHits += jointHits.size();
       locRead++;
       ++numObservedFragments;
@@ -1118,6 +1149,16 @@ void processReadsQuasi(
       }
 
     } // end for i < j->nb_filled
+
+    if (writeUnmapped) {
+        std::string outStr(unmappedNames.str());
+        // Get rid of last newline
+        if (!outStr.empty()) {
+            outStr.pop_back();
+            unmappedLogger->info(std::move(outStr));
+        }
+        unmappedNames.clear();
+    }
 
     prevObservedFrags = numObservedFragments;
     AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(
@@ -1977,7 +2018,10 @@ int salmonQuantify(int argc, char* argv[]) {
           "This is mutually exclusive with Gibbs sampling.")(
           "quiet,q", po::bool_switch(&(sopt.quiet))->default_value(false),
           "Be quiet while doing quantification (don't write informative "
-          "output to the console unless something goes wrong).");
+          "output to the console unless something goes wrong).")(
+          "writeUnmappedNames",
+	  po::bool_switch(&(sopt.writeUnmappedNames))->default_value(false),
+	  "Write the names of un-mapped reads to the file unmapped.txt in the auxiliary directory.");
 
   po::options_description testing("\n"
                                   "testing options");
@@ -2240,6 +2284,15 @@ transcript abundance from RNA-seq reads
       }
     }
 
+    if (sopt.writeUnmappedNames) {
+      auto l = spdlog::get("unmappedLog");
+      // If the logger was created, then flush it and
+      // close the associated file.
+      if (l) {
+	l->flush();
+	if (sopt.unmappedFile) { sopt.unmappedFile->close(); }
+      }
+    }
   } catch (po::error& e) {
     std::cerr << "Exception : [" << e.what() << "]. Exiting.\n";
     std::exit(1);
