@@ -86,28 +86,27 @@ SCENARIO("The next k-mer index function works correctly") {
         return rc;
     };
 
-    auto rcs = rc(s);
+    //auto rcs = rc(s);
 
     GIVEN("The string " + s + " in the reverse complement direction") {
-        auto idx = indexForKmer(s.c_str() + s.size() - K - 1, 6,
-                                Direction::REVERSE_COMPLEMENT);
-        std::string k = rc(s.substr(s.size() - K - 1, 6));
+        auto idx = indexForKmer(s.c_str(), 6, Direction::REVERSE_COMPLEMENT);
+        std::string k = rc(s.substr(0, 6));
         WHEN("kmer is [" + k + "]") {
             auto kp = kmerForIndex(idx, 6);
             THEN("decodes as [" + kp + "]") {
                 REQUIRE(k == kp);
             }
         }
-        for (int32_t i = s.size() - K - 2; i >= 0; --i) {
-            idx = nextKmerIndex(idx, s[i], 6, Direction::REVERSE_COMPLEMENT);
-            k = rc(s.substr(i, 6));
-            WHEN("kmer is [" + k + "]") {
-                auto kp = kmerForIndex(idx, 6);
-                THEN("decodes as [" + kp + "]") {
-                    REQUIRE(k == kp);
-                }
-            }
-        }
+	for (size_t i = 0; i < s.size() - K; ++i) {
+	  idx = nextKmerIndex(idx, s[i+K], 6, Direction::REVERSE_COMPLEMENT);
+	  k = rc(s.substr(i+1, 6));
+	  WHEN("kmer is [" + k + "]") {
+	    auto kp = kmerForIndex(idx, 6);
+	    THEN("decodes as [" + kp + "]") {
+	      REQUIRE(k == kp);
+	    }
+	  }
+	}
     }
 
 }

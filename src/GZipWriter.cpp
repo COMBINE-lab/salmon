@@ -47,6 +47,56 @@ bool writeVectorToFile(boost::filesystem::path path,
 }
 
 /**
+ * Write the equivalence class information to file.
+ * The header will contain the transcript / target ids in
+ * a fixed order, then each equivalence class will consist
+ * of a line / row.
+ */
+template <typename ExpT>
+bool GZipWriter::writeEquivCounts(
+    const SalmonOpts& opts,
+    ExpT& experiment) {
+
+  namespace bfs = boost::filesystem;
+
+  bfs::path auxDir = path_ / opts.auxDir;
+  bool auxSuccess = boost::filesystem::create_directories(auxDir);
+  bfs::path eqFilePath = auxDir / "eq_classes.txt";
+
+  std::ofstream equivFile(eqFilePath.string());
+
+  auto& transcripts = experiment.transcripts();
+  std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec =
+        experiment.equivalenceClassBuilder().eqVec();
+
+  // Number of transcripts
+  equivFile << transcripts.size() << '\n';
+
+  // Number of equivalence classes
+  equivFile << eqVec.size() << '\n';
+
+  for (auto& t : transcripts) {
+    equivFile << t.RefName << '\n';
+  }
+
+  for (auto& eq : eqVec) {
+    uint64_t count = eq.second.count;
+    // for each transcript in this class
+    const TranscriptGroup& tgroup = eq.first;
+    const std::vector<uint32_t>& txps = tgroup.txps;
+    // group size
+    equivFile << txps.size() << '\t';
+    // each group member
+    for (auto tid : txps) { equivFile << tid << '\t'; }
+    // count for this class
+    equivFile << count << '\n';
+  }
+
+  equivFile.close();
+  return true;
+}
+
+/**
  * Write the ``main'' metadata to file.  Currently this includes:
  *   -- Names of the target id's if bootstrapping / gibbs is performed
  *   -- The fragment length distribution
@@ -100,7 +150,7 @@ bool GZipWriter::writeMeta(
   writeVectorToFile(fldPath, fldSamples);
 
   bfs::path normBiasPath = auxDir / "expected_bias.gz";
-  writeVectorToFile(normBiasPath, experiment.expectedBias());
+  writeVectorToFile(normBiasPath, experiment.expectedSeqBias());
 
   bfs::path obsBiasPath = auxDir / "observed_bias.gz";
   const auto& bcounts = experiment.readBias().counts;
@@ -108,6 +158,15 @@ bool GZipWriter::writeMeta(
   std::copy(bcounts.begin(), bcounts.end(), observedBias.begin());
   writeVectorToFile(obsBiasPath, observedBias);
 
+  bfs::path normGCPath = auxDir / "expected_gc.gz";
+  writeVectorToFile(normGCPath, experiment.expectedGCBias());
+
+  bfs::path obsGCPath = auxDir / "observed_gc.gz";
+  const auto& gcCounts = experiment.observedGC();
+  std::vector<double> observedGC(gcCounts.size(), 0.0);
+  std::copy(gcCounts.begin(), gcCounts.end(), observedGC.begin());
+  writeVectorToFile(obsGCPath, observedGC);
+  
   bfs::path info = auxDir / "meta_info.json";
 
   {
@@ -223,6 +282,15 @@ bool GZipWriter::writeBootstrap<double>(const std::vector<double>& abund);
 template
 bool GZipWriter::writeBootstrap<int>(const std::vector<int>& abund);
 
+template
+bool GZipWriter::writeEquivCounts<ReadExperiment>(const SalmonOpts& sopt,
+                                                 ReadExperiment& readExp);
+template
+bool GZipWriter::writeEquivCounts<AlignmentLibrary<UnpairedRead>>(const SalmonOpts& sopt,
+                                                 AlignmentLibrary<UnpairedRead>& readExp);
+template
+bool GZipWriter::writeEquivCounts<AlignmentLibrary<ReadPair>>(const SalmonOpts& sopt,
+                                                 AlignmentLibrary<ReadPair>& readExp);
 template
 bool GZipWriter::writeAbundances<ReadExperiment>(const SalmonOpts& sopt,
                                                  ReadExperiment& readExp);

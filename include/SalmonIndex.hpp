@@ -17,6 +17,7 @@ extern "C" {
 #include "cereal/archives/json.hpp"
 #include "cereal/types/vector.hpp"
 
+#include "MPHMap.hpp"
 #include "RapMapSAIndex.hpp"
 #include "IndexHeader.hpp"
 #include "BWAUtils.hpp"
@@ -30,6 +31,14 @@ int bwa_index(int argc, char* argv[]);
 // declaration of quasi index function
 int rapMapSAIndex(int argc, char* argv[]);
 
+template <typename IndexT> 
+using DenseHash = google::dense_hash_map<uint64_t, 
+                                         rapmap::utils::SAInterval<IndexT>, 
+                                         rapmap::utils::KmerKeyHasher>;
+template <typename IndexT> 
+using PerfectHash = MPHMap<uint64_t, 
+                           std::pair<uint64_t, 
+                                     rapmap::utils::SAInterval<IndexT>>>;
 
 class SalmonIndex{
         public:
@@ -144,8 +153,13 @@ class SalmonIndex{
             bwaidx_t* bwaIndex() { return idx_; }
 
             bool is64BitQuasi() { return largeQuasi_; }
-            RapMapSAIndex<int32_t>* quasiIndex32() { return quasiIndex32_.get(); }
-            RapMapSAIndex<int64_t>* quasiIndex64() { return quasiIndex64_.get(); }
+            bool isPerfectHashQuasi() { return perfectHashQuasi_;} 
+
+            RapMapSAIndex<int32_t, DenseHash<int32_t>>* quasiIndex32() { return quasiIndex32_.get(); }
+            RapMapSAIndex<int64_t, DenseHash<int64_t>>* quasiIndex64() { return quasiIndex64_.get(); }
+
+            RapMapSAIndex<int32_t, PerfectHash<int32_t>>* quasiIndexPerfectHash32() { return quasiIndexPerfectHash32_.get(); }
+            RapMapSAIndex<int64_t, PerfectHash<int64_t>>* quasiIndexPerfectHash64() { return quasiIndexPerfectHash64_.get(); }
 
             bool hasAuxKmerIndex() { return versionInfo_.hasAuxKmerIndex(); }
             KmerIntervalMap& auxIndex() { return auxIdx_; }
@@ -209,16 +223,13 @@ class SalmonIndex{
                                   std::vector<std::string>& quasiArgVec,
                                   uint32_t k) {
                 namespace bfs = boost::filesystem;
-                char* quasiArgv[] = {
-                    const_cast<char*>(quasiArgVec[0].c_str()),
-                    const_cast<char*>(quasiArgVec[1].c_str()),
-                    const_cast<char*>(quasiArgVec[2].c_str()),
-                    const_cast<char*>(quasiArgVec[3].c_str()),
-                    const_cast<char*>(quasiArgVec[4].c_str()),
-                    const_cast<char*>(quasiArgVec[5].c_str()),
-                    const_cast<char*>(quasiArgVec[6].c_str())
-                };
-                int quasiArgc = 7;
+		int quasiArgc = static_cast<int>(quasiArgVec.size());
+		char** quasiArgv = new char*[quasiArgc];
+		for (size_t i = 0; i < quasiArgc; ++i) {
+		  auto& arg = quasiArgVec[i];
+		  quasiArgv[i] = new char[arg.size() + 1];
+		  std::strcpy(quasiArgv[i], arg.c_str());
+		}
 
                 int ret = rapMapSAIndex(quasiArgc, quasiArgv);
 
@@ -228,7 +239,14 @@ class SalmonIndex{
                 versionInfo_.auxKmerLength(k);
                 versionInfo_.indexType(SalmonIndexType::QUASI);
                 versionInfo_.save(versionFile);
-                return (ret == 0);
+	
+		// Free the memory used for the arg vector
+		for (size_t i = 0; i < quasiArgc; ++i) {
+		  delete quasiArgv[i];
+		}
+		delete [] quasiArgv;
+	
+		return (ret == 0);
             }
 
           bool loadFMDIndex_(const boost::filesystem::path& indexDir) {
@@ -281,22 +299,44 @@ class SalmonIndex{
                     std::exit(1);
                   }
 
+                  // Is the quasi-index using a perfect hash
+                  perfectHashQuasi_ = h.perfectHash();
+
                   if (h.bigSA()) {
                     largeQuasi_ = true;
                     fmt::print(stderr, "Loading 64-bit quasi index");
-                    quasiIndex64_.reset(new RapMapSAIndex<int64_t>);
-                    if (!quasiIndex64_->load(indexStr)) {
-                      fmt::print(stderr, "Couldn't open index [{}] --- ", indexPath);
-                      fmt::print(stderr, "Please make sure that 'salmon index' has been run successfully\n");
-                      std::exit(1);
+                    if (perfectHashQuasi_) {
+                        quasiIndexPerfectHash64_.reset(new RapMapSAIndex<int64_t, PerfectHash<int64_t>>);
+                        if (!quasiIndexPerfectHash64_->load(indexStr)) {
+                            fmt::print(stderr, "Couldn't open index [{}] --- ", indexPath);
+                            fmt::print(stderr, "Please make sure that 'salmon index' has been run successfully\n");
+                            std::exit(1);
+                        }
+                    } else {
+                        quasiIndex64_.reset(new RapMapSAIndex<int64_t, DenseHash<int64_t>>);
+                        if (!quasiIndex64_->load(indexStr)) {
+                            fmt::print(stderr, "Couldn't open index [{}] --- ", indexPath);
+                            fmt::print(stderr, "Please make sure that 'salmon index' has been run successfully\n");
+                            std::exit(1);
+                        }
                     }
-                  } else {
+                  } else { // 32-bit index
                     fmt::print(stderr, "Loading 32-bit quasi index");
-                    quasiIndex32_.reset(new RapMapSAIndex<int32_t>);
-                    if(!quasiIndex32_->load(indexStr)) {
-                      fmt::print(stderr, "Couldn't open index [{}] --- ", indexPath);
-                      fmt::print(stderr, "Please make sure that 'salmon index' has been run successfully\n");
-                      std::exit(1);
+                    
+                    if (perfectHashQuasi_) {
+                        quasiIndexPerfectHash32_.reset(new RapMapSAIndex<int32_t, PerfectHash<int32_t>>);
+                        if (!quasiIndexPerfectHash32_->load(indexStr)) {
+                            fmt::print(stderr, "Couldn't open index [{}] --- ", indexPath);
+                            fmt::print(stderr, "Please make sure that 'salmon index' has been run successfully\n");
+                            std::exit(1);
+                        }
+                    } else {
+                        quasiIndex32_.reset(new RapMapSAIndex<int32_t, DenseHash<int32_t>>);
+                        if (!quasiIndex32_->load(indexStr)) {
+                            fmt::print(stderr, "Couldn't open index [{}] --- ", indexPath);
+                            fmt::print(stderr, "Please make sure that 'salmon index' has been run successfully\n");
+                            std::exit(1);
+                        }
                     }
                   }
               }
@@ -310,8 +350,13 @@ class SalmonIndex{
           // Can't think of a generally better way to do this now
           // without making the entire code-base look crazy
           bool largeQuasi_{false};
-      	  std::unique_ptr<RapMapSAIndex<int32_t>> quasiIndex32_{nullptr};
-      	  std::unique_ptr<RapMapSAIndex<int64_t>> quasiIndex64_{nullptr};
+          bool perfectHashQuasi_{false};
+
+          std::unique_ptr<RapMapSAIndex<int32_t, DenseHash<int32_t>>> quasiIndex32_{nullptr};
+          std::unique_ptr<RapMapSAIndex<int64_t, DenseHash<int64_t>>> quasiIndex64_{nullptr};
+
+          std::unique_ptr<RapMapSAIndex<int32_t, PerfectHash<int32_t>>> quasiIndexPerfectHash32_{nullptr};
+          std::unique_ptr<RapMapSAIndex<int64_t, PerfectHash<int64_t>>> quasiIndexPerfectHash64_{nullptr};
 
           bwaidx_t *idx_{nullptr};
           KmerIntervalMap auxIdx_;

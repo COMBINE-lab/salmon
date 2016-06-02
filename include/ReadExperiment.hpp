@@ -17,6 +17,7 @@ extern "C" {
 #include "SequenceBiasModel.hpp"
 #include "SalmonOpts.hpp"
 #include "SalmonIndex.hpp"
+#include "SalmonUtils.hpp"
 #include "EquivalenceClassBuilder.hpp"
 #include "SpinLock.hpp" // RapMap's with try_lock
 #include "UtilityFunctions.hpp"
@@ -57,7 +58,9 @@ class ReadExperiment {
         fragStartDists_(5),
         seqBiasModel_(1.0),
 	eqBuilder_(sopt.jointLog),
-        expectedBias_(constExprPow(4, readBias_.getK()), 1.0) {
+        expectedBias_(constExprPow(4, readBias_.getK()), 1.0),
+        expectedGC_(101, 0.0),
+        observedGC_(101, 1e-5) {
             namespace bfs = boost::filesystem;
 
             // Make sure the read libraries are valid.
@@ -107,9 +110,17 @@ class ReadExperiment {
 	    switch (salmonIndex_->indexType()) {
             case SalmonIndexType::QUASI:
                 if (salmonIndex_->is64BitQuasi()) {
-                  loadTranscriptsFromQuasi(salmonIndex_->quasiIndex64());
+                    if (salmonIndex_->isPerfectHashQuasi()) {
+                        loadTranscriptsFromQuasi(salmonIndex_->quasiIndexPerfectHash64(), sopt);
+                    } else {
+                        loadTranscriptsFromQuasi(salmonIndex_->quasiIndex64(), sopt);
+                    }
                 } else {
-                  loadTranscriptsFromQuasi(salmonIndex_->quasiIndex32());
+                    if (salmonIndex_->isPerfectHashQuasi()) {
+                        loadTranscriptsFromQuasi(salmonIndex_->quasiIndexPerfectHash32(), sopt);
+                    } else {
+                        loadTranscriptsFromQuasi(salmonIndex_->quasiIndex32(), sopt);
+                    }
                 }
                 break;
             case SalmonIndexType::FMD:
@@ -166,6 +177,15 @@ class ReadExperiment {
     std::atomic<uint64_t>& numAssignedFragmentsAtomic() { return numAssignedFragments_; }
 
     void setNumObservedFragments(uint64_t numObserved) { numObservedFragments_ = numObserved; }
+    
+    void updateShortFrags(salmon::utils::ShortFragStats& fs) { 
+        sl_.lock();
+        shortFragStats_.numTooShort += fs.numTooShort; 
+        shortFragStats_.shortest = (fs.shortest < shortFragStats_.shortest) ? fs.shortest : shortFragStats_.shortest; 
+        sl_.unlock();
+    }
+
+    salmon::utils::ShortFragStats getShortFragStats() const { return shortFragStats_; }
 
     uint64_t numObservedFragments() const {
         return numObservedFragments_;
@@ -182,7 +202,7 @@ class ReadExperiment {
     SalmonIndex* getIndex() { return salmonIndex_.get(); }
 
     template <typename QuasiIndexT>
-    void loadTranscriptsFromQuasi(QuasiIndexT* idx_) {
+    void loadTranscriptsFromQuasi(QuasiIndexT* idx_, const SalmonOpts& sopt) {
 	    size_t numRecords = idx_->txpNames.size();
 
 	    fmt::print(stderr, "Index contained {} targets\n", numRecords);
@@ -199,7 +219,8 @@ class ReadExperiment {
 		    //auto txpSeq = idx_->seq.substr(idx_->txpOffsets[i], len);
 
 		    // Set the transcript sequence
-		    txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i]);
+		    txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i],
+                                    sopt.gcBiasCorrect, sopt.gcSampFactor);
 		    // Length classes taken from
 		    // ======
 		    // Roberts, Adam, et al.
@@ -532,16 +553,41 @@ class ReadExperiment {
     std::vector<ReadLibrary>& readLibraries() { return readLibraries_; }
     FragmentLengthDistribution* fragmentLengthDistribution() const { return fragLengthDist_.get(); }
 
-    void setExpectedBias(const std::vector<double>& expectedBiasIn) {
+    void setGCFracForward(double fracForward) { gcFracFwd_ = fracForward; }
+
+    double gcFracFwd() const { return gcFracFwd_; }
+    double gcFracRC() const { return 1.0 - gcFracFwd_; }
+
+    void setExpectedSeqBias(const std::vector<double>& expectedBiasIn) {
         expectedBias_ = expectedBiasIn;
     }
 
-    std::vector<double>& expectedBias() {
+    std::vector<double>& expectedSeqBias() {
         return expectedBias_;
     }
 
-    const std::vector<double>& expectedBias() const {
+    const std::vector<double>& expectedSeqBias() const {
         return expectedBias_;
+    }
+
+    void setExpectedGCBias(const std::vector<double>& expectedBiasIn) {
+        expectedGC_ = expectedBiasIn;
+    }
+
+    std::vector<double>& expectedGCBias() {
+        return expectedGC_;
+    }
+
+    const std::vector<double>& expectedGCBias() const {
+        return expectedGC_;
+    }
+
+    const std::vector<double>& observedGC() const {
+        return observedGC_;
+    }
+
+    std::vector<double>& observedGC() {
+        return observedGC_;
     }
 
     ReadKmerDist<6, std::atomic<uint32_t>>& readBias() { return readBias_; }
@@ -586,6 +632,7 @@ class ReadExperiment {
     /** Keeps track of the number of passes that have been
      *  made through the alignment file.
      */
+    salmon::utils::ShortFragStats shortFragStats_;
     std::atomic<uint64_t> numObservedFragments_{0};
     std::atomic<uint64_t> numAssignedFragments_{0};
     uint64_t totalAssignedFragments_{0};
@@ -597,6 +644,12 @@ class ReadExperiment {
     SpinLock sl_;
     std::unique_ptr<FragmentLengthDistribution> fragLengthDist_;
     EquivalenceClassBuilder eqBuilder_;
+
+    /** GC-fragment bias things **/
+    // One bin for each percentage GC content
+    double gcFracFwd_{-1.0};
+    std::vector<double> observedGC_;
+    std::vector<double> expectedGC_;
 
     /** Sequence specific bias things **/
     // Since multiple threads can touch this dist, we

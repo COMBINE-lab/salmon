@@ -1,6 +1,6 @@
 /**
 >HEADER
-    Copyright (c) 2013, 2014, 2015 Rob Patro rob.patro@cs.stonybrook.edu
+    Copyright (c) 2013, 2014, 2015, 2016 Rob Patro rob.patro@cs.stonybrook.edu
 
     This file is part of Salmon.
 
@@ -122,6 +122,7 @@ extern "C" {
 #include "SASearcher.hpp"
 #include "SACollector.hpp"
 #include "GZipWriter.hpp"
+#include "GCBiasParams.hpp"
 //#include "TextBootstrapWriter.hpp"
 
 /****** QUASI MAPPING DECLARATIONS *********/
@@ -168,6 +169,7 @@ void processMiniBatch(
         std::vector<Transcript>& transcripts,
         ClusterForest& clusterForest,
         FragmentLengthDistribution& fragLengthDist,
+        GCBiasParams& observedGCParams,
         std::atomic<uint64_t>& numAssignedFragments,
         std::default_random_engine& randEng,
         bool initialRound,
@@ -192,7 +194,11 @@ void processMiniBatch(
     std::vector<FragmentStartPositionDistribution>& fragStartDists =
         readExp.fragmentStartPositionDistributions();
     auto& biasModel = readExp.sequenceBiasModel();
+    auto& observedGCMass = observedGCParams.observedGCMass;
+    auto& obsFwd = observedGCParams.massFwd;
+    auto& obsRC = observedGCParams.massRC;
 
+    bool gcBiasCorrect = salmonOpts.gcBiasCorrect;
     bool updateCounts = initialRound;
     bool useReadCompat = salmonOpts.incompatPrior != salmon::math::LOG_1;
     bool useFSPD{salmonOpts.useFSPD};
@@ -420,27 +426,68 @@ void processMiniBatch(
                 double newMass = logForgettingMass + aln.logProb;
                 transcript.addMass( newMass );
 
-                double r = uni(randEng);
-                if (!burnedIn and r < std::exp(aln.logProb)) {
-                    //errMod.update(aln, transcript, aln.logProb, logForgettingMass);
-                    double fragLength = aln.fragLength();
-                    if (useFragLengthDist and fragLength > 0.0) {
-                        //if (aln.fragType() == ReadType::PAIRED_END) {
-                        fragLengthDist.addVal(fragLength, logForgettingMass);
+                // Paired-end
+                if (aln.libFormat().type == ReadType::PAIRED_END) {
+                    // TODO: Is this right for *all* library types?
+                    if (aln.fwd) {
+                        obsFwd = salmon::math::logAdd(obsFwd, aln.logProb);
+                    } else {
+                        obsRC = salmon::math::logAdd(obsRC, aln.logProb);
                     }
-                    if (useFSPD) {
-                        auto hitPos = aln.hitPos();
-                        auto& fragStartDist = fragStartDists[transcript.lengthClassIndex()];
-                        fragStartDist.addVal(hitPos,
-                                             transcript.RefLength,
-                                             logForgettingMass);
+                } else if (aln.libFormat().type == ReadType::SINGLE_END) {
+		  // Single-end or orphan
+                    if (aln.libFormat().strandedness == ReadStrandedness::S) {
+                        obsFwd = salmon::math::logAdd(obsFwd, aln.logProb);
+                    } else {
+                        obsRC = salmon::math::logAdd(obsRC, aln.logProb);
                     }
                 }
-            } // end normalize
 
-            // update the single target transcript
-            if (transcriptUnique) {
-                if (updateCounts) {
+
+		
+                if (gcBiasCorrect and aln.libFormat().type == ReadType::PAIRED_END) {
+                    int32_t start = std::min(aln.pos, aln.matePos);
+                    int32_t stop = start + aln.fragLen - 1;
+                    if (start > 0 and stop < transcript.RefLength) {
+                        int32_t gcFrac = transcript.gcFrac(start, stop);
+                        // Add this fragment's contribution
+                        observedGCMass[gcFrac] = salmon::math::logAdd(observedGCMass[gcFrac], aln.logProb + logForgettingMass);
+                    }
+                }
+		double r = uni(randEng);
+		if (!burnedIn and r < std::exp(aln.logProb)) {
+			//errMod.update(aln, transcript, aln.logProb, logForgettingMass);
+			double fragLength = aln.fragLength();
+			if (useFragLengthDist and fragLength > 0.0) {
+				//if (aln.fragType() == ReadType::PAIRED_END) {
+				fragLengthDist.addVal(fragLength, logForgettingMass);
+			}
+			if (useFSPD) {
+				auto hitPos = aln.hitPos();
+				auto& fragStartDist = fragStartDists[transcript.lengthClassIndex()];
+				fragStartDist.addVal(hitPos,
+						transcript.RefLength,
+						logForgettingMass);
+			}
+			// Try sampling rather than considering all.
+			/*
+			if (gcBiasCorrect and aln.libFormat().type == ReadType::PAIRED_END) {
+			  int32_t start = std::min(aln.pos, aln.matePos);
+			  int32_t stop = start + aln.fragLen - 1;
+			  if (start > 0 and stop < transcript.RefLength) {
+			    int32_t gcFrac = transcript.gcFrac(start, stop);
+			    // Add this fragment's contribution
+			    observedGCMass[gcFrac] = salmon::math::logAdd(
+									  observedGCMass[gcFrac], logForgettingMass);
+			  }
+			}
+			*/
+		}
+	    } // end normalize
+
+	    // update the single target transcript
+	    if (transcriptUnique) {
+		if (updateCounts) {
                     transcripts[firstTranscriptID].addUniqueCount(1);
                 }
                 clusterForest.updateCluster(
@@ -501,6 +548,7 @@ void processReadsQuasi(paired_parser* parser,
                ForgettingMassCalculator& fmCalc,
                ClusterForest& clusterForest,
                FragmentLengthDistribution& fragLengthDist,
+               GCBiasParams& observedGCParams,
                mem_opt_t* memOptions,
                SalmonOpts& salmonOpts,
                double coverageThresh,
@@ -528,6 +576,7 @@ void processReadsQuasi(single_parser* parser,
                ForgettingMassCalculator& fmCalc,
                ClusterForest& clusterForest,
                FragmentLengthDistribution& fragLengthDist,
+               GCBiasParams& observedGCParams,
                mem_opt_t* memOptions,
                SalmonOpts& salmonOpts,
                double coverageThresh,
@@ -554,6 +603,7 @@ void processReadsQuasi(paired_parser* parser,
                ForgettingMassCalculator& fmCalc,
                ClusterForest& clusterForest,
                FragmentLengthDistribution& fragLengthDist,
+               GCBiasParams& observedGCParams,
                mem_opt_t* memOptions,
                SalmonOpts& salmonOpts,
                double coverageThresh,
@@ -571,21 +621,25 @@ void processReadsQuasi(paired_parser* parser,
   uint64_t prevObservedFrags{1};
   uint64_t leftHitCount{0};
   uint64_t hitListCount{0};
+  salmon::utils::ShortFragStats shortFragStats;
 
   auto& readBias = readExp.readBias();
 
   auto expectedLibType = rl.format();
 
   uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
+  size_t minK = rapmap::utils::my_mer::k();
 
   size_t locRead{0};
   uint64_t localUpperBoundHits{0};
   size_t rangeSize{0};
   uint64_t  localNumAssignedFragments{0};
+  bool strictIntersect = salmonOpts.strictIntersect;
 
   bool tooManyHits{false};
   size_t maxNumHits{salmonOpts.maxReadOccs};
-  size_t readLen{0};
+  size_t readLenLeft{0};
+  size_t readLenRight{0};
   SACollector<RapMapIndexT> hitCollector(qidx);
   SASearcher<RapMapIndexT> saSearcher(qidx);
   std::vector<QuasiAlignment> leftHits;
@@ -604,7 +658,10 @@ void processReadsQuasi(paired_parser* parser,
     }
 
     for(size_t i = 0; i < j->nb_filled; ++i) { // For all the read in this batch
-        readLen = j->data[i].first.seq.length();
+        readLenLeft = j->data[i].first.seq.length();
+        readLenRight = j->data[i].second.seq.length();
+        bool tooShortLeft = (readLenLeft <  minK);
+        bool tooShortRight = (readLenRight <  minK);
         tooManyHits = false;
         localUpperBoundHits = 0;
         auto& jointHitGroup = structureVec[i];
@@ -613,25 +670,43 @@ void processReadsQuasi(paired_parser* parser,
         leftHits.clear();
         rightHits.clear();
 
-        bool lh = hitCollector(j->data[i].first.seq,
-                               leftHits, saSearcher,
-                               MateStatus::PAIRED_END_LEFT,
-                               true);
-        bool rh = hitCollector(j->data[i].second.seq,
-                               rightHits, saSearcher,
-                               MateStatus::PAIRED_END_RIGHT,
-                               true);
+        bool lh = tooShortLeft ? false :
+                   hitCollector(j->data[i].first.seq,
+                                leftHits, saSearcher,
+                                MateStatus::PAIRED_END_LEFT,
+                                true);
 
-        rapmap::utils::mergeLeftRightHits(
-                               leftHits, rightHits, jointHits,
-                               readLen, maxNumHits, tooManyHits, hctr);
+        bool rh = tooShortRight ? false : 
+                   hitCollector(j->data[i].second.seq,
+                                rightHits, saSearcher,
+                                MateStatus::PAIRED_END_RIGHT,
+                                true);
 
-        if (initialRound) {
-            upperBoundHits += (jointHits.size() > 0);
+        // Consider a read as too short if both ends are too short
+        if (tooShortLeft and tooShortRight) { 
+            ++shortFragStats.numTooShort; 
+            shortFragStats.shortest = std::min(shortFragStats.shortest, std::max(readLenLeft, readLenRight));
+        } else { 
+            // If we actually attempted to map the fragment (it wasn't too short), then 
+            // do the intersection.
+            if (strictIntersect) {
+                rapmap::utils::mergeLeftRightHits(
+                                                  leftHits, rightHits, jointHits,
+                                                  readLenLeft, maxNumHits, tooManyHits, hctr);
+            } else {
+                rapmap::utils::mergeLeftRightHitsFuzzy(
+                                                       lh, rh,
+                                                       leftHits, rightHits, jointHits,
+                                                       readLenLeft, maxNumHits, tooManyHits, hctr);
+            }
+
+            if (initialRound) {
+                upperBoundHits += (jointHits.size() > 0);
+            }
+
+            // If the read mapped to > maxReadOccs places, discard it
+            if (jointHits.size() > salmonOpts.maxReadOccs ) { jointHitGroup.clearAlignments(); }
         }
-
-        // If the read mapped to > maxReadOccs places, discard it
-        if (jointHits.size() > salmonOpts.maxReadOccs ) { jointHitGroup.clearAlignments(); }
 
 
 	// If we have mappings, then process them.
@@ -673,48 +748,50 @@ void processReadsQuasi(paired_parser* parser,
 	    // If bias correction is turned on, and we haven't sampled a mapping
 	    // for this read yet, and we haven't collected the required number of
 	    // samples overall.
-	    if(needBiasSample and salmonOpts.numBiasSamples > 0){
-	      // the "start" position is the leftmost position if
-	      // we hit the forward strand, and the leftmost
-	      // position + the read length if we hit the reverse complement
-	      int32_t startPos = h.fwd ? pos : pos + h.readLen;
+        if(needBiasSample and salmonOpts.numBiasSamples > 0){
+            // the "start" position is the leftmost position if
+            // we hit the forward strand, and the leftmost
+            // position + the read length if we hit the reverse complement
+            int32_t startPos = h.fwd ? pos : pos + h.readLen;
 
-	      auto& t = transcripts[h.tid];
-	      if (startPos > 0 and startPos < t.RefLength) {
-		const char* txpStart = t.Sequence();
-		const char* readStart = txpStart + startPos;
-		const char* txpEnd = txpStart + t.RefLength;
-		bool success = readBias.update(txpStart, readStart, txpEnd, dir);
-		if (success) {
-		  salmonOpts.numBiasSamples -= 1;
-		  needBiasSample = false;
-		}
-	      }
-	    }
+            auto& t = transcripts[h.tid];
+            if (startPos > 0 and startPos < t.RefLength) {
+                const char* txpStart = t.Sequence();
+                const char* readStart = txpStart + startPos;
+                const char* txpEnd = txpStart + t.RefLength;
+                bool success = readBias.update(txpStart, readStart, txpEnd, dir);
+                if (success) {
+                    salmonOpts.numBiasSamples -= 1;
+                    needBiasSample = false;
+                }
+            }
+        }
 	    // ---- Collect bias samples ------ //
 
 
 	    switch (h.mateStatus) {
-	      case MateStatus::PAIRED_END_LEFT:
-		{
-		  h.format = salmon::utils::hitType(h.pos, h.fwd);
-		}
-		break;
-	      case MateStatus::PAIRED_END_RIGHT:
-		{
-		  h.format = salmon::utils::hitType(h.pos, h.fwd);
-		}
-		break;
-	      case MateStatus::PAIRED_END_PAIRED:
-		{
-		  uint32_t end1Pos = (h.fwd) ? h.pos : h.pos + h.readLen;
-		  uint32_t end2Pos = (h.mateIsFwd) ? h.matePos : h.matePos + h.mateLen;
-		  bool canDovetail = false;
-		  h.format = salmon::utils::hitType(end1Pos, h.fwd, h.readLen,
-		      end2Pos, h.mateIsFwd, h.mateLen, canDovetail);
-		}
-		break;
-	    }
+            case MateStatus::PAIRED_END_LEFT:
+                {
+                    h.format = salmon::utils::hitType(h.pos, h.fwd);
+                }
+                break;
+            case MateStatus::PAIRED_END_RIGHT:
+                {
+                    // we pass in !h.fwd here because the right read
+                    // will have the opposite orientation from its mate.
+                    h.format = salmon::utils::hitType(h.pos, !h.fwd);
+                }
+                break;
+            case MateStatus::PAIRED_END_PAIRED:
+                {
+                    uint32_t end1Pos = (h.fwd) ? h.pos : h.pos + h.readLen;
+                    uint32_t end2Pos = (h.mateIsFwd) ? h.matePos : h.matePos + h.mateLen;
+                    bool canDovetail = false;
+                    h.format = salmon::utils::hitType(end1Pos, h.fwd, h.readLen,
+                            end2Pos, h.mateIsFwd, h.mateLen, canDovetail);
+                }
+                break;
+        }
 	  }
 	} // If we have no mappings --- then there's nothing to do
 
@@ -746,8 +823,10 @@ void processReadsQuasi(paired_parser* parser,
     prevObservedFrags = numObservedFragments;
     AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(structureVec.begin(), structureVec.begin() + rangeSize);
     processMiniBatch<QuasiAlignment>(readExp, fmCalc,firstTimestepOfRound, rl, salmonOpts, hitLists, transcripts, clusterForest,
-                     fragLengthDist, numAssignedFragments, eng, initialRound, burnedIn);
+                     fragLengthDist, observedGCParams, numAssignedFragments, eng, initialRound, burnedIn);
   }
+  
+  readExp.updateShortFrags(shortFragStats);
 }
 
 // SINGLE END
@@ -769,6 +848,7 @@ void processReadsQuasi(single_parser* parser,
                ForgettingMassCalculator& fmCalc,
                ClusterForest& clusterForest,
                FragmentLengthDistribution& fragLengthDist,
+               GCBiasParams& observedGCParams,
                mem_opt_t* memOptions,
                SalmonOpts& salmonOpts,
                double coverageThresh,
@@ -786,6 +866,8 @@ void processReadsQuasi(single_parser* parser,
   uint64_t prevObservedFrags{1};
   uint64_t leftHitCount{0};
   uint64_t hitListCount{0};
+  salmon::utils::ShortFragStats shortFragStats;
+  bool tooShort{false};
 
   auto& readBias = readExp.readBias();
   const char* txomeStr = qidx->seq.c_str();
@@ -794,6 +876,7 @@ void processReadsQuasi(single_parser* parser,
 
 
   uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
+  size_t minK = rapmap::utils::my_mer::k();
 
   size_t locRead{0};
   uint64_t localUpperBoundHits{0};
@@ -819,16 +902,24 @@ void processReadsQuasi(single_parser* parser,
 
     for(size_t i = 0; i < j->nb_filled; ++i) { // For all the read in this batch
         readLen = j->data[i].seq.length();
+        tooShort = (readLen <  minK);
         tooManyHits = false;
         localUpperBoundHits = 0;
         auto& jointHitGroup = structureVec[i];
         auto& jointHits = jointHitGroup.alignments();
         jointHitGroup.clearAlignments();
 
-        bool lh = hitCollector(j->data[i].seq,
-                               jointHits, saSearcher,
-                               MateStatus::SINGLE_END,
-                               true);
+        bool lh = tooShort ? false :
+            hitCollector(j->data[i].seq,
+                         jointHits, saSearcher,
+                         MateStatus::SINGLE_END,
+                         true);
+
+        // If the fragment was too short, record it
+        if (tooShort) { 
+            ++shortFragStats.numTooShort; 
+            shortFragStats.shortest = std::min(shortFragStats.shortest, readLen);
+        }
 
         if (initialRound) {
             upperBoundHits += (jointHits.size() > 0);
@@ -837,7 +928,7 @@ void processReadsQuasi(single_parser* parser,
         // If the read mapped to > maxReadOccs places, discard it
         if (jointHits.size() > salmonOpts.maxReadOccs ) { jointHitGroup.clearAlignments(); }
 
-	bool needBiasSample = salmonOpts.biasCorrect;
+        bool needBiasSample = salmonOpts.biasCorrect;
 
         for (auto& h : jointHits) {
 
@@ -848,25 +939,25 @@ void processReadsQuasi(single_parser* parser,
 	    // If bias correction is turned on, and we haven't sampled a mapping
 	    // for this read yet, and we haven't collected the required number of
 	    // samples overall.
-	    if(needBiasSample and salmonOpts.numBiasSamples > 0){
-	      // the "start" position is the leftmost position if
-	      // we hit the forward strand, and the leftmost
-	      // position + the read length if we hit the reverse complement
-	      int32_t startPos = h.fwd ? pos : pos + h.readLen;
+        if(needBiasSample and salmonOpts.numBiasSamples > 0){
+            // the "start" position is the leftmost position if
+            // we hit the forward strand, and the leftmost
+            // position + the read length if we hit the reverse complement
+            int32_t startPos = h.fwd ? pos : pos + h.readLen;
 
 
-	      auto& t = transcripts[h.tid];
-	      if (startPos > 0 and startPos < t.RefLength) {
-		const char* txpStart = t.Sequence();
-		const char* readStart = txpStart + startPos;
-		const char* txpEnd = txpStart + t.RefLength;
-		bool success = readBias.update(txpStart, readStart, txpEnd, dir);
-		if (success) {
-		  salmonOpts.numBiasSamples -= 1;
-		  needBiasSample = false;
-		}
-	      }
-	    }
+            auto& t = transcripts[h.tid];
+            if (startPos > 0 and startPos < t.RefLength) {
+                const char* txpStart = t.Sequence();
+                const char* readStart = txpStart + startPos;
+                const char* txpEnd = txpStart + t.RefLength;
+                bool success = readBias.update(txpStart, readStart, txpEnd, dir);
+                if (success) {
+                    salmonOpts.numBiasSamples -= 1;
+                    needBiasSample = false;
+                }
+            }
+        }
 	    // ---- Collect bias samples ------ //
 
 
@@ -907,8 +998,9 @@ void processReadsQuasi(single_parser* parser,
     prevObservedFrags = numObservedFragments;
     AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(structureVec.begin(), structureVec.begin() + rangeSize);
     processMiniBatch<QuasiAlignment>(readExp, fmCalc,firstTimestepOfRound, rl, salmonOpts, hitLists, transcripts, clusterForest,
-                     fragLengthDist, numAssignedFragments, eng, initialRound, burnedIn);
+                     fragLengthDist, observedGCParams, numAssignedFragments, eng, initialRound, burnedIn);
   }
+  readExp.updateShortFrags(shortFragStats);
 }
 
 /// DONE QUASI
@@ -946,6 +1038,10 @@ void processReadLibrary(
 
             std::unique_ptr<paired_parser> pairedParserPtr{nullptr};
             std::unique_ptr<single_parser> singleParserPtr{nullptr};
+
+            /** GC-fragment bias vectors --- each thread gets it's own **/
+            std::vector<GCBiasParams> observedGCParams(numThreads);
+
             // If the read library is paired-end
             // ------ Paired-end --------
             if (rl.format().type == ReadType::PAIRED_END) {
@@ -991,6 +1087,7 @@ void processReadLibrary(
 						fmCalc,
 						clusterForest,
 						fragLengthDist,
+                        observedGCParams[i],
 						memOptions,
 						salmonOpts,
 						coverageThresh,
@@ -1003,70 +1100,175 @@ void processReadLibrary(
 				}
 				break;
 				case SalmonIndexType::QUASI:
-				{
-            // True if we have a 64-bit SA index, false otherwise
-            bool largeIndex = sidx->is64BitQuasi();
-				    for(int i = 0; i < numThreads; ++i)  {
-					// NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
-					// change value before the lambda below is evaluated --- crazy!
-          if (largeIndex) {
-            auto threadFun = [&,i]() -> void {
-              processReadsQuasi<RapMapSAIndex<int64_t>>(
-                pairedParserPtr.get(),
-                readExp,
-                rl,
-                structureVec[i],
-                numObservedFragments,
-                numAssignedFragments,
-                numValidHits,
-                upperBoundHits,
-                sidx->quasiIndex64(),
-                transcripts,
-                fmCalc,
-                clusterForest,
-                fragLengthDist,
-                memOptions,
-                salmonOpts,
-                coverageThresh,
-                iomutex,
-                initialRound,
-                burnedIn,
-                writeToCache);
-              };
-              threads.emplace_back(threadFun);
-            } else {
-              auto threadFun = [&,i]() -> void {
-              processReadsQuasi<RapMapSAIndex<int32_t>>(
-                pairedParserPtr.get(),
-                readExp,
-                rl,
-                structureVec[i],
-                numObservedFragments,
-                numAssignedFragments,
-                numValidHits,
-                upperBoundHits,
-                sidx->quasiIndex32(),
-                transcripts,
-                fmCalc,
-                clusterForest,
-                fragLengthDist,
-                memOptions,
-                salmonOpts,
-                coverageThresh,
-                iomutex,
-                initialRound,
-                burnedIn,
-                writeToCache);
-              };
-              threads.emplace_back(threadFun);
-            }
+                    {
+                        // True if we have a 64-bit SA index, false otherwise
+                        bool largeIndex = sidx->is64BitQuasi();
+                        bool perfectHashIndex = sidx->isPerfectHashQuasi();
+                        for(int i = 0; i < numThreads; ++i)  {
+                            // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
+                            // change value before the lambda below is evaluated --- crazy!
+                            if (largeIndex) {
+                                if (perfectHashIndex) { // Perfect Hash
+                                    auto threadFun = [&,i]() -> void {
+                                        processReadsQuasi<RapMapSAIndex<int64_t, PerfectHash<int64_t>>>(
+                                                                                  pairedParserPtr.get(),
+                                                                                  readExp,
+                                                                                  rl,
+                                                                                  structureVec[i],
+                                                                                  numObservedFragments,
+                                                                                  numAssignedFragments,
+                                                                                  numValidHits,
+                                                                                  upperBoundHits,
+                                                                                  sidx->quasiIndexPerfectHash64(),
+                                                                                  transcripts,
+                                                                                  fmCalc,
+                                                                                  clusterForest,
+                                                                                  fragLengthDist,
+                                                                                  observedGCParams[i],
+                                                                                  memOptions,
+                                                                                  salmonOpts,
+                                                                                  coverageThresh,
+                                                                                  iomutex,
+                                                                                  initialRound,
+                                                                                  burnedIn,
+                                                                                  writeToCache);
+                                    };
+                                    threads.emplace_back(threadFun);
+                                } else { // Dense Hash
+                                    auto threadFun = [&,i]() -> void {
+                                        processReadsQuasi<RapMapSAIndex<int64_t, DenseHash<int64_t>>>(
+                                                                                                        pairedParserPtr.get(),
+                                                                                                        readExp,
+                                                                                                        rl,
+                                                                                                        structureVec[i],
+                                                                                                        numObservedFragments,
+                                                                                                        numAssignedFragments,
+                                                                                                        numValidHits,
+                                                                                                        upperBoundHits,
+                                                                                                        sidx->quasiIndex64(),
+                                                                                                        transcripts,
+                                                                                                        fmCalc,
+                                                                                                        clusterForest,
+                                                                                                        fragLengthDist,
+                                                                                                        observedGCParams[i],
+                                                                                                        memOptions,
+                                                                                                        salmonOpts,
+                                                                                                        coverageThresh,
+                                                                                                        iomutex,
+                                                                                                        initialRound,
+                                                                                                        burnedIn,
+                                                                                                        writeToCache);
+                                    };
+                                    threads.emplace_back(threadFun);
+                                }
+                            } else {
+                                if (perfectHashIndex) { // Perfect Hash
+                                    auto threadFun = [&,i]() -> void {
+                                        processReadsQuasi<RapMapSAIndex<int32_t, PerfectHash<int32_t>>>(
+                                                                                  pairedParserPtr.get(),
+                                                                                  readExp,
+                                                                                  rl,
+                                                                                  structureVec[i],
+                                                                                  numObservedFragments,
+                                                                                  numAssignedFragments,
+                                                                                  numValidHits,
+                                                                                  upperBoundHits,
+                                                                                  sidx->quasiIndexPerfectHash32(),
+                                                                                  transcripts,
+                                                                                  fmCalc,
+                                                                                  clusterForest,
+                                                                                  fragLengthDist,
+                                                                                  observedGCParams[i],
+                                                                                  memOptions,
+                                                                                  salmonOpts,
+                                                                                  coverageThresh,
+                                                                                  iomutex,
+                                                                                  initialRound,
+                                                                                  burnedIn,
+                                                                                  writeToCache);
+                                    };
+                                    threads.emplace_back(threadFun);
+                                } else { // Dense Hash
+                                    auto threadFun = [&,i]() -> void {
+                                        processReadsQuasi<RapMapSAIndex<int32_t, DenseHash<int32_t>>>(
+                                                                                                        pairedParserPtr.get(),
+                                                                                                        readExp,
+                                                                                                        rl,
+                                                                                                        structureVec[i],
+                                                                                                        numObservedFragments,
+                                                                                                        numAssignedFragments,
+                                                                                                        numValidHits,
+                                                                                                        upperBoundHits,
+                                                                                                        sidx->quasiIndex32(),
+                                                                                                        transcripts,
+                                                                                                        fmCalc,
+                                                                                                        clusterForest,
+                                                                                                        fragLengthDist,
+                                                                                                        observedGCParams[i],
+                                                                                                        memOptions,
+                                                                                                        salmonOpts,
+                                                                                                        coverageThresh,
+                                                                                                        iomutex,
+                                                                                                        initialRound,
+                                                                                                        burnedIn,
+                                                                                                        writeToCache);
+                                    };
+                                    threads.emplace_back(threadFun);
+                                }
 
-				    }
-				}
-				break;
+                            } // End spawn current thread  
+
+                        } // End spawn all threads
+                    } // End Quasi index
+                    break;
 			    } // end switch
 		    }
 		    for(int i = 0; i < numThreads; ++i) { threads[i].join(); }
+
+
+            /** GC-fragment bias **/
+            // Set the global distribution based on the sum of local
+            // distributions.
+            double gcFracFwd{0.0};
+            double globalMass{salmon::math::LOG_0};
+            double globalFwdMass{salmon::math::LOG_0};
+            auto& globalGCMass = readExp.observedGC();
+            for (auto& gcp : observedGCParams) {
+                auto& gcm = gcp.observedGCMass;
+                double totMass = salmon::math::LOG_0;
+                for (auto e : gcm) {
+                    totMass = salmon::math::logAdd(totMass, e);
+                }
+
+                globalMass = salmon::math::logAdd(globalMass, gcp.massFwd);
+                globalMass = salmon::math::logAdd(globalMass, gcp.massRC);
+                globalFwdMass = salmon::math::logAdd(globalFwdMass, gcp.massFwd);
+
+                if (totMass != salmon::math::LOG_0) {
+                    for (size_t i = 0; i < gcm.size(); ++i) {
+                        if (gcm[i] != salmon::math::LOG_0) {
+                            double val = std::exp(gcm[i] - totMass);
+                            globalGCMass[i] += val;
+                        }
+                    }
+                }
+
+            }
+            if (globalMass != salmon::math::LOG_0) {
+                if (globalFwdMass != salmon::math::LOG_0) {
+                  gcFracFwd = std::exp(globalFwdMass - globalMass);
+                }
+                readExp.setGCFracForward(gcFracFwd);
+            }
+            /** END GC-fragment bias **/
+
+	    /** To dump the GC content
+	    std::ofstream gc_cont("gc_obs_salmon.tsv");
+	    for (size_t i = 0; i < globalGCMass.size(); ++i) {
+	      gc_cont << i << '\t' << globalGCMass[i] << '\n';
+	    }
+	    gc_cont.close();
+	    */
 
             } // ------ Single-end --------
             else if (rl.format().type == ReadType::SINGLE_END) {
@@ -1103,6 +1305,7 @@ void processReadLibrary(
                                             fmCalc,
                                             clusterForest,
                                             fragLengthDist,
+                                            observedGCParams[i],
                                             memOptions,
                                             salmonOpts,
                                             coverageThresh,
@@ -1118,67 +1321,127 @@ void processReadLibrary(
 
                     case SalmonIndexType::QUASI:
                     {
-                      // True if we have a 64-bit SA index, false otherwise
-                      bool largeIndex = sidx->is64BitQuasi();
-                      for(int i = 0; i < numThreads; ++i)  {
-                        // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
-                        // change value before the lambda below is evaluated --- crazy!
-                        if (largeIndex) {
-                          auto threadFun = [&,i]() -> void {
-                            processReadsQuasi<RapMapSAIndex<int64_t>>(
-                              singleParserPtr.get(),
-                              readExp,
-                              rl,
-                              structureVec[i],
-                              numObservedFragments,
-                              numAssignedFragments,
-                              numValidHits,
-                              upperBoundHits,
-                              sidx->quasiIndex64(),
-                              transcripts,
-                              fmCalc,
-                              clusterForest,
-                              fragLengthDist,
-                              memOptions,
-                              salmonOpts,
-                              coverageThresh,
-                              iomutex,
-                              initialRound,
-                              burnedIn,
-                              writeToCache);
-                            };
-                            threads.emplace_back(threadFun);
-                          } else {
-                            auto threadFun = [&,i]() -> void {
-                              processReadsQuasi<RapMapSAIndex<int32_t>>(
-                                singleParserPtr.get(),
-                                readExp,
-                                rl,
-                                structureVec[i],
-                                numObservedFragments,
-                                numAssignedFragments,
-                                numValidHits,
-                                upperBoundHits,
-                                sidx->quasiIndex32(),
-                                transcripts,
-                                fmCalc,
-                                clusterForest,
-                                fragLengthDist,
-                                memOptions,
-                                salmonOpts,
-                                coverageThresh,
-                                iomutex,
-                                initialRound,
-                                burnedIn,
-                                writeToCache);
-                              };
-                              threads.emplace_back(threadFun);
-                            }
+                        // True if we have a 64-bit SA index, false otherwise
+                        bool largeIndex = sidx->is64BitQuasi();
+                        bool perfectHashIndex = sidx->isPerfectHashQuasi();
+                        for(int i = 0; i < numThreads; ++i)  {
+                            // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
+                            // change value before the lambda below is evaluated --- crazy!
+                            if (largeIndex) {
+                                if (perfectHashIndex) { // Perfect Hash
+                                    auto threadFun = [&,i]() -> void {
+                                        processReadsQuasi<RapMapSAIndex<int64_t, PerfectHash<int64_t>>>(
+                                                                                  pairedParserPtr.get(),
+                                                                                  readExp,
+                                                                                  rl,
+                                                                                  structureVec[i],
+                                                                                  numObservedFragments,
+                                                                                  numAssignedFragments,
+                                                                                  numValidHits,
+                                                                                  upperBoundHits,
+                                                                                  sidx->quasiIndexPerfectHash64(),
+                                                                                  transcripts,
+                                                                                  fmCalc,
+                                                                                  clusterForest,
+                                                                                  fragLengthDist,
+                                                                                  observedGCParams[i],
+                                                                                  memOptions,
+                                                                                  salmonOpts,
+                                                                                  coverageThresh,
+                                                                                  iomutex,
+                                                                                  initialRound,
+                                                                                  burnedIn,
+                                                                                  writeToCache);
+                                    };
+                                    threads.emplace_back(threadFun);
+                                } else { // Dense Hash
+                                    auto threadFun = [&,i]() -> void {
+                                        processReadsQuasi<RapMapSAIndex<int64_t, DenseHash<int64_t>>>(
+                                                                                                        singleParserPtr.get(),
+                                                                                                        readExp,
+                                                                                                        rl,
+                                                                                                        structureVec[i],
+                                                                                                        numObservedFragments,
+                                                                                                        numAssignedFragments,
+                                                                                                        numValidHits,
+                                                                                                        upperBoundHits,
+                                                                                                        sidx->quasiIndex64(),
+                                                                                                        transcripts,
+                                                                                                        fmCalc,
+                                                                                                        clusterForest,
+                                                                                                        fragLengthDist,
+                                                                                                        observedGCParams[i],
+                                                                                                        memOptions,
+                                                                                                        salmonOpts,
+                                                                                                        coverageThresh,
+                                                                                                        iomutex,
+                                                                                                        initialRound,
+                                                                                                        burnedIn,
+                                                                                                        writeToCache);
+                                    };
+                                    threads.emplace_back(threadFun);
+                                }
+                            } else {
+                                if (perfectHashIndex) { // Perfect Hash
+                                    auto threadFun = [&,i]() -> void {
+                                        processReadsQuasi<RapMapSAIndex<int32_t, PerfectHash<int32_t>>>(
+                                                                                  singleParserPtr.get(),
+                                                                                  readExp,
+                                                                                  rl,
+                                                                                  structureVec[i],
+                                                                                  numObservedFragments,
+                                                                                  numAssignedFragments,
+                                                                                  numValidHits,
+                                                                                  upperBoundHits,
+                                                                                  sidx->quasiIndexPerfectHash32(),
+                                                                                  transcripts,
+                                                                                  fmCalc,
+                                                                                  clusterForest,
+                                                                                  fragLengthDist,
+                                                                                  observedGCParams[i],
+                                                                                  memOptions,
+                                                                                  salmonOpts,
+                                                                                  coverageThresh,
+                                                                                  iomutex,
+                                                                                  initialRound,
+                                                                                  burnedIn,
+                                                                                  writeToCache);
+                                    };
+                                    threads.emplace_back(threadFun);
+                                } else { // Dense Hash
+                                    auto threadFun = [&,i]() -> void {
+                                        processReadsQuasi<RapMapSAIndex<int32_t, DenseHash<int32_t>>>(
+                                                                                                        singleParserPtr.get(),
+                                                                                                        readExp,
+                                                                                                        rl,
+                                                                                                        structureVec[i],
+                                                                                                        numObservedFragments,
+                                                                                                        numAssignedFragments,
+                                                                                                        numValidHits,
+                                                                                                        upperBoundHits,
+                                                                                                        sidx->quasiIndex32(),
+                                                                                                        transcripts,
+                                                                                                        fmCalc,
+                                                                                                        clusterForest,
+                                                                                                        fragLengthDist,
+                                                                                                        observedGCParams[i],
+                                                                                                        memOptions,
+                                                                                                        salmonOpts,
+                                                                                                        coverageThresh,
+                                                                                                        iomutex,
+                                                                                                        initialRound,
+                                                                                                        burnedIn,
+                                                                                                        writeToCache);
+                                    };
+                                    threads.emplace_back(threadFun);
+                                }
 
-                        }
-                      }
-                      break;
-                }
+                            } // End spawn current thread  
+
+                        } // End spawn all threads
+		    } // End Quasi index
+		    break;
+		}
                 for(int i = 0; i < numThreads; ++i) { threads[i].join(); }
             } // ------ END Single-end --------
 }
@@ -1198,10 +1461,10 @@ void quantifyLibrary(
         mem_opt_t* memOptions,
         SalmonOpts& salmonOpts,
         double coverageThresh,
-        size_t numRequiredFragments,
         uint32_t numQuantThreads) {
 
     bool burnedIn{false};
+    uint64_t numRequiredFragments = salmonOpts.numRequiredFragments;
     std::atomic<uint64_t> upperBoundHits{0};
     //ErrorModel errMod(1.00);
     auto& refs = experiment.transcripts();
@@ -1322,6 +1585,28 @@ void quantifyLibrary(
     }
     fmt::print(stderr, "\n\n\n\n");
 
+    // Report statistics about short fragments
+    salmon::utils::ShortFragStats shortFragStats = experiment.getShortFragStats();
+    if (shortFragStats.numTooShort > 0) {
+        double tooShortFrac = (numObservedFragments > 0) ? 
+            (static_cast<double>(shortFragStats.numTooShort) / numObservedFragments) : 0.0; 
+        if (tooShortFrac > 0.0) {
+            size_t minK = rapmap::utils::my_mer::k();
+            fmt::print(stderr, "\n\n");
+            salmonOpts.jointLog->warn("{}% of fragments were shorter than the k used to build the index ({}).\n"
+                                      "If this fraction is too large, consider re-building the index with a smaller k.\n"
+                                      "The minimum read size found was {}.\n\n",
+                                      tooShortFrac * 100.0, minK, shortFragStats.shortest);
+            
+            // If *all* fragments were too short, then halt now
+            if (shortFragStats.numTooShort == numObservedFragments) {
+                salmonOpts.jointLog->error("All fragments were too short to quasi-map.  I won't proceed.");
+                std::exit(1);  
+            }
+        } // end tooShortFrac > 0.0
+    }
+
+
     // If we didn't achieve burnin, then at least compute effective
     // lengths and mention this to the user.
     if (totalAssignedFragments < salmonOpts.numBurninFrags) {
@@ -1407,6 +1692,7 @@ int salmonQuantify(int argc, char *argv[]) {
                         "more transcripts to be detected), but may decrease specificity as orphaned alignments are more likely "
                         "to be spurious -- this option is *always* set to true when using quasi-mapping.")
     ("biasCorrect", po::value(&(sopt.biasCorrect))->zero_tokens(), "Perform sequence-specific bias correction.")
+    ("gcBiasCorrect", po::value(&(sopt.gcBiasCorrect))->zero_tokens(), "[experimental] Perform fragment GC bias correction")
     ("threads,p", po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads), "The number of threads to use concurrently.")
     ("incompatPrior", po::value<double>(&(sopt.incompatPrior))->default_value(1e-20), "This option "
                         "sets the prior probability that an alignment that disagrees with the specified "
@@ -1451,7 +1737,17 @@ int salmonQuantify(int argc, char *argv[]) {
     */
     ("auxDir", po::value<std::string>(&(sopt.auxDir))->default_value("aux"), "The sub-directory of the quantification directory where auxiliary information "
      			"e.g. bootstraps, bias parameters, etc. will be written.")
-    ("fldMax" , po::value<size_t>(&(sopt.fragLenDistMax))->default_value(800), "The maximum fragment length to consider when building the empirical "
+    ("dumpEq", po::bool_switch(&(sopt.dumpEq))->default_value(false), "Dump the equivalence class counts "
+             "that were computed during quasi-mapping")
+    ("gcSizeSamp", po::value<std::uint32_t>(&(sopt.gcSampFactor))->default_value(1), "The value by which to down-sample transcripts when representing the "
+                "GC content.  Larger values will reduce memory usage, but may decrease the fidelity of bias modeling results.")
+    ("gcSpeedSamp", po::value<std::uint32_t>(&(sopt.pdfSampFactor))->default_value(1), "The value at which the fragment length PMF is down-sampled "
+                "when evaluating GC fragment bias.  Larger values speed up effective length correction, but may decrease the fidelity of bias modeling results.")
+    ("strictIntersect", po::bool_switch(&(sopt.strictIntersect))->default_value(false), "Modifies how orphans are "
+     "assigned.  When this flag is set, if the intersection of the quasi-mappings for the left and right "
+     "is empty, then all mappings for the left and all mappings for the right read are reported as orphaned "
+     "quasi-mappings")
+    ("fldMax" , po::value<size_t>(&(sopt.fragLenDistMax))->default_value(1000), "The maximum fragment length to consider when building the empirical "
      											      "distribution")
     ("fldMean", po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(200), "The mean used in the fragment length distribution prior")
     ("fldSD" , po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(80), "The standard deviation used in the fragment length distribution prior")
@@ -1473,6 +1769,9 @@ int salmonQuantify(int argc, char *argv[]) {
                         "a priori probability.")
     ("useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(false), "[experimental] : "
                         "Consider / model non-uniformity in the fragment start positions across the transcript.")
+    ("noBiasLengthThreshold", po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(false), "[experimental] : "
+                        "If this option is enabled, then bias correction will be allowed to estimate effective lengths "
+                        "shorter than the approximate mean fragment length")
     ("numBiasSamples", po::value<int32_t>(&numBiasSamples)->default_value(1000000),
             "Number of fragment mappings to use when learning the sequence-specific bias model.")
     ("numAuxModelSamples", po::value<uint32_t>(&(sopt.numBurninFrags))->default_value(5000000), "The first <numAuxModelSamples> are used to train the "
@@ -1482,7 +1781,7 @@ int salmonQuantify(int argc, char *argv[]) {
      			"assignment likelihoods and contributions to the transcript abundances computed without applying any auxiliary models.  The purpose "
 			"of ignoring the auxiliary models for the first <numPreAuxModelSamples> observations is to avoid applying these models before thier "
 			"parameters have been learned sufficiently well.")
-    ("numRequiredObs,n", po::value(&requiredObservations)->default_value(50000000),
+    ("numRequiredObs,n", po::value(&(sopt.numRequiredFragments))->default_value(50000000),
                                         "[Deprecated]: The minimum number of observations (mapped reads) that must be observed before "
                                         "the inference procedure will terminate.  If fewer mapped reads exist in the "
                                         "input file, then it will be read through multiple times.")
@@ -1632,6 +1931,15 @@ transcript abundance from RNA-seq reads
             }
         }
 
+	// FEB 18
+	/*
+        if (sopt.biasCorrect and sopt.gcBiasCorrect) {
+            sopt.jointLog->error("Enabling both sequence-specific and fragment GC bias correction "
+                    "simultaneously is not yet supported. Please disable one of these options.");
+            return 1;
+        }
+	*/
+
         // maybe arbitrary, but if it's smaller than this, consider it
         // equal to LOG_0
         if (sopt.incompatPrior < 1e-320) {
@@ -1641,21 +1949,6 @@ transcript abundance from RNA-seq reads
         }
         // END: option checking
 
-        // Write out information about the command / run
-        {
-            bfs::path cmdInfoPath = outputDirectory / "cmd_info.json";
-            std::ofstream os(cmdInfoPath.string());
-            cereal::JSONOutputArchive oa(os);
-            oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
-            for (auto& opt : orderedOptions.options) {
-                if (opt.value.size() == 1) {
-                    oa(cereal::make_nvp(opt.string_key, opt.value.front()));
-                } else {
-                    oa(cereal::make_nvp(opt.string_key, opt.value));
-                }
-            }
-        }
-
         jointLog->info() << "parsing read library format";
 
         vector<ReadLibrary> readLibraries = salmon::utils::extractReadLibraries(orderedOptions);
@@ -1663,7 +1956,7 @@ transcript abundance from RNA-seq reads
         SalmonIndexVersionInfo versionInfo;
         boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
         versionInfo.load(versionPath);
-        versionInfo.indexType();
+        auto idxType = versionInfo.indexType();
 
         ReadExperiment experiment(readLibraries, indexDirectory, sopt);
 
@@ -1683,7 +1976,6 @@ transcript abundance from RNA-seq reads
         */
         // end parameter validation
 
-
         // This will be the class in charge of maintaining our
     	// rich equivalence classes
         experiment.equivalenceClassBuilder().start();
@@ -1696,23 +1988,58 @@ transcript abundance from RNA-seq reads
                     /** Currently no seq-specific bias correction with
                      *  FMD index.
                      */
-                    if (sopt.biasCorrect) {
+                    if (sopt.biasCorrect or sopt.gcBiasCorrect) {
                         sopt.biasCorrect = false;
-                        jointLog->warn("Sequence-specific bias correction requires "
-                                "use of the quasi-index. Disabling bias correction");
+                        sopt.gcBiasCorrect = false;
+                        jointLog->warn("Sequence-specific or fragment GC bias correction require "
+                                       "use of the quasi-index. Disabling all bias correction");
                     }
                     quantifyLibrary<SMEMAlignment>(experiment, greedyChain, memOptions, sopt, coverageThresh,
-                            requiredObservations, sopt.numThreads);
+                                                   sopt.numThreads);
                 }
                 break;
             case SalmonIndexType::QUASI:
                 {
+                    // We can only do fragment GC bias correction, for the time being, with paired-end reads
+                    if (sopt.gcBiasCorrect) {
+                        for (auto& rl : readLibraries) {
+                            if (rl.format().type != ReadType::PAIRED_END) {
+                                jointLog->warn("Fragment GC bias correction is currently only "
+                                        "implemented for paired-end libraries.  Disabling "
+                                        "fragment GC bias correction for this run");
+                                sopt.gcBiasCorrect = false;
+                            }
+                        }
+                    }
                     sopt.allowOrphans = true;
                     sopt.useQuasi = true;
                      quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions, sopt, coverageThresh,
-                                                     requiredObservations, sopt.numThreads);
+                                                     sopt.numThreads);
                 }
                 break;
+        }
+
+        // Write out information about the command / run
+        {
+            bfs::path cmdInfoPath = outputDirectory / "cmd_info.json";
+            std::ofstream os(cmdInfoPath.string());
+            cereal::JSONOutputArchive oa(os);
+            oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
+            for (auto& opt : orderedOptions.options) {
+                if (opt.value.size() == 1) {
+                    oa(cereal::make_nvp(opt.string_key, opt.value.front()));
+                } else {
+                    oa(cereal::make_nvp(opt.string_key, opt.value));
+                }
+            }
+        }
+
+        GZipWriter gzw(outputDirectory, jointLog);
+
+        // If we are dumping the equivalence classes, then
+        // do it here.
+        if (sopt.dumpEq) {
+            gzw.writeEquivCounts(sopt, experiment);
         }
 
         // Now that the streaming pass is complete, we have
@@ -1727,12 +2054,12 @@ transcript abundance from RNA-seq reads
     	salmon::utils::normalizeAlphas(sopt, experiment);
         bool optSuccess = optimizer.optimize(experiment, sopt, 0.01, 10000);
 
-	if (!optSuccess) {
-	  jointLog->error("The optimization algorithm failed. This is likely the result of "
-			  "bad input (or a bug). If you cannot track down the cause, please "
-			  "report this issue on GitHub.");
-	  return 1;
-	}
+        if (!optSuccess) {
+            jointLog->error("The optimization algorithm failed. This is likely the result of "
+                    "bad input (or a bug). If you cannot track down the cause, please "
+                    "report this issue on GitHub.");
+            return 1;
+        }
         jointLog->info("Finished optimizer");
 
         free(memOptions);
@@ -1742,10 +2069,6 @@ transcript abundance from RNA-seq reads
 
         bfs::path estFilePath = outputDirectory / "quant.sf";
 
-        commentStream << "# [ mapping rate ] => { " << experiment.effectiveMappingRate() * 100.0 << "\% }\n";
-        commentString = commentStream.str();
-
-        GZipWriter gzw(outputDirectory, jointLog);
         // Write the main results
         gzw.writeAbundances(sopt, experiment);
         // Write meta-information about the run

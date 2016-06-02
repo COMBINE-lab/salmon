@@ -22,7 +22,7 @@ public:
         priorMass_(salmon::math::LOG_0),
         mass_(salmon::math::LOG_0), sharedCount_(0.0),
         avgMassBias_(salmon::math::LOG_0),
-        active_(false){
+        active_(false) {
             uniqueCount_.store(0);
             lastUpdate_.store(0);
             lastTimestepUpdated_.store(0);
@@ -36,7 +36,7 @@ public:
         priorMass_(std::log(alpha*len)),
         mass_(salmon::math::LOG_0), sharedCount_(0.0),
         avgMassBias_(salmon::math::LOG_0),
-        active_(false){
+        active_(false) {
             uniqueCount_.store(0);
             lastUpdate_.store(0);
             lastTimestepUpdated_.store(0);
@@ -56,6 +56,10 @@ public:
 
         SAMSequence_ = std::move(other.SAMSequence_);
         Sequence_ = std::move(other.Sequence_);
+        GCCount_ = std::move(other.GCCount_);
+        gcStep_ = other.gcStep_;
+        gcFracLen_ = other.gcFracLen_;
+        lastRegularSample_ = other.lastRegularSample_;
 
         uniqueCount_.store(other.uniqueCount_);
         totalCount_.store(other.totalCount_.load());
@@ -80,6 +84,10 @@ public:
         EffectiveLength = other.EffectiveLength;
         SAMSequence_ = std::move(other.SAMSequence_);
         Sequence_ = std::move(other.Sequence_);
+        GCCount_ = std::move(other.GCCount_);
+        gcStep_ = other.gcStep_;
+        gcFracLen_ = other.gcFracLen_;
+        lastRegularSample_ = other.lastRegularSample_;
 
         uniqueCount_.store(other.uniqueCount_);
         totalCount_.store(other.totalCount_.load());
@@ -284,36 +292,54 @@ public:
         return hasAnchorFragment_.load();
     }
 
+    // Return the fractional GC content along this transcript
+    // in the interval [s,e] (note; this interval is closed on both sides).
+    inline int32_t gcFrac(int32_t s, int32_t e) const {
+        if (gcStep_ == 1) {
+            auto cs = GCCount_[s];
+            auto ce = GCCount_[e];
+            return std::lrint((100.0 * (ce - cs)) / (e - s + 1));
+        } else {
+            auto cs = gcCountInterp_(s);
+            auto ce = gcCountInterp_(e);
+            return std::lrint((100.0 * (ce - cs)) / (e - s + 1));
+        }
+    }
+
     // Will *not* delete seq on destruction
-    void setSequenceBorrowed(const char* seq) {
+    void setSequenceBorrowed(const char* seq, bool needGC=false, uint32_t gcSampFactor=1) {
         Sequence_ = std::unique_ptr<const char, void(*)(const char*)>(
                 seq,                 // store seq
                 [](const char* p) {} // do nothing deleter
                 );
+        if (needGC) { computeGCContent_(gcSampFactor); }
     }
 
     // Will delete seq on destruction
-    void setSequenceOwned(const char* seq) {
+    void setSequenceOwned(const char* seq, bool needGC=false, uint32_t gcSampFactor=1) {
         Sequence_ = std::unique_ptr<const char, void(*)(const char*)>(
                 seq,                 // store seq
                 [](const char* p) { delete [] p; } // do nothing deleter
                 );
+        if (needGC) { computeGCContent_(gcSampFactor); }
     }
 
     // Will *not* delete seq on destruction
-    void setSAMSequenceBorrowed(uint8_t* seq) {
+    void setSAMSequenceBorrowed(uint8_t* seq, bool needGC=false, uint32_t gcSampFactor=1) {
         SAMSequence_ = std::unique_ptr<uint8_t, void(*)(uint8_t*)>(
                 seq,                 // store seq
                 [](uint8_t* p) {} // do nothing deleter
                 );
+        if (needGC) { computeGCContent_(gcSampFactor); }
     }
 
     // Will delete seq on destruction
-    void setSAMSequenceOwned(uint8_t* seq) {
+    void setSAMSequenceOwned(uint8_t* seq, bool needGC=false,  uint32_t gcSampFactor=1) {
         SAMSequence_ = std::unique_ptr<uint8_t, void(*)(uint8_t*)>(
                 seq,                 // store seq
                 [](uint8_t* p) { delete [] p; } // do nothing deleter
                 );
+        if (needGC) { computeGCContent_(gcSampFactor); }
     }
 
     const char* Sequence() const {
@@ -336,11 +362,98 @@ public:
     double sharedCounts{0.0};
 
 private:
+    // NOTE: Is it worth it to check if we have GC here?
+    // we should never access these without bias correction.
+    inline double gcCount_(int32_t p) {
+        return (gcStep_ == 1) ? static_cast<double>(GCCount_[p]) : gcCountInterp_(p);
+    }
+    inline double gcCount_(int32_t p) const {
+        return (gcStep_ == 1) ? static_cast<double>(GCCount_[p]) : gcCountInterp_(p);
+    }
+
+    inline double gcCountInterp_(int32_t p) const {
+        //std::cerr << "in gcCountInterp\n";
+        if (p == RefLength - 1) {
+            // If p is the last position, just return the last value
+            return static_cast<double>(GCCount_.back());
+        }
+
+        // The fractional sampling factor position p would have
+        double fracP = static_cast<double>(p) / gcStep_;
+
+        // The largest sampled index for some position <= p
+        uint32_t sampInd = std::floor(fracP);
+
+        // The fraction sampling factor for the largest sampled
+        // position <= p
+        double fracSample = static_cast<double>(sampInd);
+
+        int32_t nextSample{0};
+        double fracNextSample{0.0};
+
+        // special case: The last bin may not be evenly spaced.
+        if (sampInd >= lastRegularSample_) {
+            nextSample = GCCount_.size() - 1;
+            fracNextSample = gcFracLen_;
+        } else {
+            nextSample = sampInd + 1;
+            fracNextSample = static_cast<double>(nextSample);
+        }
+        double lambda = (fracP - fracSample) / (fracNextSample - fracSample);
+        return lambda * GCCount_[sampInd] + (1.0 - lambda) * GCCount_[nextSample];
+    }
+
+    void computeGCContentSampled_(uint32_t step) {
+        gcStep_ = step;
+        const char* seq = Sequence_.get();
+        size_t nsamp = std::ceil(static_cast<double>(RefLength) / step);
+        GCCount_.reserve(nsamp + 2);
+
+        size_t lastSamp{0};
+        size_t totGC{0};
+        for (size_t i = 0; i < RefLength; ++i) {
+            auto c = std::toupper(seq[i]);
+            if (c == 'G' or c == 'C') {
+                totGC++;
+            }
+            if (i % step == 0) {
+                GCCount_.push_back(totGC);
+                lastSamp = i;
+            }
+        }
+
+        if (lastSamp < RefLength - 1) {
+            GCCount_.push_back(totGC);
+        }
+
+        gcFracLen_ = static_cast<double>(RefLength - 1) / gcStep_;
+        lastRegularSample_ = std::ceil(gcFracLen_);
+    }
+
+    void computeGCContent_(uint32_t gcSampFactor) {
+        const char* seq = Sequence_.get();
+        GCCount_.clear();
+        if (gcSampFactor == 1) {
+            GCCount_.resize(RefLength, 0);
+            size_t totGC{0};
+            for (size_t i = 0; i < RefLength; ++i) {
+                auto c = std::toupper(seq[i]);
+                if (c == 'G' or c == 'C') {
+                    totGC++;
+                }
+                GCCount_[i] = totGC;
+            }
+        } else {
+            computeGCContentSampled_(gcSampFactor);
+        }
+    }
+
     std::unique_ptr<uint8_t, void(*)(uint8_t*)> SAMSequence_ =
         std::unique_ptr<uint8_t, void(*)(uint8_t*)> (nullptr, [](uint8_t*){});
 
     std::unique_ptr<const char, void(*)(const char*)> Sequence_ =
         std::unique_ptr<const char, void(*)(const char*)> (nullptr, [](const char*){});
+
     std::atomic<size_t> uniqueCount_;
     std::atomic<size_t> totalCount_;
     // The most recent timestep at which this transcript's mass was updated.
@@ -358,6 +471,11 @@ private:
     // pair of reads mapping to it.
     std::atomic<bool> hasAnchorFragment_{false};
     bool active_;
+
+    uint32_t gcStep_{1};
+    double gcFracLen_{0.0};
+    uint32_t lastRegularSample_{0};
+    std::vector<uint32_t> GCCount_;
 };
 
 #endif //TRANSCRIPT

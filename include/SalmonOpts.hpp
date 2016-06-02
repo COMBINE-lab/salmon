@@ -35,6 +35,8 @@ struct SalmonOpts {
 
     std::string auxDir; // The directory where auxiliary files will be written.
 
+    bool dumpEq; 	     // Dump the equivalence classes and counts to file
+
     bool splitSpanningSeeds; // Attempt to split seeds that span multiple transcripts.
 
     bool noFragLengthDist ; // Don't give a fragment assignment a likelihood based on an emperically
@@ -43,6 +45,9 @@ struct SalmonOpts {
     bool noEffectiveLengthCorrection; // Don't take the fragment length distribution into
                                       // account when computing the probability that a
                                      // fragment was generated from a transcript.
+
+    bool noBiasLengthThreshold; // Don't require that the recomputed effective length for a target
+                                // be above a threshold before applying it.
 
     bool useFSPD; // Learn a non-uniform start distribution
 
@@ -81,6 +86,13 @@ struct SalmonOpts {
 
     uint32_t maxExpectedReadLen; // Maximum expected length of an observed read.
 
+    uint64_t numRequiredFragments; //
+
+    uint32_t gcSampFactor; // The factor by which to down-sample the GC distribution of transcripts
+    uint32_t pdfSampFactor; // The factor by which to down-sample the fragment length pmf when
+                            // evaluating gc-bias for effective length correction.
+
+    bool strictIntersect; // Use strict rather than fuzzy intersection in quasi-mapping
     bool useMassBanking; // DEPRECATED
 
     bool sensitive; // Perform splitting of long SMEMs into MEMs
@@ -105,6 +117,7 @@ struct SalmonOpts {
 
     bool alnMode{false};     // true if we're in alignment based mode, false otherwise
     bool biasCorrect{false}; // Perform sequence-specific bias correction
+    bool gcBiasCorrect{false}; // Perform gc-fragment bias correction
     std::atomic<int32_t> numBiasSamples{1000000}; // The number of fragment mappings to consider when building
 						  // the sequence-specific "foreground" distribution.
 

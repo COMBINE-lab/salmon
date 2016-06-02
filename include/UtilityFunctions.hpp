@@ -40,55 +40,67 @@ inline std::string kmerForIndex(uint32_t idx, uint32_t K) {
 inline uint32_t nextKmerIndex(uint32_t idx, char n, uint32_t K,
                               salmon::utils::Direction dir) {
     using salmon::utils::Direction;
-    idx = idx << 2;
-    if(dir == Direction::REVERSE_COMPLEMENT) {
+    if(dir == Direction::REVERSE or dir == Direction::REVERSE_COMPLEMENT) {
+      // drop the leftmost character, and replace it with the complement of the
+      // new one.
+      idx = idx >> 2;
         switch(n) {
             case 'A':
             case 'a':
-                n='T';
+              //  n='T';
+	      // complement is 'T';
+	      idx = idx | (3 << 2*(K-1));
                 break;
             case 'C':
             case 'c':
-                n='G';
+              //  n='G';
+	      // complement is 'G';
+	      idx = idx | (2 << 2*(K-1));
                 break;
             case 'g':
             case 'G':
-                n='C';
+	      // n='C';
+	      // complement is 'C';
+	      idx = idx | (1 << 2*(K-1));
                 break;
             case 'T':
             case 't':
             case 'U':
             case 'u':
-                n='A';
+	      // n='A';
+	      // complement is 'A';
                 break;
         }
+	return idx;
+    } else {
+      // drop the rightmost character and replace it with the new one.
+      idx = idx << 2;
+      switch(n) {
+      case 'A':
+      case 'a': break;
+      case 'C':
+      case 'c': idx = idx + 1;
+	break;
+      case 'G':
+      case 'g': idx = idx + 2;
+	break;
+      case 'T':
+      case 't':
+      case 'U':
+      case 'u':
+	idx = idx + 3;
+	break;
+      }
+      // Clear the top 32 - 2*K bits.
+      uint32_t clearShift = (32 - 2*K);
+      return idx & (0xFFFFFFFF >> clearShift);
     }
-
-    switch(n) {
-        case 'A':
-        case 'a': break;
-        case 'C':
-        case 'c': idx = idx + 1;
-                  break;
-        case 'G':
-        case 'g': idx = idx + 2;
-                  break;
-        case 'T':
-        case 't':
-        case 'U':
-        case 'u':
-                  idx = idx + 3;
-                  break;
-    }
-    // Clear the top 32 - 2*K bits.
-    uint32_t clearShift = (32 - 2*K);
-    return idx & (0xFFFFFFFF >> clearShift);
 }
 
 
 inline uint32_t indexForKmer(const char* s,
-        uint32_t K,
-        salmon::utils::Direction dir) {
+	uint32_t K,
+	salmon::utils::Direction dir) {
     using salmon::utils::Direction;
     // The index we'll return
     uint32_t idx{0};

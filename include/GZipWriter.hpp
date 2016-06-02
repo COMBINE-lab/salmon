@@ -21,6 +21,11 @@ class GZipWriter {
     ~GZipWriter();
 
     template <typename ExpT>
+    bool writeEquivCounts(
+	const SalmonOpts& opts,
+	ExpT& experiment);
+
+    template <typename ExpT>
     bool writeMeta(
 	const SalmonOpts& opts,
 	const ExpT& experiment,

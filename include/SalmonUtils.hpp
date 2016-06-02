@@ -44,9 +44,16 @@ using IndexVector = std::vector<size_t>;
 using KmerVector = std::vector<uint64_t>;
 using MateStatus = rapmap::utils::MateStatus;
 
+// To keep track of short fragments (shorter than the k-mer length)
+// on which the index was built.
+struct ShortFragStats {
+    size_t numTooShort{0};
+    size_t shortest{std::numeric_limits<size_t>::max()};
+};
+
 // An enum class for direction to avoid potential errors
 // with keeping everything as a bool
-enum class Direction { FORWARD = 0, REVERSE_COMPLEMENT = 1 };
+enum class Direction { FORWARD = 0, REVERSE_COMPLEMENT = 1, REVERSE = 2 };
 
 // Returns FORWARD if isFwd is true and REVERSE_COMPLEMENT otherwise
 constexpr inline Direction boolToDirection(bool isFwd) {
@@ -89,10 +96,11 @@ TranscriptGeneMap readTranscriptToGeneMap( std::ifstream &ifile );
 TranscriptGeneMap transcriptToGeneMapFromFasta( const std::string& transcriptsFile );
 
 template <typename AbundanceVecT, typename ReadExpT>
-Eigen::VectorXd updateEffectiveLengths(ReadExpT& readExp,
-    Eigen::VectorXd& effLensIn,
-    AbundanceVecT& alphas,
-    std::vector<double>& transcriptKmerDist);
+Eigen::VectorXd updateEffectiveLengths(
+        SalmonOpts& sopt,
+        ReadExpT& readExp,
+        Eigen::VectorXd& effLensIn,
+        AbundanceVecT& alphas);
 
 /*
  * Use atomic compare-and-swap to update val to
