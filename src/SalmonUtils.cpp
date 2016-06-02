@@ -1623,17 +1623,7 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
     sopt.posBiasCorrect = false;
     return effLensIn;
   }
-  boost::filesystem::path auxDir = sopt.outputDirectory / sopt.auxDir;
-  bool auxSuccess = boost::filesystem::is_directory(auxDir);
-  if (!auxSuccess) {
-    auxSuccess = boost::filesystem::create_directories(auxDir);
-  }
-  if (auxSuccess) {
-      auto bgSampFn = auxDir / "background_samples.txt";
-      std::ofstream bgSamps(bgSampFn.string());
-      bgSamps << numBackgroundTranscripts.load() << '\n';
-      bgSamps.close();
-  }
+
   /**
    * The local bias terms from each thread can be combined
    * via simple summation.  Here, we combine the locally-computed

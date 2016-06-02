@@ -17,7 +17,7 @@ extern "C" {
 #include "cereal/archives/json.hpp"
 #include "cereal/types/vector.hpp"
 
-#include "MPHMap.hpp"
+#include "BooMap.hpp"
 #include "RapMapSAIndex.hpp"
 #include "IndexHeader.hpp"
 #include "BWAUtils.hpp"
@@ -36,9 +36,7 @@ using DenseHash = google::dense_hash_map<uint64_t,
                                          rapmap::utils::SAInterval<IndexT>, 
                                          rapmap::utils::KmerKeyHasher>;
 template <typename IndexT> 
-using PerfectHash = MPHMap<uint64_t, 
-                           std::pair<uint64_t, 
-                                     rapmap::utils::SAInterval<IndexT>>>;
+using PerfectHash = BooMap<uint64_t, rapmap::utils::SAInterval<IndexT>>;
 
 class SalmonIndex{
         public:
