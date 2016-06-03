@@ -35,6 +35,10 @@ struct SalmonOpts {
 
     std::string auxDir; // The directory where auxiliary files will be written.
 
+    std::string runStartTime; // String representation of the date / time at which the run began.
+
+    bool consistentHits;  // Enforce consistency of hits gathered during quasi-mapping.
+
     bool dumpEq; 	     // Dump the equivalence classes and counts to file
 
     bool splitSpanningSeeds; // Attempt to split seeds that span multiple transcripts.
@@ -47,6 +51,8 @@ struct SalmonOpts {
                                      // fragment was generated from a transcript.
 
     bool noBiasLengthThreshold; // Don't require that the recomputed effective length for a target
+                                // be above a threshold before applying it.
+    bool useBiasLengthThreshold; // Don't require that the recomputed effective length for a target
                                 // be above a threshold before applying it.
 
     bool useFSPD; // Learn a non-uniform start distribution
@@ -105,10 +111,16 @@ struct SalmonOpts {
 
     boost::filesystem::path indexDirectory; // Index directory
 
+    boost::filesystem::path geneMapPath; // Gene map path 
+    
+    bool quiet; // Be quiet during quantification.
+
     bool useVBOpt; // Use Variational Bayesian EM instead of "regular" EM in the batch passes
 
     bool useQuasi; // Are we using the quasi-mapping based index or not.
 
+  std::unique_ptr<std::ofstream> unmappedFile{nullptr};
+    bool writeUnmappedNames; // write the names of unmapped reads
     bool sampleOutput; // Sample alignments according to posterior estimates of transcript abundance.
     bool sampleUnaligned; // Pass along un-aligned reads in the sampling.
 
@@ -118,6 +130,7 @@ struct SalmonOpts {
     bool alnMode{false};     // true if we're in alignment based mode, false otherwise
     bool biasCorrect{false}; // Perform sequence-specific bias correction
     bool gcBiasCorrect{false}; // Perform gc-fragment bias correction
+    bool posBiasCorrect{false}; // Perform positional bias correction
     std::atomic<int32_t> numBiasSamples{1000000}; // The number of fragment mappings to consider when building
 						  // the sequence-specific "foreground" distribution.
 

@@ -11,10 +11,11 @@
 #include "FASTAParser.hpp"
 #include "Transcript.hpp"
 #include "SalmonStringUtils.hpp"
+#include "SalmonOpts.hpp"
 
 FASTAParser::FASTAParser(const std::string& fname): fname_(fname) {}
 
-void FASTAParser::populateTargets(std::vector<Transcript>& refs) {
+void FASTAParser::populateTargets(std::vector<Transcript>& refs, SalmonOpts& sopt) {
     using stream_manager = jellyfish::stream_manager<std::vector<std::string>::const_iterator>;
     using single_parser = jellyfish::whole_sequence_parser<stream_manager>;
 
@@ -73,7 +74,7 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs) {
 	      // allocate space for the new copy
 	      char* seqCopy = new char[seq.length()+1];
 	      std::strcpy(seqCopy, seq.c_str());
-	      refs[it->second].setSequenceOwned(seqCopy);
+	      refs[it->second].setSequenceOwned(seqCopy, sopt.gcBiasCorrect, sopt.gcSampFactor);
 	      // seqCopy will only be freed when the transcript is destructed!
             }
         }

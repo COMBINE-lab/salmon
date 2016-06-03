@@ -9,6 +9,7 @@ extern "C" {
 }
 
 // Our includes
+#include "SBModel.hpp"
 #include "ClusterForest.hpp"
 #include "Transcript.hpp"
 #include "BAMQueue.hpp"
@@ -25,6 +26,7 @@ extern "C" {
 #include "EquivalenceClassBuilder.hpp"
 #include "SpinLock.hpp" // RapMap's with try_lock
 #include "ReadKmerDist.hpp"
+#include "SimplePosBias.hpp"
 
 // Boost includes
 #include <boost/filesystem.hpp>
@@ -58,10 +60,12 @@ class AlignmentLibrary {
         libFmt_(libFmt),
         transcripts_(std::vector<Transcript>()),
     	fragStartDists_(5),
+        posBiasFW_(5),
+        posBiasRC_(5),
         seqBiasModel_(1.0),
     	eqBuilder_(salmonOpts.jointLog),
         quantificationPasses_(0),
-        expectedBias_(constExprPow(4, readBias_.getK()), 1.0),
+        expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0),
         expectedGC_(101, 1.0),
         observedGC_(101, 1e-5) {
             namespace bfs = boost::filesystem;
@@ -113,7 +117,7 @@ class AlignmentLibrary {
 
             fmt::print(stderr, "Populating targets from aln = {}, fasta = {} . . .",
                        alnFiles.front(), transcriptFile_);
-            fp.populateTargets(transcripts_);
+            fp.populateTargets(transcripts_, salmonOpts);
 	    for (auto& txp : transcripts_) {
 		    // Length classes taken from
 		    // ======
@@ -300,10 +304,26 @@ class AlignmentLibrary {
         return observedGC_;
     }
 
+    std::vector<SimplePosBias>& posBias(salmon::utils::Direction dir) { 
+        return (dir == salmon::utils::Direction::FORWARD) ? posBiasFW_ : posBiasRC_; 
+    }
+    const std::vector<SimplePosBias>& posBias(salmon::utils::Direction dir) const { 
+        return (dir == salmon::utils::Direction::FORWARD) ? posBiasFW_ : posBiasRC_; 
+    }
 
-    ReadKmerDist<6, std::atomic<uint32_t>>& readBias() { return readBias_; }
-    const ReadKmerDist<6, std::atomic<uint32_t>>& readBias() const { return readBias_; }
+    ReadKmerDist<6, std::atomic<uint32_t>>& readBias(salmon::utils::Direction dir) { 
+        return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0] : readBias_[1]; 
+    }
+    const ReadKmerDist<6, std::atomic<uint32_t>>& readBias(salmon::utils::Direction dir) const { 
+        return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0] : readBias_[1]; 
+    }
 
+    SBModel& readBiasModel(salmon::utils::Direction dir) { 
+        return (dir == salmon::utils::Direction::FORWARD) ? readBiasModel_[0] : readBiasModel_[1]; 
+    }
+    const SBModel& readBiasModel(salmon::utils::Direction dir) const { 
+        return (dir == salmon::utils::Direction::FORWARD) ? readBiasModel_[0] : readBiasModel_[1]; 
+    }
 
     private:
     /**
@@ -365,6 +385,10 @@ class AlignmentLibrary {
     SpinLock sl_;
     EquivalenceClassBuilder eqBuilder_;
 
+    /** Positional bias things**/
+    std::vector<SimplePosBias> posBiasFW_;
+    std::vector<SimplePosBias> posBiasRC_;
+ 
     /** GC-fragment bias things **/
     // One bin for each percentage GC content
     double gcFracFwd_;
@@ -373,7 +397,10 @@ class AlignmentLibrary {
 
     // Since multiple threads can touch this dist, we
     // need atomic counters.
-    ReadKmerDist<6, std::atomic<uint32_t>> readBias_;
+    std::array<ReadKmerDist<6, std::atomic<uint32_t>>, 2> readBias_;
+    std::array<SBModel, 2> readBiasModel_;
+
+    //ReadKmerDist<6, std::atomic<uint32_t>> readBias_;
     std::vector<double> expectedBias_;
 };
 

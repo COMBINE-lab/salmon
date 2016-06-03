@@ -176,10 +176,18 @@ Creates a salmon index.
 
             optWriter << auxKmerLen;
             argVec->push_back(optWriter.str());
+	    optWriter.clear();
+	    
             argVec->push_back("-t");
             argVec->push_back(transcriptFile);
             argVec->push_back("-i");
             argVec->push_back(outputPrefix.string());
+
+	    argVec->push_back("-x");
+	    optWriter << numThreads;
+	    argVec->push_back(optWriter.str());
+	    optWriter.clear();
+	    
             if (perfectHash) {
                 argVec->push_back("--perfectHash");
             }

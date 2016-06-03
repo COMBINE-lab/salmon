@@ -22,6 +22,8 @@ extern "C" {
 #include "SpinLock.hpp" // RapMap's with try_lock
 #include "UtilityFunctions.hpp"
 #include "ReadKmerDist.hpp"
+#include "SBModel.hpp"
+#include "SimplePosBias.hpp"
 
 // Logger includes
 #include "spdlog/spdlog.h"
@@ -29,6 +31,9 @@ extern "C" {
 // Boost includes
 #include <boost/filesystem.hpp>
 #include <boost/range/irange.hpp>
+
+// Cereal includes
+#include "cereal/archives/json.hpp"
 
 // Standard includes
 #include <vector>
@@ -56,9 +61,11 @@ class ReadExperiment {
         transcripts_(std::vector<Transcript>()),
         totalAssignedFragments_(0),
         fragStartDists_(5),
+        posBiasFW_(5),
+        posBiasRC_(5),
         seqBiasModel_(1.0),
 	eqBuilder_(sopt.jointLog),
-        expectedBias_(constExprPow(4, readBias_.getK()), 1.0),
+        expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0),
         expectedGC_(101, 0.0),
         observedGC_(101, 1e-5) {
             namespace bfs = boost::filesystem;
@@ -222,23 +229,24 @@ class ReadExperiment {
 		    txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i],
                                     sopt.gcBiasCorrect, sopt.gcSampFactor);
 		    // Length classes taken from
+            // https://github.com/cole-trapnell-lab/cufflinks/blob/master/src/biascorrection.cpp
 		    // ======
 		    // Roberts, Adam, et al.
 		    // "Improving RNA-Seq expression estimates by correcting for fragment bias."
 		    // Genome Biol 12.3 (2011): R22.
 		    // ======
 		    // perhaps, define these in a more data-driven way
-        if (txp.RefLength <= 1334) {
-          txp.lengthClassIndex(0);
-        } else if (txp.RefLength <= 2104) {
-          txp.lengthClassIndex(0);
-        } else if (txp.RefLength <= 2988) {
-          txp.lengthClassIndex(0);
-        } else if (txp.RefLength <= 4389) {
-          txp.lengthClassIndex(0);
-        } else {
-          txp.lengthClassIndex(0);
-        }
+            if (txp.RefLength <= 791) {
+                txp.lengthClassIndex(0);
+            } else if (txp.RefLength <= 1265) {
+                txp.lengthClassIndex(1);
+            } else if (txp.RefLength <= 1707) {
+                txp.lengthClassIndex(2);
+            } else if (txp.RefLength <= 2433) {
+                txp.lengthClassIndex(3);
+            } else {
+                txp.lengthClassIndex(4);
+            }
       }
 	    // ====== Done loading the transcripts from file
     }
@@ -300,32 +308,25 @@ class ReadExperiment {
             txp.setSequenceOwned(seqCopy);
 		    txp.setSAMSequenceOwned(salmon::stringtools::encodeSequenceInSAM(seq.c_str(), t.RefLength));
 
-		    // Length classes taken from
+            // Length classes taken from
+            // https://github.com/cole-trapnell-lab/cufflinks/blob/master/src/biascorrection.cpp
 		    // ======
 		    // Roberts, Adam, et al.
 		    // "Improving RNA-Seq expression estimates by correcting for fragment bias."
 		    // Genome Biol 12.3 (2011): R22.
 		    // ======
 		    // perhaps, define these in a more data-driven way
-		    if (t.RefLength <= 1334) {
-			    txp.lengthClassIndex(0);
-		    } else if (t.RefLength <= 2104) {
-			    txp.lengthClassIndex(0);
-		    } else if (t.RefLength <= 2988) {
-			    txp.lengthClassIndex(0);
-		    } else if (t.RefLength <= 4389) {
-			    txp.lengthClassIndex(0);
-		    } else {
-			    txp.lengthClassIndex(0);
-		    }
-		    /*
-		       std::cerr << "TS = " << t.RefName << " : \n";
-		       std::cerr << seq << "\n VS \n";
-		       for (size_t i = 0; i < t.RefLength; ++i) {
-		       std::cerr << transcripts_.back().charBaseAt(i);
-		       }
-		       std::cerr << "\n\n";
-		       */
+            if (txp.RefLength <= 791) {
+                txp.lengthClassIndex(0);
+            } else if (txp.RefLength <= 1265) {
+                txp.lengthClassIndex(1);
+            } else if (txp.RefLength <= 1707) {
+                txp.lengthClassIndex(2);
+            } else if (txp.RefLength <= 2433) {
+                txp.lengthClassIndex(3);
+            } else {
+                txp.lengthClassIndex(4);
+            }
 		    free(rseq);
 		    /* end BWA code */
             ++tnum;
@@ -429,7 +430,10 @@ class ReadExperiment {
         LibraryFormat fmt1(ReadType::SINGLE_END, ReadOrientation::NONE, ReadStrandedness::U);
         LibraryFormat fmt2(ReadType::SINGLE_END, ReadOrientation::NONE, ReadStrandedness::U);
 
-        std::ofstream ofile(opath.string());
+        std::ofstream os(opath.string());
+        cereal::JSONOutputArchive oa(os);
+
+        //std::ofstream ofile(opath.string());
 
         fmt::MemoryWriter errstr;
 
@@ -487,13 +491,27 @@ class ReadExperiment {
 
                 if ( std::abs(ratio - 0.5) > 0.01) {
                     errstr << "NOTE: Read Lib [" << rl.readFilesAsString() << "] :\n";
-                    errstr << "\nDetected a strand bias > 1\% in an unstranded protocol "
+                    errstr << "\nDetected a *potential* strand bias > 1\% in an unstranded protocol "
                            << "check the file: " << opath.string() << " for details\n";
 
                     log->warn() << errstr.str();
                     errstr.clear();
                 }
+                
 
+                oa(cereal::make_nvp("read_files", rl.readFilesAsString()));
+                std::string expectedFormat = rl.format().toString();
+                oa(cereal::make_nvp("expected_format", expectedFormat));
+
+                double compatFragmentRatio = rl.numCompat() / static_cast<double>(numAssignedFragments_);
+                oa(cereal::make_nvp("compatible_fragment_ratio", compatFragmentRatio));
+                oa(cereal::make_nvp("num_compatible_fragments", rl.numCompat()));
+                oa(cereal::make_nvp("num_assigned_fragments", numAssignedFragments_.load()));
+
+                oa(cereal::make_nvp("num_consistent_mappings", numAgree));
+                oa(cereal::make_nvp("num_inconsistent_mappings", numDisagree));
+                oa(cereal::make_nvp("strand_mapping_bias", ratio));
+                    /*
                 ofile << "========\n"
                       << "Read library consisting of files: "
                       << rl.readFilesAsString()
@@ -506,6 +524,7 @@ class ReadExperiment {
                       << "# alignments with format " << fmt1 << ": " << numFmt1 << "\n"
                       << "# alignments with format " << fmt2 << ": " << numFmt2 << "\n"
                       << "\n========\n";
+                    */
             } else {
                 numAgree = 0;
                 numDisagree = 0;
@@ -518,6 +537,19 @@ class ReadExperiment {
                     }
                 } // end for
 
+                oa(cereal::make_nvp("read_files", rl.readFilesAsString()));
+                std::string expectedFormat = rl.format().toString();
+                oa(cereal::make_nvp("expected_format", expectedFormat));
+
+                double compatFragmentRatio = rl.numCompat() / static_cast<double>(numAssignedFragments_);
+                oa(cereal::make_nvp("compatible_fragment_ratio", compatFragmentRatio));
+                oa(cereal::make_nvp("num_compatible_fragments", rl.numCompat()));
+                oa(cereal::make_nvp("num_assigned_fragments", numAssignedFragments_.load()));
+
+                oa(cereal::make_nvp("num_consistent_mappings", numAgree));
+                oa(cereal::make_nvp("num_inconsistent_mappings", numDisagree));
+
+                /*
                 ofile << "========\n"
                       << "Read library consisting of files: "
                       << rl.readFilesAsString()
@@ -527,13 +559,15 @@ class ReadExperiment {
                       << "# of consistent alignments: " << numAgree << "\n"
                       << "# of inconsistent alignments: " << numDisagree << "\n"
                       << "\n========\n";
-
+                */
             } //end else
 
-            double disagreeRatio = static_cast<double>(numDisagree) / (numAgree + numDisagree);
+
+            double compatFragmentRatio = rl.numCompat() / static_cast<double>(numAssignedFragments_);
+            double disagreeRatio = 1.0 - compatFragmentRatio;
             if (disagreeRatio > 0.05) {
                 errstr << "NOTE: Read Lib [" << rl.readFilesAsString() << "] :\n";
-                errstr << "\nGreater than 5\% of the alignments (but not, necessarily reads) "
+                errstr << "\nGreater than 5\% of the fragments "
                        << "disagreed with the provided library type; "
                        << "check the file: " << opath.string() << " for details\n";
 
@@ -541,13 +575,17 @@ class ReadExperiment {
                 errstr.clear();
             }
 
-            ofile << "---- counts for each format type ---\n";
+            //ofile << "---- counts for each format type ---\n";
             for (size_t i = 0; i < counts.size(); ++i) {
-                ofile << LibraryFormat::formatFromID(i) << " : " << counts[i] << "\n";
+                //ofile << LibraryFormat::formatFromID(i) << " : " << counts[i] << "\n";
+                std::string desc = LibraryFormat::formatFromID(i).toString();
+                if (!desc.empty()) {
+                    oa(cereal::make_nvp(desc, counts[i].load()));
+                }
             }
-            ofile << "------------------------------------\n\n";
+            //ofile << "------------------------------------\n\n";
         }
-        ofile.close();
+        //ofile.close();
     }
 
     std::vector<ReadLibrary>& readLibraries() { return readLibraries_; }
@@ -590,8 +628,27 @@ class ReadExperiment {
         return observedGC_;
     }
 
-    ReadKmerDist<6, std::atomic<uint32_t>>& readBias() { return readBias_; }
-    const ReadKmerDist<6, std::atomic<uint32_t>>& readBias() const { return readBias_; }
+    std::vector<SimplePosBias>& posBias(salmon::utils::Direction dir) { 
+        return (dir == salmon::utils::Direction::FORWARD) ? posBiasFW_ : posBiasRC_; 
+    }
+    const std::vector<SimplePosBias>& posBias(salmon::utils::Direction dir) const { 
+        return (dir == salmon::utils::Direction::FORWARD) ? posBiasFW_ : posBiasRC_; 
+    }
+
+    ReadKmerDist<6, std::atomic<uint32_t>>& readBias(salmon::utils::Direction dir) { 
+        return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0] : readBias_[1]; 
+    }
+    const ReadKmerDist<6, std::atomic<uint32_t>>& readBias(salmon::utils::Direction dir) const { 
+        return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0] : readBias_[1]; 
+    }
+
+    SBModel& readBiasModel(salmon::utils::Direction dir) { 
+        return (dir == salmon::utils::Direction::FORWARD) ? readBiasModel_[0] : readBiasModel_[1]; 
+    }
+    const SBModel& readBiasModel(salmon::utils::Direction dir) const { 
+        return (dir == salmon::utils::Direction::FORWARD) ? readBiasModel_[0] : readBiasModel_[1]; 
+    }
+
 
     private:
     /**
@@ -645,6 +702,10 @@ class ReadExperiment {
     std::unique_ptr<FragmentLengthDistribution> fragLengthDist_;
     EquivalenceClassBuilder eqBuilder_;
 
+    /** Positional bias things**/
+    std::vector<SimplePosBias> posBiasFW_;
+    std::vector<SimplePosBias> posBiasRC_;
+ 
     /** GC-fragment bias things **/
     // One bin for each percentage GC content
     double gcFracFwd_{-1.0};
@@ -654,7 +715,9 @@ class ReadExperiment {
     /** Sequence specific bias things **/
     // Since multiple threads can touch this dist, we
     // need atomic counters.
-    ReadKmerDist<6, std::atomic<uint32_t>> readBias_;
+    std::array<ReadKmerDist<6, std::atomic<uint32_t>>, 2> readBias_;
+    std::array<SBModel, 2> readBiasModel_;
+    //std::array<std::vector<double>, 2> expectedBias_;
     std::vector<double> expectedBias_;
 };
 

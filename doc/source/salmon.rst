@@ -367,32 +367,7 @@ For more details on the library type, see :ref:`FragLibType`.
 Output
 ------
 
-Salmon writes its output in a simple tab-delimited file format.  Any line that begins 
-with a ``#`` is a comment line, and can be safely ignored.  Salmon records the files
-and options passed to it in comments at the top of its output file.  The last comment 
-line gives the names of each of the data columns. The columns appear in the following order: 
-
-+------+--------+-----+----------+
-| Name | Length | TPM | NumReads |
-+------+--------+-----+----------+
-
-Each subsequent row described a single quantification record.  The columns have
-the following interpretation.
-
-* **Name** --- 
-  This is the name of the target transcript provided in the input transcript database (FASTA file). 
-
-* **Length** ---
-  This is the length of the target transcript in nucleotides.
-
-* **TPM** ---
-  This is salmon's estimate of the relative abundance of this transcript in units of Transcripts Per Million (TPM).
-  TPM is the recommended relative abundance measure to use for downstream analysis. 
-
-* **NumReads** --- 
-  This is salmon's estimate of the number of reads mapping to each transcript that was quantified.  It is an "estimate" 
-  insofar as it is the expected number of reads that have originated from each transcript given the structure of the uniquely 
-  mapping and multi-mapping reads and the relative abundance estimates for each transcript.
+For details of Salmon's different output files and their formats see :ref: `FileFormats`.
 
 Misc
 ----

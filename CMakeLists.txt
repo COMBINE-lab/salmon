@@ -4,9 +4,9 @@ enable_testing()
 
 project (Salmon)
 
-set(CPACK_PACKAGE_VERSION "0.6.0")
+set(CPACK_PACKAGE_VERSION "0.7.0")
 set(CPACK_PACKAGE_VERSION_MAJOR "0")
-set(CPACK_PACKAGE_VERSION_MINOR "6")
+set(CPACK_PACKAGE_VERSION_MINOR "7")
 set(CPACK_PACKAGE_VERSION_PATCH "0")
 set(CPACK_GENERATOR "TGZ")
 set(CPACK_SOURCE_GENERATOR "TGZ")
@@ -26,7 +26,7 @@ SET(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
 
 ## Set the standard required compile flags
 # Nov 18th --- removed -DHAVE_CONFIG_H
-set (CMAKE_CXX_FLAGS "-pthread -funroll-loops -fPIC -fomit-frame-pointer -Ofast -DRAPMAP_SALMON_SUPPORT -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -Wno-reorder -Wno-unused-variable -std=c++11 -Wreturn-type -Werror=return-type")
+set (CMAKE_CXX_FLAGS "-pthread -ftree-vectorize -funroll-loops -fPIC -fomit-frame-pointer -Ofast -DRAPMAP_SALMON_SUPPORT -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -Wno-reorder -Wno-unused-variable -std=c++11 -Wreturn-type -Werror=return-type")
 
 ##
 # OSX is strange (some might say, stupid in this regard).  Deal with it's quirkines here.
@@ -523,10 +523,10 @@ message("Build system will fetch SPDLOG")
 message("==================================================================")
 ExternalProject_Add(libspdlog
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/spdlog/archive/v1.7.tar.gz -o spdlog-v1.7.tar.gz &&
-                     tar -xzf spdlog-v1.7.tar.gz &&
+    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/spdlog/archive/v1.8.tar.gz -o spdlog-v1.8.tar.gz &&
+                     tar -xzf spdlog-v1.8.tar.gz &&
                      rm -fr spdlog &&
-                     mv -f  spdlog-1.7 spdlog
+                     mv -f  spdlog-1.8 spdlog
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/spdlog
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ""

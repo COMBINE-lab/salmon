@@ -153,10 +153,18 @@ bool GZipWriter::writeMeta(
   writeVectorToFile(normBiasPath, experiment.expectedSeqBias());
 
   bfs::path obsBiasPath = auxDir / "observed_bias.gz";
-  const auto& bcounts = experiment.readBias().counts;
+  // TODO: dump both sense and anti-sense models
+  const auto& bcounts = experiment.readBias(salmon::utils::Direction::FORWARD).counts;
   std::vector<int32_t> observedBias(bcounts.size(), 0);
   std::copy(bcounts.begin(), bcounts.end(), observedBias.begin());
   writeVectorToFile(obsBiasPath, observedBias);
+  
+  bfs::path obsBiasPath3p = auxDir / "observed_bias_3p.gz";
+  const auto& bcounts3p = experiment.readBias(salmon::utils::Direction::REVERSE_COMPLEMENT).counts;
+  std::vector<int32_t> observedBias3p(bcounts3p.size(), 0);
+  std::copy(bcounts3p.begin(), bcounts3p.end(), observedBias3p.begin());
+  writeVectorToFile(obsBiasPath3p, observedBias3p);
+
 
   bfs::path normGCPath = auxDir / "expected_gc.gz";
   writeVectorToFile(normGCPath, experiment.expectedGCBias());
