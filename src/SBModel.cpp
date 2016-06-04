@@ -16,17 +16,17 @@ SBModel::SBModel() : _trained(false) {
   //         -5 -4 -3 -2 -1  0  1  2  3  4  5  6  7  8  9
       
   // Simple model
-  //_order = {0, 0, 1, 2, 2, 2, 1, 1, 0};
+   _order = {0, 0, 1, 2, 2, 2, 2, 1, 0};
   //        -3 -2 -1  0  1  2  3  4  5
 
   // Short model
-  _order = {0, 1, 2, 2, 2, 2};
+  //_order = {0, 1, 2, 2, 2, 2};
   //       -2 -1  0 1  2  3    
 
   // The number of bases before the read start position.
-  _contextLeft = 2;
+  _contextLeft = 3;
   // The number of bases after the read start position.
-  _contextRight = 3;
+  _contextRight = 5;
 
   // The total length of the contexts we'll consider
   _contextLength = _order.size();
