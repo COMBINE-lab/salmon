@@ -844,11 +844,11 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   bool converged{false};
   double maxRelDiff = -std::numeric_limits<double>::max();
   bool needBias = doBiasCorrect;
+  //bool secondPass = false;
+  size_t targetIt{10};
+  
   while (itNum < minIter or (itNum < maxIter and !converged) or needBias) {
-    if (needBias and (itNum > 10 or converged)) {
-      // if (doBiasCorrect and
-      //(find(recomputeIt.begin(), recomputeIt.end(), itNum) !=
-      // recomputeIt.end())) {
+    if (needBias and (itNum > targetIt or converged)) {
 
       jointLog->info("iteration {}, recomputing effective lengths", itNum);
       effLens = salmon::utils::updateEffectiveLengths(sopt, readExp, effLens,

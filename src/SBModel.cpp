@@ -23,13 +23,19 @@ SBModel::SBModel() : _trained(false) {
   //_order = {0, 1, 2, 2, 2, 2};
   //       -2 -1  0 1  2  3    
 
+  // The total length of the contexts we'll consider
+  _contextLength = _order.size();
   // The number of bases before the read start position.
   _contextLeft = 3;
   // The number of bases after the read start position.
   _contextRight = 5;
 
-  // The total length of the contexts we'll consider
-  _contextLength = _order.size();
+  if ((_contextLeft + _contextRight + 1) !=  _contextLength) {
+    std::cerr << "The left (" << _contextLeft << ") and right (" << _contextRight << ") "
+                 "context length (+1) didn't match the size of the model provided "
+                 "(" << _contextLength << "); something is wrong!\n";
+    std::exit(1);
+  }
 
   _marginals = Eigen::MatrixXd(4, _contextLength);
   _marginals.setZero();

@@ -36,6 +36,7 @@
 
 #include "GenomicFeature.hpp"
 #include "TranscriptGeneMap.hpp"
+#include "SGSmooth.hpp"
 
 namespace salmon {
 namespace utils {
@@ -1520,7 +1521,7 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
 
           // Skip transcripts with trivial expression or that are too
           // short
-          if (alphas[it] < minAlpha or unprocessedLen <= 0) { //} or txp.uniqueUpdateFraction() < 0.90) {
+          if (alphas[it] < minAlpha or unprocessedLen <= 0) {  // or txp.uniqueUpdateFraction() < 0.90) {
             if (alphas[it] >= minAlpha) {
               ++numExpressedTranscripts;
             }
@@ -1662,8 +1663,32 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
     }
   }
 
-  sopt.jointLog->info("Computed expected counts (for bias correction)");
+  auto smoothDist = [](std::vector<double>& v, int w, int d) -> void {
+    v = sg_smooth(v, w, d); 
+    double gcSum = 0.0;
+    for (size_t i = 0; i < v.size(); ++i) {
+      if (v[i] < 1e-5) { v[i] = 1e-5; }
+      gcSum += v[i];
+    }
+    for (size_t i = 0; i < v.size(); ++i) {
+      v[i] /= gcSum;
+    }
+  };
 
+  /*
+  smoothDist(transcriptGCDist, 5,  3);
+  smoothDist(gcCounts, 5,  3);
+  // Compute the bias weights for each fragment-GC bin
+  Eigen::VectorXd gcBias(101);
+  if (gcBiasCorrect) {
+    for (size_t i = 0; i < 101; ++i) {
+      gcBias[i] = (gcCounts[i] / (transcriptGCDist[i]));
+    }
+  }
+  */
+
+  sopt.jointLog->info("Computed expected counts (for bias correction)");
+  
   // Compute appropriate priors and normalization factors
   double txomeGCNormFactor = 0.0;
   double gcPrior = 0.0;
@@ -1678,17 +1703,22 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
   }
   double scaleGCBias = (txomeGCNormFactor / readGCNormFactor);
 
-  exp5.normalize();
-  exp3.normalize();
-
   // Compute the bias weights for each fragment-GC bin
   Eigen::VectorXd gcBias(101);
+  double gcBiasMax = 20.0;
+  double gcBiasMin = 1.0 / gcBiasMax;
   if (gcBiasCorrect) {
     for (size_t i = 0; i < 101; ++i) {
-      gcBias[i] = (gcCounts[i] / (gcPrior + transcriptGCDist[i]));
+      gcBias[i] = scaleGCBias * (gcCounts[i] / (gcPrior + transcriptGCDist[i]));
+      gcBias[i] = (gcBias[i] > gcBiasMax) ? gcBiasMax :
+          ((gcBias[i] < gcBiasMin) ? gcBiasMin : gcBias[i]);
     }
-    gcBias *= scaleGCBias;
+    //gcBias *= scaleGCBias;
   }
+  
+    
+  exp5.normalize();
+  exp3.normalize();
 
   bool noThreshold = sopt.noBiasLengthThreshold;
   std::atomic<size_t> numCorrected{0};
@@ -1849,18 +1879,20 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
 
             if (numProcessed > nextUpdate) {
               updateMutex.try_lock();
-              sopt.jointLog->info(
-                  "processed bias for {:3.1f}% of the transcripts",
-                  100.0 * (numProcessed / static_cast<double>(numTranscripts)));
-              nextUpdate += stepSize;
-              if (nextUpdate > numTranscripts) {
-                nextUpdate = numTranscripts - 1;
-              }
-              updateMutex.unlock();
-            }
-            ++numProcessed;
+	      if (numProcessed > nextUpdate) {
+		sopt.jointLog->info(
+				    "processed bias for {:3.1f}% of the transcripts",
+				    100.0 * (numProcessed / static_cast<double>(numTranscripts)));
+		nextUpdate += stepSize;
+		if (nextUpdate > numTranscripts) {
+		  nextUpdate = numTranscripts - 1;
+		}
+	      }
+	      updateMutex.unlock();
+	    }
+	    ++numProcessed;
 
-            size_t sp = static_cast<size_t>((fl > 0) ? fl - 1 : 0);
+	    size_t sp = static_cast<size_t>((fl > 0) ? fl - 1 : 0);
             double prevFLMass = cdf[sp];
             double unbiasedMass{0.0};
 
@@ -1907,7 +1939,7 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
 
           // throw caution to the wind
           double thresh = noThreshold ? 1.0 : unprocessedLen;
-	  double minAllowedLength = 0.5 * minObservedLength;
+          double minAllowedLength = 0.5 * minObservedLength;//std::max(0.5 * minObservedLength, elen * 0.1);
           auto barrierLength = [minAllowedLength](double x) -> double {
             return x + ((minAllowedLength * minAllowedLength) /
                         (x + minAllowedLength));

@@ -63,6 +63,7 @@ SBModel.cpp
 SalmonUtils.cpp
 SalmonStringUtils.cpp
 SimplePosBias.cpp
+SGSmooth.cpp
 )
 
 set ( UNIT_TESTS_SRCS
