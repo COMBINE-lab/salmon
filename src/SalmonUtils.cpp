@@ -41,6 +41,25 @@
 namespace salmon {
 namespace utils {
 
+std::string str(const MappingType& mt) {
+    switch (mt) {
+        case MappingType::UNMAPPED:
+            return "u";
+        case MappingType::LEFT_ORPHAN:
+            return "m1";
+        case MappingType::RIGHT_ORPHAN:
+            return "m2";
+        case MappingType::BOTH_ORPHAN:
+            return "m12";
+        case MappingType::PAIRED_MAPPED:
+            return "mp";
+        case MappingType::SINGLE_MAPPED:
+            return "ms";
+        }
+    // should never get here!
+    return "E";
+}
+    
 bool headersAreConsistent(SAM_hdr* h1, SAM_hdr* h2) {
 
   bool consistent{true};

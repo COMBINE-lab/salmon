@@ -706,7 +706,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   bool useVBEM{sopt.useVBOpt};
 
   // If we use VBEM, we'll need the prior parameters
-  double priorAlpha = 0.01;
+  double priorAlpha = 1.0;//0.01;
 
   auto jointLog = sopt.jointLog;
 

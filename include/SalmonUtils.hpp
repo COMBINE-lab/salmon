@@ -43,6 +43,14 @@ using NameVector = std::vector<string>;
 using IndexVector = std::vector<size_t>;
 using KmerVector = std::vector<uint64_t>;
 using MateStatus = rapmap::utils::MateStatus;
+    
+// Keep track of the type of mapping that was obtained for this read
+enum class MappingType : uint8_t { 
+    UNMAPPED = 0, LEFT_ORPHAN = 1, RIGHT_ORPHAN = 2, BOTH_ORPHAN = 3, 
+        PAIRED_MAPPED = 4,  SINGLE_MAPPED = 5 };
+
+std::string str(const MappingType& mt);
+
 
 // To keep track of short fragments (shorter than the k-mer length)
 // on which the index was built.
