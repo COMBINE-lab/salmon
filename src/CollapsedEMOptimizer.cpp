@@ -144,7 +144,6 @@ void VBEMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
   double logNorm = boost::math::digamma(alphaSum);
 
   double prior = priorAlpha;
-  double priorNorm = prior * totLen;
 
   for (size_t i = 0; i < transcripts.size(); ++i) {
     if (alphaIn[i] > ::digammaMin) {
@@ -278,7 +277,6 @@ void VBEMUpdate_(std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
                      &expTheta](const BlockedIndexRange& range) -> void {
 
                       double prior = priorAlpha;
-                      double priorNorm = prior * totLen;
 
                       for (auto i : boost::irange(range.begin(), range.end())) {
                         if (alphaIn[i] > ::digammaMin) {
@@ -288,7 +286,7 @@ void VBEMUpdate_(std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
                         } else {
                           expTheta[i] = 0.0;
                         }
-                        alphaOut[i] = prior;
+                        alphaOut[i] = prior;//* transcripts[i].RefLength;
                       }
                     });
 
@@ -450,7 +448,7 @@ bool doBootstrap(
     size_t itNum = 0;
 
     // If we use VBEM, we'll need the prior parameters
-    double priorAlpha = 0.01;
+    double priorAlpha = 1.00;
     double minAlpha = 1e-8;
     double alphaCheckCutoff = 1e-2;
     double cutoff = (useVBEM) ? (priorAlpha + minAlpha) : minAlpha;
@@ -553,7 +551,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
 
   bool useVBEM{sopt.useVBOpt};
   // If we use VBEM, we'll need the prior parameters
-  double priorAlpha = 0.01;
+  double priorAlpha = 1.00;
 
   auto jointLog = sopt.jointLog;
 
