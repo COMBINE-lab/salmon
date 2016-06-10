@@ -699,7 +699,6 @@ void processReadsQuasi(
   std::vector<QuasiAlignment> leftHits;
   std::vector<QuasiAlignment> rightHits;
   rapmap::utils::HitCounters hctr;
-  salmon::utils::MappingType mapType{salmon::utils::MappingType::UNMAPPED};
 
   while (true) {
     typename paired_parser::job j(*parser); // Get a job from the parser: a
@@ -730,7 +729,6 @@ void processReadsQuasi(
       auto& jointHits = jointHitGroup.alignments();
       leftHits.clear();
       rightHits.clear();
-      mapType = salmon::utils::MappingType::UNMAPPED;
 
       bool lh = tooShortLeft ? false : hitCollector(j->data[i].first.seq,
                                                     leftHits, saSearcher,
@@ -777,10 +775,6 @@ void processReadsQuasi(
       if (jointHits.size() > 0) {
         bool isPaired = jointHits.front().mateStatus ==
                         rapmap::utils::MateStatus::PAIRED_END_PAIRED;
-        if (isPaired) { 
-            mapType = salmon::utils::MappingType::PAIRED_MAPPED; 
-        }
-
         // If we are ignoring orphans
         if (!salmonOpts.allowOrphans) {
           // If the mappings for the current read are not properly-paired (i.e.
@@ -801,19 +795,6 @@ void processReadsQuasi(
                   return q.mateStatus ==
                          rapmap::utils::MateStatus::PAIRED_END_LEFT;
                 });
-            // If we found left hits
-            bool foundLeftMappings = (leftHitEndIt > jointHits.begin());
-            // If we found right hits
-            bool foundRightMappings = (leftHitEndIt  < jointHits.end());
-
-            if (foundLeftMappings and foundRightMappings) {
-                mapType = salmon::utils::MappingType::BOTH_ORPHAN;
-            } else if (foundLeftMappings) { 
-                mapType = salmon::utils::MappingType::LEFT_ORPHAN;
-            } else if (foundRightMappings) { 
-                mapType = salmon::utils::MappingType::RIGHT_ORPHAN;
-            }
-
             // Merge the hits so that the entire list is in order
             // by transcript ID.
             std::inplace_merge(
@@ -933,15 +914,10 @@ void processReadsQuasi(
           } break;
           }
         }
-      } else {
-          // This read was completely unmapped.
-          mapType = salmon::utils::MappingType::UNMAPPED;
-      } 
-      
-      if (writeUnmapped and mapType != salmon::utils::MappingType::PAIRED_MAPPED) {
+      } else if (writeUnmapped) {
           // If we have no mappings --- then there's nothing to do
           // unless we're outputting names for un-mapped reads
-          unmappedNames << j->data[i].first.header << ' ' << salmon::utils::str(mapType) << '\n';
+          unmappedNames << j->data[i].first.header << '\n';
       }
       
       validHits += jointHits.size();
@@ -1154,7 +1130,7 @@ void processReadsQuasi(
       if (writeUnmapped and jointHits.empty()) {
           // If we have no mappings --- then there's nothing to do
           // unless we're outputting names for un-mapped reads
-          unmappedNames << j->data[i].header << " u\n";
+          unmappedNames << j->data[i].header << '\n';
       }
 
       validHits += jointHits.size();
@@ -2049,8 +2025,16 @@ int salmonQuantify(int argc, char* argv[]) {
           "This is mutually exclusive with Gibbs sampling.")(
           "quiet,q", po::bool_switch(&(sopt.quiet))->default_value(false),
           "Be quiet while doing quantification (don't write informative "
-          "output to the console unless something goes wrong).")(
-          "writeUnmappedNames",
+          "output to the console unless something goes wrong).")
+         ("perTranscriptPrior", po::bool_switch(&(sopt.perTranscriptPrior)), "The "
+          "prior (either the default or the argument provided via --vbPrior) will "
+	  "be interpreted as a transcript-level prior (i.e. each transcript will "
+	  "be given a prior read count of this value)")
+         ("vbPrior", po::value<double>(&(sopt.vbPrior))->default_value(1e-3),
+          "The prior that will be used in the VBEM algorithm.  This is interpreted "
+          "as a per-nucleotide prior, unless the --perTranscriptPrior flag "
+          "is also given, in which case this is used as a transcript-level prior")
+         ("writeUnmappedNames",
 	  po::bool_switch(&(sopt.writeUnmappedNames))->default_value(false),
 	  "Write the names of un-mapped reads to the file unmapped.txt in the auxiliary directory.");
 

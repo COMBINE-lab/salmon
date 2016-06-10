@@ -134,6 +134,9 @@ struct SalmonOpts {
     std::atomic<int32_t> numBiasSamples{1000000}; // The number of fragment mappings to consider when building
 						  // the sequence-specific "foreground" distribution.
 
+    // Related to the prior of the VBEM algorithm
+    double vbPrior{1e-3};
+    bool perTranscriptPrior{false};
     // Related to the fragment length distribution
     size_t fragLenDistMax;
     size_t fragLenDistPriorMean;
