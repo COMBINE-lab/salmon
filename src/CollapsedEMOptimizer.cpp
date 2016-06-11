@@ -442,6 +442,7 @@ bool doBootstrap(
   std::vector<uint64_t> sampCounts(numClasses, 0);
 
   uint32_t numBootstraps = sopt.numBootstraps;
+  bool perTranscriptPrior{sopt.perTranscriptPrior};
 
   auto& jointLog = sopt.jointLog;
 
@@ -497,7 +498,20 @@ bool doBootstrap(
       ++itNum;
     }
 
-    double alphaSum = truncateCountVector(alphas, cutoff);
+    // Truncate tiny expression values
+    double alphaSum = 0.0;
+    if (useVBEM and !perTranscriptPrior) {
+        std::vector<double> cutoffs(transcripts.size(), 0.0);
+        for (size_t i = 0; i < transcripts.size(); ++i) {
+            cutoffs[i] = priorAlphas[i] + minAlpha;
+        }
+        //alphaSum = truncateCountVector(alphas, cutoffs);
+        alphaSum = truncateCountVector(alphas, cutoffs);
+    } else {
+        // Truncate tiny expression values
+        alphaSum = truncateCountVector(alphas, cutoff);
+    }
+
 
     if (alphaSum < minWeight) {
       jointLog->error("Total alpha weight was too small! "
