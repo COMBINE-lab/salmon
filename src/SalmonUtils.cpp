@@ -1540,8 +1540,9 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
 
           // Skip transcripts with trivial expression or that are too
           // short
-          if (alphas[it] < minAlpha or unprocessedLen <= 0) {  // or txp.uniqueUpdateFraction() < 0.90) {
-            if (alphas[it] >= minAlpha) {
+	  double minBackgroundAlpha = 1.0;
+          if (alphas[it] < minBackgroundAlpha or unprocessedLen <= 0) {  // or txp.uniqueUpdateFraction() < 0.90) {
+            if (alphas[it] >= minBackgroundAlpha) {
               ++numExpressedTranscripts;
             }
             continue;
@@ -1724,7 +1725,7 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
 
   // Compute the bias weights for each fragment-GC bin
   Eigen::VectorXd gcBias(101);
-  double gcBiasMax = 20.0;
+  double gcBiasMax = 100.0;
   double gcBiasMin = 1.0 / gcBiasMax;
   if (gcBiasCorrect) {
     for (size_t i = 0; i < 101; ++i) {
