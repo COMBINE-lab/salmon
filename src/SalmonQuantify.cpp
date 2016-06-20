@@ -522,12 +522,13 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
         }
         double r = uni(randEng);
         if (!burnedIn and r < std::exp(aln.logProb)) {
-          // errMod.update(aln, transcript, aln.logProb, logForgettingMass);
-          double fragLength = aln.fragLength();
-          if (useFragLengthDist and fragLength > 0.0) {
-            // if (aln.fragType() == ReadType::PAIRED_END) {
-            fragLengthDist.addVal(fragLength, logForgettingMass);
-          }
+            
+            //Old fragment length calc: double fragLength = aln.fragLength();
+            auto fragLength = aln.fragLengthPedantic(transcript.RefLength);
+            if (fragLength > 0) {
+                fragLengthDist.addVal(fragLength, logForgettingMass);
+            }
+
           if (useFSPD) {
             auto hitPos = aln.hitPos();
             auto& fragStartDist = fragStartDists[transcript.lengthClassIndex()];
@@ -1934,9 +1935,11 @@ int salmonQuantify(int argc, char* argv[]) {
           "and may be unstable.  A larger value results in slower learning but "
           "may be more stable.  Value should "
           "be in the interval (0.5, 1.0].")(
-          "maxOcc,m",
+          "maxOcc,m", 
           po::value<int>(&(memOptions->max_occ))->default_value(200),
           "(S)MEMs occuring more than this many times won't be considered.")(
+          "initUniform", po::bool_switch(&(sopt.initUniform))->default_value(false),
+          "initialize the offline inference with uniform parameters, rather than seeding with online parameters.")(
           "maxReadOcc,w",
           po::value<uint32_t>(&(sopt.maxReadOccs))->default_value(100),
           "Reads \"mapping\" to more than this many places won't be "
@@ -1965,12 +1968,12 @@ int salmonQuantify(int argc, char* argv[]) {
           "[experimental] : "
           "Consider / model non-uniformity in the fragment start positions "
           "across the transcript.")(
-          "useBiasLengthThreshold",
-          po::bool_switch(&(sopt.useBiasLengthThreshold))->default_value(false),
+          "noBiasLengthThreshold",
+          po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(false),
           "[experimental] : "
-          "If this option is enabled, then bias correction will not be allowed "
-          "to estimate effective lengths "
-          "shorter than the approximate mean fragment length")(
+          "If this option is enabled, then no (lower) threshold will be set on "
+          "how short bias correction can make effective lengths. This can increase the precision "
+          "of bias correction, but harm robustness.  The default correction applies a threshold")(
           "numBiasSamples",
           po::value<int32_t>(&numBiasSamples)->default_value(2000000),
           "Number of fragment mappings to use when learning the "

@@ -81,7 +81,11 @@ struct UnpairedRead {
    inline bool isLeft()  const { return !isRight(); }
    inline int32_t left() const { return bam_pos(read); }
    inline int32_t right() const { return left() + bam_seq_len(read); }
+   // will always be at least the length of a single read
    inline uint32_t fragLen() const { return 0; }
+   // from the leftmost end of the 5' read to the rightmost 
+   // end of the 3' read (can be less than the length of a single read)
+   inline uint32_t fragLengthPedantic(uint32_t txpLen) const { return 0; }
    inline ReadType fragType() const { return ReadType::SINGLE_END; }
    inline int32_t transcriptID() const { return bam_ref(read); }
 

@@ -1175,38 +1175,6 @@ std::vector<std::string> split(const std::string& str,
   return result;
 }
 
-std::vector<int32_t> samplesFromLogPMF(FragmentLengthDistribution* fld,
-                                       int32_t numSamples) {
-  std::vector<double> logPMF;
-  size_t minVal;
-  size_t maxVal;
-  double logFLDMean = fld->mean();
-  fld->dumpPMF(logPMF, minVal, maxVal);
-  double sum = salmon::math::LOG_0;
-  for (auto v : logPMF) {
-    sum = salmon::math::logAdd(sum, v);
-  }
-  for (auto& v : logPMF) {
-    v -= sum;
-  }
-
-  // Create the non-logged pmf
-  std::vector<double> pmf(maxVal + 1, 0.0);
-  for (size_t i = minVal; i < maxVal; ++i) {
-    pmf[i] = std::exp(logPMF[i - minVal]);
-  }
-
-  // generate samples
-  std::random_device rd;
-  std::mt19937 gen(rd());
-  std::discrete_distribution<int32_t> dist(pmf.begin(), pmf.end());
-
-  std::vector<int32_t> samples(pmf.size());
-  for (int32_t i = 0; i < numSamples; ++i) {
-    ++samples[dist(gen)];
-  }
-  return samples;
-}
 
 /**
  * Validate the options for quasi-mapping-based salmon, and create the necessary
@@ -1337,8 +1305,6 @@ bool processQuantOptions(SalmonOpts& sopt,
       return false;
     }
   }
-
-  sopt.noBiasLengthThreshold = !sopt.useBiasLengthThreshold;
 
   // maybe arbitrary, but if it's smaller than this, consider it
   // equal to LOG_0
@@ -1959,13 +1925,16 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
 
           // throw caution to the wind
           double thresh = noThreshold ? 1.0 : unprocessedLen;
+          /*
+          // JUNE 17
           double minAllowedLength = 0.5 * minObservedLength;//std::max(0.5 * minObservedLength, elen * 0.1);
           auto barrierLength = [minAllowedLength](double x) -> double {
             return x + ((minAllowedLength * minAllowedLength) /
                         (x + minAllowedLength));
           };
           effLength = barrierLength(effLength);
-
+          // END: JUNE 17
+          */
           // To correct the transcript length, we require it to be
           // "sufficiently" long to begin with.
           if (unprocessedLen > 0.0 and elen > thresh and effLength > thresh) {

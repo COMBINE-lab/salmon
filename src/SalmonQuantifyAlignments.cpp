@@ -266,8 +266,9 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                             } else {
                             }
                             */
-                            if(aln->isPaired() and aln->fragLen() > 0) {
-                                logFragProb = fragLengthDist.pmf(static_cast<size_t>(aln->fragLen()));
+                            auto fragLen = aln->fragLengthPedantic(transcript.RefLength);
+                            if(aln->isPaired() and fragLen > 0) {
+                                logFragProb = fragLengthDist.pmf(static_cast<size_t>(fragLen));
                             }
                         }
 
@@ -585,8 +586,10 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                             }
                             // Update the fragment length distribution
                             if (aln->isPaired() and !salmonOpts.noFragLengthDist) {
-                                double fragLength = aln->fragLen();
-                                fragLengthDist.addVal(fragLength, logForgettingMass);
+                                double fragLength = aln->fragLengthPedantic(transcript.RefLength);
+                                if (fragLength > 0) {
+                                    fragLengthDist.addVal(fragLength, logForgettingMass);
+                                }
                             }
                             // Update the fragment start position distribution
                             if (useFSPD) {
@@ -1167,9 +1170,10 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     advanced.add_options()
     ("auxDir", po::value<std::string>(&(sopt.auxDir))->default_value("aux"), "The sub-directory of the quantification directory where auxiliary information "
      			"e.g. bootstraps, bias parameters, etc. will be written.")
-    ("useBiasLengthThreshold", po::bool_switch(&(sopt.useBiasLengthThreshold))->default_value(false), "[experimental] : "
-                        "If this option is enabled, then bias correction will only be allowed to estimate effective lengths "
-                        "longer than the approximate mean fragment length")
+    ("noBiasLengthThreshold", po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(false), "[experimental] : "
+          "If this option is enabled, then no (lower) threshold will be set on "
+          "how short bias correction can make effective lengths. This can increase the precision "
+          "of bias correction, but harm robustness.  The default correction applies a threshold")
     ("fldMax" , po::value<size_t>(&(sopt.fragLenDistMax))->default_value(800), "The maximum fragment length to consider when building the empirical distribution")
     ("fldMean", po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(200), "The mean used in the fragment length distribution prior")
     ("fldSD" , po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(80), "The standard deviation used in the fragment length distribution prior")

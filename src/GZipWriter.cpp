@@ -3,6 +3,7 @@
 
 #include "cereal/archives/json.hpp"
 
+#include "DistributionUtils.hpp"
 #include "GZipWriter.hpp"
 #include "SalmonOpts.hpp"
 #include "ReadExperiment.hpp"
@@ -145,7 +146,7 @@ bool GZipWriter::writeMeta(
 
   bfs::path fldPath = auxDir / "fld.gz";
   int32_t numFLDSamples{10000};
-  auto fldSamples = salmon::utils::samplesFromLogPMF(
+  auto fldSamples = distribution_utils::samplesFromLogPMF(
                         experiment.fragmentLengthDistribution(), numFLDSamples);
   writeVectorToFile(fldPath, fldSamples);
 

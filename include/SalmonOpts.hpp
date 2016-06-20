@@ -127,6 +127,7 @@ struct SalmonOpts {
     uint32_t numGibbsSamples; // Number of rounds of Gibbs sampling to perform
     uint32_t numBootstraps; // Number of bootstrap samples to draw
 
+    bool initUniform{false}; // initialize offline optimization parameters uniformly, rather than with online estimates.
     bool alnMode{false};     // true if we're in alignment based mode, false otherwise
     bool biasCorrect{false}; // Perform sequence-specific bias correction
     bool gcBiasCorrect{false}; // Perform gc-fragment bias correction

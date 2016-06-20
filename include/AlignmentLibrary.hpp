@@ -9,6 +9,7 @@ extern "C" {
 }
 
 // Our includes
+#include "DistributionUtils.hpp"
 #include "SBModel.hpp"
 #include "ClusterForest.hpp"
 #include "Transcript.hpp"
@@ -170,15 +171,17 @@ class AlignmentLibrary {
         return eqBuilder_;
     }
 
+    // TODO: Make same as mapping-based
     void updateTranscriptLengthsAtomic(std::atomic<bool>& done) {
         if (sl_.try_lock()) {
             if (!done) {
-                auto& fld = *(flDist_.get());
+
+                auto fld = flDist_.get();
+                // Convert the PMF to non-log scale
                 std::vector<double> logPMF;
                 size_t minVal;
                 size_t maxVal;
-                double logFLDMean = fld.mean();
-                fld.dumpPMF(logPMF, minVal, maxVal);
+                fld->dumpPMF(logPMF, minVal, maxVal);
                 double sum = salmon::math::LOG_0;
                 for (auto v : logPMF) {
                     sum = salmon::math::logAdd(sum, v);
@@ -186,10 +189,28 @@ class AlignmentLibrary {
                 for (auto& v : logPMF) {
                     v -= sum;
                 }
+
+                // Create the non-logged distribution.
+                // Here, we multiply by 100 to discourage small
+                // numbers in the correctionFactorsfromCounts call
+                // below.
+                std::vector<double> pmf(maxVal + 1, 0.0);
+                for (size_t i = minVal; i < maxVal; ++i) {
+                    pmf[i] = 100.0 * std::exp(logPMF[i - minVal]);
+                }
+
+		using distribution_utils::DistributionSpace;
+		// We compute the factors in linear space (since we've de-logged the pmf)
+                auto correctionFactors = distribution_utils::correctionFactorsFromMass(pmf, DistributionSpace::LINEAR);
+		// Since we'll continue treating effective lengths in log space, populate them as such
+		distribution_utils::computeSmoothedEffectiveLengths(pmf.size(), transcripts_, correctionFactors, DistributionSpace::LOG);
+		
+		/*
                 // Update the effective length of *every* transcript
                 for( auto& t : transcripts_ ) {
                     t.updateEffectiveLength(logPMF, logFLDMean, minVal, maxVal);
                 }
+		*/
                 // then declare that we are done
                 done = true;
                 sl_.unlock();

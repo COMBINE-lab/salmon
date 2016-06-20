@@ -778,16 +778,21 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
     auto& txp = transcripts[i];
     alphas[i] = txp.projectedCounts;
 
-    if (txp.projectedCounts > 0) {
-      totalWeight += txp.projectedCounts;
-      alphasPrime[i] = 1.0;
-      ++numActive;
-    }
 
     effLens(i) = useEffectiveLengths
                      ? std::exp(txp.getCachedLogEffectiveLength())
                      : txp.RefLength;
     txp.EffectiveLength = effLens(i);
+
+    if (txp.uniqueCount() > 0) {
+      totalWeight += txp.uniqueCount();
+      alphasPrime[i] = 1.0;
+      ++numActive;
+    } else {
+      totalWeight += 1e-3 * effLens(i);
+      alphasPrime[i] = 1.0;
+      ++numActive;
+    }
 
     if (noRichEq or !useFSPD) {
       posWeightInvDenoms(i) = 1.0;
@@ -809,6 +814,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   double uniformPrior = totalWeight / static_cast<double>(numActive);
   // double fracObserved = 1.0;
   double fracObserved = std::min(1.0, totalWeight / sopt.numRequiredFragments);
+  if (sopt.initUniform) { fracObserved = 0.0; }
   for (size_t i = 0; i < alphas.size(); ++i) {
     alphas[i] = (alphasPrime[i] == 1.0)
                     ? ((alphas[i] * fracObserved) +

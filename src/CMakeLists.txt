@@ -61,6 +61,7 @@ GenomicFeature.cpp
 VersionChecker.cpp
 SBModel.cpp
 SalmonUtils.cpp
+DistributionUtils.cpp
 SalmonStringUtils.cpp
 SimplePosBias.cpp
 SGSmooth.cpp

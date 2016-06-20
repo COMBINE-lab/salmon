@@ -217,9 +217,10 @@ public:
         double refLen = static_cast<double>(RefLength);
         double logRefLength = std::log(refLen);
 
-        if (logRefLength <= logFLDMean) {
-            effectiveLength = logRefLength;
-        } else {
+	// JUNE 17 (just ensure it's >= 1)
+        //if (logRefLength <= logFLDMean) {
+        //    effectiveLength = logRefLength;
+        //} else {
             uint32_t mval = maxVal;
             size_t clen = minVal;
             size_t maxLen = std::min(RefLength, mval);
@@ -230,10 +231,11 @@ public:
                         logPMF[i] + std::log(refLen - clen + 1));
                 ++clen;
             }
-        }
-        if (std::exp(effectiveLength) <= 1.0) {
-            effectiveLength = salmon::math::LOG_1;
-        }
+	//}
+	if (salmon::math::isLog0(effectiveLength) or std::exp(effectiveLength) < 1.0) {
+	  effectiveLength = logRefLength;
+	  //effectiveLength = //salmon::math::LOG_1;
+    }
 
         return effectiveLength;
     }
@@ -243,6 +245,10 @@ public:
      */
     double getCachedLogEffectiveLength() {
         return cachedEffectiveLength_.load();
+    }
+
+    void setCachedLogEffectiveLength(double l) {
+        cachedEffectiveLength_.store(l);
     }
 
     void updateEffectiveLength(

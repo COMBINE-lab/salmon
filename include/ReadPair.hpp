@@ -108,6 +108,27 @@ struct ReadPair {
         return l;//bam_name_len(read1);
     }
 
+    // from the leftmost end of the 5' read to the rightmost 
+    // end of the 3' read (can be less than the length of a single read)
+    inline uint32_t fragLengthPedantic(uint32_t txpLen) const { 
+        if (!isPaired()) { return 0; }
+
+        bool fw1 = !bam_strand(read1);
+        bool fw2 = !bam_strand(read2);
+
+        if (fw1 != fw2) {
+            int32_t p1 = fw1 ? bam_pos(read1) : bam_pos(read2);
+            p1 = (p1 < 0) ? 0 : p1;
+            p1 = (p1 > txpLen) ? txpLen : p1;
+            int32_t p2 = fw1 ? bam_pos(read2) + bam_seq_len(read2) : bam_pos(read1) + bam_seq_len(read1); 
+            p2 = (p2 < 0) ? 0 : p2;
+            p2 = (p2 > txpLen) ? txpLen : p2;
+            return (p1 > p2) ? p1 - p2 : p2 - p1;
+        } 
+
+        return 0;
+    }
+    
     inline uint32_t fragLen() const {
         if (!isPaired()) { return 0; }
         auto leftmost1 = bam_pos(read1);

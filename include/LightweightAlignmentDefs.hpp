@@ -35,6 +35,7 @@ class SMEMAlignment {
 
         inline TranscriptID transcriptID() const { return transcriptID_; }
         inline uint32_t fragLength() const { return fragLength_; }
+        inline uint32_t fragLengthPedantic(uint32_t txpLen) const { return fragLength_; }
         inline LibraryFormat libFormat() const { return format_; }
         inline double score() const { return score_; }
         inline int32_t hitPos() const { return pos; }
@@ -59,6 +60,8 @@ class SMEMAlignment {
         int32_t matePos; // JUST FOR COMPATIBILITY WITH QUASI!
         bool fwd;
         bool mateIsFwd;
+        uint32_t readLen;
+        uint32_t mateLen;
         uint32_t fragLen;
     private:
         TranscriptID transcriptID_;

@@ -158,8 +158,6 @@ bool processQuantOptions(SalmonOpts& sopt, boost::program_options::variables_map
 
 void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm, boost::filesystem::path& inputPath);
 
-std::vector<int32_t> samplesFromLogPMF(FragmentLengthDistribution* fld, int32_t numSamples);
-
 // NOTE: Throws an invalid_argument exception of the quant or quant_bias_corrected files do
 // not exist!
 void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
