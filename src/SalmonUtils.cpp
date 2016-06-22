@@ -2026,7 +2026,7 @@ Eigen::VectorXd updateEffectiveLengthsConditional(SalmonOpts& sopt, ReadExpT& re
   auto& transcriptGCDist = readExp.expectedGCBias();
   auto& gcCounts = readExp.observedGC();
   double readGCNormFactor = 0.0;
-  int32_t fldLow{0};
+  int32_t fldLow{1};
   int32_t fldHigh = static_cast<int32_t>(fld.maxVal());
 
   // The CDF and PDF of the fragment length distribution

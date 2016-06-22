@@ -687,6 +687,7 @@ void processReadsQuasi(
   std::vector<QuasiAlignment> leftHits;
   std::vector<QuasiAlignment> rightHits;
   rapmap::utils::HitCounters hctr;
+  salmon::utils::MappingType mapType{salmon::utils::MappingType::UNMAPPED};
 
   while (true) {
     typename paired_parser::job j(*parser); // Get a job from the parser: a
@@ -717,6 +718,7 @@ void processReadsQuasi(
       auto& jointHits = jointHitGroup.alignments();
       leftHits.clear();
       rightHits.clear();
+      mapType = salmon::utils::MappingType::UNMAPPED;
 
       bool lh = tooShortLeft ? false : hitCollector(j->data[i].first.seq,
                                                     leftHits, saSearcher,
@@ -763,6 +765,9 @@ void processReadsQuasi(
       if (jointHits.size() > 0) {
         bool isPaired = jointHits.front().mateStatus ==
                         rapmap::utils::MateStatus::PAIRED_END_PAIRED;
+        if (isPaired) {
+            mapType = salmon::utils::MappingType::PAIRED_MAPPED;
+        }
         // If we are ignoring orphans
         if (!salmonOpts.allowOrphans) {
           // If the mappings for the current read are not properly-paired (i.e.
@@ -783,6 +788,19 @@ void processReadsQuasi(
                   return q.mateStatus ==
                          rapmap::utils::MateStatus::PAIRED_END_LEFT;
                 });
+            // If we found left hits
+            bool foundLeftMappings = (leftHitEndIt > jointHits.begin());
+            // If we found right hits
+            bool foundRightMappings = (leftHitEndIt  < jointHits.end());
+
+            if (foundLeftMappings and foundRightMappings) {
+                mapType = salmon::utils::MappingType::BOTH_ORPHAN;
+            } else if (foundLeftMappings) {
+                mapType = salmon::utils::MappingType::LEFT_ORPHAN;
+            } else if (foundRightMappings) {
+                mapType = salmon::utils::MappingType::RIGHT_ORPHAN;
+            }
+
             // Merge the hits so that the entire list is in order
             // by transcript ID.
             std::inplace_merge(
@@ -902,12 +920,17 @@ void processReadsQuasi(
           } break;
           }
         }
-      } else if (writeUnmapped) {
-          // If we have no mappings --- then there's nothing to do
-          // unless we're outputting names for un-mapped reads
-          unmappedNames << j->data[i].first.header << '\n';
+      } else {
+          // This read was completely unmapped.
+          mapType = salmon::utils::MappingType::UNMAPPED;
       }
       
+      if (writeUnmapped and mapType != salmon::utils::MappingType::PAIRED_MAPPED) {
+          // If we have no mappings --- then there's nothing to do
+          // unless we're outputting names for un-mapped reads
+          unmappedNames << j->data[i].first.header << ' ' << salmon::utils::str(mapType) << '\n';
+      }
+
       validHits += jointHits.size();
       localNumAssignedFragments += (jointHits.size() > 0);
       locRead++;
@@ -1118,7 +1141,7 @@ void processReadsQuasi(
       if (writeUnmapped and jointHits.empty()) {
           // If we have no mappings --- then there's nothing to do
           // unless we're outputting names for un-mapped reads
-          unmappedNames << j->data[i].header << '\n';
+          unmappedNames << j->data[i].header << " u\n";
       }
 
       validHits += jointHits.size();

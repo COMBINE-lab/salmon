@@ -910,7 +910,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
     if (needBias and (itNum > targetIt or converged)) {
 
       jointLog->info("iteration {}, recomputing effective lengths", itNum);
-      effLens = salmon::utils::updateEffectiveLengths(sopt, readExp, effLens,
+      effLens = salmon::utils::updateEffectiveLengthsConditional(sopt, readExp, effLens,
                                                       alphas, true);
       //(itNum == recomputeIt.front()));
 
