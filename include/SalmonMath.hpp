@@ -42,6 +42,8 @@ namespace salmon {
         constexpr double EPSILON = 0.375e-10;
         const double LOG_EPSILON = log(EPSILON);
 
+        inline double log(double v) { return (v > 0) ? std::log(v) : LOG_0; }
+        inline double exp(double v) { return std::exp(v); }
         inline bool isLog0(double v) { return v == LOG_0; }
         // Taken from https://github.com/adarob/eXpress/blob/master/src/main.h
         inline bool approxEqual(double a, double b, double eps=EPSILON) {

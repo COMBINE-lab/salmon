@@ -111,6 +111,12 @@ Eigen::VectorXd updateEffectiveLengths(
         AbundanceVecT& alphas,
 	bool finalRound = false);
 
+template <typename AbundanceVecT, typename ReadExpT>
+Eigen::VectorXd updateEffectiveLengthsConditional(SalmonOpts& sopt, ReadExpT& readExp,
+                                                      Eigen::VectorXd& effLensIn,
+                                                      AbundanceVecT& alphas, bool finalRound=false);
+
+
 /*
  * Use atomic compare-and-swap to update val to
  * val + inc (*in log-space*).  Update occurs in a loop in case other

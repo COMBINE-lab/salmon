@@ -1181,10 +1181,14 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "in the online learning schedule.  A smaller value results in quicker learning, but higher variance "
                         "and may be unstable.  A larger value results in slower learning but may be more stable.  Value should "
                         "be in the interval (0.5, 1.0].")
-        ("gcSizeSamp", po::value<std::uint32_t>(&(sopt.gcSampFactor))->default_value(1), "The value by which to down-sample transcripts when representing the "
+    ("gcSizeSamp", po::value<std::uint32_t>(&(sopt.gcSampFactor))->default_value(1), "The value by which to down-sample transcripts when representing the "
          "GC content.  Larger values will reduce memory usage, but may decrease the fidelity of bias modeling results.")
-        ("gcSpeedSamp", po::value<std::uint32_t>(&(sopt.pdfSampFactor))->default_value(1), "The value at which the fragment length PMF is down-sampled "
-         "when evaluating GC fragment bias.  Larger values speed up effective length correction, but may decrease the fidelity of bias modeling results.")
+   ("biasSpeedSamp",
+          po::value<std::uint32_t>(&(sopt.pdfSampFactor))->default_value(1),
+          "The value at which the fragment length PMF is down-sampled "
+          "when evaluating sequence-specific & GC fragment bias.  Larger values speed up effective "
+          "length correction, but may decrease the fidelity of bias modeling "
+          "results.")
     ("mappingCacheMemoryLimit", po::value<uint32_t>(&(sopt.mappingCacheMemoryLimit))->default_value(2000000), "If the file contained fewer than this "
                                         "many mapped reads, then just keep the data in memory for subsequent rounds of inference. Obviously, this value should "
                                         "not be too large if you wish to keep a low memory usage, but setting it large enough to accommodate all of the mapped "
@@ -1205,6 +1209,14 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "across the transcript.")
     ("useVBOpt,v", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
                            "traditional EM algorithm for optimization in the batch passes.")
+         ("perTranscriptPrior", po::bool_switch(&(sopt.perTranscriptPrior)), "The "
+          "prior (either the default or the argument provided via --vbPrior) will "
+	  "be interpreted as a transcript-level prior (i.e. each transcript will "
+	  "be given a prior read count of this value)")
+         ("vbPrior", po::value<double>(&(sopt.vbPrior))->default_value(1e-3),
+          "The prior that will be used in the VBEM algorithm.  This is interpreted "
+          "as a per-nucleotide prior, unless the --perTranscriptPrior flag "
+          "is also given, in which case this is used as a transcript-level prior")
     /*
     // Don't expose this yet
     ("noRichEqClasses", po::bool_switch(&(sopt.noRichEqClasses))->default_value(false),

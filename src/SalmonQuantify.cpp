@@ -535,19 +535,6 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
             fragStartDist.addVal(hitPos, transcript.RefLength,
                                  logForgettingMass);
           }
-          // Try sampling rather than considering all.
-          /*
-          if (gcBiasCorrect and aln.libFormat().type == ReadType::PAIRED_END) {
-            int32_t start = std::min(aln.pos, aln.matePos);
-            int32_t stop = start + aln.fragLen - 1;
-            if (start > 0 and stop < transcript.RefLength) {
-              int32_t gcFrac = transcript.gcFrac(start, stop);
-              // Add this fragment's contribution
-              observedGCMass[gcFrac] = salmon::math::logAdd(
-                                    observedGCMass[gcFrac], logForgettingMass);
-            }
-          }
-          */
         }
       } // end normalize
 
@@ -1902,10 +1889,10 @@ int salmonQuantify(int argc, char* argv[]) {
           "The value by which to down-sample transcripts when representing the "
           "GC content.  Larger values will reduce memory usage, but may "
           "decrease the fidelity of bias modeling results.")(
-          "gcSpeedSamp",
+          "biasSpeedSamp",
           po::value<std::uint32_t>(&(sopt.pdfSampFactor))->default_value(1),
           "The value at which the fragment length PMF is down-sampled "
-          "when evaluating GC fragment bias.  Larger values speed up effective "
+          "when evaluating sequence-specific & GC fragment bias.  Larger values speed up effective "
           "length correction, but may decrease the fidelity of bias modeling "
           "results.")(
           "strictIntersect",

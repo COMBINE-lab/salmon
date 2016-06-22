@@ -1925,31 +1925,692 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
 
           // throw caution to the wind
           double thresh = noThreshold ? 1.0 : unprocessedLen;
-          /*
+          
           // JUNE 17
-          double minAllowedLength = 0.5 * minObservedLength;//std::max(0.5 * minObservedLength, elen * 0.1);
-          auto barrierLength = [minAllowedLength](double x) -> double {
-            return x + ((minAllowedLength * minAllowedLength) /
-                        (x + minAllowedLength));
-          };
-          effLength = barrierLength(effLength);
+          if (noThreshold) {
+              if (unprocessedLen > 0.0 and effLength > thresh) {
+                  effLensOut(it) = effLength;
+              } else {
+                  effLensOut(it) = effLensIn(it);
+              }
+          } else {
+              double offset = std::max(1.0, thresh);
+              double effLengthNoBias = static_cast<double>(elen);
+              auto barrierLength = [effLengthNoBias, offset](double x) -> double {
+                  return std::max(x, std::min(effLengthNoBias, offset));
+                  //return x + ((unprocessedLen * unprocessedLen) /
+                  //            (x + unprocessedLen));
+              };
+              effLength = barrierLength(effLength);
+              effLensOut(it) = effLength;
+          }
+          
           // END: JUNE 17
-          */
+	  /*
+          // commented out JUNE 20
           // To correct the transcript length, we require it to be
           // "sufficiently" long to begin with.
-          if (unprocessedLen > 0.0 and elen > thresh and effLength > thresh) {
+          // WORKING MODEL: if (unprocessedLen > 0.0 and elen > thresh and effLength > thresh) {
+	  if (unprocessedLen > 0.0 and effLength > thresh) {
             ++numCorrected;
             effLensOut(it) = effLength;
           } else {
             ++numUncorrected;
             effLensOut(it) = effLensIn(it);
           }
+	  */
+	  
+	  
         }
       } // end parallel_for lambda
       );
   sopt.jointLog->info("processed bias for 100.0% of the transcripts");
   return effLensOut;
 }
+
+//========
+// TEST
+//========
+/**
+ * Computes (and returns) new effective lengths for the transcripts
+ * based on the current abundance estimates (alphas) and the current
+ * effective lengths (effLensIn).  This approach to sequence-specifc bias is
+ * based on the one taken in Roberts et al. (2011) [1].
+ * Here, we also consider fragment-GC bias which uses a novel method extending
+ * the idea of adjusting the effective lengths.
+ *
+ * [1] Roberts, Adam, et al. "Improving RNA-Seq expression estimates by
+ * correcting for fragment bias."
+ *     Genome Biol 12.3 (2011): R22.
+ */
+template <typename AbundanceVecT, typename ReadExpT>
+Eigen::VectorXd updateEffectiveLengthsConditional(SalmonOpts& sopt, ReadExpT& readExp,
+                                       Eigen::VectorXd& effLensIn,
+                                       AbundanceVecT& alphas, bool writeBias) {
+
+  using std::vector;
+  using BlockedIndexRange = tbb::blocked_range<size_t>;
+
+  double minAlpha = 1e-8;
+  uint32_t gcSamp{sopt.pdfSampFactor};
+  bool gcBiasCorrect{sopt.gcBiasCorrect};
+  bool seqBiasCorrect{sopt.biasCorrect};
+  bool posBiasCorrect{sopt.posBiasCorrect};
+
+  double probFwd = readExp.gcFracFwd();
+  double probRC = readExp.gcFracRC();
+
+  if (gcBiasCorrect and probFwd < 0.0) {
+    sopt.jointLog->warn("Had no fragments from which to estimate "
+                        "fwd vs. rev-comp mapping rate.  Skipping "
+                        "sequence-specific / fragment-gc bias correction");
+    return effLensIn;
+  }
+
+  // calculate read bias normalization factor -- total count in read
+  // distribution.
+  auto& obs5 = readExp.readBiasModel(salmon::utils::Direction::FORWARD);
+  auto& obs3 =
+      readExp.readBiasModel(salmon::utils::Direction::REVERSE_COMPLEMENT);
+  obs5.normalize();
+  obs3.normalize();
+
+  auto& pos5Obs = readExp.posBias(salmon::utils::Direction::FORWARD);
+  auto& pos3Obs = readExp.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
+
+  int32_t K = static_cast<int32_t>(obs5.getContextLength());
+
+  FragmentLengthDistribution& fld = *(readExp.fragmentLengthDistribution());
+  
+  // The *expected* biases from GC effects
+  auto& transcriptGCDist = readExp.expectedGCBias();
+  auto& gcCounts = readExp.observedGC();
+  double readGCNormFactor = 0.0;
+  int32_t fldLow{0};
+  int32_t fldHigh = static_cast<int32_t>(fld.maxVal());
+
+  // The CDF and PDF of the fragment length distribution
+  std::vector<double> cdf(fld.maxVal() + 1, 0.0);
+  std::vector<double> pdf(fld.maxVal() + 1, 0.0);
+  {
+    transcriptGCDist.clear();
+    transcriptGCDist.resize(101, 0.0);
+
+    for (size_t i = 0; i <= fld.maxVal(); ++i) {
+      pdf[i] = std::exp(fld.pmf(i));
+      cdf[i] = (i > 0) ? cdf[i - 1] + pdf[i] : pdf[i];
+      auto density = cdf[i];
+     }
+
+    if (gcBiasCorrect) {
+      for (auto& c : gcCounts) {
+        readGCNormFactor += c;
+      }
+    }
+  }
+
+  // Make this const so there are no shenanigans
+  const auto& transcripts = readExp.transcripts();
+
+  double minObservedLength = effLensIn.minCoeff();
+
+  // The effective lengths adjusted for bias
+  Eigen::VectorXd effLensOut(effLensIn.size());
+
+  // How much to cut off
+  int32_t trunc = K;
+
+  using GCBiasVecT = std::vector<double>;
+  using SeqBiasVecT = std::vector<double>;
+
+  /**
+   * These will store "thread local" parameters
+   * for the appropriate bias terms.
+   */
+  class CombineableBiasParams {
+  public:
+    CombineableBiasParams(uint32_t K) {
+      expectGC = std::vector<double>(101, 0.0);
+      expectPos5 = std::vector<SimplePosBias>(5);
+      expectPos3 = std::vector<SimplePosBias>(5);
+    }
+
+    std::vector<SimplePosBias> expectPos5;
+    std::vector<SimplePosBias> expectPos3;
+    SBModel expectSeqFW;
+    SBModel expectSeqRC;
+    std::vector<double> expectGC;
+  };
+
+  auto revComplement = [](const char* s, int32_t l, std::string& o) -> void {
+    if (l > o.size()) {
+      o.resize(l, 'A');
+    }
+    int32_t j = 0;
+    for (int32_t i = l - 1; i >= 0; --i, ++j) {
+      switch (s[i]) {
+      case 'A':
+      case 'a':
+        o[j] = 'T';
+        break;
+      case 'C':
+      case 'c':
+        o[j] = 'G';
+        break;
+      case 'T':
+      case 't':
+        o[j] = 'A';
+        break;
+      case 'G':
+      case 'g':
+        o[j] = 'C';
+        break;
+      default:
+        o[j] = 'N';
+        break;
+      }
+    }
+  };
+
+  /**
+   * The local bias terms from each thread can be combined
+   * via simple summation.
+   */
+  auto getBiasParams = [K]() -> CombineableBiasParams {
+    return CombineableBiasParams(K);
+  };
+  tbb::combinable<CombineableBiasParams> expectedDist(getBiasParams);
+  std::atomic<size_t> numBackgroundTranscripts{0};
+  std::atomic<size_t> numExpressedTranscripts{0};
+
+  tbb::parallel_for(
+      BlockedIndexRange(size_t(0), size_t(transcripts.size())),
+      [&](const BlockedIndexRange& range) -> void {
+
+        auto& expectSeqFW = expectedDist.local().expectSeqFW;
+        auto& expectSeqRC = expectedDist.local().expectSeqRC;
+        auto& expectGC = expectedDist.local().expectGC;
+        auto& expectPos5 = expectedDist.local().expectPos5;
+        auto& expectPos3 = expectedDist.local().expectPos3;
+
+        std::string rcSeq;
+        // For each transcript
+        for (auto it : boost::irange(range.begin(), range.end())) {
+
+          // Get the transcript
+          const auto& txp = transcripts[it];
+
+          // Get the reference length and the
+          // "initial" effective length (not considering any biases)
+          int32_t refLen = static_cast<int32_t>(txp.RefLength);
+          int32_t elen = static_cast<int32_t>(txp.EffectiveLength);
+
+          // The difference between the actual and effective length
+          int32_t unprocessedLen = std::max(0, refLen - elen);
+
+          // Skip transcripts with trivial expression or that are too
+          // short
+	  double minBackgroundAlpha = 1.0;
+          if (alphas[it] < minBackgroundAlpha or unprocessedLen <= 0) {  // or txp.uniqueUpdateFraction() < 0.90) {
+            if (alphas[it] >= minBackgroundAlpha) {
+              ++numExpressedTranscripts;
+            }
+            continue;
+          }
+          ++numBackgroundTranscripts;
+
+          // Otherwise, proceed giving this transcript the following weight
+          double weight = (alphas[it] / effLensIn(it));
+
+          // This transcript's sequence
+          const char* tseq = txp.Sequence();
+          revComplement(tseq, refLen, rcSeq);
+          const char* rseq = rcSeq.c_str();
+
+          Mer fwmer;
+          fwmer.from_chars(tseq);
+          Mer rcmer;
+          rcmer.from_chars(rseq);
+          int32_t contextLength{expectSeqFW.getContextLength()};
+
+          int32_t cdfMaxArg = std::min(static_cast<int32_t>(cdf.size() - 1), refLen);
+          double cdfMaxVal = cdf[cdfMaxArg];
+          // need a reliable CDF
+          if (cdfMaxVal < 1e-10) { continue; }
+          auto conditionalCDF = [cdfMaxArg, cdfMaxVal, &cdf](double x) -> double {
+              return (x > cdfMaxArg) ? 1.0 : (cdf[x] / cdfMaxVal); 
+          };
+
+          // For each position along the transcript
+          // Starting from the 5' end and moving toward the 3' end
+          for (int32_t fragStartPos = 0; fragStartPos < refLen - K;
+               ++fragStartPos) {
+            // Seq-specific bias
+            if (seqBiasCorrect) {
+              int32_t contextEndPos =
+                  fragStartPos + K - 1; // -1 because pos is *inclusive*
+
+              if (contextEndPos >= 0 and contextEndPos < refLen) {
+                int32_t maxFragLen =
+                    refLen - (fragStartPos + expectSeqFW.contextBefore(false));
+                if (maxFragLen >= 0 and maxFragLen < refLen) {
+                  auto cdensity = conditionalCDF(maxFragLen);
+                  expectSeqFW.addSequence(fwmer, weight * cdensity);
+                  expectSeqRC.addSequence(rcmer, weight * cdensity);
+                }
+              }
+
+              // shift the context one nucleotide to the right
+              fwmer.shift_left(tseq[fragStartPos + contextLength]);
+              rcmer.shift_left(rseq[fragStartPos + contextLength]);
+            } // end: Seq-specific bias
+
+            // fragment-GC bias
+            if (gcBiasCorrect) {
+              size_t sp = static_cast<size_t>((fldLow > 0) ? fldLow - 1 : 0);
+              double prevFLMass = conditionalCDF(sp);
+              int32_t fragStart = fragStartPos;
+              for (int32_t fl = fldLow; fl <= fldHigh; fl += gcSamp) {
+                int32_t fragEnd = fragStart + fl - 1;
+                if (fragEnd < refLen) {
+                  // The GC fraction for this putative fragment
+                  auto gcFrac = txp.gcFrac(fragStart, fragEnd);
+                  expectGC[gcFrac] += weight * (conditionalCDF(fl) - prevFLMass);
+                  prevFLMass = conditionalCDF(fl);
+                } else {
+                  break;
+                } // no more valid positions
+              }   // end: for each fragment length
+            }     // end: fragment GC bias
+
+            // positional bias
+            if (posBiasCorrect) {
+              int32_t maxFragLenFW = refLen - fragStartPos + 1;
+              int32_t maxFragLenRC = fragStartPos;
+              auto densityFW = conditionalCDF(maxFragLenFW);
+              auto densityRC = conditionalCDF(maxFragLenRC);
+              if (weight * densityFW > 1e-8) {
+                expectPos5[txp.lengthClassIndex()].addMass(
+                    fragStartPos, txp.RefLength, std::log(weight * densityFW));
+              }
+              if (weight * densityRC > 1e-8) {
+                expectPos3[txp.lengthClassIndex()].addMass(
+                    fragStartPos, txp.RefLength, std::log(weight * densityRC));
+              }
+            }
+          } // end: for every fragment start position
+        }   // end for each transcript
+
+      } // end tbb for function
+      );
+
+  size_t bgCutoff =
+      std::min(static_cast<size_t>(150),
+               static_cast<size_t>(numBackgroundTranscripts *  0.1));
+  if (numBackgroundTranscripts < bgCutoff) {
+    sopt.jointLog->warn("I found only {} transcripts meeting the necessary "
+                        "conditions to contribute to "
+                        "the bias background distribution.  This is likely too "
+                        "small to safely do bias correction. "
+                        "I'm skipping bias correction",
+                        numBackgroundTranscripts.load());
+    sopt.biasCorrect = false;
+    sopt.gcBiasCorrect = false;
+    sopt.posBiasCorrect = false;
+    return effLensIn;
+  }
+
+  /**
+   * The local bias terms from each thread can be combined
+   * via simple summation.  Here, we combine the locally-computed
+   * bias terms.
+   */
+  SBModel exp5;
+  SBModel exp3;
+  std::vector<SimplePosBias> pos5Exp(5);
+  std::vector<SimplePosBias> pos3Exp(5);
+  auto combineBiasParams =
+      [seqBiasCorrect, gcBiasCorrect, posBiasCorrect, &pos5Exp, &pos3Exp, &exp5,
+       &exp3, &transcriptGCDist](const CombineableBiasParams& p) -> void {
+    if (seqBiasCorrect) {
+      exp5.combineCounts(p.expectSeqFW);
+      exp3.combineCounts(p.expectSeqRC);
+    }
+    if (gcBiasCorrect) {
+      for (size_t i = 0; i < p.expectGC.size(); ++i) {
+        transcriptGCDist[i] += p.expectGC[i];
+      }
+    }
+    if (posBiasCorrect) {
+      for (size_t i = 0; i < p.expectPos5.size(); ++i) {
+        pos5Exp[i].combine(p.expectPos5[i]);
+        pos3Exp[i].combine(p.expectPos3[i]);
+      }
+    }
+  };
+  expectedDist.combine_each(combineBiasParams);
+
+  // finalize expected positional biases
+  if (posBiasCorrect) {
+    for (size_t i = 0; i < pos5Exp.size(); ++i) {
+      pos5Exp[i].finalize();
+      pos3Exp[i].finalize();
+    }
+  }
+
+  auto smoothDist = [](std::vector<double>& v, int w, int d) -> void {
+    v = sg_smooth(v, w, d); 
+    double gcSum = 0.0;
+    for (size_t i = 0; i < v.size(); ++i) {
+      if (v[i] < 1e-5) { v[i] = 1e-5; }
+      gcSum += v[i];
+    }
+    for (size_t i = 0; i < v.size(); ++i) {
+      v[i] /= gcSum;
+    }
+  };
+
+  /*
+  smoothDist(transcriptGCDist, 5,  3);
+  smoothDist(gcCounts, 5,  3);
+  // Compute the bias weights for each fragment-GC bin
+  Eigen::VectorXd gcBias(101);
+  if (gcBiasCorrect) {
+    for (size_t i = 0; i < 101; ++i) {
+      gcBias[i] = (gcCounts[i] / (transcriptGCDist[i]));
+    }
+  }
+  */
+
+  sopt.jointLog->info("Computed expected counts (for bias correction)");
+  
+  // Compute appropriate priors and normalization factors
+  double txomeGCNormFactor = 0.0;
+  double gcPrior = 0.0;
+  if (gcBiasCorrect) {
+    for (auto m : transcriptGCDist) {
+      txomeGCNormFactor += m;
+    }
+    auto pmass = 1e-5 * 101.0;
+    gcPrior =
+        ((pmass / (readGCNormFactor - pmass)) * txomeGCNormFactor) / 101.0;
+    txomeGCNormFactor += gcPrior * 101.0;
+  }
+  double scaleGCBias = (txomeGCNormFactor / readGCNormFactor);
+
+  // Compute the bias weights for each fragment-GC bin
+  Eigen::VectorXd gcBias(101);
+  double gcBiasMax = 100.0;
+  double gcBiasMin = 1.0 / gcBiasMax;
+  if (gcBiasCorrect) {
+    for (size_t i = 0; i < 101; ++i) {
+      gcBias[i] = scaleGCBias * (gcCounts[i] / (gcPrior + transcriptGCDist[i]));
+      gcBias[i] = (gcBias[i] > gcBiasMax) ? gcBiasMax :
+          ((gcBias[i] < gcBiasMin) ? gcBiasMin : gcBias[i]);
+    }
+    //gcBias *= scaleGCBias;
+  }
+  
+    
+  exp5.normalize();
+  exp3.normalize();
+
+  bool noThreshold = sopt.noBiasLengthThreshold;
+  std::atomic<size_t> numCorrected{0};
+  std::atomic<size_t> numUncorrected{0};
+
+  // Write out the bias model parameters we learned
+  if (writeBias) {
+    boost::filesystem::path auxDir = sopt.outputDirectory / sopt.auxDir;
+    bool auxSuccess = boost::filesystem::is_directory(auxDir);
+    if (!auxSuccess) {
+      auxSuccess = boost::filesystem::create_directories(auxDir);
+    }
+    if (auxSuccess) {
+      auto exp5fn = auxDir / "exp5_marginals.txt";
+      auto& exp5m = exp5.marginals();
+      std::ofstream exp5f(exp5fn.string());
+      exp5f << exp5m.rows() << '\t' << exp5m.cols() << '\n';
+      exp5f << exp5m;
+      exp5f.close();
+
+      auto exp3fn = auxDir / "exp3_marginals.txt";
+      auto& exp3m = exp3.marginals();
+      std::ofstream exp3f(exp3fn.string());
+      exp3f << exp3m.rows() << '\t' << exp3m.cols() << '\n';
+      exp3f << exp3m;
+      exp3f.close();
+
+      auto obs5fnc = auxDir / "obs5_conditionals.txt";
+      std::ofstream obs5fc(obs5fnc.string());
+      obs5.dumpConditionalProbabilities(obs5fc);
+      obs5fc.close();
+
+      auto obs3fnc = auxDir / "obs3_conditionals.txt";
+      std::ofstream obs3fc(obs3fnc.string());
+      obs3.dumpConditionalProbabilities(obs3fc);
+      obs3fc.close();
+
+      auto exp5fnc = auxDir / "exp5_conditionals.txt";
+      std::ofstream exp5fc(exp5fnc.string());
+      exp5.dumpConditionalProbabilities(exp5fc);
+      exp5fc.close();
+
+      auto exp3fnc = auxDir / "exp3_conditionals.txt";
+      std::ofstream exp3fc(exp3fnc.string());
+      exp3.dumpConditionalProbabilities(exp3fc);
+      exp3fc.close();
+    } else {
+      sopt.jointLog->warn(
+          "Couldn't create auxiliary directory {} to write bias parameters",
+          auxDir);
+    }
+  }
+
+  std::atomic<uint32_t> numProcessed{0};
+  size_t numTranscripts = transcripts.size();
+  size_t stepSize = static_cast<size_t>(transcripts.size() * 0.1);
+  size_t nextUpdate{0};
+
+  std::mutex updateMutex;
+  /**
+   * Compute the effective lengths of each transcript (in parallel)
+   */
+  tbb::parallel_for(
+      BlockedIndexRange(size_t(0), size_t(transcripts.size())),
+      [&](const BlockedIndexRange& range) -> void {
+
+        std::string rcSeq;
+        // For each transcript
+        for (auto it : boost::irange(range.begin(), range.end())) {
+
+          auto& txp = transcripts[it];
+
+          // eff. length starts out as 0
+          double effLength = 0.0;
+
+          // Reference length
+          int32_t refLen = static_cast<int32_t>(txp.RefLength);
+          // Effective length before any bias correction
+          int32_t elen = static_cast<int32_t>(txp.EffectiveLength);
+
+          // How much of this transcript (beginning and end) should
+          // not be considered
+          int32_t unprocessedLen = std::max(0, refLen - elen);
+          int32_t cdfMaxArg = std::min(static_cast<int32_t>(cdf.size() - 1), refLen);
+          double cdfMaxVal = cdf[cdfMaxArg];
+          auto conditionalCDF = [cdfMaxArg, cdfMaxVal, &cdf](double x) -> double {
+              return (x > cdfMaxArg) ? 1.0 : (cdf[x] / cdfMaxVal); 
+          };
+
+          if (alphas[it] >= minAlpha and unprocessedLen > 0 and cdfMaxVal > 1e-10) {
+
+              
+            Eigen::VectorXd seqFactorsFW(refLen);
+            Eigen::VectorXd seqFactorsRC(refLen);
+            seqFactorsFW.setOnes();
+            seqFactorsRC.setOnes();
+
+            std::vector<double> posFactorsFW(refLen, 1.0);
+            std::vector<double> posFactorsRC(refLen, 1.0);
+
+            // This transcript's sequence
+            const char* tseq = txp.Sequence();
+            revComplement(tseq, refLen, rcSeq);
+            const char* rseq = rcSeq.c_str();
+
+            int32_t fl = fldLow;
+            auto maxLen = std::min(refLen, fldHigh + 1);
+            bool done{fl >= maxLen};
+
+            if (posBiasCorrect) {
+              std::vector<double> posFactorsObs5(refLen, 1.0);
+              std::vector<double> posFactorsObs3(refLen, 1.0);
+              std::vector<double> posFactorsExp5(refLen, 1.0);
+              std::vector<double> posFactorsExp3(refLen, 1.0);
+              auto li = txp.lengthClassIndex();
+              auto& p5O = pos5Obs[li];
+              auto& p3O = pos3Obs[li];
+              auto& p5E = pos5Exp[li];
+              auto& p3E = pos3Exp[li];
+              p5O.projectWeights(posFactorsObs5);
+              p3O.projectWeights(posFactorsObs3);
+              p5E.projectWeights(posFactorsExp5);
+              p3E.projectWeights(posFactorsExp3);
+              for (int32_t fragStart = 0; fragStart < refLen - K; ++fragStart) {
+                posFactorsFW[fragStart] =
+                    posFactorsObs5[fragStart] / posFactorsExp5[fragStart];
+                posFactorsRC[fragStart] =
+                    posFactorsObs3[fragStart] / posFactorsExp3[fragStart];
+              }
+            }
+
+            // Evaluate the sequence specific bias (5' and 3') over the length
+            // of the transcript.  After this loop,
+            // seqFactorsFW will contain the sequence-specific bias for each
+            // position on the 5' strand
+            // and seqFactorsRC will contain the sequence-specific bias for each
+            // position on the 3' strand.
+            if (seqBiasCorrect) {
+              Mer mer;
+              Mer rcmer;
+              mer.from_chars(tseq);
+              rcmer.from_chars(rseq);
+              int32_t contextLength{exp5.getContextLength()};
+
+              for (int32_t fragStart = 0; fragStart < refLen - K; ++fragStart) {
+                int32_t readStart = fragStart + obs5.contextBefore(false);
+                int32_t kmerEndPos =
+                    fragStart + K - 1; // -1 because pos is *inclusive*
+
+                if (kmerEndPos >= 0 and kmerEndPos < refLen and
+                    readStart < refLen) {
+                  seqFactorsFW[readStart] =
+                      std::exp(obs5.evaluateLog(mer) - exp5.evaluateLog(mer));
+                  seqFactorsRC[readStart] = std::exp(obs3.evaluateLog(rcmer) -
+                                                     exp3.evaluateLog(rcmer));
+                }
+                // shift the context one nucleotide to the right
+                mer.shift_left(tseq[fragStart + contextLength]);
+                rcmer.shift_left(rseq[fragStart + contextLength]);
+              }
+              // We need these in 5' -> 3' order, so reverse them
+              seqFactorsRC.reverseInPlace();
+            } // end sequence-specific factor calculation
+
+            if (numProcessed > nextUpdate) {
+              updateMutex.try_lock();
+	      if (numProcessed > nextUpdate) {
+		sopt.jointLog->info(
+				    "processed bias for {:3.1f}% of the transcripts",
+				    100.0 * (numProcessed / static_cast<double>(numTranscripts)));
+		nextUpdate += stepSize;
+		if (nextUpdate > numTranscripts) {
+		  nextUpdate = numTranscripts - 1;
+		}
+	      }
+	      updateMutex.unlock();
+	    }
+	    ++numProcessed;
+
+        
+
+	    size_t sp = static_cast<size_t>((fl > 0) ? fl - 1 : 0);
+            double prevFLMass = conditionalCDF(sp);
+            double unbiasedMass{0.0};
+
+            // For every possible fragment length
+            while (!done) {
+              if (fl >= maxLen) {
+                done = true;
+                fl = maxLen - 1;
+              }
+              double flWeight = conditionalCDF(fl) - prevFLMass;
+              prevFLMass = conditionalCDF(fl);
+
+              double flMassTotal{0.0};
+              // For every position a fragment of length fl could start
+              for (int32_t kmerStartPos = 0; kmerStartPos < refLen - fl;
+                   ++kmerStartPos) {
+                int32_t fragStart = kmerStartPos;
+                int32_t fragEnd = fragStart + fl - 1;
+
+                // If the 3' end is within the transcript
+                if (fragStart < refLen and fragEnd < refLen) {
+                  double fragFactor =
+                      seqFactorsFW[fragStart] * seqFactorsRC[fragEnd];
+                  if (gcBiasCorrect) {
+                    auto gcFrac = txp.gcFrac(fragStart, fragEnd);
+                    fragFactor *= gcBias[gcFrac];
+                  }
+                  if (posBiasCorrect) {
+                    fragFactor *=
+                        posFactorsFW[fragStart] * posFactorsRC[fragEnd];
+                  }
+                  flMassTotal += fragFactor;
+                } else {
+                  break;
+                }
+              }
+
+              effLength += (flWeight * flMassTotal);
+              fl += gcSamp;
+            }
+            // effLength = flMassTotal;//flMasses.sum();
+
+          } // for the processed transcript
+
+          // throw caution to the wind
+          double thresh = noThreshold ? 1.0 : unprocessedLen;
+          
+          // JUNE 17
+          if (noThreshold) {
+              if (unprocessedLen > 0.0 and effLength > thresh) {
+                  effLensOut(it) = effLength;
+              } else {
+                  effLensOut(it) = effLensIn(it);
+              }
+          } else {
+              double offset = std::max(1.0, thresh);
+              double effLengthNoBias = static_cast<double>(elen);
+              auto barrierLength = [effLengthNoBias, offset](double x) -> double {
+                  return std::max(x, std::min(effLengthNoBias, offset));
+                  //return x + ((unprocessedLen * unprocessedLen) /
+                  //            (x + unprocessedLen));
+              };
+              effLength = barrierLength(effLength);
+              effLensOut(it) = effLength;
+          }
+          
+        }
+      } // end parallel_for lambda
+      );
+  sopt.jointLog->info("processed bias for 100.0% of the transcripts");
+  return effLensOut;
+}
+//========
+// End Test
+//========
 
 void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm,
                                    boost::filesystem::path& inputPath) {
@@ -2192,6 +2853,46 @@ salmon::utils::updateEffectiveLengths<std::vector<double>,
                                       AlignmentLibrary<UnpairedRead>>(
     SalmonOpts& sopt, AlignmentLibrary<UnpairedRead>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<double>& alphas, bool finalRound);
+
+// explicit instantiations for effective length updates ---
+template Eigen::VectorXd
+salmon::utils::updateEffectiveLengthsConditional<std::vector<tbb::atomic<double>>,
+                                      ReadExperiment>(
+    SalmonOpts& sopt, ReadExperiment& readExp, Eigen::VectorXd& effLensIn,
+    std::vector<tbb::atomic<double>>& alphas, bool finalRound);
+
+template Eigen::VectorXd
+salmon::utils::updateEffectiveLengthsConditional<std::vector<double>, ReadExperiment>(
+    SalmonOpts& sopt, ReadExperiment& readExp, Eigen::VectorXd& effLensIn,
+    std::vector<double>& alphas, bool finalRound);
+
+template Eigen::VectorXd
+salmon::utils::updateEffectiveLengthsConditional<std::vector<tbb::atomic<double>>,
+                                      AlignmentLibrary<ReadPair>>(
+    SalmonOpts& sopt, AlignmentLibrary<ReadPair>& readExp,
+    Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
+    bool finalRound);
+
+template Eigen::VectorXd
+salmon::utils::updateEffectiveLengthsConditional<std::vector<double>,
+                                      AlignmentLibrary<ReadPair>>(
+    SalmonOpts& sopt, AlignmentLibrary<ReadPair>& readExp,
+    Eigen::VectorXd& effLensIn, std::vector<double>& alphas, bool finalRound);
+
+template Eigen::VectorXd
+salmon::utils::updateEffectiveLengthsConditional<std::vector<tbb::atomic<double>>,
+                                      AlignmentLibrary<UnpairedRead>>(
+    SalmonOpts& sopt, AlignmentLibrary<UnpairedRead>& readExp,
+    Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
+    bool finalRound);
+
+template Eigen::VectorXd
+salmon::utils::updateEffectiveLengthsConditional<std::vector<double>,
+                                      AlignmentLibrary<UnpairedRead>>(
+    SalmonOpts& sopt, AlignmentLibrary<UnpairedRead>& readExp,
+    Eigen::VectorXd& effLensIn, std::vector<double>& alphas, bool finalRound);
+
+
 
 //// 0th order model --- code for computing bias factors.
 
