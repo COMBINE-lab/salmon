@@ -21,6 +21,14 @@ def mkdir_p(path):
 def main(args):
     logging.basicConfig(level=logging.INFO)
     quantDir = args.quantDir
+    auxDir = "aux"
+
+    # Check for a custom auxDir
+    with open(os.path.sep.join([quantDir, "cmd_info.json"])) as cmdFile:
+        dat = json.load(cmdFile)
+        if 'auxDir' in dat:
+            auxDir = dat['auxDir']
+
     bootstrapFile = os.path.sep.join([quantDir, "aux", "bootstrap", "bootstraps.gz"])
     nameFile = os.path.sep.join([quantDir, "aux", "bootstrap", "names.tsv.gz"])
     if not os.path.isfile(bootstrapFile):

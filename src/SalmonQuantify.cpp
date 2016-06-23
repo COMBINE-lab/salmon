@@ -2193,6 +2193,8 @@ transcript abundance from RNA-seq reads
           oa(cereal::make_nvp(opt.string_key, opt.value));
         }
       }
+      // explicitly ouput the aux directory as well
+      oa(cereal::make_nvp("auxDir", sopt.auxDir));
     }
 
     GZipWriter gzw(outputDirectory, jointLog);

@@ -1463,7 +1463,9 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                     oa(cereal::make_nvp(opt.string_key, opt.value));
                 }
             }
-        }
+	    // explicitly ouput the aux directory as well
+	    oa(cereal::make_nvp("auxDir", sopt.auxDir));
+	}
 
         // The transcript file contains the target sequences
         bfs::path transcriptFile(vm["targets"].as<std::string>());
