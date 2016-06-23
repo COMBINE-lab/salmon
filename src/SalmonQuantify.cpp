@@ -765,8 +765,8 @@ void processReadsQuasi(
       if (jointHits.size() > 0) {
         bool isPaired = jointHits.front().mateStatus ==
                         rapmap::utils::MateStatus::PAIRED_END_PAIRED;
-        if (isPaired) {
-            mapType = salmon::utils::MappingType::PAIRED_MAPPED;
+        if (isPaired) { 
+            mapType = salmon::utils::MappingType::PAIRED_MAPPED; 
         }
         // If we are ignoring orphans
         if (!salmonOpts.allowOrphans) {
@@ -795,9 +795,9 @@ void processReadsQuasi(
 
             if (foundLeftMappings and foundRightMappings) {
                 mapType = salmon::utils::MappingType::BOTH_ORPHAN;
-            } else if (foundLeftMappings) {
+            } else if (foundLeftMappings) { 
                 mapType = salmon::utils::MappingType::LEFT_ORPHAN;
-            } else if (foundRightMappings) {
+            } else if (foundRightMappings) { 
                 mapType = salmon::utils::MappingType::RIGHT_ORPHAN;
             }
 
@@ -923,7 +923,7 @@ void processReadsQuasi(
       } else {
           // This read was completely unmapped.
           mapType = salmon::utils::MappingType::UNMAPPED;
-      }
+      } 
       
       if (writeUnmapped and mapType != salmon::utils::MappingType::PAIRED_MAPPED) {
           // If we have no mappings --- then there's nothing to do

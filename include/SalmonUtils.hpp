@@ -103,6 +103,7 @@ TranscriptGeneMap readTranscriptToGeneMap( std::ifstream &ifile );
 
 TranscriptGeneMap transcriptToGeneMapFromFasta( const std::string& transcriptsFile );
 
+/*
 template <typename AbundanceVecT, typename ReadExpT>
 Eigen::VectorXd updateEffectiveLengths(
         SalmonOpts& sopt,
@@ -110,9 +111,10 @@ Eigen::VectorXd updateEffectiveLengths(
         Eigen::VectorXd& effLensIn,
         AbundanceVecT& alphas,
 	bool finalRound = false);
+*/
 
 template <typename AbundanceVecT, typename ReadExpT>
-Eigen::VectorXd updateEffectiveLengthsConditional(SalmonOpts& sopt, ReadExpT& readExp,
+Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
                                                       Eigen::VectorXd& effLensIn,
                                                       AbundanceVecT& alphas, bool finalRound=false);
 
