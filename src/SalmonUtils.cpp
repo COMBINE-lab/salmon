@@ -15,6 +15,8 @@
 #include "tbb/parallel_for.h"
 
 #include "AlignmentLibrary.hpp"
+#include "DistributionUtils.hpp"
+#include "GCFragModel.hpp"
 #include "KmerContext.hpp"
 #include "LibraryFormat.hpp"
 #include "ReadExperiment.hpp"
@@ -1369,6 +1371,8 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
 
   int32_t K =
       seqBiasCorrect ? static_cast<int32_t>(obs5.getContextLength()) : 1;
+  int32_t contextUpstream = 
+      seqBiasCorrect ? obs5.contextBefore(false) : 0;
 
   FragmentLengthDistribution& fld = *(readExp.fragmentLengthDistribution());
 
@@ -1386,8 +1390,7 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
   std::vector<double> cdf(fld.maxVal() + 1, 0.0);
   std::vector<double> pdf(fld.maxVal() + 1, 0.0);
   {
-    transcriptGCDist.clear();
-    transcriptGCDist.resize(101, 0.0);
+    transcriptGCDist.reset(distribution_utils::DistributionSpace::LINEAR);
 
     bool lb{false};
     bool ub{false};
@@ -1406,11 +1409,13 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
       }
     }
 
+    /*
     if (gcBiasCorrect) {
       for (auto& c : gcCounts) {
         readGCNormFactor += c;
       }
     }
+    */
   }
 
   // Make this const so there are no shenanigans
@@ -1432,16 +1437,17 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
   class CombineableBiasParams {
   public:
     CombineableBiasParams(uint32_t K) {
-      expectGC = std::vector<double>(101, 0.0);
+        //expectGC = std::vector<double>(101, 0.0);
       expectPos5 = std::vector<SimplePosBias>(5);
       expectPos3 = std::vector<SimplePosBias>(5);
+      expectGC.reset(distribution_utils::DistributionSpace::LINEAR);
     }
 
     std::vector<SimplePosBias> expectPos5;
     std::vector<SimplePosBias> expectPos3;
     SBModel expectSeqFW;
     SBModel expectSeqRC;
-    std::vector<double> expectGC;
+    GCFragModel expectGC;
   };
 
   auto revComplement = [](const char* s, int32_t l, std::string& o) -> void {
@@ -1582,13 +1588,21 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
                   static_cast<size_t>((locFLDLow > 0) ? locFLDLow - 1 : 0);
               double prevFLMass = conditionalCDF(sp);
               int32_t fragStart = fragStartPos;
+              double gcCountStart = (txp.gcAt(fragStartPos + 2) - txp.gcAt(fragStartPos - 2));
+
               for (int32_t fl = locFLDLow; fl <= locFLDHigh; fl += gcSamp) {
                 int32_t fragEnd = fragStart + fl - 1;
+                //double gcCountEnd = txp.gcAt(fragEnd + 2) - txp.gcAt(fragEnd - 2);
+                //double contextFrac = (gcCountStart + gcCountEnd) * 0.1;
                 if (fragEnd < refLen) {
                   // The GC fraction for this putative fragment
+                  auto desc = txp.gcDesc(fragStart, fragEnd);
+                  expectGC.inc(desc, weight * (conditionalCDF(fl) - prevFLMass));
+                  /*
                   auto gcFrac = txp.gcFrac(fragStart, fragEnd);
                   expectGC[gcFrac] +=
                       weight * (conditionalCDF(fl) - prevFLMass);
+                  */
                   prevFLMass = conditionalCDF(fl);
                 } else {
                   break;
@@ -1650,9 +1664,12 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
       exp3.combineCounts(p.expectSeqRC);
     }
     if (gcBiasCorrect) {
+      transcriptGCDist.combineCounts(p.expectGC);
+	/*
       for (size_t i = 0; i < p.expectGC.size(); ++i) {
         transcriptGCDist[i] += p.expectGC[i];
       }
+        */
     }
     if (posBiasCorrect) {
       for (size_t i = 0; i < p.expectPos5.size(); ++i) {
@@ -1669,6 +1686,9 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
       pos5Exp[i].finalize();
       pos3Exp[i].finalize();
     }
+  }
+  if (gcBiasCorrect) {
+      transcriptGCDist.normalize();
   }
 
   /*
@@ -1700,6 +1720,7 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
   sopt.jointLog->info("Computed expected counts (for bias correction)");
 
   // Compute appropriate priors and normalization factors
+  /*
   double txomeGCNormFactor = 0.0;
   double gcPrior = 0.0;
   if (gcBiasCorrect) {
@@ -1725,6 +1746,9 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
                       : ((gcBias[i] < gcBiasMin) ? gcBiasMin : gcBias[i]);
     }
   }
+  */
+
+  auto gcBias = gcCounts.ratio(transcriptGCDist, 1000.0);
 
   exp5.normalize();
   exp3.normalize();
@@ -1831,6 +1855,11 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
             seqFactorsFW.setOnes();
             seqFactorsRC.setOnes();
 
+            Eigen::VectorXd contextCountsFP(refLen);
+            Eigen::VectorXd contextCountsTP(refLen);
+            contextCountsFP.setOnes();
+            contextCountsTP.setOnes();
+
             std::vector<double> posFactorsFW(refLen, 1.0);
             std::vector<double> posFactorsRC(refLen, 1.0);
 
@@ -1842,6 +1871,30 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
             int32_t fl = locFLDLow;
             auto maxLen = std::min(refLen, locFLDHigh + 1);
             bool done{fl >= maxLen};
+
+            if (gcBiasCorrect and refLen >= 5) {
+                double count = txp.gcAt(4);
+                contextCountsFP[4] = count;
+                contextCountsTP[0] = count;
+                for (int32_t s = 5; s < refLen; ++s) {
+                    switch (tseq[s-5]) {
+                    case 'G':
+                    case 'g':
+                    case 'C':
+                    case 'c':
+                        count -= 1;
+                    }
+                    switch (tseq[s]) {
+                    case 'G':
+                    case 'g':
+                    case 'C':
+                    case 'c':
+                        count += 1;
+                    }
+                    contextCountsFP[s] = count;
+                    contextCountsTP[s-4] = count;
+                }
+            }
 
             if (posBiasCorrect) {
               std::vector<double> posFactorsObs5(refLen, 1.0);
@@ -1940,7 +1993,13 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
                       seqFactorsFW[fragStart] * seqFactorsRC[fragEnd];
                   if (gcBiasCorrect) {
                     auto gcFrac = txp.gcFrac(fragStart, fragEnd);
+                    int32_t contextFrac = std::lrint((contextCountsFP[fragStart] + contextCountsTP[fragEnd]) * 10.0);
+                    GCDesc desc{gcFrac, contextFrac};
+		    //auto desc = txp.gcDesc(fragStart, fragEnd);
+                    fragFactor *= gcBias.get(desc);
+                    /*
                     fragFactor *= gcBias[gcFrac];
+                    */
                   }
                   if (posBiasCorrect) {
                     fragFactor *=

@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include "GCFragModel.hpp"
 #include "SalmonStringUtils.hpp"
 #include "SalmonUtils.hpp"
 #include "SalmonMath.hpp"
@@ -296,6 +297,40 @@ public:
 
     bool hasAnchorFragment() {
         return hasAnchorFragment_.load();
+    }
+
+    inline GCDesc gcDesc(int32_t s, int32_t e) const {
+        if (gcStep_ == 1) {
+            auto cs = GCCount_[s];
+            auto ce = GCCount_[e];
+
+            auto fps = GCCount_[(s >= 4) ? s-4 : 0];
+            auto fpe = cs;
+            auto tps = ce;
+            auto tpe = GCCount_[(e < RefLength - 4) ? e+4 : RefLength - 1];
+            
+            int32_t fragFrac = std::lrint((100.0 * (ce - cs)) / (e - s + 1));
+            int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (10.0))));
+            GCDesc desc = {fragFrac, contextFrac};
+            return desc;
+        } else {
+            auto cs = gcCountInterp_(s);
+            auto ce = gcCountInterp_(e);
+
+            auto fps = gcCountInterp_((s >= 4) ? s-4 : 0);
+            auto fpe = cs;
+            auto tps = ce;
+            auto tpe = gcCountInterp_((e < RefLength - 4) ? e+4 : RefLength - 1);
+            
+            int32_t fragFrac = std::lrint((100.0 * (ce - cs)) / (e - s + 1));
+            int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (10.0))));
+            GCDesc desc = {fragFrac, contextFrac};
+            return desc;
+        }
+
+    }
+    inline double gcAt(int32_t s) const {
+        return (s < 0) ? 0.0 : ((s >= RefLength) ? gcCount_(RefLength) : gcCount_(s));
     }
 
     // Return the fractional GC content along this transcript

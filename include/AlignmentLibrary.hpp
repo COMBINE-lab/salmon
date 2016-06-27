@@ -10,6 +10,7 @@ extern "C" {
 
 // Our includes
 #include "DistributionUtils.hpp"
+#include "GCFragModel.hpp"
 #include "SBModel.hpp"
 #include "ClusterForest.hpp"
 #include "Transcript.hpp"
@@ -66,9 +67,10 @@ class AlignmentLibrary {
         seqBiasModel_(1.0),
     	eqBuilder_(salmonOpts.jointLog),
         quantificationPasses_(0),
-        expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0),
-        expectedGC_(101, 1.0),
-        observedGC_(101, 1e-5) {
+        expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0)
+        //expectedGC_(101, 1.0),
+        //observedGC_(101, 1e-5) 
+    {
             namespace bfs = boost::filesystem;
 
             // Make sure the alignment file exists.
@@ -293,10 +295,6 @@ class AlignmentLibrary {
     double gcFracFwd() const { return gcFracFwd_; }
     double gcFracRC() const { return 1.0 - gcFracFwd_; }
 
-    void setExpectedSeqBias(const std::vector<double>& expectedBiasIn) {
-        expectedBias_ = expectedBiasIn;
-    }
-
     std::vector<double>& expectedSeqBias() {
         return expectedBias_;
     }
@@ -305,23 +303,23 @@ class AlignmentLibrary {
         return expectedBias_;
     }
 
-    void setExpectedGCBias(const std::vector<double>& expectedBiasIn) {
+    void setExpectedGCBias(const GCFragModel& expectedBiasIn) {
         expectedGC_ = expectedBiasIn;
     }
 
-    std::vector<double>& expectedGCBias() {
+    GCFragModel& expectedGCBias() {
         return expectedGC_;
     }
 
-    const std::vector<double>& expectedGCBias() const {
+    const GCFragModel& expectedGCBias() const {
         return expectedGC_;
     }
 
-    const std::vector<double>& observedGC() const {
+    const GCFragModel& observedGC() const {
         return observedGC_;
     }
 
-    std::vector<double>& observedGC() {
+    GCFragModel& observedGC() {
         return observedGC_;
     }
 
@@ -413,8 +411,8 @@ class AlignmentLibrary {
     /** GC-fragment bias things **/
     // One bin for each percentage GC content
     double gcFracFwd_;
-    std::vector<double> observedGC_;
-    std::vector<double> expectedGC_;
+    GCFragModel observedGC_;
+    GCFragModel expectedGC_;
 
     // Since multiple threads can touch this dist, we
     // need atomic counters.

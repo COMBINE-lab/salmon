@@ -513,11 +513,17 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
         if (gcBiasCorrect and aln.libFormat().type == ReadType::PAIRED_END) {
           int32_t start = std::min(aln.pos, aln.matePos);
           int32_t stop = start + aln.fragLen - 1;
-          if (start > 0 and stop < transcript.RefLength) {
+
+          // WITH CONTEXT
+          if (start >= 0 and stop < transcript.RefLength) {
+              auto desc = transcript.gcDesc(start, stop);
+              observedGCMass.inc(desc, aln.logProb);
+            /*
             int32_t gcFrac = transcript.gcFrac(start, stop);
             // Add this fragment's contribution
             observedGCMass[gcFrac] =
                 salmon::math::logAdd(observedGCMass[gcFrac], aln.logProb);
+            */
           }
         }
         double r = uni(randEng);
@@ -1336,10 +1342,7 @@ void processReadLibrary(
     auto& globalGCMass = readExp.observedGC();
     for (auto& gcp : observedBiasParams) {
       auto& gcm = gcp.observedGCMass;
-      double totMass = salmon::math::LOG_0;
-      for (auto e : gcm) {
-        totMass = salmon::math::logAdd(totMass, e);
-      }
+      globalGCMass.combineCounts(gcm);
 
       auto& fw = readExp.readBiasModel(salmon::utils::Direction::FORWARD);
       auto& rc =
@@ -1370,16 +1373,9 @@ void processReadLibrary(
       globalMass = salmon::math::logAdd(globalMass, gcp.massFwd);
       globalMass = salmon::math::logAdd(globalMass, gcp.massRC);
       globalFwdMass = salmon::math::logAdd(globalFwdMass, gcp.massFwd);
-
-      if (totMass != salmon::math::LOG_0) {
-        for (size_t i = 0; i < gcm.size(); ++i) {
-          if (gcm[i] != salmon::math::LOG_0) {
-            double val = std::exp(gcm[i] - totMass);
-            globalGCMass[i] += val;
-          }
-        }
-      }
     }
+    globalGCMass.normalize();
+
     if (globalMass != salmon::math::LOG_0) {
       if (globalFwdMass != salmon::math::LOG_0) {
         gcFracFwd = std::exp(globalFwdMass - globalMass);

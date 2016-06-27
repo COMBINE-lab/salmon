@@ -11,6 +11,7 @@ extern "C" {
 // Our includes
 #include "ClusterForest.hpp"
 #include "DistributionUtils.hpp"
+#include "GCFragModel.hpp"
 #include "Transcript.hpp"
 #include "ReadLibrary.hpp"
 #include "FragmentLengthDistribution.hpp"
@@ -66,9 +67,10 @@ class ReadExperiment {
         posBiasRC_(5),
         seqBiasModel_(1.0),
 	eqBuilder_(sopt.jointLog),
-        expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0),
-        expectedGC_(101, 0.0),
-        observedGC_(101, 1e-5) {
+        expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0)
+        //expectedGC_(101, 0.0),
+        //observedGC_(101, 1e-5) 
+    {
             namespace bfs = boost::filesystem;
 
             // Make sure the read libraries are valid.
@@ -614,9 +616,6 @@ class ReadExperiment {
     double gcFracFwd() const { return gcFracFwd_; }
     double gcFracRC() const { return 1.0 - gcFracFwd_; }
 
-    void setExpectedSeqBias(const std::vector<double>& expectedBiasIn) {
-        expectedBias_ = expectedBiasIn;
-    }
 
     std::vector<double>& expectedSeqBias() {
         return expectedBias_;
@@ -626,23 +625,23 @@ class ReadExperiment {
         return expectedBias_;
     }
 
-    void setExpectedGCBias(const std::vector<double>& expectedBiasIn) {
+    void setExpectedGCBias(const GCFragModel& expectedBiasIn) {
         expectedGC_ = expectedBiasIn;
     }
 
-    std::vector<double>& expectedGCBias() {
+    GCFragModel& expectedGCBias() {
         return expectedGC_;
     }
 
-    const std::vector<double>& expectedGCBias() const {
+    const GCFragModel& expectedGCBias() const {
         return expectedGC_;
     }
 
-    const std::vector<double>& observedGC() const {
+    const GCFragModel& observedGC() const {
         return observedGC_;
     }
 
-    std::vector<double>& observedGC() {
+    GCFragModel& observedGC() {
         return observedGC_;
     }
 
@@ -727,8 +726,8 @@ class ReadExperiment {
     /** GC-fragment bias things **/
     // One bin for each percentage GC content
     double gcFracFwd_{-1.0};
-    std::vector<double> observedGC_;
-    std::vector<double> expectedGC_;
+    GCFragModel observedGC_;
+    GCFragModel expectedGC_;
 
     /** Sequence specific bias things **/
     // Since multiple threads can touch this dist, we

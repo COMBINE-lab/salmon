@@ -2,6 +2,7 @@
 #define __BIAS_PARAMS__
 
 #include "SBModel.hpp"
+#include "GCFragModel.hpp"
 #include "ReadKmerDist.hpp"
 #include "SalmonMath.hpp"
 #include "SimplePosBias.hpp"
@@ -20,7 +21,8 @@ struct BiasParams {
   /**
    * fragment-GC bias counts
    **/
-    std::vector<double> observedGCMass = std::vector<double>(101, salmon::math::LOG_0);
+    //std::vector<double> observedGCMass = std::vector<double>(101, salmon::math::LOG_0);
+    GCFragModel observedGCMass;
 
     ReadKmerDist<8, uint32_t> seqBiasFW;
     ReadKmerDist<8, uint32_t> seqBiasRC;

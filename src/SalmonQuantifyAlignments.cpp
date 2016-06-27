@@ -537,11 +537,18 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                   int32_t start = alnp->left(); 
                   int32_t stop = alnp->right(); 
 
+                  if (start >= 0 and stop < transcript.RefLength) {
+		      auto desc = transcript.gcDesc(start, stop);
+                      observedGCMass.inc(desc, aln->logProb);
+                   }
+
+          /*
 			    if (start >= 0 and stop < transcript.RefLength) {
 			      int32_t gcFrac = transcript.gcFrac(start, stop);
 			      // Add this fragment's contribution
 			      observedGCMass[gcFrac] = salmon::math::logAdd(observedGCMass[gcFrac], newMass); 
 			    }
+          */
 			  }
 			}
 			// END: GC-fragment bias
@@ -905,10 +912,7 @@ bool quantifyLibrary(
             auto& globalGCMass = alnLib.observedGC();
             for (auto& gcp : observedBiasParams) {
                 auto& gcm = gcp.observedGCMass;
-                double totMass = salmon::math::LOG_0;
-                for (auto e : gcm) {
-                    totMass = salmon::math::logAdd(totMass, e);
-                }
+                globalGCMass.combineCounts(gcm);
                 
                 auto& fw = alnLib.readBiasModel(salmon::utils::Direction::FORWARD);
                 auto& rc = alnLib.readBiasModel(salmon::utils::Direction::REVERSE_COMPLEMENT);
@@ -922,16 +926,9 @@ bool quantifyLibrary(
                 globalMass = salmon::math::logAdd(globalMass, gcp.massRC);
                 globalFwdMass = salmon::math::logAdd(globalFwdMass, gcp.massFwd);
 
-		if (gcBiasCorrect and totMass != salmon::math::LOG_0) {
-		  for (size_t i = 0; i < gcm.size(); ++i) {
-		    if (gcm[i] != salmon::math::LOG_0) {
-		      double val = std::exp(gcm[i] - totMass);
-		      globalGCMass[i] += val;
-		    }
-		  }
-		}
-
 	    }
+            globalGCMass.normalize();
+
 	    if (globalMass != salmon::math::LOG_0) {
 		if (globalFwdMass != salmon::math::LOG_0) {
                   gcFracFwd = std::exp(globalFwdMass - globalMass);

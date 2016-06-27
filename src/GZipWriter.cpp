@@ -167,6 +167,7 @@ bool GZipWriter::writeMeta(
   writeVectorToFile(obsBiasPath3p, observedBias3p);
 
 
+  /*
   bfs::path normGCPath = auxDir / "expected_gc.gz";
   writeVectorToFile(normGCPath, experiment.expectedGCBias());
 
@@ -175,6 +176,7 @@ bool GZipWriter::writeMeta(
   std::vector<double> observedGC(gcCounts.size(), 0.0);
   std::copy(gcCounts.begin(), gcCounts.end(), observedGC.begin());
   writeVectorToFile(obsGCPath, observedGC);
+  */
   
   bfs::path info = auxDir / "meta_info.json";
 
