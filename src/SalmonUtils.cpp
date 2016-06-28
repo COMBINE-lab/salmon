@@ -1480,6 +1480,36 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
     }
   };
 
+  auto populateContextCounts = [](const Transcript& txp,
+				  const char* tseq,
+				  Eigen::VectorXd& contextCountsFP,
+				  Eigen::VectorXd& contextCountsTP) {
+    auto refLen = static_cast<int32_t>(txp.RefLength);
+    if (refLen >= 5) {
+      double count = txp.gcAt(4);
+      contextCountsFP[4] = count;
+      contextCountsTP[0] = count;
+      for (int32_t s = 5; s < refLen; ++s) {
+	switch (tseq[s-5]) {
+	case 'G':
+	case 'g':
+	case 'C':
+	case 'c':
+	  count -= 1;
+	}
+	switch (tseq[s]) {
+	case 'G':
+	case 'g':
+	case 'C':
+	case 'c':
+	  count += 1;
+	}
+	contextCountsFP[s] = count;
+	contextCountsTP[s-4] = count;
+      }
+    }
+  };
+
   /**
    * The local bias terms from each thread can be combined
    * via simple summation.
@@ -1542,7 +1572,12 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
           // Otherwise, proceed giving this transcript the following weight
           double weight = (alphas[it] / effLensIn(it));
 
-          // This transcript's sequence
+	  Eigen::VectorXd contextCountsFP(refLen);
+	  Eigen::VectorXd contextCountsTP(refLen);
+	  contextCountsFP.setOnes();
+	  contextCountsTP.setOnes();
+
+	  // This transcript's sequence
           const char* tseq = txp.Sequence();
           revComplement(tseq, refLen, rcSeq);
           const char* rseq = rcSeq.c_str();
@@ -1553,7 +1588,11 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
           rcmer.from_chars(rseq);
           int32_t contextLength{expectSeqFW.getContextLength()};
 
-          // The smallest and largest values of fragment
+	  if (gcBiasCorrect) {
+	    populateContextCounts(txp, tseq, contextCountsFP, contextCountsTP);
+	  } 
+
+	  // The smallest and largest values of fragment
           // lengths we'll consider for this transcript.
           int32_t locFLDLow = (refLen < cdfMaxArg) ? 1 : fldLow;
           int32_t locFLDHigh = (refLen < cdfMaxArg) ? cdfMaxArg : fldHigh;
@@ -1588,21 +1627,14 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
                   static_cast<size_t>((locFLDLow > 0) ? locFLDLow - 1 : 0);
               double prevFLMass = conditionalCDF(sp);
               int32_t fragStart = fragStartPos;
-              double gcCountStart = (txp.gcAt(fragStartPos + 2) - txp.gcAt(fragStartPos - 2));
-
               for (int32_t fl = locFLDLow; fl <= locFLDHigh; fl += gcSamp) {
                 int32_t fragEnd = fragStart + fl - 1;
-                //double gcCountEnd = txp.gcAt(fragEnd + 2) - txp.gcAt(fragEnd - 2);
-                //double contextFrac = (gcCountStart + gcCountEnd) * 0.1;
                 if (fragEnd < refLen) {
                   // The GC fraction for this putative fragment
-                  auto desc = txp.gcDesc(fragStart, fragEnd);
+		  auto gcFrac = txp.gcFrac(fragStart, fragEnd);
+		  int32_t contextFrac = std::lrint((contextCountsFP[fragStart] + contextCountsTP[fragEnd]) * 10.0);
+		  GCDesc desc{gcFrac, contextFrac};
                   expectGC.inc(desc, weight * (conditionalCDF(fl) - prevFLMass));
-                  /*
-                  auto gcFrac = txp.gcFrac(fragStart, fragEnd);
-                  expectGC[gcFrac] +=
-                      weight * (conditionalCDF(fl) - prevFLMass);
-                  */
                   prevFLMass = conditionalCDF(fl);
                 } else {
                   break;
@@ -1665,11 +1697,6 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
     }
     if (gcBiasCorrect) {
       transcriptGCDist.combineCounts(p.expectGC);
-	/*
-      for (size_t i = 0; i < p.expectGC.size(); ++i) {
-        transcriptGCDist[i] += p.expectGC[i];
-      }
-        */
     }
     if (posBiasCorrect) {
       for (size_t i = 0; i < p.expectPos5.size(); ++i) {
@@ -1691,62 +1718,7 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
       transcriptGCDist.normalize();
   }
 
-  /*
-  auto smoothDist = [](std::vector<double>& v, int w, int d) -> void {
-    v = sg_smooth(v, w, d);
-    double gcSum = 0.0;
-    for (size_t i = 0; i < v.size(); ++i) {
-      if (v[i] < 1e-5) {
-        v[i] = 1e-5;
-      }
-      gcSum += v[i];
-    }
-    for (size_t i = 0; i < v.size(); ++i) {
-      v[i] /= gcSum;
-    }
-  };
-
-  smoothDist(transcriptGCDist, 5,  3);
-  smoothDist(gcCounts, 5,  3);
-  // Compute the bias weights for each fragment-GC bin
-  Eigen::VectorXd gcBias(101);
-  if (gcBiasCorrect) {
-    for (size_t i = 0; i < 101; ++i) {
-      gcBias[i] = (gcCounts[i] / (transcriptGCDist[i]));
-    }
-  }
-  */
-
   sopt.jointLog->info("Computed expected counts (for bias correction)");
-
-  // Compute appropriate priors and normalization factors
-  /*
-  double txomeGCNormFactor = 0.0;
-  double gcPrior = 0.0;
-  if (gcBiasCorrect) {
-    for (auto m : transcriptGCDist) {
-      txomeGCNormFactor += m;
-    }
-    auto pmass = 1e-5 * 101.0;
-    gcPrior =
-        ((pmass / (readGCNormFactor - pmass)) * txomeGCNormFactor) / 101.0;
-    txomeGCNormFactor += gcPrior * 101.0;
-  }
-  double scaleGCBias = (txomeGCNormFactor / readGCNormFactor);
-
-  // Compute the bias weights for each fragment-GC bin
-  Eigen::VectorXd gcBias(101);
-  double gcBiasMax = 1000.0;
-  double gcBiasMin = 1.0 / gcBiasMax;
-  if (gcBiasCorrect) {
-    for (size_t i = 0; i < 101; ++i) {
-      gcBias[i] = scaleGCBias * (gcCounts[i] / (gcPrior + transcriptGCDist[i]));
-      gcBias[i] = (gcBias[i] > gcBiasMax)
-                      ? gcBiasMax
-                      : ((gcBias[i] < gcBiasMin) ? gcBiasMin : gcBias[i]);
-    }
-  }
-  */
 
   auto gcBias = gcCounts.ratio(transcriptGCDist, 1000.0);
 
@@ -1872,29 +1844,9 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
             auto maxLen = std::min(refLen, locFLDHigh + 1);
             bool done{fl >= maxLen};
 
-            if (gcBiasCorrect and refLen >= 5) {
-                double count = txp.gcAt(4);
-                contextCountsFP[4] = count;
-                contextCountsTP[0] = count;
-                for (int32_t s = 5; s < refLen; ++s) {
-                    switch (tseq[s-5]) {
-                    case 'G':
-                    case 'g':
-                    case 'C':
-                    case 'c':
-                        count -= 1;
-                    }
-                    switch (tseq[s]) {
-                    case 'G':
-                    case 'g':
-                    case 'C':
-                    case 'c':
-                        count += 1;
-                    }
-                    contextCountsFP[s] = count;
-                    contextCountsTP[s-4] = count;
-                }
-            }
+	    if (gcBiasCorrect) {
+	      populateContextCounts(txp, tseq, contextCountsFP, contextCountsTP);
+	    }
 
             if (posBiasCorrect) {
               std::vector<double> posFactorsObs5(refLen, 1.0);
@@ -1995,7 +1947,6 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
                     auto gcFrac = txp.gcFrac(fragStart, fragEnd);
                     int32_t contextFrac = std::lrint((contextCountsFP[fragStart] + contextCountsTP[fragEnd]) * 10.0);
                     GCDesc desc{gcFrac, contextFrac};
-		    //auto desc = txp.gcDesc(fragStart, fragEnd);
                     fragFactor *= gcBias.get(desc);
                     /*
                     fragFactor *= gcBias[gcFrac];

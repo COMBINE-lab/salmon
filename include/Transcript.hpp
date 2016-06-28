@@ -304,9 +304,9 @@ public:
             auto cs = GCCount_[s];
             auto ce = GCCount_[e];
 
-            auto fps = GCCount_[(s >= 4) ? s-4 : 0];
+            auto fps = GCCount_[(s >= 5) ? s-5 : 0];
             auto fpe = cs;
-            auto tps = ce;
+            auto tps = GCCount_[(e >= 1) ? e-1 : 0];
             auto tpe = GCCount_[(e < RefLength - 4) ? e+4 : RefLength - 1];
             
             int32_t fragFrac = std::lrint((100.0 * (ce - cs)) / (e - s + 1));
@@ -317,9 +317,9 @@ public:
             auto cs = gcCountInterp_(s);
             auto ce = gcCountInterp_(e);
 
-            auto fps = gcCountInterp_((s >= 4) ? s-4 : 0);
+            auto fps = gcCountInterp_((s >= 5) ? s-5 : 0);
             auto fpe = cs;
-            auto tps = ce;
+            auto tps = gcCountInterp_((e >= 1) ? e-1 : 0);
             auto tpe = gcCountInterp_((e < RefLength - 4) ? e+4 : RefLength - 1);
             
             int32_t fragFrac = std::lrint((100.0 * (ce - cs)) / (e - s + 1));
