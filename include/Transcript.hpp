@@ -300,17 +300,29 @@ public:
     }
 
     inline GCDesc gcDesc(int32_t s, int32_t e) const {
+        int outsideContext{3};
+        int insideContext{2};
+        
+        int outside5p = outsideContext + 1;
+        int outside3p = outsideContext;
+
+        int inside5p = insideContext - 1;
+        int inside3p = insideContext;
+
+        int contextSize = outsideContext + insideContext;
+        int lastPos = RefLength - 1;
         if (gcStep_ == 1) {
             auto cs = GCCount_[s];
             auto ce = GCCount_[e];
 
-            auto fps = GCCount_[(s >= 5) ? s-5 : 0];
-            auto fpe = cs;
-            auto tps = GCCount_[(e >= 1) ? e-1 : 0];
-            auto tpe = GCCount_[(e < RefLength - 4) ? e+4 : RefLength - 1];
+            auto fps = (s >= outside5p) ? GCCount_[s-outside5p] : 0;
+            auto fpe = (inside5p > 0) ? GCCount_[std::min(s+inside5p, lastPos)] : cs;
+            auto tps = (inside3p > 0) ? 
+                ((e >= inside3p) ? GCCount_[e-inside3p] : 0) : ce;
+            auto tpe = GCCount_[std::min(e+outside3p, lastPos)];
             
             int32_t fragFrac = std::lrint((100.0 * (ce - cs)) / (e - s + 1));
-            int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (10.0))));
+            int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (2.0 * contextSize))));
             GCDesc desc = {fragFrac, contextFrac};
             return desc;
         } else {

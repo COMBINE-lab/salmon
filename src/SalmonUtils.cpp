@@ -1333,10 +1333,9 @@ bool processQuantOptions(SalmonOpts& sopt,
  *     Genome Biol 12.3 (2011): R22.
  */
 template <typename AbundanceVecT, typename ReadExpT>
-Eigen::VectorXd
-updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
-                                  Eigen::VectorXd& effLensIn,
-                                  AbundanceVecT& alphas, bool writeBias) {
+Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
+                                       Eigen::VectorXd& effLensIn,
+                                       AbundanceVecT& alphas, bool writeBias) {
 
   using std::vector;
   using BlockedIndexRange = tbb::blocked_range<size_t>;
@@ -1371,8 +1370,7 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
 
   int32_t K =
       seqBiasCorrect ? static_cast<int32_t>(obs5.getContextLength()) : 1;
-  int32_t contextUpstream = 
-      seqBiasCorrect ? obs5.contextBefore(false) : 0;
+  int32_t contextUpstream = seqBiasCorrect ? obs5.contextBefore(false) : 0;
 
   FragmentLengthDistribution& fld = *(readExp.fragmentLengthDistribution());
 
@@ -1437,7 +1435,7 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
   class CombineableBiasParams {
   public:
     CombineableBiasParams(uint32_t K) {
-        //expectGC = std::vector<double>(101, 0.0);
+      // expectGC = std::vector<double>(101, 0.0);
       expectPos5 = std::vector<SimplePosBias>(5);
       expectPos3 = std::vector<SimplePosBias>(5);
       expectGC.reset(distribution_utils::DistributionSpace::LINEAR);
@@ -1480,32 +1478,49 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
     }
   };
 
-  auto populateContextCounts = [](const Transcript& txp,
-				  const char* tseq,
-				  Eigen::VectorXd& contextCountsFP,
-				  Eigen::VectorXd& contextCountsTP) {
+  int outsideContext{3};
+  int insideContext{2};
+
+  int contextSize = outsideContext + insideContext;
+  double cscale = 100.0 / (2 * contextSize);
+  auto populateContextCounts = [outsideContext, insideContext, contextSize](
+      const Transcript& txp, const char* tseq, Eigen::VectorXd& contextCountsFP,
+      Eigen::VectorXd& contextCountsTP) {
     auto refLen = static_cast<int32_t>(txp.RefLength);
-    if (refLen >= 5) {
-      double count = txp.gcAt(4);
-      contextCountsFP[4] = count;
-      contextCountsTP[0] = count;
-      for (int32_t s = 5; s < refLen; ++s) {
-	switch (tseq[s-5]) {
-	case 'G':
-	case 'g':
-	case 'C':
-	case 'c':
-	  count -= 1;
-	}
-	switch (tseq[s]) {
-	case 'G':
-	case 'g':
-	case 'C':
-	case 'c':
-	  count += 1;
-	}
-	contextCountsFP[s] = count;
-	contextCountsTP[s-4] = count;
+    auto lastPos = refLen - 1;
+    if (refLen > contextSize) {
+      int windowStart = -1;
+      int windowEnd = contextSize - 1;
+      int fp = outsideContext;
+      int tp = insideContext - 1;
+      double count = txp.gcAt(windowEnd);
+      contextCountsFP[fp] = count;
+      contextCountsTP[tp] = count;
+      ++windowStart;
+      ++windowEnd;
+      ++fp;
+      ++tp;
+      for (; tp < refLen; ++windowStart, ++windowEnd, ++fp, ++tp) {
+        switch (tseq[windowStart]) {
+        case 'G':
+        case 'g':
+        case 'C':
+        case 'c':
+          count -= 1;
+        }
+        if (windowEnd < refLen) {
+          switch (tseq[windowEnd]) {
+          case 'G':
+          case 'g':
+          case 'C':
+          case 'c':
+            count += 1;
+          }
+        }
+        if (fp < refLen) {
+          contextCountsFP[fp] = count;
+        }
+        contextCountsTP[tp] = count;
       }
     }
   };
@@ -1572,12 +1587,12 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
           // Otherwise, proceed giving this transcript the following weight
           double weight = (alphas[it] / effLensIn(it));
 
-	  Eigen::VectorXd contextCountsFP(refLen);
-	  Eigen::VectorXd contextCountsTP(refLen);
-	  contextCountsFP.setOnes();
-	  contextCountsTP.setOnes();
+          Eigen::VectorXd contextCountsFP(refLen);
+          Eigen::VectorXd contextCountsTP(refLen);
+          contextCountsFP.setOnes();
+          contextCountsTP.setOnes();
 
-	  // This transcript's sequence
+          // This transcript's sequence
           const char* tseq = txp.Sequence();
           revComplement(tseq, refLen, rcSeq);
           const char* rseq = rcSeq.c_str();
@@ -1588,11 +1603,11 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
           rcmer.from_chars(rseq);
           int32_t contextLength{expectSeqFW.getContextLength()};
 
-	  if (gcBiasCorrect) {
-	    populateContextCounts(txp, tseq, contextCountsFP, contextCountsTP);
-	  } 
+          if (gcBiasCorrect) {
+            populateContextCounts(txp, tseq, contextCountsFP, contextCountsTP);
+          }
 
-	  // The smallest and largest values of fragment
+          // The smallest and largest values of fragment
           // lengths we'll consider for this transcript.
           int32_t locFLDLow = (refLen < cdfMaxArg) ? 1 : fldLow;
           int32_t locFLDHigh = (refLen < cdfMaxArg) ? cdfMaxArg : fldHigh;
@@ -1631,11 +1646,25 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
                 int32_t fragEnd = fragStart + fl - 1;
                 if (fragEnd < refLen) {
                   // The GC fraction for this putative fragment
-		  auto gcFrac = txp.gcFrac(fragStart, fragEnd);
-		  int32_t contextFrac = std::lrint((contextCountsFP[fragStart] + contextCountsTP[fragEnd]) * 10.0);
-		  GCDesc desc{gcFrac, contextFrac};
-                  expectGC.inc(desc, weight * (conditionalCDF(fl) - prevFLMass));
+                  auto gcFrac = txp.gcFrac(fragStart, fragEnd);
+                  int32_t contextFrac = std::lrint(
+                      (contextCountsFP[fragStart] + contextCountsTP[fragEnd]) *
+                      cscale);
+                  GCDesc desc{gcFrac, contextFrac};
+                  expectGC.inc(desc,
+                               weight * (conditionalCDF(fl) - prevFLMass));
                   prevFLMass = conditionalCDF(fl);
+                  /*
+                  if (fragStart > contextSize and contextFrac !=
+                  desc.contextFrac) {
+                              sopt.jointLog->info() << "fl = " << fl << ",pos =
+                  " << fragStart << ", counts5p = " <<
+                  contextCountsFP[fragStart] <<
+                                  ", counts 3p = " << contextCountsTP[fragEnd]
+                  << ", cscale = " << cscale << ", contextFrac = " <<
+                  contextFrac << ", desc.contextFrac = " << desc.contextFrac;
+                          }
+                          */
                 } else {
                   break;
                 } // no more valid positions
@@ -1715,7 +1744,7 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
     }
   }
   if (gcBiasCorrect) {
-      transcriptGCDist.normalize();
+    transcriptGCDist.normalize();
   }
 
   sopt.jointLog->info("Computed expected counts (for bias correction)");
@@ -1844,9 +1873,10 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
             auto maxLen = std::min(refLen, locFLDHigh + 1);
             bool done{fl >= maxLen};
 
-	    if (gcBiasCorrect) {
-	      populateContextCounts(txp, tseq, contextCountsFP, contextCountsTP);
-	    }
+            if (gcBiasCorrect) {
+              populateContextCounts(txp, tseq, contextCountsFP,
+                                    contextCountsTP);
+            }
 
             if (posBiasCorrect) {
               std::vector<double> posFactorsObs5(refLen, 1.0);
@@ -1945,7 +1975,10 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
                       seqFactorsFW[fragStart] * seqFactorsRC[fragEnd];
                   if (gcBiasCorrect) {
                     auto gcFrac = txp.gcFrac(fragStart, fragEnd);
-                    int32_t contextFrac = std::lrint((contextCountsFP[fragStart] + contextCountsTP[fragEnd]) * 10.0);
+                    int32_t contextFrac =
+                        std::lrint((contextCountsFP[fragStart] +
+                                    contextCountsTP[fragEnd]) *
+                                   cscale);
                     GCDesc desc{gcFrac, contextFrac};
                     fragFactor *= gcBias.get(desc);
                     /*
@@ -2236,38 +2269,40 @@ salmon::utils::updateEffectiveLengths<std::vector<double>,
 */
 
 // explicit instantiations for effective length updates ---
-template Eigen::VectorXd salmon::utils::updateEffectiveLengths<
-    std::vector<tbb::atomic<double>>, ReadExperiment>(
+template Eigen::VectorXd
+salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
+                                      ReadExperiment>(
     SalmonOpts& sopt, ReadExperiment& readExp, Eigen::VectorXd& effLensIn,
     std::vector<tbb::atomic<double>>& alphas, bool finalRound);
 
-template Eigen::VectorXd salmon::utils::updateEffectiveLengths<
-    std::vector<double>, ReadExperiment>(SalmonOpts& sopt,
-                                         ReadExperiment& readExp,
-                                         Eigen::VectorXd& effLensIn,
-                                         std::vector<double>& alphas,
-                                         bool finalRound);
+template Eigen::VectorXd
+salmon::utils::updateEffectiveLengths<std::vector<double>, ReadExperiment>(
+    SalmonOpts& sopt, ReadExperiment& readExp, Eigen::VectorXd& effLensIn,
+    std::vector<double>& alphas, bool finalRound);
 
-template Eigen::VectorXd salmon::utils::updateEffectiveLengths<
-    std::vector<tbb::atomic<double>>, AlignmentLibrary<ReadPair>>(
+template Eigen::VectorXd
+salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
+                                      AlignmentLibrary<ReadPair>>(
     SalmonOpts& sopt, AlignmentLibrary<ReadPair>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
     bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<double>,
-                                                 AlignmentLibrary<ReadPair>>(
+                                      AlignmentLibrary<ReadPair>>(
     SalmonOpts& sopt, AlignmentLibrary<ReadPair>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<double>& alphas, bool finalRound);
 
-template Eigen::VectorXd salmon::utils::updateEffectiveLengths<
-    std::vector<tbb::atomic<double>>, AlignmentLibrary<UnpairedRead>>(
+template Eigen::VectorXd
+salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
+                                      AlignmentLibrary<UnpairedRead>>(
     SalmonOpts& sopt, AlignmentLibrary<UnpairedRead>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
     bool finalRound);
 
-template Eigen::VectorXd salmon::utils::updateEffectiveLengths<
-    std::vector<double>, AlignmentLibrary<UnpairedRead>>(
+template Eigen::VectorXd
+salmon::utils::updateEffectiveLengths<std::vector<double>,
+                                      AlignmentLibrary<UnpairedRead>>(
     SalmonOpts& sopt, AlignmentLibrary<UnpairedRead>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<double>& alphas, bool finalRound);
 
