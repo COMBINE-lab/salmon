@@ -62,7 +62,35 @@ SBModel::SBModel() : _trained(false) {
   // We have no intial observations
   _probs.setZero();
 }
-  
+
+bool SBModel::writeBinary(boost::iostreams::filtering_ostream& out) const {
+  auto* mutThis = const_cast<SBModel*>(this);
+  out.write(reinterpret_cast<char*>(&(mutThis->_contextLength)), sizeof(int32_t));
+  out.write(reinterpret_cast<char*>(&(mutThis->_contextLeft)), sizeof(int32_t));
+  out.write(reinterpret_cast<char*>(&(mutThis->_contextRight)), sizeof(int32_t));
+  // write the orders
+  out.write(reinterpret_cast<char*>(mutThis->_order.data()), _contextLength * sizeof(int32_t));
+  // write the shifts 
+  out.write(reinterpret_cast<char*>(mutThis->_shifts.data()), _contextLength * sizeof(int32_t));
+  // write the widths 
+  out.write(reinterpret_cast<char*>(mutThis->_shifts.data()), _contextLength * sizeof(int32_t));
+
+  // Following adopted from: http://stackoverflow.com/questions/25389480/how-to-write-read-an-eigen-matrix-from-binary-file
+  // write all probabilities
+  typename Eigen::MatrixXd::Index prows = _probs.rows(), pcols= _probs.cols();
+  out.write(reinterpret_cast<char*>(&prows), sizeof(typename Eigen::MatrixXd::Index));
+  out.write(reinterpret_cast<char*>(&pcols), sizeof(typename Eigen::MatrixXd::Index));
+  out.write(reinterpret_cast<char*>(mutThis->_probs.data()), prows*pcols*sizeof(typename Eigen::MatrixXd::Scalar));
+
+  // write marginal probabilities
+  typename Eigen::MatrixXd::Index mrows= _marginals.rows(), mcols= _marginals.cols();
+  out.write(reinterpret_cast<char*>(&mrows), sizeof(typename Eigen::MatrixXd::Index));
+  out.write(reinterpret_cast<char*>(&mcols), sizeof(typename Eigen::MatrixXd::Index));
+  out.write(reinterpret_cast<char*>(mutThis->_marginals.data()), mrows*mcols*sizeof(typename Eigen::MatrixXd::Scalar));
+
+  return true;
+}
+ 
 double SBModel::evaluateLog(const char* seqIn) {
     double p = 0;
     Mer mer;

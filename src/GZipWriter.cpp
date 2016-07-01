@@ -166,6 +166,49 @@ bool GZipWriter::writeMeta(
   std::copy(bcounts3p.begin(), bcounts3p.end(), observedBias3p.begin());
   writeVectorToFile(obsBiasPath3p, observedBias3p);
 
+  if (opts.biasCorrect) {
+    // 5' observed
+    {
+      bfs::path obs5Path = auxDir / "obs5_seq.gz";
+      auto flags = std::ios_base::out | std::ios_base::binary;
+      boost::iostreams::filtering_ostream out;
+      out.push(boost::iostreams::gzip_compressor(6));
+      out.push(boost::iostreams::file_sink(obs5Path.string(), flags));
+      auto& obs5 = experiment.readBiasModelObserved(salmon::utils::Direction::FORWARD);
+      obs5.writeBinary(out);
+    }
+    // 3' observed
+    {
+      bfs::path obs3Path = auxDir / "obs3_seq.gz";
+      auto flags = std::ios_base::out | std::ios_base::binary;
+      boost::iostreams::filtering_ostream out;
+      out.push(boost::iostreams::gzip_compressor(6));
+      out.push(boost::iostreams::file_sink(obs3Path.string(), flags));
+      auto& obs3 = experiment.readBiasModelObserved(salmon::utils::Direction::REVERSE_COMPLEMENT);
+      obs3.writeBinary(out);
+    }
+
+    // 5' expected
+    {
+      bfs::path exp5Path = auxDir / "exp5_seq.gz";
+      auto flags = std::ios_base::out | std::ios_base::binary;
+      boost::iostreams::filtering_ostream out;
+      out.push(boost::iostreams::gzip_compressor(6));
+      out.push(boost::iostreams::file_sink(exp5Path.string(), flags));
+      auto& exp5 = experiment.readBiasModelExpected(salmon::utils::Direction::FORWARD);
+      exp5.writeBinary(out);
+    }
+    // 3' expected
+    {
+      bfs::path exp3Path = auxDir / "exp3_seq.gz";
+      auto flags = std::ios_base::out | std::ios_base::binary;
+      boost::iostreams::filtering_ostream out;
+      out.push(boost::iostreams::gzip_compressor(6));
+      out.push(boost::iostreams::file_sink(exp3Path.string(), flags));
+      auto& exp3 = experiment.readBiasModelExpected(salmon::utils::Direction::REVERSE_COMPLEMENT);
+      exp3.writeBinary(out);
+    }
+  }
 
   /*
   bfs::path normGCPath = auxDir / "expected_gc.gz";
@@ -196,7 +239,8 @@ bool GZipWriter::writeMeta(
       oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
       oa(cereal::make_nvp("samp_type", sampType));
       oa(cereal::make_nvp("frag_dist_length", fldSamples.size()));
-      oa(cereal::make_nvp("bias_correct", opts.biasCorrect));
+      oa(cereal::make_nvp("seq_bias_correct", opts.biasCorrect));
+      oa(cereal::make_nvp("gc_bias_correct", opts.gcBiasCorrect));
       oa(cereal::make_nvp("num_bias_bins", bcounts.size()));
 
       std::string mapTypeStr = opts.alnMode ? "alignment" : "mapping";

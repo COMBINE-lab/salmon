@@ -6,6 +6,7 @@
 #include "ReadKmerDist.hpp"
 #include "SalmonMath.hpp"
 #include "SimplePosBias.hpp"
+#include "DistributionUtils.hpp"
 #include <vector>
 
 struct BiasParams {
@@ -33,8 +34,10 @@ struct BiasParams {
     SBModel seqBiasModelFW;
     SBModel seqBiasModelRC;
 
-    BiasParams(bool seqBiasPseudocount=false) : seqBiasFW(seqBiasPseudocount), seqBiasRC(seqBiasPseudocount),
-                                                posBiasFW(5), posBiasRC(5) {}
+  BiasParams(size_t numCondBins=3,
+	     size_t numGCBins=101,
+	     bool seqBiasPseudocount=false) : seqBiasFW(seqBiasPseudocount), seqBiasRC(seqBiasPseudocount),
+					      posBiasFW(5), posBiasRC(5), observedGCMass(numCondBins, numGCBins) {}
 };
 
 #endif //__GC_BIAS_PARAMS__

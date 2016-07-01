@@ -1,6 +1,8 @@
 #ifndef __SB_MODEL_HPP__
 #define __SB_MODEL_HPP__
 
+#include <boost/iostreams/filtering_stream.hpp>
+
 #include "jellyfish/mer_dna.hpp"
 #include "UtilityFunctions.hpp"
 #include <Eigen/Dense>
@@ -11,6 +13,14 @@ using Mer = jellyfish::mer_dna_ns::mer_base_static<uint64_t, 4>;
 class SBModel {
 public:
   SBModel();   
+  
+  SBModel(const SBModel&) = default;
+  SBModel(SBModel&&) = default;
+  SBModel& operator=(const SBModel&) = default;
+  SBModel& operator=(SBModel&&) = default;
+
+  bool writeBinary(boost::iostreams::filtering_ostream& out) const; 
+
   inline int32_t contextBefore(bool rc) { return rc ? _contextRight : _contextLeft; }
   inline int32_t contextAfter(bool rc) { return rc ? _contextLeft : _contextRight; }
 

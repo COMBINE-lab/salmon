@@ -132,6 +132,8 @@ struct SalmonOpts {
     bool biasCorrect{false}; // Perform sequence-specific bias correction
     bool gcBiasCorrect{false}; // Perform gc-fragment bias correction
     bool posBiasCorrect{false}; // Perform positional bias correction
+    size_t numConditionalGCBins{3};
+    size_t numFragGCBins{101};
     std::atomic<int32_t> numBiasSamples{1000000}; // The number of fragment mappings to consider when building
 						  // the sequence-specific "foreground" distribution.
 

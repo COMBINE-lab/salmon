@@ -67,10 +67,11 @@ class AlignmentLibrary {
         seqBiasModel_(1.0),
     	eqBuilder_(salmonOpts.jointLog),
         quantificationPasses_(0),
-        expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0)
-        //expectedGC_(101, 1.0),
-        //observedGC_(101, 1e-5) 
-    {
+        expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0),
+	expectedGC_( salmonOpts.numConditionalGCBins,
+		    salmonOpts.numFragGCBins, distribution_utils::DistributionSpace::LOG),
+        observedGC_( salmonOpts.numConditionalGCBins,
+		    salmonOpts.numFragGCBins, distribution_utils::DistributionSpace::LOG) {
             namespace bfs = boost::filesystem;
 
             // Make sure the alignment file exists.
@@ -337,13 +338,25 @@ class AlignmentLibrary {
         return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0] : readBias_[1]; 
     }
 
-    SBModel& readBiasModel(salmon::utils::Direction dir) { 
-        return (dir == salmon::utils::Direction::FORWARD) ? readBiasModel_[0] : readBiasModel_[1]; 
+    SBModel& readBiasModelObserved(salmon::utils::Direction dir) { 
+        return (dir == salmon::utils::Direction::FORWARD) ? readBiasModelObserved_[0] : readBiasModelObserved_[1]; 
     }
-    const SBModel& readBiasModel(salmon::utils::Direction dir) const { 
-        return (dir == salmon::utils::Direction::FORWARD) ? readBiasModel_[0] : readBiasModel_[1]; 
+    const SBModel& readBiasModelObserved(salmon::utils::Direction dir) const { 
+        return (dir == salmon::utils::Direction::FORWARD) ? readBiasModelObserved_[0] : readBiasModelObserved_[1]; 
     }
 
+    SBModel& readBiasModelExpected(salmon::utils::Direction dir) { 
+	return (dir == salmon::utils::Direction::FORWARD) ? readBiasModelExpected_[0] : readBiasModelExpected_[1]; 
+    }
+    const SBModel& readBiasModelExpected(salmon::utils::Direction dir) const { 
+	return (dir == salmon::utils::Direction::FORWARD) ? readBiasModelExpected_[0] : readBiasModelExpected_[1]; 
+   }
+  
+    void setReadBiasModelExpected(SBModel&& model, salmon::utils::Direction dir) {
+        size_t idx = (dir == salmon::utils::Direction::FORWARD) ? 0 : 1;
+	readBiasModelExpected_[idx] = std::move(model);
+    }
+ 
     private:
     /**
      * The file from which the alignments will be read.
@@ -417,7 +430,8 @@ class AlignmentLibrary {
     // Since multiple threads can touch this dist, we
     // need atomic counters.
     std::array<ReadKmerDist<6, std::atomic<uint32_t>>, 2> readBias_;
-    std::array<SBModel, 2> readBiasModel_;
+    std::array<SBModel, 2> readBiasModelObserved_;
+    std::array<SBModel, 2> readBiasModelExpected_;
 
     //ReadKmerDist<6, std::atomic<uint32_t>> readBias_;
     std::vector<double> expectedBias_;

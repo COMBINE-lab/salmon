@@ -1359,9 +1359,9 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
 
   // calculate read bias normalization factor -- total count in read
   // distribution.
-  auto& obs5 = readExp.readBiasModel(salmon::utils::Direction::FORWARD);
+  auto& obs5 = readExp.readBiasModelObserved(salmon::utils::Direction::FORWARD);
   auto& obs3 =
-      readExp.readBiasModel(salmon::utils::Direction::REVERSE_COMPLEMENT);
+      readExp.readBiasModelObserved(salmon::utils::Direction::REVERSE_COMPLEMENT);
   obs5.normalize();
   obs3.normalize();
 
@@ -1434,11 +1434,10 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
    */
   class CombineableBiasParams {
   public:
-    CombineableBiasParams(uint32_t K) {
-      // expectGC = std::vector<double>(101, 0.0);
+    CombineableBiasParams(uint32_t K, size_t numCondBins, size_t numGCBins) :
+      expectGC(numCondBins, numGCBins, distribution_utils::DistributionSpace::LINEAR) {
       expectPos5 = std::vector<SimplePosBias>(5);
       expectPos3 = std::vector<SimplePosBias>(5);
-      expectGC.reset(distribution_utils::DistributionSpace::LINEAR);
     }
 
     std::vector<SimplePosBias> expectPos5;
@@ -1529,8 +1528,8 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
    * The local bias terms from each thread can be combined
    * via simple summation.
    */
-  auto getBiasParams = [K]() -> CombineableBiasParams {
-    return CombineableBiasParams(K);
+  auto getBiasParams = [K, &sopt]() -> CombineableBiasParams {
+    return CombineableBiasParams(K, sopt.numConditionalGCBins, sopt.numFragGCBins);
   };
   tbb::combinable<CombineableBiasParams> expectedDist(getBiasParams);
   std::atomic<size_t> numBackgroundTranscripts{0};
@@ -1603,7 +1602,7 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
           rcmer.from_chars(rseq);
           int32_t contextLength{expectSeqFW.getContextLength()};
 
-          if (gcBiasCorrect) {
+          if (gcBiasCorrect and seqBiasCorrect) {
             populateContextCounts(txp, tseq, contextCountsFP, contextCountsTP);
           }
 
@@ -1873,7 +1872,7 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
             auto maxLen = std::min(refLen, locFLDHigh + 1);
             bool done{fl >= maxLen};
 
-            if (gcBiasCorrect) {
+            if (gcBiasCorrect and seqBiasCorrect) {
               populateContextCounts(txp, tseq, contextCountsFP,
                                     contextCountsTP);
             }
@@ -2020,6 +2019,13 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
         }
       } // end parallel_for lambda
       );
+
+  // Copy over the expected sequence bias models
+  if (seqBiasCorrect) {
+    readExp.setReadBiasModelExpected(std::move(exp5), salmon::utils::Direction::FORWARD); 
+    readExp.setReadBiasModelExpected(std::move(exp3), salmon::utils::Direction::REVERSE_COMPLEMENT); 
+  }
+  
   sopt.jointLog->info("processed bias for 100.0% of the transcripts");
   return effLensOut;
 }

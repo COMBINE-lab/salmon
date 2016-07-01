@@ -802,7 +802,9 @@ bool quantifyLibrary(
         }
 
 	/** sequence-specific and GC-fragment bias vectors --- each thread gets it's own **/
-	std::vector<BiasParams> observedBiasParams(currentQuantThreads);
+	std::vector<BiasParams> observedBiasParams(currentQuantThreads,
+						   BiasParams(salmonOpts.numConditionalGCBins, salmonOpts.numFragGCBins, false));
+
 
 	for (uint32_t i = 0; i < currentQuantThreads; ++i) {
             workers.emplace_back(processMiniBatch<FragT>,
@@ -914,8 +916,8 @@ bool quantifyLibrary(
                 auto& gcm = gcp.observedGCMass;
                 globalGCMass.combineCounts(gcm);
                 
-                auto& fw = alnLib.readBiasModel(salmon::utils::Direction::FORWARD);
-                auto& rc = alnLib.readBiasModel(salmon::utils::Direction::REVERSE_COMPLEMENT);
+                auto& fw = alnLib.readBiasModelObserved(salmon::utils::Direction::FORWARD);
+                auto& rc = alnLib.readBiasModelObserved(salmon::utils::Direction::REVERSE_COMPLEMENT);
                 
                 auto& fwloc = gcp.seqBiasModelFW;
                 auto& rcloc = gcp.seqBiasModelRC;
@@ -1411,7 +1413,15 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         sopt.jointLog = jointLog;
         sopt.fileLog = fileLog;
 
-        // Verify that no inconsistent options were provided
+	// If the user is enabling *just* GC bias correction
+	// i.e. without seq-specific bias correction, then disable
+	// the conditional model.
+	if (sopt.gcBiasCorrect and !sopt.biasCorrect) {
+	  sopt.numConditionalGCBins = 1;
+	}
+
+	
+	// Verify that no inconsistent options were provided
         if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {
             jointLog->error("You cannot perform both Gibbs sampling and bootstrapping. "
                             "Please choose one.");
@@ -1491,7 +1501,8 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 				   "implemented for paired-end libraries.  Disabling "
 				   "fragment GC bias correction for this run");
 		    sopt.gcBiasCorrect = false;
-		  }
+		  } 
+
 		    AlignmentLibrary<UnpairedRead> alnLib(alignmentFiles,
 							  transcriptFile,
 							  libFmt,

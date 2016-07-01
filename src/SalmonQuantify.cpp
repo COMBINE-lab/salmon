@@ -1225,7 +1225,8 @@ void processReadLibrary(
 
   /** sequence-specific and GC-fragment bias vectors --- each thread gets it's
    * own **/
-  std::vector<BiasParams> observedBiasParams(numThreads);
+  std::vector<BiasParams> observedBiasParams(numThreads,
+					     BiasParams(salmonOpts.numConditionalGCBins, salmonOpts.numFragGCBins, false));
 
   // If the read library is paired-end
   // ------ Paired-end --------
@@ -1344,9 +1345,9 @@ void processReadLibrary(
       auto& gcm = gcp.observedGCMass;
       globalGCMass.combineCounts(gcm);
 
-      auto& fw = readExp.readBiasModel(salmon::utils::Direction::FORWARD);
+      auto& fw = readExp.readBiasModelObserved(salmon::utils::Direction::FORWARD);
       auto& rc =
-          readExp.readBiasModel(salmon::utils::Direction::REVERSE_COMPLEMENT);
+          readExp.readBiasModelObserved(salmon::utils::Direction::REVERSE_COMPLEMENT);
 
       auto& fwloc = gcp.seqBiasModelFW;
       auto& rcloc = gcp.seqBiasModelRC;
@@ -1507,9 +1508,9 @@ void processReadLibrary(
                   rc.counts[i] += rcloc.counts[i];
               }
       */
-      auto& fw = readExp.readBiasModel(salmon::utils::Direction::FORWARD);
+      auto& fw = readExp.readBiasModelObserved(salmon::utils::Direction::FORWARD);
       auto& rc =
-          readExp.readBiasModel(salmon::utils::Direction::REVERSE_COMPLEMENT);
+          readExp.readBiasModelObserved(salmon::utils::Direction::REVERSE_COMPLEMENT);
 
       auto& fwloc = gcp.seqBiasModelFW;
       auto& rcloc = gcp.seqBiasModelRC;
@@ -2116,12 +2117,19 @@ transcript abundance from RNA-seq reads
     if (!optionsOK) {
       std::exit(1);
     }
-
+ 
     auto fileLog = sopt.fileLog;
     auto jointLog = sopt.jointLog;
     auto indexDirectory = sopt.indexDirectory;
     auto outputDirectory = sopt.outputDirectory;
     bool greedyChain = true;
+    
+    // If the user is enabling *just* GC bias correction
+    // i.e. without seq-specific bias correction, then disable
+    // the conditional model.
+    if (sopt.gcBiasCorrect and !sopt.biasCorrect) {
+      sopt.numConditionalGCBins = 1;
+    }
 
     jointLog->info() << "parsing read library format";
 
@@ -2169,6 +2177,7 @@ transcript abundance from RNA-seq reads
           }
         }
       }
+
       sopt.allowOrphans = true;
       sopt.useQuasi = true;
       quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions, sopt,

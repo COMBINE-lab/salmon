@@ -329,11 +329,12 @@ public:
             auto cs = gcCountInterp_(s);
             auto ce = gcCountInterp_(e);
 
-            auto fps = gcCountInterp_((s >= 5) ? s-5 : 0);
-            auto fpe = cs;
-            auto tps = gcCountInterp_((e >= 1) ? e-1 : 0);
-            auto tpe = gcCountInterp_((e < RefLength - 4) ? e+4 : RefLength - 1);
-            
+	    auto fps = (s >= outside5p) ? gcCountInterp_(s-outside5p) : 0;
+	    auto fpe = (inside5p > 0) ? gcCountInterp_(std::min(s+inside5p, lastPos)) : cs;
+	    auto tps = (inside3p > 0) ? 
+	      ((e >= inside3p) ? gcCountInterp_(e-inside3p) : 0) : ce;
+	    auto tpe = gcCountInterp_(std::min(e+outside3p, lastPos));
+	    
             int32_t fragFrac = std::lrint((100.0 * (ce - cs)) / (e - s + 1));
             int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (10.0))));
             GCDesc desc = {fragFrac, contextFrac};
