@@ -1265,9 +1265,17 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "goodness-of-fit of an alignment with the empirical fragment length "
                         "distribution");
 
+    po::options_description hidden("\nhidden options");
+    hidden.add_options()
+        ("numGCBins", po::value<size_t>(&(sopt.numFragGCBins))->default_value(100),
+         "Number of bins to use when modeling fragment GC bias"
+         )(
+           "conditionalGCBins", po::value<size_t>(&(sopt.numConditionalGCBins))->default_value(3),
+           "Number of different fragment GC models to learn based on read start/end context"
+           );
 
     po::options_description all("salmon quant options");
-    all.add(basic).add(advanced).add(testing);
+    all.add(basic).add(advanced).add(testing).add(hidden);
 
     po::options_description visible("salmon quant options");
     visible.add(basic).add(advanced);

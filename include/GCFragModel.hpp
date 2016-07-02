@@ -5,6 +5,8 @@
 #include "SalmonMath.hpp"
 #include "Eigen/Dense"
 
+#include <boost/iostreams/filtering_stream.hpp>
+
 #include <vector>
 #include <iostream>
 
@@ -45,6 +47,18 @@ public:
 	}
     }
 
+    bool writeBinary(boost::iostreams::filtering_ostream& out) const {
+        auto* mutThis = const_cast<GCFragModel*>(this);
+        int32_t dtype = (dspace_ == distribution_utils::DistributionSpace::LINEAR) ? 0 : 1;
+        out.write(reinterpret_cast<char*>(&dtype), sizeof(dtype));
+        typename Eigen::MatrixXd::Index rows= counts_.rows(), cols= counts_.cols();
+        out.write(reinterpret_cast<char*>(&rows), sizeof(typename Eigen::MatrixXd::Index));
+        out.write(reinterpret_cast<char*>(&cols), sizeof(typename Eigen::MatrixXd::Index));
+        out.write(reinterpret_cast<char*>(mutThis->counts_.data()), rows*cols*sizeof(typename Eigen::MatrixXd::Scalar));
+        return true;
+    }
+
+
     GCFragModel(const GCFragModel&) = default;
     GCFragModel(GCFragModel&&) = default;
     GCFragModel& operator=(const GCFragModel&) = default;
@@ -83,7 +97,7 @@ public:
              double fragWeight    //< the weight associated with this fragment 
              ) {
       auto ctx = (condBins_ > 1) ? desc.contextBin(condBins_) : 0;
-        auto frag = desc.fragBin();
+        auto frag = (numGCBins_ != 101) ? desc.fragBin(numGCBins_) : desc.fragBin();
 
 	if (dspace_ == distribution_utils::DistributionSpace::LOG) {
 	  counts_(ctx, frag) = salmon::math::logAdd(counts_(ctx, frag), fragWeight);
@@ -94,7 +108,7 @@ public:
 
   double get(GCDesc desc) {
       auto ctx = (condBins_ > 1) ? desc.contextBin(condBins_) : 0;
-        auto frag = desc.fragBin();
+        auto frag = (numGCBins_ != 101) ? desc.fragBin(numGCBins_) : desc.fragBin();
         return counts_(ctx, frag); 
     }
 

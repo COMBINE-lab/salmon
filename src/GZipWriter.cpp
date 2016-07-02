@@ -210,6 +210,28 @@ bool GZipWriter::writeMeta(
     }
   }
 
+  if (opts.gcBiasCorrect) {
+      // GC observed 
+      {
+          bfs::path obsGCPath = auxDir / "obs_gc.gz";
+          auto flags = std::ios_base::out | std::ios_base::binary;
+          boost::iostreams::filtering_ostream out;
+          out.push(boost::iostreams::gzip_compressor(6));
+          out.push(boost::iostreams::file_sink(obsGCPath.string(), flags));
+          auto& obsgc = experiment.observedGC();
+          obsgc.writeBinary(out);
+      }
+      // GC expected 
+      {
+          bfs::path expGCPath = auxDir / "exp_gc.gz";
+          auto flags = std::ios_base::out | std::ios_base::binary;
+          boost::iostreams::filtering_ostream out;
+          out.push(boost::iostreams::gzip_compressor(6));
+          out.push(boost::iostreams::file_sink(expGCPath.string(), flags));
+          auto& expgc = experiment.expectedGCBias();
+          expgc.writeBinary(out);
+      }
+  }
   /*
   bfs::path normGCPath = auxDir / "expected_gc.gz";
   writeVectorToFile(normGCPath, experiment.expectedGCBias());

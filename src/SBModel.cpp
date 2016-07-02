@@ -73,7 +73,7 @@ bool SBModel::writeBinary(boost::iostreams::filtering_ostream& out) const {
   // write the shifts 
   out.write(reinterpret_cast<char*>(mutThis->_shifts.data()), _contextLength * sizeof(int32_t));
   // write the widths 
-  out.write(reinterpret_cast<char*>(mutThis->_shifts.data()), _contextLength * sizeof(int32_t));
+  out.write(reinterpret_cast<char*>(mutThis->_widths.data()), _contextLength * sizeof(int32_t));
 
   // Following adopted from: http://stackoverflow.com/questions/25389480/how-to-write-read-an-eigen-matrix-from-binary-file
   // write all probabilities

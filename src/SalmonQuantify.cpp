@@ -2048,6 +2048,15 @@ int salmonQuantify(int argc, char* argv[]) {
 	  po::bool_switch(&(sopt.writeUnmappedNames))->default_value(false),
 	  "Write the names of un-mapped reads to the file unmapped.txt in the auxiliary directory.");
 
+  po::options_description hidden("\nhidden options");
+  hidden.add_options()
+      ("numGCBins", po::value<size_t>(&(sopt.numFragGCBins))->default_value(100),
+       "Number of bins to use when modeling fragment GC bias"
+       )(
+      "conditionalGCBins", po::value<size_t>(&(sopt.numConditionalGCBins))->default_value(3),
+       "Number of different fragment GC models to learn based on read start/end context"
+       );
+
   po::options_description testing("\n"
                                   "testing options");
   testing.add_options()
@@ -2070,7 +2079,7 @@ int salmonQuantify(int argc, char* argv[]) {
       "distribution");
 
   po::options_description all("salmon quant options");
-  all.add(generic).add(advanced).add(testing);
+  all.add(generic).add(advanced).add(testing).add(hidden);
 
   po::options_description visible("salmon quant options");
   visible.add(generic).add(advanced);
