@@ -1757,54 +1757,6 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
   std::atomic<size_t> numCorrected{0};
   std::atomic<size_t> numUncorrected{0};
 
-  // Write out the bias model parameters we learned
-  if (writeBias) {
-    boost::filesystem::path auxDir = sopt.outputDirectory / sopt.auxDir;
-    bool auxSuccess = boost::filesystem::is_directory(auxDir);
-    if (!auxSuccess) {
-      auxSuccess = boost::filesystem::create_directories(auxDir);
-    }
-    if (auxSuccess) {
-      auto exp5fn = auxDir / "exp5_marginals.txt";
-      auto& exp5m = exp5.marginals();
-      std::ofstream exp5f(exp5fn.string());
-      exp5f << exp5m.rows() << '\t' << exp5m.cols() << '\n';
-      exp5f << exp5m;
-      exp5f.close();
-
-      auto exp3fn = auxDir / "exp3_marginals.txt";
-      auto& exp3m = exp3.marginals();
-      std::ofstream exp3f(exp3fn.string());
-      exp3f << exp3m.rows() << '\t' << exp3m.cols() << '\n';
-      exp3f << exp3m;
-      exp3f.close();
-
-      auto obs5fnc = auxDir / "obs5_conditionals.txt";
-      std::ofstream obs5fc(obs5fnc.string());
-      obs5.dumpConditionalProbabilities(obs5fc);
-      obs5fc.close();
-
-      auto obs3fnc = auxDir / "obs3_conditionals.txt";
-      std::ofstream obs3fc(obs3fnc.string());
-      obs3.dumpConditionalProbabilities(obs3fc);
-      obs3fc.close();
-
-      auto exp5fnc = auxDir / "exp5_conditionals.txt";
-      std::ofstream exp5fc(exp5fnc.string());
-      exp5.dumpConditionalProbabilities(exp5fc);
-      exp5fc.close();
-
-      auto exp3fnc = auxDir / "exp3_conditionals.txt";
-      std::ofstream exp3fc(exp3fnc.string());
-      exp3.dumpConditionalProbabilities(exp3fc);
-      exp3fc.close();
-    } else {
-      sopt.jointLog->warn(
-          "Couldn't create auxiliary directory {} to write bias parameters",
-          auxDir);
-    }
-  }
-
   std::atomic<uint32_t> numProcessed{0};
   size_t numTranscripts = transcripts.size();
   size_t stepSize = static_cast<size_t>(transcripts.size() * 0.1);
