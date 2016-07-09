@@ -1389,6 +1389,7 @@ void processReadLibrary(
     // HACK!
     if (rl.unmated().size() > 1 and numThreads > 8) { numParsingThreads = 2; }
     singleParserPtr.reset(new single_parser(rl.unmated(), numThreads, numParsingThreads, miniBatchSize));
+    singleParserPtr->start();
     switch (indexType) {
     case SalmonIndexType::FMD: {
       for (int i = 0; i < numThreads; ++i) {
