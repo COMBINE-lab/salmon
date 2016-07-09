@@ -717,9 +717,14 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
     }
     libs.push_back(lib);
   }
+  
+  auto log = spdlog::get("jointLog");
   size_t numLibs = libs.size();
-  std::cerr << "there " << ((numLibs > 1) ? "are " : "is ") << libs.size()
-            << ((numLibs > 1) ? " libs\n" : " lib\n");
+  if (numLibs == 1) {
+      log->info("There is 1 library.");
+  } else if (numLibs > 1) {
+      log->info("There are {} libraries.", numLibs);
+  } 
   return libs;
 }
 

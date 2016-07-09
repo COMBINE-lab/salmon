@@ -85,7 +85,9 @@ public:
         namespace bfs = boost::filesystem;
 
         std::set<std::string> acceptableExensions = {".FASTA", ".FASTQ", ".FA", ".FQ",
-                                                     ".fasta", ".fastq", ".fa", ".fq"};
+                                                     ".fasta", ".fastq", ".fa", ".fq",
+                                                     ".GZ", ".gz"};
+
         bool extensionsOK{true};
         for (auto& fn : filenames) {
             auto fpath = bfs::path(fn);
@@ -93,8 +95,8 @@ public:
             if (bfs::is_regular_file(fpath)) {
                 if (acceptableExensions.find(ext) == acceptableExensions.end()) {
                     errorStream << "ERROR: file [" << fn << "] has extension " << ext << ", "
-                        << "which suggests it is neither a fasta nor a fastq file.\n"
-                        << "Is this a compressed file?  If so, consider replacing: \n\n"
+                        << "which suggests it is neither a fasta nor a fastq file (or gzip compressed fasta/q).\n"
+                        << "Is this file compressed in some other way?  If so, consider replacing: \n\n"
                         << fn << "\n\nwith\n\n"
                         << "<(decompressor " << fn << ")\n\n"
                         << "which will decompress the reads \"on-the-fly\"\n\n";

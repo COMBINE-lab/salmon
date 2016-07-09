@@ -787,7 +787,9 @@ inline bool nearEndOfTranscript(
 }
 
 template <typename CoverageCalculator>
-inline void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_qual>& frag,
+inline void getHitsForFragment(
+                               fastx_parser::ReadPair& frag,
+                               //std::pair<header_sequence_qual, header_sequence_qual>& frag,
                         SalmonIndex* sidx,
                         smem_i *itr,
                         const bwtintv_v *a,
@@ -1198,7 +1200,8 @@ inline void getHitsForFragment(std::pair<header_sequence_qual, header_sequence_q
   *
   */
 template <typename CoverageCalculator>
-inline void getHitsForFragment(jellyfish::header_sequence_qual& frag,
+inline void getHitsForFragment(fastx_parser::ReadSeq& frag,
+                               //jellyfish::header_sequence_qual& frag,
                         SalmonIndex* sidx,
                         smem_i *itr,
                         const bwtintv_v *a,
@@ -1409,23 +1412,30 @@ void processReadsMEM(ParserT* parser,
   size_t locRead{0};
   uint64_t localUpperBoundHits{0};
   size_t rangeSize{0};
+  auto rg = parser->getReadGroup();
+  while (parser->refill(rg)) {
+      rangeSize = rg.size();
 
+      /*
   while(true) {
+      
     typename ParserT::job j(*parser); // Get a job from the parser: a bunch of read (at most max_read_group)
     if(j.is_empty()) break;           // If got nothing, quit
-
     rangeSize = j->nb_filled;
+      */
     if (rangeSize > structureVec.size()) {
         salmonOpts.jointLog->error("rangeSize = {}, but structureVec.size() = {} --- this shouldn't happen.\n"
                                    "Please report this bug on GitHub", rangeSize, structureVec.size());
         std::exit(1);
     }
 
-    for(size_t i = 0; i < j->nb_filled; ++i) { // For all the read in this batch
+    for(size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
         localUpperBoundHits = 0;
 
         auto& hitList = structureVec[i];
-        getHitsForFragment<CoverageCalculator>(j->data[i], sidx, itr, a,
+        getHitsForFragment<CoverageCalculator>(rg[i],
+                                               //j->data[i], 
+                                               sidx, itr, a,
                                                auxHits,
                                                memOptions,
                                                readExp,
@@ -1468,6 +1478,7 @@ void processReadsMEM(ParserT* parser,
     AlnGroupVecRange<SMEMAlignment> hitLists = boost::make_iterator_range(structureVec.begin(), structureVec.begin() + rangeSize);
     processMiniBatch<SMEMAlignment>(readExp, fmCalc,firstTimestepOfRound, rl, salmonOpts, hitLists, transcripts, clusterForest,
                      fragLengthDist, observedGCParams, numAssignedFragments, eng, initialRound, burnedIn);
+    
   }
   smem_aux_destroy(auxHits);
   smem_itr_destroy(itr);

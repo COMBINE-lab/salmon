@@ -94,8 +94,9 @@ extern "C" {
 
 #include "concurrentqueue.h"
 
-// salmon / Salmon includes
+// salmon includes
 #include "ClusterForest.hpp"
+#include "FastxParser.hpp"
 #include "IOUtils.hpp"
 #include "LibraryFormat.hpp"
 #include "ReadLibrary.hpp"
@@ -129,10 +130,10 @@ using MateStatus = rapmap::utils::MateStatus;
 using QuasiAlignment = rapmap::utils::QuasiAlignment;
 /****** QUASI MAPPING DECLARATIONS  *******/
 
-using paired_parser = pair_sequence_parser<char**>;
+using paired_parser = fastx_parser::FastxParser<fastx_parser::ReadPair>;
 using stream_manager =
     jellyfish::stream_manager<std::vector<std::string>::const_iterator>;
-using single_parser = jellyfish::whole_sequence_parser<stream_manager>;
+using single_parser = fastx_parser::FastxParser<fastx_parser::ReadSeq>;
 
 using TranscriptID = uint32_t;
 using TranscriptIDVector = std::vector<TranscriptID>;
@@ -694,15 +695,11 @@ void processReadsQuasi(
   std::vector<QuasiAlignment> rightHits;
   rapmap::utils::HitCounters hctr;
   salmon::utils::MappingType mapType{salmon::utils::MappingType::UNMAPPED};
+  
+  auto rg = parser->getReadGroup();
+  while (parser->refill(rg)) {
+      rangeSize = rg.size();
 
-  while (true) {
-    typename paired_parser::job j(*parser); // Get a job from the parser: a
-                                            // bunch of reads (at most
-                                            // max_read_group)
-    if (j.is_empty())
-      break; // If got nothing, quit
-
-    rangeSize = j->nb_filled;
     if (rangeSize > structureVec.size()) {
       salmonOpts.jointLog->error("rangeSize = {}, but structureVec.size() = {} "
                                  "--- this shouldn't happen.\n"
@@ -711,10 +708,10 @@ void processReadsQuasi(
       std::exit(1);
     }
 
-    for (size_t i = 0; i < j->nb_filled;
-         ++i) { // For all the read in this batch
-      readLenLeft = j->data[i].first.seq.length();
-      readLenRight = j->data[i].second.seq.length();
+    for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
+        auto& rp = rg[i];
+        readLenLeft = rp.first.seq.length();
+        readLenRight= rp.second.seq.length();
       bool tooShortLeft = (readLenLeft < minK);
       bool tooShortRight = (readLenRight < minK);
       tooManyHits = false;
@@ -726,14 +723,13 @@ void processReadsQuasi(
       rightHits.clear();
       mapType = salmon::utils::MappingType::UNMAPPED;
 
-      bool lh = tooShortLeft ? false : hitCollector(j->data[i].first.seq,
+      bool lh = tooShortLeft ? false : hitCollector(rp.first.seq,
                                                     leftHits, saSearcher,
                                                     MateStatus::PAIRED_END_LEFT,
                                                     true, consistentHits);
 
-      bool rh = tooShortRight
-                    ? false
-                    : hitCollector(j->data[i].second.seq, rightHits, saSearcher,
+      bool rh = tooShortRight ? false : hitCollector(rp.second.seq,
+                                   rightHits, saSearcher,
                                    MateStatus::PAIRED_END_RIGHT, true,
                                    consistentHits);
 
@@ -934,7 +930,7 @@ void processReadsQuasi(
       if (writeUnmapped and mapType != salmon::utils::MappingType::PAIRED_MAPPED) {
           // If we have no mappings --- then there's nothing to do
           // unless we're outputting names for un-mapped reads
-          unmappedNames << j->data[i].first.header << ' ' << salmon::utils::str(mapType) << '\n';
+          unmappedNames << rp.first.name << ' ' << salmon::utils::str(mapType) << '\n';
       }
 
       validHits += jointHits.size();
@@ -1045,15 +1041,9 @@ void processReadsQuasi(
   SACollector<RapMapIndexT> hitCollector(qidx);
   SASearcher<RapMapIndexT> saSearcher(qidx);
   rapmap::utils::HitCounters hctr;
-
-  while (true) {
-    typename single_parser::job j(*parser); // Get a job from the parser: a
-                                            // bunch of read (at most
-                                            // max_read_group)
-    if (j.is_empty())
-      break; // If got nothing, quit
-
-    rangeSize = j->nb_filled;
+ auto rg = parser->getReadGroup();
+  while (parser->refill(rg)) {
+      rangeSize = rg.size();
     if (rangeSize > structureVec.size()) {
       salmonOpts.jointLog->error("rangeSize = {}, but structureVec.size() = {} "
                                  "--- this shouldn't happen.\n"
@@ -1062,9 +1052,9 @@ void processReadsQuasi(
       std::exit(1);
     }
 
-    for (size_t i = 0; i < j->nb_filled;
-         ++i) { // For all the read in this batch
-      readLen = j->data[i].seq.length();
+    for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
+        auto& rp = rg[i];
+      readLen = rp.seq.length();
       tooShort = (readLen < minK);
       tooManyHits = false;
       localUpperBoundHits = 0;
@@ -1074,7 +1064,8 @@ void processReadsQuasi(
 
       bool lh =
           tooShort ? false
-                   : hitCollector(j->data[i].seq, jointHits, saSearcher,
+          : hitCollector(rp.seq,
+                                  jointHits, saSearcher,
                                   MateStatus::SINGLE_END, true, consistentHits);
 
       // If the fragment was too short, record it
@@ -1147,7 +1138,7 @@ void processReadsQuasi(
       if (writeUnmapped and jointHits.empty()) {
           // If we have no mappings --- then there's nothing to do
           // unless we're outputting names for un-mapped reads
-          unmappedNames << j->data[i].header << " u\n";
+          unmappedNames << rp.name << " u\n";
       }
 
       validHits += jointHits.size();
@@ -1239,18 +1230,12 @@ void processReadLibrary(
     }
 
     size_t numFiles = rl.mates1().size() + rl.mates2().size();
-    char** pairFileList = new char*[numFiles];
-    for (size_t i = 0; i < rl.mates1().size(); ++i) {
-      pairFileList[2 * i] = const_cast<char*>(rl.mates1()[i].c_str());
-      pairFileList[2 * i + 1] = const_cast<char*>(rl.mates2()[i].c_str());
-    }
-
-    size_t maxReadGroup{miniBatchSize}; // Number of reads in each "job"
-    size_t concurrentFile{2}; // Number of files to read simultaneously
-    pairedParserPtr.reset(new paired_parser(4 * numThreads, maxReadGroup,
-                                            concurrentFile, pairFileList,
-                                            pairFileList + numFiles));
-
+    uint32_t numParsingThreads{1};
+    // HACK!
+    if (rl.mates1().size() > 1 and numThreads > 8) { numParsingThreads = 2; }
+    pairedParserPtr.reset(new paired_parser(rl.mates1(), rl.mates2(), numThreads, numParsingThreads, miniBatchSize));
+    pairedParserPtr->start();
+    
     switch (indexType) {
     case SalmonIndexType::FMD: {
       for (int i = 0; i < numThreads; ++i) {
@@ -1400,16 +1385,10 @@ void processReadLibrary(
   } // ------ Single-end --------
   else if (rl.format().type == ReadType::SINGLE_END) {
 
-    char* readFiles[] = {const_cast<char*>(rl.unmated().front().c_str())};
-    size_t maxReadGroup{
-        miniBatchSize};       // Number of files to read simultaneously
-    size_t concurrentFile{1}; // Number of reads in each "job"
-    stream_manager streams(rl.unmated().begin(), rl.unmated().end(),
-                           concurrentFile);
-
-    singleParserPtr.reset(new single_parser(4 * numThreads, maxReadGroup,
-                                            concurrentFile, streams));
-
+    uint32_t numParsingThreads{1};
+    // HACK!
+    if (rl.unmated().size() > 1 and numThreads > 8) { numParsingThreads = 2; }
+    singleParserPtr.reset(new single_parser(rl.unmated(), numThreads, numParsingThreads, miniBatchSize));
     switch (indexType) {
     case SalmonIndexType::FMD: {
       for (int i = 0; i < numThreads; ++i) {
@@ -1892,7 +1871,7 @@ int salmonQuantify(int argc, char* argv[]) {
                                           "make use of a very large number of
       threads.")
       */
-      ("auxDir", po::value<std::string>(&(sopt.auxDir))->default_value("aux"),
+      ("auxDir", po::value<std::string>(&(sopt.auxDir))->default_value("aux_info"),
        "The sub-directory of the quantification directory where auxiliary "
        "information "
        "e.g. bootstraps, bias parameters, etc. will be written.")(
@@ -2104,6 +2083,11 @@ transcript abundance from RNA-seq reads
     }
 
     po::notify(vm);
+    
+    // If we're supposed to be quiet, set the global logger level to >= warn
+    if (sopt.quiet) {
+        spdlog::set_level(spdlog::level::warn); //Set global log level to info
+    }
 
     std::stringstream commentStream;
     commentStream << "# salmon (mapping-based) v" << salmon::version << "\n";
@@ -2117,7 +2101,9 @@ transcript abundance from RNA-seq reads
       commentStream << " }\n";
     }
     std::string commentString = commentStream.str();
-    fmt::print(stderr, "{}", commentString);
+    if (!sopt.quiet) {
+        fmt::print(stderr, "{}", commentString);
+    }
 
     // TODO: Fix fragment start pos dist
     // sopt.useFSPD = false;
@@ -2144,6 +2130,13 @@ transcript abundance from RNA-seq reads
 
     vector<ReadLibrary> readLibraries =
         salmon::utils::extractReadLibraries(orderedOptions);
+    
+    if (readLibraries.size() == 0) {
+        jointLog->error("Failed to successfully parse any complete read libraries."
+                        " Please make sure you provided arguments properly to -1, -2 (for paired-end libraries)"
+                        " or -r (for single-end libraries).");
+        std::exit(1);
+    }
 
     SalmonIndexVersionInfo versionInfo;
     boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";

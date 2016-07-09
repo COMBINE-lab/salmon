@@ -233,8 +233,9 @@ class ReadExperiment {
     template <typename QuasiIndexT>
     void loadTranscriptsFromQuasi(QuasiIndexT* idx_, const SalmonOpts& sopt) {
 	    size_t numRecords = idx_->txpNames.size();
+        auto log = spdlog::get("jointLog");
 
-	    fmt::print(stderr, "Index contained {} targets\n", numRecords);
+	    log->info("Index contained {} targets", numRecords);
 	    //transcripts_.resize(numRecords);
 	    double alpha = 0.005;
 	    for (auto i : boost::irange(size_t(0), numRecords)) {
@@ -277,10 +278,11 @@ class ReadExperiment {
 	    bwaidx_t* idx_ = salmonIndex_->bwaIndex();
 	    size_t numRecords = idx_->bns->n_seqs;
 	    std::vector<Transcript> transcripts_tmp;
+        auto log = spdlog::get("jointLog");
         //transcripts_tmp.reserve(numRecords);
         //transcripts_.reserve(numRecords);
 
-	    fmt::print(stderr, "Index contained {} targets\n", numRecords);
+	    log->info("Index contained {} targets", numRecords);
 	    //transcripts_.resize(numRecords);
 	    for (auto i : boost::irange(size_t(0), numRecords)) {
 		    uint32_t id = i;

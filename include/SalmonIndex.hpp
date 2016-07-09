@@ -100,7 +100,7 @@ class SalmonIndex{
                               tend = tstart + len;
                               rseq = bns_get_seq(l_pac, idx_->pac, tstart, tend, &compLen);
                               if (compLen != len) {
-                                  fmt::print(stderr,
+                                  logger_->error(
                                           "For transcript {}, stored length ({}) != computed length ({}) --- index may be corrupt. exiting\n",
                                           name, compLen, len);
                                   std::exit(1);
@@ -265,8 +265,8 @@ class SalmonIndex{
                   boost::filesystem::path indexPath = indexDir / "bwaidx";
                   //if ((idx_ = bwa_idx_load(indexPath.string().c_str(), BWA_IDX_BWT|BWA_IDX_BNS|BWA_IDX_PAC)) == 0) {
                   if ((idx_ = bwa_idx_load(indexPath.string().c_str(), BWA_IDX_ALL)) == 0) {
-                      fmt::print(stderr, "Couldn't open index [{}] --- ", indexPath);
-                      fmt::print(stderr, "Please make sure that 'salmon index' has been run successfully\n");
+                      logger_->error("Couldn't open index [{}] --- ", indexPath);
+                      logger_->error("Please make sure that 'salmon index' has been run successfully");
                       std::exit(1);
                   }
               }
@@ -302,7 +302,7 @@ class SalmonIndex{
 
                   if (h.bigSA()) {
                     largeQuasi_ = true;
-                    fmt::print(stderr, "Loading 64-bit quasi index");
+                    logger_->info("Loading 64-bit quasi index");
                     if (perfectHashQuasi_) {
                         quasiIndexPerfectHash64_.reset(new RapMapSAIndex<int64_t, PerfectHash<int64_t>>);
                         if (!quasiIndexPerfectHash64_->load(indexStr)) {
@@ -319,7 +319,7 @@ class SalmonIndex{
                         }
                     }
                   } else { // 32-bit index
-                    fmt::print(stderr, "Loading 32-bit quasi index");
+                    logger_->info("Loading 32-bit quasi index");
                     
                     if (perfectHashQuasi_) {
                         quasiIndexPerfectHash32_.reset(new RapMapSAIndex<int32_t, PerfectHash<int32_t>>);

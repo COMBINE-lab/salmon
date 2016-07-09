@@ -60,6 +60,7 @@ LibraryFormat.cpp
 GenomicFeature.cpp
 VersionChecker.cpp
 SBModel.cpp
+FastxParser.cpp
 SalmonUtils.cpp
 DistributionUtils.cpp
 SalmonStringUtils.cpp
