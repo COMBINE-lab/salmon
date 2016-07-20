@@ -15,7 +15,7 @@ search: true
 # Jekyll configuration
 permalink:   /:categories/:title/
 markdown:    kramdown
-highlighter: rogue 
+highlighter: rouge 
 sass:
   sass_dir: _sass
   style: compressed
