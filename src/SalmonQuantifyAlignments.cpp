@@ -1147,10 +1147,6 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "the observed frequency of different types of mismatches when computing the likelihood of "
                         "a given alignment.")
     ("output,o", po::value<std::string>()->required(), "Output quantification directory.")
-    ("numRequiredObs,n", po::value(&requiredObservations)->default_value(50000000),
-                                        "[Deprecated]: The minimum number of observations (mapped reads) that must be observed before "
-                                        "the inference procedure will terminate.  If fewer mapped reads exist in the "
-                                        "input file, then it will be read through multiple times.")
     ("geneMap,g", po::value<std::string>(), "File containing a mapping of transcripts to genes.  If this file is provided "
                                         "Salmon will output both quant.sf and quant.genes.sf files, where the latter "
                                         "contains aggregated gene-level abundance estimates.  The transcript to gene mapping "
@@ -1205,14 +1201,14 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "a priori probability.")
     ("useVBOpt,v", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
                            "traditional EM algorithm for optimization in the batch passes.")
-         ("perTranscriptPrior", po::bool_switch(&(sopt.perTranscriptPrior)), "The "
-          "prior (either the default or the argument provided via --vbPrior) will "
-	  "be interpreted as a transcript-level prior (i.e. each transcript will "
-	  "be given a prior read count of this value)")
-         ("vbPrior", po::value<double>(&(sopt.vbPrior))->default_value(1e-3),
-          "The prior that will be used in the VBEM algorithm.  This is interpreted "
-          "as a per-nucleotide prior, unless the --perTranscriptPrior flag "
-          "is also given, in which case this is used as a transcript-level prior")
+    ("perTranscriptPrior", po::bool_switch(&(sopt.perTranscriptPrior)), "The "
+    "prior (either the default or the argument provided via --vbPrior) will "
+    "be interpreted as a transcript-level prior (i.e. each transcript will "
+    "be given a prior read count of this value)")
+    ("vbPrior", po::value<double>(&(sopt.vbPrior))->default_value(1e-3),
+    "The prior that will be used in the VBEM algorithm.  This is interpreted "
+    "as a per-nucleotide prior, unless the --perTranscriptPrior flag "
+    "is also given, in which case this is used as a transcript-level prior")
     /*
     // Don't expose this yet
     ("noRichEqClasses", po::bool_switch(&(sopt.noRichEqClasses))->default_value(false),
@@ -1264,12 +1260,18 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 
     po::options_description hidden("\nhidden options");
     hidden.add_options()
-        ("numGCBins", po::value<size_t>(&(sopt.numFragGCBins))->default_value(100),
-         "Number of bins to use when modeling fragment GC bias"
-         )(
-           "conditionalGCBins", po::value<size_t>(&(sopt.numConditionalGCBins))->default_value(3),
-           "Number of different fragment GC models to learn based on read start/end context"
-           );
+      (
+       "numGCBins", po::value<size_t>(&(sopt.numFragGCBins))->default_value(100),
+       "Number of bins to use when modeling fragment GC bias")
+      (
+       "conditionalGCBins", po::value<size_t>(&(sopt.numConditionalGCBins))->default_value(3),
+       "Number of different fragment GC models to learn based on read start/end context")
+      (
+       "numRequiredObs,n", po::value(&requiredObservations)->default_value(50000000),
+       "[Deprecated]: The minimum number of observations (mapped reads) that must be observed before "
+       "the inference procedure will terminate.  If fewer mapped reads exist in the "
+       "input file, then it will be read through multiple times.");
+    
     po::options_description deprecated("\ndeprecated options about which to inform the user");
     deprecated.add_options()
     ("useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(false), "[experimental] : "
@@ -1408,7 +1410,9 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
             std::cerr << "exiting\n";
             std::exit(1);
         }
-        std::cerr << "Logs will be written to " << logDirectory.string() << "\n";
+	if (!sopt.quiet) {
+	  std::cout << "Logs will be written to " << logDirectory.string() << "\n";
+	}
 
         bfs::path logPath = logDirectory / "salmon.log";
         size_t max_q_size = 2097152;

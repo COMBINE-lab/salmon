@@ -1770,18 +1770,27 @@ int salmonQuantify(int argc, char* argv[]) {
 
   po::options_description generic("\n"
                                   "basic options");
-  generic.add_options()("version,v", "print version string")(
-      "help,h", "produce help message")(
+  generic.add_options()("version,v", "print version string")
+    (
+      "help,h", "produce help message")
+    (
       "index,i", po::value<string>()->required(),
       "Salmon index")("libType,l", po::value<std::string>()->required(),
-                      "Format string describing the library type")(
+                      "Format string describing the library type")
+    (
       "unmatedReads,r",
       po::value<vector<string>>(&unmatedReadFiles)->multitoken(),
       "List of files containing unmated reads of (e.g. single-end reads)")(
       "mates1,1", po::value<vector<string>>(&mate1ReadFiles)->multitoken(),
-      "File containing the #1 mates")(
+      "File containing the #1 mates")
+    (
       "mates2,2", po::value<vector<string>>(&mate2ReadFiles)->multitoken(),
-      "File containing the #2 mates")(
+      "File containing the #2 mates")
+    (
+
+      "output,o", po::value<std::string>()->required(),
+      "Output quantification file.")
+    (
       "allowOrphans",
       po::bool_switch(&(sopt.allowOrphans))->default_value(false),
       "Consider orphaned reads as valid hits when "
@@ -1790,14 +1799,19 @@ int salmonQuantify(int argc, char* argv[]) {
       "more transcripts to be detected), but may decrease specificity as "
       "orphaned alignments are more likely "
       "to be spurious -- this option is *always* set to true when using "
-      "quasi-mapping.")("seqBias",
-                        po::value(&(sopt.biasCorrect))->zero_tokens(),
-                        "Perform sequence-specific bias correction.")(
+      "quasi-mapping.")
+    (
+     "seqBias",
+     po::value(&(sopt.biasCorrect))->zero_tokens(),
+     "Perform sequence-specific bias correction.")
+    (
       "gcBias", po::value(&(sopt.gcBiasCorrect))->zero_tokens(),
-      "[beta] Perform fragment GC bias correction")(
+      "[beta] Perform fragment GC bias correction")
+    (
       "threads,p",
       po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads),
-      "The number of threads to use concurrently.")(
+      "The number of threads to use concurrently.")
+    (
       "incompatPrior",
       po::value<double>(&(sopt.incompatPrior))->default_value(1e-20),
       "This option "
@@ -1809,29 +1823,8 @@ int salmonQuantify(int argc, char* argv[]) {
       "\"impossible\", "
       "while setting it to 1 says that alignments that disagree with the "
       "library type are no "
-      "less likely than those that do")(
-      "minLen,k",
-      po::value<int>(&(memOptions->min_seed_len))->default_value(19),
-      "(S)MEMs smaller than this size won't be considered.")(
-      "sensitive", po::bool_switch(&(sopt.sensitive))->default_value(false),
-      "Setting this option enables the splitting of SMEMs that are larger "
-      "than 1.5 times the minimum seed length (minLen/k above).  This may "
-      "reveal high scoring chains of MEMs "
-      "that are masked by long SMEMs.  However, this option makes "
-      "lightweight-alignment a bit slower and is "
-      "usually not necessary if the reference is of reasonable quality.")(
-      "extraSensitive",
-      po::bool_switch(&(sopt.extraSeedPass))->default_value(false),
-      "Setting this option enables an extra pass of \"seed\" search. "
-      "Enabling this option may improve sensitivity (the number of reads "
-      "having sufficient coverage), but will "
-      "typically slow down quantification by ~40%.  Consider enabling this "
-      "option if you find the mapping rate to "
-      "be significantly lower than expected.")(
-      "coverage,c", po::value<double>(&coverageThresh)->default_value(0.70),
-      "required coverage of read by union of SMEMs to consider it a \"hit\".")(
-      "output,o", po::value<std::string>()->required(),
-      "Output quantification file.")(
+      "less likely than those that do")
+    (
       "geneMap,g", po::value<string>(),
       "File containing a mapping of transcripts to genes.  If this file is "
       "provided "
@@ -1872,166 +1865,220 @@ int salmonQuantify(int argc, char* argv[]) {
                                           "make use of a very large number of
       threads.")
       */
-      ("auxDir", po::value<std::string>(&(sopt.auxDir))->default_value("aux_info"),
-       "The sub-directory of the quantification directory where auxiliary "
-       "information "
-       "e.g. bootstraps, bias parameters, etc. will be written.")(
-          "consistentHits,c",
-          po::bool_switch(&(sopt.consistentHits))->default_value(false),
-          "Force hits gathered during "
-          "quasi-mapping to be \"consistent\" (i.e. co-linear and "
-          "approximately the right distance apart).")(
-          "dumpEq", po::bool_switch(&(sopt.dumpEq))->default_value(false),
-          "Dump the equivalence class counts "
-          "that were computed during quasi-mapping")(
-          "gcSizeSamp",
-          po::value<std::uint32_t>(&(sopt.gcSampFactor))->default_value(1),
-          "The value by which to down-sample transcripts when representing the "
-          "GC content.  Larger values will reduce memory usage, but may "
-          "decrease the fidelity of bias modeling results.")(
-          "biasSpeedSamp",
-          po::value<std::uint32_t>(&(sopt.pdfSampFactor))->default_value(1),
-          "The value at which the fragment length PMF is down-sampled "
-          "when evaluating sequence-specific & GC fragment bias.  Larger values speed up effective "
-          "length correction, but may decrease the fidelity of bias modeling "
-          "results.")(
-          "strictIntersect",
-          po::bool_switch(&(sopt.strictIntersect))->default_value(false),
-          "Modifies how orphans are "
-          "assigned.  When this flag is set, if the intersection of the "
-          "quasi-mappings for the left and right "
-          "is empty, then all mappings for the left and all mappings for the "
-          "right read are reported as orphaned "
-          "quasi-mappings")(
-          "fldMax",
-          po::value<size_t>(&(sopt.fragLenDistMax))->default_value(1000),
-          "The maximum fragment length to consider when building the empirical "
-          "distribution")(
-          "fldMean",
-          po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(200),
-          "The mean used in the fragment length distribution prior")(
-          "fldSD",
-          po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(80),
-          "The standard deviation used in the fragment length distribution "
-          "prior")(
-          "forgettingFactor,f",
-          po::value<double>(&(sopt.forgettingFactor))->default_value(0.65),
-          "The forgetting factor used "
-          "in the online learning schedule.  A smaller value results in "
-          "quicker learning, but higher variance "
-          "and may be unstable.  A larger value results in slower learning but "
-          "may be more stable.  Value should "
-          "be in the interval (0.5, 1.0].")(
-          "maxOcc,m", 
-          po::value<int>(&(memOptions->max_occ))->default_value(200),
-          "(S)MEMs occuring more than this many times won't be considered.")(
-          "initUniform", po::bool_switch(&(sopt.initUniform))->default_value(false),
-          "initialize the offline inference with uniform parameters, rather than seeding with online parameters.")(
-          "maxReadOcc,w",
-          po::value<uint32_t>(&(sopt.maxReadOccs))->default_value(100),
-          "Reads \"mapping\" to more than this many places won't be "
-          "considered.")("noEffectiveLengthCorrection",
-                         po::bool_switch(&(sopt.noEffectiveLengthCorrection))
-                             ->default_value(false),
-                         "Disables "
-                         "effective length correction when computing the "
-                         "probability that a fragment was generated "
-                         "from a transcript.  If this flag is passed in, the "
-                         "fragment length distribution is not taken "
-                         "into account when computing this probability.")(
-          "noFragLengthDist",
-          po::bool_switch(&(sopt.noFragLengthDist))->default_value(false),
-          "[experimental] : "
-          "Don't consider concordance with the learned fragment length "
-          "distribution when trying to determine "
-          "the probability that a fragment has originated from a specified "
-          "location.  Normally, Fragments with "
-          "unlikely lengths will be assigned a smaller relative probability "
-          "than those with more likely "
-          "lengths.  When this flag is passed in, the observed fragment length "
-          "has no effect on that fragment's "
-          "a priori probability.")(
-          "noBiasLengthThreshold",
-          po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(false),
-          "[experimental] : "
-          "If this option is enabled, then no (lower) threshold will be set on "
-          "how short bias correction can make effective lengths. This can increase the precision "
-          "of bias correction, but harm robustness.  The default correction applies a threshold")(
-          "numBiasSamples",
-          po::value<int32_t>(&numBiasSamples)->default_value(2000000),
-          "Number of fragment mappings to use when learning the "
-          "sequence-specific bias model.")(
-          "numAuxModelSamples",
-          po::value<uint32_t>(&(sopt.numBurninFrags))->default_value(5000000),
-          "The first <numAuxModelSamples> are used to train the "
-          "auxiliary model parameters (e.g. fragment length distribution, "
-          "bias, etc.).  After ther first <numAuxModelSamples> observations "
-          "the auxiliary model parameters will be assumed to have converged "
-          "and will be fixed.")(
-          "numPreAuxModelSamples",
-          po::value<uint32_t>(&(sopt.numPreBurninFrags))
-              ->default_value(1000000),
-          "The first <numPreAuxModelSamples> will have their "
-          "assignment likelihoods and contributions to the transcript "
-          "abundances computed without applying any auxiliary models.  The "
-          "purpose "
-          "of ignoring the auxiliary models for the first "
-          "<numPreAuxModelSamples> observations is to avoid applying these "
-          "models before thier "
-          "parameters have been learned sufficiently well.")(
-          "numRequiredObs,n",
-          po::value(&(sopt.numRequiredFragments))->default_value(50000000),
-          "[Deprecated]: The minimum number of observations (mapped reads) "
-          "that must be observed before "
-          "the inference procedure will terminate.  If fewer mapped reads "
-          "exist in the "
-          "input file, then it will be read through multiple times.")(
-          "splitWidth,s",
-          po::value<int>(&(memOptions->split_width))->default_value(0),
-          "If (S)MEM occurs fewer than this many times, search for smaller, "
-          "contained MEMs. "
-          "The default value will not split (S)MEMs, a higher value will "
-          "result in more MEMs being explore and, thus, will "
-          "result in increased running time.")(
-          "splitSpanningSeeds,b",
-          po::bool_switch(&(sopt.splitSpanningSeeds))->default_value(false),
-          "Attempt to split seeds that happen to fall on the "
-          "boundary between two transcripts.  This can improve the  fragment "
-          "hit-rate, but is usually not necessary.")(
-          "useVBOpt", po::bool_switch(&(sopt.useVBOpt))->default_value(false),
-          "Use the Variational Bayesian EM rather than the "
-          "traditional EM algorithm for optimization in the batch passes.")(
-          "numGibbsSamples",
-          po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0),
-          "Number of Gibbs sampling rounds to "
-          "perform.")(
-          "numBootstraps",
-          po::value<uint32_t>(&(sopt.numBootstraps))->default_value(0),
-          "Number of bootstrap samples to generate. Note: "
-          "This is mutually exclusive with Gibbs sampling.")(
-          "quiet,q", po::bool_switch(&(sopt.quiet))->default_value(false),
-          "Be quiet while doing quantification (don't write informative "
-          "output to the console unless something goes wrong).")
-         ("perTranscriptPrior", po::bool_switch(&(sopt.perTranscriptPrior)), "The "
-          "prior (either the default or the argument provided via --vbPrior) will "
-	  "be interpreted as a transcript-level prior (i.e. each transcript will "
-	  "be given a prior read count of this value)")
-         ("vbPrior", po::value<double>(&(sopt.vbPrior))->default_value(1e-3),
-          "The prior that will be used in the VBEM algorithm.  This is interpreted "
-          "as a per-nucleotide prior, unless the --perTranscriptPrior flag "
-          "is also given, in which case this is used as a transcript-level prior")
-         ("writeUnmappedNames",
-	  po::bool_switch(&(sopt.writeUnmappedNames))->default_value(false),
-	  "Write the names of un-mapped reads to the file unmapped.txt in the auxiliary directory.");
+    (
+     "auxDir", po::value<std::string>(&(sopt.auxDir))->default_value("aux_info"),
+     "The sub-directory of the quantification directory where auxiliary "
+     "information "
+     "e.g. bootstraps, bias parameters, etc. will be written.")
+    (
+     "consistentHits,c",
+     po::bool_switch(&(sopt.consistentHits))->default_value(false),
+     "Force hits gathered during "
+     "quasi-mapping to be \"consistent\" (i.e. co-linear and "
+     "approximately the right distance apart).")(
+						 "dumpEq", po::bool_switch(&(sopt.dumpEq))->default_value(false),
+						 "Dump the equivalence class counts "
+						 "that were computed during quasi-mapping")
+    (
+     "gcSizeSamp",
+     po::value<std::uint32_t>(&(sopt.gcSampFactor))->default_value(1),
+     "The value by which to down-sample transcripts when representing the "
+     "GC content.  Larger values will reduce memory usage, but may "
+     "decrease the fidelity of bias modeling results.")
+    (
+     "biasSpeedSamp",
+     po::value<std::uint32_t>(&(sopt.pdfSampFactor))->default_value(1),
+     "The value at which the fragment length PMF is down-sampled "
+     "when evaluating sequence-specific & GC fragment bias.  Larger values speed up effective "
+     "length correction, but may decrease the fidelity of bias modeling "
+     "results.")
+    (
+     "strictIntersect",
+     po::bool_switch(&(sopt.strictIntersect))->default_value(false),
+     "Modifies how orphans are "
+     "assigned.  When this flag is set, if the intersection of the "
+     "quasi-mappings for the left and right "
+     "is empty, then all mappings for the left and all mappings for the "
+     "right read are reported as orphaned "
+     "quasi-mappings")
+    (
+     "fldMax",
+     po::value<size_t>(&(sopt.fragLenDistMax))->default_value(1000),
+     "The maximum fragment length to consider when building the empirical "
+     "distribution")
+    (
+     "fldMean",
+     po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(200),
+     "The mean used in the fragment length distribution prior")
+    (
+     "fldSD",
+     po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(80),
+     "The standard deviation used in the fragment length distribution "
+     "prior")
+    (
+     "forgettingFactor,f",
+     po::value<double>(&(sopt.forgettingFactor))->default_value(0.65),
+     "The forgetting factor used "
+     "in the online learning schedule.  A smaller value results in "
+     "quicker learning, but higher variance "
+     "and may be unstable.  A larger value results in slower learning but "
+     "may be more stable.  Value should "
+     "be in the interval (0.5, 1.0].")
+    (
+     "maxOcc,m", 
+     po::value<int>(&(memOptions->max_occ))->default_value(200),
+     "(S)MEMs occuring more than this many times won't be considered.")
+    (
+     "initUniform", po::bool_switch(&(sopt.initUniform))->default_value(false),
+     "initialize the offline inference with uniform parameters, rather than seeding with online parameters.")
+    (
+     "maxReadOcc,w",
+     po::value<uint32_t>(&(sopt.maxReadOccs))->default_value(100),
+     "Reads \"mapping\" to more than this many places won't be "
+     "considered.")
+    (
+     "noEffectiveLengthCorrection",
+     po::bool_switch(&(sopt.noEffectiveLengthCorrection))
+     ->default_value(false),
+     "Disables "
+     "effective length correction when computing the "
+     "probability that a fragment was generated "
+     "from a transcript.  If this flag is passed in, the "
+     "fragment length distribution is not taken "
+     "into account when computing this probability.")
+    (
+     "noFragLengthDist",
+     po::bool_switch(&(sopt.noFragLengthDist))->default_value(false),
+     "[experimental] : "
+     "Don't consider concordance with the learned fragment length "
+     "distribution when trying to determine "
+     "the probability that a fragment has originated from a specified "
+     "location.  Normally, Fragments with "
+     "unlikely lengths will be assigned a smaller relative probability "
+     "than those with more likely "
+     "lengths.  When this flag is passed in, the observed fragment length "
+     "has no effect on that fragment's "
+     "a priori probability.")
+    (
+     "noBiasLengthThreshold",
+     po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(false),
+     "[experimental] : "
+     "If this option is enabled, then no (lower) threshold will be set on "
+     "how short bias correction can make effective lengths. This can increase the precision "
+     "of bias correction, but harm robustness.  The default correction applies a threshold")
+    (
+     "numBiasSamples",
+     po::value<int32_t>(&numBiasSamples)->default_value(2000000),
+     "Number of fragment mappings to use when learning the "
+     "sequence-specific bias model.")
+    (
+     "numAuxModelSamples",
+     po::value<uint32_t>(&(sopt.numBurninFrags))->default_value(5000000),
+     "The first <numAuxModelSamples> are used to train the "
+     "auxiliary model parameters (e.g. fragment length distribution, "
+     "bias, etc.).  After ther first <numAuxModelSamples> observations "
+     "the auxiliary model parameters will be assumed to have converged "
+     "and will be fixed.")
+    (
+     "numPreAuxModelSamples",
+     po::value<uint32_t>(&(sopt.numPreBurninFrags))
+     ->default_value(1000000),
+     "The first <numPreAuxModelSamples> will have their "
+     "assignment likelihoods and contributions to the transcript "
+     "abundances computed without applying any auxiliary models.  The "
+     "purpose "
+     "of ignoring the auxiliary models for the first "
+     "<numPreAuxModelSamples> observations is to avoid applying these "
+     "models before thier "
+     "parameters have been learned sufficiently well.")
+    (
+     "useVBOpt", po::bool_switch(&(sopt.useVBOpt))->default_value(false),
+     "Use the Variational Bayesian EM rather than the "
+     "traditional EM algorithm for optimization in the batch passes.")
+    (
+     "numGibbsSamples",
+     po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0),
+     "Number of Gibbs sampling rounds to "
+     "perform.")
+    (
+     "numBootstraps",
+     po::value<uint32_t>(&(sopt.numBootstraps))->default_value(0),
+     "Number of bootstrap samples to generate. Note: "
+     "This is mutually exclusive with Gibbs sampling.")
+    (
+     "quiet,q", po::bool_switch(&(sopt.quiet))->default_value(false),
+     "Be quiet while doing quantification (don't write informative "
+     "output to the console unless something goes wrong).")
+    (
+     "perTranscriptPrior", po::bool_switch(&(sopt.perTranscriptPrior)), "The "
+     "prior (either the default or the argument provided via --vbPrior) will "
+     "be interpreted as a transcript-level prior (i.e. each transcript will "
+     "be given a prior read count of this value)")
+    (
+     "vbPrior", po::value<double>(&(sopt.vbPrior))->default_value(1e-3),
+     "The prior that will be used in the VBEM algorithm.  This is interpreted "
+     "as a per-nucleotide prior, unless the --perTranscriptPrior flag "
+     "is also given, in which case this is used as a transcript-level prior")
+    (
+     "writeUnmappedNames",
+     po::bool_switch(&(sopt.writeUnmappedNames))->default_value(false),
+     "Write the names of un-mapped reads to the file unmapped.txt in the auxiliary directory.");
 
+
+  po::options_description fmd("\noptions that apply to the old FMD index");
+  fmd.add_options()
+    (
+     "minLen,k",
+     po::value<int>(&(memOptions->min_seed_len))->default_value(19),
+     "(S)MEMs smaller than this size won't be considered.")
+    (
+     "sensitive", po::bool_switch(&(sopt.sensitive))->default_value(false),
+     "Setting this option enables the splitting of SMEMs that are larger "
+     "than 1.5 times the minimum seed length (minLen/k above).  This may "
+     "reveal high scoring chains of MEMs "
+     "that are masked by long SMEMs.  However, this option makes "
+     "lightweight-alignment a bit slower and is "
+     "usually not necessary if the reference is of reasonable quality.")
+    (
+     "extraSensitive",
+     po::bool_switch(&(sopt.extraSeedPass))->default_value(false),
+     "Setting this option enables an extra pass of \"seed\" search. "
+     "Enabling this option may improve sensitivity (the number of reads "
+     "having sufficient coverage), but will "
+     "typically slow down quantification by ~40%.  Consider enabling this "
+     "option if you find the mapping rate to "
+     "be significantly lower than expected.")
+    (
+     "coverage,c", po::value<double>(&coverageThresh)->default_value(0.70),
+     "required coverage of read by union of SMEMs to consider it a \"hit\".")
+    (
+     "splitWidth,s",
+     po::value<int>(&(memOptions->split_width))->default_value(0),
+     "If (S)MEM occurs fewer than this many times, search for smaller, "
+     "contained MEMs. "
+     "The default value will not split (S)MEMs, a higher value will "
+     "result in more MEMs being explore and, thus, will "
+     "result in increased running time.")
+    (
+     "splitSpanningSeeds,b",
+     po::bool_switch(&(sopt.splitSpanningSeeds))->default_value(false),
+     "Attempt to split seeds that happen to fall on the "
+     "boundary between two transcripts.  This can improve the  fragment "
+     "hit-rate, but is usually not necessary.");
+    
   po::options_description hidden("\nhidden options");
   hidden.add_options()
-      ("numGCBins", po::value<size_t>(&(sopt.numFragGCBins))->default_value(100),
-       "Number of bins to use when modeling fragment GC bias"
-       )(
-      "conditionalGCBins", po::value<size_t>(&(sopt.numConditionalGCBins))->default_value(3),
-       "Number of different fragment GC models to learn based on read start/end context"
-       );
+    ("numGCBins", po::value<size_t>(&(sopt.numFragGCBins))->default_value(100),
+     "Number of bins to use when modeling fragment GC bias")
+    (
+     "conditionalGCBins", po::value<size_t>(&(sopt.numConditionalGCBins))->default_value(3),
+     "Number of different fragment GC models to learn based on read start/end context")
+    (
+     "numRequiredObs,n",
+     po::value(&(sopt.numRequiredFragments))->default_value(50000000),
+     "[Deprecated]: The minimum number of observations (mapped reads) "
+     "that must be observed before "
+     "the inference procedure will terminate.");
 
   po::options_description testing("\n"
                                   "testing options");
@@ -2062,7 +2109,7 @@ int salmonQuantify(int argc, char* argv[]) {
      "across the transcript.");
 
   po::options_description all("salmon quant options");
-  all.add(generic).add(advanced).add(testing).add(hidden).add(deprecated);
+  all.add(generic).add(advanced).add(testing).add(hidden).add(fmd).add(deprecated);
 
   po::options_description visible("salmon quant options");
   visible.add(generic).add(advanced);
@@ -2094,11 +2141,11 @@ transcript abundance from RNA-seq reads
     }
 
     std::stringstream commentStream;
-    commentStream << "# salmon (mapping-based) v" << salmon::version << "\n";
-    commentStream << "# [ program ] => salmon \n";
-    commentStream << "# [ command ] => quant \n";
+    commentStream << "### salmon (mapping-based) v" << salmon::version << "\n";
+    commentStream << "### [ program ] => salmon \n";
+    commentStream << "### [ command ] => quant \n";
     for (auto& opt : orderedOptions.options) {
-      commentStream << "# [ " << opt.string_key << " ] => {";
+      commentStream << "### [ " << opt.string_key << " ] => {";
       for (auto& val : opt.value) {
         commentStream << " " << val;
       }
