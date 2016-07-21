@@ -1315,6 +1315,16 @@ bool processQuantOptions(SalmonOpts& sopt,
     }
   }
 
+  /** WARN about any deprecated options! **/
+  //
+  if (sopt.useFSPD) {
+    jointLog->error("The --useFSPD option has been deprecated.  "
+		    "Positional bias modeling will return under the --posBias flag in a future release. "
+		    "For the time being, please remove the --useFSPD flag from your command.");
+    jointLog->flush();
+    return false;
+  }
+  
   // maybe arbitrary, but if it's smaller than this, consider it
   // equal to LOG_0
   if (sopt.incompatPrior < 1e-320) {

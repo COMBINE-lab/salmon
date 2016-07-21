@@ -1794,7 +1794,7 @@ int salmonQuantify(int argc, char* argv[]) {
                         po::value(&(sopt.biasCorrect))->zero_tokens(),
                         "Perform sequence-specific bias correction.")(
       "gcBias", po::value(&(sopt.gcBiasCorrect))->zero_tokens(),
-      "[experimental] Perform fragment GC bias correction")(
+      "[beta] Perform fragment GC bias correction")(
       "threads,p",
       po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads),
       "The number of threads to use concurrently.")(
@@ -1951,10 +1951,6 @@ int salmonQuantify(int argc, char* argv[]) {
           "lengths.  When this flag is passed in, the observed fragment length "
           "has no effect on that fragment's "
           "a priori probability.")(
-          "useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(false),
-          "[experimental] : "
-          "Consider / model non-uniformity in the fragment start positions "
-          "across the transcript.")(
           "noBiasLengthThreshold",
           po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(false),
           "[experimental] : "
@@ -2042,7 +2038,7 @@ int salmonQuantify(int argc, char* argv[]) {
   testing.add_options()
     (
      "posBias", po::value(&(sopt.posBiasCorrect))->zero_tokens(),
-     "[TESTING OPTION] Perform positional bias correction")
+     "[experimental] Perform positional bias correction")
     (
       "noRichEqClasses",
       po::bool_switch(&(sopt.noRichEqClasses))->default_value(false),
@@ -2058,8 +2054,15 @@ int salmonQuantify(int argc, char* argv[]) {
       "goodness-of-fit of an alignment with the empirical fragment length "
       "distribution");
 
+  po::options_description deprecated("\ndeprecated options about which to inform the user");
+  deprecated.add_options() (
+     "useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(false),
+     "[deprecated] : "
+     "Consider / model non-uniformity in the fragment start positions "
+     "across the transcript.");
+
   po::options_description all("salmon quant options");
-  all.add(generic).add(advanced).add(testing).add(hidden);
+  all.add(generic).add(advanced).add(testing).add(hidden).add(deprecated);
 
   po::options_description visible("salmon quant options");
   visible.add(generic).add(advanced);

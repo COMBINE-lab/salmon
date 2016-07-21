@@ -1203,9 +1203,6 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                          "unlikely lengths will be assigned a smaller relative probability than those with more likely "
                         "lengths.  When this flag is passed in, the observed fragment length has no effect on that fragment's "
                         "a priori probability.")
-    ("useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(false), "[experimental] : "
-                        "Consider / model non-uniformity in the fragment start positions "
-                        "across the transcript.")
     ("useVBOpt,v", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
                            "traditional EM algorithm for optimization in the batch passes.")
          ("perTranscriptPrior", po::bool_switch(&(sopt.perTranscriptPrior)), "The "
@@ -1273,9 +1270,14 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
            "conditionalGCBins", po::value<size_t>(&(sopt.numConditionalGCBins))->default_value(3),
            "Number of different fragment GC models to learn based on read start/end context"
            );
+    po::options_description deprecated("\ndeprecated options about which to inform the user");
+    deprecated.add_options()
+    ("useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(false), "[experimental] : "
+                        "Consider / model non-uniformity in the fragment start positions "
+     "across the transcript.");
 
     po::options_description all("salmon quant options");
-    all.add(basic).add(advanced).add(testing).add(hidden);
+    all.add(basic).add(advanced).add(testing).add(hidden).add(deprecated);
 
     po::options_description visible("salmon quant options");
     visible.add(basic).add(advanced);
