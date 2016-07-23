@@ -5,7 +5,7 @@ extern "C" {
 }
 
 // for cpp-format
-#include "spdlog/details/format.h"
+#include "spdlog/fmt/fmt.h"
 
 // are these used?
 #include <boost/dynamic_bitset.hpp>
@@ -1447,7 +1447,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
             fmt::MemoryWriter wstr;
             wstr << "WARNING: you passed in the (-u/--sampleUnaligned) flag, but did not request a sampled "
                  << "output file (-s/--sampleOut).  This flag will be ignored!\n";
-            jointLog->warn() << wstr.str();
+            jointLog->warn(wstr.str());
         }
 
         // maybe arbitrary, but if it's smaller than this, consider it

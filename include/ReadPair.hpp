@@ -7,7 +7,7 @@
 #include "SalmonUtils.hpp"
 #include "RapMapUtils.hpp"
 
-#include "spdlog/details/format.h"
+#include "spdlog/fmt/fmt.h"
 
 struct ReadPair {
     bam_seq_t* read1 = nullptr;

@@ -44,8 +44,9 @@
 #include "SalmonUtils.hpp"
 #include "SalmonIndex.hpp"
 #include "GenomicFeature.hpp"
+#include "spdlog/fmt/ostr.h"
+#include "spdlog/fmt/fmt.h"
 #include "spdlog/spdlog.h"
-#include "spdlog/details/format.h"
 
 using my_mer = jellyfish::mer_dna_ns::mer_base_static<uint64_t, 1>;
 

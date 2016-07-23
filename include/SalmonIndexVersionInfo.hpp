@@ -1,7 +1,7 @@
 #ifndef __SALMON_INDEX_VERSION_INFO_HPP__
 #define __SALMON_INDEX_VERSION_INFO_HPP__
 
-#include "spdlog/details/format.h"
+#include "spdlog/fmt/fmt.h"
 #include "boost/filesystem.hpp"
 #include "cereal/archives/json.hpp"
 

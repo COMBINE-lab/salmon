@@ -15,7 +15,7 @@
 #include <boost/filesystem.hpp>
 
 // C++ string formatting library
-#include "spdlog/details/format.h"
+#include "spdlog/fmt/fmt.h"
 
 #include "cuckoohash_map.hh"
 #include "Eigen/Dense"

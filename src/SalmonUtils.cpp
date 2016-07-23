@@ -26,7 +26,8 @@
 #include "SalmonUtils.hpp"
 #include "UnpairedRead.hpp"
 
-#include "spdlog/details/format.h"
+#include "spdlog/fmt/ostr.h"
+#include "spdlog/fmt/fmt.h"
 #include "spdlog/sinks/ostream_sink.h"
 #include "spdlog/spdlog.h"
 
@@ -1307,9 +1308,9 @@ bool processQuantOptions(SalmonOpts& sopt,
 
   {
     if (sopt.noFragLengthDist and !sopt.noEffectiveLengthCorrection) {
-      jointLog->info()
-          << "Error: You cannot enable --noFragLengthDist without "
-          << "also enabling --noEffectiveLengthCorrection; exiting!\n";
+      jointLog->info(
+          "Error: You cannot enable --noFragLengthDist without "
+          "also enabling --noEffectiveLengthCorrection; exiting!\n");
       jointLog->flush();
       return false;
     }
@@ -1668,17 +1669,6 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
                   expectGC.inc(desc,
                                weight * (conditionalCDF(fl) - prevFLMass));
                   prevFLMass = conditionalCDF(fl);
-                  /*
-                  if (fragStart > contextSize and contextFrac !=
-                  desc.contextFrac) {
-                              sopt.jointLog->info() << "fl = " << fl << ",pos =
-                  " << fragStart << ", counts5p = " <<
-                  contextCountsFP[fragStart] <<
-                                  ", counts 3p = " << contextCountsTP[fragEnd]
-                  << ", cscale = " << cscale << ", contextFrac = " <<
-                  contextFrac << ", desc.contextFrac = " << desc.contextFrac;
-                          }
-                          */
                 } else {
                   break;
                 } // no more valid positions

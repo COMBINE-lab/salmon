@@ -20,7 +20,7 @@ extern "C" {
 
 #include <Eigen/Dense>
 
-#include "spdlog/details/format.h"
+#include "spdlog/fmt/fmt.h"
 
 #include "SalmonOpts.hpp"
 #include "SalmonMath.hpp"

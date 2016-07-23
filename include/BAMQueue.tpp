@@ -85,7 +85,7 @@ void BAMQueue<FragT>::reset() {
               fmt::MemoryWriter errstr;
               errstr << "The header for file " << file.fileName.c_str() 
                      << " was deleted.  This should not happen! exiting!\n";
-              logger_->warn() << errstr.str();
+              logger_->warn(errstr.str());
               std::exit(1);
           }
       }
@@ -99,7 +99,7 @@ void BAMQueue<FragT>::reset() {
   if (file.fp == NULL) {
     fmt::MemoryWriter errstr;
     errstr << "ERROR: Failed to open file " << file.fileName.c_str() << ", exiting!\n";
-    logger_->warn() << errstr.str();
+    logger_->warn(errstr.str());
     std::exit(1);
   }
   scram_set_option(file.fp, CRAM_OPT_NTHREADS, file.numParseThreads);
@@ -131,7 +131,7 @@ BAMQueue<FragT>::~BAMQueue() {
             fmt::MemoryWriter errstr;
             errstr << "The header for file " << file.fileName.c_str() 
                 << " was deleted.  This should not happen! exiting!\n";
-            logger_->warn() << errstr.str();
+            logger_->warn(errstr.str());
             std::exit(1);
         } else {
             sam_hdr_decr_ref(file.header); 
@@ -438,7 +438,7 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
                     << "The read was marked as unpaired in sequencing (not just unmapped)."
                     << "The two ends of a paired-end read should be adjacent. "
                     << "Don't know how to proceed; exiting!\n\n";
-            logger_->warn() << errmsg.str();
+            logger_->warn(errmsg.str());
             std::exit(-1);
         }
         // We've observed two, consecutive paired reads; now check if our reads
@@ -480,7 +480,7 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
                     << ((bam_flag(rpair.read2) & BAM_FUNMAP) ? "not " : "") << "mapped; mate"
                     << ((bam_flag(rpair.read2) & BAM_FMUNMAP) ? "not " : "") << "mapped\n\n";
             }
-            logger_->warn() << errmsg.str();
+            logger_->warn(errmsg.str());
         }
 
 

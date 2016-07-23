@@ -13,7 +13,7 @@
 #include <boost/math/special_functions/digamma.hpp>
 
 // C++ string formatting library
-#include "spdlog/details/format.h"
+#include "spdlog/fmt/fmt.h"
 
 #include "Eigen/Dense"
 #include "cuckoohash_map.hh"

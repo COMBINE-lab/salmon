@@ -41,7 +41,7 @@
 #include <vector>
 
 // C++ string formatting library
-#include "spdlog/details/format.h"
+#include "spdlog/fmt/fmt.h"
 
 // C Includes for BWA
 #include <cctype>
@@ -1579,7 +1579,7 @@ void quantifyLibrary(ReadExperiment& experiment, bool greedyChain,
                           : (experiment.softReset());
 
       if (!didReset) {
-        std::string errmsg = fmt::sprintf(
+        std::string errmsg = fmt::format(
             "\n\n======== WARNING ========\n"
             "One of the provided read files: [{}] "
             "is not a regular file and therefore can't be read from "
@@ -1595,7 +1595,7 @@ void quantifyLibrary(ReadExperiment& experiment, bool greedyChain,
             "==========================\n\n",
             experiment.readFilesAsString(), numObservedFragments,
             numRequiredFragments);
-        jointLog->warn() << errmsg;
+        jointLog->warn(errmsg);
         break;
       }
 
@@ -1722,10 +1722,10 @@ void quantifyLibrary(ReadExperiment& experiment, bool greedyChain,
   }
 
   if (numObservedFragments <= prevNumObservedFragments) {
-    jointLog->warn()
-        << "Something seems to be wrong with the calculation "
+    jointLog->warn(
+        "Something seems to be wrong with the calculation "
            "of the mapping rate.  The recorded ratio is likely wrong.  Please "
-           "file this as a bug report.\n";
+	"file this as a bug report.\n");
   } else {
     double upperBoundMappingRate =
         upperBoundHits.load() /
@@ -2177,7 +2177,7 @@ transcript abundance from RNA-seq reads
       sopt.numConditionalGCBins = 1;
     }
 
-    jointLog->info() << "parsing read library format";
+    jointLog->info("parsing read library format");
 
     vector<ReadLibrary> readLibraries =
         salmon::utils::extractReadLibraries(orderedOptions);
