@@ -4,8 +4,10 @@
 #include "catch.hpp"
 #include "LibraryFormat.hpp"
 #include "SalmonUtils.hpp"
+#include "Transcript.hpp"
 
 bool verbose=false; // Apparently, we *need* this (OSX)
 
+#include "GCSampleTests.cpp"
 #include "LibraryTypeTests.cpp"
-#include "KmerHistTests.cpp"
+//#include "KmerHistTests.cpp"

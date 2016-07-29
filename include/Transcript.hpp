@@ -425,6 +425,10 @@ private:
         return (gcStep_ == 1) ? static_cast<double>(GCCount_[p]) : gcCountInterp_(p);
     }
 
+    inline int32_t closestBin_(int32_t p) const {
+      return static_cast<int32_t>(std::round( static_cast<double>(p) / gcStep_ )); 
+    }
+
     inline double gcCountInterp_(int32_t p) const {
         //std::cerr << "in gcCountInterp\n";
         if (p == RefLength - 1) {
@@ -432,6 +436,39 @@ private:
             return static_cast<double>(GCCount_.back());
         }
 
+	// The index of the closest bin
+	auto cb = closestBin_(p);
+	// The actual position to which this bin corresponds
+	int32_t binPos = cb * gcStep_;
+	// Can't go past the end
+	if (binPos > RefLength - 1) {
+	  binPos = RefLength - 1;
+	  cb = GCCount_.size() - 1;
+	}
+
+	// The count of {G,C} at the checkpoint
+	auto binCount = GCCount_[cb];
+	// The count before or after the bin, until p
+	int32_t count{0};
+        const char* seq = Sequence_.get();
+
+	// we hit a sampled position
+	if (binPos == p) {
+	} else if (binPos > p) {
+	  for (size_t i = binPos; i > p; --i) {
+	    auto c = seq[i];
+	    // If the character is a G or C, we subtract 1
+	    count -= (c == 'G' or c == 'C') ? 1 : 0;
+	  }
+	} else {
+	  for (size_t i = binPos + 1; i <= p; ++i) {
+	    auto c = seq[i];
+	    // If the character is a G or C, we add 1
+	    count += (c == 'G' or c == 'C') ? 1 : 0;
+	  }
+	}
+	return  binCount + count;
+	/*
         // The fractional sampling factor position p would have
         double fracP = static_cast<double>(p) / gcStep_;
 
@@ -455,6 +492,7 @@ private:
         }
         double lambda = (fracP - fracSample) / (fracNextSample - fracSample);
         return lambda * GCCount_[sampInd] + (1.0 - lambda) * GCCount_[nextSample];
+	*/
     }
 
     void computeGCContentSampled_(uint32_t step) {
