@@ -677,28 +677,41 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
   LibraryFormat seFormat(ReadType::SINGLE_END, ReadOrientation::NONE,
                          ReadStrandedness::U);
 
+  auto isAutoLibType = [](std::string& fmt) -> bool {
+    return (fmt.length() == 1 and (fmt.front() == 'a' or fmt.front() == 'A'));
+  };
+
+  bool autoLibType{false};
   std::vector<ReadLibrary> peLibs{ReadLibrary(peFormat)};
   std::vector<ReadLibrary> seLibs{ReadLibrary(seFormat)};
   for (auto& opt : orderedOptions.options) {
     // Update the library type
     if (opt.string_key == "libType") {
-      auto libFmt = parseLibraryFormatStringNew(opt.value[0]);
-      if (libFmt.type == ReadType::PAIRED_END) {
-        peFormat = libFmt;
-        peLibs.emplace_back(libFmt);
+      if (!isAutoLibType(opt.value[0])) {
+	auto libFmt = parseLibraryFormatStringNew(opt.value[0]);
+	if (libFmt.type == ReadType::PAIRED_END) {
+	  peFormat = libFmt;
+	  peLibs.emplace_back(libFmt);
+	} else {
+	  seFormat = libFmt;
+	  seLibs.emplace_back(libFmt);
+	}
       } else {
-        seFormat = libFmt;
-        seLibs.emplace_back(libFmt);
+	autoLibType = true;
       }
     }
+
     if (opt.string_key == "mates1") {
       peLibs.back().addMates1(opt.value);
+      if (autoLibType) { peLibs.back().enableAutodetect(); }
     }
     if (opt.string_key == "mates2") {
       peLibs.back().addMates2(opt.value);
+      if (autoLibType) { peLibs.back().enableAutodetect(); }
     }
     if (opt.string_key == "unmatedReads") {
       seLibs.back().addUnmated(opt.value);
+      if (autoLibType) { seLibs.back().enableAutodetect(); }
     }
   }
 

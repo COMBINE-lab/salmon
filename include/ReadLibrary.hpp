@@ -8,6 +8,7 @@
 #include <boost/filesystem.hpp>
 
 #include "LibraryFormat.hpp"
+#include "LibraryTypeDetector.hpp"
 
 /**
  * This class represents the basic information about a library of reads, like
@@ -36,6 +37,7 @@ public:
             size_t mc = LibraryFormat::maxLibTypeID() + 1;
             for (size_t i = 0; i < mc; ++i) { libTypeCounts_[i].store(rl.libTypeCounts_[i].load()); }
             numCompat_.store(rl.numCompat());
+	    if (rl.detector_) { detector_.reset(new LibraryTypeDetector(*(rl.detector_.get()))); }
         }
 
     /**
@@ -50,6 +52,7 @@ public:
             size_t mc = LibraryFormat::maxLibTypeID() + 1;
             for (size_t i = 0; i < mc; ++i) { libTypeCounts_[i].store(rl.libTypeCounts_[i].load()); }
             numCompat_.store(rl.numCompat());
+	    if (rl.detector_) { detector_ = std::move(detector_); }
         }
 
     /**
@@ -80,7 +83,22 @@ public:
         return (fmt_.type == ReadType::PAIRED_END);
     }
 
+    /**
+    * If this is set, attempt to automatically detect this library's type
+    */
+    void enableAutodetect() {
+      // if auto detection is not already enabled, and we're enabling it
+      if (!detector_){
+	detector_.reset(new LibraryTypeDetector(fmt_.type));
+      }
+    }
 
+    bool autoDetect() const { return (detector_.get() != nullptr);}
+
+    LibraryTypeDetector* getDetector() { return detector_.get(); }
+    
+    LibraryFormat& getFormat() { return fmt_; }
+  
     bool checkFileExtensions_(std::vector<std::string>& filenames, std::stringstream& errorStream) {
         namespace bfs = boost::filesystem;
 
@@ -249,6 +267,7 @@ private:
     std::vector<std::string> mateTwoFilenames_;
     std::vector<std::atomic<uint64_t>> libTypeCounts_;
     std::atomic<uint64_t> numCompat_;
+    std::unique_ptr<LibraryTypeDetector> detector_{nullptr};
 };
 
 #endif // READ_LIBRARY_HPP

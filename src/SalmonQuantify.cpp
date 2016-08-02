@@ -207,6 +207,9 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
   bool useFragLengthDist{!salmonOpts.noFragLengthDist};
   bool noFragLenFactor{salmonOpts.noFragLenFactor};
 
+  // If we're auto detecting the library type
+  auto* detector = readLib.getDetector();
+  bool autoDetect = (detector != nullptr) ? detector->isActive() : false;
   const auto expectedLibraryFormat = readLib.format();
   uint64_t zeroProbFrags{0};
 
@@ -315,6 +318,14 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
             logFragProb = LOG_1;
           }
 
+	  if (autoDetect) {
+	    detector->addSample(aln.libFormat());
+	    if (detector->canGuess()) {
+	      detector->mostLikelyType(readLib.getFormat());
+	      autoDetect = false;
+	    }
+	  }
+	  
           // TODO: Maybe take the fragment length distribution into account
           // for single-end fragments?
 
