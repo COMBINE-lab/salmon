@@ -97,6 +97,22 @@ bool GZipWriter::writeEquivCounts(
   return true;
 }
 
+std::vector<std::string> getLibTypeStrings(const ReadExperiment& experiment) {
+  auto& libs = experiment.readLibraries();
+  std::vector<std::string> libStrings;
+  for (auto& rl : libs) {
+    libStrings.push_back(rl.getFormat().toString());
+  }
+  return libStrings;
+}
+
+template <typename AlnT>
+std::vector<std::string> getLibTypeStrings(const AlignmentLibrary<AlnT>& experiment) {
+  std::vector<std::string> libStrings;
+  libStrings.push_back(experiment.format().toString());
+  return libStrings;
+}
+
 /**
  * Write the ``main'' metadata to file.  Currently this includes:
  *   -- Names of the target id's if bootstrapping / gibbs is performed
@@ -260,6 +276,11 @@ bool GZipWriter::writeMeta(
       auto& transcripts = experiment.transcripts();
       oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
       oa(cereal::make_nvp("samp_type", sampType));
+
+      auto libStrings = getLibTypeStrings(experiment);
+      oa(cereal::make_nvp("num_libraries", libStrings.size())); 
+      oa(cereal::make_nvp("library_types", libStrings));
+
       oa(cereal::make_nvp("frag_dist_length", fldSamples.size()));
       oa(cereal::make_nvp("seq_bias_correct", opts.biasCorrect));
       oa(cereal::make_nvp("gc_bias_correct", opts.gcBiasCorrect));
@@ -396,3 +417,8 @@ bool GZipWriter::writeMeta<AlignmentLibrary<ReadPair>>(
     const AlignmentLibrary<ReadPair>& experiment,
     const std::string& tstring);
 
+template 
+std::vector<std::string> getLibTypeStrings(const AlignmentLibrary<UnpairedRead>& experiment);
+
+template 
+std::vector<std::string> getLibTypeStrings(const AlignmentLibrary<ReadPair>& experiment);

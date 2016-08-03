@@ -290,6 +290,7 @@ class AlignmentLibrary {
     }
 
     inline LibraryFormat format() { return libFmt_; }
+    inline const LibraryFormat format() const { return libFmt_; }
 
     void setGCFracForward(double fracForward) { gcFracFwd_ = fracForward; }
 

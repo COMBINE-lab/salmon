@@ -98,6 +98,7 @@ public:
     LibraryTypeDetector* getDetector() { return detector_.get(); }
     
     LibraryFormat& getFormat() { return fmt_; }
+    const LibraryFormat& getFormat() const { return fmt_; }
   
     bool checkFileExtensions_(std::vector<std::string>& filenames, std::stringstream& errorStream) {
         namespace bfs = boost::filesystem;

@@ -613,6 +613,7 @@ class ReadExperiment {
     }
 
     std::vector<ReadLibrary>& readLibraries() { return readLibraries_; }
+    const std::vector<ReadLibrary>& readLibraries() const { return readLibraries_; }
     FragmentLengthDistribution* fragmentLengthDistribution() const { return fragLengthDist_.get(); }
 
     void setGCFracForward(double fracForward) { gcFracFwd_ = fracForward; }
