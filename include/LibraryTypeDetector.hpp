@@ -119,7 +119,7 @@ public:
 	} // end paired-end
 
 	auto log = spdlog::get("jointLog");
-	log->info("Automatically detected most likely library type as {}", ifmt);
+	log->info("Automatically detected most likely library type as {}", ifmt.toString());
 
 	active_ = false;
 	ret = true;

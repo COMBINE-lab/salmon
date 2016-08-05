@@ -26,13 +26,13 @@ void SimplePosBias::addMass(int32_t pos, int32_t length, double mass) {
 }
 
 // Project, the weights contained in "bins"
-// into the vector @out (constant interpolation for now, linear later).
+// into the vector @out (using spline interpolation)
 void SimplePosBias::projectWeights(std::vector<double>& out) {
   auto len = out.size();
   for (size_t p = 0; p < len; ++p) {
     // The fractional sampling factor position p would have
     double fracP = static_cast<double>(p) / len;
-    out[p] = s_(fracP);
+    out[p] = std::max(0.001, s_(fracP));
   }
 }
 
@@ -54,8 +54,9 @@ void SimplePosBias::finalize() {
     masses_[i] = std::exp(masses_[i]);
     sum += masses_[i];
   }
-  // account for mass at endpoints
+  // Account for mass at endpoints
   std::vector<double> splineMass(masses_.size() + 2);
+  // Duplicate the first and last points as the end knots
   double startKnot = masses_.front() / sum;
   double stopKnot = masses_.back() / sum;
   double splineSum = sum + startKnot + stopKnot; 
