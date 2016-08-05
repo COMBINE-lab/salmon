@@ -372,9 +372,9 @@ with a ``#`` is a comment line, and can be safely ignored.  Salmon records the f
 and options passed to it in comments at the top of its output file.  The last comment 
 line gives the names of each of the data columns. The columns appear in the following order: 
 
-+------+--------+-----+----------+
-| Name | Length | TPM | NumReads |
-+------+--------+-----+----------+
++------+--------+-----------------+-----+----------+
+| Name | Length | EffectiveLength | TPM | NumReads |
++------+--------+-----------------+-----+----------+
 
 Each subsequent row described a single quantification record.  The columns have
 the following interpretation.
@@ -384,6 +384,11 @@ the following interpretation.
 
 * **Length** ---
   This is the length of the target transcript in nucleotides.
+  
+* **EffectiveLength** ---
+  This is the computed effective length of the target transcript. It takes into account all factors being modeled 
+  that will effect the probability of sampling fragments from this transcript, including the fragment length distribution 
+  and sequence-specific and gc-fragment bias (if they are being modeled).
 
 * **TPM** ---
   This is salmon's estimate of the relative abundance of this transcript in units of Transcripts Per Million (TPM).
