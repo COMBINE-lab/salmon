@@ -266,46 +266,73 @@ to assess the potential trade-offs in time / accuracy.  The ``--numBootstraps`` 
 set at most one of these options to a positive integer.)
 
 """""""""""""""""""""
-``--biasCorrect``
+``--seqBias``
 """""""""""""""""""""
 
-Passing the ``--biasCorrect`` flag to Salmon will enable it to learn and correct 
-for sequence-specific biases in the input data.  Specifically, this model will 
-attempt to correct for random hexamer priming bias, which results in the preferential
-sequencing of fragments starting with certain nucleotide motifs.  By default, Salmon
-learns the sequence-specific bias parameters using 1,000,000 reads from the beginning
-of the input.  If you wish to change the number of samples from which the model is 
-learned, you can use the ``--numBiasSamples`` parameter. *Note*: This sequence-specific
-bias model is substantially different from the bias-correction methodology that 
-was used in Salmon versions prior to 0.6.0 (and Sailfish versions prior to 0.9.0).
-This model specifically accounts for sequence-specific bias, and should not be 
-prone to the over-fitting problem that was sometimes observed using the previous 
-bias-correction methodology.
+Passing the ``--seqBias`` flag to Salmon will enable it to learn and
+correct for sequence-specific biases in the input data.  Specifically,
+this model will attempt to correct for random hexamer priming bias,
+which results in the preferential sequencing of fragments starting
+with certain nucleotide motifs.  By default, Salmon learns the
+sequence-specific bias parameters using 1,000,000 reads from the
+beginning of the input.  If you wish to change the number of samples
+from which the model is learned, you can use the ``--numBiasSamples``
+parameter. Salmon uses a variable-length Markov Model
+(VLMM) to model the sequence specific biases at both the 5' and 3' end
+of sequenced fragments. This methodology generally follows that of
+Roberts et al. [#roberts]_, though some details of the VLMM differ.
+
+*Note*: This sequence-specific bias model is substantially different
+from the bias-correction methodology that was used in Salmon versions
+prior to 0.6.0.  This model specifically accounts for
+sequence-specific bias, and should not be prone to the over-fitting
+problem that was sometimes observed using the previous bias-correction
+methodology.
 
 """""""""""""""""""""
-``--useFSPD``
+``--gcBias``
 """""""""""""""""""""
 
-Passing the ``--useFSPD`` flag to Salmon will enable modeling of a position-specific 
-fragment start distribution.  This is meant to model non-uniform coverage biases
-that are sometimes present in RNA-seq data (e.g. 5' or 3' positional bias).  Currently, 
-a single global model is learned and applied to all transcripts, as there is typically 
-not enough information to learn a separate model for each transcript.  However, modeling 
-the effect in this manner can still be helpful when there is a global bias in coverage.
-In the future, we will potentially be exploring more fine-grained positional bias 
-models.
+Passing the ``--gcBias`` flag to Salmon will enable it to learn and
+correct for fragment-level GC biases in the input data.  Specifically,
+this model will attempt to correct for biases in how likely a sequence
+is to be observed based on its internal GC content.  This bias is
+distinct from the primer biases learned with the ``--seqBias`` option.
+Though these biases are distinct, they are not completely independent.
+When both ``--seqBias`` and ``--gcBias`` are enabled, Salmon will
+learn a conditional fragment-GC bias model.  By default, Salmon will
+learn 3 different fragment-GC bias models based on the GC content of
+the fragment start and end contexts, though this number of conditional
+models can be changed with the (*hidden*) option
+``--conditionalGCBins``.  Likewise, the number of distinct fragment GC
+bins used to model the GC bias can be changed with the (*hidden*)
+option ``--numGCBins``.
+
+"""""""""""""""""""""
+``--posBias``
+"""""""""""""""""""""
+
+Passing the ``--posBias`` flag to Salmon will enable modeling of a
+position-specific fragment start distribution.  This is meant to model
+non-uniform coverage biases that are sometimes present in RNA-seq data
+(e.g. 5' or 3' positional bias).  Currently, a small and fixed number
+of models are learned for different lenght classes of transcripts, as
+is done in Roberts et al. [#roberts]_.
 
 
 What's this ``LIBTYPE``?
 ------------------------
 
-Salmon, like sailfish, has the user provide a description of the type of
-sequencing library from which the reads come, and this contains information
-about e.g. the relative orientation of paired end reads.  However, we've
-replaced the somewhat esoteric description of the library type with a simple
-set of strings; each of which represents a different type of read library. This
-new method of specifying the type of read library is being back-ported into
-Sailfish and will be available in the next release.
+Salmon, has the user provide a description of the type of sequencing
+library from which the reads come, and this contains information about
+e.g. the relative orientation of paired end reads.  As of version
+0.7.0, Salmon also has the ability to automatically infer (i.e. guess)
+the library type based on how the first few thousand reads map to the
+transcriptome.  To allow Salmon to automatically infer the library
+type, simply provide ``-l A`` or ``--libType A`` to Salmon.  Even if you
+allow Salmon to infer the library type for you, you should still read
+the section below, so that you can interpret how Salmon reports the
+library type it discovers.
 
 The library type string consists of three parts: the relative orientation of
 the reads, the strandedness of the library, and the directionality of the
@@ -391,3 +418,7 @@ If you have something useful to report or just some interesting ideas or
 suggestions, please contact us (`rob.patro@cs.stonybrook.edu` and/or
 `carlk@cs.cmu.edu`).  If you encounter any bugs, please file a *detailed*
 bug report at the `Salmon GitHub repository <https://github.com/COMBINE-lab/salmon>`_. 
+
+.. references::
+
+.. [#roberts] Roberts, Adam, et al. "Improving RNA-Seq expression estimates by correcting for fragment bias." Genome biology 12.3 (2011): 1.
