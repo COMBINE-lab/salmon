@@ -224,6 +224,16 @@ bootstrapping / posterior sampling (if enabled).  Salmon is designed to work
 well with many threads, so, if you have a sufficient number of processors, larger
 values here can speed up the run substantially.
 
+""""""""""""
+``--dumpEq``
+""""""""""""
+
+If Salmon is passed the ``--dumpEq`` option, it will write a file in the auxiliary
+directory, called ``eq_classes.txt`` that contains the equivalence classes and corresponding
+counts that were computed during quasi-mapping.  The file has a format described in
+:ref:`eq-class-file`.
+
+
 """""""""""""
 ``--fldMean``
 """""""""""""
