@@ -147,7 +147,7 @@ learned (or expected) fragment-GC distribution.
 Equivalence class file
 """"""""""""""""""""""
 
-If Salmon was run with the ``--dumEq`` option, then a file called ``eq_classes.txt``
+If Salmon was run with the ``--dumpEq`` option, then a file called ``eq_classes.txt``
 will exist in the auxiliary directory.  The format of that file is as follows:
 
 
