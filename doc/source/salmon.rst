@@ -83,7 +83,8 @@ are mappings of reads to transcript positions that are computed without
 performing a base-to-base alignment of the read to the transcript.  Quasi-mapping
 is typically **much** faster to compute than traditional (or full)
 alignments, and can sometimes provide superior accuracy by being more robust 
-to errors in the read or genomic variation from the reference sequence.
+to errors in the read or genomic variation from the reference sequence.  More details
+about quasi-mappings, and how they are computed, can be found `here <http://bioinformatics.oxfordjournals.org/content/32/12/i192.full>`_.
 
 Salmon currently supports two different methods for mapping reads to transcriptomes;
 (SMEM-based) lightweight-alignment and quasi-mapping.  SMEM-based mapping is the original 
@@ -522,7 +523,7 @@ For more details on the library type, see :ref:`FragLibType`.
 Output
 ------
 
-For details of Salmon's different output files and their formats see :ref: `FileFormats`.
+For details of Salmon's different output files and their formats see :ref:`FileFormats`.
 
 Misc
 ----
