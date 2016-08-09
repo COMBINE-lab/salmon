@@ -54,11 +54,26 @@ The top-level quantification directory will contain an auxiliary directory calle
 the auxiliary directory name was overridden via the command line).  This directory will have a number
 of files (and subfolders) depending on how salmon was invoked.
 
-""""""""""
-``fld.gz``
-""""""""""
+""""""""""""""""
+Meta information
+""""""""""""""""
 
-This file contains an approximation of the observed fragment length
+The auxiliary directory will contain a JSON format file called
+``meta_info.json`` which contains meta information about the run,
+including stats such as the number of observed and mapped fragments,
+details of the bias modeling etc.  If Salmon was run with automatic
+inference of the library type (i.e. ``--libType A``), then one
+particularly important piece of information contained in this file is
+the inferred library type.  Most of the information recorded in this
+file should be self-descriptive.
+
+
+""""""""""""""""""""""""""""
+Fragment length distribution
+""""""""""""""""""""""""""""
+
+The auxiliary directory will contain a file called ``fld.gz``.  This
+file contains an approximation of the observed fragment length
 distribution.  It is a gzipped, binary file containing integer counts.
 The number of (signed, 32-bit) integers (with machine-native
 endianness) is equal to the number of bins in the fragment length
