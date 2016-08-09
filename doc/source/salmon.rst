@@ -31,7 +31,7 @@ set of alignments.
 
 .. note:: Read / alignment order
 
-    Salmon, like eXpress, uses a streaming inference method to perform 
+    Salmon, like eXpress [#express]_, uses a streaming inference method to perform 
     transcript-level quantification.  One of the fundamental assumptions 
     of such inference methods is that observations (i.e. reads or alignments)
     are made "at random".  This means, for example, that alignments should 
@@ -75,7 +75,7 @@ set of alignments.
     parallelizability of quasi-mapping-based Salmon.
 
 Quasi-mapping-based mode (including lightweight alignment)
----------------------------------------------------------
+----------------------------------------------------------
 
 One of the novel and innovative features of Salmon is its ability to accurately
 quantify transcripts using *quasi-mappings*. Quasi-mappings 
@@ -224,19 +224,72 @@ bootstrapping / posterior sampling (if enabled).  Salmon is designed to work
 well with many threads, so, if you have a sufficient number of processors, larger
 values here can speed up the run substantially.
 
+"""""""""""""
+``--fldMean``
+"""""""""""""
+*Note* : This option is only important when running Salmon with single-end reads.
+
+Since the empirical fragment length distribution cannot be estimated
+from the mappings of single-end reads, the ``--fldMean`` allows the
+user to set the expected mean fragment lenth of the sequencing
+library.  This value will affect the effective length correction, and
+hence the estimated effective lengths of the transcripts and the TPMs.
+The value passed to ``--fldMean`` will be used as the mean of the assumed
+fragment length distribution (which is modeled as a truncated Gaussan with
+a standard deviation given by ``--fldSD``).
+
+
+"""""""""""
+``--fldSD``
+"""""""""""
+
+*Note* : This option is only important when running Salmon with single-end reads.
+
+Since the empirical fragment length distribution cannot be estimated
+from the mappings of single-end reads, the ``--fldSD`` allows the user
+to set the expected standard deviation of the fragment lenth
+distribution of the sequencing library.  This value will affect the
+effective length correction, and hence the estimated effective lengths
+of the transcripts and the TPMs.  The value passed to ``--fldSD`` will
+be used as the standard deviation of the assumed fragment length
+distribution (which is modeled as a truncated Gaussan with a mean
+given by ``--fldMean``).
+
 
 """"""""""""""
 ``--useVBOpt``
 """"""""""""""
 
-Use the variational Bayesian EM algorithm rather than the "standard" EM algorithm
-to optimize abundance estimates.  The details of the VBEM algorithm can be found
-in [2]_, and the details of the variant over fragment equivalence classes that
-we use can be found in [3]_.  While both the standard EM and the VBEM produce
-accurate abundance estimates, those produced by the VBEM seem, generally, to be
-a bit more accurate.  Further, the VBEM tends to converge after fewer iterations,
-so it may result in a shorter runtime; especially if you are computing many
-bootstrap samples. 
+Use the variational Bayesian EM algorithm rather than the "standard"
+EM algorithm to optimize abundance estimates.  The details of the VBEM
+algorithm can be found in [#salmon]_.  While both the standard EM and
+the VBEM produce accurate abundance estimates, there are some
+trade-offs between the approaches.  The EM algorithm tends to produce
+sparser estimates (i.e. more transcripts estimated to have 0
+abundance), while the VBEM, in part due to the prior, tends to
+estimate non-zero abundance for more transcripts.  Conversely, the
+prior used in the VBEM tends to have a regularizing effect, especially
+for low abundance transcripts, that leads to more consistent estimates
+of abundance at low expression levels.  We are currently working to
+analyze and understand all the tradeoffs between these different optimization
+approaches.  Also, the VBEM tends to converge after fewer iterations,
+so it may result in a shorter runtime; especially if you are computing
+many bootstrap samples.
+
+The default prior used in the VB optimization is a *per-nucleotide* prior
+of 0.001 per nucleotide.  This means that a transcript of length 1000 will
+have a prior count of 1 fragment, while a transcript of length 500 will have
+a prior count of 0.5 fragments, etc.  This behavior can be modified in two
+ways.  First, the prior itself can be modified via Salmon's ``--vbPrior``
+option.  The argument to this option is the value you wish to place as the
+*per-nucleotide* prior.  Additonally, you can modify the behavior to use
+a *per-transcript* rather than a *per-nucleotide* prior by passing the flag
+``--perTranscriptPrior`` to Salmon.  In this case, whatever value is set
+by ``--vbPrior`` will be used as the transcript-level prior, so that the
+prior count is no longer dependent on the transcript length.  However,
+the default behavior of a *per-nucleotide* prior is recommended when
+using VB optimization.
+
 
 """""""""""""""""""
 ``--numBootstraps``
@@ -308,6 +361,21 @@ models can be changed with the (*hidden*) option
 bins used to model the GC bias can be changed with the (*hidden*)
 option ``--numGCBins``.
 
+*Note* : In order to speed up the evaluation of the GC content of
+arbitrary fragments, Salmon pre-computes and stores the cumulative GC
+count for each transcript.  This requires an extra 4-bytes per
+nucleotide.  While this extra memory usage should normally be minor,
+it can nonetheless be controlled with the ``--gcSizeSamp`` option.
+This option takes a positive integer argument *i*, such that Salmon
+stores the values of the cumulative GC count only at every
+*i*:sup:`th` nucleotide.  The cumulative GC count at values between
+the sampled positions are recomputed on-the-fly when necessary.  Using
+this option will reduce the memory required to store the GC
+information by a factor of *i*, but will slow down the computation of
+GC-fragment content by a factor of *i*/2.  Typically, the
+``--gcSizeSamp`` can be left at its default value of 1, but larger
+values can be chosen if necessary.
+
 """""""""""""""""""""
 ``--posBias``
 """""""""""""""""""""
@@ -320,6 +388,56 @@ of models are learned for different lenght classes of transcripts, as
 is done in Roberts et al. [#roberts]_.
 
 
+"""""""""""""""""""
+``--biasSpeedSamp``
+"""""""""""""""""""
+
+When evaluating the bias models (the GC-fragment model specifically),
+Salmon must consider the probability of generating a fragment of every
+possible length (with a non-trivial probability) from every position
+on every transcript.  This results in a process that is quadratic in
+the length of the transcriptome --- though each evaluation itself is
+efficient and the process is highly parallelized.
+
+It is possible to speed this process up by a multiplicative factor by
+considering only every *i*:sup:`th` fragment length, and interploating
+the intermediate results.  The ``--biasSpeedSamp`` option allows the
+user to set this sampling factor.  Larger values speed up effective
+length correction, but may decrease the fidelity of bias modeling.
+However, reasonably small values (e.g. 10 or less) should have only a
+minor effect on the computed effective lengths, and can considerably
+speed up effective length correction on large transcriptomes.
+
+""""""""""""""""""""""""
+``--writeUnmappedNames``
+""""""""""""""""""""""""
+
+Passing the ``--writeUnmappedNames`` flag to Salmon will tell Salmon to
+write out the names of reads (or mates in paired-end reads) that do not
+map to the transcriptome.  When mapping paired-end reads, the entire
+fragment (both ends of the pair) are identified by the name of the first
+read (i.e. the read appearing in the ``_1`` file).  Each line of the umapped
+reads file contains the name of the unmapped read followed by a simple flag
+that designates *how* the read failed to map completely.  For single-end
+reads, the only valid flag is ``u`` (unmapped).  However, for paired-end
+reads, there are a number of different possibilities, outlined below:
+
+::
+   
+   u   = The entire pair was unmapped. No mappings were found for either the left or right read.
+   m1  = Left orphan (mappings were found for the left (i.e. first) read, but not the right).
+   m2  = Right orphan (mappinds were found for the right read, but not the left).
+   m12 = Left and right orphans. Both the left and right read mapped, but never to the same transcript. 
+
+By reading through the file of unmapped reads and selecting the appropriate
+sequences from the input FASTA/Q files, you can build an "unmapped" file that
+can then be used to investigate why these reads may not have mapped
+(e.g. poor quality, contamination, etc.).  Currently, this process must be
+done independently, but future versions of Salmon may provide a script to
+generate this unmapped FASTA/Q file from the unmapped file and the original
+inputs.
+
+   
 What's this ``LIBTYPE``?
 ------------------------
 
@@ -399,26 +517,41 @@ For details of Salmon's different output files and their formats see :ref: `File
 Misc
 ----
 
-Salmon deals with reading from compressed read files in the same way as
-sailfish --- by using process substitution.  Say in the
-lightweigh-alignment-based salmon example above, the reads were actually in the
-files ``reads1.fa.gz`` and ``reads2.fa.gz``, then you'd run the following
-command to decompress the reads "on-the-fly":
+Salmon, in *quasi-mapping*-based mode, can accept reads from FASTA/Q
+format files, or directly from gzipped FASTA/Q files (the ability to
+accept compressed files directly is a feature of Salmon 0.7.0 and
+higher).  If your reads are compressed in a different format, you can
+still stream them directly to Salmon by using process substitution.
+Say in the *quasi-mapping*-based Salmon example above, the reads were
+actually in the files ``reads1.fa.bz2`` and ``reads2.fa.bz2``, then
+you'd run the following command to decompress the reads "on-the-fly":
 
 ::
 
-    > ./bin/salmon quant -i transcripts_index -l <LIBTYPE> -1 <(gzcat reads1.fa.gz) -2 <(gzcat reads2.fa.gz) -o transcripts_quant
+    > ./bin/salmon quant -i transcripts_index -l <LIBTYPE> -1 <(bunzip2 -c reads1.fa.gz) -2 <(bunzip2 -c reads2.fa.bz2) -o transcripts_quant
 
-and the gzipped files will be decompressed via separate processes and the raw
-reads will be fed into salmon.
+and the bzipped files will be decompressed via separate processes and
+the raw reads will be fed into Salmon.  Actually, you can use this
+same process even with gzip compressed reads (replacing ``bunzip2``
+with ``gunzip`` or ``pigz -d``).  Depending on the number of threads
+and the exact configuration, this may actually improve Salmon's
+running time, since the reads are decompressed concurrently in a
+separate process when you use process substitution.
 
-**Finally**, the purpose of making this software available is for people to use
-it and provide feedback.  The `pre-print describing this method is on bioRxiv <http://biorxiv.org/content/early/2015/10/03/021592>`_.
-If you have something useful to report or just some interesting ideas or
-suggestions, please contact us (`rob.patro@cs.stonybrook.edu` and/or
-`carlk@cs.cmu.edu`).  If you encounter any bugs, please file a *detailed*
-bug report at the `Salmon GitHub repository <https://github.com/COMBINE-lab/salmon>`_. 
+**Finally**, the purpose of making this software available is for
+people to use it and provide feedback.  The
+`pre-print describing this method is on bioRxiv <http://biorxiv.org/content/early/2015/10/03/021592>`_.
+If you have something useful to report or just some interesting ideas
+or suggestions, please contact us (`rob.patro@cs.stonybrook.edu`
+and/or `carlk@cs.cmu.edu`).  If you encounter any bugs, please file a
+*detailed* bug report at the `Salmon GitHub repository <https://github.com/COMBINE-lab/salmon>`_.
 
-.. references::
 
+References
+----------
+
+.. [#express] Roberts, Adam, and Lior Pachter. "Streaming fragment assignment for real-time analysis of sequencing experiments." Nature methods 10.1 (2013): 71-73.
+   
 .. [#roberts] Roberts, Adam, et al. "Improving RNA-Seq expression estimates by correcting for fragment bias." Genome biology 12.3 (2011): 1.
+
+.. [#salmon] Patro, Rob, et al. "Salmon provides accurate, fast, and bias-aware transcript expression estimates using dual-phase inference." bioRxiv (2016).
