@@ -55,6 +55,9 @@ struct SalmonOpts {
     bool useBiasLengthThreshold; // Don't require that the recomputed effective length for a target
                                 // be above a threshold before applying it.
 
+    bool rankEqClasses; // Keep a separate equivalence class for each ordering (by conditional probability) 
+                        // of the the transcript labels 
+    
     bool useFSPD; // Learn a non-uniform start distribution
 
     bool noSeqBiasModel; // Don't learn and use a sequence-specific bias model.

@@ -206,6 +206,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
   bool useFSPD{salmonOpts.useFSPD};
   bool useFragLengthDist{!salmonOpts.noFragLengthDist};
   bool noFragLenFactor{salmonOpts.noFragLenFactor};
+  bool useRankEqClasses{salmonOpts.rankEqClasses};
 
   // If we're auto detecting the library type
   auto* detector = readLib.getDetector();
@@ -442,7 +443,42 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
         p = std::exp(p - auxDenom);
         auxProbSum += p;
       }
-      if (txpIDs.size() > 0) {
+      
+      auto eqSize = txpIDs.size();
+      if (eqSize > 0) {
+        if (useRankEqClasses and eqSize > 1) {
+            std::vector<int> inds(eqSize);
+            std::iota(inds.begin(), inds.end(), 0);
+            // Get the indices in order by conditional probability
+            std::sort(inds.begin(), inds.end(), 
+                      [&auxProbs](int i, int j) -> bool { return auxProbs[i] < auxProbs[j]; });
+            // Reorder the other vectors
+            if (useFSPD) {
+                decltype(txpIDs) txpIDsNew(txpIDs.size());
+                decltype(auxProbs) auxProbsNew(auxProbs.size());
+                decltype(posProbs) posProbsNew(posProbs.size());
+                for (size_t r = 0; r < eqSize; ++r) {
+                    auto ind = inds[r];
+                    txpIDsNew[r] = txpIDs[ind];
+                    auxProbsNew[r] = auxProbs[ind];
+                    posProbsNew[r] = posProbs[ind];
+                }
+                std::swap(txpIDsNew, txpIDs);
+                std::swap(auxProbsNew, auxProbs);
+                std::swap(posProbsNew, posProbs);
+            } else {
+                decltype(txpIDs) txpIDsNew(txpIDs.size());
+                decltype(auxProbs) auxProbsNew(auxProbs.size());
+                for (size_t r = 0; r < eqSize; ++r) {
+                    auto ind = inds[r];
+                    txpIDsNew[r] = txpIDs[ind];
+                    auxProbsNew[r] = auxProbs[ind];
+                }
+                std::swap(txpIDsNew, txpIDs);
+                std::swap(auxProbsNew, auxProbs);
+            }
+        }
+        
         TranscriptGroup tg(txpIDs);
         eqBuilder.addGroup(std::move(tg), auxProbs, posProbs);
       }
@@ -2110,7 +2146,11 @@ int salmonQuantify(int argc, char* argv[]) {
       "[TESTING OPTION]: Disable the factor in the likelihood that takes into "
       "account the "
       "goodness-of-fit of an alignment with the empirical fragment length "
-      "distribution");
+      "distribution")(
+      "rankEqClasses",
+      po::bool_switch(&(sopt.rankEqClasses))->default_value(false),
+      "[TESTING OPTION]: Keep separate equivalence classes for each distinct "
+      "ordering of transcripts in the label.");
 
   po::options_description deprecated("\ndeprecated options about which to inform the user");
   deprecated.add_options() (
