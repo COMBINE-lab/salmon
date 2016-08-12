@@ -65,15 +65,42 @@ set of alignments.
     quasi-mapping-based quantification.  Since this process is
     trivially parallelizable (and well-parallelized within Salmon), more
     threads generally equates to faster quantification. However, there may
-    still be a limit to the return on invested threads. Specifically, writing
-    to the mapping cache (see `Misc`_ below) is done via a single thread.  With
-    a huge number of quantification threads or in environments with a very slow
-    disk, this may become the limiting step. If you're certain that you have
-    more than the required number of observations, or if you have reason to
-    suspect that your disk is particularly slow on writes, then you can disable
-    the mapping cache (``--disableMappingCache``), and potentially increase the
-    parallelizability of quasi-mapping-based Salmon.
+    still be a limit to the return on invested threads, when Salmon can begin
+    to process fragments more quickly than they can be provided via the parser.
+ 
+    
+"""""""""""""""""""""""""""""""""""""""
+Providing multiple read files to Salmon
+"""""""""""""""""""""""""""""""""""""""
 
+Often, a single library may be split into multiple FASTA/Q files.  Also, sometimes one may wish
+to quantify multiple replicates or samples together, treating them as if they are one library.
+Salmon allows the user to provide a *space-separated* list of read files to all of it's options
+that expect input files (i.e. ``-r``, ``-1``, ``-2``).  When the input is paired-end reads, the
+order of the files in the left and right lists must be the same.  There are a number of ways to
+provide salmon with multiple read files, and treat these as a single library.  For the examples
+below, assume we have two replicates ``lib_1`` and ``lib_2``.  The left and right reads for
+``lib_1`` are ``lib_1_1.fq`` and ``lib_1_2.fq``, respectively.  The left and right reads for
+``lib_2`` are ``lib_2_1.fq`` and ``lib_2_2.fq``, respectively.  The following are both valid
+ways to input these reads to Salmon::
+
+  > salmon quant -i index -l IU -1 lib_1_1.fq lib_2_1.fq -2 lib_1_2.fq lib_2_2.fq -o out
+
+  > salmon quant -i index -l IU -1 <(cat lib_1_1.fq lib_2_1.fq) -2 <(cat lib_1_2.fq lib_2_2.fq) -o out
+
+Similarly, both of these approaches can be adopted if the files are gzipped as well::
+
+   > salmon quant -i index -l IU -1 lib_1_1.fq.gz lib_2_1.fq.gz -2 lib_1_2.fq.gz lib_2_2.fq.gz -o out
+
+   > salmon quant -i index -l IU -1 <(gunzip -c lib_1_1.fq.gz lib_2_1.fq.gz) -2 <(gunzip -c lib_1_2.fq.gz lib_2_2.fq.gz) -o out
+
+In each pair of commands, the first command lets Salmon natively parse the files, while the latter command
+creates, on-the-fly, an input stream that consists of the concatenation of both files.  Both methods work, and
+are acceptable ways to merge the files.  The latter method (i.e. process substitution) allows more complex
+processing to be done to the reads in the substituted process before they are passed to Salmon as input, and thus,
+in some situations, is more versatile.
+
+    
 Quasi-mapping-based mode (including lightweight alignment)
 ----------------------------------------------------------
 
