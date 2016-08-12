@@ -83,16 +83,10 @@ message("TBB_LIBRARIES = ${TBB_LIBRARIES}")
 message("Boost_LIBRARIES = ${Boost_LIBRARIES}")
 
 # Set the RPATH
-if (APPLE)
-    ## This DOES NOT do what I / any one sane, expects.  Setting the
-    ## linker path on OSX is messed up.  Just tell the user to use
-    ## DYLD_FALLBACK_LIBRARY_PATH for now
-    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
-else()
+if (NOT APPLE)
     set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib:$ORIGIN/../../lib:$ORIGIN/:$ORIGIN/../../external/install/lib")
+    set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 endif()
-
-set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 
 # Build the Salmon library
 add_library(salmon_core STATIC ${SALMON_LIB_SRCS} )
