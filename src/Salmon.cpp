@@ -40,6 +40,9 @@
 #include <boost/range/irange.hpp>
 #include <boost/filesystem.hpp>
 
+// C++ string formatting library
+#include "spdlog/fmt/fmt.h"
+
 #include "BiasIndex.hpp"
 #include "SailfishUtils.hpp"
 #include "GenomicFeature.hpp"
@@ -47,7 +50,18 @@
 #include "VersionChecker.hpp"
 
 int help(int argc, char* argv[]) {
-    auto helpmsg = R"(
+    fmt::MemoryWriter helpMsg;
+    helpMsg.write("Salmon v{}\n\n", salmon::version);
+    helpMsg.write("Usage:  salmon -h|--help or \n"
+                  "        salmon -v|--version or \n"
+                  "        salmon [--no-version-check] <COMMAND> [-h | options]\n\n");
+    helpMsg.write("Commands:\n");
+    helpMsg.write("     index Create a salmon index\n");
+    helpMsg.write("     quant Quantify a sample\n");
+    helpMsg.write("     swim  Perform super-secret operation\n");
+
+    /*
+    auto orighelpmsg = R"(
     ===============
 
     Please invoke salmon with one of the following commands {index, quant, swim}.
@@ -58,8 +72,10 @@ int help(int argc, char* argv[]) {
 
     will give you detailed help information about the index command.
     )";
+    */
 
-    std::cerr << "    Salmon v" << salmon::version << helpmsg << "\n";
+    std::cerr << helpMsg.str();
+//std::cerr << "    Salmon v" << salmon::version << helpmsg << "\n";
     return 1;
 }
 
@@ -117,6 +133,12 @@ int main( int argc, char* argv[] ) {
   using std::string;
   namespace po = boost::program_options;
 
+  // With no arguments, print help
+  if (argc == 1) {
+      help(argc, argv);
+      std::exit(1);
+  }
+
   try {
 
     po::options_description hidden("hidden");
@@ -154,7 +176,7 @@ int main( int argc, char* argv[] ) {
     }
 
     if (vm.count("help") and !vm.count("command")) {
-        std::cout << sfopts << std::endl;
+        //std::cout << sfopts << std::endl;
         help(argc, argv);
         std::exit(0);
     }
@@ -163,7 +185,7 @@ int main( int argc, char* argv[] ) {
       std::string versionMessage = getVersionMessage();
       std::cerr << versionMessage;
     }
-
+    
     po::notify(vm);
 
     std::unordered_map<string, std::function<int(int, char*[])>> cmds({
