@@ -87,16 +87,24 @@ message("TBB_LIBRARIES = ${TBB_LIBRARIES}")
 message("Boost_LIBRARIES = ${Boost_LIBRARIES}")
 
 # Set the RPATH
-if (APPLE)
-    ## This DOES NOT do what I / any one sane, expects.  Setting the
-    ## linker path on OSX is messed up.  Just tell the user to use
-    ## DYLD_FALLBACK_LIBRARY_PATH for now
-    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
-else()
+if (NOT APPLE)
     set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib:$ORIGIN/../../lib:$ORIGIN/:$ORIGIN/../../external/install/lib")
-endif()
+    set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+else()
+  # use, i.e. don't skip the full RPATH for the build tree
+  set(CMAKE_SKIP_BUILD_RPATH  FALSE)
 
-set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+  # when building, don't use the install RPATH already
+  # (but later on when installing)
+  set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE) 
+
+  # the RPATH to be used when installing
+  set(CMAKE_INSTALL_RPATH "")
+
+  # don't add the automatically determined parts of the RPATH
+  # which point to directories outside the build tree to the install RPATH
+  set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
+endif()
 
 # Build the Salmon library
 add_library(salmon_core STATIC ${SALMON_LIB_SRCS} )
@@ -111,22 +119,6 @@ add_executable(unitTests ${UNIT_TESTS_SRCS})
 #    LINK_FLAGS "-DHAVE_LIBPTHREAD -D_PBGZF_USE -fopenmp")
 
 #set_target_properties(salmon_core salmon PROPERTIES LINK_SEARCH_END_STATIC TRUE)
-
-# Grumble grumble . . . OSX
-if (APPLE)
-    # only attempt install_name_tool for tbb if we installed it
-    if (${TBB_LIBRARY_DIRS} MATCHES ${GAT_SOURCE_DIR}/external/install/lib)
-        add_custom_command(TARGET salmon
-            PRE_LINK
-            COMMAND install_name_tool -id @rpath/libtbb.dylib ${TBB_LIBRARY_DIRS}/libtbb.dylib
-            COMMAND install_name_tool -id @rpath/libtbbmalloc.dylib ${TBB_LIBRARY_DIRS}/libtbbmalloc.dylib
-        )
-    endif()
-
-else()
-    # related to complete static linking --- on hold
-    set (BOOST_THREAD_LIBRARY)
-endif()
 
 # our suffix array construction libraries
 set (SUFFARRAY_LIB ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort.a)
@@ -177,32 +169,32 @@ target_link_libraries(unitTests
     ${FAST_MALLOC_LIB}
     )
 
-##
-#  This ensures that the salmon executable should work with or without `make install`
-##
-# Grumble grumble . . . OSX
-if (APPLE)
-    # only attempt install_name_tool for tbb if we installed it
-    if (${TBB_LIBRARY_DIRS} MATCHES ${GAT_SOURCE_DIR}/external/install/lib)
-        add_custom_command(TARGET salmon
-            POST_BUILD
-            COMMAND install_name_tool -change libtbb.dylib @rpath/libtbb.dylib ${GAT_SOURCE_DIR}/build/src/salmon
-            COMMAND install_name_tool -change libtbbmalloc.dylib @rpath/libtbbmalloc.dylib ${GAT_SOURCE_DIR}/build/src/salmon
-            COMMAND install_name_tool -change libtbbmalloc_proxy.dylib @rpath/libtbbmalloc_proxy.dylib ${GAT_SOURCE_DIR}/build/src/salmon
-            COMMAND install_name_tool -add_rpath  ${GAT_SOURCE_DIR}/external/install/lib ${GAT_SOURCE_DIR}/build/src/salmon
-            )
-        add_custom_command(TARGET unitTests
-            POST_BUILD
-            COMMAND install_name_tool -change libtbb.dylib @rpath/libtbb.dylib ${GAT_SOURCE_DIR}/build/src/unitTests
-            COMMAND install_name_tool -change libtbbmalloc.dylib @rpath/libtbbmalloc.dylib ${GAT_SOURCE_DIR}/build/src/unitTests
-            COMMAND install_name_tool -change libtbbmalloc_proxy.dylib @rpath/libtbbmalloc_proxy.dylib ${GAT_SOURCE_DIR}/build/src/unitTests
-            COMMAND install_name_tool -add_rpath  ${GAT_SOURCE_DIR}/external/install/lib ${GAT_SOURCE_DIR}/build/src/unitTests
-            )
-    endif()
-else()
-    # related to complete static linking --- on hold    
-    set (BOOST_THREAD_LIBRARY)
-endif()
+### No need for this, I think
+##  This ensures that the salmon executable should work with or without `make install`
+###
+## Grumble grumble . . . OSX
+#if (APPLE)
+#    # only attempt install_name_tool for tbb if we installed it
+#    if (${TBB_LIBRARY_DIRS} MATCHES ${GAT_SOURCE_DIR}/external/install/lib)
+#        add_custom_command(TARGET salmon
+#            POST_BUILD
+#            COMMAND install_name_tool -change libtbb.dylib @rpath/libtbb.dylib ${GAT_SOURCE_DIR}/build/src/salmon
+#            COMMAND install_name_tool -change libtbbmalloc.dylib @rpath/libtbbmalloc.dylib ${GAT_SOURCE_DIR}/build/src/salmon
+#            COMMAND install_name_tool -change libtbbmalloc_proxy.dylib @rpath/libtbbmalloc_proxy.dylib ${GAT_SOURCE_DIR}/build/src/salmon
+#            COMMAND install_name_tool -add_rpath  ${GAT_SOURCE_DIR}/external/install/lib ${GAT_SOURCE_DIR}/build/src/salmon
+#            )
+#        add_custom_command(TARGET unitTests
+#            POST_BUILD
+#            COMMAND install_name_tool -change libtbb.dylib @rpath/libtbb.dylib ${GAT_SOURCE_DIR}/build/src/unitTests
+#            COMMAND install_name_tool -change libtbbmalloc.dylib @rpath/libtbbmalloc.dylib ${GAT_SOURCE_DIR}/build/src/unitTests
+#            COMMAND install_name_tool -change libtbbmalloc_proxy.dylib @rpath/libtbbmalloc_proxy.dylib ${GAT_SOURCE_DIR}/build/src/unitTests
+#            COMMAND install_name_tool -add_rpath  ${GAT_SOURCE_DIR}/external/install/lib ${GAT_SOURCE_DIR}/build/src/unitTests
+#            )
+#    endif()
+#else()
+#    # related to complete static linking --- on hold    
+#    set (BOOST_THREAD_LIBRARY)
+#endif()
 
 #if (APPLE)
 #	add_custom_command(TARGET salmon
@@ -239,8 +231,9 @@ install(TARGETS salmon salmon_core
                 ARCHIVE DESTINATION lib
         )
 
-install(TARGETS unitTests
-        RUNTIME DESTINATION tests
+add_custom_command(TARGET unitTests POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:unitTests> ${GAT_SOURCE_DIR}/tests/$<TARGET_FILE_NAME:unitTests>
+    COMMENT "Copying unitTests"
 )
 
 set(POST_INSTALL_SCRIPT ${GAT_SOURCE_DIR}/cmake/PostInstall.cmake)

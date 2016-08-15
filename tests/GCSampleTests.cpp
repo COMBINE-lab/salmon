@@ -1,3 +1,5 @@
+#include <random>
+
 std::string generateRandomSequence(size_t length, std::uniform_int_distribution<>& dis, std::mt19937& gen) {
   char nucs[] =  {'A', 'C', 'G', 'T'};
   std::string s(length, 'N');
