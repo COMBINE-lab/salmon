@@ -31,6 +31,6 @@ make
 make install
 make test
 cd ../scripts
-bash make-release.sh -v ${version} -n CentOS5
+bash make-release.sh -v ${version} -n linux_x86_64
 cd ../RELEASES
 cp *.tar.gz /io/
