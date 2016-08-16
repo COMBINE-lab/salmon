@@ -20,7 +20,7 @@ mkdir -p ${EXTERNAL_DIR}
 curl -k -L https://github.com/COMBINE-lab/RapMap/archive/salmon-v0.7.0.zip -o ${EXTERNAL_DIR}/rapmap.zip
 rm -fr ${EXTERNAL_DIR}/RapMap
 unzip ${EXTERNAL_DIR}/rapmap.zip -d ${EXTERNAL_DIR}
-mv ${EXTERNAL_DIR}/RapMap-develop-salmon ${EXTERNAL_DIR}/RapMap
+mv ${EXTERNAL_DIR}/RapMap-salmon-v0.7.0 ${EXTERNAL_DIR}/RapMap
 
 mkdir -p ${INSTALL_DIR}/include/rapmap
 mkdir -p ${INSTALL_DIR}/src/rapmap
