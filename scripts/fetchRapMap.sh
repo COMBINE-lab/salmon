@@ -17,7 +17,7 @@ if [ -d ${INSTALL_DIR}/src/rapmap ] ; then
 fi
 
 mkdir -p ${EXTERNAL_DIR}
-curl -k -L https://github.com/COMBINE-lab/RapMap/archive/develop-salmon.zip -o ${EXTERNAL_DIR}/rapmap.zip
+curl -k -L https://github.com/COMBINE-lab/RapMap/archive/salmon-v0.7.0.zip -o ${EXTERNAL_DIR}/rapmap.zip
 rm -fr ${EXTERNAL_DIR}/RapMap
 unzip ${EXTERNAL_DIR}/rapmap.zip -d ${EXTERNAL_DIR}
 mv ${EXTERNAL_DIR}/RapMap-develop-salmon ${EXTERNAL_DIR}/RapMap
