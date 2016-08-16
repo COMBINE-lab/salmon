@@ -2,8 +2,6 @@
 [![Documentation Status](https://readthedocs.org/projects/salmon/badge/?version=latest)](http://salmon.readthedocs.org/en/latest)
 [![install with bioconda](https://img.shields.io/badge/install%20with-bioconda-brightgreen.svg?style=flat-square)](http://bioconda.github.io/recipes/salmon/README.html)
 
-The current version of the master branch of Salmon can be found [**here**](http://combine-lab.github.io/salmon/version_info/latest)
-
 What is Salmon?
 ===============
 
@@ -15,6 +13,8 @@ into many differnt pipelines.  For example, you can choose to make use of our *q
 to estimate transcript-level abundances for your experiment.
 
 Give salmon a try!  You can find the latest binary releases [here](https://github.com/COMBINE-lab/salmon/releases).
+
+The current version of the master branch of Salmon can be found [**here**](http://combine-lab.github.io/salmon/version_info/latest)
 
 **NOTE**: Salmon works by (quasi)-mapping sequencing reads directly to the *transcriptome*.  This means the Salmon index should be built on a set of target transcripts, **not** on the *genome* of the underlying organism.  If indexing appears to be taking a very long time, or using a tremendous amount of memory (which it should not), please ensure that you are not attempting to build an index on the genome of your organism!
 
