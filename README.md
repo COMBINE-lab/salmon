@@ -2,6 +2,8 @@
 [![Documentation Status](https://readthedocs.org/projects/salmon/badge/?version=latest)](http://salmon.readthedocs.org/en/latest)
 [![install with bioconda](https://img.shields.io/badge/install%20with-bioconda-brightgreen.svg?style=flat-square)](http://bioconda.github.io/recipes/salmon/README.html)
 
+The current version of the master branch of Salmon can be found [**here**](http://combine-lab.github.io/salmon/version_info/latest)
+
 What is Salmon?
 ===============
 
