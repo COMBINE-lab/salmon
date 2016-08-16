@@ -101,7 +101,7 @@ int salmonIndex(int argc, char* argv[]) {
     ;
 
     po::variables_map vm;
-    int ret = 1;
+    int ret = 0;
     try {
 
         po::store(po::command_line_parser(argc, argv).options(generic).run(), vm);
@@ -114,7 +114,7 @@ Creates a salmon index.
 )";
             std::cout << hstring << std::endl;
             std::cout << generic << std::endl;
-            std::exit(1);
+            std::exit(0);
         }
         po::notify(vm);
 
@@ -222,11 +222,13 @@ Creates a salmon index.
         std::cerr << "exception : [" << e.what() << "]. Exiting.\n";
         std::exit(1);
     } catch (const spdlog::spdlog_ex& ex) {
-        std::cout << "logger failed with : [" << ex.what() << "]. Exiting.\n";
+        std::cerr << "logger failed with : [" << ex.what() << "]. Exiting.\n";
+        ret = 1;
     } catch (std::exception& e) {
         std::cerr << "Exception : [" << e.what() << "]\n";
         std::cerr << argv[0] << " index was invoked improperly.\n";
         std::cerr << "For usage information, try " << argv[0] << " index --help\nExiting.\n";
+        ret = 1;
     }
     return ret;
 }

@@ -2181,7 +2181,7 @@ transcript abundance from RNA-seq reads
 )";
       std::cout << hstring << std::endl;
       std::cout << visible << std::endl;
-      std::exit(1);
+      std::exit(0);
     }
 
     po::notify(vm);
