@@ -418,7 +418,7 @@ endif()
 message("Build system will fetch and build Intel Threading Building Blocks")
 message("==================================================================")
 # These are useful for the custom install step we'll do later
-set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb43_20140724oss)
+set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb44_20160526oss)
 set(TBB_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
 
 if ("${TBB_COMPILER}" STREQUAL "gcc")
@@ -429,10 +429,13 @@ endif()
 
 ExternalProject_Add(libtbb
 	DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    URL http://www.threadingbuildingblocks.org/sites/default/files/software_releases/source/tbb43_20140724oss_src.tgz
-    DOWNLOAD_COMMAND curl -k -L  http://www.threadingbuildingblocks.org/sites/default/files/software_releases/source/tbb43_20140724oss_src.tgz -o tbb_20140724oss_src.tgz &&
-                     tar -xzvf tbb_20140724oss_src.tgz
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb43_20140724oss
+    URL https://www.threadingbuildingblocks.org/sites/default/files/software_releases/source/tbb44_20160526oss_src_0.tgz
+    #URL http://www.threadingbuildingblocks.org/sites/default/files/software_releases/source/tbb433_20140724oss_src.tgz
+    DOWNLOAD_COMMAND curl -k -L https://www.threadingbuildingblocks.org/sites/default/files/software_releases/source/tbb44_20160526oss_src_0.tgz -o tbb_20160526oss_src.tgz &&
+                    tar -xzvf tbb_20160526oss_src.tgz
+    #DOWNLOAD_COMMAND curl -k -L  http://www.threadingbuildingblocks.org/sites/default/files/software_releases/source/tbb42_20140724oss_src.tgz -o tbb_20140724oss_src.tgz &&
+    #                     tar -xzvf tbb_20140724oss_src.tgz
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb44_20160526oss
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     PATCH_COMMAND "${TBB_PATCH_STEP}"
     CONFIGURE_COMMAND ""
