@@ -77,6 +77,7 @@ int salmonIndex(int argc, char* argv[]) {
     uint32_t numThreads;
     bool useQuasi{false};
     bool perfectHash{false};
+    bool gencodeRef{false};
 
     po::options_description generic("Command Line Options");
     generic.add_options()
@@ -86,6 +87,10 @@ int salmonIndex(int argc, char* argv[]) {
     ("kmerLen,k", po::value<uint32_t>(&auxKmerLen)->default_value(31)->required(),
                     "The size of k-mers that should be used for the quasi index.")
     ("index,i", po::value<string>()->required(), "Salmon index.")
+    ("gencode", po::bool_switch(&gencodeRef)->default_value(false), 
+         "This flag will expect the input transcript fasta to be in GENCODE format, and will split "
+         "the transcript name at the first \'|\' character.  These reduced names will be used in the "
+         "output and when looking for these transcripts in a gene to transcript GTF.")
     ("threads,p", po::value<uint32_t>(&numThreads)->default_value(2)->required(),
                             "Number of threads to use (only used for computing bias features)")
     ("perfectHash", po::bool_switch(&perfectHash)->default_value(false), 
@@ -192,6 +197,11 @@ Creates a salmon index.
             if (perfectHash) {
                 argVec->push_back("--perfectHash");
             }
+            if (gencodeRef) {
+                argVec->push_back("-s");
+                argVec->push_back("\"|\"");
+            }
+
             sidx.reset(new SalmonIndex(jointLog, SalmonIndexType::QUASI));
         } else {
             // Build the FMD-based index
