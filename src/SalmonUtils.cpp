@@ -118,6 +118,21 @@ std::ostream& operator<<(std::ostream& os, OrphanStatus s) {
   return os;
 }
 
+bool isCompatible(const LibraryFormat observed,
+                  const LibraryFormat expected,
+                  int32_t start,
+                  bool isForward,
+                  rapmap::utils::MateStatus ms) {
+  // If we're dealing with a single end read.
+  bool compat{false};
+  if (ms != rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
+    compat = compatibleHit(expected, start, isForward, ms);
+  } else {
+    compat = compatibleHit(expected, observed);
+  }
+  return compat;
+}
+
 double logAlignFormatProb(const LibraryFormat observed,
                           const LibraryFormat expected, int32_t start,
                           bool isForward, rapmap::utils::MateStatus ms,
@@ -1341,11 +1356,15 @@ bool processQuantOptions(SalmonOpts& sopt,
   
   // maybe arbitrary, but if it's smaller than this, consider it
   // equal to LOG_0
-  if (sopt.incompatPrior < 1e-320) {
-    sopt.incompatPrior = salmon::math::LOG_0;
+  if (sopt.incompatPrior < 1e-320 or sopt.incompatPrior == 0.0) {
+      jointLog->info("Fragment incompatibility prior below threshold.  Incompatible fragments will be ignored.");
+      sopt.incompatPrior = salmon::math::LOG_0;
+      sopt.ignoreIncompat = true;
   } else {
-    sopt.incompatPrior = std::log(sopt.incompatPrior);
+      sopt.incompatPrior = std::log(sopt.incompatPrior);
+      sopt.ignoreIncompat = false;
   }
+
   return true;
 }
 

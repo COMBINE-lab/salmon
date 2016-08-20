@@ -138,8 +138,8 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
     // Whether or not we are using "banking"
     bool useMassBanking = (!initialRound and salmonOpts.useMassBanking);
-    bool useReadCompat = salmonOpts.incompatPrior != salmon::math::LOG_0;
-
+    bool useReadCompat = salmonOpts.incompatPrior != salmon::math::LOG_1;
+    
     // Create a random uniform distribution
     std::default_random_engine eng(rd());
     std::uniform_real_distribution<> uni(0.0, 1.0 + std::numeric_limits<double>::min());
@@ -189,6 +189,8 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     bool updateCounts = initialRound;
     size_t numTranscripts = refs.size();
 
+    double maxZeroFrac{0.0};
+
     while (!doneParsing or !workQueue.empty()) {
         uint32_t zeroProbFrags{0};
 
@@ -203,13 +205,17 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
             std::unique_lock<std::mutex> l(cvmutex);
             workAvailable.wait(l, [&miniBatch, &workQueue, &doneParsing]() { return workQueue.try_pop(miniBatch) or doneParsing; });
         }
+                 
+
+        uint64_t batchReads{0};
 
 	    // If we actually got some work
         if (miniBatch != nullptr) {
 
             useAuxParams = (processedReads > salmonOpts.numPreBurninFrags);
             ++activeBatches;
-            size_t batchReads{0};
+            batchReads = 0;
+            zeroProbFrags = 0;
 
             // double logForgettingMass = fmCalc();
             double logForgettingMass{0.0};
@@ -292,6 +298,18 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
                         // The probability that the fragments align to the given strands in the
                         // given orientations.
+                        bool isCompat = 
+                            salmon::utils::isCompatible(
+                                  aln->libFormat(),
+                                  expectedLibraryFormat,
+                                  aln->pos(),
+                                  aln->fwd(), aln->mateStatus());
+                        double logAlignCompatProb = isCompat ? LOG_1 : salmonOpts.incompatPrior;
+                        if (!isCompat and salmonOpts.ignoreIncompat) {
+                            aln->logProb = salmon::math::LOG_0;
+                            continue;
+                        }
+                              /*
                         double logAlignCompatProb =
                             (useReadCompat) ?
                             (salmon::utils::logAlignFormatProb(
@@ -300,6 +318,13 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                                   aln->pos(),
                                   aln->fwd(), aln->mateStatus(), salmonOpts.incompatPrior)
                             ) : LOG_1;
+
+                        if (logAlignCompatProb != salmon::math::LOG_1) {
+                            aln->logProb = salmon::math::LOG_0;
+                            std::cerr <<"here\n";
+                            continue;
+                        }
+                              */
 
                         // Adjustment to the likelihood due to the
                         // error model
@@ -367,9 +392,8 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
                     // If we have a 0-probability fragment
                     if (sumOfAlignProbs == LOG_0) {
-                        auto aln = alnGroup->alignments().front();
-                        log->warn("0 probability fragment [{}] "
-                                  "encountered \n", aln->getName());
+                        ++zeroProbFrags;
+                        ++batchReads;
                         continue;
                     }
 
@@ -697,9 +721,20 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                 // thread will set burnedIn to true
                 alnLib.updateTranscriptLengthsAtomic(burnedIn);
             }
+
+            if (zeroProbFrags > 0) {
+                maxZeroFrac = std::max(maxZeroFrac, static_cast<double>(100.0 * zeroProbFrags) / batchReads);
+            }
         }
+
         miniBatch = nullptr;
     } // nothing left to process
+
+    if (maxZeroFrac > 0.0) {
+        log->info("Thread saw mini-batch with a maximum of {0:.2f}\% zero probability fragments", 
+                  maxZeroFrac);
+    }
+
 }
 
 /**
@@ -1452,10 +1487,13 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 
         // maybe arbitrary, but if it's smaller than this, consider it
         // equal to LOG_0
-        if (sopt.incompatPrior < 1e-320) {
+        if (sopt.incompatPrior < 1e-320 or sopt.incompatPrior == 0.0) {
+            jointLog->info("Fragment incompatibility prior below threshold.  Incompatible fragments will be ignored.");
             sopt.incompatPrior = salmon::math::LOG_0;
+            sopt.ignoreIncompat = true;
         } else {
             sopt.incompatPrior = std::log(sopt.incompatPrior);
+            sopt.ignoreIncompat = false;
         }
 
         // Now create a subdirectory for any parameters of interest

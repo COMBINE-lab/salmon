@@ -170,7 +170,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
                       BiasParams& observedBiasParams,
                       std::atomic<uint64_t>& numAssignedFragments,
                       std::default_random_engine& randEng, bool initialRound,
-                      std::atomic<bool>& burnedIn) {
+                      std::atomic<bool>& burnedIn, double& maxZeroFrac) {
 
   using salmon::math::LOG_0;
   using salmon::math::LOG_1;
@@ -611,9 +611,8 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
   }   // end timer
 
   if (zeroProbFrags > 0) {
-    log->warn("Minibatch contained {} "
-              "0 probability fragments",
-              zeroProbFrags);
+      auto batchReads = batchHits.size();
+      maxZeroFrac = std::max(maxZeroFrac, static_cast<double>(100.0 * zeroProbFrags) / batchReads);
   }
 
   numAssignedFragments += localNumAssignedFragments;
@@ -703,6 +702,7 @@ void processReadsQuasi(
   uint64_t leftHitCount{0};
   uint64_t hitListCount{0};
   salmon::utils::ShortFragStats shortFragStats;
+  double maxZeroFrac{0.0};
 
   // Write unmapped reads
   fmt::MemoryWriter unmappedNames;
@@ -1022,7 +1022,12 @@ void processReadsQuasi(
     processMiniBatch<QuasiAlignment>(
         readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
         transcripts, clusterForest, fragLengthDist, observedBiasParams,
-        numAssignedFragments, eng, initialRound, burnedIn);
+        numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac);
+  }
+
+  if (maxZeroFrac > 0.0) {
+      salmonOpts.jointLog->info("Thread saw mini-batch with a maximum of {0:.2f}\% zero probability fragments", 
+                                maxZeroFrac);
   }
 
   readExp.updateShortFrags(shortFragStats);
@@ -1058,6 +1063,7 @@ void processReadsQuasi(
   uint64_t hitListCount{0};
   salmon::utils::ShortFragStats shortFragStats;
   bool tooShort{false};
+  double maxZeroFrac{0.0};
 
   // Write unmapped reads
   fmt::MemoryWriter unmappedNames;
@@ -1228,9 +1234,14 @@ void processReadsQuasi(
     processMiniBatch<QuasiAlignment>(
         readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
         transcripts, clusterForest, fragLengthDist, observedBiasParams,
-        numAssignedFragments, eng, initialRound, burnedIn);
+        numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac);
   }
   readExp.updateShortFrags(shortFragStats);
+
+  if (maxZeroFrac > 0.0) {
+      salmonOpts.jointLog->info("Thread saw mini-batch with a maximum of {0:.2f}\% zero probability fragments", 
+                                maxZeroFrac);
+  }
 }
 
 /// DONE QUASI

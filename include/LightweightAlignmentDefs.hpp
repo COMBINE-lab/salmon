@@ -546,7 +546,8 @@ void processMiniBatch(
         std::atomic<uint64_t>& numAssignedFragments,
         std::default_random_engine& randEng,
         bool initialRound,
-        std::atomic<bool>& burnedIn
+        std::atomic<bool>& burnedIn,
+        double& maxZeroFrac
         );
 
 template <typename CoverageCalculator>
@@ -1412,6 +1413,7 @@ void processReadsMEM(ParserT* parser,
   size_t locRead{0};
   uint64_t localUpperBoundHits{0};
   size_t rangeSize{0};
+  double maxZeroFrac{0.0};
   auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
       rangeSize = rg.size();
@@ -1477,9 +1479,15 @@ void processReadsMEM(ParserT* parser,
     prevObservedFrags = numObservedFragments;
     AlnGroupVecRange<SMEMAlignment> hitLists = boost::make_iterator_range(structureVec.begin(), structureVec.begin() + rangeSize);
     processMiniBatch<SMEMAlignment>(readExp, fmCalc,firstTimestepOfRound, rl, salmonOpts, hitLists, transcripts, clusterForest,
-                     fragLengthDist, observedGCParams, numAssignedFragments, eng, initialRound, burnedIn);
+                                    fragLengthDist, observedGCParams, numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac);
     
   }
+
+  if (maxZeroFrac > 0.0) {
+      salmonOpts.jointLog->info("Thread saw mini-batch with a maximum of {0:.2f}\% zero probability fragments", 
+                                maxZeroFrac);
+  }
+
   smem_aux_destroy(auxHits);
   smem_itr_destroy(itr);
 }

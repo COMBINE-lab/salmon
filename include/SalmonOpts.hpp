@@ -77,6 +77,9 @@ struct SalmonOpts {
                           // the provided library type could correspond to the true
                           // fragment origin.
 
+    bool ignoreIncompat; // If incompatPrior is 0, this flag is set to true and we completely 
+                         // ignore incompatible fragments.
+
     bool useErrorModel; // Learn and apply the error model when computing the likelihood
                         // of a given alignment.
 

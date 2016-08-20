@@ -227,6 +227,12 @@ void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
     void normalizeAlphas(const SalmonOpts& sopt,
                          AlnLibT& alnLib);
 
+    bool isCompatible(const LibraryFormat observed,
+                      const LibraryFormat expected,
+                      int32_t start,
+                      bool isForward,
+                      rapmap::utils::MateStatus ms);
+
     double logAlignFormatProb(const LibraryFormat observed,
                               const LibraryFormat expected,
                               int32_t start, bool isForward,
