@@ -1355,7 +1355,7 @@ bool processQuantOptions(SalmonOpts& sopt,
   }
   
   // maybe arbitrary, but if it's smaller than this, consider it
-  // equal to LOG_0
+  // equal to LOG_0.
   if (sopt.incompatPrior < 1e-320 or sopt.incompatPrior == 0.0) {
       jointLog->info("Fragment incompatibility prior below threshold.  Incompatible fragments will be ignored.");
       sopt.incompatPrior = salmon::math::LOG_0;
