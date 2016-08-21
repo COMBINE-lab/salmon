@@ -4,17 +4,36 @@
 #define _CUCKOOHASH_UTIL_HH
 
 #include <exception>
-#include <pthread.h>
 #include <thread>
 #include <vector>
 #include "cuckoohash_config.hh" // for LIBCUCKOO_DEBUG
 
 #if LIBCUCKOO_DEBUG
-#  define LIBCUCKOO_DBG(fmt, args...)                                   \
+#  define LIBCUCKOO_DBG(fmt, ...)                                        \
      fprintf(stderr, "\x1b[32m""[libcuckoo:%s:%d:%lu] " fmt"" "\x1b[0m", \
-             __FILE__,__LINE__, (unsigned long)pthread_self(), ##args)
+             __FILE__,__LINE__, (unsigned long)std::this_thread::get_id(), __VA_ARGS__)
 #else
-#  define LIBCUCKOO_DBG(fmt, args...)  do {} while (0)
+#  define LIBCUCKOO_DBG(fmt, ...)  do {} while (0)
+#endif
+
+/**
+ * alignas() requires GCC >= 4.9, so we stick with the alignment attribute for
+ * GCC.
+ */
+#ifdef __GNUC__
+#define LIBCUCKOO_ALIGNAS(x) __attribute__((aligned(x)))
+#else
+#define LIBCUCKOO_ALIGNAS(x) alignas(x)
+#endif
+
+/**
+ * At higher warning levels, MSVC produces an annoying warning that alignment
+ * may cause wasted space: "structure was padded due to __declspec(align())".
+ */
+#ifdef _MSC_VER
+#define LIBCUCKOO_SQUELCH_PADDING_WARNING __pragma(warning(suppress : 4324))
+#else
+#define LIBCUCKOO_SQUELCH_PADDING_WARNING
 #endif
 
 // For enabling certain methods based on a condition. Here's an example.
@@ -43,7 +62,7 @@ public:
     libcuckoo_load_factor_too_low(const double lf)
         : load_factor_(lf) {}
 
-    virtual const char* what() const noexcept {
+    virtual const char* what() const noexcept override {
         return "Automatic expansion triggered when load factor was below "
             "minimum threshold";
     }
@@ -73,7 +92,7 @@ public:
     libcuckoo_maximum_hashpower_exceeded(const size_t hp)
         : hashpower_(hp) {}
 
-    virtual const char* what() const noexcept {
+    virtual const char* what() const noexcept override {
         return "Expansion beyond maximum hashpower";
     }
 

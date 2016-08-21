@@ -23,7 +23,6 @@
 #include <thread>
 #include <tuple>
 #include <type_traits>
-#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -146,13 +145,13 @@ private:
 
     // number of cores on the machine
     static size_t kNumCores() {
-        static size_t cores = std::thread::hardware_concurrency() == 0 ?
-            sysconf(_SC_NPROCESSORS_ONLN) : std::thread::hardware_concurrency();
+        static size_t cores = std::thread::hardware_concurrency();
         return cores;
     }
 
     // A fast, lightweight spinlock
-    class spinlock {
+    LIBCUCKOO_SQUELCH_PADDING_WARNING
+    class LIBCUCKOO_ALIGNAS(64) spinlock {
         std::atomic_flag lock_;
     public:
         spinlock() {
@@ -171,7 +170,7 @@ private:
             return !lock_.test_and_set(std::memory_order_acquire);
         }
 
-    } __attribute__((aligned(64)));
+    };
 
     typedef enum {
         ok,
@@ -239,13 +238,13 @@ private:
         }
 
         template <typename K, typename... Args>
-        void setKV(size_t ind, K&& key, Args&&... args) {
+        void setKV(size_t ind, K&& k, Args&&... args) {
             static allocator_type pair_allocator;
             occupied_[ind] = true;
             pair_allocator.construct(
                 &storage_kvpair(ind),
                 std::piecewise_construct,
-                std::forward_as_tuple(std::forward<K>(key)),
+                std::forward_as_tuple(std::forward<K>(k)),
                 std::forward_as_tuple(std::forward<Args>(args)...));
         }
 
@@ -294,7 +293,8 @@ private:
     typedef std::mutex expansion_lock_t;
 
     // cacheint is a cache-aligned atomic integer type.
-    struct cacheint {
+    LIBCUCKOO_SQUELCH_PADDING_WARNING
+    struct LIBCUCKOO_ALIGNAS(64) cacheint {
         std::atomic<size_t> num;
         cacheint(): num(0) {}
         cacheint(size_t x): num(x) {}
@@ -308,7 +308,7 @@ private:
             num = x.num.load();
             return *this;
         }
-    } __attribute__((aligned(64)));
+    };
 
     // Helper methods to read and write hashpower_ with the correct memory
     // barriers
@@ -324,7 +324,7 @@ private:
     static inline int get_counterid() {
         // counterid stores the per-thread counter index of each thread. Each
         // counter value corresponds to a core on the machine.
-        static __thread int counterid = -1;
+        static thread_local int counterid = -1;
 
         if (counterid < 0) {
             counterid = rand() % kNumCores();
@@ -666,7 +666,7 @@ private:
         const cuckoohash_map* map;
         std::array<size_t, N> i;
 
-        BucketContainer() : map(nullptr) {}
+        BucketContainer() : map(nullptr), i() {}
 
         template <typename... Args>
         BucketContainer(const cuckoohash_map* _map, Args&&... inds)
@@ -752,7 +752,7 @@ private:
     inline void check_hashpower(const size_t hp, const size_t lock) const {
         if (get_hashpower() != hp) {
             locks_[lock].unlock();
-            LIBCUCKOO_DBG("hashpower changed\n");
+            LIBCUCKOO_DBG("%s", "hashpower changed\n");
             throw hashpower_changed();
         }
     }
@@ -954,6 +954,7 @@ private:
     typedef std::array<CuckooRecord, MAX_BFS_PATH_LEN> CuckooRecords;
 
     // b_slot holds the information for a BFS path through the table
+    #pragma pack(push,1)
     struct b_slot {
         // The bucket of the last item in the path
         size_t bucket;
@@ -980,9 +981,11 @@ private:
             : bucket(b), pathcode(p), depth(d) {
             assert(d < MAX_BFS_PATH_LEN);
         }
-    } __attribute__((__packed__));
+    };
+    #pragma pack(pop)
 
     // b_queue is the queue used to store b_slots for BFS cuckoo hashing.
+    #pragma pack(push,1)
     class b_queue {
         // The maximum size of the BFS queue. Note that unless it's less than
         // SLOT_PER_BUCKET^MAX_BFS_PATH_LEN, it won't really mean anything.
@@ -1025,7 +1028,8 @@ private:
         bool full() {
             return increment(last) == first;
         }
-    } __attribute__((__packed__));
+    };
+    #pragma pack(pop)
 
     // slot_search searches for a cuckoo path using breadth-first search. It
     // starts with the i1 and i2 buckets, and, until it finds a bucket with an
@@ -1674,7 +1678,7 @@ private:
         if (get_hashpower() != current_hp) {
             // Most likely another expansion ran before this one could grab the
             // locks
-            LIBCUCKOO_DBG("another expansion is on-going\n");
+            LIBCUCKOO_DBG("%s", "another expansion is on-going\n");
             return failure_under_expansion;
         }
 
@@ -1748,7 +1752,7 @@ private:
             (!is_expansion && new_hp >= hp)) {
             // Most likely another expansion ran before this one could grab the
             // locks
-            LIBCUCKOO_DBG("another expansion is on-going\n");
+            LIBCUCKOO_DBG("%s", "another expansion is on-going\n");
             return failure_under_expansion;
         }
 
