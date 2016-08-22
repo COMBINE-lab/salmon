@@ -236,7 +236,7 @@ endif()
 ##
 # Set the latest version and look for what we need
 ##
-set(Boost_ADDITIONAL_VERSIONS "1.53" "1.53.0" "1.54" "1.55" "1.56" "1.57.0" "1.58")
+set(Boost_ADDITIONAL_VERSIONS "1.53" "1.53.0" "1.54" "1.55" "1.56" "1.57.0" "1.58" "1.59" "1.60" "1.61")
 find_package(Boost 1.53.0 COMPONENTS iostreams filesystem system thread timer chrono program_options serialization)
 message("BOOST_INCLUDEDIR = ${BOOST_INCLUDEDIR}")
 message("BOOST_LIBRARYDIR = ${BOOST_LIBRARYDIR}")
@@ -430,11 +430,8 @@ endif()
 ExternalProject_Add(libtbb
 	DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
     URL https://www.threadingbuildingblocks.org/sites/default/files/software_releases/source/tbb44_20160526oss_src_0.tgz
-    #URL http://www.threadingbuildingblocks.org/sites/default/files/software_releases/source/tbb433_20140724oss_src.tgz
     DOWNLOAD_COMMAND curl -k -L https://www.threadingbuildingblocks.org/sites/default/files/software_releases/source/tbb44_20160526oss_src_0.tgz -o tbb_20160526oss_src.tgz &&
                     tar -xzvf tbb_20160526oss_src.tgz
-    #DOWNLOAD_COMMAND curl -k -L  http://www.threadingbuildingblocks.org/sites/default/files/software_releases/source/tbb42_20140724oss_src.tgz -o tbb_20140724oss_src.tgz &&
-    #                     tar -xzvf tbb_20140724oss_src.tgz
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb44_20160526oss
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     PATCH_COMMAND "${TBB_PATCH_STEP}"
