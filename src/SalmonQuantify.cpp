@@ -2384,7 +2384,7 @@ transcript abundance from RNA-seq reads
         return gzw.writeBootstrap(alphas);
       };
 
-      jointLog->info("Staring Bootstrapping");
+      jointLog->info("Starting Bootstrapping");
       bool bootstrapSuccess =
           optimizer.gatherBootstraps(experiment, sopt, bsWriter, 0.01, 10000);
       jointLog->info("Finished Bootstrapping");
