@@ -25,6 +25,7 @@
 #include "SalmonMath.hpp"
 #include "SalmonUtils.hpp"
 #include "UnpairedRead.hpp"
+#include "TryableSpinLock.hpp"
 
 #include "spdlog/fmt/ostr.h"
 #include "spdlog/fmt/fmt.h"
@@ -1799,7 +1800,8 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
   size_t stepSize = static_cast<size_t>(transcripts.size() * 0.1);
   size_t nextUpdate{0};
 
-  std::mutex updateMutex;
+  //std::mutex updateMutex;
+  TryableSpinLock tsl;
   /**
    * Compute the effective lengths of each transcript (in parallel)
    */
@@ -1922,7 +1924,7 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
             } // end sequence-specific factor calculation
 
             if (numProcessed > nextUpdate) {
-                if (updateMutex.try_lock()) {
+                if (tsl.try_lock()) {
                     if (numProcessed > nextUpdate) {
                         sopt.jointLog->info(
                                             "processed bias for {:3.1f}% of the transcripts",
@@ -1933,7 +1935,7 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
                             nextUpdate = numTranscripts - 1;
                         }
                     }
-                    updateMutex.unlock();
+                    tsl.unlock();
                 }
             }
             ++numProcessed;
