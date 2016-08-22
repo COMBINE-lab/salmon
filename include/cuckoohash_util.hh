@@ -9,9 +9,10 @@
 #include "cuckoohash_config.hh" // for LIBCUCKOO_DEBUG
 
 #if LIBCUCKOO_DEBUG
-#  define LIBCUCKOO_DBG(fmt, ...)                                        \
-     fprintf(stderr, "\x1b[32m""[libcuckoo:%s:%d:%lu] " fmt"" "\x1b[0m", \
-             __FILE__,__LINE__, (unsigned long)std::this_thread::get_id(), __VA_ARGS__)
+#  define LIBCUCKOO_DBG(fmt, ...)                                          \
+     fprintf(stderr, "\x1b[32m""[libcuckoo:%s:%d:%lu] " fmt"" "\x1b[0m",   \
+             __FILE__,__LINE__, (unsigned long)std::this_thread::get_id(), \
+             __VA_ARGS__)
 #else
 #  define LIBCUCKOO_DBG(fmt, ...)  do {} while (0)
 #endif
@@ -34,6 +35,23 @@
 #define LIBCUCKOO_SQUELCH_PADDING_WARNING __pragma(warning(suppress : 4324))
 #else
 #define LIBCUCKOO_SQUELCH_PADDING_WARNING
+#endif
+
+/**
+ * thread_local requires GCC >= 4.8 and is not supported in some clang versions,
+ * so we use __thread if thread_local is not supported
+ */
+#define LIBCUCKOO_THREAD_LOCAL thread_local
+#if defined(__clang__)
+#  if !__has_feature(cxx_thread_local)
+#    undef LIBCUCKOO_THREAD_LOCAL
+#    define LIBCUCKOO_THREAD_LOCAL __thread
+#  endif
+#elif defined(__GNUC__)
+#  if __GNUC__ == 4 && __GNUC_MINOR__ < 8
+#    undef LIBCUCKOO_THREAD_LOCAL
+#    define LIBCUCKOO_THREAD_LOCAL __thread
+#  endif
 #endif
 
 // For enabling certain methods based on a condition. Here's an example.

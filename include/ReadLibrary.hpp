@@ -100,6 +100,18 @@ public:
     LibraryFormat& getFormat() { return fmt_; }
     const LibraryFormat& getFormat() const { return fmt_; }
   
+    bool allExist_(std::vector<std::string>& filenames, std::stringstream& errorStream) {
+        namespace bfs = boost::filesystem;
+        bool allExist{true};
+        for (auto& fn : filenames) {
+            if (!bfs::exists(fn)) {
+                errorStream << "ERROR: file [" << fn << "] does not appear to exist!\n\n";
+                allExist = false;
+            }
+        }
+        return allExist;
+    }
+
     bool checkFileExtensions_(std::vector<std::string>& filenames, std::stringstream& errorStream) {
         namespace bfs = boost::filesystem;
 
@@ -210,9 +222,9 @@ public:
         // (i.e. named-pipes).  If the user passed in a non-regular file, we should
         // have some other mechanism to check if it's of an expected format and provide
         // a reasonable error message otherwise.
-        readsOK = readsOK && checkFileExtensions_(mateOneFilenames_, errorStream);
-        readsOK = readsOK && checkFileExtensions_(mateTwoFilenames_, errorStream);
-        readsOK = readsOK && checkFileExtensions_(unmatedFilenames_, errorStream);
+        readsOK = readsOK && allExist_(mateOneFilenames_, errorStream) && checkFileExtensions_(mateOneFilenames_, errorStream);
+        readsOK = readsOK && allExist_(mateTwoFilenames_, errorStream) && checkFileExtensions_(mateTwoFilenames_, errorStream);
+        readsOK = readsOK && allExist_(unmatedFilenames_, errorStream) && checkFileExtensions_(unmatedFilenames_, errorStream);
 
         if (!readsOK) {
             throw std::invalid_argument(errorStream.str());
