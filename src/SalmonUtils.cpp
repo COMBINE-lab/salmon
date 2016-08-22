@@ -1922,18 +1922,19 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
             } // end sequence-specific factor calculation
 
             if (numProcessed > nextUpdate) {
-              updateMutex.try_lock();
-              if (numProcessed > nextUpdate) {
-                sopt.jointLog->info(
-                    "processed bias for {:3.1f}% of the transcripts",
-                    100.0 *
-                        (numProcessed / static_cast<double>(numTranscripts)));
-                nextUpdate += stepSize;
-                if (nextUpdate > numTranscripts) {
-                  nextUpdate = numTranscripts - 1;
+                if (updateMutex.try_lock()) {
+                    if (numProcessed > nextUpdate) {
+                        sopt.jointLog->info(
+                                            "processed bias for {:3.1f}% of the transcripts",
+                                            100.0 *
+                                            (numProcessed / static_cast<double>(numTranscripts)));
+                        nextUpdate += stepSize;
+                        if (nextUpdate > numTranscripts) {
+                            nextUpdate = numTranscripts - 1;
+                        }
+                    }
+                    updateMutex.unlock();
                 }
-              }
-              updateMutex.unlock();
             }
             ++numProcessed;
 
