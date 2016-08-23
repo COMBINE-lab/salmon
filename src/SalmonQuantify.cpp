@@ -211,7 +211,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
   // If we're auto detecting the library type
   auto* detector = readLib.getDetector();
   bool autoDetect = (detector != nullptr) ? detector->isActive() : false;
-  const auto expectedLibraryFormat = readLib.format();
+  auto expectedLibraryFormat = readLib.format();
   uint64_t zeroProbFrags{0};
 
   // EQClass
@@ -323,6 +323,10 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 	    detector->addSample(aln.libFormat());
 	    if (detector->canGuess()) {
 	      detector->mostLikelyType(readLib.getFormat());
+	      expectedLibraryFormat = readLib.getFormat();
+	      autoDetect = false;
+	    } else if (!detector->isActive()) {
+	      expectedLibraryFormat = readLib.getFormat();
 	      autoDetect = false;
 	    }
 	  }
@@ -333,13 +337,27 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
           // The probability that the fragments align to the given strands in
           // the
           // given orientations.
-          double logAlignCompatProb =
-              (useReadCompat) ? (salmon::utils::logAlignFormatProb(
-                                    aln.libFormat(), expectedLibraryFormat,
-                                    static_cast<int32_t>(aln.pos), aln.fwd,
+	  bool isCompat = 
+	    salmon::utils::isCompatible(
+					aln.libFormat(),
+					expectedLibraryFormat,
+					static_cast<int32_t>(aln.pos),
+					aln.fwd,
+					aln.mateStatus);
+	  double logAlignCompatProb = isCompat ? LOG_1 : salmonOpts.incompatPrior;
+	  if (!isCompat and salmonOpts.ignoreIncompat) {
+	    aln.logProb = salmon::math::LOG_0;
+	    continue;
+	  }
+
+	  /*
+	  double logAlignCompatProb =
+	      (useReadCompat) ? (salmon::utils::logAlignFormatProb(
+				    aln.libFormat(), expectedLibraryFormat,
+				    static_cast<int32_t>(aln.pos), aln.fwd,
                                     aln.mateStatus, salmonOpts.incompatPrior))
                               : LOG_1;
-
+	  */
           /** New compat handling
           // True if the read is compatible with the
           // expected library type; false otherwise.

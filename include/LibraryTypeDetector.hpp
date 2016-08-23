@@ -124,6 +124,8 @@ public:
 	active_ = false;
 	ret = true;
       } // end if active_
+      
+      mut_.unlock(); // release the lock
     } // end try_lock()
     return ret;
   }

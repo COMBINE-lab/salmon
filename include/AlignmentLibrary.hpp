@@ -17,6 +17,7 @@ extern "C" {
 #include "BAMQueue.hpp"
 #include "SalmonUtils.hpp"
 #include "LibraryFormat.hpp"
+#include "LibraryTypeDetector.hpp"
 #include "SalmonOpts.hpp"
 #include "FragmentLengthDistribution.hpp"
 #include "FragmentStartPositionDistribution.hpp"
@@ -292,6 +293,24 @@ class AlignmentLibrary {
     inline LibraryFormat format() { return libFmt_; }
     inline const LibraryFormat format() const { return libFmt_; }
 
+  /**
+   * If this is set, attempt to automatically detect this library's type
+   */
+  void enableAutodetect() {
+    // if auto detection is not already enabled, and we're enabling it
+    if (!detector_){
+      detector_.reset(new LibraryTypeDetector(libFmt_.type));
+    }
+  }
+
+  bool autoDetect() const { return (detector_.get() != nullptr);}
+
+  LibraryTypeDetector* getDetector() { return detector_.get(); }
+    
+  LibraryFormat& getFormat() { return libFmt_; }
+  const LibraryFormat& getFormat() const { return libFmt_; }
+  
+  
     void setGCFracForward(double fracForward) { gcFracFwd_ = fracForward; }
 
     double gcFracFwd() const { return gcFracFwd_; }
@@ -436,6 +455,7 @@ class AlignmentLibrary {
 
     //ReadKmerDist<6, std::atomic<uint32_t>> readBias_;
     std::vector<double> expectedBias_;
+    std::unique_ptr<LibraryTypeDetector> detector_{nullptr};
 };
 
 #endif // ALIGNMENT_LIBRARY_HPP

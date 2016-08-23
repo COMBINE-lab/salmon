@@ -144,6 +144,10 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     std::default_random_engine eng(rd());
     std::uniform_real_distribution<> uni(0.0, 1.0 + std::numeric_limits<double>::min());
 
+    // If we're auto detecting the library type
+    auto* detector = alnLib.getDetector();
+    bool autoDetect = (detector != nullptr) ? detector->isActive() : false;
+    
     //EQClass
     EquivalenceClassBuilder& eqBuilder = alnLib.equivalenceClassBuilder();
     auto& readBiasFW = observedBiasParams.seqBiasModelFW;
@@ -179,7 +183,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     bool noFragLenFactor{salmonOpts.noFragLenFactor};
 
     double startingCumulativeMass = fmCalc.cumulativeLogMassAt(firstTimestepOfRound);
-    const auto expectedLibraryFormat = alnLib.format();
+    auto expectedLibraryFormat = alnLib.format();
     uint32_t numBurninFrags{salmonOpts.numBurninFrags};
 
     bool useAuxParams = (processedReads > salmonOpts.numPreBurninFrags);
@@ -281,7 +285,18 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         // TESTING
                         if (noFragLenFactor) { logFragProb = LOG_1; }
 
-                        // @TODO: handle this case better
+			if (autoDetect) {
+			  detector->addSample(aln->libFormat());
+			  if (detector->canGuess()) {
+			    detector->mostLikelyType(alnLib.getFormat());
+			    expectedLibraryFormat = alnLib.getFormat();
+			    autoDetect = false;
+			  } else if (!detector->isActive()) {
+			    expectedLibraryFormat = alnLib.getFormat();
+			    autoDetect = false;
+			  }
+			}
+			// @TODO: handle this case better
                         //double fragProb = cdf(fragLengthDist, fragLength + 0.5) - cdf(fragLengthDist, fragLength - 0.5);
                         //fragProb = std::max(fragProb, 1e-3);
                         //fragProb /= cdf(fragLengthDist, refLength);
@@ -1401,9 +1416,25 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                 alignmentFiles.push_back(alignmentFile);
             }
         }
-
+	
+	// Just so we have the variable around
+	LibraryFormat libFmt(ReadType::PAIRED_END, ReadOrientation::TOWARD, ReadStrandedness::U);
+	// Get the library format string
         std::string libFmtStr = vm["libType"].as<std::string>();
-        LibraryFormat libFmt = salmon::utils::parseLibraryFormatStringNew(libFmtStr);
+
+	// If we're auto-detecting, set things up appropriately
+	std::set<std::string> autoTypes = {"AS", "as", "AP", "ap"};
+	bool autoDetectFmt = (autoTypes.find(libFmtStr) != autoTypes.end());
+	if (autoDetectFmt) {
+	  if (libFmtStr == "as" or libFmtStr == "AS") {
+	    libFmt = LibraryFormat(ReadType::SINGLE_END, ReadOrientation::NONE, ReadStrandedness::U);
+	  } else if (libFmtStr == "ap" or libFmtStr == "AP") {
+	    libFmt = LibraryFormat(ReadType::PAIRED_END, ReadOrientation::TOWARD, ReadStrandedness::U);
+	  }
+	} else { // Parse the provided type
+	  libFmt = salmon::utils::parseLibraryFormatStringNew(libFmtStr);
+	}
+
         if (libFmt.check()) {
             std::cerr << libFmt << "\n";
         } else {
@@ -1560,6 +1591,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 							  libFmt,
 							  sopt);
 
+		    if (autoDetectFmt) { alnLib.enableAutodetect(); }
                     success = processSample<UnpairedRead>(alnLib, runStartTime,
                                                           requiredObservations, sopt,
                                                           outputDirectory);
@@ -1571,7 +1603,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                                                       transcriptFile,
                                                       libFmt,
                                                       sopt);
-
+		    if (autoDetectFmt) { alnLib.enableAutodetect(); }
                     success = processSample<ReadPair>(alnLib, runStartTime,
                                                       requiredObservations, sopt,
                                                       outputDirectory);
