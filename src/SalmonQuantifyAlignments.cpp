@@ -138,7 +138,8 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
     // Whether or not we are using "banking"
     bool useMassBanking = (!initialRound and salmonOpts.useMassBanking);
-    bool useReadCompat = salmonOpts.incompatPrior != salmon::math::LOG_1;
+    double incompatPrior = salmonOpts.incompatPrior;
+    bool useReadCompat = incompatPrior != salmon::math::LOG_1;
     
     // Create a random uniform distribution
     std::default_random_engine eng(rd());
@@ -147,7 +148,9 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     // If we're auto detecting the library type
     auto* detector = alnLib.getDetector();
     bool autoDetect = (detector != nullptr) ? detector->isActive() : false;
-    
+    // If we haven't detected yet, nothing is incompatible
+    if (autoDetect) { incompatPrior = salmon::math::LOG_1; }
+
     //EQClass
     EquivalenceClassBuilder& eqBuilder = alnLib.equivalenceClassBuilder();
     auto& readBiasFW = observedBiasParams.seqBiasModelFW;
@@ -290,9 +293,11 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 			  if (detector->canGuess()) {
 			    detector->mostLikelyType(alnLib.getFormat());
 			    expectedLibraryFormat = alnLib.getFormat();
+                incompatPrior = salmonOpts.incompatPrior;
 			    autoDetect = false;
 			  } else if (!detector->isActive()) {
 			    expectedLibraryFormat = alnLib.getFormat();
+                incompatPrior = salmonOpts.incompatPrior;
 			    autoDetect = false;
 			  }
 			}
@@ -319,7 +324,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                                   expectedLibraryFormat,
                                   aln->pos(),
                                   aln->fwd(), aln->mateStatus());
-                        double logAlignCompatProb = isCompat ? LOG_1 : salmonOpts.incompatPrior;
+                        double logAlignCompatProb = isCompat ? LOG_1 : incompatPrior;
                         if (!isCompat and salmonOpts.ignoreIncompat) {
                             aln->logProb = salmon::math::LOG_0;
                             continue;

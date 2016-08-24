@@ -202,7 +202,8 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
   bool posBiasCorrect = salmonOpts.posBiasCorrect;
   bool gcBiasCorrect = salmonOpts.gcBiasCorrect;
   bool updateCounts = initialRound;
-  bool useReadCompat = salmonOpts.incompatPrior != salmon::math::LOG_1;
+  double incompatPrior = salmonOpts.incompatPrior;
+  bool useReadCompat = incompatPrior != salmon::math::LOG_1;
   bool useFSPD{salmonOpts.useFSPD};
   bool useFragLengthDist{!salmonOpts.noFragLengthDist};
   bool noFragLenFactor{salmonOpts.noFragLenFactor};
@@ -211,6 +212,9 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
   // If we're auto detecting the library type
   auto* detector = readLib.getDetector();
   bool autoDetect = (detector != nullptr) ? detector->isActive() : false;
+  // If we haven't detected yet, nothing is incompatible
+    if (autoDetect) { incompatPrior = salmon::math::LOG_1; }
+
   auto expectedLibraryFormat = readLib.format();
   uint64_t zeroProbFrags{0};
 
@@ -324,9 +328,11 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 	    if (detector->canGuess()) {
 	      detector->mostLikelyType(readLib.getFormat());
 	      expectedLibraryFormat = readLib.getFormat();
+          incompatPrior = salmonOpts.incompatPrior;
 	      autoDetect = false;
 	    } else if (!detector->isActive()) {
 	      expectedLibraryFormat = readLib.getFormat();
+          incompatPrior = salmonOpts.incompatPrior;
 	      autoDetect = false;
 	    }
 	  }
@@ -344,7 +350,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 					static_cast<int32_t>(aln.pos),
 					aln.fwd,
 					aln.mateStatus);
-	  double logAlignCompatProb = isCompat ? LOG_1 : salmonOpts.incompatPrior;
+	  double logAlignCompatProb = isCompat ? LOG_1 : incompatPrior;
 	  if (!isCompat and salmonOpts.ignoreIncompat) {
 	    aln.logProb = salmon::math::LOG_0;
 	    continue;

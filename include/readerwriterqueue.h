@@ -1,4 +1,4 @@
-// ©2013-2015 Cameron Desrochers.
+// ©2013-2016 Cameron Desrochers.
 // Distributed under the simplified BSD license (see the license file that
 // should have come with this header).
 
@@ -9,8 +9,12 @@
 #include <utility>
 #include <cassert>
 #include <stdexcept>
+#include <new>
 #include <cstdint>
-#include <cstdlib>		// For malloc/free & size_t
+#include <cstdlib>		// For malloc/free/abort & size_t
+#if __cplusplus > 199711L
+#include <chrono>
+#endif
 
 
 // A lock-free queue for a single-consumer, single-producer architecture.
@@ -26,7 +30,15 @@
 // one role, is not safe unless properly synchronized.
 // Using the queue exclusively from one thread is fine, though a bit silly.
 
-#define CACHE_LINE_SIZE 64
+#ifndef MOODYCAMEL_CACHE_LINE_SIZE
+#define MOODYCAMEL_CACHE_LINE_SIZE 64
+#endif
+
+#ifndef MOODYCAMEL_EXCEPTIONS_ENABLED
+#if (defined(_MSC_VER) && defined(_CPPUNWIND)) || (defined(__GNUC__) && defined(__EXCEPTIONS)) || (!defined(_MSC_VER) && !defined(__GNUC__))
+#define MOODYCAMEL_EXCEPTIONS_ENABLED
+#endif
+#endif
 
 #ifdef AE_VCPP
 #pragma warning(push)
@@ -90,7 +102,11 @@ public:
 			for (size_t i = 0; i != initialBlockCount; ++i) {
 				auto block = make_block(largestBlockSize);
 				if (block == nullptr) {
+#ifdef MOODYCAMEL_EXCEPTIONS_ENABLED
 					throw std::bad_alloc();
+#else
+					abort();
+#endif
 				}
 				if (firstBlock == nullptr) {
 					firstBlock = block;
@@ -105,7 +121,11 @@ public:
 		else {
 			firstBlock = make_block(largestBlockSize);
 			if (firstBlock == nullptr) {
+#ifdef MOODYCAMEL_EXCEPTIONS_ENABLED
 				throw std::bad_alloc();
+#else
+				abort();
+#endif
 			}
 			firstBlock->next = firstBlock;
 		}
@@ -543,11 +563,7 @@ private:
 		ReentrantGuard(bool& _inSection)
 			: inSection(_inSection)
 		{
-			assert(!inSection);
-			if (inSection) {
-				throw std::runtime_error("ReaderWriterQueue does not support enqueuing or dequeuing elements from other elements' ctors and dtors");
-			}
-
+			assert(!inSection && "ReaderWriterQueue does not support enqueuing or dequeuing elements from other elements' ctors and dtors");
 			inSection = true;
 		}
 
@@ -567,11 +583,11 @@ private:
 		weak_atomic<size_t> front;	// (Atomic) Elements are read from here
 		size_t localTail;			// An uncontended shadow copy of tail, owned by the consumer
 		
-		char cachelineFiller0[CACHE_LINE_SIZE - sizeof(weak_atomic<size_t>) - sizeof(size_t)];
+		char cachelineFiller0[MOODYCAMEL_CACHE_LINE_SIZE - sizeof(weak_atomic<size_t>) - sizeof(size_t)];
 		weak_atomic<size_t> tail;	// (Atomic) Elements are enqueued here
 		size_t localFront;
 		
-		char cachelineFiller1[CACHE_LINE_SIZE - sizeof(weak_atomic<size_t>) - sizeof(size_t)];	// next isn't very contended, but we don't want it on the same cache line as tail (which is)
+		char cachelineFiller1[MOODYCAMEL_CACHE_LINE_SIZE - sizeof(weak_atomic<size_t>) - sizeof(size_t)];	// next isn't very contended, but we don't want it on the same cache line as tail (which is)
 		weak_atomic<Block*> next;	// (Atomic)
 		
 		char* data;		// Contents (on heap) are aligned to T's alignment
@@ -612,7 +628,7 @@ private:
 private:
 	weak_atomic<Block*> frontBlock;		// (Atomic) Elements are enqueued to this block
 	
-	char cachelineFiller[CACHE_LINE_SIZE - sizeof(weak_atomic<Block*>)];
+	char cachelineFiller[MOODYCAMEL_CACHE_LINE_SIZE - sizeof(weak_atomic<Block*>)];
 	weak_atomic<Block*> tailBlock;		// (Atomic) Elements are dequeued from this block
 
 	size_t largestBlockSize;
@@ -621,6 +637,175 @@ private:
 	bool enqueuing;
 	bool dequeuing;
 #endif
+};
+
+// Like ReaderWriterQueue, but also providees blocking operations
+template<typename T, size_t MAX_BLOCK_SIZE = 512>
+class BlockingReaderWriterQueue
+{
+private:
+	typedef ::moodycamel::ReaderWriterQueue<T, MAX_BLOCK_SIZE> ReaderWriterQueue;
+	
+public:
+	explicit BlockingReaderWriterQueue(size_t maxSize = 15)
+		: inner(maxSize)
+	{ }
+
+	
+	// Enqueues a copy of element if there is room in the queue.
+	// Returns true if the element was enqueued, false otherwise.
+	// Does not allocate memory.
+	AE_FORCEINLINE bool try_enqueue(T const& element)
+	{
+		if (inner.try_enqueue(element)) {
+			sema.signal();
+			return true;
+		}
+		return false;
+	}
+
+	// Enqueues a moved copy of element if there is room in the queue.
+	// Returns true if the element was enqueued, false otherwise.
+	// Does not allocate memory.
+	AE_FORCEINLINE bool try_enqueue(T&& element)
+	{
+		if (inner.try_enqueue(std::forward<T>(element))) {
+			sema.signal();
+			return true;
+		}
+		return false;
+	}
+
+
+	// Enqueues a copy of element on the queue.
+	// Allocates an additional block of memory if needed.
+	// Only fails (returns false) if memory allocation fails.
+	AE_FORCEINLINE bool enqueue(T const& element)
+	{
+		if (inner.enqueue(element)) {
+			sema.signal();
+			return true;
+		}
+		return false;
+	}
+
+	// Enqueues a moved copy of element on the queue.
+	// Allocates an additional block of memory if needed.
+	// Only fails (returns false) if memory allocation fails.
+	AE_FORCEINLINE bool enqueue(T&& element)
+	{
+		if (inner.enqueue(std::forward<T>(element))) {
+			sema.signal();
+			return true;
+		}
+		return false;
+	}
+
+
+	// Attempts to dequeue an element; if the queue is empty,
+	// returns false instead. If the queue has at least one element,
+	// moves front to result using operator=, then returns true.
+	template<typename U>
+	bool try_dequeue(U& result)
+	{
+		if (sema.tryWait()) {
+			bool success = inner.try_dequeue(result);
+			assert(success);
+			AE_UNUSED(success);
+			return true;
+		}
+		return false;
+	}
+	
+	
+	// Attempts to dequeue an element; if the queue is empty,
+	// waits until an element is available, then dequeues it.
+	template<typename U>
+	void wait_dequeue(U& result)
+	{
+		sema.wait();
+		bool success = inner.try_dequeue(result);
+		AE_UNUSED(result);
+		assert(success);
+		AE_UNUSED(success);
+	}
+
+
+	// Attempts to dequeue an element; if the queue is empty,
+	// waits until an element is available up to the specified timeout,
+	// then dequeues it and returns true, or returns false if the timeout
+	// expires before an element can be dequeued.
+	// Using a negative timeout indicates an indefinite timeout,
+	// and is thus functionally equivalent to calling wait_dequeue.
+	template<typename U>
+	bool wait_dequeue_timed(U& result, std::int64_t timeout_usecs)
+	{
+		if (!sema.wait(timeout_usecs)) {
+			return false;
+		}
+		bool success = inner.try_dequeue(result);
+		AE_UNUSED(result);
+		assert(success);
+		AE_UNUSED(success);
+		return true;
+	}
+
+
+#if __cplusplus > 199711L
+	// Attempts to dequeue an element; if the queue is empty,
+	// waits until an element is available up to the specified timeout,
+	// then dequeues it and returns true, or returns false if the timeout
+	// expires before an element can be dequeued.
+	// Using a negative timeout indicates an indefinite timeout,
+	// and is thus functionally equivalent to calling wait_dequeue.
+	template<typename U, typename Rep, typename Period>
+	inline bool wait_dequeue_timed(U& result, std::chrono::duration<Rep, Period> const& timeout)
+	{
+        return wait_dequeue_timed(result, std::chrono::duration_cast<std::chrono::microseconds>(timeout).count());
+	}
+#endif
+
+
+	// Returns a pointer to the front element in the queue (the one that
+	// would be removed next by a call to `try_dequeue` or `pop`). If the
+	// queue appears empty at the time the method is called, nullptr is
+	// returned instead.
+	// Must be called only from the consumer thread.
+	AE_FORCEINLINE T* peek()
+	{
+		return inner.peek();
+	}
+	
+	// Removes the front element from the queue, if any, without returning it.
+	// Returns true on success, or false if the queue appeared empty at the time
+	// `pop` was called.
+	AE_FORCEINLINE bool pop()
+	{
+		if (sema.tryWait()) {
+			bool result = inner.pop();
+			assert(result);
+			AE_UNUSED(result);
+			return true;
+		}
+		return false;
+	}
+	
+	// Returns the approximate number of items currently in the queue.
+	// Safe to call from both the producer and consumer threads.
+	AE_FORCEINLINE size_t size_approx() const
+	{
+		return sema.availableApprox();
+	}
+
+
+private:
+	// Disable copying & assignment
+	BlockingReaderWriterQueue(ReaderWriterQueue const&) {  }
+	BlockingReaderWriterQueue& operator=(ReaderWriterQueue const&) {  }
+	
+private:
+	ReaderWriterQueue inner;
+	spsc_sema::LightweightSemaphore sema;
 };
 
 }    // end namespace moodycamel
