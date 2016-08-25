@@ -175,7 +175,7 @@ bool GZipWriter::writeMeta(
   std::vector<int32_t> observedBias(bcounts.size(), 0);
   std::copy(bcounts.begin(), bcounts.end(), observedBias.begin());
   writeVectorToFile(obsBiasPath, observedBias);
-  
+
   bfs::path obsBiasPath3p = auxDir / "observed_bias_3p.gz";
   const auto& bcounts3p = experiment.readBias(salmon::utils::Direction::REVERSE_COMPLEMENT).counts;
   std::vector<int32_t> observedBias3p(bcounts3p.size(), 0);
@@ -227,7 +227,7 @@ bool GZipWriter::writeMeta(
   }
 
   if (opts.gcBiasCorrect) {
-      // GC observed 
+      // GC observed
       {
           bfs::path obsGCPath = auxDir / "obs_gc.gz";
           auto flags = std::ios_base::out | std::ios_base::binary;
@@ -237,7 +237,7 @@ bool GZipWriter::writeMeta(
           auto& obsgc = experiment.observedGC();
           obsgc.writeBinary(out);
       }
-      // GC expected 
+      // GC expected
       {
           bfs::path expGCPath = auxDir / "exp_gc.gz";
           auto flags = std::ios_base::out | std::ios_base::binary;
@@ -258,7 +258,7 @@ bool GZipWriter::writeMeta(
   std::copy(gcCounts.begin(), gcCounts.end(), observedGC.begin());
   writeVectorToFile(obsGCPath, observedGC);
   */
-  
+
   bfs::path info = auxDir / "meta_info.json";
 
   {
@@ -278,7 +278,7 @@ bool GZipWriter::writeMeta(
       oa(cereal::make_nvp("samp_type", sampType));
 
       auto libStrings = getLibTypeStrings(experiment);
-      oa(cereal::make_nvp("num_libraries", libStrings.size())); 
+      oa(cereal::make_nvp("num_libraries", libStrings.size()));
       oa(cereal::make_nvp("library_types", libStrings));
 
       oa(cereal::make_nvp("frag_dist_length", fldSamples.size()));
@@ -290,7 +290,7 @@ bool GZipWriter::writeMeta(
       oa(cereal::make_nvp("mapping_type", mapTypeStr));
 
       oa(cereal::make_nvp("num_targets", transcripts.size()));
-      oa(cereal::make_nvp("num_bootstraps", numBootstraps));
+      oa(cereal::make_nvp("num_bootstraps", numSamples));
       oa(cereal::make_nvp("num_processed", experiment.numObservedFragments()));
       oa(cereal::make_nvp("num_mapped", experiment.numMappedFragments()));
       oa(cereal::make_nvp("percent_mapped", experiment.effectiveMappingRate() * 100.0));
@@ -417,8 +417,8 @@ bool GZipWriter::writeMeta<AlignmentLibrary<ReadPair>>(
     const AlignmentLibrary<ReadPair>& experiment,
     const std::string& tstring);
 
-template 
+template
 std::vector<std::string> getLibTypeStrings(const AlignmentLibrary<UnpairedRead>& experiment);
 
-template 
+template
 std::vector<std::string> getLibTypeStrings(const AlignmentLibrary<ReadPair>& experiment);
