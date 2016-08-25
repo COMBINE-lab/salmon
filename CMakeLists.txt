@@ -506,11 +506,11 @@ message("Build system will compile Staden IOLib")
 message("==================================================================")
 ExternalProject_Add(libstadenio
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/staden-io_lib/releases/download/v1.13.10/io_lib-1.13.10.tar.gz -o staden-io_lib-v1.13.10.tar.gz &&
-                     mkdir -p staden-io_lib-1.13.10 &&
-                     tar -xzf staden-io_lib-v1.13.10.tar.gz --strip-components=1 -C staden-io_lib-1.13.10 &&
+    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/staden-io_lib/archive/v1.14.8.tar.gz -o staden-io_lib-v1.14.8.tar.gz &&
+                     mkdir -p staden-io_lib-1.14.8 &&
+                     tar -xzf staden-io_lib-v1.14.8.tar.gz --strip-components=1 -C staden-io_lib-1.14.8 &&
                      rm -fr staden-io_lib &&
-                     mv -f staden-io_lib-1.13.10 staden-io_lib
+                     mv -f staden-io_lib-1.14.8 staden-io_lib
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/staden-io_lib
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ./configure --enable-shared=no --without-libcurl --prefix=<INSTALL_DIR> LDFLAGS=${LIBSTADEN_LDFLAGS} CFLAGS=${LIBSTADEN_CFLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}

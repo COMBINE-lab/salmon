@@ -1428,13 +1428,15 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         std::string libFmtStr = vm["libType"].as<std::string>();
 
 	// If we're auto-detecting, set things up appropriately
-	std::set<std::string> autoTypes = {"AS", "as", "AP", "ap"};
-	bool autoDetectFmt = (autoTypes.find(libFmtStr) != autoTypes.end());
+	bool autoDetectFmt = (libFmtStr == "a" or libFmtStr == "A");//(autoTypes.find(libFmtStr) != autoTypes.end());
 	if (autoDetectFmt) {
-	  if (libFmtStr == "as" or libFmtStr == "AS") {
-	    libFmt = LibraryFormat(ReadType::SINGLE_END, ReadOrientation::NONE, ReadStrandedness::U);
-	  } else if (libFmtStr == "ap" or libFmtStr == "AP") {
+
+	  bool isPairedEnd = salmon::utils::peekBAMIsPaired(alignmentFiles.front());
+	  
+	  if (isPairedEnd) {
 	    libFmt = LibraryFormat(ReadType::PAIRED_END, ReadOrientation::TOWARD, ReadStrandedness::U);
+	  } else {
+	    libFmt = LibraryFormat(ReadType::SINGLE_END, ReadOrientation::NONE, ReadStrandedness::U);
 	  }
 	} else { // Parse the provided type
 	  libFmt = salmon::utils::parseLibraryFormatStringNew(libFmtStr);

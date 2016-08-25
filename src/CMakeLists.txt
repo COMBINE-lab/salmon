@@ -40,7 +40,6 @@ SalmonQuantify.cpp
 FragmentLengthDistribution.cpp
 FragmentStartPositionDistribution.cpp
 SequenceBiasModel.cpp
-StadenUtils.cpp
 TranscriptGroup.cpp
 GZipWriter.cpp
 #${GAT_SOURCE_DIR}/external/install/src/rapmap/sais.c
@@ -61,6 +60,7 @@ GenomicFeature.cpp
 VersionChecker.cpp
 SBModel.cpp
 FastxParser.cpp
+StadenUtils.cpp
 SalmonUtils.cpp
 DistributionUtils.cpp
 SalmonStringUtils.cpp

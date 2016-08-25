@@ -87,6 +87,9 @@ std::vector<ReadLibrary> extractReadLibraries(boost::program_options::parsed_opt
 
 LibraryFormat parseLibraryFormatString(std::string& fmt);
 
+  bool peekBAMIsPaired(const boost::filesystem::path& fname);
+
+    
 size_t numberOfReadsInFastaFile(const std::string& fname);
 
 bool readKmerOrder( const std::string& fname, std::vector<uint64_t>& kmers );
