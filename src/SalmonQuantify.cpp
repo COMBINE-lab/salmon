@@ -123,6 +123,9 @@ extern "C" {
 #include "SACollector.hpp"
 #include "SASearcher.hpp"
 #include "SalmonOpts.hpp"
+#include "PairAlignmentFormatter.hpp"
+#include "SingleAlignmentFormatter.hpp"
+#include "RapMapUtils.hpp"
 //#include "TextBootstrapWriter.hpp"
 
 /****** QUASI MAPPING DECLARATIONS *********/
@@ -766,7 +769,13 @@ void processReadsQuasi(
   std::vector<QuasiAlignment> rightHits;
   rapmap::utils::HitCounters hctr;
   salmon::utils::MappingType mapType{salmon::utils::MappingType::UNMAPPED};
+ 
   
+  PairAlignmentFormatter<RapMapIndexT*> formatter(qidx);
+  fmt::MemoryWriter sstream;
+  auto* qmLog = salmonOpts.qmLog.get();
+  bool writeQuasimappings = (qmLog != nullptr);
+
   auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
       rangeSize = rg.size();
@@ -993,6 +1002,12 @@ void processReadsQuasi(
           } break;
           }
         }
+
+        if (writeQuasimappings) {
+            rapmap::utils::writeAlignmentsToStream(rp, formatter,
+                                                   hctr, jointHits, sstream);
+        }
+       
       } else {
           // This read was completely unmapped.
           mapType = salmon::utils::MappingType::UNMAPPED;
@@ -1003,6 +1018,7 @@ void processReadsQuasi(
           // unless we're outputting names for un-mapped reads
           unmappedNames << rp.first.name << ' ' << salmon::utils::str(mapType) << '\n';
       }
+
 
       validHits += jointHits.size();
       localNumAssignedFragments += (jointHits.size() > 0);
@@ -1039,6 +1055,15 @@ void processReadsQuasi(
         unmappedNames.clear();
     }
 	    
+    if (writeQuasimappings) {
+        std::string outStr(sstream.str());
+        // Get rid of last newline
+        if (!outStr.empty()) {
+            outStr.pop_back();
+            qmLog->info(std::move(outStr));
+        }
+        sstream.clear();
+    } 
 
     prevObservedFrags = numObservedFragments;
     AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(
@@ -1118,6 +1143,12 @@ void processReadsQuasi(
   SACollector<RapMapIndexT> hitCollector(qidx);
   SASearcher<RapMapIndexT> saSearcher(qidx);
   rapmap::utils::HitCounters hctr;
+  
+  SingleAlignmentFormatter<RapMapIndexT*> formatter(qidx);
+  fmt::MemoryWriter sstream;
+  auto* qmLog = salmonOpts.qmLog.get();
+  bool writeQuasimappings = (qmLog != nullptr);
+
  auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
       rangeSize = rg.size();
@@ -1211,6 +1242,11 @@ void processReadsQuasi(
         } break;
         }
       }
+      
+      if (writeQuasimappings) {
+          rapmap::utils::writeAlignmentsToStream(rp, formatter,
+                                                 hctr, jointHits, sstream);
+      }
 
       if (writeUnmapped and jointHits.empty()) {
           // If we have no mappings --- then there's nothing to do
@@ -1252,6 +1288,16 @@ void processReadsQuasi(
         unmappedNames.clear();
     }
 
+    if (writeQuasimappings) {
+        std::string outStr(sstream.str());
+        // Get rid of last newline
+        if (!outStr.empty()) {
+            outStr.pop_back();
+            qmLog->info(std::move(outStr));
+        }
+        sstream.clear();
+    } 
+    
     prevObservedFrags = numObservedFragments;
     AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(
         structureVec.begin(), structureVec.begin() + rangeSize);
@@ -1343,6 +1389,9 @@ void processReadLibrary(
         // change value before the lambda below is evaluated --- crazy!
         if (largeIndex) {
           if (perfectHashIndex) { // Perfect Hash
+              if (salmonOpts.qmFileName != "" and i == 0) {
+                  rapmap::utils::writeSAMHeader(*(sidx->quasiIndexPerfectHash64()), salmonOpts.qmLog);
+              }
             auto threadFun = [&, i]() -> void {
               processReadsQuasi<RapMapSAIndex<int64_t, PerfectHash<int64_t>>>(
                   pairedParserPtr.get(), readExp, rl, structureVec[i],
@@ -1354,6 +1403,9 @@ void processReadLibrary(
             };
             threads.emplace_back(threadFun);
           } else { // Dense Hash
+              if (salmonOpts.qmFileName != "" and i == 0) {
+                  rapmap::utils::writeSAMHeader(*(sidx->quasiIndex64()), salmonOpts.qmLog);
+              }
             auto threadFun = [&, i]() -> void {
               processReadsQuasi<RapMapSAIndex<int64_t, DenseHash<int64_t>>>(
                   pairedParserPtr.get(), readExp, rl, structureVec[i],
@@ -1367,6 +1419,9 @@ void processReadLibrary(
           }
         } else {
           if (perfectHashIndex) { // Perfect Hash
+              if (salmonOpts.qmFileName != "" and i == 0) {
+                  rapmap::utils::writeSAMHeader(*(sidx->quasiIndexPerfectHash32()), salmonOpts.qmLog);
+              }
             auto threadFun = [&, i]() -> void {
               processReadsQuasi<RapMapSAIndex<int32_t, PerfectHash<int32_t>>>(
                   pairedParserPtr.get(), readExp, rl, structureVec[i],
@@ -1378,6 +1433,9 @@ void processReadLibrary(
             };
             threads.emplace_back(threadFun);
           } else { // Dense Hash
+              if (salmonOpts.qmFileName != "" and i == 0) {
+                  rapmap::utils::writeSAMHeader(*(sidx->quasiIndex32()), salmonOpts.qmLog);
+              }
             auto threadFun = [&, i]() -> void {
               processReadsQuasi<RapMapSAIndex<int32_t, DenseHash<int32_t>>>(
                   pairedParserPtr.get(), readExp, rl, structureVec[i],
@@ -1494,10 +1552,14 @@ void processReadLibrary(
       bool largeIndex = sidx->is64BitQuasi();
       bool perfectHashIndex = sidx->isPerfectHashQuasi();
       for (int i = 0; i < numThreads; ++i) {
+
         // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
         // change value before the lambda below is evaluated --- crazy!
         if (largeIndex) {
           if (perfectHashIndex) { // Perfect Hash
+              if (salmonOpts.qmFileName != "" and i == 0) {
+                  rapmap::utils::writeSAMHeader(*(sidx->quasiIndexPerfectHash64()), salmonOpts.qmLog);
+              }
             auto threadFun = [&, i]() -> void {
               processReadsQuasi<RapMapSAIndex<int64_t, PerfectHash<int64_t>>>(
                   pairedParserPtr.get(), readExp, rl, structureVec[i],
@@ -1509,6 +1571,10 @@ void processReadLibrary(
             };
             threads.emplace_back(threadFun);
           } else { // Dense Hash
+              if (salmonOpts.qmFileName != "" and i == 0) {
+                  rapmap::utils::writeSAMHeader(*(sidx->quasiIndex64()), salmonOpts.qmLog);
+              }
+
             auto threadFun = [&, i]() -> void {
               processReadsQuasi<RapMapSAIndex<int64_t, DenseHash<int64_t>>>(
                   singleParserPtr.get(), readExp, rl, structureVec[i],
@@ -1522,6 +1588,10 @@ void processReadLibrary(
           }
         } else {
           if (perfectHashIndex) { // Perfect Hash
+              if (salmonOpts.qmFileName != "" and i == 0) {
+                  rapmap::utils::writeSAMHeader(*(sidx->quasiIndexPerfectHash32()), salmonOpts.qmLog);
+              }
+
             auto threadFun = [&, i]() -> void {
               processReadsQuasi<RapMapSAIndex<int32_t, PerfectHash<int32_t>>>(
                   singleParserPtr.get(), readExp, rl, structureVec[i],
@@ -1533,6 +1603,10 @@ void processReadLibrary(
             };
             threads.emplace_back(threadFun);
           } else { // Dense Hash
+              if (salmonOpts.qmFileName != "" and i == 0) {
+                  rapmap::utils::writeSAMHeader(*(sidx->quasiIndex32()), salmonOpts.qmLog);
+              }
+
             auto threadFun = [&, i]() -> void {
               processReadsQuasi<RapMapSAIndex<int32_t, DenseHash<int32_t>>>(
                   singleParserPtr.get(), readExp, rl, structureVec[i],
@@ -1923,7 +1997,12 @@ int salmonQuantify(int argc, char* argv[]) {
       "should be parsed.  Files ending in \'.gtf\' or \'.gff\' are assumed to "
       "be in GTF "
       "format; files with any other extension are assumed to be in the simple "
-      "format.");
+      "format.")
+  (
+   "writeMappings", po::value<string>(&sopt.qmFileName)->default_value("")->implicit_value("-"),
+   "If this option is provided, then the quasi-mapping results will be written out in SAM-compatible "
+   "format.  By default, output will be directed to stdout, but an alternative file name can be "
+   "provided instead.");
 
   sopt.noRichEqClasses = false;
   // mapping cache has been deprecated
@@ -2466,6 +2545,14 @@ transcript abundance from RNA-seq reads
 	l->flush();
 	if (sopt.unmappedFile) { sopt.unmappedFile->close(); }
       }
+    }
+    
+    // if we wrote quasimappings, flush that buffer
+    if (sopt.qmFileName != "" ){
+        sopt.qmLog->flush();
+        // if we wrote to a buffer other than stdout, close
+        // the file
+        if (sopt.qmFileName != "-") { sopt.qmFile.close(); }
     }
   } catch (po::error& e) {
     std::cerr << "Exception : [" << e.what() << "]. Exiting.\n";

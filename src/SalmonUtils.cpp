@@ -1325,14 +1325,24 @@ bool processQuantOptions(SalmonOpts& sopt,
     std::cout << "Logs will be written to " << logDirectory.string() << "\n";
   }
 
+  // Determine what we'll do with quasi-mapping results 
+  bool writeQuasimappings = (sopt.qmFileName != "");
+
   bfs::path logPath = logDirectory / "salmon_quant.log";
   // must be a power-of-two
-
   size_t max_q_size = 2097152;
+                      
+  // make it larger if we're writing mappings or 
+  // unmapped names.
+  std::streambuf* qmBuf;
+  if (writeQuasimappings or sopt.writeUnmappedNames) {
+      max_q_size = 16777216;
+  }  
+
   spdlog::set_async_mode(max_q_size);
 
   auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(
-      logPath.string(), true);
+      logPath.string());
   auto rawConsoleSink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
   auto consoleSink =
       std::make_shared<spdlog::sinks::ansicolor_sink>(rawConsoleSink);
@@ -1361,9 +1371,8 @@ bool processQuantOptions(SalmonOpts& sopt,
       std::ofstream* outFile = new std::ofstream(unmappedNameFile.string());
 
       // Must be a power of 2
-      size_t queueSize{268435456};
-
-      spdlog::set_async_mode(queueSize);
+      //size_t queueSize{268435456};
+      //spdlog::set_async_mode(queueSize);
       auto outputSink =
           std::make_shared<spdlog::sinks::ostream_sink_mt>(*outFile);
 
@@ -1375,8 +1384,42 @@ bool processQuantOptions(SalmonOpts& sopt,
     } else {
       jointLog->error("Couldn't create auxiliary directory in which to place "
                       "\"unmapped_names.txt\"");
+      return false;
     }
   }
+
+  if (writeQuasimappings) {
+      // output to stdout
+      if (sopt.qmFileName == "-") {
+          qmBuf = std::cout.rdbuf();
+      } else { // output to the requested path, making the directory if it doesn't exist
+          // get the parent directory
+          bfs::path qmDir = boost::filesystem::path(sopt.qmFileName).parent_path();
+          // if it's not already a directory that exists
+          bool qmDirSuccess = boost::filesystem::is_directory(qmDir);
+          // try to create it
+          if (!qmDirSuccess) {
+              qmDirSuccess = boost::filesystem::create_directories(qmDir); 
+          }
+          // if the directory already existed, or we created it successfully, open the file
+          if (qmDirSuccess) {
+              sopt.qmFile.open(sopt.qmFileName);
+              qmBuf = sopt.qmFile.rdbuf();
+          } else {
+              bfs::path qmFileName = boost::filesystem::path(sopt.qmFileName).filename();
+              jointLog->error("Couldn't create requested directory {} in which "
+                              "to place the mapping output {}", qmDir.string(), qmFileName.string());
+              return false;
+          }
+      }
+      // Now set the output stream to the buffer, which is
+      // either std::cout, or a file.
+      sopt.qmStream.reset(new std::ostream(qmBuf));
+      
+      auto outputSink = std::make_shared<spdlog::sinks::ostream_sink_mt>(*(sopt.qmStream.get()));
+      sopt.qmLog = std::make_shared<spdlog::logger>("qmStream", outputSink);
+      sopt.qmLog->set_pattern("%v");
+  } 
 
   // Verify that no inconsistent options were provided
   if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {

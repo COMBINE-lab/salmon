@@ -6,6 +6,8 @@
 // Logger includes
 #include "spdlog/spdlog.h"
 
+#include <fstream>
+#include <ostream>
 #include <memory> // for shared_ptr
 
 
@@ -124,6 +126,13 @@ struct SalmonOpts {
     bool useVBOpt; // Use Variational Bayesian EM instead of "regular" EM in the batch passes
 
     bool useQuasi; // Are we using the quasi-mapping based index or not.
+    
+    // For writing quasi-mappings
+    std::string qmFileName;
+    std::ofstream qmFile;
+    std::unique_ptr<std::ostream> qmStream{nullptr};
+    std::shared_ptr<spdlog::logger> qmLog{nullptr};
+
 
   std::unique_ptr<std::ofstream> unmappedFile{nullptr};
     bool writeUnmappedNames; // write the names of unmapped reads
