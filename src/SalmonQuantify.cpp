@@ -2183,7 +2183,7 @@ int salmonQuantify(int argc, char* argv[]) {
     (
      "writeUnmappedNames",
      po::bool_switch(&(sopt.writeUnmappedNames))->default_value(false),
-     "Write the names of un-mapped reads to the file unmapped.txt in the auxiliary directory.");
+     "Write the names of un-mapped reads to the file unmapped_names.txt in the auxiliary directory.");
 
 
   po::options_description fmd("\noptions that apply to the old FMD index");

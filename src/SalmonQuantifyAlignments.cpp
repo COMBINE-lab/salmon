@@ -1218,7 +1218,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 
     po::options_description advanced("\nadvanced options");
     advanced.add_options()
-    ("auxDir", po::value<std::string>(&(sopt.auxDir))->default_value("aux"), "The sub-directory of the quantification directory where auxiliary information "
+    ("auxDir", po::value<std::string>(&(sopt.auxDir))->default_value("aux_info"), "The sub-directory of the quantification directory where auxiliary information "
      			"e.g. bootstraps, bias parameters, etc. will be written.")
     ("noBiasLengthThreshold", po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(false), "[experimental] : "
           "If this option is enabled, then no (lower) threshold will be set on "
@@ -1295,7 +1295,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "going to perform downstream analysis of the alignments with tools which don't, themselves, take "
                         "fragment assignment ambiguity into account, you should use this output.")
     ("sampleUnaligned,u", po::bool_switch(&(sopt.sampleUnaligned))->default_value(false), "In addition to sampling the aligned reads, also write "
-                        "the un-aligned reads to \"posSample.bam\".")
+                        "the un-aligned reads to \"postSample.bam\".")
     ("numGibbsSamples", po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0), "Number of Gibbs sampling rounds to "
      "perform.")
     ("numBootstraps", po::value<uint32_t>(&(sopt.numBootstraps))->default_value(0), "Number of bootstrap samples to generate. Note: "
