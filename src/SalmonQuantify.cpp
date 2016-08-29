@@ -2126,7 +2126,7 @@ int salmonQuantify(int argc, char* argv[]) {
      "[experimental] : "
      "If this option is enabled, then no (lower) threshold will be set on "
      "how short bias correction can make effective lengths. This can increase the precision "
-     "of bias correction, but harm robustness.  The default correction applies a threshold")
+     "of bias correction, but harm robustness.  The default correction applies a threshold.")
     (
      "numBiasSamples",
      po::value<int32_t>(&numBiasSamples)->default_value(2000000),

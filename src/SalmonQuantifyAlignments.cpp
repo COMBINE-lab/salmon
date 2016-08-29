@@ -1223,8 +1223,8 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     ("noBiasLengthThreshold", po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(false), "[experimental] : "
           "If this option is enabled, then no (lower) threshold will be set on "
           "how short bias correction can make effective lengths. This can increase the precision "
-          "of bias correction, but harm robustness.  The default correction applies a threshold")
-    ("fldMax" , po::value<size_t>(&(sopt.fragLenDistMax))->default_value(800), "The maximum fragment length to consider when building the empirical distribution")
+          "of bias correction, but harm robustness.  The default correction applies a thresholdi.")
+    ("fldMax" , po::value<size_t>(&(sopt.fragLenDistMax))->default_value(1000), "The maximum fragment length to consider when building the empirical distribution")
     ("fldMean", po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(200), "The mean used in the fragment length distribution prior")
     ("fldSD" , po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(80), "The standard deviation used in the fragment length distribution prior")
     ("forgettingFactor,f", po::value<double>(&(sopt.forgettingFactor))->default_value(0.65), "The forgetting factor used "
@@ -1271,10 +1271,11 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "all information about the relative weights for each transcript in the "
                         "label of an equivalence class will be ignored, and only the relative "
                         "abundance and effective length of each transcript will be considered.")
-                        */
     ("noBiasLengthThreshold", po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(false), "[experimental] : "
                         "If this option is enabled, then bias correction will be allowed to estimate effective lengths "
                         "shorter than the approximate mean fragment length")
+
+                        */
     ("numErrorBins", po::value<uint32_t>(&(sopt.numErrorBins))->default_value(6), "The number of bins into which to divide "
                         "each read when learning and applying the error model.  For example, a value of 10 would mean that "
                         "effectively, a separate error model is leared and applied to each 10th of the read, while a value of "
@@ -1388,7 +1389,6 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 
         // Set the atomic variable numBiasSamples from the local version
         sopt.numBiasSamples.store(numBiasSamples);
-	sopt.noBiasLengthThreshold = !sopt.useBiasLengthThreshold;
 	
         // Get the time at the start of the run
         std::time_t result = std::time(NULL);
