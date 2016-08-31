@@ -478,6 +478,29 @@ done independently, but future versions of Salmon may provide a script to
 generate this unmapped FASTA/Q file from the unmapped file and the original
 inputs.
 
+
+"""""""""""""""""""
+``--writeMappings``
+"""""""""""""""""""
+
+Passing the ``--writeMappings`` argument to Salmon will have an effect
+only in mapping-based mode and *only when using a quasi-index*.  When
+executed with the ``--writeMappings`` argument, Salmon will write out
+the mapping information that it then processes to quantify transcript
+abundances.  The mapping information will be written in a SAM
+compatible format. If no options are provided to this argument, then
+the output will be written to stdout (so that e.g. it can be piped to
+samtools and directly converted into BAM format).  Otherwise, this 
+argument can optionally be provided with a filename, and the mapping 
+information will be written to that file.
+
+.. note:: Compatible mappings
+
+  The mapping information is computed and written *before* library
+  type compatibility checks take place, thus the mapping file will
+  contain information about all mappings of the reads considered by
+  Salmon, even those that may later be filtered out due to
+  incompatibility with the library type.
    
 What's this ``LIBTYPE``?
 ------------------------
@@ -492,6 +515,26 @@ type, simply provide ``-l A`` or ``--libType A`` to Salmon.  Even if you
 allow Salmon to infer the library type for you, you should still read
 the section below, so that you can interpret how Salmon reports the
 library type it discovers.
+
+.. note:: Automatic library type detection in alignment-based mode
+
+ The implementation of this feature involves opening the BAM
+ file, peaking at the first record, and then closing it to
+ determine if the library should be treated as single-end or
+ paired-end.  Thus, *in alignment-based mode* automatic
+ library type detection will not work with an input
+ stream. If your input is a regular file, everything should
+ work as expected; otherwise, you should provide the library
+ type explicitly in alignment-based mode.
+ 
+ Also the automatic library type detection is performed *on the
+ basis of the alignments in the file*.  Thus, for example, if the
+ upstream aligner has been told to perform strand-aware mapping
+ (i.e. to ignore potential alignments that don't map in the
+ expected manner), but the actual library is unstranded,
+ automatic library type detection cannot detect this.  It will
+ attempt to detect the library type that is most consistent *with
+ the alignment that are provided*.
 
 The library type string consists of three parts: the relative orientation of
 the reads, the strandedness of the library, and the directionality of the

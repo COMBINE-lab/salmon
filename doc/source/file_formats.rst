@@ -67,6 +67,24 @@ particularly important piece of information contained in this file is
 the inferred library type.  Most of the information recorded in this
 file should be self-descriptive.
 
+""""""""""""""""""""""""""""""
+Observed library format counts
+""""""""""""""""""""""""""""""
+
+When run in *mapping-based* mode, the quantification directory will 
+contain a file called ``lib_format_counts.json``.  This JSON file 
+reports the number of fragments that had at least one mapping compatible 
+with the designated library format, as well as the number that didn't.
+It also records the strand-bias that provides some information about 
+how strand-specific the computed mappings were.
+
+Finally, this file contains a count of the number of *mappings* that
+were computed that matched each possible library type.  These are
+counts of *mappings*, and so a single fragment that maps to the
+transcriptome in more than one way may contribute to multiple library
+type counts. **Note**: This file is currently not generated when Salmon
+is run in alignment-based mode.
+
 
 """"""""""""""""""""""""""""
 Fragment length distribution
