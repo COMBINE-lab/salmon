@@ -535,20 +535,6 @@ class ReadExperiment {
                 oa(cereal::make_nvp("num_consistent_mappings", numAgree));
                 oa(cereal::make_nvp("num_inconsistent_mappings", numDisagree));
                 oa(cereal::make_nvp("strand_mapping_bias", ratio));
-                    /*
-                ofile << "========\n"
-                      << "Read library consisting of files: "
-                      << rl.readFilesAsString()
-                      << "\n\n"
-                      << "Expected format: " << rl.format()
-                      << "\n\n"
-                      << "# of consistent alignments: " << numAgree << "\n"
-                      << "# of inconsistent alignments: " << numDisagree << "\n"
-                      << "strand bias = " << ratio << " (0.5 is unbiased)\n"
-                      << "# alignments with format " << fmt1 << ": " << numFmt1 << "\n"
-                      << "# alignments with format " << fmt2 << ": " << numFmt2 << "\n"
-                      << "\n========\n";
-                    */
             } else {
                 numAgree = 0;
                 numDisagree = 0;
@@ -572,18 +558,6 @@ class ReadExperiment {
 
                 oa(cereal::make_nvp("num_consistent_mappings", numAgree));
                 oa(cereal::make_nvp("num_inconsistent_mappings", numDisagree));
-
-                /*
-                ofile << "========\n"
-                      << "Read library consisting of files: "
-                      << rl.readFilesAsString()
-                      << "\n\n"
-                      << "Expected format: " << rl.format()
-                      << "\n\n"
-                      << "# of consistent alignments: " << numAgree << "\n"
-                      << "# of inconsistent alignments: " << numDisagree << "\n"
-                      << "\n========\n";
-                */
             } //end else
 
 
@@ -599,24 +573,13 @@ class ReadExperiment {
                 errstr.clear();
             }
 
-            //ofile << "---- counts for each format type ---\n";
-            //std::unordered_map<std::string, uint64_t> descMap;
             for (size_t i = 0; i < counts.size(); ++i) {
-                //ofile << LibraryFormat::formatFromID(i) << " : " << counts[i] << "\n";
                 std::string desc = LibraryFormat::formatFromID(i).toString();
                 if (!desc.empty()) {
                     oa(cereal::make_nvp(desc, counts[i].load()));
-                    //descMap[desc] += counts[i].load();
                 }
             }
-            /*
-            for (auto& kv : descMap) {
-                oa(cereal::make_nvp(kv.first, kv.second));
-            }
-            */
-            //ofile << "------------------------------------\n\n";
         }
-        //ofile.close();
     }
 
     std::vector<ReadLibrary>& readLibraries() { return readLibraries_; }

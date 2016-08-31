@@ -1140,7 +1140,8 @@ bool processSample(AlignmentLibrary<ReadT>& alnLib,
         }
     }
 
-
+    //bfs::path libCountFilePath = outputDirectory / "lib_format_counts.json";
+    //alnLib.summarizeLibraryTypeCounts(libCountFilePath);
 
     if (sopt.sampleOutput) {
         // In this case, we should "re-convert" transcript
@@ -1545,7 +1546,6 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                 std::exit(-1);
             }
         }
-
 
         // Write out information about the command / run
         {
