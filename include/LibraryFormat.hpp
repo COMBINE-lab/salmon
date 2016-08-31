@@ -89,10 +89,16 @@ public:
         if (type == ReadType::SINGLE_END) {
             if (orientation != ReadOrientation::NONE) {
                 return desc;
+            } else if (strandedness == ReadStrandedness::SA or 
+                       strandedness == ReadStrandedness::AS ) {
+                return desc;
             }
         }
         if (type == ReadType::PAIRED_END) {
             if (orientation == ReadOrientation::NONE) {
+                return desc;
+            } else if (strandedness == ReadStrandedness::S or 
+                       strandedness == ReadStrandedness::A ) {
                 return desc;
             }
         }
@@ -131,26 +137,15 @@ public:
             desc += "SR";
             break;
         case ReadStrandedness::S:
-            desc += "F";
+            desc += "SF";
             break;
         case ReadStrandedness::A:
-            desc += "R";
+            desc += "SR";
             break;
         case ReadStrandedness::U:
             desc += "U";
             break;
         }
-        /*
-        if (type == ReadType::PAIRED_END) {
-            if (desc == "SF" or 
-                desc == "SR" or
-                desc == "F" or
-                desc == "R" or 
-                desc == "U" ) { 
-                desc.clear();
-            }
-        }
-        */
         return desc;
     }
 

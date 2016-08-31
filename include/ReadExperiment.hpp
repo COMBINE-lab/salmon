@@ -600,13 +600,20 @@ class ReadExperiment {
             }
 
             //ofile << "---- counts for each format type ---\n";
+            //std::unordered_map<std::string, uint64_t> descMap;
             for (size_t i = 0; i < counts.size(); ++i) {
                 //ofile << LibraryFormat::formatFromID(i) << " : " << counts[i] << "\n";
                 std::string desc = LibraryFormat::formatFromID(i).toString();
                 if (!desc.empty()) {
                     oa(cereal::make_nvp(desc, counts[i].load()));
+                    //descMap[desc] += counts[i].load();
                 }
             }
+            /*
+            for (auto& kv : descMap) {
+                oa(cereal::make_nvp(kv.first, kv.second));
+            }
+            */
             //ofile << "------------------------------------\n\n";
         }
         //ofile.close();
