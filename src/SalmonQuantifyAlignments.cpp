@@ -1349,8 +1349,8 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         po::store(orderedOptions, vm);
 
         if (vm.count("help")) {
-            std::cout << "Salmon quant (alignment-based)\n";
-            std::cout << visible << std::endl;
+            std::cerr << "Salmon quant (alignment-based)\n";
+            std::cerr << visible << std::endl;
             std::exit(0);
         }
         po::notify(vm);
@@ -1485,7 +1485,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
             std::exit(1);
         }
 	if (!sopt.quiet) {
-	  std::cout << "Logs will be written to " << logDirectory.string() << "\n";
+	  std::cerr << "Logs will be written to " << logDirectory.string() << "\n";
 	}
 
         bfs::path logPath = logDirectory / "salmon.log";

@@ -2293,8 +2293,8 @@ Quant
 Perform streaming mapping-based estimation of
 transcript abundance from RNA-seq reads
 )";
-      std::cout << hstring << std::endl;
-      std::cout << visible << std::endl;
+      std::cerr << hstring << std::endl;
+      std::cerr << visible << std::endl;
       std::exit(0);
     }
 

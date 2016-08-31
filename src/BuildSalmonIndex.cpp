@@ -117,8 +117,8 @@ Index
 ==========
 Creates a salmon index.
 )";
-            std::cout << hstring << std::endl;
-            std::cout << generic << std::endl;
+            std::cerr << hstring << std::endl;
+            std::cerr << generic << std::endl;
             std::exit(0);
         }
         po::notify(vm);

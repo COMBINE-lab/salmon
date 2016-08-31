@@ -75,7 +75,6 @@ int help(int argc, char* argv[]) {
     */
 
     std::cerr << helpMsg.str();
-//std::cerr << "    Salmon v" << salmon::version << helpmsg << "\n";
     return 1;
 }
 
@@ -176,7 +175,6 @@ int main( int argc, char* argv[] ) {
     }
 
     if (vm.count("help") and !vm.count("command")) {
-        //std::cout << sfopts << std::endl;
         help(argc, argv);
         std::exit(0);
     }

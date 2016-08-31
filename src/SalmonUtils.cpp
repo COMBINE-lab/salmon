@@ -1322,7 +1322,7 @@ bool processQuantOptions(SalmonOpts& sopt,
   }
 
   if (!sopt.quiet) {
-    std::cout << "Logs will be written to " << logDirectory.string() << "\n";
+    std::cerr << "Logs will be written to " << logDirectory.string() << "\n";
   }
 
   // Determine what we'll do with quasi-mapping results 
