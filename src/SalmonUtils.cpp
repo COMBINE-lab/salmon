@@ -1393,13 +1393,17 @@ bool processQuantOptions(SalmonOpts& sopt,
       if (sopt.qmFileName == "-") {
           qmBuf = std::cout.rdbuf();
       } else { // output to the requested path, making the directory if it doesn't exist
-          // get the parent directory
-          bfs::path qmDir = boost::filesystem::path(sopt.qmFileName).parent_path();
+	// get the absolute file path
+	sopt.qmFileName = boost::filesystem::absolute(sopt.qmFileName).string();
+	  // get the parent directory
+	  bfs::path qmDir = boost::filesystem::path(sopt.qmFileName).parent_path();
           // if it's not already a directory that exists
           bool qmDirSuccess = boost::filesystem::is_directory(qmDir);
           // try to create it
           if (!qmDirSuccess) {
+	    std::cerr << "trying to create " << qmDir << '\n';
               qmDirSuccess = boost::filesystem::create_directories(qmDir); 
+	    std::cerr << "result " << qmDirSuccess << '\n';
           }
           // if the directory already existed, or we created it successfully, open the file
           if (qmDirSuccess) {
