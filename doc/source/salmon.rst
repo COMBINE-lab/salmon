@@ -492,7 +492,13 @@ compatible format. If no options are provided to this argument, then
 the output will be written to stdout (so that e.g. it can be piped to
 samtools and directly converted into BAM format).  Otherwise, this 
 argument can optionally be provided with a filename, and the mapping 
-information will be written to that file.
+information will be written to that file. **Note:** Because of the way
+that the boost options parser that we use works, and the fact that 
+``--writeMappings`` has an implicit argument of ``stdout``, if you 
+provide an explicit argument to ``--writeMappings``, you must do so 
+with the syntax ``--writeMappings=<outfile>`` rather than the synatx 
+``--writeMappings <outfile>``.  This is a due to a limitation of the 
+parser in how the latter could be interpreted.
 
 .. note:: Compatible mappings
 
