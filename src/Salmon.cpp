@@ -1,6 +1,6 @@
 /**
 >HEADER
-    Copyright (c) 2013 Rob Patro robp@cs.cmu.edu
+    Copyright (c) 2013 -- 2016 Rob Patro rob.patro@cs.stonybrook.edu
 
     This file is part of Salmon.
 
@@ -43,7 +43,6 @@
 // C++ string formatting library
 #include "spdlog/fmt/fmt.h"
 
-#include "BiasIndex.hpp"
 #include "SailfishUtils.hpp"
 #include "GenomicFeature.hpp"
 #include "SalmonConfig.hpp"
