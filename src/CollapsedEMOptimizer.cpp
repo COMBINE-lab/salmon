@@ -561,7 +561,6 @@ bool CollapsedEMOptimizer::gatherBootstraps(
 
   bool scaleCounts = (!sopt.useQuasi and !sopt.allowOrphans);
 
-  auto& fragStartDists = readExp.fragmentStartPositionDistributions();
   uint64_t numMappedFrags =
       scaleCounts ? readExp.upperBoundHits() : readExp.numMappedFragments();
 
@@ -592,7 +591,6 @@ bool CollapsedEMOptimizer::gatherBootstraps(
       priorAlphas[i] = priorValue * transcripts[i].RefLength;
     }
   }
-  //double priorAlpha = 1e-3;//1.00;
 
   auto jointLog = sopt.jointLog;
 
@@ -614,7 +612,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
     alphas[i] = transcripts[i].getActive() ? scale * totalNumFrags : 0.0;
     effLens(i) = (sopt.noEffectiveLengthCorrection)
                      ? transcripts[i].RefLength
-                     : std::exp(transcripts[i].getCachedLogEffectiveLength());
+                     : transcripts[i].EffectiveLength;
     totalLen += effLens(i);
   }
 
