@@ -58,6 +58,7 @@ int help(int argc, char* argv[]) {
     helpMsg.write("Commands:\n");
     helpMsg.write("     index Create a salmon index\n");
     helpMsg.write("     quant Quantify a sample\n");
+    //helpMsg.write("     quantmerge Merge multiple quantifications into a single file\n");
     helpMsg.write("     swim  Perform super-secret operation\n");
 
     /*
@@ -189,6 +190,7 @@ int main( int argc, char* argv[] ) {
     std::unordered_map<string, std::function<int(int, char*[])>> cmds({
       {"index", salmonIndex},
       {"quant", salmonQuantify},
+          //{"quantmerge", salmonQuantMerge},
       {"swim", salmonSwim}
     });
 

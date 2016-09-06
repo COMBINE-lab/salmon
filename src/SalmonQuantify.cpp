@@ -1999,7 +1999,7 @@ int salmonQuantify(int argc, char* argv[]) {
       "format; files with any other extension are assumed to be in the simple "
       "format.")
   (
-   "writeMappings", po::value<string>(&sopt.qmFileName)->default_value("")->implicit_value("-"),
+   "writeMappings,z", po::value<string>(&sopt.qmFileName)->default_value("")->implicit_value("-"),
    "If this option is provided, then the quasi-mapping results will be written out in SAM-compatible "
    "format.  By default, output will be directed to stdout, but an alternative file name can be "
    "provided instead.");
