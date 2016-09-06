@@ -1401,9 +1401,7 @@ bool processQuantOptions(SalmonOpts& sopt,
           bool qmDirSuccess = boost::filesystem::is_directory(qmDir);
           // try to create it
           if (!qmDirSuccess) {
-	    std::cerr << "trying to create " << qmDir << '\n';
               qmDirSuccess = boost::filesystem::create_directories(qmDir); 
-	    std::cerr << "result " << qmDirSuccess << '\n';
           }
           // if the directory already existed, or we created it successfully, open the file
           if (qmDirSuccess) {
