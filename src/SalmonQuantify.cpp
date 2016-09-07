@@ -585,21 +585,31 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
           }
         }
 
-        if (gcBiasCorrect and aln.libFormat().type == ReadType::PAIRED_END) {
-          int32_t start = std::min(aln.pos, aln.matePos);
-          int32_t stop = start + aln.fragLen - 1;
+        if (gcBiasCorrect) {
+            if (aln.libFormat().type == ReadType::PAIRED_END) {
+                int32_t start = std::min(aln.pos, aln.matePos);
+                int32_t stop = start + aln.fragLen - 1;
 
-          // WITH CONTEXT
-          if (start >= 0 and stop < transcript.RefLength) {
-              auto desc = transcript.gcDesc(start, stop);
-              observedGCMass.inc(desc, aln.logProb);
-            /*
-            int32_t gcFrac = transcript.gcFrac(start, stop);
-            // Add this fragment's contribution
-            observedGCMass[gcFrac] =
-                salmon::math::logAdd(observedGCMass[gcFrac], aln.logProb);
-            */
-          }
+                // WITH CONTEXT
+                if (start >= 0 and stop < transcript.RefLength) {
+                    auto desc = transcript.gcDesc(start, stop);
+                    observedGCMass.inc(desc, aln.logProb);
+                }
+            } else {
+                // For single-end reads, simply assume that every fragment
+                // has a length equal to the conditional mean (given the 
+                // current transcript's length).
+                auto cmeans = readExp.condMeans();
+                auto cmean = static_cast<int32_t>((transcript.RefLength >= cmeans.size()) ? cmeans.back() : cmeans[transcript.RefLength]);
+                int32_t start = aln.fwd ? aln.pos : std::max(0, aln.pos - cmean);
+                int32_t stop = start + cmean;
+                // WITH CONTEXT
+                if (start >= 0 and stop < transcript.RefLength) {
+                    auto desc = transcript.gcDesc(start, stop);
+                    observedGCMass.inc(desc, aln.logProb);
+                }
+            } 
+
         }
         double r = uni(randEng);
         if (!burnedIn and r < std::exp(aln.logProb)) {
@@ -1629,21 +1639,17 @@ void processReadLibrary(
       threads[i].join();
     }
 
+    /** GC-fragment bias **/
     // Set the global distribution based on the sum of local
     // distributions.
+    double gcFracFwd{0.0};
+    double globalMass{salmon::math::LOG_0};
+    double globalFwdMass{salmon::math::LOG_0};
+    auto& globalGCMass = readExp.observedGC();
     for (auto& gcp : observedBiasParams) {
-      /*
-              auto& fw = readExp.readBias(salmon::utils::Direction::FORWARD);
-              auto& rc =
-         readExp.readBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
+      auto& gcm = gcp.observedGCMass;
+      globalGCMass.combineCounts(gcm);
 
-              auto& fwloc = gcp.seqBiasFW;
-              auto& rcloc = gcp.seqBiasRC;
-              for (size_t i = 0; i < fwloc.counts.size(); ++i) {
-                  fw.counts[i] += fwloc.counts[i];
-                  rc.counts[i] += rcloc.counts[i];
-              }
-      */
       auto& fw = readExp.readBiasModelObserved(salmon::utils::Direction::FORWARD);
       auto& rc =
           readExp.readBiasModelObserved(salmon::utils::Direction::REVERSE_COMPLEMENT);
@@ -1663,7 +1669,20 @@ void processReadLibrary(
         posBiasesFW[i].combine(gcp.posBiasFW[i]);
         posBiasesRC[i].combine(gcp.posBiasRC[i]);
       }
+
+      globalMass = salmon::math::logAdd(globalMass, gcp.massFwd);
+      globalMass = salmon::math::logAdd(globalMass, gcp.massRC);
+      globalFwdMass = salmon::math::logAdd(globalFwdMass, gcp.massFwd);
     }
+    globalGCMass.normalize();
+
+    if (globalMass != salmon::math::LOG_0) {
+      if (globalFwdMass != salmon::math::LOG_0) {
+        gcFracFwd = std::exp(globalFwdMass - globalMass);
+      }
+      readExp.setGCFracForward(gcFracFwd);
+    }
+
     // finalize the positional biases
     if (salmonOpts.posBiasCorrect) {
       auto& posBiasesFW = readExp.posBias(salmon::utils::Direction::FORWARD);
@@ -1675,7 +1694,42 @@ void processReadLibrary(
       }
     }
 
-    /** END: bias models **/
+    /** END GC-fragment bias **/
+
+    /* OLD SINGLE END BIAS
+    // Set the global distribution based on the sum of local
+    // distributions.
+    for (auto& gcp : observedBiasParams) {
+      auto& fw = readExp.readBiasModelObserved(salmon::utils::Direction::FORWARD);
+      auto& rc =
+          readExp.readBiasModelObserved(salmon::utils::Direction::REVERSE_COMPLEMENT);
+
+      auto& fwloc = gcp.seqBiasModelFW;
+      auto& rcloc = gcp.seqBiasModelRC;
+      fw.combineCounts(fwloc);
+      rc.combineCounts(rcloc);
+
+      // positional biases
+      auto& posBiasesFW = readExp.posBias(salmon::utils::Direction::FORWARD);
+      auto& posBiasesRC =
+          readExp.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
+      for (size_t i = 0; i < posBiasesFW.size(); ++i) {
+        posBiasesFW[i].combine(gcp.posBiasFW[i]);
+        posBiasesRC[i].combine(gcp.posBiasRC[i]);
+      }
+    }
+    // finalize the positional biases
+    if (salmonOpts.posBiasCorrect) {
+      auto& posBiasesFW = readExp.posBias(salmon::utils::Direction::FORWARD);
+      auto& posBiasesRC =
+          readExp.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
+      for (size_t i = 0; i < posBiasesFW.size(); ++i) {
+        posBiasesFW[i].finalize();
+        posBiasesRC[i].finalize();
+      }
+    }
+    END OLD SINGLE-END BIAS */
+
 
   } // ------ END Single-end --------
 }
@@ -2388,10 +2442,10 @@ transcript abundance from RNA-seq reads
       if (sopt.gcBiasCorrect) {
         for (auto& rl : readLibraries) {
           if (rl.format().type != ReadType::PAIRED_END) {
-            jointLog->warn("Fragment GC bias correction is currently only "
-                           "implemented for paired-end libraries.  Disabling "
-                           "fragment GC bias correction for this run");
-            sopt.gcBiasCorrect = false;
+            jointLog->warn("Fragment GC bias correction is currently *experimental* "
+                           "in single-end libraries.  Please use this option "
+                           "with caution.");
+            //sopt.gcBiasCorrect = false;
           }
         }
       }

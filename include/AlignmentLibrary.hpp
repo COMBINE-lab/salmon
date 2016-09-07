@@ -165,6 +165,34 @@ class AlignmentLibrary {
             alnMod_.reset(new AlignmentModel(1.0, salmonOpts.numErrorBins));
             alnMod_->setLogger(salmonOpts.jointLog);
 
+            if (libFmt.type == ReadType::SINGLE_END) {
+                // Convert the PMF to non-log scale
+                std::vector<double> logPMF;
+                size_t minVal;
+                size_t maxVal;
+                flDist_->dumpPMF(logPMF, minVal, maxVal);
+                double sum = salmon::math::LOG_0;
+                for (auto v : logPMF) {
+                    sum = salmon::math::logAdd(sum, v);
+                }
+                for (auto& v : logPMF) {
+                    v -= sum;
+                }
+
+                // Create the non-logged distribution.
+                // Here, we multiply by 100 to discourage small
+                // numbers in the correctionFactorsfromCounts call
+                // below.
+                std::vector<double> pmf(maxVal + 1, 0.0);
+                for (size_t i = minVal; i < maxVal; ++i) {
+                    pmf[i] = 100.0 * std::exp(logPMF[i - minVal]);
+                }
+
+                using distribution_utils::DistributionSpace;
+                // We compute the factors in linear space (since we've de-logged the pmf)
+                conditionalMeans_ = distribution_utils::correctionFactorsFromMass(pmf, DistributionSpace::LINEAR);
+            }
+
             // Start parsing the alignments
            NullFragmentFilter<FragT>* nff = nullptr;
            bool onlyProcessAmbiguousAlignments = false;
@@ -221,6 +249,8 @@ class AlignmentLibrary {
             }
         }
     }
+
+    const std::vector<double>& condMeans() const { return conditionalMeans_; }
 
     std::vector<Transcript>& transcripts() { return transcripts_; }
     const std::vector<Transcript>& transcripts() const { return transcripts_; }
@@ -456,6 +486,7 @@ class AlignmentLibrary {
     //ReadKmerDist<6, std::atomic<uint32_t>> readBias_;
     std::vector<double> expectedBias_;
     std::unique_ptr<LibraryTypeDetector> detector_{nullptr};
+    std::vector<double> conditionalMeans_;
 };
 
 #endif // ALIGNMENT_LIBRARY_HPP

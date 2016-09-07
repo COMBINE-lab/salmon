@@ -104,7 +104,7 @@ int salmonIndex(int argc, char* argv[]) {
                             "The default should be OK, unless your transcriptome is huge. "
 			    "This value should be a power of 2.")
     ;
-
+    
     po::variables_map vm;
     int ret = 0;
     try {
@@ -142,7 +142,6 @@ Creates a salmon index.
 
         string transcriptFile = vm["transcripts"].as<string>();
         bfs::path indexDirectory(vm["index"].as<string>());
-
 
         if (!bfs::exists(indexDirectory)) {
             std::cerr << "index [" << indexDirectory << "] did not previously exist "

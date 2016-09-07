@@ -571,29 +571,41 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 			}
 
 			// Collect the GC-fragment bias samples
-			if (gcBiasCorrect and aln->isPaired()) {
-			  ReadPair* alnp = reinterpret_cast<ReadPair*>(aln);
-			  bam_seq_t* r1 = alnp->read1; 
-			  bam_seq_t* r2 = alnp->read2; 
-			  if (r1 != nullptr and r2 != nullptr) {
-                  bool fwd1{bam_strand(r1) == 0};
-                  bool fwd2{bam_strand(r2) == 0};
-                  int32_t start = alnp->left(); 
-                  int32_t stop = alnp->right(); 
+			if (gcBiasCorrect) {
+                if (aln->isPaired()) {
+                    ReadPair* alnp = reinterpret_cast<ReadPair*>(aln);
+                    bam_seq_t* r1 = alnp->read1; 
+                    bam_seq_t* r2 = alnp->read2; 
+                    if (r1 != nullptr and r2 != nullptr) {
+                        bool fwd1{bam_strand(r1) == 0};
+                        bool fwd2{bam_strand(r2) == 0};
+                        int32_t start = alnp->left(); 
+                        int32_t stop = alnp->right(); 
 
-                  if (start >= 0 and stop < transcript.RefLength) {
-		      auto desc = transcript.gcDesc(start, stop);
-                      observedGCMass.inc(desc, aln->logProb);
-                   }
-
-          /*
-			    if (start >= 0 and stop < transcript.RefLength) {
-			      int32_t gcFrac = transcript.gcFrac(start, stop);
-			      // Add this fragment's contribution
-			      observedGCMass[gcFrac] = salmon::math::logAdd(observedGCMass[gcFrac], newMass); 
-			    }
-          */
-			  }
+                        if (start >= 0 and stop < transcript.RefLength) {
+                            auto desc = transcript.gcDesc(start, stop);
+                            observedGCMass.inc(desc, aln->logProb);
+                        }
+                    }
+                } else {
+                    UnpairedRead* alnp = reinterpret_cast<UnpairedRead*>(aln);
+                    bam_seq_t* r = alnp->read;
+                    if (r != nullptr) {
+                        bool fwd{alnp->fwd()};
+                        // For single-end reads, simply assume that every fragment
+                        // has a length equal to the conditional mean (given the 
+                        // current transcript's length).
+                        auto cmeans = alnLib.condMeans();
+                        auto cmean = static_cast<int32_t>((transcript.RefLength >= cmeans.size()) ? cmeans.back() : cmeans[transcript.RefLength]);
+                        int32_t start = fwd ? alnp->pos() : std::max(0, alnp->pos() - cmean);
+                        int32_t stop = start + cmean;
+                        // WITH CONTEXT
+                        if (start >= 0 and stop < transcript.RefLength) {
+                            auto desc = transcript.gcDesc(start, stop);
+                            observedGCMass.inc(desc, aln->logProb);
+                        }
+                    }
+                }
 			}
 			// END: GC-fragment bias
 			
@@ -1587,10 +1599,10 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                 {
 		  // We can only do fragment GC bias correction, for the time being, with paired-end reads
 		  if (sopt.gcBiasCorrect) {
-		    jointLog->warn("Fragment GC bias correction is currently only "
-				   "implemented for paired-end libraries.  Disabling "
-				   "fragment GC bias correction for this run");
-		    sopt.gcBiasCorrect = false;
+            jointLog->warn("Fragment GC bias correction is currently *experimental* "
+                           "in single-end libraries.  Please use this option "
+                           "with caution.");
+		    //sopt.gcBiasCorrect = false;
 		  } 
 
 		    AlignmentLibrary<UnpairedRead> alnLib(alignmentFiles,

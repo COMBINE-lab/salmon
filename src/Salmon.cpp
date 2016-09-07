@@ -48,7 +48,7 @@
 #include "SalmonConfig.hpp"
 #include "VersionChecker.hpp"
 
-int help(int argc, char* argv[]) {
+int help(std::vector<std::string> opts) { //}int argc, char* argv[]) {
     fmt::MemoryWriter helpMsg;
     helpMsg.write("Salmon v{}\n\n", salmon::version);
     helpMsg.write("Usage:  salmon -h|--help or \n"
@@ -75,7 +75,7 @@ int help(int argc, char* argv[]) {
     */
 
     std::cerr << helpMsg.str();
-    return 1;
+    return 0;
 }
 
 
@@ -99,7 +99,7 @@ int dualModeMessage() {
     salmon quant --help-reads
     )";
     std::cerr << "    Salmon v" << salmon::version << helpmsg << "\n";
-    return 1;
+    return 0;
 }
 
 
@@ -134,39 +134,31 @@ int main( int argc, char* argv[] ) {
 
   // With no arguments, print help
   if (argc == 1) {
-      help(argc, argv);
+      std::vector<std::string> o;
+      help(o);//argc, argv);
       std::exit(1);
   }
 
   try {
-
-    po::options_description hidden("hidden");
-    hidden.add_options()
-    ("command", po::value<string>(), "command to run {index, quant, sf}");
-
+      
+    // subcommand parsing code inspired by : https://gist.github.com/randomphrase/10801888
     po::options_description sfopts("Allowed Options");
     sfopts.add_options()
-    ("version,v", "print version string")
-    ("no-version-check", "don't check with the server to see if this is the latest version")
-    ("help,h", "produce help message")
+        ("version,v", "print version string")
+        ("no-version-check", "don't check with the server to see if this is the latest version")
+        ("help,h", "produce help message")
+        ("command", po::value<string>(), "command to run {index, quant, sf}")
+        ("subargs", po::value<std::vector<std::string>>(), "Arguments for command");
     ;
 
     po::options_description all("Allowed Options");
-    all.add(sfopts).add(hidden);
+    all.add(sfopts);
 
     po::positional_options_description pd;
-    pd.add("command", 1);
-
-    size_t topLevelArgc = argc;
-    for (size_t i : boost::irange(size_t{1}, static_cast<size_t>(argc))) {
-      if (argv[i][0] != '-') {
-        topLevelArgc = i+1;
-        break;
-      }
-    }
+    pd.add("command", 1).add("subargs", -1);
 
     po::variables_map vm;
-    po::parsed_options parsed = po::command_line_parser(topLevelArgc, argv).options(all).positional(pd).allow_unregistered().run();
+    po::parsed_options parsed = po::command_line_parser(argc, argv).options(all).positional(pd).allow_unregistered().run();
     po::store(parsed, vm);
 
     if (vm.count("version")) {
@@ -175,7 +167,8 @@ int main( int argc, char* argv[] ) {
     }
 
     if (vm.count("help") and !vm.count("command")) {
-        help(argc, argv);
+        std::vector<std::string> o;
+        help(o);
         std::exit(0);
     }
 
@@ -184,25 +177,40 @@ int main( int argc, char* argv[] ) {
       std::cerr << versionMessage;
     }
     
-    po::notify(vm);
+    //po::notify(vm);
+
+    std::string cmd = vm["command"].as<std::string>();
+    std::vector<std::string> opts = po::collect_unrecognized(parsed.options, po::include_positional);
+    opts.erase(opts.begin());
+    // if there was a help and a command, then add the help back since it was parsed
+    if (vm.count("help")) { opts.insert(opts.begin(), "--help"); }
 
     std::unordered_map<string, std::function<int(int, char*[])>> cmds({
       {"index", salmonIndex},
       {"quant", salmonQuantify},
-          //{"quantmerge", salmonQuantMerge},
+      //{"quantmerge", salmonQuantMerge},
       {"swim", salmonSwim}
     });
 
-    string cmd = vm["command"].as<string>();
-
+    /*
+    //string cmd = vm["command"].as<string>();
     int subCommandArgc = argc - topLevelArgc + 1;
     char** argv2 = new char*[subCommandArgc];
     argv2[0] = argv[0];
     std::copy_n( &argv[topLevelArgc], argc-topLevelArgc, &argv2[1] );
+    */
 
+    int subCommandArgc = opts.size() + 1;
+    std::unique_ptr<char*[]> argv2(new char*[subCommandArgc]);
+    argv2[0] = argv[0];
+    for (size_t i = 0; i < subCommandArgc - 1; ++i) {
+        argv2[i+1] = &*opts[i].begin();
+    }
+    
     auto cmdMain = cmds.find(cmd);
     if (cmdMain == cmds.end()) {
-      help(subCommandArgc, argv2);
+        //help(subCommandArgc, argv2);
+        return help(opts);
     } else {
       // If the command is quant; determine whether
       // we're quantifying with raw sequences or alignemnts
@@ -212,18 +220,17 @@ int main( int argc, char* argv[] ) {
         if (strncmp(argv2[1], "--help-alignment", 16) == 0) {
             std::vector<char> helpStr{'-','-','h','e','l','p','\0'};
             char* helpArgv[] = {argv[0], &helpStr[0]};
-            salmonAlignmentQuantify(2, helpArgv);
+            return salmonAlignmentQuantify(2, helpArgv);
         } else if (strncmp(argv2[1], "--help-reads", 12) == 0) {
             std::vector<char> helpStr{'-','-','h','e','l','p','\0'};
             char* helpArgv[] = {argv[0], &helpStr[0]};
-            salmonQuantify(2, helpArgv);
+            return salmonQuantify(2, helpArgv);
         }
 
         // detect general help request
         if (strncmp(argv2[1], "--help", 6) == 0 or
             strncmp(argv2[1], "-h", 2) == 0) {
-            dualModeMessage();
-            std::exit(0);
+            return dualModeMessage();
         }
 
         // otherwise, detect and dispatch the correct mode
@@ -236,15 +243,14 @@ int main( int argc, char* argv[] ) {
             }
         }
         if (useSalmonAlign) {
-            salmonAlignmentQuantify(subCommandArgc, argv2);
+            return salmonAlignmentQuantify(subCommandArgc, argv2.get());
         } else {
-            salmonQuantify(subCommandArgc, argv2);
+            return salmonQuantify(subCommandArgc, argv2.get());
         }
       } else {
-        cmdMain->second(subCommandArgc, argv2);
+        return cmdMain->second(subCommandArgc, argv2.get());
       }
     }
-    delete[] argv2;
 
   } catch (po::error &e) {
     std::cerr << "Program Option Error (main) : [" << e.what() << "].\n Exiting.\n";

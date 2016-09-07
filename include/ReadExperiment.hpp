@@ -88,6 +88,36 @@ class ReadExperiment {
                     fragLenKernelN,
                     fragLenKernelP, 1));
 
+
+            if (readLibraries_.front().getFormat().type == ReadType::SINGLE_END) {
+                // Convert the PMF to non-log scale
+                std::vector<double> logPMF;
+                size_t minVal;
+                size_t maxVal;
+                fragLengthDist_->dumpPMF(logPMF, minVal, maxVal);
+                double sum = salmon::math::LOG_0;
+                for (auto v : logPMF) {
+                    sum = salmon::math::logAdd(sum, v);
+                }
+                for (auto& v : logPMF) {
+                    v -= sum;
+                }
+
+                // Create the non-logged distribution.
+                // Here, we multiply by 100 to discourage small
+                // numbers in the correctionFactorsfromCounts call
+                // below.
+                std::vector<double> pmf(maxVal + 1, 0.0);
+                for (size_t i = minVal; i < maxVal; ++i) {
+                    pmf[i] = 100.0 * std::exp(logPMF[i - minVal]);
+                }
+
+                using distribution_utils::DistributionSpace;
+                // We compute the factors in linear space (since we've de-logged the pmf)
+                conditionalMeans_ = distribution_utils::correctionFactorsFromMass(pmf, DistributionSpace::LINEAR);
+            }
+
+
             // Make sure the transcript file exists.
             /*
             if (!bfs::exists(transcriptFile_)) {
@@ -151,6 +181,8 @@ class ReadExperiment {
 
     std::vector<Transcript>& transcripts() { return transcripts_; }
     const std::vector<Transcript>& transcripts() const { return transcripts_; }
+
+        const std::vector<double>& condMeans() const { return conditionalMeans_; }
 
     void updateTranscriptLengthsAtomic(std::atomic<bool>& done) {
         if (sl_.try_lock()) {
@@ -722,6 +754,7 @@ class ReadExperiment {
     std::array<SBModel, 2> readBiasModelExpected_;
     //std::array<std::vector<double>, 2> expectedBias_;
     std::vector<double> expectedBias_;
+    std::vector<double> conditionalMeans_;
 };
 
 #endif // EXPERIMENT_HPP
