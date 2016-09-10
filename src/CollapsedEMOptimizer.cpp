@@ -86,6 +86,30 @@ double truncateCountVector(VecT& alphas, std::vector<double>& cutoff) {
 }
 
 /**
+ *  Populate the prior parameters for the VBEM
+ *  Note: effLens *must* be valid before calling this function.
+ */
+std::vector<double> populatePriorAlphas_(
+                                         std::vector<Transcript>& transcripts, // transcripts
+                                         Eigen::VectorXd& effLens, // current effective length estimate
+                                         double priorValue,        // the per-nucleotide prior value to use
+                                         bool perTranscriptPrior   // true if prior is per-txp, else per-nucleotide
+                                         ) {
+    // start out with the per-txp prior
+    std::vector<double> priorAlphas(transcripts.size(), priorValue);
+
+    // If the prior is per-nucleotide (default, then we need a potentially different
+    // value for each transcript based on its length).
+    if (!perTranscriptPrior) {
+        for (size_t i = 0; i < transcripts.size(); ++i) {
+            priorAlphas[i] = priorValue * effLens(i); 
+        }
+    }
+    return priorAlphas;
+}
+
+
+/**
  * Single-threaded EM-update routine for use in bootstrapping
  */
 template <typename VecT>
@@ -581,16 +605,6 @@ bool CollapsedEMOptimizer::gatherBootstraps(
   bool useVBEM{sopt.useVBOpt};
   bool perTranscriptPrior{sopt.perTranscriptPrior};
   double priorValue{sopt.vbPrior};
-  
-  // If we use VBEM, we'll need the prior parameters
-  std::vector<double> priorAlphas(transcripts.size(), priorValue);
-  // If the prior is per-nucleotide (default, then we need a potentially different
-  // value for each transcript based on its length).
-  if (!perTranscriptPrior) {
-    for (size_t i = 0; i < transcripts.size(); ++i) {
-      priorAlphas[i] = priorValue * transcripts[i].RefLength;
-    }
-  }
 
   auto jointLog = sopt.jointLog;
 
@@ -615,6 +629,10 @@ bool CollapsedEMOptimizer::gatherBootstraps(
                      : transcripts[i].EffectiveLength;
     totalLen += effLens(i);
   }
+
+  
+  // If we use VBEM, we'll need the prior parameters
+  std::vector<double> priorAlphas = populatePriorAlphas_(transcripts, effLens, priorValue, perTranscriptPrior);
 
   auto numRemoved =
       markDegenerateClasses(eqVec, alphas, effLens, sopt.jointLog);
@@ -745,20 +763,6 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   bool perTranscriptPrior{sopt.perTranscriptPrior};
   double priorValue{sopt.vbPrior};
   
-  // If we use VBEM, we'll need the prior parameters
-  std::vector<double> priorAlphas(transcripts.size(), priorValue);
-  // If the prior is per-nucleotide (default, then we need a potentially different
-  // value for each transcript based on its length).
-  if (!perTranscriptPrior) {
-    for (size_t i = 0; i < transcripts.size(); ++i) {
-      priorAlphas[i] = priorValue * transcripts[i].RefLength;
-    }
-  }
-
-  // If we use VBEM, we'll need the prior parameters
-  //double priorAlpha = 1e-3;//0.01;
-  //double priorAlpha = 1.0;
-
   auto jointLog = sopt.jointLog;
 
   auto& fragStartDists = readExp.fragmentStartPositionDistributions();
@@ -805,6 +809,9 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
 
     totalLen += effLens(i);
   }
+
+  // If we use VBEM, we'll need the prior parameters
+  std::vector<double> priorAlphas = populatePriorAlphas_(transcripts, effLens, priorValue, perTranscriptPrior);
 
   // Based on the number of observed reads, use
   // a linear combination of the online estimates
@@ -910,7 +917,10 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
       jointLog->info("iteration {}, adjusting effective lengths to account for biases", itNum);
       effLens = salmon::utils::updateEffectiveLengths(sopt, readExp, effLens,
                                                       alphas, true);
-      //(itNum == recomputeIt.front()));
+      // if we're doing the VB optimization, update the priors
+      if (useVBEM) {
+          priorAlphas = populatePriorAlphas_(transcripts, effLens, priorValue, perTranscriptPrior);
+      }
 
       // Check for strangeness with the lengths.
       for (size_t i = 0; i < effLens.size(); ++i) {
