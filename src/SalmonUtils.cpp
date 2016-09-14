@@ -1343,7 +1343,7 @@ bool processQuantOptions(SalmonOpts& sopt,
 
   auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(
       logPath.string());
-  auto rawConsoleSink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
+  auto rawConsoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
   auto consoleSink =
       std::make_shared<spdlog::sinks::ansicolor_sink>(rawConsoleSink);
   auto consoleLog = spdlog::create("stderrLog", {consoleSink});
