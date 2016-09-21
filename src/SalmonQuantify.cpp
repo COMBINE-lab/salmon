@@ -774,6 +774,15 @@ void processReadsQuasi(
   size_t readLenLeft{0};
   size_t readLenRight{0};
   SACollector<RapMapIndexT> hitCollector(qidx);
+
+  if (salmonOpts.fasterMapping) {
+      hitCollector.enableNIP();
+  } else {
+      hitCollector.disableNIP();
+  } 
+  hitCollector.setStrictCheck(true);
+  //hitCollector.setCoverageRequirement(0.5);
+
   SASearcher<RapMapIndexT> saSearcher(qidx);
   std::vector<QuasiAlignment> leftHits;
   std::vector<QuasiAlignment> rightHits;
@@ -816,11 +825,11 @@ void processReadsQuasi(
       bool lh = tooShortLeft ? false : hitCollector(rp.first.seq,
                                                     leftHits, saSearcher,
                                                     MateStatus::PAIRED_END_LEFT,
-                                                    true, consistentHits);
+                                                    consistentHits);
 
       bool rh = tooShortRight ? false : hitCollector(rp.second.seq,
                                    rightHits, saSearcher,
-                                   MateStatus::PAIRED_END_RIGHT, true,
+                                   MateStatus::PAIRED_END_RIGHT, 
                                    consistentHits);
 
       // Consider a read as too short if both ends are too short
@@ -1151,6 +1160,15 @@ void processReadsQuasi(
   bool quiet{salmonOpts.quiet};
 
   SACollector<RapMapIndexT> hitCollector(qidx);
+  if (salmonOpts.fasterMapping) {
+      hitCollector.enableNIP();
+  } else {
+      hitCollector.disableNIP();
+  } 
+
+  hitCollector.setStrictCheck(true);
+  //hitCollector.setCoverageRequirement(0.5);
+
   SASearcher<RapMapIndexT> saSearcher(qidx);
   rapmap::utils::HitCounters hctr;
   
@@ -1184,7 +1202,7 @@ void processReadsQuasi(
           tooShort ? false
           : hitCollector(rp.seq,
                                   jointHits, saSearcher,
-                                  MateStatus::SINGLE_END, true, consistentHits);
+                                  MateStatus::SINGLE_END, consistentHits);
 
       // If the fragment was too short, record it
       if (tooShort) {
@@ -2094,6 +2112,11 @@ int salmonQuantify(int argc, char* argv[]) {
 						 "dumpEq", po::bool_switch(&(sopt.dumpEq))->default_value(false),
 						 "Dump the equivalence class counts "
 						 "that were computed during quasi-mapping")
+    ("fasterMapping",
+     po::bool_switch(&(sopt.fasterMapping))->default_value(false),
+     "[Developer]: Disables some extra checks during quasi-mapping. This may make mapping a "
+     "little bit faster at the potential cost of returning too many mappings (i.e. some sub-optimal mappings) "
+     "for certain reads. Only use this option if you know what it does (enables NIP-skipping)")
     (
      "gcSizeSamp",
      po::value<std::uint32_t>(&(sopt.gcSampFactor))->default_value(1),

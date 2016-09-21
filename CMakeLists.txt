@@ -580,18 +580,18 @@ endif ()
 ##
 ## This depenency is for RapMap
 ##
-message("Build system will fetch and build SparseHash")
-message("==================================================================")
-ExternalProject_Add(libsparsehash
-    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/sparsehash/archive/sparsehash-2.0.2.tar.gz -o sparsehash-2.0.2.tar.gz &&
-        tar -xzf sparsehash-2.0.2.tar.gz
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/sparsehash-sparsehash-2.0.2
-    BUILD_IN_SOURCE TRUE
-    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    CONFIGURE_COMMAND sh -c "CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure --prefix=<INSTALL_DIR>"
-    INSTALL_COMMAND make install
-)
+#message("Build system will fetch and build SparseHash")
+#message("==================================================================")
+#ExternalProject_Add(libsparsehash
+#    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+#    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/sparsehash/archive/sparsehash-2.0.2.tar.gz -o sparsehash-2.0.2.tar.gz &&
+#        tar -xzf sparsehash-2.0.2.tar.gz
+#    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/sparsehash-sparsehash-2.0.2
+#    BUILD_IN_SOURCE TRUE
+#    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
+#    CONFIGURE_COMMAND sh -c "CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure --prefix=<INSTALL_DIR>"
+#    INSTALL_COMMAND make install
+#)
 
 ###
 #

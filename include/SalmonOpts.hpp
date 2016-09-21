@@ -43,6 +43,10 @@ struct SalmonOpts {
 
     bool dumpEq; 	     // Dump the equivalence classes and counts to file
 
+    bool fasterMapping; // [Developer]: Disables some extra checks during quasi-mapping. This may make mapping a 
+                        // little bit faster at the potential cost of returning too many mappings (i.e. some sub-optimal mappings) 
+                        // for certain reads. Only use this option if you know what it does (enables NIP-skipping)
+
     bool splitSpanningSeeds; // Attempt to split seeds that span multiple transcripts.
 
     bool noFragLengthDist ; // Don't give a fragment assignment a likelihood based on an emperically

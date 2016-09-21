@@ -697,11 +697,10 @@ bool CollapsedEMOptimizer::gatherBootstraps(
 
 void updateEqClassWeights(
     std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
-    Eigen::VectorXd& posWeightInvDenoms, Eigen::VectorXd& effLens) {
+    Eigen::VectorXd& effLens) {
   tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(eqVec.size())),
-      [&eqVec, &effLens,
-       &posWeightInvDenoms](const BlockedIndexRange& range) -> void {
+      [&eqVec, &effLens](const BlockedIndexRange& range) -> void {
         // For each index in the equivalence class vector
         for (auto eqID : boost::irange(range.begin(), range.end())) {
           // The vector entry
@@ -720,8 +719,7 @@ void updateEqClassWeights(
             auto tid = k.txps[i];
             v.posWeights[i] = 1.0 / effLens(tid);
             v.combinedWeights[i] =
-                kv.second.count *
-                (v.weights[i] * v.posWeights[i] * posWeightInvDenoms[tid]);
+                kv.second.count * (v.weights[i] * v.posWeights[i]);
             wsum += v.combinedWeights[i];
           }
           double wnorm = 1.0 / wsum;
@@ -751,7 +749,6 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   VecType expTheta(transcripts.size());
 
   Eigen::VectorXd effLens(transcripts.size());
-  Eigen::VectorXd posWeightInvDenoms(transcripts.size());
 
   std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec =
       readExp.equivalenceClassBuilder().eqVec();
@@ -786,27 +783,11 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
                      : txp.RefLength;
     txp.EffectiveLength = effLens(i);
 
-    if (txp.uniqueCount() > 0) {
-      totalWeight += txp.uniqueCount();
-      alphasPrime[i] = 1.0;
-      ++numActive;
-    } else {
-      totalWeight += 1e-3 * effLens(i);
-      alphasPrime[i] = 1.0;
-      ++numActive;
-    }
-
-    if (noRichEq or !useFSPD) {
-      posWeightInvDenoms(i) = 1.0;
-    } else {
-      auto& fragStartDist = fragStartDists[txp.lengthClassIndex()];
-      double denomFactor = fragStartDist.evalCDF(
-          static_cast<int32_t>(txp.EffectiveLength), txp.RefLength);
-      posWeightInvDenoms(i) = (denomFactor >= salmon::math::LOG_EPSILON)
-                                  ? std::exp(-denomFactor)
-                                  : (1e-5);
-    }
-
+    double uniqueCount = static_cast<double>(txp.uniqueCount() + 0.5);
+    auto wi = uniqueCount * 1e-3 * effLens(i);
+    alphasPrime[i] = wi;
+    totalWeight += wi; 
+    ++numActive;
     totalLen += effLens(i);
   }
 
@@ -819,12 +800,19 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   double uniformPrior = totalWeight / static_cast<double>(numActive);
   // double fracObserved = 1.0;
   double fracObserved = std::min(1.0, totalWeight / sopt.numRequiredFragments);
-  if (sopt.initUniform) { fracObserved = 0.0; }
-  for (size_t i = 0; i < alphas.size(); ++i) {
-    alphas[i] = (alphasPrime[i] == 1.0)
-                    ? ((alphas[i] * fracObserved) +
-                       (uniformPrior * (1.0 - fracObserved)))
-                    : 0.0;
+  // Above, we placed the uniformative (uniform) initalization into the alphasPrime
+  // variables.  If that's what the user requested, then copy those over to the alphas
+  if (sopt.initUniform) { 
+    for (size_t i = 0; i < alphas.size(); ++i) {
+        alphas[i] = alphasPrime[i];
+        alphasPrime[i] = 1.0;
+    } 
+  } else { // otherwise, initalize with a linear combination of the true and uniform alphas 
+      for (size_t i = 0; i < alphas.size(); ++i) {
+          //alphas[i] = (alphas[i] * fracObserved) + (uniformPrior * (1.0 - fracObserved));
+          alphas[i] = (alphas[i] * fracObserved) + (alphasPrime[i] * (1.0 - fracObserved));
+          alphasPrime[i] = 1.0;
+      } 
   }
 
   // If the user requested *not* to use "rich" equivalence classes,
@@ -834,8 +822,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   // by the effective length term.
   tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(eqVec.size())),
-      [&eqVec, &effLens, &posWeightInvDenoms, useFSPD,
-       noRichEq](const BlockedIndexRange& range) -> void {
+      [&eqVec, &effLens, noRichEq](const BlockedIndexRange& range) -> void {
         // For each index in the equivalence class vector
         for (auto eqID : boost::irange(range.begin(), range.end())) {
           // The vector entry
@@ -867,18 +854,13 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
             if (noRichEq) {
               // Keep length factor separate for the time being
               v.weights[i] = 1.0;
-              // Pos weight
-              v.posWeights[i] = 1.0 / el;
-            } else if (createdPosWeights or !useFSPD) {
-              // If the positional weights are new, then give them
-              // meaningful values.
-              v.posWeights[i] = 1.0 / el;
             }
+            // meaningful values.
+            v.posWeights[i] = 1.0 / el;
 
             // combined weight
             v.combinedWeights.push_back(
-                v.weights[i].load() *
-                (v.posWeights[i].load() * posWeightInvDenoms[tid]));
+                v.count * v.weights[i].load() * v.posWeights[i].load());
             wsum += v.combinedWeights.back();
           }
 
@@ -927,19 +909,8 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
         if (effLens(i) <= 0.0) {
           jointLog->warn("Transcript {} had length {}", i, effLens(i));
         }
-        if (noRichEq or !useFSPD) {
-          posWeightInvDenoms(i) = 1.0;
-        } else {
-          auto& txp = transcripts[i];
-          auto& fragStartDist = fragStartDists[txp.lengthClassIndex()];
-          double denomFactor = fragStartDist.evalCDF(
-              static_cast<int32_t>(effLens(i)), txp.RefLength);
-          posWeightInvDenoms(i) = (denomFactor >= salmon::math::LOG_EPSILON)
-                                      ? std::exp(-denomFactor)
-                                      : 1e-5;
-        }
       }
-      updateEqClassWeights(eqVec, posWeightInvDenoms, effLens);
+      updateEqClassWeights(eqVec, effLens);
       needBias = false;
     }
 

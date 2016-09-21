@@ -27,7 +27,6 @@ xxhash.c
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapFileSystem.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndexer.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndex.cpp
-${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAMapper.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapUtils.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/HitManager.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/rank9b.cpp
