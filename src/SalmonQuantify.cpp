@@ -781,7 +781,9 @@ void processReadsQuasi(
       hitCollector.disableNIP();
   } 
   hitCollector.setStrictCheck(true);
-  //hitCollector.setCoverageRequirement(0.5);
+  if (salmonOpts.quasiCoverage > 0.0) {
+      hitCollector.setCoverageRequirement(salmonOpts.quasiCoverage);
+  }
 
   SASearcher<RapMapIndexT> saSearcher(qidx);
   std::vector<QuasiAlignment> leftHits;
@@ -1167,7 +1169,9 @@ void processReadsQuasi(
   } 
 
   hitCollector.setStrictCheck(true);
-  //hitCollector.setCoverageRequirement(0.5);
+  if (salmonOpts.quasiCoverage > 0.0) {
+      hitCollector.setCoverageRequirement(salmonOpts.quasiCoverage);
+  }
 
   SASearcher<RapMapIndexT> saSearcher(qidx);
   rapmap::utils::HitCounters hctr;
@@ -2260,7 +2264,14 @@ int salmonQuantify(int argc, char* argv[]) {
     (
      "writeUnmappedNames",
      po::bool_switch(&(sopt.writeUnmappedNames))->default_value(false),
-     "Write the names of un-mapped reads to the file unmapped_names.txt in the auxiliary directory.");
+     "Write the names of un-mapped reads to the file unmapped_names.txt in the auxiliary directory.")
+    ("quasiCoverage,z",
+     po::value<double>(&(sopt.quasiCoverage))->default_value(0.0),
+     "[Experimental]: The fraction of the read that must be covered by MMPs (of length >= 31) if "
+     "this read is to be considered as \"mapped\".  This may help to avoid \"spurious\" mappings. "
+     "A value of 0 (the default) denotes no coverage threshold (a single 31-mer can yield a mapping).  "
+     "Since coverage by exact matching, large, MMPs is a rather strict condition, this value should likely "
+     "be set to something low, if used.");
 
 
   po::options_description fmd("\noptions that apply to the old FMD index");
