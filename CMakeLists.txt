@@ -176,7 +176,12 @@ endif ( DEFINED CUSTOM_BOOST_PATH )
 ##
 # We want static, multithreaded boost libraries
 ##
-set (Boost_USE_STATIC_LIBS ON)
+if(CONDA_BUILD)
+  set (Boost_USE_STATIC_LIBS OFF)
+else ()
+  set (Boost_USE_STATIC_LIBS ON)
+endif(CONDA_BUILD)
+
 set (Boost_USE_MULTITHREADED ON)
 #set (Boost_USE_STATIC_RUNTIME OFF)
 
@@ -494,13 +499,18 @@ ExternalProject_Add(libgff
     CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=${CMAKE_CURRENT_SOURCE_DIR}/external/install
 )
 
-# Because of the way that Apple has changed SIP 
+# Because of the way that Apple has changed SIP
 # in el capitan, some headers may be in a new location
 if (APPLE)
     set(STADEN_INC "-I/usr/local/include")
     set(STADEN_LIB "-L/usr/local/lib")
 endif()
 
+if (CONDA_BUILD)
+  set(LZFLAG "-lz")
+else ()
+  set(LZFLAG "")
+endif (CONDA_BUILD)
 
 message("Build system will compile Staden IOLib")
 message("==================================================================")
@@ -514,7 +524,7 @@ ExternalProject_Add(libstadenio
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/staden-io_lib
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ./configure --enable-shared=no --without-libcurl --prefix=<INSTALL_DIR> LDFLAGS=${LIBSTADEN_LDFLAGS} CFLAGS=${LIBSTADEN_CFLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
-    BUILD_COMMAND make CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS+=${STADEN_INC} CFLAGS+=${STADEN_LIB}
+    BUILD_COMMAND make CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS+=${STADEN_INC} CFLAGS+=${STADEN_LIB} CFLAGS+=${LZFLAG}
 
     BUILD_IN_SOURCE 1
     INSTALL_COMMAND make install
@@ -558,6 +568,12 @@ if (NOT HAVE_FAST_MALLOC)
     endif()
 endif()
 
+if(CONDA_BUILD)
+  set (JEMALLOC_FLAGS "CC=${CMAKE_C_COMPILER} CFLAGS=-fPIC CPPFLAGS=-fPIC")
+else ()
+  set (JEMALLOC_FLAGS "CC=${CMAKE_C_COMPILER}")
+endif()
+
 if (NOT HAVE_FAST_MALLOC)
     message("Build system will fetch and use JEMalloc")
     message("==================================================================")
@@ -568,7 +584,7 @@ if (NOT HAVE_FAST_MALLOC)
         SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-4.0.4
         BUILD_IN_SOURCE TRUE
         INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-        CONFIGURE_COMMAND sh -c "CC=${CMAKE_C_COMPILER} ./autogen.sh --prefix=<INSTALL_DIR>"
+        CONFIGURE_COMMAND sh -c "${JEMALLOC_FLAGS} ./autogen.sh --prefix=<INSTALL_DIR>"
         INSTALL_COMMAND cp -r lib <INSTALL_DIR>/ && cp -r include <INSTALL_DIR>/
         )
 
