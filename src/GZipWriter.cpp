@@ -248,6 +248,64 @@ bool GZipWriter::writeMeta(
           expgc.writeBinary(out);
       }
   }
+  
+  if (opts.posBiasCorrect) {
+    // the length classes
+    std::vector<uint32_t> lenBounds = {791, 1265, 1707, 2433, std::numeric_limits<uint32_t>::max()};
+    
+    // lambda to write out a vector of SimplePosBias models (along with the length bounds) to file.
+    auto writePosModel= [&lenBounds, this](bfs::path fpath, const std::vector<SimplePosBias>& model) -> bool {
+      auto flags = std::ios_base::out | std::ios_base::binary;
+      boost::iostreams::filtering_ostream out;
+      out.push(boost::iostreams::gzip_compressor(6));
+      out.push(boost::iostreams::file_sink(fpath.string(), flags));
+      // Write out the number of different models
+      uint32_t numModels = static_cast<uint32_t>(lenBounds.size());
+      out.write(reinterpret_cast<char*>(&numModels), sizeof(numModels));
+      // Write out the length class for each model
+      for (auto& b : lenBounds) {
+          out.write(reinterpret_cast<char*>(&b), sizeof(b));
+      }
+      // write out each
+      for (auto& pb : model) { 
+	bool success = pb.writeBinary(out);
+	if (!success) {
+	  this->logger_->error("Could not write out positional bias model to {}!", fpath.string());
+	}
+      }
+      return true;
+    };
+
+    // 5' observed 
+    {
+      bfs::path obsPosPath = auxDir / "obs5_pos.gz";
+      // Get the pos bias vector
+      auto& posBiases = experiment.posBias(salmon::utils::Direction::FORWARD);
+      writePosModel(obsPosPath, posBiases);
+    }
+    //3' observed
+    {
+      bfs::path obsPosPath = auxDir / "obs3_pos.gz";
+      // Get the pos bias vector
+      auto& posBiases = experiment.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
+      writePosModel(obsPosPath, posBiases);
+    }
+    // 5' expected
+    {
+      bfs::path expPosPath = auxDir / "exp5_pos.gz";
+      // Get the pos bias vector
+      auto& posBiases = experiment.posBiasExpected(salmon::utils::Direction::FORWARD);
+      writePosModel(expPosPath, posBiases);
+    }
+    // 3' expected
+    {
+      bfs::path expPosPath = auxDir / "exp3_pos.gz";
+      // Get the pos bias vector
+      auto& posBiases = experiment.posBiasExpected(salmon::utils::Direction::REVERSE_COMPLEMENT);
+      writePosModel(expPosPath, posBiases);
+    }
+  }
+
   /*
   bfs::path normGCPath = auxDir / "expected_gc.gz";
   writeVectorToFile(normGCPath, experiment.expectedGCBias());

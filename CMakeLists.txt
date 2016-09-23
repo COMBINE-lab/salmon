@@ -20,8 +20,13 @@ set(CPACK_SOURCE_PACKAGE_FILE_NAME
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 
+if (APPLE)
 set (WARNING_IGNORE_FLAGS "-Wno-deprecated-register")
-set (BOOST_CXX_FLAGS "-Wno-deprecated-register -std=c++11")
+else()
+set (WARNING_IGNORE_FLAGS "")
+endif()
+
+set (BOOST_CXX_FLAGS "${WARNING_IGNORE_FLAGS} -std=c++11")
 ## Prefer static to dynamic libraries
 SET(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
 

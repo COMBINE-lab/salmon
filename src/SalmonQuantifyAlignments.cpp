@@ -587,7 +587,8 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                             observedGCMass.inc(desc, aln->logProb);
                         }
                     }
-                } else {
+                } else if (expectedLibraryFormat.type == ReadType::SINGLE_END) {
+		  // Both expected and observed should be single end here
                     UnpairedRead* alnp = reinterpret_cast<UnpairedRead*>(aln);
                     bam_seq_t* r = alnp->read;
                     if (r != nullptr) {

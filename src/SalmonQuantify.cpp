@@ -183,7 +183,8 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 
   const uint64_t numBurninFrags = salmonOpts.numBurninFrags;
 
-  auto log = spdlog::get("jointLog");
+  auto& log = salmonOpts.jointLog;
+  //auto log = spdlog::get("jointLog");
   size_t numTranscripts{transcripts.size()};
   size_t localNumAssignedFragments{0};
   size_t priorNumAssignedFragments{numAssignedFragments};
@@ -589,13 +590,13 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
             if (aln.libFormat().type == ReadType::PAIRED_END) {
                 int32_t start = std::min(aln.pos, aln.matePos);
                 int32_t stop = start + aln.fragLen - 1;
-
                 // WITH CONTEXT
                 if (start >= 0 and stop < transcript.RefLength) {
                     auto desc = transcript.gcDesc(start, stop);
                     observedGCMass.inc(desc, aln.logProb);
                 }
-            } else {
+            } else if(expectedLibraryFormat.type == ReadType::SINGLE_END) { 
+	      // Both expected and observed should be single end here
                 // For single-end reads, simply assume that every fragment
                 // has a length equal to the conditional mean (given the 
                 // current transcript's length).
@@ -743,8 +744,8 @@ void processReadsQuasi(
 
   // Write unmapped reads
   fmt::MemoryWriter unmappedNames;
-  auto unmappedLogger = spdlog::get("unmappedLog");
-  bool writeUnmapped = (unmappedLogger.get() == nullptr) ? false : true;
+  bool writeUnmapped = salmonOpts.writeUnmappedNames;
+  spdlog::logger* unmappedLogger = (writeUnmapped) ? spdlog::get("unmappedLog").get() : nullptr;
 
   auto& readBiasFW =
       observedBiasParams
@@ -1137,8 +1138,8 @@ void processReadsQuasi(
 
   // Write unmapped reads
   fmt::MemoryWriter unmappedNames;
-  auto unmappedLogger = spdlog::get("unmappedLog");
-  bool writeUnmapped = (unmappedLogger.get() == nullptr) ? false : true;
+  bool writeUnmapped = salmonOpts.writeUnmappedNames;
+  spdlog::logger* unmappedLogger = (writeUnmapped) ? spdlog::get("unmappedLog").get() : nullptr;
 
   auto& readBiasFW = observedBiasParams.seqBiasModelFW;
   auto& readBiasRC = observedBiasParams.seqBiasModelRC;
@@ -1783,7 +1784,7 @@ void quantifyLibrary(ReadExperiment& experiment, bool greedyChain,
   std::atomic<uint64_t> totalAssignedFragments{0};
   uint64_t prevNumAssignedFragments{0};
 
-  auto jointLog = spdlog::get("jointLog");
+  auto jointLog = salmonOpts.jointLog;
 
   ForgettingMassCalculator fmCalc(salmonOpts.forgettingFactor);
   size_t prefillSize = 1000000000 / miniBatchSize;

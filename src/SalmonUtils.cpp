@@ -1848,8 +1848,10 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
    */
   SBModel exp5;
   SBModel exp3;
-  std::vector<SimplePosBias> pos5Exp(5);
-  std::vector<SimplePosBias> pos3Exp(5);
+
+  auto& pos5Exp = readExp.posBiasExpected(salmon::utils::Direction::FORWARD);
+  auto& pos3Exp = readExp.posBiasExpected(salmon::utils::Direction::REVERSE_COMPLEMENT);
+
   auto combineBiasParams =
       [seqBiasCorrect, gcBiasCorrect, posBiasCorrect, &pos5Exp, &pos3Exp, &exp5,
        &exp3, &transcriptGCDist](const CombineableBiasParams& p) -> void {

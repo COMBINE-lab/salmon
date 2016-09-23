@@ -65,6 +65,8 @@ class ReadExperiment {
         fragStartDists_(5),
         posBiasFW_(5),
         posBiasRC_(5),
+	posBiasExpectFW_(5),
+	posBiasExpectRC_(5),
         seqBiasModel_(1.0),
 	eqBuilder_(sopt.jointLog),
         expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0),
@@ -659,6 +661,13 @@ class ReadExperiment {
         return (dir == salmon::utils::Direction::FORWARD) ? posBiasFW_ : posBiasRC_; 
     }
 
+    std::vector<SimplePosBias>& posBiasExpected(salmon::utils::Direction dir) {
+      return (dir == salmon::utils::Direction::FORWARD) ? posBiasExpectFW_ : posBiasExpectRC_;
+    }
+    const std::vector<SimplePosBias>& posBiasExpected(salmon::utils::Direction dir) const {
+      return (dir == salmon::utils::Direction::FORWARD) ? posBiasExpectFW_ : posBiasExpectRC_;
+    }
+
     ReadKmerDist<6, std::atomic<uint32_t>>& readBias(salmon::utils::Direction dir) { 
         return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0] : readBias_[1]; 
     }
@@ -739,7 +748,9 @@ class ReadExperiment {
     /** Positional bias things**/
     std::vector<SimplePosBias> posBiasFW_;
     std::vector<SimplePosBias> posBiasRC_;
- 
+    std::vector<SimplePosBias> posBiasExpectFW_;
+    std::vector<SimplePosBias> posBiasExpectRC_;
+
     /** GC-fragment bias things **/
     // One bin for each percentage GC content
     double gcFracFwd_{-1.0};
