@@ -18,6 +18,7 @@ extern "C" {
 #include "cereal/types/vector.hpp"
 
 #include "BooMap.hpp"
+#include "FrugalBooMap.hpp"
 #include "RapMapSAIndex.hpp"
 #include "IndexHeader.hpp"
 #include "BWAUtils.hpp"
@@ -36,7 +37,7 @@ using DenseHash = spp::sparse_hash_map<uint64_t,
                                          rapmap::utils::SAInterval<IndexT>, 
                                          rapmap::utils::KmerKeyHasher>;
 template <typename IndexT> 
-using PerfectHash = BooMap<uint64_t, rapmap::utils::SAInterval<IndexT>>;
+using PerfectHash = FrugalBooMap<uint64_t, rapmap::utils::SAInterval<IndexT>>;
 
 class SalmonIndex{
         public:
