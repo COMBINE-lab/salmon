@@ -117,7 +117,7 @@ extern "C" {
 #include "GZipWriter.hpp"
 #include "HitManager.hpp"
 #include "KmerIntervalMap.hpp"
-#include "PairSequenceParser.hpp"
+//#include "PairSequenceParser.hpp"
 #include "RapMapUtils.hpp"
 #include "ReadExperiment.hpp"
 #include "SACollector.hpp"

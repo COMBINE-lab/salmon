@@ -50,7 +50,6 @@ extern "C" {
 #include "AlignmentModel.hpp"
 #include "FragmentLengthDistribution.hpp"
 #include "TranscriptCluster.hpp"
-#include "SailfishUtils.hpp"
 #include "SalmonUtils.hpp"
 #include "SalmonConfig.hpp"
 #include "SalmonOpts.hpp"

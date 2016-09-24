@@ -43,7 +43,6 @@
 // C++ string formatting library
 #include "spdlog/fmt/fmt.h"
 
-#include "SailfishUtils.hpp"
 #include "GenomicFeature.hpp"
 #include "SalmonConfig.hpp"
 #include "VersionChecker.hpp"
