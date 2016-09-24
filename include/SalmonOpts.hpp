@@ -142,6 +142,7 @@ struct SalmonOpts {
 
   std::unique_ptr<std::ofstream> unmappedFile{nullptr};
     bool writeUnmappedNames; // write the names of unmapped reads
+    std::shared_ptr<spdlog::logger> unmappedLog{nullptr};
     bool sampleOutput; // Sample alignments according to posterior estimates of transcript abundance.
     bool sampleUnaligned; // Pass along un-aligned reads in the sampling.
 

@@ -745,7 +745,7 @@ void processReadsQuasi(
   // Write unmapped reads
   fmt::MemoryWriter unmappedNames;
   bool writeUnmapped = salmonOpts.writeUnmappedNames;
-  spdlog::logger* unmappedLogger = (writeUnmapped) ? spdlog::get("unmappedLog").get() : nullptr;
+  spdlog::logger* unmappedLogger = (writeUnmapped) ? salmonOpts.unmappedLog.get() : nullptr;
 
   auto& readBiasFW =
       observedBiasParams
@@ -1139,7 +1139,7 @@ void processReadsQuasi(
   // Write unmapped reads
   fmt::MemoryWriter unmappedNames;
   bool writeUnmapped = salmonOpts.writeUnmappedNames;
-  spdlog::logger* unmappedLogger = (writeUnmapped) ? spdlog::get("unmappedLog").get() : nullptr;
+  spdlog::logger* unmappedLogger = (writeUnmapped) ? salmonOpts.unmappedLog.get() : nullptr;
 
   auto& readBiasFW = observedBiasParams.seqBiasModelFW;
   auto& readBiasRC = observedBiasParams.seqBiasModelRC;
@@ -2627,7 +2627,7 @@ transcript abundance from RNA-seq reads
     }
 
     if (sopt.writeUnmappedNames) {
-      auto l = spdlog::get("unmappedLog");
+       auto l = sopt.unmappedLog.get();
       // If the logger was created, then flush it and
       // close the associated file.
       if (l) {

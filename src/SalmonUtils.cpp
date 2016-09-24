@@ -1381,6 +1381,7 @@ bool processQuantOptions(SalmonOpts& sopt,
       spdlog::register_logger(outLog);
       outLog->set_pattern("%v");
       sopt.unmappedFile.reset(outFile);
+      sopt.unmappedLog = outLog;
     } else {
       jointLog->error("Couldn't create auxiliary directory in which to place "
                       "\"unmapped_names.txt\"");

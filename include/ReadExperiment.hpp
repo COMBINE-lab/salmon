@@ -267,7 +267,7 @@ class ReadExperiment {
     template <typename QuasiIndexT>
     void loadTranscriptsFromQuasi(QuasiIndexT* idx_, const SalmonOpts& sopt) {
 	    size_t numRecords = idx_->txpNames.size();
-        auto log = spdlog::get("jointLog");
+        auto log = sopt.jointLog.get();
 
 	    log->info("Index contained {} targets", numRecords);
 	    //transcripts_.resize(numRecords);
