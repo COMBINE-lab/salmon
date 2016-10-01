@@ -47,6 +47,8 @@ struct SalmonOpts {
                         // little bit faster at the potential cost of returning too many mappings (i.e. some sub-optimal mappings) 
                         // for certain reads. Only use this option if you know what it does (enables NIP-skipping)
 
+    bool gencodeRef; // The reference is expected to be from Gencode.
+
     double quasiCoverage; // [Experimental]: Default of 0.  The coverage by MMPs required for a read to be considered mapped.
 
     bool splitSpanningSeeds; // Attempt to split seeds that span multiple transcripts.

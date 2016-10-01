@@ -27,6 +27,13 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs, SalmonOpts& sop
 	nameToID[ref.RefName] = ref.id;
     }
 
+    // Separators for the header (default ' ' and '\t')
+    // If we have the gencode flag, then add '|'.
+    std::string sepStr = " \t";
+    if (sopt.gencodeRef) {
+        sepStr += '|';
+    }
+
     std::vector<std::string> readFiles{fname_};
     size_t maxReadGroup{1000}; // Number of files to read simultaneously
     size_t concurrentFile{1}; // Number of reads in each "job"
@@ -46,7 +53,7 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs, SalmonOpts& sop
 
         for(size_t i = 0; i < j->nb_filled; ++i) { // For all the read we got
             std::string& header = j->data[i].header;
-            std::string name = header.substr(0, header.find(' '));
+            std::string name = header.substr(0, header.find_first_of(sepStr));
 
             auto it = nameToID.find(name);
             if (it == nameToID.end()) {

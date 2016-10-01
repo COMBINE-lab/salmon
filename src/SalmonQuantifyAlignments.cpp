@@ -1245,6 +1245,9 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "in the online learning schedule.  A smaller value results in quicker learning, but higher variance "
                         "and may be unstable.  A larger value results in slower learning but may be more stable.  Value should "
                         "be in the interval (0.5, 1.0].")
+    ("gencode", po::bool_switch(&(sopt.gencodeRef))->default_value(false), "This flag will expect the input transcript fasta to be "
+         "in GENCODE format, and will split the transcript name at the first \'|\' character.  These reduced names will be used in "
+         "the output and when looking for these transcripts in a gene to transcript GTF.")
     ("gcSizeSamp", po::value<std::uint32_t>(&(sopt.gcSampFactor))->default_value(1), "The value by which to down-sample transcripts when representing the "
          "GC content.  Larger values will reduce memory usage, but may decrease the fidelity of bias modeling results.")
    ("biasSpeedSamp",
