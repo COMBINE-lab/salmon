@@ -52,8 +52,10 @@ int help(std::vector<std::string> opts) { //}int argc, char* argv[]) {
     helpMsg.write("Salmon v{}\n\n", salmon::version);
     helpMsg.write("Usage:  salmon -h|--help or \n"
                   "        salmon -v|--version or \n"
+		  "        salmon -c|--cite or \n"
                   "        salmon [--no-version-check] <COMMAND> [-h | options]\n\n");
     helpMsg.write("Commands:\n");
+    helpMsg.write("     cite  Show salmon citation information\n");
     helpMsg.write("     index Create a salmon index\n");
     helpMsg.write("     quant Quantify a sample\n");
     //helpMsg.write("     quantmerge Merge multiple quantifications into a single file\n");
@@ -121,6 +123,36 @@ int salmonSwim(int argc, char* argv[]) {
 
 }
 
+/**
+ * Bonus!
+ */
+void printCite() {
+
+  std::cerr << R"(
+Reference:
+==========
+
+Salmon provides accurate, fast, and bias-aware transcript expression estimates using dual-phase inference
+Rob Patro, Geet Duggal, Michael I Love, Rafael A Irizarry, Carl Kingsford
+bioRxiv 021592; doi: http://dx.doi.org/10.1101/021592
+
+bibtex:
+=======
+
+@article {Patro:2016,
+  author = {Patro, Rob and Duggal, Geet and Love, Michael I and Irizarry, Rafael A and Kingsford, Carl},
+  title = {Salmon provides accurate, fast, and bias-aware transcript expression estimates using dual-phase inference},
+  year = {2016},
+  doi = {10.1101/021592},
+  publisher = {Cold Spring Harbor Labs Journals},
+  URL = {http://biorxiv.org/content/early/2016/08/30/021592},
+  journal = {bioRxiv}
+}
+)";
+
+}
+
+
 int salmonIndex(int argc, char* argv[]);
 int salmonQuantify(int argc, char* argv[]);
 int salmonAlignmentQuantify(int argc, char* argv[]);
@@ -145,6 +177,7 @@ int main( int argc, char* argv[] ) {
     sfopts.add_options()
         ("version,v", "print version string")
         ("no-version-check", "don't check with the server to see if this is the latest version")
+        ("cite,c", "show citation information")
         ("help,h", "produce help message")
         ("command", po::value<string>(), "command to run {index, quant, sf}")
         ("subargs", po::value<std::vector<std::string>>(), "Arguments for command");
@@ -169,6 +202,11 @@ int main( int argc, char* argv[] ) {
         std::vector<std::string> o;
         help(o);
         std::exit(0);
+    }
+
+    if (vm.count("cite") and !vm.count("command")) {
+      printCite();
+      std::exit(0);
     }
 
     if (!vm.count("no-version-check")){
