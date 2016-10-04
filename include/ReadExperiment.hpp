@@ -264,6 +264,7 @@ class ReadExperiment {
 
     SalmonIndex* getIndex() { return salmonIndex_.get(); }
 
+
     template <typename QuasiIndexT>
     void loadTranscriptsFromQuasi(QuasiIndexT* idx_, const SalmonOpts& sopt) {
 	    size_t numRecords = idx_->txpNames.size();
@@ -271,6 +272,8 @@ class ReadExperiment {
 
 	    log->info("Index contained {} targets", numRecords);
 	    //transcripts_.resize(numRecords);
+	    std::vector<uint32_t> lengths;
+	    lengths.reserve(numRecords);
 	    double alpha = 0.005;
 	    for (auto i : boost::irange(size_t(0), numRecords)) {
 		    uint32_t id = i;
@@ -285,27 +288,31 @@ class ReadExperiment {
 		    // Set the transcript sequence
 		    txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i],
                                     sopt.gcBiasCorrect, sopt.gcSampFactor);
+		    lengths.push_back(txp.RefLength);
+		    /*
 		    // Length classes taken from
-            // https://github.com/cole-trapnell-lab/cufflinks/blob/master/src/biascorrection.cpp
+		    // https://github.com/cole-trapnell-lab/cufflinks/blob/master/src/biascorrection.cpp
 		    // ======
 		    // Roberts, Adam, et al.
 		    // "Improving RNA-Seq expression estimates by correcting for fragment bias."
 		    // Genome Biol 12.3 (2011): R22.
 		    // ======
 		    // perhaps, define these in a more data-driven way
-            if (txp.RefLength <= 791) {
-                txp.lengthClassIndex(0);
-            } else if (txp.RefLength <= 1265) {
-                txp.lengthClassIndex(1);
-            } else if (txp.RefLength <= 1707) {
-                txp.lengthClassIndex(2);
-            } else if (txp.RefLength <= 2433) {
-                txp.lengthClassIndex(3);
-            } else {
-                txp.lengthClassIndex(4);
-            }
+		    if (txp.RefLength <= 791) {
+			txp.lengthClassIndex(0);
+		    } else if (txp.RefLength <= 1265) {
+			txp.lengthClassIndex(1);
+		    } else if (txp.RefLength <= 1707) {
+			txp.lengthClassIndex(2);
+		    } else if (txp.RefLength <= 2433) {
+			txp.lengthClassIndex(3);
+		    } else {
+			txp.lengthClassIndex(4);
+		    }
+		    */
       }
 	    // ====== Done loading the transcripts from file
+	    setTranscriptLengthClasses_(lengths, posBiasFW_.size());
     }
 
     void loadTranscriptsFromFMD() {
@@ -337,6 +344,8 @@ class ReadExperiment {
 	    nucTab[0] = 'A'; nucTab[1] = 'C'; nucTab[2] = 'G'; nucTab[3] = 'T';
 	    for (size_t i = 4; i < 256; ++i) { nucTab[i] = 'N'; }
 
+	    std::vector<uint32_t> lengths;
+	    lengths.reserve(transcripts_tmp.size());
         size_t tnum = 0;
 	    // Load the transcript sequence from file
 	    for (auto& t : transcripts_tmp) {
@@ -365,7 +374,8 @@ class ReadExperiment {
             std::strcpy(seqCopy, seq.c_str());
             txp.setSequenceOwned(seqCopy);
 		    txp.setSAMSequenceOwned(salmon::stringtools::encodeSequenceInSAM(seq.c_str(), t.RefLength));
-
+	    lengths.push_back(t.RefLength);
+		    /*
             // Length classes taken from
             // https://github.com/cole-trapnell-lab/cufflinks/blob/master/src/biascorrection.cpp
 		    // ======
@@ -385,6 +395,7 @@ class ReadExperiment {
             } else {
                 txp.lengthClassIndex(4);
             }
+	    */
 		    free(rseq);
 		    /* end BWA code */
             ++tnum;
@@ -397,6 +408,7 @@ class ReadExperiment {
 	    /** END TEST OPT **/
 	    transcripts_tmp.clear();
 	    // ====== Done loading the transcripts from file
+	    setTranscriptLengthClasses_(lengths, posBiasFW_.size());
     }
 
 
@@ -694,6 +706,46 @@ class ReadExperiment {
     }
   
     private:
+
+  void setTranscriptLengthClasses_(std::vector<uint32_t>& lengths, size_t nbins) {
+    auto n = lengths.size();
+    if ( n > nbins) {
+      lengthQuantiles_.clear();
+      lengthQuantiles_.reserve(nbins);
+      
+      size_t step = lengths.size() / nbins;
+      size_t cumStep = 0;
+      for (size_t i = 0; i < nbins; ++i) {
+	cumStep += step;
+	size_t ind = std::min(cumStep, n-1);
+	std::nth_element(lengths.begin(), lengths.begin() + ind, lengths.end());
+	// Find the proper quantile 
+	lengthQuantiles_.push_back(*(lengths.begin() + ind));
+      }
+    } else {
+      lengthQuantiles_.clear();
+      lengthQuantiles_.reserve(n);
+      std::sort(lengths.begin(), lengths.end());
+      for (auto l : lengths) {
+	lengthQuantiles_.push_back(l);
+      }
+      posBiasFW_.resize(n);
+      posBiasRC_.resize(n);
+      posBiasExpectFW_.resize(n);
+      posBiasExpectRC_.resize(n);
+    }
+
+    auto qb = lengthQuantiles_.begin();
+    auto qe = lengthQuantiles_.end();
+    auto maxQuant = std::distance(qb, qe) - 1;
+    for (auto& t : transcripts_) {
+      auto ind = std::min(maxQuant, std::distance(qb, std::upper_bound(qb, qe, t.RefLength)));
+      // the index is the smallest quantile longer than this length
+      t.lengthClassIndex(ind);
+    }
+  }
+
+  
     /**
      * The file from which the alignments will be read.
      * This can be a SAM or BAM file, and can be a regular
@@ -746,6 +798,7 @@ class ReadExperiment {
     EquivalenceClassBuilder eqBuilder_;
 
     /** Positional bias things**/
+    std::vector<uint32_t> lengthQuantiles_;
     std::vector<SimplePosBias> posBiasFW_;
     std::vector<SimplePosBias> posBiasRC_;
     std::vector<SimplePosBias> posBiasExpectFW_;
