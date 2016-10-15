@@ -704,6 +704,8 @@ class ReadExperiment {
         size_t idx = (dir == salmon::utils::Direction::FORWARD) ? 0 : 1;
 	readBiasModelExpected_[idx] = std::move(model);
     }
+
+    const std::vector<uint32_t>& getLengthQuantiles() const { return lengthQuantiles_; }
   
     private:
 

@@ -125,6 +125,7 @@ class AlignmentLibrary {
             fmt::print(stderr, "Populating targets from aln = {}, fasta = {} . . .",
                        alnFiles.front(), transcriptFile_);
             fp.populateTargets(transcripts_, salmonOpts);
+            /*
 	    for (auto& txp : transcripts_) {
 		    // Length classes taken from
 		    // ======
@@ -145,6 +146,15 @@ class AlignmentLibrary {
 			    txp.lengthClassIndex(0);
 		    }
 	    }
+        */
+
+            std::vector<uint32_t> lengths;
+            lengths.reserve(transcripts_.size());
+            for (auto& txp : transcripts_) {
+               lengths.push_back(txp.RefLength);
+            }
+            setTranscriptLengthClasses_(lengths, posBiasFW_.size());
+
             fmt::print(stderr, "done\n");
 
             // Create the cluster forest for this set of transcripts
@@ -417,7 +427,49 @@ class AlignmentLibrary {
 	readBiasModelExpected_[idx] = std::move(model);
     }
  
+    const std::vector<uint32_t>& getLengthQuantiles() const { return lengthQuantiles_; }
+    
     private:
+    
+    void setTranscriptLengthClasses_(std::vector<uint32_t>& lengths, size_t nbins) {
+        auto n = lengths.size();
+        if ( n > nbins) {
+            lengthQuantiles_.clear();
+            lengthQuantiles_.reserve(nbins);
+      
+            size_t step = lengths.size() / nbins;
+            size_t cumStep = 0;
+            for (size_t i = 0; i < nbins; ++i) {
+                cumStep += step;
+                size_t ind = std::min(cumStep, n-1);
+                std::nth_element(lengths.begin(), lengths.begin() + ind, lengths.end());
+                // Find the proper quantile 
+                lengthQuantiles_.push_back(*(lengths.begin() + ind));
+            }
+        } else {
+            lengthQuantiles_.clear();
+            lengthQuantiles_.reserve(n);
+            std::sort(lengths.begin(), lengths.end());
+            for (auto l : lengths) {
+                lengthQuantiles_.push_back(l);
+            }
+            posBiasFW_.resize(n);
+            posBiasRC_.resize(n);
+            posBiasExpectFW_.resize(n);
+            posBiasExpectRC_.resize(n);
+        }
+
+        auto qb = lengthQuantiles_.begin();
+        auto qe = lengthQuantiles_.end();
+        auto maxQuant = std::distance(qb, qe) - 1;
+        for (auto& t : transcripts_) {
+            auto ind = std::min(maxQuant, std::distance(qb, std::upper_bound(qb, qe, t.RefLength)));
+            // the index is the smallest quantile longer than this length
+            t.lengthClassIndex(ind);
+        }
+    }
+
+
     /**
      * The file from which the alignments will be read.
      * This can be a SAM or BAM file, and can be a regular
@@ -478,6 +530,7 @@ class AlignmentLibrary {
     EquivalenceClassBuilder eqBuilder_;
 
     /** Positional bias things**/
+    std::vector<uint32_t> lengthQuantiles_;
     std::vector<SimplePosBias> posBiasFW_;
     std::vector<SimplePosBias> posBiasRC_;
     std::vector<SimplePosBias> posBiasExpectFW_;

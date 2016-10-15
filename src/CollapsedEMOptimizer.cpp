@@ -172,24 +172,25 @@ void VBEMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
                  VecT& expTheta) {
 
   assert(alphaIn.size() == alphaOut.size());
-
+  size_t M = alphaIn.size();
   size_t numEQClasses = txpGroupLabels.size();
   double alphaSum = {0.0};
-  for (auto& e : alphaIn) {
-    alphaSum += e;
+  for (size_t i = 0; i < M; ++i) {
+    alphaSum +=  alphaIn[i] + priorAlphas[i];
   }
 
   double logNorm = boost::math::digamma(alphaSum);
 
   //double prior = priorAlpha;
 
-  for (size_t i = 0; i < transcripts.size(); ++i) {
-    if (alphaIn[i] > ::digammaMin) {
-      expTheta[i] = std::exp(boost::math::digamma(alphaIn[i]) - logNorm);
+  for (size_t i = 0; i < M; ++i) {
+      auto ap = alphaIn[i] + priorAlphas[i];
+    if (ap > ::digammaMin) {
+      expTheta[i] = std::exp(boost::math::digamma(ap) - logNorm);
     } else {
       expTheta[i] = 0.0;
     }
-    alphaOut[i] = priorAlphas[i];
+    alphaOut[i] = 0.0;//priorAlphas[i];
   }
 
   for (size_t eqID = 0; eqID < numEQClasses; ++eqID) {
@@ -302,10 +303,10 @@ void VBEMUpdate_(std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
                  CollapsedEMOptimizer::VecType& expTheta) {
 
   assert(alphaIn.size() == alphaOut.size());
-
+  size_t M = alphaIn.size();
   double alphaSum = {0.0};
-  for (auto& e : alphaIn) {
-    alphaSum += e;
+  for (size_t i = 0; i < M; ++i) {
+      alphaSum +=  alphaIn[i] + priorAlphas[i];
   }
 
   double logNorm = boost::math::digamma(alphaSum);
@@ -317,15 +318,14 @@ void VBEMUpdate_(std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
                       //double prior = priorAlpha;
 
                       for (auto i : boost::irange(range.begin(), range.end())) {
-                        if (alphaIn[i] > ::digammaMin) {
-                          expTheta[i] =
-                              std::exp(boost::math::digamma(alphaIn[i].load()) -
-                                       logNorm);
-                        } else {
-                          expTheta[i] = 0.0;
-                        }
-                        //alphaOut[i] = prior * transcripts[i].RefLength;
-                        alphaOut[i] = priorAlphas[i];
+                          auto ap = alphaIn[i].load() + priorAlphas[i];
+                          if (ap > ::digammaMin) {
+                              expTheta[i] = std::exp(boost::math::digamma(ap) - logNorm);
+                          } else {
+                              expTheta[i] = 0.0;
+                          }
+                          //alphaOut[i] = prior * transcripts[i].RefLength;
+                          alphaOut[i] = 0.0;
                       }
                     });
 
@@ -527,7 +527,7 @@ bool doBootstrap(
     if (useVBEM and !perTranscriptPrior) {
         std::vector<double> cutoffs(transcripts.size(), 0.0);
         for (size_t i = 0; i < transcripts.size(); ++i) {
-            cutoffs[i] = priorAlphas[i] + minAlpha;
+            cutoffs[i] = minAlpha;
         }
         //alphaSum = truncateCountVector(alphas, cutoffs);
         alphaSum = truncateCountVector(alphas, cutoffs);
@@ -952,7 +952,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   if (useVBEM and !perTranscriptPrior) {
       std::vector<double> cutoffs(transcripts.size(), 0.0);
       for (size_t i = 0; i < transcripts.size(); ++i) {
-	cutoffs[i] = priorAlphas[i] + minAlpha;
+          cutoffs[i] = minAlpha;
       }
       //alphaSum = truncateCountVector(alphas, cutoffs);
       alphaSum = truncateCountVector(alphas, cutoffs);

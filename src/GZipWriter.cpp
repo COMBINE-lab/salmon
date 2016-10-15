@@ -348,6 +348,8 @@ bool GZipWriter::writeMeta(
       oa(cereal::make_nvp("mapping_type", mapTypeStr));
 
       oa(cereal::make_nvp("num_targets", transcripts.size()));
+
+      oa(cereal::make_nvp("length_classes", experiment.getLengthQuantiles()));
       oa(cereal::make_nvp("num_bootstraps", numSamples));
       oa(cereal::make_nvp("num_processed", experiment.numObservedFragments()));
       oa(cereal::make_nvp("num_mapped", experiment.numMappedFragments()));

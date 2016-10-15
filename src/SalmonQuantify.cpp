@@ -747,6 +747,11 @@ void processReadsQuasi(
   bool writeUnmapped = salmonOpts.writeUnmappedNames;
   spdlog::logger* unmappedLogger = (writeUnmapped) ? salmonOpts.unmappedLog.get() : nullptr;
 
+  // Write unmapped reads
+  fmt::MemoryWriter orphanLinks;
+  bool writeOrphanLinks = salmonOpts.writeOrphanLinks;
+  spdlog::logger* orphanLinkLogger = (writeOrphanLinks) ? salmonOpts.orphanLinkLog.get() : nullptr;
+
   auto& readBiasFW =
       observedBiasParams
           .seqBiasModelFW; // readExp.readBias(salmon::utils::Direction::FORWARD);
@@ -862,6 +867,27 @@ void processReadsQuasi(
         if (jointHits.size() > salmonOpts.maxReadOccs) {
           jointHitGroup.clearAlignments();
         }
+      }
+
+      // NOTE: This will currently not work with "strict intersect", i.e.
+      // nothing will be output here with strict intersect.
+      if (writeOrphanLinks) {
+          // If we are not using strict intersection, then joint hits
+          // can only be zero when either:
+          // 1) there are *no* hits or
+          // 2) there are hits for *both* the left and right reads, but not to the same txp
+          if (!strictIntersect and jointHits.size() == 0) {
+              if (leftHits.size() > 0 and rightHits.size() > 0) {
+                  for (auto& h : leftHits) {
+                      orphanLinks << h.transcriptID() << ',' << h.pos << "\t";
+                  }
+                  orphanLinks << ":";
+                  for (auto& h : rightHits) {
+                      orphanLinks << h.transcriptID() << ',' << h.pos << "\t";
+                  }
+                  orphanLinks << "\n";
+              }
+          }
       }
 
       // If we have mappings, then process them.
@@ -1086,6 +1112,16 @@ void processReadsQuasi(
         }
         sstream.clear();
     } 
+
+    if (writeOrphanLinks) {
+        std::string outStr(orphanLinks.str());
+        // Get rid of last newline
+        if (!outStr.empty()) {
+            outStr.pop_back();
+            orphanLinkLogger->info(std::move(outStr));
+        }
+        orphanLinks.clear();
+    }
 
     prevObservedFrags = numObservedFragments;
     AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(
@@ -2035,10 +2071,10 @@ int salmonQuantify(int argc, char* argv[]) {
       "quasi-mapping.")
     (
      "seqBias",
-     po::value(&(sopt.biasCorrect))->zero_tokens(),
+     po::bool_switch(&(sopt.biasCorrect))->default_value(false),
      "Perform sequence-specific bias correction.")
     (
-      "gcBias", po::value(&(sopt.gcBiasCorrect))->zero_tokens(),
+      "gcBias", po::bool_switch(&(sopt.gcBiasCorrect))->default_value(false),
       "[beta] Perform fragment GC bias correction")
     (
       "threads,p",
@@ -2079,7 +2115,12 @@ int salmonQuantify(int argc, char* argv[]) {
    "writeMappings,z", po::value<string>(&sopt.qmFileName)->default_value("")->implicit_value("-"),
    "If this option is provided, then the quasi-mapping results will be written out in SAM-compatible "
    "format.  By default, output will be directed to stdout, but an alternative file name can be "
-   "provided instead.");
+   "provided instead.")
+  (
+   "meta", po::bool_switch(&(sopt.meta))->default_value(false),
+   "If you're using Salmon on a metagenomic dataset, consider setting this flag to disable parts of the "
+   "abundance estimation model that make less sense for metagenomic data."
+  );
 
   sopt.noRichEqClasses = false;
   // mapping cache has been deprecated
@@ -2262,6 +2303,10 @@ int salmonQuantify(int argc, char* argv[]) {
      "The prior that will be used in the VBEM algorithm.  This is interpreted "
      "as a per-nucleotide prior, unless the --perTranscriptPrior flag "
      "is also given, in which case this is used as a transcript-level prior")
+    (
+     "writeOrphanLinks",
+     po::bool_switch(&(sopt.writeOrphanLinks))->default_value(false),
+     "Write the transcripts that are linked by orphaned reads.")
     (
      "writeUnmappedNames",
      po::bool_switch(&(sopt.writeUnmappedNames))->default_value(false),
@@ -2636,6 +2681,16 @@ transcript abundance from RNA-seq reads
       }
     }
     
+    if (sopt.writeOrphanLinks) {
+        auto l = sopt.orphanLinkLog.get();
+        // If the logger was created, then flush it and
+        // close the associated file.
+        if (l) {
+            l->flush();
+            if (sopt.orphanLinkFile) { sopt.orphanLinkFile->close(); }
+        }
+    }
+
     // if we wrote quasimappings, flush that buffer
     if (sopt.qmFileName != "" ){
         sopt.qmLog->flush();

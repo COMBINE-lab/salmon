@@ -1216,6 +1216,8 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "the observed frequency of different types of mismatches when computing the likelihood of "
                         "a given alignment.")
     ("output,o", po::value<std::string>()->required(), "Output quantification directory.")
+    ("meta", po::bool_switch(&(sopt.meta))->default_value(false), "If you're using Salmon on a metagenomic dataset, "
+     "consider setting this flag to disable parts of the abundance estimation model that make less sense for metagenomic data.")
     ("geneMap,g", po::value<std::string>(), "File containing a mapping of transcripts to genes.  If this file is provided "
                                         "Salmon will output both quant.sf and quant.genes.sf files, where the latter "
                                         "contains aggregated gene-level abundance estimates.  The transcript to gene mapping "
@@ -1385,6 +1387,12 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
             fmt::print(stderr, "The forgetting factor must be in (0.5, 1.0], "
                                "but the value {} was provided\n", sopt.forgettingFactor);
             std::exit(1);
+        }
+
+        // Metagenomic option
+        if (sopt.meta) {
+            sopt.initUniform = true;
+            sopt.noRichEqClasses = true;
         }
 
         std::stringstream commentStream;

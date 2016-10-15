@@ -1324,6 +1324,12 @@ bool processQuantOptions(SalmonOpts& sopt,
   if (!sopt.quiet) {
     std::cerr << "Logs will be written to " << logDirectory.string() << "\n";
   }
+  
+  // Metagenomic option
+  if (sopt.meta) {
+      sopt.initUniform = true;
+      sopt.noRichEqClasses = true;
+  }
 
   // Determine what we'll do with quasi-mapping results 
   bool writeQuasimappings = (sopt.qmFileName != "");
@@ -1335,7 +1341,7 @@ bool processQuantOptions(SalmonOpts& sopt,
   // make it larger if we're writing mappings or 
   // unmapped names.
   std::streambuf* qmBuf;
-  if (writeQuasimappings or sopt.writeUnmappedNames) {
+  if (writeQuasimappings or sopt.writeUnmappedNames or sopt.writeOrphanLinks) {
       max_q_size = 16777216;
   }  
 
@@ -1385,6 +1391,37 @@ bool processQuantOptions(SalmonOpts& sopt,
     } else {
       jointLog->error("Couldn't create auxiliary directory in which to place "
                       "\"unmapped_names.txt\"");
+      return false;
+    }
+  }
+  
+  // Create the file (and logger) for outputting unmapped reads, if the user has
+  // asked for it.
+  if (sopt.writeOrphanLinks) {
+    boost::filesystem::path auxDir = sopt.outputDirectory / sopt.auxDir;
+    bool auxSuccess = boost::filesystem::is_directory(auxDir);
+    if (!auxSuccess) {
+      auxSuccess = boost::filesystem::create_directories(auxDir);
+    }
+    if (auxSuccess) {
+      bfs::path orphanLinkFile = auxDir / "orphan_links.txt";
+      std::ofstream* outFile = new std::ofstream(orphanLinkFile.string());
+
+      // Must be a power of 2
+      //size_t queueSize{268435456};
+      //spdlog::set_async_mode(queueSize);
+      auto outputSink =
+          std::make_shared<spdlog::sinks::ostream_sink_mt>(*outFile);
+
+      std::shared_ptr<spdlog::logger> outLog =
+          std::make_shared<spdlog::logger>("orphanLinkLog", outputSink);
+      spdlog::register_logger(outLog);
+      outLog->set_pattern("%v");
+      sopt.orphanLinkFile.reset(outFile);
+      sopt.orphanLinkLog = outLog;
+    } else {
+      jointLog->error("Couldn't create auxiliary directory in which to place "
+                      "\"orphan_links.txt\"");
       return false;
     }
   }

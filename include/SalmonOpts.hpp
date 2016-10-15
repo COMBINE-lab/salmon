@@ -122,6 +122,8 @@ struct SalmonOpts {
     bool extraSeedPass; // Perform extra pass trying to find seeds to cover the read
 
     bool disableMappingCache; // Don't write mapping results to temporary mapping cache file
+    
+    bool meta; // Set other options to be optimized for metagenomic data
 
     boost::filesystem::path outputDirectory; // Quant output directory
 
@@ -145,6 +147,11 @@ struct SalmonOpts {
   std::unique_ptr<std::ofstream> unmappedFile{nullptr};
     bool writeUnmappedNames; // write the names of unmapped reads
     std::shared_ptr<spdlog::logger> unmappedLog{nullptr};
+    
+    std::unique_ptr<std::ofstream> orphanLinkFile{nullptr};
+    bool writeOrphanLinks; // write the names of unmapped reads
+    std::shared_ptr<spdlog::logger> orphanLinkLog{nullptr};
+
     bool sampleOutput; // Sample alignments according to posterior estimates of transcript abundance.
     bool sampleUnaligned; // Pass along un-aligned reads in the sampling.
 

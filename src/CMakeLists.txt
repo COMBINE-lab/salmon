@@ -110,8 +110,10 @@ add_library(salmon_core STATIC ${SALMON_LIB_SRCS} )
 
 # Build the salmon executable
 add_executable(salmon ${SALMON_MAIN_SRCS} ${SALMON_ALIGN_SRCS})
+add_dependencies(salmon salmon_core)
 
 add_executable(unitTests ${UNIT_TESTS_SRCS})
+add_dependencies(unitTests salmon)
 
 #add_executable(salmon-read ${SALMON_READ_SRCS})
 #set_target_properties(salmon-read PROPERTIES COMPILE_FLAGS "${CMAKE_CXX_FLAGS} -DHAVE_LIBPTHREAD -D_PBGZF_USE -fopenmp"
