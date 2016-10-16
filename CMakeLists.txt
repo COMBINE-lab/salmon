@@ -351,10 +351,16 @@ ExternalProject_Add(libdivsufsort
     URL ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort.zip
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
+    #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
     BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master/build
     CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DBUILD_DIVSUFSORT64=TRUE -DUSE_OPENMP=TRUE -DBUILD_SHARED_LIBS=FALSE
 )
+ExternalProject_Add_Step(libdivsufsort makedir
+  COMMAND mkdir -p <SOURCE_DIR>/build 
+  COMMENT "Make build directory"
+  DEPENDEES download 
+  DEPENDERS configure)
+  
 set(SUFFARRAY_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
 
 message("Build system will fetch and build the Cereal serialization library")
@@ -366,13 +372,18 @@ ExternalProject_Add(libcereal
 		tar -xzvf cereal-v1.1.2.tar.gz
 	SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.1.2
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
+    #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
     BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.1.2/build
     CONFIGURE_COMMAND ""
     BUILD_COMMAND ""
     INSTALL_COMMAND sh -c "mkdir -p <INSTALL_DIR>/include && cp -r <SOURCE_DIR>/include/cereal <INSTALL_DIR>/include"
 )
-
+ExternalProject_Add_Step(libcereal makedir
+  COMMAND mkdir -p <SOURCE_DIR>/build 
+  COMMENT "Make build directory"
+  DEPENDEES download 
+  DEPENDERS configure)
+  
 message("Build system will fetch and build BWA (for Salmon)")
 message("==================================================================")
 include(ExternalProject)
@@ -498,11 +509,17 @@ ExternalProject_Add(libgff
     rm -fr libgff &&
     mv libgff-1.0 libgff
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff
-    UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
+    #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff/build
     CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=${CMAKE_CURRENT_SOURCE_DIR}/external/install
 )
+ExternalProject_Add_Step(libgff makedir
+  COMMAND mkdir -p <SOURCE_DIR>/build 
+  COMMENT "Make build directory"
+  DEPENDEES download 
+  DEPENDERS configure)
+  
 
 # Because of the way that Apple has changed SIP
 # in el capitan, some headers may be in a new location
