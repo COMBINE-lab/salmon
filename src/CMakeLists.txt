@@ -107,13 +107,21 @@ endif()
 
 # Build the Salmon library
 add_library(salmon_core STATIC ${SALMON_LIB_SRCS} )
+#IF(FETCHED_LZMA)
+#  add_dependencies(salmon_core liblzma)
+#ENDIF()
+#IF(FETCHED_BZ2)
+#  add_dependencies(salmon_core libbz2)
+#ENDIF()
+#IF(FETCHED_BOOST)
+#  add_dependencies(salmon_core libboost)
+#ENDIF()
+
 
 # Build the salmon executable
 add_executable(salmon ${SALMON_MAIN_SRCS} ${SALMON_ALIGN_SRCS})
-add_dependencies(salmon salmon_core)
 
 add_executable(unitTests ${UNIT_TESTS_SRCS})
-add_dependencies(unitTests salmon)
 
 #add_executable(salmon-read ${SALMON_READ_SRCS})
 #set_target_properties(salmon-read PROPERTIES COMPILE_FLAGS "${CMAKE_CXX_FLAGS} -DHAVE_LIBPTHREAD -D_PBGZF_USE -fopenmp"
@@ -147,7 +155,7 @@ target_link_libraries(salmon
     ${FAST_MALLOC_LIB}
 )
 
-add_dependencies(salmon libbwa)
+#add_dependencies(salmon libbwa)
 
 # Link the executable
 target_link_libraries(unitTests
