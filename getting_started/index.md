@@ -12,7 +12,7 @@ published: true
 
 ## Getting started with Salmon
 
-This brief tutorial will explain how you can get started using Salmon to quantify your RNA-seq data.
+This brief tutorial will explain how you can get started using Salmon to quantify your RNA-seq data.  This tutorial will walk you through installing salmon, building an index on a transcriptome, and then quantifying some RNA-seq samples for downstream processing.
 
 ### Obtaining Salmon
 
@@ -41,5 +41,7 @@ Commands:
      quant Quantify a sample
      swim  Perform super-secret operation
 ```
+
+
 
 
