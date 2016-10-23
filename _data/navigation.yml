@@ -8,6 +8,9 @@
 - title: Contact
   url: /contact/
 
+- title: Getting Started
+  url: /getting_started/
+  
 - title: Documentation
   url: http://salmon.readthedocs.org
 
