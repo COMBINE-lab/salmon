@@ -42,6 +42,8 @@ Commands:
      swim  Perform super-secret operation
 ```
 
+### Analyzing your RNA-seq data with Salmon
 
+**Obtaining a transcriptome and building an index**
 
-
+In order to quantify transcript-level abundances, Salmon requires a target *transcriptome*.  This transcriptome is given to Salmon in the form of a (possibly compressed) multi-FASTA file, with each entry providing the sequence of a transcript.  Thus, when you are building a salmon index, **please do not build the index on the genome of the organism whose transcripts you want to quantify**, this is almost certainly not want you want to do and will not provide you with meaningful results.
