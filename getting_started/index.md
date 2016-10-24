@@ -88,7 +88,7 @@ done
 cd .. 
 ```
 
-We'll place these commands in a script called [`dl_reads.sh`]().
+We'll place these commands in a script called [`dl_tut_reads.sh`](https://raw.githubusercontent.com/COMBINE-lab/salmon/gh-pages/assets/dl_tut_reads.sh).
 
 
 
