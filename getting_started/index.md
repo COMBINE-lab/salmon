@@ -69,5 +69,24 @@ $ salmon index -t ahtal.fa.gz -i athal_index
 
 There are a number of different options you can pass to the indexer to change its behavior (read more about those [here](http://salmon.readthedocs.io/en/latest/)), but the default should work well for most data.
 
+**Obtaining sequencing data
+
+In addition to the *index*, salmon obviously requires the RNA-seq reads from the experiment to perform quantification.  In this tutorial, we'll be analyzing data from [this 4-condition experiment](https://www.ebi.ac.uk/ena/data/view/DRP001761) [accession PRJDB2508].  You can use the following shell script to obtain the raw data and place the corresponding read files in the proper locations.  Here, we're simply placing the left and right reads for each sample in a directory labeled with that sample's ID (i.e. `DRR016125_1.fastq.gz` and `DRR016125_2.fastq.gz` go in a folder called `DRR016125`).
+
+```
+#!/bin/bash
+mkdir data
+cd data
+for i in `seq 25 40`; 
+do 
+  mkdir DRR0161${i}; 
+  cd DRR0161${i}; 
+  wget ftp://ftp.sra.ebi.ac.uk/vol1/fastq/DRR016/DRR0161${i}/DRR0161${i}_1.fastq.gz; 
+  wget ftp://ftp.sra.ebi.ac.uk/vol1/fastq/DRR016/DRR0161${i}/DRR0161${i}_2.fastq.gz; 
+  cd ..; 
+done
+cd .. 
+```
+
 [^1]:
 	When you are building a salmon index, **please do not build the index on the genome of the organism whose transcripts you want to quantify**, this is almost certainly not want you want to do and will not provide you with meaningful results.
