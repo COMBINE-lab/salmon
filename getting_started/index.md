@@ -17,7 +17,8 @@ This brief tutorial will explain how you can get started using Salmon to quantif
 Index of this tutorial:
 
 * [Obtaining Salmon](){:rel='obtaining-salmon'}
-
+* [Indexing the transcriptome](){:rel='indexing-txome'}
+* [Obtaining the reads](){:rel='obtaining-salmon'}
 
 ### Obtaining Salmon {#obtaining-salmon}
 
@@ -49,7 +50,7 @@ Commands:
 
 ### Analyzing your RNA-seq data with Salmon
 
-**Obtaining a transcriptome and building an index**
+#### Obtaining a transcriptome and building an index {#obtaining-salmon}
 
 In order to quantify transcript-level abundances, Salmon requires a target *transcriptome*.  This transcriptome is given to Salmon in the form of a (possibly compressed) multi-FASTA file, with each entry providing the sequence of a transcript[^1].  For this example, we'll be analyzing some *Arabidopsis thaliana* data, so we'll download and index the *A. thaliana* transcriptome.  First, create a directory where we'll do our analysis, let's call it `salmon_tutorial`:
 
