@@ -69,7 +69,7 @@ $ salmon index -t ahtal.fa.gz -i athal_index
 
 There are a number of different options you can pass to the indexer to change its behavior (read more about those [here](http://salmon.readthedocs.io/en/latest/)), but the default should work well for most data.
 
-**Obtaining sequencing data
+**Obtaining sequencing data**
 
 In addition to the *index*, salmon obviously requires the RNA-seq reads from the experiment to perform quantification.  In this tutorial, we'll be analyzing data from [this 4-condition experiment](https://www.ebi.ac.uk/ena/data/view/DRP001761) [accession PRJDB2508].  You can use the following shell script to obtain the raw data and place the corresponding read files in the proper locations.  Here, we're simply placing all of the data in a directory called `data`, and the left and right reads for each sample in a sub-directory labeled with that sample's ID (i.e. `DRR016125_1.fastq.gz` and `DRR016125_2.fastq.gz` go in a folder called `data/DRR016125`).
 
@@ -96,9 +96,9 @@ $ bash dl_tut_reads.sh
 
 *Now might be a good time to grab a cup of coffee (or tea)*.
 
-**Quantifying the samples
+**Quantifying the samples**
 
-Now that we have our index built and all of our data downloaded, we're ready to quantify our samples.  Since we'll be running the same command on each sample, the simplest way to automate this process is, again, a simple shell script.  The script we'll be
+Now that we have our index built and all of our data downloaded, we're ready to quantify our samples.  Since we'll be running the same command on each sample, the simplest way to automate this process is, again, a simple shell script ([`quant_tut_samples.sh`](https://raw.githubusercontent.com/COMBINE-lab/salmon/gh-pages/assets/quant_tut_samples.sh)):
 
 ```
 #!/bin/bash
