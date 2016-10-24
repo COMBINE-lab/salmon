@@ -46,13 +46,28 @@ Commands:
 
 **Obtaining a transcriptome and building an index**
 
-In order to quantify transcript-level abundances, Salmon requires a target *transcriptome*.  This transcriptome is given to Salmon in the form of a (possibly compressed) multi-FASTA file, with each entry providing the sequence of a transcript[^1].  For this example, we'll be analyzing some *Arabidopsis thaliana* data, so we'll download and index the *A. thaliana* transcriptome:
+In order to quantify transcript-level abundances, Salmon requires a target *transcriptome*.  This transcriptome is given to Salmon in the form of a (possibly compressed) multi-FASTA file, with each entry providing the sequence of a transcript[^1].  For this example, we'll be analyzing some *Arabidopsis thaliana* data, so we'll download and index the *A. thaliana* transcriptome.  First, create a directory where we'll do our analysis, let's call it `salmon_tutorial`:
 
 ```
-$ curl ftp://ftp.ensemblgenomes.org/pub/plants/release-28/fasta/arabidopsis_thaliana/cdna/Arabidopsis_thaliana.TAIR10.28.cdna.all.fa.gz
+$ mkdir salmon_tutorial
+$ cd salmon_tutorial
 ```
 
+Now, download the transcriptome:
 
+```
+$ curl ftp://ftp.ensemblgenomes.org/pub/plants/release-28/fasta/arabidopsis_thaliana/cdna/Arabidopsis_thaliana.TAIR10.28.cdna.all.fa.gz -o athal.fa.gz
+```
+
+Here, we've used a reference transcriptome for *Arabadopsis*.  However, one of the benefits of performing quantification directly on the transcriptome (rather than via the host genome), is that one can easily quantify assembled transcripts as well (obtained via software such as [StringTie](https://ccb.jhu.edu/software/stringtie/) for organisms with a reference or [Trinity](https://github.com/trinityrnaseq/trinityrnaseq/wiki) for *de novo* RNA-seq experiments).
+
+Next, we're going to build an *index* on our transcriptome.  The index is a structure that salmon uses to [quasi-map](http://bioinformatics.oxfordjournals.org/content/32/12/i192.abstract) RNA-seq reads during quantification.  The index need only be constructed once per transcriptome, and it can then be reused to quantify many experiments.  We use the *index* command of salmon to build our index:
+
+```
+$ salmon index -t ahtal.fa.gz -i athal_index
+```
+
+There are a number of different options you can pass to the indexer to change its behavior (read more about those [here](http://salmon.readthedocs.io/en/latest/)), but the default should work well for most data.
 
 [^1]:
 	When you are building a salmon index, **please do not build the index on the genome of the organism whose transcripts you want to quantify**, this is almost certainly not want you want to do and will not provide you with meaningful results.
