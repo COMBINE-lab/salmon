@@ -106,12 +106,15 @@ for fn in data/DRR0161{25..40};
 do
 samp=`basename ${fn}`
 echo "Processing sample ${samp}"
-sailfish quant -i athal_index -l A \
+salmon quant -i athal_index -l A \
          -1 ${fn}/${samp}_1.fastq.gz \
-         -2 ${samp}_2.fastq.gz \
-		 -p 8 -o quants/${samp}_quant
+         -2 ${fn}/${samp}_2.fastq.gz \
+         -p 8 -o quants/${samp}_quant
 done 
 ```
+
+This script simply loops through each sample and invokes `salmon` using fairly barebone options.  The `-i` argument tells salmon where to find the index `-l A` tells salmon that it should automatically determine the library type of the sequencing reads (e.g. stranded vs. unstranded etc.).  The `-1` and `-2` arguments tell salmon where to find the left and right reads for this sample (notice, salmon will accept gzipped FASTQ files directly).  Finally, the `-p 8` argument tells salmon to make use of 8 threads and the `-o` argument specifies the directory where salmon's quantification results sould be written.  Salmon exposes *many* different options to the user that enable extra features or modify default behavior.  However, the purpose and behavior of all of those options is beyond the scope of this introductory tutorial.  You can read about salmon's many  options in the [documentation](http://salmon.readthedocs.io/en/latest/).
+
 
 
 [^1]:
