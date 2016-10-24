@@ -71,7 +71,7 @@ There are a number of different options you can pass to the indexer to change it
 
 **Obtaining sequencing data
 
-In addition to the *index*, salmon obviously requires the RNA-seq reads from the experiment to perform quantification.  In this tutorial, we'll be analyzing data from [this 4-condition experiment](https://www.ebi.ac.uk/ena/data/view/DRP001761) [accession PRJDB2508].  You can use the following shell script to obtain the raw data and place the corresponding read files in the proper locations.  Here, we're simply placing the left and right reads for each sample in a directory labeled with that sample's ID (i.e. `DRR016125_1.fastq.gz` and `DRR016125_2.fastq.gz` go in a folder called `DRR016125`).
+In addition to the *index*, salmon obviously requires the RNA-seq reads from the experiment to perform quantification.  In this tutorial, we'll be analyzing data from [this 4-condition experiment](https://www.ebi.ac.uk/ena/data/view/DRP001761) [accession PRJDB2508].  You can use the following shell script to obtain the raw data and place the corresponding read files in the proper locations.  Here, we're simply placing all of the data in a directory called `data`, and the left and right reads for each sample in a sub-directory labeled with that sample's ID (i.e. `DRR016125_1.fastq.gz` and `DRR016125_2.fastq.gz` go in a folder called `data/DRR016125`).
 
 ```
 #!/bin/bash
@@ -88,8 +88,30 @@ done
 cd .. 
 ```
 
-We'll place these commands in a script called [`dl_tut_reads.sh`](https://raw.githubusercontent.com/COMBINE-lab/salmon/gh-pages/assets/dl_tut_reads.sh).
+We'll place these commands in a script called [`dl_tut_reads.sh`](https://raw.githubusercontent.com/COMBINE-lab/salmon/gh-pages/assets/dl_tut_reads.sh).  To download the data, just run the script and wait for it to complete:
 
+```
+$ bash dl_tut_reads.sh
+```
+
+*Now might be a good time to grab a cup of coffee (or tea)*.
+
+**Quantifying the samples
+
+Now that we have our index built and all of our data downloaded, we're ready to quantify our samples.  Since we'll be running the same command on each sample, the simplest way to automate this process is, again, a simple shell script.  The script we'll be
+
+```
+#!/bin/bash
+for fn in data/DRR0161{25..40};
+do
+samp=`basename ${fn}`
+echo "Processing sample ${samp}"
+sailfish quant -i athal_index -l A \
+         -1 ${fn}/${samp}_1.fastq.gz \
+         -2 ${samp}_2.fastq.gz \
+		 -p 8 -o quants/${samp}_quant
+done 
+```
 
 
 [^1]:
