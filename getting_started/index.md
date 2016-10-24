@@ -19,6 +19,8 @@ Index of this tutorial:
 1. [Obtaining Salmon](#obtaining-salmon)
 2. [Indexing the transcriptome](#indexing-txome)
 3. [Obtaining the reads](#obtaining-reads)
+4. [Quantifying the samples](#quantifying-samples)
+5. [After quantification](#after-quantification)
 
 ### Obtaining Salmon {#obtaining-salmon}
 
@@ -102,7 +104,7 @@ $ bash dl_tut_reads.sh
 
 *Now might be a good time to grab a cup of coffee (or tea)*.
 
-**Quantifying the samples**
+#### Quantifying the samples {#quantifying-samples}
 
 Now that we have our index built and all of our data downloaded, we're ready to quantify our samples.  Since we'll be running the same command on each sample, the simplest way to automate this process is, again, a simple shell script ([`quant_tut_samples.sh`](https://raw.githubusercontent.com/COMBINE-lab/salmon/gh-pages/assets/quant_tut_samples.sh)):
 
@@ -121,7 +123,11 @@ done
 
 This script simply loops through each sample and invokes `salmon` using fairly barebone options.  The `-i` argument tells salmon where to find the index `-l A` tells salmon that it should automatically determine the library type of the sequencing reads (e.g. stranded vs. unstranded etc.).  The `-1` and `-2` arguments tell salmon where to find the left and right reads for this sample (notice, salmon will accept gzipped FASTQ files directly).  Finally, the `-p 8` argument tells salmon to make use of 8 threads and the `-o` argument specifies the directory where salmon's quantification results sould be written.  Salmon exposes *many* different options to the user that enable extra features or modify default behavior.  However, the purpose and behavior of all of those options is beyond the scope of this introductory tutorial.  You can read about salmon's many  options in the [documentation](http://salmon.readthedocs.io/en/latest/).
 
+After the salmon commands finish running, you should have a directory named `quants`, which will have a sub-directory for each sample.  These sub-directories contain the quantification results of salmon, as well as a lot of other information salmon records about the sample and the run.  The main output file (called `quant.sf`) is rather self-explanatory.  For example, take a peek at the quantification file for sample `DRR016125` in `quants/DRR016125/quant.sf` and you'll see a simple TSV format file listing the name (`Name`) of each transcript, its length (`Length`), effective length (`EffectiveLength`) (more details on this in the documentation), and its abundance in terms of Transcripts Per Million (`TPM`) and estimated number of reads (`NumReads`) originating from this transcript.
 
+#### After quantification {#after-quantification}
+
+That's it!  Quantifying your RNA-seq data with salmon is that simple (and fast).  Once you have your quantification results you can use them for downstream analysis with differential expression tools like [DESeq2](https://bioconductor.org/packages/release/bioc/html/DESeq2.html).  In fact, using the [tximport](http://bioconductor.org/packages/release/bioc/html/tximport.html) package, you can import salmon's transcript-level quantifications directly into DESeq2 (and optionally aggregate them to the gene level for gene-level differential expression analysis).  You can read more about how to import salmon's results into DESeq2 by reading the `tximport` section (1.3.4) of the excellent [DESeq2 manual](https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.pdf).
 
 [^1]:
 	When you are building a salmon index, **please do not build the index on the genome of the organism whose transcripts you want to quantify**, this is almost certainly not want you want to do and will not provide you with meaningful results.
