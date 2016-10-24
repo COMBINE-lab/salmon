@@ -88,5 +88,9 @@ done
 cd .. 
 ```
 
+We'll place these commands in a script called [`dl_reads.sh`]().
+
+
+
 [^1]:
 	When you are building a salmon index, **please do not build the index on the genome of the organism whose transcripts you want to quantify**, this is almost certainly not want you want to do and will not provide you with meaningful results.
