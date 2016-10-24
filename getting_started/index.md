@@ -16,9 +16,9 @@ This brief tutorial will explain how you can get started using Salmon to quantif
 
 Index of this tutorial:
 
-* [Obtaining Salmon](#obtaining-salmon)
-* [Indexing the transcriptome](#indexing-txome)
-* [Obtaining the reads](#obtaining-reads)
+1. [Obtaining Salmon](#obtaining-salmon)
+2. [Indexing the transcriptome](#indexing-txome)
+3. [Obtaining the reads](#obtaining-reads)
 
 ### Obtaining Salmon {#obtaining-salmon}
 
