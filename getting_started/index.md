@@ -18,7 +18,7 @@ Index of this tutorial:
 
 * [Obtaining Salmon](){:rel='obtaining-salmon'}
 * [Indexing the transcriptome](){:rel='indexing-txome'}
-* [Obtaining the reads](){:rel='obtaining-salmon'}
+* [Obtaining the reads](){:rel='obtaining-reads'}
 
 ### Obtaining Salmon {#obtaining-salmon}
 
@@ -75,7 +75,7 @@ $ salmon index -t ahtal.fa.gz -i athal_index
 
 There are a number of different options you can pass to the indexer to change its behavior (read more about those [here](http://salmon.readthedocs.io/en/latest/)), but the default should work well for most data.
 
-**Obtaining sequencing data**
+#### Obtaining sequencing data {#obtaining-reads}
 
 In addition to the *index*, salmon obviously requires the RNA-seq reads from the experiment to perform quantification.  In this tutorial, we'll be analyzing data from [this 4-condition experiment](https://www.ebi.ac.uk/ena/data/view/DRP001761) [accession PRJDB2508].  You can use the following shell script to obtain the raw data and place the corresponding read files in the proper locations.  Here, we're simply placing all of the data in a directory called `data`, and the left and right reads for each sample in a sub-directory labeled with that sample's ID (i.e. `DRR016125_1.fastq.gz` and `DRR016125_2.fastq.gz` go in a folder called `data/DRR016125`).
 
