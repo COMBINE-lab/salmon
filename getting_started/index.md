@@ -16,9 +16,9 @@ This brief tutorial will explain how you can get started using Salmon to quantif
 
 Index of this tutorial:
 
-* [Obtaining Salmon](./){:rel='obtaining-salmon'}
-* [Indexing the transcriptome](./){:rel='indexing-txome'}
-* [Obtaining the reads](./){:rel='obtaining-reads'}
+* [Obtaining Salmon](https://combine-lab.github.io/salmon/getting_started/){:rel='obtaining-salmon'}
+* [Indexing the transcriptome](https://combine-lab.github.io/salmon/getting_started/){:rel='indexing-txome'}
+* [Obtaining the reads](https://combine-lab.github.io/salmon/getting_started/){:rel='obtaining-reads'}
 
 ### Obtaining Salmon {#obtaining-salmon}
 
