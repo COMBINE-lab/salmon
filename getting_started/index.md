@@ -14,7 +14,12 @@ published: true
 
 This brief tutorial will explain how you can get started using Salmon to quantify your RNA-seq data.  This tutorial will walk you through installing salmon, building an index on a transcriptome, and then quantifying some RNA-seq samples for downstream processing.
 
-### Obtaining Salmon
+Index of this tutorial:
+
+* [Obtaining Salmon](){:rel='obtaining-salmon'}
+
+
+### Obtaining Salmon {#obtaining-salmon}
 
 Salmon is a free (both as in "free beer" and "free speech") software tool for estimating transcript-level abundance from RNA-seq read data.  It is developed openly on GitHub.  You can visit Salmon's GitHub page [here](https://github.com/COMBINE-lab/salmon), and check out the Salmon source code, feature requests, known issues etc.  However, the easiest way to get started with Salmon is to download the pre-compiled binaries for your platfor from the [releases page](https://github.com/COMBINE-lab/salmon/releases).  We provide binaries for both 64-bit Linux and MacOS.  
 
