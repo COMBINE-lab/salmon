@@ -5,8 +5,7 @@ excerpt: >-
   Salmon is an easy-to-use and ultrafast program for quantification from RNA-seq
   data
 modified: {}
-image:
-  feature: SalmonLogo.png
+image: null
 published: true
 ---
 
