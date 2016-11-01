@@ -43,6 +43,8 @@ struct SalmonOpts {
 
     bool dumpEq; 	     // Dump the equivalence classes and counts to file
 
+    bool dumpEqWeights; 	     // Dump the equivalence classes rich weights 
+
     bool fasterMapping; // [Developer]: Disables some extra checks during quasi-mapping. This may make mapping a 
                         // little bit faster at the potential cost of returning too many mappings (i.e. some sub-optimal mappings) 
                         // for certain reads. Only use this option if you know what it does (enables NIP-skipping)

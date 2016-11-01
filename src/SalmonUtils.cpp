@@ -1500,6 +1500,11 @@ bool processQuantOptions(SalmonOpts& sopt,
       sopt.ignoreIncompat = false;
   }
 
+  // Dumping equivalnce class weights implies dumping equivalence classes
+  if (sopt.dumpEqWeights and !sopt.dumpEq) {
+    sopt.dumpEq = true;
+    jointLog->info("You specified --dumpEqWeights, which implies --dumpEq; that option has been enabled.");
+  }
   return true;
 }
 

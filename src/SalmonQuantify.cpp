@@ -2158,6 +2158,10 @@ int salmonQuantify(int argc, char* argv[]) {
 						 "dumpEq", po::bool_switch(&(sopt.dumpEq))->default_value(false),
 						 "Dump the equivalence class counts "
 						 "that were computed during quasi-mapping")
+    ("dumpEqWeights,d",
+     po::bool_switch(&(sopt.dumpEqWeights))->default_value(false),
+     "Includes \"rich\" equivlance class weights in the output when equivalence "
+     "class information is being dumped to file.")
     ("fasterMapping",
      po::bool_switch(&(sopt.fasterMapping))->default_value(false),
      "[Developer]: Disables some extra checks during quasi-mapping. This may make mapping a "
@@ -2556,12 +2560,6 @@ transcript abundance from RNA-seq reads
 
     GZipWriter gzw(outputDirectory, jointLog);
 
-    // If we are dumping the equivalence classes, then
-    // do it here.
-    if (sopt.dumpEq) {
-      gzw.writeEquivCounts(sopt, experiment);
-    }
-
     // Now that the streaming pass is complete, we have
     // our initial estimates, and our rich equivalence
     // classes.  Perform further optimization until
@@ -2594,6 +2592,12 @@ transcript abundance from RNA-seq reads
     gzw.writeAbundances(sopt, experiment);
     // Write meta-information about the run
     gzw.writeMeta(sopt, experiment, sopt.runStartTime);
+
+    // If we are dumping the equivalence classes, then
+    // do it here.
+    if (sopt.dumpEq) {
+      gzw.writeEquivCounts(sopt, experiment);
+    }
 
     if (sopt.numGibbsSamples > 0) {
 

@@ -69,6 +69,7 @@ bool GZipWriter::writeEquivCounts(
   auto& transcripts = experiment.transcripts();
   std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec =
         experiment.equivalenceClassBuilder().eqVec();
+  bool dumpRichWeights = opts.dumpEqWeights;
 
   // Number of transcripts
   equivFile << transcripts.size() << '\n';
@@ -89,6 +90,10 @@ bool GZipWriter::writeEquivCounts(
     equivFile << txps.size() << '\t';
     // each group member
     for (auto tid : txps) { equivFile << tid << '\t'; }
+    if (dumpRichWeights) {
+      const auto& auxs = eq.second.combinedWeights;
+      for (auto aux : auxs) { equivFile << aux << '\t'; }
+    }
     // count for this class
     equivFile << count << '\n';
   }
@@ -251,7 +256,7 @@ bool GZipWriter::writeMeta(
   
   if (opts.posBiasCorrect) {
     // the length classes
-    std::vector<uint32_t> lenBounds = {791, 1265, 1707, 2433, std::numeric_limits<uint32_t>::max()};
+    const auto& lenBounds = experiment.getLengthQuantiles();
     
     // lambda to write out a vector of SimplePosBias models (along with the length bounds) to file.
     auto writePosModel= [&lenBounds, this](bfs::path fpath, const std::vector<SimplePosBias>& model) -> bool {
@@ -263,8 +268,8 @@ bool GZipWriter::writeMeta(
       uint32_t numModels = static_cast<uint32_t>(lenBounds.size());
       out.write(reinterpret_cast<char*>(&numModels), sizeof(numModels));
       // Write out the length class for each model
-      for (auto& b : lenBounds) {
-          out.write(reinterpret_cast<char*>(&b), sizeof(b));
+      for (const auto& b : lenBounds) {
+        out.write(reinterpret_cast<char*>(const_cast<uint32_t*>(&b)), sizeof(b));
       }
       // write out each
       for (auto& pb : model) { 
