@@ -354,6 +354,15 @@ bool GZipWriter::writeMeta(
 
       oa(cereal::make_nvp("num_targets", transcripts.size()));
 
+      // True if we dumped the equivalence classes, false otherwise
+      oa(cereal::make_nvp("serialized_eq_classes", opts.dumpEq));
+      
+      // For now, this vector is empty unless we dumped the equivalence classes
+      // with weights.  In which case it contains the string "scalar_weights".
+      std::vector<std::string> props;
+      if (opts.dumpEqWeights) { props.push_back("scalar_weights"); }
+      oa(cereal::make_nvp("eq_class_properties", props));
+
       oa(cereal::make_nvp("length_classes", experiment.getLengthQuantiles()));
       oa(cereal::make_nvp("num_bootstraps", numSamples));
       oa(cereal::make_nvp("num_processed", experiment.numObservedFragments()));
