@@ -1,21 +1,12 @@
  pipeline:
-  build:
-   image: golang 
-   commands: 
-    - printf "HELLO\n"
-    - printf "WORLD\n"
-    - mkdir build
-    - cd build
-    - cmake ..
-    - make install
+  setup:
+   image: ubuntu_16.04:salmon_build 
+  build2: 
+   image: ubuntu_16.04:salmon_build
+   commands:
+    - ./.drone/build.sh
    notify:
     email:
      recipients:
       - combinelab.sbu@gmail.com
-  build2: 
-   image: ubuntu_16.04:salmon_build
-   commands:
-    - printf "BROKEN\n"
-    - printf "SYSTEM\n"
-    - echo `pwd`
-    - ./.drone/build.sh
+

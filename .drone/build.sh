@@ -14,4 +14,4 @@ cmake ..
 
 echo "[Drone build] making salmon and installing locally (this could take a while)"
 
-make install
+make -s install
