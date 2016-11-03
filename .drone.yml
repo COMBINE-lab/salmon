@@ -1,6 +1,6 @@
 pipeline:
   compile:
-    image: ubuntu_16.04:salmon_build
+    image: dlksjaflkjsa;lfjasldjl;asjd
     commands:
       - echo hi
       - echo `pwd`
