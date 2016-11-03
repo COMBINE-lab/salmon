@@ -2,15 +2,5 @@
   setup:
    image: ubuntu_16.04:salmon_build 
    commands:
-    - echo "filler"
-    - echo "do nothing"
-  build2: 
-   image: ubuntu_16.04:salmon_build
-   commands:
     - echo "Starting build"
     - ./.drone/build.sh
-   notify:
-    email:
-     recipients:
-      - combinelab.sbu@gmail.com
-
