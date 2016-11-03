@@ -2,9 +2,9 @@ pipeline:
   compile:
     image: ubuntu_16.04:salmon_build
     commands:
-      - echo "hi"
-      - echo `pwd`
-      - ./.drone/build.sh
+      - "echo hi"
+      - "echo `pwd`"
+      - "./.drone/build.sh"
     notify:
       email:
         recipients:
