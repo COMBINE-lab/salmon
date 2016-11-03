@@ -1,13 +1,13 @@
 pipeline:
-  build:
+  compile:
     image: ubuntu_16.04:salmon_build
     commands:
       - echo "hi"
       - echo `pwd`
     script:
       - ./salmon/.drone/build.sh
-  notify:
-    email:
-      recipients:
-        - combinelab.sbu@gmail.com
+    notify:
+      email:
+        recipients:
+          - combinelab.sbu@gmail.com
     
