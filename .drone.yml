@@ -1,7 +1,9 @@
  pipeline:
   build:
-   image: ubuntu_16.04:salmon_build
+   image: golang 
    commands: 
+    - printf "HELLO\n"
+    - printf "WORLD\n"
     - mkdir build
     - cd build
     - cmake ..
