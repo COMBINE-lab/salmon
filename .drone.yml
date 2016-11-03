@@ -12,3 +12,8 @@
     email:
      recipients:
       - combinelab.sbu@gmail.com
+  build2: 
+   image: ubuntu_16.04:salmon_build
+   commands:
+    - printf "BROKEN\n"
+    - printf "SYSTEM\n"
