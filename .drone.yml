@@ -1,8 +1,9 @@
 pipeline:
   build:
     image: ubuntu_16.04:salmon_build
-    script:
+    commands:
       - echo `pwd`
+    script:
       - ./salmon/.drone/build.sh
     notify:
       email:
