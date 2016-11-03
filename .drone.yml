@@ -4,8 +4,7 @@ pipeline:
     commands:
       - echo "hi"
       - echo `pwd`
-    script:
-      - ./salmon/.drone/build.sh
+      - ./.drone/build.sh
     notify:
       email:
         recipients:
