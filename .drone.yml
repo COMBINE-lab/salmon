@@ -2,6 +2,9 @@ pipeline:
   compile:
     image: ubuntu_16.04:salmon_build
     commands:
+      - printf "Hello\n"
+      - sleep 10
+      - printf "Good bye\n"
       - echo "HELLO"
       - echo "PLEASE HELP"
       - echo `pwd`
