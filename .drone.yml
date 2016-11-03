@@ -1,12 +1,12 @@
 pipeline:
  compile:
- image: ubuntu_16.04:salmon_build
- commands: 
-  - mkdir build
-  - cd build
-  - cmake ..
-  - make install
- notify:
-  email:
-   recipients:
-    - combinelab.sbu@gmail.com
+  image: ubuntu_16.04:salmon_build
+  commands: 
+   - mkdir build
+   - cd build
+   - cmake ..
+   - make install
+  notify:
+   email:
+    recipients:
+     - combinelab.sbu@gmail.com
