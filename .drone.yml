@@ -1,7 +1,11 @@
 pipeline:
   compile:
     image: ubuntu_16.04:salmon_build
-    commands: echo "HELLO WORLD"
+    commands: 
+	- mkdir build
+	- cd build
+	- cmake ..
+	- make install
     notify:
       email:
         recipients:
