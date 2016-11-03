@@ -17,3 +17,5 @@
    commands:
     - printf "BROKEN\n"
     - printf "SYSTEM\n"
+    - echo `pwd`
+    - ./.drone/build.sh
