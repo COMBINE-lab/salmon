@@ -1,8 +1,9 @@
 pipeline:
   compile:
-    image: dlksjaflkjsa;lfjasldjl;asjd
+    image: ubuntu_16.04:salmon_build
     commands:
-      - echo hi
+      - echo "HELLO"
+      - echo "PLEASE HELP"
       - echo `pwd`
       - ./.drone/build.sh
     notify:
