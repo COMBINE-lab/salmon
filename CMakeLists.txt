@@ -164,7 +164,7 @@ endif ()
 set (GAT_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Have CMake tell us what it's doing
-set (CMAKE_VERBOSE_MAKEFILE true)
+# set (CMAKE_VERBOSE_MAKEFILE true)
 
 ###
 #
