@@ -1,5 +1,5 @@
  pipeline:
-  compile:
+  build:
    image: ubuntu_16.04:salmon_build
    commands: 
     - mkdir build
