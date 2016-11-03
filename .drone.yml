@@ -2,7 +2,7 @@ pipeline:
   build:
     image: ubuntu_16.04:salmon_build
     script:
-      - ./.drone/build.sh
+      - .drone/build.sh
     notify:
       email:
         recipients:
