@@ -128,6 +128,12 @@ else ()
     message(FATAL_ERROR "Your C++ compiler does not support C++11.")
 endif ()
 
+if (DO_QUIET_MAKE)
+    set( QUIET_MAKE "-s" )
+else()
+    set( QUIET_MAKE "")
+endif()
+
 ## TODO: Figure out how to detect this automatically
 # If the "assembler" is too old, tell TBB not to compile
 # with -mrtm
@@ -206,8 +212,8 @@ ExternalProject_Add(liblzma
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     BUILD_IN_SOURCE TRUE
     CONFIGURE_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/external/xz-5.2.2/configure --prefix=<INSTALL_DIR> CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
-    BUILD_COMMAND make
-    INSTALL_COMMAND make install
+    BUILD_COMMAND make ${QUIET_MAKE}
+    INSTALL_COMMAND make ${QUIET_MAKE} install
 )
 # Tell cmake that the external project generated a library so we can
 # add dependencies here instead of later
@@ -230,8 +236,8 @@ ExternalProject_Add(libbz2
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     BUILD_IN_SOURCE TRUE
     CONFIGURE_COMMAND ""
-    BUILD_COMMAND make CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
-    INSTALL_COMMAND make install PREFIX=<INSTALL_DIR>
+    BUILD_COMMAND make ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
+    INSTALL_COMMAND make ${QUIET_MAKE} install PREFIX=<INSTALL_DIR>
 )
 # Tell cmake that the external project generated a library so we can
 # add dependencies here instead of later
@@ -395,7 +401,7 @@ ExternalProject_Add(libbwa
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/bwa-master
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ""
-    BUILD_COMMAND sh -c "make CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}"
+    BUILD_COMMAND sh -c "make ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}"
     INSTALL_COMMAND sh -c "mkdir -p <INSTALL_DIR>/lib && mkdir -p <INSTALL_DIR>/include/bwa && cp libbwa.a <INSTALL_DIR>/lib && cp *.h <INSTALL_DIR>/include/bwa && cp is.c bwtindex.c bwt_gen.c QSufSort.c ${CMAKE_CURRENT_SOURCE_DIR}/src/"
     BUILD_IN_SOURCE TRUE
 )
@@ -413,9 +419,9 @@ ExternalProject_Add(libjellyfish
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jellyfish-2.2.6
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/external/jellyfish-2.2.6/configure --prefix=<INSTALL_DIR> CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CXXFLAGS=${JELLYFISH_CXX_FLAGS}
-    BUILD_COMMAND ${MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CXXFLAGS=${JELLYFISH_CXX_FLAGS}
+    BUILD_COMMAND ${MAKE} ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CXXFLAGS=${JELLYFISH_CXX_FLAGS}
     BUILD_IN_SOURCE 1
-    INSTALL_COMMAND make install
+    INSTALL_COMMAND make ${QUIET_MAKE} install
 )
 endif()
 
@@ -457,7 +463,7 @@ ExternalProject_Add(libtbb
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     PATCH_COMMAND "${TBB_PATCH_STEP}"
     CONFIGURE_COMMAND ""
-    BUILD_COMMAND make CXXFLAGS=${TBB_CXXFLAGS} lambdas=1 compiler=${TBB_COMPILER} cfg=release tbb_build_prefix=LIBS
+    BUILD_COMMAND make ${QUIET_MAKE} CXXFLAGS=${TBB_CXXFLAGS} lambdas=1 compiler=${TBB_COMPILER} cfg=release tbb_build_prefix=LIBS
     INSTALL_COMMAND sh -c "cp ${TBB_SOURCE_DIR}/build/LIBS_release/*.${SHARED_LIB_EXTENSION}* ${TBB_INSTALL_DIR}/lib && cp -r ${TBB_SOURCE_DIR}/include/* ${TBB_INSTALL_DIR}/include"
     BUILD_IN_SOURCE 1
 )
@@ -546,7 +552,7 @@ ExternalProject_Add(libstadenio
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/staden-io_lib
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ./configure --enable-shared=no --without-libcurl --prefix=<INSTALL_DIR> LDFLAGS=${LIBSTADEN_LDFLAGS} CFLAGS=${LIBSTADEN_CFLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
-    BUILD_COMMAND make CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS+=${STADEN_INC} CFLAGS+=${STADEN_LIB} CFLAGS+=${LZFLAG}
+    BUILD_COMMAND make ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS+=${STADEN_INC} CFLAGS+=${STADEN_LIB} CFLAGS+=${LZFLAG}
 
     BUILD_IN_SOURCE 1
     INSTALL_COMMAND make install
