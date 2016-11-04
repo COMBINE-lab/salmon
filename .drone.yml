@@ -7,7 +7,9 @@
   test:
    image: hbb:salmon_build
    commands:
-    - echo "Testing"
+    - echo "[Testing indexing]"
     - ./bin/salmon -h
+    - mkdir testing
+    - ./bin/salmon index -t (curl --keepalive-time 4 -s ftp://ftp.sanger.ac.uk/pub/gencode/Gencode_human/release_25/gencode.v25.pc_transcripts.fa.gz | gunzip -c) -o testing/idx
   notify_gitter:
     image: plugins/gitter
