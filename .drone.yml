@@ -4,5 +4,10 @@
    commands:
     - echo "Starting build"
     - ./.drone/build.sh
+  test:
+   image: hbb:salmon_build
+   commands:
+    - echo "Testing"
+    - ./bin/salmon -h
   notify_gitter:
     image: plugins/gitter
