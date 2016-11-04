@@ -4,3 +4,7 @@
    commands:
     - echo "Starting build"
     - ./.drone/build.sh
+  gitter:
+    image: plugins/gitter
+      webhook: ${GITTER_WEBHOOK}
+   
