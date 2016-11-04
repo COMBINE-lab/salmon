@@ -4,12 +4,13 @@
    commands:
     - echo "Starting build"
     - ./.drone/build.sh
-  test:
+  test_indexing:
    image: hbb:salmon_build
    commands:
     - echo "[Testing indexing]"
     - ./bin/salmon -h
     - mkdir testing
-    - ./bin/salmon index -t (curl --keepalive-time 4 -s ftp://ftp.sanger.ac.uk/pub/gencode/Gencode_human/release_25/gencode.v25.pc_transcripts.fa.gz | gunzip -c) -o testing/idx
+    - wget ftp://ftp.sanger.ac.uk/pub/gencode/Gencode_human/release_25/gencode.v25.pc_transcripts.fa.gz 
+    - ./bin/salmon index -t gencode.v25.pc_transcripts.fa.gz -i testing/idx
   notify_gitter:
     image: plugins/gitter
