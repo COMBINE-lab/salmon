@@ -4,5 +4,5 @@
    commands:
     - echo "Starting build"
     - ./.drone/build.sh
-  notify_via_gitter:
+  notify_gitter:
     image: plugins/gitter
