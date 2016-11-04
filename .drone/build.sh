@@ -1,4 +1,6 @@
 #!/bin/bash
+source /hbb_exe/activate
+
 set -e
 
 CPATH=`pwd`
