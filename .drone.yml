@@ -7,10 +7,9 @@
   test_indexing:
    image: hbb:salmon_build
    commands:
-    - echo "[Testing indexing]"
-    - ./bin/salmon -h
-    - mkdir testing
-    - wget ftp://ftp.sanger.ac.uk/pub/gencode/Gencode_human/release_25/gencode.v25.pc_transcripts.fa.gz 
-    - ./bin/salmon index -t gencode.v25.pc_transcripts.fa.gz -i testing/idx
+    - echo "[Testing quant]"
+    - ./.drone/test_quant.sh 
+   volumes:
+    - /mnt/scratch6/avi/data:/mnt/data
   notify_gitter:
     image: plugins/gitter
