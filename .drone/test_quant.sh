@@ -23,5 +23,5 @@ fi
 echo "[Drone test] echoing quants here"
 grep "spearman" sim/*.json
 
-mkdir -p "/mnt/data/${DRONE_REPO}/${DRONE_REPO_BRANCH}/${DRONE_COMMIT_SHA}"
-cp -r sim "/mnt/data/${DRONE_REPO}/${DRONE_REPO_BRANCH}/${DRONE_COMMIT_SHA}/"
+mkdir -p "/mnt/ci_res/${DRONE_REPO}/${DRONE_REPO_BRANCH}/${DRONE_COMMIT_SHA}"
+cp -r sim "/mnt/ci_res/${DRONE_REPO}/${DRONE_REPO_BRANCH}/${DRONE_COMMIT_SHA}/"
