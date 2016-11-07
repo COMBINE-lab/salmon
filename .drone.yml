@@ -11,5 +11,12 @@
     - ./.drone/test_quant.sh 
    volumes:
     - /mnt/scratch6/avi/data:/mnt/data
+  copy_build:
+    image: hbb:salmon_build
+    commands:
+     - echo "[Packaging binary]"
+     - ./.drone/copy_build.sh
+    volumes:
+     - /mnt/scratch6/avi/data:/mnt/data
   notify_gitter:
     image: plugins/gitter

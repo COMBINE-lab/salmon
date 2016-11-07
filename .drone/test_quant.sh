@@ -13,7 +13,15 @@ export PYTHONPATH=/root/miniconda2/lib/python2.7/site-packages
 echo "[Drone test] run nextflow pipeline"
 
 nextflow tests/test_quant.nf
+# store the nextflow return value
+nextflowret=$?
+if [ $nextflowret -ne 0 ]; then
+    echo "[Drone test]: nextflow pipeline test_quant.nf failed!"
+    exit 1
+fi
 
 echo "[Drone test] echoing quants here"
-
 grep "spearman" sim/*.json
+
+mkdir -p "/mnt/data/${DRONE_REPO}/${DRONE_REPO_BRANCH}/${DRONE_COMMIT_SHA}"
+cp -r sim "/mnt/data/${DRONE_REPO}/${DRONE_REPO_BRANCH}/${DRONE_COMMIT_SHA}/"
