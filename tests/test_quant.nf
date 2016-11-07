@@ -1,10 +1,10 @@
 #!/usr/bin/env nextflow
 
-params.salmon = './bin/salmon'
+params.salmon = '$PWD/bin/salmon'
 ref = file('/mnt/data/simulated/sim/Homo_sapiens.GRCh37.75.cdna.pc.fa')
 truthpath = file('/mnt/data/simulated/sim/truth')
 basepath = Channel.from('/mnt/data/simulated/sim/out/out')
-scriptdir = file('scripts')
+scriptdir = file('$PWD/scripts')
 resdir = './'
 conds = ['A', 'B']
 samples = [1, 2]
