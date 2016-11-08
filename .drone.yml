@@ -22,3 +22,5 @@
      - /mnt/scratch6/salmon_ci:/mnt/ci_res
   notify_gitter:
     image: plugins/gitter
+    commands:
+     - echo "[Notifying gitter]"
