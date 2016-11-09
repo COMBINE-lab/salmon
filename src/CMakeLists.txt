@@ -108,42 +108,6 @@ endif()
 # Build the Salmon library
 add_library(salmon_core STATIC ${SALMON_LIB_SRCS} )
 
-##
-# External dependencies of salmon_core
-##
-if (${FETCHED_JEMALLOC})
-   add_dependencies(salmon_core libjemalloc)
-   add_dependencies(salmon libjemalloc)
-endif()
-
-if (${FETCHED_BOOST})
-   add_dependencies(salmon_core libboost)
-   add_dependencies(salmon libboost)
-endif()
-
-if (${FETCHED_JELLYFISH})
-   add_dependencies(salmon_core libjellyfish)
-   add_dependencies(salmon libjellyfish)
-endif()
-
-if (${FETCHED_TBB})
-   add_dependencies(salmon_core libtbb)
-   add_dependencies(salmon libtbb)
-endif()
-
-add_dependencies(salmon_core libcereal)
-add_dependencies(salmon libcereal)
-add_dependencies(salmon_core libstadenio)
-add_dependencies(salmon libstadenio)
-add_dependencies(salmon_core libspdlog)
-add_dependencies(salmon libspdlog)
-add_dependencies(salmon_core libbwa)
-add_dependencies(salmon libbwa)
-add_dependencies(salmon_core libgff)
-add_dependencies(salmon libgff)
-add_dependencies(salmon_core libdivsufsort)
-add_dependencies(salmon libdivsufsort)
-
 
 # Build the salmon executable
 add_executable(salmon ${SALMON_MAIN_SRCS} ${SALMON_ALIGN_SRCS})
@@ -183,7 +147,41 @@ target_link_libraries(salmon
     ${LIBRT}
 )
 
-#add_dependencies(salmon libbwa)
+##
+# External dependencies of salmon_core and salmon
+##
+if (${FETCHED_JEMALLOC})
+   add_dependencies(salmon_core libjemalloc)
+   add_dependencies(salmon libjemalloc)
+endif()
+
+if (${FETCHED_BOOST})
+   add_dependencies(salmon_core libboost)
+   add_dependencies(salmon libboost)
+endif()
+
+if (${FETCHED_JELLYFISH})
+   add_dependencies(salmon_core libjellyfish)
+   add_dependencies(salmon libjellyfish)
+endif()
+
+if (${FETCHED_TBB})
+   add_dependencies(salmon_core libtbb)
+   add_dependencies(salmon libtbb)
+endif()
+
+add_dependencies(salmon_core libcereal)
+add_dependencies(salmon libcereal)
+add_dependencies(salmon_core libstadenio)
+add_dependencies(salmon libstadenio)
+add_dependencies(salmon_core libspdlog)
+add_dependencies(salmon libspdlog)
+add_dependencies(salmon_core libbwa)
+add_dependencies(salmon libbwa)
+add_dependencies(salmon_core libgff)
+add_dependencies(salmon libgff)
+add_dependencies(salmon_core libdivsufsort)
+add_dependencies(salmon libdivsufsort)
 
 # Link the executable
 target_link_libraries(unitTests
