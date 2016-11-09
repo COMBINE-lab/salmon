@@ -57,7 +57,7 @@ set( BOOST_EXTRA_FLAGS "--layout=tagged" )
 set (NON_APPLECLANG_LIBS gomp rt)
 
 if(UNIX AND NOT APPLE)
-	target_link_libraries(LIBRT rt)
+	set(LIBRT rt)
 endif()
 
 set (PTHREAD_LIB)
