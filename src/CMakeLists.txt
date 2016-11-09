@@ -156,6 +156,29 @@ target_link_libraries(salmon
     ${LIBRT}
 )
 
+if (${FETCHED_JEMALLOC})
+   add_dependencies(salmon libjemalloc)
+endif()
+
+if (${FETCHED_BOOST})
+   add_dependencies(salmon libboost)
+endif()
+
+if (${FETCHED_JELLYFISH})
+   add_dependencies(salmon libjellyfish)
+endif()
+
+if (${FETCHED_TBB})
+   add_dependencies(salmon libtbb)
+endif()
+
+add_dependencies(salmon libcereal)
+add_dependencies(salmon libstadenio)
+add_dependencies(salmon libbwa)
+add_dependencies(salmon libgff)
+add_dependencies(salmon libdivsufsort)
+
+
 #add_dependencies(salmon libbwa)
 
 # Link the executable
@@ -179,6 +202,8 @@ target_link_libraries(unitTests
     ${FAST_MALLOC_LIB}
     ${LIBRT}
     )
+
+add_dependencies(salmon unitTests)
 
 ### No need for this, I think
 ##  This ensures that the salmon executable should work with or without `make install`

@@ -220,11 +220,13 @@ ExternalProject_Add(liblzma
     BUILD_COMMAND make ${QUIET_MAKE}
     INSTALL_COMMAND make ${QUIET_MAKE} install
 )
+
 # Tell cmake that the external project generated a library so we can
 # add dependencies here instead of later
 set (LIBLZMA_LIBRARIES ${GAT_SOURCE_DIR}/external/install/lib/liblzma.a)
 set (LIBSTADEN_LDFLAGS "-L${GAT_SOURCE_DIR}/external/install/lib")
 set (LIBSTADEN_CFLAGS "-I${GAT_SOURCE_DIR}/external/install/include")
+set (FETCHED_LIBLZMA TRUE)
 else()
     message("Found liblzma library: ${LIBLZMA_LIBRARIES}")
     message("===========================================")
@@ -249,6 +251,7 @@ ExternalProject_Add(libbz2
 set (BZIP2_LIBRARIES ${GAT_SOURCE_DIR}/external/install/lib/libbz2.a)
 set (LIBSTADEN_LDFLAGS "-L${GAT_SOURCE_DIR}/external/install/lib -I${GAT_SOURCE_DIR}/external/install/include")
 set (LIBSTADEN_CFLAGS "-I${GAT_SOURCE_DIR}/external/install/include")
+set (FETCHED_LIBBZ2 TRUE)
 else()
     message("Found libbz2 library: ${BZIP2_LIBRARIES}")
     message("===========================================")
@@ -332,6 +335,7 @@ elseif(FETCH_BOOST)
         COMMAND ${CMAKE_COMMAND} ${CMAKE_CURRENT_SOURCE_DIR} ${RECONFIG_FLAGS}
         DEPENDEES install
     )
+    set (FETCHED_BOOST TRUE)
 endif()
 
 ##
@@ -371,8 +375,9 @@ ExternalProject_Add_Step(libdivsufsort makedir
   COMMENT "Make build directory"
   DEPENDEES download 
   DEPENDERS configure)
-  
+ 
 set(SUFFARRAY_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
+
 
 message("Build system will fetch and build the Cereal serialization library")
 message("==================================================================")
@@ -394,7 +399,7 @@ ExternalProject_Add_Step(libcereal makedir
   COMMENT "Make build directory"
   DEPENDEES download 
   DEPENDERS configure)
-  
+
 message("Build system will fetch and build BWA (for Salmon)")
 message("==================================================================")
 include(ExternalProject)
@@ -428,6 +433,7 @@ ExternalProject_Add(libjellyfish
     BUILD_IN_SOURCE 1
     INSTALL_COMMAND make ${QUIET_MAKE} install
 )
+set (FETCHED_JELLYFISH TRUE)
 endif()
 
 find_package(TBB)
@@ -478,6 +484,8 @@ ExternalProject_Add_Step(libtbb reconfigure
         COMMAND ${CMAKE_COMMAND} ${CMAKE_CURRENT_SOURCE_DIR} ${RECONFIG_FLAGS}
         DEPENDEES install
 )
+
+set (FETCHED_TBB TRUE)
 endif()
 
 ##
@@ -530,7 +538,6 @@ ExternalProject_Add_Step(libgff makedir
   COMMENT "Make build directory"
   DEPENDEES download 
   DEPENDERS configure)
-  
 
 # Because of the way that Apple has changed SIP
 # in el capitan, some headers may be in a new location
@@ -623,6 +630,15 @@ if (NOT HAVE_FAST_MALLOC)
 
     set (FAST_MALLOC_LIB ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib/libjemalloc.a)
     set (HAVE_FAST_MALLOC TRUE)
+    set (FETCHED_JEMALLOC TRUE)
+    if (FETCHED_LIBBZ2)
+       add_dependencies(libjemalloc libbz2)
+    endif()
+
+    if (FETCHED_LIBLZMA)
+       add_dependencies(libjemalloc liblzma)
+    endif()
+
 endif ()
 
 
