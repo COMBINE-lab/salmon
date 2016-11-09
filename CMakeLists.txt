@@ -55,6 +55,11 @@ set( BOOST_EXTRA_FLAGS "--layout=tagged" )
 ## this get's set differently below if we
 ## are on clang & apple
 set (NON_APPLECLANG_LIBS gomp rt)
+
+if(UNIX AND NOT APPLE)
+	target_link_libraries(LIBRT rt)
+endif()
+
 set (PTHREAD_LIB)
 
 ##

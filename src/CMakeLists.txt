@@ -153,6 +153,7 @@ target_link_libraries(salmon
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
     ${FAST_MALLOC_LIB}
+    ${LIBRT}
 )
 
 #add_dependencies(salmon libbwa)
@@ -176,7 +177,6 @@ target_link_libraries(unitTests
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
     ${FAST_MALLOC_LIB}
-    rt
     )
 
 ### No need for this, I think
