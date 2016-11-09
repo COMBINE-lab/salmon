@@ -174,6 +174,7 @@ endif()
 
 add_dependencies(salmon libcereal)
 add_dependencies(salmon libstadenio)
+add_dependencies(salmon libspdlog)
 add_dependencies(salmon libbwa)
 add_dependencies(salmon libgff)
 add_dependencies(salmon libdivsufsort)
