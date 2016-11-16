@@ -143,6 +143,19 @@ Creates a salmon index.
         string transcriptFile = vm["transcripts"].as<string>();
         bfs::path indexDirectory(vm["index"].as<string>());
 
+        // Check that the transcriptome file exists
+        if (!bfs::exists(transcriptFile)) {
+          std::cerr << "The file [" << transcriptFile << "] provided for the transcriptome "
+                    << "does not appear to exist.";
+          std::exit(1);
+        }
+        // and is not a directory
+        if (bfs::is_directory(transcriptFile)) {
+          std::cerr << "The provided transcriptome argument [" << transcriptFile << "] appears to be a directory; "
+                    << "please provide a file.";
+          std::exit(1);
+        }
+
         if (!bfs::exists(indexDirectory)) {
             std::cerr << "index [" << indexDirectory << "] did not previously exist "
                       << " . . . creating it\n";

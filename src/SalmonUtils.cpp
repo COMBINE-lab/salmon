@@ -983,6 +983,10 @@ TranscriptGeneMap transcriptGeneMapFromGTF(const std::string& fname,
   using std::string;
   using std::get;
 
+  // Get the logger
+  auto logger = spdlog::get("jointLog");
+
+
   // Use GffReader to read the file
   GffReader reader(const_cast<char*>(fname.c_str()));
   // Remember the optional attributes
@@ -996,7 +1000,7 @@ TranscriptGeneMap transcriptGeneMapFromGTF(const std::string& fname,
   };
 
   // The user can group transcripts by gene_id, gene_name, or
-  // an optinal attribute that they provide as a string.
+  // an optional attribute that they provide as a string.
   enum class TranscriptKey { GENE_ID, GENE_NAME, DYNAMIC };
 
   // Select the proper attribute by which to group
@@ -1028,7 +1032,17 @@ TranscriptGeneMap transcriptGeneMapFromGTF(const std::string& fname,
         keyStr = f->getAttr(key.c_str());
         break;
       }
-      feats.emplace_back(f->getID(), keyStr);
+      if (keyStr != NULL and f->hasGffID()) {
+        feats.emplace_back(f->getID(), keyStr);
+      } else {
+        if (!f->hasGffID()){
+          logger->warn("Feature has no GFF ID");
+        }
+        if (keyStr == NULL) {
+          const char* fid = f->hasGffID() ? f->getID() : "NO_GFF_ID";
+          logger->warn("Could not find key for feature {}", fid);
+        }
+      }
     }
   }
 
