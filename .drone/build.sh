@@ -16,4 +16,4 @@ cmake -DDO_QUIET_MAKE=TRUE ..
 
 echo "[Drone build] making salmon and installing locally (this could take a while)"
 
-make -s install
+make -j8 -s install

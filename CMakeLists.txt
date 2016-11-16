@@ -55,6 +55,11 @@ set( BOOST_EXTRA_FLAGS "--layout=tagged" )
 ## this get's set differently below if we
 ## are on clang & apple
 set (NON_APPLECLANG_LIBS gomp rt)
+
+if(UNIX AND NOT APPLE)
+	set(LIBRT rt)
+endif()
+
 set (PTHREAD_LIB)
 
 ##
@@ -215,11 +220,13 @@ ExternalProject_Add(liblzma
     BUILD_COMMAND make ${QUIET_MAKE}
     INSTALL_COMMAND make ${QUIET_MAKE} install
 )
+
 # Tell cmake that the external project generated a library so we can
 # add dependencies here instead of later
 set (LIBLZMA_LIBRARIES ${GAT_SOURCE_DIR}/external/install/lib/liblzma.a)
 set (LIBSTADEN_LDFLAGS "-L${GAT_SOURCE_DIR}/external/install/lib")
 set (LIBSTADEN_CFLAGS "-I${GAT_SOURCE_DIR}/external/install/include")
+set (FETCHED_LIBLZMA TRUE)
 else()
     message("Found liblzma library: ${LIBLZMA_LIBRARIES}")
     message("===========================================")
@@ -244,6 +251,7 @@ ExternalProject_Add(libbz2
 set (BZIP2_LIBRARIES ${GAT_SOURCE_DIR}/external/install/lib/libbz2.a)
 set (LIBSTADEN_LDFLAGS "-L${GAT_SOURCE_DIR}/external/install/lib -I${GAT_SOURCE_DIR}/external/install/include")
 set (LIBSTADEN_CFLAGS "-I${GAT_SOURCE_DIR}/external/install/include")
+set (FETCHED_LIBBZ2 TRUE)
 else()
     message("Found libbz2 library: ${BZIP2_LIBRARIES}")
     message("===========================================")
@@ -327,6 +335,7 @@ elseif(FETCH_BOOST)
         COMMAND ${CMAKE_COMMAND} ${CMAKE_CURRENT_SOURCE_DIR} ${RECONFIG_FLAGS}
         DEPENDEES install
     )
+    set (FETCHED_BOOST TRUE)
 endif()
 
 ##
@@ -366,8 +375,9 @@ ExternalProject_Add_Step(libdivsufsort makedir
   COMMENT "Make build directory"
   DEPENDEES download 
   DEPENDERS configure)
-  
+ 
 set(SUFFARRAY_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
+
 
 message("Build system will fetch and build the Cereal serialization library")
 message("==================================================================")
@@ -389,7 +399,7 @@ ExternalProject_Add_Step(libcereal makedir
   COMMENT "Make build directory"
   DEPENDEES download 
   DEPENDERS configure)
-  
+
 message("Build system will fetch and build BWA (for Salmon)")
 message("==================================================================")
 include(ExternalProject)
@@ -423,6 +433,7 @@ ExternalProject_Add(libjellyfish
     BUILD_IN_SOURCE 1
     INSTALL_COMMAND make ${QUIET_MAKE} install
 )
+set (FETCHED_JELLYFISH TRUE)
 endif()
 
 find_package(TBB)
@@ -473,6 +484,8 @@ ExternalProject_Add_Step(libtbb reconfigure
         COMMAND ${CMAKE_COMMAND} ${CMAKE_CURRENT_SOURCE_DIR} ${RECONFIG_FLAGS}
         DEPENDEES install
 )
+
+set (FETCHED_TBB TRUE)
 endif()
 
 ##
@@ -525,7 +538,6 @@ ExternalProject_Add_Step(libgff makedir
   COMMENT "Make build directory"
   DEPENDEES download 
   DEPENDERS configure)
-  
 
 # Because of the way that Apple has changed SIP
 # in el capitan, some headers may be in a new location
@@ -607,9 +619,9 @@ if (NOT HAVE_FAST_MALLOC)
     message("==================================================================")
     ExternalProject_Add(libjemalloc
         DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-        DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/jemalloc/archive/4.0.4.tar.gz -o jemalloc-4.0.4.tar.gz &&
-        tar -xzf jemalloc-4.0.4.tar.gz
-        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-4.0.4
+        DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/jemalloc/archive/4.3.1.tar.gz -o jemalloc-4.3.1.tar.gz &&
+        tar -xzf jemalloc-4.3.1.tar.gz
+        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-4.3.1
         BUILD_IN_SOURCE TRUE
         INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
         CONFIGURE_COMMAND sh -c "${JEMALLOC_FLAGS} ./autogen.sh --prefix=<INSTALL_DIR>"
@@ -618,6 +630,15 @@ if (NOT HAVE_FAST_MALLOC)
 
     set (FAST_MALLOC_LIB ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib/libjemalloc.a)
     set (HAVE_FAST_MALLOC TRUE)
+    set (FETCHED_JEMALLOC TRUE)
+    if (FETCHED_LIBBZ2)
+       add_dependencies(libjemalloc libbz2)
+    endif()
+
+    if (FETCHED_LIBLZMA)
+       add_dependencies(libjemalloc liblzma)
+    endif()
+
 endif ()
 
 
