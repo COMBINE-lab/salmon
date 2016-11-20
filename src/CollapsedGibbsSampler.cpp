@@ -41,7 +41,8 @@ constexpr double minWeight = std::numeric_limits<double>::denorm_min();
 void initCountMap_(
         std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
         std::vector<Transcript>& transcriptsIn,
-        double priorAlpha,
+        const std::vector<double>& alphasIn,
+        const std::vector<double>& priorAlphas,
         MultinomialSampler& msamp,
         std::vector<uint64_t>& countMap,
         std::vector<double>& probMap,
@@ -62,31 +63,31 @@ void initCountMap_(
             double denom = 0.0;
             if (BOOST_LIKELY(groupSize > 1)) {
 
+              for (size_t i = 0; i < groupSize; ++i) {
+                auto tid = txps[i];
+                auto aux = auxs[i];
+                denom += (priorAlphas[tid] + alphasIn[tid]) * aux;
+                countMap[offset + i] = 0;
+              }
+
+              if (denom > ::minEQClassWeight) {
+                // Get the multinomial probabilities
+                double norm = 1.0 / denom;
                 for (size_t i = 0; i < groupSize; ++i) {
-                    auto tid = txps[i];
-                    auto aux = auxs[i];
-                    denom += (priorAlpha + transcriptsIn[tid].mass(false)) * aux;
-                    countMap[offset + i] = 0;
+                  auto tid = txps[i];
+                  auto aux = auxs[i];
+                  probMap[offset + i] = norm *
+                    ((priorAlphas[tid] + alphasIn[tid]) * aux);
                 }
 
-		if (denom > ::minEQClassWeight) {
-	   	   // Get the multinomial probabilities
-		   double norm = 1.0 / denom;
-		   for (size_t i = 0; i < groupSize; ++i) {
-		     auto tid = txps[i];
-		     auto aux = auxs[i];
-		     probMap[offset + i] = norm *
-                        ((priorAlpha + transcriptsIn[tid].mass(false)) * aux);
-		    }
-
-	   	    // re-sample
-	            msamp(countMap.begin() + offset,
+                // re-sample
+                msamp(countMap.begin() + offset,
                       classCount,
                       groupSize,
                       probMap.begin() + offset);
-		}
+              }
             } else {
-                countMap[offset] = classCount;
+              countMap[offset] = classCount;
             }
 
 
@@ -100,12 +101,118 @@ void initCountMap_(
     } // loop over all eq classes
 }
 
+
+/**
+ * This non-collapsed Gibbs step is largely inspired by the method first introduced by
+ * Turro et al. [1].  Given the current estimates `txpCount` of the read count for each transcript,
+ * the mean transcript fractions are sampled from a Gamma distribution
+ * ~ Gam( prior[i] + txpCount[i], \Beta + effLens[i]).  Then, given these transcript fractions,
+ * The reads are re-assigned within each equivalence class by sampling from a multinomial
+ * distributed according to these means.
+ *
+ * [1] Haplotype and isoform specific expression estimation using multi-mapping RNA-seq reads.
+ * Turro E, Su S-Y, Goncalves A, Coin L, Richardson S and Lewin A. Genome Biology, 2011 Feb; 12:R13.
+ * doi: 10.1186/gb-2011-12-2-r13.
+ **/
+void sampleRoundNonCollapsed_(
+        std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
+        std::vector<uint64_t>& countMap,
+        std::vector<double>& probMap,
+        Eigen::VectorXd& effLens,
+        const std::vector<double>& priorAlphas,
+        std::vector<int>& txpCount,
+        MultinomialSampler& msamp) {
+  std::random_device rd;
+  std::mt19937 gen(rd());
+    // offset for 2d to 1d count map
+    size_t offset{0};
+
+    //retain original txp count
+    std::vector<int> origTxpCount = txpCount;
+
+    //reset txpCounts to zero
+    std::fill(txpCount.begin(), txpCount.end(), 0);
+
+    //generate norm. coeff for \mu from \alpha (countMap)
+    std::vector<double> muGlobal(txpCount.size(), 0.0);
+    double beta = 0.1;
+    double norm = 0.0;
+    for (size_t i = 0; i < origTxpCount.size(); ++i){
+      std::gamma_distribution<double> d(origTxpCount[i] + priorAlphas[i], 1.0 / (beta + effLens(i)));
+      muGlobal[i] = d(gen);
+    }
+
+    for (auto& eqClass : eqVec) {
+        // get total number of reads for an equivalence class
+        uint64_t classCount = eqClass.second.count;
+
+        // for each transcript in this class
+        const TranscriptGroup& tgroup = eqClass.first;
+        const size_t groupSize = tgroup.txps.size();
+        if (tgroup.valid) {
+            const std::vector<uint32_t>& txps = tgroup.txps;
+            const auto& auxs = eqClass.second.combinedWeights;
+
+            double denom = 0.0;
+            // If this is a single-transcript group,
+            // then it gets the full count --- otherwise,
+            // sample!
+            if (BOOST_LIKELY(groupSize > 1)) {
+
+                std::vector<uint64_t> txpResamp(groupSize);
+                std::vector<double> mu(groupSize);
+
+                // For each transcript in the group
+                double muSum = 0.0;
+                for (size_t i = 0; i < groupSize; ++i) {
+                    auto tid = txps[i];
+                    auto aux = auxs[i];
+                    //mu[i] = (origTxpCount[tid]+priorAlpha) * aux;
+                    mu[i] = muGlobal[tid];
+                    muSum += mu[i]; 
+                    denom += (priorAlphas[tid] + origTxpCount[tid]) * aux;
+                }
+
+                //calculate prob vector
+                for (size_t i = 0; i < groupSize; ++i) {
+                    probMap[offset + i] = mu[i]/muSum;
+                    txpResamp[i] = 0.0;
+                }
+
+                if (denom > ::minEQClassWeight) {
+                    // re-sample
+                    msamp(txpResamp.begin(),                    // count array to fill in
+                            classCount,                         // multinomial n
+                            groupSize,		                    // multinomial k
+                            probMap.begin() + offset            // where to find multinomial probs
+                         );
+
+                    for (size_t i = 0; i < groupSize; ++i) {
+                        auto tid = txps.at(i);
+                        txpCount.at(tid) += txpResamp.at(i);
+                        //txpCount.at(tid) -= countMap.at(offset + i);
+                        //countMap.at(offset + i) = txpResamp.at(i);
+                    }
+                }//do nothing when denom less than minEQClassWeight
+                else{
+                    std::cerr<<"minEQClassWeight error";
+                }
+            }//do nothing if group size less than 2
+            else{
+                 auto tid = txps.at(0);
+                 txpCount.at(tid) += countMap.at(offset);
+            }
+            offset += groupSize;
+        }// valid group
+    }// loop over all eq classes
+}
+
 void sampleRound_(
         std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
         std::vector<uint64_t>& countMap,
         std::vector<double>& probMap,
         Eigen::VectorXd& effLens,
-        double priorAlpha,
+        const std::vector<double>& priorAlphas,
         std::vector<int>& txpCount,
         MultinomialSampler& msamp) {
 
@@ -152,7 +259,7 @@ void sampleRound_(
                     txpResamp[i] = currResamp;
                     txpCount[tid] -= currResamp;
                     countMap[offset + i] -= currResamp;
-                    denom += (priorAlpha + txpCount[tid]) * aux;
+                    denom += (priorAlphas[tid] + txpCount[tid]) * aux;
                 }
 
                 if (denom > ::minEQClassWeight) {
@@ -161,7 +268,7 @@ void sampleRound_(
                     for (size_t i = 0; i < groupSize; ++i) {
                         auto tid = txps[i];
                         auto aux = auxs[i];
-                        probMap[offset + i] = norm * ((priorAlpha + txpCount[tid]) * aux);
+                        probMap[offset + i] = norm * ((priorAlphas[tid] + txpCount[tid]) * aux);
                     }
 
                     // re-sample
@@ -203,6 +310,30 @@ class DistStats {
 	double maxVal;
 };
 
+/**
+ *  Populate the prior parameters for the VBEM
+ *  Note: effLens *must* be valid before calling this function.
+ */
+// Get rid of redundancy of this function
+std::vector<double> populatePriorAlphasGibbs_(
+                                         std::vector<Transcript>& transcripts, // transcripts
+                                         Eigen::VectorXd& effLens, // current effective length estimate
+                                         double priorValue,        // the per-nucleotide prior value to use
+                                         bool perTranscriptPrior   // true if prior is per-txp, else per-nucleotide
+                                         ) {
+    // start out with the per-txp prior
+    std::vector<double> priorAlphas(transcripts.size(), priorValue);
+
+    // If the prior is per-nucleotide (default, then we need a potentially different
+    // value for each transcript based on its length).
+    if (!perTranscriptPrior) {
+        for (size_t i = 0; i < transcripts.size(); ++i) {
+            priorAlphas[i] = priorValue * effLens(i); 
+        }
+    }
+    return priorAlphas;
+}
+
 template <typename ExpT>
 bool CollapsedGibbsSampler::sample(ExpT& readExp,
         SalmonOpts& sopt,
@@ -224,20 +355,26 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
 
     std::vector<std::vector<int>> allSamples(numSamples,
                                         std::vector<int>(transcripts.size(),0));
-    double priorAlpha = 1e-8;
+
+    bool perTranscriptPrior = (sopt.useVBOpt) ? sopt.perTranscriptPrior : true;
+    double priorValue = (sopt.useVBOpt) ? sopt.vbPrior : 1e-8;
+    std::vector<double> priorAlphas = populatePriorAlphasGibbs_(transcripts, effLens, priorValue, perTranscriptPrior);
+    std::vector<double> alphasIn(priorAlphas.size(), 0.0);
+
     bool useScaledCounts = (!sopt.useQuasi and !sopt.allowOrphans);
     auto numMappedFragments = (useScaledCounts) ? readExp.upperBoundHits() : readExp.numMappedFragments();
-
+    uint32_t numInternalRounds = sopt.thinningFactor;
 
     for (size_t i = 0; i < transcripts.size(); ++i) {
         auto& txp = transcripts[i];
-        txp.setMass(priorAlpha + (txp.mass(false) * numMappedFragments));
+        //txp.setMass(priorAlphas[i] + (txp.mass(false) * numMappedFragments));
+        alphasIn[i] = txp.mass(false) * numMappedFragments;
         effLens(i) = txp.EffectiveLength;
     }
 
     tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(numSamples)),
-                [&eqVec, &transcripts, priorAlpha, &effLens,
-                 &allSamples, &writeBootstrap, useScaledCounts,
+                 [&eqVec, &transcripts, &alphasIn, &priorAlphas, &effLens,
+                  &allSamples, &writeBootstrap, useScaledCounts, numInternalRounds,
                  &jointLog, numMappedFragments]( const BlockedIndexRange& range) -> void {
 
 
@@ -258,11 +395,10 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
                 std::vector<uint64_t> countMap(countMapSize, 0);
                 std::vector<double> probMap(countMapSize, 0.0);
 
-                initCountMap_(eqVec, transcripts, priorAlpha, ms, countMap, probMap, effLens, allSamples[range.begin()]);
+                initCountMap_(eqVec, transcripts, alphasIn, priorAlphas, ms, countMap, probMap, effLens, allSamples[range.begin()]);
 
                 // For each sample this thread should generate
                 bool isFirstSample{true};
-                bool numInternalRounds = 10;
                 for (auto sampleID : boost::irange(range.begin(), range.end())) {
                     if (sampleID % 100 == 0) {
                         std::cerr << "gibbs sampling " << sampleID << "\n";
@@ -275,7 +411,7 @@ bool CollapsedGibbsSampler::sample(ExpT& readExp,
 
                     // Thin the chain by a factor of (numInternalRounds)
                     for (size_t i = 0; i < numInternalRounds; ++i){
-                        sampleRound_(eqVec, countMap, probMap, effLens, priorAlpha,
+                      sampleRoundNonCollapsed_(eqVec, countMap, probMap, effLens, priorAlphas,
                                 allSamples[sampleID], ms);
                     }
 

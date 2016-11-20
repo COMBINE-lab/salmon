@@ -2294,6 +2294,13 @@ int salmonQuantify(int argc, char* argv[]) {
      "Number of bootstrap samples to generate. Note: "
      "This is mutually exclusive with Gibbs sampling.")
     (
+     "thinningFactor",
+     po::value<uint32_t>(&(sopt.thinningFactor))->default_value(16),
+     "Number of steps to discard for every sample kept from the Gibbs chain. "
+     "The larger this number, the less chance that subsequent samples are "
+     "auto-correlated, but the slower sampling becomes."
+    )
+    (
      "quiet,q", po::bool_switch(&(sopt.quiet))->default_value(false),
      "Be quiet while doing quantification (don't write informative "
      "output to the console unless something goes wrong).")

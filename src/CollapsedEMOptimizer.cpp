@@ -611,7 +611,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
   jointLog->info("Will draw {} bootstrap samples", numBootstraps);
   jointLog->info("Optimizing over {} equivalence classes", eqVec.size());
 
-  double totalNumFrags{static_cast<double>(readExp.numMappedFragments())};
+  double totalNumFrags{static_cast<double>(numMappedFrags)};
   double totalLen{0.0};
 
   if (activeTranscriptIDs.size() == 0) {

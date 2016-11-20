@@ -1318,7 +1318,10 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     ("numGibbsSamples", po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0), "Number of Gibbs sampling rounds to "
      "perform.")
     ("numBootstraps", po::value<uint32_t>(&(sopt.numBootstraps))->default_value(0), "Number of bootstrap samples to generate. Note: "
-      "This is mutually exclusive with Gibbs sampling.");
+      "This is mutually exclusive with Gibbs sampling.")
+    ("thinningFactor", po::value<uint32_t>(&(sopt.thinningFactor))->default_value(16), "Number of steps to discard for every sample "
+       "kept from the Gibbs chain. The larger this number, the less chance that subsequent samples are auto-correlated, "
+       "but the slower sampling becomes."); 
 
     po::options_description testing("\n"
             "testing options");
@@ -1539,6 +1542,15 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                             "Please choose one.");
             jointLog->flush();
             std::exit(1);
+        }
+
+        if (sopt.numGibbsSamples > 0) {
+          if (! sopt.thinningFactor >= 1) {
+            jointLog->error("The Gibbs sampling thinning factor (--thinningFactor) "
+                            "cannot be smaller than 1.");
+            jointLog->flush();
+            std::exit(1);
+          }
         }
 
         if (!sopt.sampleOutput and sopt.sampleUnaligned) {

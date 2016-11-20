@@ -159,6 +159,7 @@ struct SalmonOpts {
 
     uint32_t numGibbsSamples; // Number of rounds of Gibbs sampling to perform
     uint32_t numBootstraps; // Number of bootstrap samples to draw
+    uint32_t thinningFactor; // Gibbs chain thinning factor
 
     bool initUniform{false}; // initialize offline optimization parameters uniformly, rather than with online estimates.
     bool alnMode{false};     // true if we're in alignment based mode, false otherwise

@@ -1482,6 +1482,14 @@ bool processQuantOptions(SalmonOpts& sopt,
     jointLog->flush();
     return false;
   }
+  if (sopt.numGibbsSamples > 0) {
+    if (! sopt.thinningFactor >= 1) {
+      jointLog->error("The Gibbs sampling thinning factor (--thinningFactor) "
+                      "cannot be smaller than 1.");
+      jointLog->flush();
+      return false;
+    }
+  }
 
   {
     if (sopt.noFragLengthDist and !sopt.noEffectiveLengthCorrection) {

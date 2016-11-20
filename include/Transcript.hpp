@@ -315,6 +315,14 @@ public:
             auto cs = GCCount_[s];
             auto ce = GCCount_[e];
 
+            /*
+            int fs = std::max(s - outside5p, 0);
+            int fe = std::min(s + inside5p, lastPos);
+            int ts = std::max(e - inside3p, 0);
+            int te = std::min(e + outside3p, 0);
+            contextSize = (fe - fs + 1) + (te - ts + 1);
+            */
+
             auto fps = (s >= outside5p) ? GCCount_[s-outside5p] : 0;
             auto fpe = (inside5p > 0) ? GCCount_[std::min(s+inside5p, lastPos)] : cs;
             auto tps = (inside3p > 0) ? 
