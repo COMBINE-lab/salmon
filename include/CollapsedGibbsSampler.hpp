@@ -22,8 +22,17 @@ class CollapsedGibbsSampler {
         template <typename ExpT>
         bool sample(ExpT& readExp,
                       SalmonOpts& sopt,
-                      std::function<bool(const std::vector<int>&)>& writeBootstrap,
+                      std::function<bool(const std::vector<double>&)>& writeBootstrap,
                       uint32_t numSamples = 500);
+
+  /*
+        template <typename ExpT>
+        bool sampleMultipleChains(ExpT& readExp,
+              SalmonOpts& sopt,
+              std::function<bool(const std::vector<double>&)>& writeBootstrap,
+              uint32_t numSamples = 500);
+  */
+
 };
 
 #endif // COLLAPSED_EM_OPTIMIZER_HPP

@@ -38,7 +38,7 @@ class GZipWriter {
       ExpT& readExp);
 
     template <typename T>
-    bool writeBootstrap(const std::vector<T>& abund);
+    bool writeBootstrap(const std::vector<T>& abund, bool quiet=false);
 
    private:
      boost::filesystem::path path_;

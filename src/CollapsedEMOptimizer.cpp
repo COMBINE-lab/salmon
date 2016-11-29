@@ -447,7 +447,7 @@ bool doBootstrap(
     std::vector<std::vector<uint32_t>>& txpGroups,
     std::vector<std::vector<double>>& txpGroupCombinedWeights,
     std::vector<Transcript>& transcripts, Eigen::VectorXd& effLens,
-    std::vector<double>& sampleWeights, uint64_t totalNumFrags,
+    const std::vector<double>& sampleWeights, uint64_t totalNumFrags,
     uint64_t numMappedFrags, double uniformTxpWeight,
     std::atomic<uint32_t>& bsNum, SalmonOpts& sopt,
     std::vector<double>& priorAlphas,
@@ -471,11 +471,20 @@ bool doBootstrap(
   auto& jointLog = sopt.jointLog;
 
   std::random_device rd;
-  MultinomialSampler msamp(rd);
-
+  std::mt19937 gen(rd());
+  //MultinomialSampler msamp(rd);
+  std::discrete_distribution<uint64_t> csamp(sampleWeights.begin(), sampleWeights.end());
   while (bsNum++ < numBootstraps) {
+    csamp.reset();
+
+    for (size_t sc = 0; sc < sampCounts.size(); ++sc) {
+      sampCounts[sc] = 0;
+    }
+    for (size_t fn = 0; fn < totalNumFrags; ++fn) {
+      ++sampCounts[csamp(gen)];
+    }
     // Do a new bootstrap
-    msamp(sampCounts.begin(), totalNumFrags, numClasses, sampleWeights.begin());
+    //msamp(sampCounts.begin(), totalNumFrags, numClasses, sampleWeights.begin());
 
     double totalLen{0.0};
     for (size_t i = 0; i < transcripts.size(); ++i) {

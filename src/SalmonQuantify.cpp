@@ -2611,13 +2611,14 @@ transcript abundance from RNA-seq reads
       jointLog->info("Starting Gibbs Sampler");
       CollapsedGibbsSampler sampler;
       // The function we'll use as a callback to write samples
-      std::function<bool(const std::vector<int>&)> bsWriter =
-          [&gzw](const std::vector<int>& alphas) -> bool {
-        return gzw.writeBootstrap(alphas);
+      std::function<bool(const std::vector<double>&)> bsWriter =
+          [&gzw](const std::vector<double>& alphas) -> bool {
+        return gzw.writeBootstrap(alphas, true);
       };
 
       bool sampleSuccess =
-          sampler.sample(experiment, sopt, bsWriter, sopt.numGibbsSamples);
+        //sampler.sampleMultipleChains(experiment, sopt, bsWriter, sopt.numGibbsSamples);
+        sampler.sample(experiment, sopt, bsWriter, sopt.numGibbsSamples);
       if (!sampleSuccess) {
         jointLog->error("Encountered error during Gibb sampling .\n"
                         "This should not happen.\n"

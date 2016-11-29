@@ -423,7 +423,7 @@ bool GZipWriter::writeAbundances(
 }
 
 template <typename T>
-bool GZipWriter::writeBootstrap(const std::vector<T>& abund) {
+bool GZipWriter::writeBootstrap(const std::vector<T>& abund, bool quiet) {
 #if defined __APPLE__
             spin_lock::scoped_lock sl(writeMutex_);
 #else
@@ -443,16 +443,18 @@ bool GZipWriter::writeBootstrap(const std::vector<T>& abund) {
         size_t elSize = sizeof(typename std::vector<T>::value_type);
         ofile.write(reinterpret_cast<char*>(const_cast<T*>(abund.data())),
                     elSize * num);
-        logger_->info("wrote {} bootstraps", numBootstrapsWritten_.load()+1);
+        if (!quiet){
+          logger_->info("wrote {} bootstraps", numBootstrapsWritten_.load()+1);
+        }
         ++numBootstrapsWritten_;
         return true;
 }
 
 template
-bool GZipWriter::writeBootstrap<double>(const std::vector<double>& abund);
+bool GZipWriter::writeBootstrap<double>(const std::vector<double>& abund, bool quiet);
 
 template
-bool GZipWriter::writeBootstrap<int>(const std::vector<int>& abund);
+bool GZipWriter::writeBootstrap<int>(const std::vector<int>& abund, bool quiet);
 
 template
 bool GZipWriter::writeEquivCounts<ReadExperiment>(const SalmonOpts& sopt,

@@ -49,7 +49,8 @@ def main(args):
         meta_info = json.load(fh)
         
     if meta_info['samp_type'] == 'gibbs':
-        s = struct.Struct('<' + 'i' * ntxp)
+        #s = struct.Struct('<' + 'i' * ntxp)
+        s = struct.Struct('@' + 'd' * ntxp)
     elif meta_info['samp_type'] == 'bootstrap':
         s = struct.Struct('@' + 'd' * ntxp)
     else:

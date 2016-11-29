@@ -315,22 +315,29 @@ public:
             auto cs = GCCount_[s];
             auto ce = GCCount_[e];
 
-            /*
             int fs = std::max(s - outside5p, 0);
             int fe = std::min(s + inside5p, lastPos);
             int ts = std::max(e - inside3p, 0);
-            int te = std::min(e + outside3p, 0);
+            int te = std::min(e + outside3p, lastPos);
             contextSize = (fe - fs + 1) + (te - ts + 1);
-            */
 
+            auto fps = (s >= outside5p) ? GCCount_[fs] : 0;
+            auto fpe = (inside5p > 0) ? GCCount_[fe] : cs;
+            auto tps = (inside3p > 0) ? 
+            ((e >= inside3p) ? GCCount_[e-inside3p] : 0) : ce;
+            auto tpe = GCCount_[te];
+
+            /*
             auto fps = (s >= outside5p) ? GCCount_[s-outside5p] : 0;
             auto fpe = (inside5p > 0) ? GCCount_[std::min(s+inside5p, lastPos)] : cs;
             auto tps = (inside3p > 0) ? 
                 ((e >= inside3p) ? GCCount_[e-inside3p] : 0) : ce;
             auto tpe = GCCount_[std::min(e+outside3p, lastPos)];
+            */
             
             int32_t fragFrac = std::lrint((100.0 * (ce - cs)) / (e - s + 1));
-            int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (2.0 * contextSize))));
+            //int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (2.0 * contextSize))));
+            int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (contextSize))));
             GCDesc desc = {fragFrac, contextFrac};
             return desc;
         } else {
