@@ -371,6 +371,40 @@ bool GZipWriter::writeMeta(
       oa(cereal::make_nvp("call", std::string("quant")));
       oa(cereal::make_nvp("start_time", tstring));
   }
+
+  {
+    bfs::path ambigInfo = auxDir / "ambig_info.tsv";
+    std::ofstream os(ambigInfo.string());
+    os << "UniqueCount\tAmbigCount\n";
+
+    auto& transcripts = experiment.transcripts();
+    std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec =
+      const_cast<ExpT&>(experiment).equivalenceClassBuilder().eqVec();
+
+    class CountPair {
+    public:
+      uint32_t unique=0;
+      uint32_t potential=0;
+    };
+
+    std::vector<CountPair> counts(transcripts.size());
+    for (auto& eq : eqVec) {
+      uint64_t count = eq.second.count;
+      const TranscriptGroup& tgroup = eq.first;
+      const std::vector<uint32_t>& txps = tgroup.txps;
+      if (txps.size() > 1) {
+        for (auto tid : txps) {
+          counts[tid].potential += count;
+        }
+      } else {
+        counts[txps.front()].unique += count;
+      }
+    }
+    for (size_t i = 0; i < transcripts.size(); ++i) {
+      os << counts[i].unique << '\t' << counts[i].potential << '\n';
+    }
+  }
+
   return true;
 }
 
