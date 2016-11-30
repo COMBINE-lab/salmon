@@ -45,34 +45,25 @@ constexpr double minWeight = std::numeric_limits<double>::denorm_min();
 
 /**
  * This non-collapsed Gibbs step is largely inspired by the method first
- *introduced by
- * Turro et al. [1].  Given the current estimates `txpCount` of the read count
- *for each transcript,
- * the mean transcript fractions are sampled from a Gamma distribution
+ * introduced by  Turro et al. [1].  Given the current estimates `txpCount` of the read count
+ * for each transcript,  the mean transcript fractions are sampled from a Gamma distribution
  * ~ Gam( prior[i] + txpCount[i], \Beta + effLens[i]).  Then, given these
- *transcript fractions,
- * The reads are re-assigned within each equivalence class by sampling from a
- *multinomial
- * distributed according to these means.
+ * transcript fractions,  The reads are re-assigned within each equivalence class by sampling from a
+ * multinomial * distributed according to these means.
  *
- * [1] Haplotype and isoform specific expression estimation using multi-mapping
- *RNA-seq reads.
- * Turro E, Su S-Y, Goncalves A, Coin L, Richardson S and Lewin A. Genome
- *Biology, 2011 Feb; 12:R13.
- * doi: 10.1186/gb-2011-12-2-r13.
+ * [1] Haplotype and isoform specific expression estimation using multi-mapping RNA-seq reads.
+ * Turro E, Su S-Y, Goncalves A, Coin L, Richardson S and Lewin A.
+ * Genome Biology, 2011 Feb; 12:R13.  doi: 10.1186/gb-2011-12-2-r13.
  **/
 void sampleRoundNonCollapsedMultithreaded_(
     std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
+    std::vector<bool>& active,
     std::vector<uint64_t>& countMap, std::vector<double>& probMap,
     std::vector<double>& muGlobal, Eigen::VectorXd& effLens,
     const std::vector<double>& priorAlphas, std::vector<double>& txpCount,
     std::vector<uint32_t>& offsetMap) {
-  std::random_device rd;
-  // retain original txp count
-  // std::vector<int> origTxpCount = txpCount;
 
-  // generate norm. coeff for \mu from \alpha (countMap)
-  // std::vector<double> muGlobal(txpCount.size(), 0.0);
+  // generate coeff for \mu from \alpha and \effLens
   double beta = 0.1;
   double norm = 0.0;
 
@@ -90,9 +81,11 @@ void sampleRoundNonCollapsedMultithreaded_(
       [&, beta](const BlockedIndexRange& range) -> void {
         GeneratorType::reference gen = localGenerator.local();
         for (auto i : boost::irange(range.begin(), range.end())) {
-          double ci = static_cast<double>(txpCount[i] + priorAlphas[i]);
-          std::gamma_distribution<double> d(ci, 1.0 / (beta + effLens(i)));
-          muGlobal[i] = d(gen);
+          if (active[i]) {
+            double ci = static_cast<double>(txpCount[i] + priorAlphas[i]);
+            std::gamma_distribution<double> d(ci, 1.0 / (beta + effLens(i)));
+            muGlobal[i] = d(gen);
+          }
           txpCount[i] = 0.0;
         }
       });
@@ -131,6 +124,7 @@ void sampleRoundNonCollapsedMultithreaded_(
           if (tgroup.valid) {
             const std::vector<uint32_t>& txps = tgroup.txps;
             const auto& auxs = eqClass.second.combinedWeights;
+            const auto& weights = eqClass.second.weights;
 
             double denom = 0.0;
             // If this is a single-transcript group,
@@ -142,7 +136,7 @@ void sampleRoundNonCollapsedMultithreaded_(
               for (size_t i = 0; i < groupSize; ++i) {
                 auto tid = txps[i];
                 size_t gi = offset + i;
-                probMap[gi] = muGlobal[tid];
+                probMap[gi] = muGlobal[tid] * weights[i];
                 muSum += probMap[gi];
                 denom += probMap[gi];
               }
@@ -240,30 +234,34 @@ bool CollapsedGibbsSampler::sample(
   std::vector<double> priorAlphas = populatePriorAlphasGibbs_(
       transcripts, effLens, priorValue, perTranscriptPrior);
   std::vector<double> alphasIn(priorAlphas.size(), 0.0);
+  std::vector<double> alphasInit(priorAlphas.size(), 0.0);
 
   bool useScaledCounts = (!sopt.useQuasi and !sopt.allowOrphans);
   auto numMappedFragments = (useScaledCounts) ? readExp.upperBoundHits()
                                               : readExp.numMappedFragments();
   uint32_t numInternalRounds = sopt.thinningFactor;
+  size_t numTranscripts{transcripts.size()};
 
   for (size_t i = 0; i < transcripts.size(); ++i) {
     auto& txp = transcripts[i];
     alphasIn[i] = txp.projectedCounts;
+    alphasInit[i] = txp.projectedCounts;
     effLens(i) = txp.EffectiveLength;
   }
 
+  std::vector<bool> active(numTranscripts, false);
   size_t countMapSize{0};
   std::vector<uint32_t> offsetMap(eqVec.size(), 0);
   for (size_t i = 0; i < eqVec.size(); ++i) {
     if (eqVec[i].first.valid) {
       countMapSize += eqVec[i].first.txps.size();
+      for (auto t : eqVec[i].first.txps) { active[t] = true; }
       if (i < eqVec.size() - 1) {
         offsetMap[i + 1] = countMapSize;
       }
     }
   }
 
-  size_t numTranscripts{transcripts.size()};
 
   // will hold estimated counts
   std::vector<double> alphas(numTranscripts, 0.0);
@@ -278,6 +276,27 @@ bool CollapsedGibbsSampler::sample(
   probMap, effLens, allSamples[0]);
   */
 
+  uint32_t nchains{1};
+  if (numSamples >= 50) {
+    nchains = 2;
+  }
+  if (numSamples >= 100) {
+    nchains = 4;
+  }
+  if (numSamples >= 200) {
+    nchains = 8;
+  }
+
+  std::vector<uint32_t> newChainIter{0};
+  if (nchains > 1) {
+    auto step = numSamples / nchains;
+    for (size_t i = 1; i < nchains; ++i) {
+      newChainIter.push_back(i * step);
+    }
+  }
+
+  auto nextChainStart = newChainIter.begin();
+
   // For each sample this thread should generate
   std::unique_ptr<ez::ezETAProgressBar> pbar{nullptr};
   if (!sopt.quiet) {
@@ -289,7 +308,11 @@ bool CollapsedGibbsSampler::sample(
     if (pbar) {
       ++(*pbar);
     }
-
+    // If we should start a new chain here, then do it!
+    if (nextChainStart < newChainIter.end() and sampleID == *nextChainStart) {
+      alphasIn = alphasInit;
+      ++nextChainStart;
+    }
     /*
       if (!isFirstSample) {
           // the counts start at what they were last round.
@@ -299,7 +322,7 @@ bool CollapsedGibbsSampler::sample(
 
     // Thin the chain by a factor of (numInternalRounds)
     for (size_t i = 0; i < numInternalRounds; ++i) {
-      sampleRoundNonCollapsedMultithreaded_(eqVec, countMap, probMap, mu,
+      sampleRoundNonCollapsedMultithreaded_(eqVec, active, countMap, probMap, mu,
                                             effLens, priorAlphas, alphasIn,
                                             offsetMap);
     }
