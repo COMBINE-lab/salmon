@@ -126,7 +126,21 @@ After the salmon commands finish running, you should have a directory named `qua
 
 #### After quantification {#after-quantification}
 
-That's it!  Quantifying your RNA-seq data with salmon is that simple (and fast).  Once you have your quantification results you can use them for downstream analysis with differential expression tools like [DESeq2](https://bioconductor.org/packages/release/bioc/html/DESeq2.html).  In fact, using the [tximport](http://bioconductor.org/packages/release/bioc/html/tximport.html) package, you can import salmon's transcript-level quantifications directly into DESeq2 (and optionally aggregate them to the gene level for gene-level differential expression analysis).  You can read more about how to import salmon's results into DESeq2 by reading the `tximport` section (1.3.4) of the excellent [DESeq2 manual](https://bioconductor.org/packages/release/bioc/vignettes/DESeq2/inst/doc/DESeq2.pdf).
+That's it!  Quantifying your RNA-seq data with salmon is that simple (and fast).
+Once you have your quantification results you can use them for downstream analysis with differential expression tools like 
+[DESeq2](https://bioconductor.org/packages/DESeq2),
+[edgeR](https://bioconductor.org/packages/edgeR),
+[limma](https://bioconductor.org/packages/limma), or
+[sleuth](http://pachterlab.github.io/sleuth/).
+Using the [tximport](http://bioconductor.org/packages/tximport) package, 
+you can import salmon's transcript-level quantifications 
+and optionally aggregate them to the gene level for gene-level differential expression analysis.
+You can read more about how to import salmon's results into DESeq2 by reading the `tximport` section
+of the excellent [DESeq2 vignette](https://bioconductor.org/packages/DESeq2).
+For instructions on importing for use with edgeR or limma, see the 
+[tximport vignette](http://bioconductor.org/packages/tximport).
+For preparing salmon output for use with sleuth, 
+see the [wasabi](https://github.com/COMBINE-lab/wasabi) package.
 
 [^1]:
 	When you are building a salmon index, **please do not build the index on the genome of the organism whose transcripts you want to quantify**, this is almost certainly not want you want to do and will not provide you with meaningful results.
