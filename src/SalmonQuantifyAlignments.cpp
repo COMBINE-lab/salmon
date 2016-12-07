@@ -1339,7 +1339,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     po::options_description hidden("\nhidden options");
     hidden.add_options()
       (
-       "numGCBins", po::value<size_t>(&(sopt.numFragGCBins))->default_value(100),
+       "numGCBins", po::value<size_t>(&(sopt.numFragGCBins))->default_value(25),
        "Number of bins to use when modeling fragment GC bias")
       (
        "conditionalGCBins", po::value<size_t>(&(sopt.numConditionalGCBins))->default_value(3),
