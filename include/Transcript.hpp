@@ -309,7 +309,7 @@ public:
         int inside5p = insideContext - 1;
         int inside3p = insideContext;
 
-        int contextSize = outsideContext + insideContext;
+        double contextSize = outsideContext + insideContext;
         int lastPos = RefLength - 1;
         if (gcStep_ == 1) {
             auto cs = GCCount_[s];
@@ -319,7 +319,7 @@ public:
             int fe = std::min(s + inside5p, lastPos);
             int ts = std::max(e - inside3p, 0);
             int te = std::min(e + outside3p, lastPos);
-            contextSize = (fe - fs + 1) + (te - ts + 1);
+            contextSize = static_cast<double>((fe - fs + 1) + (te - ts + 1));
 
             auto fps = (s >= outside5p) ? GCCount_[fs] : 0;
             auto fpe = (inside5p > 0) ? GCCount_[fe] : cs;
