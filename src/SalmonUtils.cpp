@@ -2001,8 +2001,8 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
           int32_t locFLDLow = (refLen < cdfMaxArg) ? 1 : fldLow;
           int32_t locFLDHigh = (refLen < cdfMaxArg) ? cdfMaxArg : fldHigh;
 
-          if (//alphas[it] >= minAlpha
-              available[it] 
+          if (alphas[it] >= minAlpha
+              //available[it] 
               and unprocessedLen > 0
               and cdfMaxVal > minCDFMass) {
 
