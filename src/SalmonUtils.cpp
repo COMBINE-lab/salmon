@@ -1545,7 +1545,7 @@ bool processQuantOptions(SalmonOpts& sopt,
 template <typename AbundanceVecT, typename ReadExpT>
 Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
                                        Eigen::VectorXd& effLensIn,
-                                       AbundanceVecT& alphas, bool writeBias) {
+                                       AbundanceVecT& alphas, std::vector<bool>& available, bool writeBias) {
 
   using std::vector;
   using BlockedIndexRange = tbb::blocked_range<size_t>;
@@ -2001,8 +2001,10 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
           int32_t locFLDLow = (refLen < cdfMaxArg) ? 1 : fldLow;
           int32_t locFLDHigh = (refLen < cdfMaxArg) ? cdfMaxArg : fldHigh;
 
-          if (alphas[it] >= minAlpha and unprocessedLen > 0 and
-              cdfMaxVal > minCDFMass) {
+          if (//alphas[it] >= minAlpha
+              available[it] 
+              and unprocessedLen > 0
+              and cdfMaxVal > minCDFMass) {
 
             Eigen::VectorXd seqFactorsFW(refLen);
             Eigen::VectorXd seqFactorsRC(refLen);
@@ -2434,38 +2436,38 @@ template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
                                       ReadExperiment>(
     SalmonOpts& sopt, ReadExperiment& readExp, Eigen::VectorXd& effLensIn,
-    std::vector<tbb::atomic<double>>& alphas, bool finalRound);
+    std::vector<tbb::atomic<double>>& alphas, std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<double>, ReadExperiment>(
     SalmonOpts& sopt, ReadExperiment& readExp, Eigen::VectorXd& effLensIn,
-    std::vector<double>& alphas, bool finalRound);
+    std::vector<double>& alphas, std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
                                       AlignmentLibrary<ReadPair>>(
     SalmonOpts& sopt, AlignmentLibrary<ReadPair>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
-    bool finalRound);
+    std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<double>,
                                       AlignmentLibrary<ReadPair>>(
     SalmonOpts& sopt, AlignmentLibrary<ReadPair>& readExp,
-    Eigen::VectorXd& effLensIn, std::vector<double>& alphas, bool finalRound);
+    Eigen::VectorXd& effLensIn, std::vector<double>& alphas, std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
                                       AlignmentLibrary<UnpairedRead>>(
     SalmonOpts& sopt, AlignmentLibrary<UnpairedRead>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
-    bool finalRound);
+    std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<double>,
                                       AlignmentLibrary<UnpairedRead>>(
     SalmonOpts& sopt, AlignmentLibrary<UnpairedRead>& readExp,
-    Eigen::VectorXd& effLensIn, std::vector<double>& alphas, bool finalRound);
+    Eigen::VectorXd& effLensIn, std::vector<double>& alphas, std::vector<bool>& available, bool finalRound);
 
 //// 0th order model --- code for computing bias factors.
 

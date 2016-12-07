@@ -119,7 +119,7 @@ Eigen::VectorXd updateEffectiveLengths(
 template <typename AbundanceVecT, typename ReadExpT>
 Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
                                                       Eigen::VectorXd& effLensIn,
-                                                      AbundanceVecT& alphas, bool finalRound=false);
+                                       AbundanceVecT& alphas, std::vector<bool>& available, bool finalRound=false);
 
 
 /*

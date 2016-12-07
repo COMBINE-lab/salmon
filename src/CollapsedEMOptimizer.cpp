@@ -382,7 +382,7 @@ void VBEMUpdate_(std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
 template <typename VecT>
 size_t markDegenerateClasses(
     std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
-    VecT& alphaIn, Eigen::VectorXd& effLens,
+    VecT& alphaIn, Eigen::VectorXd& effLens, std::vector<bool>& available, 
     std::shared_ptr<spdlog::logger> jointLog, bool verbose = false) {
 
   size_t numDropped{0};
@@ -436,6 +436,11 @@ size_t markDegenerateClasses(
       }
       ++numDropped;
       kv.first.setValid(false);
+    } else {
+      for (size_t i = 0; i < txps.size(); ++i) {
+        auto tid = txps[i];
+        available[tid] = true;
+      }
     }
   }
   return numDropped;
@@ -585,6 +590,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
     double relDiffTolerance, uint32_t maxIter) {
 
   std::vector<Transcript>& transcripts = readExp.transcripts();
+  std::vector<bool> available(transcripts.size(), false);
   using VecT = CollapsedEMOptimizer::SerialVecType;
   // With atomics
   VecT alphas(transcripts.size(), 0.0);
@@ -644,7 +650,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
   std::vector<double> priorAlphas = populatePriorAlphas_(transcripts, effLens, priorValue, perTranscriptPrior);
 
   auto numRemoved =
-      markDegenerateClasses(eqVec, alphas, effLens, sopt.jointLog);
+    markDegenerateClasses(eqVec, alphas, effLens, available, sopt.jointLog);
   sopt.jointLog->info("Marked {} weighted equivalence classes as degenerate",
                       numRemoved);
 
@@ -745,6 +751,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
 
   tbb::task_scheduler_init tbbScheduler(sopt.numThreads);
   std::vector<Transcript>& transcripts = readExp.transcripts();
+  std::vector<bool> available(transcripts.size(), false);
 
   uint32_t minIter = 50;
   bool seqBiasCorrect = sopt.biasCorrect;
@@ -881,7 +888,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
       });
 
   auto numRemoved =
-      markDegenerateClasses(eqVec, alphas, effLens, sopt.jointLog);
+    markDegenerateClasses(eqVec, alphas, effLens, available, sopt.jointLog);
   sopt.jointLog->info("Marked {} weighted equivalence classes as degenerate",
                       numRemoved);
 
@@ -907,7 +914,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
 
       jointLog->info("iteration {}, adjusting effective lengths to account for biases", itNum);
       effLens = salmon::utils::updateEffectiveLengths(sopt, readExp, effLens,
-                                                      alphas, true);
+                                                      alphas, available, true);
       // if we're doing the VB optimization, update the priors
       if (useVBEM) {
           priorAlphas = populatePriorAlphas_(transcripts, effLens, priorValue, perTranscriptPrior);
