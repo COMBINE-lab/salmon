@@ -450,7 +450,7 @@ bool GZipWriter::writeAbundances(
       double tfrac = (npm / effLength) / tfracDenom;
       double tpm = tfrac * million;
       fmt::print(output.get(), "{}\t{}\t{}\t{}\t{}\n",
-              transcript.RefName, transcript.RefLength, effLength,
+              transcript.RefName, transcript.CompleteLength, effLength,
               tpm, count);
   }
   return true;

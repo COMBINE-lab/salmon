@@ -36,7 +36,8 @@ class FragmentLengthDistribution {
    /**
    * A private vector that stores the observed (logged) mass for each length.
    */
-    std::vector<double> cachedCMF_;
+  std::vector<double> cachedCMF_;
+  std::vector<double> cachedPMF_;
     volatile bool haveCachedCMF_;
     std::mutex fldMut_;
 
@@ -127,6 +128,8 @@ public:
    * @return (Logged) cmf of bins.
    */
   std::vector<double> cmf() const;
+  // do the same thing as above, but use pmf to compute this CMF
+  std::vector<double> cmf(const std::vector<double>& pmf) const;
 
 
   /**

@@ -309,7 +309,7 @@ void writeAbundancesFromCollapsed(const SalmonOpts& sopt, ExpLib& alnLib,
     double tfrac = (npm / effLength) / tfracDenom;
     double tpm = tfrac * million;
     fmt::print(output.get(), "{}\t{}\t{}\t{}\t{}\n", transcript.RefName,
-               transcript.RefLength, effLength, tpm, count);
+               transcript.CompleteLength, effLength, tpm, count);
   }
 }
 
@@ -749,14 +749,14 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
     }
     libs.push_back(lib);
   }
-  
+
   auto log = spdlog::get("jointLog");
   size_t numLibs = libs.size();
   if (numLibs == 1) {
       log->info("There is 1 library.");
   } else if (numLibs > 1) {
       log->info("There are {} libraries.", numLibs);
-  } 
+  }
   return libs;
 }
 
@@ -855,7 +855,7 @@ LibraryFormat parseLibraryFormatString(std::string& fmt) {
   bool peekBAMIsPaired(const boost::filesystem::path& file) {
     namespace bfs = boost::filesystem;
     std::string readMode = "r";
-    
+
     if (bfs::is_regular_file(file)) {
       if (bfs::is_empty(file)) {
 	fmt::MemoryWriter errstr;
@@ -885,7 +885,7 @@ LibraryFormat parseLibraryFormatString(std::string& fmt) {
 
     bool didRead = (scram_get_seq(fp, &read) >= 0);
     bool isPaired{false};
-    
+
     if (didRead) {
       isPaired = bam_flag(read) & BAM_FPAIRED;
     } else {
@@ -900,7 +900,7 @@ LibraryFormat parseLibraryFormatString(std::string& fmt) {
     staden::utils::bam_destroy(read);
     return isPaired;
   }
-  
+
 uint64_t encode(uint64_t tid, uint64_t offset) {
   uint64_t res = (((tid & 0xFFFFFFFF) << 32) | (offset & 0xFFFFFFFF));
   return res;
@@ -1338,26 +1338,26 @@ bool processQuantOptions(SalmonOpts& sopt,
   if (!sopt.quiet) {
     std::cerr << "Logs will be written to " << logDirectory.string() << "\n";
   }
-  
+
   // Metagenomic option
   if (sopt.meta) {
       sopt.initUniform = true;
       sopt.noRichEqClasses = true;
   }
 
-  // Determine what we'll do with quasi-mapping results 
+  // Determine what we'll do with quasi-mapping results
   bool writeQuasimappings = (sopt.qmFileName != "");
 
   bfs::path logPath = logDirectory / "salmon_quant.log";
   // must be a power-of-two
   size_t max_q_size = 2097152;
-                      
-  // make it larger if we're writing mappings or 
+
+  // make it larger if we're writing mappings or
   // unmapped names.
   std::streambuf* qmBuf;
   if (writeQuasimappings or sopt.writeUnmappedNames or sopt.writeOrphanLinks) {
       max_q_size = 16777216;
-  }  
+  }
 
   spdlog::set_async_mode(max_q_size);
 
@@ -1408,7 +1408,7 @@ bool processQuantOptions(SalmonOpts& sopt,
       return false;
     }
   }
-  
+
   // Create the file (and logger) for outputting unmapped reads, if the user has
   // asked for it.
   if (sopt.writeOrphanLinks) {
@@ -1453,7 +1453,7 @@ bool processQuantOptions(SalmonOpts& sopt,
           bool qmDirSuccess = boost::filesystem::is_directory(qmDir);
           // try to create it
           if (!qmDirSuccess) {
-              qmDirSuccess = boost::filesystem::create_directories(qmDir); 
+              qmDirSuccess = boost::filesystem::create_directories(qmDir);
           }
           // if the directory already existed, or we created it successfully, open the file
           if (qmDirSuccess) {
@@ -1469,11 +1469,11 @@ bool processQuantOptions(SalmonOpts& sopt,
       // Now set the output stream to the buffer, which is
       // either std::cout, or a file.
       sopt.qmStream.reset(new std::ostream(qmBuf));
-      
+
       auto outputSink = std::make_shared<spdlog::sinks::ostream_sink_mt>(*(sopt.qmStream.get()));
       sopt.qmLog = std::make_shared<spdlog::logger>("qmStream", outputSink);
       sopt.qmLog->set_pattern("%v");
-  } 
+  }
 
   // Verify that no inconsistent options were provided
   if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {
@@ -1510,7 +1510,7 @@ bool processQuantOptions(SalmonOpts& sopt,
     jointLog->flush();
     return false;
   }
-  
+
   // maybe arbitrary, but if it's smaller than this, consider it
   // equal to LOG_0.
   if (sopt.incompatPrior < 1e-320 or sopt.incompatPrior == 0.0) {
@@ -1690,7 +1690,69 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
   int outsideContext{3};
   int insideContext{2};
 
+  /**
+   * New context counting
+   */
+  /*
   int contextSize = outsideContext + insideContext;
+  //double cscale = 100.0 / (2 * contextSize);
+  auto populateContextCounts = [outsideContext, insideContext, contextSize](
+      const Transcript& txp, const char* tseq, Eigen::VectorXd& contextCountsFP,
+      Eigen::VectorXd& contextCountsTP,
+      Eigen::VectorXd& windowLensFP,
+      Eigen::VectorXd& windowLensTP) {
+    auto refLen = static_cast<int32_t>(txp.RefLength);
+    auto lastPos = refLen - 1;
+    if (refLen > contextSize) {
+      // window starts like this
+      // -3 === -2 === -1 === 0 === 1
+      //         3'           5'
+      // and then shifts to the right one base at a time.
+      int windowEnd = insideContext - 1;
+      int windowStart = -outsideContext;
+      int fp = 0;
+      int tp = windowStart + (insideContext - 1);
+      double count = txp.gcAt(windowEnd - 1);
+      for (; tp < refLen; ++fp, ++tp) {
+        if (windowStart > 0) {
+          switch (tseq[windowStart]) {
+          case 'G':
+          case 'g':
+          case 'C':
+          case 'c':
+          count -= 1;
+          }
+        }
+        if (windowEnd < refLen) {
+          switch (tseq[windowEnd]) {
+          case 'G':
+          case 'g':
+          case 'C':
+          case 'c':
+            count += 1;
+          }
+        }
+        double actualWindowLength = (windowEnd < contextSize) ? windowEnd + 1 : (windowEnd - windowStart + 1);
+        if (fp < refLen) {
+          contextCountsFP[fp] = count;
+          windowLensFP[fp] = actualWindowLength;
+        }
+        if (tp >=0 ) {
+          contextCountsTP[tp] = count;
+          windowLensTP[tp] = actualWindowLength;
+        }
+        // Shift the end of the window right 1 base
+        if (windowEnd < refLen - 1) { ++windowEnd; }
+        ++windowStart;
+      }
+    }
+  };
+  */
+
+  /**
+   * orig context counting
+   **/
+int contextSize = outsideContext + insideContext;
   double cscale = 100.0 / (2 * contextSize);
   auto populateContextCounts = [outsideContext, insideContext, contextSize](
       const Transcript& txp, const char* tseq, Eigen::VectorXd& contextCountsFP,
@@ -1733,6 +1795,8 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
       }
     }
   };
+
+
 
   /**
    * The local bias terms from each thread can be combined
@@ -1798,8 +1862,12 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
 
           Eigen::VectorXd contextCountsFP(refLen);
           Eigen::VectorXd contextCountsTP(refLen);
-          contextCountsFP.setOnes();
-          contextCountsTP.setOnes();
+          Eigen::VectorXd windowLensFP(refLen);
+          Eigen::VectorXd windowLensTP(refLen);
+          contextCountsFP.setZero();
+          contextCountsTP.setZero();
+          windowLensFP.setZero();
+          windowLensTP.setZero();
 
           // This transcript's sequence
           const char* tseq = txp.Sequence();
@@ -1813,7 +1881,9 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
           int32_t contextLength{expectSeqFW.getContextLength()};
 
           if (gcBiasCorrect and seqBiasCorrect) {
-            populateContextCounts(txp, tseq, contextCountsFP, contextCountsTP);
+            populateContextCounts(txp, tseq,
+                                  contextCountsFP, contextCountsTP);
+                                  //windowLensFP, windowLensTP);
           }
 
           // The smallest and largest values of fragment
@@ -1857,8 +1927,15 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
                   // The GC fraction for this putative fragment
                   auto gcFrac = txp.gcFrac(fragStart, fragEnd);
                   int32_t contextFrac = std::lrint(
-                      (contextCountsFP[fragStart] + contextCountsTP[fragEnd]) *
-                      cscale);
+                                                   (contextCountsFP[fragStart] + contextCountsTP[fragEnd]) *
+                                                   cscale);
+                  /*
+                    double contextLength = (windowLensFP[fragStart] + windowLensTP[fragEnd]);
+                  int32_t contextFrac = (contextLength > 0) ?
+                    (std::lrint(100.0 *
+                               (contextCountsFP[fragStart] + contextCountsTP[fragEnd]) / contextLength)) :
+                    0;
+                  */
                   GCDesc desc{gcFrac, contextFrac};
                   expectGC.inc(desc,
                                weight * (conditionalCDF(fl) - prevFLMass));
@@ -2002,7 +2079,7 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
           int32_t locFLDHigh = (refLen < cdfMaxArg) ? cdfMaxArg : fldHigh;
 
           if (alphas[it] >= minAlpha
-              //available[it] 
+              //available[it]
               and unprocessedLen > 0
               and cdfMaxVal > minCDFMass) {
 
@@ -2013,8 +2090,12 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
 
             Eigen::VectorXd contextCountsFP(refLen);
             Eigen::VectorXd contextCountsTP(refLen);
-            contextCountsFP.setOnes();
-            contextCountsTP.setOnes();
+            Eigen::VectorXd windowLensFP(refLen);
+            Eigen::VectorXd windowLensTP(refLen);
+            contextCountsFP.setZero();
+            contextCountsTP.setZero();
+            windowLensFP.setZero();
+            windowLensTP.setZero();
 
             std::vector<double> posFactorsFW(refLen, 1.0);
             std::vector<double> posFactorsRC(refLen, 1.0);
@@ -2029,8 +2110,9 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
             bool done{fl >= maxLen};
 
             if (gcBiasCorrect and seqBiasCorrect) {
-              populateContextCounts(txp, tseq, contextCountsFP,
-                                    contextCountsTP);
+              populateContextCounts(txp, tseq,
+                                    contextCountsFP, contextCountsTP);
+                                    //windowLensFP, windowLensTP);
             }
 
             if (posBiasCorrect) {
@@ -2132,9 +2214,16 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
                   if (gcBiasCorrect) {
                     auto gcFrac = txp.gcFrac(fragStart, fragEnd);
                     int32_t contextFrac =
-                        std::lrint((contextCountsFP[fragStart] +
-                                    contextCountsTP[fragEnd]) *
-                                   cscale);
+                      std::lrint((contextCountsFP[fragStart] +
+                                  contextCountsTP[fragEnd]) *
+                                 cscale);
+                    /*
+                      double contextLength = (windowLensFP[fragStart] + windowLensTP[fragEnd]);
+                    int32_t contextFrac = (contextLength > 0) ?
+                      (std::lrint(100.0 *
+                                  (contextCountsFP[fragStart] + contextCountsTP[fragEnd]) / contextLength)) :
+                      0;
+                    */
                     GCDesc desc{gcFrac, contextFrac};
                     fragFactor *= gcBias.get(desc);
                     /*
@@ -2179,10 +2268,10 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
 
   // Copy over the expected sequence bias models
   if (seqBiasCorrect) {
-    readExp.setReadBiasModelExpected(std::move(exp5), salmon::utils::Direction::FORWARD); 
-    readExp.setReadBiasModelExpected(std::move(exp3), salmon::utils::Direction::REVERSE_COMPLEMENT); 
+    readExp.setReadBiasModelExpected(std::move(exp5), salmon::utils::Direction::FORWARD);
+    readExp.setReadBiasModelExpected(std::move(exp3), salmon::utils::Direction::REVERSE_COMPLEMENT);
   }
-  
+
   sopt.jointLog->info("processed bias for 100.0% of the transcripts");
   return effLensOut;
 }

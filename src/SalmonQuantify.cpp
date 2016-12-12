@@ -317,9 +317,25 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 
           // The probability of drawing a fragment of this length;
           double logFragProb = LOG_1;
-          if (burnedIn and useFragLengthDist and aln.fragLength() > 0) {
-            logFragProb =
-                fragLengthDist.pmf(static_cast<size_t>(aln.fragLength()));
+          if (burnedIn and useFragLengthDist and aln.fragLength() > 0.0) {
+            size_t fl = aln.fragLength();
+            double lenProb = fragLengthDist.pmf(fl); 
+            /* condition fragment length prob on txp length */
+            
+            double refLengthCM = fragLengthDist.cmf(static_cast<size_t>(refLength)); 
+            bool computeMass = aln.fragLength() < refLength and !salmon::math::isLog0(refLengthCM);
+            logFragProb = (computeMass) ?
+              (lenProb - refLengthCM) :
+              salmon::math::LOG_EPSILON;
+              if (computeMass and refLengthCM < lenProb) {
+                // Threading is hard!  It's possible that an update to the PMF snuck in between when we asked to cache the CMF and when the
+                // "burnedIn" variable was last seen as false.
+                log->info("reference length = {}, CMF[refLen] = {}, fragLen = {}, PMF[fragLen] = {}", refLength, std::exp(refLengthCM), aln.fragLength(), std::exp(lenProb));
+              }
+            
+            
+            //logFragProb = lenProb;
+            //logFragProb = fragLengthDist.pmf(static_cast<size_t>(aln.fragLength()));
           }
 
           // TESTING
@@ -387,7 +403,11 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
           **/
 
           // Allow for a non-uniform fragment start position distribution
-          double startPosProb{-logRefLength};
+
+          // double startPosProb{-logRefLength};
+          // DEC 9
+          double startPosProb = (aln.fragLen <= refLength) ? -std::log(refLength - aln.fragLen + 1) : salmon::math::LOG_EPSILON;
+
           double fragStartLogNumerator{salmon::math::LOG_1};
           double fragStartLogDenominator{salmon::math::LOG_1};
 
@@ -592,8 +612,9 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
                 int32_t stop = start + aln.fragLen - 1;
                 // WITH CONTEXT
                 if (start >= 0 and stop < transcript.RefLength) {
-                    auto desc = transcript.gcDesc(start, stop);
-                    observedGCMass.inc(desc, aln.logProb);
+                    bool valid{false};
+                    auto desc = transcript.gcDesc(start, stop, valid);
+                    if (valid) { observedGCMass.inc(desc, aln.logProb); }
                 }
             } else if(expectedLibraryFormat.type == ReadType::SINGLE_END) { 
 	      // Both expected and observed should be single end here
@@ -606,8 +627,9 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
                 int32_t stop = start + cmean;
                 // WITH CONTEXT
                 if (start >= 0 and stop < transcript.RefLength) {
-                    auto desc = transcript.gcDesc(start, stop);
-                    observedGCMass.inc(desc, aln.logProb);
+                  bool valid{false};
+                  auto desc = transcript.gcDesc(start, stop, valid);
+                  if (valid) {observedGCMass.inc(desc, aln.logProb);}
                 }
             } 
 
@@ -665,6 +687,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
     // NOTE: only one thread should succeed here, and that
     // thread will set burnedIn to true.
     readExp.updateTranscriptLengthsAtomic(burnedIn);
+    fragLengthDist.cacheCMF();
   }
   if (initialRound) {
     readLib.updateLibTypeCounts(libTypeCounts);

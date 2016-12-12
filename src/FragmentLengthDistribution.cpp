@@ -130,11 +130,15 @@ void FragmentLengthDistribution::addVal(size_t len, double mass) {
  * Returns the *LOG* probability of observing a fragment of length *len*.
  */
 double FragmentLengthDistribution::pmf(size_t len) const {
+  if (haveCachedCMF_) {
+    return (len < cachedPMF_.size()) ? cachedPMF_[len] : cachedPMF_.back();
+  } else {
     len /= binSize_;
     if (len > maxVal()) {
         len = maxVal();
     }
     return hist_[len]-totMass_;
+  }
 }
 
 /**
@@ -154,10 +158,9 @@ void FragmentLengthDistribution::dumpPMF(
     }
 }
 
-
 double FragmentLengthDistribution::cmf(size_t len) const {
     if(haveCachedCMF_) {
-        return cachedCMF_[len];
+      return (len < cachedCMF_.size()) ? cachedCMF_[len] : cachedCMF_.back();
     } else {
         double cum = salmon::math::LOG_0;
         len /= binSize_;
@@ -172,12 +175,45 @@ double FragmentLengthDistribution::cmf(size_t len) const {
     }
 }
 
+std::vector<double> getLockedPMF(FragmentLengthDistribution* fld){
+  std::vector<double> pmfOut;
+  auto maxV = fld->maxVal();
+  pmfOut.reserve(maxV + 1);
+  double totMass = salmon::math::LOG_0;
+  for (size_t i = 0; i <= maxV; ++i) {
+    pmfOut.push_back(fld->pmf(i));
+    totMass = salmon::math::logAdd(totMass, pmfOut.back());
+  }
+  for (size_t i = 0; i <= maxV; ++i) {
+    pmfOut[i] -= totMass;
+  }
+  return pmfOut;
+}
+
 void FragmentLengthDistribution::cacheCMF() {
     std::lock_guard<std::mutex> lg(fldMut_);
     if (!haveCachedCMF_) {
-        cachedCMF_ = cmf();
+      size_t minV, maxV;
+        cachedPMF_ = getLockedPMF(this);
+        cachedCMF_ = cmf(cachedPMF_);
         haveCachedCMF_ = true;
     }
+}
+
+/**
+ * NOTE: It is *assumed* that pmf is properly normalized!
+ **/
+vector<double> FragmentLengthDistribution::cmf(const std::vector<double>& pmf) const {
+  double cum = salmon::math::LOG_0;
+  double totalMass = salmon::math::LOG_0;
+  vector<double> cdf(pmf.size());
+  for (size_t i = 0; i < pmf.size(); ++i) {
+    cum = salmon::math::logAdd(cum, pmf[i]);
+    cdf[i] = cum;
+  }
+  //assert(approxEq(cum, totMass_));
+
+  return cdf;
 }
 
 vector<double> FragmentLengthDistribution::cmf() const {

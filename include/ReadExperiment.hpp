@@ -282,6 +282,7 @@ class ReadExperiment {
 		    // copy over the length, then we're done.
 		    transcripts_.emplace_back(id, name, len, alpha);
 		    auto& txp = transcripts_.back();
+        txp.setCompleteLength(idx_->txpCompleteLens[i]);
 		    // The transcript sequence
 		    //auto txpSeq = idx_->seq.substr(idx_->txpOffsets[i], len);
 

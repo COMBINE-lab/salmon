@@ -583,8 +583,9 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         int32_t stop = alnp->right(); 
 
                         if (start >= 0 and stop < transcript.RefLength) {
-                            auto desc = transcript.gcDesc(start, stop);
-                            observedGCMass.inc(desc, aln->logProb);
+                          bool valid{false};
+                          auto desc = transcript.gcDesc(start, stop, valid);
+                          if (valid) { observedGCMass.inc(desc, aln->logProb); }
                         }
                     }
                 } else if (expectedLibraryFormat.type == ReadType::SINGLE_END) {
@@ -602,8 +603,9 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         int32_t stop = start + cmean;
                         // WITH CONTEXT
                         if (start >= 0 and stop < transcript.RefLength) {
-                            auto desc = transcript.gcDesc(start, stop);
-                            observedGCMass.inc(desc, aln->logProb);
+                          bool valid{false};
+                          auto desc = transcript.gcDesc(start, stop, valid);
+                          if(valid) { observedGCMass.inc(desc, aln->logProb); }
                         }
                     }
                 }
@@ -749,10 +751,10 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         fspd.update();
                     }
                 }
-                fragLengthDist.cacheCMF();
                 // NOTE: only one thread should succeed here, and that
                 // thread will set burnedIn to true
                 alnLib.updateTranscriptLengthsAtomic(burnedIn);
+                fragLengthDist.cacheCMF();
             }
 
             if (zeroProbFrags > 0) {
