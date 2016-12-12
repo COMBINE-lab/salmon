@@ -356,7 +356,6 @@ public:
             int te = std::min(e + outside3p, lastPos);
             
             //contextSize = static_cast<double>((fe - fs) + (te - ts));
-
             auto fps = (s >= outside5p) ? GCCount_[fs] : 0;
             auto fpe = (inside5p > 0) ? GCCount_[fe] : cs;
             auto tps = (inside3p > 0) ?
