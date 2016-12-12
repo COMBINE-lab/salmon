@@ -16,6 +16,8 @@
 #include <string>
 #include <mutex>
 
+#include "SpinLock.hpp" // RapMap's with try_lock
+
 /**
  * The LengthDistribution class keeps track of the observed length distribution.
  * It is initialized with a Gaussian prior with parameters specified by the
@@ -39,7 +41,9 @@ class FragmentLengthDistribution {
   std::vector<double> cachedCMF_;
   std::vector<double> cachedPMF_;
     volatile bool haveCachedCMF_;
-    std::mutex fldMut_;
+  //std::mutex fldMut_;
+  SpinLock sl_;
+
 
   /**
    * A private double that stores the total observed (logged) mass.

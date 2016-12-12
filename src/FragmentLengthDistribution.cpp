@@ -191,12 +191,16 @@ std::vector<double> getLockedPMF(FragmentLengthDistribution* fld){
 }
 
 void FragmentLengthDistribution::cacheCMF() {
-    std::lock_guard<std::mutex> lg(fldMut_);
-    if (!haveCachedCMF_) {
-      size_t minV, maxV;
+  //std::lock_guard<std::mutex> lg(fldMut_);
+    if (sl_.try_lock()) {
+      if (!haveCachedCMF_) {
+        size_t minV, maxV;
         cachedPMF_ = getLockedPMF(this);
         cachedCMF_ = cmf(cachedPMF_);
         haveCachedCMF_ = true;
+      }
+
+      sl_.unlock();
     }
 }
 
