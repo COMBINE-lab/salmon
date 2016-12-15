@@ -128,9 +128,7 @@ std::vector<std::string> getLibTypeStrings(const AlignmentLibrary<AlnT>& experim
 template <typename ExpT>
 bool GZipWriter::writeMeta(
     const SalmonOpts& opts,
-    const ExpT& experiment,
-    const std::string& tstring // the start time of the run
-    ) {
+    const ExpT& experiment) {
 
   namespace bfs = boost::filesystem;
 
@@ -369,7 +367,8 @@ bool GZipWriter::writeMeta(
       oa(cereal::make_nvp("num_mapped", experiment.numMappedFragments()));
       oa(cereal::make_nvp("percent_mapped", experiment.effectiveMappingRate() * 100.0));
       oa(cereal::make_nvp("call", std::string("quant")));
-      oa(cereal::make_nvp("start_time", tstring));
+      oa(cereal::make_nvp("start_time", opts.runStartTime));
+      oa(cereal::make_nvp("end_time", opts.runStopTime));
   }
 
   {
@@ -512,20 +511,17 @@ bool GZipWriter::writeAbundances<AlignmentLibrary<ReadPair>>(const SalmonOpts& s
 template
 bool GZipWriter::writeMeta<ReadExperiment>(
     const SalmonOpts& opts,
-    const ReadExperiment& experiment,
-    const std::string& tstring);
+    const ReadExperiment& experiment);
 
 template
 bool GZipWriter::writeMeta<AlignmentLibrary<UnpairedRead>>(
     const SalmonOpts& opts,
-    const AlignmentLibrary<UnpairedRead>& experiment,
-    const std::string& tstring);
+    const AlignmentLibrary<UnpairedRead>& experiment);
 
 template
 bool GZipWriter::writeMeta<AlignmentLibrary<ReadPair>>(
     const SalmonOpts& opts,
-    const AlignmentLibrary<ReadPair>& experiment,
-    const std::string& tstring);
+    const AlignmentLibrary<ReadPair>& experiment);
 
 template
 std::vector<std::string> getLibTypeStrings(const AlignmentLibrary<UnpairedRead>& experiment);

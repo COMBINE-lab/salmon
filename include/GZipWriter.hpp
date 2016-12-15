@@ -28,9 +28,7 @@ class GZipWriter {
     template <typename ExpT>
     bool writeMeta(
 	const SalmonOpts& opts,
-	const ExpT& experiment,
-    const std::string& tstring  = "now"  // the start time of the run
-	);
+	const ExpT& experiment);
 
     template <typename ExpT>
     bool writeAbundances(

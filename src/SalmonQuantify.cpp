@@ -2620,8 +2620,6 @@ transcript abundance from RNA-seq reads
 
     // Write the main results
     gzw.writeAbundances(sopt, experiment);
-    // Write meta-information about the run
-    gzw.writeMeta(sopt, experiment, sopt.runStartTime);
 
     // If we are dumping the equivalence classes, then
     // do it here.
@@ -2733,6 +2731,12 @@ transcript abundance from RNA-seq reads
         // the file
         if (sopt.qmFileName != "-") { sopt.qmFile.close(); }
     }
+
+    sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
+
+    // Write meta-information about the run
+    gzw.writeMeta(sopt, experiment);
+
   } catch (po::error& e) {
     std::cerr << "Exception : [" << e.what() << "]. Exiting.\n";
     std::exit(1);

@@ -163,6 +163,8 @@ inline void incLoop(tbb::atomic<double>& val, double inc) {
         } while (returnedMass != oldMass);
 }
 
+std::string getCurrentTimeAsString();
+
 bool processQuantOptions(SalmonOpts& sopt, boost::program_options::variables_map& vm, int32_t numBiasSamples);
 
 

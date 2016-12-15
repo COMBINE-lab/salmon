@@ -1112,8 +1112,6 @@ bool processSample(AlignmentLibrary<ReadT>& alnLib,
     GZipWriter gzw(outputDirectory, jointLog);
     // Write the main results
     gzw.writeAbundances(sopt, alnLib);
-    // Write meta-information about the run
-    gzw.writeMeta(sopt, alnLib, runStartTime);
 
     if (sopt.numGibbsSamples > 0) {
 
@@ -1175,6 +1173,10 @@ bool processSample(AlignmentLibrary<ReadT>& alnLib,
             jointLog->warn("There may have been a problem generating the sampled output file; please check the log\n");
         }
     }
+
+    sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
+    // Write meta-information about the run
+    gzw.writeMeta(sopt, alnLib);
 
     return true;
 }

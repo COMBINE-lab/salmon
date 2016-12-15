@@ -37,7 +37,9 @@ struct SalmonOpts {
 
     std::string auxDir; // The directory where auxiliary files will be written.
 
-    std::string runStartTime; // String representation of the date / time at which the run began.
+  std::string runStartTime; // String representation of the date / time at which the run began.
+
+  std::string runStopTime; // String representation of the date / time at which the run ended.
 
     bool consistentHits;  // Enforce consistency of hits gathered during quasi-mapping.
 

@@ -1277,6 +1277,14 @@ std::vector<std::string> split(const std::string& str,
   return result;
 }
 
+std::string getCurrentTimeAsString() {
+    // Get the time at the start of the run
+    std::time_t result = std::time(NULL);
+    auto time = std::string(std::asctime(std::localtime(&result)));
+    time.pop_back(); // remove the newline
+    return time;
+}
+
 /**
  * Validate the options for quasi-mapping-based salmon, and create the necessary
  *output directories and
@@ -1294,9 +1302,7 @@ bool processQuantOptions(SalmonOpts& sopt,
   sopt.numBiasSamples.store(numBiasSamples);
 
   // Get the time at the start of the run
-  std::time_t result = std::time(NULL);
-  sopt.runStartTime = std::string(std::asctime(std::localtime(&result)));
-  sopt.runStartTime.pop_back(); // remove the newline
+  sopt.runStartTime = getCurrentTimeAsString();
 
   // Verify the geneMap before we start doing any real work.
   bfs::path geneMapPath;
@@ -1693,7 +1699,7 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
   /**
    * New context counting
    */
-  /*
+  
   int contextSize = outsideContext + insideContext;
   //double cscale = 100.0 / (2 * contextSize);
   auto populateContextCounts = [outsideContext, insideContext, contextSize](
@@ -1715,7 +1721,7 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
       double count = txp.gcAt(windowEnd - 1);
       for (; tp < refLen; ++fp, ++tp) {
         if (windowStart > 0) {
-          switch (tseq[windowStart]) {
+          switch (tseq[windowStart-1]) {
           case 'G':
           case 'g':
           case 'C':
@@ -1747,11 +1753,12 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
       }
     }
   };
-  */
+  
 
   /**
    * orig context counting
    **/
+  /*
 int contextSize = outsideContext + insideContext;
   double cscale = 100.0 / (2 * contextSize);
   auto populateContextCounts = [outsideContext, insideContext, contextSize](
@@ -1795,7 +1802,7 @@ int contextSize = outsideContext + insideContext;
       }
     }
   };
-
+  */
 
 
   /**
@@ -1882,8 +1889,8 @@ int contextSize = outsideContext + insideContext;
 
           if (gcBiasCorrect and seqBiasCorrect) {
             populateContextCounts(txp, tseq,
-                                  contextCountsFP, contextCountsTP);
-                                  //windowLensFP, windowLensTP);
+                                  contextCountsFP, contextCountsTP,
+                                  windowLensFP, windowLensTP);
           }
 
           // The smallest and largest values of fragment
@@ -1926,16 +1933,17 @@ int contextSize = outsideContext + insideContext;
                 if (fragEnd < refLen) {
                   // The GC fraction for this putative fragment
                   auto gcFrac = txp.gcFrac(fragStart, fragEnd);
+                  /*
                   int32_t contextFrac = std::lrint(
                                                    (contextCountsFP[fragStart] + contextCountsTP[fragEnd]) *
                                                    cscale);
-                  /*
-                    double contextLength = (windowLensFP[fragStart] + windowLensTP[fragEnd]);
+                  */ 
+                  double contextLength = (windowLensFP[fragStart] + windowLensTP[fragEnd]);
                   int32_t contextFrac = (contextLength > 0) ?
                     (std::lrint(100.0 *
                                (contextCountsFP[fragStart] + contextCountsTP[fragEnd]) / contextLength)) :
                     0;
-                  */
+                  
                   GCDesc desc{gcFrac, contextFrac};
                   expectGC.inc(desc,
                                weight * (conditionalCDF(fl) - prevFLMass));
@@ -2111,8 +2119,8 @@ int contextSize = outsideContext + insideContext;
 
             if (gcBiasCorrect and seqBiasCorrect) {
               populateContextCounts(txp, tseq,
-                                    contextCountsFP, contextCountsTP);
-                                    //windowLensFP, windowLensTP);
+                                    contextCountsFP, contextCountsTP,
+                                    windowLensFP, windowLensTP);
             }
 
             if (posBiasCorrect) {
@@ -2213,17 +2221,18 @@ int contextSize = outsideContext + insideContext;
                       seqFactorsFW[fragStart] * seqFactorsRC[fragEnd];
                   if (gcBiasCorrect) {
                     auto gcFrac = txp.gcFrac(fragStart, fragEnd);
+                    /*
                     int32_t contextFrac =
                       std::lrint((contextCountsFP[fragStart] +
                                   contextCountsTP[fragEnd]) *
                                  cscale);
-                    /*
-                      double contextLength = (windowLensFP[fragStart] + windowLensTP[fragEnd]);
+                    */ 
+                    double contextLength = (windowLensFP[fragStart] + windowLensTP[fragEnd]);
                     int32_t contextFrac = (contextLength > 0) ?
                       (std::lrint(100.0 *
                                   (contextCountsFP[fragStart] + contextCountsTP[fragEnd]) / contextLength)) :
                       0;
-                    */
+                    
                     GCDesc desc{gcFrac, contextFrac};
                     fragFactor *= gcBias.get(desc);
                     /*

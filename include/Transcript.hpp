@@ -318,7 +318,7 @@ public:
             auto cs = (s > 0) ? GCCount_[s - 1] : 0;
             auto ce = GCCount_[e];
 
-            /*
+            
             int fs = s - outside5p;
             int fe = s + inside5p;
             int ts = e - inside3p;
@@ -329,16 +329,16 @@ public:
             bool tpLeftExists = (ts >= 0);
             bool tpRightExists = (te <= lastPos);
 
+            /*
             if (!(fpLeftExists and fpRightExists and tpLeftExists and tpRightExists)) {
               return GCDesc();
             }
+            */
             auto fps = (fpLeftExists) ? GCCount_[fs] : 0;
             auto fpe = (fpRightExists) ? GCCount_[fe] : ce;
             auto tps = (tpLeftExists) ? GCCount_[ts] : 0;
             auto tpe = (tpRightExists) ? GCCount_[te] : ce;
-            */ 
-            valid = true;
-            /*
+            
             // now, clamp to actual bounds
             fs = (fs < 0) ? 0 : fs;
             fe = (fe > lastPos) ? lastPos : fe;
@@ -347,8 +347,12 @@ public:
             int fpContextSize = (!fpLeftExists) ? (fe + 1) : (fe - fs);
             int tpContextSize = (!tpLeftExists) ? (te + 1) : (te - ts);
             contextSize = static_cast<double>(fpContextSize + tpContextSize);
-            if (contextSize == 0) { std::cerr << "HRMMM" << std::endl; }
-            
+            if (contextSize == 0) {
+              //std::cerr << "" << std::endl;
+              return GCDesc();
+            }
+            valid = true;
+            /* 
             
             int fs = std::max(s - outside5p, 0);
             int fe = std::min(s + inside5p, lastPos);
@@ -364,17 +368,17 @@ public:
             */
             
 
-             
+            /* 
             auto fps = (s >= outside5p) ? GCCount_[s-outside5p] : 0;
             auto fpe = (inside5p > 0) ? GCCount_[std::min(s+inside5p, lastPos)] : cs;
             auto tps = (inside3p > 0) ?
                 ((e >= inside3p) ? GCCount_[e-inside3p] : 0) : ce;
             auto tpe = GCCount_[std::min(e+outside3p, lastPos)];
-            
+            */
             
             int32_t fragFrac = std::lrint((100.0 * (ce - cs)) / (e - s + 1));
-            int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (2.0 * contextSize))));
-            //int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (contextSize))));
+            //int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (2.0 * contextSize))));
+            int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (contextSize))));
             //int32_t contextFrac = std::lrint((100.0 * (((fpeCount - fpsCount) + (tpeCount - tpsCount)) / (contextSize))));
             /*
             if (contextFrac > 100) {
