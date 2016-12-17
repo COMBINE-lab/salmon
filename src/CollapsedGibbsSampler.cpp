@@ -58,6 +58,7 @@ constexpr double minWeight = std::numeric_limits<double>::denorm_min();
 void sampleRoundNonCollapsedMultithreaded_(
     std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
     std::vector<bool>& active,
+    std::vector<uint32_t>& activeList,
     std::vector<uint64_t>& countMap, std::vector<double>& probMap,
     std::vector<double>& muGlobal, Eigen::VectorXd& effLens,
     const std::vector<double>& priorAlphas, std::vector<double>& txpCount,
@@ -77,18 +78,19 @@ void sampleRoundNonCollapsedMultithreaded_(
 
   // Compute the mu to be used in the equiv class resampling
   tbb::parallel_for(
-      BlockedIndexRange(size_t(0), size_t(txpCount.size())),
+                    BlockedIndexRange(size_t(0), size_t(activeList.size()), 1024), // 1024 is grainsize, use only with simple_partitioner
       [&, beta](const BlockedIndexRange& range) -> void {
         GeneratorType::reference gen = localGenerator.local();
-        for (auto i : boost::irange(range.begin(), range.end())) {
-          if (active[i]) {
+        for (auto activeIdx : boost::irange(range.begin(), range.end())) {
+          auto i = activeList[activeIdx];
+          //if (active[i]) {
             double ci = static_cast<double>(txpCount[i] + priorAlphas[i]);
             std::gamma_distribution<double> d(ci, 1.0 / (beta + effLens(i)));
             muGlobal[i] = d(gen);
-          }
+          //}
           txpCount[i] = 0.0;
         }
-      });
+      }, tbb::simple_partitioner());
 
   /**
    * These will store "thread local" parameters
@@ -106,7 +108,7 @@ void sampleRoundNonCollapsedMultithreaded_(
 
   // resample within each equivalence class
   tbb::parallel_for(
-      BlockedIndexRange(size_t(0), size_t(eqVec.size())),
+                    BlockedIndexRange(size_t(0), size_t(eqVec.size()), 1024),
       [&](const BlockedIndexRange& range) -> void {
 
         auto& txpCountLoc = combineableCounts.local().txpCount;
@@ -161,7 +163,7 @@ void sampleRoundNonCollapsedMultithreaded_(
             }
           } // valid group
         }   // loop over all eq classes
-      });
+      }, tbb::simple_partitioner());
 
   auto combineCounts = [&txpCount](const CombineableTxpCounts& p) -> void {
     for (size_t i = 0; i < txpCount.size(); ++i) {
@@ -262,6 +264,15 @@ bool CollapsedGibbsSampler::sample(
     }
   }
 
+  std::vector<uint32_t> activeList; activeList.reserve(numTranscripts);
+  for (size_t i = 0; i < numTranscripts; ++i) {
+    if (active[i]) {
+      activeList.push_back(i);
+    } else {
+      alphasIn[i] = 0.0;
+      alphasInit[i] = 0.0;
+    }
+  }
 
   // will hold estimated counts
   std::vector<double> alphas(numTranscripts, 0.0);
@@ -322,7 +333,7 @@ bool CollapsedGibbsSampler::sample(
 
     // Thin the chain by a factor of (numInternalRounds)
     for (size_t i = 0; i < numInternalRounds; ++i) {
-      sampleRoundNonCollapsedMultithreaded_(eqVec, active, countMap, probMap, mu,
+      sampleRoundNonCollapsedMultithreaded_(eqVec, active, activeList, countMap, probMap, mu,
                                             effLens, priorAlphas, alphasIn,
                                             offsetMap);
     }

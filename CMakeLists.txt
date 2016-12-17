@@ -436,7 +436,8 @@ ExternalProject_Add(libjellyfish
 set (FETCHED_JELLYFISH TRUE)
 endif()
 
-find_package(TBB)
+## TODO
+# find_package(TBB)
 
 ##
 #
@@ -456,7 +457,7 @@ endif()
 message("Build system will fetch and build Intel Threading Building Blocks")
 message("==================================================================")
 # These are useful for the custom install step we'll do later
-set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb44_20160526oss)
+set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2017_U3)
 set(TBB_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
 
 if ("${TBB_COMPILER}" STREQUAL "gcc")
@@ -467,10 +468,10 @@ endif()
 
 ExternalProject_Add(libtbb
 	DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    URL https://www.threadingbuildingblocks.org/sites/default/files/software_releases/source/tbb44_20160526oss_src_0.tgz
-    DOWNLOAD_COMMAND curl -k -L https://www.threadingbuildingblocks.org/sites/default/files/software_releases/source/tbb44_20160526oss_src_0.tgz -o tbb_20160526oss_src.tgz &&
-                    tar -xzvf tbb_20160526oss_src.tgz
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb44_20160526oss
+    #URL https://github.com/01org/tbb/archive/2017_U3.tar.gz 
+    DOWNLOAD_COMMAND curl -k -L https://github.com/01org/tbb/archive/2017_U3.tar.gz -o tbb-2017_U3.tgz &&
+                    tar -xzvf tbb-2017_U3.tgz
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2017_U3
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     PATCH_COMMAND "${TBB_PATCH_STEP}"
     CONFIGURE_COMMAND ""

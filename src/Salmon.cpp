@@ -39,6 +39,7 @@
 #include <boost/program_options/parsers.hpp>
 #include <boost/range/irange.hpp>
 #include <boost/filesystem.hpp>
+#include <boost/any.hpp>
 
 // C++ string formatting library
 #include "spdlog/fmt/fmt.h"
