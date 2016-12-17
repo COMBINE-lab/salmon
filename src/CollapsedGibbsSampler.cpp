@@ -43,6 +43,33 @@ using BlockedIndexRange = tbb::blocked_range<size_t>;
 constexpr double minEQClassWeight = std::numeric_limits<double>::denorm_min();
 constexpr double minWeight = std::numeric_limits<double>::denorm_min();
 
+/** http://codereview.stackexchange.com/questions/106773/dividing-a-range-into-n-sub-ranges */
+template <typename Iterator>
+std::vector<std::pair<Iterator, Iterator>>
+  divide_work( Iterator begin, Iterator end, std::size_t n )
+{
+  std::vector<std::pair<Iterator, Iterator>> ranges;
+  if (n == 0) return ranges;
+  ranges.reserve(n);
+
+  auto dist = std::distance(begin, end);
+  n = std::min<size_t>(n, dist);
+  auto chunk = dist / n;
+  auto remainder = dist % n;
+
+  for (size_t i = 0; i < n-1; ++i) {
+    auto next_end = std::next(begin, chunk + (remainder ? 1 : 0));
+    ranges.emplace_back(begin, next_end);
+
+    begin = next_end;
+    if (remainder) remainder -= 1;
+  }
+
+  // last chunk
+  ranges.emplace_back(begin, end);
+  return ranges;
+}
+
 /**
  * This non-collapsed Gibbs step is largely inspired by the method first
  * introduced by  Turro et al. [1].  Given the current estimates `txpCount` of the read count
@@ -66,8 +93,8 @@ void sampleRoundNonCollapsedMultithreaded_(
 
   // generate coeff for \mu from \alpha and \effLens
   double beta = 0.1;
-  double norm = 0.0;
-
+  double norm = 0.0; 
+  /*
   // Sample the transcript fractions \mu from a gamma distribution, and
   // reset txpCounts to zero for each transcript.
   typedef tbb::enumerable_thread_specific<pcg32_unique> GeneratorType;
@@ -91,6 +118,17 @@ void sampleRoundNonCollapsedMultithreaded_(
           txpCount[i] = 0.0;
         }
       }, tbb::simple_partitioner());
+  */
+  auto ugen = pcg32_unique(pcg_extras::seed_seq_from<std::random_device>());
+  for (auto activeIdx : activeList) {
+    auto i = activeList[activeIdx];
+    //if (active[i]) {
+    double ci = static_cast<double>(txpCount[i] + priorAlphas[i]);
+    std::gamma_distribution<double> d(ci, 1.0 / (beta + effLens(i)));
+    muGlobal[i] = d(ugen);
+    //}
+    txpCount[i] = 0.0;
+  }
 
   /**
    * These will store "thread local" parameters
