@@ -455,6 +455,28 @@ bool GZipWriter::writeAbundances(
   return true;
 }
 
+bool GZipWriter::setSamplingPath(const SalmonOpts& sopt) {
+  namespace bfs = boost::filesystem;
+
+  bfs::path auxDir = path_ / sopt.auxDir;
+  if (!bfs::exists(auxDir)) {
+    bool auxSuccess = boost::filesystem::create_directories(auxDir);
+    if (!auxSuccess) {
+      sopt.jointLog->critical("Could not create auxiliary directory {}", auxDir.string());
+      return false;
+    }
+  }
+  bsPath_ = auxDir / "bootstrap";
+  if (!bfs::exists(bsPath_)) {
+    bool bsSuccess = boost::filesystem::create_directories(bsPath_);
+    if (!bsSuccess) {
+      sopt.jointLog->critical("Could not create sampling directory {}", bsPath_.string());
+      return false;
+    }
+  }
+  return true;
+}
+
 template <typename T>
 bool GZipWriter::writeBootstrap(const std::vector<T>& abund, bool quiet) {
 #if defined __APPLE__

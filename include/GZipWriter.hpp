@@ -38,6 +38,7 @@ class GZipWriter {
     template <typename T>
     bool writeBootstrap(const std::vector<T>& abund, bool quiet=false);
 
+  bool setSamplingPath(const SalmonOpts& sopt);
    private:
      boost::filesystem::path path_;
      boost::filesystem::path bsPath_;

@@ -118,7 +118,8 @@ void sampleRoundNonCollapsedMultithreaded_(
           txpCount[i] = 0.0;
         }
       }, tbb::simple_partitioner());
-  */
+  */ 
+  
   auto ugen = pcg32_unique(pcg_extras::seed_seq_from<std::random_device>());
   for (auto activeIdx : activeList) {
     auto i = activeList[activeIdx];
@@ -129,6 +130,7 @@ void sampleRoundNonCollapsedMultithreaded_(
     //}
     txpCount[i] = 0.0;
   }
+  
 
   /**
    * These will store "thread local" parameters

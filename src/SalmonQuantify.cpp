@@ -2631,6 +2631,7 @@ transcript abundance from RNA-seq reads
 
       jointLog->info("Starting Gibbs Sampler");
       CollapsedGibbsSampler sampler;
+      gzw.setSamplingPath(sopt);
       // The function we'll use as a callback to write samples
       std::function<bool(const std::vector<double>&)> bsWriter =
           [&gzw](const std::vector<double>& alphas) -> bool {
@@ -2648,6 +2649,7 @@ transcript abundance from RNA-seq reads
       }
       jointLog->info("Finished Gibbs Sampler");
     } else if (sopt.numBootstraps > 0) {
+      gzw.setSamplingPath(sopt);
       // The function we'll use as a callback to write samples
       std::function<bool(const std::vector<double>&)> bsWriter =
           [&gzw](const std::vector<double>& alphas) -> bool {
