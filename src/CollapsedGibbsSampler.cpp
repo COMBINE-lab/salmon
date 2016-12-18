@@ -15,6 +15,9 @@
 //#include "fastapprox.h"
 #include <boost/filesystem.hpp>
 #include <boost/math/special_functions/digamma.hpp>
+#include <boost/math/distributions/gamma.hpp>
+#include <boost/random/gamma_distribution.hpp>
+#include <boost/random/variate_generator.hpp>
 // PCG Random number generator
 #include "pcg_random.hpp"
 
@@ -125,8 +128,10 @@ void sampleRoundNonCollapsedMultithreaded_(
     auto i = activeList[activeIdx];
     //if (active[i]) {
     double ci = static_cast<double>(txpCount[i] + priorAlphas[i]);
-    std::gamma_distribution<double> d(ci, 1.0 / (beta + effLens(i)));
-    muGlobal[i] = d(ugen);
+    boost::random::gamma_distribution<> d(ci, 1.0 / (beta + effLens(i)));
+    boost::random::variate_generator<pcg32_unique&, boost::random::gamma_distribution<>> bgen(ugen, d);
+    //muGlobal[i] = d(ugen);
+    muGlobal[i] = bgen();
     //}
     txpCount[i] = 0.0;
   }
