@@ -2,6 +2,8 @@
 #include <random>
 #include <unordered_map>
 #include <vector>
+#include <mutex>
+#include <thread>
 
 #include "tbb/blocked_range.h"
 #include "tbb/combinable.h"
@@ -16,8 +18,6 @@
 #include <boost/filesystem.hpp>
 #include <boost/math/special_functions/digamma.hpp>
 #include <boost/math/distributions/gamma.hpp>
-#include <boost/random/gamma_distribution.hpp>
-#include <boost/random/variate_generator.hpp>
 // PCG Random number generator
 #include "pcg_random.hpp"
 
@@ -97,7 +97,7 @@ void sampleRoundNonCollapsedMultithreaded_(
   // generate coeff for \mu from \alpha and \effLens
   double beta = 0.1;
   double norm = 0.0; 
-  /*
+  
   // Sample the transcript fractions \mu from a gamma distribution, and
   // reset txpCounts to zero for each transcript.
   typedef tbb::enumerable_thread_specific<pcg32_unique> GeneratorType;
@@ -108,34 +108,23 @@ void sampleRoundNonCollapsedMultithreaded_(
 
   // Compute the mu to be used in the equiv class resampling
   tbb::parallel_for(
-                    BlockedIndexRange(size_t(0), size_t(activeList.size()), 1024), // 1024 is grainsize, use only with simple_partitioner
+                    BlockedIndexRange(size_t(0), size_t(activeList.size())), // 1024 is grainsize, use only with simple_partitioner
       [&, beta](const BlockedIndexRange& range) -> void {
         GeneratorType::reference gen = localGenerator.local();
         for (auto activeIdx : boost::irange(range.begin(), range.end())) {
           auto i = activeList[activeIdx];
-          //if (active[i]) {
-            double ci = static_cast<double>(txpCount[i] + priorAlphas[i]);
-            std::gamma_distribution<double> d(ci, 1.0 / (beta + effLens(i)));
-            muGlobal[i] = d(gen);
-          //}
+          double ci = static_cast<double>(txpCount[i] + priorAlphas[i]);
+          std::gamma_distribution<double> d(ci, 1.0 / (beta + effLens(i)));
+          muGlobal[i] = d(gen);
           txpCount[i] = 0.0;
+          /** DEBUG
+          if (std::isnan(muGlobal[i]) or std::isinf(muGlobal[i])) {
+            std::cerr << "txpCount = " << txpCount[i] << ", prior = " << priorAlphas[i] << ", alpha = " << ci << ", beta = " << (1.0 / (beta + effLens(i))) << ", mu = " << muGlobal[i] << "\n";
+            std::exit(1);
+          } 
+          **/
         }
-      }, tbb::simple_partitioner());
-  */ 
-  
-  auto ugen = pcg32_unique(pcg_extras::seed_seq_from<std::random_device>());
-  for (auto activeIdx : activeList) {
-    auto i = activeList[activeIdx];
-    //if (active[i]) {
-    double ci = static_cast<double>(txpCount[i] + priorAlphas[i]);
-    boost::random::gamma_distribution<> d(ci, 1.0 / (beta + effLens(i)));
-    boost::random::variate_generator<pcg32_unique&, boost::random::gamma_distribution<>> bgen(ugen, d);
-    //muGlobal[i] = d(ugen);
-    muGlobal[i] = bgen();
-    //}
-    txpCount[i] = 0.0;
-  }
-  
+      });
 
   /**
    * These will store "thread local" parameters
@@ -151,9 +140,10 @@ void sampleRoundNonCollapsedMultithreaded_(
   };
   tbb::combinable<CombineableTxpCounts> combineableCounts(txpCount.size());
 
+  std::mutex writeMut;
   // resample within each equivalence class
   tbb::parallel_for(
-                    BlockedIndexRange(size_t(0), size_t(eqVec.size()), 1024),
+                    BlockedIndexRange(size_t(0), size_t(eqVec.size())),
       [&](const BlockedIndexRange& range) -> void {
 
         auto& txpCountLoc = combineableCounts.local().txpCount;
@@ -183,9 +173,38 @@ void sampleRoundNonCollapsedMultithreaded_(
               for (size_t i = 0; i < groupSize; ++i) {
                 auto tid = txps[i];
                 size_t gi = offset + i;
-                probMap[gi] = muGlobal[tid] * weights[i];
+                probMap[gi] = (1000.0 * muGlobal[tid]) * weights[i];
                 muSum += probMap[gi];
                 denom += probMap[gi];
+              }
+
+              if (denom <= ::minEQClassWeight) {
+                {
+                  std::lock_guard<std::mutex> lg(writeMut);
+                  std::cerr << "[WARNING] eq class denom was too small : denom = " << denom << ", numReads = "
+                            << classCount << ". Distributing reads evenly for this class\n";
+                }
+
+                denom = 0.0;
+                muSum = 0.0;
+                for (size_t i = 0; i < groupSize; ++i) {
+                  auto tid = txps[i];
+                  size_t gi = offset + i;
+                  probMap[gi] = 1.0 / effLens(tid);
+                  muSum += probMap[gi];
+                  denom += probMap[gi];
+                }
+
+                // If it's still too small --- divide evenly
+                if (denom <= ::minEQClassWeight) {
+                  for (size_t i = 0; i < groupSize; ++i) {
+                    auto tid = txps[i];
+                    size_t gi = offset + i;
+                    probMap[gi] = 1.0;
+                  }
+                  denom = groupSize;
+                  muSum = groupSize;
+                }
               }
 
               if (denom > ::minEQClassWeight) {
@@ -197,9 +216,6 @@ void sampleRoundNonCollapsedMultithreaded_(
                   auto ind = dist(gen);
                   ++txpCountLoc[txps[ind]];
                 }
-              } // do nothing when denom less than minEQClassWeight
-              else {
-                std::cerr << "minEQClassWeight error";
               }
             } // do nothing if group size less than 2
             else {
@@ -208,7 +224,7 @@ void sampleRoundNonCollapsedMultithreaded_(
             }
           } // valid group
         }   // loop over all eq classes
-      }, tbb::simple_partitioner());
+      });
 
   auto combineCounts = [&txpCount](const CombineableTxpCounts& p) -> void {
     for (size_t i = 0; i < txpCount.size(); ++i) {
@@ -248,7 +264,8 @@ std::vector<double> populatePriorAlphasGibbs_(
   // value for each transcript based on its length).
   if (!perTranscriptPrior) {
     for (size_t i = 0; i < transcripts.size(); ++i) {
-      priorAlphas[i] = priorValue * effLens(i);
+      double ml = std::max(1.0, effLens(i));
+      priorAlphas[i] = priorValue * ml;
     }
   }
   return priorAlphas;
@@ -276,12 +293,8 @@ bool CollapsedGibbsSampler::sample(
   std::vector<std::vector<int>> allSamples(
       numSamples, std::vector<int>(transcripts.size(), 0));
 
-  bool perTranscriptPrior = (sopt.useVBOpt) ? sopt.perTranscriptPrior : true;
-  double priorValue = (sopt.useVBOpt) ? sopt.vbPrior : 1e-4;
-  std::vector<double> priorAlphas = populatePriorAlphasGibbs_(
-      transcripts, effLens, priorValue, perTranscriptPrior);
-  std::vector<double> alphasIn(priorAlphas.size(), 0.0);
-  std::vector<double> alphasInit(priorAlphas.size(), 0.0);
+  std::vector<double> alphasIn(transcripts.size(), 0.0);
+  std::vector<double> alphasInit(transcripts.size(), 0.0);
 
   bool useScaledCounts = (!sopt.useQuasi and !sopt.allowOrphans);
   auto numMappedFragments = (useScaledCounts) ? readExp.upperBoundHits()
@@ -295,6 +308,19 @@ bool CollapsedGibbsSampler::sample(
     alphasInit[i] = txp.projectedCounts;
     effLens(i) = txp.EffectiveLength;
   }
+
+  bool perTranscriptPrior = (sopt.useVBOpt) ? sopt.perTranscriptPrior : true;
+  double priorValue = (sopt.useVBOpt) ? sopt.vbPrior : 1e-4;
+  std::vector<double> priorAlphas = populatePriorAlphasGibbs_(
+                                                              transcripts, effLens, priorValue, perTranscriptPrior);
+  /** DEBUG 
+  for (size_t i = 0; i < priorAlphas.size(); ++i) {
+    auto& v = priorAlphas[i];
+    if (!std::isfinite(v)) {
+      std::cerr << "prior for transcript " << i << " is " << v << ", eff length = " << effLens(i) << "\n";
+    }
+  }
+  **/
 
   std::vector<bool> active(numTranscripts, false);
   size_t countMapSize{0};
