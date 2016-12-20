@@ -2345,7 +2345,7 @@ int salmonQuantify(int argc, char* argv[]) {
      "writeUnmappedNames",
      po::bool_switch(&(sopt.writeUnmappedNames))->default_value(false),
      "Write the names of un-mapped reads to the file unmapped_names.txt in the auxiliary directory.")
-    ("quasiCoverage,z",
+    ("quasiCoverage,x",
      po::value<double>(&(sopt.quasiCoverage))->default_value(0.0),
      "[Experimental]: The fraction of the read that must be covered by MMPs (of length >= 31) if "
      "this read is to be considered as \"mapped\".  This may help to avoid \"spurious\" mappings. "
