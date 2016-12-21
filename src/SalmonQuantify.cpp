@@ -404,9 +404,11 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 
           // Allow for a non-uniform fragment start position distribution
 
-          // double startPosProb{-logRefLength};
+          double startPosProb{-logRefLength};
           // DEC 9
-          double startPosProb = (aln.fragLen <= refLength) ? -std::log(refLength - aln.fragLen + 1) : salmon::math::LOG_EPSILON;
+          if (aln.mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
+            startPosProb = (aln.fragLen <= refLength) ? -std::log(refLength - aln.fragLen + 1) : salmon::math::LOG_EPSILON;
+          }
 
           double fragStartLogNumerator{salmon::math::LOG_1};
           double fragStartLogDenominator{salmon::math::LOG_1};
