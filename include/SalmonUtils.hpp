@@ -165,6 +165,8 @@ inline void incLoop(tbb::atomic<double>& val, double inc) {
 
 std::string getCurrentTimeAsString();
 
+bool validateOptions(SalmonOpts& sopt);
+
 bool processQuantOptions(SalmonOpts& sopt, boost::program_options::variables_map& vm, int32_t numBiasSamples);
 
 

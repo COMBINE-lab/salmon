@@ -304,7 +304,9 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
         // transcript-level term (based on abundance and) an
         // alignment-level term.
         double logRefLength{salmon::math::LOG_0};
-        if (salmonOpts.noEffectiveLengthCorrection or !burnedIn) {
+        if (salmonOpts.noLengthCorrection) {
+          logRefLength = 1.0;
+        } else if (salmonOpts.noEffectiveLengthCorrection or !burnedIn) {
           logRefLength = std::log(transcript.RefLength);
         } else {
           logRefLength = transcript.getCachedLogEffectiveLength();
@@ -2249,6 +2251,13 @@ int salmonQuantify(int argc, char* argv[]) {
      po::value<uint32_t>(&(sopt.maxReadOccs))->default_value(100),
      "Reads \"mapping\" to more than this many places won't be "
      "considered.")
+    ("noLengthCorrection",
+     po::bool_switch(&(sopt.noLengthCorrection))->default_value(false),
+     "[experimental] : Entirely disables length correction when estimating "
+     "the abundance of transcripts.  This option can be used with protocols "
+     "where one expects that fragments derive from their underlying targets "
+     "without regard to that target's length (e.g. QuantSeq)"
+     )
     (
      "noEffectiveLengthCorrection",
      po::bool_switch(&(sopt.noEffectiveLengthCorrection))
@@ -2496,6 +2505,11 @@ transcript abundance from RNA-seq reads
     bool optionsOK =
         salmon::utils::processQuantOptions(sopt, vm, numBiasSamples);
     if (!optionsOK) {
+      std::exit(1);
+    }
+    bool optionsValidate =
+      salmon::utils::validateOptions(sopt);
+    if (!optionsValidate) {
       std::exit(1);
     }
  

@@ -294,6 +294,7 @@ void writeAbundancesFromCollapsed(const SalmonOpts& sopt, ExpLib& alnLib,
     double refLength = sopt.noEffectiveLengthCorrection
                            ? transcript.RefLength
                            : std::exp(transcript.getCachedLogEffectiveLength());
+    if (sopt.noLengthCorrection) { refLength = 100.0; }
     tfracDenom += (transcript.projectedCounts / numMappedFrags) / refLength;
   }
 
@@ -306,6 +307,7 @@ void writeAbundancesFromCollapsed(const SalmonOpts& sopt, ExpLib& alnLib,
     double count = transcript.projectedCounts;
     double npm = (transcript.projectedCounts / numMappedFrags);
     double effLength = std::exp(logLength);
+    if (sopt.noLengthCorrection) { effLength = 100.0; }
     double tfrac = (npm / effLength) / tfracDenom;
     double tpm = tfrac * million;
     fmt::print(output.get(), "{}\t{}\t{}\t{}\t{}\n", transcript.RefName,
@@ -402,6 +404,7 @@ void writeAbundances(const SalmonOpts& sopt, ExpLib& alnLib,
     double logLength = sopt.noEffectiveLengthCorrection
                            ? std::log(transcript.RefLength)
                            : transcript.getCachedLogEffectiveLength();
+    if (sopt.noLengthCorrection) { logLength = 1.0; }
     /*
     if (!sopt.noSeqBiasModel) {
         double avgLogBias = transcript.getAverageSequenceBias(
@@ -1283,6 +1286,35 @@ std::string getCurrentTimeAsString() {
     auto time = std::string(std::asctime(std::localtime(&result)));
     time.pop_back(); // remove the newline
     return time;
+}
+
+/**
+ * Validate the options regardless of the mode (quasi or alignment). 
+ * Assumes a logger already exists.
+ **/
+bool validateOptions(SalmonOpts& sopt) {
+
+  // The growing list of thou shalt nots
+
+  /**
+  Since bias correction is dependent on
+  modifying effective lengths, we can not
+  allow it if we are not employing any length
+  correction.
+  **/
+  if (sopt.noLengthCorrection) {
+    bool anyBiasCorrect =
+      sopt.gcBiasCorrect or sopt.biasCorrect or sopt.posBiasCorrect;
+    if (anyBiasCorrect) {
+      sopt.jointLog->critical("Since bias correction relies on modifying "
+                              "effective lengths, you cannot enable bias "
+                              "correction simultaneously with the --noLengthCorrection "
+                              "option.");
+      return false;
+    }
+  }
+
+  return true;
 }
 
 /**

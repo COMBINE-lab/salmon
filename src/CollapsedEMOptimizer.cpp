@@ -797,6 +797,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
     effLens(i) = useEffectiveLengths
                      ? std::exp(txp.getCachedLogEffectiveLength())
                      : txp.RefLength;
+    if (sopt.noLengthCorrection) { effLens(i) = 100.0; }
     txp.EffectiveLength = effLens(i);
 
     double uniqueCount = static_cast<double>(txp.uniqueCount() + 0.5);

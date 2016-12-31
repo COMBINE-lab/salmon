@@ -64,6 +64,8 @@ struct SalmonOpts {
                                       // account when computing the probability that a
                                      // fragment was generated from a transcript.
 
+    bool noLengthCorrection; // Don't account for transcript length at all during abundance estimation.
+
     bool noBiasLengthThreshold; // Don't require that the recomputed effective length for a target
                                 // be above a threshold before applying it.
     bool useBiasLengthThreshold; // Don't require that the recomputed effective length for a target
