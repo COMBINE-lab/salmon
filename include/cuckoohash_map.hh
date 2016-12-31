@@ -9,6 +9,7 @@
 #include <bitset>
 #include <cassert>
 #include <chrono>
+#include <climits>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -29,12 +30,11 @@
 #include "cuckoohash_config.hh"
 #include "cuckoohash_util.hh"
 #include "lazy_array.hh"
-#include "default_hasher.hh"
 
 //! cuckoohash_map is the hash table class.
 template < class Key,
            class T,
-           class Hash = DefaultHasher<Key>,
+           class Hash = std::hash<Key>,
            class Pred = std::equal_to<Key>,
            class Alloc = std::allocator<std::pair<const Key, T>>,
            size_t SLOT_PER_BUCKET = DEFAULT_SLOT_PER_BUCKET
@@ -55,19 +55,19 @@ public:
     typedef Alloc                   allocator_type;
 
     //! slot_per_bucket is the number of items each bucket in the table can hold
-    static const size_t slot_per_bucket = SLOT_PER_BUCKET;
+    static constexpr size_t slot_per_bucket = SLOT_PER_BUCKET;
 
     //! For any update operations, the callable passed in must be convertible to
     //! the following type
     typedef std::function<void(mapped_type&)> updater_type;
 
     //! Class returned by operator[] which wraps an entry in the hash table.
-    //! Note that this reference type behave somewhat differently from an STL
+    //! Note that this reference type behaves somewhat differently from an STL
     //! map reference. Most importantly, running this operator will not insert a
     //! default key-value pair into the map if the given key is not already in
     //! the map.
     class reference {
-        // Note that this implementation here is not exactly STL compliant. To
+        // Note that this implementation is not exactly STL compliant. To
         // maintain performance and avoid hitting the hash table too many times,
         // The reference object is *lazy*. In other words,
         //
@@ -124,24 +124,25 @@ public:
         friend class cuckoohash_map<Key, T, Hash, Pred, Alloc, slot_per_bucket>;
     };
 
+    //! Const version of \ref reference
     typedef const mapped_type const_reference;
 
-    typedef char partial_t;
-
 private:
+    typedef uint8_t partial_t;
+
     // Constants used internally
 
     // true if the key is small and simple, which means using partial keys for
     // lookup would probably slow us down
-    static const bool is_simple =
+    static constexpr bool is_simple =
         std::is_pod<key_type>::value && sizeof(key_type) <= 8;
 
     // We enable certain methods only if the mapped_type is copy-assignable
-    static const bool value_copy_assignable = std::is_copy_assignable<
+    static constexpr bool value_copy_assignable = std::is_copy_assignable<
         mapped_type>::value;
 
     // number of locks in the locks array
-    static const size_t kNumLocks = 1 << 16;
+    static constexpr size_t kNumLocks = 1 << 16;
 
     // number of cores on the machine
     static size_t kNumCores() {
@@ -154,12 +155,14 @@ private:
     class LIBCUCKOO_ALIGNAS(64) spinlock {
         std::atomic_flag lock_;
     public:
-        spinlock() {
+        size_t elems_in_buckets;
+
+        spinlock() : elems_in_buckets(0) {
             lock_.clear();
         }
 
         inline void lock() {
-            while (lock_.test_and_set(std::memory_order_acquire));
+            while (lock_.test_and_set(std::memory_order_acq_rel));
         }
 
         inline void unlock() {
@@ -167,7 +170,7 @@ private:
         }
 
         inline bool try_lock() {
-            return !lock_.test_and_set(std::memory_order_acquire);
+            return !lock_.test_and_set(std::memory_order_acq_rel);
         }
 
     };
@@ -320,34 +323,12 @@ private:
         hashpower_.store(val, std::memory_order_release);
     }
 
-    // get_counterid returns the counterid for the current thread.
-    static inline int get_counterid() {
-        // counterid stores the per-thread counter index of each thread. Each
-        // counter value corresponds to a core on the machine.
-        static LIBCUCKOO_THREAD_LOCAL int counterid = -1;
-
-        if (counterid < 0) {
-            counterid = rand() % kNumCores();
-        }
-        return counterid;
-    }
-
     // reserve_calc takes in a parameter specifying a certain number of slots
     // for a table and returns the smallest hashpower that will hold n elements.
     static size_t reserve_calc(const size_t n) {
-        size_t buckets = (n + slot_per_bucket - 1) / slot_per_bucket;
+        const size_t buckets = (n + slot_per_bucket - 1) / slot_per_bucket;
         size_t blog2;
-        if (buckets <= 1) {
-            blog2 = 1;
-        } else {
-            blog2 = 0;
-            for (size_t bcounter = buckets; bcounter > 1; bcounter >>= 1) {
-                ++blog2;
-            }
-            if (hashsize(blog2) < buckets) {
-                ++blog2;
-            }
-        }
+        for (blog2 = 1; (1UL << blog2) < buckets; ++blog2);
         assert(n <= hashsize(blog2) * slot_per_bucket);
         return blog2;
     }
@@ -361,6 +342,8 @@ public:
      * table allows for automatic expansion.
      * @param mhp the maximum hashpower that the table can take on (pass in 0
      * for no limit)
+     * @param hf hash function instance to use
+     * @param eql equality function instance to use
      * @throw std::invalid_argument if the given minimum load factor is invalid,
      * or if the initial space exceeds the maximum hashpower
      */
@@ -372,7 +355,7 @@ public:
         : hash_fn(hf), eq_fn(eql) {
         minimum_load_factor(mlf);
         maximum_hashpower(mhp);
-        size_t hp = reserve_calc(n);
+        const size_t hp = reserve_calc(n);
         if (mhp != NO_MAXIMUM_HASHPOWER && hp > mhp) {
             throw std::invalid_argument(
                 "hashpower for initial size " + std::to_string(hp) +
@@ -381,8 +364,6 @@ public:
         set_hashpower(hp);
         buckets_.resize(hashsize(hp));
         locks_.allocate(std::min(locks_t::size(), hashsize(hp)));
-        num_inserts_.resize(kNumCores(), 0);
-        num_deletes_.resize(kNumCores(), 0);
     }
 
     ~cuckoohash_map() {
@@ -472,12 +453,12 @@ public:
     }
 
     //! find searches through the table for \p key, and stores the associated
-    //! value it finds in \p val. must be copy assignable.
+    //! value it finds in \p val. Must be copy assignable.
     template <typename K>
     bool find(const K& key, mapped_type& val) const {
-        size_t hv = hashed_key(key);
-        auto b = snapshot_and_lock_two(hv);
-        const cuckoo_status st = cuckoo_find(key, val, hv, b.i[0], b.i[1]);
+        const hash_value hv = hashed_key(key);
+        const auto b = snapshot_and_lock_two(hv);
+        const cuckoo_status st = cuckoo_find(key, val, hv.partial, b.i[0], b.i[1]);
         return (st == ok);
     }
 
@@ -487,7 +468,7 @@ public:
     template <typename K>
     mapped_type find(const K& key) const {
         mapped_type val;
-        bool done = find(key, val);
+        const bool done = find(key, val);
         if (done) {
             return val;
         } else {
@@ -499,9 +480,9 @@ public:
     //! finds it in the table, and false otherwise.
     template <typename K>
     bool contains(const K& key) const {
-        size_t hv = hashed_key(key);
-        auto b = snapshot_and_lock_two(hv);
-        const bool result = cuckoo_contains(key, hv, b.i[0], b.i[1]);
+        const hash_value hv = hashed_key(key);
+        const auto b = snapshot_and_lock_two(hv);
+        const bool result = cuckoo_contains(key, hv.partial, b.i[0], b.i[1]);
         return result;
     }
 
@@ -520,18 +501,19 @@ public:
      */
     template <typename K, typename... Args>
     bool insert(K&& key, Args&&... val) {
-        return cuckoo_insert_loop(hashed_key(key), std::forward<K>(key),
+        return cuckoo_insert_loop(hashed_key(key),
+                                  std::forward<K>(key),
                                   std::forward<Args>(val)...);
     }
 
-    //! erase removes \p key and it's associated value from the table, calling
+    //! erase removes \p key and its associated value from the table, calling
     //! their destructors. If \p key is not there, it returns false, otherwise
     //! it returns true.
     template <typename K>
     bool erase(const K& key) {
-        size_t hv = hashed_key(key);
-        auto b = snapshot_and_lock_two(hv);
-        const cuckoo_status st = cuckoo_delete(key, hv, b.i[0], b.i[1]);
+        const hash_value hv = hashed_key(key);
+        const auto b = snapshot_and_lock_two(hv);
+        const cuckoo_status st = cuckoo_delete(key, hv.partial, b.i[0], b.i[1]);
         return (st == ok);
     }
 
@@ -539,9 +521,9 @@ public:
     //! not there, it returns false, otherwise it returns true.
     template <typename K, typename V>
     bool update(const K& key, V&& val) {
-        size_t hv = hashed_key(key);
-        auto b = snapshot_and_lock_two(hv);
-        const cuckoo_status st = cuckoo_update(hv, b.i[0], b.i[1],
+        const hash_value hv = hashed_key(key);
+        const auto b = snapshot_and_lock_two(hv);
+        const cuckoo_status st = cuckoo_update(hv.partial, b.i[0], b.i[1],
                                                key, std::forward<V>(val));
         return (st == ok);
     }
@@ -554,9 +536,10 @@ public:
     typename std::enable_if<
         std::is_convertible<Updater, updater_type>::value,
         bool>::type update_fn(const K& key, Updater fn) {
-        size_t hv = hashed_key(key);
-        auto b = snapshot_and_lock_two(hv);
-        const cuckoo_status st = cuckoo_update_fn(key, fn, hv, b.i[0], b.i[1]);
+        const hash_value hv = hashed_key(key);
+        const auto b = snapshot_and_lock_two(hv);
+        const cuckoo_status st = cuckoo_update_fn(key, fn, hv.partial,
+                                                  b.i[0], b.i[1]);
         return (st == ok);
     }
 
@@ -569,19 +552,19 @@ public:
     typename std::enable_if<
         std::is_convertible<Updater, updater_type>::value,
         void>::type upsert(K&& key, Updater fn, Args&&... val) {
-        size_t hv = hashed_key(key);
+        const hash_value hv = hashed_key(key);
         cuckoo_status st;
         do {
             auto b = snapshot_and_lock_two(hv);
             size_t hp = get_hashpower();
-            st = cuckoo_update_fn(key, fn, hv, b.i[0], b.i[1]);
+            st = cuckoo_update_fn(key, fn, hv.partial, b.i[0], b.i[1]);
             if (st == ok) {
                 break;
             }
 
             // We run an insert, since the update failed. Since we already have
             // the locks, we don't run cuckoo_insert_loop immediately, to avoid
-            // releasing and re-grabbing the locks. Recall, that the locks will
+            // releasing and re-grabbing the locks. Recall that the locks will
             // be released at the end of this call to cuckoo_insert.
             st = cuckoo_insert(hv, std::move(b), std::forward<K>(key),
                                std::forward<Args>(val)...);
@@ -607,10 +590,10 @@ public:
      * @param n the hashpower to set for the table
      * @return true if the table changed size, false otherwise
      * @throw libcuckoo_maximum_hashpower_exceeded if the specified hashpower is
-     * greater than the maximum, if one was set
+     * greater than the maximum, if one was set.
      */
     bool rehash(size_t n) {
-        size_t hp = get_hashpower();
+        const size_t hp = get_hashpower();
         if (n == hp) {
             return false;
         }
@@ -626,11 +609,11 @@ public:
      * @param n the number of elements to reserve space for
      * @return true if the size of the table changed, false otherwise
      * @throw libcuckoo_maximum_hashpower_exceeded if the specified hashpower is
-     * greater than the maximum, if one was set
+     * greater than the maximum, if one was set.
      */
     bool reserve(size_t n) {
-        size_t hp = get_hashpower();
-        size_t new_hp = reserve_calc(n);
+        const size_t hp = get_hashpower();
+        const size_t new_hp = reserve_calc(n);
         if (new_hp == hp) {
             return false;
         }
@@ -662,6 +645,42 @@ public:
     }
 
 private:
+    // hash_value contains a hash and partial for a given key. The partial key
+    // is used for partial-key cuckoohashing, and for finding the alternate
+    // bucket of that a key hashes to.
+    struct hash_value {
+        size_t hash;
+        partial_t partial;
+    };
+
+    template <typename K>
+    hash_value hashed_key(const K& key) const {
+        const size_t hash = hash_function()(key);
+        return { hash, partial_key(hash) };
+    }
+
+    template <typename K>
+    size_t hashed_key_only_hash(const K& key) const {
+        return hash_function()(key);
+    }
+
+    // The partial key must only depend on the hash value. It cannot change with
+    // the hashpower, because, in order for `cuckoo_fast_double` to work
+    // properly, the alt_index must only grow by one bit at the top each time we
+    // expand the table.
+    static partial_t partial_key(const size_t hash) {
+        const uint64_t hash_64bit = hash;
+        const uint32_t hash_32bit = (
+            static_cast<uint32_t>(hash_64bit) ^
+            static_cast<uint32_t>(hash_64bit >> 32));
+        const uint16_t hash_16bit = (
+            static_cast<uint16_t>(hash_32bit) ^
+            static_cast<uint16_t>(hash_32bit >> 16));
+        const uint16_t hash_8bit = (
+            static_cast<uint8_t>(hash_16bit) ^
+            static_cast<uint8_t>(hash_16bit >> 8));
+        return hash_8bit;
+    }
 
     template <size_t N>
     struct BucketContainer {
@@ -800,7 +819,10 @@ private:
                const size_t i2, const size_t i3) const {
         std::array<size_t, 3> l{{
                 lock_ind(i1), lock_ind(i2), lock_ind(i3)}};
-        std::sort(l.begin(), l.end());
+	// Lock in order.
+	if (l[2] < l[1]) std::swap(l[2], l[1]);
+	if (l[2] < l[0]) std::swap(l[2], l[0]);
+	if (l[1] < l[0]) std::swap(l[1], l[0]);
         locks_[l[0]].lock();
         check_hashpower(hp, l[0]);
         if (l[1] != l[0]) {
@@ -824,12 +846,12 @@ private:
     // the bucket indices associated with the hash value and the current
     // hashpower.
     TwoBuckets
-    snapshot_and_lock_two(const size_t hv) const noexcept {
+    snapshot_and_lock_two(const hash_value& hv) const noexcept {
         while (true) {
             // Store the current hashpower we're using to compute the buckets
-            size_t hp = get_hashpower();
-            size_t i1 = index_hash(hp, hv);
-            size_t i2 = alt_index(hp, partial_key(hv), i1);
+            const size_t hp = get_hashpower();
+            const size_t i1 = index_hash(hp, hv.hash);
+            const size_t i2 = alt_index(hp, hv.partial, i1);
             try {
                 return lock_two(hp, i1, i2);
             } catch (hashpower_changed&) {
@@ -839,7 +861,7 @@ private:
         }
     }
 
-    // A resource manager which releases all the locks upon destruction. It can
+    // A resource manager that releases all the locks upon destruction. It can
     // only be moved, not copied.
     class AllUnlocker {
     private:
@@ -877,7 +899,7 @@ private:
         }
     };
 
-    // snapshot_and_lock_all takes all the locks, and returns a deleter object,
+    // snapshot_and_lock_all takes all the locks, and returns a deleter object
     // that releases the locks upon destruction. Note that after taking all the
     // locks, it is okay to change the buckets_ vector and the hashpower_, since
     // no other threads should be accessing the buckets.
@@ -905,12 +927,6 @@ private:
         return hashsize(hp) - 1;
     }
 
-    // hashed_key hashes the given key.
-    template <typename K>
-    inline size_t hashed_key(const K& key) const {
-        return hash_function()(key);
-    }
-
     // index_hash returns the first possible bucket that the given hashed key
     // could be.
     static inline size_t index_hash(const size_t hp, const size_t hv) {
@@ -924,19 +940,10 @@ private:
     // index_hash(ti, hv))) == index_hash(ti, hv).
     static inline size_t alt_index(const size_t hp, const partial_t partial,
                                    const size_t index) {
-        // ensure tag is nonzero for the multiply.
-        const partial_t nonzero_tag = (partial >> 1 << 1) + 1;
-        // 0xc6a4a7935bd1e995 is the hash constant from 64-bit MurmurHash2
-        const size_t hash_of_tag =
-            static_cast<size_t>(nonzero_tag * 0xc6a4a7935bd1e995);
-        return (index ^ hash_of_tag) & hashmask(hp);
-    }
-
-    // partial_key returns a partial_t representing the upper sizeof(partial_t)
-    // bytes of the hashed key. This is used for partial-key cuckoohashing, and
-    // for finding the alternate bucket of that a key hashes to.
-    static inline partial_t partial_key(const size_t hv) {
-        return (partial_t)(hv >> ((sizeof(size_t)-sizeof(partial_t)) * 8));
+        // ensure tag is nonzero for the multiply. 0xc6a4a7935bd1e995 is the
+        // hash constant from 64-bit MurmurHash2
+        const size_t nonzero_tag = static_cast<size_t>(partial) + 1;
+        return (index ^ (nonzero_tag * 0xc6a4a7935bd1e995)) & hashmask(hp);
     }
 
     // A constexpr version of pow that we can use for static_asserts
@@ -945,7 +952,7 @@ private:
     }
 
     // The maximum number of items in a BFS path.
-    static const uint8_t MAX_BFS_PATH_LEN = 5;
+    static constexpr uint8_t MAX_BFS_PATH_LEN = 5;
 
     // CuckooRecord holds one position in a cuckoo path. Since cuckoopath
     // elements only define a sequence of alternate hashings for different hash
@@ -954,20 +961,20 @@ private:
     typedef struct {
         size_t bucket;
         size_t slot;
-        size_t hv;
+        hash_value hv;
     } CuckooRecord;
 
     typedef std::array<CuckooRecord, MAX_BFS_PATH_LEN> CuckooRecords;
 
-    // b_slot holds the information for a BFS path through the table
+    // b_slot holds the information for a BFS path through the table.
     #pragma pack(push,1)
     struct b_slot {
-        // The bucket of the last item in the path
+        // The bucket of the last item in the path.
         size_t bucket;
         // a compressed representation of the slots for each of the buckets in
         // the path. pathcode is sort of like a base-slot_per_bucket number, and
         // we need to hold at most MAX_BFS_PATH_LEN slots. Thus we need the
-        // maximum pathcode to be at least slot_per_bucket^(MAX_BFS_PATH_LEN)
+        // maximum pathcode to be at least slot_per_bucket^(MAX_BFS_PATH_LEN).
         size_t pathcode;
         static_assert(const_pow(slot_per_bucket, MAX_BFS_PATH_LEN) <
                       std::numeric_limits<decltype(pathcode)>::max(),
@@ -995,7 +1002,7 @@ private:
     class b_queue {
         // The maximum size of the BFS queue. Note that unless it's less than
         // SLOT_PER_BUCKET^MAX_BFS_PATH_LEN, it won't really mean anything.
-        static const size_t MAX_CUCKOO_COUNT = 512;
+        static constexpr size_t MAX_CUCKOO_COUNT = 512;
         static_assert((MAX_CUCKOO_COUNT & (MAX_CUCKOO_COUNT - 1)) == 0,
                       "MAX_CUCKOO_COUNT should be a power of 2");
         // A circular array of b_slots
@@ -1007,7 +1014,7 @@ private:
 
         // returns the index in the queue after ind, wrapping around if
         // necessary.
-        size_t increment(size_t ind) {
+        size_t increment(size_t ind) const {
             return (ind + 1) & (MAX_CUCKOO_COUNT - 1);
         }
 
@@ -1027,11 +1034,11 @@ private:
             return x;
         }
 
-        bool empty() {
+        bool empty() const {
             return first == last;
         }
 
-        bool full() {
+        bool full() const {
             return increment(last) == first;
         }
     };
@@ -1088,7 +1095,7 @@ private:
     // cuckoopath_move. Thus cuckoopath_move checks that the data matches the
     // cuckoo path before changing it.
     //
-    // throws hashpower_changed if it changed during the search
+    // throws hashpower_changed if it changed during the search.
     int cuckoopath_search(const size_t hp,
                           CuckooRecords& cuckoo_path,
                           const size_t i1, const size_t i2) {
@@ -1096,7 +1103,7 @@ private:
         if (x.depth == -1) {
             return -1;
         }
-        // Fill in the cuckoo path slots from the end to the beginning
+        // Fill in the cuckoo path slots from the end to the beginning.
         for (int i = x.depth; i >= 0; i--) {
             cuckoo_path[i].slot = x.pathcode % slot_per_bucket;
             x.pathcode /= slot_per_bucket;
@@ -1114,8 +1121,8 @@ private:
             first.bucket = i2;
         }
         {
-            OneBucket ob = lock_one(hp, first.bucket);
-            Bucket& b = buckets_[first.bucket];
+            const OneBucket ob = lock_one(hp, first.bucket);
+            const Bucket& b = buckets_[first.bucket];
             if (!b.occupied(first.slot)) {
                 // We can terminate here
                 return 0;
@@ -1124,15 +1131,15 @@ private:
         }
         for (int i = 1; i <= x.depth; ++i) {
             CuckooRecord& curr = cuckoo_path[i];
-            CuckooRecord& prev = cuckoo_path[i-1];
-            assert(prev.bucket == index_hash(hp, prev.hv) ||
-                   prev.bucket == alt_index(hp, partial_key(prev.hv),
-                                            index_hash(hp, prev.hv)));
+            const CuckooRecord& prev = cuckoo_path[i-1];
+            assert(prev.bucket == index_hash(hp, prev.hv.hash) ||
+                   prev.bucket == alt_index(hp, prev.hv.partial,
+                                            index_hash(hp, prev.hv.hash)));
             // We get the bucket that this slot is on by computing the alternate
             // index of the previous bucket
-            curr.bucket = alt_index(hp, partial_key(prev.hv), prev.bucket);
-            OneBucket ob = lock_one(hp, curr.bucket);
-            Bucket& b = buckets_[curr.bucket];
+            curr.bucket = alt_index(hp, prev.hv.partial, prev.bucket);
+            const OneBucket ob = lock_one(hp, curr.bucket);
+            const Bucket& b = buckets_[curr.bucket];
             if (!b.occupied(curr.slot)) {
                 // We can terminate here
                 return i;
@@ -1146,10 +1153,10 @@ private:
     // an empty slot in one of the buckets in cuckoo_insert. Before the start of
     // this function, the two insert-locked buckets were unlocked in run_cuckoo.
     // At the end of the function, if the function returns true (success), then
-    // the both insert-locked buckets remain locked. If the function is
+    // both insert-locked buckets remain locked. If the function is
     // unsuccessful, then both insert-locked buckets will be unlocked.
     //
-    // throws hashpower_changed if it changed during the move
+    // throws hashpower_changed if it changed during the move.
     bool cuckoopath_move(const size_t hp, CuckooRecords& cuckoo_path,
                          size_t depth, TwoBuckets& b) {
         assert(!b.is_active());
@@ -1174,9 +1181,7 @@ private:
         while (depth > 0) {
             CuckooRecord& from = cuckoo_path[depth-1];
             CuckooRecord& to   = cuckoo_path[depth];
-            Bucket& fb = buckets_[from.bucket];
             const size_t fs = from.slot;
-            Bucket& tb = buckets_[to.bucket];
             const size_t ts = to.slot;
             TwoBuckets twob;
             OneBucket extrab;
@@ -1192,6 +1197,9 @@ private:
                 twob = lock_two(hp, from.bucket, to.bucket);
             }
 
+            Bucket& fb = buckets_[from.bucket];
+            Bucket& tb = buckets_[to.bucket];
+
             // We plan to kick out fs, but let's check if it is still there;
             // there's a small chance we've gotten scooped by a later cuckoo. If
             // that happened, just... try again. Also the slot we are filling in
@@ -1200,8 +1208,8 @@ private:
             // We only need to check that the hash value is the same, because,
             // even if the keys are different and have the same hash value, then
             // the cuckoopath is still valid.
-            if (hashed_key(fb.key(fs)) != from.hv || tb.occupied(ts) ||
-                !fb.occupied(fs)) {
+            if (hashed_key_only_hash(fb.key(fs)) != from.hv.hash ||
+                tb.occupied(ts) || !fb.occupied(fs)) {
                 return false;
             }
 
@@ -1249,7 +1257,7 @@ private:
         bool done = false;
         try {
             while (!done) {
-                int depth = cuckoopath_search(hp, cuckoo_path, b.i[0], b.i[1]);
+                const int depth = cuckoopath_search(hp, cuckoo_path, b.i[0], b.i[1]);
                 if (depth < 0) {
                     break;
                 }
@@ -1322,12 +1330,12 @@ private:
     // for use afterwards.
     template <typename K, typename... Args>
     void add_to_bucket(const partial_t partial, Bucket& b,
-                       const size_t slot, K&& key, Args&&... val) {
+                       const size_t bucket_ind, const size_t slot,
+                       K&& key, Args&&... val) {
         assert(!b.occupied(slot));
         b.partial(slot) = partial;
         b.setKV(slot, std::forward<K>(key), std::forward<Args>(val)...);
-        num_inserts_[get_counterid()].num.fetch_add(
-            1, std::memory_order_relaxed);
+        ++locks_[lock_ind(bucket_ind)].elems_in_buckets;
     }
 
     // try_find_insert_bucket will search the bucket and store the index of an
@@ -1362,8 +1370,8 @@ private:
     // try_del_from_bucket will search the bucket for the given key, and set the
     // slot of the key to empty if it finds it.
     template <typename K>
-    bool try_del_from_bucket(const partial_t partial,
-                             const K &key, Bucket& b) {
+    bool try_del_from_bucket(const partial_t partial, const K &key,
+                             Bucket& b, const size_t bucket_ind) {
         for (size_t i = 0; i < slot_per_bucket; ++i) {
             if (!b.occupied(i)) {
                 continue;
@@ -1373,8 +1381,7 @@ private:
             }
             if (key_eq()(b.key(i), key)) {
                 b.eraseKV(i);
-                num_deletes_[get_counterid()].num.fetch_add(
-                    1, std::memory_order_relaxed);
+                --locks_[lock_ind(bucket_ind)].elems_in_buckets;
                 return true;
             }
         }
@@ -1428,9 +1435,9 @@ private:
     // and released outside the function.
     template <typename K>
     cuckoo_status cuckoo_find(const K &key, mapped_type& val,
-                              const size_t hv, const size_t i1,
+                              const partial_t partial,
+                              const size_t i1,
                               const size_t i2) const {
-        const partial_t partial = partial_key(hv);
         if (try_read_from_bucket(partial, key, val, buckets_[i1])) {
             return ok;
         }
@@ -1444,9 +1451,8 @@ private:
     // it's in the table and false otherwise. It expects the locks to be taken
     // and released outside the function.
     template <typename K>
-    bool cuckoo_contains(const K& key, const size_t hv, const size_t i1,
-                         const size_t i2) const {
-        const partial_t partial = partial_key(hv);
+    bool cuckoo_contains(const K& key, const partial_t partial,
+                         const size_t i1, const size_t i2) const {
         if (check_in_bucket(partial, key, buckets_[i1])) {
             return true;
         }
@@ -1465,30 +1471,31 @@ private:
     // in the function. If the insert fails, the key and value won't be
     // move-constructed, so they can be retried.
     template <typename K, typename... Args>
-    cuckoo_status cuckoo_insert(const size_t hv, TwoBuckets b,
+    cuckoo_status cuckoo_insert(const hash_value hv, TwoBuckets b,
                                 K&& key, Args&&... val) {
         int res1, res2;
-        const partial_t partial = partial_key(hv);
         Bucket& b0 = buckets_[b.i[0]];
-        if (!try_find_insert_bucket(partial, key, b0, res1)) {
+        if (!try_find_insert_bucket(hv.partial, key, b0, res1)) {
             return failure_key_duplicated;
         }
         Bucket& b1 = buckets_[b.i[1]];
-        if (!try_find_insert_bucket(partial, key, b1, res2)) {
+        if (!try_find_insert_bucket(hv.partial, key, b1, res2)) {
             return failure_key_duplicated;
         }
         if (res1 != -1) {
-            add_to_bucket(partial, b0, res1, std::forward<K>(key),
+            add_to_bucket(hv.partial, b0, b.i[0], res1,
+                          std::forward<K>(key),
                           std::forward<Args>(val)...);
             return ok;
         }
         if (res2 != -1) {
-            add_to_bucket(partial, b1, res2, std::forward<K>(key),
+            add_to_bucket(hv.partial, b1, b.i[1], res2,
+                          std::forward<K>(key),
                           std::forward<Args>(val)...);
             return ok;
         }
 
-        // we are unlucky, so let's perform cuckoo hashing
+        // we are unlucky, so let's perform cuckoo hashing.
         size_t insert_bucket = 0;
         size_t insert_slot = 0;
         cuckoo_status st = run_cuckoo(b, insert_bucket, insert_slot);
@@ -1501,17 +1508,19 @@ private:
             assert(!locks_[lock_ind(b.i[0])].try_lock());
             assert(!locks_[lock_ind(b.i[1])].try_lock());
             assert(!buckets_[insert_bucket].occupied(insert_slot));
-            assert(insert_bucket == index_hash(get_hashpower(), hv) ||
-                   insert_bucket == alt_index(get_hashpower(), partial,
-                                              index_hash(get_hashpower(), hv)));
+            assert(insert_bucket == index_hash(get_hashpower(), hv.hash) ||
+                   insert_bucket == alt_index(
+                       get_hashpower(), hv.partial,
+                       index_hash(get_hashpower(), hv.hash)));
             // Since we unlocked the buckets during run_cuckoo, another insert
             // could have inserted the same key into either b.i[0] or b.i[1], so
             // we check for that before doing the insert.
-            if (cuckoo_contains(key, hv, b.i[0], b.i[1])) {
+            if (cuckoo_contains(key, hv.partial, b.i[0], b.i[1])) {
                 return failure_key_duplicated;
             }
-            add_to_bucket(partial, buckets_[insert_bucket], insert_slot,
-                          std::forward<K>(key), std::forward<Args>(val)...);
+            add_to_bucket(hv.partial, buckets_[insert_bucket], insert_bucket,
+                          insert_slot, std::forward<K>(key),
+                          std::forward<Args>(val)...);
             return ok;
         }
         assert(st == failure);
@@ -1524,7 +1533,7 @@ private:
 
     /**
      * We run cuckoo_insert in a loop until it succeeds in insert and upsert, so
-     * we pulled out the loop to avoid duplicating logic
+     * we pulled out the loop to avoid duplicating logic.
      *
      * @param key the key to insert
      * @param val the value to insert
@@ -1534,11 +1543,11 @@ private:
      * load factor of the table is below the threshold
      */
     template <typename K, typename... Args>
-    bool cuckoo_insert_loop(size_t hv, K&& key, Args&&... val) {
+    bool cuckoo_insert_loop(hash_value hv, K&& key, Args&&... val) {
         cuckoo_status st;
         do {
             auto b = snapshot_and_lock_two(hv);
-            size_t hp = get_hashpower();
+            const size_t hp = get_hashpower();
             st = cuckoo_insert(hv, std::move(b), std::forward<K>(key),
                                std::forward<Args>(val)...);
             if (st == failure_key_duplicated) {
@@ -1558,13 +1567,12 @@ private:
     // that key to empty if it finds it. It expects the locks to be taken and
     // released outside the function.
     template <class K>
-    cuckoo_status cuckoo_delete(const K &key, const size_t hv,
+    cuckoo_status cuckoo_delete(const K &key, const partial_t partial,
                                 const size_t i1, const size_t i2) {
-        const partial_t partial = partial_key(hv);
-        if (try_del_from_bucket(partial, key, buckets_[i1])) {
+        if (try_del_from_bucket(partial, key, buckets_[i1], i1)) {
             return ok;
         }
-        if (try_del_from_bucket(partial, key, buckets_[i2])) {
+        if (try_del_from_bucket(partial, key, buckets_[i2], i2)) {
             return ok;
         }
         return failure_key_not_found;
@@ -1574,9 +1582,8 @@ private:
     // if it finds it. It expects the locks to be taken and released outside the
     // function.
     template <typename K, typename V>
-    cuckoo_status cuckoo_update(const size_t hv, const size_t i1,
+    cuckoo_status cuckoo_update(const partial_t partial, const size_t i1,
                                 const size_t i2, const K &key, V&& val) {
-        const partial_t partial = partial_key(hv);
         if (try_update_bucket(partial, buckets_[i1], key,
                               std::forward<V>(val))) {
             return ok;
@@ -1594,9 +1601,8 @@ private:
     // outside the function.
     template <typename K, typename Updater>
     cuckoo_status cuckoo_update_fn(const K &key, Updater fn,
-                                   const size_t hv, const size_t i1,
+                                   const partial_t partial, const size_t i1,
                                    const size_t i2) {
-        const partial_t partial = partial_key(hv);
         if (try_update_bucket_fn(partial, key, fn, buckets_[i1])) {
             return ok;
         }
@@ -1613,22 +1619,19 @@ private:
         for (Bucket& b : buckets_) {
             b.clear();
         }
-        for (size_t i = 0; i < num_inserts_.size(); ++i) {
-            num_inserts_[i].num.store(0);
-            num_deletes_[i].num.store(0);
+        for (size_t i = 0; i < locks_.allocated_size(); ++i) {
+            locks_[i].elems_in_buckets = 0;
         }
         return ok;
     }
 
     // cuckoo_size returns the number of elements in the given table.
     size_t cuckoo_size() const noexcept {
-        size_t inserts = 0;
-        size_t deletes = 0;
-        for (size_t i = 0; i < num_inserts_.size(); ++i) {
-            inserts += num_inserts_[i].num.load();
-            deletes += num_deletes_[i].num.load();
+        size_t size = 0;
+        for (size_t i = 0; i < locks_.allocated_size(); ++i) {
+            size += locks_[i].elems_in_buckets;
         }
-        return inserts-deletes;
+        return size;
     }
 
     // cuckoo_loadfactor returns the load factor of the given table.
@@ -1659,19 +1662,23 @@ private:
                     if (!old_bucket.occupied(slot)) {
                         continue;
                     }
-                    const size_t hv = hashed_key(old_bucket.key(slot));
-                    const size_t old_ihash = index_hash(current_hp, hv);
+                    const hash_value hv = hashed_key(old_bucket.key(slot));
+                    const size_t old_ihash = index_hash(current_hp, hv.hash);
                     const size_t old_ahash = alt_index(
-                        current_hp, old_bucket.partial(slot), old_ihash);
-                    const size_t new_ihash = index_hash(new_hp, hv);
+                        current_hp, hv.partial, old_ihash);
+                    const size_t new_ihash = index_hash(new_hp, hv.hash);
                     const size_t new_ahash = alt_index(
-                        new_hp, old_bucket.partial(slot), new_ihash);
+                        new_hp, hv.partial, new_ihash);
                     if ((bucket_i == old_ihash && new_ihash == new_bucket_i) ||
                         (bucket_i == old_ahash && new_ahash == new_bucket_i)) {
                         // We're moving the key from the old bucket to the new
                         // one
                         Bucket::move_to_bucket(
                             old_bucket, slot, new_bucket, new_bucket_slot++);
+                        // Also update the lock counts, in case we're moving to
+                        // a different lock.
+                        --locks_[lock_ind(bucket_i)].elems_in_buckets;
+                        ++locks_[lock_ind(new_bucket_i)].elems_in_buckets;
                     } else {
                         // Check that we don't want to move the new key
                         assert(
@@ -1686,6 +1693,30 @@ private:
         }
     }
 
+    // Executes the function over the given range split over num_threads threads
+    template <class F>
+    static void parallel_exec(size_t start, size_t end,
+                              size_t num_threads, F func) {
+        size_t work_per_thread = (end - start) / num_threads;
+        std::vector<std::thread> threads(num_threads);
+        std::vector<std::exception_ptr> eptrs(num_threads, nullptr);
+        for (size_t i = 0; i < num_threads - 1; ++i) {
+            threads[i] = std::thread(func, start, start + work_per_thread,
+                                     std::ref(eptrs[i]));
+            start += work_per_thread;
+        }
+        threads[num_threads - 1] = std::thread(
+            func, start, end, std::ref(eptrs[num_threads - 1]));
+        for (std::thread& t : threads) {
+            t.join();
+        }
+        for (std::exception_ptr& eptr : eptrs) {
+            if (eptr) {
+                std::rethrow_exception(eptr);
+            }
+        }
+    }
+
     // cuckoo_fast_double will double the size of the table by taking advantage
     // of the properties of index_hash and alt_index. If the key's move
     // constructor is not noexcept, we use cuckoo_expand_simple, since that
@@ -1696,8 +1727,8 @@ private:
                           "is not nothrow move constructible");
             return cuckoo_expand_simple(current_hp + 1, true);
         }
-        size_t new_hp = current_hp + 1;
-        size_t mhp = maximum_hashpower();
+        const size_t new_hp = current_hp + 1;
+        const size_t mhp = maximum_hashpower();
         if (mhp != NO_MAXIMUM_HASHPOWER && new_hp > mhp) {
             throw libcuckoo_maximum_hashpower_exceeded(new_hp);
         }
@@ -1722,7 +1753,8 @@ private:
         // it and the new bucket, letting other threads using the new map
         // gradually. We only unlock the locks being used by the old table,
         // because unlocking new locks would enable operations on the table
-        // before we want them.
+        // before we want them. We also re-evaluate the partial key stored at
+        // each slot, since it depends on the hashpower.
         const size_t locks_to_move = std::min(locks_t::size(),
                                               hashsize(current_hp));
         parallel_exec(0, locks_to_move, kNumCores(),
@@ -1757,11 +1789,11 @@ private:
     // beyond the maximum hashpower, and we have an actual limit.
     cuckoo_status cuckoo_expand_simple(size_t new_hp,
                                        bool is_expansion) {
-        size_t mhp = maximum_hashpower();
+        const size_t mhp = maximum_hashpower();
         if (mhp != NO_MAXIMUM_HASHPOWER && new_hp > mhp) {
             throw libcuckoo_maximum_hashpower_exceeded(new_hp);
         }
-        auto unlocker = snapshot_and_lock_all();
+        const auto unlocker = snapshot_and_lock_all();
         const size_t hp = get_hashpower();
         if ((is_expansion && new_hp <= hp) ||
             (!is_expansion && new_hp >= hp)) {
@@ -1772,9 +1804,13 @@ private:
         }
 
         // Creates a new hash table with hashpower new_hp and adds all
-        // the elements from the old buckets
+        // the elements from the old buckets.
         cuckoohash_map<Key, T, Hash, Pred, Alloc, slot_per_bucket> new_map(
-            hashsize(new_hp) * slot_per_bucket);
+            hashsize(new_hp) * slot_per_bucket,
+            0.0, /* minimum load factor */
+            NO_MAXIMUM_HASHPOWER
+            );
+
         parallel_exec(
             0, hashsize(hp), kNumCores(),
             [this, &new_map]
@@ -1835,11 +1871,13 @@ public:
               has_table_lock_(new bool(true)) {}
 
     public:
+        //! Move constructor for a locked table
         locked_table(locked_table&& lt)
             : unlocker_(std::move(lt.unlocker_)),
               buckets_(std::move(lt.buckets_)),
               has_table_lock_(std::move(lt.has_table_lock_)) {}
 
+        //! Move assignment for a locked table
         locked_table& operator=(locked_table&& lt) {
             release();
             unlocker_ = std::move(lt.unlocker_);
@@ -2053,7 +2091,9 @@ public:
         };
 
     public:
+        //! A iterator that provides read-only access to the table
         typedef templated_iterator<true> const_iterator;
+        //! A iterator that provides read-write access to the table
         typedef templated_iterator<false> iterator;
 
         //! begin returns an iterator to the beginning of the table
@@ -2138,11 +2178,6 @@ private:
 
     // a lock to synchronize expansions
     expansion_lock_t expansion_lock_;
-
-    // per-core counters for the number of inserts and deletes
-    std::vector<
-        cacheint, typename allocator_type::template rebind<cacheint>::other>
-    num_inserts_, num_deletes_;
 
     // stores the minimum load factor allowed for automatic expansions. Whenever
     // an automatic expansion is triggered (during an insertion where cuckoo
