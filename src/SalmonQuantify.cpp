@@ -313,6 +313,14 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
         }
 
         double transcriptLogCount = transcript.mass(initialRound);
+        auto flen = aln.fragLength();
+        // If we have a properly-paired read then use the "pedantic"
+        // definition here.
+        if (aln.mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED and
+            aln.fwd != aln.mateIsFwd) {
+          flen = aln.fragLengthPedantic(transcript.RefLength); 
+        }
+
 
         // If the transcript had a non-zero count (including pseudocount)
         if (std::abs(transcriptLogCount) != LOG_0) {
@@ -320,12 +328,13 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
           // The probability of drawing a fragment of this length;
           double logFragProb = LOG_1;
           if (burnedIn and useFragLengthDist and aln.fragLength() > 0.0) {
-            size_t fl = aln.fragLength();
+            //if (useFragLengthDist and aln.fragLength() > 0.0) {
+            size_t fl = flen;//aln.fragLength();
             double lenProb = fragLengthDist.pmf(fl); 
             /* condition fragment length prob on txp length */
             
             double refLengthCM = fragLengthDist.cmf(static_cast<size_t>(refLength)); 
-            bool computeMass = aln.fragLength() < refLength and !salmon::math::isLog0(refLengthCM);
+            bool computeMass = fl < refLength and !salmon::math::isLog0(refLengthCM);
             logFragProb = (computeMass) ?
               (lenProb - refLengthCM) :
               salmon::math::LOG_EPSILON;
@@ -409,7 +418,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
           double startPosProb{-logRefLength};
           // DEC 9
           if (aln.mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
-            startPosProb = (aln.fragLen <= refLength) ? -std::log(refLength - aln.fragLen + 1) : salmon::math::LOG_EPSILON;
+            startPosProb = (flen <= refLength) ? -std::log(refLength - flen + 1) : salmon::math::LOG_EPSILON;
           }
 
           double fragStartLogNumerator{salmon::math::LOG_1};
