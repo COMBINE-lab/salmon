@@ -212,6 +212,8 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
   bool useFragLengthDist{!salmonOpts.noFragLengthDist};
   bool noFragLenFactor{salmonOpts.noFragLenFactor};
   bool useRankEqClasses{salmonOpts.rankEqClasses};
+  // JAN 13
+  bool useAuxParams = ((localNumAssignedFragments + numAssignedFragments) >= salmonOpts.numPreBurninFrags);
 
   // If we're auto detecting the library type
   auto* detector = readLib.getDetector();
@@ -291,6 +293,9 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
       // For each alignment of this read
       for (auto& aln : alnGroup.alignments()) {
 
+        useAuxParams = ((localNumAssignedFragments + numAssignedFragments) >= salmonOpts.numPreBurninFrags);
+        bool considerCondProb{burnedIn or useAuxParams};
+
         auto transcriptID = aln.transcriptID();
         auto& transcript = transcripts[transcriptID];
         transcriptUnique =
@@ -329,20 +334,24 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 
           // The probability of drawing a fragment of this length;
           double logFragProb = LOG_1;
-          if (burnedIn and useFragLengthDist and flen > 0.0) {
+          if (flen > 0.0 and useFragLengthDist and considerCondProb) {
             size_t fl = flen;
             double lenProb = fragLengthDist.pmf(fl); 
-            /* condition fragment length prob on txp length */
-            double refLengthCM = fragLengthDist.cmf(static_cast<size_t>(refLength)); 
-            bool computeMass = fl < refLength and !salmon::math::isLog0(refLengthCM);
-            logFragProb = (computeMass) ?
-              (lenProb - refLengthCM) :
-              salmon::math::LOG_EPSILON;
+            if (burnedIn) {
+              /* condition fragment length prob on txp length */
+              double refLengthCM = fragLengthDist.cmf(static_cast<size_t>(refLength)); 
+              bool computeMass = fl < refLength and !salmon::math::isLog0(refLengthCM);
+              logFragProb = (computeMass) ?
+                                      (lenProb - refLengthCM) :
+                salmon::math::LOG_EPSILON;
               if (computeMass and refLengthCM < lenProb) {
                 // Threading is hard!  It's possible that an update to the PMF snuck in between when we asked to cache the CMF and when the
                 // "burnedIn" variable was last seen as false.
                 log->info("reference length = {}, CMF[refLen] = {}, fragLen = {}, PMF[fragLen] = {}", refLength, std::exp(refLengthCM), aln.fragLength(), std::exp(lenProb));
               }
+            } else if (useAuxParams) {
+              logFragProb = lenProb;
+            }
             //logFragProb = lenProb;
             //logFragProb = fragLengthDist.pmf(static_cast<size_t>(aln.fragLength()));
           }
@@ -423,6 +432,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
           double fragStartLogDenominator{salmon::math::LOG_1};
 
           auto hitPos = aln.hitPos();
+          /** NOTE: no more FSPD
           if (useFSPD and burnedIn and hitPos < refLength) {
             auto& fragStartDist = fragStartDists[transcript.lengthClassIndex()];
             // Get the log(numerator) and log(denominator) for the fragment
@@ -436,6 +446,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
                                ? fragStartLogNumerator - fragStartLogDenominator
                                : salmon::math::LOG_0;
           }
+          **/
 
           // Increment the count of this type of read that we've seen
           ++libTypeCounts[aln.libFormat().formatID()];
@@ -2234,11 +2245,11 @@ int salmonQuantify(int argc, char* argv[]) {
      "distribution")
     (
      "fldMean",
-     po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(200),
+     po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(250),
      "The mean used in the fragment length distribution prior")
     (
      "fldSD",
-     po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(80),
+     po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(25),
      "The standard deviation used in the fragment length distribution "
      "prior")
     (
@@ -2521,6 +2532,8 @@ transcript abundance from RNA-seq reads
     bool optionsValidate =
       salmon::utils::validateOptions(sopt);
     if (!optionsValidate) {
+      sopt.jointLog->flush();
+      spdlog::drop_all();
       std::exit(1);
     }
  

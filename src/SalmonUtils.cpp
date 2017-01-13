@@ -1302,6 +1302,17 @@ bool validateOptions(SalmonOpts& sopt) {
   allow it if we are not employing any length
   correction.
   **/
+
+  /** Warnings, not errors **/
+  if (sopt.numBurninFrags < sopt.numPreBurninFrags) {
+    sopt.jointLog->warn("You set the number of burnin fragments (--numAuxModelSamples) to be less than the number of \n"
+                   "pre-burnin fragments (--numPreAuxModelSamples), but it must be at least as large.  The \n"
+                   "number of pre-burnin fragments and burnin fragments is being set to the same value "
+                   "({})", sopt.numBurninFrags);
+    sopt.numPreBurninFrags = sopt.numBurninFrags;
+  }
+
+  /** Errors **/
   if (sopt.noLengthCorrection) {
     bool anyBiasCorrect =
       sopt.gcBiasCorrect or sopt.biasCorrect or sopt.posBiasCorrect;

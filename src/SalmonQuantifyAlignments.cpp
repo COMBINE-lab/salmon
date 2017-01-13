@@ -1249,8 +1249,8 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
           "how short bias correction can make effective lengths. This can increase the precision "
           "of bias correction, but harm robustness.  The default correction applies a thresholdi.")
     ("fldMax" , po::value<size_t>(&(sopt.fragLenDistMax))->default_value(1000), "The maximum fragment length to consider when building the empirical distribution")
-    ("fldMean", po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(200), "The mean used in the fragment length distribution prior")
-    ("fldSD" , po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(80), "The standard deviation used in the fragment length distribution prior")
+    ("fldMean", po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(250), "The mean used in the fragment length distribution prior")
+    ("fldSD" , po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(25), "The standard deviation used in the fragment length distribution prior")
     ("forgettingFactor,f", po::value<double>(&(sopt.forgettingFactor))->default_value(0.65), "The forgetting factor used "
                         "in the online learning schedule.  A smaller value results in quicker learning, but higher variance "
                         "and may be unstable.  A larger value results in slower learning but may be more stable.  Value should "
@@ -1545,14 +1545,15 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 
 	
 	// Verify that no inconsistent options were provided
-  if (sopt.numBurninFrags < sopt.numPreBurninFrags) {
-    jointLog->warn("You set the number of burnin (--numAuxModelSamples) fragments to be less than the number of \n"
-                   "pre-burnin fragments (--numPreAuxModelSamples), but it must be at least as large.  The \n"
-                   "number of pre-burnin fragments and burnin fragments is being set to the same value "
-                   "({})", sopt.numBurninFrags);
-    sopt.numPreBurninFrags = sopt.numBurninFrags;
+  bool optionsValidate =
+    salmon::utils::validateOptions(sopt);
+  if (!optionsValidate) {
+    sopt.jointLog->flush();
+    spdlog::drop_all();
+    std::exit(1);
   }
-        if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {
+
+  if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {
             jointLog->error("You cannot perform both Gibbs sampling and bootstrapping. "
                             "Please choose one.");
             jointLog->flush();
