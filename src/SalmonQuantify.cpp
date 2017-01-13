@@ -290,6 +290,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
       hasCompatibleMapping = false;
       // For each alignment of this read
       for (auto& aln : alnGroup.alignments()) {
+
         auto transcriptID = aln.transcriptID();
         auto& transcript = transcripts[transcriptID];
         transcriptUnique =
@@ -304,13 +305,14 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
         // transcript-level term (based on abundance and) an
         // alignment-level term.
         double logRefLength{salmon::math::LOG_0};
+
         if (salmonOpts.noLengthCorrection) {
           logRefLength = 1.0;
         } else if (salmonOpts.noEffectiveLengthCorrection or !burnedIn) {
-          logRefLength = std::log(transcript.RefLength);
+          logRefLength = std::log(static_cast<double>(transcript.RefLength));
         } else {
           logRefLength = transcript.getCachedLogEffectiveLength();
-        }
+        } 
 
         double transcriptLogCount = transcript.mass(initialRound);
         auto flen = aln.fragLength();
@@ -327,12 +329,10 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 
           // The probability of drawing a fragment of this length;
           double logFragProb = LOG_1;
-          if (burnedIn and useFragLengthDist and aln.fragLength() > 0.0) {
-            //if (useFragLengthDist and aln.fragLength() > 0.0) {
-            size_t fl = flen;//aln.fragLength();
+          if (burnedIn and useFragLengthDist and flen > 0.0) {
+            size_t fl = flen;
             double lenProb = fragLengthDist.pmf(fl); 
             /* condition fragment length prob on txp length */
-            
             double refLengthCM = fragLengthDist.cmf(static_cast<size_t>(refLength)); 
             bool computeMass = fl < refLength and !salmon::math::isLog0(refLengthCM);
             logFragProb = (computeMass) ?
@@ -343,8 +343,6 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
                 // "burnedIn" variable was last seen as false.
                 log->info("reference length = {}, CMF[refLen] = {}, fragLen = {}, PMF[fragLen] = {}", refLength, std::exp(refLengthCM), aln.fragLength(), std::exp(lenProb));
               }
-            
-            
             //logFragProb = lenProb;
             //logFragProb = fragLengthDist.pmf(static_cast<size_t>(aln.fragLength()));
           }
@@ -1841,7 +1839,7 @@ void quantifyLibrary(ReadExperiment& experiment, bool greedyChain,
                      mem_opt_t* memOptions, SalmonOpts& salmonOpts,
                      double coverageThresh, uint32_t numQuantThreads) {
 
-  bool burnedIn{false};
+  bool burnedIn = (salmonOpts.numBurninFrags == 0);
   uint64_t numRequiredFragments = salmonOpts.numRequiredFragments;
   std::atomic<uint64_t> upperBoundHits{0};
   // ErrorModel errMod(1.00);
@@ -2180,6 +2178,10 @@ int salmonQuantify(int argc, char* argv[]) {
                                           "make use of a very large number of
       threads.")
       */
+    ("alternativeInitMode", po::bool_switch(&(sopt.alternativeInitMode))->default_value(false),
+     "[Experimental]: Use an alternative strategy (rather than simple interpolation between) the "
+     "online and uniform abundance estimates to initalize the EM / VBEM algorithm."
+     )
     (
      "auxDir", po::value<std::string>(&(sopt.auxDir))->default_value("aux_info"),
      "The sub-directory of the quantification directory where auxiliary "

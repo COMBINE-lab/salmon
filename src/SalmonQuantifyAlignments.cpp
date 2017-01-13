@@ -189,7 +189,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     auto expectedLibraryFormat = alnLib.format();
     uint32_t numBurninFrags{salmonOpts.numBurninFrags};
 
-    bool useAuxParams = (processedReads > salmonOpts.numPreBurninFrags);
+    bool useAuxParams = (processedReads >= salmonOpts.numPreBurninFrags);
 
     std::chrono::microseconds sleepTime(1);
     MiniBatchInfo<AlignmentGroup<FragT*>>* miniBatch = nullptr;
@@ -219,7 +219,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 	    // If we actually got some work
         if (miniBatch != nullptr) {
 
-            useAuxParams = (processedReads > salmonOpts.numPreBurninFrags);
+            useAuxParams = (processedReads >= salmonOpts.numPreBurninFrags);
             ++activeBatches;
             batchReads = 0;
             zeroProbFrags = 0;
@@ -785,7 +785,7 @@ bool quantifyLibrary(
         size_t numRequiredFragments,
         SalmonOpts& salmonOpts) {
 
-    std::atomic<bool> burnedIn{false};
+  std::atomic<bool> burnedIn{salmonOpts.numBurninFrags == 0};
 
     auto& refs = alnLib.transcripts();
     size_t numTranscripts = refs.size();
@@ -1238,6 +1238,10 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 
     po::options_description advanced("\nadvanced options");
     advanced.add_options()
+    ("alternativeInitMode", po::bool_switch(&(sopt.alternativeInitMode))->default_value(false),
+       "[Experimental]: Use an alternative strategy (rather than simple interpolation between) the "
+       "online and uniform abundance estimates to initalize the EM / VBEM algorithm."
+    )
     ("auxDir", po::value<std::string>(&(sopt.auxDir))->default_value("aux_info"), "The sub-directory of the quantification directory where auxiliary information "
      			"e.g. bootstraps, bias parameters, etc. will be written.")
     ("noBiasLengthThreshold", po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(false), "[experimental] : "
@@ -1541,6 +1545,13 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 
 	
 	// Verify that no inconsistent options were provided
+  if (sopt.numBurninFrags < sopt.numPreBurninFrags) {
+    jointLog->warn("You set the number of burnin (--numAuxModelSamples) fragments to be less than the number of \n"
+                   "pre-burnin fragments (--numPreAuxModelSamples), but it must be at least as large.  The \n"
+                   "number of pre-burnin fragments and burnin fragments is being set to the same value "
+                   "({})", sopt.numBurninFrags);
+    sopt.numPreBurninFrags = sopt.numBurninFrags;
+  }
         if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {
             jointLog->error("You cannot perform both Gibbs sampling and bootstrapping. "
                             "Please choose one.");

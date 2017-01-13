@@ -757,6 +757,8 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   bool seqBiasCorrect = sopt.biasCorrect;
   bool gcBiasCorrect = sopt.gcBiasCorrect;
   bool doBiasCorrect = seqBiasCorrect or gcBiasCorrect;
+  bool metaGenomeMode = sopt.meta;
+  bool altInitMode = sopt.alternativeInitMode;
 
   using VecT = CollapsedEMOptimizer::VecType;
   // With atomics
@@ -826,10 +828,10 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
     } 
   } else { // otherwise, initalize with a linear combination of the true and uniform alphas 
       for (size_t i = 0; i < alphas.size(); ++i) {
-          //alphas[i] = (alphas[i] * fracObserved) + (uniformPrior * (1.0 - fracObserved));
-          alphas[i] = (alphas[i] * fracObserved) + (alphasPrime[i] * (1.0 - fracObserved));
-          alphasPrime[i] = 1.0;
-      } 
+        auto uniAbund = (metaGenomeMode or altInitMode) ? alphasPrime[i].load() : uniformPrior;
+        alphas[i] = (alphas[i] * fracObserved) + (uniAbund * (1.0 - fracObserved));
+        alphasPrime[i] = 1.0;
+      }
   }
 
   // If the user requested *not* to use "rich" equivalence classes,

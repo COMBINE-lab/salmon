@@ -28,10 +28,12 @@ struct SalmonOpts {
     bool maxMEMIntervals; // If true, don't split (S)MEMs into MEMs
     */
 
-    SalmonOpts() : allowOrphans(false), splitSpanningSeeds(false), noFragLengthDist(false),
+    SalmonOpts() : alternativeInitMode(false), allowOrphans(false), splitSpanningSeeds(false), noFragLengthDist(false),
                    noEffectiveLengthCorrection(false), useReadCompat(false),
                    maxReadOccs(200), extraSeedPass(false),
                    mappingCacheMemoryLimit(5000000), useQuasi(false) {}
+
+    bool alternativeInitMode; // Weigh unique reads more heavily when initialzing the optimization.
 
     bool allowOrphans; // Consider orphaned reads when performing lightweight alignemnt.
 

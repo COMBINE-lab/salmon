@@ -415,7 +415,7 @@ class ReadExperiment {
 
     template <typename CallbackT>
     bool processReads(const uint32_t& numThreads, const SalmonOpts& sopt, CallbackT& processReadLibrary) {
-        std::atomic<bool> burnedIn{totalAssignedFragments_ + numAssignedFragments_ > sopt.numBurninFrags};
+        std::atomic<bool> burnedIn{totalAssignedFragments_ + numAssignedFragments_ >= sopt.numBurninFrags};
         for (auto& rl : readLibraries_) {
             processReadLibrary(rl, salmonIndex_.get(), transcripts_, clusterForest(),
                                *(fragLengthDist_.get()), numAssignedFragments_,
