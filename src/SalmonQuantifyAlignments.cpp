@@ -188,6 +188,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     double startingCumulativeMass = fmCalc.cumulativeLogMassAt(firstTimestepOfRound);
     auto expectedLibraryFormat = alnLib.format();
     uint32_t numBurninFrags{salmonOpts.numBurninFrags};
+    bool noLengthCorrection{salmonOpts.noLengthCorrection};
 
     bool useAuxParams = (processedReads >= salmonOpts.numPreBurninFrags);
 
@@ -329,7 +330,9 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         // transcript-level term (based on abundance and) an
                         // alignment-level term.
                         double logRefLength{salmon::math::LOG_0};
-                        if (salmonOpts.noEffectiveLengthCorrection or !burnedIn) {
+                        if (noLengthCorrection) {
+                          logRefLength = 1.0;
+                        } else if (salmonOpts.noEffectiveLengthCorrection or !burnedIn) {
                             logRefLength = std::log(transcript.RefLength);
                         } else {
                             logRefLength = transcript.getCachedLogEffectiveLength();
@@ -375,7 +378,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
 			// Allow for a non-uniform fragment start position distribution
 			double startPosProb{-logRefLength};
-      if (aln->isPaired()) {
+      if (aln->isPaired() and !noLengthCorrection) {
         startPosProb = (flen <= refLength) ? -std::log(refLength - flen + 1) : salmon::math::LOG_EPSILON;
       }
 

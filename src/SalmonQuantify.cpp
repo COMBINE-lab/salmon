@@ -212,6 +212,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
   bool useFragLengthDist{!salmonOpts.noFragLengthDist};
   bool noFragLenFactor{salmonOpts.noFragLenFactor};
   bool useRankEqClasses{salmonOpts.rankEqClasses};
+  bool noLengthCorrection{salmonOpts.noLengthCorrection};
   // JAN 13
   bool useAuxParams = ((localNumAssignedFragments + numAssignedFragments) >= salmonOpts.numPreBurninFrags);
 
@@ -311,7 +312,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
         // alignment-level term.
         double logRefLength{salmon::math::LOG_0};
 
-        if (salmonOpts.noLengthCorrection) {
+        if (noLengthCorrection) {
           logRefLength = 1.0;
         } else if (salmonOpts.noEffectiveLengthCorrection or !burnedIn) {
           logRefLength = std::log(static_cast<double>(transcript.RefLength));
@@ -424,7 +425,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 
           double startPosProb{-logRefLength};
           // DEC 9
-          if (aln.mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
+          if (aln.mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED and !noLengthCorrection) {
             startPosProb = (flen <= refLength) ? -std::log(refLength - flen + 1) : salmon::math::LOG_EPSILON;
           }
 
