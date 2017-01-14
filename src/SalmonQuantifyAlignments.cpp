@@ -220,6 +220,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
         if (miniBatch != nullptr) {
 
             useAuxParams = (processedReads >= salmonOpts.numPreBurninFrags);
+            bool considerCondProb = (useAuxParams or burnedIn);
             ++activeBatches;
             batchReads = 0;
             zeroProbFrags = 0;
@@ -265,25 +266,43 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         transcriptUnique = transcriptUnique and (transcriptID == firstTranscriptID);
 
                         double refLength = transcript.RefLength > 0 ? transcript.RefLength : 1.0;
-                        double logFragProb = salmon::math::LOG_1;
+                        auto flen = aln->fragLen();
+                        // If we have a properly-paired read then use the "pedantic"
+                        // definition here.
+                        if (aln->isPaired() and aln->isInward()) { 
+                          flen = aln->fragLengthPedantic(refLength); 
+                        }
 
-                        if (!salmonOpts.noFragLengthDist and useAuxParams) {
-                            /** Forget reads that are not paired **/
-                            /*
-                            if(aln->fragLen() == 0) {
-                                if (aln->isLeft() and transcript.RefLength - aln->left() < fragLengthDist.maxVal()) {
-                                    logFragProb = fragLengthDist.cmf(transcript.RefLength - aln->left());
-                                } else if (aln->isRight() and aln->right() < fragLengthDist.maxVal()) {
-                                    logFragProb = fragLengthDist.cmf(aln->right());
-                                }
-                            } else {
+                        // The probability of drawing a fragment of this length;
+                        double logFragProb = LOG_1;
+                        if (flen > 0.0 and aln->isPaired() and useFragLengthDist and considerCondProb) {
+                          size_t fl = flen;
+                          double lenProb = fragLengthDist.pmf(fl); 
+                          if (burnedIn) {
+                            /* condition fragment length prob on txp length */
+                            double refLengthCM = fragLengthDist.cmf(static_cast<size_t>(refLength)); 
+                            bool computeMass = fl < refLength and !salmon::math::isLog0(refLengthCM);
+                            logFragProb = (computeMass) ?
+                                                    (lenProb - refLengthCM) :
+                              salmon::math::LOG_EPSILON;
+                            if (computeMass and refLengthCM < lenProb) {
+                              // Threading is hard!  It's possible that an update to the PMF snuck in between when we asked to cache the CMF and when the
+                              // "burnedIn" variable was last seen as false.
+                              log->info("reference length = {}, CMF[refLen] = {}, fragLen = {}, PMF[fragLen] = {}",
+                                        refLength, std::exp(refLengthCM), aln->fragLen(), std::exp(lenProb));
                             }
-                            */
-                            auto fragLen = aln->fragLengthPedantic(transcript.RefLength);
-                            if(aln->isPaired() and fragLen > 0) {
-                                logFragProb = fragLengthDist.pmf(static_cast<size_t>(fragLen));
+                          } else if (useAuxParams) {
+                            logFragProb = lenProb;
+                          }
+                        }
+
+                        /*
+                        if (!salmonOpts.noFragLengthDist and useAuxParams) {
+                            if(aln->isPaired() and flen > 0) {
+                                logFragProb = fragLengthDist.pmf(static_cast<size_t>(flen));
                             }
                         }
+                        */
 
                         // TESTING
                         if (noFragLenFactor) { logFragProb = LOG_1; }
@@ -356,6 +375,11 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
 			// Allow for a non-uniform fragment start position distribution
 			double startPosProb{-logRefLength};
+      if (aln->isPaired()) {
+        startPosProb = (flen <= refLength) ? -std::log(refLength - flen + 1) : salmon::math::LOG_EPSILON;
+      }
+
+
 			double fragStartLogNumerator{salmon::math::LOG_1};
 			double fragStartLogDenominator{salmon::math::LOG_1};
 
@@ -1528,7 +1552,9 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         spdlog::set_async_mode(max_q_size);
 
         auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(logPath.string(), true);
-        auto consoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
+        auto rawConsoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
+        auto consoleSink =
+          std::make_shared<spdlog::sinks::ansicolor_sink>(rawConsoleSink);
         auto consoleLog = spdlog::create("consoleLog", {consoleSink});
         auto fileLog = spdlog::create("fileLog", {fileSink});
         auto jointLog = spdlog::create("jointLog", {fileSink, consoleSink});
