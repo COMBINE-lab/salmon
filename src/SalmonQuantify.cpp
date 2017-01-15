@@ -177,6 +177,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 
   using salmon::math::LOG_0;
   using salmon::math::LOG_1;
+  using salmon::math::LOG_EPSILON;
   using salmon::math::LOG_ONEHALF;
   using salmon::math::logAdd;
   using salmon::math::logSub;
@@ -239,6 +240,11 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 
   double startingCumulativeMass =
       fmCalc.cumulativeLogMassAt(firstTimestepOfRound);
+
+  auto isUnexpectedOrphan = [expectedLibraryFormat](AlnT& aln) -> bool {
+    return (expectedLibraryFormat.type == ReadType::PAIRED_END and aln.mateStatus != rapmap::utils::MateStatus::PAIRED_END_PAIRED);
+  };
+
   int i{0};
   {
     // Iterate over each group of alignments (a group consists of all alignments
@@ -335,6 +341,12 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 
           // The probability of drawing a fragment of this length;
           double logFragProb = LOG_1;
+          // If we are expecting a paired-end library, and this is an orphan,
+          // then logFragProb should be small
+          if (isUnexpectedOrphan(aln)) { 
+            logFragProb = LOG_EPSILON;
+          }
+          
           if (flen > 0.0 and useFragLengthDist and considerCondProb) {
             size_t fl = flen;
             double lenProb = fragLengthDist.pmf(fl); 

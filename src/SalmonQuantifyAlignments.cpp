@@ -162,6 +162,8 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     bool gcBiasCorrect = salmonOpts.gcBiasCorrect;
 
     using salmon::math::LOG_0;
+    using salmon::math::LOG_1;
+    using salmon::math::LOG_EPSILON;
     using salmon::math::logAdd;
     using salmon::math::logSub;
 
@@ -198,6 +200,10 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     size_t numTranscripts = refs.size();
 
     double maxZeroFrac{0.0};
+
+    auto isUnexpectedOrphan = [expectedLibraryFormat](FragT* aln) -> bool {
+      return (expectedLibraryFormat.type == ReadType::PAIRED_END and !aln->isPaired());
+    };
 
     while (!doneParsing or !workQueue.empty()) {
         uint32_t zeroProbFrags{0};
@@ -276,6 +282,12 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
                         // The probability of drawing a fragment of this length;
                         double logFragProb = LOG_1;
+                        // If we are expecting a paired-end library, and this is an orphan,
+                        // then logFragProb should be small
+                        if (isUnexpectedOrphan(aln)) {
+                          logFragProb = LOG_EPSILON;
+                        }
+
                         if (flen > 0.0 and aln->isPaired() and useFragLengthDist and considerCondProb) {
                           size_t fl = flen;
                           double lenProb = fragLengthDist.pmf(fl); 

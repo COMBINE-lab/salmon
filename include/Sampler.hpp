@@ -94,6 +94,8 @@ namespace salmon {
                 std::uniform_real_distribution<> uni(0.0, 1.0 + std::numeric_limits<double>::min());
 
                 using salmon::math::LOG_0;
+                using salmon::math::LOG_1;
+                using salmon::math::LOG_EPSILON;
                 using salmon::math::logAdd;
                 using salmon::math::logSub;
 
@@ -114,6 +116,10 @@ namespace salmon {
                     alnLib.fragmentStartPositionDistributions();
 
                 const auto expectedLibraryFormat = alnLib.format();
+
+                auto isUnexpectedOrphan = [expectedLibraryFormat](FragT* aln) -> bool {
+                  return (expectedLibraryFormat.type == ReadType::PAIRED_END and !aln->isPaired());
+                };
 
                 std::chrono::microseconds sleepTime(1);
                 MiniBatchInfo<AlignmentGroup<FragT*>>* miniBatch = nullptr;
@@ -174,6 +180,12 @@ namespace salmon {
 
                                     // The probability of drawing a fragment of this length;
                                     double logFragProb = salmon::math::LOG_1;
+                                    // If we are expecting a paired-end library, and this is an orphan,
+                                    // then logFragProb should be small
+                                    if (isUnexpectedOrphan(aln)) {
+                                      logFragProb = LOG_EPSILON;
+                                    }
+
                                     if (flen > 0.0 and aln->isPaired() and useFragLengthDist and considerCondProb) {
                                       size_t fl = flen;
                                       double lenProb = fragLengthDist.pmf(fl); 
