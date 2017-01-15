@@ -2153,10 +2153,12 @@ int salmonQuantify(int argc, char* argv[]) {
       "it belongs "
       "separated by a tab.  The extension of the file is used to determine how "
       "the file "
-      "should be parsed.  Files ending in \'.gtf\' or \'.gff\' are assumed to "
+      "should be parsed.  Files ending in \'.gtf\', \'.gff\' or \'.gff3\' are assumed to "
       "be in GTF "
       "format; files with any other extension are assumed to be in the simple "
-      "format.")
+      "format. In GTF / GFF format, the \"transcript_id\" is assumed to contain the "
+      "transcript identifier and the \"gene_id\" is assumed to contain the corresponding "
+      "gene identifier.")
   (
    "writeMappings,z", po::value<string>(&sopt.qmFileName)->default_value("")->implicit_value("-"),
    "If this option is provided, then the quasi-mapping results will be written out in SAM-compatible "

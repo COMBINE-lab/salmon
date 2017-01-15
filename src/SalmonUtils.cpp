@@ -2445,12 +2445,12 @@ void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
                                 boost::filesystem::path& estDir) {
   namespace bfs = boost::filesystem;
   std::cerr << "Computing gene-level abundance estimates\n";
-  bfs::path gtfExtension(".gtf");
+  std::set<std::string> validGTFExtensions = {".gtf", ".gff", ".gff3", ".GTF", ".GFF", ".GFF3"};
   auto extension = geneMapPath.extension();
 
   TranscriptGeneMap tranGeneMap;
   // parse the map as a GTF file
-  if (extension == gtfExtension) {
+  if (validGTFExtensions.find(extension.string()) != validGTFExtensions.end()) {
     // Using libgff
     tranGeneMap = salmon::utils::transcriptGeneMapFromGTF(geneMapPath.string(),
                                                           "gene_id");

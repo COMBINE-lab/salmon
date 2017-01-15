@@ -1255,8 +1255,10 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                                         "should be provided as either a GTF file, or a in a simple tab-delimited format "
                                         "where each line contains the name of a transcript and the gene to which it belongs "
                                         "separated by a tab.  The extension of the file is used to determine how the file "
-                                        "should be parsed.  Files ending in \'.gtf\' or \'.gff\' are assumed to be in GTF "
-                                        "format; files with any other extension are assumed to be in the simple format.");
+                                        "should be parsed.  Files ending in \'.gtf\', \'.gff\' or \'.gff3\' are assumed to be in GTF "
+     "format; files with any other extension are assumed to be in the simple format. In GTF / GFF format, the \"transcript_id\" is assumed to contain the "
+     "transcript identifier and the \"gene_id\" is assumed to contain the corresponding "
+     "gene identifier.");
 
     // no sequence bias for now
     sopt.useMassBanking = false;

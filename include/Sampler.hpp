@@ -98,6 +98,11 @@ namespace salmon {
                 using salmon::math::logSub;
 
                 bool useFSPD{salmonOpts.useFSPD};
+                bool noLengthCorrection{salmonOpts.noLengthCorrection};
+                bool useFragLengthDist{!salmonOpts.noFragLengthDist};
+                bool useAuxParams = (processedReads >= salmonOpts.numPreBurninFrags);
+                bool considerCondProb = (useAuxParams or burnedIn);
+
                 auto& refs = alnLib.transcripts();
                 auto& clusterForest = alnLib.clusterForest();
                 auto& fragmentQueue = alnLib.fragmentQueue();
@@ -160,39 +165,65 @@ namespace salmon {
 
                                     double refLength = transcript.RefLength > 0 ? transcript.RefLength : 1.0;
 
-                                    double logFragProb = salmon::math::LOG_1;
+                                    auto flen = aln->fragLen();
+                                    // If we have a properly-paired read then use the "pedantic"
+                                    // definition here.
+                                    if (aln->isPaired() and aln->isInward()) { 
+                                      flen = aln->fragLengthPedantic(refLength); 
+                                    }
 
-                                    if (!salmonOpts.noFragLengthDist) {
-                                        if(aln->fragLen() == 0) {
-                                            if (aln->isLeft() and transcript.RefLength - aln->left() < fragLengthDist.maxVal()) {
-                                                logFragProb = fragLengthDist.cmf(transcript.RefLength - aln->left());
-                                            } else if (aln->isRight() and aln->right() < fragLengthDist.maxVal()) {
-                                                logFragProb = fragLengthDist.cmf(aln->right());
-                                            }
-                                        } else {
-                                            logFragProb = fragLengthDist.pmf(static_cast<size_t>(aln->fragLen()));
+                                    // The probability of drawing a fragment of this length;
+                                    double logFragProb = salmon::math::LOG_1;
+                                    if (flen > 0.0 and aln->isPaired() and useFragLengthDist and considerCondProb) {
+                                      size_t fl = flen;
+                                      double lenProb = fragLengthDist.pmf(fl); 
+                                      if (burnedIn) {
+                                        /* condition fragment length prob on txp length */
+                                        double refLengthCM = fragLengthDist.cmf(static_cast<size_t>(refLength)); 
+                                        bool computeMass = fl < refLength and !salmon::math::isLog0(refLengthCM);
+                                        logFragProb = (computeMass) ?
+                                                                (lenProb - refLengthCM) :
+                                          salmon::math::LOG_EPSILON;
+                                        if (computeMass and refLengthCM < lenProb) {
+                                          // Threading is hard!  It's possible that an update to the PMF snuck in between when we asked to cache the CMF and when the
+                                          // "burnedIn" variable was last seen as false.
+                                          log->info("reference length = {}, CMF[refLen] = {}, fragLen = {}, PMF[fragLen] = {}",
+                                                    refLength, std::exp(refLengthCM), aln->fragLen(), std::exp(lenProb));
                                         }
+                                      } else if (useAuxParams) {
+                                        logFragProb = lenProb;
+                                      }
+                                    }
+
+                                    if (!salmonOpts.noFragLengthDist and aln->fragLen() > 0.0) {
+                                      logFragProb = fragLengthDist.pmf(static_cast<size_t>(aln->fragLen()));
                                     }
 
                                     // The alignment probability is the product of a
                                     // transcript-level term (based on abundance and) an
                                     // alignment-level term.
                                     double logRefLength{salmon::math::LOG_0};
-                                    if (salmonOpts.noEffectiveLengthCorrection or !burnedIn) {
-                                        logRefLength = std::log(transcript.RefLength);
+                                    if (noLengthCorrection) {
+                                      logRefLength = 1.0;
+                                    } else if (salmonOpts.noEffectiveLengthCorrection or !burnedIn) {
+                                      logRefLength = std::log(transcript.RefLength);
                                     } else {
-                                        logRefLength = transcript.getCachedLogEffectiveLength();
+                                      logRefLength = transcript.getCachedLogEffectiveLength();
                                     }
 
-
-                                    double logAlignCompatProb =
-                                        (salmonOpts.useReadCompat) ?
-                                        (salmon::utils::logAlignFormatProb(
-                                                  aln->libFormat(),
-                                                  expectedLibraryFormat,
-                                                  aln->pos(),
-                                                  aln->fwd(), aln->mateStatus(), salmonOpts.incompatPrior)
-                                        ) : LOG_1;
+                                    // The probability that the fragments align to the given strands in the
+                                    // given orientations.
+                                    bool isCompat = 
+                                      salmon::utils::isCompatible(
+                                                                  aln->libFormat(),
+                                                                  expectedLibraryFormat,
+                                                                  aln->pos(),
+                                                                  aln->fwd(), aln->mateStatus());
+                                    double logAlignCompatProb = isCompat ? LOG_1 : salmonOpts.incompatPrior;
+                                    if (!isCompat and salmonOpts.ignoreIncompat) {
+                                      aln->logProb = salmon::math::LOG_0;
+                                      continue;
+                                    }
 
                                     // Adjustment to the likelihood due to the
                                     // error model
