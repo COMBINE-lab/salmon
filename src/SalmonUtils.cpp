@@ -1023,7 +1023,7 @@ TranscriptGeneMap transcriptGeneMapFromGTF(const std::string& fname,
   for (int i = 0; i < nfeat; ++i) {
     auto f = reader.gflst[i];
     if (f->isTranscript()) {
-      const char* keyStr;
+      const char* keyStr = nullptr;
       switch (tkey) {
       case TranscriptKey::GENE_ID:
         keyStr = f->getGeneID();
@@ -1035,7 +1035,7 @@ TranscriptGeneMap transcriptGeneMapFromGTF(const std::string& fname,
         keyStr = f->getAttr(key.c_str());
         break;
       }
-      if (keyStr != NULL and f->hasGffID()) {
+      if (keyStr != nullptr and keyStr != NULL and f->hasGffID()) {
         feats.emplace_back(f->getID(), keyStr);
       } else {
         if (!f->hasGffID()){
@@ -2337,6 +2337,8 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm,
   using std::move;
   using std::cerr;
   using std::max;
+ 
+  auto logger = spdlog::get("jointLog");
 
   constexpr double minTPM = std::numeric_limits<double>::denorm_min();
   std::ifstream expFile(inputPath.string());
@@ -2353,9 +2355,6 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm,
 
   bool headerLine{true};
   while (getline(expFile, l)) {
-    if (++ln % 1000 == 0) {
-      cerr << "\r\rParsed " << ln << " expression lines";
-    }
     auto it =
         find_if(l.begin(), l.end(), [](char c) -> bool { return !isspace(c); });
     if (it != l.end()) {
@@ -2366,7 +2365,12 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm,
         if (!headerLine) {
           vector<string> toks = split(l);
           ExpressionRecord er(toks);
-          auto gn = tgm.geneName(er.target);
+          bool foundGene{false};
+          auto gn = tgm.geneName(er.target, foundGene);
+          if (!foundGene) {
+            logger->warn("couldn't find transcript named [{}] in transcript <-> gene map; "
+                         "returning transcript as it's own gene", er.target);
+          }
           geneExps[gn].push_back(move(er));
         } else { // treat the header line as a comment
           comments.push_back(l);
@@ -2375,10 +2379,9 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm,
       }
     }
   }
-  cerr << "\ndone\n";
   expFile.close();
 
-  cerr << "Aggregating expressions to gene level . . .";
+  logger->info("Aggregating expressions to gene level");
   boost::filesystem::path outputFilePath(inputPath);
   outputFilePath.replace_extension(".genes.sf");
   ofstream outFile(outputFilePath.string());
@@ -2437,14 +2440,15 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm,
   }
 
   outFile.close();
-  cerr << " done\n";
+  logger->info("done");
   //====================== From GeneSum =====================
 }
 
 void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
                                 boost::filesystem::path& estDir) {
   namespace bfs = boost::filesystem;
-  std::cerr << "Computing gene-level abundance estimates\n";
+  auto logger = spdlog::get("jointLog");
+  logger->info("Computing gene-level abundance estimates");
   std::set<std::string> validGTFExtensions = {".gtf", ".gff", ".gff3", ".GTF", ".GFF", ".GFF3"};
   auto extension = geneMapPath.extension();
 
@@ -2460,9 +2464,8 @@ void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
     tgfile.close();
   }
 
-  std::cerr << "There were " << tranGeneMap.numTranscripts()
-            << " transcripts mapping to " << tranGeneMap.numGenes()
-            << " genes\n";
+  logger->info("There were {} transcripts mapping to {} genes",
+               tranGeneMap.numTranscripts(), tranGeneMap.numGenes());
 
   bfs::path estFilePath = estDir / "quant.sf";
   if (!bfs::exists(estFilePath)) {
