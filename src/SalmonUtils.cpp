@@ -1598,6 +1598,8 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
 
   using std::vector;
   using BlockedIndexRange = tbb::blocked_range<size_t>;
+  using salmon::math::EPSILON;
+  using salmon::math::LOG_EPSILON;
 
   double minAlpha = 1e-8;
   double minCDFMass = 1e-10;
@@ -2003,11 +2005,11 @@ int contextSize = outsideContext + insideContext;
               int32_t maxFragLenRC = fragStartPos;
               auto densityFW = conditionalCDF(maxFragLenFW);
               auto densityRC = conditionalCDF(maxFragLenRC);
-              if (weight * densityFW > 1e-8) {
+              if (weight * densityFW > EPSILON) {
                 expectPos5[txp.lengthClassIndex()].addMass(
                     fragStartPos, txp.RefLength, std::log(weight * densityFW));
               }
-              if (weight * densityRC > 1e-8) {
+              if (weight * densityRC > EPSILON) {
                 expectPos3[txp.lengthClassIndex()].addMass(
                     fragStartPos, txp.RefLength, std::log(weight * densityRC));
               }

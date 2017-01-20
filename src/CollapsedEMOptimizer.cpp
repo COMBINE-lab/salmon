@@ -756,7 +756,8 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   uint32_t minIter = 50;
   bool seqBiasCorrect = sopt.biasCorrect;
   bool gcBiasCorrect = sopt.gcBiasCorrect;
-  bool doBiasCorrect = seqBiasCorrect or gcBiasCorrect;
+  bool posBiasCorrect = sopt.posBiasCorrect;
+  bool doBiasCorrect = seqBiasCorrect or gcBiasCorrect or posBiasCorrect;
   bool metaGenomeMode = sopt.meta;
   bool altInitMode = sopt.alternativeInitMode;
 

@@ -73,7 +73,6 @@ void SimplePosBias::finalize() {
     splineBins[i+1] = positionBins_[i] - 0.01;
   }
   splineBins.back() = 1.0;
-
   s_.set_points(splineBins, splineMass);
   isLogged_ = false;
   isFinalized_ = true;
