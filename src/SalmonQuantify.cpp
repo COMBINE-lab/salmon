@@ -19,8 +19,6 @@
 <HEADER
 **/
 
-#include "btree_map.h"
-#include "btree_set.h"
 #include <algorithm>
 #include <atomic>
 #include <cassert>
