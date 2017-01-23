@@ -436,15 +436,15 @@ ExternalProject_Add(libjellyfish
 set (FETCHED_JELLYFISH TRUE)
 endif()
 
-## TODO
-# find_package(TBB)
+## Try and find TBB first
+find_package(TBB 4.4 COMPONENTS tbb tbbmalloc tbbmalloc_proxy )
 
 ##
 #
 # Fetch and build Intel's Threading Building Blocks library.
 #
 ##
-if(NOT TBB_FOUND)
+if((NOT TBB_FOUND) OR (TBB_FOUND AND (TBB_VERSION VERSION_LESS 4.4)))
 
 set(TBB_WILL_RECONFIGURE TRUE)
 # Set the appropriate compiler
