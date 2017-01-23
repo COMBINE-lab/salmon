@@ -19,8 +19,6 @@
 <HEADER
 **/
 
-#include "btree_map.h"
-#include "btree_set.h"
 #include <algorithm>
 #include <atomic>
 #include <cassert>
@@ -117,7 +115,7 @@ extern "C" {
 #include "GZipWriter.hpp"
 #include "HitManager.hpp"
 #include "KmerIntervalMap.hpp"
-#include "PairSequenceParser.hpp"
+//#include "PairSequenceParser.hpp"
 #include "RapMapUtils.hpp"
 #include "ReadExperiment.hpp"
 #include "SACollector.hpp"
@@ -177,13 +175,15 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 
   using salmon::math::LOG_0;
   using salmon::math::LOG_1;
+  using salmon::math::LOG_EPSILON;
   using salmon::math::LOG_ONEHALF;
   using salmon::math::logAdd;
   using salmon::math::logSub;
 
   const uint64_t numBurninFrags = salmonOpts.numBurninFrags;
 
-  auto log = spdlog::get("jointLog");
+  auto& log = salmonOpts.jointLog;
+  //auto log = spdlog::get("jointLog");
   size_t numTranscripts{transcripts.size()};
   size_t localNumAssignedFragments{0};
   size_t priorNumAssignedFragments{numAssignedFragments};
@@ -211,6 +211,9 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
   bool useFragLengthDist{!salmonOpts.noFragLengthDist};
   bool noFragLenFactor{salmonOpts.noFragLenFactor};
   bool useRankEqClasses{salmonOpts.rankEqClasses};
+  bool noLengthCorrection{salmonOpts.noLengthCorrection};
+  // JAN 13
+  bool useAuxParams = ((localNumAssignedFragments + numAssignedFragments) >= salmonOpts.numPreBurninFrags);
 
   // If we're auto detecting the library type
   auto* detector = readLib.getDetector();
@@ -235,6 +238,11 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 
   double startingCumulativeMass =
       fmCalc.cumulativeLogMassAt(firstTimestepOfRound);
+
+  auto isUnexpectedOrphan = [expectedLibraryFormat](AlnT& aln) -> bool {
+    return (expectedLibraryFormat.type == ReadType::PAIRED_END and aln.mateStatus != rapmap::utils::MateStatus::PAIRED_END_PAIRED);
+  };
+
   int i{0};
   {
     // Iterate over each group of alignments (a group consists of all alignments
@@ -289,6 +297,10 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
       hasCompatibleMapping = false;
       // For each alignment of this read
       for (auto& aln : alnGroup.alignments()) {
+
+        useAuxParams = ((localNumAssignedFragments + numAssignedFragments) >= salmonOpts.numPreBurninFrags);
+        bool considerCondProb{burnedIn or useAuxParams};
+
         auto transcriptID = aln.transcriptID();
         auto& transcript = transcripts[transcriptID];
         transcriptUnique =
@@ -303,22 +315,56 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
         // transcript-level term (based on abundance and) an
         // alignment-level term.
         double logRefLength{salmon::math::LOG_0};
-        if (salmonOpts.noEffectiveLengthCorrection or !burnedIn) {
-          logRefLength = std::log(transcript.RefLength);
+
+        if (noLengthCorrection) {
+          logRefLength = 1.0;
+        } else if (salmonOpts.noEffectiveLengthCorrection or !burnedIn) {
+          logRefLength = std::log(static_cast<double>(transcript.RefLength));
         } else {
           logRefLength = transcript.getCachedLogEffectiveLength();
-        }
+        } 
 
         double transcriptLogCount = transcript.mass(initialRound);
+        auto flen = aln.fragLength();
+        // If we have a properly-paired read then use the "pedantic"
+        // definition here.
+        if (aln.mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED and
+            aln.fwd != aln.mateIsFwd) {
+          flen = aln.fragLengthPedantic(transcript.RefLength); 
+        }
+
 
         // If the transcript had a non-zero count (including pseudocount)
         if (std::abs(transcriptLogCount) != LOG_0) {
 
           // The probability of drawing a fragment of this length;
           double logFragProb = LOG_1;
-          if (burnedIn and useFragLengthDist and aln.fragLength() > 0) {
-            logFragProb =
-                fragLengthDist.pmf(static_cast<size_t>(aln.fragLength()));
+          // If we are expecting a paired-end library, and this is an orphan,
+          // then logFragProb should be small
+          if (isUnexpectedOrphan(aln)) { 
+            logFragProb = LOG_EPSILON;
+          }
+          
+          if (flen > 0.0 and useFragLengthDist and considerCondProb) {
+            size_t fl = flen;
+            double lenProb = fragLengthDist.pmf(fl); 
+            if (burnedIn) {
+              /* condition fragment length prob on txp length */
+              double refLengthCM = fragLengthDist.cmf(static_cast<size_t>(refLength)); 
+              bool computeMass = fl < refLength and !salmon::math::isLog0(refLengthCM);
+              logFragProb = (computeMass) ?
+                                      (lenProb - refLengthCM) :
+                salmon::math::LOG_EPSILON;
+              if (computeMass and refLengthCM < lenProb) {
+                // Threading is hard!  It's possible that an update to the PMF snuck in between when we asked to cache the CMF and when the
+                // "burnedIn" variable was last seen as false.
+                log->info("reference length = {}, CMF[refLen] = {}, fragLen = {}, PMF[fragLen] = {}", refLength, std::exp(refLengthCM), aln.fragLength(), std::exp(lenProb));
+              }
+            } else if (useAuxParams) {
+              logFragProb = lenProb;
+            }
+            //logFragProb = lenProb;
+            //logFragProb = fragLengthDist.pmf(static_cast<size_t>(aln.fragLength()));
           }
 
           // TESTING
@@ -386,11 +432,18 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
           **/
 
           // Allow for a non-uniform fragment start position distribution
+
           double startPosProb{-logRefLength};
+          // DEC 9
+          if (aln.mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED and !noLengthCorrection) {
+            startPosProb = (flen <= refLength) ? -std::log(refLength - flen + 1) : salmon::math::LOG_EPSILON;
+          }
+
           double fragStartLogNumerator{salmon::math::LOG_1};
           double fragStartLogDenominator{salmon::math::LOG_1};
 
           auto hitPos = aln.hitPos();
+          /** NOTE: no more FSPD
           if (useFSPD and burnedIn and hitPos < refLength) {
             auto& fragStartDist = fragStartDists[transcript.lengthClassIndex()];
             // Get the log(numerator) and log(denominator) for the fragment
@@ -404,6 +457,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
                                ? fragStartLogNumerator - fragStartLogDenominator
                                : salmon::math::LOG_0;
           }
+          **/
 
           // Increment the count of this type of read that we've seen
           ++libTypeCounts[aln.libFormat().formatID()];
@@ -585,21 +639,33 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
           }
         }
 
-        if (gcBiasCorrect and aln.libFormat().type == ReadType::PAIRED_END) {
-          int32_t start = std::min(aln.pos, aln.matePos);
-          int32_t stop = start + aln.fragLen - 1;
+        if (gcBiasCorrect) {
+            if (aln.libFormat().type == ReadType::PAIRED_END) {
+                int32_t start = std::min(aln.pos, aln.matePos);
+                int32_t stop = start + aln.fragLen - 1;
+                // WITH CONTEXT
+                if (start >= 0 and stop < transcript.RefLength) {
+                    bool valid{false};
+                    auto desc = transcript.gcDesc(start, stop, valid);
+                    if (valid) { observedGCMass.inc(desc, aln.logProb); }
+                }
+            } else if(expectedLibraryFormat.type == ReadType::SINGLE_END) { 
+	      // Both expected and observed should be single end here
+                // For single-end reads, simply assume that every fragment
+                // has a length equal to the conditional mean (given the 
+                // current transcript's length).
+                auto cmeans = readExp.condMeans();
+                auto cmean = static_cast<int32_t>((transcript.RefLength >= cmeans.size()) ? cmeans.back() : cmeans[transcript.RefLength]);
+                int32_t start = aln.fwd ? aln.pos : std::max(0, aln.pos - cmean);
+                int32_t stop = start + cmean;
+                // WITH CONTEXT
+                if (start >= 0 and stop < transcript.RefLength) {
+                  bool valid{false};
+                  auto desc = transcript.gcDesc(start, stop, valid);
+                  if (valid) {observedGCMass.inc(desc, aln.logProb);}
+                }
+            } 
 
-          // WITH CONTEXT
-          if (start >= 0 and stop < transcript.RefLength) {
-              auto desc = transcript.gcDesc(start, stop);
-              observedGCMass.inc(desc, aln.logProb);
-            /*
-            int32_t gcFrac = transcript.gcFrac(start, stop);
-            // Add this fragment's contribution
-            observedGCMass[gcFrac] =
-                salmon::math::logAdd(observedGCMass[gcFrac], aln.logProb);
-            */
-          }
         }
         double r = uni(randEng);
         if (!burnedIn and r < std::exp(aln.logProb)) {
@@ -654,6 +720,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
     // NOTE: only one thread should succeed here, and that
     // thread will set burnedIn to true.
     readExp.updateTranscriptLengthsAtomic(burnedIn);
+    fragLengthDist.cacheCMF();
   }
   if (initialRound) {
     readLib.updateLibTypeCounts(libTypeCounts);
@@ -733,8 +800,13 @@ void processReadsQuasi(
 
   // Write unmapped reads
   fmt::MemoryWriter unmappedNames;
-  auto unmappedLogger = spdlog::get("unmappedLog");
-  bool writeUnmapped = (unmappedLogger.get() == nullptr) ? false : true;
+  bool writeUnmapped = salmonOpts.writeUnmappedNames;
+  spdlog::logger* unmappedLogger = (writeUnmapped) ? salmonOpts.unmappedLog.get() : nullptr;
+
+  // Write unmapped reads
+  fmt::MemoryWriter orphanLinks;
+  bool writeOrphanLinks = salmonOpts.writeOrphanLinks;
+  spdlog::logger* orphanLinkLogger = (writeOrphanLinks) ? salmonOpts.orphanLinkLog.get() : nullptr;
 
   auto& readBiasFW =
       observedBiasParams
@@ -764,6 +836,17 @@ void processReadsQuasi(
   size_t readLenLeft{0};
   size_t readLenRight{0};
   SACollector<RapMapIndexT> hitCollector(qidx);
+
+  if (salmonOpts.fasterMapping) {
+      hitCollector.enableNIP();
+  } else {
+      hitCollector.disableNIP();
+  } 
+  hitCollector.setStrictCheck(true);
+  if (salmonOpts.quasiCoverage > 0.0) {
+      hitCollector.setCoverageRequirement(salmonOpts.quasiCoverage);
+  }
+
   SASearcher<RapMapIndexT> saSearcher(qidx);
   std::vector<QuasiAlignment> leftHits;
   std::vector<QuasiAlignment> rightHits;
@@ -806,11 +889,11 @@ void processReadsQuasi(
       bool lh = tooShortLeft ? false : hitCollector(rp.first.seq,
                                                     leftHits, saSearcher,
                                                     MateStatus::PAIRED_END_LEFT,
-                                                    true, consistentHits);
+                                                    consistentHits);
 
       bool rh = tooShortRight ? false : hitCollector(rp.second.seq,
                                    rightHits, saSearcher,
-                                   MateStatus::PAIRED_END_RIGHT, true,
+                                   MateStatus::PAIRED_END_RIGHT, 
                                    consistentHits);
 
       // Consider a read as too short if both ends are too short
@@ -840,6 +923,27 @@ void processReadsQuasi(
         if (jointHits.size() > salmonOpts.maxReadOccs) {
           jointHitGroup.clearAlignments();
         }
+      }
+
+      // NOTE: This will currently not work with "strict intersect", i.e.
+      // nothing will be output here with strict intersect.
+      if (writeOrphanLinks) {
+          // If we are not using strict intersection, then joint hits
+          // can only be zero when either:
+          // 1) there are *no* hits or
+          // 2) there are hits for *both* the left and right reads, but not to the same txp
+          if (!strictIntersect and jointHits.size() == 0) {
+              if (leftHits.size() > 0 and rightHits.size() > 0) {
+                  for (auto& h : leftHits) {
+                      orphanLinks << h.transcriptID() << ',' << h.pos << "\t";
+                  }
+                  orphanLinks << ":";
+                  for (auto& h : rightHits) {
+                      orphanLinks << h.transcriptID() << ',' << h.pos << "\t";
+                  }
+                  orphanLinks << "\n";
+              }
+          }
       }
 
       // If we have mappings, then process them.
@@ -1065,6 +1169,16 @@ void processReadsQuasi(
         sstream.clear();
     } 
 
+    if (writeOrphanLinks) {
+        std::string outStr(orphanLinks.str());
+        // Get rid of last newline
+        if (!outStr.empty()) {
+            outStr.pop_back();
+            orphanLinkLogger->info(std::move(outStr));
+        }
+        orphanLinks.clear();
+    }
+
     prevObservedFrags = numObservedFragments;
     AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(
         structureVec.begin(), structureVec.begin() + rangeSize);
@@ -1116,8 +1230,8 @@ void processReadsQuasi(
 
   // Write unmapped reads
   fmt::MemoryWriter unmappedNames;
-  auto unmappedLogger = spdlog::get("unmappedLog");
-  bool writeUnmapped = (unmappedLogger.get() == nullptr) ? false : true;
+  bool writeUnmapped = salmonOpts.writeUnmappedNames;
+  spdlog::logger* unmappedLogger = (writeUnmapped) ? salmonOpts.unmappedLog.get() : nullptr;
 
   auto& readBiasFW = observedBiasParams.seqBiasModelFW;
   auto& readBiasRC = observedBiasParams.seqBiasModelRC;
@@ -1141,6 +1255,17 @@ void processReadsQuasi(
   bool quiet{salmonOpts.quiet};
 
   SACollector<RapMapIndexT> hitCollector(qidx);
+  if (salmonOpts.fasterMapping) {
+      hitCollector.enableNIP();
+  } else {
+      hitCollector.disableNIP();
+  } 
+
+  hitCollector.setStrictCheck(true);
+  if (salmonOpts.quasiCoverage > 0.0) {
+      hitCollector.setCoverageRequirement(salmonOpts.quasiCoverage);
+  }
+
   SASearcher<RapMapIndexT> saSearcher(qidx);
   rapmap::utils::HitCounters hctr;
   
@@ -1174,7 +1299,7 @@ void processReadsQuasi(
           tooShort ? false
           : hitCollector(rp.seq,
                                   jointHits, saSearcher,
-                                  MateStatus::SINGLE_END, true, consistentHits);
+                                  MateStatus::SINGLE_END, consistentHits);
 
       // If the fragment was too short, record it
       if (tooShort) {
@@ -1629,21 +1754,17 @@ void processReadLibrary(
       threads[i].join();
     }
 
+    /** GC-fragment bias **/
     // Set the global distribution based on the sum of local
     // distributions.
+    double gcFracFwd{0.0};
+    double globalMass{salmon::math::LOG_0};
+    double globalFwdMass{salmon::math::LOG_0};
+    auto& globalGCMass = readExp.observedGC();
     for (auto& gcp : observedBiasParams) {
-      /*
-              auto& fw = readExp.readBias(salmon::utils::Direction::FORWARD);
-              auto& rc =
-         readExp.readBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
+      auto& gcm = gcp.observedGCMass;
+      globalGCMass.combineCounts(gcm);
 
-              auto& fwloc = gcp.seqBiasFW;
-              auto& rcloc = gcp.seqBiasRC;
-              for (size_t i = 0; i < fwloc.counts.size(); ++i) {
-                  fw.counts[i] += fwloc.counts[i];
-                  rc.counts[i] += rcloc.counts[i];
-              }
-      */
       auto& fw = readExp.readBiasModelObserved(salmon::utils::Direction::FORWARD);
       auto& rc =
           readExp.readBiasModelObserved(salmon::utils::Direction::REVERSE_COMPLEMENT);
@@ -1663,7 +1784,20 @@ void processReadLibrary(
         posBiasesFW[i].combine(gcp.posBiasFW[i]);
         posBiasesRC[i].combine(gcp.posBiasRC[i]);
       }
+
+      globalMass = salmon::math::logAdd(globalMass, gcp.massFwd);
+      globalMass = salmon::math::logAdd(globalMass, gcp.massRC);
+      globalFwdMass = salmon::math::logAdd(globalFwdMass, gcp.massFwd);
     }
+    globalGCMass.normalize();
+
+    if (globalMass != salmon::math::LOG_0) {
+      if (globalFwdMass != salmon::math::LOG_0) {
+        gcFracFwd = std::exp(globalFwdMass - globalMass);
+      }
+      readExp.setGCFracForward(gcFracFwd);
+    }
+
     // finalize the positional biases
     if (salmonOpts.posBiasCorrect) {
       auto& posBiasesFW = readExp.posBias(salmon::utils::Direction::FORWARD);
@@ -1675,7 +1809,42 @@ void processReadLibrary(
       }
     }
 
-    /** END: bias models **/
+    /** END GC-fragment bias **/
+
+    /* OLD SINGLE END BIAS
+    // Set the global distribution based on the sum of local
+    // distributions.
+    for (auto& gcp : observedBiasParams) {
+      auto& fw = readExp.readBiasModelObserved(salmon::utils::Direction::FORWARD);
+      auto& rc =
+          readExp.readBiasModelObserved(salmon::utils::Direction::REVERSE_COMPLEMENT);
+
+      auto& fwloc = gcp.seqBiasModelFW;
+      auto& rcloc = gcp.seqBiasModelRC;
+      fw.combineCounts(fwloc);
+      rc.combineCounts(rcloc);
+
+      // positional biases
+      auto& posBiasesFW = readExp.posBias(salmon::utils::Direction::FORWARD);
+      auto& posBiasesRC =
+          readExp.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
+      for (size_t i = 0; i < posBiasesFW.size(); ++i) {
+        posBiasesFW[i].combine(gcp.posBiasFW[i]);
+        posBiasesRC[i].combine(gcp.posBiasRC[i]);
+      }
+    }
+    // finalize the positional biases
+    if (salmonOpts.posBiasCorrect) {
+      auto& posBiasesFW = readExp.posBias(salmon::utils::Direction::FORWARD);
+      auto& posBiasesRC =
+          readExp.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
+      for (size_t i = 0; i < posBiasesFW.size(); ++i) {
+        posBiasesFW[i].finalize();
+        posBiasesRC[i].finalize();
+      }
+    }
+    END OLD SINGLE-END BIAS */
+
 
   } // ------ END Single-end --------
 }
@@ -1692,7 +1861,7 @@ void quantifyLibrary(ReadExperiment& experiment, bool greedyChain,
                      mem_opt_t* memOptions, SalmonOpts& salmonOpts,
                      double coverageThresh, uint32_t numQuantThreads) {
 
-  bool burnedIn{false};
+  bool burnedIn = (salmonOpts.numBurninFrags == 0);
   uint64_t numRequiredFragments = salmonOpts.numRequiredFragments;
   std::atomic<uint64_t> upperBoundHits{0};
   // ErrorModel errMod(1.00);
@@ -1707,7 +1876,7 @@ void quantifyLibrary(ReadExperiment& experiment, bool greedyChain,
   std::atomic<uint64_t> totalAssignedFragments{0};
   uint64_t prevNumAssignedFragments{0};
 
-  auto jointLog = spdlog::get("jointLog");
+  auto jointLog = salmonOpts.jointLog;
 
   ForgettingMassCalculator fmCalc(salmonOpts.forgettingFactor);
   size_t prefillSize = 1000000000 / miniBatchSize;
@@ -1958,10 +2127,10 @@ int salmonQuantify(int argc, char* argv[]) {
       "quasi-mapping.")
     (
      "seqBias",
-     po::value(&(sopt.biasCorrect))->zero_tokens(),
+     po::bool_switch(&(sopt.biasCorrect))->default_value(false),
      "Perform sequence-specific bias correction.")
     (
-      "gcBias", po::value(&(sopt.gcBiasCorrect))->zero_tokens(),
+      "gcBias", po::bool_switch(&(sopt.gcBiasCorrect))->default_value(false),
       "[beta] Perform fragment GC bias correction")
     (
       "threads,p",
@@ -1994,15 +2163,22 @@ int salmonQuantify(int argc, char* argv[]) {
       "it belongs "
       "separated by a tab.  The extension of the file is used to determine how "
       "the file "
-      "should be parsed.  Files ending in \'.gtf\' or \'.gff\' are assumed to "
+      "should be parsed.  Files ending in \'.gtf\', \'.gff\' or \'.gff3\' are assumed to "
       "be in GTF "
       "format; files with any other extension are assumed to be in the simple "
-      "format.")
+      "format. In GTF / GFF format, the \"transcript_id\" is assumed to contain the "
+      "transcript identifier and the \"gene_id\" is assumed to contain the corresponding "
+      "gene identifier.")
   (
-   "writeMappings", po::value<string>(&sopt.qmFileName)->default_value("")->implicit_value("-"),
+   "writeMappings,z", po::value<string>(&sopt.qmFileName)->default_value("")->implicit_value("-"),
    "If this option is provided, then the quasi-mapping results will be written out in SAM-compatible "
    "format.  By default, output will be directed to stdout, but an alternative file name can be "
-   "provided instead.");
+   "provided instead.")
+  (
+   "meta", po::bool_switch(&(sopt.meta))->default_value(false),
+   "If you're using Salmon on a metagenomic dataset, consider setting this flag to disable parts of the "
+   "abundance estimation model that make less sense for metagenomic data."
+  );
 
   sopt.noRichEqClasses = false;
   // mapping cache has been deprecated
@@ -2026,6 +2202,10 @@ int salmonQuantify(int argc, char* argv[]) {
                                           "make use of a very large number of
       threads.")
       */
+    ("alternativeInitMode", po::bool_switch(&(sopt.alternativeInitMode))->default_value(false),
+     "[Experimental]: Use an alternative strategy (rather than simple interpolation between) the "
+     "online and uniform abundance estimates to initalize the EM / VBEM algorithm."
+     )
     (
      "auxDir", po::value<std::string>(&(sopt.auxDir))->default_value("aux_info"),
      "The sub-directory of the quantification directory where auxiliary "
@@ -2040,6 +2220,15 @@ int salmonQuantify(int argc, char* argv[]) {
 						 "dumpEq", po::bool_switch(&(sopt.dumpEq))->default_value(false),
 						 "Dump the equivalence class counts "
 						 "that were computed during quasi-mapping")
+    ("dumpEqWeights,d",
+     po::bool_switch(&(sopt.dumpEqWeights))->default_value(false),
+     "Includes \"rich\" equivlance class weights in the output when equivalence "
+     "class information is being dumped to file.")
+    ("fasterMapping",
+     po::bool_switch(&(sopt.fasterMapping))->default_value(false),
+     "[Developer]: Disables some extra checks during quasi-mapping. This may make mapping a "
+     "little bit faster at the potential cost of returning too many mappings (i.e. some sub-optimal mappings) "
+     "for certain reads. Only use this option if you know what it does (enables NIP-skipping)")
     (
      "gcSizeSamp",
      po::value<std::uint32_t>(&(sopt.gcSampFactor))->default_value(1),
@@ -2069,11 +2258,11 @@ int salmonQuantify(int argc, char* argv[]) {
      "distribution")
     (
      "fldMean",
-     po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(200),
+     po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(250),
      "The mean used in the fragment length distribution prior")
     (
      "fldSD",
-     po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(80),
+     po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(25),
      "The standard deviation used in the fragment length distribution "
      "prior")
     (
@@ -2097,6 +2286,13 @@ int salmonQuantify(int argc, char* argv[]) {
      po::value<uint32_t>(&(sopt.maxReadOccs))->default_value(100),
      "Reads \"mapping\" to more than this many places won't be "
      "considered.")
+    ("noLengthCorrection",
+     po::bool_switch(&(sopt.noLengthCorrection))->default_value(false),
+     "[experimental] : Entirely disables length correction when estimating "
+     "the abundance of transcripts.  This option can be used with protocols "
+     "where one expects that fragments derive from their underlying targets "
+     "without regard to that target's length (e.g. QuantSeq)"
+     )
     (
      "noEffectiveLengthCorrection",
      po::bool_switch(&(sopt.noEffectiveLengthCorrection))
@@ -2167,6 +2363,13 @@ int salmonQuantify(int argc, char* argv[]) {
      "Number of bootstrap samples to generate. Note: "
      "This is mutually exclusive with Gibbs sampling.")
     (
+     "thinningFactor",
+     po::value<uint32_t>(&(sopt.thinningFactor))->default_value(16),
+     "Number of steps to discard for every sample kept from the Gibbs chain. "
+     "The larger this number, the less chance that subsequent samples are "
+     "auto-correlated, but the slower sampling becomes."
+    )
+    (
      "quiet,q", po::bool_switch(&(sopt.quiet))->default_value(false),
      "Be quiet while doing quantification (don't write informative "
      "output to the console unless something goes wrong).")
@@ -2181,9 +2384,20 @@ int salmonQuantify(int argc, char* argv[]) {
      "as a per-nucleotide prior, unless the --perTranscriptPrior flag "
      "is also given, in which case this is used as a transcript-level prior")
     (
+     "writeOrphanLinks",
+     po::bool_switch(&(sopt.writeOrphanLinks))->default_value(false),
+     "Write the transcripts that are linked by orphaned reads.")
+    (
      "writeUnmappedNames",
      po::bool_switch(&(sopt.writeUnmappedNames))->default_value(false),
-     "Write the names of un-mapped reads to the file unmapped_names.txt in the auxiliary directory.");
+     "Write the names of un-mapped reads to the file unmapped_names.txt in the auxiliary directory.")
+    ("quasiCoverage,x",
+     po::value<double>(&(sopt.quasiCoverage))->default_value(0.0),
+     "[Experimental]: The fraction of the read that must be covered by MMPs (of length >= 31) if "
+     "this read is to be considered as \"mapped\".  This may help to avoid \"spurious\" mappings. "
+     "A value of 0 (the default) denotes no coverage threshold (a single 31-mer can yield a mapping).  "
+     "Since coverage by exact matching, large, MMPs is a rather strict condition, this value should likely "
+     "be set to something low, if used.");
 
 
   po::options_description fmd("\noptions that apply to the old FMD index");
@@ -2328,6 +2542,13 @@ transcript abundance from RNA-seq reads
     if (!optionsOK) {
       std::exit(1);
     }
+    bool optionsValidate =
+      salmon::utils::validateOptions(sopt);
+    if (!optionsValidate) {
+      sopt.jointLog->flush();
+      spdlog::drop_all();
+      std::exit(1);
+    }
  
     auto fileLog = sopt.fileLog;
     auto jointLog = sopt.jointLog;
@@ -2388,10 +2609,10 @@ transcript abundance from RNA-seq reads
       if (sopt.gcBiasCorrect) {
         for (auto& rl : readLibraries) {
           if (rl.format().type != ReadType::PAIRED_END) {
-            jointLog->warn("Fragment GC bias correction is currently only "
-                           "implemented for paired-end libraries.  Disabling "
-                           "fragment GC bias correction for this run");
-            sopt.gcBiasCorrect = false;
+            jointLog->warn("Fragment GC bias correction is currently *experimental* "
+                           "in single-end libraries.  Please use this option "
+                           "with caution.");
+            //sopt.gcBiasCorrect = false;
           }
         }
       }
@@ -2421,12 +2642,6 @@ transcript abundance from RNA-seq reads
     }
 
     GZipWriter gzw(outputDirectory, jointLog);
-
-    // If we are dumping the equivalence classes, then
-    // do it here.
-    if (sopt.dumpEq) {
-      gzw.writeEquivCounts(sopt, experiment);
-    }
 
     // Now that the streaming pass is complete, we have
     // our initial estimates, and our rich equivalence
@@ -2458,21 +2673,27 @@ transcript abundance from RNA-seq reads
 
     // Write the main results
     gzw.writeAbundances(sopt, experiment);
-    // Write meta-information about the run
-    gzw.writeMeta(sopt, experiment, sopt.runStartTime);
+
+    // If we are dumping the equivalence classes, then
+    // do it here.
+    if (sopt.dumpEq) {
+      gzw.writeEquivCounts(sopt, experiment);
+    }
 
     if (sopt.numGibbsSamples > 0) {
 
       jointLog->info("Starting Gibbs Sampler");
       CollapsedGibbsSampler sampler;
+      gzw.setSamplingPath(sopt);
       // The function we'll use as a callback to write samples
-      std::function<bool(const std::vector<int>&)> bsWriter =
-          [&gzw](const std::vector<int>& alphas) -> bool {
-        return gzw.writeBootstrap(alphas);
+      std::function<bool(const std::vector<double>&)> bsWriter =
+          [&gzw](const std::vector<double>& alphas) -> bool {
+        return gzw.writeBootstrap(alphas, true);
       };
 
       bool sampleSuccess =
-          sampler.sample(experiment, sopt, bsWriter, sopt.numGibbsSamples);
+        //sampler.sampleMultipleChains(experiment, sopt, bsWriter, sopt.numGibbsSamples);
+        sampler.sample(experiment, sopt, bsWriter, sopt.numGibbsSamples);
       if (!sampleSuccess) {
         jointLog->error("Encountered error during Gibb sampling .\n"
                         "This should not happen.\n"
@@ -2481,6 +2702,7 @@ transcript abundance from RNA-seq reads
       }
       jointLog->info("Finished Gibbs Sampler");
     } else if (sopt.numBootstraps > 0) {
+      gzw.setSamplingPath(sopt);
       // The function we'll use as a callback to write samples
       std::function<bool(const std::vector<double>&)> bsWriter =
           [&gzw](const std::vector<double>& alphas) -> bool {
@@ -2538,7 +2760,7 @@ transcript abundance from RNA-seq reads
     }
 
     if (sopt.writeUnmappedNames) {
-      auto l = spdlog::get("unmappedLog");
+       auto l = sopt.unmappedLog.get();
       // If the logger was created, then flush it and
       // close the associated file.
       if (l) {
@@ -2547,6 +2769,16 @@ transcript abundance from RNA-seq reads
       }
     }
     
+    if (sopt.writeOrphanLinks) {
+        auto l = sopt.orphanLinkLog.get();
+        // If the logger was created, then flush it and
+        // close the associated file.
+        if (l) {
+            l->flush();
+            if (sopt.orphanLinkFile) { sopt.orphanLinkFile->close(); }
+        }
+    }
+
     // if we wrote quasimappings, flush that buffer
     if (sopt.qmFileName != "" ){
         sopt.qmLog->flush();
@@ -2554,6 +2786,12 @@ transcript abundance from RNA-seq reads
         // the file
         if (sopt.qmFileName != "-") { sopt.qmFile.close(); }
     }
+
+    sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
+
+    // Write meta-information about the run
+    gzw.writeMeta(sopt, experiment);
+
   } catch (po::error& e) {
     std::cerr << "Exception : [" << e.what() << "]. Exiting.\n";
     std::exit(1);

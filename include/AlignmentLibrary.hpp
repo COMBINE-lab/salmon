@@ -65,6 +65,8 @@ class AlignmentLibrary {
     	fragStartDists_(5),
         posBiasFW_(5),
         posBiasRC_(5),
+	posBiasExpectFW_(5),
+	posBiasExpectRC_(5),
         seqBiasModel_(1.0),
     	eqBuilder_(salmonOpts.jointLog),
         quantificationPasses_(0),
@@ -123,6 +125,7 @@ class AlignmentLibrary {
             fmt::print(stderr, "Populating targets from aln = {}, fasta = {} . . .",
                        alnFiles.front(), transcriptFile_);
             fp.populateTargets(transcripts_, salmonOpts);
+            /*
 	    for (auto& txp : transcripts_) {
 		    // Length classes taken from
 		    // ======
@@ -143,6 +146,15 @@ class AlignmentLibrary {
 			    txp.lengthClassIndex(0);
 		    }
 	    }
+        */
+
+            std::vector<uint32_t> lengths;
+            lengths.reserve(transcripts_.size());
+            for (auto& txp : transcripts_) {
+               lengths.push_back(txp.RefLength);
+            }
+            setTranscriptLengthClasses_(lengths, posBiasFW_.size());
+
             fmt::print(stderr, "done\n");
 
             // Create the cluster forest for this set of transcripts
@@ -164,6 +176,34 @@ class AlignmentLibrary {
 
             alnMod_.reset(new AlignmentModel(1.0, salmonOpts.numErrorBins));
             alnMod_->setLogger(salmonOpts.jointLog);
+
+            if (libFmt.type == ReadType::SINGLE_END) {
+                // Convert the PMF to non-log scale
+                std::vector<double> logPMF;
+                size_t minVal;
+                size_t maxVal;
+                flDist_->dumpPMF(logPMF, minVal, maxVal);
+                double sum = salmon::math::LOG_0;
+                for (auto v : logPMF) {
+                    sum = salmon::math::logAdd(sum, v);
+                }
+                for (auto& v : logPMF) {
+                    v -= sum;
+                }
+
+                // Create the non-logged distribution.
+                // Here, we multiply by 100 to discourage small
+                // numbers in the correctionFactorsfromCounts call
+                // below.
+                std::vector<double> pmf(maxVal + 1, 0.0);
+                for (size_t i = minVal; i < maxVal; ++i) {
+                    pmf[i] = 100.0 * std::exp(logPMF[i - minVal]);
+                }
+
+                using distribution_utils::DistributionSpace;
+                // We compute the factors in linear space (since we've de-logged the pmf)
+                conditionalMeans_ = distribution_utils::correctionFactorsFromMass(pmf, DistributionSpace::LINEAR);
+            }
 
             // Start parsing the alignments
            NullFragmentFilter<FragT>* nff = nullptr;
@@ -221,6 +261,8 @@ class AlignmentLibrary {
             }
         }
     }
+
+    const std::vector<double>& condMeans() const { return conditionalMeans_; }
 
     std::vector<Transcript>& transcripts() { return transcripts_; }
     const std::vector<Transcript>& transcripts() const { return transcripts_; }
@@ -351,6 +393,14 @@ class AlignmentLibrary {
         return (dir == salmon::utils::Direction::FORWARD) ? posBiasFW_ : posBiasRC_; 
     }
 
+    std::vector<SimplePosBias>& posBiasExpected(salmon::utils::Direction dir) {
+	return (dir == salmon::utils::Direction::FORWARD) ? posBiasExpectFW_ : posBiasExpectRC_;
+    }
+
+    const std::vector<SimplePosBias>& posBiasExpected(salmon::utils::Direction dir) const {
+	return (dir == salmon::utils::Direction::FORWARD) ? posBiasExpectFW_ : posBiasExpectRC_;
+    }
+
     ReadKmerDist<6, std::atomic<uint32_t>>& readBias(salmon::utils::Direction dir) { 
         return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0] : readBias_[1]; 
     }
@@ -377,7 +427,49 @@ class AlignmentLibrary {
 	readBiasModelExpected_[idx] = std::move(model);
     }
  
+    const std::vector<uint32_t>& getLengthQuantiles() const { return lengthQuantiles_; }
+    
     private:
+    
+    void setTranscriptLengthClasses_(std::vector<uint32_t>& lengths, size_t nbins) {
+        auto n = lengths.size();
+        if ( n > nbins) {
+            lengthQuantiles_.clear();
+            lengthQuantiles_.reserve(nbins);
+      
+            size_t step = lengths.size() / nbins;
+            size_t cumStep = 0;
+            for (size_t i = 0; i < nbins; ++i) {
+                cumStep += step;
+                size_t ind = std::min(cumStep, n-1);
+                std::nth_element(lengths.begin(), lengths.begin() + ind, lengths.end());
+                // Find the proper quantile 
+                lengthQuantiles_.push_back(*(lengths.begin() + ind));
+            }
+        } else {
+            lengthQuantiles_.clear();
+            lengthQuantiles_.reserve(n);
+            std::sort(lengths.begin(), lengths.end());
+            for (auto l : lengths) {
+                lengthQuantiles_.push_back(l);
+            }
+            posBiasFW_.resize(n);
+            posBiasRC_.resize(n);
+            posBiasExpectFW_.resize(n);
+            posBiasExpectRC_.resize(n);
+        }
+
+        auto qb = lengthQuantiles_.begin();
+        auto qe = lengthQuantiles_.end();
+        auto maxQuant = std::distance(qb, qe) - 1;
+        for (auto& t : transcripts_) {
+            auto ind = std::min(maxQuant, std::distance(qb, std::upper_bound(qb, qe, t.RefLength)));
+            // the index is the smallest quantile longer than this length
+            t.lengthClassIndex(ind);
+        }
+    }
+
+
     /**
      * The file from which the alignments will be read.
      * This can be a SAM or BAM file, and can be a regular
@@ -438,8 +530,11 @@ class AlignmentLibrary {
     EquivalenceClassBuilder eqBuilder_;
 
     /** Positional bias things**/
+    std::vector<uint32_t> lengthQuantiles_;
     std::vector<SimplePosBias> posBiasFW_;
     std::vector<SimplePosBias> posBiasRC_;
+    std::vector<SimplePosBias> posBiasExpectFW_;
+    std::vector<SimplePosBias> posBiasExpectRC_;
  
     /** GC-fragment bias things **/
     // One bin for each percentage GC content
@@ -456,6 +551,7 @@ class AlignmentLibrary {
     //ReadKmerDist<6, std::atomic<uint32_t>> readBias_;
     std::vector<double> expectedBias_;
     std::unique_ptr<LibraryTypeDetector> detector_{nullptr};
+    std::vector<double> conditionalMeans_;
 };
 
 #endif // ALIGNMENT_LIBRARY_HPP

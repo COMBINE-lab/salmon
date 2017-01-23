@@ -29,8 +29,8 @@ def main(args):
         if 'auxDir' in dat:
             auxDir = dat['auxDir']
 
-    bootstrapFile = os.path.sep.join([quantDir, "aux", "bootstrap", "bootstraps.gz"])
-    nameFile = os.path.sep.join([quantDir, "aux", "bootstrap", "names.tsv.gz"])
+    bootstrapFile = os.path.sep.join([quantDir, auxDir, "bootstrap", "bootstraps.gz"])
+    nameFile = os.path.sep.join([quantDir, auxDir, "bootstrap", "names.tsv.gz"])
     if not os.path.isfile(bootstrapFile):
        logging.error("The required bootstrap file {} doesn't appear to exist".format(bootstrapFile)) 
        sys.exit(1)
@@ -45,11 +45,12 @@ def main(args):
     ntxp = len(txpNames)
     logging.info("Expecting bootstrap info for {} transcripts".format(ntxp))
     
-    with open(os.path.sep.join([quantDir, "aux", "meta_info.json"])) as fh:
+    with open(os.path.sep.join([quantDir, auxDir, "meta_info.json"])) as fh:
         meta_info = json.load(fh)
         
     if meta_info['samp_type'] == 'gibbs':
-        s = struct.Struct('<' + 'i' * ntxp)
+        #s = struct.Struct('<' + 'i' * ntxp)
+        s = struct.Struct('@' + 'd' * ntxp)
     elif meta_info['samp_type'] == 'bootstrap':
         s = struct.Struct('@' + 'd' * ntxp)
     else:

@@ -27,7 +27,6 @@ xxhash.c
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapFileSystem.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndexer.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndex.cpp
-${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAMapper.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapUtils.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/HitManager.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/rank9b.cpp
@@ -109,6 +108,7 @@ endif()
 # Build the Salmon library
 add_library(salmon_core STATIC ${SALMON_LIB_SRCS} )
 
+
 # Build the salmon executable
 add_executable(salmon ${SALMON_MAIN_SRCS} ${SALMON_ALIGN_SRCS})
 
@@ -144,9 +144,44 @@ target_link_libraries(salmon
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
     ${FAST_MALLOC_LIB}
+    ${LIBRT}
 )
 
+##
+# External dependencies of salmon_core and salmon
+##
+if (${FETCHED_JEMALLOC})
+   add_dependencies(salmon_core libjemalloc)
+   add_dependencies(salmon libjemalloc)
+endif()
+
+if (${FETCHED_BOOST})
+   add_dependencies(salmon_core libboost)
+   add_dependencies(salmon libboost)
+endif()
+
+if (${FETCHED_JELLYFISH})
+   add_dependencies(salmon_core libjellyfish)
+   add_dependencies(salmon libjellyfish)
+endif()
+
+if (${FETCHED_TBB})
+   add_dependencies(salmon_core libtbb)
+   add_dependencies(salmon libtbb)
+endif()
+
+add_dependencies(salmon_core libcereal)
+add_dependencies(salmon libcereal)
+add_dependencies(salmon_core libstadenio)
+add_dependencies(salmon libstadenio)
+add_dependencies(salmon_core libspdlog)
+add_dependencies(salmon libspdlog)
+add_dependencies(salmon_core libbwa)
 add_dependencies(salmon libbwa)
+add_dependencies(salmon_core libgff)
+add_dependencies(salmon libgff)
+add_dependencies(salmon_core libdivsufsort)
+add_dependencies(salmon libdivsufsort)
 
 # Link the executable
 target_link_libraries(unitTests
@@ -167,7 +202,10 @@ target_link_libraries(unitTests
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
     ${FAST_MALLOC_LIB}
+    ${LIBRT}
     )
+
+add_dependencies(salmon unitTests)
 
 ### No need for this, I think
 ##  This ensures that the salmon executable should work with or without `make install`

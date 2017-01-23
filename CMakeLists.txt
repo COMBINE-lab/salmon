@@ -4,10 +4,10 @@ enable_testing()
 
 project (Salmon)
 
-set(CPACK_PACKAGE_VERSION "0.7.2")
+set(CPACK_PACKAGE_VERSION "0.8.0")
 set(CPACK_PACKAGE_VERSION_MAJOR "0")
-set(CPACK_PACKAGE_VERSION_MINOR "7")
-set(CPACK_PACKAGE_VERSION_PATCH "2")
+set(CPACK_PACKAGE_VERSION_MINOR "8")
+set(CPACK_PACKAGE_VERSION_PATCH "0")
 set(PROJECT_VERSION ${CPACK_PACKAGE_VERSION})
 set(CPACK_GENERATOR "TGZ")
 set(CPACK_SOURCE_GENERATOR "TGZ")
@@ -20,14 +20,19 @@ set(CPACK_SOURCE_PACKAGE_FILE_NAME
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 
+if (APPLE)
 set (WARNING_IGNORE_FLAGS "-Wno-deprecated-register")
-set (BOOST_CXX_FLAGS "-Wno-deprecated-register -std=c++11")
+else()
+set (WARNING_IGNORE_FLAGS "")
+endif()
+
+set (BOOST_CXX_FLAGS "${WARNING_IGNORE_FLAGS} -std=c++11")
 ## Prefer static to dynamic libraries
 SET(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
 
 ## Set the standard required compile flags
 # Nov 18th --- removed -DHAVE_CONFIG_H
-set (CMAKE_CXX_FLAGS "-pthread -ftree-vectorize -funroll-loops -fPIC -fomit-frame-pointer -Ofast -DRAPMAP_SALMON_SUPPORT -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -Wno-unknown-pragmas -Wno-reorder -Wno-unused-variable -std=c++11 -Wreturn-type -Werror=return-type")
+set (CMAKE_CXX_FLAGS "-pthread -ftree-vectorize -funroll-loops -fPIC -fomit-frame-pointer -O3 -DRAPMAP_SALMON_SUPPORT -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -Wno-unknown-pragmas -Wno-reorder -Wno-unused-variable -std=c++11 -Wreturn-type -Werror=return-type")
 
 ##
 # OSX is strange (some might say, stupid in this regard).  Deal with it's quirkines here.
@@ -50,6 +55,11 @@ set( BOOST_EXTRA_FLAGS "--layout=tagged" )
 ## this get's set differently below if we
 ## are on clang & apple
 set (NON_APPLECLANG_LIBS gomp rt)
+
+if(UNIX AND NOT APPLE)
+	set(LIBRT rt)
+endif()
+
 set (PTHREAD_LIB)
 
 ##
@@ -123,6 +133,12 @@ else ()
     message(FATAL_ERROR "Your C++ compiler does not support C++11.")
 endif ()
 
+if (DO_QUIET_MAKE)
+    set( QUIET_MAKE "--silent" )
+else()
+    set( QUIET_MAKE "")
+endif()
+
 ## TODO: Figure out how to detect this automatically
 # If the "assembler" is too old, tell TBB not to compile
 # with -mrtm
@@ -153,7 +169,7 @@ endif ()
 set (GAT_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 
 # Have CMake tell us what it's doing
-set (CMAKE_VERBOSE_MAKEFILE true)
+# set (CMAKE_VERBOSE_MAKEFILE true)
 
 ###
 #
@@ -176,7 +192,12 @@ endif ( DEFINED CUSTOM_BOOST_PATH )
 ##
 # We want static, multithreaded boost libraries
 ##
-set (Boost_USE_STATIC_LIBS ON)
+if(CONDA_BUILD)
+  set (Boost_USE_STATIC_LIBS OFF)
+else ()
+  set (Boost_USE_STATIC_LIBS ON)
+endif(CONDA_BUILD)
+
 set (Boost_USE_MULTITHREADED ON)
 #set (Boost_USE_STATIC_RUNTIME OFF)
 
@@ -196,14 +217,16 @@ ExternalProject_Add(liblzma
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     BUILD_IN_SOURCE TRUE
     CONFIGURE_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/external/xz-5.2.2/configure --prefix=<INSTALL_DIR> CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
-    BUILD_COMMAND make
-    INSTALL_COMMAND make install
+    BUILD_COMMAND make ${QUIET_MAKE}
+    INSTALL_COMMAND make ${QUIET_MAKE} install
 )
+
 # Tell cmake that the external project generated a library so we can
 # add dependencies here instead of later
 set (LIBLZMA_LIBRARIES ${GAT_SOURCE_DIR}/external/install/lib/liblzma.a)
 set (LIBSTADEN_LDFLAGS "-L${GAT_SOURCE_DIR}/external/install/lib")
 set (LIBSTADEN_CFLAGS "-I${GAT_SOURCE_DIR}/external/install/include")
+set (FETCHED_LIBLZMA TRUE)
 else()
     message("Found liblzma library: ${LIBLZMA_LIBRARIES}")
     message("===========================================")
@@ -220,14 +243,15 @@ ExternalProject_Add(libbz2
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     BUILD_IN_SOURCE TRUE
     CONFIGURE_COMMAND ""
-    BUILD_COMMAND make CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
-    INSTALL_COMMAND make install PREFIX=<INSTALL_DIR>
+    BUILD_COMMAND make ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
+    INSTALL_COMMAND make ${QUIET_MAKE} install PREFIX=<INSTALL_DIR>
 )
 # Tell cmake that the external project generated a library so we can
 # add dependencies here instead of later
 set (BZIP2_LIBRARIES ${GAT_SOURCE_DIR}/external/install/lib/libbz2.a)
 set (LIBSTADEN_LDFLAGS "-L${GAT_SOURCE_DIR}/external/install/lib -I${GAT_SOURCE_DIR}/external/install/include")
 set (LIBSTADEN_CFLAGS "-I${GAT_SOURCE_DIR}/external/install/include")
+set (FETCHED_LIBBZ2 TRUE)
 else()
     message("Found libbz2 library: ${BZIP2_LIBRARIES}")
     message("===========================================")
@@ -237,7 +261,7 @@ endif()
 # Set the latest version and look for what we need
 ##
 set(Boost_ADDITIONAL_VERSIONS "1.53" "1.53.0" "1.54" "1.55" "1.56" "1.57.0" "1.58" "1.59" "1.60" "1.61")
-find_package(Boost 1.53.0 COMPONENTS iostreams filesystem system thread timer chrono program_options serialization)
+find_package(Boost 1.53.0 COMPONENTS iostreams filesystem system thread timer chrono program_options)
 message("BOOST_INCLUDEDIR = ${BOOST_INCLUDEDIR}")
 message("BOOST_LIBRARYDIR = ${BOOST_LIBRARYDIR}")
 message("Boost_FOUND = ${Boost_FOUND}")
@@ -311,6 +335,7 @@ elseif(FETCH_BOOST)
         COMMAND ${CMAKE_COMMAND} ${CMAKE_CURRENT_SOURCE_DIR} ${RECONFIG_FLAGS}
         DEPENDEES install
     )
+    set (FETCHED_BOOST TRUE)
 endif()
 
 ##
@@ -341,11 +366,18 @@ ExternalProject_Add(libdivsufsort
     URL ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort.zip
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
+    #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
     BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master/build
     CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DBUILD_DIVSUFSORT64=TRUE -DUSE_OPENMP=TRUE -DBUILD_SHARED_LIBS=FALSE
 )
+ExternalProject_Add_Step(libdivsufsort makedir
+  COMMAND mkdir -p <SOURCE_DIR>/build 
+  COMMENT "Make build directory"
+  DEPENDEES download 
+  DEPENDERS configure)
+ 
 set(SUFFARRAY_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
+
 
 message("Build system will fetch and build the Cereal serialization library")
 message("==================================================================")
@@ -356,12 +388,17 @@ ExternalProject_Add(libcereal
 		tar -xzvf cereal-v1.1.2.tar.gz
 	SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.1.2
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
+    #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
     BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.1.2/build
     CONFIGURE_COMMAND ""
     BUILD_COMMAND ""
     INSTALL_COMMAND sh -c "mkdir -p <INSTALL_DIR>/include && cp -r <SOURCE_DIR>/include/cereal <INSTALL_DIR>/include"
 )
+ExternalProject_Add_Step(libcereal makedir
+  COMMAND mkdir -p <SOURCE_DIR>/build 
+  COMMENT "Make build directory"
+  DEPENDEES download 
+  DEPENDERS configure)
 
 message("Build system will fetch and build BWA (for Salmon)")
 message("==================================================================")
@@ -374,7 +411,7 @@ ExternalProject_Add(libbwa
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/bwa-master
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ""
-    BUILD_COMMAND sh -c "make CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}"
+    BUILD_COMMAND sh -c "make ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}"
     INSTALL_COMMAND sh -c "mkdir -p <INSTALL_DIR>/lib && mkdir -p <INSTALL_DIR>/include/bwa && cp libbwa.a <INSTALL_DIR>/lib && cp *.h <INSTALL_DIR>/include/bwa && cp is.c bwtindex.c bwt_gen.c QSufSort.c ${CMAKE_CURRENT_SOURCE_DIR}/src/"
     BUILD_IN_SOURCE TRUE
 )
@@ -394,18 +431,20 @@ ExternalProject_Add(libjellyfish
     CONFIGURE_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/external/jellyfish-2.2.6/configure --prefix=<INSTALL_DIR> CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CXXFLAGS=${JELLYFISH_CXX_FLAGS}
     BUILD_COMMAND ${MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CXXFLAGS=${JELLYFISH_CXX_FLAGS}
     BUILD_IN_SOURCE 1
-    INSTALL_COMMAND make install
+    INSTALL_COMMAND make ${QUIET_MAKE} install
 )
+set (FETCHED_JELLYFISH TRUE)
 endif()
 
-find_package(TBB)
+## Try and find TBB first
+find_package(TBB 4.4 COMPONENTS tbb tbbmalloc tbbmalloc_proxy )
 
 ##
 #
 # Fetch and build Intel's Threading Building Blocks library.
 #
 ##
-if(NOT TBB_FOUND)
+if((NOT TBB_FOUND) OR (TBB_FOUND AND (TBB_VERSION VERSION_LESS 4.4)))
 
 set(TBB_WILL_RECONFIGURE TRUE)
 # Set the appropriate compiler
@@ -418,7 +457,7 @@ endif()
 message("Build system will fetch and build Intel Threading Building Blocks")
 message("==================================================================")
 # These are useful for the custom install step we'll do later
-set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb44_20160526oss)
+set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2017_U3)
 set(TBB_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
 
 if ("${TBB_COMPILER}" STREQUAL "gcc")
@@ -429,14 +468,14 @@ endif()
 
 ExternalProject_Add(libtbb
 	DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    URL https://www.threadingbuildingblocks.org/sites/default/files/software_releases/source/tbb44_20160526oss_src_0.tgz
-    DOWNLOAD_COMMAND curl -k -L https://www.threadingbuildingblocks.org/sites/default/files/software_releases/source/tbb44_20160526oss_src_0.tgz -o tbb_20160526oss_src.tgz &&
-                    tar -xzvf tbb_20160526oss_src.tgz
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb44_20160526oss
+    #URL https://github.com/01org/tbb/archive/2017_U3.tar.gz 
+    DOWNLOAD_COMMAND curl -k -L https://github.com/01org/tbb/archive/2017_U3.tar.gz -o tbb-2017_U3.tgz &&
+                    tar -xzvf tbb-2017_U3.tgz
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2017_U3
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     PATCH_COMMAND "${TBB_PATCH_STEP}"
     CONFIGURE_COMMAND ""
-    BUILD_COMMAND make CXXFLAGS=${TBB_CXXFLAGS} lambdas=1 compiler=${TBB_COMPILER} cfg=release tbb_build_prefix=LIBS
+    BUILD_COMMAND make ${QUIET_MAKE} CXXFLAGS=${TBB_CXXFLAGS} lambdas=1 compiler=${TBB_COMPILER} cfg=release tbb_build_prefix=LIBS
     INSTALL_COMMAND sh -c "cp ${TBB_SOURCE_DIR}/build/LIBS_release/*.${SHARED_LIB_EXTENSION}* ${TBB_INSTALL_DIR}/lib && cp -r ${TBB_SOURCE_DIR}/include/* ${TBB_INSTALL_DIR}/include"
     BUILD_IN_SOURCE 1
 )
@@ -446,6 +485,8 @@ ExternalProject_Add_Step(libtbb reconfigure
         COMMAND ${CMAKE_COMMAND} ${CMAKE_CURRENT_SOURCE_DIR} ${RECONFIG_FLAGS}
         DEPENDEES install
 )
+
+set (FETCHED_TBB TRUE)
 endif()
 
 ##
@@ -483,24 +524,34 @@ message("Build system will compile libgff")
 message("==================================================================")
 ExternalProject_Add(libgff
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/Kingsford-Group/libgff/archive/v1.0.tar.gz -o libgff.tgz &&
+    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/libgff/archive/v1.1.tar.gz -o libgff.tgz &&
     tar -xzvf libgff.tgz &&
     rm -fr libgff &&
-    mv libgff-1.0 libgff
+    mv libgff-1.1 libgff
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff
-    UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
+    #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff/build
     CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=${CMAKE_CURRENT_SOURCE_DIR}/external/install
 )
+ExternalProject_Add_Step(libgff makedir
+  COMMAND mkdir -p <SOURCE_DIR>/build 
+  COMMENT "Make build directory"
+  DEPENDEES download 
+  DEPENDERS configure)
 
-# Because of the way that Apple has changed SIP 
+# Because of the way that Apple has changed SIP
 # in el capitan, some headers may be in a new location
 if (APPLE)
     set(STADEN_INC "-I/usr/local/include")
     set(STADEN_LIB "-L/usr/local/lib")
 endif()
 
+if (CONDA_BUILD)
+  set(LZFLAG "-lz")
+else ()
+  set(LZFLAG "")
+endif (CONDA_BUILD)
 
 message("Build system will compile Staden IOLib")
 message("==================================================================")
@@ -514,7 +565,7 @@ ExternalProject_Add(libstadenio
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/staden-io_lib
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ./configure --enable-shared=no --without-libcurl --prefix=<INSTALL_DIR> LDFLAGS=${LIBSTADEN_LDFLAGS} CFLAGS=${LIBSTADEN_CFLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
-    BUILD_COMMAND make CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS+=${STADEN_INC} CFLAGS+=${STADEN_LIB}
+    BUILD_COMMAND make ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS+=${STADEN_INC} CFLAGS+=${STADEN_LIB} CFLAGS+=${LZFLAG}
 
     BUILD_IN_SOURCE 1
     INSTALL_COMMAND make install
@@ -524,10 +575,10 @@ message("Build system will fetch SPDLOG")
 message("==================================================================")
 ExternalProject_Add(libspdlog
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/spdlog/archive/v1.12.tar.gz -o spdlog-v1.12.tar.gz &&
-                     tar -xzf spdlog-v1.12.tar.gz &&
+    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/spdlog/archive/v0.11.0.tar.gz -o spdlog-v0.11.0.tar.gz &&
+                     tar -xzf spdlog-v0.11.0.tar.gz &&
                      rm -fr spdlog &&
-                     mv -f  spdlog-1.12 spdlog
+                     mv -f  spdlog-0.11.0 spdlog
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/spdlog
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ""
@@ -558,40 +609,55 @@ if (NOT HAVE_FAST_MALLOC)
     endif()
 endif()
 
+if(CONDA_BUILD)
+  set (JEMALLOC_FLAGS "CC=${CMAKE_C_COMPILER} CFLAGS=-fPIC CPPFLAGS=-fPIC")
+else ()
+  set (JEMALLOC_FLAGS "CC=${CMAKE_C_COMPILER}")
+endif()
+
 if (NOT HAVE_FAST_MALLOC)
     message("Build system will fetch and use JEMalloc")
     message("==================================================================")
     ExternalProject_Add(libjemalloc
         DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-        DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/jemalloc/archive/4.0.4.tar.gz -o jemalloc-4.0.4.tar.gz &&
-        tar -xzf jemalloc-4.0.4.tar.gz
-        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-4.0.4
+        DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/jemalloc/archive/4.4.0.tar.gz -o jemalloc-4.4.0.tar.gz &&
+        tar -xzf jemalloc-4.4.0.tar.gz
+        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-4.4.0
         BUILD_IN_SOURCE TRUE
         INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-        CONFIGURE_COMMAND sh -c "CC=${CMAKE_C_COMPILER} ./autogen.sh --prefix=<INSTALL_DIR>"
+        CONFIGURE_COMMAND sh -c "${JEMALLOC_FLAGS} ./autogen.sh --prefix=<INSTALL_DIR>"
         INSTALL_COMMAND cp -r lib <INSTALL_DIR>/ && cp -r include <INSTALL_DIR>/
         )
 
     set (FAST_MALLOC_LIB ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib/libjemalloc.a)
     set (HAVE_FAST_MALLOC TRUE)
+    set (FETCHED_JEMALLOC TRUE)
+    if (FETCHED_LIBBZ2)
+       add_dependencies(libjemalloc libbz2)
+    endif()
+
+    if (FETCHED_LIBLZMA)
+       add_dependencies(libjemalloc liblzma)
+    endif()
+
 endif ()
 
 
 ##
 ## This depenency is for RapMap
 ##
-message("Build system will fetch and build SparseHash")
-message("==================================================================")
-ExternalProject_Add(libsparsehash
-    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/sparsehash/archive/sparsehash-2.0.2.tar.gz -o sparsehash-2.0.2.tar.gz &&
-        tar -xzf sparsehash-2.0.2.tar.gz
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/sparsehash-sparsehash-2.0.2
-    BUILD_IN_SOURCE TRUE
-    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    CONFIGURE_COMMAND sh -c "CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure --prefix=<INSTALL_DIR>"
-    INSTALL_COMMAND make install
-)
+#message("Build system will fetch and build SparseHash")
+#message("==================================================================")
+#ExternalProject_Add(libsparsehash
+#    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+#    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/sparsehash/archive/sparsehash-2.0.2.tar.gz -o sparsehash-2.0.2.tar.gz &&
+#        tar -xzf sparsehash-2.0.2.tar.gz
+#    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/sparsehash-sparsehash-2.0.2
+#    BUILD_IN_SOURCE TRUE
+#    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
+#    CONFIGURE_COMMAND sh -c "CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure --prefix=<INSTALL_DIR>"
+#    INSTALL_COMMAND make install
+#)
 
 ###
 #

@@ -69,7 +69,7 @@ class EquivalenceClassBuilder {
             countMap_.reserve(1000000);
         }
 
-        ~EquivalenceClassBuilder() {}
+  //~EquivalenceClassBuilder() {}
 
         void start() { active_ = true; }
 

@@ -82,6 +82,11 @@ struct ReadPair {
 
     inline int32_t pos() const { return left(); }
     inline bool fwd() const { return !bam_strand(read1); }
+    inline bool isInward() const {
+      bool fw1 = !bam_strand(read1);
+      bool fw2 = !bam_strand(read2);
+      return (fw1 != fw2);
+    }
 
     /**
       * returns 0 on success, -1 on failure.
@@ -112,10 +117,8 @@ struct ReadPair {
     // end of the 3' read (can be less than the length of a single read)
     inline uint32_t fragLengthPedantic(uint32_t txpLen) const { 
         if (!isPaired()) { return 0; }
-
         bool fw1 = !bam_strand(read1);
         bool fw2 = !bam_strand(read2);
-
         if (fw1 != fw2) {
             int32_t p1 = fw1 ? bam_pos(read1) : bam_pos(read2);
             p1 = (p1 < 0) ? 0 : p1;

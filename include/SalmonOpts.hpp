@@ -28,20 +28,34 @@ struct SalmonOpts {
     bool maxMEMIntervals; // If true, don't split (S)MEMs into MEMs
     */
 
-    SalmonOpts() : allowOrphans(false), splitSpanningSeeds(false), noFragLengthDist(false),
+    SalmonOpts() : alternativeInitMode(false), allowOrphans(false), splitSpanningSeeds(false), noFragLengthDist(false),
                    noEffectiveLengthCorrection(false), useReadCompat(false),
                    maxReadOccs(200), extraSeedPass(false),
                    mappingCacheMemoryLimit(5000000), useQuasi(false) {}
+
+    bool alternativeInitMode; // Weigh unique reads more heavily when initialzing the optimization.
 
     bool allowOrphans; // Consider orphaned reads when performing lightweight alignemnt.
 
     std::string auxDir; // The directory where auxiliary files will be written.
 
-    std::string runStartTime; // String representation of the date / time at which the run began.
+  std::string runStartTime; // String representation of the date / time at which the run began.
+
+  std::string runStopTime; // String representation of the date / time at which the run ended.
 
     bool consistentHits;  // Enforce consistency of hits gathered during quasi-mapping.
 
     bool dumpEq; 	     // Dump the equivalence classes and counts to file
+
+    bool dumpEqWeights; 	     // Dump the equivalence classes rich weights 
+
+    bool fasterMapping; // [Developer]: Disables some extra checks during quasi-mapping. This may make mapping a 
+                        // little bit faster at the potential cost of returning too many mappings (i.e. some sub-optimal mappings) 
+                        // for certain reads. Only use this option if you know what it does (enables NIP-skipping)
+
+    bool gencodeRef; // The reference is expected to be from Gencode.
+
+    double quasiCoverage; // [Experimental]: Default of 0.  The coverage by MMPs required for a read to be considered mapped.
 
     bool splitSpanningSeeds; // Attempt to split seeds that span multiple transcripts.
 
@@ -51,6 +65,8 @@ struct SalmonOpts {
     bool noEffectiveLengthCorrection; // Don't take the fragment length distribution into
                                       // account when computing the probability that a
                                      // fragment was generated from a transcript.
+
+    bool noLengthCorrection; // Don't account for transcript length at all during abundance estimation.
 
     bool noBiasLengthThreshold; // Don't require that the recomputed effective length for a target
                                 // be above a threshold before applying it.
@@ -114,6 +130,8 @@ struct SalmonOpts {
     bool extraSeedPass; // Perform extra pass trying to find seeds to cover the read
 
     bool disableMappingCache; // Don't write mapping results to temporary mapping cache file
+    
+    bool meta; // Set other options to be optimized for metagenomic data
 
     boost::filesystem::path outputDirectory; // Quant output directory
 
@@ -136,11 +154,18 @@ struct SalmonOpts {
 
   std::unique_ptr<std::ofstream> unmappedFile{nullptr};
     bool writeUnmappedNames; // write the names of unmapped reads
+    std::shared_ptr<spdlog::logger> unmappedLog{nullptr};
+    
+    std::unique_ptr<std::ofstream> orphanLinkFile{nullptr};
+    bool writeOrphanLinks; // write the names of unmapped reads
+    std::shared_ptr<spdlog::logger> orphanLinkLog{nullptr};
+
     bool sampleOutput; // Sample alignments according to posterior estimates of transcript abundance.
     bool sampleUnaligned; // Pass along un-aligned reads in the sampling.
 
     uint32_t numGibbsSamples; // Number of rounds of Gibbs sampling to perform
     uint32_t numBootstraps; // Number of bootstrap samples to draw
+    uint32_t thinningFactor; // Gibbs chain thinning factor
 
     bool initUniform{false}; // initialize offline optimization parameters uniformly, rather than with online estimates.
     bool alnMode{false};     // true if we're in alignment based mode, false otherwise

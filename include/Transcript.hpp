@@ -18,6 +18,7 @@ public:
 
     Transcript() :
         RefName(nullptr), RefLength(std::numeric_limits<uint32_t>::max()),
+        CompleteLength(std::numeric_limits<uint32_t>::max()),
         EffectiveLength(-1.0), id(std::numeric_limits<uint32_t>::max()),
         logPerBasePrior_(salmon::math::LOG_0),
         priorMass_(salmon::math::LOG_0),
@@ -32,7 +33,7 @@ public:
 
 
     Transcript(size_t idIn, const char* name, uint32_t len, double alpha = 0.05) :
-        RefName(name), RefLength(len), EffectiveLength(-1.0), id(idIn),
+      RefName(name), RefLength(len), CompleteLength(len), EffectiveLength(-1.0), id(idIn),
         logPerBasePrior_(std::log(alpha)),
         priorMass_(std::log(alpha*len)),
         mass_(salmon::math::LOG_0), sharedCount_(0.0),
@@ -53,6 +54,7 @@ public:
 
         RefName = std::move(other.RefName);
         RefLength = other.RefLength;
+        CompleteLength = other.CompleteLength;
         EffectiveLength = other.EffectiveLength;
 
         SAMSequence_ = std::move(other.SAMSequence_);
@@ -82,6 +84,7 @@ public:
 
         RefName = std::move(other.RefName);
         RefLength = other.RefLength;
+        CompleteLength = other.CompleteLength;
         EffectiveLength = other.EffectiveLength;
         SAMSequence_ = std::move(other.SAMSequence_);
         Sequence_ = std::move(other.Sequence_);
@@ -299,44 +302,112 @@ public:
         return hasAnchorFragment_.load();
     }
 
-    inline GCDesc gcDesc(int32_t s, int32_t e) const {
+  inline GCDesc gcDesc(int32_t s, int32_t e, bool& valid) const {
         int outsideContext{3};
         int insideContext{2};
-        
+
         int outside5p = outsideContext + 1;
         int outside3p = outsideContext;
 
         int inside5p = insideContext - 1;
         int inside3p = insideContext;
 
-        int contextSize = outsideContext + insideContext;
+        double contextSize = outsideContext + insideContext;
         int lastPos = RefLength - 1;
         if (gcStep_ == 1) {
-            auto cs = GCCount_[s];
+            auto cs = (s > 0) ? GCCount_[s - 1] : 0;
             auto ce = GCCount_[e];
 
+            
+            int fs = s - outside5p;
+            int fe = s + inside5p;
+            int ts = e - inside3p;
+            int te = e + outside3p;
+
+            bool fpLeftExists = (fs >= 0);
+            bool fpRightExists = (fe <= lastPos);
+            bool tpLeftExists = (ts >= 0);
+            bool tpRightExists = (te <= lastPos);
+
+            /*
+            if (!(fpLeftExists and fpRightExists and tpLeftExists and tpRightExists)) {
+              return GCDesc();
+            }
+            */
+            auto fps = (fpLeftExists) ? GCCount_[fs] : 0;
+            auto fpe = (fpRightExists) ? GCCount_[fe] : ce;
+            auto tps = (tpLeftExists) ? GCCount_[ts] : 0;
+            auto tpe = (tpRightExists) ? GCCount_[te] : ce;
+            
+            // now, clamp to actual bounds
+            fs = (fs < 0) ? 0 : fs;
+            fe = (fe > lastPos) ? lastPos : fe;
+            ts = (ts < 0) ? 0 : ts;
+            te = (te > lastPos) ? lastPos : te;
+            int fpContextSize = (!fpLeftExists) ? (fe + 1) : (fe - fs);
+            int tpContextSize = (!tpLeftExists) ? (te + 1) : (te - ts);
+            contextSize = static_cast<double>(fpContextSize + tpContextSize);
+            if (contextSize == 0) {
+              //std::cerr << "" << std::endl;
+              return GCDesc();
+            }
+            valid = true;
+            /* 
+            
+            int fs = std::max(s - outside5p, 0);
+            int fe = std::min(s + inside5p, lastPos);
+            int ts = std::max(e - inside3p, 0);
+            int te = std::min(e + outside3p, lastPos);
+            
+            //contextSize = static_cast<double>((fe - fs) + (te - ts));
+            auto fps = (s >= outside5p) ? GCCount_[fs] : 0;
+            auto fpe = (inside5p > 0) ? GCCount_[fe] : cs;
+            auto tps = (inside3p > 0) ?
+            ((e >= inside3p) ? GCCount_[e-inside3p] : 0) : ce;
+            auto tpe = GCCount_[te];
+            */
+            
+
+            /* 
             auto fps = (s >= outside5p) ? GCCount_[s-outside5p] : 0;
             auto fpe = (inside5p > 0) ? GCCount_[std::min(s+inside5p, lastPos)] : cs;
-            auto tps = (inside3p > 0) ? 
+            auto tps = (inside3p > 0) ?
                 ((e >= inside3p) ? GCCount_[e-inside3p] : 0) : ce;
             auto tpe = GCCount_[std::min(e+outside3p, lastPos)];
+            */
             
             int32_t fragFrac = std::lrint((100.0 * (ce - cs)) / (e - s + 1));
-            int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (2.0 * contextSize))));
+            //int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (2.0 * contextSize))));
+            int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (contextSize))));
+            //int32_t contextFrac = std::lrint((100.0 * (((fpeCount - fpsCount) + (tpeCount - tpsCount)) / (contextSize))));
+            /*
+            if (contextFrac > 100) {
+              std::cerr << "NOTE : 5' count = " << (fpeCount - fpsCount) << ", 3' count =" << (tpeCount - tpsCount) << ", context size = " << contextSize << std::endl;
+              std::cerr << "s = " << s << ", e = " << e << ", l = " << RefLength << ", fs = " << fs  << ", fe =  " << fe << ", ts = " << ts << ", te = " << te << std::endl;
+              std::cerr << "fpsCount = " << fpsCount << 
+                ", fpeCount = " << fpeCount << 
+                ", tpsCount = " << tpsCount <<
+                ", tpeCount = " << tpeCount  <<
+                ", fpContextSize = " << fpContextSize  <<
+                ", tpContextSize = " << tpContextSize << std::endl;
+
+            } 
+            */
             GCDesc desc = {fragFrac, contextFrac};
             return desc;
         } else {
             auto cs = gcCountInterp_(s);
             auto ce = gcCountInterp_(e);
 
+            valid = true;
 	    auto fps = (s >= outside5p) ? gcCountInterp_(s-outside5p) : 0;
 	    auto fpe = (inside5p > 0) ? gcCountInterp_(std::min(s+inside5p, lastPos)) : cs;
-	    auto tps = (inside3p > 0) ? 
+	    auto tps = (inside3p > 0) ?
 	      ((e >= inside3p) ? gcCountInterp_(e-inside3p) : 0) : ce;
 	    auto tpe = gcCountInterp_(std::min(e+outside3p, lastPos));
-	    
+
             int32_t fragFrac = std::lrint((100.0 * (ce - cs)) / (e - s + 1));
-            int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (10.0))));
+            int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (2.0 * contextSize))));
             GCDesc desc = {fragFrac, contextFrac};
             return desc;
         }
@@ -350,11 +421,11 @@ public:
     // in the interval [s,e] (note; this interval is closed on both sides).
     inline int32_t gcFrac(int32_t s, int32_t e) const {
         if (gcStep_ == 1) {
-            auto cs = GCCount_[s];
+            auto cs = (s > 0) ? GCCount_[s - 1] : 0;
             auto ce = GCCount_[e];
             return std::lrint((100.0 * (ce - cs)) / (e - s + 1));
         } else {
-            auto cs = gcCountInterp_(s);
+            auto cs = (s > 0) ? gcCountInterp_(s - 1) : 0;
             auto ce = gcCountInterp_(e);
             return std::lrint((100.0 * (ce - cs)) / (e - s + 1));
         }
@@ -404,9 +475,13 @@ public:
         return SAMSequence_.get();
     }
 
+  void setCompleteLength(uint32_t completeLengthIn) {
+    CompleteLength = completeLengthIn;
+  }
 
     std::string RefName;
     uint32_t RefLength;
+    uint32_t CompleteLength;
     double EffectiveLength;
     uint32_t id;
 
@@ -426,7 +501,7 @@ private:
     }
 
     inline int32_t closestBin_(int32_t p) const {
-      return static_cast<int32_t>(std::round( static_cast<double>(p) / gcStep_ )); 
+      return static_cast<int32_t>(std::round( static_cast<double>(p) / gcStep_ ));
     }
 
     inline double gcCountInterp_(int32_t p) const {

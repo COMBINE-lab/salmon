@@ -95,7 +95,11 @@ public:
         using std::distance;
         using std::lower_bound;
         auto it = lower_bound( _transcriptNames.begin(), _transcriptNames.end(), tname );
-        return ( it == _transcriptNames.end() ) ? INVALID : ( distance(_transcriptNames.begin(), it) );
+        if (it == _transcriptNames.end() or *it != tname) {
+          return INVALID;
+        } else {
+          return distance(_transcriptNames.begin(), it);
+        }
     }
 
     Size numTranscripts() {
@@ -128,15 +132,15 @@ public:
         return _geneNames[_transcriptsToGenes[transcriptID]];
     }
     inline std::string geneName (const std::string& transcriptName,
-                                 bool complain=true) {
+                                 bool& found) {
+        found = false;
         auto tid = findTranscriptID(transcriptName);
         if (tid != INVALID) {
+            found = true;
             return geneName(tid);
         } else {
-            std::cerr << "WARNING: couldn't find transcript named ["
-                      << transcriptName << "]; returning transcript "
-                      << " as it's own gene\n";
-            return transcriptName;
+           found = false;
+           return transcriptName;
         }
     }
 

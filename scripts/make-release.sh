@@ -44,6 +44,9 @@ echo -e "Copying over the binary and Intel TBB libraries\n"
 cp ${DIR}/../bin/salmon ${DIR}/../RELEASES/${betaname}/bin/
 cp ${DIR}/../lib/libtbb* ${DIR}/../RELEASES/${betaname}/lib/
 
+# copy over the test data
+cp ${DIR}/../sample_data.tgz ${DIR}/../RELEASES/${betaname}/
+
 # copy other dependencies (shared libraries)
 echo -e "Copying over other shared library dependencies\n"
 bash ${DIR}/../scripts/cpld.bash ${DIR}/../bin/salmon ${DIR}/../RELEASES/${betaname}/lib/

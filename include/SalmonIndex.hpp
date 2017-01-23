@@ -18,6 +18,7 @@ extern "C" {
 #include "cereal/types/vector.hpp"
 
 #include "BooMap.hpp"
+#include "FrugalBooMap.hpp"
 #include "RapMapSAIndex.hpp"
 #include "IndexHeader.hpp"
 #include "BWAUtils.hpp"
@@ -32,11 +33,11 @@ int bwa_index(int argc, char* argv[]);
 int rapMapSAIndex(int argc, char* argv[]);
 
 template <typename IndexT> 
-using DenseHash = google::dense_hash_map<uint64_t, 
+using DenseHash = spp::sparse_hash_map<uint64_t, 
                                          rapmap::utils::SAInterval<IndexT>, 
                                          rapmap::utils::KmerKeyHasher>;
 template <typename IndexT> 
-using PerfectHash = BooMap<uint64_t, rapmap::utils::SAInterval<IndexT>>;
+using PerfectHash = FrugalBooMap<uint64_t, rapmap::utils::SAInterval<IndexT>>;
 
 class SalmonIndex{
         public:
@@ -291,6 +292,10 @@ class SalmonIndex{
                   }
                   indexStream.close();
 
+                  if (h.version() != salmon::requiredQuasiIndexVersion) {
+                    fmt::print(stderr, "I found a quasi-index with version {}, but I require {}",
+                               h.version(), salmon::requiredQuasiIndexVersion);
+                  }
                   if (h.indexType() != IndexType::QUASI) {
                     fmt::print(stderr, "The index {} does not appear to be of the "
                                         "appropriate type (quasi)", indexStr);

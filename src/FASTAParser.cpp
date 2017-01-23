@@ -27,6 +27,13 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs, SalmonOpts& sop
 	nameToID[ref.RefName] = ref.id;
     }
 
+    // Separators for the header (default ' ' and '\t')
+    // If we have the gencode flag, then add '|'.
+    std::string sepStr = " \t";
+    if (sopt.gencodeRef) {
+        sepStr += '|';
+    }
+
     std::vector<std::string> readFiles{fname_};
     size_t maxReadGroup{1000}; // Number of files to read simultaneously
     size_t concurrentFile{1}; // Number of reads in each "job"
@@ -40,17 +47,21 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs, SalmonOpts& sop
     std::uniform_int_distribution<> dis(0, 3);
     uint64_t numNucleotidesReplaced{0};
 
+    // All header names we encounter in the fasta file
+    std::unordered_set<std::string> fastaNames;
+
     while(true) {
         typename single_parser::job j(parser); // Get a job from the parser: a bunch of read (at most max_read_group)
         if(j.is_empty()) break;           // If got nothing, quit
 
         for(size_t i = 0; i < j->nb_filled; ++i) { // For all the read we got
             std::string& header = j->data[i].header;
-            std::string name = header.substr(0, header.find(' '));
+            std::string name = header.substr(0, header.find_first_of(sepStr));
+            fastaNames.insert(name);
 
             auto it = nameToID.find(name);
             if (it == nameToID.end()) {
-                std::cerr << "WARNING: Transcript " << name << " appears in the reference but did not appear in the BAM\n";
+              sopt.jointLog->warn("Transcript {} appears in the reference but did not appear in the BAM", name);
             } else {
 
 	      std::string& seq = j->data[i].seq;
@@ -80,7 +91,28 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs, SalmonOpts& sop
         }
     }
 
-    std::cerr << "replaced " << numNucleotidesReplaced << " non-ACGT nucleotides with random nucleotides\n";
+    // Check that every sequence present in the BAM header was also present in the
+    // transcriptome fasta.
+    bool missingTxpError{false};
+    for (auto& kv : nameToID) {
+      auto& name = kv.first;
+      if (fastaNames.find(name) == fastaNames.end()) {
+        sopt.jointLog->critical("Transcript {} appeared in the BAM header, but was not in the provided FASTA file", name);
+        missingTxpError = true;
+      }
+    }
+
+    if (missingTxpError) {
+      sopt.jointLog->critical("Please provide a reference FASTA file that includes all targets present in the BAM header\n"
+      "If you have access to the genome FASTA and GTF used for alignment \n"
+      "consider generating a transcriptome fasta using a command like: \n"
+      "gffread -w output.fa -g genome.fa genome.gtf\n"
+      "you can find the gffread utility at (http://ccb.jhu.edu/software/stringtie/gff.shtml)");
+      sopt.jointLog->flush();
+      std::exit(1);
+    }
+
+    sopt.jointLog->info("replaced {} non-ACGT nucleotides with random nucleotides",  numNucleotidesReplaced);
 
 }
 

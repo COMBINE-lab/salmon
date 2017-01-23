@@ -73,6 +73,24 @@ void SimplePosBias::finalize() {
     splineBins[i+1] = positionBins_[i] - 0.01;
   }
   splineBins.back() = 1.0;
-
   s_.set_points(splineBins, splineMass);
+  isLogged_ = false;
+  isFinalized_ = true;
+}
+
+// Seralize this model.
+bool SimplePosBias::writeBinary(boost::iostreams::filtering_ostream& out) const {
+    auto* mutThis = const_cast<SimplePosBias*>(this);
+    // We shouldn't write out a non-finalized model
+    if (!mutThis->isFinalized_) {
+      auto l = spdlog::get("jointLog");
+      l->error("Attempting to write out a non-finalized positional bias model. "
+	       "This should not happen.  Please report this bug on GitHub.");
+      return false;
+    }
+
+    uint32_t modelLen = static_cast<uint32_t>(masses_.size());
+    out.write(reinterpret_cast<char*>(&modelLen), sizeof(modelLen));
+    out.write(reinterpret_cast<char*>(const_cast<decltype(masses_)::value_type*>(masses_.data())), sizeof(masses_.front()) * modelLen);
+    return true;
 }

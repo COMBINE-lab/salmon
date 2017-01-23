@@ -162,6 +162,8 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     bool gcBiasCorrect = salmonOpts.gcBiasCorrect;
 
     using salmon::math::LOG_0;
+    using salmon::math::LOG_1;
+    using salmon::math::LOG_EPSILON;
     using salmon::math::logAdd;
     using salmon::math::logSub;
 
@@ -188,8 +190,9 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     double startingCumulativeMass = fmCalc.cumulativeLogMassAt(firstTimestepOfRound);
     auto expectedLibraryFormat = alnLib.format();
     uint32_t numBurninFrags{salmonOpts.numBurninFrags};
+    bool noLengthCorrection{salmonOpts.noLengthCorrection};
 
-    bool useAuxParams = (processedReads > salmonOpts.numPreBurninFrags);
+    bool useAuxParams = (processedReads >= salmonOpts.numPreBurninFrags);
 
     std::chrono::microseconds sleepTime(1);
     MiniBatchInfo<AlignmentGroup<FragT*>>* miniBatch = nullptr;
@@ -197,6 +200,10 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     size_t numTranscripts = refs.size();
 
     double maxZeroFrac{0.0};
+
+    auto isUnexpectedOrphan = [expectedLibraryFormat](FragT* aln) -> bool {
+      return (expectedLibraryFormat.type == ReadType::PAIRED_END and !aln->isPaired());
+    };
 
     while (!doneParsing or !workQueue.empty()) {
         uint32_t zeroProbFrags{0};
@@ -219,7 +226,8 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 	    // If we actually got some work
         if (miniBatch != nullptr) {
 
-            useAuxParams = (processedReads > salmonOpts.numPreBurninFrags);
+            useAuxParams = (processedReads >= salmonOpts.numPreBurninFrags);
+            bool considerCondProb = (useAuxParams or burnedIn);
             ++activeBatches;
             batchReads = 0;
             zeroProbFrags = 0;
@@ -265,25 +273,49 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         transcriptUnique = transcriptUnique and (transcriptID == firstTranscriptID);
 
                         double refLength = transcript.RefLength > 0 ? transcript.RefLength : 1.0;
-                        double logFragProb = salmon::math::LOG_1;
+                        auto flen = aln->fragLen();
+                        // If we have a properly-paired read then use the "pedantic"
+                        // definition here.
+                        if (aln->isPaired() and aln->isInward()) { 
+                          flen = aln->fragLengthPedantic(refLength); 
+                        }
 
-                        if (!salmonOpts.noFragLengthDist and useAuxParams) {
-                            /** Forget reads that are not paired **/
-                            /*
-                            if(aln->fragLen() == 0) {
-                                if (aln->isLeft() and transcript.RefLength - aln->left() < fragLengthDist.maxVal()) {
-                                    logFragProb = fragLengthDist.cmf(transcript.RefLength - aln->left());
-                                } else if (aln->isRight() and aln->right() < fragLengthDist.maxVal()) {
-                                    logFragProb = fragLengthDist.cmf(aln->right());
-                                }
-                            } else {
+                        // The probability of drawing a fragment of this length;
+                        double logFragProb = LOG_1;
+                        // If we are expecting a paired-end library, and this is an orphan,
+                        // then logFragProb should be small
+                        if (isUnexpectedOrphan(aln)) {
+                          logFragProb = LOG_EPSILON;
+                        }
+
+                        if (flen > 0.0 and aln->isPaired() and useFragLengthDist and considerCondProb) {
+                          size_t fl = flen;
+                          double lenProb = fragLengthDist.pmf(fl); 
+                          if (burnedIn) {
+                            /* condition fragment length prob on txp length */
+                            double refLengthCM = fragLengthDist.cmf(static_cast<size_t>(refLength)); 
+                            bool computeMass = fl < refLength and !salmon::math::isLog0(refLengthCM);
+                            logFragProb = (computeMass) ?
+                                                    (lenProb - refLengthCM) :
+                              salmon::math::LOG_EPSILON;
+                            if (computeMass and refLengthCM < lenProb) {
+                              // Threading is hard!  It's possible that an update to the PMF snuck in between when we asked to cache the CMF and when the
+                              // "burnedIn" variable was last seen as false.
+                              log->info("reference length = {}, CMF[refLen] = {}, fragLen = {}, PMF[fragLen] = {}",
+                                        refLength, std::exp(refLengthCM), aln->fragLen(), std::exp(lenProb));
                             }
-                            */
-                            auto fragLen = aln->fragLengthPedantic(transcript.RefLength);
-                            if(aln->isPaired() and fragLen > 0) {
-                                logFragProb = fragLengthDist.pmf(static_cast<size_t>(fragLen));
+                          } else if (useAuxParams) {
+                            logFragProb = lenProb;
+                          }
+                        }
+
+                        /*
+                        if (!salmonOpts.noFragLengthDist and useAuxParams) {
+                            if(aln->isPaired() and flen > 0) {
+                                logFragProb = fragLengthDist.pmf(static_cast<size_t>(flen));
                             }
                         }
+                        */
 
                         // TESTING
                         if (noFragLenFactor) { logFragProb = LOG_1; }
@@ -310,7 +342,9 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         // transcript-level term (based on abundance and) an
                         // alignment-level term.
                         double logRefLength{salmon::math::LOG_0};
-                        if (salmonOpts.noEffectiveLengthCorrection or !burnedIn) {
+                        if (noLengthCorrection) {
+                          logRefLength = 1.0;
+                        } else if (salmonOpts.noEffectiveLengthCorrection or !burnedIn) {
                             logRefLength = std::log(transcript.RefLength);
                         } else {
                             logRefLength = transcript.getCachedLogEffectiveLength();
@@ -356,6 +390,11 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
 			// Allow for a non-uniform fragment start position distribution
 			double startPosProb{-logRefLength};
+      if (aln->isPaired() and !noLengthCorrection) {
+        startPosProb = (flen <= refLength) ? -std::log(refLength - flen + 1) : salmon::math::LOG_EPSILON;
+      }
+
+
 			double fragStartLogNumerator{salmon::math::LOG_1};
 			double fragStartLogDenominator{salmon::math::LOG_1};
 
@@ -571,29 +610,44 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 			}
 
 			// Collect the GC-fragment bias samples
-			if (gcBiasCorrect and aln->isPaired()) {
-			  ReadPair* alnp = reinterpret_cast<ReadPair*>(aln);
-			  bam_seq_t* r1 = alnp->read1; 
-			  bam_seq_t* r2 = alnp->read2; 
-			  if (r1 != nullptr and r2 != nullptr) {
-                  bool fwd1{bam_strand(r1) == 0};
-                  bool fwd2{bam_strand(r2) == 0};
-                  int32_t start = alnp->left(); 
-                  int32_t stop = alnp->right(); 
+			if (gcBiasCorrect) {
+                if (aln->isPaired()) {
+                    ReadPair* alnp = reinterpret_cast<ReadPair*>(aln);
+                    bam_seq_t* r1 = alnp->read1; 
+                    bam_seq_t* r2 = alnp->read2; 
+                    if (r1 != nullptr and r2 != nullptr) {
+                        bool fwd1{bam_strand(r1) == 0};
+                        bool fwd2{bam_strand(r2) == 0};
+                        int32_t start = alnp->left(); 
+                        int32_t stop = alnp->right(); 
 
-                  if (start >= 0 and stop < transcript.RefLength) {
-		      auto desc = transcript.gcDesc(start, stop);
-                      observedGCMass.inc(desc, aln->logProb);
-                   }
-
-          /*
-			    if (start >= 0 and stop < transcript.RefLength) {
-			      int32_t gcFrac = transcript.gcFrac(start, stop);
-			      // Add this fragment's contribution
-			      observedGCMass[gcFrac] = salmon::math::logAdd(observedGCMass[gcFrac], newMass); 
-			    }
-          */
-			  }
+                        if (start >= 0 and stop < transcript.RefLength) {
+                          bool valid{false};
+                          auto desc = transcript.gcDesc(start, stop, valid);
+                          if (valid) { observedGCMass.inc(desc, aln->logProb); }
+                        }
+                    }
+                } else if (expectedLibraryFormat.type == ReadType::SINGLE_END) {
+		  // Both expected and observed should be single end here
+                    UnpairedRead* alnp = reinterpret_cast<UnpairedRead*>(aln);
+                    bam_seq_t* r = alnp->read;
+                    if (r != nullptr) {
+                        bool fwd{alnp->fwd()};
+                        // For single-end reads, simply assume that every fragment
+                        // has a length equal to the conditional mean (given the 
+                        // current transcript's length).
+                        auto cmeans = alnLib.condMeans();
+                        auto cmean = static_cast<int32_t>((transcript.RefLength >= cmeans.size()) ? cmeans.back() : cmeans[transcript.RefLength]);
+                        int32_t start = fwd ? alnp->pos() : std::max(0, alnp->pos() - cmean);
+                        int32_t stop = start + cmean;
+                        // WITH CONTEXT
+                        if (start >= 0 and stop < transcript.RefLength) {
+                          bool valid{false};
+                          auto desc = transcript.gcDesc(start, stop, valid);
+                          if(valid) { observedGCMass.inc(desc, aln->logProb); }
+                        }
+                    }
+                }
 			}
 			// END: GC-fragment bias
 			
@@ -736,10 +790,10 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         fspd.update();
                     }
                 }
-                fragLengthDist.cacheCMF();
                 // NOTE: only one thread should succeed here, and that
                 // thread will set burnedIn to true
                 alnLib.updateTranscriptLengthsAtomic(burnedIn);
+                fragLengthDist.cacheCMF();
             }
 
             if (zeroProbFrags > 0) {
@@ -770,7 +824,7 @@ bool quantifyLibrary(
         size_t numRequiredFragments,
         SalmonOpts& salmonOpts) {
 
-    std::atomic<bool> burnedIn{false};
+  std::atomic<bool> burnedIn{salmonOpts.numBurninFrags == 0};
 
     auto& refs = alnLib.transcripts();
     size_t numTranscripts = refs.size();
@@ -1097,16 +1151,14 @@ bool processSample(AlignmentLibrary<ReadT>& alnLib,
     GZipWriter gzw(outputDirectory, jointLog);
     // Write the main results
     gzw.writeAbundances(sopt, alnLib);
-    // Write meta-information about the run
-    gzw.writeMeta(sopt, alnLib, runStartTime);
 
     if (sopt.numGibbsSamples > 0) {
 
         jointLog->info("Starting Gibbs Sampler");
         CollapsedGibbsSampler sampler;
         // The function we'll use as a callback to write samples
-        std::function<bool(const std::vector<int>&)> bsWriter =
-            [&gzw](const std::vector<int>& alphas) -> bool {
+        std::function<bool(const std::vector<double>&)> bsWriter =
+            [&gzw](const std::vector<double>& alphas) -> bool {
                 return gzw.writeBootstrap(alphas);
             };
 
@@ -1161,6 +1213,10 @@ bool processSample(AlignmentLibrary<ReadT>& alnLib,
         }
     }
 
+    sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
+    // Write meta-information about the run
+    gzw.writeMeta(sopt, alnLib);
+
     return true;
 }
 
@@ -1203,14 +1259,18 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "the observed frequency of different types of mismatches when computing the likelihood of "
                         "a given alignment.")
     ("output,o", po::value<std::string>()->required(), "Output quantification directory.")
+    ("meta", po::bool_switch(&(sopt.meta))->default_value(false), "If you're using Salmon on a metagenomic dataset, "
+     "consider setting this flag to disable parts of the abundance estimation model that make less sense for metagenomic data.")
     ("geneMap,g", po::value<std::string>(), "File containing a mapping of transcripts to genes.  If this file is provided "
                                         "Salmon will output both quant.sf and quant.genes.sf files, where the latter "
                                         "contains aggregated gene-level abundance estimates.  The transcript to gene mapping "
                                         "should be provided as either a GTF file, or a in a simple tab-delimited format "
                                         "where each line contains the name of a transcript and the gene to which it belongs "
                                         "separated by a tab.  The extension of the file is used to determine how the file "
-                                        "should be parsed.  Files ending in \'.gtf\' or \'.gff\' are assumed to be in GTF "
-                                        "format; files with any other extension are assumed to be in the simple format.");
+                                        "should be parsed.  Files ending in \'.gtf\', \'.gff\' or \'.gff3\' are assumed to be in GTF "
+     "format; files with any other extension are assumed to be in the simple format. In GTF / GFF format, the \"transcript_id\" is assumed to contain the "
+     "transcript identifier and the \"gene_id\" is assumed to contain the corresponding "
+     "gene identifier.");
 
     // no sequence bias for now
     sopt.useMassBanking = false;
@@ -1219,6 +1279,10 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 
     po::options_description advanced("\nadvanced options");
     advanced.add_options()
+    ("alternativeInitMode", po::bool_switch(&(sopt.alternativeInitMode))->default_value(false),
+       "[Experimental]: Use an alternative strategy (rather than simple interpolation between) the "
+       "online and uniform abundance estimates to initalize the EM / VBEM algorithm."
+    )
     ("auxDir", po::value<std::string>(&(sopt.auxDir))->default_value("aux_info"), "The sub-directory of the quantification directory where auxiliary information "
      			"e.g. bootstraps, bias parameters, etc. will be written.")
     ("noBiasLengthThreshold", po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(false), "[experimental] : "
@@ -1226,12 +1290,15 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
           "how short bias correction can make effective lengths. This can increase the precision "
           "of bias correction, but harm robustness.  The default correction applies a thresholdi.")
     ("fldMax" , po::value<size_t>(&(sopt.fragLenDistMax))->default_value(1000), "The maximum fragment length to consider when building the empirical distribution")
-    ("fldMean", po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(200), "The mean used in the fragment length distribution prior")
-    ("fldSD" , po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(80), "The standard deviation used in the fragment length distribution prior")
+    ("fldMean", po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(250), "The mean used in the fragment length distribution prior")
+    ("fldSD" , po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(25), "The standard deviation used in the fragment length distribution prior")
     ("forgettingFactor,f", po::value<double>(&(sopt.forgettingFactor))->default_value(0.65), "The forgetting factor used "
                         "in the online learning schedule.  A smaller value results in quicker learning, but higher variance "
                         "and may be unstable.  A larger value results in slower learning but may be more stable.  Value should "
                         "be in the interval (0.5, 1.0].")
+    ("gencode", po::bool_switch(&(sopt.gencodeRef))->default_value(false), "This flag will expect the input transcript fasta to be "
+         "in GENCODE format, and will split the transcript name at the first \'|\' character.  These reduced names will be used in "
+         "the output and when looking for these transcripts in a gene to transcript GTF.")
     ("gcSizeSamp", po::value<std::uint32_t>(&(sopt.gcSampFactor))->default_value(1), "The value by which to down-sample transcripts when representing the "
          "GC content.  Larger values will reduce memory usage, but may decrease the fidelity of bias modeling results.")
    ("biasSpeedSamp",
@@ -1300,7 +1367,10 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     ("numGibbsSamples", po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0), "Number of Gibbs sampling rounds to "
      "perform.")
     ("numBootstraps", po::value<uint32_t>(&(sopt.numBootstraps))->default_value(0), "Number of bootstrap samples to generate. Note: "
-      "This is mutually exclusive with Gibbs sampling.");
+      "This is mutually exclusive with Gibbs sampling.")
+    ("thinningFactor", po::value<uint32_t>(&(sopt.thinningFactor))->default_value(16), "Number of steps to discard for every sample "
+       "kept from the Gibbs chain. The larger this number, the less chance that subsequent samples are auto-correlated, "
+       "but the slower sampling becomes."); 
 
     po::options_description testing("\n"
             "testing options");
@@ -1318,7 +1388,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     po::options_description hidden("\nhidden options");
     hidden.add_options()
       (
-       "numGCBins", po::value<size_t>(&(sopt.numFragGCBins))->default_value(100),
+       "numGCBins", po::value<size_t>(&(sopt.numFragGCBins))->default_value(25),
        "Number of bins to use when modeling fragment GC bias")
       (
        "conditionalGCBins", po::value<size_t>(&(sopt.numConditionalGCBins))->default_value(3),
@@ -1369,6 +1439,12 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
             fmt::print(stderr, "The forgetting factor must be in (0.5, 1.0], "
                                "but the value {} was provided\n", sopt.forgettingFactor);
             std::exit(1);
+        }
+
+        // Metagenomic option
+        if (sopt.meta) {
+            sopt.initUniform = true;
+            sopt.noRichEqClasses = true;
         }
 
         std::stringstream commentStream;
@@ -1493,7 +1569,9 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         spdlog::set_async_mode(max_q_size);
 
         auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(logPath.string(), true);
-        auto consoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
+        auto rawConsoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
+        auto consoleSink =
+          std::make_shared<spdlog::sinks::ansicolor_sink>(rawConsoleSink);
         auto consoleLog = spdlog::create("consoleLog", {consoleSink});
         auto fileLog = spdlog::create("fileLog", {fileSink});
         auto jointLog = spdlog::create("jointLog", {fileSink, consoleSink});
@@ -1510,11 +1588,28 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 
 	
 	// Verify that no inconsistent options were provided
-        if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {
+  bool optionsValidate =
+    salmon::utils::validateOptions(sopt);
+  if (!optionsValidate) {
+    sopt.jointLog->flush();
+    spdlog::drop_all();
+    std::exit(1);
+  }
+
+  if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {
             jointLog->error("You cannot perform both Gibbs sampling and bootstrapping. "
                             "Please choose one.");
             jointLog->flush();
             std::exit(1);
+        }
+
+        if (sopt.numGibbsSamples > 0) {
+          if (! sopt.thinningFactor >= 1) {
+            jointLog->error("The Gibbs sampling thinning factor (--thinningFactor) "
+                            "cannot be smaller than 1.");
+            jointLog->flush();
+            std::exit(1);
+          }
         }
 
         if (!sopt.sampleOutput and sopt.sampleUnaligned) {
@@ -1587,10 +1682,10 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                 {
 		  // We can only do fragment GC bias correction, for the time being, with paired-end reads
 		  if (sopt.gcBiasCorrect) {
-		    jointLog->warn("Fragment GC bias correction is currently only "
-				   "implemented for paired-end libraries.  Disabling "
-				   "fragment GC bias correction for this run");
-		    sopt.gcBiasCorrect = false;
+            jointLog->warn("Fragment GC bias correction is currently *experimental* "
+                           "in single-end libraries.  Please use this option "
+                           "with caution.");
+		    //sopt.gcBiasCorrect = false;
 		  } 
 
 		    AlignmentLibrary<UnpairedRead> alnLib(alignmentFiles,

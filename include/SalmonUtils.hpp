@@ -119,7 +119,7 @@ Eigen::VectorXd updateEffectiveLengths(
 template <typename AbundanceVecT, typename ReadExpT>
 Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
                                                       Eigen::VectorXd& effLensIn,
-                                                      AbundanceVecT& alphas, bool finalRound=false);
+                                       AbundanceVecT& alphas, std::vector<bool>& available, bool finalRound=false);
 
 
 /*
@@ -162,6 +162,10 @@ inline void incLoop(tbb::atomic<double>& val, double inc) {
             returnedMass = val.compare_and_swap(newMass, oldMass);
         } while (returnedMass != oldMass);
 }
+
+std::string getCurrentTimeAsString();
+
+bool validateOptions(SalmonOpts& sopt);
 
 bool processQuantOptions(SalmonOpts& sopt, boost::program_options::variables_map& vm, int32_t numBiasSamples);
 

@@ -28,9 +28,7 @@ class GZipWriter {
     template <typename ExpT>
     bool writeMeta(
 	const SalmonOpts& opts,
-	const ExpT& experiment,
-    const std::string& tstring  = "now"  // the start time of the run
-	);
+	const ExpT& experiment);
 
     template <typename ExpT>
     bool writeAbundances(
@@ -38,8 +36,9 @@ class GZipWriter {
       ExpT& readExp);
 
     template <typename T>
-    bool writeBootstrap(const std::vector<T>& abund);
+    bool writeBootstrap(const std::vector<T>& abund, bool quiet=false);
 
+  bool setSamplingPath(const SalmonOpts& sopt);
    private:
      boost::filesystem::path path_;
      boost::filesystem::path bsPath_;

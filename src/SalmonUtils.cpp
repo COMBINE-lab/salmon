@@ -294,6 +294,7 @@ void writeAbundancesFromCollapsed(const SalmonOpts& sopt, ExpLib& alnLib,
     double refLength = sopt.noEffectiveLengthCorrection
                            ? transcript.RefLength
                            : std::exp(transcript.getCachedLogEffectiveLength());
+    if (sopt.noLengthCorrection) { refLength = 100.0; }
     tfracDenom += (transcript.projectedCounts / numMappedFrags) / refLength;
   }
 
@@ -306,10 +307,11 @@ void writeAbundancesFromCollapsed(const SalmonOpts& sopt, ExpLib& alnLib,
     double count = transcript.projectedCounts;
     double npm = (transcript.projectedCounts / numMappedFrags);
     double effLength = std::exp(logLength);
+    if (sopt.noLengthCorrection) { effLength = 100.0; }
     double tfrac = (npm / effLength) / tfracDenom;
     double tpm = tfrac * million;
     fmt::print(output.get(), "{}\t{}\t{}\t{}\t{}\n", transcript.RefName,
-               transcript.RefLength, effLength, tpm, count);
+               transcript.CompleteLength, effLength, tpm, count);
   }
 }
 
@@ -402,6 +404,7 @@ void writeAbundances(const SalmonOpts& sopt, ExpLib& alnLib,
     double logLength = sopt.noEffectiveLengthCorrection
                            ? std::log(transcript.RefLength)
                            : transcript.getCachedLogEffectiveLength();
+    if (sopt.noLengthCorrection) { logLength = 1.0; }
     /*
     if (!sopt.noSeqBiasModel) {
         double avgLogBias = transcript.getAverageSequenceBias(
@@ -749,14 +752,14 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
     }
     libs.push_back(lib);
   }
-  
+
   auto log = spdlog::get("jointLog");
   size_t numLibs = libs.size();
   if (numLibs == 1) {
       log->info("There is 1 library.");
   } else if (numLibs > 1) {
       log->info("There are {} libraries.", numLibs);
-  } 
+  }
   return libs;
 }
 
@@ -855,7 +858,7 @@ LibraryFormat parseLibraryFormatString(std::string& fmt) {
   bool peekBAMIsPaired(const boost::filesystem::path& file) {
     namespace bfs = boost::filesystem;
     std::string readMode = "r";
-    
+
     if (bfs::is_regular_file(file)) {
       if (bfs::is_empty(file)) {
 	fmt::MemoryWriter errstr;
@@ -885,7 +888,7 @@ LibraryFormat parseLibraryFormatString(std::string& fmt) {
 
     bool didRead = (scram_get_seq(fp, &read) >= 0);
     bool isPaired{false};
-    
+
     if (didRead) {
       isPaired = bam_flag(read) & BAM_FPAIRED;
     } else {
@@ -900,7 +903,7 @@ LibraryFormat parseLibraryFormatString(std::string& fmt) {
     staden::utils::bam_destroy(read);
     return isPaired;
   }
-  
+
 uint64_t encode(uint64_t tid, uint64_t offset) {
   uint64_t res = (((tid & 0xFFFFFFFF) << 32) | (offset & 0xFFFFFFFF));
   return res;
@@ -983,6 +986,10 @@ TranscriptGeneMap transcriptGeneMapFromGTF(const std::string& fname,
   using std::string;
   using std::get;
 
+  // Get the logger
+  auto logger = spdlog::get("jointLog");
+
+
   // Use GffReader to read the file
   GffReader reader(const_cast<char*>(fname.c_str()));
   // Remember the optional attributes
@@ -996,7 +1003,7 @@ TranscriptGeneMap transcriptGeneMapFromGTF(const std::string& fname,
   };
 
   // The user can group transcripts by gene_id, gene_name, or
-  // an optinal attribute that they provide as a string.
+  // an optional attribute that they provide as a string.
   enum class TranscriptKey { GENE_ID, GENE_NAME, DYNAMIC };
 
   // Select the proper attribute by which to group
@@ -1016,7 +1023,7 @@ TranscriptGeneMap transcriptGeneMapFromGTF(const std::string& fname,
   for (int i = 0; i < nfeat; ++i) {
     auto f = reader.gflst[i];
     if (f->isTranscript()) {
-      const char* keyStr;
+      const char* keyStr = nullptr;
       switch (tkey) {
       case TranscriptKey::GENE_ID:
         keyStr = f->getGeneID();
@@ -1028,7 +1035,17 @@ TranscriptGeneMap transcriptGeneMapFromGTF(const std::string& fname,
         keyStr = f->getAttr(key.c_str());
         break;
       }
-      feats.emplace_back(f->getID(), keyStr);
+      if (keyStr != nullptr and keyStr != NULL and f->hasGffID()) {
+        feats.emplace_back(f->getID(), keyStr);
+      } else {
+        if (!f->hasGffID()){
+          logger->warn("Feature has no GFF ID");
+        }
+        if (keyStr == NULL) {
+          const char* fid = f->hasGffID() ? f->getID() : "NO_GFF_ID";
+          logger->warn("Could not find key for feature {}", fid);
+        }
+      }
     }
   }
 
@@ -1263,6 +1280,54 @@ std::vector<std::string> split(const std::string& str,
   return result;
 }
 
+std::string getCurrentTimeAsString() {
+    // Get the time at the start of the run
+    std::time_t result = std::time(NULL);
+    auto time = std::string(std::asctime(std::localtime(&result)));
+    time.pop_back(); // remove the newline
+    return time;
+}
+
+/**
+ * Validate the options regardless of the mode (quasi or alignment). 
+ * Assumes a logger already exists.
+ **/
+bool validateOptions(SalmonOpts& sopt) {
+
+  // The growing list of thou shalt nots
+
+  /**
+  Since bias correction is dependent on
+  modifying effective lengths, we can not
+  allow it if we are not employing any length
+  correction.
+  **/
+
+  /** Warnings, not errors **/
+  if (sopt.numBurninFrags < sopt.numPreBurninFrags) {
+    sopt.jointLog->warn("You set the number of burnin fragments (--numAuxModelSamples) to be less than the number of \n"
+                   "pre-burnin fragments (--numPreAuxModelSamples), but it must be at least as large.  The \n"
+                   "number of pre-burnin fragments and burnin fragments is being set to the same value "
+                   "({})", sopt.numBurninFrags);
+    sopt.numPreBurninFrags = sopt.numBurninFrags;
+  }
+
+  /** Errors **/
+  if (sopt.noLengthCorrection) {
+    bool anyBiasCorrect =
+      sopt.gcBiasCorrect or sopt.biasCorrect or sopt.posBiasCorrect;
+    if (anyBiasCorrect) {
+      sopt.jointLog->critical("Since bias correction relies on modifying "
+                              "effective lengths, you cannot enable bias "
+                              "correction simultaneously with the --noLengthCorrection "
+                              "option.");
+      return false;
+    }
+  }
+
+  return true;
+}
+
 /**
  * Validate the options for quasi-mapping-based salmon, and create the necessary
  *output directories and
@@ -1280,9 +1345,7 @@ bool processQuantOptions(SalmonOpts& sopt,
   sopt.numBiasSamples.store(numBiasSamples);
 
   // Get the time at the start of the run
-  std::time_t result = std::time(NULL);
-  sopt.runStartTime = std::string(std::asctime(std::localtime(&result)));
-  sopt.runStartTime.pop_back(); // remove the newline
+  sopt.runStartTime = getCurrentTimeAsString();
 
   // Verify the geneMap before we start doing any real work.
   bfs::path geneMapPath;
@@ -1325,25 +1388,31 @@ bool processQuantOptions(SalmonOpts& sopt,
     std::cerr << "Logs will be written to " << logDirectory.string() << "\n";
   }
 
-  // Determine what we'll do with quasi-mapping results 
+  // Metagenomic option
+  if (sopt.meta) {
+      sopt.initUniform = true;
+      sopt.noRichEqClasses = true;
+  }
+
+  // Determine what we'll do with quasi-mapping results
   bool writeQuasimappings = (sopt.qmFileName != "");
 
   bfs::path logPath = logDirectory / "salmon_quant.log";
   // must be a power-of-two
   size_t max_q_size = 2097152;
-                      
-  // make it larger if we're writing mappings or 
+
+  // make it larger if we're writing mappings or
   // unmapped names.
   std::streambuf* qmBuf;
-  if (writeQuasimappings or sopt.writeUnmappedNames) {
+  if (writeQuasimappings or sopt.writeUnmappedNames or sopt.writeOrphanLinks) {
       max_q_size = 16777216;
-  }  
+  }
 
   spdlog::set_async_mode(max_q_size);
 
   auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(
       logPath.string());
-  auto rawConsoleSink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
+  auto rawConsoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
   auto consoleSink =
       std::make_shared<spdlog::sinks::ansicolor_sink>(rawConsoleSink);
   auto consoleLog = spdlog::create("stderrLog", {consoleSink});
@@ -1381,9 +1450,41 @@ bool processQuantOptions(SalmonOpts& sopt,
       spdlog::register_logger(outLog);
       outLog->set_pattern("%v");
       sopt.unmappedFile.reset(outFile);
+      sopt.unmappedLog = outLog;
     } else {
       jointLog->error("Couldn't create auxiliary directory in which to place "
                       "\"unmapped_names.txt\"");
+      return false;
+    }
+  }
+
+  // Create the file (and logger) for outputting unmapped reads, if the user has
+  // asked for it.
+  if (sopt.writeOrphanLinks) {
+    boost::filesystem::path auxDir = sopt.outputDirectory / sopt.auxDir;
+    bool auxSuccess = boost::filesystem::is_directory(auxDir);
+    if (!auxSuccess) {
+      auxSuccess = boost::filesystem::create_directories(auxDir);
+    }
+    if (auxSuccess) {
+      bfs::path orphanLinkFile = auxDir / "orphan_links.txt";
+      std::ofstream* outFile = new std::ofstream(orphanLinkFile.string());
+
+      // Must be a power of 2
+      //size_t queueSize{268435456};
+      //spdlog::set_async_mode(queueSize);
+      auto outputSink =
+          std::make_shared<spdlog::sinks::ostream_sink_mt>(*outFile);
+
+      std::shared_ptr<spdlog::logger> outLog =
+          std::make_shared<spdlog::logger>("orphanLinkLog", outputSink);
+      spdlog::register_logger(outLog);
+      outLog->set_pattern("%v");
+      sopt.orphanLinkFile.reset(outFile);
+      sopt.orphanLinkLog = outLog;
+    } else {
+      jointLog->error("Couldn't create auxiliary directory in which to place "
+                      "\"orphan_links.txt\"");
       return false;
     }
   }
@@ -1393,13 +1494,15 @@ bool processQuantOptions(SalmonOpts& sopt,
       if (sopt.qmFileName == "-") {
           qmBuf = std::cout.rdbuf();
       } else { // output to the requested path, making the directory if it doesn't exist
-          // get the parent directory
-          bfs::path qmDir = boost::filesystem::path(sopt.qmFileName).parent_path();
+	// get the absolute file path
+	sopt.qmFileName = boost::filesystem::absolute(sopt.qmFileName).string();
+	  // get the parent directory
+	  bfs::path qmDir = boost::filesystem::path(sopt.qmFileName).parent_path();
           // if it's not already a directory that exists
           bool qmDirSuccess = boost::filesystem::is_directory(qmDir);
           // try to create it
           if (!qmDirSuccess) {
-              qmDirSuccess = boost::filesystem::create_directories(qmDir); 
+              qmDirSuccess = boost::filesystem::create_directories(qmDir);
           }
           // if the directory already existed, or we created it successfully, open the file
           if (qmDirSuccess) {
@@ -1415,11 +1518,11 @@ bool processQuantOptions(SalmonOpts& sopt,
       // Now set the output stream to the buffer, which is
       // either std::cout, or a file.
       sopt.qmStream.reset(new std::ostream(qmBuf));
-      
+
       auto outputSink = std::make_shared<spdlog::sinks::ostream_sink_mt>(*(sopt.qmStream.get()));
       sopt.qmLog = std::make_shared<spdlog::logger>("qmStream", outputSink);
       sopt.qmLog->set_pattern("%v");
-  } 
+  }
 
   // Verify that no inconsistent options were provided
   if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {
@@ -1427,6 +1530,14 @@ bool processQuantOptions(SalmonOpts& sopt,
                     "Please choose one.");
     jointLog->flush();
     return false;
+  }
+  if (sopt.numGibbsSamples > 0) {
+    if (! sopt.thinningFactor >= 1) {
+      jointLog->error("The Gibbs sampling thinning factor (--thinningFactor) "
+                      "cannot be smaller than 1.");
+      jointLog->flush();
+      return false;
+    }
   }
 
   {
@@ -1448,7 +1559,7 @@ bool processQuantOptions(SalmonOpts& sopt,
     jointLog->flush();
     return false;
   }
-  
+
   // maybe arbitrary, but if it's smaller than this, consider it
   // equal to LOG_0.
   if (sopt.incompatPrior < 1e-320 or sopt.incompatPrior == 0.0) {
@@ -1460,6 +1571,11 @@ bool processQuantOptions(SalmonOpts& sopt,
       sopt.ignoreIncompat = false;
   }
 
+  // Dumping equivalnce class weights implies dumping equivalence classes
+  if (sopt.dumpEqWeights and !sopt.dumpEq) {
+    sopt.dumpEq = true;
+    jointLog->info("You specified --dumpEqWeights, which implies --dumpEq; that option has been enabled.");
+  }
   return true;
 }
 
@@ -1478,10 +1594,12 @@ bool processQuantOptions(SalmonOpts& sopt,
 template <typename AbundanceVecT, typename ReadExpT>
 Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
                                        Eigen::VectorXd& effLensIn,
-                                       AbundanceVecT& alphas, bool writeBias) {
+                                       AbundanceVecT& alphas, std::vector<bool>& available, bool writeBias) {
 
   using std::vector;
   using BlockedIndexRange = tbb::blocked_range<size_t>;
+  using salmon::math::EPSILON;
+  using salmon::math::LOG_EPSILON;
 
   double minAlpha = 1e-8;
   double minCDFMass = 1e-10;
@@ -1623,7 +1741,70 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
   int outsideContext{3};
   int insideContext{2};
 
+  /**
+   * New context counting
+   */
+  
   int contextSize = outsideContext + insideContext;
+  //double cscale = 100.0 / (2 * contextSize);
+  auto populateContextCounts = [outsideContext, insideContext, contextSize](
+      const Transcript& txp, const char* tseq, Eigen::VectorXd& contextCountsFP,
+      Eigen::VectorXd& contextCountsTP,
+      Eigen::VectorXd& windowLensFP,
+      Eigen::VectorXd& windowLensTP) {
+    auto refLen = static_cast<int32_t>(txp.RefLength);
+    auto lastPos = refLen - 1;
+    if (refLen > contextSize) {
+      // window starts like this
+      // -3 === -2 === -1 === 0 === 1
+      //         3'           5'
+      // and then shifts to the right one base at a time.
+      int windowEnd = insideContext - 1;
+      int windowStart = -outsideContext;
+      int fp = 0;
+      int tp = windowStart + (insideContext - 1);
+      double count = txp.gcAt(windowEnd - 1);
+      for (; tp < refLen; ++fp, ++tp) {
+        if (windowStart > 0) {
+          switch (tseq[windowStart-1]) {
+          case 'G':
+          case 'g':
+          case 'C':
+          case 'c':
+          count -= 1;
+          }
+        }
+        if (windowEnd < refLen) {
+          switch (tseq[windowEnd]) {
+          case 'G':
+          case 'g':
+          case 'C':
+          case 'c':
+            count += 1;
+          }
+        }
+        double actualWindowLength = (windowEnd < contextSize) ? windowEnd + 1 : (windowEnd - windowStart + 1);
+        if (fp < refLen) {
+          contextCountsFP[fp] = count;
+          windowLensFP[fp] = actualWindowLength;
+        }
+        if (tp >=0 ) {
+          contextCountsTP[tp] = count;
+          windowLensTP[tp] = actualWindowLength;
+        }
+        // Shift the end of the window right 1 base
+        if (windowEnd < refLen - 1) { ++windowEnd; }
+        ++windowStart;
+      }
+    }
+  };
+  
+
+  /**
+   * orig context counting
+   **/
+  /*
+int contextSize = outsideContext + insideContext;
   double cscale = 100.0 / (2 * contextSize);
   auto populateContextCounts = [outsideContext, insideContext, contextSize](
       const Transcript& txp, const char* tseq, Eigen::VectorXd& contextCountsFP,
@@ -1666,6 +1847,8 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
       }
     }
   };
+  */
+
 
   /**
    * The local bias terms from each thread can be combined
@@ -1731,8 +1914,12 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
 
           Eigen::VectorXd contextCountsFP(refLen);
           Eigen::VectorXd contextCountsTP(refLen);
-          contextCountsFP.setOnes();
-          contextCountsTP.setOnes();
+          Eigen::VectorXd windowLensFP(refLen);
+          Eigen::VectorXd windowLensTP(refLen);
+          contextCountsFP.setZero();
+          contextCountsTP.setZero();
+          windowLensFP.setZero();
+          windowLensTP.setZero();
 
           // This transcript's sequence
           const char* tseq = txp.Sequence();
@@ -1746,7 +1933,9 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
           int32_t contextLength{expectSeqFW.getContextLength()};
 
           if (gcBiasCorrect and seqBiasCorrect) {
-            populateContextCounts(txp, tseq, contextCountsFP, contextCountsTP);
+            populateContextCounts(txp, tseq,
+                                  contextCountsFP, contextCountsTP,
+                                  windowLensFP, windowLensTP);
           }
 
           // The smallest and largest values of fragment
@@ -1789,9 +1978,17 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
                 if (fragEnd < refLen) {
                   // The GC fraction for this putative fragment
                   auto gcFrac = txp.gcFrac(fragStart, fragEnd);
+                  /*
                   int32_t contextFrac = std::lrint(
-                      (contextCountsFP[fragStart] + contextCountsTP[fragEnd]) *
-                      cscale);
+                                                   (contextCountsFP[fragStart] + contextCountsTP[fragEnd]) *
+                                                   cscale);
+                  */ 
+                  double contextLength = (windowLensFP[fragStart] + windowLensTP[fragEnd]);
+                  int32_t contextFrac = (contextLength > 0) ?
+                    (std::lrint(100.0 *
+                               (contextCountsFP[fragStart] + contextCountsTP[fragEnd]) / contextLength)) :
+                    0;
+                  
                   GCDesc desc{gcFrac, contextFrac};
                   expectGC.inc(desc,
                                weight * (conditionalCDF(fl) - prevFLMass));
@@ -1808,11 +2005,11 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
               int32_t maxFragLenRC = fragStartPos;
               auto densityFW = conditionalCDF(maxFragLenFW);
               auto densityRC = conditionalCDF(maxFragLenRC);
-              if (weight * densityFW > 1e-8) {
+              if (weight * densityFW > EPSILON) {
                 expectPos5[txp.lengthClassIndex()].addMass(
                     fragStartPos, txp.RefLength, std::log(weight * densityFW));
               }
-              if (weight * densityRC > 1e-8) {
+              if (weight * densityRC > EPSILON) {
                 expectPos3[txp.lengthClassIndex()].addMass(
                     fragStartPos, txp.RefLength, std::log(weight * densityRC));
               }
@@ -1846,8 +2043,10 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
    */
   SBModel exp5;
   SBModel exp3;
-  std::vector<SimplePosBias> pos5Exp(5);
-  std::vector<SimplePosBias> pos3Exp(5);
+
+  auto& pos5Exp = readExp.posBiasExpected(salmon::utils::Direction::FORWARD);
+  auto& pos3Exp = readExp.posBiasExpected(salmon::utils::Direction::REVERSE_COMPLEMENT);
+
   auto combineBiasParams =
       [seqBiasCorrect, gcBiasCorrect, posBiasCorrect, &pos5Exp, &pos3Exp, &exp5,
        &exp3, &transcriptGCDist](const CombineableBiasParams& p) -> void {
@@ -1932,8 +2131,10 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
           int32_t locFLDLow = (refLen < cdfMaxArg) ? 1 : fldLow;
           int32_t locFLDHigh = (refLen < cdfMaxArg) ? cdfMaxArg : fldHigh;
 
-          if (alphas[it] >= minAlpha and unprocessedLen > 0 and
-              cdfMaxVal > minCDFMass) {
+          if (alphas[it] >= minAlpha
+              //available[it]
+              and unprocessedLen > 0
+              and cdfMaxVal > minCDFMass) {
 
             Eigen::VectorXd seqFactorsFW(refLen);
             Eigen::VectorXd seqFactorsRC(refLen);
@@ -1942,8 +2143,12 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
 
             Eigen::VectorXd contextCountsFP(refLen);
             Eigen::VectorXd contextCountsTP(refLen);
-            contextCountsFP.setOnes();
-            contextCountsTP.setOnes();
+            Eigen::VectorXd windowLensFP(refLen);
+            Eigen::VectorXd windowLensTP(refLen);
+            contextCountsFP.setZero();
+            contextCountsTP.setZero();
+            windowLensFP.setZero();
+            windowLensTP.setZero();
 
             std::vector<double> posFactorsFW(refLen, 1.0);
             std::vector<double> posFactorsRC(refLen, 1.0);
@@ -1958,8 +2163,9 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
             bool done{fl >= maxLen};
 
             if (gcBiasCorrect and seqBiasCorrect) {
-              populateContextCounts(txp, tseq, contextCountsFP,
-                                    contextCountsTP);
+              populateContextCounts(txp, tseq,
+                                    contextCountsFP, contextCountsTP,
+                                    windowLensFP, windowLensTP);
             }
 
             if (posBiasCorrect) {
@@ -2060,10 +2266,18 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
                       seqFactorsFW[fragStart] * seqFactorsRC[fragEnd];
                   if (gcBiasCorrect) {
                     auto gcFrac = txp.gcFrac(fragStart, fragEnd);
+                    /*
                     int32_t contextFrac =
-                        std::lrint((contextCountsFP[fragStart] +
-                                    contextCountsTP[fragEnd]) *
-                                   cscale);
+                      std::lrint((contextCountsFP[fragStart] +
+                                  contextCountsTP[fragEnd]) *
+                                 cscale);
+                    */ 
+                    double contextLength = (windowLensFP[fragStart] + windowLensTP[fragEnd]);
+                    int32_t contextFrac = (contextLength > 0) ?
+                      (std::lrint(100.0 *
+                                  (contextCountsFP[fragStart] + contextCountsTP[fragEnd]) / contextLength)) :
+                      0;
+                    
                     GCDesc desc{gcFrac, contextFrac};
                     fragFactor *= gcBias.get(desc);
                     /*
@@ -2108,10 +2322,10 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
 
   // Copy over the expected sequence bias models
   if (seqBiasCorrect) {
-    readExp.setReadBiasModelExpected(std::move(exp5), salmon::utils::Direction::FORWARD); 
-    readExp.setReadBiasModelExpected(std::move(exp3), salmon::utils::Direction::REVERSE_COMPLEMENT); 
+    readExp.setReadBiasModelExpected(std::move(exp5), salmon::utils::Direction::FORWARD);
+    readExp.setReadBiasModelExpected(std::move(exp3), salmon::utils::Direction::REVERSE_COMPLEMENT);
   }
-  
+
   sopt.jointLog->info("processed bias for 100.0% of the transcripts");
   return effLensOut;
 }
@@ -2125,6 +2339,8 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm,
   using std::move;
   using std::cerr;
   using std::max;
+ 
+  auto logger = spdlog::get("jointLog");
 
   constexpr double minTPM = std::numeric_limits<double>::denorm_min();
   std::ifstream expFile(inputPath.string());
@@ -2141,9 +2357,6 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm,
 
   bool headerLine{true};
   while (getline(expFile, l)) {
-    if (++ln % 1000 == 0) {
-      cerr << "\r\rParsed " << ln << " expression lines";
-    }
     auto it =
         find_if(l.begin(), l.end(), [](char c) -> bool { return !isspace(c); });
     if (it != l.end()) {
@@ -2154,7 +2367,12 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm,
         if (!headerLine) {
           vector<string> toks = split(l);
           ExpressionRecord er(toks);
-          auto gn = tgm.geneName(er.target);
+          bool foundGene{false};
+          auto gn = tgm.geneName(er.target, foundGene);
+          if (!foundGene) {
+            logger->warn("couldn't find transcript named [{}] in transcript <-> gene map; "
+                         "returning transcript as it's own gene", er.target);
+          }
           geneExps[gn].push_back(move(er));
         } else { // treat the header line as a comment
           comments.push_back(l);
@@ -2163,10 +2381,9 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm,
       }
     }
   }
-  cerr << "\ndone\n";
   expFile.close();
 
-  cerr << "Aggregating expressions to gene level . . .";
+  logger->info("Aggregating expressions to gene level");
   boost::filesystem::path outputFilePath(inputPath);
   outputFilePath.replace_extension(".genes.sf");
   ofstream outFile(outputFilePath.string());
@@ -2225,20 +2442,21 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm,
   }
 
   outFile.close();
-  cerr << " done\n";
+  logger->info("done");
   //====================== From GeneSum =====================
 }
 
 void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
                                 boost::filesystem::path& estDir) {
   namespace bfs = boost::filesystem;
-  std::cerr << "Computing gene-level abundance estimates\n";
-  bfs::path gtfExtension(".gtf");
+  auto logger = spdlog::get("jointLog");
+  logger->info("Computing gene-level abundance estimates");
+  std::set<std::string> validGTFExtensions = {".gtf", ".gff", ".gff3", ".GTF", ".GFF", ".GFF3"};
   auto extension = geneMapPath.extension();
 
   TranscriptGeneMap tranGeneMap;
   // parse the map as a GTF file
-  if (extension == gtfExtension) {
+  if (validGTFExtensions.find(extension.string()) != validGTFExtensions.end()) {
     // Using libgff
     tranGeneMap = salmon::utils::transcriptGeneMapFromGTF(geneMapPath.string(),
                                                           "gene_id");
@@ -2248,9 +2466,8 @@ void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
     tgfile.close();
   }
 
-  std::cerr << "There were " << tranGeneMap.numTranscripts()
-            << " transcripts mapping to " << tranGeneMap.numGenes()
-            << " genes\n";
+  logger->info("There were {} transcripts mapping to {} genes",
+               tranGeneMap.numTranscripts(), tranGeneMap.numGenes());
 
   bfs::path estFilePath = estDir / "quant.sf";
   if (!bfs::exists(estFilePath)) {
@@ -2365,38 +2582,38 @@ template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
                                       ReadExperiment>(
     SalmonOpts& sopt, ReadExperiment& readExp, Eigen::VectorXd& effLensIn,
-    std::vector<tbb::atomic<double>>& alphas, bool finalRound);
+    std::vector<tbb::atomic<double>>& alphas, std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<double>, ReadExperiment>(
     SalmonOpts& sopt, ReadExperiment& readExp, Eigen::VectorXd& effLensIn,
-    std::vector<double>& alphas, bool finalRound);
+    std::vector<double>& alphas, std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
                                       AlignmentLibrary<ReadPair>>(
     SalmonOpts& sopt, AlignmentLibrary<ReadPair>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
-    bool finalRound);
+    std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<double>,
                                       AlignmentLibrary<ReadPair>>(
     SalmonOpts& sopt, AlignmentLibrary<ReadPair>& readExp,
-    Eigen::VectorXd& effLensIn, std::vector<double>& alphas, bool finalRound);
+    Eigen::VectorXd& effLensIn, std::vector<double>& alphas, std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
                                       AlignmentLibrary<UnpairedRead>>(
     SalmonOpts& sopt, AlignmentLibrary<UnpairedRead>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
-    bool finalRound);
+    std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<double>,
                                       AlignmentLibrary<UnpairedRead>>(
     SalmonOpts& sopt, AlignmentLibrary<UnpairedRead>& readExp,
-    Eigen::VectorXd& effLensIn, std::vector<double>& alphas, bool finalRound);
+    Eigen::VectorXd& effLensIn, std::vector<double>& alphas, std::vector<bool>& available, bool finalRound);
 
 //// 0th order model --- code for computing bias factors.
 

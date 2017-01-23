@@ -63,7 +63,7 @@ struct UnpairedRead {
 
    inline int32_t pos() const { return left(); }
    inline bool fwd() const { return !bam_strand(read); }
-
+   inline bool isInward() const { return false; }
     // return 0 on success, -1 on failure
     int writeToFile(scram_fd* fp) {
         return scram_put_seq(fp, read);

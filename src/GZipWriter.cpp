@@ -69,6 +69,7 @@ bool GZipWriter::writeEquivCounts(
   auto& transcripts = experiment.transcripts();
   std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec =
         experiment.equivalenceClassBuilder().eqVec();
+  bool dumpRichWeights = opts.dumpEqWeights;
 
   // Number of transcripts
   equivFile << transcripts.size() << '\n';
@@ -89,6 +90,10 @@ bool GZipWriter::writeEquivCounts(
     equivFile << txps.size() << '\t';
     // each group member
     for (auto tid : txps) { equivFile << tid << '\t'; }
+    if (dumpRichWeights) {
+      const auto& auxs = eq.second.combinedWeights;
+      for (auto aux : auxs) { equivFile << aux << '\t'; }
+    }
     // count for this class
     equivFile << count << '\n';
   }
@@ -123,9 +128,7 @@ std::vector<std::string> getLibTypeStrings(const AlignmentLibrary<AlnT>& experim
 template <typename ExpT>
 bool GZipWriter::writeMeta(
     const SalmonOpts& opts,
-    const ExpT& experiment,
-    const std::string& tstring // the start time of the run
-    ) {
+    const ExpT& experiment) {
 
   namespace bfs = boost::filesystem;
 
@@ -248,6 +251,64 @@ bool GZipWriter::writeMeta(
           expgc.writeBinary(out);
       }
   }
+  
+  if (opts.posBiasCorrect) {
+    // the length classes
+    const auto& lenBounds = experiment.getLengthQuantiles();
+    
+    // lambda to write out a vector of SimplePosBias models (along with the length bounds) to file.
+    auto writePosModel= [&lenBounds, this](bfs::path fpath, const std::vector<SimplePosBias>& model) -> bool {
+      auto flags = std::ios_base::out | std::ios_base::binary;
+      boost::iostreams::filtering_ostream out;
+      out.push(boost::iostreams::gzip_compressor(6));
+      out.push(boost::iostreams::file_sink(fpath.string(), flags));
+      // Write out the number of different models
+      uint32_t numModels = static_cast<uint32_t>(lenBounds.size());
+      out.write(reinterpret_cast<char*>(&numModels), sizeof(numModels));
+      // Write out the length class for each model
+      for (const auto& b : lenBounds) {
+        out.write(reinterpret_cast<char*>(const_cast<uint32_t*>(&b)), sizeof(b));
+      }
+      // write out each
+      for (auto& pb : model) { 
+	bool success = pb.writeBinary(out);
+	if (!success) {
+	  this->logger_->error("Could not write out positional bias model to {}!", fpath.string());
+	}
+      }
+      return true;
+    };
+
+    // 5' observed 
+    {
+      bfs::path obsPosPath = auxDir / "obs5_pos.gz";
+      // Get the pos bias vector
+      auto& posBiases = experiment.posBias(salmon::utils::Direction::FORWARD);
+      writePosModel(obsPosPath, posBiases);
+    }
+    //3' observed
+    {
+      bfs::path obsPosPath = auxDir / "obs3_pos.gz";
+      // Get the pos bias vector
+      auto& posBiases = experiment.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
+      writePosModel(obsPosPath, posBiases);
+    }
+    // 5' expected
+    {
+      bfs::path expPosPath = auxDir / "exp5_pos.gz";
+      // Get the pos bias vector
+      auto& posBiases = experiment.posBiasExpected(salmon::utils::Direction::FORWARD);
+      writePosModel(expPosPath, posBiases);
+    }
+    // 3' expected
+    {
+      bfs::path expPosPath = auxDir / "exp3_pos.gz";
+      // Get the pos bias vector
+      auto& posBiases = experiment.posBiasExpected(salmon::utils::Direction::REVERSE_COMPLEMENT);
+      writePosModel(expPosPath, posBiases);
+    }
+  }
+
   /*
   bfs::path normGCPath = auxDir / "expected_gc.gz";
   writeVectorToFile(normGCPath, experiment.expectedGCBias());
@@ -290,13 +351,59 @@ bool GZipWriter::writeMeta(
       oa(cereal::make_nvp("mapping_type", mapTypeStr));
 
       oa(cereal::make_nvp("num_targets", transcripts.size()));
+
+      // True if we dumped the equivalence classes, false otherwise
+      oa(cereal::make_nvp("serialized_eq_classes", opts.dumpEq));
+      
+      // For now, this vector is empty unless we dumped the equivalence classes
+      // with weights.  In which case it contains the string "scalar_weights".
+      std::vector<std::string> props;
+      if (opts.dumpEqWeights) { props.push_back("scalar_weights"); }
+      oa(cereal::make_nvp("eq_class_properties", props));
+
+      oa(cereal::make_nvp("length_classes", experiment.getLengthQuantiles()));
       oa(cereal::make_nvp("num_bootstraps", numSamples));
       oa(cereal::make_nvp("num_processed", experiment.numObservedFragments()));
       oa(cereal::make_nvp("num_mapped", experiment.numMappedFragments()));
       oa(cereal::make_nvp("percent_mapped", experiment.effectiveMappingRate() * 100.0));
       oa(cereal::make_nvp("call", std::string("quant")));
-      oa(cereal::make_nvp("start_time", tstring));
+      oa(cereal::make_nvp("start_time", opts.runStartTime));
+      oa(cereal::make_nvp("end_time", opts.runStopTime));
   }
+
+  {
+    bfs::path ambigInfo = auxDir / "ambig_info.tsv";
+    std::ofstream os(ambigInfo.string());
+    os << "UniqueCount\tAmbigCount\n";
+
+    auto& transcripts = experiment.transcripts();
+    std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec =
+      const_cast<ExpT&>(experiment).equivalenceClassBuilder().eqVec();
+
+    class CountPair {
+    public:
+      uint32_t unique=0;
+      uint32_t potential=0;
+    };
+
+    std::vector<CountPair> counts(transcripts.size());
+    for (auto& eq : eqVec) {
+      uint64_t count = eq.second.count;
+      const TranscriptGroup& tgroup = eq.first;
+      const std::vector<uint32_t>& txps = tgroup.txps;
+      if (txps.size() > 1) {
+        for (auto tid : txps) {
+          counts[tid].potential += count;
+        }
+      } else {
+        counts[txps.front()].unique += count;
+      }
+    }
+    for (size_t i = 0; i < transcripts.size(); ++i) {
+      os << counts[i].unique << '\t' << counts[i].potential << '\n';
+    }
+  }
+
   return true;
 }
 
@@ -342,14 +449,36 @@ bool GZipWriter::writeAbundances(
       double tfrac = (npm / effLength) / tfracDenom;
       double tpm = tfrac * million;
       fmt::print(output.get(), "{}\t{}\t{}\t{}\t{}\n",
-              transcript.RefName, transcript.RefLength, effLength,
+              transcript.RefName, transcript.CompleteLength, effLength,
               tpm, count);
   }
   return true;
 }
 
+bool GZipWriter::setSamplingPath(const SalmonOpts& sopt) {
+  namespace bfs = boost::filesystem;
+
+  bfs::path auxDir = path_ / sopt.auxDir;
+  if (!bfs::exists(auxDir)) {
+    bool auxSuccess = boost::filesystem::create_directories(auxDir);
+    if (!auxSuccess) {
+      sopt.jointLog->critical("Could not create auxiliary directory {}", auxDir.string());
+      return false;
+    }
+  }
+  bsPath_ = auxDir / "bootstrap";
+  if (!bfs::exists(bsPath_)) {
+    bool bsSuccess = boost::filesystem::create_directories(bsPath_);
+    if (!bsSuccess) {
+      sopt.jointLog->critical("Could not create sampling directory {}", bsPath_.string());
+      return false;
+    }
+  }
+  return true;
+}
+
 template <typename T>
-bool GZipWriter::writeBootstrap(const std::vector<T>& abund) {
+bool GZipWriter::writeBootstrap(const std::vector<T>& abund, bool quiet) {
 #if defined __APPLE__
             spin_lock::scoped_lock sl(writeMutex_);
 #else
@@ -369,16 +498,18 @@ bool GZipWriter::writeBootstrap(const std::vector<T>& abund) {
         size_t elSize = sizeof(typename std::vector<T>::value_type);
         ofile.write(reinterpret_cast<char*>(const_cast<T*>(abund.data())),
                     elSize * num);
-        logger_->info("wrote {} bootstraps", numBootstrapsWritten_.load()+1);
+        if (!quiet){
+          logger_->info("wrote {} bootstraps", numBootstrapsWritten_.load()+1);
+        }
         ++numBootstrapsWritten_;
         return true;
 }
 
 template
-bool GZipWriter::writeBootstrap<double>(const std::vector<double>& abund);
+bool GZipWriter::writeBootstrap<double>(const std::vector<double>& abund, bool quiet);
 
 template
-bool GZipWriter::writeBootstrap<int>(const std::vector<int>& abund);
+bool GZipWriter::writeBootstrap<int>(const std::vector<int>& abund, bool quiet);
 
 template
 bool GZipWriter::writeEquivCounts<ReadExperiment>(const SalmonOpts& sopt,
@@ -402,20 +533,17 @@ bool GZipWriter::writeAbundances<AlignmentLibrary<ReadPair>>(const SalmonOpts& s
 template
 bool GZipWriter::writeMeta<ReadExperiment>(
     const SalmonOpts& opts,
-    const ReadExperiment& experiment,
-    const std::string& tstring);
+    const ReadExperiment& experiment);
 
 template
 bool GZipWriter::writeMeta<AlignmentLibrary<UnpairedRead>>(
     const SalmonOpts& opts,
-    const AlignmentLibrary<UnpairedRead>& experiment,
-    const std::string& tstring);
+    const AlignmentLibrary<UnpairedRead>& experiment);
 
 template
 bool GZipWriter::writeMeta<AlignmentLibrary<ReadPair>>(
     const SalmonOpts& opts,
-    const AlignmentLibrary<ReadPair>& experiment,
-    const std::string& tstring);
+    const AlignmentLibrary<ReadPair>& experiment);
 
 template
 std::vector<std::string> getLibTypeStrings(const AlignmentLibrary<UnpairedRead>& experiment);
