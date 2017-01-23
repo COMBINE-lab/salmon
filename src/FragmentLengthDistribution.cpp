@@ -4,6 +4,7 @@
  *
  *  Created by Adam Roberts on 1/30/13.
  *  Copyright 2013 Adam Roberts. All rights reserved.
+ *  Modified 2014, 2015, 2016, 2017 by Rob Patro.
  */
 
 #include "FragmentLengthDistribution.hpp"
