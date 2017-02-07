@@ -252,6 +252,14 @@ bootstrapping / posterior sampling (if enabled).  Salmon is designed to work
 well with many threads, so, if you have a sufficient number of processors, larger
 values here can speed up the run substantially.
 
+.. note:: Default number of threads
+
+	The default behavior is for Salmon to probe the number of available hardware threads and 
+    to use this number.  Thus, if you want to use fewer threads (e.g., if you are running multiple
+    instances of Salmon simultaneously), you will likely want to set this option explicitly in 
+    accordance with the desired per-process resource usage.
+    
+
 """"""""""""
 ``--dumpEq``
 """"""""""""
