@@ -2478,7 +2478,12 @@ int salmonQuantify(int argc, char* argv[]) {
       "rankEqClasses",
       po::bool_switch(&(sopt.rankEqClasses))->default_value(false),
       "[TESTING OPTION]: Keep separate equivalence classes for each distinct "
-      "ordering of transcripts in the label.");
+      "ordering of transcripts in the label.")(
+      "noExtrapolateCounts",
+      po::bool_switch(&(sopt.dontExtrapolateCounts))->default_value(false),
+      "[TESTING OPTION]: When generating posterior counts for Gibbs sampling, "
+      "use the directly re-allocated counts in each iteration, rather than extrapolating "
+      "from transcript fractions.");
 
   po::options_description deprecated("\ndeprecated options about which to inform the user");
   deprecated.add_options() (

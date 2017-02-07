@@ -404,24 +404,35 @@ bool CollapsedGibbsSampler::sample(
 
     // Thin the chain by a factor of (numInternalRounds)
     for (size_t i = 0; i < numInternalRounds; ++i) {
-      sampleRoundNonCollapsedMultithreaded_(eqVec, active, activeList, countMap, probMap, mu,
-                                            effLens, priorAlphas, alphasIn,
-                                            offsetMap);
+      sampleRoundNonCollapsedMultithreaded_(eqVec,        // encodes equivalence classes
+                                            active,       // the set of active transcripts
+                                            activeList,   // the list of active transcript ids
+                                            countMap,     // the count of reads in each eq coming from each eq class
+                                            probMap,      // the probability of reads in each eq class coming from each txp
+                                            mu,           // transcript fractions
+                                            effLens,      // the effective transcript lengths
+                                            priorAlphas,  // the prior transcript counts
+                                            alphasIn,     // [input/output param] the (hard) fragment counts per txp from the previous iteration
+                                            offsetMap     // where the information begins for each equivalence class
+                                            );
     }
 
-    double denom{0.0};
-    for (size_t tn = 0; tn < numTranscripts; ++tn) {
-      denom += mu[tn] * effLens[tn];
+    if (sopt.dontExtrapolateCounts) {
+      alphas = alphasIn;
+    } else {
+      double denom{0.0};
+      for (size_t tn = 0; tn < numTranscripts; ++tn) {
+        denom += mu[tn] * effLens[tn];
+      }
+      double scale = numMappedFragments / denom;
+      double asum = {0.0};
+      double minAlpha = 1e-8;
+      for (size_t tn = 0; tn < numTranscripts; ++tn) {
+        alphas[tn] = (mu[tn] * effLens[tn]) * scale;
+        alphas[tn] = (alphas[tn] > minAlpha) ? alphas[tn] : 0.0;
+        asum += alphas[tn];
+      }
     }
-    double scale = numMappedFragments / denom;
-    double asum = {0.0};
-    double minAlpha = 1e-8;
-    for (size_t tn = 0; tn < numTranscripts; ++tn) {
-      alphas[tn] = (mu[tn] * effLens[tn]) * scale;
-      alphas[tn] = (alphas[tn] > minAlpha) ? alphas[tn] : 0.0;
-      asum += alphas[tn];
-    }
-
     writeBootstrap(alphas);
     isFirstSample = false;
   }
