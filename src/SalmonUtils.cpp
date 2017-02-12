@@ -1392,6 +1392,8 @@ bool processQuantOptions(SalmonOpts& sopt,
   if (sopt.meta) {
       sopt.initUniform = true;
       sopt.noRichEqClasses = true;
+      //sopt.incompatPrior = salmon::math::LOG_0;
+      //sopt.ignoreIncompat = true;
   }
 
   // Determine what we'll do with quasi-mapping results
