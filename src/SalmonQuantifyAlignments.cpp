@@ -1383,7 +1383,12 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         ("noFragLenFactor", po::bool_switch(&(sopt.noFragLenFactor))->default_value(false),
                         "[TESTING OPTION]: Disable the factor in the likelihood that takes into account the "
                         "goodness-of-fit of an alignment with the empirical fragment length "
-                        "distribution");
+         "distribution")(
+      "noExtrapolateCounts",
+      po::bool_switch(&(sopt.dontExtrapolateCounts))->default_value(false),
+                      "[TESTING OPTION]: When generating posterior counts for Gibbs sampling, "
+      "use the directly re-allocated counts in each iteration, rather than extrapolating "
+      "from transcript fractions.");
 
     po::options_description hidden("\nhidden options");
     hidden.add_options()

@@ -1325,6 +1325,14 @@ bool validateOptions(SalmonOpts& sopt) {
     }
   }
 
+  if (sopt.dontExtrapolateCounts) { // If the user has provided this option, (s)he must be using Gibbs sampling
+    if (sopt.numGibbsSamples == 0) {
+      sopt.jointLog->critical("You passed the --dontExtrapolateCounts flag, but are not using Gibbs sampling. "
+                              "The fomer implies the latter.  Please enable Gibbs sampling to use this flag.");
+      return false;
+    }
+  }
+
   return true;
 }
 
