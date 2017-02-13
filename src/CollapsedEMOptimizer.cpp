@@ -916,7 +916,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   // by the effective length term.
   tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(eqVec.size())),
-      [&eqVec, &effLens, noRichEq](const BlockedIndexRange& range) -> void {
+      [&eqVec, &effLens, noRichEq, &useRankEqClasses, &rangeCounts](const BlockedIndexRange& range) -> void {
         // For each index in the equivalence class vector
         for (auto eqID : boost::irange(range.begin(), range.end())) {
           // The vector entry
@@ -1017,7 +1017,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
     } else if (useFMEM){
       EMUpdate_FM(eqVec, transcripts, alphas, alphasPrime);
     }  else {
-      EMUpdate_(eqVec, transcripts, alphas, alphasPrime,sopt);
+      EMUpdate_(eqVec, transcripts, alphas, alphasPrime);
     }
 
     converged = true;

@@ -157,7 +157,8 @@ void sampleRoundNonCollapsedMultithreaded_(
 
           // for each transcript in this class
           const TranscriptGroup& tgroup = eqClass.first;
-          const size_t groupSize = tgroup.txps.size();
+          //const size_t groupSize = tgroup.txps.size();
+          const size_t groupSize = eqClass.second.weights.size();
           if (tgroup.valid) {
             const std::vector<uint32_t>& txps = tgroup.txps;
             const auto& auxs = eqClass.second.combinedWeights;
@@ -327,7 +328,8 @@ bool CollapsedGibbsSampler::sample(
   std::vector<uint32_t> offsetMap(eqVec.size(), 0);
   for (size_t i = 0; i < eqVec.size(); ++i) {
     if (eqVec[i].first.valid) {
-      countMapSize += eqVec[i].first.txps.size();
+      //countMapSize += eqVec[i].first.txps.size();
+      countMapSize += eqVec[i].second.weights.size();
       for (auto t : eqVec[i].first.txps) { active[t] = true; }
       if (i < eqVec.size() - 1) {
         offsetMap[i + 1] = countMapSize;
