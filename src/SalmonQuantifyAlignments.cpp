@@ -194,6 +194,9 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
     bool useAuxParams = (processedReads >= salmonOpts.numPreBurninFrags);
 
+    bool useRankEqClasses{salmonOpts.rankEqClasses};
+    size_t rangeClusterEqClasses = salmonOpts.useRangeClusterEqClasses;
+    bool useFMEM{salmonOpts.useFMEMOpt}; 
     std::chrono::microseconds sleepTime(1);
     MiniBatchInfo<AlignmentGroup<FragT*>>* miniBatch = nullptr;
     bool updateCounts = initialRound;
@@ -464,7 +467,49 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                     }
 
                     if (txpIDs.size() > 0) {
-                        TranscriptGroup tg(txpIDs);
+			auto eqSize = txpIDs.size();
+			if (useRankEqClasses and eqSize > 1) {
+			    std::vector<int> inds(eqSize);
+			    std::iota(inds.begin(), inds.end(), 0);
+			    // Get the indices in order by conditional probability
+			    std::sort(inds.begin(), inds.end(), 
+				      [&auxProbs](int i, int j) -> bool { return auxProbs[i] < auxProbs[j]; });
+			    // Reorder the other vectors
+			    if (useFSPD) {
+				decltype(txpIDs) txpIDsNew(txpIDs.size());
+				decltype(auxProbs) auxProbsNew(auxProbs.size());
+				decltype(posProbs) posProbsNew(posProbs.size());
+				for (size_t r = 0; r < eqSize; ++r) {
+				    auto ind = inds[r];
+				    txpIDsNew[r] = txpIDs[ind];
+				    auxProbsNew[r] = auxProbs[ind];
+				    posProbsNew[r] = posProbs[ind];
+				}
+				std::swap(txpIDsNew, txpIDs);
+				std::swap(auxProbsNew, auxProbs);
+				std::swap(posProbsNew, posProbs);
+			    } else {
+				decltype(txpIDs) txpIDsNew(txpIDs.size());
+				decltype(auxProbs) auxProbsNew(auxProbs.size());
+				for (size_t r = 0; r < eqSize; ++r) {
+				    auto ind = inds[r];
+				    txpIDsNew[r] = txpIDs[ind];
+				    auxProbsNew[r] = auxProbs[ind];
+				}
+				std::swap(txpIDsNew, txpIDs);
+				std::swap(auxProbsNew, auxProbs);
+			    }
+			}
+			if( rangeClusterEqClasses>0 ) {
+			    int key = 1;
+		            int rangeClusterEqClasses1 = std::sqrt(txpIDs.size())+rangeClusterEqClasses;
+		            int txpsSize = txpIDs.size();
+			    for(size_t i=0; i<txpsSize; i++){
+					int rangeNumber = auxProbs[i]*rangeClusterEqClasses1;
+					txpIDs.push_back(rangeNumber);
+			    }
+			}
+			TranscriptGroup tg(txpIDs);
                         eqBuilder.addGroup(std::move(tg), auxProbs, posProbs);
                     }
 

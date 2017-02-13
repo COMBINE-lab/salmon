@@ -211,6 +211,8 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
   bool useFragLengthDist{!salmonOpts.noFragLengthDist};
   bool noFragLenFactor{salmonOpts.noFragLenFactor};
   bool useRankEqClasses{salmonOpts.rankEqClasses};
+  size_t rangeClusterEqClasses = salmonOpts.useRangeClusterEqClasses;
+  bool useFMEM{salmonOpts.useFMEMOpt};
   bool noLengthCorrection{salmonOpts.noLengthCorrection};
   // JAN 13
   bool useAuxParams = ((localNumAssignedFragments + numAssignedFragments) >= salmonOpts.numPreBurninFrags);
@@ -558,8 +560,17 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
                 std::swap(txpIDsNew, txpIDs);
                 std::swap(auxProbsNew, auxProbs);
             }
-        }
-        
+
+	    if( rangeClusterEqClasses>0) {
+		int key = 1;
+		int rangeClusterEqClasses1 = std::sqrt(txpIDs.size())+rangeClusterEqClasses;
+		int txpsSize = txpIDs.size();
+		for(size_t i=0; i<txpsSize; i++){
+			int rangeNumber = auxProbs[i]*rangeClusterEqClasses1;
+			txpIDs.push_back(rangeNumber);
+		}
+	    }
+ 	}
         TranscriptGroup tg(txpIDs);
         eqBuilder.addGroup(std::move(tg), auxProbs, posProbs);
       }
