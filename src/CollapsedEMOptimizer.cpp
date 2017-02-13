@@ -379,6 +379,74 @@ void VBEMUpdate_(std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
       });
 }
 
+
+
+void EMUpdate_FM(std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
+               std::vector<Transcript>& transcripts,
+               const CollapsedEMOptimizer::VecType& alphaIn,
+               CollapsedEMOptimizer::VecType& alphaOut) {
+
+  assert(alphaIn.size() == alphaOut.size());
+  int hits = 0;
+  tbb::parallel_for(
+      BlockedIndexRange(size_t(0), size_t(eqVec.size())),
+      [&eqVec, &alphaIn, &alphaOut](const BlockedIndexRange& range) -> void {
+        for (auto eqID : boost::irange(range.begin(), range.end())) {
+          auto& kv = eqVec[eqID];
+
+          uint64_t count = kv.second.count;
+          // for each transcript in this class
+          const TranscriptGroup& tgroup = kv.first;
+
+         //The FULL MODEL
+         if (tgroup.valid) {
+            const std::vector<uint32_t>& txps = tgroup.txps;
+            //const auto& auxs = kv.second.combinedWeights;
+	    
+
+            //double denom = 0.0;
+            size_t groupSize = txps.size();
+            // If this is a single-transcript group,
+            // then it gets the full count.  Otherwise,
+            // update according to our VBEM rule.
+            if (BOOST_LIKELY(groupSize > 1)) {
+              for (size_t f = 0; f< count; ++f){
+                double denom = 0.0;
+		const auto& auxs = kv.second.allWeights[f];
+                for (size_t i = 0; i < groupSize; ++i) {
+                        auto tid = txps[i];
+                        auto aux = auxs[i];
+                        //auto aux = kv.second.allWeights[f][i];
+                        double v =  alphaIn[tid] * aux;
+                        denom += v;
+                }
+
+                if (denom <= ::minEQClassWeight) {
+                        // tgroup.setValid(false);
+                } else {
+                        double invDenom = 1.0 / denom;
+                        for (size_t i = 0; i < groupSize; ++i) {
+                                auto tid = txps[i];
+                                auto aux = auxs[i];
+                                //auto aux = kv.second.allWeights[f][i];
+                                double v = alphaIn[tid] * aux;
+                                if (!std::isnan(v)) {
+                                        salmon::utils::incLoop(alphaOut[tid], v * invDenom);
+                                }
+                        }
+                }
+              }
+            }
+           else {
+                salmon::utils::incLoop(alphaOut[txps.front()], count);
+            }
+          }
+        }
+      });
+}
+
+
+
 template <typename VecT>
 size_t markDegenerateClasses(
     std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
