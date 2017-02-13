@@ -474,7 +474,14 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
           // The bias probability
           double auxProb = logFragProb + logFragCov + logAlignCompatProb;
 
-          aln.logProb = transcriptLogCount + auxProb + startPosProb;
+          //aln.logProb = transcriptLogCount + auxProb + startPosProb;
+	  //If the factorization or FM is used, startPosProb is added here combinedWeights cannot be used 
+	  if(useRankEqClasses or useFMEM or rangeClusterEqClasses>0) {
+		auxProb += startPosProb;
+	  	aln.logProb = transcriptLogCount + auxProb;
+	  } else	 
+          	aln.logProb = transcriptLogCount + auxProb + startPosProb;
+
 
           // If this alignment had a zero probability, then skip it
           if (std::abs(aln.logProb) == LOG_0) {

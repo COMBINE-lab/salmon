@@ -422,7 +422,10 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         // The auxProb does *not* account for the start position
                         // probability!
                         double auxProb = logFragProb + errLike + logAlignCompatProb;
-
+			//If FM or factorizations are used, startPosProb is added here and combinedWeights cannot be used
+	  		if(useRankEqClasses or useFMEM or rangeClusterEqClasses>0) {
+				auxProb += startPosProb;
+	  		} 	
                         // The overall mass of this transcript, which is used to
                         // account for this transcript's relaive abundance
                         double transcriptLogCount = transcript.mass(initialRound);
@@ -430,7 +433,13 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         if ( transcriptLogCount != LOG_0 and
                               auxProb != LOG_0 and
                               startPosProb != LOG_0 ) {
-                            aln->logProb = transcriptLogCount + auxProb + startPosProb;
+
+			      if(useRankEqClasses or useFMEM or rangeClusterEqClasses>0)
+	                         aln->logProb = transcriptLogCount + auxProb;
+			      else
+                            	 aln->logProb = transcriptLogCount + auxProb + startPosProb;
+
+                              //aln->logProb = transcriptLogCount + auxProb + startPosProb;
 
                             sumOfAlignProbs = logAdd(sumOfAlignProbs, aln->logProb);
                             if (updateCounts and
