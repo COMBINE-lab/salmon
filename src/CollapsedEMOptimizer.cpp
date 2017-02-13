@@ -244,6 +244,7 @@ void EMUpdate_(std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
 
   assert(alphaIn.size() == alphaOut.size());
 
+
   tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(eqVec.size())),
       [&eqVec, &alphaIn, &alphaOut](const BlockedIndexRange& range) -> void {
@@ -258,7 +259,7 @@ void EMUpdate_(std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
             const auto& auxs = kv.second.combinedWeights;
 
             double denom = 0.0;
-            size_t groupSize = txps.size();
+	    size_t groupSize = kv.second.weights.size();
             // If this is a single-transcript group,
             // then it gets the full count.  Otherwise,
             // update according to our VBEM rule.
@@ -463,7 +464,8 @@ size_t markDegenerateClasses(
     const auto& auxs = kv.second.combinedWeights;
 
     double denom = 0.0;
-    for (size_t i = 0; i < txps.size(); ++i) {
+    size_t groupSize = kv.second.weights.size();
+    for (size_t i = 0; i < groupSize; ++i) {
       auto tid = txps[i];
       auto aux = auxs[i];
       double v = alphaIn[tid] * aux;
@@ -505,7 +507,7 @@ size_t markDegenerateClasses(
       ++numDropped;
       kv.first.setValid(false);
     } else {
-      for (size_t i = 0; i < txps.size(); ++i) {
+      for (size_t i = 0; i < groupSize; ++i) {
         auto tid = txps[i];
         available[tid] = true;
       }
@@ -791,7 +793,7 @@ void updateEqClassWeights(
           // The label of the equivalence class
           const TranscriptGroup& k = kv.first;
           // The size of the label
-          size_t classSize = k.txps.size();
+          size_t classSize = kv.second.weights.size();
           // The weights of the label
           TGValue& v = kv.second;
 
@@ -844,6 +846,10 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   bool useFSPD{sopt.useFSPD};
 
   bool useVBEM{sopt.useVBOpt};
+  bool useFMEM{sopt.useFMEMOpt};
+  bool useRankEqClasses{sopt.rankEqClasses};
+  size_t rangeCounts = sopt.useRangeClusterEqClasses;
+
   bool perTranscriptPrior{sopt.perTranscriptPrior};
   double priorValue{sopt.vbPrior};
   
@@ -918,7 +924,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
           // The label of the equivalence class
           const TranscriptGroup& k = kv.first;
           // The size of the label
-          size_t classSize = k.txps.size();
+          size_t classSize = kv.second.weights.size();
           // The weights of the label
           TGValue& v = kv.second;
 
@@ -947,8 +953,11 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
             v.posWeights[i] = 1.0 / el;
 
             // combined weight
-            v.combinedWeights.push_back(
-                v.count * v.weights[i].load() * v.posWeights[i].load());
+	    if(useRankEqClasses or rangeCounts>0)
+		v.combinedWeights.push_back(v.weights[i].load());
+	    else
+            	v.combinedWeights.push_back(
+                	v.count * v.weights[i].load() * v.posWeights[i].load());
             wsum += v.combinedWeights.back();
           }
 
@@ -1005,8 +1014,10 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
     if (useVBEM) {
       VBEMUpdate_(eqVec, transcripts, priorAlphas, totalLen, alphas, alphasPrime,
                   expTheta);
-    } else {
-      EMUpdate_(eqVec, transcripts, alphas, alphasPrime);
+    } else if (useFMEM){
+      EMUpdate_FM(eqVec, transcripts, alphas, alphasPrime);
+    }  else {
+      EMUpdate_(eqVec, transcripts, alphas, alphasPrime,sopt);
     }
 
     converged = true;
