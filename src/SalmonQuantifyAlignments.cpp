@@ -1324,6 +1324,14 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "a priori probability.")
     ("useVBOpt,v", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
                            "traditional EM algorithm for optimization in the batch passes.")
+    ("useFMEMOpt,v", po::bool_switch(&(sopt.useFMEMOpt))->default_value(false), "Use the Full Model EM rather than the "
+                           "equivalence class EM algorithm for optimization in the batch passes.")
+    ("useRangeClusterEqClasses", po::value<uint32_t>(&(sopt.useRangeClusterEqClasses))->default_value(0),
+      "Cluster each in equivalence class based on the range "
+      "conditional probabilites fall into.")
+    ("rankEqClasses", po::bool_switch(&(sopt.rankEqClasses))->default_value(false),
+      "Keep separate equivalence classes for each distinct "
+      "ordering of transcripts in the label.")
     ("perTranscriptPrior", po::bool_switch(&(sopt.perTranscriptPrior)), "The "
     "prior (either the default or the argument provided via --vbPrior) will "
     "be interpreted as a transcript-level prior (i.e. each transcript will "

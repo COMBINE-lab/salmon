@@ -75,6 +75,10 @@ struct SalmonOpts {
 
     bool rankEqClasses; // Keep a separate equivalence class for each ordering (by conditional probability) 
                         // of the the transcript labels 
+
+    uint32_t useRangeClusterEqClasses; // Cluster reads in each Eq Class based on the reads they fall into
+
+    bool useFMEMOpt; // Use Full Model EM instead of equivalence class EM in the batch passes
     
     bool useFSPD; // Learn a non-uniform start distribution
 
