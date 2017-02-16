@@ -476,7 +476,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 
           //aln.logProb = transcriptLogCount + auxProb + startPosProb;
 	  //If the factorization or FM is used, startPosProb is added here combinedWeights cannot be used 
-	  if(useRankEqClasses or useFMEM or rangeClusterEqClasses>0) {
+	  if(useFMEM /*useRankEqClasses or useFMEM or rangeClusterEqClasses>0*/) {
 		auxProb += startPosProb;
 	  	aln.logProb = transcriptLogCount + auxProb;
 	  } else	 

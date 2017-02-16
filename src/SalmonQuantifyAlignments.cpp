@@ -423,7 +423,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         // probability!
                         double auxProb = logFragProb + errLike + logAlignCompatProb;
 			//If FM or factorizations are used, startPosProb is added here and combinedWeights cannot be used
-	  		if(useRankEqClasses or useFMEM or rangeClusterEqClasses>0) {
+	  		if(useFMEM /*useRankEqClasses or useFMEM or rangeClusterEqClasses>0*/) {
 				auxProb += startPosProb;
 	  		} 	
                         // The overall mass of this transcript, which is used to
@@ -434,7 +434,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                               auxProb != LOG_0 and
                               startPosProb != LOG_0 ) {
 
-			      if(useRankEqClasses or useFMEM or rangeClusterEqClasses>0)
+			      if(useFMEM /*useRankEqClasses or useFMEM or rangeClusterEqClasses>0*/)
 	                         aln->logProb = transcriptLogCount + auxProb;
 			      else
                             	 aln->logProb = transcriptLogCount + auxProb + startPosProb;

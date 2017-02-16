@@ -129,7 +129,7 @@ void EMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
     const auto& auxs = txpGroupCombinedWeights[eqID];
 
     double denom = 0.0;
-    size_t groupSize = txps.size();
+    size_t groupSize = txpGroupCombinedWeights[eqID].size();
     // If this is a single-transcript group,
     // then it gets the full count.  Otherwise,
     // update according to our VBEM rule.
@@ -231,6 +231,9 @@ void VBEMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
     }
   }
 }
+
+
+
 
 /*
  * Use the "standard" EM algorithm over equivalence
@@ -380,8 +383,11 @@ void VBEMUpdate_(std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
       });
 }
 
-
-
+/*
+ * Use the "standard" EM algorithm over all reads
+ * to estimate the latent variables (alphaOut)
+ * given the current estimates (alphaIn).
+ */
 void EMUpdate_FM(std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
                std::vector<Transcript>& transcripts,
                const CollapsedEMOptimizer::VecType& alphaIn,
@@ -953,9 +959,9 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
             v.posWeights[i] = 1.0 / el;
 
             // combined weight
-	    if(useRankEqClasses or rangeCounts>0)
+	    /*if(useRankEqClasses or rangeCounts>0)
 		v.combinedWeights.push_back(v.weights[i].load());
-	    else
+	    else*/
             	v.combinedWeights.push_back(
                 	v.count * v.weights[i].load() * v.posWeights[i].load());
             wsum += v.combinedWeights.back();
