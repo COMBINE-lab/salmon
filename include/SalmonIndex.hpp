@@ -295,12 +295,13 @@ class SalmonIndex{
                   indexStream.close();
 
                   if (h.version() != salmon::requiredQuasiIndexVersion) {
-                    fmt::print(stderr, "I found a quasi-index with version {}, but I require {}",
-                               h.version(), salmon::requiredQuasiIndexVersion);
+		    logger_->critical("I found a quasi-index with version {}, but I require {}. "
+				      "Please re-index the reference.", h.version(), salmon::requiredQuasiIndexVersion);
+                    std::exit(1);
                   }
                   if (h.indexType() != IndexType::QUASI) {
-                    fmt::print(stderr, "The index {} does not appear to be of the "
-                                        "appropriate type (quasi)", indexStr);
+                    logger_->critical("The index {} does not appear to be of the "
+                                      "appropriate type (quasi)", indexStr);
                     std::exit(1);
                   }
 
