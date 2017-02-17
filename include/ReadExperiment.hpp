@@ -181,6 +181,9 @@ class ReadExperiment {
         return eqBuilder_;
     }
 
+    std::string  getIndexSeqHash() const { return salmonIndex_->seqHash(); }
+    std::string  getIndexNameHash() const { return salmonIndex_->nameHash(); }
+
     std::vector<Transcript>& transcripts() { return transcripts_; }
     const std::vector<Transcript>& transcripts() const { return transcripts_; }
 

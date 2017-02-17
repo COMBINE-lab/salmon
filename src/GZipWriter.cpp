@@ -362,6 +362,8 @@ bool GZipWriter::writeMeta(
       oa(cereal::make_nvp("eq_class_properties", props));
 
       oa(cereal::make_nvp("length_classes", experiment.getLengthQuantiles()));
+      oa(cereal::make_nvp("index_seq_hash", experiment.getIndexSeqHash()));
+      oa(cereal::make_nvp("index_name_hash", experiment.getIndexNameHash()));
       oa(cereal::make_nvp("num_bootstraps", numSamples));
       oa(cereal::make_nvp("num_processed", experiment.numObservedFragments()));
       oa(cereal::make_nvp("num_mapped", experiment.numMappedFragments()));

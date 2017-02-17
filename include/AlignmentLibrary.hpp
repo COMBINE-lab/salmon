@@ -215,6 +215,9 @@ class AlignmentLibrary {
         return eqBuilder_;
     }
 
+    std::string  getIndexSeqHash() const { return ""; }
+    std::string  getIndexNameHash() const { return ""; }
+
     // TODO: Make same as mapping-based
     void updateTranscriptLengthsAtomic(std::atomic<bool>& done) {
         if (sl_.try_lock()) {

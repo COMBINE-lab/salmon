@@ -42,7 +42,7 @@ using PerfectHash = FrugalBooMap<uint64_t, rapmap::utils::SAInterval<IndexT>>;
 class SalmonIndex{
         public:
             SalmonIndex(std::shared_ptr<spdlog::logger>& logger, SalmonIndexType indexType) :
-                loaded_(false), versionInfo_(0, false, 0, indexType), logger_(logger) {}
+                loaded_(false), versionInfo_(0, false, 0, indexType), logger_(logger), seqHash_(""), nameHash_("") {}
 
             ~SalmonIndex() {
                 if (idx_) { bwa_idx_destroy(idx_); }
@@ -189,6 +189,8 @@ class SalmonIndex{
 	      }
 	    }
 
+	std::string seqHash() const { return seqHash_; }
+	std::string nameHash() const { return nameHash_; }
 
         private:
             bool buildFMDIndex_(boost::filesystem::path indexDir,
@@ -302,6 +304,9 @@ class SalmonIndex{
                     std::exit(1);
                   }
 
+		  seqHash_ = h.seqHash();
+		  nameHash_ = h.nameHash();
+
                   // Is the quasi-index using a perfect hash
                   perfectHashQuasi_ = h.perfectHash();
 
@@ -364,6 +369,8 @@ class SalmonIndex{
           bwaidx_t *idx_{nullptr};
           KmerIntervalMap auxIdx_;
           std::shared_ptr<spdlog::logger> logger_;
+	  std::string seqHash_;
+	  std::string nameHash_;
 };
 
 #endif //__SALMON_INDEX_HPP
