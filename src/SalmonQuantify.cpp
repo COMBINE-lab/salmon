@@ -2509,7 +2509,7 @@ int salmonQuantify(int argc, char* argv[]) {
       auto hstring = R"(
 Quant
 ==========
-Perform streaming mapping-based estimation of
+Perform dual-phase, mapping-based estimation of
 transcript abundance from RNA-seq reads
 )";
       std::cerr << hstring << std::endl;
@@ -2540,18 +2540,16 @@ transcript abundance from RNA-seq reads
         fmt::print(stderr, "{}", commentString);
     }
 
+    sopt.quantMode = SalmonQuantMode::MAP;
     // TODO: Fix fragment start pos dist
     // sopt.useFSPD = false;
     bool optionsOK =
         salmon::utils::processQuantOptions(sopt, vm, numBiasSamples);
     if (!optionsOK) {
-      std::exit(1);
-    }
-    bool optionsValidate =
-      salmon::utils::validateOptions(sopt);
-    if (!optionsValidate) {
-      sopt.jointLog->flush();
-      spdlog::drop_all();
+      if (sopt.jointLog) {
+        sopt.jointLog->flush();
+        spdlog::drop_all();
+      }
       std::exit(1);
     }
  
@@ -2560,25 +2558,20 @@ transcript abundance from RNA-seq reads
     auto indexDirectory = sopt.indexDirectory;
     auto outputDirectory = sopt.outputDirectory;
     bool greedyChain = true;
-    
-    // If the user is enabling *just* GC bias correction
-    // i.e. without seq-specific bias correction, then disable
-    // the conditional model.
-    if (sopt.gcBiasCorrect and !sopt.biasCorrect) {
-      sopt.numConditionalGCBins = 1;
-    }
 
     jointLog->info("parsing read library format");
 
+    // ==== Library format processing ===
     vector<ReadLibrary> readLibraries =
         salmon::utils::extractReadLibraries(orderedOptions);
-    
+
     if (readLibraries.size() == 0) {
         jointLog->error("Failed to successfully parse any complete read libraries."
                         " Please make sure you provided arguments properly to -1, -2 (for paired-end libraries)"
                         " or -r (for single-end libraries).");
         std::exit(1);
     }
+    // ==== END: Library format processing ===
 
     SalmonIndexVersionInfo versionInfo;
     boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
@@ -2602,8 +2595,8 @@ transcript abundance from RNA-seq reads
         sopt.biasCorrect = false;
         sopt.gcBiasCorrect = false;
         jointLog->warn(
-            "Sequence-specific or fragment GC bias correction require "
-            "use of the quasi-index. Disabling all bias correction");
+                       "Sequence-specific or fragment GC bias correction require "
+                       "use of the quasi-index. Disabling all bias correction");
       }
       quantifyLibrary<SMEMAlignment>(experiment, greedyChain, memOptions, sopt,
                                      coverageThresh, sopt.numThreads);
@@ -2630,21 +2623,7 @@ transcript abundance from RNA-seq reads
     }
 
     // Write out information about the command / run
-    {
-      bfs::path cmdInfoPath = outputDirectory / "cmd_info.json";
-      std::ofstream os(cmdInfoPath.string());
-      cereal::JSONOutputArchive oa(os);
-      oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
-      for (auto& opt : orderedOptions.options) {
-        if (opt.value.size() == 1) {
-          oa(cereal::make_nvp(opt.string_key, opt.value.front()));
-        } else {
-          oa(cereal::make_nvp(opt.string_key, opt.value));
-        }
-      }
-      // explicitly ouput the aux directory as well
-      oa(cereal::make_nvp("auxDir", sopt.auxDir));
-    }
+    salmon::utils::writeCmdInfo(sopt, orderedOptions);
 
     GZipWriter gzw(outputDirectory, jointLog);
 
@@ -2700,7 +2679,7 @@ transcript abundance from RNA-seq reads
         //sampler.sampleMultipleChains(experiment, sopt, bsWriter, sopt.numGibbsSamples);
         sampler.sample(experiment, sopt, bsWriter, sopt.numGibbsSamples);
       if (!sampleSuccess) {
-        jointLog->error("Encountered error during Gibb sampling .\n"
+        jointLog->error("Encountered error during Gibbs sampling.\n"
                         "This should not happen.\n"
                         "Please file a bug report on GitHub.\n");
         return 1;
@@ -2726,24 +2705,12 @@ transcript abundance from RNA-seq reads
       }
     }
 
-    // Now create a subdirectory for any parameters of interest
-    bfs::path paramsDir = outputDirectory / "libParams";
-    if (!boost::filesystem::exists(paramsDir)) {
-      if (!boost::filesystem::create_directories(paramsDir)) {
-        fmt::print(stderr, "{}ERROR{}: Could not create "
-                           "output directory for experimental parameter "
-                           "estimates [{}]. exiting.",
-                   ioutils::SET_RED, ioutils::RESET_COLOR, paramsDir);
-        std::exit(-1);
-      }
-    }
-
     bfs::path libCountFilePath = outputDirectory / "lib_format_counts.json";
     experiment.summarizeLibraryTypeCounts(libCountFilePath);
 
     // Test writing out the fragment length distribution
     if (!sopt.noFragLengthDist) {
-      bfs::path distFileName = paramsDir / "flenDist.txt";
+      bfs::path distFileName = sopt.paramsDirectory / "flenDist.txt";
       {
         std::unique_ptr<std::FILE, int (*)(std::FILE*)> distOut(
             std::fopen(distFileName.c_str(), "w"), std::fclose);
@@ -2765,23 +2732,23 @@ transcript abundance from RNA-seq reads
     }
 
     if (sopt.writeUnmappedNames) {
-       auto l = sopt.unmappedLog.get();
+      auto l = sopt.unmappedLog.get();
       // If the logger was created, then flush it and
       // close the associated file.
       if (l) {
-	l->flush();
-	if (sopt.unmappedFile) { sopt.unmappedFile->close(); }
+        l->flush();
+        if (sopt.unmappedFile) { sopt.unmappedFile->close(); }
       }
     }
     
     if (sopt.writeOrphanLinks) {
-        auto l = sopt.orphanLinkLog.get();
-        // If the logger was created, then flush it and
-        // close the associated file.
-        if (l) {
-            l->flush();
-            if (sopt.orphanLinkFile) { sopt.orphanLinkFile->close(); }
-        }
+      auto l = sopt.orphanLinkLog.get();
+      // If the logger was created, then flush it and
+      // close the associated file.
+      if (l) {
+        l->flush();
+        if (sopt.orphanLinkFile) { sopt.orphanLinkFile->close(); }
+      }
     }
 
     // if we wrote quasimappings, flush that buffer

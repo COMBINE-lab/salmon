@@ -1288,154 +1288,29 @@ std::string getCurrentTimeAsString() {
     return time;
 }
 
-/**
- * Validate the options regardless of the mode (quasi or alignment). 
- * Assumes a logger already exists.
- **/
-bool validateOptions(SalmonOpts& sopt) {
-
-  // The growing list of thou shalt nots
-
-  /**
-  Since bias correction is dependent on
-  modifying effective lengths, we can not
-  allow it if we are not employing any length
-  correction.
-  **/
-
-  /** Warnings, not errors **/
-  if (sopt.numBurninFrags < sopt.numPreBurninFrags) {
-    sopt.jointLog->warn("You set the number of burnin fragments (--numAuxModelSamples) to be less than the number of \n"
-                   "pre-burnin fragments (--numPreAuxModelSamples), but it must be at least as large.  The \n"
-                   "number of pre-burnin fragments and burnin fragments is being set to the same value "
-                   "({})", sopt.numBurninFrags);
-    sopt.numPreBurninFrags = sopt.numBurninFrags;
+bool validateOptionsAlignment_(SalmonOpts& sopt) {
+  if (!sopt.sampleOutput and sopt.sampleUnaligned) {
+    sopt.jointLog->warn("WARNING: you passed in the (-u/--sampleUnaligned) flag, but did not request a sampled "
+                        "output file (-s/--sampleOut).  This flag will be ignored!\n");
   }
+  return true;
+}
 
-  /** Errors **/
-  if (sopt.noLengthCorrection) {
-    bool anyBiasCorrect =
-      sopt.gcBiasCorrect or sopt.biasCorrect or sopt.posBiasCorrect;
-    if (anyBiasCorrect) {
-      sopt.jointLog->critical("Since bias correction relies on modifying "
-                              "effective lengths, you cannot enable bias "
-                              "correction simultaneously with the --noLengthCorrection "
-                              "option.");
-      return false;
-    }
-  }
-
-  if (sopt.dontExtrapolateCounts) { // If the user has provided this option, (s)he must be using Gibbs sampling
-    if (sopt.numGibbsSamples == 0) {
-      sopt.jointLog->critical("You passed the --dontExtrapolateCounts flag, but are not using Gibbs sampling. "
-                              "The fomer implies the latter.  Please enable Gibbs sampling to use this flag.");
-      return false;
-    }
-  }
-
+bool validateOptionsMapping_(SalmonOpts& sopt) {
   return true;
 }
 
 /**
- * Validate the options for quasi-mapping-based salmon, and create the necessary
- *output directories and
- * logging infrastructure.
+ * In mapping mode, depending on what the user has requested, we may have to write out
+ * some files.  Prepare loggers so we can do this asynchronously.
  **/
-bool processQuantOptions(SalmonOpts& sopt,
-                         boost::program_options::variables_map& vm,
-                         int32_t numBiasSamples) {
+bool createAuxMapLoggers_(SalmonOpts& sopt, boost::program_options::variables_map& vm) {
   using std::cerr;
   using std::vector;
   using std::string;
   namespace bfs = boost::filesystem;
-  namespace po = boost::program_options;
-  // Set the atomic variable numBiasSamples from the local version
-  sopt.numBiasSamples.store(numBiasSamples);
 
-  // Get the time at the start of the run
-  sopt.runStartTime = getCurrentTimeAsString();
-
-  // Verify the geneMap before we start doing any real work.
-  bfs::path geneMapPath;
-  if (vm.count("geneMap")) {
-    // Make sure the provided file exists
-    geneMapPath = vm["geneMap"].as<std::string>();
-    if (!bfs::exists(geneMapPath)) {
-      std::cerr << "Could not find transcript <=> gene map file " << geneMapPath
-                << "\n";
-      std::cerr << "Exiting now: please either omit the \'geneMap\' option or "
-                   "provide a valid file\n";
-      return false;
-    }
-    sopt.geneMapPath = geneMapPath;
-  }
-
-  bfs::path outputDirectory(vm["output"].as<std::string>());
-  bfs::create_directories(outputDirectory);
-  if (!(bfs::exists(outputDirectory) and bfs::is_directory(outputDirectory))) {
-    std::cerr << "Couldn't create output directory " << outputDirectory << "\n";
-    std::cerr << "exiting\n";
-    return false;
-  }
-
-  bfs::path indexDirectory(vm["index"].as<string>());
-  bfs::path logDirectory = outputDirectory / "logs";
-
-  sopt.indexDirectory = indexDirectory;
-  sopt.outputDirectory = outputDirectory;
-
-  // Create the logger and the logging directory
-  bfs::create_directories(logDirectory);
-  if (!(bfs::exists(logDirectory) and bfs::is_directory(logDirectory))) {
-    std::cerr << "Couldn't create log directory " << logDirectory << "\n";
-    std::cerr << "exiting\n";
-    return false;
-  }
-
-  if (!sopt.quiet) {
-    std::cerr << "Logs will be written to " << logDirectory.string() << "\n";
-  }
-
-  // Metagenomic option
-  if (sopt.meta) {
-      sopt.initUniform = true;
-      sopt.noRichEqClasses = true;
-      //sopt.incompatPrior = salmon::math::LOG_0;
-      //sopt.ignoreIncompat = true;
-  }
-
-  // Determine what we'll do with quasi-mapping results
-  bool writeQuasimappings = (sopt.qmFileName != "");
-
-  bfs::path logPath = logDirectory / "salmon_quant.log";
-  // must be a power-of-two
-  size_t max_q_size = 2097152;
-
-  // make it larger if we're writing mappings or
-  // unmapped names.
-  std::streambuf* qmBuf;
-  if (writeQuasimappings or sopt.writeUnmappedNames or sopt.writeOrphanLinks) {
-      max_q_size = 16777216;
-  }
-
-  spdlog::set_async_mode(max_q_size);
-
-  auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(
-      logPath.string());
-  auto rawConsoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
-  auto consoleSink =
-      std::make_shared<spdlog::sinks::ansicolor_sink>(rawConsoleSink);
-  auto consoleLog = spdlog::create("stderrLog", {consoleSink});
-  auto fileLog = spdlog::create("fileLog", {fileSink});
-  auto jointLog = spdlog::create("jointLog", {fileSink, consoleSink});
-
-  // If we're being quiet, the only emit errors.
-  if (sopt.quiet) {
-    jointLog->set_level(spdlog::level::err);
-  }
-
-  sopt.jointLog = jointLog;
-  sopt.fileLog = fileLog;
+  auto jointLog = sopt.jointLog;
 
   // Create the file (and logger) for outputting unmapped reads, if the user has
   // asked for it.
@@ -1449,9 +1324,6 @@ bool processQuantOptions(SalmonOpts& sopt,
       bfs::path unmappedNameFile = auxDir / "unmapped_names.txt";
       std::ofstream* outFile = new std::ofstream(unmappedNameFile.string());
 
-      // Must be a power of 2
-      //size_t queueSize{268435456};
-      //spdlog::set_async_mode(queueSize);
       auto outputSink =
           std::make_shared<spdlog::sinks::ostream_sink_mt>(*outFile);
 
@@ -1499,95 +1371,295 @@ bool processQuantOptions(SalmonOpts& sopt,
     }
   }
 
+  // Determine what we'll do with quasi-mapping results
+  bool writeQuasimappings = (sopt.qmFileName != "");
+
   if (writeQuasimappings) {
-      // output to stdout
-      if (sopt.qmFileName == "-") {
-          qmBuf = std::cout.rdbuf();
-      } else { // output to the requested path, making the directory if it doesn't exist
-	// get the absolute file path
-	sopt.qmFileName = boost::filesystem::absolute(sopt.qmFileName).string();
-	  // get the parent directory
-	  bfs::path qmDir = boost::filesystem::path(sopt.qmFileName).parent_path();
-          // if it's not already a directory that exists
-          bool qmDirSuccess = boost::filesystem::is_directory(qmDir);
-          // try to create it
-          if (!qmDirSuccess) {
-              qmDirSuccess = boost::filesystem::create_directories(qmDir);
-          }
-          // if the directory already existed, or we created it successfully, open the file
-          if (qmDirSuccess) {
-              sopt.qmFile.open(sopt.qmFileName);
-              qmBuf = sopt.qmFile.rdbuf();
-          } else {
-              bfs::path qmFileName = boost::filesystem::path(sopt.qmFileName).filename();
-              jointLog->error("Couldn't create requested directory {} in which "
-                              "to place the mapping output {}", qmDir.string(), qmFileName.string());
-              return false;
-          }
+    std::streambuf* qmBuf{nullptr};
+    // output to stdout
+    if (sopt.qmFileName == "-") {
+      qmBuf = std::cout.rdbuf();
+    } else { // output to the requested path, making the directory if it doesn't exist
+      // get the absolute file path
+      sopt.qmFileName = boost::filesystem::absolute(sopt.qmFileName).string();
+      // get the parent directory
+      bfs::path qmDir = boost::filesystem::path(sopt.qmFileName).parent_path();
+      // if it's not already a directory that exists
+      bool qmDirSuccess = boost::filesystem::is_directory(qmDir);
+      // try to create it
+      if (!qmDirSuccess) {
+        qmDirSuccess = boost::filesystem::create_directories(qmDir);
       }
-      // Now set the output stream to the buffer, which is
-      // either std::cout, or a file.
-      sopt.qmStream.reset(new std::ostream(qmBuf));
-
-      auto outputSink = std::make_shared<spdlog::sinks::ostream_sink_mt>(*(sopt.qmStream.get()));
-      sopt.qmLog = std::make_shared<spdlog::logger>("qmStream", outputSink);
-      sopt.qmLog->set_pattern("%v");
-  }
-
-  // Verify that no inconsistent options were provided
-  if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {
-    jointLog->error("You cannot perform both Gibbs sampling and bootstrapping. "
-                    "Please choose one.");
-    jointLog->flush();
-    return false;
-  }
-  if (sopt.numGibbsSamples > 0) {
-    if (! sopt.thinningFactor >= 1) {
-      jointLog->error("The Gibbs sampling thinning factor (--thinningFactor) "
-                      "cannot be smaller than 1.");
-      jointLog->flush();
-      return false;
+      // if the directory already existed, or we created it successfully, open the file
+      if (qmDirSuccess) {
+        sopt.qmFile.open(sopt.qmFileName);
+        qmBuf = sopt.qmFile.rdbuf();
+      } else {
+        bfs::path qmFileName = boost::filesystem::path(sopt.qmFileName).filename();
+        jointLog->error("Couldn't create requested directory {} in which "
+                        "to place the mapping output {}", qmDir.string(), qmFileName.string());
+        return false;
+      }
     }
-  }
+    // Now set the output stream to the buffer, which is
+    // either std::cout, or a file.
+    sopt.qmStream.reset(new std::ostream(qmBuf));
 
-  {
-    if (sopt.noFragLengthDist and !sopt.noEffectiveLengthCorrection) {
-      jointLog->info(
-          "Error: You cannot enable --noFragLengthDist without "
-          "also enabling --noEffectiveLengthCorrection; exiting!\n");
-      jointLog->flush();
-      return false;
-    }
-  }
-
-  /** WARN about any deprecated options! **/
-  //
-  if (sopt.useFSPD) {
-    jointLog->error("The --useFSPD option has been deprecated.  "
-		    "Positional bias modeling will return under the --posBias flag in a future release. "
-		    "For the time being, please remove the --useFSPD flag from your command.");
-    jointLog->flush();
-    return false;
-  }
-
-  // maybe arbitrary, but if it's smaller than this, consider it
-  // equal to LOG_0.
-  if (sopt.incompatPrior < 1e-320 or sopt.incompatPrior == 0.0) {
-      jointLog->info("Fragment incompatibility prior below threshold.  Incompatible fragments will be ignored.");
-      sopt.incompatPrior = salmon::math::LOG_0;
-      sopt.ignoreIncompat = true;
-  } else {
-      sopt.incompatPrior = std::log(sopt.incompatPrior);
-      sopt.ignoreIncompat = false;
-  }
-
-  // Dumping equivalnce class weights implies dumping equivalence classes
-  if (sopt.dumpEqWeights and !sopt.dumpEq) {
-    sopt.dumpEq = true;
-    jointLog->info("You specified --dumpEqWeights, which implies --dumpEq; that option has been enabled.");
+    auto outputSink = std::make_shared<spdlog::sinks::ostream_sink_mt>(*(sopt.qmStream.get()));
+    sopt.qmLog = std::make_shared<spdlog::logger>("qmStream", outputSink);
+    sopt.qmLog->set_pattern("%v");
   }
   return true;
 }
+
+
+/**
+ * Validate the options for quasi-mapping-based salmon, and create the necessary
+ *output directories and
+ * logging infrastructure.
+ **/
+bool processQuantOptions(SalmonOpts& sopt,
+                         boost::program_options::variables_map& vm,
+                         int32_t numBiasSamples) {
+  using std::cerr;
+  using std::vector;
+  using std::string;
+  namespace bfs = boost::filesystem;
+  namespace po = boost::program_options;
+  // Set the atomic variable numBiasSamples from the local version
+  sopt.numBiasSamples.store(numBiasSamples);
+
+  // Get the time at the start of the run
+  sopt.runStartTime = getCurrentTimeAsString();
+
+  // Verify the geneMap before we start doing any real work.
+  bfs::path geneMapPath;
+  if (vm.count("geneMap")) {
+    // Make sure the provided file exists
+    geneMapPath = vm["geneMap"].as<std::string>();
+    if (!bfs::exists(geneMapPath)) {
+      std::cerr << "ERROR: Could not find transcript <=> gene map file " << geneMapPath
+                << "\n";
+      std::cerr << "Exiting now: please either omit the \'geneMap\' option or "
+                   "provide a valid file\n";
+      return false;
+    }
+    sopt.geneMapPath = geneMapPath;
+  }
+
+  /**
+   * Create the output  and log directories
+   **/
+  bfs::path outputDirectory(vm["output"].as<std::string>());
+  // If the path exists
+  if (bfs::exists(outputDirectory)) {
+    // If it is not a directory, then complain
+    if (!bfs::is_directory(outputDirectory)) {
+      std::stringstream errstr;
+      errstr << "Path [" << outputDirectory << "] already exists "
+             << "and is not a directory.\n"
+             << "Please either remove this file or choose another "
+             << "output path.\n";
+      std::cerr << errstr.str();
+      return false;
+    }
+  } else { // If the path doesn't exist, then create it
+    if (!bfs::create_directories(outputDirectory)) { // creation failed for some reason
+      std::stringstream errstr;
+      errstr << "Could not create output directory ["
+             << outputDirectory << "], please check that it is valid.";
+      std::cerr << errstr.str();
+      return false;
+    }
+  }
+  // set the output directory
+  sopt.outputDirectory = outputDirectory;
+  bfs::path logDirectory = outputDirectory / "logs";
+
+  // Create the logger and the logging directory
+  bfs::create_directories(logDirectory);
+  if (!(bfs::exists(logDirectory) and bfs::is_directory(logDirectory))) {
+    std::cerr << "Couldn't create log directory " << logDirectory << "\n";
+    std::cerr << "exiting\n";
+    return false;
+  }
+
+  if (!sopt.quiet) {
+    std::cerr << "Logs will be written to " << logDirectory.string() << "\n";
+  }
+
+  // Now create a subdirectory for any parameters of interest
+  bfs::path paramsDir = outputDirectory / "libParams";
+  if (!boost::filesystem::exists(paramsDir)) {
+    if (!boost::filesystem::create_directories(paramsDir)) {
+      fmt::print(stderr, "{}ERROR{}: Could not create "
+                 "output directory for experimental parameter "
+                 "estimates [{}]. exiting.",
+                 ioutils::SET_RED, ioutils::RESET_COLOR, paramsDir);
+      return false;
+    }
+  }
+  sopt.paramsDirectory = paramsDir;
+
+  // Metagenomic option
+  if (sopt.meta) {
+      sopt.initUniform = true;
+      sopt.noRichEqClasses = true;
+      //sopt.incompatPrior = salmon::math::LOG_0;
+      //sopt.ignoreIncompat = true;
+  }
+
+  //  Size for the logger buffer
+  size_t max_q_size = 2097152;
+  bfs::path logPath = logDirectory / "salmon_quant.log";
+
+  if (sopt.quantMode == SalmonQuantMode::MAP) {
+    bfs::path indexDirectory(vm["index"].as<string>());
+    sopt.indexDirectory = indexDirectory;
+
+    // Determine what we'll do with quasi-mapping results
+    bool writeQuasimappings = (sopt.qmFileName != "");
+
+    // make it larger if we're writing mappings or
+    // unmapped names.
+    if (writeQuasimappings or sopt.writeUnmappedNames or sopt.writeOrphanLinks) {
+      max_q_size = 16777216;
+    }
+  }
+
+  spdlog::set_async_mode(max_q_size);
+  auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(
+      logPath.string());
+  auto rawConsoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
+  auto consoleSink =
+      std::make_shared<spdlog::sinks::ansicolor_sink>(rawConsoleSink);
+  auto consoleLog = spdlog::create("stderrLog", {consoleSink});
+  auto fileLog = spdlog::create("fileLog", {fileSink});
+  auto jointLog = spdlog::create("jointLog", {fileSink, consoleSink});
+
+  // If we're being quiet, then only emit errors.
+  if (sopt.quiet) {
+    jointLog->set_level(spdlog::level::err);
+  }
+
+  sopt.jointLog = jointLog;
+  sopt.fileLog = fileLog;
+
+  if (sopt.quantMode == SalmonQuantMode::MAP) {
+    bool auxLoggersOK = createAuxMapLoggers_(sopt, vm);
+    if (!auxLoggersOK) { return auxLoggersOK; }
+  }
+
+
+  /**
+   *  SETTING CONDITIONAL OPTIONS
+   *
+   *
+   **/
+
+  // If the user is enabling *just* GC bias correction
+  // i.e. without seq-specific bias correction, then disable
+  // the conditional model.
+  if (sopt.gcBiasCorrect and !sopt.biasCorrect) {
+    sopt.numConditionalGCBins = 1;
+  }
+
+
+  // The growing list of thou shalt nots
+
+  /** Warnings, not errors **/
+  {
+    if (sopt.numBurninFrags < sopt.numPreBurninFrags) {
+      sopt.jointLog->warn("You set the number of burnin fragments (--numAuxModelSamples) to be less than the number of \n"
+                          "pre-burnin fragments (--numPreAuxModelSamples), but it must be at least as large.  The \n"
+                          "number of pre-burnin fragments and burnin fragments is being set to the same value "
+                          "({})", sopt.numBurninFrags);
+      sopt.numPreBurninFrags = sopt.numBurninFrags;
+    }
+
+    // maybe arbitrary, but if it's smaller than this, consider it
+    // equal to LOG_0.
+    if (sopt.incompatPrior < 1e-320 or sopt.incompatPrior == 0.0) {
+      jointLog->info("Fragment incompatibility prior below threshold.  Incompatible fragments will be ignored.");
+      sopt.incompatPrior = salmon::math::LOG_0;
+      sopt.ignoreIncompat = true;
+    } else {
+      sopt.incompatPrior = std::log(sopt.incompatPrior);
+      sopt.ignoreIncompat = false;
+    }
+
+    // Dumping equivalnce class weights implies dumping equivalence classes
+    if (sopt.dumpEqWeights and !sopt.dumpEq) {
+      sopt.dumpEq = true;
+      jointLog->info("You specified --dumpEqWeights, which implies --dumpEq; that option has been enabled.");
+    }
+  }
+
+  /** Errors -- will prevent Salmon from running **/
+  {
+    if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {
+      jointLog->error("You cannot perform both Gibbs sampling and bootstrapping. "
+                      "Please choose one.");
+      jointLog->flush();
+      return false;
+    }
+    if (sopt.numGibbsSamples > 0) {
+      if (! sopt.thinningFactor >= 1) {
+        jointLog->error("The Gibbs sampling thinning factor (--thinningFactor) "
+                        "cannot be smaller than 1.");
+        jointLog->flush();
+        return false;
+      }
+    }
+
+    if (sopt.useFSPD) {
+      jointLog->error("The --useFSPD option has been deprecated.  "
+                      "Positional bias modeling will return under the --posBias flag in a future release. "
+                      "For the time being, please remove the --useFSPD flag from your command.");
+      jointLog->flush();
+      return false;
+    }
+
+    if (sopt.noFragLengthDist and !sopt.noEffectiveLengthCorrection) {
+      jointLog->info(
+                     "Error: You cannot enable --noFragLengthDist without "
+                     "also enabling --noEffectiveLengthCorrection; exiting!\n");
+      jointLog->flush();
+      return false;
+    }
+
+    if (sopt.noLengthCorrection) {
+      bool anyBiasCorrect =
+        sopt.gcBiasCorrect or sopt.biasCorrect or sopt.posBiasCorrect;
+      if (anyBiasCorrect) {
+        sopt.jointLog->critical("Since bias correction relies on modifying "
+                                "effective lengths, you cannot enable bias "
+                                "correction simultaneously with the --noLengthCorrection "
+                                "option.");
+        return false;
+      }
+    }
+
+    if (sopt.dontExtrapolateCounts) { // If the user has provided this option, (s)he must be using Gibbs sampling
+      if (sopt.numGibbsSamples == 0) {
+        sopt.jointLog->critical("You passed the --dontExtrapolateCounts flag, but are not using Gibbs sampling. "
+                                "The fomer implies the latter.  Please enable Gibbs sampling to use this flag.");
+        return false;
+      }
+    }
+  }
+
+  // Validation that is different for alignment and mapping based modes.
+  bool perModeValidate{true};
+  if (sopt.quantMode == SalmonQuantMode::ALIGN) {
+    perModeValidate = validateOptionsAlignment_(sopt);
+  } else if (sopt.quantMode == SalmonQuantMode::MAP) {
+    perModeValidate = validateOptionsMapping_(sopt);
+  }
+
+  return perModeValidate;
+}
+
 
 /**
  * Computes (and returns) new effective lengths for the transcripts

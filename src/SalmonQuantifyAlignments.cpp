@@ -1123,7 +1123,6 @@ bool quantifyLibrary(
 
 template <typename ReadT>
 bool processSample(AlignmentLibrary<ReadT>& alnLib,
-                   const std::string& runStartTime,
                    size_t requiredObservations,
                    SalmonOpts& sopt,
                    boost::filesystem::path outputDirectory) {
@@ -1424,13 +1423,18 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         po::store(orderedOptions, vm);
 
         if (vm.count("help")) {
-            std::cerr << "Salmon quant (alignment-based)\n";
-            std::cerr << visible << std::endl;
-            std::exit(0);
+          auto hstring = R"(
+Quant
+==========
+Perform dual-phase, alignment-based estimation of
+transcript abundance from RNA-seq reads
+)";
+          std::cerr << hstring << std::endl;
+          std::cerr << visible << std::endl;
+          std::exit(0);
         }
-        po::notify(vm);
 
-        sopt.alnMode = true;
+        po::notify(vm);
 
         if (numThreads < 2) {
             fmt::print(stderr, "salmon requires at least 2 threads --- "
@@ -1446,12 +1450,6 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
             std::exit(1);
         }
 
-        // Metagenomic option
-        if (sopt.meta) {
-            sopt.initUniform = true;
-            sopt.noRichEqClasses = true;
-        }
-
         std::stringstream commentStream;
         commentStream << "# salmon (alignment-based) v" << salmon::version << "\n";
         commentStream << "# [ program ] => salmon \n";
@@ -1464,205 +1462,71 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
             commentStream << " }\n";
         }
         std::string commentString = commentStream.str();
-        fmt::print(stderr, "{}", commentString);
-
-        // TODO: Fix fragment start pos dist
-        // sopt.useFSPD = false;
-
-        // Set the atomic variable numBiasSamples from the local version
-        sopt.numBiasSamples.store(numBiasSamples);
-	
-        // Get the time at the start of the run
-        std::time_t result = std::time(NULL);
-        std::string runStartTime(std::asctime(std::localtime(&result)));
-        runStartTime.pop_back(); // remove the newline
-
-        // Verify the geneMap before we start doing any real work.
-        bfs::path geneMapPath;
-        if (vm.count("geneMap")) {
-            // Make sure the provided file exists
-            geneMapPath = vm["geneMap"].as<std::string>();
-            if (!bfs::exists(geneMapPath)) {
-                fmt::print(stderr, "Could not find transcript <=> gene map file {} \n"
-                           "Exiting now; please either omit the \'geneMap\' option or "
-                           "provide a valid file\n", geneMapPath);
-                std::exit(1);
-            }
+        if (!sopt.quiet) {
+          fmt::print(stderr, "{}", commentString);
         }
 
+        sopt.alnMode = true;
+        sopt.quantMode = SalmonQuantMode::ALIGN;
+        // TODO: Fix fragment start pos dist
+        // sopt.useFSPD = false;
+        bool optionsOK =
+          salmon::utils::processQuantOptions(sopt, vm, numBiasSamples);
+        if (!optionsOK) {
+          if (sopt.jointLog) {
+            sopt.jointLog->flush();
+            spdlog::drop_all();
+          }
+          std::exit(1);
+        }
+
+        auto fileLog = sopt.fileLog;
+        auto jointLog = sopt.jointLog;
+        auto indexDirectory = sopt.indexDirectory;
+        auto outputDirectory = sopt.outputDirectory;
+
+        // ==== Library format processing ===
         vector<string> alignmentFileNames = vm["alignments"].as<vector<string>>();
         vector<bfs::path> alignmentFiles;
         for (auto& alignmentFileName : alignmentFileNames) {
-            bfs::path alignmentFile(alignmentFileName);
-            if (!bfs::exists(alignmentFile)) {
-                std::stringstream ss;
-                ss << "The provided alignment file: " << alignmentFile <<
-                    " does not exist!\n";
-                throw std::invalid_argument(ss.str());
-            } else {
-                alignmentFiles.push_back(alignmentFile);
-            }
-        }
-	
-	// Just so we have the variable around
-	LibraryFormat libFmt(ReadType::PAIRED_END, ReadOrientation::TOWARD, ReadStrandedness::U);
-	// Get the library format string
-        std::string libFmtStr = vm["libType"].as<std::string>();
-
-	// If we're auto-detecting, set things up appropriately
-	bool autoDetectFmt = (libFmtStr == "a" or libFmtStr == "A");//(autoTypes.find(libFmtStr) != autoTypes.end());
-	if (autoDetectFmt) {
-
-	  bool isPairedEnd = salmon::utils::peekBAMIsPaired(alignmentFiles.front());
-	  
-	  if (isPairedEnd) {
-	    libFmt = LibraryFormat(ReadType::PAIRED_END, ReadOrientation::TOWARD, ReadStrandedness::U);
-	  } else {
-	    libFmt = LibraryFormat(ReadType::SINGLE_END, ReadOrientation::NONE, ReadStrandedness::U);
-	  }
-	} else { // Parse the provided type
-	  libFmt = salmon::utils::parseLibraryFormatStringNew(libFmtStr);
-	}
-
-        if (libFmt.check()) {
-            std::cerr << libFmt << "\n";
-        } else {
+          bfs::path alignmentFile(alignmentFileName);
+          if (!bfs::exists(alignmentFile)) {
             std::stringstream ss;
-            ss << libFmt << " is invalid!";
+            ss << "The provided alignment file: " << alignmentFile <<
+              " does not exist!\n";
             throw std::invalid_argument(ss.str());
-        }
-
-        bfs::path outputDirectory(vm["output"].as<std::string>());
-        // If the path exists
-        if (bfs::exists(outputDirectory)) {
-            // If it is not a directory, then complain
-            if (!bfs::is_directory(outputDirectory)) {
-                std::stringstream errstr;
-                errstr << "Path [" << outputDirectory << "] already exists "
-                       << "and is not a directory.\n"
-                       << "Please either remove this file or choose another "
-                       << "output path.\n";
-                throw std::invalid_argument(errstr.str());
-            }
-        } else { // If the path doesn't exist, then create it
-            if (!bfs::create_directories(outputDirectory)) { // creation failed for some reason
-                std::stringstream errstr;
-                errstr << "Could not create output directory ["
-                       << outputDirectory << "], please check that it is valid.";
-                throw std::invalid_argument(errstr.str());
-            }
-        }
-        // set the output directory
-        sopt.outputDirectory = outputDirectory;
-
-
-        bfs::path logDirectory = outputDirectory / "logs";
-
-        // Create the logger and the logging directory
-        bfs::create_directories(logDirectory);
-        if (!(bfs::exists(logDirectory) and bfs::is_directory(logDirectory))) {
-            std::cerr << "Couldn't create log directory " << logDirectory << "\n";
-            std::cerr << "exiting\n";
-            std::exit(1);
-        }
-	if (!sopt.quiet) {
-	  std::cerr << "Logs will be written to " << logDirectory.string() << "\n";
-	}
-
-        bfs::path logPath = logDirectory / "salmon.log";
-        size_t max_q_size = 2097152;
-        spdlog::set_async_mode(max_q_size);
-
-        auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(logPath.string(), true);
-        auto rawConsoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
-        auto consoleSink =
-          std::make_shared<spdlog::sinks::ansicolor_sink>(rawConsoleSink);
-        auto consoleLog = spdlog::create("consoleLog", {consoleSink});
-        auto fileLog = spdlog::create("fileLog", {fileSink});
-        auto jointLog = spdlog::create("jointLog", {fileSink, consoleSink});
-
-        sopt.jointLog = jointLog;
-        sopt.fileLog = fileLog;
-
-	// If the user is enabling *just* GC bias correction
-	// i.e. without seq-specific bias correction, then disable
-	// the conditional model.
-	if (sopt.gcBiasCorrect and !sopt.biasCorrect) {
-	  sopt.numConditionalGCBins = 1;
-	}
-
-	
-	// Verify that no inconsistent options were provided
-  bool optionsValidate =
-    salmon::utils::validateOptions(sopt);
-  if (!optionsValidate) {
-    sopt.jointLog->flush();
-    spdlog::drop_all();
-    std::exit(1);
-  }
-
-  if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {
-            jointLog->error("You cannot perform both Gibbs sampling and bootstrapping. "
-                            "Please choose one.");
-            jointLog->flush();
-            std::exit(1);
-        }
-
-        if (sopt.numGibbsSamples > 0) {
-          if (! sopt.thinningFactor >= 1) {
-            jointLog->error("The Gibbs sampling thinning factor (--thinningFactor) "
-                            "cannot be smaller than 1.");
-            jointLog->flush();
-            std::exit(1);
+          } else {
+            alignmentFiles.push_back(alignmentFile);
           }
         }
 
-        if (!sopt.sampleOutput and sopt.sampleUnaligned) {
-            fmt::MemoryWriter wstr;
-            wstr << "WARNING: you passed in the (-u/--sampleUnaligned) flag, but did not request a sampled "
-                 << "output file (-s/--sampleOut).  This flag will be ignored!\n";
-            jointLog->warn(wstr.str());
+        // Just so we have the variable around
+        LibraryFormat libFmt(ReadType::PAIRED_END, ReadOrientation::TOWARD, ReadStrandedness::U);
+        // Get the library format string
+        std::string libFmtStr = vm["libType"].as<std::string>();
+
+        // If we're auto-detecting, set things up appropriately
+        bool autoDetectFmt = (libFmtStr == "a" or libFmtStr == "A");//(autoTypes.find(libFmtStr) != autoTypes.end());
+        if (autoDetectFmt) {
+
+          bool isPairedEnd = salmon::utils::peekBAMIsPaired(alignmentFiles.front());
+          if (isPairedEnd) {
+            libFmt = LibraryFormat(ReadType::PAIRED_END, ReadOrientation::TOWARD, ReadStrandedness::U);
+          } else {
+            libFmt = LibraryFormat(ReadType::SINGLE_END, ReadOrientation::NONE, ReadStrandedness::U);
+          }
+        } else { // Parse the provided type
+          libFmt = salmon::utils::parseLibraryFormatStringNew(libFmtStr);
         }
 
-        // maybe arbitrary, but if it's smaller than this, consider it
-        // equal to LOG_0
-        if (sopt.incompatPrior < 1e-320 or sopt.incompatPrior == 0.0) {
-            jointLog->info("Fragment incompatibility prior below threshold.  Incompatible fragments will be ignored.");
-            sopt.incompatPrior = salmon::math::LOG_0;
-            sopt.ignoreIncompat = true;
+        if (libFmt.check()) {
+          std::cerr << libFmt << "\n";
         } else {
-            sopt.incompatPrior = std::log(sopt.incompatPrior);
-            sopt.ignoreIncompat = false;
+          std::stringstream ss;
+          ss << libFmt << " is invalid!";
+          throw std::invalid_argument(ss.str());
         }
-
-        // Now create a subdirectory for any parameters of interest
-        bfs::path paramsDir = outputDirectory / "libParams";
-        if (!boost::filesystem::exists(paramsDir)) {
-            if (!boost::filesystem::create_directories(paramsDir)) {
-                fmt::print(stderr, "{}ERROR{}: Could not create "
-                           "output directory for experimental parameter "
-                           "estimates [{}]. exiting.", ioutils::SET_RED,
-                           ioutils::RESET_COLOR, paramsDir);
-                std::exit(-1);
-            }
-        }
-
-        // Write out information about the command / run
-        {
-            bfs::path cmdInfoPath = outputDirectory / "cmd_info.json";
-            std::ofstream os(cmdInfoPath.string());
-            cereal::JSONOutputArchive oa(os);
-            oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
-            for (auto& opt : orderedOptions.options) {
-                if (opt.value.size() == 1) {
-                    oa(cereal::make_nvp(opt.string_key, opt.value.front()));
-                } else {
-                    oa(cereal::make_nvp(opt.string_key, opt.value));
-                }
-            }
-	    // explicitly ouput the aux directory as well
-	    oa(cereal::make_nvp("auxDir", sopt.auxDir));
-	}
+        // ==== END: Library format processing ===
 
         // The transcript file contains the target sequences
         bfs::path transcriptFile(vm["targets"].as<std::string>());
@@ -1678,56 +1542,61 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         uint32_t numQuantThreads = std::max(uint32_t(2), uint32_t(numThreads - numParseThreads));
         sopt.numQuantThreads = numQuantThreads;
         sopt.numParseThreads = numParseThreads;
-        std::cerr << "numQuantThreads = " << numQuantThreads << "\n";
+        jointLog->info("numQuantThreads = {}", numQuantThreads);
+
+        // Write out information about the command / run
+        salmon::utils::writeCmdInfo(sopt, orderedOptions);
 
         bool success{false};
 
         switch (libFmt.type) {
-            case ReadType::SINGLE_END:
-                {
-		  // We can only do fragment GC bias correction, for the time being, with paired-end reads
-		  if (sopt.gcBiasCorrect) {
-            jointLog->warn("Fragment GC bias correction is currently *experimental* "
-                           "in single-end libraries.  Please use this option "
-                           "with caution.");
-		    //sopt.gcBiasCorrect = false;
-		  } 
+        case ReadType::SINGLE_END:
+          {
+            // We can only do fragment GC bias correction, for the time being, with paired-end reads
+            if (sopt.gcBiasCorrect) {
+              jointLog->warn("Fragment GC bias correction is currently *experimental* "
+                             "in single-end libraries.  Please use this option "
+                             "with caution.");
+              //sopt.gcBiasCorrect = false;
+            }
 
-		    AlignmentLibrary<UnpairedRead> alnLib(alignmentFiles,
-							  transcriptFile,
-							  libFmt,
-							  sopt);
+            AlignmentLibrary<UnpairedRead> alnLib(alignmentFiles,
+                                                  transcriptFile,
+                                                  libFmt,
+                                                  sopt);
 
-		    if (autoDetectFmt) { alnLib.enableAutodetect(); }
-                    success = processSample<UnpairedRead>(alnLib, runStartTime,
-                                                          requiredObservations, sopt,
-                                                          outputDirectory);
-                }
-                break;
-            case ReadType::PAIRED_END:
-                {
-                    AlignmentLibrary<ReadPair> alnLib(alignmentFiles,
-                                                      transcriptFile,
-                                                      libFmt,
-                                                      sopt);
-		    if (autoDetectFmt) { alnLib.enableAutodetect(); }
-                    success = processSample<ReadPair>(alnLib, runStartTime,
-                                                      requiredObservations, sopt,
-                                                      outputDirectory);
-                }
-                break;
-            default:
-                std::cerr << "Cannot quantify library of unknown format "
-                          << libFmt << "\n";
-                std::exit(1);
+            if (autoDetectFmt) { alnLib.enableAutodetect(); }
+            success = processSample<UnpairedRead>(alnLib,
+                                                  requiredObservations, sopt,
+                                                  outputDirectory);
+          }
+          break;
+        case ReadType::PAIRED_END:
+          {
+            AlignmentLibrary<ReadPair> alnLib(alignmentFiles,
+                                              transcriptFile,
+                                              libFmt,
+                                              sopt);
+            if (autoDetectFmt) { alnLib.enableAutodetect(); }
+            success = processSample<ReadPair>(alnLib,
+                                              requiredObservations, sopt,
+                                              outputDirectory);
+          }
+          break;
+        default:
+          std::stringstream errfmt;
+          errfmt << "Cannot quantify library of unknown format " << libFmt;
+          jointLog->error(errfmt.str());
+          jointLog->flush();
+          std::exit(1);
         }
 
         // Make sure the quantification was successful.
         if (!success) {
-            jointLog->error("Quantification was un-successful.  Please check the log "
-                            "for information about why quantification failed. If this "
-                            "problem persists, please report this issue on GitHub.");
-            return 1;
+          jointLog->error("Quantification was un-successful.  Please check the log "
+                          "for information about why quantification failed. If this "
+                          "problem persists, please report this issue on GitHub.");
+          return 1;
         }
 
         bfs::path estFilePath = outputDirectory / "quant.sf";
@@ -1735,7 +1604,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         /** If the user requested gene-level abundances, then compute those now **/
         if (vm.count("geneMap")) {
             try {
-                salmon::utils::generateGeneLevelEstimates(geneMapPath,
+                salmon::utils::generateGeneLevelEstimates(sopt.geneMapPath,
                                                             outputDirectory);
             } catch (std::exception& e) {
                 fmt::print(stderr, "Error: [{}] when trying to compute gene-level "\
