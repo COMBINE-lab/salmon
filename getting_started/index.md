@@ -49,6 +49,16 @@ Commands:
      swim  Perform super-secret operation
 ```
 
+#### Obtaining a docker image for Salmon
+
+Salmon is also available via Docker hub.  You can obtain a docker image of salmon using the command:
+
+```
+$ docker pull combinelab/salmon:0.8.0
+```
+
+Then, if you wish, you can follow the tuorital below using this contanerized version of Salmon.
+
 ### Analyzing your RNA-seq data with Salmon
 
 #### Obtaining a transcriptome and building an index {#indexing-txome}
