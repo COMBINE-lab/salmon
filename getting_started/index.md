@@ -49,6 +49,14 @@ Commands:
      swim  Perform super-secret operation
 ```
 
+**Note**: OSX is frustratingly particular about how it looks for dynamic symbols in programs. If you're on OSX and you're getting an unresolved symbol error, you should run Salmon with the library directory in you `DYLD_FALLBACK_LIBRARY_PATH`, like this:
+
+```
+$ DYLD_FALLBACK_LIBRARY_PATH=<path_to_salmon_folder>/lib ./salmon -h
+```
+
+now, Salmon should find the appropriate symbols.
+
 #### Obtaining a docker image for Salmon
 
 Salmon is also available via Docker hub.  You can obtain a docker image of salmon using the command:
