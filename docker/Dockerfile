@@ -6,7 +6,7 @@ MAINTAINER salmon.maintainer@gmail.com
 
 ENV PACKAGES git gcc make g++ cmake libboost-all-dev liblzma-dev libbz2-dev \
     ca-certificates zlib1g-dev curl unzip autoconf
-ENV SALMON_VERSION 0.7.1
+ENV SALMON_VERSION 0.8.0
 
 # salmon binary will be installed in /home/salmon/bin/salmon
 
