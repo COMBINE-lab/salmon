@@ -1155,6 +1155,7 @@ bool processSample(AlignmentLibrary<ReadT>& alnLib,
 
         jointLog->info("Starting Gibbs Sampler");
         CollapsedGibbsSampler sampler;
+        gzw.setSamplingPath(sopt);
         // The function we'll use as a callback to write samples
         std::function<bool(const std::vector<double>&)> bsWriter =
             [&gzw](const std::vector<double>& alphas) -> bool {
@@ -1179,6 +1180,7 @@ bool processSample(AlignmentLibrary<ReadT>& alnLib,
             };
 
         jointLog->info("Staring Bootstrapping");
+        gzw.setSamplingPath(sopt);
         bool bootstrapSuccess = optimizer.gatherBootstraps(
                 alnLib, sopt,
                 bsWriter, 0.01, 10000);
