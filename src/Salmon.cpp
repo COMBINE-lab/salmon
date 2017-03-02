@@ -120,7 +120,7 @@ void printCite() {
 Reference:
 ==========
 
-Rob Patro, Geet Duggal, Michael I Love, Rafael A Irizarry, Carl Kingsford (2017).
+Rob Patro, Geet Duggal, Michael I. Love, Rafael A. Irizarry, Carl Kingsford (2017).
 Salmon provides fast and bias-aware quantification of transcript expression.
 Nature Methods. Advanced Online Publication. doi: 10.1038/nmeth.4197
 
