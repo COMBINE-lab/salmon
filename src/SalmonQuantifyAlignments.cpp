@@ -1470,8 +1470,6 @@ transcript abundance from RNA-seq reads
 
         sopt.alnMode = true;
         sopt.quantMode = SalmonQuantMode::ALIGN;
-        // TODO: Fix fragment start pos dist
-        // sopt.useFSPD = false;
         bool optionsOK =
           salmon::utils::processQuantOptions(sopt, vm, numBiasSamples);
         if (!optionsOK) {

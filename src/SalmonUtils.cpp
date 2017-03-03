@@ -1316,11 +1316,8 @@ bool createAuxMapLoggers_(SalmonOpts& sopt, boost::program_options::variables_ma
   // asked for it.
   if (sopt.writeUnmappedNames) {
     boost::filesystem::path auxDir = sopt.outputDirectory / sopt.auxDir;
-    bool auxSuccess = boost::filesystem::is_directory(auxDir);
-    if (!auxSuccess) {
-      auxSuccess = boost::filesystem::create_directories(auxDir);
-    }
-    if (auxSuccess) {
+    bool auxSuccess = bfs::exists(auxDir) and bfs::is_directory(auxDir);
+    if (!auxSuccess) { return false; }
       bfs::path unmappedNameFile = auxDir / "unmapped_names.txt";
       std::ofstream* outFile = new std::ofstream(unmappedNameFile.string());
 
@@ -1333,42 +1330,29 @@ bool createAuxMapLoggers_(SalmonOpts& sopt, boost::program_options::variables_ma
       outLog->set_pattern("%v");
       sopt.unmappedFile.reset(outFile);
       sopt.unmappedLog = outLog;
-    } else {
-      jointLog->error("Couldn't create auxiliary directory in which to place "
-                      "\"unmapped_names.txt\"");
-      return false;
-    }
   }
 
   // Create the file (and logger) for outputting unmapped reads, if the user has
   // asked for it.
   if (sopt.writeOrphanLinks) {
     boost::filesystem::path auxDir = sopt.outputDirectory / sopt.auxDir;
-    bool auxSuccess = boost::filesystem::is_directory(auxDir);
-    if (!auxSuccess) {
-      auxSuccess = boost::filesystem::create_directories(auxDir);
-    }
-    if (auxSuccess) {
-      bfs::path orphanLinkFile = auxDir / "orphan_links.txt";
-      std::ofstream* outFile = new std::ofstream(orphanLinkFile.string());
+    bool auxSuccess = bfs::exists(auxDir) and bfs::is_directory(auxDir);
+    if (!auxSuccess) { return false; }
+    bfs::path orphanLinkFile = auxDir / "orphan_links.txt";
+    std::ofstream* outFile = new std::ofstream(orphanLinkFile.string());
 
-      // Must be a power of 2
-      //size_t queueSize{268435456};
-      //spdlog::set_async_mode(queueSize);
-      auto outputSink =
-          std::make_shared<spdlog::sinks::ostream_sink_mt>(*outFile);
+    // Must be a power of 2
+    //size_t queueSize{268435456};
+    //spdlog::set_async_mode(queueSize);
+    auto outputSink =
+      std::make_shared<spdlog::sinks::ostream_sink_mt>(*outFile);
 
-      std::shared_ptr<spdlog::logger> outLog =
-          std::make_shared<spdlog::logger>("orphanLinkLog", outputSink);
-      spdlog::register_logger(outLog);
-      outLog->set_pattern("%v");
-      sopt.orphanLinkFile.reset(outFile);
-      sopt.orphanLinkLog = outLog;
-    } else {
-      jointLog->error("Couldn't create auxiliary directory in which to place "
-                      "\"orphan_links.txt\"");
-      return false;
-    }
+    std::shared_ptr<spdlog::logger> outLog =
+      std::make_shared<spdlog::logger>("orphanLinkLog", outputSink);
+    spdlog::register_logger(outLog);
+    outLog->set_pattern("%v");
+    sopt.orphanLinkFile.reset(outFile);
+    sopt.orphanLinkLog = outLog;
   }
 
   // Determine what we'll do with quasi-mapping results
@@ -1467,15 +1451,15 @@ bool processQuantOptions(SalmonOpts& sopt,
     if (!bfs::create_directories(outputDirectory)) { // creation failed for some reason
       std::stringstream errstr;
       errstr << "Could not create output directory ["
-             << outputDirectory << "], please check that it is valid.";
+             << outputDirectory << "]. Please check that it is valid.";
       std::cerr << errstr.str();
       return false;
     }
   }
   // set the output directory
   sopt.outputDirectory = outputDirectory;
-  bfs::path logDirectory = outputDirectory / "logs";
 
+  bfs::path logDirectory = outputDirectory / "logs";
   // Create the logger and the logging directory
   bfs::create_directories(logDirectory);
   if (!(bfs::exists(logDirectory) and bfs::is_directory(logDirectory))) {
@@ -1501,6 +1485,25 @@ bool processQuantOptions(SalmonOpts& sopt,
   }
   sopt.paramsDirectory = paramsDir;
 
+  // Finally create the auxiliary directory
+  bfs::path auxDir = sopt.outputDirectory / sopt.auxDir;
+  if (bfs::exists(auxDir)) {
+    // If it already exists and isn't a directory, then complain
+    if (!bfs::is_directory(auxDir)) {
+      fmt::print(stderr, "{}ERROR{}: Path [{}] already exists "
+                 "and is not a directory.\n"
+                 "Please either remove this file or choose another "
+                 "auxiliary directory.\n", ioutils::SET_RED, ioutils::RESET_COLOR, auxDir);
+      return false;
+    }
+  } else { // If the path doesn't exist, then create it
+    if (!bfs::create_directories(auxDir)) { // creation failed for some reason
+      fmt::print(stderr, "{}ERROR{}: Could not create auxiliary directory [{}]. "
+                 "Please check that it is valid.", ioutils::SET_RED, ioutils::RESET_COLOR, auxDir);
+      return false;
+    }
+  }
+
   // Metagenomic option
   if (sopt.meta) {
       sopt.initUniform = true;
@@ -1523,7 +1526,7 @@ bool processQuantOptions(SalmonOpts& sopt,
     // make it larger if we're writing mappings or
     // unmapped names.
     if (writeQuasimappings or sopt.writeUnmappedNames or sopt.writeOrphanLinks) {
-      max_q_size = 16777216;
+      max_q_size = 4194304;//16777216;
     }
   }
 
@@ -1614,8 +1617,8 @@ bool processQuantOptions(SalmonOpts& sopt,
 
     if (sopt.useFSPD) {
       jointLog->error("The --useFSPD option has been deprecated.  "
-                      "Positional bias modeling will return under the --posBias flag in a future release. "
-                      "For the time being, please remove the --useFSPD flag from your command.");
+                      "Positional bias modeling is available [eperimentally] under the --posBias flag. "
+                      "Please remove the --useFSPD flag from your command.");
       jointLog->flush();
       return false;
     }
@@ -1632,10 +1635,11 @@ bool processQuantOptions(SalmonOpts& sopt,
       bool anyBiasCorrect =
         sopt.gcBiasCorrect or sopt.biasCorrect or sopt.posBiasCorrect;
       if (anyBiasCorrect) {
-        sopt.jointLog->critical("Since bias correction relies on modifying "
-                                "effective lengths, you cannot enable bias "
-                                "correction simultaneously with the --noLengthCorrection "
-                                "option.");
+        jointLog->critical("Since bias correction relies on modifying "
+                           "effective lengths, you cannot enable bias "
+                           "correction simultaneously with the --noLengthCorrection "
+                           "option.");
+        jointLog->flush();
         return false;
       }
     }
@@ -1648,6 +1652,7 @@ bool processQuantOptions(SalmonOpts& sopt,
       }
     }
   }
+  /** End of generic Error validation **/
 
   // Validation that is different for alignment and mapping based modes.
   bool perModeValidate{true};
