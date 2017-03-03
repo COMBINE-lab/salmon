@@ -47,8 +47,8 @@ JSON format file that records the main command line parameters with which Salmon
 run that produced the output in this directory.
 
 
-Auxiliary File
---------------
+Auxiliary Files
+---------------
 
 The top-level quantification directory will contain an auxiliary directory called ``aux_info`` (unless 
 the auxiliary directory name was overridden via the command line).  This directory will have a number
@@ -66,6 +66,17 @@ inference of the library type (i.e. ``--libType A``), then one
 particularly important piece of information contained in this file is
 the inferred library type.  Most of the information recorded in this
 file should be self-descriptive.
+
+"""""""""""""""""""""""""""""""
+Unique and ambiguous count file
+"""""""""""""""""""""""""""""""
+
+The auxiliary directory also contains 2-column tab-separated file called
+``ambig_info.tsv``. This file contains information about the number of
+uniquely-mapping reads as well as the total number of ambiguously-mapping reads
+for each transcript.  This file is provided mostly for exploratory analysis of
+the results; it gives some idea of the fraction of each transcript's estimated
+abundance that derives from ambiguously-mappable reads.
 
 """"""""""""""""""""""""""""""
 Observed library format counts
