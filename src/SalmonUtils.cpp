@@ -1396,6 +1396,34 @@ bool createAuxMapLoggers_(SalmonOpts& sopt, boost::program_options::variables_ma
   return true;
 }
 
+/**
+ *  Try to create the directory named by `dirPath`.  If it already
+ *  exists, make sure it is a directory.  If it already exists
+ *  but is not a directory, or if we are unable to create it, then
+ *  print an appropriate message to stderr.  This function returns
+ *  true if the directory was created successfully or already existed, and
+ *  false otherwise.
+ **/
+bool createDirectoryVerbose_(boost::filesystem::path& dirPath) {
+  namespace bfs = boost::filesystem;
+  if (bfs::exists(dirPath)) {
+    // If it already exists and isn't a directory, then complain
+    if (!bfs::is_directory(dirPath)) {
+      fmt::print(stderr, "{}ERROR{}: Path [{}] already exists "
+                 "and is not a directory.\n"
+                 "Please either remove this file or choose another "
+                 "auxiliary directory.\n", ioutils::SET_RED, ioutils::RESET_COLOR, dirPath);
+      return false;
+    }
+  } else { // If the path doesn't exist, then create it
+    if (!bfs::create_directories(dirPath)) { // creation failed for some reason
+      fmt::print(stderr, "{}ERROR{}: Could not create the directory [{}]. "
+                 "Please check that doing so is valid.", ioutils::SET_RED, ioutils::RESET_COLOR, dirPath);
+      return false;
+    }
+  }
+  return true;
+}
 
 /**
  * Validate the options for quasi-mapping-based salmon, and create the necessary
@@ -1432,77 +1460,37 @@ bool processQuantOptions(SalmonOpts& sopt,
   }
 
   /**
-   * Create the output  and log directories
+   * Create some necessary directories
    **/
-  bfs::path outputDirectory(vm["output"].as<std::string>());
-  // If the path exists
-  if (bfs::exists(outputDirectory)) {
-    // If it is not a directory, then complain
-    if (!bfs::is_directory(outputDirectory)) {
-      std::stringstream errstr;
-      errstr << "Path [" << outputDirectory << "] already exists "
-             << "and is not a directory.\n"
-             << "Please either remove this file or choose another "
-             << "output path.\n";
-      std::cerr << errstr.str();
-      return false;
-    }
-  } else { // If the path doesn't exist, then create it
-    if (!bfs::create_directories(outputDirectory)) { // creation failed for some reason
-      std::stringstream errstr;
-      errstr << "Could not create output directory ["
-             << outputDirectory << "]. Please check that it is valid.";
-      std::cerr << errstr.str();
-      return false;
-    }
-  }
-  // set the output directory
-  sopt.outputDirectory = outputDirectory;
 
-  bfs::path logDirectory = outputDirectory / "logs";
-  // Create the logger and the logging directory
-  bfs::create_directories(logDirectory);
-  if (!(bfs::exists(logDirectory) and bfs::is_directory(logDirectory))) {
-    std::cerr << "Couldn't create log directory " << logDirectory << "\n";
-    std::cerr << "exiting\n";
+  // output directory
+  bfs::path outputDirectory(vm["output"].as<std::string>());
+  bool outputDirOK = createDirectoryVerbose_(outputDirectory);
+  // set the output directory
+  if (!outputDirOK) {
     return false;
   }
+  sopt.outputDirectory = outputDirectory;
 
+  // log directory
+  bfs::path logDirectory = outputDirectory / "logs";
+  bool logDirOK = createDirectoryVerbose_(logDirectory);
+  if (!logDirOK) { return false; }
   if (!sopt.quiet) {
     std::cerr << "Logs will be written to " << logDirectory.string() << "\n";
   }
 
-  // Now create a subdirectory for any parameters of interest
+  // parameter directory
   bfs::path paramsDir = outputDirectory / "libParams";
-  if (!boost::filesystem::exists(paramsDir)) {
-    if (!boost::filesystem::create_directories(paramsDir)) {
-      fmt::print(stderr, "{}ERROR{}: Could not create "
-                 "output directory for experimental parameter "
-                 "estimates [{}]. exiting.",
-                 ioutils::SET_RED, ioutils::RESET_COLOR, paramsDir);
-      return false;
-    }
-  }
+  bool paramDirOK = createDirectoryVerbose_(paramsDir);
+  if (!paramDirOK) { return false; }
   sopt.paramsDirectory = paramsDir;
 
-  // Finally create the auxiliary directory
+  // auxiliary directory 
   bfs::path auxDir = sopt.outputDirectory / sopt.auxDir;
-  if (bfs::exists(auxDir)) {
-    // If it already exists and isn't a directory, then complain
-    if (!bfs::is_directory(auxDir)) {
-      fmt::print(stderr, "{}ERROR{}: Path [{}] already exists "
-                 "and is not a directory.\n"
-                 "Please either remove this file or choose another "
-                 "auxiliary directory.\n", ioutils::SET_RED, ioutils::RESET_COLOR, auxDir);
-      return false;
-    }
-  } else { // If the path doesn't exist, then create it
-    if (!bfs::create_directories(auxDir)) { // creation failed for some reason
-      fmt::print(stderr, "{}ERROR{}: Could not create auxiliary directory [{}]. "
-                 "Please check that it is valid.", ioutils::SET_RED, ioutils::RESET_COLOR, auxDir);
-      return false;
-    }
-  }
+  bool auxDirOK = createDirectoryVerbose_(auxDir);
+  if (!auxDirOK) { return false; }
+  /** Done creating directories **/
 
   // Metagenomic option
   if (sopt.meta) {
