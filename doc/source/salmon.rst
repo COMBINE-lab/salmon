@@ -430,7 +430,7 @@ Passing the ``--posBias`` flag to Salmon will enable modeling of a
 position-specific fragment start distribution.  This is meant to model
 non-uniform coverage biases that are sometimes present in RNA-seq data
 (e.g. 5' or 3' positional bias).  Currently, a small and fixed number
-of models are learned for different lenght classes of transcripts, as
+of models are learned for different length classes of transcripts, as
 is done in Roberts et al. [#roberts]_. *Note*: The positional bias
 model is relatively new, and is still undergoing testing.  It replaces
 the previous `--useFSPD` option, which is now deprecated.  This
