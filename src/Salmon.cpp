@@ -174,7 +174,6 @@ int main( int argc, char* argv[] ) {
         ("help,h", "produce help message")
         ("command", po::value<string>(), "command to run {index, quant, sf}")
         ("subargs", po::value<std::vector<std::string>>(), "Arguments for command");
-    ;
 
     po::options_description all("Allowed Options");
     all.add(sfopts);

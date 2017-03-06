@@ -1290,8 +1290,8 @@ std::string getCurrentTimeAsString() {
 
 bool validateOptionsAlignment_(SalmonOpts& sopt) {
   if (!sopt.sampleOutput and sopt.sampleUnaligned) {
-    sopt.jointLog->warn("WARNING: you passed in the (-u/--sampleUnaligned) flag, but did not request a sampled "
-                        "output file (-s/--sampleOut).  This flag will be ignored!\n");
+    sopt.jointLog->warn("You passed in the (-u/--sampleUnaligned) flag, but did not request a sampled "
+                        "output file (-s/--sampleOut).  This flag will be ignored!");
   }
   return true;
 }
@@ -1318,18 +1318,23 @@ bool createAuxMapLoggers_(SalmonOpts& sopt, boost::program_options::variables_ma
     boost::filesystem::path auxDir = sopt.outputDirectory / sopt.auxDir;
     bool auxSuccess = bfs::exists(auxDir) and bfs::is_directory(auxDir);
     if (!auxSuccess) { return false; }
-      bfs::path unmappedNameFile = auxDir / "unmapped_names.txt";
-      std::ofstream* outFile = new std::ofstream(unmappedNameFile.string());
+    bfs::path unmappedNameFile = auxDir / "unmapped_names.txt";
+    std::ofstream* outFile = new std::ofstream(unmappedNameFile.string());
+    // Make sure file opened successfully.
+    if (!outFile->is_open()) {
+      jointLog->error("Could not create file for unmapped read names [{}]", unmappedNameFile.string());
+      delete outFile;
+      return false;
+    }
+    auto outputSink =
+      std::make_shared<spdlog::sinks::ostream_sink_mt>(*outFile);
 
-      auto outputSink =
-          std::make_shared<spdlog::sinks::ostream_sink_mt>(*outFile);
-
-      std::shared_ptr<spdlog::logger> outLog =
-          std::make_shared<spdlog::logger>("unmappedLog", outputSink);
-      spdlog::register_logger(outLog);
-      outLog->set_pattern("%v");
-      sopt.unmappedFile.reset(outFile);
-      sopt.unmappedLog = outLog;
+    std::shared_ptr<spdlog::logger> outLog =
+      std::make_shared<spdlog::logger>("unmappedLog", outputSink);
+    spdlog::register_logger(outLog);
+    outLog->set_pattern("%v");
+    sopt.unmappedFile.reset(outFile);
+    sopt.unmappedLog = outLog;
   }
 
   // Create the file (and logger) for outputting unmapped reads, if the user has
@@ -1340,10 +1345,13 @@ bool createAuxMapLoggers_(SalmonOpts& sopt, boost::program_options::variables_ma
     if (!auxSuccess) { return false; }
     bfs::path orphanLinkFile = auxDir / "orphan_links.txt";
     std::ofstream* outFile = new std::ofstream(orphanLinkFile.string());
+    // Make sure file opened successfully.
+    if (!outFile->is_open()) {
+      jointLog->error("Could not create file for orphan links [{}]", orphanLinkFile.string());
+      delete outFile;
+      return false;
+    }
 
-    // Must be a power of 2
-    //size_t queueSize{268435456};
-    //spdlog::set_async_mode(queueSize);
     auto outputSink =
       std::make_shared<spdlog::sinks::ostream_sink_mt>(*outFile);
 
@@ -1377,6 +1385,11 @@ bool createAuxMapLoggers_(SalmonOpts& sopt, boost::program_options::variables_ma
       // if the directory already existed, or we created it successfully, open the file
       if (qmDirSuccess) {
         sopt.qmFile.open(sopt.qmFileName);
+        // Make sure file opened successfully.
+        if (!sopt.qmFile.is_open()) {
+          jointLog->error("Could not create file for writing quasi-mappings [{}]", sopt.qmFileName);
+          return false;
+        }
         qmBuf = sopt.qmFile.rdbuf();
       } else {
         bfs::path qmFileName = boost::filesystem::path(sopt.qmFileName).filename();
@@ -1570,7 +1583,7 @@ bool processQuantOptions(SalmonOpts& sopt,
 
     // maybe arbitrary, but if it's smaller than this, consider it
     // equal to LOG_0.
-    if (sopt.incompatPrior < 1e-320 or sopt.incompatPrior == 0.0) {
+    if (sopt.incompatPrior < 1e-100 or sopt.incompatPrior == 0.0) {
       jointLog->info("Fragment incompatibility prior below threshold.  Incompatible fragments will be ignored.");
       sopt.incompatPrior = salmon::math::LOG_0;
       sopt.ignoreIncompat = true;
@@ -1589,32 +1602,31 @@ bool processQuantOptions(SalmonOpts& sopt,
   /** Errors -- will prevent Salmon from running **/
   {
     if (sopt.numGibbsSamples > 0 and sopt.numBootstraps > 0) {
-      jointLog->error("You cannot perform both Gibbs sampling and bootstrapping. "
-                      "Please choose one.");
+      jointLog->critical("You cannot perform both Gibbs sampling and bootstrapping. "
+                         "Please choose one.");
       jointLog->flush();
       return false;
     }
     if (sopt.numGibbsSamples > 0) {
       if (! sopt.thinningFactor >= 1) {
-        jointLog->error("The Gibbs sampling thinning factor (--thinningFactor) "
-                        "cannot be smaller than 1.");
+        jointLog->critical("The Gibbs sampling thinning factor (--thinningFactor) "
+                           "cannot be smaller than 1.");
         jointLog->flush();
         return false;
       }
     }
 
     if (sopt.useFSPD) {
-      jointLog->error("The --useFSPD option has been deprecated.  "
-                      "Positional bias modeling is available [eperimentally] under the --posBias flag. "
-                      "Please remove the --useFSPD flag from your command.");
+      jointLog->critical("The --useFSPD option has been deprecated.  "
+                         "Positional bias modeling is available [experimentally] under the --posBias flag. "
+                         "Please remove the --useFSPD flag from your command.");
       jointLog->flush();
       return false;
     }
 
     if (sopt.noFragLengthDist and !sopt.noEffectiveLengthCorrection) {
-      jointLog->info(
-                     "Error: You cannot enable --noFragLengthDist without "
-                     "also enabling --noEffectiveLengthCorrection; exiting!\n");
+      jointLog->critical("You cannot enable --noFragLengthDist without "
+                         "also enabling --noEffectiveLengthCorrection; exiting.");
       jointLog->flush();
       return false;
     }
@@ -1634,7 +1646,7 @@ bool processQuantOptions(SalmonOpts& sopt,
 
     if (sopt.dontExtrapolateCounts) { // If the user has provided this option, (s)he must be using Gibbs sampling
       if (sopt.numGibbsSamples == 0) {
-        sopt.jointLog->critical("You passed the --dontExtrapolateCounts flag, but are not using Gibbs sampling. "
+        sopt.jointLog->critical("You passed the --noExtrapolateCounts flag, but are not using Gibbs sampling. "
                                 "The fomer implies the latter.  Please enable Gibbs sampling to use this flag.");
         return false;
       }
