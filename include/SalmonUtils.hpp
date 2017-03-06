@@ -21,10 +21,12 @@ extern "C" {
 #include <Eigen/Dense>
 
 #include "spdlog/fmt/fmt.h"
+#include "cereal/archives/json.hpp"
 
 #include "SalmonOpts.hpp"
 #include "SalmonMath.hpp"
 
+#include "SalmonConfig.hpp"
 #include "LibraryFormat.hpp"
 #include "ReadLibrary.hpp"
 #include "TranscriptGeneMap.hpp"
@@ -165,9 +167,31 @@ inline void incLoop(tbb::atomic<double>& val, double inc) {
 
 std::string getCurrentTimeAsString();
 
-bool validateOptions(SalmonOpts& sopt);
+bool validateOptionsAlignment_(SalmonOpts& sopt); 
+bool validateOptionsMapping_(SalmonOpts& sopt); 
+
+bool createAuxMapLoggers_(SalmonOpts& sopt, boost::program_options::variables_map& vm);
 
 bool processQuantOptions(SalmonOpts& sopt, boost::program_options::variables_map& vm, int32_t numBiasSamples);
+
+template <typename OrderedOptionsT>
+bool writeCmdInfo(SalmonOpts& sopt, OrderedOptionsT& orderedOptions) {
+  namespace bfs = boost::filesystem;
+  bfs::path cmdInfoPath = sopt.outputDirectory / "cmd_info.json";
+  std::ofstream os(cmdInfoPath.string());
+  cereal::JSONOutputArchive oa(os);
+  oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
+  for (auto& opt : orderedOptions.options) {
+    if (opt.value.size() == 1) {
+      oa(cereal::make_nvp(opt.string_key, opt.value.front()));
+    } else {
+      oa(cereal::make_nvp(opt.string_key, opt.value));
+    }
+  }
+  // explicitly ouput the aux directory as well
+  oa(cereal::make_nvp("auxDir", sopt.auxDir));
+  return true;
+}
 
 
 

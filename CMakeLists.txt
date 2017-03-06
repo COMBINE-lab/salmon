@@ -4,10 +4,10 @@ enable_testing()
 
 project (Salmon)
 
-set(CPACK_PACKAGE_VERSION "0.8.0")
+set(CPACK_PACKAGE_VERSION "0.8.1")
 set(CPACK_PACKAGE_VERSION_MAJOR "0")
 set(CPACK_PACKAGE_VERSION_MINOR "8")
-set(CPACK_PACKAGE_VERSION_PATCH "0")
+set(CPACK_PACKAGE_VERSION_PATCH "1")
 set(PROJECT_VERSION ${CPACK_PACKAGE_VERSION})
 set(CPACK_GENERATOR "TGZ")
 set(CPACK_SOURCE_GENERATOR "TGZ")
@@ -212,7 +212,10 @@ if (NOT LIBLZMA_FOUND)
     message ("=======================================")
 ExternalProject_Add(liblzma
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+    ##
     URL http://tukaani.org/xz/xz-5.2.2.tar.gz
+    #URL_HASH SHA1=14663612422ab61386673be78fbb2556f50a1f08
+    ##
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/xz-5.2.2
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     BUILD_IN_SOURCE TRUE
@@ -239,6 +242,7 @@ if (NOT BZIP2_FOUND)
 ExternalProject_Add(libbz2
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
     URL http://www.bzip.org/1.0.6/bzip2-1.0.6.tar.gz
+    #URL_HASH SHA1=3f89f861209ce81a6bab1fd1998c0ef311712002
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/bzip2-1.0.6
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     BUILD_IN_SOURCE TRUE
@@ -364,6 +368,8 @@ include(ExternalProject)
 ExternalProject_Add(libdivsufsort
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
     URL ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort.zip
+    # Note: This zip comes from the fetched rapmap.zip, whose SHA we check
+    # so we souldn't need to check this one separately.
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
@@ -384,12 +390,18 @@ message("==================================================================")
 include(ExternalProject)
 ExternalProject_Add(libcereal
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/USCiLab/cereal/archive/v1.1.2.tar.gz -o cereal-v1.1.2.tar.gz &&
-		tar -xzvf cereal-v1.1.2.tar.gz
-	SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.1.2
+    DOWNLOAD_COMMAND curl -k -L https://github.com/USCiLab/cereal/archive/v1.2.2.tar.gz -o cereal-v1.2.2.tar.gz &&		 
+                     tar -xzvf cereal-v1.2.2.tar.gz
+    ##
+    #URL https://github.com/USCiLab/cereal/archive/v1.2.2.tar.gz
+    #DOWNLOAD_NAME cereal-v1.2.2.tar.gz
+    #TLS_VERIFY FALSE
+    #URL_HASH SHA1=ffddf5fc5313cfbb893e07823ca8c473084eebca
+    ##
+  	SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.2.2
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
-    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.1.2/build
+    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.2.2/build
     CONFIGURE_COMMAND ""
     BUILD_COMMAND ""
     INSTALL_COMMAND sh -c "mkdir -p <INSTALL_DIR>/include && cp -r <SOURCE_DIR>/include/cereal <INSTALL_DIR>/include"
@@ -402,9 +414,14 @@ ExternalProject_Add_Step(libcereal makedir
 
 message("Build system will fetch and build BWA (for Salmon)")
 message("==================================================================")
+##
+# This mode will likely go away soon, but until then, consider bundling directly with Salmon
+##
 include(ExternalProject)
 ExternalProject_Add(libbwa
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+    #URL https://github.com/COMBINE-lab/bwa/archive/0.7.12.3.tar.gz
+    #DOWNLOAD_NAME bwa-master.tar.gz
     DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/bwa/archive/0.7.12.3.tar.gz -o bwa-master.tar.gz &&
                      mkdir -p bwa-master &&
                      tar -xzvf bwa-master.tar.gz --strip-components=1 -C bwa-master
@@ -423,6 +440,12 @@ message("Build system will fetch and build Jellyfish")
 message("==================================================================")
 ExternalProject_Add(libjellyfish
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+    ##
+    #URL  https://github.com/gmarcais/Jellyfish/releases/download/v2.2.6/jellyfish-2.2.6.tar.gz
+    #DOWNLOAD_NAME jellyfish-2.2.6.tgz
+    #URL_HASH SHA1=53819a57ea8ffae26e3f917babf978f8215ef117
+    #TLS_VERIFY FALSE
+    ##
     DOWNLOAD_COMMAND curl -k -L https://github.com/gmarcais/Jellyfish/releases/download/v2.2.6/jellyfish-2.2.6.tar.gz -o jellyfish-2.2.6.tgz &&
     	rm -fr jellyfish-2.2.6 &&
      	tar -xzvf jellyfish-2.2.6.tgz
@@ -468,9 +491,14 @@ endif()
 
 ExternalProject_Add(libtbb
 	DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    #URL https://github.com/01org/tbb/archive/2017_U3.tar.gz 
     DOWNLOAD_COMMAND curl -k -L https://github.com/01org/tbb/archive/2017_U3.tar.gz -o tbb-2017_U3.tgz &&
-                    tar -xzvf tbb-2017_U3.tgz
+                        tar -xzvf tbb-2017_U3.tgz
+    ##
+    #URL https://github.com/01org/tbb/archive/2017_U3.tar.gz 
+    #DOWNLOAD_NAME 2017_U3.tar.gz
+    #URL_HASH SHA1=d6cf16a42ece60aad6a722b369e1a2aa753347b4
+    #TLS_VERIFY FALSE
+    ##
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2017_U3
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     PATCH_COMMAND "${TBB_PATCH_STEP}"
@@ -525,13 +553,17 @@ message("==================================================================")
 ExternalProject_Add(libgff
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
     DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/libgff/archive/v1.1.tar.gz -o libgff.tgz &&
-    tar -xzvf libgff.tgz &&
-    rm -fr libgff &&
-    mv libgff-1.1 libgff
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff
+    tar -xzvf libgff.tgz 
+    ##
+    #URL https://github.com/COMBINE-lab/libgff/archive/v1.1.tar.gz
+    #DOWNLOAD_NAME libff.tgz
+    #URL_HASH SHA1=37b3147d78391d1fabbe6a0df313fbf516abbc6f
+    #TLS_VERIFY FALSE
+    ##
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-1.1
     #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff/build
+    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-1.1/build
     CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=${CMAKE_CURRENT_SOURCE_DIR}/external/install
 )
 ExternalProject_Add_Step(libgff makedir
@@ -575,11 +607,15 @@ message("Build system will fetch SPDLOG")
 message("==================================================================")
 ExternalProject_Add(libspdlog
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/spdlog/archive/v0.11.0.tar.gz -o spdlog-v0.11.0.tar.gz &&
-                     tar -xzf spdlog-v0.11.0.tar.gz &&
-                     rm -fr spdlog &&
-                     mv -f  spdlog-0.11.0 spdlog
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/spdlog
+    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/spdlog/archive/v0.12.0.tar.gz -o spdlog-v0.12.0.tar.gz &&
+                     tar -xzf spdlog-v0.12.0.tar.gz 
+    ##
+    #URL https://github.com/COMBINE-lab/spdlog/archive/v0.12.0.tar.gz
+    #DOWNLOAD_NAME spdlog-v0.12.0.tar.gz
+    #TLS_VERIFY FALSE
+    #URL_HASH SHA1=c868b4d1a27c4d9fb3b748f0566a8f0390d83ffb
+    ##
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/spdlog-0.12.0
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ""
     BUILD_COMMAND ""
@@ -620,12 +656,18 @@ if (NOT HAVE_FAST_MALLOC)
     message("==================================================================")
     ExternalProject_Add(libjemalloc
         DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-        DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/jemalloc/archive/4.4.0.tar.gz -o jemalloc-4.4.0.tar.gz &&
-        tar -xzf jemalloc-4.4.0.tar.gz
-        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-4.4.0
+        DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/jemalloc/archive/4.5.0.tar.gz -o jemalloc-4.5.0.tar.gz &&
+                          tar -xzf jemalloc-4.5.0.tar.gz
+        ##
+        #URL https://github.com/COMBINE-lab/jemalloc/archive/4.5.0.tar.gz
+        #DOWNLOAD_NAME jemalloc-4.5.0.tar.gz  
+        #URL_HASH SHA1=ad3a10866ad34b446f8f133e5edcd028be2f3003
+        #TLS_VERIFY FALSE
+        ##
+        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-4.5.0
         BUILD_IN_SOURCE TRUE
         INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-        CONFIGURE_COMMAND sh -c "${JEMALLOC_FLAGS} ./autogen.sh --prefix=<INSTALL_DIR>"
+        CONFIGURE_COMMAND sh -c "${JEMALLOC_FLAGS} ./autogen.sh --disable-debug --prefix=<INSTALL_DIR>"
         INSTALL_COMMAND cp -r lib <INSTALL_DIR>/ && cp -r include <INSTALL_DIR>/
         )
 
@@ -641,23 +683,6 @@ if (NOT HAVE_FAST_MALLOC)
     endif()
 
 endif ()
-
-
-##
-## This depenency is for RapMap
-##
-#message("Build system will fetch and build SparseHash")
-#message("==================================================================")
-#ExternalProject_Add(libsparsehash
-#    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-#    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/sparsehash/archive/sparsehash-2.0.2.tar.gz -o sparsehash-2.0.2.tar.gz &&
-#        tar -xzf sparsehash-2.0.2.tar.gz
-#    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/sparsehash-sparsehash-2.0.2
-#    BUILD_IN_SOURCE TRUE
-#    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-#    CONFIGURE_COMMAND sh -c "CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure --prefix=<INSTALL_DIR>"
-#    INSTALL_COMMAND make install
-#)
 
 ###
 #

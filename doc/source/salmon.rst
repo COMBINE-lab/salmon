@@ -270,6 +270,24 @@ counts that were computed during quasi-mapping.  The file has a format described
 :ref:`eq-class-file`.
 
 
+"""""""""""""""""""
+``--incompatPrior``
+"""""""""""""""""""
+
+This parameter governs the *a priori* probability that a fragment mapping or
+aligning to the reference in a manner incompatible with the prescribed library
+type is nonetheless the correct mapping. Note that Salmon sets this value, by
+default, to a small but *non-zero* probability. This means that if an
+incompatible mapping is the *only* mapping for a fragment, Salmon will still
+assign this fragment to the transcript. This default behavior is different than
+programs like `RSEM <https://deweylab.github.io/RSEM/>`_, which assign
+incompatible fragments a 0 probability (i.e., incompatible mappings will be
+discarded). If you wish to obtain this behavior, so that only compatible
+mappings will be considered, you can set ``--incompatPrior 0.0``.  This
+will cause Salmon to only consider mappings (or alignments) that are compatible
+with the prescribed or inferred library type.
+
+
 """""""""""""
 ``--fldMean``
 """""""""""""
@@ -281,7 +299,7 @@ user to set the expected mean fragment lenth of the sequencing
 library.  This value will affect the effective length correction, and
 hence the estimated effective lengths of the transcripts and the TPMs.
 The value passed to ``--fldMean`` will be used as the mean of the assumed
-fragment length distribution (which is modeled as a truncated Gaussan with
+fragment length distribution (which is modeled as a truncated Gaussian with
 a standard deviation given by ``--fldSD``).
 
 

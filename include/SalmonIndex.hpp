@@ -42,7 +42,7 @@ using PerfectHash = FrugalBooMap<uint64_t, rapmap::utils::SAInterval<IndexT>>;
 class SalmonIndex{
         public:
             SalmonIndex(std::shared_ptr<spdlog::logger>& logger, SalmonIndexType indexType) :
-                loaded_(false), versionInfo_(0, false, 0, indexType), logger_(logger) {}
+                loaded_(false), versionInfo_(0, false, 0, indexType), logger_(logger), seqHash_(""), nameHash_("") {}
 
             ~SalmonIndex() {
                 if (idx_) { bwa_idx_destroy(idx_); }
@@ -189,6 +189,8 @@ class SalmonIndex{
 	      }
 	    }
 
+	std::string seqHash() const { return seqHash_; }
+	std::string nameHash() const { return nameHash_; }
 
         private:
             bool buildFMDIndex_(boost::filesystem::path indexDir,
@@ -293,14 +295,18 @@ class SalmonIndex{
                   indexStream.close();
 
                   if (h.version() != salmon::requiredQuasiIndexVersion) {
-                    fmt::print(stderr, "I found a quasi-index with version {}, but I require {}",
-                               h.version(), salmon::requiredQuasiIndexVersion);
-                  }
-                  if (h.indexType() != IndexType::QUASI) {
-                    fmt::print(stderr, "The index {} does not appear to be of the "
-                                        "appropriate type (quasi)", indexStr);
+		    logger_->critical("I found a quasi-index with version {}, but I require {}. "
+				      "Please re-index the reference.", h.version(), salmon::requiredQuasiIndexVersion);
                     std::exit(1);
                   }
+                  if (h.indexType() != IndexType::QUASI) {
+                    logger_->critical("The index {} does not appear to be of the "
+                                      "appropriate type (quasi)", indexStr);
+                    std::exit(1);
+                  }
+
+		  seqHash_ = h.seqHash();
+		  nameHash_ = h.nameHash();
 
                   // Is the quasi-index using a perfect hash
                   perfectHashQuasi_ = h.perfectHash();
@@ -364,6 +370,8 @@ class SalmonIndex{
           bwaidx_t *idx_{nullptr};
           KmerIntervalMap auxIdx_;
           std::shared_ptr<spdlog::logger> logger_;
+	  std::string seqHash_;
+	  std::string nameHash_;
 };
 
 #endif //__SALMON_INDEX_HPP

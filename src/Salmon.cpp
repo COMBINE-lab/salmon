@@ -1,6 +1,6 @@
 /**
 >HEADER
-    Copyright (c) 2013 -- 2016 Rob Patro rob.patro@cs.stonybrook.edu
+    Copyright (c) 2013 -- 2017 Rob Patro rob.patro@cs.stonybrook.edu
 
     This file is part of Salmon.
 
@@ -59,22 +59,8 @@ int help(std::vector<std::string> opts) { //}int argc, char* argv[]) {
     helpMsg.write("     cite  Show salmon citation information\n");
     helpMsg.write("     index Create a salmon index\n");
     helpMsg.write("     quant Quantify a sample\n");
-    //helpMsg.write("     quantmerge Merge multiple quantifications into a single file\n");
     helpMsg.write("     swim  Perform super-secret operation\n");
-
-    /*
-    auto orighelpmsg = R"(
-    ===============
-
-    Please invoke salmon with one of the following commands {index, quant, swim}.
-    For more information on the options for these particular methods, use the -h
-    flag along with the method name.  For example:
-
-    salmon index -h
-
-    will give you detailed help information about the index command.
-    )";
-    */
+    //helpMsg.write("     quantmerge Merge multiple quantifications into a single file\n");
 
     std::cerr << helpMsg.str();
     return 0;
@@ -85,20 +71,21 @@ int dualModeMessage() {
     auto helpmsg = R"(
     ===============
 
-    salmon quant has two modes --- one quantifies expression using raw reads
+    Salmon quant has two modes --- one quantifies expression using raw reads
     and the other makes use of already-aligned reads (in BAM/SAM format).
-    which algorithm is used depends on the arguments passed to salmon quant.
-    If you provide salmon with alignments '-a [ --alignments ]' then the
+    Which algorithm is used depends on the arguments passed to Salmon quant.
+    If you provide Salmon with alignments '-a [ --alignments ]' then the
     alignment-based algorithm will be used, otherwise the algorithm for
     quantifying from raw reads will be used.
 
-    To view the help for salmon's alignment-based mode, use the command
+    to view the help for Salmon's quasi-mapping-based mode, use the command
+
+    salmon quant --help-reads
+
+    To view the help for Salmon's alignment-based mode, use the command
 
     salmon quant --help-alignment
 
-    to view the help for salmon's read-based mode, use the command
-
-    salmon quant --help-reads
     )";
     std::cerr << "    Salmon v" << salmon::version << helpmsg << "\n";
     return 0;
@@ -125,29 +112,34 @@ int salmonSwim(int argc, char* argv[]) {
 }
 
 /**
- * Bonus!
+ * Citation
  */
 void printCite() {
 
   std::cerr << R"(
+If you use Salmon in your research, please cite the publication in any
+papers, pre-prints or reports.  The proper citation information for Salmon
+appears below.
+
 Reference:
 ==========
 
-Salmon provides accurate, fast, and bias-aware transcript expression estimates using dual-phase inference
-Rob Patro, Geet Duggal, Michael I Love, Rafael A Irizarry, Carl Kingsford
-bioRxiv 021592; doi: http://dx.doi.org/10.1101/021592
+Rob Patro, Geet Duggal, Michael I. Love, Rafael A. Irizarry, Carl Kingsford (2017).
+Salmon provides fast and bias-aware quantification of transcript expression.
+Nature Methods. Advanced Online Publication. doi: 10.1038/nmeth.4197
 
 bibtex:
 =======
 
-@article {Patro:2016,
+@article{Patro2017,
   author = {Patro, Rob and Duggal, Geet and Love, Michael I and Irizarry, Rafael A and Kingsford, Carl},
-  title = {Salmon provides accurate, fast, and bias-aware transcript expression estimates using dual-phase inference},
-  year = {2016},
-  doi = {10.1101/021592},
-  publisher = {Cold Spring Harbor Labs Journals},
-  URL = {http://biorxiv.org/content/early/2016/08/30/021592},
-  journal = {bioRxiv}
+  title = {Salmon provides fast and bias-aware quantification of transcript expression},
+  doi = {10.1038/nmeth.4197},
+  url = {https://doi.org/10.1038/nmeth.4197},
+  year  = {2017},
+  month = {March},
+  publisher = {Springer Nature},
+  journal = {Nature Methods}
 }
 )";
 
@@ -182,7 +174,6 @@ int main( int argc, char* argv[] ) {
         ("help,h", "produce help message")
         ("command", po::value<string>(), "command to run {index, quant, sf}")
         ("subargs", po::value<std::vector<std::string>>(), "Arguments for command");
-    ;
 
     po::options_description all("Allowed Options");
     all.add(sfopts);

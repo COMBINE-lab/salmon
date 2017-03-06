@@ -824,8 +824,8 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   // variables.  If that's what the user requested, then copy those over to the alphas
   if (sopt.initUniform) { 
     for (size_t i = 0; i < alphas.size(); ++i) {
-        alphas[i] = alphasPrime[i];
-        alphasPrime[i] = 1.0;
+      alphas[i] = alphasPrime[i];
+      alphasPrime[i] = 1.0;
     } 
   } else { // otherwise, initalize with a linear combination of the true and uniform alphas 
       for (size_t i = 0; i < alphas.size(); ++i) {
@@ -904,15 +904,16 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   // Iterations in which we will allow re-computing the effective lengths
   // if bias-correction is enabled.
   // std::vector<uint32_t> recomputeIt{100, 500, 1000};
-
-  minIter = 100;
+  //minIter = 100;
 
   bool converged{false};
   double maxRelDiff = -std::numeric_limits<double>::max();
   bool needBias = doBiasCorrect;
-  //bool secondPass = false;
   size_t targetIt{10};
-  
+  /* -- v0.8.x
+  double alphaSum = 0.0;
+  */
+
   while (itNum < minIter or (itNum < maxIter and !converged) or needBias) {
     if (needBias and (itNum > targetIt or converged)) {
 
@@ -955,12 +956,45 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
       alphasPrime[i] = 0.0;
     }
 
+    /* -- v0.8.x
+    if (converged and itNum > minIter and !needBias) {
+      if (useVBEM and !perTranscriptPrior) {
+        std::vector<double> cutoffs(transcripts.size(), 0.0);
+        for (size_t i = 0; i < transcripts.size(); ++i) {
+          cutoffs[i] = minAlpha;
+        }
+        alphaSum = truncateCountVector(alphas, cutoffs);
+      } else {
+        // Truncate tiny expression values
+        alphaSum = truncateCountVector(alphas, cutoff);
+      }
+      if (useVBEM) {
+        VBEMUpdate_(eqVec, transcripts, priorAlphas, totalLen, alphas, alphasPrime,
+                    expTheta);
+      } else {
+        EMUpdate_(eqVec, transcripts, alphas, alphasPrime);
+      }
+      for (size_t i = 0; i < transcripts.size(); ++i) {
+        alphas[i] = alphasPrime[i];
+        alphasPrime[i] = 0.0;
+      }
+    }
+    */
+
     if (itNum % 100 == 0) {
       jointLog->info("iteration = {} | max rel diff. = {}", itNum, maxRelDiff);
     }
 
     ++itNum;
   }
+
+  /* -- v0.8.x
+  if (alphaSum < minWeight) {
+    jointLog->error("Total alpha weight was too small! "
+                    "Make sure you ran salmon correclty.");
+    return false;
+  }
+  */
 
   // Reset the original bias correction options
   sopt.gcBiasCorrect = gcBiasCorrect;
@@ -974,11 +1008,10 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
       for (size_t i = 0; i < transcripts.size(); ++i) {
           cutoffs[i] = minAlpha;
       }
-      //alphaSum = truncateCountVector(alphas, cutoffs);
       alphaSum = truncateCountVector(alphas, cutoffs);
   } else {
       // Truncate tiny expression values
-      alphaSum = truncateCountVector(alphas, cutoff);
+    alphaSum = truncateCountVector(alphas, cutoff);
   }
 
   if (alphaSum < minWeight) {
@@ -986,6 +1019,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
                     "Make sure you ran salmon correclty.");
     return false;
   }
+  
 
   // Set the mass of each transcript using the
   // computed alphas.

@@ -11,6 +11,8 @@
 #include <memory> // for shared_ptr
 
 
+enum class SalmonQuantMode { MAP = 1, ALIGN = 2 };
+
 /**
   * A structure to hold some common options used
   * by Salmon so that we don't have to pass them
@@ -28,10 +30,13 @@ struct SalmonOpts {
     bool maxMEMIntervals; // If true, don't split (S)MEMs into MEMs
     */
 
-    SalmonOpts() : alternativeInitMode(false), allowOrphans(false), splitSpanningSeeds(false), noFragLengthDist(false),
-                   noEffectiveLengthCorrection(false), useReadCompat(false),
-                   maxReadOccs(200), extraSeedPass(false),
+  SalmonOpts() : quantMode(SalmonQuantMode::MAP), alternativeInitMode(false),
+                   allowOrphans(false), splitSpanningSeeds(false),
+                   noFragLengthDist(false), noEffectiveLengthCorrection(false),
+                   useReadCompat(false), maxReadOccs(200), extraSeedPass(false),
                    mappingCacheMemoryLimit(5000000), useQuasi(false) {}
+
+  SalmonQuantMode quantMode; // How quantification is done
 
     bool alternativeInitMode; // Weigh unique reads more heavily when initialzing the optimization.
 
@@ -133,7 +138,9 @@ struct SalmonOpts {
     
     bool meta; // Set other options to be optimized for metagenomic data
 
-    boost::filesystem::path outputDirectory; // Quant output directory
+  boost::filesystem::path outputDirectory; // Quant output directory
+
+  boost::filesystem::path paramsDirectory; // Parameters directory
 
     boost::filesystem::path indexDirectory; // Index directory
 
@@ -166,7 +173,7 @@ struct SalmonOpts {
     uint32_t numGibbsSamples; // Number of rounds of Gibbs sampling to perform
     uint32_t numBootstraps; // Number of bootstrap samples to draw
     uint32_t thinningFactor; // Gibbs chain thinning factor
-
+    bool dontExtrapolateCounts{false}; // In gibbs sampling, use direct counts from re-allocation in eq classes, don't extrapolate from txp-fraction
     bool initUniform{false}; // initialize offline optimization parameters uniformly, rather than with online estimates.
     bool alnMode{false};     // true if we're in alignment based mode, false otherwise
     bool biasCorrect{false}; // Perform sequence-specific bias correction
