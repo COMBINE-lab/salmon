@@ -14,6 +14,11 @@ This page hosts a (potentially growing) list of frequently-asked questions about
 
 *A:* Salmon is a program for quickly and accurately estimating transcript-level abundance from RNA-seq data.  There are more details about this in [about](https://combine-lab.github.io/salmon/about/) page.
 
+### Q: I'm currently using [Sailfish](https://github.com/kingsfordgroup/sailfish), should I switch to Salmon?
+
+*A:* Probably.  Sailfish is still actively-maintained software and we will continue to provide support and important updates for it.  However, the majority of our development efforts have shifted to Salmon, since it provides a richer framework and model for future extension.  Also, some aspects of the Salmon model cannot be properly backported to Sailfish.  Thus, while both tools are actively maintained and supported, we recommend using Salmon if there's nothing preventing you from doing so.
+
+
 ### Q: Can I use Salmon to quantify my reads against a target genome instead of a transcriptome?
 
 *A:* No.  Salmon quantifies a provided set of target transcripts given an RNA-seq sample (similar to tools like RSEM and eXpress).  If you have a well-annotated genome, consider using the reference set of transcripts.  It is also possible to use another program like StringTie, TransComb, etc. to identify novel transcripts, and then to add the corresponding assembled transcripts to the Salmon index for subsequent quantification.  If you are working with a *de novo* assembled transcriptome, you can use Salmon to quantify the assembled transcripts directly. 
