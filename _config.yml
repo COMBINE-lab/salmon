@@ -1,5 +1,5 @@
 # Site settings
-title: "Salmon: Lightweight transcript quantification from RNA-seq data"
+title: "Salmon: Fast, accurate and bias-aware transcript quantification from RNA-seq data"
 locale: en_US
 email: your-email@domain.com
 description: > # this means to ignore newlines until "baseurl:"
