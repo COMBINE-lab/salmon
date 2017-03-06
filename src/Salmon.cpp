@@ -117,6 +117,10 @@ int salmonSwim(int argc, char* argv[]) {
 void printCite() {
 
   std::cerr << R"(
+If you use Salmon in your research, please cite the publication in any
+papers, pre-prints or reports.  The proper citation information for Salmon
+appears below.
+
 Reference:
 ==========
 
