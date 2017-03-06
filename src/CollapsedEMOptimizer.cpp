@@ -910,7 +910,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   double maxRelDiff = -std::numeric_limits<double>::max();
   bool needBias = doBiasCorrect;
   size_t targetIt{10};
-  /* -- v0.8.1
+  /* -- v0.8.x
   double alphaSum = 0.0;
   */
 
@@ -956,7 +956,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
       alphasPrime[i] = 0.0;
     }
 
-    /* -- v0.8.1
+    /* -- v0.8.x
     if (converged and itNum > minIter and !needBias) {
       if (useVBEM and !perTranscriptPrior) {
         std::vector<double> cutoffs(transcripts.size(), 0.0);
@@ -988,7 +988,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
     ++itNum;
   }
 
-  /* -- v0.8.1
+  /* -- v0.8.x
   if (alphaSum < minWeight) {
     jointLog->error("Total alpha weight was too small! "
                     "Make sure you ran salmon correclty.");
