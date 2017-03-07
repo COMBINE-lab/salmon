@@ -656,7 +656,7 @@ separate process when you use process substitution.
 
 **Finally**, the purpose of making this software available is for
 people to use it and provide feedback.  The
-`pre-print describing this method is on bioRxiv <http://biorxiv.org/content/early/2015/10/03/021592>`_.
+`paper describing this method is published in Nature Methods <http://rdcu.be/pQsw>`_.
 If you have something useful to report or just some interesting ideas
 or suggestions, please contact us (`rob.patro@cs.stonybrook.edu`
 and/or `carlk@cs.cmu.edu`).  If you encounter any bugs, please file a
@@ -670,4 +670,4 @@ References
    
 .. [#roberts] Roberts, Adam, et al. "Improving RNA-Seq expression estimates by correcting for fragment bias." Genome biology 12.3 (2011): 1.
 
-.. [#salmon] Patro, Rob, et al. "Salmon provides accurate, fast, and bias-aware transcript expression estimates using dual-phase inference." bioRxiv (2016).
+.. [#salmon] Patro, Rob, et al. "Salmon provides fast and bias-aware quantification of transcript expression." Nature Methods(2017). Advanced Online Publication. doi: 10.1038/nmeth.4197
