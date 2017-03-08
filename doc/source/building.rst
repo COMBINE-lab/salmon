@@ -8,9 +8,14 @@ Pre-compiled binaries of the latest release of Salmon for a number different
 platforms are available available under the `Releases tab
 <https://github.com/COMBINE-lab/salmon/releases>`_ of Salmon's `GitHub
 repository <https://github.com/COMBINE-lab/salmon>`_.  You should be able to
-get started quickly byfinding a binary from the list that is compatible with
-your platform.  If you're running an old version of Linux and get errors
-related to `GLIBC`, try the pre-compiled "Debian Squeeze" binary.
+get started quickly by finding a binary from the list that is compatible with
+your platform.  Additionally, you can obtain a Docker image of the latest version
+from DockerHub using:
+
+::
+
+    > docker pull combinelab/salmon
+  
 
 Requirements for Building from Source
 -------------------------------------
