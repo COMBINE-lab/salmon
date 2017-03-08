@@ -204,7 +204,7 @@ latex_elements = {
 #  author, documentclass [howto, manual, or own class]).
 latex_documents = [
   ('index', 'Salmon.tex', u'Salmon Documentation',
-   u'Rob Patro, Carl Kingsford and Steve Mount', 'manual'),
+   u'Rob Patro, Geet Duggal, Mike Love, Rafael Irizarry and Carl Kingsford', 'manual'),
 ]
 
 # The name of an image file (relative to this directory) to place at the top of
