@@ -63,6 +63,11 @@ endif()
 set (PTHREAD_LIB)
 
 ##
+# Let us check the sha sum of our pacakges if we have the right tools
+##
+set(SHASUM ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_shasum.sh)
+
+##
 # Compiler-specific C++11 activation.
 # http://stackoverflow.com/questions/10984442/how-to-detect-c11-support-of-a-compiler-with-cmake
 ##
@@ -213,7 +218,10 @@ if (NOT LIBLZMA_FOUND)
 ExternalProject_Add(liblzma
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
     ##
-    URL http://tukaani.org/xz/xz-5.2.2.tar.gz
+    DOWNLOAD_COMMAND curl -k -L http://tukaani.org/xz/xz-5.2.2.tar.gz -o xz-5.2.2.tar.gz &&
+                     ${SHASUM} 73df4d5d34f0468bd57d09f2d8af363e95ed6cc3a4a86129d2f2c366259902a2 xz-5.2.2.tar.gz &&
+                     tar -xzvf xz-5.2.2.tar.gz
+    #URL http://tukaani.org/xz/xz-5.2.2.tar.gz
     #URL_HASH SHA1=14663612422ab61386673be78fbb2556f50a1f08
     ##
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/xz-5.2.2
@@ -241,7 +249,10 @@ if (NOT BZIP2_FOUND)
     message ("=======================================")
 ExternalProject_Add(libbz2
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    URL http://www.bzip.org/1.0.6/bzip2-1.0.6.tar.gz
+    DOWNLOAD_COMMAND curl -k -L http://www.bzip.org/1.0.6/bzip2-1.0.6.tar.gz -o bzip2-1.0.6.tar.gz &&
+                     ${SHASUM} a2848f34fcd5d6cf47def00461fcb528a0484d8edef8208d6d2e2909dc61d9cd bzip2-1.0.6.tar.gz &&
+                     tar -xzvf  bzip2-1.0.6.tar.gz
+    #URL http://www.bzip.org/1.0.6/bzip2-1.0.6.tar.gz
     #URL_HASH SHA1=3f89f861209ce81a6bab1fd1998c0ef311712002
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/bzip2-1.0.6
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
@@ -320,7 +331,8 @@ elseif(FETCH_BOOST)
     ExternalProject_Add(libboost
         DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
         DOWNLOAD_COMMAND curl -k -L  http://downloads.sourceforge.net/project/boost/boost/1.59.0/boost_1_59_0.tar.gz -o boost_1_59_0.tar.gz &&
-                tar xzf boost_1_59_0.tar.gz
+                         ${SHASUM} 47f11c8844e579d02691a607fbd32540104a9ac7a2534a8ddaef50daf502baac  boost_1_59_0.tar.gz &&
+                         tar xzf boost_1_59_0.tar.gz
         #URL http://downloads.sourceforge.net/project/boost/boost/1.57.0/boost_1_57_0.tar.gz
         SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_59_0
         INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
@@ -384,13 +396,13 @@ ExternalProject_Add_Step(libdivsufsort makedir
  
 set(SUFFARRAY_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
 
-
 message("Build system will fetch and build the Cereal serialization library")
 message("==================================================================")
 include(ExternalProject)
 ExternalProject_Add(libcereal
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
     DOWNLOAD_COMMAND curl -k -L https://github.com/USCiLab/cereal/archive/v1.2.2.tar.gz -o cereal-v1.2.2.tar.gz &&		 
+                     ${SHASUM} 1921f26d2e1daf9132da3c432e2fd02093ecaedf846e65d7679ddf868c7289c4  cereal-v1.2.2.tar.gz &&
                      tar -xzvf cereal-v1.2.2.tar.gz
     ##
     #URL https://github.com/USCiLab/cereal/archive/v1.2.2.tar.gz
@@ -423,6 +435,7 @@ ExternalProject_Add(libbwa
     #URL https://github.com/COMBINE-lab/bwa/archive/0.7.12.3.tar.gz
     #DOWNLOAD_NAME bwa-master.tar.gz
     DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/bwa/archive/0.7.12.3.tar.gz -o bwa-master.tar.gz &&
+                     ${SHASUM} e1665acd44f971f6d8b90c25992c680a7fec0a822268437d6fd4e51dbf603181  bwa-master.tar.gz &&
                      mkdir -p bwa-master &&
                      tar -xzvf bwa-master.tar.gz --strip-components=1 -C bwa-master
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/bwa-master
@@ -447,6 +460,7 @@ ExternalProject_Add(libjellyfish
     #TLS_VERIFY FALSE
     ##
     DOWNLOAD_COMMAND curl -k -L https://github.com/gmarcais/Jellyfish/releases/download/v2.2.6/jellyfish-2.2.6.tar.gz -o jellyfish-2.2.6.tgz &&
+                     ${SHASUM} 4532fb003a0494f6473bb97d52467904f631b94f7f9afb0d45b398f6c413692e  jellyfish-2.2.6.tgz &&
     	rm -fr jellyfish-2.2.6 &&
      	tar -xzvf jellyfish-2.2.6.tgz
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jellyfish-2.2.6
@@ -492,7 +506,8 @@ endif()
 ExternalProject_Add(libtbb
 	DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
     DOWNLOAD_COMMAND curl -k -L https://github.com/01org/tbb/archive/2017_U3.tar.gz -o tbb-2017_U3.tgz &&
-                        tar -xzvf tbb-2017_U3.tgz
+                     ${SHASUM} 9d1fdd595b7978200ae73673de5e06540a24f9d1c266f5863639ade1a26ffb95  tbb-2017_U3.tgz &&
+                     tar -xzvf tbb-2017_U3.tgz
     ##
     #URL https://github.com/01org/tbb/archive/2017_U3.tar.gz 
     #DOWNLOAD_NAME 2017_U3.tar.gz
@@ -553,7 +568,8 @@ message("==================================================================")
 ExternalProject_Add(libgff
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
     DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/libgff/archive/v1.1.tar.gz -o libgff.tgz &&
-    tar -xzvf libgff.tgz 
+                     ${SHASUM} 34597ecd3718e6d6e7a1dd4350220664be2c1cd992070d1218564a20d7aa5697  libgff.tgz &&
+                     tar -xzvf libgff.tgz 
     ##
     #URL https://github.com/COMBINE-lab/libgff/archive/v1.1.tar.gz
     #DOWNLOAD_NAME libff.tgz
@@ -590,6 +606,7 @@ message("==================================================================")
 ExternalProject_Add(libstadenio
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
     DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/staden-io_lib/archive/v1.14.8.tar.gz -o staden-io_lib-v1.14.8.tar.gz &&
+                     ${SHASUM} 1e20adc298d3c0b03c71fdeac72fd6337540fb3273a27ea45cca6813178d2236  staden-io_lib-v1.14.8.tar.gz &&
                      mkdir -p staden-io_lib-1.14.8 &&
                      tar -xzf staden-io_lib-v1.14.8.tar.gz --strip-components=1 -C staden-io_lib-1.14.8 &&
                      rm -fr staden-io_lib &&
@@ -608,6 +625,7 @@ message("==================================================================")
 ExternalProject_Add(libspdlog
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
     DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/spdlog/archive/v0.12.0.tar.gz -o spdlog-v0.12.0.tar.gz &&
+                     ${SHASUM} 5cfd6a0b3182a88e1eb35bcb65a7ef9035140d7c73b16ba6095939dbf07325b9  spdlog-v0.12.0.tar.gz &&
                      tar -xzf spdlog-v0.12.0.tar.gz 
     ##
     #URL https://github.com/COMBINE-lab/spdlog/archive/v0.12.0.tar.gz
@@ -657,7 +675,8 @@ if (NOT HAVE_FAST_MALLOC)
     ExternalProject_Add(libjemalloc
         DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
         DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/jemalloc/archive/4.5.0.tar.gz -o jemalloc-4.5.0.tar.gz &&
-                          tar -xzf jemalloc-4.5.0.tar.gz
+                         ${SHASUM} e885b65b95426945655ee91a30f563c9679770c92946bcdd0795f6b78c06c221  jemalloc-4.5.0.tar.gz &&
+                         tar -xzf jemalloc-4.5.0.tar.gz
         ##
         #URL https://github.com/COMBINE-lab/jemalloc/archive/4.5.0.tar.gz
         #DOWNLOAD_NAME jemalloc-4.5.0.tar.gz  

@@ -32,3 +32,5 @@ RUN rm jre-8u60-linux-x64.rpm
 # and nextflow
 RUN curl -fsSL get.nextflow.io | bash
 RUN mv nextflow /usr/local/bin/
+
+RUN yum install -y --quiet shasum 
