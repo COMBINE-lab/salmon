@@ -8,10 +8,19 @@ exists()
 sum=$1
 fname=$2
 
+hashcheck=""
 if exists sha256sum; then
-    echo "${sum}  ${fname}" | sha256sum -c - || { echo "${fname} did not match expected SHA256! Exiting."; exit 1; }
+	hashcheck="sha256sum"
+elif exists shasum; then
+	hashcheck="shasum -a256"
 else
+	unset hashcheck
+fi
+
+if [ -z "${hashcheck-}" ]; then
     echo "Couldn't find shasum command; can't verify contents of ${fname}";
+else
+    echo "${sum}  ${fname}" | sha256sum -c - || { echo "${fname} did not match expected SHA256! Exiting."; exit 1; }
 fi
 
 

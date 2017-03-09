@@ -25,11 +25,19 @@ mkdir -p ${EXTERNAL_DIR}
 #curl -k -L https://github.com/COMBINE-lab/RapMap/archive/salmon-v0.8.1.zip -o ${EXTERNAL_DIR}/rapmap.zip
 curl -k -L https://github.com/COMBINE-lab/RapMap/archive/develop-salmon.zip -o ${EXTERNAL_DIR}/rapmap.zip
 
+hashcheck=""
 if exists sha256sum; then
-    echo "f6772f3f7effb13dddf08bfa640f4b58a4fe53bdf116e249925c601b34d92884  ${EXTERNAL_DIR}/rapmap.zip" | sha256sum -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
-    #echo "2556b405bc78811ad3e4f649d4df2d3efb810196  ${EXTERNAL_DIR}/rapmap.zip" | shasum -a1 -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
+	hashcheck="sha256sum"
+elif exists shasum; then
+	hashcheck="shasum -a256"
 else
-  echo "Couldn't find shasum command; can't verify contents of downloaded RapMap";
+	unset hashcheck
+fi
+
+if [ -z "${hashcheck-}" ]; then
+    echo "Couldn't find shasum command; can't verify contents of downloaded RapMap";
+else
+    echo "f6772f3f7effb13dddf08bfa640f4b58a4fe53bdf116e249925c601b34d92884  ${EXTERNAL_DIR}/rapmap.zip" | ${hashcheck} -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
 fi
 
 
