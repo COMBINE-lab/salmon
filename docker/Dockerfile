@@ -1,7 +1,7 @@
 # image: COMBINE-lab/salmon
 # This dockerfile is based on the one created by
 # Titus Brown (available at https://github.com/ctb/2015-docker-building/blob/master/salmon/Dockerfile)
-FROM ubuntu:15.10
+FROM insilicodb/bioconductor 
 MAINTAINER salmon.maintainer@gmail.com
 
 ENV PACKAGES git gcc make g++ cmake libboost-all-dev liblzma-dev libbz2-dev \
@@ -23,6 +23,6 @@ RUN curl -k -L https://github.com/COMBINE-lab/salmon/archive/v${SALMON_VERSION}.
     cd salmon-${SALMON_VERSION} && \
     mkdir build && \
     cd build && \
-    cmake .. && make && make install
+    cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local && make && make install
 
 ENV PATH /home/salmon-${SALMON_VERSION}/bin:${PATH}
