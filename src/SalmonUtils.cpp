@@ -1514,7 +1514,7 @@ bool processQuantOptions(SalmonOpts& sopt,
   }
 
   //  Size for the logger buffer
-  size_t max_q_size = 2097152;
+  size_t max_q_size = 131072;//2097152;
   bfs::path logPath = logDirectory / "salmon_quant.log";
 
   if (sopt.quantMode == SalmonQuantMode::MAP) {
@@ -1527,7 +1527,7 @@ bool processQuantOptions(SalmonOpts& sopt,
     // make it larger if we're writing mappings or
     // unmapped names.
     if (writeQuasimappings or sopt.writeUnmappedNames or sopt.writeOrphanLinks) {
-      max_q_size = 4194304;//16777216;
+      max_q_size = 2097152;//4194304;//16777216;
     }
   }
 
