@@ -4,6 +4,7 @@
 
 #include "BWAMemStaticFuncs.hpp"
 #include "RapMapUtils.hpp"
+#include "EffectiveLengthStats.hpp"
 
 class SMEMAlignment {
     public:
@@ -543,6 +544,7 @@ void processMiniBatch(
         ClusterForest& clusterForest,
         FragmentLengthDistribution& fragLengthDist,
         BiasParams& observedGCParams,
+        EffectiveLengthStats& effLengthStats,
         std::atomic<uint64_t>& numAssignedFragments,
         std::default_random_engine& randEng,
         bool initialRound,
@@ -1356,6 +1358,7 @@ void processReadsMEM(ParserT* parser,
                ClusterForest& clusterForest,
                FragmentLengthDistribution& fragLengthDist,
                BiasParams& observedGCParams,
+               EffectiveLengthStats& obsEffLengths,
                mem_opt_t* memOptions,
                const SalmonOpts& salmonOpts,
                double coverageThresh,
@@ -1383,6 +1386,7 @@ void processReadsMEM(ParserT* parser,
                ClusterForest& clusterForest,
                FragmentLengthDistribution& fragLengthDist,
                BiasParams& observedGCParams,
+               EffectiveLengthStats& obsEffLengths,
                mem_opt_t* memOptions,
                const SalmonOpts& salmonOpts,
                double coverageThresh,
@@ -1479,7 +1483,7 @@ void processReadsMEM(ParserT* parser,
     prevObservedFrags = numObservedFragments;
     AlnGroupVecRange<SMEMAlignment> hitLists = boost::make_iterator_range(structureVec.begin(), structureVec.begin() + rangeSize);
     processMiniBatch<SMEMAlignment>(readExp, fmCalc,firstTimestepOfRound, rl, salmonOpts, hitLists, transcripts, clusterForest,
-                                    fragLengthDist, observedGCParams, numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac);
+                                    fragLengthDist, observedGCParams, obsEffLengths, numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac);
     
   }
 
