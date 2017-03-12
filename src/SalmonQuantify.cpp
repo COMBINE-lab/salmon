@@ -58,8 +58,6 @@ extern "C" {
 
 // Jellyfish 2 include
 #include "jellyfish/mer_dna.hpp"
-#include "jellyfish/stream_manager.hpp"
-#include "jellyfish/whole_sequence_parser.hpp"
 
 // Boost Includes
 #include <boost/container/flat_map.hpp>
@@ -115,7 +113,7 @@ extern "C" {
 #include "GZipWriter.hpp"
 #include "HitManager.hpp"
 #include "KmerIntervalMap.hpp"
-//#include "PairSequenceParser.hpp"
+
 #include "RapMapUtils.hpp"
 #include "ReadExperiment.hpp"
 #include "SACollector.hpp"
@@ -132,8 +130,6 @@ using QuasiAlignment = rapmap::utils::QuasiAlignment;
 /****** QUASI MAPPING DECLARATIONS  *******/
 
 using paired_parser = fastx_parser::FastxParser<fastx_parser::ReadPair>;
-using stream_manager =
-    jellyfish::stream_manager<std::vector<std::string>::const_iterator>;
 using single_parser = fastx_parser::FastxParser<fastx_parser::ReadSeq>;
 
 using TranscriptID = uint32_t;

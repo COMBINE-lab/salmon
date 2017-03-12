@@ -24,8 +24,6 @@
 #include "jellyfish/err.hpp"
 #include "jellyfish/misc.hpp"
 #include "jellyfish/jellyfish.hpp"
-#include "jellyfish/stream_manager.hpp"
-#include "jellyfish/whole_sequence_parser.hpp"
 
 
 #include <boost/program_options.hpp>
@@ -49,9 +47,6 @@
 #include "spdlog/spdlog.h"
 
 using my_mer = jellyfish::mer_dna_ns::mer_base_static<uint64_t, 1>;
-
-typedef jellyfish::stream_manager<char**>                stream_manager;
-typedef jellyfish::whole_sequence_parser<stream_manager> sequence_parser;
 
 extern "C" {
 int bwa_index(int argc, char* argv[]);

@@ -1417,14 +1417,6 @@ void processReadsMEM(ParserT* parser,
   auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
       rangeSize = rg.size();
-
-      /*
-  while(true) {
-      
-    typename ParserT::job j(*parser); // Get a job from the parser: a bunch of read (at most max_read_group)
-    if(j.is_empty()) break;           // If got nothing, quit
-    rangeSize = j->nb_filled;
-      */
     if (rangeSize > structureVec.size()) {
         salmonOpts.jointLog->error("rangeSize = {}, but structureVec.size() = {} --- this shouldn't happen.\n"
                                    "Please report this bug on GitHub", rangeSize, structureVec.size());

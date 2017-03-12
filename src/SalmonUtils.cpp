@@ -35,8 +35,7 @@
 #include "gff.h"
 
 #include "jellyfish/mer_dna.hpp"
-#include "jellyfish/stream_manager.hpp"
-#include "jellyfish/whole_sequence_parser.hpp"
+#include "FastxParser.hpp"
 
 #include "GenomicFeature.hpp"
 #include "SGSmooth.hpp"
@@ -1180,35 +1179,24 @@ TranscriptGeneMap readTranscriptToGeneMap(std::ifstream& ifile) {
 TranscriptGeneMap
 transcriptToGeneMapFromFasta(const std::string& transcriptsFile) {
   using std::vector;
-  using stream_manager = jellyfish::stream_manager<char**>;
-  using sequence_parser = jellyfish::whole_sequence_parser<stream_manager>;
+  using sequence_parser = fastx_parser::FastxParser<fastx_parser::ReadSeq>;
   namespace bfs = boost::filesystem;
 
   NameVector transcriptNames;
   NameVector geneNames{"gene"};
 
   vector<bfs::path> paths{transcriptsFile};
-
-  // Create a jellyfish parser
-  const int concurrentFile{1};
-  char** fnames = new char*[1];
-  fnames[0] = const_cast<char*>(transcriptsFile.c_str());
-  stream_manager streams(fnames, fnames + 1, concurrentFile);
-
   size_t maxReadGroupSize{100};
-  sequence_parser parser(4, maxReadGroupSize, concurrentFile, streams);
+  std::vector<std::string> readFiles{transcriptsFile};
+  sequence_parser parser(readFiles, 1, 1, maxReadGroupSize);
+  parser.start();
 
   // while there are transcripts left to process
-  while (true) {
-    sequence_parser::job j(parser);
-    // If this job is empty, then we're done
-    if (j.is_empty()) {
-      break;
-    }
-
-    for (size_t i = 0; i < j->nb_filled; ++i) {
+  auto rg = parser.getReadGroup();
+  while (parser.refill(rg)) {
+    for (auto& read : rg) {
       // The transcript name
-      std::string fullHeader(j->data[i].header);
+      std::string fullHeader(read.name);
       std::string header = fullHeader.substr(0, fullHeader.find(' '));
       transcriptNames.emplace_back(header);
     }
