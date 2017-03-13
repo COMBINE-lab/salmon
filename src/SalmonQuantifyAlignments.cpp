@@ -274,8 +274,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         auto transcriptID = aln->transcriptID();
                         auto& transcript = refs[transcriptID];
                         transcriptUnique = transcriptUnique and (transcriptID == firstTranscriptID);
-
-                        double refLength = transcript.RefLength > 0 ? transcript.RefLength : 1.0;
+			double refLength = transcript.RefLength > 0 ? transcript.RefLength : 1.0;
                         auto flen = aln->fragLen();
                         // If we have a properly-paired read then use the "pedantic"
                         // definition here.
@@ -1248,6 +1247,15 @@ bool processSample(AlignmentLibrary<ReadT>& alnLib,
 
     //bfs::path libCountFilePath = outputDirectory / "lib_format_counts.json";
     //alnLib.summarizeLibraryTypeCounts(libCountFilePath);
+    if (sopt.writeOrphanLinks) {
+        auto l = sopt.orphanLinkLog.get();
+        // If the logger was created, then flush it and
+        // close the associated file.
+        if (l) {
+            l->flush();
+            if (sopt.orphanLinkFile) { sopt.orphanLinkFile->close(); }
+        }
+    }
 
     if (sopt.sampleOutput) {
         // In this case, we should "re-convert" transcript
@@ -1394,6 +1402,11 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     "The prior that will be used in the VBEM algorithm.  This is interpreted "
     "as a per-nucleotide prior, unless the --perTranscriptPrior flag "
     "is also given, in which case this is used as a transcript-level prior")
+    (
+     "writeOrphanLinks",
+     po::bool_switch(&(sopt.writeOrphanLinks))->default_value(false),
+     "Write the transcripts that are linked by orphaned reads.")
+
     /*
     // Don't expose this yet
     ("noRichEqClasses", po::bool_switch(&(sopt.noRichEqClasses))->default_value(false),
@@ -1632,7 +1645,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 	}
 
         bfs::path logPath = logDirectory / "salmon.log";
-        size_t max_q_size = 2097152;
+        size_t max_q_size = 65536;//2097152;
         spdlog::set_async_mode(max_q_size);
 
         auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(logPath.string(), true);
