@@ -579,7 +579,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 	    }
  	}
         TranscriptGroup tg(txpIDs);
-        eqBuilder.addGroup(std::move(tg), auxProbs, posProbs);
+        eqBuilder.addGroup(std::move(tg), auxProbs, posProbs, salmonOpts);
       }
 
       // normalize the hits

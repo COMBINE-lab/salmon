@@ -14,7 +14,7 @@
 #include "concurrentqueue.h"
 #include "SalmonUtils.hpp"
 #include "TranscriptGroup.hpp"
-
+#include "SalmonOpts.hpp"
 
 struct TGValue {
     TGValue(const TGValue& o) {
@@ -93,9 +93,10 @@ class EquivalenceClassBuilder {
 
         inline void addGroup(TranscriptGroup&& g,
                              std::vector<double>& weights,
-			     std::vector<double>& posWeights) {
+			     std::vector<double>& posWeights,
+			     const SalmonOpts& salmonOpts) {
 
-            auto upfn = [&weights, &posWeights](TGValue& x) -> void {
+            auto upfn = [&weights, &posWeights, &salmonOpts](TGValue& x) -> void {
                 // update the count
                 x.count++;
                 // update the weights
@@ -112,10 +113,12 @@ class EquivalenceClassBuilder {
 		    salmon::utils::incLoop(x.weights[i], weights[i]);
 		  }
 		}
-		x.allWeights.push_back(weights);
+		if(salmonOpts.useFMEMOpt)
+			x.allWeights.push_back(weights);
             };
             TGValue v(weights, posWeights, 1);
-	    v.allWeights.push_back(weights);
+	    if(salmonOpts.useFMEMOpt)
+	    	v.allWeights.push_back(weights);
             countMap_.upsert(g, upfn, v);
         }
 

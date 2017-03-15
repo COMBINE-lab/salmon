@@ -518,7 +518,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 			    }
 			}
 			TranscriptGroup tg(txpIDs);
-                        eqBuilder.addGroup(std::move(tg), auxProbs, posProbs);
+                        eqBuilder.addGroup(std::move(tg), auxProbs, posProbs, salmonOpts);
                     }
 
 
