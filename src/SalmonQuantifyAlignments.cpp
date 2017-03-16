@@ -254,10 +254,9 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                     // EQCLASS
                     std::vector<uint32_t> txpIDs;
                     std::vector<double> auxProbs;
-                    std::vector<double> posProbs;
                     double auxDenom = salmon::math::LOG_0;
 
-		    // The alignments must be sorted by transcript id
+                    // The alignments must be sorted by transcript id
                     alnGroup->sortHits();
 
                     double sumOfAlignProbs{LOG_0};
@@ -440,10 +439,6 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                             auxProbs.push_back(auxProb);
                             auxDenom = salmon::math::logAdd(auxDenom, auxProb);
 
-			    if (useFSPD) {
-			      posProbs.push_back(fragStartLogNumerator);
-			    }
-
                         } else {
                             aln->logProb = LOG_0;
                         }
@@ -465,7 +460,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
                     if (txpIDs.size() > 0) {
                         TranscriptGroup tg(txpIDs);
-                        eqBuilder.addGroup(std::move(tg), auxProbs, posProbs);
+                        eqBuilder.addGroup(std::move(tg), auxProbs);
                     }
 
 

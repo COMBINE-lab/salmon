@@ -732,9 +732,9 @@ void updateEqClassWeights(
           double wsum{0.0};
           for (size_t i = 0; i < classSize; ++i) {
             auto tid = k.txps[i];
-            v.posWeights[i] = 1.0 / effLens(tid);
+            auto probStartPos = 1.0 / effLens(tid);
             v.combinedWeights[i] =
-                kv.second.count * (v.weights[i] * v.posWeights[i]);
+                kv.second.count * (v.weights[i] * probStartPos);
             wsum += v.combinedWeights[i];
           }
           double wnorm = 1.0 / wsum;
@@ -857,14 +857,6 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
           // Iterate over each weight and set it
           double wsum{0.0};
 
-          // If we don't have positional weights, then
-          // create them here.
-          bool createdPosWeights{false};
-          if (v.weights.size() != v.posWeights.size()) {
-            createdPosWeights = true;
-            v.posWeights = std::vector<tbb::atomic<double>>(v.weights.size());
-          }
-
           for (size_t i = 0; i < classSize; ++i) {
             auto tid = k.txps[i];
             double el = effLens(tid);
@@ -876,11 +868,11 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
               v.weights[i] = 1.0;
             }
             // meaningful values.
-            v.posWeights[i] = 1.0 / el;
+            auto probStartPos = 1.0 / el;
 
             // combined weight
             v.combinedWeights.push_back(
-                v.count * v.weights[i].load() * v.posWeights[i].load());
+                v.count * v.weights[i].load() * probStartPos);
             wsum += v.combinedWeights.back();
           }
 

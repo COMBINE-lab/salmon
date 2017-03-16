@@ -284,7 +284,6 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 
       std::vector<uint32_t> txpIDs;
       std::vector<double> auxProbs;
-      std::vector<double> posProbs;
       double auxDenom = salmon::math::LOG_0;
 
       uint32_t numInGroup{0};
@@ -492,13 +491,6 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
           txpIDs.push_back(transcriptID);
           auxProbs.push_back(auxProb);
           auxDenom = salmon::math::logAdd(auxDenom, auxProb);
-
-          // If we're using the fragment start position distribution
-          // remember *the numerator* of (x / cdf(effLen / len)) where
-          // x = cdf(p+1 / len) - cdf(p / len)
-          if (useFSPD) {
-            posProbs.push_back(std::exp(fragStartLogNumerator));
-          }
         } else {
           aln.logProb = LOG_0;
         }
@@ -529,21 +521,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
             // Get the indices in order by conditional probability
             std::sort(inds.begin(), inds.end(), 
                       [&auxProbs](int i, int j) -> bool { return auxProbs[i] < auxProbs[j]; });
-            // Reorder the other vectors
-            if (useFSPD) {
-                decltype(txpIDs) txpIDsNew(txpIDs.size());
-                decltype(auxProbs) auxProbsNew(auxProbs.size());
-                decltype(posProbs) posProbsNew(posProbs.size());
-                for (size_t r = 0; r < eqSize; ++r) {
-                    auto ind = inds[r];
-                    txpIDsNew[r] = txpIDs[ind];
-                    auxProbsNew[r] = auxProbs[ind];
-                    posProbsNew[r] = posProbs[ind];
-                }
-                std::swap(txpIDsNew, txpIDs);
-                std::swap(auxProbsNew, auxProbs);
-                std::swap(posProbsNew, posProbs);
-            } else {
+            {
                 decltype(txpIDs) txpIDsNew(txpIDs.size());
                 decltype(auxProbs) auxProbsNew(auxProbs.size());
                 for (size_t r = 0; r < eqSize; ++r) {
@@ -557,7 +535,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
         }
         
         TranscriptGroup tg(txpIDs);
-        eqBuilder.addGroup(std::move(tg), auxProbs, posProbs);
+        eqBuilder.addGroup(std::move(tg), auxProbs);
       }
 
       // normalize the hits
