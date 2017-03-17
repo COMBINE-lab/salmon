@@ -53,7 +53,7 @@ int help(std::vector<std::string> opts) { //}int argc, char* argv[]) {
     helpMsg.write("Salmon v{}\n\n", salmon::version);
     helpMsg.write("Usage:  salmon -h|--help or \n"
                   "        salmon -v|--version or \n"
-		  "        salmon -c|--cite or \n"
+                  "        salmon -c|--cite or \n"
                   "        salmon [--no-version-check] <COMMAND> [-h | options]\n\n");
     helpMsg.write("Commands:\n");
     helpMsg.write("     cite  Show salmon citation information\n");
