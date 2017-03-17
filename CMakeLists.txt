@@ -4,10 +4,10 @@ enable_testing()
 
 project (Salmon)
 
-set(CPACK_PACKAGE_VERSION "0.8.1")
+set(CPACK_PACKAGE_VERSION "0.8.2")
 set(CPACK_PACKAGE_VERSION_MAJOR "0")
 set(CPACK_PACKAGE_VERSION_MINOR "8")
-set(CPACK_PACKAGE_VERSION_PATCH "1")
+set(CPACK_PACKAGE_VERSION_PATCH "2")
 set(PROJECT_VERSION ${CPACK_PACKAGE_VERSION})
 set(CPACK_GENERATOR "TGZ")
 set(CPACK_SOURCE_GENERATOR "TGZ")
@@ -211,6 +211,18 @@ if (NOT ZLIB_FOUND)
 	message (FATAL_ERROR "zlib must be installed before configuration & building can proceed")
 endif()
 
+if ("${CMAKE_INCLUDE_PATH}" STREQUAL "")
+	set(EXTRA_CMAKE_INCLUDE_FLAGS "")
+else()
+	set(EXTRA_CMAKE_INCLUDE_FLAGS "-I${CMAKE_INCLUDE_PATH}")
+endif()
+
+if ("${CMAKE_LIBRARY_PATH}" STREQUAL "")
+	set(EXTRA_CMAKE_LIBRARY_FLAGS "")
+else()
+	set(EXTRA_CMAKE_LIBRARY_FLAGS "-L${CMAKE_LIBRARY_PATH}")
+endif()
+
 find_package (LibLZMA)
 if (NOT LIBLZMA_FOUND)
     message ("Will attempt to fetch and build liblzma")
@@ -227,7 +239,7 @@ ExternalProject_Add(liblzma
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/xz-5.2.2
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     BUILD_IN_SOURCE TRUE
-    CONFIGURE_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/external/xz-5.2.2/configure --prefix=<INSTALL_DIR> CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
+    CONFIGURE_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/external/xz-5.2.2/configure --prefix=<INSTALL_DIR> CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS+=${EXTRA_CMAKE_INCLUDE_FLAGS} CPPFLAGS+=${EXTRA_CMAKE_INCLUDE_FLAGS} LDFLAGS+=${EXTRA_CMAKE_LIBRARY_FLAGS}
     BUILD_COMMAND make ${QUIET_MAKE}
     INSTALL_COMMAND make ${QUIET_MAKE} install
 )
@@ -404,13 +416,14 @@ ExternalProject_Add(libcereal
     DOWNLOAD_COMMAND curl -k -L https://github.com/USCiLab/cereal/archive/v1.2.2.tar.gz -o cereal-v1.2.2.tar.gz &&		 
                      ${SHASUM} 1921f26d2e1daf9132da3c432e2fd02093ecaedf846e65d7679ddf868c7289c4  cereal-v1.2.2.tar.gz &&
                      tar -xzvf cereal-v1.2.2.tar.gz
+
     ##
     #URL https://github.com/USCiLab/cereal/archive/v1.2.2.tar.gz
     #DOWNLOAD_NAME cereal-v1.2.2.tar.gz
     #TLS_VERIFY FALSE
     #URL_HASH SHA1=ffddf5fc5313cfbb893e07823ca8c473084eebca
     ##
-  	SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.2.2
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.2.2
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
     BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.2.2/build
@@ -614,7 +627,8 @@ ExternalProject_Add(libstadenio
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/staden-io_lib
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ./configure --enable-shared=no --without-libcurl --prefix=<INSTALL_DIR> LDFLAGS=${LIBSTADEN_LDFLAGS} CFLAGS=${LIBSTADEN_CFLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
-    BUILD_COMMAND make ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS+=${STADEN_INC} CFLAGS+=${STADEN_LIB} CFLAGS+=${LZFLAG}
+    BUILD_COMMAND make ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS+=${STADEN_INC} CFLAGS+=${STADEN_LIB} LDFLAGS+=${EXTRA_CMAKE_LIBRARY_FLAGS} CFLAGS+=${EXTRA_CMAKE_INCLUDE_FLAGS} CFLAGS+=${LZFLAG} 
+
 
     BUILD_IN_SOURCE 1
     INSTALL_COMMAND make install

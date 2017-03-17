@@ -22,7 +22,8 @@ RUN rm boost_1_59_0.tar.gz
 RUN rm -fr "/boost_1_59_0"
 RUN wget https://repo.continuum.io/miniconda/Miniconda2-latest-Linux-x86_64.sh
 RUN bash Miniconda2-latest-Linux-x86_64.sh -b
-RUN PYTHONPATH=/root/miniconda2/lib/python2.7/site-packages PATH=/root/miniconda2/bin:$PATH pip install pandas scipy numpy matplotlib seaborn
+RUN source /hbb_exe/activate && PYTHONPATH=/root/miniconda2/lib/python2.7/site-packages PATH=/root/miniconda2/bin:$PATH pip install pandas scipy numpy 
+#matplotlib seaborn
 
 # java
 RUN wget --no-cookies --no-check-certificate --header "Cookie: gpw_e24=http%3A%2F%2Fwww.oracle.com%2F; oraclelicense=accept-securebackup-cookie" "http://download.oracle.com/otn-pub/java/jdk/8u60-b27/jre-8u60-linux-x64.rpm" -O jre-8u60-linux-x64.rpm
