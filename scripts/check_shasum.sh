@@ -20,7 +20,7 @@ fi
 if [ -z "${hashcheck-}" ]; then
     echo "Couldn't find shasum command; can't verify contents of ${fname}";
 else
-    echo "${sum}  ${fname}" | sha256sum -c - || { echo "${fname} did not match expected SHA256! Exiting."; exit 1; }
+    echo "${sum}  ${fname}" | ${hashcheck} -c - || { echo "${fname} did not match expected SHA256! Exiting."; exit 1; }
 fi
 
 
