@@ -19,17 +19,17 @@
 struct TGValue {
     TGValue(const TGValue& o) {
         weights = o.weights;
-	posWeights = o.posWeights;
+	//:posWeights = o.posWeights;
 	combinedWeights = o.combinedWeights;
         count.store(o.count.load());
 	allWeights = o.allWeights;
     }
 
     TGValue(std::vector<double>& weightIn, 
-	    std::vector<double>& posWeightsIn, 
+	    //std::vector<double>& posWeightsIn, 
 	    uint64_t countIn) :
-        weights(weightIn.begin(), weightIn.end()),
-	posWeights(posWeightsIn.begin(), posWeightsIn.end()) { 
+        weights(weightIn.begin(), weightIn.end())
+	/*posWeights(posWeightsIn.begin(), posWeightsIn.end())*/ { 
 	  count.store(countIn); 
 	}
 
@@ -46,21 +46,22 @@ struct TGValue {
       }
 
       // If we have positional weights, normalize them.
-      if (posWeights.size() > 0) {
+      /*if (posWeights.size() > 0) {
 	double posNorm = 1.0 / count.load();
 	for (size_t i = 0; i < posWeights.size(); ++i) {
 	  posWeights[i].store(posWeights[i].load() * posNorm);
 	}
-      }
+      }*/
     }
 
     mutable std::vector<tbb::atomic<double>> weights;
-    mutable std::vector<tbb::atomic<double>> posWeights;
+    //mutable std::vector<tbb::atomic<double>> posWeights;
     // The combined auxiliary and position weights.  These
     // are filled in by the inference algorithm.
     mutable std::vector<double> combinedWeights;
     std::atomic<uint64_t> count{0};
-    std::vector<std::vector<double> > allWeights;
+    std::vector<double> allWeights;
+    //std::vector<std::vector<double> > allWeights;
 };
 
 class EquivalenceClassBuilder {
@@ -93,32 +94,36 @@ class EquivalenceClassBuilder {
 
         inline void addGroup(TranscriptGroup&& g,
                              std::vector<double>& weights,
-			     std::vector<double>& posWeights,
+			     //std::vector<double>& posWeights,
 			     const SalmonOpts& salmonOpts) {
 
-            auto upfn = [&weights, &posWeights, &salmonOpts](TGValue& x) -> void {
+            auto upfn = [&weights, &salmonOpts](TGValue& x) -> void {
                 // update the count
                 x.count++;
                 // update the weights
 
 		// If we have positional weights
-		if (weights.size() == posWeights.size()) {
+		/*if (weights.size() == posWeights.size()) {
 		  for (size_t i = 0; i < x.weights.size(); ++i) {
 		    salmon::utils::incLoop(x.weights[i], weights[i]);
-		    salmon::utils::incLoop(x.posWeights[i], posWeights[i]);
+		    //salmon::utils::incLoop(x.posWeights[i], posWeights[i]);
 		  }
-		} else {
+		}*/// else {
 	        // With no positional weights
 		  for (size_t i = 0; i < x.weights.size(); ++i) {
 		    salmon::utils::incLoop(x.weights[i], weights[i]);
-		  }
+		  //}
 		}
-		if(salmonOpts.useFMEMOpt)
-			x.allWeights.push_back(weights);
+		if(salmonOpts.useFMEMOpt){
+			//x.allWeights.push_back(weights);
+			x.allWeights.insert(x.allWeights.end(), weights.begin(), weights.end() );
+		}
             };
-            TGValue v(weights, posWeights, 1);
-	    if(salmonOpts.useFMEMOpt)
-	    	v.allWeights.push_back(weights);
+            TGValue v(weights, 1);
+	    if(salmonOpts.useFMEMOpt){
+	    	//v.allWeights.push_back(weights);
+		v.allWeights.insert(v.allWeights.end(),weights.begin(),weights.end());
+	    }
             countMap_.upsert(g, upfn, v);
         }
 

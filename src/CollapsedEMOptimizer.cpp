@@ -417,12 +417,14 @@ void EMUpdate_FM(std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
             // then it gets the full count.  Otherwise,
             // update according to our VBEM rule.
             if (BOOST_LIKELY(groupSize > 1)) {
+	      size_t  allWeights_iter = 0;
+	      const auto& auxs = kv.second.allWeights; 
               for (size_t f = 0; f< count; ++f){
                 double denom = 0.0;
-		const auto& auxs = kv.second.allWeights[f];
+		//const auto& auxs = kv.second.allWeights;
                 for (size_t i = 0; i < groupSize; ++i) {
                         auto tid = txps[i];
-                        auto aux = auxs[i];
+                        auto aux = auxs[i + allWeights_iter ];
                         //auto aux = kv.second.allWeights[f][i];
                         double v =  alphaIn[tid] * aux;
                         denom += v;
@@ -434,7 +436,7 @@ void EMUpdate_FM(std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
                         double invDenom = 1.0 / denom;
                         for (size_t i = 0; i < groupSize; ++i) {
                                 auto tid = txps[i];
-                                auto aux = auxs[i];
+                                auto aux = auxs[i + allWeights_iter];
                                 //auto aux = kv.second.allWeights[f][i];
                                 double v = alphaIn[tid] * aux;
                                 if (!std::isnan(v)) {
@@ -442,9 +444,10 @@ void EMUpdate_FM(std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
                                 }
                         }
                 }
+		allWeights_iter += groupSize;
               }
             }
-           else {
+            else {
                 salmon::utils::incLoop(alphaOut[txps.front()], count);
             }
           }
@@ -808,9 +811,9 @@ void updateEqClassWeights(
           double wsum{0.0};
           for (size_t i = 0; i < classSize; ++i) {
             auto tid = k.txps[i];
-            v.posWeights[i] = 1.0 / effLens(tid);
+            //v.posWeights[i] = 1.0 / effLens(tid);
             v.combinedWeights[i] =
-                kv.second.count * (v.weights[i] * v.posWeights[i]);
+                kv.second.count * (v.weights[i] *  (1.0 / effLens(tid)) );
             wsum += v.combinedWeights[i];
           }
           double wnorm = 1.0 / wsum;
@@ -940,10 +943,10 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
           // If we don't have positional weights, then
           // create them here.
           bool createdPosWeights{false};
-          if (v.weights.size() != v.posWeights.size()) {
+          /*if (v.weights.size() != v.posWeights.size()) {
             createdPosWeights = true;
             v.posWeights = std::vector<tbb::atomic<double>>(v.weights.size());
-          }
+          }*/
 
           for (size_t i = 0; i < classSize; ++i) {
             auto tid = k.txps[i];
@@ -956,14 +959,14 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
               v.weights[i] = 1.0;
             }
             // meaningful values.
-            v.posWeights[i] = 1.0 / el;
+            //v.posWeights[i] = 1.0 / el;
 
             // combined weight
 	    /*if(useRankEqClasses or rangeCounts>0)
 		v.combinedWeights.push_back(v.weights[i].load());
 	    else*/
             	v.combinedWeights.push_back(
-                	v.count * v.weights[i].load() * v.posWeights[i].load());
+                	v.count * v.weights[i].load() * (1.0 / el) );
             wsum += v.combinedWeights.back();
           }
 

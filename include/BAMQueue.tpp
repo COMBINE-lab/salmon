@@ -669,6 +669,7 @@ void BAMQueue<FragT>::fillQueue_(FilterT filt, bool onlyProcessAmbiguousAlignmen
             if (!exhaustedAlnGroupPool_) {
                 f = new FragT;
                 ++numFragAlloc;
+		if (numFragAlloc > 1000000) { exhaustedAlnGroupPool_ = true; }
                 break;
             }
         }
