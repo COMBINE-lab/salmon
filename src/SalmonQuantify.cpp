@@ -918,41 +918,41 @@ void processReadsQuasi(
       bool lh = tooShortLeft ? false : hitCollector(rp.first.seq,
                                   leftHits, saSearcher,
                                   MateStatus::PAIRED_END_LEFT,
-				  false,10,
+				  false,salmonOpts.hitMatchLength,
 				  //*** mopts->mmpThreshold, or strictCheck, 
                                   consistentHits);
 
-      if (leftHits.size() == 0){
+      if (leftHits.size() == 0 and salmonOpts.remap){
 
 	hitCollector9(rp.first.seq,
 			   leftHits, saSearcher,
 			   MateStatus::PAIRED_END_LEFT,
-			   true,10,
+			   true,salmonOpts.hitMatchLength,
 			   //*** mopts->mmpThreshold, or strictCheck, 
 			   consistentHits);
 
       }
 
-      if(leftHits.size() > 0) hitSECollector(rp.first, leftHits);
+      if(leftHits.size() > 0) hitSECollector(rp.first, leftHits, salmonOpts.mmThreshold);
 
       bool rh = tooShortRight ? false : hitCollector(rp.second.seq,
                                    rightHits, saSearcher,
                                    MateStatus::PAIRED_END_RIGHT, 
-				   false,10,
+				   false,salmonOpts.hitMatchLength,
 				   //*** mopts->mmpThreads,
                                    consistentHits);
 
-      if(rightHits.size() == 0){
+      if(rightHits.size() == 0 and salmonOpts.remap){
 
 	hitCollector9(rp.second.seq,
 			   rightHits, saSearcher,
 			   MateStatus::PAIRED_END_RIGHT,
-			   true,10,
+			   true,salmonOpts.hitMatchLength,
 			   //*** mopts->mmpThreshold,
 			   consistentHits);
       }
 
-      if(rightHits.size() > 0) hitSECollector(rp.second, rightHits);
+      if(rightHits.size() > 0) hitSECollector(rp.second, rightHits, salmonOpts.mmThreshold);
 
       // Consider a read as too short if both ends are too short
       if (tooShortLeft and tooShortRight) {
@@ -1362,18 +1362,18 @@ void processReadsQuasi(
 
       bool lh =
           tooShort ? false
-          : hitCollector9(rp.seq,
+          : hitCollector(rp.seq,
                                   jointHits, saSearcher,
-                                  MateStatus::SINGLE_END,false,10, consistentHits);
-      if (jointHits.size() == 0){
-	hitCollector9(rp.seq, jointHits, saSearcher, MateStatus::SINGLE_END, true, 10, consistentHits);
+                                  MateStatus::SINGLE_END,false,salmonOpts.hitMatchLength, consistentHits);
+      if (jointHits.size() == 0 and salmonOpts.remap){
+	hitCollector9(rp.seq, jointHits, saSearcher, MateStatus::SINGLE_END, true, salmonOpts.hitMatchLength, consistentHits);
       }
             // @hirak
             // Here I collected all the QuasiALignments in
             // QuasiAlignment Object vector hits
             // which right now contains lcpLengths too
             // time to call the new function
-            hitSECollector(rp, jointHits);
+            hitSECollector(rp, jointHits,salmonOpts.mmThreshold);
 
 
       // If the fragment was too short, record it
@@ -2441,6 +2441,17 @@ int salmonQuantify(int argc, char* argv[]) {
      po::bool_switch(&(sopt.rankEqClasses))->default_value(false),
      "Keep separate equivalence classes for each distinct "
      "ordering of transcripts in the label.")
+    (
+     "hitMatchLength",
+     po::value<uint32_t>(&(sopt.hitMatchLength))->default_value(0),
+     "minimum match length when trying to remap.")
+    (
+     "mmThreshold",
+     po::value<uint32_t>(&(sopt.mmThreshold))->default_value(0),
+     "minimum threshold for hits to consider.")   
+     ( 
+     "remap", po::bool_switch(&(sopt.remap))->default_value(false),
+     "Do remap with kmer size 9 when fail to map in the usual way.")
     (
      "numGibbsSamples",
      po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0),

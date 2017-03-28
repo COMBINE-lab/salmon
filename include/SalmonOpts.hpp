@@ -78,6 +78,11 @@ struct SalmonOpts {
 
     uint32_t useRangeClusterEqClasses; // Cluster reads in each Eq Class based on the reads they fall into
 
+    uint32_t hitMatchLength;
+    uint32_t mmThreshold;
+
+    bool remap;
+
     bool useFMEMOpt; // Use Full Model EM instead of equivalence class EM in the batch passes
     
     bool useFSPD; // Learn a non-uniform start distribution
