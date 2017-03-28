@@ -124,6 +124,7 @@ extern "C" {
 #include "PairAlignmentFormatter.hpp"
 #include "SingleAlignmentFormatter.hpp"
 #include "RapMapUtils.hpp"
+#include "SelectiveAlignment.hpp"
 //#include "TextBootstrapWriter.hpp"
 
 /****** QUASI MAPPING DECLARATIONS *********/
@@ -853,7 +854,17 @@ void processReadsQuasi(
   size_t maxNumHits{salmonOpts.maxReadOccs};
   size_t readLenLeft{0};
   size_t readLenRight{0};
-  SACollector<RapMapIndexT> hitCollector(qidx);
+
+
+  //Normal Call to SACollector
+  SACollector<RapMapIndexT, rapmap::utils::my_mer> hitCollector(qidx);
+  //Remap caqll to SACollector
+  SACollector<RapMapIndexT, rapmap::utils::my_mer9> hitCollector9(qidx);
+
+  SECollector<RapMapIndexT> hitSECollector(qidx);
+
+
+  //SACollector<RapMapIndexT> hitCollector(qidx);
 
   if (salmonOpts.fasterMapping) {
       hitCollector.enableNIP();
@@ -905,14 +916,43 @@ void processReadsQuasi(
       mapType = salmon::utils::MappingType::UNMAPPED;
 
       bool lh = tooShortLeft ? false : hitCollector(rp.first.seq,
-                                                    leftHits, saSearcher,
-                                                    MateStatus::PAIRED_END_LEFT,
-                                                    consistentHits);
+                                  leftHits, saSearcher,
+                                  MateStatus::PAIRED_END_LEFT,
+				  false,10,
+				  //*** mopts->mmpThreshold, or strictCheck, 
+                                  consistentHits);
+
+      if (leftHits.size() == 0){
+
+	hitCollector9(rp.first.seq,
+			   leftHits, saSearcher,
+			   MateStatus::PAIRED_END_LEFT,
+			   true,10,
+			   //*** mopts->mmpThreshold, or strictCheck, 
+			   consistentHits);
+
+      }
+
+      if(leftHits.size() > 0) hitSECollector(rp.first, leftHits);
 
       bool rh = tooShortRight ? false : hitCollector(rp.second.seq,
                                    rightHits, saSearcher,
                                    MateStatus::PAIRED_END_RIGHT, 
+				   false,10,
+				   //*** mopts->mmpThreads,
                                    consistentHits);
+
+      if(rightHits.size() == 0){
+
+	hitCollector9(rp.second.seq,
+			   rightHits, saSearcher,
+			   MateStatus::PAIRED_END_RIGHT,
+			   true,10,
+			   //*** mopts->mmpThreshold,
+			   consistentHits);
+      }
+
+      if(rightHits.size() > 0) hitSECollector(rp.second, rightHits);
 
       // Consider a read as too short if both ends are too short
       if (tooShortLeft and tooShortRight) {
@@ -1272,7 +1312,14 @@ void processReadsQuasi(
   bool consistentHits{salmonOpts.consistentHits};
   bool quiet{salmonOpts.quiet};
 
-  SACollector<RapMapIndexT> hitCollector(qidx);
+  //Normal Call to SACollector
+  SACollector<RapMapIndexT, rapmap::utils::my_mer> hitCollector(qidx);
+  //Remap caqll to SACollector
+  SACollector<RapMapIndexT, rapmap::utils::my_mer9> hitCollector9(qidx);
+
+  SECollector<RapMapIndexT> hitSECollector(qidx);
+
+  //SACollector<RapMapIndexT> hitCollector(qidx);
   if (salmonOpts.fasterMapping) {
       hitCollector.enableNIP();
   } else {
@@ -1292,7 +1339,7 @@ void processReadsQuasi(
   auto* qmLog = salmonOpts.qmLog.get();
   bool writeQuasimappings = (qmLog != nullptr);
 
- auto rg = parser->getReadGroup();
+  auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
       rangeSize = rg.size();
     if (rangeSize > structureVec.size()) {
@@ -1315,9 +1362,19 @@ void processReadsQuasi(
 
       bool lh =
           tooShort ? false
-          : hitCollector(rp.seq,
+          : hitCollector9(rp.seq,
                                   jointHits, saSearcher,
-                                  MateStatus::SINGLE_END, consistentHits);
+                                  MateStatus::SINGLE_END,false,10, consistentHits);
+      if (jointHits.size() == 0){
+	hitCollector9(rp.seq, jointHits, saSearcher, MateStatus::SINGLE_END, true, 10, consistentHits);
+      }
+            // @hirak
+            // Here I collected all the QuasiALignments in
+            // QuasiAlignment Object vector hits
+            // which right now contains lcpLengths too
+            // time to call the new function
+            hitSECollector(rp, jointHits);
+
 
       // If the fragment was too short, record it
       if (tooShort) {
