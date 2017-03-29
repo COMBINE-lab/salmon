@@ -918,7 +918,7 @@ void processReadsQuasi(
       bool lh = tooShortLeft ? false : hitCollector(rp.first.seq,
                                   leftHits, saSearcher,
                                   MateStatus::PAIRED_END_LEFT,
-				  false,salmonOpts.hitMatchLength,
+				  false,salmonOpts.mmpLength,
 				  //*** mopts->mmpThreshold, or strictCheck, 
                                   consistentHits);
 
@@ -927,7 +927,7 @@ void processReadsQuasi(
 	hitCollector9(rp.first.seq,
 			   leftHits, saSearcher,
 			   MateStatus::PAIRED_END_LEFT,
-			   true,salmonOpts.hitMatchLength,
+			   true,salmonOpts.mmpLength,
 			   //*** mopts->mmpThreshold, or strictCheck, 
 			   consistentHits);
 
@@ -938,7 +938,7 @@ void processReadsQuasi(
       bool rh = tooShortRight ? false : hitCollector(rp.second.seq,
                                    rightHits, saSearcher,
                                    MateStatus::PAIRED_END_RIGHT, 
-				   false,salmonOpts.hitMatchLength,
+				   false,salmonOpts.mmpLength,
 				   //*** mopts->mmpThreads,
                                    consistentHits);
 
@@ -947,7 +947,7 @@ void processReadsQuasi(
 	hitCollector9(rp.second.seq,
 			   rightHits, saSearcher,
 			   MateStatus::PAIRED_END_RIGHT,
-			   true,salmonOpts.hitMatchLength,
+			   true,salmonOpts.mmpLength,
 			   //*** mopts->mmpThreshold,
 			   consistentHits);
       }
@@ -1364,9 +1364,9 @@ void processReadsQuasi(
           tooShort ? false
           : hitCollector(rp.seq,
                                   jointHits, saSearcher,
-                                  MateStatus::SINGLE_END,false,salmonOpts.hitMatchLength, consistentHits);
+                                  MateStatus::SINGLE_END,false,salmonOpts.mmpLength, consistentHits);
       if (jointHits.size() == 0 and salmonOpts.remap){
-	hitCollector9(rp.seq, jointHits, saSearcher, MateStatus::SINGLE_END, true, salmonOpts.hitMatchLength, consistentHits);
+	hitCollector9(rp.seq, jointHits, saSearcher, MateStatus::SINGLE_END, true, salmonOpts.mmpLength, consistentHits);
       }
             // @hirak
             // Here I collected all the QuasiALignments in
@@ -2442,12 +2442,12 @@ int salmonQuantify(int argc, char* argv[]) {
      "Keep separate equivalence classes for each distinct "
      "ordering of transcripts in the label.")
     (
-     "hitMatchLength",
-     po::value<uint32_t>(&(sopt.hitMatchLength))->default_value(0),
+     "mmpLength",
+     po::value<uint32_t>(&(sopt.mmpLength))->default_value(10),
      "minimum match length when trying to remap.")
     (
      "mmThreshold",
-     po::value<uint32_t>(&(sopt.mmThreshold))->default_value(0),
+     po::value<uint32_t>(&(sopt.mmThreshold))->default_value(10),
      "minimum threshold for hits to consider.")   
      ( 
      "remap", po::bool_switch(&(sopt.remap))->default_value(false),
