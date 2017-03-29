@@ -880,9 +880,9 @@ void processReadsQuasi(
   std::vector<QuasiAlignment> leftHits;
   std::vector<QuasiAlignment> rightHits;
   //filtered hits in the following vectors
-  std::vector<QuasiAlignment> filtLeftHits;
-  std::vector<QuasiAlignment> filtRightHits;
-  std::vector<QuasiAlignment> filtJointHits;
+  //std::vector<QuasiAlignment> filtLeftHits;
+  //std::vector<QuasiAlignment> filtRightHits;
+  //std::vector<QuasiAlignment> filtJointHits;
 
 
   rapmap::utils::HitCounters hctr;
@@ -919,7 +919,6 @@ void processReadsQuasi(
       auto& jointHits = jointHitGroup.alignments();
       leftHits.clear();
       rightHits.clear();
-      filtJointHits.clear();
       mapType = salmon::utils::MappingType::UNMAPPED;
 
       bool lh = tooShortLeft ? false : hitCollector(rp.first.seq,
@@ -939,35 +938,39 @@ void processReadsQuasi(
 			   consistentHits);
 
       }
-      filtLeftHits.clear();
-      filtRightHits.clear();
+      //filtLeftHits.clear();
+      //filtRightHits.clear();
       //std::ofstream f;
       //f.open ("/mnt/scratch1/mohsen/selective-alignment/edits/"+rp.first.name, std::fstream::in | std::fstream::out | std::fstream::app);
       //std::cout<< "hi\n";
+      int32_t minLDist{salmonOpts.editDistance};
+      int32_t minRDist{salmonOpts.editDistance};
+
+
       if(leftHits.size() > 0) {
 	  //std::cout<<"ho\n";
           hitSECollector(rp.first, leftHits, salmonOpts.editDistance);
 	  //int i = 0;
-          for(auto& qa : leftHits){
-	      //i++;
-	      //std::cout<<"hi\n";
-	      //leftHits.
-	      //f<< i << "\t" << qa.tid << "\t" << qa.editD << "\t" << qa.toAlign << "\n";
-              if(qa.toAlign){
-                filtLeftHits.push_back(qa);
-              }
+          leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
+                      [](QuasiAlignment& a) {
+                      return !a.toAlign;
+                      }), leftHits.end());
+          if(leftHits.size() > 0){
+                std::for_each(leftHits.begin(), leftHits.end(),
+                        [&minLDist](QuasiAlignment& a) {
+                                       if (a.editD < minLDist) { minLDist = a.editD; }
+                                      });
+
+          leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
+                      [&minLDist](QuasiAlignment& a) {
+                      return a.editD > minLDist;
+                      }), leftHits.end());
           }
-          if(filtLeftHits.size() == 0){
-              lh = false ;
-          }/*else{
-              std::sort(filtLeftHits.begin(),filtLeftHits.end(),
-                      [](const QuasiAlignment& q1, const QuasiAlignment& q2) -> bool {
-                        return q1.tid < q2.tid;
-                      });
-          }*/
       }
      // f.close();
     //filter on the basis of edit distance
+
+
 
 
 
@@ -990,14 +993,27 @@ void processReadsQuasi(
 
       if(rightHits.size() > 0){
           hitSECollector(rp.second, rightHits, salmonOpts.editDistance);
-          for(auto& qa : rightHits){
-              if(qa.toAlign){
-                  filtRightHits.push_back(qa);
-              }
-          }
-          if(filtRightHits.size() == 0){
+
+          rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
+                      [](QuasiAlignment& a) {
+                      return !a.toAlign;
+                      }), rightHits.end());
+
+          if(rightHits.size() > 0){
+              std::for_each(rightHits.begin(), rightHits.end(),
+                        [&minRDist](QuasiAlignment& a) {
+                                       if (a.editD < minRDist) { minRDist = a.editD; }
+                                      });
+
+              rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
+                      [&minRDist](QuasiAlignment& a) {
+                      return a.editD > minRDist;
+                      }), rightHits.end());
+            }
+
+          /*if(rightHits.size() == 0){
               rh = false ;
-          }/*else{
+          }else{
               std::sort(filtRightHits.begin(),filtRightHits.end(),
                       [](const QuasiAlignment& q1, const QuasiAlignment& q2) -> bool {
                         return q1.tid < q2.tid;
@@ -1015,11 +1031,11 @@ void processReadsQuasi(
         // then
         // do the intersection.
         if (strictIntersect) {
-            rapmap::utils::mergeLeftRightHits(filtLeftHits, filtRightHits, jointHits,
+            rapmap::utils::mergeLeftRightHits(leftHits, rightHits, jointHits,
                                             readLenLeft, maxNumHits,
                                             tooManyHits, hctr);
         } else {
-            rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, filtLeftHits, filtRightHits,
+            rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, leftHits, rightHits,
                                                  jointHits, readLenLeft,
                                                  maxNumHits, tooManyHits, hctr);
         }
@@ -1033,7 +1049,7 @@ void processReadsQuasi(
           jointHitGroup.clearAlignments();
         }
 
-        if(jointHits.size() > 1){
+        /*if(jointHits.size() > 1){
             if(jointHits.front().isPaired){
 
                //auto bestHit =  std::min_element(jointHits.begin(),jointHits.end(),
@@ -1051,15 +1067,15 @@ void processReadsQuasi(
                 }
             }
         }
-      }
+
 
       if(jointHits.front().isPaired) {
           jointHits.clear();
         for(auto& qa:filtJointHits)
             jointHits.push_back(qa);
+      }*/
+
       }
-
-
 
       // NOTE: This will currently not work with "strict intersect", i.e.
       // nothing will be output here with strict intersect.
