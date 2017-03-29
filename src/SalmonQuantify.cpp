@@ -161,6 +161,50 @@ using AlnGroupQueue = tbb::concurrent_queue<AlignmentGroup<AlnT>*>;
 
 #include "LightweightAlignmentDefs.hpp"
 
+
+
+static constexpr int8_t rc_table[128] = {
+    78, 78,  78, 78,  78,  78,  78, 78,  78, 78, 78, 78,  78, 78, 78, 78, // 15
+    78, 78,  78, 78,  78,  78,  78, 78,  78, 78, 78, 78,  78, 78, 78, 78, // 31
+    78, 78,  78, 78,  78,  78,  78, 78,  78, 78, 78, 78,  78, 78, 78, 78, // 787
+    78, 78,  78, 78,  78,  78,  78, 78,  78, 78, 78, 78,  78, 78, 78, 78, // 63
+    78, 84, 78, 71, 78,  78,  78, 67, 78, 78, 78, 78,  78, 78, 78, 78, // 79
+    78, 78,  78, 78,  65, 65, 78, 78,  78, 78, 78, 78,  78, 78, 78, 78, // 95
+    78, 84, 78, 71, 78,  78,  78, 67, 78, 78, 78, 78,  78, 78, 78, 78, // 101
+    78, 78,  78, 78,  65, 65, 78, 78,  78, 78, 78, 78,  78, 78, 78, 78  // 127
+};
+
+int hammingDist(QuasiAlignment& qa, std::string& read, Transcript& transcript, int maxDist=4) {
+   int hamming = 0;
+   int minOffset = (qa.pos < 0) ? -(qa.pos) : 0;
+   hamming += minOffset;
+   int maxOffset = std::min(static_cast<int>(read.size()), static_cast<int>(transcript.RefLength - qa.pos));
+   hamming += (read.size() - maxOffset);
+   const char* txpSeq = transcript.Sequence();
+      const char* readSeq{nullptr};
+   auto readLen = read.length();
+   if (qa.fwd) {
+     for (int j=minOffset; j<maxOffset; ++j) {
+       hamming += (read[j]!=txpSeq[qa.pos+j]);
+       if (hamming > maxDist) { return hamming; }
+     }
+   } else {
+     for (int j=minOffset; j<maxOffset; ++j) {
+       hamming += ((char)rc_table[(uint8_t)read[(readLen-j)-1]] != txpSeq[qa.pos+j]);
+              if (hamming > maxDist) { return hamming; }
+     }
+   }
+   return hamming;
+ }
+
+
+
+
+
+
+
+
+
 template <typename AlnT>
 void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
                       uint64_t firstTimestepOfRound, ReadLibrary& readLib,
@@ -947,28 +991,30 @@ void processReadsQuasi(
       int32_t minRDist{salmonOpts.editDistance};
 
 
-      if(leftHits.size() > 0) {
-	  //std::cout<<"ho\n";
-          hitSECollector(rp.first, leftHits, salmonOpts.editDistance);
-	  //int i = 0;
-          leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
-                      [](QuasiAlignment& a) {
-                      return !a.toAlign;
-                      }), leftHits.end());
-          if(leftHits.size() > 0){
-                std::for_each(leftHits.begin(), leftHits.end(),
-                        [&minLDist](QuasiAlignment& a) {
-                                       if (a.editD < minLDist) { minLDist = a.editD; }
-                                      });
 
-          leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
-                      [&minLDist](QuasiAlignment& a) {
-                      return a.editD > minLDist;
-                      }), leftHits.end());
-          }
-      }
-     // f.close();
-    //filter on the basis of edit distance
+      //if(leftHits.size() > 0) {
+          ////std::cout<<"ho\n";
+          //hitSECollector(rp.first, leftHits, salmonOpts.editDistance);
+          ////int i = 0;
+          //leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
+                      //[](QuasiAlignment& a) {
+                      //return !a.toAlign;
+                      //}), leftHits.end());
+          //if(leftHits.size() > 0){
+                //std::for_each(leftHits.begin(), leftHits.end(),
+                        //[&minLDist](QuasiAlignment& a) {
+                                       //if (a.editD < minLDist) { minLDist = a.editD; }
+                                      //});
+
+
+          //leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
+                      //[&minLDist](QuasiAlignment& a) {
+                      //return a.editD > minLDist;
+                      //}), leftHits.end());
+
+          //}
+      //}
+
 
 
 
@@ -991,35 +1037,69 @@ void processReadsQuasi(
 			   consistentHits);
       }
 
-      if(rightHits.size() > 0){
-          hitSECollector(rp.second, rightHits, salmonOpts.editDistance);
+      //if(rightHits.size() > 0){
+          //hitSECollector(rp.second, rightHits, salmonOpts.editDistance);
 
-          rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
-                      [](QuasiAlignment& a) {
-                      return !a.toAlign;
-                      }), rightHits.end());
+          //rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
+                      //[](QuasiAlignment& a) {
+                      //return !a.toAlign;
+                      //}), rightHits.end());
 
-          if(rightHits.size() > 0){
-              std::for_each(rightHits.begin(), rightHits.end(),
-                        [&minRDist](QuasiAlignment& a) {
-                                       if (a.editD < minRDist) { minRDist = a.editD; }
-                                      });
+          //if(rightHits.size() > 0){
+              //std::for_each(rightHits.begin(), rightHits.end(),
+                        //[&minRDist](QuasiAlignment& a) {
+                                       //if (a.editD < minRDist) { minRDist = a.editD; }
+                                      //});
+            //[>
+              //rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
+                      //[&minRDist](QuasiAlignment& a) {
+                      //return a.editD > minRDist;
+                      //}), rightHits.end());
+                      //*/
+            //}
 
-              rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
-                      [&minRDist](QuasiAlignment& a) {
-                      return a.editD > minRDist;
-                      }), rightHits.end());
-            }
+          //[>if(rightHits.size() == 0){
+              //rh = false ;
+          //}else{
+              //std::sort(filtRightHits.begin(),filtRightHits.end(),
+                      //[](const QuasiAlignment& q1, const QuasiAlignment& q2) -> bool {
+                        //return q1.tid < q2.tid;
+                      //});
+          //}*/
+      //}
+      size_t maxDist = salmonOpts.editDistance;
+      std::for_each(leftHits.begin(), leftHits.end(),
+                                       [&transcripts, &rp, &minLDist, maxDist](QuasiAlignment& a) {
+                                         auto& txp = transcripts[a.tid];
+                                         auto dist = hammingDist(a, rp.first.seq, txp, maxDist);
+                                         if (dist < minLDist) { minLDist = dist; }
+                                         a.editD = dist;
+                                       });
+         std::for_each(rightHits.begin(), rightHits.end(),
+                                        [&transcripts, &rp, &minRDist, maxDist](QuasiAlignment& a) {
+                                         auto& txp = transcripts[a.tid];
+                                         auto dist = hammingDist(a, rp.second.seq, txp, maxDist);
+                                         if (dist < minRDist) { minRDist = dist; }
+                                         a.editD = dist;
+                                        });
 
-          /*if(rightHits.size() == 0){
-              rh = false ;
-          }else{
-              std::sort(filtRightHits.begin(),filtRightHits.end(),
-                      [](const QuasiAlignment& q1, const QuasiAlignment& q2) -> bool {
-                        return q1.tid < q2.tid;
-                      });
-          }*/
-      }
+         size_t maxLDist = std::min(static_cast<uint32_t>(minLDist), static_cast<uint32_t>(salmonOpts.editDistance));
+         leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
+                                       [&transcripts, &rp, maxLDist, maxDist](QuasiAlignment& a) {
+                                       return a.editD > maxLDist;
+                                       }), leftHits.end());
+         size_t maxRDist = std::min(static_cast<uint32_t>(minRDist), static_cast<uint32_t>(salmonOpts.editDistance));
+         rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
+                                        [&transcripts, &rp, maxRDist, maxDist](QuasiAlignment& a) {
+                                        return a.editD > maxRDist;
+                                        }), rightHits.end());
+
+
+
+      if (leftHits.size() == 0)
+        lh = false ;
+      if(rightHits.size() == 0)
+        rh = false ;
 
       // Consider a read as too short if both ends are too short
       if (tooShortLeft and tooShortRight) {

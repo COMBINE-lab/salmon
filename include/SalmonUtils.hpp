@@ -43,10 +43,10 @@ using NameVector = std::vector<string>;
 using IndexVector = std::vector<size_t>;
 using KmerVector = std::vector<uint64_t>;
 using MateStatus = rapmap::utils::MateStatus;
-    
+
 // Keep track of the type of mapping that was obtained for this read
-enum class MappingType : uint8_t { 
-    UNMAPPED = 0, LEFT_ORPHAN = 1, RIGHT_ORPHAN = 2, BOTH_ORPHAN = 3, 
+enum class MappingType : uint8_t {
+    UNMAPPED = 0, LEFT_ORPHAN = 1, RIGHT_ORPHAN = 2, BOTH_ORPHAN = 3,
         PAIRED_MAPPED = 4,  SINGLE_MAPPED = 5 };
 
 std::string str(const MappingType& mt);
@@ -89,7 +89,7 @@ LibraryFormat parseLibraryFormatString(std::string& fmt);
 
   bool peekBAMIsPaired(const boost::filesystem::path& fname);
 
-    
+
 size_t numberOfReadsInFastaFile(const std::string& fname);
 
 bool readKmerOrder( const std::string& fname, std::vector<uint64_t>& kmers );
@@ -173,6 +173,7 @@ bool processQuantOptions(SalmonOpts& sopt, boost::program_options::variables_map
 
 void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm, boost::filesystem::path& inputPath);
 
+
 // NOTE: Throws an invalid_argument exception of the quant or quant_bias_corrected files do
 // not exist!
 void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
@@ -208,7 +209,7 @@ void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
             default:
                 o[j] = 'N';
                 break;
-            } 
+            }
         }
     }
 
@@ -217,7 +218,7 @@ void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
         reverseComplement(s, l, o);
         return o;
     }
-   
+
     template <typename AlnLibT>
     void writeAbundances(const SalmonOpts& sopt,
                          AlnLibT& alnLib,
