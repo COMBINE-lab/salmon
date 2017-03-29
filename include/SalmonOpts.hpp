@@ -79,7 +79,7 @@ struct SalmonOpts {
     uint32_t useRangeClusterEqClasses; // Cluster reads in each Eq Class based on the reads they fall into
 
     uint32_t mmpLength;
-    uint32_t mmThreshold;
+    uint32_t editDistance;
 
     bool remap;
 

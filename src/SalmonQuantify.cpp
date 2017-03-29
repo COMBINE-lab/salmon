@@ -944,7 +944,7 @@ void processReadsQuasi(
       //std::cout<< "hi\n";  
       if(leftHits.size() > 0) {
 	  //std::cout<<"ho\n";
-          hitSECollector(rp.first, leftHits, salmonOpts.mmThreshold);
+          hitSECollector(rp.first, leftHits, salmonOpts.editDistance);
 	  //int i = 0;
           for(auto& qa : leftHits){
 	      //i++;
@@ -987,7 +987,7 @@ void processReadsQuasi(
       }
 
       if(rightHits.size() > 0){
-          hitSECollector(rp.second, rightHits, salmonOpts.mmThreshold);
+          hitSECollector(rp.second, rightHits, salmonOpts.editDistance);
           for(auto& qa : rightHits){
               if(qa.toAlign){
                   filtRightHits.push_back(qa);
@@ -1422,7 +1422,7 @@ void processReadsQuasi(
             // QuasiAlignment Object vector hits
             // which right now contains lcpLengths too
             // time to call the new function
-            hitSECollector(rp, jointHits,salmonOpts.mmThreshold);
+            hitSECollector(rp, jointHits,salmonOpts.editDistance);
 
 
       // If the fragment was too short, record it
@@ -2495,8 +2495,8 @@ int salmonQuantify(int argc, char* argv[]) {
      po::value<uint32_t>(&(sopt.mmpLength))->default_value(10),
      "minimum match length when trying to remap.")
     (
-     "mmThreshold",
-     po::value<uint32_t>(&(sopt.mmThreshold))->default_value(10),
+     "editDistance",
+     po::value<uint32_t>(&(sopt.editDistance))->default_value(10),
      "minimum threshold for hits to consider.")
      (
      "remap", po::bool_switch(&(sopt.remap))->default_value(false),
