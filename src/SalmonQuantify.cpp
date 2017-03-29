@@ -325,7 +325,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
           logRefLength = std::log(static_cast<double>(transcript.RefLength));
         } else {
           logRefLength = transcript.getCachedLogEffectiveLength();
-        } 
+        }
 
         double transcriptLogCount = transcript.mass(initialRound);
         auto flen = aln.fragLength();
@@ -333,7 +333,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
         // definition here.
         if (aln.mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED and
             aln.fwd != aln.mateIsFwd) {
-          flen = aln.fragLengthPedantic(transcript.RefLength); 
+          flen = aln.fragLengthPedantic(transcript.RefLength);
         }
 
 
@@ -344,16 +344,16 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
           double logFragProb = LOG_1;
           // If we are expecting a paired-end library, and this is an orphan,
           // then logFragProb should be small
-          if (isUnexpectedOrphan(aln)) { 
+          if (isUnexpectedOrphan(aln)) {
             logFragProb = LOG_EPSILON;
           }
-          
+
           if (flen > 0.0 and useFragLengthDist and considerCondProb) {
             size_t fl = flen;
-            double lenProb = fragLengthDist.pmf(fl); 
+            double lenProb = fragLengthDist.pmf(fl);
             if (burnedIn) {
               /* condition fragment length prob on txp length */
-              double refLengthCM = fragLengthDist.cmf(static_cast<size_t>(refLength)); 
+              double refLengthCM = fragLengthDist.cmf(static_cast<size_t>(refLength));
               bool computeMass = fl < refLength and !salmon::math::isLog0(refLengthCM);
               logFragProb = (computeMass) ?
                                       (lenProb - refLengthCM) :
@@ -388,14 +388,14 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 	      autoDetect = false;
 	    }
 	  }
-	  
+
           // TODO: Maybe take the fragment length distribution into account
           // for single-end fragments?
 
           // The probability that the fragments align to the given strands in
           // the
           // given orientations.
-	  bool isCompat = 
+	  bool isCompat =
 	    salmon::utils::isCompatible(
 					aln.libFormat(),
 					expectedLibraryFormat,
@@ -476,11 +476,11 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
           double auxProb = logFragProb + logFragCov + logAlignCompatProb;
 
           //aln.logProb = transcriptLogCount + auxProb + startPosProb;
-	  //If the factorization or FM is used, startPosProb is added here combinedWeights cannot be used 
+	  //If the factorization or FM is used, startPosProb is added here combinedWeights cannot be used
 	  if(useFMEM /*useRankEqClasses or useFMEM or rangeClusterEqClasses>0*/) {
 		auxProb += startPosProb;
 	  	aln.logProb = transcriptLogCount + auxProb;
-	  } else	 
+	  } else
           	aln.logProb = transcriptLogCount + auxProb + startPosProb;
 
 
@@ -534,14 +534,14 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
         p = std::exp(p - auxDenom);
         auxProbSum += p;
       }
-      
+
       auto eqSize = txpIDs.size();
       if (eqSize > 0) {
         if (useRankEqClasses and eqSize > 1) {
             std::vector<int> inds(eqSize);
             std::iota(inds.begin(), inds.end(), 0);
             // Get the indices in order by conditional probability
-            std::sort(inds.begin(), inds.end(), 
+            std::sort(inds.begin(), inds.end(),
                       [&auxProbs](int i, int j) -> bool { return auxProbs[i] < auxProbs[j]; });
             // Reorder the other vectors
             if (useFSPD) {
@@ -668,10 +668,10 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
                     auto desc = transcript.gcDesc(start, stop, valid);
                     if (valid) { observedGCMass.inc(desc, aln.logProb); }
                 }
-            } else if(expectedLibraryFormat.type == ReadType::SINGLE_END) { 
+            } else if(expectedLibraryFormat.type == ReadType::SINGLE_END) {
 	      // Both expected and observed should be single end here
                 // For single-end reads, simply assume that every fragment
-                // has a length equal to the conditional mean (given the 
+                // has a length equal to the conditional mean (given the
                 // current transcript's length).
                 auto cmeans = readExp.condMeans();
                 auto cmean = static_cast<int32_t>((transcript.RefLength >= cmeans.size()) ? cmeans.back() : cmeans[transcript.RefLength]);
@@ -683,12 +683,12 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
                   auto desc = transcript.gcDesc(start, stop, valid);
                   if (valid) {observedGCMass.inc(desc, aln.logProb);}
                 }
-            } 
+            }
 
         }
         double r = uni(randEng);
         if (!burnedIn and r < std::exp(aln.logProb)) {
-            
+
             //Old fragment length calc: double fragLength = aln.fragLength();
             auto fragLength = aln.fragLengthPedantic(transcript.RefLength);
             if (fragLength > 0) {
@@ -849,7 +849,7 @@ void processReadsQuasi(
   bool strictIntersect = salmonOpts.strictIntersect;
   bool consistentHits = salmonOpts.consistentHits;
   bool quiet = salmonOpts.quiet;
-  
+
   bool tooManyHits{false};
   size_t maxNumHits{salmonOpts.maxReadOccs};
   size_t readLenLeft{0};
@@ -870,7 +870,7 @@ void processReadsQuasi(
       hitCollector.enableNIP();
   } else {
       hitCollector.disableNIP();
-  } 
+  }
   hitCollector.setStrictCheck(true);
   if (salmonOpts.quasiCoverage > 0.0) {
       hitCollector.setCoverageRequirement(salmonOpts.quasiCoverage);
@@ -879,10 +879,13 @@ void processReadsQuasi(
   SASearcher<RapMapIndexT> saSearcher(qidx);
   std::vector<QuasiAlignment> leftHits;
   std::vector<QuasiAlignment> rightHits;
+  //filtered hits in the following vectors
+  std::vector<QuasiAlignment> filtLeftHits;
+  std::vector<QuasiAlignment> filtRightHits;
   rapmap::utils::HitCounters hctr;
   salmon::utils::MappingType mapType{salmon::utils::MappingType::UNMAPPED};
- 
-  
+
+
   PairAlignmentFormatter<RapMapIndexT*> formatter(qidx);
   fmt::MemoryWriter sstream;
   auto* qmLog = salmonOpts.qmLog.get();
@@ -919,7 +922,7 @@ void processReadsQuasi(
                                   leftHits, saSearcher,
                                   MateStatus::PAIRED_END_LEFT,
 				  false,salmonOpts.mmpLength,
-				  //*** mopts->mmpThreshold, or strictCheck, 
+				  //*** mopts->mmpThreshold, or strictCheck,
                                   consistentHits);
 
       if (leftHits.size() == 0 and salmonOpts.remap){
@@ -928,16 +931,30 @@ void processReadsQuasi(
 			   leftHits, saSearcher,
 			   MateStatus::PAIRED_END_LEFT,
 			   true,salmonOpts.mmpLength,
-			   //*** mopts->mmpThreshold, or strictCheck, 
+			   //*** mopts->mmpThreshold, or strictCheck,
 			   consistentHits);
 
       }
 
-      if(leftHits.size() > 0) hitSECollector(rp.first, leftHits, salmonOpts.mmThreshold);
+
+
+      if(leftHits.size() > 0) {
+          hitSECollector(rp.first, leftHits, salmonOpts.mmThreshold);
+          for(auto& qa : leftHits){
+              if(qa.toAlign){
+                filtLeftHits.push_back(qa);
+              }
+
+          }
+      }
+
+    //filter on the basis of edit distance
+
+
 
       bool rh = tooShortRight ? false : hitCollector(rp.second.seq,
                                    rightHits, saSearcher,
-                                   MateStatus::PAIRED_END_RIGHT, 
+                                   MateStatus::PAIRED_END_RIGHT,
 				   false,salmonOpts.mmpLength,
 				   //*** mopts->mmpThreads,
                                    consistentHits);
@@ -952,7 +969,14 @@ void processReadsQuasi(
 			   consistentHits);
       }
 
-      if(rightHits.size() > 0) hitSECollector(rp.second, rightHits, salmonOpts.mmThreshold);
+      if(rightHits.size() > 0){
+          hitSECollector(rp.second, rightHits, salmonOpts.mmThreshold);
+          for(auto& qa : rightHits){
+              if(qa.toAlign){
+                  filtRightHits.push_back(qa);
+              }
+          }
+      }
 
       // Consider a read as too short if both ends are too short
       if (tooShortLeft and tooShortRight) {
@@ -964,11 +988,11 @@ void processReadsQuasi(
         // then
         // do the intersection.
         if (strictIntersect) {
-          rapmap::utils::mergeLeftRightHits(leftHits, rightHits, jointHits,
+            rapmap::utils::mergeLeftRightHits(filtLeftHits, filtRightHits, jointHits,
                                             readLenLeft, maxNumHits,
                                             tooManyHits, hctr);
         } else {
-          rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, leftHits, rightHits,
+            rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, filtLeftHits, filtRightHits,
                                                  jointHits, readLenLeft,
                                                  maxNumHits, tooManyHits, hctr);
         }
@@ -1009,8 +1033,8 @@ void processReadsQuasi(
       if (jointHits.size() > 0) {
         bool isPaired = jointHits.front().mateStatus ==
                         rapmap::utils::MateStatus::PAIRED_END_PAIRED;
-        if (isPaired) { 
-            mapType = salmon::utils::MappingType::PAIRED_MAPPED; 
+        if (isPaired) {
+            mapType = salmon::utils::MappingType::PAIRED_MAPPED;
         }
         // If we are ignoring orphans
         if (!salmonOpts.allowOrphans) {
@@ -1039,9 +1063,9 @@ void processReadsQuasi(
 
             if (foundLeftMappings and foundRightMappings) {
                 mapType = salmon::utils::MappingType::BOTH_ORPHAN;
-            } else if (foundLeftMappings) { 
+            } else if (foundLeftMappings) {
                 mapType = salmon::utils::MappingType::LEFT_ORPHAN;
-            } else if (foundRightMappings) { 
+            } else if (foundRightMappings) {
                 mapType = salmon::utils::MappingType::RIGHT_ORPHAN;
             }
 
@@ -1169,12 +1193,12 @@ void processReadsQuasi(
             rapmap::utils::writeAlignmentsToStream(rp, formatter,
                                                    hctr, jointHits, sstream);
         }
-       
+
       } else {
           // This read was completely unmapped.
           mapType = salmon::utils::MappingType::UNMAPPED;
-      } 
-      
+      }
+
       if (writeUnmapped and mapType != salmon::utils::MappingType::PAIRED_MAPPED) {
           // If we have no mappings --- then there's nothing to do
           // unless we're outputting names for un-mapped reads
@@ -1216,7 +1240,7 @@ void processReadsQuasi(
         }
         unmappedNames.clear();
     }
-	    
+
     if (writeQuasimappings) {
         std::string outStr(sstream.str());
         // Get rid of last newline
@@ -1225,7 +1249,7 @@ void processReadsQuasi(
             qmLog->info(std::move(outStr));
         }
         sstream.clear();
-    } 
+    }
 
     if (writeOrphanLinks) {
         std::string outStr(orphanLinks.str());
@@ -1247,7 +1271,7 @@ void processReadsQuasi(
   }
 
   if (maxZeroFrac > 0.0) {
-      salmonOpts.jointLog->info("Thread saw mini-batch with a maximum of {0:.2f}\% zero probability fragments", 
+      salmonOpts.jointLog->info("Thread saw mini-batch with a maximum of {0:.2f}\% zero probability fragments",
                                 maxZeroFrac);
   }
 
@@ -1324,7 +1348,7 @@ void processReadsQuasi(
       hitCollector.enableNIP();
   } else {
       hitCollector.disableNIP();
-  } 
+  }
 
   hitCollector.setStrictCheck(true);
   if (salmonOpts.quasiCoverage > 0.0) {
@@ -1333,7 +1357,7 @@ void processReadsQuasi(
 
   SASearcher<RapMapIndexT> saSearcher(qidx);
   rapmap::utils::HitCounters hctr;
-  
+
   SingleAlignmentFormatter<RapMapIndexT*> formatter(qidx);
   fmt::MemoryWriter sstream;
   auto* qmLog = salmonOpts.qmLog.get();
@@ -1442,7 +1466,7 @@ void processReadsQuasi(
         } break;
         }
       }
-      
+
       if (writeQuasimappings) {
           rapmap::utils::writeAlignmentsToStream(rp, formatter,
                                                  hctr, jointHits, sstream);
@@ -1496,8 +1520,8 @@ void processReadsQuasi(
             qmLog->info(std::move(outStr));
         }
         sstream.clear();
-    } 
-    
+    }
+
     prevObservedFrags = numObservedFragments;
     AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(
         structureVec.begin(), structureVec.begin() + rangeSize);
@@ -1509,7 +1533,7 @@ void processReadsQuasi(
   readExp.updateShortFrags(shortFragStats);
 
   if (maxZeroFrac > 0.0) {
-      salmonOpts.jointLog->info("Thread saw mini-batch with a maximum of {0:.2f}\% zero probability fragments", 
+      salmonOpts.jointLog->info("Thread saw mini-batch with a maximum of {0:.2f}\% zero probability fragments",
                                 maxZeroFrac);
   }
 }
@@ -1563,7 +1587,7 @@ void processReadLibrary(
     if (rl.mates1().size() > 1 and numThreads > 8) { numParsingThreads = 2; }
     pairedParserPtr.reset(new paired_parser(rl.mates1(), rl.mates2(), numThreads, numParsingThreads, miniBatchSize));
     pairedParserPtr->start();
-    
+
     switch (indexType) {
     case SalmonIndexType::FMD: {
       for (int i = 0; i < numThreads; ++i) {
@@ -2350,7 +2374,7 @@ int salmonQuantify(int argc, char* argv[]) {
      "may be more stable.  Value should "
      "be in the interval (0.5, 1.0].")
     (
-     "maxOcc,m", 
+     "maxOcc,m",
      po::value<int>(&(memOptions->max_occ))->default_value(200),
      "(S)MEMs occuring more than this many times won't be considered.")
     (
@@ -2427,7 +2451,7 @@ int salmonQuantify(int argc, char* argv[]) {
      "useVBOpt", po::bool_switch(&(sopt.useVBOpt))->default_value(false),
      "Use the Variational Bayesian EM rather than the "
      "traditional EM algorithm for optimization in the batch passes.")
-    ( 
+    (
      "useFMEMOpt", po::bool_switch(&(sopt.useFMEMOpt))->default_value(false),
      "Use the Full Model EM rather than the "
      "equivalence class EM algorithm for optimization in the batch passes.")
@@ -2448,8 +2472,8 @@ int salmonQuantify(int argc, char* argv[]) {
     (
      "mmThreshold",
      po::value<uint32_t>(&(sopt.mmThreshold))->default_value(10),
-     "minimum threshold for hits to consider.")   
-     ( 
+     "minimum threshold for hits to consider.")
+     (
      "remap", po::bool_switch(&(sopt.remap))->default_value(false),
      "Do remap with kmer size 9 when fail to map in the usual way.")
     (
@@ -2540,7 +2564,7 @@ int salmonQuantify(int argc, char* argv[]) {
      "Attempt to split seeds that happen to fall on the "
      "boundary between two transcripts.  This can improve the  fragment "
      "hit-rate, but is usually not necessary.");
-    
+
   po::options_description hidden("\nhidden options");
   hidden.add_options()
     ("numGCBins", po::value<size_t>(&(sopt.numFragGCBins))->default_value(25),
@@ -2614,7 +2638,7 @@ transcript abundance from RNA-seq reads
     }
 
     po::notify(vm);
-    
+
     // If we're supposed to be quiet, set the global logger level to >= warn
     if (sopt.quiet) {
         spdlog::set_level(spdlog::level::warn); //Set global log level to info
@@ -2650,13 +2674,13 @@ transcript abundance from RNA-seq reads
       spdlog::drop_all();
       std::exit(1);
     }
- 
+
     auto fileLog = sopt.fileLog;
     auto jointLog = sopt.jointLog;
     auto indexDirectory = sopt.indexDirectory;
     auto outputDirectory = sopt.outputDirectory;
     bool greedyChain = true;
-    
+
     // If the user is enabling *just* GC bias correction
     // i.e. without seq-specific bias correction, then disable
     // the conditional model.
@@ -2668,7 +2692,7 @@ transcript abundance from RNA-seq reads
 
     vector<ReadLibrary> readLibraries =
         salmon::utils::extractReadLibraries(orderedOptions);
-    
+
     if (readLibraries.size() == 0) {
         jointLog->error("Failed to successfully parse any complete read libraries."
                         " Please make sure you provided arguments properly to -1, -2 (for paired-end libraries)"
@@ -2869,7 +2893,7 @@ transcript abundance from RNA-seq reads
 	if (sopt.unmappedFile) { sopt.unmappedFile->close(); }
       }
     }
-    
+
     if (sopt.writeOrphanLinks) {
         auto l = sopt.orphanLinkLog.get();
         // If the logger was created, then flush it and
