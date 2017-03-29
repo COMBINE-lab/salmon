@@ -950,7 +950,7 @@ void processReadsQuasi(
           }else{
               std::sort(filtLeftHits.begin(),filtLeftHits.end(),
                       [](const QuasiAlignment& q1, const QuasiAlignment& q2) -> bool {
-                        return q1->tid < q2->tid;
+                        return q1.tid < q2.tid;
                       });
           }
       }
@@ -984,11 +984,11 @@ void processReadsQuasi(
               }
           }
           if(filtRightHits.size() == 0){
-              lh = false ;
+              rh = false ;
           }else{
               std::sort(filtRightHits.begin(),filtRightHits.end(),
                       [](const QuasiAlignment& q1, const QuasiAlignment& q2) -> bool {
-                        return q1->tid < q2->tid;
+                        return q1.tid < q2.tid;
                       });
           }
       }
