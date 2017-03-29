@@ -882,6 +882,8 @@ void processReadsQuasi(
   //filtered hits in the following vectors
   std::vector<QuasiAlignment> filtLeftHits;
   std::vector<QuasiAlignment> filtRightHits;
+
+
   rapmap::utils::HitCounters hctr;
   salmon::utils::MappingType mapType{salmon::utils::MappingType::UNMAPPED};
 
@@ -902,7 +904,7 @@ void processReadsQuasi(
                                  rangeSize, structureVec.size());
       std::exit(1);
     }
-
+    //std::cout<<"hp\n";
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
         auto& rp = rg[i];
         readLenLeft = rp.first.seq.length();
@@ -935,26 +937,34 @@ void processReadsQuasi(
 			   consistentHits);
 
       }
-
-
-
+      filtLeftHits.clear();
+      filtRightHits.clear();
+      std::ofstream f;
+      f.open ("/mnt/scratch1/mohsen/selective-alignment/edits/"+rp.first.name, std::fstream::in | std::fstream::out | std::fstream::app);
+      //std::cout<< "hi\n";  
       if(leftHits.size() > 0) {
+	  //std::cout<<"ho\n";
           hitSECollector(rp.first, leftHits, salmonOpts.mmThreshold);
+	  //int i = 0;
           for(auto& qa : leftHits){
+	      //i++;
+	      //std::cout<<"hi\n";
+	      //leftHits.
+	      //f<< i << "\t" << qa.tid << "\t" << qa.editD << "\t" << qa.toAlign << "\n";
               if(qa.toAlign){
                 filtLeftHits.push_back(qa);
               }
           }
           if(filtLeftHits.size() == 0){
               lh = false ;
-          }else{
+          }/*else{
               std::sort(filtLeftHits.begin(),filtLeftHits.end(),
                       [](const QuasiAlignment& q1, const QuasiAlignment& q2) -> bool {
                         return q1.tid < q2.tid;
                       });
-          }
+          }*/
       }
-
+      f.close();
     //filter on the basis of edit distance
 
 
@@ -985,12 +995,12 @@ void processReadsQuasi(
           }
           if(filtRightHits.size() == 0){
               rh = false ;
-          }else{
+          }/*else{
               std::sort(filtRightHits.begin(),filtRightHits.end(),
                       [](const QuasiAlignment& q1, const QuasiAlignment& q2) -> bool {
                         return q1.tid < q2.tid;
                       });
-          }
+          }*/
       }
 
       // Consider a read as too short if both ends are too short
