@@ -882,6 +882,7 @@ void processReadsQuasi(
   //filtered hits in the following vectors
   std::vector<QuasiAlignment> filtLeftHits;
   std::vector<QuasiAlignment> filtRightHits;
+  std::vector<QuasiAlignment> filtJointHits;
 
 
   rapmap::utils::HitCounters hctr;
@@ -918,6 +919,7 @@ void processReadsQuasi(
       auto& jointHits = jointHitGroup.alignments();
       leftHits.clear();
       rightHits.clear();
+      filtJointHits.clear();
       mapType = salmon::utils::MappingType::UNMAPPED;
 
       bool lh = tooShortLeft ? false : hitCollector(rp.first.seq,
@@ -939,9 +941,9 @@ void processReadsQuasi(
       }
       filtLeftHits.clear();
       filtRightHits.clear();
-      std::ofstream f;
-      f.open ("/mnt/scratch1/mohsen/selective-alignment/edits/"+rp.first.name, std::fstream::in | std::fstream::out | std::fstream::app);
-      //std::cout<< "hi\n";  
+      //std::ofstream f;
+      //f.open ("/mnt/scratch1/mohsen/selective-alignment/edits/"+rp.first.name, std::fstream::in | std::fstream::out | std::fstream::app);
+      //std::cout<< "hi\n";
       if(leftHits.size() > 0) {
 	  //std::cout<<"ho\n";
           hitSECollector(rp.first, leftHits, salmonOpts.editDistance);
@@ -964,7 +966,7 @@ void processReadsQuasi(
                       });
           }*/
       }
-      f.close();
+     // f.close();
     //filter on the basis of edit distance
 
 
@@ -1030,7 +1032,34 @@ void processReadsQuasi(
         if (jointHits.size() > salmonOpts.maxReadOccs) {
           jointHitGroup.clearAlignments();
         }
+
+        if(jointHits.size() > 1){
+            if(jointHits.front().isPaired){
+
+               //auto bestHit =  std::min_element(jointHits.begin(),jointHits.end(),
+                       //[](const QuasiAlignment& qa1, const QuasiAlignment& qa2) -> bool {
+                            //return qa1.editD < qa2.editD ;
+                       //});
+                int32_t minEditD = std::numeric_limits<int32_t>::max() ;
+                for(auto& qa : jointHits){
+                     if(qa.editD < minEditD)
+                         minEditD = qa.editD ;
+                }
+                for(auto& qa : jointHits){
+                    if(qa.editD == minEditD)
+                        filtJointHits.push_back(qa);
+                }
+            }
+        }
       }
+
+      if(jointHits.front().isPaired) {
+          jointHits.clear();
+        for(auto& qa:filtJointHits)
+            jointHits.push_back(qa);
+      }
+
+
 
       // NOTE: This will currently not work with "strict intersect", i.e.
       // nothing will be output here with strict intersect.
