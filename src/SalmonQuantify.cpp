@@ -1171,7 +1171,7 @@ void processReadsQuasi(
                          return !a.toAlign;
                          }), rightHits.end());
 
-		        if(rightHits.size() > 0){
+		        /*if(rightHits.size() > 0){
         		      std::for_each(rightHits.begin(), rightHits.end(),
                 	        [&minRDist](QuasiAlignment& a) {
                                        if (a.editD < minRDist) { minRDist = a.editD; }
@@ -1182,22 +1182,25 @@ void processReadsQuasi(
                 	      return a.editD > minRDist;
                 	      }), rightHits.end());
                 	      
-           	        }
+           	        }*/
 
 
+			if(rightHits.size() >0 ){ 
+                        	jointHits.clear();
+                        	rapmap::utils::mergeLeftRightHitsFuzzy(
+                        	        lh, rh,
+                        	        leftHits, rightHits, jointHits,
+                        	        readLenLeft, maxNumHits, tooManyHits, hctr);
 
-                        jointHits.clear();
-                        rapmap::utils::mergeLeftRightHitsFuzzy(
-                                lh, rh,
-                                leftHits, rightHits, jointHits,
-                                readLenLeft, maxNumHits, tooManyHits, hctr);
-
-			if(writeOrphanLinks and jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED){
-			//	orphan_recovered << elems[0] << "\n";
-				//orphanLinks << elems[0]  << "\n";
-				for(auto qa: jointHits){
-					orphanLinks << elems[0] << "\t" << transcripts[qa.tid].RefName << "\t" << qa.pos << "\t" << qa.matePos << "\t"  <<qa.editD  << "\n";
-				}
+				if(writeOrphanLinks and jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED){
+				//	orphan_recovered << elems[0] << "\n";
+					//orphanLinks << elems[0]  << "\n";
+					for(auto qa: jointHits){
+						orphanLinks << elems[0] << "\t" << transcripts[qa.tid].RefName << "\t" << qa.pos << "\t" << qa.matePos << "\t"  <<qa.editD  << "\n";
+					}
+				} 
+			} else {
+				jointHits.clear();
 			}
                     }
                 }else if(startHit.mateStatus == rapmap::utils::MateStatus::PAIRED_END_RIGHT){
@@ -1223,7 +1226,7 @@ void processReadsQuasi(
                          }), leftHits.end());
 
 
-		          if(leftHits.size() > 0){
+		          /*if(leftHits.size() > 0){
         		        std::for_each(leftHits.begin(), leftHits.end(),
                 	        [&minLDist](QuasiAlignment& a) {
                                        if (a.editD < minLDist) { minLDist = a.editD; }
@@ -1235,20 +1238,23 @@ void processReadsQuasi(
                 		      return a.editD > minLDist;
                         	 }), leftHits.end());
 	
-         		 }		
+         		 }*/		
 
-
-                        jointHits.clear();
-                        rapmap::utils::mergeLeftRightHitsFuzzy(
-                                lh, rh,
-                                leftHits, rightHits, jointHits,
-                                readLenLeft, maxNumHits, tooManyHits, hctr);
-			if(writeOrphanLinks and jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED){
-				//orphanLinks << elems[0] << "\n";
-				//orphanLinks << h.transcriptID() << ',' << h.pos << "\t"; 
-				for(auto qa: jointHits){
-					orphanLinks << elems[0] << "\t" << transcripts[qa.tid].RefName << "\t" << qa.pos << "\t" << qa.matePos << "\t"  <<qa.editD  << "\n";
+			if(leftHits.size() == 0) {
+                       		jointHits.clear();
+                        	rapmap::utils::mergeLeftRightHitsFuzzy(
+                                	lh, rh,
+                                	leftHits, rightHits, jointHits,
+                                	readLenLeft, maxNumHits, tooManyHits, hctr);
+				if(writeOrphanLinks and jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED){
+					//orphanLinks << elems[0] << "\n";
+					//orphanLinks << h.transcriptID() << ',' << h.pos << "\t"; 
+					for(auto qa: jointHits){
+						orphanLinks << elems[0] << "\t" << transcripts[qa.tid].RefName << "\t" << qa.pos << "\t" << qa.matePos << "\t"  <<qa.editD  << "\n";
+					}
 				}
+			} else {
+				jointHits.clear();
 			}
                     }
 			//if(leftHits.size()>0) std::cout<<leftHits.size()<<"\n";
