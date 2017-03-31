@@ -82,6 +82,8 @@ struct SalmonOpts {
     uint32_t editDistance;
 
     bool remap;
+    bool filter;
+    bool hammingFilter;
 
     bool useFMEMOpt; // Use Full Model EM instead of equivalence class EM in the batch passes
     
