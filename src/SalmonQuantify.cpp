@@ -945,6 +945,9 @@ void processReadsQuasi(
   
   std::vector<uint32_t> dummy ;
 
+	//std::fstream f;
+        //f.open ("/mnt/scratch1/mohsen/selective-alignment/edit_hamming_newEdit_eq.txt", std::fstream::in | std::fstream::out | std::fstream::app);
+ 
   while (parser->refill(rg)) {
       rangeSize = rg.size();
 
@@ -1151,6 +1154,8 @@ void processReadsQuasi(
                                    consistentHits);
                     if(rightHits.size() > 0){
  
+              	       hitSECollector(rp.second, rightHits, salmonOpts.editDistance);
+
 	               rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
                          [](QuasiAlignment& a) {
                          return !a.toAlign;
@@ -1176,7 +1181,10 @@ void processReadsQuasi(
                                    salmonOpts.mmpLength,
                                    consistentHits);
                     if(leftHits.size() > 0){
- 	               leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
+
+			 hitSECollector(rp.first, leftHits, salmonOpts.editDistance);
+
+ 	                 leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
                          [](QuasiAlignment& a) {
                          return !a.toAlign;
                          }), leftHits.end());
