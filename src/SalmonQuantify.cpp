@@ -945,8 +945,8 @@ void processReadsQuasi(
   
   std::vector<uint32_t> dummy ;
 
-	//std::fstream f;
-        //f.open ("/mnt/scratch1/mohsen/selective-alignment/edit_hamming_newEdit_eq.txt", std::fstream::in | std::fstream::out | std::fstream::app);
+  std::fstream orphan_recovered;
+  orphan_recovered.open ("/mnt/scratch1/mohsen/selective-alignment/orphans_recovered.txt", std::fstream::in | std::fstream::out | std::fstream::app);
  
   while (parser->refill(rg)) {
       rangeSize = rg.size();
@@ -973,7 +973,17 @@ void processReadsQuasi(
       leftHits.clear();
       rightHits.clear();
       mapType = salmon::utils::MappingType::UNMAPPED;
+
+        std::stringstream ss;
+        ss.str(rp.first.name);
+        std::string item;
+        std::vector<std::string> elems;
+        while (std::getline(ss, item, '/')) {
+          elems.push_back(item);
+        }
+
       
+
       bool lh = tooShortLeft ? false : hitCollector(rp.first.seq,
                                   leftHits, saSearcher,
                                   MateStatus::PAIRED_END_LEFT,
@@ -1161,11 +1171,30 @@ void processReadsQuasi(
                          return !a.toAlign;
                          }), rightHits.end());
 
-                       jointHits.clear();
+		        if(rightHits.size() > 0){
+        		      std::for_each(rightHits.begin(), rightHits.end(),
+                	        [&minRDist](QuasiAlignment& a) {
+                                       if (a.editD < minRDist) { minRDist = a.editD; }
+                                      });
+            
+           		   rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
+                	      [&minRDist](QuasiAlignment& a) {
+                	      return a.editD > minRDist;
+                	      }), rightHits.end());
+                	      
+           	        }
+
+
+
+                        jointHits.clear();
                         rapmap::utils::mergeLeftRightHitsFuzzy(
                                 lh, rh,
                                 leftHits, rightHits, jointHits,
                                 readLenLeft, maxNumHits, tooManyHits, hctr);
+
+			if(jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED){
+				orphan_recovered << elems[0] << "\n";
+			}
                     }
                 }else if(startHit.mateStatus == rapmap::utils::MateStatus::PAIRED_END_RIGHT){
                     std::vector<uint32_t> goldenTids ;
@@ -1190,11 +1219,29 @@ void processReadsQuasi(
                          }), leftHits.end());
 
 
+		          if(leftHits.size() > 0){
+        		        std::for_each(leftHits.begin(), leftHits.end(),
+                	        [&minLDist](QuasiAlignment& a) {
+                                       if (a.editD < minLDist) { minLDist = a.editD; }
+                                      });
+
+
+         			 leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
+                		      [&minLDist](QuasiAlignment& a) {
+                		      return a.editD > minLDist;
+                        	 }), leftHits.end());
+	
+         		 }		
+
+
                         jointHits.clear();
                         rapmap::utils::mergeLeftRightHitsFuzzy(
                                 lh, rh,
                                 leftHits, rightHits, jointHits,
                                 readLenLeft, maxNumHits, tooManyHits, hctr);
+			if(jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED){
+				orphan_recovered << elems[0] << "\n";
+			}
                     }
 			//if(leftHits.size()>0) std::cout<<leftHits.size()<<"\n";
                 }
@@ -1501,6 +1548,7 @@ void processReadsQuasi(
         transcripts, clusterForest, fragLengthDist, observedBiasParams,
         numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac);
   }
+  orphan_recovered.close();
 
   if (maxZeroFrac > 0.0) {
       salmonOpts.jointLog->info("Thread saw mini-batch with a maximum of {0:.2f}\% zero probability fragments",
