@@ -945,8 +945,8 @@ void processReadsQuasi(
   
   std::vector<uint32_t> dummy ;
 
-  std::fstream orphan_recovered;
-  orphan_recovered.open ("/mnt/scratch1/mohsen/selective-alignment/orphans_recovered.txt", std::fstream::in | std::fstream::out | std::fstream::app);
+  //std::fstream orphan_recovered;
+  //orphan_recovered.open ("/mnt/scratch1/mohsen/selective-alignment/orphans_recovered.txt", std::fstream::in | std::fstream::out | std::fstream::app);
  
   while (parser->refill(rg)) {
       rangeSize = rg.size();
@@ -1166,7 +1166,7 @@ void processReadsQuasi(
  
               	       hitSECollector(rp.second, rightHits, salmonOpts.editDistance);
 
-	               rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
+	                rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
                          [](QuasiAlignment& a) {
                          return !a.toAlign;
                          }), rightHits.end());
@@ -1192,8 +1192,12 @@ void processReadsQuasi(
                                 leftHits, rightHits, jointHits,
                                 readLenLeft, maxNumHits, tooManyHits, hctr);
 
-			if(jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED){
-				orphan_recovered << elems[0] << "\n";
+			if(writeOrphanLinks and jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED){
+			//	orphan_recovered << elems[0] << "\n";
+				//orphanLinks << elems[0]  << "\n";
+				for(auto qa: jointHits){
+					orphanLinks << elems[0] << "\t" << transcripts[qa.tid].RefName << "\t" << qa.pos << "\t" << qa.matePos << "\t"  <<qa.editD  << "\n";
+				}
 			}
                     }
                 }else if(startHit.mateStatus == rapmap::utils::MateStatus::PAIRED_END_RIGHT){
@@ -1239,8 +1243,12 @@ void processReadsQuasi(
                                 lh, rh,
                                 leftHits, rightHits, jointHits,
                                 readLenLeft, maxNumHits, tooManyHits, hctr);
-			if(jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED){
-				orphan_recovered << elems[0] << "\n";
+			if(writeOrphanLinks and jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED){
+				//orphanLinks << elems[0] << "\n";
+				//orphanLinks << h.transcriptID() << ',' << h.pos << "\t"; 
+				for(auto qa: jointHits){
+					orphanLinks << elems[0] << "\t" << transcripts[qa.tid].RefName << "\t" << qa.pos << "\t" << qa.matePos << "\t"  <<qa.editD  << "\n";
+				}
 			}
                     }
 			//if(leftHits.size()>0) std::cout<<leftHits.size()<<"\n";
@@ -1288,7 +1296,7 @@ void processReadsQuasi(
 
       // NOTE: This will currently not work with "strict intersect", i.e.
       // nothing will be output here with strict intersect.
-      if (writeOrphanLinks) {
+      if (false and writeOrphanLinks) {
           // If we are not using strict intersection, then joint hits
           // can only be zero when either:
           // 1) there are *no* hits or
@@ -1548,7 +1556,7 @@ void processReadsQuasi(
         transcripts, clusterForest, fragLengthDist, observedBiasParams,
         numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac);
   }
-  orphan_recovered.close();
+  //orphan_recovered.close();
 
   if (maxZeroFrac > 0.0) {
       salmonOpts.jointLog->info("Thread saw mini-batch with a maximum of {0:.2f}\% zero probability fragments",
