@@ -24,3 +24,6 @@
     image: plugins/gitter
     commands:
      - echo "[Notifying gitter]"
+branches:
+     - master
+     - develop
