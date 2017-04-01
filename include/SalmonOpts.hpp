@@ -84,6 +84,9 @@ struct SalmonOpts {
     bool remap;
     bool filter;
     bool hammingFilter;
+    bool bestRemap;
+    bool keepOrphans;
+
 
     bool useFMEMOpt; // Use Full Model EM instead of equivalence class EM in the batch passes
     

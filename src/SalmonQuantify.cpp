@@ -1166,25 +1166,25 @@ void processReadsQuasi(
  
               	       hitSECollector(rp.second, rightHits, salmonOpts.editDistance);
 
-	                rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
+	               rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
                          [](QuasiAlignment& a) {
                          return !a.toAlign;
                          }), rightHits.end());
-
-		        /*if(rightHits.size() > 0){
+		       if(salmonOpts.bestRemap) {
+		           if(rightHits.size() > 0){
         		      std::for_each(rightHits.begin(), rightHits.end(),
                 	        [&minRDist](QuasiAlignment& a) {
                                        if (a.editD < minRDist) { minRDist = a.editD; }
                                       });
             
-           		   rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
-                	      [&minRDist](QuasiAlignment& a) {
-                	      return a.editD > minRDist;
-                	      }), rightHits.end());
+           		     rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
+                	       [&minRDist](QuasiAlignment& a) {
+                	       return a.editD > minRDist;
+                	       }), rightHits.end());
                 	      
-           	        }*/
-
-
+           	           }
+			}
+			
 			if(rightHits.size() >0 ){ 
                         	jointHits.clear();
                         	rapmap::utils::mergeLeftRightHitsFuzzy(
@@ -1200,6 +1200,7 @@ void processReadsQuasi(
 					}
 				} 
 			} else {
+			   if(!salmonOpts.keepOrphans)
 				jointHits.clear();
 			}
                     }
@@ -1225,8 +1226,8 @@ void processReadsQuasi(
                          return !a.toAlign;
                          }), leftHits.end());
 
-
-		          /*if(leftHits.size() > 0){
+			if(salmonOpts.bestRemap){
+		            if(leftHits.size() > 0){
         		        std::for_each(leftHits.begin(), leftHits.end(),
                 	        [&minLDist](QuasiAlignment& a) {
                                        if (a.editD < minLDist) { minLDist = a.editD; }
@@ -1238,8 +1239,8 @@ void processReadsQuasi(
                 		      return a.editD > minLDist;
                         	 }), leftHits.end());
 	
-         		 }*/		
-
+         		   }		
+			}
 			if(leftHits.size() == 0) {
                        		jointHits.clear();
                         	rapmap::utils::mergeLeftRightHitsFuzzy(
@@ -1254,6 +1255,7 @@ void processReadsQuasi(
 					}
 				}
 			} else {
+		 	   if(!salmonOpts.keepOrphans)
 				jointHits.clear();
 			}
                     }
@@ -2773,6 +2775,12 @@ int salmonQuantify(int argc, char* argv[]) {
      (
      "remap", po::bool_switch(&(sopt.remap))->default_value(false),
      "Do remap with kmer size 9 when fail to map in the usual way.")
+      (
+     "keepOrphans", po::bool_switch(&(sopt.keepOrphans))->default_value(false),
+     "Keep the orphan reads after doing remap.")
+     (
+     "bestRemap", po::bool_switch(&(sopt.bestRemap))->default_value(false),
+     "Keep the best hits after remap.")    
      (
      "filter", po::bool_switch(&(sopt.filter))->default_value(false),
      "Do filtering on both right and left hits after hitCollector call.")
