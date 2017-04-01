@@ -1162,6 +1162,7 @@ void processReadsQuasi(
                                    true,
                                    salmonOpts.mmpLength,
                                    consistentHits);
+		    
                     if(rightHits.size() > 0){
  
               	       hitSECollector(rp.second, rightHits, salmonOpts.editDistance);
@@ -1186,6 +1187,17 @@ void processReadsQuasi(
 			}
 			
 			if(rightHits.size() >0 ){ 
+				// Rob pass
+				std::vector<QuasiAlignment> newJointHits;
+				rapmap::utils::mergeLeftRightHitsFuzzy(
+                        	        true, true,
+                        	        leftHits, rightHits, newJointHits,
+                        	        readLenLeft, maxNumHits, tooManyHits, hctr);
+				if (newJointHits.size() > 0) {
+					std::swap(jointHits, newJointHits);
+				}		
+				// END: Rob pass
+				/*
                         	jointHits.clear();
                         	rapmap::utils::mergeLeftRightHitsFuzzy(
                         	        lh, rh,
@@ -1199,6 +1211,7 @@ void processReadsQuasi(
 						orphanLinks << elems[0] << "\t" << transcripts[qa.tid].RefName << "\t" << qa.pos << "\t" << qa.matePos << "\t"  <<qa.editD  << "\n";
 					}
 				} 
+				*/
 			} else {
 			   if(!salmonOpts.keepOrphans)
 				jointHits.clear();
@@ -1241,7 +1254,18 @@ void processReadsQuasi(
 	
          		   }		
 			}
-			if(leftHits.size() == 0) {
+			if(leftHits.size() > 0) {
+				// Rob pass
+				std::vector<QuasiAlignment> newJointHits;
+				rapmap::utils::mergeLeftRightHitsFuzzy(
+                        	        true, true,
+                        	        leftHits, rightHits, newJointHits,
+                        	        readLenLeft, maxNumHits, tooManyHits, hctr);
+				if (newJointHits.size() > 0) {
+					std::swap(jointHits, newJointHits);
+				}		
+				// END: Rob pass
+				/*
                        		jointHits.clear();
                         	rapmap::utils::mergeLeftRightHitsFuzzy(
                                 	lh, rh,
@@ -1254,6 +1278,7 @@ void processReadsQuasi(
 						orphanLinks << elems[0] << "\t" << transcripts[qa.tid].RefName << "\t" << qa.pos << "\t" << qa.matePos << "\t"  <<qa.editD  << "\n";
 					}
 				}
+				*/
 			} else {
 		 	   if(!salmonOpts.keepOrphans)
 				jointHits.clear();
