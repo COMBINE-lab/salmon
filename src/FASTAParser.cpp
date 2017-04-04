@@ -1,6 +1,7 @@
 #include <unistd.h>
 #include <cstdio>
 #include <iostream>
+#include <fstream>
 #include <unordered_map>
 #include <random>
 
@@ -107,18 +108,18 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs,
     //////////////////////////////////////////////////////////
     //
     //Avi's Edits
-    std::ifstream alleleFile(sopt.alleleFilePath);
-    uint32_t avgLength, i, origNoOfTxps, matIndex, patIndex, catIndex;
+    std::ifstream alleleFile(sopt.alleleFilePath.c_str());
+    uint32_t avgLength, origNoOfTxps, matIndex, patIndex, catIndex, i=0;
     std::set<uint32_t> indexList;
     origNoOfTxps = refs.size();
-    for (std::string token, i=1; alleleFile >> token; ++i) {
+    for (std::string token; alleleFile >> token; ++i) {
         matIndex = nameToID[token + "_mat"];
         patIndex = nameToID[token + "_pat"];
         indexList.insert(matIndex);
         indexList.insert(patIndex);
-        catIndex = oldNoOfTxps+i-1;
+        catIndex = origNoOfTxps+i;
         avgLength = (refs[matIndex].RefLength + refs[patIndex].RefLength) / 2;
-        refs.emplace_back(catIndex, token+"_cat", avgLength, 0.005);
+        refs.emplace_back(catIndex, (token+"_cat").c_str(), avgLength, 0.005);
         alleleToSuperTxpMap.insert(std::pair<uint32_t, uint32_t>(matIndex, catIndex));
         alleleToSuperTxpMap.insert(std::pair<uint32_t, uint32_t>(patIndex, catIndex));
     }

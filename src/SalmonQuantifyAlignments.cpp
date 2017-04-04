@@ -173,7 +173,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     Mer context;
 
     auto& refs = alnLib.transcripts();
-    auto& alleleMap = alnLib.alleleToSuperTxpMap();
+    std::unordered_map<uint32_t, uint32_t>& alleleMap = alnLib.alleleToSuperTxpMap();
     auto& clusterForest = alnLib.clusterForest();
     auto& fragmentQueue = alnLib.fragmentQueue();
     auto& alignmentGroupQueue = alnLib.alignmentGroupQueue();
@@ -518,8 +518,10 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 					txpIDs.push_back(rangeNumber);
 			    }
 			}
+            uint32_t txpId;
 			for(size_t i=0; i<txpIDs.size(); i++){
-				txpIDs[i] = alleleMap[txpIDs[i]];
+                txpId = txpIDs[i];
+				txpIDs[i] = alleleMap[txpId];
 			}
 			TranscriptGroup tg(txpIDs);
                         eqBuilder.addGroup(std::move(tg), auxProbs, salmonOpts);
@@ -1337,7 +1339,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
      "format; files with any other extension are assumed to be in the simple format. In GTF / GFF format, the \"transcript_id\" is assumed to contain the "
      "transcript identifier and the \"gene_id\" is assumed to contain the corresponding "
      "gene identifier.")
-    ("alleleFilePath", po::value<std::string>()->required(), "Allele File PATH.");
+    ("alleleFile", po::value<std::string>()->required(), "Allele File PATH.");
     // no sequence bias for now
     sopt.useMassBanking = false;
     sopt.noSeqBiasModel = true;
@@ -1633,7 +1635,8 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         }
         // set the output directory
         sopt.outputDirectory = outputDirectory;
-
+        bfs::path alleleFilePath(vm["alleleFile"].as<std::string>());
+        sopt.alleleFilePath = alleleFilePath;
 
         bfs::path logDirectory = outputDirectory / "logs";
 

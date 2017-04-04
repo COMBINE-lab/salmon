@@ -267,7 +267,7 @@ class AlignmentLibrary {
     std::vector<Transcript>& transcripts() { return transcripts_; }
     const std::vector<Transcript>& transcripts() const { return transcripts_; }
 
-    const std::unordered_map<uint32_t, uint32_t>& alleleToSuperTxpMap() const { return alleleToSuperTxpMap_; }
+    std::unordered_map<uint32_t, uint32_t>& alleleToSuperTxpMap() { return alleleToSuperTxpMap_; }
 
     inline bool getAlignmentGroup(AlignmentGroup<FragT>*& ag) { return bq->getAlignmentGroup(ag); }
 
