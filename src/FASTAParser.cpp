@@ -109,15 +109,29 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs,
     //Avi's Edits
     std::ifstream alleleFile(sopt.alleleFilePath);
     uint32_t avgLength, i, origNoOfTxps, matIndex, patIndex, catIndex;
+    std::set<uint32_t> indexList;
     origNoOfTxps = refs.size();
     for (std::string token, i=1; alleleFile >> token; ++i) {
         matIndex = nameToID[token + "_mat"];
         patIndex = nameToID[token + "_pat"];
+        indexList.insert(matIndex);
+        indexList.insert(patIndex);
         catIndex = oldNoOfTxps+i-1;
         avgLength = (refs[matIndex].RefLength + refs[patIndex].RefLength) / 2;
         refs.emplace_back(catIndex, token+"_cat", avgLength, 0.005);
         alleleToSuperTxpMap.insert(std::pair<uint32_t, uint32_t>(matIndex, catIndex));
         alleleToSuperTxpMap.insert(std::pair<uint32_t, uint32_t>(patIndex, catIndex));
+    }
+
+    std::set<uint32_t>::iterator it;
+    for (uint32_t i=0; i<nameToID.size(); ++i){
+        it=indexList.find(i);
+        if (it == indexList.end()) {
+            alleleToSuperTxpMap.insert(std::pair<uint32_t, uint32_t>(i,i));
+        }
+        else{
+            indexList.erase(it);
+        }
     }
     //////////////////////////////////////////////////////////
 
