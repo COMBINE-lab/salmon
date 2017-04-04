@@ -15,7 +15,9 @@
 
 FASTAParser::FASTAParser(const std::string& fname): fname_(fname) {}
 
-void FASTAParser::populateTargets(std::vector<Transcript>& refs, SalmonOpts& sopt) {
+void FASTAParser::populateTargets(std::vector<Transcript>& refs,
+                                  SalmonOpts& sopt,
+                                  std::unordered_map<uint32_t,uint32_t> & alleleToSuperTxpMap) {
     using stream_manager = jellyfish::stream_manager<std::vector<std::string>::const_iterator>;
     using single_parser = jellyfish::whole_sequence_parser<stream_manager>;
 
@@ -101,6 +103,23 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs, SalmonOpts& sop
         missingTxpError = true;
       }
     }
+
+    //////////////////////////////////////////////////////////
+    //
+    //Avi's Edits
+    std::ifstream alleleFile(sopt.alleleFilePath);
+    uint32_t avgLength, i, origNoOfTxps, matIndex, patIndex, catIndex;
+    origNoOfTxps = refs.size();
+    for (std::string token, i=1; alleleFile >> token; ++i) {
+        matIndex = nameToID[token + "_mat"];
+        patIndex = nameToID[token + "_pat"];
+        catIndex = oldNoOfTxps+i-1;
+        avgLength = (refs[matIndex].RefLength + refs[patIndex].RefLength) / 2;
+        refs.emplace_back(catIndex, token+"_cat", avgLength, 0.005);
+        alleleToSuperTxpMap.insert(std::pair<uint32_t, uint32_t>(matIndex, catIndex));
+        alleleToSuperTxpMap.insert(std::pair<uint32_t, uint32_t>(patIndex, catIndex));
+    }
+    //////////////////////////////////////////////////////////
 
     if (missingTxpError) {
       sopt.jointLog->critical("Please provide a reference FASTA file that includes all targets present in the BAM header\n"
