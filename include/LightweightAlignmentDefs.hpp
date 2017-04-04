@@ -11,6 +11,7 @@ class SMEMAlignment {
             pos(0),
             fwd(false),
             mateIsFwd(false),
+	    editD(0),
             transcriptID_(std::numeric_limits<TranscriptID>::max()),
             format_(LibraryFormat::formatFromID(0)),
             score_(0.0),
@@ -21,9 +22,10 @@ class SMEMAlignment {
         SMEMAlignment(TranscriptID transcriptIDIn, LibraryFormat format,
                   double scoreIn = 0.0,
                   int32_t hitPosIn = 0,
+	          int32_t editDIn = 0,
                   uint32_t fragLengthIn= 0,
                   double logProbIn = salmon::math::LOG_0) :
-            pos(hitPosIn), fwd(false), mateIsFwd(false), transcriptID_(transcriptIDIn),
+            pos(hitPosIn), fwd(false), mateIsFwd(false), editD(editDIn), transcriptID_(transcriptIDIn),
             format_(format), score_(scoreIn),
             fragLength_(fragLengthIn), fragLen(fragLengthIn), logProb(logProbIn) {}
 
@@ -63,6 +65,7 @@ class SMEMAlignment {
         uint32_t readLen;
         uint32_t mateLen;
         uint32_t fragLen;
+	uint32_t editD;
     private:
         TranscriptID transcriptID_;
         LibraryFormat format_;

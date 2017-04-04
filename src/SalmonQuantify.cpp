@@ -361,6 +361,9 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
         double coverage = aln.score();
         double logFragCov = (coverage > 0) ? std::log(coverage) : LOG_1;
 
+	size_t score = aln.editD;
+	//if(score>0 and score!=18446744073709551615)
+	//	std::cout<<score<<"\n";
         // The alignment probability is the product of a
         // transcript-level term (based on abundance and) an
         // alignment-level term.
@@ -521,6 +524,11 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
           // The fragment compatibility probability
           // The bias probability
           double auxProb = logFragProb + logFragCov + logAlignCompatProb;
+	
+	  //if(score>0 and score!=18446744073709551615)
+	  //	std::cout<<auxProb<<"\n";
+	  if(salmonOpts.softFilter and score>0 and score!=18446744073709551615)
+	  	auxProb -= score;
 
           //aln.logProb = transcriptLogCount + auxProb + startPosProb;
 	  //If the factorization or FM is used, startPosProb is added here combinedWeights cannot be used
@@ -1014,12 +1022,12 @@ void processReadsQuasi(
           hitSECollector(rp.first, leftHits, salmonOpts.editDistance);
 
 
-	/*for(auto& qa : leftHits){
+	for(auto& qa : leftHits){
 	   size_t hamming = hammingDist(qa, rp.first.seq, transcripts[qa.tid], salmonOpts.editDistance);
-	   if(hamming == qa.editD )
-		f << qa.tid << "\t" << qa.editD << "\t" << hamming << "\t" << rp.first.name  << "\t" << qa.pos  <<"\t" << transcripts[qa.tid].RefLength <<"\n"; 
+	   if(hamming != qa.editD and (qa.editD!=-1 or hamming<=salmonOpts.editDistance) )
+		orphanLinks << transcripts[qa.tid].RefName << "\t" << qa.editD << "\t" << hamming << "\t" << rp.first.name  << "\t" << qa.pos  <<"\t" << transcripts[qa.tid].RefLength <<"\n"; 
 	}
-	f.close();*/
+	//f.close();
 
 
 
@@ -1028,7 +1036,8 @@ void processReadsQuasi(
                       [](QuasiAlignment& a) {
                       return !a.toAlign;
                       }), leftHits.end());
-          if(leftHits.size() > 0){
+
+          if(salmonOpts.strictFilter and leftHits.size() > 0){
                 std::for_each(leftHits.begin(), leftHits.end(),
                         [&minLDist](QuasiAlignment& a) {
                                        if (a.editD < minLDist) { minLDist = a.editD; }
@@ -1039,8 +1048,7 @@ void processReadsQuasi(
                       [&minLDist](QuasiAlignment& a) {
                       return a.editD > minLDist;
                       }), leftHits.end());
-
-          }
+          } 
       }
 
 
@@ -1071,7 +1079,7 @@ void processReadsQuasi(
                       return !a.toAlign;
                       }), rightHits.end());
 
-          if(rightHits.size() > 0){
+          if(salmonOpts.strictFilter and rightHits.size() > 0){
               std::for_each(rightHits.begin(), rightHits.end(),
                         [&minRDist](QuasiAlignment& a) {
                                        if (a.editD < minRDist) { minRDist = a.editD; }
@@ -1083,7 +1091,6 @@ void processReadsQuasi(
                       }), rightHits.end());
                       
             }
-
           /*if(rightHits.size() == 0){
               rh = false ;
           }else{
@@ -2808,8 +2815,14 @@ int salmonQuantify(int argc, char* argv[]) {
      "Keep the best hits after remap.")    
      (
      "filter", po::bool_switch(&(sopt.filter))->default_value(false),
-     "Do filtering on both right and left hits after hitCollector call.")
+     "filtering hits on both right and left hits after hitCollector call.")
       (
+     "strictFilter", po::bool_switch(&(sopt.filter))->default_value(false),
+     "Do strict filtering on hits for only keeping the best hit.")
+      (
+     "softFilter", po::bool_switch(&(sopt.filter))->default_value(false),
+     "Do filtering on hits by an exponential function over the edit distances.")
+     (
      "hammingFilter", po::bool_switch(&(sopt.hammingFilter))->default_value(false),
      "Do filtering on both right and left hits after hitCollector call.")
     (
