@@ -83,6 +83,10 @@ struct SalmonOpts {
 
     bool remap;
     bool filter;
+
+    bool strictFilter;
+    bool softFilter;
+
     bool hammingFilter;
     bool bestRemap;
     bool keepOrphans;
