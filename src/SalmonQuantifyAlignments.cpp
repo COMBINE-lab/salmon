@@ -173,6 +173,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     Mer context;
     
     auto& refs = alnLib.transcripts();
+    auto& alleleMap = alnLib.alleleToSuperTxpMap();
     auto& clusterForest = alnLib.clusterForest();
     auto& fragmentQueue = alnLib.fragmentQueue();
     auto& alignmentGroupQueue = alnLib.alignmentGroupQueue();
@@ -516,6 +517,9 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 					int rangeNumber = auxProbs[i]*rangeClusterEqClasses1;
 					txpIDs.push_back(rangeNumber);
 			    }
+			}
+			for(size_t i=0; i<txpIDs.size(); i++){
+				txpIDs[i] = alleleMap[txpIDs[i]];
 			}
 			TranscriptGroup tg(txpIDs);
                         eqBuilder.addGroup(std::move(tg), auxProbs, salmonOpts);
