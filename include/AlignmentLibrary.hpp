@@ -124,7 +124,7 @@ class AlignmentLibrary {
 
             fmt::print(stderr, "Populating targets from aln = {}, fasta = {} . . .",
                        alnFiles.front(), transcriptFile_);
-            fp.populateTargets(transcripts_, salmonOpts);
+            fp.populateTargets(transcripts_, salmonOpts, alleleToSuperTxpMap_);
             /*
 	    for (auto& txp : transcripts_) {
 		    // Length classes taken from
@@ -248,7 +248,7 @@ class AlignmentLibrary {
                 auto correctionFactors = distribution_utils::correctionFactorsFromMass(pmf, DistributionSpace::LINEAR);
 		// Since we'll continue treating effective lengths in log space, populate them as such
 		distribution_utils::computeSmoothedEffectiveLengths(pmf.size(), transcripts_, correctionFactors, DistributionSpace::LOG);
-		
+
 		/*
                 // Update the effective length of *every* transcript
                 for( auto& t : transcripts_ ) {
@@ -348,11 +348,11 @@ class AlignmentLibrary {
   bool autoDetect() const { return (detector_.get() != nullptr);}
 
   LibraryTypeDetector* getDetector() { return detector_.get(); }
-    
+
   LibraryFormat& getFormat() { return libFmt_; }
   const LibraryFormat& getFormat() const { return libFmt_; }
-  
-  
+
+
     void setGCFracForward(double fracForward) { gcFracFwd_ = fracForward; }
 
     double gcFracFwd() const { return gcFracFwd_; }
@@ -386,11 +386,11 @@ class AlignmentLibrary {
         return observedGC_;
     }
 
-    std::vector<SimplePosBias>& posBias(salmon::utils::Direction dir) { 
-        return (dir == salmon::utils::Direction::FORWARD) ? posBiasFW_ : posBiasRC_; 
+    std::vector<SimplePosBias>& posBias(salmon::utils::Direction dir) {
+        return (dir == salmon::utils::Direction::FORWARD) ? posBiasFW_ : posBiasRC_;
     }
-    const std::vector<SimplePosBias>& posBias(salmon::utils::Direction dir) const { 
-        return (dir == salmon::utils::Direction::FORWARD) ? posBiasFW_ : posBiasRC_; 
+    const std::vector<SimplePosBias>& posBias(salmon::utils::Direction dir) const {
+        return (dir == salmon::utils::Direction::FORWARD) ? posBiasFW_ : posBiasRC_;
     }
 
     std::vector<SimplePosBias>& posBiasExpected(salmon::utils::Direction dir) {
@@ -401,49 +401,49 @@ class AlignmentLibrary {
 	return (dir == salmon::utils::Direction::FORWARD) ? posBiasExpectFW_ : posBiasExpectRC_;
     }
 
-    ReadKmerDist<6, std::atomic<uint32_t>>& readBias(salmon::utils::Direction dir) { 
-        return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0] : readBias_[1]; 
+    ReadKmerDist<6, std::atomic<uint32_t>>& readBias(salmon::utils::Direction dir) {
+        return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0] : readBias_[1];
     }
-    const ReadKmerDist<6, std::atomic<uint32_t>>& readBias(salmon::utils::Direction dir) const { 
-        return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0] : readBias_[1]; 
-    }
-
-    SBModel& readBiasModelObserved(salmon::utils::Direction dir) { 
-        return (dir == salmon::utils::Direction::FORWARD) ? readBiasModelObserved_[0] : readBiasModelObserved_[1]; 
-    }
-    const SBModel& readBiasModelObserved(salmon::utils::Direction dir) const { 
-        return (dir == salmon::utils::Direction::FORWARD) ? readBiasModelObserved_[0] : readBiasModelObserved_[1]; 
+    const ReadKmerDist<6, std::atomic<uint32_t>>& readBias(salmon::utils::Direction dir) const {
+        return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0] : readBias_[1];
     }
 
-    SBModel& readBiasModelExpected(salmon::utils::Direction dir) { 
-	return (dir == salmon::utils::Direction::FORWARD) ? readBiasModelExpected_[0] : readBiasModelExpected_[1]; 
+    SBModel& readBiasModelObserved(salmon::utils::Direction dir) {
+        return (dir == salmon::utils::Direction::FORWARD) ? readBiasModelObserved_[0] : readBiasModelObserved_[1];
     }
-    const SBModel& readBiasModelExpected(salmon::utils::Direction dir) const { 
-	return (dir == salmon::utils::Direction::FORWARD) ? readBiasModelExpected_[0] : readBiasModelExpected_[1]; 
+    const SBModel& readBiasModelObserved(salmon::utils::Direction dir) const {
+        return (dir == salmon::utils::Direction::FORWARD) ? readBiasModelObserved_[0] : readBiasModelObserved_[1];
+    }
+
+    SBModel& readBiasModelExpected(salmon::utils::Direction dir) {
+	return (dir == salmon::utils::Direction::FORWARD) ? readBiasModelExpected_[0] : readBiasModelExpected_[1];
+    }
+    const SBModel& readBiasModelExpected(salmon::utils::Direction dir) const {
+	return (dir == salmon::utils::Direction::FORWARD) ? readBiasModelExpected_[0] : readBiasModelExpected_[1];
    }
-  
+
     void setReadBiasModelExpected(SBModel&& model, salmon::utils::Direction dir) {
         size_t idx = (dir == salmon::utils::Direction::FORWARD) ? 0 : 1;
 	readBiasModelExpected_[idx] = std::move(model);
     }
- 
+
     const std::vector<uint32_t>& getLengthQuantiles() const { return lengthQuantiles_; }
-    
+
     private:
-    
+
     void setTranscriptLengthClasses_(std::vector<uint32_t>& lengths, size_t nbins) {
         auto n = lengths.size();
         if ( n > nbins) {
             lengthQuantiles_.clear();
             lengthQuantiles_.reserve(nbins);
-      
+
             size_t step = lengths.size() / nbins;
             size_t cumStep = 0;
             for (size_t i = 0; i < nbins; ++i) {
                 cumStep += step;
                 size_t ind = std::min(cumStep, n-1);
                 std::nth_element(lengths.begin(), lengths.begin() + ind, lengths.end());
-                // Find the proper quantile 
+                // Find the proper quantile
                 lengthQuantiles_.push_back(*(lengths.begin() + ind));
             }
         } else {
@@ -535,7 +535,7 @@ class AlignmentLibrary {
     std::vector<SimplePosBias> posBiasRC_;
     std::vector<SimplePosBias> posBiasExpectFW_;
     std::vector<SimplePosBias> posBiasExpectRC_;
- 
+
     /** GC-fragment bias things **/
     // One bin for each percentage GC content
     double gcFracFwd_;
@@ -552,6 +552,7 @@ class AlignmentLibrary {
     std::vector<double> expectedBias_;
     std::unique_ptr<LibraryTypeDetector> detector_{nullptr};
     std::vector<double> conditionalMeans_;
+    std::unordered_map<uint32_t, uint32_t> alleleToSuperTxpMap_;
 };
 
 #endif // ALIGNMENT_LIBRARY_HPP
