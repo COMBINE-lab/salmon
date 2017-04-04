@@ -527,8 +527,8 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 	
 	  //if(score>0 and score!=18446744073709551615)
 	  //	std::cout<<auxProb<<"\n";
-	  if(salmonOpts.softFilter and score>0 and score!=18446744073709551615)
-	  	auxProb -= score;
+	  //if(salmonOpts.softFilter and score>0 and score!=18446744073709551615)
+	  //	auxProb -= score;
 
           //aln.logProb = transcriptLogCount + auxProb + startPosProb;
 	  //If the factorization or FM is used, startPosProb is added here combinedWeights cannot be used
@@ -1032,26 +1032,37 @@ void processReadsQuasi(
 
 
           ////int i = 0;
-          leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
+        leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
                       [](QuasiAlignment& a) {
                       return !a.toAlign;
                       }), leftHits.end());
 
-          if(salmonOpts.strictFilter and leftHits.size() > 0){
+
+	 
+
+          if(/*salmonOpts.strictFilter and*/ leftHits.size() > 0){
                 std::for_each(leftHits.begin(), leftHits.end(),
                         [&minLDist](QuasiAlignment& a) {
                                        if (a.editD < minLDist) { minLDist = a.editD; }
                                       });
 
 
-          leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
+
+	        leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
                       [&minLDist](QuasiAlignment& a) {
                       return a.editD > minLDist;
                       }), leftHits.end());
-          } 
+          }
       }
 
+/*
+ 	    for(auto qa: leftHits)
+	      if(!qa.toAlign ){
+		//if(qa.mateStatus ==  rapmap::utils::MateStatus::PAIRED_END_PAIRED) 
+		std::cout<<qa.editD<<" " << qa.mateEditD << "\n";
+	      }   
 
+*/
 
 
 
@@ -1079,7 +1090,7 @@ void processReadsQuasi(
                       return !a.toAlign;
                       }), rightHits.end());
 
-          if(salmonOpts.strictFilter and rightHits.size() > 0){
+          if(/*salmonOpts.strictFilter and*/ rightHits.size() > 0){
               std::for_each(rightHits.begin(), rightHits.end(),
                         [&minRDist](QuasiAlignment& a) {
                                        if (a.editD < minRDist) { minRDist = a.editD; }
@@ -1090,7 +1101,9 @@ void processReadsQuasi(
                       return a.editD > minRDist;
                       }), rightHits.end());
                       
-            }
+          }
+
+
           /*if(rightHits.size() == 0){
               rh = false ;
           }else{
@@ -1130,6 +1143,7 @@ void processReadsQuasi(
       }
 
 
+
       /*if (leftHits.size() == 0)
         lh = false ;
       if(rightHits.size() == 0)
@@ -1149,10 +1163,14 @@ void processReadsQuasi(
                                             readLenLeft, maxNumHits,
                                             tooManyHits, hctr);
         } else {
+
+
             rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, leftHits, rightHits,
                                                  jointHits, readLenLeft,
                                                  maxNumHits, tooManyHits, hctr);
-        
+       
+
+ 
 	     if(salmonOpts.remap){
 
                 auto& startHit = jointHits.front();
@@ -1295,7 +1313,12 @@ void processReadsQuasi(
                 }
 	     }
         }
-
+/*
+	for(auto qa: jointHits)
+	   if(!qa.toAlign)
+		if(qa.mateStatus ==  rapmap::utils::MateStatus::PAIRED_END_PAIRED) 
+			std::cout<<qa.editD<<" "<<qa.mateEditD << "\n";
+*/
 
         if (initialRound) {
           upperBoundHits += (jointHits.size() > 0);
@@ -2817,10 +2840,10 @@ int salmonQuantify(int argc, char* argv[]) {
      "filter", po::bool_switch(&(sopt.filter))->default_value(false),
      "filtering hits on both right and left hits after hitCollector call.")
       (
-     "strictFilter", po::bool_switch(&(sopt.filter))->default_value(false),
+     "strictFilter", po::bool_switch(&(sopt.strictFilter))->default_value(false),
      "Do strict filtering on hits for only keeping the best hit.")
       (
-     "softFilter", po::bool_switch(&(sopt.filter))->default_value(false),
+     "softFilter", po::bool_switch(&(sopt.softFilter))->default_value(false),
      "Do filtering on hits by an exponential function over the edit distances.")
      (
      "hammingFilter", po::bool_switch(&(sopt.hammingFilter))->default_value(false),
