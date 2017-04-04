@@ -156,6 +156,8 @@ struct SalmonOpts {
     boost::filesystem::path indexDirectory; // Index directory
 
     boost::filesystem::path geneMapPath; // Gene map path 
+	
+    boost::filesystem::path alleleFilePath; // alleleFilePath 
     
     bool quiet; // Be quiet during quantification.
 
