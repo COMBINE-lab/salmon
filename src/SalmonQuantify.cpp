@@ -361,9 +361,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
         double coverage = aln.score();
         double logFragCov = (coverage > 0) ? std::log(coverage) : LOG_1;
 
-	size_t score = aln.editD;
-	//if(score>0 and score!=18446744073709551615)
-	//	std::cout<<score<<"\n";
+
         // The alignment probability is the product of a
         // transcript-level term (based on abundance and) an
         // alignment-level term.
@@ -525,10 +523,8 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
           // The bias probability
           double auxProb = logFragProb + logFragCov + logAlignCompatProb;
 	
-	  //if(score>0 and score!=18446744073709551615)
-	  //	std::cout<<auxProb<<"\n";
-	  //if(salmonOpts.softFilter and score>0 and score!=18446744073709551615)
-	  //	auxProb -= score;
+	  if(salmonOpts.softFilter)
+	  	auxProb -= 4*aln.editD;
 
           //aln.logProb = transcriptLogCount + auxProb + startPosProb;
 	  //If the factorization or FM is used, startPosProb is added here combinedWeights cannot be used
@@ -1040,7 +1036,7 @@ void processReadsQuasi(
 
 	 
 
-          if(/*salmonOpts.strictFilter and*/ leftHits.size() > 0){
+          if(salmonOpts.strictFilter and leftHits.size() > 0){
                 std::for_each(leftHits.begin(), leftHits.end(),
                         [&minLDist](QuasiAlignment& a) {
                                        if (a.editD < minLDist) { minLDist = a.editD; }
@@ -1090,7 +1086,7 @@ void processReadsQuasi(
                       return !a.toAlign;
                       }), rightHits.end());
 
-          if(/*salmonOpts.strictFilter and*/ rightHits.size() > 0){
+          if(salmonOpts.strictFilter and rightHits.size() > 0){
               std::for_each(rightHits.begin(), rightHits.end(),
                         [&minRDist](QuasiAlignment& a) {
                                        if (a.editD < minRDist) { minRDist = a.editD; }
@@ -1313,13 +1309,6 @@ void processReadsQuasi(
                 }
 	     }
         }
-/*
-	for(auto qa: jointHits)
-	   if(!qa.toAlign)
-		if(qa.mateStatus ==  rapmap::utils::MateStatus::PAIRED_END_PAIRED) 
-			std::cout<<qa.editD<<" "<<qa.mateEditD << "\n";
-*/
-
         if (initialRound) {
           upperBoundHits += (jointHits.size() > 0);
         }
