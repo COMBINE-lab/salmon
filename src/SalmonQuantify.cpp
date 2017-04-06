@@ -567,8 +567,8 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
                 std::swap(txpIDsNew, txpIDs);
                 std::swap(auxProbsNew, auxProbs);
             }
-
-	    if( rangeClusterEqClasses>0) {
+	 }
+	 if( rangeClusterEqClasses>0) {
 		int key = 1;
 		int rangeClusterEqClasses1 = std::sqrt(txpIDs.size())+rangeClusterEqClasses;
 		int txpsSize = txpIDs.size();
@@ -576,8 +576,8 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 			int rangeNumber = auxProbs[i]*rangeClusterEqClasses1;
 			txpIDs.push_back(rangeNumber);
 		}
-	    }
- 	}
+	  }
+ 	
         TranscriptGroup tg(txpIDs);
         eqBuilder.addGroup(std::move(tg), auxProbs, salmonOpts);
       }
