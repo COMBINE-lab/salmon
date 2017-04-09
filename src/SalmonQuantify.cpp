@@ -1189,7 +1189,7 @@ void processReadsQuasi(
 
 	     }
 	
-	     if(salmonOpts.filterInsertSize>0){
+	     if(salmonOpts.filterInsertSize>0 and jointHits.size()>0){
 		
 		if(jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
 		    
@@ -1202,6 +1202,18 @@ void processReadsQuasi(
 		   	
 		}
 
+	     }
+
+	     if(salmonOpts.filterDiscordant and jointHits.size()>0) { 
+		
+		if(jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
+              	    jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
+                      [](QuasiAlignment& a) {
+                      return (a.fwd == a.mateIsFwd);
+                      }), jointHits.end());
+		   
+		}		
+	
 	     }
 
 	      
@@ -2872,6 +2884,9 @@ int salmonQuantify(int argc, char* argv[]) {
      (
      "bestRemap", po::bool_switch(&(sopt.bestRemap))->default_value(false),
      "Keep the best hits after remap.")    
+      (
+     "filterDiscordant", po::bool_switch(&(sopt.filterDiscordant))->default_value(false),
+     "filter discordant paired end reads.")    
       (
      "filterInsertSize", 
       po::value<uint32_t>(&(sopt.filterInsertSize))->default_value(0),

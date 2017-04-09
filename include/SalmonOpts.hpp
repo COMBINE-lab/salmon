@@ -92,7 +92,9 @@ struct SalmonOpts {
     bool hammingFilter;
     bool bestRemap;
     bool keepOrphans;
-    
+       
+    bool filterDiscordant; 
+
     uint32_t filterInsertSize;
 
     bool useFMEMOpt; // Use Full Model EM instead of equivalence class EM in the batch passes
