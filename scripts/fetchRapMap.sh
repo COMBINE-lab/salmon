@@ -38,7 +38,7 @@ if [ -z "${hashcheck-}" ]; then
     echo "Couldn't find shasum command; can't verify contents of downloaded RapMap";
 else
     #echo "1691f4bca2b604f05f36772ae45faf0842ab4809843df770bd10366a5cfd6822  ${EXTERNAL_DIR}/rapmap.zip" | ${hashcheck} -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
-    echo "813de74d54ed16f71fa21278ff558397070f0177db4d2325b813ae4bdbda7720  ${EXTERNAL_DIR}/rapmap.zip" | ${hashcheck} -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
+    echo "5e0fa601f97c7b5f3bfa3216755d20a957d3f5e761f1128566a1441145cb60d7  ${EXTERNAL_DIR}/rapmap.zip" | ${hashcheck} -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
 fi
 
 
