@@ -44,6 +44,19 @@ using IndexVector = std::vector<size_t>;
 using KmerVector = std::vector<uint64_t>;
 using MateStatus = rapmap::utils::MateStatus;
 
+
+std::vector<std::string> split(const std::string& str, int delimiter(int)) ;
+std::vector<std::string> split2(const std::string &text, char sep);
+//read isoform file
+class GroundTruth{
+    public:
+        static std::map<size_t, std::string> truthMap ;
+
+};
+
+void loadGroundTruthIsoformExp(boost::filesystem::path groundTruthIsoformFile);
+
+
 // Keep track of the type of mapping that was obtained for this read
 enum class MappingType : uint8_t {
     UNMAPPED = 0, LEFT_ORPHAN = 1, RIGHT_ORPHAN = 2, BOTH_ORPHAN = 3,
@@ -172,6 +185,8 @@ bool processQuantOptions(SalmonOpts& sopt, boost::program_options::variables_map
 
 
 void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm, boost::filesystem::path& inputPath);
+
+
 
 
 // NOTE: Throws an invalid_argument exception of the quant or quant_bias_corrected files do

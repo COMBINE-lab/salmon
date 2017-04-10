@@ -522,7 +522,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
           // The fragment compatibility probability
           // The bias probability
           double auxProb = logFragProb + logFragCov + logAlignCompatProb;
-	
+
 	  if(salmonOpts.softFilter)
 	  	auxProb -= 4*aln.editD;
 
@@ -629,7 +629,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 			txpIDs.push_back(rangeNumber);
 		}
 	}
- 	
+
         TranscriptGroup tg(txpIDs);
         eqBuilder.addGroup(std::move(tg), auxProbs, salmonOpts);
       }
@@ -842,6 +842,8 @@ void processReadsQuasi(
   std::exit(1);
 }
 
+//std::map<size_t,std::string> salmon::utils::GroundTruth::truthMap;
+
 template <typename RapMapIndexT>
 void processReadsQuasi(
     paired_parser* parser, ReadExperiment& readExp, ReadLibrary& rl,
@@ -946,12 +948,13 @@ void processReadsQuasi(
   bool writeQuasimappings = (qmLog != nullptr);
 
   auto rg = parser->getReadGroup();
-  
+
   std::vector<uint32_t> dummy ;
 
   //std::fstream orphan_recovered;
   //orphan_recovered.open ("/mnt/scratch1/mohsen/selective-alignment/orphans_recovered.txt", std::fstream::in | std::fstream::out | std::fstream::app);
- 
+
+  auto trueTxpsMap = salmon::utils::GroundTruth::truthMap;
   while (parser->refill(rg)) {
       rangeSize = rg.size();
 
@@ -986,7 +989,9 @@ void processReadsQuasi(
           elems.push_back(item);
         }
 
-      
+    //auto& truthMap
+      int32_t minLDist{salmonOpts.editDistance};
+      int32_t minRDist{salmonOpts.editDistance};
 
       bool lh = tooShortLeft ? false : hitCollector(rp.first.seq,
                                   leftHits, saSearcher,
@@ -1004,31 +1009,48 @@ void processReadsQuasi(
 			   consistentHits);
 
       }*/
-      
-      int32_t minLDist{salmonOpts.editDistance};
-      int32_t minRDist{salmonOpts.editDistance};
+
+      auto tmpVec = salmon::utils::split2(rp.first.name,'_');
+      size_t trueTxpId = (size_t)std::stoi(tmpVec[2])-1 ;
+      auto trueTxpName = trueTxpsMap[trueTxpId] ;
+      bool gotTruth{false};
+      for(auto& qa:leftHits){
+          if(transcripts[qa.tid].RefName == trueTxpName){
+            gotTruth = true ;
+            break;
+          }
+      }
+
+
 
 	//std::fstream f;
         //f.open ("/mnt/scratch1/mohsen/selective-alignment/edit_hamming_newEdit_eq.txt", std::fstream::in | std::fstream::out | std::fstream::app);
- 
+
       if(salmonOpts.filter and leftHits.size() > 0) {
           hitSECollector(rp.first, leftHits, salmonOpts.editDistance);
 
+      if(!gotTruth){
+          orphanLinks << rp.first.name << "\t" << trueTxpName ;
+          for(auto& qa:leftHits){
+              orphanLinks << "\t" << transcripts[qa.tid].RefName << " " << qa.editD << " " << qa.pos;
+        }
+          orphanLinks << "\n" ;
+      }
 
 	 /*for(auto& qa : leftHits){
 	    size_t hamming = hammingDist(qa, rp.first.seq, transcripts[qa.tid], salmonOpts.editDistance);
 	    if(hamming != qa.editD and (qa.editD!=-1 or hamming<=salmonOpts.editDistance) )
-	 	orphanLinks << transcripts[qa.tid].RefName << "\t" << qa.editD << "\t" << hamming << "\t" << rp.first.name  << "\t" << qa.pos  <<"\t" << transcripts[qa.tid].RefLength <<"\n"; 
+	 	orphanLinks << transcripts[qa.tid].RefName << "\t" << qa.editD << "\t" << hamming << "\t" << rp.first.name  << "\t" << qa.pos  <<"\t" << transcripts[qa.tid].RefLength <<"\n";
 	 }*/
 	 //f.close();
-	  
-	  
+
+
          leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
                       [](QuasiAlignment& a) {
                       return !a.toAlign;
                       }), leftHits.end());
 
- 
+
           if(salmonOpts.strictFilter and leftHits.size() > 0){
                 std::for_each(leftHits.begin(), leftHits.end(),
                         [&minLDist](QuasiAlignment& a) {
@@ -1054,7 +1076,7 @@ void processReadsQuasi(
 		}
 		//std::cout<<"end\n";
 	    }*/
-	  
+
       }
 
 
@@ -1090,17 +1112,17 @@ void processReadsQuasi(
                         [&minRDist](QuasiAlignment& a) {
                                        if (a.editD < minRDist) { minRDist = a.editD; }
                                       });
-            
+
               rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
                       [&minRDist](QuasiAlignment& a) {
                       return a.editD > minRDist;
                       }), rightHits.end());
-                      
-          }    
+
+          }
 
       }
 
-      if(salmonOpts.hammingFilter) {	
+      if(salmonOpts.hammingFilter) {
         size_t maxDist = salmonOpts.editDistance;
         std::for_each(leftHits.begin(), leftHits.end(),
                                        [&transcripts, &rp, &minLDist, maxDist](QuasiAlignment& a) {
@@ -1149,74 +1171,74 @@ void processReadsQuasi(
             rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, leftHits, rightHits,
                                                  jointHits, readLenLeft,
                                                  maxNumHits, tooManyHits, hctr);
-       
+
 
 	     if(salmonOpts.afterMergeFilter and jointHits.size()>0){
 
 		size_t minDist = salmonOpts.editDistance;
-		
+
 		if(jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
 
               	    std::for_each(jointHits.begin(), jointHits.end(),
                         [&minDist](QuasiAlignment& a) {
                                        if ( (a.editD + a.mateEditD) < minDist) { minDist = a.editD + a.mateEditD; }
                                       });
-            
+
               	    jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
                       [&minDist](QuasiAlignment& a) {
                       return (a.editD + a.mateEditD) > minDist;
                       }), jointHits.end());
-                      
+
           	}
  		else if(jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_LEFT or jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_RIGHT) {
-       		  
+
               	    std::for_each(jointHits.begin(), jointHits.end(),
                         [&minDist](QuasiAlignment& a) {
                                        if ( ((a.editD!=-1)?a.editD:a.mateEditD) < minDist) { minDist = ((a.editD!=-1)?a.editD:a.mateEditD); }
                                       });
-            
+
               	    jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
                       [&minDist](QuasiAlignment& a) {
                       return ((a.editD!=-1)?a.editD:a.mateEditD) > minDist;
                       }), jointHits.end());
- 
+
 		}
 		/*else if(!salmonOpts.keepOrphans) {
-		    
-		   jointHits.clear(); 
+
+		   jointHits.clear();
 
 		}*/
 
 	     }
-	
+
 	     if(salmonOpts.filterInsertSize>0 and jointHits.size()>0){
-		
+
 		if(jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
-		    
+
            	    size_t maxInsert = salmonOpts.filterInsertSize;
 		    size_t minInsert = rp.first.seq.size()+1;
               	    jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
                       [&maxInsert,&minInsert, &transcripts](QuasiAlignment& a) {
                       return ((a.fragLengthPedantic(transcripts[a.tid].RefLength)) > maxInsert) or ((a.fragLengthPedantic(transcripts[a.tid].RefLength)) < minInsert);
                       }), jointHits.end());
-		   	
+
 		}
 
 	     }
 
-	     if(salmonOpts.filterDiscordant and jointHits.size()>0) { 
-		
+	     if(salmonOpts.filterDiscordant and jointHits.size()>0) {
+
 		if(jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
               	    jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
                       [](QuasiAlignment& a) {
                       return (a.fwd == a.mateIsFwd);
                       }), jointHits.end());
-		   
-		}		
-	
+
+		}
+
 	     }
 
-	      
+
 	     if(salmonOpts.remap){
 
                 auto& startHit = jointHits.front();
@@ -1233,9 +1255,9 @@ void processReadsQuasi(
                                    true,
                                    salmonOpts.mmpLength,
                                    consistentHits);
-		    
+
                     if(rightHits.size() > 0){
- 
+
               	       hitSECollector(rp.second, rightHits, salmonOpts.editDistance);
 
 	               rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
@@ -1248,16 +1270,16 @@ void processReadsQuasi(
                 	        [&minRDist](QuasiAlignment& a) {
                                        if (a.editD < minRDist) { minRDist = a.editD; }
                                       });
-            
+
            		     rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
                 	       [&minRDist](QuasiAlignment& a) {
                 	       return a.editD > minRDist;
                 	       }), rightHits.end());
-                	      
+
            	           }
 			}
-			
-			if(rightHits.size() >0 ){ 
+
+			if(rightHits.size() >0 ){
 				// Rob pass
 				std::vector<QuasiAlignment> newJointHits;
 				rapmap::utils::mergeLeftRightHitsFuzzy(
@@ -1266,7 +1288,7 @@ void processReadsQuasi(
                         	        readLenLeft, maxNumHits, tooManyHits, hctr);
 				if (newJointHits.size() > 0) {
 					std::swap(jointHits, newJointHits);
-				}		
+				}
 				// END: Rob pass
 				/*
                         	jointHits.clear();
@@ -1281,7 +1303,7 @@ void processReadsQuasi(
 					for(auto qa: jointHits){
 						orphanLinks << elems[0] << "\t" << transcripts[qa.tid].RefName << "\t" << qa.pos << "\t" << qa.matePos << "\t"  <<qa.editD  << "\n";
 					}
-				} 
+				}
 				*/
 			} else {
 			   if(!salmonOpts.keepOrphans)
@@ -1322,8 +1344,8 @@ void processReadsQuasi(
                 		      [&minLDist](QuasiAlignment& a) {
                 		      return a.editD > minLDist;
                         	 }), leftHits.end());
-	
-         		   }		
+
+         		   }
 			}
 			if(leftHits.size() > 0) {
 				// Rob pass
@@ -1334,7 +1356,7 @@ void processReadsQuasi(
                         	        readLenLeft, maxNumHits, tooManyHits, hctr);
 				if (newJointHits.size() > 0) {
 					std::swap(jointHits, newJointHits);
-				}		
+				}
 				// END: Rob pass
 				/*
                        		jointHits.clear();
@@ -1344,7 +1366,7 @@ void processReadsQuasi(
                                 	readLenLeft, maxNumHits, tooManyHits, hctr);
 				if(writeOrphanLinks and jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED){
 					//orphanLinks << elems[0] << "\n";
-					//orphanLinks << h.transcriptID() << ',' << h.pos << "\t"; 
+					//orphanLinks << h.transcriptID() << ',' << h.pos << "\t";
 					for(auto qa: jointHits){
 						orphanLinks << elems[0] << "\t" << transcripts[qa.tid].RefName << "\t" << qa.pos << "\t" << qa.matePos << "\t"  <<qa.editD  << "\n";
 					}
@@ -1765,7 +1787,7 @@ void processReadsQuasi(
   auto rg = parser->getReadGroup();
 
   std::vector<uint32_t> dummy ;
-  
+
   while (parser->refill(rg)) {
       rangeSize = rg.size();
     if (rangeSize > structureVec.size()) {
@@ -2713,6 +2735,11 @@ int salmonQuantify(int argc, char* argv[]) {
      "information "
      "e.g. bootstraps, bias parameters, etc. will be written.")
     (
+     "rsemTruth", po::value<std::string>(),
+     "The file contains RSEM ground truth transcripts for simulation"
+     "we get the transcript indices from the first column of this file"
+     "e.g. bootstraps, bias parameters, etc. will be written.")
+    (
      "consistentHits,c",
      po::bool_switch(&(sopt.consistentHits))->default_value(false),
      "Force hits gathered during "
@@ -2883,12 +2910,12 @@ int salmonQuantify(int argc, char* argv[]) {
      "Keep the orphan reads after doing remap.")
      (
      "bestRemap", po::bool_switch(&(sopt.bestRemap))->default_value(false),
-     "Keep the best hits after remap.")    
+     "Keep the best hits after remap.")
       (
      "filterDiscordant", po::bool_switch(&(sopt.filterDiscordant))->default_value(false),
-     "filter discordant paired end reads.")    
+     "filter discordant paired end reads.")
       (
-     "filterInsertSize", 
+     "filterInsertSize",
       po::value<uint32_t>(&(sopt.filterInsertSize))->default_value(0),
      "filtering hits on both right and left hits after hitCollector call.")
      (
@@ -3133,6 +3160,12 @@ transcript abundance from RNA-seq reads
     boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
     versionInfo.load(versionPath);
     auto idxType = versionInfo.indexType();
+
+    //if(vm.count("truthMap")){
+        salmon::utils::loadGroundTruthIsoformExp(sopt.groundTruthIsoformFile);
+    //}
+    std::cout << "Hash map size  " <<  salmon::utils::GroundTruth::truthMap.size() << "\n" ;
+
 
     ReadExperiment experiment(readLibraries, indexDirectory, sopt);
 

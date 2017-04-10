@@ -47,10 +47,10 @@ struct SalmonOpts {
 
     bool dumpEq; 	     // Dump the equivalence classes and counts to file
 
-    bool dumpEqWeights; 	     // Dump the equivalence classes rich weights 
+    bool dumpEqWeights; 	     // Dump the equivalence classes rich weights
 
-    bool fasterMapping; // [Developer]: Disables some extra checks during quasi-mapping. This may make mapping a 
-                        // little bit faster at the potential cost of returning too many mappings (i.e. some sub-optimal mappings) 
+    bool fasterMapping; // [Developer]: Disables some extra checks during quasi-mapping. This may make mapping a
+                        // little bit faster at the potential cost of returning too many mappings (i.e. some sub-optimal mappings)
                         // for certain reads. Only use this option if you know what it does (enables NIP-skipping)
 
     bool gencodeRef; // The reference is expected to be from Gencode.
@@ -73,8 +73,8 @@ struct SalmonOpts {
     bool useBiasLengthThreshold; // Don't require that the recomputed effective length for a target
                                 // be above a threshold before applying it.
 
-    bool rankEqClasses; // Keep a separate equivalence class for each ordering (by conditional probability) 
-                        // of the the transcript labels 
+    bool rankEqClasses; // Keep a separate equivalence class for each ordering (by conditional probability)
+                        // of the the transcript labels
 
     uint32_t useRangeClusterEqClasses; // Cluster reads in each Eq Class based on the reads they fall into
 
@@ -92,13 +92,13 @@ struct SalmonOpts {
     bool hammingFilter;
     bool bestRemap;
     bool keepOrphans;
-       
-    bool filterDiscordant; 
+
+    bool filterDiscordant;
 
     uint32_t filterInsertSize;
 
     bool useFMEMOpt; // Use Full Model EM instead of equivalence class EM in the batch passes
-    
+
     bool useFSPD; // Learn a non-uniform start distribution
 
     bool noSeqBiasModel; // Don't learn and use a sequence-specific bias model.
@@ -118,7 +118,7 @@ struct SalmonOpts {
                           // the provided library type could correspond to the true
                           // fragment origin.
 
-    bool ignoreIncompat; // If incompatPrior is 0, this flag is set to true and we completely 
+    bool ignoreIncompat; // If incompatPrior is 0, this flag is set to true and we completely
                          // ignore incompatible fragments.
 
     bool useErrorModel; // Learn and apply the error model when computing the likelihood
@@ -153,23 +153,26 @@ struct SalmonOpts {
     bool extraSeedPass; // Perform extra pass trying to find seeds to cover the read
 
     bool disableMappingCache; // Don't write mapping results to temporary mapping cache file
-    
+
     bool meta; // Set other options to be optimized for metagenomic data
 
     boost::filesystem::path outputDirectory; // Quant output directory
 
     boost::filesystem::path indexDirectory; // Index directory
 
-    boost::filesystem::path geneMapPath; // Gene map path 
-	
-    boost::filesystem::path alleleFilePath; // alleleFilePath 
-    
+    boost::filesystem::path geneMapPath; // Gene map path
+
+    boost::filesystem::path alleleFilePath; // alleleFilePath
+
+    boost::filesystem::path groundTruthIsoformFile; // Isoform file from rsem simulation
+
+
     bool quiet; // Be quiet during quantification.
 
     bool useVBOpt; // Use Variational Bayesian EM instead of "regular" EM in the batch passes
 
     bool useQuasi; // Are we using the quasi-mapping based index or not.
-    
+
     // For writing quasi-mappings
     std::string qmFileName;
     std::ofstream qmFile;
@@ -180,7 +183,7 @@ struct SalmonOpts {
   std::unique_ptr<std::ofstream> unmappedFile{nullptr};
     bool writeUnmappedNames; // write the names of unmapped reads
     std::shared_ptr<spdlog::logger> unmappedLog{nullptr};
-    
+
     std::unique_ptr<std::ofstream> orphanLinkFile{nullptr};
     bool writeOrphanLinks; // write the names of unmapped reads
     std::shared_ptr<spdlog::logger> orphanLinkLog{nullptr};

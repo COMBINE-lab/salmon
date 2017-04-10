@@ -1280,6 +1280,36 @@ std::vector<std::string> split(const std::string& str,
   return result;
 }
 
+std::vector<std::string> split2(const std::string &text, char sep) {
+    std::vector<std::string> tokens;
+    std::size_t start = 0, end = 0;
+    while ((end = text.find(sep, start)) != std::string::npos) {
+        tokens.push_back(text.substr(start, end - start));
+        start = end + 1;
+    }
+    tokens.push_back(text.substr(start));
+    return tokens;
+}
+
+std::map<size_t,std::string> GroundTruth::truthMap;
+
+void loadGroundTruthIsoformExp(boost::filesystem::path groundTruthIsoformFile){
+    std::cout << " File name " << groundTruthIsoformFile << "\n";
+    std::ifstream truthFile("/mnt/scratch3/hirak/rsem/model4/simulated_reads/15M_non_gaussian/sim.sim.isoforms.results");
+     std::string line ;
+     std::getline(truthFile,line);
+     size_t i= 0;
+     while(std::getline(truthFile,line)){
+
+         auto vec = split(line);
+         //GroundTruth a;
+         GroundTruth::truthMap[i] = vec[0];
+         i += 1;
+     }
+     if(i == 0) std::cout << " not in while "<<"\n";
+     truthFile.close();
+}
+
 std::string getCurrentTimeAsString() {
     // Get the time at the start of the run
     std::time_t result = std::time(NULL);
@@ -1289,7 +1319,7 @@ std::string getCurrentTimeAsString() {
 }
 
 /**
- * Validate the options regardless of the mode (quasi or alignment). 
+ * Validate the options regardless of the mode (quasi or alignment).
  * Assumes a logger already exists.
  **/
 bool validateOptions(SalmonOpts& sopt) {
@@ -1754,7 +1784,7 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
   /**
    * New context counting
    */
-  
+
   int contextSize = outsideContext + insideContext;
   //double cscale = 100.0 / (2 * contextSize);
   auto populateContextCounts = [outsideContext, insideContext, contextSize](
@@ -1808,7 +1838,7 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
       }
     }
   };
-  
+
 
   /**
    * orig context counting
@@ -1992,13 +2022,13 @@ int contextSize = outsideContext + insideContext;
                   int32_t contextFrac = std::lrint(
                                                    (contextCountsFP[fragStart] + contextCountsTP[fragEnd]) *
                                                    cscale);
-                  */ 
+                  */
                   double contextLength = (windowLensFP[fragStart] + windowLensTP[fragEnd]);
                   int32_t contextFrac = (contextLength > 0) ?
                     (std::lrint(100.0 *
                                (contextCountsFP[fragStart] + contextCountsTP[fragEnd]) / contextLength)) :
                     0;
-                  
+
                   GCDesc desc{gcFrac, contextFrac};
                   expectGC.inc(desc,
                                weight * (conditionalCDF(fl) - prevFLMass));
@@ -2281,13 +2311,13 @@ int contextSize = outsideContext + insideContext;
                       std::lrint((contextCountsFP[fragStart] +
                                   contextCountsTP[fragEnd]) *
                                  cscale);
-                    */ 
+                    */
                     double contextLength = (windowLensFP[fragStart] + windowLensTP[fragEnd]);
                     int32_t contextFrac = (contextLength > 0) ?
                       (std::lrint(100.0 *
                                   (contextCountsFP[fragStart] + contextCountsTP[fragEnd]) / contextLength)) :
                       0;
-                    
+
                     GCDesc desc{gcFrac, contextFrac};
                     fragFactor *= gcBias.get(desc);
                     /*
@@ -2349,7 +2379,7 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm,
   using std::move;
   using std::cerr;
   using std::max;
- 
+
   auto logger = spdlog::get("jointLog");
 
   constexpr double minTPM = std::numeric_limits<double>::denorm_min();
