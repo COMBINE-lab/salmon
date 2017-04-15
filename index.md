@@ -19,6 +19,16 @@ little memory. Salmon performs its inference using an expressive and
 realistic model of RNA-seq data that takes into account experimental attributes
 and biases commonly observed in *real* RNA-seq data.
 
+Citing Salmon
+-------------
+
+If you find Salmon useful, or have suggestions for improvement, please let us know!
+If you use Salmon in your work, please cite the Salmon paper:
+
+Patro, R., Duggal, G., Love, M. I., Irizarry, R. A., & Kingsford, C. (2017). Salmon provides fast and bias-aware quantification of transcript expression. Nature Methods. 
+
+You can find other citation formats on Google Scholar [here](https://scholar.google.com/scholar?hl=en&q=Salmon+provides+fast+and+bias-aware+quantification+of+transcript&btnG=&as_sdt=1%2C5&as_sdtp=).
+
 Funding
 -------
 - **NSF**
