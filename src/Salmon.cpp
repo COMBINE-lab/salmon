@@ -124,22 +124,25 @@ appears below.
 Reference:
 ==========
 
-Rob Patro, Geet Duggal, Michael I. Love, Rafael A. Irizarry, Carl Kingsford (2017).
+Rob Patro, Geet Duggal, Michael I. Love, Rafael A. Irizarry, Carl Kingsford.
 Salmon provides fast and bias-aware quantification of transcript expression.
-Nature Methods. Advanced Online Publication. doi: 10.1038/nmeth.4197
+Nature Methods. 2017;14(4):417-419. doi: 10.1038/nmeth.4197
 
 bibtex:
 =======
 
-@article{Patro2017,
-  author = {Patro, Rob and Duggal, Geet and Love, Michael I and Irizarry, Rafael A and Kingsford, Carl},
-  title = {Salmon provides fast and bias-aware quantification of transcript expression},
+@article{Patro2017Salmon,
   doi = {10.1038/nmeth.4197},
-  url = {https://doi.org/10.1038/nmeth.4197},
+  url = {https://doi.org/10.1038%2Fnmeth.4197},
   year  = {2017},
-  month = {March},
-  publisher = {Springer Nature},
-  journal = {Nature Methods}
+  month = {mar},
+  publisher = {{Springer Nature}},
+  volume = {14},
+  number = {4},
+  pages = {417--419},
+  author = {Rob Patro and Geet Duggal and Michael I Love and Rafael A Irizarry and Carl Kingsford},
+  title = {Salmon provides fast and bias-aware quantification of transcript expression},
+  journal = {{Nature Methods}}
 }
 )";
 
