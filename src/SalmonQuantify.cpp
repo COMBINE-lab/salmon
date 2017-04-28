@@ -126,8 +126,10 @@ extern "C" {
 #include "RapMapUtils.hpp"
 #include "SelectiveAlignment.hpp"
 //#include "TextBootstrapWriter.hpp"
+#include "SACollectorPair.hpp"
+#include "HitManagerSA.hpp"
 
-/****** QUASI MAPPING DECLARATIONS *********/
+ /****** QUASI MAPPING DECLARATIONS *********/
 using MateStatus = rapmap::utils::MateStatus;
 using QuasiAlignment = rapmap::utils::QuasiAlignment;
 /****** QUASI MAPPING DECLARATIONS  *******/
@@ -857,7 +859,12 @@ void processReadsQuasi(
     mem_opt_t* memOptions, SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache) {
-  uint64_t count_fwd = 0, count_bwd = 0;
+
+    //strategy 2
+    using OffsetT = typename RapMapIndexT::IndexType;
+    using SAIntervalHit = rapmap::utils::SAIntervalHit<OffsetT> ;
+
+    uint64_t count_fwd = 0, count_bwd = 0;
   // Seed with a real random value, if available
   std::random_device rd;
 
@@ -916,6 +923,7 @@ void processReadsQuasi(
 
   SECollector<RapMapIndexT> hitSECollector(qidx);
 
+  SACollectorPair<RapMapIndexT, rapmap::utils::my_mer> hitCollectorPair(qidx);
 
   //SACollector<RapMapIndexT> hitCollector(qidx);
 
@@ -953,6 +961,14 @@ void processReadsQuasi(
 
   //std::fstream orphan_recovered;
   //orphan_recovered.open ("/mnt/scratch1/mohsen/selective-alignment/orphans_recovered.txt", std::fstream::in | std::fstream::out | std::fstream::app);
+
+
+  //Strategy 2
+  std::vector<SAIntervalHit> leftFwdSAInts;
+  std::vector<SAIntervalHit> leftRcSAInts;
+  std::vector<SAIntervalHit> rightFwdSAInts;
+  std::vector<SAIntervalHit> rightRcSAInts;
+
 
   auto trueTxpsMap = salmon::utils::GroundTruth::truthMap;
   while (parser->refill(rg)) {
@@ -993,163 +1009,44 @@ void processReadsQuasi(
       int32_t minLDist{salmonOpts.editDistance};
       int32_t minRDist{salmonOpts.editDistance};
 
-      bool lh = tooShortLeft ? false : hitCollector(rp.first.seq,
+
+
+      /*bool lh = tooShortLeft ? false : hitCollector(rp.first.seq,
                                   leftHits, saSearcher,
                                   MateStatus::PAIRED_END_LEFT,
 				  dummy,false,salmonOpts.mmpLength,
-                                  consistentHits);
+                                  consistentHits);*/
 
-      /*if (leftHits.size() == 0 and salmonOpts.remap){
+    //strategy 2
 
-	hitCollector9(rp.first.seq,
-			   leftHits, saSearcher,
-			   MateStatus::PAIRED_END_LEFT,
-			   true,salmonOpts.mmpLength,
-			   //  mopts->mmpThreshold, or strictCheck,
-			   consistentHits);
+      leftFwdSAInts.clear();
+      leftRcSAInts.clear();
+      rightFwdSAInts.clear();
+      rightRcSAInts.clear();
 
-      }*/
-
-      auto tmpVec = salmon::utils::split2(rp.first.name,'_');
-      size_t trueTxpId = (size_t)std::stoi(tmpVec[2])-1 ;
-      auto trueTxpName = trueTxpsMap[trueTxpId] ;
-      bool gotTruth{false};
-      for(auto& qa:leftHits){
-          if(transcripts[qa.tid].RefName == trueTxpName){
-            gotTruth = true ;
-            break;
-          }
-      }
+      bool lh = hitCollectorPair(rp.first.seq,
+                    leftFwdSAInts, leftRcSAInts, saSearcher,
+                    MateStatus::PAIRED_END_LEFT,
+                    dummy,
+                    false,
+                    salmonOpts.mmpLength,
+                    consistentHits);
 
 
 
-	//std::fstream f;
-        //f.open ("/mnt/scratch1/mohsen/selective-alignment/edit_hamming_newEdit_eq.txt", std::fstream::in | std::fstream::out | std::fstream::app);
-
-      if(salmonOpts.filter and leftHits.size() > 0) {
-          hitSECollector(rp.first, leftHits, salmonOpts.editDistance);
-
-      if(!gotTruth){
-          orphanLinks << rp.first.name << "\t" << trueTxpName ;
-          for(auto& qa:leftHits){
-              orphanLinks << "\t" << transcripts[qa.tid].RefName << " " << qa.editD << " " << qa.pos;
-        }
-          orphanLinks << "\n" ;
-      }
-
-	 /*for(auto& qa : leftHits){
-	    size_t hamming = hammingDist(qa, rp.first.seq, transcripts[qa.tid], salmonOpts.editDistance);
-	    if(hamming != qa.editD and (qa.editD!=-1 or hamming<=salmonOpts.editDistance) )
-	 	orphanLinks << transcripts[qa.tid].RefName << "\t" << qa.editD << "\t" << hamming << "\t" << rp.first.name  << "\t" << qa.pos  <<"\t" << transcripts[qa.tid].RefLength <<"\n";
-	 }*/
-	 //f.close();
-
-
-         leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
-                      [](QuasiAlignment& a) {
-                      return !a.toAlign;
-                      }), leftHits.end());
-
-
-          if(salmonOpts.strictFilter and leftHits.size() > 0){
-                std::for_each(leftHits.begin(), leftHits.end(),
-                        [&minLDist](QuasiAlignment& a) {
-                                       if (a.editD < minLDist) { minLDist = a.editD; }
-                                      });
-
-
-
-	        leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
-                      [&minLDist](QuasiAlignment& a) {
-                      return a.editD > minLDist;
-                      }), leftHits.end());
-          }
-	  //if(leftHits.size()>0 and leftHits.front().editD != 0){
-	    /*if(leftHits.front().editD != 0){
-	    //if(rp.first.name == "read272375/ENST00000373816.4;mate1:2693-2792;mate2:2873-2972"){
-		//std::cout<<"after strictFilter\n";
-		//std::cout<<leftHits.size()<<"\n";
-		for(auto a : leftHits){
-	    	  orphanLinks<< a.editD << "\t" <<rp.first.seq << "\t" << rp.first.name<<"\t" <<transcripts[a.tid].RefName << "\t" << a.pos << "\t" <<  transcripts[a.tid].RefLength<< "\n";
-		  //std::cout<< "--------\n";
-		  //std::cout<< "--------\n";
-		}
-		//std::cout<<"end\n";
-	    }*/
-
-      }
-
-
-
-      bool rh = tooShortRight ? false : hitCollector(rp.second.seq,
+      /*bool rh = tooShortRight ? false : hitCollector(rp.second.seq,
                                    rightHits, saSearcher,
                                    MateStatus::PAIRED_END_RIGHT,
 				   dummy,false,salmonOpts.mmpLength,
-                                   consistentHits);
+                                   consistentHits);*/
 
-      /*if(rightHits.size() == 0 and salmonOpts.remap){
-
-	hitCollector9(rp.second.seq,
-			   rightHits, saSearcher,
-			   MateStatus::PAIRED_END_RIGHT,
-			   true,salmonOpts.mmpLength,
-			   consistentHits);
-      }*/
-
-	int old_size = rightHits.size();
-
-      if(salmonOpts.filter and rightHits.size() > 0){
-          hitSECollector(rp.second, rightHits, salmonOpts.editDistance);
-
-          rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
-                      [](QuasiAlignment& a) {
-                      return !a.toAlign;
-                      }), rightHits.end());
-
-
-          if(salmonOpts.strictFilter and rightHits.size() > 0){
-              std::for_each(rightHits.begin(), rightHits.end(),
-                        [&minRDist](QuasiAlignment& a) {
-                                       if (a.editD < minRDist) { minRDist = a.editD; }
-                                      });
-
-              rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
-                      [&minRDist](QuasiAlignment& a) {
-                      return a.editD > minRDist;
-                      }), rightHits.end());
-
-          }
-
-      }
-
-      if(salmonOpts.hammingFilter) {
-        size_t maxDist = salmonOpts.editDistance;
-        std::for_each(leftHits.begin(), leftHits.end(),
-                                       [&transcripts, &rp, &minLDist, maxDist](QuasiAlignment& a) {
-                                         auto& txp = transcripts[a.tid];
-                                         auto dist = hammingDist(a, rp.first.seq, txp, maxDist);
-                                         if (dist < minLDist) { minLDist = dist; }
-                                         a.editD = dist;
-                                       });
-         std::for_each(rightHits.begin(), rightHits.end(),
-                                        [&transcripts, &rp, &minRDist, maxDist](QuasiAlignment& a) {
-                                         auto& txp = transcripts[a.tid];
-                                         auto dist = hammingDist(a, rp.second.seq, txp, maxDist);
-                                         if (dist < minRDist) { minRDist = dist; }
-                                         a.editD = dist;
-                                        });
-
-         size_t maxLDist = std::min(static_cast<uint32_t>(minLDist), static_cast<uint32_t>(salmonOpts.editDistance));
-         leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
-                                       [&transcripts, &rp, maxLDist, maxDist](QuasiAlignment& a) {
-                                       return a.editD > maxLDist;
-                                       }), leftHits.end());
-         size_t maxRDist = std::min(static_cast<uint32_t>(minRDist), static_cast<uint32_t>(salmonOpts.editDistance));
-         rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
-                                        [&transcripts, &rp, maxRDist, maxDist](QuasiAlignment& a) {
-                                        return a.editD > maxRDist;
-                                        }), rightHits.end());
-      }
+      bool rh = hitCollectorPair(rp.second.seq,
+                    rightFwdSAInts, rightRcSAInts, saSearcher,
+                    MateStatus::PAIRED_END_RIGHT,
+                    dummy,
+                    false,
+                    salmonOpts.mmpLength,
+                    consistentHits);
 
 
       // Consider a read as too short if both ends are too short
@@ -1168,226 +1065,25 @@ void processReadsQuasi(
         } else {
 
 
-            rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, leftHits, rightHits,
-                                                 jointHits, readLenLeft,
-                                                 maxNumHits, tooManyHits, hctr);
+            //rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, leftHits, rightHits,
+            //                                     jointHits, readLenLeft,
+            //                                     maxNumHits, tooManyHits, hctr);
 
-
-	     if(salmonOpts.afterMergeFilter and jointHits.size()>0){
-
-		size_t minDist = salmonOpts.editDistance;
-
-		if(jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
-
-              	    std::for_each(jointHits.begin(), jointHits.end(),
-                        [&minDist](QuasiAlignment& a) {
-                                       if ( (a.editD + a.mateEditD) < minDist) { minDist = a.editD + a.mateEditD; }
-                                      });
-
-              	    jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
-                      [&minDist](QuasiAlignment& a) {
-                      return (a.editD + a.mateEditD) > minDist;
-                      }), jointHits.end());
-
-          	}
- 		else if(jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_LEFT or jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_RIGHT) {
-
-              	    std::for_each(jointHits.begin(), jointHits.end(),
-                        [&minDist](QuasiAlignment& a) {
-                                       if ( ((a.editD!=-1)?a.editD:a.mateEditD) < minDist) { minDist = ((a.editD!=-1)?a.editD:a.mateEditD); }
-                                      });
-
-              	    jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
-                      [&minDist](QuasiAlignment& a) {
-                      return ((a.editD!=-1)?a.editD:a.mateEditD) > minDist;
-                      }), jointHits.end());
-
-		}
-		/*else if(!salmonOpts.keepOrphans) {
-
-		   jointHits.clear();
-
-		}*/
-
-	     }
-
-	     if(salmonOpts.filterInsertSize>0 and jointHits.size()>0){
-
-		if(jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
-
-           	    size_t maxInsert = salmonOpts.filterInsertSize;
-		    size_t minInsert = rp.first.seq.size()+1;
-              	    jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
-                      [&maxInsert,&minInsert, &transcripts](QuasiAlignment& a) {
-                      return ((a.fragLengthPedantic(transcripts[a.tid].RefLength)) > maxInsert) or ((a.fragLengthPedantic(transcripts[a.tid].RefLength)) < minInsert);
-                      }), jointHits.end());
-
-		}
-
-	     }
-
-	     if(salmonOpts.filterDiscordant and jointHits.size()>0) {
-
-		if(jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
-              	    jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
-                      [](QuasiAlignment& a) {
-                      return (a.fwd == a.mateIsFwd);
-                      }), jointHits.end());
-
-		}
-
-	     }
-
-
-	     if(salmonOpts.remap){
-
-                auto& startHit = jointHits.front();
-	        if(startHit.mateStatus == rapmap::utils::MateStatus::PAIRED_END_LEFT){
-                    std::vector<uint32_t> goldenTids ;
-                    for(auto& qa : jointHits){
-                        goldenTids.push_back(qa.tid);
-                    }
-                    rightHits.clear();
-                    hitCollector9(rp.second.seq,
-                                   rightHits, saSearcher,
-                                   MateStatus::PAIRED_END_RIGHT,
-                                   goldenTids,
-                                   true,
-                                   salmonOpts.mmpLength,
-                                   consistentHits);
-
-                    if(rightHits.size() > 0){
-
-              	       hitSECollector(rp.second, rightHits, salmonOpts.editDistance);
-
-	               rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
-                         [](QuasiAlignment& a) {
-                         return !a.toAlign;
-                         }), rightHits.end());
-		       if(salmonOpts.bestRemap) {
-		           if(rightHits.size() > 0){
-        		      std::for_each(rightHits.begin(), rightHits.end(),
-                	        [&minRDist](QuasiAlignment& a) {
-                                       if (a.editD < minRDist) { minRDist = a.editD; }
-                                      });
-
-           		     rightHits.erase(std::remove_if(rightHits.begin(), rightHits.end(),
-                	       [&minRDist](QuasiAlignment& a) {
-                	       return a.editD > minRDist;
-                	       }), rightHits.end());
-
-           	           }
-			}
-
-			if(rightHits.size() >0 ){
-				// Rob pass
-				std::vector<QuasiAlignment> newJointHits;
-				rapmap::utils::mergeLeftRightHitsFuzzy(
-                        	        true, true,
-                        	        leftHits, rightHits, newJointHits,
-                        	        readLenLeft, maxNumHits, tooManyHits, hctr);
-				if (newJointHits.size() > 0) {
-					std::swap(jointHits, newJointHits);
-				}
-				// END: Rob pass
-				/*
-                        	jointHits.clear();
-                        	rapmap::utils::mergeLeftRightHitsFuzzy(
-                        	        lh, rh,
-                        	        leftHits, rightHits, jointHits,
-                        	        readLenLeft, maxNumHits, tooManyHits, hctr);
-
-				if(writeOrphanLinks and jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED){
-				//	orphan_recovered << elems[0] << "\n";
-					//orphanLinks << elems[0]  << "\n";
-					for(auto qa: jointHits){
-						orphanLinks << elems[0] << "\t" << transcripts[qa.tid].RefName << "\t" << qa.pos << "\t" << qa.matePos << "\t"  <<qa.editD  << "\n";
-					}
-				}
-				*/
-			} else {
-			   if(!salmonOpts.keepOrphans)
-				jointHits.clear();
-			}
-                    }
-                }else if(startHit.mateStatus == rapmap::utils::MateStatus::PAIRED_END_RIGHT){
-                    std::vector<uint32_t> goldenTids ;
-                    for(auto& qa : jointHits){
-                        goldenTids.push_back(qa.tid);
-                    }
-                    leftHits.clear();
-                    hitCollector9(rp.first.seq,
-                                   leftHits, saSearcher,
-                                   MateStatus::PAIRED_END_LEFT,
-                                   goldenTids,
-                                   true,
-                                   salmonOpts.mmpLength,
-                                   consistentHits);
-                    if(leftHits.size() > 0){
-
-			 hitSECollector(rp.first, leftHits, salmonOpts.editDistance);
-
- 	                 leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
-                         [](QuasiAlignment& a) {
-                         return !a.toAlign;
-                         }), leftHits.end());
-
-			if(salmonOpts.bestRemap){
-		            if(leftHits.size() > 0){
-        		        std::for_each(leftHits.begin(), leftHits.end(),
-                	        [&minLDist](QuasiAlignment& a) {
-                                       if (a.editD < minLDist) { minLDist = a.editD; }
-                                      });
-
-
-         			 leftHits.erase(std::remove_if(leftHits.begin(), leftHits.end(),
-                		      [&minLDist](QuasiAlignment& a) {
-                		      return a.editD > minLDist;
-                        	 }), leftHits.end());
-
-         		   }
-			}
-			if(leftHits.size() > 0) {
-				// Rob pass
-				std::vector<QuasiAlignment> newJointHits;
-				rapmap::utils::mergeLeftRightHitsFuzzy(
-                        	        true, true,
-                        	        leftHits, rightHits, newJointHits,
-                        	        readLenLeft, maxNumHits, tooManyHits, hctr);
-				if (newJointHits.size() > 0) {
-					std::swap(jointHits, newJointHits);
-				}
-				// END: Rob pass
-				/*
-                       		jointHits.clear();
-                        	rapmap::utils::mergeLeftRightHitsFuzzy(
-                                	lh, rh,
-                                	leftHits, rightHits, jointHits,
-                                	readLenLeft, maxNumHits, tooManyHits, hctr);
-				if(writeOrphanLinks and jointHits.front().mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED){
-					//orphanLinks << elems[0] << "\n";
-					//orphanLinks << h.transcriptID() << ',' << h.pos << "\t";
-					for(auto qa: jointHits){
-						orphanLinks << elems[0] << "\t" << transcripts[qa.tid].RefName << "\t" << qa.pos << "\t" << qa.matePos << "\t"  <<qa.editD  << "\n";
-					}
-				}
-				*/
-			} else {
-		 	   if(!salmonOpts.keepOrphans)
-				jointHits.clear();
-			}
-                    }
-			//if(leftHits.size()>0) std::cout<<leftHits.size()<<"\n";
-                }
-	     }
+            // strategy 2
+            // std::cout<<"before merge\n";
+            bool res = rapmap::hit_manager_sa::mergeLeftRightSAInts(
+                    rp,
+                    lh, rh,
+                    leftFwdSAInts, leftRcSAInts,
+                    rightFwdSAInts, rightRcSAInts,
+                    jointHits,
+                    *qidx,
+                    false,
+                    consistentHits,
+                    hctr);
+		    //std::cout<<"after join: \t"<<jointHits.size()<<"\n";
         }
 
-	/*if(writeOrphanLinks) {
-	   orphanLinks << rp.first.name;
-	   for(auto aln: jointHits)
-	      orphanLinks << "\t" << transcripts[aln.tid].RefName;
-	   orphanLinks << "\n";
-	}*/
 
 
         if (initialRound) {
@@ -1399,37 +1095,11 @@ void processReadsQuasi(
           jointHitGroup.clearAlignments();
         }
 
-        /*if(jointHits.size() > 1){
-            if(jointHits.front().isPaired){
-
-               //auto bestHit =  std::min_element(jointHits.begin(),jointHits.end(),
-                       //[](const QuasiAlignment& qa1, const QuasiAlignment& qa2) -> bool {
-                            //return qa1.editD < qa2.editD ;
-                       //});
-                int32_t minEditD = std::numeric_limits<int32_t>::max() ;
-                for(auto& qa : jointHits){
-                     if(qa.editD < minEditD)
-                         minEditD = qa.editD ;
-                }
-                for(auto& qa : jointHits){
-                    if(qa.editD == minEditD)
-                        filtJointHits.push_back(qa);
-                }
-            }
-        }
-
-
-      if(jointHits.front().isPaired) {
-          jointHits.clear();
-        for(auto& qa:filtJointHits)
-            jointHits.push_back(qa);
-      }*/
-
       }
 
       // NOTE: This will currently not work with "strict intersect", i.e.
       // nothing will be output here with strict intersect.
-      if (false and writeOrphanLinks) {
+      if (writeOrphanLinks) {
           // If we are not using strict intersection, then joint hits
           // can only be zero when either:
           // 1) there are *no* hits or
@@ -3162,9 +2832,9 @@ transcript abundance from RNA-seq reads
     auto idxType = versionInfo.indexType();
 
     //if(vm.count("truthMap")){
-        salmon::utils::loadGroundTruthIsoformExp(sopt.groundTruthIsoformFile);
+    //  salmon::utils::loadGroundTruthIsoformExp(sopt.groundTruthIsoformFile);
     //}
-    std::cout << "Hash map size  " <<  salmon::utils::GroundTruth::truthMap.size() << "\n" ;
+    //std::cout << "Hash map size  " <<  salmon::utils::GroundTruth::truthMap.size() << "\n" ;
 
 
     ReadExperiment experiment(readLibraries, indexDirectory, sopt);

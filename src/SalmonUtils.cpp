@@ -225,13 +225,13 @@ bool compatibleHit(const LibraryFormat expected, int32_t start, bool isForward,
   default:
     // SHOULD NOT GET HERE
     fmt::print(stderr,
-               "WARNING: Could not associate known library type with read!\n");
+               "WARNING1: Could not associate known library type with read!\n");
     return false;
     break;
   }
   // SHOULD NOT GET HERE
   fmt::print(stderr,
-             "WARNING: Could not associate known library type with read!\n");
+             "WARNING2: Could not associate known library type with read!\n");
   return false;
 }
 
@@ -620,7 +620,7 @@ LibraryFormat hitType(int32_t start, bool isForward) {
   }
   // SHOULD NOT GET HERE
   fmt::print(stderr,
-             "WARNING: Could not associate known library type with read!\n");
+             "WARNING3: Could not associate known library type with read!\n");
   return LibraryFormat(ReadType::PAIRED_END, ReadOrientation::NONE,
                        ReadStrandedness::U);
 }
