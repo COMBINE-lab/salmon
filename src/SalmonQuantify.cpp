@@ -1032,8 +1032,9 @@ void processReadsQuasi(
                     salmonOpts.mmpLength,
                     consistentHits);
 
-
-
+    //if(salmonOpts.filter and leftHits.size() > 0) {
+        // hitSECollector(rp.first, leftHits, salmonOpts.editDistance);
+    //}
       /*bool rh = tooShortRight ? false : hitCollector(rp.second.seq,
                                    rightHits, saSearcher,
                                    MateStatus::PAIRED_END_RIGHT,
@@ -1081,7 +1082,40 @@ void processReadsQuasi(
                     false,
                     consistentHits,
                     hctr);
-		    //std::cout<<"after join: \t"<<jointHits.size()<<"\n";
+            hitSECollector(rp.first,rp.second, jointHits, salmonOpts.editDistance,transcripts);
+
+            jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
+                  [&transcripts](QuasiAlignment& a) {
+                  //return (foundBowtie? (!a.toAlign && transcripts[a.tid].RefName!=trueTxpName):!a.toAlign);
+                  return !a.toAlign;
+                  }), jointHits.end());
+
+
+
+            if(salmonOpts.strictFilter and jointHits.size() > 0){
+
+                auto minDist = 200;// salmonOpts.editDistance*2;
+                std::for_each(jointHits.begin(), jointHits.end(),
+                    [&minDist](QuasiAlignment& a) {
+                    if (a.editD < minDist and a.editD != -1) { minDist = a.editD; }
+                });
+
+
+
+	            jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
+                    [&minDist,&transcripts](QuasiAlignment& a) {
+                    return (a.editD > minDist);
+                }), jointHits.end());
+                if(jointHits.size()==0)
+                    std::cout<<minDist<<"\n";
+                /*if(minDist>20){
+                    std::cout<<minDist<<" " <<rp.first.name << " " << jointHits.front().editD << " " << jointHits.front().pos << " " << jointHits.front().matePos << "\n";
+                }*/
+	        }
+
+
+
+
         }
 
 
@@ -1491,7 +1525,7 @@ void processReadsQuasi(
             // QuasiAlignment Object vector hits
             // which right now contains lcpLengths too
             // time to call the new function
-            hitSECollector(rp, jointHits,salmonOpts.editDistance);
+            //hitSECollector(rp, jointHits,salmonOpts.editDistance);
 
 
       // If the fragment was too short, record it
