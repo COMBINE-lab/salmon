@@ -3,6 +3,8 @@
 #include "BooMap.hpp"
 #include "FrugalBooMap.hpp"
 #include "FastxParser.hpp"
+#include "SelectiveAlignment.hpp"
+#include "SalmonUtils.hpp"
 
 #include "edlib.h"
 #include <algorithm>
@@ -30,12 +32,13 @@ namespace rapmap {
 
 
     }*/
-
+    template <typename RapMapIndexT>
     bool mergeLeftRightMap(fastx_parser::ReadPair& rpair,
     		              SAHitMap& leftMap,
 						  SAHitMap& rightMap,
-						  std::vector<QuasiAlignment>& jointHits
-    		              ){
+						  std::vector<QuasiAlignment>& jointHits,
+                          uint32_t editDistance,
+                          RapMapIndexT& rmi){
     	//using OffsetT = typename RapMapIndexT::IndexType;
         typedef struct covInfo{
 		  public:
@@ -58,24 +61,52 @@ namespace rapmap {
     	uint32_t maxInsertSize_{1000} ;
     	bool foundHit{false} ;
 
+        SECollector<RapMapIndexT> hitSECollector(&rmi);
+        std::vector<QuasiAlignment> hits;
+
+        if(salmon::utils::GroundTruth::foundTxps.count(rpair.first.name)==0){
+            std::vector<std::string> txps;
+            salmon::utils::GroundTruth::foundTxps[rpair.first.name] = txps;
+        }
+
 
     		std::set<int> commonTids ;
     		for(auto& phLeft : leftMap){
     			auto leftTid = phLeft.first ;
     			for(auto& phRight: rightMap){
     				auto rightTid = phRight.first ;
-    				if(leftTid == rightTid){
-    					commonTids.insert(leftTid);
-    				}
-    			}
-    		}
+                     //if(rpair.second.name=="13915359_0_6053_768_153/2"){
+                    //    std::cout<<rpair.second.name << " " << rmi.txpNames[rightTid] << " " << rpair.first.name << " " << rmi.txpNames[leftTid] <<"\n";
+                    //}
+
+                    if(leftTid == rightTid){
+                            commonTids.insert(leftTid);
+                        }
+                    }
+                }
     		if(commonTids.size() > 0){
+
     			//for each common tid check
     			//if both the end tell us
     			//something
     			for(auto tid:commonTids){
-    				if(leftMap[tid].active and rightMap[tid].active){
-						auto& lefttqvec = leftMap[tid].tqvec ;
+
+                //if(rpair.second.name=="13915359_0_6053_768_153/2"){
+                //    std::cout<<rpair.second.name << "\n " << rmi.txpNames[tid] <<"\n\n";
+                //}
+
+   				if(leftMap[tid].active and rightMap[tid].active){
+
+                    //if(rpair.second.name=="13915359_0_6053_768_153/2"){
+                    //    std::cout<<rpair.second.name << "\n\n after active " << rmi.txpNames[tid] <<"\n\n";
+                   // }
+
+
+                    //salmon::utils::GroundTruth::foundTxps[rpair.first.name].push_back(rmi.txpNames[tid]);
+                    //if(rpair.first.name=="13915359_0_6053_768_153/2")
+                     //   std::cout<<"\n\n added to the vector: "<<salmon::utils::GroundTruth::foundTxps[rpair.first.name].front() << "\n\n";
+
+					auto& lefttqvec = leftMap[tid].tqvec ;
 						auto& righttqvec = rightMap[tid].tqvec ;
 
 						std::sort(lefttqvec.begin(),
@@ -188,6 +219,7 @@ namespace rapmap {
 							}
 						}
 
+                        hits.clear();
 						for(auto& vp: validPairs){
 							//I will try to make QuasiAlignment objects
 							//real alignments and edit distance are not present
@@ -205,33 +237,42 @@ namespace rapmap {
 								int32_t fragEndPos = read1First ?
                                     (startRead1 + rpair.first.seq.length()) : (startRead2 + rpair.second.seq.length());
 								uint32_t fragLen = fragEndPos - fragStartPos;
-								//if(leftHitCov[vp.first]->saTxpQp.queryRC != (rightHitCov[vp.second]->saTxpQp).queryRC) {
-									jointHits.emplace_back(
-										tid,
-                                        hitPos1,
-										!leftHitCov[vp.first].rc,
-										rpair.first.seq.length(),
-										0,//leftHitCov[vp.first].saTxpQp.lcpLength,
-										fragLen,
-										true
-									);
-									auto& qaln = jointHits.back();
-                                    //qaln.fwd = !leftHitCov[vp.first].rc;
-									qaln.mateLen = rpair.second.seq.length();
-									qaln.matePos = hitPos2 ;
-                                    qaln.mateIsFwd = !(rightHitCov[vp.second].rc);  //!vp.second.queryRC ;
-									qaln.mateStatus = rapmap::utils::MateStatus::PAIRED_END_PAIRED;
-                                    if(leftHitCov[vp.first].cov == rpair.first.seq.length()){
-                                        qaln.editD = 0;
-                                        qaln.toAlign = true;
-                                    }
-                                    if(rightHitCov[vp.second].cov == rpair.second.seq.length()){
-                                        qaln.mateEditD = 0;
-                                        qaln.mateToAlign = true;
-                                    }
-                                //}
-							}
+                                jointHits.emplace_back(
+                                    tid,
+                                    hitPos1,
+                                    !leftHitCov[vp.first].rc,
+                                    rpair.first.seq.length(),
+                                    0,//leftHitCov[vp.first].saTxpQp.lcpLength,
+                                    fragLen,
+                                    true
+                                );
+                                auto& qaln = jointHits.back();
+                                //qaln.fwd = !leftHitCov[vp.first].rc;
+                                qaln.mateLen = rpair.second.seq.length();
+                                qaln.matePos = hitPos2 ;
+                                qaln.mateIsFwd = !(rightHitCov[vp.second].rc);  //!vp.second.queryRC ;
+                                qaln.mateStatus = rapmap::utils::MateStatus::PAIRED_END_PAIRED;
+                                break;
+                            }
 						}
+                        /*hitSECollector(rpair.first,rpair.second, hits, editDistance);
+
+                        auto minDist = 200;
+                        std::for_each(hits.begin(), hits.end(),
+                            [&minDist](QuasiAlignment& a) {
+                            if (a.editD < minDist and a.editD != -1) { minDist = a.editD; }
+                        });
+
+
+
+                        hits.erase(std::remove_if(hits.begin(),hits.end(),
+                            [&minDist](QuasiAlignment& a) {
+                                return (a.editD > minDist);
+                        }), hits.end());*/
+
+                        //if(hits.size()>0)
+                        //    jointHits.push_back(hits.back());
+
     				}//end if
     			}//end for
     		}else{
@@ -247,188 +288,6 @@ namespace rapmap {
     	return foundHit ;
     }
 
-    //template <typename readT>
-    /*bool mergeLeftRightMap(fastx_parser::ReadPair& rpair,
-    		              SAHitMap& leftMap,
-						  SAHitMap& rightMap,
-						  std::vector<QuasiAlignment>& jointHits
-    		               ){
-    	//using OffsetT = typename RapMapIndexT::IndexType;
-
-    	constexpr const int32_t signedZero{0};
-    	uint32_t maxInsertSize_{1000} ;
-    	 bool foundHit{false} ;
-
-
-    		std::set<int> commonTids ;
-    		for(auto& phLeft : leftMap){
-    			auto leftTid = phLeft.first ;
-    			for(auto& phRight: rightMap){
-    				auto rightTid = phRight.first ;
-    				if(leftTid == rightTid){
-    					commonTids.insert(leftTid);
-    				}
-    			}
-    		}
-            //std::cout<<commonTids.size()<<"\n";
-    		if(commonTids.size() > 0){
-    			//for each common tid check
-    			//if both the end tell us
-    			//something
-    			for(auto tid:commonTids){
-    				if(leftMap[tid].active and rightMap[tid].active){
-						auto& lefttqvec = leftMap[tid].tqvec ;
-						auto& righttqvec = rightMap[tid].tqvec ;
-						std::sort(lefttqvec.begin(),
-								  lefttqvec.end(),
-								  [](const SATxpQueryPos& a, const SATxpQueryPos& b)-> bool {
-															return a.pos < b.pos;
-													} );
-
-						std::sort(righttqvec.begin(),
-								  righttqvec.end(),
-								  [](const SATxpQueryPos& a, const SATxpQueryPos& b)-> bool {
-															return a.pos < b.pos;
-													} );
-
-						//look at the things in pair
-						//Make possible pairs
-						//Discard pairs which are
-						//impossible in the sense
-						//that they are far(1000 bp) apart
-						std::map<int32_t , int> leftHitCov ;
-						{
-							std::map<int32_t , int> hitEndPos ;
-							auto it = lefttqvec.begin();
-							while(it != lefttqvec.end()){
-								int numOfCov = 0;
-								int32_t hitKey = it->pos - it->queryPos ;
-								if(leftHitCov.count(hitKey) == 0){
-									leftHitCov[hitKey] = it->matchedLen;
-									hitEndPos[hitKey] = it->pos + it->matchedLen;
-								}
-								else{
-									if(hitEndPos[hitKey] > it->pos){
-										leftHitCov[hitKey] += ( it->pos + it->matchedLen - hitEndPos[hitKey] );
-										hitEndPos[hitKey] = it->pos + it->matchedLen ;
-									}else{
-										leftHitCov[hitKey] += it->matchedLen;
-										hitEndPos[hitKey] = it->pos + it->matchedLen ;
-									}
-								}
-								++it ;
-							}
-						}
-
-						std::map<int32_t , int> rightHitCov ;
-						{
-							std::map<int32_t , int> hitEndPos ;
-							auto it = righttqvec.begin();
-							while(it != righttqvec.end()){
-								int numOfCov = 0;
-								int32_t hitKey = it->pos - it->queryPos ;
-								if(rightHitCov.count(hitKey) == 0){
-									rightHitCov[hitKey] = it->matchedLen;
-									hitEndPos[hitKey] = it->pos + it->matchedLen;
-								}
-								else{
-									if(hitEndPos[hitKey] > it->pos){
-										rightHitCov[hitKey] += ( it->pos + it->matchedLen - hitEndPos[hitKey] );
-										hitEndPos[hitKey] = it->pos + it->matchedLen ;
-									}else{
-										rightHitCov[hitKey] += it->matchedLen;
-										hitEndPos[hitKey] = it->pos + it->matchedLen ;
-									}
-								}
-								++it ;
-							}
-						}
-
-
-						//std::vector<std::pair<SATxpQueryPos, SATxpQueryPos>> validPairs ;
-
-                        std::vector<std::pair<int32_t, int32_t>> validPairs ;
-
-
-                        for(auto& leftTQPos : leftHitCov){
-                            for(auto& rightTQPos: rightHitCov){
-
-						//for(auto& leftTQPos : lefttqvec){
-							//for(auto& rightTQPos: righttqvec){
-								// Check for the distance
-								// go with it otherwise
-								// go with something else
-                                int32_t hitPos1 = leftTQPos.first;    //leftTQPos.pos - leftTQPos.queryPos ;
-								int32_t hitPos2 = rightTQPos.first;   //rightTQPos.pos - rightTQPos.queryPos ;
-
-								if(std::abs(hitPos1 - hitPos2) < maxInsertSize_){
-									validPairs.push_back(std::make_pair(leftTQPos.first, rightTQPos.first)) ;
-								}
-							}
-						}//end for
-                        //std::cout<<"validPairs \t" << validPairs.size() <<"\t" <<lefttqvec.size() <<"\t" <<righttqvec.size() << "\n";
-						//Now I have valid pairs so I can directly make QuasiAlignment vectors
-						//
-						if(validPairs.size() > 0){
-							foundHit = true;
-						}
-
-
-						int maxCovScore = 0;
-						for(auto& vp : validPairs){
-								maxCovScore = score ;
-							}
-						}
-
-						for(auto& vp: validPairs){
-							//I will try to make QuasiAlignment objects
-							//real alignments and edit distance are not present
-							//yet
-
-							int32_t hitPos1 = vp.first;  //  vp.first.pos - vp.first.queryPos ;
-                            int32_t hitPos2 = vp.second; //  vp.second.pos - vp.second.queryPos ;
-
-							if(leftHitCov[hitPos1] + rightHitCov[hitPos2] == maxCovScore){
-								int32_t startRead1 = std::max(hitPos1, signedZero);
-								int32_t startRead2 = std::max(hitPos2, signedZero);
-
-								bool read1First{(startRead1 < startRead2)};
-								int32_t fragStartPos = read1First ? startRead1 : startRead2;
-								int32_t fragEndPos = read1First ?
-									   (startRead2 + rpair.second.seq.length()) : (startRead1 + rpair.first.seq.length());
-								uint32_t fragLen = fragEndPos - fragStartPos;
-
-								jointHits.emplace_back(
-										tid,
-										hitPos1,
-										!vp.first,//.queryRC,
-										rpair.first.seq.length(),
-										0,//vp.first.lcpLength,
-										fragLen,
-										true
-										);
-								auto& qaln = jointHits.back();
-
-								// qaln.mateLen = rpair.second.seq.length();
-								// qaln.matePos = hitPos2 ;
-								// qaln.mateIsFwd = false; //!vp.second.queryRC ;
-							}
-						}
-    				}//end if
-    			}//end for
-    		}else{
-    			foundHit = false;
-    		}
-    if(jointHits.size()>0){
-        std::sort(jointHits.begin(), jointHits.end(),
-								  [](const QuasiAlignment& a, const QuasiAlignment& b)-> bool {
-                                  return a.tid < b.tid;
-								} );
-    }
-    	return foundHit ;
-    }*/
-
-
     template <typename RapMapIndexT>
 	bool mergeLeftRightSAInts(
 						fastx_parser::ReadPair& rpair,
@@ -442,8 +301,8 @@ namespace rapmap {
 						RapMapIndexT& rmi,
 						bool maxNumHits,
 						bool consistentHits,
-						rapmap::utils::HitCounters& hctr
-						){
+						rapmap::utils::HitCounters& hctr,
+						uint32_t editDistance){
 
     	using OffsetT = typename RapMapIndexT::IndexType;
     	AlignerEngine ae_ ;
@@ -522,6 +381,11 @@ namespace rapmap {
     			}
     		}
     	}
+        /*if(rpair.second.seq == "AAAACTAGCCAGGCGTGGTGGTGGGCACCTGTAATCCCAGCTACGTGGGAGGCTGAGGCAAGAGAATTGCTTGAA" or rpair.second.seq=="TTCAAGCAATTCTCTTGCCTCAGCCTCCCACGTAGCTGGGATTACAGGTGCCCACCACCACGCCTGGCTAGTTTT"){
+            std::cout<<"\n\n" <<leftRcMap.size() << " " << rightFwdMap.size() << "\n\n" <<leftFwdMap.size() << " " << rightRcMap.size() << "\n\n";
+
+        }*/
+
 
     	//there are two possibilities
     	bool fwdRc{false} ;
@@ -529,12 +393,21 @@ namespace rapmap {
     	//1. The left is from forward and right is from reverse
     	if(leftFwdMap.size() > 0 and rightRcMap.size() > 0){
     		// only consider transcripts that are common between both
-    		fwdRc = mergeLeftRightMap(rpair, leftFwdMap, rightRcMap, jointHits) ;
+            /*if(rpair.second.seq == "AAAACTAGCCAGGCGTGGTGGTGGGCACCTGTAATCCCAGCTACGTGGGAGGCTGAGGCAAGAGAATTGCTTGAA" or rpair.second.seq=="TTCAAGCAATTCTCTTGCCTCAGCCTCCCACGTAGCTGGGATTACAGGTGCCCACCACCACGCCTGGCTAGTTTT"){
+                std::cout<<"\n\n" <<leftFwdMap.size() << " " << rightRcMap.size() << "\n\n";
+
+            }*/
+            fwdRc = mergeLeftRightMap(rpair, leftFwdMap, rightRcMap, jointHits,editDistance,rmi) ;
     		foundHit = true ;
     	}
 
     	if(leftRcMap.size() > 0 and rightFwdMap.size() > 0){
-            rcFwd = mergeLeftRightMap(rpair, leftRcMap, rightFwdMap, jointHits) ;
+            /*if(rpair.second.seq == "AAAACTAGCCAGGCGTGGTGGTGGGCACCTGTAATCCCAGCTACGTGGGAGGCTGAGGCAAGAGAATTGCTTGAA" or rpair.second.seq=="TTCAAGCAATTCTCTTGCCTCAGCCTCCCACGTAGCTGGGATTACAGGTGCCCACCACCACGCCTGGCTAGTTTT"){
+                std::cout<<"\n\n" <<leftRcMap.size() << " " << rightFwdMap.size() << "\n\n";
+
+            }*/
+
+            rcFwd = mergeLeftRightMap(rpair, leftRcMap, rightFwdMap, jointHits,editDistance,rmi) ;
     		foundHit = true ;
     	}
 
@@ -562,8 +435,8 @@ namespace rapmap {
          						SAIndex32BitDense& rmi,
          						bool maxNumHits,
          						bool consistentHits,
-         						rapmap::utils::HitCounters& hctr
-         						);
+         						rapmap::utils::HitCounters& hctr,
+         						uint32_t editDistance);
     template
     bool mergeLeftRightSAInts<SAIndex64BitDense>(
     							fastx_parser::ReadPair& rpair,
@@ -577,8 +450,8 @@ namespace rapmap {
          						SAIndex64BitDense& rmi,
          						bool maxNumHits,
          						bool consistentHits,
-         						rapmap::utils::HitCounters& hctr
-         						);
+         						rapmap::utils::HitCounters& hctr,
+                                uint32_t editDistance);
     template
     bool mergeLeftRightSAInts<SAIndex32BitPerfect>(
     							fastx_parser::ReadPair& rpair,
@@ -592,8 +465,8 @@ namespace rapmap {
          						SAIndex32BitPerfect& rmi,
          						bool maxNumHits,
          						bool consistentHits,
-         						rapmap::utils::HitCounters& hctr
-         						);
+         						rapmap::utils::HitCounters& hctr,
+         						uint32_t editDistance);
     template
     bool mergeLeftRightSAInts<SAIndex64BitPerfect>(
     							fastx_parser::ReadPair& rpair,
@@ -607,9 +480,45 @@ namespace rapmap {
          						SAIndex64BitPerfect& rmi,
          						bool maxNumHits,
          						bool consistentHits,
-         						rapmap::utils::HitCounters& hctr
-         						);
+         						rapmap::utils::HitCounters& hctr,
+         						uint32_t editDistance);
 
+
+    template
+    bool mergeLeftRightMap<SAIndex32BitDense>(
+                          fastx_parser::ReadPair& rpair,
+    		              SAHitMap& leftMap,
+						  SAHitMap& rightMap,
+						  std::vector<QuasiAlignment>& jointHits,
+                          uint32_t editDistance,
+                          SAIndex32BitDense& rmi);
+
+    template
+    bool mergeLeftRightMap<SAIndex64BitDense>(
+                          fastx_parser::ReadPair& rpair,
+    		              SAHitMap& leftMap,
+						  SAHitMap& rightMap,
+						  std::vector<QuasiAlignment>& jointHits,
+                          uint32_t editDistance,
+                          SAIndex64BitDense& rmi);
+
+    template
+    bool mergeLeftRightMap<SAIndex32BitPerfect>(
+                          fastx_parser::ReadPair& rpair,
+    		              SAHitMap& leftMap,
+						  SAHitMap& rightMap,
+						  std::vector<QuasiAlignment>& jointHits,
+                          uint32_t editDistance,
+                          SAIndex32BitPerfect& rmi);
+
+    template
+    bool mergeLeftRightMap<SAIndex64BitPerfect>(
+                          fastx_parser::ReadPair& rpair,
+    		              SAHitMap& leftMap,
+						  SAHitMap& rightMap,
+						  std::vector<QuasiAlignment>& jointHits,
+                          uint32_t editDistance,
+                          SAIndex64BitPerfect& rmi);
 
 
     }

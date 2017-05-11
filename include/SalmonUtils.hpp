@@ -50,7 +50,16 @@ std::vector<std::string> split2(const std::string &text, char sep);
 //read isoform file
 class GroundTruth{
     public:
+        static tbb::atomic<double> lcpSkip;
+        static tbb::atomic<double> mmpSkip;
+        static tbb::atomic<double> totHit;
+
+        static tbb::atomic<double> notFoundTxps;
+        static tbb::atomic<double> totReads;
+
+
         static std::map<size_t, std::string> truthMap ;
+        static std::map<std::string,std::vector<std::string> > foundTxps;
 
 };
 

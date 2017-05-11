@@ -288,13 +288,17 @@ public:
                  rb,               // where to start the search
                  &(merIt->second.interval), // pointer to the search interval
 				 merIt->second.lcpLength, // starting lcpLength
+                 merIt->second.safeLength, // safe length
                  fwdCov, fwdHit, rcHit, fwdSAInts, kmerScores, false, sigHit, remap);
     }
 
-    //bool checkRC = useCoverageCheck ? (rcHit > 0) : (rcHit >= fwdHit);
+
+   //bool checkRC = useCoverageCheck ? (rcHit > 0) : (rcHit >= fwdHit);
     //TODO RC checked enabled
     bool checkRC = useCoverageCheck ? (rcHit > 0) : (rcHit >= fwdHit);
     // If we had a hit on the reverse complement strand
+    // if(read=="CAGGCTGGAGTGCAGTGGCACGATCTTGGCTCACTGCAAGCTCCGCCTCCCAGGTTCACGTCATTCCCCTGCCAG" or read=="CTGGCAGGGGAATGACGTGAACCTGGGAGGCGGAGCTTGCAGTGAGCCAAGATCGTGCCACTGCACTCCAGCCTG")
+
     if (checkRC) {
       rapmap::utils::reverseRead(read, rcBuffer_);
       getSAHits_(saSearcher,
@@ -302,7 +306,8 @@ public:
                  rcBuffer_.begin(), // where to start the search
                  nullptr,           // pointer to the search interval
 				 0, //starting lcpLength
-                                 rcCov, rcHit, fwdHit, rcSAInts, kmerScores, true, sigHit, remap);
+				 0, //safe length
+                 rcCov, rcHit, fwdHit, rcSAInts, kmerScores, true, sigHit, remap);
     }
 
     // Now, if we *didn't* check the forward strand at first, but we encountered
@@ -319,6 +324,7 @@ public:
                  read.begin(), // where to start the search
                  nullptr,      // pointer to the search interval
 				 0, //starting lcpLength
+				 0, //safe length
                  fwdCov, fwdHit, rcHit, fwdSAInts, kmerScores, false, sigHit, remap);
     }
 
@@ -665,7 +671,7 @@ private:
   inline void getSAHits_(
       SASearcher<RapMapIndexT>& saSearcher, std::string& read,
       std::string::iterator startIt,
-      rapmap::utils::SAInterval<OffsetT>* startInterval, uint32_t lcpLengthIn, size_t& cov,
+      rapmap::utils::SAInterval<OffsetT>* startInterval, uint32_t lcpLengthIn, uint8_t safeLenIn, size_t& cov,
       uint32_t& strandHits, uint32_t& otherStrandHits,
       std::vector<rapmap::utils::SAIntervalHit<OffsetT>>& saInts,
       std::vector<KmerDirScore>& kmerScores,
@@ -698,6 +704,7 @@ private:
     auto re = rb + k;
     OffsetT lb, ub;
     uint32_t lcpLength = lcpLengthIn;
+    uint8_t safeLength = safeLenIn;
     size_t invalidPos{0};
 
     MerT mer, complementMer;
@@ -773,6 +780,10 @@ private:
       complementMer = mer.get_reverse_complement();
       merIt = khash.find(mer.word(0));//get_bits(0, 2 * k));
 
+      /*if(read=="AAACCATTTTCAGACCGGGCACGGTGGCTCACCTGTAATCCCAGGACTTTGGGAGGCCAGGGCGGGCAGATCACC" or read=="GGTGATCTGCCCGCCCTGGCCTCCCAAAGTCCTGGGATTACAGGTGAGCCACCGTGCCCGGTCTGAAAATGGTTT"){
+          std::cout<<"\n\n berfore going khash check: " << mer << "\n\n";
+      }*/
+
 
       //@debug HIRAK check a falsely read
       //finds the true list in its transcript or not
@@ -788,36 +799,84 @@ private:
         lb = merIt->second.interval.begin();
         ub = merIt->second.interval.end();
         lcpLength = merIt->second.lcpLength ;
+        safeLength = merIt->second.safeLength ;
       skipSetup:
 
+      /*if(read=="AAACCATTTTCAGACCGGGCACGGTGGCTCACCTGTAATCCCAGGACTTTGGGAGGCCAGGGCGGGCAGATCACC" or read=="GGTGATCTGCCCGCCCTGGCCTCCCAAAGTCCTGGGATTACAGGTGAGCCACCGTGCCCGGTCTGAAAATGGTTT"){
+          std::cout<<"\n\n after khash check: " << mer << "\n\n";
+      }*/
 
 
 
+
+        //if(read=="TCAACTGGGCTAGATAATTGAAGGCTGAGCTCTTTGTAAGTTTTTTTTTTGTTTTTTTTTTTGAGACTGATTCTC" or read=="GAGAATCAGTCTCAAAAAAAAAAACAAAAAAAAAACTTACAAAGAGCTCAGCCTTCAATTATCTAGCCCAGTTGA"){
+        // if(read=="GATCACAAGGTCAAGAGATTGAGACCATCTTGGCCAACATGGTGAAACCCCGTCTCTACTAAAAACACAAAAATC" or read == "")
+        //if(read=="CAGCCTCCCGAGTAGCTGGGACTACAGGTGCATGCCACGACGGCCGGCTGATTTTTGTGTTTTTTGTAGAGACGG" or read == "CCGTCTCTACAAAAAACACAAAAATCAGCCGGCCGTCGTGGCATGCACCTGTAGTCCCAGCTACTCGGGAGGCTG"){
+        //    std::cout <<"\n" << mer << " " <<(uint32_t)safeLength << " " << saSearcher.extendSafe(lb, ub, k, rb, readEndIt,safeLength ) << "\n";
+        //}
 
         auto oldlb = lb;
         auto oldub = ub;
 
 
-        // lb must be 1 *less* then the current lb
-        // We can't move any further in the reverse complement direction
-        //comment these lines to disable MMP check
-
-        if(readStartIt == startIt){
-            lb = std::max(static_cast<OffsetT>(0), lb - 1);
-            std::tie(lb, ub, matchedLen) =
-                saSearcher.extendSearchNaive(lb, ub, k, rb, readEndIt);
-        } else
-            matchedLen = 0;
-
-
+        lb = std::max(static_cast<OffsetT>(0), lb - 1);
+        std::tie(lb, ub, matchedLen) =
+            saSearcher.extendSearchNaive(lb, ub, k, rb, readEndIt);
         if( matchedLen < readLen) {
-            matchedLen = k+readLen/10;
+            matchedLen = k+10;//readLen/10;
             lb = oldlb;
             ub = oldub;
         }
-        //until this
-        //add this
-        //matchedLen = k;
+
+        /*if(readStartIt == startIt){
+
+            lb = std::max(static_cast<OffsetT>(0), lb - 1);
+            std::tie(lb, ub, matchedLen) =
+                saSearcher.extendSearchNaive(lb, ub, k, rb, readEndIt);
+            if(matchedLen == readLen){
+                matchedLen = readLen;
+            }
+            else {
+                lb = oldlb;
+                ub = oldub;
+                if(safeLength==k)
+                    safeLength=k+1;
+                auto newExtend =  saSearcher.extendSafe(lb, ub, k, rb, readEndIt,safeLength );
+                //std::cout <<"1 " <<newExtend << "\n";
+                if(newExtend > k){
+                    matchedLen = newExtend ;
+                }else{
+                    matchedLen = k;
+                }
+            }
+        } else {
+            if(safeLength==k)
+                safeLength=k+1;
+            auto newExtend =  saSearcher.extendSafe(lb, ub, k, rb, readEndIt,safeLength );
+            if(newExtend > k){
+                matchedLen = newExtend ;
+            }else{
+                matchedLen = k;
+            }
+        }*/
+
+        //if(read=="TCAACTGGGCTAGATAATTGAAGGCTGAGCTCTTTGTAAGTTTTTTTTTTGTTTTTTTTTTTGAGACTGATTCTC" or read=="GAGAATCAGTCTCAAAAAAAAAAACAAAAAAAAAACTTACAAAGAGCTCAGCCTTCAATTATCTAGCCCAGTTGA"){
+        //if(read=="GAAAGAGTCCACCTTGCACCTGGTGCTCCGTCTCAGAGGTGGGATGCAGATCGTCGTGAAGACCCTGACTGGTAA" or read=="TTACCAGTCAGGGTCTTCACGACGATCTGCATCCCACCTCTGAGACGGAGCACCAGGTGCAAGGTGGACTCTTTC"){
+        /*if(read=="TCCTTCTTTGGGCCTGGGTTTCCTCATCTAATCTGCAAACCAAGAATGCAGACTAGTCCTACCACTCCCGGAAGA" or read =="TCTTCCGGGAGTGGTAGGACTAGTCTGCATTCTTGGTTTGCAGATTAGATGAGGAAACCCAGGCCCAAAGAAGGA"){
+        //if(read=="AGGGATGCCCTCCTTGTCTTGGATCTTTGCCTTGACATTCTCAATGGTGTCACTCGGCTCCACCTCGAGAGTGAT" or read=="ATCACTCTCGAGGTGGAGCCGAGTGACACCATTGAGAATGTCAAGGCAAAGATCCAAGACAAGGAGGGCATCCCT"){
+        //if(read=="CAGGCTGGAGTGCAGTGGCACGATCTTGGCTCACTGCAAGCTCCGCCTCCCAGGTTCACGTCATTCCCCTGCCAG" or read=="CTGGCAGGGGAATGACGTGAACCTGGGAGGCGGAGCTTGCAGTGAGCCAAGATCGTGCCACTGCACTCCAGCCTG"){
+        std::cout <<"\n" << mer << " " << "safeLength: " << (uint32_t)safeLength << " extendLength: " << (uint32_t)matchedLen <<"\n";
+        rapmap::utils::my_mer mer_(std::string(rb,rb+k));
+        auto merIt_ = khash.find(mer_.word(0));
+        for(auto spos = merIt_->second.interval.begin() ; spos < merIt_->second.interval.end(); ++spos){
+            std::cout<<"\n"<<rmi_->txpNames[rmi_->transcriptAtPosition(rmi_->SA[spos])] << "\n";// <<" pos: "<< spos - rmi_->txpOffsets[rmi_->transcriptAtPosition(rmi_->SA[spos])] << "\n";
+        }
+        for(auto i=rb;i<rb+k;i++){
+            std::cout<<*i;
+        }
+        std::cout<<" encountered\n";
+        }*/
+
 
         OffsetT diff = ub - lb;
         if (ub > lb and diff < maxInterval_) {
@@ -910,7 +969,9 @@ private:
         // Pick the maximum of the two
         auto maxSkip = std::max(skipMatch, skipLCE);
         // And that's where our new search will start
-        rb = maxSkip;
+        //rb = maxSkip;
+
+        rb = rb+matchedLen-k+1;
         /*
         if (rb > neverSkipMoreThan) {
             rb = neverSkipMoreThan;

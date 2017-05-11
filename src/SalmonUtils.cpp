@@ -1292,6 +1292,13 @@ std::vector<std::string> split2(const std::string &text, char sep) {
 }
 
 std::map<size_t,std::string> GroundTruth::truthMap;
+tbb::atomic<double> GroundTruth::lcpSkip;
+tbb::atomic<double> GroundTruth::mmpSkip;
+tbb::atomic<double> GroundTruth::totHit;
+tbb::atomic<double> GroundTruth::notFoundTxps;
+tbb::atomic<double> GroundTruth::totReads;
+
+std::map<std::string,std::vector<std::string> > GroundTruth::foundTxps;
 
 void loadGroundTruthIsoformExp(boost::filesystem::path groundTruthIsoformFile){
     std::cout << " File name " << groundTruthIsoformFile << "\n";

@@ -929,12 +929,16 @@ void processReadsQuasi(
 
   if (salmonOpts.fasterMapping) {
       hitCollector.enableNIP();
+      hitCollectorPair.enableNIP();
   } else {
       hitCollector.disableNIP();
+      hitCollectorPair.disableNIP();
   }
   hitCollector.setStrictCheck(true);
+  hitCollectorPair.setStrictCheck(true);
   if (salmonOpts.quasiCoverage > 0.0) {
       hitCollector.setCoverageRequirement(salmonOpts.quasiCoverage);
+      hitCollectorPair.setCoverageRequirement(salmonOpts.quasiCoverage);
   }
 
   SASearcher<RapMapIndexT> saSearcher(qidx);
@@ -1081,38 +1085,52 @@ void processReadsQuasi(
                     *qidx,
                     false,
                     consistentHits,
-                    hctr);
-            hitSECollector(rp.first,rp.second, jointHits, salmonOpts.editDistance,transcripts);
-
-            jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
-                  [&transcripts](QuasiAlignment& a) {
-                  //return (foundBowtie? (!a.toAlign && transcripts[a.tid].RefName!=trueTxpName):!a.toAlign);
-                  return !a.toAlign;
-                  }), jointHits.end());
+                    hctr,
+                    salmonOpts.editDistance);
 
 
+            if(salmonOpts.writeOrphanLinks){
+                std::vector<std::string> txps = salmon::utils::GroundTruth::foundTxps[rp.first.name];
+                orphanLinks << rp.first.name << "\t";
+                for(auto& txp: txps){
+                    orphanLinks << txp << "\t";
+                }
+                orphanLinks<<"\n";
+            }
 
-            if(salmonOpts.strictFilter and jointHits.size() > 0){
+            if(salmonOpts.filter){
 
-                auto minDist = 200;// salmonOpts.editDistance*2;
-                std::for_each(jointHits.begin(), jointHits.end(),
-                    [&minDist](QuasiAlignment& a) {
-                    if (a.editD < minDist and a.editD != -1) { minDist = a.editD; }
-                });
-
-
-
-	            jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
-                    [&minDist,&transcripts](QuasiAlignment& a) {
-                    return (a.editD > minDist);
-                }), jointHits.end());
-                if(jointHits.size()==0)
-                    std::cout<<minDist<<"\n";
-                /*if(minDist>20){
-                    std::cout<<minDist<<" " <<rp.first.name << " " << jointHits.front().editD << " " << jointHits.front().pos << " " << jointHits.front().matePos << "\n";
+                hitSECollector(rp.first,rp.second, jointHits, salmonOpts.editDistance);
+                /*for(auto& qa:jointHits) {
+                    if(qa.isLCPused)
+                        salmon::utils::incLoop(salmon::utils::GroundTruth::lcpSkip,1);
+                    if(qa.isMMPused)
+                        salmon::utils::incLoop(salmon::utils::GroundTruth::mmpSkip,1);
+                    salmon::utils::incLoop(salmon::utils::GroundTruth::totHit,1);
                 }*/
-	        }
 
+                jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
+                      [&transcripts](QuasiAlignment& a) {
+                      //return (foundBowtie? (!a.toAlign && transcripts[a.tid].RefName!=trueTxpName):!a.toAlign);
+                      return !a.toAlign;
+                      }), jointHits.end());
+
+                if(salmonOpts.strictFilter and jointHits.size() > 0){
+
+                    auto minDist = 200;// salmonOpts.editDistance*2;
+                    std::for_each(jointHits.begin(), jointHits.end(),
+                        [&minDist](QuasiAlignment& a) {
+                        if (a.editD < minDist and a.editD != -1) { minDist = a.editD; }
+                    });
+
+
+
+                    jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
+                        [&minDist,&transcripts](QuasiAlignment& a) {
+                        return (a.editD > minDist);
+                    }), jointHits.end());
+                }
+            }
 
 
 
@@ -2866,7 +2884,7 @@ transcript abundance from RNA-seq reads
     auto idxType = versionInfo.indexType();
 
     //if(vm.count("truthMap")){
-    //  salmon::utils::loadGroundTruthIsoformExp(sopt.groundTruthIsoformFile);
+    salmon::utils::loadGroundTruthIsoformExp(sopt.groundTruthIsoformFile);
     //}
     //std::cout << "Hash map size  " <<  salmon::utils::GroundTruth::truthMap.size() << "\n" ;
 
@@ -2954,6 +2972,14 @@ transcript abundance from RNA-seq reads
       return 1;
     }
     jointLog->info("Finished optimizer");
+
+    std::cout<<"lcp skipped \t"<<salmon::utils::GroundTruth::lcpSkip<<"\n";
+    std::cout<<"mmp skipped \t"<<salmon::utils::GroundTruth::mmpSkip<<"\n";
+    std::cout<<"total \t"<<salmon::utils::GroundTruth::totHit<<"\n";
+
+    std::cout<<"notFoundTxps \t"<<salmon::utils::GroundTruth::notFoundTxps<<"\n";
+    std::cout<<"total \t"<<salmon::utils::GroundTruth::totReads<<"\n";
+
 
     free(memOptions);
     size_t tnum{0};
