@@ -1298,6 +1298,17 @@ tbb::atomic<double> GroundTruth::totHit;
 tbb::atomic<double> GroundTruth::notFoundTxps;
 tbb::atomic<double> GroundTruth::totReads;
 
+
+tbb::atomic<double> GroundTruth::lookupKmers;
+tbb::atomic<double> GroundTruth::foundKmers;
+tbb::atomic<double> GroundTruth::rcCheck;
+tbb::atomic<double> GroundTruth::fwdCheck;
+tbb::atomic<double> GroundTruth::mmpExtension;
+
+
+
+
+
 std::map<std::string,std::vector<std::string> > GroundTruth::foundTxps;
 
 void loadGroundTruthIsoformExp(boost::filesystem::path groundTruthIsoformFile){

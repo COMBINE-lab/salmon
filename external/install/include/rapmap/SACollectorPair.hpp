@@ -25,6 +25,7 @@
 #include "RapMapSAIndex.hpp"
 #include "RapMapUtils.hpp"
 #include "SASearcher.hpp"
+#include "SalmonUtils.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -300,6 +301,7 @@ public:
     // if(read=="CAGGCTGGAGTGCAGTGGCACGATCTTGGCTCACTGCAAGCTCCGCCTCCCAGGTTCACGTCATTCCCCTGCCAG" or read=="CTGGCAGGGGAATGACGTGAACCTGGGAGGCGGAGCTTGCAGTGAGCCAAGATCGTGCCACTGCACTCCAGCCTG")
 
     if (checkRC) {
+      salmon::utils::incLoop(salmon::utils::GroundTruth::rcCheck,1);
       rapmap::utils::reverseRead(read, rcBuffer_);
       getSAHits_(saSearcher,
                  rcBuffer_,         // the read
@@ -318,6 +320,7 @@ public:
     bool checkFwd = useCoverageCheck ? (fwdHit > 0) : (fwdHit >= rcHit);
     //bool checkFwd = true ;
     if (!didCheckFwd and checkFwd) {
+      salmon::utils::incLoop(salmon::utils::GroundTruth::fwdCheck,1);
       didCheckFwd = true;
       getSAHits_(saSearcher,
                  read,         // the read
@@ -780,6 +783,7 @@ private:
       complementMer = mer.get_reverse_complement();
       merIt = khash.find(mer.word(0));//get_bits(0, 2 * k));
 
+      salmon::utils::incLoop(salmon::utils::GroundTruth::lookupKmers,1);
       /*if(read=="AAACCATTTTCAGACCGGGCACGGTGGCTCACCTGTAATCCCAGGACTTTGGGAGGCCAGGGCGGGCAGATCACC" or read=="GGTGATCTGCCCGCCCTGGCCTCCCAAAGTCCTGGGATTACAGGTGAGCCACCGTGCCCGGTCTGAAAATGGTTT"){
           std::cout<<"\n\n berfore going khash check: " << mer << "\n\n";
       }*/
@@ -818,22 +822,35 @@ private:
         auto oldlb = lb;
         auto oldub = ub;
 
-
-        lb = std::max(static_cast<OffsetT>(0), lb - 1);
-        std::tie(lb, ub, matchedLen) =
-            saSearcher.extendSearchNaive(lb, ub, k, rb, readEndIt);
-        if( matchedLen < readLen) {
-            matchedLen = k+10;//readLen/10;
-            lb = oldlb;
-            ub = oldub;
+        /*if(safeLength<=k)
+            safeLength = k+1;
+        salmon::utils::incLoop(salmon::utils::GroundTruth::foundKmers,1);
+        if(readStartIt == startIt){
+            lb = std::max(static_cast<OffsetT>(0), lb - 1);
+            std::tie(lb, ub, matchedLen) =
+                saSearcher.extendSearchNaive(lb, ub, k, rb, readEndIt);
+            if( matchedLen < readLen) {
+                matchedLen = safeLength;//k+10;//readLen/10;
+                lb= oldlb;
+                ub = oldub;
+            }else{
+                salmon::utils::incLoop(salmon::utils::GroundTruth::mmpExtension,1);
+            }
         }
+        else{
+            matchedLen = safeLength;//k+10;//readLen/10;
+            lb= oldlb;
+            ub = oldub;
+        }*/
 
-        /*if(readStartIt == startIt){
+        salmon::utils::incLoop(salmon::utils::GroundTruth::foundKmers,1);
+        if(readStartIt == startIt) {
 
             lb = std::max(static_cast<OffsetT>(0), lb - 1);
             std::tie(lb, ub, matchedLen) =
                 saSearcher.extendSearchNaive(lb, ub, k, rb, readEndIt);
             if(matchedLen == readLen){
+                salmon::utils::incLoop(salmon::utils::GroundTruth::mmpExtension,1);
                 matchedLen = readLen;
             }
             else {
@@ -846,8 +863,9 @@ private:
                 if(newExtend > k){
                     matchedLen = newExtend ;
                 }else{
-                    matchedLen = k;
+                    matchedLen = k+readLen/10;
                 }
+                
             }
         } else {
             if(safeLength==k)
@@ -855,10 +873,10 @@ private:
             auto newExtend =  saSearcher.extendSafe(lb, ub, k, rb, readEndIt,safeLength );
             if(newExtend > k){
                 matchedLen = newExtend ;
-            }else{
-                matchedLen = k;
+            }else {
+                matchedLen = k+readLen/10;
             }
-        }*/
+        }
 
         //if(read=="TCAACTGGGCTAGATAATTGAAGGCTGAGCTCTTTGTAAGTTTTTTTTTTGTTTTTTTTTTTGAGACTGATTCTC" or read=="GAGAATCAGTCTCAAAAAAAAAAACAAAAAAAAAACTTACAAAGAGCTCAGCCTTCAATTATCTAGCCCAGTTGA"){
         //if(read=="GAAAGAGTCCACCTTGCACCTGGTGCTCCGTCTCAGAGGTGGGATGCAGATCGTCGTGAAGACCCTGACTGGTAA" or read=="TTACCAGTCAGGGTCTTCACGACGATCTGCATCCCACCTCTGAGACGGAGCACCAGGTGCAAGGTGGACTCTTTC"){

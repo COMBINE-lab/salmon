@@ -61,6 +61,13 @@ class GroundTruth{
         static std::map<size_t, std::string> truthMap ;
         static std::map<std::string,std::vector<std::string> > foundTxps;
 
+        static tbb::atomic<double> lookupKmers;
+        static tbb::atomic<double> foundKmers;
+        static tbb::atomic<double> rcCheck;
+        static tbb::atomic<double> fwdCheck;
+        static tbb::atomic<double> mmpExtension;
+
+
 };
 
 void loadGroundTruthIsoformExp(boost::filesystem::path groundTruthIsoformFile);
