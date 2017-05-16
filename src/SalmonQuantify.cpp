@@ -1101,18 +1101,6 @@ void processReadsQuasi(
             if(salmonOpts.filter){
 
                 hitSECollector(rp.first,rp.second, jointHits, salmonOpts.editDistance);
-                for(auto& qa:jointHits) {
-                    if(qa.isLCPused)
-                        salmon::utils::incLoop(salmon::utils::GroundTruth::lcpSkip,1);
-                    if(qa.isMMPused)
-                        salmon::utils::incLoop(salmon::utils::GroundTruth::mmpSkip,1);
-                     if(qa.mateIsLCPused)
-                        salmon::utils::incLoop(salmon::utils::GroundTruth::lcpSkip,1);
-                    if(qa.mateIsMMPused)
-                        salmon::utils::incLoop(salmon::utils::GroundTruth::mmpSkip,1);
-                    salmon::utils::incLoop(salmon::utils::GroundTruth::totHit,2);
-                }
-
                 jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
                       [&transcripts](QuasiAlignment& a) {
                       //return (foundBowtie? (!a.toAlign && transcripts[a.tid].RefName!=trueTxpName):!a.toAlign);
@@ -2976,23 +2964,6 @@ transcript abundance from RNA-seq reads
       return 1;
     }
     jointLog->info("Finished optimizer");
-
-    std::cout<<"lcp skipped \t"<<salmon::utils::GroundTruth::lcpSkip<<"\n";
-    std::cout<<"mmp skipped \t"<<salmon::utils::GroundTruth::mmpSkip<<"\n";
-    std::cout<<"total \t"<<salmon::utils::GroundTruth::totHit<<"\n";
-
-    std::cout<<"notFoundTxps \t"<<salmon::utils::GroundTruth::notFoundTxps<<"\n";
-    std::cout<<"total \t"<<salmon::utils::GroundTruth::totReads<<"\n";
-
-    std::cout<<"lookupKmers \t"<<salmon::utils::GroundTruth::lookupKmers<<"\n";
-    std::cout<<"foundKmers \t"<<salmon::utils::GroundTruth::foundKmers<<"\n";
-    std::cout<<"mmpExtension \t"<<salmon::utils::GroundTruth::mmpExtension<<"\n";
-    std::cout<<"fwdCheck \t"<<salmon::utils::GroundTruth::fwdCheck<<"\n";
-    std::cout<<"rcCheck \t"<<salmon::utils::GroundTruth::rcCheck<<"\n";
-
-
-
-
 
 
 
