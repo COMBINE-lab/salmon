@@ -1478,6 +1478,7 @@ void processReadLibrary(
         };
         threads.emplace_back(threadFun);
       }
+      }
       break;
     case SalmonIndexType::QUASI: {
       // True if we have a 64-bit SA index, false otherwise
@@ -1550,10 +1551,10 @@ void processReadLibrary(
         } // End spawn current thread
 
       } // End spawn all threads
-    }   // End Quasi index
+      }   // End Quasi index
     break;
     } // end switch
-    }
+    
     for (int i = 0; i < numThreads; ++i) {
       threads[i].join();
     }
