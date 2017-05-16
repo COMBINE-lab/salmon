@@ -1098,7 +1098,6 @@ void processReadsQuasi(
                 orphanLinks<<"\n";
             }
 
-            if(salmonOpts.filter){
 
                 hitSECollector(rp.first,rp.second, jointHits, salmonOpts.editDistance);
                 jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
@@ -1122,7 +1121,6 @@ void processReadsQuasi(
                         return (a.editD > minDist);
                     }), jointHits.end());
                 }
-            }
 
 
 
