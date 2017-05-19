@@ -152,6 +152,7 @@ bibtex:
 int salmonIndex(int argc, char* argv[]);
 int salmonQuantify(int argc, char* argv[]);
 int salmonAlignmentQuantify(int argc, char* argv[]);
+int salmonQuantMerge(int argc, char* argv[]);
 
 bool verbose = false;
 
@@ -220,7 +221,7 @@ int main( int argc, char* argv[] ) {
     std::unordered_map<string, std::function<int(int, char*[])>> cmds({
       {"index", salmonIndex},
       {"quant", salmonQuantify},
-      //{"quantmerge", salmonQuantMerge},
+      {"quantmerge", salmonQuantMerge},
       {"swim", salmonSwim}
     });
 

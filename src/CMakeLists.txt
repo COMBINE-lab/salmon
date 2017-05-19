@@ -41,6 +41,7 @@ FragmentStartPositionDistribution.cpp
 SequenceBiasModel.cpp
 TranscriptGroup.cpp
 GZipWriter.cpp
+SalmonQuantMerge.cpp
 #${GAT_SOURCE_DIR}/external/install/src/rapmap/sais.c
 )
 
