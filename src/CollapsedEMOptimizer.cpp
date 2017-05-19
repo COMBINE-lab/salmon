@@ -872,7 +872,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
 
             // combined weight
             v.combinedWeights.push_back(
-                v.count * v.weights[i].load() * probStartPos);
+                v.count * v.weights[i] * probStartPos);
             wsum += v.combinedWeights.back();
           }
 

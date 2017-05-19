@@ -20,12 +20,12 @@ struct TGValue {
     TGValue(const TGValue& o) {
         weights = o.weights;
         combinedWeights = o.combinedWeights;
-        count.store(o.count.load());
+        count = o.count;
     }
 
   TGValue(std::vector<double>& weightIn, uint64_t countIn) :
     weights(weightIn.begin(), weightIn.end()) {
-    count.store(countIn); 
+    count = countIn;
   }
 
 // const is a lie
@@ -36,17 +36,16 @@ struct TGValue {
     }
     double norm = 1.0 / sumOfAux;
     for (size_t i = 0; i < weights.size(); ++i) {
-      weights[i].store(weights[i].load() * norm);
-
+      weights[i] *= norm;
     }
   }
 
-    mutable std::vector<tbb::atomic<double>> weights;
+    mutable std::vector<double> weights;
 
     // The combined auxiliary and position weights.  These
     // are filled in by the inference algorithm.
     mutable std::vector<double> combinedWeights;
-    std::atomic<uint64_t> count{0};
+    uint64_t count{0};
 };
 
 class EquivalenceClassBuilder {
@@ -85,7 +84,7 @@ class EquivalenceClassBuilder {
                 x.count++;
                 // update the weights
                 for (size_t i = 0; i < x.weights.size(); ++i) {
-                  salmon::utils::incLoop(x.weights[i], weights[i]);
+                  x.weights[i] += weights[i];
                 }
             };
             TGValue v(weights, 1);
