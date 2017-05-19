@@ -24,10 +24,11 @@
 #include <memory>
 #include <boost/filesystem.hpp>
 #include <boost/program_options.hpp>
-// C++ string formatting library
-#include "spdlog/fmt/fmt.h"
+// C++ string formatting library #include "spdlog/fmt/fmt.h"
 // logger includes
 #include "spdlog/spdlog.h"
+
+enum class TargetColumn {LEN, ELEN, TPM, NREADS};
 
 class QuantMergeOptions {
 public:
@@ -36,6 +37,7 @@ public:
   std::string outputName;
   std::string outputCol;
   std::shared_ptr<spdlog::logger> log;
+  TargetColumn tcol;
 
   void print() {
     std::string slist;
@@ -74,6 +76,30 @@ bool validateOptions(boost::program_options::variables_map& vm,
     for (auto& sp : qmOpts.samples) {
       qmOpts.names.push_back(boost::filesystem::path(sp).filename().string());
     }
+  }
+
+  std::transform(qmOpts.outputCol.begin(), qmOpts.outputCol.end(), qmOpts.outputCol.begin(),
+                 [](unsigned char c) { return std::toupper(c); });
+  if (qmOpts.outputCol == "LEN" or
+      qmOpts.outputCol == "LENGTH") {
+    qmOpts.tcol = TargetColumn::LEN;
+  } else if (qmOpts.outputCol == "ELEN" or
+             qmOpts.outputCol == "ELENGTH" or
+             qmOpts.outputCol == "EFFLEN" or
+             qmOpts.outputCol == "EFFLENGTH" or
+             qmOpts.outputCol == "EFFECTIVELEN" or
+             qmOpts.outputCol == "EFFECTIVELENGTH") {
+    qmOpts.tcol = TargetColumn::ELEN;
+  } else if (qmOpts.outputCol == "TPM") {
+    qmOpts.tcol = TargetColumn::TPM;
+  } else if (qmOpts.outputCol == "NUMREADS" or
+             qmOpts.outputCol == "NUM_READS" or
+             qmOpts.outputCol == "NREADS") {
+    qmOpts.tcol = TargetColumn::NREADS;
+  } else {
+    qmOpts.log->critical("I do not understand the requested output column name, {}. "
+                         "The output column should be one of {{len, elen, tmp, numreads}}.", qmOpts.outputCol);
+    std::exit(1);
   }
 
   return true;
@@ -119,6 +145,7 @@ bool doMerge(QuantMergeOptions& qmOpts) {
     }
   }
 
+  size_t missingValues{0};
   // Now, the path exists
   std::ofstream outFile(qmOpts.outputName);
   if (!outFile.is_open()) {
@@ -139,15 +166,35 @@ bool doMerge(QuantMergeOptions& qmOpts) {
     uint32_t nextTrec{0};
     for (uint32_t n = 0; n < qmOpts.samples.size(); ++n) {
       if (nextTrec < trecs.size() and trecs[nextTrec].snum == n) {
-        outFile << '\t' << trecs[nextTrec].tpm;
+        switch (qmOpts.tcol) {
+        case TargetColumn::LEN:
+          outFile << '\t' << trecs[nextTrec].len;
+          break;
+        case TargetColumn::ELEN:
+          outFile << '\t' << trecs[nextTrec].effectiveLen;
+          break;
+        case TargetColumn::TPM:
+          outFile << '\t' << trecs[nextTrec].tpm;
+          break;
+        case TargetColumn::NREADS:
+          outFile << '\t' << trecs[nextTrec].numReads;
+          break;
+        }
         ++nextTrec;
       } else {
+        ++missingValues;
         outFile << '\t' << "NA";
       }
     }
     outFile << '\n';
   }
   outFile.close();
+
+
+  if (missingValues > 0) {
+    qmOpts.log->warn("There were {} missing entries (recorded as \"NA\") in the output", missingValues);
+  }
+
   return true;
 }
 
