@@ -222,7 +222,8 @@ int salmonQuantMerge(int argc, char* argv[]) {
     )
     (
      "column,c", po::value<string>(&qmOpts.outputCol)->required()->default_value("TPM"),
-     "The name of the column that will be merged together into the output files."
+     "The name of the column that will be merged together into the output files. "
+     "The options are {len, elen, tpm, numreads}"
     )
     (
 
@@ -244,7 +245,7 @@ int salmonQuantMerge(int argc, char* argv[]) {
 
     if (vm.count("help")) {
       auto hstring = R"(
-QuantMerge
+quantmerge
 ==========
 Merge multiple quantification results into
 a single file.
