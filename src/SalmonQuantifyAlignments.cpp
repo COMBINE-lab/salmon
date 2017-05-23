@@ -46,6 +46,8 @@ extern "C" {
 #include "FASTAParser.hpp"
 #include "LibraryFormat.hpp"
 #include "Transcript.hpp"
+#include "SalmonExceptions.hpp"
+
 #include "ReadPair.hpp"
 #include "ErrorModel.hpp"
 #include "AlignmentModel.hpp"
@@ -1005,6 +1007,16 @@ bool quantifyLibrary(
 
         numObservedFragments += alnLib.numMappedFragments();
 
+        // If we don't have a sufficient number of mapped fragments, then
+        // complain here!
+
+        // If we don't have a sufficient number of assigned fragments, then
+        // complain here!
+        if (numObservedFragments < salmonOpts.minRequiredFrags) {
+          throw InsufficientAssignedFragments(numObservedFragments, salmonOpts.minRequiredFrags);
+        }
+
+
 	/**
 	 *
 	 * Aggregate thread-local bias parameters 
@@ -1126,7 +1138,19 @@ bool processSample(AlignmentLibrary<ReadT>& alnLib,
     // EQCLASS
     alnLib.equivalenceClassBuilder().start();
 
-    bool burnedIn = quantifyLibrary<ReadT>(alnLib, requiredObservations, sopt);
+    bool burnedIn = false;
+    try {
+      burnedIn = quantifyLibrary<ReadT>(alnLib, requiredObservations, sopt);
+    } catch (const InsufficientAssignedFragments& iaf ) {
+      jointLog->warn(iaf.what());
+      GZipWriter gzw(outputDirectory, jointLog);
+      gzw.writeEmptyAbundances(sopt, alnLib);
+      // Write meta-information about the run
+      std::vector<std::string> errors{"insufficient_assigned_fragments"};
+      sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
+      gzw.writeEmptyMeta(sopt, alnLib, errors);
+      std::exit(1);
+    }
 
     // EQCLASS
     // NOTE: A side-effect of calling the optimizer is that
@@ -1292,6 +1316,11 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "in the online learning schedule.  A smaller value results in quicker learning, but higher variance "
                         "and may be unstable.  A larger value results in slower learning but may be more stable.  Value should "
                         "be in the interval (0.5, 1.0].")
+      ("minAssignedFrags",
+       po::value<std::uint64_t>(&(sopt.minRequiredFrags))->default_value(10),
+       "The minimum number of fragments that must be assigned to the transcriptome for "
+       "quantification to proceed."
+     )
     ("gencode", po::bool_switch(&(sopt.gencodeRef))->default_value(false), "This flag will expect the input transcript fasta to be "
          "in GENCODE format, and will split the transcript name at the first \'|\' character.  These reduced names will be used in "
          "the output and when looking for these transcripts in a gene to transcript GTF.")

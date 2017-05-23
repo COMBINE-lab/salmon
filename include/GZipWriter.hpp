@@ -30,10 +30,22 @@ class GZipWriter {
 	const SalmonOpts& opts,
 	const ExpT& experiment);
 
+  template <typename ExpT>
+  bool writeEmptyMeta(
+                 const SalmonOpts& opts,
+                 const ExpT& experiment,
+                 std::vector<std::string>& errors);
+
+
     template <typename ExpT>
     bool writeAbundances(
       const SalmonOpts& sopt,
       ExpT& readExp);
+
+  template <typename ExpT>
+  bool writeEmptyAbundances(
+                       const SalmonOpts& sopt,
+                       ExpT& readExp);
 
     template <typename T>
     bool writeBootstrap(const std::vector<T>& abund, bool quiet=false);

@@ -63,6 +63,7 @@ FastxParser.cpp
 StadenUtils.cpp
 SalmonUtils.cpp
 DistributionUtils.cpp
+SalmonExceptions.cpp
 SalmonStringUtils.cpp
 SimplePosBias.cpp
 SGSmooth.cpp

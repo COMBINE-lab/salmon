@@ -119,6 +119,68 @@ std::vector<std::string> getLibTypeStrings(const AlignmentLibrary<AlnT>& experim
 }
 
 /**
+ * Write the ``main'' metadata to file when the quantifications will be empty.
+ */
+template <typename ExpT>
+bool GZipWriter::writeEmptyMeta(
+                           const SalmonOpts& opts,
+                           const ExpT& experiment,
+                           std::vector<std::string>& errors) {
+    namespace bfs = boost::filesystem;
+
+  bfs::path auxDir = path_ / opts.auxDir;
+  bool auxSuccess = boost::filesystem::create_directories(auxDir);
+
+  bfs::path info = auxDir / "meta_info.json";
+
+  {
+      std::ofstream os(info.string());
+      cereal::JSONOutputArchive oa(os);
+
+      std::string sampType = "none";
+
+      auto& transcripts = experiment.transcripts();
+      oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
+      oa(cereal::make_nvp("samp_type", sampType));
+
+      oa(cereal::make_nvp("quant_errors", errors));
+      auto libStrings = getLibTypeStrings(experiment);
+      oa(cereal::make_nvp("num_libraries", libStrings.size()));
+      oa(cereal::make_nvp("library_types", libStrings));
+
+      oa(cereal::make_nvp("frag_dist_length", 0));
+      oa(cereal::make_nvp("seq_bias_correct", false));
+      oa(cereal::make_nvp("gc_bias_correct", false));
+      oa(cereal::make_nvp("num_bias_bins", 0));
+
+      std::string mapTypeStr = opts.alnMode ? "alignment" : "mapping";
+      oa(cereal::make_nvp("mapping_type", mapTypeStr));
+
+      oa(cereal::make_nvp("num_targets", transcripts.size()));
+
+      // True if we dumped the equivalence classes, false otherwise
+      oa(cereal::make_nvp("serialized_eq_classes", false));
+      
+      // For now, this vector is empty unless we dumped the equivalence classes
+      // with weights.  In which case it contains the string "scalar_weights".
+      std::vector<std::string> props;
+      oa(cereal::make_nvp("eq_class_properties", props));
+
+      oa(cereal::make_nvp("length_classes", experiment.getLengthQuantiles()));
+      oa(cereal::make_nvp("index_seq_hash", experiment.getIndexSeqHash()));
+      oa(cereal::make_nvp("index_name_hash", experiment.getIndexNameHash()));
+      oa(cereal::make_nvp("num_bootstraps", 0));
+      oa(cereal::make_nvp("num_processed", experiment.numObservedFragments()));
+      oa(cereal::make_nvp("num_mapped", experiment.numMappedFragments()));
+      oa(cereal::make_nvp("percent_mapped", experiment.effectiveMappingRate() * 100.0));
+      oa(cereal::make_nvp("call", std::string("quant")));
+      oa(cereal::make_nvp("start_time", opts.runStartTime));
+      oa(cereal::make_nvp("end_time", opts.runStopTime));
+  }
+  return true;
+}
+
+/**
  * Write the ``main'' metadata to file.  Currently this includes:
  *   -- Names of the target id's if bootstrapping / gibbs is performed
  *   -- The fragment length distribution
@@ -338,6 +400,9 @@ bool GZipWriter::writeMeta(
       oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
       oa(cereal::make_nvp("samp_type", sampType));
 
+      std::vector<std::string> errors;
+      oa(cereal::make_nvp("quant_errors", errors));
+
       auto libStrings = getLibTypeStrings(experiment);
       oa(cereal::make_nvp("num_libraries", libStrings.size()));
       oa(cereal::make_nvp("library_types", libStrings));
@@ -408,6 +473,28 @@ bool GZipWriter::writeMeta(
 
   return true;
 }
+
+template <typename ExpT>
+bool GZipWriter::writeEmptyAbundances(
+    const SalmonOpts& sopt,
+    ExpT& readExp) {
+
+  namespace bfs = boost::filesystem;
+
+  bfs::path fname = path_ / "quant.sf";
+  std::unique_ptr<std::FILE, int (*)(std::FILE *)> output(std::fopen(fname.c_str(), "w"), std::fclose);
+  fmt::print(output.get(), "Name\tLength\tEffectiveLength\tTPM\tNumReads\n");
+  // Now posterior has the transcript fraction
+  std::vector<Transcript>& transcripts_ = readExp.transcripts();
+  for (auto& transcript : transcripts_) {
+      fmt::print(output.get(), "{}\t{}\t{:.3f}\t{:f}\t{:f}\n",
+              transcript.RefName, transcript.CompleteLength, static_cast<float>(transcript.CompleteLength),
+              0.0, 0.0);
+  }
+  return true;
+}
+
+
 
 template <typename ExpT>
 bool GZipWriter::writeAbundances(
@@ -533,6 +620,17 @@ bool GZipWriter::writeAbundances<AlignmentLibrary<ReadPair>>(const SalmonOpts& s
                                                  AlignmentLibrary<ReadPair>& readExp);
 
 template
+bool GZipWriter::writeEmptyAbundances<ReadExperiment>(const SalmonOpts& sopt,
+                                                 ReadExperiment& readExp);
+template
+bool GZipWriter::writeEmptyAbundances<AlignmentLibrary<UnpairedRead>>(const SalmonOpts& sopt,
+                                                                 AlignmentLibrary<UnpairedRead>& readExp);
+template
+bool GZipWriter::writeEmptyAbundances<AlignmentLibrary<ReadPair>>(const SalmonOpts& sopt,
+                                                             AlignmentLibrary<ReadPair>& readExp);
+
+
+template
 bool GZipWriter::writeMeta<ReadExperiment>(
     const SalmonOpts& opts,
     const ReadExperiment& experiment);
@@ -546,6 +644,23 @@ template
 bool GZipWriter::writeMeta<AlignmentLibrary<ReadPair>>(
     const SalmonOpts& opts,
     const AlignmentLibrary<ReadPair>& experiment);
+
+
+template
+bool GZipWriter::writeEmptyMeta<ReadExperiment>(
+                                           const SalmonOpts& opts,
+                                           const ReadExperiment& experiment, std::vector<std::string>& errors);
+
+template
+bool GZipWriter::writeEmptyMeta<AlignmentLibrary<UnpairedRead>>(
+                                                           const SalmonOpts& opts,
+                                                           const AlignmentLibrary<UnpairedRead>& experiment, std::vector<std::string>& errors);
+
+template
+bool GZipWriter::writeEmptyMeta<AlignmentLibrary<ReadPair>>(
+                                                       const SalmonOpts& opts,
+                                                       const AlignmentLibrary<ReadPair>& experiment, std::vector<std::string>& errors);
+
 
 template
 std::vector<std::string> getLibTypeStrings(const AlignmentLibrary<UnpairedRead>& experiment);

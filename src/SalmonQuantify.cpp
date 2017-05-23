@@ -101,6 +101,7 @@ extern "C" {
 #include "SalmonMath.hpp"
 #include "SalmonUtils.hpp"
 #include "Transcript.hpp"
+#include "SalmonExceptions.hpp"
 
 #include "AlignmentGroup.hpp"
 #include "BWAUtils.hpp"
@@ -1559,6 +1560,17 @@ void processReadLibrary(
       threads[i].join();
     }
 
+    // If we don't have a sufficient number of assigned fragments, then
+    // complain here!
+    if (numAssignedFragments < salmonOpts.minRequiredFrags) {
+      readExp.setNumObservedFragments(numObservedFragments);
+      readExp.numAssignedFragmentsAtomic().store(numAssignedFragments);
+      double mappingRate = numAssignedFragments.load() /
+        static_cast<double>(numObservedFragments.load());
+      readExp.setEffectiveMappingRate(mappingRate);
+      throw InsufficientAssignedFragments(numAssignedFragments.load(), salmonOpts.minRequiredFrags);
+    }
+
     /** GC-fragment bias **/
     // Set the global distribution based on the sum of local
     // distributions.
@@ -2204,6 +2216,11 @@ int salmonQuantify(int argc, char* argv[]) {
      "[Developer]: Disables some extra checks during quasi-mapping. This may make mapping a "
      "little bit faster at the potential cost of returning too many mappings (i.e. some sub-optimal mappings) "
      "for certain reads. Only use this option if you know what it does (enables NIP-skipping)")
+    ("minAssignedFrags",
+     po::value<std::uint64_t>(&(sopt.minRequiredFrags))->default_value(10),
+     "The minimum number of fragments that must be assigned to the transcriptome for "
+     "quantification to proceed."
+     )
     (
      "gcSizeSamp",
      po::value<std::uint32_t>(&(sopt.gcSampFactor))->default_value(1),
@@ -2560,40 +2577,52 @@ transcript abundance from RNA-seq reads
 
     auto indexType = experiment.getIndex()->indexType();
 
-    switch (indexType) {
-    case SalmonIndexType::FMD: {
-      /** Currently no seq-specific bias correction with
-       *  FMD index.
-       */
-      if (sopt.biasCorrect or sopt.gcBiasCorrect) {
-        sopt.biasCorrect = false;
-        sopt.gcBiasCorrect = false;
-        jointLog->warn(
-                       "Sequence-specific or fragment GC bias correction require "
-                       "use of the quasi-index. Disabling all bias correction");
-      }
-      quantifyLibrary<SMEMAlignment>(experiment, greedyChain, memOptions, sopt,
-                                     coverageThresh, sopt.numThreads);
-    } break;
-    case SalmonIndexType::QUASI: {
-      // We can only do fragment GC bias correction, for the time being, with
-      // paired-end reads
-      if (sopt.gcBiasCorrect) {
-        for (auto& rl : readLibraries) {
-          if (rl.format().type != ReadType::PAIRED_END) {
-            jointLog->warn("Fragment GC bias correction is currently *experimental* "
-                           "in single-end libraries.  Please use this option "
-                           "with caution.");
-            //sopt.gcBiasCorrect = false;
+    try {
+      switch (indexType) {
+      case SalmonIndexType::FMD: {
+        /** Currently no seq-specific bias correction with
+        *  FMD index.
+        */
+        if (sopt.biasCorrect or sopt.gcBiasCorrect) {
+          sopt.biasCorrect = false;
+          sopt.gcBiasCorrect = false;
+          jointLog->warn(
+                        "Sequence-specific or fragment GC bias correction require "
+                        "use of the quasi-index. Disabling all bias correction");
+        }
+        quantifyLibrary<SMEMAlignment>(experiment, greedyChain, memOptions, sopt,
+                                      coverageThresh, sopt.numThreads);
+      } break;
+      case SalmonIndexType::QUASI: {
+        // We can only do fragment GC bias correction, for the time being, with
+        // paired-end reads
+        if (sopt.gcBiasCorrect) {
+          for (auto& rl : readLibraries) {
+            if (rl.format().type != ReadType::PAIRED_END) {
+              jointLog->warn("Fragment GC bias correction is currently *experimental* "
+                            "in single-end libraries.  Please use this option "
+                            "with caution.");
+              //sopt.gcBiasCorrect = false;
+            }
           }
         }
-      }
 
-      sopt.allowOrphans = true;
-      sopt.useQuasi = true;
-      quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions, sopt,
-                                      coverageThresh, sopt.numThreads);
-    } break;
+        sopt.allowOrphans = true;
+        sopt.useQuasi = true;
+        quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions, sopt,
+                                        coverageThresh, sopt.numThreads);
+      } break;
+      }
+    } catch (const InsufficientAssignedFragments& iaf ) {
+      sopt.jointLog->warn(iaf.what());
+      salmon::utils::writeCmdInfo(sopt, orderedOptions);
+      GZipWriter gzw(outputDirectory, jointLog);
+      gzw.writeEmptyAbundances(sopt, experiment);
+      // Write meta-information about the run
+      std::vector<std::string> errors{"insufficient_assigned_fragments"};
+      sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
+      gzw.writeEmptyMeta(sopt, experiment, errors);
+      std::exit(1);
     }
 
     // Write out information about the command / run
