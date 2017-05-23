@@ -12,6 +12,13 @@ InsufficientAssignedFragments::InsufficientAssignedFragments(uint64_t numAssigne
   msg_ = cnvt.str();
 }
 
+InsufficientAssignedFragments::InsufficientAssignedFragments(InsufficientAssignedFragments&& other) : std::runtime_error("") {
+  //  cnvt = other.cnvt;
+  msg_ = other.msg_;
+  numAssigned_ = other.numAssigned_;
+  numRequired_ = other.numRequired_;
+}
+
 const char* InsufficientAssignedFragments::what() const throw() {
   return msg_.c_str();
 }

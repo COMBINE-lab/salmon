@@ -7,6 +7,7 @@
 class InsufficientAssignedFragments : public std::runtime_error {
 public:
   InsufficientAssignedFragments(uint64_t numAssigned, uint64_t numRequired) noexcept;
+  InsufficientAssignedFragments(InsufficientAssignedFragments&& other);
   virtual const char* what() const throw();
 private:
   uint64_t numAssigned_;
