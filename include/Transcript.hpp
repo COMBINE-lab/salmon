@@ -73,7 +73,7 @@ public:
         SAMSequence_ = std::move(other.SAMSequence_);
         Sequence_ = std::move(other.Sequence_);
         GCCount_ = std::move(other.GCCount_);
-        gcStep_ = other.gcStep_;
+        reduceGCMemory_ = other.reduceGCMemory_;
         gcFracLen_ = other.gcFracLen_;
         lastRegularSample_ = other.lastRegularSample_;
         gcBitArray_ = std::move(other.gcBitArray_);
@@ -104,7 +104,7 @@ public:
         SAMSequence_ = std::move(other.SAMSequence_);
         Sequence_ = std::move(other.Sequence_);
         GCCount_ = std::move(other.GCCount_);
-        gcStep_ = other.gcStep_;
+        reduceGCMemory_ = other.reduceGCMemory_;
         gcFracLen_ = other.gcFracLen_;
         lastRegularSample_ = other.lastRegularSample_;
         gcBitArray_ = std::move(other.gcBitArray_);
@@ -331,7 +331,7 @@ public:
 
         double contextSize = outsideContext + insideContext;
         int lastPos = RefLength - 1;
-        if (gcStep_ == 1) {
+        if (!reduceGCMemory_) {
             auto cs = (s > 0) ? GCCount_[s - 1] : 0;
             auto ce = GCCount_[e];
 
@@ -444,7 +444,7 @@ public:
     // Return the fractional GC content along this transcript
     // in the interval [s,e] (note; this interval is closed on both sides).
     inline int32_t gcFrac(int32_t s, int32_t e) const {
-        if (gcStep_ == 1) {
+        if (!reduceGCMemory_) {
             auto cs = (s > 0) ? GCCount_[s - 1] : 0;
             auto ce = GCCount_[e];
             return std::lrint((100.0 * (ce - cs)) / (e - s + 1));
@@ -453,42 +453,43 @@ public:
             auto ce = gcCountInterp_(e);
             return std::lrint((100.0 * (ce - cs)) / (e - s + 1));
         }
+        return 0;
     }
 
     // Will *not* delete seq on destruction
-    void setSequenceBorrowed(const char* seq, bool needGC=false, uint32_t gcSampFactor=1) {
+    void setSequenceBorrowed(const char* seq, bool needGC=false, bool reduceGCMemory=false) {
         Sequence_ = std::unique_ptr<const char, void(*)(const char*)>(
                 seq,                 // store seq
                 [](const char* p) {} // do nothing deleter
                 );
-        if (needGC) { computeGCContent_(gcSampFactor); }
+        if (needGC) { computeGCContent_(reduceGCMemory); }
     }
 
     // Will delete seq on destruction
-    void setSequenceOwned(const char* seq, bool needGC=false, uint32_t gcSampFactor=1) {
+    void setSequenceOwned(const char* seq, bool needGC=false, bool reduceGCMemory=false) {
         Sequence_ = std::unique_ptr<const char, void(*)(const char*)>(
                 seq,                 // store seq
                 [](const char* p) { delete [] p; } // do nothing deleter
                 );
-        if (needGC) { computeGCContent_(gcSampFactor); }
+        if (needGC) { computeGCContent_(reduceGCMemory); }
     }
 
     // Will *not* delete seq on destruction
-    void setSAMSequenceBorrowed(uint8_t* seq, bool needGC=false, uint32_t gcSampFactor=1) {
+  void setSAMSequenceBorrowed(uint8_t* seq, bool needGC=false, bool reduceGCMemory=false) {
         SAMSequence_ = std::unique_ptr<uint8_t, void(*)(uint8_t*)>(
                 seq,                 // store seq
                 [](uint8_t* p) {} // do nothing deleter
                 );
-        if (needGC) { computeGCContent_(gcSampFactor); }
+        if (needGC) { computeGCContent_(reduceGCMemory); }
     }
 
     // Will delete seq on destruction
-    void setSAMSequenceOwned(uint8_t* seq, bool needGC=false,  uint32_t gcSampFactor=1) {
+  void setSAMSequenceOwned(uint8_t* seq, bool needGC=false, bool reduceGCMemory=false) {
         SAMSequence_ = std::unique_ptr<uint8_t, void(*)(uint8_t*)>(
                 seq,                 // store seq
                 [](uint8_t* p) { delete [] p; } // do nothing deleter
                 );
-        if (needGC) { computeGCContent_(gcSampFactor); }
+        if (needGC) { computeGCContent_(reduceGCMemory); }
     }
 
     const char* Sequence() const {
@@ -518,15 +519,17 @@ private:
     // NOTE: Is it worth it to check if we have GC here?
     // we should never access these without bias correction.
     inline double gcCount_(int32_t p) {
-      return (gcStep_ == 1) ? static_cast<double>(GCCount_[p]) : gcCountInterp_(p);
+      return (!reduceGCMemory_) ? static_cast<double>(GCCount_[p]) : gcCountInterp_(p);
     }
     inline double gcCount_(int32_t p) const {
-      return (gcStep_ == 1) ? static_cast<double>(GCCount_[p]) : gcCountInterp_(p);
+      return (!reduceGCMemory_) ? static_cast<double>(GCCount_[p]) : gcCountInterp_(p);
     }
 
+  /*
     inline int32_t closestBin_(int32_t p) const {
       return static_cast<int32_t>(std::round( static_cast<double>(p) / gcStep_ ));
     }
+  */
 
   inline double gcCountInterp_(int32_t p) const {
     if (p >= RefLength) { p = RefLength - 1; }
@@ -577,6 +580,7 @@ private:
     }
   */
 
+  /*
     void computeGCContentSampled_(uint32_t step) {
         gcStep_ = step;
         const char* seq = Sequence_.get();
@@ -603,11 +607,13 @@ private:
         gcFracLen_ = static_cast<double>(RefLength - 1) / gcStep_;
         lastRegularSample_ = std::ceil(gcFracLen_);
     }
+  */
 
-    void computeGCContent_(uint32_t gcSampFactor) {
+    void computeGCContent_(bool reduceGCMemory) {
+        reduceGCMemory_ = reduceGCMemory;
         const char* seq = Sequence_.get();
         GCCount_.clear();
-        if (gcSampFactor == 1) {
+        if (!reduceGCMemory) {
             GCCount_.resize(RefLength, 0);
             size_t totGC{0};
             for (size_t i = 0; i < RefLength; ++i) {
@@ -627,7 +633,6 @@ private:
           }
           gcBitArray_.reset(rawArray);
           gcRank_.reset(new rank9b(gcBitArray_->words, RefLength));
-          gcStep_ = gcSampFactor;
           //computeGCContentSampled_(gcSampFactor);
         }
     }
@@ -656,7 +661,7 @@ private:
     std::atomic<bool> hasAnchorFragment_{false};
     bool active_;
 
-    uint32_t gcStep_{1};
+    bool reduceGCMemory_{false};
     double gcFracLen_{0.0};
     uint32_t lastRegularSample_{0};
     std::vector<uint32_t> GCCount_;

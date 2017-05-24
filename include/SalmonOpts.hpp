@@ -123,7 +123,8 @@ struct SalmonOpts {
 
     uint64_t numRequiredFragments; //
   uint64_t minRequiredFrags;
-    uint32_t gcSampFactor; // The factor by which to down-sample the GC distribution of transcripts
+    bool reduceGCMemory;  // Use a memory-efficient (rank-based) data structure for computing fragment GC content
+  //uint32_t gcSampFactor; // The factor by which to down-sample the GC distribution of transcripts
     uint32_t pdfSampFactor; // The factor by which to down-sample the fragment length pmf when
                             // evaluating gc-bias for effective length correction.
 

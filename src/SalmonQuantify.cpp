@@ -2222,11 +2222,12 @@ int salmonQuantify(int argc, char* argv[]) {
      "quantification to proceed."
      )
     (
-     "gcSizeSamp",
-     po::value<std::uint32_t>(&(sopt.gcSampFactor))->default_value(1),
-     "The value by which to down-sample transcripts when representing the "
-     "GC content.  Larger values will reduce memory usage, but may "
-     "decrease the fidelity of bias modeling results.")
+     "reduceGCMemory",
+     po::bool_switch(&(sopt.reduceGCMemory))->default_value(false),
+     "If this option is selected, a more memory efficient (but slightly slower) representation is "
+     "used to compute fragment GC content. Enabling this will reduce memory usage, but can also reduce "
+     "speed.  However, the results themselves will remain the same."
+     )
     (
      "biasSpeedSamp",
      po::value<std::uint32_t>(&(sopt.pdfSampFactor))->default_value(1),

@@ -291,7 +291,7 @@ class ReadExperiment {
 
 		    // Set the transcript sequence
 		    txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i],
-                                    sopt.gcBiasCorrect, sopt.gcSampFactor);
+                                    sopt.gcBiasCorrect, sopt.reduceGCMemory);
 		    lengths.push_back(txp.RefLength);
 		    /*
 		    // Length classes taken from

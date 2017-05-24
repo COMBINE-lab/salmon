@@ -36,8 +36,8 @@ SCENARIO("GC sampling works properly") {
 	auto len = lengths[tn];
 	txpsSampled.emplace_back(tn, names[tn], len); 
 	txpsUnSampled.emplace_back(tn, names[tn], len); 
-	txpsSampled[tn].setSequenceBorrowed(txpSeqs[tn], true, 5);
-	txpsUnSampled[tn].setSequenceBorrowed(txpSeqs[tn], true, 1);
+	txpsSampled[tn].setSequenceBorrowed(txpSeqs[tn], true, true);
+	txpsUnSampled[tn].setSequenceBorrowed(txpSeqs[tn], true, false);
       }
       
       for (size_t tn = 0; tn < 1000; ++tn) {

@@ -84,7 +84,7 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs, SalmonOpts& sop
           // allocate space for the new copy
           char* seqCopy = new char[seq.length()+1];
           std::strcpy(seqCopy, seq.c_str());
-          refs[it->second].setSequenceOwned(seqCopy, sopt.gcBiasCorrect, sopt.gcSampFactor);
+          refs[it->second].setSequenceOwned(seqCopy, sopt.gcBiasCorrect, sopt.reduceGCMemory);
           // seqCopy will only be freed when the transcript is destructed!
         }
       }
