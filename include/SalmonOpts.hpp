@@ -80,7 +80,7 @@ struct SalmonOpts {
 
     uint32_t mmpLength;
     uint32_t editDistance;
-
+    uint32_t maxInsertSize;
     bool remap;
     bool filter;
 

@@ -1086,7 +1086,8 @@ void processReadsQuasi(
                     false,
                     consistentHits,
                     hctr,
-                    salmonOpts.editDistance);
+                    salmonOpts.editDistance,
+		    salmonOpts.maxInsertSize);
 
 
             if(salmonOpts.writeOrphanLinks){
@@ -2614,6 +2615,10 @@ int salmonQuantify(int argc, char* argv[]) {
      "editDistance",
      po::value<uint32_t>(&(sopt.editDistance))->default_value(10),
      "minimum threshold for hits to consider.")
+     (
+     "maxInsertSize",
+     po::value<uint32_t>(&(sopt.maxInsertSize))->default_value(1000),
+     "maximum insert size in coMapping procedure.")
      (
      "remap", po::bool_switch(&(sopt.remap))->default_value(false),
      "Do remap with kmer size 9 when fail to map in the usual way.")

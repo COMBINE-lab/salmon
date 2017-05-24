@@ -25,7 +25,6 @@
 #include "RapMapSAIndex.hpp"
 #include "RapMapUtils.hpp"
 #include "SASearcher.hpp"
-#include "SalmonUtils.hpp"
 
 #include <algorithm>
 #include <iostream>
@@ -114,8 +113,8 @@ public:
     auto& rankDict = rmi_->rankDict;
     auto& txpStarts = rmi_->txpOffsets;
     auto& SA = rmi_->SA;
-    auto& khash = (remap)?rmi_->khash9:rmi_->khash;
-    //auto& khash = rmi_->khash;
+    //auto& khash = (remap)?rmi_->khash9:rmi_->khash;
+    auto& khash = rmi_->khash;
     auto& text = rmi_->seq;
     auto salen = SA.size();
     if(remap) hashEnd_ = khash.end();
@@ -301,7 +300,6 @@ public:
     // if(read=="CAGGCTGGAGTGCAGTGGCACGATCTTGGCTCACTGCAAGCTCCGCCTCCCAGGTTCACGTCATTCCCCTGCCAG" or read=="CTGGCAGGGGAATGACGTGAACCTGGGAGGCGGAGCTTGCAGTGAGCCAAGATCGTGCCACTGCACTCCAGCCTG")
 
     if (checkRC) {
-      salmon::utils::incLoop(salmon::utils::GroundTruth::rcCheck,1);
       rapmap::utils::reverseRead(read, rcBuffer_);
       getSAHits_(saSearcher,
                  rcBuffer_,         // the read
@@ -320,7 +318,6 @@ public:
     bool checkFwd = useCoverageCheck ? (fwdHit > 0) : (fwdHit >= rcHit);
     //bool checkFwd = true ;
     if (!didCheckFwd and checkFwd) {
-      salmon::utils::incLoop(salmon::utils::GroundTruth::fwdCheck,1);
       didCheckFwd = true;
       getSAHits_(saSearcher,
                  read,         // the read
@@ -603,7 +600,8 @@ private:
              ) {
     IteratorT merIt = hashEnd_;
     IteratorT complementMerIt = hashEnd_;
-    auto& khash =(remap)?rmi_->khash9:rmi_->khash;
+    //auto& khash =(remap)?rmi_->khash9:rmi_->khash;
+    auto& khash = rmi_->khash;
     //auto hashEnd_ = khash.end();
     auto k = rapmap::utils::my_mer::k();
     if(remap){
@@ -683,7 +681,8 @@ private:
       bool remap=false
       ) {
     using SAIntervalHit = rapmap::utils::SAIntervalHit<OffsetT>;
-    auto& khash = (remap)?rmi_->khash9:rmi_->khash;
+    //auto& khash = (remap)?rmi_->khash9:rmi_->khash;
+    auto& khash = rmi_->khash;
 
     //auto hashEnd_ = khash.end();
     //
@@ -718,6 +717,8 @@ private:
     bool lastSearch{false};
     size_t prevMMPEnd{0};
     bool validMer{true};
+    
+    OffsetT hybridSkip{std::max(size_t(1), readLen / 10)};
 
     // If we have some place to start that we have already computed
     // then use it.
@@ -730,7 +731,7 @@ private:
       invalidPos = pos;
       lb = startInterval->begin();
       ub = startInterval->end();
-
+      
       goto skipSetup;
     }
 
@@ -763,18 +764,6 @@ private:
       if (mer.is_homopolymer()) {
         rb += homoPolymerSkip;
         re += homoPolymerSkip;
-        /*
-        rb += homoPolymerSkip;
-        re += homoPolymerSkip;
-        // If the default skip jumps us off the end of the read
-        // then try to check the last k-mer
-        if (re >= readEndIt and !lastSearch) {
-          rb = readEndIt - k;
-          re = rb + k;
-          // but give up if that's still a homopolymer
-          lastSearch = true;
-        }
-        */
         continue;
       }
 
@@ -783,19 +772,6 @@ private:
       complementMer = mer.get_reverse_complement();
       merIt = khash.find(mer.word(0));//get_bits(0, 2 * k));
 
-      salmon::utils::incLoop(salmon::utils::GroundTruth::lookupKmers,1);
-      /*if(read=="AAACCATTTTCAGACCGGGCACGGTGGCTCACCTGTAATCCCAGGACTTTGGGAGGCCAGGGCGGGCAGATCACC" or read=="GGTGATCTGCCCGCCCTGGCCTCCCAAAGTCCTGGGATTACAGGTGAGCCACCGTGCCCGGTCTGAAAATGGTTT"){
-          std::cout<<"\n\n berfore going khash check: " << mer << "\n\n";
-      }*/
-
-
-      //@debug HIRAK check a falsely read
-      //finds the true list in its transcript or not
-     //auto& SA = rmi_->SA ;
-     //auto& txpNames = rmi_->txpNames;
-
-
-      // If we found the k-mer
       if (merIt != hashEnd_) {
         spotCheck_(mer, pos, readLen, &merIt, nullItPtr, isRC, strandHits,
                    otherStrandHits, kmerScores, remap);
@@ -805,95 +781,55 @@ private:
         lcpLength = merIt->second.lcpLength ;
         safeLength = merIt->second.safeLength ;
       skipSetup:
-
-      /*if(read=="AAACCATTTTCAGACCGGGCACGGTGGCTCACCTGTAATCCCAGGACTTTGGGAGGCCAGGGCGGGCAGATCACC" or read=="GGTGATCTGCCCGCCCTGGCCTCCCAAAGTCCTGGGATTACAGGTGAGCCACCGTGCCCGGTCTGAAAATGGTTT"){
-          std::cout<<"\n\n after khash check: " << mer << "\n\n";
-      }*/
-
-
-
-
-        //if(read=="TCAACTGGGCTAGATAATTGAAGGCTGAGCTCTTTGTAAGTTTTTTTTTTGTTTTTTTTTTTGAGACTGATTCTC" or read=="GAGAATCAGTCTCAAAAAAAAAAACAAAAAAAAAACTTACAAAGAGCTCAGCCTTCAATTATCTAGCCCAGTTGA"){
-        // if(read=="GATCACAAGGTCAAGAGATTGAGACCATCTTGGCCAACATGGTGAAACCCCGTCTCTACTAAAAACACAAAAATC" or read == "")
-        //if(read=="CAGCCTCCCGAGTAGCTGGGACTACAGGTGCATGCCACGACGGCCGGCTGATTTTTGTGTTTTTTGTAGAGACGG" or read == "CCGTCTCTACAAAAAACACAAAAATCAGCCGGCCGTCGTGGCATGCACCTGTAGTCCCAGCTACTCGGGAGGCTG"){
-        //    std::cout <<"\n" << mer << " " <<(uint32_t)safeLength << " " << saSearcher.extendSafe(lb, ub, k, rb, readEndIt,safeLength ) << "\n";
-        //}
-
         auto oldlb = lb;
         auto oldub = ub;
 
-        /*if(safeLength<=k)
-            safeLength = k+1;
-        salmon::utils::incLoop(salmon::utils::GroundTruth::foundKmers,1);
+
         if(readStartIt == startIt){
-            lb = std::max(static_cast<OffsetT>(0), lb - 1);
-            std::tie(lb, ub, matchedLen) =
-                saSearcher.extendSearchNaive(lb, ub, k, rb, readEndIt);
-            if( matchedLen < readLen) {
-                matchedLen = safeLength;//k+10;//readLen/10;
-                lb= oldlb;
-                ub = oldub;
-            }else{
-                salmon::utils::incLoop(salmon::utils::GroundTruth::mmpExtension,1);
-            }
-        }
-        else{
-            matchedLen = safeLength;//k+10;//readLen/10;
-            lb= oldlb;
-            ub = oldub;
-        }*/
-
-        salmon::utils::incLoop(salmon::utils::GroundTruth::foundKmers,1);
-        if(readStartIt == startIt) {
 
             lb = std::max(static_cast<OffsetT>(0), lb - 1);
             std::tie(lb, ub, matchedLen) =
                 saSearcher.extendSearchNaive(lb, ub, k, rb, readEndIt);
+
+            // **Note** : If we don't match the whole read, why go back and
+            // re-do the extendSafe?  We know how long the matchedLen is, so
+            // we should be able to just reduce it to min(matchedLen, safeLength)
+            // and proceed without re-checking, right?
+
             if(matchedLen == readLen){
-                salmon::utils::incLoop(salmon::utils::GroundTruth::mmpExtension,1);
                 matchedLen = readLen;
-            }
-            else {
-                lb = oldlb;
-                ub = oldub;
-                if(safeLength==k)
-                    safeLength=k+1;
-                auto newExtend =  saSearcher.extendSafe(lb, ub, k, rb, readEndIt,safeLength );
-                //std::cout <<"1 " <<newExtend << "\n";
+            } else {
+                if(safeLength==k) { safeLength=k+1; }
+                /** Assuming there isn't an OBO here, I think we can
+                    replace the call to extendSafe in this block by
+                    the code immediately below **/
+                
+		lb = oldlb;
+		ub = oldub;
+		auto newExtend =  std::min((uint32_t)matchedLen,(uint32_t) safeLength); 
+                if (newExtend > k+1) {
+                  matchedLen = newExtend;
+                } else {
+                  matchedLen = k+hybridSkip;
+                }
+                
+                /**auto newExtend =  saSearcher.extendSafe(lb, ub, k, rb, readEndIt, safeLength);
                 if(newExtend > k){
                     matchedLen = newExtend ;
                 }else{
-                    matchedLen = k+readLen/10;
-                }
-                
+                    matchedLen = k+hybridSkip;
+                }**/
             }
         } else {
             if(safeLength==k)
                 safeLength=k+1;
             auto newExtend =  saSearcher.extendSafe(lb, ub, k, rb, readEndIt,safeLength );
             if(newExtend > k){
-                matchedLen = newExtend ;
-            }else {
-                matchedLen = k+readLen/10;
+                matchedLen = newExtend;
+            }else{
+                matchedLen = k+hybridSkip;
             }
         }
-
-        //if(read=="TCAACTGGGCTAGATAATTGAAGGCTGAGCTCTTTGTAAGTTTTTTTTTTGTTTTTTTTTTTGAGACTGATTCTC" or read=="GAGAATCAGTCTCAAAAAAAAAAACAAAAAAAAAACTTACAAAGAGCTCAGCCTTCAATTATCTAGCCCAGTTGA"){
-        //if(read=="GAAAGAGTCCACCTTGCACCTGGTGCTCCGTCTCAGAGGTGGGATGCAGATCGTCGTGAAGACCCTGACTGGTAA" or read=="TTACCAGTCAGGGTCTTCACGACGATCTGCATCCCACCTCTGAGACGGAGCACCAGGTGCAAGGTGGACTCTTTC"){
-        /*if(read=="TCCTTCTTTGGGCCTGGGTTTCCTCATCTAATCTGCAAACCAAGAATGCAGACTAGTCCTACCACTCCCGGAAGA" or read =="TCTTCCGGGAGTGGTAGGACTAGTCTGCATTCTTGGTTTGCAGATTAGATGAGGAAACCCAGGCCCAAAGAAGGA"){
-        //if(read=="AGGGATGCCCTCCTTGTCTTGGATCTTTGCCTTGACATTCTCAATGGTGTCACTCGGCTCCACCTCGAGAGTGAT" or read=="ATCACTCTCGAGGTGGAGCCGAGTGACACCATTGAGAATGTCAAGGCAAAGATCCAAGACAAGGAGGGCATCCCT"){
-        //if(read=="CAGGCTGGAGTGCAGTGGCACGATCTTGGCTCACTGCAAGCTCCGCCTCCCAGGTTCACGTCATTCCCCTGCCAG" or read=="CTGGCAGGGGAATGACGTGAACCTGGGAGGCGGAGCTTGCAGTGAGCCAAGATCGTGCCACTGCACTCCAGCCTG"){
-        std::cout <<"\n" << mer << " " << "safeLength: " << (uint32_t)safeLength << " extendLength: " << (uint32_t)matchedLen <<"\n";
-        rapmap::utils::my_mer mer_(std::string(rb,rb+k));
-        auto merIt_ = khash.find(mer_.word(0));
-        for(auto spos = merIt_->second.interval.begin() ; spos < merIt_->second.interval.end(); ++spos){
-            std::cout<<"\n"<<rmi_->txpNames[rmi_->transcriptAtPosition(rmi_->SA[spos])] << "\n";// <<" pos: "<< spos - rmi_->txpOffsets[rmi_->transcriptAtPosition(rmi_->SA[spos])] << "\n";
-        }
-        for(auto i=rb;i<rb+k;i++){
-            std::cout<<*i;
-        }
-        std::cout<<" encountered\n";
-        }*/
 
 
         OffsetT diff = ub - lb;
@@ -982,19 +918,9 @@ private:
         // if (skipMatch + k )
         // Where we would jump if we used the LCE
         auto skipLCE = rb + lce - skipOverlapNIP;
-        // TODO: GIANT HACK TO TEST SENSITIVITY!!!!
-        //auto neverSkipMoreThan = rb + 10;
         // Pick the maximum of the two
         auto maxSkip = std::max(skipMatch, skipLCE);
-        // And that's where our new search will start
-        //rb = maxSkip;
-
         rb = rb+matchedLen-k+1;
-        /*
-        if (rb > neverSkipMoreThan) {
-            rb = neverSkipMoreThan;
-        }*/
-
 
         // If NIP skipping is *enabled*, and we got to the current position
         // by doing an LCE query, then we allow ourselves to *double check*
