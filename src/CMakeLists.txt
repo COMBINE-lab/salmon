@@ -72,6 +72,8 @@ SGSmooth.cpp
 set ( UNIT_TESTS_SRCS
     ${GAT_SOURCE_DIR}/tests/UnitTests.cpp
     FragmentLengthDistribution.cpp
+    ${GAT_SOURCE_DIR}/external/install/src/rapmap/rank9b.cpp
+    ${GAT_SOURCE_DIR}/external/install/src/rapmap/bit_array.c
 )
 
 

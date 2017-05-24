@@ -26,6 +26,10 @@ struct GCDesc {
     double w = (100.0 / n);
     return std::min(n - 1, static_cast<int32_t>(contextFrac / w));
   }
+
+  bool operator==(const GCDesc& other) {
+    return fragFrac == other.fragFrac and contextFrac == other.contextFrac;
+  }
 };
 
 class GCFragModel {

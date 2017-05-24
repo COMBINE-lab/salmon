@@ -51,6 +51,23 @@ SCENARIO("GC sampling works properly") {
 	}
       }
 
+  for (size_t tn = 0; tn < 1000; ++tn) {
+    WHEN("Computing GC contexts") {
+      auto l = txpsSampled[tn].RefLength;
+      for (size_t i = 0; i < 1000; ++i) {
+        bool v1, v2;
+        auto s = dis(gen);
+        auto len = dis(gen);
+        decltype(s) e;
+        if ( s >= l ) { s = l/2; }
+        if ( s + len >= l ) { e= l-1; }
+        THEN("Sampled contexts are the same as unsampled contexts") {
+            REQUIRE(txpsSampled[tn].gcDesc(s, e, v1) == txpsUnSampled[tn].gcDesc(s, e, v2));
+        }
+      }
+    }
+      }
+
       for (size_t tn = 0; tn < 1000; ++tn) {
 	delete [] txpSeqs[tn];
 	delete [] names[tn];

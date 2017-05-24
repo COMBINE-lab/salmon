@@ -13,8 +13,21 @@
 #include "FragmentLengthDistribution.hpp"
 #include "tbb/atomic.h"
 
+#include "rapmap/bit_array.h"
+#include "rapmap/rank9b.h"
+
 class Transcript {
 public:
+
+  struct BitArrayDeleter {
+    void operator()(BIT_ARRAY* b) {
+      if(b != nullptr) {
+        bit_array_free(b);
+      }
+    }
+  };
+  using BitArrayPointer = std::unique_ptr<BIT_ARRAY, BitArrayDeleter>;
+  using Rank9bPointer = std::unique_ptr<rank9b>;
 
     Transcript() :
         RefName(nullptr), RefLength(std::numeric_limits<uint32_t>::max()),
@@ -63,6 +76,8 @@ public:
         gcStep_ = other.gcStep_;
         gcFracLen_ = other.gcFracLen_;
         lastRegularSample_ = other.lastRegularSample_;
+        gcBitArray_ = std::move(other.gcBitArray_);
+        gcRank_ = std::move(other.gcRank_);
 
         uniqueCount_.store(other.uniqueCount_);
         totalCount_.store(other.totalCount_.load());
@@ -92,6 +107,8 @@ public:
         gcStep_ = other.gcStep_;
         gcFracLen_ = other.gcFracLen_;
         lastRegularSample_ = other.lastRegularSample_;
+        gcBitArray_ = std::move(other.gcBitArray_);
+        gcRank_ = std::move(other.gcRank_);
 
         uniqueCount_.store(other.uniqueCount_);
         totalCount_.store(other.totalCount_.load());
@@ -318,7 +335,6 @@ public:
             auto cs = (s > 0) ? GCCount_[s - 1] : 0;
             auto ce = GCCount_[e];
 
-            
             int fs = s - outside5p;
             int fe = s + inside5p;
             int ts = e - inside3p;
@@ -329,16 +345,11 @@ public:
             bool tpLeftExists = (ts >= 0);
             bool tpRightExists = (te <= lastPos);
 
-            /*
-            if (!(fpLeftExists and fpRightExists and tpLeftExists and tpRightExists)) {
-              return GCDesc();
-            }
-            */
             auto fps = (fpLeftExists) ? GCCount_[fs] : 0;
             auto fpe = (fpRightExists) ? GCCount_[fe] : ce;
             auto tps = (tpLeftExists) ? GCCount_[ts] : 0;
             auto tpe = (tpRightExists) ? GCCount_[te] : ce;
-            
+
             // now, clamp to actual bounds
             fs = (fs < 0) ? 0 : fs;
             fe = (fe > lastPos) ? lastPos : fe;
@@ -352,34 +363,9 @@ public:
               return GCDesc();
             }
             valid = true;
-            /* 
-            
-            int fs = std::max(s - outside5p, 0);
-            int fe = std::min(s + inside5p, lastPos);
-            int ts = std::max(e - inside3p, 0);
-            int te = std::min(e + outside3p, lastPos);
-            
-            //contextSize = static_cast<double>((fe - fs) + (te - ts));
-            auto fps = (s >= outside5p) ? GCCount_[fs] : 0;
-            auto fpe = (inside5p > 0) ? GCCount_[fe] : cs;
-            auto tps = (inside3p > 0) ?
-            ((e >= inside3p) ? GCCount_[e-inside3p] : 0) : ce;
-            auto tpe = GCCount_[te];
-            */
-            
 
-            /* 
-            auto fps = (s >= outside5p) ? GCCount_[s-outside5p] : 0;
-            auto fpe = (inside5p > 0) ? GCCount_[std::min(s+inside5p, lastPos)] : cs;
-            auto tps = (inside3p > 0) ?
-                ((e >= inside3p) ? GCCount_[e-inside3p] : 0) : ce;
-            auto tpe = GCCount_[std::min(e+outside3p, lastPos)];
-            */
-            
             int32_t fragFrac = std::lrint((100.0 * (ce - cs)) / (e - s + 1));
-            //int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (2.0 * contextSize))));
             int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (contextSize))));
-            //int32_t contextFrac = std::lrint((100.0 * (((fpeCount - fpsCount) + (tpeCount - tpsCount)) / (contextSize))));
             /*
             if (contextFrac > 100) {
               std::cerr << "NOTE : 5' count = " << (fpeCount - fpsCount) << ", 3' count =" << (tpeCount - tpsCount) << ", context size = " << contextSize << std::endl;
@@ -396,25 +382,63 @@ public:
             GCDesc desc = {fragFrac, contextFrac};
             return desc;
         } else {
-            auto cs = gcCountInterp_(s);
+            auto cs = (s > 0) ? gcCountInterp_(s - 1) : 0;
             auto ce = gcCountInterp_(e);
 
+            int fs = s - outside5p;
+            int fe = s + inside5p;
+            int ts = e - inside3p;
+            int te = e + outside3p;
+
+            bool fpLeftExists = (fs >= 0);
+            bool fpRightExists = (fe <= lastPos);
+            bool tpLeftExists = (ts >= 0);
+            bool tpRightExists = (te <= lastPos);
+
+            auto fps = (fpLeftExists) ? gcCountInterp_(fs) : 0;
+            auto fpe = (fpRightExists) ? gcCountInterp_(fe) : ce;
+            auto tps = (tpLeftExists) ? gcCountInterp_(ts) : 0;
+            auto tpe = (tpRightExists) ? gcCountInterp_(te) : ce;
+
+            // now, clamp to actual bounds
+            fs = (fs < 0) ? 0 : fs;
+            fe = (fe > lastPos) ? lastPos : fe;
+            ts = (ts < 0) ? 0 : ts;
+            te = (te > lastPos) ? lastPos : te;
+            int fpContextSize = (!fpLeftExists) ? (fe + 1) : (fe - fs);
+            int tpContextSize = (!tpLeftExists) ? (te + 1) : (te - ts);
+            contextSize = static_cast<double>(fpContextSize + tpContextSize);
+            if (contextSize == 0) {
+              return GCDesc();
+            }
             valid = true;
-	    auto fps = (s >= outside5p) ? gcCountInterp_(s-outside5p) : 0;
-	    auto fpe = (inside5p > 0) ? gcCountInterp_(std::min(s+inside5p, lastPos)) : cs;
-	    auto tps = (inside3p > 0) ?
-	      ((e >= inside3p) ? gcCountInterp_(e-inside3p) : 0) : ce;
-	    auto tpe = gcCountInterp_(std::min(e+outside3p, lastPos));
 
             int32_t fragFrac = std::lrint((100.0 * (ce - cs)) / (e - s + 1));
-            int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (2.0 * contextSize))));
+            int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (contextSize))));
             GCDesc desc = {fragFrac, contextFrac};
             return desc;
+            /** PREVIOUS SAMPLED IMPL (before May 23, 2017) **/
+            /*
+              auto cs = gcCountInterp_(s);
+              auto ce = gcCountInterp_(e);
+
+              valid = true;
+              auto fps = (s >= outside5p) ? gcCountInterp_(s-outside5p) : 0;
+              auto fpe = (inside5p > 0) ? gcCountInterp_(std::min(s+inside5p, lastPos)) : cs;
+              auto tps = (inside3p > 0) ?
+              ((e >= inside3p) ? gcCountInterp_(e-inside3p) : 0) : ce;
+              auto tpe = gcCountInterp_(std::min(e+outside3p, lastPos));
+
+              int32_t fragFrac = std::lrint((100.0 * (ce - cs)) / (e - s + 1));
+              int32_t contextFrac = std::lrint((100.0 * (((fpe - fps) + (tpe - tps)) / (2.0 * contextSize))));
+              GCDesc desc = {fragFrac, contextFrac};
+              return desc;
+            */
         }
 
     }
     inline double gcAt(int32_t s) const {
-        return (s < 0) ? 0.0 : ((s >= RefLength) ? gcCount_(RefLength) : gcCount_(s));
+        return (s < 0) ? 0.0 : ((s >= RefLength) ? gcCount_(RefLength-1) : gcCount_(s));
     }
 
     // Return the fractional GC content along this transcript
@@ -494,81 +518,64 @@ private:
     // NOTE: Is it worth it to check if we have GC here?
     // we should never access these without bias correction.
     inline double gcCount_(int32_t p) {
-        return (gcStep_ == 1) ? static_cast<double>(GCCount_[p]) : gcCountInterp_(p);
+      return (gcStep_ == 1) ? static_cast<double>(GCCount_[p]) : gcCountInterp_(p);
     }
     inline double gcCount_(int32_t p) const {
-        return (gcStep_ == 1) ? static_cast<double>(GCCount_[p]) : gcCountInterp_(p);
+      return (gcStep_ == 1) ? static_cast<double>(GCCount_[p]) : gcCountInterp_(p);
     }
 
     inline int32_t closestBin_(int32_t p) const {
       return static_cast<int32_t>(std::round( static_cast<double>(p) / gcStep_ ));
     }
 
+  inline double gcCountInterp_(int32_t p) const {
+    if (p >= RefLength) { p = RefLength - 1; }
+    return static_cast<double>(gcRank_->rank(p + 1));
+  }
+
+  /** Previous GC count interp implementation (May 23, 2017) **/
+  /*
     inline double gcCountInterp_(int32_t p) const {
-        //std::cerr << "in gcCountInterp\n";
-        if (p == RefLength - 1) {
-            // If p is the last position, just return the last value
-            return static_cast<double>(GCCount_.back());
+      //std::cerr << "in gcCountInterp\n";
+      if (p == RefLength - 1) {
+        // If p is the last position, just return the last value
+        return static_cast<double>(GCCount_.back());
+      }
+
+      // The index of the closest bin
+      auto cb = closestBin_(p);
+      // The actual position to which this bin corresponds
+      int32_t binPos = cb * gcStep_;
+      // Can't go past the end
+      if (binPos > RefLength - 1) {
+        binPos = RefLength - 1;
+        cb = GCCount_.size() - 1;
+      }
+
+      // The count of {G,C} at the checkpoint
+      auto binCount = GCCount_[cb];
+      // The count before or after the bin, until p
+      int32_t count{0};
+      const char* seq = Sequence_.get();
+
+      // we hit a sampled position
+      if (binPos == p) {
+      } else if (binPos > p) {
+        for (size_t i = binPos; i > p; --i) {
+          auto c = seq[i];
+          // If the character is a G or C, we subtract 1
+          count -= (c == 'G' or c == 'C') ? 1 : 0;
         }
-
-	// The index of the closest bin
-	auto cb = closestBin_(p);
-	// The actual position to which this bin corresponds
-	int32_t binPos = cb * gcStep_;
-	// Can't go past the end
-	if (binPos > RefLength - 1) {
-	  binPos = RefLength - 1;
-	  cb = GCCount_.size() - 1;
-	}
-
-	// The count of {G,C} at the checkpoint
-	auto binCount = GCCount_[cb];
-	// The count before or after the bin, until p
-	int32_t count{0};
-        const char* seq = Sequence_.get();
-
-	// we hit a sampled position
-	if (binPos == p) {
-	} else if (binPos > p) {
-	  for (size_t i = binPos; i > p; --i) {
-	    auto c = seq[i];
-	    // If the character is a G or C, we subtract 1
-	    count -= (c == 'G' or c == 'C') ? 1 : 0;
-	  }
-	} else {
-	  for (size_t i = binPos + 1; i <= p; ++i) {
-	    auto c = seq[i];
-	    // If the character is a G or C, we add 1
-	    count += (c == 'G' or c == 'C') ? 1 : 0;
-	  }
-	}
-	return  binCount + count;
-	/*
-        // The fractional sampling factor position p would have
-        double fracP = static_cast<double>(p) / gcStep_;
-
-        // The largest sampled index for some position <= p
-        uint32_t sampInd = std::floor(fracP);
-
-        // The fraction sampling factor for the largest sampled
-        // position <= p
-        double fracSample = static_cast<double>(sampInd);
-
-        int32_t nextSample{0};
-        double fracNextSample{0.0};
-
-        // special case: The last bin may not be evenly spaced.
-        if (sampInd >= lastRegularSample_) {
-            nextSample = GCCount_.size() - 1;
-            fracNextSample = gcFracLen_;
-        } else {
-            nextSample = sampInd + 1;
-            fracNextSample = static_cast<double>(nextSample);
+      } else {
+        for (size_t i = binPos + 1; i <= p; ++i) {
+          auto c = seq[i];
+          // If the character is a G or C, we add 1
+          count += (c == 'G' or c == 'C') ? 1 : 0;
         }
-        double lambda = (fracP - fracSample) / (fracNextSample - fracSample);
-        return lambda * GCCount_[sampInd] + (1.0 - lambda) * GCCount_[nextSample];
-	*/
+      }
+      return  binCount + count;
     }
+  */
 
     void computeGCContentSampled_(uint32_t step) {
         gcStep_ = step;
@@ -611,7 +618,17 @@ private:
                 GCCount_[i] = totGC;
             }
         } else {
-            computeGCContentSampled_(gcSampFactor);
+          BIT_ARRAY* rawArray = bit_array_create(RefLength);
+          for (size_t i = 0; i < RefLength; ++i) {
+            auto c = std::toupper(seq[i]);
+            if (c == 'G' or c == 'C') {
+              bit_array_set_bit(rawArray, i);
+            }
+          }
+          gcBitArray_.reset(rawArray);
+          gcRank_.reset(new rank9b(gcBitArray_->words, RefLength));
+          gcStep_ = gcSampFactor;
+          //computeGCContentSampled_(gcSampFactor);
         }
     }
 
@@ -643,6 +660,8 @@ private:
     double gcFracLen_{0.0};
     uint32_t lastRegularSample_{0};
     std::vector<uint32_t> GCCount_;
+    BitArrayPointer gcBitArray_{nullptr};
+    Rank9bPointer gcRank_{nullptr};
 };
 
 #endif //TRANSCRIPT
