@@ -140,7 +140,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     bool useMassBanking = (!initialRound and salmonOpts.useMassBanking);
     double incompatPrior = salmonOpts.incompatPrior;
     bool useReadCompat = incompatPrior != salmon::math::LOG_1;
-
+    
     // Create a random uniform distribution
     std::default_random_engine eng(rd());
     std::uniform_real_distribution<> uni(0.0, 1.0 + std::numeric_limits<double>::min());
@@ -171,9 +171,8 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     Mer leftMer;
     Mer rightMer;
     Mer context;
-
+    
     auto& refs = alnLib.transcripts();
-    std::unordered_map<uint32_t, uint32_t>& alleleMap = alnLib.alleleToSuperTxpMap();
     auto& clusterForest = alnLib.clusterForest();
     auto& fragmentQueue = alnLib.fragmentQueue();
     auto& alignmentGroupQueue = alnLib.alignmentGroupQueue();
@@ -197,7 +196,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
     bool useRankEqClasses{salmonOpts.rankEqClasses};
     size_t rangeClusterEqClasses = salmonOpts.useRangeClusterEqClasses;
-    bool useFMEM{salmonOpts.useFMEMOpt};
+    bool useFMEM{salmonOpts.useFMEMOpt}; 
     std::chrono::microseconds sleepTime(1);
     MiniBatchInfo<AlignmentGroup<FragT*>>* miniBatch = nullptr;
     bool updateCounts = initialRound;
@@ -223,7 +222,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
             std::unique_lock<std::mutex> l(cvmutex);
             workAvailable.wait(l, [&miniBatch, &workQueue, &doneParsing]() { return workQueue.try_pop(miniBatch) or doneParsing; });
         }
-
+                 
 
         uint64_t batchReads{0};
 
@@ -279,8 +278,8 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                         auto flen = aln->fragLen();
                         // If we have a properly-paired read then use the "pedantic"
                         // definition here.
-                        if (aln->isPaired() and aln->isInward()) {
-                          flen = aln->fragLengthPedantic(refLength);
+                        if (aln->isPaired() and aln->isInward()) { 
+                          flen = aln->fragLengthPedantic(refLength); 
                         }
 
                         // The probability of drawing a fragment of this length;
@@ -293,10 +292,10 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
                         if (flen > 0.0 and aln->isPaired() and useFragLengthDist and considerCondProb) {
                           size_t fl = flen;
-                          double lenProb = fragLengthDist.pmf(fl);
+                          double lenProb = fragLengthDist.pmf(fl); 
                           if (burnedIn) {
                             /* condition fragment length prob on txp length */
-                            double refLengthCM = fragLengthDist.cmf(static_cast<size_t>(refLength));
+                            double refLengthCM = fragLengthDist.cmf(static_cast<size_t>(refLength)); 
                             bool computeMass = fl < refLength and !salmon::math::isLog0(refLengthCM);
                             logFragProb = (computeMass) ?
                                                     (lenProb - refLengthCM) :
@@ -355,7 +354,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
                         // The probability that the fragments align to the given strands in the
                         // given orientations.
-                        bool isCompat =
+                        bool isCompat = 
                             salmon::utils::isCompatible(
                                   aln->libFormat(),
                                   expectedLibraryFormat,
@@ -425,7 +424,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 			//If FM or factorizations are used, startPosProb is added here and combinedWeights cannot be used
 	  		if(useFMEM /*useRankEqClasses or useFMEM or rangeClusterEqClasses>0*/) {
 				auxProb += startPosProb;
-	  		}
+	  		} 	
                         // The overall mass of this transcript, which is used to
                         // account for this transcript's relaive abundance
                         double transcriptLogCount = transcript.mass(initialRound);
@@ -481,7 +480,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 			    std::vector<int> inds(eqSize);
 			    std::iota(inds.begin(), inds.end(), 0);
 			    // Get the indices in order by conditional probability
-			    std::sort(inds.begin(), inds.end(),
+			    std::sort(inds.begin(), inds.end(), 
 				      [&auxProbs](int i, int j) -> bool { return auxProbs[i] < auxProbs[j]; });
 			    // Reorder the other vectors
 			    if (useFSPD) {
@@ -518,11 +517,6 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 					txpIDs.push_back(rangeNumber);
 			    }
 			}
-            uint32_t txpId;
-			for(size_t i=0; i<txpIDs.size(); i++){
-                txpId = txpIDs[i];
-				txpIDs[i] = alleleMap[txpId];
-			}
 			TranscriptGroup tg(txpIDs);
                         eqBuilder.addGroup(std::move(tg), auxProbs, salmonOpts);
                     }
@@ -557,15 +551,15 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                             }
                             return end;
                         };
-
+       
                         bool success = false;
                         if(needBiasSample and salmonOpts.numBiasSamples > 0) {
 			  const char* txpStart = transcript.Sequence();
 			  const char* txpEnd = txpStart + transcript.RefLength;
 			    if (aln->isPaired()){
 				ReadPair* alnp = reinterpret_cast<ReadPair*>(aln);
-                                bam_seq_t* r1 = alnp->read1;
-                                bam_seq_t* r2 = alnp->read2;
+                                bam_seq_t* r1 = alnp->read1; 
+                                bam_seq_t* r2 = alnp->read2; 
                                 if (r1 != nullptr and r2 != nullptr) {
                                     int32_t pos1 = bam_pos(r1);
                                     bool fwd1{bam_strand(r1) == 0};
@@ -577,31 +571,31 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
 				    // Shouldn't be from the same strand and they should be in the right order
 				    if ((fwd1 != fwd2) and // Shouldn't be from the same strand
-					(startPos1 > 0 and startPos1 < transcript.RefLength) and
-					(startPos2 > 0 and startPos2 < transcript.RefLength)) {
+					(startPos1 > 0 and startPos1 < transcript.RefLength) and 
+					(startPos2 > 0 and startPos2 < transcript.RefLength)) { 
 
 				      const char* readStart1 = txpStart + startPos1;
 				      auto& readBias1 = (fwd1) ? readBiasFW : readBiasRC;
 
 				      const char* readStart2 = txpStart + startPos2;
 				      auto& readBias2 = (fwd2) ? readBiasFW : readBiasRC;
-
+		
 				      int32_t fwPre = readBias1.contextBefore(!fwd1);
 				      int32_t fwPost = readBias1.contextAfter(!fwd1);
 
 				      int32_t rcPre = readBias2.contextBefore(!fwd2);
-				      int32_t rcPost = readBias2.contextAfter(!fwd2);
+				      int32_t rcPost = readBias2.contextAfter(!fwd2); 
 
 				      bool read1RC = !fwd1;
 				      bool read2RC = !fwd2;
 
-				      if ( (startPos1 >= readBias1.contextBefore(read1RC) and
-					    startPos1 + readBias1.contextAfter(read1RC ) < transcript.RefLength)
+				      if ( (startPos1 >= readBias1.contextBefore(read1RC) and 
+					    startPos1 + readBias1.contextAfter(read1RC ) < transcript.RefLength) 
 					   and
 					   (startPos2 >= readBias2.contextBefore(read2RC) and
 					    startPos2 + readBias2.contextAfter(read2RC) < transcript.RefLength) ) {
-
-					int32_t fwPos = (fwd1) ? startPos1 : startPos2;
+		    
+					int32_t fwPos = (fwd1) ? startPos1 : startPos2; 
 					int32_t rcPos = (fwd1) ? startPos2 : startPos1;
 					if (fwPos < rcPos) {
 					  leftMer.from_chars(txpStart + startPos1 - readBias1.contextBefore(read1RC));
@@ -616,8 +610,8 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                                 }
                             } else {  // unpaired read
                                 UnpairedRead* alnp = reinterpret_cast<UnpairedRead*>(aln);
-                                bam_seq_t* r1 = alnp->read;
-                                if (r1 != nullptr) {
+                                bam_seq_t* r1 = alnp->read; 
+                                if (r1 != nullptr) { 
                                     int32_t pos1 = bam_pos(r1);
                                     bool fwd1{bam_strand(r1) == 0};
                                     int32_t startPos1 = fwd1 ? pos1 : pos1 + getCIGARLength(r1) - 1;
@@ -630,10 +624,10 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                                         const char* readStart1 = txpStart + startPos1;
                                         auto& readBias1 = (fwd1) ? readBiasFW : readBiasRC;
 
-                                        if (startPos1 >= readBias1.contextBefore(!fwd1) and
+                                        if (startPos1 >= readBias1.contextBefore(!fwd1) and 
                                             startPos1 + readBias1.contextAfter(!fwd1) < transcript.RefLength) {
                                             context.from_chars(txpStart + startPos1 - readBias1.contextBefore(!fwd1));
-                                            if (!fwd1) { context.reverse_complement(); }
+                                            if (!fwd1) { context.reverse_complement(); } 
                                             success = readBias1.addSequence(context, 1.0);
                                         }
                                     }
@@ -672,13 +666,13 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 			if (gcBiasCorrect) {
                 if (aln->isPaired()) {
                     ReadPair* alnp = reinterpret_cast<ReadPair*>(aln);
-                    bam_seq_t* r1 = alnp->read1;
-                    bam_seq_t* r2 = alnp->read2;
+                    bam_seq_t* r1 = alnp->read1; 
+                    bam_seq_t* r2 = alnp->read2; 
                     if (r1 != nullptr and r2 != nullptr) {
                         bool fwd1{bam_strand(r1) == 0};
                         bool fwd2{bam_strand(r2) == 0};
-                        int32_t start = alnp->left();
-                        int32_t stop = alnp->right();
+                        int32_t start = alnp->left(); 
+                        int32_t stop = alnp->right(); 
 
                         if (start >= 0 and stop < transcript.RefLength) {
                           bool valid{false};
@@ -693,7 +687,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                     if (r != nullptr) {
                         bool fwd{alnp->fwd()};
                         // For single-end reads, simply assume that every fragment
-                        // has a length equal to the conditional mean (given the
+                        // has a length equal to the conditional mean (given the 
                         // current transcript's length).
                         auto cmeans = alnLib.condMeans();
                         auto cmean = static_cast<int32_t>((transcript.RefLength >= cmeans.size()) ? cmeans.back() : cmeans[transcript.RefLength]);
@@ -709,7 +703,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                 }
 			}
 			// END: GC-fragment bias
-
+			
 			double r = uni(eng);
 			if (!burnedIn and r < std::exp(aln->logProb)) {
 			    /**
@@ -742,7 +736,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                                 }
                             }
                             */
-
+			  
 
                             // Update the error model
                             if (salmonOpts.useErrorModel) {
@@ -864,7 +858,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     } // nothing left to process
 
     if (maxZeroFrac > 0.0) {
-        log->info("Thread saw mini-batch with a maximum of {0:.2f}\% zero probability fragments",
+        log->info("Thread saw mini-batch with a maximum of {0:.2f}\% zero probability fragments", 
                   maxZeroFrac);
     }
 
@@ -1071,7 +1065,7 @@ bool quantifyLibrary(
 
 	/**
 	 *
-	 * Aggregate thread-local bias parameters
+	 * Aggregate thread-local bias parameters 
 	 *
 	 **/
             // Set the global distribution based on the sum of local
@@ -1083,10 +1077,10 @@ bool quantifyLibrary(
             for (auto& gcp : observedBiasParams) {
                 auto& gcm = gcp.observedGCMass;
                 globalGCMass.combineCounts(gcm);
-
+                
                 auto& fw = alnLib.readBiasModelObserved(salmon::utils::Direction::FORWARD);
                 auto& rc = alnLib.readBiasModelObserved(salmon::utils::Direction::REVERSE_COMPLEMENT);
-
+                
                 auto& fwloc = gcp.seqBiasModelFW;
                 auto& rcloc = gcp.seqBiasModelRC;
 		fw.combineCounts(fwloc);
@@ -1110,7 +1104,7 @@ bool quantifyLibrary(
 
 
 
-
+	
         fmt::print(stderr, "# observed = {} / # required = {}\033[A\033[A\033[A\033[A\033[A",
                    numObservedFragments, numRequiredFragments);
 
@@ -1338,8 +1332,8 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                                         "should be parsed.  Files ending in \'.gtf\', \'.gff\' or \'.gff3\' are assumed to be in GTF "
      "format; files with any other extension are assumed to be in the simple format. In GTF / GFF format, the \"transcript_id\" is assumed to contain the "
      "transcript identifier and the \"gene_id\" is assumed to contain the corresponding "
-     "gene identifier.")
-    ("alleleFile", po::value<std::string>()->required(), "Allele File PATH.");
+     "gene identifier.");
+
     // no sequence bias for now
     sopt.useMassBanking = false;
     sopt.noSeqBiasModel = true;
@@ -1451,7 +1445,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
       "This is mutually exclusive with Gibbs sampling.")
     ("thinningFactor", po::value<uint32_t>(&(sopt.thinningFactor))->default_value(16), "Number of steps to discard for every sample "
        "kept from the Gibbs chain. The larger this number, the less chance that subsequent samples are auto-correlated, "
-       "but the slower sampling becomes.");
+       "but the slower sampling becomes."); 
 
     po::options_description testing("\n"
             "testing options");
@@ -1484,7 +1478,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
        "[Deprecated]: The minimum number of observations (mapped reads) that must be observed before "
        "the inference procedure will terminate.  If fewer mapped reads exist in the "
        "input file, then it will be read through multiple times.");
-
+    
     po::options_description deprecated("\ndeprecated options about which to inform the user");
     deprecated.add_options()
     ("useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(false), "[experimental] : "
@@ -1552,7 +1546,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 
         // Set the atomic variable numBiasSamples from the local version
         sopt.numBiasSamples.store(numBiasSamples);
-
+	
         // Get the time at the start of the run
         std::time_t result = std::time(NULL);
         std::string runStartTime(std::asctime(std::localtime(&result)));
@@ -1584,7 +1578,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                 alignmentFiles.push_back(alignmentFile);
             }
         }
-
+	
 	// Just so we have the variable around
 	LibraryFormat libFmt(ReadType::PAIRED_END, ReadOrientation::TOWARD, ReadStrandedness::U);
 	// Get the library format string
@@ -1595,7 +1589,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 	if (autoDetectFmt) {
 
 	  bool isPairedEnd = salmon::utils::peekBAMIsPaired(alignmentFiles.front());
-
+	  
 	  if (isPairedEnd) {
 	    libFmt = LibraryFormat(ReadType::PAIRED_END, ReadOrientation::TOWARD, ReadStrandedness::U);
 	  } else {
@@ -1635,8 +1629,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
         }
         // set the output directory
         sopt.outputDirectory = outputDirectory;
-        bfs::path alleleFilePath(vm["alleleFile"].as<std::string>());
-        sopt.alleleFilePath = alleleFilePath;
+
 
         bfs::path logDirectory = outputDirectory / "logs";
 
@@ -1673,7 +1666,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
 	  sopt.numConditionalGCBins = 1;
 	}
 
-
+	
 	// Verify that no inconsistent options were provided
   bool optionsValidate =
     salmon::utils::validateOptions(sopt);
@@ -1773,7 +1766,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                            "in single-end libraries.  Please use this option "
                            "with caution.");
 		    //sopt.gcBiasCorrect = false;
-		  }
+		  } 
 
 		    AlignmentLibrary<UnpairedRead> alnLib(alignmentFiles,
 							  transcriptFile,
