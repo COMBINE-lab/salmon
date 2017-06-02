@@ -1674,7 +1674,7 @@ void processReadLibrary(
               }
             auto threadFun = [&, i]() -> void {
               processReadsQuasi<RapMapSAIndex<int64_t, PerfectHash<int64_t>>>(
-                  pairedParserPtr.get(), readExp, rl, structureVec[i],
+                  singleParserPtr.get(), readExp, rl, structureVec[i],
                   numObservedFragments, numAssignedFragments, numValidHits,
                   upperBoundHits, sidx->quasiIndexPerfectHash64(), transcripts,
                   fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
