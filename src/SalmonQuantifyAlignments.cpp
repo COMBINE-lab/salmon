@@ -1170,6 +1170,12 @@ bool processSample(AlignmentLibrary<ReadT>& alnLib,
     // Write the main results
     gzw.writeAbundances(sopt, alnLib);
 
+    // If we are dumping the equivalence classes, then
+    // do it here.
+    if (sopt.dumpEq) {
+      gzw.writeEquivCounts(sopt, alnLib);
+    }
+
     if (sopt.numGibbsSamples > 0) {
 
         jointLog->info("Starting Gibbs Sampler");
@@ -1308,7 +1314,15 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
     ("noBiasLengthThreshold", po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(false), "[experimental] : "
           "If this option is enabled, then no (lower) threshold will be set on "
           "how short bias correction can make effective lengths. This can increase the precision "
-          "of bias correction, but harm robustness.  The default correction applies a thresholdi.")
+          "of bias correction, but harm robustness.  The default correction applies a threshold.")
+      (
+       "dumpEq", po::bool_switch(&(sopt.dumpEq))->default_value(false),
+       "Dump the equivalence class counts "
+       "that were computed during quasi-mapping")
+      ("dumpEqWeights,d",
+       po::bool_switch(&(sopt.dumpEqWeights))->default_value(false),
+       "Includes \"rich\" equivlance class weights in the output when equivalence "
+       "class information is being dumped to file.")
     ("fldMax" , po::value<size_t>(&(sopt.fragLenDistMax))->default_value(1000), "The maximum fragment length to consider when building the empirical distribution")
     ("fldMean", po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(250), "The mean used in the fragment length distribution prior")
     ("fldSD" , po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(25), "The standard deviation used in the fragment length distribution prior")
