@@ -31,6 +31,9 @@ int32_t alignRead(std::string& read,
 
 
 }*/
+
+
+
 template <typename RapMapIndexT>
 bool mergeLeftRightMap(fastx_parser::ReadPair& rpair, SAHitMap& leftMap,
                        SAHitMap& rightMap,
@@ -297,6 +300,77 @@ bool mergeLeftRightMap(fastx_parser::ReadPair& rpair, SAHitMap& leftMap,
   return foundHit;
 }
 
+
+//template <typename RapMapIndexT>
+bool mergeMap(fastx_parser::ReadSeq& rp, SAHitMap& leftMap,
+                       std::vector<QuasiAlignment>& jointHits) {
+
+	for (auto& ph : leftMap) {
+		auto tid = ph.first;
+		//sort transcripts with respect to
+		//positions
+		std::sort(ph.second.tqvec.begin(),
+			ph.second.tqvec.end(),
+			[](const SATxpQueryPos& a, const SATxpQueryPos& b)-> bool {
+				return a.pos < b.pos;
+			} );
+
+		std::map<int32_t , int> hitCov ;
+		std::map<int32_t , int> hitEndPos ;
+		auto it = ph.second.tqvec.begin();
+		while(it != ph.second.tqvec.end()){
+		    int numOfCov = 0;
+		    int32_t hitKey = it->pos - it->queryPos ;
+		    if(hitCov.count(hitKey) == 0){
+			hitCov[hitKey] = it->matchedLen;
+			hitEndPos[hitKey] = it->pos + it->matchedLen;
+		    }
+		    else{
+			if(hitEndPos[hitKey] > it->pos){
+			    hitCov[hitKey] += ( it->pos + it->matchedLen - hitEndPos[hitKey] );
+
+			}else{
+			    hitCov[hitKey] += it->matchedLen;
+			    hitEndPos[hitKey] = it->pos + it->matchedLen ;
+			}
+		    }
+		    ++it ;
+		}
+		//std::cout << "\n outside while \n";
+
+		auto minPosIt = std::min_element(ph.second.tqvec.begin(),
+				ph.second.tqvec.end(),
+				[](const SATxpQueryPos& a, const SATxpQueryPos& b) -> bool {
+				    return a.pos < b.pos;
+				});
+
+		using pair_type = decltype(hitCov)::value_type;
+		auto maxCov = std::max_element(hitCov.begin(),hitCov.end(),
+			[](const pair_type& p1, const pair_type& p2) -> bool {
+				return p1.second < p2.second ;
+			});
+
+		bool hitRC = ph.second.tqvec[0].queryRC;
+		int32_t hitPos = maxCov->first;
+		bool isFwd = !hitRC;
+		jointHits.emplace_back(tid, hitPos, isFwd, rp.seq.length(), 0,0,true);
+	
+                auto& qaln = jointHits.back();
+                // qaln.fwd = !leftHitCov[vp.first].rc;
+                qaln.mateStatus = rapmap::utils::MateStatus::SINGLE_END;
+                if (maxCov->second== rp.seq.length()) {
+                  qaln.toAlign = true;
+                  qaln.editD = 0;
+                }
+	}
+	if(jointHits.size()>0)
+		return true;
+	else
+		return false;
+}
+
+
+
 template <typename RapMapIndexT>
 bool mergeLeftRightSAInts(
     fastx_parser::ReadPair& rpair, bool lhp, bool rhp,
@@ -452,6 +526,96 @@ bool mergeLeftRightSAInts(
   return foundHit;
 }
 
+
+template <typename RapMapIndexT>
+bool mergeSAInts(
+    fastx_parser::ReadSeq& rp, bool lhp,
+    std::vector<SAIntervalHit<typename RapMapIndexT::IndexType>>& leftFwdSAInts,
+    std::vector<SAIntervalHit<typename RapMapIndexT::IndexType>>& leftRcSAInts,
+    std::vector<QuasiAlignment>& jointHits, RapMapIndexT& rmi, bool maxNumHits,
+    bool consistentHits, rapmap::utils::HitCounters& hctr) {
+
+  //if(leftFwdSAInts.size()==0 and leftRcSAInts.size()==0)
+  //	std::cout<<"err\n";
+
+  using OffsetT = typename RapMapIndexT::IndexType;
+  AlignerEngine ae_;
+
+  auto& SA = rmi.SA;
+  auto& txpStarts = rmi.txpOffsets;
+  auto& txpIDs = rmi.positionIDs;
+
+  //uint32_t maxInsertSize_{1000};
+
+  bool foundHit{false};
+
+  SAHitMap leftFwdMap;
+  SAHitMap leftRcMap;
+
+  if (leftFwdSAInts.size() > 0 or leftRcSAInts.size() > 0) {
+    if (leftFwdSAInts.size() > 1) {
+      leftFwdMap = rapmap::hit_manager::unionSAHits(
+          leftFwdSAInts, rmi, rp.seq.length(), consistentHits);
+    } else if (leftFwdSAInts.size() > 0) {
+      auto inHit = leftFwdSAInts.front();
+      for (auto i = inHit.begin; i < inHit.end; ++i) {
+        auto globalPos = SA[i];
+        auto tid = rmi.transcriptAtPosition(globalPos);
+        auto txpPos = globalPos - txpStarts[tid];
+        leftFwdMap[tid].tqvec.emplace_back(txpPos, inHit.queryPos,
+                                           inHit.lcpLength, inHit.queryRC);
+        leftFwdMap[tid].active = true;
+        leftFwdMap[tid].tqvec.back().matchedLen = inHit.len;
+      }
+    }
+
+    if (leftRcSAInts.size() > 1) {
+      leftRcMap = rapmap::hit_manager::unionSAHits(
+          leftRcSAInts, rmi, rp.seq.length(), consistentHits);
+    } else if (leftRcSAInts.size() > 0) {
+      auto inHit = leftRcSAInts.front();
+      for (auto i = inHit.begin; i < inHit.end; ++i) {
+        auto globalPos = SA[i];
+        auto tid = rmi.transcriptAtPosition(globalPos);
+        auto txpPos = globalPos - txpStarts[tid];
+        leftRcMap[tid].tqvec.emplace_back(txpPos, inHit.queryPos,
+                                          inHit.lcpLength, inHit.queryRC);
+        leftRcMap[tid].active = true;
+        leftRcMap[tid].tqvec.back().matchedLen = inHit.len;
+      }
+    }
+  }
+
+  bool fwdRc{false};
+  bool rcFwd{false};
+
+  if (leftFwdMap.size() > 0) {
+    // only consider transcripts that are common between both
+    fwdRc = mergeMap(rp, leftFwdMap, jointHits);
+    foundHit = true;
+  }
+
+  size_t fwdRcOffset = jointHits.size();
+
+  if (leftRcMap.size() > 0) {
+    rcFwd = mergeMap(rp, leftRcMap, jointHits);
+    foundHit = true;
+  }
+
+  // merge two sets if jointHits in different orientations instead of sort
+  // use std::merge for this
+  std::inplace_merge(jointHits.begin(), jointHits.begin() + fwdRcOffset,
+                     jointHits.end(),
+                     [](const QuasiAlignment& l, const QuasiAlignment& r)->bool {
+                       return l.tid < r.tid;
+                     });
+
+  return foundHit;
+
+}
+
+
+
 using SAIndex32BitDense =
     RapMapSAIndex<int32_t, RegHashT<uint64_t, rapmap::utils::kmerVal<int32_t>,
                                     rapmap::utils::KmerKeyHasher>>;
@@ -504,6 +668,42 @@ template bool mergeLeftRightSAInts<SAIndex64BitPerfect>(
     std::vector<QuasiAlignment>& jointHits, SAIndex64BitPerfect& rmi,
     bool maxNumHits, bool consistentHits, rapmap::utils::HitCounters& hctr,
     uint32_t editDistance, uint32_t maxInsertSize_);
+
+
+
+template bool mergeSAInts<SAIndex32BitDense>(
+    fastx_parser::ReadSeq& rp, bool lhp,
+    std::vector<SAIntervalHit<int32_t>>& leftFwdSAInts,
+    std::vector<SAIntervalHit<int32_t>>& leftRcSAInts,
+    std::vector<QuasiAlignment>& jointHits, SAIndex32BitDense& rmi,
+    bool maxNumHits, bool consistentHits, rapmap::utils::HitCounters& hctr);
+
+template bool mergeSAInts<SAIndex64BitDense>(
+    fastx_parser::ReadSeq& rp, bool lhp,
+    std::vector<SAIntervalHit<int64_t>>& leftFwdSAInts,
+    std::vector<SAIntervalHit<int64_t>>& leftRcSAInts,
+    std::vector<QuasiAlignment>& jointHits, SAIndex64BitDense& rmi,
+    bool maxNumHits, bool consistentHits, rapmap::utils::HitCounters& hctr);
+
+template bool mergeSAInts<SAIndex32BitPerfect>(
+    fastx_parser::ReadSeq& rp, bool lhp,
+    std::vector<SAIntervalHit<int32_t>>& leftFwdSAInts,
+    std::vector<SAIntervalHit<int32_t>>& leftRcSAInts,
+    std::vector<QuasiAlignment>& jointHits, SAIndex32BitPerfect& rmi,
+    bool maxNumHits, bool consistentHits, rapmap::utils::HitCounters& hctr);
+
+template bool mergeSAInts<SAIndex64BitPerfect>(
+    fastx_parser::ReadSeq& rp, bool lhp,
+    std::vector<SAIntervalHit<int64_t>>& leftFwdSAInts,
+    std::vector<SAIntervalHit<int64_t>>& leftRcSAInts,
+    std::vector<QuasiAlignment>& jointHits, SAIndex64BitPerfect& rmi,
+    bool maxNumHits, bool consistentHits, rapmap::utils::HitCounters& hctr);
+
+
+
+
+
+
 
 template bool mergeLeftRightMap<SAIndex32BitDense>(
     fastx_parser::ReadPair& rpair, SAHitMap& leftMap, SAHitMap& rightMap,

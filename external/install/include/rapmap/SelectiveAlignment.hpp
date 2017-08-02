@@ -171,10 +171,10 @@ public:
                   /* ROB : slight interface change */
                   //EdlibAlignResult startEdlibResult;
                   if(startHit.fwd){
-                    ae_(read.c_str(), read.length(), thisTxpSeq, thisTargetLen, edlibNewAlignConfig(editThreshold*3, EDLIB_MODE_NW, EDLIB_TASK_DISTANCE));
+                    ae_(read.c_str(), read.length(), thisTxpSeq, thisTargetLen, edlibNewAlignConfig((editThreshold+1)*3, EDLIB_MODE_NW, EDLIB_TASK_DISTANCE));
                   }else{
                     auto revRead = rapmap::utils::reverseComplement(read);
-                    ae_(revRead.c_str(), read.length(), thisTxpSeq, thisTargetLen, edlibNewAlignConfig(editThreshold*3, EDLIB_MODE_NW, EDLIB_TASK_DISTANCE));
+                    ae_(revRead.c_str(), read.length(), thisTxpSeq, thisTargetLen, edlibNewAlignConfig((editThreshold+1)*3, EDLIB_MODE_NW, EDLIB_TASK_DISTANCE));
                   }
                   auto& startEdlibResult = ae_.result();
 
@@ -190,7 +190,7 @@ public:
                       std::cout << "\nIn selective Alignment start  edit distance: "<< startEditDistance << " length: "<< thisTxpLen << " pos " << pos << " fwd "<<  startHit.fwd << "\n";
                   }*/
 
-                  if(startEditDistance < editThreshold ){
+                  if(startEditDistance <= editThreshold ){
                     startHit.toAlign = true;
                     /* ROB: No CIGAR right now */
                     /*
@@ -257,7 +257,7 @@ public:
                     continue;
                 }
                 if ( (!skipLCPOpt) && (search != tidset.end()) && (lcpLength >= readLen) && (tidPos[txpID] == globalPos)){
-                    if(startEditDistance < editThreshold){
+                    if(startEditDistance <= editThreshold){
                                 hitsIt->editD = startEditDistance;
                                 hitsIt->toAlign = true;
                                 //std::cout << " LCP Length " << lcpLength << "\n";
@@ -281,10 +281,10 @@ public:
                       /* ROB : slight interface change */
                       //EdlibAlignResult thisEdlibResult;
                       if(hitsIt->fwd){
-                        ae_(read.c_str(), read.length(), thisTxpSeq, thisTargetLen, edlibNewAlignConfig( editThreshold*3, EDLIB_MODE_NW, EDLIB_TASK_DISTANCE));
+                        ae_(read.c_str(), read.length(), thisTxpSeq, thisTargetLen, edlibNewAlignConfig(1+editThreshold*3, EDLIB_MODE_NW, EDLIB_TASK_DISTANCE));
                       }else{
                         auto revRead = rapmap::utils::reverseComplement(read);
-                        ae_(revRead.c_str(), read.length(), thisTxpSeq, thisTargetLen, edlibNewAlignConfig(editThreshold*3, EDLIB_MODE_NW, EDLIB_TASK_DISTANCE));
+                        ae_(revRead.c_str(), read.length(), thisTxpSeq, thisTargetLen, edlibNewAlignConfig(1+editThreshold*3, EDLIB_MODE_NW, EDLIB_TASK_DISTANCE));
                       }
                       auto& thisEdlibResult = ae_.result();
                       auto thisEditDistance = thisEdlibResult.editDistance ;
@@ -293,7 +293,7 @@ public:
                       if(hitsIt->toAlign and thisEditDistance!=0){
                           std::cout<<"WTF\n";
                       }
-                      if(thisEditDistance < editThreshold){
+                      if(thisEditDistance <= editThreshold){
                               //selectedHits.emplace_back(txpID,pos,startHit.fwd,hitsIt->readLen, thisEditDistance,"II");
                               hitsIt->editD = thisEditDistance;
                               hitsIt->toAlign = true;
@@ -339,15 +339,24 @@ public:
            bool edit = false; bool edit_r = true;
            for(int i=0; i<leftHits.size(); i++) {
                if(leftHits[i].editD==-1)
-                    leftHits[i].editD = editThreshold*3;
+                    leftHits[i].editD = (editThreshold+1)*3;
                 if(rightHits[i].editD==-1)
-                    rightHits[i].editD = editThreshold*3;
+                    rightHits[i].editD = (editThreshold+1)*3;
 
                 hits[i].editD = leftHits[i].editD + rightHits[i].editD;
                 hits[i].toAlign =  hits[i].editD <= 2*editThreshold;
 
            }
        }
+
+    template <typename ReadStructT>
+	void operator()(ReadStructT& leftReadT,
+			std::vector<rapmap::utils::QuasiAlignment>& hits,
+			int32_t editThreshold) { 
+			compute(leftReadT,hits,editThreshold);
+	}
+
+
 private:
   RapMapIndexT* rmi_ ;
   AlignerEngine ae_;
