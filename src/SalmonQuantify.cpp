@@ -1036,6 +1036,9 @@ void processReadsQuasi(
                     salmonOpts.mmpLength,
                     consistentHits);
 
+
+    //if(leftFwdSAInts.size()==0 and leftRcSAInts.size()==0) std::cout<<"err\n";
+
     //if(salmonOpts.filter and leftHits.size() > 0) {
         // hitSECollector(rp.first, leftHits, salmonOpts.editDistance);
     //}
@@ -1430,6 +1433,10 @@ void processReadsQuasi(
     mem_opt_t* memOptions, SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache) {
+
+  using OffsetT = typename RapMapIndexT::IndexType;
+  using SAIntervalHit = rapmap::utils::SAIntervalHit<OffsetT> ;
+
   uint64_t count_fwd = 0, count_bwd = 0;
   // Seed with a real random value, if available
   std::random_device rd;
@@ -1475,6 +1482,8 @@ void processReadsQuasi(
   //Remap caqll to SACollector
   SACollector<RapMapIndexT, rapmap::utils::my_mer9> hitCollector9(qidx);
 
+  SACollectorPair<RapMapIndexT, rapmap::utils::my_mer> hitCollectorPair(qidx);
+
   SECollector<RapMapIndexT> hitSECollector(qidx);
 
   //SACollector<RapMapIndexT> hitCollector(qidx);
@@ -1501,6 +1510,9 @@ void processReadsQuasi(
 
   std::vector<uint32_t> dummy ;
 
+  std::vector<SAIntervalHit> leftFwdSAInts;
+  std::vector<SAIntervalHit> leftRcSAInts;
+
   while (parser->refill(rg)) {
       rangeSize = rg.size();
     if (rangeSize > structureVec.size()) {
@@ -1521,20 +1533,74 @@ void processReadsQuasi(
       auto& jointHits = jointHitGroup.alignments();
       jointHitGroup.clearAlignments();
 
+      /*	
       bool lh =
           tooShort ? false
           : hitCollector(rp.seq,
                                   jointHits, saSearcher,
                                   MateStatus::SINGLE_END,dummy,false,salmonOpts.mmpLength, consistentHits);
+      */
+
+
+      //strategy 2
+
+      leftFwdSAInts.clear();
+      leftRcSAInts.clear();
+
+      bool lh = hitCollectorPair(rp.seq,
+                    leftFwdSAInts, leftRcSAInts, saSearcher,
+                    MateStatus::SINGLE_END,
+                    dummy,
+                    false,
+                    salmonOpts.mmpLength,
+                    consistentHits);
+
+      bool res = rapmap::hit_manager_sa::mergeSAInts(
+                    rp,
+                    lh,
+                    leftFwdSAInts, leftRcSAInts,
+                    jointHits,
+                    *qidx,
+                    false,
+                    consistentHits,
+                    hctr
+                    );
+
+
+
       /*if (jointHits.size() == 0 and salmonOpts.remap){
 	hitCollector9(rp.seq, jointHits, saSearcher, MateStatus::SINGLE_END, true, salmonOpts.mmpLength, consistentHits);
       }*/
+
             // @hirak
             // Here I collected all the QuasiALignments in
             // QuasiAlignment Object vector hits
             // which right now contains lcpLengths too
             // time to call the new function
-            //hitSECollector(rp, jointHits,salmonOpts.editDistance);
+            hitSECollector(rp, jointHits,salmonOpts.editDistance);
+
+                jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
+                      [&transcripts](QuasiAlignment& a) {
+                      //return (foundBowtie? (!a.toAlign && transcripts[a.tid].RefName!=trueTxpName):!a.toAlign);
+                      return !a.toAlign;
+                      }), jointHits.end());
+
+                if(salmonOpts.strictFilter and jointHits.size() > 0){
+
+                    auto minDist = 200;// salmonOpts.editDistance*2;
+                    std::for_each(jointHits.begin(), jointHits.end(),
+                        [&minDist](QuasiAlignment& a) {
+                        if (a.editD < minDist and a.editD != -1) { minDist = a.editD; }
+                    });
+
+
+
+                    jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
+                        [&minDist,&transcripts](QuasiAlignment& a) {
+                        return (a.editD > minDist);
+                    }), jointHits.end());
+                }
+
 
 
       // If the fragment was too short, record it
