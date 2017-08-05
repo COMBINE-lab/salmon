@@ -1,0 +1,105 @@
+import sys, os
+
+##########################################################
+#requires snakemake, python3, pyfasta to be installed
+#save this file and provide all the binaries and their path
+#in variables below.
+#to run flux pipeline:
+#snakemake run_flux_pipeline
+#to run rsem pipeline:
+#snakemake run_rsem_pipeline
+##########################################################
+
+pwd = os.getcwd()
+bin = "/home/hirak/bio-env/bin/"
+
+##########################################################
+#Paths for binaries
+#We assume these binaries are available and their path can
+#be specifies below:
+#1. rsem-prepare-reference
+#2. rsem-simulator
+#3. salmon (co-mapping branch)
+#4. kallisto
+#5. bowtie2
+#6. STAR
+##########################################################
+
+
+##########################RSEM BINARY################################
+rsem_prepare_reference_binary=os.path.join(bin,"rsem-prepare-reference")
+rsem_calculate_expression_binary=os.path.join(bin,"rsem-calculate-expression")
+rsem_simulate_reads_binary=os.path.join(bin,"rsem-simulate-reads")
+##########################BOWTIE2 BINARY#############################
+bowtie2_binary=os.path.join(bin,"bowtie2")
+##########################STAR BINARY################################
+star_binary=os.path.join(bin,"STAR")
+#####################################################################
+
+
+##########################################################
+rsem_transcriptome_full_path="/mnt/scratch6/selective_alignment_data/transcript_clean.fasta"
+rsem_gtf_file="/mnt/scratch6/selective_alignment_data/gencode.v26.annotation.gtf"
+rsem_transcriptome_60_percent_path = "/mnt/scratch6/selective_alignment_data/transcriptome_60.fa"
+rsem_mate_1 = "/mnt/scratch6/selective_alignment_data/real_data/ERR188140_1.fastq.gz"
+rsem_mate_2 = "/mnt/scratch6/selective_alignment_data/real_data/ERR188140_2.fastq.gz"
+rsem_folder= config["out"]
+rsem_exp = os.path.join(rsem_folder,"rsem_exp")
+simulation_folder = os.path.join(rsem_folder,"rsem_sim")
+ref_folder = os.path.join(rsem_folder,"ref_dir")
+model="model"
+reference="reference"
+threads=8
+#gid_tid_subset = "/mnt/scratch6/selective_alignment_data/gid_tid_subset.txt"
+gid_tid_subset = config["subset"]
+isoform_result = "model.isoform.result"
+##########################################################
+
+
+rule run_rsem:
+    input:
+        transcriptome={rsem_transcriptome_full_path}
+    output:
+        ref_folder
+        rsem_exp
+        simulation_folder
+    threads: 8
+    run:
+        shell("mkdir -p {}".format(ref_folder))
+        shell("mkdir -p {}".format(rsem_exp))
+        shell("mkdir -p {}".format(simulation_folder))
+        shell("{rsem_prepare_reference_binary} --bowtie2 --bowtie2-path {bin} --transcript-to-gene-map  {gid_tid_subset} {rsem_transcriptome_60_percent_path} {ref_folder}/{reference}")
+        shell("{rsem_calculate_expression_binary} -p {threads} --paired-end --bowtie2 --bowtie2-path {bin} --paired-end {rsem_mate_1} {rsem_mate_2} {ref_folder}/{reference} {rsem_exp}/{model}")
+        shell("{rsem_simulate_reads_binary} {ref_folder}/{reference} {rsem_exp}/model.stat/model.model {rsem_exp}/model.isoforms.results 0.0987 15000000 {simulation_folder}/sim")
+
+rule run_rsem_prepare_ref:
+    input:
+        transcriptome={rsem_transcriptome_full_path}
+    output:
+        ref_folder
+    threads: 8
+    run:
+        shell("mkdir -p {}".format(ref_folder))
+        shell("{rsem_prepare_reference_binary} --bowtie2 --bowtie2-path {bin} --transcript-to-gene-map  {gid_tid_subset} {rsem_transcriptome_60_percent_path} {ref_folder}/{reference}")
+        #shell("{rsem_calculate_expression_binary} -p {threads} --paired-end --bowtie2 --bowtie2-path {bin} {rsem_mate_1} {rsem_mate_2} {ref_folder}/{reference} {rsem_folder}/{model}")
+
+rule run_rsem_calculate_exp:
+    input:
+        transcriptome={rsem_transcriptome_full_path}
+    output:
+        rsem_exp
+    threads: 8
+    run:
+        shell("mkdir -p {}".format(rsem_exp))
+        #shell("{rsem_prepare_reference_binary} --bowtie2 --bowtie2-path {bin} --transcript-to-gene-map  {gid_tid_subset} {rsem_transcriptome_60_percent_path} {ref_folder}/{reference}")
+        shell("{rsem_calculate_expression_binary} -p {threads} --paired-end --bowtie2 --bowtie2-path {bin} --paired-end {rsem_mate_1} {rsem_mate_2} {ref_folder}/{reference} {rsem_exp}/{model}")
+    
+rule run_rsem_simulate:
+    input:
+        transcriptome={rsem_transcriptome_full_path}
+    output:
+        simulation_folder
+    threads: 8
+    run:
+        shell("mkdir -p {}".format(simulation_folder))
+        shell("{rsem_simulate_reads_binary} {ref_folder}/{reference} {rsem_exp}/model.stat/model.model {rsem_exp}/model.isoforms.results 0.0987 15000000 {simulation_folder}/sim")
