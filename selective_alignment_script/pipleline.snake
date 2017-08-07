@@ -39,8 +39,8 @@ star_binary=os.path.join(bin,"STAR")
 
 ################################BINARY###############################
 kallisto_binary = os.path.join(proj_dir,"kallisto/build/src/kallisto")
-hera_build_binary = os.path.join(proj_dir,"hera/build/src/hera_build")
-hera_quant_binary = os.path.join(proj_dir,"hera/build/src/hera")
+hera_build_binary = os.path.join(proj_dir,"hera/build/hera_build")
+hera_quant_binary = os.path.join(proj_dir,"hera/build/hera")
 salmon_sl_binary = os.path.join(proj_dir,"salmon/build/src/salmon")
 prep_ref_file = "/mnt/scratch6/selective_alignment_data/rsem_prep_ref/reference.transcripts.fa"
 gtf_file = "/mnt/scratch6/selective_alignment_data/gtf/gencode.v26.annotation.gtf"
@@ -75,9 +75,10 @@ rule build_indices:
         shell("mkdir -p {}".format(salmon_ind))
         shell("mkdir -p {}".format(hera_ind))
         print("building salmon index")
-        shell("{salmon_sl_binary} index -t {prep_ref_file} -i {salmon_ind} -p 16 -k 25")
+        #shell("{salmon_sl_binary} index -t {prep_ref_file} -i {salmon_ind} -p 16 -k 25")
         print("building hera index")
-        shell("{hera_build_binary} --fasta {genome_file} --gtf {gtf_file} --outdir {hera_ind}")
+        print("{hera_build_binary} --fasta {genome_file} --gtf {gtf_file} --outdir {hera_ind}")
+        shell("{hera_build_binary} --fasta {genome_file} --gtf {gtf_file} --outdir {hera_ind}/")
         print("building kallisto index")
         shell("{kallisto_binary} index -i {kallisto_ind} -k 25 {prep_ref_file}")
 
@@ -85,10 +86,18 @@ rule run_fast_tools:
     threads: 16
     run:
         quant_folder=config["quant"]
-        shell("mkdir -p {}".format(os.path.join(quant_folder,"salmon_out")))
-        shell("mkdir -p {}".format(os.path.join(quant_folder,"kallisto_out")))
-        shell("mkdir -p {}".format(os.path.join(quant_folder,"hera_out")))
-        shell("{hera_build_binary} quant -i {hera_ind} -t 16 -w 1 {simulation_folder}/sim_1.fq {simulation_folder}/sim_2.fq -o {hera_out}")
+        indices_folder=config["indices"]
+        kallisto_ind = os.path.join(indices_folder,"kallisto_ind")
+        salmon_ind = os.path.join(indices_folder,"salmon_ind")
+        hera_ind = os.path.join(indices_folder,"hera_ind")
+        salmon_out = os.path.join(quant_folder,"salmon_out")
+        kallisto_out = os.path.join(quant_folder,"kallisto_out")
+        hera_out = os.path.join(quant_folder,"hera_out")
+        shell("mkdir -p {}".format(salmon_out))
+        shell("mkdir -p {}".format(kallisto_out))
+        shell("mkdir -p {}".format(hera_out))
+        #print("{hera_quant_binary} quant -i {hera_ind} -t 16 -w 1 {simulation_folder}/{} {simulation_folder}/{} -o {hera_out}".format("sim_1.fq","sim_2.fq"))
+        shell("{hera_quant_binary} quant -i {hera_ind} -t 16 -w 1 {simulation_folder}/sim_1.fq {simulation_folder}/sim_2.fq -o {hera_out}")
         shell("{salmon_sl_binary} quant -i {salmon_ind} -l IU -1 {simulation_folder}/sim_1.fq -2 {simulation_folder}/sim_2.fq -p 16 -o {salmon_out} --softFilter --editDistance 4 --useRangeClusterEqClasses 4")
         shell("{kallisto_binary} quant -i {kallisto_ind} -o {kallisto_out} -t 16 {simulation_folder}/sim_1.fq {simulation_folder}/sim_2.fq")
 
