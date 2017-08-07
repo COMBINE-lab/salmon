@@ -1,6 +1,11 @@
 import sys, os
 
 ##########################################################
+#How to run 
+#snakemake -j 16 -s pipleline.snake build_indices --config out="./rsem/" indices="./test_indices"
+#snakemake -j 16 -s pipleline.snake run_fast_tools --config out="/mnt/scratch6/selective_alignment_data/rsem/" quant="./test_quant" indices="./test_indices/"
+
+##########################################################
 #requires snakemake, python3, pyfasta to be installed
 #save this file and provide all the binaries and their path
 #in variables below.
