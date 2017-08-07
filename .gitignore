@@ -4,6 +4,9 @@
 *.o
 *.obj
 
+# Snakemake fike
+.snakemake
+
 # Precompiled Headers
 *.gch
 *.pch
