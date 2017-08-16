@@ -459,6 +459,7 @@ bool doBootstrap(
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     double relDiffTolerance, uint32_t maxIter) {
 
+  // An EM termination criterion, adopted from Bray et al. 2016
   uint32_t minIter = 50;
 
   // Determine up front if we're going to use scaled counts.
@@ -504,6 +505,8 @@ bool doBootstrap(
 
     // If we use VBEM, we'll need the prior parameters
     //double priorAlpha = 1.00;
+
+    // EM termination criteria, adopted from Bray et al. 2016
     double minAlpha = 1e-8;
     double alphaCheckCutoff = 1e-2;
     double cutoff = minAlpha;
@@ -655,6 +658,8 @@ bool CollapsedEMOptimizer::gatherBootstraps(
                       numRemoved);
 
   size_t itNum{0};
+
+  // EM termination criteria, adopted from Bray et al. 2016
   double minAlpha = 1e-8;
   double cutoff = minAlpha;
 
@@ -753,6 +758,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   std::vector<Transcript>& transcripts = readExp.transcripts();
   std::vector<bool> available(transcripts.size(), false);
 
+  // An EM termination criterion, adopted from Bray et al. 2016
   uint32_t minIter = 50;
   bool seqBiasCorrect = sopt.biasCorrect;
   bool gcBiasCorrect = sopt.gcBiasCorrect;
@@ -889,6 +895,8 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
                       numRemoved);
 
   size_t itNum{0};
+
+  // A EM termination criteria, adopted from Bray et al. 2016
   double minAlpha = 1e-8;
   double alphaCheckCutoff = 1e-2;
   double cutoff = minAlpha;

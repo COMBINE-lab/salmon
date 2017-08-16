@@ -24,8 +24,8 @@ class CollapsedEMOptimizer {
         template <typename ExpT>
         bool optimize(ExpT& readExp,
                       SalmonOpts& sopt,
-                      double tolerance = 0.01,
-                      uint32_t maxIter = 1000);
+                      double tolerance = 0.01, // A EM termination criteria, adopted from Bray et al. 2016
+                      uint32_t maxIter = 1000);// A EM termination criteria, adopted from Bray et al. 2016
 
         template <typename ExpT>
         bool gatherBootstraps(
