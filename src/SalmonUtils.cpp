@@ -1676,7 +1676,9 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
   using salmon::math::EPSILON;
   using salmon::math::LOG_EPSILON;
 
+  // A read cutoff for a txp to be present, adopted from Bray et al. 2016
   double minAlpha = 1e-8;
+
   double minCDFMass = 1e-10;
   uint32_t gcSamp{sopt.pdfSampFactor};
   bool gcBiasCorrect{sopt.gcBiasCorrect};
