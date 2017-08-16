@@ -426,6 +426,8 @@ bool CollapsedGibbsSampler::sample(
       }
       double scale = numMappedFragments / denom;
       double asum = {0.0};
+
+      // A read cutoff for a txp to be present, adopted from Bray et al. 2016
       double minAlpha = 1e-8;
       for (size_t tn = 0; tn < numTranscripts; ++tn) {
         alphas[tn] = (mu[tn] * effLens[tn]) * scale;
