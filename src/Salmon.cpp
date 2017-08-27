@@ -56,7 +56,6 @@ int help(std::vector<std::string> opts) { //}int argc, char* argv[]) {
                   "        salmon -c|--cite or \n"
                   "        salmon [--no-version-check] <COMMAND> [-h | options]\n\n");
     helpMsg.write("Commands:\n");
-    helpMsg.write("     cite  Show salmon citation information\n");
     helpMsg.write("     index Create a salmon index\n");
     helpMsg.write("     quant Quantify a sample\n");
     helpMsg.write("     swim  Perform super-secret operation\n");
@@ -190,7 +189,7 @@ int main( int argc, char* argv[] ) {
     po::store(parsed, vm);
 
     if (vm.count("version")) {
-      std::cerr << "version : " << salmon::version << "\n";
+      std::cerr << "salmon " << salmon::version << "\n";
       std::exit(0);
     }
 
