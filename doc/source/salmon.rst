@@ -416,14 +416,14 @@ this model will attempt to correct for biases in how likely a sequence
 is to be observed based on its internal GC content.  
 
 You can use the FASTQC software followed by 
-`MultiQC with transcriptome GC distributions <http://multiqc.info/docs/#theoretical-gc-content>`
-to check if your samples exhibit strong GC bias, that is,
+`MultiQC with transcriptome GC distributions <http://multiqc.info/docs/#theoretical-gc-content>`_
+to check if your samples exhibit strong GC bias, i.e.
 under-representation of some sub-sequences of the transcriptome. If they do, 
-we obviously recommend using the ``--gcBias`` flag. Or you can simply run with 
+we obviously recommend using the ``--gcBias`` flag. Or you can simply run Salmon with 
 ``--gcBias`` in any case, as it does not impair quantification for samples 
 without GC bias, it just takes a few more minutes per sample. For samples 
 with moderate to high GC bias, correction for this bias at the fragment level 
-has been show to reduce isoform quantification errors [#alpine]_ [#salmon]_.
+has been shown to reduce isoform quantification errors [#alpine]_ [#salmon]_.
 
 This bias is distinct from the primer biases learned with the ``--seqBias`` option.
 Though these biases are distinct, they are not completely independent.
