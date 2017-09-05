@@ -413,8 +413,19 @@ methodology.
 Passing the ``--gcBias`` flag to Salmon will enable it to learn and
 correct for fragment-level GC biases in the input data.  Specifically,
 this model will attempt to correct for biases in how likely a sequence
-is to be observed based on its internal GC content.  This bias is
-distinct from the primer biases learned with the ``--seqBias`` option.
+is to be observed based on its internal GC content.  
+
+You can use the FASTQC software followed by 
+`MultiQC with transcriptome GC distributions <http://multiqc.info/docs/#theoretical-gc-content>`_
+to check if your samples exhibit strong GC bias, i.e.
+under-representation of some sub-sequences of the transcriptome. If they do, 
+we obviously recommend using the ``--gcBias`` flag. Or you can simply run Salmon with 
+``--gcBias`` in any case, as it does not impair quantification for samples 
+without GC bias, it just takes a few more minutes per sample. For samples 
+with moderate to high GC bias, correction for this bias at the fragment level 
+has been shown to reduce isoform quantification errors [#alpine]_ [#salmon]_.
+
+This bias is distinct from the primer biases learned with the ``--seqBias`` option.
 Though these biases are distinct, they are not completely independent.
 When both ``--seqBias`` and ``--gcBias`` are enabled, Salmon will
 learn a conditional fragment-GC bias model.  By default, Salmon will
@@ -666,8 +677,11 @@ and/or `carlk@cs.cmu.edu`).  If you encounter any bugs, please file a
 References
 ----------
 
-.. [#express] Roberts, Adam, and Lior Pachter. "Streaming fragment assignment for real-time analysis of sequencing experiments." Nature methods 10.1 (2013): 71-73.
-   
-.. [#roberts] Roberts, Adam, et al. "Improving RNA-Seq expression estimates by correcting for fragment bias." Genome biology 12.3 (2011): 1.
 
-.. [#salmon] Patro, Rob, et al. "Salmon provides fast and bias-aware quantification of transcript expression." Nature Methods(2017). Advanced Online Publication. doi: 10.1038/nmeth.4197
+.. [#express] Roberts, Adam, and Lior Pachter. "Streaming fragment assignment for real-time analysis of sequencing experiments." Nature Methods 10.1 (2013): 71-73.
+   
+.. [#roberts] Roberts, Adam, et al. "Improving RNA-Seq expression estimates by correcting for fragment bias." Genome Biology 12.3 (2011): 1.
+
+.. [#salmon] Patro, Rob, et al. "Salmon provides fast and bias-aware quantification of transcript expression." Nature Methods (2017). Advanced Online Publication. doi: 10.1038/nmeth.4197
+
+.. [#alpine] Love, Michael I., Hogenesch, John B., Irizarry, Rafael A. "Modeling of RNA-seq fragment sequence bias reduces systematic errors in transcript abundance estimation." Nature Biotechnology 34.12 (2016). doi: 10.1038/nbt.3682
