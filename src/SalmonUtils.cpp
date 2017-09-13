@@ -1522,12 +1522,14 @@ bool processQuantOptions(SalmonOpts& sopt,
   spdlog::set_async_mode(max_q_size);
   auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(
       logPath.string());
-  auto rawConsoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
-  auto consoleSink =
-      std::make_shared<spdlog::sinks::ansicolor_sink>(rawConsoleSink);
+  //auto rawConsoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
+  //auto consoleSink =
+  //    std::make_shared<spdlog::sinks::ansicolor_sink>(rawConsoleSink);
+  auto consoleSink = std::make_shared<spdlog::sinks::ansicolor_stderr_sink_mt>();
   auto consoleLog = spdlog::create("stderrLog", {consoleSink});
   auto fileLog = spdlog::create("fileLog", {fileSink});
-  auto jointLog = spdlog::create("jointLog", {fileSink, consoleSink});
+  std::vector<spdlog::sink_ptr> sinks{consoleSink, fileSink};
+  auto jointLog = spdlog::create("jointLog", std::begin(sinks), std::end(sinks));
 
   // If we're being quiet, then only emit errors.
   if (sopt.quiet) {

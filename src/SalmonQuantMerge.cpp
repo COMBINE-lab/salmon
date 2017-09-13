@@ -259,9 +259,7 @@ a single file.
     size_t max_q_size = 131072;
     spdlog::set_async_mode(max_q_size);
 
-    auto rawConsoleSink = std::make_shared<spdlog::sinks::stdout_sink_mt>();
-    auto consoleSink =
-        std::make_shared<spdlog::sinks::ansicolor_sink>(rawConsoleSink);
+    auto consoleSink = std::make_shared<spdlog::sinks::ansicolor_stdout_sink_mt>();
     auto consoleLog = spdlog::create("mergeLog", {consoleSink});
     qmOpts.log = consoleLog;
 
