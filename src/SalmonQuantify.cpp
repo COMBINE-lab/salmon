@@ -123,6 +123,7 @@ extern "C" {
 #include "PairAlignmentFormatter.hpp"
 #include "SingleAlignmentFormatter.hpp"
 #include "RapMapUtils.hpp"
+#include "EffectiveLengthStats.hpp"
 //#include "TextBootstrapWriter.hpp"
 
 /****** QUASI MAPPING DECLARATIONS *********/
@@ -166,6 +167,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
                       ClusterForest& clusterForest,
                       FragmentLengthDistribution& fragLengthDist,
                       BiasParams& observedBiasParams,
+                      EffectiveLengthStats& obsEffLens,
                       std::atomic<uint64_t>& numAssignedFragments,
                       std::default_random_engine& randEng, bool initialRound,
                       std::atomic<bool>& burnedIn, double& maxZeroFrac) {
@@ -433,6 +435,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
           // DEC 9
           if (aln.mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED and !noLengthCorrection) {
             startPosProb = (flen <= refLength) ? -std::log(refLength - flen + 1) : salmon::math::LOG_EPSILON;
+            if (flen <= refLength) { obsEffLens.addFragment(transcriptID, (refLength - flen + 1), logForgettingMass); }
           }
 
           double fragStartLogNumerator{salmon::math::LOG_1};
@@ -718,6 +721,7 @@ void processReadsQuasi(
     RapMapIndexT* idx, std::vector<Transcript>& transcripts,
     ForgettingMassCalculator& fmCalc, ClusterForest& clusterForest,
     FragmentLengthDistribution& fragLengthDist, BiasParams& observedBiasParams,
+    EffectiveLengthStats& obsEffLengths,
     mem_opt_t* memOptions, SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache) {
@@ -738,6 +742,7 @@ void processReadsQuasi(
     RapMapIndexT* sidx, std::vector<Transcript>& transcripts,
     ForgettingMassCalculator& fmCalc, ClusterForest& clusterForest,
     FragmentLengthDistribution& fragLengthDist, BiasParams& observedBiasParams,
+    EffectiveLengthStats& obsEffLengths,
     mem_opt_t* memOptions, SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache) {
@@ -757,6 +762,7 @@ void processReadsQuasi(
     RapMapIndexT* qidx, std::vector<Transcript>& transcripts,
     ForgettingMassCalculator& fmCalc, ClusterForest& clusterForest,
     FragmentLengthDistribution& fragLengthDist, BiasParams& observedBiasParams,
+    EffectiveLengthStats& obsEffLengths,
     mem_opt_t* memOptions, SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache) {
@@ -1160,6 +1166,7 @@ void processReadsQuasi(
     processMiniBatch<QuasiAlignment>(
         readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
         transcripts, clusterForest, fragLengthDist, observedBiasParams,
+        obsEffLengths,
         numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac);
   }
 
@@ -1186,6 +1193,7 @@ void processReadsQuasi(
     RapMapIndexT* qidx, std::vector<Transcript>& transcripts,
     ForgettingMassCalculator& fmCalc, ClusterForest& clusterForest,
     FragmentLengthDistribution& fragLengthDist, BiasParams& observedBiasParams,
+    EffectiveLengthStats& obsEffLengths,
     mem_opt_t* memOptions, SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache) {
@@ -1404,6 +1412,7 @@ void processReadsQuasi(
     processMiniBatch<QuasiAlignment>(
         readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
         transcripts, clusterForest, fragLengthDist, observedBiasParams,
+        obsEffLengths,
         numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac);
   }
   readExp.updateShortFrags(shortFragStats);
@@ -1444,8 +1453,11 @@ void processReadLibrary(
 
   /** sequence-specific and GC-fragment bias vectors --- each thread gets it's
    * own **/
+  size_t numTxp = readExp.transcripts().size();
   std::vector<BiasParams> observedBiasParams(numThreads,
 					     BiasParams(salmonOpts.numConditionalGCBins, salmonOpts.numFragGCBins, false));
+
+  std::vector<EffectiveLengthStats> observedEffectiveLengths(numThreads, EffectiveLengthStats(numTxp));
 
   // If the read library is paired-end
   // ------ Paired-end --------
@@ -1474,7 +1486,7 @@ void processReadLibrary(
               pairedParserPtr.get(), readExp, rl, structureVec[i],
               numObservedFragments, numAssignedFragments, numValidHits,
               upperBoundHits, sidx, transcripts, fmCalc, clusterForest,
-              fragLengthDist, observedBiasParams[i], memOptions, salmonOpts,
+              fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i], memOptions, salmonOpts,
               coverageThresh, iomutex, initialRound, burnedIn, writeToCache);
         };
         threads.emplace_back(threadFun);
@@ -1498,7 +1510,7 @@ void processReadLibrary(
                   pairedParserPtr.get(), readExp, rl, structureVec[i],
                   numObservedFragments, numAssignedFragments, numValidHits,
                   upperBoundHits, sidx->quasiIndexPerfectHash64(), transcripts,
-                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
+                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i],
                   memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
                   burnedIn, writeToCache);
             };
@@ -1512,7 +1524,7 @@ void processReadLibrary(
                   pairedParserPtr.get(), readExp, rl, structureVec[i],
                   numObservedFragments, numAssignedFragments, numValidHits,
                   upperBoundHits, sidx->quasiIndex64(), transcripts, fmCalc,
-                  clusterForest, fragLengthDist, observedBiasParams[i],
+                  clusterForest, fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i],
                   memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
                   burnedIn, writeToCache);
             };
@@ -1528,7 +1540,7 @@ void processReadLibrary(
                   pairedParserPtr.get(), readExp, rl, structureVec[i],
                   numObservedFragments, numAssignedFragments, numValidHits,
                   upperBoundHits, sidx->quasiIndexPerfectHash32(), transcripts,
-                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
+                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i],
                   memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
                   burnedIn, writeToCache);
             };
@@ -1542,7 +1554,7 @@ void processReadLibrary(
                   pairedParserPtr.get(), readExp, rl, structureVec[i],
                   numObservedFragments, numAssignedFragments, numValidHits,
                   upperBoundHits, sidx->quasiIndex32(), transcripts, fmCalc,
-                  clusterForest, fragLengthDist, observedBiasParams[i],
+                  clusterForest, fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i],
                   memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
                   burnedIn, writeToCache);
             };
@@ -1569,6 +1581,19 @@ void processReadLibrary(
         static_cast<double>(numObservedFragments.load());
       readExp.setEffectiveMappingRate(mappingRate);
       throw InsufficientAssignedFragments(numAssignedFragments.load(), salmonOpts.minRequiredFrags);
+    }
+
+    /** NEW :: Expected Lengths **/
+    EffectiveLengthStats eel(numTxp);
+    for (auto& els : observedEffectiveLengths) {
+      eel.merge(els);
+    }
+    auto& transcripts = readExp.transcripts();
+    for (size_t tid = 0; tid < numTxp; ++tid) {
+      auto el = eel.getExpectedEffectiveLength(tid);
+      if (el >= 1.0) {
+        transcripts[tid].setCachedLogEffectiveLength(std::log(el));
+      }
     }
 
     /** GC-fragment bias **/
@@ -1652,7 +1677,8 @@ void processReadLibrary(
               singleParserPtr.get(), readExp, rl, structureVec[i],
               numObservedFragments, numAssignedFragments, numValidHits,
               upperBoundHits, sidx, transcripts, fmCalc, clusterForest,
-              fragLengthDist, observedBiasParams[i], memOptions, salmonOpts,
+              fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i],
+              memOptions, salmonOpts,
               coverageThresh, iomutex, initialRound, burnedIn, writeToCache);
         };
         threads.emplace_back(threadFun);
@@ -1677,7 +1703,7 @@ void processReadLibrary(
                   singleParserPtr.get(), readExp, rl, structureVec[i],
                   numObservedFragments, numAssignedFragments, numValidHits,
                   upperBoundHits, sidx->quasiIndexPerfectHash64(), transcripts,
-                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
+                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i],
                   memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
                   burnedIn, writeToCache);
             };
@@ -1692,7 +1718,7 @@ void processReadLibrary(
                   singleParserPtr.get(), readExp, rl, structureVec[i],
                   numObservedFragments, numAssignedFragments, numValidHits,
                   upperBoundHits, sidx->quasiIndex64(), transcripts, fmCalc,
-                  clusterForest, fragLengthDist, observedBiasParams[i],
+                  clusterForest, fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i],
                   memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
                   burnedIn, writeToCache);
             };
@@ -1709,7 +1735,7 @@ void processReadLibrary(
                   singleParserPtr.get(), readExp, rl, structureVec[i],
                   numObservedFragments, numAssignedFragments, numValidHits,
                   upperBoundHits, sidx->quasiIndexPerfectHash32(), transcripts,
-                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
+                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i],
                   memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
                   burnedIn, writeToCache);
             };
@@ -1724,7 +1750,7 @@ void processReadLibrary(
                   singleParserPtr.get(), readExp, rl, structureVec[i],
                   numObservedFragments, numAssignedFragments, numValidHits,
                   upperBoundHits, sidx->quasiIndex32(), transcripts, fmCalc,
-                  clusterForest, fragLengthDist, observedBiasParams[i],
+                  clusterForest, fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i],
                   memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
                   burnedIn, writeToCache);
             };
@@ -1739,6 +1765,28 @@ void processReadLibrary(
     }
     for (int i = 0; i < numThreads; ++i) {
       threads[i].join();
+    }
+
+    // If we don't have a sufficient number of assigned fragments, then
+    // complain here!
+    if (numAssignedFragments < salmonOpts.minRequiredFrags) {
+      readExp.setNumObservedFragments(numObservedFragments);
+      readExp.numAssignedFragmentsAtomic().store(numAssignedFragments);
+      double mappingRate = numAssignedFragments.load() /
+        static_cast<double>(numObservedFragments.load());
+      readExp.setEffectiveMappingRate(mappingRate);
+      throw InsufficientAssignedFragments(numAssignedFragments.load(), salmonOpts.minRequiredFrags);
+    }
+
+    /** NEW :: Expected Lengths **/
+    EffectiveLengthStats eel(numTxp);
+    for (auto& els : observedEffectiveLengths) {
+      eel.merge(els);
+    }
+    auto& transcripts = readExp.transcripts();
+    for (size_t tid = 0; tid < numTxp; ++tid) {
+      auto el = eel.getExpectedEffectiveLength(tid);
+      if (el >= 1.0) { transcripts[tid].setCachedLogEffectiveLength(std::log(el)); }
     }
 
     /** GC-fragment bias **/

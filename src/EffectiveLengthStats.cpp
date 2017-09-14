@@ -1,14 +1,17 @@
 #include "EffectiveLengthStats.hpp"
+#include "SalmonMath.hpp"
 
 EffectiveLengthStats::EffectiveLengthStats(size_t numTxps) : numTxps_(numTxps), lengths_(numTxps), weights_(numTxps) {
-  lengths_ = Eigen::VectorXd::Constant(salmon::math::LOG_0);
-  weights_ = Eigen::VectorXd::Constant(salmon::math::LOG_0);
+  for (size_t i = 0; i < numTxps_; ++i) {
+    lengths_(i) = salmon::math::LOG_0;
+    weights_(i) = salmon::math::LOG_0;
+  }
 }
 
 void EffectiveLengthStats::addFragment(uint32_t txID, uint32_t len, double logMass) {
   len = (len >= 1) ? len : 1;
   const double logLen = std::log(static_cast<double>(len));
-  lengths_(txID) = salmon::math::logAdd(lengths_(txID), logLen);
+  lengths_(txID) = salmon::math::logAdd(lengths_(txID), logLen + logMass);
   weights_(txID) = salmon::math::logAdd(weights_(txID), logMass);
 }
 

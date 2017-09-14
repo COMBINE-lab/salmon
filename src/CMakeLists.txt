@@ -54,6 +54,7 @@ SalmonQuantifyAlignments.cpp
 )
 
 set (SALMON_LIB_SRCS
+EffectiveLengthStats.cpp
 BWAUtils.cpp
 LibraryFormat.cpp
 GenomicFeature.cpp
