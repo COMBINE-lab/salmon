@@ -89,7 +89,7 @@ Here, we've used a reference transcriptome for *Arabadopsis*.  However, one of t
 Next, we're going to build an *index* on our transcriptome.  The index is a structure that salmon uses to [quasi-map](http://bioinformatics.oxfordjournals.org/content/32/12/i192.abstract) RNA-seq reads during quantification.  The index need only be constructed once per transcriptome, and it can then be reused to quantify many experiments.  We use the *index* command of salmon to build our index:
 
 ```
-$ salmon index -t ahtal.fa.gz -i athal_index
+$ salmon index -t athal.fa.gz -i athal_index
 ```
 
 There are a number of different options you can pass to the indexer to change its behavior (read more about those [here](http://salmon.readthedocs.io/en/latest/)), but the default should work well for most data.
