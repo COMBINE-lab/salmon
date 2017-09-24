@@ -194,6 +194,8 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
     uint32_t numBurninFrags{salmonOpts.numBurninFrags};
     bool noLengthCorrection{salmonOpts.noLengthCorrection};
 
+    size_t rangeFactorization{salmonOpts.useRangeFactorization};
+
     bool useAuxParams = (processedReads >= salmonOpts.numPreBurninFrags);
 
     std::chrono::microseconds sleepTime(1);
@@ -461,7 +463,18 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                     }
 
                     if (txpIDs.size() > 0) {
-                        TranscriptGroup tg(txpIDs);
+
+			if (rangeFactorization > 0) {
+			  int txpsSize = txpIDs.size();
+			  int rangeCount = std::sqrt(txpsSize)+rangeFactorization;
+			  
+			  for(size_t i=0; i<txpsSize; i++){
+			    int rangeNumber = auxProbs[i]*rangeCount;
+			    txpIDs.push_back(rangeNumber);
+			  }
+			}
+
+			TranscriptGroup tg(txpIDs);
                         eqBuilder.addGroup(std::move(tg), auxProbs);
                     }
 
@@ -1365,6 +1378,8 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
                         "a priori probability.")
     ("useVBOpt,v", po::bool_switch(&(sopt.useVBOpt))->default_value(false), "Use the Variational Bayesian EM rather than the "
                            "traditional EM algorithm for optimization in the batch passes.")
+    ("useRangeFactorization", po::value<uint32_t>(&(sopt.useRangeFactorization))->default_value(0),
+     "Cluster each in equivalence class based on the conditional probabilities.")
     ("perTranscriptPrior", po::bool_switch(&(sopt.perTranscriptPrior)), "The "
     "prior (either the default or the argument provided via --vbPrior) will "
     "be interpreted as a transcript-level prior (i.e. each transcript will "

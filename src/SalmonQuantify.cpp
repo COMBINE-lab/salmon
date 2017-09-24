@@ -210,6 +210,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
   bool useFragLengthDist{!salmonOpts.noFragLengthDist};
   bool noFragLenFactor{salmonOpts.noFragLenFactor};
   bool useRankEqClasses{salmonOpts.rankEqClasses};
+  size_t rangeFactorization{salmonOpts.useRangeFactorization};
   bool noLengthCorrection{salmonOpts.noLengthCorrection};
   // JAN 13
   bool useAuxParams = ((localNumAssignedFragments + numAssignedFragments) >= salmonOpts.numPreBurninFrags);
@@ -537,6 +538,16 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
                 std::swap(auxProbsNew, auxProbs);
             }
         }
+
+	if (rangeFactorization > 0) {
+	  int txpsSize = txpIDs.size();
+	  int rangeCount = std::sqrt(txpsSize)+rangeFactorization;
+	  
+	  for(size_t i=0; i<txpsSize; i++){
+	    int rangeNumber = auxProbs[i]*rangeCount;
+	    txpIDs.push_back(rangeNumber);
+	  }
+	}
         
         TranscriptGroup tg(txpIDs);
         eqBuilder.addGroup(std::move(tg), auxProbs);
@@ -2393,6 +2404,11 @@ int salmonQuantify(int argc, char* argv[]) {
      "useVBOpt", po::bool_switch(&(sopt.useVBOpt))->default_value(false),
      "Use the Variational Bayesian EM rather than the "
      "traditional EM algorithm for optimization in the batch passes.")
+    (
+     "useRangeFactorization",
+     po::value<uint32_t>(&(sopt.useRangeFactorization))->default_value(0),
+     "Cluster each in equivalence class based on the "
+     "conditional probabilities.")
     (
      "numGibbsSamples",
      po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0),
