@@ -905,7 +905,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   // Iterations in which we will allow re-computing the effective lengths
   // if bias-correction is enabled.
   // std::vector<uint32_t> recomputeIt{100, 500, 1000};
-  //minIter = 100;
+  minIter = 100;
 
   bool converged{false};
   double maxRelDiff = -std::numeric_limits<double>::max();
