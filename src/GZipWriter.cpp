@@ -488,7 +488,7 @@ bool GZipWriter::writeEmptyAbundances(
   // Now posterior has the transcript fraction
   std::vector<Transcript>& transcripts_ = readExp.transcripts();
   for (auto& transcript : transcripts_) {
-      fmt::print(output.get(), "{}\t{}\t{:.3f}\t{:f}\t{}\n",
+      fmt::print(output.get(), "{}\t{}\t{:.3f}\t{:f}\t{:f}\n",
               transcript.RefName, transcript.CompleteLength, static_cast<float>(transcript.CompleteLength),
               0.0, 0.0);
   }
@@ -538,7 +538,7 @@ bool GZipWriter::writeAbundances(
       double effLength = transcript.EffectiveLength;
       double tfrac = (npm / effLength) / tfracDenom;
       double tpm = tfrac * million;
-      fmt::print(output.get(), "{}\t{}\t{:.3f}\t{:f}\t{}\n",
+      fmt::print(output.get(), "{}\t{}\t{:.3f}\t{:f}\t{:f}\n",
               transcript.RefName, transcript.CompleteLength, effLength,
               tpm, count);
   }
