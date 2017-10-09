@@ -87,9 +87,10 @@ bool GZipWriter::writeEquivCounts(
     const TranscriptGroup& tgroup = eq.first;
     const std::vector<uint32_t>& txps = tgroup.txps;
     // group size
-    equivFile << txps.size() << '\t';
+    uint32_t groupSize = eq.second.weights.size();
+    equivFile << groupSize << '\t';
     // each group member
-    for (auto tid : txps) { equivFile << tid << '\t'; }
+    for (uint32_t i=0; i<groupSize; i++) { equivFile << txps[i] << '\t'; }
     if (dumpRichWeights) {
       const auto& auxs = eq.second.combinedWeights;
       for (auto aux : auxs) { equivFile << aux << '\t'; }
