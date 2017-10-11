@@ -851,6 +851,7 @@ void processReadsQuasi(
   auto* qmLog = salmonOpts.qmLog.get();
   bool writeQuasimappings = (qmLog != nullptr);
 
+
   auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
       rangeSize = rg.size();
@@ -1459,8 +1460,38 @@ void processReadLibrary(
 
   auto indexType = sidx->indexType();
 
-  std::unique_ptr<paired_parser> pairedParserPtr{nullptr};
-  std::unique_ptr<single_parser> singleParserPtr{nullptr};
+  // Catch any exceptions that might be thrown while processing the reads
+
+  // These two deleters are highly redundant (identical in content, but have different argument types).
+  // This will be resolved by generic lambdas as soon as we can rely on c++14.
+  auto pairedPtrDeleter = [&salmonOpts](paired_parser* p) -> void {
+    try {
+      p->stop();
+    } catch (const std::exception& e) {
+      salmonOpts.jointLog->error("\n\n");
+      salmonOpts.jointLog->error("Processing reads : {}", e.what());
+      salmonOpts.jointLog->flush();
+      spdlog::drop_all();
+      std::exit(-1);
+    }
+    delete p;
+  };
+
+  auto singlePtrDeleter = [&salmonOpts](single_parser* p) -> void {
+    try {
+      p->stop();
+    } catch (const std::exception& e) {
+      salmonOpts.jointLog->error("\n\n");
+      salmonOpts.jointLog->error("Processing reads : {}", e.what());
+      salmonOpts.jointLog->flush();
+      spdlog::drop_all();
+      std::exit(-1);
+    }
+    delete p;
+  };
+
+  std::unique_ptr<paired_parser, decltype(pairedPtrDeleter)> pairedParserPtr(nullptr, pairedPtrDeleter);
+  std::unique_ptr<single_parser, decltype(singlePtrDeleter)> singleParserPtr(nullptr, singlePtrDeleter);
 
   /** sequence-specific and GC-fragment bias vectors --- each thread gets it's
    * own **/
@@ -1469,6 +1500,7 @@ void processReadLibrary(
 					     BiasParams(salmonOpts.numConditionalGCBins, salmonOpts.numFragGCBins, false));
 
   std::vector<EffectiveLengthStats> observedEffectiveLengths(numThreads, EffectiveLengthStats(numTxp));
+
 
   // If the read library is paired-end
   // ------ Paired-end --------
@@ -1669,7 +1701,6 @@ void processReadLibrary(
     }
 
     /** END GC-fragment bias **/
-
   } // ------ Single-end --------
   else if (rl.format().type == ReadType::SINGLE_END) {
 
@@ -1890,7 +1921,6 @@ void processReadLibrary(
       }
     }
     END OLD SINGLE-END BIAS */
-
 
   } // ------ END Single-end --------
 }

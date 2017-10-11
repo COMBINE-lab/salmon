@@ -121,8 +121,10 @@ public:
   FastxParser(std::vector<std::string> files, std::vector<std::string> files2,
               uint32_t numConsumers, uint32_t numParsers = 1,
               uint32_t chunkSize = 1000);
+
   ~FastxParser();
   bool start();
+  bool stop();
   ReadGroup<T> getReadGroup();
   bool refill(ReadGroup<T>& rg);
   void finishedWithGroup(ReadGroup<T>& s);
@@ -135,7 +137,17 @@ private:
   std::vector<std::string> inputStreams2_;
   uint32_t numParsers_;
   std::atomic<uint32_t> numParsing_;
+
+  // NOTE: Would like to use std::future<int> here instead, but that
+  // solution doesn't seem to work.  It's unclear exactly why
+  // see (https://twitter.com/nomad421/status/917748383321817088)
   std::vector<std::unique_ptr<std::thread>> parsingThreads_;
+
+  // holds the results of the parsing threads, which is simply equal to
+  // the return value of kseq_read() for the last call to that function.
+  // A value < -1 signifies some sort of error.
+  std::vector<int> threadResults_;
+
   size_t blockSize_;
   moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>> readQueue_,
       seqContainerQueue_;
@@ -145,6 +157,7 @@ private:
 
   std::vector<std::unique_ptr<moodycamel::ProducerToken>> produceReads_;
   std::vector<std::unique_ptr<moodycamel::ConsumerToken>> consumeContainers_;
+  bool isActive_{false};
 };
 }
 #endif // __FASTX_PARSER__
