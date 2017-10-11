@@ -59,7 +59,7 @@ int help(std::vector<std::string> opts) { //}int argc, char* argv[]) {
     helpMsg.write("     index Create a salmon index\n");
     helpMsg.write("     quant Quantify a sample\n");
     helpMsg.write("     swim  Perform super-secret operation\n");
-    //helpMsg.write("     quantmerge Merge multiple quantifications into a single file\n");
+    helpMsg.write("     quantmerge Merge multiple quantifications into a single file\n");
 
     std::cerr << helpMsg.str();
     return 0;
