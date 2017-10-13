@@ -154,7 +154,8 @@ struct SalmonOpts {
     uint32_t useRangeFactorization; // Cluster reads in each Eq Class based on the conditional probabilities
 
     bool useQuasi; // Are we using the quasi-mapping based index or not.
-    
+
+    uint32_t eelCountCutoff{50};
     // For writing quasi-mappings
     std::string qmFileName;
     std::ofstream qmFile;

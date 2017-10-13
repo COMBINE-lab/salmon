@@ -212,14 +212,13 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
   bool useRankEqClasses{salmonOpts.rankEqClasses};
   size_t rangeFactorization{salmonOpts.useRangeFactorization};
   bool noLengthCorrection{salmonOpts.noLengthCorrection};
-  // JAN 13
   bool useAuxParams = ((localNumAssignedFragments + numAssignedFragments) >= salmonOpts.numPreBurninFrags);
 
   // If we're auto detecting the library type
   auto* detector = readLib.getDetector();
   bool autoDetect = (detector != nullptr) ? detector->isActive() : false;
   // If we haven't detected yet, nothing is incompatible
-    if (autoDetect) { incompatPrior = salmon::math::LOG_1; }
+  if (autoDetect) { incompatPrior = salmon::math::LOG_1; }
 
   auto expectedLibraryFormat = readLib.format();
   uint64_t zeroProbFrags{0};
@@ -433,7 +432,6 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
           // Allow for a non-uniform fragment start position distribution
 
           double startPosProb{-logRefLength};
-          // DEC 9
           if (aln.mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED and !noLengthCorrection) {
             startPosProb = (flen <= refLength) ? -std::log(refLength - flen + 1) : salmon::math::LOG_EPSILON;
             if (flen <= refLength) { obsEffLens.addFragment(transcriptID, (refLength - flen + 1), logForgettingMass); }
@@ -1634,7 +1632,8 @@ void processReadLibrary(
     auto& transcripts = readExp.transcripts();
     for (size_t tid = 0; tid < numTxp; ++tid) {
       auto el = eel.getExpectedEffectiveLength(tid);
-      if (el >= 1.0) {
+      auto countObs = eel.getObservedCount(tid);
+      if (countObs > salmonOpts.eelCountCutoff and el >= 1.0) {
         transcripts[tid].setCachedLogEffectiveLength(std::log(el));
       }
     }
@@ -1820,7 +1819,7 @@ void processReadLibrary(
       throw InsufficientAssignedFragments(numAssignedFragments.load(), salmonOpts.minRequiredFrags);
     }
 
-    /** NEW :: Expected Lengths **/
+    /** This model doesn't really make sense for SE data
     EffectiveLengthStats eel(numTxp);
     for (auto& els : observedEffectiveLengths) {
       eel.merge(els);
@@ -1830,6 +1829,7 @@ void processReadLibrary(
       auto el = eel.getExpectedEffectiveLength(tid);
       if (el >= 1.0) { transcripts[tid].setCachedLogEffectiveLength(std::log(el)); }
     }
+    **/
 
     /** GC-fragment bias **/
     // Set the global distribution based on the sum of local
@@ -2207,7 +2207,7 @@ int salmonQuantify(int argc, char* argv[]) {
      "Perform sequence-specific bias correction.")
     (
       "gcBias", po::bool_switch(&(sopt.gcBiasCorrect))->default_value(false),
-      "[beta] Perform fragment GC bias correction")
+      "[beta for single-end reads] Perform fragment GC bias correction")
     (
       "threads,p",
       po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads),
@@ -2304,7 +2304,7 @@ int salmonQuantify(int argc, char* argv[]) {
      po::bool_switch(&(sopt.fasterMapping))->default_value(false),
      "[Developer]: Disables some extra checks during quasi-mapping. This may make mapping a "
      "little bit faster at the potential cost of returning too many mappings (i.e. some sub-optimal mappings) "
-     "for certain reads. Only use this option if you know what it does (enables NIP-skipping)")
+     "for certain reads.")
     ("minAssignedFrags",
      po::value<std::uint64_t>(&(sopt.minRequiredFrags))->default_value(10),
      "The minimum number of fragments that must be assigned to the transcriptome for "
