@@ -19,48 +19,48 @@
 <HEADER
 **/
 
-
 #ifndef __MULTITHREADED_BAM_PARSER__
 #define __MULTITHREADED_BAM_PARSER__
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
-#include <vector>
-#include <thread>
-#include <atomic>
 #include <iostream>
+#include <thread>
+#include <vector>
 
-#include "api/BamReader.h"
 #include "api/BamAlignment.h"
+#include "api/BamReader.h"
 
+#include "tbb/concurrent_queue.h"
 #include <boost/filesystem.hpp>
 #include <boost/range/irange.hpp>
-#include "tbb/concurrent_queue.h"
 
 namespace bfs = boost::filesystem;
 
 struct ReadSeq {
-    char* seq = nullptr;
-    size_t len = 0;
-    char* name = nullptr;
-    size_t nlen = 0;
+  char* seq = nullptr;
+  size_t len = 0;
+  char* name = nullptr;
+  size_t nlen = 0;
 };
 
 class MultithreadedBAMParser {
 public:
-    MultithreadedBAMParser( std::vector<bfs::path>& files );
-    ~MultithreadedBAMParser();
-    bool start();
-    bool nextAlignment(BamTools::BamAlignment*& seq);
-    void finishedWithAlignment(BamTools::BamAlignment*& s);
+  MultithreadedBAMParser(std::vector<bfs::path>& files);
+  ~MultithreadedBAMParser();
+  bool start();
+  bool nextAlignment(BamTools::BamAlignment*& seq);
+  void finishedWithAlignment(BamTools::BamAlignment*& s);
 
 private:
-    std::vector<bfs::path>& inputStreams_;
-    bool parsing_;
-    std::thread* parsingThread_;
-    tbb::concurrent_bounded_queue<BamTools::BamAlignment*> alnQueue_, seqContainerQueue_;
-    BamTools::BamAlignment* alnStructs_;
-    const size_t queueCapacity_ = 5000000;
+  std::vector<bfs::path>& inputStreams_;
+  bool parsing_;
+  std::thread* parsingThread_;
+  tbb::concurrent_bounded_queue<BamTools::BamAlignment*> alnQueue_,
+      seqContainerQueue_;
+  BamTools::BamAlignment* alnStructs_;
+  const size_t queueCapacity_ = 5000000;
 };
 
 //#include "Parser.cpp"

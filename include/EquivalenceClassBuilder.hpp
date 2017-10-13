@@ -1,34 +1,33 @@
 #ifndef EQUIVALENCE_CLASS_BUILDER_HPP
 #define EQUIVALENCE_CLASS_BUILDER_HPP
 
-#include <unordered_map>
-#include <vector>
-#include <thread>
 #include <memory>
 #include <mutex>
+#include <thread>
+#include <unordered_map>
+#include <vector>
 
 // Logger includes
 #include "spdlog/spdlog.h"
 
-#include "cuckoohash_map.hh"
-#include "concurrentqueue.h"
 #include "SalmonUtils.hpp"
 #include "TranscriptGroup.hpp"
-
+#include "concurrentqueue.h"
+#include "cuckoohash_map.hh"
 
 struct TGValue {
-    TGValue(const TGValue& o) {
-        weights = o.weights;
-        combinedWeights = o.combinedWeights;
-        count = o.count;
-    }
+  TGValue(const TGValue& o) {
+    weights = o.weights;
+    combinedWeights = o.combinedWeights;
+    count = o.count;
+  }
 
-  TGValue(std::vector<double>& weightIn, uint64_t countIn) :
-    weights(weightIn.begin(), weightIn.end()) {
+  TGValue(std::vector<double>& weightIn, uint64_t countIn)
+      : weights(weightIn.begin(), weightIn.end()) {
     count = countIn;
   }
 
-// const is a lie
+  // const is a lie
   void normalizeAux() const {
     double sumOfAux{0.0};
     for (size_t i = 0; i < weights.size(); ++i) {
@@ -40,73 +39,73 @@ struct TGValue {
     }
   }
 
-    mutable std::vector<double> weights;
+  mutable std::vector<double> weights;
 
-    // The combined auxiliary and position weights.  These
-    // are filled in by the inference algorithm.
-    mutable std::vector<double> combinedWeights;
-    uint64_t count{0};
+  // The combined auxiliary and position weights.  These
+  // are filled in by the inference algorithm.
+  mutable std::vector<double> combinedWeights;
+  uint64_t count{0};
 };
 
 class EquivalenceClassBuilder {
-    public:
-        EquivalenceClassBuilder(std::shared_ptr<spdlog::logger> loggerIn) :
-		logger_(loggerIn) {
-            countMap_.reserve(1000000);
-        }
+public:
+  EquivalenceClassBuilder(std::shared_ptr<spdlog::logger> loggerIn)
+      : logger_(loggerIn) {
+    countMap_.reserve(1000000);
+  }
 
   //~EquivalenceClassBuilder() {}
 
-        void start() { active_ = true; }
+  void start() { active_ = true; }
 
-        bool finish() {
-            active_ = false;
-            size_t totalCount{0};
-            auto lt = countMap_.lock_table();
-            for (auto& kv : lt) {
-                kv.second.normalizeAux();
-                totalCount += kv.second.count;
-                countVec_.push_back(kv);
-            }
+  bool finish() {
+    active_ = false;
+    size_t totalCount{0};
+    auto lt = countMap_.lock_table();
+    for (auto& kv : lt) {
+      kv.second.normalizeAux();
+      totalCount += kv.second.count;
+      countVec_.push_back(kv);
+    }
 
-    	    logger_->info("Computed {} rich equivalence classes "
-			  "for further processing", countVec_.size());
-            logger_->info("Counted {} total reads in the equivalence classes ",
-                    totalCount);
-            return true;
-        }
+    logger_->info("Computed {} rich equivalence classes "
+                  "for further processing",
+                  countVec_.size());
+    logger_->info("Counted {} total reads in the equivalence classes ",
+                  totalCount);
+    return true;
+  }
 
-        inline void addGroup(TranscriptGroup&& g,
-                             std::vector<double>& weights) {
+  inline void addGroup(TranscriptGroup&& g, std::vector<double>& weights) {
 
-            auto upfn = [&weights](TGValue& x) -> void {
-                // update the count
-                x.count++;
-                // update the weights
-                for (size_t i = 0; i < x.weights.size(); ++i) {
-                  x.weights[i] += weights[i];
-                }
-            };
-            TGValue v(weights, 1);
-            countMap_.upsert(g, upfn, v);
-        }
+    auto upfn = [&weights](TGValue& x) -> void {
+      // update the count
+      x.count++;
+      // update the weights
+      for (size_t i = 0; i < x.weights.size(); ++i) {
+        x.weights[i] += weights[i];
+      }
+    };
+    TGValue v(weights, 1);
+    countMap_.upsert(g, upfn, v);
+  }
 
-        std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec() {
-            return countVec_;
-        }
+  std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec() {
+    return countVec_;
+  }
 
-    private:
-        std::atomic<bool> active_;
-	    cuckoohash_map<TranscriptGroup, TGValue, TranscriptGroupHasher> countMap_;
-        std::vector<std::pair<const TranscriptGroup, TGValue>> countVec_;
-    	std::shared_ptr<spdlog::logger> logger_;
+private:
+  std::atomic<bool> active_;
+  cuckoohash_map<TranscriptGroup, TGValue, TranscriptGroupHasher> countMap_;
+  std::vector<std::pair<const TranscriptGroup, TGValue>> countVec_;
+  std::shared_ptr<spdlog::logger> logger_;
 };
 
 #endif // EQUIVALENCE_CLASS_BUILDER_HPP
 
 /** Unordered map implementation */
-//std::unordered_map<TranscriptGroup, TGValue, TranscriptGroupHasher> countMap_;
-//std::mutex mapMut_;
+// std::unordered_map<TranscriptGroup, TGValue, TranscriptGroupHasher>
+// countMap_;  std::mutex mapMut_;
 /*
 bool finish() {
     // unordered_map implementation

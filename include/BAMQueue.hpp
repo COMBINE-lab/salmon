@@ -3,58 +3,55 @@
 
 //#include <boost/lockfree/spsc_queue.hpp>
 //#include <boost/lockfree/queue.hpp>
-#include <tbb/atomic.h>
-#include <iostream>
-#include <fstream>
 #include <atomic>
-#include <vector>
-#include <memory>
-#include <exception>
-#include <thread>
-#include <mutex>
 #include <condition_variable>
+#include <exception>
+#include <fstream>
+#include <iostream>
+#include <memory>
+#include <mutex>
+#include <tbb/atomic.h>
+#include <thread>
+#include <vector>
 
-#include <boost/timer/timer.hpp>
-#include <boost/filesystem.hpp>
-#include <tbb/concurrent_queue.h>
 #include "AlignmentGroup.hpp"
 #include "LibraryFormat.hpp"
-#include "SalmonMath.hpp"
 #include "ReadPair.hpp"
+#include "SalmonMath.hpp"
 #include "UnpairedRead.hpp"
-#include "spdlog/spdlog.h"
 #include "concurrentqueue.h"
 #include "readerwriterqueue.h"
+#include "spdlog/spdlog.h"
+#include <boost/filesystem.hpp>
+#include <boost/timer/timer.hpp>
+#include <tbb/concurrent_queue.h>
 
 extern "C" {
-#include "io_lib/scram.h"
 #include "io_lib/os.h"
+#include "io_lib/scram.h"
 #undef max
 #undef min
 }
 
-
-
 /**
-  * Simple structure holding info about the alignment file.
-  */
+ * Simple structure holding info about the alignment file.
+ */
 struct AlignmentFile {
-    boost::filesystem::path fileName;
-    std::string readMode;
-    scram_fd* fp;
-    SAM_hdr* header;
-    uint32_t numParseThreads;
+  boost::filesystem::path fileName;
+  std::string readMode;
+  scram_fd* fp;
+  SAM_hdr* header;
+  uint32_t numParseThreads;
 };
 
 /**
-  * A queue from which to draw BAM alignments.  The queue is thread-safe, and
-  * can be written to and read from multiple threads.
-  *
-  * This class is templated on LibT --- the type of read library from which
-  * the provided alignments are being generated.
-  */
-template <typename FragT>
-class BAMQueue {
+ * A queue from which to draw BAM alignments.  The queue is thread-safe, and
+ * can be written to and read from multiple threads.
+ *
+ * This class is templated on LibT --- the type of read library from which
+ * the provided alignments are being generated.
+ */
+template <typename FragT> class BAMQueue {
 public:
   BAMQueue(std::vector<boost::filesystem::path>& fnames, LibraryFormat& libFmt,
            uint32_t numParseThreads, uint32_t cacheSize);
@@ -80,18 +77,19 @@ public:
   void reset();
 
   tbb::concurrent_queue<FragT*>& getFragmentQueue();
-  //moodycamel::ConcurrentQueue<FragT*>& getFragmentQueue();
+  // moodycamel::ConcurrentQueue<FragT*>& getFragmentQueue();
 
-  //tbb::concurrent_bounded_queue<AlignmentGroup<FragT*>*>& getAlignmentGroupQueue();
-  moodycamel::ConcurrentQueue<AlignmentGroup<FragT*>*>& getAlignmentGroupQueue();
+  // tbb::concurrent_bounded_queue<AlignmentGroup<FragT*>*>&
+  // getAlignmentGroupQueue();
+  moodycamel::ConcurrentQueue<AlignmentGroup<FragT*>*>&
+  getAlignmentGroupQueue();
 
 private:
   size_t popNum{0};
   /** Fill the queue with the appropriate type of alignment
    * depending on the template paramater T
    */
-  template <typename FilterT>
-  void fillQueue_(FilterT, bool);
+  template <typename FilterT> void fillQueue_(FilterT, bool);
 
   /** Overload of getFrag_ for paired-end reads */
   template <typename FilterT>
@@ -101,7 +99,8 @@ private:
   inline bool getFrag_(UnpairedRead& sread, FilterT filt);
 
 public:
-  bool verbose=false;
+  bool verbose = false;
+
 private:
   std::vector<AlignmentFile> files_;
   std::string fname_;
@@ -111,18 +110,18 @@ private:
   scram_fd* fp_ = nullptr;
   SAM_hdr* hdr_ = nullptr;
 
-  //htsFile* fp_ = nullptr;
+  // htsFile* fp_ = nullptr;
   size_t totalAlignments_;
   size_t numUnaligned_;
   size_t numMappedReads_;
   size_t numUniquelyMappedReads_;
   tbb::concurrent_queue<FragT*> fragmentQueue_;
-  //moodycamel::ConcurrentQueue<FragT*> fragmentQueue_;
+  // moodycamel::ConcurrentQueue<FragT*> fragmentQueue_;
 
-  //tbb::concurrent_bounded_queue<AlignmentGroup<FragT*>*> alnGroupPool_;
+  // tbb::concurrent_bounded_queue<AlignmentGroup<FragT*>*> alnGroupPool_;
   moodycamel::ConcurrentQueue<AlignmentGroup<FragT*>*> alnGroupPool_;
 
-  //tbb::concurrent_bounded_queue<AlignmentGroup<FragT*>*> alnGroupQueue_;
+  // tbb::concurrent_bounded_queue<AlignmentGroup<FragT*>*> alnGroupQueue_;
   moodycamel::ReaderWriterQueue<AlignmentGroup<FragT*>*> alnGroupQueue_;
 
   /*
@@ -136,12 +135,12 @@ private:
 
   size_t batchNum_;
   std::string readMode_;
-/*
-#if not defined(__APPLE__)
-   std::mutex agMutex_;
-    std::condition_variable workAvailable_;
-#endif
-*/
+  /*
+  #if not defined(__APPLE__)
+     std::mutex agMutex_;
+      std::condition_variable workAvailable_;
+  #endif
+  */
 };
 
 #include "BAMQueue.tpp"

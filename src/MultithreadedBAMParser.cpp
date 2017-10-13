@@ -19,77 +19,77 @@
 <HEADER
 **/
 
-
 #include "MultithreadedBAMParser.hpp"
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
-#include <vector>
-#include <thread>
-#include <atomic>
 #include <iostream>
+#include <thread>
+#include <vector>
 
+#include "tbb/concurrent_queue.h"
 #include <boost/filesystem.hpp>
 #include <boost/range/irange.hpp>
-#include "tbb/concurrent_queue.h"
-
 
 namespace bfs = boost::filesystem;
 using BamTools::BamReader;
 using BamTools::BamAlignment;
 
-MultithreadedBAMParser::MultithreadedBAMParser(std::vector<bfs::path>& files) : inputStreams_(files),
-        parsing_(false), parsingThread_(nullptr)
-    {
-        alnStructs_ = new BamTools::BamAlignment[queueCapacity_];
-        alnQueue_.set_capacity(queueCapacity_);
-        seqContainerQueue_.set_capacity(queueCapacity_);
-        for (size_t i = 0; i < queueCapacity_; ++i) {
-            seqContainerQueue_.push(&alnStructs_[i]);
-        }
-    }
-
-MultithreadedBAMParser::~MultithreadedBAMParser() {
-        parsingThread_->join();
-        delete [] alnStructs_;
-        delete parsingThread_;
-    }
-
-bool MultithreadedBAMParser::start() {
-        if (!parsing_) {
-            parsing_ = true;
-            parsingThread_ = new std::thread([this](){
-
-                BamTools::BamReader reader;
-
-                for (auto file : this->inputStreams_) {
-                    reader.Open(file.string());
-                    std::cerr << "reading from " << file.native() << "\n";
-
-                    BamAlignment* aln;
-                    this->seqContainerQueue_.pop(aln);
-                    while (reader.GetNextAlignment(*aln)) {
-                        this->alnQueue_.push(aln);
-                        this->seqContainerQueue_.pop(aln);
-                    }
-                    // close the file
-                    reader.Close();
-                }
-
-                this->parsing_ = false;
-            });
-            return true;
-        } else {
-            return false;
-        }
-
-    }
-
-bool MultithreadedBAMParser::nextAlignment(BamAlignment*& seq) {
-        while(parsing_ or !alnQueue_.empty()) {
-            if (alnQueue_.try_pop(seq)) { return true; }
-        }
-        return false;
+MultithreadedBAMParser::MultithreadedBAMParser(std::vector<bfs::path>& files)
+    : inputStreams_(files), parsing_(false), parsingThread_(nullptr) {
+  alnStructs_ = new BamTools::BamAlignment[queueCapacity_];
+  alnQueue_.set_capacity(queueCapacity_);
+  seqContainerQueue_.set_capacity(queueCapacity_);
+  for (size_t i = 0; i < queueCapacity_; ++i) {
+    seqContainerQueue_.push(&alnStructs_[i]);
+  }
 }
 
-void MultithreadedBAMParser::finishedWithAlignment(BamAlignment*& s) { seqContainerQueue_.push(s); }
+MultithreadedBAMParser::~MultithreadedBAMParser() {
+  parsingThread_->join();
+  delete[] alnStructs_;
+  delete parsingThread_;
+}
+
+bool MultithreadedBAMParser::start() {
+  if (!parsing_) {
+    parsing_ = true;
+    parsingThread_ = new std::thread([this]() {
+
+      BamTools::BamReader reader;
+
+      for (auto file : this->inputStreams_) {
+        reader.Open(file.string());
+        std::cerr << "reading from " << file.native() << "\n";
+
+        BamAlignment* aln;
+        this->seqContainerQueue_.pop(aln);
+        while (reader.GetNextAlignment(*aln)) {
+          this->alnQueue_.push(aln);
+          this->seqContainerQueue_.pop(aln);
+        }
+        // close the file
+        reader.Close();
+      }
+
+      this->parsing_ = false;
+    });
+    return true;
+  } else {
+    return false;
+  }
+}
+
+bool MultithreadedBAMParser::nextAlignment(BamAlignment*& seq) {
+  while (parsing_ or !alnQueue_.empty()) {
+    if (alnQueue_.try_pop(seq)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void MultithreadedBAMParser::finishedWithAlignment(BamAlignment*& s) {
+  seqContainerQueue_.push(s);
+}

@@ -1,14 +1,16 @@
 #ifndef __SALMON_EXCEPTIONS_HPP__
 #define __SALMON_EXCEPTIONS_HPP__
 
-#include <stdexcept>
 #include <sstream>
+#include <stdexcept>
 
 class InsufficientAssignedFragments : public std::runtime_error {
 public:
-  InsufficientAssignedFragments(uint64_t numAssigned, uint64_t numRequired) noexcept;
+  InsufficientAssignedFragments(uint64_t numAssigned,
+                                uint64_t numRequired) noexcept;
   InsufficientAssignedFragments(InsufficientAssignedFragments&& other);
   virtual const char* what() const throw();
+
 private:
   uint64_t numAssigned_;
   uint64_t numRequired_;

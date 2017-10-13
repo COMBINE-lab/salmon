@@ -19,19 +19,18 @@
 <HEADER
 **/
 
-
 #ifndef SALMON_CONFIG_HPP
 #define SALMON_CONFIG_HPP
 
 #include <string>
 
 namespace salmon {
-	constexpr char majorVersion[] = "0";
-	constexpr char minorVersion[] = "8";
-	constexpr char patchVersion[] = "3";
-	constexpr char version[] = "0.8.3";
-  constexpr uint32_t indexVersion = 2;
-  constexpr char requiredQuasiIndexVersion[] = "q5";
-}
+constexpr char majorVersion[] = "0";
+constexpr char minorVersion[] = "8";
+constexpr char patchVersion[] = "3";
+constexpr char version[] = "0.8.3";
+constexpr uint32_t indexVersion = 2;
+constexpr char requiredQuasiIndexVersion[] = "q5";
+} // namespace salmon
 
 #endif // SALMON_CONFIG_HPP

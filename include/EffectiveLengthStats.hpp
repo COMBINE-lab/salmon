@@ -9,6 +9,7 @@
  **/
 class EffectiveLengthStats {
   using VectorXu = Eigen::Matrix<uint32_t, Eigen::Dynamic, 1>;
+
 public:
   EffectiveLengthStats(size_t numTxps);
   void addFragment(uint32_t txID, uint32_t len, double logMass);
@@ -16,6 +17,7 @@ public:
   double getExpectedEffectiveLength(uint32_t txID);
   Eigen::VectorXd getExpectedEffectiveLengths();
   void merge(const EffectiveLengthStats& other);
+
 private:
   size_t numTxps_;
   Eigen::VectorXd lengths_;

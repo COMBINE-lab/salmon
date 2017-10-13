@@ -61,7 +61,8 @@ public:
               sizeof(typename Eigen::MatrixXd::Index));
     out.write(reinterpret_cast<char*>(&cols),
               sizeof(typename Eigen::MatrixXd::Index));
-    out.write(reinterpret_cast<char*>(const_cast<double*>(modelTotals_.data())), sizeof(double) * rows);
+    out.write(reinterpret_cast<char*>(const_cast<double*>(modelTotals_.data())),
+              sizeof(double) * rows);
     out.write(reinterpret_cast<char*>(mutThis->counts_.data()),
               rows * cols * sizeof(typename Eigen::MatrixXd::Scalar));
     return true;
@@ -85,7 +86,8 @@ public:
     std::vector<uint32_t> nbins{5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 101};
     // Using the "BR" penalty
     // see:
-    // Davies, Laurie, et al. "A comparison of automatic histogram constructions."
+    // Davies, Laurie, et al. "A comparison of automatic histogram
+  constructions."
     // ESAIM: Probability and Statistics 13 (2009): 181-196.
     std::vector<double> scores;
     for (auto nb : nbins) {
@@ -133,7 +135,7 @@ public:
 
   void inc(GCDesc desc,
            double fragWeight //< the weight associated with this fragment
-           ) {
+  ) {
     auto ctx = (condBins_ > 1) ? desc.contextBin(condBins_) : 0;
     auto frag = (numGCBins_ != 101) ? desc.fragBin(numGCBins_) : desc.fragBin();
 
@@ -211,7 +213,7 @@ public:
             }
             modelTotals_[r] = rowMass;
           }
-          // if rowMass is 0.0, just leave modelTotals_[r] as 0.0; 
+          // if rowMass is 0.0, just leave modelTotals_[r] as 0.0;
         }
       }
       normalized_ = true;

@@ -1,7 +1,9 @@
 #include "EffectiveLengthStats.hpp"
 #include "SalmonMath.hpp"
 
-EffectiveLengthStats::EffectiveLengthStats(size_t numTxps) : numTxps_(numTxps), lengths_(numTxps), weights_(numTxps), counts_(numTxps) {
+EffectiveLengthStats::EffectiveLengthStats(size_t numTxps)
+    : numTxps_(numTxps), lengths_(numTxps), weights_(numTxps),
+      counts_(numTxps) {
   for (size_t i = 0; i < numTxps_; ++i) {
     lengths_(i) = salmon::math::LOG_0;
     weights_(i) = salmon::math::LOG_0;
@@ -9,7 +11,8 @@ EffectiveLengthStats::EffectiveLengthStats(size_t numTxps) : numTxps_(numTxps), 
   }
 }
 
-void EffectiveLengthStats::addFragment(uint32_t txID, uint32_t len, double logMass) {
+void EffectiveLengthStats::addFragment(uint32_t txID, uint32_t len,
+                                       double logMass) {
   len = (len >= 1) ? len : 1;
   const double logLen = std::log(static_cast<double>(len));
   lengths_(txID) = salmon::math::logAdd(lengths_(txID), logLen + logMass);
@@ -22,15 +25,20 @@ uint32_t EffectiveLengthStats::getObservedCount(uint32_t txID) {
 }
 
 double EffectiveLengthStats::getExpectedEffectiveLength(uint32_t txID) {
-  return (!salmon::math::isLog0(weights_(txID))) ? std::exp(lengths_(txID) - weights_(txID)) : 0.01;
-  //return (weights_(txID) > 0) ? static_cast<double>(lengths_(txID)) / weights_(txID) : 0.01;
+  return (!salmon::math::isLog0(weights_(txID)))
+             ? std::exp(lengths_(txID) - weights_(txID))
+             : 0.01;
+  // return (weights_(txID) > 0) ? static_cast<double>(lengths_(txID)) /
+  // weights_(txID) : 0.01;
 }
 
 Eigen::VectorXd EffectiveLengthStats::getExpectedEffectiveLengths() {
   // expected effective lengths
   Eigen::VectorXd eel(numTxps_);
   eel.setZero();
-  for (size_t i = 0; i < numTxps_; ++i) { eel(i) = getExpectedEffectiveLength(i); }
+  for (size_t i = 0; i < numTxps_; ++i) {
+    eel(i) = getExpectedEffectiveLength(i);
+  }
   return eel;
 }
 

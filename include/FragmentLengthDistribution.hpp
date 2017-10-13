@@ -12,9 +12,9 @@
 
 #include "tbb/atomic.h"
 #include <atomic>
-#include <vector>
-#include <string>
 #include <mutex>
+#include <string>
+#include <vector>
 
 #include "SpinLock.hpp" // RapMap's with try_lock
 
@@ -33,31 +33,30 @@ class FragmentLengthDistribution {
   /**
    * A private vector that stores the observed (logged) mass for each length.
    */
-    std::vector<tbb::atomic<double>> hist_;
+  std::vector<tbb::atomic<double>> hist_;
 
-   /**
+  /**
    * A private vector that stores the observed (logged) mass for each length.
    */
   std::vector<double> cachedCMF_;
   std::vector<double> cachedPMF_;
-    volatile bool haveCachedCMF_;
-  //std::mutex fldMut_;
+  volatile bool haveCachedCMF_;
+  // std::mutex fldMut_;
   SpinLock sl_;
-
 
   /**
    * A private double that stores the total observed (logged) mass.
    */
-    tbb::atomic<double> totMass_;
+  tbb::atomic<double> totMass_;
   /**
    * A private double that stores the (logged) sum of the product of observed
    * lengths and masses for quick mean calculations.
    */
-    tbb::atomic<double> sum_;
+  tbb::atomic<double> sum_;
   /**
    * A private int that stores the minimum observed length.
    */
-    std::atomic<size_t> min_;
+  std::atomic<size_t> min_;
   /**
    * A size for internal binning of the lengths in the distribution.
    */
@@ -80,8 +79,8 @@ public:
    *        reduce the number of parameters in the distribution.
    */
   FragmentLengthDistribution(double alpha, size_t max_val, size_t prior_mu,
-                             size_t prior_sigma, size_t kernel_n, double kernel_p,
-                             size_t bin_size = 1);
+                             size_t prior_sigma, size_t kernel_n,
+                             double kernel_p, size_t bin_size = 1);
   /**
    * An accessor for the maximum allowed length.
    * @return Max allowed length.
@@ -119,11 +118,11 @@ public:
   double cmf(size_t len) const;
 
   /**
-    * A member function that caches the cumulative mass function into
-    * a vector.  This should be called (once), when the fld will no
-    * longer be updated.  It will make future calls to cmf(len)
-    * much faster.
-    */
+   * A member function that caches the cumulative mass function into
+   * a vector.  This should be called (once), when the fld will no
+   * longer be updated.  It will make future calls to cmf(len)
+   * much faster.
+   */
   void cacheCMF();
 
   /**
@@ -135,10 +134,9 @@ public:
   // do the same thing as above, but use pmf to compute this CMF
   std::vector<double> cmf(const std::vector<double>& pmf) const;
 
-
   /**
-   * A member function that fills in a a vector containing the (logged) probability
-   * mass function *for the bins*, and the min and max values
+   * A member function that fills in a a vector containing the (logged)
+   * probability mass function *for the bins*, and the min and max values
    * @return (Logged) pmf of bins.
    */
   void dumpPMF(std::vector<double>& pmfOut, size_t& minV, size_t& maxV) const;
@@ -154,8 +152,8 @@ public:
    * @return Space-separated string of probabilities ordered from length 0 to
    *         max_val (non-logged).
    */
-   std::string toString() const;
-  //std::string to_string() const;
+  std::string toString() const;
+  // std::string to_string() const;
   /**
    * A member function that appends the LengthDistribution parameters to the end
    * of the given file.
@@ -163,7 +161,7 @@ public:
    * @param length_type a string specifying the type of length the distribution
    *        is of (ie. "Fragment" or "Target") to be included in the header.
    */
-  //void append_output(std::ofstream& outfile, std::string length_type) const;
+  // void append_output(std::ofstream& outfile, std::string length_type) const;
 };
 
 #endif

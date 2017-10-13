@@ -19,134 +19,128 @@
 <HEADER
 **/
 
-
 #ifndef TRANSCRIPT_GENE_MAP_HPP
 #define TRANSCRIPT_GENE_MAP_HPP
 
 // Allows for the serialization of this class
 #include <cereal/archives/binary.hpp>
-#include <cereal/types/vector.hpp>
 #include <cereal/types/string.hpp>
+#include <cereal/types/vector.hpp>
 
 #include <algorithm>
 #include <unordered_map>
 #include <vector>
 
 class TranscriptGeneMap {
-using Index = size_t;
-using Size = size_t;
-using NameVector = std::vector<std::string>;
-using IndexVector = std::vector<size_t>;
-using IndexVectorList = std::vector<std::vector<size_t>>;
+  using Index = size_t;
+  using Size = size_t;
+  using NameVector = std::vector<std::string>;
+  using IndexVector = std::vector<size_t>;
+  using IndexVectorList = std::vector<std::vector<size_t>>;
 
 private:
-    NameVector _transcriptNames;
-    NameVector _geneNames;
-    IndexVector _transcriptsToGenes;
-    IndexVectorList _genesToTranscripts;
-    bool _haveReverseMap;
+  NameVector _transcriptNames;
+  NameVector _geneNames;
+  IndexVector _transcriptsToGenes;
+  IndexVectorList _genesToTranscripts;
+  bool _haveReverseMap;
 
-    void _computeReverseMap() {
+  void _computeReverseMap() {
 
-        _genesToTranscripts.resize( _geneNames.size(), {});
+    _genesToTranscripts.resize(_geneNames.size(), {});
 
-        Index transcriptID = 0;
-        size_t maxNumTrans = 0;
-        Index maxGene;
-        for ( transcriptID = 0; transcriptID < _transcriptsToGenes.size(); ++transcriptID ) {
-            _genesToTranscripts[ _transcriptsToGenes[transcriptID] ].push_back( transcriptID );
-            if ( maxNumTrans < _genesToTranscripts[ _transcriptsToGenes[transcriptID] ].size() ) {
-                maxNumTrans = _genesToTranscripts[ _transcriptsToGenes[transcriptID] ].size();
-                maxGene = _transcriptsToGenes[transcriptID];
-            }
-        }
-        std::cerr << "max # of transcripts in a gene was " << maxNumTrans << " in gene " << _geneNames[maxGene] << "\n";
+    Index transcriptID = 0;
+    size_t maxNumTrans = 0;
+    Index maxGene;
+    for (transcriptID = 0; transcriptID < _transcriptsToGenes.size();
+         ++transcriptID) {
+      _genesToTranscripts[_transcriptsToGenes[transcriptID]].push_back(
+          transcriptID);
+      if (maxNumTrans <
+          _genesToTranscripts[_transcriptsToGenes[transcriptID]].size()) {
+        maxNumTrans =
+            _genesToTranscripts[_transcriptsToGenes[transcriptID]].size();
+        maxGene = _transcriptsToGenes[transcriptID];
+      }
     }
+    std::cerr << "max # of transcripts in a gene was " << maxNumTrans
+              << " in gene " << _geneNames[maxGene] << "\n";
+  }
 
-    friend class cereal::access;
+  friend class cereal::access;
 
-    template<class Archive>
-    void serialize(Archive & ar, const unsigned int version)
-    {
-        ar(_transcriptNames, _geneNames, _transcriptsToGenes,
-           _genesToTranscripts, _haveReverseMap);
-    }
+  template <class Archive>
+  void serialize(Archive& ar, const unsigned int version) {
+    ar(_transcriptNames, _geneNames, _transcriptsToGenes, _genesToTranscripts,
+       _haveReverseMap);
+  }
 
 public:
-    TranscriptGeneMap() :
-        _transcriptNames(NameVector()), _geneNames(NameVector()),
+  TranscriptGeneMap()
+      : _transcriptNames(NameVector()), _geneNames(NameVector()),
         _transcriptsToGenes(IndexVector()), _haveReverseMap(false) {}
 
-
-    TranscriptGeneMap( const NameVector &transcriptNames,
-                       const NameVector &geneNames,
-                       const IndexVector &transcriptsToGenes ) :
-        _transcriptNames(transcriptNames), _geneNames(geneNames),
+  TranscriptGeneMap(const NameVector& transcriptNames,
+                    const NameVector& geneNames,
+                    const IndexVector& transcriptsToGenes)
+      : _transcriptNames(transcriptNames), _geneNames(geneNames),
         _transcriptsToGenes(transcriptsToGenes), _haveReverseMap(false) {}
 
+  TranscriptGeneMap(const TranscriptGeneMap& other) = default;
+  TranscriptGeneMap& operator=(const TranscriptGeneMap& other) = default;
 
-    TranscriptGeneMap(const TranscriptGeneMap& other) = default;
-    TranscriptGeneMap& operator=(const TranscriptGeneMap& other) = default;
+  Index INVALID{std::numeric_limits<Index>::max()};
 
+  Index findTranscriptID(const std::string& tname) {
+    using std::distance;
+    using std::lower_bound;
+    auto it =
+        lower_bound(_transcriptNames.begin(), _transcriptNames.end(), tname);
+    if (it == _transcriptNames.end() or *it != tname) {
+      return INVALID;
+    } else {
+      return distance(_transcriptNames.begin(), it);
+    }
+  }
 
-    Index INVALID { std::numeric_limits<Index>::max() };
+  Size numTranscripts() { return _transcriptNames.size(); }
+  Size numGenes() { return _geneNames.size(); }
 
-    Index findTranscriptID( const std::string &tname ) {
-        using std::distance;
-        using std::lower_bound;
-        auto it = lower_bound( _transcriptNames.begin(), _transcriptNames.end(), tname );
-        if (it == _transcriptNames.end() or *it != tname) {
-          return INVALID;
-        } else {
-          return distance(_transcriptNames.begin(), it);
-        }
+  bool needReverse() {
+    if (_haveReverseMap) {
+      return false;
+    } else {
+      _computeReverseMap();
+      return true;
     }
+  }
 
-    Size numTranscripts() {
-        return _transcriptNames.size();
-    }
-    Size numGenes() {
-        return _geneNames.size();
-    }
+  const IndexVector& transcriptsForGene(Index geneID) {
+    return _genesToTranscripts[geneID];
+  }
 
-    bool needReverse() {
-        if ( _haveReverseMap ) {
-            return false;
-        } else {
-            _computeReverseMap();
-            return true;
-        }
+  inline std::string nameFromGeneID(Index geneID) { return _geneNames[geneID]; }
+  inline Index gene(Index transcriptID) {
+    return _transcriptsToGenes[transcriptID];
+  }
+  inline std::string geneName(Index transcriptID) {
+    return _geneNames[_transcriptsToGenes[transcriptID]];
+  }
+  inline std::string geneName(const std::string& transcriptName, bool& found) {
+    found = false;
+    auto tid = findTranscriptID(transcriptName);
+    if (tid != INVALID) {
+      found = true;
+      return geneName(tid);
+    } else {
+      found = false;
+      return transcriptName;
     }
+  }
 
-    const IndexVector &transcriptsForGene( Index geneID ) {
-        return _genesToTranscripts[geneID];
-    }
-
-    inline std::string nameFromGeneID( Index geneID ) {
-        return _geneNames[geneID];
-    }
-    inline Index gene( Index transcriptID ) {
-        return _transcriptsToGenes[transcriptID];
-    }
-    inline std::string geneName( Index transcriptID ) {
-        return _geneNames[_transcriptsToGenes[transcriptID]];
-    }
-    inline std::string geneName (const std::string& transcriptName,
-                                 bool& found) {
-        found = false;
-        auto tid = findTranscriptID(transcriptName);
-        if (tid != INVALID) {
-            found = true;
-            return geneName(tid);
-        } else {
-           found = false;
-           return transcriptName;
-        }
-    }
-
-    inline std::string transcriptName( Index transcriptID ) {
-        return _transcriptNames[transcriptID];
-    }
+  inline std::string transcriptName(Index transcriptID) {
+    return _transcriptNames[transcriptID];
+  }
 };
 
 #endif // TRANSCRIPT_GENE_MAP_HPP

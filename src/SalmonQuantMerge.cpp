@@ -19,16 +19,16 @@
 <HEADER
 **/
 
-#include <iostream>
-#include <fstream>
-#include <memory>
 #include <boost/filesystem.hpp>
 #include <boost/program_options.hpp>
+#include <fstream>
+#include <iostream>
+#include <memory>
 // C++ string formatting library #include "spdlog/fmt/fmt.h"
 // logger includes
 #include "spdlog/spdlog.h"
 
-enum class TargetColumn {LEN, ELEN, TPM, NREADS};
+enum class TargetColumn { LEN, ELEN, TPM, NREADS };
 
 class QuantMergeOptions {
 public:
@@ -42,14 +42,18 @@ public:
   void print() {
     std::string slist;
     for (size_t n = 0; n < samples.size(); ++n) {
-      if (n > 0) {slist += ", ";}
+      if (n > 0) {
+        slist += ", ";
+      }
       slist += samples[n];
     }
     log->info("samples: [ {} ]", slist);
     if (names.size() > 0) {
       std::string nlist;
       for (size_t n = 0; n < names.size(); ++n) {
-        if (n > 0) { nlist += ", "; }
+        if (n > 0) {
+          nlist += ", ";
+        }
         nlist += names[n];
       }
       log->info("sample names : [ {} ]", nlist);
@@ -59,7 +63,6 @@ public:
   }
 };
 
-
 bool validateOptions(boost::program_options::variables_map& vm,
                      QuantMergeOptions& qmOpts,
                      std::shared_ptr<spdlog::logger> log) {
@@ -67,8 +70,10 @@ bool validateOptions(boost::program_options::variables_map& vm,
   // as the list of samples
   if (vm.count("names")) {
     if (qmOpts.names.size() != qmOpts.samples.size()) {
-      log->critical("If you provide names for your samples, they number of names must be the "
-                    "same as the number of samples.  You provided {} samples but {} names",
+      log->critical("If you provide names for your samples, they number of "
+                    "names must be the "
+                    "same as the number of samples.  You provided {} samples "
+                    "but {} names",
                     qmOpts.samples.size(), qmOpts.names.size());
       std::exit(1);
     }
@@ -78,27 +83,26 @@ bool validateOptions(boost::program_options::variables_map& vm,
     }
   }
 
-  std::transform(qmOpts.outputCol.begin(), qmOpts.outputCol.end(), qmOpts.outputCol.begin(),
+  std::transform(qmOpts.outputCol.begin(), qmOpts.outputCol.end(),
+                 qmOpts.outputCol.begin(),
                  [](unsigned char c) { return std::toupper(c); });
-  if (qmOpts.outputCol == "LEN" or
-      qmOpts.outputCol == "LENGTH") {
+  if (qmOpts.outputCol == "LEN" or qmOpts.outputCol == "LENGTH") {
     qmOpts.tcol = TargetColumn::LEN;
-  } else if (qmOpts.outputCol == "ELEN" or
-             qmOpts.outputCol == "ELENGTH" or
-             qmOpts.outputCol == "EFFLEN" or
-             qmOpts.outputCol == "EFFLENGTH" or
+  } else if (qmOpts.outputCol == "ELEN" or qmOpts.outputCol == "ELENGTH" or
+             qmOpts.outputCol == "EFFLEN" or qmOpts.outputCol == "EFFLENGTH" or
              qmOpts.outputCol == "EFFECTIVELEN" or
              qmOpts.outputCol == "EFFECTIVELENGTH") {
     qmOpts.tcol = TargetColumn::ELEN;
   } else if (qmOpts.outputCol == "TPM") {
     qmOpts.tcol = TargetColumn::TPM;
   } else if (qmOpts.outputCol == "NUMREADS" or
-             qmOpts.outputCol == "NUM_READS" or
-             qmOpts.outputCol == "NREADS") {
+             qmOpts.outputCol == "NUM_READS" or qmOpts.outputCol == "NREADS") {
     qmOpts.tcol = TargetColumn::NREADS;
   } else {
-    qmOpts.log->critical("I do not understand the requested output column name, {}. "
-                         "The output column should be one of {{len, elen, tmp, numreads}}.", qmOpts.outputCol);
+    qmOpts.log->critical(
+        "I do not understand the requested output column name, {}. "
+        "The output column should be one of {{len, elen, tmp, numreads}}.",
+        qmOpts.outputCol);
     std::exit(1);
   }
 
@@ -118,7 +122,8 @@ bool doMerge(QuantMergeOptions& qmOpts) {
   for (uint32_t n = 0; n < qmOpts.samples.size(); ++n) {
     auto& sampDir = qmOpts.samples[n];
     auto quantFile = boost::filesystem::path(sampDir) / "quant.sf";
-    if (boost::filesystem::exists(quantFile) and boost::filesystem::is_regular_file(quantFile)) {
+    if (boost::filesystem::exists(quantFile) and
+        boost::filesystem::is_regular_file(quantFile)) {
       qmOpts.log->info("Parsing {}", quantFile.string());
       std::ifstream ifile(quantFile.string());
       std::string header;
@@ -132,15 +137,19 @@ bool doMerge(QuantMergeOptions& qmOpts) {
       ifile.close();
     } else {
       qmOpts.log->critical("The sample directory {} either doesn't exist, "
-                           "or doesn't contain a quant.sf file", sampDir);
+                           "or doesn't contain a quant.sf file",
+                           sampDir);
       return false;
     }
   }
 
-  auto outputPath = boost::filesystem::absolute(boost::filesystem::path(qmOpts.outputName)).parent_path();
+  auto outputPath =
+      boost::filesystem::absolute(boost::filesystem::path(qmOpts.outputName))
+          .parent_path();
   if (!boost::filesystem::exists(outputPath)) {
     if (!boost::filesystem::create_directories(outputPath)) {
-      qmOpts.log->critical("Couldn't create output path {}", outputPath.string());
+      qmOpts.log->critical("Couldn't create output path {}",
+                           outputPath.string());
       std::exit(1);
     }
   }
@@ -190,14 +199,14 @@ bool doMerge(QuantMergeOptions& qmOpts) {
   }
   outFile.close();
 
-
   if (missingValues > 0) {
-    qmOpts.log->warn("There were {} missing entries (recorded as \"NA\") in the output", missingValues);
+    qmOpts.log->warn(
+        "There were {} missing entries (recorded as \"NA\") in the output",
+        missingValues);
   }
 
   return true;
 }
-
 
 int salmonQuantMerge(int argc, char* argv[]) {
   using std::cerr;
@@ -209,27 +218,22 @@ int salmonQuantMerge(int argc, char* argv[]) {
   QuantMergeOptions qmOpts;
   po::options_description generic("\n"
                                   "basic options");
-  generic.add_options()("version,v", "print version string")
-    (
-      "help,h", "produce help message")
-    (
+  generic.add_options()("version,v", "print version string")(
+      "help,h", "produce help message")(
       "quants",
       po::value<vector<string>>(&qmOpts.samples)->multitoken()->required(),
-      "List of quantification directories.")
-    (
+      "List of quantification directories.")(
       "names", po::value<vector<string>>(&qmOpts.names)->multitoken(),
-      "Optional list of names to give to the samples."
-    )
-    (
-     "column,c", po::value<string>(&qmOpts.outputCol)->required()->default_value("TPM"),
-     "The name of the column that will be merged together into the output files. "
-     "The options are {len, elen, tpm, numreads}"
-    )
-    (
+      "Optional list of names to give to the samples.")(
+      "column,c",
+      po::value<string>(&qmOpts.outputCol)->required()->default_value("TPM"),
+      "The name of the column that will be merged together into the output "
+      "files. "
+      "The options are {len, elen, tpm, numreads}")(
 
       "output,o", po::value<std::string>(&qmOpts.outputName)->required(),
       "Output quantification file.");
-   
+
   po::options_description all("salmon quantmerge options");
   all.add(generic);
 
@@ -259,7 +263,8 @@ a single file.
     size_t max_q_size = 131072;
     spdlog::set_async_mode(max_q_size);
 
-    auto consoleSink = std::make_shared<spdlog::sinks::ansicolor_stdout_sink_mt>();
+    auto consoleSink =
+        std::make_shared<spdlog::sinks::ansicolor_stdout_sink_mt>();
     auto consoleLog = spdlog::create("mergeLog", {consoleSink});
     qmOpts.log = consoleLog;
 

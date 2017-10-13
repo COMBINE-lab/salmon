@@ -86,4 +86,4 @@ std::vector<int32_t> samplesFromLogPMF(FragmentLengthDistribution* fld,
   }
   return samples;
 }
-}
+} // namespace distribution_utils

@@ -1,9 +1,9 @@
 #include <atomic>
+#include <mutex>
 #include <random>
+#include <thread>
 #include <unordered_map>
 #include <vector>
-#include <mutex>
-#include <thread>
 
 #include "tbb/blocked_range.h"
 #include "tbb/combinable.h"
@@ -16,8 +16,8 @@
 
 //#include "fastapprox.h"
 #include <boost/filesystem.hpp>
-#include <boost/math/special_functions/digamma.hpp>
 #include <boost/math/distributions/gamma.hpp>
+#include <boost/math/special_functions/digamma.hpp>
 // PCG Random number generator
 #include "pcg_random.hpp"
 
@@ -46,13 +46,15 @@ using BlockedIndexRange = tbb::blocked_range<size_t>;
 constexpr double minEQClassWeight = std::numeric_limits<double>::denorm_min();
 constexpr double minWeight = std::numeric_limits<double>::denorm_min();
 
-/** http://codereview.stackexchange.com/questions/106773/dividing-a-range-into-n-sub-ranges */
+/**
+ * http://codereview.stackexchange.com/questions/106773/dividing-a-range-into-n-sub-ranges
+ */
 template <typename Iterator>
 std::vector<std::pair<Iterator, Iterator>>
-  divide_work( Iterator begin, Iterator end, std::size_t n )
-{
+divide_work(Iterator begin, Iterator end, std::size_t n) {
   std::vector<std::pair<Iterator, Iterator>> ranges;
-  if (n == 0) return ranges;
+  if (n == 0)
+    return ranges;
   ranges.reserve(n);
 
   auto dist = std::distance(begin, end);
@@ -60,12 +62,13 @@ std::vector<std::pair<Iterator, Iterator>>
   auto chunk = dist / n;
   auto remainder = dist % n;
 
-  for (size_t i = 0; i < n-1; ++i) {
+  for (size_t i = 0; i < n - 1; ++i) {
     auto next_end = std::next(begin, chunk + (remainder ? 1 : 0));
     ranges.emplace_back(begin, next_end);
 
     begin = next_end;
-    if (remainder) remainder -= 1;
+    if (remainder)
+      remainder -= 1;
   }
 
   // last chunk
@@ -75,20 +78,20 @@ std::vector<std::pair<Iterator, Iterator>>
 
 /**
  * This non-collapsed Gibbs step is largely inspired by the method first
- * introduced by  Turro et al. [1].  Given the current estimates `txpCount` of the read count
- * for each transcript,  the mean transcript fractions are sampled from a Gamma distribution
- * ~ Gam( prior[i] + txpCount[i], \Beta + effLens[i]).  Then, given these
- * transcript fractions,  The reads are re-assigned within each equivalence class by sampling from a
- * multinomial * distributed according to these means.
+ * introduced by  Turro et al. [1].  Given the current estimates `txpCount` of
+ *the read count for each transcript,  the mean transcript fractions are sampled
+ *from a Gamma distribution ~ Gam( prior[i] + txpCount[i], \Beta + effLens[i]).
+ *Then, given these transcript fractions,  The reads are re-assigned within
+ *each equivalence class by sampling from a multinomial * distributed according
+ *to these means.
  *
- * [1] Haplotype and isoform specific expression estimation using multi-mapping RNA-seq reads.
- * Turro E, Su S-Y, Goncalves A, Coin L, Richardson S and Lewin A.
+ * [1] Haplotype and isoform specific expression estimation using multi-mapping
+ *RNA-seq reads. Turro E, Su S-Y, Goncalves A, Coin L, Richardson S and Lewin A.
  * Genome Biology, 2011 Feb; 12:R13.  doi: 10.1186/gb-2011-12-2-r13.
  **/
 void sampleRoundNonCollapsedMultithreaded_(
     std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
-    std::vector<bool>& active,
-    std::vector<uint32_t>& activeList,
+    std::vector<bool>& active, std::vector<uint32_t>& activeList,
     std::vector<uint64_t>& countMap, std::vector<double>& probMap,
     std::vector<double>& muGlobal, Eigen::VectorXd& effLens,
     const std::vector<double>& priorAlphas, std::vector<double>& txpCount,
@@ -96,8 +99,8 @@ void sampleRoundNonCollapsedMultithreaded_(
 
   // generate coeff for \mu from \alpha and \effLens
   double beta = 0.1;
-  double norm = 0.0; 
-  
+  double norm = 0.0;
+
   // Sample the transcript fractions \mu from a gamma distribution, and
   // reset txpCounts to zero for each transcript.
   typedef tbb::enumerable_thread_specific<pcg32_unique> GeneratorType;
@@ -108,7 +111,9 @@ void sampleRoundNonCollapsedMultithreaded_(
 
   // Compute the mu to be used in the equiv class resampling
   tbb::parallel_for(
-                    BlockedIndexRange(size_t(0), size_t(activeList.size())), // 1024 is grainsize, use only with simple_partitioner
+      BlockedIndexRange(
+          size_t(0), size_t(activeList.size())), // 1024 is grainsize, use only
+                                                 // with simple_partitioner
       [&, beta](const BlockedIndexRange& range) -> void {
         GeneratorType::reference gen = localGenerator.local();
         for (auto activeIdx : boost::irange(range.begin(), range.end())) {
@@ -119,9 +124,10 @@ void sampleRoundNonCollapsedMultithreaded_(
           txpCount[i] = 0.0;
           /** DEBUG
           if (std::isnan(muGlobal[i]) or std::isinf(muGlobal[i])) {
-            std::cerr << "txpCount = " << txpCount[i] << ", prior = " << priorAlphas[i] << ", alpha = " << ci << ", beta = " << (1.0 / (beta + effLens(i))) << ", mu = " << muGlobal[i] << "\n";
-            std::exit(1);
-          } 
+            std::cerr << "txpCount = " << txpCount[i] << ", prior = " <<
+          priorAlphas[i] << ", alpha = " << ci << ", beta = " << (1.0 / (beta +
+          effLens(i))) << ", mu = " << muGlobal[i] << "\n"; std::exit(1);
+          }
           **/
         }
       });
@@ -133,7 +139,8 @@ void sampleRoundNonCollapsedMultithreaded_(
   class CombineableTxpCounts {
   public:
     CombineableTxpCounts(uint32_t numTxp) : txpCount(numTxp, 0) {
-      gen.reset(new pcg32_unique(pcg_extras::seed_seq_from<std::random_device>()));
+      gen.reset(
+          new pcg32_unique(pcg_extras::seed_seq_from<std::random_device>()));
     }
     std::vector<int> txpCount;
     std::unique_ptr<pcg32_unique> gen{nullptr};
@@ -143,7 +150,7 @@ void sampleRoundNonCollapsedMultithreaded_(
   std::mutex writeMut;
   // resample within each equivalence class
   tbb::parallel_for(
-                    BlockedIndexRange(size_t(0), size_t(eqVec.size())),
+      BlockedIndexRange(size_t(0), size_t(eqVec.size())),
       [&](const BlockedIndexRange& range) -> void {
 
         auto& txpCountLoc = combineableCounts.local().txpCount;
@@ -157,7 +164,8 @@ void sampleRoundNonCollapsedMultithreaded_(
 
           // for each transcript in this class
           const TranscriptGroup& tgroup = eqClass.first;
-          const size_t groupSize = eqClass.second.weights.size(); //tgroup.txps.size();
+          const size_t groupSize =
+              eqClass.second.weights.size(); // tgroup.txps.size();
           if (tgroup.valid) {
             const std::vector<uint32_t>& txps = tgroup.txps;
             const auto& auxs = eqClass.second.combinedWeights;
@@ -181,8 +189,10 @@ void sampleRoundNonCollapsedMultithreaded_(
               if (denom <= ::minEQClassWeight) {
                 {
                   std::lock_guard<std::mutex> lg(writeMut);
-                  std::cerr << "[WARNING] eq class denom was too small : denom = " << denom << ", numReads = "
-                            << classCount << ". Distributing reads evenly for this class\n";
+                  std::cerr
+                      << "[WARNING] eq class denom was too small : denom = "
+                      << denom << ", numReads = " << classCount
+                      << ". Distributing reads evenly for this class\n";
                 }
 
                 denom = 0.0;
@@ -255,7 +265,7 @@ std::vector<double> populatePriorAlphasGibbs_(
     Eigen::VectorXd& effLens,             // current effective length estimate
     double priorValue,      // the per-nucleotide prior value to use
     bool perTranscriptPrior // true if prior is per-txp, else per-nucleotide
-    ) {
+) {
   // start out with the per-txp prior
   std::vector<double> priorAlphas(transcripts.size(), priorValue);
 
@@ -312,12 +322,13 @@ bool CollapsedGibbsSampler::sample(
   bool perTranscriptPrior = (sopt.useVBOpt) ? sopt.perTranscriptPrior : true;
   double priorValue = (sopt.useVBOpt) ? sopt.vbPrior : 1e-4;
   std::vector<double> priorAlphas = populatePriorAlphasGibbs_(
-                                                              transcripts, effLens, priorValue, perTranscriptPrior);
-  /** DEBUG 
+      transcripts, effLens, priorValue, perTranscriptPrior);
+  /** DEBUG
   for (size_t i = 0; i < priorAlphas.size(); ++i) {
     auto& v = priorAlphas[i];
     if (!std::isfinite(v)) {
-      std::cerr << "prior for transcript " << i << " is " << v << ", eff length = " << effLens(i) << "\n";
+      std::cerr << "prior for transcript " << i << " is " << v << ", eff length
+  = " << effLens(i) << "\n";
     }
   }
   **/
@@ -327,15 +338,19 @@ bool CollapsedGibbsSampler::sample(
   std::vector<uint32_t> offsetMap(eqVec.size(), 0);
   for (size_t i = 0; i < eqVec.size(); ++i) {
     if (eqVec[i].first.valid) {
-      countMapSize += eqVec[i].second.weights.size(); //eqVec[i].first.txps.size();
-      for (auto t : eqVec[i].first.txps) { active[t] = true; }
+      countMapSize +=
+          eqVec[i].second.weights.size(); // eqVec[i].first.txps.size();
+      for (auto t : eqVec[i].first.txps) {
+        active[t] = true;
+      }
       if (i < eqVec.size() - 1) {
         offsetMap[i + 1] = countMapSize;
       }
     }
   }
 
-  std::vector<uint32_t> activeList; activeList.reserve(numTranscripts);
+  std::vector<uint32_t> activeList;
+  activeList.reserve(numTranscripts);
   for (size_t i = 0; i < numTranscripts; ++i) {
     if (active[i]) {
       activeList.push_back(i);
@@ -404,17 +419,20 @@ bool CollapsedGibbsSampler::sample(
 
     // Thin the chain by a factor of (numInternalRounds)
     for (size_t i = 0; i < numInternalRounds; ++i) {
-      sampleRoundNonCollapsedMultithreaded_(eqVec,        // encodes equivalence classes
-                                            active,       // the set of active transcripts
-                                            activeList,   // the list of active transcript ids
-                                            countMap,     // the count of reads in each eq coming from each eq class
-                                            probMap,      // the probability of reads in each eq class coming from each txp
-                                            mu,           // transcript fractions
-                                            effLens,      // the effective transcript lengths
-                                            priorAlphas,  // the prior transcript counts
-                                            alphasIn,     // [input/output param] the (hard) fragment counts per txp from the previous iteration
-                                            offsetMap     // where the information begins for each equivalence class
-                                            );
+      sampleRoundNonCollapsedMultithreaded_(
+          eqVec,      // encodes equivalence classes
+          active,     // the set of active transcripts
+          activeList, // the list of active transcript ids
+          countMap,   // the count of reads in each eq coming from each eq class
+          probMap, // the probability of reads in each eq class coming from each
+                   // txp
+          mu,      // transcript fractions
+          effLens, // the effective transcript lengths
+          priorAlphas, // the prior transcript counts
+          alphasIn, // [input/output param] the (hard) fragment counts per txp
+                    // from the previous iteration
+          offsetMap // where the information begins for each equivalence class
+      );
     }
 
     if (sopt.dontExtrapolateCounts) {
