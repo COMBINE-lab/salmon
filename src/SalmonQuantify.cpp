@@ -167,7 +167,10 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
                       ClusterForest& clusterForest,
                       FragmentLengthDistribution& fragLengthDist,
                       BiasParams& observedBiasParams,
-                      EffectiveLengthStats& obsEffLens,
+                      /**
+                       * NOTE : test new el model in future
+                       * EffectiveLengthStats& obsEffLens,
+                       */
                       std::atomic<uint64_t>& numAssignedFragments,
                       std::default_random_engine& randEng, bool initialRound,
                       std::atomic<bool>& burnedIn, double& maxZeroFrac) {
@@ -434,7 +437,8 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
           double startPosProb{-logRefLength};
           if (aln.mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED and !noLengthCorrection) {
             startPosProb = (flen <= refLength) ? -std::log(refLength - flen + 1) : salmon::math::LOG_EPSILON;
-            if (flen <= refLength) { obsEffLens.addFragment(transcriptID, (refLength - flen + 1), logForgettingMass); }
+            // NOTE : test new el model in future
+            // if (flen <= refLength) { obsEffLens.addFragment(transcriptID, (refLength - flen + 1), logForgettingMass); }
           }
 
           double fragStartLogNumerator{salmon::math::LOG_1};
@@ -730,7 +734,10 @@ void processReadsQuasi(
     RapMapIndexT* idx, std::vector<Transcript>& transcripts,
     ForgettingMassCalculator& fmCalc, ClusterForest& clusterForest,
     FragmentLengthDistribution& fragLengthDist, BiasParams& observedBiasParams,
-    EffectiveLengthStats& obsEffLengths,
+    /**
+     * NOTE : test new el model in future
+     * EffectiveLengthStats& obsEffLengths,
+     */
     mem_opt_t* memOptions, SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache) {
@@ -751,7 +758,10 @@ void processReadsQuasi(
     RapMapIndexT* sidx, std::vector<Transcript>& transcripts,
     ForgettingMassCalculator& fmCalc, ClusterForest& clusterForest,
     FragmentLengthDistribution& fragLengthDist, BiasParams& observedBiasParams,
-    EffectiveLengthStats& obsEffLengths,
+    /**
+     * NOTE : test new el model in future
+     * EffectiveLengthStats& obsEffLengths,
+     */
     mem_opt_t* memOptions, SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache) {
@@ -771,7 +781,10 @@ void processReadsQuasi(
     RapMapIndexT* qidx, std::vector<Transcript>& transcripts,
     ForgettingMassCalculator& fmCalc, ClusterForest& clusterForest,
     FragmentLengthDistribution& fragLengthDist, BiasParams& observedBiasParams,
-    EffectiveLengthStats& obsEffLengths,
+    /**
+     * NOTE : test new el model in future
+     * EffectiveLengthStats& obsEffLengths,
+     **/
     mem_opt_t* memOptions, SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache) {
@@ -1176,7 +1189,10 @@ void processReadsQuasi(
     processMiniBatch<QuasiAlignment>(
         readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
         transcripts, clusterForest, fragLengthDist, observedBiasParams,
-        obsEffLengths,
+        /**
+         * NOTE : test new el model in future
+         * obsEffLengths,
+         */
         numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac);
   }
 
@@ -1203,7 +1219,10 @@ void processReadsQuasi(
     RapMapIndexT* qidx, std::vector<Transcript>& transcripts,
     ForgettingMassCalculator& fmCalc, ClusterForest& clusterForest,
     FragmentLengthDistribution& fragLengthDist, BiasParams& observedBiasParams,
-    EffectiveLengthStats& obsEffLengths,
+    /**
+     * NOTE : test new el model in future
+     * EffectiveLengthStats& obsEffLengths,
+     **/
     mem_opt_t* memOptions, SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache) {
@@ -1422,7 +1441,10 @@ void processReadsQuasi(
     processMiniBatch<QuasiAlignment>(
         readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
         transcripts, clusterForest, fragLengthDist, observedBiasParams,
-        obsEffLengths,
+        /**
+         * NOTE : test new el model in future
+         * obsEffLengths,
+         **/
         numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac);
   }
   readExp.updateShortFrags(shortFragStats);
@@ -1497,8 +1519,10 @@ void processReadLibrary(
   std::vector<BiasParams> observedBiasParams(numThreads,
 					     BiasParams(salmonOpts.numConditionalGCBins, salmonOpts.numFragGCBins, false));
 
-  std::vector<EffectiveLengthStats> observedEffectiveLengths(numThreads, EffectiveLengthStats(numTxp));
-
+  /**
+   * NOTE : test new el model in future
+   * std::vector<EffectiveLengthStats> observedEffectiveLengths(numThreads, EffectiveLengthStats(numTxp));
+   **/
 
   // If the read library is paired-end
   // ------ Paired-end --------
@@ -1527,7 +1551,12 @@ void processReadLibrary(
               pairedParserPtr.get(), readExp, rl, structureVec[i],
               numObservedFragments, numAssignedFragments, numValidHits,
               upperBoundHits, sidx, transcripts, fmCalc, clusterForest,
-              fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i], memOptions, salmonOpts,
+              fragLengthDist, observedBiasParams[i],
+              /**
+               * NOTE : test new el model in future
+               * observedEffectiveLengths[i],
+               */
+              memOptions, salmonOpts,
               coverageThresh, iomutex, initialRound, burnedIn, writeToCache);
         };
         threads.emplace_back(threadFun);
@@ -1551,7 +1580,11 @@ void processReadLibrary(
                   pairedParserPtr.get(), readExp, rl, structureVec[i],
                   numObservedFragments, numAssignedFragments, numValidHits,
                   upperBoundHits, sidx->quasiIndexPerfectHash64(), transcripts,
-                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i],
+                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
+                  /**
+                   * NOTE : test new el model in future
+                   * observedEffectiveLengths[i],
+                   **/
                   memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
                   burnedIn, writeToCache);
             };
@@ -1565,7 +1598,11 @@ void processReadLibrary(
                   pairedParserPtr.get(), readExp, rl, structureVec[i],
                   numObservedFragments, numAssignedFragments, numValidHits,
                   upperBoundHits, sidx->quasiIndex64(), transcripts, fmCalc,
-                  clusterForest, fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i],
+                  clusterForest, fragLengthDist, observedBiasParams[i],
+                  /**
+                   * NOTE : test new el model in future
+                   * observedEffectiveLengths[i],
+                   **/
                   memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
                   burnedIn, writeToCache);
             };
@@ -1581,7 +1618,11 @@ void processReadLibrary(
                   pairedParserPtr.get(), readExp, rl, structureVec[i],
                   numObservedFragments, numAssignedFragments, numValidHits,
                   upperBoundHits, sidx->quasiIndexPerfectHash32(), transcripts,
-                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i],
+                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
+                  /**
+                   * NOTE : test new el model in future
+                   * observedEffectiveLengths[i],
+                   **/
                   memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
                   burnedIn, writeToCache);
             };
@@ -1595,7 +1636,11 @@ void processReadLibrary(
                   pairedParserPtr.get(), readExp, rl, structureVec[i],
                   numObservedFragments, numAssignedFragments, numValidHits,
                   upperBoundHits, sidx->quasiIndex32(), transcripts, fmCalc,
-                  clusterForest, fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i],
+                  clusterForest, fragLengthDist, observedBiasParams[i],
+                  /**
+                   * NOTE : test new el model in future
+                   * observedEffectiveLengths[i],
+                   **/
                   memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
                   burnedIn, writeToCache);
             };
@@ -1624,7 +1669,8 @@ void processReadLibrary(
       throw InsufficientAssignedFragments(numAssignedFragments.load(), salmonOpts.minRequiredFrags);
     }
 
-    /** NEW :: Expected Lengths **/
+    /**
+     * NOTE : test new el model in future
     EffectiveLengthStats eel(numTxp);
     for (auto& els : observedEffectiveLengths) {
       eel.merge(els);
@@ -1637,6 +1683,7 @@ void processReadLibrary(
         transcripts[tid].setCachedLogEffectiveLength(std::log(el));
       }
     }
+    **/
 
     /** GC-fragment bias **/
     // Set the global distribution based on the sum of local
@@ -1718,7 +1765,11 @@ void processReadLibrary(
               singleParserPtr.get(), readExp, rl, structureVec[i],
               numObservedFragments, numAssignedFragments, numValidHits,
               upperBoundHits, sidx, transcripts, fmCalc, clusterForest,
-              fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i],
+              fragLengthDist, observedBiasParams[i],
+              /**
+               * NOTE : test new el model in future
+               * observedEffectiveLengths[i],
+               **/
               memOptions, salmonOpts,
               coverageThresh, iomutex, initialRound, burnedIn, writeToCache);
         };
@@ -1744,7 +1795,11 @@ void processReadLibrary(
                   singleParserPtr.get(), readExp, rl, structureVec[i],
                   numObservedFragments, numAssignedFragments, numValidHits,
                   upperBoundHits, sidx->quasiIndexPerfectHash64(), transcripts,
-                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i],
+                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
+                  /**
+                   * NOTE : test new el model in future
+                   * observedEffectiveLengths[i],
+                   **/
                   memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
                   burnedIn, writeToCache);
             };
@@ -1759,7 +1814,11 @@ void processReadLibrary(
                   singleParserPtr.get(), readExp, rl, structureVec[i],
                   numObservedFragments, numAssignedFragments, numValidHits,
                   upperBoundHits, sidx->quasiIndex64(), transcripts, fmCalc,
-                  clusterForest, fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i],
+                  clusterForest, fragLengthDist, observedBiasParams[i],
+                  /**
+                   * NOTE : test new el model in future
+                   * observedEffectiveLengths[i],
+                   **/
                   memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
                   burnedIn, writeToCache);
             };
@@ -1776,7 +1835,11 @@ void processReadLibrary(
                   singleParserPtr.get(), readExp, rl, structureVec[i],
                   numObservedFragments, numAssignedFragments, numValidHits,
                   upperBoundHits, sidx->quasiIndexPerfectHash32(), transcripts,
-                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i],
+                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
+                  /**
+                   * NOTE : test new el model in future
+                   * observedEffectiveLengths[i],
+                   **/
                   memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
                   burnedIn, writeToCache);
             };
@@ -1791,7 +1854,11 @@ void processReadLibrary(
                   singleParserPtr.get(), readExp, rl, structureVec[i],
                   numObservedFragments, numAssignedFragments, numValidHits,
                   upperBoundHits, sidx->quasiIndex32(), transcripts, fmCalc,
-                  clusterForest, fragLengthDist, observedBiasParams[i], observedEffectiveLengths[i],
+                  clusterForest, fragLengthDist, observedBiasParams[i],
+                  /**
+                   * NOTE : test new el model in future
+                   * observedEffectiveLengths[i],
+                   **/
                   memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
                   burnedIn, writeToCache);
             };
