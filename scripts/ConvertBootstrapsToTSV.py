@@ -40,7 +40,7 @@ def main(args):
     
     txpNames = None
     with gzip.open(nameFile) as nf:
-        txpNames = nf.read().strip().split('\t')
+        txpNames = nf.read().decode().strip().split('\t')
     
     ntxp = len(txpNames)
     logging.info("Expecting bootstrap info for {} transcripts".format(ntxp))
