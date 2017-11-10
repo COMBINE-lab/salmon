@@ -452,10 +452,10 @@ ExternalProject_Add(libbwa
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
     #URL https://github.com/COMBINE-lab/bwa/archive/0.7.12.3.tar.gz
     #DOWNLOAD_NAME bwa-master.tar.gz
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/bwa/archive/0.7.12.3.tar.gz -o bwa-master.tar.gz &&
-                     ${SHASUM} e1665acd44f971f6d8b90c25992c680a7fec0a822268437d6fd4e51dbf603181  bwa-master.tar.gz &&
-                     mkdir -p bwa-master &&
-                     tar -xzvf bwa-master.tar.gz --strip-components=1 -C bwa-master
+    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/bwa/archive/v0.7.12.5.tar.gz -o bwa-master.tar.gz &&
+                    ${SHASUM} 1ac5661d9e12e9017a47f0264201a75d9128f28dbd9a26952925f7745ddf6036 bwa-master.tar.gz &&
+                    mkdir -p bwa-master &&
+                    tar -xzvf bwa-master.tar.gz --strip-components=1 -C bwa-master
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/bwa-master
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ""
