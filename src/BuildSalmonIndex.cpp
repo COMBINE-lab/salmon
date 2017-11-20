@@ -68,6 +68,7 @@ int salmonIndex(int argc, char* argv[]) {
   bool useQuasi{false};
   bool perfectHash{false};
   bool gencodeRef{false};
+  bool keepDuplicates{false};
 
   po::options_description generic("Command Line Options");
   generic.add_options()("version,v", "print version string")(
@@ -85,6 +86,11 @@ int salmonIndex(int argc, char* argv[]) {
       "will be used in the "
       "output and when looking for these transcripts in a gene to transcript "
       "GTF.")(
+              "keepDuplicates", po::bool_switch(&keepDuplicates)->default_value(false),
+              "This flag will disable the default indexing behavior of discarding sequence-identical duplicate "
+              "transcripts.  If this flag is passed, then duplicate transcripts that appear in the input will be "
+              "retained and quantified separately."
+       )(
       "threads,p",
       po::value<uint32_t>(&numThreads)->default_value(2)->required(),
       "Number of threads to use (only used for computing bias features)")(
@@ -219,6 +225,9 @@ Creates a salmon index.
       if (gencodeRef) {
         argVec->push_back("-s");
         argVec->push_back("\"|\"");
+      }
+      if (keepDuplicates) {
+        argVec->push_back("--keepDuplicates");
       }
 
       sidx.reset(new SalmonIndex(jointLog, SalmonIndexType::QUASI));
