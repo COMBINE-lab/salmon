@@ -267,7 +267,7 @@ void writeAbundancesFromCollapsed(const SalmonOpts& sopt, ExpLib& alnLib,
 
   // If we're using lightweight-alignment (FMD)
   // and not allowing orphans.
-  bool useScaledCounts = (!sopt.useQuasi and sopt.allowOrphans == false);
+  bool useScaledCounts = !(sopt.useQuasi or sopt.allowOrphans);
 
   std::unique_ptr<std::FILE, int (*)(std::FILE*)> output(
       std::fopen(fname.c_str(), "w"), std::fclose);
@@ -1454,9 +1454,8 @@ bool createDirectoryVerbose_(boost::filesystem::path& dirPath) {
 }
 
 /**
- * Validate the options for quasi-mapping-based salmon, and create the necessary
- *output directories and
- * logging infrastructure.
+ * Validate the options for salmon, and create the necessary
+ * output directories and logging infrastructure.
  **/
 bool processQuantOptions(SalmonOpts& sopt,
                          boost::program_options::variables_map& vm,
@@ -1587,6 +1586,11 @@ bool processQuantOptions(SalmonOpts& sopt,
    *
    *
    **/
+
+  // If the user is using range factorization, set the appropriate parameters here
+  if (sopt.rangeFactorizationBins > 0) {
+    sopt.useRangeFactorization = true;
+  }
 
   // If the user is enabling *just* GC bias correction
   // i.e. without seq-specific bias correction, then disable

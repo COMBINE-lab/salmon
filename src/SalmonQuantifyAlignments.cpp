@@ -190,7 +190,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
   uint32_t numBurninFrags{salmonOpts.numBurninFrags};
   bool noLengthCorrection{salmonOpts.noLengthCorrection};
 
-  size_t rangeFactorization{salmonOpts.useRangeFactorization};
+  uint32_t rangeFactorization{salmonOpts.rangeFactorizationBins};
 
   bool useAuxParams = (processedReads >= salmonOpts.numPreBurninFrags);
 
@@ -1488,10 +1488,13 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
       "useVBOpt,v", po::bool_switch(&(sopt.useVBOpt))->default_value(false),
       "Use the Variational Bayesian EM rather than the "
       "traditional EM algorithm for optimization in the batch passes.")(
-      "useRangeFactorization",
-      po::value<uint32_t>(&(sopt.useRangeFactorization))->default_value(0),
-      "Cluster each in equivalence class based on the conditional "
-      "probabilities.")(
+      "rangeFactorizationBins",
+      po::value<uint32_t>(&(sopt.rangeFactorizationBins))->default_value(0),
+      "Factorizes the likelihood used in quantification by adopting a new notion of equivalence classes based on "
+      "the conditional probabilities with which fragments are generated from different transcripts.  This is a more "
+      "fine-grained factorization than the normal rich equivalence classes.  The default value (0) corresponds to "
+      "the standard rich equivalence classes, and larger values imply a more fine-grained factorization.  If range factorization "
+      "is enabled, a common value to select for this parameter is 4.")(
       "perTranscriptPrior", po::bool_switch(&(sopt.perTranscriptPrior)),
       "The "
       "prior (either the default or the argument provided via --vbPrior) will "

@@ -211,7 +211,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
   bool useFragLengthDist{!salmonOpts.noFragLengthDist};
   bool noFragLenFactor{salmonOpts.noFragLenFactor};
   bool useRankEqClasses{salmonOpts.rankEqClasses};
-  size_t rangeFactorization{salmonOpts.useRangeFactorization};
+  uint32_t rangeFactorization{salmonOpts.rangeFactorizationBins};
   bool noLengthCorrection{salmonOpts.noLengthCorrection};
   bool useAuxParams = ((localNumAssignedFragments + numAssignedFragments) >=
                        salmonOpts.numPreBurninFrags);
@@ -2248,11 +2248,11 @@ void quantifyLibrary(ReadExperiment& experiment, bool greedyChain,
     experiment.setNumObservedFragments(numObservedFragments -
                                        prevNumObservedFragments);
     experiment.setUpperBoundHits(upperBoundHits.load());
-    if (salmonOpts.allowOrphans) {
+    if (salmonOpts.useQuasi or salmonOpts.allowOrphans) {
       double mappingRate = totalAssignedFragments.load() /
                            static_cast<double>(numObservedFragments.load());
       experiment.setEffectiveMappingRate(mappingRate);
-    } else {
+    } else { // otherwise, we're using FMD-based mapping and are not allowing orphans.
       experiment.setEffectiveMappingRate(upperBoundMappingRate);
     }
   }
@@ -2269,6 +2269,7 @@ int salmonQuantify(int argc, char* argv[]) {
   namespace bfs = boost::filesystem;
   namespace po = boost::program_options;
 
+  bool discardOrphansQuasi{false};
   bool optChain{false};
   int32_t numBiasSamples{0};
 
@@ -2300,15 +2301,20 @@ int salmonQuantify(int argc, char* argv[]) {
 
       "output,o", po::value<std::string>()->required(),
       "Output quantification file.")(
-      "allowOrphans",
+                                     "discardOrphansQuasi",
+                                     po::bool_switch(&discardOrphansQuasi)->default_value(false),
+                                     "[Quasi-mapping mode only] : Discard orphan mappings in quasi-mapping mode.  If this flag is passed "
+                                     "then only paired mappings will be considered toward quantification estimates.  The default behavior is "
+                                     "to consider orphan mappings if no valid paired mappings exist.  This flag is independent of the option to "
+                                     "write the orphaned mappings to file (--writeOrphanLinks)."
+    )("allowOrphansFMD",
       po::bool_switch(&(sopt.allowOrphans))->default_value(false),
-      "Consider orphaned reads as valid hits when "
+      "[FMD-mapping mode only] : Consider orphaned reads as valid hits when "
       "performing lightweight-alignment.  This option will increase "
       "sensitivity (allow more reads to map and "
       "more transcripts to be detected), but may decrease specificity as "
       "orphaned alignments are more likely "
-      "to be spurious -- this option is *always* set to true when using "
-      "quasi-mapping.")(
+      "to be spurious.")(
       "seqBias", po::bool_switch(&(sopt.biasCorrect))->default_value(false),
       "Perform sequence-specific bias correction.")(
       "gcBias", po::bool_switch(&(sopt.gcBiasCorrect))->default_value(false),
@@ -2536,11 +2542,14 @@ int salmonQuantify(int argc, char* argv[]) {
           "useVBOpt", po::bool_switch(&(sopt.useVBOpt))->default_value(false),
           "Use the Variational Bayesian EM rather than the "
           "traditional EM algorithm for optimization in the batch passes.")(
-          "useRangeFactorization",
-          po::value<uint32_t>(&(sopt.useRangeFactorization))->default_value(0),
-          "Cluster each in equivalence class based on the "
-          "conditional probabilities.")(
-          "numGibbsSamples",
+          "rangeFactorizationBins",
+          po::value<uint32_t>(&(sopt.rangeFactorizationBins))->default_value(0),
+          "Factorizes the likelihood used in quantification by adopting a new notion of equivalence classes based on "
+          "the conditional probabilities with which fragments are generated from different transcripts.  This is a more "
+          "fine-grained factorization than the normal rich equivalence classes.  The default value (0) corresponds to "
+          "the standard rich equivalence classes, and larger values imply a more fine-grained factorization.  If range factorization "
+          "is enabled, a common value to select for this parameter is 4.")
+          ("numGibbsSamples",
           po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0),
           "Number of Gibbs sampling rounds to "
           "perform.")(
@@ -2803,7 +2812,7 @@ transcript abundance from RNA-seq reads
           }
         }
 
-        sopt.allowOrphans = true;
+        sopt.allowOrphans = !discardOrphansQuasi;
         sopt.useQuasi = true;
         quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions,
                                         sopt, coverageThresh, sopt.numThreads);

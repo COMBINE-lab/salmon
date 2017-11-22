@@ -1,6 +1,6 @@
 /**
 >HEADER
-    Copyright (c) 2014, 2015 Rob Patro robp@cs.stonybrook.edu
+    Copyright (c) 2014, 2015, 2016, 2017 Rob Patro robp@cs.stonybrook.edu
 
     This file is part of Salmon.
 

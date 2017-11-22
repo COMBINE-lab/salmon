@@ -20,6 +20,12 @@ set(CPACK_SOURCE_PACKAGE_FILE_NAME
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 
+if( NOT CMAKE_BUILD_TYPE )
+  set( CMAKE_BUILD_TYPE Release CACHE STRING
+       "Choose the type of build, options are: Debug Release."
+       FORCE )
+endif()
+
 if (APPLE)
 set (WARNING_IGNORE_FLAGS "-Wno-deprecated-register")
 else()
