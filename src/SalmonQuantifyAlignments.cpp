@@ -1490,10 +1490,14 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
       "traditional EM algorithm for optimization in the batch passes.")(
       "rangeFactorizationBins",
       po::value<uint32_t>(&(sopt.rangeFactorizationBins))->default_value(0),
-      "Factorizes the likelihood used in quantification by adopting a new notion of equivalence classes based on "
-      "the conditional probabilities with which fragments are generated from different transcripts.  This is a more "
-      "fine-grained factorization than the normal rich equivalence classes.  The default value (0) corresponds to "
-      "the standard rich equivalence classes, and larger values imply a more fine-grained factorization.  If range factorization "
+      "Factorizes the likelihood used in quantification by adopting a new "
+      "notion of equivalence classes based on "
+      "the conditional probabilities with which fragments are generated from "
+      "different transcripts.  This is a more "
+      "fine-grained factorization than the normal rich equivalence classes.  "
+      "The default value (0) corresponds to "
+      "the standard rich equivalence classes, and larger values imply a more "
+      "fine-grained factorization.  If range factorization "
       "is enabled, a common value to select for this parameter is 4.")(
       "perTranscriptPrior", po::bool_switch(&(sopt.perTranscriptPrior)),
       "The "

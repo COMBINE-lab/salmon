@@ -175,9 +175,10 @@ struct SalmonOpts {
   bool useVBOpt; // Use Variational Bayesian EM instead of "regular" EM in the
                  // batch passes
 
-  bool useRangeFactorization{false};  // enable range factorization
-  uint32_t rangeFactorizationBins{0}; // Cluster reads in each Eq Class based on the
-                                      // conditional probabilities
+  bool useRangeFactorization{false}; // enable range factorization
+  uint32_t rangeFactorizationBins{
+      0}; // Cluster reads in each Eq Class based on the
+          // conditional probabilities
 
   bool useQuasi; // Are we using the quasi-mapping based index or not.
 

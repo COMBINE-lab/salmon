@@ -85,12 +85,13 @@ int salmonIndex(int argc, char* argv[]) {
       "the transcript name at the first \'|\' character.  These reduced names "
       "will be used in the "
       "output and when looking for these transcripts in a gene to transcript "
-      "GTF.")(
-              "keepDuplicates", po::bool_switch(&keepDuplicates)->default_value(false),
-              "This flag will disable the default indexing behavior of discarding sequence-identical duplicate "
-              "transcripts.  If this flag is passed, then duplicate transcripts that appear in the input will be "
-              "retained and quantified separately."
-       )(
+      "GTF.")("keepDuplicates",
+              po::bool_switch(&keepDuplicates)->default_value(false),
+              "This flag will disable the default indexing behavior of "
+              "discarding sequence-identical duplicate "
+              "transcripts.  If this flag is passed, then duplicate "
+              "transcripts that appear in the input will be "
+              "retained and quantified separately.")(
       "threads,p",
       po::value<uint32_t>(&numThreads)->default_value(2)->required(),
       "Number of threads to use (only used for computing bias features)")(

@@ -27,38 +27,38 @@
 
 // Disable bogus MSVC warnings.
 #ifndef _CRT_SECURE_NO_WARNINGS
-# define _CRT_SECURE_NO_WARNINGS
+#define _CRT_SECURE_NO_WARNINGS
 #endif
 
 #include "posix.h"
 
 #include <limits.h>
-#include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 
 #ifndef _WIN32
-# include <unistd.h>
+#include <unistd.h>
 #else
-# include <windows.h>
-# include <io.h>
+#include <io.h>
+#include <windows.h>
 
-# define O_CREAT _O_CREAT
-# define O_TRUNC _O_TRUNC
+#define O_CREAT _O_CREAT
+#define O_TRUNC _O_TRUNC
 
-# ifndef S_IRUSR
-#  define S_IRUSR _S_IREAD
-# endif
+#ifndef S_IRUSR
+#define S_IRUSR _S_IREAD
+#endif
 
-# ifndef S_IWUSR
-#  define S_IWUSR _S_IWRITE
-# endif
+#ifndef S_IWUSR
+#define S_IWUSR _S_IWRITE
+#endif
 
-# ifdef __MINGW32__
-#  define _SH_DENYNO 0x40
-#  undef fileno
-# endif
+#ifdef __MINGW32__
+#define _SH_DENYNO 0x40
+#undef fileno
+#endif
 
-#endif  // _WIN32
+#endif // _WIN32
 
 namespace {
 #ifdef _WIN32
@@ -159,12 +159,12 @@ fmt::LongLong fmt::File::size() const {
   if (FMT_POSIX_CALL(fstat(fd_, &file_stat)) == -1)
     throw SystemError(errno, "cannot get file attributes");
   FMT_STATIC_ASSERT(sizeof(fmt::LongLong) >= sizeof(file_stat.st_size),
-      "return type of File::size is not large enough");
+                    "return type of File::size is not large enough");
   return file_stat.st_size;
 #endif
 }
 
-std::size_t fmt::File::read(void *buffer, std::size_t count) {
+std::size_t fmt::File::read(void* buffer, std::size_t count) {
   RWResult result = 0;
   FMT_RETRY(result, FMT_POSIX_CALL(read(fd_, buffer, convert_rwcount(count))));
   if (result < 0)
@@ -172,7 +172,7 @@ std::size_t fmt::File::read(void *buffer, std::size_t count) {
   return result;
 }
 
-std::size_t fmt::File::write(const void *buffer, std::size_t count) {
+std::size_t fmt::File::write(const void* buffer, std::size_t count) {
   RWResult result = 0;
   FMT_RETRY(result, FMT_POSIX_CALL(write(fd_, buffer, convert_rwcount(count))));
   if (result < 0)
@@ -193,19 +193,19 @@ void fmt::File::dup2(int fd) {
   int result = 0;
   FMT_RETRY(result, FMT_POSIX_CALL(dup2(fd_, fd)));
   if (result == -1) {
-    throw SystemError(errno,
-      "cannot duplicate file descriptor {} to {}", fd_, fd);
+    throw SystemError(errno, "cannot duplicate file descriptor {} to {}", fd_,
+                      fd);
   }
 }
 
-void fmt::File::dup2(int fd, ErrorCode &ec) FMT_NOEXCEPT {
+void fmt::File::dup2(int fd, ErrorCode& ec) FMT_NOEXCEPT {
   int result = 0;
   FMT_RETRY(result, FMT_POSIX_CALL(dup2(fd_, fd)));
   if (result == -1)
     ec = ErrorCode(errno);
 }
 
-void fmt::File::pipe(File &read_end, File &write_end) {
+void fmt::File::pipe(File& read_end, File& write_end) {
   // Close the descriptors first to make sure that assignments don't throw
   // and there are no leaks.
   read_end.close();
@@ -228,9 +228,9 @@ void fmt::File::pipe(File &read_end, File &write_end) {
   write_end = File(fds[1]);
 }
 
-fmt::BufferedFile fmt::File::fdopen(const char *mode) {
+fmt::BufferedFile fmt::File::fdopen(const char* mode) {
   // Don't retry as fdopen doesn't return EINTR.
-  FILE *f = FMT_POSIX_CALL(fdopen(fd_, mode));
+  FILE* f = FMT_POSIX_CALL(fdopen(fd_, mode));
   if (!f)
     throw SystemError(errno, "cannot associate stream with file descriptor");
   BufferedFile file(f);

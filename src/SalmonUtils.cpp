@@ -1587,7 +1587,8 @@ bool processQuantOptions(SalmonOpts& sopt,
    *
    **/
 
-  // If the user is using range factorization, set the appropriate parameters here
+  // If the user is using range factorization, set the appropriate parameters
+  // here
   if (sopt.rangeFactorizationBins > 0) {
     sopt.useRangeFactorization = true;
   }

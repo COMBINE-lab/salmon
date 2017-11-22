@@ -699,7 +699,8 @@ inline void collectHitsForRead(SalmonIndex* sidx, const bwtintv_v* a,
             slen = len1;
             int32_t votePos = static_cast<int32_t>(hitLoc) - queryStart;
             // std::cerr << "\t\t t1 (of length " << tlen << ") has larger hit
-            // --- new hit length = " << len1 << "; starts at pos " << queryStart
+            // --- new hit length = " << len1 << "; starts at pos " <<
+            // queryStart
             // << " in the read (votePos will be " << votePos << ")\n";
           } else {
             // Otherwise, make the hit be in t2.
@@ -715,7 +716,8 @@ inline void collectHitsForRead(SalmonIndex* sidx, const bwtintv_v* a,
             int32_t votePos = static_cast<int32_t>(hitLoc) - queryStart;
             tlen = idx->bns->anns[refID].len;
             // std::cerr << "\t\t t2 (of length " << tlen << ") has larger hit
-            // --- new hit length = " << len2 << "; starts at pos " << queryStart
+            // --- new hit length = " << len2 << "; starts at pos " <<
+            // queryStart
             // << " in the read (votePos will be " << votePos << ")\n";
           }
         } else {

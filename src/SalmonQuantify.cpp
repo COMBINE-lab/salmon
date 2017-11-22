@@ -2252,7 +2252,8 @@ void quantifyLibrary(ReadExperiment& experiment, bool greedyChain,
       double mappingRate = totalAssignedFragments.load() /
                            static_cast<double>(numObservedFragments.load());
       experiment.setEffectiveMappingRate(mappingRate);
-    } else { // otherwise, we're using FMD-based mapping and are not allowing orphans.
+    } else { // otherwise, we're using FMD-based mapping and are not allowing
+             // orphans.
       experiment.setEffectiveMappingRate(upperBoundMappingRate);
     }
   }
@@ -2301,13 +2302,16 @@ int salmonQuantify(int argc, char* argv[]) {
 
       "output,o", po::value<std::string>()->required(),
       "Output quantification file.")(
-                                     "discardOrphansQuasi",
-                                     po::bool_switch(&discardOrphansQuasi)->default_value(false),
-                                     "[Quasi-mapping mode only] : Discard orphan mappings in quasi-mapping mode.  If this flag is passed "
-                                     "then only paired mappings will be considered toward quantification estimates.  The default behavior is "
-                                     "to consider orphan mappings if no valid paired mappings exist.  This flag is independent of the option to "
-                                     "write the orphaned mappings to file (--writeOrphanLinks)."
-    )("allowOrphansFMD",
+      "discardOrphansQuasi",
+      po::bool_switch(&discardOrphansQuasi)->default_value(false),
+      "[Quasi-mapping mode only] : Discard orphan mappings in quasi-mapping "
+      "mode.  If this flag is passed "
+      "then only paired mappings will be considered toward quantification "
+      "estimates.  The default behavior is "
+      "to consider orphan mappings if no valid paired mappings exist.  This "
+      "flag is independent of the option to "
+      "write the orphaned mappings to file (--writeOrphanLinks).")(
+      "allowOrphansFMD",
       po::bool_switch(&(sopt.allowOrphans))->default_value(false),
       "[FMD-mapping mode only] : Consider orphaned reads as valid hits when "
       "performing lightweight-alignment.  This option will increase "
@@ -2544,12 +2548,16 @@ int salmonQuantify(int argc, char* argv[]) {
           "traditional EM algorithm for optimization in the batch passes.")(
           "rangeFactorizationBins",
           po::value<uint32_t>(&(sopt.rangeFactorizationBins))->default_value(0),
-          "Factorizes the likelihood used in quantification by adopting a new notion of equivalence classes based on "
-          "the conditional probabilities with which fragments are generated from different transcripts.  This is a more "
-          "fine-grained factorization than the normal rich equivalence classes.  The default value (0) corresponds to "
-          "the standard rich equivalence classes, and larger values imply a more fine-grained factorization.  If range factorization "
-          "is enabled, a common value to select for this parameter is 4.")
-          ("numGibbsSamples",
+          "Factorizes the likelihood used in quantification by adopting a new "
+          "notion of equivalence classes based on "
+          "the conditional probabilities with which fragments are generated "
+          "from different transcripts.  This is a more "
+          "fine-grained factorization than the normal rich equivalence "
+          "classes.  The default value (0) corresponds to "
+          "the standard rich equivalence classes, and larger values imply a "
+          "more fine-grained factorization.  If range factorization "
+          "is enabled, a common value to select for this parameter is 4.")(
+          "numGibbsSamples",
           po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0),
           "Number of Gibbs sampling rounds to "
           "perform.")(
