@@ -35,6 +35,8 @@ else
 	unset hashcheck
 fi
 
+unset hashcheck
+
 if [ -z "${hashcheck-}" ]; then
     echo "Couldn't find shasum command; can't verify contents of downloaded RapMap";
 else
