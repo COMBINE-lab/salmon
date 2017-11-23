@@ -41,6 +41,7 @@ FragmentStartPositionDistribution.cpp
 SequenceBiasModel.cpp
 TranscriptGroup.cpp
 GZipWriter.cpp
+SalmonQuantMerge.cpp
 #${GAT_SOURCE_DIR}/external/install/src/rapmap/sais.c
 )
 
@@ -53,6 +54,7 @@ SalmonQuantifyAlignments.cpp
 )
 
 set (SALMON_LIB_SRCS
+EffectiveLengthStats.cpp
 BWAUtils.cpp
 LibraryFormat.cpp
 GenomicFeature.cpp
@@ -62,6 +64,7 @@ FastxParser.cpp
 StadenUtils.cpp
 SalmonUtils.cpp
 DistributionUtils.cpp
+SalmonExceptions.cpp
 SalmonStringUtils.cpp
 SimplePosBias.cpp
 SGSmooth.cpp
@@ -70,6 +73,8 @@ SGSmooth.cpp
 set ( UNIT_TESTS_SRCS
     ${GAT_SOURCE_DIR}/tests/UnitTests.cpp
     FragmentLengthDistribution.cpp
+    ${GAT_SOURCE_DIR}/external/install/src/rapmap/rank9b.cpp
+    ${GAT_SOURCE_DIR}/external/install/src/rapmap/bit_array.c
 )
 
 

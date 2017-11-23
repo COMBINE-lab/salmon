@@ -1,11 +1,11 @@
 #ifndef SIMPLE_POS_BIAS_HPP
 #define SIMPLE_POS_BIAS_HPP
 
+#include "spdlog/spdlog.h"
 #include "spline.h"
 #include <array>
-#include <vector>
-#include "spdlog/spdlog.h"
 #include <boost/iostreams/filtering_stream.hpp>
+#include <vector>
 
 class SimplePosBias {
 public:
@@ -31,7 +31,7 @@ public:
   void finalize();
 
   // Seralize this model.
-  bool writeBinary(boost::iostreams::filtering_ostream& out) const; 
+  bool writeBinary(boost::iostreams::filtering_ostream& out) const;
 
 private:
   int32_t numBins_;

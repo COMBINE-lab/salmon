@@ -4,10 +4,10 @@ enable_testing()
 
 project (Salmon)
 
-set(CPACK_PACKAGE_VERSION "0.8.2")
+set(CPACK_PACKAGE_VERSION "0.9.0")
 set(CPACK_PACKAGE_VERSION_MAJOR "0")
-set(CPACK_PACKAGE_VERSION_MINOR "8")
-set(CPACK_PACKAGE_VERSION_PATCH "2")
+set(CPACK_PACKAGE_VERSION_MINOR "9")
+set(CPACK_PACKAGE_VERSION_PATCH "0")
 set(PROJECT_VERSION ${CPACK_PACKAGE_VERSION})
 set(CPACK_GENERATOR "TGZ")
 set(CPACK_SOURCE_GENERATOR "TGZ")
@@ -20,13 +20,24 @@ set(CPACK_SOURCE_PACKAGE_FILE_NAME
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 
+if( NOT CMAKE_BUILD_TYPE )
+  set( CMAKE_BUILD_TYPE Release CACHE STRING
+       "Choose the type of build, options are: Debug Release."
+       FORCE )
+endif()
+
 if (APPLE)
 set (WARNING_IGNORE_FLAGS "-Wno-deprecated-register")
 else()
 set (WARNING_IGNORE_FLAGS "")
 endif()
 
+
 set (BOOST_CXX_FLAGS "${WARNING_IGNORE_FLAGS} -std=c++11")
+if (FETCH_BOOST)
+   set (BOOST_CXX_FLAGS "${BOOST_CXX_FLAGS} -I${CMAKE_CURRENT_SOURCE_DIR}/external/install/include -L${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib")
+endif()
+
 ## Prefer static to dynamic libraries
 SET(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
 
@@ -447,10 +458,10 @@ ExternalProject_Add(libbwa
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
     #URL https://github.com/COMBINE-lab/bwa/archive/0.7.12.3.tar.gz
     #DOWNLOAD_NAME bwa-master.tar.gz
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/bwa/archive/0.7.12.3.tar.gz -o bwa-master.tar.gz &&
-                     ${SHASUM} e1665acd44f971f6d8b90c25992c680a7fec0a822268437d6fd4e51dbf603181  bwa-master.tar.gz &&
-                     mkdir -p bwa-master &&
-                     tar -xzvf bwa-master.tar.gz --strip-components=1 -C bwa-master
+    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/bwa/archive/v0.7.12.5.tar.gz -o bwa-master.tar.gz &&
+                    ${SHASUM} 1ac5661d9e12e9017a47f0264201a75d9128f28dbd9a26952925f7745ddf6036 bwa-master.tar.gz &&
+                    mkdir -p bwa-master &&
+                    tar -xzvf bwa-master.tar.gz --strip-components=1 -C bwa-master
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/bwa-master
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ""
@@ -519,7 +530,7 @@ endif()
 ExternalProject_Add(libtbb
 	DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
     DOWNLOAD_COMMAND curl -k -L https://github.com/01org/tbb/archive/2017_U3.tar.gz -o tbb-2017_U3.tgz &&
-                     ${SHASUM} 00a8b2798c498507572e24c2db7bf4896f05b760a38ed9ba566ffd348a7c6cef  tbb-2017_U3.tgz &&
+                     ${SHASUM} 00a8b2798c498507572e24c2db7bf4896f05b760a38ed9ba566ffd348a7c6cef tbb-2017_U3.tgz &&
                      tar -xzvf tbb-2017_U3.tgz
     ##
     #URL https://github.com/01org/tbb/archive/2017_U3.tar.gz 
@@ -638,16 +649,16 @@ message("Build system will fetch SPDLOG")
 message("==================================================================")
 ExternalProject_Add(libspdlog
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/spdlog/archive/v0.12.0.tar.gz -o spdlog-v0.12.0.tar.gz &&
-                     ${SHASUM} 5cfd6a0b3182a88e1eb35bcb65a7ef9035140d7c73b16ba6095939dbf07325b9  spdlog-v0.12.0.tar.gz &&
-                     tar -xzf spdlog-v0.12.0.tar.gz 
+    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/spdlog/archive/v0.14.0.tar.gz -o spdlog-v0.14.0.tar.gz &&
+                     ${SHASUM} eb5beb4e53f4bfff5b32eb4db8588484bdc15a17b90eeefef3a9fc74fec1d83d spdlog-v0.14.0.tar.gz &&
+                     tar -xzf spdlog-v0.14.0.tar.gz 
     ##
     #URL https://github.com/COMBINE-lab/spdlog/archive/v0.12.0.tar.gz
     #DOWNLOAD_NAME spdlog-v0.12.0.tar.gz
     #TLS_VERIFY FALSE
     #URL_HASH SHA1=c868b4d1a27c4d9fb3b748f0566a8f0390d83ffb
     ##
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/spdlog-0.12.0
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/spdlog-0.14.0
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ""
     BUILD_COMMAND ""
@@ -751,7 +762,6 @@ message("CPACK_SOURCE_IGNORE_FILES = ${CPACK_SOURCE_IGNORE_FILES}")
 # Recurse into Salmon source directory
 add_subdirectory ( src )
 #add_dependencies(salmon RapMap)
-
 # build a CPack driven installer package
 include (CPack)
 

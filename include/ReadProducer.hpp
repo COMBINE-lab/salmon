@@ -19,43 +19,40 @@
 <HEADER
 **/
 
-
 #ifndef __READPRODUCER_HPP__
 #define __READPRODUCER_HPP__
 
-#include "jellyfish/parse_dna.hpp"
-#include "jellyfish/mapped_file.hpp"
-#include "jellyfish/parse_read.hpp"
-#include "jellyfish/sequence_parser.hpp"
-#include "jellyfish/dna_codes.hpp"
+#include "StreamingSequenceParser.hpp"
 #include "jellyfish/compacted_hash.hpp"
+#include "jellyfish/dna_codes.hpp"
+#include "jellyfish/mapped_file.hpp"
 #include "jellyfish/mer_counting.hpp"
 #include "jellyfish/misc.hpp"
-#include "StreamingSequenceParser.hpp"
+#include "jellyfish/parse_dna.hpp"
+#include "jellyfish/parse_read.hpp"
+#include "jellyfish/sequence_parser.hpp"
 
-template <typename Parser>
-class ReadProducer {
-};
+template <typename Parser> class ReadProducer {};
 
-template <>
-class ReadProducer<jellyfish::parse_read> {
+template <> class ReadProducer<jellyfish::parse_read> {
 public:
-  ReadProducer(jellyfish::parse_read& parser) : s_(new ReadSeq), stream_(parser.new_thread()) {}
+  ReadProducer(jellyfish::parse_read& parser)
+      : s_(new ReadSeq), stream_(parser.new_thread()) {}
   ~ReadProducer() { delete s_; }
 
   bool nextRead(ReadSeq*& s) {
     if ((read_ = stream_.next_read())) {
-        // we iterate over the entire read
-        const char*         start = read_->seq_s;
-        const char*  const  end   = read_->seq_e;
-        uint32_t readLen = std::distance(start, end);
+      // we iterate over the entire read
+      const char* start = read_->seq_s;
+      const char* const end = read_->seq_e;
+      uint32_t readLen = std::distance(start, end);
 
-        s_->seq = const_cast<char*>(read_->seq_s);
-        s_->len = readLen;
-        s_->name = const_cast<char*>(read_->header);
-        s_->nlen = read_->hlen;
-        s = s_;
-        return true;
+      s_->seq = const_cast<char*>(read_->seq_s);
+      s_->len = readLen;
+      s_->name = const_cast<char*>(read_->header);
+      s_->nlen = read_->hlen;
+      s = s_;
+      return true;
     } else {
       return false;
     }
@@ -65,12 +62,11 @@ public:
 
 private:
   ReadSeq* s_;
-  jellyfish::parse_read::read_t* read_;//{parser.new_thread()};
-  jellyfish::parse_read::thread stream_;//{parser.new_thread()};
+  jellyfish::parse_read::read_t* read_;  //{parser.new_thread()};
+  jellyfish::parse_read::thread stream_; //{parser.new_thread()};
 };
 
-template <>
-class ReadProducer<StreamingReadParser> {
+template <> class ReadProducer<StreamingReadParser> {
 public:
   ReadProducer(StreamingReadParser& parser) : parser_(parser) {}
 

@@ -1,4 +1,7 @@
 #whitelist
+sudo: required
+dist: precise
+
 branches:
     only:
         - master

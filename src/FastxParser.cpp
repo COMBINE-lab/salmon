@@ -1,4 +1,5 @@
 #include "FastxParser.hpp"
+#include "FastxParserThreadUtils.hpp"
 
 #include "fcntl.h"
 #include "unistd.h"
@@ -7,6 +8,8 @@
 #include <cstdlib>
 #include <iostream>
 #include <poll.h>
+#include <sstream>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 #include <zlib.h>
@@ -86,9 +89,53 @@ moodycamel::ConsumerToken FastxParser<T>::getConsumerToken_() {
 }
 
 template <typename T> FastxParser<T>::~FastxParser() {
-  for (auto& t : parsingThreads_) {
-    t->join();
+  if (isActive_ or numParsing_ > 0) {
+    // Think about if this is too noisy --- but the user really shouldn't do
+    // this.
+    std::cerr
+        << "\n\nEncountered FastxParser destructor while parser was still "
+           "marked active (or while parsing threads were still active). "
+        << "Be sure to call stop() before letting FastxParser leave scope!\n";
+    try {
+      stop();
+    } catch (const std::exception& e) {
+      // Should exiting here be a user-definable behavior?
+      // What is the right mechanism for that.
+      std::cerr << "\n\nParser encountered exception : " << e.what() << "\n";
+      std::exit(-1);
+    }
   }
+  // Otherwise, we are good to go (i.e., destruct)
+}
+
+template <typename T> bool FastxParser<T>::stop() {
+  bool ret{false};
+  if (isActive_) {
+    for (auto& t : parsingThreads_) {
+      t->join();
+    }
+    isActive_ = false;
+    for (auto& res : threadResults_) {
+      if (res == -3) {
+        throw std::range_error("Error reading from the FASTA/Q stream. Make "
+                               "sure the file is valid.");
+      } else if (res < -1) {
+        std::stringstream ss;
+        ss << "Error reading from the FASTA/Q stream. Minimum return code for "
+              "left and right read was ("
+           << res << "). Make sure the file is valid.";
+        throw std::range_error(ss.str());
+      }
+    }
+    ret = true;
+  } else {
+    // Is this being too loud?  Again, if this triggers, the user has violated
+    // the API.
+    std::cerr << "stop() was called on a FastxParser that was not marked "
+                 "active. Did you remember "
+              << "to call start() on this parser?\n";
+  }
+  return ret;
 }
 
 inline void copyRecord(kseq_t* seq, ReadSeq* s) {
@@ -98,13 +145,16 @@ inline void copyRecord(kseq_t* seq, ReadSeq* s) {
 }
 
 template <typename T>
-void parseReads(
+int parseReads(
     std::vector<std::string>& inputStreams, std::atomic<uint32_t>& numParsing,
     moodycamel::ConsumerToken* cCont, moodycamel::ProducerToken* pRead,
     moodycamel::ConcurrentQueue<uint32_t>& workQueue,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>&
         seqContainerQueue_,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& readQueue_) {
+
+  using fastx_parser::thread_utils::MIN_BACKOFF_ITERS;
+  auto curMaxDelay = MIN_BACKOFF_ITERS;
   kseq_t* seq;
   T* s;
   uint32_t fn{0};
@@ -112,7 +162,10 @@ void parseReads(
     auto file = inputStreams[fn];
     std::unique_ptr<ReadChunk<T>> local;
     while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
-      std::cerr << "couldn't dequeue read chunk\n";
+      fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
+      // Think of a way to do this that wouldn't be loud (or would allow a
+      // user-definable logging mechanism) std::cerr << "couldn't dequeue read
+      // chunk\n";
     }
     size_t numObtained{local->size()};
     // open the file and init the parser
@@ -131,23 +184,34 @@ void parseReads(
 
       // If we've filled the local vector, then dump to the concurrent queue
       if (numWaiting == numObtained) {
+        curMaxDelay = MIN_BACKOFF_ITERS;
         while (!readQueue_.try_enqueue(std::move(local))) {
+          fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
         }
         numWaiting = 0;
         numObtained = 0;
         // And get more empty reads
+        curMaxDelay = MIN_BACKOFF_ITERS;
         while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
+          fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
         }
         numObtained = local->size();
       }
       ksv = kseq_read(seq);
     }
 
+    if (ksv == -3) {
+      --numParsing;
+      return -3;
+    }
+
     // If we hit the end of the file and have any reads in our local buffer
     // then dump them here.
     if (numWaiting > 0) {
       local->have(numWaiting);
+      curMaxDelay = MIN_BACKOFF_ITERS;
       while (!readQueue_.try_enqueue(*pRead, std::move(local))) {
+        fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
       }
       numWaiting = 0;
     }
@@ -157,10 +221,11 @@ void parseReads(
   }
 
   --numParsing;
+  return 0;
 }
 
 template <typename T>
-void parseReadPair(
+int parseReadPair(
     std::vector<std::string>& inputStreams,
     std::vector<std::string>& inputStreams2, std::atomic<uint32_t>& numParsing,
     moodycamel::ConsumerToken* cCont, moodycamel::ProducerToken* pRead,
@@ -169,6 +234,8 @@ void parseReadPair(
         seqContainerQueue_,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& readQueue_) {
 
+  using fastx_parser::thread_utils::MIN_BACKOFF_ITERS;
+  size_t curMaxDelay = MIN_BACKOFF_ITERS;
   kseq_t* seq;
   kseq_t* seq2;
   T* s;
@@ -181,7 +248,10 @@ void parseReadPair(
 
     std::unique_ptr<ReadChunk<T>> local;
     while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
-      std::cerr << "couldn't dequeue read chunk\n";
+      fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
+      // Think of a way to do this that wouldn't be loud (or would allow a
+      // user-definable logging mechanism) std::cerr << "couldn't dequeue read
+      // chunk\n";
     }
     size_t numObtained{local->size()};
     // open the file and init the parser
@@ -204,12 +274,16 @@ void parseReadPair(
 
       // If we've filled the local vector, then dump to the concurrent queue
       if (numWaiting == numObtained) {
+        curMaxDelay = MIN_BACKOFF_ITERS;
         while (!readQueue_.try_enqueue(std::move(local))) {
+          fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
         }
         numWaiting = 0;
         numObtained = 0;
         // And get more empty reads
+        curMaxDelay = MIN_BACKOFF_ITERS;
         while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
+          fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
         }
         numObtained = local->size();
       }
@@ -217,11 +291,21 @@ void parseReadPair(
       ksv2 = kseq_read(seq2);
     }
 
+    if (ksv == -3 or ksv2 == -3) {
+      --numParsing;
+      return -3;
+    } else if (ksv < -1 or ksv2 < -1) {
+      --numParsing;
+      return std::min(ksv, ksv2);
+    }
+
     // If we hit the end of the file and have any reads in our local buffer
     // then dump them here.
     if (numWaiting > 0) {
       local->have(numWaiting);
+      curMaxDelay = MIN_BACKOFF_ITERS;
       while (!readQueue_.try_enqueue(*pRead, std::move(local))) {
+        fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
       }
       numWaiting = 0;
     }
@@ -233,17 +317,21 @@ void parseReadPair(
   }
 
   --numParsing;
+  return 0;
 }
 
 template <> bool FastxParser<ReadSeq>::start() {
   if (numParsing_ == 0) {
+    isActive_ = true;
+    threadResults_.resize(numParsers_);
+    std::fill(threadResults_.begin(), threadResults_.end(), 0);
     for (size_t i = 0; i < numParsers_; ++i) {
       ++numParsing_;
       parsingThreads_.emplace_back(new std::thread([this, i]() {
-        parseReads(this->inputStreams_, this->numParsing_,
-                   this->consumeContainers_[i].get(),
-                   this->produceReads_[i].get(), this->workQueue_,
-                   this->seqContainerQueue_, this->readQueue_);
+        this->threadResults_[i] = parseReads(
+            this->inputStreams_, this->numParsing_,
+            this->consumeContainers_[i].get(), this->produceReads_[i].get(),
+            this->workQueue_, this->seqContainerQueue_, this->readQueue_);
       }));
     }
     return true;
@@ -254,7 +342,7 @@ template <> bool FastxParser<ReadSeq>::start() {
 
 template <> bool FastxParser<ReadPair>::start() {
   if (numParsing_ == 0) {
-
+    isActive_ = true;
     // Some basic checking to ensure the read files look "sane".
     if (inputStreams_.size() != inputStreams2_.size()) {
       throw std::invalid_argument("There should be the same number "
@@ -268,13 +356,17 @@ template <> bool FastxParser<ReadPair>::start() {
                                     " as both a left and right file");
       }
     }
+
+    threadResults_.resize(numParsers_);
+    std::fill(threadResults_.begin(), threadResults_.end(), 0);
+
     for (size_t i = 0; i < numParsers_; ++i) {
       ++numParsing_;
       parsingThreads_.emplace_back(new std::thread([this, i]() {
-        parseReadPair(this->inputStreams_, this->inputStreams2_,
-                      this->numParsing_, this->consumeContainers_[i].get(),
-                      this->produceReads_[i].get(), this->workQueue_,
-                      this->seqContainerQueue_, this->readQueue_);
+        this->threadResults_[i] = parseReadPair(
+            this->inputStreams_, this->inputStreams2_, this->numParsing_,
+            this->consumeContainers_[i].get(), this->produceReads_[i].get(),
+            this->workQueue_, this->seqContainerQueue_, this->readQueue_);
       }));
     }
     return true;
@@ -285,10 +377,12 @@ template <> bool FastxParser<ReadPair>::start() {
 
 template <typename T> bool FastxParser<T>::refill(ReadGroup<T>& seqs) {
   finishedWithGroup(seqs);
+  auto curMaxDelay = fastx_parser::thread_utils::MIN_BACKOFF_ITERS;
   while (numParsing_ > 0) {
     if (readQueue_.try_dequeue(seqs.consumerToken(), seqs.chunkPtr())) {
       return true;
     }
+    fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
   }
   return readQueue_.try_dequeue(seqs.consumerToken(), seqs.chunkPtr());
 }
@@ -303,4 +397,4 @@ template <typename T> void FastxParser<T>::finishedWithGroup(ReadGroup<T>& s) {
 
 template class FastxParser<ReadSeq>;
 template class FastxParser<ReadPair>;
-}
+} // namespace fastx_parser

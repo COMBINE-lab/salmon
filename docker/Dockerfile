@@ -1,12 +1,13 @@
 # image: COMBINE-lab/salmon
 # This dockerfile is based on the one created by
 # Titus Brown (available at https://github.com/ctb/2015-docker-building/blob/master/salmon/Dockerfile)
+#FROM insilicodb/bioconductor 
 FROM ubuntu:16.04
 MAINTAINER salmon.maintainer@gmail.com
 
 ENV PACKAGES git gcc make g++ cmake libboost-all-dev liblzma-dev libbz2-dev \
     ca-certificates zlib1g-dev curl unzip autoconf
-ENV SALMON_VERSION 0.8.2
+ENV SALMON_VERSION 0.9.0
 
 # salmon binary will be installed in /home/salmon/bin/salmon
 

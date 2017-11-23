@@ -3,8 +3,8 @@
 
 #include <boost/iostreams/filtering_stream.hpp>
 
-#include "jellyfish/mer_dna.hpp"
 #include "UtilityFunctions.hpp"
+#include "jellyfish/mer_dna.hpp"
 #include <Eigen/Dense>
 #include <cmath>
 
@@ -12,42 +12,46 @@ using Mer = jellyfish::mer_dna_ns::mer_base_static<uint64_t, 4>;
 
 class SBModel {
 public:
-  SBModel();   
-  
+  SBModel();
+
   SBModel(const SBModel&) = default;
   SBModel(SBModel&&) = default;
   SBModel& operator=(const SBModel&) = default;
   SBModel& operator=(SBModel&&) = default;
 
-  bool writeBinary(boost::iostreams::filtering_ostream& out) const; 
+  bool writeBinary(boost::iostreams::filtering_ostream& out) const;
 
-  inline int32_t contextBefore(bool rc) { return rc ? _contextRight : _contextLeft; }
-  inline int32_t contextAfter(bool rc) { return rc ? _contextLeft : _contextRight; }
+  inline int32_t contextBefore(bool rc) {
+    return rc ? _contextRight : _contextLeft;
+  }
+  inline int32_t contextAfter(bool rc) {
+    return rc ? _contextLeft : _contextRight;
+  }
 
-    bool addSequence(const char* seqIn, bool revCmp, double weight = 1.0);
-    bool addSequence(const Mer& mer, double weight); 
+  bool addSequence(const char* seqIn, bool revCmp, double weight = 1.0);
+  bool addSequence(const Mer& mer, double weight);
 
-    Eigen::MatrixXd& counts();
-    Eigen::MatrixXd& marginals();
-  
-    double evaluateLog(const char* seqIn); 
-    double evaluateLog(const Mer& mer);
- 
+  Eigen::MatrixXd& counts();
+  Eigen::MatrixXd& marginals();
+
+  double evaluateLog(const char* seqIn);
+  double evaluateLog(const Mer& mer);
+
   bool normalize();
 
   bool checkTransitionProbabilities();
-  
+
   void combineCounts(const SBModel& other);
 
   void dumpConditionalProbabilities(std::ostream& os);
 
-  int32_t getContextLength(); 
+  int32_t getContextLength();
 
   template <typename CountVecT>
   bool train(CountVecT& kmerCounts, const uint32_t K);
-  
+
   inline double evaluate(uint32_t kmer, uint32_t K) {
-    std::vector<uint32_t> _order{0, 0, 2,2,2,2};
+    std::vector<uint32_t> _order{0, 0, 2, 2, 2, 2};
     double p{1.0};
     for (int32_t pos = 0; pos < K - _order.back(); ++pos) {
       uint32_t offset = 2 * (K - (pos + 1) - _order[pos]);

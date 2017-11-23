@@ -19,30 +19,28 @@
 <HEADER
 **/
 
+#ifndef COMMON_TYPES_HPP
+#define COMMON_TYPES_HPP
 
-# ifndef COMMON_TYPES_HPP
-# define COMMON_TYPES_HPP
-
-#include <cstdint>
 #include <array>
+#include <cstdint>
 
 namespace Sailfish {
-    /*
-	struct Kmer {
-		uint64_t kmer;
-	};
+/*
+struct Kmer {
+    uint64_t kmer;
+};
 
-	struct Index {
-		uint64_t index;
-	};
-    */
-    struct TranscriptFeatures{
-        std::string name;
-        size_t length;
-        double gcContent;
-        std::array<uint64_t, 16> diNucleotides;
-    };
-}
+struct Index {
+    uint64_t index;
+};
+*/
+struct TranscriptFeatures {
+  std::string name;
+  size_t length;
+  double gcContent;
+  std::array<uint64_t, 16> diNucleotides;
+};
+} // namespace Sailfish
 
-
-# endif // COMMON_TYPES_HPP
+#endif // COMMON_TYPES_HPP
