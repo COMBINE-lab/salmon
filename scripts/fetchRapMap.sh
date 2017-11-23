@@ -40,7 +40,7 @@ if [ -z "${hashcheck-}" ]; then
 else
     #echo "1691f4bca2b604f05f36772ae45faf0842ab4809843df770bd10366a5cfd6822  ${EXTERNAL_DIR}/rapmap.zip" | ${hashcheck} -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
     #echo "5e0fa601f97c7b5f3bfa3216755d20a957d3f5e761f1128566a1441145cb60d7  ${EXTERNAL_DIR}/rapmap.zip" | ${hashcheck} -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
-    echo "e3dd29e3f79ad93f655c2262f428688d3dd81462d5ba3b7191dc1b16cbe5489f ${EXTERNAL_DIR}/rapmap.zip" | ${hashcheck} -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
+    echo "e3dd29e3f79ad93f655c2262f428688d3dd81462d5ba3b7191dc1b16cbe5489f  ${EXTERNAL_DIR}/rapmap.zip" | ${hashcheck} -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
     #echo "not testing sha in develop branch"
 fi
 
