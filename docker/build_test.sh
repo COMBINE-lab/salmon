@@ -1,2 +1,2 @@
 #! /bin/bash
-docker build -t combinelab/salmon:0.8.2 .
+docker build -t combinelab/salmon:0.9.0 .
