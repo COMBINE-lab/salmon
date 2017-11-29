@@ -41,8 +41,8 @@ if [ -z "${hashcheck-}" ]; then
     echo "Couldn't find shasum command; can't verify contents of downloaded RapMap";
 else
     #echo "1691f4bca2b604f05f36772ae45faf0842ab4809843df770bd10366a5cfd6822  ${EXTERNAL_DIR}/rapmap.zip" | ${hashcheck} -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
-    #echo "627e76da308c020fd475174afbec23448f526053882917b31b5dcfd20cfa33d5 ${EXTERNAL_DIR}/rapmap.zip" | ${hashcheck} -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
-    echo "8975e5a1ed61ed9354ba776272927545f417ecdce95823e71ba1e7b61de7d380 ${EXTERNAL_DIR}/rapmap.zip" | ${hashcheck} -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
+    #echo "627e76da308c020fd475174afbec23448f526053882917b31b5dcfd20cfa33d5  ${EXTERNAL_DIR}/rapmap.zip" | ${hashcheck} -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
+    echo "8975e5a1ed61ed9354ba776272927545f417ecdce95823e71ba1e7b61de7d380  ${EXTERNAL_DIR}/rapmap.zip" | ${hashcheck} -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
     #echo "not testing sha in develop branch"
 fi
 
