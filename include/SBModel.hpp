@@ -5,10 +5,12 @@
 
 #include "UtilityFunctions.hpp"
 #include "jellyfish/mer_dna.hpp"
+//#include "rapmap/Kmer.hpp"
 #include <Eigen/Dense>
 #include <cmath>
 
 using Mer = jellyfish::mer_dna_ns::mer_base_static<uint64_t, 4>;
+//using Mer = combinelib::kmers::Kmer<32,2>;
 
 class SBModel {
 public:
