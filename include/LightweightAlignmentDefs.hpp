@@ -800,9 +800,10 @@ inline void collectHitsForRead(SalmonIndex* sidx, const bwtintv_v* a,
   }
 }
 
-inline bool consistentNames(header_sequence_qual& r) { return true; }
+/*
+constexpr inline bool consistentNames(header_sequence_qual& r) { return true; }
 
-bool consistentNames(
+constexpr inline bool consistentNames(
     std::pair<header_sequence_qual, header_sequence_qual>& rp) {
   auto l1 = rp.first.header.length();
   auto l2 = rp.second.header.length();
@@ -841,6 +842,7 @@ bool consistentNames(
   }
   return compat;
 }
+*/
 
 /**
  *  Returns true if the @hit is within @cutoff bases of the end of
