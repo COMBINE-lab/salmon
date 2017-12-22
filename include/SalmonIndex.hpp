@@ -34,10 +34,10 @@ int rapMapSAIndex(int argc, char* argv[]);
 
 template <typename IndexT>
 using DenseHash =
-    spp::sparse_hash_map<uint64_t, rapmap::utils::SAInterval<IndexT>,
+    spp::sparse_hash_map<uint64_t, rapmap::utils::kmerVal<IndexT>,//rapmap::utils::SAInterval<IndexT>,
                          rapmap::utils::KmerKeyHasher>;
 template <typename IndexT>
-using PerfectHash = FrugalBooMap<uint64_t, rapmap::utils::SAInterval<IndexT>>;
+using PerfectHash = FrugalBooMap<uint64_t, rapmap::utils::kmerVal<IndexT>>;//rapmap::utils::SAInterval<IndexT>>;
 
 class SalmonIndex {
 public:

@@ -180,6 +180,13 @@ struct SalmonOpts {
       0}; // Cluster reads in each Eq Class based on the
           // conditional probabilities
 
+  uint32_t mmpLength;
+  uint32_t editDistance;
+  uint32_t maxInsertSize;
+
+  bool strictFilter;
+  bool softFilter;
+
   bool useQuasi; // Are we using the quasi-mapping based index or not.
 
   uint32_t eelCountCutoff{50};
