@@ -801,7 +801,7 @@ inline void collectHitsForRead(SalmonIndex* sidx, const bwtintv_v* a,
   }
 }
 
-inline bool consistentNames(header_sequence_qual& r) { return true; }
+/*inline bool consistentNames(header_sequence_qual& r) { return true; }
 
 bool consistentNames(
     std::pair<header_sequence_qual, header_sequence_qual>& rp) {
@@ -842,7 +842,7 @@ bool consistentNames(
   }
   return compat;
 }
-
+*/
 /**
  *  Returns true if the @hit is within @cutoff bases of the end of
  *  transcript @txp and false otherwise.
