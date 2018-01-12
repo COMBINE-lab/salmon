@@ -252,6 +252,9 @@ int main(int argc, char* argv[]) {
       // we're quantifying with raw sequences or alignemnts
       if (cmdMain->first == "quant") {
 
+        if (subCommandArgc < 2) {
+          return dualModeMessage();
+        }
         // detect mode-specific help request
         if (strncmp(argv2[1], "--help-alignment", 16) == 0) {
           std::vector<char> helpStr{'-', '-', 'h', 'e', 'l', 'p', '\0'};
