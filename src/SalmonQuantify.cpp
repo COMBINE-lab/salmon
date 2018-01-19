@@ -873,7 +873,7 @@ void processReadsQuasi(
   size_t maxNumHits{salmonOpts.maxReadOccs};
   size_t readLenLeft{0};
   size_t readLenRight{0};
- 
+
   //SACollector<RapMapIndexT> hitCollector(qidx);
 
 
@@ -935,6 +935,7 @@ void processReadsQuasi(
       rightHits.clear();
       mapType = salmon::utils::MappingType::UNMAPPED;
 
+	  bool flag{false} ;
       //bool lh = tooShortLeft
       //              ? false
       //              : hitCollector(rp.first.seq, leftHits, saSearcher,
@@ -1003,13 +1004,22 @@ void processReadsQuasi(
                     salmonOpts.editDistance,
 		    salmonOpts.maxInsertSize);
 
-	   hitSECollector(rp.first,rp.second, jointHits, salmonOpts.editDistance);
-                jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
-                      [&transcripts](QuasiAlignment& a) {
-                      return !a.toAlign;
-                      }), jointHits.end());
+          if(flag){
+            if(!res){
+              std::cerr << "\nLost after merging\n" ;
+            }
+          }
 
-           if(salmonOpts.strictFilter and jointHits.size() > 0){
+          if(!jointHits.back().resOrphan){
+            hitSECollector(rp.first,rp.second, jointHits, salmonOpts.editDistance);
+
+            jointHits.erase(std::remove_if(jointHits.begin(), jointHits.end(),
+                                           [&transcripts](QuasiAlignment& a) {
+                                             return !a.toAlign;
+                                           }), jointHits.end());
+          }
+
+          if(salmonOpts.strictFilter and jointHits.size() > 0){
 
                     auto minDist = 200;// salmonOpts.editDistance*2;
                     std::for_each(jointHits.begin(), jointHits.end(),
@@ -1439,7 +1449,7 @@ void processReadsQuasi(
 
       leftFwdSAInts.clear();
       leftRcSAInts.clear();
-      
+
       bool lh = hitCollectorPair(rp.seq,
                     leftFwdSAInts, leftRcSAInts, saSearcher,
                     MateStatus::SINGLE_END,

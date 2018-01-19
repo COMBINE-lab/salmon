@@ -19,11 +19,11 @@ fi
 mkdir -p ${EXTERNAL_DIR}
 #curl -k -L https://github.com/COMBINE-lab/RapMap/archive/salmon-v0.8.0.zip -o ${EXTERNAL_DIR}/rapmap.zip
 #curl -k -L https://github.com/COMBINE-lab/RapMap/archive/develop-salmon.zip -o ${EXTERNAL_DIR}/rapmap.zip
-curl -k -L https://github.com/COMBINE-lab/RapMap/archive/selective-alignment-custom-kmer.zip -o ${EXTERNAL_DIR}/rapmap.zip
+curl -k -L https://github.com/COMBINE-lab/RapMap/archive/rescue-orphan.zip -o ${EXTERNAL_DIR}/rapmap.zip
 
 rm -fr ${EXTERNAL_DIR}/RapMap
 unzip ${EXTERNAL_DIR}/rapmap.zip -d ${EXTERNAL_DIR}
-mv ${EXTERNAL_DIR}/RapMap-selective-alignment-custom-kmer ${EXTERNAL_DIR}/RapMap
+mv ${EXTERNAL_DIR}/RapMap-rescue-orphan ${EXTERNAL_DIR}/RapMap
 #mv ${EXTERNAL_DIR}/RapMap-salmon-v0.8.0 ${EXTERNAL_DIR}/RapMap
 
 mkdir -p ${INSTALL_DIR}/include/rapmap
