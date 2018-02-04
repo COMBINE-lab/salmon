@@ -29,6 +29,11 @@ public:
   void setRead(std::string* r) { read_ = r; }
   std::string* read() { return read_; }
 
+   void setBarcode(uint32_t b ) {barcode_ = b;}
+   void setUMI(uint64_t b) {umi_ = b;}
+   uint32_t barcode() {return barcode_;}
+   uint64_t umi() {return umi_;}
+
   inline std::vector<FragT>& alignments() { return alignments_; }
   void emplaceAlignment(FragT&& p) { alignments_.emplace_back(p); }
   void addAlignment(FragT& p) { alignments_.push_back(p); }

@@ -1672,12 +1672,12 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
      "[Developer]: Disables some extra checks during quasi-mapping. This may make mapping a "
      "little bit faster at the potential cost of returning too many mappings (i.e. some sub-optimal mappings) "
      "for certain reads. Only use this option if you know what it does (enables NIP-skipping)")
-    (
-     "gcSizeSamp",
-     po::value<std::uint32_t>(&(sopt.gcSampFactor))->default_value(1),
-     "The value by which to down-sample transcripts when representing the "
-     "GC content.  Larger values will reduce memory usage, but may "
-     "decrease the fidelity of bias modeling results.")
+    //(
+    // "gcSizeSamp",
+    // po::value<std::uint32_t>(&(sopt.gcSampFactor))->default_value(1),
+    // "The value by which to down-sample transcripts when representing the "
+    // "GC content.  Larger values will reduce memory usage, but may "
+    // "decrease the fidelity of bias modeling results.")
     (
      "biasSpeedSamp",
      po::value<std::uint32_t>(&(sopt.pdfSampFactor))->default_value(1),

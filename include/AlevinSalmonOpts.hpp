@@ -39,7 +39,7 @@ void setSalmonOpt(SalmonOpts& sopt, AlevinOpts<ProtocolT>& aopt){
   sopt.dumpEq = false;
   sopt.dumpEqWeights = false;
   sopt.fasterMapping = false;
-  sopt.gcSampFactor = 1;
+  //sopt.gcSampFactor = 1;
   sopt.pdfSampFactor = 1;
   sopt.strictIntersect = false;
   sopt.fragLenDistMax = 1000;

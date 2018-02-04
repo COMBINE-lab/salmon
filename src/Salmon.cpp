@@ -147,6 +147,7 @@ bibtex:
 int salmonIndex(int argc, char* argv[]);
 int salmonQuantify(int argc, char* argv[]);
 int salmonAlignmentQuantify(int argc, char* argv[]);
+int salmonBarcoding(int argc, char* argv[]);
 int salmonQuantMerge(int argc, char* argv[]);
 
 bool verbose = false;

@@ -173,8 +173,8 @@ if (${FETCHED_JEMALLOC})
 endif()
 
 if (${FETCHED_BOOST})
-   add_dependencies(salmon_core libboost)
    add_dependencies(alevin_core libboost)
+   add_dependencies(salmon_core libboost)
    add_dependencies(salmon libboost)
 endif()
 
