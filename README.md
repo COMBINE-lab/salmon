@@ -2,9 +2,6 @@
 ```
 bin/salmon/include/AlignmentGroup.hpp
 bin/salmon/include/EquivalenceClassBuilder.hpp
-bin/salmon/include/GZipWriter.hpp
-bin/salmon/src/CMakeLists.txt
-bin/salmon/src/GZipWriter.cpp
 bin/salmon/src/Salmon.cpp
 ```
 

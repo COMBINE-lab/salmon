@@ -10,6 +10,7 @@
 #include "ReadPair.hpp"
 #include "SalmonOpts.hpp"
 #include "UnpairedRead.hpp"
+#include "SingleCellProtocols.hpp"
 
 GZipWriter::GZipWriter(const boost::filesystem::path path,
                        std::shared_ptr<spdlog::logger> logger)

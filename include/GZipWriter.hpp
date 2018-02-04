@@ -13,6 +13,7 @@
 #include "ReadExperiment.hpp"
 #include "SalmonOpts.hpp"
 #include "SalmonSpinLock.hpp"
+#include "AlevinOpts.hpp"
 
 class GZipWriter {
 public:
@@ -24,6 +25,12 @@ public:
   template <typename ExpT>
   bool writeEquivCounts(const SalmonOpts& opts, ExpT& experiment);
 
+  template <typename ExpT, typename ProtocolT>
+  bool writeEquivCounts(
+                        const AlevinOpts<ProtocolT>& aopts,
+                        ExpT& experiment);
+
+
   template <typename ExpT>
   bool writeMeta(const SalmonOpts& opts, const ExpT& experiment);
 
@@ -33,6 +40,9 @@ public:
 
   template <typename ExpT>
   bool writeAbundances(const SalmonOpts& sopt, ExpT& readExp);
+
+  bool writeAbundances(std::vector<double>& alphas,
+                       std::vector<Transcript>& transcripts);
 
   template <typename ExpT>
   bool writeEmptyAbundances(const SalmonOpts& sopt, ExpT& readExp);
