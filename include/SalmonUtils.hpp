@@ -217,7 +217,7 @@ bool headersAreConsistent(SAM_hdr* h1, SAM_hdr* h2);
 bool headersAreConsistent(std::vector<SAM_hdr*>&& headers);
 
 inline void reverseComplement(const char* s, int32_t l, std::string& o) {
-  if (l > o.size()) {
+  if (static_cast<decltype(o.size())>(l) > o.size()) {
     o.resize(l, 'A');
   }
   int32_t j = 0;
