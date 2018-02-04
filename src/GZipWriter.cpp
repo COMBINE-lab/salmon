@@ -106,6 +106,67 @@ bool GZipWriter::writeEquivCounts(const SalmonOpts& opts, ExpT& experiment) {
   return true;
 }
 
+/**
+ * Write the equivalence class information to file.
+ * The header will contain the transcript / target ids in
+ * a fixed order, then each equivalence class will consist
+ * of a line / row.
+ */
+template <typename ExpT, typename ProtocolT>
+bool GZipWriter::writeEquivCounts(
+    const AlevinOpts<ProtocolT>& aopts,
+    ExpT& experiment) {
+
+  namespace bfs = boost::filesystem;
+
+  bfs::path auxDir = aopts.outputDirectory;
+  bool auxSuccess = boost::filesystem::create_directories(auxDir);
+  bfs::path eqFilePath = auxDir / "eq_classes.txt";
+
+  std::ofstream equivFile(eqFilePath.string());
+
+  auto& transcripts = experiment.transcripts();
+  const auto& eqVec =
+    experiment.equivalenceClassBuilder().eqMap().lock_table();
+
+  // Number of transcripts
+  equivFile << transcripts.size() << '\n';
+
+  // Number of equivalence classes
+  equivFile << eqVec.size() << '\n';
+
+  for (auto& t : transcripts) {
+    equivFile << t.RefName << '\n';
+  }
+
+  for (auto& eq : eqVec) {
+    uint64_t count = eq.second.count;
+    // for each transcript in this class
+    const TranscriptGroup& tgroup = eq.first;
+    const std::vector<uint32_t>& txps = tgroup.txps;
+
+    // group size
+    equivFile << txps.size() << '\t';
+    // each group member
+    for (auto tid : txps) { equivFile << tid << '\t'; }
+    const auto& bgroup = eq.second.barcodeGroup;
+    equivFile << count << "\t" << bgroup.size();
+    for (auto  bcIt : bgroup){
+      auto bc = bcIt.first;
+      auto ugroup = bcIt.second;
+      equivFile << "\t" << bc << "\t" << ugroup.size();
+      for (auto umiIt : ugroup){
+        auto umi = umiIt.first;
+        auto count = umiIt.second;
+        equivFile << "\t" << umi << "\t" << count;
+      }
+    }
+    equivFile << "\n";
+  }
+  equivFile.close();
+  return true;
+}
+
 std::vector<std::string> getLibTypeStrings(const ReadExperiment& experiment) {
   auto& libs = experiment.readLibraries();
   std::vector<std::string> libStrings;
@@ -496,6 +557,26 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment) {
   return true;
 }
 
+bool GZipWriter::writeAbundances(
+                                 std::vector<double>& alphas,
+                                 std::vector<Transcript>& transcripts) {
+  namespace bfs = boost::filesystem;
+
+  bfs::path fname = path_ / "quant.sf";
+  std::unique_ptr<std::FILE, int (*)(std::FILE *)> output(std::fopen(fname.c_str(), "w"), std::fclose);
+
+  fmt::print(output.get(), "Name\tLength\tNumMolecules\n");
+
+  // Now posterior has the transcript fraction
+  for (size_t i=0; i < transcripts.size(); i++) {
+    fmt::print(output.get(), "{}\t{}\t{}\n",
+               transcripts[i].RefName,
+               transcripts[i].CompleteLength,
+               alphas[i]);
+  }
+  return true;
+}
+
 template <typename ExpT>
 bool GZipWriter::writeEmptyAbundances(const SalmonOpts& sopt, ExpT& readExp) {
 
@@ -671,3 +752,59 @@ getLibTypeStrings(const AlignmentLibrary<UnpairedRead>& experiment);
 
 template std::vector<std::string>
 getLibTypeStrings(const AlignmentLibrary<ReadPair>& experiment);
+
+namespace apt = alevin::protocols;
+template
+bool GZipWriter::writeEquivCounts<ReadExperiment, apt::DropSeq>(
+                                                                const AlevinOpts<apt::DropSeq>& aopts,
+                                                                ReadExperiment& readExp);
+template
+bool GZipWriter::writeEquivCounts<AlignmentLibrary<UnpairedRead>, apt::DropSeq>(
+                                                                  const AlevinOpts<apt::DropSeq>& aopts,
+                                                                  AlignmentLibrary<UnpairedRead>& readExp);
+template
+bool GZipWriter::writeEquivCounts<AlignmentLibrary<ReadPair>, apt::DropSeq>(
+                                                              const AlevinOpts<apt::DropSeq>& aopts,
+                                                              AlignmentLibrary<ReadPair>& readExp);
+
+template
+bool GZipWriter::writeEquivCounts<ReadExperiment, apt::InDrop>(
+                                                                const AlevinOpts<apt::InDrop>& aopts,
+                                                                ReadExperiment& readExp);
+template
+bool GZipWriter::writeEquivCounts<AlignmentLibrary<UnpairedRead>, apt::InDrop>(
+                                                                  const AlevinOpts<apt::InDrop>& aopts,
+                                                                  AlignmentLibrary<UnpairedRead>& readExp);
+template
+bool GZipWriter::writeEquivCounts<AlignmentLibrary<ReadPair>, apt::InDrop>(
+                                                                            const AlevinOpts<apt::InDrop>& aopts,
+                                                                            AlignmentLibrary<ReadPair>& readExp);
+
+
+template
+bool GZipWriter::writeEquivCounts<ReadExperiment, apt::Chromium>(
+                                                                const AlevinOpts<apt::Chromium>& aopts,
+                                                                ReadExperiment& readExp);
+template
+bool GZipWriter::writeEquivCounts<AlignmentLibrary<UnpairedRead>, apt::Chromium>(
+                                                                  const AlevinOpts<apt::Chromium>& aopts,
+                                                                  AlignmentLibrary<UnpairedRead>& readExp);
+template
+bool GZipWriter::writeEquivCounts<AlignmentLibrary<ReadPair>, apt::Chromium>(
+                                                                           const AlevinOpts<apt::Chromium>& aopts,
+                                                                           AlignmentLibrary<ReadPair>& readExp);
+
+
+template
+bool GZipWriter::writeEquivCounts<ReadExperiment, apt::Custom>(
+                                                                const AlevinOpts<apt::Custom>& aopts,
+                                                                ReadExperiment& readExp);
+template
+bool GZipWriter::writeEquivCounts<AlignmentLibrary<UnpairedRead>, apt::Custom>(
+                                                                  const AlevinOpts<apt::Custom>& aopts,
+                                                                  AlignmentLibrary<UnpairedRead>& readExp);
+template
+bool GZipWriter::writeEquivCounts<AlignmentLibrary<ReadPair>, apt::Custom>(
+                                                                           const AlevinOpts<apt::Custom>& aopts,
+                                                                           AlignmentLibrary<ReadPair>& readExp);
+
