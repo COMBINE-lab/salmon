@@ -1,3 +1,13 @@
+# Files remaning to change
+```
+bin/salmon/include/AlignmentGroup.hpp
+bin/salmon/include/EquivalenceClassBuilder.hpp
+bin/salmon/include/GZipWriter.hpp
+bin/salmon/src/CMakeLists.txt
+bin/salmon/src/GZipWriter.cpp
+bin/salmon/src/Salmon.cpp
+```
+
 [![Build Status](https://travis-ci.org/COMBINE-lab/salmon.svg?branch=master)](https://travis-ci.org/COMBINE-lab/salmon)
 [![Documentation Status](https://readthedocs.org/projects/salmon/badge/?version=latest)](http://salmon.readthedocs.org/en/latest)
 [![install with bioconda](https://img.shields.io/badge/install%20with-bioconda-brightgreen.svg?style=flat-square)](http://bioconda.github.io/recipes/salmon/README.html)
