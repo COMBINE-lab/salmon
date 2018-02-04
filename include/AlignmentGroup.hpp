@@ -59,6 +59,8 @@ public:
 private:
   std::vector<FragT> alignments_;
   std::string* read_;
+  uint32_t barcode_;
+  uint64_t umi_;
   bool isUniquelyMapped_;
 };
 #endif // ALIGNMENT_GROUP

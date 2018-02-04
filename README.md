@@ -2,7 +2,6 @@
 ```
 bin/salmon/include/AlignmentGroup.hpp
 bin/salmon/include/EquivalenceClassBuilder.hpp
-bin/salmon/src/Salmon.cpp
 ```
 
 [![Build Status](https://travis-ci.org/COMBINE-lab/salmon.svg?branch=master)](https://travis-ci.org/COMBINE-lab/salmon)
