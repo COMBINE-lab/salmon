@@ -150,7 +150,11 @@ namespace alevin{
 
   constexpr uint32_t miniBatchSize{5000};
 
-  template <typename AlnT> using AlnGroupVec = std::vector<AlignmentGroup<AlnT>>;
+  using CellBarcodeT = uint32_t;
+  using UMIBarcodeT = uint64_t;
+
+  template <typename AlnT> using AlevinAlnGroup = AlignmentGroup<AlnT, CellBarcodeT, UMIBarcodeT>;
+  template <typename AlnT> using AlnGroupVec = std::vector<AlevinAlnGroup<AlnT>>;
 
   template <typename AlnT>
   using AlnGroupVecRange =
@@ -159,10 +163,10 @@ namespace alevin{
 #define __MOODYCAMEL__
 #if defined(__MOODYCAMEL__)
   template <typename AlnT>
-  using AlnGroupQueue = moodycamel::ConcurrentQueue<AlignmentGroup<AlnT>*>;
+  using AlnGroupQueue = moodycamel::ConcurrentQueue<AlevinAlnGroup<AlnT>*>;
 #else
   template <typename AlnT>
-  using AlnGroupQueue = tbb::concurrent_queue<AlignmentGroup<AlnT>*>;
+  using AlnGroupQueue = tbb::concurrent_queue<AlevinAlnGroup<AlnT>*>;
 #endif
 
 #include "LightweightAlignmentDefs.hpp"

@@ -299,7 +299,7 @@ void optimizeCell(ReadExperiment& experiment,
 
 void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                      const std::vector<Transcript>& transcripts){
-  std::string fname = "/mnt/scratch5/avi/alevin/data/mouse/gtf/txp2gene.tsv";
+  std::string fname = "/mnt/scratch5/avi/alevin/data/mohu/gtf/txp2gene.tsv";
   std::ifstream t2gFile(fname);
 
   spp::sparse_hash_map<std::string, uint32_t> txpIdxMap(transcripts.size());

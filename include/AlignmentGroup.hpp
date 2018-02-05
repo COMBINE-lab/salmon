@@ -16,7 +16,9 @@ extern "C" {
 #include "SalmonMath.hpp"
 #include <vector>
 
-template <typename FragT> class AlignmentGroup {
+struct EmptyCellInfo {};
+
+template <typename FragT, typename BCType = EmptyCellInfo, typename UMIType = EmptyCellInfo> class AlignmentGroup {
 public:
   AlignmentGroup() : read_(nullptr), isUniquelyMapped_(true) {
     alignments_.reserve(10);
@@ -29,10 +31,10 @@ public:
   void setRead(std::string* r) { read_ = r; }
   std::string* read() { return read_; }
 
-   void setBarcode(uint32_t b ) {barcode_ = b;}
-   void setUMI(uint64_t b) {umi_ = b;}
-   uint32_t barcode() {return barcode_;}
-   uint64_t umi() {return umi_;}
+   void setBarcode(BCType b ) {barcode_ = b;}
+   void setUMI(UMIType b) {umi_ = b;}
+   BCType barcode() {return barcode_;}
+   UMIType umi() {return umi_;}
 
   inline std::vector<FragT>& alignments() { return alignments_; }
   void emplaceAlignment(FragT&& p) { alignments_.emplace_back(p); }
@@ -64,8 +66,9 @@ public:
 private:
   std::vector<FragT> alignments_;
   std::string* read_;
-  uint32_t barcode_;
-  uint64_t umi_;
   bool isUniquelyMapped_;
+  BCType barcode_;
+  UMIType umi_;
 };
+
 #endif // ALIGNMENT_GROUP
