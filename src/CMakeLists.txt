@@ -23,7 +23,6 @@ QSufSort.c
 is.c
 bwt_gen.c
 bwtindex.c
-xxhash.c
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapFileSystem.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndexer.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndex.cpp
@@ -43,7 +42,6 @@ SalmonQuantify.cpp
 FragmentLengthDistribution.cpp
 FragmentStartPositionDistribution.cpp
 SequenceBiasModel.cpp
-TranscriptGroup.cpp
 GZipWriter.cpp
 SalmonQuantMerge.cpp
 #${GAT_SOURCE_DIR}/external/install/src/rapmap/sais.c
@@ -63,6 +61,8 @@ set (ALEVIN_LIB_SRCS
 )
 
 set (SALMON_LIB_SRCS
+xxhash.c
+TranscriptGroup.cpp
 EffectiveLengthStats.cpp
 BWAUtils.cpp
 LibraryFormat.cpp

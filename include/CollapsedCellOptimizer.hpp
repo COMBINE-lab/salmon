@@ -26,10 +26,11 @@
 #include "concurrentqueue.h"
 
 using JqueueT = moodycamel::ConcurrentQueue<uint32_t>;
-using eqMapT = cuckoohash_map<TranscriptGroup, TGValue, TranscriptGroupHasher>;
+using eqMapT = cuckoohash_map<TranscriptGroup, SCTGValue, TranscriptGroupHasher>;
 using tgrouplabelt = std::vector<uint32_t>;
 using tgroupweightvec = std::vector<double>;
 namespace bfs = boost::filesystem;
+using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 
 bool runPerCellEM(std::vector<std::vector<uint32_t>>& txpGroups,
                   std::vector<std::vector<double>>& txpGroupCombinedWeights,
@@ -40,7 +41,7 @@ bool runPerCellEM(std::vector<std::vector<uint32_t>>& txpGroups,
                   bfs::path& outDirPath,
                   std::unordered_set<uint32_t>& activeTxps);
 
-void optimizeCell(ReadExperiment& experiment,
+void optimizeCell(SCExpT& experiment,
                   std::vector<std::string>& trueBarcodes,
                   std::atomic<uint32_t>& barcode,
                   size_t totalCells,
@@ -59,7 +60,7 @@ public:
   CollapsedCellOptimizer();
 
   template <class ProtocolT>
-  bool optimize(ReadExperiment& readExp,
+  bool optimize(SCExpT& readExp,
                 AlevinOpts<ProtocolT>& aopt,
                 std::vector<std::string>& trueBarcodes,
                 std::vector<uint32_t>& umiCount);

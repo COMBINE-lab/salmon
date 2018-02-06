@@ -33,7 +33,7 @@ extern "C" {
 #include "SalmonConfig.hpp"
 #include "TranscriptGeneMap.hpp"
 
-class ReadExperiment;
+template <typename EqBuilderT> class ReadExperiment;
 class LibraryFormat;
 class FragmentLengthDistribution;
 

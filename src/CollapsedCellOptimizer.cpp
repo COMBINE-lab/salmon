@@ -98,7 +98,7 @@ bool runPerCellEM(
 }
 
 
-void optimizeCell(ReadExperiment& experiment,
+void optimizeCell(SCExpT& experiment,
                   std::vector<std::string>& trueBarcodes,
                   std::atomic<uint32_t>& barcode,
                   size_t totalCells,
@@ -164,7 +164,7 @@ void optimizeCell(ReadExperiment& experiment,
 
     for (auto& key : orderedTgroup) {
       //traversing each class and copying relevant data.
-      bool isKeyPresent = eqMap.find_fn(key, [&](const TGValue& val){
+      bool isKeyPresent = eqMap.find_fn(key, [&](const SCTGValue& val){
           auto& bg = val.barcodeGroup;
           auto bcIt = bg.find(trueBarcodeIdx);
 
@@ -336,7 +336,7 @@ void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
 
 
 template <typename ProtocolT>
-bool CollapsedCellOptimizer::optimize(ReadExperiment& experiment,
+bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<ProtocolT>& aopt,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount){
@@ -401,22 +401,22 @@ bool CollapsedCellOptimizer::optimize(ReadExperiment& experiment,
 
 namespace apt = alevin::protocols;
 template
-bool CollapsedCellOptimizer::optimize(ReadExperiment& experiment,
+bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::DropSeq>& aopt,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount);
 template
-bool CollapsedCellOptimizer::optimize(ReadExperiment& experiment,
+bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::InDrop>& aopt,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount);
 template
-bool CollapsedCellOptimizer::optimize(ReadExperiment& experiment,
+bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::Chromium>& aopt,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount);
 template
-bool CollapsedCellOptimizer::optimize(ReadExperiment& experiment,
+bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::Custom>& aopt,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount);

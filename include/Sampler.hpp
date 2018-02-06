@@ -72,7 +72,11 @@ template <typename FragT>
 using OutputQueue = tbb::concurrent_bounded_queue<FragT*>;
 
 template <typename FragT>
-void sampleMiniBatch(AlignmentLibrary<FragT>& alnLib,
+using AlignmentLibraryT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>>;
+
+
+template <typename FragT>
+void sampleMiniBatch(AlignmentLibraryT<FragT>& alnLib,
                      MiniBatchQueue<AlignmentGroup<FragT*>>& workQueue,
                      std::condition_variable& workAvailable,
                      std::mutex& cvmutex, volatile bool& doneParsing,
@@ -339,7 +343,7 @@ void sampleMiniBatch(AlignmentLibrary<FragT>& alnLib,
  *  estimates of transcript abundance.
  */
 template <typename FragT>
-bool sampleLibrary(AlignmentLibrary<FragT>& alnLib,
+bool sampleLibrary(AlignmentLibraryT<FragT>& alnLib,
                    const SalmonOpts& salmonOpts, bool burnedIn,
                    bfs::path& sampleFilePath, bool sampleUnaligned) {
 

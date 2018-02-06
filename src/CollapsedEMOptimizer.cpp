@@ -236,7 +236,8 @@ void VBEMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
  * classes to estimate the latent variables (alphaOut)
  * given the current estimates (alphaIn).
  */
-void EMUpdate_(std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
+template <typename EQVecT>
+void EMUpdate_(EQVecT& eqVec,
                std::vector<Transcript>& transcripts,
                const CollapsedEMOptimizer::VecType& alphaIn,
                CollapsedEMOptimizer::VecType& alphaOut) {
@@ -295,7 +296,8 @@ void EMUpdate_(std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
  * classes to estimate the latent variables (alphaOut)
  * given the current estimates (alphaIn).
  */
-void VBEMUpdate_(std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
+template <typename EQVecT>
+void VBEMUpdate_(EQVecT& eqVec,
                  std::vector<Transcript>& transcripts,
                  std::vector<double>& priorAlphas, double totLen,
                  const CollapsedEMOptimizer::VecType& alphaIn,
@@ -380,9 +382,9 @@ void VBEMUpdate_(std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
       });
 }
 
-template <typename VecT>
+template <typename VecT, typename EQVecT>
 size_t markDegenerateClasses(
-    std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
+    EQVecT& eqVec,
     VecT& alphaIn, Eigen::VectorXd& effLens, std::vector<bool>& available,
     std::shared_ptr<spdlog::logger> jointLog, bool verbose = false) {
 
@@ -611,7 +613,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
 
   uint32_t numBootstraps = sopt.numBootstraps;
 
-  std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec =
+  auto& eqVec =
       readExp.equivalenceClassBuilder().eqVec();
 
   std::unordered_set<uint32_t> activeTranscriptIDs;
@@ -719,8 +721,9 @@ bool CollapsedEMOptimizer::gatherBootstraps(
   return true;
 }
 
+template <typename EQVecT>
 void updateEqClassWeights(
-    std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
+    EQVecT& eqVec,
     Eigen::VectorXd& effLens) {
   tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(eqVec.size())),
@@ -734,7 +737,7 @@ void updateEqClassWeights(
           // The size of the label
           size_t classSize = kv.second.weights.size(); // k.txps.size();
           // The weights of the label
-          TGValue& v = kv.second;
+          auto& v = kv.second;
 
           // Iterate over each weight and set it equal to
           // 1 / effLen of the corresponding transcript
@@ -779,7 +782,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
 
   Eigen::VectorXd effLens(transcripts.size());
 
-  std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec =
+  auto& eqVec =
       readExp.equivalenceClassBuilder().eqVec();
 
   bool noRichEq = sopt.noRichEqClasses;
@@ -868,7 +871,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
           // The size of the label
           size_t classSize = kv.second.weights.size(); // k.txps.size();
           // The weights of the label
-          TGValue& v = kv.second;
+          auto& v = kv.second;
 
           // Iterate over each weight and set it
           double wsum{0.0};
@@ -1046,32 +1049,49 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   return true;
 }
 
-template bool CollapsedEMOptimizer::optimize<ReadExperiment>(
-    ReadExperiment& readExp, SalmonOpts& sopt, double relDiffTolerance,
+using BulkReadExperimentT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;
+template <typename FragT>
+using BulkAlnLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>>;
+using SCReadExperimentT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
+
+
+template bool CollapsedEMOptimizer::optimize<BulkReadExperimentT>(
+    BulkReadExperimentT& readExp, SalmonOpts& sopt, double relDiffTolerance,
     uint32_t maxIter);
+template bool CollapsedEMOptimizer::optimize<SCReadExperimentT>(
+                                                                  SCReadExperimentT& readExp, SalmonOpts& sopt, double relDiffTolerance,
+                                                                  uint32_t maxIter);
 
-template bool CollapsedEMOptimizer::optimize<AlignmentLibrary<UnpairedRead>>(
-    AlignmentLibrary<UnpairedRead>& readExp, SalmonOpts& sopt,
+
+template bool CollapsedEMOptimizer::optimize<BulkAlnLibT<UnpairedRead>>(
+    BulkAlnLibT<UnpairedRead>& readExp, SalmonOpts& sopt,
     double relDiffTolerance, uint32_t maxIter);
 
-template bool CollapsedEMOptimizer::optimize<AlignmentLibrary<ReadPair>>(
-    AlignmentLibrary<ReadPair>& readExp, SalmonOpts& sopt,
+template bool CollapsedEMOptimizer::optimize<BulkAlnLibT<ReadPair>>(
+    BulkAlnLibT<ReadPair>& readExp, SalmonOpts& sopt,
     double relDiffTolerance, uint32_t maxIter);
 
-template bool CollapsedEMOptimizer::gatherBootstraps<ReadExperiment>(
-    ReadExperiment& readExp, SalmonOpts& sopt,
+
+template bool CollapsedEMOptimizer::gatherBootstraps<BulkReadExperimentT>(
+    BulkReadExperimentT& readExp, SalmonOpts& sopt,
+    std::function<bool(const std::vector<double>&)>& writeBootstrap,
+    double relDiffTolerance, uint32_t maxIter);
+
+template bool CollapsedEMOptimizer::gatherBootstraps<SCReadExperimentT>(
+                                                                          SCReadExperimentT& readExp, SalmonOpts& sopt,
+                                                                          std::function<bool(const std::vector<double>&)>& writeBootstrap,
+                                                                          double relDiffTolerance, uint32_t maxIter);
+
+
+template bool
+CollapsedEMOptimizer::gatherBootstraps<BulkAlnLibT<UnpairedRead>>(
+    BulkAlnLibT<UnpairedRead>& readExp, SalmonOpts& sopt,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     double relDiffTolerance, uint32_t maxIter);
 
 template bool
-CollapsedEMOptimizer::gatherBootstraps<AlignmentLibrary<UnpairedRead>>(
-    AlignmentLibrary<UnpairedRead>& readExp, SalmonOpts& sopt,
-    std::function<bool(const std::vector<double>&)>& writeBootstrap,
-    double relDiffTolerance, uint32_t maxIter);
-
-template bool
-CollapsedEMOptimizer::gatherBootstraps<AlignmentLibrary<ReadPair>>(
-    AlignmentLibrary<ReadPair>& readExp, SalmonOpts& sopt,
+CollapsedEMOptimizer::gatherBootstraps<BulkAlnLibT<ReadPair>>(
+    BulkAlnLibT<ReadPair>& readExp, SalmonOpts& sopt,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     double relDiffTolerance, uint32_t maxIter);
 

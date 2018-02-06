@@ -89,8 +89,9 @@ divide_work(Iterator begin, Iterator end, std::size_t n) {
  *RNA-seq reads. Turro E, Su S-Y, Goncalves A, Coin L, Richardson S and Lewin A.
  * Genome Biology, 2011 Feb; 12:R13.  doi: 10.1186/gb-2011-12-2-r13.
  **/
+template <typename EQVecT>
 void sampleRoundNonCollapsedMultithreaded_(
-    std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
+    EQVecT& eqVec,
     std::vector<bool>& active, std::vector<uint32_t>& activeList,
     std::vector<uint64_t>& countMap, std::vector<double>& probMap,
     std::vector<double>& muGlobal, Eigen::VectorXd& effLens,
@@ -295,7 +296,7 @@ bool CollapsedGibbsSampler::sample(
   // Fill in the effective length vector
   Eigen::VectorXd effLens(transcripts.size());
 
-  std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec =
+  auto& eqVec =
       readExp.equivalenceClassBuilder().eqVec();
 
   using VecT = CollapsedGibbsSampler::VecType;
@@ -857,18 +858,28 @@ static_cast<int>(allSamples[sampleID][tn]);
 }
 */
 
-template bool CollapsedGibbsSampler::sample<ReadExperiment>(
-    ReadExperiment& readExp, SalmonOpts& sopt,
+using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
+using BulkExpT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;
+template <typename FragT>
+using BulkAlignLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>>;
+
+template bool CollapsedGibbsSampler::sample<BulkExpT>(
+    BulkExpT& readExp, SalmonOpts& sopt,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     uint32_t maxIter);
 
-template bool CollapsedGibbsSampler::sample<AlignmentLibrary<UnpairedRead>>(
-    AlignmentLibrary<UnpairedRead>& readExp, SalmonOpts& sopt,
+template bool CollapsedGibbsSampler::sample<SCExpT>(
+                                                            SCExpT& readExp, SalmonOpts& sopt,
+                                                            std::function<bool(const std::vector<double>&)>& writeBootstrap,
+                                                            uint32_t maxIter);
+
+template bool CollapsedGibbsSampler::sample<BulkAlignLibT<UnpairedRead>>(
+    BulkAlignLibT<UnpairedRead>& readExp, SalmonOpts& sopt,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     uint32_t maxIter);
 
-template bool CollapsedGibbsSampler::sample<AlignmentLibrary<ReadPair>>(
-    AlignmentLibrary<ReadPair>& readExp, SalmonOpts& sopt,
+template bool CollapsedGibbsSampler::sample<BulkAlignLibT<ReadPair>>(
+    BulkAlignLibT<ReadPair>& readExp, SalmonOpts& sopt,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     uint32_t maxIter);
 /*

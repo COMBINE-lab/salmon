@@ -179,9 +179,10 @@ using namespace alevin;
 using bcEnd = BarcodeEnd;
 namespace aut = alevin::utils;
 using BlockedIndexRange = tbb::blocked_range<size_t>;
+using ReadExperimentT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 
 template <typename AlnT, typename ProtocolT>
-void alevin::processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
+void alevin::processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc,
                               uint64_t firstTimestepOfRound, ReadLibrary& readLib,
                               const SalmonOpts& salmonOpts,
                               AlnGroupVecRange<AlnT> batchHits,
@@ -247,7 +248,7 @@ void alevin::processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator&
   uint64_t zeroProbFrags{0};
 
   // EQClass
-  EquivalenceClassBuilder& eqBuilder = readExp.equivalenceClassBuilder();
+  auto& eqBuilder = readExp.equivalenceClassBuilder();
 
   // Build reverse map from transcriptID => hit id
   using HitID = uint32_t;
@@ -609,7 +610,7 @@ void alevin::processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator&
 // jellyfish::sequence_list (see whole_sequence_parser.hpp).
 template <typename RapMapIndexT, typename ProtocolT>
 void processReadsQuasi(
-                       paired_parser* parser, ReadExperiment& readExp, ReadLibrary& rl,
+                       paired_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
                        AlnGroupVec<SMEMAlignment>& structureVec,
                        std::atomic<uint64_t>& numObservedFragments,
                        std::atomic<uint64_t>& numAssignedFragments,
@@ -630,7 +631,7 @@ void processReadsQuasi(
 
 template <typename RapMapIndexT, typename ProtocolT>
 void processReadsQuasi(
-                       paired_parser* parser, ReadExperiment& readExp, ReadLibrary& rl,
+                       paired_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
                        AlnGroupVec<QuasiAlignment>& structureVec,
                        std::atomic<uint64_t>& numObservedFragments,
                        std::atomic<uint64_t>& numAssignedFragments,
@@ -1151,7 +1152,7 @@ void processReadsQuasi(
 
 template <typename AlnT, typename ProtocolT>
 void processReadLibrary(
-                        ReadExperiment& readExp, ReadLibrary& rl, SalmonIndex* sidx,
+                        ReadExperimentT& readExp, ReadLibrary& rl, SalmonIndex* sidx,
                         std::vector<Transcript>& transcripts, ClusterForest& clusterForest,
                         std::atomic<uint64_t>&
                         numObservedFragments, // total number of reads we've looked at
@@ -1356,7 +1357,7 @@ void processReadLibrary(
  *
  */
 template <typename AlnT, typename ProtocolT>
-void quantifyLibrary(ReadExperiment& experiment, bool greedyChain,
+void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
                      mem_opt_t* memOptions, SalmonOpts& salmonOpts,
                      double coverageThresh, uint32_t numQuantThreads,
                      AlevinOpts<ProtocolT>& alevinOpts,
@@ -2076,7 +2077,7 @@ Let the Salmon swim!!
     versionInfo.load(versionPath);
     auto idxType = versionInfo.indexType();
 
-    ReadExperiment experiment(readLibraries, indexDirectory, sopt);
+    ReadExperimentT experiment(readLibraries, indexDirectory, sopt);
 
     // This will be the class in charge of maintaining our
     // rich equivalence classes

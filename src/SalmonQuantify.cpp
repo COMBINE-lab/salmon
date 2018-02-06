@@ -156,8 +156,10 @@ using AlnGroupQueue = tbb::concurrent_queue<AlignmentGroup<AlnT>*>;
 
 #include "LightweightAlignmentDefs.hpp"
 
+using ReadExperimentT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;
+
 template <typename AlnT>
-void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
+void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc,
                       uint64_t firstTimestepOfRound, ReadLibrary& readLib,
                       const SalmonOpts& salmonOpts,
                       AlnGroupVecRange<AlnT> batchHits,
@@ -228,7 +230,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
   uint64_t zeroProbFrags{0};
 
   // EQClass
-  EquivalenceClassBuilder& eqBuilder = readExp.equivalenceClassBuilder();
+  auto& eqBuilder = readExp.equivalenceClassBuilder();
 
   // Build reverse map from transcriptID => hit id
   using HitID = uint32_t;
@@ -745,7 +747,7 @@ void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
 // jellyfish::sequence_list (see whole_sequence_parser.hpp).
 template <typename RapMapIndexT>
 void processReadsQuasi(
-    paired_parser* parser, ReadExperiment& readExp, ReadLibrary& rl,
+    paired_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
     AlnGroupVec<SMEMAlignment>& structureVec,
     std::atomic<uint64_t>& numObservedFragments,
     std::atomic<uint64_t>& numAssignedFragments,
@@ -769,7 +771,7 @@ void processReadsQuasi(
 
 template <typename RapMapIndexT>
 void processReadsQuasi(
-    single_parser* parser, ReadExperiment& readExp, ReadLibrary& rl,
+    single_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
     AlnGroupVec<SMEMAlignment>& structureVec,
     std::atomic<uint64_t>& numObservedFragments,
     std::atomic<uint64_t>& numAssignedFragments,
@@ -792,7 +794,7 @@ void processReadsQuasi(
 
 template <typename RapMapIndexT>
 void processReadsQuasi(
-    paired_parser* parser, ReadExperiment& readExp, ReadLibrary& rl,
+    paired_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
     AlnGroupVec<QuasiAlignment>& structureVec,
     std::atomic<uint64_t>& numObservedFragments,
     std::atomic<uint64_t>& numAssignedFragments,
@@ -1234,7 +1236,7 @@ void processReadsQuasi(
 // jellyfish::sequence_list (see whole_sequence_parser.hpp).
 template <typename RapMapIndexT>
 void processReadsQuasi(
-    single_parser* parser, ReadExperiment& readExp, ReadLibrary& rl,
+    single_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
     AlnGroupVec<QuasiAlignment>& structureVec,
     std::atomic<uint64_t>& numObservedFragments,
     std::atomic<uint64_t>& numAssignedFragments,
@@ -1482,7 +1484,7 @@ void processReadsQuasi(
 
 template <typename AlnT>
 void processReadLibrary(
-    ReadExperiment& readExp, ReadLibrary& rl, SalmonIndex* sidx,
+    ReadExperimentT& readExp, ReadLibrary& rl, SalmonIndex* sidx,
     std::vector<Transcript>& transcripts, ClusterForest& clusterForest,
     std::atomic<uint64_t>&
         numObservedFragments, // total number of reads we've looked at
@@ -2047,7 +2049,7 @@ void processReadLibrary(
  *
  */
 template <typename AlnT>
-void quantifyLibrary(ReadExperiment& experiment, bool greedyChain,
+void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
                      mem_opt_t* memOptions, SalmonOpts& salmonOpts,
                      double coverageThresh, uint32_t numQuantThreads) {
 
@@ -2781,7 +2783,7 @@ transcript abundance from RNA-seq reads
     versionInfo.load(versionPath);
     auto idxType = versionInfo.indexType();
 
-    ReadExperiment experiment(readLibraries, indexDirectory, sopt);
+    ReadExperimentT experiment(readLibraries, indexDirectory, sopt);
 
     // This will be the class in charge of maintaining our
     // rich equivalence classes

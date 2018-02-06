@@ -5,6 +5,9 @@
 #include "EffectiveLengthStats.hpp"
 #include "RapMapUtils.hpp"
 
+
+using BulkReadExpT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;
+
 class SMEMAlignment {
 public:
   SMEMAlignment()
@@ -568,7 +571,7 @@ public:
 };
 
 template <typename AlnT>
-void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
+void processMiniBatch(BulkReadExpT& readExp, ForgettingMassCalculator& fmCalc,
                       uint64_t firstTimestepOfRound, ReadLibrary& readLib,
                       const SalmonOpts& salmonOpts,
                       AlnGroupVecRange<AlnT> batchHits,
@@ -864,7 +867,7 @@ inline void getHitsForFragment(
     fastx_parser::ReadPair& frag,
     // std::pair<header_sequence_qual, header_sequence_qual>& frag,
     SalmonIndex* sidx, smem_i* itr, const bwtintv_v* a, smem_aux_t* auxHits,
-    mem_opt_t* memOptions, ReadExperiment& readExp,
+    mem_opt_t* memOptions, BulkReadExpT& readExp,
     const SalmonOpts& salmonOpts, double coverageThresh,
     uint64_t& upperBoundHits, AlignmentGroup<SMEMAlignment>& hitList,
     uint64_t& hitListCount, std::vector<Transcript>& transcripts) {
@@ -1296,7 +1299,7 @@ inline void getHitsForFragment(fastx_parser::ReadSeq& frag,
                                // jellyfish::header_sequence_qual& frag,
                                SalmonIndex* sidx, smem_i* itr,
                                const bwtintv_v* a, smem_aux_t* auxHits,
-                               mem_opt_t* memOptions, ReadExperiment& readExp,
+                               mem_opt_t* memOptions, BulkReadExpT& readExp,
                                const SalmonOpts& salmonOpts,
                                double coverageThresh, uint64_t& upperBoundHits,
                                AlignmentGroup<SMEMAlignment>& hitList,
@@ -1428,7 +1431,7 @@ inline void getHitsForFragment(fastx_parser::ReadSeq& frag,
 // jellyfish::sequence_list (see whole_sequence_parser.hpp).
 template <typename ParserT, typename CoverageCalculator>
 void processReadsMEM(
-    ParserT* parser, ReadExperiment& readExp, ReadLibrary& rl,
+    ParserT* parser, BulkReadExpT& readExp, ReadLibrary& rl,
     AlnGroupVec<QuasiAlignment>& structureVec,
     std::atomic<uint64_t>& numObservedFragments,
     std::atomic<uint64_t>& numAssignedFragments,
@@ -1451,7 +1454,7 @@ void processReadsMEM(
 
 template <typename ParserT, typename CoverageCalculator>
 void processReadsMEM(
-    ParserT* parser, ReadExperiment& readExp, ReadLibrary& rl,
+    ParserT* parser, BulkReadExpT& readExp, ReadLibrary& rl,
     AlnGroupVec<SMEMAlignment>& structureVec,
     std::atomic<uint64_t>& numObservedFragments,
     std::atomic<uint64_t>& numAssignedFragments,
