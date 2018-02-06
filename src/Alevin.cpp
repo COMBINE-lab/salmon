@@ -670,7 +670,8 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
       if(!isDumpok){
         aopt.jointLog->error("Not able to dump fastq."
                              "Something went wrong.\n"
-                             "Please report of github");
+                             "Please report this issue to github");
+        aopt.jointLog->flush();
         std::exit(1);
       }
       aopt.jointLog->info("Done dumping fastq File");
@@ -696,7 +697,7 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
 
   // If we're supposed to be quiet, set the global logger level to >= warn
   if (aopt.quiet) {
-    spdlog::set_level(spdlog::level::warn); //Set global log level to info
+    spdlog::set_level(spdlog::level::warn); //Set global log level to warn
   }
   else {
     fmt::print(stderr, "{}\n\n", commentString);
@@ -850,8 +851,7 @@ int salmonBarcoding(int argc, char* argv[]) {
       auto hstring = R"(
 Alevin
 ==========
-Salmon extention for multi-sample single-cell barcoded data.
-Let the Salmon swim!!
+Salmon-based processing of single-cell RNA-seq data.
 )";
 
       std::cerr << hstring << std::endl;

@@ -111,9 +111,9 @@ void optimizeCell(SCExpT& experiment,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
-  //bool found = jqueue.try_dequeue(trueBarcodeIdx);
+
   // looping over until the end of the file
-  while((trueBarcodeIdx = barcode++) < totalCells) {//found){
+  while((trueBarcodeIdx = barcode++) < totalCells) {
     // per-cell level optimization
     if(umiCount[trueBarcodeIdx] == 0){
       //skip the barcode if no mapped UMI
