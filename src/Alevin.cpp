@@ -833,6 +833,8 @@ int salmonBarcoding(int argc, char* argv[]) {
      "nobarcode",po::bool_switch()->default_value(false),
      "this flag should be used when there is no barcode i.e. only one cell deduplication.")
     (
+     "geneMap,g", po::value<std::string>(), "transcript to gene map tsv file")
+    (
     "freqthreshold",po::value<uint32_t>(),
     "threshold for the frequency of the barcodes");
 

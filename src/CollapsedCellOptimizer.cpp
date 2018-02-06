@@ -298,8 +298,9 @@ void optimizeCell(SCExpT& experiment,
 }
 
 void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                     const std::vector<Transcript>& transcripts){
-  std::string fname = "/mnt/scratch5/avi/alevin/data/mohu/gtf/txp2gene.tsv";
+                     const std::vector<Transcript>& transcripts,
+                     const std::string& geneMapFile){
+  std::string fname = geneMapFile;
   std::ifstream t2gFile(fname);
 
   spp::sparse_hash_map<std::string, uint32_t> txpIdxMap(transcripts.size());
@@ -363,7 +364,9 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   }
 
   spp::sparse_hash_map<uint32_t, uint32_t> txpToGeneMap;
-  getTxpToGeneMap(txpToGeneMap, experiment.transcripts());
+  getTxpToGeneMap(txpToGeneMap,
+                  experiment.transcripts(),
+                  aopt.geneMapFile.string());
 
   tbb::atomic<uint32_t> skippedCBcount{0};
   std::atomic<uint32_t> bcount{0};

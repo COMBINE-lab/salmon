@@ -64,6 +64,8 @@ struct AlevinOpts {
   boost::filesystem::path outputDirectory;
   // barcode white-list File path
   boost::filesystem::path whitelistFile;
+  // Txp to gene map tsv file
+  boost::filesystem::path geneMapFile;
 };
 
 #endif // ALEVIN_OPTS_HPP

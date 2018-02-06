@@ -216,6 +216,19 @@ namespace alevin {
         }
       }
 
+      if (vm.count("geneMap")){
+        aopt.geneMapFile = vm["geneMap"].as<std::string>();
+        if (!bfs::exists(aopt.geneMapFile)) {
+          fmt::print(stderr,"\nTranscript to Gene Map File {} does not exists\n Exiting Now",
+                     aopt.geneMapFile.string());
+          return false;
+        }
+      }
+      else{
+        fmt::print(stderr,"\nTranscript to Gene Map File not provided\n Exiting Now");
+        return false;
+      }
+
       //create logger
       auto logPath = aopt.outputDirectory / "alevin.log";
       auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(logPath.string(), true);
