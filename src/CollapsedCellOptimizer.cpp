@@ -107,7 +107,7 @@ void optimizeCell(SCExpT& experiment,
                   std::shared_ptr<spdlog::logger>& jointlog,
                   bfs::path& outDir, std::vector<uint32_t>& umiCount,
                   tbb::atomic<uint32_t>& skippedCBcount,
-                  bool verbose, size_t umiLength, bool noEM,
+                  bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
@@ -161,10 +161,14 @@ void optimizeCell(SCExpT& experiment,
       }
     }
 
+    // equivalence class vector encoding for this cell (i.e. row)
+    std::vector<uint32_t> eqIDs;
+    std::vector<uint32_t> counts;
+    size_t eqNum{0};
 
     for (auto& key : orderedTgroup) {
       //traversing each class and copying relevant data.
-      bool isKeyPresent = eqMap.find_fn(key, [&](const SCTGValue& val){
+      bool isKeyPresent = eqMap.find_fn(key, [&,eqNum](const SCTGValue& val){
           auto& bg = val.barcodeGroup;
           auto bcIt = bg.find(trueBarcodeIdx);
 
@@ -195,10 +199,12 @@ void optimizeCell(SCExpT& experiment,
 
               if(verbose){
                 // group size
-                qFile << txps.size();
+                // qFile << txps.size();
                 // dump txp-group members
-                for (auto tid : txps) { qFile << "\t" << tid; }
-                qFile << "\t" << eqCount << "\n";
+                //for (auto tid : txps) { qFile << "\t" << tid; }
+                //qFile << "\t" << eqCount << "\n";
+                eqIDs.push_back(static_cast<uint32_t>(eqNum));
+                counts.push_back(static_cast<uint32_t>(eqCount));
               }
 
               // currently add only 1 length eqclass to active txps
@@ -216,6 +222,11 @@ void optimizeCell(SCExpT& experiment,
                         "Please Report this issue on github");
         exit(1);
       }
+      ++eqNum;
+    }
+
+    if (verbose) {
+      gzw.writeCellEQVec(trueBarcodeIdx, eqIDs, counts, true);
     }
 
     // get the list of active gene ids
@@ -339,6 +350,7 @@ void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
 template <typename ProtocolT>
 bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<ProtocolT>& aopt,
+                                      GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount){
   double relDiffTolerance{0.01};
@@ -385,6 +397,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                std::ref(umiCount),
                                std::ref(skippedCBcount),
                                aopt.dumpBarcodeEq,
+                               std::ref(gzw),
                                aopt.protocol.umiLength,
                                aopt.noEM,
                                std::ref(txpToGeneMap));
@@ -406,20 +419,24 @@ namespace apt = alevin::protocols;
 template
 bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::DropSeq>& aopt,
+                                      GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount);
 template
 bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::InDrop>& aopt,
+                                      GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount);
 template
 bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::Chromium>& aopt,
+                                      GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount);
 template
 bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::Custom>& aopt,
+                                      GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount);

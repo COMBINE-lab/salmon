@@ -20,6 +20,9 @@ GZipWriter::~GZipWriter() {
   if (bsStream_) {
     bsStream_->reset();
   }
+  if (cellEQStream_){
+    cellEQStream_->reset();
+  }
 }
 
 /**
@@ -119,10 +122,7 @@ bool GZipWriter::writeEquivCounts(
 
   namespace bfs = boost::filesystem;
 
-  bfs::path auxDir = aopts.outputDirectory;
-  bool auxSuccess = boost::filesystem::create_directories(auxDir);
-  bfs::path eqFilePath = auxDir / "eq_classes.txt";
-
+  bfs::path eqFilePath = aopts.outputDirectory / "cell_eq_info.txt";
   std::ofstream equivFile(eqFilePath.string());
 
   auto& transcripts = experiment.transcripts();
@@ -138,7 +138,20 @@ bool GZipWriter::writeEquivCounts(
   for (auto& t : transcripts) {
     equivFile << t.RefName << '\n';
   }
+  for (auto& eq : eqVec) {
+    uint64_t count = eq.second.count;
+    // for each transcript in this class
+    const TranscriptGroup& tgroup = eq.first;
+    const std::vector<uint32_t>& txps = tgroup.txps;
 
+    // group size
+    equivFile << txps.size() ;
+    // each group member
+    for (auto tid : txps) { equivFile << '\t' << tid; }
+    equivFile << '\n';
+  }
+
+  /*
   for (auto& eq : eqVec) {
     uint64_t count = eq.second.count;
     // for each transcript in this class
@@ -163,6 +176,9 @@ bool GZipWriter::writeEquivCounts(
     }
     equivFile << "\n";
   }
+  equivFile.close();
+  */
+  
   equivFile.close();
   return true;
 }
@@ -694,6 +710,38 @@ bool GZipWriter::writeBootstrap(const std::vector<T>& abund, bool quiet) {
   ++numBootstrapsWritten_;
   return true;
 }
+
+bool GZipWriter::writeCellEQVec(size_t barcode, const std::vector<uint32_t>& offsets, const std::vector<uint32_t>& counts, bool quiet) {
+#if defined __APPLE__
+  spin_lock::scoped_lock sl(writeMutex_);
+#else
+  std::lock_guard<std::mutex> lock(writeMutex_);
+#endif
+  if (!cellEQStream_) {
+    cellEQStream_.reset(new boost::iostreams::filtering_ostream);
+    cellEQStream_->push(boost::iostreams::gzip_compressor(6));
+    auto ceqFilename = path_ / "alevin" / "cell_eq_mat.gz";
+    cellEQStream_->push(boost::iostreams::file_sink(
+                                                ceqFilename.string(), std::ios_base::out | std::ios_base::binary));
+  }
+
+  boost::iostreams::filtering_ostream& ofile = *cellEQStream_;
+  size_t num = offsets.size();
+  size_t elSize = sizeof(typename std::vector<uint32_t>::value_type);
+  // write the barcode
+  ofile.write(reinterpret_cast<char*>(&barcode), sizeof(barcode));
+  // write the number of elements in the list
+  ofile.write(reinterpret_cast<char*>(&num), sizeof(barcode));
+  // write the offsets and counts
+  ofile.write(reinterpret_cast<char*>(const_cast<uint32_t*>(offsets.data())), elSize * num);
+  ofile.write(reinterpret_cast<char*>(const_cast<uint32_t*>(counts.data())), elSize * num);
+
+  if (!quiet) {
+    logger_->info("wrote EQ vector for barcode ID {}", barcode);
+  }
+  return true;
+}
+
 
 using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 using BulkExpT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;

@@ -1994,6 +1994,8 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
      "nobarcode",po::bool_switch()->default_value(false),
      "this flag should be used when there is no barcode i.e. only one cell deduplication.")
     (
+     "tgMap", po::value<std::string>(), "transcript to gene map tsv file")
+    (
      "freqthreshold",po::value<uint32_t>(),
      "threshold for the frequency of the barcodes");
 
@@ -2164,6 +2166,7 @@ Let the Salmon swim!!
 
       CollapsedCellOptimizer optimizer;
       bool optSuccess = optimizer.optimize(experiment, aopt,
+                                           gzw,
                                            trueBarcodesVec,
                                            umiCount);
       if (!optSuccess) {

@@ -50,7 +50,7 @@ void optimizeCell(SCExpT& experiment,
                   std::shared_ptr<spdlog::logger>& jointlog,
                   bfs::path& outDir, std::vector<uint32_t>& umiCount,
                   tbb::atomic<uint32_t>& skippedCBcount,
-                  bool verbose, size_t umiLength, bool noEM,
+                  bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap);
 
 class CollapsedCellOptimizer {
@@ -62,6 +62,7 @@ public:
   template <class ProtocolT>
   bool optimize(SCExpT& readExp,
                 AlevinOpts<ProtocolT>& aopt,
+                GZipWriter& gzw,
                 std::vector<std::string>& trueBarcodes,
                 std::vector<uint32_t>& umiCount);
 };

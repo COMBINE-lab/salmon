@@ -50,6 +50,8 @@ public:
   template <typename T>
   bool writeBootstrap(const std::vector<T>& abund, bool quiet = false);
 
+  bool writeCellEQVec(size_t barcode, const std::vector<uint32_t>& offsets, const std::vector<uint32_t>& counts, bool quiet = true);
+
   bool setSamplingPath(const SalmonOpts& sopt);
 
 private:
@@ -57,6 +59,7 @@ private:
   boost::filesystem::path bsPath_;
   std::shared_ptr<spdlog::logger> logger_;
   std::unique_ptr<boost::iostreams::filtering_ostream> bsStream_{nullptr};
+  std::unique_ptr<boost::iostreams::filtering_ostream> cellEQStream_{nullptr};
 // only one writer thread at a time
 #if defined __APPLE__
   spin_lock writeMutex_;

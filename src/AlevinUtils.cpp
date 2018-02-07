@@ -216,8 +216,8 @@ namespace alevin {
         }
       }
 
-      if (vm.count("geneMap")){
-        aopt.geneMapFile = vm["geneMap"].as<std::string>();
+      if (vm.count("tgMap")){
+        aopt.geneMapFile = vm["tgMap"].as<std::string>();
         if (!bfs::exists(aopt.geneMapFile)) {
           fmt::print(stderr,"\nTranscript to Gene Map File {} does not exists\n Exiting Now",
                      aopt.geneMapFile.string());
