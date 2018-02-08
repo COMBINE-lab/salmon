@@ -1140,11 +1140,11 @@ int salmonBarcoding(int argc, char* argv[]) {
     (
      "help,h", "produce help message")
     (
-     "barcodeFiles,1", po::value<std::vector<std::string>>(&barcodeFiles)->multitoken()->required(),
+     "mates1,1", po::value<std::vector<std::string>>(&barcodeFiles)->multitoken()->required(),
      "List of files containing the barcodes+umi from drop seq dataset, usually the first file")
     (
-     "readFiles,2", po::value<std::vector<std::string>>(&readFiles)->multitoken(),
-     "List of files containing the barcodes+umi from drop seq dataset, usually the first file")
+     "mates2,2", po::value<std::vector<std::string>>(&readFiles)->multitoken(),
+     "List of files containing the barcodes+umi from drop seq dataset, usually the second file")
     (
      "output,o", po::value<std::string>()->required(),
      "Parent directory for dumping barcode mapping")
@@ -1231,15 +1231,15 @@ int salmonBarcoding(int argc, char* argv[]) {
     "threshold for the frequency of the barcodes");
 
   po::options_description all("Alevin options");
-  all.add(generic).add(advanced).add(testing).add(hidden).add(fmd);
+  all.add(alevin_generic).add(advanced).add(testing).add(hidden).add(fmd).add(generic);
 
-  po::options_description visible("visible Alevin options");
-  visible.add(alevin_generic);
+  //po::options_description visible("visible Alevin options");
+  //visible.add(alevin_generic);
 
   po::variables_map vm;
   try {
     auto orderedOptions =
-        po::command_line_parser(argc, argv).options(visible).run();
+        po::command_line_parser(argc, argv).options(all).run();
 
     po::store(orderedOptions, vm);
 

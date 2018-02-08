@@ -1539,10 +1539,9 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
   using std::string;
   namespace bfs = boost::filesystem;
   namespace po = boost::program_options;
-
   try{
-    auto fileLog = sopt.fileLog;
-    auto jointLog = sopt.jointLog;
+    //auto fileLog = sopt.fileLog;
+    auto jointLog = aopt.jointLog;
     auto indexDirectory = sopt.indexDirectory;
     auto outputDirectory = sopt.outputDirectory;
     bool greedyChain = true;

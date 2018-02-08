@@ -2764,7 +2764,7 @@ transcript abundance from RNA-seq reads
 
     // ==== Library format processing ===
     vector<ReadLibrary> readLibraries =
-        salmon::utils::extractReadLibraries(orderedOptions);
+      salmon::utils::extractReadLibraries(orderedOptions);
 
     if (readLibraries.size() == 0) {
       jointLog->error(

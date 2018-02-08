@@ -272,8 +272,7 @@ namespace alevin {
       else{
         aopt.numThreads = vm["threads"].as<uint32_t>();
       }  // things which needs to be updated for salmonOpts
-      sopt.numThreads = aopt.numThreads;
-      sopt.quiet = aopt.quiet;
+
       //validate customized options for custom protocol
       if (barEnd or barcodeLength or umiLength
           or !aopt.protocol.barcodeLength or !aopt.protocol.umiLength){
@@ -341,9 +340,11 @@ namespace alevin {
       }
 
       // code from SalmonAlevin
+      sopt.numThreads = aopt.numThreads;
+      sopt.quiet = aopt.quiet;
       sopt.quantMode = SalmonQuantMode::MAP;
       bool optionsOK =
-        salmon::utils::processQuantOptions(sopt, vm, vm["numBiasSamples"].as<int32_t>());
+        salmon::utils::processAlevinQuantOptions(sopt, vm);
       if (!optionsOK) {
         if (aopt.jointLog) {
           aopt.jointLog->flush();
@@ -351,6 +352,7 @@ namespace alevin {
         }
         return false;
       }
+      sopt.jointLog = aopt.jointLog;
 
       return true;
     }
