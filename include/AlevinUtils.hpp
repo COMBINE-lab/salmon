@@ -38,6 +38,7 @@
 
 #include "SalmonConfig.hpp"
 #include "SalmonUtils.hpp"
+#include "SalmonOpts.hpp"
 
 namespace alevin{
   namespace utils{
@@ -62,7 +63,8 @@ namespace alevin{
 
     template <typename ProtocolT>
     bool processAlevinOpts(AlevinOpts<ProtocolT>& aopt,
-                           boost::program_options::variables_map& vm);
+                             SalmonOpts& sopt,
+                             boost::program_options::variables_map& vm);
 
     template <typename ProtocolT>
     bool extractUMI(std::string& read,

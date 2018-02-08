@@ -192,6 +192,7 @@ namespace alevin {
 
     template <typename ProtocolT>
     bool processAlevinOpts(AlevinOpts<ProtocolT>& aopt,
+                           SalmonOpts& sopt,
                            boost::program_options::variables_map& vm){
       namespace bfs = boost::filesystem;
       namespace po = boost::program_options;
@@ -270,8 +271,9 @@ namespace alevin {
       }
       else{
         aopt.numThreads = vm["threads"].as<uint32_t>();
-      }
-
+      }  // things which needs to be updated for salmonOpts
+      sopt.numThreads = aopt.numThreads;
+      sopt.quiet = aopt.quiet;
       //validate customized options for custom protocol
       if (barEnd or barcodeLength or umiLength
           or !aopt.protocol.barcodeLength or !aopt.protocol.umiLength){
@@ -337,6 +339,19 @@ namespace alevin {
           aopt.iupac.clear();
         }
       }
+
+      // code from SalmonAlevin
+      sopt.quantMode = SalmonQuantMode::MAP;
+      bool optionsOK =
+        salmon::utils::processQuantOptions(sopt, vm, vm["numBiasSamples"].as<int32_t>());
+      if (!optionsOK) {
+        if (aopt.jointLog) {
+          aopt.jointLog->flush();
+          spdlog::drop_all();
+        }
+        return false;
+      }
+
       return true;
     }
 
@@ -375,15 +390,19 @@ namespace alevin {
 
     template
     bool processAlevinOpts(AlevinOpts<apt::DropSeq>& aopt,
+                           SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::InDrop>& aopt,
+                           SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::Chromium>& aopt,
+                           SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::Custom>& aopt,
+                           SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
 
     template bool sequenceCheck(std::string sequence,
