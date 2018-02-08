@@ -344,7 +344,7 @@ namespace alevin {
       sopt.quiet = aopt.quiet;
       sopt.quantMode = SalmonQuantMode::MAP;
       bool optionsOK =
-        salmon::utils::processAlevinQuantOptions(sopt, vm);
+        salmon::utils::processQuantOptions(sopt, vm, vm["numBiasSamples"].as<int32_t>());
       if (!optionsOK) {
         if (aopt.jointLog) {
           aopt.jointLog->flush();
