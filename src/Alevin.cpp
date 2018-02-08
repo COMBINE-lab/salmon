@@ -719,7 +719,6 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
                   trueBarcodes);
 
   aopt.jointLog->flush();
-  spdlog::drop_all();
 
   if(!aopt.noQuant){
     aopt.jointLog->info("Done with Barcode Processing; Moving to Quantify\n");

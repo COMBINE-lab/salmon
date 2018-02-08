@@ -231,14 +231,12 @@ namespace alevin {
       }
 
       //create logger
+      spdlog::set_async_mode(131072);
       auto logPath = aopt.outputDirectory / "alevin.log";
       auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(logPath.string(), true);
-      //auto rawConsoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
-      //auto consoleSink = std::make_shared<spdlog::sinks::ansicolor_sink>(rawConsoleSink);
       auto consoleSink = std::make_shared<spdlog::sinks::ansicolor_stderr_sink_mt>();
-      //aopt.jointLog = spdlog::create("AlevinLog", {fileSink, consoleSink});
       std::vector<spdlog::sink_ptr> sinks{consoleSink, fileSink};
-      aopt.jointLog = spdlog::create("jointLog", std::begin(sinks), std::end(sinks));
+      aopt.jointLog = spdlog::create("alevinLog", std::begin(sinks), std::end(sinks));
 
       uint32_t barEnd{0}, barcodeLength{0}, umiLength{0};
 
@@ -347,13 +345,12 @@ namespace alevin {
         salmon::utils::processQuantOptions(sopt, vm, vm["numBiasSamples"].as<int32_t>());
       if (!optionsOK) {
         if (aopt.jointLog) {
+          aopt.jointLog->error("Could not properly process salmon-level options!");
           aopt.jointLog->flush();
           spdlog::drop_all();
         }
         return false;
       }
-      sopt.jointLog = aopt.jointLog;
-
       return true;
     }
 
