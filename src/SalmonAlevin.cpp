@@ -679,13 +679,13 @@ void processReadsQuasi(
   Mer leftMer;
   Mer rightMer;
 
-  auto expectedLibType = rl.format();
+  //auto expectedLibType = rl.format();
 
   uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
   size_t minK = rapmap::utils::my_mer::k();
 
   size_t locRead{0};
-  uint64_t localUpperBoundHits{0};
+  //uint64_t localUpperBoundHits{0};
   size_t rangeSize{0};
   uint64_t localNumAssignedFragments{0};
   bool strictIntersect = salmonOpts.strictIntersect;
@@ -740,7 +740,7 @@ void processReadsQuasi(
       bool tooShortLeft = (readLenLeft < minK);
       bool tooShortRight = (readLenRight < minK);
       tooManyHits = false;
-      localUpperBoundHits = 0;
+      //localUpperBoundHits = 0;
       auto& jointHitGroup = structureVec[i];
       jointHitGroup.clearAlignments();
       auto& jointHits = jointHitGroup.alignments();
@@ -753,7 +753,7 @@ void processReadsQuasi(
       size_t barcodeLength = alevinOpts.protocol.barcodeLength;
       size_t umiLength = alevinOpts.protocol.umiLength;
       std::string umi, barcode;
-      uint32_t barcodeIdx;
+      uint32_t barcodeIdx{0};
       bool lh, rh, isExtractOk, seqOk;
 
       if (alevinOpts.protocol.end == bcEnd::FIVE){

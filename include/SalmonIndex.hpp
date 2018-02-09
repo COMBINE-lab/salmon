@@ -238,9 +238,9 @@ private:
   bool buildQuasiIndex_(boost::filesystem::path indexDir,
                         std::vector<std::string>& quasiArgVec, uint32_t k) {
     namespace bfs = boost::filesystem;
-    int quasiArgc = static_cast<int>(quasiArgVec.size());
+    int32_t quasiArgc = static_cast<int32_t>(quasiArgVec.size());
     char** quasiArgv = new char*[quasiArgc];
-    for (size_t i = 0; i < quasiArgc; ++i) {
+    for (int32_t i = 0; i < quasiArgc; ++i) {
       auto& arg = quasiArgVec[i];
       quasiArgv[i] = new char[arg.size() + 1];
       std::strcpy(quasiArgv[i], arg.c_str());
@@ -256,7 +256,7 @@ private:
     versionInfo_.save(versionFile);
 
     // Free the memory used for the arg vector
-    for (size_t i = 0; i < quasiArgc; ++i) {
+    for (int32_t i = 0; i < quasiArgc; ++i) {
       delete quasiArgv[i];
     }
     delete[] quasiArgv;

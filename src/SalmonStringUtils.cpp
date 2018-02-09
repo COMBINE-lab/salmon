@@ -9,9 +9,9 @@ uint8_t* salmon::stringtools::encodeSequenceInSAM(const char* src, size_t len) {
     size_t byte = i >> 1;
     size_t nibble = i & 0x1;
     if (nibble) {
-      target[byte] |= charToSamEncode[src[i]];
+      target[byte] |= charToSamEncode[static_cast<uint8_t>(src[i])];
     } else {
-      target[byte] |= (charToSamEncode[src[i]] << 4);
+      target[byte] |= (charToSamEncode[static_cast<uint8_t>(src[i])] << 4);
     }
   }
   return target;

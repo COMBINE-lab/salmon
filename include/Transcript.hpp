@@ -417,8 +417,9 @@ public:
     }
   }
   inline double gcAt(int32_t s) const {
+    int32_t sRefLength = static_cast<int32_t>(RefLength);
     return (s < 0) ? 0.0
-                   : ((s >= RefLength) ? gcCount_(RefLength - 1) : gcCount_(s));
+                   : ((s >= sRefLength) ? gcCount_(sRefLength - 1) : gcCount_(s));
   }
 
   // Return the fractional GC content along this transcript
@@ -523,8 +524,9 @@ private:
   */
 
   inline double gcCountInterp_(int32_t p) const {
-    if (p >= RefLength) {
-      p = RefLength - 1;
+    int32_t sRefLength = static_cast<int32_t>(RefLength);
+    if (p >= sRefLength) {
+      p = sRefLength - 1;
     }
     return static_cast<double>(gcRank_->rank(p + 1));
   }

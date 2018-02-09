@@ -109,10 +109,11 @@ inline uint32_t indexForKmer(const char* s, uint32_t K,
   using salmon::utils::Direction;
   // The index we'll return
   uint32_t idx{0};
+  int32_t SK = static_cast<int32_t>(K);
   // The number of bits we need to shift the
   // current mask to the left.
   if (dir == Direction::FORWARD) {
-    for (int32_t i = 0; i < K; ++i) {
+    for (int32_t i = 0; i < SK; ++i) {
       switch (s[i]) {
       case 'A':
       case 'a':
@@ -134,12 +135,12 @@ inline uint32_t indexForKmer(const char* s, uint32_t K,
       default:
         return std::numeric_limits<uint32_t>::max();
       }
-      if (i < K - 1) {
+      if (i < SK - 1) {
         idx = idx << 2;
       }
     }
   } else {
-    for (int32_t i = K - 1; i >= 0; i--) {
+    for (int32_t i = SK - 1; i >= 0; i--) {
       switch (s[i]) {
       case 'T':
       case 't':

@@ -241,11 +241,13 @@ public:
                         0.259240260646,
                         0.188875602838};
 
-    uint32_t maxGap = 4;
+    int32_t maxGap = 4;
     uint32_t leftmost = (sVotes.front().votePos > maxGap)
                             ? (sVotes.front().votePos - maxGap)
                             : 0;
-    uint32_t rightmost = std::min(sVotes.back().votePos + maxGap, tlen);
+    uint32_t rightmost = static_cast<uint32_t>(
+                             std::min(sVotes.back().votePos + maxGap,
+                                      static_cast<int32_t>(tlen)));
 
     uint32_t span = (rightmost - leftmost);
     std::vector<double> probAln(span, 0.0);
@@ -257,7 +259,7 @@ public:
       uint32_t voteLen = sVotes[j].voteLen;
 
       auto x = j + 1;
-      while (x < nvotes and sVotes[x].votePos == votePos) {
+      while (x < nvotes and static_cast<uint32_t>(sVotes[x].votePos) == votePos) {
         voteLen += sVotes[x].voteLen;
         j += 1;
         x += 1;
@@ -370,7 +372,7 @@ public:
       ss << "Transcript name = " << transcript.RefName << "\n";
       ss << "T : ";
       try {
-        for (size_t j = 0; j < readLen; ++j) {
+        for (int32_t j = 0; j < readLen; ++j) {
           if (isRC) {
             if (j == posInRead) {
               char red[] = "\x1b[30m";
@@ -621,17 +623,19 @@ inline void collectHitsForRead(SalmonIndex* sidx, const bwtintv_v* a,
     // For every occurrence of the MEM
     for (k = count = 0; k < p->x[2] && count < memOptions->max_occ;
          k += step, ++count) {
-      bwtint_t pos;
+      //bwtint_t pos;
       bwtint_t startPos, endPos;
-      int len, isRev, isRevStart, isRevEnd, refID, refIDStart, refIDEnd;
+      //int len, isRev, isRevStart, isRevEnd, refID, refIDStart, refIDEnd;
+      int isRev, isRevStart, isRevEnd, refID, refIDStart, refIDEnd;
       int queryStart = qstart;
-      len = slen;
+      //len = slen;
       uint32_t rlen = readLen;
 
       // Get the position in the reference index of this MEM occurrence
       int64_t refStart = bwt_sa(idx->bwt, p->x[0] + k);
 
-      pos = startPos = bns_depos(idx->bns, refStart, &isRevStart);
+      //pos = startPos = bns_depos(idx->bns, refStart, &isRevStart);
+      startPos = bns_depos(idx->bns, refStart, &isRevStart);
       endPos = bns_depos(idx->bns, refStart + slen - 1, &isRevEnd);
       // If we span the forward/reverse boundary, discard the hit
       if (isRevStart != isRevEnd) {
@@ -1313,14 +1317,14 @@ inline void getHitsForFragment(fastx_parser::ReadSeq& frag,
 
   auto& eqBuilder = readExp.equivalenceClassBuilder();
 
-  uint32_t readLength{0};
+  //uint32_t readLength{0};
 
   //---------- get hits ----------------------//
   {
     std::string readStr = frag.seq;
     uint32_t readLen = frag.seq.size();
 
-    readLength = readLen;
+    //readLength = readLen;
 
     for (int p = 0; p < readLen; ++p) {
       readStr[p] = nst_nt4_table[static_cast<int>(readStr[p])];

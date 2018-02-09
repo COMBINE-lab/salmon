@@ -401,7 +401,7 @@ bool CollapsedGibbsSampler::sample(
     pbar.reset(new ez::ezETAProgressBar(numSamples));
     pbar->start();
   }
-  bool isFirstSample{true};
+  //bool isFirstSample{true};
   for (size_t sampleID = 0; sampleID < numSamples; ++sampleID) {
     if (pbar) {
       ++(*pbar);
@@ -455,7 +455,7 @@ bool CollapsedGibbsSampler::sample(
       }
     }
     writeBootstrap(alphas);
-    isFirstSample = false;
+    //isFirstSample = false;
   }
   return true;
 }

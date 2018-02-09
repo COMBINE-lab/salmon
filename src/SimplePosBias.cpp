@@ -19,7 +19,8 @@ void SimplePosBias::addMass(int32_t bin, double mass) {
 void SimplePosBias::addMass(int32_t pos, int32_t length, double mass) {
   double step = static_cast<double>(length) / numBins_;
   int bin = std::floor(pos / step);
-  if (bin >= masses_.size()) {
+  int msize = static_cast<int>(masses_.size());
+  if (bin >= msize) {
     std::cerr << "bin = " << bin << '\n';
   }
   addMass(bin, mass);

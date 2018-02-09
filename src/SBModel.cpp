@@ -151,10 +151,10 @@ Eigen::MatrixXd& SBModel::marginals() { return _marginals; }
 void SBModel::dumpConditionalProbabilities(std::ostream& os) {
   typedef jellyfish::mer_dna_ns::mer_base_dynamic<uint64_t> mer64;
   // For each position
-  for (size_t i = 0; i < _contextLength; ++i) {
+  for (int32_t i = 0; i < _contextLength; ++i) {
     mer64 k(_order[i] + 1);
     size_t nbit = 2 * (_order[i] + 1);
-    uint32_t N = constExprPow(4, _order[i] + 1);
+    int32_t N = constExprPow(4, _order[i] + 1);
     // header
     for (size_t j = 0; j < N; ++j) {
       k.set_bits(0, nbit, j);
@@ -214,7 +214,7 @@ bool SBModel::normalize() {
   // now normalize the rest of the sub-contexts in groups
   // each consecutive group of 4 rows shares the same prefix
   for (int32_t pos = 0; pos < _contextLength; ++pos) {
-    size_t numStates = constExprPow(4, _order[pos]);
+    int32_t numStates = constExprPow(4, _order[pos]);
     size_t rowsPerNode = 4;
     size_t nodeStart = 0;
     for (int32_t i = 0; i < numStates; ++i) {
@@ -252,7 +252,7 @@ bool SBModel::checkTransitionProbabilities() {
   // now normalize the rest of the sub-contexts in groups
   // each consecutive group of 4 rows shares the same 2-mer prefix
   for (int32_t pos = 0; pos < _contextLength; ++pos) {
-    size_t numStates = constExprPow(4, _order[pos]);
+    int32_t numStates = constExprPow(4, _order[pos]);
     size_t rowsPerNode = 4;
     size_t nodeStart = 0;
     for (int32_t i = 0; i < numStates; ++i) {
@@ -303,7 +303,7 @@ bool SBModel::train(CountVecT& kmerCounts, const uint32_t K) {
     // now normalize the rest of the sub-contexts in groups
     // each consecutive group of 4 rows shares the same 2-mer prefix
     for (int32_t pos = 3; pos < K - _order.back(); ++pos) {
-      size_t numStates = constExprPow(4, _order[pos]);
+      int32_t numStates = constExprPow(4, _order[pos]);
       size_t rowsPerNode = 4;
       size_t nodeStart = 0;
       for (size_t i = 0; i < numStates; ++i) {
