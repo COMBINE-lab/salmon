@@ -15,7 +15,8 @@ SequenceBiasModel::SequenceBiasModel(double alpha, uint32_t windowSize)
       biasLeftBackground_(AtomicMatrix<double>(windowSize, numBases(), alpha)),
       biasRightForeground_(AtomicMatrix<double>(windowSize, numBases(), alpha)),
       biasRightBackground_(AtomicMatrix<double>(windowSize, numBases(), alpha)),
-      isEnabled_(true), windowSize_(windowSize), burnedIn_(false) {}
+      //isEnabled_(true),
+      windowSize_(windowSize), burnedIn_(false) {}
 
 bool SequenceBiasModel::burnedIn() { return burnedIn_; }
 void SequenceBiasModel::burnedIn(bool burnedIn) { burnedIn_ = burnedIn; }
