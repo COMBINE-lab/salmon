@@ -164,7 +164,7 @@ namespace alevin {
     void findNeighbors(size_t seqSize,
                        const std::string& barcodeSeq,
                        std::unordered_set<std::string>& neighbors){
-      uint32_t barcodeLength{barcodeSeq.size()};
+      uint32_t barcodeLength{static_cast<uint32_t>(barcodeSeq.size())};
       std::string newBarcode, nt;
 
       if(barcodeLength > seqSize){

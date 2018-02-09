@@ -182,8 +182,9 @@ namespace aut = alevin::utils;
 using BlockedIndexRange = tbb::blocked_range<size_t>;
 using ReadExperimentT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 
+
 template <typename AlnT, typename ProtocolT>
-void alevin::processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc,
+void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc,
                               uint64_t firstTimestepOfRound, ReadLibrary& readLib,
                               const SalmonOpts& salmonOpts,
                               AlnGroupVecRange<AlnT> batchHits,

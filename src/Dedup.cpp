@@ -159,7 +159,7 @@ uint32_t dedupReads(
        {return ugroup.find(i1)->second < ugroup.find(i2)->second;});
 
   //  iota(visitList.begin(), visitList.end(), 0);
-  uint32_t numMolecules {umiList.size()};
+  uint32_t numMolecules {static_cast<uint32_t>(umiList.size())};
 
   // making a vector umi sequences
   std::vector<std::string> umiSeqs;

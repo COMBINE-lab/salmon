@@ -21,7 +21,7 @@ namespace alevin{
                                  const std::string& s1,
                                  const std::string& s2,
                                  double& probability){
-      size_t l1 {s1.size()}, l2 {s2.size()};
+      int32_t l1{static_cast<int32_t>(s1.size())}, l2 {static_cast<int32_t>(s2.size())};
 
       // Shouldn't happen i.e. length diff are greater than 1
       if ( std::abs(l1-l2) > 1 ){
