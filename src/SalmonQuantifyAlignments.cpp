@@ -81,6 +81,9 @@ using MiniBatchQueue = tbb::concurrent_queue<MiniBatchInfo<FragT>*>;
 using PriorAbundanceVector = std::vector<double>;
 using PosteriorAbundanceVector = std::vector<double>;
 
+template <typename FragT>
+using AlignmentLibraryT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>>;
+
 struct RefSeq {
   RefSeq(char* name, uint32_t len) : RefName(name), RefLength(len) {}
   std::string RefName;
@@ -114,7 +117,7 @@ inline bool tryToGetWork(MiniBatchQueue<AlignmentGroup<FragT*>>& workQueue,
 }
 
 template <typename FragT>
-void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
+void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
                       ForgettingMassCalculator& fmCalc,
                       uint64_t firstTimestepOfRound,
                       MiniBatchQueue<AlignmentGroup<FragT*>>& workQueue,
@@ -149,7 +152,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
   }
 
   // EQClass
-  EquivalenceClassBuilder& eqBuilder = alnLib.equivalenceClassBuilder();
+  auto& eqBuilder = alnLib.equivalenceClassBuilder();
   auto& readBiasFW = observedBiasParams.seqBiasModelFW;
   auto& readBiasRC = observedBiasParams.seqBiasModelRC;
   auto& observedGCMass = observedBiasParams.observedGCMass;
@@ -864,7 +867,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
  *
  */
 template <typename FragT>
-bool quantifyLibrary(AlignmentLibrary<FragT>& alnLib,
+bool quantifyLibrary(AlignmentLibraryT<FragT>& alnLib,
                      size_t numRequiredFragments, SalmonOpts& salmonOpts) {
 
   std::atomic<bool> burnedIn{salmonOpts.numBurninFrags == 0};
@@ -1181,7 +1184,7 @@ bool quantifyLibrary(AlignmentLibrary<FragT>& alnLib,
 }
 
 template <typename ReadT>
-bool processSample(AlignmentLibrary<ReadT>& alnLib, size_t requiredObservations,
+bool processSample(AlignmentLibraryT<ReadT>& alnLib, size_t requiredObservations,
                    SalmonOpts& sopt, boost::filesystem::path outputDirectory) {
 
   auto& jointLog = sopt.jointLog;
@@ -1788,7 +1791,7 @@ transcript abundance from RNA-seq reads
         // sopt.gcBiasCorrect = false;
       }
 
-      AlignmentLibrary<UnpairedRead> alnLib(alignmentFiles, transcriptFile,
+      AlignmentLibraryT<UnpairedRead> alnLib(alignmentFiles, transcriptFile,
                                             libFmt, sopt);
 
       if (autoDetectFmt) {
@@ -1798,7 +1801,7 @@ transcript abundance from RNA-seq reads
                                             outputDirectory);
     } break;
     case ReadType::PAIRED_END: {
-      AlignmentLibrary<ReadPair> alnLib(alignmentFiles, transcriptFile, libFmt,
+      AlignmentLibraryT<ReadPair> alnLib(alignmentFiles, transcriptFile, libFmt,
                                         sopt);
       if (autoDetectFmt) {
         alnLib.enableAutodetect();

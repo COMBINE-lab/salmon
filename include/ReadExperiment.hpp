@@ -49,6 +49,7 @@ extern "C" {
  *  It is used to group them together and track information about them
  *  during the quantification procedure.
  */
+template <typename EQBuilderT>
 class ReadExperiment {
 
 public:
@@ -169,7 +170,7 @@ public:
     clusters_.reset(new ClusterForest(transcripts_.size(), transcripts_));
   }
 
-  EquivalenceClassBuilder& equivalenceClassBuilder() { return eqBuilder_; }
+  EQBuilderT& equivalenceClassBuilder() { return eqBuilder_; }
 
   std::string getIndexSeqHash() const { return salmonIndex_->seqHash(); }
   std::string getIndexNameHash() const { return salmonIndex_->nameHash(); }
@@ -831,7 +832,7 @@ private:
   double effectiveMappingRate_{0.0};
   SpinLock sl_;
   std::unique_ptr<FragmentLengthDistribution> fragLengthDist_;
-  EquivalenceClassBuilder eqBuilder_;
+  EQBuilderT eqBuilder_;
 
   /** Positional bias things**/
   std::vector<uint32_t> lengthQuantiles_;

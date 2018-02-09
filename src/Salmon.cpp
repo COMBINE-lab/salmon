@@ -57,6 +57,7 @@ int help(std::vector<std::string> opts) { //}int argc, char* argv[]) {
   helpMsg.write("Commands:\n");
   helpMsg.write("     index Create a salmon index\n");
   helpMsg.write("     quant Quantify a sample\n");
+  helpMsg.write("     alevin single cell analysis\n");
   helpMsg.write("     swim  Perform super-secret operation\n");
   helpMsg.write(
       "     quantmerge Merge multiple quantifications into a single file\n");
@@ -146,6 +147,7 @@ bibtex:
 int salmonIndex(int argc, char* argv[]);
 int salmonQuantify(int argc, char* argv[]);
 int salmonAlignmentQuantify(int argc, char* argv[]);
+int salmonBarcoding(int argc, char* argv[]);
 int salmonQuantMerge(int argc, char* argv[]);
 
 bool verbose = false;
@@ -226,6 +228,7 @@ int main(int argc, char* argv[]) {
         {{"index", salmonIndex},
          {"quant", salmonQuantify},
          {"quantmerge", salmonQuantMerge},
+         {"alevin", salmonBarcoding},
          {"swim", salmonSwim}});
 
     /*

@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <vector>
+#include "xxhash.h"
 
 class TranscriptGroup {
 public:

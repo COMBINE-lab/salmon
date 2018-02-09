@@ -23,7 +23,6 @@ QSufSort.c
 is.c
 bwt_gen.c
 bwtindex.c
-xxhash.c
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapFileSystem.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndexer.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndex.cpp
@@ -32,14 +31,17 @@ ${GAT_SOURCE_DIR}/external/install/src/rapmap/HitManager.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/rank9b.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/bit_array.c
 CollapsedEMOptimizer.cpp
+CollapsedCellOptimizer.cpp
 CollapsedGibbsSampler.cpp
 Salmon.cpp
 BuildSalmonIndex.cpp
+Dedup.cpp
+Alevin.cpp
+SalmonAlevin.cpp
 SalmonQuantify.cpp
 FragmentLengthDistribution.cpp
 FragmentStartPositionDistribution.cpp
 SequenceBiasModel.cpp
-TranscriptGroup.cpp
 GZipWriter.cpp
 SalmonQuantMerge.cpp
 #${GAT_SOURCE_DIR}/external/install/src/rapmap/sais.c
@@ -53,7 +55,14 @@ FragmentLengthDistribution.cpp
 SalmonQuantifyAlignments.cpp
 )
 
+set (ALEVIN_LIB_SRCS
+  edlib.cpp
+  AlevinUtils.cpp
+)
+
 set (SALMON_LIB_SRCS
+xxhash.c
+TranscriptGroup.cpp
 EffectiveLengthStats.cpp
 BWAUtils.cpp
 LibraryFormat.cpp
@@ -113,6 +122,8 @@ endif()
 # Build the Salmon library
 add_library(salmon_core STATIC ${SALMON_LIB_SRCS} )
 
+# Build the Alevin library
+add_library(alevin_core STATIC ${ALEVIN_LIB_SRCS})
 
 # Build the salmon executable
 add_executable(salmon ${SALMON_MAIN_SRCS} ${SALMON_ALIGN_SRCS})
@@ -133,6 +144,7 @@ set (SUFFARRAY64_LIB ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort64.a)
 # Link the executable
 target_link_libraries(salmon
     salmon_core
+    alevin_core
     gff
     ${PTHREAD_LIB}
     ${Boost_LIBRARIES}
@@ -161,6 +173,7 @@ if (${FETCHED_JEMALLOC})
 endif()
 
 if (${FETCHED_BOOST})
+   add_dependencies(alevin_core libboost)
    add_dependencies(salmon_core libboost)
    add_dependencies(salmon libboost)
 endif()
@@ -191,6 +204,7 @@ add_dependencies(salmon libdivsufsort)
 # Link the executable
 target_link_libraries(unitTests
     salmon_core
+    alevin_core
     gff
     ${PTHREAD_LIB}
     ${Boost_LIBRARIES}

@@ -48,7 +48,7 @@ template <typename T> class NullFragmentFilter;
  *  It is used to group them together and track information about them
  *  during the quantification procedure.
  */
-template <typename FragT> class AlignmentLibrary {
+template <typename FragT, typename EQBuilderT> class AlignmentLibrary {
 
 public:
   AlignmentLibrary(std::vector<boost::filesystem::path>& alnFiles,
@@ -201,7 +201,7 @@ for (auto& txp : transcripts_) {
     bq->start(nff, onlyProcessAmbiguousAlignments);
   }
 
-  EquivalenceClassBuilder& equivalenceClassBuilder() { return eqBuilder_; }
+  EQBuilderT& equivalenceClassBuilder() { return eqBuilder_; }
 
   std::string getIndexSeqHash() const { return ""; }
   std::string getIndexNameHash() const { return ""; }
@@ -534,7 +534,7 @@ private:
    */
   size_t quantificationPasses_;
   SpinLock sl_;
-  EquivalenceClassBuilder eqBuilder_;
+  EQBuilderT eqBuilder_;
 
   /** Positional bias things**/
   std::vector<uint32_t> lengthQuantiles_;

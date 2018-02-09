@@ -25,6 +25,7 @@
 #include "SalmonUtils.hpp"
 #include "TryableSpinLock.hpp"
 #include "UnpairedRead.hpp"
+#include "TranscriptGroup.hpp"
 
 #include "spdlog/fmt/fmt.h"
 #include "spdlog/fmt/ostr.h"
@@ -2652,40 +2653,58 @@ void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
 } // namespace salmon
 
 // === Explicit instantiations
+using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
+using BulkExpT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;
+template <typename FragT>
+using BulkAlignLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>>;
 
 // explicit instantiations for writing abundances ---
-template void salmon::utils::writeAbundances<AlignmentLibrary<ReadPair>>(
-    const SalmonOpts& opts, AlignmentLibrary<ReadPair>& alnLib,
+template void salmon::utils::writeAbundances<BulkAlignLibT<ReadPair>>(
+    const SalmonOpts& opts, BulkAlignLibT<ReadPair>& alnLib,
     boost::filesystem::path& fname, std::string headerComments);
 
-template void salmon::utils::writeAbundances<AlignmentLibrary<UnpairedRead>>(
-    const SalmonOpts& opts, AlignmentLibrary<UnpairedRead>& alnLib,
+template void salmon::utils::writeAbundances<BulkAlignLibT<UnpairedRead>>(
+    const SalmonOpts& opts, BulkAlignLibT<UnpairedRead>& alnLib,
     boost::filesystem::path& fname, std::string headerComments);
-template void salmon::utils::writeAbundances<ReadExperiment>(
-    const SalmonOpts& opts, ReadExperiment& alnLib,
+
+template void salmon::utils::writeAbundances<BulkExpT>(
+    const SalmonOpts& opts, BulkExpT& alnLib,
     boost::filesystem::path& fname, std::string headerComments);
+
+template void salmon::utils::writeAbundances<SCExpT>(
+                                                             const SalmonOpts& opts, SCExpT& alnLib,
+                                                             boost::filesystem::path& fname, std::string headerComments);
+
+
 template void
-salmon::utils::writeAbundancesFromCollapsed<AlignmentLibrary<ReadPair>>(
-    const SalmonOpts& opts, AlignmentLibrary<ReadPair>& alnLib,
+salmon::utils::writeAbundancesFromCollapsed<BulkAlignLibT<ReadPair>>(
+    const SalmonOpts& opts, BulkAlignLibT<ReadPair>& alnLib,
     boost::filesystem::path& fname, std::string headerComments);
 
 template void
-salmon::utils::writeAbundancesFromCollapsed<AlignmentLibrary<UnpairedRead>>(
-    const SalmonOpts& opts, AlignmentLibrary<UnpairedRead>& alnLib,
-    boost::filesystem::path& fname, std::string headerComments);
-template void salmon::utils::writeAbundancesFromCollapsed<ReadExperiment>(
-    const SalmonOpts& opts, ReadExperiment& alnLib,
+salmon::utils::writeAbundancesFromCollapsed<BulkAlignLibT<UnpairedRead>>(
+    const SalmonOpts& opts, BulkAlignLibT<UnpairedRead>& alnLib,
     boost::filesystem::path& fname, std::string headerComments);
 
+template void salmon::utils::writeAbundancesFromCollapsed<BulkExpT>(
+    const SalmonOpts& opts, BulkExpT& alnLib,
+    boost::filesystem::path& fname, std::string headerComments);
+
+template void salmon::utils::writeAbundancesFromCollapsed<SCExpT>(
+                                                                          const SalmonOpts& opts, SCExpT& alnLib,
+                                                                          boost::filesystem::path& fname, std::string headerComments);
 // explicit instantiations for normalizing alpha vectors ---
 template void
-salmon::utils::normalizeAlphas<ReadExperiment>(const SalmonOpts& sopt,
-                                               ReadExperiment& alnLib);
+salmon::utils::normalizeAlphas<BulkExpT>(const SalmonOpts& sopt,
+                                               BulkExpT& alnLib);
+template void
+salmon::utils::normalizeAlphas<SCExpT>(const SalmonOpts& sopt,
+                                               SCExpT& alnLib);
 
-template void salmon::utils::normalizeAlphas<AlignmentLibrary<UnpairedRead>>(
-    const SalmonOpts& sopt, AlignmentLibrary<UnpairedRead>& alnLib);
-template void salmon::utils::normalizeAlphas<AlignmentLibrary<ReadPair>>(
-    const SalmonOpts& sopt, AlignmentLibrary<ReadPair>& alnLib);
+template void salmon::utils::normalizeAlphas<BulkAlignLibT<UnpairedRead>>(
+    const SalmonOpts& sopt, BulkAlignLibT<UnpairedRead>& alnLib);
+template void salmon::utils::normalizeAlphas<BulkAlignLibT<ReadPair>>(
+    const SalmonOpts& sopt, BulkAlignLibT<ReadPair>& alnLib);
 
 // explicit instantiations for effective length updates ---
 /*
@@ -2730,41 +2749,53 @@ salmon::utils::updateEffectiveLengths<std::vector<double>,
 // explicit instantiations for effective length updates ---
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
-                                      ReadExperiment>(
-    SalmonOpts& sopt, ReadExperiment& readExp, Eigen::VectorXd& effLensIn,
+                                      BulkExpT>(
+    SalmonOpts& sopt, BulkExpT& readExp, Eigen::VectorXd& effLensIn,
     std::vector<tbb::atomic<double>>& alphas, std::vector<bool>& available,
     bool finalRound);
 
 template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<double>, ReadExperiment>(
-    SalmonOpts& sopt, ReadExperiment& readExp, Eigen::VectorXd& effLensIn,
+salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
+                                      SCExpT>(
+                                                      SalmonOpts& sopt, SCExpT& readExp, Eigen::VectorXd& effLensIn,
+                                                      std::vector<tbb::atomic<double>>& alphas, std::vector<bool>& available,
+                                                      bool finalRound);
+
+template Eigen::VectorXd
+salmon::utils::updateEffectiveLengths<std::vector<double>, BulkExpT>(
+    SalmonOpts& sopt, BulkExpT& readExp, Eigen::VectorXd& effLensIn,
     std::vector<double>& alphas, std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
+salmon::utils::updateEffectiveLengths<std::vector<double>, SCExpT>(
+                                                                           SalmonOpts& sopt, SCExpT& readExp, Eigen::VectorXd& effLensIn,
+                                                                           std::vector<double>& alphas, std::vector<bool>& available, bool finalRound);
+
+template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
-                                      AlignmentLibrary<ReadPair>>(
-    SalmonOpts& sopt, AlignmentLibrary<ReadPair>& readExp,
+                                      BulkAlignLibT<ReadPair>>(
+    SalmonOpts& sopt, BulkAlignLibT<ReadPair>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
     std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<double>,
-                                      AlignmentLibrary<ReadPair>>(
-    SalmonOpts& sopt, AlignmentLibrary<ReadPair>& readExp,
+                                      BulkAlignLibT<ReadPair>>(
+    SalmonOpts& sopt, BulkAlignLibT<ReadPair>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<double>& alphas,
     std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
-                                      AlignmentLibrary<UnpairedRead>>(
-    SalmonOpts& sopt, AlignmentLibrary<UnpairedRead>& readExp,
+                                      BulkAlignLibT<UnpairedRead>>(
+    SalmonOpts& sopt, BulkAlignLibT<UnpairedRead>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
     std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<double>,
-                                      AlignmentLibrary<UnpairedRead>>(
-    SalmonOpts& sopt, AlignmentLibrary<UnpairedRead>& readExp,
+                                      BulkAlignLibT<UnpairedRead>>(
+    SalmonOpts& sopt, BulkAlignLibT<UnpairedRead>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<double>& alphas,
     std::vector<bool>& available, bool finalRound);
 

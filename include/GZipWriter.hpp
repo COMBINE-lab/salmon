@@ -13,6 +13,7 @@
 #include "ReadExperiment.hpp"
 #include "SalmonOpts.hpp"
 #include "SalmonSpinLock.hpp"
+#include "AlevinOpts.hpp"
 
 class GZipWriter {
 public:
@@ -24,6 +25,12 @@ public:
   template <typename ExpT>
   bool writeEquivCounts(const SalmonOpts& opts, ExpT& experiment);
 
+  template <typename ExpT, typename ProtocolT>
+  bool writeEquivCounts(
+                        const AlevinOpts<ProtocolT>& aopts,
+                        ExpT& experiment);
+
+
   template <typename ExpT>
   bool writeMeta(const SalmonOpts& opts, const ExpT& experiment);
 
@@ -34,11 +41,16 @@ public:
   template <typename ExpT>
   bool writeAbundances(const SalmonOpts& sopt, ExpT& readExp);
 
+  bool writeAbundances(std::vector<double>& alphas,
+                       std::vector<Transcript>& transcripts);
+
   template <typename ExpT>
   bool writeEmptyAbundances(const SalmonOpts& sopt, ExpT& readExp);
 
   template <typename T>
   bool writeBootstrap(const std::vector<T>& abund, bool quiet = false);
+
+  bool writeCellEQVec(size_t barcode, const std::vector<uint32_t>& offsets, const std::vector<uint32_t>& counts, bool quiet = true);
 
   bool setSamplingPath(const SalmonOpts& sopt);
 
@@ -47,6 +59,7 @@ private:
   boost::filesystem::path bsPath_;
   std::shared_ptr<spdlog::logger> logger_;
   std::unique_ptr<boost::iostreams::filtering_ostream> bsStream_{nullptr};
+  std::unique_ptr<boost::iostreams::filtering_ostream> cellEQStream_{nullptr};
 // only one writer thread at a time
 #if defined __APPLE__
   spin_lock writeMutex_;
