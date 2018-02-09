@@ -58,7 +58,7 @@ SCENARIO("GC sampling works properly") {
         bool v1, v2;
         auto s = dis(gen);
         auto len = dis(gen);
-        decltype(s) e;
+        decltype(s) e = s + len;
         if ( s >= l ) { s = l/2; }
         if ( s + len >= l ) { e= l-1; }
         THEN("Sampled contexts are the same as unsampled contexts") {
