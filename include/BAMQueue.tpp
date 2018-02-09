@@ -537,7 +537,7 @@ inline bool BAMQueue<FragT>::getFrag_(UnpairedRead& sread, FilterT filt) {
         // If we didn't get a read, then we've exhausted this file
         if (!didRead) { 
             // close the current file
-            scram_close(fp_);
+            scram_close(currFile_->fp);
             currFile_->fp = nullptr;
             currFile_++;
             // If this is the last file, then we're done
