@@ -1059,6 +1059,10 @@ void processReadsQuasi(
               salmon::utils::hitType(end1Pos, h.fwd, h.readLen, end2Pos,
                                      h.mateIsFwd, h.mateLen, canDovetail);
           } break;
+          case MateStatus::SINGLE_END : {
+            // do nothing
+            //salmonOpts.jointLog->warn("");
+          } break;
           }
         }
 

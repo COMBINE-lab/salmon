@@ -1131,6 +1131,9 @@ void processReadsQuasi(
                 salmon::utils::hitType(end1Pos, h.fwd, h.readLen, end2Pos,
                                        h.mateIsFwd, h.mateLen, canDovetail);
           } break;
+          case MateStatus::SINGLE_END: {
+            // do nothing
+          } break;
           }
         }
 
@@ -1401,6 +1404,8 @@ void processReadsQuasi(
         case MateStatus::SINGLE_END: {
           h.format = salmon::utils::hitType(h.pos, h.fwd);
         } break;
+        default:
+          break;
         }
       }
 

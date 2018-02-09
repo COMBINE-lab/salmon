@@ -461,9 +461,9 @@ public:
         subHit +=
             (isRC)
                 ? (transcript.charBaseAt(readStart + readLen - readPos, dir) ==
-                   salmon::stringtools::charCanon[read[readPos]])
+                   salmon::stringtools::charCanon[static_cast<uint8_t>(read[readPos])])
                 : (transcript.charBaseAt(readStart + readPos) ==
-                   salmon::stringtools::charCanon[read[readPos]]);
+                   salmon::stringtools::charCanon[static_cast<uint8_t>(read[readPos])]);
       }
       // if the entire subvote was successful, this is a hit
       numHits += (subHit == lpos);

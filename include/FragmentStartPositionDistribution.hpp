@@ -36,7 +36,7 @@ class FragmentStartPositionDistribution {
    * A private double that stores the (logged) sum of the product of observed
    * lengths and masses for quick mean calculations.
    */
-  tbb::atomic<double> sum_;
+  //tbb::atomic<double> sum_;
   /**
    * The number of bins we consider within each transcript.
    */

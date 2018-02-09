@@ -1,4 +1,4 @@
-#ifndef __BARCDOE_MODEL_HPP__
+#ifndef __BARCODE_MODEL_HPP__
 #define __BARCODE_MODEL_HPP__
 
 #include <iostream>
