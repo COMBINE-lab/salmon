@@ -69,10 +69,10 @@ SCENARIO("GC sampling works properly") {
       }
 
       for (size_t tn = 0; tn < 1000; ++tn) {
-	delete [] txpSeqs[tn];
-	delete [] names[tn];
+	delete txpSeqs[tn];
+	delete names[tn];
       }
-      delete txpSeqs;
-      delete names;
+      delete [] txpSeqs;
+      delete [] names;
     } // end GIVEN
 }

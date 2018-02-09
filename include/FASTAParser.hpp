@@ -4,7 +4,7 @@
 #include <vector>
 
 class Transcript;
-class SalmonOpts;
+struct SalmonOpts;
 
 class FASTAParser {
 public:

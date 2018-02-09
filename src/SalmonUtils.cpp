@@ -1648,7 +1648,7 @@ bool processQuantOptions(SalmonOpts& sopt,
       return false;
     }
     if (sopt.numGibbsSamples > 0) {
-      if (!sopt.thinningFactor >= 1) {
+      if (!(sopt.thinningFactor >= 1)) {
         jointLog->critical(
             "The Gibbs sampling thinning factor (--thinningFactor) "
             "cannot be smaller than 1.");

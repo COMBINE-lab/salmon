@@ -7,6 +7,8 @@
 #include <limits>
 
 class KmerContext {
+private:
+  uint32_t _invalidIdx{std::numeric_limits<uint32_t>::max()};
 public:
   KmerContext(uint32_t K, salmon::utils::Direction dir)
       : _valid(false), _length(K), _dir(dir), _repr(_invalidIdx) {
@@ -36,7 +38,6 @@ private:
   uint32_t _length;
   salmon::utils::Direction _dir;
   uint32_t _repr;
-  uint32_t _invalidIdx{std::numeric_limits<uint32_t>::max()};
 };
 
 #endif //__KMER_CONTEXT_HPP__
