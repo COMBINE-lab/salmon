@@ -114,11 +114,11 @@ void permute(float_mat& A, int_vect& idx) {
   }
 
   // loop over permuted indices
-  for (j = 0; j < A.nr_rows(); ++j) {
+  for (j = 0; j < nrows; ++j) {
     if (i[j] != idx[j]) {
 
       // search only the remaining indices
-      for (k = j + 1; k < A.nr_rows(); ++k) {
+      for (k = j + 1; k < nrows; ++k) {
         if (i[k] == idx[j]) {
           std::swap(A[j], A[k]); // swap the rows and
           i[k] = i[j];           // the elements of

@@ -47,7 +47,7 @@ static void mem_collect_intv(const SalmonOpts& sopt, const mem_opt_t* opt,
     while (x < static_cast<size_t>(len)) {
       if (seq[x] < 4) {
         // Make sure there are at least k bases left
-        if (len - x < klen) {
+        if (len - static_cast<int>(x) < klen) {
           x = len;
           continue;
         }
@@ -74,7 +74,7 @@ static void mem_collect_intv(const SalmonOpts& sopt, const mem_opt_t* opt,
         ++x;
     }
   } else {
-    while (x < len) {
+    while (x < static_cast<size_t>(len)) {
       if (seq[x] < 4) {
         x = bwt_smem1(bwt, len, seq, x, start_width, &a->mem1, a->tmpv);
         for (i = 0; i < a->mem1.n; ++i) {
@@ -112,7 +112,7 @@ static void mem_collect_intv(const SalmonOpts& sopt, const mem_opt_t* opt,
   // third pass: LAST-like
   if (sopt.extraSeedPass and opt->max_mem_intv > 0) {
     x = 0;
-    while (x < len) {
+    while (x < static_cast<size_t>(len)) {
       if (seq[x] < 4) {
         if (1) {
           bwtintv_t m;

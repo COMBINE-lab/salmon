@@ -266,7 +266,7 @@ public:
       }
 
       uint32_t dist{0};
-      size_t start = (votePos >= maxGap) ? (votePos - maxGap - leftmost)
+      size_t start = (votePos >= static_cast<uint32_t>(maxGap)) ? (votePos - maxGap - leftmost)
                                          : (votePos - leftmost);
       size_t mid = votePos - leftmost;
       size_t end = std::min(votePos + maxGap - leftmost, rightmost - leftmost);

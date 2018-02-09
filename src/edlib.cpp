@@ -863,7 +863,7 @@ static int myersCalcEditDistanceSemiGlobal(
     int lastBlock = min(maxNumBlocks, ceilDiv(min(k, (k + queryLength - targetLength) / 2) + 1, WORD_SIZE)) - 1;
     decltype(blocks.begin()) bl; // Current block
 
-    if (maxNumBlocks != blocks.size()) {
+    if (maxNumBlocks != static_cast<int>(blocks.size())) {
       blocks.resize(maxNumBlocks);
     }
     //Block* blocks = new Block[maxNumBlocks];
