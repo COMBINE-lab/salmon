@@ -171,7 +171,7 @@ void SBModel::dumpConditionalProbabilities(std::ostream& os) {
     }
     os << '\n';
     // probs
-    for (size_t j = 0; j < N; ++j) {
+    for (int32_t j = 0; j < N; ++j) {
       auto p = _probs(j, i);
       os << std::exp(p);
       if (j < N - 1) {
