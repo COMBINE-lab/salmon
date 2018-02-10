@@ -844,13 +844,13 @@ void processReadsQuasi(
   Mer leftMer;
   Mer rightMer;
 
-  auto expectedLibType = rl.format();
+  //auto expectedLibType = rl.format();
 
   uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
   size_t minK = rapmap::utils::my_mer::k();
 
   size_t locRead{0};
-  uint64_t localUpperBoundHits{0};
+  //uint64_t localUpperBoundHits{0};
   size_t rangeSize{0};
   uint64_t localNumAssignedFragments{0};
   bool strictIntersect = salmonOpts.strictIntersect;
@@ -903,7 +903,7 @@ void processReadsQuasi(
       bool tooShortLeft = (readLenLeft < minK);
       bool tooShortRight = (readLenRight < minK);
       tooManyHits = false;
-      localUpperBoundHits = 0;
+      //localUpperBoundHits = 0;
       auto& jointHitGroup = structureVec[i];
       jointHitGroup.clearAlignments();
       auto& jointHits = jointHitGroup.alignments();
@@ -1280,16 +1280,16 @@ void processReadsQuasi(
 
   const char* txomeStr = qidx->seq.c_str();
 
-  auto expectedLibType = rl.format();
+  //auto expectedLibType = rl.format();
 
   uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
   size_t minK = rapmap::utils::my_mer::k();
 
   size_t locRead{0};
-  uint64_t localUpperBoundHits{0};
+  //uint64_t localUpperBoundHits{0};
   size_t rangeSize{0};
 
-  bool tooManyHits{false};
+  //bool tooManyHits{false};
   size_t readLen{0};
   size_t maxNumHits{salmonOpts.maxReadOccs};
   bool consistentHits{salmonOpts.consistentHits};
@@ -1330,8 +1330,8 @@ void processReadsQuasi(
       auto& rp = rg[i];
       readLen = rp.seq.length();
       tooShort = (readLen < minK);
-      tooManyHits = false;
-      localUpperBoundHits = 0;
+      //tooManyHits = false;
+      //localUpperBoundHits = 0;
       auto& jointHitGroup = structureVec[i];
       auto& jointHits = jointHitGroup.alignments();
       jointHitGroup.clearAlignments();

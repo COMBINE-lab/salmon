@@ -160,8 +160,9 @@ bool FragmentStartPositionDistribution::logNumDenomMass(int32_t hitPos,
   if (hitPos < 0) {
     hitPos = 0;
   }
-  assert(hitPos < txpLen);
-  if (hitPos >= txpLen) {
+  uint32_t uHitPos = static_cast<uint32_t>(hitPos);
+  assert(uHitPos < txpLen);
+  if (uHitPos >= txpLen) {
     std::cerr << "\n\nhitPos = " << hitPos << ", txpLen = " << txpLen
               << "!!\n\n\n";
     logNum = salmon::math::LOG_0;

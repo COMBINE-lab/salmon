@@ -239,10 +239,10 @@ int main(int argc, char* argv[]) {
     std::copy_n( &argv[topLevelArgc], argc-topLevelArgc, &argv2[1] );
     */
 
-    int subCommandArgc = opts.size() + 1;
+    int32_t subCommandArgc = opts.size() + 1;
     std::unique_ptr<char* []> argv2(new char*[subCommandArgc]);
     argv2[0] = argv[0];
-    for (size_t i = 0; i < subCommandArgc - 1; ++i) {
+    for (int32_t i = 0; i < subCommandArgc - 1; ++i) {
       argv2[i + 1] = &*opts[i].begin();
     }
 

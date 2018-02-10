@@ -156,7 +156,7 @@ void SBModel::dumpConditionalProbabilities(std::ostream& os) {
     size_t nbit = 2 * (_order[i] + 1);
     int32_t N = constExprPow(4, _order[i] + 1);
     // header
-    for (size_t j = 0; j < N; ++j) {
+    for (int32_t j = 0; j < N; ++j) {
       k.set_bits(0, nbit, j);
       std::string s = k.to_str();
       if (s.length() > 1) {

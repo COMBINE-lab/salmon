@@ -266,7 +266,7 @@ double AlignmentModel::logLikelihood(
     for (size_t i = 0; i < opLen; ++i) {
       if (advanceInRead) {
         // Shouldn't happen!
-        if (readIdx >= readLen) {
+        if (readIdx >= static_cast<decltype(readIdx)>(readLen)) {
           if (logger_) {
             logger_->warn("(in logLikelihood()) CIGAR string for read [{}] "
                           "seems inconsistent. It refers to non-existant "

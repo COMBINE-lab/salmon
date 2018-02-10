@@ -59,8 +59,8 @@ SCENARIO("GC sampling works properly") {
         auto s = dis(gen);
         auto len = dis(gen);
         decltype(s) e = s + len;
-        if ( s >= l ) { s = l/2; }
-        if ( s + len >= l ) { e= l-1; }
+        if ( static_cast<decltype(l)>(s) >= l ) { s = l/2; }
+        if ( static_cast<decltype(l)>(s) + len >= l ) { e= l-1; }
         THEN("Sampled contexts are the same as unsampled contexts") {
             REQUIRE(txpsSampled[tn].gcDesc(s, e, v1) == txpsUnSampled[tn].gcDesc(s, e, v2));
         }

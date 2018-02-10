@@ -4,7 +4,7 @@ namespace bwautils {
 static void bwt_reverse_intvs(bwtintv_v* p) {
   if (p->n > 1) {
     int j;
-    for (j = 0; j<p->n>> 1; ++j) {
+    for (j = 0; static_cast<bwtint_t>(j) < p->n >> 1; ++j) {
       bwtintv_t tmp = p->a[p->n - 1 - j];
       p->a[p->n - 1 - j] = p->a[j];
       p->a[j] = tmp;
@@ -28,14 +28,15 @@ bool getIntervalForKmer(const bwt_t* bwt, // the bwt index
   int i, j, c, ret;
   int x = 0;
   bwtintv_t ik, ok[4];
-  bwtintv_v a[2], *prev, *curr, *swap;
+  //bwtintv_v a[2], *prev, *curr, *swap;
+  bwtintv_v a[2], *curr, *swap;
 
   if (q[x] > 3)
     return false;
   // if (min_intv < 1) min_intv = 1; // the interval size should be at least 1
   kv_init(a[0]);
   kv_init(a[1]);
-  prev = &a[0]; // use the temporary vector if provided
+  //prev = &a[0]; // use the temporary vector if provided
   curr = &a[1];
   bwt_set_intv(bwt, q[x], ik); // the initial interval of a single base
   ik.info = x + 1;
@@ -105,7 +106,7 @@ int bwt_smem1a_with_kmer(const bwt_t* bwt, int len, const uint8_t* q, int x,
       bwt_extend(bwt, &ik, ok, 0);
       if (ok[c].x[2] != ik.x[2]) { // change of the interval size
         kv_push(bwtintv_t, *curr, ik);
-        if (ok[c].x[2] < min_intv)
+        if (ok[c].x[2] < static_cast<bwtint_t>(min_intv))
           break; // the interval size is too small to be extended further
       }
       ik = ok[c];
@@ -129,18 +130,18 @@ int bwt_smem1a_with_kmer(const bwt_t* bwt, int len, const uint8_t* q, int x,
     c = i < 0
             ? -1
             : q[i] < 4 ? q[i] : -1; // c==-1 if i<0 or q[i] is an ambiguous base
-    for (j = 0, curr->n = 0; j < prev->n; ++j) {
+    for (j = 0, curr->n = 0; static_cast<bwtint_t>(j) < prev->n; ++j) {
       bwtintv_t* p = &prev->a[j];
       if (c >= 0 && ik.x[2] >= max_intv)
         bwt_extend(bwt, p, ok, 1);
       if (c < 0 || ik.x[2] < max_intv ||
-          ok[c].x[2] < min_intv) { // keep the hit if reaching the beginning or
+          ok[c].x[2] < static_cast<bwtint_t>(min_intv)) { // keep the hit if reaching the beginning or
                                    // an ambiguous base or the intv is small
                                    // enough
         if (curr->n ==
             0) { // test curr->n>0 to make sure there are no longer matches
           if (mem->n == 0 ||
-              i + 1 < mem->a[mem->n - 1].info >> 32) { // skip contained matches
+              static_cast<bwtint_t>(i) + 1 < mem->a[mem->n - 1].info >> 32) { // skip contained matches
             ik = *p;
             ik.info |= (uint64_t)(i + 1) << 32;
             kv_push(bwtintv_t, *mem, ik);

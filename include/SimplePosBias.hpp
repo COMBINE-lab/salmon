@@ -38,7 +38,7 @@ private:
   std::vector<double> masses_;
   bool isLogged_{true};
   bool isFinalized_{false};
-  tk::spline s_;
+  ::tk::spline s_;
   // position bins taken from Cufflinks:
   // https://github.com/cole-trapnell-lab/cufflinks/blob/master/src/biascorrection.cpp
   const std::vector<double> positionBins_{{.02, .04, .06, .08, .10, .15, .2,

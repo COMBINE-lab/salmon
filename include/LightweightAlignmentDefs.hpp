@@ -1038,7 +1038,6 @@ inline void getHitsForFragment(
   if (BOOST_UNLIKELY(isOrphan and allowOrphans)) {
     // std::vector<CoverageCalculator> allHits;
     // allHits.reserve(totalHits);
-    bool foundValidHit{false};
 
     // search for a hit on the left
     for (auto& tHitList : leftHits) {
@@ -1056,7 +1055,6 @@ inline void getHitsForFragment(
       // if (!nearEndOfTranscript(covChain, t, 1000)) { continue; }
 
       if (score >= fOpt * bestScore and score >= cutoffLeft) {
-        foundValidHit = true;
 
         if (score > bestScore) {
           bestScore = score;
@@ -1106,7 +1104,6 @@ inline void getHitsForFragment(
         if (score > bestScore) {
           bestScore = score;
         }
-        foundValidHit = true;
         bool isForward = covChain.isForward();
         int32_t hitPos = covChain.bestHitPos;
         auto fmt = salmon::utils::hitType(hitPos, isForward);
@@ -1489,7 +1486,7 @@ void processReadsMEM(
   const bwtintv_v* a = nullptr;
   smem_aux_t* auxHits = smem_aux_init();
 
-  auto expectedLibType = rl.format();
+  //auto expectedLibType = rl.format();
 
   uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
 
