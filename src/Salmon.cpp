@@ -277,7 +277,7 @@ int main(int argc, char* argv[]) {
 
         // otherwise, detect and dispatch the correct mode
         bool useSalmonAlign{false};
-        for (size_t i = 0; i < subCommandArgc; ++i) {
+        for (int32_t i = 0; i < subCommandArgc; ++i) {
           if (strncmp(argv2[i], "-a", 2) == 0 or
               strncmp(argv2[i], "--alignments", 12) == 0) {
             useSalmonAlign = true;

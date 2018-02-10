@@ -479,7 +479,7 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
               int txpsSize = txpIDs.size();
               int rangeCount = std::sqrt(txpsSize) + rangeFactorization;
 
-              for (size_t i = 0; i < txpsSize; i++) {
+              for (int32_t i = 0; i < txpsSize; i++) {
                 int rangeNumber = auxProbs[i] * rangeCount;
                 txpIDs.push_back(rangeNumber);
               }
@@ -509,7 +509,7 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
             // ---- Collect seq-specific bias samples ------ //
             auto getCIGARLength = [](bam_seq_t* s) -> uint32_t {
               auto cl = bam_cigar_len(s);
-              uint32_t k, end;
+              decltype(cl) k, end;
               end = 0; // bam_pos(s);
               uint32_t* cigar = bam_cigar(s);
               for (k = 0; k < cl; ++k) {
@@ -543,8 +543,8 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
                   // Shouldn't be from the same strand and they should be in the
                   // right order
                   if ((fwd1 != fwd2) and // Shouldn't be from the same strand
-                      (startPos1 > 0 and startPos1 < transcript.RefLength) and
-                      (startPos2 > 0 and startPos2 < transcript.RefLength)) {
+                      (startPos1 > 0 and startPos1 < static_cast<int32_t>(transcript.RefLength)) and
+                      (startPos2 > 0 and startPos2 < static_cast<int32_t>(transcript.RefLength))) {
 
                     const char* readStart1 = txpStart + startPos1;
                     auto& readBias1 = (fwd1) ? readBiasFW : readBiasRC;
@@ -563,10 +563,10 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
 
                     if ((startPos1 >= readBias1.contextBefore(read1RC) and
                          startPos1 + readBias1.contextAfter(read1RC) <
-                             transcript.RefLength) and
+                         static_cast<int32_t>(transcript.RefLength)) and
                         (startPos2 >= readBias2.contextBefore(read2RC) and
                          startPos2 + readBias2.contextAfter(read2RC) <
-                             transcript.RefLength)) {
+                         static_cast<int32_t>(transcript.RefLength))) {
 
                       int32_t fwPos = (fwd1) ? startPos1 : startPos2;
                       int32_t rcPos = (fwd1) ? startPos2 : startPos1;
@@ -596,7 +596,7 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
                   int32_t startPos1 =
                       fwd1 ? pos1 : pos1 + getCIGARLength(r1) - 1;
 
-                  if (startPos1 > 0 and startPos1 < transcript.RefLength) {
+                  if (startPos1 > 0 and startPos1 < static_cast<int32_t>(transcript.RefLength)) {
 
                     const char* txpStart = transcript.Sequence();
                     const char* txpEnd = txpStart + transcript.RefLength;
@@ -606,7 +606,7 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
 
                     if (startPos1 >= readBias1.contextBefore(!fwd1) and
                         startPos1 + readBias1.contextAfter(!fwd1) <
-                            transcript.RefLength) {
+                        static_cast<int32_t>(transcript.RefLength)) {
                       context.from_chars(txpStart + startPos1 -
                                          readBias1.contextBefore(!fwd1));
                       if (!fwd1) {
@@ -656,7 +656,7 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
                   int32_t start = alnp->left();
                   int32_t stop = alnp->right();
 
-                  if (start >= 0 and stop < transcript.RefLength) {
+                  if (start >= 0 and stop < static_cast<int32_t>(transcript.RefLength)) {
                     bool valid{false};
                     auto desc = transcript.gcDesc(start, stop, valid);
                     if (valid) {
@@ -682,7 +682,7 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
                       fwd ? alnp->pos() : std::max(0, alnp->pos() - cmean);
                   int32_t stop = start + cmean;
                   // WITH CONTEXT
-                  if (start >= 0 and stop < transcript.RefLength) {
+                  if (start >= 0 and stop < static_cast<int32_t>(transcript.RefLength)) {
                     bool valid{false};
                     auto desc = transcript.gcDesc(start, stop, valid);
                     if (valid) {

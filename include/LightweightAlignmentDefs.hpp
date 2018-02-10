@@ -1323,7 +1323,7 @@ inline void getHitsForFragment(fastx_parser::ReadSeq& frag,
 
     //readLength = readLen;
 
-    for (int p = 0; p < readLen; ++p) {
+    for (int p = 0; p < static_cast<int>(readLen); ++p) {
       readStr[p] = nst_nt4_table[static_cast<int>(readStr[p])];
     }
 
@@ -1381,7 +1381,7 @@ inline void getHitsForFragment(fastx_parser::ReadSeq& frag,
 
       auto transcriptID = hitID;
 
-      if (transcriptID < lastTranscriptId) {
+      if (static_cast<int32_t>(transcriptID) < lastTranscriptId) {
         sortedByTranscript = false;
       }
 

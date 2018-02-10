@@ -280,7 +280,7 @@ int32_t SBModel::getContextLength() { return _contextLength; }
 template <typename CountVecT>
 bool SBModel::train(CountVecT& kmerCounts, const uint32_t K) {
   // The _order of the model *ending at* positions 2, 3, 4, and 5 (0-based)
-  std::vector<uint32_t> _order{0, 0, 2, 2, 2, 2};
+  std::vector<int32_t> _order{0, 0, 2, 2, 2, 2};
   const auto numKmers = constExprPow(4, K);
 
   if (!_trained) {
@@ -306,7 +306,7 @@ bool SBModel::train(CountVecT& kmerCounts, const uint32_t K) {
       int32_t numStates = constExprPow(4, _order[pos]);
       size_t rowsPerNode = 4;
       size_t nodeStart = 0;
-      for (size_t i = 0; i < numStates; ++i) {
+      for (int32_t i = 0; i < numStates; ++i) {
         auto tot = _probs.col(pos).segment(nodeStart, rowsPerNode).sum();
         _probs.col(pos).segment(nodeStart, rowsPerNode) /= tot;
         nodeStart += rowsPerNode;

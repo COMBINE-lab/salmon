@@ -35,7 +35,7 @@ namespace alevin{
         distance = 1;
       }
 
-      for (size_t i=0, j=0; i<l1 and j<l2; i++, j++){
+      for (int32_t i=0, j=0; i<l1 and j<l2; i++, j++){
         if (s1[i] != s2[j]){
           if (distance == 1){
             edit = 'F';
@@ -50,7 +50,7 @@ namespace alevin{
           else{
             bool flag = true;
             if(s1[i+1] == s2[j+1]){
-              for(size_t l=i+2, m=j+2; l<l1 and m<l2; l++,m++){
+              for(int32_t l=i+2, m=j+2; l<l1 and m<l2; l++,m++){
                 if (s1[l] != s2[m]){
                   flag = false;
                   break;
@@ -65,7 +65,7 @@ namespace alevin{
           if(s1[i+1] == s2[j]){
             edit = 'D';
             bool flag = true;
-            for(size_t l=i+2, m=j+1; l<l1 and m<l2; l++,m++){
+            for(int32_t l=i+2, m=j+1; l<l1 and m<l2; l++,m++){
               if (s1[l] != s2[m]){
                 flag = false;
                 break;
@@ -79,7 +79,7 @@ namespace alevin{
           if (s1[i] == s2[j+1]){
             edit = 'I';
             bool flag = true;
-            for(size_t l=i+1, m=j+2; l<l1 and m<l2; l++,m++){
+            for(int32_t l=i+1, m=j+2; l<l1 and m<l2; l++,m++){
               if (s1[l] != s2[m]){
                 flag = false;
                 break;

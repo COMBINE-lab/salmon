@@ -987,8 +987,8 @@ void processReadsQuasi(
             bool success = false;
 
             if ((dir1 != dir2) and // Shouldn't be from the same strand
-                (startPos1 > 0 and startPos1 < t.RefLength) and
-                (startPos2 > 0 and startPos2 < t.RefLength)) {
+                (startPos1 > 0 and startPos1 < static_cast<int32_t>(t.RefLength)) and
+                (startPos2 > 0 and startPos2 < static_cast<int32_t>(t.RefLength))) {
 
               const char* txpStart = t.Sequence();
               const char* txpEnd = txpStart + t.RefLength;
@@ -1010,9 +1010,10 @@ void processReadsQuasi(
 
               if ((startPos1 >= readBias1.contextBefore(read1RC) and
                    startPos1 + readBias1.contextAfter(read1RC) <
-                   t.RefLength) and
+                   static_cast<int32_t>(t.RefLength)) and
                   (startPos2 >= readBias2.contextBefore(read2RC) and
-                   startPos2 + readBias2.contextAfter(read2RC) < t.RefLength)) {
+                   startPos2 + readBias2.contextAfter(read2RC) <
+                   static_cast<int32_t>(t.RefLength))) {
 
                 int32_t fwPos = (h.fwd) ? startPos1 : startPos2;
                 int32_t rcPos = (h.fwd) ? startPos2 : startPos1;
@@ -1212,7 +1213,7 @@ void processReadLibrary(
     // True if we have a 64-bit SA index, false otherwise
     bool largeIndex = sidx->is64BitQuasi();
     bool perfectHashIndex = sidx->isPerfectHashQuasi();
-    for (int i = 0; i < numThreads; ++i) {
+    for (size_t i = 0; i < numThreads; ++i) {
       // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
       // change value before the lambda below is evaluated --- crazy!
       if (largeIndex) {
@@ -1280,8 +1281,8 @@ void processReadLibrary(
 
     } // End spawn all threads
 
-    for (int i = 0; i < numThreads; ++i) {
-      threads[i].join();
+    for (auto& t : threads) {
+      t.join();
     }
 
     pairedParserPtr->stop();

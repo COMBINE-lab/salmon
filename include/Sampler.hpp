@@ -154,7 +154,7 @@ void sampleMiniBatch(AlignmentLibraryT<FragT>& alnLib,
         // their probabilities
         for (auto a : alnGroup->alignments()) {
           auto transcriptID = a->transcriptID();
-          if (transcriptID < 0 or transcriptID >= refs.size()) {
+          if (transcriptID < 0 or transcriptID >= static_cast<decltype(transcriptID)>(refs.size())) {
             log->warn("Invalid Transcript ID: {}\n", transcriptID);
           }
           hitList[transcriptID].emplace_back(a);

@@ -556,11 +556,11 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
         }
 
         if (rangeFactorization > 0) {
-          int txpsSize = txpIDs.size();
-          int rangeCount = std::sqrt(txpsSize) + rangeFactorization;
+          int32_t txpsSize = txpIDs.size();
+          int32_t rangeCount = std::sqrt(txpsSize) + rangeFactorization;
 
-          for (size_t i = 0; i < txpsSize; i++) {
-            int rangeNumber = auxProbs[i] * rangeCount;
+          for (int32_t i = 0; i < txpsSize; i++) {
+            int32_t rangeNumber = auxProbs[i] * rangeCount;
             txpIDs.push_back(rangeNumber);
           }
         }
@@ -594,7 +594,7 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
           }
         } else if (aln.libFormat().type == ReadType::SINGLE_END) {
           int32_t p = (aln.pos < 0) ? 0 : aln.pos;
-          if (p >= transcript.RefLength) {
+          if (static_cast<uint32_t>(p) >= transcript.RefLength) {
             p = transcript.RefLength - 1;
           }
           // Single-end or orphan
@@ -614,10 +614,12 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
               int32_t posFW = aln.fwd ? aln.pos : aln.matePos;
               int32_t posRC = aln.fwd ? aln.matePos : aln.pos;
               posFW = posFW < 0 ? 0 : posFW;
-              posFW = posFW >= transcript.RefLength ? transcript.RefLength - 1
+              posFW = posFW >= static_cast<int32_t>(transcript.RefLength) ?
+                               static_cast<int32_t>(transcript.RefLength) - 1
                                                     : posFW;
               posRC = posRC < 0 ? 0 : posRC;
-              posRC = posRC >= transcript.RefLength ? transcript.RefLength - 1
+              posRC = posRC >= static_cast<int32_t>(transcript.RefLength) ?
+                               static_cast<int32_t>(transcript.RefLength) - 1
                                                     : posRC;
               observedPosBiasFwd[lengthClassIndex].addMass(
                   posFW, transcript.RefLength, aln.logProb);
@@ -630,7 +632,8 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
           case rapmap::utils::MateStatus::SINGLE_END: {
             int32_t pos = aln.pos;
             pos = pos < 0 ? 0 : pos;
-            pos = pos >= transcript.RefLength ? transcript.RefLength - 1 : pos;
+            pos = pos >= static_cast<int32_t>(transcript.RefLength) ?
+                         static_cast<int32_t>(transcript.RefLength) - 1 : pos;
             if (aln.fwd) {
               observedPosBiasFwd[lengthClassIndex].addMass(
                   pos, transcript.RefLength, aln.logProb);
@@ -649,7 +652,7 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
             int32_t start = std::min(aln.pos, aln.matePos);
             int32_t stop = start + aln.fragLen - 1;
             // WITH CONTEXT
-            if (start >= 0 and stop < transcript.RefLength) {
+            if (start >= 0 and stop < static_cast<int32_t>(transcript.RefLength)) {
               bool valid{false};
               auto desc = transcript.gcDesc(start, stop, valid);
               if (valid) {
@@ -669,7 +672,7 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
             int32_t start = aln.fwd ? aln.pos : std::max(0, aln.pos - cmean);
             int32_t stop = start + cmean;
             // WITH CONTEXT
-            if (start >= 0 and stop < transcript.RefLength) {
+            if (start >= 0 and stop < static_cast<int32_t>(transcript.RefLength)) {
               bool valid{false};
               auto desc = transcript.gcDesc(start, stop, valid);
               if (valid) {
@@ -1059,8 +1062,8 @@ void processReadsQuasi(
             bool success = false;
 
             if ((dir1 != dir2) and // Shouldn't be from the same strand
-                (startPos1 > 0 and startPos1 < t.RefLength) and
-                (startPos2 > 0 and startPos2 < t.RefLength)) {
+                (startPos1 > 0 and startPos1 < static_cast<int32_t>(t.RefLength)) and
+                (startPos2 > 0 and startPos2 < static_cast<int32_t>(t.RefLength))) {
 
               const char* txpStart = t.Sequence();
               const char* txpEnd = txpStart + t.RefLength;
@@ -1082,9 +1085,9 @@ void processReadsQuasi(
 
               if ((startPos1 >= readBias1.contextBefore(read1RC) and
                    startPos1 + readBias1.contextAfter(read1RC) <
-                       t.RefLength) and
+                   static_cast<int32_t>(t.RefLength)) and
                   (startPos2 >= readBias2.contextBefore(read2RC) and
-                   startPos2 + readBias2.contextAfter(read2RC) < t.RefLength)) {
+                   startPos2 + readBias2.contextAfter(read2RC) < static_cast<int32_t>(t.RefLength))) {
 
                 int32_t fwPos = (h.fwd) ? startPos1 : startPos2;
                 int32_t rcPos = (h.fwd) ? startPos2 : startPos1;
@@ -1373,7 +1376,7 @@ void processReadsQuasi(
           int32_t startPos = h.fwd ? pos : pos + h.readLen;
 
           auto& t = transcripts[h.tid];
-          if (startPos > 0 and startPos < t.RefLength) {
+          if (startPos > 0 and startPos < static_cast<int32_t>(t.RefLength)) {
             auto& readBias = (h.fwd) ? readBiasFW : readBiasRC;
             const char* txpStart = t.Sequence();
             const char* readStart = txpStart + startPos;
@@ -1383,7 +1386,7 @@ void processReadsQuasi(
             // If the context exists around the read, add it to the observed
             // read start sequences.
             if (startPos >= readBias.contextBefore(!h.fwd) and
-                startPos + readBias.contextAfter(!h.fwd) < t.RefLength) {
+                startPos + readBias.contextAfter(!h.fwd) < static_cast<int32_t>(t.RefLength)) {
               context.from_chars(txpStart + startPos -
                                  readBias.contextBefore(!h.fwd));
               if (!h.fwd) {
@@ -1582,7 +1585,7 @@ void processReadLibrary(
 
     switch (indexType) {
     case SalmonIndexType::FMD: {
-      for (int i = 0; i < numThreads; ++i) {
+      for (size_t i = 0; i < numThreads; ++i) {
         // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
         // change value before the lambda below is evaluated --- crazy!
         auto threadFun = [&, i]() -> void {
@@ -1605,7 +1608,7 @@ void processReadLibrary(
       // True if we have a 64-bit SA index, false otherwise
       bool largeIndex = sidx->is64BitQuasi();
       bool perfectHashIndex = sidx->isPerfectHashQuasi();
-      for (int i = 0; i < numThreads; ++i) {
+      for (size_t i = 0; i < numThreads; ++i) {
         // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
         // change value before the lambda below is evaluated --- crazy!
         if (largeIndex) {
@@ -1696,8 +1699,8 @@ void processReadLibrary(
     break;
     } // end switch
 
-    for (int i = 0; i < numThreads; ++i) {
-      threads[i].join();
+    for (auto& t : threads) {
+      t.join();
     }
 
     // If we don't have a sufficient number of assigned fragments, then
@@ -1804,7 +1807,7 @@ void processReadLibrary(
     singleParserPtr->start();
     switch (indexType) {
     case SalmonIndexType::FMD: {
-      for (int i = 0; i < numThreads; ++i) {
+      for (size_t i = 0; i < numThreads; ++i) {
         // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
         // change value before the lambda below is evaluated --- crazy!
         auto threadFun = [&, i]() -> void {
@@ -1828,7 +1831,7 @@ void processReadLibrary(
       // True if we have a 64-bit SA index, false otherwise
       bool largeIndex = sidx->is64BitQuasi();
       bool perfectHashIndex = sidx->isPerfectHashQuasi();
-      for (int i = 0; i < numThreads; ++i) {
+      for (size_t i = 0; i < numThreads; ++i) {
 
         // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
         // change value before the lambda below is evaluated --- crazy!
@@ -1922,8 +1925,8 @@ void processReadLibrary(
     }   // End Quasi index
     break;
     }
-    for (int i = 0; i < numThreads; ++i) {
-      threads[i].join();
+    for (auto& t : threads) {
+      t.join();
     }
 
     // If we don't have a sufficient number of assigned fragments, then

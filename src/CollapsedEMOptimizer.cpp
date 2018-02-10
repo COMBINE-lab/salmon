@@ -941,7 +941,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
       }
 
       // Check for strangeness with the lengths.
-      for (size_t i = 0; i < effLens.size(); ++i) {
+      for (int32_t i = 0; i < effLens.size(); ++i) {
         if (effLens(i) <= 0.0) {
           jointLog->warn("Transcript {} had length {}", i, effLens(i));
         }

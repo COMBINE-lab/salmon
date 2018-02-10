@@ -1846,7 +1846,7 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
   };
 
   auto revComplement = [](const char* s, int32_t l, std::string& o) -> void {
-    if (l > o.size()) {
+    if (l > static_cast<int32_t>(o.size())) {
       o.resize(l, 'A');
     }
     int32_t j = 0;

@@ -220,7 +220,7 @@ uint32_t getLeftBoundary(std::vector<size_t>& sortedIdx,
   // order
   double cumCount{0.0};
   std::vector<double> freqs(topxBarcodes);
-  for(auto i=0; i<topxBarcodes; i++){
+  for(uint32_t i = 0; i < topxBarcodes; i++){
     size_t ind = sortedIdx[topxBarcodes-i];
     cumCount += freqCounter[ind];
     freqs[i] = std::log(cumCount);
@@ -569,7 +569,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
 
     singleParserPtr->start();
 
-    for (int i = 0; i < numThreads; ++i) {
+    for (decltype(numThreads) i = 0; i < numThreads; ++i) {
       // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
       // change value before the lambda below is evaluated --- crazy!
       auto threadFun = [&, i]() -> void {
@@ -579,8 +579,8 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
       threads.emplace_back(threadFun);
     }
 
-    for (int i = 0; i < numThreads; ++i) {
-      threads[i].join();
+    for (auto& t : threads) {
+      t.join();
     }
 
     singleParserPtr->stop();
