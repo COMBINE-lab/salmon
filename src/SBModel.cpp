@@ -285,7 +285,7 @@ bool SBModel::train(CountVecT& kmerCounts, const uint32_t K) {
 
   if (!_trained) {
     // For each starting position
-    for (int32_t pos = 0; pos < K - _order.back(); ++pos) {
+    for (int32_t pos = 0; pos < static_cast<int32_t>(K - _order.back()); ++pos) {
       uint32_t offset = 2 * (K - (pos + 1) - _order[pos]);
 
       // See how frequently sub-contexts starting at this position appear
@@ -302,7 +302,7 @@ bool SBModel::train(CountVecT& kmerCounts, const uint32_t K) {
     _probs.col(2) /= _probs.col(2).sum();
     // now normalize the rest of the sub-contexts in groups
     // each consecutive group of 4 rows shares the same 2-mer prefix
-    for (int32_t pos = 3; pos < K - _order.back(); ++pos) {
+    for (int32_t pos = 3; pos < static_cast<int32_t>(K - _order.back()); ++pos) {
       int32_t numStates = constExprPow(4, _order[pos]);
       size_t rowsPerNode = 4;
       size_t nodeStart = 0;
