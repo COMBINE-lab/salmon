@@ -532,7 +532,7 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
           }
         } else if (aln.libFormat().type == ReadType::SINGLE_END) {
           int32_t p = (aln.pos < 0) ? 0 : aln.pos;
-          if (p >= transcript.RefLength) {
+          if (static_cast<uint32_t>(p) >= transcript.RefLength) {
             p = transcript.RefLength - 1;
           }
           // Single-end or orphan
