@@ -602,7 +602,7 @@ inline void collectHitsForRead(SalmonIndex* sidx, const bwtintv_v* a,
 
   // For each MEM
   int firstSeedLen{-1};
-  for (int i = 0; i < auxHits->mem.n; ++i) {
+  for (decltype(auxHits->mem.n) i = 0; i < auxHits->mem.n; ++i) {
     // A pointer to the interval of the MEMs occurences
     bwtintv_t* p = &auxHits->mem.a[i];
     // The start and end positions in the query string (i.e. read) of the MEM
@@ -619,9 +619,10 @@ inline void collectHitsForRead(SalmonIndex* sidx, const bwtintv_v* a,
     */
 
     int64_t k;
-    step = p->x[2] > memOptions->max_occ ? p->x[2] / memOptions->max_occ : 1;
+    step = (p->x[2] > static_cast<bwtint_t>(memOptions->max_occ)) ? p->x[2] / memOptions->max_occ : 1;
     // For every occurrence of the MEM
-    for (k = count = 0; k < p->x[2] && count < memOptions->max_occ;
+    for (k = count = 0;
+         k < static_cast<decltype(k)>(p->x[2]) && count < static_cast<decltype(count)>(memOptions->max_occ);
          k += step, ++count) {
       //bwtint_t pos;
       bwtint_t startPos, endPos;
@@ -737,7 +738,7 @@ inline void collectHitsForRead(SalmonIndex* sidx, const bwtintv_v* a,
 
           auto len2 = endPos - idx->bns->anns[refIDEnd].offset;
           auto len1 = slen - len2;
-          if (std::max(len1, len2) < memOptions->min_seed_len) {
+          if (std::max(len1, len2) < static_cast<decltype(len1)>(memOptions->min_seed_len)) {
             continue;
           }
 
@@ -780,7 +781,7 @@ inline void collectHitsForRead(SalmonIndex* sidx, const bwtintv_v* a,
 
       auto hitIt = std::find_if(hits.begin(), hits.end(),
                                 [refID](CoverageCalculator& c) -> bool {
-                                  return c.targetID == refID;
+                                  return (c.targetID) == static_cast<decltype(c.targetID)>(refID);
                                 });
       if (isRev) {
         if (hitIt == hits.end()) {
@@ -917,7 +918,7 @@ inline void getHitsForFragment(
 
     leftReadLength = readLen;
 
-    for (int p = 0; p < readLen; ++p) {
+    for (decltype(readLen) p = 0; p < readLen; ++p) {
       readStr[p] = nst_nt4_table[static_cast<int>(readStr[p])];
     }
 
@@ -933,7 +934,7 @@ inline void getHitsForFragment(
 
     rightReadLength = readLen;
 
-    for (int p = 0; p < readLen; ++p) {
+    for (decltype(readLen) p = 0; p < readLen; ++p) {
       readStr[p] = nst_nt4_table[static_cast<int>(readStr[p])];
     }
 
@@ -1070,7 +1071,7 @@ inline void getHitsForFragment(
           hitList.isUniquelyMapped() = false;
         }
 
-        if (transcriptID < lastTranscriptId) {
+        if (static_cast<decltype(lastTranscriptId)>(transcriptID) < lastTranscriptId) {
           sortedByTranscript = false;
         }
 
@@ -1228,7 +1229,7 @@ inline void getHitsForFragment(
         }
 
         int32_t minHitPos = std::min(end1Pos, end2Pos);
-        if (transcriptID < lastTranscriptId) {
+        if (static_cast<decltype(lastTranscriptId)>(transcriptID) < lastTranscriptId) {
           sortedByTranscript = false;
         }
         // ANCHOR TEST
