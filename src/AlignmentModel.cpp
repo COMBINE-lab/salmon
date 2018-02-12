@@ -427,8 +427,6 @@ void AlignmentModel::update(
   // unsigned version of transcriptIdx
   size_t uTranscriptIdx = static_cast<size_t>(transcriptIdx);
 
-  // std::stringstream readStream, matchStream, refStream;
-
   uint32_t* cigar = bam_cigar(read);
   uint32_t cigarLen = bam_cigar_len(read);
   uint8_t* qseq = reinterpret_cast<uint8_t*>(bam_seq(read));
