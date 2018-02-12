@@ -38,6 +38,7 @@ BuildSalmonIndex.cpp
 Dedup.cpp
 Alevin.cpp
 SalmonAlevin.cpp
+WhiteList.cpp
 SalmonQuantify.cpp
 FragmentLengthDistribution.cpp
 FragmentStartPositionDistribution.cpp

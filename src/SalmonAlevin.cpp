@@ -34,7 +34,6 @@
 #include <sstream>
 #include <thread>
 #include <unordered_map>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -126,6 +125,7 @@
 #include "SingleAlignmentFormatter.hpp"
 #include "RapMapUtils.hpp"
 #include "AlevinKmer.hpp"
+#include "WhiteList.hpp"
 
 namespace alevin{
   extern "C" {
@@ -1539,7 +1539,9 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
-                boost::program_options::parsed_options& orderedOptions) {
+                boost::program_options::parsed_options& orderedOptions,
+                CFreqMapT& freqCounter){
+
   using std::cerr;
   using std::vector;
   using std::string;
@@ -1678,6 +1680,25 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
     }
 
     jointLog->flush();
+
+    if(not boost::filesystem::exists(aopt.whitelistFile)){
+      jointLog->info("Starting white listing");
+
+      bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
+                                                                        umiCount,
+                                                                        trueBarcodesVec,
+                                                                        freqCounter);
+      if (!whitelistingSuccess) {
+        jointLog->error(
+                        "The white listing algorithm failed. This is likely the result of "
+                        "bad input (or a bug). If you cannot track down the cause, please "
+                        "report this issue on GitHub.");
+        jointLog->flush();
+        exit(1);
+      }
+      std::cout<< "\n\n";
+      jointLog->info("Finished white listing");
+    }
 
     //CollapsedJointEMOptimizer optimizer;
     //salmon::utils::normalizeAlphas(sopt, experiment);
@@ -1845,23 +1866,27 @@ int alevinQuant(AlevinOpts<apt::DropSeq>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
-                boost::program_options::parsed_options& orderedOptions);
+                boost::program_options::parsed_options& orderedOptions,
+                CFreqMapT& freqCounter);
 template
 int alevinQuant(AlevinOpts<apt::InDrop>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
-                boost::program_options::parsed_options& orderedOptions);
+                boost::program_options::parsed_options& orderedOptions,
+                CFreqMapT& freqCounter);
 template
 int alevinQuant(AlevinOpts<apt::Chromium>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
-                boost::program_options::parsed_options& orderedOptions);
+                boost::program_options::parsed_options& orderedOptions,
+                CFreqMapT& freqCounter);
 template
 int alevinQuant(AlevinOpts<apt::Custom>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
-                boost::program_options::parsed_options& orderedOptions);
+                boost::program_options::parsed_options& orderedOptions,
+                CFreqMapT& freqCounter);
 

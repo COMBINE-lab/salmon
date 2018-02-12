@@ -73,10 +73,11 @@ namespace aut = alevin::utils;
 
 template <typename ProtocolT>
 int alevinQuant(AlevinOpts<ProtocolT>& aopt,
-                  SalmonOpts& sopt,
-                  SoftMapT& barcodeMap,
-                  TrueBcsT& trueBarcodes,
-                  boost::program_options::parsed_options& orderedOptions);
+                SalmonOpts& sopt,
+                SoftMapT& barcodeMap,
+                TrueBcsT& trueBarcodes,
+                boost::program_options::parsed_options& orderedOptions,
+                CFreqMapT& freqCounter);
 
 //colors for progress monitoring
 const char RESET_COLOR[] = "\x1b[0m";
@@ -543,7 +544,8 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
                      std::vector<std::string>& readFiles,
                      AlevinOpts<ProtocolT>& aopt,
                      SoftMapT& barcodeSoftMap,
-                     TrueBcsT& trueBarcodes){
+                     TrueBcsT& trueBarcodes,
+                     CFreqMapT& freqCounter){
   if (not aopt.nobarcode){
     //Avi -> HardCoding threads for Barcode Parsing
     //2 for consuming 1 for generating since
@@ -555,9 +557,6 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
     std::vector<std::thread> threads;
     std::mutex ioMutex;
     std::atomic<uint64_t> totNumBarcodes{0}, usedNumBarcodes{0};
-
-    //frequency counter
-    CFreqMapT freqCounter;
 
     if (aopt.numThreads <= 3) {
       numThreads = 1;
@@ -710,19 +709,24 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
   */
   SoftMapT barcodeSoftMap;
   TrueBcsT trueBarcodes;
+  //frequency counter
+  CFreqMapT freqCounter;
+
   aopt.jointLog->info("Processing barcodes files (if Present) \n\n ");
 
   processBarcodes(barcodeFiles,
                   readFiles,
                   aopt,
                   barcodeSoftMap,
-                  trueBarcodes);
+                  trueBarcodes,
+                  freqCounter);
 
   aopt.jointLog->flush();
 
   if(!aopt.noQuant){
     aopt.jointLog->info("Done with Barcode Processing; Moving to Quantify\n");
-    alevinQuant(aopt, sopt, barcodeSoftMap, trueBarcodes, orderedOptions);
+    alevinQuant(aopt, sopt, barcodeSoftMap, trueBarcodes,
+                orderedOptions, freqCounter);
   }
   else{
     boost::filesystem::path cmdInfoPath = vm["output"].as<std::string>();
@@ -1182,7 +1186,7 @@ int salmonBarcoding(int argc, char* argv[]) {
      "noquant", po::bool_switch()->default_value(false),
      "Don't run downstream barcode-Salmon model.")
     (
-     "nosoftmap", po::bool_switch()->default_value(false),
+     "nosoftmap", po::bool_switch()->default_value(true),
      "Don't use soft-assignment for quant instead do hard-assignment.")
     (
      "dumpfq", po::bool_switch()->default_value(false),
