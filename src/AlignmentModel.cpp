@@ -415,7 +415,7 @@ void AlignmentModel::update(
     std::vector<AtomicMatrix<double>>& transitionProbs) {
   using namespace salmon::stringtools;
   bool useQual{false};
-  size_t readIdx{0};
+  int32_t readIdx{0};
   auto transcriptIdx = bam_pos(read);
   size_t transcriptLen = ref.RefLength;
   // if the read starts before the beginning of the transcript,
@@ -426,8 +426,6 @@ void AlignmentModel::update(
   }
   // unsigned version of transcriptIdx
   size_t uTranscriptIdx = static_cast<size_t>(transcriptIdx);
-
-  // std::stringstream readStream, matchStream, refStream;
 
   uint32_t* cigar = bam_cigar(read);
   uint32_t cigarLen = bam_cigar_len(read);

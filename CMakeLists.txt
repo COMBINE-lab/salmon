@@ -630,8 +630,8 @@ message("Build system will compile Staden IOLib")
 message("==================================================================")
 ExternalProject_Add(libstadenio
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/staden-io_lib/archive/v1.14.8.tar.gz -o staden-io_lib-v1.14.8.tar.gz &&
-                     ${SHASUM} 1e20adc298d3c0b03c71fdeac72fd6337540fb3273a27ea45cca6813178d2236  staden-io_lib-v1.14.8.tar.gz &&
+    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/staden-io_lib/archive/v1.14.8.1.tar.gz -o staden-io_lib-v1.14.8.tar.gz &&
+                     ${SHASUM} f6f30eefa478cfb708f3109a35fb6ffa0e24951d9d971985df2cef5919dd0bc3 staden-io_lib-v1.14.8.tar.gz &&
                      mkdir -p staden-io_lib-1.14.8 &&
                      tar -xzf staden-io_lib-v1.14.8.tar.gz --strip-components=1 -C staden-io_lib-1.14.8 &&
                      rm -fr staden-io_lib &&
