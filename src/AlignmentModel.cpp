@@ -415,7 +415,7 @@ void AlignmentModel::update(
     std::vector<AtomicMatrix<double>>& transitionProbs) {
   using namespace salmon::stringtools;
   bool useQual{false};
-  size_t readIdx{0};
+  int32_t readIdx{0};
   auto transcriptIdx = bam_pos(read);
   size_t transcriptLen = ref.RefLength;
   // if the read starts before the beginning of the transcript,
