@@ -125,7 +125,6 @@
 #include "SingleAlignmentFormatter.hpp"
 #include "RapMapUtils.hpp"
 #include "AlevinKmer.hpp"
-#include "WhiteList.hpp"
 
 namespace alevin{
   extern "C" {
@@ -1663,7 +1662,8 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
       bool optSuccess = optimizer.optimize(experiment, aopt,
                                            gzw,
                                            trueBarcodesVec,
-                                           umiCount);
+                                           umiCount,
+                                           freqCounter);
       if (!optSuccess) {
         jointLog->error(
                         "The optimization algorithm failed. This is likely the result of "
@@ -1680,25 +1680,6 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
     }
 
     jointLog->flush();
-
-    if(not boost::filesystem::exists(aopt.whitelistFile)){
-      jointLog->info("Starting white listing");
-
-      bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
-                                                                        umiCount,
-                                                                        trueBarcodesVec,
-                                                                        freqCounter);
-      if (!whitelistingSuccess) {
-        jointLog->error(
-                        "The white listing algorithm failed. This is likely the result of "
-                        "bad input (or a bug). If you cannot track down the cause, please "
-                        "report this issue on GitHub.");
-        jointLog->flush();
-        exit(1);
-      }
-      std::cout<< "\n\n";
-      jointLog->info("Finished white listing");
-    }
 
     //CollapsedJointEMOptimizer optimizer;
     //salmon::utils::normalizeAlphas(sopt, experiment);

@@ -594,6 +594,43 @@ bool GZipWriter::writeAbundances(
   return true;
 }
 
+//bool GZipWriter::writeAbundances(
+//                                 std::vector<double>& alphas,
+//                                 std::vector<Transcript>& transcripts) {
+//#if defined __APPLE__
+//  spin_lock::scoped_lock sl(writeMutex_);
+//#else
+//  std::lock_guard<std::mutex> lock(writeMutex_);
+//#endif
+//  namespace bfs = boost::filesystem;
+//  if (!countMatrixStream_) {
+//    countMatrixStream_.reset(new boost::iostreams::filtering_ostream);
+//    countMatrixStream_->push(boost::iostreams::gzip_compressor(6));
+//    auto countMatFilename = path_ / "alevin" / "quants.mat.gz";
+//    countMatrixStream_->push(boost::iostreams::file_sink(
+//                                                         countMatFilename.string(),
+//                                                         std::ios_base::out | std::ios_base::binary));
+//  }
+//
+//  boost::iostreams::filtering_ostream& ofile = *countMatrixStream_;
+//  size_t num = offsets.size();
+//
+//  bfs::path fname = path_ / "quant.sf";
+//  std::unique_ptr<std::FILE, int (*)(std::FILE *)> output(std::fopen(fname.c_str(), "w"), std::fclose);
+//
+//  fmt::print(output.get(), "Name\tLength\tNumMolecules\n");
+//
+//  // Now posterior has the transcript fraction
+//  for (size_t i=0; i < transcripts.size(); i++) {
+//    fmt::print(output.get(), "{}\t{}\t{}\n",
+//               transcripts[i].RefName,
+//               transcripts[i].CompleteLength,
+//               alphas[i]);
+//  }
+//  return true;
+//}
+
+
 template <typename ExpT>
 bool GZipWriter::writeEmptyAbundances(const SalmonOpts& sopt, ExpT& readExp) {
 

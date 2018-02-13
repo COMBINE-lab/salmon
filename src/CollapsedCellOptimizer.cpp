@@ -24,7 +24,9 @@ bool runPerCellEM(
                   uint64_t totalNumFrags,
                   std::shared_ptr<spdlog::logger>& jointlog,
                   bfs::path& outDirPath,
-                  std::unordered_set<uint32_t>& activeTranscriptIds) {
+                  std::unordered_set<uint32_t>& activeTranscriptIds,
+                  std::vector<std::vector<double>>& countMatrix,
+                  size_t currBarcodeIndex){
 
   // An EM termination criterion, adopted from Bray et al. 2016
   uint32_t minIter {50};
@@ -93,6 +95,7 @@ bool runPerCellEM(
 
   GZipWriter gzw(outDirPath, jointlog);
   gzw.writeAbundances(alphas, const_cast<std::vector<Transcript>&>(transcripts));
+  countMatrix[currBarcodeIndex] = alphas;
 
   return true;
 }
@@ -101,14 +104,14 @@ bool runPerCellEM(
 void optimizeCell(SCExpT& experiment,
                   std::vector<std::string>& trueBarcodes,
                   std::atomic<uint32_t>& barcode,
-                  size_t totalCells,
-                  eqMapT& eqMap,
+                  size_t totalCells, eqMapT& eqMap,
                   std::deque<TranscriptGroup>& orderedTgroup,
                   std::shared_ptr<spdlog::logger>& jointlog,
                   bfs::path& outDir, std::vector<uint32_t>& umiCount,
                   tbb::atomic<uint32_t>& skippedCBcount,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
-                  spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap){
+                  spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                  std::vector<std::vector<double>>& countMatrix){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
 
@@ -284,7 +287,9 @@ void optimizeCell(SCExpT& experiment,
                                  totalnumfrags,
                                  jointlog,
                                  qDirPath,
-                                 activetranscriptids);
+                                 activetranscriptids,
+                                 countMatrix,
+                                 trueBarcodeIdx);
       if( !isEMok ){
         jointlog->error("EM iteration for cell {} failed \n"
                         "Please Report this on github.", trueBarcodeStr);
@@ -352,7 +357,8 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<ProtocolT>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
-                                      std::vector<uint32_t>& umiCount){
+                                      std::vector<uint32_t>& umiCount,
+                                      CFreqMapT& freqCounter){
   double relDiffTolerance{0.01};
   uint32_t maxIter {10000};
 
@@ -382,6 +388,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
 
   tbb::atomic<uint32_t> skippedCBcount{0};
   std::atomic<uint32_t> bcount{0};
+  std::vector<std::vector<double>> countMatrix(numCells);
 
   std::vector<std::thread> workerThreads;
   for (size_t tn = 0; tn < numWorkerThreads; ++tn) {
@@ -400,7 +407,8 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                std::ref(gzw),
                                aopt.protocol.umiLength,
                                aopt.noEM,
-                               std::ref(txpToGeneMap));
+                               std::ref(txpToGeneMap),
+                               std::ref(countMatrix));
   }
 
   for (auto& t : workerThreads) {
@@ -409,6 +417,26 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   if(skippedCBcount>0){
     aopt.jointLog->warn("Skipped {} barcodes due to No mapped read",
                         skippedCBcount);
+  }
+
+  if(not boost::filesystem::exists(aopt.whitelistFile)){
+    jointLog->info("Starting white listing");
+    bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
+                                                                      umiCount,
+                                                                      trueBarcodes,
+                                                                      freqCounter,
+                                                                      countMatrix,
+                                                                      txpToGeneMap);
+    if (!whitelistingSuccess) {
+      aopt.jointLog->error(
+                           "The white listing algorithm failed. This is likely the result of "
+                           "bad input (or a bug). If you cannot track down the cause, please "
+                           "report this issue on GitHub.");
+      aopt.jointLog->flush();
+      return false;
+    }
+    std::cout<< "\n\n";
+    aopt.jointLog->info("Finished white listing");
   }
 
   return true;

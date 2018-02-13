@@ -19,6 +19,7 @@
 
 #include "AlevinOpts.hpp"
 #include "SingleCellProtocols.hpp"
+#include "WhiteList.hpp"
 #include "Dedup.hpp"
 
 #include "cuckoohash_map.hh"
