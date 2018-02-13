@@ -52,7 +52,8 @@ void optimizeCell(SCExpT& experiment,
                   bfs::path& outDir, std::vector<uint32_t>& umiCount,
                   tbb::atomic<uint32_t>& skippedCBcount,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
-                  spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap);
+                  spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                  std::vector<std::vector<double>>& countMatrix);
 
 class CollapsedCellOptimizer {
 public:
@@ -65,7 +66,8 @@ public:
                 AlevinOpts<ProtocolT>& aopt,
                 GZipWriter& gzw,
                 std::vector<std::string>& trueBarcodes,
-                std::vector<uint32_t>& umiCount);
+                std::vector<uint32_t>& umiCount,
+                CFreqMapT& freqCounter);
 };
 
 using VecT = CollapsedCellOptimizer::SerialVecType;

@@ -314,7 +314,7 @@ void optimizeCell(SCExpT& experiment,
 }
 
 void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                     const std::vector<Transcript>& transcripts,
+                     size_t numGenes, const std::vector<Transcript>& transcripts,
                      const std::string& geneMapFile){
   std::string fname = geneMapFile;
   std::ifstream t2gFile(fname);
@@ -349,6 +349,7 @@ void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
     }
     t2gFile.close();
   }
+  numGenes = geneCount;
 }
 
 
@@ -382,7 +383,8 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   }
 
   spp::sparse_hash_map<uint32_t, uint32_t> txpToGeneMap;
-  getTxpToGeneMap(txpToGeneMap,
+  size_t numGenes{0};
+  getTxpToGeneMap(txpToGeneMap, numGenes,
                   experiment.transcripts(),
                   aopt.geneMapFile.string());
 
@@ -420,11 +422,12 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   }
 
   if(not boost::filesystem::exists(aopt.whitelistFile)){
-    jointLog->info("Starting white listing");
+    aopt.jointLog->info("Starting white listing");
     bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
                                                                       umiCount,
                                                                       trueBarcodes,
                                                                       freqCounter,
+                                                                      numGenes,
                                                                       countMatrix,
                                                                       txpToGeneMap);
     if (!whitelistingSuccess) {
@@ -449,22 +452,26 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::DropSeq>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
-                                      std::vector<uint32_t>& umiCount);
+                                      std::vector<uint32_t>& umiCount,
+                                      CFreqMapT& freqCounter);
 template
 bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::InDrop>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
-                                      std::vector<uint32_t>& umiCount);
+                                      std::vector<uint32_t>& umiCount,
+                                      CFreqMapT& freqCounter);
 template
 bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::Chromium>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
-                                      std::vector<uint32_t>& umiCount);
+                                      std::vector<uint32_t>& umiCount,
+                                      CFreqMapT& freqCounter);
 template
 bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::Custom>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
-                                      std::vector<uint32_t>& umiCount);
+                                      std::vector<uint32_t>& umiCount,
+                                      CFreqMapT& freqCounter);

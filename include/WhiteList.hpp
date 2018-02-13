@@ -9,6 +9,7 @@
 
 #include "SingleCellProtocols.hpp"
 #include "BarcodeGroup.hpp"
+#include "RapMapUtils.hpp"
 
 namespace alevin {
   namespace whitelist {
@@ -16,7 +17,9 @@ namespace alevin {
     bool performWhitelisting(AlevinOpts<ProtocolT>& aopt,
                              std::vector<uint32_t>& umiCount,
                              std::vector<std::string>& trueBarcodes,
-                             CFreqMapT& freqCounter);
+                             CFreqMapT& freqCounter, size_t numGenes,
+                             std::vector<std::vector<double>>& countMatrix,
+                             spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap);
   }
 }
 
