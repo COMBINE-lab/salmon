@@ -1,6 +1,7 @@
 #include "WhiteList.hpp"
 #include <cmath>
 #include <cassert>
+#include <fstream>
 
 namespace alevin {
   namespace whitelist {
