@@ -1,5 +1,6 @@
 #include "WhiteList.hpp"
 #include <cmath>
+#include <cassert>
 
 namespace alevin {
   namespace whitelist {
@@ -9,8 +10,8 @@ namespace alevin {
       //calculate pearsonr
     }
 
-    use DoubleMatrixT std::vector<std::vector<double>> ;
-    use DoubleVectorT std::vector<double> ;
+    using DoubleMatrixT = std::vector<std::vector<double>> ;
+    using DoubleVectorT = std::vector<double> ;
 
     double get_log_likelihood(double prior,
                               DoubleVectorT& sigma,
@@ -20,7 +21,7 @@ namespace alevin {
       double mean, variance, likelihood {0.5};
 
       // Gaussian Probability
-      for (size_t i=0; i<sigma.len(); i++){
+      for (size_t i=0; i<sigma.size(); i++){
         variance = sigma[i];
         mean = theta[i];
 
@@ -36,8 +37,8 @@ namespace alevin {
                              DoubleMatrixT& theta,
                              DoubleVectorT& query,
                              DoubleVectorT& classPrior){
-      std::assert(sigma.size() == theta.size());
-      std::assert(query.size() == theta[0].size());
+      //std::assert(sigma.size() == theta.size());
+      //std::assert(query.size() == theta[0].size());
 
       double trueProbability = get_log_likelihood(classPrior[0],
                                                   sigma[0],
@@ -56,48 +57,99 @@ namespace alevin {
       }
     }
 
-    void update_mean_variance(DoubleMatrixT& features,
+    void update_mean_variance(DoubleMatrixT features,
                               DoubleMatrixT& theta,
                               DoubleMatrixT& sigma,
-                              DoubleVectorT& classCount,
-                              uint8_t is_true){
-      std::assert( theta.size() == sigma.size() );
+                              std::vector<uint32_t>& classCount,
+                              uint32_t is_true){
       size_t numFeatures = features[0].size();
 
       for ( auto& feature: features ){
-        for (size_t j=0; j<numFeatures; j++){
+        for (size_t i=0; i<numFeatures; i++){
           theta[is_true][i] += feature[i];
         }
       }
+
+      // get mean of the dataset
+      for ( size_t i=0; i<theta[is_true].size(); i++ ){
+        theta[is_true][i] /= classCount[is_true];
+      }
+
+      // get variance
+      for ( auto& feature: features ){
+        for (size_t i=0; i<numFeatures; i++){
+          sigma[is_true][i] += std::pow((feature[i] - theta[is_true][i]), 2);
+        }
+      }
+
+      // get variance of the dataset
+      for ( size_t i=0; i<sigma[is_true].size(); i++ ){
+        sigma[is_true][i] /= classCount[is_true];
+      }
+    }
+
+    void naive_bayes_fit(DoubleMatrixT& features,
+                         DoubleMatrixT& theta,
+                         DoubleMatrixT& sigma,
+                         std::vector<uint32_t>& classCount,
+                         DoubleVectorT& classPrior,
+                         size_t numClasses,
+                         size_t numTrueCells,
+                         size_t numAmbiguousCells,
+                         size_t numFalseCells){
+      //std::assert( theta.size() == sigma.size() );
+
+      size_t numCells = features.size();
+      size_t numFeatures = features[0].size();
+
+      size_t trueStartIdx{0}, trueEndIdx{numTrueCells-1};
+      size_t falseStartIdx{numTrueCells+numAmbiguousCells};
+      size_t falseEndIdx{numCells-1};
+
+      //std::assert( falseEndIdx-falseStartIdx == numFalseCells);
+
+      classCount[0] = numTrueCells;
+      classCount[1] = numFalseCells;
+
+      update_mean_variance(DoubleMatrixT (features.begin()+trueStartIdx, features.begin()+trueEndIdx),
+                           theta, sigma, classCount, 0);
+      update_mean_variance(DoubleMatrixT (features.begin()+falseStartIdx, features.begin()+falseEndIdx),
+                           theta, sigma, classCount, 1);
+
+      // calculate prior
+      size_t norm = classCount[0] + classCount[1];
+      classPrior[0] = classCount[0] / norm;
+      classPrior[1] = classCount[1] / norm;
     }
 
     // Implementation from https://github.com/scikit-learn/scikit-learn/blob/master/sklearn/naive_bayes.py
-    void naive_bayes_fit(DoubleMatrixT& positiveFeatures,
-                         DoubleMatrixT& negativeFeatures){
-      size_t numFeatures { positiveFeatures[0].size() };
-      size_t numClasses {2};
+    std::vector<uint32_t> classifyBarcodes(DoubleMatrixT& featureCountsMatrix,
+                                           size_t numCells, size_t numFeatures){
+      size_t numFalseCells { 1000 };
+      size_t numTrueCells = ( numCells - numFalseCells ) / 2;
+      size_t numAmbiguousCells { numTrueCells };
+      size_t i{0}, numClasses { 2 };
+
+      std::vector<uint32_t> selectedBarcodes;
+      std::vector<uint32_t> classCount (numClasses, 0);
+      std::vector<double> classPrior (numClasses, 0.0);
 
       DoubleMatrixT theta (numClasses, DoubleVectorT (numFeatures, 0.0));
       DoubleMatrixT sigma (numClasses, DoubleVectorT (numFeatures, 0.0));
 
-      std::vector<uint32_t> classCount (numClasses, 0);
-      std::vector<double> classPrior (numClasses, 0.0);
+      naive_bayes_fit(featureCountsMatrix, theta, sigma,
+                      classCount, classPrior, numClasses,
+                      numTrueCells, numAmbiguousCells, numFalseCells);
 
-      update_mean_variance(positiveFeatures, theta, sigma, classCount, 1);
-      update_mean_variance(negativeFeatures, theta, sigma, classCount, 0);
-
-      double var_smoothing {1e-9};
-      // get mean across full dataset (i.e. both +ve and -ve)
-      double maxIntraFeatureVariance = std::max(mean);
-      double epsilon = var_smoothing * maxIntraFeatureVariance;
-    }
-
-    std::vector<uint32_t> classifyBarcodes(spp::sparse_hash_map<int32_t, std::vector<double>>& featureCountsMatrix,
-                                           size_t numCells){
-      size_t numFalseCells {1000};
-      size_t numTrueCells = ( numCells - numFalseCells ) / 2;
-      size_t numAmbiguousCells {numTrueCells};
-      std::vector<uint32_t> selectedBarcodes;
+      for (; i<numTrueCells; i++){
+        selectedBarcodes.emplace_back(i);
+      }
+      for (; i<numTrueCells*2; i++){
+        if (naive_bayes_predict(sigma, theta,
+                                featureCountsMatrix[i], classPrior)){
+          selectedBarcodes.emplace_back(i);
+        }
+      }
 
       return selectedBarcodes;
     }
@@ -120,9 +172,9 @@ namespace alevin {
 
       size_t numCells = trueBarcodes.size();
 
-      spp::sparse_hash_map<int32_t, std::vector<double>> geneCountsMatrix;
-      spp::sparse_hash_map<int32_t, std::vector<double>> featureCountsMatrix;
-      size_t numFeatures(4);
+      size_t numFeatures{4};
+      DoubleMatrixT geneCountsMatrix( numCells, DoubleVectorT (numGenes, 0.0));
+      DoubleMatrixT featureCountsMatrix( numCells, DoubleVectorT (numFeatures, 0.0));
 
       // loop over each barcode
       for (size_t i=0; i<trueBarcodes.size(); i++){
@@ -169,7 +221,16 @@ namespace alevin {
       }
 
       std::vector<uint32_t> whitelistBarcodes =
-        classifyBarcodes(featureCountsMatrix, numCells);
+        classifyBarcodes(featureCountsMatrix, numCells,
+                         numFeatures);
+
+      std::ofstream whitelistStream;
+      auto whitelistFileName = aopt.outputDirectory / "whitelist.txt";
+      whitelistStream.open(whitelistFileName.string());
+      for (auto i: whitelistBarcodes){
+        whitelistStream << trueBarcodes[i] << "\n";
+      }
+      whitelistStream.close();
 
       return true;
     }
