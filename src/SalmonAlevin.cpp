@@ -1539,7 +1539,7 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter){
+                CFreqMapT& freqCounter, size_t numLowConfidentBarcode){
 
   using std::cerr;
   using std::vector;
@@ -1663,7 +1663,8 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
                                            gzw,
                                            trueBarcodesVec,
                                            umiCount,
-                                           freqCounter);
+                                           freqCounter,
+                                           numLowConfidentBarcode);
       if (!optSuccess) {
         jointLog->error(
                         "The optimization algorithm failed. This is likely the result of "
@@ -1848,26 +1849,30 @@ int alevinQuant(AlevinOpts<apt::DropSeq>& aopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter);
+                CFreqMapT& freqCounter,
+                size_t numLowConfidentBarcode);
 template
 int alevinQuant(AlevinOpts<apt::InDrop>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter);
+                CFreqMapT& freqCounter,
+                size_t numLowConfidentBarcode);
 template
 int alevinQuant(AlevinOpts<apt::Chromium>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter);
+                CFreqMapT& freqCounter,
+                size_t numLowConfidentBarcode);
 template
 int alevinQuant(AlevinOpts<apt::Custom>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter);
+                CFreqMapT& freqCounter,
+                size_t numLowConfidentBarcode);
 

@@ -77,7 +77,8 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter);
+                CFreqMapT& freqCounter,
+                size_t numLowConfidentBarcode);
 
 //colors for progress monitoring
 const char RESET_COLOR[] = "\x1b[0m";
@@ -272,13 +273,13 @@ uint32_t getLeftBoundary(std::vector<size_t>& sortedIdx,
  */
 template <typename ProtocolT>
 void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
-                        TrueBcsT& trueBarcodes,
+                        TrueBcsT& trueBarcodes, size_t& lowRegionNumBarcodes,
                         std::unordered_map<uint32_t, std::string> colMap,
                         AlevinOpts<ProtocolT>& aopt){
   std::vector<size_t> sortedIdx = sort_indexes(freqCounter);
   std::vector<uint64_t> cdfDist;
   size_t maxNumBarcodes { 100000 }, lowRegionMaxNumBarcodes { 1000 };
-  size_t lowRegionNumBarcodes { 0 }, lowRegionMinNumBarcodes { 200 };
+  size_t lowRegionMinNumBarcodes { 200 };
   double lowConfidenceFraction { 0.25 };
   uint32_t topxBarcodes = std::min(maxNumBarcodes, freqCounter.size());
   uint64_t history { 0 };
@@ -558,7 +559,8 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
                      AlevinOpts<ProtocolT>& aopt,
                      SoftMapT& barcodeSoftMap,
                      TrueBcsT& trueBarcodes,
-                     CFreqMapT& freqCounter){
+                     CFreqMapT& freqCounter,
+                     size_t& numLowConfidentBarcode){
   if (not aopt.nobarcode){
     //Avi -> HardCoding threads for Barcode Parsing
     //2 for consuming 1 for generating since
@@ -628,7 +630,8 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
 
       //Calculate the knee using the frequency distribution
       //and get the true set of barcodes
-      sampleTrueBarcodes(collapsedfrequency, trueBarcodes, collapMap, aopt);
+      sampleTrueBarcodes(collapsedfrequency, trueBarcodes,
+                         numLowConfidentBarcode, collapMap, aopt);
       aopt.jointLog->info("Done True Barcode Sampling");
     }
 
@@ -724,6 +727,7 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
   TrueBcsT trueBarcodes;
   //frequency counter
   CFreqMapT freqCounter;
+  size_t numLowConfidentBarcode;
 
   aopt.jointLog->info("Processing barcodes files (if Present) \n\n ");
 
@@ -732,14 +736,15 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
                   aopt,
                   barcodeSoftMap,
                   trueBarcodes,
-                  freqCounter);
+                  freqCounter,
+                  numLowConfidentBarcode);
 
   aopt.jointLog->flush();
 
   if(!aopt.noQuant){
     aopt.jointLog->info("Done with Barcode Processing; Moving to Quantify\n");
     alevinQuant(aopt, sopt, barcodeSoftMap, trueBarcodes,
-                orderedOptions, freqCounter);
+                orderedOptions, freqCounter, numLowConfidentBarcode);
   }
   else{
     boost::filesystem::path cmdInfoPath = vm["output"].as<std::string>();

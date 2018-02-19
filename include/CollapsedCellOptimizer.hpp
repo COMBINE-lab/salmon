@@ -67,7 +67,8 @@ public:
                 GZipWriter& gzw,
                 std::vector<std::string>& trueBarcodes,
                 std::vector<uint32_t>& umiCount,
-                CFreqMapT& freqCounter);
+                CFreqMapT& freqCounter,
+                size_t numLowConfidentBarcode);
 };
 
 using VecT = CollapsedCellOptimizer::SerialVecType;

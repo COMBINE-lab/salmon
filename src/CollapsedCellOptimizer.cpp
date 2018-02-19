@@ -359,7 +359,8 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount,
-                                      CFreqMapT& freqCounter){
+                                      CFreqMapT& freqCounter,
+                                      size_t numLowConfidentBarcode){
   double relDiffTolerance{0.01};
   uint32_t maxIter {10000};
 
@@ -429,7 +430,8 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                                                       freqCounter,
                                                                       numGenes,
                                                                       countMatrix,
-                                                                      txpToGeneMap);
+                                                                      txpToGeneMap,
+                                                                      numLowConfidentBarcode);
     if (!whitelistingSuccess) {
       aopt.jointLog->error(
                            "The white listing algorithm failed. This is likely the result of "
@@ -453,25 +455,29 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount,
-                                      CFreqMapT& freqCounter);
+                                      CFreqMapT& freqCounter,
+                                      size_t numLowConfidentBarcode);
 template
 bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::InDrop>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount,
-                                      CFreqMapT& freqCounter);
+                                      CFreqMapT& freqCounter,
+                                      size_t numLowConfidentBarcode);
 template
 bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::Chromium>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount,
-                                      CFreqMapT& freqCounter);
+                                      CFreqMapT& freqCounter,
+                                      size_t numLowConfidentBarcode);
 template
 bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::Custom>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount,
-                                      CFreqMapT& freqCounter);
+                                      CFreqMapT& freqCounter,
+                                      size_t numLowConfidentBarcode);
