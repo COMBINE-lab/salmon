@@ -314,7 +314,7 @@ void optimizeCell(SCExpT& experiment,
 }
 
 void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                     size_t numGenes, const std::vector<Transcript>& transcripts,
+                     size_t& numGenes, const std::vector<Transcript>& transcripts,
                      const std::string& geneMapFile){
   std::string fname = geneMapFile;
   std::ifstream t2gFile(fname);

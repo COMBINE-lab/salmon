@@ -277,10 +277,11 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
                         AlevinOpts<ProtocolT>& aopt){
   std::vector<size_t> sortedIdx = sort_indexes(freqCounter);
   std::vector<uint64_t> cdfDist;
-  size_t maxNumBarcodes = 100000;
-  size_t lowRegionNumBarcodes = 1000;
+  size_t maxNumBarcodes { 100000 }, lowRegionMaxNumBarcodes { 1000 };
+  size_t lowRegionNumBarcodes { 0 }, lowRegionMinNumBarcodes { 200 };
+  double lowConfidenceFraction { 0.25 };
   uint32_t topxBarcodes = std::min(maxNumBarcodes, freqCounter.size());
-  uint64_t history{0};
+  uint64_t history { 0 };
   uint32_t threshold;
 
   topxBarcodes = getLeftBoundary(sortedIdx,
@@ -297,12 +298,24 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
                         RESET_COLOR, red, maxNumBarcodes,
                         RESET_COLOR);
 
+    uint32_t fractionTrueBarcodes = static_cast<int>(0.25 * topxBarcodes);
+
+    if (fractionTrueBarcodes < lowRegionMinNumBarcodes){
+      lowRegionNumBarcodes = lowRegionMinNumBarcodes;
+    }
+    else if (fractionTrueBarcodes > lowRegionMaxNumBarcodes){
+      lowRegionNumBarcodes = lowRegionMaxNumBarcodes;
+    }
+    else{
+      lowRegionNumBarcodes = fractionTrueBarcodes;
+    }
+
+    topxBarcodes += lowRegionNumBarcodes;
     // keeping 1000 cells left of the left boundary for learning
-    aopt.jointLog->info("Total {}{}{}(+{}{}{} low confidence)"
+    aopt.jointLog->info("Total {}{}{}(has {}{}{} low confidence)"
                         " barcodes",
                         green, topxBarcodes, RESET_COLOR,
                         green, lowRegionNumBarcodes, RESET_COLOR);
-    topxBarcodes += lowRegionNumBarcodes;
   }
 
   threshold = topxBarcodes;

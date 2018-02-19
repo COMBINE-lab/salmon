@@ -126,6 +126,8 @@ namespace alevin {
     // Implementation from https://github.com/scikit-learn/scikit-learn/blob/master/sklearn/naive_bayes.py
     std::vector<uint32_t> classifyBarcodes(DoubleMatrixT& featureCountsMatrix,
                                            size_t numCells, size_t numFeatures){
+
+      std::cout<<"inside classify";
       size_t numFalseCells { 1000 };
       size_t numTrueCells = ( numCells - numFalseCells ) / 2;
       size_t numAmbiguousCells { numTrueCells };
@@ -172,8 +174,8 @@ namespace alevin {
       // 4. Using all txps i.e. not ignoring txp with 0 values in all the cells
 
       size_t numCells = trueBarcodes.size();
-
       size_t numFeatures{4};
+
       DoubleMatrixT geneCountsMatrix( numCells, DoubleVectorT (numGenes, 0.0));
       DoubleMatrixT featureCountsMatrix( numCells, DoubleVectorT (numFeatures, 0.0));
 
@@ -185,17 +187,21 @@ namespace alevin {
 
         // Alignment Rate
         bool indexOk = freqCounter.find(currBarcodeName, rawBarcodeFrequency);
+        if ( not indexOk ){
+          aopt.jointLog->error("Error: index not find in freq Counter\n"
+                               "Please Report the issue on github");
+          exit(1);
+        }
         featureVector[0] = umiCount[i] / static_cast<double>(rawBarcodeFrequency);
 
         size_t numNonZeroGeneCount{0};
         double totalCellCount{0.0}, maxCount{0};
-        std::vector<double> geneCounts(numGenes);
+        std::vector<double> geneCounts(numGenes, 0.0);
         auto& countVec = countMatrix[i];
 
         for (size_t j=0; j<countVec.size(); j++){
           auto count = countVec[j];
           numNonZeroGeneCount += 1;
-
           geneCounts[ txpToGeneMap[j] ] += count;
           totalCellCount += count;
           if (count>maxCount){
