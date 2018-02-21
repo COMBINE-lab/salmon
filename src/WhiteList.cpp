@@ -18,7 +18,7 @@ namespace alevin {
                               DoubleVectorT& sigma,
                               DoubleVectorT& theta,
                               DoubleVectorT& query){
-      double logPrior = std::log(prior);
+      double logPrior = prior ? std::log(prior) : 0.0;
       double mean, variance, likelihood {0.5};
 
       // Gaussian Probability
@@ -26,8 +26,8 @@ namespace alevin {
         variance = sigma[i];
         mean = theta[i];
 
-        likelihood += std::log(2.0 * M_PI * variance);
-        likelihood += std::pow((query[i] - mean), 2) / variance;
+        likelihood += variance ? std::log(2.0 * M_PI * variance) : 0.0;
+        likelihood += variance ? std::pow((query[i] - mean), 2) / variance : 0.0;
       }
       likelihood *= -0.5;
 
@@ -38,9 +38,6 @@ namespace alevin {
                              DoubleMatrixT& theta,
                              DoubleVectorT& query,
                              DoubleVectorT& classPrior){
-      //std::assert(sigma.size() == theta.size());
-      //std::assert(query.size() == theta[0].size());
-
       double trueProbability = get_log_likelihood(classPrior[0],
                                                   sigma[0],
                                                   theta[0],
@@ -148,7 +145,8 @@ namespace alevin {
       }
       for (; i<numTrueCells*2; i++){
         if (naive_bayes_predict(sigma, theta,
-                                featureCountsMatrix[i], classPrior)){
+                                featureCountsMatrix[i],
+                                classPrior)){
           selectedBarcodes.emplace_back(i);
         }
       }
