@@ -44,6 +44,9 @@ public:
   bool writeAbundances(std::vector<double>& alphas,
                        std::vector<Transcript>& transcripts);
 
+  bool writeAbundances(std::string& bcName,
+                       std::vector<double>& alphas);
+
   template <typename ExpT>
   bool writeEmptyAbundances(const SalmonOpts& sopt, ExpT& readExp);
 
@@ -59,6 +62,8 @@ private:
   boost::filesystem::path bsPath_;
   std::shared_ptr<spdlog::logger> logger_;
   std::unique_ptr<boost::iostreams::filtering_ostream> bsStream_{nullptr};
+  std::unique_ptr<boost::iostreams::filtering_ostream> countMatrixStream_{nullptr};
+  std::unique_ptr<std::ofstream> bcNameStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> cellEQStream_{nullptr};
 // only one writer thread at a time
 #if defined __APPLE__

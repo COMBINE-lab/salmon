@@ -40,7 +40,8 @@ bool runPerCellEM(std::vector<std::vector<uint32_t>>& txpGroups,
                   uint64_t totalNumFrags, double uniformTxpWeight,
                   std::shared_ptr<spdlog::logger>& jointlog,
                   bfs::path& outDirPath,
-                  std::unordered_set<uint32_t>& activeTxps);
+                  std::unordered_set<uint32_t>& activeTxps,
+                  std::string& bcName);
 
 void optimizeCell(SCExpT& experiment,
                   std::vector<std::string>& trueBarcodes,

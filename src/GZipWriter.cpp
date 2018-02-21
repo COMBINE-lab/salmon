@@ -23,6 +23,12 @@ GZipWriter::~GZipWriter() {
   if (cellEQStream_){
     cellEQStream_->reset();
   }
+  if (countMatrixStream_) {
+    countMatrixStream_->reset();
+  }
+  if (bcNameStream_) {
+    bcNameStream_->close();
+  }
 }
 
 /**
@@ -594,41 +600,38 @@ bool GZipWriter::writeAbundances(
   return true;
 }
 
-//bool GZipWriter::writeAbundances(
-//                                 std::vector<double>& alphas,
-//                                 std::vector<Transcript>& transcripts) {
-//#if defined __APPLE__
-//  spin_lock::scoped_lock sl(writeMutex_);
-//#else
-//  std::lock_guard<std::mutex> lock(writeMutex_);
-//#endif
-//  namespace bfs = boost::filesystem;
-//  if (!countMatrixStream_) {
-//    countMatrixStream_.reset(new boost::iostreams::filtering_ostream);
-//    countMatrixStream_->push(boost::iostreams::gzip_compressor(6));
-//    auto countMatFilename = path_ / "alevin" / "quants.mat.gz";
-//    countMatrixStream_->push(boost::iostreams::file_sink(
-//                                                         countMatFilename.string(),
-//                                                         std::ios_base::out | std::ios_base::binary));
-//  }
-//
-//  boost::iostreams::filtering_ostream& ofile = *countMatrixStream_;
-//  size_t num = offsets.size();
-//
-//  bfs::path fname = path_ / "quant.sf";
-//  std::unique_ptr<std::FILE, int (*)(std::FILE *)> output(std::fopen(fname.c_str(), "w"), std::fclose);
-//
-//  fmt::print(output.get(), "Name\tLength\tNumMolecules\n");
-//
-//  // Now posterior has the transcript fraction
-//  for (size_t i=0; i < transcripts.size(); i++) {
-//    fmt::print(output.get(), "{}\t{}\t{}\n",
-//               transcripts[i].RefName,
-//               transcripts[i].CompleteLength,
-//               alphas[i]);
-//  }
-//  return true;
-//}
+bool GZipWriter::writeAbundances(std::string& bcName,
+                                 std::vector<double>& alphas) {
+#if defined __APPLE__
+  spin_lock::scoped_lock sl(writeMutex_);
+#else
+  std::lock_guard<std::mutex> lock(writeMutex_);
+#endif
+  namespace bfs = boost::filesystem;
+  if (!countMatrixStream_) {
+    countMatrixStream_.reset(new boost::iostreams::filtering_ostream);
+    countMatrixStream_->push(boost::iostreams::gzip_compressor(6));
+    auto countMatFilename = path_ / "quants_mat.gz";
+    countMatrixStream_->push(boost::iostreams::file_sink(countMatFilename.string(),
+                                                         std::ios_base::out | std::ios_base::binary));
+  }
+
+  ///if (!bcNameStream_) {
+  ///  auto bcNameFilename = path_ / "barcodes.txt";
+  ///  bcNameStream_->open(bcNameFilename.string());
+  ///}
+
+  boost::iostreams::filtering_ostream& countfile = *countMatrixStream_;
+  //std::ofstream& namefile = *bcNameStream_;
+
+  size_t num = alphas.size();
+  size_t elSize = sizeof(typename std::vector<double>::value_type);
+  countfile.write(reinterpret_cast<char*>(alphas.data()),
+                  elSize * num);
+  //bcName += "\n";
+  //namefile.write(bcName.c_str(), sizeof(bcName));
+  return true;
+}
 
 
 template <typename ExpT>
@@ -758,8 +761,8 @@ bool GZipWriter::writeCellEQVec(size_t barcode, const std::vector<uint32_t>& off
     cellEQStream_.reset(new boost::iostreams::filtering_ostream);
     cellEQStream_->push(boost::iostreams::gzip_compressor(6));
     auto ceqFilename = path_ / "alevin" / "cell_eq_mat.gz";
-    cellEQStream_->push(boost::iostreams::file_sink(
-                                                ceqFilename.string(), std::ios_base::out | std::ios_base::binary));
+    cellEQStream_->push(boost::iostreams::file_sink(ceqFilename.string(),
+                                                    std::ios_base::out | std::ios_base::binary));
   }
 
   boost::iostreams::filtering_ostream& ofile = *cellEQStream_;

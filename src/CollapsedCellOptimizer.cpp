@@ -26,7 +26,7 @@ bool runPerCellEM(
                   bfs::path& outDirPath,
                   std::unordered_set<uint32_t>& activeTranscriptIds,
                   std::vector<std::vector<double>>& countMatrix,
-                  size_t currBarcodeIndex){
+                  size_t currBarcodeIndex, std::string& bcName){
 
   // An EM termination criterion, adopted from Bray et al. 2016
   uint32_t minIter {50};
@@ -94,7 +94,7 @@ bool runPerCellEM(
   }
 
   GZipWriter gzw(outDirPath, jointlog);
-  gzw.writeAbundances(alphas, const_cast<std::vector<Transcript>&>(transcripts));
+  gzw.writeAbundances(bcName, alphas);
   countMatrix[currBarcodeIndex] = alphas;
 
   return true;
@@ -126,15 +126,15 @@ void optimizeCell(SCExpT& experiment,
     auto& trueBarcodeStr = trueBarcodes[trueBarcodeIdx];
     //creating quant directory for each cell and file
 
-    bfs::path qDirPath = outDir / "cell" / trueBarcodeStr ;
-    if (!bfs::exists(qDirPath)) {
-      bool dirSuccess = boost::filesystem::create_directories(qDirPath);
-      if (!dirSuccess) {
-        fmt::print(stderr,"\nCould not create output directory {}\nExiting Now.",
-                   qDirPath.string());
-        exit(1);
-      }
-    }
+    //bfs::path qDirPath = outDir / "cell" / trueBarcodeStr ;
+    //if (!bfs::exists(qDirPath)) {
+    //  bool dirSuccess = boost::filesystem::create_directories(qDirPath);
+    //  if (!dirSuccess) {
+    //    fmt::print(stderr,"\nCould not create output directory {}\nExiting Now.",
+    //               qDirPath.string());
+    //    exit(1);
+    //  }
+    //}
 
 
     //extracting per-cell level eq class information
@@ -146,23 +146,23 @@ void optimizeCell(SCExpT& experiment,
     uint64_t totalcount{0};
 
     std::unordered_map<uint32_t, std::unordered_set<uint64_t>> umiBiasList;
-    std::ofstream qFile;
+    //std::ofstream qFile;
 
-    if(verbose){
-      bfs::path qFilePath = qDirPath / "cell_eq_classes.txt";
-      qFile.open(qFilePath.string());
+    //if(verbose){
+    //  bfs::path qFilePath = qDirPath / "cell_eq_classes.txt";
+    //  qFile.open(qFilePath.string());
 
-      // Number of transcripts
-      qFile << transcripts.size() << '\n';
+    //  // Number of transcripts
+    //  qFile << transcripts.size() << '\n';
 
-      // Number of equivalence classes
-      //qFile << "XX" << '\n';
+    //  // Number of equivalence classes
+    //  //qFile << "XX" << '\n';
 
-      // dump transcript names
-      for (auto& t : transcripts) {
-        qFile << t.RefName << '\n';
-      }
-    }
+    //  // dump transcript names
+    //  for (auto& t : transcripts) {
+    //    qFile << t.RefName << '\n';
+    //  }
+    //}
 
     // equivalence class vector encoding for this cell (i.e. row)
     std::vector<uint32_t> eqIDs;
@@ -266,10 +266,10 @@ void optimizeCell(SCExpT& experiment,
       }
     }
 
-    if(verbose){
-      qFile.close();
-      //jointlog->info("optimizing over {} equivalence classes", txpgroups.size());
-    }
+    //if(verbose){
+    //  qFile.close();
+    //  //jointlog->info("optimizing over {} equivalence classes", txpgroups.size());
+    //}
 
     double totalnumfrags{static_cast<double>(totalcount)};
 
@@ -286,10 +286,11 @@ void optimizeCell(SCExpT& experiment,
                                  transcripts,
                                  totalnumfrags,
                                  jointlog,
-                                 qDirPath,
+                                 outDir,
                                  activetranscriptids,
                                  countMatrix,
-                                 trueBarcodeIdx);
+                                 trueBarcodeIdx,
+                                 trueBarcodeStr);
       if( !isEMok ){
         jointlog->error("EM iteration for cell {} failed \n"
                         "Please Report this on github.", trueBarcodeStr);
