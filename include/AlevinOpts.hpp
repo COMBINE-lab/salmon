@@ -64,6 +64,10 @@ struct AlevinOpts {
   boost::filesystem::path outputDirectory;
   // barcode white-list File path
   boost::filesystem::path whitelistFile;
+  // barcode mitochondrial genes File path
+  boost::filesystem::path mRnaFile;
+  // barcode ribosomal gene File path
+  boost::filesystem::path rRnaFile;
   // Txp to gene map tsv file
   boost::filesystem::path geneMapFile;
 };

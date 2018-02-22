@@ -280,7 +280,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
   std::vector<uint64_t> cdfDist;
   size_t maxNumBarcodes { 100000 }, lowRegionMaxNumBarcodes { 1000 };
   size_t lowRegionMinNumBarcodes { 200 };
-  double lowConfidenceFraction { 0.25 };
+  double lowConfidenceFraction { 0.5 };
   uint32_t topxBarcodes = std::min(maxNumBarcodes, freqCounter.size());
   uint64_t history { 0 };
   uint32_t threshold;
@@ -299,7 +299,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
                         RESET_COLOR, red, maxNumBarcodes,
                         RESET_COLOR);
 
-    uint32_t fractionTrueBarcodes = static_cast<int>(0.25 * topxBarcodes);
+    uint32_t fractionTrueBarcodes = static_cast<int>(lowConfidenceFraction * topxBarcodes);
 
     if (fractionTrueBarcodes < lowRegionMinNumBarcodes){
       lowRegionNumBarcodes = lowRegionMinNumBarcodes;
@@ -1206,6 +1206,12 @@ int salmonBarcoding(int argc, char* argv[]) {
     (
      "nosoftmap", po::bool_switch()->default_value(true),
      "Don't use soft-assignment for quant instead do hard-assignment.")
+    (
+     "mrna", po::value<std::string>(),
+     "path to a file containing mito-RNA gene, one per line")
+    (
+     "rrna", po::value<std::string>(),
+     "path to a file containing ribosomal RNA, one per line")
     (
      "dumpfq", po::bool_switch()->default_value(false),
      "Dump barcode modified fastq file for downstream analysis by"

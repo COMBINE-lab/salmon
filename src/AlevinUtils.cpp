@@ -208,6 +208,24 @@ namespace alevin {
         }
       }
 
+      if (vm.count("mrna")){
+        aopt.mRnaFile = vm["mrna"].as<std::string>();
+        if (!bfs::exists(aopt.mRnaFile)) {
+          fmt::print(stderr,"\n mRna File {} does not exists\n Exiting Now",
+                     aopt.mRnaFile.string());
+          return false;
+        }
+      }
+
+      if (vm.count("rrna")){
+        aopt.rRnaFile = vm["rrna"].as<std::string>();
+        if (!bfs::exists(aopt.rRnaFile)) {
+          fmt::print(stderr,"\nrRna File {} does not exists\n Exiting Now",
+                     aopt.rRnaFile.string());
+          return false;
+        }
+      }
+
       if (vm.count("whitelist")){
         aopt.whitelistFile = vm["whitelist"].as<std::string>();
         if (!bfs::exists(aopt.whitelistFile)) {

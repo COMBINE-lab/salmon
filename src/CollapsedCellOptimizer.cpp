@@ -315,13 +315,13 @@ void optimizeCell(SCExpT& experiment,
 }
 
 void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                     size_t& numGenes, const std::vector<Transcript>& transcripts,
-                     const std::string& geneMapFile){
+                     const std::vector<Transcript>& transcripts,
+                     const std::string& geneMapFile,
+                     spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap){
   std::string fname = geneMapFile;
   std::ifstream t2gFile(fname);
 
   spp::sparse_hash_map<std::string, uint32_t> txpIdxMap(transcripts.size());
-  spp::sparse_hash_map<std::string, uint32_t> geneIdxMap;
 
   for (size_t i=0; i<transcripts.size(); i++){
     txpIdxMap[ transcripts[i].RefName ] = i;
@@ -350,7 +350,6 @@ void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
     }
     t2gFile.close();
   }
-  numGenes = geneCount;
 }
 
 
@@ -385,10 +384,12 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   }
 
   spp::sparse_hash_map<uint32_t, uint32_t> txpToGeneMap;
-  size_t numGenes{0};
-  getTxpToGeneMap(txpToGeneMap, numGenes,
+  spp::sparse_hash_map<std::string, uint32_t> geneIdxMap;
+
+  getTxpToGeneMap(txpToGeneMap,
                   experiment.transcripts(),
-                  aopt.geneMapFile.string());
+                  aopt.geneMapFile.string(),
+                  geneIdxMap);
 
   tbb::atomic<uint32_t> skippedCBcount{0};
   std::atomic<uint32_t> bcount{0};
@@ -429,7 +430,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                                                       umiCount,
                                                                       trueBarcodes,
                                                                       freqCounter,
-                                                                      numGenes,
+                                                                      geneIdxMap,
                                                                       countMatrix,
                                                                       txpToGeneMap,
                                                                       numLowConfidentBarcode);

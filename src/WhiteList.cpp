@@ -158,7 +158,8 @@ namespace alevin {
     bool performWhitelisting(AlevinOpts<ProtocolT>& aopt,
                              std::vector<uint32_t>& umiCount,
                              std::vector<std::string>& trueBarcodes,
-                             CFreqMapT& freqCounter, size_t numGenes,
+                             CFreqMapT& freqCounter,
+                             spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                              std::vector<std::vector<double>>& countMatrix,
                              spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                              size_t numLowConfidentBarcode){
@@ -172,9 +173,57 @@ namespace alevin {
       // 4. Using all txps i.e. not ignoring txp with 0 values in all the cells
 
       size_t numCells = trueBarcodes.size();
+      size_t numGenes = geneIdxMap.size();
       size_t numFeatures{4};
 
-      DoubleMatrixT geneCountsMatrix( numCells, DoubleVectorT (numGenes, 0.0));
+      //DoubleMatrixT geneCountsMatrix( numCells, DoubleVectorT (numGenes, 0.0));
+
+      spp::sparse_hash_set<uint32_t> mRnaGenes, rRnaGenes;
+      bool useMitoRna {false}, useRiboRna{false};
+
+      if(boost::filesystem::exists(aopt.mRnaFile)){
+        numFeatures += 1;
+        useMitoRna = true;
+        std::ifstream mRnaFile(aopt.mRnaFile.string());
+        std::string gene;
+        if(mRnaFile.is_open()) {
+          while(getline(mRnaFile, gene)) {
+            if (geneIdxMap.contains(gene)){
+              mRnaGenes.insert(geneIdxMap[ gene ]);
+            }
+            else{
+              aopt.jointLog->error("{} mrna gene not found in txp tp gene map", gene);
+              exit(1);
+            }
+          }
+          mRnaFile.close();
+        }
+        aopt.jointLog->info("Done importing mRnaFile");
+        aopt.jointLog->info("Total {} mRna genes", mRnaGenes.size());
+      }
+
+      if(boost::filesystem::exists(aopt.rRnaFile)){
+        numFeatures += 1;
+        useRiboRna = true;
+        std::ifstream rRnaFile(aopt.rRnaFile.string());
+        std::string gene;
+        if(rRnaFile.is_open()) {
+          while(getline(rRnaFile, gene)) {
+            if (geneIdxMap.contains(gene)){
+              rRnaGenes.insert(geneIdxMap[ gene ]);
+            }
+            else{
+              aopt.jointLog->error("{} rrna gene not found in txp tp gene map", gene);
+              exit(1);
+            }
+          }
+          rRnaFile.close();
+        }
+        aopt.jointLog->info("Done importing rRnaFile");
+        aopt.jointLog->info("Total {} rRna genes", rRnaGenes.size());
+      }
+
+      aopt.jointLog->info("Starting to make feature Matrix");
       DoubleMatrixT featureCountsMatrix( numCells, DoubleVectorT (numFeatures, 0.0));
 
       // loop over each barcode
@@ -196,6 +245,7 @@ namespace alevin {
         double totalCellCount{0.0}, maxCount{0};
         std::vector<double> geneCounts(numGenes, 0.0);
         auto& countVec = countMatrix[i];
+        double mitoCount {0.0}, riboCount {0.0};
 
         for (size_t j=0; j<countVec.size(); j++){
           auto count = countVec[j];
@@ -204,6 +254,12 @@ namespace alevin {
           totalCellCount += count;
           if (count>maxCount){
             maxCount = count;
+          }
+          if (useMitoRna and mRnaGenes.contains(j)){
+            mitoCount += count;
+          }
+          if (useRiboRna and rRnaGenes.contains(j)){
+            riboCount += count;
           }
         }
 
@@ -221,9 +277,18 @@ namespace alevin {
           }
         }
         featureVector[3] = overMeanCount;
+
+        if (useMitoRna) {
+          featureVector[4] = mitoCount ? mitoCount/totalCellCount : 0.0;
+        }
+        if (useRiboRna) {
+          featureVector[5] = riboCount ? riboCount/totalCellCount : 0.0;
+        }
+
+        //geneCountsMatrix[i] = geneCounts;
         featureCountsMatrix[i] = featureVector;
-        geneCountsMatrix[i] = geneCounts;
       }
+      aopt.jointLog->info("Done making feature Matrix");
 
       std::vector<uint32_t> whitelistBarcodes =
         classifyBarcodes(featureCountsMatrix, numCells,
@@ -242,28 +307,32 @@ namespace alevin {
     template bool performWhitelisting(AlevinOpts<alevin::protocols::DropSeq>& aopt,
                                       std::vector<uint32_t>& umiCount,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter, size_t numGenes,
+                                      CFreqMapT& freqCounter,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                                       std::vector<std::vector<double>>& countMatrix,
                                       spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::InDrop>& aopt,
                                       std::vector<uint32_t>& umiCount,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter, size_t numGenes,
+                                      CFreqMapT& freqCounter,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                                       std::vector<std::vector<double>>& countMatrix,
                                       spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::Chromium>& aopt,
                                       std::vector<uint32_t>& umiCount,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter, size_t numGenes,
+                                      CFreqMapT& freqCounter,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                                       std::vector<std::vector<double>>& countMatrix,
                                       spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::Custom>& aopt,
                                       std::vector<uint32_t>& umiCount,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter, size_t numGenes,
+                                      CFreqMapT& freqCounter,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                                       std::vector<std::vector<double>>& countMatrix,
                                       spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                       size_t numLowConfidentBarcode);
