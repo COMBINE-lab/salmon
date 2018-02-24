@@ -600,7 +600,7 @@ bool GZipWriter::writeAbundances(
   return true;
 }
 
-bool GZipWriter::writeAbundances(std::string& bcName,
+bool GZipWriter::writeAbundances(std::string bcName,
                                  std::vector<double>& alphas) {
 #if defined __APPLE__
   spin_lock::scoped_lock sl(writeMutex_);

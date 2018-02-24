@@ -193,6 +193,7 @@ namespace alevin {
             }
             else{
               aopt.jointLog->error("{} mrna gene not found in txp tp gene map", gene);
+              aopt.jointLog->flush();
               exit(1);
             }
           }
@@ -214,6 +215,7 @@ namespace alevin {
             }
             else{
               aopt.jointLog->error("{} rrna gene not found in txp tp gene map", gene);
+              aopt.jointLog->flush();
               exit(1);
             }
           }
@@ -230,13 +232,15 @@ namespace alevin {
       for (size_t i=0; i<trueBarcodes.size(); i++){
         std::vector<double> featureVector(numFeatures);
         std::string currBarcodeName = trueBarcodes[i];
-        uint32_t rawBarcodeFrequency;
+        uint32_t rawBarcodeFrequency{0};
 
         // Alignment Rate
         bool indexOk = freqCounter.find(currBarcodeName, rawBarcodeFrequency);
         if ( not indexOk ){
-          aopt.jointLog->error("Error: index not find in freq Counter\n"
-                               "Please Report the issue on github");
+          aopt.jointLog->error("Error: index {} not found in freq Counter\n"
+                               "Please Report the issue on github", currBarcodeName,
+                               freqCounter.size());
+          aopt.jointLog->flush();
           exit(1);
         }
         featureVector[0] = umiCount[i] / static_cast<double>(rawBarcodeFrequency);

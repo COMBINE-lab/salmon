@@ -44,7 +44,7 @@ public:
   bool writeAbundances(std::vector<double>& alphas,
                        std::vector<Transcript>& transcripts);
 
-  bool writeAbundances(std::string& bcName,
+  bool writeAbundances(std::string bcName,
                        std::vector<double>& alphas);
 
   template <typename ExpT>
