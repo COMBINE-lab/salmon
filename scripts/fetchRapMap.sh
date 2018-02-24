@@ -30,7 +30,9 @@ mkdir -p ${EXTERNAL_DIR}
 # Not sure why we should need this (again), but this gives us
 # a sane curl if we are in hold build box.
 if [ -f /hbb_exe/activate ]; then
+  echo "activating hbb again"
   source /hbb_exe/activate
+  curl --version
 fi
 
 curl -k -L https://github.com/COMBINE-lab/RapMap/archive/${SVER}.zip -o ${EXTERNAL_DIR}/rapmap.zip
