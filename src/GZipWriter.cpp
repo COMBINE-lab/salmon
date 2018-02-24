@@ -616,20 +616,21 @@ bool GZipWriter::writeAbundances(std::string& bcName,
                                                          std::ios_base::out | std::ios_base::binary));
   }
 
-  ///if (!bcNameStream_) {
-  ///  auto bcNameFilename = path_ / "barcodes.txt";
-  ///  bcNameStream_->open(bcNameFilename.string());
-  ///}
+  if (!bcNameStream_) {
+    auto bcNameFilename = path_ / "barcodes.txt";
+    bcNameStream_.reset(new std::ofstream);
+    bcNameStream_->open(bcNameFilename.string());
+  }
 
   boost::iostreams::filtering_ostream& countfile = *countMatrixStream_;
-  //std::ofstream& namefile = *bcNameStream_;
+  std::ofstream& namefile = *bcNameStream_;
 
   size_t num = alphas.size();
   size_t elSize = sizeof(typename std::vector<double>::value_type);
   countfile.write(reinterpret_cast<char*>(alphas.data()),
                   elSize * num);
-  //bcName += "\n";
-  //namefile.write(bcName.c_str(), sizeof(bcName));
+  bcName += "\n";
+  namefile.write(bcName.c_str(), sizeof(bcName));
   return true;
 }
 
