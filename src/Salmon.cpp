@@ -192,7 +192,7 @@ int main(int argc, char* argv[]) {
     po::store(parsed, vm);
 
     if (vm.count("version")) {
-      std::cerr << "salmon " << salmon::version << "\n";
+      std::cout << "salmon " << salmon::version << "\n";
       std::exit(0);
     }
 
