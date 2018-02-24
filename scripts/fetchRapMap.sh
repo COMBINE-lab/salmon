@@ -26,7 +26,13 @@ SVER=salmon-v0.9.1
 
 mkdir -p ${EXTERNAL_DIR}
 #curl -k -L https://github.com/COMBINE-lab/RapMap/archive/salmon-v0.8.2.zip -o ${EXTERNAL_DIR}/rapmap.zip
-curl --version
+
+# Not sure why we should need this (again), but this gives us
+# a sane curl if we are in hold build box.
+if [ -f /hbb_exe/activate ]; then
+  source /hbb_exe/activate
+fi
+
 curl -k -L https://github.com/COMBINE-lab/RapMap/archive/${SVER}.zip -o ${EXTERNAL_DIR}/rapmap.zip
 #curl -k -L https://github.com/COMBINE-lab/RapMap/archive/develop-salmon.zip -o ${EXTERNAL_DIR}/rapmap.zip
 
