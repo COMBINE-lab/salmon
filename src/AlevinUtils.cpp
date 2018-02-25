@@ -148,7 +148,7 @@ namespace alevin {
     //      }
     //    }//end-j-for
 
-  //    if(barcodeLength>8 and i<barcodeLength){
+    //    if(barcodeLength>8 and i<barcodeLength){
     //      //deletion
     //      newBarcode = barcodeSeq;
     //      newBarcode.erase(i, 1);
@@ -272,6 +272,7 @@ namespace alevin {
       aopt.dumpfq = vm["dumpfq"].as<bool>();
       aopt.nobarcode = vm["nobarcode"].as<bool>();
       aopt.dumpfeatures = vm["dumpfeatures"].as<bool>();
+      aopt.dumpCsvCounts = vm["dumpcsvcounts"].as<bool>();
       aopt.dumpBarcodeEq = vm["dumpbarcodeeq"].as<bool>();
       aopt.dumpBarcodeMap = vm["dumpbarcodemap"].as<bool>();
       aopt.dumpUmiToolsMap = vm["dumpumitoolsmap"].as<bool>();

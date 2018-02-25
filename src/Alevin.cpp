@@ -1226,6 +1226,9 @@ int salmonBarcoding(int argc, char* argv[]) {
      "dumpbarcodemap", po::bool_switch()->default_value(false),
      "Dump BarcodeMap for downstream analysis.")
     (
+     "dumpcsvcounts", po::bool_switch()->default_value(false),
+     "Dump cell v transcripts count matrix in csv format.")
+    (
      "quiet,q", po::bool_switch()->default_value(false),
      "Be quiet while doing quantification (don't write informative "
      "output to the console unless something goes wrong).")

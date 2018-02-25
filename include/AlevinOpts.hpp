@@ -36,6 +36,8 @@ struct AlevinOpts {
   bool nobarcode;
   //eqclass level barcode count
   bool dumpBarcodeEq;
+  //dump cellvtxp matrix in csv
+  bool dumpCsvCounts;
   //Stop progress sumps
   bool quiet;
   //flag for deduplication

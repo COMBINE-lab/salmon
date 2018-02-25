@@ -5,14 +5,10 @@
 #include <boost/iostreams/device/file.hpp>
 #include <boost/iostreams/filter/gzip.hpp>
 #include <boost/iostreams/filtering_stream.hpp>
+#include <numeric>
 
 namespace alevin {
   namespace whitelist {
-
-    void getCorrelation(std::vector<double>& A,
-                        std::vector<double>& B){
-      //calculate pearsonr
-    }
 
     using DoubleMatrixT = std::vector<std::vector<double>> ;
     using DoubleVectorT = std::vector<double> ;
@@ -125,10 +121,10 @@ namespace alevin {
     // Implementation from https://github.com/scikit-learn/scikit-learn/blob/master/sklearn/naive_bayes.py
     std::vector<uint32_t> classifyBarcodes(DoubleMatrixT& featureCountsMatrix,
                                            size_t numCells, size_t numFeatures,
-                                           size_t numLowConfidentBarcode){
+                                           size_t numLowConfidentBarcode,
+                                           size_t numTrueCells){
 
       size_t numFalseCells { numLowConfidentBarcode };
-      size_t numTrueCells = ( numCells - numFalseCells ) / 2;
       size_t numAmbiguousCells { numTrueCells };
       size_t i, numClasses { 2 };
 
@@ -155,6 +151,40 @@ namespace alevin {
       }
 
       return selectedBarcodes;
+    }
+
+    double getPearsonCorrelation(std::vector<double>& first,
+                                 std::vector<double>& second){
+      if (first.size() != second.size()){
+        std::cout << "correlation vectors size does not match" << std::flush;
+        exit(1);
+      }
+
+      size_t num_elem = first.size();
+      double f_sum = std::accumulate(first.begin(), first.end(), 0.0);
+      double f_sq_sum = std::accumulate( first.begin(), first.end(), 0.0,
+                                         [](const double& l, const double& r){
+                                           return (l + r*r);} );
+      double s_sum = std::accumulate(second.begin(), second.end(), 0.0);
+      double s_sq_sum = std::accumulate( second.begin(), second.end(), 0.0,
+                                         [](const double& l, const double& r){
+                                           return (l + r*r);} );
+
+      double f_mean = f_sum / num_elem;
+      double s_mean = s_sum / num_elem;
+
+      double f_std = pow( (f_sq_sum / num_elem) - pow(f_mean, 2), 0.5);
+      double s_std = pow( (s_sq_sum / num_elem) - pow(s_mean, 2), 0.5);
+
+      double denom = f_std * s_std * num_elem;
+      if (denom == 0){
+        return 0;
+      }
+      double numer = 0.0;
+      std::for_each(first.begin(), first.end(), [&](double& d) { numer += (d-f_mean) ;});
+      std::for_each(second.begin(), second.end(), [&](double& d) { numer += (d-f_mean) ;});
+
+      return numer / denom ;
     }
 
     void populate_count_matrix(boost::filesystem::path& outDir,
@@ -190,20 +220,22 @@ namespace alevin {
       size_t numCells = trueBarcodes.size();
       size_t numGenes = geneIdxMap.size();
       size_t numTxps = txpToGeneMap.size();
-      size_t numFeatures{4};
+      size_t numFeatures{5};
 
       DoubleMatrixT countMatrix(numCells, DoubleVectorT (numTxps, 0.0));
-      //DoubleMatrixT geneCountsMatrix( numCells, DoubleVectorT (numGenes, 0.0));
+      DoubleMatrixT geneCountsMatrix( numCells, DoubleVectorT (numGenes, 0.0));
       populate_count_matrix(aopt.outputDirectory, countMatrix);
 
-      std::ofstream qFile;
-      boost::filesystem::path qFilePath = aopt.outputDirectory / "txt_count_mat_new.txt";
-      qFile.open(qFilePath.string());
-      for (auto& row : countMatrix) {
-        for (auto cell : row) {
-          qFile << cell << ',';
+      if (aopt.dumpCsvCounts){
+        std::ofstream qFile;
+        boost::filesystem::path qFilePath = aopt.outputDirectory / "quants_mat.csv";
+        qFile.open(qFilePath.string());
+        for (auto& row : countMatrix) {
+          for (auto cell : row) {
+            qFile << cell << '\n';
+          }
+          qFile << "\n";
         }
-        qFile << "\n";
       }
 
       spp::sparse_hash_set<uint32_t> mRnaGenes, rRnaGenes;
@@ -264,7 +296,7 @@ namespace alevin {
 
       // loop over each barcode
       for (size_t i=0; i<trueBarcodes.size(); i++){
-        std::vector<double> featureVector(numFeatures);
+        std::vector<double>& featureVector = featureCountsMatrix[i];
         std::string currBarcodeName = trueBarcodes[i];
         uint32_t rawBarcodeFrequency{0};
 
@@ -281,7 +313,7 @@ namespace alevin {
 
         size_t numNonZeroGeneCount{0};
         double totalCellCount{0.0}, maxCount{0};
-        std::vector<double> geneCounts(numGenes, 0.0);
+        std::vector<double>& geneCounts = geneCountsMatrix[i];
         auto& countVec = countMatrix[i];
         double mitoCount {0.0}, riboCount {0.0};
 
@@ -316,21 +348,42 @@ namespace alevin {
         }
         featureVector[3] = overMeanCount;
 
+        size_t curFeatIdx = 4;
         if (useMitoRna) {
-          featureVector[4] = mitoCount ? mitoCount/totalCellCount : 0.0;
+          featureVector[curFeatIdx] = mitoCount ? mitoCount/totalCellCount : 0.0;
+          curFeatIdx += 1;
         }
         if (useRiboRna) {
-          featureVector[5] = riboCount ? riboCount/totalCellCount : 0.0;
+          featureVector[curFeatIdx] = riboCount ? riboCount/totalCellCount : 0.0;
         }
 
         //geneCountsMatrix[i] = geneCounts;
-        featureCountsMatrix[i] = featureVector;
+        //featureCountsMatrix[i] = featureVector;
       }
+      aopt.jointLog->info("Done making regular featues; making correlation matrix");
+
+      size_t numTrueCells = ( numCells - numLowConfidentBarcode ) / 2;
+      for(size_t i=0; i<numCells; i++){
+        double maxCorr = 0.0;
+        for(size_t j=0; j<numTrueCells; j++){
+          if (i == j){
+            continue;
+          }
+          double currCorr = getPearsonCorrelation(geneCountsMatrix[i],
+                                                  geneCountsMatrix[j]);
+          if (currCorr > maxCorr){
+            maxCorr = currCorr;
+          }
+        }
+        featureCountsMatrix[i][numFeatures-1] = maxCorr;
+      }
+
       aopt.jointLog->info("Done making feature Matrix");
 
       std::vector<uint32_t> whitelistBarcodes =
         classifyBarcodes(featureCountsMatrix, numCells,
-                         numFeatures, numLowConfidentBarcode);
+                         numFeatures, numLowConfidentBarcode,
+                         numTrueCells);
 
       std::ofstream whitelistStream;
       auto whitelistFileName = aopt.outputDirectory / "whitelist.txt";
