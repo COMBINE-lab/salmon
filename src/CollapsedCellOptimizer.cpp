@@ -15,7 +15,6 @@ double truncateAlphas(VecT& alphas, double cutoff) {
   return alphaSum;
 }
 
-
 bool runPerCellEM(
                   std::vector<std::vector<uint32_t>>& txpGroups,
                   std::vector<std::vector<double>>& txpGroupCombinedWeights,
@@ -25,7 +24,7 @@ bool runPerCellEM(
                   std::shared_ptr<spdlog::logger>& jointlog,
                   bfs::path& outDirPath,
                   std::unordered_set<uint32_t>& activeTranscriptIds,
-                  std::vector<std::vector<double>>& countMatrix,
+                  //std::vector<std::vector<double>>& countMatrix,
                   size_t currBarcodeIndex, std::string& bcName){
 
   // An EM termination criterion, adopted from Bray et al. 2016
@@ -95,7 +94,7 @@ bool runPerCellEM(
 
   GZipWriter gzw(outDirPath, jointlog);
   gzw.writeAbundances(bcName, alphas);
-  countMatrix[currBarcodeIndex] = alphas;
+  //countMatrix[currBarcodeIndex] = alphas;
 
   return true;
 }
@@ -110,8 +109,8 @@ void optimizeCell(SCExpT& experiment,
                   bfs::path& outDir, std::vector<uint32_t>& umiCount,
                   tbb::atomic<uint32_t>& skippedCBcount,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
-                  spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                  std::vector<std::vector<double>>& countMatrix){
+                  spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap){
+                  //std::vector<std::vector<double>>& countMatrix){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
 
@@ -288,7 +287,7 @@ void optimizeCell(SCExpT& experiment,
                                  jointlog,
                                  outDir,
                                  activetranscriptids,
-                                 countMatrix,
+                                 //countMatrix,
                                  trueBarcodeIdx,
                                  trueBarcodeStr);
       if( !isEMok ){
@@ -393,7 +392,6 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
 
   tbb::atomic<uint32_t> skippedCBcount{0};
   std::atomic<uint32_t> bcount{0};
-  std::vector<std::vector<double>> countMatrix(numCells);
 
   std::vector<std::thread> workerThreads;
   for (size_t tn = 0; tn < numWorkerThreads; ++tn) {
@@ -412,8 +410,8 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                std::ref(gzw),
                                aopt.protocol.umiLength,
                                aopt.noEM,
-                               std::ref(txpToGeneMap),
-                               std::ref(countMatrix));
+                               std::ref(txpToGeneMap));
+                               //std::ref(countMatrix));
   }
 
   for (auto& t : workerThreads) {
@@ -431,7 +429,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                                                       trueBarcodes,
                                                                       freqCounter,
                                                                       geneIdxMap,
-                                                                      countMatrix,
+                                                                      //countMatrix,
                                                                       txpToGeneMap,
                                                                       numLowConfidentBarcode);
     if (!whitelistingSuccess) {

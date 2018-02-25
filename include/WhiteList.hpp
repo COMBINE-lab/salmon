@@ -19,7 +19,6 @@ namespace alevin {
                              std::vector<std::string>& trueBarcodes,
                              CFreqMapT& freqCounter,
                              spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-                             std::vector<std::vector<double>>& countMatrix,
                              spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                              size_t numLowConfidentBarcode);
   }
