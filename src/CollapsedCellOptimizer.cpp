@@ -20,11 +20,9 @@ bool runPerCellEM(
                   std::vector<std::vector<double>>& txpGroupCombinedWeights,
                   std::vector<uint64_t>& txpGroupCounts,
                   const std::vector<Transcript>& transcripts,
-                  uint64_t totalNumFrags,
+                  uint64_t totalNumFrags, GZipWriter& gzw,
                   std::shared_ptr<spdlog::logger>& jointlog,
-                  bfs::path& outDirPath,
                   std::unordered_set<uint32_t>& activeTranscriptIds,
-                  //std::vector<std::vector<double>>& countMatrix,
                   size_t currBarcodeIndex, std::string& bcName){
 
   // An EM termination criterion, adopted from Bray et al. 2016
@@ -92,10 +90,7 @@ bool runPerCellEM(
     return false;
   }
 
-  GZipWriter gzw(outDirPath, jointlog);
   gzw.writeAbundances(bcName, alphas);
-  //countMatrix[currBarcodeIndex] = alphas;
-
   return true;
 }
 
@@ -110,7 +105,6 @@ void optimizeCell(SCExpT& experiment,
                   tbb::atomic<uint32_t>& skippedCBcount,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap){
-                  //std::vector<std::vector<double>>& countMatrix){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
 
@@ -284,10 +278,9 @@ void optimizeCell(SCExpT& experiment,
                                  origcounts,
                                  transcripts,
                                  totalnumfrags,
+                                 gzw,
                                  jointlog,
-                                 outDir,
                                  activetranscriptids,
-                                 //countMatrix,
                                  trueBarcodeIdx,
                                  trueBarcodeStr);
       if( !isEMok ){

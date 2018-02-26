@@ -1,5 +1,6 @@
 #include <ctime>
 #include <fstream>
+#include <numeric>
 
 #include "cereal/archives/json.hpp"
 
@@ -629,7 +630,13 @@ bool GZipWriter::writeAbundances(std::string bcName,
   size_t elSize = sizeof(typename std::vector<double>::value_type);
   countfile.write(reinterpret_cast<char*>(alphas.data()),
                   elSize * num);
-  bcName += "\n";
+
+  double total_counts = std::accumulate(alphas.begin(), alphas.end(), 0.0);
+  if (total_counts == 0){
+    std::cout<< "ERROR: cell doesn't have any read count" << std::flush;
+    exit(1);
+  }
+  bcName += "\t"+std::to_string(total_counts)+"\n";
   namefile.write(bcName.c_str(), sizeof(bcName));
   return true;
 }

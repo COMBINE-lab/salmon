@@ -29,7 +29,6 @@ namespace alevin {
         likelihood += variance ? std::pow((query[i] - mean), 2) / variance : 0.0;
       }
       likelihood *= -0.5;
-
       return likelihood+logPrior;
     }
 
@@ -139,6 +138,13 @@ namespace alevin {
                       classCount, classPrior, numClasses,
                       numTrueCells, numAmbiguousCells, numFalseCells);
 
+      for (auto vec: sigma){
+        for (auto cell : vec){
+          std::cout<<cell<<"\t";
+        }
+        std::cout<<"\n";
+      }
+
       for (i=0; i<numTrueCells; i++){
         selectedBarcodes.emplace_back(i);
       }
@@ -220,7 +226,7 @@ namespace alevin {
       size_t numCells = trueBarcodes.size();
       size_t numGenes = geneIdxMap.size();
       size_t numTxps = txpToGeneMap.size();
-      size_t numFeatures{5};
+      size_t numFeatures{4};
 
       DoubleMatrixT countMatrix(numCells, DoubleVectorT (numTxps, 0.0));
       DoubleMatrixT geneCountsMatrix( numCells, DoubleVectorT (numGenes, 0.0));
@@ -232,7 +238,7 @@ namespace alevin {
         qFile.open(qFilePath.string());
         for (auto& row : countMatrix) {
           for (auto cell : row) {
-            qFile << cell << '\n';
+            qFile << cell << ',';
           }
           qFile << "\n";
         }
@@ -311,7 +317,6 @@ namespace alevin {
         }
         featureVector[0] = umiCount[i] / static_cast<double>(rawBarcodeFrequency);
 
-        size_t numNonZeroGeneCount{0};
         double totalCellCount{0.0}, maxCount{0};
         std::vector<double>& geneCounts = geneCountsMatrix[i];
         auto& countVec = countMatrix[i];
@@ -319,7 +324,6 @@ namespace alevin {
 
         for (size_t j=0; j<countVec.size(); j++){
           auto count = countVec[j];
-          numNonZeroGeneCount += 1;
           geneCounts[ txpToGeneMap[j] ] += count;
           totalCellCount += count;
           if (count>maxCount){
@@ -333,8 +337,9 @@ namespace alevin {
           }
         }
 
-        double meanCount = totalCellCount / numNonZeroGeneCount;
+        double meanCount = totalCellCount / numGenes;
         // meanMaxCount
+        //std::cout<<meanCount << "\t" << maxCount << "\t" << totalCellCount << "\n";
         featureVector[1] = meanCount / maxCount ;
         // dedup Rate
         featureVector[2] = 1.0 - (totalCellCount / umiCount[i]);
@@ -363,20 +368,21 @@ namespace alevin {
       aopt.jointLog->info("Done making regular featues; making correlation matrix");
 
       size_t numTrueCells = ( numCells - numLowConfidentBarcode ) / 2;
-      for(size_t i=0; i<numCells; i++){
-        double maxCorr = 0.0;
-        for(size_t j=0; j<numTrueCells; j++){
-          if (i == j){
-            continue;
-          }
-          double currCorr = getPearsonCorrelation(geneCountsMatrix[i],
-                                                  geneCountsMatrix[j]);
-          if (currCorr > maxCorr){
-            maxCorr = currCorr;
-          }
-        }
-        featureCountsMatrix[i][numFeatures-1] = maxCorr;
-      }
+      //for(size_t i=0; i<numCells; i++){
+      //  double maxCorr = 0.0;
+      //  for(size_t j=0; j<numTrueCells; j++){
+      //    if (i == j){
+      //      continue;
+      //    }
+      //    double currCorr = getPearsonCorrelation(geneCountsMatrix[i],
+      //                                            geneCountsMatrix[j]);
+      //    std::cout<< currCorr <<std::endl;
+      //    if (currCorr > maxCorr){
+      //      maxCorr = currCorr;
+      //    }
+      //  }
+      //  featureCountsMatrix[i][numFeatures-1] = maxCorr;
+      //}
 
       aopt.jointLog->info("Done making feature Matrix");
 
