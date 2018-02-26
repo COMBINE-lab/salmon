@@ -1448,7 +1448,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
       "usage, but can also reduce "
       "speed.  However, the results themselves will remain the same.")(
       "biasSpeedSamp",
-      po::value<std::uint32_t>(&(sopt.pdfSampFactor))->default_value(1),
+      po::value<std::uint32_t>(&(sopt.pdfSampFactor))->default_value(5),
       "The value at which the fragment length PMF is down-sampled "
       "when evaluating sequence-specific & GC fragment bias.  Larger values "
       "speed up effective "

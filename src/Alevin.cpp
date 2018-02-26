@@ -904,7 +904,7 @@ int salmonBarcoding(int argc, char* argv[]) {
     // "decrease the fidelity of bias modeling results.")
     (
      "biasSpeedSamp",
-     po::value<std::uint32_t>(&(sopt.pdfSampFactor))->default_value(1),
+     po::value<std::uint32_t>(&(sopt.pdfSampFactor))->default_value(5),
      "The value at which the fragment length PMF is down-sampled "
      "when evaluating sequence-specific & GC fragment bias.  Larger values speed up effective "
      "length correction, but may decrease the fidelity of bias modeling "
