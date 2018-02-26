@@ -202,6 +202,18 @@ namespace alevin {
       }
     }
 
+    void importBiologicalWhitelist(spp::sparse_hash_set<std::string>& bioList){
+      // file takend from https://github.com/10XGenomics/cellranger/tree/master/tenkit/lib/python/tenkit/barcodes
+      std::ifstream file("/mnt/scratch5/avi/alevin/bin/salmon/include/737K-august-2016.txt");
+      std::string bc;
+      if(file.is_open()) {
+        while(getline(file, bc)) {
+          bioList.insert(bc);
+        }
+        file.close();
+      }
+    }
+
     template <typename ProtocolT>
     bool performWhitelisting(AlevinOpts<ProtocolT>& aopt,
                              std::vector<uint32_t>& umiCount,
@@ -238,6 +250,21 @@ namespace alevin {
         }
       }
 
+      if (aopt.protocol.is_chromium()){
+        spp::sparse_hash_set<std::string> biologicalWhitelist;
+        importBiologicalWhitelist(biologicalWhitelist);
+
+        size_t origCount {0};
+        for (auto& bc: trueBarcodes){
+          if (biologicalWhitelist.contains(bc)){
+            origCount += 1;
+          }
+        }
+        aopt.jointLog->warn("Only {}/{} is biological({} was present)",
+                            origCount, trueBarcodes.size(),
+                            biologicalWhitelist.size());
+      }
+
       spp::sparse_hash_set<uint32_t> mRnaGenes, rRnaGenes;
       bool useMitoRna {false}, useRiboRna{false};
 
@@ -252,7 +279,7 @@ namespace alevin {
               mRnaGenes.insert(geneIdxMap[ gene ]);
             }
             else{
-              aopt.jointLog->error("{} mrna gene not found in txp tp gene map", gene);
+              aopt.jointLog->error("{} mitorna gene not found in txp tp gene map", gene);
               aopt.jointLog->flush();
               exit(1);
             }
@@ -295,6 +322,7 @@ namespace alevin {
       DoubleMatrixT featureCountsMatrix( numCells, DoubleVectorT (numFeatures, 0.0));
 
       // loop over each barcode
+      // TODO:: This can be parallelized
       for (size_t i=0; i<trueBarcodes.size(); i++){
         std::vector<double>& featureVector = featureCountsMatrix[i];
         std::string currBarcodeName = trueBarcodes[i];
