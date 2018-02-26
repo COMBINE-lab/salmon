@@ -339,10 +339,9 @@ namespace alevin {
 
         double meanCount = totalCellCount / numGenes;
         // meanMaxCount
-        //std::cout<<meanCount << "\t" << maxCount << "\t" << totalCellCount << "\n";
-        featureVector[1] = meanCount / maxCount ;
+        featureVector[1] = maxCount ? meanCount / maxCount : 0.0 ;
         // dedup Rate
-        featureVector[2] = 1.0 - (totalCellCount / umiCount[i]);
+        featureVector[2] = umiCount[i] ? 1.0 - (totalCellCount / umiCount[i]) : 0.0;
 
         //count of genes over mean
         size_t overMeanCount{0};
@@ -368,21 +367,20 @@ namespace alevin {
       aopt.jointLog->info("Done making regular featues; making correlation matrix");
 
       size_t numTrueCells = ( numCells - numLowConfidentBarcode ) / 2;
-      //for(size_t i=0; i<numCells; i++){
-      //  double maxCorr = 0.0;
-      //  for(size_t j=0; j<numTrueCells; j++){
-      //    if (i == j){
-      //      continue;
-      //    }
-      //    double currCorr = getPearsonCorrelation(geneCountsMatrix[i],
-      //                                            geneCountsMatrix[j]);
-      //    std::cout<< currCorr <<std::endl;
-      //    if (currCorr > maxCorr){
-      //      maxCorr = currCorr;
-      //    }
-      //  }
-      //  featureCountsMatrix[i][numFeatures-1] = maxCorr;
-      //}
+      for(size_t i=0; i<numCells; i++){
+        double maxCorr = 0.0;
+        for(size_t j=0; j<numTrueCells; j++){
+          if (i == j){
+            continue;
+          }
+          double currCorr = getPearsonCorrelation(geneCountsMatrix[i],
+                                                  geneCountsMatrix[j]);
+          if (currCorr > maxCorr){
+            maxCorr = currCorr;
+          }
+        }
+        featureCountsMatrix[i][numFeatures-1] = maxCorr;
+      }
 
       aopt.jointLog->info("Done making feature Matrix");
 

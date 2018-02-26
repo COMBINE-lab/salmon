@@ -612,13 +612,13 @@ bool GZipWriter::writeAbundances(std::string bcName,
   if (!countMatrixStream_) {
     countMatrixStream_.reset(new boost::iostreams::filtering_ostream);
     countMatrixStream_->push(boost::iostreams::gzip_compressor(6));
-    auto countMatFilename = path_ / "quants_mat.gz";
+    auto countMatFilename = path_ / "alevin" / "quants_mat.gz";
     countMatrixStream_->push(boost::iostreams::file_sink(countMatFilename.string(),
                                                          std::ios_base::out | std::ios_base::binary));
   }
 
   if (!bcNameStream_) {
-    auto bcNameFilename = path_ / "barcodes.txt";
+    auto bcNameFilename = path_ / "alevin" / "barcodes.txt";
     bcNameStream_.reset(new std::ofstream);
     bcNameStream_->open(bcNameFilename.string());
   }
@@ -636,8 +636,8 @@ bool GZipWriter::writeAbundances(std::string bcName,
     std::cout<< "ERROR: cell doesn't have any read count" << std::flush;
     exit(1);
   }
-  bcName += "\t"+std::to_string(total_counts)+"\n";
-  namefile.write(bcName.c_str(), sizeof(bcName));
+  bcName += "\n";
+  namefile.write(bcName.c_str(), bcName.size());
   return true;
 }
 
