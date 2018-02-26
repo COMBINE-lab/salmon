@@ -1,15 +1,9 @@
 #include "WhiteList.hpp"
-#include <cmath>
-#include <cassert>
-#include <fstream>
-#include <boost/iostreams/device/file.hpp>
-#include <boost/iostreams/filter/gzip.hpp>
-#include <boost/iostreams/filtering_stream.hpp>
-#include <numeric>
 
 namespace alevin {
   namespace whitelist {
 
+    using BlockedIndexRange = tbb::blocked_range<size_t>;
     using DoubleMatrixT = std::vector<std::vector<double>> ;
     using DoubleVectorT = std::vector<double> ;
 
@@ -138,12 +132,12 @@ namespace alevin {
                       classCount, classPrior, numClasses,
                       numTrueCells, numAmbiguousCells, numFalseCells);
 
-      for (auto vec: sigma){
-        for (auto cell : vec){
-          std::cout<<cell<<"\t";
-        }
-        std::cout<<"\n";
-      }
+      //for (auto vec: sigma){
+      //  for (auto cell : vec){
+      //    std::cout<<cell<<"\t";
+      //  }
+      //  std::cout<<"\n";
+      //}
 
       for (i=0; i<numTrueCells; i++){
         selectedBarcodes.emplace_back(i);
@@ -367,20 +361,25 @@ namespace alevin {
       aopt.jointLog->info("Done making regular featues; making correlation matrix");
 
       size_t numTrueCells = ( numCells - numLowConfidentBarcode ) / 2;
-      for(size_t i=0; i<numCells; i++){
-        double maxCorr = 0.0;
-        for(size_t j=0; j<numTrueCells; j++){
-          if (i == j){
-            continue;
-          }
-          double currCorr = getPearsonCorrelation(geneCountsMatrix[i],
-                                                  geneCountsMatrix[j]);
-          if (currCorr > maxCorr){
-            maxCorr = currCorr;
-          }
-        }
-        featureCountsMatrix[i][numFeatures-1] = maxCorr;
-      }
+      tbb::parallel_for(
+                        BlockedIndexRange(size_t(0), size_t(numCells)),
+                        [&featureCountsMatrix, numTrueCells,
+                         &geneCountsMatrix, numFeatures](const BlockedIndexRange& range) -> void {
+                          for (auto i : boost::irange(range.begin(), range.end())) {
+                            double maxCorr = 0.0;
+                            for(size_t j=0; j<numTrueCells; j++){
+                              if (i == j){
+                                continue;
+                              }
+                              double currCorr = getPearsonCorrelation(geneCountsMatrix[i],
+                                                                      geneCountsMatrix[j]);
+                              if (currCorr > maxCorr){
+                                maxCorr = currCorr;
+                              }
+                            }
+                            featureCountsMatrix[i][numFeatures-1] = maxCorr;
+                          }
+                        });
 
       aopt.jointLog->info("Done making feature Matrix");
 

@@ -6,10 +6,21 @@
 #include <vector>
 #include <string>
 #include <unordered_set>
+#include <cmath>
+#include <cassert>
+#include <fstream>
+#include <numeric>
 
 #include "SingleCellProtocols.hpp"
 #include "BarcodeGroup.hpp"
 #include "RapMapUtils.hpp"
+#include "tbb/parallel_for.h"
+#include "tbb/blocked_range.h"
+
+#include <boost/range/irange.hpp>
+#include <boost/iostreams/device/file.hpp>
+#include <boost/iostreams/filter/gzip.hpp>
+#include <boost/iostreams/filtering_stream.hpp>
 
 namespace alevin {
   namespace whitelist {
