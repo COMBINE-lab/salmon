@@ -819,7 +819,7 @@ int salmonBarcoding(int argc, char* argv[]) {
     // "The number of threads to use concurrently.")
     (
      "incompatPrior",
-     po::value<double>(&(sopt.incompatPrior))->default_value(1e-20),
+     po::value<double>(&(sopt.incompatPrior))->default_value(0.0),
      "This option "
      "sets the prior probability that an alignment that disagrees with the "
      "specified "

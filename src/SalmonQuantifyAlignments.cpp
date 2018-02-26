@@ -1333,7 +1333,7 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
       "gcBias", po::value(&(sopt.gcBiasCorrect))->zero_tokens(),
       "[experimental] Perform fragment GC bias correction")(
       "incompatPrior",
-      po::value<double>(&(sopt.incompatPrior))->default_value(1e-20),
+      po::value<double>(&(sopt.incompatPrior))->default_value(0.0),
       "This option "
       "sets the prior probability that an alignment that disagrees with the "
       "specified "
