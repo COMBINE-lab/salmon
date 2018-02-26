@@ -27,9 +27,6 @@ namespace alevin{
       //barcode and 8 length umi & iupac can be
       //changed
       DropSeq(): Rule(12, 8, BarcodeEnd::FIVE, 16777216){}
-      bool is_chromium(){
-        return false;
-      }
     };
 
     struct InDrop : Rule{
@@ -40,9 +37,6 @@ namespace alevin{
       InDrop(): Rule(42, 6, BarcodeEnd::FIVE, 22347776){}
 
       std::string w1;
-      bool is_chromium(){
-        return false;
-      }
       void setW1(std::string& w1_){
         w1 = w1_;
       }
@@ -50,18 +44,11 @@ namespace alevin{
 
     struct Chromium : Rule{
       Chromium(): Rule(16, 10, BarcodeEnd::FIVE, 4294967295){}
-
-      bool is_chromium(){
-        return true;
-      }
     };
 
     //dummy class
     struct Custom : Rule{
       Custom() : Rule(0,0,BarcodeEnd::THREE,0){}
-      bool is_chromium(){
-        return false;
-      }
     };
   }
 }
