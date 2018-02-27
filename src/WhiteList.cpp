@@ -1,4 +1,5 @@
 #include "WhiteList.hpp"
+#include "tbb/task_scheduler_init.h"
 
 namespace alevin {
   namespace whitelist {
@@ -362,6 +363,7 @@ namespace alevin {
       aopt.jointLog->info("Done making regular featues; making correlation matrix");
 
       size_t numTrueCells = ( numCells - numLowConfidentBarcode ) / 2;
+      tbb::task_scheduler_init tbbScheduler(aopt.numThreads);
       tbb::parallel_for(
                         BlockedIndexRange(size_t(0), size_t(numCells)),
                         [&featureCountsMatrix, numTrueCells,
