@@ -297,73 +297,79 @@ namespace alevin {
 
       // loop over each barcode
       // TODO:: This can be parallelized
-      for (size_t i=0; i<trueBarcodes.size(); i++){
-        std::vector<double>& featureVector = featureCountsMatrix[i];
-        std::string currBarcodeName = trueBarcodes[i];
-        uint32_t rawBarcodeFrequency{0};
+      tbb::task_scheduler_init tbbScheduler(aopt.numThreads);
+      tbb::parallel_for(
+                        BlockedIndexRange(size_t(0), size_t(trueBarcodes.size())),
+                        [&featureCountsMatrix, &trueBarcodes,
+                         &freqCounter, &aopt, &umiCount, &geneCountsMatrix,
+                         &countMatrix, &txpToGeneMap, useMitoRna, useRiboRna,
+                         &mRnaGenes, &rRnaGenes, numGenes](const BlockedIndexRange& range) -> void {
+                          for (auto i : boost::irange(range.begin(), range.end())) {
+                            std::vector<double>& featureVector = featureCountsMatrix[i];
+                            std::string& currBarcodeName = trueBarcodes[i];
+                            uint32_t rawBarcodeFrequency{0};
 
-        // Alignment Rate
-        bool indexOk = freqCounter.find(currBarcodeName, rawBarcodeFrequency);
-        if ( not indexOk ){
-          aopt.jointLog->error("Error: index {} not found in freq Counter\n"
-                               "Please Report the issue on github", currBarcodeName,
-                               freqCounter.size());
-          aopt.jointLog->flush();
-          exit(1);
-        }
-        featureVector[0] = umiCount[i] / static_cast<double>(rawBarcodeFrequency);
+                            // Alignment Rate
+                            bool indexOk = freqCounter.find(currBarcodeName, rawBarcodeFrequency);
+                            if ( not indexOk ){
+                              aopt.jointLog->error("Error: index {} not found in freq Counter\n"
+                                                   "Please Report the issue on github", currBarcodeName,
+                                                   freqCounter.size());
+                              aopt.jointLog->flush();
+                              exit(1);
+                            }
+                            featureVector[0] = rawBarcodeFrequency ?
+                              umiCount[i] / static_cast<double>(rawBarcodeFrequency) : 0.0;
 
-        double totalCellCount{0.0}, maxCount{0};
-        std::vector<double>& geneCounts = geneCountsMatrix[i];
-        auto& countVec = countMatrix[i];
-        double mitoCount {0.0}, riboCount {0.0};
+                            double totalCellCount{0.0}, maxCount{0};
+                            std::vector<double>& geneCounts = geneCountsMatrix[i];
+                            auto& countVec = countMatrix[i];
+                            double mitoCount {0.0}, riboCount {0.0};
 
-        for (size_t j=0; j<countVec.size(); j++){
-          auto count = countVec[j];
-          geneCounts[ txpToGeneMap[j] ] += count;
-          totalCellCount += count;
-          if (count>maxCount){
-            maxCount = count;
-          }
-          if (useMitoRna and mRnaGenes.contains(j)){
-            mitoCount += count;
-          }
-          if (useRiboRna and rRnaGenes.contains(j)){
-            riboCount += count;
-          }
-        }
+                            for (size_t j=0; j<countVec.size(); j++){
+                              auto count = countVec[j];
+                              geneCounts[ txpToGeneMap[j] ] += count;
+                              totalCellCount += count;
+                              if (count>maxCount){
+                                maxCount = count;
+                              }
+                              if (useMitoRna and mRnaGenes.contains(j)){
+                                mitoCount += count;
+                              }
+                              if (useRiboRna and rRnaGenes.contains(j)){
+                                riboCount += count;
+                              }
+                            }
 
-        double meanCount = totalCellCount / numGenes;
-        // meanMaxCount
-        featureVector[1] = maxCount ? meanCount / maxCount : 0.0 ;
-        // dedup Rate
-        featureVector[2] = umiCount[i] ? 1.0 - (totalCellCount / umiCount[i]) : 0.0;
+                            double meanCount = totalCellCount / numGenes;
+                            // meanMaxCount
+                            featureVector[1] = maxCount ? meanCount / maxCount : 0.0 ;
+                            // dedup Rate
+                            featureVector[2] = umiCount[i] ? 1.0 - (totalCellCount / umiCount[i]) : 0.0;
 
-        //count of genes over mean
-        size_t overMeanCount{0};
-        for (auto count: geneCounts){
-          if (count > meanCount){
-            overMeanCount += 1;
-          }
-        }
-        featureVector[3] = overMeanCount;
+                            //count of genes over mean
+                            size_t overMeanCount{0};
+                            for (auto count: geneCounts){
+                              if (count > meanCount){
+                                overMeanCount += 1;
+                              }
+                            }
+                            featureVector[3] = overMeanCount;
 
-        size_t curFeatIdx = 4;
-        if (useMitoRna) {
-          featureVector[curFeatIdx] = mitoCount ? mitoCount/totalCellCount : 0.0;
-          curFeatIdx += 1;
-        }
-        if (useRiboRna) {
-          featureVector[curFeatIdx] = riboCount ? riboCount/totalCellCount : 0.0;
-        }
+                            size_t curFeatIdx = 4;
+                            if (useMitoRna) {
+                              featureVector[curFeatIdx] = mitoCount ? mitoCount/totalCellCount : 0.0;
+                              curFeatIdx += 1;
+                            }
+                            if (useRiboRna) {
+                              featureVector[curFeatIdx] = riboCount ? riboCount/totalCellCount : 0.0;
+                            }
+                          }
+                        });
 
-        //geneCountsMatrix[i] = geneCounts;
-        //featureCountsMatrix[i] = featureVector;
-      }
       aopt.jointLog->info("Done making regular featues; making correlation matrix");
 
       size_t numTrueCells = ( numCells - numLowConfidentBarcode ) / 2;
-      tbb::task_scheduler_init tbbScheduler(aopt.numThreads);
       tbb::parallel_for(
                         BlockedIndexRange(size_t(0), size_t(numCells)),
                         [&featureCountsMatrix, numTrueCells,

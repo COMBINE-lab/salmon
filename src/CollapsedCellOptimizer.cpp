@@ -422,7 +422,6 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                                                       trueBarcodes,
                                                                       freqCounter,
                                                                       geneIdxMap,
-                                                                      //countMatrix,
                                                                       txpToGeneMap,
                                                                       numLowConfidentBarcode);
     if (!whitelistingSuccess) {
