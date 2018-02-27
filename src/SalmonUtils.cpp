@@ -190,6 +190,10 @@ bool compatibleHit(const LibraryFormat expected, int32_t start, bool isForward,
               expectedStrand == ReadStrandedness::A);
     }
     break;
+    // The next two cases are for *orphaned* PE reads
+
+    // This case is where the mapped read belongs to the "left" (i.e. 1) end
+    // of the pair.
   case MateStatus::PAIRED_END_LEFT:
     // "M"atching or same orientation is a special case
     if (expected.orientation == ReadOrientation::SAME) {
@@ -198,12 +202,15 @@ bool compatibleHit(const LibraryFormat expected, int32_t start, bool isForward,
               (expectedStrand == ReadStrandedness::A and !isForward));
     } else if (isForward) { // IU, ISF, OU, OSF, MU, MSF
       return (expectedStrand == ReadStrandedness::U or
-              expectedStrand == ReadStrandedness::S);
+              expectedStrand == ReadStrandedness::SA);
     } else { // IU, ISR, OU, OSR, MU, MSR
       return (expectedStrand == ReadStrandedness::U or
-              expectedStrand == ReadStrandedness::A);
+              expectedStrand == ReadStrandedness::AS);
     }
     break;
+
+    // This case is where the mapped read belongs to the "right" (i.e. 2) end
+    // of the pair.
   case MateStatus::PAIRED_END_RIGHT:
     // "M"atching or same orientation is a special case
     if (expected.orientation == ReadOrientation::SAME) {
@@ -212,10 +219,10 @@ bool compatibleHit(const LibraryFormat expected, int32_t start, bool isForward,
               (expectedStrand == ReadStrandedness::A and !isForward));
     } else if (isForward) { // IU, ISR, OU, OSR, MU, MSR
       return (expectedStrand == ReadStrandedness::U or
-              expectedStrand == ReadStrandedness::A);
+              expectedStrand == ReadStrandedness::AS);
     } else { // IU, ISF, OU, OSF, MU, MSF
       return (expectedStrand == ReadStrandedness::U or
-              expectedStrand == ReadStrandedness::S);
+              expectedStrand == ReadStrandedness::SA);
     }
     break;
   default:
