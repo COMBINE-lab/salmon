@@ -415,7 +415,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                         skippedCBcount);
   }
 
-  if(not boost::filesystem::exists(aopt.whitelistFile)){
+  if(not boost::filesystem::exists(aopt.whitelistFile) and not aopt.nobarcode){
     aopt.jointLog->info("Starting white listing");
     bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
                                                                       umiCount,
