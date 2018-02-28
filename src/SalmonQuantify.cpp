@@ -1123,7 +1123,9 @@ void processReadsQuasi(
           case MateStatus::PAIRED_END_RIGHT: {
             // we pass in !h.fwd here because the right read
             // will have the opposite orientation from its mate.
-            h.format = salmon::utils::hitType(h.pos, !h.fwd);
+            // NOTE : We will try recording what the mapped fragment
+            // actually is, not to infer what it's mate should be.
+            h.format = salmon::utils::hitType(h.pos, h.fwd);
           } break;
           case MateStatus::PAIRED_END_PAIRED: {
             uint32_t end1Pos = (h.fwd) ? h.pos : h.pos + h.readLen;
