@@ -87,6 +87,7 @@ bool runPerCellEM(
   if (alphaSum < minWeight) {
     jointlog->error("Total alpha weight was too small! "
                     "Make sure you ran salmon correclty.");
+    jointlog->flush();
     return false;
   }
 
@@ -216,6 +217,7 @@ void optimizeCell(SCExpT& experiment,
       if(!isKeyPresent){
         jointlog->error("Not able to find key in Cuckoo hash map."
                         "Please Report this issue on github");
+        jointlog->flush();
         exit(1);
       }
       ++eqNum;
@@ -233,8 +235,8 @@ void optimizeCell(SCExpT& experiment,
         activeGeneIds.insert(gid);
       }
       else{
-        std::cerr << "Out of Range error for txp to gene Map in 1st: " << '\n';
-        std::cerr << tid << "\t" << transcripts[tid].RefName << " not found";
+        std::cerr << "Out of Range error for txp to gene Map in 1st: " << '\n' << std::flush;
+        std::cerr << tid << "\t" << transcripts[tid].RefName << " not found" << std::flush;
         exit(1);
       }
     }
@@ -248,8 +250,8 @@ void optimizeCell(SCExpT& experiment,
             gid = txpToGeneMap.at(tid);
           }
           else{
-            std::cerr << "Out of Range error for txp to gene Map: " << '\n';
-            std::cerr << tid << "\t not found";
+            std::cerr << "Out of Range error for txp to gene Map: " << '\n' << std::flush;
+            std::cerr << tid << "\t not found" << std::flush;
             exit(1);
           }
           if (activeGeneIds.find(gid) != activeGeneIds.end()){
@@ -269,6 +271,7 @@ void optimizeCell(SCExpT& experiment,
     if (activetranscriptids.size() == 0) {
       jointlog->error("it seems that no transcripts are expressed; something is "
                       "likely wrong!");
+      jointlog->flush();
       std::exit(1);
     }
 
@@ -286,6 +289,7 @@ void optimizeCell(SCExpT& experiment,
       if( !isEMok ){
         jointlog->error("EM iteration for cell {} failed \n"
                         "Please Report this on github.", trueBarcodeStr);
+        jointlog->flush();
         std::exit(1);
       }
     }
@@ -416,9 +420,27 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   }
 
   if(not boost::filesystem::exists(aopt.whitelistFile) and not aopt.nobarcode){
+    std::vector<std::vector<double>> countMatrix(trueBarcodes.size(),
+                                                 std::vector<double> (txpToGeneMap.size(), 0.0));
+    alevin::whitelist::populate_count_matrix(aopt.outputDirectory, countMatrix);
+    if (aopt.dumpCsvCounts){
+      aopt.jointLog->info("Starting dumping csv counts");
+      std::ofstream qFile;
+      boost::filesystem::path qFilePath = aopt.outputDirectory / "quants_mat.csv";
+      qFile.open(qFilePath.string());
+      for (auto& row : countMatrix) {
+        for (auto cell : row) {
+          qFile << cell << ',';
+        }
+        qFile << "\n";
+      }
+      aopt.jointLog->info("Finished dumping csv counts");
+    }
+
     aopt.jointLog->info("Starting white listing");
     bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
                                                                       umiCount,
+                                                                      countMatrix,
                                                                       trueBarcodes,
                                                                       freqCounter,
                                                                       geneIdxMap,
@@ -432,7 +454,6 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
       aopt.jointLog->flush();
       return false;
     }
-    std::cout<< "\n\n";
     aopt.jointLog->info("Finished white listing");
   }
 

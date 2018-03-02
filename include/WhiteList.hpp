@@ -26,9 +26,18 @@
 
 namespace alevin {
   namespace whitelist {
+
+    using BlockedIndexRange = tbb::blocked_range<size_t>;
+    using DoubleMatrixT = std::vector<std::vector<double>> ;
+    using DoubleVectorT = std::vector<double> ;
+
+    void populate_count_matrix(boost::filesystem::path& outDir,
+                               DoubleMatrixT& countMatrix);
+
     template <typename ProtocolT>
     bool performWhitelisting(AlevinOpts<ProtocolT>& aopt,
                              std::vector<uint32_t>& umiCount,
+                             DoubleMatrixT& countMatrix,
                              std::vector<std::string>& trueBarcodes,
                              CFreqMapT& freqCounter,
                              spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
