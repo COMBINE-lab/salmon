@@ -261,7 +261,14 @@ uint32_t getLeftBoundary(std::vector<size_t>& sortedIdx,
     }
 
     if(isUp == false){
-      return topxBarcodes-j;
+      // ignoring all the frequencies having same frequency as cutoff
+      uint32_t cutoff = topxBarcodes-j;
+      uint32_t cutoffFrequency = freqCounter[sortedIdx[cutoff]];
+      uint32_t nearestLeftFrequency = cutoffFrequency;
+      while(nearestLeftFrequency == cutoffFrequency){
+        nearestLeftFrequency = freqCounter[sortedIdx[--cutoff]];
+      }
+      return cutoff;
     }
   }
 
@@ -311,7 +318,18 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
       lowRegionNumBarcodes = fractionTrueBarcodes;
     }
 
+    // ignoring all the frequencies having same frequency as cutoff
+    // to imitate stable sort
     topxBarcodes += lowRegionNumBarcodes;
+    uint32_t cutoffFrequency = freqCounter[sortedIdx[ topxBarcodes ]];
+    uint32_t nearestLeftFrequency = cutoffFrequency;
+    while(nearestLeftFrequency == cutoffFrequency){
+      nearestLeftFrequency = freqCounter[sortedIdx[--topxBarcodes]];
+      lowRegionNumBarcodes--;
+    }
+    lowRegionNumBarcodes++;
+    topxBarcodes++;
+
     // keeping 1000 cells left of the left boundary for learning
     aopt.jointLog->info("Total {}{}{}(has {}{}{} low confidence)"
                         " barcodes",
@@ -395,8 +413,8 @@ void indexBarcodes(AlevinOpts<ProtocolT>& aopt,
                                         ZRow.second,
                                         freqCounter,
                                         dumpPair);
-    for(auto updateVal: dumpPair){
-      barcodeSoftMap[barcode].push_back(updateVal);
+    for(auto& updateVal: dumpPair){
+      barcodeSoftMap[barcode].emplace_back(updateVal);
     }
   }//end-for
 

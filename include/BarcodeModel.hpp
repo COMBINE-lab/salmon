@@ -111,7 +111,8 @@ namespace alevin{
     }
 
     template <typename T>
-    std::vector<size_t> sort_indexes(const std::vector<T> &v) {
+    std::vector<size_t> sort_indexes(const std::vector<T> &v,
+                                     const std::vector<std::string>& trueBarcodes) {
 
       // initialize original index locations
       std::vector<size_t> idx(v.size());
@@ -119,7 +120,39 @@ namespace alevin{
 
       // sort indexes based on comparing values in v
       sort(idx.begin(), idx.end(),
-           [&v](size_t i1, size_t i2) {return v[i1] < v[i2];});
+           [&v, &trueBarcodes](size_t i1, size_t i2) {
+             if (v[i1] > v[i2])
+               return true;
+             else if (v[i1] < v[i2])
+               return false;
+             else
+               if (trueBarcodes[i1] > trueBarcodes[i2])
+                 return true;
+               else
+                 return false;
+           });
+
+      //if(v.size()>1 and v[idx[0]] == v[idx[1]]){
+      //  size_t maxIdx = idx[0];
+      //  size_t maxBase = 0;
+      //  for (size_t qbase=1; qbase<v.size(); qbase++){
+      //    size_t qIdx = idx[qbase];
+      //    if (v[qIdx] < v[maxIdx]){
+      //      break;
+      //    }
+      //    else if (v[qIdx] > v[maxIdx]) {
+      //      std::cout << "ERROR in sorting the barcode probability" <<std::flush;
+      //      exit(1);
+      //    }
+      //    if (trueBarcodes[qIdx].compare(trueBarcodes[maxIdx]) < 0){
+      //      maxIdx = qIdx;
+      //      maxBase = qbase;
+      //    }
+      //  }
+      //  if (maxIdx != idx[0]){
+      //    std::iter_swap(idx.begin(), idx.begin()+maxBase);
+      //  }
+      //}
 
       return idx;
     }
@@ -161,7 +194,7 @@ namespace alevin{
                         probabilityVec.begin(),
                         [probabilityNorm](double n){ return n/probabilityNorm;} );
 
-        for (auto i: sort_indexes(probabilityVec)) {
+        for (auto i: sort_indexes(probabilityVec, trueBarcodes)) {
           dumpPair.push_back(std::make_pair(trueBarcodes[i], probabilityVec[i]));
         }
         //std::vector<double> cumProbVec(probabilityVec.size());
