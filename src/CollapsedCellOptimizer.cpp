@@ -118,18 +118,6 @@ void optimizeCell(SCExpT& experiment,
       continue;
     }
     auto& trueBarcodeStr = trueBarcodes[trueBarcodeIdx];
-    //creating quant directory for each cell and file
-
-    //bfs::path qDirPath = outDir / "cell" / trueBarcodeStr ;
-    //if (!bfs::exists(qDirPath)) {
-    //  bool dirSuccess = boost::filesystem::create_directories(qDirPath);
-    //  if (!dirSuccess) {
-    //    fmt::print(stderr,"\nCould not create output directory {}\nExiting Now.",
-    //               qDirPath.string());
-    //    exit(1);
-    //  }
-    //}
-
 
     //extracting per-cell level eq class information
     const std::vector<Transcript>& transcripts = experiment.transcripts();
@@ -140,23 +128,6 @@ void optimizeCell(SCExpT& experiment,
     uint64_t totalcount{0};
 
     std::unordered_map<uint32_t, std::unordered_set<uint64_t>> umiBiasList;
-    //std::ofstream qFile;
-
-    //if(verbose){
-    //  bfs::path qFilePath = qDirPath / "cell_eq_classes.txt";
-    //  qFile.open(qFilePath.string());
-
-    //  // Number of transcripts
-    //  qFile << transcripts.size() << '\n';
-
-    //  // Number of equivalence classes
-    //  //qFile << "XX" << '\n';
-
-    //  // dump transcript names
-    //  for (auto& t : transcripts) {
-    //    qFile << t.RefName << '\n';
-    //  }
-    //}
 
     // equivalence class vector encoding for this cell (i.e. row)
     std::vector<uint32_t> eqIDs;
@@ -195,11 +166,6 @@ void optimizeCell(SCExpT& experiment,
               totalcount += eqCount;
 
               if(verbose){
-                // group size
-                // qFile << txps.size();
-                // dump txp-group members
-                //for (auto tid : txps) { qFile << "\t" << tid; }
-                //qFile << "\t" << eqCount << "\n";
                 eqIDs.push_back(static_cast<uint32_t>(eqNum));
                 counts.push_back(static_cast<uint32_t>(eqCount));
               }
@@ -260,11 +226,6 @@ void optimizeCell(SCExpT& experiment,
         }
       }
     }
-
-    //if(verbose){
-    //  qFile.close();
-    //  //jointlog->info("optimizing over {} equivalence classes", txpgroups.size());
-    //}
 
     double totalnumfrags{static_cast<double>(totalcount)};
 
@@ -390,6 +351,12 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   tbb::atomic<uint32_t> skippedCBcount{0};
   std::atomic<uint32_t> bcount{0};
 
+  if (aopt.dumpCsvCounts and aopt.noEM){
+    aopt.jointLog->warn("EM wasn't run can't dump csv counts \n"
+                   "use --dumpbarcodeeq for deduplicated eqClass counts");
+    aopt.jointLog->flush();
+  }
+
   std::vector<std::thread> workerThreads;
   for (size_t tn = 0; tn < numWorkerThreads; ++tn) {
     workerThreads.emplace_back(optimizeCell,
@@ -408,7 +375,6 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                aopt.protocol.umiLength,
                                aopt.noEM,
                                std::ref(txpToGeneMap));
-                               //std::ref(countMatrix));
   }
 
   for (auto& t : workerThreads) {
@@ -419,7 +385,9 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                         skippedCBcount);
   }
 
-  if(not boost::filesystem::exists(aopt.whitelistFile) and not aopt.nobarcode){
+  // Perform White listing only if the data has barcode, EM has been run and white list file
+  // has not been provided
+  if(not boost::filesystem::exists(aopt.whitelistFile) and not aopt.nobarcode and not aopt.noEM){
     std::vector<std::vector<double>> countMatrix(trueBarcodes.size(),
                                                  std::vector<double> (txpToGeneMap.size(), 0.0));
     alevin::whitelist::populate_count_matrix(aopt.outputDirectory, countMatrix);

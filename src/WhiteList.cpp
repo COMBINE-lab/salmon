@@ -190,12 +190,21 @@ namespace alevin {
       countMatrixStream.push(boost::iostreams::gzip_decompressor());
 
       auto countMatFilename = outDir / "quants_mat.gz";
+      if(not boost::filesystem::exists(countMatFilename)){
+        std::cout<<"ERROR: Can't import Binary file quants.mat.gz, it doesn't exist" <<std::flush;
+        exit(1);
+      }
       countMatrixStream.push(boost::iostreams::file_source(countMatFilename.string(),
                                                            std::ios_base::in | std::ios_base::binary));
       size_t numTxps = countMatrix[0].size();
       size_t elSize = sizeof(typename std::vector<double>::value_type);
       for (auto& cell: countMatrix){
         countMatrixStream.read(reinterpret_cast<char*>(cell.data()), elSize * numTxps);
+        if (std::accumulate(cell.begin(), cell.end(), 0.0) == 0){
+          std::cout<<"ERROR: Importing counts from binary\n"
+                   <<"Cell has 0 reads, should not happen" <<std::flush;
+          exit(1);
+        }
       }
     }
 
