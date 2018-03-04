@@ -1,5 +1,6 @@
 #include "WhiteList.hpp"
 #include "tbb/task_scheduler_init.h"
+#include <cassert>
 
 namespace alevin {
   namespace whitelist {
@@ -129,12 +130,12 @@ namespace alevin {
                       classCount, classPrior, numClasses,
                       numTrueCells, numAmbiguousCells, numFalseCells);
 
-      //for (auto vec: sigma){
-      //  for (auto cell : vec){
-      //    std::cout<<cell<<"\t";
-      //  }
-      //  std::cout<<"\n";
-      //}
+      for (auto vec: sigma){
+        for (auto cell : vec){
+          std::cout<<cell<<"\t";
+        }
+        std::cout<<"\n";
+      }
 
       for (i=0; i<numTrueCells; i++){
         selectedBarcodes.emplace_back(i);
@@ -225,7 +226,6 @@ namespace alevin {
       // umiCount has frequency of UMI per-cell after knee selection
       // Count matrix file after the deduplicated counts
       // TODO::
-      // 2. No correlation
       // 4. Using all txps i.e. not ignoring txp with 0 values in all the cells
 
       size_t numCells = trueBarcodes.size();
@@ -237,6 +237,30 @@ namespace alevin {
 
       spp::sparse_hash_set<uint32_t> mRnaGenes, rRnaGenes;
       bool useMitoRna {false}, useRiboRna{false};
+      boost::filesystem::path barcodeOrderFile = aopt.outputDirectory / "barcodes.txt";
+      spp::sparse_hash_map<std::string, uint32_t> bcOrderMap;
+
+      if(boost::filesystem::exists(barcodeOrderFile)){
+        std::ifstream bcFile(barcodeOrderFile.string());
+        std::string bc;
+        if(bcFile.is_open()) {
+          uint32_t count = 0;
+          while(getline(bcFile, bc)) {
+            bcOrderMap[bc] = count;
+            count += 1;
+          }
+          bcFile.close();
+        }
+        aopt.jointLog->info("Done importing order of barcodes \"barcodes.txt\" file.");
+        aopt.jointLog->info("Total {} barcodes found", bcOrderMap.size());
+        assert(bcOrderMap.size() == numCells);
+      }
+      else{
+        aopt.jointLog->error("barcodes.txt file not found. It contains the order of "
+                             "the cells counts was dumped.");
+        aopt.jointLog->flush();
+        exit(1);
+      }
 
       if(boost::filesystem::exists(aopt.mRnaFile)){
         numFeatures += 1;
@@ -298,9 +322,10 @@ namespace alevin {
                         BlockedIndexRange(size_t(0), size_t(trueBarcodes.size())),
                         [&featureCountsMatrix, &trueBarcodes,
                          &freqCounter, &aopt, &umiCount, &geneCountsMatrix,
-                         &countMatrix, &txpToGeneMap, useMitoRna, useRiboRna,
+                         &countMatrix, &txpToGeneMap, useMitoRna, useRiboRna, &bcOrderMap,
                          &mRnaGenes, &rRnaGenes, numGenes](const BlockedIndexRange& range) -> void {
                           for (auto i : boost::irange(range.begin(), range.end())) {
+                            uint32_t count_matrix_i = bcOrderMap[ trueBarcodes[i] ];
                             std::vector<double>& featureVector = featureCountsMatrix[i];
                             std::string& currBarcodeName = trueBarcodes[i];
                             uint32_t rawBarcodeFrequency{0};
@@ -317,10 +342,10 @@ namespace alevin {
                             featureVector[0] = rawBarcodeFrequency ?
                               umiCount[i] / static_cast<double>(rawBarcodeFrequency) : 0.0;
 
-                            double totalCellCount{0.0}, maxCount{0};
-                            std::vector<double>& geneCounts = geneCountsMatrix[i];
-                            auto& countVec = countMatrix[i];
+                            double totalCellCount{0.0}, maxCount{0.0};
                             double mitoCount {0.0}, riboCount {0.0};
+                            DoubleVectorT& geneCounts = geneCountsMatrix[i];
+                            DoubleVectorT& countVec = countMatrix[count_matrix_i];
 
                             for (size_t j=0; j<countVec.size(); j++){
                               auto count = countVec[j];
@@ -388,6 +413,23 @@ namespace alevin {
                         });
 
       aopt.jointLog->info("Done making feature Matrix");
+
+      // debugging code
+      std::ofstream whitelistStream1;
+      auto whitelistFileName1 = aopt.outputDirectory / "featureDump.txt";
+      whitelistStream1.open(whitelistFileName1.string());
+      for(size_t i=0; i<featureCountsMatrix.size(); i++){
+        whitelistStream1 << trueBarcodes[i]
+          //<< "\t" << featureCountsMatrix[i][0]
+          //<< "\t" << featureCountsMatrix[i][1]
+          //<< "\t" << featureCountsMatrix[i][2]
+          //<< "\t" << featureCountsMatrix[i][3]
+          //<< "\t" << featureCountsMatrix[i][4]
+          //<< "\t" << featureCountsMatrix[i][5]
+          << "\t" << featureCountsMatrix[i][6]
+                         << "\n";
+      }
+      whitelistStream1.close();
 
       std::vector<uint32_t> whitelistBarcodes =
         classifyBarcodes(featureCountsMatrix, numCells,

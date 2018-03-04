@@ -393,6 +393,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
     aopt.jointLog->info("Starting white listing");
     std::vector<std::vector<double>> countMatrix(trueBarcodes.size(),
                                                  std::vector<double> (txpToGeneMap.size(), 0.0));
+    aopt.jointLog->info("Done Importing count matrix for all cells");
     alevin::whitelist::populate_count_matrix(aopt.outputDirectory, countMatrix);
     if (aopt.dumpCsvCounts){
       aopt.jointLog->info("Starting dumping csv counts");
