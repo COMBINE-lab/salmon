@@ -198,11 +198,15 @@ namespace alevin {
                                                            std::ios_base::in | std::ios_base::binary));
       size_t numTxps = countMatrix[0].size();
       size_t elSize = sizeof(typename std::vector<double>::value_type);
+      size_t cellCount {0};
       for (auto& cell: countMatrix){
+        cellCount += 1;
         countMatrixStream.read(reinterpret_cast<char*>(cell.data()), elSize * numTxps);
         if (std::accumulate(cell.begin(), cell.end(), 0.0) == 0){
           std::cout<<"ERROR: Importing counts from binary\n"
-                   <<"Cell has 0 reads, should not happen" <<std::flush;
+                   <<"Cell has 0 reads, should not happen.\n"
+                   <<"Saw total "<< cellCount << " Cells before Error"
+                   <<std::flush;
           exit(1);
         }
       }

@@ -388,6 +388,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   // Perform White listing only if the data has barcode, EM has been run and white list file
   // has not been provided
   if(not boost::filesystem::exists(aopt.whitelistFile) and not aopt.nobarcode and not aopt.noEM){
+    aopt.jointLog->info("Starting white listing");
     std::vector<std::vector<double>> countMatrix(trueBarcodes.size(),
                                                  std::vector<double> (txpToGeneMap.size(), 0.0));
     alevin::whitelist::populate_count_matrix(aopt.outputDirectory, countMatrix);
@@ -405,7 +406,6 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
       aopt.jointLog->info("Finished dumping csv counts");
     }
 
-    aopt.jointLog->info("Starting white listing");
     bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
                                                                       umiCount,
                                                                       countMatrix,
