@@ -1149,7 +1149,7 @@ void processReadsQuasi(
                                      alevinOpts, iomutex);
   }
 
-  if (maxZeroFrac > 2.0) {
+  if (maxZeroFrac > 5.0) {
     salmonOpts.jointLog->info("Thread saw mini-batch with a maximum of {0:.2f}\% zero probability fragments",
                               maxZeroFrac);
   }

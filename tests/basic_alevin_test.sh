@@ -3,13 +3,44 @@ OUT=$PWD
 
 tfile=$(mktemp /tmp/foo.XXXXXXXXX)
 
-/usr/bin/time -o $tfile $ALVBIN alevin -1 /mnt/scratch4/mohsen/strt_reads/umi/SRR1547890_umi.fastq.gz -2 /mnt/scratch4/mohsen/strt_reads/seqs/SRR1547890.fastq.gz -la --end 5 --umilength 6 --barcodelength 10 --nobarcode -o $OUT/prediction -i /mnt/scratch5/avi/alevin/strt_testing/salData/salIndex/ -p 20 --nosoftmap --dedup --tgMap /mnt/scratch5/avi/alevin/data/mouse/gtf/txp2gene.tsv --dumpbarcodeeq --dumpcsvcounts
+/usr/bin/time -o $tfile $ALVBIN alevin -lISR  -1 /mnt/scratch5/avi/alevin/data/10x/mohu/100/all_bcs.fq -2 /mnt/scratch5/avi/alevin/data/10x/mohu/100/all_reads.fq --chromium -o $OUT/prediction -i /mnt/scratch5/avi/alevin/testing/salmonData/index/ -p 20 --dedup --tgMap /mnt/scratch5/avi/alevin/data/mohu/gtf/txp2gene.tsv --mrna /mnt/scratch5/avi/alevin/data/mohu/gtf/mrna.txt --rrna /mnt/scratch5/avi/alevin/data/mohu/gtf/rrna.txt  --dumpbarcodeeq --dumpcsvcounts --dumpfeatures --dumpbarcodemap
 
 cat $tfile
 
 tar -xvzf alevin_test_data.tar.gz
 
-python2 alevin_test_data/src-py/get_correlation.py --sf prediction
+echo "Barcodes.txt"
+sort prediction/alevin/barcodes.txt > 1.txt
+sort alevin_test_data/alevin/barcodes.txt > 2.txt
+diff 1.txt 2.txt  > diff.txt
+wc -l diff.txt
+echo "Above line should be Zero"
 
-echo 'EM #reads'
-awk '{sum += $3} END {print sum}' prediction/alevin/cell/AAA/quant.sf
+echo "BarcodeSoftMap.txt"
+sort prediction/alevin/barcodeSoftMaps.txt > 1.txt
+sort alevin_test_data/alevin/barcodeSoftMaps.txt > 2.txt
+diff 1.txt 2.txt  > diff.txt
+wc -l diff.txt
+echo "Above line should be Zero"
+
+echo "frequency.txt"
+sort prediction/alevin/frequency.txt > 1.txt
+sort alevin_test_data/alevin/frequency.txt > 2.txt
+diff 1.txt 2.txt  > diff.txt
+wc -l diff.txt
+echo "Above line should be Zero"
+
+echo "mappedUMI.txt"
+sort prediction/alevin/MappedUmi.txt > 1.txt
+sort alevin_test_data/alevin/MappedUmi.txt > 2.txt
+diff 1.txt 2.txt  > diff.txt
+wc -l diff.txt
+echo "Above line should be Zero"
+
+rm 1.txt 2.txt diff.txt
+
+#python2 alevin_test_data/src-py/alevin.py --txps 322667 --one prediction/alevin/quants_mat.csv --b1 prediction/alevin/barcodes.txt --two alevin_test_data/alevin/quants_mat.csv --b2 alevin_test_data/alevin/barcodes.txt  --type csv
+
+python2 alevin_test_data/src-py/alevin.py --txps 322667 --one prediction/alevin/quants_mat.gz --b1 prediction/alevin/barcodes.txt --two alevin_test_data/alevin/quants_mat.gz --b2 alevin_test_data/alevin/barcodes.txt --type sf
+
+#python2 alevin_test_data/src-py/alevin.py --txps 322667 --one prediction/alevin/cell_eq_mat.gz --b1 prediction/alevin/barcodes.txt --two alevin_test_data/alevin/cell_eq_mat.gz --b2 alevin_test_data/alevin/barcodes.txt --type eq

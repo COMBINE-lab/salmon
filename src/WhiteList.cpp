@@ -363,7 +363,8 @@ namespace alevin {
                           }
                         });
 
-      aopt.jointLog->info("Done making regular featues; making correlation matrix");
+      aopt.jointLog->info("Done making regular featues");
+      aopt.jointLog->info("Starting to Make correlation Matrix (Heavy!)");
 
       size_t numTrueCells = ( numCells - numLowConfidentBarcode ) / 2;
       tbb::parallel_for(
