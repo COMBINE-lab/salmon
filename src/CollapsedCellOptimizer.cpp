@@ -385,6 +385,8 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                         skippedCBcount);
   }
 
+  gzw.close_all_streams();
+
   // Perform White listing only if the data has barcode, EM has been run and white list file
   // has not been provided
   if(not boost::filesystem::exists(aopt.whitelistFile) and not aopt.nobarcode and not aopt.noEM){

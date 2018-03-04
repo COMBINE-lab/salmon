@@ -22,6 +22,8 @@ public:
 
   ~GZipWriter();
 
+  void close_all_streams();
+
   template <typename ExpT>
   bool writeEquivCounts(const SalmonOpts& opts, ExpT& experiment);
 

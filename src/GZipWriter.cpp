@@ -32,6 +32,18 @@ GZipWriter::~GZipWriter() {
   }
 }
 
+void GZipWriter::close_all_streams(){
+  if (cellEQStream_){
+    cellEQStream_->reset();
+  }
+  if (countMatrixStream_) {
+    countMatrixStream_->reset();
+  }
+  if (bcNameStream_) {
+    bcNameStream_->close();
+  }
+}
+
 /**
  * Creates a new gzipped file (path) and writes the contents
  * of the vector (vec) to the file in binary.
@@ -632,7 +644,7 @@ bool GZipWriter::writeAbundances(std::string bcName,
                   elSize * num);
 
   double total_counts = std::accumulate(alphas.begin(), alphas.end(), 0.0);
-  if (total_counts == 0){
+  if (not (total_counts > 0.0)){
     std::cout<< "ERROR: cell doesn't have any read count" << std::flush;
     exit(1);
   }

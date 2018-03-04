@@ -1674,7 +1674,6 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
         jointLog->flush();
         exit(1);
       }
-      std::cout<< "\n\n";
       jointLog->info("Finished optimizer");
     }
     else{
