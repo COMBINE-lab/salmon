@@ -1596,6 +1596,32 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
     }
 
     std::vector<std::string> trueBarcodesVec (trueBarcodes.begin(), trueBarcodes.end());
+    std::sort (trueBarcodesVec.begin(), trueBarcodesVec.end(),
+               [&freqCounter, &jointLog](std::string i, std::string j){
+                 uint32_t iCount, jCount;
+                 bool iOk = freqCounter.find(i, iCount);
+                 bool jOk = freqCounter.find(j, jCount);
+                 if (not iOk or not jOk){
+                   jointLog->error("Barcode not found in frequency table");
+                   jointLog->flush();
+                   exit(1);
+                 }
+                 if (iCount > jCount){
+                   return true;
+                 }
+                 else if (iCount < jCount){
+                   return false;
+                 }
+                 else{
+                   // stable sorting
+                   if (i>j){
+                     return true;
+                   }
+                   else{
+                     return false;
+                   }
+                 }
+               });
     spp::sparse_hash_map<std::string, uint32_t> trueBarcodesIndexMap;
     for(size_t i=0; i<trueBarcodes.size(); i++){
       trueBarcodesIndexMap[ trueBarcodesVec[i] ] = i;

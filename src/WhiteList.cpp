@@ -116,7 +116,7 @@ namespace alevin {
                                            size_t numTrueCells){
 
       size_t numFalseCells { numLowConfidentBarcode };
-      size_t numAmbiguousCells { numTrueCells };
+      size_t numAmbiguousCells { numCells - numTrueCells - numLowConfidentBarcode };
       size_t i, numClasses { 2 };
 
       std::vector<uint32_t> selectedBarcodes;
@@ -140,7 +140,7 @@ namespace alevin {
       for (i=0; i<numTrueCells; i++){
         selectedBarcodes.emplace_back(i);
       }
-      for (; i<numTrueCells*2; i++){
+      for (; i<numTrueCells+numAmbiguousCells; i++){
         if (naive_bayes_predict(sigma, theta,
                                 featureCountsMatrix[i],
                                 classPrior)){
@@ -168,21 +168,21 @@ namespace alevin {
                                          [](const double& l, const double& r){
                                            return (l + r*r);} );
 
-      double f_mean = f_sum / num_elem;
-      double s_mean = s_sum / num_elem;
+      double p_sum = std::inner_product(first.begin(), first.end(),
+                                        second.begin(), 0.0);
 
-      double f_std = pow( (f_sq_sum / num_elem) - pow(f_mean, 2), 0.5);
-      double s_std = pow( (s_sq_sum / num_elem) - pow(s_mean, 2), 0.5);
+      double numrtr = p_sum-( (f_sum*s_sum) / num_elem);
 
-      double denom = f_std * s_std * num_elem;
-      if (denom == 0){
-        return 0;
+      double f_std = f_sq_sum - pow(f_sum, 2)/num_elem;
+      double s_std = s_sq_sum - pow(s_sum, 2)/num_elem;
+
+      double denom = pow(f_std * s_std , 0.5);
+
+      if (denom == 0.0 or numrtr == 0.0){
+        return 0.0;
       }
-      double numer = 0.0;
-      std::for_each(first.begin(), first.end(), [&](double& d) { numer += (d-f_mean) ;});
-      std::for_each(second.begin(), second.end(), [&](double& d) { numer += (d-f_mean) ;});
 
-      return numer / denom ;
+      return numrtr / denom;
     }
 
     void populate_count_matrix(boost::filesystem::path& outDir,
@@ -392,6 +392,7 @@ namespace alevin {
       aopt.jointLog->info("Starting to Make correlation Matrix (Heavy!)");
 
       size_t numTrueCells = ( numCells - numLowConfidentBarcode ) / 2;
+
       tbb::parallel_for(
                         BlockedIndexRange(size_t(0), size_t(numCells)),
                         [&featureCountsMatrix, numTrueCells,
@@ -414,22 +415,33 @@ namespace alevin {
 
       aopt.jointLog->info("Done making feature Matrix");
 
-      // debugging code
-      std::ofstream whitelistStream1;
-      auto whitelistFileName1 = aopt.outputDirectory / "featureDump.txt";
-      whitelistStream1.open(whitelistFileName1.string());
-      for(size_t i=0; i<featureCountsMatrix.size(); i++){
-        whitelistStream1 << trueBarcodes[i]
-          //<< "\t" << featureCountsMatrix[i][0]
-          //<< "\t" << featureCountsMatrix[i][1]
-          //<< "\t" << featureCountsMatrix[i][2]
-          //<< "\t" << featureCountsMatrix[i][3]
-          //<< "\t" << featureCountsMatrix[i][4]
-          //<< "\t" << featureCountsMatrix[i][5]
-          << "\t" << featureCountsMatrix[i][6]
-                         << "\n";
+      if (aopt.dumpfeatures){
+        std::ofstream featureStream;
+        auto featureFileName = aopt.outputDirectory / "featureDump.txt";
+        featureStream.open(featureFileName.string());
+        /*for (size_t i=0; i<numTrueCells; i++){
+          whitelistStream1 << trueBarcodes[i] << "\n";
+          }*/
+        /*for (size_t i=0; i<geneCountsMatrix.size(); i++){
+          whitelistStream1<< trueBarcodes[i] << "\t";
+          for ( auto cell: geneCountsMatrix[i] ){
+          whitelistStream1 << cell << "\t";
+          }
+          whitelistStream1 << "\n";
+          }*/
+        for(size_t i=0; i<featureCountsMatrix.size(); i++){
+          featureStream << trueBarcodes[i]
+                        << "\t" << featureCountsMatrix[i][0]
+                        << "\t" << featureCountsMatrix[i][1]
+                        << "\t" << featureCountsMatrix[i][2]
+                        << "\t" << featureCountsMatrix[i][3]
+                        << "\t" << featureCountsMatrix[i][4]
+                        << "\t" << featureCountsMatrix[i][5]
+                        << "\t" << featureCountsMatrix[i][6]
+                        << "\n";
+        }
+        featureStream.close();
       }
-      whitelistStream1.close();
 
       std::vector<uint32_t> whitelistBarcodes =
         classifyBarcodes(featureCountsMatrix, numCells,
