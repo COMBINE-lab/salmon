@@ -1231,6 +1231,10 @@ int salmonBarcoding(int argc, char* argv[]) {
      "rrna", po::value<std::string>(),
      "path to a file containing ribosomal RNA, one per line")
     (
+     "usecorrelation", po::bool_switch()->default_value(false),
+     "Use pair-wise pearson correlation with True barcodes as a"
+     " feature for white-list creation.")
+    (
      "dumpfq", po::bool_switch()->default_value(false),
      "Dump barcode modified fastq file for downstream analysis by"
      "using coin toss for multi-mapping.")

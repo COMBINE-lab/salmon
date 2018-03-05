@@ -409,6 +409,8 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
       aopt.jointLog->info("Finished dumping csv counts");
     }
 
+    aopt.jointLog->info("Clearing EqMap because of memory requirement");
+    fullEqMap.clear();
     bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
                                                                       umiCount,
                                                                       countMatrix,
