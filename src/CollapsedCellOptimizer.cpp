@@ -391,6 +391,10 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   // has not been provided
   if(not boost::filesystem::exists(aopt.whitelistFile) and not aopt.nobarcode and not aopt.noEM){
     aopt.jointLog->info("Starting white listing");
+
+    aopt.jointLog->info("Clearing EqMap because of memory requirement");
+    fullEqMap.clear();
+
     std::vector<std::vector<double>> countMatrix(trueBarcodes.size(),
                                                  std::vector<double> (txpToGeneMap.size(), 0.0));
     aopt.jointLog->info("Done Importing count matrix for all cells");
@@ -409,8 +413,6 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
       aopt.jointLog->info("Finished dumping csv counts");
     }
 
-    aopt.jointLog->info("Clearing EqMap because of memory requirement");
-    fullEqMap.clear();
     bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
                                                                       umiCount,
                                                                       countMatrix,
