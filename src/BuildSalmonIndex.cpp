@@ -64,7 +64,7 @@ int salmonIndex(int argc, char* argv[]) {
   string indexTypeStr = "fmd";
   uint32_t saSampInterval = 1;
   uint32_t auxKmerLen = 0;
-  uint32_t numThreads;
+  uint32_t numThreads{2};
   bool useQuasi{false};
   bool perfectHash{false};
   bool gencodeRef{false};

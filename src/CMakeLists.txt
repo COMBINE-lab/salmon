@@ -105,7 +105,7 @@ if (NOT APPLE)
     set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib:$ORIGIN/../../lib:$ORIGIN/:$ORIGIN/../../external/install/lib")
     set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 else()
-  # use, i.e. don't skip the full RPATH for the build tree
+  # use, i.e. do not skip the full RPATH for the build tree
   set(CMAKE_SKIP_BUILD_RPATH  FALSE)
 
   # when building, don't use the install RPATH already

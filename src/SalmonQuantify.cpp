@@ -2292,7 +2292,7 @@ int salmonQuantify(int argc, char* argv[]) {
 
   sopt.numThreads = std::thread::hardware_concurrency();
 
-  double coverageThresh;
+  double coverageThresh{0.70};
   vector<string> unmatedReadFiles;
   vector<string> mate1ReadFiles;
   vector<string> mate2ReadFiles;
