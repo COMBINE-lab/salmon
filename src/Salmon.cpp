@@ -2,20 +2,20 @@
 >HEADER
     Copyright (c) 2013 -- 2017 Rob Patro rob.patro@cs.stonybrook.edu
 
-    This file is part of Salmon.
+    This file is part of salmon.
 
-    Salmon is free software: you can redistribute it and/or modify
+    salmon is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
-    Salmon is distributed in the hope that it will be useful,
+    salmon is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
     GNU General Public License for more details.
 
     You should have received a copy of the GNU General Public License
-    along with Salmon.  If not, see <http://www.gnu.org/licenses/>.
+    along with salmon.  If not, see <http://www.gnu.org/licenses/>.
 <HEADER
 **/
 
@@ -48,7 +48,7 @@
 
 int help(std::vector<std::string> opts) { //}int argc, char* argv[]) {
   fmt::MemoryWriter helpMsg;
-  helpMsg.write("Salmon v{}\n\n", salmon::version);
+  helpMsg.write("salmon v{}\n\n", salmon::version);
   helpMsg.write(
       "Usage:  salmon -h|--help or \n"
       "        salmon -v|--version or \n"
@@ -70,23 +70,23 @@ int dualModeMessage() {
   auto helpmsg = R"(
     ===============
 
-    Salmon quant has two modes --- one quantifies expression using raw reads
+    salmon quant has two modes --- one quantifies expression using raw reads
     and the other makes use of already-aligned reads (in BAM/SAM format).
-    Which algorithm is used depends on the arguments passed to Salmon quant.
-    If you provide Salmon with alignments '-a [ --alignments ]' then the
+    Which algorithm is used depends on the arguments passed to salmon quant.
+    If you provide salmon with alignments '-a [ --alignments ]' then the
     alignment-based algorithm will be used, otherwise the algorithm for
     quantifying from raw reads will be used.
 
-    to view the help for Salmon's quasi-mapping-based mode, use the command
+    to view the help for salmon's quasi-mapping-based mode, use the command
 
     salmon quant --help-reads
 
-    To view the help for Salmon's alignment-based mode, use the command
+    To view the help for salmon's alignment-based mode, use the command
 
     salmon quant --help-alignment
 
     )";
-  std::cerr << "    Salmon v" << salmon::version << helpmsg << "\n";
+  std::cerr << "    salmon v" << salmon::version << helpmsg << "\n";
   return 0;
 }
 
@@ -114,8 +114,8 @@ int salmonSwim(int argc, char* argv[]) {
 void printCite() {
 
   std::cerr << R"(
-If you use Salmon in your research, please cite the publication in any
-papers, pre-prints or reports.  The proper citation information for Salmon
+If you use salmon in your research, please cite the publication in any
+papers, pre-prints or reports.  The proper citation information for salmon
 appears below.
 
 Reference:

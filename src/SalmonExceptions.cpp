@@ -6,7 +6,7 @@ InsufficientAssignedFragments::InsufficientAssignedFragments(
       numRequired_(numRequired) {
   cnvt.str("");
   cnvt
-      << "Salmon was only able to assign " << numAssigned_
+      << "salmon was only able to assign " << numAssigned_
       << " fragments to transcripts in the index, "
          "but the minimum number of required assigned fragments "
          "(--minAssignedFrags) "
@@ -14,7 +14,7 @@ InsufficientAssignedFragments::InsufficientAssignedFragments(
       << numRequired_
       << ". This could be indicative of a mismatch between the reference and "
          "sample, or a very bad sample.  You can change the --minAssignedFrags "
-         "parameter to force Salmon to quantify with fewer assigned fragments "
+         "parameter to force salmon to quantify with fewer assigned fragments "
          "(must have at least 1).";
   msg_ = cnvt.str();
 }

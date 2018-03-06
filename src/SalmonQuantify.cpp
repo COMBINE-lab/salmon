@@ -2302,7 +2302,7 @@ int salmonQuantify(int argc, char* argv[]) {
   generic.add_options()("version,v", "print version string")(
       "help,h", "produce help message")(
       "index,i", po::value<string>()->required(),
-      "Salmon index")("libType,l", po::value<std::string>()->required(),
+      "salmon index")("libType,l", po::value<std::string>()->required(),
                       "Format string describing the library type")(
       "unmatedReads,r",
       po::value<vector<string>>(&unmatedReadFiles)->multitoken(),
@@ -2353,7 +2353,7 @@ int salmonQuantify(int argc, char* argv[]) {
       "geneMap,g", po::value<string>(),
       "File containing a mapping of transcripts to genes.  If this file is "
       "provided "
-      "Salmon will output both quant.sf and quant.genes.sf files, where the "
+      "salmon will output both quant.sf and quant.genes.sf files, where the "
       "latter "
       "contains aggregated gene-level abundance estimates.  The transcript to "
       "gene mapping "

@@ -78,7 +78,7 @@ int salmonIndex(int argc, char* argv[]) {
       "kmerLen,k",
       po::value<uint32_t>(&auxKmerLen)->default_value(31)->required(),
       "The size of k-mers that should be used for the quasi index.")(
-      "index,i", po::value<string>()->required(), "Salmon index.")(
+      "index,i", po::value<string>()->required(), "salmon index.")(
       "gencode", po::bool_switch(&gencodeRef)->default_value(false),
       "This flag will expect the input transcript fasta to be in GENCODE "
       "format, and will split "
