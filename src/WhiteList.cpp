@@ -186,6 +186,7 @@ namespace alevin {
     }
 
     void populate_count_matrix(boost::filesystem::path& outDir,
+                               spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                DoubleMatrixT& countMatrix){
       boost::iostreams::filtering_istream countMatrixStream;
       countMatrixStream.push(boost::iostreams::gzip_decompressor());
@@ -197,18 +198,29 @@ namespace alevin {
       }
       countMatrixStream.push(boost::iostreams::file_source(countMatFilename.string(),
                                                            std::ios_base::in | std::ios_base::binary));
-      size_t numTxps = countMatrix[0].size();
+      size_t numTxps = txpToGeneMap.size();
+      size_t numGenes = countMatrix[0].size();
       size_t elSize = sizeof(typename std::vector<double>::value_type);
       size_t cellCount {0};
+      std::vector<double> row (numTxps, 0.0);
       for (auto& cell: countMatrix){
         cellCount += 1;
-        countMatrixStream.read(reinterpret_cast<char*>(cell.data()), elSize * numTxps);
-        if (std::accumulate(cell.begin(), cell.end(), 0.0) == 0){
+        std::fill(row.begin(), row.end(), 0.0);
+        countMatrixStream.read(reinterpret_cast<char*>(row.data()), elSize * numTxps);
+        if (std::accumulate(row.begin(), row.end(), 0.0) == 0){
           std::cout<<"ERROR: Importing counts from binary\n"
                    <<"Cell has 0 reads, should not happen.\n"
                    <<"Saw total "<< cellCount << " Cells before Error"
                    <<std::flush;
           exit(1);
+        }
+        for (size_t i=0; i<row.size(); i++){
+          uint32_t geneId = txpToGeneMap[i];
+          if (geneId > numGenes){
+            std::cout<<"ERROR: wrong txp to gene mapping found" <<std::flush;
+            exit(1);
+          }
+          cell[geneId] += row[i];
         }
       }
     }
@@ -216,11 +228,10 @@ namespace alevin {
     template <typename ProtocolT>
     bool performWhitelisting(AlevinOpts<ProtocolT>& aopt,
                              std::vector<uint32_t>& umiCount,
-                             DoubleMatrixT& countMatrix,
+                             DoubleMatrixT& geneCountsMatrix,
                              std::vector<std::string>& trueBarcodes,
                              CFreqMapT& freqCounter,
                              spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-                             spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                              size_t numLowConfidentBarcode){
       // freqCounter has frequency of reads for all detected Barcodes
       // umiCount has frequency of UMI per-cell after knee selection
@@ -230,13 +241,10 @@ namespace alevin {
 
       size_t numCells = trueBarcodes.size();
       size_t numGenes = geneIdxMap.size();
-      size_t numTxps = txpToGeneMap.size();
       size_t numFeatures{4};
       if (aopt.useCorrelation){
         numFeatures += 1;
       }
-
-      DoubleMatrixT geneCountsMatrix( numCells, DoubleVectorT (numGenes, 0.0));
 
       spp::sparse_hash_set<uint32_t> mRnaGenes, rRnaGenes;
       bool useMitoRna {false}, useRiboRna{false};
@@ -325,7 +333,7 @@ namespace alevin {
                         BlockedIndexRange(size_t(0), size_t(trueBarcodes.size())),
                         [&featureCountsMatrix, &trueBarcodes,
                          &freqCounter, &aopt, &umiCount, &geneCountsMatrix,
-                         &countMatrix, &txpToGeneMap, useMitoRna, useRiboRna, &bcOrderMap,
+                         useMitoRna, useRiboRna, &bcOrderMap,
                          &mRnaGenes, &rRnaGenes, numGenes](const BlockedIndexRange& range) -> void {
                           for (auto i : boost::irange(range.begin(), range.end())) {
                             uint32_t count_matrix_i = bcOrderMap[ trueBarcodes[i] ];
@@ -347,12 +355,10 @@ namespace alevin {
 
                             double totalCellCount{0.0}, maxCount{0.0};
                             double mitoCount {0.0}, riboCount {0.0};
-                            DoubleVectorT& geneCounts = geneCountsMatrix[i];
-                            DoubleVectorT& countVec = countMatrix[count_matrix_i];
+                            DoubleVectorT& geneCounts = geneCountsMatrix[count_matrix_i];
 
-                            for (size_t j=0; j<countVec.size(); j++){
-                              auto count = countVec[j];
-                              geneCounts[ txpToGeneMap[j] ] += count;
+                            for (size_t j=0; j<geneCounts.size(); j++){
+                              auto count = geneCounts[j];
                               totalCellCount += count;
                               if (count>maxCount){
                                 maxCount = count;
@@ -464,35 +470,31 @@ namespace alevin {
     }
     template bool performWhitelisting(AlevinOpts<alevin::protocols::DropSeq>& aopt,
                                       std::vector<uint32_t>& umiCount,
-                                      DoubleMatrixT& countMatrix,
+                                      DoubleMatrixT& geneCountsMatrix,
                                       std::vector<std::string>& trueBarcodes,
                                       CFreqMapT& freqCounter,
                                       spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-                                      spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::InDrop>& aopt,
                                       std::vector<uint32_t>& umiCount,
-                                      DoubleMatrixT& countMatrix,
+                                      DoubleMatrixT& geneCountsMatrix,
                                       std::vector<std::string>& trueBarcodes,
                                       CFreqMapT& freqCounter,
                                       spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-                                      spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::Chromium>& aopt,
                                       std::vector<uint32_t>& umiCount,
-                                      DoubleMatrixT& countMatrix,
+                                      DoubleMatrixT& geneCountsMatrix,
                                       std::vector<std::string>& trueBarcodes,
                                       CFreqMapT& freqCounter,
                                       spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-                                      spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::Custom>& aopt,
                                       std::vector<uint32_t>& umiCount,
-                                      DoubleMatrixT& countMatrix,
+                                      DoubleMatrixT& geneCountsMatrix,
                                       std::vector<std::string>& trueBarcodes,
                                       CFreqMapT& freqCounter,
                                       spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-                                      spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                       size_t numLowConfidentBarcode);
   }
 }
