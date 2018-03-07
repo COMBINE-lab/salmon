@@ -394,13 +394,16 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
 
     aopt.jointLog->info("Clearing EqMap because of memory requirement");
     fullEqMap.clear();
-
+    aopt.jointLog->info("Starting Import of the Gene count matrix.");
     std::vector<std::vector<double>> countMatrix(trueBarcodes.size(),
-                                                 std::vector<double> (txpToGeneMap.size(), 0.0));
-    aopt.jointLog->info("Done Importing count matrix for all cells");
-    alevin::whitelist::populate_count_matrix(aopt.outputDirectory, countMatrix);
+                                                 std::vector<double> (geneIdxMap.size(), 0.0));
+    alevin::whitelist::populate_count_matrix(aopt.outputDirectory,
+                                             txpToGeneMap,
+                                             countMatrix);
+    aopt.jointLog->info("Done Importing count matrix for {}x{} matrix",
+                        numCells, geneIdxMap.size());
     if (aopt.dumpCsvCounts){
-      aopt.jointLog->info("Starting dumping csv counts");
+      aopt.jointLog->info("Starting dumping genes counts in csv format");
       std::ofstream qFile;
       boost::filesystem::path qFilePath = aopt.outputDirectory / "quants_mat.csv";
       qFile.open(qFilePath.string());
@@ -419,7 +422,6 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                                                       trueBarcodes,
                                                                       freqCounter,
                                                                       geneIdxMap,
-                                                                      txpToGeneMap,
                                                                       numLowConfidentBarcode);
     if (!whitelistingSuccess) {
       aopt.jointLog->error(

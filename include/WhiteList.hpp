@@ -32,6 +32,7 @@ namespace alevin {
     using DoubleVectorT = std::vector<double> ;
 
     void populate_count_matrix(boost::filesystem::path& outDir,
+                               spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                DoubleMatrixT& countMatrix);
 
     template <typename ProtocolT>
@@ -41,7 +42,6 @@ namespace alevin {
                              std::vector<std::string>& trueBarcodes,
                              CFreqMapT& freqCounter,
                              spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-                             spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                              size_t numLowConfidentBarcode);
   }
 }
