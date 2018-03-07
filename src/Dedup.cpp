@@ -63,7 +63,7 @@ uint32_t neighborCollapse(const std::unordered_set<uint64_t>& umiList,
     auto got = neighbors.find(rUmiStr);
 
     if (got != neighbors.end()){
-      uint32_t qFreq, rFreq;
+      uint32_t qFreq{1}, rFreq{1};
       auto rIt = ugroup.find(rUmiJellyIdx);
       auto qIt = ugroup.find(qUmiJellyIdx);
 

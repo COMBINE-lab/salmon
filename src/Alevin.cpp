@@ -1204,7 +1204,7 @@ int salmonBarcoding(int argc, char* argv[]) {
      "Must be used in conjunction with inDrop;")
     (
      "index,i", po::value<std::string>(),
-     "Salmon index")
+     "salmon index")
     (
      "libType,l", po::value<std::string>(),
      "Format string describing the library type")
@@ -1220,7 +1220,7 @@ int salmonBarcoding(int argc, char* argv[]) {
      "Dump JointEqClas with umi-barcode count.(Only DropSeq)")
     (
      "noquant", po::bool_switch()->default_value(false),
-     "Don't run downstream barcode-Salmon model.")
+     "Don't run downstream barcode-salmon model.")
     (
      "nosoftmap", po::bool_switch()->default_value(true),
      "Don't use soft-assignment for quant instead do hard-assignment.")
@@ -1299,7 +1299,7 @@ int salmonBarcoding(int argc, char* argv[]) {
       auto hstring = R"(
 Alevin
 ==========
-Salmon-based processing of single-cell RNA-seq data.
+salmon-based processing of single-cell RNA-seq data.
 )";
 
       std::cerr << hstring << std::endl;
