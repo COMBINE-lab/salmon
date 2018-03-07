@@ -205,7 +205,6 @@ namespace alevin {
       std::vector<double> row (numTxps, 0.0);
       for (auto& cell: countMatrix){
         cellCount += 1;
-        std::fill(row.begin(), row.end(), 0.0);
         countMatrixStream.read(reinterpret_cast<char*>(row.data()), elSize * numTxps);
         if (std::accumulate(row.begin(), row.end(), 0.0) == 0){
           std::cout<<"ERROR: Importing counts from binary\n"
@@ -215,12 +214,14 @@ namespace alevin {
           exit(1);
         }
         for (size_t i=0; i<row.size(); i++){
-          uint32_t geneId = txpToGeneMap[i];
-          if (geneId > numGenes){
-            std::cout<<"ERROR: wrong txp to gene mapping found" <<std::flush;
-            exit(1);
+          if (row[i] > 0.0){
+            uint32_t geneId = txpToGeneMap[i];
+            if (geneId > numGenes){
+              std::cout<<"ERROR: wrong txp to gene mapping found" <<std::flush;
+              exit(1);
+            }
+            cell[geneId] += row[i];
           }
-          cell[geneId] += row[i];
         }
       }
     }
