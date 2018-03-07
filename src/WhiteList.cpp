@@ -204,24 +204,28 @@ namespace alevin {
       size_t cellCount {0};
       std::vector<double> row (numTxps, 0.0);
       for (auto& cell: countMatrix){
+        size_t readCount {0};
         cellCount += 1;
         countMatrixStream.read(reinterpret_cast<char*>(row.data()), elSize * numTxps);
-        if (std::accumulate(row.begin(), row.end(), 0.0) == 0){
-          std::cout<<"ERROR: Importing counts from binary\n"
-                   <<"Cell has 0 reads, should not happen.\n"
-                   <<"Saw total "<< cellCount << " Cells before Error"
-                   <<std::flush;
-          exit(1);
-        }
+
         for (size_t i=0; i<row.size(); i++){
-          if (row[i] > 0.0){
+          double count  = row[i];
+          if (count > 0.0){
+            readCount += count;
             uint32_t geneId = txpToGeneMap[i];
             if (geneId > numGenes){
               std::cout<<"ERROR: wrong txp to gene mapping found" <<std::flush;
               exit(1);
             }
-            cell[geneId] += row[i];
+            cell[geneId] += count;
           }
+        }
+        if (readCount == 0){
+          std::cout<<"ERROR: Importing counts from binary\n"
+                   <<"Cell has 0 reads, should not happen.\n"
+                   <<"Saw total "<< cellCount << " Cells before Error"
+                   <<std::flush;
+          exit(1);
         }
       }
     }
