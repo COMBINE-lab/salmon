@@ -96,6 +96,7 @@ extern "C" {
 #include "LibraryFormat.hpp"
 #include "ReadLibrary.hpp"
 #include "SalmonConfig.hpp"
+#include "SalmonDefaults.hpp"
 #include "SalmonExceptions.hpp"
 #include "SalmonIndex.hpp"
 #include "SalmonMath.hpp"
@@ -2315,7 +2316,7 @@ int salmonQuantify(int argc, char* argv[]) {
       "output,o", po::value<std::string>()->required(),
       "Output quantification file.")(
       "discardOrphansQuasi",
-      po::bool_switch(&discardOrphansQuasi)->default_value(false),
+      po::bool_switch(&discardOrphansQuasi)->default_value(salmon::defaults::discardOrphansQuasi),
       "[Quasi-mapping mode only] : Discard orphan mappings in quasi-mapping "
       "mode.  If this flag is passed "
       "then only paired mappings will be considered toward quantification "
@@ -2324,22 +2325,22 @@ int salmonQuantify(int argc, char* argv[]) {
       "flag is independent of the option to "
       "write the orphaned mappings to file (--writeOrphanLinks).")(
       "allowOrphansFMD",
-      po::bool_switch(&(sopt.allowOrphans))->default_value(false),
+      po::bool_switch(&(sopt.allowOrphans))->default_value(salmon::defaults::allowOrphansFMD),
       "[FMD-mapping mode only] : Consider orphaned reads as valid hits when "
       "performing lightweight-alignment.  This option will increase "
       "sensitivity (allow more reads to map and "
       "more transcripts to be detected), but may decrease specificity as "
       "orphaned alignments are more likely "
-      "to be spurious.")(
-      "seqBias", po::bool_switch(&(sopt.biasCorrect))->default_value(false),
-      "Perform sequence-specific bias correction.")(
-      "gcBias", po::bool_switch(&(sopt.gcBiasCorrect))->default_value(false),
+      "to be spurious.")
+      ("seqBias", po::bool_switch(&(sopt.biasCorrect))->default_value(salmon::defaults::seqBiasCorrect),
+      "Perform sequence-specific bias correction.")
+      ("gcBias", po::bool_switch(&(sopt.gcBiasCorrect))->default_value(salmon::defaults::gcBiasCorrect),
       "[beta for single-end reads] Perform fragment GC bias correction")(
       "threads,p",
       po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads),
       "The number of threads to use concurrently.")(
       "incompatPrior",
-      po::value<double>(&(sopt.incompatPrior))->default_value(0.0),
+      po::value<double>(&(sopt.incompatPrior))->default_value(salmon::defaults::incompatPrior),
       "This option "
       "sets the prior probability that an alignment that disagrees with the "
       "specified "
@@ -2373,21 +2374,21 @@ int salmonQuantify(int argc, char* argv[]) {
       "corresponding "
       "gene identifier.")("writeMappings,z",
                           po::value<string>(&sopt.qmFileName)
-                              ->default_value("")
-                              ->implicit_value("-"),
+                          ->default_value(salmon::defaults::quasiMappingDefaultFile)
+                          ->implicit_value(salmon::defaults::quasiMappingImplicitFile),
                           "If this option is provided, then the quasi-mapping "
                           "results will be written out in SAM-compatible "
                           "format.  By default, output will be directed to "
                           "stdout, but an alternative file name can be "
-                          "provided instead.")(
-      "meta", po::bool_switch(&(sopt.meta))->default_value(false),
+                          "provided instead.")
+    ("meta", po::bool_switch(&(sopt.meta))->default_value(salmon::defaults::metaMode),
       "If you're using Salmon on a metagenomic dataset, consider setting this "
       "flag to disable parts of the "
       "abundance estimation model that make less sense for metagenomic data.");
 
-  sopt.noRichEqClasses = false;
+  sopt.noRichEqClasses = salmon::defaults::noRichEqClasses;
   // mapping cache has been deprecated
-  sopt.disableMappingCache = true;
+  sopt.disableMappingCache = salmon::defaults::disableMappingCache;
 
   po::options_description advanced("\n"
                                    "advanced options");
@@ -2408,95 +2409,95 @@ int salmonQuantify(int argc, char* argv[]) {
       threads.")
       */
       ("alternativeInitMode",
-       po::bool_switch(&(sopt.alternativeInitMode))->default_value(false),
+       po::bool_switch(&(sopt.alternativeInitMode))->default_value(salmon::defaults::alternativeInitMode),
        "[Experimental]: Use an alternative strategy (rather than simple "
        "interpolation between) the "
        "online and uniform abundance estimates to initalize the EM / VBEM "
        "algorithm.")(
           "auxDir",
-          po::value<std::string>(&(sopt.auxDir))->default_value("aux_info"),
+          po::value<std::string>(&(sopt.auxDir))->default_value(salmon::defaults::auxDir),
           "The sub-directory of the quantification directory where auxiliary "
           "information "
           "e.g. bootstraps, bias parameters, etc. will be written.")(
           "consistentHits,c",
-          po::bool_switch(&(sopt.consistentHits))->default_value(false),
+          po::bool_switch(&(sopt.consistentHits))->default_value(salmon::defaults::consistentHits),
           "Force hits gathered during "
           "quasi-mapping to be \"consistent\" (i.e. co-linear and "
-          "approximately the right distance apart).")(
-          "dumpEq", po::bool_switch(&(sopt.dumpEq))->default_value(false),
+          "approximately the right distance apart).")
+      ("dumpEq", po::bool_switch(&(sopt.dumpEq))->default_value(salmon::defaults::dumpEq),
           "Dump the equivalence class counts "
-          "that were computed during quasi-mapping")(
-          "dumpEqWeights,d",
-          po::bool_switch(&(sopt.dumpEqWeights))->default_value(false),
+          "that were computed during quasi-mapping")
+      ("dumpEqWeights,d",
+       po::bool_switch(&(sopt.dumpEqWeights))->default_value(salmon::defaults::dumpEqWeights),
           "Includes \"rich\" equivlance class weights in the output when "
           "equivalence "
-          "class information is being dumped to file.")(
-          "fasterMapping",
-          po::bool_switch(&(sopt.fasterMapping))->default_value(false),
+          "class information is being dumped to file.")
+     ("fasterMapping",
+      po::bool_switch(&(sopt.fasterMapping))->default_value(salmon::defaults::fasterMapping),
           "[Developer]: Disables some extra checks during quasi-mapping. This "
           "may make mapping a "
           "little bit faster at the potential cost of returning too many "
           "mappings (i.e. some sub-optimal mappings) "
-          "for certain reads.")(
-          "minAssignedFrags",
-          po::value<std::uint64_t>(&(sopt.minRequiredFrags))->default_value(10),
+          "for certain reads.")
+     ("minAssignedFrags",
+      po::value<std::uint64_t>(&(sopt.minRequiredFrags))->default_value(salmon::defaults::minAssignedFrags),
           "The minimum number of fragments that must be assigned to the "
           "transcriptome for "
-          "quantification to proceed.")(
-          "reduceGCMemory",
-          po::bool_switch(&(sopt.reduceGCMemory))->default_value(false),
+          "quantification to proceed.")
+    ("reduceGCMemory",
+     po::bool_switch(&(sopt.reduceGCMemory))->default_value(salmon::defaults::reduceGCMemory),
           "If this option is selected, a more memory efficient (but slightly "
           "slower) representation is "
           "used to compute fragment GC content. Enabling this will reduce "
           "memory usage, but can also reduce "
-          "speed.  However, the results themselves will remain the same.")(
-          "biasSpeedSamp",
-          po::value<std::uint32_t>(&(sopt.pdfSampFactor))->default_value(5),
+          "speed.  However, the results themselves will remain the same.")
+    ("biasSpeedSamp",
+     po::value<std::uint32_t>(&(sopt.pdfSampFactor))->default_value(salmon::defaults::biasSpeedSamp),
           "The value at which the fragment length PMF is down-sampled "
           "when evaluating sequence-specific & GC fragment bias.  Larger "
           "values speed up effective "
           "length correction, but may decrease the fidelity of bias modeling "
-          "results.")(
-          "strictIntersect",
-          po::bool_switch(&(sopt.strictIntersect))->default_value(false),
+          "results.")
+    ("strictIntersect",
+     po::bool_switch(&(sopt.strictIntersect))->default_value(salmon::defaults::strictIntersect),
           "Modifies how orphans are "
           "assigned.  When this flag is set, if the intersection of the "
           "quasi-mappings for the left and right "
           "is empty, then all mappings for the left and all mappings for the "
           "right read are reported as orphaned "
-          "quasi-mappings")(
-          "fldMax",
-          po::value<size_t>(&(sopt.fragLenDistMax))->default_value(1000),
+          "quasi-mappings")
+    ("fldMax",
+     po::value<size_t>(&(sopt.fragLenDistMax))->default_value(salmon::defaults::maxFragLength),
           "The maximum fragment length to consider when building the empirical "
-          "distribution")(
-          "fldMean",
-          po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(250),
-          "The mean used in the fragment length distribution prior")(
-          "fldSD",
-          po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(25),
+          "distribution")
+    ("fldMean",
+     po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(salmon::defaults::fragLenPriorMean),
+          "The mean used in the fragment length distribution prior")
+    ("fldSD",
+     po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(salmon::defaults::fragLenPriorSD),
           "The standard deviation used in the fragment length distribution "
-          "prior")(
-          "forgettingFactor,f",
-          po::value<double>(&(sopt.forgettingFactor))->default_value(0.65),
+          "prior")
+    ("forgettingFactor,f",
+     po::value<double>(&(sopt.forgettingFactor))->default_value(salmon::defaults::ffactor),
           "The forgetting factor used "
           "in the online learning schedule.  A smaller value results in "
           "quicker learning, but higher variance "
           "and may be unstable.  A larger value results in slower learning but "
           "may be more stable.  Value should "
-          "be in the interval (0.5, 1.0].")(
-          "maxOcc,m",
-          po::value<int>(&(memOptions->max_occ))->default_value(200),
-          "(S)MEMs occuring more than this many times won't be considered.")(
-          "initUniform",
-          po::bool_switch(&(sopt.initUniform))->default_value(false),
+          "be in the interval (0.5, 1.0].")
+    ("maxOcc,m",
+     po::value<int>(&(memOptions->max_occ))->default_value(salmon::defaults::maxSMEMOccs),
+          "(S)MEMs occuring more than this many times won't be considered.")
+    ("initUniform",
+     po::bool_switch(&(sopt.initUniform))->default_value(salmon::defaults::initUniform),
           "initialize the offline inference with uniform parameters, rather "
-          "than seeding with online parameters.")(
-          "maxReadOcc,w",
-          po::value<uint32_t>(&(sopt.maxReadOccs))->default_value(100),
+          "than seeding with online parameters.")
+    ("maxReadOcc,w",
+     po::value<uint32_t>(&(sopt.maxReadOccs))->default_value(salmon::defaults::maxReadOccs),
           "Reads \"mapping\" to more than this many places won't be "
-          "considered.")(
-          "noLengthCorrection",
-          po::bool_switch(&(sopt.noLengthCorrection))->default_value(false),
+          "considered.")
+    ("noLengthCorrection",
+     po::bool_switch(&(sopt.noLengthCorrection))->default_value(salmon::defaults::noLengthCorrection),
           "[experimental] : Entirely disables length correction when "
           "estimating "
           "the abundance of transcripts.  This option can be used with "
@@ -2506,15 +2507,15 @@ int salmonQuantify(int argc, char* argv[]) {
           "without regard to that target's length (e.g. QuantSeq)")(
           "noEffectiveLengthCorrection",
           po::bool_switch(&(sopt.noEffectiveLengthCorrection))
-              ->default_value(false),
+          ->default_value(salmon::defaults::noEffectiveLengthCorrection),
           "Disables "
           "effective length correction when computing the "
           "probability that a fragment was generated "
           "from a transcript.  If this flag is passed in, the "
           "fragment length distribution is not taken "
-          "into account when computing this probability.")(
-          "noFragLengthDist",
-          po::bool_switch(&(sopt.noFragLengthDist))->default_value(false),
+          "into account when computing this probability.")
+    ("noFragLengthDist",
+     po::bool_switch(&(sopt.noFragLengthDist))->default_value(salmon::defaults::noFragLengthDist),
           "[experimental] : "
           "Don't consider concordance with the learned fragment length "
           "distribution when trying to determine "
@@ -2524,29 +2525,29 @@ int salmonQuantify(int argc, char* argv[]) {
           "than those with more likely "
           "lengths.  When this flag is passed in, the observed fragment length "
           "has no effect on that fragment's "
-          "a priori probability.")(
-          "noBiasLengthThreshold",
-          po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(false),
+          "a priori probability.")
+    ("noBiasLengthThreshold",
+     po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(salmon::defaults::noBiasLengthThreshold),
           "[experimental] : "
           "If this option is enabled, then no (lower) threshold will be set on "
           "how short bias correction can make effective lengths. This can "
           "increase the precision "
           "of bias correction, but harm robustness.  The default correction "
-          "applies a threshold.")(
-          "numBiasSamples",
-          po::value<int32_t>(&numBiasSamples)->default_value(2000000),
+          "applies a threshold.")
+    ("numBiasSamples",
+     po::value<int32_t>(&numBiasSamples)->default_value(salmon::defaults::numBiasSamples),
           "Number of fragment mappings to use when learning the "
-          "sequence-specific bias model.")(
-          "numAuxModelSamples",
-          po::value<uint32_t>(&(sopt.numBurninFrags))->default_value(5000000),
+          "sequence-specific bias model.")
+    ("numAuxModelSamples",
+     po::value<uint32_t>(&(sopt.numBurninFrags))->default_value(salmon::defaults::numBurninFrags),
           "The first <numAuxModelSamples> are used to train the "
           "auxiliary model parameters (e.g. fragment length distribution, "
           "bias, etc.).  After ther first <numAuxModelSamples> observations "
           "the auxiliary model parameters will be assumed to have converged "
-          "and will be fixed.")(
-          "numPreAuxModelSamples",
+          "and will be fixed.")
+    ("numPreAuxModelSamples",
           po::value<uint32_t>(&(sopt.numPreBurninFrags))
-              ->default_value(1000000),
+     ->default_value(salmon::defaults::numPreBurninFrags),
           "The first <numPreAuxModelSamples> will have their "
           "assignment likelihoods and contributions to the transcript "
           "abundances computed without applying any auxiliary models.  The "
@@ -2554,12 +2555,12 @@ int salmonQuantify(int argc, char* argv[]) {
           "of ignoring the auxiliary models for the first "
           "<numPreAuxModelSamples> observations is to avoid applying these "
           "models before thier "
-          "parameters have been learned sufficiently well.")(
-          "useVBOpt", po::bool_switch(&(sopt.useVBOpt))->default_value(false),
+          "parameters have been learned sufficiently well.")
+    ("useVBOpt", po::bool_switch(&(sopt.useVBOpt))->default_value(salmon::defaults::useVBOpt),
           "Use the Variational Bayesian EM rather than the "
-          "traditional EM algorithm for optimization in the batch passes.")(
-          "rangeFactorizationBins",
-          po::value<uint32_t>(&(sopt.rangeFactorizationBins))->default_value(0),
+          "traditional EM algorithm for optimization in the batch passes.")
+    ("rangeFactorizationBins",
+     po::value<uint32_t>(&(sopt.rangeFactorizationBins))->default_value(salmon::defaults::rangeFactorizationBins),
           "Factorizes the likelihood used in quantification by adopting a new "
           "notion of equivalence classes based on "
           "the conditional probabilities with which fragments are generated "
@@ -2568,46 +2569,46 @@ int salmonQuantify(int argc, char* argv[]) {
           "classes.  The default value (0) corresponds to "
           "the standard rich equivalence classes, and larger values imply a "
           "more fine-grained factorization.  If range factorization "
-          "is enabled, a common value to select for this parameter is 4.")(
-          "numGibbsSamples",
-          po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0),
+          "is enabled, a common value to select for this parameter is 4.")
+    ("numGibbsSamples",
+     po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(salmon::defaults::numGibbsSamples),
           "Number of Gibbs sampling rounds to "
-          "perform.")(
-          "numBootstraps",
-          po::value<uint32_t>(&(sopt.numBootstraps))->default_value(0),
+          "perform.")
+    ("numBootstraps",
+     po::value<uint32_t>(&(sopt.numBootstraps))->default_value(salmon::defaults::numBootstraps),
           "Number of bootstrap samples to generate. Note: "
-          "This is mutually exclusive with Gibbs sampling.")(
-          "thinningFactor",
-          po::value<uint32_t>(&(sopt.thinningFactor))->default_value(16),
+          "This is mutually exclusive with Gibbs sampling.")
+    ("thinningFactor",
+     po::value<uint32_t>(&(sopt.thinningFactor))->default_value(salmon::defaults::thinningFactor),
           "Number of steps to discard for every sample kept from the Gibbs "
           "chain. "
           "The larger this number, the less chance that subsequent samples are "
-          "auto-correlated, but the slower sampling becomes.")(
-          "quiet,q", po::bool_switch(&(sopt.quiet))->default_value(false),
+          "auto-correlated, but the slower sampling becomes.")
+    ("quiet,q", po::bool_switch(&(sopt.quiet))->default_value(salmon::defaults::quiet),
           "Be quiet while doing quantification (don't write informative "
-          "output to the console unless something goes wrong).")(
-          "perTranscriptPrior", po::bool_switch(&(sopt.perTranscriptPrior)),
+          "output to the console unless something goes wrong).")
+    ("perTranscriptPrior", po::bool_switch(&(sopt.perTranscriptPrior))->default_value(salmon::defaults::perTranscriptPrior),
           "The "
           "prior (either the default or the argument provided via --vbPrior) "
           "will "
           "be interpreted as a transcript-level prior (i.e. each transcript "
           "will "
-          "be given a prior read count of this value)")(
-          "vbPrior", po::value<double>(&(sopt.vbPrior))->default_value(1e-3),
+          "be given a prior read count of this value)")
+    ("vbPrior", po::value<double>(&(sopt.vbPrior))->default_value(salmon::defaults::vbPrior),
           "The prior that will be used in the VBEM algorithm.  This is "
           "interpreted "
           "as a per-nucleotide prior, unless the --perTranscriptPrior flag "
           "is also given, in which case this is used as a transcript-level "
-          "prior")(
-          "writeOrphanLinks",
-          po::bool_switch(&(sopt.writeOrphanLinks))->default_value(false),
-          "Write the transcripts that are linked by orphaned reads.")(
-          "writeUnmappedNames",
-          po::bool_switch(&(sopt.writeUnmappedNames))->default_value(false),
+          "prior")
+    ("writeOrphanLinks",
+     po::bool_switch(&(sopt.writeOrphanLinks))->default_value(salmon::defaults::writeOrphanLinks),
+          "Write the transcripts that are linked by orphaned reads.")
+    ("writeUnmappedNames",
+     po::bool_switch(&(sopt.writeUnmappedNames))->default_value(salmon::defaults::writeUnmappedNames),
           "Write the names of un-mapped reads to the file unmapped_names.txt "
-          "in the auxiliary directory.")(
-          "quasiCoverage,x",
-          po::value<double>(&(sopt.quasiCoverage))->default_value(0.0),
+          "in the auxiliary directory.")
+    ("quasiCoverage,x",
+     po::value<double>(&(sopt.quasiCoverage))->default_value(salmon::defaults::quasiCoverage),
           "[Experimental]: The fraction of the read that must be covered by "
           "MMPs (of length >= 31) if "
           "this read is to be considered as \"mapped\".  This may help to "
@@ -2619,78 +2620,78 @@ int salmonQuantify(int argc, char* argv[]) {
           "be set to something low, if used.");
 
   po::options_description fmd("\noptions that apply to the old FMD index");
-  fmd.add_options()(
-      "minLen,k",
-      po::value<int>(&(memOptions->min_seed_len))->default_value(19),
-      "(S)MEMs smaller than this size won't be considered.")(
-      "sensitive", po::bool_switch(&(sopt.sensitive))->default_value(false),
+  fmd.add_options()
+    ("minLen,k",
+     po::value<int>(&(memOptions->min_seed_len))->default_value(salmon::defaults::fmdMinSeedLength),
+      "(S)MEMs smaller than this size won't be considered.")
+    ("sensitive", po::bool_switch(&(sopt.sensitive))->default_value(salmon::defaults::fmdSensitive),
       "Setting this option enables the splitting of SMEMs that are larger "
       "than 1.5 times the minimum seed length (minLen/k above).  This may "
       "reveal high scoring chains of MEMs "
       "that are masked by long SMEMs.  However, this option makes "
       "lightweight-alignment a bit slower and is "
-      "usually not necessary if the reference is of reasonable quality.")(
-      "extraSensitive",
-      po::bool_switch(&(sopt.extraSeedPass))->default_value(false),
+      "usually not necessary if the reference is of reasonable quality.")
+    ("extraSensitive",
+     po::bool_switch(&(sopt.extraSeedPass))->default_value(salmon::defaults::fmdExtraSeedPass),
       "Setting this option enables an extra pass of \"seed\" search. "
       "Enabling this option may improve sensitivity (the number of reads "
       "having sufficient coverage), but will "
       "typically slow down quantification by ~40%.  Consider enabling this "
       "option if you find the mapping rate to "
-      "be significantly lower than expected.")(
-      "coverage,c", po::value<double>(&coverageThresh)->default_value(0.70),
-      "required coverage of read by union of SMEMs to consider it a \"hit\".")(
-      "splitWidth,s",
-      po::value<int>(&(memOptions->split_width))->default_value(0),
+      "be significantly lower than expected.")
+    ("coverage,c", po::value<double>(&coverageThresh)->default_value(salmon::defaults::fmdCoverageThresh),
+      "required coverage of read by union of SMEMs to consider it a \"hit\".")
+    ("splitWidth,s",
+     po::value<int>(&(memOptions->split_width))->default_value(salmon::defaults::fmdSplitWidth),
       "If (S)MEM occurs fewer than this many times, search for smaller, "
       "contained MEMs. "
       "The default value will not split (S)MEMs, a higher value will "
       "result in more MEMs being explore and, thus, will "
-      "result in increased running time.")(
-      "splitSpanningSeeds,b",
-      po::bool_switch(&(sopt.splitSpanningSeeds))->default_value(false),
+      "result in increased running time.")
+    ("splitSpanningSeeds,b",
+     po::bool_switch(&(sopt.splitSpanningSeeds))->default_value(salmon::defaults::fmdSplitSpanningSeeds),
       "Attempt to split seeds that happen to fall on the "
       "boundary between two transcripts.  This can improve the  fragment "
       "hit-rate, but is usually not necessary.");
 
   po::options_description hidden("\nhidden options");
-  hidden.add_options()(
-      "numGCBins", po::value<size_t>(&(sopt.numFragGCBins))->default_value(25),
-      "Number of bins to use when modeling fragment GC bias")(
-      "conditionalGCBins",
-      po::value<size_t>(&(sopt.numConditionalGCBins))->default_value(3),
+  hidden.add_options()
+    ("numGCBins", po::value<size_t>(&(sopt.numFragGCBins))->default_value(salmon::defaults::numFragGCBins),
+      "Number of bins to use when modeling fragment GC bias")
+    ("conditionalGCBins",
+     po::value<size_t>(&(sopt.numConditionalGCBins))->default_value(salmon::defaults::numConditionalGCBins),
       "Number of different fragment GC models to learn based on read start/end "
-      "context")(
-      "numRequiredObs,n",
-      po::value(&(sopt.numRequiredFragments))->default_value(50000000),
+      "context")
+    ("numRequiredObs,n",
+     po::value(&(sopt.numRequiredFragments))->default_value(salmon::defaults::numRequiredFrags),
       "[Deprecated]: The minimum number of observations (mapped reads) "
       "that must be observed before "
       "the inference procedure will terminate.");
 
   po::options_description testing("\n"
                                   "testing options");
-  testing.add_options()("posBias",
-                        po::value(&(sopt.posBiasCorrect))->zero_tokens(),
-                        "[experimental] Perform positional bias correction")(
-      "noRichEqClasses",
-      po::bool_switch(&(sopt.noRichEqClasses))->default_value(false),
+  testing.add_options()
+    ("posBias", po::bool_switch(&(sopt.posBiasCorrect))->default_value(salmon::defaults::posBiasCorrect),
+                        "[experimental] Perform positional bias correction")
+    ("noRichEqClasses",
+     po::bool_switch(&(sopt.noRichEqClasses))->default_value(salmon::defaults::noRichEqClasses),
       "[TESTING OPTION]: Disable \"rich\" equivalent classes.  If this flag is "
       "passed, then "
       "all information about the relative weights for each transcript in the "
       "label of an equivalence class will be ignored, and only the relative "
-      "abundance and effective length of each transcript will be considered.")(
-      "noFragLenFactor",
-      po::bool_switch(&(sopt.noFragLenFactor))->default_value(false),
+      "abundance and effective length of each transcript will be considered.")
+    ("noFragLenFactor",
+     po::bool_switch(&(sopt.noFragLenFactor))->default_value(salmon::defaults::noFragLengthFactor),
       "[TESTING OPTION]: Disable the factor in the likelihood that takes into "
       "account the "
       "goodness-of-fit of an alignment with the empirical fragment length "
-      "distribution")(
-      "rankEqClasses",
-      po::bool_switch(&(sopt.rankEqClasses))->default_value(false),
+      "distribution")
+    ("rankEqClasses",
+     po::bool_switch(&(sopt.rankEqClasses))->default_value(salmon::defaults::rankEqClasses),
       "[TESTING OPTION]: Keep separate equivalence classes for each distinct "
-      "ordering of transcripts in the label.")(
-      "noExtrapolateCounts",
-      po::bool_switch(&(sopt.dontExtrapolateCounts))->default_value(false),
+      "ordering of transcripts in the label.")
+    ("noExtrapolateCounts",
+     po::bool_switch(&(sopt.dontExtrapolateCounts))->default_value(salmon::defaults::dontExtrapolateCounts),
       "[TESTING OPTION]: When generating posterior counts for Gibbs sampling, "
       "use the directly re-allocated counts in each iteration, rather than "
       "extrapolating "
@@ -2698,8 +2699,8 @@ int salmonQuantify(int argc, char* argv[]) {
 
   po::options_description deprecated(
       "\ndeprecated options about which to inform the user");
-  deprecated.add_options()(
-      "useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(false),
+  deprecated.add_options()
+    ("useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(salmon::defaults::useFSPD),
       "[deprecated] : "
       "Consider / model non-uniformity in the fragment start positions "
       "across the transcript.");

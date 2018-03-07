@@ -59,6 +59,7 @@
 // salmon includes
 #include "FastxParser.hpp"
 #include "SalmonConfig.hpp"
+#include "SalmonDefaults.hpp"
 #include "SalmonOpts.hpp"
 
 using paired_parser_qual = fastx_parser::FastxParser<fastx_parser::ReadQualPair>;
@@ -816,7 +817,7 @@ int salmonBarcoding(int argc, char* argv[]) {
     // "Output quantification file.")
     (
      "allowOrphans",
-     po::bool_switch(&(sopt.allowOrphans))->default_value(false),
+     po::bool_switch(&(sopt.allowOrphans))->default_value(salmon::defaults::allowOrphansFMD),
      "Consider orphaned reads as valid hits when "
      "performing lightweight-alignment.  This option will increase "
      "sensitivity (allow more reads to map and "
@@ -826,10 +827,10 @@ int salmonBarcoding(int argc, char* argv[]) {
      "quasi-mapping.")
     (
      "seqBias",
-     po::bool_switch(&(sopt.biasCorrect))->default_value(false),
+     po::bool_switch(&(sopt.biasCorrect))->default_value(salmon::defaults::seqBiasCorrect),
      "Perform sequence-specific bias correction.")
     (
-     "gcBias", po::bool_switch(&(sopt.gcBiasCorrect))->default_value(false),
+     "gcBias", po::bool_switch(&(sopt.gcBiasCorrect))->default_value(salmon::defaults::gcBiasCorrect),
      "[beta] Perform fragment GC bias correction")
     //(
     // "threads,p",
@@ -837,7 +838,7 @@ int salmonBarcoding(int argc, char* argv[]) {
     // "The number of threads to use concurrently.")
     (
      "incompatPrior",
-     po::value<double>(&(sopt.incompatPrior))->default_value(0.0),
+     po::value<double>(&(sopt.incompatPrior))->default_value(salmon::defaults::incompatPrior),
      "This option "
      "sets the prior probability that an alignment that disagrees with the "
      "specified "
@@ -869,48 +870,48 @@ int salmonBarcoding(int argc, char* argv[]) {
      "transcript identifier and the \"gene_id\" is assumed to contain the corresponding "
      "gene identifier.")
     (
-     "writeMappings,z", po::value<std::string>(&sopt.qmFileName)->default_value("")->implicit_value("-"),
+     "writeMappings,z", po::value<std::string>(&sopt.qmFileName)->default_value(salmon::defaults::quasiMappingDefaultFile)->implicit_value(salmon::defaults::quasiMappingImplicitFile),
      "If this option is provided, then the quasi-mapping results will be written out in SAM-compatible "
      "format.  By default, output will be directed to stdout, but an alternative file name can be "
      "provided instead.")
     (
-     "meta", po::bool_switch(&(sopt.meta))->default_value(false),
+     "meta", po::bool_switch(&(sopt.meta))->default_value(salmon::defaults::metaMode),
      "If you're using Salmon on a metagenomic dataset, consider setting this flag to disable parts of the "
      "abundance estimation model that make less sense for metagenomic data."
      );
 
-  sopt.noRichEqClasses = false;
+  sopt.noRichEqClasses = salmon::defaults::noRichEqClasses;
   // mapping cache has been deprecated
-  sopt.disableMappingCache = true;
+  sopt.disableMappingCache = salmon::defaults::disableMappingCache;
 
   po::options_description advanced("\n"
                                    "advanced options");
   advanced.add_options()
-    ("alternativeInitMode", po::bool_switch(&(sopt.alternativeInitMode))->default_value(false),
+    ("alternativeInitMode", po::bool_switch(&(sopt.alternativeInitMode))->default_value(salmon::defaults::alternativeInitMode),
      "[Experimental]: Use an alternative strategy (rather than simple interpolation between) the "
      "online and uniform abundance estimates to initalize the EM / VBEM algorithm."
      )
     (
-     "auxDir", po::value<std::string>(&(sopt.auxDir))->default_value("aux_info"),
+     "auxDir", po::value<std::string>(&(sopt.auxDir))->default_value(salmon::defaults::auxDir),
      "The sub-directory of the quantification directory where auxiliary "
      "information "
      "e.g. bootstraps, bias parameters, etc. will be written.")
     (
      "consistentHits,c",
-     po::bool_switch(&(sopt.consistentHits))->default_value(false),
+     po::bool_switch(&(sopt.consistentHits))->default_value(salmon::defaults::consistentHits),
      "Force hits gathered during "
      "quasi-mapping to be \"consistent\" (i.e. co-linear and "
      "approximately the right distance apart).")
     (
-     "dumpEq", po::bool_switch(&(sopt.dumpEq))->default_value(false),
+     "dumpEq", po::bool_switch(&(sopt.dumpEq))->default_value(salmon::defaults::dumpEq),
      "Dump the equivalence class counts "
      "that were computed during quasi-mapping")
     ("dumpEqWeights,d",
-     po::bool_switch(&(sopt.dumpEqWeights))->default_value(false),
+     po::bool_switch(&(sopt.dumpEqWeights))->default_value(salmon::defaults::dumpEqWeights),
      "Includes \"rich\" equivlance class weights in the output when equivalence "
      "class information is being dumped to file.")
     ("fasterMapping",
-     po::bool_switch(&(sopt.fasterMapping))->default_value(false),
+     po::bool_switch(&(sopt.fasterMapping))->default_value(salmon::defaults::fasterMapping),
      "[Developer]: Disables some extra checks during quasi-mapping. This may make mapping a "
      "little bit faster at the potential cost of returning too many mappings (i.e. some sub-optimal mappings) "
      "for certain reads. Only use this option if you know what it does (enables NIP-skipping)")
@@ -922,14 +923,14 @@ int salmonBarcoding(int argc, char* argv[]) {
     // "decrease the fidelity of bias modeling results.")
     (
      "biasSpeedSamp",
-     po::value<std::uint32_t>(&(sopt.pdfSampFactor))->default_value(5),
+     po::value<std::uint32_t>(&(sopt.pdfSampFactor))->default_value(salmon::defaults::biasSpeedSamp),
      "The value at which the fragment length PMF is down-sampled "
      "when evaluating sequence-specific & GC fragment bias.  Larger values speed up effective "
      "length correction, but may decrease the fidelity of bias modeling "
      "results.")
     (
      "strictIntersect",
-     po::bool_switch(&(sopt.strictIntersect))->default_value(false),
+     po::bool_switch(&(sopt.strictIntersect))->default_value(salmon::defaults::strictIntersect),
      "Modifies how orphans are "
      "assigned.  When this flag is set, if the intersection of the "
      "quasi-mappings for the left and right "
@@ -938,21 +939,21 @@ int salmonBarcoding(int argc, char* argv[]) {
      "quasi-mappings")
     (
      "fldMax",
-     po::value<size_t>(&(sopt.fragLenDistMax))->default_value(1000),
+     po::value<size_t>(&(sopt.fragLenDistMax))->default_value(salmon::defaults::maxFragLength),
      "The maximum fragment length to consider when building the empirical "
      "distribution")
     (
      "fldMean",
-     po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(250),
+     po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(salmon::defaults::fragLenPriorMean),
      "The mean used in the fragment length distribution prior")
     (
      "fldSD",
-     po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(25),
+     po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(salmon::defaults::fragLenPriorSD),
      "The standard deviation used in the fragment length distribution "
      "prior")
     (
      "forgettingFactor,f",
-     po::value<double>(&(sopt.forgettingFactor))->default_value(0.65),
+     po::value<double>(&(sopt.forgettingFactor))->default_value(salmon::defaults::ffactor),
      "The forgetting factor used "
      "in the online learning schedule.  A smaller value results in "
      "quicker learning, but higher variance "
@@ -964,15 +965,15 @@ int salmonBarcoding(int argc, char* argv[]) {
     // po::value<int>(&(memOptions->max_occ))->default_value(200),
     // "(S)MEMs occuring more than this many times won't be considered.")
     (
-     "initUniform", po::bool_switch(&(sopt.initUniform))->default_value(false),
+     "initUniform", po::bool_switch(&(sopt.initUniform))->default_value(salmon::defaults::initUniform),
      "initialize the offline inference with uniform parameters, rather than seeding with online parameters.")
     (
      "maxReadOcc,w",
-     po::value<uint32_t>(&(sopt.maxReadOccs))->default_value(100),
+     po::value<uint32_t>(&(sopt.maxReadOccs))->default_value(salmon::defaults::maxReadOccs),
      "Reads \"mapping\" to more than this many places won't be "
      "considered.")
     ("noLengthCorrection",
-     po::bool_switch(&(sopt.noLengthCorrection))->default_value(false),
+     po::bool_switch(&(sopt.noLengthCorrection))->default_value(salmon::defaults::noLengthCorrection),
      "[experimental] : Entirely disables length correction when estimating "
      "the abundance of transcripts.  This option can be used with protocols "
      "where one expects that fragments derive from their underlying targets "
@@ -981,7 +982,7 @@ int salmonBarcoding(int argc, char* argv[]) {
     (
      "noEffectiveLengthCorrection",
      po::bool_switch(&(sopt.noEffectiveLengthCorrection))
-     ->default_value(false),
+     ->default_value(salmon::defaults::noEffectiveLengthCorrection),
      "Disables "
      "effective length correction when computing the "
      "probability that a fragment was generated "
@@ -990,7 +991,7 @@ int salmonBarcoding(int argc, char* argv[]) {
      "into account when computing this probability.")
     (
      "noFragLengthDist",
-     po::bool_switch(&(sopt.noFragLengthDist))->default_value(false),
+     po::bool_switch(&(sopt.noFragLengthDist))->default_value(salmon::defaults::noFragLengthDist),
      "[experimental] : "
      "Don't consider concordance with the learned fragment length "
      "distribution when trying to determine "
@@ -1003,19 +1004,19 @@ int salmonBarcoding(int argc, char* argv[]) {
      "a priori probability.")
     (
      "noBiasLengthThreshold",
-     po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(false),
+     po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(salmon::defaults::noBiasLengthThreshold),
      "[experimental] : "
      "If this option is enabled, then no (lower) threshold will be set on "
      "how short bias correction can make effective lengths. This can increase the precision "
      "of bias correction, but harm robustness.  The default correction applies a threshold.")
     (
      "numBiasSamples",
-     po::value<int32_t>(&numBiasSamples)->default_value(2000000),
+     po::value<int32_t>(&numBiasSamples)->default_value(salmon::defaults::numBiasSamples),
      "Number of fragment mappings to use when learning the "
      "sequence-specific bias model.")
     (
      "numAuxModelSamples",
-     po::value<uint32_t>(&(sopt.numBurninFrags))->default_value(5000000),
+     po::value<uint32_t>(&(sopt.numBurninFrags))->default_value(salmon::defaults::numBurninFrags),
      "The first <numAuxModelSamples> are used to train the "
      "auxiliary model parameters (e.g. fragment length distribution, "
      "bias, etc.).  After ther first <numAuxModelSamples> observations "
@@ -1024,7 +1025,7 @@ int salmonBarcoding(int argc, char* argv[]) {
     (
      "numPreAuxModelSamples",
      po::value<uint32_t>(&(sopt.numPreBurninFrags))
-     ->default_value(1000000),
+     ->default_value(salmon::defaults::numPreBurninFrags),
      "The first <numPreAuxModelSamples> will have their "
      "assignment likelihoods and contributions to the transcript "
      "abundances computed without applying any auxiliary models.  The "
@@ -1034,22 +1035,22 @@ int salmonBarcoding(int argc, char* argv[]) {
      "models before thier "
      "parameters have been learned sufficiently well.")
     (
-     "useVBOpt", po::bool_switch(&(sopt.useVBOpt))->default_value(false),
+     "useVBOpt", po::bool_switch(&(sopt.useVBOpt))->default_value(salmon::defaults::useVBOpt),
      "Use the Variational Bayesian EM rather than the "
      "traditional EM algorithm for optimization in the batch passes.")
     (
      "numGibbsSamples",
-     po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0),
+     po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(salmon::defaults::numGibbsSamples),
      "Number of Gibbs sampling rounds to "
      "perform.")
     (
      "numBootstraps",
-     po::value<uint32_t>(&(sopt.numBootstraps))->default_value(0),
+     po::value<uint32_t>(&(sopt.numBootstraps))->default_value(salmon::defaults::numBootstraps),
      "Number of bootstrap samples to generate. Note: "
      "This is mutually exclusive with Gibbs sampling.")
     (
      "thinningFactor",
-     po::value<uint32_t>(&(sopt.thinningFactor))->default_value(16),
+     po::value<uint32_t>(&(sopt.thinningFactor))->default_value(salmon::defaults::thinningFactor),
      "Number of steps to discard for every sample kept from the Gibbs chain. "
      "The larger this number, the less chance that subsequent samples are "
      "auto-correlated, but the slower sampling becomes."
@@ -1059,25 +1060,25 @@ int salmonBarcoding(int argc, char* argv[]) {
     // "Be quiet while doing quantification (don't write informative "
     // "output to the console unless something goes wrong).")
     (
-     "perTranscriptPrior", po::bool_switch(&(sopt.perTranscriptPrior)), "The "
+     "perTranscriptPrior", po::bool_switch(&(sopt.perTranscriptPrior))->default_value(salmon::defaults::perTranscriptPrior), "The "
      "prior (either the default or the argument provided via --vbPrior) will "
      "be interpreted as a transcript-level prior (i.e. each transcript will "
      "be given a prior read count of this value)")
     (
-     "vbPrior", po::value<double>(&(sopt.vbPrior))->default_value(1e-3),
+     "vbPrior", po::value<double>(&(sopt.vbPrior))->default_value(salmon::defaults::vbPrior),
      "The prior that will be used in the VBEM algorithm.  This is interpreted "
      "as a per-nucleotide prior, unless the --perTranscriptPrior flag "
      "is also given, in which case this is used as a transcript-level prior")
     (
      "writeOrphanLinks",
-     po::bool_switch(&(sopt.writeOrphanLinks))->default_value(false),
+     po::bool_switch(&(sopt.writeOrphanLinks))->default_value(salmon::defaults::writeOrphanLinks),
      "Write the transcripts that are linked by orphaned reads.")
     (
      "writeUnmappedNames",
-     po::bool_switch(&(sopt.writeUnmappedNames))->default_value(false),
+     po::bool_switch(&(sopt.writeUnmappedNames))->default_value(salmon::defaults::writeUnmappedNames),
      "Write the names of un-mapped reads to the file unmapped_names.txt in the auxiliary directory.")
     ("quasiCoverage,x",
-     po::value<double>(&(sopt.quasiCoverage))->default_value(0.0),
+     po::value<double>(&(sopt.quasiCoverage))->default_value(salmon::defaults::quasiCoverage),
      "[Experimental]: The fraction of the read that must be covered by MMPs (of length >= 31) if "
      "this read is to be considered as \"mapped\".  This may help to avoid \"spurious\" mappings. "
      "A value of 0 (the default) denotes no coverage threshold (a single 31-mer can yield a mapping).  "
@@ -1092,7 +1093,7 @@ int salmonBarcoding(int argc, char* argv[]) {
     // po::value<int>(&(memOptions->min_seed_len))->default_value(19),
     // "(S)MEMs smaller than this size won't be considered.")
     (
-     "sensitive", po::bool_switch(&(sopt.sensitive))->default_value(false),
+     "sensitive", po::bool_switch(&(sopt.sensitive))->default_value(salmon::defaults::fmdSensitive),
      "Setting this option enables the splitting of SMEMs that are larger "
      "than 1.5 times the minimum seed length (minLen/k above).  This may "
      "reveal high scoring chains of MEMs "
@@ -1101,7 +1102,7 @@ int salmonBarcoding(int argc, char* argv[]) {
      "usually not necessary if the reference is of reasonable quality.")
     (
      "extraSensitive",
-     po::bool_switch(&(sopt.extraSeedPass))->default_value(false),
+     po::bool_switch(&(sopt.extraSeedPass))->default_value(salmon::defaults::fmdExtraSeedPass),
      "Setting this option enables an extra pass of \"seed\" search. "
      "Enabling this option may improve sensitivity (the number of reads "
      "having sufficient coverage), but will "
@@ -1109,7 +1110,7 @@ int salmonBarcoding(int argc, char* argv[]) {
      "option if you find the mapping rate to "
      "be significantly lower than expected.")
     (
-     "coverage,c", po::value<double>(&coverageThresh)->default_value(0.70),
+     "coverage,c", po::value<double>(&coverageThresh)->default_value(salmon::defaults::fmdCoverageThresh),
      "required coverage of read by union of SMEMs to consider it a \"hit\".")
     //(
     // "splitWidth,s",
@@ -1121,21 +1122,21 @@ int salmonBarcoding(int argc, char* argv[]) {
     // "result in increased running time.")
     (
      "splitSpanningSeeds,b",
-     po::bool_switch(&(sopt.splitSpanningSeeds))->default_value(false),
+     po::bool_switch(&(sopt.splitSpanningSeeds))->default_value(salmon::defaults::fmdSplitSpanningSeeds),
      "Attempt to split seeds that happen to fall on the "
      "boundary between two transcripts.  This can improve the  fragment "
      "hit-rate, but is usually not necessary.");
 
   po::options_description hidden("\nhidden options");
   hidden.add_options()
-    ("numGCBins", po::value<size_t>(&(sopt.numFragGCBins))->default_value(25),
+    ("numGCBins", po::value<size_t>(&(sopt.numFragGCBins))->default_value(salmon::defaults::numFragGCBins),
      "Number of bins to use when modeling fragment GC bias")
     (
-     "conditionalGCBins", po::value<size_t>(&(sopt.numConditionalGCBins))->default_value(3),
+     "conditionalGCBins", po::value<size_t>(&(sopt.numConditionalGCBins))->default_value(salmon::defaults::numConditionalGCBins),
      "Number of different fragment GC models to learn based on read start/end context")
     (
      "numRequiredObs,n",
-     po::value(&(sopt.numRequiredFragments))->default_value(50000000),
+     po::value(&(sopt.numRequiredFragments))->default_value(salmon::defaults::numRequiredFrags),
      "[Deprecated]: The minimum number of observations (mapped reads) "
      "that must be observed before "
      "the inference procedure will terminate.");
@@ -1144,11 +1145,11 @@ int salmonBarcoding(int argc, char* argv[]) {
                                   "testing options");
   testing.add_options()
     (
-     "posBias", po::value(&(sopt.posBiasCorrect))->zero_tokens(),
+     "posBias", po::bool_switch(&(sopt.posBiasCorrect))->default_value(salmon::defaults::posBiasCorrect),
      "[experimental] Perform positional bias correction")
     (
      "noRichEqClasses",
-     po::bool_switch(&(sopt.noRichEqClasses))->default_value(false),
+     po::bool_switch(&(sopt.noRichEqClasses))->default_value(salmon::defaults::noRichEqClasses),
      "[TESTING OPTION]: Disable \"rich\" equivalent classes.  If this flag is "
      "passed, then "
      "all information about the relative weights for each transcript in the "
@@ -1156,19 +1157,19 @@ int salmonBarcoding(int argc, char* argv[]) {
      "abundance and effective length of each transcript will be considered.")
     (
      "noFragLenFactor",
-     po::bool_switch(&(sopt.noFragLenFactor))->default_value(false),
+     po::bool_switch(&(sopt.noFragLenFactor))->default_value(salmon::defaults::noFragLengthFactor),
      "[TESTING OPTION]: Disable the factor in the likelihood that takes into "
      "account the "
      "goodness-of-fit of an alignment with the empirical fragment length "
      "distribution")
     (
      "rankEqClasses",
-     po::bool_switch(&(sopt.rankEqClasses))->default_value(false),
+     po::bool_switch(&(sopt.rankEqClasses))->default_value(salmon::defaults::rankEqClasses),
      "[TESTING OPTION]: Keep separate equivalence classes for each distinct "
      "ordering of transcripts in the label.")
     (
      "noExtrapolateCounts",
-     po::bool_switch(&(sopt.dontExtrapolateCounts))->default_value(false),
+     po::bool_switch(&(sopt.dontExtrapolateCounts))->default_value(salmon::defaults::dontExtrapolateCounts),
      "[TESTING OPTION]: When generating posterior counts for Gibbs sampling, "
      "use the directly re-allocated counts in each iteration, rather than extrapolating "
      "from transcript fractions.");
@@ -1188,16 +1189,16 @@ int salmonBarcoding(int argc, char* argv[]) {
      "output,o", po::value<std::string>()->required(),
      "Parent directory for dumping barcode mapping")
     (
-     "dedup", po::bool_switch()->default_value(false),
+     "dedup", po::bool_switch()->default_value(alevin::defaults::dedup),
      "Perform Directional per-cell deduplication")
     (
-     "dropseq", po::bool_switch()->default_value(false),
+     "dropseq", po::bool_switch()->default_value(alevin::defaults::isDropseq),
      "Use DropSeq Single Cell protocol for the library")
     (
-     "chromium", po::bool_switch()->default_value(false),
+     "chromium", po::bool_switch()->default_value(alevin::defaults::isChromium),
      "Use 10x chromium (under-development) Single Cell protocol for the library.")
     (
-     "indrop", po::bool_switch()->default_value(false),
+     "indrop", po::bool_switch()->default_value(alevin::defaults::isInDrop),
      "Use inDrop Single Cell protocol for the library. must specify w1 too.")
     (
      "w1", po::value<std::string>(),
@@ -1216,13 +1217,13 @@ int salmonBarcoding(int argc, char* argv[]) {
      po::value<uint32_t>(),
      "The number of threads to use concurrently.")
     (
-     "dumpbarcodeeq", po::bool_switch()->default_value(false),
+     "dumpbarcodeeq", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeEq),
      "Dump JointEqClas with umi-barcode count.(Only DropSeq)")
     (
-     "noquant", po::bool_switch()->default_value(false),
+     "noquant", po::bool_switch()->default_value(alevin::defaults::noQuant),
      "Don't run downstream barcode-salmon model.")
     (
-     "nosoftmap", po::bool_switch()->default_value(true),
+     "nosoftmap", po::bool_switch()->default_value(alevin::defaults::noSoftMap),
      "Don't use soft-assignment for quant instead do hard-assignment.")
     (
      "mrna", po::value<std::string>(),
@@ -1231,27 +1232,27 @@ int salmonBarcoding(int argc, char* argv[]) {
      "rrna", po::value<std::string>(),
      "path to a file containing ribosomal RNA, one per line")
     (
-     "usecorrelation", po::bool_switch()->default_value(false),
+     "usecorrelation", po::bool_switch()->default_value(alevin::defaults::useCorrelation),
      "Use pair-wise pearson correlation with True barcodes as a"
      " feature for white-list creation.")
     (
-     "dumpfq", po::bool_switch()->default_value(false),
+     "dumpfq", po::bool_switch()->default_value(alevin::defaults::dumpFQ),
      "Dump barcode modified fastq file for downstream analysis by"
      "using coin toss for multi-mapping.")
     (
-     "dumpfeatures", po::bool_switch()->default_value(false),
+     "dumpfeatures", po::bool_switch()->default_value(alevin::defaults::dumpFeatures),
      "Dump features for whitelist and downstream analysis.")
     (
-     "dumpumitoolsmap", po::bool_switch()->default_value(false),
+     "dumpumitoolsmap", po::bool_switch()->default_value(alevin::defaults::dumpUMIToolsMap),
      "Dump umi_tools readable whitelist map for downstream analysis.")
     (
-     "dumpbarcodemap", po::bool_switch()->default_value(false),
+     "dumpbarcodemap", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeMap),
      "Dump BarcodeMap for downstream analysis.")
     (
-     "dumpcsvcounts", po::bool_switch()->default_value(false),
+     "dumpcsvcounts", po::bool_switch()->default_value(alevin::defaults::dumpCSVCounts),
      "Dump cell v transcripts count matrix in csv format.")
     (
-     "quiet,q", po::bool_switch()->default_value(false),
+     "quiet,q", po::bool_switch()->default_value(salmon::defaults::quiet),
      "Be quiet while doing quantification (don't write informative "
      "output to the console unless something goes wrong).")
     (
@@ -1271,10 +1272,10 @@ int salmonBarcoding(int argc, char* argv[]) {
      "umi length Parameter for unknown protocol. (end, umilength, barcodelength)"
      " should all be provided if using this option")
     (
-     "noem",po::bool_switch()->default_value(false),
+     "noem",po::bool_switch()->default_value(alevin::defaults::noEM),
      "do not run em")
     (
-     "nobarcode",po::bool_switch()->default_value(false),
+     "nobarcode",po::bool_switch()->default_value(alevin::defaults::noBarcode),
      "this flag should be used when there is no barcode i.e. only one cell deduplication.")
     (
      "tgMap", po::value<std::string>(), "transcript to gene map tsv file")
