@@ -351,12 +351,6 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   tbb::atomic<uint32_t> skippedCBcount{0};
   std::atomic<uint32_t> bcount{0};
 
-  if (aopt.dumpCsvCounts and aopt.noEM){
-    aopt.jointLog->warn("EM wasn't run can't dump csv counts \n"
-                   "use --dumpbarcodeeq for deduplicated eqClass counts");
-    aopt.jointLog->flush();
-  }
-
   std::vector<std::thread> workerThreads;
   for (size_t tn = 0; tn < numWorkerThreads; ++tn) {
     workerThreads.emplace_back(optimizeCell,
@@ -387,22 +381,26 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
 
   gzw.close_all_streams();
 
-  // Perform White listing only if the data has barcode, EM has been run and white list file
-  // has not been provided
-  if(not boost::filesystem::exists(aopt.whitelistFile) and not aopt.nobarcode and not aopt.noEM){
-    aopt.jointLog->info("Starting white listing");
+  std::vector<std::vector<double>> countMatrix;
+  if (aopt.dumpCsvCounts){
+    if (aopt.noEM){
+      aopt.jointLog->warn("EM wasn't run can't dump csv counts \n"
+                          "use --dumpbarcodeeq for deduplicated eqClass counts");
+      aopt.jointLog->flush();
+    }
+    else{
+      aopt.jointLog->info("Clearing EqMap; Might take some time.");
+      fullEqMap.clear();
 
-    aopt.jointLog->info("Clearing EqMap because of memory requirement");
-    fullEqMap.clear();
-    aopt.jointLog->info("Starting Import of the Gene count matrix.");
-    std::vector<std::vector<double>> countMatrix(trueBarcodes.size(),
-                                                 std::vector<double> (geneIdxMap.size(), 0.0));
-    alevin::whitelist::populate_count_matrix(aopt.outputDirectory,
-                                             txpToGeneMap,
-                                             countMatrix);
-    aopt.jointLog->info("Done Importing count matrix for {}x{} matrix",
-                        numCells, geneIdxMap.size());
-    if (aopt.dumpCsvCounts){
+      aopt.jointLog->info("Starting Import of the Gene count matrix.");
+      countMatrix.resize(trueBarcodes.size(),
+                         std::vector<double> (geneIdxMap.size(), 0.0));
+      alevin::whitelist::populate_count_matrix(aopt.outputDirectory,
+                                               txpToGeneMap,
+                                               countMatrix);
+      aopt.jointLog->info("Done Importing count matrix for {}x{} matrix",
+                          numCells, geneIdxMap.size());
+
       aopt.jointLog->info("Starting dumping genes counts in csv format");
       std::ofstream qFile;
       boost::filesystem::path qFilePath = aopt.outputDirectory / "quants_mat.csv";
@@ -413,7 +411,28 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
         }
         qFile << "\n";
       }
+      qFile.close();
       aopt.jointLog->info("Finished dumping csv counts");
+    }
+  }
+
+  // Perform White listing only if the data has barcode, EM has been run and white list file
+  // has not been provided
+  if(not boost::filesystem::exists(aopt.whitelistFile) and not aopt.nobarcode and not aopt.noEM){
+    aopt.jointLog->info("Starting white listing");
+
+    if (not aopt.dumpCsvCounts){
+      aopt.jointLog->info("Clearing EqMap; Might take some time.");
+      fullEqMap.clear();
+
+      aopt.jointLog->info("Starting Import of the Gene count matrix.");
+      countMatrix.resize(trueBarcodes.size(),
+                         std::vector<double> (geneIdxMap.size(), 0.0));
+      alevin::whitelist::populate_count_matrix(aopt.outputDirectory,
+                                               txpToGeneMap,
+                                               countMatrix);
+      aopt.jointLog->info("Done Importing count matrix for {}x{} matrix",
+                          numCells, geneIdxMap.size());
     }
 
     bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
