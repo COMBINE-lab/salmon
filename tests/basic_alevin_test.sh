@@ -14,28 +14,35 @@ sort prediction/alevin/barcodes.txt > 1.txt
 sort alevin_test_data/alevin/barcodes.txt > 2.txt
 diff 1.txt 2.txt  > diff.txt
 wc -l diff.txt
-echo "Above line should be Zero"
+echo "FAILED if above line > Zero"
 
 echo "BarcodeSoftMap.txt"
 sort prediction/alevin/barcodeSoftMaps.txt > 1.txt
 sort alevin_test_data/alevin/barcodeSoftMaps.txt > 2.txt
 diff 1.txt 2.txt  > diff.txt
 wc -l diff.txt
-echo "Above line should be Zero"
+echo "FAILED if above line > Zero"
 
 echo "frequency.txt"
 sort prediction/alevin/frequency.txt > 1.txt
 sort alevin_test_data/alevin/frequency.txt > 2.txt
 diff 1.txt 2.txt  > diff.txt
 wc -l diff.txt
-echo "Above line should be Zero"
+echo "FAILED if above line > Zero"
 
 echo "mappedUMI.txt"
 sort prediction/alevin/MappedUmi.txt > 1.txt
 sort alevin_test_data/alevin/MappedUmi.txt > 2.txt
 diff 1.txt 2.txt  > diff.txt
 wc -l diff.txt
-echo "Above line should be Zero"
+echo "FAILED if above line > Zero"
+
+echo "whitelist.txt"
+sort prediction/alevin/whitelist.txt > 1.txt
+sort alevin_test_data/alevin/whitelist.txt > 2.txt
+diff 1.txt 2.txt  > diff.txt
+wc -l diff.txt
+echo "FAILED if above line > Zero"
 
 rm 1.txt 2.txt diff.txt
 

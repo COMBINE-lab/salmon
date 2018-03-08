@@ -5,7 +5,6 @@
 #include "SingleCellProtocols.hpp"
 #include "edlib.h"
 #include "SalmonOpts.hpp"
-#include "AlevinSalmonOpts.hpp"
 #include "CollapsedEMOptimizer.hpp"
 #include "GZipWriter.hpp"
 #include "AlevinKmer.hpp"
