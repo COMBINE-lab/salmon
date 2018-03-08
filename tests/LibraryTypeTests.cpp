@@ -126,7 +126,16 @@ SCENARIO("Single-end library types have proper compatibility") {
                         observedName += " should not happen!";
                     }
 
-                    WHEN("expected is " + expectedName + " and observed is " + observedName) {
+                    // If the expected type is single-end, we should never observe paired-end reads
+                    if (expected.type == ReadType::SINGLE_END and (s == MateStatus::PAIRED_END_LEFT or s == MateStatus::PAIRED_END_RIGHT)) {
+                      continue;
+                    }
+                    // If the expected type is paired-end, we should never observe single-end reads (though orphans are OK)
+                    if (expected.type == ReadType::PAIRED_END and s == MateStatus::SINGLE_END) {
+                      continue;
+                    }
+
+                    WHEN("expected is " + expected.toString() + " and observed is " + observedName) {
                         THEN("compatibility should be") {
                             /*
                             if ((expected.type == ReadType::PAIRED_END) and

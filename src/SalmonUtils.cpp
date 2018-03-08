@@ -180,6 +180,7 @@ double logAlignFormatProb(const LibraryFormat observed,
 bool compatibleHit(const LibraryFormat expected, int32_t start, bool isForward,
                    MateStatus ms) {
   auto expectedStrand = expected.strandedness;
+  auto expectedType = expected.type;
   switch (ms) {
   case MateStatus::SINGLE_END:
     if (isForward) { // U, SF
@@ -196,6 +197,13 @@ bool compatibleHit(const LibraryFormat expected, int32_t start, bool isForward,
     // of the pair.
   case MateStatus::PAIRED_END_LEFT:
     // "M"atching or same orientation is a special case
+    /*
+    if (expectedType == ReadType::SINGLE_END) {
+      return (expectedStrand == ReadStrandedness::U or
+              (expectedStrand == ReadStrandedness::S and isForward) or
+              (expectedStrand == ReadStrandedness::A and !isForward));
+    } else
+    */
     if (expected.orientation == ReadOrientation::SAME) {
       return (expectedStrand == ReadStrandedness::U or
               (expectedStrand == ReadStrandedness::S and isForward) or
@@ -213,6 +221,13 @@ bool compatibleHit(const LibraryFormat expected, int32_t start, bool isForward,
     // of the pair.
   case MateStatus::PAIRED_END_RIGHT:
     // "M"atching or same orientation is a special case
+    /*
+    if (expectedType == ReadType::SINGLE_END) {
+      return (expectedStrand == ReadStrandedness::U or
+              (expectedStrand == ReadStrandedness::A and isForward) or
+              (expectedStrand == ReadStrandedness::S and !isForward));
+    } else
+    */
     if (expected.orientation == ReadOrientation::SAME) {
       return (expectedStrand == ReadStrandedness::U or
               (expectedStrand == ReadStrandedness::S and isForward) or
