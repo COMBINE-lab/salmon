@@ -401,16 +401,17 @@ namespace salmon {
        "protocols "
        "where one expects that fragments derive from their underlying "
        "targets "
-       "without regard to that target's length (e.g. QuantSeq)")(
-                                                                 "noEffectiveLengthCorrection",
-                                                                 po::bool_switch(&(sopt.noEffectiveLengthCorrection))
-                                                                 ->default_value(salmon::defaults::noEffectiveLengthCorrection),
-                                                                 "Disables "
-                                                                 "effective length correction when computing the "
-                                                                 "probability that a fragment was generated "
-                                                                 "from a transcript.  If this flag is passed in, the "
-                                                                 "fragment length distribution is not taken "
-                                                                 "into account when computing this probability.")
+       "without regard to that target's length (e.g. QuantSeq)")
+      (
+       "noEffectiveLengthCorrection",
+       po::bool_switch(&(sopt.noEffectiveLengthCorrection))
+       ->default_value(salmon::defaults::noEffectiveLengthCorrection),
+       "Disables "
+       "effective length correction when computing the "
+       "probability that a fragment was generated "
+       "from a transcript.  If this flag is passed in, the "
+       "fragment length distribution is not taken "
+       "into account when computing this probability.")
       ("noFragLengthDist",
        po::bool_switch(&(sopt.noFragLengthDist))->default_value(salmon::defaults::noFragLengthDist),
        "[experimental] : "
