@@ -103,7 +103,7 @@ void optimizeCell(SCExpT& experiment,
                   std::deque<TranscriptGroup>& orderedTgroup,
                   std::shared_ptr<spdlog::logger>& jointlog,
                   bfs::path& outDir, std::vector<uint32_t>& umiCount,
-                  tbb::atomic<uint32_t>& skippedCBcount,
+                  spp::sparse_hash_set<uint32_t>& skippedCBcount,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap){
   size_t numCells {trueBarcodes.size()};
@@ -114,7 +114,7 @@ void optimizeCell(SCExpT& experiment,
     // per-cell level optimization
     if(umiCount[trueBarcodeIdx] == 0){
       //skip the barcode if no mapped UMI
-      skippedCBcount += 1;
+      skippedCBcount.insert(trueBarcodeIdx);
       continue;
     }
     auto& trueBarcodeStr = trueBarcodes[trueBarcodeIdx];
@@ -230,10 +230,15 @@ void optimizeCell(SCExpT& experiment,
     double totalnumfrags{static_cast<double>(totalcount)};
 
     if (activetranscriptids.size() == 0) {
-      jointlog->error("it seems that no transcripts are expressed; something is "
-                      "likely wrong!");
+      for (auto& txps: txpgroups){
+        for (auto& tid: txps){
+          activetranscriptids.insert(tid);
+        }
+      }
+      jointlog->warn("it seems that no rich-transcripts are expressed for cell {}"
+                     ". Adding all genes, above cell may bias the result.",
+                     trueBarcodeStr);
       jointlog->flush();
-      std::exit(1);
     }
 
     if(not noEM){
@@ -348,7 +353,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                   aopt.geneMapFile.string(),
                   geneIdxMap);
 
-  tbb::atomic<uint32_t> skippedCBcount{0};
+  spp::sparse_hash_set<uint32_t> skippedCBcount;
   std::atomic<uint32_t> bcount{0};
 
   std::vector<std::thread> workerThreads;
@@ -374,9 +379,23 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   for (auto& t : workerThreads) {
     t.join();
   }
-  if(skippedCBcount>0){
+  if(skippedCBcount.size()>0){
     aopt.jointLog->warn("Skipped {} barcodes due to No mapped read",
-                        skippedCBcount);
+                        skippedCBcount.size());
+    auto lowRegionCutoffIdx = numCells - numLowConfidentBarcode;
+    for (uint32_t idx: skippedCBcount){
+      // not very efficient way but assuming the size is small enough
+      trueBarcodes.erase(trueBarcodes.begin() + idx);
+      if (idx > lowRegionCutoffIdx){
+        numLowConfidentBarcode--;
+      }
+      else{
+        std::cout<< "Skipped Barcodes are from High Confidence Region\n"
+                 << " Should not happen"<<std::flush;
+        exit(1);
+      }
+    }
+    numCells = trueBarcodes.size();
   }
 
   gzw.close_all_streams();

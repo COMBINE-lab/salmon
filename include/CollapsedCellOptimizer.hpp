@@ -51,7 +51,7 @@ void optimizeCell(SCExpT& experiment,
                   std::deque<TranscriptGroup>& orderedTgroup,
                   std::shared_ptr<spdlog::logger>& jointlog,
                   bfs::path& outDir, std::vector<uint32_t>& umiCount,
-                  tbb::atomic<uint32_t>& skippedCBcount,
+                  spp::sparse_hash_set<uint32_t>& skippedCBcount,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap);
 

@@ -1708,86 +1708,6 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
 
     jointLog->flush();
 
-    //CollapsedJointEMOptimizer optimizer;
-    //salmon::utils::normalizeAlphas(sopt, experiment);
-
-    //TrueMapT trBcMap;
-    //uint32_t ind{0};
-    //for(const auto& trBc : trueBarcodes){
-    //  trBcMap[trBc] = ind;
-    //  ind += 1;
-    //}
-    //bool optSuccess = optimizer.optimize(experiment, sopt,
-    //                                     barcodeMap, trBcMap,
-    //                                     0.01, 10000);
-
-    //if (!optSuccess) {
-    //  jointLog->error(
-    //                  "The optimization algorithm failed. This is likely the result of "
-    //                  "bad input (or a bug). If you cannot track down the cause, please "
-    //                  "report this issue on GitHub.");
-    //  return 1;
-    //}
-    //jointLog->info("Finished optimizer");
-
-    //free(memOptions);
-    //size_t tnum{0};
-
-    //jointLog->info("writing output \n");
-
-    //bfs::path estFilePath = outputDirectory / "quant.sf";
-
-    // Write the main results
-    //gzw.writeAbundances(sopt, experiment);
-
-    // If we are dumping the equivalence classes, then
-    // do it here.
-    //if (sopt.dumpEq) {
-    //  gzw.writeEquivCounts(sopt, experiment);
-    //}
-
-    //if (sopt.numGibbsSamples > 0) {
-
-    //  jointLog->info("Starting Gibbs Sampler");
-    //  CollapsedGibbsSampler sampler;
-    //  gzw.setSamplingPath(sopt);
-    //  // The function we'll use as a callback to write samples
-    //  std::function<bool(const std::vector<double>&)> bsWriter =
-    //    [&gzw](const std::vector<double>& alphas) -> bool {
-    //    return gzw.writeBootstrap(alphas, true);
-    //  };
-
-    //  bool sampleSuccess =
-    //    //sampler.sampleMultipleChains(experiment, sopt, bsWriter, sopt.numGibbsSamples);
-    //    sampler.sample(experiment, sopt, bsWriter, sopt.numGibbsSamples);
-    //  if (!sampleSuccess) {
-    //    jointLog->error("Encountered error during Gibbs sampling.\n"
-    //                    "This should not happen.\n"
-    //                    "Please file a bug report on GitHub.\n");
-    //    return 1;
-    //  }
-    //  jointLog->info("Finished Gibbs Sampler");
-    //} else if (sopt.numBootstraps > 0) {
-    //  gzw.setSamplingPath(sopt);
-    //  // The function we'll use as a callback to write samples
-    //  std::function<bool(const std::vector<double>&)> bsWriter =
-    //    [&gzw](const std::vector<double>& alphas) -> bool {
-    //    return gzw.writeBootstrap(alphas);
-    //  };
-
-    //  jointLog->info("Starting Bootstrapping");
-    //  bool bootstrapSuccess =
-    //    optimizer.gatherBootstraps(experiment, sopt, bsWriter, 0.01, 10000);
-    //  jointLog->info("Finished Bootstrapping");
-    //  if (!bootstrapSuccess) {
-    //    jointLog->error("Encountered error during bootstrapping.\n"
-    //                    "This should not happen.\n"
-    //                    "Please file a bug report on GitHub.\n");
-    //    return 1;
-    //  }
-    //}
-    //+++++++++++++++++++++++++++++++++++++++
-
     bfs::path libCountFilePath = outputDirectory / "lib_format_counts.json";
     experiment.summarizeLibraryTypeCounts(libCountFilePath);
 
@@ -1802,21 +1722,6 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
                    experiment.fragmentLengthDistribution()->toString());
       }
     }
-
-    /** If the user requested gene-level abundances, then compute those now **/
-    //if (vm.count("geneMap")) {
-    //  try {
-    //    salmon::utils::generateGeneLevelEstimates(sopt.geneMapPath,
-    //                                              outputDirectory);
-    //  } catch (std::invalid_argument& e) {
-    //    fmt::print(stderr, "Error: [{}] when trying to compute gene-level "
-    //               "estimates. The gene-level file(s) may not exist",
-    //               e.what());
-    //  }
-    //}
-
-    //+++++++++++++++++++++++++++++++++++++++
-
 
     if (sopt.writeUnmappedNames) {
       auto l = sopt.unmappedLog.get();
