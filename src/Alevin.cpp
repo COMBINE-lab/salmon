@@ -986,6 +986,11 @@ salmon-based processing of single-cell RNA-seq data.
     }
     std::string commentString = commentStream.str();
 
+    // Until we can figure out a better way to generify our parsing
+    barcodeFiles = sopt.mate1ReadFiles;
+    readFiles = sopt.mate2ReadFiles;
+    //
+
     if (dropseq){
       AlevinOpts<apt::DropSeq> aopt;
       initiatePipeline(aopt, sopt, orderedOptions,
