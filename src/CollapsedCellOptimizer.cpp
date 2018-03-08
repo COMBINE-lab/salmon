@@ -112,7 +112,7 @@ void optimizeCell(SCExpT& experiment,
   // looping over until the end of the file
   while((trueBarcodeIdx = barcode++) < totalCells) {
     // per-cell level optimization
-    if(umiCount[trueBarcodeIdx] == 0){
+    if(umiCount[trueBarcodeIdx] < 10){
       //skip the barcode if no mapped UMI
       skippedCBcount.insert(trueBarcodeIdx);
       continue;
