@@ -414,13 +414,7 @@ void writeAbundances(const SalmonOpts& sopt, ExpLib& alnLib,
     if (sopt.noLengthCorrection) {
       logLength = 1.0;
     }
-    /*
-    if (!sopt.noSeqBiasModel) {
-        double avgLogBias = transcript.getAverageSequenceBias(
-                            alnLib.sequenceBiasModel());
-        logLength += avgLogBias;
-    }
-    */
+
     // logLength = std::log(transcript.RefLength);
     double fpkmFactor = std::exp(logBillion - logLength - logNumFragments);
     double count = transcript.projectedCounts;

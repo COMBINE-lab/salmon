@@ -61,6 +61,7 @@
 #include "SalmonConfig.hpp"
 #include "SalmonDefaults.hpp"
 #include "SalmonOpts.hpp"
+#include "ProgramOptionsGenerator.hpp"
 
 using paired_parser_qual = fastx_parser::FastxParser<fastx_parser::ReadQualPair>;
 using single_parser = fastx_parser::FastxParser<fastx_parser::ReadSeq>;
@@ -790,6 +791,256 @@ int salmonBarcoding(int argc, char* argv[]) {
   //vector<string> mate2ReadFiles;
 
   SalmonOpts sopt;
+  mem_opt_t* memOptions = mem_opt_init();
+  memOptions->split_factor = 1.5;
+  auto tot_cores = std::thread::hardware_concurrency();
+  sopt.numThreads = std::max(1, static_cast<int>(tot_cores/4.0));
+
+  salmon::ProgramOptionsGenerator pogen;
+
+  auto inputOpt = pogen.getMappingInputOptions(sopt);
+  auto basicOpt = pogen.getBasicOptions(sopt);
+  auto mapSpecOpt = pogen.getMappingSpecificOptions(sopt);
+  auto advancedOpt = pogen.getAdvancedOptions(numBiasSamples, sopt);
+  auto fmdOpt = pogen.getFMDOptions(memOptions, sopt);
+  auto hiddenOpt = pogen.getHiddenOptions(sopt);
+  auto testingOpt = pogen.getTestingOptions(sopt);
+  auto deprecatedOpt = pogen.getDeprecatedOptions(sopt);
+
+  po::options_description alevin_generic("\nAlevin Options");
+  alevin_generic.add_options()
+    /*
+    ("version,v", "print version string")
+    (
+     "help,h", "produce help message")
+    (
+     "mates1,1", po::value<std::vector<std::string>>(&barcodeFiles)->multitoken()->required(),
+     "List of files containing the barcodes+umi from drop seq dataset, usually the first file")
+    (
+     "mates2,2", po::value<std::vector<std::string>>(&readFiles)->multitoken(),
+     "List of files containing the barcodes+umi from drop seq dataset, usually the second file")
+    (
+     "output,o", po::value<std::string>()->required(),
+     "Parent directory for dumping barcode mapping")
+    */
+    (
+     "dedup", po::bool_switch()->default_value(alevin::defaults::dedup),
+     "Perform Directional per-cell deduplication")
+    (
+     "dropseq", po::bool_switch()->default_value(alevin::defaults::isDropseq),
+     "Use DropSeq Single Cell protocol for the library")
+    (
+     "chromium", po::bool_switch()->default_value(alevin::defaults::isChromium),
+     "Use 10x chromium (under-development) Single Cell protocol for the library.")
+    (
+     "indrop", po::bool_switch()->default_value(alevin::defaults::isInDrop),
+     "Use inDrop Single Cell protocol for the library. must specify w1 too.")
+    (
+     "w1", po::value<std::string>(),
+     "Must be used in conjunction with inDrop;")
+    /*
+    (
+     "index,i", po::value<std::string>(),
+     "salmon index")
+    (
+     "libType,l", po::value<std::string>(),
+     "Format string describing the library type")
+    */
+    (
+     "whitelist", po::value<std::string>(),
+     "File containing white-list barcodes")
+    /*
+    (
+     "threads,p",
+     po::value<uint32_t>(),
+     "The number of threads to use concurrently.")
+    */
+    (
+     "dumpbarcodeeq", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeEq),
+     "Dump JointEqClas with umi-barcode count.(Only DropSeq)")
+    (
+     "noquant", po::bool_switch()->default_value(alevin::defaults::noQuant),
+     "Don't run downstream barcode-salmon model.")
+    (
+     "nosoftmap", po::bool_switch()->default_value(alevin::defaults::noSoftMap),
+     "Don't use soft-assignment for quant instead do hard-assignment.")
+    (
+     "mrna", po::value<std::string>(),
+     "path to a file containing mito-RNA gene, one per line")
+    (
+     "rrna", po::value<std::string>(),
+     "path to a file containing ribosomal RNA, one per line")
+    (
+     "usecorrelation", po::bool_switch()->default_value(alevin::defaults::useCorrelation),
+     "Use pair-wise pearson correlation with True barcodes as a"
+     " feature for white-list creation.")
+    (
+     "dumpfq", po::bool_switch()->default_value(alevin::defaults::dumpFQ),
+     "Dump barcode modified fastq file for downstream analysis by"
+     "using coin toss for multi-mapping.")
+    (
+     "dumpfeatures", po::bool_switch()->default_value(alevin::defaults::dumpFeatures),
+     "Dump features for whitelist and downstream analysis.")
+    (
+     "dumpumitoolsmap", po::bool_switch()->default_value(alevin::defaults::dumpUMIToolsMap),
+     "Dump umi_tools readable whitelist map for downstream analysis.")
+    (
+     "dumpbarcodemap", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeMap),
+     "Dump BarcodeMap for downstream analysis.")
+    (
+     "dumpcsvcounts", po::bool_switch()->default_value(alevin::defaults::dumpCSVCounts),
+     "Dump cell v transcripts count matrix in csv format.")
+    /*
+    (
+     "quiet,q", po::bool_switch()->default_value(salmon::defaults::quiet),
+     "Be quiet while doing quantification (don't write informative "
+     "output to the console unless something goes wrong).")
+    */
+    (
+     "iupac,u",po::value<std::string>(),
+     "<Deprecated>iupac code for cell-level barcodes.")
+    (
+     "end",po::value<uint32_t>(),
+     "Cell-Barcodes end (5 or 3) location in the read sequence from where barcode has to"
+     "be extracted. (end, umilength, barcodelength)"
+     " should all be provided if using this option")
+    (
+     "umilength",po::value<uint32_t>(),
+     "umi length Parameter for unknown protocol. (end, umilength, barcodelength)"
+     " should all be provided if using this option")
+    (
+     "barcodelength",po::value<uint32_t>(),
+     "umi length Parameter for unknown protocol. (end, umilength, barcodelength)"
+     " should all be provided if using this option")
+    (
+     "noem",po::bool_switch()->default_value(alevin::defaults::noEM),
+     "do not run em")
+    (
+     "nobarcode",po::bool_switch()->default_value(alevin::defaults::noBarcode),
+     "this flag should be used when there is no barcode i.e. only one cell deduplication.")
+    (
+     "tgMap", po::value<std::string>(), "transcript to gene map tsv file")
+    (
+    "freqthreshold",po::value<uint32_t>(),
+    "threshold for the frequency of the barcodes");
+
+  po::options_description all("alevin options");
+  all.add(inputOpt).add(alevin_generic).add(basicOpt).add(mapSpecOpt).add(advancedOpt).add(fmdOpt).add(testingOpt).add(hiddenOpt).add(deprecatedOpt);
+
+  po::options_description visible("alevin options");
+  visible.add(inputOpt).add(alevin_generic).add(basicOpt).add(mapSpecOpt).add(advancedOpt).add(fmdOpt);
+
+  /*
+  po::options_description all("Alevin options");
+  all.add(alevin_generic).add(advanced).add(testing).add(hidden).add(fmd).add(generic);
+  */
+  //po::options_description visible("visible Alevin options");
+  //visible.add(alevin_generic);
+
+  po::variables_map vm;
+  try {
+    auto orderedOptions =
+        po::command_line_parser(argc, argv).options(all).run();
+
+    po::store(orderedOptions, vm);
+
+    if (vm.count("help")) {
+      auto hstring = R"(
+alevin
+==========
+salmon-based processing of single-cell RNA-seq data.
+)";
+
+      std::cerr << hstring << std::endl;
+      std::cerr << visible << std::endl;
+      std::exit(0);
+    }
+
+    po::notify(vm);
+
+    green[3] = '0' + static_cast<char>(fmt::GREEN);
+    red[3] = '0' + static_cast<char>(fmt::RED);
+
+
+    bool dropseq = vm["dropseq"].as<bool>();
+    bool indrop = vm["indrop"].as<bool>();
+    bool chrom = vm["chromium"].as<bool>();
+
+    if((dropseq and indrop) or
+       (dropseq and chrom) or
+       (chrom and indrop)){
+      fmt::print(stderr, "ERROR: Please specify only one scRNA protocol;");
+      exit(1);
+    }
+
+    std::stringstream commentStream;
+    commentStream << "### salmon (single-cell-based) v" << salmon::version << "\n";
+    commentStream << "### [ program ] => salmon \n";
+    commentStream << "### [ command ] => alevin \n";
+    for (auto& opt : orderedOptions.options) {
+      commentStream << "### [ " << opt.string_key << " ] => {";
+      for (auto& val : opt.value) {
+        commentStream << " " << val;
+      }
+      commentStream << " }\n";
+    }
+    std::string commentString = commentStream.str();
+
+    if (dropseq){
+      AlevinOpts<apt::DropSeq> aopt;
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString,
+                       barcodeFiles, readFiles);
+    }
+    else if(indrop){
+      std::cout<<"Indrop get neighbors removed, please use other protocols";
+      exit(1);
+      if(vm.count("w1") != 0){
+        std::string w1 = vm["w1"].as<std::string>();
+        AlevinOpts<apt::InDrop> aopt;
+        aopt.protocol.setW1(w1);
+        initiatePipeline(aopt, sopt, orderedOptions,
+                         vm, commentString,
+                         barcodeFiles, readFiles);
+      }
+      else{
+        fmt::print(stderr, "ERROR: indrop needs w1 flag too.\n Exiting Now");
+        exit(1);
+      }
+    }
+    else if(chrom){
+      AlevinOpts<apt::Chromium> aopt;
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString,
+                       barcodeFiles, readFiles);
+    }
+    else{
+      AlevinOpts<apt::Custom> aopt;
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString,
+                       barcodeFiles, readFiles);
+    }
+
+  } catch (po::error& e) {
+    std::cerr << "Exception : [" << e.what() << "]. Exiting.\n";
+    std::exit(1);
+  } catch (const spdlog::spdlog_ex& ex) {
+    std::cerr << "logger failed with : [" << ex.what() << "]. Exiting.\n";
+    std::exit(1);
+  } catch (std::exception& e) {
+    std::cerr << "Exception : [" << e.what() << "]\n";
+    std::cerr << argv[0] << " alevin was invoked improperly.\n";
+    std::cerr << "For usage information, try " << argv[0]
+              << " alevin --help\nExiting.\n";
+    std::exit(1);
+  }
+
+  return 0;
+}
+
+
+// to remove
+/*
 
   po::options_description generic("\n"
                                   "basic options");
@@ -1173,219 +1424,4 @@ int salmonBarcoding(int argc, char* argv[]) {
      "[TESTING OPTION]: When generating posterior counts for Gibbs sampling, "
      "use the directly re-allocated counts in each iteration, rather than extrapolating "
      "from transcript fractions.");
-
-  po::options_description alevin_generic("\nAlevin Options");
-  alevin_generic.add_options()
-    ("version,v", "print version string")
-    (
-     "help,h", "produce help message")
-    (
-     "mates1,1", po::value<std::vector<std::string>>(&barcodeFiles)->multitoken()->required(),
-     "List of files containing the barcodes+umi from drop seq dataset, usually the first file")
-    (
-     "mates2,2", po::value<std::vector<std::string>>(&readFiles)->multitoken(),
-     "List of files containing the barcodes+umi from drop seq dataset, usually the second file")
-    (
-     "output,o", po::value<std::string>()->required(),
-     "Parent directory for dumping barcode mapping")
-    (
-     "dedup", po::bool_switch()->default_value(alevin::defaults::dedup),
-     "Perform Directional per-cell deduplication")
-    (
-     "dropseq", po::bool_switch()->default_value(alevin::defaults::isDropseq),
-     "Use DropSeq Single Cell protocol for the library")
-    (
-     "chromium", po::bool_switch()->default_value(alevin::defaults::isChromium),
-     "Use 10x chromium (under-development) Single Cell protocol for the library.")
-    (
-     "indrop", po::bool_switch()->default_value(alevin::defaults::isInDrop),
-     "Use inDrop Single Cell protocol for the library. must specify w1 too.")
-    (
-     "w1", po::value<std::string>(),
-     "Must be used in conjunction with inDrop;")
-    (
-     "index,i", po::value<std::string>(),
-     "salmon index")
-    (
-     "libType,l", po::value<std::string>(),
-     "Format string describing the library type")
-    (
-     "whitelist", po::value<std::string>(),
-     "File containing white-list barcodes")
-    (
-     "threads,p",
-     po::value<uint32_t>(),
-     "The number of threads to use concurrently.")
-    (
-     "dumpbarcodeeq", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeEq),
-     "Dump JointEqClas with umi-barcode count.(Only DropSeq)")
-    (
-     "noquant", po::bool_switch()->default_value(alevin::defaults::noQuant),
-     "Don't run downstream barcode-salmon model.")
-    (
-     "nosoftmap", po::bool_switch()->default_value(alevin::defaults::noSoftMap),
-     "Don't use soft-assignment for quant instead do hard-assignment.")
-    (
-     "mrna", po::value<std::string>(),
-     "path to a file containing mito-RNA gene, one per line")
-    (
-     "rrna", po::value<std::string>(),
-     "path to a file containing ribosomal RNA, one per line")
-    (
-     "usecorrelation", po::bool_switch()->default_value(alevin::defaults::useCorrelation),
-     "Use pair-wise pearson correlation with True barcodes as a"
-     " feature for white-list creation.")
-    (
-     "dumpfq", po::bool_switch()->default_value(alevin::defaults::dumpFQ),
-     "Dump barcode modified fastq file for downstream analysis by"
-     "using coin toss for multi-mapping.")
-    (
-     "dumpfeatures", po::bool_switch()->default_value(alevin::defaults::dumpFeatures),
-     "Dump features for whitelist and downstream analysis.")
-    (
-     "dumpumitoolsmap", po::bool_switch()->default_value(alevin::defaults::dumpUMIToolsMap),
-     "Dump umi_tools readable whitelist map for downstream analysis.")
-    (
-     "dumpbarcodemap", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeMap),
-     "Dump BarcodeMap for downstream analysis.")
-    (
-     "dumpcsvcounts", po::bool_switch()->default_value(alevin::defaults::dumpCSVCounts),
-     "Dump cell v transcripts count matrix in csv format.")
-    (
-     "quiet,q", po::bool_switch()->default_value(salmon::defaults::quiet),
-     "Be quiet while doing quantification (don't write informative "
-     "output to the console unless something goes wrong).")
-    (
-     "iupac,u",po::value<std::string>(),
-     "<Deprecated>iupac code for cell-level barcodes.")
-    (
-     "end",po::value<uint32_t>(),
-     "Cell-Barcodes end (5 or 3) location in the read sequence from where barcode has to"
-     "be extracted. (end, umilength, barcodelength)"
-     " should all be provided if using this option")
-    (
-     "umilength",po::value<uint32_t>(),
-     "umi length Parameter for unknown protocol. (end, umilength, barcodelength)"
-     " should all be provided if using this option")
-    (
-     "barcodelength",po::value<uint32_t>(),
-     "umi length Parameter for unknown protocol. (end, umilength, barcodelength)"
-     " should all be provided if using this option")
-    (
-     "noem",po::bool_switch()->default_value(alevin::defaults::noEM),
-     "do not run em")
-    (
-     "nobarcode",po::bool_switch()->default_value(alevin::defaults::noBarcode),
-     "this flag should be used when there is no barcode i.e. only one cell deduplication.")
-    (
-     "tgMap", po::value<std::string>(), "transcript to gene map tsv file")
-    (
-    "freqthreshold",po::value<uint32_t>(),
-    "threshold for the frequency of the barcodes");
-
-  po::options_description all("Alevin options");
-  all.add(alevin_generic).add(advanced).add(testing).add(hidden).add(fmd).add(generic);
-
-  //po::options_description visible("visible Alevin options");
-  //visible.add(alevin_generic);
-
-  po::variables_map vm;
-  try {
-    auto orderedOptions =
-        po::command_line_parser(argc, argv).options(all).run();
-
-    po::store(orderedOptions, vm);
-
-    if (vm.count("help")) {
-      auto hstring = R"(
-Alevin
-==========
-salmon-based processing of single-cell RNA-seq data.
-)";
-
-      std::cerr << hstring << std::endl;
-      std::cerr << alevin_generic << std::endl;
-      std::exit(0);
-    }
-
-    po::notify(vm);
-
-    green[3] = '0' + static_cast<char>(fmt::GREEN);
-    red[3] = '0' + static_cast<char>(fmt::RED);
-
-
-    bool dropseq = vm["dropseq"].as<bool>();
-    bool indrop = vm["indrop"].as<bool>();
-    bool chrom = vm["chromium"].as<bool>();
-
-    if((dropseq and indrop) or
-       (dropseq and chrom) or
-       (chrom and indrop)){
-      fmt::print(stderr, "ERROR: Please specify only one scRNA protocol;");
-      exit(1);
-    }
-
-    std::stringstream commentStream;
-    commentStream << "### salmon (single-cell-based) v" << salmon::version << "\n";
-    commentStream << "### [ program ] => salmon \n";
-    commentStream << "### [ command ] => alevin \n";
-    for (auto& opt : orderedOptions.options) {
-      commentStream << "### [ " << opt.string_key << " ] => {";
-      for (auto& val : opt.value) {
-        commentStream << " " << val;
-      }
-      commentStream << " }\n";
-    }
-    std::string commentString = commentStream.str();
-
-    if (dropseq){
-      AlevinOpts<apt::DropSeq> aopt;
-      initiatePipeline(aopt, sopt, orderedOptions,
-                       vm, commentString,
-                       barcodeFiles, readFiles);
-    }
-    else if(indrop){
-      std::cout<<"Indrop get neighbors removed, please use other protocols";
-      exit(1);
-      if(vm.count("w1") != 0){
-        std::string w1 = vm["w1"].as<std::string>();
-        AlevinOpts<apt::InDrop> aopt;
-        aopt.protocol.setW1(w1);
-        initiatePipeline(aopt, sopt, orderedOptions,
-                         vm, commentString,
-                         barcodeFiles, readFiles);
-      }
-      else{
-        fmt::print(stderr, "ERROR: indrop needs w1 flag too.\n Exiting Now");
-        exit(1);
-      }
-    }
-    else if(chrom){
-      AlevinOpts<apt::Chromium> aopt;
-      initiatePipeline(aopt, sopt, orderedOptions,
-                       vm, commentString,
-                       barcodeFiles, readFiles);
-    }
-    else{
-      AlevinOpts<apt::Custom> aopt;
-      initiatePipeline(aopt, sopt, orderedOptions,
-                       vm, commentString,
-                       barcodeFiles, readFiles);
-    }
-
-  } catch (po::error& e) {
-    std::cerr << "Exception : [" << e.what() << "]. Exiting.\n";
-    std::exit(1);
-  } catch (const spdlog::spdlog_ex& ex) {
-    std::cerr << "logger failed with : [" << ex.what() << "]. Exiting.\n";
-    std::exit(1);
-  } catch (std::exception& e) {
-    std::cerr << "Exception : [" << e.what() << "]\n";
-    std::cerr << argv[0] << " alevin was invoked improperly.\n";
-    std::cerr << "For usage information, try " << argv[0]
-              << " alevin --help\nExiting.\n";
-    std::exit(1);
-  }
-
-  return 0;
-}
+*/

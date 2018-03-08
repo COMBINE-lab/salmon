@@ -236,6 +236,15 @@ struct SalmonOpts {
   uint32_t numThreads;
   uint32_t numQuantThreads;
   uint32_t numParseThreads;
+
+
+  // for utility (may need to be cleaned up later)
+  bool discardOrphansQuasi;
+  double coverageThresh;
+  std::vector<std::string> unmatedReadFiles;
+  std::vector<std::string> mate1ReadFiles;
+  std::vector<std::string> mate2ReadFiles;
+
 };
 
 #endif // SALMON_OPTS_HPP

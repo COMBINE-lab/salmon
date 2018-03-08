@@ -117,6 +117,7 @@ extern "C" {
 
 #include "EffectiveLengthStats.hpp"
 #include "PairAlignmentFormatter.hpp"
+#include "ProgramOptionsGenerator.hpp"
 #include "RapMapUtils.hpp"
 #include "ReadExperiment.hpp"
 #include "SACollector.hpp"
@@ -2293,11 +2294,345 @@ int salmonQuantify(int argc, char* argv[]) {
 
   sopt.numThreads = std::thread::hardware_concurrency();
 
-  double coverageThresh{0.70};
+  //double coverageThresh{0.70};
   vector<string> unmatedReadFiles;
   vector<string> mate1ReadFiles;
   vector<string> mate2ReadFiles;
 
+  salmon::ProgramOptionsGenerator pogen;
+
+  auto inputOpt = pogen.getMappingInputOptions(sopt);
+  auto basicOpt = pogen.getBasicOptions(sopt);
+  auto mapSpecOpt = pogen.getMappingSpecificOptions(sopt);
+  auto advancedOpt = pogen.getAdvancedOptions(numBiasSamples, sopt);
+  auto fmdOpt = pogen.getFMDOptions(memOptions, sopt);
+  auto hiddenOpt = pogen.getHiddenOptions(sopt);
+  auto testingOpt = pogen.getTestingOptions(sopt);
+  auto deprecatedOpt = pogen.getDeprecatedOptions(sopt);
+
+  po::options_description all("salmon quant options");
+  all.add(inputOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt).add(fmdOpt).add(testingOpt).add(hiddenOpt).add(deprecatedOpt);
+
+  po::options_description visible("salmon quant options");
+  visible.add(inputOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt).add(fmdOpt);
+  /*
+  po::options_description all("salmon quant options");
+  all.add(generic).add(advanced).add(testing).add(hidden).add(fmd).add(
+      deprecated);
+
+  po::options_description visible("salmon quant options");
+  visible.add(generic).add(advanced);
+  */
+
+  po::variables_map vm;
+  try {
+    auto orderedOptions =
+        po::command_line_parser(argc, argv).options(all).run();
+
+    po::store(orderedOptions, vm);
+
+    if (vm.count("help")) {
+      auto hstring = R"(
+Quant
+==========
+Perform dual-phase, mapping-based estimation of
+transcript abundance from RNA-seq reads
+)";
+      std::cerr << hstring << std::endl;
+      std::cerr << visible << std::endl;
+      std::exit(0);
+    }
+
+    po::notify(vm);
+
+    // If we're supposed to be quiet, set the global logger level to >= warn
+    if (sopt.quiet) {
+      spdlog::set_level(spdlog::level::warn); // Set global log level to info
+    }
+
+    std::stringstream commentStream;
+    commentStream << "### salmon (mapping-based) v" << salmon::version << "\n";
+    commentStream << "### [ program ] => salmon \n";
+    commentStream << "### [ command ] => quant \n";
+    for (auto& opt : orderedOptions.options) {
+      commentStream << "### [ " << opt.string_key << " ] => {";
+      for (auto& val : opt.value) {
+        commentStream << " " << val;
+      }
+      commentStream << " }\n";
+    }
+    std::string commentString = commentStream.str();
+    if (!sopt.quiet) {
+      fmt::print(stderr, "{}", commentString);
+    }
+
+    sopt.quantMode = SalmonQuantMode::MAP;
+    bool optionsOK =
+        salmon::utils::processQuantOptions(sopt, vm, numBiasSamples);
+    if (!optionsOK) {
+      if (sopt.jointLog) {
+        sopt.jointLog->flush();
+        spdlog::drop_all();
+      }
+      std::exit(1);
+    }
+
+    auto fileLog = sopt.fileLog;
+    auto jointLog = sopt.jointLog;
+    auto indexDirectory = sopt.indexDirectory;
+    auto outputDirectory = sopt.outputDirectory;
+    bool greedyChain = true;
+
+    jointLog->info("parsing read library format");
+
+    // ==== Library format processing ===
+    vector<ReadLibrary> readLibraries =
+      salmon::utils::extractReadLibraries(orderedOptions);
+
+    if (readLibraries.size() == 0) {
+      jointLog->error(
+          "Failed to successfully parse any complete read libraries."
+          " Please make sure you provided arguments properly to -1, -2 (for "
+          "paired-end libraries)"
+          " or -r (for single-end libraries), and that the library format "
+          "option (-l) comes before,"
+          " the read libraries.");
+      std::exit(1);
+    }
+    // ==== END: Library format processing ===
+
+    SalmonIndexVersionInfo versionInfo;
+    boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
+    versionInfo.load(versionPath);
+    auto idxType = versionInfo.indexType();
+
+    ReadExperimentT experiment(readLibraries, indexDirectory, sopt);
+
+    // This will be the class in charge of maintaining our
+    // rich equivalence classes
+    experiment.equivalenceClassBuilder().start();
+
+    auto indexType = experiment.getIndex()->indexType();
+
+    try {
+      switch (indexType) {
+      case SalmonIndexType::FMD: {
+        /** Currently no seq-specific bias correction with
+         *  FMD index.
+         */
+        if (sopt.biasCorrect or sopt.gcBiasCorrect) {
+          sopt.biasCorrect = false;
+          sopt.gcBiasCorrect = false;
+          jointLog->warn(
+              "Sequence-specific or fragment GC bias correction require "
+              "use of the quasi-index. Disabling all bias correction");
+        }
+        quantifyLibrary<SMEMAlignment>(experiment, greedyChain, memOptions,
+                                       sopt, sopt.coverageThresh, sopt.numThreads);
+      } break;
+      case SalmonIndexType::QUASI: {
+        // We can only do fragment GC bias correction, for the time being, with
+        // paired-end reads
+        if (sopt.gcBiasCorrect) {
+          for (auto& rl : readLibraries) {
+            if (rl.format().type != ReadType::PAIRED_END) {
+              jointLog->warn(
+                  "Fragment GC bias correction is currently *experimental* "
+                  "in single-end libraries.  Please use this option "
+                  "with caution.");
+              // sopt.gcBiasCorrect = false;
+            }
+          }
+        }
+
+        sopt.allowOrphans = !discardOrphansQuasi;
+        sopt.useQuasi = true;
+        quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions,
+                                        sopt, sopt.coverageThresh, sopt.numThreads);
+      } break;
+      }
+    } catch (const InsufficientAssignedFragments& iaf) {
+      sopt.jointLog->warn(iaf.what());
+      salmon::utils::writeCmdInfo(sopt, orderedOptions);
+      GZipWriter gzw(outputDirectory, jointLog);
+      gzw.writeEmptyAbundances(sopt, experiment);
+      // Write meta-information about the run
+      std::vector<std::string> errors{"insufficient_assigned_fragments"};
+      sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
+      gzw.writeEmptyMeta(sopt, experiment, errors);
+      std::exit(1);
+    }
+
+    // Write out information about the command / run
+    salmon::utils::writeCmdInfo(sopt, orderedOptions);
+
+    GZipWriter gzw(outputDirectory, jointLog);
+
+    // Now that the streaming pass is complete, we have
+    // our initial estimates, and our rich equivalence
+    // classes.  Perform further optimization until
+    // convergence.
+    // NOTE: A side-effect of calling the optimizer is that
+    // the `EffectiveLength` field of each transcript is
+    // set to its final value.
+    CollapsedEMOptimizer optimizer;
+    jointLog->info("Starting optimizer");
+    salmon::utils::normalizeAlphas(sopt, experiment);
+    bool optSuccess = optimizer.optimize(experiment, sopt, 0.01, 10000);
+
+    if (!optSuccess) {
+      jointLog->error(
+          "The optimization algorithm failed. This is likely the result of "
+          "bad input (or a bug). If you cannot track down the cause, please "
+          "report this issue on GitHub.");
+      return 1;
+    }
+    jointLog->info("Finished optimizer");
+
+    free(memOptions);
+    size_t tnum{0};
+
+    jointLog->info("writing output \n");
+
+    bfs::path estFilePath = outputDirectory / "quant.sf";
+
+    // Write the main results
+    gzw.writeAbundances(sopt, experiment);
+
+    // If we are dumping the equivalence classes, then
+    // do it here.
+    if (sopt.dumpEq) {
+      gzw.writeEquivCounts(sopt, experiment);
+    }
+
+    if (sopt.numGibbsSamples > 0) {
+
+      jointLog->info("Starting Gibbs Sampler");
+      CollapsedGibbsSampler sampler;
+      gzw.setSamplingPath(sopt);
+      // The function we'll use as a callback to write samples
+      std::function<bool(const std::vector<double>&)> bsWriter =
+          [&gzw](const std::vector<double>& alphas) -> bool {
+        return gzw.writeBootstrap(alphas, true);
+      };
+
+      bool sampleSuccess =
+          // sampler.sampleMultipleChains(experiment, sopt, bsWriter,
+          // sopt.numGibbsSamples);
+          sampler.sample(experiment, sopt, bsWriter, sopt.numGibbsSamples);
+      if (!sampleSuccess) {
+        jointLog->error("Encountered error during Gibbs sampling.\n"
+                        "This should not happen.\n"
+                        "Please file a bug report on GitHub.\n");
+        return 1;
+      }
+      jointLog->info("Finished Gibbs Sampler");
+    } else if (sopt.numBootstraps > 0) {
+      gzw.setSamplingPath(sopt);
+      // The function we'll use as a callback to write samples
+      std::function<bool(const std::vector<double>&)> bsWriter =
+          [&gzw](const std::vector<double>& alphas) -> bool {
+        return gzw.writeBootstrap(alphas);
+      };
+
+      jointLog->info("Starting Bootstrapping");
+      bool bootstrapSuccess =
+          optimizer.gatherBootstraps(experiment, sopt, bsWriter, 0.01, 10000);
+      jointLog->info("Finished Bootstrapping");
+      if (!bootstrapSuccess) {
+        jointLog->error("Encountered error during bootstrapping.\n"
+                        "This should not happen.\n"
+                        "Please file a bug report on GitHub.\n");
+        return 1;
+      }
+    }
+
+    bfs::path libCountFilePath = outputDirectory / "lib_format_counts.json";
+    experiment.summarizeLibraryTypeCounts(libCountFilePath);
+
+    // Test writing out the fragment length distribution
+    if (!sopt.noFragLengthDist) {
+      bfs::path distFileName = sopt.paramsDirectory / "flenDist.txt";
+      {
+        std::unique_ptr<std::FILE, int (*)(std::FILE*)> distOut(
+            std::fopen(distFileName.c_str(), "w"), std::fclose);
+        fmt::print(distOut.get(), "{}\n",
+                   experiment.fragmentLengthDistribution()->toString());
+      }
+    }
+
+    /** If the user requested gene-level abundances, then compute those now **/
+    if (vm.count("geneMap")) {
+      try {
+        salmon::utils::generateGeneLevelEstimates(sopt.geneMapPath,
+                                                  outputDirectory);
+      } catch (std::invalid_argument& e) {
+        fmt::print(stderr,
+                   "Error: [{}] when trying to compute gene-level "
+                   "estimates. The gene-level file(s) may not exist",
+                   e.what());
+      }
+    }
+
+    if (sopt.writeUnmappedNames) {
+      auto l = sopt.unmappedLog.get();
+      // If the logger was created, then flush it and
+      // close the associated file.
+      if (l) {
+        l->flush();
+        if (sopt.unmappedFile) {
+          sopt.unmappedFile->close();
+        }
+      }
+    }
+
+    if (sopt.writeOrphanLinks) {
+      auto l = sopt.orphanLinkLog.get();
+      // If the logger was created, then flush it and
+      // close the associated file.
+      if (l) {
+        l->flush();
+        if (sopt.orphanLinkFile) {
+          sopt.orphanLinkFile->close();
+        }
+      }
+    }
+
+    // if we wrote quasimappings, flush that buffer
+    if (sopt.qmFileName != "") {
+      sopt.qmLog->flush();
+      // if we wrote to a buffer other than stdout, close
+      // the file
+      if (sopt.qmFileName != "-") {
+        sopt.qmFile.close();
+      }
+    }
+
+    sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
+
+    // Write meta-information about the run
+    gzw.writeMeta(sopt, experiment);
+
+  } catch (po::error& e) {
+    std::cerr << "Exception : [" << e.what() << "]. Exiting.\n";
+    std::exit(1);
+  } catch (const spdlog::spdlog_ex& ex) {
+    std::cerr << "logger failed with : [" << ex.what() << "]. Exiting.\n";
+    std::exit(1);
+  } catch (std::exception& e) {
+    std::cerr << "Exception : [" << e.what() << "]\n";
+    std::cerr << argv[0] << " quant was invoked improperly.\n";
+    std::cerr << "For usage information, try " << argv[0]
+              << " quant --help\nExiting.\n";
+    std::exit(1);
+  }
+
+  return 0;
+}
+
+
+// to remove
+/*
   po::options_description generic("\n"
                                   "basic options");
   generic.add_options()("version,v", "print version string")(
@@ -2306,14 +2641,13 @@ int salmonQuantify(int argc, char* argv[]) {
       "salmon index")("libType,l", po::value<std::string>()->required(),
                       "Format string describing the library type")(
       "unmatedReads,r",
-      po::value<vector<string>>(&unmatedReadFiles)->multitoken(),
-      "List of files containing unmated reads of (e.g. single-end reads)")(
-      "mates1,1", po::value<vector<string>>(&mate1ReadFiles)->multitoken(),
-      "File containing the #1 mates")(
-      "mates2,2", po::value<vector<string>>(&mate2ReadFiles)->multitoken(),
-      "File containing the #2 mates")(
-
-      "output,o", po::value<std::string>()->required(),
+      po::value<vector<string>>(&(sopt.unmatedReadFiles))->multitoken(),
+      "List of files containing unmated reads of (e.g. single-end reads)")
+    ("mates1,1", po::value<vector<string>>(&(sopt.mate1ReadFiles))->multitoken(),
+      "File containing the #1 mates")
+    ("mates2,2", po::value<vector<string>>(&(sopt.mate2ReadFiles))->multitoken(),
+      "File containing the #2 mates")
+    ("output,o", po::value<std::string>()->required(),
       "Output quantification file.")(
       "discardOrphansQuasi",
       po::bool_switch(&discardOrphansQuasi)->default_value(salmon::defaults::discardOrphansQuasi),
@@ -2393,21 +2727,6 @@ int salmonQuantify(int argc, char* argv[]) {
   po::options_description advanced("\n"
                                    "advanced options");
   advanced.add_options()
-      /*
-      ("disableMappingCache",
-      po::bool_switch(&(sopt.disableMappingCache))->default_value(false),
-      "Setting this option disables the creation and use "
-                                          "of the \"mapping cache\" file.  The
-      mapping cache can speed up quantification significantly for smaller read "
-                                          "libraries (i.e. where the number of
-      mapped fragments is less than the required number of observations).
-      However, "
-                                          "for very large read libraries, the
-      mapping cache is unnecessary, and disabling it may allow salmon to more
-      effectively "
-                                          "make use of a very large number of
-      threads.")
-      */
       ("alternativeInitMode",
        po::bool_switch(&(sopt.alternativeInitMode))->default_value(salmon::defaults::alternativeInitMode),
        "[Experimental]: Use an alternative strategy (rather than simple "
@@ -2639,7 +2958,7 @@ int salmonQuantify(int argc, char* argv[]) {
       "typically slow down quantification by ~40%.  Consider enabling this "
       "option if you find the mapping rate to "
       "be significantly lower than expected.")
-    ("coverage,c", po::value<double>(&coverageThresh)->default_value(salmon::defaults::fmdCoverageThresh),
+    ("coverage,c", po::value<double>(&(sopt.coverageThresh))->default_value(salmon::defaults::fmdCoverageThresh),
       "required coverage of read by union of SMEMs to consider it a \"hit\".")
     ("splitWidth,s",
      po::value<int>(&(memOptions->split_width))->default_value(salmon::defaults::fmdSplitWidth),
@@ -2705,315 +3024,4 @@ int salmonQuantify(int argc, char* argv[]) {
       "Consider / model non-uniformity in the fragment start positions "
       "across the transcript.");
 
-  po::options_description all("salmon quant options");
-  all.add(generic).add(advanced).add(testing).add(hidden).add(fmd).add(
-      deprecated);
-
-  po::options_description visible("salmon quant options");
-  visible.add(generic).add(advanced);
-
-  po::variables_map vm;
-  try {
-    auto orderedOptions =
-        po::command_line_parser(argc, argv).options(all).run();
-
-    po::store(orderedOptions, vm);
-
-    if (vm.count("help")) {
-      auto hstring = R"(
-Quant
-==========
-Perform dual-phase, mapping-based estimation of
-transcript abundance from RNA-seq reads
-)";
-      std::cerr << hstring << std::endl;
-      std::cerr << visible << std::endl;
-      std::exit(0);
-    }
-
-    po::notify(vm);
-
-    // If we're supposed to be quiet, set the global logger level to >= warn
-    if (sopt.quiet) {
-      spdlog::set_level(spdlog::level::warn); // Set global log level to info
-    }
-
-    std::stringstream commentStream;
-    commentStream << "### salmon (mapping-based) v" << salmon::version << "\n";
-    commentStream << "### [ program ] => salmon \n";
-    commentStream << "### [ command ] => quant \n";
-    for (auto& opt : orderedOptions.options) {
-      commentStream << "### [ " << opt.string_key << " ] => {";
-      for (auto& val : opt.value) {
-        commentStream << " " << val;
-      }
-      commentStream << " }\n";
-    }
-    std::string commentString = commentStream.str();
-    if (!sopt.quiet) {
-      fmt::print(stderr, "{}", commentString);
-    }
-
-    sopt.quantMode = SalmonQuantMode::MAP;
-    bool optionsOK =
-        salmon::utils::processQuantOptions(sopt, vm, numBiasSamples);
-    if (!optionsOK) {
-      if (sopt.jointLog) {
-        sopt.jointLog->flush();
-        spdlog::drop_all();
-      }
-      std::exit(1);
-    }
-
-    auto fileLog = sopt.fileLog;
-    auto jointLog = sopt.jointLog;
-    auto indexDirectory = sopt.indexDirectory;
-    auto outputDirectory = sopt.outputDirectory;
-    bool greedyChain = true;
-
-    jointLog->info("parsing read library format");
-
-    // ==== Library format processing ===
-    vector<ReadLibrary> readLibraries =
-      salmon::utils::extractReadLibraries(orderedOptions);
-
-    if (readLibraries.size() == 0) {
-      jointLog->error(
-          "Failed to successfully parse any complete read libraries."
-          " Please make sure you provided arguments properly to -1, -2 (for "
-          "paired-end libraries)"
-          " or -r (for single-end libraries), and that the library format "
-          "option (-l) comes before,"
-          " the read libraries.");
-      std::exit(1);
-    }
-    // ==== END: Library format processing ===
-
-    SalmonIndexVersionInfo versionInfo;
-    boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
-    versionInfo.load(versionPath);
-    auto idxType = versionInfo.indexType();
-
-    ReadExperimentT experiment(readLibraries, indexDirectory, sopt);
-
-    // This will be the class in charge of maintaining our
-    // rich equivalence classes
-    experiment.equivalenceClassBuilder().start();
-
-    auto indexType = experiment.getIndex()->indexType();
-
-    try {
-      switch (indexType) {
-      case SalmonIndexType::FMD: {
-        /** Currently no seq-specific bias correction with
-         *  FMD index.
-         */
-        if (sopt.biasCorrect or sopt.gcBiasCorrect) {
-          sopt.biasCorrect = false;
-          sopt.gcBiasCorrect = false;
-          jointLog->warn(
-              "Sequence-specific or fragment GC bias correction require "
-              "use of the quasi-index. Disabling all bias correction");
-        }
-        quantifyLibrary<SMEMAlignment>(experiment, greedyChain, memOptions,
-                                       sopt, coverageThresh, sopt.numThreads);
-      } break;
-      case SalmonIndexType::QUASI: {
-        // We can only do fragment GC bias correction, for the time being, with
-        // paired-end reads
-        if (sopt.gcBiasCorrect) {
-          for (auto& rl : readLibraries) {
-            if (rl.format().type != ReadType::PAIRED_END) {
-              jointLog->warn(
-                  "Fragment GC bias correction is currently *experimental* "
-                  "in single-end libraries.  Please use this option "
-                  "with caution.");
-              // sopt.gcBiasCorrect = false;
-            }
-          }
-        }
-
-        sopt.allowOrphans = !discardOrphansQuasi;
-        sopt.useQuasi = true;
-        quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions,
-                                        sopt, coverageThresh, sopt.numThreads);
-      } break;
-      }
-    } catch (const InsufficientAssignedFragments& iaf) {
-      sopt.jointLog->warn(iaf.what());
-      salmon::utils::writeCmdInfo(sopt, orderedOptions);
-      GZipWriter gzw(outputDirectory, jointLog);
-      gzw.writeEmptyAbundances(sopt, experiment);
-      // Write meta-information about the run
-      std::vector<std::string> errors{"insufficient_assigned_fragments"};
-      sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
-      gzw.writeEmptyMeta(sopt, experiment, errors);
-      std::exit(1);
-    }
-
-    // Write out information about the command / run
-    salmon::utils::writeCmdInfo(sopt, orderedOptions);
-
-    GZipWriter gzw(outputDirectory, jointLog);
-
-    // Now that the streaming pass is complete, we have
-    // our initial estimates, and our rich equivalence
-    // classes.  Perform further optimization until
-    // convergence.
-    // NOTE: A side-effect of calling the optimizer is that
-    // the `EffectiveLength` field of each transcript is
-    // set to its final value.
-    CollapsedEMOptimizer optimizer;
-    jointLog->info("Starting optimizer");
-    salmon::utils::normalizeAlphas(sopt, experiment);
-    bool optSuccess = optimizer.optimize(experiment, sopt, 0.01, 10000);
-
-    if (!optSuccess) {
-      jointLog->error(
-          "The optimization algorithm failed. This is likely the result of "
-          "bad input (or a bug). If you cannot track down the cause, please "
-          "report this issue on GitHub.");
-      return 1;
-    }
-    jointLog->info("Finished optimizer");
-
-    free(memOptions);
-    size_t tnum{0};
-
-    jointLog->info("writing output \n");
-
-    bfs::path estFilePath = outputDirectory / "quant.sf";
-
-    // Write the main results
-    gzw.writeAbundances(sopt, experiment);
-
-    // If we are dumping the equivalence classes, then
-    // do it here.
-    if (sopt.dumpEq) {
-      gzw.writeEquivCounts(sopt, experiment);
-    }
-
-    if (sopt.numGibbsSamples > 0) {
-
-      jointLog->info("Starting Gibbs Sampler");
-      CollapsedGibbsSampler sampler;
-      gzw.setSamplingPath(sopt);
-      // The function we'll use as a callback to write samples
-      std::function<bool(const std::vector<double>&)> bsWriter =
-          [&gzw](const std::vector<double>& alphas) -> bool {
-        return gzw.writeBootstrap(alphas, true);
-      };
-
-      bool sampleSuccess =
-          // sampler.sampleMultipleChains(experiment, sopt, bsWriter,
-          // sopt.numGibbsSamples);
-          sampler.sample(experiment, sopt, bsWriter, sopt.numGibbsSamples);
-      if (!sampleSuccess) {
-        jointLog->error("Encountered error during Gibbs sampling.\n"
-                        "This should not happen.\n"
-                        "Please file a bug report on GitHub.\n");
-        return 1;
-      }
-      jointLog->info("Finished Gibbs Sampler");
-    } else if (sopt.numBootstraps > 0) {
-      gzw.setSamplingPath(sopt);
-      // The function we'll use as a callback to write samples
-      std::function<bool(const std::vector<double>&)> bsWriter =
-          [&gzw](const std::vector<double>& alphas) -> bool {
-        return gzw.writeBootstrap(alphas);
-      };
-
-      jointLog->info("Starting Bootstrapping");
-      bool bootstrapSuccess =
-          optimizer.gatherBootstraps(experiment, sopt, bsWriter, 0.01, 10000);
-      jointLog->info("Finished Bootstrapping");
-      if (!bootstrapSuccess) {
-        jointLog->error("Encountered error during bootstrapping.\n"
-                        "This should not happen.\n"
-                        "Please file a bug report on GitHub.\n");
-        return 1;
-      }
-    }
-
-    bfs::path libCountFilePath = outputDirectory / "lib_format_counts.json";
-    experiment.summarizeLibraryTypeCounts(libCountFilePath);
-
-    // Test writing out the fragment length distribution
-    if (!sopt.noFragLengthDist) {
-      bfs::path distFileName = sopt.paramsDirectory / "flenDist.txt";
-      {
-        std::unique_ptr<std::FILE, int (*)(std::FILE*)> distOut(
-            std::fopen(distFileName.c_str(), "w"), std::fclose);
-        fmt::print(distOut.get(), "{}\n",
-                   experiment.fragmentLengthDistribution()->toString());
-      }
-    }
-
-    /** If the user requested gene-level abundances, then compute those now **/
-    if (vm.count("geneMap")) {
-      try {
-        salmon::utils::generateGeneLevelEstimates(sopt.geneMapPath,
-                                                  outputDirectory);
-      } catch (std::invalid_argument& e) {
-        fmt::print(stderr,
-                   "Error: [{}] when trying to compute gene-level "
-                   "estimates. The gene-level file(s) may not exist",
-                   e.what());
-      }
-    }
-
-    if (sopt.writeUnmappedNames) {
-      auto l = sopt.unmappedLog.get();
-      // If the logger was created, then flush it and
-      // close the associated file.
-      if (l) {
-        l->flush();
-        if (sopt.unmappedFile) {
-          sopt.unmappedFile->close();
-        }
-      }
-    }
-
-    if (sopt.writeOrphanLinks) {
-      auto l = sopt.orphanLinkLog.get();
-      // If the logger was created, then flush it and
-      // close the associated file.
-      if (l) {
-        l->flush();
-        if (sopt.orphanLinkFile) {
-          sopt.orphanLinkFile->close();
-        }
-      }
-    }
-
-    // if we wrote quasimappings, flush that buffer
-    if (sopt.qmFileName != "") {
-      sopt.qmLog->flush();
-      // if we wrote to a buffer other than stdout, close
-      // the file
-      if (sopt.qmFileName != "-") {
-        sopt.qmFile.close();
-      }
-    }
-
-    sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
-
-    // Write meta-information about the run
-    gzw.writeMeta(sopt, experiment);
-
-  } catch (po::error& e) {
-    std::cerr << "Exception : [" << e.what() << "]. Exiting.\n";
-    std::exit(1);
-  } catch (const spdlog::spdlog_ex& ex) {
-    std::cerr << "logger failed with : [" << ex.what() << "]. Exiting.\n";
-    std::exit(1);
-  } catch (std::exception& e) {
-    std::cerr << "Exception : [" << e.what() << "]\n";
-    std::cerr << argv[0] << " quant was invoked improperly.\n";
-    std::cerr << "For usage information, try " << argv[0]
-              << " quant --help\nExiting.\n";
-    std::exit(1);
-  }
-
-  return 0;
-}
+*/

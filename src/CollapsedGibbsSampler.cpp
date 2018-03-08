@@ -82,7 +82,7 @@ divide_work(Iterator begin, Iterator end, std::size_t n) {
  *the read count for each transcript,  the mean transcript fractions are sampled
  *from a Gamma distribution ~ Gam( prior[i] + txpCount[i], \Beta + effLens[i]).
  *Then, given these transcript fractions,  The reads are re-assigned within
- *each equivalence class by sampling from a multinomial * distributed according
+ *each equivalence class by sampling from a multinomial distributed according
  *to these means.
  *
  * [1] Haplotype and isoform specific expression estimation using multi-mapping
