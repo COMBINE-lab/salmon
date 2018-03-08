@@ -53,10 +53,7 @@ namespace defaults {
   constexpr const bool writeUnmappedNames{false};
   constexpr const double quasiCoverage{0.0};
 
-  // alevin-specific options
-  
-
-  // FMD-specific options
+   // FMD-specific options
   constexpr const int fmdMinSeedLength{19};
   constexpr const bool fmdSensitive{false};
   constexpr const bool fmdExtraSeedPass{false};

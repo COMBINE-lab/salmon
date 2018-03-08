@@ -1311,8 +1311,8 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
   namespace bfs = boost::filesystem;
 
   SalmonOpts sopt;
+  sopt.numThreads = salmon::defaults::numThreads;
 
-  uint32_t numThreads{4};
   size_t requiredObservations{50000000};
   int32_t numBiasSamples{0};
   salmon::ProgramOptionsGenerator pogen;
@@ -1352,12 +1352,12 @@ transcript abundance from RNA-seq reads
 
     po::notify(vm);
 
-    if (numThreads < 2) {
+    if (sopt.numThreads < 2) {
       fmt::print(stderr, "salmon requires at least 2 threads --- "
                          "setting # of threads = 2\n");
-      numThreads = 2;
+      sopt.numThreads = 2;
     }
-    sopt.numThreads = numThreads;
+    auto numThreads = sopt.numThreads;
 
     if (sopt.forgettingFactor <= 0.5 or sopt.forgettingFactor > 1.0) {
       fmt::print(stderr,
