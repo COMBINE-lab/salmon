@@ -105,6 +105,7 @@ void optimizeCell(SCExpT& experiment,
                   bfs::path& outDir, std::vector<uint32_t>& umiCount,
                   spp::sparse_hash_set<uint32_t>& skippedCBcount,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
+                  bool quiet,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
@@ -269,8 +270,10 @@ void optimizeCell(SCExpT& experiment,
     double cellCount {static_cast<double>(barcode)};//numCells-jqueue.size_approx()};
     if (cellCount > totalCells) { cellCount = totalCells; }
     double percentCompletion {cellCount*100/numCells};
-    fmt::print(stderr, "\033[A\r\r{}Analyzed {} cells ({}{}%{} of all).{}\n",
-               green, cellCount, red, round(percentCompletion), green, RESET_COLOR);
+    if (not quiet){
+      fmt::print(stderr, "\033[A\r\r{}Analyzed {} cells ({}{}%{} of all).{}\n",
+                 green, cellCount, red, round(percentCompletion), green, RESET_COLOR);
+    }
 
     //found = jqueue.try_dequeue(trueBarcodeIdx);
   }
@@ -373,6 +376,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                std::ref(gzw),
                                aopt.protocol.umiLength,
                                aopt.noEM,
+                               aopt.quiet,
                                std::ref(txpToGeneMap));
   }
 

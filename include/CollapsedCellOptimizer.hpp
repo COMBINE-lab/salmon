@@ -53,6 +53,7 @@ void optimizeCell(SCExpT& experiment,
                   bfs::path& outDir, std::vector<uint32_t>& umiCount,
                   spp::sparse_hash_set<uint32_t>& skippedCBcount,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
+                  bool quiet,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap);
 
 class CollapsedCellOptimizer {

@@ -498,7 +498,7 @@ bool writeFastq(AlevinOpts<ProtocolT>& aopt,
     return true;
   }
   catch (std::exception& e) {
-    std::cerr << "Exception : [" << e.what() << "]\n";
+    std::cerr << "Exception : [" << e.what() << "]\n" << std::flush;
     return false;
   }
 }
