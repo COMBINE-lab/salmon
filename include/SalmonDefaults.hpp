@@ -92,6 +92,7 @@ namespace defaults {
   constexpr const bool isDropseq{false};
   constexpr const bool isChromium{false};
   constexpr const bool isInDrop{false};
+  constexpr const bool isGemcode{false};
   constexpr const bool dumpBarcodeEq{false};
   constexpr const bool noQuant{false};
   constexpr const bool noSoftMap{true};

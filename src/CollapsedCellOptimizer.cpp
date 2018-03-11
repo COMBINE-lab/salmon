@@ -307,7 +307,10 @@ void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
       }
 
       if(not txpIdxMap.contains(tStr)){
-        continue;
+        std::cerr << "ERROR: "
+                  << tStr << " <- transcript present in txp2gene but "
+                  << "not in the reference transcriptome. Exiting" << std::flush;
+        exit(1);
       }
       tid = txpIdxMap[tStr];
 
@@ -435,6 +438,28 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
         qFile << "\n";
       }
       qFile.close();
+
+      {//dump gene names
+        std::vector<std::string> geneNames(geneIdxMap.size());
+        for (auto geneIdx : geneIdxMap) {
+          geneNames[geneIdx.second] = geneIdx.first;
+        }
+        boost::filesystem::path gFilePath = aopt.outputDirectory / "genes.txt";
+        std::ofstream gFile(gFilePath.string());
+        std::ostream_iterator<std::string> giterator(gFile, "\n");
+        std::copy(geneNames.begin(), geneNames.end(), giterator);
+        gFile.close();
+      }
+
+      {//dump transcripts names
+        boost::filesystem::path tFilePath = aopt.outputDirectory / "transcripts.txt";
+        std::ofstream tFile(tFilePath.string());
+        for (auto& txp: experiment.transcripts()) {
+          tFile << txp.RefName << "\n";
+        }
+        tFile.close();
+      }
+
       aopt.jointLog->info("Finished dumping csv counts");
     }
   }
@@ -500,6 +525,14 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
 template
 bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::Chromium>& aopt,
+                                      GZipWriter& gzw,
+                                      std::vector<std::string>& trueBarcodes,
+                                      std::vector<uint32_t>& umiCount,
+                                      CFreqMapT& freqCounter,
+                                      size_t numLowConfidentBarcode);
+template
+bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
+                                      AlevinOpts<apt::Gemcode>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount,

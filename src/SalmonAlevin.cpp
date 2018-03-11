@@ -1799,6 +1799,14 @@ int alevinQuant(AlevinOpts<apt::Chromium>& aopt,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
 template
+int alevinQuant(AlevinOpts<apt::Gemcode>& aopt,
+                SalmonOpts& sopt,
+                SoftMapT& barcodeMap,
+                TrueBcsT& trueBarcodes,
+                boost::program_options::parsed_options& orderedOptions,
+                CFreqMapT& freqCounter,
+                size_t numLowConfidentBarcode);
+template
 int alevinQuant(AlevinOpts<apt::Custom>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,

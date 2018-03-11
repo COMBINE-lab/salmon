@@ -887,17 +887,21 @@ namespace apt = alevin::protocols;
 
 template
 bool GZipWriter::writeEquivCounts<SCExpT, apt::DropSeq>(
-                                                                const AlevinOpts<apt::DropSeq>& aopts,
-                                                                SCExpT& readExp);
+                                                        const AlevinOpts<apt::DropSeq>& aopts,
+                                                        SCExpT& readExp);
 template
 bool GZipWriter::writeEquivCounts<SCExpT, apt::InDrop>(
-                                                                const AlevinOpts<apt::InDrop>& aopts,
-                                                                SCExpT& readExp);
+                                                       const AlevinOpts<apt::InDrop>& aopts,
+                                                       SCExpT& readExp);
 template
 bool GZipWriter::writeEquivCounts<SCExpT, apt::Chromium>(
-                                                                const AlevinOpts<apt::Chromium>& aopts,
-                                                                SCExpT& readExp);
+                                                         const AlevinOpts<apt::Chromium>& aopts,
+                                                         SCExpT& readExp);
+template
+bool GZipWriter::writeEquivCounts<SCExpT, apt::Gemcode>(
+                                                        const AlevinOpts<apt::Gemcode>& aopts,
+                                                        SCExpT& readExp);
 template
 bool GZipWriter::writeEquivCounts<SCExpT, apt::Custom>(
-                                                                const AlevinOpts<apt::Custom>& aopts,
-                                                                SCExpT& readExp);
+                                                       const AlevinOpts<apt::Custom>& aopts,
+                                                       SCExpT& readExp);
