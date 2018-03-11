@@ -184,7 +184,7 @@ namespace salmon {
        "chromium", po::bool_switch()->default_value(alevin::defaults::isChromium),
        "Use 10x chromium v2 Single Cell protocol for the library.")
       (
-       "chromium", po::bool_switch()->default_value(alevin::defaults::isGemcode),
+       "gemcode", po::bool_switch()->default_value(alevin::defaults::isGemcode),
        "Use 10x gemcode v1 Single Cell protocol for the library.")
       (
        "indrop", po::bool_switch()->default_value(alevin::defaults::isInDrop),
