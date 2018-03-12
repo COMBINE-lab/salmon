@@ -717,7 +717,7 @@ int salmonBarcoding(int argc, char* argv[]) {
   namespace bfs = boost::filesystem;
   namespace po = boost::program_options;
 
-  std::vector<std::string> barcodeFiles, readFiles;
+  std::vector<std::string> barcodeFiles, readFiles, unmateFiles;
   bool optChain{false};
   int32_t numBiasSamples{0};
 
@@ -803,6 +803,7 @@ salmon-based processing of single-cell RNA-seq data.
     // Until we can figure out a better way to generify our parsing
     barcodeFiles = sopt.mate1ReadFiles;
     readFiles = sopt.mate2ReadFiles;
+    unmateFiles = sopt.unmatedReadFiles;
     //
 
     if (dropseq){
@@ -841,7 +842,7 @@ salmon-based processing of single-cell RNA-seq data.
       //aopt.jointLog->warn("Using 10x v1 Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
                        vm, commentString,
-                       barcodeFiles, readFiles);
+                       unmateFiles, readFiles);
     }
     else{
       AlevinOpts<apt::Custom> aopt;

@@ -307,10 +307,11 @@ void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
       }
 
       if(not txpIdxMap.contains(tStr)){
-        std::cerr << "ERROR: "
-                  << tStr << " <- transcript present in txp2gene but "
-                  << "not in the reference transcriptome. Exiting" << std::flush;
-        exit(1);
+        continue;
+        //std::cerr << "ERROR: "
+        //          << tStr << " <- transcript present in txp2gene but "
+        //          << "not in the reference transcriptome. Exiting" << std::flush;
+        //exit(1);
       }
       tid = txpIdxMap[tStr];
 
