@@ -96,7 +96,8 @@ void sampleRoundNonCollapsedMultithreaded_(
     std::vector<uint64_t>& countMap, std::vector<double>& probMap,
     std::vector<double>& muGlobal, Eigen::VectorXd& effLens,
     const std::vector<double>& priorAlphas, std::vector<double>& txpCount,
-    std::vector<uint32_t>& offsetMap) {
+    std::vector<uint32_t>& offsetMap,
+    bool noGammaDraw) {
 
   // generate coeff for \mu from \alpha and \effLens
   double beta = 0.1;
@@ -111,7 +112,23 @@ void sampleRoundNonCollapsedMultithreaded_(
   GeneratorType localGenerator(getGenerator);
 
   // Compute the mu to be used in the equiv class resampling
-  tbb::parallel_for(
+  // If we are doing a gamma draw (including shot-noise)
+  if (noGammaDraw) {
+   tbb::parallel_for(
+      BlockedIndexRange(
+          size_t(0), size_t(activeList.size())), // 1024 is grainsize, use only
+                                                 // with simple_partitioner
+      [&, beta](const BlockedIndexRange& range) -> void {
+        for (auto activeIdx : boost::irange(range.begin(), range.end())) {
+          auto i = activeList[activeIdx];
+          double ci = static_cast<double>(txpCount[i] + priorAlphas[i]);
+          muGlobal[i] = ci / effLens(i);
+          txpCount[i] = 0.0;
+        }
+      });
+   
+  } else {
+   tbb::parallel_for(
       BlockedIndexRange(
           size_t(0), size_t(activeList.size())), // 1024 is grainsize, use only
                                                  // with simple_partitioner
@@ -132,6 +149,7 @@ void sampleRoundNonCollapsedMultithreaded_(
           **/
         }
       });
+  }
 
   /**
    * These will store "thread local" parameters
@@ -432,7 +450,8 @@ bool CollapsedGibbsSampler::sample(
           priorAlphas, // the prior transcript counts
           alphasIn, // [input/output param] the (hard) fragment counts per txp
                     // from the previous iteration
-          offsetMap // where the information begins for each equivalence class
+          offsetMap, // where the information begins for each equivalence class
+          sopt.noGammaDraw      // true if we should skip the Gamma draw, false otherwise
       );
     }
 

@@ -472,6 +472,10 @@ namespace salmon {
        po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(salmon::defaults::numGibbsSamples),
        "Number of Gibbs sampling rounds to "
        "perform.")
+      ("noGammaDraw",
+       po::bool_switch(&(sopt.noGammaDraw))->default_value(salmon::defaults::noGammaDraw),
+       "This switch will disable drawing transcript fractions from a Gamma distribution during Gibbs sampling.  In this case "
+       "the sampler does not account for shot-noise, but only assignment ambiguity")
       ("numBootstraps",
        po::value<uint32_t>(&(sopt.numBootstraps))->default_value(salmon::defaults::numBootstraps),
        "Number of bootstrap samples to generate. Note: "
