@@ -182,10 +182,13 @@ namespace salmon {
        "Use DropSeq Single Cell protocol for the library")
       (
        "chromium", po::bool_switch()->default_value(alevin::defaults::isChromium),
-       "Use 10x chromium (under-development) Single Cell protocol for the library.")
+       "Use 10x chromium v2 Single Cell protocol for the library.")
+      (
+       "gemcode", po::bool_switch()->default_value(alevin::defaults::isGemcode),
+       "Use 10x gemcode v1 Single Cell protocol for the library.")
       (
        "indrop", po::bool_switch()->default_value(alevin::defaults::isInDrop),
-       "Use inDrop Single Cell protocol for the library. must specify w1 too.")
+       "Use inDrop (not extensively tested) Single Cell protocol for the library. must specify w1 too.")
       (
        "w1", po::value<std::string>(),
        "Must be used in conjunction with inDrop;")

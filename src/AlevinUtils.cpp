@@ -55,6 +55,13 @@ namespace alevin {
       return true;
     }
     template <>
+    bool extractUMI<apt::Gemcode>(std::string& read,
+                                   apt::Gemcode& pt,
+                                   std::string& umi){
+      umi = read.substr(pt.barcodeLength, pt.umiLength);
+      return true;
+    }
+    template <>
     bool extractUMI<apt::Custom>(std::string& read,
                                  apt::Custom& pt,
                                  std::string& umi){
@@ -80,6 +87,13 @@ namespace alevin {
     template <>
     bool extractBarcode<apt::Chromium>(std::string& read,
                                        apt::Chromium& pt,
+                                       std::string& bc){
+      bc = read.substr(0, pt.barcodeLength);
+      return true;
+    }
+    template <>
+    bool extractBarcode<apt::Gemcode>(std::string& read,
+                                       apt::Gemcode& pt,
                                        std::string& bc){
       bc = read.substr(0, pt.barcodeLength);
       return true;
@@ -420,6 +434,10 @@ namespace alevin {
                            SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
     template
+    bool processAlevinOpts(AlevinOpts<apt::Gemcode>& aopt,
+                           SalmonOpts& sopt,
+                           boost::program_options::variables_map& vm);
+    template
     bool processAlevinOpts(AlevinOpts<apt::Custom>& aopt,
                            SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
@@ -434,6 +452,10 @@ namespace alevin {
                                 Sequence seqType);
     template bool sequenceCheck(std::string sequence,
                                 AlevinOpts<apt::Chromium>& aopt,
+                                std::mutex& iomutex,
+                                Sequence seqType);
+    template bool sequenceCheck(std::string sequence,
+                                AlevinOpts<apt::Gemcode>& aopt,
                                 std::mutex& iomutex,
                                 Sequence seqType);
     template bool sequenceCheck(std::string sequence,

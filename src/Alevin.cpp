@@ -498,7 +498,7 @@ bool writeFastq(AlevinOpts<ProtocolT>& aopt,
     return true;
   }
   catch (std::exception& e) {
-    std::cerr << "Exception : [" << e.what() << "]\n";
+    std::cerr << "Exception : [" << e.what() << "]\n" << std::flush;
     return false;
   }
 }
@@ -717,7 +717,7 @@ int salmonBarcoding(int argc, char* argv[]) {
   namespace bfs = boost::filesystem;
   namespace po = boost::program_options;
 
-  std::vector<std::string> barcodeFiles, readFiles;
+  std::vector<std::string> barcodeFiles, readFiles, unmateFiles;
   bool optChain{false};
   int32_t numBiasSamples{0};
 
@@ -778,6 +778,7 @@ salmon-based processing of single-cell RNA-seq data.
     bool dropseq = vm["dropseq"].as<bool>();
     bool indrop = vm["indrop"].as<bool>();
     bool chrom = vm["chromium"].as<bool>();
+    bool gemcode = vm["gemcode"].as<bool>();
 
     if((dropseq and indrop) or
        (dropseq and chrom) or
@@ -802,10 +803,12 @@ salmon-based processing of single-cell RNA-seq data.
     // Until we can figure out a better way to generify our parsing
     barcodeFiles = sopt.mate1ReadFiles;
     readFiles = sopt.mate2ReadFiles;
+    unmateFiles = sopt.unmatedReadFiles;
     //
 
     if (dropseq){
       AlevinOpts<apt::DropSeq> aopt;
+      //aopt.jointLog->warn("Using DropSeq Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
                        vm, commentString,
                        barcodeFiles, readFiles);
@@ -817,6 +820,7 @@ salmon-based processing of single-cell RNA-seq data.
         std::string w1 = vm["w1"].as<std::string>();
         AlevinOpts<apt::InDrop> aopt;
         aopt.protocol.setW1(w1);
+        //aopt.jointLog->warn("Using InDrop Setting for Alevin");
         initiatePipeline(aopt, sopt, orderedOptions,
                          vm, commentString,
                          barcodeFiles, readFiles);
@@ -828,12 +832,21 @@ salmon-based processing of single-cell RNA-seq data.
     }
     else if(chrom){
       AlevinOpts<apt::Chromium> aopt;
+      //aopt.jointLog->warn("Using 10x v2 Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
                        vm, commentString,
                        barcodeFiles, readFiles);
     }
+    else if(gemcode){
+      AlevinOpts<apt::Gemcode> aopt;
+      //aopt.jointLog->warn("Using 10x v1 Setting for Alevin");
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString,
+                       unmateFiles, readFiles);
+    }
     else{
       AlevinOpts<apt::Custom> aopt;
+      //aopt.jointLog->warn("Using Custom Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
                        vm, commentString,
                        barcodeFiles, readFiles);

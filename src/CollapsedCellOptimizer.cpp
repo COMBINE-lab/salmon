@@ -100,11 +100,12 @@ void optimizeCell(SCExpT& experiment,
                   std::vector<std::string>& trueBarcodes,
                   std::atomic<uint32_t>& barcode,
                   size_t totalCells, eqMapT& eqMap,
-                  std::deque<TranscriptGroup>& orderedTgroup,
+                  std::deque<std::pair<TranscriptGroup, uint32_t>>& orderedTgroup,
                   std::shared_ptr<spdlog::logger>& jointlog,
                   bfs::path& outDir, std::vector<uint32_t>& umiCount,
                   spp::sparse_hash_set<uint32_t>& skippedCBcount,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
+                  bool quiet, std::atomic<uint64_t>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
@@ -132,11 +133,10 @@ void optimizeCell(SCExpT& experiment,
     // equivalence class vector encoding for this cell (i.e. row)
     std::vector<uint32_t> eqIDs;
     std::vector<uint32_t> counts;
-    size_t eqNum{0};
 
     for (auto& key : orderedTgroup) {
       //traversing each class and copying relevant data.
-      bool isKeyPresent = eqMap.find_fn(key, [&,eqNum](const SCTGValue& val){
+      bool isKeyPresent = eqMap.find_fn(key.first, [&](const SCTGValue& val){
           auto& bg = val.barcodeGroup;
           auto bcIt = bg.find(trueBarcodeIdx);
 
@@ -146,10 +146,10 @@ void optimizeCell(SCExpT& experiment,
                                       jointlog,
                                       bcIt->second,
                                       umiBiasList,
-                                      key);
+                                      key.first);
 
             if ( eqCount != 0 ) {
-              const std::vector<uint32_t>& txps = key.txps;
+              const std::vector<uint32_t>& txps = key.first.txps;
               // Avi -> Major Hack
               // Basically probStartpos is 1/effec_length.
               // effec_length for all txp is 100
@@ -166,7 +166,7 @@ void optimizeCell(SCExpT& experiment,
               totalcount += eqCount;
 
               if(verbose){
-                eqIDs.push_back(static_cast<uint32_t>(eqNum));
+                eqIDs.push_back(static_cast<uint32_t>(key.second));
                 counts.push_back(static_cast<uint32_t>(eqCount));
               }
 
@@ -186,7 +186,6 @@ void optimizeCell(SCExpT& experiment,
         jointlog->flush();
         exit(1);
       }
-      ++eqNum;
     }
 
     if (verbose) {
@@ -228,6 +227,7 @@ void optimizeCell(SCExpT& experiment,
     }
 
     double totalnumfrags{static_cast<double>(totalcount)};
+    totalDedupCounts += totalcount;
 
     if (activetranscriptids.size() == 0) {
       for (auto& txps: txpgroups){
@@ -269,8 +269,10 @@ void optimizeCell(SCExpT& experiment,
     double cellCount {static_cast<double>(barcode)};//numCells-jqueue.size_approx()};
     if (cellCount > totalCells) { cellCount = totalCells; }
     double percentCompletion {cellCount*100/numCells};
-    fmt::print(stderr, "\033[A\r\r{}Analyzed {} cells ({}{}%{} of all).{}\n",
-               green, cellCount, red, round(percentCompletion), green, RESET_COLOR);
+    if (not quiet){
+      fmt::print(stderr, "\033[A\r\r{}Analyzed {} cells ({}{}%{} of all).{}\n",
+                 green, cellCount, red, round(percentCompletion), green, RESET_COLOR);
+    }
 
     //found = jqueue.try_dequeue(trueBarcodeIdx);
   }
@@ -305,6 +307,10 @@ void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
 
       if(not txpIdxMap.contains(tStr)){
         continue;
+        //std::cerr << "ERROR: "
+        //          << tStr << " <- transcript present in txp2gene but "
+        //          << "not in the reference transcriptome. Exiting" << std::flush;
+        //exit(1);
       }
       tid = txpIdxMap[tStr];
 
@@ -335,14 +341,17 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   }
 
   //get the keys of the map
-  std::deque<TranscriptGroup> orderedTgroup;
+  std::deque<std::pair<TranscriptGroup, uint32_t>> orderedTgroup;
+  uint32_t eqId{0};
   for(const auto& kv : fullEqMap.lock_table()){
+    // assuming the iteration through lock table is always same
     if(kv.first.txps.size() == 1){
-      orderedTgroup.push_front(kv.first);
+      orderedTgroup.push_front(std::make_pair(kv.first, eqId));
     }
     else{
-      orderedTgroup.push_back(kv.first);
+      orderedTgroup.push_back(std::make_pair(kv.first, eqId));
     }
+    eqId++;
   }
 
   spp::sparse_hash_map<uint32_t, uint32_t> txpToGeneMap;
@@ -353,8 +362,19 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                   aopt.geneMapFile.string(),
                   geneIdxMap);
 
+  if (aopt.dumpBarcodeEq){
+    std::ofstream oFile;
+    boost::filesystem::path oFilePath = aopt.outputDirectory / "cell_eq_order.txt";
+    oFile.open(oFilePath.string());
+    for (auto& bc : trueBarcodes) {
+      oFile << bc << "\n";
+    }
+    oFile.close();
+  }
+
   spp::sparse_hash_set<uint32_t> skippedCBcount;
   std::atomic<uint32_t> bcount{0};
+  std::atomic<uint64_t> totalDedupCounts{0};
 
   std::vector<std::thread> workerThreads;
   for (size_t tn = 0; tn < numWorkerThreads; ++tn) {
@@ -373,12 +393,16 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                std::ref(gzw),
                                aopt.protocol.umiLength,
                                aopt.noEM,
+                               aopt.quiet,
+                               std::ref(totalDedupCounts),
                                std::ref(txpToGeneMap));
   }
 
   for (auto& t : workerThreads) {
     t.join();
   }
+  aopt.jointLog->info("Total {} UMI after deduplicating.",
+                      totalDedupCounts);
   if(skippedCBcount.size()>0){
     aopt.jointLog->warn("Skipped {} barcodes due to No mapped read",
                         skippedCBcount.size());
@@ -431,6 +455,28 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
         qFile << "\n";
       }
       qFile.close();
+
+      {//dump gene names
+        std::vector<std::string> geneNames(geneIdxMap.size());
+        for (auto geneIdx : geneIdxMap) {
+          geneNames[geneIdx.second] = geneIdx.first;
+        }
+        boost::filesystem::path gFilePath = aopt.outputDirectory / "genes.txt";
+        std::ofstream gFile(gFilePath.string());
+        std::ostream_iterator<std::string> giterator(gFile, "\n");
+        std::copy(geneNames.begin(), geneNames.end(), giterator);
+        gFile.close();
+      }
+
+      {//dump transcripts names
+        boost::filesystem::path tFilePath = aopt.outputDirectory / "transcripts.txt";
+        std::ofstream tFile(tFilePath.string());
+        for (auto& txp: experiment.transcripts()) {
+          tFile << txp.RefName << "\n";
+        }
+        tFile.close();
+      }
+
       aopt.jointLog->info("Finished dumping csv counts");
     }
   }
@@ -496,6 +542,14 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
 template
 bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::Chromium>& aopt,
+                                      GZipWriter& gzw,
+                                      std::vector<std::string>& trueBarcodes,
+                                      std::vector<uint32_t>& umiCount,
+                                      CFreqMapT& freqCounter,
+                                      size_t numLowConfidentBarcode);
+template
+bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
+                                      AlevinOpts<apt::Gemcode>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount,

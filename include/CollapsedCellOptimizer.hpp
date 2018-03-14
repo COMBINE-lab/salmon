@@ -48,11 +48,12 @@ void optimizeCell(SCExpT& experiment,
                   std::atomic<uint32_t>& barcode,
                   size_t totalCells,
                   eqMapT& eqMap,
-                  std::deque<TranscriptGroup>& orderedTgroup,
+                  std::deque<std::pair<TranscriptGroup, uint32_t>>& orderedTgroup,
                   std::shared_ptr<spdlog::logger>& jointlog,
                   bfs::path& outDir, std::vector<uint32_t>& umiCount,
                   spp::sparse_hash_set<uint32_t>& skippedCBcount,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
+                  bool quiet,std::atomic<uint64_t>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap);
 
 class CollapsedCellOptimizer {

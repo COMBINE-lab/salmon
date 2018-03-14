@@ -46,6 +46,10 @@ namespace alevin{
       Chromium(): Rule(16, 10, BarcodeEnd::FIVE, 4294967295){}
     };
 
+    struct Gemcode : Rule{
+      Gemcode(): Rule(14, 10, BarcodeEnd::FIVE, 268435456){}
+    };
+
     //dummy class
     struct Custom : Rule{
       Custom() : Rule(0,0,BarcodeEnd::THREE,0){}
