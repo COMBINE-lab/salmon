@@ -219,9 +219,9 @@ void optimizeCell(SCExpT& experiment,
             std::cerr << tid << "\t not found" << std::flush;
             exit(1);
           }
-          if (activeGeneIds.find(gid) != activeGeneIds.end()){
+          //if (activeGeneIds.find(gid) != activeGeneIds.end()){
             activetranscriptids.insert(tid);
-          }
+            //}
         }
       }
     }

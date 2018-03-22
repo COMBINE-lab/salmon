@@ -1,10 +1,8 @@
 #!/bin/bash
 
 cmd="$@"
-file1=`echo $cmd | grep -Po -- '-1\s+\K[^ ]+'`
-new_cmd=`echo $cmd | sed 's/-1[[:space:]][[:graph:]]\+//'`
-file2=`echo $cmd | grep -Po -- '-2\s+\K[^ ]+'`
-new_cmd=`echo $new_cmd | sed 's/-2[[:space:]][[:graph:]]\+//'`
+base=`echo $cmd | grep -Po -- '-b\s+\K[^ ]+'`
+new_cmd=`echo $cmd | sed 's/-b[[:space:]][[:graph:]]\+//'`
 
 tmpdir=$(mktemp -d)
 echo "TEMPDIR is $tmpdir"
@@ -15,7 +13,8 @@ p2="$tmpdir/p2.fa"
 mkfifo $p1
 mkfifo $p2
 
-./wrapper $file1 $file2 >> $p1 2>> $p2 &
+i1=`ls $base*I1*`
+bin/salmon/bin/wrapper <(cat $base*I1*) <(cat $base*RA*) >> $p1 2>> $p2 &
 
-echo "Running command [${new_cmd} -1 $p1 -2 $p2]"
-${new_cmd} -1 $p1 -2 $p2
+echo "Running command [${new_cmd} -1 $p1 -2 $p2 -r $i1]"
+${new_cmd} -1 $p1 -2 $p2 -r $i1
