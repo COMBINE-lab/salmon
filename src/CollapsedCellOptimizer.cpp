@@ -20,10 +20,10 @@ bool runPerCellEM(
                   std::vector<std::vector<double>>& txpGroupCombinedWeights,
                   std::vector<uint64_t>& txpGroupCounts,
                   const std::vector<Transcript>& transcripts,
-                  uint64_t totalNumFrags, GZipWriter& gzw,
+                  uint64_t totalNumFrags,
+                  CollapsedCellOptimizer::SerialVecType& alphas,
                   std::shared_ptr<spdlog::logger>& jointlog,
-                  std::unordered_set<uint32_t>& activeTranscriptIds,
-                  size_t currBarcodeIndex, std::string& bcName){
+                  std::unordered_set<uint32_t>& activeTranscriptIds){
 
   // An EM termination criterion, adopted from Bray et al. 2016
   uint32_t minIter {50};
@@ -33,7 +33,6 @@ bool runPerCellEM(
   double uniformTxpWeight = 1.0 / activeTranscriptIds.size();
 
   std::vector<uint64_t> eqCounts(numClasses, 0);
-  CollapsedCellOptimizer::SerialVecType alphas(transcripts.size(), 0.0);
   CollapsedCellOptimizer::SerialVecType alphasPrime(transcripts.size(), 0.0);
 
   for (size_t i = 0; i < transcripts.size(); ++i) {
@@ -91,7 +90,6 @@ bool runPerCellEM(
     return false;
   }
 
-  gzw.writeAbundances(bcName, alphas);
   return true;
 }
 
@@ -106,7 +104,8 @@ void optimizeCell(SCExpT& experiment,
                   spp::sparse_hash_set<uint32_t>& skippedCBcount,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
                   bool quiet, std::atomic<uint64_t>& totalDedupCounts,
-                  spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap){
+                  spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                  uint32_t numGenes, bool txpLevel){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
 
@@ -171,11 +170,11 @@ void optimizeCell(SCExpT& experiment,
               }
 
               // currently add only 1 length eqclass to active txps
-              if (txps.size() == 1) {
+              //if (txps.size() == 1) {
                 for (auto& t : txps) {
                   activetranscriptids.insert(t);
                 }
-              }
+              //}
             }
           }
         });
@@ -192,23 +191,13 @@ void optimizeCell(SCExpT& experiment,
       gzw.writeCellEQVec(trueBarcodeIdx, eqIDs, counts, true);
     }
 
-    // get the list of active gene ids
-    std::unordered_set<uint32_t> activeGeneIds;
-    for(auto& tid: activetranscriptids){
-      if(txpToGeneMap.contains(tid)){
-        uint32_t gid = txpToGeneMap[tid];
-        activeGeneIds.insert(gid);
-      }
-      else{
-        std::cerr << "Out of Range error for txp to gene Map in 1st: " << '\n' << std::flush;
-        std::cerr << tid << "\t" << transcripts[tid].RefName << " not found" << std::flush;
-        exit(1);
-      }
-    }
-
-    // parse through eqclass once more to filter out non-relevant txps
-    for (auto& txps: txpgroups){
-      if (txps.size() != 1){
+    if(noEM){
+      // no em i.e. only eqclass mode
+      std::vector<double> geneAlphas(numGenes, 0.0);
+      // parse through the eqclasses and extract unique gene counts
+      for (size_t k=0; k<txpgroups.size(); k++){
+        spp::sparse_hash_set<uint32_t> geneids;
+        auto& txps = txpgroups[k];
         for (auto& tid: txps){
           uint32_t gid;
           if(txpToGeneMap.contains(tid)){
@@ -219,45 +208,70 @@ void optimizeCell(SCExpT& experiment,
             std::cerr << tid << "\t not found" << std::flush;
             exit(1);
           }
-          //if (activeGeneIds.find(gid) != activeGeneIds.end()){
-            activetranscriptids.insert(tid);
-            //}
+          geneids.insert(gid);
+          if (geneids.size() > 1){
+            break;
+          }
+        }
+        if (geneids.size() == 1){
+          uint32_t gid = *geneids.begin();
+          if (gid > numGenes){
+            std::cerr<< "Gene id out of range"
+                     << "Please check txp2gene has the write entries"
+                     << std::flush;
+            exit(1);
+          }
+          geneAlphas[gid] += origcounts[k];
+          totalDedupCounts += origcounts[k];
         }
       }
+      gzw.writeAbundances(trueBarcodeStr, geneAlphas);
     }
-
-    double totalnumfrags{static_cast<double>(totalcount)};
-    totalDedupCounts += totalcount;
-
-    if (activetranscriptids.size() == 0) {
-      for (auto& txps: txpgroups){
-        for (auto& tid: txps){
-          activetranscriptids.insert(tid);
-        }
-      }
-      jointlog->warn("it seems that no rich-transcripts are expressed for cell {}"
-                     ". Adding all genes, above cell may bias the result.",
-                     trueBarcodeStr);
-      jointlog->flush();
-    }
-
-    if(not noEM){
+    else {
+      CollapsedCellOptimizer::SerialVecType alphas(transcripts.size(), 0.0);
       bool isEMok = runPerCellEM(txpgroups,
                                  txpgroupcombinedweights,
                                  origcounts,
                                  transcripts,
-                                 totalnumfrags,
-                                 gzw,
+                                 totalcount,
+                                 alphas,
                                  jointlog,
-                                 activetranscriptids,
-                                 trueBarcodeIdx,
-                                 trueBarcodeStr);
+                                 activetranscriptids);
       if( !isEMok ){
         jointlog->error("EM iteration for cell {} failed \n"
                         "Please Report this on github.", trueBarcodeStr);
         jointlog->flush();
         std::exit(1);
       }
+
+      if (txpLevel){
+        // dump txp level counts in matrix
+        gzw.writeAbundances(trueBarcodeStr, alphas);
+      }
+      else{
+        //dump gene level counts in matrix
+        std::vector<double> geneAlphas(numGenes, 0.0);
+        for (size_t tid=0; tid<alphas.size(); tid++){
+          uint32_t gid;
+          if(txpToGeneMap.contains(tid)){
+            gid = txpToGeneMap.at(tid);
+          }
+          else{
+            std::cerr << "Out of Range error for txp to gene Map: " << '\n' << std::flush;
+            std::cerr << tid << "\t not found" << std::flush;
+            exit(1);
+          }
+          if (gid > numGenes){
+            std::cerr<< "Gene id out of range"
+                     << "Please check txp2gene has the write entries"
+                     << std::flush;
+            exit(1);
+          }
+          geneAlphas[gid] += alphas[tid];
+        }
+        gzw.writeAbundances(trueBarcodeStr, geneAlphas);
+      }
+      totalDedupCounts += totalcount;
     }
 
     const char RESET_COLOR[] = "\x1b[0m";
@@ -278,10 +292,10 @@ void optimizeCell(SCExpT& experiment,
   }
 }
 
-void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                     const std::vector<Transcript>& transcripts,
-                     const std::string& geneMapFile,
-                     spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap){
+uint32_t getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                         const std::vector<Transcript>& transcripts,
+                         const std::string& geneMapFile,
+                         spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap){
   std::string fname = geneMapFile;
   std::ifstream t2gFile(fname);
 
@@ -296,6 +310,12 @@ void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
   if(t2gFile.is_open()) {
     while( not t2gFile.eof() ) {
       t2gFile >> tStr >> gStr;
+
+      if(not txpIdxMap.contains(tStr)){
+        continue;
+      }
+      tid = txpIdxMap[tStr];
+
       if (geneIdxMap.contains(gStr)){
         gid = geneIdxMap[gStr];
       }
@@ -305,19 +325,17 @@ void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
         geneCount++;
       }
 
-      if(not txpIdxMap.contains(tStr)){
-        continue;
-        //std::cerr << "ERROR: "
-        //          << tStr << " <- transcript present in txp2gene but "
-        //          << "not in the reference transcriptome. Exiting" << std::flush;
-        //exit(1);
-      }
-      tid = txpIdxMap[tStr];
-
       txpToGeneMap[tid] = gid;
     }
     t2gFile.close();
   }
+  if(txpToGeneMap.size() < transcripts.size()){
+    std::cerr << "ERROR: "
+              << "Txp to Gene Map not found for some transcripts. Exiting" << std::flush;
+    exit(1);
+  }
+
+  return geneCount;
 }
 
 
@@ -357,10 +375,10 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   spp::sparse_hash_map<uint32_t, uint32_t> txpToGeneMap;
   spp::sparse_hash_map<std::string, uint32_t> geneIdxMap;
 
-  getTxpToGeneMap(txpToGeneMap,
-                  experiment.transcripts(),
-                  aopt.geneMapFile.string(),
-                  geneIdxMap);
+  uint32_t numGenes = getTxpToGeneMap(txpToGeneMap,
+                                      experiment.transcripts(),
+                                      aopt.geneMapFile.string(),
+                                      geneIdxMap);
 
   if (aopt.dumpBarcodeEq){
     std::ofstream oFile;
@@ -370,6 +388,15 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
       oFile << bc << "\n";
     }
     oFile.close();
+
+    {//dump transcripts names
+      boost::filesystem::path tFilePath = aopt.outputDirectory / "transcripts.txt";
+      std::ofstream tFile(tFilePath.string());
+      for (auto& txp: experiment.transcripts()) {
+        tFile << txp.RefName << "\n";
+      }
+      tFile.close();
+    }
   }
 
   spp::sparse_hash_set<uint32_t> skippedCBcount;
@@ -395,7 +422,9 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                aopt.noEM,
                                aopt.quiet,
                                std::ref(totalDedupCounts),
-                               std::ref(txpToGeneMap));
+                               std::ref(txpToGeneMap),
+                               numGenes,
+                               aopt.txpLevel);
   }
 
   for (auto& t : workerThreads) {
@@ -424,99 +453,80 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
 
   gzw.close_all_streams();
 
+  bool txpLevel = aopt.txpLevel;
+  if (not txpLevel){//dump gene names
+    std::vector<std::string> geneNames(numGenes);
+    for (auto geneIdx : geneIdxMap) {
+      geneNames[geneIdx.second] = geneIdx.first;
+    }
+    boost::filesystem::path gFilePath = aopt.outputDirectory / "quants_mat_cols.txt";
+    std::ofstream gFile(gFilePath.string());
+    std::ostream_iterator<std::string> giterator(gFile, "\n");
+    std::copy(geneNames.begin(), geneNames.end(), giterator);
+    gFile.close();
+  }
+
+
   std::vector<std::vector<double>> countMatrix;
-  if (aopt.dumpCsvCounts){
-    if (aopt.noEM){
-      aopt.jointLog->warn("EM wasn't run can't dump csv counts \n"
-                          "use --dumpbarcodeeq for deduplicated eqClass counts");
-      aopt.jointLog->flush();
-    }
-    else{
+
+  bool hasWhitelist = boost::filesystem::exists(aopt.whitelistFile);
+  if(not aopt.nobarcode){
+    if(not hasWhitelist  or aopt.dumpCsvCounts){
       aopt.jointLog->info("Clearing EqMap; Might take some time.");
       fullEqMap.clear();
+      size_t numElem = txpLevel ? experiment.transcripts().size() : numGenes;
+      std::string mode = txpLevel ? "transcript" : "gene";
 
-      aopt.jointLog->info("Starting Import of the Gene count matrix.");
+      aopt.jointLog->info("Starting Import of the {} count matrix.", mode);
       countMatrix.resize(trueBarcodes.size(),
-                         std::vector<double> (geneIdxMap.size(), 0.0));
+                         std::vector<double> (numElem, 0.0));
       alevin::whitelist::populate_count_matrix(aopt.outputDirectory,
-                                               txpToGeneMap,
+                                               numElem,
                                                countMatrix);
-      aopt.jointLog->info("Done Importing count matrix for {}x{} matrix",
-                          numCells, geneIdxMap.size());
+      aopt.jointLog->info("Done Importing {} count matrix for dimension {}x{}",
+                          mode, numCells, numGenes);
 
-      aopt.jointLog->info("Starting dumping genes counts in csv format");
-      std::ofstream qFile;
-      boost::filesystem::path qFilePath = aopt.outputDirectory / "quants_mat.csv";
-      qFile.open(qFilePath.string());
-      for (auto& row : countMatrix) {
-        for (auto cell : row) {
-          qFile << cell << ',';
+      if (aopt.dumpCsvCounts){
+        aopt.jointLog->info("Starting dumping {} cell counts in csv format",
+                            mode);
+        std::ofstream qFile;
+        boost::filesystem::path qFilePath = aopt.outputDirectory / "quants_mat.csv";
+        qFile.open(qFilePath.string());
+        for (auto& row : countMatrix) {
+          for (auto cell : row) {
+            qFile << cell << ',';
+          }
+          qFile << "\n";
         }
-        qFile << "\n";
-      }
-      qFile.close();
+        qFile.close();
 
-      {//dump gene names
-        std::vector<std::string> geneNames(geneIdxMap.size());
-        for (auto geneIdx : geneIdxMap) {
-          geneNames[geneIdx.second] = geneIdx.first;
-        }
-        boost::filesystem::path gFilePath = aopt.outputDirectory / "genes.txt";
-        std::ofstream gFile(gFilePath.string());
-        std::ostream_iterator<std::string> giterator(gFile, "\n");
-        std::copy(geneNames.begin(), geneNames.end(), giterator);
-        gFile.close();
+        aopt.jointLog->info("Finished dumping csv counts");
       }
 
-      {//dump transcripts names
-        boost::filesystem::path tFilePath = aopt.outputDirectory / "transcripts.txt";
-        std::ofstream tFile(tFilePath.string());
-        for (auto& txp: experiment.transcripts()) {
-          tFile << txp.RefName << "\n";
+      if(not hasWhitelist and not txpLevel){
+        aopt.jointLog->info("Starting white listing");
+        bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
+                                                                          umiCount,
+                                                                          countMatrix,
+                                                                          trueBarcodes,
+                                                                          freqCounter,
+                                                                          geneIdxMap,
+                                                                          numLowConfidentBarcode);
+        if (!whitelistingSuccess) {
+          aopt.jointLog->error(
+                               "The white listing algorithm failed. This is likely the result of "
+                               "bad input (or a bug). If you cannot track down the cause, please "
+                               "report this issue on GitHub.");
+          aopt.jointLog->flush();
+          return false;
         }
-        tFile.close();
+        aopt.jointLog->info("Finished white listing");
       }
-
-      aopt.jointLog->info("Finished dumping csv counts");
+      else if(txpLevel){
+        aopt.jointLog->warn("can't perform whitelisting on txp level cell count matrix");
+      }
     }
-  }
-
-  // Perform White listing only if the data has barcode, EM has been run and white list file
-  // has not been provided
-  if(not boost::filesystem::exists(aopt.whitelistFile) and not aopt.nobarcode and not aopt.noEM){
-    aopt.jointLog->info("Starting white listing");
-
-    if (not aopt.dumpCsvCounts){
-      aopt.jointLog->info("Clearing EqMap; Might take some time.");
-      fullEqMap.clear();
-
-      aopt.jointLog->info("Starting Import of the Gene count matrix.");
-      countMatrix.resize(trueBarcodes.size(),
-                         std::vector<double> (geneIdxMap.size(), 0.0));
-      alevin::whitelist::populate_count_matrix(aopt.outputDirectory,
-                                               txpToGeneMap,
-                                               countMatrix);
-      aopt.jointLog->info("Done Importing count matrix for {}x{} matrix",
-                          numCells, geneIdxMap.size());
-    }
-
-    bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
-                                                                      umiCount,
-                                                                      countMatrix,
-                                                                      trueBarcodes,
-                                                                      freqCounter,
-                                                                      geneIdxMap,
-                                                                      numLowConfidentBarcode);
-    if (!whitelistingSuccess) {
-      aopt.jointLog->error(
-                           "The white listing algorithm failed. This is likely the result of "
-                           "bad input (or a bug). If you cannot track down the cause, please "
-                           "report this issue on GitHub.");
-      aopt.jointLog->flush();
-      return false;
-    }
-    aopt.jointLog->info("Finished white listing");
-  }
+  } // end-if no barcode
 
   return true;
 } //end-optimize

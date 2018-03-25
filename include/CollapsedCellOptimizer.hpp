@@ -33,29 +33,6 @@ using tgroupweightvec = std::vector<double>;
 namespace bfs = boost::filesystem;
 using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 
-bool runPerCellEM(std::vector<std::vector<uint32_t>>& txpGroups,
-                  std::vector<std::vector<double>>& txpGroupCombinedWeights,
-                  std::vector<uint64_t>& txpGroupCounts,
-                  const std::vector<Transcript>& transcripts,
-                  uint64_t totalNumFrags, double uniformTxpWeight,
-                  std::shared_ptr<spdlog::logger>& jointlog,
-                  bfs::path& outDirPath,
-                  std::unordered_set<uint32_t>& activeTxps,
-                  std::string& bcName);
-
-void optimizeCell(SCExpT& experiment,
-                  std::vector<std::string>& trueBarcodes,
-                  std::atomic<uint32_t>& barcode,
-                  size_t totalCells,
-                  eqMapT& eqMap,
-                  std::deque<std::pair<TranscriptGroup, uint32_t>>& orderedTgroup,
-                  std::shared_ptr<spdlog::logger>& jointlog,
-                  bfs::path& outDir, std::vector<uint32_t>& umiCount,
-                  spp::sparse_hash_set<uint32_t>& skippedCBcount,
-                  bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
-                  bool quiet,std::atomic<uint64_t>& totalDedupCounts,
-                  spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap);
-
 class CollapsedCellOptimizer {
 public:
   using VecType = std::vector<tbb::atomic<double>>;
@@ -71,6 +48,29 @@ public:
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
 };
+
+bool runPerCellEM(std::vector<std::vector<uint32_t>>& txpGroups,
+                  std::vector<std::vector<double>>& txpGroupCombinedWeights,
+                  std::vector<uint64_t>& txpGroupCounts,
+                  const std::vector<Transcript>& transcripts,
+                  uint64_t totalNumFrags,
+                  CollapsedCellOptimizer::SerialVecType& alphas,
+                  std::shared_ptr<spdlog::logger>& jointlog,
+                  std::unordered_set<uint32_t>& activeTxps);
+
+void optimizeCell(SCExpT& experiment,
+                  std::vector<std::string>& trueBarcodes,
+                  std::atomic<uint32_t>& barcode,
+                  size_t totalCells,
+                  eqMapT& eqMap,
+                  std::deque<std::pair<TranscriptGroup, uint32_t>>& orderedTgroup,
+                  std::shared_ptr<spdlog::logger>& jointlog,
+                  bfs::path& outDir, std::vector<uint32_t>& umiCount,
+                  spp::sparse_hash_set<uint32_t>& skippedCBcount,
+                  bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
+                  bool quiet,std::atomic<uint64_t>& totalDedupCounts,
+                  spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                  uint32_t numGenes, bool txpLevel);
 
 using VecT = CollapsedCellOptimizer::SerialVecType;
 

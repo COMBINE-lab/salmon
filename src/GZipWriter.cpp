@@ -630,7 +630,7 @@ bool GZipWriter::writeAbundances(std::string bcName,
   }
 
   if (!bcNameStream_) {
-    auto bcNameFilename = path_ / "alevin" / "barcodes.txt";
+    auto bcNameFilename = path_ / "alevin" / "quants_mat_rows.txt";
     bcNameStream_.reset(new std::ofstream);
     bcNameStream_->open(bcNameFilename.string());
   }

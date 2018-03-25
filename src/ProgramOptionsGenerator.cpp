@@ -250,6 +250,9 @@ namespace salmon {
        "noem",po::bool_switch()->default_value(alevin::defaults::noEM),
        "do not run em")
       (
+       "txplevel",po::bool_switch()->default_value(alevin::defaults::txpLevel),
+       "perform txp level analysis instead of gene level")
+      (
        "nobarcode",po::bool_switch()->default_value(alevin::defaults::noBarcode),
        "this flag should be used when there is no barcode i.e. only one cell deduplication.")
       (

@@ -89,7 +89,8 @@ namespace defaults {
 
 namespace alevin {
 namespace defaults {
-  constexpr const bool dedup{false};
+  constexpr const bool dedup{true};
+  constexpr const bool txpLevel{false};
   constexpr const bool isDropseq{false};
   constexpr const bool isChromium{false};
   constexpr const bool isInDrop{false};

@@ -186,7 +186,7 @@ namespace alevin {
     }
 
     void populate_count_matrix(boost::filesystem::path& outDir,
-                               spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                               size_t numElem,
                                DoubleMatrixT& countMatrix){
       boost::iostreams::filtering_istream countMatrixStream;
       countMatrixStream.push(boost::iostreams::gzip_decompressor());
@@ -198,28 +198,13 @@ namespace alevin {
       }
       countMatrixStream.push(boost::iostreams::file_source(countMatFilename.string(),
                                                            std::ios_base::in | std::ios_base::binary));
-      size_t numTxps = txpToGeneMap.size();
-      size_t numGenes = countMatrix[0].size();
       size_t elSize = sizeof(typename std::vector<double>::value_type);
       size_t cellCount {0};
-      std::vector<double> row (numTxps, 0.0);
       for (auto& cell: countMatrix){
-        size_t readCount {0};
         cellCount += 1;
-        countMatrixStream.read(reinterpret_cast<char*>(row.data()), elSize * numTxps);
+        countMatrixStream.read(reinterpret_cast<char*>(cell.data()), elSize * numElem);
+        double readCount = std::accumulate(cell.begin(), cell.end(), 0.0);
 
-        for (size_t i=0; i<row.size(); i++){
-          double count  = row[i];
-          if (count > 0.0){
-            readCount += count;
-            uint32_t geneId = txpToGeneMap[i];
-            if (geneId > numGenes){
-              std::cout<<"ERROR: wrong txp to gene mapping found" <<std::flush;
-              exit(1);
-            }
-            cell[geneId] += count;
-          }
-        }
         if (readCount == 0){
           std::cout<<"ERROR: Importing counts from binary\n"
                    <<"Cell has 0 reads, should not happen.\n"
@@ -253,7 +238,7 @@ namespace alevin {
 
       spp::sparse_hash_set<uint32_t> mRnaGenes, rRnaGenes;
       bool useMitoRna {false}, useRiboRna{false};
-      boost::filesystem::path barcodeOrderFile = aopt.outputDirectory / "barcodes.txt";
+      boost::filesystem::path barcodeOrderFile = aopt.outputDirectory / "quants_mat_rows.txt";
       spp::sparse_hash_map<std::string, uint32_t> bcOrderMap;
 
       if(boost::filesystem::exists(barcodeOrderFile)){
@@ -267,12 +252,12 @@ namespace alevin {
           }
           bcFile.close();
         }
-        aopt.jointLog->info("Done importing order of barcodes \"barcodes.txt\" file.");
+        aopt.jointLog->info("Done importing order of barcodes \"quants_mat_rows.txt\" file.");
         aopt.jointLog->info("Total {} barcodes found", bcOrderMap.size());
         assert(bcOrderMap.size() == numCells);
       }
       else{
-        aopt.jointLog->error("barcodes.txt file not found. It contains the order of "
+        aopt.jointLog->error("quants_mat_rows.txt file not found. It contains the order of "
                              "the cells counts was dumped.");
         aopt.jointLog->flush();
         exit(1);
@@ -283,21 +268,23 @@ namespace alevin {
         useMitoRna = true;
         std::ifstream mRnaFile(aopt.mRnaFile.string());
         std::string gene;
+        size_t skippedGenes {0};
         if(mRnaFile.is_open()) {
           while(getline(mRnaFile, gene)) {
             if (geneIdxMap.contains(gene)){
               mRnaGenes.insert(geneIdxMap[ gene ]);
             }
             else{
-              aopt.jointLog->error("{} mitorna gene not found in txp tp gene map", gene);
-              aopt.jointLog->flush();
-              exit(1);
+              skippedGenes += 1;
             }
           }
           mRnaFile.close();
         }
-        aopt.jointLog->info("Done importing mRnaFile");
-        aopt.jointLog->info("Total {} mRna genes", mRnaGenes.size());
+        if (skippedGenes > 0){
+          aopt.jointLog->warn("{} mitorna gene(s) does not have transcript in the reference",
+                              skippedGenes);
+        }
+        aopt.jointLog->info("Total {} usable mRna genes", mRnaGenes.size());
       }
       else{
         aopt.jointLog->warn("mrna file not provided; using is 1 less feature for whitelisting");
@@ -308,21 +295,23 @@ namespace alevin {
         useRiboRna = true;
         std::ifstream rRnaFile(aopt.rRnaFile.string());
         std::string gene;
+        size_t skippedGenes {0};
         if(rRnaFile.is_open()) {
           while(getline(rRnaFile, gene)) {
             if (geneIdxMap.contains(gene)){
               rRnaGenes.insert(geneIdxMap[ gene ]);
             }
             else{
-              aopt.jointLog->error("{} rrna gene not found in txp tp gene map", gene);
-              aopt.jointLog->flush();
-              exit(1);
+              skippedGenes += 1;
             }
           }
           rRnaFile.close();
         }
-        aopt.jointLog->info("Done importing rRnaFile");
-        aopt.jointLog->info("Total {} rRna genes", rRnaGenes.size());
+        if (skippedGenes > 0){
+          aopt.jointLog->warn("{} ribosomal rna gene(s) does not have transcript in the reference",
+                              skippedGenes);
+        }
+        aopt.jointLog->info("Total {} usable rRna genes", rRnaGenes.size());
       }
       else{
         aopt.jointLog->warn("rrna file not provided; using is 1 less feature for whitelisting");

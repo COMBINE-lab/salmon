@@ -56,6 +56,8 @@ struct AlevinOpts {
   bool useCorrelation;
   // don't run EM flag
   bool noEM;
+  // perform txp level analysis instead of gene level
+  bool txpLevel;
   //do hard-assignment of error bcs
   bool noSoftMap;
   //number of cells

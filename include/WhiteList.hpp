@@ -32,7 +32,7 @@ namespace alevin {
     using DoubleVectorT = std::vector<double> ;
 
     void populate_count_matrix(boost::filesystem::path& outDir,
-                               spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                               size_t numElem,
                                DoubleMatrixT& countMatrix);
 
     template <typename ProtocolT>
