@@ -480,6 +480,12 @@ public:
     return fragStartDists_;
   }
 
+  void computePolyAPositions() {
+    for (auto& t : transcripts_) {
+      t.computePolyAPositions();
+    }
+  }
+
   SequenceBiasModel& sequenceBiasModel() { return seqBiasModel_; }
 
   bool softReset() {

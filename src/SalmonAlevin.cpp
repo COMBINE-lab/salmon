@@ -195,6 +195,7 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
                               std::default_random_engine& randEng, bool initialRound,
                               std::atomic<bool>& burnedIn, double& maxZeroFrac,
                               AlevinOpts<ProtocolT>& alevinOpts,
+                      /*std::vector<uint64_t>& uniqueFLD,*/
                               std::mutex& iomutex){
 
   using salmon::math::LOG_0;
@@ -569,6 +570,17 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
         }
         clusterForest.updateCluster(firstTranscriptID, 1.0, logForgettingMass,
                                     updateCounts);
+        /*
+        auto& aln = alnGroup.alignments().front();
+        // Get the transcript referenced in this alignment
+        auto transcriptID = aln.transcriptID();
+        auto& transcript = transcripts[transcriptID];
+        uint32_t p = (aln.pos < 0) ? 0 : aln.pos;
+        if (p >= transcript.RefLength) { p = transcript.RefLength - 1; }
+        auto nextPolyA = transcript.getNextPolyA(p+50);
+        auto dist = std::min(99999u, nextPolyA - p);
+        ++uniqueFLD[dist];
+        */
       } else { // or the appropriate clusters
         clusterForest.mergeClusters<AlnT>(alnGroup.alignments().begin(),
                                           alnGroup.alignments().end());
@@ -622,7 +634,8 @@ void processReadsQuasi(
                        SalmonOpts& salmonOpts,
                        std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
                        volatile bool& writeToCache, AlevinOpts<ProtocolT>& alevinOpts,
-                       SoftMapT& barcodeMap, spp::sparse_hash_map<std::string, uint32_t>& trBcs) {
+                       SoftMapT& barcodeMap, spp::sparse_hash_map<std::string, uint32_t>& trBcs,
+                       std::vector<uint64_t>& uniqueFLD) {
 
   // ERROR
   salmonOpts.jointLog->error("MEM-mapping cannot be used with the Quasi index "
@@ -644,7 +657,8 @@ void processReadsQuasi(
                        std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
                        volatile bool& writeToCache, AlevinOpts<ProtocolT>& alevinOpts,
                        SoftMapT& barcodeMap,
-                       spp::sparse_hash_map<std::string, uint32_t>& trBcs) {
+                       spp::sparse_hash_map<std::string, uint32_t>& trBcs
+                       /*,std::vector<uint64_t>& uniqueFLD*/) {
   uint64_t count_fwd = 0, count_bwd = 0;
   // Seed with a real random value, if available
   std::random_device rd;
@@ -1146,7 +1160,7 @@ void processReadsQuasi(
                                      readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
                                      transcripts, clusterForest, fragLengthDist, observedBiasParams,
                                      numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac,
-                                     alevinOpts, iomutex);
+                                     alevinOpts, /*uniqueFLD,*/ iomutex);
   }
 
   if (maxZeroFrac > 5.0) {
@@ -1210,6 +1224,11 @@ void processReadLibrary(
     pairedParserPtr.reset(new paired_parser(rl.mates1(), rl.mates2(), numThreads, numParsingThreads, miniBatchSize));
     pairedParserPtr->start();
 
+    /*
+    std::vector<std::vector<uint64_t>> uniqueFLDs(numThreads);
+    for (size_t i = 0; i < numThreads; ++i) { uniqueFLDs[i] = std::vector<uint64_t>(100000, 0); }
+    */
+
     // True if we have a 64-bit SA index, false otherwise
     bool largeIndex = sidx->is64BitQuasi();
     bool perfectHashIndex = sidx->isPerfectHashQuasi();
@@ -1228,7 +1247,7 @@ void processReadLibrary(
                                                                             upperBoundHits, sidx->quasiIndexPerfectHash64(), transcripts,
                                                                             fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
                                                                             salmonOpts, iomutex, initialRound,
-                                                                            burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs);
+                                                                            burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs/*, uniqueFLDs[i]*/);
           };
           threads.emplace_back(threadFun);
         } else { // Dense Hash
@@ -1242,7 +1261,7 @@ void processReadLibrary(
                                                                           upperBoundHits, sidx->quasiIndex64(), transcripts, fmCalc,
                                                                           clusterForest, fragLengthDist, observedBiasParams[i],
                                                                           salmonOpts, iomutex, initialRound,
-                                                                          burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs);
+                                                                          burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs/*, uniqueFLDs[i]*/);
           };
           threads.emplace_back(threadFun);
         }
@@ -1258,7 +1277,7 @@ void processReadLibrary(
                                                                             upperBoundHits, sidx->quasiIndexPerfectHash32(), transcripts,
                                                                             fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
                                                                             salmonOpts, iomutex, initialRound,
-                                                                            burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs);
+                                                                            burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs/*, uniqueFLDs[i]*/);
           };
           threads.emplace_back(threadFun);
         } else { // Dense Hash
@@ -1272,7 +1291,7 @@ void processReadLibrary(
                                                                           upperBoundHits, sidx->quasiIndex32(), transcripts, fmCalc,
                                                                           clusterForest, fragLengthDist, observedBiasParams[i],
                                                                           salmonOpts, iomutex, initialRound,
-                                                                          burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs);
+                                                                          burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs/*, uniqueFLDs[i]*/);
           };
           threads.emplace_back(threadFun);
         }
@@ -1286,6 +1305,18 @@ void processReadLibrary(
     }
 
     pairedParserPtr->stop();
+    /*std::vector<uint64_t> uniqueFLD(100000, 0);
+    for (size_t i = 0; i < numThreads; ++i) {
+      for (size_t j = 0; j < uniqueFLD.size(); ++j) {
+        uniqueFLD[j] += uniqueFLDs[i][j];
+      }
+    }
+    std::ofstream testDist("uniqueFLDNew.bin");
+    uint64_t s = uniqueFLD.size();
+    testDist.write(reinterpret_cast<char*>(&s), sizeof(s));
+    testDist.write(reinterpret_cast<char*>(uniqueFLD.data()), sizeof(s)*uniqueFLD.size());
+    testDist.close();
+    */
 
     //+++++++++++++++++++++++++++++++++++++++
     /** GC-fragment bias **/
@@ -1575,6 +1606,7 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
     auto idxType = versionInfo.indexType();
 
     ReadExperimentT experiment(readLibraries, indexDirectory, sopt);
+    //experiment.computePolyAPositions();
 
     // This will be the class in charge of maintaining our
     // rich equivalence classes

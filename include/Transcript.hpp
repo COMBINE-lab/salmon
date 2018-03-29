@@ -8,6 +8,7 @@
 #include "SalmonUtils.hpp"
 #include "SequenceBiasModel.hpp"
 #include "tbb/atomic.h"
+#include <boost/utility/string_view.hpp>
 #include <atomic>
 #include <cmath>
 #include <limits>
@@ -17,6 +18,7 @@
 #include "rapmap/rank9b.h"
 
 class Transcript {
+  static constexpr const uint32_t adapterBindingLength{5};
 public:
   struct BitArrayDeleter {
     void operator()(BIT_ARRAY* b) {
@@ -437,6 +439,16 @@ public:
     return 0;
   }
 
+  /**
+   * Return the next polyA site that occurs in this transcript
+   * after position p
+   **/
+  inline int32_t getNextPolyA(int32_t p) {
+    if (p+1 >= static_cast<int32_t>(RefLength)) { return RefLength; }
+    auto r = polyARank_->rank(p+1);
+    return polyAPos_[r];
+  }
+
   // Will *not* delete seq on destruction
   void setSequenceBorrowed(const char* seq, bool needGC = false,
                            bool reduceGCMemory = false) {
@@ -492,6 +504,8 @@ public:
   void setCompleteLength(uint32_t completeLengthIn) {
     CompleteLength = completeLengthIn;
   }
+
+  void computePolyAPositions() { computePolyAPositions_(); }
 
   std::string RefName;
   uint32_t RefLength;
@@ -632,6 +646,39 @@ private:
     }
   }
 
+  void computePolyAPositions_() {
+    polyAPos_.clear();
+    BIT_ARRAY* rawArray = bit_array_create(RefLength);
+    std::string polyA(adapterBindingLength, 'A');
+    boost::string_view polyAView(polyA);
+    boost::string_view seq(Sequence_.get(), RefLength);
+    auto occIt = seq.find(polyAView);
+    auto prev = occIt;
+    auto end = boost::string_view::npos;
+    while (occIt != end) {
+      auto d = occIt;
+      bit_array_set_bit(rawArray, d);
+      polyAPos_.push_back(d);
+      prev = occIt;
+      occIt = seq.find(polyAView, d+polyAView.length());
+      // if this is the same stretch of polyA, skip again
+      if (occIt != end and (static_cast<int64_t>(occIt) - prev) < (polyAView.length() + 1)) {
+        occIt = seq.find_first_not_of('A', d+polyAView.length());
+        occIt = seq.find(polyAView, occIt);
+      }
+    }
+    polyAPos_.push_back(RefLength);
+    polyABitArray_.reset(rawArray);
+    polyARank_.reset(new rank9b(polyABitArray_->words, RefLength));
+    /*
+    if (polyAPos_.size() >= 3) {
+      std::cerr << polyAView << "; RefLength = " << RefLength << " polyAs = [";
+      for (auto x : polyAPos_) { std::cerr << " " << x; }
+      std::cerr << "]\n";
+    }
+    */
+  }
+
   std::unique_ptr<uint8_t, void (*)(uint8_t*)> SAMSequence_ =
       std::unique_ptr<uint8_t, void (*)(uint8_t*)>(nullptr, [](uint8_t*) {});
 
@@ -663,6 +710,9 @@ private:
   std::vector<uint32_t> GCCount_;
   BitArrayPointer gcBitArray_{nullptr};
   Rank9bPointer gcRank_{nullptr};
+  BitArrayPointer polyABitArray_{nullptr};
+  Rank9bPointer polyARank_{nullptr};
+  std::vector<int32_t> polyAPos_;
 };
 
 #endif // TRANSCRIPT
