@@ -45,6 +45,7 @@ namespace defaults {
   constexpr const uint32_t rangeFactorizationBins{0};
   constexpr const uint32_t numGibbsSamples{0};
   constexpr const bool noGammaDraw{false};
+  constexpr const bool bootstrapReproject{false};
   constexpr const uint32_t thinningFactor{16};
   constexpr const uint32_t numBootstraps{0};
   constexpr const bool quiet{false};

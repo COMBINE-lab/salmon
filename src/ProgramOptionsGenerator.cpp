@@ -486,6 +486,10 @@ namespace salmon {
        po::value<uint32_t>(&(sopt.numBootstraps))->default_value(salmon::defaults::numBootstraps),
        "Number of bootstrap samples to generate. Note: "
        "This is mutually exclusive with Gibbs sampling.")
+      ("bootstrapReproject",
+       po::bool_switch(&(sopt.bootstrapReproject))->default_value(salmon::defaults::noGammaDraw),
+       "This switch will learn the parameter distribution from the bootstrapped counts for each sample, but "
+        "will reproject those parameters onto the original equivalence class counts.")
       ("thinningFactor",
        po::value<uint32_t>(&(sopt.thinningFactor))->default_value(salmon::defaults::thinningFactor),
        "Number of steps to discard for every sample kept from the Gibbs "

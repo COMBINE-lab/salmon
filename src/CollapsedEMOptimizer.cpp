@@ -114,7 +114,7 @@ std::vector<double> populatePriorAlphas_(
 template <typename VecT>
 void EMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
                std::vector<std::vector<double>>& txpGroupCombinedWeights,
-               std::vector<uint64_t>& txpGroupCounts,
+               const std::vector<uint64_t>& txpGroupCounts,
                std::vector<Transcript>& transcripts, const VecT& alphaIn,
                VecT& alphaOut) {
 
@@ -165,7 +165,7 @@ void EMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
 template <typename VecT>
 void VBEMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
                  std::vector<std::vector<double>>& txpGroupCombinedWeights,
-                 std::vector<uint64_t>& txpGroupCounts,
+                 const std::vector<uint64_t>& txpGroupCounts,
                  std::vector<Transcript>& transcripts,
                  std::vector<double>& priorAlphas, double totLen,
                  const VecT& alphaIn, VecT& alphaOut, VecT& expTheta) {
@@ -456,7 +456,8 @@ bool doBootstrap(
     std::vector<std::vector<uint32_t>>& txpGroups,
     std::vector<std::vector<double>>& txpGroupCombinedWeights,
     std::vector<Transcript>& transcripts, Eigen::VectorXd& effLens,
-    const std::vector<double>& sampleWeights, uint64_t totalNumFrags,
+    const std::vector<double>& sampleWeights, std::vector<uint64_t>& origCounts,
+    uint64_t totalNumFrags,
     uint64_t numMappedFrags, double uniformTxpWeight,
     std::atomic<uint32_t>& bsNum, SalmonOpts& sopt,
     std::vector<double>& priorAlphas,
@@ -545,6 +546,18 @@ bool doBootstrap(
       ++itNum;
     }
 
+    // Consider the projection of the abundances onto the *original* equivalence class
+    // counts
+    if (sopt.bootstrapReproject) {
+      if (useVBEM) {
+        VBEMUpdate_(txpGroups, txpGroupCombinedWeights, origCounts, transcripts,
+                    priorAlphas, totalLen, alphas, alphasPrime, expTheta);
+      } else {
+        EMUpdate_(txpGroups, txpGroupCombinedWeights, origCounts, transcripts,
+                  alphas, alphasPrime);
+      }
+    }
+
     // Truncate tiny expression values
     double alphaSum = 0.0;
     if (useVBEM and !perTranscriptPrior) {
@@ -586,6 +599,7 @@ bool doBootstrap(
             "have run salmon correctly and report this to GitHub.");
       }
     }
+
     writeBootstrap(alphas);
   }
   return true;
@@ -709,7 +723,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
   for (size_t tn = 0; tn < numWorkerThreads; ++tn) {
     workerThreads.emplace_back(
         doBootstrap, std::ref(txpGroups), std::ref(txpGroupCombinedWeights),
-        std::ref(transcripts), std::ref(effLens), std::ref(samplingWeights),
+        std::ref(transcripts), std::ref(effLens), std::ref(samplingWeights), std::ref(origCounts),
         totalCount, numMappedFrags, scale, std::ref(bsCounter), std::ref(sopt),
         std::ref(priorAlphas), std::ref(writeBootstrap), relDiffTolerance,
         maxIter);
