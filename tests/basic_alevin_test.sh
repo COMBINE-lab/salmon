@@ -3,7 +3,7 @@ OUT=$PWD
 
 tfile=$(mktemp /tmp/foo.XXXXXXXXX)
 
-/usr/bin/time -o $tfile $ALVBIN alevin -lISR  -1 /mnt/scratch5/avi/alevin/data/10x/mohu/100/all_bcs.fq -2 /mnt/scratch5/avi/alevin/data/10x/mohu/100/all_reads.fq --chromium -o $OUT/prediction -i /mnt/scratch5/avi/alevin/testing/salmonData/index/ -p 20 --tgMap /mnt/scratch5/avi/alevin/data/mohu/gtf/txp2gene.tsv --mrna /mnt/scratch5/avi/alevin/data/mohu/gtf/mrna.txt --rrna /mnt/scratch5/avi/alevin/data/mohu/gtf/rrna.txt  --dumpbarcodeeq --dumpfeatures --dumpbarcodemap
+/usr/bin/time -o $tfile $ALVBIN alevin -lISR  -1 /mnt/scratch5/avi/alevin/data/10x/mohu/100/all_bcs.fq -2 /mnt/scratch5/avi/alevin/data/10x/mohu/100/all_reads.fq --chromium -o $OUT/prediction -i /mnt/scratch5/avi/alevin/testing/salmonData/index/ -p 20 --tgMap /mnt/scratch5/avi/alevin/data/mohu/gtf/txp2gene.tsv --mrna /mnt/scratch5/avi/alevin/data/mohu/gtf/mrna.txt --rrna /mnt/scratch5/avi/alevin/data/mohu/gtf/rrna.txt  --dumpbarcodeeq --dumpfeatures --dumpbarcodemap --noquant
 
 cat $tfile
 

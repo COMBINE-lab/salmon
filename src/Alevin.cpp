@@ -155,10 +155,11 @@ std::vector<size_t> sort_indexes(const std::vector<T> &v) {
 
 // reference from https://github.com/scipy/scipy/blob/master/scipy/stats/kde.py
 // and https://github.com/CGATOxford/UMI-tools/blob/master/umi_tools/umi_methods.py#L193
-double gaussianKDE(const std::vector<uint32_t>& freqCounter,
-                   const std::vector<size_t>& sortedIdx,
-                   double& invCovariance, double& normFactor){
-  double covariance, mean, bw_method {0.01} threshold = 0.001*freqCounter[sortedIdx[0]];
+bool gaussianKDE(const std::vector<uint32_t>& freqCounter,
+                 const std::vector<size_t>& sortedIdx,
+                 double& invCovariance, double& normFactor,
+                 uint32_t expect_cells, uint32_t& predicted_cells){
+  double covariance{0.0}, mean{0.0}, bw_method {0.01}, threshold = 0.001*freqCounter[sortedIdx[0]];
   std::vector<double> logDataset;
   size_t numElem, xSpace {10000};
 
@@ -180,8 +181,8 @@ double gaussianKDE(const std::vector<uint32_t>& freqCounter,
   mean /= numElem;
 
   // generate the covariance
-  for (auto count: counts){
-    covariance += math.pow((count - mean), 2);
+  for (auto count: logDataset){
+    covariance += std::pow((count - mean), 2);
   }
   covariance = (covariance * bw_method) / (numElem - 1.0);
 
@@ -190,32 +191,50 @@ double gaussianKDE(const std::vector<uint32_t>& freqCounter,
     exit(1);
   }
 
+  const double PI = 3.1415926535897;
   invCovariance = 1.0 / covariance;
-  normFactor = math.sqrt( 2.0*math.pi*covariance ) * numElem;
+  normFactor = std::sqrt( 2.0*PI*covariance ) * numElem;
 
   // Evaluate Step starting from here
-  double decrement = (freqCounter[sortedIdx[0]] - freqCounter[sortedIdx[numElem]]) / static_cast<double>(xSpace);
+  double decrement = (logDataset[0] - logDataset[logDataset.size()-1]) / static_cast<double>(xSpace);
   std::vector<double> density(xSpace, 0.0);
 
   for (size_t i=0; i<numElem; i++){
-    double pred = freqCounter[ sortedIdx[0] ];
+    double pred = logDataset[0];
     for(size_t j=0; j<xSpace; j++,pred -= decrement){
-      double diff = freqCounter[sortedIdx[i]] - pred;
-      double energy = ( math.pow(diff,2)*invCovariance ) / 2.0;
-      density[j] += math.exp(-energy);
+      double diff = logDataset[ i ] - pred;
+      double energy = ( std::pow(diff,2)*invCovariance ) / 2.0;
+      density[j] += std::exp(-energy);
     }
   }
 
   //calculating the argrelextrema
-  double frqThreshold;
-  for (size_t i=1; i<xSpace; i++){
-    if (density[i-1] < density[i]){
-      freqThreshold = freqThreshold[ sortedIdx[0] ] - (i*decrement);
-      break;
+  std::vector<uint32_t> local_mins;
+  for (size_t i=1; i<xSpace-1; i++){
+    if (density[i-1] > density[i] and density[i] < density[i+1]){
+      local_mins.emplace_back(i);
     }
   }
 
-  return freqThreshold;
+  for (auto minIdx: local_mins){
+    double freqThreshold = std::pow(10, logDataset[0]-(minIdx*decrement));
+    size_t boundary {0};
+    while( freqThreshold <= freqCounter[sortedIdx[boundary]] ){
+      boundary ++;
+    }
+    if (boundary > expect_cells){
+      return false;
+    }
+    else if (expect_cells*0.1 > boundary){
+      continue;
+    }
+    else{
+      predicted_cells = boundary;
+      return true;
+    }
+  }
+
+  return false;
 }
 
 uint32_t getLeftBoundary(std::vector<size_t>& sortedIdx,
@@ -306,23 +325,20 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
     aopt.jointLog->info("Knee found left boundary at {} {} {}",
                         green, topxBarcodes, RESET_COLOR);
 
-    double invCovariance {0.0}, normFactor{0.0}, gaussThreshold;
-    gaussThreshold = gaussianKDE(freqCounter, sortedIdx,
-                                 invCovariance, normFactor);
+    double invCovariance {0.0}, normFactor{0.0};
+    uint32_t gaussThreshold;
+    bool isGaussOk = gaussianKDE(freqCounter, sortedIdx,
+                                 invCovariance, normFactor,
+                                 topxBarcodes, gaussThreshold);
 
-    for (size_t i=0; i<topxBarcodes; i++){
-      if (freqCounter[ sortedIdx[i] ] < gaussThreshold){
-        // consider only if within 10% of current prediction
-        aopt.jointLog->info("Gauss Corrected Boundary at {} {} {}",
-                            green, i, RESET_COLOR);
-        if ( i < 0.1*topxBarcodes ){
-          topxBarcodes = i;
-        }
-        else{
-          aopt.jointLog->warn("Too far from knee prediction skipping Gauss correction");
-        }
-        break;
-      }
+    if ( isGaussOk ){
+      topxBarcodes = gaussThreshold;
+      // consider only if within 10% of current prediction
+      aopt.jointLog->info("Gauss Corrected Boundary at {} {} {}",
+                          green, gaussThreshold, RESET_COLOR);
+    }
+    else{
+      aopt.jointLog->warn("Gauss Prediction Too far from knee prediction skipping it");
     }
 
     aopt.jointLog->info("Learned InvCov: {} normfactor: {}",
