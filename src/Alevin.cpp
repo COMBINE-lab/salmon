@@ -153,6 +153,71 @@ std::vector<size_t> sort_indexes(const std::vector<T> &v) {
   return idx;
 }
 
+// reference from https://github.com/scipy/scipy/blob/master/scipy/stats/kde.py
+// and https://github.com/CGATOxford/UMI-tools/blob/master/umi_tools/umi_methods.py#L193
+double gaussianKDE(const std::vector<uint32_t>& freqCounter,
+                   const std::vector<size_t>& sortedIdx,
+                   double& invCovariance, double& normFactor){
+  double covariance, mean, bw_method {0.01} threshold = 0.001*freqCounter[sortedIdx[0]];
+  std::vector<double> logDataset;
+  size_t numElem, xSpace {10000};
+
+  // extract counts above threshold
+  for(size_t i=0; i<freqCounter.size(); i++){
+    double count = static_cast<double>(freqCounter[ sortedIdx[ i ] ]);
+    if (count <= threshold){
+      break;
+    }
+    count = std::log10(count);
+    mean += count;
+    logDataset.emplace_back(count);
+  }
+
+  // size of the reference
+  numElem = logDataset.size();
+
+  // get mean of the data
+  mean /= numElem;
+
+  // generate the covariance
+  for (auto count: counts){
+    covariance += math.pow((count - mean), 2);
+  }
+  covariance = (covariance * bw_method) / (numElem - 1.0);
+
+  if (covariance == 0){
+    std::cout << "0 Covariance error for Gaussian kde"<<std::flush;
+    exit(1);
+  }
+
+  invCovariance = 1.0 / covariance;
+  normFactor = math.sqrt( 2.0*math.pi*covariance ) * numElem;
+
+  // Evaluate Step starting from here
+  double decrement = (freqCounter[sortedIdx[0]] - freqCounter[sortedIdx[numElem]]) / static_cast<double>(xSpace);
+  std::vector<double> density(xSpace, 0.0);
+
+  for (size_t i=0; i<numElem; i++){
+    double pred = freqCounter[ sortedIdx[0] ];
+    for(size_t j=0; j<xSpace; j++,pred -= decrement){
+      double diff = freqCounter[sortedIdx[i]] - pred;
+      double energy = ( math.pow(diff,2)*invCovariance ) / 2.0;
+      density[j] += math.exp(-energy);
+    }
+  }
+
+  //calculating the argrelextrema
+  double frqThreshold;
+  for (size_t i=1; i<xSpace; i++){
+    if (density[i-1] < density[i]){
+      freqThreshold = freqThreshold[ sortedIdx[0] ] - (i*decrement);
+      break;
+    }
+  }
+
+  return freqThreshold;
+}
+
 uint32_t getLeftBoundary(std::vector<size_t>& sortedIdx,
                          uint32_t topxBarcodes,
                          const std::vector<uint32_t>& freqCounter){
@@ -222,7 +287,6 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
                         std::unordered_map<uint32_t, std::string> colMap,
                         AlevinOpts<ProtocolT>& aopt){
   std::vector<size_t> sortedIdx = sort_indexes(freqCounter);
-  std::vector<uint64_t> cdfDist;
   size_t maxNumBarcodes { 100000 }, lowRegionMaxNumBarcodes { 1000 };
   size_t lowRegionMinNumBarcodes { 200 };
   double lowConfidenceFraction { 0.5 };
@@ -239,10 +303,34 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
     exit(1);
   }
   else{
-    aopt.jointLog->info("Found left boundary at {}{}{} / {}{}{}.",
-                        green, maxNumBarcodes-topxBarcodes,
-                        RESET_COLOR, red, maxNumBarcodes,
-                        RESET_COLOR);
+    aopt.jointLog->info("Knee found left boundary at {} {} {}",
+                        green, topxBarcodes, RESET_COLOR);
+
+    double invCovariance {0.0}, normFactor{0.0}, gaussThreshold;
+    gaussThreshold = gaussianKDE(freqCounter, sortedIdx,
+                                 invCovariance, normFactor);
+
+    for (size_t i=0; i<topxBarcodes; i++){
+      if (freqCounter[ sortedIdx[i] ] < gaussThreshold){
+        // consider only if within 10% of current prediction
+        aopt.jointLog->info("Gauss Corrected Boundary at {} {} {}",
+                            green, i, RESET_COLOR);
+        if ( i < 0.1*topxBarcodes ){
+          topxBarcodes = i;
+        }
+        else{
+          aopt.jointLog->warn("Too far from knee prediction skipping Gauss correction");
+        }
+        break;
+      }
+    }
+
+    aopt.jointLog->info("Learned InvCov: {} normfactor: {}",
+                        invCovariance, normFactor);
+    if (invCovariance == 0.0 or normFactor == 0.0){
+      aopt.jointLog->error("Wrong invCovariance/Normfactor");
+      exit(1);
+    }
 
     uint32_t fractionTrueBarcodes = static_cast<int>(lowConfidenceFraction * topxBarcodes);
 
