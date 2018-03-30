@@ -8,7 +8,6 @@
 #include "SalmonUtils.hpp"
 #include "SequenceBiasModel.hpp"
 #include "tbb/atomic.h"
-#include <boost/utility/string_view.hpp>
 #include <atomic>
 #include <cmath>
 #include <limits>
