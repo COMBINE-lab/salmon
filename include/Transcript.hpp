@@ -8,6 +8,7 @@
 #include "SalmonUtils.hpp"
 #include "SequenceBiasModel.hpp"
 #include "tbb/atomic.h"
+#include "stx/string_view.hpp"
 #include <atomic>
 #include <cmath>
 #include <limits>
@@ -649,11 +650,11 @@ private:
     polyAPos_.clear();
     BIT_ARRAY* rawArray = bit_array_create(RefLength);
     std::string polyA(adapterBindingLength, 'A');
-    boost::string_view polyAView(polyA);
-    boost::string_view seq(Sequence_.get(), RefLength);
+    stx::string_view polyAView(polyA);
+    stx::string_view seq(Sequence_.get(), RefLength);
     auto occIt = seq.find(polyAView);
     auto prev = occIt;
-    auto end = boost::string_view::npos;
+    auto end = stx::string_view::npos;
     while (occIt != end) {
       auto d = occIt;
       bit_array_set_bit(rawArray, d);
