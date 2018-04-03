@@ -1436,7 +1436,7 @@ static void BWTIncConstruct(BWTInc *bwtInc, const bgint_t numChar)
 BWTInc *BWTIncConstructFromPacked(const char *inputFileName, bgint_t initialMaxBuildSize, bgint_t incMaxBuildSize)
 {
 
-	FILE *packedFile = NULL;
+	FILE *packedFile;
 	bgint_t packedFileLen;
 	bgint_t totalTextLength;
 	bgint_t textToLoad, textSizeInByte;
@@ -1538,11 +1538,6 @@ BWTInc *BWTIncConstructFromPacked(const char *inputFileName, bgint_t initialMaxB
 					(long)bwtInc->numberOfIterationDone, (long)processedTextLength);
 		}
 	}
-
-  if (packedFile != NULL) {
-    fclose(packedFile);
-  }
-
 	return bwtInc;
 }
 

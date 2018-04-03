@@ -223,6 +223,7 @@ bool gaussianKDE(const std::vector<uint32_t>& freqCounter,
       boundary ++;
     }
     if (boundary > expect_cells){
+      predicted_cells = boundary;
       return false;
     }
     else if (expect_cells*0.1 > boundary){
@@ -233,7 +234,7 @@ bool gaussianKDE(const std::vector<uint32_t>& freqCounter,
       return true;
     }
   }
-
+  predicted_cells = 0;
   return false;
 }
 
@@ -338,7 +339,8 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
                           green, gaussThreshold, RESET_COLOR);
     }
     else{
-      aopt.jointLog->warn("Gauss Prediction Too far from knee prediction skipping it");
+      aopt.jointLog->warn("Gauss Prediction {} Too far from knee prediction skipping it",
+                          gaussThreshold);
     }
 
     aopt.jointLog->info("Learned InvCov: {} normfactor: {}",
