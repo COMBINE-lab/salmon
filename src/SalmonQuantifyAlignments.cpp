@@ -1345,8 +1345,8 @@ Quant
 Perform dual-phase, alignment-based estimation of
 transcript abundance from RNA-seq reads
 )";
-      std::cerr << hstring << std::endl;
-      std::cerr << visible << std::endl;
+      std::cout << hstring << std::endl;
+      std::cout << visible << std::endl;
       std::exit(0);
     }
 

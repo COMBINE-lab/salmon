@@ -86,7 +86,7 @@ int dualModeMessage() {
     salmon quant --help-alignment
 
     )";
-  std::cerr << "    salmon v" << salmon::version << helpmsg << "\n";
+  std::cout << "    salmon v" << salmon::version << helpmsg << "\n";
   return 0;
 }
 
@@ -95,7 +95,7 @@ int dualModeMessage() {
  */
 int salmonSwim(int argc, char* argv[]) {
 
-  std::cerr << R"(
+  std::cout << R"(
     _____       __
    / ___/____ _/ /___ ___  ____  ____
    \__ \/ __ `/ / __ `__ \/ __ \/ __ \
@@ -113,7 +113,7 @@ int salmonSwim(int argc, char* argv[]) {
  */
 void printCite() {
 
-  std::cerr << R"(
+  std::cout << R"(
 If you use salmon in your research, please cite the publication in any
 papers, pre-prints or reports.  The proper citation information for salmon
 appears below.
@@ -209,7 +209,7 @@ int main(int argc, char* argv[]) {
 
     if (!vm.count("no-version-check")) {
       std::string versionMessage = getVersionMessage();
-      std::cerr << versionMessage;
+      std::cout << versionMessage;
     }
 
     // po::notify(vm);
