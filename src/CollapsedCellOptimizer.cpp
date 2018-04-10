@@ -93,6 +93,11 @@ bool runPerCellEM(
   return true;
 }
 
+void getMinSetTxps(std::vector<tgrouplabelt>& txpgroups,
+                   std::vector<uint64_t>& origcounts,
+                   std::vector<UGroupT>& umigroups){
+  
+}
 
 void optimizeCell(SCExpT& experiment,
                   std::vector<std::string>& trueBarcodes,
@@ -123,6 +128,7 @@ void optimizeCell(SCExpT& experiment,
     const std::vector<Transcript>& transcripts = experiment.transcripts();
     std::unordered_set<uint32_t> activetranscriptids;
     std::vector<tgrouplabelt> txpgroups;
+    std::vector<UGroupT> umigroups;
     std::vector<tgroupweightvec> txpgroupcombinedweights;
     std::vector<uint64_t> origcounts;
     uint64_t totalcount{0};
@@ -141,40 +147,22 @@ void optimizeCell(SCExpT& experiment,
 
           if (bcIt != bg.end()){
             // sub-selecting bgroup of this barcode only
-            auto eqCount = dedupReads(umiLength,
-                                      jointlog,
-                                      bcIt->second,
-                                      umiBiasList,
-                                      key.first);
+            const std::vector<uint32_t>& txps = key.first.txps;
+            auto eqCount = val.count;
+            // Avi -> Major Hack
+            // Basically probStartpos is 1/effec_length.
+            // effec_length for all txp is 100
+            // Eqclass weights are set to 1 since sopt.noRichEqClasses is true
+            // Making aux as 1/#oftxps_in_class
+            // Ideally should be taken from eqclass.combinedWeights but
+            // ignoring for now
+            txpgroups.emplace_back(txps);
+            origcounts.emplace_back(eqCount);
+            umigroups.emplace_back(bcIt->second);
 
-            if ( eqCount != 0 ) {
-              const std::vector<uint32_t>& txps = key.first.txps;
-              // Avi -> Major Hack
-              // Basically probStartpos is 1/effec_length.
-              // effec_length for all txp is 100
-              // Eqclass weights are set to 1 since sopt.noRichEqClasses is true
-              // Making aux as 1/#oftxps_in_class
-              // Ideally should be taken from eqclass.combinedWeights but
-              // ignoring for now
-              const tgroupweightvec auxs(txps.size(), 1.0/txps.size());
-              // convert to non-atomic
-              txpgroupcombinedweights.emplace_back(auxs.begin(), auxs.end());
-              txpgroups.push_back(txps);
-              origcounts.emplace_back(eqCount);
-
-              totalcount += eqCount;
-
-              if(verbose){
-                eqIDs.push_back(static_cast<uint32_t>(key.second));
-                counts.push_back(static_cast<uint32_t>(eqCount));
-              }
-
-              // currently add only 1 length eqclass to active txps
-              //if (txps.size() == 1) {
-                for (auto& t : txps) {
-                  activetranscriptids.insert(t);
-                }
-              //}
+            if(verbose){
+              eqIDs.push_back(static_cast<uint32_t>(key.second));
+              counts.push_back(static_cast<uint32_t>(eqCount));
             }
           }
         });
@@ -184,6 +172,39 @@ void optimizeCell(SCExpT& experiment,
                         "Please Report this issue on github");
         jointlog->flush();
         exit(1);
+      }
+    }
+
+    //spp::sparse_hash_map<uint32_t, std::vector<uint64_t>> seen;
+    getMinSetTxps(txpgroups, origcounts, umigroups);
+
+    for (size_t i=0; i<txpgroups.size(); i++){
+      // sub-selecting bgroup of this barcode only
+      auto eqCount = dedupReads(umiLength,
+                                jointlog,
+                                umigroups[i],
+                                umiBiasList,
+                                txpgroups[i]);
+
+      if ( eqCount != 0 ) {
+        const std::vector<uint32_t>& txps = txpgroups[i];
+        // Avi -> Major Hack
+        // Basically probStartpos is 1/effec_length.
+        // effec_length for all txp is 100
+        // Eqclass weights are set to 1 since sopt.noRichEqClasses is true
+        // Making aux as 1/#oftxps_in_class
+        // Ideally should be taken from eqclass.combinedWeights but
+        // ignoring for now
+        const tgroupweightvec auxs(txps.size(), 1.0/txps.size());
+        // convert to non-atomic
+        txpgroupcombinedweights.emplace_back(auxs.begin(), auxs.end());
+
+        totalcount += eqCount;
+
+        // currently add only 1 length eqclass to active txps
+        for (auto& t : txps) {
+          activetranscriptids.insert(t);
+        }
       }
     }
 
