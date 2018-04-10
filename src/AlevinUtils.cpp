@@ -422,6 +422,49 @@ namespace alevin {
       return true;
     }
 
+    bool checkSetCoverage(std::vector<std::vector<uint32_t>>& tgroup,
+                          std::vector<uint32_t> txps){
+      // make sparse hash set for constant membership check
+      spp::sparse_hash_set<uint32_t> txpSet (txps.begin(), txps.end());
+      for (auto& tg: tgroup){
+        bool covered = false;
+        for(auto txp: tg){
+          if (txpSet.contains(txp)){
+            covered = true;
+            break;
+          }
+        }
+        if (not covered){
+          return false;
+        }
+      }
+      return true;
+    }
+
+    // from here https://www.geeksforgeeks.org/print-subsets-given-size-set/
+    void combinationUtil(std::vector<uint32_t>& arr, int n, int r,
+                         int index, std::vector<uint32_t> data,
+                         int i, std::vector<std::vector<uint32_t>>& comb) {
+      // Current cobination is ready, print it
+      if (index == r) {
+        comb.emplace_back(data);
+        return;
+      }
+
+      // When no more elements are there to put in data[]
+      if (i >= n)
+        return;
+
+      // current is included, put next at next location
+      data[index] = arr[i];
+      combinationUtil(arr, n, r, index + 1, data, i + 1, comb);
+
+      // current is excluded, replace it with next
+      // (Note that i+1 is passed, but index is not
+      // changed)
+      combinationUtil(arr, n, r, index, data, i + 1, comb);
+    }
+
     template
     bool processAlevinOpts(AlevinOpts<apt::DropSeq>& aopt,
                            SalmonOpts& sopt,

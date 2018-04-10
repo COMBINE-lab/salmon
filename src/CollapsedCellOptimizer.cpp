@@ -96,7 +96,42 @@ bool runPerCellEM(
 void getMinSetTxps(std::vector<tgrouplabelt>& txpgroups,
                    std::vector<uint64_t>& origcounts,
                    std::vector<UGroupT>& umigroups){
-  
+  uint32_t grouping {1};
+  std::vector<std::vector<uint32_t>> combinations;
+  spp::sparse_hash_set<uint32_t> txpSet;
+
+  for(auto& txpgroup: txpgroups){
+    for (auto txp: txpgroup){
+      txpSet.insert(txp);
+    }
+  }
+
+  std::vector<uint32_t> txpList(txpSet.begin(), txpSet.end());
+  std::vector<uint32_t> minTxps;
+
+  while (true){
+    grouping++;
+    std::vector<uint32_t> temp(grouping);
+    alevin::utils::combinationUtil(txpList, txpList.size(), grouping,
+                                   0, temp, 0, combinations);
+    bool found {false};
+    for (auto& txps: combinations){
+      bool isCovered = alevin::utils::checkSetCoverage(txpgroups, txps);
+      if (isCovered){
+        minTxps = txps;
+        found = true;
+        break;
+      }
+    }
+    if (found or grouping > txpList.size()){
+      if(grouping > txpList.size()){
+        std::cerr << "ERROR:: can't found min set"
+                  << "\n Should Not happen";
+        exit(1);
+      }
+      break;
+    }
+  }
 }
 
 void optimizeCell(SCExpT& experiment,

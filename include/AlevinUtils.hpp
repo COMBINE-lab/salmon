@@ -93,6 +93,12 @@ namespace alevin{
       return true;
     }
 
+    bool checkSetCoverage(std::vector<std::vector<uint32_t>>& tgroup,
+                          std::vector<uint32_t> txps);
+
+    void combinationUtil(std::vector<uint32_t>& arr, int n, int r,
+                         int index, std::vector<uint32_t> data,
+                         int i, std::vector<std::vector<uint32_t>>& comb);
   }
 }
 #endif // __ALEVIN_UTILS_HPP__
