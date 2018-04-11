@@ -94,42 +94,65 @@ bool runPerCellEM(
 }
 
 void getMinSetTxps(std::vector<tgrouplabelt>& txpgroups,
-                   std::vector<uint64_t>& origcounts,
-                   std::vector<UGroupT>& umigroups){
-  uint32_t grouping {1};
-  std::vector<std::vector<uint32_t>> combinations;
-  spp::sparse_hash_set<uint32_t> txpSet;
-
-  for(auto& txpgroup: txpgroups){
-    for (auto txp: txpgroup){
-      txpSet.insert(txp);
+                   std::vector<UGroupT>& umigroups,
+                   size_t numTxps){
+  // get left and right set from Rob's figure and frequency of each txp
+  std::vector<uint32_t> txpCount(numTxps);
+  spp::sparse_hash_set<uint32_t> tgroupSet;
+  for(size_t i=0; i<txpgroups.size(); i++){
+    for (auto txp: txpgroups[i]){
+      txpCount[txp]++;
     }
+    tgroupSet.insert(i);
   }
 
-  std::vector<uint32_t> txpList(txpSet.begin(), txpSet.end());
-  std::vector<uint32_t> minTxps;
+  // initialize original index locations
+  std::vector<size_t> idx(numTxps);
+  iota(idx.begin(), idx.end(), 0);
 
-  while (true){
-    grouping++;
-    std::vector<uint32_t> temp(grouping);
-    alevin::utils::combinationUtil(txpList, txpList.size(), grouping,
-                                   0, temp, 0, combinations);
-    bool found {false};
-    for (auto& txps: combinations){
-      bool isCovered = alevin::utils::checkSetCoverage(txpgroups, txps);
-      if (isCovered){
-        minTxps = txps;
-        found = true;
-        break;
+  // sort indexes based on comparing values in txpCount
+  sort(idx.begin(), idx.end(),
+       [&txpCount](size_t i1, size_t i2) {return txpCount[i1] > txpCount[i2];});
+
+  size_t head{0};
+  spp::sparse_hash_set<uint32_t> minTxps;
+  while(tgroupSet.size() != 0){
+    // extract transcript id for most frequent txp
+    uint32_t tid = idx[head];
+    std::vector<uint32_t> removableTgroups;
+
+    // select which tgroup to remove
+    for (auto tgroupIdx: tgroupSet){
+      auto& tgroup = txpgroups[tgroupIdx];
+      if (std::find(tgroup.begin(), tgroup.end(), tid) != tgroup.end() ){
+        removableTgroups.emplace_back(tgroupIdx);
       }
     }
-    if (found or grouping > txpList.size()){
-      if(grouping > txpList.size()){
-        std::cerr << "ERROR:: can't found min set"
-                  << "\n Should Not happen";
-        exit(1);
+
+    // remove tgroups relevant for this tid
+    for(auto tgroupIdx: removableTgroups){
+      tgroupSet.erase(tgroupIdx);
+    }
+
+    // if removed at least one tgroup then add to mintxps
+    if(removableTgroups.size() > 0){
+      minTxps.insert(tid);
+    }
+
+    // get next highest txp
+    head++;
+  }
+
+  // modify txp labels of eqclasses
+  for (auto& tgroup: txpgroups){
+    std::vector<uint32_t> newlabel;
+    for(auto txp: tgroup){
+      if (minTxps.contains(txp)){
+        newlabel.emplace_back(txp);
       }
-      break;
+    }
+    if (tgroup != newlabel){
+      tgroup = newlabel;
     }
   }
 }
@@ -192,7 +215,6 @@ void optimizeCell(SCExpT& experiment,
             // Ideally should be taken from eqclass.combinedWeights but
             // ignoring for now
             txpgroups.emplace_back(txps);
-            origcounts.emplace_back(eqCount);
             umigroups.emplace_back(bcIt->second);
 
             if(verbose){
@@ -211,8 +233,9 @@ void optimizeCell(SCExpT& experiment,
     }
 
     //spp::sparse_hash_map<uint32_t, std::vector<uint64_t>> seen;
-    getMinSetTxps(txpgroups, origcounts, umigroups);
+    getMinSetTxps(txpgroups, umigroups, transcripts.size());
 
+    spp::sparse_hash_set<uint32_t> removableTgroups;
     for (size_t i=0; i<txpgroups.size(); i++){
       // sub-selecting bgroup of this barcode only
       auto eqCount = dedupReads(umiLength,
@@ -233,6 +256,7 @@ void optimizeCell(SCExpT& experiment,
         const tgroupweightvec auxs(txps.size(), 1.0/txps.size());
         // convert to non-atomic
         txpgroupcombinedweights.emplace_back(auxs.begin(), auxs.end());
+        origcounts.emplace_back(eqCount);
 
         totalcount += eqCount;
 
@@ -241,7 +265,19 @@ void optimizeCell(SCExpT& experiment,
           activetranscriptids.insert(t);
         }
       }
+      else{
+        removableTgroups.insert(i);
+      }
     }
+
+    // remove 0 count eqclass
+    std::vector<tgrouplabelt> newTgroups;
+    for(size_t i=0; i<txpgroups.size();i++){
+      if (not removableTgroups.contains(i)){
+        newTgroups.emplace_back(txpgroups[i]);
+      }
+    }
+    txpgroups = newTgroups;
 
     if (verbose) {
       gzw.writeCellEQVec(trueBarcodeIdx, eqIDs, counts, true);
