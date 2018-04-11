@@ -144,16 +144,52 @@ void getMinSetTxps(std::vector<tgrouplabelt>& txpgroups,
   }
 
   // modify txp labels of eqclasses
-  for (auto& tgroup: txpgroups){
-    std::vector<uint32_t> newlabel;
+  // Very inefficient way O(n^2) but doing for checking
+  std::deque<spp::sparse_hash_set<uint32_t>> newTgroups;
+  std::deque<UGroupT> newUgroups;
+  for (size_t i=0; i<txpgroups.size(); i++){
+    auto& tgroup = txpgroups[i];
+    // extract new label by removing txps not in mintxps
+    spp::sparse_hash_set<uint32_t> newlabel;
     for(auto txp: tgroup){
       if (minTxps.contains(txp)){
-        newlabel.emplace_back(txp);
+        newlabel.insert(txp);
       }
     }
-    if (tgroup != newlabel){
-      tgroup = newlabel;
+    // check if this label is already present in the vector
+    auto it = std::find(newTgroups.begin(), newTgroups.end(), newlabel);
+    if ( it != newTgroups.end() ){
+      // if found then just append UMI
+      auto index = std::distance(newTgroups.begin(), it);
+      auto& ugroup = newUgroups[index];
+      for (auto umi: umigroups[i]){
+        ugroup[umi.first] += umi.second;
+      }
     }
+    else{
+      // if 1 length txp insert in front
+      if (newlabel.size() == 1){
+        newUgroups.push_front(umigroups[i]);
+        newTgroups.push_front(newlabel);
+      }
+      // else insert t last
+      else{
+        newUgroups.push_back(umigroups[i]);
+        newTgroups.push_back(newlabel);
+      }
+    }
+  }
+
+  // replace the present group with a new one
+  txpgroups.clear();
+  for(auto& tgroupSet: newTgroups){
+    std::vector<uint32_t> tgroup (tgroupSet.begin(), tgroupSet.end());
+    txpgroups.emplace_back(tgroup);
+  }
+
+  umigroups.clear();
+  for(auto& ugroup: newUgroups){
+    umigroups.emplace_back(ugroup);
   }
 }
 
