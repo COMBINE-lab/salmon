@@ -227,7 +227,7 @@ void optimizeCell(SCExpT& experiment,
     std::vector<uint64_t> origcounts;
     uint64_t totalcount{0};
 
-    std::unordered_map<uint32_t, std::unordered_set<uint64_t>> umiBiasList;
+    spp::sparse_hash_map<uint32_t, spp::sparse_hash_set<uint64_t>> umiBiasList;
 
     // equivalence class vector encoding for this cell (i.e. row)
     std::vector<uint32_t> eqIDs;
@@ -242,7 +242,10 @@ void optimizeCell(SCExpT& experiment,
           if (bcIt != bg.end()){
             // sub-selecting bgroup of this barcode only
             const std::vector<uint32_t>& txps = key.first.txps;
-            auto eqCount = val.count;
+            uint32_t eqCount {0};
+            for(auto& ugroup: bcIt->second){
+                eqCount += ugroup.second;
+            }
             // Avi -> Major Hack
             // Basically probStartpos is 1/effec_length.
             // effec_length for all txp is 100
@@ -266,6 +269,10 @@ void optimizeCell(SCExpT& experiment,
         jointlog->flush();
         exit(1);
       }
+    }
+
+    if (verbose) {
+      gzw.writeCellEQVec(trueBarcodeIdx, eqIDs, counts, true);
     }
 
     //spp::sparse_hash_map<uint32_t, std::vector<uint64_t>> seen;
@@ -314,10 +321,6 @@ void optimizeCell(SCExpT& experiment,
       }
     }
     txpgroups = newTgroups;
-
-    if (verbose) {
-      gzw.writeCellEQVec(trueBarcodeIdx, eqIDs, counts, true);
-    }
 
     if(noEM){
       // no em i.e. only eqclass mode

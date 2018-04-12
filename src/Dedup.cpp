@@ -4,7 +4,7 @@
 //Ntranos, Vasilis, et al. "Fast and accurate single-cell RNA-seq analysis by clustering of transcript-compatibility counts." Genome biology 17.1 (2016): 112
 // we build upon the idea proposed on the above paper.
 
-uint32_t edLibCollapse(const std::unordered_set<uint64_t>& umiList,
+uint32_t edLibCollapse(const spp::sparse_hash_set<uint64_t>& umiList,
                        std::vector<uint64_t>& vList,
                        const size_t& length,
                        const UGroupT& ugroup,
@@ -33,7 +33,7 @@ uint32_t edLibCollapse(const std::unordered_set<uint64_t>& umiList,
   return numCollapsed;
 }
 
-uint32_t neighborCollapse(const std::unordered_set<uint64_t>& umiList,
+uint32_t neighborCollapse(const spp::sparse_hash_set<uint64_t>& umiList,
                           std::vector<uint64_t>& vList,
                           const size_t& length,
                           const UGroupT& ugroup,
@@ -97,8 +97,7 @@ uint32_t dedupReads(
                     const size_t umiLength,
                     std::shared_ptr<spdlog::logger>& jointLog,
                     const UGroupT& ugroup,
-                    std::unordered_map<uint32_t,
-                    std::unordered_set<uint64_t>>& umiBiasList,
+                    spp::sparse_hash_map<uint32_t, spp::sparse_hash_set<uint64_t>>& umiBiasList,
                     const TranscriptGroup& tgroup){
 
   //Aligner engine for edlib
@@ -108,7 +107,7 @@ uint32_t dedupReads(
 
   //lambda for extracting keys (umi)
   //auto key_selector = [](std::pair<uint64_t, uint32_t> pair){return pair.first;};
-  std::unordered_set<uint64_t> umiList;
+  spp::sparse_hash_set<uint64_t> umiList;
 
   //make a vector of umis
   for(auto& kpair: ugroup){
@@ -124,21 +123,27 @@ uint32_t dedupReads(
     }
   }
   else{
+    // make a list of already deduplicated UMI
+    spp::sparse_hash_set<uint64_t> seen_umis;
     for (auto txp : txps){
-      auto got = umiBiasList.find(txp);
-      if ( got != umiBiasList.end() ){
-        auto biasUmis = got->second;
-        for (auto umi : biasUmis){
-          //auto it = std::find(umiList.begin(),
-          //                    umiList.end(),
-          //                    umi);
-          auto it = umiList.find(umi);
-          if(it != umiList.end()){
-            umiList.erase(it);
-            bias += 1;
-          }
+      if(umiBiasList.contains(txp)){
+        for(auto umi: umiBiasList[txp]){
+          seen_umis.insert(umi);
         }
       }
+    }
+    // extract indices to remove
+    std::vector<uint64_t> removeUmis;
+    for(auto umi: umiList){
+      if (seen_umis.contains(umi)){
+        removeUmis.emplace_back(umi);
+      }
+    }
+
+    // remove the UMI from the list
+    for (auto umi: removeUmis){
+      umiList.erase(umi);
+      bias += 1;
     }
   }
 
