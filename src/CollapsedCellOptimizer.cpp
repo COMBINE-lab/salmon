@@ -95,7 +95,8 @@ bool runPerCellEM(
 
 void getMinSetTxps(std::vector<tgrouplabelt>& txpgroups,
                    std::vector<UGroupT>& umigroups,
-                   size_t numTxps){
+                   size_t numTxps,
+                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap){
   // get left and right set from Rob's figure and frequency of each txp
   std::vector<uint32_t> txpCount(numTxps);
   spp::sparse_hash_set<uint32_t> tgroupSet;
@@ -151,11 +152,25 @@ void getMinSetTxps(std::vector<tgrouplabelt>& txpgroups,
     auto& tgroup = txpgroups[i];
     // extract new label by removing txps not in mintxps
     spp::sparse_hash_set<uint32_t> newlabel;
+    spp::sparse_hash_set<uint32_t> geneSet;
     for(auto txp: tgroup){
       if (minTxps.contains(txp)){
         newlabel.insert(txp);
       }
+      if (txpToGeneMap.contains(txp)){
+        geneSet.insert(txpToGeneMap[txp]);
+      }
+      else{
+        std::cerr<< "Wrong Txp To gene Map"<<std::flush;
+        exit(1);
+      }
     }
+
+    //TODO: Major Update required here when doing ambiguity resolution
+    if (geneSet.size() > 1){
+      continue;
+    }
+
     // check if this label is already present in the vector
     auto it = std::find(newTgroups.begin(), newTgroups.end(), newlabel);
     if ( it != newTgroups.end() ){
@@ -275,8 +290,23 @@ void optimizeCell(SCExpT& experiment,
       gzw.writeCellEQVec(trueBarcodeIdx, eqIDs, counts, true);
     }
 
-    //spp::sparse_hash_map<uint32_t, std::vector<uint64_t>> seen;
-    getMinSetTxps(txpgroups, umigroups, transcripts.size());
+
+    getMinSetTxps(txpgroups, umigroups,
+                  transcripts.size(),
+                  txpToGeneMap);
+
+
+    for(size_t i=0; i<counts.size(); i++){
+      if (txpgroups[i].size() == 1){
+        std::cout << txpgroups[i][0] << "," << umigroups[i].size() << std::flush;
+        for (auto umi: umigroups[i]){
+          alevin::kmer::AlvKmer jellyObj(10);
+          jellyObj.fromNum(umi.first);
+          std::cout << "," << umi.first << "," << jellyObj.to_str() << "," << umi.second << std::flush;
+        }
+        std::cout<< std::endl << std::flush;
+      }
+    }
 
     spp::sparse_hash_set<uint32_t> removableTgroups;
     for (size_t i=0; i<txpgroups.size(); i++){
@@ -289,6 +319,9 @@ void optimizeCell(SCExpT& experiment,
 
       if ( eqCount != 0 ) {
         const std::vector<uint32_t>& txps = txpgroups[i];
+        if (txps.size() == 1){
+          std::cout<<txps[0]<<","<<eqCount<<std::endl<<std::flush;
+        }
         // Avi -> Major Hack
         // Basically probStartpos is 1/effec_length.
         // effec_length for all txp is 100
@@ -618,7 +651,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                           mode, numCells, numGenes);
 
       if (aopt.dumpCsvCounts){
-        aopt.jointLog->info("Starting dumping {} cell counts in csv format",
+        aopt.jointLog->info("Starting dumping cell v {} counts in csv format",
                             mode);
         std::ofstream qFile;
         boost::filesystem::path qFilePath = aopt.outputDirectory / "quants_mat.csv";
