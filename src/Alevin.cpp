@@ -870,8 +870,8 @@ alevin
 salmon-based processing of single-cell RNA-seq data.
 )";
 
-      std::cerr << hstring << std::endl;
-      std::cerr << visible << std::endl;
+      std::cout << hstring << std::endl;
+      std::cout << visible << std::endl;
       std::exit(0);
     }
 
