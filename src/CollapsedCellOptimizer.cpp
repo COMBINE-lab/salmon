@@ -295,19 +295,6 @@ void optimizeCell(SCExpT& experiment,
                   transcripts.size(),
                   txpToGeneMap);
 
-
-    for(size_t i=0; i<counts.size(); i++){
-      if (txpgroups[i].size() == 1){
-        std::cout << txpgroups[i][0] << "," << umigroups[i].size() << std::flush;
-        for (auto umi: umigroups[i]){
-          alevin::kmer::AlvKmer jellyObj(10);
-          jellyObj.fromNum(umi.first);
-          std::cout << "," << umi.first << "," << jellyObj.to_str() << "," << umi.second << std::flush;
-        }
-        std::cout<< std::endl << std::flush;
-      }
-    }
-
     spp::sparse_hash_set<uint32_t> removableTgroups;
     for (size_t i=0; i<txpgroups.size(); i++){
       // sub-selecting bgroup of this barcode only
@@ -319,9 +306,6 @@ void optimizeCell(SCExpT& experiment,
 
       if ( eqCount != 0 ) {
         const std::vector<uint32_t>& txps = txpgroups[i];
-        if (txps.size() == 1){
-          std::cout<<txps[0]<<","<<eqCount<<std::endl<<std::flush;
-        }
         // Avi -> Major Hack
         // Basically probStartpos is 1/effec_length.
         // effec_length for all txp is 100
