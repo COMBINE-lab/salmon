@@ -62,7 +62,7 @@ int help(std::vector<std::string> opts) { //}int argc, char* argv[]) {
   helpMsg.write(
       "     quantmerge Merge multiple quantifications into a single file\n");
 
-  std::cerr << helpMsg.str();
+  std::cout << helpMsg.str();
   return 0;
 }
 

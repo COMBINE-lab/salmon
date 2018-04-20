@@ -239,6 +239,7 @@ void VBEMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
 template <typename EQVecT>
 void EMUpdate_(EQVecT& eqVec,
                std::vector<Transcript>& transcripts,
+	       std::vector<double>& priorAlphas,
                const CollapsedEMOptimizer::VecType& alphaIn,
                CollapsedEMOptimizer::VecType& alphaOut) {
 
@@ -246,7 +247,7 @@ void EMUpdate_(EQVecT& eqVec,
 
   tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(eqVec.size())),
-      [&eqVec, &alphaIn, &alphaOut](const BlockedIndexRange& range) -> void {
+      [&eqVec, &priorAlphas, &alphaIn, &alphaOut](const BlockedIndexRange& range) -> void {
         for (auto eqID : boost::irange(range.begin(), range.end())) {
           auto& kv = eqVec[eqID];
 
@@ -266,7 +267,7 @@ void EMUpdate_(EQVecT& eqVec,
               for (size_t i = 0; i < groupSize; ++i) {
                 auto tid = txps[i];
                 auto aux = auxs[i];
-                double v = alphaIn[tid] * aux;
+                double v = (alphaIn[tid]) * aux;
                 denom += v;
               }
 
@@ -277,7 +278,7 @@ void EMUpdate_(EQVecT& eqVec,
                 for (size_t i = 0; i < groupSize; ++i) {
                   auto tid = txps[i];
                   auto aux = auxs[i];
-                  double v = alphaIn[tid] * aux;
+                  double v = (alphaIn[tid]) * aux;
                   if (!std::isnan(v)) {
                     salmon::utils::incLoop(alphaOut[tid], v * invDenom);
                   }
@@ -968,7 +969,14 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
       VBEMUpdate_(eqVec, transcripts, priorAlphas, totalLen, alphas,
                   alphasPrime, expTheta);
     } else {
-      EMUpdate_(eqVec, transcripts, alphas, alphasPrime);
+      /*
+      if (itNum > 0 and (itNum % 250 == 0)) {
+        for (size_t i = 0; i < transcripts.size(); ++i) {
+      	  if (alphas[i] < 1.0) { alphas[i] = 0.0; }
+      	}
+      }
+      */
+      EMUpdate_(eqVec, transcripts, priorAlphas, alphas, alphasPrime);
     }
 
     converged = true;
