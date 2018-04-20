@@ -49,7 +49,8 @@ uint32_t neighborCollapse(const size_t& length,
                                  qUmiStr,
                                  neighbors);
 
-    for (size_t i = vList.size()-1; i>=0; i--){
+    // DON't change int to size_t: stupid wrapper error
+    for (int32_t i = vList.size()-1; i>=0; i--){
       uint64_t rUmiJellyIdx = vList[ i ].first;
       std::string& rUmiStr = vList[ i ].second;
       auto got = neighbors.find(rUmiStr);
@@ -65,7 +66,7 @@ uint32_t neighborCollapse(const size_t& length,
         }
         else{
           std::cerr<<"Wrong jelly inx found in the collapse stage."
-                   <<"Please Report this on github \n";
+                   <<"Please Report this on github \n" << std::flush;
           exit(1);
         }
         if ( (qFreq/2.0)+1 > rFreq ){
