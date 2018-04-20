@@ -285,6 +285,7 @@ namespace alevin {
       aopt.noQuant = vm["noquant"].as<bool>();
       aopt.noSoftMap = vm["nosoftmap"].as<bool>();
       aopt.dumpfq = vm["dumpfq"].as<bool>();
+      aopt.dumpBFH = vm["dumpbfh"].as<bool>();
       aopt.txpLevel = vm["txplevel"].as<bool>();
       aopt.nobarcode = vm["nobarcode"].as<bool>();
       aopt.dumpfeatures = vm["dumpfeatures"].as<bool>();

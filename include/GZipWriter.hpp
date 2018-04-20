@@ -14,6 +14,7 @@
 #include "SalmonOpts.hpp"
 #include "SalmonSpinLock.hpp"
 #include "AlevinOpts.hpp"
+#include "AlevinKmer.hpp"
 
 class GZipWriter {
 public:
@@ -28,10 +29,12 @@ public:
   bool writeEquivCounts(const SalmonOpts& opts, ExpT& experiment);
 
   template <typename ExpT, typename ProtocolT>
-  bool writeEquivCounts(
-                        const AlevinOpts<ProtocolT>& aopts,
+  bool writeEquivCounts(const AlevinOpts<ProtocolT>& aopts,
                         ExpT& experiment);
 
+  template <typename ExpT>
+  bool writeBFH(boost::filesystem::path& outDir,
+                ExpT& experiment, size_t umiLength);
 
   template <typename ExpT>
   bool writeMeta(const SalmonOpts& opts, const ExpT& experiment);

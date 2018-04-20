@@ -128,6 +128,59 @@ bool GZipWriter::writeEquivCounts(const SalmonOpts& opts, ExpT& experiment) {
   return true;
 }
 
+template <typename ExpT>
+bool GZipWriter::writeBFH(boost::filesystem::path& outDir,
+                          ExpT& experiment, size_t umiLength) {
+  namespace bfs = boost::filesystem;
+
+  bfs::path eqFilePath = outDir / "bfh.txt";
+  std::ofstream equivFile(eqFilePath.string());
+
+  auto& transcripts = experiment.transcripts();
+  const auto& eqVec =
+    experiment.equivalenceClassBuilder().eqMap().lock_table();
+
+  // Number of transcripts
+  equivFile << transcripts.size() << '\n';
+
+  // Number of equivalence classes
+  equivFile << eqVec.size() << '\n';
+
+  for (auto& t : transcripts) {
+    equivFile << t.RefName << '\n';
+  }
+
+  alevin::kmer::AlvKmer jellyObj(umiLength);
+  for (auto& eq : eqVec) {
+    uint64_t count = eq.second.count;
+    // for each transcript in this class
+    const TranscriptGroup& tgroup = eq.first;
+    const std::vector<uint32_t>& txps = tgroup.txps;
+
+    // group size
+    equivFile << txps.size() << '\t';
+    // each group member
+    for (auto tid : txps) { equivFile << tid << '\t'; }
+    const auto& bgroup = eq.second.barcodeGroup;
+    equivFile << count << "\t" << bgroup.size();
+    for (auto  bcIt : bgroup){
+      auto bc = bcIt.first;
+      auto ugroup = bcIt.second;
+      equivFile << "\t" << bc << "\t" << ugroup.size();
+      for (auto umiIt : ugroup){
+        auto umi = umiIt.first;
+        jellyObj.fromNum(umi);
+        auto count = umiIt.second;
+        equivFile << "\t" << jellyObj.to_str() << "\t" << count;
+      }
+    }
+    equivFile << "\n";
+  }
+  equivFile.close();
+  return true;
+}
+
+
 /**
  * Write the equivalence class information to file.
  * The header will contain the transcript / target ids in
@@ -170,34 +223,6 @@ bool GZipWriter::writeEquivCounts(
     equivFile << '\n';
   }
 
-  /*
-  for (auto& eq : eqVec) {
-    uint64_t count = eq.second.count;
-    // for each transcript in this class
-    const TranscriptGroup& tgroup = eq.first;
-    const std::vector<uint32_t>& txps = tgroup.txps;
-
-    // group size
-    equivFile << txps.size() << '\t';
-    // each group member
-    for (auto tid : txps) { equivFile << tid << '\t'; }
-    const auto& bgroup = eq.second.barcodeGroup;
-    equivFile << count << "\t" << bgroup.size();
-    for (auto  bcIt : bgroup){
-      auto bc = bcIt.first;
-      auto ugroup = bcIt.second;
-      equivFile << "\t" << bc << "\t" << ugroup.size();
-      for (auto umiIt : ugroup){
-        auto umi = umiIt.first;
-        auto count = umiIt.second;
-        equivFile << "\t" << umi << "\t" << count;
-      }
-    }
-    equivFile << "\n";
-  }
-  equivFile.close();
-  */
-  
   equivFile.close();
   return true;
 }
@@ -826,6 +851,8 @@ template bool GZipWriter::writeEquivCounts<BulkAlignLibT<UnpairedRead>>(
 template bool GZipWriter::writeEquivCounts<BulkAlignLibT<ReadPair>>(
     const SalmonOpts& sopt, BulkAlignLibT<ReadPair>& readExp);
 
+template bool GZipWriter::writeBFH<SCExpT>(boost::filesystem::path& outDir,
+                                           SCExpT& experiment, size_t umiLength);
 
 template bool GZipWriter::writeAbundances<BulkExpT>(const SalmonOpts& sopt,
                                             BulkExpT& readExp);

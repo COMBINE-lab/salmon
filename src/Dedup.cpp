@@ -4,19 +4,17 @@
 //Ntranos, Vasilis, et al. "Fast and accurate single-cell RNA-seq analysis by clustering of transcript-compatibility counts." Genome biology 17.1 (2016): 112
 // we build upon the idea proposed on the above paper.
 
-uint32_t edLibCollapse(const spp::sparse_hash_set<uint64_t>& umiList,
-                       std::vector<uint64_t>& vList,
-                       const size_t& length,
+uint32_t edLibCollapse(const size_t& length,
                        const UGroupT& ugroup,
                        AlignerEngine& ae,
-                       std::vector<std::string>& umiSeqs){
+                       std::vector<std::pair<uint64_t, std::string>>& umiSeqs){
   uint32_t numCollapsed{0};
 
-  uint64_t qUmiJellyIdx = vList.back();
-  std::string qUmiStr = umiSeqs.back();
+  uint64_t qUmiJellyIdx = umiSeqs.back().first;
+  std::string qUmiStr = umiSeqs.back().second;
 
-  uint64_t rUmiJellyIdx = vList.front();
-  std::string rUmiStr = umiSeqs.front();
+  uint64_t rUmiJellyIdx = umiSeqs.front().first;
+  std::string rUmiStr = umiSeqs.front().second;
 
   //convert back to char* pointer
   ae(qUmiStr.c_str(), length, rUmiStr.c_str(), length, edlibNewAlignConfig(1, EDLIB_MODE_NW, EDLIB_TASK_DISTANCE));
@@ -33,60 +31,55 @@ uint32_t edLibCollapse(const spp::sparse_hash_set<uint64_t>& umiList,
   return numCollapsed;
 }
 
-uint32_t neighborCollapse(const spp::sparse_hash_set<uint64_t>& umiList,
-                          std::vector<uint64_t>& vList,
-                          const size_t& length,
+uint32_t neighborCollapse(const size_t& length,
                           const UGroupT& ugroup,
-                          std::vector<std::string>& umiSeqs){
-  //get index/string of current most frequent UMI
-  //size_t qUmiIdx {vList[0]};
-  //vList.erase(vList.begin());
-
-  uint64_t qUmiJellyIdx = vList.back();
-  std::string qUmiStr = umiSeqs.back();
-  vList.pop_back();
-  umiSeqs.pop_back();
-
+                          std::vector<std::pair<uint64_t, std::string>>& vList){
   uint32_t numCollapsed {0};
-  std::vector<uint32_t> collapseList;
+  std::deque<std::pair<uint64_t, std::string>> flagged_umis {vList.back()};
+  vList.pop_back();
 
-  std::unordered_set<std::string> neighbors;
-  alevin::utils::findNeighbors(length,
-                               qUmiStr,
-                               neighbors);
+  while(flagged_umis.size() != 0){
+    std::vector<uint32_t> collapseList;
+    uint64_t qUmiJellyIdx = flagged_umis.front().first;
+    std::string& qUmiStr = flagged_umis.front().second;
+    flagged_umis.pop_front();
 
-  for (int32_t i=vList.size()-1; i>=0; i--){
-    //size_t rUmiIdx {vList[i]};
-    uint64_t rUmiJellyIdx = vList[ i ];
-    std::string rUmiStr = umiSeqs[ i ];
+    std::unordered_set<std::string> neighbors;
+    alevin::utils::findNeighbors(length,
+                                 qUmiStr,
+                                 neighbors);
 
-    auto got = neighbors.find(rUmiStr);
+    for (size_t i = vList.size()-1; i>=0; i--){
+      uint64_t rUmiJellyIdx = vList[ i ].first;
+      std::string& rUmiStr = vList[ i ].second;
+      auto got = neighbors.find(rUmiStr);
 
-    if (got != neighbors.end()){
-      uint32_t qFreq{1}, rFreq{1};
-      auto rIt = ugroup.find(rUmiJellyIdx);
-      auto qIt = ugroup.find(qUmiJellyIdx);
+      if (got != neighbors.end()){
+        uint32_t qFreq, rFreq;
+        auto rIt = ugroup.find(rUmiJellyIdx);
+        auto qIt = ugroup.find(qUmiJellyIdx);
 
-      if(rIt != ugroup.end() and qIt != ugroup.end()){
-        rFreq = rIt->second;
-        qFreq = qIt->second;
-      }
-      else{
-        std::cerr<<"Wrong jelly inx found in the collapse stage."
-                 <<"Please Report this on github \n";
-        exit(1);
-      }
-      if ( (qFreq/2.0)+1 > rFreq ){
-        numCollapsed += 1;
-        collapseList.emplace_back(i);
+        if(rIt != ugroup.end() and qIt != ugroup.end()){
+          rFreq = rIt->second;
+          qFreq = qIt->second;
+        }
+        else{
+          std::cerr<<"Wrong jelly inx found in the collapse stage."
+                   <<"Please Report this on github \n";
+          exit(1);
+        }
+        if ( (qFreq/2.0)+1 > rFreq ){
+          numCollapsed += 1;
+          collapseList.emplace_back(i);
+          flagged_umis.push_back(vList[i]);
+        }
       }
     }
-  }
 
-  for (auto rIt = collapseList.begin();
-       rIt!= collapseList.end(); ++rIt){
-    vList.erase(vList.begin() + *rIt);
-    umiSeqs.erase(umiSeqs.begin() + *rIt);
+    for (auto rIt = collapseList.begin();
+         rIt!= collapseList.end(); ++rIt){
+      vList.erase(vList.begin() + *rIt);
+    }
   }
 
   return numCollapsed;
@@ -167,21 +160,19 @@ uint32_t dedupReads(
   uint32_t numMolecules {static_cast<uint32_t>(umiList.size())};
 
   // making a vector umi sequences
-  std::vector<std::string> umiSeqs;
+  std::vector<std::pair<uint64_t, std::string>> umis;
   alevin::kmer::AlvKmer jellyObj(umiLength);
   for(auto& umi: visitList){
     jellyObj.fromNum(umi);
-    umiSeqs.emplace_back(jellyObj.to_str());
+    umis.emplace_back(std::make_pair(umi, jellyObj.to_str()));
   }
 
-  if (umiList.size() == 2){
+  if (umis.size() == 2){
     //keep counting until collapse everything
-    auto numCollapsed = edLibCollapse(umiList,
-                                      visitList,
-                                      umiLength,
+    auto numCollapsed = edLibCollapse(umiLength,
                                       ugroup,
                                       ae,
-                                      umiSeqs);
+                                      umis);
     numMolecules -= numCollapsed;
     if (numMolecules < 1){
       jointLog->error("Collapse Procedure Error");
@@ -189,12 +180,10 @@ uint32_t dedupReads(
     }
   }
   else{
-    while(not visitList.empty()){
-      auto numCollapsed = neighborCollapse(umiList,
-                                           visitList,
-                                           umiLength,
+    while(not umis.empty()){
+      auto numCollapsed = neighborCollapse(umiLength,
                                            ugroup,
-                                           umiSeqs);
+                                           umis);
       numMolecules -= numCollapsed;
       if (numMolecules < 1){
         jointLog->error("Collapse Procedure Error");

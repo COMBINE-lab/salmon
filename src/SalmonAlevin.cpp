@@ -1684,6 +1684,11 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
       gzw.writeEquivCounts(aopt, experiment);
     }
 
+    if(aopt.dumpBFH){
+      gzw.writeBFH(aopt.outputDirectory, experiment,
+                   aopt.protocol.umiLength);
+    }
+
     std::vector<uint32_t> umiCount(trueBarcodesVec.size());
     auto& fullEqMap = experiment.equivalenceClassBuilder().eqMap();
     for(auto& eq: fullEqMap.lock_table()){

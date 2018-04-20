@@ -102,6 +102,7 @@ namespace defaults {
   constexpr const bool useCorrelation{false};
   constexpr const bool dumpFQ{false};
   constexpr const bool dumpFeatures{false};
+  constexpr const bool dumpBFH{false};
   constexpr const bool dumpUMIToolsMap{false};
   constexpr const bool dumpBarcodeMap{false};
   constexpr const bool dumpCSVCounts{false};

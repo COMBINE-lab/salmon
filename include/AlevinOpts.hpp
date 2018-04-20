@@ -38,6 +38,8 @@ struct AlevinOpts {
   bool dumpBarcodeEq;
   //dump cellvtxp matrix in csv
   bool dumpCsvCounts;
+  // dump big fishing hash
+  bool dumpBFH;
   //Stop progress sumps
   bool quiet;
   //flag for deduplication
