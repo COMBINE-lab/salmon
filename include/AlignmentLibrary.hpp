@@ -253,8 +253,8 @@ for (auto& txp : transcripts_) {
         */
         // then declare that we are done
         done = true;
-        sl_.unlock();
       }
+      sl_.unlock();
     }
   }
 
