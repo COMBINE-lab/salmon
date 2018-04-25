@@ -182,8 +182,8 @@ namespace alevin {
       std::string newBarcode, nt;
 
       if(barcodeLength > seqSize){
-        std::cout<<"Sequence-Size greater than specified."
-                 <<"Please report the issue on Github.\n" ;
+        std::cout<<"Sequence-Size " << barcodeLength << "greater than specified "
+                 << seqSize <<".\nPlease report the issue on Github.\n" ;
         exit(1);
       }
 
