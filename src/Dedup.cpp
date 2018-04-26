@@ -168,7 +168,7 @@ uint32_t dedupReads(
     jellyObj.fromNum(umi);
     std::string umiseq = jellyObj.to_str();
     umis.emplace_back(std::make_pair(umi, umiseq));
-    if (umiseq != umiLength){
+    if (umiseq.size() != umiLength){
         std::cout << "Size mismatch from Jelly Object\n"
             << "Expected :" << umiLength << "\tGot: " << umiseq.size()
             << std::flush;
