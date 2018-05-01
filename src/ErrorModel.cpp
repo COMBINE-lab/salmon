@@ -20,12 +20,12 @@ bool ErrorModel::burnedIn() { return burnedIn_; }
 void ErrorModel::burnedIn(bool burnedIn) { burnedIn_ = burnedIn; }
 
 double
-ErrorModel::logLikelihood(bam_seq_t* read, Transcript& ref,
+ErrorModel::logLikelihood(SamRecord* read, Transcript& ref,
                           std::vector<AtomicMatrix<double>>& mismatchProfile) {
   using namespace salmon::stringtools;
   bool useQual{false};
   size_t readIdx{0};
-  auto transcriptIdx = bam_pos(read);
+  auto transcriptIdx = combinelab::samutils::bam_pos(read);
   size_t transcriptLen = ref.RefLength;
   // if the read starts before the beginning of the transcript,
   // only consider the part overlapping the transcript
@@ -50,15 +50,15 @@ ErrorModel::logLikelihood(bam_seq_t* read, Transcript& ref,
   salmon::stringtools::strand readStrand = salmon::stringtools::strand::forward;
   double logLike = salmon::math::LOG_1;
 
-  uint8_t* qseq = reinterpret_cast<uint8_t*>(bam_seq(read)); // bam1_seq(read);
-  auto qualStr = reinterpret_cast<uint8_t*>(bam_qual(read)); // bam1_qual(read);
-  size_t readLen = static_cast<size_t>(bam_seq_len(read));
+  uint8_t* qseq = reinterpret_cast<uint8_t*>(combinelab::samutils::bam_seq(read)); // bam1_seq(read);
+  auto qualStr = reinterpret_cast<uint8_t*>(combinelab::samutils::bam_qual(read)); // bam1_qual(read);
+  size_t readLen = static_cast<size_t>(combinelab::samutils::bam_seq_len(read));
   size_t basesChecked = 0;
   size_t numInc = std::min(transcriptLen - uTranscriptIdx, readLen - readIdx);
   while (basesChecked < numInc) {
-    size_t curReadBase = samToTwoBit[bam_seqi(qseq, readIdx)];
+    size_t curReadBase = samToTwoBit[combinelab::samutils::bam_seqi(qseq, readIdx)];
     size_t prevReadBase =
-        (readIdx > 0) ? samToTwoBit[bam_seqi(qseq, readIdx - 1)] : 0;
+      (readIdx > 0) ? samToTwoBit[combinelab::samutils::bam_seqi(qseq, readIdx - 1)] : 0;
     size_t refBase = samToTwoBit[ref.baseAt(uTranscriptIdx, readStrand)];
     size_t index = prevReadBase + refBase;
     int qval = qualStr[readIdx];
@@ -86,13 +86,13 @@ double ErrorModel::logLikelihood(const ReadPair& hit, Transcript& ref) {
     }
   }
 
-  bam_seq_t* leftRead =
-      (bam_pos(hit.read1) < bam_pos(hit.read2)) ? hit.read1 : hit.read2;
-  bam_seq_t* rightRead =
-      (bam_pos(hit.read1) < bam_pos(hit.read2)) ? hit.read2 : hit.read1;
+  SamRecord* leftRead =
+    (combinelab::samutils::bam_pos(hit.read1) < combinelab::samutils::bam_pos(hit.read2)) ? hit.read1 : hit.read2;
+  SamRecord* rightRead =
+    (combinelab::samutils::bam_pos(hit.read1) < combinelab::samutils::bam_pos(hit.read2)) ? hit.read2 : hit.read1;
 
-  size_t leftLen = static_cast<size_t>(bam_seq_len(leftRead));
-  size_t rightLen = static_cast<size_t>(bam_seq_len(rightRead));
+  size_t leftLen = static_cast<size_t>(combinelab::samutils::bam_seq_len(leftRead));
+  size_t rightLen = static_cast<size_t>(combinelab::samutils::bam_seq_len(rightRead));
 
   // NOTE: Raise a warning in this case?
   if (BOOST_UNLIKELY((leftLen > maxExpectedLen_) or
@@ -123,13 +123,14 @@ double ErrorModel::logLikelihood(const UnpairedRead& hit, Transcript& ref) {
   }
 
   bam_seq_t* read = hit.read;
-  size_t readLen = static_cast<size_t>(bam_seq_len(read));
+  size_t readLen = static_cast<size_t>(combinelab::samutils::bam_seq_len(read));
   // NOTE: Raise a warning in this case?
   if (BOOST_UNLIKELY(readLen > maxExpectedLen_)) {
     return logLike;
   }
   logLike += logLikelihood(read, ref, mismatchLeft_);
 
+  // TODO : Use the logger here!
   if (logLike == salmon::math::LOG_0) {
     std::lock_guard<std::mutex> lock(outputMutex_);
     std::cerr << "error log likelihood: " << logLike << "\n";
@@ -146,16 +147,16 @@ void ErrorModel::update(const UnpairedRead& hit, Transcript& ref, double p,
   if (BOOST_UNLIKELY(!isEnabled_)) {
     return;
   }
-  bam_seq_t* leftRead = hit.read;
+  SamRecord* leftRead = hit.read;
   update(leftRead, ref, p, mass, mismatchLeft_);
 }
 
-void ErrorModel::update(bam_seq_t* read, Transcript& ref, double p, double mass,
+void ErrorModel::update(SamRecord* read, Transcript& ref, double p, double mass,
                         std::vector<AtomicMatrix<double>>& mismatchProfile) {
   using namespace salmon::stringtools;
   bool useQual{false};
   size_t readIdx{0};
-  auto transcriptIdx = bam_pos(read);
+  auto transcriptIdx = combinelab::samutils::bam_pos(read);
   size_t transcriptLen = ref.RefLength;
   // if the read starts before the beginning of the transcript,
   // only consider the part overlapping the transcript
@@ -172,15 +173,15 @@ void ErrorModel::update(bam_seq_t* read, Transcript& ref, double p, double mass,
         salmon::stringtools::strand::forward;
 
     uint32_t numMismatch{0};
-    uint8_t* qseq = reinterpret_cast<uint8_t*>(bam_seq(read));
-    uint8_t* qualStr = reinterpret_cast<uint8_t*>(bam_qual(read));
-    size_t readLen = static_cast<size_t>(bam_seq_len(read));
+    uint8_t* qseq = reinterpret_cast<uint8_t*>(combinelab::samutils::bam_seq(read));
+    uint8_t* qualStr = reinterpret_cast<uint8_t*>(combinelab::samutils::bam_qual(read));
+    size_t readLen = static_cast<size_t>(combinelab::samutils::bam_seq_len(read));
     size_t basesChecked = 0;
     size_t numInc = std::min(transcriptLen - uTranscriptIdx, readLen - readIdx);
     while (basesChecked < numInc) {
-      size_t curReadBase = samToTwoBit[bam_seqi(qseq, readIdx)];
+      size_t curReadBase = samToTwoBit[combinelab::samutils::bam_seqi(qseq, readIdx)];
       size_t prevReadBase =
-          (readIdx > 0) ? samToTwoBit[bam_seqi(qseq, readIdx - 1)] : 0;
+        (readIdx > 0) ? samToTwoBit[combinelab::samutils::bam_seqi(qseq, readIdx - 1)] : 0;
       size_t refBase = samToTwoBit[ref.baseAt(uTranscriptIdx, readStrand)];
       size_t index = prevReadBase + refBase;
       if (curReadBase != refBase) {
@@ -242,9 +243,9 @@ void ErrorModel::update(const ReadPair& hit, Transcript& ref, double p,
   }
 
   bam_seq_t* leftRead =
-      (bam_pos(hit.read1) < bam_pos(hit.read2)) ? hit.read1 : hit.read2;
+    (combinelab::samutils::bam_pos(hit.read1) < combinelab::samutils::bam_pos(hit.read2)) ? hit.read1 : hit.read2;
   bam_seq_t* rightRead =
-      (bam_pos(hit.read1) < bam_pos(hit.read2)) ? hit.read2 : hit.read1;
+    (combinelab::samutils::bam_pos(hit.read1) < combinelab::samutils::bam_pos(hit.read2)) ? hit.read2 : hit.read1;
 
   if (leftRead) {
     update(leftRead, ref, p, mass, mismatchLeft_);

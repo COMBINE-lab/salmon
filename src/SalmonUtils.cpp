@@ -40,8 +40,7 @@
 #include "GenomicFeature.hpp"
 #include "SGSmooth.hpp"
 #include "TranscriptGeneMap.hpp"
-
-#include "StadenUtils.hpp"
+//#include "StadenUtils.hpp"
 
 namespace salmon {
 namespace utils {
@@ -65,28 +64,28 @@ std::string str(const MappingType& mt) {
   return "E";
 }
 
-bool headersAreConsistent(SAM_hdr* h1, SAM_hdr* h2) {
+bool headersAreConsistent(SamHeader* h1, SamHeader* h2) {
 
   bool consistent{true};
   // Both files must contain the same number of targets
-  if (h1->nref != h2->nref) {
+  if (h1->n_targets != h2->n_targets) {
     consistent = false;
   }
 
   // Check each target to ensure that the name and length are the same.
-  size_t i = 0;
-  size_t n = h1->nref;
+  uint32_t i = 0;
+  uint32_t n = h1->n_targets;
   while (consistent and i < n) {
-    size_t l1 = h1->ref[i].len;
-    size_t l2 = h2->ref[i].len;
-    consistent = (l1 == l2) and (strcmp(h1->ref[i].name, h2->ref[i].name) == 0);
+    size_t l1 = combinelab::samutils::header_get_ref_len(h1, i);//->ref[i].len;
+    size_t l2 = combinelab::samutils::header_get_ref_len(h2, i);//->ref[i].len;
+    consistent = (l1 == l2) and (strcmp(combinelab::samutils::header_get_ref_name(h1, i), combinelab::samutils::header_get_ref_name(h2, i)) == 0);
     ++i;
   }
 
   return consistent;
 }
 
-bool headersAreConsistent(std::vector<SAM_hdr*>&& headers) {
+bool headersAreConsistent(std::vector<SamHeader*>&& headers) {
   if (headers.size() == 1) {
     return true;
   }
@@ -898,7 +897,8 @@ bool peekBAMIsPaired(const boost::filesystem::path& file) {
     readMode = "rb";
   }
 
-  auto* fp = scram_open(file.c_str(), readMode.c_str());
+  htsFormat fmt;
+  auto* fp = sam_open_format(file.c_str(), readMode.c_str(), &fmt);
 
   // If we couldn't open the file, then report this and exit.
   if (fp == NULL) {
@@ -908,25 +908,32 @@ bool peekBAMIsPaired(const boost::filesystem::path& file) {
     return false;
   }
 
-  bam_seq_t* read = nullptr;
-  read = staden::utils::bam_init();
+  SamRecord* read = nullptr;
+  read = combinelab::samutils::bam_init();
+  auto* header = sam_hdr_read(fp);
 
-  bool didRead = (scram_get_seq(fp, &read) >= 0);
+  //bool didRead = (scram_get_seq(fp, &read) >= 0);
+  //(sam_read1(fp_, hdr_, &sread.read) >= 0);
+  bool didRead = (sam_read1(fp, header, read) >= 0);
   bool isPaired{false};
 
   if (didRead) {
-    isPaired = bam_flag(read) & BAM_FPAIRED;
+    isPaired = combinelab::samutils::bam_flag(read) & BAM_FPAIRED;
   } else {
     fmt::MemoryWriter errstr;
     errstr << "ERROR: Failed to read alignment from " << file.string()
            << ", exiting!\n";
-    staden::utils::bam_destroy(read);
+    combinelab::samutils::bam_destroy(read);
+    //staden::utils::bam_destroy(read);
     throw std::invalid_argument(errstr.str());
     return false;
   }
 
-  scram_close(fp);
-  staden::utils::bam_destroy(read);
+  auto logger = spdlog::get("jointLog");
+  combinelab::samutils::closeOrDie(fp, logger);
+  bam_hdr_destroy(header);
+  //scram_close(fp);
+  //staden::utils::bam_destroy(read);
   return isPaired;
 }
 

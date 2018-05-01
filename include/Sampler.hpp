@@ -1,12 +1,16 @@
 #ifndef __SAMPLER__HPP__
 #define __SAMPLER__HPP__
 
+#include "SamTypes.hpp"
+
+/*
 extern "C" {
 #include "io_lib/os.h"
 #include "io_lib/scram.h"
 #undef max
 #undef min
 }
+*/
 
 // for cpp-format
 #include "spdlog/fmt/fmt.h"
@@ -414,10 +418,23 @@ bool sampleLibrary(AlignmentLibraryT<FragT>& alnLib,
   std::thread outputThread(
       [&consumedAllInput, &alnLib, &outQueue, &log, sampleFilePath]() -> void {
 
-        scram_fd* bf = scram_open(sampleFilePath.c_str(), "wb");
-        scram_set_option(bf, CRAM_OPT_NTHREADS, 3);
-        scram_set_header(bf, alnLib.header());
-        scram_write_header(bf);
+        // libstaden
+        // scram_fd* bf = scram_open(sampleFilePath.c_str(), "wb");
+        // scram_set_option(bf, CRAM_OPT_NTHREADS, 3);
+        // scram_set_header(bf, alnLib.header());
+        // scram_write_header(bf);
+
+        // samtools
+        // TODO : Make sure we are using the threadpool to write with multiple threads here
+        htsFormat fmt;
+        SamFile* bf = sam_open_format(sampleFilePath.c_str(), "wb", &fmt);
+        auto* hdr = alnLib.header();
+        int ret = sam_hdr_write(bf, alnLib.header());
+        if (ret != 0) {
+          log->error("Could not write header to file {}; exiting.  Please consider reporting this via GitHub", sampleFilePath.c_str());
+          std::exit(1);
+        }
+
         if (bf == nullptr) {
           fmt::MemoryWriter errstr;
           errstr << ioutils::SET_RED << "ERROR: " << ioutils::RESET_COLOR
@@ -431,7 +448,7 @@ bool sampleLibrary(AlignmentLibraryT<FragT>& alnLib,
         while (!outQueue.empty() or !consumedAllInput) {
           while (outQueue.try_pop(aln)) {
             if (aln != nullptr) {
-              int ret = aln->writeToFile(bf);
+              int ret = aln->writeToFile(bf, hdr);
               if (ret != 0) {
                 std::cerr << "ret = " << ret << "\n";
                 fmt::MemoryWriter errstr;
@@ -454,7 +471,10 @@ bool sampleLibrary(AlignmentLibraryT<FragT>& alnLib,
           }
         }
 
-        scram_close(bf); // will delete the header itself
+        // libstaden
+        // scram_close(bf); // will delete the header itself
+        combinelab::samutils::closeOrDie(bf, log);
+        bf = nullptr;
       });
 
   BAMQueue<FragT>& bq = alnLib.getAlignmentGroupQueue();

@@ -1,8 +1,8 @@
 
-extern "C" {
-#include "io_lib/os.h"
-#include "io_lib/scram.h"
-}
+//extern "C" {
+//#include "io_lib/os.h"
+//#include "io_lib/scram.h"
+//}
 
 // for cpp-format
 #include "spdlog/fmt/fmt.h"
@@ -36,6 +36,7 @@ extern "C" {
 #include <boost/program_options.hpp>
 #include <boost/timer/timer.hpp>
 
+#include "SamTypes.hpp"
 #include "AlignmentLibrary.hpp"
 #include "BAMQueue.hpp"
 #include "ClusterForest.hpp"
@@ -509,14 +510,14 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
             transcript.setLastTimestepUpdated(currentMinibatchTimestep);
 
             // ---- Collect seq-specific bias samples ------ //
-            auto getCIGARLength = [](bam_seq_t* s) -> uint32_t {
-              auto cl = bam_cigar_len(s);
+            auto getCIGARLength = [](SamRecord* s) -> uint32_t {
+              auto cl = combinelab::samutils::bam_cigar_len(s);
               decltype(cl) k, end;
               end = 0; // bam_pos(s);
-              uint32_t* cigar = bam_cigar(s);
+              uint32_t* cigar = combinelab::samutils::bam_cigar(s);
               for (k = 0; k < cl; ++k) {
-                int op = cigar[k] & BAM_CIGAR_MASK;
-                if (BAM_CONSUME_SEQ(op)) {
+                auto op = combinelab::samutils::get_cigar_op(cigar[k] & BAM_CIGAR_MASK);
+                if (combinelab::samutils::bam_consume_seq(op)) {
                   end += cigar[k] >> BAM_CIGAR_SHIFT;
                 }
               }
@@ -529,16 +530,16 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
               const char* txpEnd = txpStart + transcript.RefLength;
               if (aln->isPaired()) {
                 ReadPair* alnp = reinterpret_cast<ReadPair*>(aln);
-                bam_seq_t* r1 = alnp->read1;
-                bam_seq_t* r2 = alnp->read2;
+                SamRecord* r1 = alnp->read1;
+                SamRecord* r2 = alnp->read2;
                 if (r1 != nullptr and r2 != nullptr) {
-                  int32_t pos1 = bam_pos(r1);
-                  bool fwd1{bam_strand(r1) == 0};
+                  int32_t pos1 = combinelab::samutils::bam_pos(r1);
+                  bool fwd1{combinelab::samutils::bam_strand(r1) == 0};
                   int32_t startPos1 =
                       fwd1 ? pos1 : pos1 + getCIGARLength(r1) - 1;
 
-                  int32_t pos2 = bam_pos(r2);
-                  bool fwd2{bam_strand(r2) == 0};
+                  int32_t pos2 = combinelab::samutils::bam_pos(r2);
+                  bool fwd2{combinelab::samutils::bam_strand(r2) == 0};
                   int32_t startPos2 =
                       fwd2 ? pos2 : pos2 + getCIGARLength(r2) - 1;
 
@@ -591,10 +592,10 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
                 }
               } else { // unpaired read
                 UnpairedRead* alnp = reinterpret_cast<UnpairedRead*>(aln);
-                bam_seq_t* r1 = alnp->read;
+                SamRecord* r1 = alnp->read;
                 if (r1 != nullptr) {
-                  int32_t pos1 = bam_pos(r1);
-                  bool fwd1{bam_strand(r1) == 0};
+                  int32_t pos1 = combinelab::samutils::bam_pos(r1);
+                  bool fwd1{combinelab::samutils::bam_strand(r1) == 0};
                   int32_t startPos1 =
                       fwd1 ? pos1 : pos1 + getCIGARLength(r1) - 1;
 
@@ -650,11 +651,11 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
             if (gcBiasCorrect) {
               if (aln->isPaired()) {
                 ReadPair* alnp = reinterpret_cast<ReadPair*>(aln);
-                bam_seq_t* r1 = alnp->read1;
-                bam_seq_t* r2 = alnp->read2;
+                SamRecord* r1 = alnp->read1;
+                SamRecord* r2 = alnp->read2;
                 if (r1 != nullptr and r2 != nullptr) {
-                  bool fwd1{bam_strand(r1) == 0};
-                  bool fwd2{bam_strand(r2) == 0};
+                  bool fwd1{combinelab::samutils::bam_strand(r1) == 0};
+                  bool fwd2{combinelab::samutils::bam_strand(r2) == 0};
                   int32_t start = alnp->left();
                   int32_t stop = alnp->right();
 
@@ -669,7 +670,7 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
               } else if (expectedLibraryFormat.type == ReadType::SINGLE_END) {
                 // Both expected and observed should be single end here
                 UnpairedRead* alnp = reinterpret_cast<UnpairedRead*>(aln);
-                bam_seq_t* r = alnp->read;
+                SamRecord* r = alnp->read;
                 if (r != nullptr) {
                   bool fwd{alnp->fwd()};
                   // For single-end reads, simply assume that every fragment
@@ -708,11 +709,11 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
               // the "start" position is the leftmost position if
               // we hit the forward strand, and the leftmost
               // position + the read length if we hit the reverse complement
-              bam_seq_t* r = aln->get5PrimeRead();
+              SamRecord* r = aln->get5PrimeRead();
               if (r) {
-                  bool fwd{bam_strand(r) == 0};
-                  int32_t pos{bam_pos(r)};
-                  int32_t startPos = fwd ? pos : pos + bam_seq_len(r);
+              bool fwd{combinelab::samutils::bam_strand(r) == 0};
+              int32_t pos{combinelab::samutils::bam_pos(r)};
+              int32_t startPos = fwd ? pos : pos + combinelab::samutils::bam_seq_len(r);
                   auto dir = salmon::utils::boolToDirection(fwd);
 
                                   if (startPos > 0 and startPos <

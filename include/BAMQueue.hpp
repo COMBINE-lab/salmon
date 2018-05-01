@@ -26,12 +26,14 @@
 #include <boost/timer/timer.hpp>
 #include <tbb/concurrent_queue.h>
 
-extern "C" {
-#include "io_lib/os.h"
-#include "io_lib/scram.h"
-#undef max
-#undef min
-}
+//extern "C" {
+//#include "io_lib/os.h"
+//#include "io_lib/scram.h"
+//#undef max
+//#undef min
+//}
+
+#include "SamTypes.hpp"
 
 /**
  * Simple structure holding info about the alignment file.
@@ -39,8 +41,8 @@ extern "C" {
 struct AlignmentFile {
   boost::filesystem::path fileName;
   std::string readMode;
-  scram_fd* fp;
-  SAM_hdr* header;
+  SamFile* fp;
+  SamHeader* header;
   uint32_t numParseThreads;
 };
 
@@ -58,10 +60,10 @@ public:
   ~BAMQueue();
   void forceEndParsing();
 
-  SAM_hdr* header();
-  SAM_hdr* safeHeader();
+  SamHeader* header();
+  SamHeader* safeHeader();
 
-  std::vector<SAM_hdr*> headers();
+  std::vector<SamHeader*> headers();
 
   template <typename FilterT>
   void start(FilterT filt, bool onlyProcessAmbiguousAlignments = false);
@@ -107,9 +109,9 @@ private:
   LibraryFormat libFmt_;
 
   std::vector<AlignmentFile>::iterator currFile_;
-  scram_fd* fp_ = nullptr;
-  SAM_hdr* hdr_ = nullptr;
-
+  SamFile* fp_ = nullptr;
+  SamHeader* hdr_ = nullptr;
+  SamParserThreadpool tpool_ = {nullptr, 0};
   // htsFile* fp_ = nullptr;
   size_t totalAlignments_;
   size_t numUnaligned_;

@@ -6,12 +6,15 @@
 #include <atomic>
 #include <mutex>
 
-extern "C" {
+#include "SamTypes.hpp"
+/*
+  extern "C" {
 #include "io_lib/os.h"
 #include "io_lib/scram.h"
 #undef max
 #undef min
 }
+*/
 
 struct UnpairedRead;
 struct ReadPair;
@@ -52,9 +55,9 @@ private:
    * These functions, which work directly on bam_seq_t* types, drive the
    * update() and logLikelihood() methods above.
    */
-  void update(bam_seq_t* read, Transcript& ref, double p, double mass,
+  void update(SamRecord* read, Transcript& ref, double p, double mass,
               std::vector<AtomicMatrix<double>>& mismatchProfile);
-  double logLikelihood(bam_seq_t* read, Transcript& ref,
+  double logLikelihood(SamRecord* read, Transcript& ref,
                        std::vector<AtomicMatrix<double>>& mismatchProfile);
 
   // NOTE: Do these need to be concurrent_vectors as before?

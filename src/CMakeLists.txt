@@ -51,7 +51,7 @@ ProgramOptionsGenerator.cpp
 
 set (SALMON_ALIGN_SRCS
 FASTAParser.cpp
-ErrorModel.cpp
+#ErrorModel.cpp
 AlignmentModel.cpp
 FragmentLengthDistribution.cpp
 SalmonQuantifyAlignments.cpp
@@ -72,7 +72,7 @@ GenomicFeature.cpp
 VersionChecker.cpp
 SBModel.cpp
 FastxParser.cpp
-StadenUtils.cpp
+#StadenUtils.cpp
 SalmonUtils.cpp
 DistributionUtils.cpp
 SalmonExceptions.cpp
@@ -150,12 +150,13 @@ target_link_libraries(salmon
     gff
     ${PTHREAD_LIB}
     ${Boost_LIBRARIES}
-    ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
+    #${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
     ${SUFFARRAY64_LIB}
     ${GAT_SOURCE_DIR}/external/install/lib/libjellyfish-2.0.a
     ${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
+    ${GAT_SOURCE_DIR}/external/install/lib/libhts.a
     m
     ${LIBLZMA_LIBRARIES}
     ${BZIP2_LIBRARIES}
@@ -192,9 +193,9 @@ endif()
 
 add_dependencies(salmon_core libcereal)
 add_dependencies(salmon libcereal)
-add_dependencies(alevin_core libstadenio)
-add_dependencies(salmon_core libstadenio)
-add_dependencies(salmon libstadenio)
+add_dependencies(alevin_core libhts)
+add_dependencies(salmon_core libhts)
+add_dependencies(salmon libhts)
 add_dependencies(salmon_core libspdlog)
 add_dependencies(salmon libspdlog)
 add_dependencies(salmon_core libbwa)
@@ -211,12 +212,13 @@ target_link_libraries(unitTests
     gff
     ${PTHREAD_LIB}
     ${Boost_LIBRARIES}
-    ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
+    #${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
     ${SUFFARRAY64_LIB}
     ${GAT_SOURCE_DIR}/external/install/lib/libjellyfish-2.0.a
     ${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
+    #${GAT_SOURCE_DIR}/external/install/lib/libhts.a
     m
     ${LIBLZMA_LIBRARIES}
     ${BZIP2_LIBRARIES}

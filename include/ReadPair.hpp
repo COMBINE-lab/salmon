@@ -5,24 +5,25 @@
 #include "RapMapUtils.hpp"
 #include "SalmonMath.hpp"
 #include "SalmonUtils.hpp"
-#include "StadenUtils.hpp"
+//#include "StadenUtils.hpp"
+#include "SamTypes.hpp"
 
 #include "spdlog/fmt/fmt.h"
 
 struct ReadPair {
-  bam_seq_t* read1 = nullptr;
-  bam_seq_t* read2 = nullptr;
+  SamRecord* read1 = nullptr;
+  SamRecord* read2 = nullptr;
   salmon::utils::OrphanStatus orphanStatus;
   double logProb;
   LibraryFormat libFmt{ReadType::PAIRED_END, ReadOrientation::NONE,
                        ReadStrandedness::U};
 
   ReadPair()
-      : read1(staden::utils::bam_init()), read2(staden::utils::bam_init()),
+      : read1(combinelab::samutils::bam_init()), read2(combinelab::samutils::bam_init()),
         orphanStatus(salmon::utils::OrphanStatus::Paired),
         logProb(salmon::math::LOG_0) {}
 
-  ReadPair(bam_seq_t* r1, bam_seq_t* r2, salmon::utils::OrphanStatus os,
+  ReadPair(SamRecord* r1, SamRecord* r2, salmon::utils::OrphanStatus os,
            double lp, LibraryFormat lf)
       : read1(r1), read2(r2), orphanStatus(os), logProb(lp), libFmt(lf) {}
 
@@ -48,13 +49,14 @@ struct ReadPair {
   ReadPair& operator=(ReadPair& other) = default;
 
   ReadPair* clone() {
-    return new ReadPair(bam_dup(read1), bam_dup(read2), orphanStatus, logProb,
-                        libFmt);
+    return new ReadPair(combinelab::samutils::bam_dup(read1), combinelab::samutils::bam_dup(read2), orphanStatus, logProb, libFmt);
   }
 
   ~ReadPair() {
-    staden::utils::bam_destroy(read1);
-    staden::utils::bam_destroy(read2);
+    combinelab::samutils::bam_destroy(read1);
+    combinelab::samutils::bam_destroy(read2);
+    //staden::utils::bam_destroy(read1);
+    //staden::utils::bam_destroy(read2);
   }
 
   inline LibraryFormat& libFormat() { return libFmt; }
@@ -67,7 +69,7 @@ struct ReadPair {
   inline bool isRightOrphan() const {
     return (orphanStatus == salmon::utils::OrphanStatus::RightOrphan);
   }
-  inline bam_seq_t* get5PrimeRead() {
+  inline SamRecord* get5PrimeRead() {
     return (isPaired() or isLeftOrphan()) ? read1 : nullptr;
   }
 
@@ -87,16 +89,18 @@ struct ReadPair {
   }
 
   inline int32_t pos() const { return left(); }
-  inline bool fwd() const { return !bam_strand(read1); }
+  inline bool fwd() const { return !combinelab::samutils::bam_strand(read1); }
   inline bool isInward() const {
-    bool fw1 = !bam_strand(read1);
-    bool fw2 = !bam_strand(read2);
+    bool fw1 = !combinelab::samutils::bam_strand(read1);
+    bool fw2 = !combinelab::samutils::bam_strand(read2);
     return (fw1 != fw2);
   }
 
   /**
    * returns 0 on success, -1 on failure.
    */
+  // libstaden
+  /*
   int writeToFile(scram_fd* fp) {
     int r1 = scram_put_seq(fp, read1);
     if (r1 == 0 and isPaired()) {
@@ -105,11 +109,21 @@ struct ReadPair {
       return r1;
     }
   }
+  */
+  // samtools
+  int writeToFile(SamFile* fp, SamHeader* hdr) {
+    int r1 = sam_write1(fp, hdr, read1);
+    if (r1 == 0 and isPaired()) {
+      return sam_write1(fp, hdr, read2);
+    } else {
+      return r1;
+    }
+  }
 
-  inline char* getName() const { return bam_name(read1); }
+  inline char* getName() const { return combinelab::samutils::bam_name(read1); }
 
   inline uint32_t getNameLength() {
-    uint32_t l = bam_name_len(read1);
+    uint32_t l = combinelab::samutils::bam_name_len(read1);
     char* r = getName();
     if (l > 2 and r[l - 2] == '/') {
       return l - 2;
@@ -124,14 +138,14 @@ struct ReadPair {
     if (!isPaired()) {
       return 0;
     }
-    bool fw1 = !bam_strand(read1);
-    bool fw2 = !bam_strand(read2);
+    bool fw1 = !combinelab::samutils::bam_strand(read1);
+    bool fw2 = !combinelab::samutils::bam_strand(read2);
     if (fw1 != fw2) {
-      int32_t p1 = fw1 ? bam_pos(read1) : bam_pos(read2);
+      int32_t p1 = fw1 ? combinelab::samutils::bam_pos(read1) : combinelab::samutils::bam_pos(read2);
       p1 = (p1 < 0) ? 0 : p1;
       p1 = (p1 > txpLenSigned) ? txpLenSigned : p1;
-      int32_t p2 = fw1 ? bam_pos(read2) + bam_seq_len(read2)
-                       : bam_pos(read1) + bam_seq_len(read1);
+      int32_t p2 = fw1 ? combinelab::samutils::bam_pos(read2) + combinelab::samutils::bam_seq_len(read2)
+        : combinelab::samutils::bam_pos(read1) + combinelab::samutils::bam_seq_len(read1);
       p2 = (p2 < 0) ? 0 : p2;
       p2 = (p2 > txpLenSigned) ? txpLenSigned : p2;
       return (p1 > p2) ? p1 - p2 : p2 - p1;
@@ -144,13 +158,13 @@ struct ReadPair {
     if (!isPaired()) {
       return 0;
     }
-    auto leftmost1 = bam_pos(read1);
-    auto leftmost2 = bam_pos(read2);
+    auto leftmost1 = combinelab::samutils::bam_pos(read1);
+    auto leftmost2 = combinelab::samutils::bam_pos(read2);
 
     // The length of the mapped read that is "rightmost" w.r.t. the forward
     // strand.
     auto rightmostLen =
-        (leftmost1 < leftmost2) ? bam_seq_len(read2) : bam_seq_len(read1);
+      (leftmost1 < leftmost2) ? combinelab::samutils::bam_seq_len(read2) : combinelab::samutils::bam_seq_len(read1);
     return std::abs(leftmost1 - leftmost2) + rightmostLen;
 
     // return std::abs(read1->core.isize) + std::abs(read1->core.l_qseq) +
@@ -166,23 +180,23 @@ struct ReadPair {
 
   inline int32_t left() const {
     if (isPaired()) {
-      return std::min(bam_pos(read1), bam_pos(read2));
+      return std::min(combinelab::samutils::bam_pos(read1), combinelab::samutils::bam_pos(read2));
     } else {
-      return bam_pos(read1);
+      return combinelab::samutils::bam_pos(read1);
     }
   }
 
   inline int32_t right() const {
     if (isPaired()) {
-      return std::max(bam_pos(read1) + bam_seq_len(read1),
-                      bam_pos(read2) + bam_seq_len(read2));
+      return std::max(combinelab::samutils::bam_pos(read1) + combinelab::samutils::bam_seq_len(read1),
+                      combinelab::samutils::bam_pos(read2) + combinelab::samutils::bam_seq_len(read2));
     } else {
-      return bam_pos(read1) + bam_seq_len(read1);
+      return combinelab::samutils::bam_pos(read1) + combinelab::samutils::bam_seq_len(read1);
     }
   }
 
   inline ReadType fragType() const { return ReadType::PAIRED_END; }
-  inline int32_t transcriptID() const { return bam_ref(read1); }
+  inline int32_t transcriptID() const { return combinelab::samutils::bam_ref(read1); }
 
   inline double logQualProb() {
     return salmon::math::LOG_1;

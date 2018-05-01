@@ -39,19 +39,19 @@ bool AlignmentModel::hasIndel(ReadPair& hit) {
 
 bool AlignmentModel::hasIndel(UnpairedRead& hit) { return hasIndel(hit.read); }
 
-bool AlignmentModel::hasIndel(bam_seq_t* read) {
-  uint32_t* cigar = bam_cigar(read);
-  uint32_t cigarLen = bam_cigar_len(read);
+bool AlignmentModel::hasIndel(SamRecord* read) {
+  uint32_t* cigar = combinelab::samutils::bam_cigar(read);
+  uint32_t cigarLen = combinelab::samutils::bam_cigar_len(read);
 
   for (uint32_t cigarIdx = 0; cigarIdx < cigarLen; ++cigarIdx) {
     uint32_t opLen = cigar[cigarIdx] >> BAM_CIGAR_SHIFT;
-    enum cigar_op op =
-        static_cast<enum cigar_op>(cigar[cigarIdx] & BAM_CIGAR_MASK);
+    enum combinelab::samutils::CIGAROp op =
+      static_cast<enum combinelab::samutils::CIGAROp>(cigar[cigarIdx] & BAM_CIGAR_MASK);
 
     switch (op) {
-    case BAM_CINS:
+    case combinelab::samutils::OP_CINS:
       return true;
-    case BAM_CDEL:
+    case combinelab::samutils::OP_CDEL:
       return true;
     default:
       break;
@@ -128,78 +128,78 @@ matchStr, std::stringstream& refStr) { using salmon::stringtools::twoBitToChar;
 }
 */
 
-inline void AlignmentModel::setBasesFromCIGAROp_(enum cigar_op op,
+inline void AlignmentModel::setBasesFromCIGAROp_(enum combinelab::samutils::CIGAROp op,
                                                  size_t& curRefBase,
                                                  size_t& curReadBase) {
   switch (op) {
-  case BAM_UNKNOWN:
+  case combinelab::samutils::OP_UNKNOWN:
     std::cerr << "ENCOUNTERED UNKNOWN SYMBOL IN CIGAR STRING!\n";
     break;
-  case BAM_CMATCH:
+  case combinelab::samutils::OP_CMATCH:
     // do nothing
     break;
-  case BAM_CBASE_MATCH:
+  case combinelab::samutils::OP_CBASE_MATCH:
     // do nothing
     break;
-  case BAM_CBASE_MISMATCH:
+  case combinelab::samutils::OP_CBASE_MISMATCH:
     // do nothing
     break;
-  case BAM_CINS:
+  case combinelab::samutils::OP_CINS:
     curRefBase = ALN_DASH;
     break;
-  case BAM_CDEL:
+  case combinelab::samutils::OP_CDEL:
     curReadBase = ALN_DASH;
     break;
-  case BAM_CREF_SKIP:
+  case combinelab::samutils::OP_CREF_SKIP:
     curReadBase = ALN_REF_SKIP;
     break;
-  case BAM_CSOFT_CLIP:
+  case combinelab::samutils::OP_CSOFT_CLIP:
     curRefBase = ALN_SOFT_CLIP;
     break;
-  case BAM_CHARD_CLIP:
+  case combinelab::samutils::OP_CHARD_CLIP:
     curRefBase = ALN_HARD_CLIP;
     curReadBase = ALN_HARD_CLIP;
     break;
-  case BAM_CPAD:
+  case combinelab::samutils::OP_CPAD:
     curRefBase = ALN_PAD;
     curReadBase = ALN_PAD;
     break;
   }
 }
 
-char opToChr(enum cigar_op op) {
+char opToChr(enum combinelab::samutils::CIGAROp op) {
   switch (op) {
-  case BAM_UNKNOWN:
+  case combinelab::samutils::OP_UNKNOWN:
     std::cerr << "ENCOUNTERED UNKNOWN SYMBOL IN CIGAR STRING!\n";
     break;
-  case BAM_CMATCH:
+  case combinelab::samutils::OP_CMATCH:
     // do nothing
     return 'M';
     break;
-  case BAM_CBASE_MATCH:
+  case combinelab::samutils::OP_CBASE_MATCH:
     // do nothing
     return 'M';
     break;
-  case BAM_CBASE_MISMATCH:
+  case combinelab::samutils::OP_CBASE_MISMATCH:
     // do nothing
     return 'M';
     break;
-  case BAM_CINS:
+  case combinelab::samutils::OP_CINS:
     return 'I';
     break;
-  case BAM_CDEL:
+  case combinelab::samutils::OP_CDEL:
     return 'D';
     break;
-  case BAM_CREF_SKIP:
+  case combinelab::samutils::OP_CREF_SKIP:
     return 'S';
     break;
-  case BAM_CSOFT_CLIP:
+  case combinelab::samutils::OP_CSOFT_CLIP:
     return 'c';
     break;
-  case BAM_CHARD_CLIP:
+  case combinelab::samutils::OP_CHARD_CLIP:
     return 'C';
     break;
-  case BAM_CPAD:
+  case combinelab::samutils::OP_CPAD:
     return 'P';
     break;
   }
@@ -207,12 +207,12 @@ char opToChr(enum cigar_op op) {
 }
 
 double AlignmentModel::logLikelihood(
-    bam_seq_t* read, Transcript& ref,
+    SamRecord* read, Transcript& ref,
     std::vector<AtomicMatrix<double>>& transitionProbs) {
   using namespace salmon::stringtools;
   bool useQual{false};
   size_t readIdx{0};
-  auto transcriptIdx = bam_pos(read);
+  auto transcriptIdx = combinelab::samutils::bam_pos(read);
   size_t transcriptLen = ref.RefLength;
   // if the read starts before the beginning of the transcript,
   // only consider the part overlapping the transcript
@@ -233,11 +233,11 @@ double AlignmentModel::logLikelihood(
 
   // std::stringstream readStream, matchStream, refStream;
 
-  uint32_t* cigar = bam_cigar(read);
-  uint32_t cigarLen = bam_cigar_len(read);
-  uint8_t* qseq = reinterpret_cast<uint8_t*>(bam_seq(read));
-  uint8_t* qualStr = reinterpret_cast<uint8_t*>(bam_qual(read));
-  int32_t readLen = bam_seq_len(read);
+  uint32_t* cigar = combinelab::samutils::bam_cigar(read);
+  uint32_t cigarLen = combinelab::samutils::bam_cigar_len(read);
+  uint8_t* qseq = reinterpret_cast<uint8_t*>(combinelab::samutils::bam_seq(read));
+  uint8_t* qualStr = reinterpret_cast<uint8_t*>(combinelab::samutils::bam_qual(read));
+  int32_t readLen = combinelab::samutils::bam_seq_len(read);
 
   if (cigarLen == 0 or !cigar) {
     return salmon::math::LOG_EPSILON;
@@ -252,13 +252,13 @@ double AlignmentModel::logLikelihood(
   uint32_t cigarIdx{0};
   uint32_t prevStateIdx{startStateIdx};
   uint32_t curStateIdx{0};
-  double invLen = static_cast<double>(readBins_) / bam_seq_len(read);
+  double invLen = static_cast<double>(readBins_) / combinelab::samutils::bam_seq_len(read);
 
   for (uint32_t cigarIdx = 0; cigarIdx < cigarLen; ++cigarIdx) {
     uint32_t opLen = cigar[cigarIdx] >> BAM_CIGAR_SHIFT;
-    enum cigar_op op =
-        static_cast<enum cigar_op>(cigar[cigarIdx] & BAM_CIGAR_MASK);
-    size_t curReadBase = samToTwoBit[bam_seqi(qseq, readIdx)];
+    enum combinelab::samutils::CIGAROp op =
+      static_cast<enum combinelab::samutils::CIGAROp>(cigar[cigarIdx] & BAM_CIGAR_MASK);
+    size_t curReadBase = samToTwoBit[combinelab::samutils::BAMSeqI(qseq, readIdx)];
     size_t curRefBase = samToTwoBit[ref.baseAt(uTranscriptIdx, readStrand)];
     advanceInRead = false;
     advanceInReference = false;
@@ -271,19 +271,19 @@ double AlignmentModel::logLikelihood(
             logger_->warn("(in logLikelihood()) CIGAR string for read [{}] "
                           "seems inconsistent. It refers to non-existant "
                           "positions in the read!",
-                          bam_name(read));
+                          combinelab::samutils::bam_name(read));
             std::stringstream cigarStream;
             for (size_t j = 0; j < cigarLen; ++j) {
               uint32_t opLen = cigar[j] >> BAM_CIGAR_SHIFT;
-              enum cigar_op op =
-                  static_cast<enum cigar_op>(cigar[j] & BAM_CIGAR_MASK);
+              enum combinelab::samutils::CIGAROp op =
+                static_cast<enum combinelab::samutils::CIGAROp>(cigar[j] & BAM_CIGAR_MASK);
               cigarStream << opLen << opToChr(op);
             }
             logger_->warn("(in logLikelihood()) CIGAR = {}", cigarStream.str());
           }
           return logLike;
         }
-        curReadBase = samToTwoBit[bam_seqi(qseq, readIdx)];
+        curReadBase = samToTwoBit[combinelab::samutils::BAMSeqI(qseq, readIdx)];
         readPosBin = static_cast<uint32_t>((readIdx * invLen));
         advanceInRead = false;
       }
@@ -296,8 +296,8 @@ double AlignmentModel::logLikelihood(
                 "seems inconsistent. It refers to non-existant "
                 "positions in the reference! Transcript name "
                 "is {}, length is {}, id is {}. Read things refid is {}",
-                bam_name(read), ref.RefName, transcriptLen, ref.id,
-                bam_ref(read));
+                combinelab::samutils::bam_name(read), ref.RefName, transcriptLen, ref.id,
+                combinelab::samutils::bam_ref(read));
           }
           return logLike;
         }
@@ -311,11 +311,11 @@ double AlignmentModel::logLikelihood(
       double tp = transitionProbs[readPosBin](prevStateIdx, curStateIdx);
       logLike += tp;
       prevStateIdx = curStateIdx;
-      if (BAM_CONSUME_SEQ(op)) {
+      if (combinelab::samutils::bam_consume_seq(op)) {
         ++readIdx;
         advanceInRead = true;
       }
-      if (BAM_CONSUME_REF(op)) {
+      if (combinelab::samutils::bam_consume_ref(op)) {
         ++uTranscriptIdx;
         advanceInReference = true;
       }
@@ -349,13 +349,13 @@ double AlignmentModel::logLikelihood(const ReadPair& hit, Transcript& ref) {
     }
   }
 
-  bam_seq_t* leftRead =
-      (bam_pos(hit.read1) < bam_pos(hit.read2)) ? hit.read1 : hit.read2;
-  bam_seq_t* rightRead =
-      (bam_pos(hit.read1) < bam_pos(hit.read2)) ? hit.read2 : hit.read1;
+  SamRecord* leftRead =
+    (combinelab::samutils::bam_pos(hit.read1) < combinelab::samutils::bam_pos(hit.read2)) ? hit.read1 : hit.read2;
+  SamRecord* rightRead =
+    (combinelab::samutils::bam_pos(hit.read1) < combinelab::samutils::bam_pos(hit.read2)) ? hit.read2 : hit.read1;
 
-  size_t leftLen = static_cast<size_t>(bam_seq_len(leftRead));
-  size_t rightLen = static_cast<size_t>(bam_seq_len(rightRead));
+  size_t leftLen = static_cast<size_t>(combinelab::samutils::bam_seq_len(leftRead));
+  size_t rightLen = static_cast<size_t>(combinelab::samutils::bam_seq_len(rightRead));
 
   if (leftRead) {
     logLike += logLikelihood(leftRead, ref, transitionProbsLeft_);
@@ -379,8 +379,8 @@ double AlignmentModel::logLikelihood(const UnpairedRead& hit, Transcript& ref) {
     return logLike;
   }
 
-  bam_seq_t* read = hit.read;
-  size_t readLen = static_cast<size_t>(bam_seq_len(read));
+  SamRecord* read = hit.read;
+  size_t readLen = static_cast<size_t>(combinelab::samutils::bam_seq_len(read));
   // NOTE: Raise a warning in this case?
   /*
   if (BOOST_UNLIKELY(readLen > maxExpectedLen_)) {
@@ -406,17 +406,17 @@ void AlignmentModel::update(const UnpairedRead& hit, Transcript& ref, double p,
   if (BOOST_UNLIKELY(!isEnabled_)) {
     return;
   }
-  bam_seq_t* leftRead = hit.read;
+  SamRecord* leftRead = hit.read;
   update(leftRead, ref, p, mass, transitionProbsLeft_);
 }
 
 void AlignmentModel::update(
-    bam_seq_t* read, Transcript& ref, double p, double mass,
+    SamRecord* read, Transcript& ref, double p, double mass,
     std::vector<AtomicMatrix<double>>& transitionProbs) {
   using namespace salmon::stringtools;
   bool useQual{false};
   int32_t readIdx{0};
-  auto transcriptIdx = bam_pos(read);
+  auto transcriptIdx = combinelab::samutils::bam_pos(read);
   size_t transcriptLen = ref.RefLength;
   // if the read starts before the beginning of the transcript,
   // only consider the part overlapping the transcript
@@ -427,11 +427,11 @@ void AlignmentModel::update(
   // unsigned version of transcriptIdx
   size_t uTranscriptIdx = static_cast<size_t>(transcriptIdx);
 
-  uint32_t* cigar = bam_cigar(read);
-  uint32_t cigarLen = bam_cigar_len(read);
-  uint8_t* qseq = reinterpret_cast<uint8_t*>(bam_seq(read));
-  uint8_t* qualStr = reinterpret_cast<uint8_t*>(bam_qual(read));
-  int32_t readLen = bam_seq_len(read);
+  uint32_t* cigar = combinelab::samutils::bam_cigar(read);
+  uint32_t cigarLen = combinelab::samutils::bam_cigar_len(read);
+  uint8_t* qseq = reinterpret_cast<uint8_t*>(combinelab::samutils::bam_seq(read));
+  uint8_t* qualStr = reinterpret_cast<uint8_t*>(combinelab::samutils::bam_qual(read));
+  int32_t readLen = combinelab::samutils::bam_seq_len(read);
 
   if (cigarLen > 0 and cigar) {
 
@@ -448,9 +448,9 @@ void AlignmentModel::update(
 
     for (uint32_t cigarIdx = 0; cigarIdx < cigarLen; ++cigarIdx) {
       uint32_t opLen = cigar[cigarIdx] >> BAM_CIGAR_SHIFT;
-      enum cigar_op op =
-          static_cast<enum cigar_op>(cigar[cigarIdx] & BAM_CIGAR_MASK);
-      size_t curReadBase = samToTwoBit[bam_seqi(qseq, readIdx)];
+      enum combinelab::samutils::CIGAROp op =
+        static_cast<enum combinelab::samutils::CIGAROp>(cigar[cigarIdx] & BAM_CIGAR_MASK);
+      size_t curReadBase = samToTwoBit[combinelab::samutils::BAMSeqI(qseq, readIdx)];
       size_t curRefBase = samToTwoBit[ref.baseAt(uTranscriptIdx, readStrand)];
       advanceInRead = false;
       advanceInReference = false;
@@ -463,19 +463,19 @@ void AlignmentModel::update(
               logger_->warn("(in update()) CIGAR string for read [{}] "
                             "seems inconsistent. It refers to non-existant "
                             "positions in the read!",
-                            bam_name(read));
+                            combinelab::samutils::bam_name(read));
               std::stringstream cigarStream;
               for (size_t j = 0; j < cigarLen; ++j) {
                 uint32_t opLen = cigar[j] >> BAM_CIGAR_SHIFT;
-                enum cigar_op op =
-                    static_cast<enum cigar_op>(cigar[j] & BAM_CIGAR_MASK);
+                enum combinelab::samutils::CIGAROp op =
+                  static_cast<enum combinelab::samutils::CIGAROp>(cigar[j] & BAM_CIGAR_MASK);
                 cigarStream << opLen << opToChr(op);
               }
               logger_->warn("CIGAR = {}", cigarStream.str());
             }
             return;
           }
-          curReadBase = samToTwoBit[bam_seqi(qseq, readIdx)];
+          curReadBase = samToTwoBit[combinelab::samutils::BAMSeqI(qseq, readIdx)];
           readPosBin = static_cast<uint32_t>((readIdx * invLen));
           advanceInRead = false;
         }
@@ -488,8 +488,8 @@ void AlignmentModel::update(
                   "seems inconsistent. It refers to non-existant "
                   "positions in the reference! Transcript name "
                   "is {}, length is {}, id is {}. Read things refid is {}",
-                  bam_name(read), ref.RefName, transcriptLen, ref.id,
-                  bam_ref(read));
+                  combinelab::samutils::bam_name(read), ref.RefName, transcriptLen, ref.id,
+                  combinelab::samutils::bam_ref(read));
             }
             return;
           }
@@ -507,24 +507,24 @@ void AlignmentModel::update(
                                               mass + p);
 
         prevStateIdx = curStateIdx;
-        if (BAM_CONSUME_SEQ(op)) {
+        if (combinelab::samutils::bam_consume_seq(op)) {
           ++readIdx;
           advanceInRead = true;
           /* DEBUG -- print what happened
-             std::cerr << "read name = " << bam_name(read) << "\n";
+             std::cerr << "read name = " << combinelab::samutils::bam_name(read) << "\n";
              std::cerr << "curReadBase = " << readIdx << "\n";
-             std::cerr << "readLen = " << bam_seq_len(read) << "\n";
+             std::cerr << "readLen = " << combinelab::samutils::bam_seq_len(read) << "\n";
              std::cerr << "ref = ";
              for (size_t j = 0; j <
-             std::min(static_cast<size_t>(bam_seq_len(read)),
+             std::min(static_cast<size_t>(combinelab::samutils::bam_seq_len(read)),
              static_cast<size_t>(transcriptLen - transcriptIdx)); ++j) {
              std::cerr << salmon::stringtools::samCodeToChar[ref.baseAt(j,
              readStrand)];
              }
              std::cerr << "\n";
              std::cerr << "read = ";
-             for (size_t j = 0; j < bam_seq_len(read); ++j) {
-             std::cerr << salmon::stringtools::samCodeToChar[bam_seqi(qseq, j)];
+             for (size_t j = 0; j < combinelab::samutils::bam_seq_len(read); ++j) {
+             std::cerr << salmon::stringtools::samCodeToChar[combinelab::samutils::BAMSeqI(qseq, j)];
              }
              std::cerr << "\nCIGAR = ";
              for (size_t j = 0; j < cigarLen; ++j) {
@@ -535,7 +535,7 @@ void AlignmentModel::update(
              std::cerr << "\n";
              */
         }
-        if (BAM_CONSUME_REF(op)) {
+        if (combinelab::samutils::bam_consume_ref(op)) {
           ++uTranscriptIdx;
           advanceInReference = true;
         }
@@ -554,17 +554,17 @@ void AlignmentModel::update(const ReadPair& hit, Transcript& ref, double p,
   }
 
   if (hit.isPaired()) {
-    bam_seq_t* leftRead =
-        (bam_pos(hit.read1) < bam_pos(hit.read2)) ? hit.read1 : hit.read2;
-    bam_seq_t* rightRead =
-        (bam_pos(hit.read1) < bam_pos(hit.read2)) ? hit.read2 : hit.read1;
+    SamRecord* leftRead =
+      (combinelab::samutils::bam_pos(hit.read1) < combinelab::samutils::bam_pos(hit.read2)) ? hit.read1 : hit.read2;
+    SamRecord* rightRead =
+      (combinelab::samutils::bam_pos(hit.read1) < combinelab::samutils::bam_pos(hit.read2)) ? hit.read2 : hit.read1;
     update(leftRead, ref, p, mass, transitionProbsLeft_);
     update(rightRead, ref, p, mass, transitionProbsRight_);
   } else if (hit.isLeftOrphan()) {
-    bam_seq_t* read = hit.read1;
+    SamRecord* read = hit.read1;
     update(read, ref, p, mass, transitionProbsLeft_);
   } else if (hit.isRightOrphan()) {
-    bam_seq_t* read = hit.read1;
+    SamRecord* read = hit.read1;
     update(read, ref, p, mass, transitionProbsRight_);
   }
 }

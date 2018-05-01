@@ -259,8 +259,6 @@ ExternalProject_Add(liblzma
 # Tell cmake that the external project generated a library so we can
 # add dependencies here instead of later
 set (LIBLZMA_LIBRARIES ${GAT_SOURCE_DIR}/external/install/lib/liblzma.a)
-set (LIBSTADEN_LDFLAGS "-L${GAT_SOURCE_DIR}/external/install/lib")
-set (LIBSTADEN_CFLAGS "-I${GAT_SOURCE_DIR}/external/install/include")
 set (FETCHED_LIBLZMA TRUE)
 else()
     message("Found liblzma library: ${LIBLZMA_LIBRARIES}")
@@ -288,8 +286,10 @@ ExternalProject_Add(libbz2
 # Tell cmake that the external project generated a library so we can
 # add dependencies here instead of later
 set (BZIP2_LIBRARIES ${GAT_SOURCE_DIR}/external/install/lib/libbz2.a)
-set (LIBSTADEN_LDFLAGS "-L${GAT_SOURCE_DIR}/external/install/lib -I${GAT_SOURCE_DIR}/external/install/include")
-set (LIBSTADEN_CFLAGS "-I${GAT_SOURCE_DIR}/external/install/include")
+set (LIBSAMTOOLS_LDFLAGS "-L${GAT_SOURCE_DIR}/external/install/lib -I${GAT_SOURCE_DIR}/external/install/include")
+set (LIBSAMTOOLS_CFLAGS "-L${GAT_SOURCE_DIR}/external/install/include")
+#set (LIBSTADEN_LDFLAGS "-L${GAT_SOURCE_DIR}/external/install/lib -I${GAT_SOURCE_DIR}/external/install/include")
+#set (LIBSTADEN_CFLAGS "-I${GAT_SOURCE_DIR}/external/install/include")
 set (FETCHED_LIBBZ2 TRUE)
 else()
     message("Found libbz2 library: ${BZIP2_LIBRARIES}")
@@ -458,8 +458,8 @@ ExternalProject_Add(libbwa
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
     #URL https://github.com/COMBINE-lab/bwa/archive/0.7.12.3.tar.gz
     #DOWNLOAD_NAME bwa-master.tar.gz
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/bwa/archive/v0.7.12.5.tar.gz -o bwa-master.tar.gz &&
-                    ${SHASUM} 1ac5661d9e12e9017a47f0264201a75d9128f28dbd9a26952925f7745ddf6036 bwa-master.tar.gz &&
+    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/bwa/archive/v0.7.12.10.tar.gz -o bwa-master.tar.gz &&
+                    ${SHASUM} 81ec7add338e97fae9fa08c20fa7ee012bb0307b8bab294187f12dcffa0dfb1f bwa-master.tar.gz &&
                     mkdir -p bwa-master &&
                     tar -xzvf bwa-master.tar.gz --strip-components=1 -C bwa-master
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/bwa-master
@@ -617,6 +617,8 @@ ExternalProject_Add_Step(libgff makedir
 if (APPLE)
     set(STADEN_INC "-I/usr/local/include")
     set(STADEN_LIB "-L/usr/local/lib")
+    set(HTS_INC "-I/usr/local/include")
+    set(HTS_LIB "-L/usr/local/lib")
 endif()
 
 if (CONDA_BUILD)
@@ -625,25 +627,41 @@ else ()
   set(LZFLAG "")
 endif (CONDA_BUILD)
 
-message("Build system will compile Staden IOLib")
+message("Build system will compile HTSLib")
 message("==================================================================")
-ExternalProject_Add(libstadenio
+ExternalProject_Add(libhts
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/staden-io_lib/archive/v1.14.8.1.tar.gz -o staden-io_lib-v1.14.8.tar.gz &&
-                     ${SHASUM} f6f30eefa478cfb708f3109a35fb6ffa0e24951d9d971985df2cef5919dd0bc3 staden-io_lib-v1.14.8.tar.gz &&
-                     mkdir -p staden-io_lib-1.14.8 &&
-                     tar -xzf staden-io_lib-v1.14.8.tar.gz --strip-components=1 -C staden-io_lib-1.14.8 &&
-                     rm -fr staden-io_lib &&
-                     mv -f staden-io_lib-1.14.8 staden-io_lib
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/staden-io_lib
+    DOWNLOAD_COMMAND curl -k -L https://github.com/samtools/htslib/releases/download/1.8/htslib-1.8.tar.bz2 -o htslib-1.8.tar.bz2 &&
+                     ${SHASUM} c0ef1eec954a98cc708e9f99f6037db85db45670b52b6ab37abcc89b6c057ca1 htslib-1.8.tar.bz2 &&
+                     bunzip2 htslib-1.8.tar.bz2 &&
+                     tar -xf htslib-1.8.tar
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/htslib-1.8
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    CONFIGURE_COMMAND ./configure --enable-shared=no --without-libcurl --prefix=<INSTALL_DIR> LDFLAGS=${LIBSTADEN_LDFLAGS} CFLAGS=${LIBSTADEN_CFLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
-    BUILD_COMMAND make ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS+=${STADEN_INC} CFLAGS+=${STADEN_LIB} LDFLAGS+=${EXTRA_CMAKE_LIBRARY_FLAGS} CFLAGS+=${EXTRA_CMAKE_INCLUDE_FLAGS} CFLAGS+=${LZFLAG} 
-
-
+    CONFIGURE_COMMAND ./configure --prefix=<INSTALL_DIR> LDFLAGS=${LIBHTS_LDFLAGS} CFLAGS=${LIBHTS_CFLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
+    BUILD_COMMAND make ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS+=${HTS_INC} CFLAGS+=${HTS_LIB} LDFLAGS+=${EXTRA_CMAKE_LIBRARY_FLAGS} CFLAGS+=${EXTRA_CMAKE_INCLUDE_FLAGS} CFLAGS+=${LZFLAG} 
     BUILD_IN_SOURCE 1
     INSTALL_COMMAND make install
 )
+
+# message("Build system will compile Staden IOLib")
+#message("==================================================================")
+#ExternalProject_Add(libstadenio
+#    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+#    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/staden-io_lib/archive/v1.14.8.1.tar.gz -o staden-io_lib-v1.14.8.tar.gz &&
+#                     ${SHASUM} f6f30eefa478cfb708f3109a35fb6ffa0e24951d9d971985df2cef5919dd0bc3 staden-io_lib-v1.14.8.tar.gz &&
+#                     mkdir -p staden-io_lib-1.14.8 &&
+#                     tar -xzf staden-io_lib-v1.14.8.tar.gz --strip-components=1 -C staden-io_lib-1.14.8 &&
+#                     rm -fr staden-io_lib &&
+#                     mv -f staden-io_lib-1.14.8 staden-io_lib
+#    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/staden-io_lib
+#    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
+#    CONFIGURE_COMMAND ./configure --enable-shared=no --without-libcurl --prefix=<INSTALL_DIR> LDFLAGS=${LIBSTADEN_LDFLAGS} CFLAGS=${LIBSTADEN_CFLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
+#    BUILD_COMMAND make ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS+=${STADEN_INC} CFLAGS+=${STADEN_LIB} LDFLAGS+=${EXTRA_CMAKE_LIBRARY_FLAGS} CFLAGS+=${EXTRA_CMAKE_INCLUDE_FLAGS} CFLAGS+=${LZFLAG} 
+#
+#
+#    BUILD_IN_SOURCE 1
+#    INSTALL_COMMAND make install
+#)
 
 message("Build system will fetch SPDLOG")
 message("==================================================================")

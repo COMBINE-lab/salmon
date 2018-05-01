@@ -1,12 +1,13 @@
 #ifndef ALIGNMENT_GROUP
 #define ALIGNMENT_GROUP
 
-extern "C" {
-#include "io_lib/os.h"
-#include "io_lib/scram.h"
-#undef max
-#undef min
-}
+#include "SamTypes.hpp"
+//extern "C" {
+//#include "io_lib/os.h"
+//#include "io_lib/scram.h"
+//#undef max
+//#undef min
+//}
 
 // Cereal includes
 #include "cereal/archives/binary.hpp"

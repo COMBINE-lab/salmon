@@ -52,19 +52,44 @@ BAMQueue<FragT>::BAMQueue(std::vector<boost::filesystem::path>& fnames, LibraryF
             if (fname.extension() == ".bam") {
                 readMode_ = "rb";
             }
-            auto* fp = scram_open(fname.c_str(), readMode_.c_str());
+            // libstaden : 
+            //auto* fp = scram_open(fname.c_str(), readMode_.c_str());
+            // samtools : 
+            htsFormat format = {};
+            auto* fp = sam_open_format(fname.c_str(), readMode_.c_str(), &format);
+
             // If this is the first file, then we'll be parsing it soon.
             // set the number of parse threads.
             if (firstFile) {
-                scram_set_option(fp, CRAM_OPT_NTHREADS, numParseThreads);
+              // libstadent
+              //scram_set_option(fp, CRAM_OPT_NTHREADS, numParseThreads);
+              // samtools
+
+              tpool_.pool = hts_tpool_init(numParseThreads);
+              if (!tpool_.pool) {
+                logger_->error("Error creating HTSLib thread pool.  Salmon will now exit.  "
+                              "Please report this bug via GitHub\n");
+                std::exit(1);
+              }
+
+              hts_set_opt(fp,  HTS_OPT_THREAD_POOL, &tpool_);
             }
-            auto* header = scram_get_header(fp);
-            sam_hdr_incr_ref(header);
+            // libstaden
+            //auto* header = scram_get_header(fp);
+            // libstaden
+            //sam_hdr_incr_ref(header);
+
+            // samtools
+            auto* header = sam_hdr_read(fp);
+
             // If this isn't the first file, then close it.
             // We'll open it again when we need it.
             if (!firstFile) {
-                scram_close(fp);
-                fp = nullptr;
+              // libstaden
+              // scram_close(fp);
+              // samtools
+              combinelab::samutils::closeOrDie(fp, logger_);
+              fp = nullptr;
             }
             files_.push_back({fname, readMode_, fp, header, numParseThreads});
             firstFile = false;
@@ -79,21 +104,28 @@ void BAMQueue<FragT>::reset() {
       fmt::print(stderr, "{} ", file.fileName);
       // make sure that all of the current files are closed
       if (file.fp != nullptr) {
-          scram_close(file.fp);
-          // but make sure we still have a reference to the header!
-          if (file.header == nullptr or file.header->ref_count <= 0) {
-              fmt::MemoryWriter errstr;
-              errstr << "The header for file " << file.fileName.c_str() 
-                     << " was deleted.  This should not happen! exiting!\n";
-              logger_->warn(errstr.str());
-              std::exit(1);
-          }
+        // libstaden
+        //scram_close(file.fp);
+        // samtools
+        combinelab::samutils::closeOrDie(file.fp, logger_);
+        // but make sure we still have a reference to the header!
+        if (file.header == nullptr or file.header->n_targets <= 0) {
+          fmt::MemoryWriter errstr;
+          errstr << "The header for file " << file.fileName.c_str() 
+                 << " was deleted.  This should not happen! exiting!\n";
+          logger_->warn(errstr.str());
+          std::exit(1);
+        }
       }
   }
 
   // re-open the first file
   auto& file = files_.front();
-  file.fp = scram_open(file.fileName.c_str(), file.readMode.c_str());
+  // libstaden
+  // file.fp = scram_open(file.fileName.c_str(), file.readMode.c_str());
+  // samtools
+  htsFormat format = {};
+  file.fp = sam_open_format(file.fileName.c_str(), file.readMode.c_str(), &format);
 
   // If we couldn't open the file, then report this and exit.
   if (file.fp == NULL) {
@@ -102,7 +134,10 @@ void BAMQueue<FragT>::reset() {
     logger_->warn(errstr.str());
     std::exit(1);
   }
-  scram_set_option(file.fp, CRAM_OPT_NTHREADS, file.numParseThreads);
+  // libstaden
+  // scram_set_option(file.fp, CRAM_OPT_NTHREADS, file.numParseThreads);
+  // samtools
+  hts_set_opt(file.fp,  HTS_OPT_THREAD_POOL, &tpool_);
 
   fmt::print(stderr, "] . . . done\n");
   totalAlignments_ = 0;
@@ -123,20 +158,31 @@ BAMQueue<FragT>::~BAMQueue() {
         fmt::print(stderr, "{} ", file.fileName);
         // make sure that all of the current files are closed
         if (file.fp != nullptr) {
-            scram_close(file.fp);
-            file.fp = nullptr;
+          // libstaden
+          // scram_close(file.fp);
+          // samtools
+          combinelab::samutils::closeOrDie(file.fp, logger_);
+          file.fp = nullptr;
        }
        // free the remaining reference to the header
-       if (file.header == nullptr or file.header->ref_count <= 0) {
+        if (file.header == nullptr or file.header->n_targets <= 0) {
             fmt::MemoryWriter errstr;
             errstr << "The header for file " << file.fileName.c_str() 
                 << " was deleted.  This should not happen! exiting!\n";
             logger_->warn(errstr.str());
             std::exit(1);
         } else {
-            sam_hdr_decr_ref(file.header); 
-            file.header = nullptr;
+         // libstadne
+         //sam_hdr_decr_ref(file.header); 
+         // samtools
+         bam_hdr_destroy(file.header);
+         file.header = nullptr;
         }
+    }
+
+    // samtools
+    if (tpool_.pool) {
+      hts_tpool_destroy(tpool_.pool);
     }
 
     fmt::print(stderr, "\nClosed all files . . . ");
@@ -209,11 +255,11 @@ template <typename FragT>
 void BAMQueue<FragT>::forceEndParsing() { doneParsing_ = true; }
 
 template <typename FragT>
-SAM_hdr* BAMQueue<FragT>::header() { return files_.front().header; } 
+SamHeader* BAMQueue<FragT>::header() { return files_.front().header; } 
 
 template <typename FragT>
-std::vector<SAM_hdr*> BAMQueue<FragT>::headers() { 
-    std::vector<SAM_hdr*> hs;
+std::vector<SamHeader*> BAMQueue<FragT>::headers() { 
+    std::vector<SamHeader*> hs;
     for (auto& file : files_) {
         hs.push_back(file.header);
     }
@@ -285,13 +331,13 @@ enum class AlignmentType : uint8_t {
     UnmappedPair = 4
 };
 
-inline AlignmentType getPairedAlignmentType_(bam_seq_t* aln) {
-    bool readIsMapped = !(bam_flag(aln) & BAM_FUNMAP);
-    bool mateIsMapped = !(bam_flag(aln) & BAM_FMUNMAP);
+inline AlignmentType getPairedAlignmentType_(SamRecord* aln) {
+  bool readIsMapped = !(combinelab::samutils::bam_flag(aln) & BAM_FUNMAP);
+  bool mateIsMapped = !(combinelab::samutils::bam_flag(aln) & BAM_FMUNMAP);
 
     if (readIsMapped and mateIsMapped) {
-        if ( bam_flag(aln) & BAM_FPROPER_PAIR ) {
-            if (bam_ref(aln) == bam_mate_ref(aln)) {
+      if ( combinelab::samutils::bam_flag(aln) & BAM_FPROPER_PAIR ) {
+        if (combinelab::samutils::bam_ref(aln) == combinelab::samutils::bam_mate_ref(aln)) {
                 return AlignmentType::MappedConcordantPair;
             } else {
                 // NOTE: It seems like some aligners (e.g. SNAP), currently mark
@@ -326,9 +372,9 @@ inline AlignmentType getPairedAlignmentType_(bam_seq_t* aln) {
     std::exit(1);
 }
 
-inline uint32_t getPairedNameLen(bam_seq_t* read) {
-        uint32_t l = bam_name_len(read);
-        char* r = bam_name(read);
+inline uint32_t getPairedNameLen(SamRecord* read) {
+  uint32_t l = combinelab::samutils::bam_name_len(read);
+  char* r = combinelab::samutils::bam_name(read);
         if ( l > 2  and r[l-2] == '/') {
             return l-2;
         }
@@ -346,7 +392,10 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
     // Until we get a valid pair of reads
     while (!haveValidPair) {
         // Consume a single read
-        didRead1 = (scram_get_seq(fp_, &rpair.read1) >= 0);
+        // libstaden
+        // didRead1 = (scram_get_seq(fp_, &rpair.read1) >= 0);
+        // samtools
+        didRead1 = (sam_read1(fp_, hdr_, rpair.read1) >= 0);
         AlignmentType alnType;
         // If we were able to obtain a read, determine what type
         // of alignment it came from.
@@ -370,10 +419,10 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
                     break;
                     // === end of UnmappedOrphan case
                 case AlignmentType::MappedOrphan:
-                    isFwd = !(bam_strand(rpair.read1));
-                    startPos = bam_pos(rpair.read1); 
+                  isFwd = !(combinelab::samutils::bam_strand(rpair.read1));
+                  startPos = combinelab::samutils::bam_pos(rpair.read1); 
                     rpair.libFmt = salmon::utils::hitType(startPos, isFwd);
-                    rpair.orphanStatus = (bam_flag(rpair.read1) & BAM_FREAD1) ?
+                    rpair.orphanStatus = (combinelab::samutils::bam_flag(rpair.read1) & BAM_FREAD1) ?
                         salmon::utils::OrphanStatus::LeftOrphan :
                         salmon::utils::OrphanStatus::RightOrphan;
                     rpair.logProb = salmon::math::LOG_0;
@@ -402,10 +451,17 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
             }
             // If this was not a properly mapped orphan read, then grab the next
             // read.
-            didRead1 = (scram_get_seq(fp_, &rpair.read1) >= 0);
+            // libstaden
+            // didRead1 = (scram_get_seq(fp_, &rpair.read1) >= 0);
+            // samtools
+            didRead1 = (sam_read1(fp_, hdr_, rpair.read1) >= 0);
+
         }
 
-        didRead2 = (scram_get_seq(fp_, &rpair.read2) >=0);
+        // libstaden
+        // didRead2 = (scram_get_seq(fp_, &rpair.read2) >=0);
+        // samtools
+        didRead2 = (sam_read1(fp_, hdr_, rpair.read2) >= 0);
 
         // If we didn't get a read, then we've exhausted this file. 
         // NOTE: I'm not sure about the *or* condition here. In some cases, we
@@ -413,23 +469,31 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
         // anyway. Figure out what the right thing is to do here.
         if (!didRead1 or !didRead2) { 
             // close the current file
-            scram_close(currFile_->fp);
+            // libstaden
+            // scram_close(currFile_->fp);
+            // samtools
+          combinelab::samutils::closeOrDie(currFile_->fp, logger_);
             currFile_->fp = nullptr;
             // increment the file iterator
             currFile_++;
             // If this is the last file, then we're done
             if (currFile_ == files_.end()) { return false; }
             // Otherwise, start parsing the next file.
-            fp_ = scram_open(currFile_->fileName.c_str(), currFile_->readMode.c_str());
+            // libstaden
+            // fp_ = scram_open(currFile_->fileName.c_str(), currFile_->readMode.c_str());
+            // samtools
+            htsFormat format = {};
+            fp_ = sam_open_format(currFile_->fileName.c_str(), currFile_->readMode.c_str(), &format);
             hdr_ = currFile_->header;
+            hts_set_opt(fp_,  HTS_OPT_THREAD_POOL, &tpool_);
             continue;
         }
 
         // If we expected a paired read, but didn't find one
         // then flip out and quit!
         if (BOOST_UNLIKELY((
-                        !(bam_flag(rpair.read1) & BAM_FPAIRED) or
-                        !(bam_flag(rpair.read2) & BAM_FPAIRED))
+                            !(combinelab::samutils::bam_flag(rpair.read1) & BAM_FPAIRED) or
+                            !(combinelab::samutils::bam_flag(rpair.read2) & BAM_FPAIRED))
                     )) {
             fmt::MemoryWriter errmsg;
             errmsg << "\n\n"
@@ -445,40 +509,40 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
         // have the same name.
         // The names must first have the same length.
         //bool sameName = getPairedNameLen(rpair.read1) == getPairedNameLen(rpair.read2);
-        bool sameName = (bam_name_len(rpair.read1) == bam_name_len(rpair.read2));
+        bool sameName = (combinelab::samutils::bam_name_len(rpair.read1) == combinelab::samutils::bam_name_len(rpair.read2));
         
         // If the lengths are the same, check the actual strings. Use
         // memcmp for efficiency since we know the length.
         if (BOOST_LIKELY(sameName)) {
-            //auto nameLen = getPairedNameLen(rpair.read1);
-            auto nameLen = bam_name_len(rpair.read1);
-            char* qname1 = bam_name(rpair.read1);
-            char* qname2 = bam_name(rpair.read2);
-            sameName = (memcmp(qname1, qname2, nameLen) == 0);
+          //auto nameLen = getPairedNameLen(rpair.read1);
+          auto nameLen = combinelab::samutils::bam_name_len(rpair.read1);
+          char* qname1 = combinelab::samutils::bam_name(rpair.read1);
+          char* qname2 = combinelab::samutils::bam_name(rpair.read2);
+          sameName = (memcmp(qname1, qname2, nameLen) == 0);
         }
         // If we've gotten this far, then the read should be a pair (same name)
         // and should either be concordantly aligned (proper pair) or both unaligned.
         if (BOOST_UNLIKELY(
-                    !sameName or ((bam_flag(rpair.read1) & BAM_FPROPER_PAIR) != (bam_flag(rpair.read2) & BAM_FPROPER_PAIR)))) {
+                           !sameName or ((combinelab::samutils::bam_flag(rpair.read1) & BAM_FPROPER_PAIR) != (combinelab::samutils::bam_flag(rpair.read2) & BAM_FPROPER_PAIR)))) {
             
             fmt::MemoryWriter errmsg;
             errmsg << "\n\n\n";
             errmsg << "WARNING: Detected suspicious pair --- \n";
             if (!sameName) {
                 errmsg << "\tThe names are different:\n";
-                errmsg << "\tread1 : " << bam_name(rpair.read1) << "\n";
-                errmsg << "\tread2 : " << bam_name(rpair.read2) << "\n";
+                errmsg << "\tread1 : " << combinelab::samutils::bam_name(rpair.read1) << "\n";
+                errmsg << "\tread2 : " << combinelab::samutils::bam_name(rpair.read2) << "\n";
             }
-            if((bam_flag(rpair.read1) & BAM_FPROPER_PAIR) != (bam_flag(rpair.read2) & BAM_FPROPER_PAIR)) {
+            if((combinelab::samutils::bam_flag(rpair.read1) & BAM_FPROPER_PAIR) != (combinelab::samutils::bam_flag(rpair.read2) & BAM_FPROPER_PAIR)) {
                 errmsg << "\tThe proper-pair statuses are inconsistent:\n";
-                errmsg << "read1 [" << bam_name(rpair.read1) << "] : " 
-                    << (!(bam_flag(rpair.read1) & BAM_FPROPER_PAIR) ? "no " : "") << "proper-pair; "
-                    << ((bam_flag(rpair.read1) & BAM_FUNMAP) ? "not " : "") << "mapped; mate"
-                    << ((bam_flag(rpair.read1) & BAM_FMUNMAP) ? "not " : "") << "mapped\n\n";
-                errmsg << "read2 : [" << bam_name(rpair.read1) << "] : " 
-                    << (!(bam_flag(rpair.read2) & BAM_FPROPER_PAIR) ? "no " : "") << "proper-pair; "
-                    << ((bam_flag(rpair.read2) & BAM_FUNMAP) ? "not " : "") << "mapped; mate"
-                    << ((bam_flag(rpair.read2) & BAM_FMUNMAP) ? "not " : "") << "mapped\n\n";
+                errmsg << "read1 [" << combinelab::samutils::bam_name(rpair.read1) << "] : " 
+                       << (!(combinelab::samutils::bam_flag(rpair.read1) & BAM_FPROPER_PAIR) ? "no " : "") << "proper-pair; "
+                       << ((combinelab::samutils::bam_flag(rpair.read1) & BAM_FUNMAP) ? "not " : "") << "mapped; mate"
+                       << ((combinelab::samutils::bam_flag(rpair.read1) & BAM_FMUNMAP) ? "not " : "") << "mapped\n\n";
+                errmsg << "read2 : [" << combinelab::samutils::bam_name(rpair.read1) << "] : " 
+                       << (!(combinelab::samutils::bam_flag(rpair.read2) & BAM_FPROPER_PAIR) ? "no " : "") << "proper-pair; "
+                       << ((combinelab::samutils::bam_flag(rpair.read2) & BAM_FUNMAP) ? "not " : "") << "mapped; mate"
+                       << ((combinelab::samutils::bam_flag(rpair.read2) & BAM_FMUNMAP) ? "not " : "") << "mapped\n\n";
             }
             logger_->warn(errmsg.str());
         }
@@ -492,16 +556,16 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
         switch (alnType) {
             case AlignmentType::MappedConcordantPair:
                 haveValidPair = true;
-                if (bam_flag(rpair.read1) & BAM_FREAD2) {
+                if (combinelab::samutils::bam_flag(rpair.read1) & BAM_FREAD2) {
                     std::swap(rpair.read1, rpair.read2);
                 }
 
                 // if the "fragment" is from the forward strand,
                 // the read will map to the reverse strand, and vice-versa
-                isFwd1 = !(bam_flag(rpair.read1) & BAM_FREVERSE);
-                startPos1 = bam_pos(rpair.read1); 
-                isFwd2 = !(bam_flag(rpair.read2) & BAM_FREVERSE);
-                startPos2 = bam_pos(rpair.read2); 
+                isFwd1 = !(combinelab::samutils::bam_flag(rpair.read1) & BAM_FREVERSE);
+                startPos1 = combinelab::samutils::bam_pos(rpair.read1); 
+                isFwd2 = !(combinelab::samutils::bam_flag(rpair.read2) & BAM_FREVERSE);
+                startPos2 = combinelab::samutils::bam_pos(rpair.read2); 
  
                 rpair.libFmt = salmon::utils::hitType(startPos1, isFwd1, 
                                                       startPos2, isFwd2);
@@ -533,24 +597,36 @@ inline bool BAMQueue<FragT>::getFrag_(UnpairedRead& sread, FilterT filt) {
     bool haveValidRead{false};
 
     while (!haveValidRead) {
-        bool didRead = (scram_get_seq(fp_, &sread.read) >= 0);
+      // libstaden
+      // bool didRead = (scram_get_seq(fp_, &sread.read) >= 0);
+        //samtools 
+        bool didRead = (sam_read1(fp_, hdr_, sread.read) >= 0);
+
         // If we didn't get a read, then we've exhausted this file
         if (!didRead) { 
             // close the current file
-            scram_close(currFile_->fp);
+            // libstaden
+            // scram_close(currFile_->fp);
+            // samtools
+            combinelab::samutils::closeOrDie(currFile_->fp, logger_);
             currFile_->fp = nullptr;
             currFile_++;
             // If this is the last file, then we're done
             if (currFile_ == files_.end()) { return false; }
             // Otherwise, start parsing the next file.
-            fp_ = scram_open(currFile_->fileName.c_str(), currFile_->readMode.c_str());
+            // libstaden
+            // fp_ = scram_open(currFile_->fileName.c_str(), currFile_->readMode.c_str());
+            // samtools
+            htsFormat format;
+            fp_ = sam_open_format(currFile_->fileName.c_str(), currFile_->readMode.c_str(), &format);
             hdr_ = currFile_->header;
+            hts_set_opt(fp_,  HTS_OPT_THREAD_POOL, &tpool_);
             continue;
         }
 
-        if (!(bam_flag(sread.read) & BAM_FDUP) and
-            !(bam_flag(sread.read) & BAM_FQCFAIL) and
-            !(bam_flag(sread.read) & BAM_FUNMAP) and
+        if (!(combinelab::samutils::bam_flag(sread.read) & BAM_FDUP) and
+            !(combinelab::samutils::bam_flag(sread.read) & BAM_FQCFAIL) and
+            !(combinelab::samutils::bam_flag(sread.read) & BAM_FUNMAP) and
             sread.transcriptID() >= 0) {
             haveValidRead = true;
         }

@@ -10,13 +10,15 @@
 
 #include "AtomicMatrix.hpp"
 #include "tbb/concurrent_vector.h"
-
+#include "SamTypes.hpp"
+/*
 extern "C" {
 #include "io_lib/os.h"
 #include "io_lib/scram.h"
 #undef max
 #undef min
 }
+*/
 
 struct UnpairedRead;
 struct ReadPair;
@@ -73,7 +75,7 @@ private:
     ALN_REF_SKIP = 8
   };
 
-  void setBasesFromCIGAROp_(enum cigar_op op, size_t& curRefBase,
+  void setBasesFromCIGAROp_(enum combinelab::samutils::CIGAROp op, size_t& curRefBase,
                             size_t& curReadBase);
   // std::stringstream& readStr, std::stringstream& matchStr,
   // std::stringstream& refstr);
@@ -85,14 +87,14 @@ private:
   constexpr static uint32_t startStateIdx = 81;
 
   /**
-   * These functions, which work directly on bam_seq_t* types, drive the
+   * These functions, which work directly on SamRecord* types, drive the
    * update() and logLikelihood() methods above.
    */
-  void update(bam_seq_t* read, Transcript& ref, double p, double mass,
+  void update(SamRecord* read, Transcript& ref, double p, double mass,
               std::vector<AtomicMatrix<double>>& mismatchProfile);
-  double logLikelihood(bam_seq_t* read, Transcript& ref,
+  double logLikelihood(SamRecord* read, Transcript& ref,
                        std::vector<AtomicMatrix<double>>& mismatchProfile);
-  bool hasIndel(bam_seq_t* r);
+  bool hasIndel(SamRecord* r);
 
   // NOTE: Do these need to be concurrent_vectors as before?
   // Store the mismatch probability tables for the left and right reads

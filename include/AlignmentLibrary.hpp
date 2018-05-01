@@ -1,12 +1,12 @@
 #ifndef ALIGNMENT_LIBRARY_HPP
 #define ALIGNMENT_LIBRARY_HPP
 
-extern "C" {
-#include "io_lib/os.h"
-#include "io_lib/scram.h"
-#undef max
-#undef min
-}
+//extern "C" {
+//#include "io_lib/os.h"
+//#include "io_lib/scram.h"
+//#undef max
+//#undef min
+//}
 
 // Our includes
 #include "AlignmentGroup.hpp"
@@ -15,7 +15,7 @@ extern "C" {
 #include "ClusterForest.hpp"
 #include "DistributionUtils.hpp"
 #include "EquivalenceClassBuilder.hpp"
-#include "ErrorModel.hpp"
+//#include "ErrorModel.hpp"
 #include "FASTAParser.hpp"
 #include "FragmentLengthDistribution.hpp"
 #include "FragmentStartPositionDistribution.hpp"
@@ -104,12 +104,12 @@ public:
     }
     std::cerr << "done\n";
 
-    SAM_hdr* header = bq->header();
+    SamHeader* header = bq->header();
 
     // The transcript file existed, so load up the transcripts
     double alpha = 0.005;
-    for (decltype(header->nref) i = 0; i < header->nref; ++i) {
-      transcripts_.emplace_back(i, header->ref[i].name, header->ref[i].len,
+    for (decltype(header->n_targets) i = 0; i < header->n_targets; ++i) {
+      transcripts_.emplace_back(i, combinelab::samutils::header_get_ref_name(header, i), combinelab::samutils::header_get_ref_len(header, i),
                                 alpha);
     }
 
@@ -269,7 +269,7 @@ for (auto& txp : transcripts_) {
 
   // inline t_pool* threadPool() { return threadPool_.get(); }
 
-  inline SAM_hdr* header() { return bq->header(); }
+  inline SamHeader* header() { return bq->header(); }
 
   inline std::vector<FragmentStartPositionDistribution>&
   fragmentStartPositionDistributions() {

@@ -1,12 +1,12 @@
 #ifndef __SALMON_UTILS_HPP__
 #define __SALMON_UTILS_HPP__
 
-extern "C" {
-#include "io_lib/os.h"
-#include "io_lib/scram.h"
-#undef min
-#undef max
-}
+//extern "C" {
+//#include "io_lib/os.h"
+//#include "io_lib/scram.h"
+//#undef min
+//#undef max
+//}
 
 #include <algorithm>
 #include <boost/filesystem.hpp>
@@ -32,6 +32,7 @@ extern "C" {
 #include "ReadLibrary.hpp"
 #include "SalmonConfig.hpp"
 #include "TranscriptGeneMap.hpp"
+#include "SamTypes.hpp"
 
 template <typename EqBuilderT> class ReadExperiment;
 class LibraryFormat;
@@ -212,9 +213,9 @@ enum class OrphanStatus : uint8_t {
   Paired = 2
 };
 
-bool headersAreConsistent(SAM_hdr* h1, SAM_hdr* h2);
+bool headersAreConsistent(SamHeader* h1, SamHeader* h2);
 
-bool headersAreConsistent(std::vector<SAM_hdr*>&& headers);
+bool headersAreConsistent(std::vector<SamHeader*>&& headers);
 
 inline void reverseComplement(const char* s, int32_t l, std::string& o) {
   if (static_cast<decltype(o.size())>(l) > o.size()) {
