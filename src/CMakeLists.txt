@@ -165,6 +165,7 @@ target_link_libraries(salmon
     ${NON_APPLECLANG_LIBS}
     ${FAST_MALLOC_LIB}
     ${LIBRT}
+    z
 )
 
 ##
@@ -213,6 +214,7 @@ target_link_libraries(unitTests
     ${PTHREAD_LIB}
     ${Boost_LIBRARIES}
     #${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
+    ${GAT_SOURCE_DIR}/external/install/lib/libhts.a
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
     ${SUFFARRAY64_LIB}
