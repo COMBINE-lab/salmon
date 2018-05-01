@@ -897,7 +897,7 @@ bool peekBAMIsPaired(const boost::filesystem::path& file) {
     readMode = "rb";
   }
 
-  htsFormat fmt;
+  htsFormat fmt = {};
   auto* fp = sam_open_format(file.c_str(), readMode.c_str(), &fmt);
 
   // If we couldn't open the file, then report this and exit.

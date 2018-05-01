@@ -617,7 +617,7 @@ inline bool BAMQueue<FragT>::getFrag_(UnpairedRead& sread, FilterT filt) {
             // libstaden
             // fp_ = scram_open(currFile_->fileName.c_str(), currFile_->readMode.c_str());
             // samtools
-            htsFormat format;
+            htsFormat format = {};
             fp_ = sam_open_format(currFile_->fileName.c_str(), currFile_->readMode.c_str(), &format);
             hdr_ = currFile_->header;
             hts_set_opt(fp_,  HTS_OPT_THREAD_POOL, &tpool_);

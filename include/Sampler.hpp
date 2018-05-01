@@ -426,7 +426,7 @@ bool sampleLibrary(AlignmentLibraryT<FragT>& alnLib,
 
         // samtools
         // TODO : Make sure we are using the threadpool to write with multiple threads here
-        htsFormat fmt;
+        htsFormat fmt = {};
         SamFile* bf = sam_open_format(sampleFilePath.c_str(), "wb", &fmt);
         auto* hdr = alnLib.header();
         int ret = sam_hdr_write(bf, alnLib.header());
