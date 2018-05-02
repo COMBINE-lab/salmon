@@ -23,6 +23,7 @@ using SamRecord = bam1_t;
 
 namespace combinelab {
   namespace samutils {
+
     enum CIGAROp {
       OP_UNKNOWN=-1,
       OP_CMATCH=0,

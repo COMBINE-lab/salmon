@@ -1459,7 +1459,7 @@ transcript abundance from RNA-seq reads
     // total number of threads - 1.
     uint32_t numParseThreads =
         std::min(uint32_t(6),
-                 std::max(uint32_t(2), uint32_t(std::ceil(numThreads / 2.0))));
+                 std::max(uint32_t(2), uint32_t(std::ceil(numThreads / 4.0))));
     numThreads = std::max(numThreads, numParseThreads);
     uint32_t numQuantThreads =
         std::max(uint32_t(2), uint32_t(numThreads - numParseThreads));
