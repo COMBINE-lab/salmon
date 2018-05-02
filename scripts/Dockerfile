@@ -35,3 +35,8 @@ RUN curl -fsSL get.nextflow.io | bash
 RUN mv nextflow /usr/local/bin/
 
 RUN yum install -y --quiet shasum 
+RUN wget --no-check-certificate https://zlib.net/zlib-1.2.11.tar.gz  && tar xzvf zlib-1.2.11.tar.gz
+WORKDIR "/zlib-1.2.11"
+RUN source /hbb_exe/activate && ./configure --64 --static && make && make install
+WORKDIR "/"
+RUN rm -fr "/zlib-1.2.11"

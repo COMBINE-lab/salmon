@@ -621,8 +621,6 @@ if (APPLE)
     set(HTS_LIB "-L/usr/local/lib")
 endif()
 
-set(LIBHTS_CFLAGS "-fPIC")
-
 if (CONDA_BUILD)
   set(LZFLAG "-lz")
 else ()
