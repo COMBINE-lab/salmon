@@ -178,12 +178,12 @@ namespace alevin {
     void findNeighbors(size_t seqSize,
                        const std::string& barcodeSeq,
                        std::unordered_set<std::string>& neighbors){
-      uint32_t barcodeLength{static_cast<uint32_t>(barcodeSeq.size())};
+      size_t barcodeLength { barcodeSeq.size() };
       std::string newBarcode, nt;
 
       if(barcodeLength > seqSize){
-        std::cout<<"Sequence-Size greater than specified."
-                 <<"Please report the issue on Github.\n" ;
+        std::cout<<"Sequence-Size " << barcodeLength << "greater than specified "
+                 << seqSize <<".\nPlease report the issue on Github.\n" ;
         exit(1);
       }
 
