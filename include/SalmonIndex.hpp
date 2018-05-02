@@ -326,8 +326,8 @@ private:
         std::exit(1);
       }
 
-      seqHash_ = h.seqHash();
-      nameHash_ = h.nameHash();
+      seqHash_ = h.seqHash256();
+      nameHash_ = h.nameHash256();
 
       // Is the quasi-index using a perfect hash
       perfectHashQuasi_ = h.perfectHash();
