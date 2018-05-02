@@ -158,10 +158,9 @@ namespace combinelab {
       return bam_is_rev(bam);
     }
 
-          inline const constexpr int32_t bam_pos(SamRecord* bam) {
-            return ((bam)->core.pos);
-          }
-
+    inline const constexpr int32_t bam_pos(SamRecord* bam) {
+      return ((bam)->core.pos);
+    }
 
   }
 }

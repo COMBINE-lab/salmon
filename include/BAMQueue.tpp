@@ -472,7 +472,7 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
             // libstaden
             // scram_close(currFile_->fp);
             // samtools
-          combinelab::samutils::closeOrDie(currFile_->fp, logger_);
+            combinelab::samutils::closeOrDie(currFile_->fp, logger_);
             currFile_->fp = nullptr;
             // increment the file iterator
             currFile_++;
