@@ -41,7 +41,7 @@ uint32_t neighborCollapse(const size_t& length,
   while(flagged_umis.size() != 0){
     std::vector<uint32_t> collapseList;
     uint64_t qUmiJellyIdx = flagged_umis.front().first;
-    std::string& qUmiStr = flagged_umis.front().second;
+    std::string qUmiStr = flagged_umis.front().second;
     flagged_umis.pop_front();
 
     std::unordered_set<std::string> neighbors;
@@ -52,7 +52,7 @@ uint32_t neighborCollapse(const size_t& length,
     // DON't change int to size_t: stupid wrapper error
     for (int32_t i = vList.size()-1; i>=0; i--){
       uint64_t rUmiJellyIdx = vList[ i ].first;
-      std::string& rUmiStr = vList[ i ].second;
+      std::string rUmiStr = vList[ i ].second;
       auto got = neighbors.find(rUmiStr);
 
       if (got != neighbors.end()){
@@ -163,9 +163,17 @@ uint32_t dedupReads(
   // making a vector umi sequences
   std::vector<std::pair<uint64_t, std::string>> umis;
   alevin::kmer::AlvKmer jellyObj(umiLength);
+  
   for(auto& umi: visitList){
     jellyObj.fromNum(umi);
-    umis.emplace_back(std::make_pair(umi, jellyObj.to_str()));
+    std::string umiseq = jellyObj.to_str();
+    umis.emplace_back(std::make_pair(umi, umiseq));
+    if (umiseq.size() != umiLength){
+        std::cout << "Size mismatch from Jelly Object\n"
+            << "Expected :" << umiLength << "\tGot: " << umiseq.size()
+            << std::flush;
+        exit(1);
+    }
   }
 
   if (umis.size() == 2){
