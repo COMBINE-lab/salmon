@@ -203,8 +203,10 @@ for (auto& txp : transcripts_) {
 
   EQBuilderT& equivalenceClassBuilder() { return eqBuilder_; }
 
-  std::string getIndexSeqHash() const { return ""; }
-  std::string getIndexNameHash() const { return ""; }
+  std::string getIndexSeqHash256() const { return ""; }
+  std::string getIndexNameHash256() const { return ""; }
+  std::string getIndexSeqHash512() const { return ""; }
+  std::string getIndexNameHash512() const { return ""; }
 
   // TODO: Make same as mapping-based
   void updateTranscriptLengthsAtomic(std::atomic<bool>& done) {

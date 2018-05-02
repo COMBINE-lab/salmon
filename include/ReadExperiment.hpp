@@ -172,8 +172,10 @@ public:
 
   EQBuilderT& equivalenceClassBuilder() { return eqBuilder_; }
 
-  std::string getIndexSeqHash() const { return salmonIndex_->seqHash(); }
-  std::string getIndexNameHash() const { return salmonIndex_->nameHash(); }
+  std::string getIndexSeqHash256() const { return salmonIndex_->seqHash256(); }
+  std::string getIndexNameHash256() const { return salmonIndex_->nameHash256(); }
+  std::string getIndexSeqHash512() const { return salmonIndex_->seqHash512(); }
+  std::string getIndexNameHash512() const { return salmonIndex_->nameHash512(); }
 
   std::vector<Transcript>& transcripts() { return transcripts_; }
   const std::vector<Transcript>& transcripts() const { return transcripts_; }
