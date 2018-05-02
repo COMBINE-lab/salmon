@@ -10,7 +10,7 @@ ${ZLIB_INCLUDE_DIR}
 ${TBB_INCLUDE_DIRS}
 ${Boost_INCLUDE_DIRS}
 ${GAT_SOURCE_DIR}/external/install/include/rapmap
-${GAT_SOURCE_DIR}/external/install/include/digestpp
+${GAT_SOURCE_DIR}/external/install/include/rapmap/digestpp
 )
 
 if (JELLYFISH_FOUND)
