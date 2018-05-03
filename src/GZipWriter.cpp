@@ -130,7 +130,8 @@ bool GZipWriter::writeEquivCounts(const SalmonOpts& opts, ExpT& experiment) {
 
 template <typename ExpT>
 bool GZipWriter::writeBFH(boost::filesystem::path& outDir,
-                          ExpT& experiment, size_t umiLength) {
+                          ExpT& experiment, size_t umiLength,
+                          std::vector<std::string>& bcSeqVec) {
   namespace bfs = boost::filesystem;
 
   bfs::path eqFilePath = outDir / "bfh.txt";
@@ -143,11 +144,18 @@ bool GZipWriter::writeBFH(boost::filesystem::path& outDir,
   // Number of transcripts
   equivFile << transcripts.size() << '\n';
 
+  // Number of barcodes
+  equivFile << bcSeqVec.size() << '\n';
+
   // Number of equivalence classes
   equivFile << eqVec.size() << '\n';
 
   for (auto& t : transcripts) {
     equivFile << t.RefName << '\n';
+  }
+
+  for (auto& b : bcSeqVec) {
+    equivFile << b << '\n';
   }
 
   alevin::kmer::AlvKmer jellyObj(umiLength);
