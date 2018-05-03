@@ -40,7 +40,6 @@ extern "C" {
 #include "AlignmentModel.hpp"
 #include "BAMQueue.hpp"
 #include "ClusterForest.hpp"
-#include "ErrorModel.hpp"
 #include "FASTAParser.hpp"
 #include "FragmentLengthDistribution.hpp"
 #include "LibraryFormat.hpp"

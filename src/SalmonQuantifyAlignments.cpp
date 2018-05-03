@@ -53,7 +53,6 @@ extern "C" {
 #include "CollapsedEMOptimizer.hpp"
 #include "CollapsedGibbsSampler.hpp"
 #include "EquivalenceClassBuilder.hpp"
-#include "ErrorModel.hpp"
 #include "ForgettingMassCalculator.hpp"
 #include "FragmentLengthDistribution.hpp"
 #include "GZipWriter.hpp"

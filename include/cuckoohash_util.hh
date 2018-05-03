@@ -13,10 +13,9 @@
 //! When \ref LIBCUCKOO_DEBUG is 0, LIBCUCKOO_DBG will printing out status
 //! messages in various situations
 #define LIBCUCKOO_DBG(fmt, ...)                                                \
-  fprintf(stderr,                                                              \
-          "\x1b[32m"                                                           \
-          "[libcuckoo:%s:%d:%lu] " fmt ""                                      \
-          "\x1b[0m",                                                           \
+  fprintf(stderr, "\x1b[32m"                                                   \
+                  "[libcuckoo:%s:%d:%lu] " fmt ""                              \
+                  "\x1b[0m",                                                   \
           __FILE__, __LINE__,                                                  \
           std::hash<std::thread::id>()(std::this_thread::get_id()),            \
           __VA_ARGS__)
@@ -48,29 +47,21 @@
 #endif
 
 /**
- * thread_local requires GCC >= 4.8 and is not supported in some clang versions,
- * so we use __thread if thread_local is not supported
+ * At higher warning levels, MSVC may issue a deadcode warning which depends on
+ * the template arguments given. For certain other template arguments, the code
+ * is not really "dead".
  */
-#define LIBCUCKOO_THREAD_LOCAL thread_local
-#if defined(__clang__)
-#if !__has_feature(cxx_thread_local)
-#undef LIBCUCKOO_THREAD_LOCAL
-#define LIBCUCKOO_THREAD_LOCAL __thread
+#ifdef _MSC_VER
+#define LIBCUCKOO_SQUELCH_DEADCODE_WARNING_BEGIN                               \
+  do {                                                                         \
+    __pragma(warning(push));                                                   \
+    __pragma(warning(disable : 4702))                                          \
+  } while (0)
+#define LIBCUCKOO_SQUELCH_DEADCODE_WARNING_END __pragma(warning(pop))
+#else
+#define LIBCUCKOO_SQUELCH_DEADCODE_WARNING_BEGIN
+#define LIBCUCKOO_SQUELCH_DEADCODE_WARNING_END
 #endif
-#elif defined(__GNUC__)
-#if __GNUC__ == 4 && __GNUC_MINOR__ < 8
-#undef LIBCUCKOO_THREAD_LOCAL
-#define LIBCUCKOO_THREAD_LOCAL __thread
-#endif
-#endif
-
-//! For enabling certain methods based on a condition. Here's an example.
-//! LIBCUCKOO_ENABLE_IF(sizeof(int) == 4, int) method() {
-//!     ...
-//! }
-#define LIBCUCKOO_ENABLE_IF(condition, return_type)                            \
-  template <class Bogus = void*>                                               \
-  typename std::enable_if<sizeof(Bogus) && condition, return_type>::type
 
 /**
  * Thrown when an automatic expansion is triggered, but the load factor of the
@@ -91,7 +82,7 @@ public:
   /**
    * @return a descriptive error message
    */
-  virtual const char* what() const noexcept override {
+  virtual const char *what() const noexcept override {
     return "Automatic expansion triggered when load factor was below "
            "minimum threshold";
   }
@@ -122,7 +113,7 @@ public:
   /**
    * @return a descriptive error message
    */
-  virtual const char* what() const noexcept override {
+  virtual const char *what() const noexcept override {
     return "Expansion beyond maximum hashpower";
   }
 
