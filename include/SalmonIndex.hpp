@@ -44,7 +44,7 @@ public:
   SalmonIndex(std::shared_ptr<spdlog::logger>& logger,
               SalmonIndexType indexType)
       : loaded_(false), versionInfo_(0, false, 0, indexType), logger_(logger),
-        seqHash_(""), nameHash_("") {}
+        seqHash256_(""), nameHash256_(""), seqHash512_(""), nameHash512_("") {}
 
   ~SalmonIndex() {
     if (idx_) {
@@ -206,8 +206,10 @@ public:
     }
   }
 
-  std::string seqHash() const { return seqHash_; }
-  std::string nameHash() const { return nameHash_; }
+  std::string seqHash256() const { return seqHash256_; }
+  std::string nameHash256() const { return nameHash256_; }
+  std::string seqHash512() const { return seqHash512_; }
+  std::string nameHash512() const { return nameHash512_; }
 
 private:
   bool buildFMDIndex_(boost::filesystem::path indexDir,
@@ -326,8 +328,10 @@ private:
         std::exit(1);
       }
 
-      seqHash_ = h.seqHash256();
-      nameHash_ = h.nameHash256();
+      seqHash256_ = h.seqHash256();
+      nameHash256_ = h.nameHash256();
+      seqHash512_ = h.seqHash512();
+      nameHash512_ = h.nameHash512();
 
       // Is the quasi-index using a perfect hash
       perfectHashQuasi_ = h.perfectHash();
@@ -400,8 +404,10 @@ private:
   bwaidx_t* idx_{nullptr};
   KmerIntervalMap auxIdx_;
   std::shared_ptr<spdlog::logger> logger_;
-  std::string seqHash_;
-  std::string nameHash_;
+  std::string seqHash256_;
+  std::string nameHash256_;
+  std::string seqHash512_;
+  std::string nameHash512_;
 };
 
 #endif //__SALMON_INDEX_HPP
