@@ -1,6 +1,8 @@
 #ifndef SALMON_MATH_HPP
 #define SALMON_MATH_HPP
 
+#include "boost/config.hpp"
+
 // If we have built-ins, do as Boost does
 
 #ifndef BOOST_LIKELY
