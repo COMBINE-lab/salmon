@@ -498,14 +498,14 @@ set (FETCHED_JELLYFISH TRUE)
 endif()
 
 ## Try and find TBB first
-find_package(TBB 4.4 COMPONENTS tbb tbbmalloc tbbmalloc_proxy )
+find_package(TBB 2018.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy )
 
 ##
 #
 # Fetch and build Intel's Threading Building Blocks library.
 #
 ##
-if((NOT TBB_FOUND) OR (TBB_FOUND AND (TBB_VERSION VERSION_LESS 4.4)))
+if((NOT TBB_FOUND) OR (TBB_FOUND AND (TBB_VERSION VERSION_LESS 2018.0)))
 
 set(TBB_WILL_RECONFIGURE TRUE)
 # Set the appropriate compiler
@@ -518,7 +518,7 @@ endif()
 message("Build system will fetch and build Intel Threading Building Blocks")
 message("==================================================================")
 # These are useful for the custom install step we'll do later
-set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2017_U3)
+set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2018_U3)
 set(TBB_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
 
 if ("${TBB_COMPILER}" STREQUAL "gcc")
@@ -529,16 +529,16 @@ endif()
 
 ExternalProject_Add(libtbb
 	DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/01org/tbb/archive/2017_U3.tar.gz -o tbb-2017_U3.tgz &&
-                     ${SHASUM} 00a8b2798c498507572e24c2db7bf4896f05b760a38ed9ba566ffd348a7c6cef tbb-2017_U3.tgz &&
-                     tar -xzvf tbb-2017_U3.tgz
+    DOWNLOAD_COMMAND curl -k -L https://github.com/01org/tbb/archive/2018_U3.tar.gz -o tbb-2018_U3.tgz &&
+                     ${SHASUM} 23793c8645480148e9559df96b386b780f92194c80120acce79fcdaae0d81f45 tbb-2018_U3.tgz &&
+                     tar -xzvf tbb-2018_U3.tgz
     ##
-    #URL https://github.com/01org/tbb/archive/2017_U3.tar.gz 
-    #DOWNLOAD_NAME 2017_U3.tar.gz
+    #URL https://github.com/01org/tbb/archive/2018_U3.tar.gz 
+    #DOWNLOAD_NAME 2018_U3.tar.gz
     #URL_HASH SHA1=d6cf16a42ece60aad6a722b369e1a2aa753347b4
     #TLS_VERIFY FALSE
     ##
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2017_U3
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2018_U3
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     PATCH_COMMAND "${TBB_PATCH_STEP}"
     CONFIGURE_COMMAND ""
