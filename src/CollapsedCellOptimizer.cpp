@@ -479,7 +479,9 @@ uint32_t getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
   }
   if(txpToGeneMap.size() < transcripts.size()){
     std::cerr << "ERROR: "
-              << "Txp to Gene Map not found for some transcripts. Exiting" << std::flush;
+              << "Txp to Gene Map not found for "
+              << transcripts.size() - txpToGeneMap.size()
+              <<" transcripts. Exiting" << std::flush;
     exit(1);
   }
 

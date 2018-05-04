@@ -864,7 +864,8 @@ template bool GZipWriter::writeEquivCounts<BulkAlignLibT<ReadPair>>(
     const SalmonOpts& sopt, BulkAlignLibT<ReadPair>& readExp);
 
 template bool GZipWriter::writeBFH<SCExpT>(boost::filesystem::path& outDir,
-                                           SCExpT& experiment, size_t umiLength);
+                                           SCExpT& experiment, size_t umiLength,
+                                           std::vector<std::string>& bcSeqVec);
 
 template bool GZipWriter::writeAbundances<BulkExpT>(const SalmonOpts& sopt,
                                             BulkExpT& readExp);
