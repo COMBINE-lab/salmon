@@ -52,7 +52,6 @@ ProgramOptionsGenerator.cpp
 
 set (SALMON_ALIGN_SRCS
 FASTAParser.cpp
-ErrorModel.cpp
 AlignmentModel.cpp
 FragmentLengthDistribution.cpp
 SalmonQuantifyAlignments.cpp
