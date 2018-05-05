@@ -1,6 +1,7 @@
 include_directories(
 ${GAT_SOURCE_DIR}/include
 ${GAT_SOURCE_DIR}/include/eigen3
+${GAT_SOURCE_DIR}/include/ksw2pp
 ${GAT_SOURCE_DIR}/external
 ${GAT_SOURCE_DIR}/external/cereal/include
 ${GAT_SOURCE_DIR}/external/install/include
@@ -81,6 +82,19 @@ SimplePosBias.cpp
 SGSmooth.cpp
 )
 
+set (KSW2PP_LIB_SRCS
+ksw2pp/kalloc.c
+ksw2pp/ksw2_extd.c
+ksw2pp/ksw2_extd2_sse.c
+ksw2pp/ksw2_extf2_sse.c
+ksw2pp/ksw2_extz.c
+ksw2pp/ksw2_extz2_sse.c
+ksw2pp/ksw2_gg.c
+ksw2pp/ksw2_gg2.c
+ksw2pp/ksw2_gg2_sse.c
+ksw2pp/KSW2Aligner.cpp
+)
+
 set ( UNIT_TESTS_SRCS
     ${GAT_SOURCE_DIR}/tests/UnitTests.cpp
     FragmentLengthDistribution.cpp
@@ -124,6 +138,9 @@ endif()
 # Build the Salmon library
 add_library(salmon_core STATIC ${SALMON_LIB_SRCS} )
 
+# Build the ksw2pp library
+add_library(ksw2pp STATIC ${KSW2PP_LIB_SRCS})
+
 # Build the Alevin library
 add_library(alevin_core STATIC ${ALEVIN_LIB_SRCS})
 
@@ -164,6 +181,7 @@ target_link_libraries(salmon
     ${NON_APPLECLANG_LIBS}
     ${FAST_MALLOC_LIB}
     ${LIBRT}
+    ksw2pp
 )
 
 ##

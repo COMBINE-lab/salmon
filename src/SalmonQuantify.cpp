@@ -124,6 +124,7 @@ extern "C" {
 #include "SASearcher.hpp"
 #include "SalmonOpts.hpp"
 #include "SingleAlignmentFormatter.hpp"
+#include "KSW2Aligner.hpp"
 //#include "TextBootstrapWriter.hpp"
 
 /****** QUASI MAPPING DECLARATIONS *********/
@@ -889,6 +890,30 @@ void processReadsQuasi(
   auto* qmLog = salmonOpts.qmLog.get();
   bool writeQuasimappings = (qmLog != nullptr);
 
+  std::string rc1; rc1.reserve(300);
+  std::string rc2; rc2.reserve(300);
+
+
+  using ksw2pp::KSW2Aligner;
+  using ksw2pp::KSW2Config;
+  using ksw2pp::EnumToType;
+  using ksw2pp::KSW2AlignmentType;
+  KSW2Config config;
+  config.dropoff = -1;
+  config.gapo = 4;
+  config.gape = 2;
+  config.bandwidth = 30;
+  config.flag = 0;
+  config.flag |= KSW_EZ_SCORE_ONLY;
+  //config.flag |= KSW_EZ_APPROX_MAX | KSW_EZ_APPROX_DROP;
+  int8_t a = 2;
+  int8_t b = -4;
+  KSW2Aligner aligner(static_cast<int8_t>(a), static_cast<int8_t>(b));
+  aligner.config() = config;
+  ksw_extz_t ez;
+  memset(&ez, 0, sizeof(ksw_extz_t));
+  size_t numDropped{0};
+
   auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
     rangeSize = rg.size();
@@ -1027,6 +1052,146 @@ void processReadsQuasi(
                   return a.transcriptID() < b.transcriptID();
                 });
           }
+        }
+
+        bool tryAlign{salmonOpts.validateMappings};
+        if (tryAlign) {
+          auto* r1 = rp.first.seq.data();
+          auto* r2 = rp.second.seq.data();
+          auto l1 = rp.first.seq.length();
+          auto l2 = rp.second.seq.length();
+          rapmap::utils::reverseRead(rp.first.seq, rc1);
+          rapmap::utils::reverseRead(rp.second.seq, rc2);
+          // we will not break the const promise
+          char* r1rc = const_cast<char*>(rc1.data());
+          char* r2rc = const_cast<char*>(rc2.data());
+          int32_t bestScore{-1};
+          std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
+          size_t idx{0};
+          double optFrac{0.95};
+
+          for (auto& h : jointHits) {
+            int32_t score{-1};
+            auto& t = transcripts[h.tid];
+            char* tseq = const_cast<char*>(t.Sequence());
+            const int32_t tlen = static_cast<int32_t>(t.RefLength);
+            const uint32_t buf{8};
+
+            if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
+              auto* r1ptr = h.fwd ? r1 : r1rc;
+              int32_t s1{-1};
+              int32_t s2{-1};
+
+              auto pos = h.pos;
+              if (pos < 0) { r1ptr += -pos; pos = 0; l1 += pos; }
+              if (pos < tlen) {
+                uint32_t tlen1 = std::min(static_cast<uint32_t>(l1+buf), static_cast<uint32_t>(tlen - pos));
+                char* tseq1 = tseq + pos;
+                ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
+                ez.n_cigar = 0;
+                aligner(r1ptr, l1, tseq1, tlen1, &ez, EnumToType<KSW2AlignmentType::EXTENSION>());
+                s1 += std::max(ez.mqe, ez.mte);
+              }
+
+              auto* r2ptr = h.mateIsFwd ? r2 : r2rc;
+              pos = h.matePos;
+              if (pos < 0) { r2ptr += -pos; pos = 0; l2 += pos; }
+              if (pos < tlen) {
+                uint32_t tlen2 = std::min(static_cast<uint32_t>(l2+buf), static_cast<uint32_t>(tlen - pos));
+                char* tseq2 = tseq + pos;
+                ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
+                ez.n_cigar = 0;
+                aligner(r2ptr, l2, tseq2, tlen2, &ez, EnumToType<KSW2AlignmentType::EXTENSION>());
+                s2 += std::max(ez.mqe, ez.mte);
+              }
+              if ((s1 + s2) < (optFrac * a * rp.first.seq.length() + optFrac * a * rp.second.seq.length())) {
+                s1 = -1000;
+                s2 = -1000;
+              }
+              score = s1 + s2;
+              // h.score_ = score;
+            } else if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_LEFT) {
+              auto* rptr = h.fwd ? r1 : r1rc;
+              int32_t s{-1};
+
+              auto pos = h.pos;
+              if (pos < 0) { rptr += -pos; pos = 0; l1 += pos; }
+              if (pos < tlen) {
+                uint32_t tlen1 = std::min(static_cast<uint32_t>(l1+buf), static_cast<uint32_t>(tlen - pos));
+                char* tseq1 = tseq + pos;
+                ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
+                ez.n_cigar = 0;
+                aligner(rptr, l1, tseq1, tlen1, &ez, EnumToType<KSW2AlignmentType::EXTENSION>());
+                s = std::max(ez.mqe, ez.mte);
+              }
+              if (s < (optFrac * a * rp.first.seq.length())) {
+                s = -1000;
+              }
+              score = s;
+              // h.score_ = score;
+            } else if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_RIGHT) {
+              auto* rptr = h.fwd ? r2 : r2rc;
+              int32_t s{-1};
+
+              auto pos = h.pos;
+              if (pos < 0) { rptr += -pos; pos = 0; l2 += pos; }
+              if (pos < tlen) {
+                uint32_t tlen1 = std::min(static_cast<uint32_t>(l2+buf), static_cast<uint32_t>(tlen - pos));
+                char* tseq1 = tseq + pos;
+                ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
+                ez.n_cigar = 0;
+                aligner(rptr, l2, tseq1, tlen1, &ez, EnumToType<KSW2AlignmentType::EXTENSION>());
+                s = std::max(ez.mqe, ez.mte);
+              }
+              if (s < (optFrac * a * rp.second.seq.length())) {
+                s = -1000;
+              }
+              score = s;
+              //h.score_ = score;
+            }
+
+            bestScore = (score > bestScore) ? score : bestScore;
+            scores[idx] = score;
+            ++idx;
+          }
+
+          uint32_t ctr{0};
+          jointHits.erase(
+                          std::remove_if(jointHits.begin(), jointHits.end(),
+                                         [&ctr, &scores, &numDropped, /*&salmonOpts, &rp, &rc1, &rc2, &transcripts,*/ bestScore] (const QuasiAlignment& qa) -> bool {
+                                           /*
+                         bool rem = qa.score_ < bestScore;
+                         auto split = rp.first.name.find('/');
+                         auto readRef = rp.first.name.substr(split+1, rp.first.name.find(';') - split - 1);
+                         bool right = (readRef == transcripts[qa.tid].RefName);
+                         if (qa.score_ < bestScore and right and (readRef == "ENST00000310682.6")) {
+                           std::string* r1seq = qa.fwd ? &rp.first.seq : &rc1;
+                           std::string* r2seq = qa.mateIsFwd ? &rp.second.seq : &rc2;
+                           auto tlen = transcripts[qa.tid].RefLength;
+                           uint32_t tlen1 = std::min(static_cast<uint32_t>(rp.first.seq.length()), static_cast<uint32_t>(tlen - qa.pos));
+                           uint32_t tlen2 = std::min(static_cast<uint32_t>(rp.second.seq.length()), static_cast<uint32_t>(tlen - qa.matePos));
+                           std::string refSeq1(transcripts[qa.tid].Sequence() + qa.pos, tlen1);
+                           std::string refSeq2(transcripts[qa.tid].Sequence() + qa.matePos, rp.second.seq.length());
+                           salmonOpts.jointLog->info("will discard read = {}, mapping to = {} ({},{}), score = {}, best = {} \n" 
+                                                     "read1   = {} \n"
+                                                     "refseq1 = {} \n"
+                                                     "read2   = {} \n"
+                                                     "refseq2 = {} \n"
+                                                     "ref len = {} \n",
+                                                     rp.first.name,
+                                                     transcripts[qa.tid].RefName, qa.pos, qa.matePos, scores[ctr], bestScore,
+                                                     *r1seq, refSeq1, *r2seq, refSeq2, transcripts[qa.tid].RefLength);
+                         }
+                                           */
+                         bool rem = scores[ctr] < bestScore;
+                         ++ctr;
+                         numDropped += rem ? 1 : 0;
+                         return rem;
+                       }),
+                     jointHits.end()
+                     );
+          if (jointHits.size() == 0) { jointHitGroup.clearAlignments(); }
+
         }
 
         bool needBiasSample = salmonOpts.biasCorrect;
@@ -1236,6 +1401,7 @@ void processReadsQuasi(
                               maxZeroFrac);
   }
 
+  salmonOpts.jointLog->info("Score filtering dropped {} total mappings", numDropped);
   readExp.updateShortFrags(shortFragStats);
 }
 

@@ -241,6 +241,8 @@ struct SalmonOpts {
   uint32_t numQuantThreads;
   uint32_t numParseThreads;
 
+  bool validateMappings;
+
   // for utility (may need to be cleaned up later)
   bool discardOrphansQuasi;
   double coverageThresh;

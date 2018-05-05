@@ -6,6 +6,7 @@ namespace defaults {
   // general
   constexpr const bool discardOrphansQuasi{false};
   constexpr const bool allowOrphansFMD{false};
+  constexpr const bool validateMappings{false};
   constexpr const bool seqBiasCorrect{false};
   constexpr const bool gcBiasCorrect{false};
   constexpr const bool posBiasCorrect{false};

@@ -83,6 +83,11 @@ namespace salmon {
        "to consider orphan mappings if no valid paired mappings exist.  This "
        "flag is independent of the option to "
        "write the orphaned mappings to file (--writeOrphanLinks).")
+      ("validateMappings",
+       po::bool_switch(&(sopt.validateMappings))->default_value(salmon::defaults::validateMappings),
+       "[Quasi-mapping mode only] : Validate mappings using alignment-based verifcation. "
+       "If this flag is passed, quasi-mappings will be validated to ensure that they could give "
+       "rise to a reasonable alignment before they are further used for quantification")
       ("allowOrphansFMD",
        po::bool_switch(&(sopt.allowOrphans))->default_value(salmon::defaults::allowOrphansFMD),
        "[FMD-mapping mode only] : Consider orphaned reads as valid hits when "
