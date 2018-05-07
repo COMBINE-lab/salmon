@@ -1054,12 +1054,27 @@ void processReadsQuasi(
           }
         }
 
+        auto getAlnScore = [&aligner, &ez](int32_t pos, const char* rptr, int32_t rlen, char* tseq, int32_t tlen, uint32_t buf) -> int32_t {
+          int32_t s{-1};
+          if (pos < 0) { rptr += -pos; pos = 0; rlen += pos; }
+          if (pos < tlen) {
+            uint32_t tlen1 = std::min(static_cast<uint32_t>(rlen+buf), static_cast<uint32_t>(tlen - pos));
+            char* tseq1 = tseq + pos;
+            ez.max_q = ez.max_t = ez.mqe_t = ez.mte_q = -1;
+            ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
+            ez.n_cigar = 0;
+            aligner(rptr, rlen, tseq1, tlen1, &ez, EnumToType<KSW2AlignmentType::EXTENSION>());
+            s = std::max(ez.mqe, ez.mte);
+          }
+          return s;
+        };
+
         bool tryAlign{salmonOpts.validateMappings};
         if (tryAlign) {
           auto* r1 = rp.first.seq.data();
           auto* r2 = rp.second.seq.data();
-          auto l1 = rp.first.seq.length();
-          auto l2 = rp.second.seq.length();
+          auto l1 = static_cast<int32_t>(rp.first.seq.length());
+          auto l2 = static_cast<int32_t>(rp.second.seq.length());
           rapmap::utils::reverseRead(rp.first.seq, rc1);
           rapmap::utils::reverseRead(rp.second.seq, rc2);
           // we will not break the const promise
@@ -1079,33 +1094,9 @@ void processReadsQuasi(
 
             if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
               auto* r1ptr = h.fwd ? r1 : r1rc;
-              int32_t s1{-1};
-              int32_t s2{-1};
-
-              auto pos = h.pos;
-              if (pos < 0) { r1ptr += -pos; pos = 0; l1 += pos; }
-              if (pos < tlen) {
-                uint32_t tlen1 = std::min(static_cast<uint32_t>(l1+buf), static_cast<uint32_t>(tlen - pos));
-                char* tseq1 = tseq + pos;
-                ez.max_q = ez.max_t = ez.mqe_t = ez.mte_q = -1;
-                ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
-                ez.n_cigar = 0;
-                aligner(r1ptr, l1, tseq1, tlen1, &ez, EnumToType<KSW2AlignmentType::EXTENSION>());
-                s1 += std::max(ez.mqe, ez.mte);
-              }
-
               auto* r2ptr = h.mateIsFwd ? r2 : r2rc;
-              pos = h.matePos;
-              if (pos < 0) { r2ptr += -pos; pos = 0; l2 += pos; }
-              if (pos < tlen) {
-                uint32_t tlen2 = std::min(static_cast<uint32_t>(l2+buf), static_cast<uint32_t>(tlen - pos));
-                char* tseq2 = tseq + pos;
-                ez.max_q = ez.max_t = ez.mqe_t = ez.mte_q = -1;
-                ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
-                ez.n_cigar = 0;
-                aligner(r2ptr, l2, tseq2, tlen2, &ez, EnumToType<KSW2AlignmentType::EXTENSION>());
-                s2 += std::max(ez.mqe, ez.mte);
-              }
+              auto s1 = getAlnScore(h.pos, r1ptr, l1, tseq, tlen, buf);
+              auto s2 = getAlnScore(h.matePos, r2ptr, l2, tseq, tlen, buf);
               if ((s1 + s2) < (optFrac * a * rp.first.seq.length() + optFrac * a * rp.second.seq.length())) {
                 s1 = -1000;
                 s2 = -1000;
@@ -1114,19 +1105,7 @@ void processReadsQuasi(
               // h.score_ = score;
             } else if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_LEFT) {
               auto* rptr = h.fwd ? r1 : r1rc;
-              int32_t s{-1};
-
-              auto pos = h.pos;
-              if (pos < 0) { rptr += -pos; pos = 0; l1 += pos; }
-              if (pos < tlen) {
-                uint32_t tlen1 = std::min(static_cast<uint32_t>(l1+buf), static_cast<uint32_t>(tlen - pos));
-                char* tseq1 = tseq + pos;
-                ez.max_q = ez.max_t = ez.mqe_t = ez.mte_q = -1;
-                ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
-                ez.n_cigar = 0;
-                aligner(rptr, l1, tseq1, tlen1, &ez, EnumToType<KSW2AlignmentType::EXTENSION>());
-                s = std::max(ez.mqe, ez.mte);
-              }
+              auto s = getAlnScore(h.pos, rptr, l1, tseq, tlen, buf);
               if (s < (optFrac * a * rp.first.seq.length())) {
                 s = -1000;
               }
@@ -1134,19 +1113,7 @@ void processReadsQuasi(
               // h.score_ = score;
             } else if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_RIGHT) {
               auto* rptr = h.fwd ? r2 : r2rc;
-              int32_t s{-1};
-
-              auto pos = h.pos;
-              if (pos < 0) { rptr += -pos; pos = 0; l2 += pos; }
-              if (pos < tlen) {
-                uint32_t tlen1 = std::min(static_cast<uint32_t>(l2+buf), static_cast<uint32_t>(tlen - pos));
-                char* tseq1 = tseq + pos;
-                ez.max_q = ez.max_t = ez.mqe_t = ez.mte_q = -1;
-                ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
-                ez.n_cigar = 0;
-                aligner(rptr, l2, tseq1, tlen1, &ez, EnumToType<KSW2AlignmentType::EXTENSION>());
-                s = std::max(ez.mqe, ez.mte);
-              }
+              auto s = getAlnScore(h.pos, rptr, l2, tseq, tlen, buf);
               if (s < (optFrac * a * rp.second.seq.length())) {
                 s = -1000;
               }
