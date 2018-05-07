@@ -1,7 +1,63 @@
 #include "KSW2Aligner.hpp"
-#include "ksw2.h"
+#include <iostream>
+
+/*
+extern void ksw_extz2_sse2(void *km, int qlen, const uint8_t *query, int tlen, const uint8_t *target, int8_t m, const int8_t *mat, int8_t q, int8_t e, int w, int zdrop, int end_bonus, int flag, ksw_extz_t *ez);
+extern void ksw_extz2_sse41(void *km, int qlen, const uint8_t *query, int tlen, const uint8_t *target, int8_t m, const int8_t *mat, int8_t q, int8_t e, int w, int zdrop, int end_bonus, int flag, ksw_extz_t *ez);
+*/
 
 namespace ksw2pp {
+
+// The following is from ksw2_dispatch.c : https://github.com/lh3/minimap2/blob/master/ksw2_dispatch.c
+#define SIMD_SSE     0x1
+#define SIMD_SSE2    0x2
+#define SIMD_SSE3    0x4
+#define SIMD_SSSE3   0x8
+#define SIMD_SSE4_1  0x10
+#define SIMD_SSE4_2  0x20
+#define SIMD_AVX     0x40
+#define SIMD_AVX2    0x80
+#define SIMD_AVX512F 0x100
+
+#ifndef _MSC_VER
+// adapted from https://github.com/01org/linux-sgx/blob/master/common/inc/internal/linux/cpuid_gnu.h
+void __cpuidex(int cpuid[4], int func_id, int subfunc_id)
+{
+#if defined(__x86_64__)
+	asm volatile ("cpuid"
+			: "=a" (cpuid[0]), "=b" (cpuid[1]), "=c" (cpuid[2]), "=d" (cpuid[3])
+			: "0" (func_id), "2" (subfunc_id));
+#else // on 32bit, ebx can NOT be used as PIC code
+	asm volatile ("xchgl %%ebx, %1; cpuid; xchgl %%ebx, %1"
+			: "=a" (cpuid[0]), "=r" (cpuid[1]), "=c" (cpuid[2]), "=d" (cpuid[3])
+			: "0" (func_id), "2" (subfunc_id));
+#endif
+}
+#endif
+
+int x86_simd(void)
+{
+	int flag = 0, cpuid[4], max_id;
+	__cpuidex(cpuid, 0, 0);
+	max_id = cpuid[0];
+	if (max_id == 0) return 0;
+	__cpuidex(cpuid, 1, 0);
+	if (cpuid[3]>>25&1) flag |= SIMD_SSE;
+	if (cpuid[3]>>26&1) flag |= SIMD_SSE2;
+	if (cpuid[2]>>0 &1) flag |= SIMD_SSE3;
+	if (cpuid[2]>>9 &1) flag |= SIMD_SSSE3;
+	if (cpuid[2]>>19&1) flag |= SIMD_SSE4_1;
+	if (cpuid[2]>>20&1) flag |= SIMD_SSE4_2;
+	if (cpuid[2]>>28&1) flag |= SIMD_AVX;
+	if (max_id >= 7) {
+		__cpuidex(cpuid, 7, 0);
+		if (cpuid[1]>>5 &1) flag |= SIMD_AVX2;
+		if (cpuid[1]>>16&1) flag |= SIMD_AVX512F;
+	}
+	return flag;
+}
+// end of ksw2_dispatch.c here
+
 unsigned char seq_nt4_table_loc[256] = {
     0, 1, 2, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
     4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
@@ -15,7 +71,8 @@ unsigned char seq_nt4_table_loc[256] = {
     4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
     4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4};
 
-KSW2Aligner::KSW2Aligner(int8_t match, int8_t mismatch) {
+  KSW2Aligner::KSW2Aligner(int8_t match, int8_t mismatch) {
+    simd_ = x86_simd();
   query_.clear();
   target_.clear();
   kalloc_allocator_.reset(km_init());
@@ -38,6 +95,7 @@ KSW2Aligner::KSW2Aligner(int8_t match, int8_t mismatch) {
 }
 
 KSW2Aligner::KSW2Aligner(std::vector<int8_t> mat) {
+  simd_ = x86_simd();
   query_.clear();
   target_.clear();
   kalloc_allocator_.reset(km_init());
@@ -113,13 +171,21 @@ int KSW2Aligner::operator()(const char* const queryOriginal,
   int asize = transformSequencesDNA(queryOriginal, queryLength, targetOriginal,
                                     targetLength, query_, target_);
   (void)asize;
-  int q = config_.gapo;
-  int e = config_.gape;
+  int8_t q = config_.gapo;
+  int8_t e = config_.gape;
   int w = config_.bandwidth;
   int z = config_.dropoff;
-  ksw_extz2_sse(kalloc_allocator_.get(), qlen, query_.data(), tlen,
+  if (simd_ & SIMD_SSE4_1) {
+    ksw_extz2_sse41(kalloc_allocator_.get(), qlen, query_.data(), tlen,
                 target_.data(), config_.alphabetSize, mat_.data(), q, e, w, z,
-                config_.flag, ez);
+                config_.end_bonus, config_.flag, ez);
+  } else if (simd_ & SIMD_SSE2) {
+    ksw_extz2_sse2(kalloc_allocator_.get(), qlen, query_.data(), tlen,
+                  target_.data(), config_.alphabetSize, mat_.data(), q, e, w, z,
+                  config_.end_bonus, config_.flag, ez);
+  } else {
+    std::abort();
+  }
   return ez->score;
 }
 
@@ -238,13 +304,21 @@ int KSW2Aligner::operator()(const uint8_t* const query_, const int queryLength,
                             EnumToType<KSW2AlignmentType::EXTENSION>) {
   auto qlen = queryLength;
   auto tlen = targetLength;
-  int q = config_.gapo;
-  int e = config_.gape;
+  int8_t q = config_.gapo;
+  int8_t e = config_.gape;
   int w = config_.bandwidth;
   int z = config_.dropoff;
-  ksw_extz2_sse(kalloc_allocator_.get(), qlen, query_, tlen, target_,
-                config_.alphabetSize, mat_.data(), q, e, w, z, config_.flag,
+  if (simd_ & SIMD_SSE4_1) {
+    ksw_extz2_sse41(kalloc_allocator_.get(), qlen, query_, tlen, target_,
+                config_.alphabetSize, mat_.data(), q, e, w, z, config_.end_bonus, config_.flag,
                 ez);
+  } else if (simd_ & SIMD_SSE2) {
+    ksw_extz2_sse2(kalloc_allocator_.get(), qlen, query_, tlen, target_,
+                  config_.alphabetSize, mat_.data(), q, e, w, z, config_.end_bonus, config_.flag,
+                  ez);
+  } else {
+    std::abort();
+  }
   return ez->score;
 }
 

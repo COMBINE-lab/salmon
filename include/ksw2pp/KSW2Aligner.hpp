@@ -3,9 +3,12 @@
 
 #include <memory>
 #include <vector>
+#include <cstdlib>
 
+extern "C" {
 #include "kalloc.h"
 #include "ksw2.h"
+}
 
 namespace ksw2pp {
 
@@ -35,6 +38,7 @@ struct KSW2Config {
   int dropoff = -1;
   int flag = 0;
   int alphabetSize = 5;
+  int end_bonus = 10;
   KSW2AlignmentType atype = KSW2AlignmentType::GLOBAL;
 };
 
@@ -116,6 +120,7 @@ private:
                                                          KallocDeleter()};
   std::vector<int8_t> mat_;
   KSW2Config config_;
+  unsigned int simd_{0};
 };
 } // namespace ksw2pp
 #endif //__KSW2_ALIGNER_HPP__
