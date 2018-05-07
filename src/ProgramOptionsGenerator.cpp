@@ -88,6 +88,29 @@ namespace salmon {
        "[Quasi-mapping mode only] : Validate mappings using alignment-based verifcation. "
        "If this flag is passed, quasi-mappings will be validated to ensure that they could give "
        "rise to a reasonable alignment before they are further used for quantification")
+      ("minScoreFraction",
+       po::value<double>(&sopt.minScoreFraction)->default_value(salmon::defaults::minScoreFraction),
+       "[Quasi-mapping mode only] : The fraction of the optimal possible alignment score that a "
+       "mapping must achieve in order to be considered \"valid\"."
+       )
+      ("ma",
+       po::value<int8_t>(&sopt.matchScore)->default_value(salmon::defaults::matchScore),
+       "[Quasi-mapping mode only] : The value given to a match between read and reference nucleotides "
+       "in an alignment."
+       )
+      ("mp",
+       po::value<int8_t>(&sopt.mismatchPenalty)->default_value(salmon::defaults::mismatchPenalty),
+       "[Quasi-mapping mode only] : The value given to a mis-match between read and reference nucleotides "
+       "in an alignment."
+       )
+      ("go",
+       po::value<int8_t>(&sopt.gapOpenPenalty)->default_value(salmon::defaults::gapOpenPenalty),
+       "[Quasi-mapping mode only] : The value given to a gap opening in an alignment."
+       )
+      ("ge",
+       po::value<int8_t>(&sopt.gapExtendPenalty)->default_value(salmon::defaults::gapExtendPenalty),
+       "[Quasi-mapping mode only] : The value given to a gap extension in an alignment."
+       )
       ("allowOrphansFMD",
        po::bool_switch(&(sopt.allowOrphans))->default_value(salmon::defaults::allowOrphansFMD),
        "[FMD-mapping mode only] : Consider orphaned reads as valid hits when "

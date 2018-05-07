@@ -900,14 +900,14 @@ void processReadsQuasi(
   using ksw2pp::KSW2AlignmentType;
   KSW2Config config;
   config.dropoff = -1;
-  config.gapo = 4;
-  config.gape = 2;
+  config.gapo = salmonOpts.gapOpenPenalty;
+  config.gape = salmonOpts.gapExtendPenalty;
   config.bandwidth = 30;
   config.flag = 0;
   config.flag |= KSW_EZ_SCORE_ONLY;
   //config.flag |= KSW_EZ_APPROX_MAX | KSW_EZ_APPROX_DROP;
-  int8_t a = 2;
-  int8_t b = -4;
+  int8_t a = salmonOpts.matchScore;
+  int8_t b = salmonOpts.mismatchPenalty;
   KSW2Aligner aligner(static_cast<int8_t>(a), static_cast<int8_t>(b));
   aligner.config() = config;
   ksw_extz_t ez;
@@ -1068,7 +1068,7 @@ void processReadsQuasi(
           int32_t bestScore{-1};
           std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
           size_t idx{0};
-          double optFrac{0.95};
+          double optFrac{salmonOpts.minScoreFraction};
 
           for (auto& h : jointHits) {
             int32_t score{-1};
@@ -1087,6 +1087,7 @@ void processReadsQuasi(
               if (pos < tlen) {
                 uint32_t tlen1 = std::min(static_cast<uint32_t>(l1+buf), static_cast<uint32_t>(tlen - pos));
                 char* tseq1 = tseq + pos;
+                ez.max_q = ez.max_t = ez.mqe_t = ez.mte_q = -1;
                 ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
                 ez.n_cigar = 0;
                 aligner(r1ptr, l1, tseq1, tlen1, &ez, EnumToType<KSW2AlignmentType::EXTENSION>());
@@ -1099,6 +1100,7 @@ void processReadsQuasi(
               if (pos < tlen) {
                 uint32_t tlen2 = std::min(static_cast<uint32_t>(l2+buf), static_cast<uint32_t>(tlen - pos));
                 char* tseq2 = tseq + pos;
+                ez.max_q = ez.max_t = ez.mqe_t = ez.mte_q = -1;
                 ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
                 ez.n_cigar = 0;
                 aligner(r2ptr, l2, tseq2, tlen2, &ez, EnumToType<KSW2AlignmentType::EXTENSION>());
@@ -1119,6 +1121,7 @@ void processReadsQuasi(
               if (pos < tlen) {
                 uint32_t tlen1 = std::min(static_cast<uint32_t>(l1+buf), static_cast<uint32_t>(tlen - pos));
                 char* tseq1 = tseq + pos;
+                ez.max_q = ez.max_t = ez.mqe_t = ez.mte_q = -1;
                 ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
                 ez.n_cigar = 0;
                 aligner(rptr, l1, tseq1, tlen1, &ez, EnumToType<KSW2AlignmentType::EXTENSION>());
@@ -1138,6 +1141,7 @@ void processReadsQuasi(
               if (pos < tlen) {
                 uint32_t tlen1 = std::min(static_cast<uint32_t>(l2+buf), static_cast<uint32_t>(tlen - pos));
                 char* tseq1 = tseq + pos;
+                ez.max_q = ez.max_t = ez.mqe_t = ez.mte_q = -1;
                 ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
                 ez.n_cigar = 0;
                 aligner(rptr, l2, tseq1, tlen1, &ez, EnumToType<KSW2AlignmentType::EXTENSION>());

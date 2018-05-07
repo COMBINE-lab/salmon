@@ -140,6 +140,7 @@ add_library(salmon_core STATIC ${SALMON_LIB_SRCS} )
 
 # Build the ksw2pp library
 add_library(ksw2pp STATIC ${KSW2PP_LIB_SRCS})
+set_target_properties(ksw2pp PROPERTIES COMPILE_FLAGS "-mavx2 -msse4")
 
 # Build the Alevin library
 add_library(alevin_core STATIC ${ALEVIN_LIB_SRCS})

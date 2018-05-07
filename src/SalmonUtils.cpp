@@ -1312,7 +1312,15 @@ bool validateOptionsAlignment_(SalmonOpts& sopt) {
   return true;
 }
 
-bool validateOptionsMapping_(SalmonOpts& sopt) { return true; }
+bool validateOptionsMapping_(SalmonOpts& sopt) {
+  if (sopt.mismatchPenalty > 0) {
+    sopt.jointLog->warn(
+                        "You set the mismatch penalty as {}, but it should be negative.  It is being negated to {}.",
+                        sopt.mismatchPenalty, -sopt.mismatchPenalty);
+    sopt.mismatchPenalty = -sopt.mismatchPenalty;
+  }
+  return true;
+}
 
 /**
  * In mapping mode, depending on what the user has requested, we may have to
