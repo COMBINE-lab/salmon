@@ -120,7 +120,8 @@ private:
                                                          KallocDeleter()};
   std::vector<int8_t> mat_;
   KSW2Config config_;
-  unsigned int simd_{0};
+  bool haveSSE41{false};
+  bool haveSSE2{false};
 };
 } // namespace ksw2pp
 #endif //__KSW2_ALIGNER_HPP__

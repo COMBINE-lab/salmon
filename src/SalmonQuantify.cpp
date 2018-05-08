@@ -902,7 +902,7 @@ void processReadsQuasi(
   config.dropoff = -1;
   config.gapo = salmonOpts.gapOpenPenalty;
   config.gape = salmonOpts.gapExtendPenalty;
-  config.bandwidth = 30;
+  config.bandwidth = 15;
   config.flag = 0;
   config.flag |= KSW_EZ_SCORE_ONLY;
   //config.flag |= KSW_EZ_APPROX_MAX | KSW_EZ_APPROX_DROP;

@@ -72,7 +72,9 @@ unsigned char seq_nt4_table_loc[256] = {
     4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4};
 
   KSW2Aligner::KSW2Aligner(int8_t match, int8_t mismatch) {
-    simd_ = x86_simd();
+  unsigned int simd = x86_simd();
+  haveSSE41 = (simd & SIMD_SSE4_1);
+  haveSSE2 = (simd & SIMD_SSE2);
   query_.clear();
   target_.clear();
   kalloc_allocator_.reset(km_init());
@@ -95,7 +97,9 @@ unsigned char seq_nt4_table_loc[256] = {
 }
 
 KSW2Aligner::KSW2Aligner(std::vector<int8_t> mat) {
-  simd_ = x86_simd();
+  unsigned int simd = x86_simd();
+  haveSSE41 = (simd & SIMD_SSE4_1);
+  haveSSE2 = (simd & SIMD_SSE2);
   query_.clear();
   target_.clear();
   kalloc_allocator_.reset(km_init());
@@ -175,11 +179,11 @@ int KSW2Aligner::operator()(const char* const queryOriginal,
   int8_t e = config_.gape;
   int w = config_.bandwidth;
   int z = config_.dropoff;
-  if (simd_ & SIMD_SSE4_1) {
+  if (haveSSE41) {
     ksw_extz2_sse41(kalloc_allocator_.get(), qlen, query_.data(), tlen,
                 target_.data(), config_.alphabetSize, mat_.data(), q, e, w, z,
                 config_.end_bonus, config_.flag, ez);
-  } else if (simd_ & SIMD_SSE2) {
+  } else if (haveSSE2) {
     ksw_extz2_sse2(kalloc_allocator_.get(), qlen, query_.data(), tlen,
                   target_.data(), config_.alphabetSize, mat_.data(), q, e, w, z,
                   config_.end_bonus, config_.flag, ez);
@@ -308,11 +312,11 @@ int KSW2Aligner::operator()(const uint8_t* const query_, const int queryLength,
   int8_t e = config_.gape;
   int w = config_.bandwidth;
   int z = config_.dropoff;
-  if (simd_ & SIMD_SSE4_1) {
+  if (haveSSE41) {
     ksw_extz2_sse41(kalloc_allocator_.get(), qlen, query_, tlen, target_,
                 config_.alphabetSize, mat_.data(), q, e, w, z, config_.end_bonus, config_.flag,
                 ez);
-  } else if (simd_ & SIMD_SSE2) {
+  } else if (haveSSE2) {
     ksw_extz2_sse2(kalloc_allocator_.get(), qlen, query_, tlen, target_,
                   config_.alphabetSize, mat_.data(), q, e, w, z, config_.end_bonus, config_.flag,
                   ez);
