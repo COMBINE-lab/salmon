@@ -241,6 +241,14 @@ struct SalmonOpts {
   uint32_t numQuantThreads;
   uint32_t numParseThreads;
 
+  // Related to alignment verification
+  bool validateMappings;
+  double minScoreFraction;
+  int8_t matchScore;
+  int8_t mismatchPenalty;
+  int8_t gapOpenPenalty;
+  int8_t gapExtendPenalty;
+
   // for utility (may need to be cleaned up later)
   bool discardOrphansQuasi;
   double coverageThresh;

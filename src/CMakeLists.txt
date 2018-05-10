@@ -1,6 +1,7 @@
 include_directories(
 ${GAT_SOURCE_DIR}/include
 ${GAT_SOURCE_DIR}/include/eigen3
+${GAT_SOURCE_DIR}/include/ksw2pp
 ${GAT_SOURCE_DIR}/external
 ${GAT_SOURCE_DIR}/external/cereal/include
 ${GAT_SOURCE_DIR}/external/install/include
@@ -80,6 +81,36 @@ SalmonStringUtils.cpp
 SimplePosBias.cpp
 SGSmooth.cpp
 )
+
+set (KSW2PP_BASIC_LIB_SRCS
+ksw2pp/kalloc.c
+ksw2pp/ksw2_extd.c
+ksw2pp/ksw2_extz.c
+ksw2pp/ksw2_gg.c
+ksw2pp/ksw2_gg2.c
+ksw2pp/ksw2_gg2_sse.c
+ksw2pp/KSW2Aligner.cpp
+)
+
+set (KSW2PP_ADVANCED_LIB_SRCS
+ksw2pp/ksw2_extd2_sse.c
+ksw2pp/ksw2_extf2_sse.c
+ksw2pp/ksw2_extz2_sse.c
+)
+
+add_library(ksw2pp_sse2 OBJECT ${KSW2PP_ADVANCED_LIB_SRCS})
+add_library(ksw2pp_sse4 OBJECT ${KSW2PP_ADVANCED_LIB_SRCS})
+add_library(ksw2pp_basic OBJECT ${KSW2PP_BASIC_LIB_SRCS})
+
+set_target_properties(ksw2pp_sse2 PROPERTIES COMPILE_FLAGS "-msse2 -mno-sse4.1")
+set_target_properties(ksw2pp_sse2 PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;KSW_SSE2_ONLY;HAVE_KALLOC")
+set_target_properties(ksw2pp_sse4 PROPERTIES COMPILE_FLAGS "-msse4.1")
+set_target_properties(ksw2pp_sse4 PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;HAVE_KALLOC")
+set_target_properties(ksw2pp_basic PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;HAVE_KALLOC")
+
+# Build the ksw2pp library
+add_library(ksw2pp STATIC $<TARGET_OBJECTS:ksw2pp_sse2> $<TARGET_OBJECTS:ksw2pp_sse4> $<TARGET_OBJECTS:ksw2pp_basic>)
+set_target_properties(ksw2pp PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;HAVE_KALLOC")
 
 set ( UNIT_TESTS_SRCS
     ${GAT_SOURCE_DIR}/tests/UnitTests.cpp
@@ -164,6 +195,7 @@ target_link_libraries(salmon
     ${NON_APPLECLANG_LIBS}
     ${FAST_MALLOC_LIB}
     ${LIBRT}
+    ksw2pp
 )
 
 ##
