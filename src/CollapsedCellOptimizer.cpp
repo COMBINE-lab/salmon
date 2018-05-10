@@ -219,7 +219,7 @@ void optimizeCell(SCExpT& experiment,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
                   bool quiet, std::atomic<uint64_t>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                  uint32_t numGenes, bool txpLevel){
+                  uint32_t numGenes, bool txpLevel, bool naive){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
 
@@ -243,6 +243,9 @@ void optimizeCell(SCExpT& experiment,
     uint64_t totalcount{0};
 
     spp::sparse_hash_map<uint32_t, spp::sparse_hash_set<uint64_t>> umiBiasList;
+
+    std::vector<double> geneAlphas(numGenes, 0.0);
+    spp::sparse_hash_map<uint32_t, spp::sparse_hash_map<uint64_t, uint32_t>> geneUmiGroup;
 
     // equivalence class vector encoding for this cell (i.e. row)
     std::vector<uint32_t> eqIDs;
@@ -275,6 +278,15 @@ void optimizeCell(SCExpT& experiment,
               eqIDs.push_back(static_cast<uint32_t>(key.second));
               counts.push_back(static_cast<uint32_t>(eqCount));
             }
+            if ( naive ){
+              uint32_t geneId;
+              if ( alevin::utils::hasOneGene(txps, geneId,
+                                             txpToGeneMap, numGenes) ){
+                for (auto& umiIt:bcIt->second){
+                  geneUmiGroup[geneId][umiIt.first] += umiIt.second;
+                }
+              }
+            }
           }
         });
 
@@ -290,6 +302,18 @@ void optimizeCell(SCExpT& experiment,
       gzw.writeCellEQVec(trueBarcodeIdx, eqIDs, counts, true);
     }
 
+    if (naive){
+      std::vector<uint32_t> dummyTxpGroup {0,1};
+      for (auto& geneUmis: geneUmiGroup){
+        auto eqCount = dedupReads(umiLength,
+                                  jointlog,
+                                  geneUmis.second,
+                                  umiBiasList,
+                                  dummyTxpGroup);
+        totalDedupCounts += eqCount;
+        geneAlphas[geneUmis.first] = eqCount;
+      }
+    }
 
     getMinSetTxps(txpgroups, umigroups,
                   transcripts.size(),
@@ -341,36 +365,15 @@ void optimizeCell(SCExpT& experiment,
 
     if(noEM){
       // no em i.e. only eqclass mode
-      std::vector<double> geneAlphas(numGenes, 0.0);
       // parse through the eqclasses and extract unique gene counts
       for (size_t k=0; k<txpgroups.size(); k++){
-        spp::sparse_hash_set<uint32_t> geneids;
-        auto& txps = txpgroups[k];
-        for (auto& tid: txps){
-          uint32_t gid;
-          if(txpToGeneMap.contains(tid)){
-            gid = txpToGeneMap.at(tid);
+        uint32_t geneId;
+        if ( alevin::utils::hasOneGene(txpgroups[k], geneId,
+                                       txpToGeneMap, numGenes) ){
+          if (not naive){
+            geneAlphas[geneId] += origcounts[k];
+            totalDedupCounts += origcounts[k];
           }
-          else{
-            std::cerr << "Out of Range error for txp to gene Map: " << '\n' << std::flush;
-            std::cerr << tid << "\t not found" << std::flush;
-            exit(1);
-          }
-          geneids.insert(gid);
-          if (geneids.size() > 1){
-            break;
-          }
-        }
-        if (geneids.size() == 1){
-          uint32_t gid = *geneids.begin();
-          if (gid > numGenes){
-            std::cerr<< "Gene id out of range"
-                     << "Please check txp2gene has the write entries"
-                     << std::flush;
-            exit(1);
-          }
-          geneAlphas[gid] += origcounts[k];
-          totalDedupCounts += origcounts[k];
         }
       }
       gzw.writeAbundances(trueBarcodeStr, geneAlphas);
@@ -574,7 +577,8 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                std::ref(totalDedupCounts),
                                std::ref(txpToGeneMap),
                                numGenes,
-                               aopt.txpLevel);
+                               aopt.txpLevel,
+                               aopt.naive);
   }
 
   for (auto& t : workerThreads) {

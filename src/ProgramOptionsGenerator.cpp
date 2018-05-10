@@ -202,6 +202,9 @@ namespace salmon {
        "noquant", po::bool_switch()->default_value(alevin::defaults::noQuant),
        "Don't run downstream barcode-salmon model.")
       (
+       "naive", po::bool_switch()->default_value(alevin::defaults::naive),
+       "Run Gene level naive deduplication")
+      (
        "nosoftmap", po::bool_switch()->default_value(alevin::defaults::noSoftMap),
        "Don't use soft-assignment for quant instead do hard-assignment.")
       (
