@@ -320,7 +320,7 @@ namespace salmon {
      "The number of bins into which to divide "
      "each read when learning and applying the error model.  For example, a "
      "value of 10 would mean that "
-     "effectively, a separate error model is leared and applied to each 10th "
+     "effectively, a separate error model is learned and applied to each 10th "
      "of the read, while a value of "
      "3 would mean that a separate error model is applied to the read "
      "beginning (first third), middle (second third) "
@@ -356,7 +356,13 @@ namespace salmon {
        "not be too large if you wish to keep a low memory usage, but setting it "
        "large enough to accommodate all of the mapped "
        "read can substantially speed up inference on \"small\" files that "
-       "contain only a few million reads.");
+       "contain only a few million reads.")
+       (
+               "pufferfish",
+               po::bool_switch(&(sopt.pufferfish))->default_value(salmon::defaults::pufferfish),
+               "This flag will expect the provided alignment file be "
+               "a pufferfish binary mapping output specialized for salmon."
+               );
 
     return alnspec;
   }

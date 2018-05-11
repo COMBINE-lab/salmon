@@ -91,6 +91,7 @@ namespace defaults {
   constexpr const uint32_t numErrorBins{6};
   constexpr const bool sampleOutput{false};
   constexpr const bool sampleUnaligned{false};
+  constexpr const bool pufferfish{false};
 }
 }
 
