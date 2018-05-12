@@ -1686,7 +1686,7 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
 
     if(aopt.dumpBFH){
       gzw.writeBFH(aopt.outputDirectory, experiment,
-                   aopt.protocol.umiLength);
+                   aopt.protocol.umiLength, trueBarcodesVec);
     }
 
     std::vector<uint32_t> umiCount(trueBarcodesVec.size());

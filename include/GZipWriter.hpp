@@ -34,7 +34,8 @@ public:
 
   template <typename ExpT>
   bool writeBFH(boost::filesystem::path& outDir,
-                ExpT& experiment, size_t umiLength);
+                ExpT& experiment, size_t umiLength,
+                std::vector<std::string>& bcSeqVec);
 
   template <typename ExpT>
   bool writeMeta(const SalmonOpts& opts, const ExpT& experiment);

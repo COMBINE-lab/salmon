@@ -282,6 +282,7 @@ namespace alevin {
       aopt.noEM = vm["noem"].as<bool>();
       aopt.useCorrelation = vm["usecorrelation"].as<bool>();
       aopt.dedup = vm["dedup"].as<bool>();
+      aopt.naive = vm["naive"].as<bool>();
       aopt.noQuant = vm["noquant"].as<bool>();
       aopt.noSoftMap = vm["nosoftmap"].as<bool>();
       aopt.dumpfq = vm["dumpfq"].as<bool>();
@@ -464,6 +465,39 @@ namespace alevin {
       // (Note that i+1 is passed, but index is not
       // changed)
       combinationUtil(arr, n, r, index, data, i + 1, comb);
+    }
+
+    bool hasOneGene(const std::vector<uint32_t>& txps, uint32_t& geneId,
+                    spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                    const size_t numGenes){
+      spp::sparse_hash_set<uint32_t> geneids;
+      for (auto& tid: txps){
+        uint32_t gid;
+        if(txpToGeneMap.contains(tid)){
+          gid = txpToGeneMap.at(tid);
+        }
+        else{
+          std::cerr << "Out of Range error for txp to gene Map: " << '\n' << std::flush;
+          std::cerr << tid << "\t not found" << std::flush;
+          exit(1);
+        }
+        geneids.insert(gid);
+        if (geneids.size() > 1){
+          return false;
+        }
+      }
+      if (geneids.size() == 1){
+        uint32_t gid = *geneids.begin();
+        if (gid > numGenes){
+          std::cerr<< "Gene id out of range"
+                   << "Please check txp2gene has the write entries"
+                   << std::flush;
+          exit(1);
+        }
+        geneId = gid;
+        return true;
+      }
+      return false;
     }
 
     template

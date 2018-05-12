@@ -99,6 +99,9 @@ namespace alevin{
     void combinationUtil(std::vector<uint32_t>& arr, int n, int r,
                          int index, std::vector<uint32_t> data,
                          int i, std::vector<std::vector<uint32_t>>& comb);
+    bool hasOneGene(const std::vector<uint32_t>& txps, uint32_t& geneId,
+                    spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                    const size_t numGenes);
   }
 }
 #endif // __ALEVIN_UTILS_HPP__
