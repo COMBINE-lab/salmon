@@ -91,7 +91,7 @@ namespace salmon {
       ("minScoreFraction",
        po::value<double>(&sopt.minScoreFraction)->default_value(salmon::defaults::minScoreFraction),
        "[Quasi-mapping mode only] : The fraction of the optimal possible alignment score that a "
-       "mapping must achieve in order to be considered \"valid\"."
+       "mapping must achieve in order to be considered \"valid\" --- should be in (0,1]."
        )
       ("ma",
        po::value<int8_t>(&sopt.matchScore)->default_value(salmon::defaults::matchScore),
