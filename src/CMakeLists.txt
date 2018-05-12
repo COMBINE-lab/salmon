@@ -179,13 +179,14 @@ target_link_libraries(salmon
     alevin_core
     gff
     ${PTHREAD_LIB}
-    Boost::iostreams
-    Boost::filesystem
-    Boost::system
-    Boost::thread
-    Boost::timer
-    Boost::chrono
-    Boost::program_options
+    ${Boost_LIBRARIES}
+    #Boost::iostreams
+    #Boost::filesystem
+    #Boost::system
+    #Boost::thread
+    #Boost::timer
+    #Boost::chrono
+    #Boost::program_options
     ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
@@ -247,13 +248,14 @@ target_link_libraries(unitTests
     alevin_core
     gff
     ${PTHREAD_LIB}
-    Boost::iostreams
-    Boost::filesystem
-    Boost::system
-    Boost::thread
-    Boost::timer
-    Boost::chrono
-    Boost::program_options
+    ${Boost_LIBRARIES}
+    #Boost::iostreams
+    #Boost::filesystem
+    #Boost::system
+    #Boost::thread
+    #Boost::timer
+    #Boost::chrono
+    #Boost::program_options
     ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
