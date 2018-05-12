@@ -130,7 +130,6 @@ ${BLAS_LIBRARY_DIR}
 )
 
 message("TBB_LIBRARIES = ${TBB_LIBRARIES}")
-message("Boost_LIBRARIES = ${Boost_LIBRARIES}")
 
 # Set the RPATH
 if (NOT APPLE)
@@ -180,7 +179,13 @@ target_link_libraries(salmon
     alevin_core
     gff
     ${PTHREAD_LIB}
-    ${Boost_LIBRARIES}
+    Boost::iostreams
+    Boost::filesystem
+    Boost::system
+    Boost::thread
+    Boost::timer
+    Boost::chrono
+    Boost::program_options
     ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
@@ -242,7 +247,13 @@ target_link_libraries(unitTests
     alevin_core
     gff
     ${PTHREAD_LIB}
-    ${Boost_LIBRARIES}
+    Boost::iostreams
+    Boost::filesystem
+    Boost::system
+    Boost::thread
+    Boost::timer
+    Boost::chrono
+    Boost::program_options
     ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
@@ -344,84 +355,3 @@ include(InstallRequiredSystemLibraries)
 add_test( NAME unit_tests COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${CMAKE_INSTALL_PREFIX} -P ${GAT_SOURCE_DIR}/cmake/UnitTests.cmake )
 add_test( NAME salmon_read_test_fmd COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/TestSalmonFMD.cmake )
 add_test( NAME salmon_read_test_quasi COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/TestSalmonQuasi.cmake )
-
-####
-#
-# Deprecated or currently unused
-#
-####
-
-
-# # use, i.e. don't skip the full RPATH for the build tree
-# SET(CMAKE_SKIP_BUILD_RPATH  FALSE)
-
-# # when building, don't use the install RPATH already
-# # (but later on when installing)
-# SET(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
-# MESSAGE( "LINK DIRECTORIES : ${CMAKE_LIBRARY_PATH}")
-# SET(CMAKE_INSTALL_RPATH "${CMAKE_LIBRARY_PATH}")
-
-# # add the automatically determined parts of the RPATH
-# # which point to directories outside the build tree to the install RPATH
-# SET(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
-
-
-# # the RPATH to be used when installing, but only if it's not a system directory
-# LIST(FIND CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES "${CMAKE_INSTALL_PREFIX}/lib" isSystemDir)
-# IF("${isSystemDir}" STREQUAL "-1")
-#    SET(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib")
-# ENDIF("${isSystemDir}" STREQUAL "-1")
-
-
-# set( BUILD_LUT_SRCS
-# BuildLUT.cpp
-# IndexedCounter.cpp
-# PerfectHashIndexer.cpp
-# )
-
-# add_executable( BuildLUT ${BUILD_LUT_SRCS} )
-# target_link_libraries( BuildLUT
-# 	${Boost_LIBRARIES} ${ZLIB_LIBRARY}
-# 	cmph # perfect hashing library
-# 	jellyfish-2.0 pthread
-#     gomp lib_activeobject lib_g2logger m tbb)
-
-# INSTALL(TARGETS BuildLUT DESTINATION ${PROJECT_SOURCE_DIR}/bin COMPONENT comp_buildlut)
-
-# set ( BUILD_INDEX_SRCS Indexer.cpp )
-
-# set( ANALYZE_TRANSCRIPT_GRAPH
-# AnalyzeTranscriptGraph.cpp
-# IndexedCounter.cpp
-# PerfectHashIndexer.cpp
-# )
-
-# set ( PROBES_TO_GENES_SRC MapProbesToGenes.cpp affymetrix_utils.cpp )
-# set( COMPUTE_TGRAPH_SRCS
-# ComputeTranscriptGraph.cpp
-# IndexedCounter.cpp
-# PerfectHashIndexer.cpp
-# )
-
-# add_executable( ComputeTranscriptGraph ${COMPUTE_TGRAPH_SRCS} )
-# target_link_libraries( ComputeTranscriptGraph
-# 	${Boost_LIBRARIES} ${ZLIB_LIBRARY}
-# 	cmph # perfect hashing library
-# 	jellyfish pthread
-#     gomp lib_activeobject lib_g2logger blas m tbb nnls)
-
-
-# add_executable( AnalyzeTranscriptGraph ${ANALYZE_TRANSCRIPT_GRAPH} )
-# target_link_libraries( AnalyzeTranscriptGraph
-# 	${Boost_LIBRARIES} ${ZLIB_LIBRARY}
-# 	cmph # perfect hashing library
-# 	jellyfish pthread
-#     gomp lib_activeobject lib_g2logger blas m tbb)
-
-
-#add_executable( BuildIndex ${BUILD_INDEX_SRCS} )
-#target_link_libraries( BuildIndex ${Boost_LIBRARIES} jellyfish pthread m tbb)
-
-
-#add_executable( TestTsnnls ${TEST_SRCS} )
-#target_link_libraries( TestTsnnls ${Boost_LIBRARIES} ${ZLIB_LIBRARY} blas lapack gomp lib_activeobject lib_g2logger tsnnls )
