@@ -320,6 +320,83 @@ distribution (which is modeled as a truncated Gaussan with a mean
 given by ``--fldMean``).
 
 
+""""""""""""""""""""""
+``--validateMappings``
+""""""""""""""""""""""
+
+One potential artifact that may arise from *alignment-free* mapping techniques is
+*spurious mappings*.  These may either be reads that do not arise from some target being
+quantified, but nonetheless exhibit some match against them (e.g. contaminants) or, more
+commonly, mapping a read to a larget set of quantification targets than would be
+supported by an optimal or near-optimal alignment.
+
+If you pass the ``--validateMappings`` flag to Salmon, it will run an extension
+alignment dynamic program on the quasi-mappings it produces. The alignment
+procedure used to validate these mappings makes use of the highly-efficient and
+SIMD-parallelized `ksw2 <https://github.com/lh3/ksw2>`_ library.  Moreover, Salmon
+makes use of an intelligent alignment cache to avoid re-computing alignment scores
+against redundant transcript sequences (e.g. when a read maps to the same exon in
+multiple different transcripts).  The exact parameters used for scoring alignments,
+and the cutoff used for which mappings should be reported at all, are controllable
+by parameters described below.
+
+This parameter should be used in conjunction with the range factorization option
+``--rangeFactorizationBins``, and can lead to improved quantification estimates.
+It is worth noting that this also makes quantification more sensitive to
+low-quality reads, so that e.g. quality trimming may become more important
+before processing reads using this option.
+
+""""""""""""""""""""""
+``--minScoreFraction``
+""""""""""""""""""""""
+
+This value controls the minimum allowed score for a mapping to be considered valid.
+It matters only when ``--validateMappings`` has been passed to Salmon.  The maximum
+possible score for a fragment is ``ms = read_len * ma`` (or ``ms = (left_read_len + right_read_len) * ma``
+for paired-end reads).  The argument to ``--minScoreFraction`` determines what fraction of the maximum
+score ``s`` a mapping must achieve to be potentially retained.  For a minimum score fraction of ``f``, only
+mappings with a score > ``f * s`` will be kept.  Mappings with lower scores will be considered as low-quality,
+and will be discarded.
+
+It is worth noting that mapping validation uses extension alignment.  This means that the read need not
+map end-to-end.  Instead, the score of the mapping will be the position along the alignment with the
+highest score.  This is the score which must reach the fraction threshold for the read to be considered
+as valid.
+
+""""""""
+``--ma``
+""""""""
+
+This value should be a positive (typically small) integer.  It controls the score given
+to a match in the alignment between the query (read) and the reference.
+
+""""""""
+``--mp``
+""""""""
+
+This value should be a negative (typically small) integer.  It controls the score given
+to a mismatch in the alignment between the query (read) and the reference.
+
+""""""""
+``--go``
+""""""""
+
+This value should be a positive (typically small) integer. It controls the score
+penalty attributed to an alignment for each new gap that is opened. The
+alignment score computed uses an affine gap penalty, so the penalty of a gap is
+``go + l * ge`` where l is the gap length.  The value of ``go`` should typically
+be larger than that of ``ge``.
+
+""""""""
+``--ge``
+""""""""
+
+This value should be a positive (typically small) integer. It controls the score
+penalty attributed to the extension of a gap in an alignment. The
+alignment score computed uses an affine gap penalty, so the penalty of a gap is
+``go + l * ge`` where l is the gap length.  The value of ``ge`` should typically
+be smaller than that of ``go``.
+
 """"""""""""""
 ``--useVBOpt``
 """"""""""""""
@@ -328,21 +405,19 @@ Use the variational Bayesian EM algorithm rather than the "standard"
 EM algorithm to optimize abundance estimates.  The details of the VBEM
 algorithm can be found in [#salmon]_.  While both the standard EM and
 the VBEM produce accurate abundance estimates, there are some
-trade-offs between the approaches.  The EM algorithm tends to produce
-sparser estimates (i.e. more transcripts estimated to have 0
-abundance), while the VBEM, in part due to the prior, tends to
-estimate non-zero abundance for more transcripts.  Conversely, the
-prior used in the VBEM tends to have a regularizing effect, especially
-for low abundance transcripts, that leads to more consistent estimates
-of abundance at low expression levels.  We are currently working to
-analyze and understand all the tradeoffs between these different optimization
-approaches.  Also, the VBEM tends to converge after fewer iterations,
-so it may result in a shorter runtime; especially if you are computing
-many bootstrap samples.
+trade-offs between the approaches.  Specifically, the sparsity of
+the VBEM algorithm depends on the prior that is chosen.  When
+the prior is small, the VBEM tends to produce a sparser solution
+than the EM algorithm, while when the prior is relatively larger, it
+tends to estimate more non-zero abundances than the EM algorithm.
+It is an active research effort to analyze and understand all the tradeoffs
+between these different optimization approaches. Also, the VBEM tends to
+converge after fewer iterations, so it may result in a shorter runtime;
+especially if you are computing many bootstrap samples.
 
 The default prior used in the VB optimization is a *per-nucleotide* prior
-of 0.001 per nucleotide.  This means that a transcript of length 1000 will
-have a prior count of 1 fragment, while a transcript of length 500 will have
+of 1e-5 reads per-nucleotide.  This means that a transcript of length 100000 will
+have a prior count of 1 fragment, while a transcript of length 50000 will have
 a prior count of 0.5 fragments, etc.  This behavior can be modified in two
 ways.  First, the prior itself can be modified via Salmon's ``--vbPrior``
 option.  The argument to this option is the value you wish to place as the
@@ -353,6 +428,15 @@ by ``--vbPrior`` will be used as the transcript-level prior, so that the
 prior count is no longer dependent on the transcript length.  However,
 the default behavior of a *per-nucleotide* prior is recommended when
 using VB optimization.
+
+.. note:: Choosing between EM and VBEM algorithms
+
+   As mentioned above, a thorough comparison of all of the benefits and detriments
+   of the different algorithms is an ongoing area of research.  However, preliminary
+   testing suggests that the sparsity-inducing effect of running the VBEM with a small
+   prior may lead, in general, to more accurate estimates (the current testing was
+   performed mostly through simulation).  If these results persist through more
+   thorough testing, the VBEM may become the default inference mode in future versions of Salmon.
 
 
 """""""""""""""""""
