@@ -1717,7 +1717,7 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
     // deduplication starts from here
     ////////////////////////////////////////////
 
-    if(aopt.dedup) {
+    if(not aopt.noDedup) {
       jointLog->info("Starting optimizer");
       jointLog->flush();
       std::cout<< "\n\n";

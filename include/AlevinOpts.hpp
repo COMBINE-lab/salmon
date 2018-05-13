@@ -43,7 +43,7 @@ struct AlevinOpts {
   //Stop progress sumps
   bool quiet;
   //flag for deduplication
-  bool dedup;
+  bool noDedup;
   //Number of generator threads
   uint32_t numParsingThreads;
   //Number of consumer threads
@@ -57,7 +57,7 @@ struct AlevinOpts {
   // use correlation for white-listing
   bool useCorrelation;
   // don't run EM flag
-  bool noEM;
+  bool doEM;
   // perform naive deduplication
   bool naive;
   // perform txp level analysis instead of gene level

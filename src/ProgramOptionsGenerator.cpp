@@ -203,7 +203,7 @@ namespace salmon {
                                        "alevin-specific Options");
     alevinspec.add_options()
       (
-       "dedup", po::bool_switch()->default_value(alevin::defaults::dedup),
+       "nodedup", po::bool_switch()->default_value(alevin::defaults::noDedup),
        "Perform Directional per-cell deduplication")
       (
        "dropseq", po::bool_switch()->default_value(alevin::defaults::isDropseq),
@@ -281,7 +281,7 @@ namespace salmon {
        "umi length Parameter for unknown protocol. (end, umilength, barcodelength)"
        " should all be provided if using this option")
       (
-       "noem",po::bool_switch()->default_value(alevin::defaults::noEM),
+       "em",po::bool_switch()->default_value(alevin::defaults::doEM),
        "do not run em")
       (
        "txplevel",po::bool_switch()->default_value(alevin::defaults::txpLevel),

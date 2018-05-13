@@ -96,8 +96,8 @@ namespace defaults {
 
 namespace alevin {
 namespace defaults {
-  constexpr const bool naive{true};
-  constexpr const bool dedup{true};
+  constexpr const bool naive{false};
+  constexpr const bool noDedup{false};
   constexpr const bool txpLevel{false};
   constexpr const bool isDropseq{false};
   constexpr const bool isChromium{false};
@@ -113,7 +113,7 @@ namespace defaults {
   constexpr const bool dumpUMIToolsMap{false};
   constexpr const bool dumpBarcodeMap{false};
   constexpr const bool dumpCSVCounts{false};
-  constexpr const bool noEM{true};
+  constexpr const bool doEM{false};
   constexpr const bool noBarcode{false};
 }
 }

@@ -216,7 +216,7 @@ void optimizeCell(SCExpT& experiment,
                   std::shared_ptr<spdlog::logger>& jointlog,
                   bfs::path& outDir, std::vector<uint32_t>& umiCount,
                   spp::sparse_hash_set<uint32_t>& skippedCBcount,
-                  bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
+                  bool verbose, GZipWriter& gzw, size_t umiLength, bool doEM,
                   bool quiet, std::atomic<uint64_t>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, bool txpLevel, bool naive){
@@ -278,7 +278,7 @@ void optimizeCell(SCExpT& experiment,
               eqIDs.push_back(static_cast<uint32_t>(key.second));
               counts.push_back(static_cast<uint32_t>(eqCount));
             }
-            if ( naive ){
+            if (not txpLevel){
               uint32_t geneId;
               if ( alevin::utils::hasOneGene(txps, geneId,
                                              txpToGeneMap, numGenes) ){
@@ -302,7 +302,7 @@ void optimizeCell(SCExpT& experiment,
       gzw.writeCellEQVec(trueBarcodeIdx, eqIDs, counts, true);
     }
 
-    if (naive){
+    if (not txpLevel){
       std::vector<uint32_t> dummyTxpGroup {0,1};
       for (auto& geneUmis: geneUmiGroup){
         auto eqCount = dedupReads(umiLength,
@@ -319,60 +319,92 @@ void optimizeCell(SCExpT& experiment,
                   transcripts.size(),
                   txpToGeneMap);
 
-    spp::sparse_hash_set<uint32_t> removableTgroups;
-    for (size_t i=0; i<txpgroups.size(); i++){
-      // sub-selecting bgroup of this barcode only
-      auto eqCount = dedupReads(umiLength,
-                                jointlog,
-                                umigroups[i],
-                                umiBiasList,
-                                txpgroups[i]);
+    if (txpLevel or doEM){
+      // this scope contains code for deduplicating and per-Eq class level
+      spp::sparse_hash_set<uint32_t> removableTgroups;
+      for (size_t i=0; i<txpgroups.size(); i++){
+        // sub-selecting bgroup of this barcode only
+        auto eqCount = dedupReads(umiLength,
+                                  jointlog,
+                                  umigroups[i],
+                                  umiBiasList,
+                                  txpgroups[i]);
 
-      if ( eqCount != 0 ) {
-        const std::vector<uint32_t>& txps = txpgroups[i];
-        // Avi -> Major Hack
-        // Basically probStartpos is 1/effec_length.
-        // effec_length for all txp is 100
-        // Eqclass weights are set to 1 since sopt.noRichEqClasses is true
-        // Making aux as 1/#oftxps_in_class
-        // Ideally should be taken from eqclass.combinedWeights but
-        // ignoring for now
-        const tgroupweightvec auxs(txps.size(), 1.0/txps.size());
-        // convert to non-atomic
-        txpgroupcombinedweights.emplace_back(auxs.begin(), auxs.end());
-        origcounts.emplace_back(eqCount);
+        if ( eqCount != 0 ) {
+          const std::vector<uint32_t>& txps = txpgroups[i];
+          // Avi -> Major Hack
+          // Basically probStartpos is 1/effec_length.
+          // effec_length for all txp is 100
+          // Eqclass weights are set to 1 since sopt.noRichEqClasses is true
+          // Making aux as 1/#oftxps_in_class
+          // Ideally should be taken from eqclass.combinedWeights but
+          // ignoring for now
+          if (doEM){
+            const tgroupweightvec auxs(txps.size(), 1.0/txps.size());
+            // convert to non-atomic
+            txpgroupcombinedweights.emplace_back(auxs.begin(), auxs.end());
+          }
+          origcounts.emplace_back(eqCount);
 
-        totalcount += eqCount;
+          totalcount += eqCount;
 
-        // currently add only 1 length eqclass to active txps
-        for (auto& t : txps) {
-          activetranscriptids.insert(t);
+          // currently add only 1 length eqclass to active txps
+          for (auto& t : txps) {
+            activetranscriptids.insert(t);
+          }
+        }
+        else{
+          removableTgroups.insert(i);
         }
       }
-      else{
-        removableTgroups.insert(i);
-      }
-    }
 
-    // remove 0 count eqclass
-    std::vector<tgrouplabelt> newTgroups;
-    for(size_t i=0; i<txpgroups.size();i++){
-      if (not removableTgroups.contains(i)){
-        newTgroups.emplace_back(txpgroups[i]);
+      // remove 0 count eqclass
+      std::vector<tgrouplabelt> newTgroups;
+      for(size_t i=0; i<txpgroups.size();i++){
+        if (not removableTgroups.contains(i)){
+          newTgroups.emplace_back(txpgroups[i]);
+        }
       }
-    }
-    txpgroups = newTgroups;
+      txpgroups = newTgroups;
+    }// end-if txpLevel
 
-    if(noEM){
+    if(not doEM){
       // no em i.e. only eqclass mode
-      // parse through the eqclasses and extract unique gene counts
-      for (size_t k=0; k<txpgroups.size(); k++){
-        uint32_t geneId;
-        if ( alevin::utils::hasOneGene(txpgroups[k], geneId,
-                                       txpToGeneMap, numGenes) ){
-          if (not naive){
+      if (txpLevel){
+        for (size_t k=0; k<txpgroups.size(); k++){
+          uint32_t geneId;
+          if ( alevin::utils::hasOneGene(txpgroups[k], geneId,
+                                         txpToGeneMap, numGenes) ){
             geneAlphas[geneId] += origcounts[k];
             totalDedupCounts += origcounts[k];
+          }
+        }
+      }
+      else {
+        // collision resolution based on the UMI in 1-length
+        // eqclasses after minset-ting
+        geneUmiGroup.clear();
+        for (size_t k=0; k<txpgroups.size(); k++){
+          uint32_t geneId;
+          // redundant if should be removed later
+          if ( alevin::utils::hasOneGene(txpgroups[k], geneId,
+                                         txpToGeneMap, numGenes) ){
+            if ( geneUmiGroup.contains(geneId) ){
+              for (auto umiIt: umigroups[k]){
+                if (geneUmiGroup[geneId].contains(umiIt.first)){
+                  geneAlphas[geneId] += 1;
+                  totalDedupCounts += 1;
+                }
+                else{
+                  geneUmiGroup[geneId][umiIt.first] += 1;
+                }
+              }
+            }
+            else{
+              for (auto umiIt: umigroups[k]){
+                geneUmiGroup[geneId][umiIt.first] += 1;
+              }
+            }
           }
         }
       }
@@ -572,7 +604,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                aopt.dumpBarcodeEq,
                                std::ref(gzw),
                                aopt.protocol.umiLength,
-                               aopt.noEM,
+                               aopt.doEM,
                                aopt.quiet,
                                std::ref(totalDedupCounts),
                                std::ref(txpToGeneMap),
