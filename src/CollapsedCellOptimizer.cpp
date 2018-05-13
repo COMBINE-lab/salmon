@@ -368,9 +368,9 @@ void optimizeCell(SCExpT& experiment,
       txpgroups = newTgroups;
     }// end-if txpLevel
 
-    if(not doEM){
+    if( not doEM ){
       // no em i.e. only eqclass mode
-      if (txpLevel){
+      if ( txpLevel ){
         for (size_t k=0; k<txpgroups.size(); k++){
           uint32_t geneId;
           if ( alevin::utils::hasOneGene(txpgroups[k], geneId,
@@ -380,7 +380,7 @@ void optimizeCell(SCExpT& experiment,
           }
         }
       }
-      else {
+      else if( not naive ) {
         // collision resolution based on the UMI in 1-length
         // eqclasses after minset-ting
         geneUmiGroup.clear();
