@@ -388,7 +388,8 @@ void optimizeCell(SCExpT& experiment,
           uint32_t geneId;
           // redundant if should be removed later
           if ( alevin::utils::hasOneGene(txpgroups[k], geneId,
-                                         txpToGeneMap, numGenes) ){
+                                         txpToGeneMap, numGenes)
+               and txpgroups[k].size() == 1 ){
             if ( geneUmiGroup.contains(geneId) ){
               for (auto umiIt: umigroups[k]){
                 if (geneUmiGroup[geneId].contains(umiIt.first)){
