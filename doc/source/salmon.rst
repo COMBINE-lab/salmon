@@ -524,16 +524,10 @@ option ``--numGCBins``.
 arbitrary fragments, Salmon pre-computes and stores the cumulative GC
 count for each transcript.  This requires an extra 4-bytes per
 nucleotide.  While this extra memory usage should normally be minor,
-it can nonetheless be controlled with the ``--gcSizeSamp`` option.
-This option takes a positive integer argument *i*, such that Salmon
-stores the values of the cumulative GC count only at every
-*i*:sup:`th` nucleotide.  The cumulative GC count at values between
-the sampled positions are recomputed on-the-fly when necessary.  Using
-this option will reduce the memory required to store the GC
-information by a factor of *i*, but will slow down the computation of
-GC-fragment content by a factor of *i*/2.  Typically, the
-``--gcSizeSamp`` can be left at its default value of 1, but larger
-values can be chosen if necessary.
+it can nonetheless be controlled with the ``--reduceGCMemory`` option.
+This option replaces the per-nucleotide GC count with a rank-select
+capable bit vector, reducing the memory overhead from 4-bytes per
+nucleotide to ~1.25 bits, while being only marginally slower).
 
 """""""""""""""""""""
 ``--posBias``
@@ -568,7 +562,8 @@ user to set this sampling factor.  Larger values speed up effective
 length correction, but may decrease the fidelity of bias modeling.
 However, reasonably small values (e.g. 10 or less) should have only a
 minor effect on the computed effective lengths, and can considerably
-speed up effective length correction on large transcriptomes.
+speed up effective length correction on large transcriptomes.  The
+default value for ``--biasSpeedSamp`` is 5.
 
 """"""""""""""""""""""""
 ``--writeUnmappedNames``
