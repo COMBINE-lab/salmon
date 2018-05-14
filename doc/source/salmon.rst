@@ -397,6 +397,23 @@ alignment score computed uses an affine gap penalty, so the penalty of a gap is
 ``go + l * ge`` where l is the gap length.  The value of ``ge`` should typically
 be smaller than that of ``go``.
 
+""""""""""""""""""""""""""""
+``--rangeFactorizationBins``
+""""""""""""""""""""""""""""
+
+The `range-factorization <https://academic.oup.com/bioinformatics/article/33/14/i142/3953977>`_ feature
+allows using a data-driven likelihood factorization, which can improve
+quantification accuracy on certain classes of "difficult" transcripts.
+Currently, this feature interacts best (i.e., yields the most considerable
+improvements) when either (1) using alignment-based mode and simultaneously
+enabling error modeling with ``--useErrorModel`` or (2) when enabling
+``--validateMappings`` in quasi-mapping-based mode. The argument to this option
+is a positive integer ``x``, that determines fidelity of the factorization.  The larger
+``x``, the closer the factorization to the un-factorized likelihood, but the larger
+the resulting number of equivalence classes.  A value of 1 corresponds to salmon's
+traditional rich equivalence classes.  We recommend 4 as a reasonable parameter
+for this option (it is what was used in the range-factorization paper).
+
 """"""""""""""
 ``--useVBOpt``
 """"""""""""""
