@@ -18,6 +18,7 @@ before_install:
     - echo "yes" | sudo add-apt-repository ppa:george-edison55/precise-backports
     - sudo apt-get clean -qq
     - sudo apt-get update -qq
+    - sudo apt-mark showhold -qq
     - sudo apt-get install -qq cmake
     - sudo apt-get install -qq gcc-4.9 g++-4.9 
     - export CC="gcc-4.9"
