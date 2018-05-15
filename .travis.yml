@@ -15,8 +15,10 @@ before_install:
     - echo "yes" | sudo apt-add-repository ppa:boost-latest
     - echo "yes" | sudo apt-add-repository ppa:mapnik/boost-backports-1-54
     - echo "yes" | sudo apt-add-repository ppa:h-rayflood/gcc-upper
+    - echo "yes" | sudo add-apt-repository ppa:george-edison55/precise-backports
     - sudo apt-get clean -qq
     - sudo apt-get update -qq
+    - sudo apt-get install -qq cmake
     - sudo apt-get install -qq gcc-4.9 g++-4.9 
     - export CC="gcc-4.9"
     - export CXX="gcc-4.9"
