@@ -124,7 +124,7 @@ extern "C" {
 #include "SASearcher.hpp"
 #include "SalmonOpts.hpp"
 #include "SingleAlignmentFormatter.hpp"
-#include "KSW2Aligner.hpp"
+#include "ksw2pp/KSW2Aligner.hpp"
 //#include "TextBootstrapWriter.hpp"
 
 /****** QUASI MAPPING DECLARATIONS *********/

@@ -1,4 +1,4 @@
-#include "KSW2Aligner.hpp"
+#include "ksw2pp/KSW2Aligner.hpp"
 #include <iostream>
 
 /*
