@@ -18,7 +18,6 @@ addons:
       - kalakris-cmake
       - ubuntu-toolchain-r-test
       - george-edison55-precise-backports
-      - h-rayflood-gcc-upper
     packages:
       - cmake
       - cmake-data
