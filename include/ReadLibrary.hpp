@@ -86,7 +86,14 @@ public:
     unmatedFilenames_ = unmatedFilenames;
   }
 
-  /**
+    /**
+     * Add files containing pufferfish mapping outputs.
+     */
+    void addPufferfishOutput(const std::vector<std::string>& pufferfishFilenames) {
+      pufferfishFilenames_ = pufferfishFilenames;
+    }
+
+    /**
    * Return true if this read library is for paired-end reads and false
    * otherwise.
    */
@@ -280,6 +287,11 @@ public:
    */
   const std::vector<std::string>& unmated() const { return unmatedFilenames_; }
 
+    /**
+   * Return the vector of files containing the pufferfish mapping outputs for the library.
+   */
+    const std::vector<std::string>& pufferfishOutput() const { return pufferfishFilenames_; }
+
   /**
    * Return the LibraryFormat object describing the format of this read library.
    */
@@ -315,6 +327,7 @@ private:
   std::vector<std::atomic<uint64_t>> libTypeCounts_;
   std::atomic<uint64_t> numCompat_;
   std::unique_ptr<LibraryTypeDetector> detector_{nullptr};
+  std::vector<std::string> pufferfishFilenames_;
 };
 
 #endif // READ_LIBRARY_HPP
