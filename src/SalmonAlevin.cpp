@@ -1405,7 +1405,6 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
   bool burnedIn = (salmonOpts.numBurninFrags == 0);
   uint64_t numRequiredFragments = salmonOpts.numRequiredFragments;
   std::atomic<uint64_t> upperBoundHits{0};
-  // ErrorModel errMod(1.00);
   auto& refs = experiment.transcripts();
   size_t numTranscripts = refs.size();
   // The *total* number of fragments observed so far (over all passes through

@@ -15,7 +15,6 @@ extern "C" {
 #include "ClusterForest.hpp"
 #include "DistributionUtils.hpp"
 #include "EquivalenceClassBuilder.hpp"
-#include "ErrorModel.hpp"
 #include "FASTAParser.hpp"
 #include "FragmentLengthDistribution.hpp"
 #include "FragmentStartPositionDistribution.hpp"
