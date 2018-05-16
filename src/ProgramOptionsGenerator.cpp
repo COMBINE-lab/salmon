@@ -356,13 +356,7 @@ namespace salmon {
        "not be too large if you wish to keep a low memory usage, but setting it "
        "large enough to accommodate all of the mapped "
        "read can substantially speed up inference on \"small\" files that "
-       "contain only a few million reads.")
-       (
-               "pufferfish",
-               po::bool_switch(&(sopt.pufferfish))->default_value(salmon::defaults::pufferfish),
-               "This flag will expect the provided alignment file be "
-               "a pufferfish binary mapping output specialized for salmon."
-               );
+       "contain only a few million reads.");
 
     return alnspec;
   }

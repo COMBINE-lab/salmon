@@ -67,6 +67,7 @@ extern "C" {
 #include <boost/range/irange.hpp>
 #include <boost/range/iterator_range.hpp>
 #include <boost/thread/thread.hpp>
+#include <boost/algorithm/string.hpp>
 
 // TBB Includes
 #include "tbb/blocked_range.h"
@@ -2539,8 +2540,13 @@ transcript abundance from RNA-seq reads
     // ==== END: Library format processing ===
 
     SalmonIndexVersionInfo versionInfo;
-    boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
-    versionInfo.load(versionPath);
+    if (boost::iequals(indexDirectory.string(), "none")) {
+      versionInfo.indexType(SalmonIndexType::PUFFERFISH_OUTPUT); // pufferfish output without index
+    }
+    else {
+      boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
+      versionInfo.load(versionPath);
+    }
     auto idxType = versionInfo.indexType();
 
     ReadExperimentT experiment(readLibraries, indexDirectory, sopt);
@@ -2586,6 +2592,9 @@ transcript abundance from RNA-seq reads
         sopt.useQuasi = true;
         quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions,
                                         sopt, sopt.coverageThresh, sopt.numThreads);
+      } break;
+      case SalmonIndexType::PUFFERFISH_OUTPUT: {
+
       } break;
       }
     } catch (const InsufficientAssignedFragments& iaf) {

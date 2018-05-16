@@ -34,7 +34,7 @@ struct SalmonOpts {
         allowOrphans(false), splitSpanningSeeds(false), noFragLengthDist(false),
         noEffectiveLengthCorrection(false), useReadCompat(false),
         maxReadOccs(200), extraSeedPass(false),
-        mappingCacheMemoryLimit(5000000), useQuasi(false), pufferfish{false} {}
+        mappingCacheMemoryLimit(5000000), useQuasi(false) {}
 
   SalmonQuantMode quantMode; // How quantification is done
 
@@ -256,8 +256,7 @@ struct SalmonOpts {
   std::vector<std::string> mate1ReadFiles;
   std::vector<std::string> mate2ReadFiles;
 
-  // for reading pufferfish binary mapping output
-    bool pufferfish{false};
+
 };
 
 #endif // SALMON_OPTS_HPP
