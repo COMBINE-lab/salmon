@@ -56,6 +56,7 @@ set (ALEVIN_LIB_SRCS
 )
 
 set (SALMON_LIB_SRCS
+${GAT_SOURCE_DIR}/src/jellyfish/mer_dna.cc
 xxhash.c
 TranscriptGroup.cpp
 EffectiveLengthStats.cpp
