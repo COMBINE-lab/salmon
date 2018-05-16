@@ -4,7 +4,6 @@ ${GAT_SOURCE_DIR}/include/eigen3
 ${GAT_SOURCE_DIR}/external
 ${GAT_SOURCE_DIR}/external/cereal/include
 ${GAT_SOURCE_DIR}/external/install/include
-${GAT_SOURCE_DIR}/external/install/include/jellyfish-2.2.6
 ${GAT_SOURCE_DIR}/external/install/include/bwa
 ${ZLIB_INCLUDE_DIR}
 ${TBB_INCLUDE_DIRS}
@@ -12,12 +11,6 @@ ${Boost_INCLUDE_DIRS}
 ${GAT_SOURCE_DIR}/external/install/include/rapmap
 ${GAT_SOURCE_DIR}/external/install/include/rapmap/digestpp
 )
-
-if (JELLYFISH_FOUND)
-    include_directories(${JELLYFISH_INCLUDE_DIR})
-else()
-    include_directories(${GAT_SOURCE_DIR}/external/install/include/jellyfish-2.2.6)
-endif()
 
 set ( SALMON_MAIN_SRCS
 QSufSort.c
@@ -193,7 +186,6 @@ target_link_libraries(salmon
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
     ${SUFFARRAY64_LIB}
-    ${GAT_SOURCE_DIR}/external/install/lib/libjellyfish-2.0.a
     ${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
     m
     ${LIBLZMA_LIBRARIES}
@@ -218,11 +210,6 @@ if (${fetched_boost})
    add_dependencies(alevin_core libboost)
    add_dependencies(salmon_core libboost)
    add_dependencies(salmon libboost)
-endif()
-
-if (${FETCHED_JELLYFISH})
-   add_dependencies(salmon_core libjellyfish)
-   add_dependencies(salmon libjellyfish)
 endif()
 
 if (${FETCHED_TBB})
@@ -262,7 +249,6 @@ target_link_libraries(unitTests
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
     ${SUFFARRAY64_LIB}
-    ${GAT_SOURCE_DIR}/external/install/lib/libjellyfish-2.0.a
     ${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
     m
     ${LIBLZMA_LIBRARIES}

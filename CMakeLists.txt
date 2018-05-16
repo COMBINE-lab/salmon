@@ -131,7 +131,6 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
         set (BOOST_CONFIGURE_TOOLSET "--with-toolset=clang")
 	    set (BCXX_FLAGS "-stdlib=libc++ -DBOOST_HAS_INT128")
 	    set (BOOST_EXTRA_FLAGS toolset=clang cxxflags=${BCXX_FLAGS} linkflags="-stdlib=libc++")
-        set (JELLYFISH_CXX_FLAGS "-stdlib=libc++")
     # Otherwise, use libstdc++ (and make it static)
     else()
         set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static-libstdc++")
@@ -469,33 +468,6 @@ ExternalProject_Add(libbwa
     INSTALL_COMMAND sh -c "mkdir -p <INSTALL_DIR>/lib && mkdir -p <INSTALL_DIR>/include/bwa && cp libbwa.a <INSTALL_DIR>/lib && cp *.h <INSTALL_DIR>/include/bwa && cp is.c bwtindex.c bwt_gen.c QSufSort.c ${CMAKE_CURRENT_SOURCE_DIR}/src/"
     BUILD_IN_SOURCE TRUE
 )
-
-find_package(Jellyfish 2.2.6)
-
-if (NOT JELLYFISH_FOUND)
-message("Build system will fetch and build Jellyfish")
-message("==================================================================")
-ExternalProject_Add(libjellyfish
-    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    ##
-    #URL  https://github.com/gmarcais/Jellyfish/releases/download/v2.2.6/jellyfish-2.2.6.tar.gz
-    #DOWNLOAD_NAME jellyfish-2.2.6.tgz
-    #URL_HASH SHA1=53819a57ea8ffae26e3f917babf978f8215ef117
-    #TLS_VERIFY FALSE
-    ##
-    DOWNLOAD_COMMAND curl -k -L https://github.com/gmarcais/Jellyfish/releases/download/v2.2.6/jellyfish-2.2.6.tar.gz -o jellyfish-2.2.6.tgz &&
-                     ${SHASUM} 4532fb003a0494f6473bb97d52467904f631b94f7f9afb0d45b398f6c413692e  jellyfish-2.2.6.tgz &&
-    	rm -fr jellyfish-2.2.6 &&
-     	tar -xzvf jellyfish-2.2.6.tgz
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jellyfish-2.2.6
-    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    CONFIGURE_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/external/jellyfish-2.2.6/configure --prefix=<INSTALL_DIR> CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CXXFLAGS=${JELLYFISH_CXX_FLAGS}
-    BUILD_COMMAND ${MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CXXFLAGS=${JELLYFISH_CXX_FLAGS}
-    BUILD_IN_SOURCE 1
-    INSTALL_COMMAND make ${QUIET_MAKE} install
-)
-set (FETCHED_JELLYFISH TRUE)
-endif()
 
 ## Try and find TBB first
 find_package(TBB 2018.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy )
