@@ -1011,7 +1011,7 @@ void processReadsQuasi(
 
            if(salmonOpts.strictFilter and jointHits.size() > 0){
 
-                    auto minDist = 200;// salmonOpts.editDistance*2;
+                    auto minDist = salmonOpts.editDistance*2;
                     std::for_each(jointHits.begin(), jointHits.end(),
                         [&minDist](QuasiAlignment& a) {
                         if (a.editD < minDist and a.editD != -1) { minDist = a.editD; }
@@ -1468,7 +1468,7 @@ void processReadsQuasi(
 
       if(salmonOpts.strictFilter and jointHits.size() > 0){
 
-	    auto minDist = 200;// salmonOpts.editDistance*2;
+	    auto minDist =  salmonOpts.editDistance*2;
 	    std::for_each(jointHits.begin(), jointHits.end(),
 		[&minDist](QuasiAlignment& a) {
 		if (a.editD < minDist and a.editD != -1) { minDist = a.editD; }
