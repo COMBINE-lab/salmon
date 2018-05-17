@@ -99,6 +99,7 @@ public:
    */
   bool isPairedEnd() { return (fmt_.type == ReadType::PAIRED_END); }
 
+  bool isInputPufferfishOutput() { return isInputPufferfishOutput_;}
   /**
    * If this is set, attempt to automatically detect this library's type
    */
@@ -231,6 +232,7 @@ public:
    */
   void checkValid() {
 
+    if (isInputPufferfishOutput_) return;
     bool readsOK{true};
 
     std::stringstream errorStream;
@@ -304,6 +306,7 @@ public:
     numCompat_ += numCompat;
   }
 
+  inline void setInputIsPufferfishOutput() { isInputPufferfishOutput_ = true;}
   uint64_t numCompat() const { return numCompat_; }
 
   /**
@@ -328,6 +331,7 @@ private:
   std::atomic<uint64_t> numCompat_;
   std::unique_ptr<LibraryTypeDetector> detector_{nullptr};
   std::vector<std::string> pufferfishFilenames_;
+  bool isInputPufferfishOutput_{false};
 };
 
 #endif // READ_LIBRARY_HPP

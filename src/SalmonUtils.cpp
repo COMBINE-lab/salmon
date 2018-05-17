@@ -728,6 +728,7 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
   }
   if (isInputPufferfishOutput) {
     libs.push_back(peFormat);
+    libs.back().setInputIsPufferfishOutput();
     for (auto& opt : orderedOptions.options) {
       if (opt.string_key == "unmatedReads") {
         libs.back().addPufferfishOutput(opt.value);

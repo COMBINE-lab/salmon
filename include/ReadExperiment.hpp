@@ -33,6 +33,7 @@ extern "C" {
 // Boost includes
 #include <boost/filesystem.hpp>
 #include <boost/range/irange.hpp>
+#include <boost/algorithm/string.hpp>
 
 // Cereal includes
 #include "cereal/archives/json.hpp"
@@ -125,13 +126,18 @@ public:
     // ==== Figure out the index type
     boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
     SalmonIndexVersionInfo versionInfo;
-    versionInfo.load(versionPath);
-    if (versionInfo.indexVersion() == 0) {
-      fmt::MemoryWriter infostr;
-      infostr << "Error: The index version file " << versionPath.string()
-              << " doesn't seem to exist.  Please try re-building the salmon "
-                 "index.";
-      throw std::invalid_argument(infostr.str());
+    if (boost::iequals(indexDirectory.string(), "none")) {
+      versionInfo.indexType(SalmonIndexType::PUFFERFISH_OUTPUT); // pufferfish output without index
+    }
+    else {
+      versionInfo.load(versionPath);
+      if (versionInfo.indexVersion() == 0) {
+        fmt::MemoryWriter infostr;
+        infostr << "Error: The index version file " << versionPath.string()
+                << " doesn't seem to exist.  Please try re-building the salmon "
+                   "index.";
+        throw std::invalid_argument(infostr.str());
+      }
     }
     // Check index version compatibility here
     auto indexType = versionInfo.indexType();
