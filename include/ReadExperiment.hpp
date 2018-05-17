@@ -124,12 +124,14 @@ public:
     */
 
     // ==== Figure out the index type
-    boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
+
+    // Check index version compatibility here
     SalmonIndexVersionInfo versionInfo;
     if (boost::iequals(indexDirectory.string(), "none")) {
       versionInfo.indexType(SalmonIndexType::PUFFERFISH_OUTPUT); // pufferfish output without index
     }
     else {
+      boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
       versionInfo.load(versionPath);
       if (versionInfo.indexVersion() == 0) {
         fmt::MemoryWriter infostr;
@@ -138,15 +140,15 @@ public:
                    "index.";
         throw std::invalid_argument(infostr.str());
       }
+
     }
-    // Check index version compatibility here
-    auto indexType = versionInfo.indexType();
+
     // ==== Figure out the index type
+    auto indexType = versionInfo.indexType();
 
     salmonIndex_.reset(new SalmonIndex(sopt.jointLog, indexType));
-    salmonIndex_->load(indexDirectory);
-
-    // Now we'll have either an FMD-based index or a QUASI index
+    salmonIndex_->load(indexDirectory, indexType);
+    // Now we'll have either an FMD-based index, a QUASI index, or a Pufferfish index
     // dispatch on the correct type.
 
     switch (salmonIndex_->indexType()) {
@@ -170,7 +172,11 @@ public:
     case SalmonIndexType::FMD:
       loadTranscriptsFromFMD();
       break;
+    case SalmonIndexType::PUFFERFISH_OUTPUT:
+      loadTranscriptsFromPuffOut();
+      break;
     }
+
 
     // Create the cluster forest for this set of transcripts
     clusters_.reset(new ClusterForest(transcripts_.size(), transcripts_));
@@ -435,6 +441,10 @@ public:
     transcripts_tmp.clear();
     // ====== Done loading the transcripts from file
     setTranscriptLengthClasses_(lengths, posBiasFW_.size());
+  }
+
+  void loadTranscriptsFromPuffOut() {
+    std::cerr << "read experiment | loadtranscriptsfrompuffout -- pufferfish output\n";
   }
 
   template <typename CallbackT>

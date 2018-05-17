@@ -804,6 +804,7 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
       log->info("There are {} libraries.", numLibs);
     }
   }
+  std::cerr << "before return: " << libs.back().isInputPufferfishOutput() << "\n";
   return libs;
 }
 

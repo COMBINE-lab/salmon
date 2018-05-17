@@ -32,6 +32,7 @@ public:
       : fmt_(rl.fmt_), unmatedFilenames_(rl.unmatedFilenames_),
         mateOneFilenames_(rl.mateOneFilenames_),
         mateTwoFilenames_(rl.mateTwoFilenames_),
+        isInputPufferfishOutput_(rl.isInputPufferfishOutput_),
         libTypeCounts_(std::vector<std::atomic<uint64_t>>(
             LibraryFormat::maxLibTypeID() + 1)) {
     size_t mc = LibraryFormat::maxLibTypeID() + 1;
@@ -51,6 +52,7 @@ public:
       : fmt_(rl.fmt_), unmatedFilenames_(std::move(rl.unmatedFilenames_)),
         mateOneFilenames_(std::move(rl.mateOneFilenames_)),
         mateTwoFilenames_(std::move(rl.mateTwoFilenames_)),
+        isInputPufferfishOutput_(rl.isInputPufferfishOutput_),
         libTypeCounts_(std::vector<std::atomic<uint64_t>>(
             LibraryFormat::maxLibTypeID() + 1)) {
     size_t mc = LibraryFormat::maxLibTypeID() + 1;
@@ -192,7 +194,21 @@ public:
 
   std::string readFilesAsString() {
     std::stringstream sstr;
-    if (isPairedEnd()) {
+    if (isInputPufferfishOutput()) {
+      size_t n = pufferfishFilenames_.size();
+      if (n == 0) {
+        sstr << "LIBRARY INVALID --- You must provide pufferfish output files with "
+                "a pufferfish library type (when index is none you should set value for unmated file)";
+      } else {
+        for (size_t i = 0; i < n; ++i) {
+          sstr << pufferfishFilenames_[i];
+          if (i != n - 1) {
+            sstr << ", ";
+          }
+        }
+      }
+    }
+    else if (isPairedEnd()) {
       size_t n1 = mateOneFilenames_.size();
       size_t n2 = mateTwoFilenames_.size();
       if (n1 == 0 or n2 == 0 or n1 != n2) {
@@ -210,7 +226,7 @@ public:
     } else { // single end
       size_t n = unmatedFilenames_.size();
       if (n == 0) {
-        sstr << "LIBRARY INVALID --- You must provide unmated read files with "
+        sstr << "LIBRARY INVALID --- You mus files with "
                 "a single-end library type";
       } else {
         for (size_t i = 0; i < n; ++i) {

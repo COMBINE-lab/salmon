@@ -1838,6 +1838,10 @@ void processReadLibrary(
       } // End spawn all threads
     }   // End Quasi index
     break;
+      case SalmonIndexType::PUFFERFISH_OUTPUT: {
+        std::cerr << "salmon quantify -- pufferfish output\n";
+      } // End Pufferfish Output
+      break;
     } // end switch
 
     for (auto& t : threads) {
@@ -2065,6 +2069,10 @@ void processReadLibrary(
       } // End spawn all threads
     }   // End Quasi index
     break;
+        case SalmonIndexType::PUFFERFISH_OUTPUT: {
+            std::cerr << "salmon quantify 3 -- pufferfish output\n";
+        } break;
+
     }
     for (auto& t : threads) {
       t.join();
@@ -2537,7 +2545,6 @@ transcript abundance from RNA-seq reads
       std::exit(1);
     }
     // ==== END: Library format processing ===
-
     ReadExperimentT experiment(readLibraries, indexDirectory, sopt);
 
     // This will be the class in charge of maintaining our
@@ -2583,7 +2590,7 @@ transcript abundance from RNA-seq reads
                                         sopt, sopt.coverageThresh, sopt.numThreads);
       } break;
       case SalmonIndexType::PUFFERFISH_OUTPUT: {
-
+        std::cerr << "salmon quantify 2 -- pufferfish output\n";
       } break;
       }
     } catch (const InsufficientAssignedFragments& iaf) {

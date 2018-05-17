@@ -68,15 +68,23 @@ public:
     // Check index version compatibility here
 
     auto indexType = versionInfo_.indexType();
-    // Load the appropriate index type
-    if (indexType == SalmonIndexType::FMD) {
-      loadFMDIndex_(indexDir);
-    } else {
-      loadQuasiIndex_(indexDir);
-    }
-
-    loaded_ = true;
+    load(indexDir, indexType);
   }
+
+    void load(const boost::filesystem::path& indexDir, SalmonIndexType indexType) {
+      versionInfo_.indexType(indexType);
+      // Load the appropriate index type
+      switch (indexType) {
+          case SalmonIndexType::FMD:
+            loadFMDIndex_(indexDir); break;
+          case SalmonIndexType::QUASI:
+            loadQuasiIndex_(indexDir); break;
+          case SalmonIndexType::PUFFERFISH_OUTPUT:
+            std::cerr << "salmon index -- pufferfish output (no index)\n"; break;
+      }
+
+      loaded_ = true;
+    }
 
   bool buildAux_(boost::filesystem::path indexDir, uint32_t k) {
     namespace bfs = boost::filesystem;
