@@ -1319,6 +1319,18 @@ bool validateOptionsMapping_(SalmonOpts& sopt) {
                         sopt.mismatchPenalty, -sopt.mismatchPenalty);
     sopt.mismatchPenalty = -sopt.mismatchPenalty;
   }
+
+  // If we have validate mappings, then make sure we automatically enable
+  // range factorization
+  if (sopt.validateMappings and sopt.rangeFactorizationBins < 4) {
+    uint32_t nbins{4};
+    sopt.jointLog->info(
+                        "Usage of --validateMappings implies use of range factorization. "
+                        "rangeFactorization bins is being set to {}", nbins
+                        );
+    sopt.rangeFactorizationBins = nbins;
+    sopt.useRangeFactorization = true;
+  }
   return true;
 }
 
