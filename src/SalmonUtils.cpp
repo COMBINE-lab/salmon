@@ -1309,6 +1309,15 @@ bool validateOptionsAlignment_(SalmonOpts& sopt) {
         "sampled "
         "output file (-s/--sampleOut).  This flag will be ignored!");
   }
+  if (!sopt.useErrorModel and sopt.rangeFactorizationBins < 4) {
+    uint32_t nbins{4};
+    sopt.jointLog->info(
+                        "Usage of --useErrorModel implies use of range factorization. "
+                        "rangeFactorization bins is being set to {}", nbins
+                        );
+    sopt.rangeFactorizationBins = nbins;
+    sopt.useRangeFactorization = true;
+  }
   return true;
 }
 
