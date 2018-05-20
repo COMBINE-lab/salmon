@@ -6,8 +6,8 @@
 #include <cstdlib>
 
 extern "C" {
-#include "kalloc.h"
-#include "ksw2.h"
+#include "ksw2pp/kalloc.h"
+#include "ksw2pp/ksw2.h"
 }
 
 namespace ksw2pp {

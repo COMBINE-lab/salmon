@@ -124,7 +124,7 @@ extern "C" {
 #include "SASearcher.hpp"
 #include "SalmonOpts.hpp"
 #include "SingleAlignmentFormatter.hpp"
-#include "KSW2Aligner.hpp"
+#include "ksw2pp/KSW2Aligner.hpp"
 //#include "TextBootstrapWriter.hpp"
 
 /****** QUASI MAPPING DECLARATIONS *********/
@@ -1121,7 +1121,7 @@ void processReadsQuasi(
           double optFrac{salmonOpts.minScoreFraction};
 
           for (auto& h : jointHits) {
-            int32_t score{-1};
+            int32_t score{std::numeric_limits<int32_t>::min()};
             auto& t = transcripts[h.tid];
             char* tseq = const_cast<char*>(t.Sequence());
             const int32_t tlen = static_cast<int32_t>(t.RefLength);
@@ -1134,47 +1134,62 @@ void processReadsQuasi(
               auto s1 = getAlnScore(h.pos, r1ptr, l1, tseq, tlen, buf, alnCacheLeft);
               auto s2 = getAlnScore(h.matePos, r2ptr, l2, tseq, tlen, buf, alnCacheRight);
               if ((s1 + s2) < (optFrac * a * rp.first.seq.length() + optFrac * a * rp.second.seq.length())) {
-                s1 = -1000;
-                s2 = -1000;
+                score = std::numeric_limits<decltype(score)>::min();
+              } else {
+                score = s1 + s2;
               }
-              score = s1 + s2;
               // h.score_ = score;
             } else if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_LEFT) {
               auto* rptr = h.fwd ? r1 : r1rc;
               auto s = getAlnScore(h.pos, rptr, l1, tseq, tlen, buf, alnCacheLeft);
               if (s < (optFrac * a * rp.first.seq.length())) {
-                s = -1000;
+                score = std::numeric_limits<decltype(score)>::min();
+              } else {
+                score = s;
               }
-              score = s;
               // h.score_ = score;
             } else if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_RIGHT) {
               auto* rptr = h.fwd ? r2 : r2rc;
               auto s = getAlnScore(h.pos, rptr, l2, tseq, tlen, buf, alnCacheRight);
               if (s < (optFrac * a * rp.second.seq.length())) {
-                s = -1000;
+                score = std::numeric_limits<decltype(score)>::min();
+              } else {
+                score = s;
               }
-              score = s;
               //h.score_ = score;
             }
 
             bestScore = (score > bestScore) ? score : bestScore;
             scores[idx] = score;
+            h.score(score);
             ++idx;
           }
 
           uint32_t ctr{0};
-          jointHits.erase(
-                          std::remove_if(jointHits.begin(), jointHits.end(),
-                                         [&ctr, &scores, &numDropped, /*&salmonOpts, &rp, &rc1, &rc2, &transcripts,*/ bestScore] (const QuasiAlignment& qa) -> bool {
-                         bool rem = scores[ctr] < bestScore;
-                         ++ctr;
-                         numDropped += rem ? 1 : 0;
-                         return rem;
-                       }),
-                     jointHits.end()
-                     );
-          if (jointHits.size() == 0) { jointHitGroup.clearAlignments(); }
-
+          if (bestScore > std::numeric_limits<int32_t>::min()) {
+            // Note --- with soft filtering, only those hits that are given the minimum possible
+            // score are filtered out.
+            jointHits.erase(
+                            std::remove_if(jointHits.begin(), jointHits.end(),
+                                           [&ctr, &scores, &numDropped, /*&salmonOpts, &rp, &rc1, &rc2, &transcripts,*/ bestScore] (const QuasiAlignment& qa) -> bool {
+                                             bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
+                                             //bool rem = (scores[ctr] < bestScore);
+                                             ++ctr;
+                                             numDropped += rem ? 1 : 0;
+                                             return rem;
+                                           }),
+                            jointHits.end()
+                            );
+            //if (jointHits.size() == 0) { jointHitGroup.clearAlignments(); }
+            double bestScoreD = static_cast<double>(bestScore);
+            std::for_each(jointHits.begin(), jointHits.end(),
+                          [bestScoreD](QuasiAlignment& qa) -> void {
+                            double v = bestScoreD - qa.score();
+                            qa.score(std::exp(-v));
+                          });
+          } else {
+            jointHitGroup.clearAlignments();
+          }
         }
 
         bool needBiasSample = salmonOpts.biasCorrect;
@@ -1589,13 +1604,13 @@ void processReadsQuasi(
           rapmap::utils::reverseRead(rp.seq, rc1);
           // we will not break the const promise
           char* r1rc = const_cast<char*>(rc1.data());
-          int32_t bestScore{-1};
+          int32_t bestScore{std::numeric_limits<int32_t>::min()};
           std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
           size_t idx{0};
           double optFrac{salmonOpts.minScoreFraction};
 
           for (auto& h : jointHits) {
-            int32_t score{-1};
+            int32_t score{std::numeric_limits<int32_t>::min()};
             auto& t = transcripts[h.tid];
             char* tseq = const_cast<char*>(t.Sequence());
             const int32_t tlen = static_cast<int32_t>(t.RefLength);
@@ -1604,27 +1619,40 @@ void processReadsQuasi(
             auto* rptr = h.fwd ? r1 : r1rc;
             auto s = getAlnScore(h.pos, rptr, l1, tseq, tlen, buf, alnCache);
             if (s < (optFrac * a * rp.seq.length())) {
-              s = -1000;
+              score = std::numeric_limits<decltype(score)>::min();
+            } else {
+              score = s;
             }
-            score = s;
-
             bestScore = (score > bestScore) ? score : bestScore;
             scores[idx] = score;
             ++idx;
           }
 
           uint32_t ctr{0};
-          jointHits.erase(
-                          std::remove_if(jointHits.begin(), jointHits.end(),
-                                         [&ctr, &scores, &numDropped, /*&salmonOpts, &rp, &rc1, &rc2, &transcripts,*/ bestScore] (const QuasiAlignment& qa) -> bool {
-                         bool rem = scores[ctr] < bestScore;
-                         ++ctr;
-                         numDropped += rem ? 1 : 0;
-                         return rem;
-                       }),
-                     jointHits.end()
-                     );
-          if (jointHits.size() == 0) { jointHitGroup.clearAlignments(); }
+          if (bestScore > std::numeric_limits<int32_t>::min()) {
+            // Note --- with soft filtering, only those hits that are given the minimum possible
+            // score are filtered out.
+            jointHits.erase(
+                            std::remove_if(jointHits.begin(), jointHits.end(),
+                                           [&ctr, &scores, &numDropped, /*&salmonOpts, &rp, &rc1, &rc2, &transcripts,*/ bestScore] (const QuasiAlignment& qa) -> bool {
+                                             bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
+                                             //bool rem = (scores[ctr] < bestScore);
+                                             ++ctr;
+                                             numDropped += rem ? 1 : 0;
+                                             return rem;
+                                           }),
+                            jointHits.end()
+                            );
+            //if (jointHits.size() == 0) { jointHitGroup.clearAlignments(); }
+            double bestScoreD = static_cast<double>(bestScore);
+            std::for_each(jointHits.begin(), jointHits.end(),
+                          [bestScoreD](QuasiAlignment& qa) -> void {
+                            double v = bestScoreD - qa.score();
+                            qa.score(std::exp(-v));
+                          });
+          } else {
+            jointHitGroup.clearAlignments();
+          }
         }
 
 
@@ -2334,7 +2362,6 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
   bool burnedIn = (salmonOpts.numBurninFrags == 0);
   uint64_t numRequiredFragments = salmonOpts.numRequiredFragments;
   std::atomic<uint64_t> upperBoundHits{0};
-  // ErrorModel errMod(1.00);
   auto& refs = experiment.transcripts();
   size_t numTranscripts = refs.size();
   // The *total* number of fragments observed so far (over all passes through

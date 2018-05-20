@@ -1,5 +1,5 @@
 #include <stdio.h> // for debugging only
-#include "ksw2.h"
+#include "ksw2pp/ksw2.h"
 
 typedef struct { int32_t h, e; } eh_t;
 

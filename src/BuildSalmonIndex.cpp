@@ -20,10 +20,6 @@
 #include "cereal/archives/binary.hpp"
 #include "cereal/types/vector.hpp"
 
-#include "jellyfish/err.hpp"
-#include "jellyfish/jellyfish.hpp"
-#include "jellyfish/misc.hpp"
-
 #include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/program_options.hpp>

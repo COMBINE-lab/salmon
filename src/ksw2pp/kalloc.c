@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
-#include "kalloc.h"
+#include "ksw2pp/kalloc.h"
 
 /* The whole thing is: ("@" for the kheader_t of the block, "-" for free
  * memory, and "+" for allocated memory. One char for one unit.)

@@ -1309,6 +1309,15 @@ bool validateOptionsAlignment_(SalmonOpts& sopt) {
         "sampled "
         "output file (-s/--sampleOut).  This flag will be ignored!");
   }
+  if (sopt.useErrorModel and sopt.rangeFactorizationBins < 4) {
+    uint32_t nbins{4};
+    sopt.jointLog->info(
+                        "Usage of --useErrorModel implies use of range factorization. "
+                        "rangeFactorization bins is being set to {}", nbins
+                        );
+    sopt.rangeFactorizationBins = nbins;
+    sopt.useRangeFactorization = true;
+  }
   return true;
 }
 
@@ -1318,6 +1327,18 @@ bool validateOptionsMapping_(SalmonOpts& sopt) {
                         "You set the mismatch penalty as {}, but it should be negative.  It is being negated to {}.",
                         sopt.mismatchPenalty, -sopt.mismatchPenalty);
     sopt.mismatchPenalty = -sopt.mismatchPenalty;
+  }
+
+  // If we have validate mappings, then make sure we automatically enable
+  // range factorization
+  if (sopt.validateMappings and sopt.rangeFactorizationBins < 4) {
+    uint32_t nbins{4};
+    sopt.jointLog->info(
+                        "Usage of --validateMappings implies use of range factorization. "
+                        "rangeFactorization bins is being set to {}", nbins
+                        );
+    sopt.rangeFactorizationBins = nbins;
+    sopt.useRangeFactorization = true;
   }
   return true;
 }

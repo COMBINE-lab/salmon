@@ -18,7 +18,7 @@ namespace defaults {
 
   // advanced
   constexpr const bool validateMappings{false};
-  constexpr const double minScoreFraction{0.90};
+  constexpr const double minScoreFraction{0.65};
   constexpr const int8_t matchScore{2};
   constexpr const int8_t mismatchPenalty{-4};
   constexpr const int8_t gapOpenPenalty{5};

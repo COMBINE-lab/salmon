@@ -1,5 +1,5 @@
 #include <stdio.h> // for debugging only
-#include "ksw2.h"
+#include "ksw2pp/ksw2.h"
 
 int ksw_gg2(void *km, int qlen, const uint8_t *query, int tlen, const uint8_t *target, int8_t m, const int8_t *mat, int8_t q, int8_t e, int w, int *m_cigar_, int *n_cigar_, uint32_t **cigar_)
 {
