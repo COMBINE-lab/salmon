@@ -203,7 +203,7 @@ namespace salmon {
                                        "alevin-specific Options");
     alevinspec.add_options()
       (
-       "nodedup", po::bool_switch()->default_value(alevin::defaults::noDedup),
+       "noDedup", po::bool_switch()->default_value(alevin::defaults::noDedup),
        "Perform Directional per-cell deduplication")
       (
        "dropseq", po::bool_switch()->default_value(alevin::defaults::isDropseq),
@@ -224,16 +224,16 @@ namespace salmon {
        "whitelist", po::value<std::string>(),
        "File containing white-list barcodes")
       (
-       "dumpbarcodeeq", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeEq),
+       "dumpBarcodeEq", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeEq),
        "Dump JointEqClas with umi-barcode count.(Only DropSeq)")
       (
-       "noquant", po::bool_switch()->default_value(alevin::defaults::noQuant),
+       "noQuant", po::bool_switch()->default_value(alevin::defaults::noQuant),
        "Don't run downstream barcode-salmon model.")
       (
        "naive", po::bool_switch()->default_value(alevin::defaults::naive),
        "Run Gene level naive deduplication")
       (
-       "nosoftmap", po::bool_switch()->default_value(alevin::defaults::noSoftMap),
+       "noSoftMap", po::bool_switch()->default_value(alevin::defaults::noSoftMap),
        "Don't use soft-assignment for quant instead do hard-assignment.")
       (
        "mrna", po::value<std::string>(),
@@ -242,7 +242,7 @@ namespace salmon {
        "rrna", po::value<std::string>(),
        "path to a file containing ribosomal RNA, one per line")
       (
-       "usecorrelation", po::bool_switch()->default_value(alevin::defaults::useCorrelation),
+       "useCorrelation", po::bool_switch()->default_value(alevin::defaults::useCorrelation),
        "Use pair-wise pearson correlation with True barcodes as a"
        " feature for white-list creation.")
       (
@@ -250,19 +250,19 @@ namespace salmon {
        "Dump barcode modified fastq file for downstream analysis by"
        "using coin toss for multi-mapping.")
       (
-       "dumpbfh", po::bool_switch()->default_value(alevin::defaults::dumpBFH),
+       "dumpBfh", po::bool_switch()->default_value(alevin::defaults::dumpBFH),
        "dump the big hash with all the barcodes and the UMI sequence.")
       (
-       "dumpfeatures", po::bool_switch()->default_value(alevin::defaults::dumpFeatures),
+       "dumpFeatures", po::bool_switch()->default_value(alevin::defaults::dumpFeatures),
        "Dump features for whitelist and downstream analysis.")
       (
-       "dumpumitoolsmap", po::bool_switch()->default_value(alevin::defaults::dumpUMIToolsMap),
+       "dumpUmitoolsMap", po::bool_switch()->default_value(alevin::defaults::dumpUMIToolsMap),
        "Dump umi_tools readable whitelist map for downstream analysis.")
       (
-       "dumpbarcodemap", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeMap),
+       "dumpBarcodeMap", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeMap),
        "Dump BarcodeMap for downstream analysis.")
       (
-       "dumpcsvcounts", po::bool_switch()->default_value(alevin::defaults::dumpCSVCounts),
+       "dumpCsvCounts", po::bool_switch()->default_value(alevin::defaults::dumpCSVCounts),
        "Dump cell v transcripts count matrix in csv format.")
       (
        "iupac,u",po::value<std::string>(),
@@ -270,29 +270,29 @@ namespace salmon {
       (
        "end",po::value<uint32_t>(),
        "Cell-Barcodes end (5 or 3) location in the read sequence from where barcode has to"
-       "be extracted. (end, umilength, barcodelength)"
+       "be extracted. (end, umiLength, barcodeLength)"
        " should all be provided if using this option")
       (
-       "umilength",po::value<uint32_t>(),
-       "umi length Parameter for unknown protocol. (end, umilength, barcodelength)"
+       "umiLength",po::value<uint32_t>(),
+       "umi length Parameter for unknown protocol. (end, umiLength, barcodeLength)"
        " should all be provided if using this option")
       (
-       "barcodelength",po::value<uint32_t>(),
-       "umi length Parameter for unknown protocol. (end, umilength, barcodelength)"
+       "barcodeLength",po::value<uint32_t>(),
+       "umi length Parameter for unknown protocol. (end, umiLength, barcodeLength)"
        " should all be provided if using this option")
       (
        "em",po::bool_switch()->default_value(alevin::defaults::doEM),
        "do not run em")
       (
-       "txplevel",po::bool_switch()->default_value(alevin::defaults::txpLevel),
+       "txpLevel",po::bool_switch()->default_value(alevin::defaults::txpLevel),
        "perform txp level analysis instead of gene level")
       (
-       "nobarcode",po::bool_switch()->default_value(alevin::defaults::noBarcode),
+       "noBarcode",po::bool_switch()->default_value(alevin::defaults::noBarcode),
        "this flag should be used when there is no barcode i.e. only one cell deduplication.")
       (
        "tgMap", po::value<std::string>(), "transcript to gene map tsv file")
       (
-       "freqthreshold",po::value<uint32_t>(),
+       "freqThreshold",po::value<uint32_t>(),
        "threshold for the frequency of the barcodes");
     return alevinspec;
   }

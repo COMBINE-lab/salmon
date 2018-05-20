@@ -272,28 +272,28 @@ namespace alevin {
 
       uint32_t barEnd{0}, barcodeLength{0}, umiLength{0};
 
-      if(vm.count("end") and vm.count("barcodelength") and vm.count("umilength")){
+      if(vm.count("end") and vm.count("barcodeLength") and vm.count("umiLength")){
         barEnd = vm["end"].as<uint32_t>();
-        barcodeLength = vm["barcodelength"].as<uint32_t>();
-        umiLength = vm["umilength"].as<uint32_t>();
+        barcodeLength = vm["barcodeLength"].as<uint32_t>();
+        umiLength = vm["umiLength"].as<uint32_t>();
       }
 
       aopt.quiet = vm["quiet"].as<bool>();
       aopt.doEM = vm["em"].as<bool>();
-      aopt.useCorrelation = vm["usecorrelation"].as<bool>();
-      aopt.noDedup = vm["nodedup"].as<bool>();
+      aopt.useCorrelation = vm["useCorrelation"].as<bool>();
+      aopt.noDedup = vm["noDedup"].as<bool>();
       aopt.naive = vm["naive"].as<bool>();
-      aopt.noQuant = vm["noquant"].as<bool>();
-      aopt.noSoftMap = vm["nosoftmap"].as<bool>();
+      aopt.noQuant = vm["noQuant"].as<bool>();
+      aopt.noSoftMap = vm["noSoftMap"].as<bool>();
       aopt.dumpfq = vm["dumpfq"].as<bool>();
-      aopt.dumpBFH = vm["dumpbfh"].as<bool>();
-      aopt.txpLevel = vm["txplevel"].as<bool>();
-      aopt.nobarcode = vm["nobarcode"].as<bool>();
-      aopt.dumpfeatures = vm["dumpfeatures"].as<bool>();
-      aopt.dumpCsvCounts = vm["dumpcsvcounts"].as<bool>();
-      aopt.dumpBarcodeEq = vm["dumpbarcodeeq"].as<bool>();
-      aopt.dumpBarcodeMap = vm["dumpbarcodemap"].as<bool>();
-      aopt.dumpUmiToolsMap = vm["dumpumitoolsmap"].as<bool>();
+      aopt.dumpBFH = vm["dumpBfh"].as<bool>();
+      aopt.txpLevel = vm["txpLevel"].as<bool>();
+      aopt.nobarcode = vm["noBarcode"].as<bool>();
+      aopt.dumpfeatures = vm["dumpFeatures"].as<bool>();
+      aopt.dumpCsvCounts = vm["dumpCsvCounts"].as<bool>();
+      aopt.dumpBarcodeEq = vm["dumpBarcodeEq"].as<bool>();
+      aopt.dumpBarcodeMap = vm["dumpBarcodeMap"].as<bool>();
+      aopt.dumpUmiToolsMap = vm["dumpUmitoolsMap"].as<bool>();
       if(vm.count("iupac")){
         aopt.iupac = vm["iupac"].as<std::string>();
       }
