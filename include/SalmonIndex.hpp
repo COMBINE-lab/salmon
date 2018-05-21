@@ -80,7 +80,8 @@ public:
           case SalmonIndexType::QUASI:
             loadQuasiIndex_(indexDir); break;
           case SalmonIndexType::PUFFERFISH_OUTPUT:
-            std::cerr << "salmon index -- pufferfish output (no index)\n"; break;
+            logger_->info("salmon index -- pufferfish output (no index)");
+              break;
       }
 
       loaded_ = true;

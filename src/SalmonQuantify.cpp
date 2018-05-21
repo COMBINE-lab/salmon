@@ -2643,8 +2643,9 @@ transcript abundance from RNA-seq reads
             std::exit(1);
         }
         // ==== END: Library format processing ===
+        jointLog->info("gathering experiment stats");
         ReadExperimentT experiment(readLibraries, indexDirectory, sopt);
-
+        jointLog->info("end of experiment loading");
         // This will be the class in charge of maintaining our
         // rich equivalence classes
         experiment.equivalenceClassBuilder().start();

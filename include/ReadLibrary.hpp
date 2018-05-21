@@ -34,6 +34,7 @@ public:
         mateOneFilenames_(rl.mateOneFilenames_),
         mateTwoFilenames_(rl.mateTwoFilenames_),
         isInputPufferfishOutput_(rl.isInputPufferfishOutput_),
+        pufferfishFilenames_(rl.pufferfishFilenames_),
         libTypeCounts_(std::vector<std::atomic<uint64_t>>(
             LibraryFormat::maxLibTypeID() + 1)) {
     size_t mc = LibraryFormat::maxLibTypeID() + 1;
@@ -54,6 +55,7 @@ public:
         mateOneFilenames_(std::move(rl.mateOneFilenames_)),
         mateTwoFilenames_(std::move(rl.mateTwoFilenames_)),
         isInputPufferfishOutput_(rl.isInputPufferfishOutput_),
+        pufferfishFilenames_(rl.pufferfishFilenames_),
         libTypeCounts_(std::vector<std::atomic<uint64_t>>(
             LibraryFormat::maxLibTypeID() + 1)) {
     size_t mc = LibraryFormat::maxLibTypeID() + 1;

@@ -53,6 +53,8 @@ private:
 class PuffoutFilePointer {
 public:
     PuffoutFilePointer(std::string filename) {
+        logger = spdlog::get("jointLog");
+        std::cerr << "reading from pufferfish output: " << filename << "\n";
         inFile.open(filename, std::ios::binary);
         if (!readHeader()) {
             logger->error("Invalid header for mapping output file.");
@@ -85,6 +87,7 @@ private:
     bool hasNext() { return inFile.is_open() && inFile.good(); }
 
     bool readHeader() {
+        auto logger = spdlog::get("jointLog");
         iomutex.lock();
         size_t refCount;
         inFile.read(reinterpret_cast<char *>(&isPaired), sizeof(bool));
@@ -112,7 +115,7 @@ private:
 
     std::mutex iomutex;
     std::ifstream inFile;
-    bool isPaired{true};
+    bool isPaired{false};
     std::vector <refLenType> refLengths;
     std::vector <std::string> refNames;
     std::shared_ptr <spdlog::logger> logger;

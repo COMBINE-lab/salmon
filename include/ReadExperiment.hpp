@@ -148,7 +148,9 @@ public:
     auto indexType = versionInfo.indexType();
 
     salmonIndex_.reset(new SalmonIndex(sopt.jointLog, indexType));
+    std::cerr << "Before loading index -- readExperiment\n";
     salmonIndex_->load(indexDirectory, indexType);
+    std::cerr << "After loading index -- readExperiment\n";
     // Now we'll have either an FMD-based index, a QUASI index, or a Pufferfish index
     // dispatch on the correct type.
 
@@ -174,7 +176,7 @@ public:
       loadTranscriptsFromFMD();
       break;
     case SalmonIndexType::PUFFERFISH_OUTPUT:
-        puffoutFilePointer_ = new PuffoutFilePointer(readLibraries_[0].pufferfishOutput()[0]);
+      puffoutFilePointer_ = new PuffoutFilePointer(readLibraries_[0].pufferfishOutput()[0]);
       loadTranscriptsFromPuffOut();
       break;
     }
@@ -474,7 +476,7 @@ public:
       }
       // ====== Done loading the transcripts from file
       setTranscriptLengthClasses_(lengths, posBiasFW_.size());
-    std::cerr << "read experiment | loadtranscriptsfrompuffout -- pufferfish output\n";
+    log->info("read experiment | loaded transcripts from puffout -- pufferfish output");
   }
 
   template <typename CallbackT>
