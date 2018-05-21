@@ -15,7 +15,8 @@
  * its paired-end status, the reads that should appear on the forward and
  * reverse strand, and the relative orientation of the reads.
  */
-class ReadLibrary {
+class
+ReadLibrary {
 public:
   /**
    * Construct a new ReadLibrary of the given format

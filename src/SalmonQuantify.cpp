@@ -102,6 +102,7 @@ extern "C" {
 #include "SalmonMath.hpp"
 #include "SalmonUtils.hpp"
 #include "Transcript.hpp"
+#include "PuffoutParser.h"
 
 #include "AlignmentGroup.hpp"
 #include "BWAUtils.hpp"
@@ -1631,6 +1632,51 @@ void processReadsQuasi(
 
 /// DONE QUASI
 
+/// START PUFFERFISH
+void processMappingsPufferfish(
+        ReadExperimentT &readExp, ReadLibrary &rl,
+        AlnGroupVec<QuasiAlignment> &structureVec,
+        std::atomic <uint64_t> &numObservedFragments,
+        std::atomic <uint64_t> &numAssignedFragments,
+        std::atomic <uint64_t> &validHits, std::atomic <uint64_t> &upperBoundHits,
+        std::vector <Transcript> &transcripts,
+        ForgettingMassCalculator &fmCalc, ClusterForest &clusterForest,
+        FragmentLengthDistribution &fragLengthDist, BiasParams &observedBiasParams,
+        /**
+         * NOTE : test new el model in future
+         * EffectiveLengthStats& obsEffLengths,
+         **/
+        mem_opt_t *memOptions, SalmonOpts &salmonOpts, double coverageThresh,
+        std::mutex &iomutex, bool initialRound, std::atomic<bool> &burnedIn,
+        volatile bool &writeToCache) {
+  std::cerr << "processMappingsPufferfish was called\n";
+}
+
+void processMappingsPufferfish(
+        ReadExperimentT &readExp, ReadLibrary &rl,
+        AlnGroupVec<SMEMAlignment> &structureVec,
+        std::atomic <uint64_t> &numObservedFragments,
+        std::atomic <uint64_t> &numAssignedFragments,
+        std::atomic <uint64_t> &validHits, std::atomic <uint64_t> &upperBoundHits,
+        std::vector <Transcript> &transcripts,
+        ForgettingMassCalculator &fmCalc, ClusterForest &clusterForest,
+        FragmentLengthDistribution &fragLengthDist, BiasParams &observedBiasParams,
+        /**
+         * NOTE : test new el model in future
+         * EffectiveLengthStats& obsEffLengths,
+         **/
+        mem_opt_t *memOptions, SalmonOpts &salmonOpts, double coverageThresh,
+        std::mutex &iomutex, bool initialRound, std::atomic<bool> &burnedIn,
+        volatile bool &writeToCache) {
+// ERROR
+  salmonOpts.jointLog->error("MEM-mapping cannot be used with the Quasi index "
+                             "--- please report this bug on GitHub");
+  std::exit(1);
+}
+
+
+/// DONE PUFFERFISH
+
 template <typename AlnT>
 void processReadLibrary(
     ReadExperimentT& readExp, ReadLibrary& rl, SalmonIndex* sidx,
@@ -1839,9 +1885,21 @@ void processReadLibrary(
     }   // End Quasi index
     break;
       case SalmonIndexType::PUFFERFISH_OUTPUT: {
-        std::cerr << "salmon quantify -- pufferfish output\n";
+        std::cerr << "salmon quantify -- processReadLibrary -- pufferfish output -- start\n";
+        for (size_t i = 0; i < numThreads; ++i) {
+          auto threadFun = [&, i]() -> void {
+              processMappingsPufferfish(readExp, rl, structureVec[i],
+                                        numObservedFragments, numAssignedFragments, numValidHits,
+                                        upperBoundHits, transcripts, fmCalc,
+                                        clusterForest, fragLengthDist, observedBiasParams[i],
+                                        memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
+                                        burnedIn, writeToCache);
+          };
+          threads.emplace_back(threadFun);
+        }
+        std::cerr << "salmon quantify -- processReadLibrary -- pufferfish output -- end\n";
       } // End Pufferfish Output
-      break;
+            break;
     } // end switch
 
     for (auto& t : threads) {

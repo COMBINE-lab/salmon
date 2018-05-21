@@ -26,6 +26,7 @@ extern "C" {
 #include "SpinLock.hpp" // RapMap's with try_lock
 #include "Transcript.hpp"
 #include "UtilityFunctions.hpp"
+#include "PuffoutFilePointer.h"
 
 // Logger includes
 #include "spdlog/spdlog.h"
@@ -173,6 +174,7 @@ public:
       loadTranscriptsFromFMD();
       break;
     case SalmonIndexType::PUFFERFISH_OUTPUT:
+        puffoutFilePointer_ = new PuffoutFilePointer(readLibraries_[0].pufferfishOutput()[0]);
       loadTranscriptsFromPuffOut();
       break;
     }
@@ -444,6 +446,33 @@ public:
   }
 
   void loadTranscriptsFromPuffOut() {
+      size_t numRecords = puffoutFilePointer_->numRefs();
+      auto log = spdlog::get("jointLog");
+
+      log->info("Index contained {} targets", numRecords);
+      // transcripts_.resize(numRecords);
+      std::vector<uint32_t> lengths;
+      lengths.reserve(numRecords);
+      double alpha = 0.005;
+      for (auto i : boost::irange(size_t(0), numRecords)) {
+          uint32_t id = i;
+          std::string name = puffoutFilePointer_->refName(i);
+          uint32_t len = puffoutFilePointer_->refLength(i);
+          // copy over the length, then we're done.
+          transcripts_.emplace_back(id, name.c_str(), len, alpha);
+          auto &txp = transcripts_.back();
+          /*txp.setCompleteLength(idx_->txpCompleteLens[i]);
+          // The transcript sequence
+          // auto txpSeq = idx_->seq.substr(idx_->txpOffsets[i], len);
+
+          // Set the transcript sequence
+          txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i],
+                                  sopt.gcBiasCorrect, sopt.reduceGCMemory);*/
+          lengths.push_back(txp.RefLength);
+
+      }
+      // ====== Done loading the transcripts from file
+      setTranscriptLengthClasses_(lengths, posBiasFW_.size());
     std::cerr << "read experiment | loadtranscriptsfrompuffout -- pufferfish output\n";
   }
 
@@ -880,6 +909,7 @@ private:
   // std::array<std::vector<double>, 2> expectedBias_;
   std::vector<double> expectedBias_;
   std::vector<double> conditionalMeans_;
+    PuffoutFilePointer *puffoutFilePointer_{nullptr};
 };
 
 #endif // EXPERIMENT_HPP
