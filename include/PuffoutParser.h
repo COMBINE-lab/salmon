@@ -25,13 +25,13 @@ public:
     /*
      * will prepare at max as many alignments as miniBatch requires
      */
-    bool nextChunkOfAlignments(PuffoutFilePointer &puffoutFilePointer, AlnGroupVector &alignments) {
+    bool nextChunkOfAlignments(PuffoutFilePointer *puffoutFilePointer, AlnGroupVector &alignments) {
 
         // parse read chunks
         readCnt = 0;
         while (chunk.hasNext() || readCnt < alignments.size()) {
             if (!chunk.hasNext()) // if nothing has left from the last chunk fetched from file
-                if (!puffoutFilePointer.readChunk(chunk) && readCnt == 0) // try to read a new chunk from file
+                if (!puffoutFilePointer->readChunk(chunk) && readCnt == 0) // try to read a new chunk from file
                     return false; // if nothing left to process return false
             uint32_t mcnt{0};
             rLenType llen{0}, rlen{0};
@@ -44,9 +44,8 @@ public:
             auto &jointHitGroup = alignments[readCnt];
             jointHitGroup.clearAlignments();
 
-
             // read name
-            uint8_t readNameLength;
+            uint8_t readNameLength{0};
             std::string readName;
             chunk.fill(readNameLength);
             chunk.fill(readName, readNameLength);
@@ -54,7 +53,7 @@ public:
             // mapping count
             chunk.fill(mcnt);
             chunk.fill(llen); // left read len
-            if (puffoutFilePointer.isMappingPaired()) {
+            if (puffoutFilePointer->isMappingPaired()) {
                 chunk.fill(rlen); // right read len
             }
 
@@ -65,7 +64,7 @@ public:
                 bool lori, rori;
                 chunk.fill(puff_id);
                 chunk.fill(lcnt);
-                if (puffoutFilePointer.isMappingPaired()) {
+                if (puffoutFilePointer->isMappingPaired()) {
                     chunk.fill(rcnt);
                 }
                 if (lcnt > 0) {
@@ -91,7 +90,7 @@ public:
 
                 } else if (lcnt > 0) {
                     QuasiAlignment qaln(puff_id, reflPos, lori, llen, 0, false);
-                    if (puffoutFilePointer.isMappingPaired())
+                    if (puffoutFilePointer->isMappingPaired())
                         qaln.mateStatus = MateStatus::PAIRED_END_LEFT;
                     else
                         qaln.mateStatus = MateStatus::SINGLE_END;
@@ -121,4 +120,4 @@ private:
 
 };
 
-#endif PUFFOUTREADER_H
+#endif //PUFFOUTREADER_H

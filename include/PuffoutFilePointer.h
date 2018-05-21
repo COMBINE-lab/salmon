@@ -119,4 +119,4 @@ private:
 
 };
 
-#endif PUFFOUTFILEPOINTER_H
+#endif //PUFFOUTFILEPOINTER_H

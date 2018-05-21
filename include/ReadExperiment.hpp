@@ -191,6 +191,7 @@ public:
   std::string getIndexSeqHash512() const { return salmonIndex_->seqHash512(); }
   std::string getIndexNameHash512() const { return salmonIndex_->nameHash512(); }
 
+    PuffoutFilePointer *getPuffoutFilePointer() { return puffoutFilePointer_; }
   std::vector<Transcript>& transcripts() { return transcripts_; }
   const std::vector<Transcript>& transcripts() const { return transcripts_; }
 
