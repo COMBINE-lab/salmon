@@ -746,6 +746,59 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
   }
 }
 
+
+/// Get alignment score
+namespace salmon {
+  namespace mapping {
+    struct CacheEntry {
+      uint64_t hashKey;
+      int32_t alnScore;
+      CacheEntry(uint64_t hashKeyIn, int32_t alnScoreIn) :
+        hashKey(hashKeyIn), alnScore(alnScoreIn) {}
+    };
+  }
+}
+
+inline int32_t getAlnScore(ksw2pp::KSW2Aligner& aligner, ksw_extz_t& ez, int32_t pos, const char* rptr,
+                           int32_t rlen, char* tseq, int32_t tlen, uint32_t buf,
+                           std::vector<salmon::mapping::CacheEntry>& alnCache) {
+  int32_t s{-1};
+  if (pos < 0) { rptr += -pos; pos = 0; rlen += pos; }
+  if (pos < tlen) {
+    uint32_t tlen1 = std::min(static_cast<uint32_t>(rlen+buf), static_cast<uint32_t>(tlen - pos));
+    char* tseq1 = tseq + pos;
+    ez.max_q = ez.max_t = ez.mqe_t = ez.mte_q = -1;
+    ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
+    ez.n_cigar = 0;
+
+    uint64_t hashKey{0};
+    bool didHash{false};
+    if (!alnCache.empty()) {
+      // hash the reference string
+      hashKey = XXH64(reinterpret_cast<void*>(tseq1), tlen1, 0);
+      didHash = true;
+      // see if we have this hash
+      auto hit = std::find_if(alnCache.begin(), alnCache.end(), [hashKey](const salmon::mapping::CacheEntry& e) -> bool {
+          return e.hashKey == hashKey;
+        });
+      // if so, we know the alignment score
+      if (hit != alnCache.end()) {
+        s = hit->alnScore;
+      }
+    }
+    // If we got here with s == -1, we don't have the score cached
+    if (s == -1) {
+      aligner(rptr, rlen, tseq1, tlen1, &ez, ksw2pp::EnumToType<ksw2pp::KSW2AlignmentType::EXTENSION>());
+      s = std::max(ez.mqe, ez.mte);
+      if (!didHash) {
+        hashKey = XXH64(reinterpret_cast<void*>(tseq1), tlen1, 0);
+      }
+      alnCache.emplace_back(hashKey, s);
+    }
+  }
+  return s;
+}
+
 /// START QUASI
 
 // To use the parser in the following, we get "jobs" until none is
@@ -914,14 +967,9 @@ void processReadsQuasi(
   memset(&ez, 0, sizeof(ksw_extz_t));
   size_t numDropped{0};
 
-  struct CacheEntry {
-    uint64_t hashKey;
-    int32_t alnScore;
-    CacheEntry(uint64_t hashKeyIn, int32_t alnScoreIn) :
-      hashKey(hashKeyIn), alnScore(alnScoreIn) {}
-  };
-  std::vector<CacheEntry> alnCacheLeft; alnCacheLeft.reserve(15);
-  std::vector<CacheEntry> alnCacheRight; alnCacheRight.reserve(15);
+
+  std::vector<salmon::mapping::CacheEntry> alnCacheLeft; alnCacheLeft.reserve(15);
+  std::vector<salmon::mapping::CacheEntry> alnCacheRight; alnCacheRight.reserve(15);
 
   auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
@@ -1063,45 +1111,6 @@ void processReadsQuasi(
           }
         }
 
-        auto getAlnScore = [&aligner, &ez](int32_t pos, const char* rptr, int32_t rlen, char* tseq, int32_t tlen, uint32_t buf,
-                                           std::vector<CacheEntry>& alnCache) -> int32_t {
-          int32_t s{-1};
-          if (pos < 0) { rptr += -pos; pos = 0; rlen += pos; }
-          if (pos < tlen) {
-            uint32_t tlen1 = std::min(static_cast<uint32_t>(rlen+buf), static_cast<uint32_t>(tlen - pos));
-            char* tseq1 = tseq + pos;
-            ez.max_q = ez.max_t = ez.mqe_t = ez.mte_q = -1;
-            ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
-            ez.n_cigar = 0;
-
-            uint64_t hashKey{0};
-            bool didHash{false};
-            if (!alnCache.empty()) {
-              // hash the reference string
-              hashKey = XXH64(reinterpret_cast<void*>(tseq1), tlen1, 0);
-              didHash = true;
-              // see if we have this hash
-              auto hit = std::find_if(alnCache.begin(), alnCache.end(), [hashKey](const CacheEntry& e) -> bool {
-                  return e.hashKey == hashKey;
-                });
-              // if so, we know the alignment score
-              if (hit != alnCache.end()) {
-                s = hit->alnScore;
-              }
-            }
-            // If we got here with s == -1, we don't have the score cached
-            if (s == -1) {
-              aligner(rptr, rlen, tseq1, tlen1, &ez, EnumToType<KSW2AlignmentType::EXTENSION>());
-              s = std::max(ez.mqe, ez.mte);
-              if (!didHash) {
-                hashKey = XXH64(reinterpret_cast<void*>(tseq1), tlen1, 0);
-              }
-              alnCache.emplace_back(hashKey, s);
-            }
-          }
-          return s;
-        };
-
         bool tryAlign{salmonOpts.validateMappings};
         if (tryAlign) {
           alnCacheLeft.clear();
@@ -1131,8 +1140,8 @@ void processReadsQuasi(
               auto* r1ptr = h.fwd ? r1 : r1rc;
               auto* r2ptr = h.mateIsFwd ? r2 : r2rc;
 
-              auto s1 = getAlnScore(h.pos, r1ptr, l1, tseq, tlen, buf, alnCacheLeft);
-              auto s2 = getAlnScore(h.matePos, r2ptr, l2, tseq, tlen, buf, alnCacheRight);
+              auto s1 = getAlnScore(aligner, ez, h.pos, r1ptr, l1, tseq, tlen, buf, alnCacheLeft);
+              auto s2 = getAlnScore(aligner, ez, h.matePos, r2ptr, l2, tseq, tlen, buf, alnCacheRight);
               if ((s1 + s2) < (optFrac * a * rp.first.seq.length() + optFrac * a * rp.second.seq.length())) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
@@ -1141,7 +1150,7 @@ void processReadsQuasi(
               // h.score_ = score;
             } else if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_LEFT) {
               auto* rptr = h.fwd ? r1 : r1rc;
-              auto s = getAlnScore(h.pos, rptr, l1, tseq, tlen, buf, alnCacheLeft);
+              auto s = getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, buf, alnCacheLeft);
               if (s < (optFrac * a * rp.first.seq.length())) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
@@ -1150,7 +1159,7 @@ void processReadsQuasi(
               // h.score_ = score;
             } else if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_RIGHT) {
               auto* rptr = h.fwd ? r2 : r2rc;
-              auto s = getAlnScore(h.pos, rptr, l2, tseq, tlen, buf, alnCacheRight);
+              auto s = getAlnScore(aligner, ez, h.pos, rptr, l2, tseq, tlen, buf, alnCacheRight);
               if (s < (optFrac * a * rp.second.seq.length())) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
@@ -1172,7 +1181,9 @@ void processReadsQuasi(
             jointHits.erase(
                             std::remove_if(jointHits.begin(), jointHits.end(),
                                            [&ctr, &scores, &numDropped, /*&salmonOpts, &rp, &rc1, &rc2, &transcripts,*/ bestScore] (const QuasiAlignment& qa) -> bool {
+                                             // soft filter
                                              bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
+                                             //strict filter
                                              //bool rem = (scores[ctr] < bestScore);
                                              ++ctr;
                                              numDropped += rem ? 1 : 0;
@@ -1180,7 +1191,7 @@ void processReadsQuasi(
                                            }),
                             jointHits.end()
                             );
-            //if (jointHits.size() == 0) { jointHitGroup.clearAlignments(); }
+            // soft filter
             double bestScoreD = static_cast<double>(bestScore);
             std::for_each(jointHits.begin(), jointHits.end(),
                           [bestScoreD](QuasiAlignment& qa) -> void {
@@ -1508,13 +1519,7 @@ void processReadsQuasi(
   memset(&ez, 0, sizeof(ksw_extz_t));
   size_t numDropped{0};
 
-  struct CacheEntry {
-    uint64_t hashKey;
-    int32_t alnScore;
-    CacheEntry(uint64_t hashKeyIn, int32_t alnScoreIn) :
-      hashKey(hashKeyIn), alnScore(alnScoreIn) {}
-  };
-  std::vector<CacheEntry> alnCache; alnCache.reserve(15);
+  std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
 
   auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
@@ -1556,46 +1561,6 @@ void processReadsQuasi(
         jointHitGroup.clearAlignments();
       }
 
-
-        auto getAlnScore = [&aligner, &ez](int32_t pos, const char* rptr, int32_t rlen, char* tseq, int32_t tlen, uint32_t buf,
-                                           std::vector<CacheEntry>& alnCache) -> int32_t {
-          int32_t s{-1};
-          if (pos < 0) { rptr += -pos; pos = 0; rlen += pos; }
-          if (pos < tlen) {
-            uint32_t tlen1 = std::min(static_cast<uint32_t>(rlen+buf), static_cast<uint32_t>(tlen - pos));
-            char* tseq1 = tseq + pos;
-            ez.max_q = ez.max_t = ez.mqe_t = ez.mte_q = -1;
-            ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
-            ez.n_cigar = 0;
-
-            uint64_t hashKey{0};
-            bool didHash{false};
-            if (!alnCache.empty()) {
-              // hash the reference string
-              hashKey = XXH64(reinterpret_cast<void*>(tseq1), tlen1, 0);
-              didHash = true;
-              // see if we have this hash
-              auto hit = std::find_if(alnCache.begin(), alnCache.end(), [hashKey](const CacheEntry& e) -> bool {
-                  return e.hashKey == hashKey;
-                });
-              // if so, we know the alignment score
-              if (hit != alnCache.end()) {
-                s = hit->alnScore;
-              }
-            }
-            // If we got here with s == -1, we don't have the score cached
-            if (s == -1) {
-              aligner(rptr, rlen, tseq1, tlen1, &ez, EnumToType<KSW2AlignmentType::EXTENSION>());
-              s = std::max(ez.mqe, ez.mte);
-              if (!didHash) {
-                hashKey = XXH64(reinterpret_cast<void*>(tseq1), tlen1, 0);
-              }
-              alnCache.emplace_back(hashKey, s);
-            }
-          }
-          return s;
-        };
-
         bool tryAlign{salmonOpts.validateMappings};
         if (tryAlign) {
           alnCache.clear();
@@ -1617,7 +1582,7 @@ void processReadsQuasi(
             const uint32_t buf{8};
 
             auto* rptr = h.fwd ? r1 : r1rc;
-            auto s = getAlnScore(h.pos, rptr, l1, tseq, tlen, buf, alnCache);
+            auto s = getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, buf, alnCache);
             if (s < (optFrac * a * rp.seq.length())) {
               score = std::numeric_limits<decltype(score)>::min();
             } else {
@@ -1635,7 +1600,9 @@ void processReadsQuasi(
             jointHits.erase(
                             std::remove_if(jointHits.begin(), jointHits.end(),
                                            [&ctr, &scores, &numDropped, /*&salmonOpts, &rp, &rc1, &rc2, &transcripts,*/ bestScore] (const QuasiAlignment& qa) -> bool {
+                                             // soft filter
                                              bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
+                                             // strict filter
                                              //bool rem = (scores[ctr] < bestScore);
                                              ++ctr;
                                              numDropped += rem ? 1 : 0;
@@ -1643,7 +1610,7 @@ void processReadsQuasi(
                                            }),
                             jointHits.end()
                             );
-            //if (jointHits.size() == 0) { jointHitGroup.clearAlignments(); }
+            // for soft filter
             double bestScoreD = static_cast<double>(bestScore);
             std::for_each(jointHits.begin(), jointHits.end(),
                           [bestScoreD](QuasiAlignment& qa) -> void {
@@ -2577,8 +2544,6 @@ int salmonQuantify(int argc, char* argv[]) {
   namespace bfs = boost::filesystem;
   namespace po = boost::program_options;
 
-  bool discardOrphansQuasi{false};
-  bool optChain{false};
   int32_t numBiasSamples{0};
 
   SalmonOpts sopt;
@@ -2587,7 +2552,6 @@ int salmonQuantify(int argc, char* argv[]) {
 
   sopt.numThreads = std::thread::hardware_concurrency();
 
-  //double coverageThresh{0.70};
   vector<string> unmatedReadFiles;
   vector<string> mate1ReadFiles;
   vector<string> mate2ReadFiles;
@@ -2608,14 +2572,6 @@ int salmonQuantify(int argc, char* argv[]) {
 
   po::options_description visible("salmon quant options");
   visible.add(inputOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt).add(fmdOpt);
-  /*
-  po::options_description all("salmon quant options");
-  all.add(generic).add(advanced).add(testing).add(hidden).add(fmd).add(
-      deprecated);
-
-  po::options_description visible("salmon quant options");
-  visible.add(generic).add(advanced);
-  */
 
   po::variables_map vm;
   try {
@@ -2738,7 +2694,7 @@ transcript abundance from RNA-seq reads
           }
         }
 
-        sopt.allowOrphans = !discardOrphansQuasi;
+        sopt.allowOrphans = !sopt.discardOrphansQuasi;
         sopt.useQuasi = true;
         quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions,
                                         sopt, sopt.coverageThresh, sopt.numThreads);
