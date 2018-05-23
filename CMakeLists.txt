@@ -33,7 +33,7 @@ set (WARNING_IGNORE_FLAGS "")
 endif()
 
 
-set (BOOST_CXX_FLAGS "${WARNING_IGNORE_FLAGS} -std=c++11")
+set (BOOST_CXX_FLAGS "${WARNING_IGNORE_FLAGS} -std=c++14")
 if (FETCH_BOOST)
    set (BOOST_CXX_FLAGS "${BOOST_CXX_FLAGS} -I${CMAKE_CURRENT_SOURCE_DIR}/external/install/include -L${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib")
 endif()
@@ -44,7 +44,7 @@ SET(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
 ## Set the standard required compile flags
 # Nov 18th --- removed -DHAVE_CONFIG_H
 set (REMOVE_WARNING_FLAGS "-Wno-unused-function -Wno-unused-local-typedef")
-set (CMAKE_CXX_FLAGS "-pthread -ftree-vectorize -funroll-loops -fPIC -fomit-frame-pointer -O3 -DRAPMAP_SALMON_SUPPORT -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -Wno-unknown-pragmas -Wno-reorder -Wno-unused-variable -std=c++11 -Wreturn-type -Werror=return-type ${REMOVE_WARNING_FLAGS}")
+set (CMAKE_CXX_FLAGS "-pthread -ftree-vectorize -funroll-loops -fPIC -fomit-frame-pointer -O3 -DRAPMAP_SALMON_SUPPORT -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -Wno-unknown-pragmas -Wno-reorder -Wno-unused-variable -std=c++14 -Wreturn-type -Werror=return-type ${REMOVE_WARNING_FLAGS}")
 
 ##
 # OSX is strange (some might say, stupid in this regard).  Deal with it's quirkines here.
@@ -80,7 +80,7 @@ set (PTHREAD_LIB)
 set(SHASUM ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_shasum.sh)
 
 ##
-# Compiler-specific C++11 activation.
+# Compiler-specific C++14 activation.
 # http://stackoverflow.com/questions/10984442/how-to-detect-c11-support-of-a-compiler-with-cmake
 ##
 ##
@@ -90,11 +90,11 @@ if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
     execute_process(
         COMMAND ${CMAKE_CXX_COMPILER} -dumpversion OUTPUT_VARIABLE GCC_VERSION)
     # If we're on OSX
-    if (APPLE AND NOT (GCC_VERSION VERSION_GREATER 4.8.2 OR GCC_VERSION VERSION_EQUAL 4.8.2))
+    if (APPLE AND NOT (GCC_VERSION VERSION_GREATER 5.2 OR GCC_VERSION VERSION_EQUAL 5.2))
         message(FATAL_ERROR "When building under OSX, ${PROJECT_NAME} requires "
-                            "either clang or g++ >= 4.8.2")
-    elseif (NOT (GCC_VERSION VERSION_GREATER 4.7 OR GCC_VERSION VERSION_EQUAL 4.7))
-        message(FATAL_ERROR "${PROJECT_NAME} requires g++ 4.7 or greater.")
+                            "either clang or g++ >= 5.2")
+    elseif (NOT (GCC_VERSION VERSION_GREATER 5.2 OR GCC_VERSION VERSION_EQUAL 4.2))
+        message(FATAL_ERROR "${PROJECT_NAME} requires g++ 5.2 or greater.")
     endif ()
 
     set (GCC TRUE)
@@ -116,7 +116,7 @@ if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
     set (WARNING_IGNORE_FLAGS "${WARNING_IGNORE_FLAGS} -Wno-unused-local-typedefs")
     set (BOOST_TOOLSET "gcc")
     set (BOOST_CONFIGURE_TOOLSET "--with-toolset=gcc")
-	set (BCXX_FLAGS "-std=c++11")
+	set (BCXX_FLAGS "-std=c++14")
     set (BOOST_EXTRA_FLAGS toolset=gcc cxxflags=${BCXX_FLAGS})
 # Tentatively, we support clang now
 elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
@@ -146,7 +146,7 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
         set (PTHREAD_LIB "pthread")
     endif()
 else ()
-    message(FATAL_ERROR "Your C++ compiler does not support C++11.")
+    message(FATAL_ERROR "Your C++ compiler does not support C++14.")
 endif ()
 
 if (DO_QUIET_MAKE)
