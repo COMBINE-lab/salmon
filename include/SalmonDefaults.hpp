@@ -99,6 +99,7 @@ namespace defaults {
   constexpr const bool naive{false};
   constexpr const bool noDedup{false};
   constexpr const bool txpLevel{false};
+  constexpr const bool eqClassLevel{false};
   constexpr const bool isDropseq{false};
   constexpr const bool isChromium{false};
   constexpr const bool isInDrop{false};

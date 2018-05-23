@@ -288,6 +288,7 @@ namespace alevin {
       aopt.dumpfq = vm["dumpfq"].as<bool>();
       aopt.dumpBFH = vm["dumpBfh"].as<bool>();
       aopt.txpLevel = vm["txpLevel"].as<bool>();
+      aopt.eqClassLevel = vm["eqClassLevel"].as<bool>();
       aopt.nobarcode = vm["noBarcode"].as<bool>();
       aopt.dumpfeatures = vm["dumpFeatures"].as<bool>();
       aopt.dumpCsvCounts = vm["dumpCsvCounts"].as<bool>();

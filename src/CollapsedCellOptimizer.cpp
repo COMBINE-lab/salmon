@@ -219,7 +219,12 @@ void optimizeCell(SCExpT& experiment,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool doEM,
                   bool quiet, std::atomic<uint64_t>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                  uint32_t numGenes, bool txpLevel, bool naive){
+                  uint32_t numGenes, bool txpLevel, bool naive,
+                  bool eqClassLevel){
+  // HACK: todo: major refactoring needed
+  if (eqClassLevel){
+    txpLevel = eqClassLevel;
+  }
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
 
@@ -315,9 +320,11 @@ void optimizeCell(SCExpT& experiment,
       }
     }
 
-    getMinSetTxps(txpgroups, umigroups,
-                  transcripts.size(),
-                  txpToGeneMap);
+    if (not eqClassLevel){
+      getMinSetTxps(txpgroups, umigroups,
+                    transcripts.size(),
+                    txpToGeneMap);
+    }
 
     if (txpLevel or doEM){
       // this scope contains code for deduplicating and per-Eq class level
@@ -611,7 +618,8 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                std::ref(txpToGeneMap),
                                numGenes,
                                aopt.txpLevel,
-                               aopt.naive);
+                               aopt.naive,
+                               aopt.eqClassLevel);
   }
 
   for (auto& t : workerThreads) {

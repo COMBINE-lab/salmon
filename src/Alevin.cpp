@@ -848,13 +848,14 @@ int salmonBarcoding(int argc, char* argv[]) {
   auto hiddenOpt = pogen.getHiddenOptions(sopt);
   auto testingOpt = pogen.getTestingOptions(sopt);
   auto deprecatedOpt = pogen.getDeprecatedOptions(sopt);
-  auto alevinSpecOpt = pogen.getAlevinSpecificOptions();
+  auto alevinBasicOpt = pogen.getAlevinBasicOptions();
+  auto alevinDevsOpt = pogen.getAlevinDevsOptions();
 
   po::options_description all("alevin options");
-  all.add(inputOpt).add(alevinSpecOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt).add(fmdOpt).add(testingOpt).add(hiddenOpt).add(deprecatedOpt);
+  all.add(inputOpt).add(alevinBasicOpt).add(alevinDevsOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt).add(fmdOpt).add(testingOpt).add(hiddenOpt).add(deprecatedOpt);
 
   po::options_description visible("alevin options");
-  visible.add(inputOpt).add(alevinSpecOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt).add(fmdOpt);
+  visible.add(inputOpt).add(alevinBasicOpt).add(basicOpt);
 
   po::variables_map vm;
   try {
