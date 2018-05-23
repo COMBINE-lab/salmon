@@ -584,8 +584,6 @@ ExternalProject_Add_Step(libgff makedir
   DEPENDEES download 
   DEPENDERS configure)
 
-add_dependencies(libgff libtbb)
-
 # Because of the way that Apple has changed SIP
 # in el capitan, some headers may be in a new location
 if (APPLE)
