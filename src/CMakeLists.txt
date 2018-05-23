@@ -199,26 +199,6 @@ target_link_libraries(salmon
     ksw2pp
 )
 
-##
-# External dependencies of salmon_core and salmon
-##
-if (${FETCHED_JEMALLOC})
-   add_dependencies(salmon_core libjemalloc)
-   add_dependencies(salmon libjemalloc)
-endif()
-
-if (${FETCHED_BOOST})
-   add_dependencies(alevin_core libboost)
-   add_dependencies(salmon_core libboost)
-   add_dependencies(salmon libboost)
-endif()
-
-if (${FETCHED_TBB})
-   add_dependencies(salmon_core libtbb)
-   add_dependencies(alevin_core libtbb)
-   add_dependencies(salmon libtbb)
-   add_dependencies(alevin libtbb)
-endif()
 
 add_dependencies(salmon_core libcereal)
 add_dependencies(salmon libcereal)
@@ -264,6 +244,27 @@ target_link_libraries(unitTests
     )
 
 add_dependencies(salmon unitTests)
+
+##
+# External dependencies of salmon_core and salmon
+##
+if (${FETCHED_JEMALLOC})
+   add_dependencies(salmon_core libjemalloc)
+   add_dependencies(salmon libjemalloc)
+endif()
+
+if (${FETCHED_BOOST})
+   add_dependencies(alevin_core libboost)
+   add_dependencies(salmon_core libboost)
+   add_dependencies(salmon libboost)
+endif()
+
+if (${FETCHED_TBB})
+   add_dependencies(salmon_core libtbb)
+   add_dependencies(alevin_core libtbb)
+   add_dependencies(salmon libtbb)
+   add_dependencies(alevin libtbb)
+endif()
 
 ### No need for this, I think
 ##  This ensures that the salmon executable should work with or without `make install`
