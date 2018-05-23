@@ -14,7 +14,7 @@ mkfifo $p1
 mkfifo $p2
 
 i1=`ls $base*I1*`
-bin/salmon/bin/wrapper <(cat $base*I1*) <(cat $base*RA*) >> $p1 2>> $p2 &
+wrapper <(cat $base*I1*) <(cat $base*RA*) >> $p1 2>> $p2 &
 
 echo "Running command [${new_cmd} -1 $p1 -2 $p2 -r $i1]"
 ${new_cmd} -1 $p1 -2 $p2 -r $i1
