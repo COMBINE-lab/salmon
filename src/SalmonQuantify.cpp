@@ -1665,7 +1665,6 @@ void processMappingsPufferfish(
         mem_opt_t *memOptions, SalmonOpts &salmonOpts, double coverageThresh,
         std::mutex &iomutex, bool initialRound, std::atomic<bool> &burnedIn,
         volatile bool &writeToCache) {
-    std::cerr << "processMappingsPufferfish was called\n";
     uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
     // Seed with a real random value, if available
     std::random_device rd;
@@ -1676,7 +1675,7 @@ void processMappingsPufferfish(
     uint64_t prevObservedFrags{1};
     double maxZeroFrac{0.0};
     PuffoutParser puffoutParser;
-    while (puffoutParser.nextChunkOfAlignments(readExp.getPuffoutFilePointer(), structureVec)) {
+    while (puffoutParser.nextChunkOfAlignments(readExp.getPuffoutFilePointer(), structureVec, iomutex)) {
         //prevObservedFrags = numObservedFragments;
         AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(
                 structureVec.begin(), structureVec.begin() + puffoutParser.getReadCnt());
@@ -1684,6 +1683,8 @@ void processMappingsPufferfish(
                 readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
                 transcripts, clusterForest, fragLengthDist, observedBiasParams,
                 numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac);
+        numObservedFragments += puffoutParser.getReadCnt();
+        upperBoundHits += puffoutParser.getReadCnt();
     }
 
 }
@@ -2182,6 +2183,7 @@ void processReadLibrary(
             readExp.numAssignedFragmentsAtomic().store(numAssignedFragments);
             double mappingRate = numAssignedFragments.load() /
                                  static_cast<double>(numObservedFragments.load());
+
             readExp.setEffectiveMappingRate(mappingRate);
             throw InsufficientAssignedFragments(numAssignedFragments.load(),
                                                 salmonOpts.minRequiredFrags);
@@ -2473,7 +2475,6 @@ void quantifyLibrary(ReadExperimentT &experiment, bool greedyChain,
     if (totalAssignedFragments < salmonOpts.numBurninFrags) {
         std::atomic<bool> dummyBool{false};
         experiment.updateTranscriptLengthsAtomic(dummyBool);
-
         jointLog->warn("Only {} fragments were mapped, but the number of burn-in "
                        "fragments was set to {}.\n"
                        "The effective lengths have been computed using the "
@@ -2504,10 +2505,13 @@ void quantifyLibrary(ReadExperimentT &experiment, bool greedyChain,
         experiment.setNumObservedFragments(numObservedFragments -
                                            prevNumObservedFragments);
         experiment.setUpperBoundHits(upperBoundHits.load());
-        if (salmonOpts.useQuasi or salmonOpts.allowOrphans) {
+        if (salmonOpts.useQuasi or salmonOpts.allowOrphans or experiment.getIndex()->indexType() == SalmonIndexType::PUFFERFISH_OUTPUT) {
             double mappingRate = totalAssignedFragments.load() /
                                  static_cast<double>(numObservedFragments.load());
             experiment.setEffectiveMappingRate(mappingRate);
+            salmonOpts.jointLog->info("assigned: {}", totalAssignedFragments.load());
+            salmonOpts.jointLog->info("observed: {}", numObservedFragments.load());
+
         } else { // otherwise, we're using FMD-based mapping and are not allowing
             // orphans.
             experiment.setEffectiveMappingRate(upperBoundMappingRate);
@@ -2692,6 +2696,8 @@ transcript abundance from RNA-seq reads
                     break;
                 case SalmonIndexType::PUFFERFISH_OUTPUT: {
                     std::cerr << "salmon quantify 2 -- pufferfish output\n";
+                    quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions, sopt, sopt.coverageThresh,
+                                                    sopt.numThreads);
                 }
                     break;
             }
@@ -2721,6 +2727,9 @@ transcript abundance from RNA-seq reads
         // set to its final value.
         CollapsedEMOptimizer optimizer;
         jointLog->info("Starting optimizer");
+        if (experiment.getIndex()->indexType() == SalmonIndexType::PUFFERFISH_OUTPUT) {
+            sopt.useQuasi = true;
+        }
         salmon::utils::normalizeAlphas(sopt, experiment);
         bool optSuccess = optimizer.optimize(experiment, sopt, 0.01, 10000);
 
@@ -2740,7 +2749,7 @@ transcript abundance from RNA-seq reads
 
         bfs::path estFilePath = outputDirectory / "quant.sf";
 
-        // Write the main results
+        // Write the main result
         gzw.writeAbundances(sopt, experiment);
 
         // If we are dumping the equivalence classes, then

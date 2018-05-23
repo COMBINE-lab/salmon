@@ -5,7 +5,7 @@
 #include "cereal/archives/json.hpp"
 #include "spdlog/fmt/fmt.h"
 
-enum class SalmonIndexType : uint8_t { FMD, QUASI, PUFFERFISH, PUFFERFISH_OUTPUT };
+enum class SalmonIndexType : uint8_t { FMD, QUASI, /*PUFFERFISH, */PUFFERFISH_OUTPUT };
 
 class SalmonIndexVersionInfo {
 public:

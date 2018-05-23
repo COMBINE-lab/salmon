@@ -148,9 +148,7 @@ public:
     auto indexType = versionInfo.indexType();
 
     salmonIndex_.reset(new SalmonIndex(sopt.jointLog, indexType));
-    std::cerr << "Before loading index -- readExperiment\n";
     salmonIndex_->load(indexDirectory, indexType);
-    std::cerr << "After loading index -- readExperiment\n";
     // Now we'll have either an FMD-based index, a QUASI index, or a Pufferfish index
     // dispatch on the correct type.
 
@@ -472,6 +470,7 @@ public:
           txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i],
                                   sopt.gcBiasCorrect, sopt.reduceGCMemory);*/
           lengths.push_back(txp.RefLength);
+          //std::cerr << "txp len:" << txp.RefLength << "\n";
 
       }
       // ====== Done loading the transcripts from file
