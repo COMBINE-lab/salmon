@@ -21,7 +21,7 @@ extern "C" {
 
 #if __cplusplus >= 201402L
 #include <memory>
-using std::make_unique
+using std::make_unique;
 #else
 
 #include <cstddef>
