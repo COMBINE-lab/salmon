@@ -263,7 +263,6 @@ if (${FETCHED_TBB})
    add_dependencies(salmon_core libtbb)
    add_dependencies(alevin_core libtbb)
    add_dependencies(salmon libtbb)
-   add_dependencies(alevin libtbb)
 endif()
 
 ### No need for this, I think
