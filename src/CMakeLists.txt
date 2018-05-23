@@ -207,7 +207,7 @@ if (${FETCHED_JEMALLOC})
    add_dependencies(salmon libjemalloc)
 endif()
 
-if (${fetched_boost})
+if (${FETCHED_BOOST})
    add_dependencies(alevin_core libboost)
    add_dependencies(salmon_core libboost)
    add_dependencies(salmon libboost)

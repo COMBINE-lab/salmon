@@ -526,6 +526,7 @@ ExternalProject_Add_Step(libtbb reconfigure
 )
 
 set (FETCHED_TBB TRUE)
+       add_dependencies(libgff libtbb)
 endif()
 
 ##
