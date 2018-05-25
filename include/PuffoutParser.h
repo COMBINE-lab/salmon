@@ -66,6 +66,7 @@ public:
                 if (puffoutFilePointer->isMappingPaired()) {
                     chunk.fill(rlen); // right read len
                 }
+                if (mcnt == 0) std::cerr << readName << "\n";
                 //std::cerr << "ra" << readCnt << " " << readName << " " << mcnt << "\n";
 
                 //logger->info("read name {}", readName);

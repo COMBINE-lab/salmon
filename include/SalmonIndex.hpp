@@ -81,7 +81,7 @@ public:
             loadQuasiIndex_(indexDir); break;
           case SalmonIndexType::PUFFERFISH_OUTPUT:
             logger_->info("salmon index -- pufferfish output (no index)");
-              break;
+            break;
       }
 
       loaded_ = true;

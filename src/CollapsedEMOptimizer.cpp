@@ -940,7 +940,6 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   /* -- v0.8.x
   double alphaSum = 0.0;
   */
-
   while (itNum < minIter or (itNum < maxIter and !converged) or needBias) {
     if (needBias and (itNum > targetIt or converged)) {
 
@@ -1023,6 +1022,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
 
     ++itNum;
   }
+
 
   /* -- v0.8.x
   if (alphaSum < minWeight) {

@@ -1790,23 +1790,24 @@ void processReadLibrary(
     // ------ Paired-end --------
     if (rl.format().type == ReadType::PAIRED_END) {
 
-        if (rl.mates1().size() != rl.mates2().size()) {
-            salmonOpts.jointLog->error("The number of provided files for "
-                                       "-1 and -2 must be the same!");
-            std::exit(1);
-        }
+        if (indexType != SalmonIndexType::PUFFERFISH_OUTPUT) {
+            if (rl.mates1().size() != rl.mates2().size()) {
+                salmonOpts.jointLog->error("The number of provided files for "
+                                           "-1 and -2 must be the same!");
+                std::exit(1);
+            }
 
-        size_t numFiles = rl.mates1().size() + rl.mates2().size();
-        uint32_t numParsingThreads{1};
-        // HACK!
-        if (rl.mates1().size() > 1 and numThreads > 8) {
-            numParsingThreads = 2;
+            size_t numFiles = rl.mates1().size() + rl.mates2().size();
+            uint32_t numParsingThreads{1};
+            // HACK!
+            if (rl.mates1().size() > 1 and numThreads > 8) {
+                numParsingThreads = 2;
+            }
+            pairedParserPtr.reset(new paired_parser(rl.mates1(), rl.mates2(),
+                                                    numThreads, numParsingThreads,
+                                                    miniBatchSize));
+            pairedParserPtr->start();
         }
-        pairedParserPtr.reset(new paired_parser(rl.mates1(), rl.mates2(),
-                                                numThreads, numParsingThreads,
-                                                miniBatchSize));
-        pairedParserPtr->start();
-
         switch (indexType) {
             case SalmonIndexType::FMD: {
                 for (size_t i = 0; i < numThreads; ++i) {
@@ -1923,7 +1924,7 @@ void processReadLibrary(
             }   // End Quasi index
                 break;
             case SalmonIndexType::PUFFERFISH_OUTPUT: {
-                std::cerr << "salmon quantify -- processReadLibrary -- pufferfish output -- start\n";
+                //std::cerr << "salmon quantify -- processReadLibrary -- pufferfish output -- start\n";
                 for (size_t i = 0; i < numThreads; ++i) {
                     auto threadFun = [&, i]() -> void {
                         processMappingsPufferfish(readExp, rl, structureVec[i],
@@ -1935,7 +1936,7 @@ void processReadLibrary(
                     };
                     threads.emplace_back(threadFun);
                 }
-                std::cerr << "salmon quantify -- processReadLibrary -- pufferfish output -- end\n";
+                //std::cerr << "salmon quantify -- processReadLibrary -- pufferfish output -- end\n";
             } // End Pufferfish Output
                 break;
         } // end switch
@@ -2505,12 +2506,13 @@ void quantifyLibrary(ReadExperimentT &experiment, bool greedyChain,
         experiment.setNumObservedFragments(numObservedFragments -
                                            prevNumObservedFragments);
         experiment.setUpperBoundHits(upperBoundHits.load());
-        if (salmonOpts.useQuasi or salmonOpts.allowOrphans or experiment.getIndex()->indexType() == SalmonIndexType::PUFFERFISH_OUTPUT) {
+        if (salmonOpts.useQuasi or salmonOpts.allowOrphans or
+            experiment.getIndex()->indexType() == SalmonIndexType::PUFFERFISH_OUTPUT) {
             double mappingRate = totalAssignedFragments.load() /
                                  static_cast<double>(numObservedFragments.load());
             experiment.setEffectiveMappingRate(mappingRate);
-            salmonOpts.jointLog->info("assigned: {}", totalAssignedFragments.load());
-            salmonOpts.jointLog->info("observed: {}", numObservedFragments.load());
+            salmonOpts.jointLog->info("observed reads: {}", numObservedFragments.load());
+            salmonOpts.jointLog->info("assigned reads: {}", totalAssignedFragments.load());
 
         } else { // otherwise, we're using FMD-based mapping and are not allowing
             // orphans.
@@ -2696,6 +2698,7 @@ transcript abundance from RNA-seq reads
                     break;
                 case SalmonIndexType::PUFFERFISH_OUTPUT: {
                     std::cerr << "salmon quantify 2 -- pufferfish output\n";
+                    sopt.useQuasi = true;
                     quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions, sopt, sopt.coverageThresh,
                                                     sopt.numThreads);
                 }
@@ -2727,9 +2730,9 @@ transcript abundance from RNA-seq reads
         // set to its final value.
         CollapsedEMOptimizer optimizer;
         jointLog->info("Starting optimizer");
-        if (experiment.getIndex()->indexType() == SalmonIndexType::PUFFERFISH_OUTPUT) {
+        /*if (experiment.getIndex()->indexType() == SalmonIndexType::PUFFERFISH_OUTPUT) {
             sopt.useQuasi = true;
-        }
+        }*/
         salmon::utils::normalizeAlphas(sopt, experiment);
         bool optSuccess = optimizer.optimize(experiment, sopt, 0.01, 10000);
 
