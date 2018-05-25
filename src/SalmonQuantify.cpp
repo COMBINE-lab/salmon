@@ -931,6 +931,9 @@ void processReadsQuasi(
   if (salmonOpts.quasiCoverage > 0.0) {
     hitCollector.setCoverageRequirement(salmonOpts.quasiCoverage);
   }
+  if (salmonOpts.validateMappings) {
+    hitCollector.enableChainScoring();
+  }
 
   SASearcher<RapMapIndexT> saSearcher(qidx);
   std::vector<QuasiAlignment> leftHits;
@@ -958,7 +961,6 @@ void processReadsQuasi(
   config.bandwidth = 10;
   config.flag = 0;
   config.flag |= KSW_EZ_SCORE_ONLY;
-  //config.flag |= KSW_EZ_APPROX_MAX | KSW_EZ_APPROX_DROP;
   int8_t a = salmonOpts.matchScore;
   int8_t b = salmonOpts.mismatchPenalty;
   KSW2Aligner aligner(static_cast<int8_t>(a), static_cast<int8_t>(b));
@@ -966,7 +968,6 @@ void processReadsQuasi(
   ksw_extz_t ez;
   memset(&ez, 0, sizeof(ksw_extz_t));
   size_t numDropped{0};
-
 
   std::vector<salmon::mapping::CacheEntry> alnCacheLeft; alnCacheLeft.reserve(15);
   std::vector<salmon::mapping::CacheEntry> alnCacheRight; alnCacheRight.reserve(15);
@@ -1016,8 +1017,7 @@ void processReadsQuasi(
                                            std::max(readLenLeft, readLenRight));
       } else {
         // If we actually attempted to map the fragment (it wasn't too short),
-        // then
-        // do the intersection.
+        // then do the intersection.
         if (strictIntersect) {
           rapmap::utils::mergeLeftRightHits(leftHits, rightHits, jointHits,
                                             readLenLeft, maxNumHits,
@@ -1489,6 +1489,10 @@ void processReadsQuasi(
     hitCollector.setCoverageRequirement(salmonOpts.quasiCoverage);
   }
 
+  if (salmonOpts.validateMappings) {
+    hitCollector.enableChainScoring();
+  }
+
   SASearcher<RapMapIndexT> saSearcher(qidx);
   rapmap::utils::HitCounters hctr;
 
@@ -1779,11 +1783,7 @@ void processReadLibrary(
   auto indexType = sidx->indexType();
 
   // Catch any exceptions that might be thrown while processing the reads
-
-  // These two deleters are highly redundant (identical in content, but have
-  // different argument types). This will be resolved by generic lambdas as soon
-  // as we can rely on c++14.
-  auto pairedPtrDeleter = [&salmonOpts](paired_parser* p) -> void {
+  auto parserPtrDeleter = [&salmonOpts](auto* p) -> void {
     try {
       p->stop();
     } catch (const std::exception& e) {
@@ -1796,23 +1796,10 @@ void processReadLibrary(
     delete p;
   };
 
-  auto singlePtrDeleter = [&salmonOpts](single_parser* p) -> void {
-    try {
-      p->stop();
-    } catch (const std::exception& e) {
-      salmonOpts.jointLog->error("\n\n");
-      salmonOpts.jointLog->error("Processing reads : {}", e.what());
-      salmonOpts.jointLog->flush();
-      spdlog::drop_all();
-      std::exit(-1);
-    }
-    delete p;
-  };
-
-  std::unique_ptr<paired_parser, decltype(pairedPtrDeleter)> pairedParserPtr(
-      nullptr, pairedPtrDeleter);
-  std::unique_ptr<single_parser, decltype(singlePtrDeleter)> singleParserPtr(
-      nullptr, singlePtrDeleter);
+  std::unique_ptr<paired_parser, decltype(parserPtrDeleter)> pairedParserPtr(
+      nullptr, parserPtrDeleter);
+  std::unique_ptr<single_parser, decltype(parserPtrDeleter)> singleParserPtr(
+      nullptr, parserPtrDeleter);
 
   /** sequence-specific and GC-fragment bias vectors --- each thread gets it's
    * own **/

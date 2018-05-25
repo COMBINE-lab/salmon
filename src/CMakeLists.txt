@@ -176,13 +176,6 @@ target_link_libraries(salmon
     gff
     ${PTHREAD_LIB}
     ${Boost_LIBRARIES}
-    #Boost::iostreams
-    #Boost::filesystem
-    #Boost::system
-    #Boost::thread
-    #Boost::timer
-    #Boost::chrono
-    #Boost::program_options
     ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
@@ -199,21 +192,6 @@ target_link_libraries(salmon
     ksw2pp
 )
 
-
-add_dependencies(salmon_core libcereal)
-add_dependencies(salmon libcereal)
-add_dependencies(alevin_core libstadenio)
-add_dependencies(salmon_core libstadenio)
-add_dependencies(salmon libstadenio)
-add_dependencies(salmon_core libspdlog)
-add_dependencies(salmon libspdlog)
-add_dependencies(salmon_core libbwa)
-add_dependencies(salmon libbwa)
-add_dependencies(salmon_core libgff)
-add_dependencies(salmon libgff)
-add_dependencies(salmon_core libdivsufsort)
-add_dependencies(salmon libdivsufsort)
-
 # Link the executable
 target_link_libraries(unitTests
     salmon_core
@@ -221,13 +199,6 @@ target_link_libraries(unitTests
     gff
     ${PTHREAD_LIB}
     ${Boost_LIBRARIES}
-    #Boost::iostreams
-    #Boost::filesystem
-    #Boost::system
-    #Boost::thread
-    #Boost::timer
-    #Boost::chrono
-    #Boost::program_options
     ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
@@ -264,6 +235,20 @@ if (${FETCHED_TBB})
    add_dependencies(alevin_core libtbb)
    add_dependencies(salmon libtbb)
 endif()
+
+add_dependencies(salmon_core libcereal)
+add_dependencies(salmon libcereal)
+add_dependencies(alevin_core libstadenio)
+add_dependencies(salmon_core libstadenio)
+add_dependencies(salmon libstadenio)
+add_dependencies(salmon_core libspdlog)
+add_dependencies(salmon libspdlog)
+add_dependencies(salmon_core libbwa)
+add_dependencies(salmon libbwa)
+add_dependencies(salmon_core libgff)
+add_dependencies(salmon libgff)
+add_dependencies(salmon_core libdivsufsort)
+add_dependencies(salmon libdivsufsort)
 
 ### No need for this, I think
 ##  This ensures that the salmon executable should work with or without `make install`
