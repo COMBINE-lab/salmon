@@ -60,6 +60,8 @@ struct AlevinOpts {
   bool doEM;
   // perform naive deduplication
   bool naive;
+  // perform eqclass level analysis instead of gene or txp level minsets
+  bool eqClassLevel;
   // perform txp level analysis instead of gene level
   bool txpLevel;
   //do hard-assignment of error bcs
