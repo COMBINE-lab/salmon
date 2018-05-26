@@ -610,8 +610,8 @@ public:
         oa(cereal::make_nvp("num_assigned_fragments",
                             numAssignedFragments_.load()));
 
-        oa(cereal::make_nvp("num_consistent_mappings", numAgree));
-        oa(cereal::make_nvp("num_inconsistent_mappings", numDisagree));
+        oa(cereal::make_nvp("num_frags_with_consistent_mappings", numAgree));
+        oa(cereal::make_nvp("num_frags_with_inconsistent_or_orphan_mappings", numDisagree));
         oa(cereal::make_nvp("strand_mapping_bias", ratio));
       } else {
         numAgree = 0;
@@ -636,8 +636,8 @@ public:
         oa(cereal::make_nvp("num_assigned_fragments",
                             numAssignedFragments_.load()));
 
-        oa(cereal::make_nvp("num_consistent_mappings", numAgree));
-        oa(cereal::make_nvp("num_inconsistent_mappings", numDisagree));
+        oa(cereal::make_nvp("num_frags_with_consistent_mappings", numAgree));
+        oa(cereal::make_nvp("num_frags_with_inconsistent_or_orphan_mappings", numDisagree));
       } // end else
 
       double compatFragmentRatio =

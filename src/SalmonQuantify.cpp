@@ -195,6 +195,7 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
   std::uniform_real_distribution<> uni(
       0.0, 1.0 + std::numeric_limits<double>::min());
   std::vector<uint64_t> libTypeCounts(LibraryFormat::maxLibTypeID() + 1);
+  std::vector<uint64_t> libTypeCountsPerFrag(LibraryFormat::maxLibTypeID() + 1);
   bool hasCompatibleMapping{false};
   uint64_t numCompatibleFragments{0};
 
@@ -263,6 +264,7 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
       if (alnGroup.size() == 0) {
         continue;
       }
+      std::fill(libTypeCountsPerFrag.begin(), libTypeCountsPerFrag.end(), 0);
 
       // We start out with probability 0
       double sumOfAlignProbs{LOG_0};
@@ -474,7 +476,7 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
           **/
 
           // Increment the count of this type of read that we've seen
-          ++libTypeCounts[aln.libFormat().formatID()];
+          ++libTypeCountsPerFrag[aln.libFormat().formatID()];
           //
           if (!hasCompatibleMapping and logAlignCompatProb == LOG_1) {
             hasCompatibleMapping = true;
@@ -717,6 +719,9 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
             logForgettingMass, updateCounts);
       }
 
+      for(size_t i=0; i < libTypeCounts.size(); ++i) {
+        libTypeCounts[i] += (libTypeCountsPerFrag[i] > 0);
+      }
     } // end read group
   }   // end timer
 
@@ -1410,7 +1415,7 @@ void processReadsQuasi(
                               maxZeroFrac);
   }
 
-  salmonOpts.jointLog->info("Score filtering dropped {} total mappings", numDropped);
+  //salmonOpts.jointLog->info("Score filtering dropped {} total mappings", numDropped);
   readExp.updateShortFrags(shortFragStats);
 }
 
@@ -2538,10 +2543,6 @@ int salmonQuantify(int argc, char* argv[]) {
   memOptions->split_factor = 1.5;
 
   sopt.numThreads = std::thread::hardware_concurrency();
-
-  vector<string> unmatedReadFiles;
-  vector<string> mate1ReadFiles;
-  vector<string> mate2ReadFiles;
 
   salmon::ProgramOptionsGenerator pogen;
 

@@ -1322,6 +1322,27 @@ bool validateOptionsAlignment_(SalmonOpts& sopt) {
 }
 
 bool validateOptionsMapping_(SalmonOpts& sopt) {
+  auto numUnpaired = sopt.unmatedReadFiles.size();
+  auto numLeft = sopt.mate1ReadFiles.size();
+  auto numRight = sopt.mate2ReadFiles.size();
+
+  // currently there is some strange use for this in alevin, I think ...
+  // check with avi.
+  if (numLeft + numRight > 0 and numUnpaired > 0) {
+      sopt.jointLog->warn("You seem to have passed in both un-paired reads and paired-end reads. "
+                          "It is not currently possible to quantify hybrid library types in salmon.");
+  }
+
+
+  if (numLeft + numRight > 0) {
+    if (numLeft != numRight) {
+      sopt.jointLog->error("You passed paired-end files to salmon, but you passed {} files to --mates1 "
+                           "and {} files to --mates2.  You must pass the same number of files to both flags",
+                           numLeft, numRight);
+      return false;
+    }
+   }
+
   if (sopt.mismatchPenalty > 0) {
     sopt.jointLog->warn(
                         "You set the mismatch penalty as {}, but it should be negative.  It is being negated to {}.",
