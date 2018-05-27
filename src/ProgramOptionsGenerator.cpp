@@ -1,4 +1,5 @@
 #include <vector>
+#include <iostream>
 
 #include "ProgramOptionsGenerator.hpp"
 #include "SalmonDefaults.hpp"
@@ -314,17 +315,19 @@ namespace salmon {
     sopt.useMassBanking = salmon::defaults::useMassBanking;
     sopt.noRichEqClasses = salmon::defaults::noRichEqClasses;
 
+    auto onErrorModel = [&sopt](bool noErrorModel) -> void {
+      sopt.useErrorModel = !noErrorModel;
+    };
+
     po::options_description alnspec("\n"
                                       "alignment-specific options");
     alnspec.add_options()
-      ("useErrorModel",
-       po::bool_switch(&(sopt.useErrorModel))->default_value(salmon::defaults::useErrorModel),
-       "[experimental] : "
-       "Learn and apply an error model for the aligned reads.  This takes into "
-       "account the "
-       "the observed frequency of different types of mismatches when computing "
-       "the likelihood of "
-       "a given alignment.")
+      ("noErrorModel",
+       po::bool_switch()->default_value(salmon::defaults::noErrorModel)->notifier(onErrorModel),
+       "Turn off the alignment error model, which takes into "
+       "account the the observed frequency of different types of mismatches / "
+       "indels when computing the likelihood of a given alignment. Turning this off can "
+       "speed up alignment-based salmon, but can harm quantification accuracy.")
     ("numErrorBins",
      po::value<uint32_t>(&(sopt.numErrorBins))->default_value(salmon::defaults::numErrorBins),
      "The number of bins into which to divide "

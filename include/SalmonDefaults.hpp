@@ -84,7 +84,8 @@ namespace defaults {
   constexpr const bool useFSPD{false};
 
   // alignment-based mode
-  constexpr const bool useErrorModel{false}; // think about making this true by default
+  //constexpr const bool useErrorModel{true};
+  constexpr const bool noErrorModel{false};
   constexpr const bool useMassBanking{false};
   constexpr const bool gencodeRef{false};
   constexpr const uint32_t mappingCacheMemoryLimit{2000000};
