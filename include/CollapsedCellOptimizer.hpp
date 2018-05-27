@@ -14,7 +14,6 @@
 #include "ReadExperiment.hpp"
 #include "SalmonOpts.hpp"
 #include "GZipWriter.hpp"
-#include "CollapsedEMOptimizer.hpp"
 #include "EquivalenceClassBuilder.hpp"
 
 #include "AlevinOpts.hpp"

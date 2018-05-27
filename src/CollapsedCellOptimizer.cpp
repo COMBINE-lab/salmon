@@ -1,4 +1,5 @@
 #include "CollapsedCellOptimizer.hpp"
+#include "EMUtils.hpp"
 
 CollapsedCellOptimizer::CollapsedCellOptimizer() {}
 

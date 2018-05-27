@@ -15,17 +15,6 @@
 
 class BootstrapWriter;
 
-
-template <typename VecT>
-void EMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
-               std::vector<std::vector<double>>& txpGroupCombinedWeights,
-               const std::vector<uint64_t>& txpGroupCounts,
-               std::vector<Transcript>& transcripts, const VecT& alphaIn,
-               VecT& alphaOut);
-
-template <typename VecT>
-double truncateCountVector(VecT& alphas, double cutoff);
-
 class CollapsedEMOptimizer {
 public:
   using VecType = std::vector<tbb::atomic<double>>;
