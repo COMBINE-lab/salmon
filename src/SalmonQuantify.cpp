@@ -1152,7 +1152,6 @@ void processReadsQuasi(
               } else {
                 score = s1 + s2;
               }
-              // h.score_ = score;
             } else if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_LEFT) {
               auto* rptr = h.fwd ? r1 : r1rc;
               auto s = getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, buf, alnCacheLeft);
@@ -1161,7 +1160,6 @@ void processReadsQuasi(
               } else {
                 score = s;
               }
-              // h.score_ = score;
             } else if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_RIGHT) {
               auto* rptr = h.fwd ? r2 : r2rc;
               auto s = getAlnScore(aligner, ez, h.pos, rptr, l2, tseq, tlen, buf, alnCacheRight);
@@ -1170,7 +1168,6 @@ void processReadsQuasi(
               } else {
                 score = s;
               }
-              //h.score_ = score;
             }
 
             bestScore = (score > bestScore) ? score : bestScore;
@@ -1599,6 +1596,7 @@ void processReadsQuasi(
             }
             bestScore = (score > bestScore) ? score : bestScore;
             scores[idx] = score;
+            h.score(score);
             ++idx;
           }
 

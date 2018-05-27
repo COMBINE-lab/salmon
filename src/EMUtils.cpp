@@ -1,5 +1,5 @@
 #include "EMUtils.hpp"
-#include  "SalmonUtils.hpp"
+#include "SalmonUtils.hpp"
 
 /**
  * Single-threaded EM-update routine for use in bootstrapping

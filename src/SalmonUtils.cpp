@@ -1356,7 +1356,7 @@ bool validateOptionsMapping_(SalmonOpts& sopt) {
     uint32_t nbins{4};
     sopt.jointLog->info(
                         "Usage of --validateMappings implies use of range factorization. "
-                        "rangeFactorization bins is being set to {}", nbins
+                        "rangeFactorizationBins is being set to {}", nbins
                         );
     sopt.rangeFactorizationBins = nbins;
     sopt.useRangeFactorization = true;
@@ -1366,7 +1366,7 @@ bool validateOptionsMapping_(SalmonOpts& sopt) {
 
 /**
  * In mapping mode, depending on what the user has requested, we may have to
- *write out some files.  Prepare loggers so we can do this asynchronously.
+ * write out some files.  Prepare loggers so we can do this asynchronously.
  **/
 bool createAuxMapLoggers_(SalmonOpts& sopt,
                           boost::program_options::variables_map& vm) {
