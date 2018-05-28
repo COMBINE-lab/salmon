@@ -954,7 +954,7 @@ void processReadsQuasi(
   std::string rc1; rc1.reserve(300);
   std::string rc2; rc2.reserve(300);
 
-
+  // TODO : further investigation of bandwidth and dropoff
   using ksw2pp::KSW2Aligner;
   using ksw2pp::KSW2Config;
   using ksw2pp::EnumToType;
@@ -1505,6 +1505,7 @@ void processReadsQuasi(
 
   std::string rc1; rc1.reserve(300);
 
+  // TODO : further investigation of bandwidth and dropoff
   using ksw2pp::KSW2Aligner;
   using ksw2pp::KSW2Config;
   using ksw2pp::EnumToType;
