@@ -22,7 +22,8 @@ if [ -d ${INSTALL_DIR}/src/rapmap ] ; then
     rm -fr ${INSTALL_DIR}/src/rapmap
 fi
 
-SVER=develop-salmon-custom-kmer
+SVER=salmon-v0.10.0
+#SVER=develop-salmon
 
 mkdir -p ${EXTERNAL_DIR}
 #curl -k -L https://github.com/COMBINE-lab/RapMap/archive/salmon-v0.8.2.zip -o ${EXTERNAL_DIR}/rapmap.zip
@@ -41,11 +42,8 @@ fi
 if [ -z "${hashcheck-}" ]; then
     echo "Couldn't find shasum command; can't verify contents of downloaded RapMap";
 else
-    #echo "1691f4bca2b604f05f36772ae45faf0842ab4809843df770bd10366a5cfd6822  ${EXTERNAL_DIR}/rapmap.zip" | ${hashcheck} -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
-    #echo "627e76da308c020fd475174afbec23448f526053882917b31b5dcfd20cfa33d5  ${EXTERNAL_DIR}/rapmap.zip" | ${hashcheck} -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
-
-    #echo "8975e5a1ed61ed9354ba776272927545f417ecdce95823e71ba1e7b61de7d380  ${EXTERNAL_DIR}/rapmap.zip" | ${hashcheck} -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
-    echo "not testing sha in develop branch"
+    echo "56ad9918d53859404cec4e78eb51442bc8e595d8e682686d5ff03b047f06384e ${EXTERNAL_DIR}/rapmap.zip" | ${hashcheck} -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
+    #echo "not testing sha in develop branch"
 fi
 
 
