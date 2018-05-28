@@ -24,10 +24,9 @@ Alevin requires the following minimal set of necessary input parameters (general
 * ``-o``: output, path to folder where the output gene-count matrix (along with other meta-data) would be dumped.
 * ``--tgMap``: transcript to gene map file, a tsv (tab-separated) file --- with *no header*, containing two columns mapping of each transcript present in the reference to the corresponding gene (the first column is a transcript and the second is the corresponding gene).
 
-Once all the above requirement are satisfied, alevin can be run using the following command:
+Once all the above requirement are satisfied, alevin can be run using the following command::
 
-    > ./salmon alevin -l ISR -1 cb.fastq.gz -2 reads.fastq.gz --chromium  -i salmon_index_directory -p 10 -o alevin_output --tgMap txp2gene.tsv
-
+  > salmon alevin -l ISR -1 cb.fastq.gz -2 reads.fastq.gz --chromium  -i salmon_index_directory -p 10 -o alevin_output --tgMap txp2gene.tsv
 
 Providing multiple read files to Alevin
 ------------
