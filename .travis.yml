@@ -46,7 +46,7 @@ install:
 script: 
     - mkdir build 
     - cd build 
-    - cmake -DFETCH_BOOST=TRUE -DNO_RTM=TRUE .. 
+    - cmake -DCONDA_BUILD=TRUE -DFETCH_BOOST=TRUE -DNO_RTM=TRUE .. 
     - travis_wait 45 make 
     - travis_wait make install
     - travis_wait make test VERBOSE=1

@@ -1787,7 +1787,10 @@ void processReadLibrary(
   auto indexType = sidx->indexType();
 
   // Catch any exceptions that might be thrown while processing the reads
-  auto parserPtrDeleter = [&salmonOpts](auto* p) -> void {
+  // These two deleters are highly redundant (identical in content, but have
+  // different argument types). This will be resolved by generic lambdas as soon
+  // as we can rely on c++14 (waiting on bioconda).
+  auto pairedPtrDeleter = [&salmonOpts](paired_parser* p) -> void {
     try {
       p->stop();
     } catch (const std::exception& e) {
@@ -1800,10 +1803,44 @@ void processReadLibrary(
     delete p;
   };
 
+  auto singlePtrDeleter = [&salmonOpts](single_parser* p) -> void {
+    try {
+      p->stop();
+    } catch (const std::exception& e) {
+      salmonOpts.jointLog->error("\n\n");
+      salmonOpts.jointLog->error("Processing reads : {}", e.what());
+      salmonOpts.jointLog->flush();
+      spdlog::drop_all();
+      std::exit(-1);
+    }
+    delete p;
+  };
+
+  /** C++14 version 
+  auto parserPtrDeleter = [&salmonOpts](auto* p) -> void {
+    try {
+      p->stop();
+    } catch (const std::exception& e) {
+      salmonOpts.jointLog->error("\n\n");
+      salmonOpts.jointLog->error("Processing reads : {}", e.what());
+      salmonOpts.jointLog->flush();
+      spdlog::drop_all();
+      std::exit(-1);
+    }
+    delete p;
+  };
+  **/
+
+  std::unique_ptr<paired_parser, decltype(pairedPtrDeleter)> pairedParserPtr(
+                                                                             nullptr, pairedPtrDeleter);
+  std::unique_ptr<single_parser, decltype(singlePtrDeleter)> singleParserPtr(
+                                                                             nullptr, singlePtrDeleter);
+  /** C++14 version
   std::unique_ptr<paired_parser, decltype(parserPtrDeleter)> pairedParserPtr(
-      nullptr, parserPtrDeleter);
+                                                                             nullptr, parserPtrDeleter);
   std::unique_ptr<single_parser, decltype(parserPtrDeleter)> singleParserPtr(
-      nullptr, parserPtrDeleter);
+                                                                             nullptr, parserPtrDeleter);
+  **/
 
   /** sequence-specific and GC-fragment bias vectors --- each thread gets it's
    * own **/
