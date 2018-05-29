@@ -164,14 +164,16 @@ Alevin can also dump the count-matrix in a human readable -- comma-separated-val
 Misc
 ----
 
-**Finally**, the purpose of making this software available is for
-people to use it and provide feedback.  The
-`paper describing this method is published in BioArxiv XXXX`.
-If you have something useful to report or just some interesting ideas
-or suggestions, please contact us (`asrivastava@cs.stonybrook.edu`
-and/or `rob.patro@cs.stonybrook.edu`).  If you encounter any bugs, please file a
-*detailed* bug report at the `Salmon GitHub repository <https://github.com/COMBINE-lab/salmon>`_.
+**Finally**, the purpose of making this software available is because we believe
+it may be useful for people dealing with single-cell RNA-seq data. We want the
+software to be as useful, robust, and accurate as possible. So, if you have any
+feedback --- something useful to report, or just some interesting ideas or
+suggestions --- please contact us (`asrivastava@cs.stonybrook.edu` and/or
+`rob.patro@cs.stonybrook.edu`). If you encounter any bugs, please file a
+*detailed* bug report at the `Salmon GitHub repository
+<https://github.com/COMBINE-lab/salmon>`_.
 
+.. The paper describing this method is published in BioArxiv XXXX. (update this when it appears)
 
 References
 ----------
