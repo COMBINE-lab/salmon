@@ -7,7 +7,7 @@ tfile=$(mktemp /tmp/foo.XXXXXXXXX)
 
 cat $tfile
 
-#tar -xvzf alevin_test_data.tar.gz
+tar -xvzf alevin_test_data.tar.gz
 
 echo "Barcodes.txt"
 sort prediction/alevin/quants_mat_rows.txt > 1.txt

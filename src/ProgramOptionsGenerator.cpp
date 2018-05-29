@@ -304,6 +304,12 @@ namespace salmon {
        "dumpCsvCounts", po::bool_switch()->default_value(alevin::defaults::dumpCSVCounts),
        "Dump cell v transcripts count matrix in csv format.")
       (
+       "lowRegionMinNumBarcodes", po::value<uint32_t>()->default_value(alevin::defaults::lowRegionMinNumBarcodes),
+       "Minimum Number of CB to use for learning Low confidence region (Default: 200).")
+      (
+       "maxNumBarcodes", po::value<uint32_t>()->default_value(alevin::defaults::maxNumBarcodes),
+       "Maximum allowable limit to process the cell barcodes. (Default: 100000)")
+      (
        "tgMap", po::value<std::string>(), "transcript to gene map tsv file");
     return alevinspec;
   }

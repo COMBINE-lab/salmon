@@ -307,8 +307,8 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
                         std::unordered_map<uint32_t, std::string> colMap,
                         AlevinOpts<ProtocolT>& aopt){
   std::vector<size_t> sortedIdx = sort_indexes(freqCounter);
-  size_t maxNumBarcodes { 100000 }, lowRegionMaxNumBarcodes { 1000 };
-  size_t lowRegionMinNumBarcodes { 200 };
+  size_t maxNumBarcodes { aopt.maxNumBarcodes }, lowRegionMaxNumBarcodes { 1000 };
+  size_t lowRegionMinNumBarcodes { aopt.lowRegionMinNumBarcodes };
   double lowConfidenceFraction { 0.5 };
   uint32_t topxBarcodes = std::min(maxNumBarcodes, freqCounter.size());
   uint64_t history { 0 };

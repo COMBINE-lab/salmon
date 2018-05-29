@@ -295,6 +295,8 @@ namespace alevin {
       aopt.dumpBarcodeEq = vm["dumpBarcodeEq"].as<bool>();
       aopt.dumpBarcodeMap = vm["dumpBarcodeMap"].as<bool>();
       aopt.dumpUmiToolsMap = vm["dumpUmitoolsMap"].as<bool>();
+      aopt.lowRegionMinNumBarcodes = vm["lowRegionMinNumBarcodes"].as<uint32_t>();
+      aopt.maxNumBarcodes = vm["maxNumBarcodes"].as<uint32_t>();
       if(vm.count("iupac")){
         aopt.iupac = vm["iupac"].as<std::string>();
       }

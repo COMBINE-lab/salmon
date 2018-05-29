@@ -117,6 +117,8 @@ namespace defaults {
   constexpr const bool dumpCSVCounts{false};
   constexpr const bool doEM{false};
   constexpr const bool noBarcode{false};
+  constexpr const uint32_t lowRegionMinNumBarcodes{200};
+  constexpr const uint32_t maxNumBarcodes{100000};
 }
 }
 

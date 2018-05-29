@@ -68,6 +68,10 @@ struct AlevinOpts {
   bool noSoftMap;
   //number of cells
   uint32_t numCells;
+  // minimum number of CB to use for low confidence region
+  uint32_t lowRegionMinNumBarcodes;
+  // maximum number of barcodes to use
+  uint32_t maxNumBarcodes;
 
   // Related to the logger
   std::shared_ptr<spdlog::logger> jointLog{nullptr};
