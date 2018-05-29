@@ -1,7 +1,6 @@
 # image: COMBINE-lab/salmon
 # This dockerfile is based on the one created by
 # Titus Brown (available at https://github.com/ctb/2015-docker-building/blob/master/salmon/Dockerfile)
-#FROM insilicodb/bioconductor 
 FROM ubuntu:18.04
 MAINTAINER salmon.maintainer@gmail.com
 
@@ -26,6 +25,7 @@ RUN curl -k -L https://github.com/COMBINE-lab/salmon/archive/v${SALMON_VERSION}.
     cd build && \
     cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local && make && make install
 
+# For dev version
 #RUN git clone https://github.com/COMBINE-lab/salmon.git && \
 #    cd salmon && \
 #    git checkout develop && \
