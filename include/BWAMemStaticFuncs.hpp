@@ -35,7 +35,7 @@ static void mem_collect_intv(const SalmonOpts& sopt, const mem_opt_t* opt,
                              SalmonIndex* sidx, int len, const uint8_t* seq,
                              smem_aux_t* a) {
   const bwt_t* bwt = sidx->bwaIndex()->bwt;
-  int i, k, x = 0, old_n;
+  size_t i, k, x = 0, old_n;
   int start_width = (opt->flag & MEM_F_SELF_OVLP) ? 2 : 1;
   int split_len = (int)(opt->min_seed_len * opt->split_factor + .499);
   a->mem.n = 0;
@@ -43,11 +43,11 @@ static void mem_collect_intv(const SalmonOpts& sopt, const mem_opt_t* opt,
   // first pass: find all SMEMs
   if (sidx->hasAuxKmerIndex()) {
     KmerIntervalMap& auxIdx = sidx->auxIndex();
-    uint32_t klen = auxIdx.k();
-    while (x < len) {
+    int32_t klen = static_cast<int32_t>(auxIdx.k());
+    while (x < static_cast<size_t>(len)) {
       if (seq[x] < 4) {
         // Make sure there are at least k bases left
-        if (len - x < klen) {
+        if (len - static_cast<int>(x) < klen) {
           x = len;
           continue;
         }
@@ -74,7 +74,7 @@ static void mem_collect_intv(const SalmonOpts& sopt, const mem_opt_t* opt,
         ++x;
     }
   } else {
-    while (x < len) {
+    while (x < static_cast<size_t>(len)) {
       if (seq[x] < 4) {
         x = bwt_smem1(bwt, len, seq, x, start_width, &a->mem1, a->tmpv);
         for (i = 0; i < a->mem1.n; ++i) {
@@ -95,7 +95,7 @@ static void mem_collect_intv(const SalmonOpts& sopt, const mem_opt_t* opt,
     for (k = 0; k < old_n; ++k) {
       bwtintv_t* p = &a->mem.a[k];
       int start = p->info >> 32, end = (int32_t)p->info;
-      if (end - start < split_len || p->x[2] > opt->split_width)
+      if (end - start < split_len || p->x[2] > static_cast<bwtint_t>(opt->split_width))
         continue;
 
       // int idx = (start + end) >> 1;
@@ -103,7 +103,7 @@ static void mem_collect_intv(const SalmonOpts& sopt, const mem_opt_t* opt,
                 a->tmpv);
       for (i = 0; i < a->mem1.n; ++i)
         if ((uint32_t)a->mem1.a[i].info - (a->mem1.a[i].info >> 32) >=
-            opt->min_seed_len)
+            static_cast<uint32_t>(opt->min_seed_len))
           kv_push(bwtintv_t, a->mem, a->mem1.a[i]);
     }
   }
@@ -112,7 +112,7 @@ static void mem_collect_intv(const SalmonOpts& sopt, const mem_opt_t* opt,
   // third pass: LAST-like
   if (sopt.extraSeedPass and opt->max_mem_intv > 0) {
     x = 0;
-    while (x < len) {
+    while (x < static_cast<size_t>(len)) {
       if (seq[x] < 4) {
         if (1) {
           bwtintv_t m;

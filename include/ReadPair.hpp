@@ -120,6 +120,7 @@ struct ReadPair {
   // from the leftmost end of the 5' read to the rightmost
   // end of the 3' read (can be less than the length of a single read)
   inline uint32_t fragLengthPedantic(uint32_t txpLen) const {
+    int32_t txpLenSigned = static_cast<int32_t>(txpLen);
     if (!isPaired()) {
       return 0;
     }
@@ -128,11 +129,11 @@ struct ReadPair {
     if (fw1 != fw2) {
       int32_t p1 = fw1 ? bam_pos(read1) : bam_pos(read2);
       p1 = (p1 < 0) ? 0 : p1;
-      p1 = (p1 > txpLen) ? txpLen : p1;
+      p1 = (p1 > txpLenSigned) ? txpLenSigned : p1;
       int32_t p2 = fw1 ? bam_pos(read2) + bam_seq_len(read2)
                        : bam_pos(read1) + bam_seq_len(read1);
       p2 = (p2 < 0) ? 0 : p2;
-      p2 = (p2 > txpLen) ? txpLen : p2;
+      p2 = (p2 > txpLenSigned) ? txpLenSigned : p2;
       return (p1 > p2) ? p1 - p2 : p2 - p1;
     }
 

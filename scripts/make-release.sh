@@ -33,7 +33,7 @@ echo -e "Version = ${version}"
 echo -e "Host = ${host}"
 
 # create the binary directory 
-betaname=Salmon-${version}_${host}
+betaname=salmon-${version}_${host}
 mkdir ${DIR}/../RELEASES
 mkdir ${DIR}/../RELEASES/${betaname}
 mkdir ${DIR}/../RELEASES/${betaname}/bin

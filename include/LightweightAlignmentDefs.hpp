@@ -5,6 +5,9 @@
 #include "EffectiveLengthStats.hpp"
 #include "RapMapUtils.hpp"
 
+
+using BulkReadExpT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;
+
 class SMEMAlignment {
 public:
   SMEMAlignment()
@@ -238,11 +241,13 @@ public:
                         0.259240260646,
                         0.188875602838};
 
-    uint32_t maxGap = 4;
+    int32_t maxGap = 4;
     uint32_t leftmost = (sVotes.front().votePos > maxGap)
                             ? (sVotes.front().votePos - maxGap)
                             : 0;
-    uint32_t rightmost = std::min(sVotes.back().votePos + maxGap, tlen);
+    uint32_t rightmost = static_cast<uint32_t>(
+                             std::min(sVotes.back().votePos + maxGap,
+                                      static_cast<int32_t>(tlen)));
 
     uint32_t span = (rightmost - leftmost);
     std::vector<double> probAln(span, 0.0);
@@ -254,14 +259,14 @@ public:
       uint32_t voteLen = sVotes[j].voteLen;
 
       auto x = j + 1;
-      while (x < nvotes and sVotes[x].votePos == votePos) {
+      while (x < nvotes and static_cast<uint32_t>(sVotes[x].votePos) == votePos) {
         voteLen += sVotes[x].voteLen;
         j += 1;
         x += 1;
       }
 
       uint32_t dist{0};
-      size_t start = (votePos >= maxGap) ? (votePos - maxGap - leftmost)
+      size_t start = (votePos >= static_cast<uint32_t>(maxGap)) ? (votePos - maxGap - leftmost)
                                          : (votePos - leftmost);
       size_t mid = votePos - leftmost;
       size_t end = std::min(votePos + maxGap - leftmost, rightmost - leftmost);
@@ -367,7 +372,7 @@ public:
       ss << "Transcript name = " << transcript.RefName << "\n";
       ss << "T : ";
       try {
-        for (size_t j = 0; j < readLen; ++j) {
+        for (int32_t j = 0; j < readLen; ++j) {
           if (isRC) {
             if (j == posInRead) {
               char red[] = "\x1b[30m";
@@ -458,9 +463,9 @@ public:
         subHit +=
             (isRC)
                 ? (transcript.charBaseAt(readStart + readLen - readPos, dir) ==
-                   salmon::stringtools::charCanon[read[readPos]])
+                   salmon::stringtools::charCanon[static_cast<uint8_t>(read[readPos])])
                 : (transcript.charBaseAt(readStart + readPos) ==
-                   salmon::stringtools::charCanon[read[readPos]]);
+                   salmon::stringtools::charCanon[static_cast<uint8_t>(read[readPos])]);
       }
       // if the entire subvote was successful, this is a hit
       numHits += (subHit == lpos);
@@ -568,7 +573,7 @@ public:
 };
 
 template <typename AlnT>
-void processMiniBatch(ReadExperiment& readExp, ForgettingMassCalculator& fmCalc,
+void processMiniBatch(BulkReadExpT& readExp, ForgettingMassCalculator& fmCalc,
                       uint64_t firstTimestepOfRound, ReadLibrary& readLib,
                       const SalmonOpts& salmonOpts,
                       AlnGroupVecRange<AlnT> batchHits,
@@ -597,7 +602,7 @@ inline void collectHitsForRead(SalmonIndex* sidx, const bwtintv_v* a,
 
   // For each MEM
   int firstSeedLen{-1};
-  for (int i = 0; i < auxHits->mem.n; ++i) {
+  for (decltype(auxHits->mem.n) i = 0; i < auxHits->mem.n; ++i) {
     // A pointer to the interval of the MEMs occurences
     bwtintv_t* p = &auxHits->mem.a[i];
     // The start and end positions in the query string (i.e. read) of the MEM
@@ -614,21 +619,24 @@ inline void collectHitsForRead(SalmonIndex* sidx, const bwtintv_v* a,
     */
 
     int64_t k;
-    step = p->x[2] > memOptions->max_occ ? p->x[2] / memOptions->max_occ : 1;
+    step = (p->x[2] > static_cast<bwtint_t>(memOptions->max_occ)) ? p->x[2] / memOptions->max_occ : 1;
     // For every occurrence of the MEM
-    for (k = count = 0; k < p->x[2] && count < memOptions->max_occ;
+    for (k = count = 0;
+         k < static_cast<decltype(k)>(p->x[2]) && count < static_cast<decltype(count)>(memOptions->max_occ);
          k += step, ++count) {
-      bwtint_t pos;
+      //bwtint_t pos;
       bwtint_t startPos, endPos;
-      int len, isRev, isRevStart, isRevEnd, refID, refIDStart, refIDEnd;
+      //int len, isRev, isRevStart, isRevEnd, refID, refIDStart, refIDEnd;
+      int isRev, isRevStart, isRevEnd, refID, refIDStart, refIDEnd;
       int queryStart = qstart;
-      len = slen;
+      //len = slen;
       uint32_t rlen = readLen;
 
       // Get the position in the reference index of this MEM occurrence
       int64_t refStart = bwt_sa(idx->bwt, p->x[0] + k);
 
-      pos = startPos = bns_depos(idx->bns, refStart, &isRevStart);
+      //pos = startPos = bns_depos(idx->bns, refStart, &isRevStart);
+      startPos = bns_depos(idx->bns, refStart, &isRevStart);
       endPos = bns_depos(idx->bns, refStart + slen - 1, &isRevEnd);
       // If we span the forward/reverse boundary, discard the hit
       if (isRevStart != isRevEnd) {
@@ -730,7 +738,7 @@ inline void collectHitsForRead(SalmonIndex* sidx, const bwtintv_v* a,
 
           auto len2 = endPos - idx->bns->anns[refIDEnd].offset;
           auto len1 = slen - len2;
-          if (std::max(len1, len2) < memOptions->min_seed_len) {
+          if (std::max(len1, len2) < static_cast<decltype(len1)>(memOptions->min_seed_len)) {
             continue;
           }
 
@@ -773,7 +781,7 @@ inline void collectHitsForRead(SalmonIndex* sidx, const bwtintv_v* a,
 
       auto hitIt = std::find_if(hits.begin(), hits.end(),
                                 [refID](CoverageCalculator& c) -> bool {
-                                  return c.targetID == refID;
+                                  return (c.targetID) == static_cast<decltype(c.targetID)>(refID);
                                 });
       if (isRev) {
         if (hitIt == hits.end()) {
@@ -800,9 +808,10 @@ inline void collectHitsForRead(SalmonIndex* sidx, const bwtintv_v* a,
   }
 }
 
-inline bool consistentNames(header_sequence_qual& r) { return true; }
+/*
+constexpr inline bool consistentNames(header_sequence_qual& r) { return true; }
 
-bool consistentNames(
+constexpr inline bool consistentNames(
     std::pair<header_sequence_qual, header_sequence_qual>& rp) {
   auto l1 = rp.first.header.length();
   auto l2 = rp.second.header.length();
@@ -841,6 +850,7 @@ bool consistentNames(
   }
   return compat;
 }
+*/
 
 /**
  *  Returns true if the @hit is within @cutoff bases of the end of
@@ -862,7 +872,7 @@ inline void getHitsForFragment(
     fastx_parser::ReadPair& frag,
     // std::pair<header_sequence_qual, header_sequence_qual>& frag,
     SalmonIndex* sidx, smem_i* itr, const bwtintv_v* a, smem_aux_t* auxHits,
-    mem_opt_t* memOptions, ReadExperiment& readExp,
+    mem_opt_t* memOptions, BulkReadExpT& readExp,
     const SalmonOpts& salmonOpts, double coverageThresh,
     uint64_t& upperBoundHits, AlignmentGroup<SMEMAlignment>& hitList,
     uint64_t& hitListCount, std::vector<Transcript>& transcripts) {
@@ -908,7 +918,7 @@ inline void getHitsForFragment(
 
     leftReadLength = readLen;
 
-    for (int p = 0; p < readLen; ++p) {
+    for (decltype(readLen) p = 0; p < readLen; ++p) {
       readStr[p] = nst_nt4_table[static_cast<int>(readStr[p])];
     }
 
@@ -924,7 +934,7 @@ inline void getHitsForFragment(
 
     rightReadLength = readLen;
 
-    for (int p = 0; p < readLen; ++p) {
+    for (decltype(readLen) p = 0; p < readLen; ++p) {
       readStr[p] = nst_nt4_table[static_cast<int>(readStr[p])];
     }
 
@@ -1029,7 +1039,6 @@ inline void getHitsForFragment(
   if (BOOST_UNLIKELY(isOrphan and allowOrphans)) {
     // std::vector<CoverageCalculator> allHits;
     // allHits.reserve(totalHits);
-    bool foundValidHit{false};
 
     // search for a hit on the left
     for (auto& tHitList : leftHits) {
@@ -1047,7 +1056,6 @@ inline void getHitsForFragment(
       // if (!nearEndOfTranscript(covChain, t, 1000)) { continue; }
 
       if (score >= fOpt * bestScore and score >= cutoffLeft) {
-        foundValidHit = true;
 
         if (score > bestScore) {
           bestScore = score;
@@ -1063,7 +1071,7 @@ inline void getHitsForFragment(
           hitList.isUniquelyMapped() = false;
         }
 
-        if (transcriptID < lastTranscriptId) {
+        if (static_cast<decltype(lastTranscriptId)>(transcriptID) < lastTranscriptId) {
           sortedByTranscript = false;
         }
 
@@ -1097,7 +1105,6 @@ inline void getHitsForFragment(
         if (score > bestScore) {
           bestScore = score;
         }
-        foundValidHit = true;
         bool isForward = covChain.isForward();
         int32_t hitPos = covChain.bestHitPos;
         auto fmt = salmon::utils::hitType(hitPos, isForward);
@@ -1222,7 +1229,7 @@ inline void getHitsForFragment(
         }
 
         int32_t minHitPos = std::min(end1Pos, end2Pos);
-        if (transcriptID < lastTranscriptId) {
+        if (static_cast<decltype(lastTranscriptId)>(transcriptID) < lastTranscriptId) {
           sortedByTranscript = false;
         }
         // ANCHOR TEST
@@ -1294,7 +1301,7 @@ inline void getHitsForFragment(fastx_parser::ReadSeq& frag,
                                // jellyfish::header_sequence_qual& frag,
                                SalmonIndex* sidx, smem_i* itr,
                                const bwtintv_v* a, smem_aux_t* auxHits,
-                               mem_opt_t* memOptions, ReadExperiment& readExp,
+                               mem_opt_t* memOptions, BulkReadExpT& readExp,
                                const SalmonOpts& salmonOpts,
                                double coverageThresh, uint64_t& upperBoundHits,
                                AlignmentGroup<SMEMAlignment>& hitList,
@@ -1308,16 +1315,16 @@ inline void getHitsForFragment(fastx_parser::ReadSeq& frag,
 
   auto& eqBuilder = readExp.equivalenceClassBuilder();
 
-  uint32_t readLength{0};
+  //uint32_t readLength{0};
 
   //---------- get hits ----------------------//
   {
     std::string readStr = frag.seq;
     uint32_t readLen = frag.seq.size();
 
-    readLength = readLen;
+    //readLength = readLen;
 
-    for (int p = 0; p < readLen; ++p) {
+    for (int p = 0; p < static_cast<int>(readLen); ++p) {
       readStr[p] = nst_nt4_table[static_cast<int>(readStr[p])];
     }
 
@@ -1375,7 +1382,7 @@ inline void getHitsForFragment(fastx_parser::ReadSeq& frag,
 
       auto transcriptID = hitID;
 
-      if (transcriptID < lastTranscriptId) {
+      if (static_cast<int32_t>(transcriptID) < lastTranscriptId) {
         sortedByTranscript = false;
       }
 
@@ -1426,7 +1433,7 @@ inline void getHitsForFragment(fastx_parser::ReadSeq& frag,
 // jellyfish::sequence_list (see whole_sequence_parser.hpp).
 template <typename ParserT, typename CoverageCalculator>
 void processReadsMEM(
-    ParserT* parser, ReadExperiment& readExp, ReadLibrary& rl,
+    ParserT* parser, BulkReadExpT& readExp, ReadLibrary& rl,
     AlnGroupVec<QuasiAlignment>& structureVec,
     std::atomic<uint64_t>& numObservedFragments,
     std::atomic<uint64_t>& numAssignedFragments,
@@ -1449,7 +1456,7 @@ void processReadsMEM(
 
 template <typename ParserT, typename CoverageCalculator>
 void processReadsMEM(
-    ParserT* parser, ReadExperiment& readExp, ReadLibrary& rl,
+    ParserT* parser, BulkReadExpT& readExp, ReadLibrary& rl,
     AlnGroupVec<SMEMAlignment>& structureVec,
     std::atomic<uint64_t>& numObservedFragments,
     std::atomic<uint64_t>& numAssignedFragments,
@@ -1480,7 +1487,7 @@ void processReadsMEM(
   const bwtintv_v* a = nullptr;
   smem_aux_t* auxHits = smem_aux_init();
 
-  auto expectedLibType = rl.format();
+  //auto expectedLibType = rl.format();
 
   uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
 

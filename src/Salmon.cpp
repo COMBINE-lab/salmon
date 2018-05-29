@@ -2,20 +2,20 @@
 >HEADER
     Copyright (c) 2013 -- 2017 Rob Patro rob.patro@cs.stonybrook.edu
 
-    This file is part of Salmon.
+    This file is part of salmon.
 
-    Salmon is free software: you can redistribute it and/or modify
+    salmon is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
-    Salmon is distributed in the hope that it will be useful,
+    salmon is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
     GNU General Public License for more details.
 
     You should have received a copy of the GNU General Public License
-    along with Salmon.  If not, see <http://www.gnu.org/licenses/>.
+    along with salmon.  If not, see <http://www.gnu.org/licenses/>.
 <HEADER
 **/
 
@@ -48,7 +48,7 @@
 
 int help(std::vector<std::string> opts) { //}int argc, char* argv[]) {
   fmt::MemoryWriter helpMsg;
-  helpMsg.write("Salmon v{}\n\n", salmon::version);
+  helpMsg.write("salmon v{}\n\n", salmon::version);
   helpMsg.write(
       "Usage:  salmon -h|--help or \n"
       "        salmon -v|--version or \n"
@@ -57,11 +57,12 @@ int help(std::vector<std::string> opts) { //}int argc, char* argv[]) {
   helpMsg.write("Commands:\n");
   helpMsg.write("     index Create a salmon index\n");
   helpMsg.write("     quant Quantify a sample\n");
+  helpMsg.write("     alevin single cell analysis\n");
   helpMsg.write("     swim  Perform super-secret operation\n");
   helpMsg.write(
       "     quantmerge Merge multiple quantifications into a single file\n");
 
-  std::cerr << helpMsg.str();
+  std::cout << helpMsg.str();
   return 0;
 }
 
@@ -69,23 +70,23 @@ int dualModeMessage() {
   auto helpmsg = R"(
     ===============
 
-    Salmon quant has two modes --- one quantifies expression using raw reads
+    salmon quant has two modes --- one quantifies expression using raw reads
     and the other makes use of already-aligned reads (in BAM/SAM format).
-    Which algorithm is used depends on the arguments passed to Salmon quant.
-    If you provide Salmon with alignments '-a [ --alignments ]' then the
+    Which algorithm is used depends on the arguments passed to salmon quant.
+    If you provide salmon with alignments '-a [ --alignments ]' then the
     alignment-based algorithm will be used, otherwise the algorithm for
     quantifying from raw reads will be used.
 
-    to view the help for Salmon's quasi-mapping-based mode, use the command
+    to view the help for salmon's quasi-mapping-based mode, use the command
 
     salmon quant --help-reads
 
-    To view the help for Salmon's alignment-based mode, use the command
+    To view the help for salmon's alignment-based mode, use the command
 
     salmon quant --help-alignment
 
     )";
-  std::cerr << "    Salmon v" << salmon::version << helpmsg << "\n";
+  std::cout << "    salmon v" << salmon::version << helpmsg << "\n";
   return 0;
 }
 
@@ -94,7 +95,7 @@ int dualModeMessage() {
  */
 int salmonSwim(int argc, char* argv[]) {
 
-  std::cerr << R"(
+  std::cout << R"(
     _____       __
    / ___/____ _/ /___ ___  ____  ____
    \__ \/ __ `/ / __ `__ \/ __ \/ __ \
@@ -112,9 +113,9 @@ int salmonSwim(int argc, char* argv[]) {
  */
 void printCite() {
 
-  std::cerr << R"(
-If you use Salmon in your research, please cite the publication in any
-papers, pre-prints or reports.  The proper citation information for Salmon
+  std::cout << R"(
+If you use salmon in your research, please cite the publication in any
+papers, pre-prints or reports.  The proper citation information for salmon
 appears below.
 
 Reference:
@@ -146,6 +147,7 @@ bibtex:
 int salmonIndex(int argc, char* argv[]);
 int salmonQuantify(int argc, char* argv[]);
 int salmonAlignmentQuantify(int argc, char* argv[]);
+int salmonBarcoding(int argc, char* argv[]);
 int salmonQuantMerge(int argc, char* argv[]);
 
 bool verbose = false;
@@ -190,7 +192,7 @@ int main(int argc, char* argv[]) {
     po::store(parsed, vm);
 
     if (vm.count("version")) {
-      std::cerr << "salmon " << salmon::version << "\n";
+      std::cout << "salmon " << salmon::version << "\n";
       std::exit(0);
     }
 
@@ -207,7 +209,7 @@ int main(int argc, char* argv[]) {
 
     if (!vm.count("no-version-check")) {
       std::string versionMessage = getVersionMessage();
-      std::cerr << versionMessage;
+      std::cout << versionMessage;
     }
 
     // po::notify(vm);
@@ -226,6 +228,7 @@ int main(int argc, char* argv[]) {
         {{"index", salmonIndex},
          {"quant", salmonQuantify},
          {"quantmerge", salmonQuantMerge},
+         {"alevin", salmonBarcoding},
          {"swim", salmonSwim}});
 
     /*
@@ -236,10 +239,10 @@ int main(int argc, char* argv[]) {
     std::copy_n( &argv[topLevelArgc], argc-topLevelArgc, &argv2[1] );
     */
 
-    int subCommandArgc = opts.size() + 1;
+    int32_t subCommandArgc = opts.size() + 1;
     std::unique_ptr<char* []> argv2(new char*[subCommandArgc]);
     argv2[0] = argv[0];
-    for (size_t i = 0; i < subCommandArgc - 1; ++i) {
+    for (int32_t i = 0; i < subCommandArgc - 1; ++i) {
       argv2[i + 1] = &*opts[i].begin();
     }
 
@@ -252,6 +255,9 @@ int main(int argc, char* argv[]) {
       // we're quantifying with raw sequences or alignemnts
       if (cmdMain->first == "quant") {
 
+        if (subCommandArgc < 2) {
+          return dualModeMessage();
+        }
         // detect mode-specific help request
         if (strncmp(argv2[1], "--help-alignment", 16) == 0) {
           std::vector<char> helpStr{'-', '-', 'h', 'e', 'l', 'p', '\0'};
@@ -271,7 +277,7 @@ int main(int argc, char* argv[]) {
 
         // otherwise, detect and dispatch the correct mode
         bool useSalmonAlign{false};
-        for (size_t i = 0; i < subCommandArgc; ++i) {
+        for (int32_t i = 0; i < subCommandArgc; ++i) {
           if (strncmp(argv2[i], "-a", 2) == 0 or
               strncmp(argv2[i], "--alignments", 12) == 0) {
             useSalmonAlign = true;

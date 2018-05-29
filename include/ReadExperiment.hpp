@@ -49,6 +49,7 @@ extern "C" {
  *  It is used to group them together and track information about them
  *  during the quantification procedure.
  */
+template <typename EQBuilderT>
 class ReadExperiment {
 
 public:
@@ -169,10 +170,12 @@ public:
     clusters_.reset(new ClusterForest(transcripts_.size(), transcripts_));
   }
 
-  EquivalenceClassBuilder& equivalenceClassBuilder() { return eqBuilder_; }
+  EQBuilderT& equivalenceClassBuilder() { return eqBuilder_; }
 
-  std::string getIndexSeqHash() const { return salmonIndex_->seqHash(); }
-  std::string getIndexNameHash() const { return salmonIndex_->nameHash(); }
+  std::string getIndexSeqHash256() const { return salmonIndex_->seqHash256(); }
+  std::string getIndexNameHash256() const { return salmonIndex_->nameHash256(); }
+  std::string getIndexSeqHash512() const { return salmonIndex_->seqHash512(); }
+  std::string getIndexNameHash512() const { return salmonIndex_->nameHash512(); }
 
   std::vector<Transcript>& transcripts() { return transcripts_; }
   const std::vector<Transcript>& transcripts() const { return transcripts_; }
@@ -224,8 +227,8 @@ public:
         */
         // then declare that we are done
         done = true;
-        sl_.unlock();
       }
+      sl_.unlock();
     }
   }
 
@@ -479,6 +482,12 @@ public:
     return fragStartDists_;
   }
 
+  void computePolyAPositions() {
+    for (auto& t : transcripts_) {
+      t.computePolyAPositions();
+    }
+  }
+
   SequenceBiasModel& sequenceBiasModel() { return seqBiasModel_; }
 
   bool softReset() {
@@ -601,8 +610,8 @@ public:
         oa(cereal::make_nvp("num_assigned_fragments",
                             numAssignedFragments_.load()));
 
-        oa(cereal::make_nvp("num_consistent_mappings", numAgree));
-        oa(cereal::make_nvp("num_inconsistent_mappings", numDisagree));
+        oa(cereal::make_nvp("num_frags_with_consistent_mappings", numAgree));
+        oa(cereal::make_nvp("num_frags_with_inconsistent_or_orphan_mappings", numDisagree));
         oa(cereal::make_nvp("strand_mapping_bias", ratio));
       } else {
         numAgree = 0;
@@ -627,8 +636,8 @@ public:
         oa(cereal::make_nvp("num_assigned_fragments",
                             numAssignedFragments_.load()));
 
-        oa(cereal::make_nvp("num_consistent_mappings", numAgree));
-        oa(cereal::make_nvp("num_inconsistent_mappings", numDisagree));
+        oa(cereal::make_nvp("num_frags_with_consistent_mappings", numAgree));
+        oa(cereal::make_nvp("num_frags_with_inconsistent_or_orphan_mappings", numDisagree));
       } // end else
 
       double compatFragmentRatio =
@@ -831,7 +840,7 @@ private:
   double effectiveMappingRate_{0.0};
   SpinLock sl_;
   std::unique_ptr<FragmentLengthDistribution> fragLengthDist_;
-  EquivalenceClassBuilder eqBuilder_;
+  EQBuilderT eqBuilder_;
 
   /** Positional bias things**/
   std::vector<uint32_t> lengthQuantiles_;

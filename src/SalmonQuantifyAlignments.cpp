@@ -45,13 +45,14 @@ extern "C" {
 #include "SalmonExceptions.hpp"
 #include "SalmonMath.hpp"
 #include "Transcript.hpp"
+#include "ProgramOptionsGenerator.hpp"
 
+#include "SalmonDefaults.hpp"
 #include "AlignmentModel.hpp"
 #include "BiasParams.hpp"
 #include "CollapsedEMOptimizer.hpp"
 #include "CollapsedGibbsSampler.hpp"
 #include "EquivalenceClassBuilder.hpp"
-#include "ErrorModel.hpp"
 #include "ForgettingMassCalculator.hpp"
 #include "FragmentLengthDistribution.hpp"
 #include "GZipWriter.hpp"
@@ -80,6 +81,9 @@ using MiniBatchQueue = tbb::concurrent_queue<MiniBatchInfo<FragT>*>;
 
 using PriorAbundanceVector = std::vector<double>;
 using PosteriorAbundanceVector = std::vector<double>;
+
+template <typename FragT>
+using AlignmentLibraryT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>>;
 
 struct RefSeq {
   RefSeq(char* name, uint32_t len) : RefName(name), RefLength(len) {}
@@ -114,7 +118,7 @@ inline bool tryToGetWork(MiniBatchQueue<AlignmentGroup<FragT*>>& workQueue,
 }
 
 template <typename FragT>
-void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
+void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
                       ForgettingMassCalculator& fmCalc,
                       uint64_t firstTimestepOfRound,
                       MiniBatchQueue<AlignmentGroup<FragT*>>& workQueue,
@@ -149,7 +153,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
   }
 
   // EQClass
-  EquivalenceClassBuilder& eqBuilder = alnLib.equivalenceClassBuilder();
+  auto& eqBuilder = alnLib.equivalenceClassBuilder();
   auto& readBiasFW = observedBiasParams.seqBiasModelFW;
   auto& readBiasRC = observedBiasParams.seqBiasModelRC;
   auto& observedGCMass = observedBiasParams.observedGCMass;
@@ -476,7 +480,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
               int txpsSize = txpIDs.size();
               int rangeCount = std::sqrt(txpsSize) + rangeFactorization;
 
-              for (size_t i = 0; i < txpsSize; i++) {
+              for (int32_t i = 0; i < txpsSize; i++) {
                 int rangeNumber = auxProbs[i] * rangeCount;
                 txpIDs.push_back(rangeNumber);
               }
@@ -506,7 +510,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
             // ---- Collect seq-specific bias samples ------ //
             auto getCIGARLength = [](bam_seq_t* s) -> uint32_t {
               auto cl = bam_cigar_len(s);
-              uint32_t k, end;
+              decltype(cl) k, end;
               end = 0; // bam_pos(s);
               uint32_t* cigar = bam_cigar(s);
               for (k = 0; k < cl; ++k) {
@@ -540,8 +544,8 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                   // Shouldn't be from the same strand and they should be in the
                   // right order
                   if ((fwd1 != fwd2) and // Shouldn't be from the same strand
-                      (startPos1 > 0 and startPos1 < transcript.RefLength) and
-                      (startPos2 > 0 and startPos2 < transcript.RefLength)) {
+                      (startPos1 > 0 and startPos1 < static_cast<int32_t>(transcript.RefLength)) and
+                      (startPos2 > 0 and startPos2 < static_cast<int32_t>(transcript.RefLength))) {
 
                     const char* readStart1 = txpStart + startPos1;
                     auto& readBias1 = (fwd1) ? readBiasFW : readBiasRC;
@@ -560,10 +564,10 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
                     if ((startPos1 >= readBias1.contextBefore(read1RC) and
                          startPos1 + readBias1.contextAfter(read1RC) <
-                             transcript.RefLength) and
+                         static_cast<int32_t>(transcript.RefLength)) and
                         (startPos2 >= readBias2.contextBefore(read2RC) and
                          startPos2 + readBias2.contextAfter(read2RC) <
-                             transcript.RefLength)) {
+                         static_cast<int32_t>(transcript.RefLength))) {
 
                       int32_t fwPos = (fwd1) ? startPos1 : startPos2;
                       int32_t rcPos = (fwd1) ? startPos2 : startPos1;
@@ -593,7 +597,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                   int32_t startPos1 =
                       fwd1 ? pos1 : pos1 + getCIGARLength(r1) - 1;
 
-                  if (startPos1 > 0 and startPos1 < transcript.RefLength) {
+                  if (startPos1 > 0 and startPos1 < static_cast<int32_t>(transcript.RefLength)) {
 
                     const char* txpStart = transcript.Sequence();
                     const char* txpEnd = txpStart + transcript.RefLength;
@@ -603,7 +607,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
 
                     if (startPos1 >= readBias1.contextBefore(!fwd1) and
                         startPos1 + readBias1.contextAfter(!fwd1) <
-                            transcript.RefLength) {
+                        static_cast<int32_t>(transcript.RefLength)) {
                       context.from_chars(txpStart + startPos1 -
                                          readBias1.contextBefore(!fwd1));
                       if (!fwd1) {
@@ -653,7 +657,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                   int32_t start = alnp->left();
                   int32_t stop = alnp->right();
 
-                  if (start >= 0 and stop < transcript.RefLength) {
+                  if (start >= 0 and stop < static_cast<int32_t>(transcript.RefLength)) {
                     bool valid{false};
                     auto desc = transcript.gcDesc(start, stop, valid);
                     if (valid) {
@@ -679,7 +683,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
                       fwd ? alnp->pos() : std::max(0, alnp->pos() - cmean);
                   int32_t stop = start + cmean;
                   // WITH CONTEXT
-                  if (start >= 0 and stop < transcript.RefLength) {
+                  if (start >= 0 and stop < static_cast<int32_t>(transcript.RefLength)) {
                     bool valid{false};
                     auto desc = transcript.gcDesc(start, stop, valid);
                     if (valid) {
@@ -864,7 +868,7 @@ void processMiniBatch(AlignmentLibrary<FragT>& alnLib,
  *
  */
 template <typename FragT>
-bool quantifyLibrary(AlignmentLibrary<FragT>& alnLib,
+bool quantifyLibrary(AlignmentLibraryT<FragT>& alnLib,
                      size_t numRequiredFragments, SalmonOpts& salmonOpts) {
 
   std::atomic<bool> burnedIn{salmonOpts.numBurninFrags == 0};
@@ -1181,7 +1185,7 @@ bool quantifyLibrary(AlignmentLibrary<FragT>& alnLib,
 }
 
 template <typename ReadT>
-bool processSample(AlignmentLibrary<ReadT>& alnLib, size_t requiredObservations,
+bool processSample(AlignmentLibraryT<ReadT>& alnLib, size_t requiredObservations,
                    SalmonOpts& sopt, boost::filesystem::path outputDirectory) {
 
   auto& jointLog = sopt.jointLog;
@@ -1306,335 +1310,25 @@ int salmonAlignmentQuantify(int argc, char* argv[]) {
   namespace bfs = boost::filesystem;
 
   SalmonOpts sopt;
+  sopt.numThreads = salmon::defaults::numThreads;
 
-  uint32_t numThreads{4};
   size_t requiredObservations{50000000};
   int32_t numBiasSamples{0};
+  salmon::ProgramOptionsGenerator pogen;
 
-  po::options_description basic("\nbasic options");
-  basic.add_options()("version,v", "print version string.")(
-      "help,h", "produce help message.")(
-      "libType,l", po::value<std::string>()->required(),
-      "Format string describing the library type.")(
-      "alignments,a", po::value<vector<string>>()->multitoken()->required(),
-      "input alignment (BAM) file(s).")(
-      "targets,t", po::value<std::string>()->required(),
-      "FASTA format file containing target transcripts.")(
-      "threads,p", po::value<uint32_t>(&numThreads)->default_value(6),
-      "The number of threads to use concurrently. "
-      "The alignment-based quantification mode of salmon is usually I/O bound "
-      "so until there is a faster multi-threaded SAM/BAM parser to feed the "
-      "quantification threads, one should not expect much of a speed-up beyond "
-      "~6 threads.")("seqBias", po::value(&(sopt.biasCorrect))->zero_tokens(),
-                     "Perform sequence-specific bias correction.")(
-      "gcBias", po::value(&(sopt.gcBiasCorrect))->zero_tokens(),
-      "[experimental] Perform fragment GC bias correction")(
-      "incompatPrior",
-      po::value<double>(&(sopt.incompatPrior))->default_value(1e-20),
-      "This option "
-      "sets the prior probability that an alignment that disagrees with the "
-      "specified "
-      "library type (--libType) results from the true fragment origin.  "
-      "Setting this to 0 "
-      "specifies that alignments that disagree with the library type should be "
-      "\"impossible\", "
-      "while setting it to 1 says that alignments that disagree with the "
-      "library type are no "
-      "less likely than those that do")(
-      "useErrorModel",
-      po::bool_switch(&(sopt.useErrorModel))->default_value(false),
-      "[experimental] : "
-      "Learn and apply an error model for the aligned reads.  This takes into "
-      "account the "
-      "the observed frequency of different types of mismatches when computing "
-      "the likelihood of "
-      "a given alignment.")("output,o", po::value<std::string>()->required(),
-                            "Output quantification directory.")(
-      "meta", po::bool_switch(&(sopt.meta))->default_value(false),
-      "If you're using Salmon on a metagenomic dataset, "
-      "consider setting this flag to disable parts of the abundance estimation "
-      "model that make less sense for metagenomic data.")(
-      "geneMap,g", po::value<std::string>(),
-      "File containing a mapping of transcripts to genes.  If this file is "
-      "provided "
-      "Salmon will output both quant.sf and quant.genes.sf files, where the "
-      "latter "
-      "contains aggregated gene-level abundance estimates.  The transcript to "
-      "gene mapping "
-      "should be provided as either a GTF file, or a in a simple tab-delimited "
-      "format "
-      "where each line contains the name of a transcript and the gene to which "
-      "it belongs "
-      "separated by a tab.  The extension of the file is used to determine how "
-      "the file "
-      "should be parsed.  Files ending in \'.gtf\', \'.gff\' or \'.gff3\' are "
-      "assumed to be in GTF "
-      "format; files with any other extension are assumed to be in the simple "
-      "format. In GTF / GFF format, the \"transcript_id\" is assumed to "
-      "contain the "
-      "transcript identifier and the \"gene_id\" is assumed to contain the "
-      "corresponding "
-      "gene identifier.");
-
-  // no sequence bias for now
-  sopt.useMassBanking = false;
-  sopt.noSeqBiasModel = true;
-  sopt.noRichEqClasses = false;
-
-  po::options_description advanced("\nadvanced options");
-  advanced.add_options()(
-      "alternativeInitMode",
-      po::bool_switch(&(sopt.alternativeInitMode))->default_value(false),
-      "[Experimental]: Use an alternative strategy (rather than simple "
-      "interpolation between) the "
-      "online and uniform abundance estimates to initalize the EM / VBEM "
-      "algorithm.")(
-      "auxDir",
-      po::value<std::string>(&(sopt.auxDir))->default_value("aux_info"),
-      "The sub-directory of the quantification directory where auxiliary "
-      "information "
-      "e.g. bootstraps, bias parameters, etc. will be written.")(
-      "noBiasLengthThreshold",
-      po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(false),
-      "[experimental] : "
-      "If this option is enabled, then no (lower) threshold will be set on "
-      "how short bias correction can make effective lengths. This can increase "
-      "the precision "
-      "of bias correction, but harm robustness.  The default correction "
-      "applies a threshold.")(
-      "dumpEq", po::bool_switch(&(sopt.dumpEq))->default_value(false),
-      "Dump the equivalence class counts "
-      "that were computed during quasi-mapping")(
-      "dumpEqWeights,d",
-      po::bool_switch(&(sopt.dumpEqWeights))->default_value(false),
-      "Includes \"rich\" equivlance class weights in the output when "
-      "equivalence "
-      "class information is being dumped to file.")(
-      "fldMax", po::value<size_t>(&(sopt.fragLenDistMax))->default_value(1000),
-      "The maximum fragment length to consider when building the empirical "
-      "distribution")(
-      "fldMean",
-      po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(250),
-      "The mean used in the fragment length distribution prior")(
-      "fldSD", po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(25),
-      "The standard deviation used in the fragment length distribution prior")(
-      "forgettingFactor,f",
-      po::value<double>(&(sopt.forgettingFactor))->default_value(0.65),
-      "The forgetting factor used "
-      "in the online learning schedule.  A smaller value results in quicker "
-      "learning, but higher variance "
-      "and may be unstable.  A larger value results in slower learning but may "
-      "be more stable.  Value should "
-      "be in the interval (0.5, 1.0].")(
-      "minAssignedFrags",
-      po::value<std::uint64_t>(&(sopt.minRequiredFrags))->default_value(10),
-      "The minimum number of fragments that must be assigned to the "
-      "transcriptome for "
-      "quantification to proceed.")(
-      "gencode", po::bool_switch(&(sopt.gencodeRef))->default_value(false),
-      "This flag will expect the input transcript fasta to be "
-      "in GENCODE format, and will split the transcript name at the first "
-      "\'|\' character.  These reduced names will be used in "
-      "the output and when looking for these transcripts in a gene to "
-      "transcript GTF.")(
-      "reduceGCMemory",
-      po::bool_switch(&(sopt.reduceGCMemory))->default_value(false),
-      "If this option is selected, a more memory efficient (but slightly "
-      "slower) representation is "
-      "used to compute fragment GC content. Enabling this will reduce memory "
-      "usage, but can also reduce "
-      "speed.  However, the results themselves will remain the same.")(
-      "biasSpeedSamp",
-      po::value<std::uint32_t>(&(sopt.pdfSampFactor))->default_value(1),
-      "The value at which the fragment length PMF is down-sampled "
-      "when evaluating sequence-specific & GC fragment bias.  Larger values "
-      "speed up effective "
-      "length correction, but may decrease the fidelity of bias modeling "
-      "results.")(
-      "mappingCacheMemoryLimit",
-      po::value<uint32_t>(&(sopt.mappingCacheMemoryLimit))
-          ->default_value(2000000),
-      "If the file contained fewer than this "
-      "many mapped reads, then just keep the data in memory for subsequent "
-      "rounds of inference. Obviously, this value should "
-      "not be too large if you wish to keep a low memory usage, but setting it "
-      "large enough to accommodate all of the mapped "
-      "read can substantially speed up inference on \"small\" files that "
-      "contain only a few million reads.")(
-      "maxReadOcc,w",
-      po::value<uint32_t>(&(sopt.maxReadOccs))->default_value(200),
-      "Reads \"mapping\" to more than this many places won't be considered.")(
-      "noEffectiveLengthCorrection",
-      po::bool_switch(&(sopt.noEffectiveLengthCorrection))
-          ->default_value(false),
-      "Disables "
-      "effective length correction when computing the probability that a "
-      "fragment was generated "
-      "from a transcript.  If this flag is passed in, the fragment length "
-      "distribution is not taken "
-      "into account when computing this probability.")(
-      "noFragLengthDist",
-      po::bool_switch(&(sopt.noFragLengthDist))->default_value(false),
-      "[experimental] : "
-      "Don't consider concordance with the learned fragment length "
-      "distribution when trying to determine "
-      "the probability that a fragment has originated from a specified "
-      "location.  Normally, Fragments with "
-      "unlikely lengths will be assigned a smaller relative probability than "
-      "those with more likely "
-      "lengths.  When this flag is passed in, the observed fragment length has "
-      "no effect on that fragment's "
-      "a priori probability.")(
-      "useVBOpt,v", po::bool_switch(&(sopt.useVBOpt))->default_value(false),
-      "Use the Variational Bayesian EM rather than the "
-      "traditional EM algorithm for optimization in the batch passes.")(
-      "rangeFactorizationBins",
-      po::value<uint32_t>(&(sopt.rangeFactorizationBins))->default_value(0),
-      "Factorizes the likelihood used in quantification by adopting a new "
-      "notion of equivalence classes based on "
-      "the conditional probabilities with which fragments are generated from "
-      "different transcripts.  This is a more "
-      "fine-grained factorization than the normal rich equivalence classes.  "
-      "The default value (0) corresponds to "
-      "the standard rich equivalence classes, and larger values imply a more "
-      "fine-grained factorization.  If range factorization "
-      "is enabled, a common value to select for this parameter is 4.")(
-      "perTranscriptPrior", po::bool_switch(&(sopt.perTranscriptPrior)),
-      "The "
-      "prior (either the default or the argument provided via --vbPrior) will "
-      "be interpreted as a transcript-level prior (i.e. each transcript will "
-      "be given a prior read count of this value)")(
-      "vbPrior", po::value<double>(&(sopt.vbPrior))->default_value(1e-3),
-      "The prior that will be used in the VBEM algorithm.  This is interpreted "
-      "as a per-nucleotide prior, unless the --perTranscriptPrior flag "
-      "is also given, in which case this is used as a transcript-level prior")
-      /*
-      // Don't expose this yet
-      ("noRichEqClasses",
-      po::bool_switch(&(sopt.noRichEqClasses))->default_value(false), "Disable
-      \"rich\" equivalent classes.  If this flag is passed, then " "all
-      information about the relative weights for each transcript in the " "label
-      of an equivalence class will be ignored, and only the relative "
-                          "abundance and effective length of each transcript
-      will be considered.")
-      ("noBiasLengthThreshold",
-      po::bool_switch(&(sopt.noBiasLengthThreshold))->default_value(false),
-      "[experimental] : " "If this option is enabled, then bias correction will
-      be allowed to estimate effective lengths " "shorter than the approximate
-      mean fragment length")
-
-                          */
-      ("numErrorBins",
-       po::value<uint32_t>(&(sopt.numErrorBins))->default_value(6),
-       "The number of bins into which to divide "
-       "each read when learning and applying the error model.  For example, a "
-       "value of 10 would mean that "
-       "effectively, a separate error model is leared and applied to each 10th "
-       "of the read, while a value of "
-       "3 would mean that a separate error model is applied to the read "
-       "beginning (first third), middle (second third) "
-       "and end (final third).")(
-          "numBiasSamples",
-          po::value<int32_t>(&numBiasSamples)->default_value(2000000),
-          "Number of fragment mappings to use when learning the "
-          "sequence-specific bias model.")(
-          "numPreAuxModelSamples",
-          po::value<uint32_t>(&(sopt.numPreBurninFrags))
-              ->default_value(1000000),
-          "The first <numPreAuxModelSamples> will have their "
-          "assignment likelihoods and contributions to the transcript "
-          "abundances computed without applying any auxiliary models.  The "
-          "purpose "
-          "of ignoring the auxiliary models for the first "
-          "<numPreAuxModelSamples> observations is to avoid applying these "
-          "models before thier "
-          "parameters have been learned sufficiently well.")(
-          "numAuxModelSamples",
-          po::value<uint32_t>(&(sopt.numBurninFrags))->default_value(5000000),
-          "The first <numAuxModelSamples> are used to train the "
-          "auxiliary model parameters (e.g. fragment length distribution, "
-          "bias, etc.).  After ther first <numAuxModelSamples> observations "
-          "the auxiliary model parameters will be assumed to have converged "
-          "and will be fixed.")(
-          "sampleOut,s",
-          po::bool_switch(&(sopt.sampleOutput))->default_value(false),
-          "Write a \"postSample.bam\" file in the output directory "
-          "that will sample the input alignments according to the estimated "
-          "transcript abundances. If you're "
-          "going to perform downstream analysis of the alignments with tools "
-          "which don't, themselves, take "
-          "fragment assignment ambiguity into account, you should use this "
-          "output.")(
-          "sampleUnaligned,u",
-          po::bool_switch(&(sopt.sampleUnaligned))->default_value(false),
-          "In addition to sampling the aligned reads, also write "
-          "the un-aligned reads to \"postSample.bam\".")(
-          "numGibbsSamples",
-          po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(0),
-          "Number of Gibbs sampling rounds to "
-          "perform.")(
-          "numBootstraps",
-          po::value<uint32_t>(&(sopt.numBootstraps))->default_value(0),
-          "Number of bootstrap samples to generate. Note: "
-          "This is mutually exclusive with Gibbs sampling.")(
-          "thinningFactor",
-          po::value<uint32_t>(&(sopt.thinningFactor))->default_value(16),
-          "Number of steps to discard for every sample "
-          "kept from the Gibbs chain. The larger this number, the less chance "
-          "that subsequent samples are auto-correlated, "
-          "but the slower sampling becomes.");
-
-  po::options_description testing("\n"
-                                  "testing options");
-  testing.add_options()(
-      "noRichEqClasses",
-      po::bool_switch(&(sopt.noRichEqClasses))->default_value(false),
-      "[TESTING OPTION]: Disable \"rich\" equivalent classes.  If this flag is "
-      "passed, then "
-      "all information about the relative weights for each transcript in the "
-      "label of an equivalence class will be ignored, and only the relative "
-      "abundance and effective length of each transcript will be considered.")(
-      "noFragLenFactor",
-      po::bool_switch(&(sopt.noFragLenFactor))->default_value(false),
-      "[TESTING OPTION]: Disable the factor in the likelihood that takes into "
-      "account the "
-      "goodness-of-fit of an alignment with the empirical fragment length "
-      "distribution")(
-      "noExtrapolateCounts",
-      po::bool_switch(&(sopt.dontExtrapolateCounts))->default_value(false),
-      "[TESTING OPTION]: When generating posterior counts for Gibbs sampling, "
-      "use the directly re-allocated counts in each iteration, rather than "
-      "extrapolating "
-      "from transcript fractions.");
-
-  po::options_description hidden("\nhidden options");
-  hidden.add_options()(
-      "numGCBins", po::value<size_t>(&(sopt.numFragGCBins))->default_value(25),
-      "Number of bins to use when modeling fragment GC bias")(
-      "conditionalGCBins",
-      po::value<size_t>(&(sopt.numConditionalGCBins))->default_value(3),
-      "Number of different fragment GC models to learn based on read start/end "
-      "context")("numRequiredObs,n",
-                 po::value(&requiredObservations)->default_value(50000000),
-                 "[Deprecated]: The minimum number of observations (mapped "
-                 "reads) that must be observed before "
-                 "the inference procedure will terminate.  If fewer mapped "
-                 "reads exist in the "
-                 "input file, then it will be read through multiple times.");
-
-  po::options_description deprecated(
-      "\ndeprecated options about which to inform the user");
-  deprecated.add_options()(
-      "useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(false),
-      "[experimental] : "
-      "Consider / model non-uniformity in the fragment start positions "
-      "across the transcript.");
+  auto inputOpt = pogen.getAlignmentInputOptions(sopt);
+  auto basicOpt = pogen.getBasicOptions(sopt);
+  auto alnSpecOpt = pogen.getAlignmentSpecificOptions(sopt);
+  auto advancedOpt = pogen.getAdvancedOptions(numBiasSamples, sopt);
+  auto hiddenOpt = pogen.getHiddenOptions(sopt);
+  auto testingOpt = pogen.getTestingOptions(sopt);
+  auto deprecatedOpt = pogen.getDeprecatedOptions(sopt);
 
   po::options_description all("salmon quant options");
-  all.add(basic).add(advanced).add(testing).add(hidden).add(deprecated);
+  all.add(inputOpt).add(basicOpt).add(alnSpecOpt).add(advancedOpt).add(testingOpt).add(hiddenOpt).add(deprecatedOpt);
 
   po::options_description visible("salmon quant options");
-  visible.add(basic).add(advanced);
+  visible.add(inputOpt).add(basicOpt).add(alnSpecOpt).add(advancedOpt);
 
   po::variables_map vm;
   try {
@@ -1650,19 +1344,19 @@ Quant
 Perform dual-phase, alignment-based estimation of
 transcript abundance from RNA-seq reads
 )";
-      std::cerr << hstring << std::endl;
-      std::cerr << visible << std::endl;
+      std::cout << hstring << std::endl;
+      std::cout << visible << std::endl;
       std::exit(0);
     }
 
     po::notify(vm);
 
-    if (numThreads < 2) {
+    if (sopt.numThreads < 2) {
       fmt::print(stderr, "salmon requires at least 2 threads --- "
                          "setting # of threads = 2\n");
-      numThreads = 2;
+      sopt.numThreads = 2;
     }
-    sopt.numThreads = numThreads;
+    auto numThreads = sopt.numThreads;
 
     if (sopt.forgettingFactor <= 0.5 or sopt.forgettingFactor > 1.0) {
       fmt::print(stderr,
@@ -1788,7 +1482,7 @@ transcript abundance from RNA-seq reads
         // sopt.gcBiasCorrect = false;
       }
 
-      AlignmentLibrary<UnpairedRead> alnLib(alignmentFiles, transcriptFile,
+      AlignmentLibraryT<UnpairedRead> alnLib(alignmentFiles, transcriptFile,
                                             libFmt, sopt);
 
       if (autoDetectFmt) {
@@ -1798,7 +1492,7 @@ transcript abundance from RNA-seq reads
                                             outputDirectory);
     } break;
     case ReadType::PAIRED_END: {
-      AlignmentLibrary<ReadPair> alnLib(alignmentFiles, transcriptFile, libFmt,
+      AlignmentLibraryT<ReadPair> alnLib(alignmentFiles, transcriptFile, libFmt,
                                         sopt);
       if (autoDetectFmt) {
         alnLib.enableAutodetect();

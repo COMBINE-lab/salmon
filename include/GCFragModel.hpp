@@ -27,10 +27,21 @@ struct GCDesc {
     return std::min(n - 1, static_cast<int32_t>(contextFrac / w));
   }
 
-  bool operator==(const GCDesc& other) {
+  bool operator==(const GCDesc& other) const {
     return fragFrac == other.fragFrac and contextFrac == other.contextFrac;
   }
+  bool operator==(const GCDesc&& other) const {
+    return fragFrac == other.fragFrac and contextFrac == other.contextFrac;
+  }
+
+  std::ostream& operator<<(std::ostream& os) {
+    os << "{ fragFrac : " << fragFrac << ", contextFrac : " << contextFrac << "}\n";
+    return os;
+  }
 };
+
+
+
 
 class GCFragModel {
 public:

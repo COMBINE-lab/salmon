@@ -94,6 +94,8 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs,
     }
   }
 
+  parser.stop();
+
   // Check that every sequence present in the BAM header was also present in the
   // transcriptome fasta.
   bool missingTxpError{false};

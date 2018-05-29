@@ -151,12 +151,12 @@ Eigen::MatrixXd& SBModel::marginals() { return _marginals; }
 void SBModel::dumpConditionalProbabilities(std::ostream& os) {
   typedef jellyfish::mer_dna_ns::mer_base_dynamic<uint64_t> mer64;
   // For each position
-  for (size_t i = 0; i < _contextLength; ++i) {
+  for (int32_t i = 0; i < _contextLength; ++i) {
     mer64 k(_order[i] + 1);
     size_t nbit = 2 * (_order[i] + 1);
-    uint32_t N = constExprPow(4, _order[i] + 1);
+    int32_t N = constExprPow(4, _order[i] + 1);
     // header
-    for (size_t j = 0; j < N; ++j) {
+    for (int32_t j = 0; j < N; ++j) {
       k.set_bits(0, nbit, j);
       std::string s = k.to_str();
       if (s.length() > 1) {
@@ -171,7 +171,7 @@ void SBModel::dumpConditionalProbabilities(std::ostream& os) {
     }
     os << '\n';
     // probs
-    for (size_t j = 0; j < N; ++j) {
+    for (int32_t j = 0; j < N; ++j) {
       auto p = _probs(j, i);
       os << std::exp(p);
       if (j < N - 1) {
@@ -214,7 +214,7 @@ bool SBModel::normalize() {
   // now normalize the rest of the sub-contexts in groups
   // each consecutive group of 4 rows shares the same prefix
   for (int32_t pos = 0; pos < _contextLength; ++pos) {
-    size_t numStates = constExprPow(4, _order[pos]);
+    int32_t numStates = constExprPow(4, _order[pos]);
     size_t rowsPerNode = 4;
     size_t nodeStart = 0;
     for (int32_t i = 0; i < numStates; ++i) {
@@ -252,7 +252,7 @@ bool SBModel::checkTransitionProbabilities() {
   // now normalize the rest of the sub-contexts in groups
   // each consecutive group of 4 rows shares the same 2-mer prefix
   for (int32_t pos = 0; pos < _contextLength; ++pos) {
-    size_t numStates = constExprPow(4, _order[pos]);
+    int32_t numStates = constExprPow(4, _order[pos]);
     size_t rowsPerNode = 4;
     size_t nodeStart = 0;
     for (int32_t i = 0; i < numStates; ++i) {
@@ -280,12 +280,12 @@ int32_t SBModel::getContextLength() { return _contextLength; }
 template <typename CountVecT>
 bool SBModel::train(CountVecT& kmerCounts, const uint32_t K) {
   // The _order of the model *ending at* positions 2, 3, 4, and 5 (0-based)
-  std::vector<uint32_t> _order{0, 0, 2, 2, 2, 2};
+  std::vector<int32_t> _order{0, 0, 2, 2, 2, 2};
   const auto numKmers = constExprPow(4, K);
 
   if (!_trained) {
     // For each starting position
-    for (int32_t pos = 0; pos < K - _order.back(); ++pos) {
+    for (int32_t pos = 0; pos < static_cast<int32_t>(K - _order.back()); ++pos) {
       uint32_t offset = 2 * (K - (pos + 1) - _order[pos]);
 
       // See how frequently sub-contexts starting at this position appear
@@ -302,11 +302,11 @@ bool SBModel::train(CountVecT& kmerCounts, const uint32_t K) {
     _probs.col(2) /= _probs.col(2).sum();
     // now normalize the rest of the sub-contexts in groups
     // each consecutive group of 4 rows shares the same 2-mer prefix
-    for (int32_t pos = 3; pos < K - _order.back(); ++pos) {
-      size_t numStates = constExprPow(4, _order[pos]);
+    for (int32_t pos = 3; pos < static_cast<int32_t>(K - _order.back()); ++pos) {
+      int32_t numStates = constExprPow(4, _order[pos]);
       size_t rowsPerNode = 4;
       size_t nodeStart = 0;
-      for (size_t i = 0; i < numStates; ++i) {
+      for (int32_t i = 0; i < numStates; ++i) {
         auto tot = _probs.col(pos).segment(nodeStart, rowsPerNode).sum();
         _probs.col(pos).segment(nodeStart, rowsPerNode) /= tot;
         nodeStart += rowsPerNode;

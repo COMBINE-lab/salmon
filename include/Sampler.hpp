@@ -40,7 +40,6 @@ extern "C" {
 #include "AlignmentModel.hpp"
 #include "BAMQueue.hpp"
 #include "ClusterForest.hpp"
-#include "ErrorModel.hpp"
 #include "FASTAParser.hpp"
 #include "FragmentLengthDistribution.hpp"
 #include "LibraryFormat.hpp"
@@ -72,7 +71,11 @@ template <typename FragT>
 using OutputQueue = tbb::concurrent_bounded_queue<FragT*>;
 
 template <typename FragT>
-void sampleMiniBatch(AlignmentLibrary<FragT>& alnLib,
+using AlignmentLibraryT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>>;
+
+
+template <typename FragT>
+void sampleMiniBatch(AlignmentLibraryT<FragT>& alnLib,
                      MiniBatchQueue<AlignmentGroup<FragT*>>& workQueue,
                      std::condition_variable& workAvailable,
                      std::mutex& cvmutex, volatile bool& doneParsing,
@@ -150,7 +153,7 @@ void sampleMiniBatch(AlignmentLibrary<FragT>& alnLib,
         // their probabilities
         for (auto a : alnGroup->alignments()) {
           auto transcriptID = a->transcriptID();
-          if (transcriptID < 0 or transcriptID >= refs.size()) {
+          if (transcriptID < 0 or transcriptID >= static_cast<decltype(transcriptID)>(refs.size())) {
             log->warn("Invalid Transcript ID: {}\n", transcriptID);
           }
           hitList[transcriptID].emplace_back(a);
@@ -339,7 +342,7 @@ void sampleMiniBatch(AlignmentLibrary<FragT>& alnLib,
  *  estimates of transcript abundance.
  */
 template <typename FragT>
-bool sampleLibrary(AlignmentLibrary<FragT>& alnLib,
+bool sampleLibrary(AlignmentLibraryT<FragT>& alnLib,
                    const SalmonOpts& salmonOpts, bool burnedIn,
                    bfs::path& sampleFilePath, bool sampleUnaligned) {
 

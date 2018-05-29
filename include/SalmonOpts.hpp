@@ -202,8 +202,12 @@ struct SalmonOpts {
   bool sampleUnaligned; // Pass along un-aligned reads in the sampling.
 
   uint32_t numGibbsSamples; // Number of rounds of Gibbs sampling to perform
+  bool noGammaDraw;
   uint32_t numBootstraps;   // Number of bootstrap samples to draw
   uint32_t thinningFactor;  // Gibbs chain thinning factor
+  bool bootstrapReproject{false}; // In bootstrapping, re-project the parameters
+                                  // learned from the bootstrapped sample onto the
+                                  // original equivalence class counts.
   bool dontExtrapolateCounts{false}; // In gibbs sampling, use direct counts
                                      // from re-allocation in eq classes, don't
                                      // extrapolate from txp-fraction
@@ -236,6 +240,21 @@ struct SalmonOpts {
   uint32_t numThreads;
   uint32_t numQuantThreads;
   uint32_t numParseThreads;
+
+  // Related to alignment verification
+  bool validateMappings;
+  double minScoreFraction;
+  int8_t matchScore;
+  int8_t mismatchPenalty;
+  int8_t gapOpenPenalty;
+  int8_t gapExtendPenalty;
+
+  // for utility (may need to be cleaned up later)
+  bool discardOrphansQuasi;
+  double coverageThresh;
+  std::vector<std::string> unmatedReadFiles;
+  std::vector<std::string> mate1ReadFiles;
+  std::vector<std::string> mate2ReadFiles;
 };
 
 #endif // SALMON_OPTS_HPP

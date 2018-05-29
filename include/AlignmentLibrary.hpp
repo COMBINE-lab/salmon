@@ -15,7 +15,6 @@ extern "C" {
 #include "ClusterForest.hpp"
 #include "DistributionUtils.hpp"
 #include "EquivalenceClassBuilder.hpp"
-#include "ErrorModel.hpp"
 #include "FASTAParser.hpp"
 #include "FragmentLengthDistribution.hpp"
 #include "FragmentStartPositionDistribution.hpp"
@@ -48,7 +47,7 @@ template <typename T> class NullFragmentFilter;
  *  It is used to group them together and track information about them
  *  during the quantification procedure.
  */
-template <typename FragT> class AlignmentLibrary {
+template <typename FragT, typename EQBuilderT> class AlignmentLibrary {
 
 public:
   AlignmentLibrary(std::vector<boost::filesystem::path>& alnFiles,
@@ -108,7 +107,7 @@ public:
 
     // The transcript file existed, so load up the transcripts
     double alpha = 0.005;
-    for (size_t i = 0; i < header->nref; ++i) {
+    for (decltype(header->nref) i = 0; i < header->nref; ++i) {
       transcripts_.emplace_back(i, header->ref[i].name, header->ref[i].len,
                                 alpha);
     }
@@ -201,10 +200,12 @@ for (auto& txp : transcripts_) {
     bq->start(nff, onlyProcessAmbiguousAlignments);
   }
 
-  EquivalenceClassBuilder& equivalenceClassBuilder() { return eqBuilder_; }
+  EQBuilderT& equivalenceClassBuilder() { return eqBuilder_; }
 
-  std::string getIndexSeqHash() const { return ""; }
-  std::string getIndexNameHash() const { return ""; }
+  std::string getIndexSeqHash256() const { return ""; }
+  std::string getIndexNameHash256() const { return ""; }
+  std::string getIndexSeqHash512() const { return ""; }
+  std::string getIndexNameHash512() const { return ""; }
 
   // TODO: Make same as mapping-based
   void updateTranscriptLengthsAtomic(std::atomic<bool>& done) {
@@ -253,8 +254,8 @@ for (auto& txp : transcripts_) {
         */
         // then declare that we are done
         done = true;
-        sl_.unlock();
       }
+      sl_.unlock();
     }
   }
 
@@ -534,7 +535,7 @@ private:
    */
   size_t quantificationPasses_;
   SpinLock sl_;
-  EquivalenceClassBuilder eqBuilder_;
+  EQBuilderT eqBuilder_;
 
   /** Positional bias things**/
   std::vector<uint32_t> lengthQuantiles_;

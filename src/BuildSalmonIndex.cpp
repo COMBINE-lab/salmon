@@ -20,10 +20,6 @@
 #include "cereal/archives/binary.hpp"
 #include "cereal/types/vector.hpp"
 
-#include "jellyfish/err.hpp"
-#include "jellyfish/jellyfish.hpp"
-#include "jellyfish/misc.hpp"
-
 #include <boost/algorithm/string.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/program_options.hpp>
@@ -64,7 +60,7 @@ int salmonIndex(int argc, char* argv[]) {
   string indexTypeStr = "fmd";
   uint32_t saSampInterval = 1;
   uint32_t auxKmerLen = 0;
-  uint32_t numThreads;
+  uint32_t numThreads{2};
   bool useQuasi{false};
   bool perfectHash{false};
   bool gencodeRef{false};
@@ -78,7 +74,7 @@ int salmonIndex(int argc, char* argv[]) {
       "kmerLen,k",
       po::value<uint32_t>(&auxKmerLen)->default_value(31)->required(),
       "The size of k-mers that should be used for the quasi index.")(
-      "index,i", po::value<string>()->required(), "Salmon index.")(
+      "index,i", po::value<string>()->required(), "salmon index.")(
       "gencode", po::bool_switch(&gencodeRef)->default_value(false),
       "This flag will expect the input transcript fasta to be in GENCODE "
       "format, and will split "

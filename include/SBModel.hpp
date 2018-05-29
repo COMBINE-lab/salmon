@@ -5,10 +5,12 @@
 
 #include "UtilityFunctions.hpp"
 #include "jellyfish/mer_dna.hpp"
+//#include "rapmap/Kmer.hpp"
 #include <Eigen/Dense>
 #include <cmath>
 
 using Mer = jellyfish::mer_dna_ns::mer_base_static<uint64_t, 4>;
+//using Mer = combinelib::kmers::Kmer<32,2>;
 
 class SBModel {
 public:
@@ -51,10 +53,11 @@ public:
   bool train(CountVecT& kmerCounts, const uint32_t K);
 
   inline double evaluate(uint32_t kmer, uint32_t K) {
-    std::vector<uint32_t> _order{0, 0, 2, 2, 2, 2};
+    std::vector<int32_t> _order{0, 0, 2, 2, 2, 2};
     double p{1.0};
-    for (int32_t pos = 0; pos < K - _order.back(); ++pos) {
-      uint32_t offset = 2 * (K - (pos + 1) - _order[pos]);
+    int32_t SK = static_cast<int32_t>(K);
+    for (int32_t pos = 0; pos < SK - _order.back(); ++pos) {
+      uint32_t offset = static_cast<uint32_t>(2 * (SK - (pos + 1) - _order[pos]));
       auto idx = _getIndex(kmer, offset, _order[pos]);
       p *= _probs(idx, pos);
     }

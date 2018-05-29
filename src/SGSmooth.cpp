@@ -65,15 +65,16 @@ public:
 // constructor with sizes
 float_mat::float_mat(const size_t rows, const size_t cols, const double defval)
     : std::vector<float_vect>(rows) {
+    int sizedRows = static_cast<int>(rows);
+    int sizedCols = static_cast<int>(cols);
   int i;
-  for (i = 0; i < rows; ++i) {
+  for (i = 0; i < sizedRows; ++i) {
     (*this)[i].resize(cols, defval);
   }
   if ((rows < 1) || (cols < 1)) {
     char buffer[1024];
 
-    sprintf(buffer, "cannot build matrix with %d rows and %d columns\n", rows,
-            cols);
+    sprintf(buffer, "cannot build matrix with %d rows and %d columns\n", sizedRows, sizedCols);
     // sgs_error(buffer);
   }
 }
@@ -107,17 +108,17 @@ float_mat::float_mat(const float_vect& v) : std::vector<float_vect>(1) {
 void permute(float_mat& A, int_vect& idx) {
   int_vect i(idx.size());
   int j, k;
-
-  for (j = 0; j < A.nr_rows(); ++j) {
+  int nrows = static_cast<int>(A.nr_rows());
+  for (j = 0; j < nrows; ++j) {
     i[j] = j;
   }
 
   // loop over permuted indices
-  for (j = 0; j < A.nr_rows(); ++j) {
+  for (j = 0; j < nrows; ++j) {
     if (i[j] != idx[j]) {
 
       // search only the remaining indices
-      for (k = j + 1; k < A.nr_rows(); ++k) {
+      for (k = j + 1; k < nrows; ++k) {
         if (i[k] == idx[j]) {
           std::swap(A[j], A[k]); // swap the rows and
           i[k] = i[j];           // the elements of
@@ -151,7 +152,8 @@ static int partial_pivot(float_mat& A, const size_t row, const size_t col,
 
   // loop over possible pivots below current
   int j;
-  for (j = row + 1; j < A.nr_rows(); ++j) {
+  int nrows = static_cast<int>(A.nr_rows());
+  for (j = row + 1; j < nrows; ++j) {
 
     const double tmp = fabs(A[idx[j]][col]) * scale[idx[j]];
 
@@ -166,8 +168,8 @@ static int partial_pivot(float_mat& A, const size_t row, const size_t col,
     if(piv_elem < tol) {
       //sgs_error("partial_pivot(): Zero pivot encountered.\n")
 #endif
-
-  if (pivot > row) { // bring the pivot to the diagonal
+  int srow = static_cast<int>(row);
+  if (pivot > srow) { // bring the pivot to the diagonal
     j = idx[row];    // reorder swap array
     idx[row] = idx[pivot];
     idx[pivot] = j;
@@ -185,15 +187,16 @@ static int partial_pivot(float_mat& A, const size_t row, const size_t col,
  * place.  A is not modified, and the solution, b, is returned in a. */
 static void lu_backsubst(float_mat& A, float_mat& a, bool diag = false) {
   int r, c, k;
-
-  for (r = (A.nr_rows() - 1); r >= 0; --r) {
-    for (c = (A.nr_cols() - 1); c > r; --c) {
-      for (k = 0; k < A.nr_cols(); ++k) {
+  int nrows = static_cast<int>(A.nr_rows());
+  int ncols = static_cast<int>(A.nr_cols());
+  for (r = (nrows - 1); r >= 0; --r) {
+    for (c = (ncols - 1); c > r; --c) {
+      for (k = 0; k < ncols; ++k) {
         a[r][k] -= A[r][c] * a[c][k];
       }
     }
     if (!diag) {
-      for (k = 0; k < A.nr_cols(); ++k) {
+      for (k = 0; k < ncols; ++k) {
         a[r][k] /= A[r][r];
       }
     }
@@ -209,14 +212,16 @@ static void lu_backsubst(float_mat& A, float_mat& a, bool diag = false) {
  * place.  A is not modified, and the solution, b, is returned in a. */
 static void lu_forwsubst(float_mat& A, float_mat& a, bool diag = true) {
   int r, k, c;
-  for (r = 0; r < A.nr_rows(); ++r) {
+  int nrows = static_cast<int>(A.nr_rows());
+  int ncols = static_cast<int>(A.nr_cols());
+  for (r = 0; r < nrows; ++r) {
     for (c = 0; c < r; ++c) {
-      for (k = 0; k < A.nr_cols(); ++k) {
+      for (k = 0; k < ncols; ++k) {
         a[r][k] -= A[r][c] * a[c][k];
       }
     }
     if (!diag) {
-      for (k = 0; k < A.nr_cols(); ++k) {
+      for (k = 0; k < ncols; ++k) {
         a[r][k] /= A[r][r];
       }
     }
@@ -241,11 +246,14 @@ static int lu_factorize(float_mat& A, int_vect& idx, double tol = TINY_FLOAT) {
     return 0;
   }
 
+  int nrows = static_cast<int>(A.nr_rows());
+  int ncols = static_cast<int>(A.nr_cols());
+
   float_vect scale(A.nr_rows()); // implicit pivot scaling
   int i, j;
-  for (i = 0; i < A.nr_rows(); ++i) {
+  for (i = 0; i < nrows; ++i) {
     double maxval = 0.0;
-    for (j = 0; j < A.nr_cols(); ++j) {
+    for (j = 0; j < ncols; ++j) {
       if (fabs(A[i][j]) > maxval)
         maxval = fabs(A[i][j]);
     }
@@ -258,10 +266,10 @@ static int lu_factorize(float_mat& A, int_vect& idx, double tol = TINY_FLOAT) {
 
   int swapNum = 1;
   int c, r;
-  for (c = 0; c < A.nr_cols(); ++c) { // loop over columns
+  for (c = 0; c < ncols; ++c) { // loop over columns
     swapNum *=
         partial_pivot(A, c, c, scale, idx, tol); // bring pivot to diagonal
-    for (r = 0; r < A.nr_rows(); ++r) {          //  loop over rows
+    for (r = 0; r < nrows; ++r) {          //  loop over rows
       int lim = (r < c) ? r : c;
       for (j = 0; j < lim; ++j) {
         A[idx[r]][c] -= A[idx[r]][j] * A[idx[j]][c];
@@ -283,8 +291,10 @@ static float_mat lin_solve(const float_mat& A, const float_mat& a,
   float_mat b(a);
   int_vect idx(B.nr_rows());
   int j;
+  int nrows = static_cast<int>(B.nr_rows());
+  int ncols = static_cast<int>(B.nr_cols());
 
-  for (j = 0; j < B.nr_rows(); ++j) {
+  for (j = 0; j < nrows; ++j) {
     idx[j] = j; // init row swap label array
   }
   lu_factorize(B, idx, tol); // get the lu-decomp.
@@ -316,9 +326,11 @@ static float_mat invert(const float_mat& A) {
 static float_mat transpose(const float_mat& a) {
   float_mat res(a.nr_cols(), a.nr_rows());
   int i, j;
+  int nrows = static_cast<int>(a.nr_rows());
+  int ncols = static_cast<int>(a.nr_cols());
 
-  for (i = 0; i < a.nr_rows(); ++i) {
-    for (j = 0; j < a.nr_cols(); ++j) {
+  for (i = 0; i < nrows; ++i) {
+    for (j = 0; j < ncols; ++j) {
       res[j][i] = a[i][j];
     }
   }
@@ -334,11 +346,13 @@ float_mat operator*(const float_mat& a, const float_mat& b) {
   }
 
   int i, j, k;
-
-  for (i = 0; i < a.nr_rows(); ++i) {
-    for (j = 0; j < b.nr_cols(); ++j) {
+  int arows = static_cast<int>(a.nr_rows());
+  int acols = static_cast<int>(a.nr_cols());
+  int bcols = static_cast<int>(b.nr_cols());
+  for (i = 0; i < arows; ++i) {
+    for (j = 0; j < bcols; ++j) {
       double sum(0.0);
-      for (k = 0; k < a.nr_cols(); ++k) {
+      for (k = 0; k < acols; ++k) {
         sum += a[i][k] * b[k][j];
       }
       res[i][j] = sum;
@@ -356,17 +370,20 @@ static float_vect sg_coeff(const float_vect& b, const size_t deg) {
 
   // generate input matrix for least squares fit
   int i, j;
-  for (i = 0; i < rows; ++i) {
-    for (j = 0; j < cols; ++j) {
+  int srows = static_cast<int>(rows);
+  int scols = static_cast<int>(cols);
+  int sdeg = static_cast<int>(deg);
+  for (i = 0; i < srows; ++i) {
+    for (j = 0; j < scols; ++j) {
       A[i][j] = pow(double(i), double(j));
     }
   }
 
   float_mat c(invert(transpose(A) * A) * (transpose(A) * transpose(b)));
-
-  for (i = 0; i < b.size(); ++i) {
+  int bsize = static_cast<int>(b.size());
+  for (i = 0; i < bsize; ++i) {
     res[i] = c[0][0];
-    for (j = 1; j <= deg; ++j) {
+    for (j = 1; j <= sdeg; ++j) {
       res[i] += c[j][0] * pow(double(i), double(j));
     }
   }
@@ -383,13 +400,14 @@ static float_vect sg_coeff(const float_vect& b, const size_t deg) {
  * used. */
 float_vect sg_smooth(const float_vect& v, const int width, const int deg) {
   float_vect res(v.size(), 0.0);
-  if ((width < 1) || (deg < 0) || (v.size() < (2 * width + 2))) {
+  int vsize = static_cast<int>(v.size());
+  if ((width < 1) || (deg < 0) || (vsize < (2 * width + 2))) {
     // sgs_error("sgsmooth: parameter error.\n");
     return res;
   }
 
   const int window = 2 * width + 1;
-  const int endidx = v.size() - 1;
+  const int endidx = vsize - 1;
 
   // do a regular sliding window average
   int i, j;
@@ -413,7 +431,7 @@ float_vect sg_smooth(const float_vect& v, const int width, const int deg) {
 #if defined(_OPENMP)
 #pragma omp parallel for private(i, j) schedule(static)
 #endif
-    for (i = 0; i <= (v.size() - window); ++i) {
+    for (i = 0; i <= (vsize - window); ++i) {
       for (j = 0; j < window; ++j) {
         res[i + width] += c2[j] * v[i + j];
       }
@@ -444,7 +462,7 @@ float_vect sg_smooth(const float_vect& v, const int width, const int deg) {
 #if defined(_OPENMP)
 #pragma omp parallel for private(i, j) schedule(static)
 #endif
-  for (i = 0; i <= (v.size() - window); ++i) {
+  for (i = 0; i <= (vsize - window); ++i) {
     for (j = 0; j < window; ++j) {
       res[i + width] += c2[j] * v[i + j];
     }
@@ -470,7 +488,8 @@ static float_vect lsqr_fprime(const float_vect& b, const int deg) {
 
   float_mat c(invert(transpose(A) * A) * (transpose(A) * transpose(b)));
 
-  for (i = 0; i < b.size(); ++i) {
+  int bsize = static_cast<int>(b.size());
+  for (i = 0; i < bsize; ++i) {
     res[i] = c[1][0];
     for (j = 1; j < deg; ++j) {
       res[i] += c[j + 1][0] * double(j + 1) * pow(double(i), double(j));
@@ -490,7 +509,8 @@ static float_vect lsqr_fprime(const float_vect& b, const int deg) {
 float_vect sg_derivative(const float_vect& v, const int width, const int deg,
                          const double h) {
   float_vect res(v.size(), 0.0);
-  if ((width < 1) || (deg < 1) || (v.size() < (2 * width + 2))) {
+  int vsize = static_cast<int>(v.size());
+  if ((width < 1) || (deg < 1) || (vsize < (2 * width + 2))) {
     // sgs_error("sgsderiv: parameter error.\n");
     return res;
   }
@@ -523,7 +543,7 @@ float_vect sg_derivative(const float_vect& v, const int width, const int deg,
 #if defined(_OPENMP)
 #pragma omp parallel for private(i, j) schedule(static)
 #endif
-  for (i = 1; i < (v.size() - window); ++i) {
+  for (i = 1; i < (vsize - window); ++i) {
     for (j = 0; j < window; ++j) {
       b[j] = v[i + j] / h;
     }

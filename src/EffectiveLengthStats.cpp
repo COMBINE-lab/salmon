@@ -43,7 +43,7 @@ Eigen::VectorXd EffectiveLengthStats::getExpectedEffectiveLengths() {
 }
 
 void EffectiveLengthStats::merge(const EffectiveLengthStats& other) {
-  for (size_t i = 0; i < weights_.size(); ++i) {
+  for (decltype(weights_.size()) i = 0; i < weights_.size(); ++i) {
     lengths_(i) = salmon::math::logAdd(lengths_(i), other.lengths_(i));
     weights_(i) = salmon::math::logAdd(weights_(i), other.weights_(i));
     counts_(i) = other.counts_(i);

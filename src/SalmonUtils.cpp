@@ -25,6 +25,7 @@
 #include "SalmonUtils.hpp"
 #include "TryableSpinLock.hpp"
 #include "UnpairedRead.hpp"
+#include "TranscriptGroup.hpp"
 
 #include "spdlog/fmt/fmt.h"
 #include "spdlog/fmt/ostr.h"
@@ -179,6 +180,7 @@ double logAlignFormatProb(const LibraryFormat observed,
 bool compatibleHit(const LibraryFormat expected, int32_t start, bool isForward,
                    MateStatus ms) {
   auto expectedStrand = expected.strandedness;
+  auto expectedType = expected.type;
   switch (ms) {
   case MateStatus::SINGLE_END:
     if (isForward) { // U, SF
@@ -189,32 +191,53 @@ bool compatibleHit(const LibraryFormat expected, int32_t start, bool isForward,
               expectedStrand == ReadStrandedness::A);
     }
     break;
+    // The next two cases are for *orphaned* PE reads
+
+    // This case is where the mapped read belongs to the "left" (i.e. 1) end
+    // of the pair.
   case MateStatus::PAIRED_END_LEFT:
     // "M"atching or same orientation is a special case
+    /*
+    if (expectedType == ReadType::SINGLE_END) {
+      return (expectedStrand == ReadStrandedness::U or
+              (expectedStrand == ReadStrandedness::S and isForward) or
+              (expectedStrand == ReadStrandedness::A and !isForward));
+    } else
+    */
     if (expected.orientation == ReadOrientation::SAME) {
       return (expectedStrand == ReadStrandedness::U or
               (expectedStrand == ReadStrandedness::S and isForward) or
               (expectedStrand == ReadStrandedness::A and !isForward));
     } else if (isForward) { // IU, ISF, OU, OSF, MU, MSF
       return (expectedStrand == ReadStrandedness::U or
-              expectedStrand == ReadStrandedness::S);
+              expectedStrand == ReadStrandedness::SA);
     } else { // IU, ISR, OU, OSR, MU, MSR
       return (expectedStrand == ReadStrandedness::U or
-              expectedStrand == ReadStrandedness::A);
+              expectedStrand == ReadStrandedness::AS);
     }
     break;
+
+    // This case is where the mapped read belongs to the "right" (i.e. 2) end
+    // of the pair.
   case MateStatus::PAIRED_END_RIGHT:
     // "M"atching or same orientation is a special case
+    /*
+    if (expectedType == ReadType::SINGLE_END) {
+      return (expectedStrand == ReadStrandedness::U or
+              (expectedStrand == ReadStrandedness::A and isForward) or
+              (expectedStrand == ReadStrandedness::S and !isForward));
+    } else
+    */
     if (expected.orientation == ReadOrientation::SAME) {
       return (expectedStrand == ReadStrandedness::U or
               (expectedStrand == ReadStrandedness::S and isForward) or
               (expectedStrand == ReadStrandedness::A and !isForward));
     } else if (isForward) { // IU, ISR, OU, OSR, MU, MSR
       return (expectedStrand == ReadStrandedness::U or
-              expectedStrand == ReadStrandedness::A);
+              expectedStrand == ReadStrandedness::AS);
     } else { // IU, ISF, OU, OSF, MU, MSF
       return (expectedStrand == ReadStrandedness::U or
-              expectedStrand == ReadStrandedness::S);
+              expectedStrand == ReadStrandedness::SA);
     }
     break;
   default:
@@ -406,13 +429,7 @@ void writeAbundances(const SalmonOpts& sopt, ExpLib& alnLib,
     if (sopt.noLengthCorrection) {
       logLength = 1.0;
     }
-    /*
-    if (!sopt.noSeqBiasModel) {
-        double avgLogBias = transcript.getAverageSequenceBias(
-                            alnLib.sequenceBiasModel());
-        logLength += avgLogBias;
-    }
-    */
+
     // logLength = std::log(transcript.RefLength);
     double fpkmFactor = std::exp(logBillion - logLength - logNumFragments);
     double count = transcript.projectedCounts;
@@ -1292,14 +1309,65 @@ bool validateOptionsAlignment_(SalmonOpts& sopt) {
         "sampled "
         "output file (-s/--sampleOut).  This flag will be ignored!");
   }
+
+  if (sopt.useErrorModel and sopt.rangeFactorizationBins < 4) {
+    uint32_t nbins{4};
+    sopt.jointLog->info(
+                        "Usage of --useErrorModel implies use of range factorization. "
+                        "rangeFactorization bins is being set to {}", nbins
+                        );
+    sopt.rangeFactorizationBins = nbins;
+    sopt.useRangeFactorization = true;
+  }
   return true;
 }
 
-bool validateOptionsMapping_(SalmonOpts& sopt) { return true; }
+bool validateOptionsMapping_(SalmonOpts& sopt) {
+  auto numUnpaired = sopt.unmatedReadFiles.size();
+  auto numLeft = sopt.mate1ReadFiles.size();
+  auto numRight = sopt.mate2ReadFiles.size();
+
+  // currently there is some strange use for this in alevin, I think ...
+  // check with avi.
+  if (numLeft + numRight > 0 and numUnpaired > 0) {
+      sopt.jointLog->warn("You seem to have passed in both un-paired reads and paired-end reads. "
+                          "It is not currently possible to quantify hybrid library types in salmon.");
+  }
+
+
+  if (numLeft + numRight > 0) {
+    if (numLeft != numRight) {
+      sopt.jointLog->error("You passed paired-end files to salmon, but you passed {} files to --mates1 "
+                           "and {} files to --mates2.  You must pass the same number of files to both flags",
+                           numLeft, numRight);
+      return false;
+    }
+   }
+
+  if (sopt.mismatchPenalty > 0) {
+    sopt.jointLog->warn(
+                        "You set the mismatch penalty as {}, but it should be negative.  It is being negated to {}.",
+                        sopt.mismatchPenalty, -sopt.mismatchPenalty);
+    sopt.mismatchPenalty = -sopt.mismatchPenalty;
+  }
+
+  // If we have validate mappings, then make sure we automatically enable
+  // range factorization
+  if (sopt.validateMappings and sopt.rangeFactorizationBins < 4) {
+    uint32_t nbins{4};
+    sopt.jointLog->info(
+                        "Usage of --validateMappings implies use of range factorization. "
+                        "rangeFactorizationBins is being set to {}", nbins
+                        );
+    sopt.rangeFactorizationBins = nbins;
+    sopt.useRangeFactorization = true;
+  }
+  return true;
+}
 
 /**
  * In mapping mode, depending on what the user has requested, we may have to
- *write out some files.  Prepare loggers so we can do this asynchronously.
+ * write out some files.  Prepare loggers so we can do this asynchronously.
  **/
 bool createAuxMapLoggers_(SalmonOpts& sopt,
                           boost::program_options::variables_map& vm) {
@@ -1647,7 +1715,7 @@ bool processQuantOptions(SalmonOpts& sopt,
       return false;
     }
     if (sopt.numGibbsSamples > 0) {
-      if (!sopt.thinningFactor >= 1) {
+      if (!(sopt.thinningFactor >= 1)) {
         jointLog->critical(
             "The Gibbs sampling thinning factor (--thinningFactor) "
             "cannot be smaller than 1.");
@@ -1845,7 +1913,7 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
   };
 
   auto revComplement = [](const char* s, int32_t l, std::string& o) -> void {
-    if (l > o.size()) {
+    if (l > static_cast<int32_t>(o.size())) {
       o.resize(l, 'A');
     }
     int32_t j = 0;
@@ -2652,40 +2720,58 @@ void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
 } // namespace salmon
 
 // === Explicit instantiations
+using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
+using BulkExpT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;
+template <typename FragT>
+using BulkAlignLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>>;
 
 // explicit instantiations for writing abundances ---
-template void salmon::utils::writeAbundances<AlignmentLibrary<ReadPair>>(
-    const SalmonOpts& opts, AlignmentLibrary<ReadPair>& alnLib,
+template void salmon::utils::writeAbundances<BulkAlignLibT<ReadPair>>(
+    const SalmonOpts& opts, BulkAlignLibT<ReadPair>& alnLib,
     boost::filesystem::path& fname, std::string headerComments);
 
-template void salmon::utils::writeAbundances<AlignmentLibrary<UnpairedRead>>(
-    const SalmonOpts& opts, AlignmentLibrary<UnpairedRead>& alnLib,
+template void salmon::utils::writeAbundances<BulkAlignLibT<UnpairedRead>>(
+    const SalmonOpts& opts, BulkAlignLibT<UnpairedRead>& alnLib,
     boost::filesystem::path& fname, std::string headerComments);
-template void salmon::utils::writeAbundances<ReadExperiment>(
-    const SalmonOpts& opts, ReadExperiment& alnLib,
+
+template void salmon::utils::writeAbundances<BulkExpT>(
+    const SalmonOpts& opts, BulkExpT& alnLib,
     boost::filesystem::path& fname, std::string headerComments);
+
+template void salmon::utils::writeAbundances<SCExpT>(
+                                                             const SalmonOpts& opts, SCExpT& alnLib,
+                                                             boost::filesystem::path& fname, std::string headerComments);
+
+
 template void
-salmon::utils::writeAbundancesFromCollapsed<AlignmentLibrary<ReadPair>>(
-    const SalmonOpts& opts, AlignmentLibrary<ReadPair>& alnLib,
+salmon::utils::writeAbundancesFromCollapsed<BulkAlignLibT<ReadPair>>(
+    const SalmonOpts& opts, BulkAlignLibT<ReadPair>& alnLib,
     boost::filesystem::path& fname, std::string headerComments);
 
 template void
-salmon::utils::writeAbundancesFromCollapsed<AlignmentLibrary<UnpairedRead>>(
-    const SalmonOpts& opts, AlignmentLibrary<UnpairedRead>& alnLib,
-    boost::filesystem::path& fname, std::string headerComments);
-template void salmon::utils::writeAbundancesFromCollapsed<ReadExperiment>(
-    const SalmonOpts& opts, ReadExperiment& alnLib,
+salmon::utils::writeAbundancesFromCollapsed<BulkAlignLibT<UnpairedRead>>(
+    const SalmonOpts& opts, BulkAlignLibT<UnpairedRead>& alnLib,
     boost::filesystem::path& fname, std::string headerComments);
 
+template void salmon::utils::writeAbundancesFromCollapsed<BulkExpT>(
+    const SalmonOpts& opts, BulkExpT& alnLib,
+    boost::filesystem::path& fname, std::string headerComments);
+
+template void salmon::utils::writeAbundancesFromCollapsed<SCExpT>(
+                                                                          const SalmonOpts& opts, SCExpT& alnLib,
+                                                                          boost::filesystem::path& fname, std::string headerComments);
 // explicit instantiations for normalizing alpha vectors ---
 template void
-salmon::utils::normalizeAlphas<ReadExperiment>(const SalmonOpts& sopt,
-                                               ReadExperiment& alnLib);
+salmon::utils::normalizeAlphas<BulkExpT>(const SalmonOpts& sopt,
+                                               BulkExpT& alnLib);
+template void
+salmon::utils::normalizeAlphas<SCExpT>(const SalmonOpts& sopt,
+                                               SCExpT& alnLib);
 
-template void salmon::utils::normalizeAlphas<AlignmentLibrary<UnpairedRead>>(
-    const SalmonOpts& sopt, AlignmentLibrary<UnpairedRead>& alnLib);
-template void salmon::utils::normalizeAlphas<AlignmentLibrary<ReadPair>>(
-    const SalmonOpts& sopt, AlignmentLibrary<ReadPair>& alnLib);
+template void salmon::utils::normalizeAlphas<BulkAlignLibT<UnpairedRead>>(
+    const SalmonOpts& sopt, BulkAlignLibT<UnpairedRead>& alnLib);
+template void salmon::utils::normalizeAlphas<BulkAlignLibT<ReadPair>>(
+    const SalmonOpts& sopt, BulkAlignLibT<ReadPair>& alnLib);
 
 // explicit instantiations for effective length updates ---
 /*
@@ -2730,41 +2816,53 @@ salmon::utils::updateEffectiveLengths<std::vector<double>,
 // explicit instantiations for effective length updates ---
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
-                                      ReadExperiment>(
-    SalmonOpts& sopt, ReadExperiment& readExp, Eigen::VectorXd& effLensIn,
+                                      BulkExpT>(
+    SalmonOpts& sopt, BulkExpT& readExp, Eigen::VectorXd& effLensIn,
     std::vector<tbb::atomic<double>>& alphas, std::vector<bool>& available,
     bool finalRound);
 
 template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<double>, ReadExperiment>(
-    SalmonOpts& sopt, ReadExperiment& readExp, Eigen::VectorXd& effLensIn,
+salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
+                                      SCExpT>(
+                                                      SalmonOpts& sopt, SCExpT& readExp, Eigen::VectorXd& effLensIn,
+                                                      std::vector<tbb::atomic<double>>& alphas, std::vector<bool>& available,
+                                                      bool finalRound);
+
+template Eigen::VectorXd
+salmon::utils::updateEffectiveLengths<std::vector<double>, BulkExpT>(
+    SalmonOpts& sopt, BulkExpT& readExp, Eigen::VectorXd& effLensIn,
     std::vector<double>& alphas, std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
+salmon::utils::updateEffectiveLengths<std::vector<double>, SCExpT>(
+                                                                           SalmonOpts& sopt, SCExpT& readExp, Eigen::VectorXd& effLensIn,
+                                                                           std::vector<double>& alphas, std::vector<bool>& available, bool finalRound);
+
+template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
-                                      AlignmentLibrary<ReadPair>>(
-    SalmonOpts& sopt, AlignmentLibrary<ReadPair>& readExp,
+                                      BulkAlignLibT<ReadPair>>(
+    SalmonOpts& sopt, BulkAlignLibT<ReadPair>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
     std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<double>,
-                                      AlignmentLibrary<ReadPair>>(
-    SalmonOpts& sopt, AlignmentLibrary<ReadPair>& readExp,
+                                      BulkAlignLibT<ReadPair>>(
+    SalmonOpts& sopt, BulkAlignLibT<ReadPair>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<double>& alphas,
     std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
-                                      AlignmentLibrary<UnpairedRead>>(
-    SalmonOpts& sopt, AlignmentLibrary<UnpairedRead>& readExp,
+                                      BulkAlignLibT<UnpairedRead>>(
+    SalmonOpts& sopt, BulkAlignLibT<UnpairedRead>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
     std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<double>,
-                                      AlignmentLibrary<UnpairedRead>>(
-    SalmonOpts& sopt, AlignmentLibrary<UnpairedRead>& readExp,
+                                      BulkAlignLibT<UnpairedRead>>(
+    SalmonOpts& sopt, BulkAlignLibT<UnpairedRead>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<double>& alphas,
     std::vector<bool>& available, bool finalRound);
 

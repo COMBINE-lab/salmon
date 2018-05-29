@@ -1,13 +1,13 @@
-cmake_minimum_required (VERSION 2.8)
+cmake_minimum_required (VERSION 3.1)
 
 enable_testing()
 
 project (Salmon)
 
-set(CPACK_PACKAGE_VERSION "0.9.1")
+set(CPACK_PACKAGE_VERSION "0.10.0")
 set(CPACK_PACKAGE_VERSION_MAJOR "0")
-set(CPACK_PACKAGE_VERSION_MINOR "9")
-set(CPACK_PACKAGE_VERSION_PATCH "1")
+set(CPACK_PACKAGE_VERSION_MINOR "10")
+set(CPACK_PACKAGE_VERSION_PATCH "0")
 set(PROJECT_VERSION ${CPACK_PACKAGE_VERSION})
 set(CPACK_GENERATOR "TGZ")
 set(CPACK_SOURCE_GENERATOR "TGZ")
@@ -33,7 +33,7 @@ set (WARNING_IGNORE_FLAGS "")
 endif()
 
 
-set (BOOST_CXX_FLAGS "${WARNING_IGNORE_FLAGS} -std=c++11")
+set (BOOST_CXX_FLAGS "${WARNING_IGNORE_FLAGS} -std=c++14")
 if (FETCH_BOOST)
    set (BOOST_CXX_FLAGS "${BOOST_CXX_FLAGS} -I${CMAKE_CURRENT_SOURCE_DIR}/external/install/include -L${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib")
 endif()
@@ -43,7 +43,8 @@ SET(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
 
 ## Set the standard required compile flags
 # Nov 18th --- removed -DHAVE_CONFIG_H
-set (CMAKE_CXX_FLAGS "-pthread -ftree-vectorize -funroll-loops -fPIC -fomit-frame-pointer -O3 -DRAPMAP_SALMON_SUPPORT -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -Wno-unknown-pragmas -Wno-reorder -Wno-unused-variable -std=c++11 -Wreturn-type -Werror=return-type")
+set (REMOVE_WARNING_FLAGS "-Wno-unused-function -Wno-unused-local-typedef")
+set (CMAKE_CXX_FLAGS "-pthread -ftree-vectorize -funroll-loops -fPIC -fomit-frame-pointer -O3 -DRAPMAP_SALMON_SUPPORT -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -Wno-unknown-pragmas -Wno-reorder -Wno-unused-variable -std=c++14 -Wreturn-type -Werror=return-type ${REMOVE_WARNING_FLAGS}")
 
 ##
 # OSX is strange (some might say, stupid in this regard).  Deal with it's quirkines here.
@@ -79,7 +80,7 @@ set (PTHREAD_LIB)
 set(SHASUM ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_shasum.sh)
 
 ##
-# Compiler-specific C++11 activation.
+# Compiler-specific C++14 activation.
 # http://stackoverflow.com/questions/10984442/how-to-detect-c11-support-of-a-compiler-with-cmake
 ##
 ##
@@ -89,11 +90,11 @@ if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
     execute_process(
         COMMAND ${CMAKE_CXX_COMPILER} -dumpversion OUTPUT_VARIABLE GCC_VERSION)
     # If we're on OSX
-    if (APPLE AND NOT (GCC_VERSION VERSION_GREATER 4.8.2 OR GCC_VERSION VERSION_EQUAL 4.8.2))
+    if (APPLE AND NOT (GCC_VERSION VERSION_GREATER 5.2 OR GCC_VERSION VERSION_EQUAL 5.2))
         message(FATAL_ERROR "When building under OSX, ${PROJECT_NAME} requires "
-                            "either clang or g++ >= 4.8.2")
-    elseif (NOT (GCC_VERSION VERSION_GREATER 4.7 OR GCC_VERSION VERSION_EQUAL 4.7))
-        message(FATAL_ERROR "${PROJECT_NAME} requires g++ 4.7 or greater.")
+                            "either clang or g++ >= 5.2")
+    elseif (NOT (GCC_VERSION VERSION_GREATER 5.2 OR GCC_VERSION VERSION_EQUAL 4.2))
+        message(FATAL_ERROR "${PROJECT_NAME} requires g++ 5.2 or greater.")
     endif ()
 
     set (GCC TRUE)
@@ -115,7 +116,7 @@ if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
     set (WARNING_IGNORE_FLAGS "${WARNING_IGNORE_FLAGS} -Wno-unused-local-typedefs")
     set (BOOST_TOOLSET "gcc")
     set (BOOST_CONFIGURE_TOOLSET "--with-toolset=gcc")
-	set (BCXX_FLAGS "-std=c++11")
+	set (BCXX_FLAGS "-std=c++14")
     set (BOOST_EXTRA_FLAGS toolset=gcc cxxflags=${BCXX_FLAGS})
 # Tentatively, we support clang now
 elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
@@ -130,7 +131,6 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
         set (BOOST_CONFIGURE_TOOLSET "--with-toolset=clang")
 	    set (BCXX_FLAGS "-stdlib=libc++ -DBOOST_HAS_INT128")
 	    set (BOOST_EXTRA_FLAGS toolset=clang cxxflags=${BCXX_FLAGS} linkflags="-stdlib=libc++")
-        set (JELLYFISH_CXX_FLAGS "-stdlib=libc++")
     # Otherwise, use libstdc++ (and make it static)
     else()
         set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static-libstdc++")
@@ -146,7 +146,7 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
         set (PTHREAD_LIB "pthread")
     endif()
 else ()
-    message(FATAL_ERROR "Your C++ compiler does not support C++11.")
+    message(FATAL_ERROR "Your C++ compiler does not support C++14.")
 endif ()
 
 if (DO_QUIET_MAKE)
@@ -298,8 +298,8 @@ endif()
 ##
 # Set the latest version and look for what we need
 ##
-set(Boost_ADDITIONAL_VERSIONS "1.53" "1.53.0" "1.54" "1.55" "1.56" "1.57.0" "1.58" "1.59" "1.60" "1.61")
-find_package(Boost 1.53.0 COMPONENTS iostreams filesystem system thread timer chrono program_options)
+set(Boost_ADDITIONAL_VERSIONS "1.59.0" "1.60.0" "1.61.0" "1.62" "1.63" "1.64" "1.65" "1.66")
+find_package(Boost 1.59.0 COMPONENTS iostreams filesystem system thread timer chrono program_options)
 message("BOOST_INCLUDEDIR = ${BOOST_INCLUDEDIR}")
 message("BOOST_LIBRARYDIR = ${BOOST_LIBRARYDIR}")
 message("Boost_FOUND = ${Boost_FOUND}")
@@ -324,7 +324,7 @@ if (BOOST_RECONFIGURE)
     set(CMAKE_PREFIX_PATH ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
     set(Boost_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
     set(Boost_LIBRARY_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib)
-    find_package(Boost 1.53.0 COMPONENTS iostreams filesystem system thread timer chrono program_options REQUIRED)
+    find_package(Boost 1.59.0 COMPONENTS iostreams filesystem system thread timer chrono program_options REQUIRED)
     set(FETCH_BOOST FALSE)
 endif()
 
@@ -353,15 +353,14 @@ elseif(FETCH_BOOST)
     message("==================================================================")
     ExternalProject_Add(libboost
         DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-        DOWNLOAD_COMMAND curl -k -L  http://downloads.sourceforge.net/project/boost/boost/1.59.0/boost_1_59_0.tar.gz -o boost_1_59_0.tar.gz &&
-                         ${SHASUM} 47f11c8844e579d02691a607fbd32540104a9ac7a2534a8ddaef50daf502baac  boost_1_59_0.tar.gz &&
-                         tar xzf boost_1_59_0.tar.gz
-        #URL http://downloads.sourceforge.net/project/boost/boost/1.57.0/boost_1_57_0.tar.gz
-        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_59_0
+        DOWNLOAD_COMMAND curl -k -L  http://downloads.sourceforge.net/project/boost/boost/1.66.0/boost_1_66_0.tar.gz -o boost_1_66_0.tar.gz &&
+                         ${SHASUM} bd0df411efd9a585e5a2212275f8762079fed8842264954675a4fddc46cfcf60 boost_1_66_0.tar.gz &&
+                         tar xzf boost_1_66_0.tar.gz
+        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_66_0
         INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
         #PATCH_COMMAND patch -p2 < ${CMAKE_CURRENT_SOURCE_DIR}/external/boost156.patch
-	CONFIGURE_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_59_0/bootstrap.sh ${BOOST_CONFIGURE_TOOLSET} ${BOOST_BUILD_LIBS} --prefix=<INSTALL_DIR>
-	BUILD_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_59_0/b2 -d0 -j2 ${BOOST_LIB_SUBSET} toolset=${BOOST_TOOLSET} ${BOOST_EXTRA_FLAGS} cxxflags=${BOOST_CXX_FLAGS} link=static install
+	CONFIGURE_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_66_0/bootstrap.sh ${BOOST_CONFIGURE_TOOLSET} ${BOOST_BUILD_LIBS} --prefix=<INSTALL_DIR>
+	BUILD_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_66_0/b2 -d0 -j2 ${BOOST_LIB_SUBSET} toolset=${BOOST_TOOLSET} ${BOOST_EXTRA_FLAGS} cxxflags=${BOOST_CXX_FLAGS} link=static install
         BUILD_IN_SOURCE 1
         INSTALL_COMMAND ""
     )
@@ -470,42 +469,15 @@ ExternalProject_Add(libbwa
     BUILD_IN_SOURCE TRUE
 )
 
-find_package(Jellyfish 2.2.6)
-
-if (NOT JELLYFISH_FOUND)
-message("Build system will fetch and build Jellyfish")
-message("==================================================================")
-ExternalProject_Add(libjellyfish
-    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    ##
-    #URL  https://github.com/gmarcais/Jellyfish/releases/download/v2.2.6/jellyfish-2.2.6.tar.gz
-    #DOWNLOAD_NAME jellyfish-2.2.6.tgz
-    #URL_HASH SHA1=53819a57ea8ffae26e3f917babf978f8215ef117
-    #TLS_VERIFY FALSE
-    ##
-    DOWNLOAD_COMMAND curl -k -L https://github.com/gmarcais/Jellyfish/releases/download/v2.2.6/jellyfish-2.2.6.tar.gz -o jellyfish-2.2.6.tgz &&
-                     ${SHASUM} 4532fb003a0494f6473bb97d52467904f631b94f7f9afb0d45b398f6c413692e  jellyfish-2.2.6.tgz &&
-    	rm -fr jellyfish-2.2.6 &&
-     	tar -xzvf jellyfish-2.2.6.tgz
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jellyfish-2.2.6
-    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    CONFIGURE_COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/external/jellyfish-2.2.6/configure --prefix=<INSTALL_DIR> CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CXXFLAGS=${JELLYFISH_CXX_FLAGS}
-    BUILD_COMMAND ${MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CXXFLAGS=${JELLYFISH_CXX_FLAGS}
-    BUILD_IN_SOURCE 1
-    INSTALL_COMMAND make ${QUIET_MAKE} install
-)
-set (FETCHED_JELLYFISH TRUE)
-endif()
-
 ## Try and find TBB first
-find_package(TBB 4.4 COMPONENTS tbb tbbmalloc tbbmalloc_proxy )
+find_package(TBB 2018.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy )
 
 ##
 #
 # Fetch and build Intel's Threading Building Blocks library.
 #
 ##
-if((NOT TBB_FOUND) OR (TBB_FOUND AND (TBB_VERSION VERSION_LESS 4.4)))
+if((NOT TBB_FOUND) OR (TBB_FOUND AND (TBB_VERSION VERSION_LESS 2018.0)))
 
 set(TBB_WILL_RECONFIGURE TRUE)
 # Set the appropriate compiler
@@ -518,7 +490,7 @@ endif()
 message("Build system will fetch and build Intel Threading Building Blocks")
 message("==================================================================")
 # These are useful for the custom install step we'll do later
-set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2017_U3)
+set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2018_U3)
 set(TBB_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
 
 if ("${TBB_COMPILER}" STREQUAL "gcc")
@@ -529,16 +501,16 @@ endif()
 
 ExternalProject_Add(libtbb
 	DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/01org/tbb/archive/2017_U3.tar.gz -o tbb-2017_U3.tgz &&
-                     ${SHASUM} 00a8b2798c498507572e24c2db7bf4896f05b760a38ed9ba566ffd348a7c6cef tbb-2017_U3.tgz &&
-                     tar -xzvf tbb-2017_U3.tgz
+    DOWNLOAD_COMMAND curl -k -L https://github.com/01org/tbb/archive/2018_U3.tar.gz -o tbb-2018_U3.tgz &&
+                     ${SHASUM} 23793c8645480148e9559df96b386b780f92194c80120acce79fcdaae0d81f45 tbb-2018_U3.tgz &&
+                     tar -xzvf tbb-2018_U3.tgz
     ##
-    #URL https://github.com/01org/tbb/archive/2017_U3.tar.gz 
-    #DOWNLOAD_NAME 2017_U3.tar.gz
+    #URL https://github.com/01org/tbb/archive/2018_U3.tar.gz 
+    #DOWNLOAD_NAME 2018_U3.tar.gz
     #URL_HASH SHA1=d6cf16a42ece60aad6a722b369e1a2aa753347b4
     #TLS_VERIFY FALSE
     ##
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2017_U3
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2018_U3
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     PATCH_COMMAND "${TBB_PATCH_STEP}"
     CONFIGURE_COMMAND ""
@@ -629,8 +601,8 @@ message("Build system will compile Staden IOLib")
 message("==================================================================")
 ExternalProject_Add(libstadenio
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/staden-io_lib/archive/v1.14.8.tar.gz -o staden-io_lib-v1.14.8.tar.gz &&
-                     ${SHASUM} 1e20adc298d3c0b03c71fdeac72fd6337540fb3273a27ea45cca6813178d2236  staden-io_lib-v1.14.8.tar.gz &&
+    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/staden-io_lib/archive/v1.14.8.1.tar.gz -o staden-io_lib-v1.14.8.tar.gz &&
+                     ${SHASUM} f6f30eefa478cfb708f3109a35fb6ffa0e24951d9d971985df2cef5919dd0bc3 staden-io_lib-v1.14.8.tar.gz &&
                      mkdir -p staden-io_lib-1.14.8 &&
                      tar -xzf staden-io_lib-v1.14.8.tar.gz --strip-components=1 -C staden-io_lib-1.14.8 &&
                      rm -fr staden-io_lib &&
@@ -649,16 +621,16 @@ message("Build system will fetch SPDLOG")
 message("==================================================================")
 ExternalProject_Add(libspdlog
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/spdlog/archive/v0.14.0.tar.gz -o spdlog-v0.14.0.tar.gz &&
-                     ${SHASUM} eb5beb4e53f4bfff5b32eb4db8588484bdc15a17b90eeefef3a9fc74fec1d83d spdlog-v0.14.0.tar.gz &&
-                     tar -xzf spdlog-v0.14.0.tar.gz 
+    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/spdlog/archive/v0.16.1.tar.gz -o spdlog-v0.16.1.tar.gz &&
+                     ${SHASUM} 733260e1fbdcf1b3dc307fc585e4476240026de8be28eb905731d2ab0942deae spdlog-v0.16.1.tar.gz &&
+                     tar -xzf spdlog-v0.16.1.tar.gz 
     ##
     #URL https://github.com/COMBINE-lab/spdlog/archive/v0.12.0.tar.gz
     #DOWNLOAD_NAME spdlog-v0.12.0.tar.gz
     #TLS_VERIFY FALSE
     #URL_HASH SHA1=c868b4d1a27c4d9fb3b748f0566a8f0390d83ffb
     ##
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/spdlog-0.14.0
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/spdlog-0.16.1
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ""
     BUILD_COMMAND ""

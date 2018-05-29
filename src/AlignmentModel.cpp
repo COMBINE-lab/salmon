@@ -266,7 +266,7 @@ double AlignmentModel::logLikelihood(
     for (size_t i = 0; i < opLen; ++i) {
       if (advanceInRead) {
         // Shouldn't happen!
-        if (readIdx >= readLen) {
+        if (readIdx >= static_cast<decltype(readIdx)>(readLen)) {
           if (logger_) {
             logger_->warn("(in logLikelihood()) CIGAR string for read [{}] "
                           "seems inconsistent. It refers to non-existant "
@@ -415,7 +415,7 @@ void AlignmentModel::update(
     std::vector<AtomicMatrix<double>>& transitionProbs) {
   using namespace salmon::stringtools;
   bool useQual{false};
-  size_t readIdx{0};
+  int32_t readIdx{0};
   auto transcriptIdx = bam_pos(read);
   size_t transcriptLen = ref.RefLength;
   // if the read starts before the beginning of the transcript,
@@ -426,8 +426,6 @@ void AlignmentModel::update(
   }
   // unsigned version of transcriptIdx
   size_t uTranscriptIdx = static_cast<size_t>(transcriptIdx);
-
-  // std::stringstream readStream, matchStream, refStream;
 
   uint32_t* cigar = bam_cigar(read);
   uint32_t cigarLen = bam_cigar_len(read);

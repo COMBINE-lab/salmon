@@ -80,7 +80,7 @@ private:
   AtomicMatrix<double> biasRightBackground_;
 
   uint32_t windowSize_;
-  bool isEnabled_;
+  //bool isEnabled_;
   std::atomic<bool> burnedIn_;
   std::shared_ptr<spdlog::logger> logger_;
   // Maintain a mutex in case we want to talk to the

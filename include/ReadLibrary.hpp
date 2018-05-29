@@ -59,7 +59,7 @@ public:
     }
     numCompat_.store(rl.numCompat());
     if (rl.detector_) {
-      detector_ = std::move(detector_);
+      detector_ = std::move(rl.detector_);
     }
   }
 

@@ -118,13 +118,13 @@ void FragmentStartPositionDistribution::update() {
 
 double FragmentStartPositionDistribution::
 operator()(int32_t hitPos, uint32_t txpLen, double logEffLen) {
-
   if (hitPos < 0) {
     hitPos = 0;
   }
-  assert(hitPos < txpLen);
-  if (hitPos >= txpLen) {
-    std::cerr << "\n\nhitPos = " << hitPos << ", txpLen = " << txpLen
+  uint32_t hitPosU = static_cast<uint32_t>(hitPos);
+  assert(hitPosU < txpLen);
+  if (hitPosU >= txpLen) {
+    std::cerr << "\n\nhitPos = " << hitPosU << ", txpLen = " << txpLen
               << "!!\n\n\n";
     return salmon::math::LOG_0;
   }
@@ -134,7 +134,7 @@ operator()(int32_t hitPos, uint32_t txpLen, double logEffLen) {
     return -logEffLen;
   }
 
-  double a = hitPos * (1.0 / txpLen);
+  double a = hitPosU * (1.0 / txpLen);
 
   double effLen = std::exp(logEffLen);
   if (effLen >= txpLen) {
@@ -160,8 +160,9 @@ bool FragmentStartPositionDistribution::logNumDenomMass(int32_t hitPos,
   if (hitPos < 0) {
     hitPos = 0;
   }
-  assert(hitPos < txpLen);
-  if (hitPos >= txpLen) {
+  uint32_t uHitPos = static_cast<uint32_t>(hitPos);
+  assert(uHitPos < txpLen);
+  if (uHitPos >= txpLen) {
     std::cerr << "\n\nhitPos = " << hitPos << ", txpLen = " << txpLen
               << "!!\n\n\n";
     logNum = salmon::math::LOG_0;

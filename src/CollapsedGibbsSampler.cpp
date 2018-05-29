@@ -82,20 +82,22 @@ divide_work(Iterator begin, Iterator end, std::size_t n) {
  *the read count for each transcript,  the mean transcript fractions are sampled
  *from a Gamma distribution ~ Gam( prior[i] + txpCount[i], \Beta + effLens[i]).
  *Then, given these transcript fractions,  The reads are re-assigned within
- *each equivalence class by sampling from a multinomial * distributed according
+ *each equivalence class by sampling from a multinomial distributed according
  *to these means.
  *
  * [1] Haplotype and isoform specific expression estimation using multi-mapping
  *RNA-seq reads. Turro E, Su S-Y, Goncalves A, Coin L, Richardson S and Lewin A.
  * Genome Biology, 2011 Feb; 12:R13.  doi: 10.1186/gb-2011-12-2-r13.
  **/
+template <typename EQVecT>
 void sampleRoundNonCollapsedMultithreaded_(
-    std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,
+    EQVecT& eqVec,
     std::vector<bool>& active, std::vector<uint32_t>& activeList,
     std::vector<uint64_t>& countMap, std::vector<double>& probMap,
     std::vector<double>& muGlobal, Eigen::VectorXd& effLens,
     const std::vector<double>& priorAlphas, std::vector<double>& txpCount,
-    std::vector<uint32_t>& offsetMap) {
+    std::vector<uint32_t>& offsetMap,
+    bool noGammaDraw) {
 
   // generate coeff for \mu from \alpha and \effLens
   double beta = 0.1;
@@ -110,7 +112,23 @@ void sampleRoundNonCollapsedMultithreaded_(
   GeneratorType localGenerator(getGenerator);
 
   // Compute the mu to be used in the equiv class resampling
-  tbb::parallel_for(
+  // If we are doing a gamma draw (including shot-noise)
+  if (noGammaDraw) {
+   tbb::parallel_for(
+      BlockedIndexRange(
+          size_t(0), size_t(activeList.size())), // 1024 is grainsize, use only
+                                                 // with simple_partitioner
+      [&, beta](const BlockedIndexRange& range) -> void {
+        for (auto activeIdx : boost::irange(range.begin(), range.end())) {
+          auto i = activeList[activeIdx];
+          double ci = static_cast<double>(txpCount[i] + priorAlphas[i]);
+          muGlobal[i] = ci / effLens(i);
+          txpCount[i] = 0.0;
+        }
+      });
+   
+  } else {
+   tbb::parallel_for(
       BlockedIndexRange(
           size_t(0), size_t(activeList.size())), // 1024 is grainsize, use only
                                                  // with simple_partitioner
@@ -131,6 +149,7 @@ void sampleRoundNonCollapsedMultithreaded_(
           **/
         }
       });
+  }
 
   /**
    * These will store "thread local" parameters
@@ -295,7 +314,7 @@ bool CollapsedGibbsSampler::sample(
   // Fill in the effective length vector
   Eigen::VectorXd effLens(transcripts.size());
 
-  std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec =
+  auto& eqVec =
       readExp.equivalenceClassBuilder().eqVec();
 
   using VecT = CollapsedGibbsSampler::VecType;
@@ -400,7 +419,7 @@ bool CollapsedGibbsSampler::sample(
     pbar.reset(new ez::ezETAProgressBar(numSamples));
     pbar->start();
   }
-  bool isFirstSample{true};
+  //bool isFirstSample{true};
   for (size_t sampleID = 0; sampleID < numSamples; ++sampleID) {
     if (pbar) {
       ++(*pbar);
@@ -431,7 +450,8 @@ bool CollapsedGibbsSampler::sample(
           priorAlphas, // the prior transcript counts
           alphasIn, // [input/output param] the (hard) fragment counts per txp
                     // from the previous iteration
-          offsetMap // where the information begins for each equivalence class
+          offsetMap, // where the information begins for each equivalence class
+          sopt.noGammaDraw      // true if we should skip the Gamma draw, false otherwise
       );
     }
 
@@ -454,7 +474,7 @@ bool CollapsedGibbsSampler::sample(
       }
     }
     writeBootstrap(alphas);
-    isFirstSample = false;
+    //isFirstSample = false;
   }
   return true;
 }
@@ -857,18 +877,28 @@ static_cast<int>(allSamples[sampleID][tn]);
 }
 */
 
-template bool CollapsedGibbsSampler::sample<ReadExperiment>(
-    ReadExperiment& readExp, SalmonOpts& sopt,
+using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
+using BulkExpT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;
+template <typename FragT>
+using BulkAlignLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>>;
+
+template bool CollapsedGibbsSampler::sample<BulkExpT>(
+    BulkExpT& readExp, SalmonOpts& sopt,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     uint32_t maxIter);
 
-template bool CollapsedGibbsSampler::sample<AlignmentLibrary<UnpairedRead>>(
-    AlignmentLibrary<UnpairedRead>& readExp, SalmonOpts& sopt,
+template bool CollapsedGibbsSampler::sample<SCExpT>(
+                                                            SCExpT& readExp, SalmonOpts& sopt,
+                                                            std::function<bool(const std::vector<double>&)>& writeBootstrap,
+                                                            uint32_t maxIter);
+
+template bool CollapsedGibbsSampler::sample<BulkAlignLibT<UnpairedRead>>(
+    BulkAlignLibT<UnpairedRead>& readExp, SalmonOpts& sopt,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     uint32_t maxIter);
 
-template bool CollapsedGibbsSampler::sample<AlignmentLibrary<ReadPair>>(
-    AlignmentLibrary<ReadPair>& readExp, SalmonOpts& sopt,
+template bool CollapsedGibbsSampler::sample<BulkAlignLibT<ReadPair>>(
+    BulkAlignLibT<ReadPair>& readExp, SalmonOpts& sopt,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     uint32_t maxIter);
 /*
