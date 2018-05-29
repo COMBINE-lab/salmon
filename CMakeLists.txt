@@ -33,6 +33,7 @@ set (WARNING_IGNORE_FLAGS "")
 endif()
 
 if(CONDA_BUILD)
+  message("Building with CONDA_BUILD flag")
   set (CXXSTDFLAG "-std=c++11")
   set (GCCVERSION "4.8.5")
 else ()
