@@ -8,7 +8,7 @@ matrix:
       addons:
         apt:
           sources: ['ubuntu-toolchain-r-test']
-          packages: ['g++-5', 'cmake', 'cmake-data', 'zlib1g-dev', 'libbz2-dev', 'libboost-dev']
+          packages: ['g++-5', 'cmake', 'cmake-data', 'zlib1g-dev', 'libbz2-dev']
       install:
         export CXX="g++-5"
         export CC="gcc-5"
@@ -16,7 +16,7 @@ matrix:
 script: 
     - mkdir build 
     - cd build 
-    - cmake -DNO_RTM=TRUE .. 
+    - cmake -DFETCH_BOOST=TRUE -DNO_RTM=TRUE .. 
     - travis_wait 45 make 
     - travis_wait make install
     - travis_wait make test VERBOSE=1
