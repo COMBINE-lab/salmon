@@ -122,13 +122,8 @@ void VBEMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
   for (size_t i = 0; i < M; ++i) {
     auto ap = alphaIn[i] + priorAlphas[i];
     if (ap > ::digammaMin) {
-      try {
         expTheta[i] =
           std::exp(boost::math::digamma(ap) - logNorm);
-      } catch (std::exception& e) {
-        std::cerr << "Numeric error (value " << ap << "): " << e.what() << "\n";
-        expTheta[i] = 0.0;
-      }
     } else {
       expTheta[i] = 0.0;
     }
@@ -266,13 +261,8 @@ void VBEMUpdate_(EQVecT& eqVec,
                       for (auto i : boost::irange(range.begin(), range.end())) {
                         auto ap = alphaIn[i].load() + priorAlphas[i];
                         if (ap > ::digammaMin) {
-                          try {
                           expTheta[i] =
                               std::exp(boost::math::digamma(ap) - logNorm);
-                          } catch (std::exception& e) {
-                            std::cerr << "Numeric error (value " << ap << "): " << e.what() << "\n";
-                            expTheta[i] = 0.0;
-                          }
                         } else {
                           expTheta[i] = 0.0;
                         }
