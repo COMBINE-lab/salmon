@@ -10,7 +10,7 @@ matrix:
           sources: ['ubuntu-toolchain-r-test']
           packages: ['g++-7', 'gcc-7', 'cmake', 'cmake-data', 'zlib1g-dev', 'libbz2-dev']
       install:
-        - export CXX="g++-7"
+      	- export CXX="g++-7"
         - export CC="gcc-7"
     	- sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-7 50
     	- sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-7 50
