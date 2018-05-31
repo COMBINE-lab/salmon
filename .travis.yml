@@ -4,19 +4,19 @@ language: cpp
 matrix:
   include:
     - os : linux
-      compiler : gcc-5
+      compiler : gcc-7
       addons:
         apt:
           sources: ['ubuntu-toolchain-r-test']
-          packages: ['g++-5', 'libstdc++5', 'libstdc++5-dev' 'cmake', 'cmake-data', 'zlib1g-dev', 'libbz2-dev']
+          packages: ['g++-7', 'gcc-7', 'cmake', 'cmake-data', 'zlib1g-dev', 'libbz2-dev']
       install:
-        export CXX="g++-5"
-        export CC="gcc-5"
+        export CXX="g++-7"
+        export CC="gcc-7"
 
 script: 
     - mkdir build 
     - cd build 
-    - cmake -DCONDA_BUILD=TRUE -DFETCH_BOOST=TRUE -DNO_RTM=TRUE .. 
+    - cmake -DFETCH_BOOST=TRUE -DNO_RTM=TRUE .. 
     - travis_wait 45 make 
     - travis_wait make install
     - travis_wait make test VERBOSE=1
