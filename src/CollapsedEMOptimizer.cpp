@@ -1,6 +1,7 @@
 #include <atomic>
 #include <unordered_map>
 #include <vector>
+#include <exception>
 
 #include "tbb/blocked_range.h"
 #include "tbb/parallel_for.h"
