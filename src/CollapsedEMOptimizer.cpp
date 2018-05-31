@@ -124,7 +124,7 @@ void VBEMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
       try {
         expTheta[i] =
           std::exp(boost::math::digamma(ap) - logNorm);
-      } catch (std::runtime_error& e) {
+      } catch (std::exception& e) {
         std::cerr << "Numeric error (value " << ap << "): " << e.what() << "\n";
         expTheta[i] = 0.0;
       }
@@ -268,7 +268,7 @@ void VBEMUpdate_(EQVecT& eqVec,
                           try {
                           expTheta[i] =
                               std::exp(boost::math::digamma(ap) - logNorm);
-                          } catch (std::runtime_error& e) {
+                          } catch (std::exception& e) {
                             std::cerr << "Numeric error (value " << ap << "): " << e.what() << "\n";
                             expTheta[i] = 0.0;
                           }
