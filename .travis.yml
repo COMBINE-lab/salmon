@@ -12,17 +12,12 @@ matrix:
       install:
       	- export CXX="g++-7"
         - export CC="gcc-7"
-      alternatives:
-            - alternative:
-                name: gcc
-                link: /usr/bin/gcc
-                path: /usr/bin/gcc-4.9
-                priority: 50
-            - alternative:
-                name: g++
-                link: /usr/bin/g++
-                path: /usr/bin/g++-4.9
-                priority: 50
+	- mkdir -p latest-gcc-symlinks
+	- ln -s /usr/bin/g++-7 latest-gcc-symlinks/g++
+	- ln -s /usr/bin/gcc-7 latest-gcc-symlinks/gcc
+	- export PATH=$PWD/latest-gcc-symlinks:$PATH
+	- export AR=gcc-ar-7
+        - export RANLIB=gcc-ranlib-7
 
 script: 
     - mkdir build 
