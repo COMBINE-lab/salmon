@@ -9,15 +9,16 @@ matrix:
         apt:
           sources: ['ubuntu-toolchain-r-test']
           packages: ['g++-7', 'gcc-7', 'cmake', 'cmake-data', 'zlib1g-dev', 'libbz2-dev']
-      install:
-      	- export CXX="g++-7"
-        - export CC="gcc-7"
-	- mkdir -p latest-gcc-symlinks
-	- ln -s /usr/bin/g++-7 latest-gcc-symlinks/g++
-	- ln -s /usr/bin/gcc-7 latest-gcc-symlinks/gcc
-	- export PATH=$PWD/latest-gcc-symlinks:$PATH
-	- export AR=gcc-ar-7
-        - export RANLIB=gcc-ranlib-7
+
+install:
+    - export CXX="g++-7"
+    - export CC="gcc-7"
+    - mkdir -p latest-gcc-symlinks
+    - ln -s /usr/bin/g++-7 latest-gcc-symlinks/g++
+    - ln -s /usr/bin/gcc-7 latest-gcc-symlinks/gcc
+    - export PATH=$PWD/latest-gcc-symlinks:$PATH
+    - export AR=gcc-ar-7
+    - export RANLIB=gcc-ranlib-7
 
 script: 
     - mkdir build 
