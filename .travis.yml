@@ -8,7 +8,7 @@ matrix:
       addons:
         apt:
           sources: ['ubuntu-toolchain-r-test']
-          packages: ['g++-5', 'cmake', 'cmake-data', 'zlib1g-dev', 'libbz2-dev']
+          packages: ['g++-5', 'libstdc++5', 'libstdc++5-dev' 'cmake', 'cmake-data', 'zlib1g-dev', 'libbz2-dev']
       install:
         export CXX="g++-5"
         export CC="gcc-5"
