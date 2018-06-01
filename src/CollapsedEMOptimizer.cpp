@@ -1,6 +1,7 @@
 #include <atomic>
 #include <unordered_map>
 #include <vector>
+#include <exception>
 
 #include "tbb/blocked_range.h"
 #include "tbb/parallel_for.h"
@@ -32,10 +33,11 @@
 
 using BlockedIndexRange = tbb::blocked_range<size_t>;
 
-// intelligently chosen value adopted from
+// intelligently chosen value originally adopted from
 // https://github.com/pachterlab/kallisto/blob/master/src/EMAlgorithm.h#L18
-constexpr double minEQClassWeight = std::numeric_limits<double>::denorm_min();
-constexpr double minWeight = std::numeric_limits<double>::denorm_min();
+// later modified since denorm_min seems to be too permissive.
+constexpr double minEQClassWeight = std::numeric_limits<double>::min();
+constexpr double minWeight = std::numeric_limits<double>::min();
 // A bit more conservative of a minimum as an argument to the digamma function.
 constexpr double digammaMin = 1e-10;
 
@@ -46,7 +48,7 @@ double normalize(std::vector<tbb::atomic<double>>& vec) {
   }
 
   // too small!
-  if (sum < minWeight) {
+  if (sum < ::minWeight) {
     return sum;
   }
 
@@ -121,7 +123,8 @@ void VBEMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
   for (size_t i = 0; i < M; ++i) {
     auto ap = alphaIn[i] + priorAlphas[i];
     if (ap > ::digammaMin) {
-      expTheta[i] = std::exp(boost::math::digamma(ap) - logNorm);
+        expTheta[i] =
+          std::exp(boost::math::digamma(ap) - logNorm);
     } else {
       expTheta[i] = 0.0;
     }
@@ -347,7 +350,7 @@ size_t markDegenerateClasses(
                   << ", aux = " << aux << "\n";
       }
     }
-    if (denom <= minEQClassWeight) {
+    if (denom <= ::minEQClassWeight) {
       fmt::MemoryWriter errstream;
 
       errstream << "\nDropping weighted eq class\n";
@@ -509,7 +512,7 @@ bool doBootstrap(
       alphaSum = truncateCountVector(alphas, cutoff);
     }
 
-    if (alphaSum < minWeight) {
+    if (alphaSum < ::minWeight) {
       jointLog->error("Total alpha weight was too small! "
                       "Make sure you ran salmon correclty.");
       return false;
@@ -784,8 +787,8 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   // a linear combination of the online estimates
   // and the uniform distribution.
   double uniformPrior = totalWeight / static_cast<double>(numActive);
-  // double fracObserved = 1.0;
-  double fracObserved = std::min(1.0, totalWeight / sopt.numRequiredFragments);
+  double maxFrac = 0.999;
+  double fracObserved = std::min(maxFrac, totalWeight / sopt.numRequiredFragments);
   // Above, we placed the uniformative (uniform) initalization into the
   // alphasPrime variables.  If that's what the user requested, then copy those
   // over to the alphas
@@ -961,7 +964,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   }
 
   /* -- v0.8.x
-  if (alphaSum < minWeight) {
+  if (alphaSum < ::minWeight) {
     jointLog->error("Total alpha weight was too small! "
                     "Make sure you ran salmon correclty.");
     return false;
@@ -986,7 +989,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
     alphaSum = truncateCountVector(alphas, cutoff);
   }
 
-  if (alphaSum < minWeight) {
+  if (alphaSum < ::minWeight) {
     jointLog->error("Total alpha weight was too small! "
                     "Make sure you ran salmon correclty.");
     return false;

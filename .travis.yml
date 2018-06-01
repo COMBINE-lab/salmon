@@ -1,52 +1,29 @@
-#whitelist
-sudo: required
-dist: precise
-
-branches:
-    only:
-        - master
-        - develop
-
+sudo: false
 language: cpp
 
-compiler: gcc
-
-addons:
-  apt:
-    sources:
-      - boost-latest
-      - kalakris-cmake
-      - ubuntu-toolchain-r-test
-      - george-edison55-precise-backports
-    packages:
-      - cmake
-      - cmake-data
-      - gcc-4.9
-      - g++-4.9
-
-before_install:
-#    - echo "yes" | sudo apt-add-repository ppa:boost-latest
-#    - echo "yes" | sudo apt-add-repository ppa:mapnik/boost-backports-1-54
-#    - echo "yes" | sudo apt-add-repository ppa:h-rayflood/gcc-upper
-#    - echo "yes" | sudo add-apt-repository ppa:george-edison55/precise-backports
-#    - sudo apt-get clean -qq
-#    - sudo apt-get update -qq
-#    - sudo apt-mark showhold -qq
-#    - sudo apt-get install -qq cmake
-#    - sudo apt-get install -qq gcc-4.9 g++-4.9 
-    - export CC="gcc-4.9"
-    - export CXX="gcc-4.9"
-    - sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-4.9 50
-    - sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-4.9 50
+matrix:
+  include:
+    - os : linux
+      compiler : gcc-7
+      addons:
+        apt:
+          sources: ['ubuntu-toolchain-r-test']
+          packages: ['g++-7', 'gcc-7', 'cmake', 'cmake-data', 'zlib1g-dev', 'libbz2-dev']
 
 install:
-    - export CXX="g++-4.9"
-    - export CC="gcc-4.9"
+    - export CXX="g++-7"
+    - export CC="gcc-7"
+    - mkdir -p latest-gcc-symlinks
+    - ln -s /usr/bin/g++-7 latest-gcc-symlinks/g++
+    - ln -s /usr/bin/gcc-7 latest-gcc-symlinks/gcc
+    - export PATH=$PWD/latest-gcc-symlinks:$PATH
+    - export AR=gcc-ar-7
+    - export RANLIB=gcc-ranlib-7
 
 script: 
     - mkdir build 
     - cd build 
-    - cmake -DCONDA_BUILD=TRUE -DFETCH_BOOST=TRUE -DNO_RTM=TRUE .. 
+    - cmake -DFETCH_BOOST=TRUE -DNO_RTM=TRUE .. 
     - travis_wait 45 make 
     - travis_wait make install
     - travis_wait make test VERBOSE=1
@@ -57,3 +34,63 @@ after_success:
       
 after_failure:
     - cat $TRAVIS_BUILD_DIR/build/Testing/Temporary/LastTest.log
+
+#whitelist
+#sudo: required
+#dist: precise
+#
+#branches:
+#    only:
+#        - master
+#        - develop
+#
+#language: cpp
+#
+#compiler: gcc
+#
+#addons:
+#  apt:
+#    sources:
+#      - boost-latest
+#      - kalakris-cmake
+#      - ubuntu-toolchain-r-test
+#      - george-edison55-precise-backports
+#    packages:
+#      - cmake
+#      - cmake-data
+#      - gcc-4.9
+#      - g++-4.9
+#
+#before_install:
+##    - echo "yes" | sudo apt-add-repository ppa:boost-latest
+##    - echo "yes" | sudo apt-add-repository ppa:mapnik/boost-backports-1-54
+##    - echo "yes" | sudo apt-add-repository ppa:h-rayflood/gcc-upper
+##    - echo "yes" | sudo add-apt-repository ppa:george-edison55/precise-backports
+##    - sudo apt-get clean -qq
+##    - sudo apt-get update -qq
+##    - sudo apt-mark showhold -qq
+##    - sudo apt-get install -qq cmake
+##    - sudo apt-get install -qq gcc-4.9 g++-4.9 
+#    - export CC="gcc-4.9"
+#    - export CXX="gcc-4.9"
+#    - sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-4.9 50
+#    - sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-4.9 50
+#
+#install:
+#    - export CXX="g++-4.9"
+#    - export CC="gcc-4.9"
+#
+#script: 
+#    - mkdir build 
+#    - cd build 
+#    - cmake -DCONDA_BUILD=TRUE -DFETCH_BOOST=TRUE -DNO_RTM=TRUE .. 
+#    - travis_wait 45 make 
+#    - travis_wait make install
+#    - travis_wait make test VERBOSE=1
+#
+#after_success: 
+#    - cd $TRAVIS_BUILD_DIR
+#    - ./scripts/push-binary.sh
+#      
+#after_failure:
+#    - cat $TRAVIS_BUILD_DIR/build/Testing/Temporary/LastTest.log
