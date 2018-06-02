@@ -293,7 +293,7 @@ namespace salmon {
       (
        "dumpfq", po::bool_switch()->default_value(alevin::defaults::dumpFQ),
        "Dump barcode modified fastq file for downstream analysis by"
-       "using coin toss for multi-mapping.")
+       " using coin toss for multi-mapping.")
       (
        "dumpBfh", po::bool_switch()->default_value(alevin::defaults::dumpBFH),
        "dump the big hash with all the barcodes and the UMI sequence.")
