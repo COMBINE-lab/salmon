@@ -24,6 +24,7 @@ fi
 
 #SVER=salmon-v0.10.1
 SVER=develop-salmon
+#SVER=pe-chaining
 
 mkdir -p ${EXTERNAL_DIR}
 curl -k -L https://github.com/COMBINE-lab/RapMap/archive/${SVER}.zip -o ${EXTERNAL_DIR}/rapmap.zip

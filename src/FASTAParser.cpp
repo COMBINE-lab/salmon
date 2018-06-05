@@ -55,6 +55,15 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs,
     for (auto& read : rg) {
       std::string& header = read.name;
       std::string name = header.substr(0, header.find_first_of(sepStr));
+
+      if (fastaNames.find(name) != fastaNames.end()){
+        sopt.jointLog->error("Transcript {} appears twice in the transcript FASTA file. "
+                             "Duplicate transcripts or transcripts with the same name are not allowed.",
+                             name);
+        sopt.jointLog->flush();
+        std::exit(1);
+      }
+
       fastaNames.insert(name);
 
       auto it = nameToID.find(name);
@@ -64,7 +73,6 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs,
                             name);
       } else {
 
-        // std::string& seq = j->data[i].seq;
         std::string& seq = read.seq;
         size_t readLen = seq.length();
 

@@ -102,6 +102,9 @@ public:
     }
   }
 
+  size_t nRow() const { return nRow_; }
+  size_t nCol() const { return nCol_; }
+
 private:
   std::vector<tbb::atomic<T>> storage_;
   std::vector<tbb::atomic<T>> rowsums_;

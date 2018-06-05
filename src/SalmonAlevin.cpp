@@ -711,6 +711,13 @@ void processReadsQuasi(
   size_t readLenRight{0};
   SACollector<RapMapIndexT> hitCollector(qidx);
 
+  rapmap::utils::MappingConfig mc;
+  mc.consistentHits = consistentHits;
+  mc.doChaining = false;
+
+  rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> leftHCInfo;
+  rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> rightHCInfo;
+
   if (salmonOpts.fasterMapping) {
     hitCollector.enableNIP();
   } else {
@@ -816,8 +823,9 @@ void processReadsQuasi(
 
         if (not isExtractOk or (not inTr and not indOk) or not seqOk) {
           lh = rh = false;
-        }
-        else{
+        } else{
+          leftHCInfo.clear();
+          rightHCInfo.clear();
           //corrBarcodeIndex = barcodeMap[barcodeIndex];
           jointHitGroup.setBarcode(barcodeIdx);
 
@@ -834,14 +842,18 @@ void processReadsQuasi(
           jointHitGroup.setUMI(umiIdx.umiWord());
           //clearing barcode string to use as false mate
           barcode.clear();
-          lh = tooShortLeft ? false : hitCollector(barcode,
-                                                   leftHits, saSearcher,
-                                                   MateStatus::PAIRED_END_LEFT,
-                                                   consistentHits);
-          rh = tooShortRight ? false : hitCollector(rp.second.seq,
-                                                    rightHits, saSearcher,
+          lh = false; //tooShortLeft ? false : hitCollector(barcode, saSearcher, leftHCInfo);
+
+          rh = tooShortRight ? false : hitCollector(rp.second.seq, saSearcher, rightHCInfo);
+
+          /*
+          rapmap::hit_manager::hitsToMappingsSimple(*qidx, mc,
+                                                    MateStatus::PAIRED_END_LEFT,
+                                                    leftHCInfo, leftHits);
+          */
+          rapmap::hit_manager::hitsToMappingsSimple(*qidx, mc,
                                                     MateStatus::PAIRED_END_RIGHT,
-                                                    consistentHits);
+                                                    rightHCInfo, rightHits);
         }
       }
       //else if (alevinOpts.barcodeEnd == THREE
