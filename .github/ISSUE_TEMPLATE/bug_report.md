@@ -4,13 +4,21 @@ about: Create a report to help us improve
 
 ---
 
+**Is the bug primarily related to salmon (bulk mode) or alevin (single-cell mode)?**
+
 **Describe the bug**
 A clear and concise description of what the bug is.
 
 **To Reproduce**
 Steps and data to reproduce the behavior:
 
-Specifically, which version of salmon, which reference (e.g. transcriptome), which read files and which program options.
+Specifically, please provide at least the following information:
+
+  * Which version of salmon was used?
+  * How was salmon installed (compiled, downloaded executable, through bioconda)?
+  * Which reference (e.g. transcriptome) was used?
+  * Which read files were used?
+  * Which which program options were used?
 
 
 **Expected behavior**
