@@ -28,19 +28,26 @@ find_library(JEMALLOC_LIBRARY NAMES jemalloc libjemalloc
     ${PC_JEMALLOC_LIBRARY_DIRS}
   PATH_SUFFIXES lib lib64)
 
-set(JEMALLOC_LIBRARIES ${JEMALLOC_LIBRARY})
-set(JEMALLOC_INCLUDE_DIRS ${JEMALLOC_INCLUDE_DIR})
-
-find_package_handle_standard_args(Jemalloc DEFAULT_MSG
-  JEMALLOC_LIBRARY JEMALLOC_INCLUDE_DIR)
-
-get_property(_type CACHE JEMALLOC_ROOT PROPERTY TYPE)
-if(_type)
-  set_property(CACHE JEMALLOC_ROOT PROPERTY ADVANCED 1)
-  if("x${_type}" STREQUAL "xUNINITIALIZED")
-    set_property(CACHE JEMALLOC_ROOT PROPERTY TYPE PATH)
-  endif()
+if(JEMALLOC_INCLUDE_DIR)
+  set(_version_regex "^#define[ \t]+JEMALLOC_VERSION[ \t]+\"([^\"]+)\".*")
+  file(STRINGS "${JEMALLOC_INCLUDE_DIR}/jemalloc/jemalloc.h"
+    JEMALLOC_VERSION REGEX "${_version_regex}")
+  string(REGEX REPLACE "${_version_regex}" "\\1"
+    JEMALLOC_VERSION "${JEMALLOC_VERSION}")
+  unset(_version_regex)
 endif()
 
-mark_as_advanced(JEMALLOC_ROOT JEMALLOC_LIBRARY JEMALLOC_INCLUDE_DIR)
+include(FindPackageHandleStandardArgs)
+# handle the QUIETLY and REQUIRED arguments and set JEMALLOC_FOUND to TRUE
+# if all listed variables are TRUE and the requested version matches.
+find_package_handle_standard_args(Jemalloc REQUIRED_VARS
+                                  JEMALLOC_LIBRARY JEMALLOC_INCLUDE_DIR
+                                  VERSION_VAR JEMALLOC_VERSION)
 
+
+if(JEMALLOC_FOUND)
+  set(JEMALLOC_LIBRARIES    ${JEMALLOC_LIBRARY})
+  set(JEMALLOC_INCLUDE_DIRS ${JEMALLOC_INCLUDE_DIR})
+endif()
+
+mark_as_advanced(JEMALLOC_INCLUDE_DIR JEMALLOC_LIBRARY)
