@@ -9,6 +9,7 @@
 #include "SequenceBiasModel.hpp"
 #include "tbb/atomic.h"
 #include "stx/string_view.hpp"
+#include "IOUtils.hpp"
 #include <atomic>
 #include <cmath>
 #include <limits>
@@ -145,7 +146,11 @@ public:
     using salmon::stringtools::encodedRevComp;
     size_t byte = idx >> 1;
     size_t nibble = idx & 0x1;
-    uint8_t* sseq = SAMSequence_.get();
+
+    // NOTE 10.2
+    auto& sseq = SAMSequence_;
+    //if (byte >= sseq.size()) { std::cerr << "requested index " << byte << " for vector of size " << sseq.size() << " for reference " << RefName << std::endl; return 0;}
+
 
     switch (dir) {
     case strand::forward:
@@ -473,25 +478,19 @@ public:
     }
   }
 
-  // Will *not* delete seq on destruction
-  void setSAMSequenceBorrowed(uint8_t* seq, bool needGC = false,
-                              bool reduceGCMemory = false) {
-    SAMSequence_ = std::unique_ptr<uint8_t, void (*)(uint8_t*)>(
-        seq,              // store seq
-        [](uint8_t* p) {} // do nothing deleter
-    );
-    if (needGC) {
-      computeGCContent_(reduceGCMemory);
-    }
-  }
-
   // Will delete seq on destruction
-  void setSAMSequenceOwned(uint8_t* seq, bool needGC = false,
+  void setSAMSequenceOwned(std::vector<uint8_t>&& seq, bool needGC = false,
                            bool reduceGCMemory = false) {
-    SAMSequence_ = std::unique_ptr<uint8_t, void (*)(uint8_t*)>(
-        seq,                           // store seq
-        [](uint8_t* p) { delete[] p; } // do nothing deleter
-    );
+
+    if ((2*seq.size() < RefLength) or (2*seq.size() > RefLength + 1)) {
+      std::stringstream errstream;
+      errstream << "\n\nSAM file says target " << RefName << " has length " << RefLength
+                << ", but the FASTA file contains a sequence of length [" << seq.size() * 2 << " or " << seq.size() * 2 - 1 << "]\n\n";
+      std::cerr << ioutils::SET_RED << errstream.str();
+      std::exit(1);
+    }
+
+    SAMSequence_ = std::move(seq);
     if (needGC) {
       computeGCContent_(reduceGCMemory);
     }
@@ -499,7 +498,7 @@ public:
 
   const char* Sequence() const { return Sequence_.get(); }
 
-  uint8_t* SAMSequence() const { return SAMSequence_.get(); }
+  uint8_t* SAMSequence() const { return const_cast<uint8_t*>(SAMSequence_.data()); }
 
   void setCompleteLength(uint32_t completeLengthIn) {
     CompleteLength = completeLengthIn;
@@ -679,8 +678,8 @@ private:
     */
   }
 
-  std::unique_ptr<uint8_t, void (*)(uint8_t*)> SAMSequence_ =
-      std::unique_ptr<uint8_t, void (*)(uint8_t*)>(nullptr, [](uint8_t*) {});
+  // NOTE 10.2
+  std::vector<uint8_t> SAMSequence_;
 
   std::unique_ptr<const char, void (*)(const char*)> Sequence_ =
       std::unique_ptr<const char, void (*)(const char*)>(nullptr,

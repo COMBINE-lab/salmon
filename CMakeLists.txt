@@ -4,10 +4,10 @@ enable_testing()
 
 project (Salmon)
 
-set(CPACK_PACKAGE_VERSION "0.10.1")
+set(CPACK_PACKAGE_VERSION "0.10.2")
 set(CPACK_PACKAGE_VERSION_MAJOR "0")
 set(CPACK_PACKAGE_VERSION_MINOR "10")
-set(CPACK_PACKAGE_VERSION_PATCH "1")
+set(CPACK_PACKAGE_VERSION_PATCH "2")
 set(PROJECT_VERSION ${CPACK_PACKAGE_VERSION})
 set(CPACK_GENERATOR "TGZ")
 set(CPACK_SOURCE_GENERATOR "TGZ")
@@ -37,7 +37,7 @@ if(CONDA_BUILD)
   set (CXXSTDFLAG "-std=c++11")
   set (GCCVERSION "4.8.5")
 else ()
-  set (CXXSTDFLAG "-std=c++14")
+  set (CXXSTDFLAG "-std=c++11")
   set (GCCVERSION "5.2")
 endif()
 
@@ -652,20 +652,16 @@ set (HAVE_FAST_MALLOC FALSE)
 # See if we have Jemalloc
 find_package(Jemalloc)
 if (Jemalloc_FOUND)
+  ##
+  # Don't be so stringent about the version yet
+  ##
+  #if (NOT (${JEMALLOC_VERSION} VERSION_LESS 5.1.0))
     message("Found Jemalloc library --- using this memory allocator")
     set (FAST_MALLOC_LIB ${JEMALLOC_LIBRARIES})
     set (HAVE_FAST_MALLOC TRUE)
-endif()
-
-if (NOT HAVE_FAST_MALLOC)
-    # See if we have Tcmalloc
-    find_package(Tcmalloc)
-    if (Tcmalloc_FOUND)
-        message("Fount TCMalloc library --- using this memory allocator")
-        set (TCMALLOC_LIB ${Tcmalloc_LIBRARIES})
-        set (FAST_MALLOC_LIB ${TCMALLOC_LIB})
-        set (HAVE_FAST_MALLOC TRUE)
-    endif()
+  #else()
+  #  message("Fond Jemalloc version ${JEMALLOC_VERSION}, but require >= 5.1.0. Downloading newer version")
+  #endif()
 endif()
 
 if(CONDA_BUILD)
@@ -679,16 +675,11 @@ if (NOT HAVE_FAST_MALLOC)
     message("==================================================================")
     ExternalProject_Add(libjemalloc
         DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-        DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/jemalloc/archive/4.5.0.tar.gz -o jemalloc-4.5.0.tar.gz &&
-                         ${SHASUM} e885b65b95426945655ee91a30f563c9679770c92946bcdd0795f6b78c06c221  jemalloc-4.5.0.tar.gz &&
-                         tar -xzf jemalloc-4.5.0.tar.gz
-        ##
-        #URL https://github.com/COMBINE-lab/jemalloc/archive/4.5.0.tar.gz
-        #DOWNLOAD_NAME jemalloc-4.5.0.tar.gz  
-        #URL_HASH SHA1=ad3a10866ad34b446f8f133e5edcd028be2f3003
-        #TLS_VERIFY FALSE
-        ##
-        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-4.5.0
+        DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/jemalloc/archive/5.1.0.tar.gz -o jemalloc-5.1.0.tar.gz &&
+                         ${SHASUM} ff28aef89df724bd7b6bd6fde8597695514e0e3404d1afad2f1eb8b55ef378d3  jemalloc-5.1.0.tar.gz &&
+                         tar -xzf jemalloc-5.1.0.tar.gz
+
+        SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-5.1.0
         BUILD_IN_SOURCE TRUE
         INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
         CONFIGURE_COMMAND sh -c "${JEMALLOC_FLAGS} ./autogen.sh --disable-debug --prefix=<INSTALL_DIR>"

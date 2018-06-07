@@ -191,6 +191,7 @@ target_link_libraries(salmon
     ${FAST_MALLOC_LIB}
     ${LIBRT}
     ksw2pp
+    ${CMAKE_DL_LIBS}
 )
 
 # Link the executable
@@ -213,6 +214,7 @@ target_link_libraries(unitTests
     ${NON_APPLECLANG_LIBS}
     ${FAST_MALLOC_LIB}
     ${LIBRT}
+    ${CMAKE_DL_LIBS}
     )
 
 add_dependencies(salmon unitTests)

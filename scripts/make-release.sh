@@ -51,6 +51,7 @@ cp ${DIR}/../sample_data.tgz ${DIR}/../RELEASES/${betaname}/
 echo -e "Copying over other shared library dependencies\n"
 bash ${DIR}/../scripts/cpld.bash ${DIR}/../bin/salmon ${DIR}/../RELEASES/${betaname}/lib/
 echo -e "Removing dangerous dependencies\n"
+rm ${DIR}/../RELEASES/${betaname}/lib/librt.so.1
 rm ${DIR}/../RELEASES/${betaname}/lib/libc.so.6
 rm ${DIR}/../RELEASES/${betaname}/lib/ld-linux-x86-64.so.2
 rm ${DIR}/../RELEASES/${betaname}/lib/libdl.so.2

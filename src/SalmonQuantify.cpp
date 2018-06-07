@@ -927,6 +927,13 @@ void processReadsQuasi(
   size_t readLenRight{0};
   SACollector<RapMapIndexT> hitCollector(qidx);
 
+  rapmap::utils::MappingConfig mc;
+  mc.consistentHits = consistentHits;
+  mc.doChaining = salmonOpts.validateMappings;
+
+  rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> leftHCInfo;
+  rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> rightHCInfo;
+
   if (salmonOpts.fasterMapping) {
     hitCollector.enableNIP();
   } else {
@@ -1002,18 +1009,25 @@ void processReadsQuasi(
       auto& jointHits = jointHitGroup.alignments();
       leftHits.clear();
       rightHits.clear();
+
+      leftHCInfo.clear();
+      rightHCInfo.clear();
+
       mapType = salmon::utils::MappingType::UNMAPPED;
 
       bool lh = tooShortLeft
-                    ? false
-                    : hitCollector(rp.first.seq, leftHits, saSearcher,
-                                   MateStatus::PAIRED_END_LEFT, consistentHits);
+        ? false : hitCollector(rp.first.seq, saSearcher, leftHCInfo);
 
-      bool rh =
-          tooShortRight
-              ? false
-              : hitCollector(rp.second.seq, rightHits, saSearcher,
-                             MateStatus::PAIRED_END_RIGHT, consistentHits);
+      bool rh = tooShortRight
+        ? false : hitCollector(rp.second.seq, saSearcher, rightHCInfo);
+
+      rapmap::hit_manager::hitsToMappingsSimple(*qidx, mc,
+                                                MateStatus::PAIRED_END_LEFT,
+                                                leftHCInfo, leftHits);
+
+      rapmap::hit_manager::hitsToMappingsSimple(*qidx, mc,
+                                                MateStatus::PAIRED_END_RIGHT,
+                                                rightHCInfo, rightHits);
 
       // Consider a read as too short if both ends are too short
       if (tooShortLeft and tooShortRight) {
@@ -1479,6 +1493,12 @@ void processReadsQuasi(
   bool consistentHits{salmonOpts.consistentHits};
   bool quiet{salmonOpts.quiet};
 
+  rapmap::utils::MappingConfig mc;
+  mc.consistentHits = consistentHits;
+  mc.doChaining = salmonOpts.validateMappings;
+
+  rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> hcInfo;
+
   SACollector<RapMapIndexT> hitCollector(qidx);
   if (salmonOpts.fasterMapping) {
     hitCollector.enableNIP();
@@ -1495,6 +1515,9 @@ void processReadsQuasi(
     hitCollector.enableChainScoring();
   }
 
+  /**
+   * Setup related to mapping parameters
+   **/
   SASearcher<RapMapIndexT> saSearcher(qidx);
   rapmap::utils::HitCounters hctr;
 
@@ -1548,10 +1571,15 @@ void processReadsQuasi(
       auto& jointHitGroup = structureVec[i];
       auto& jointHits = jointHitGroup.alignments();
       jointHitGroup.clearAlignments();
+      hcInfo.clear();
 
       bool lh = tooShort ? false
-                         : hitCollector(rp.seq, jointHits, saSearcher,
-                                        MateStatus::SINGLE_END, consistentHits);
+        : hitCollector(rp.seq, saSearcher, hcInfo);
+
+      rapmap::hit_manager::hitsToMappingsSimple(*qidx, mc,
+                                                MateStatus::SINGLE_END,
+                                                hcInfo, jointHits);
+
 
       // If the fragment was too short, record it
       if (tooShort) {
