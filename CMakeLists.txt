@@ -37,7 +37,7 @@ if(CONDA_BUILD)
   set (CXXSTDFLAG "-std=c++11")
   set (GCCVERSION "4.8.5")
 else ()
-  set (CXXSTDFLAG "-std=c++14")
+  set (CXXSTDFLAG "-std=c++11")
   set (GCCVERSION "5.2")
 endif()
 
@@ -652,13 +652,16 @@ set (HAVE_FAST_MALLOC FALSE)
 # See if we have Jemalloc
 find_package(Jemalloc)
 if (Jemalloc_FOUND)
-  if (NOT (${JEMALLOC_VERSION} VERSION_LESS 5.1.0))
+  ##
+  # Don't be so stringent about the version yet
+  ##
+  #if (NOT (${JEMALLOC_VERSION} VERSION_LESS 5.1.0))
     message("Found Jemalloc library --- using this memory allocator")
     set (FAST_MALLOC_LIB ${JEMALLOC_LIBRARIES})
     set (HAVE_FAST_MALLOC TRUE)
-  else()
-    message("Fond Jemalloc version ${JEMALLOC_VERSION}, but require >= 5.1.0. Downloading newer version")
-  endif()
+  #else()
+  #  message("Fond Jemalloc version ${JEMALLOC_VERSION}, but require >= 5.1.0. Downloading newer version")
+  #endif()
 endif()
 
 if(CONDA_BUILD)
