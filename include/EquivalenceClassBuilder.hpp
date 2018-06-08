@@ -146,6 +146,8 @@ public:
   }
 
   //~EquivalenceClassBuilder() {}
+  void setMaxResizeThreads(uint32_t t) { countMap_.set_max_resize_threads(t); }
+  uint32_t getMaxResizeThreads() const { return countMap_.get_max_resize_threads(); }
 
   void start() { active_ = true; }
 

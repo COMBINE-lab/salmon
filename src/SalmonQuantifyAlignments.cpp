@@ -1190,6 +1190,7 @@ bool processSample(AlignmentLibraryT<ReadT>& alnLib, size_t requiredObservations
 
   auto& jointLog = sopt.jointLog;
   // EQCLASS
+  alnLib.equivalenceClassBuilder().setMaxResizeThreads(sopt.maxHashResizeThreads);
   alnLib.equivalenceClassBuilder().start();
 
   bool burnedIn = false;

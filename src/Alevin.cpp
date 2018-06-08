@@ -789,6 +789,9 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
   TrueBcsT trueBarcodes;
   //frequency counter
   CFreqMapT freqCounter;
+  freqCounter.reserve(2097152);
+  freqCounter.set_max_resize_threads(sopt.maxHashResizeThreads);
+
   size_t numLowConfidentBarcode;
 
   aopt.jointLog->info("Processing barcodes files (if Present) \n\n ");
