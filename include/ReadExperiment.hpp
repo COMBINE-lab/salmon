@@ -61,7 +61,7 @@ public:
         // transcriptFile_(transcriptFile),
         transcripts_(std::vector<Transcript>()), totalAssignedFragments_(0),
         fragStartDists_(5), posBiasFW_(5), posBiasRC_(5), posBiasExpectFW_(5),
-        posBiasExpectRC_(5), seqBiasModel_(1.0), eqBuilder_(sopt.jointLog),
+        posBiasExpectRC_(5), seqBiasModel_(1.0), eqBuilder_(sopt.jointLog, sopt.maxHashResizeThreads),
         expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0),
         expectedGC_(sopt.numConditionalGCBins, sopt.numFragGCBins,
                     distribution_utils::DistributionSpace::LOG),

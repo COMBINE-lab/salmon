@@ -789,8 +789,8 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
   TrueBcsT trueBarcodes;
   //frequency counter
   CFreqMapT freqCounter;
-  freqCounter.reserve(2097152);
   freqCounter.set_max_resize_threads(sopt.maxHashResizeThreads);
+  freqCounter.reserve(2097152);
 
   size_t numLowConfidentBarcode;
 
