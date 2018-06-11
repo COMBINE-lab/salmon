@@ -26,10 +26,17 @@ if( NOT CMAKE_BUILD_TYPE )
        FORCE )
 endif()
 
+## Set the standard required compile flags
+# Nov 18th --- removed -DHAVE_CONFIG_H
+set (REMOVE_WARNING_FLAGS "-Wno-unused-function;-Wno-unused-local-typedefs")
+set (TGT_COMPILE_FLAGS "-ftree-vectorize;-funroll-loops;-fPIC;-fomit-frame-pointer;-O3")
+set (TGT_WARN_FLAGS "-Wall;-Wno-unknown-pragmas;-Wno-reorder;-Wno-unused-variable;-Wreturn-type;-Werror=return-type;${REMOVE_WARNING_FLAGS}")
+
 if (APPLE)
-set (WARNING_IGNORE_FLAGS "-Wno-deprecated-register")
+set(WARNING_IGNORE_FLAGS "-Wno-deprecated-register")
+list(APPEND TGT_WARN_FLAGS -Wno-deprecated-register)
 else()
-set (WARNING_IGNORE_FLAGS "")
+set(WARNING_IGNORE_FLAGS "")
 endif()
 
 if(CONDA_BUILD)
@@ -57,12 +64,6 @@ endif()
 
 ## Prefer static to dynamic libraries
 SET(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
-
-## Set the standard required compile flags
-# Nov 18th --- removed -DHAVE_CONFIG_H
-set (REMOVE_WARNING_FLAGS "-Wno-unused-function;-Wno-unused-local-typedefs")
-set (TGT_COMPILE_FLAGS "-ftree-vectorize;-funroll-loops;-fPIC;-fomit-frame-pointer;-O3")
-set (TGT_WARN_FLAGS "-Wall;-Wno-unknown-pragmas;-Wno-reorder;-Wno-unused-variable;-Wreturn-type;-Werror=return-type;${REMOVE_WARNING_FLAGS}")
 
 ##
 # OSX is strange (some might say, stupid in this regard).  Deal with it's quirkines here.
