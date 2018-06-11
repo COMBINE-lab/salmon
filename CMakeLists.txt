@@ -47,6 +47,9 @@ else ()
   set(GCCVERSION "5.2")
 endif()
 
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
 set (BOOST_CXX_FLAGS "${WARNING_IGNORE_FLAGS} ${CXXSTDFLAG}")
 if (FETCH_BOOST)
    set (BOOST_CXX_FLAGS "${BOOST_CXX_FLAGS} -I${CMAKE_CURRENT_SOURCE_DIR}/external/install/include -L${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib")
@@ -57,8 +60,9 @@ SET(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
 
 ## Set the standard required compile flags
 # Nov 18th --- removed -DHAVE_CONFIG_H
-set (REMOVE_WARNING_FLAGS "-Wno-unused-function -Wno-unused-local-typedef")
-set (CMAKE_CXX_FLAGS "-pthread -ftree-vectorize -funroll-loops -fPIC -fomit-frame-pointer -O3 -DRAPMAP_SALMON_SUPPORT -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -Wno-unknown-pragmas -Wno-reorder -Wno-unused-variable -Wreturn-type -Werror=return-type ${REMOVE_WARNING_FLAGS}")
+set (REMOVE_WARNING_FLAGS "-Wno-unused-function;-Wno-unused-local-typedefs")
+set (TGT_COMPILE_FLAGS "-ftree-vectorize;-funroll-loops;-fPIC;-fomit-frame-pointer;-O3")
+set (TGT_WARN_FLAGS "-Wall;-Wno-unknown-pragmas;-Wno-reorder;-Wno-unused-variable;-Wreturn-type;-Werror=return-type;${REMOVE_WARNING_FLAGS}")
 
 ##
 # OSX is strange (some might say, stupid in this regard).  Deal with it's quirkines here.
@@ -66,7 +70,7 @@ set (CMAKE_CXX_FLAGS "-pthread -ftree-vectorize -funroll-loops -fPIC -fomit-fram
 if (APPLE)
     # To allow ourselves to build a dynamic library, we have to tell the compiler
     # that, yes, the symbols will be around at runtime.
-    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -undefined dynamic_lookup")
+    list(APPEND TGT_COMPILE_FLAGS -undefined dynamic_lookup)
     set (LIBSALMON_LINKER_FLAGS "-all_load")
     # In order to "think different", we also have to use non-standard suffixes
     # for our shared libraries
@@ -116,7 +120,6 @@ if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
     # Put complete static linking on hold for the time-being
     # If we're not on OSX, make an attempt to compile everything statically
     #if (NOT APPLE)
-    #set (CMAKE_CXX_FLAGS "-static ${CMAKE_CXX_FLAGS}")
     #set (CMAKE_EXE_LINK_FLAGS "-static")
     set (PTHREAD_LIB "pthread")
     #endif()
@@ -124,7 +127,7 @@ if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
     # If we're on Linux (i.e. not OSX) and we're using
     # gcc, then set the -static-libstdc++ flag
     if (NOT APPLE)
-        set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static-libstdc++")
+        list(APPEND TGT_COMPILE_FLAGS -static-libstdc++)
     endif()
 
     set (WARNING_IGNORE_FLAGS "${WARNING_IGNORE_FLAGS} -Wno-unused-local-typedefs")
@@ -140,19 +143,19 @@ elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
     check_cxx_compiler_flag(-stdlib=libc++ HAVE_LIBCPP)
     if (HAVE_LIBCPP)
         message ("It appears that you're compiling with clang and that libc++ is available, so I'll use that")
-        set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -stdlib=libc++")
+        list(APPEND TGT_COMPILE_FLAGS -stdlib=libc++)
 	    set (BOOST_TOOLSET "clang")
         set (BOOST_CONFIGURE_TOOLSET "--with-toolset=clang")
 	    set (BCXX_FLAGS "-stdlib=libc++ -DBOOST_HAS_INT128")
 	    set (BOOST_EXTRA_FLAGS toolset=clang cxxflags=${BCXX_FLAGS} linkflags="-stdlib=libc++")
     # Otherwise, use libstdc++ (and make it static)
     else()
-        set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static-libstdc++")
+        list(APPEND TGT_COMPILE_FLAGS -static-libstdc++)
     endif()
     # There's currently a bug with clang-3.4 & Boost 1.55 -- this hack fixes it
     # but we should do something better (does this break things if CPU doesn't
     # have 128-bit support)?
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DBOOST_HAS_INT128")
+    list(APPEND TGT_COMPILE_FLAGS -DBOOST_HAS_INT128)
 
     if (APPLE)
         set (NON_APPLECLANG_LIBS "")
@@ -178,17 +181,10 @@ endif()
 
 include(ExternalProject)
 
-##
-#  Update the CXX flags according to the system and compiler
-##
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${WARNING_IGNORE_FLAGS}")
-
 if (CMAKE_BUILD_TYPE MATCHES Debug)
     message ("Making Debug build")
-    set (CMAKE_CXX_FLAGS_DEBUG "-g ${CMAKE_CXX_FLAGS}")
 elseif (CMAKE_BUILD_TYPE MATCHES Release)
     message ("Making Release build")
-    set (CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS}")
 else ()
     message ("Making Default build type")
 endif ()

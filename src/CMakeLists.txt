@@ -41,7 +41,6 @@ SequenceBiasModel.cpp
 GZipWriter.cpp
 SalmonQuantMerge.cpp
 ProgramOptionsGenerator.cpp
-#${GAT_SOURCE_DIR}/external/install/src/rapmap/sais.c
 )
 
 set (SALMON_ALIGN_SRCS
@@ -148,11 +147,29 @@ else()
   set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
 endif()
 
+
+set (TGT_RELEASE_FLAGS "${TGT_COMPILE_FLAGS};${TGT_WARN_FLAGS}")
+set (TGT_DEBUG_FLAGS "-g;${TGT_COMPILE_FLAGS};${TGT_WARN_FLAGS}")
+
 # Build the Salmon library
 add_library(salmon_core STATIC ${SALMON_LIB_SRCS} )
+target_compile_definitions(salmon_core PUBLIC
+RAPMAP_SALMON_SUPPORT=1
+HAVE_ANSI_TERM=1
+HAVE_SSTREAM=1
+)
+target_compile_options(salmon_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
+target_compile_options(salmon_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
 
 # Build the Alevin library
 add_library(alevin_core STATIC ${ALEVIN_LIB_SRCS})
+target_compile_definitions(alevin_core PUBLIC
+RAPMAP_SALMON_SUPPORT=1
+HAVE_ANSI_TERM=1
+HAVE_SSTREAM=1
+)
+target_compile_options(alevin_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
+target_compile_options(alevin_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
 
 # Build the salmon executable
 add_executable(salmon ${SALMON_MAIN_SRCS} ${SALMON_ALIGN_SRCS})
@@ -172,10 +189,10 @@ set (SUFFARRAY64_LIB ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort64.a)
 
 # Link the executable
 target_link_libraries(salmon
+    Threads::Threads
     salmon_core
     alevin_core
     gff
-    ${PTHREAD_LIB}
     ${Boost_LIBRARIES}
     ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
     ${ZLIB_LIBRARY}
@@ -196,10 +213,10 @@ target_link_libraries(salmon
 
 # Link the executable
 target_link_libraries(unitTests
+    Threads::Threads
     salmon_core
     alevin_core
     gff
-    ${PTHREAD_LIB}
     ${Boost_LIBRARIES}
     ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
     ${ZLIB_LIBRARY}
