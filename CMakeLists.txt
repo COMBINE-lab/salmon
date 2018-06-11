@@ -71,7 +71,7 @@ SET(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
 if (APPLE)
     # To allow ourselves to build a dynamic library, we have to tell the compiler
     # that, yes, the symbols will be around at runtime.
-    list(APPEND TGT_COMPILE_FLAGS -undefined dynamic_lookup)
+    list(APPEND TGT_COMPILE_FLAGS "-undefined dynamic_lookup;-Wno-unused-command-line-argument")
     set (LIBSALMON_LINKER_FLAGS "-all_load")
     # In order to "think different", we also have to use non-standard suffixes
     # for our shared libraries
