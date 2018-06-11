@@ -138,6 +138,9 @@ struct SalmonOpts {
 
   uint32_t maxExpectedReadLen; // Maximum expected length of an observed read.
 
+  // hidden / for extreme control
+  uint32_t maxHashResizeThreads;
+
   uint64_t numRequiredFragments; //
   uint64_t minRequiredFrags;
   bool reduceGCMemory; // Use a memory-efficient (rank-based) data structure for

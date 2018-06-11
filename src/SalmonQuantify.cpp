@@ -2711,6 +2711,7 @@ transcript abundance from RNA-seq reads
 
     // This will be the class in charge of maintaining our
     // rich equivalence classes
+    experiment.equivalenceClassBuilder().setMaxResizeThreads(sopt.maxHashResizeThreads);
     experiment.equivalenceClassBuilder().start();
 
     auto indexType = experiment.getIndex()->indexType();

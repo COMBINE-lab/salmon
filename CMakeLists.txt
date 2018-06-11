@@ -34,11 +34,17 @@ endif()
 
 if(CONDA_BUILD)
   message("Building with CONDA_BUILD flag")
-  set (CXXSTDFLAG "-std=c++11")
-  set (GCCVERSION "4.8.5")
+  set(CMAKE_CXX_STANDARD 11)
+  set(CMAKE_CXX_STANDARD_REQUIRED ON)
+  set(CMAKE_CXX_EXTENSIONS OFF)
+  set(CXXSTDFLAG "-std=c++11")
+  set(GCCVERSION "4.8.5")
 else ()
-  set (CXXSTDFLAG "-std=c++11")
-  set (GCCVERSION "5.2")
+  set(CMAKE_CXX_STANDARD 11)
+  set(CMAKE_CXX_STANDARD_REQUIRED ON)
+  set(CMAKE_CXX_EXTENSIONS OFF)
+  set(CXXSTDFLAG "-std=c++11")
+  set(GCCVERSION "5.2")
 endif()
 
 set (BOOST_CXX_FLAGS "${WARNING_IGNORE_FLAGS} ${CXXSTDFLAG}")
@@ -52,7 +58,7 @@ SET(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
 ## Set the standard required compile flags
 # Nov 18th --- removed -DHAVE_CONFIG_H
 set (REMOVE_WARNING_FLAGS "-Wno-unused-function -Wno-unused-local-typedef")
-set (CMAKE_CXX_FLAGS "-pthread -ftree-vectorize -funroll-loops -fPIC -fomit-frame-pointer -O3 -DRAPMAP_SALMON_SUPPORT -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -Wno-unknown-pragmas -Wno-reorder -Wno-unused-variable ${CXXSTDFLAG} -Wreturn-type -Werror=return-type ${REMOVE_WARNING_FLAGS}")
+set (CMAKE_CXX_FLAGS "-pthread -ftree-vectorize -funroll-loops -fPIC -fomit-frame-pointer -O3 -DRAPMAP_SALMON_SUPPORT -DHAVE_ANSI_TERM -DHAVE_SSTREAM -Wall -Wno-unknown-pragmas -Wno-reorder -Wno-unused-variable -Wreturn-type -Werror=return-type ${REMOVE_WARNING_FLAGS}")
 
 ##
 # OSX is strange (some might say, stupid in this regard).  Deal with it's quirkines here.
@@ -124,7 +130,7 @@ if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
     set (WARNING_IGNORE_FLAGS "${WARNING_IGNORE_FLAGS} -Wno-unused-local-typedefs")
     set (BOOST_TOOLSET "gcc")
     set (BOOST_CONFIGURE_TOOLSET "--with-toolset=gcc")
-	set (BCXX_FLAGS "${CXXSTDFLAG}")
+    set (BCXX_FLAGS "${CXXSTDFLAG}")
     set (BOOST_EXTRA_FLAGS toolset=gcc cxxflags=${BCXX_FLAGS})
 # Tentatively, we support clang now
 elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
@@ -506,6 +512,8 @@ if ("${TBB_COMPILER}" STREQUAL "gcc")
     ## GCC, get rid of the DO_ITT_NOTIFY flag
     set(TBB_CXXFLAGS "${TBB_CXXFLAGS} -UDO_ITT_NOTIFY")
 endif()
+
+set(TBB_CXXFLAGS "${TBB_CXXFLAGS} ${CXXSTDFLAG}")
 
 ExternalProject_Add(libtbb
 	DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external

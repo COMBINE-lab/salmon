@@ -635,7 +635,9 @@ namespace salmon {
        po::value(&(sopt.numRequiredFragments))->default_value(salmon::defaults::numRequiredFrags),
        "[Deprecated]: The minimum number of observations (mapped reads) "
        "that must be observed before "
-       "the inference procedure will terminate.");
+       "the inference procedure will terminate.")
+      ("maxHashResizeThreads", po::value<uint32_t>(&(sopt.maxHashResizeThreads))->default_value(salmon::defaults::maxHashResizeThreads),
+       "Maximum number of threads to allow cuckoo hash map to use when / if it resizes");
     return hidden;
   }
 
