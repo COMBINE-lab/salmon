@@ -1147,6 +1147,8 @@ void processReadsQuasi(
           std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
           size_t idx{0};
           double optFrac{salmonOpts.minScoreFraction};
+          int32_t maxLeftScore = a * rp.first.seq.length();
+          int32_t maxRightScore = a * rp.second.seq.length();
 
           for (auto& h : jointHits) {
             int32_t score{std::numeric_limits<int32_t>::min()};
@@ -1159,25 +1161,38 @@ void processReadsQuasi(
               auto* r1ptr = h.fwd ? r1 : r1rc;
               auto* r2ptr = h.mateIsFwd ? r2 : r2rc;
 
-              auto s1 = getAlnScore(aligner, ez, h.pos, r1ptr, l1, tseq, tlen, buf, alnCacheLeft);
-              auto s2 = getAlnScore(aligner, ez, h.matePos, r2ptr, l2, tseq, tlen, buf, alnCacheRight);
-              if ((s1 + s2) < (optFrac * a * rp.first.seq.length() + optFrac * a * rp.second.seq.length())) {
+              auto s1 = ((h.completeMatchType == rapmap::utils::MateStatus::PAIRED_END_PAIRED) or
+                         (h.completeMatchType == rapmap::utils::MateStatus::PAIRED_END_LEFT)) ?
+                maxLeftScore :
+                getAlnScore(aligner, ez, h.pos, r1ptr, l1, tseq, tlen, buf, alnCacheLeft);
+
+              auto s2 = ((h.completeMatchType == rapmap::utils::MateStatus::PAIRED_END_PAIRED) or
+                         (h.completeMatchType == rapmap::utils::MateStatus::PAIRED_END_RIGHT)) ?
+                maxRightScore :
+                getAlnScore(aligner, ez, h.matePos, r2ptr, l2, tseq, tlen, buf, alnCacheRight);
+              if ((s1 + s2) < (optFrac * (maxLeftScore + maxRightScore))) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
                 score = s1 + s2;
               }
             } else if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_LEFT) {
               auto* rptr = h.fwd ? r1 : r1rc;
-              auto s = getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, buf, alnCacheLeft);
-              if (s < (optFrac * a * rp.first.seq.length())) {
+
+              auto s = ((h.completeMatchType == rapmap::utils::MateStatus::PAIRED_END_LEFT)) ?
+                maxLeftScore :
+                getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, buf, alnCacheLeft);
+              if (s < (optFrac * maxLeftScore)) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
                 score = s;
               }
             } else if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_RIGHT) {
               auto* rptr = h.fwd ? r2 : r2rc;
-              auto s = getAlnScore(aligner, ez, h.pos, rptr, l2, tseq, tlen, buf, alnCacheRight);
-              if (s < (optFrac * a * rp.second.seq.length())) {
+
+              auto s = ((h.completeMatchType == rapmap::utils::MateStatus::PAIRED_END_RIGHT)) ?
+                maxRightScore :
+                getAlnScore(aligner, ez, h.pos, rptr, l2, tseq, tlen, buf, alnCacheRight);
+              if (s < (optFrac * maxRightScore)) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
                 score = s;
@@ -1331,6 +1346,8 @@ void processReadsQuasi(
           case MateStatus::SINGLE_END: {
             // do nothing
           } break;
+          default:
+            break;
           }
         }
 
@@ -1608,6 +1625,7 @@ void processReadsQuasi(
           std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
           size_t idx{0};
           double optFrac{salmonOpts.minScoreFraction};
+          int32_t maxReadScore = a * rp.seq.length();
 
           for (auto& h : jointHits) {
             int32_t score{std::numeric_limits<int32_t>::min()};
@@ -1617,8 +1635,9 @@ void processReadsQuasi(
             const uint32_t buf{8};
 
             auto* rptr = h.fwd ? r1 : r1rc;
-            auto s = getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, buf, alnCache);
-            if (s < (optFrac * a * rp.seq.length())) {
+            auto s = ((h.completeMatchType == rapmap::utils::MateStatus::SINGLE_END)) ?
+              maxReadScore : getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, buf, alnCache);
+            if (s < (optFrac * maxReadScore)) {
               score = std::numeric_limits<decltype(score)>::min();
             } else {
               score = s;

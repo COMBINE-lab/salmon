@@ -1084,6 +1084,8 @@ void processReadsQuasi(
             // do nothing
             //salmonOpts.jointLog->warn("");
           } break;
+          default:
+            break;
           }
         }
 
