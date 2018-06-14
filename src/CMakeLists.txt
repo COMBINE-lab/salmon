@@ -73,6 +73,7 @@ SalmonExceptions.cpp
 SalmonStringUtils.cpp
 SimplePosBias.cpp
 SGSmooth.cpp
+${GAT_SOURCE_DIR}/src/metro/metrohash64.cpp
 )
 
 set (KSW2PP_BASIC_LIB_SRCS

@@ -394,16 +394,15 @@ namespace alevin {
       return true;
     }
 
-    template <typename ProtocolT>
-    bool sequenceCheck(std::string sequence,
-                       AlevinOpts<ProtocolT>& aopt,
-                       std::mutex& iomutex,
+    //template <typename ProtocolT>
+    bool sequenceCheck(const std::string& sequence,
+                       //AlevinOpts<ProtocolT>& aopt,
+                       //std::mutex& iomutex,
                        Sequence seqType){
-      size_t lenSequnce;
-      auto log = aopt.jointLog;
-
-      lenSequnce = sequence.length();
-      if (lenSequnce == 0){
+      //size_t lenSequnce;
+      //auto log = aopt.jointLog;
+      //lenSequnce = sequence.length();
+      if (sequence.length() == 0){
         return false;
       }
 
@@ -524,6 +523,7 @@ namespace alevin {
                            SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
 
+    /*
     template bool sequenceCheck(std::string sequence,
                                 AlevinOpts<apt::DropSeq>& aopt,
                                 std::mutex& iomutex,
@@ -544,5 +544,6 @@ namespace alevin {
                                 AlevinOpts<apt::Custom>& aopt,
                                 std::mutex& iomutex,
                                 Sequence seqType);
+    */
   }
 }

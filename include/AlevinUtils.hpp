@@ -31,6 +31,7 @@
 #include <boost/any.hpp>
 
 #include "cereal/archives/json.hpp"
+#include "metro/metrohash.h"
 
 #include "AlevinOpts.hpp"
 #include "SingleCellProtocols.hpp"
@@ -55,10 +56,10 @@ namespace alevin{
                        const std::string& barcode,
                        std::unordered_set<std::string>& neighbors);
 
-    template <typename ProtocolT>
-    bool sequenceCheck(std::string barcode,
-                       AlevinOpts<ProtocolT>& aopt,
-                       std::mutex& iomutex,
+    //template <typename ProtocolT>
+    bool sequenceCheck(const std::string& barcode,
+                       //AlevinOpts<ProtocolT>& aopt,
+                       //std::mutex& iomutex,
                        Sequence seq = Sequence::BARCODE);
 
     template <typename ProtocolT>

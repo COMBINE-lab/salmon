@@ -332,11 +332,13 @@ namespace alevin {
                           for (auto i : boost::irange(range.begin(), range.end())) {
                             uint32_t count_matrix_i = bcOrderMap[ trueBarcodes[i] ];
                             std::vector<double>& featureVector = featureCountsMatrix[i];
-                            std::string& currBarcodeName = trueBarcodes[i];
+                            const std::string& currBarcodeName = trueBarcodes[i];
                             uint32_t rawBarcodeFrequency{0};
 
                             // Alignment Rate
-                            bool indexOk = freqCounter.find(currBarcodeName, rawBarcodeFrequency);
+                            //bool indexOk = freqCounter.find(currBarcodeName, rawBarcodeFrequency);
+                            auto indexIt = freqCounter.find(currBarcodeName);
+                            bool indexOk = indexIt != freqCounter.end();
                             if ( not indexOk ){
                               aopt.jointLog->error("Error: index {} not found in freq Counter\n"
                                                    "Please Report the issue on github", currBarcodeName,
@@ -344,6 +346,7 @@ namespace alevin {
                               aopt.jointLog->flush();
                               exit(1);
                             }
+                            rawBarcodeFrequency = *indexIt;
                             featureVector[0] = rawBarcodeFrequency ?
                               umiCount[i] / static_cast<double>(rawBarcodeFrequency) : 0.0;
 

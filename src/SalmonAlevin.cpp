@@ -790,8 +790,8 @@ void processReadsQuasi(
                                             alevinOpts.protocol,
                                             barcode);
           seqOk = aut::sequenceCheck(barcode,
-                                     alevinOpts,
-                                     iomutex,
+                                     //alevinOpts,
+                                     //iomutex,
                                      Sequence::BARCODE);
         }
 
@@ -1637,15 +1637,21 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
 
     std::vector<std::string> trueBarcodesVec (trueBarcodes.begin(), trueBarcodes.end());
     std::sort (trueBarcodesVec.begin(), trueBarcodesVec.end(),
-               [&freqCounter, &jointLog](std::string i, std::string j){
+               [&freqCounter, &jointLog](const std::string& i, const std::string& j){
                  uint32_t iCount, jCount;
-                 bool iOk = freqCounter.find(i, iCount);
-                 bool jOk = freqCounter.find(j, jCount);
+                 //bool iOk = freqCounter.find(i, iCount);
+                 //bool jOk = freqCounter.find(j, jCount);
+                 auto itI = freqCounter.find(i);
+                 auto itJ = freqCounter.find(j);
+                 bool iOk = itI != freqCounter.end();
+                 bool jOk = itJ != freqCounter.end();
                  if (not iOk or not jOk){
                    jointLog->error("Barcode not found in frequency table");
                    jointLog->flush();
                    exit(1);
                  }
+                 iCount = *itI;
+                 jCount = *itJ;
                  if (iCount > jCount){
                    return true;
                  }
