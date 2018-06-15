@@ -790,7 +790,7 @@ void processReadsQuasi(
             aut::sequenceCheck(*barcode, Sequence::BARCODE) : false;
         }
 
-        // If we have a barcode sequence, but not yet and index
+        // If we have a barcode sequence, but not yet an index
         if (seqOk and (not barcodeIdx)) {
           // If we get here, we have a sequence-valid barcode.
           // Check if it is in the trBcs map.

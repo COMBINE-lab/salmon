@@ -98,14 +98,11 @@ char red[] = "\x1b[30m";
 template <typename ProtocolT>
 void densityCalculator(single_parser* parser,
                        AlevinOpts<ProtocolT>& aopt,
-                       std::mutex& ioMutex,
                        CFreqMapT& freqCounter,
                        std::atomic<uint64_t>& usedNumBarcodes,
                        std::atomic<uint64_t>& totNumBarcodes){
   size_t rangeSize{0};
   uint32_t index;
-  //std::string barcode;
-  //barcode.reserve(std::max(20u, aopt.protocol.barcodeLength));
 
   auto rg = parser->getReadGroup();
   auto log = aopt.jointLog;
@@ -115,7 +112,6 @@ void densityCalculator(single_parser* parser,
   while (parser->refill(rg)) {
     rangeSize = rg.size();
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
-      //barcode.clear();
       //Sexy Progress monitor
       ++totNumBarcodesLocal;
       if (not aopt.quiet and totNumBarcodesLocal % 500000 == 0) {
@@ -130,12 +126,7 @@ void densityCalculator(single_parser* parser,
       }
 
       nonstd::optional<std::string> extractedBarcode = aut::extractBarcode(seq, aopt.protocol);
-      if(!extractedBarcode){
-        continue;
-      }
-
-      bool seqOk = aut::sequenceCheck(*extractedBarcode);
-
+      bool seqOk = (extractedBarcode.has_value()) ? aut::sequenceCheck(*extractedBarcode) : false;
       if (not seqOk){
         continue;
       }
@@ -634,9 +625,8 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
                      CFreqMapT& freqCounter,
                      size_t& numLowConfidentBarcode){
   if (not aopt.nobarcode){
-    //Avi -> HardCoding threads for Barcode Parsing
-    //2 for consuming 1 for generating since
-    //consumer thread is almost as fast as generator.
+    // Barcode processing always uses 2 threads now,
+    // one parsing thread and one consumer thread.
     std::unique_ptr<single_parser> singleParserPtr{nullptr};
     constexpr uint32_t miniBatchSize{5000};
     uint32_t numParsingThreads{aopt.numParsingThreads},
@@ -654,7 +644,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
                                             numParsingThreads, miniBatchSize));
 
     singleParserPtr->start();
-    densityCalculator(singleParserPtr.get(), aopt, ioMutex,
+    densityCalculator(singleParserPtr.get(), aopt, 
                       freqCounter, usedNumBarcodes, totNumBarcodes);
     singleParserPtr->stop();
 
