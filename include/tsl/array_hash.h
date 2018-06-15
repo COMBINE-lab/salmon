@@ -41,21 +41,23 @@
 #include "array_growth_policy.h"
 
 
-#ifdef __has_include
-    /*
-     * __has_include is a bit useless (https://gcc.gnu.org/bugzilla/show_bug.cgi?id=79433),
-     * check also __cplusplus version.
-     */
-    #if __has_include(<string_view>) && __cplusplus >= 201703L
-    #define TSL_HAS_STRING_VIEW
-    #endif
-#endif
+//#ifdef __has_include
+//    /*
+//     * __has_include is a bit useless (https://gcc.gnu.org/bugzilla/show_bug.cgi?id=79433),
+//     * check also __cplusplus version.
+//     */
+//    #if __has_include(<string_view>) && __cplusplus >= 201703L
+//    #define TSL_HAS_STRING_VIEW
+//    #endif
+//#endif
 
 
-#ifdef TSL_HAS_STRING_VIEW
-#include <string_view>
-#endif
 
+//#ifdef TSL_HAS_STRING_VIEW
+//#include <string_view>
+//#endif
+#define TSL_HAS_STRING_VIEW
+#include "nonstd/string_view.hpp"
 
 #ifndef tsl_assert
     #ifdef TSL_DEBUG
@@ -738,8 +740,8 @@ public:
         }
         
 #ifdef TSL_HAS_STRING_VIEW
-        std::basic_string_view<CharT> key_sv() const {
-            return std::basic_string_view<CharT>(key(), key_size());
+        nonstd::basic_string_view<CharT> key_sv() const {
+            return nonstd::basic_string_view<CharT>(key(), key_size());
         }
 #endif
         

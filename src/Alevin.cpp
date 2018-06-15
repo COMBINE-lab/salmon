@@ -48,6 +48,9 @@
 
 #include "cereal/types/vector.hpp"
 
+// utility includes
+#include "nonstd/string_view.hpp"
+
 //alevin include
 #include "Filter.hpp"
 #include "AlevinOpts.hpp"
@@ -105,7 +108,6 @@ void densityCalculator(single_parser* parser,
   auto rg = parser->getReadGroup();
   auto log = aopt.jointLog;
 
-  //auto updatefn = [](uint32_t &num) { ++num; };
   uint64_t usedNumBarcodesLocal{0};
   uint64_t totNumBarcodesLocal{0};
   while (parser->refill(rg)) {
@@ -130,17 +132,11 @@ void densityCalculator(single_parser* parser,
         continue;
       }
 
-      /*
-      bool seqOk = aut::sequenceCheck<ProtocolT>(barcode,
-                                                 aopt,
-                                                ioMutex);
-      */
       bool seqOk = aut::sequenceCheck(barcode);
 
       if (not seqOk){
         continue;
       }
-      //freqCounter.upsert(barcode, updatefn, 1);
       freqCounter[barcode] += 1;
       ++usedNumBarcodesLocal;
     }//end-for
@@ -313,7 +309,7 @@ uint32_t getLeftBoundary(std::vector<size_t>& sortedIdx,
 template <typename ProtocolT>
 void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
                         TrueBcsT& trueBarcodes, size_t& lowRegionNumBarcodes,
-                        std::unordered_map<uint32_t, std::string> colMap,
+                        std::unordered_map<uint32_t, nonstd::basic_string_view<char>> colMap,
                         AlevinOpts<ProtocolT>& aopt){
   std::vector<size_t> sortedIdx = sort_indexes(freqCounter);
   size_t maxNumBarcodes { aopt.maxNumBarcodes }, lowRegionMaxNumBarcodes { 1000 };
@@ -409,7 +405,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
   }
 
   for (size_t i=0; i<threshold; i++){
-    trueBarcodes.insert(colMap[sortedIdx[i]]);
+    trueBarcodes.insert(nonstd::to_string(colMap[sortedIdx[i]]));
   }
   aopt.numCells = trueBarcodes.size();
 }
@@ -656,22 +652,6 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
                                             numParsingThreads, miniBatchSize));
 
     singleParserPtr->start();
-    /*
-    for (decltype(numThreads) i = 0; i < numThreads; ++i) {
-      // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
-      // change value before the lambda below is evaluated --- crazy!
-      auto threadFun = [&, i]() -> void {
-        densityCalculator(singleParserPtr.get(), aopt, ioMutex,
-                          freqCounter, usedNumBarcodes, totNumBarcodes);
-      };
-      threads.emplace_back(threadFun);
-    }
-
-    for (auto& t : threads) {
-      t.join();
-    }
-    */
-
     densityCalculator(singleParserPtr.get(), aopt, ioMutex,
                       freqCounter, usedNumBarcodes, totNumBarcodes);
     singleParserPtr->stop();
@@ -697,12 +677,11 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
     }
     else {
       std::vector<uint32_t> collapsedfrequency;
-      std::unordered_map<uint32_t, std::string> collapMap;
+      std::unordered_map<uint32_t, nonstd::basic_string_view<char>> collapMap;
       size_t ind{0};
-      //for(const auto& fqIt : freqCounter.lock_table()){
-      for(auto fqIt = freqCounter.begin(); fqIt != freqCounter.end(); ++fqIt){//}const auto& fqIt : freqCounter.lock_table()){
+      for(auto fqIt = freqCounter.begin(); fqIt != freqCounter.end(); ++fqIt){
         collapsedfrequency.push_back(fqIt.value());
-        collapMap[ind] = fqIt.key();
+        collapMap[ind] = fqIt.key_sv();
         ind += 1;
       }
 

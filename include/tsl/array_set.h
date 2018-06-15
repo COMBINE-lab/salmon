@@ -97,7 +97,7 @@ public:
     
     
 #ifdef TSL_HAS_STRING_VIEW
-    array_set(std::initializer_list<std::basic_string_view<CharT>> init,
+    array_set(std::initializer_list<nonstd::basic_string_view<CharT>> init,
               size_type bucket_count = ht::DEFAULT_INIT_BUCKET_COUNT,
               const Hash& hash = Hash()): array_set(bucket_count, hash)
     {
@@ -115,7 +115,7 @@ public:
     
 
 #ifdef TSL_HAS_STRING_VIEW
-    array_set& operator=(std::initializer_list<std::basic_string_view<CharT>> ilist) {
+    array_set& operator=(std::initializer_list<nonstd::basic_string_view<CharT>> ilist) {
         clear();
         
         reserve(ilist.size());
@@ -164,7 +164,7 @@ public:
         
     
 #ifdef TSL_HAS_STRING_VIEW
-    std::pair<iterator, bool> insert(const std::basic_string_view<CharT>& key) {
+    std::pair<iterator, bool> insert(const nonstd::basic_string_view<CharT>& key) {
         return m_ht.emplace(key.data(), key.size()); 
     }
 #else
@@ -203,7 +203,7 @@ public:
     
 
 #ifdef TSL_HAS_STRING_VIEW
-    void insert(std::initializer_list<std::basic_string_view<CharT>> ilist) {
+    void insert(std::initializer_list<nonstd::basic_string_view<CharT>> ilist) {
         insert(ilist.begin(), ilist.end());
     }
 #else
@@ -218,7 +218,7 @@ public:
     /**
      * @copydoc emplace_ks(const CharT* key, size_type key_size)
      */
-    std::pair<iterator, bool> emplace(const std::basic_string_view<CharT>& key) {
+    std::pair<iterator, bool> emplace(const nonstd::basic_string_view<CharT>& key) {
         return m_ht.emplace(key.data(), key.size());
     }
 #else
@@ -249,7 +249,7 @@ public:
     iterator erase(const_iterator first, const_iterator last) { return m_ht.erase(first, last); }
 
 #ifdef TSL_HAS_STRING_VIEW 
-    size_type erase(const std::basic_string_view<CharT>& key) {
+    size_type erase(const nonstd::basic_string_view<CharT>& key) {
         return m_ht.erase(key.data(), key.size());
     }
 #else    
@@ -271,7 +271,7 @@ public:
     /**
      * @copydoc erase_ks(const CharT* key, size_type key_size, std::size_t precalculated_hash)
      */
-    size_type erase(const std::basic_string_view<CharT>& key, std::size_t precalculated_hash) {
+    size_type erase(const nonstd::basic_string_view<CharT>& key, std::size_t precalculated_hash) {
         return m_ht.erase(key.data(), key.size(), precalculated_hash);
     }
 #else    
@@ -307,7 +307,7 @@ public:
      * Lookup
      */    
 #ifdef TSL_HAS_STRING_VIEW 
-    size_type count(const std::basic_string_view<CharT>& key) const { return m_ht.count(key.data(), key.size()); }
+    size_type count(const nonstd::basic_string_view<CharT>& key) const { return m_ht.count(key.data(), key.size()); }
 #else
     size_type count(const CharT* key) const { return m_ht.count(key, std::strlen(key)); }
     size_type count(const std::basic_string<CharT>& key) const { return m_ht.count(key.data(), key.size()); }
@@ -320,7 +320,7 @@ public:
     /**
      * @copydoc count_ks(const CharT* key, size_type key_size, std::size_t precalculated_hash) const
      */
-    size_type count(const std::basic_string_view<CharT>& key, std::size_t precalculated_hash) const { 
+    size_type count(const nonstd::basic_string_view<CharT>& key, std::size_t precalculated_hash) const { 
         return m_ht.count(key.data(), key.size(), precalculated_hash); 
     }
 #else
@@ -349,11 +349,11 @@ public:
     
     
 #ifdef TSL_HAS_STRING_VIEW 
-    iterator find(const std::basic_string_view<CharT>& key) {
+    iterator find(const nonstd::basic_string_view<CharT>& key) {
         return m_ht.find(key.data(), key.size());
     }
     
-    const_iterator find(const std::basic_string_view<CharT>& key) const {
+    const_iterator find(const nonstd::basic_string_view<CharT>& key) const {
         return m_ht.find(key.data(), key.size());
     }
 #else
@@ -387,14 +387,14 @@ public:
     /**
      * @copydoc find_ks(const CharT* key, size_type key_size, std::size_t precalculated_hash)
      */
-    iterator find(const std::basic_string_view<CharT>& key, std::size_t precalculated_hash) {
+    iterator find(const nonstd::basic_string_view<CharT>& key, std::size_t precalculated_hash) {
         return m_ht.find(key.data(), key.size(), precalculated_hash);
     }
     
     /**
      * @copydoc find_ks(const CharT* key, size_type key_size, std::size_t precalculated_hash)
      */
-    const_iterator find(const std::basic_string_view<CharT>& key, std::size_t precalculated_hash) const {
+    const_iterator find(const nonstd::basic_string_view<CharT>& key, std::size_t precalculated_hash) const {
         return m_ht.find(key.data(), key.size(), precalculated_hash);
     }
 #else
@@ -444,11 +444,11 @@ public:
 
     
 #ifdef TSL_HAS_STRING_VIEW 
-    std::pair<iterator, iterator> equal_range(const std::basic_string_view<CharT>& key) {
+    std::pair<iterator, iterator> equal_range(const nonstd::basic_string_view<CharT>& key) {
         return m_ht.equal_range(key.data(), key.size());
     }
     
-    std::pair<const_iterator, const_iterator> equal_range(const std::basic_string_view<CharT>& key) const {
+    std::pair<const_iterator, const_iterator> equal_range(const nonstd::basic_string_view<CharT>& key) const {
         return m_ht.equal_range(key.data(), key.size());
     }
 #else
@@ -482,14 +482,14 @@ public:
     /**
      * @copydoc equal_range_ks(const CharT* key, size_type key_size, std::size_t precalculated_hash)
      */
-    std::pair<iterator, iterator> equal_range(const std::basic_string_view<CharT>& key, std::size_t precalculated_hash) {
+    std::pair<iterator, iterator> equal_range(const nonstd::basic_string_view<CharT>& key, std::size_t precalculated_hash) {
         return m_ht.equal_range(key.data(), key.size(), precalculated_hash);
     }
     
     /**
      * @copydoc equal_range_ks(const CharT* key, size_type key_size, std::size_t precalculated_hash)
      */
-    std::pair<const_iterator, const_iterator> equal_range(const std::basic_string_view<CharT>& key, std::size_t precalculated_hash) const {
+    std::pair<const_iterator, const_iterator> equal_range(const nonstd::basic_string_view<CharT>& key, std::size_t precalculated_hash) const {
         return m_ht.equal_range(key.data(), key.size(), precalculated_hash);
     }
 #else
