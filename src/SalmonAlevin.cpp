@@ -1639,8 +1639,6 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
     std::sort (trueBarcodesVec.begin(), trueBarcodesVec.end(),
                [&freqCounter, &jointLog](const std::string& i, const std::string& j){
                  uint32_t iCount, jCount;
-                 //bool iOk = freqCounter.find(i, iCount);
-                 //bool jOk = freqCounter.find(j, jCount);
                  auto itI = freqCounter.find(i);
                  auto itJ = freqCounter.find(j);
                  bool iOk = itI != freqCounter.end();

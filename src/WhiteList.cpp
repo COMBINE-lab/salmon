@@ -336,7 +336,6 @@ namespace alevin {
                             uint32_t rawBarcodeFrequency{0};
 
                             // Alignment Rate
-                            //bool indexOk = freqCounter.find(currBarcodeName, rawBarcodeFrequency);
                             auto indexIt = freqCounter.find(currBarcodeName);
                             bool indexOk = indexIt != freqCounter.end();
                             if ( not indexOk ){

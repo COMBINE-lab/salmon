@@ -705,7 +705,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
       if (trBcVec.size() > 1){
         mmBcCounts += 1;
         uint32_t numReads;
-        //bool indexOk = freqCounter.find(softMapIt.first, numReads);
+
         auto indexIt = freqCounter.find(softMapIt.first);
         bool indexOk = indexIt != freqCounter.end();
         if ( not indexOk){

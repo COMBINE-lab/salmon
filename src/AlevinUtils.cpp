@@ -399,31 +399,7 @@ namespace alevin {
                        //AlevinOpts<ProtocolT>& aopt,
                        //std::mutex& iomutex,
                        Sequence seqType){
-      //size_t lenSequnce;
-      //auto log = aopt.jointLog;
-      //lenSequnce = sequence.length();
-      if (sequence.length() == 0){
-        return false;
-      }
-
-      for(auto nt: sequence) {
-        if('N' == nt){
-          return false;
-        }
-        switch(nt){
-        case 'A':
-        case 'C':
-        case 'G':
-        case 'T':break;
-        default:
-          {
-            //log->error("Unidentified charachter {} --- non(A,C,G,T,N)"
-            //           " in barcode sequence", nt);
-            return false;
-          }
-        }//end-switch
-      }//end-for
-      return true;
+      return (sequence.length() > 0) and (sequence.find_first_not_of("ACGTacgt") == std::string::npos);
     }
 
     bool checkSetCoverage(std::vector<std::vector<uint32_t>>& tgroup,
