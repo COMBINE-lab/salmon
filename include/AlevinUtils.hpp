@@ -32,6 +32,7 @@
 
 #include "cereal/archives/json.hpp"
 #include "metro/metrohash.h"
+#include "nonstd/optional.hpp"
 
 #include "AlevinOpts.hpp"
 #include "SingleCellProtocols.hpp"
@@ -73,9 +74,7 @@ namespace alevin{
                     std::string& umi);
 
     template <typename ProtocolT>
-    bool extractBarcode(std::string& read,
-                        ProtocolT& pt,
-                        std::string& bc);
+    nonstd::optional<std::string> extractBarcode(std::string& read, ProtocolT& pt);
 
     template <typename OrderedOptionsT>
     bool writeCmdInfo(boost::filesystem::path cmdInfoPath,

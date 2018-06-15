@@ -774,60 +774,58 @@ void processReadsQuasi(
       // extracting barcodes
       size_t barcodeLength = alevinOpts.protocol.barcodeLength;
       size_t umiLength = alevinOpts.protocol.umiLength;
-      std::string umi, barcode;
-      uint32_t barcodeIdx{0};
-      bool lh, rh, isExtractOk, seqOk;
+      std::string umi;//, barcode;
+      nonstd::optional<std::string> barcode;
+      nonstd::optional<uint32_t> barcodeIdx;
+      bool lh, rh, seqOk;
 
       if (alevinOpts.protocol.end == bcEnd::FIVE){
         if(alevinOpts.nobarcode){
-          barcode = "AAA";
-          isExtractOk = true;
+          barcodeIdx = 0;
           seqOk = true;
           alevinOpts.protocol.barcodeLength = 0;
-        }
-        else{
-          isExtractOk = aut::extractBarcode(rp.first.seq,
-                                            alevinOpts.protocol,
-                                            barcode);
-          seqOk = aut::sequenceCheck(barcode,
-                                     //alevinOpts,
-                                     //iomutex,
-                                     Sequence::BARCODE);
+        } else {
+          barcode = aut::extractBarcode(rp.first.seq, alevinOpts.protocol);
+          seqOk = (barcode.has_value()) ?
+            aut::sequenceCheck(*barcode, Sequence::BARCODE) : false;
         }
 
-        //std::vector<std::string>::iterator bcIt = find(trBcs.begin(),
-        //                                               trBcs.end(),
-        //                                               barcode);
+        // If we have a barcode sequence, but not yet and index
+        if (seqOk and (not barcodeIdx)) {
+          // If we get here, we have a sequence-valid barcode.
+          // Check if it is in the trBcs map.
+          auto trIt = trBcs.find(*barcode);
 
-        //bool inTr = bcIt != trBcs.end();
-        bool inTr = trBcs.contains(barcode);
-        bool indOk {false};
-
-        if(inTr){
-          barcodeIdx = trBcs[barcode];
-        }
-        else{
-          indOk = barcodeMap.find(barcode) != barcodeMap.end();
-          if (indOk){
-            barcode = barcodeMap[barcode].front().first;
-            //auto trIt =  find(trBcs.begin(), trBcs.end(), barcode);
-            bool trIt =  trBcs.contains(barcode);
-            if(not trIt){
-              salmonOpts.jointLog->error("Wrong entry in barcode softmap.\n"
-                                         "Please Report this on github");
-              exit(1);
+          // If it is, use that index
+          if(trIt != trBcs.end()){
+            barcodeIdx = trIt->second;
+          } else{
+            // If it's not, see if it's in the barcode map
+            auto indIt = barcodeMap.find(*barcode);
+            // If so grab the representative and get its index
+            if (indIt != barcodeMap.end()){
+              barcode = indIt->second.front().first;
+              auto trItLoc = trBcs.find(*barcode);
+              if(trItLoc == trBcs.end()){
+                salmonOpts.jointLog->error("Wrong entry in barcode softmap.\n"
+                                           "Please Report this on github");
+                exit(1);
+              } else{
+                barcodeIdx = trItLoc->second;
+              }
             }
-            else{
-              barcodeIdx = trBcs[barcode];
-            }
+            // If it wasn't in the barcode map, it's not valid
+            // and we should leave barcodeIdx as nullopt.
           }
         }
 
-        if (not isExtractOk or (not inTr and not indOk) or not seqOk) {
+        // If we don't have a barcode index by this point, we can't
+        // get a valid one.
+        if (not barcodeIdx) {
           lh = rh = false;
         } else{
           //corrBarcodeIndex = barcodeMap[barcodeIndex];
-          jointHitGroup.setBarcode(barcodeIdx);
+          jointHitGroup.setBarcode(*barcodeIdx);
 
           aut::extractUMI(rp.first.seq, alevinOpts.protocol, umi);
           alevin::kmer::AlvKmer umiIdx(umiLength);
@@ -840,8 +838,10 @@ void processReadsQuasi(
           }
 
           jointHitGroup.setUMI(umiIdx.umiWord());
-          //clearing barcode string to use as false mate
-          barcode.clear();
+          // old comment : clearing barcode string to use as false mate
+          // ^^ There is no point in even trying to map this --- so forget clearing it.
+          // barcode.clear();
+
           // There is no point in trying to map the barcode
           lh = false;
           rh = tooShortRight ? false : hitCollector(rp.second.seq, saSearcher, rightHCInfo);

@@ -78,48 +78,53 @@ namespace alevin {
 
 
     template <>
-    bool extractBarcode<apt::DropSeq>(std::string& read,
-                                      apt::DropSeq& pt,
-                                      std::string& bc){
-      bc = read.substr(0, pt.barcodeLength);
-      return true;
+    nonstd::optional<std::string> extractBarcode<apt::DropSeq>(std::string& read,
+                                      apt::DropSeq& pt){
+      return (read.length() >= pt.barcodeLength) ?
+        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+      // = read.substr(0, pt.barcodeLength);
+    //return true;
     }
     template <>
-    bool extractBarcode<apt::Chromium>(std::string& read,
-                                       apt::Chromium& pt,
-                                       std::string& bc){
-      bc = read.substr(0, pt.barcodeLength);
-      return true;
+    nonstd::optional<std::string> extractBarcode<apt::Chromium>(std::string& read,
+                                       apt::Chromium& pt){
+      return (read.length() >= pt.barcodeLength) ?
+        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+      //return (read.length() >= pt.barcodeLength) ? (bc.append(read.data(), pt.barcodeLength), true) : false;
+      //bc = read.substr(0, pt.barcodeLength);
+      //return true;
     }
     template <>
-    bool extractBarcode<apt::Gemcode>(std::string& read,
-                                       apt::Gemcode& pt,
-                                       std::string& bc){
-      bc = read.substr(0, pt.barcodeLength);
-      return true;
+    nonstd::optional<std::string> extractBarcode<apt::Gemcode>(std::string& read,
+                                       apt::Gemcode& pt){
+      return (read.length() >= pt.barcodeLength) ?
+        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+      //return (read.length() >= pt.barcodeLength) ? (bc.append(read.data(), pt.barcodeLength), true) : false;
+      //bc = read.substr(0, pt.barcodeLength);
+      //return true;
     }
     template <>
-    bool extractBarcode<apt::Custom>(std::string& read,
-                                     apt::Custom& pt,
-                                     std::string& bc){
-      bc = read.substr(0, pt.barcodeLength);
-      return true;
+    nonstd::optional<std::string> extractBarcode<apt::Custom>(std::string& read,
+                                     apt::Custom& pt){
+      return (read.length() >= pt.barcodeLength) ?
+        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+      //return (read.length() >= pt.barcodeLength) ? (bc.append(read.data(), pt.barcodeLength), true) : false;
+      //bc = read.substr(0, pt.barcodeLength);
+      //return true;
     }
     template <>
-    bool extractBarcode<apt::InDrop>(std::string& read,
-                                     apt::InDrop& pt,
-                                     std::string& bc){
+    nonstd::optional<std::string> extractBarcode<apt::InDrop>(std::string& read, apt::InDrop& pt){
       std::string::size_type index = read.find(pt.w1);
       if (index == std::string::npos){
-        return false;
+        return nonstd::nullopt;
       }
-      bc = read.substr(0, index);
+      auto bc = read.substr(0, index);
       if(bc.size()<8 or bc.size()>12){
-        return false;
+        return nonstd::nullopt;
       }
       uint32_t offset = bc.size()+pt.w1.size();
       bc += read.substr(offset, offset+8);
-      return true;
+      return nonstd::optional<std::string>(bc);
     }
 
     void getIndelNeighbors(

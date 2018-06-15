@@ -50,6 +50,7 @@
 
 // utility includes
 #include "nonstd/string_view.hpp"
+#include "nonstd/optional.hpp"
 
 //alevin include
 #include "Filter.hpp"
@@ -103,7 +104,8 @@ void densityCalculator(single_parser* parser,
                        std::atomic<uint64_t>& totNumBarcodes){
   size_t rangeSize{0};
   uint32_t index;
-  std::string barcode;
+  //std::string barcode;
+  //barcode.reserve(std::max(20u, aopt.protocol.barcodeLength));
 
   auto rg = parser->getReadGroup();
   auto log = aopt.jointLog;
@@ -113,31 +115,31 @@ void densityCalculator(single_parser* parser,
   while (parser->refill(rg)) {
     rangeSize = rg.size();
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
+      //barcode.clear();
       //Sexy Progress monitor
       ++totNumBarcodesLocal;
       if (not aopt.quiet and totNumBarcodesLocal % 500000 == 0) {
-        ioMutex.lock();
         fmt::print(stderr, "\r\r{}processed{} {} Million {}barcodes{}",
                    green, red, totNumBarcodesLocal/1000000, green, RESET_COLOR);
-        ioMutex.unlock();
       }
 
       auto& rp = rg[i];
-      std::string seq = rp.seq;
+      std::string& seq = rp.seq;
       if (aopt.protocol.end == bcEnd::THREE) {
         std::reverse(seq.begin(), seq.end());
       }
-      bool isExtractOk = aut::extractBarcode(seq, aopt.protocol, barcode);
-      if(!isExtractOk){
+
+      nonstd::optional<std::string> extractedBarcode = aut::extractBarcode(seq, aopt.protocol);
+      if(!extractedBarcode){
         continue;
       }
 
-      bool seqOk = aut::sequenceCheck(barcode);
+      bool seqOk = aut::sequenceCheck(*extractedBarcode);
 
       if (not seqOk){
         continue;
       }
-      freqCounter[barcode] += 1;
+      freqCounter[*extractedBarcode] += 1;
       ++usedNumBarcodesLocal;
     }//end-for
   }//end-while
@@ -753,8 +755,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
       }
       aopt.jointLog->info("Done dumping fastq File");
     }
-  }
-  else{
+  } else{
     trueBarcodes.insert("AAA");
   }
 }
