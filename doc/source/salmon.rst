@@ -69,7 +69,7 @@ set of alignments.
     to process fragments more quickly than they can be provided via the parser.
  
     
-Quasi-mapping-based mode (including lightweight alignment)
+Preparing transcriptome indices (Quasi-index and FMD-index-based modes) 
 ----------------------------------------------------------
 
 One of the novel and innovative features of Salmon is its ability to accurately
@@ -118,7 +118,13 @@ would use the following command:
 
 Note that no value of `k` is given here.  However, the SMEM-based mapping index
 makes use of a parameter `k` that is passed in during the ``quant`` phase (the
-default value is `19`). 
+default value is `19`).
+
+
+
+
+Quantifying in non-alignment-based mode
+---------------------------------------
 
 Then, you can quantify any set of reads (say, paired-end reads in files
 `reads1.fq` and `reads2.fq`) directly against this index using the Salmon
@@ -154,8 +160,47 @@ will be a directory called ``salmon_quant``, that contains a file called
 ``quant.sf`` containing the quantification results.
 
 
-Alignment-based mode
---------------------
+"""""""""""""""""""""""""""""""""""""""
+Providing multiple read files to Salmon
+"""""""""""""""""""""""""""""""""""""""
+
+Often, a single library may be split into multiple FASTA/Q files.  Also, sometimes one may wish
+to quantify multiple replicates or samples together, treating them as if they are one library.
+Salmon allows the user to provide a *space-separated* list of read files to all of it's options
+that expect input files (i.e. ``-r``, ``-1``, ``-2``).  When the input is paired-end reads, the
+order of the files in the left and right lists must be the same.  There are a number of ways to
+provide salmon with multiple read files, and treat these as a single library.  For the examples
+below, assume we have two replicates ``lib_1`` and ``lib_2``.  The left and right reads for
+``lib_1`` are ``lib_1_1.fq`` and ``lib_1_2.fq``, respectively.  The left and right reads for
+``lib_2`` are ``lib_2_1.fq`` and ``lib_2_2.fq``, respectively.  The following are both valid
+ways to input these reads to Salmon::
+
+  > salmon quant -i index -l IU -1 lib_1_1.fq lib_2_1.fq -2 lib_1_2.fq lib_2_2.fq -o out
+
+  > salmon quant -i index -l IU -1 <(cat lib_1_1.fq lib_2_1.fq) -2 <(cat lib_1_2.fq lib_2_2.fq) -o out
+
+Similarly, both of these approaches can be adopted if the files are gzipped as well::
+
+   > salmon quant -i index -l IU -1 lib_1_1.fq.gz lib_2_1.fq.gz -2 lib_1_2.fq.gz lib_2_2.fq.gz -o out
+
+   > salmon quant -i index -l IU -1 <(gunzip -c lib_1_1.fq.gz lib_2_1.fq.gz) -2 <(gunzip -c lib_1_2.fq.gz lib_2_2.fq.gz) -o out
+
+In each pair of commands, the first command lets Salmon natively parse the files, while the latter command
+creates, on-the-fly, an input stream that consists of the concatenation of both files.  Both methods work, and
+are acceptable ways to merge the files.  The latter method (i.e. process substitution) allows more complex
+processing to be done to the reads in the substituted process before they are passed to Salmon as input, and thus,
+in some situations, is more versatile.
+
+.. note:: Interleaved FASTQ files
+
+   Salmon does not currently have built-in support for interleaved FASTQ files (i.e., paired-end
+   files where both pairs are stored in the same file).  We provide a `script <https://github.com/COMBINE-lab/salmon/blob/master/scripts/runner.sh>`_
+   that can be used to run salmon with interleaved input.  However, this script assumes that the
+   input reads are perfectly synchronized.  That is, the input cannot contain any un-paired reads.
+
+
+Quantifying in alignment-based mode
+-----------------------------------
 
 Say that you've prepared your alignments using your favorite aligner and the
 results are in the file ``aln.bam``, and assume that the sequence of the
@@ -202,44 +247,6 @@ mode, and a description of each, run ``salmon quant --help-alignment``.
     separate files must (1) all be of the same library type and (2) all be
     aligned with respect to the same reference (i.e. the @SQ records in the 
     header sections must be identical).
-
-"""""""""""""""""""""""""""""""""""""""
-Providing multiple read files to Salmon
-"""""""""""""""""""""""""""""""""""""""
-
-Often, a single library may be split into multiple FASTA/Q files.  Also, sometimes one may wish
-to quantify multiple replicates or samples together, treating them as if they are one library.
-Salmon allows the user to provide a *space-separated* list of read files to all of it's options
-that expect input files (i.e. ``-r``, ``-1``, ``-2``).  When the input is paired-end reads, the
-order of the files in the left and right lists must be the same.  There are a number of ways to
-provide salmon with multiple read files, and treat these as a single library.  For the examples
-below, assume we have two replicates ``lib_1`` and ``lib_2``.  The left and right reads for
-``lib_1`` are ``lib_1_1.fq`` and ``lib_1_2.fq``, respectively.  The left and right reads for
-``lib_2`` are ``lib_2_1.fq`` and ``lib_2_2.fq``, respectively.  The following are both valid
-ways to input these reads to Salmon::
-
-  > salmon quant -i index -l IU -1 lib_1_1.fq lib_2_1.fq -2 lib_1_2.fq lib_2_2.fq -o out
-
-  > salmon quant -i index -l IU -1 <(cat lib_1_1.fq lib_2_1.fq) -2 <(cat lib_1_2.fq lib_2_2.fq) -o out
-
-Similarly, both of these approaches can be adopted if the files are gzipped as well::
-
-   > salmon quant -i index -l IU -1 lib_1_1.fq.gz lib_2_1.fq.gz -2 lib_1_2.fq.gz lib_2_2.fq.gz -o out
-
-   > salmon quant -i index -l IU -1 <(gunzip -c lib_1_1.fq.gz lib_2_1.fq.gz) -2 <(gunzip -c lib_1_2.fq.gz lib_2_2.fq.gz) -o out
-
-In each pair of commands, the first command lets Salmon natively parse the files, while the latter command
-creates, on-the-fly, an input stream that consists of the concatenation of both files.  Both methods work, and
-are acceptable ways to merge the files.  The latter method (i.e. process substitution) allows more complex
-processing to be done to the reads in the substituted process before they are passed to Salmon as input, and thus,
-in some situations, is more versatile.
-
-.. note:: Interleaved FASTQ files
-
-   Salmon does not currently have built-in support for interleaved FASTQ files (i.e., paired-end
-   files where both pairs are stored in the same file).  We provide a `script <https://github.com/COMBINE-lab/salmon/blob/master/scripts/runner.sh>`_
-   that can be used to run salmon with interleaved input.  However, this script assumes that the
-   input reads are perfectly synchronized.  That is, the input cannot contain any un-paired reads.
 
 
 Description of important options
