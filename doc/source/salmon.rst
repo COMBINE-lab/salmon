@@ -250,7 +250,7 @@ The particularly important ones are explained here, but you can always run
 ``salmon quant -h`` to see them all.
 
 """"""""""""""""""""""""""
-``-p`` / ``--numThreads``
+``-p`` / ``--threads``
 """"""""""""""""""""""""""
 
 The number of threads that will be used for quasi-mapping, quantification, and

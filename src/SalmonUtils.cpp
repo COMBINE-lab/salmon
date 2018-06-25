@@ -1521,6 +1521,19 @@ bool createDirectoryVerbose_(boost::filesystem::path& dirPath) {
   return true;
 }
 
+
+/* Function used to check that 'opt1' and 'opt2' are not specified
+    at the same time. */
+// taken from : https://www.boost.org/doc/libs/1_67_0/libs/program_options/example/real.cpp
+  void conflicting_options(const boost::program_options::variables_map& vm,
+                          const char* opt1, const char* opt2){
+  if (vm.count(opt1) && !vm[opt1].defaulted()
+      && vm.count(opt2) && !vm[opt2].defaulted()) {
+    throw std::logic_error(std::string("Conflicting options '")
+                           + opt1 + "' and '" + opt2 + "'.");
+  }
+}
+
 /**
  * Validate the options for salmon, and create the necessary
  * output directories and logging infrastructure.
@@ -1669,6 +1682,23 @@ bool processQuantOptions(SalmonOpts& sopt,
   }
 
   // The growing list of thou shalt nots
+
+  {
+    try {
+      conflicting_options(vm, "useVBOpt", "useEM");
+    } catch (std::logic_error& e) {
+      jointLog->critical(e.what());
+      jointLog->flush();
+      return false;
+    }
+    // If the user passed useEM, but not useVBOpt, then
+    // turn off VB.  The fact that there is not a better
+    // way to handle this suggests a potential shortcoming
+    // of boost::program_options.
+    if(sopt.useEM) {
+      sopt.useVBOpt = false;
+    }
+  }
 
   /** Warnings, not errors **/
   {

@@ -175,6 +175,8 @@ struct SalmonOpts {
 
   bool quiet; // Be quiet during quantification.
 
+  bool useEM; // Use "regular" EM in the batch passes
+
   bool useVBOpt; // Use Variational Bayesian EM instead of "regular" EM in the
                  // batch passes
 
