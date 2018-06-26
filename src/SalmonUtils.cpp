@@ -1610,6 +1610,9 @@ bool processQuantOptions(SalmonOpts& sopt,
   if (sopt.meta) {
     sopt.initUniform = true;
     sopt.noRichEqClasses = true;
+    // for now, meta mode uses the EM.
+    sopt.useEM = true;
+    sopt.useVBOpt = false;
     // sopt.incompatPrior = salmon::math::LOG_0;
     // sopt.ignoreIncompat = true;
   }

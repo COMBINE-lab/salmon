@@ -271,10 +271,12 @@ bool GZipWriter::writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
     cereal::JSONOutputArchive oa(os);
 
     std::string sampType = "none";
+    std::string optType = "none";
 
     auto& transcripts = experiment.transcripts();
     oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
     oa(cereal::make_nvp("samp_type", sampType));
+    oa(cereal::make_nvp("opt_type", optType));
 
     oa(cereal::make_nvp("quant_errors", errors));
     auto libStrings = getLibTypeStrings(experiment);
@@ -550,6 +552,14 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment) {
     auto& transcripts = experiment.transcripts();
     oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
     oa(cereal::make_nvp("samp_type", sampType));
+
+    std::string optType = "none";
+    if (opts.useEM) {
+      optType = "em";
+    } else {
+      optType = "vb";
+    }
+    oa(cereal::make_nvp("opt_type", optType));
 
     std::vector<std::string> errors;
     oa(cereal::make_nvp("quant_errors", errors));
