@@ -560,6 +560,8 @@ namespace salmon {
        "be interpreted as a transcript-level prior (i.e. each transcript "
        "will "
        "be given a prior read count of this value)")
+      ("sigDigits", po::value<uint32_t>(&(sopt.sigDigits))->default_value(salmon::defaults::sigDigits),
+       "The number of significant digits to write when outputting the EffectiveLength and NumReads columns")
       ("vbPrior", po::value<double>(&(sopt.vbPrior))->default_value(salmon::defaults::vbPrior),
        "The prior that will be used in the VBEM algorithm.  This is "
        "interpreted "

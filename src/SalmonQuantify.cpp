@@ -68,6 +68,9 @@ extern "C" {
 #include <boost/range/iterator_range.hpp>
 #include <boost/thread/thread.hpp>
 
+// Future C++ convenience classes
+#include "core/range.hpp"
+
 // TBB Includes
 #include "tbb/blocked_range.h"
 #include "tbb/concurrent_queue.h"
@@ -145,8 +148,7 @@ constexpr uint32_t miniBatchSize{5000};
 template <typename AlnT> using AlnGroupVec = std::vector<AlignmentGroup<AlnT>>;
 
 template <typename AlnT>
-using AlnGroupVecRange =
-    boost::iterator_range<typename AlnGroupVec<AlnT>::iterator>;
+using AlnGroupVecRange = core::range<typename AlnGroupVec<AlnT>::iterator>;
 
 #define __MOODYCAMEL__
 #if defined(__MOODYCAMEL__)
@@ -1425,8 +1427,9 @@ void processReadsQuasi(
     }
 
     prevObservedFrags = numObservedFragments;
-    AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(
-        structureVec.begin(), structureVec.begin() + rangeSize);
+    AlnGroupVecRange<QuasiAlignment> hitLists = {structureVec.begin(), structureVec.begin()+rangeSize};
+    /*boost::make_iterator_range(
+      structureVec.begin(), structureVec.begin() + rangeSize);*/
     processMiniBatch<QuasiAlignment>(
         readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
         transcripts, clusterForest, fragLengthDist, observedBiasParams,
@@ -1788,8 +1791,9 @@ void processReadsQuasi(
     }
 
     prevObservedFrags = numObservedFragments;
-    AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(
-        structureVec.begin(), structureVec.begin() + rangeSize);
+    AlnGroupVecRange<QuasiAlignment> hitLists = {structureVec.begin(), structureVec.begin()+rangeSize};
+      /*boost::make_iterator_range(
+        structurevec.begin(), structurevec.begin() + rangesize);*/
     processMiniBatch<QuasiAlignment>(
         readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
         transcripts, clusterForest, fragLengthDist, observedBiasParams,

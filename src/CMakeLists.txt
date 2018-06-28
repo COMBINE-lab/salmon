@@ -168,6 +168,7 @@ target_compile_definitions(alevin_core PUBLIC
 RAPMAP_SALMON_SUPPORT=1
 HAVE_ANSI_TERM=1
 HAVE_SSTREAM=1
+span_FEATURE_MAKE_SPAN_TO_STD=14
 )
 target_compile_options(alevin_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
 target_compile_options(alevin_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
