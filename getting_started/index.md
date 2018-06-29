@@ -23,19 +23,34 @@ Index of this tutorial:
 
 ### Obtaining Salmon {#obtaining-salmon}
 
-Salmon is a free (both as in "free beer" and "free speech") software tool for estimating transcript-level abundance from RNA-seq read data.  It is developed openly on GitHub.  You can visit Salmon's GitHub page [here](https://github.com/COMBINE-lab/salmon), and check out the Salmon source code, feature requests, known issues etc.  However, the easiest way to get started with Salmon is to download the pre-compiled binaries for your platform from the [releases page](https://github.com/COMBINE-lab/salmon/releases).  We provide binaries for both 64-bit Linux and MacOS.  
+Salmon is a free (both as in "free beer" and "free speech") software tool for estimating transcript-level abundance from RNA-seq read data.  It is developed openly on GitHub.  You can visit Salmon's GitHub page [here](https://github.com/COMBINE-lab/salmon), and check out the Salmon source code, feature requests, known issues etc.  
 
-Once you've downloaded the appropriate binary (e.g. Salmon-0.8.1_linux_x86_64.tar.gz for a 64-bit Linux system), you simply decompress it like so:
+
+**The easiest way to install salmon** is likely via [bioconda](https://anaconda.org/bioconda/salmon).
 
 ```
-$ tar xzvf Salmon-0.8.1_linux_x86_64.tar.gz
+$ conda config --add channels conda-forge
+$ conda config --add channels bioconda
+$ conda create -n salmon salmon
+```
+This will install the latest salmon in its own conda environment.  The environment can then be activated via:
+
+```
+$ conda activate salmon
 ```
 
-then, the binary will be located in the `bin` directory inside of the uncompressed folder; for example `Salmon-0.8.1_linux_x86_64/bin/salmon` in the example above.  You can either run salmon directly using the full path, or place it into your PATH variable for easier execution.  The rest of the tutorial below will assume that you've placed the `salmon` executable in your path, so that simply running `salmon` will invoke the program.  You can test that salmon is running on your system and get a list of available commands using the `-h` command; you should see output like the following
+Another way to get started with Salmon is to download the pre-compiled binaries for your platform from the [releases page](https://github.com/COMBINE-lab/salmon/releases).  
+If you've downloaded a specific binary, you simply decompress it like so:
+
+```
+$ tar xzvf salmon-0.10.2_linux_x86_64.tar.gz
+```
+
+then, the binary will be located in the `bin` directory inside of the uncompressed folder; for example `salmon-0.10.2_linux_x86_64/bin/salmon` in the example above.  You can either run salmon directly using the full path, or place it into your PATH variable for easier execution.  The rest of the tutorial below will assume that you've placed the `salmon` executable in your path, so that simply running `salmon` will invoke the program.  You can test that salmon is running on your system and get a list of available commands using the `-h` command; you should see output like the following
 
 ```
 $ salmon -h
-Salmon v0.8.1
+salmon v0.10.2
 
 Usage:  salmon -h|--help or
         salmon -v|--version or
@@ -43,10 +58,11 @@ Usage:  salmon -h|--help or
         salmon [--no-version-check] <COMMAND> [-h | options]
 
 Commands:
-     cite  Show salmon citation information
      index Create a salmon index
      quant Quantify a sample
+     alevin single cell analysis
      swim  Perform super-secret operation
+     quantmerge Merge multiple quantifications into a single file
 ```
 
 **Note**: OSX is frustratingly particular about how it looks for dynamic symbols in programs. If you're on OSX and you're getting an unresolved symbol error, you should run Salmon with the library directory in you `DYLD_FALLBACK_LIBRARY_PATH`, like this:
@@ -62,7 +78,7 @@ now, Salmon should find the appropriate symbols.
 Salmon is also available via Docker hub.  You can obtain a docker image of salmon using the command:
 
 ```
-$ docker pull combinelab/salmon:0.8.1
+$ docker pull combinelab/salmon:latest
 ```
 
 Then, if you wish, you can follow the tuorital below using this contanerized version of Salmon.
