@@ -1549,8 +1549,9 @@ void processReadsMEM(
     } // end for i < j->nb_filled
 
     prevObservedFrags = numObservedFragments;
-    AlnGroupVecRange<SMEMAlignment> hitLists = boost::make_iterator_range(
-        structureVec.begin(), structureVec.begin() + rangeSize);
+    AlnGroupVecRange<SMEMAlignment> hitLists = {structureVec.begin(), structureVec.begin()+rangeSize};
+      /*boost::make_iterator_range(
+        structureVec.begin(), structureVec.begin() + rangeSize);*/
     processMiniBatch<SMEMAlignment>(
         readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
         transcripts, clusterForest, fragLengthDist, observedGCParams,

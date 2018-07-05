@@ -204,7 +204,11 @@ set (GAT_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 #
 ####
 if(NOT FETCHED_RAPMAP)
-  exec_program(${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetchRapMap.sh)
+  exec_program(${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetchRapMap.sh RETURN_VALUE FETCH_RM_SCRIPT_RET)
+  message(STATUS "fetch RAPMAP exit code ${FETCH_RM_SCRIPT_RET}")
+  if (NOT (FETCH_RM_SCRIPT_RET EQUAL 0))
+     message(FATAL_ERROR "Could not fetch RapMap source [fetchRapMap.sh returned exit code ${FETCH_RM_SCRIPT_RET}].")
+  endif()
   set(FETCHED_RAPMAP TRUE CACHE BOOL "Has RapMap been fetched?" FORCE)
 endif()
 

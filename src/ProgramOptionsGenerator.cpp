@@ -513,9 +513,10 @@ namespace salmon {
        "<numPreAuxModelSamples> observations is to avoid applying these "
        "models before thier "
        "parameters have been learned sufficiently well.")
+      ("useEM", po::bool_switch(&(sopt.useEM))->default_value(salmon::defaults::useEM),
+       "Use the traditional EM algorithm for optimization in the batch passes.")
       ("useVBOpt", po::bool_switch(&(sopt.useVBOpt))->default_value(salmon::defaults::useVBOpt),
-       "Use the Variational Bayesian EM rather than the "
-       "traditional EM algorithm for optimization in the batch passes.")
+       "Use the Variational Bayesian EM [default]")
       ("rangeFactorizationBins",
        po::value<uint32_t>(&(sopt.rangeFactorizationBins))->default_value(salmon::defaults::rangeFactorizationBins),
        "Factorizes the likelihood used in quantification by adopting a new "
@@ -559,6 +560,8 @@ namespace salmon {
        "be interpreted as a transcript-level prior (i.e. each transcript "
        "will "
        "be given a prior read count of this value)")
+      ("sigDigits", po::value<uint32_t>(&(sopt.sigDigits))->default_value(salmon::defaults::sigDigits),
+       "The number of significant digits to write when outputting the EffectiveLength and NumReads columns")
       ("vbPrior", po::value<double>(&(sopt.vbPrior))->default_value(salmon::defaults::vbPrior),
        "The prior that will be used in the VBEM algorithm.  This is "
        "interpreted "

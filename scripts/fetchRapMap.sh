@@ -28,6 +28,7 @@ SVER=develop-salmon
 
 EXPECTED_SHA256=c4ca27de299bee395b404d117d9d98ad9f0d6ee256ea1deb2890ea402893e688
 
+
 mkdir -p ${EXTERNAL_DIR}
 curl -k -L https://github.com/COMBINE-lab/RapMap/archive/${SVER}.zip -o ${EXTERNAL_DIR}/rapmap.zip
 
