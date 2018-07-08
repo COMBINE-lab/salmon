@@ -27,15 +27,17 @@ namespace alevin {
     bool naive_bayes_predict(DoubleMatrixT& sigma,
                              DoubleMatrixT& theta,
                              DoubleVectorT& query,
-                             DoubleVectorT& classPrior){
-      double trueProbability = get_log_likelihood(classPrior[0],
-                                                  sigma[0],
-                                                  theta[0],
-                                                  query);
-      double falseProbability = get_log_likelihood(classPrior[1],
-                                                   sigma[1],
-                                                   theta[1],
-                                                   query);
+                             DoubleVectorT& classPrior,
+                             double& trueProbability,
+                             double& falseProbability){
+      trueProbability = get_log_likelihood(classPrior[0],
+                                           sigma[0],
+                                           theta[0],
+                                           query);
+      falseProbability = get_log_likelihood(classPrior[1],
+                                            sigma[1],
+                                            theta[1],
+                                            query);
 
       if ( trueProbability < falseProbability ){
         return false;
@@ -113,7 +115,9 @@ namespace alevin {
     std::vector<uint32_t> classifyBarcodes(DoubleMatrixT& featureCountsMatrix,
                                            size_t numCells, size_t numFeatures,
                                            size_t numLowConfidentBarcode,
-                                           size_t numTrueCells){
+                                           size_t numTrueCells,
+                                           std::vector<double>& trueProb,
+                                           std::vector<double>& falseProb){
 
       size_t numFalseCells { numLowConfidentBarcode };
       size_t numAmbiguousCells { numCells - numTrueCells - numLowConfidentBarcode };
@@ -130,6 +134,9 @@ namespace alevin {
                       classCount, classPrior, numClasses,
                       numTrueCells, numAmbiguousCells, numFalseCells);
 
+      trueProb.resize(numAmbiguousCells, 0.0);
+      falseProb.resize(numAmbiguousCells, 0.0);
+
       for (auto vec: sigma){
         for (auto cell : vec){
           std::cout<<cell<<"\t";
@@ -140,11 +147,15 @@ namespace alevin {
       for (i=0; i<numTrueCells; i++){
         selectedBarcodes.emplace_back(i);
       }
-      for (; i<numTrueCells+numAmbiguousCells; i++){
+      for (size_t j=0 ; i<numTrueCells+numAmbiguousCells; i++, j++){
+        double trPb, flPb;
         if (naive_bayes_predict(sigma, theta,
                                 featureCountsMatrix[i],
-                                classPrior)){
+                                classPrior, trPb, flPb)){
           selectedBarcodes.emplace_back(i);
+
+          trueProb[j] = trPb ;
+          falseProb[j] = flPb ;
         }
       }
 
@@ -449,18 +460,33 @@ namespace alevin {
         featureStream.close();
       }
 
+      std::vector<double> trueProbs;
+      std::vector<double> falseProbs;
+
       std::vector<uint32_t> whitelistBarcodes =
         classifyBarcodes(featureCountsMatrix, numCells,
                          numFeatures, numLowConfidentBarcode,
-                         numTrueCells);
+                         numTrueCells, trueProbs, falseProbs);
 
       std::ofstream whitelistStream;
       auto whitelistFileName = aopt.outputDirectory / "whitelist.txt";
       whitelistStream.open(whitelistFileName.string());
+
+      std::ofstream predictionStream;
+      auto predictionFileName = aopt.outputDirectory / "predictions.txt";
+      predictionStream.open(predictionFileName.string());
+      predictionStream << "cb\ttrue_prob\tFalse_prob\n";
+
       for (auto i: whitelistBarcodes){
         whitelistStream << trueBarcodes[i] << "\n";
+        if (i >= numTrueCells) {
+          predictionStream << trueBarcodes[i] << "\t"
+                           << trueProbs[i-numTrueCells] << "\t"
+                           << falseProbs[i-numTrueCells] << "\t\n";
+        }
       }
       whitelistStream.close();
+      predictionStream.close();
 
       return true;
     }
