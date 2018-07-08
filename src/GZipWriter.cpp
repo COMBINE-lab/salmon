@@ -709,13 +709,15 @@ bool GZipWriter::writeEmptyAbundances(const SalmonOpts& sopt, ExpT& readExp) {
   bfs::path fname = path_ / "quant.sf";
   std::unique_ptr<std::FILE, int (*)(std::FILE*)> output(
       std::fopen(fname.c_str(), "w"), std::fclose);
-  fmt::print(output.get(), "Name\tLength\tEffectiveLength\tTPM\tNumReads\n");
+  auto* outputRaw = output.get();
+  fmt::print(outputRaw, "Name\tLength\tEffectiveLength\tTPM\tNumReads\n");
   // Now posterior has the transcript fraction
   std::vector<Transcript>& transcripts_ = readExp.transcripts();
   for (auto& transcript : transcripts_) {
-    fmt::print(output.get(), "{}\t{}\t{:.3f}\t{:f}\t{:f}\n", transcript.RefName,
-               transcript.CompleteLength,
-               static_cast<float>(transcript.CompleteLength), 0.0, 0.0);
+    fmt::print(outputRaw, "{}\t{}\t", transcript.RefName, transcript.CompleteLength);
+    fmt::print(outputRaw, "{:.{}f}\t", static_cast<float>(transcript.CompleteLength), sopt.sigDigits);
+    fmt::print(outputRaw, "{:f}\t", 0.0);
+    fmt::print(outputRaw, "{:.{}f}\n", 0.0, sopt.sigDigits);
   }
   return true;
 }
@@ -765,10 +767,6 @@ bool GZipWriter::writeAbundances(const SalmonOpts& sopt, ExpT& readExp) {
     fmt::print(outputRaw, "{:.{}f}\t", effLength, sopt.sigDigits);
     fmt::print(outputRaw, "{:f}\t", tpm);
     fmt::print(outputRaw, "{:.{}f}\n", count, sopt.sigDigits);
-    /*
-    fmt::print(output.get(), "{}\t{}\t{:.3f}\t{:f}\t{:f}\n", transcript.RefName,
-               transcript.CompleteLength, effLength, tpm, count);
-    */
   }
   return true;
 }

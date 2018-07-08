@@ -2652,15 +2652,14 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm,
     const size_t NE{expVals.size()};
 
     size_t tpmIdx{0};
-    double totalTPM{0.0};
     for (auto& tranExp : kv.second) {
       // expVals[0] = TPM
       // expVals[1] = count
       for (size_t i = 0; i < NE; ++i) {
         expVals[i] += tranExp.expVals[i];
       }
-      totalTPM += expVals[tpmIdx];
     }
+    double totalTPM = expVals[tpmIdx];
 
     // If this gene was expressed
     if (totalTPM > minTPM) {
