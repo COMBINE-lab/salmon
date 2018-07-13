@@ -766,12 +766,39 @@ namespace salmon {
   }
 }
 
-inline int32_t getAlnScore(ksw2pp::KSW2Aligner& aligner, ksw_extz_t& ez, int32_t pos, const char* rptr,
-                           int32_t rlen, char* tseq, int32_t tlen, uint32_t buf,
+inline int32_t getAlnScore(
+                           ksw2pp::KSW2Aligner& aligner,
+                           ksw_extz_t& ez,
+                           int32_t pos, const char* rptr, int32_t rlen,
+                           char* tseq, int32_t tlen,
+                           int8_t mscore,
+                           int8_t mmcost,
+                           int32_t maxScore,
+                           rapmap::utils::ChainStatus chainStat,
+                           uint32_t buf,
                            std::vector<salmon::mapping::CacheEntry>& alnCache) {
+  // If this was a perfect match, don't bother to align or compute the score
+  if (chainStat == rapmap::utils::ChainStatus::PERFECT) {
+    return maxScore;
+  }
+
+  auto ungappedAln = [mscore, mmcost](char* ref, const char* query, int32_t len) -> int32_t {
+    int32_t ungappedScore{0};
+    for (int32_t i = 0; i < len; ++i) {
+      char c1 = *(ref + i);
+      char c2 = *(query + i);
+      c1 = (c1 == 'N' or c2 == 'N') ? c2 : c1;
+      ungappedScore += (c1 == c2) ? mscore : mmcost;
+    }
+    return ungappedScore;
+  };
+
   int32_t s{-1};
-  if (pos < 0) { rptr += -pos; pos = 0; rlen += pos; }
+  bool invalidStart = (pos < 0);
+  if (invalidStart) { rptr += -pos; pos = 0; rlen += pos; }
   if (pos < tlen) {
+    bool doUngapped{true};
+    buf = (chainStat == rapmap::utils::ChainStatus::UNGAPPED) ? 0 : buf;
     uint32_t tlen1 = std::min(static_cast<uint32_t>(rlen+buf), static_cast<uint32_t>(tlen - pos));
     char* tseq1 = tseq + pos;
     ez.max_q = ez.max_t = ez.mqe_t = ez.mte_q = -1;
@@ -795,8 +822,12 @@ inline int32_t getAlnScore(ksw2pp::KSW2Aligner& aligner, ksw_extz_t& ez, int32_t
     }
     // If we got here with s == -1, we don't have the score cached
     if (s == -1) {
-      aligner(rptr, rlen, tseq1, tlen1, &ez, ksw2pp::EnumToType<ksw2pp::KSW2AlignmentType::EXTENSION>());
-      s = std::max(ez.mqe, ez.mte);
+      if (doUngapped and chainStat == rapmap::utils::ChainStatus::UNGAPPED) {
+        s = ungappedAln(tseq1, rptr, tlen1);
+      } else {
+        aligner(rptr, rlen, tseq1, tlen1, &ez, ksw2pp::EnumToType<ksw2pp::KSW2AlignmentType::EXTENSION>());
+        s = std::max(ez.mqe, ez.mte);
+      }
       if (!didHash) {
         hashKey = XXH64(reinterpret_cast<void*>(tseq1), tlen1, 0);
       }
@@ -1163,15 +1194,16 @@ void processReadsQuasi(
               auto* r1ptr = h.fwd ? r1 : r1rc;
               auto* r2ptr = h.mateIsFwd ? r2 : r2rc;
 
-              auto s1 = ((h.completeMatchType == rapmap::utils::MateStatus::PAIRED_END_PAIRED) or
-                         (h.completeMatchType == rapmap::utils::MateStatus::PAIRED_END_LEFT)) ?
-                maxLeftScore :
-                getAlnScore(aligner, ez, h.pos, r1ptr, l1, tseq, tlen, buf, alnCacheLeft);
+              int32_t s1 = //((h.completeMatchType == rapmap::utils::MateStatus::PAIRED_END_PAIRED) or
+                            //(h.completeMatchType == rapmap::utils::MateStatus::PAIRED_END_LEFT)) ?
+                //maxLeftScore :
+                getAlnScore(aligner, ez, h.pos, r1ptr, l1, tseq, tlen, a, b, maxLeftScore, h.chainStatus.getLeft(), buf, alnCacheLeft);
 
-              auto s2 = ((h.completeMatchType == rapmap::utils::MateStatus::PAIRED_END_PAIRED) or
-                         (h.completeMatchType == rapmap::utils::MateStatus::PAIRED_END_RIGHT)) ?
-                maxRightScore :
-                getAlnScore(aligner, ez, h.matePos, r2ptr, l2, tseq, tlen, buf, alnCacheRight);
+              auto s2 = //((h.completeMatchType == rapmap::utils::MateStatus::PAIRED_END_PAIRED) or
+                        // (h.completeMatchType == rapmap::utils::MateStatus::PAIRED_END_RIGHT)) ?
+                //maxRightScore :
+                getAlnScore(aligner, ez, h.matePos, r2ptr, l2, tseq, tlen, a, b, maxRightScore, h.chainStatus.getRight(), buf, alnCacheRight);
+
               if ((s1 + s2) < (optFrac * (maxLeftScore + maxRightScore))) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
@@ -1180,9 +1212,9 @@ void processReadsQuasi(
             } else if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_LEFT) {
               auto* rptr = h.fwd ? r1 : r1rc;
 
-              auto s = ((h.completeMatchType == rapmap::utils::MateStatus::PAIRED_END_LEFT)) ?
-                maxLeftScore :
-                getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, buf, alnCacheLeft);
+              auto s = //((h.completeMatchType == rapmap::utils::MateStatus::PAIRED_END_LEFT)) ?
+                //maxLeftScore :
+                getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, a, b, maxLeftScore, h.chainStatus.getLeft(), buf, alnCacheLeft);
               if (s < (optFrac * maxLeftScore)) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
@@ -1191,9 +1223,9 @@ void processReadsQuasi(
             } else if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_RIGHT) {
               auto* rptr = h.fwd ? r2 : r2rc;
 
-              auto s = ((h.completeMatchType == rapmap::utils::MateStatus::PAIRED_END_RIGHT)) ?
-                maxRightScore :
-                getAlnScore(aligner, ez, h.pos, rptr, l2, tseq, tlen, buf, alnCacheRight);
+              auto s = //((h.completeMatchType == rapmap::utils::MateStatus::PAIRED_END_RIGHT)) ?
+                //maxRightScore :
+                getAlnScore(aligner, ez, h.pos, rptr, l2, tseq, tlen, a, b, maxRightScore, h.chainStatus.getRight(), buf, alnCacheRight);
               if (s < (optFrac * maxRightScore)) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
@@ -1638,8 +1670,9 @@ void processReadsQuasi(
             const uint32_t buf{8};
 
             auto* rptr = h.fwd ? r1 : r1rc;
-            auto s = ((h.completeMatchType == rapmap::utils::MateStatus::SINGLE_END)) ?
-              maxReadScore : getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, buf, alnCache);
+            auto s = //((h.completeMatchType == rapmap::utils::MateStatus::SINGLE_END)) ?
+              //maxReadScore :
+              getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, a, b, maxReadScore, h.chainStatus.getLeft(), buf, alnCache);
             if (s < (optFrac * maxReadScore)) {
               score = std::numeric_limits<decltype(score)>::min();
             } else {
