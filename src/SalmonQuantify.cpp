@@ -805,7 +805,7 @@ inline int32_t getAlnScore(
 
   int32_t s{-1};
   bool invalidStart = (pos < 0);
-  if (invalidStart) { rptr += -pos; pos = 0; rlen += pos; }
+  if (invalidStart) { rptr += -pos; rlen += pos; pos = 0; }
   if (pos < tlen) {
     bool doUngapped{(!invalidStart) and (chainStat == rapmap::utils::ChainStatus::UNGAPPED)};
     buf = (doUngapped) ? 0 : buf;
