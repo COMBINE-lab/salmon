@@ -797,8 +797,8 @@ inline int32_t getAlnScore(
   bool invalidStart = (pos < 0);
   if (invalidStart) { rptr += -pos; pos = 0; rlen += pos; }
   if (pos < tlen) {
-    bool doUngapped{true};
-    buf = (chainStat == rapmap::utils::ChainStatus::UNGAPPED) ? 0 : buf;
+    bool doUngapped{(!invalidStart) and (chainStat == rapmap::utils::ChainStatus::UNGAPPED)};
+    buf = (doUngapped) ? 0 : buf;
     uint32_t tlen1 = std::min(static_cast<uint32_t>(rlen+buf), static_cast<uint32_t>(tlen - pos));
     char* tseq1 = tseq + pos;
     ez.max_q = ez.max_t = ez.mqe_t = ez.mte_q = -1;
@@ -822,7 +822,7 @@ inline int32_t getAlnScore(
     }
     // If we got here with s == -1, we don't have the score cached
     if (s == -1) {
-      if (doUngapped and chainStat == rapmap::utils::ChainStatus::UNGAPPED) {
+      if (doUngapped) {
         s = ungappedAln(tseq1, rptr, tlen1);
       } else {
         aligner(rptr, rlen, tseq1, tlen1, &ez, ksw2pp::EnumToType<ksw2pp::KSW2AlignmentType::EXTENSION>());
