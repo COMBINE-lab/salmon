@@ -128,6 +128,7 @@ extern "C" {
 #include "SalmonOpts.hpp"
 #include "SingleAlignmentFormatter.hpp"
 #include "ksw2pp/KSW2Aligner.hpp"
+#include "metro/metrohash64.h"
 //#include "TextBootstrapWriter.hpp"
 
 /****** QUASI MAPPING DECLARATIONS *********/
@@ -766,6 +767,15 @@ namespace salmon {
   }
 }
 
+namespace salmon {
+  namespace hashing {
+    struct PassthroughHash {
+      std::size_t operator()(uint64_t const& u) const { return u; }
+    };
+  }
+}
+
+
 inline int32_t getAlnScore(
                            ksw2pp::KSW2Aligner& aligner,
                            ksw_extz_t& ez,
@@ -776,7 +786,7 @@ inline int32_t getAlnScore(
                            int32_t maxScore,
                            rapmap::utils::ChainStatus chainStat,
                            uint32_t buf,
-                           std::vector<salmon::mapping::CacheEntry>& alnCache) {
+                           std::unordered_map<uint64_t, int32_t, salmon::hashing::PassthroughHash>& alnCache) {
   // If this was a perfect match, don't bother to align or compute the score
   if (chainStat == rapmap::utils::ChainStatus::PERFECT) {
     return maxScore;
@@ -809,15 +819,13 @@ inline int32_t getAlnScore(
     bool didHash{false};
     if (!alnCache.empty()) {
       // hash the reference string
-      hashKey = XXH64(reinterpret_cast<void*>(tseq1), tlen1, 0);
+      MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), tlen1, reinterpret_cast<uint8_t*>(&hashKey), 0);
       didHash = true;
       // see if we have this hash
-      auto hit = std::find_if(alnCache.begin(), alnCache.end(), [hashKey](const salmon::mapping::CacheEntry& e) -> bool {
-          return e.hashKey == hashKey;
-        });
+      auto hit = alnCache.find(hashKey);
       // if so, we know the alignment score
       if (hit != alnCache.end()) {
-        s = hit->alnScore;
+        s = hit->second;
       }
     }
     // If we got here with s == -1, we don't have the score cached
@@ -829,9 +837,10 @@ inline int32_t getAlnScore(
         s = std::max(ez.mqe, ez.mte);
       }
       if (!didHash) {
-        hashKey = XXH64(reinterpret_cast<void*>(tseq1), tlen1, 0);
+        MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), tlen1, reinterpret_cast<uint8_t*>(&hashKey), 0);
+        //hashKey = XXH64(reinterpret_cast<void*>(tseq1), tlen1, 0);
       }
-      alnCache.emplace_back(hashKey, s);
+      alnCache[hashKey] = s;
     }
   }
   return s;
@@ -1014,8 +1023,8 @@ void processReadsQuasi(
   memset(&ez, 0, sizeof(ksw_extz_t));
   size_t numDropped{0};
 
-  std::vector<salmon::mapping::CacheEntry> alnCacheLeft; alnCacheLeft.reserve(15);
-  std::vector<salmon::mapping::CacheEntry> alnCacheRight; alnCacheRight.reserve(15);
+  std::unordered_map<uint64_t, int32_t, salmon::hashing::PassthroughHash> alnCacheLeft; alnCacheLeft.reserve(15);
+  std::unordered_map<uint64_t, int32_t, salmon::hashing::PassthroughHash> alnCacheRight; alnCacheRight.reserve(15);
 
   auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
@@ -1601,7 +1610,8 @@ void processReadsQuasi(
   memset(&ez, 0, sizeof(ksw_extz_t));
   size_t numDropped{0};
 
-  std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
+  //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
+  std::unordered_map<uint64_t, int32_t, salmon::hashing::PassthroughHash> alnCache; alnCache.reserve(15);
 
   auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
