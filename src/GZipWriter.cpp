@@ -271,10 +271,12 @@ bool GZipWriter::writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
     cereal::JSONOutputArchive oa(os);
 
     std::string sampType = "none";
+    std::string optType = "none";
 
     auto& transcripts = experiment.transcripts();
     oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
     oa(cereal::make_nvp("samp_type", sampType));
+    oa(cereal::make_nvp("opt_type", optType));
 
     oa(cereal::make_nvp("quant_errors", errors));
     auto libStrings = getLibTypeStrings(experiment);
@@ -551,6 +553,14 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment) {
     oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
     oa(cereal::make_nvp("samp_type", sampType));
 
+    std::string optType = "none";
+    if (opts.useEM) {
+      optType = "em";
+    } else {
+      optType = "vb";
+    }
+    oa(cereal::make_nvp("opt_type", optType));
+
     std::vector<std::string> errors;
     oa(cereal::make_nvp("quant_errors", errors));
 
@@ -699,13 +709,15 @@ bool GZipWriter::writeEmptyAbundances(const SalmonOpts& sopt, ExpT& readExp) {
   bfs::path fname = path_ / "quant.sf";
   std::unique_ptr<std::FILE, int (*)(std::FILE*)> output(
       std::fopen(fname.c_str(), "w"), std::fclose);
-  fmt::print(output.get(), "Name\tLength\tEffectiveLength\tTPM\tNumReads\n");
+  auto* outputRaw = output.get();
+  fmt::print(outputRaw, "Name\tLength\tEffectiveLength\tTPM\tNumReads\n");
   // Now posterior has the transcript fraction
   std::vector<Transcript>& transcripts_ = readExp.transcripts();
   for (auto& transcript : transcripts_) {
-    fmt::print(output.get(), "{}\t{}\t{:.3f}\t{:f}\t{:f}\n", transcript.RefName,
-               transcript.CompleteLength,
-               static_cast<float>(transcript.CompleteLength), 0.0, 0.0);
+    fmt::print(outputRaw, "{}\t{}\t", transcript.RefName, transcript.CompleteLength);
+    fmt::print(outputRaw, "{:.{}f}\t", static_cast<float>(transcript.CompleteLength), sopt.sigDigits);
+    fmt::print(outputRaw, "{:f}\t", 0.0);
+    fmt::print(outputRaw, "{:.{}f}\n", 0.0, sopt.sigDigits);
   }
   return true;
 }
@@ -725,8 +737,8 @@ bool GZipWriter::writeAbundances(const SalmonOpts& sopt, ExpT& readExp) {
 
   std::unique_ptr<std::FILE, int (*)(std::FILE*)> output(
       std::fopen(fname.c_str(), "w"), std::fclose);
-
-  fmt::print(output.get(), "Name\tLength\tEffectiveLength\tTPM\tNumReads\n");
+  auto* outputRaw = output.get();
+  fmt::print(outputRaw, "Name\tLength\tEffectiveLength\tTPM\tNumReads\n");
 
   double numMappedFrags = readExp.upperBoundHits();
 
@@ -751,8 +763,10 @@ bool GZipWriter::writeAbundances(const SalmonOpts& sopt, ExpT& readExp) {
     double effLength = transcript.EffectiveLength;
     double tfrac = (npm / effLength) / tfracDenom;
     double tpm = tfrac * million;
-    fmt::print(output.get(), "{}\t{}\t{:.3f}\t{:f}\t{:f}\n", transcript.RefName,
-               transcript.CompleteLength, effLength, tpm, count);
+    fmt::print(outputRaw, "{}\t{}\t", transcript.RefName, transcript.CompleteLength);
+    fmt::print(outputRaw, "{:.{}f}\t", effLength, sopt.sigDigits);
+    fmt::print(outputRaw, "{:f}\t", tpm);
+    fmt::print(outputRaw, "{:.{}f}\n", count, sopt.sigDigits);
   }
   return true;
 }

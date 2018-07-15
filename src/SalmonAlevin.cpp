@@ -628,6 +628,7 @@ void processReadsQuasi(
                        std::atomic<uint64_t>& numObservedFragments,
                        std::atomic<uint64_t>& numAssignedFragments,
                        std::atomic<uint64_t>& validHits, std::atomic<uint64_t>& upperBoundHits,
+                       std::atomic<uint32_t>& smallSeqs,
                        RapMapIndexT* idx, std::vector<Transcript>& transcripts,
                        ForgettingMassCalculator& fmCalc, ClusterForest& clusterForest,
                        FragmentLengthDistribution& fragLengthDist, BiasParams& observedBiasParams,
@@ -650,6 +651,7 @@ void processReadsQuasi(
                        std::atomic<uint64_t>& numObservedFragments,
                        std::atomic<uint64_t>& numAssignedFragments,
                        std::atomic<uint64_t>& validHits, std::atomic<uint64_t>& upperBoundHits,
+                       std::atomic<uint32_t>& smallSeqs,
                        RapMapIndexT* qidx, std::vector<Transcript>& transcripts,
                        ForgettingMassCalculator& fmCalc, ClusterForest& clusterForest,
                        FragmentLengthDistribution& fragLengthDist, BiasParams& observedBiasParams,
@@ -774,80 +776,83 @@ void processReadsQuasi(
       // extracting barcodes
       size_t barcodeLength = alevinOpts.protocol.barcodeLength;
       size_t umiLength = alevinOpts.protocol.umiLength;
-      std::string umi, barcode;
-      uint32_t barcodeIdx{0};
-      bool lh, rh, isExtractOk, seqOk;
+      std::string umi;//, barcode;
+      nonstd::optional<std::string> barcode;
+      nonstd::optional<uint32_t> barcodeIdx;
+      bool lh, rh, seqOk;
 
       if (alevinOpts.protocol.end == bcEnd::FIVE){
         if(alevinOpts.nobarcode){
-          barcode = "AAA";
-          isExtractOk = true;
+          barcodeIdx = 0;
           seqOk = true;
           alevinOpts.protocol.barcodeLength = 0;
-        }
-        else{
-          isExtractOk = aut::extractBarcode(rp.first.seq,
-                                            alevinOpts.protocol,
-                                            barcode);
-          seqOk = aut::sequenceCheck(barcode,
-                                     alevinOpts,
-                                     iomutex,
-                                     Sequence::BARCODE);
+        } else {
+          barcode = aut::extractBarcode(rp.first.seq, alevinOpts.protocol);
+          seqOk = (barcode.has_value()) ?
+            aut::sequenceCheck(*barcode, Sequence::BARCODE) : false;
         }
 
-        //std::vector<std::string>::iterator bcIt = find(trBcs.begin(),
-        //                                               trBcs.end(),
-        //                                               barcode);
+        // If we have a barcode sequence, but not yet an index
+        if (seqOk and (not barcodeIdx)) {
+          // If we get here, we have a sequence-valid barcode.
+          // Check if it is in the trBcs map.
+          auto trIt = trBcs.find(*barcode);
 
-        //bool inTr = bcIt != trBcs.end();
-        bool inTr = trBcs.contains(barcode);
-        bool indOk {false};
-
-        if(inTr){
-          barcodeIdx = trBcs[barcode];
-        }
-        else{
-          indOk = barcodeMap.find(barcode) != barcodeMap.end();
-          if (indOk){
-            barcode = barcodeMap[barcode].front().first;
-            //auto trIt =  find(trBcs.begin(), trBcs.end(), barcode);
-            bool trIt =  trBcs.contains(barcode);
-            if(not trIt){
-              salmonOpts.jointLog->error("Wrong entry in barcode softmap.\n"
-                                         "Please Report this on github");
-              exit(1);
+          // If it is, use that index
+          if(trIt != trBcs.end()){
+            barcodeIdx = trIt->second;
+          } else{
+            // If it's not, see if it's in the barcode map
+            auto indIt = barcodeMap.find(*barcode);
+            // If so grab the representative and get its index
+            if (indIt != barcodeMap.end()){
+              barcode = indIt->second.front().first;
+              auto trItLoc = trBcs.find(*barcode);
+              if(trItLoc == trBcs.end()){
+                salmonOpts.jointLog->error("Wrong entry in barcode softmap.\n"
+                                           "Please Report this on github");
+                exit(1);
+              } else{
+                barcodeIdx = trItLoc->second;
+              }
             }
-            else{
-              barcodeIdx = trBcs[barcode];
-            }
+            // If it wasn't in the barcode map, it's not valid
+            // and we should leave barcodeIdx as nullopt.
           }
         }
 
-        if (not isExtractOk or (not inTr and not indOk) or not seqOk) {
+        // If we don't have a barcode index by this point, we can't
+        // get a valid one.
+        if (not barcodeIdx) {
           lh = rh = false;
         } else{
           //corrBarcodeIndex = barcodeMap[barcodeIndex];
-          jointHitGroup.setBarcode(barcodeIdx);
+          jointHitGroup.setBarcode(*barcodeIdx);
 
           aut::extractUMI(rp.first.seq, alevinOpts.protocol, umi);
-          alevin::kmer::AlvKmer umiIdx(umiLength);
-          bool isUmiIdxOk = umiIdx.fromStr(umi);
 
-          if(not isUmiIdxOk){
-            salmonOpts.jointLog->error("umi indexing of jellyfish failing.\n"
-                                       "Please report on github");
-            exit(1);
+          if ( umiLength != umi.size() ) {
+            lh = rh = false;
+            smallSeqs += 1;
           }
+          else{
+            alevin::kmer::AlvKmer umiIdx(umiLength);
+            bool isUmiIdxOk = umiIdx.fromStr(umi);
 
-          jointHitGroup.setUMI(umiIdx.umiWord());
-          //clearing barcode string to use as false mate
-          barcode.clear();
-          // There is no point in trying to map the barcode
-          lh = false;
-          rh = tooShortRight ? false : hitCollector(rp.second.seq, saSearcher, rightHCInfo);
-          rapmap::hit_manager::hitsToMappingsSimple(*qidx, mc,
-                                                    MateStatus::PAIRED_END_RIGHT,
-                                                    rightHCInfo, rightHits);
+            if(not isUmiIdxOk){
+              salmonOpts.jointLog->error("umi indexing of jellyfish failing.\n"
+                                         "Please report on github");
+              exit(1);
+            }
+
+            jointHitGroup.setUMI(umiIdx.umiWord());
+
+            lh = false;
+            rh = tooShortRight ? false : hitCollector(rp.second.seq, saSearcher, rightHCInfo);
+            rapmap::hit_manager::hitsToMappingsSimple(*qidx, mc,
+                                                      MateStatus::PAIRED_END_RIGHT,
+                                                      rightHCInfo, rightHits);
+          }
         }
       }
       //else if (alevinOpts.barcodeEnd == THREE
@@ -1084,6 +1089,8 @@ void processReadsQuasi(
             // do nothing
             //salmonOpts.jointLog->warn("");
           } break;
+          default:
+            break;
           }
         }
 
@@ -1186,6 +1193,7 @@ void processReadLibrary(
                         std::atomic<uint64_t>&
                         numAssignedFragments,              // total number of assigned reads
                         std::atomic<uint64_t>& upperBoundHits, // upper bound on # of mapped frags
+                        std::atomic<uint32_t>& smallSeqs,
                         bool initialRound,
                         std::atomic<bool>& burnedIn, ForgettingMassCalculator& fmCalc,
                         FragmentLengthDistribution& fragLengthDist,
@@ -1250,7 +1258,7 @@ void processReadLibrary(
             processReadsQuasi<RapMapSAIndex<int64_t, PerfectHash<int64_t>>>(
                                                                             pairedParserPtr.get(), readExp, rl, structureVec[i],
                                                                             numObservedFragments, numAssignedFragments, numValidHits,
-                                                                            upperBoundHits, sidx->quasiIndexPerfectHash64(), transcripts,
+                                                                            upperBoundHits, smallSeqs, sidx->quasiIndexPerfectHash64(), transcripts,
                                                                             fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
                                                                             salmonOpts, iomutex, initialRound,
                                                                             burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs/*, uniqueFLDs[i]*/);
@@ -1264,7 +1272,7 @@ void processReadLibrary(
             processReadsQuasi<RapMapSAIndex<int64_t, DenseHash<int64_t>>>(
                                                                           pairedParserPtr.get(), readExp, rl, structureVec[i],
                                                                           numObservedFragments, numAssignedFragments, numValidHits,
-                                                                          upperBoundHits, sidx->quasiIndex64(), transcripts, fmCalc,
+                                                                          upperBoundHits, smallSeqs, sidx->quasiIndex64(), transcripts, fmCalc,
                                                                           clusterForest, fragLengthDist, observedBiasParams[i],
                                                                           salmonOpts, iomutex, initialRound,
                                                                           burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs/*, uniqueFLDs[i]*/);
@@ -1280,7 +1288,7 @@ void processReadLibrary(
             processReadsQuasi<RapMapSAIndex<int32_t, PerfectHash<int32_t>>>(
                                                                             pairedParserPtr.get(), readExp, rl, structureVec[i],
                                                                             numObservedFragments, numAssignedFragments, numValidHits,
-                                                                            upperBoundHits, sidx->quasiIndexPerfectHash32(), transcripts,
+                                                                            upperBoundHits, smallSeqs, sidx->quasiIndexPerfectHash32(), transcripts,
                                                                             fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
                                                                             salmonOpts, iomutex, initialRound,
                                                                             burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs/*, uniqueFLDs[i]*/);
@@ -1294,7 +1302,7 @@ void processReadLibrary(
             processReadsQuasi<RapMapSAIndex<int32_t, DenseHash<int32_t>>>(
                                                                           pairedParserPtr.get(), readExp, rl, structureVec[i],
                                                                           numObservedFragments, numAssignedFragments, numValidHits,
-                                                                          upperBoundHits, sidx->quasiIndex32(), transcripts, fmCalc,
+                                                                          upperBoundHits, smallSeqs, sidx->quasiIndex32(), transcripts, fmCalc,
                                                                           clusterForest, fragLengthDist, observedBiasParams[i],
                                                                           salmonOpts, iomutex, initialRound,
                                                                           burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs/*, uniqueFLDs[i]*/);
@@ -1416,6 +1424,7 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
   // The *total* number of fragments observed so far (over all passes through
   // the data).
   std::atomic<uint64_t> numObservedFragments{0};
+  std::atomic<uint32_t> smallSeqs{0};
   uint64_t prevNumObservedFragments{0};
   // The *total* number of fragments assigned so far (over all passes through
   // the data).
@@ -1461,7 +1470,7 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
 
     processReadLibrary<AlnT>(experiment, rl, sidx, transcripts, clusterForest,
                              numObservedFragments, totalAssignedFragments,
-                             upperBoundHits, initialRound, burnedIn, fmCalc,
+                             upperBoundHits, smallSeqs, initialRound, burnedIn, fmCalc,
                              fragLengthDist, salmonOpts,
                              greedyChain, ioMutex,
                              numQuantThreads, groupVec, writeToCache,
@@ -1563,6 +1572,11 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
       experiment.setEffectiveMappingRate(upperBoundMappingRate);
     }
   }
+
+  if (smallSeqs > 100) {
+    jointLog->warn("Found {} reads with CB+UMI length smaller than expected."
+                   "Please report on github if this number is too large", smallSeqs);
+  }
   //+++++++++++++++++++++++++++++++++++++++
   jointLog->info("Mapping rate = {}\%\n",
                  experiment.effectiveMappingRate() * 100.0);
@@ -1615,6 +1629,7 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
 
     // This will be the class in charge of maintaining our
     // rich equivalence classes
+    experiment.equivalenceClassBuilder().setMaxResizeThreads(sopt.maxHashResizeThreads);
     experiment.equivalenceClassBuilder().start();
 
     auto indexType = experiment.getIndex()->indexType();
@@ -1634,15 +1649,19 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
 
     std::vector<std::string> trueBarcodesVec (trueBarcodes.begin(), trueBarcodes.end());
     std::sort (trueBarcodesVec.begin(), trueBarcodesVec.end(),
-               [&freqCounter, &jointLog](std::string i, std::string j){
+               [&freqCounter, &jointLog](const std::string& i, const std::string& j){
                  uint32_t iCount, jCount;
-                 bool iOk = freqCounter.find(i, iCount);
-                 bool jOk = freqCounter.find(j, jCount);
+                 auto itI = freqCounter.find(i);
+                 auto itJ = freqCounter.find(j);
+                 bool iOk = itI != freqCounter.end();
+                 bool jOk = itJ != freqCounter.end();
                  if (not iOk or not jOk){
                    jointLog->error("Barcode not found in frequency table");
                    jointLog->flush();
                    exit(1);
                  }
+                 iCount = *itI;
+                 jCount = *itJ;
                  if (iCount > jCount){
                    return true;
                  }

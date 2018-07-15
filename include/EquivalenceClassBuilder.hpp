@@ -140,12 +140,15 @@ struct TGValue {
 template <typename TGValueType = TGValue>
 class EquivalenceClassBuilder {
 public:
-  EquivalenceClassBuilder(std::shared_ptr<spdlog::logger> loggerIn)
+  EquivalenceClassBuilder(std::shared_ptr<spdlog::logger> loggerIn, uint32_t maxResizeThreads)
       : logger_(loggerIn) {
+    countMap_.set_max_resize_threads(maxResizeThreads);
     countMap_.reserve(1000000);
   }
 
   //~EquivalenceClassBuilder() {}
+  void setMaxResizeThreads(uint32_t t) { countMap_.set_max_resize_threads(t); }
+  uint32_t getMaxResizeThreads() const { return countMap_.get_max_resize_threads(); }
 
   void start() { active_ = true; }
 

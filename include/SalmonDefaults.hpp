@@ -18,6 +18,7 @@ namespace defaults {
 
   // advanced
   constexpr const bool validateMappings{false};
+  constexpr const int32_t consensusSlack{0};
   constexpr const double minScoreFraction{0.65};
   constexpr const int8_t matchScore{2};
   constexpr const int8_t mismatchPenalty{-4};
@@ -47,7 +48,9 @@ namespace defaults {
   constexpr const uint32_t numBiasSamples{2000000};
   constexpr const uint32_t numBurninFrags{5000000};
   constexpr const uint32_t numPreBurninFrags{1000000};
-  constexpr const bool useVBOpt{false};
+  constexpr const bool useEM{false};
+  constexpr const bool useVBOpt{true};
+  constexpr const uint32_t sigDigits{3};
   constexpr const uint32_t rangeFactorizationBins{0};
   constexpr const uint32_t numGibbsSamples{0};
   constexpr const bool noGammaDraw{false};
@@ -73,6 +76,7 @@ namespace defaults {
   constexpr const size_t numFragGCBins{25};
   constexpr const size_t numConditionalGCBins{3};
   constexpr const size_t numRequiredFrags{50000000}; // deprecated
+  constexpr const uint32_t maxHashResizeThreads{std::numeric_limits<uint32_t>::max()};
 
   // experimental / testing
   constexpr const bool noRichEqClasses{false};

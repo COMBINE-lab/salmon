@@ -68,6 +68,9 @@ extern "C" {
 #include <boost/range/iterator_range.hpp>
 #include <boost/thread/thread.hpp>
 
+// Future C++ convenience classes
+#include "core/range.hpp"
+
 // TBB Includes
 #include "tbb/blocked_range.h"
 #include "tbb/concurrent_queue.h"
@@ -125,6 +128,8 @@ extern "C" {
 #include "SalmonOpts.hpp"
 #include "SingleAlignmentFormatter.hpp"
 #include "ksw2pp/KSW2Aligner.hpp"
+#include "metro/metrohash64.h"
+#include "tsl/robin_map.h"
 //#include "TextBootstrapWriter.hpp"
 
 /****** QUASI MAPPING DECLARATIONS *********/
@@ -145,8 +150,7 @@ constexpr uint32_t miniBatchSize{5000};
 template <typename AlnT> using AlnGroupVec = std::vector<AlignmentGroup<AlnT>>;
 
 template <typename AlnT>
-using AlnGroupVecRange =
-    boost::iterator_range<typename AlnGroupVec<AlnT>::iterator>;
+using AlnGroupVecRange = core::range<typename AlnGroupVec<AlnT>::iterator>;
 
 #define __MOODYCAMEL__
 #if defined(__MOODYCAMEL__)
@@ -764,12 +768,50 @@ namespace salmon {
   }
 }
 
-inline int32_t getAlnScore(ksw2pp::KSW2Aligner& aligner, ksw_extz_t& ez, int32_t pos, const char* rptr,
-                           int32_t rlen, char* tseq, int32_t tlen, uint32_t buf,
-                           std::vector<salmon::mapping::CacheEntry>& alnCache) {
+namespace salmon {
+  namespace hashing {
+    struct PassthroughHash {
+      std::size_t operator()(uint64_t const& u) const { return u; }
+    };
+  }
+}
+
+using AlnCacheMap = //tsl::robin_map<uint64_t, int32_t, salmon::hashing::PassthroughHash>;
+  std::unordered_map<uint64_t, int32_t, salmon::hashing::PassthroughHash>;
+
+inline int32_t getAlnScore(
+                           ksw2pp::KSW2Aligner& aligner,
+                           ksw_extz_t& ez,
+                           int32_t pos, const char* rptr, int32_t rlen,
+                           char* tseq, int32_t tlen,
+                           int8_t mscore,
+                           int8_t mmcost,
+                           int32_t maxScore,
+                           rapmap::utils::ChainStatus chainStat,
+                           uint32_t buf,
+                           AlnCacheMap& alnCache) {
+  // If this was a perfect match, don't bother to align or compute the score
+  if (chainStat == rapmap::utils::ChainStatus::PERFECT) {
+    return maxScore;
+  }
+
+  auto ungappedAln = [mscore, mmcost](char* ref, const char* query, int32_t len) -> int32_t {
+    int32_t ungappedScore{0};
+    for (int32_t i = 0; i < len; ++i) {
+      char c1 = *(ref + i);
+      char c2 = *(query + i);
+      c1 = (c1 == 'N' or c2 == 'N') ? c2 : c1;
+      ungappedScore += (c1 == c2) ? mscore : mmcost;
+    }
+    return ungappedScore;
+  };
+
   int32_t s{-1};
-  if (pos < 0) { rptr += -pos; pos = 0; rlen += pos; }
+  bool invalidStart = (pos < 0);
+  if (invalidStart) { rptr += -pos; rlen += pos; pos = 0; }
   if (pos < tlen) {
+    bool doUngapped{(!invalidStart) and (chainStat == rapmap::utils::ChainStatus::UNGAPPED)};
+    buf = (doUngapped) ? 0 : buf;
     uint32_t tlen1 = std::min(static_cast<uint32_t>(rlen+buf), static_cast<uint32_t>(tlen - pos));
     char* tseq1 = tseq + pos;
     ez.max_q = ez.max_t = ez.mqe_t = ez.mte_q = -1;
@@ -780,25 +822,27 @@ inline int32_t getAlnScore(ksw2pp::KSW2Aligner& aligner, ksw_extz_t& ez, int32_t
     bool didHash{false};
     if (!alnCache.empty()) {
       // hash the reference string
-      hashKey = XXH64(reinterpret_cast<void*>(tseq1), tlen1, 0);
+      MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), tlen1, reinterpret_cast<uint8_t*>(&hashKey), 0);
       didHash = true;
       // see if we have this hash
-      auto hit = std::find_if(alnCache.begin(), alnCache.end(), [hashKey](const salmon::mapping::CacheEntry& e) -> bool {
-          return e.hashKey == hashKey;
-        });
+      auto hit = alnCache.find(hashKey);
       // if so, we know the alignment score
       if (hit != alnCache.end()) {
-        s = hit->alnScore;
+        s = hit->second;
       }
     }
     // If we got here with s == -1, we don't have the score cached
     if (s == -1) {
-      aligner(rptr, rlen, tseq1, tlen1, &ez, ksw2pp::EnumToType<ksw2pp::KSW2AlignmentType::EXTENSION>());
-      s = std::max(ez.mqe, ez.mte);
-      if (!didHash) {
-        hashKey = XXH64(reinterpret_cast<void*>(tseq1), tlen1, 0);
+      if (doUngapped) {
+        s = ungappedAln(tseq1, rptr, tlen1);
+      } else {
+        aligner(rptr, rlen, tseq1, tlen1, &ez, ksw2pp::EnumToType<ksw2pp::KSW2AlignmentType::EXTENSION>());
+        s = std::max(ez.mqe, ez.mte);
       }
-      alnCache.emplace_back(hashKey, s);
+      if (!didHash) {
+        MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), tlen1, reinterpret_cast<uint8_t*>(&hashKey), 0);
+      }
+      alnCache[hashKey] = s;
     }
   }
   return s;
@@ -930,6 +974,7 @@ void processReadsQuasi(
   rapmap::utils::MappingConfig mc;
   mc.consistentHits = consistentHits;
   mc.doChaining = salmonOpts.validateMappings;
+  mc.maxSlack = salmonOpts.consensusSlack;
 
   rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> leftHCInfo;
   rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> rightHCInfo;
@@ -981,8 +1026,8 @@ void processReadsQuasi(
   memset(&ez, 0, sizeof(ksw_extz_t));
   size_t numDropped{0};
 
-  std::vector<salmon::mapping::CacheEntry> alnCacheLeft; alnCacheLeft.reserve(15);
-  std::vector<salmon::mapping::CacheEntry> alnCacheRight; alnCacheRight.reserve(15);
+  AlnCacheMap alnCacheLeft; alnCacheLeft.reserve(16);
+  AlnCacheMap alnCacheRight; alnCacheRight.reserve(16);
 
   auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
@@ -1147,6 +1192,8 @@ void processReadsQuasi(
           std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
           size_t idx{0};
           double optFrac{salmonOpts.minScoreFraction};
+          int32_t maxLeftScore = a * rp.first.seq.length();
+          int32_t maxRightScore = a * rp.second.seq.length();
 
           for (auto& h : jointHits) {
             int32_t score{std::numeric_limits<int32_t>::min()};
@@ -1159,25 +1206,33 @@ void processReadsQuasi(
               auto* r1ptr = h.fwd ? r1 : r1rc;
               auto* r2ptr = h.mateIsFwd ? r2 : r2rc;
 
-              auto s1 = getAlnScore(aligner, ez, h.pos, r1ptr, l1, tseq, tlen, buf, alnCacheLeft);
-              auto s2 = getAlnScore(aligner, ez, h.matePos, r2ptr, l2, tseq, tlen, buf, alnCacheRight);
-              if ((s1 + s2) < (optFrac * a * rp.first.seq.length() + optFrac * a * rp.second.seq.length())) {
+              int32_t s1 =
+                getAlnScore(aligner, ez, h.pos, r1ptr, l1, tseq, tlen, a, b, maxLeftScore, h.chainStatus.getLeft(), buf, alnCacheLeft);
+
+              int32_t s2 =
+                getAlnScore(aligner, ez, h.matePos, r2ptr, l2, tseq, tlen, a, b, maxRightScore, h.chainStatus.getRight(), buf, alnCacheRight);
+
+              if ((s1 + s2) < (optFrac * (maxLeftScore + maxRightScore))) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
                 score = s1 + s2;
               }
             } else if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_LEFT) {
               auto* rptr = h.fwd ? r1 : r1rc;
-              auto s = getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, buf, alnCacheLeft);
-              if (s < (optFrac * a * rp.first.seq.length())) {
+
+              int32_t s =
+                getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, a, b, maxLeftScore, h.chainStatus.getLeft(), buf, alnCacheLeft);
+              if (s < (optFrac * maxLeftScore)) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
                 score = s;
               }
             } else if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_RIGHT) {
               auto* rptr = h.fwd ? r2 : r2rc;
-              auto s = getAlnScore(aligner, ez, h.pos, rptr, l2, tseq, tlen, buf, alnCacheRight);
-              if (s < (optFrac * a * rp.second.seq.length())) {
+
+              int32_t s =
+                getAlnScore(aligner, ez, h.pos, rptr, l2, tseq, tlen, a, b, maxRightScore, h.chainStatus.getRight(), buf, alnCacheRight);
+              if (s < (optFrac * maxRightScore)) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
                 score = s;
@@ -1331,6 +1386,8 @@ void processReadsQuasi(
           case MateStatus::SINGLE_END: {
             // do nothing
           } break;
+          default:
+            break;
           }
         }
 
@@ -1408,8 +1465,9 @@ void processReadsQuasi(
     }
 
     prevObservedFrags = numObservedFragments;
-    AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(
-        structureVec.begin(), structureVec.begin() + rangeSize);
+    AlnGroupVecRange<QuasiAlignment> hitLists = {structureVec.begin(), structureVec.begin()+rangeSize};
+    /*boost::make_iterator_range(
+      structureVec.begin(), structureVec.begin() + rangeSize);*/
     processMiniBatch<QuasiAlignment>(
         readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
         transcripts, clusterForest, fragLengthDist, observedBiasParams,
@@ -1496,6 +1554,7 @@ void processReadsQuasi(
   rapmap::utils::MappingConfig mc;
   mc.consistentHits = consistentHits;
   mc.doChaining = salmonOpts.validateMappings;
+  mc.maxSlack = salmonOpts.consensusSlack;
 
   rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> hcInfo;
 
@@ -1549,7 +1608,8 @@ void processReadsQuasi(
   memset(&ez, 0, sizeof(ksw_extz_t));
   size_t numDropped{0};
 
-  std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
+  //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
+  AlnCacheMap alnCache; alnCache.reserve(16);
 
   auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
@@ -1608,6 +1668,7 @@ void processReadsQuasi(
           std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
           size_t idx{0};
           double optFrac{salmonOpts.minScoreFraction};
+          int32_t maxReadScore = a * rp.seq.length();
 
           for (auto& h : jointHits) {
             int32_t score{std::numeric_limits<int32_t>::min()};
@@ -1617,8 +1678,9 @@ void processReadsQuasi(
             const uint32_t buf{8};
 
             auto* rptr = h.fwd ? r1 : r1rc;
-            auto s = getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, buf, alnCache);
-            if (s < (optFrac * a * rp.seq.length())) {
+            int32_t s =
+              getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, a, b, maxReadScore, h.chainStatus.getLeft(), buf, alnCache);
+            if (s < (optFrac * maxReadScore)) {
               score = std::numeric_limits<decltype(score)>::min();
             } else {
               score = s;
@@ -1769,8 +1831,9 @@ void processReadsQuasi(
     }
 
     prevObservedFrags = numObservedFragments;
-    AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(
-        structureVec.begin(), structureVec.begin() + rangeSize);
+    AlnGroupVecRange<QuasiAlignment> hitLists = {structureVec.begin(), structureVec.begin()+rangeSize};
+      /*boost::make_iterator_range(
+        structurevec.begin(), structurevec.begin() + rangesize);*/
     processMiniBatch<QuasiAlignment>(
         readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
         transcripts, clusterForest, fragLengthDist, observedBiasParams,
@@ -2711,6 +2774,7 @@ transcript abundance from RNA-seq reads
 
     // This will be the class in charge of maintaining our
     // rich equivalence classes
+    experiment.equivalenceClassBuilder().setMaxResizeThreads(sopt.maxHashResizeThreads);
     experiment.equivalenceClassBuilder().start();
 
     auto indexType = experiment.getIndex()->indexType();

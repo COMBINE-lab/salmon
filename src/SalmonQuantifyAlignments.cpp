@@ -7,11 +7,6 @@ extern "C" {
 // for cpp-format
 #include "spdlog/fmt/fmt.h"
 
-// are these used?
-#include <boost/dynamic_bitset.hpp>
-#include <boost/lockfree/queue.hpp>
-#include <boost/lockfree/spsc_queue.hpp>
-
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
@@ -1190,6 +1185,7 @@ bool processSample(AlignmentLibraryT<ReadT>& alnLib, size_t requiredObservations
 
   auto& jointLog = sopt.jointLog;
   // EQCLASS
+  alnLib.equivalenceClassBuilder().setMaxResizeThreads(sopt.maxHashResizeThreads);
   alnLib.equivalenceClassBuilder().start();
 
   bool burnedIn = false;

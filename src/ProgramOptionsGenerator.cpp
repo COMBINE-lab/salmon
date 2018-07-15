@@ -88,7 +88,15 @@ namespace salmon {
        po::bool_switch(&(sopt.validateMappings))->default_value(salmon::defaults::validateMappings),
        "[Quasi-mapping mode only] : Validate mappings using alignment-based verifcation. "
        "If this flag is passed, quasi-mappings will be validated to ensure that they could give "
-       "rise to a reasonable alignment before they are further used for quantification")
+       "rise to a reasonable alignment before they are further used for quantification.")
+      ("consensusSlack",
+       po::value<int32_t>(&(sopt.consensusSlack))->default_value(salmon::defaults::consensusSlack),
+       "[Quasi-mapping mode only] : The amount of slack allowed in the quasi-mapping consensus "
+       "mechanism.  Normally, a transcript must cover all hits to be considered for mapping.  "
+       "If this is set to a value, X, greater than 0, then a transcript can fail to cover up to "
+       "X hits before it is discounted as a mapping candidate.  The default value of this option "
+       "is 1 if --validateMappings is given and 0 otherwise."
+       )
       ("minScoreFraction",
        po::value<double>(&sopt.minScoreFraction)->default_value(salmon::defaults::minScoreFraction),
        "[Quasi-mapping mode only] : The fraction of the optimal possible alignment score that a "
@@ -513,9 +521,10 @@ namespace salmon {
        "<numPreAuxModelSamples> observations is to avoid applying these "
        "models before thier "
        "parameters have been learned sufficiently well.")
+      ("useEM", po::bool_switch(&(sopt.useEM))->default_value(salmon::defaults::useEM),
+       "Use the traditional EM algorithm for optimization in the batch passes.")
       ("useVBOpt", po::bool_switch(&(sopt.useVBOpt))->default_value(salmon::defaults::useVBOpt),
-       "Use the Variational Bayesian EM rather than the "
-       "traditional EM algorithm for optimization in the batch passes.")
+       "Use the Variational Bayesian EM [default]")
       ("rangeFactorizationBins",
        po::value<uint32_t>(&(sopt.rangeFactorizationBins))->default_value(salmon::defaults::rangeFactorizationBins),
        "Factorizes the likelihood used in quantification by adopting a new "
@@ -559,6 +568,8 @@ namespace salmon {
        "be interpreted as a transcript-level prior (i.e. each transcript "
        "will "
        "be given a prior read count of this value)")
+      ("sigDigits", po::value<uint32_t>(&(sopt.sigDigits))->default_value(salmon::defaults::sigDigits),
+       "The number of significant digits to write when outputting the EffectiveLength and NumReads columns")
       ("vbPrior", po::value<double>(&(sopt.vbPrior))->default_value(salmon::defaults::vbPrior),
        "The prior that will be used in the VBEM algorithm.  This is "
        "interpreted "
@@ -635,7 +646,9 @@ namespace salmon {
        po::value(&(sopt.numRequiredFragments))->default_value(salmon::defaults::numRequiredFrags),
        "[Deprecated]: The minimum number of observations (mapped reads) "
        "that must be observed before "
-       "the inference procedure will terminate.");
+       "the inference procedure will terminate.")
+      ("maxHashResizeThreads", po::value<uint32_t>(&(sopt.maxHashResizeThreads))->default_value(salmon::defaults::maxHashResizeThreads),
+       "Maximum number of threads to allow cuckoo hash map to use when / if it resizes");
     return hidden;
   }
 

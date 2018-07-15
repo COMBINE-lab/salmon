@@ -138,6 +138,9 @@ struct SalmonOpts {
 
   uint32_t maxExpectedReadLen; // Maximum expected length of an observed read.
 
+  // hidden / for extreme control
+  uint32_t maxHashResizeThreads;
+
   uint64_t numRequiredFragments; //
   uint64_t minRequiredFrags;
   bool reduceGCMemory; // Use a memory-efficient (rank-based) data structure for
@@ -172,9 +175,12 @@ struct SalmonOpts {
 
   bool quiet; // Be quiet during quantification.
 
+  bool useEM; // Use "regular" EM in the batch passes
+
   bool useVBOpt; // Use Variational Bayesian EM instead of "regular" EM in the
                  // batch passes
-
+  uint32_t sigDigits; // number of siginificant digits to print for EffectiveLength
+                      // and NumReads
   bool useRangeFactorization{false}; // enable range factorization
   uint32_t rangeFactorizationBins{
       0}; // Cluster reads in each Eq Class based on the
@@ -243,6 +249,7 @@ struct SalmonOpts {
 
   // Related to alignment verification
   bool validateMappings;
+  int32_t consensusSlack;
   double minScoreFraction;
   int8_t matchScore;
   int8_t mismatchPenalty;

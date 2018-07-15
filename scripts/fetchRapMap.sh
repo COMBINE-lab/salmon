@@ -22,11 +22,12 @@ if [ -d ${INSTALL_DIR}/src/rapmap ] ; then
     rm -fr ${INSTALL_DIR}/src/rapmap
 fi
 
-SVER=salmon-v0.10.2
+SVER=salmon-v0.11.0
 #SVER=develop-salmon
 #SVER=pe-chaining
 
-EXPECTED_SHA256=c4ca27de299bee395b404d117d9d98ad9f0d6ee256ea1deb2890ea402893e688
+EXPECTED_SHA256=c4bd746e3f72f6b8b2f7a94310b3152ed5b7817d0e447105327ccb6788f52119
+
 
 mkdir -p ${EXTERNAL_DIR}
 curl -k -L https://github.com/COMBINE-lab/RapMap/archive/${SVER}.zip -o ${EXTERNAL_DIR}/rapmap.zip

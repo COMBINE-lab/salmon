@@ -1302,7 +1302,10 @@ std::string getCurrentTimeAsString() {
   return time;
 }
 
-bool validateOptionsAlignment_(SalmonOpts& sopt) {
+  bool validateOptionsAlignment_(
+                                 SalmonOpts& sopt,
+                                 boost::program_options::variables_map& vm
+                                 ) {
   if (!sopt.sampleOutput and sopt.sampleUnaligned) {
     sopt.jointLog->warn(
         "You passed in the (-u/--sampleUnaligned) flag, but did not request a "
@@ -1322,7 +1325,10 @@ bool validateOptionsAlignment_(SalmonOpts& sopt) {
   return true;
 }
 
-bool validateOptionsMapping_(SalmonOpts& sopt) {
+  bool validateOptionsMapping_(
+                               SalmonOpts& sopt,
+                               boost::program_options::variables_map& vm
+                               ) {
   auto numUnpaired = sopt.unmatedReadFiles.size();
   auto numLeft = sopt.mate1ReadFiles.size();
   auto numRight = sopt.mate2ReadFiles.size();
@@ -1351,16 +1357,33 @@ bool validateOptionsMapping_(SalmonOpts& sopt) {
     sopt.mismatchPenalty = -sopt.mismatchPenalty;
   }
 
+  // Make sure that consensusSlack is not negative
+  if (sopt.consensusSlack < 0) {
+    sopt.jointLog->error("You set consensusSlack as {}, but it must be a non-negative value.", sopt.consensusSlack);
+    return false;
+  }
+
   // If we have validate mappings, then make sure we automatically enable
   // range factorization
-  if (sopt.validateMappings and sopt.rangeFactorizationBins < 4) {
-    uint32_t nbins{4};
-    sopt.jointLog->info(
-                        "Usage of --validateMappings implies use of range factorization. "
-                        "rangeFactorizationBins is being set to {}", nbins
-                        );
-    sopt.rangeFactorizationBins = nbins;
-    sopt.useRangeFactorization = true;
+  if (sopt.validateMappings) {
+    if (sopt.rangeFactorizationBins < 4) {
+      uint32_t nbins{4};
+      sopt.jointLog->info(
+                          "Usage of --validateMappings implies use of range factorization. "
+                          "rangeFactorizationBins is being set to {}", nbins
+                          );
+      sopt.rangeFactorizationBins = nbins;
+      sopt.useRangeFactorization = true;
+    }
+    // If the consensus slack was not set explicitly, then it defaults to 1 with
+    // validateMappings
+    bool consensusSlackExplicit = !vm["consensusSlack"].defaulted();
+    if (!consensusSlackExplicit) {
+      sopt.consensusSlack = 1;
+      sopt.jointLog->info(
+                          "Usage of --validateMappings implies a default consensus slack of 1. "
+                          "Setting consensusSlack to {}.", sopt.consensusSlack);
+    }
   }
   return true;
 }
@@ -1521,6 +1544,19 @@ bool createDirectoryVerbose_(boost::filesystem::path& dirPath) {
   return true;
 }
 
+
+/* Function used to check that 'opt1' and 'opt2' are not specified
+    at the same time. */
+// taken from : https://www.boost.org/doc/libs/1_67_0/libs/program_options/example/real.cpp
+  void conflicting_options(const boost::program_options::variables_map& vm,
+                          const char* opt1, const char* opt2){
+  if (vm.count(opt1) && !vm[opt1].defaulted()
+      && vm.count(opt2) && !vm[opt2].defaulted()) {
+    throw std::logic_error(std::string("Conflicting options '")
+                           + opt1 + "' and '" + opt2 + "'.");
+  }
+}
+
 /**
  * Validate the options for salmon, and create the necessary
  * output directories and logging infrastructure.
@@ -1597,6 +1633,9 @@ bool processQuantOptions(SalmonOpts& sopt,
   if (sopt.meta) {
     sopt.initUniform = true;
     sopt.noRichEqClasses = true;
+    // for now, meta mode uses the EM.
+    sopt.useEM = true;
+    sopt.useVBOpt = false;
     // sopt.incompatPrior = salmon::math::LOG_0;
     // sopt.ignoreIncompat = true;
   }
@@ -1669,6 +1708,23 @@ bool processQuantOptions(SalmonOpts& sopt,
   }
 
   // The growing list of thou shalt nots
+
+  {
+    try {
+      conflicting_options(vm, "useVBOpt", "useEM");
+    } catch (std::logic_error& e) {
+      jointLog->critical(e.what());
+      jointLog->flush();
+      return false;
+    }
+    // If the user passed useEM, but not useVBOpt, then
+    // turn off VB.  The fact that there is not a better
+    // way to handle this suggests a potential shortcoming
+    // of boost::program_options.
+    if(sopt.useEM) {
+      sopt.useVBOpt = false;
+    }
+  }
 
   /** Warnings, not errors **/
   {
@@ -1771,9 +1827,9 @@ bool processQuantOptions(SalmonOpts& sopt,
   // Validation that is different for alignment and mapping based modes.
   bool perModeValidate{true};
   if (sopt.quantMode == SalmonQuantMode::ALIGN) {
-    perModeValidate = validateOptionsAlignment_(sopt);
+    perModeValidate = validateOptionsAlignment_(sopt, vm);
   } else if (sopt.quantMode == SalmonQuantMode::MAP) {
-    perModeValidate = validateOptionsMapping_(sopt);
+    perModeValidate = validateOptionsMapping_(sopt, vm);
   }
 
   return perModeValidate;
@@ -2619,15 +2675,14 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm,
     const size_t NE{expVals.size()};
 
     size_t tpmIdx{0};
-    double totalTPM{0.0};
     for (auto& tranExp : kv.second) {
       // expVals[0] = TPM
       // expVals[1] = count
       for (size_t i = 0; i < NE; ++i) {
         expVals[i] += tranExp.expVals[i];
       }
-      totalTPM += expVals[tpmIdx];
     }
+    double totalTPM = expVals[tpmIdx];
 
     // If this gene was expressed
     if (totalTPM > minTPM) {

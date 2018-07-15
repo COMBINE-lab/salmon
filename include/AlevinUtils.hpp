@@ -31,6 +31,8 @@
 #include <boost/any.hpp>
 
 #include "cereal/archives/json.hpp"
+#include "metro/metrohash.h"
+#include "nonstd/optional.hpp"
 
 #include "AlevinOpts.hpp"
 #include "SingleCellProtocols.hpp"
@@ -55,10 +57,10 @@ namespace alevin{
                        const std::string& barcode,
                        std::unordered_set<std::string>& neighbors);
 
-    template <typename ProtocolT>
-    bool sequenceCheck(std::string barcode,
-                       AlevinOpts<ProtocolT>& aopt,
-                       std::mutex& iomutex,
+    //template <typename ProtocolT>
+    bool sequenceCheck(const std::string& barcode,
+                       //AlevinOpts<ProtocolT>& aopt,
+                       //std::mutex& iomutex,
                        Sequence seq = Sequence::BARCODE);
 
     template <typename ProtocolT>
@@ -72,9 +74,7 @@ namespace alevin{
                     std::string& umi);
 
     template <typename ProtocolT>
-    bool extractBarcode(std::string& read,
-                        ProtocolT& pt,
-                        std::string& bc);
+    nonstd::optional<std::string> extractBarcode(std::string& read, ProtocolT& pt);
 
     template <typename OrderedOptionsT>
     bool writeCmdInfo(boost::filesystem::path cmdInfoPath,
