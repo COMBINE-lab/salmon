@@ -1302,7 +1302,10 @@ std::string getCurrentTimeAsString() {
   return time;
 }
 
-bool validateOptionsAlignment_(SalmonOpts& sopt) {
+  bool validateOptionsAlignment_(
+                                 SalmonOpts& sopt,
+                                 boost::program_options::variables_map& vm
+                                 ) {
   if (!sopt.sampleOutput and sopt.sampleUnaligned) {
     sopt.jointLog->warn(
         "You passed in the (-u/--sampleUnaligned) flag, but did not request a "
@@ -1322,7 +1325,10 @@ bool validateOptionsAlignment_(SalmonOpts& sopt) {
   return true;
 }
 
-bool validateOptionsMapping_(SalmonOpts& sopt) {
+  bool validateOptionsMapping_(
+                               SalmonOpts& sopt,
+                               boost::program_options::variables_map& vm
+                               ) {
   auto numUnpaired = sopt.unmatedReadFiles.size();
   auto numLeft = sopt.mate1ReadFiles.size();
   auto numRight = sopt.mate2ReadFiles.size();
@@ -1351,16 +1357,33 @@ bool validateOptionsMapping_(SalmonOpts& sopt) {
     sopt.mismatchPenalty = -sopt.mismatchPenalty;
   }
 
+  // Make sure that consensusSlack is not negative
+  if (sopt.consensusSlack < 0) {
+    sopt.jointLog->error("You set consensusSlack as {}, but it must be a non-negative value.", sopt.consensusSlack);
+    return false;
+  }
+
   // If we have validate mappings, then make sure we automatically enable
   // range factorization
-  if (sopt.validateMappings and sopt.rangeFactorizationBins < 4) {
-    uint32_t nbins{4};
-    sopt.jointLog->info(
-                        "Usage of --validateMappings implies use of range factorization. "
-                        "rangeFactorizationBins is being set to {}", nbins
-                        );
-    sopt.rangeFactorizationBins = nbins;
-    sopt.useRangeFactorization = true;
+  if (sopt.validateMappings) {
+    if (sopt.rangeFactorizationBins < 4) {
+      uint32_t nbins{4};
+      sopt.jointLog->info(
+                          "Usage of --validateMappings implies use of range factorization. "
+                          "rangeFactorizationBins is being set to {}", nbins
+                          );
+      sopt.rangeFactorizationBins = nbins;
+      sopt.useRangeFactorization = true;
+    }
+    // If the consensus slack was not set explicitly, then it defaults to 1 with
+    // validateMappings
+    bool consensusSlackExplicit = !vm["consensusSlack"].defaulted();
+    if (!consensusSlackExplicit) {
+      sopt.consensusSlack = 1;
+      sopt.jointLog->info(
+                          "Usage of --validateMappings implies a default consensus slack of 1. "
+                          "Setting consensusSlack to {}.", sopt.consensusSlack);
+    }
   }
   return true;
 }
@@ -1804,9 +1827,9 @@ bool processQuantOptions(SalmonOpts& sopt,
   // Validation that is different for alignment and mapping based modes.
   bool perModeValidate{true};
   if (sopt.quantMode == SalmonQuantMode::ALIGN) {
-    perModeValidate = validateOptionsAlignment_(sopt);
+    perModeValidate = validateOptionsAlignment_(sopt, vm);
   } else if (sopt.quantMode == SalmonQuantMode::MAP) {
-    perModeValidate = validateOptionsMapping_(sopt);
+    perModeValidate = validateOptionsMapping_(sopt, vm);
   }
 
   return perModeValidate;
