@@ -44,19 +44,15 @@ ways to input these reads to alevin::
 
   > salmon alevin -lISR -1 lib_A_cb.fq lib_B_cb.fq -2 lib_A_read.fq lib_B_read.fq 
 
-  > salmon alevin -lISR -1 <(cat lib_A_cb.fq lib_B_cb.fq) -2 <(cat lib_A_read.fq lib_B_read.fq)
-
 Similarly, both of these approaches can be adopted if the files are gzipped as well::
 
    > salmon alevin -l ISR -1 lib_A_cb.fq.gz lib_B_cb.fq.gz -2 lib_A_read.fq.gz lib_B_read.fq.gz
 
-   > salmon alevin -l ISR -1 <(gunzip -c lib_A_cb.fq.gz lib_B_cb.fq.gz) -2 <(gunzip -c lib_A_read.fq.gz lib_B_read.fq.gz)
-
-In each pair of commands, the first command lets alevin natively parse the files, while the latter command
-creates, on-the-fly, an input stream that consists of the concatenation of both files.  Both methods work, and
-are acceptable ways to merge the files.  The latter method (i.e. process substitution) allows more complex
-processing to be done to the reads in the substituted process before they are passed to alevin as input, and thus,
-in some situations, is more versatile.
+.. note:: Don't provide data through input stream
+To keep the time-memory trade-off within acceptable bounds, alevin performs multiple passes over the Cellular
+Barcode file. Alevin goes through the barcode file once by itself, and then goes through both the barcode and 
+read files in unison to assign reads to cells using the initial barcode mapping. Since the pipe or the input 
+stream can't be reset to read from the beginning again, alevin can't read in the barcodes, and might crash.
 
 Description of important options
 --------------------------------
