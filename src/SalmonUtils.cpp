@@ -720,9 +720,12 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
     return (fmt.length() == 1 and (fmt.front() == 'a' or fmt.front() == 'A'));
   };
 
+  auto log = spdlog::get("jointLog");
+
+  bool encounteredLibraryWithoutType{false};
   bool autoLibType{false};
-  std::vector<ReadLibrary> peLibs{ReadLibrary(peFormat)};
-  std::vector<ReadLibrary> seLibs{ReadLibrary(seFormat)};
+  std::vector<ReadLibrary> peLibs{};
+  std::vector<ReadLibrary> seLibs{};
   for (auto& opt : orderedOptions.options) {
     // Update the library type
     if (opt.string_key == "libType") {
@@ -741,18 +744,39 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
     }
 
     if (opt.string_key == "mates1") {
+      if (peLibs.empty()) {
+        log->warn("Encountered a read file (--mates1/-1) before a "
+                  "library type specification.  The (--libType/-l) "
+                  "option must precede the input files.");
+        encounteredLibraryWithoutType = true;
+        break;
+      }
       peLibs.back().addMates1(opt.value);
       if (autoLibType) {
         peLibs.back().enableAutodetect();
       }
     }
     if (opt.string_key == "mates2") {
+      if (peLibs.empty()) {
+        log->warn("Encountered a read file (--mates2/-2) before a "
+                  "library type specification.  The (--libType/-l) "
+                  "option must precede the input files.");
+        encounteredLibraryWithoutType = true;
+        break;
+      }
       peLibs.back().addMates2(opt.value);
       if (autoLibType) {
         peLibs.back().enableAutodetect();
       }
     }
     if (opt.string_key == "unmatedReads") {
+      if (seLibs.empty()) {
+        log->warn("Encountered a read file (--unmatedReads/-r) before a "
+                  "library type specification.  The (--libType/-l) "
+                  "option must precede the input files.");
+        encounteredLibraryWithoutType = true;
+        break;
+      }
       seLibs.back().addUnmated(opt.value);
       if (autoLibType) {
         seLibs.back().enableAutodetect();
@@ -762,6 +786,10 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
 
   std::vector<ReadLibrary> libs;
   libs.reserve(peLibs.size() + seLibs.size());
+  if (encounteredLibraryWithoutType) {
+    return libs;
+  }
+
   for (auto& lib : boost::range::join(seLibs, peLibs)) {
     if (lib.format().type == ReadType::SINGLE_END) {
       if (lib.unmated().size() == 0) {
@@ -777,7 +805,6 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
     libs.push_back(lib);
   }
 
-  auto log = spdlog::get("jointLog");
   size_t numLibs = libs.size();
   if (numLibs == 1) {
     log->info("There is 1 library.");
