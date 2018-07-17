@@ -722,10 +722,14 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
 
   auto log = spdlog::get("jointLog");
 
-  bool encounteredLibraryWithoutType{false};
+  bool sawLibType{false};
+  bool sawPairedLibrary{false};
+  bool sawUnpairedLibrary{false};
   bool autoLibType{false};
-  std::vector<ReadLibrary> peLibs{};
-  std::vector<ReadLibrary> seLibs{};
+
+  std::vector<ReadLibrary> peLibs{peFormat};
+  std::vector<ReadLibrary> seLibs{seFormat};
+
   for (auto& opt : orderedOptions.options) {
     // Update the library type
     if (opt.string_key == "libType") {
@@ -741,55 +745,72 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
       } else {
         autoLibType = true;
       }
+      sawLibType = true;
     }
 
     if (opt.string_key == "mates1") {
-      if (peLibs.empty()) {
+      if (!sawLibType) {
         log->warn("Encountered a read file (--mates1/-1) before a "
                   "library type specification.  The (--libType/-l) "
                   "option must precede the input files.");
-        encounteredLibraryWithoutType = true;
-        break;
+        peLibs.clear();
+        return peLibs;
       }
       peLibs.back().addMates1(opt.value);
       if (autoLibType) {
         peLibs.back().enableAutodetect();
       }
+      sawPairedLibrary = true;
     }
     if (opt.string_key == "mates2") {
-      if (peLibs.empty()) {
+      if (!sawLibType) {
         log->warn("Encountered a read file (--mates2/-2) before a "
                   "library type specification.  The (--libType/-l) "
                   "option must precede the input files.");
-        encounteredLibraryWithoutType = true;
-        break;
+        peLibs.clear();
+        return peLibs;
       }
       peLibs.back().addMates2(opt.value);
       if (autoLibType) {
         peLibs.back().enableAutodetect();
       }
+      sawPairedLibrary = true;
     }
     if (opt.string_key == "unmatedReads") {
-      if (seLibs.empty()) {
+      if (!sawLibType) {
         log->warn("Encountered a read file (--unmatedReads/-r) before a "
                   "library type specification.  The (--libType/-l) "
                   "option must precede the input files.");
-        encounteredLibraryWithoutType = true;
-        break;
+        seLibs.clear();
+        return seLibs;
       }
       seLibs.back().addUnmated(opt.value);
       if (autoLibType) {
         seLibs.back().enableAutodetect();
       }
+      sawUnpairedLibrary = true;
     }
   }
 
   std::vector<ReadLibrary> libs;
-  libs.reserve(peLibs.size() + seLibs.size());
-  if (encounteredLibraryWithoutType) {
+
+  // @Avi : Allow this temporarily for now, since there is some use to hijack
+  // this behavior in Alevin.  However, we should figure out a proper parsing
+  // strategy for that rather than abusing single & PE library types.  Once we
+  // fix that, we should uncomment the below.
+  /*
+  if (sawPairedLibrary and sawUnpairedLibrary) {
+    log->warn("It seems you have specified both paired-end and unpaired read "
+              "libraries.  Salmon does not accepted mixed library types, and "
+              "different library types should typically not be quantified together "
+              "anyway.  Please quantifiy distinct library types separately.");
     return libs;
   }
+  */
+  (void)sawPairedLibrary;
+  (void)sawUnpairedLibrary;
 
+  libs.reserve(peLibs.size() + seLibs.size());
   for (auto& lib : boost::range::join(seLibs, peLibs)) {
     if (lib.format().type == ReadType::SINGLE_END) {
       if (lib.unmated().size() == 0) {
