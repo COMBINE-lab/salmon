@@ -2755,12 +2755,11 @@ transcript abundance from RNA-seq reads
 
     if (readLibraries.size() == 0) {
       jointLog->error(
-          "Failed to successfully parse any complete read libraries."
-          " Please make sure you provided arguments properly to -1, -2 (for "
-          "paired-end libraries)"
-          " or -r (for single-end libraries), and that the library format "
-          "option (-l) comes before,"
-          " the read libraries.");
+          "Failed to successfully parse any complete read libraries. "
+          "Please make sure you provided arguments properly to -1, -2 (for "
+          "paired-end libraries) "
+          "or -r (for single-end libraries), and that the library format "
+          "option (-l) *comes before* the read libraries.");
       std::exit(1);
     }
     // ==== END: Library format processing ===

@@ -314,7 +314,7 @@ endif()
 # Set the latest version and look for what we need
 ##
 set(Boost_ADDITIONAL_VERSIONS "1.59.0" "1.60.0" "1.61.0" "1.62" "1.63" "1.64" "1.65" "1.66")
-find_package(Boost 1.59.0 COMPONENTS iostreams filesystem system thread timer chrono program_options)
+find_package(Boost 1.59.0 COMPONENTS iostreams filesystem system timer chrono program_options)
 message("BOOST_INCLUDEDIR = ${BOOST_INCLUDEDIR}")
 message("BOOST_LIBRARYDIR = ${BOOST_LIBRARYDIR}")
 message("Boost_FOUND = ${Boost_FOUND}")
@@ -339,7 +339,7 @@ if (BOOST_RECONFIGURE)
     set(CMAKE_PREFIX_PATH ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
     set(Boost_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
     set(Boost_LIBRARY_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib)
-    find_package(Boost 1.59.0 COMPONENTS iostreams filesystem system thread timer chrono program_options REQUIRED)
+    find_package(Boost 1.59.0 COMPONENTS iostreams filesystem system timer chrono program_options REQUIRED)
     set(FETCH_BOOST FALSE)
 endif()
 
@@ -360,7 +360,7 @@ elseif(FETCH_BOOST)
     ## Let the rest of the build process know we're going to be fetching boost
     set (BOOST_LIB_SUBSET --with-iostreams --with-atomic --with-chrono --with-container --with-date_time --with-exception
                           --with-filesystem --with-graph --with-graph_parallel --with-math
-                          --with-program_options --with-system --with-thread
+                          --with-program_options --with-system 
                           --with-timer)
     set (BOOST_WILL_RECONFIGURE TRUE)
     set (FETCH_BOOST FALSE)
