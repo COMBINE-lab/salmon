@@ -134,8 +134,8 @@ namespace alevin {
                       classCount, classPrior, numClasses,
                       numTrueCells, numAmbiguousCells, numFalseCells);
 
-      trueProb.resize(numAmbiguousCells, 0.0);
-      falseProb.resize(numAmbiguousCells, 0.0);
+      //trueProb.resize(numAmbiguousCells, 0.0);
+      //falseProb.resize(numAmbiguousCells, 0.0);
 
       for (auto vec: sigma){
         for (auto cell : vec){
@@ -147,16 +147,17 @@ namespace alevin {
       for (i=0; i<numTrueCells; i++){
         selectedBarcodes.emplace_back(i);
       }
-      for (size_t j=0 ; i<numTrueCells+numAmbiguousCells; i++, j++){
-        double trPb, flPb;
+      auto ambiguousCellOffset = numTrueCells + numAmbiguousCells;
+      for (; i<ambiguousCellOffset; i++){
+        double trPb{0.0}, flPb{0.0};
         if (naive_bayes_predict(sigma, theta,
                                 featureCountsMatrix[i],
                                 classPrior, trPb, flPb)){
           selectedBarcodes.emplace_back(i);
 
-          trueProb[j] = trPb ;
-          falseProb[j] = flPb ;
         }
+        trueProb.emplace_back( trPb );
+        falseProb.emplace_back( flPb );
       }
 
       return selectedBarcodes;
