@@ -332,7 +332,6 @@ namespace alevin {
       DoubleMatrixT featureCountsMatrix( numCells, DoubleVectorT (numFeatures, 0.0));
 
       // loop over each barcode
-      // TODO:: This can be parallelized
       tbb::task_scheduler_init tbbScheduler(aopt.numThreads);
       tbb::parallel_for(
                         BlockedIndexRange(size_t(0), size_t(trueBarcodes.size())),
@@ -447,15 +446,11 @@ namespace alevin {
           whitelistStream1 << "\n";
           }*/
         for(size_t i=0; i<featureCountsMatrix.size(); i++){
-          featureStream << trueBarcodes[i]
-                        << "\t" << featureCountsMatrix[i][0]
-                        << "\t" << featureCountsMatrix[i][1]
-                        << "\t" << featureCountsMatrix[i][2]
-                        << "\t" << featureCountsMatrix[i][3]
-                        << "\t" << featureCountsMatrix[i][4]
-                        << "\t" << featureCountsMatrix[i][5]
-                        << "\t" << featureCountsMatrix[i][6]
-                        << "\n";
+          featureStream << trueBarcodes[i];
+          for(size_t j=0; j<numFeatures; j++) {
+            featureStream << "\t" << featureCountsMatrix[i][j];
+          }
+          featureStream << "\n";
         }
         featureStream.close();
       }
