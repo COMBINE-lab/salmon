@@ -380,6 +380,12 @@ elseif(FETCH_BOOST)
         INSTALL_COMMAND ""
     )
 
+    ExternalProject_Add_Step(libboost makedir
+  	COMMAND mkdir -p <SOURCE_DIR>/build 
+	COMMENT "Make build directory"
+  	DEPENDEES download 
+  	DEPENDERS configure)
+
     ##
     # After we've installed boost,
     ##
@@ -403,7 +409,7 @@ if (BOOST_WILL_RECONFIGURE)
     set(Boost_FOUND TRUE)
 endif()
 
-
+message("BOOST ROOT = ${BOOST_ROOT}")
 message("BOOST INCLUDE DIR = ${Boost_INCLUDE_DIR}")
 message("BOOST INCLUDE DIRS = ${Boost_INCLUDE_DIRS}")
 message("BOOST LIB DIR = ${Boost_LIBRARY_DIRS}")
