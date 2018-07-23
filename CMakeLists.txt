@@ -527,6 +527,9 @@ ExternalProject_Add_Step(libtbb reconfigure
 )
 
 set (FETCHED_TBB TRUE)
+if (${FETCHED_BOOST})
+	add_dependencies(libtbb libboost)
+endif()
 endif()
 
 ##
