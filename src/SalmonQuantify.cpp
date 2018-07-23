@@ -1793,7 +1793,11 @@ void processReadsQuasi(
 
 /// DONE QUASI
 
-
+/**
+ * This functor makes it easy to invoke the appropriate template function
+ * for processing the reads, generalizing over the library type and read type
+ * (e.g. single vs. paired end).
+ **/
 class ProcessFunctor {
   private:
     ReadExperimentT& readExp_;
@@ -1857,21 +1861,20 @@ class ProcessFunctor {
 
     template <typename ParserT, typename IndexT>
     void operator()(size_t i, ParserT& parserPtr, IndexT* index) {
-                            if (salmonOpts_.qmFileName != "" and i == 0) {
-                              rapmap::utils::writeSAMHeader(*index,
-                                                            salmonOpts_.qmLog);
-                            }
-                            auto threadFun = [&, i]() -> void {
-                                               processReadsQuasi(
-                                                                 parserPtr.get(), readExp_, rl_, structureVec_[i],
-                                                                 numObservedFragments_, numAssignedFragments_, validHits_,
-                                                                 upperBoundHits_, index, transcripts_,
-                                                                 fmCalc_, clusterForest_, fragLengthDist_, observedBiasParams_[i],
-                                                                 salmonOpts_, coverageThresh_, iomutex_, initialRound_,
-                                                                 burnedIn_, writeToCache_);
-                                             };
-                            threads_.emplace_back(threadFun);
-                          }
+      if (salmonOpts_.qmFileName != "" and i == 0) {
+        rapmap::utils::writeSAMHeader(*index, salmonOpts_.qmLog);
+      }
+      auto threadFun = [&, i]() -> void {
+        processReadsQuasi(
+                          parserPtr.get(), readExp_, rl_, structureVec_[i],
+                          numObservedFragments_, numAssignedFragments_, validHits_,
+                          upperBoundHits_, index, transcripts_,
+                          fmCalc_, clusterForest_, fragLengthDist_, observedBiasParams_[i],
+                          salmonOpts_, coverageThresh_, iomutex_, initialRound_,
+                          burnedIn_, writeToCache_);
+      };
+      threads_.emplace_back(threadFun);
+    }
 
   };
 
@@ -1997,8 +2000,9 @@ void processReadLibrary(
                                  burnedIn, writeToCache, threads);
   // If the read library is paired-end
   // ------ Paired-end --------
-    bool isPairedEnd = rl.format().type == ReadType::PAIRED_END;
-    bool isSingleEnd = rl.format().type == ReadType::SINGLE_END;
+  bool isPairedEnd = rl.format().type == ReadType::PAIRED_END;
+  bool isSingleEnd = rl.format().type == ReadType::SINGLE_END;
+
   if (isPairedEnd) {
 
     if (rl.mates1().size() != rl.mates2().size()) {
@@ -2029,136 +2033,135 @@ void processReadLibrary(
   }
 
   switch (indexType) {
-  case SalmonIndexType::FMD: {
-    fmt::MemoryWriter infostr;
-    infostr << "This version of salmon does not support FMD indexing.";
-    throw std::invalid_argument(infostr.str());
-  } break;
-  case SalmonIndexType::QUASI: {
-    // True if we have a 64-bit SA index, false otherwise
-    bool largeIndex = sidx->is64BitQuasi();
-    bool perfectHashIndex = sidx->isPerfectHashQuasi();
-    for (size_t i = 0; i < numThreads; ++i) {
-      // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
-      // change value before the lambda below is evaluated --- crazy!
-      if (largeIndex) {
-        if (perfectHashIndex) { // Perfect Hash
-          if (isPairedEnd) {processFunctor(i, pairedParserPtr, sidx->quasiIndexPerfectHash64());}
-          else if (isSingleEnd) {processFunctor(i, singleParserPtr, sidx->quasiIndexPerfectHash64());
+    case SalmonIndexType::FMD: {
+      fmt::MemoryWriter infostr;
+      infostr << "This version of salmon does not support FMD indexing.";
+      throw std::invalid_argument(infostr.str());
+    } break;
+    case SalmonIndexType::QUASI: {
+      // True if we have a 64-bit SA index, false otherwise
+      bool largeIndex = sidx->is64BitQuasi();
+      bool perfectHashIndex = sidx->isPerfectHashQuasi();
+      for (size_t i = 0; i < numThreads; ++i) {
+        // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
+        // change value before the lambda below is evaluated --- crazy!
+        if (largeIndex) {
+          if (perfectHashIndex) { // Perfect Hash
+            if (isPairedEnd) {processFunctor(i, pairedParserPtr, sidx->quasiIndexPerfectHash64());}
+            else if (isSingleEnd) {processFunctor(i, singleParserPtr, sidx->quasiIndexPerfectHash64());}
+          } else { // Dense Hash
+            if (isPairedEnd) {processFunctor(i, pairedParserPtr, sidx->quasiIndex64());}
+            else if (isSingleEnd) {processFunctor(i, singleParserPtr, sidx->quasiIndex64());}
           }
-        } else { // Dense Hash
-          if (isPairedEnd) {processFunctor(i, pairedParserPtr, sidx->quasiIndex64());}
-          else if (isSingleEnd) {processFunctor(i, singleParserPtr, sidx->quasiIndex64());}
-        }
-      } else {
-        if (perfectHashIndex) { // Perfect Hash
-          if (isPairedEnd) { processFunctor(i, pairedParserPtr, sidx->quasiIndexPerfectHash32()); }
-          else if (isSingleEnd) { processFunctor(i, singleParserPtr, sidx->quasiIndexPerfectHash32()); }
-        } else { // Dense Hash
-          if (isPairedEnd) { processFunctor(i, pairedParserPtr, sidx->quasiIndex32()); }
-          else if (isSingleEnd) { processFunctor(i, singleParserPtr, sidx->quasiIndex32()); }
-        }
-      } // End spawn current thread
+        } else {
+          if (perfectHashIndex) { // Perfect Hash
+            if (isPairedEnd) { processFunctor(i, pairedParserPtr, sidx->quasiIndexPerfectHash32()); }
+            else if (isSingleEnd) { processFunctor(i, singleParserPtr, sidx->quasiIndexPerfectHash32()); }
+          } else { // Dense Hash
+            if (isPairedEnd) { processFunctor(i, pairedParserPtr, sidx->quasiIndex32()); }
+            else if (isSingleEnd) { processFunctor(i, singleParserPtr, sidx->quasiIndex32()); }
+          }
+        } // End spawn current thread
 
-    } // End spawn all threads
-  }   // End Quasi index
+      } // End spawn all threads
+    }   // End Quasi index
     break;
   } // end switch
 
-    for (auto& t : threads) {
-      t.join();
-    }
+  for (auto& t : threads) {
+    t.join();
+  }
 
-    // If we don't have a sufficient number of assigned fragments, then
-    // complain here!
-    if (numAssignedFragments < salmonOpts.minRequiredFrags) {
-      readExp.setNumObservedFragments(numObservedFragments);
-      readExp.numAssignedFragmentsAtomic().store(numAssignedFragments);
-      double mappingRate = numAssignedFragments.load() /
-                           static_cast<double>(numObservedFragments.load());
-      readExp.setEffectiveMappingRate(mappingRate);
-      throw InsufficientAssignedFragments(numAssignedFragments.load(),
-                                          salmonOpts.minRequiredFrags);
+  // If we don't have a sufficient number of assigned fragments, then
+  // complain here!
+  if (numAssignedFragments < salmonOpts.minRequiredFrags) {
+    readExp.setNumObservedFragments(numObservedFragments);
+    readExp.numAssignedFragmentsAtomic().store(numAssignedFragments);
+    double mappingRate = numAssignedFragments.load() /
+                          static_cast<double>(numObservedFragments.load());
+    readExp.setEffectiveMappingRate(mappingRate);
+    throw InsufficientAssignedFragments(numAssignedFragments.load(),
+                                        salmonOpts.minRequiredFrags);
+  }
+
+  /**
+    * NOTE : test new el model in future
+  EffectiveLengthStats eel(numTxp);
+  for (auto& els : observedEffectiveLengths) {
+    eel.merge(els);
+  }
+  auto& transcripts = readExp.transcripts();
+  for (size_t tid = 0; tid < numTxp; ++tid) {
+    auto el = eel.getExpectedEffectiveLength(tid);
+    auto countObs = eel.getObservedCount(tid);
+    if (countObs > salmonOpts.eelCountCutoff and el >= 1.0) {
+      transcripts[tid].setCachedLogEffectiveLength(std::log(el));
     }
+  }
+  **/
+
+  /** GC-fragment bias **/
+  // Set the global distribution based on the sum of local
+  // distributions.
+  double gcFracFwd{0.0};
+  double globalMass{salmon::math::LOG_0};
+  double globalFwdMass{salmon::math::LOG_0};
+  auto& globalGCMass = readExp.observedGC();
+  for (auto& gcp : observedBiasParams) {
+    auto& gcm = gcp.observedGCMass;
+    globalGCMass.combineCounts(gcm);
+
+    auto& fw =
+        readExp.readBiasModelObserved(salmon::utils::Direction::FORWARD);
+    auto& rc = readExp.readBiasModelObserved(
+        salmon::utils::Direction::REVERSE_COMPLEMENT);
+
+    auto& fwloc = gcp.seqBiasModelFW;
+    auto& rcloc = gcp.seqBiasModelRC;
+    fw.combineCounts(fwloc);
+    rc.combineCounts(rcloc);
 
     /**
-     * NOTE : test new el model in future
-    EffectiveLengthStats eel(numTxp);
-    for (auto& els : observedEffectiveLengths) {
-      eel.merge(els);
+      * positional biases
+      **/
+    auto& posBiasesFW = readExp.posBias(salmon::utils::Direction::FORWARD);
+    auto& posBiasesRC =
+        readExp.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
+    for (size_t i = 0; i < posBiasesFW.size(); ++i) {
+      posBiasesFW[i].combine(gcp.posBiasFW[i]);
+      posBiasesRC[i].combine(gcp.posBiasRC[i]);
     }
-    auto& transcripts = readExp.transcripts();
-    for (size_t tid = 0; tid < numTxp; ++tid) {
-      auto el = eel.getExpectedEffectiveLength(tid);
-      auto countObs = eel.getObservedCount(tid);
-      if (countObs > salmonOpts.eelCountCutoff and el >= 1.0) {
-        transcripts[tid].setCachedLogEffectiveLength(std::log(el));
-      }
+    /*
+            for (size_t i = 0; i < fwloc.counts.size(); ++i) {
+                fw.counts[i] += fwloc.counts[i];
+                rc.counts[i] += rcloc.counts[i];
+            }
+    */
+
+    globalMass = salmon::math::logAdd(globalMass, gcp.massFwd);
+    globalMass = salmon::math::logAdd(globalMass, gcp.massRC);
+    globalFwdMass = salmon::math::logAdd(globalFwdMass, gcp.massFwd);
+  }
+  globalGCMass.normalize();
+
+  if (globalMass != salmon::math::LOG_0) {
+    if (globalFwdMass != salmon::math::LOG_0) {
+      gcFracFwd = std::exp(globalFwdMass - globalMass);
     }
-    **/
+    readExp.setGCFracForward(gcFracFwd);
+  }
 
-    /** GC-fragment bias **/
-    // Set the global distribution based on the sum of local
-    // distributions.
-    double gcFracFwd{0.0};
-    double globalMass{salmon::math::LOG_0};
-    double globalFwdMass{salmon::math::LOG_0};
-    auto& globalGCMass = readExp.observedGC();
-    for (auto& gcp : observedBiasParams) {
-      auto& gcm = gcp.observedGCMass;
-      globalGCMass.combineCounts(gcm);
-
-      auto& fw =
-          readExp.readBiasModelObserved(salmon::utils::Direction::FORWARD);
-      auto& rc = readExp.readBiasModelObserved(
-          salmon::utils::Direction::REVERSE_COMPLEMENT);
-
-      auto& fwloc = gcp.seqBiasModelFW;
-      auto& rcloc = gcp.seqBiasModelRC;
-      fw.combineCounts(fwloc);
-      rc.combineCounts(rcloc);
-
-      /**
-       * positional biases
-       **/
-      auto& posBiasesFW = readExp.posBias(salmon::utils::Direction::FORWARD);
-      auto& posBiasesRC =
-          readExp.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
-      for (size_t i = 0; i < posBiasesFW.size(); ++i) {
-        posBiasesFW[i].combine(gcp.posBiasFW[i]);
-        posBiasesRC[i].combine(gcp.posBiasRC[i]);
-      }
-      /*
-              for (size_t i = 0; i < fwloc.counts.size(); ++i) {
-                  fw.counts[i] += fwloc.counts[i];
-                  rc.counts[i] += rcloc.counts[i];
-              }
-      */
-
-      globalMass = salmon::math::logAdd(globalMass, gcp.massFwd);
-      globalMass = salmon::math::logAdd(globalMass, gcp.massRC);
-      globalFwdMass = salmon::math::logAdd(globalFwdMass, gcp.massFwd);
+  // finalize the positional biases
+  if (salmonOpts.posBiasCorrect) {
+    auto& posBiasesFW = readExp.posBias(salmon::utils::Direction::FORWARD);
+    auto& posBiasesRC =
+        readExp.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
+    for (size_t i = 0; i < posBiasesFW.size(); ++i) {
+      posBiasesFW[i].finalize();
+      posBiasesRC[i].finalize();
     }
-    globalGCMass.normalize();
-
-    if (globalMass != salmon::math::LOG_0) {
-      if (globalFwdMass != salmon::math::LOG_0) {
-        gcFracFwd = std::exp(globalFwdMass - globalMass);
-      }
-      readExp.setGCFracForward(gcFracFwd);
-    }
-
-    // finalize the positional biases
-    if (salmonOpts.posBiasCorrect) {
-      auto& posBiasesFW = readExp.posBias(salmon::utils::Direction::FORWARD);
-      auto& posBiasesRC =
-          readExp.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
-      for (size_t i = 0; i < posBiasesFW.size(); ++i) {
-        posBiasesFW[i].finalize();
-        posBiasesRC[i].finalize();
-      }
-    }
-    /** END GC-fragment bias **/
+  }
+  /** END GC-fragment bias **/
 }
 
 /**
