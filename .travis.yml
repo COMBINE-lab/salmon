@@ -7,11 +7,11 @@ matrix:
       compiler : gcc-7
       addons:
         apt:
-        update: true
-        sources:
-            - sourceline: 'ppa:mhier/libboost-latest'
-            - ubuntu-toolchain-r-test
-        packages: ['g++-7', 'gcc-7', 'cmake', 'cmake-data', 'zlib1g-dev', 'libbz2-dev', 'boost1.67']
+          update: true
+          sources:
+              - sourceline: 'ppa:mhier/libboost-latest'
+              - ubuntu-toolchain-r-test
+          packages: ['g++-7', 'gcc-7', 'cmake', 'cmake-data', 'zlib1g-dev', 'libbz2-dev', 'boost1.67']
 
 install:
     - export CXX="g++-7"
