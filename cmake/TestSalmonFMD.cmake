@@ -7,15 +7,6 @@ if (TAR_RESULT)
     message(FATAL_ERROR "Error untarring sample_data.tgz")
 endif()
 
-execute_process(COMMAND tar xzvf sample_data.tgz
-                WORKING_DIRECTORY ${TOPLEVEL_DIR}
-                RESULT_VARIABLE TAR_RESULT
-               )
-
-if (TAR_RESULT)
-    message(FATAL_ERROR "Error untarring sample_data.tgz")
-endif()
-
 set(SALMON_FMD_INDEX_CMD ${CMAKE_BINARY_DIR}/salmon index -t transcripts.fasta -i sample_salmon_fmd_index --type fmd)
 execute_process(COMMAND ${SALMON_FMD_INDEX_CMD}
                 WORKING_DIRECTORY ${TOPLEVEL_DIR}/sample_data
