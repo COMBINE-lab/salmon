@@ -26,7 +26,7 @@ install:
 script: 
     - mkdir build 
     - cd build 
-    - cmake -DNO_RTM=TRUE .. 
+    - cmake -BOOST_INCLUDEDIR=/usr/include -DBOOST_LIBRARYDIR=/usr/lib -DNO_RTM=TRUE .. 
     - travis_wait 45 make 
     - travis_wait make install
     - travis_wait make test VERBOSE=1
