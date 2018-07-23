@@ -462,28 +462,6 @@ ExternalProject_Add_Step(libcereal makedir
   DEPENDEES download 
   DEPENDERS configure)
 
-message("Build system will fetch and build BWA (for Salmon)")
-message("==================================================================")
-##
-# This mode will likely go away soon, but until then, consider bundling directly with Salmon
-##
-include(ExternalProject)
-ExternalProject_Add(libbwa
-    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    #URL https://github.com/COMBINE-lab/bwa/archive/0.7.12.3.tar.gz
-    #DOWNLOAD_NAME bwa-master.tar.gz
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/bwa/archive/v0.7.12.5.tar.gz -o bwa-master.tar.gz &&
-                    ${SHASUM} 1ac5661d9e12e9017a47f0264201a75d9128f28dbd9a26952925f7745ddf6036 bwa-master.tar.gz &&
-                    mkdir -p bwa-master &&
-                    tar -xzvf bwa-master.tar.gz --strip-components=1 -C bwa-master
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/bwa-master
-    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    CONFIGURE_COMMAND ""
-    BUILD_COMMAND sh -c "make ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}"
-    INSTALL_COMMAND sh -c "mkdir -p <INSTALL_DIR>/lib && mkdir -p <INSTALL_DIR>/include/bwa && cp libbwa.a <INSTALL_DIR>/lib && cp *.h <INSTALL_DIR>/include/bwa && cp is.c bwtindex.c bwt_gen.c QSufSort.c ${CMAKE_CURRENT_SOURCE_DIR}/src/"
-    BUILD_IN_SOURCE TRUE
-)
-
 ## Try and find TBB first
 find_package(TBB 2018.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy )
 

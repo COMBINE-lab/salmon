@@ -105,7 +105,6 @@
 #include "Transcript.hpp"
 
 #include "AlignmentGroup.hpp"
-#include "BWAUtils.hpp"
 #include "BiasParams.hpp"
 #include "CollapsedEMOptimizer.hpp"
 #include "CollapsedGibbsSampler.hpp"
@@ -114,7 +113,6 @@
 #include "FragmentLengthDistribution.hpp"
 #include "GZipWriter.hpp"
 #include "HitManager.hpp"
-#include "KmerIntervalMap.hpp"
 
 #include "RapMapUtils.hpp"
 #include "ReadExperiment.hpp"
@@ -127,13 +125,6 @@
 #include "AlevinKmer.hpp"
 
 namespace alevin{
-  extern "C" {
-#include "bwa.h"
-#include "bwamem.h"
-#include "ksort.h"
-#include "kvec.h"
-#include "utils.h"
-  }
 
   /****** QUASI MAPPING DECLARATIONS *********/
   using MateStatus = rapmap::utils::MateStatus;
@@ -169,7 +160,7 @@ namespace alevin{
   using AlnGroupQueue = tbb::concurrent_queue<AlevinAlnGroup<AlnT>*>;
 #endif
 
-#include "LightweightAlignmentDefs.hpp"
+  //#include "LightweightAlignmentDefs.hpp"
 }
 
 //have to create new namespace because of multiple definition
@@ -617,32 +608,6 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
 }
 
 /// START QUASI
-
-// To use the parser in the following, we get "jobs" until none is
-// available. A job behaves like a pointer to the type
-// jellyfish::sequence_list (see whole_sequence_parser.hpp).
-template <typename RapMapIndexT, typename ProtocolT>
-void processReadsQuasi(
-                       paired_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
-                       AlnGroupVec<SMEMAlignment>& structureVec,
-                       std::atomic<uint64_t>& numObservedFragments,
-                       std::atomic<uint64_t>& numAssignedFragments,
-                       std::atomic<uint64_t>& validHits, std::atomic<uint64_t>& upperBoundHits,
-                       std::atomic<uint32_t>& smallSeqs,
-                       RapMapIndexT* idx, std::vector<Transcript>& transcripts,
-                       ForgettingMassCalculator& fmCalc, ClusterForest& clusterForest,
-                       FragmentLengthDistribution& fragLengthDist, BiasParams& observedBiasParams,
-                       SalmonOpts& salmonOpts,
-                       std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
-                       volatile bool& writeToCache, AlevinOpts<ProtocolT>& alevinOpts,
-                       SoftMapT& barcodeMap, spp::sparse_hash_map<std::string, uint32_t>& trBcs,
-                       std::vector<uint64_t>& uniqueFLD) {
-
-  // ERROR
-  salmonOpts.jointLog->error("MEM-mapping cannot be used with the Quasi index "
-                             "--- please report this bug on GitHub");
-  std::exit(1);
-}
 
 template <typename RapMapIndexT, typename ProtocolT>
 void processReadsQuasi(

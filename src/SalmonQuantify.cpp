@@ -47,14 +47,6 @@
 #include <cstring>
 #include <unistd.h>
 
-extern "C" {
-#include "bwa.h"
-#include "bwamem.h"
-#include "ksort.h"
-#include "kvec.h"
-#include "utils.h"
-}
-
 // Jellyfish 2 include
 #include "jellyfish/mer_dna.hpp"
 
@@ -107,7 +99,6 @@ extern "C" {
 #include "Transcript.hpp"
 
 #include "AlignmentGroup.hpp"
-#include "BWAUtils.hpp"
 #include "BiasParams.hpp"
 #include "CollapsedEMOptimizer.hpp"
 #include "CollapsedGibbsSampler.hpp"
@@ -116,7 +107,6 @@ extern "C" {
 #include "FragmentLengthDistribution.hpp"
 #include "GZipWriter.hpp"
 #include "HitManager.hpp"
-#include "KmerIntervalMap.hpp"
 
 #include "EffectiveLengthStats.hpp"
 #include "PairAlignmentFormatter.hpp"
@@ -161,7 +151,7 @@ template <typename AlnT>
 using AlnGroupQueue = tbb::concurrent_queue<AlignmentGroup<AlnT>*>;
 #endif
 
-#include "LightweightAlignmentDefs.hpp"
+//#include "LightweightAlignmentDefs.hpp"
 
 using ReadExperimentT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;
 
@@ -849,57 +839,6 @@ inline int32_t getAlnScore(
 }
 
 /// START QUASI
-
-// To use the parser in the following, we get "jobs" until none is
-// available. A job behaves like a pointer to the type
-// jellyfish::sequence_list (see whole_sequence_parser.hpp).
-template <typename RapMapIndexT>
-void processReadsQuasi(
-    paired_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
-    AlnGroupVec<SMEMAlignment>& structureVec,
-    std::atomic<uint64_t>& numObservedFragments,
-    std::atomic<uint64_t>& numAssignedFragments,
-    std::atomic<uint64_t>& validHits, std::atomic<uint64_t>& upperBoundHits,
-    RapMapIndexT* idx, std::vector<Transcript>& transcripts,
-    ForgettingMassCalculator& fmCalc, ClusterForest& clusterForest,
-    FragmentLengthDistribution& fragLengthDist, BiasParams& observedBiasParams,
-    /**
-     * NOTE : test new el model in future
-     * EffectiveLengthStats& obsEffLengths,
-     */
-    mem_opt_t* memOptions, SalmonOpts& salmonOpts, double coverageThresh,
-    std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
-    volatile bool& writeToCache) {
-
-  // ERROR
-  salmonOpts.jointLog->error("MEM-mapping cannot be used with the Quasi index "
-                             "--- please report this bug on GitHub");
-  std::exit(1);
-}
-
-template <typename RapMapIndexT>
-void processReadsQuasi(
-    single_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
-    AlnGroupVec<SMEMAlignment>& structureVec,
-    std::atomic<uint64_t>& numObservedFragments,
-    std::atomic<uint64_t>& numAssignedFragments,
-    std::atomic<uint64_t>& validHits, std::atomic<uint64_t>& upperBoundHits,
-    RapMapIndexT* sidx, std::vector<Transcript>& transcripts,
-    ForgettingMassCalculator& fmCalc, ClusterForest& clusterForest,
-    FragmentLengthDistribution& fragLengthDist, BiasParams& observedBiasParams,
-    /**
-     * NOTE : test new el model in future
-     * EffectiveLengthStats& obsEffLengths,
-     */
-    mem_opt_t* memOptions, SalmonOpts& salmonOpts, double coverageThresh,
-    std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
-    volatile bool& writeToCache) {
-  // ERROR
-  salmonOpts.jointLog->error("MEM-mapping cannot be used with the Quasi index "
-                             "--- please report this bug on GitHub");
-  std::exit(1);
-}
-
 template <typename RapMapIndexT>
 void processReadsQuasi(
     paired_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
@@ -914,7 +853,7 @@ void processReadsQuasi(
      * NOTE : test new el model in future
      * EffectiveLengthStats& obsEffLengths,
      **/
-    mem_opt_t* memOptions, SalmonOpts& salmonOpts, double coverageThresh,
+    SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache) {
   uint64_t count_fwd = 0, count_bwd = 0;
@@ -1507,7 +1446,7 @@ void processReadsQuasi(
      * NOTE : test new el model in future
      * EffectiveLengthStats& obsEffLengths,
      **/
-    mem_opt_t* memOptions, SalmonOpts& salmonOpts, double coverageThresh,
+    SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache) {
   uint64_t count_fwd = 0, count_bwd = 0;
@@ -1854,6 +1793,89 @@ void processReadsQuasi(
 
 /// DONE QUASI
 
+
+class ProcessFunctor {
+  private:
+    ReadExperimentT& readExp_;
+    ReadLibrary& rl_;
+    std::vector<AlnGroupVec<QuasiAlignment>>& structureVec_;
+    std::atomic<uint64_t>& numObservedFragments_;
+    std::atomic<uint64_t>& numAssignedFragments_;
+    std::atomic<uint64_t>& validHits_;
+    std::atomic<uint64_t>& upperBoundHits_;
+    std::vector<Transcript>& transcripts_;
+    ForgettingMassCalculator& fmCalc_;
+    ClusterForest& clusterForest_;
+    FragmentLengthDistribution& fragLengthDist_;
+    std::vector<BiasParams>& observedBiasParams_;
+    SalmonOpts& salmonOpts_;
+    double coverageThresh_;
+    std::mutex& iomutex_;
+    bool initialRound_;
+    std::atomic<bool>& burnedIn_;
+    volatile bool& writeToCache_;
+    std::vector<std::thread>& threads_;
+  public:
+    ProcessFunctor(
+                   ReadExperimentT& readExp,
+                   ReadLibrary& rl,
+                   std::vector<AlnGroupVec<QuasiAlignment>>& structureVec,
+                   std::atomic<uint64_t>& numObservedFragments,
+                   std::atomic<uint64_t>& numAssignedFragments,
+                   std::atomic<uint64_t>& validHits,
+                   std::atomic<uint64_t>& upperBoundHits,
+                   std::vector<Transcript>& transcripts,
+                   ForgettingMassCalculator& fmCalc,
+                   ClusterForest& clusterForest,
+                   FragmentLengthDistribution& fragLengthDist,
+                   std::vector<BiasParams>& observedBiasParams,
+                   SalmonOpts& salmonOpts,
+                   double coverageThresh,
+                   std::mutex& iomutex,
+                   bool initialRound,
+                   std::atomic<bool>& burnedIn,
+                   volatile bool& writeToCache,
+                   std::vector<std::thread>& threads
+                   ) :
+      readExp_(readExp), rl_(rl), structureVec_(structureVec),
+      numObservedFragments_(numObservedFragments),
+      numAssignedFragments_(numAssignedFragments),
+      validHits_(validHits),
+      upperBoundHits_(upperBoundHits),
+      transcripts_(transcripts),
+      fmCalc_(fmCalc),
+      clusterForest_(clusterForest),
+      fragLengthDist_(fragLengthDist),
+      observedBiasParams_(observedBiasParams),
+      salmonOpts_(salmonOpts),
+      coverageThresh_(coverageThresh),
+      iomutex_(iomutex),
+      initialRound_(initialRound),
+      burnedIn_(burnedIn),
+      writeToCache_(writeToCache),
+      threads_(threads) {}
+
+    template <typename ParserT, typename IndexT>
+    void operator()(size_t i, ParserT& parserPtr, IndexT* index) {
+                            if (salmonOpts_.qmFileName != "" and i == 0) {
+                              rapmap::utils::writeSAMHeader(*index,
+                                                            salmonOpts_.qmLog);
+                            }
+                            auto threadFun = [&, i]() -> void {
+                                               processReadsQuasi(
+                                                                 parserPtr.get(), readExp_, rl_, structureVec_[i],
+                                                                 numObservedFragments_, numAssignedFragments_, validHits_,
+                                                                 upperBoundHits_, index, transcripts_,
+                                                                 fmCalc_, clusterForest_, fragLengthDist_, observedBiasParams_[i],
+                                                                 salmonOpts_, coverageThresh_, iomutex_, initialRound_,
+                                                                 burnedIn_, writeToCache_);
+                                             };
+                            threads_.emplace_back(threadFun);
+                          }
+
+  };
+
+
 template <typename AlnT>
 void processReadLibrary(
     ReadExperimentT& readExp, ReadLibrary& rl, SalmonIndex* sidx,
@@ -1865,7 +1887,7 @@ void processReadLibrary(
     std::atomic<uint64_t>& upperBoundHits, // upper bound on # of mapped frags
     bool initialRound, std::atomic<bool>& burnedIn,
     ForgettingMassCalculator& fmCalc,
-    FragmentLengthDistribution& fragLengthDist, mem_opt_t* memOptions,
+    FragmentLengthDistribution& fragLengthDist, 
     SalmonOpts& salmonOpts, double coverageThresh, bool greedyChain,
     std::mutex& iomutex, size_t numThreads,
     std::vector<AlnGroupVec<AlnT>>& structureVec, volatile bool& writeToCache) {
@@ -1946,9 +1968,38 @@ void processReadLibrary(
    *EffectiveLengthStats(numTxp));
    **/
 
+  // NOTE : When we can support C++14, we can replace the entire ProcessFunctor class above with this
+  // generic lambda.
+  /*
+    auto processFunctor = [&](size_t i, auto& parserPtr, auto* index) {
+                            if (salmonOpts.qmFileName != "" and i == 0) {
+                              rapmap::utils::writeSAMHeader(*index,
+                                                            salmonOpts.qmLog);
+                            }
+                            auto threadFun = [&, i]() -> void {
+                                               processReadsQuasi(
+                                                                 parserPtr.get(), readExp, rl, structureVec[i],
+                                                                 numObservedFragments, numAssignedFragments, numValidHits,
+                                                                 upperBoundHits, index, transcripts,
+                                                                 fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
+                                                                 salmonOpts, coverageThresh, iomutex, initialRound,
+                                                                 burnedIn, writeToCache);
+                                             };
+                            threads.emplace_back(threadFun);
+                          };
+  */
+
+  ProcessFunctor processFunctor(readExp, rl, structureVec,
+                                 numObservedFragments, numAssignedFragments, numValidHits,
+                                 upperBoundHits, transcripts,
+                                 fmCalc, clusterForest, fragLengthDist, observedBiasParams,
+                                 salmonOpts, coverageThresh, iomutex, initialRound,
+                                 burnedIn, writeToCache, threads);
   // If the read library is paired-end
   // ------ Paired-end --------
-  if (rl.format().type == ReadType::PAIRED_END) {
+    bool isPairedEnd = rl.format().type == ReadType::PAIRED_END;
+    bool isSingleEnd = rl.format().type == ReadType::SINGLE_END;
+  if (isPairedEnd) {
 
     if (rl.mates1().size() != rl.mates2().size()) {
       salmonOpts.jointLog->error("The number of provided files for "
@@ -1966,122 +2017,53 @@ void processReadLibrary(
                                             numThreads, numParsingThreads,
                                             miniBatchSize));
     pairedParserPtr->start();
+  } else if (isSingleEnd) {
+    uint32_t numParsingThreads{1};
+    // HACK!
+    if (rl.unmated().size() > 1 and numThreads > 8) {
+      numParsingThreads = 2;
+    }
+    singleParserPtr.reset(new single_parser(rl.unmated(), numThreads,
+                                            numParsingThreads, miniBatchSize));
+    singleParserPtr->start();
+  }
 
-    switch (indexType) {
-    case SalmonIndexType::FMD: {
-      for (size_t i = 0; i < numThreads; ++i) {
-        // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
-        // change value before the lambda below is evaluated --- crazy!
-        auto threadFun = [&, i]() -> void {
-          processReadsMEM<paired_parser, TranscriptHitList>(
-              pairedParserPtr.get(), readExp, rl, structureVec[i],
-              numObservedFragments, numAssignedFragments, numValidHits,
-              upperBoundHits, sidx, transcripts, fmCalc, clusterForest,
-              fragLengthDist, observedBiasParams[i],
-              /**
-               * NOTE : test new el model in future
-               * observedEffectiveLengths[i],
-               */
-              memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
-              burnedIn, writeToCache);
-        };
-        threads.emplace_back(threadFun);
-      }
-    } break;
-    case SalmonIndexType::QUASI: {
-      // True if we have a 64-bit SA index, false otherwise
-      bool largeIndex = sidx->is64BitQuasi();
-      bool perfectHashIndex = sidx->isPerfectHashQuasi();
-      for (size_t i = 0; i < numThreads; ++i) {
-        // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
-        // change value before the lambda below is evaluated --- crazy!
-        if (largeIndex) {
-          if (perfectHashIndex) { // Perfect Hash
-            if (salmonOpts.qmFileName != "" and i == 0) {
-              rapmap::utils::writeSAMHeader(*(sidx->quasiIndexPerfectHash64()),
-                                            salmonOpts.qmLog);
-            }
-            auto threadFun = [&, i]() -> void {
-              processReadsQuasi<RapMapSAIndex<int64_t, PerfectHash<int64_t>>>(
-                  pairedParserPtr.get(), readExp, rl, structureVec[i],
-                  numObservedFragments, numAssignedFragments, numValidHits,
-                  upperBoundHits, sidx->quasiIndexPerfectHash64(), transcripts,
-                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
-                  /**
-                   * NOTE : test new el model in future
-                   * observedEffectiveLengths[i],
-                   **/
-                  memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
-                  burnedIn, writeToCache);
-            };
-            threads.emplace_back(threadFun);
-          } else { // Dense Hash
-            if (salmonOpts.qmFileName != "" and i == 0) {
-              rapmap::utils::writeSAMHeader(*(sidx->quasiIndex64()),
-                                            salmonOpts.qmLog);
-            }
-            auto threadFun = [&, i]() -> void {
-              processReadsQuasi<RapMapSAIndex<int64_t, DenseHash<int64_t>>>(
-                  pairedParserPtr.get(), readExp, rl, structureVec[i],
-                  numObservedFragments, numAssignedFragments, numValidHits,
-                  upperBoundHits, sidx->quasiIndex64(), transcripts, fmCalc,
-                  clusterForest, fragLengthDist, observedBiasParams[i],
-                  /**
-                   * NOTE : test new el model in future
-                   * observedEffectiveLengths[i],
-                   **/
-                  memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
-                  burnedIn, writeToCache);
-            };
-            threads.emplace_back(threadFun);
+  switch (indexType) {
+  case SalmonIndexType::FMD: {
+    fmt::MemoryWriter infostr;
+    infostr << "This version of salmon does not support FMD indexing.";
+    throw std::invalid_argument(infostr.str());
+  } break;
+  case SalmonIndexType::QUASI: {
+    // True if we have a 64-bit SA index, false otherwise
+    bool largeIndex = sidx->is64BitQuasi();
+    bool perfectHashIndex = sidx->isPerfectHashQuasi();
+    for (size_t i = 0; i < numThreads; ++i) {
+      // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
+      // change value before the lambda below is evaluated --- crazy!
+      if (largeIndex) {
+        if (perfectHashIndex) { // Perfect Hash
+          if (isPairedEnd) {processFunctor(i, pairedParserPtr, sidx->quasiIndexPerfectHash64());}
+          else if (isSingleEnd) {processFunctor(i, singleParserPtr, sidx->quasiIndexPerfectHash64());
           }
-        } else {
-          if (perfectHashIndex) { // Perfect Hash
-            if (salmonOpts.qmFileName != "" and i == 0) {
-              rapmap::utils::writeSAMHeader(*(sidx->quasiIndexPerfectHash32()),
-                                            salmonOpts.qmLog);
-            }
-            auto threadFun = [&, i]() -> void {
-              processReadsQuasi<RapMapSAIndex<int32_t, PerfectHash<int32_t>>>(
-                  pairedParserPtr.get(), readExp, rl, structureVec[i],
-                  numObservedFragments, numAssignedFragments, numValidHits,
-                  upperBoundHits, sidx->quasiIndexPerfectHash32(), transcripts,
-                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
-                  /**
-                   * NOTE : test new el model in future
-                   * observedEffectiveLengths[i],
-                   **/
-                  memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
-                  burnedIn, writeToCache);
-            };
-            threads.emplace_back(threadFun);
-          } else { // Dense Hash
-            if (salmonOpts.qmFileName != "" and i == 0) {
-              rapmap::utils::writeSAMHeader(*(sidx->quasiIndex32()),
-                                            salmonOpts.qmLog);
-            }
-            auto threadFun = [&, i]() -> void {
-              processReadsQuasi<RapMapSAIndex<int32_t, DenseHash<int32_t>>>(
-                  pairedParserPtr.get(), readExp, rl, structureVec[i],
-                  numObservedFragments, numAssignedFragments, numValidHits,
-                  upperBoundHits, sidx->quasiIndex32(), transcripts, fmCalc,
-                  clusterForest, fragLengthDist, observedBiasParams[i],
-                  /**
-                   * NOTE : test new el model in future
-                   * observedEffectiveLengths[i],
-                   **/
-                  memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
-                  burnedIn, writeToCache);
-            };
-            threads.emplace_back(threadFun);
-          }
+        } else { // Dense Hash
+          if (isPairedEnd) {processFunctor(i, pairedParserPtr, sidx->quasiIndex64());}
+          else if (isSingleEnd) {processFunctor(i, singleParserPtr, sidx->quasiIndex64());}
+        }
+      } else {
+        if (perfectHashIndex) { // Perfect Hash
+          if (isPairedEnd) { processFunctor(i, pairedParserPtr, sidx->quasiIndexPerfectHash32()); }
+          else if (isSingleEnd) { processFunctor(i, singleParserPtr, sidx->quasiIndexPerfectHash32()); }
+        } else { // Dense Hash
+          if (isPairedEnd) { processFunctor(i, pairedParserPtr, sidx->quasiIndex32()); }
+          else if (isSingleEnd) { processFunctor(i, singleParserPtr, sidx->quasiIndex32()); }
+        }
+      } // End spawn current thread
 
-        } // End spawn current thread
-
-      } // End spawn all threads
-    }   // End Quasi index
+    } // End spawn all threads
+  }   // End Quasi index
     break;
-    } // end switch
+  } // end switch
 
     for (auto& t : threads) {
       t.join();
@@ -2176,261 +2158,7 @@ void processReadLibrary(
         posBiasesRC[i].finalize();
       }
     }
-
     /** END GC-fragment bias **/
-  } // ------ Single-end --------
-  else if (rl.format().type == ReadType::SINGLE_END) {
-
-    uint32_t numParsingThreads{1};
-    // HACK!
-    if (rl.unmated().size() > 1 and numThreads > 8) {
-      numParsingThreads = 2;
-    }
-    singleParserPtr.reset(new single_parser(rl.unmated(), numThreads,
-                                            numParsingThreads, miniBatchSize));
-    singleParserPtr->start();
-    switch (indexType) {
-    case SalmonIndexType::FMD: {
-      for (size_t i = 0; i < numThreads; ++i) {
-        // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
-        // change value before the lambda below is evaluated --- crazy!
-        auto threadFun = [&, i]() -> void {
-          processReadsMEM<single_parser, TranscriptHitList>(
-              singleParserPtr.get(), readExp, rl, structureVec[i],
-              numObservedFragments, numAssignedFragments, numValidHits,
-              upperBoundHits, sidx, transcripts, fmCalc, clusterForest,
-              fragLengthDist, observedBiasParams[i],
-              /**
-               * NOTE : test new el model in future
-               * observedEffectiveLengths[i],
-               **/
-              memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
-              burnedIn, writeToCache);
-        };
-        threads.emplace_back(threadFun);
-      }
-    } break;
-
-    case SalmonIndexType::QUASI: {
-      // True if we have a 64-bit SA index, false otherwise
-      bool largeIndex = sidx->is64BitQuasi();
-      bool perfectHashIndex = sidx->isPerfectHashQuasi();
-      for (size_t i = 0; i < numThreads; ++i) {
-
-        // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
-        // change value before the lambda below is evaluated --- crazy!
-        if (largeIndex) {
-          if (perfectHashIndex) { // Perfect Hash
-            if (salmonOpts.qmFileName != "" and i == 0) {
-              rapmap::utils::writeSAMHeader(*(sidx->quasiIndexPerfectHash64()),
-                                            salmonOpts.qmLog);
-            }
-            auto threadFun = [&, i]() -> void {
-              processReadsQuasi<RapMapSAIndex<int64_t, PerfectHash<int64_t>>>(
-                  singleParserPtr.get(), readExp, rl, structureVec[i],
-                  numObservedFragments, numAssignedFragments, numValidHits,
-                  upperBoundHits, sidx->quasiIndexPerfectHash64(), transcripts,
-                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
-                  /**
-                   * NOTE : test new el model in future
-                   * observedEffectiveLengths[i],
-                   **/
-                  memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
-                  burnedIn, writeToCache);
-            };
-            threads.emplace_back(threadFun);
-          } else { // Dense Hash
-            if (salmonOpts.qmFileName != "" and i == 0) {
-              rapmap::utils::writeSAMHeader(*(sidx->quasiIndex64()),
-                                            salmonOpts.qmLog);
-            }
-
-            auto threadFun = [&, i]() -> void {
-              processReadsQuasi<RapMapSAIndex<int64_t, DenseHash<int64_t>>>(
-                  singleParserPtr.get(), readExp, rl, structureVec[i],
-                  numObservedFragments, numAssignedFragments, numValidHits,
-                  upperBoundHits, sidx->quasiIndex64(), transcripts, fmCalc,
-                  clusterForest, fragLengthDist, observedBiasParams[i],
-                  /**
-                   * NOTE : test new el model in future
-                   * observedEffectiveLengths[i],
-                   **/
-                  memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
-                  burnedIn, writeToCache);
-            };
-            threads.emplace_back(threadFun);
-          }
-        } else {
-          if (perfectHashIndex) { // Perfect Hash
-            if (salmonOpts.qmFileName != "" and i == 0) {
-              rapmap::utils::writeSAMHeader(*(sidx->quasiIndexPerfectHash32()),
-                                            salmonOpts.qmLog);
-            }
-
-            auto threadFun = [&, i]() -> void {
-              processReadsQuasi<RapMapSAIndex<int32_t, PerfectHash<int32_t>>>(
-                  singleParserPtr.get(), readExp, rl, structureVec[i],
-                  numObservedFragments, numAssignedFragments, numValidHits,
-                  upperBoundHits, sidx->quasiIndexPerfectHash32(), transcripts,
-                  fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
-                  /**
-                   * NOTE : test new el model in future
-                   * observedEffectiveLengths[i],
-                   **/
-                  memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
-                  burnedIn, writeToCache);
-            };
-            threads.emplace_back(threadFun);
-          } else { // Dense Hash
-            if (salmonOpts.qmFileName != "" and i == 0) {
-              rapmap::utils::writeSAMHeader(*(sidx->quasiIndex32()),
-                                            salmonOpts.qmLog);
-            }
-
-            auto threadFun = [&, i]() -> void {
-              processReadsQuasi<RapMapSAIndex<int32_t, DenseHash<int32_t>>>(
-                  singleParserPtr.get(), readExp, rl, structureVec[i],
-                  numObservedFragments, numAssignedFragments, numValidHits,
-                  upperBoundHits, sidx->quasiIndex32(), transcripts, fmCalc,
-                  clusterForest, fragLengthDist, observedBiasParams[i],
-                  /**
-                   * NOTE : test new el model in future
-                   * observedEffectiveLengths[i],
-                   **/
-                  memOptions, salmonOpts, coverageThresh, iomutex, initialRound,
-                  burnedIn, writeToCache);
-            };
-            threads.emplace_back(threadFun);
-          }
-
-        } // End spawn current thread
-
-      } // End spawn all threads
-    }   // End Quasi index
-    break;
-    }
-    for (auto& t : threads) {
-      t.join();
-    }
-
-    // If we don't have a sufficient number of assigned fragments, then
-    // complain here!
-    if (numAssignedFragments < salmonOpts.minRequiredFrags) {
-      readExp.setNumObservedFragments(numObservedFragments);
-      readExp.numAssignedFragmentsAtomic().store(numAssignedFragments);
-      double mappingRate = numAssignedFragments.load() /
-                           static_cast<double>(numObservedFragments.load());
-      readExp.setEffectiveMappingRate(mappingRate);
-      throw InsufficientAssignedFragments(numAssignedFragments.load(),
-                                          salmonOpts.minRequiredFrags);
-    }
-
-    /** This model doesn't really make sense for SE data
-    EffectiveLengthStats eel(numTxp);
-    for (auto& els : observedEffectiveLengths) {
-      eel.merge(els);
-    }
-    auto& transcripts = readExp.transcripts();
-    for (size_t tid = 0; tid < numTxp; ++tid) {
-      auto el = eel.getExpectedEffectiveLength(tid);
-      if (el >= 1.0) {
-    transcripts[tid].setCachedLogEffectiveLength(std::log(el)); }
-    }
-    **/
-
-    /** GC-fragment bias **/
-    // Set the global distribution based on the sum of local
-    // distributions.
-    double gcFracFwd{0.0};
-    double globalMass{salmon::math::LOG_0};
-    double globalFwdMass{salmon::math::LOG_0};
-    auto& globalGCMass = readExp.observedGC();
-    for (auto& gcp : observedBiasParams) {
-      auto& gcm = gcp.observedGCMass;
-      globalGCMass.combineCounts(gcm);
-
-      auto& fw =
-          readExp.readBiasModelObserved(salmon::utils::Direction::FORWARD);
-      auto& rc = readExp.readBiasModelObserved(
-          salmon::utils::Direction::REVERSE_COMPLEMENT);
-
-      auto& fwloc = gcp.seqBiasModelFW;
-      auto& rcloc = gcp.seqBiasModelRC;
-      fw.combineCounts(fwloc);
-      rc.combineCounts(rcloc);
-
-      /**
-       * positional biases
-       **/
-      auto& posBiasesFW = readExp.posBias(salmon::utils::Direction::FORWARD);
-      auto& posBiasesRC =
-          readExp.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
-      for (size_t i = 0; i < posBiasesFW.size(); ++i) {
-        posBiasesFW[i].combine(gcp.posBiasFW[i]);
-        posBiasesRC[i].combine(gcp.posBiasRC[i]);
-      }
-
-      globalMass = salmon::math::logAdd(globalMass, gcp.massFwd);
-      globalMass = salmon::math::logAdd(globalMass, gcp.massRC);
-      globalFwdMass = salmon::math::logAdd(globalFwdMass, gcp.massFwd);
-    }
-    globalGCMass.normalize();
-
-    if (globalMass != salmon::math::LOG_0) {
-      if (globalFwdMass != salmon::math::LOG_0) {
-        gcFracFwd = std::exp(globalFwdMass - globalMass);
-      }
-      readExp.setGCFracForward(gcFracFwd);
-    }
-
-    // finalize the positional biases
-    if (salmonOpts.posBiasCorrect) {
-      auto& posBiasesFW = readExp.posBias(salmon::utils::Direction::FORWARD);
-      auto& posBiasesRC =
-          readExp.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
-      for (size_t i = 0; i < posBiasesFW.size(); ++i) {
-        posBiasesFW[i].finalize();
-        posBiasesRC[i].finalize();
-      }
-    }
-
-    /** END GC-fragment bias **/
-
-    /* OLD SINGLE END BIAS
-    // Set the global distribution based on the sum of local
-    // distributions.
-    for (auto& gcp : observedBiasParams) {
-      auto& fw =
-    readExp.readBiasModelObserved(salmon::utils::Direction::FORWARD); auto& rc =
-          readExp.readBiasModelObserved(salmon::utils::Direction::REVERSE_COMPLEMENT);
-
-      auto& fwloc = gcp.seqBiasModelFW;
-      auto& rcloc = gcp.seqBiasModelRC;
-      fw.combineCounts(fwloc);
-      rc.combineCounts(rcloc);
-
-      // positional biases
-      auto& posBiasesFW = readExp.posBias(salmon::utils::Direction::FORWARD);
-      auto& posBiasesRC =
-          readExp.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
-      for (size_t i = 0; i < posBiasesFW.size(); ++i) {
-        posBiasesFW[i].combine(gcp.posBiasFW[i]);
-        posBiasesRC[i].combine(gcp.posBiasRC[i]);
-      }
-    }
-    // finalize the positional biases
-    if (salmonOpts.posBiasCorrect) {
-      auto& posBiasesFW = readExp.posBias(salmon::utils::Direction::FORWARD);
-      auto& posBiasesRC =
-          readExp.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
-      for (size_t i = 0; i < posBiasesFW.size(); ++i) {
-        posBiasesFW[i].finalize();
-        posBiasesRC[i].finalize();
-      }
-    }
-    END OLD SINGLE-END BIAS */
-
-  } // ------ END Single-end --------
 }
 
 /**
@@ -2442,7 +2170,7 @@ void processReadLibrary(
  */
 template <typename AlnT>
 void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
-                     mem_opt_t* memOptions, SalmonOpts& salmonOpts,
+                     SalmonOpts& salmonOpts,
                      double coverageThresh, uint32_t numQuantThreads) {
 
   bool burnedIn = (salmonOpts.numBurninFrags == 0);
@@ -2530,7 +2258,7 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
       processReadLibrary<AlnT>(experiment, rl, sidx, transcripts, clusterForest,
                                numObservedFragments, totalAssignedFragments,
                                upperBoundHits, initialRound, burnedIn, fmCalc,
-                               fragLengthDist, memOptions, salmonOpts,
+                               fragLengthDist, salmonOpts,
                                coverageThresh, greedyChain, ioMutex,
                                numQuantThreads, groupVec, writeToCache);
 
@@ -2641,14 +2369,9 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
     experiment.setNumObservedFragments(numObservedFragments -
                                        prevNumObservedFragments);
     experiment.setUpperBoundHits(upperBoundHits.load());
-    if (salmonOpts.useQuasi or salmonOpts.allowOrphans) {
-      double mappingRate = totalAssignedFragments.load() /
-                           static_cast<double>(numObservedFragments.load());
-      experiment.setEffectiveMappingRate(mappingRate);
-    } else { // otherwise, we're using FMD-based mapping and are not allowing
-             // orphans.
-      experiment.setEffectiveMappingRate(upperBoundMappingRate);
-    }
+    double mappingRate = totalAssignedFragments.load() /
+      static_cast<double>(numObservedFragments.load());
+    experiment.setEffectiveMappingRate(mappingRate);
   }
 
   jointLog->info("Mapping rate = {}\%\n",
@@ -2666,8 +2389,6 @@ int salmonQuantify(int argc, char* argv[]) {
   int32_t numBiasSamples{0};
 
   SalmonOpts sopt;
-  mem_opt_t* memOptions = mem_opt_init();
-  memOptions->split_factor = 1.5;
 
   sopt.numThreads = std::thread::hardware_concurrency();
 
@@ -2677,16 +2398,15 @@ int salmonQuantify(int argc, char* argv[]) {
   auto basicOpt = pogen.getBasicOptions(sopt);
   auto mapSpecOpt = pogen.getMappingSpecificOptions(sopt);
   auto advancedOpt = pogen.getAdvancedOptions(numBiasSamples, sopt);
-  auto fmdOpt = pogen.getFMDOptions(memOptions, sopt);
   auto hiddenOpt = pogen.getHiddenOptions(sopt);
   auto testingOpt = pogen.getTestingOptions(sopt);
   auto deprecatedOpt = pogen.getDeprecatedOptions(sopt);
 
   po::options_description all("salmon quant options");
-  all.add(inputOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt).add(fmdOpt).add(testingOpt).add(hiddenOpt).add(deprecatedOpt);
+  all.add(inputOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt)./*add(fmdOpt).*/add(testingOpt).add(hiddenOpt).add(deprecatedOpt);
 
   po::options_description visible("salmon quant options");
-  visible.add(inputOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt).add(fmdOpt);
+  visible.add(inputOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt)/*.add(fmdOpt)*/;
 
   po::variables_map vm;
   try {
@@ -2781,18 +2501,9 @@ transcript abundance from RNA-seq reads
     try {
       switch (indexType) {
       case SalmonIndexType::FMD: {
-        /** Currently no seq-specific bias correction with
-         *  FMD index.
-         */
-        if (sopt.biasCorrect or sopt.gcBiasCorrect) {
-          sopt.biasCorrect = false;
-          sopt.gcBiasCorrect = false;
-          jointLog->warn(
-              "Sequence-specific or fragment GC bias correction require "
-              "use of the quasi-index. Disabling all bias correction");
-        }
-        quantifyLibrary<SMEMAlignment>(experiment, greedyChain, memOptions,
-                                       sopt, sopt.coverageThresh, sopt.numThreads);
+        fmt::MemoryWriter infostr;
+        infostr << "This version of salmon does not support FMD indexing.";
+        throw std::invalid_argument(infostr.str());
       } break;
       case SalmonIndexType::QUASI: {
         // We can only do fragment GC bias correction, for the time being, with
@@ -2811,7 +2522,7 @@ transcript abundance from RNA-seq reads
 
         sopt.allowOrphans = !sopt.discardOrphansQuasi;
         sopt.useQuasi = true;
-        quantifyLibrary<QuasiAlignment>(experiment, greedyChain, memOptions,
+        quantifyLibrary<QuasiAlignment>(experiment, greedyChain, 
                                         sopt, sopt.coverageThresh, sopt.numThreads);
       } break;
       }
@@ -2853,7 +2564,6 @@ transcript abundance from RNA-seq reads
     }
     jointLog->info("Finished optimizer");
 
-    free(memOptions);
     size_t tnum{0};
 
     jointLog->info("writing output \n");

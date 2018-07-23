@@ -825,8 +825,6 @@ int salmonBarcoding(int argc, char* argv[]) {
   //vector<string> mate2ReadFiles;
 
   SalmonOpts sopt;
-  mem_opt_t* memOptions = mem_opt_init();
-  memOptions->split_factor = 1.5;
   auto tot_cores = std::thread::hardware_concurrency();
   sopt.numThreads = std::max(1, static_cast<int>(tot_cores/4.0));
 
@@ -836,7 +834,6 @@ int salmonBarcoding(int argc, char* argv[]) {
   auto basicOpt = pogen.getBasicOptions(sopt);
   auto mapSpecOpt = pogen.getMappingSpecificOptions(sopt);
   auto advancedOpt = pogen.getAdvancedOptions(numBiasSamples, sopt);
-  auto fmdOpt = pogen.getFMDOptions(memOptions, sopt);
   auto hiddenOpt = pogen.getHiddenOptions(sopt);
   auto testingOpt = pogen.getTestingOptions(sopt);
   auto deprecatedOpt = pogen.getDeprecatedOptions(sopt);
@@ -844,7 +841,7 @@ int salmonBarcoding(int argc, char* argv[]) {
   auto alevinDevsOpt = pogen.getAlevinDevsOptions();
 
   po::options_description all("alevin options");
-  all.add(inputOpt).add(alevinBasicOpt).add(alevinDevsOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt).add(fmdOpt).add(testingOpt).add(hiddenOpt).add(deprecatedOpt);
+  all.add(inputOpt).add(alevinBasicOpt).add(alevinDevsOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt)/*.add(fmdOpt)*/.add(testingOpt).add(hiddenOpt).add(deprecatedOpt);
 
   po::options_description visible("alevin options");
   visible.add(inputOpt).add(alevinBasicOpt).add(basicOpt);

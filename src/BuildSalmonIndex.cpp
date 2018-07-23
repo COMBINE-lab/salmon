@@ -39,12 +39,6 @@
 #include "spdlog/fmt/ostr.h"
 #include "spdlog/spdlog.h"
 
-using my_mer = jellyfish::mer_dna_ns::mer_base_static<uint64_t, 1>;
-
-extern "C" {
-int bwa_index(int argc, char* argv[]);
-}
-
 // Cool way to do this from
 // http://stackoverflow.com/questions/108318/whats-the-simplest-way-to-test-whether-a-number-is-a-power-of-2-in-c
 bool isPowerOfTwo(uint32_t n) { return (n > 0 and (n & (n - 1)) == 0); }
@@ -229,19 +223,8 @@ Creates a salmon index.
 
       sidx.reset(new SalmonIndex(jointLog, SalmonIndexType::QUASI));
     } else {
-      // Build the FMD-based index
-      bfs::path outputPrefix = indexDirectory / "bwaidx";
-      std::cerr << "outputPrefix = " << outputPrefix << "\n";
-      argVec->push_back("index");
-      argVec->push_back("-s");
-      optWriter << vm["sasamp"].as<uint32_t>();
-      argVec->push_back(optWriter.str());
-      argVec->push_back("-p");
-      argVec->push_back(outputPrefix.string());
-      argVec->push_back(transcriptFile);
-      sidx.reset(new SalmonIndex(jointLog, SalmonIndexType::FMD));
-      // Disable the auxiliary k-mer index for now
-      auxKmerLen = 0;
+      jointLog->error("This version of salmon does not support FMD indexing.");
+      return 1;
     }
 
     jointLog->info("building index");

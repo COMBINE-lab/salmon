@@ -4,7 +4,7 @@ ${GAT_SOURCE_DIR}/include/eigen3
 ${GAT_SOURCE_DIR}/external
 ${GAT_SOURCE_DIR}/external/cereal/include
 ${GAT_SOURCE_DIR}/external/install/include
-${GAT_SOURCE_DIR}/external/install/include/bwa
+#${GAT_SOURCE_DIR}/external/install/include/bwa
 ${ZLIB_INCLUDE_DIR}
 ${TBB_INCLUDE_DIRS}
 ${Boost_INCLUDE_DIRS}
@@ -13,10 +13,6 @@ ${GAT_SOURCE_DIR}/external/install/include/rapmap/digestpp
 )
 
 set ( SALMON_MAIN_SRCS
-QSufSort.c
-is.c
-bwt_gen.c
-bwtindex.c
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapFileSystem.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndexer.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndex.cpp
@@ -60,7 +56,6 @@ ${GAT_SOURCE_DIR}/src/jellyfish/mer_dna.cc
 xxhash.c
 TranscriptGroup.cpp
 EffectiveLengthStats.cpp
-BWAUtils.cpp
 LibraryFormat.cpp
 GenomicFeature.cpp
 VersionChecker.cpp
@@ -200,7 +195,7 @@ target_link_libraries(salmon
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
     ${SUFFARRAY64_LIB}
-    ${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
+    #${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
     m
     ${LIBLZMA_LIBRARIES}
     ${BZIP2_LIBRARIES}
@@ -224,7 +219,7 @@ target_link_libraries(unitTests
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
     ${SUFFARRAY64_LIB}
-    ${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
+    #${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
     m
     ${LIBLZMA_LIBRARIES}
     ${BZIP2_LIBRARIES}
@@ -265,8 +260,8 @@ add_dependencies(salmon_core libstadenio)
 add_dependencies(salmon libstadenio)
 add_dependencies(salmon_core libspdlog)
 add_dependencies(salmon libspdlog)
-add_dependencies(salmon_core libbwa)
-add_dependencies(salmon libbwa)
+#add_dependencies(salmon_core libbwa)
+#add_dependencies(salmon libbwa)
 add_dependencies(salmon_core libgff)
 add_dependencies(salmon libgff)
 add_dependencies(salmon_core libdivsufsort)
@@ -353,5 +348,5 @@ install(
 
 include(InstallRequiredSystemLibraries)
 add_test( NAME unit_tests COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${CMAKE_INSTALL_PREFIX} -P ${GAT_SOURCE_DIR}/cmake/UnitTests.cmake )
-add_test( NAME salmon_read_test_fmd COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/TestSalmonFMD.cmake )
+#add_test( NAME salmon_read_test_fmd COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/TestSalmonFMD.cmake )
 add_test( NAME salmon_read_test_quasi COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/TestSalmonQuasi.cmake )
