@@ -11,7 +11,7 @@ matrix:
           sources:
               - sourceline: 'ppa:mhier/libboost-latest'
               - ubuntu-toolchain-r-test
-          packages: ['g++-7', 'gcc-7', 'cmake', 'cmake-data', 'zlib1g-dev', 'libbz2-dev', 'boost1.67']
+          packages: ['g++-7', 'gcc-7', 'zlib1g-dev', 'libbz2-dev', 'boost1.67']
 
 install:
     - export CXX="g++-7"
@@ -22,6 +22,12 @@ install:
     - export PATH=$PWD/latest-gcc-symlinks:$PATH
     - export AR=gcc-ar-7
     - export RANLIB=gcc-ranlib-7
+    - DEPS_DIR="${TRAVIS_BUILD_DIR}/deps"
+    - mkdir ${DEPS_DIR} && cd ${DEPS_DIR}
+    - travis_retry wget --no-check-certificate https://cmake.org/files/v3.12/cmake-3.12.0-Linux-x86_64.tar.gz
+    - tar -xzvf cmake-3.12.0-Linux-x86_64.tar.gz > /dev/null
+    - mv cmake-3.12.0-Linux-x86_64 cmake-install
+    - PATH=${DEPS_DIR}/cmake-install:${DEPS_DIR}/cmake-install/bin:$PATH
 
 script: 
     - mkdir build 
