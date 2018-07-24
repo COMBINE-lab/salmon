@@ -1975,21 +1975,19 @@ void processReadLibrary(
   // generic lambda.
   /*
     auto processFunctor = [&](size_t i, auto& parserPtr, auto* index) {
-                            if (salmonOpts.qmFileName != "" and i == 0) {
-                              rapmap::utils::writeSAMHeader(*index,
-                                                            salmonOpts.qmLog);
-                            }
-                            auto threadFun = [&, i]() -> void {
-                                               processReadsQuasi(
-                                                                 parserPtr.get(), readExp, rl, structureVec[i],
-                                                                 numObservedFragments, numAssignedFragments, numValidHits,
-                                                                 upperBoundHits, index, transcripts,
-                                                                 fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
-                                                                 salmonOpts, coverageThresh, iomutex, initialRound,
-                                                                 burnedIn, writeToCache);
-                                             };
-                            threads.emplace_back(threadFun);
-                          };
+      if (salmonOpts.qmFileName != "" and i == 0) {
+        rapmap::utils::writeSAMHeader(*index, salmonOpts.qmLog);
+      }
+      auto threadFun = [&, i]() -> void {
+                          processReadsQuasi(parserPtr.get(), readExp, rl, structureVec[i],
+                                            numObservedFragments, numAssignedFragments, numValidHits,
+                                            upperBoundHits, index, transcripts,
+                                            fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
+                                            salmonOpts, coverageThresh, iomutex, initialRound,
+                                            burnedIn, writeToCache);
+                        };
+      threads.emplace_back(threadFun);
+   };
   */
 
   ProcessFunctor processFunctor(readExp, rl, structureVec,
