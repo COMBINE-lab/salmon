@@ -36,6 +36,8 @@ script:
     - cmake -DFETCH_BOOST=TRUE -DNO_RTM=TRUE .. 
     - travis_wait 45 make 
     - travis_wait make install
+    - LD_LIBRARY_PATH=${TRAVIS_BUILD_DIR}/lib:$LD_LIBRARY_PATH
+    - ./src/salmon -h
     - travis_wait make test VERBOSE=1
 
 after_success: 
@@ -43,7 +45,9 @@ after_success:
     - ./scripts/push-binary.sh
       
 after_failure:
-    - cat $TRAVIS_BUILD_DIR/build/Testing/Temporary/LastTest.log
+    - echo "Failure"
+    - ls -laR $TRAVIS_BUILD_DIR/build/Testing/
+    - cat $TRAVIS_BUILD_DIR/build/Testing/Temporary/*
 
 #whitelist
 #sudo: required
