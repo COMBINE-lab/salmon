@@ -137,7 +137,6 @@ namespace alevin{
   using TranscriptID = uint32_t;
   using TranscriptIDVector = std::vector<TranscriptID>;
   using KmerIDMap = std::vector<TranscriptIDVector>;
-  using my_mer = jellyfish::mer_dna_ns::mer_base_static<uint64_t, 1>;
 
   constexpr uint32_t miniBatchSize{5000};
 
@@ -805,7 +804,7 @@ void processReadsQuasi(
             bool isUmiIdxOk = umiIdx.fromStr(umi);
 
             if(not isUmiIdxOk){
-              salmonOpts.jointLog->error("umi indexing of jellyfish failing.\n"
+              salmonOpts.jointLog->error("UMI indexing failed (perhaps reads were shorter than UMI + barcode?).\n"
                                          "Please report on github");
               exit(1);
             }

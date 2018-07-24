@@ -1,14 +1,14 @@
 #ifndef __ALEVIN_KMER_HPP__
 #define __ALEVIN_KMER_HPP__
 
-#include "jellyfish/mer_dna.hpp"
+#include "rapmap/Kmer.hpp"
 
 //code taken from
 //https://raw.githubusercontent.com/COMBINE-lab/pufferfish/a51c41308142cdd0186724b0ca2bf773f5882072/include/CanonicalKmer.hpp
 
 namespace alevin {
   namespace kmer {
-    using Mer = jellyfish::mer_dna_ns::mer_base_static<uint64_t, 2>;
+    using Mer = combinelib::kmers::Kmer<32, 2>;
 
     // NO_MATCH => two k-mers k1, and k2 are distinct such that k1 != k2 and rc(k1)
     // != k2
@@ -17,7 +17,7 @@ namespace alevin {
 
 
     /**
-     * This class wraps a pair of jellifish k-mers
+     * This class wraps a kmer class
      * for efficient umi handling
      */
     class AlvKmer {
@@ -39,6 +39,11 @@ namespace alevin {
       static inline int k() { return Mer::k(); }
 
       inline bool fromStr(const std::string& s) {
+        return umi_.fromCharsSafe(s);
+        // NOTE : @Avi -- what happens below if s is of
+        // the appropriate length, but contains an 'N'
+        // character?
+        /*
         auto k = Mer::k();
         if (s.length() < k) {
           return false;
@@ -47,6 +52,7 @@ namespace alevin {
           umi_.shift_right(s[i]);
         }
         return true;
+        */
       }
 
       inline void fromNum(uint64_t w) {
@@ -67,7 +73,8 @@ namespace alevin {
       }
 
       inline std::string to_str() const {
-        std::string s = umi_.to_str();
+        //std::string s = umi_.to_str();
+        std::string s = umi_.toStr();
         std::reverse(s.begin(), s.end());
         return s;
       }

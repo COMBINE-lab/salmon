@@ -47,9 +47,6 @@
 #include <cstring>
 #include <unistd.h>
 
-// Jellyfish 2 include
-#include "jellyfish/mer_dna.hpp"
-
 // Boost Includes
 #include <boost/container/flat_map.hpp>
 #include <boost/dynamic_bitset/dynamic_bitset.hpp>
@@ -133,7 +130,6 @@ using single_parser = fastx_parser::FastxParser<fastx_parser::ReadSeq>;
 using TranscriptID = uint32_t;
 using TranscriptIDVector = std::vector<TranscriptID>;
 using KmerIDMap = std::vector<TranscriptIDVector>;
-using my_mer = jellyfish::mer_dna_ns::mer_base_static<uint64_t, 1>;
 
 constexpr uint32_t miniBatchSize{5000};
 
@@ -1429,9 +1425,8 @@ void processReadsQuasi(
 
 // SINGLE END
 
-// To use the parser in the following, we get "jobs" until none is
-// available. A job behaves like a pointer to the type
-// jellyfish::sequence_list (see whole_sequence_parser.hpp).
+// To use the parser in the following, we get ReadGroups until none is
+// available.
 template <typename RapMapIndexT>
 void processReadsQuasi(
     single_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
