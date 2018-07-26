@@ -4,10 +4,26 @@ enable_testing()
 
 project (Salmon)
 
-set(CPACK_PACKAGE_VERSION "0.11.0")
-set(CPACK_PACKAGE_VERSION_MAJOR "0")
-set(CPACK_PACKAGE_VERSION_MINOR "11")
-set(CPACK_PACKAGE_VERSION_PATCH "0")
+# auto-populate version:
+# from https://stackoverflow.com/questions/47066115/cmake-get-version-from-multi-line-text-file
+file(READ "current_version.txt" ver)
+
+string(REGEX MATCH "VERSION_MAJOR ([0-9]*)" _ ${ver})
+set(ver_major ${CMAKE_MATCH_1})
+
+string(REGEX MATCH "VERSION_MINOR ([0-9]*)" _ ${ver})
+set(ver_minor ${CMAKE_MATCH_1})
+
+string(REGEX MATCH "VERSION_PATCH ([0-9]*)" _ ${ver})
+set(ver_patch ${CMAKE_MATCH_1})
+
+set(CPACK_PACKAGE_VERSION_MAJOR ${ver_major})
+set(CPACK_PACKAGE_VERSION_MINOR ${ver_minor})
+set(CPACK_PACKAGE_VERSION_PATCH ${ver_patch})
+
+set(CPACK_PACKAGE_VERSION "${ver_major}.${ver_minor}.${ver_patch}")
+message("version: ${CPACK_PACKAGE_VERSION}")
+
 set(PROJECT_VERSION ${CPACK_PACKAGE_VERSION})
 set(CPACK_GENERATOR "TGZ")
 set(CPACK_SOURCE_GENERATOR "TGZ")
