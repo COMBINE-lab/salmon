@@ -275,14 +275,6 @@ namespace alevin {
       std::vector<spdlog::sink_ptr> sinks{consoleSink, fileSink};
       aopt.jointLog = spdlog::create("alevinLog", std::begin(sinks), std::end(sinks));
 
-      uint32_t barEnd{0}, barcodeLength{0}, umiLength{0};
-
-      if(vm.count("end") and vm.count("barcodeLength") and vm.count("umiLength")){
-        barEnd = vm["end"].as<uint32_t>();
-        barcodeLength = vm["barcodeLength"].as<uint32_t>();
-        umiLength = vm["umiLength"].as<uint32_t>();
-      }
-
       aopt.quiet = vm["quiet"].as<bool>();
       aopt.doEM = vm["em"].as<bool>();
       aopt.useCorrelation = vm["useCorrelation"].as<bool>();
@@ -316,37 +308,70 @@ namespace alevin {
         aopt.numThreads = vm["threads"].as<uint32_t>();
       }  // things which needs to be updated for salmonOpts
 
-      //validate customized options for custom protocol
-      if (barEnd or barcodeLength or umiLength
-          or !aopt.protocol.barcodeLength or !aopt.protocol.umiLength){
-        if(!barEnd or !barcodeLength or !umiLength){
-          aopt.jointLog->error("\nERROR: if you are using any one"
-                               " of (end, umilength, barcodelength) flag\n"
-                               "you have to provide all of them explicitly.\n"
-                               "You can also use pre-defined single-cell protocols."
-                               "Exiting Now.");
+      // validate customized options for custom protocol
+      // NOTE : @k3yavi, I tried to clean this up a little bit
+      // because the previous logic was a little complicated.
+      // Please look over the below.
+      bool haveCustomEnd = vm.count("end");
+      bool haveCustomBC= vm.count("barcodeLength");
+      bool haveCustomUMI = vm.count("umiLength");
+
+      bool allCustom = (haveCustomEnd and haveCustomBC and haveCustomUMI);
+      bool noCustom = !(haveCustomEnd or haveCustomBC or haveCustomUMI);
+
+      // These are all or nothing.  Either the user must provide all 3
+      // or none of these options.
+      if (!(noCustom or allCustom)) {
+        aopt.jointLog->error("If you are using any one"
+                             " of (end, umilength, barcodelength) flag\n"
+                             "you have to provide all of them explicitly.\n"
+                             "You can also use pre-defined single-cell protocols."
+                             "Exiting Now.");
+        return false;
+      }
+
+      if (allCustom) {
+        uint32_t barEnd = vm["end"].as<uint32_t>();
+        uint32_t barcodeLength = vm["barcodeLength"].as<uint32_t>();
+        uint32_t umiLength = vm["umiLength"].as<uint32_t>();
+
+        // validate that BC and UMI lengths are OK
+        uint32_t maxBC{60};
+        uint32_t maxUMI{12};
+        if (barcodeLength < 1 or barcodeLength > maxBC) {
+          aopt.jointLog->error("Barcode length ({}) was not in the required length range [1, {}].\n"
+                               "Exiting now", barcodeLength, maxBC);
+          return false;
+        }
+        if (umiLength < 1 or umiLength > maxUMI) {
+          aopt.jointLog->error("UMI length ({}) was not in the required length range [1, {}].\n"
+                               "Exiting now", umiLength, maxUMI);
           return false;
         }
 
-        aopt.protocol.barcodeLength = barcodeLength;
-        aopt.protocol.umiLength = umiLength;
+        // validate that protocol end is OK and set it
         if (barEnd == 3) {
           aopt.protocol.end = BarcodeEnd::THREE;
         }
         else if (barEnd == 5) {
           aopt.protocol.end = BarcodeEnd::FIVE;
-        }
-        else{
+        } else{
           aopt.jointLog->error("\nERROR: Wrong value for Barcode-end of read -> {}"
                                "\nExiting now: please provide `5` for barcodes "
                                "starting at 5' end or `3`` for barcode starting "
                                "at 3' end.\n", barEnd);
           return false;
         }
-        if (barcodeLength > 60 or umiLength > 12){
-          aopt.jointLog->error("\nERROR: umiLength/barcodeLength too long\n"
-                               "Exiting Now;");
-          return false;
+
+        // If all validation passed, then set the appropriate variables.
+        aopt.protocol.barcodeLength = barcodeLength;
+        aopt.protocol.umiLength = umiLength;
+        // Since we passed a custom UMI length and need to update the value here.
+        if (umiLength != alevin::types::AlevinUMIKmer::k()) {
+          alevin::types::AlevinUMIKmer::k(umiLength);
+          aopt.jointLog->info("A custom protocol (END, BC length, UMI length) = ({}, {}, {}) "
+                              "is being used.  Updating UMI k-mer length accordingly.",
+                              barEnd, barcodeLength, umiLength);
         }
       }
 
