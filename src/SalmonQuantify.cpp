@@ -2399,10 +2399,10 @@ int salmonQuantify(int argc, char* argv[]) {
   auto deprecatedOpt = pogen.getDeprecatedOptions(sopt);
 
   po::options_description all("salmon quant options");
-  all.add(inputOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt)./*add(fmdOpt).*/add(testingOpt).add(hiddenOpt).add(deprecatedOpt);
+  all.add(inputOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt).add(testingOpt).add(hiddenOpt).add(deprecatedOpt);
 
   po::options_description visible("salmon quant options");
-  visible.add(inputOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt)/*.add(fmdOpt)*/;
+  visible.add(inputOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt);
 
   po::variables_map vm;
   try {

@@ -53,7 +53,7 @@ public:
     // Load the appropriate index type
     if (indexType == SalmonIndexType::FMD) {
       fmt::MemoryWriter infostr;
-      infostr << "Error: This version of salmon does not support FMD indexing";
+      infostr << "Error: This version of salmon does not support FMD indexing.";
       throw std::invalid_argument(infostr.str());
     } else {
       loadQuasiIndex_(indexDir);
@@ -69,7 +69,7 @@ public:
     case SalmonIndexType::QUASI:
       return buildQuasiIndex_(indexDir, argVec, k);
     case SalmonIndexType::FMD:
-      logger_->error("This version of salmon does not support FMD indexing");
+      logger_->error("This version of salmon does not support FMD indexing.");
       return false;
     default:
       logger_->warn("Unexpected index type; cannot build");

@@ -14,7 +14,7 @@ public:
    */
   SalmonIndexVersionInfo()
       : indexVersion_(0), hasAuxKmerIndex_(false), auxKmerLength_(0),
-        indexType_(SalmonIndexType::FMD) {}
+        indexType_(SalmonIndexType::QUASI) {}
 
   SalmonIndexVersionInfo(uint32_t indexVersionIn, bool hasAuxKmerIndexIn,
                          uint32_t auxKmerLengthIn, SalmonIndexType indexTypeIn)
