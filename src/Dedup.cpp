@@ -162,11 +162,14 @@ uint32_t dedupReads(
 
   // making a vector umi sequences
   std::vector<std::pair<uint64_t, std::string>> umis;
-  alevin::kmer::AlvKmer jellyObj(umiLength);
-  
+  combinelib::kmers::Kmer<32, 2> umiObj;
+  umiObj.k(umiLength);
+
   for(auto& umi: visitList){
-    jellyObj.fromNum(umi);
-    std::string umiseq = jellyObj.to_str();
+    umiObj.word__(0) = umi;
+    std::string umiseq = umiObj.toStr();
+    std::reverse(umiseq.begin(), umiseq.end());
+
     umis.emplace_back(std::make_pair(umi, umiseq));
     if (umiseq.size() != umiLength){
         std::cout << "Size mismatch from Jelly Object\n"

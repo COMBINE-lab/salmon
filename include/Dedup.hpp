@@ -7,7 +7,6 @@
 #include "SalmonOpts.hpp"
 #include "CollapsedEMOptimizer.hpp"
 #include "GZipWriter.hpp"
-#include "AlevinKmer.hpp"
 #include "RapMapUtils.hpp"
 #include "AlevinUtils.hpp"
 

@@ -44,8 +44,8 @@ namespace alevin {
     bool extractUMI<apt::DropSeq>(std::string& read,
                                   apt::DropSeq& pt,
                                   std::string& umi){
-      std::cout<<"Incorrect call for umi extract";
-      exit(0);
+      umi = read.substr(pt.barcodeLength, pt.umiLength);
+      return true;
     }
     template <>
     bool extractUMI<apt::Chromium>(std::string& read,

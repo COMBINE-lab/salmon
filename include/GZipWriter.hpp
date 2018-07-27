@@ -14,7 +14,6 @@
 #include "SalmonOpts.hpp"
 #include "SalmonSpinLock.hpp"
 #include "AlevinOpts.hpp"
-#include "AlevinKmer.hpp"
 
 class GZipWriter {
 public:

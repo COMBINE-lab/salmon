@@ -158,7 +158,9 @@ bool GZipWriter::writeBFH(boost::filesystem::path& outDir,
     equivFile << b << '\n';
   }
 
-  alevin::kmer::AlvKmer jellyObj(umiLength);
+  combinelib::kmers::Kmer<32, 2> umiObj;
+  umiObj.k(umiLength);
+
   for (auto& eq : eqVec) {
     uint64_t count = eq.second.count;
     // for each transcript in this class
@@ -177,9 +179,12 @@ bool GZipWriter::writeBFH(boost::filesystem::path& outDir,
       equivFile << "\t" << bc << "\t" << ugroup.size();
       for (auto umiIt : ugroup){
         auto umi = umiIt.first;
-        jellyObj.fromNum(umi);
+        umiObj.word__(0) = umi;
         auto count = umiIt.second;
-        equivFile << "\t" << jellyObj.to_str() << "\t" << count;
+
+        std::string s = umiObj.toStr();
+        std::reverse(s.begin(), s.end());
+        equivFile << "\t" << s << "\t" << count;
       }
     }
     equivFile << "\n";
