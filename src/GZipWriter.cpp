@@ -5,6 +5,7 @@
 #include "cereal/archives/json.hpp"
 
 #include "AlignmentLibrary.hpp"
+#include "AlevinTypes.hpp"
 #include "DistributionUtils.hpp"
 #include "GZipWriter.hpp"
 #include "ReadExperiment.hpp"
@@ -158,8 +159,7 @@ bool GZipWriter::writeBFH(boost::filesystem::path& outDir,
     equivFile << b << '\n';
   }
 
-  combinelib::kmers::Kmer<32, 2> umiObj;
-  umiObj.k(umiLength);
+  alevin::types::AlevinUMIKmer umiObj;
 
   for (auto& eq : eqVec) {
     uint64_t count = eq.second.count;

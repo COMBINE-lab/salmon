@@ -4,6 +4,7 @@
 #include <string>
 
 #include "AlevinOpts.hpp"
+#include "AlevinTypes.hpp"
 
 namespace alevin{
   namespace protocols {
@@ -17,7 +18,9 @@ namespace alevin{
         barcodeLength(barcodeLength_),
         umiLength(umiLength_),
         end(end_),
-        maxValue(maxValue_){}
+        maxValue(maxValue_){
+        alevin::types::AlevinUMIKmer::k(umiLength);
+      }
       uint32_t barcodeLength, umiLength, maxValue;
       BarcodeEnd end;
     };
