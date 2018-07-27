@@ -800,8 +800,7 @@ void processReadsQuasi(
             smallSeqs += 1;
           }
           else{
-            combinelib::kmers::Kmer<32, 2> umiIdx;
-            umiIdx.k(umiLength);
+            alevin::types::AlevinUMIKmer umiIdx;
             bool isUmiIdxOk = umiIdx.fromChars(umi);
 
             lh = false;
