@@ -340,12 +340,12 @@ namespace alevin {
         uint32_t maxUMI{12};
         if (barcodeLength < 1 or barcodeLength > maxBC) {
           aopt.jointLog->error("Barcode length ({}) was not in the required length range [1, {}].\n"
-                               "Exiting now", barcodeLength, maxBC);
+                               "Exiting now.", barcodeLength, maxBC);
           return false;
         }
         if (umiLength < 1 or umiLength > maxUMI) {
           aopt.jointLog->error("UMI length ({}) was not in the required length range [1, {}].\n"
-                               "Exiting now", umiLength, maxUMI);
+                               "Exiting now.", umiLength, maxUMI);
           return false;
         }
 
@@ -356,10 +356,10 @@ namespace alevin {
         else if (barEnd == 5) {
           aopt.protocol.end = BarcodeEnd::FIVE;
         } else{
-          aopt.jointLog->error("\nERROR: Wrong value for Barcode-end of read -> {}"
-                               "\nExiting now: please provide `5` for barcodes "
-                               "starting at 5' end or `3`` for barcode starting "
-                               "at 3' end.\n", barEnd);
+          aopt.jointLog->error("Wrong value for Barcode-end of read -> {}.\n"
+                               "Please provide `5` for barcodes "
+                               "starting at 5' end or `3` for barcode starting "
+                               "at 3' end.\nExiting now.", barEnd);
           return false;
         }
 
