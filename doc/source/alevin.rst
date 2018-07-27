@@ -1,7 +1,7 @@
 Alevin
 ================
 
-Aleivn is a tool --- integrated with the salmon software --- that introduces a family of algorithms for quantification and analysis of 3' tagged-end single-cell sequencing data. Currently alevin supports the following two major droplet based single-cell protocols:
+Alevin is a tool --- integrated with the salmon software --- that introduces a family of algorithms for quantification and analysis of 3' tagged-end single-cell sequencing data. Currently alevin supports the following two major droplet based single-cell protocols:
 
 1. Drop-seq
 2. 10x-Chromium v1/2

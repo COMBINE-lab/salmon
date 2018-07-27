@@ -1,13 +1,6 @@
 #ifndef EXPERIMENT_HPP
 #define EXPERIMENT_HPP
 
-extern "C" {
-#include "bwa.h"
-#include "bwamem.h"
-#include "kvec.h"
-#include "utils.h"
-}
-
 // Our includes
 #include "ClusterForest.hpp"
 #include "DistributionUtils.hpp"
@@ -142,6 +135,7 @@ public:
 
     // Now we'll have either an FMD-based index or a QUASI index
     // dispatch on the correct type.
+    fmt::MemoryWriter infostr;
 
     switch (salmonIndex_->indexType()) {
     case SalmonIndexType::QUASI:
@@ -162,7 +156,8 @@ public:
       }
       break;
     case SalmonIndexType::FMD:
-      loadTranscriptsFromFMD();
+      infostr << "Error: This version of salmon does not support the FMD index mode.";
+      throw std::invalid_argument(infostr.str());
       break;
     }
 
@@ -325,112 +320,6 @@ public:
     setTranscriptLengthClasses_(lengths, posBiasFW_.size());
   }
 
-  void loadTranscriptsFromFMD() {
-    bwaidx_t* idx_ = salmonIndex_->bwaIndex();
-    size_t numRecords = idx_->bns->n_seqs;
-    std::vector<Transcript> transcripts_tmp;
-    auto log = spdlog::get("jointLog");
-    // transcripts_tmp.reserve(numRecords);
-    // transcripts_.reserve(numRecords);
-
-    log->info("Index contained {} targets", numRecords);
-    // transcripts_.resize(numRecords);
-    for (auto i : boost::irange(size_t(0), numRecords)) {
-      uint32_t id = i;
-      char* name = idx_->bns->anns[i].name;
-      uint32_t len = idx_->bns->anns[i].len;
-      // copy over the length, then we're done.
-      transcripts_tmp.emplace_back(id, name, len);
-    }
-
-    std::sort(transcripts_tmp.begin(), transcripts_tmp.end(),
-              [](const Transcript& t1, const Transcript& t2) -> bool {
-                return t1.id < t2.id;
-              });
-
-    double alpha = 0.005;
-    char nucTab[256];
-    nucTab[0] = 'A';
-    nucTab[1] = 'C';
-    nucTab[2] = 'G';
-    nucTab[3] = 'T';
-    for (size_t i = 4; i < 256; ++i) {
-      nucTab[i] = 'N';
-    }
-
-    std::vector<uint32_t> lengths;
-    lengths.reserve(transcripts_tmp.size());
-    size_t tnum = 0;
-    // Load the transcript sequence from file
-    for (auto& t : transcripts_tmp) {
-      transcripts_.emplace_back(t.id, t.RefName.c_str(), t.RefLength, alpha);
-      /* from BWA */
-      uint8_t* rseq = nullptr;
-      int64_t tstart, tend, compLen, l_pac = idx_->bns->l_pac;
-      tstart = idx_->bns->anns[t.id].offset;
-      tend = tstart + t.RefLength;
-      rseq = bns_get_seq(l_pac, idx_->pac, tstart, tend, &compLen);
-      if (compLen != t.RefLength) {
-        fmt::print(stderr,
-                   "For transcript {}, stored length ({}) != computed length "
-                   "({}) --- index may be corrupt. exiting\n",
-                   t.RefName, compLen, t.RefLength);
-        std::exit(1);
-      }
-      std::string seq(t.RefLength, ' ');
-      if (rseq != 0) {
-        for (int64_t i = 0; i < compLen; ++i) {
-          seq[i] = nucTab[rseq[i]];
-        }
-      }
-
-      auto& txp = transcripts_.back();
-
-      // allocate space for the new copy
-      char* seqCopy = new char[seq.length() + 1];
-      std::strcpy(seqCopy, seq.c_str());
-      txp.setSequenceOwned(seqCopy);
-      txp.setSAMSequenceOwned(
-          salmon::stringtools::encodeSequenceInSAM(seq.c_str(), t.RefLength));
-      lengths.push_back(t.RefLength);
-      /*
-      // Length classes taken from
-      //
-      https://github.com/cole-trapnell-lab/cufflinks/blob/master/src/biascorrection.cpp
-      // ======
-      // Roberts, Adam, et al.
-      // "Improving RNA-Seq expression estimates by correcting for fragment
-      bias."
-      // Genome Biol 12.3 (2011): R22.
-      // ======
-      // perhaps, define these in a more data-driven way
-      if (txp.RefLength <= 791) {
-          txp.lengthClassIndex(0);
-      } else if (txp.RefLength <= 1265) {
-          txp.lengthClassIndex(1);
-      } else if (txp.RefLength <= 1707) {
-          txp.lengthClassIndex(2);
-      } else if (txp.RefLength <= 2433) {
-          txp.lengthClassIndex(3);
-      } else {
-          txp.lengthClassIndex(4);
-      }
-  */
-      free(rseq);
-      /* end BWA code */
-      ++tnum;
-    }
-
-    // Since we have the de-coded reference sequences, we no longer need
-    // the encoded sequences, so free them.
-    /** TEST OPT **/
-    // free(idx_->pac); idx_->pac = nullptr;
-    /** END TEST OPT **/
-    transcripts_tmp.clear();
-    // ====== Done loading the transcripts from file
-    setTranscriptLengthClasses_(lengths, posBiasFW_.size());
-  }
-
   template <typename CallbackT>
   bool processReads(const uint32_t& numThreads, const SalmonOpts& sopt,
                     CallbackT& processReadLibrary) {
@@ -446,7 +335,6 @@ public:
 
   ~ReadExperiment() {
     // ---- Get rid of things we no longer need --------
-    // bwa_idx_destroy(idx_);
   }
 
   ClusterForest& clusterForest() { return *clusters_.get(); }
@@ -810,7 +698,6 @@ private:
    * The index we've built on the set of transcripts.
    */
   std::unique_ptr<SalmonIndex> salmonIndex_{nullptr};
-  // bwaidx_t *idx_{nullptr};
   /**
    * The cluster forest maintains the dynamic relationship
    * defined by transcripts and reads --- if two transcripts

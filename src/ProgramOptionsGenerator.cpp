@@ -586,50 +586,6 @@ namespace salmon {
     return advanced;
   }
 
-  po::options_description ProgramOptionsGenerator::getFMDOptions(mem_opt_t* memOptions, SalmonOpts& sopt) {
-    using std::string;
-    using std::vector;
-
-    po::options_description fmd("\noptions that apply to the old FMD index");
-    fmd.add_options()
-      ("minLen,k",
-       po::value<int>(&(memOptions->min_seed_len))->default_value(salmon::defaults::fmdMinSeedLength),
-       "(S)MEMs smaller than this size won't be considered.")
-      ("maxOcc,m",
-       po::value<int>(&(memOptions->max_occ))->default_value(salmon::defaults::maxSMEMOccs),
-       "(S)MEMs occuring more than this many times won't be considered.")
-      ("sensitive", po::bool_switch(&(sopt.sensitive))->default_value(salmon::defaults::fmdSensitive),
-       "Setting this option enables the splitting of SMEMs that are larger "
-       "than 1.5 times the minimum seed length (minLen/k above).  This may "
-       "reveal high scoring chains of MEMs "
-       "that are masked by long SMEMs.  However, this option makes "
-       "lightweight-alignment a bit slower and is "
-       "usually not necessary if the reference is of reasonable quality.")
-      ("extraSensitive",
-       po::bool_switch(&(sopt.extraSeedPass))->default_value(salmon::defaults::fmdExtraSeedPass),
-       "Setting this option enables an extra pass of \"seed\" search. "
-       "Enabling this option may improve sensitivity (the number of reads "
-       "having sufficient coverage), but will "
-       "typically slow down quantification by ~40%.  Consider enabling this "
-       "option if you find the mapping rate to "
-       "be significantly lower than expected.")
-      ("coverage,c", po::value<double>(&(sopt.coverageThresh))->default_value(salmon::defaults::fmdCoverageThresh),
-       "required coverage of read by union of SMEMs to consider it a \"hit\".")
-      ("splitWidth,s",
-       po::value<int>(&(memOptions->split_width))->default_value(salmon::defaults::fmdSplitWidth),
-       "If (S)MEM occurs fewer than this many times, search for smaller, "
-       "contained MEMs. "
-       "The default value will not split (S)MEMs, a higher value will "
-       "result in more MEMs being explore and, thus, will "
-       "result in increased running time.")
-      ("splitSpanningSeeds,b",
-       po::bool_switch(&(sopt.splitSpanningSeeds))->default_value(salmon::defaults::fmdSplitSpanningSeeds),
-       "Attempt to split seeds that happen to fall on the "
-       "boundary between two transcripts.  This can improve the  fragment "
-       "hit-rate, but is usually not necessary.");
-    return fmd;
-  }
-
   po::options_description ProgramOptionsGenerator::getHiddenOptions(SalmonOpts& sopt) {
     using std::string;
     using std::vector;

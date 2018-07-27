@@ -105,7 +105,6 @@
 #include "Transcript.hpp"
 
 #include "AlignmentGroup.hpp"
-#include "BWAUtils.hpp"
 #include "BiasParams.hpp"
 #include "CollapsedEMOptimizer.hpp"
 #include "CollapsedGibbsSampler.hpp"
@@ -114,7 +113,6 @@
 #include "FragmentLengthDistribution.hpp"
 #include "GZipWriter.hpp"
 #include "HitManager.hpp"
-#include "KmerIntervalMap.hpp"
 
 #include "RapMapUtils.hpp"
 #include "ReadExperiment.hpp"
@@ -124,16 +122,8 @@
 #include "PairAlignmentFormatter.hpp"
 #include "SingleAlignmentFormatter.hpp"
 #include "RapMapUtils.hpp"
-#include "AlevinKmer.hpp"
 
 namespace alevin{
-  extern "C" {
-#include "bwa.h"
-#include "bwamem.h"
-#include "ksort.h"
-#include "kvec.h"
-#include "utils.h"
-  }
 
   /****** QUASI MAPPING DECLARATIONS *********/
   using MateStatus = rapmap::utils::MateStatus;
@@ -146,7 +136,6 @@ namespace alevin{
   using TranscriptID = uint32_t;
   using TranscriptIDVector = std::vector<TranscriptID>;
   using KmerIDMap = std::vector<TranscriptIDVector>;
-  using my_mer = jellyfish::mer_dna_ns::mer_base_static<uint64_t, 1>;
 
   constexpr uint32_t miniBatchSize{5000};
 
@@ -169,7 +158,7 @@ namespace alevin{
   using AlnGroupQueue = tbb::concurrent_queue<AlevinAlnGroup<AlnT>*>;
 #endif
 
-#include "LightweightAlignmentDefs.hpp"
+  //#include "LightweightAlignmentDefs.hpp"
 }
 
 //have to create new namespace because of multiple definition
@@ -618,32 +607,6 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
 
 /// START QUASI
 
-// To use the parser in the following, we get "jobs" until none is
-// available. A job behaves like a pointer to the type
-// jellyfish::sequence_list (see whole_sequence_parser.hpp).
-template <typename RapMapIndexT, typename ProtocolT>
-void processReadsQuasi(
-                       paired_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
-                       AlnGroupVec<SMEMAlignment>& structureVec,
-                       std::atomic<uint64_t>& numObservedFragments,
-                       std::atomic<uint64_t>& numAssignedFragments,
-                       std::atomic<uint64_t>& validHits, std::atomic<uint64_t>& upperBoundHits,
-                       std::atomic<uint32_t>& smallSeqs,
-                       RapMapIndexT* idx, std::vector<Transcript>& transcripts,
-                       ForgettingMassCalculator& fmCalc, ClusterForest& clusterForest,
-                       FragmentLengthDistribution& fragLengthDist, BiasParams& observedBiasParams,
-                       SalmonOpts& salmonOpts,
-                       std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
-                       volatile bool& writeToCache, AlevinOpts<ProtocolT>& alevinOpts,
-                       SoftMapT& barcodeMap, spp::sparse_hash_map<std::string, uint32_t>& trBcs,
-                       std::vector<uint64_t>& uniqueFLD) {
-
-  // ERROR
-  salmonOpts.jointLog->error("MEM-mapping cannot be used with the Quasi index "
-                             "--- please report this bug on GitHub");
-  std::exit(1);
-}
-
 template <typename RapMapIndexT, typename ProtocolT>
 void processReadsQuasi(
                        paired_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
@@ -652,6 +615,7 @@ void processReadsQuasi(
                        std::atomic<uint64_t>& numAssignedFragments,
                        std::atomic<uint64_t>& validHits, std::atomic<uint64_t>& upperBoundHits,
                        std::atomic<uint32_t>& smallSeqs,
+                       std::atomic<uint32_t>& nSeqs,
                        RapMapIndexT* qidx, std::vector<Transcript>& transcripts,
                        ForgettingMassCalculator& fmCalc, ClusterForest& clusterForest,
                        FragmentLengthDistribution& fragLengthDist, BiasParams& observedBiasParams,
@@ -836,22 +800,22 @@ void processReadsQuasi(
             smallSeqs += 1;
           }
           else{
-            alevin::kmer::AlvKmer umiIdx(umiLength);
-            bool isUmiIdxOk = umiIdx.fromStr(umi);
-
-            if(not isUmiIdxOk){
-              salmonOpts.jointLog->error("umi indexing of jellyfish failing.\n"
-                                         "Please report on github");
-              exit(1);
-            }
-
-            jointHitGroup.setUMI(umiIdx.umiWord());
+            alevin::types::AlevinUMIKmer umiIdx;
+            bool isUmiIdxOk = umiIdx.fromChars(umi);
 
             lh = false;
-            rh = tooShortRight ? false : hitCollector(rp.second.seq, saSearcher, rightHCInfo);
-            rapmap::hit_manager::hitsToMappingsSimple(*qidx, mc,
-                                                      MateStatus::PAIRED_END_RIGHT,
-                                                      rightHCInfo, rightHits);
+            if(isUmiIdxOk){
+              jointHitGroup.setUMI(umiIdx.word(0));
+
+              rh = tooShortRight ? false : hitCollector(rp.second.seq, saSearcher, rightHCInfo);
+              rapmap::hit_manager::hitsToMappingsSimple(*qidx, mc,
+                                                        MateStatus::PAIRED_END_RIGHT,
+                                                        rightHCInfo, rightHits);
+            }
+            else{
+              rh = false;
+              nSeqs += 1;
+            }
           }
         }
       }
@@ -1194,6 +1158,7 @@ void processReadLibrary(
                         numAssignedFragments,              // total number of assigned reads
                         std::atomic<uint64_t>& upperBoundHits, // upper bound on # of mapped frags
                         std::atomic<uint32_t>& smallSeqs,
+                        std::atomic<uint32_t>& nSeqs,
                         bool initialRound,
                         std::atomic<bool>& burnedIn, ForgettingMassCalculator& fmCalc,
                         FragmentLengthDistribution& fragLengthDist,
@@ -1258,7 +1223,7 @@ void processReadLibrary(
             processReadsQuasi<RapMapSAIndex<int64_t, PerfectHash<int64_t>>>(
                                                                             pairedParserPtr.get(), readExp, rl, structureVec[i],
                                                                             numObservedFragments, numAssignedFragments, numValidHits,
-                                                                            upperBoundHits, smallSeqs, sidx->quasiIndexPerfectHash64(), transcripts,
+                                                                            upperBoundHits, smallSeqs, nSeqs, sidx->quasiIndexPerfectHash64(), transcripts,
                                                                             fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
                                                                             salmonOpts, iomutex, initialRound,
                                                                             burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs/*, uniqueFLDs[i]*/);
@@ -1272,7 +1237,7 @@ void processReadLibrary(
             processReadsQuasi<RapMapSAIndex<int64_t, DenseHash<int64_t>>>(
                                                                           pairedParserPtr.get(), readExp, rl, structureVec[i],
                                                                           numObservedFragments, numAssignedFragments, numValidHits,
-                                                                          upperBoundHits, smallSeqs, sidx->quasiIndex64(), transcripts, fmCalc,
+                                                                          upperBoundHits, smallSeqs, nSeqs, sidx->quasiIndex64(), transcripts, fmCalc,
                                                                           clusterForest, fragLengthDist, observedBiasParams[i],
                                                                           salmonOpts, iomutex, initialRound,
                                                                           burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs/*, uniqueFLDs[i]*/);
@@ -1288,7 +1253,7 @@ void processReadLibrary(
             processReadsQuasi<RapMapSAIndex<int32_t, PerfectHash<int32_t>>>(
                                                                             pairedParserPtr.get(), readExp, rl, structureVec[i],
                                                                             numObservedFragments, numAssignedFragments, numValidHits,
-                                                                            upperBoundHits, smallSeqs, sidx->quasiIndexPerfectHash32(), transcripts,
+                                                                            upperBoundHits, smallSeqs, nSeqs, sidx->quasiIndexPerfectHash32(), transcripts,
                                                                             fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
                                                                             salmonOpts, iomutex, initialRound,
                                                                             burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs/*, uniqueFLDs[i]*/);
@@ -1302,7 +1267,7 @@ void processReadLibrary(
             processReadsQuasi<RapMapSAIndex<int32_t, DenseHash<int32_t>>>(
                                                                           pairedParserPtr.get(), readExp, rl, structureVec[i],
                                                                           numObservedFragments, numAssignedFragments, numValidHits,
-                                                                          upperBoundHits, smallSeqs, sidx->quasiIndex32(), transcripts, fmCalc,
+                                                                          upperBoundHits, smallSeqs, nSeqs, sidx->quasiIndex32(), transcripts, fmCalc,
                                                                           clusterForest, fragLengthDist, observedBiasParams[i],
                                                                           salmonOpts, iomutex, initialRound,
                                                                           burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs/*, uniqueFLDs[i]*/);
@@ -1425,6 +1390,7 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
   // the data).
   std::atomic<uint64_t> numObservedFragments{0};
   std::atomic<uint32_t> smallSeqs{0};
+  std::atomic<uint32_t> nSeqs{0};
   uint64_t prevNumObservedFragments{0};
   // The *total* number of fragments assigned so far (over all passes through
   // the data).
@@ -1470,7 +1436,7 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
 
     processReadLibrary<AlnT>(experiment, rl, sidx, transcripts, clusterForest,
                              numObservedFragments, totalAssignedFragments,
-                             upperBoundHits, smallSeqs, initialRound, burnedIn, fmCalc,
+                             upperBoundHits, smallSeqs, nSeqs, initialRound, burnedIn, fmCalc,
                              fragLengthDist, salmonOpts,
                              greedyChain, ioMutex,
                              numQuantThreads, groupVec, writeToCache,
@@ -1574,8 +1540,12 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
   }
 
   if (smallSeqs > 100) {
-    jointLog->warn("Found {} reads with CB+UMI length smaller than expected."
+    jointLog->warn("Found {} reads with CB+UMI length smaller than expected.\n"
                    "Please report on github if this number is too large", smallSeqs);
+  }
+  if (nSeqs > 100) {
+    jointLog->warn("Found {} reads with `N` in the UMI sequence and ignored the reads.\n"
+                   "Please report on github if this number is too large", nSeqs);
   }
   //+++++++++++++++++++++++++++++++++++++++
   jointLog->info("Mapping rate = {}\%\n",

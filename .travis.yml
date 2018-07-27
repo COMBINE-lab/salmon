@@ -7,8 +7,11 @@ matrix:
       compiler : gcc-7
       addons:
         apt:
-          sources: ['ubuntu-toolchain-r-test']
-          packages: ['g++-7', 'gcc-7', 'cmake', 'cmake-data', 'zlib1g-dev', 'libbz2-dev']
+          update: true
+          sources:
+              - sourceline: 'ppa:mhier/libboost-latest'
+              - ubuntu-toolchain-r-test
+          packages: ['g++-7', 'gcc-7', 'zlib1g-dev', 'libbz2-dev']
 
 install:
     - export CXX="g++-7"
@@ -19,13 +22,22 @@ install:
     - export PATH=$PWD/latest-gcc-symlinks:$PATH
     - export AR=gcc-ar-7
     - export RANLIB=gcc-ranlib-7
-
+    - DEPS_DIR="${TRAVIS_BUILD_DIR}/deps"
+    - mkdir ${DEPS_DIR} && cd ${DEPS_DIR}
+    - travis_retry wget --no-check-certificate https://cmake.org/files/v3.12/cmake-3.12.0-Linux-x86_64.tar.gz
+    - tar -xzvf cmake-3.12.0-Linux-x86_64.tar.gz > /dev/null
+    - mv cmake-3.12.0-Linux-x86_64 cmake-install
+    - PATH=${DEPS_DIR}/cmake-install:${DEPS_DIR}/cmake-install/bin:$PATH
+    - cd ${TRAVIS_BUILD_DIR}
+    
 script: 
     - mkdir build 
     - cd build 
     - cmake -DFETCH_BOOST=TRUE -DNO_RTM=TRUE .. 
     - travis_wait 45 make 
     - travis_wait make install
+    - LD_LIBRARY_PATH=${TRAVIS_BUILD_DIR}/lib:$LD_LIBRARY_PATH
+    - ./src/salmon -h
     - travis_wait make test VERBOSE=1
 
 after_success: 
@@ -33,7 +45,9 @@ after_success:
     - ./scripts/push-binary.sh
       
 after_failure:
-    - cat $TRAVIS_BUILD_DIR/build/Testing/Temporary/LastTest.log
+    - echo "Failure"
+    - ls -laR $TRAVIS_BUILD_DIR/build/Testing/
+    - cat $TRAVIS_BUILD_DIR/build/Testing/Temporary/*
 
 #whitelist
 #sudo: required
