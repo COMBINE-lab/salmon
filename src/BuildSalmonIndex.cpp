@@ -51,7 +51,7 @@ int salmonIndex(int argc, char* argv[]) {
 
   bool useStreamingParser = true;
 
-  string indexTypeStr = "fmd";
+  string indexTypeStr = "quasi";
   uint32_t saSampInterval = 1;
   uint32_t auxKmerLen = 0;
   uint32_t numThreads{2};
@@ -92,14 +92,7 @@ int salmonIndex(int argc, char* argv[]) {
       "take longer to construct")(
       "type",
       po::value<string>(&indexTypeStr)->default_value("quasi")->required(),
-      "The type of index to build; options are \"fmd\" and \"quasi\" "
-      "\"quasi\" is recommended, and \"fmd\" may be removed in the future")(
-      "sasamp,s",
-      po::value<uint32_t>(&saSampInterval)->default_value(1)->required(),
-      "The interval at which the suffix array should be sampled. "
-      "Smaller values are faster, but produce a larger index. "
-      "The default should be OK, unless your transcriptome is huge. "
-      "This value should be a power of 2.");
+      "The type of index to build; the only option is \"quasi\" in this version of salmon.");
 
   po::variables_map vm;
   int ret = 0;
@@ -119,26 +112,19 @@ Creates a salmon index.
     }
     po::notify(vm);
 
-    if (!(indexTypeStr == "quasi" or indexTypeStr == "fmd")) {
+    if (indexTypeStr == "fmd") {
       fmt::MemoryWriter errWriter;
-      errWriter << "Error: The index type must be either "
-                   "\"fmd\" or \"quasi\", but "
-                << indexTypeStr
-                << ", was "
-                   "provided.";
+      errWriter << "Error: FMD indexing is not supported in this version of salmon.";
       throw(std::logic_error(errWriter.str()));
     }
+    if (indexTypeStr != "quasi") {
+      fmt::MemoryWriter errWriter;
+      errWriter << "Error: If explicitly provided, the index type must be \"quasi\"."
+                << "You passed [" << indexTypeStr << "], but this is not supported.";
+      throw(std::logic_error(errWriter.str()));
+    }
+
     bool useQuasi = (indexTypeStr == "quasi");
-
-    uint32_t sasamp = vm["sasamp"].as<uint32_t>();
-    if (!isPowerOfTwo(sasamp) and !useQuasi) {
-      fmt::MemoryWriter errWriter;
-      errWriter << "Error: The suffix array sampling interval must be "
-                   "a power of 2. The value provided, "
-                << sasamp << ", is not.";
-      throw(std::logic_error(errWriter.str()));
-    }
-
     string transcriptFile = vm["transcripts"].as<string>();
     bfs::path indexDirectory(vm["index"].as<string>());
 
@@ -178,8 +164,7 @@ Creates a salmon index.
     fmt::MemoryWriter infostr;
 
     bfs::path outputPrefix;
-    std::unique_ptr<std::vector<std::string>> argVec(
-        new std::vector<std::string>);
+    std::unique_ptr<std::vector<std::string>> argVec(new std::vector<std::string>);
     fmt::MemoryWriter optWriter;
 
     std::unique_ptr<SalmonIndex> sidx = nullptr;

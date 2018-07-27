@@ -156,8 +156,7 @@ public:
       }
       break;
     case SalmonIndexType::FMD:
-      infostr << "Error: This version of salmon  " << versionPath.string()
-              << " does not support the FMD index mode.";
+      infostr << "Error: This version of salmon does not support the FMD index mode.";
       throw std::invalid_argument(infostr.str());
       break;
     }
