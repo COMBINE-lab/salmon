@@ -382,7 +382,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
   threshold = topxBarcodes;
 
   if(aopt.dumpfeatures){
-    auto frequencyFileName = aopt.outputDirectory / "frequency.txt";
+    auto frequencyFileName = aopt.outputDirectory / "raw_cb_frequency.txt";
     std::ofstream freqFile;
     freqFile.open(frequencyFileName.string());
     for (auto i:sortedIdx){
@@ -644,7 +644,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
                                             numParsingThreads, miniBatchSize));
 
     singleParserPtr->start();
-    densityCalculator(singleParserPtr.get(), aopt, 
+    densityCalculator(singleParserPtr.get(), aopt,
                       freqCounter, usedNumBarcodes, totNumBarcodes);
     singleParserPtr->stop();
 
@@ -692,32 +692,54 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
 
     uint32_t mmBcCounts{0}, mmBcReadCount{0};
     std::unordered_set<std::string> softMapWhiteBcSet;
-    for(auto& softMapIt: barcodeSoftMap){
-      std::vector<std::pair<std::string, double>>& trBcVec = softMapIt.second;
-      if (trBcVec.size() > 1){
-        mmBcCounts += 1;
-        uint32_t numReads;
+    for(auto& softMapIt: barcodeSoftMap ){
+      auto indexIt = freqCounter.find(softMapIt.first);
+      bool indexOk = indexIt != freqCounter.end();
+      if ( not indexOk){
+        aopt.jointLog->error("Error: index not find in freq Counter\n"
+                             "Please Report the issue on github");
+        exit(1);
+      }
 
-        auto indexIt = freqCounter.find(softMapIt.first);
-        bool indexOk = indexIt != freqCounter.end();
-        if ( not indexOk){
-          aopt.jointLog->error("Error: index not find in freq Counter\n"
-                               "Please Report the issue on github");
-          exit(1);
-        }
-        numReads = *indexIt;
+      uint32_t numReads;
+      numReads = *indexIt;
+
+      std::vector<std::pair<std::string, double>>& trBcVec = softMapIt.second;
+      if (not aopt.noSoftMap and trBcVec.size() > 1){
+        mmBcCounts += 1;
+
         for(std::pair<std::string, double> whtBc : trBcVec){
           softMapWhiteBcSet.insert(whtBc.first);
         }
         mmBcReadCount += numReads;
       }
 
+      // NOTE: Have to update the ambiguity resolution
       if (aopt.noSoftMap){
         while(trBcVec.size() != 1){
           trBcVec.pop_back();
         }
         trBcVec.front().second = 1.0;
       }
+
+      std::string trBc = trBcVec.front().first;
+      freqCounter[trBc] += numReads;
+      freqCounter.erase(softMapIt.first);
+    }
+
+    if(aopt.dumpfeatures){
+      auto frequencyFileName = aopt.outputDirectory / "filtered_cb_frequency.txt";
+      std::ofstream freqFile;
+      freqFile.open(frequencyFileName.string());
+      for(auto it = freqCounter.begin(); it != freqCounter.end(); ++it) {
+        auto trBc = it.key();
+        auto trIt = trueBarcodes.find(trBc);
+        if ( trIt != trueBarcodes.end() ) {
+          freqFile << trBc << "\t"
+                   << it.value() << "\n";
+        }
+      }
+      freqFile.close();
     }
 
     if (not aopt.noSoftMap){

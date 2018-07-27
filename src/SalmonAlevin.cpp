@@ -800,8 +800,8 @@ void processReadsQuasi(
             smallSeqs += 1;
           }
           else{
-            alevin::types::AlevinUMIKmer umiIdx;
-
+            combinelib::kmers::Kmer<32, 2> umiIdx;
+            umiIdx.k(umiLength);
             bool isUmiIdxOk = umiIdx.fromChars(umi);
 
             lh = false;
@@ -1541,11 +1541,11 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
   }
 
   if (smallSeqs > 100) {
-    jointLog->warn("Found {} reads with CB+UMI length smaller than expected."
+    jointLog->warn("Found {} reads with CB+UMI length smaller than expected.\n"
                    "Please report on github if this number is too large", smallSeqs);
   }
   if (nSeqs > 100) {
-    jointLog->warn("Found {} reads with `N` in the UMI sequence and ignored the reads "
+    jointLog->warn("Found {} reads with `N` in the UMI sequence and ignored the reads.\n"
                    "Please report on github if this number is too large", nSeqs);
   }
   //+++++++++++++++++++++++++++++++++++++++

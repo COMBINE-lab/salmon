@@ -55,7 +55,7 @@ namespace alevin{
 
     //dummy class
     struct Custom : Rule{
-      Custom() : Rule(0,0,BarcodeEnd::THREE,0){}
+      Custom() : Rule(0,0,BarcodeEnd::FIVE,0){}
     };
   }
 }
