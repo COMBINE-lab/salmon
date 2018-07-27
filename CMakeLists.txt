@@ -4,10 +4,26 @@ enable_testing()
 
 project (Salmon)
 
-set(CPACK_PACKAGE_VERSION "0.11.0")
-set(CPACK_PACKAGE_VERSION_MAJOR "0")
-set(CPACK_PACKAGE_VERSION_MINOR "11")
-set(CPACK_PACKAGE_VERSION_PATCH "0")
+# auto-populate version:
+# from https://stackoverflow.com/questions/47066115/cmake-get-version-from-multi-line-text-file
+file(READ "current_version.txt" ver)
+
+string(REGEX MATCH "VERSION_MAJOR ([0-9]*)" _ ${ver})
+set(ver_major ${CMAKE_MATCH_1})
+
+string(REGEX MATCH "VERSION_MINOR ([0-9]*)" _ ${ver})
+set(ver_minor ${CMAKE_MATCH_1})
+
+string(REGEX MATCH "VERSION_PATCH ([0-9]*)" _ ${ver})
+set(ver_patch ${CMAKE_MATCH_1})
+
+set(CPACK_PACKAGE_VERSION_MAJOR ${ver_major})
+set(CPACK_PACKAGE_VERSION_MINOR ${ver_minor})
+set(CPACK_PACKAGE_VERSION_PATCH ${ver_patch})
+
+set(CPACK_PACKAGE_VERSION "${ver_major}.${ver_minor}.${ver_patch}")
+message("version: ${CPACK_PACKAGE_VERSION}")
+
 set(PROJECT_VERSION ${CPACK_PACKAGE_VERSION})
 set(CPACK_GENERATOR "TGZ")
 set(CPACK_SOURCE_GENERATOR "TGZ")
@@ -20,10 +36,16 @@ set(CPACK_SOURCE_PACKAGE_FILE_NAME
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 
-if( NOT CMAKE_BUILD_TYPE )
-  set( CMAKE_BUILD_TYPE Release CACHE STRING
-       "Choose the type of build, options are: Debug Release."
-       FORCE )
+# Set a default build type if none was specified
+set(default_build_type "Release")
+ 
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  message(STATUS "Setting build type to '${default_build_type}' as none was specified.")
+  set(CMAKE_BUILD_TYPE "${default_build_type}" CACHE
+      STRING "Choose the type of build." FORCE)
+  # Set the possible values of build type for cmake-gui
+  set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+    "Debug" "Release")
 endif()
 
 ## Set the standard required compile flags
@@ -45,7 +67,7 @@ if(CONDA_BUILD)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
   set(CMAKE_CXX_EXTENSIONS OFF)
   set(CXXSTDFLAG "-std=c++11")
-  set(GCCVERSION "4.8.5")
+  set(GCCVERSION "4.8.2")
 else ()
   set(CMAKE_CXX_STANDARD 11)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -380,6 +402,12 @@ elseif(FETCH_BOOST)
         INSTALL_COMMAND ""
     )
 
+    ExternalProject_Add_Step(libboost makedir
+  	COMMAND mkdir -p <SOURCE_DIR>/build 
+	COMMENT "Make build directory"
+  	DEPENDEES download 
+  	DEPENDERS configure)
+
     ##
     # After we've installed boost,
     ##
@@ -403,7 +431,7 @@ if (BOOST_WILL_RECONFIGURE)
     set(Boost_FOUND TRUE)
 endif()
 
-
+message("BOOST ROOT = ${BOOST_ROOT}")
 message("BOOST INCLUDE DIR = ${Boost_INCLUDE_DIR}")
 message("BOOST INCLUDE DIRS = ${Boost_INCLUDE_DIRS}")
 message("BOOST LIB DIR = ${Boost_LIBRARY_DIRS}")
@@ -462,28 +490,6 @@ ExternalProject_Add_Step(libcereal makedir
   DEPENDEES download 
   DEPENDERS configure)
 
-message("Build system will fetch and build BWA (for Salmon)")
-message("==================================================================")
-##
-# This mode will likely go away soon, but until then, consider bundling directly with Salmon
-##
-include(ExternalProject)
-ExternalProject_Add(libbwa
-    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    #URL https://github.com/COMBINE-lab/bwa/archive/0.7.12.3.tar.gz
-    #DOWNLOAD_NAME bwa-master.tar.gz
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/bwa/archive/v0.7.12.5.tar.gz -o bwa-master.tar.gz &&
-                    ${SHASUM} 1ac5661d9e12e9017a47f0264201a75d9128f28dbd9a26952925f7745ddf6036 bwa-master.tar.gz &&
-                    mkdir -p bwa-master &&
-                    tar -xzvf bwa-master.tar.gz --strip-components=1 -C bwa-master
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/bwa-master
-    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    CONFIGURE_COMMAND ""
-    BUILD_COMMAND sh -c "make ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}"
-    INSTALL_COMMAND sh -c "mkdir -p <INSTALL_DIR>/lib && mkdir -p <INSTALL_DIR>/include/bwa && cp libbwa.a <INSTALL_DIR>/lib && cp *.h <INSTALL_DIR>/include/bwa && cp is.c bwtindex.c bwt_gen.c QSufSort.c ${CMAKE_CURRENT_SOURCE_DIR}/src/"
-    BUILD_IN_SOURCE TRUE
-)
-
 ## Try and find TBB first
 find_package(TBB 2018.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy )
 
@@ -532,7 +538,7 @@ ExternalProject_Add(libtbb
     PATCH_COMMAND "${TBB_PATCH_STEP}"
     CONFIGURE_COMMAND ""
     BUILD_COMMAND make ${QUIET_MAKE} CXXFLAGS=${TBB_CXXFLAGS} lambdas=1 compiler=${TBB_COMPILER} cfg=release tbb_build_prefix=LIBS
-    INSTALL_COMMAND sh -c "cp ${TBB_SOURCE_DIR}/build/LIBS_release/*.${SHARED_LIB_EXTENSION}* ${TBB_INSTALL_DIR}/lib && cp -r ${TBB_SOURCE_DIR}/include/* ${TBB_INSTALL_DIR}/include"
+    INSTALL_COMMAND sh -c "mkdir -p ${TBB_INSTALL_DIR}/include && mkdir -p ${TBB_INSTALL_DIR}/lib && cp ${TBB_SOURCE_DIR}/build/LIBS_release/*.${SHARED_LIB_EXTENSION}* ${TBB_INSTALL_DIR}/lib && cp -r ${TBB_SOURCE_DIR}/include/* ${TBB_INSTALL_DIR}/include"
     BUILD_IN_SOURCE 1
 )
 
@@ -543,6 +549,9 @@ ExternalProject_Add_Step(libtbb reconfigure
 )
 
 set (FETCHED_TBB TRUE)
+if (${FETCHED_BOOST})
+	add_dependencies(libtbb libboost)
+endif()
 endif()
 
 ##

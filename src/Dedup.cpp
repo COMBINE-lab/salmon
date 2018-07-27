@@ -1,4 +1,5 @@
 #include "Dedup.hpp"
+#include "AlevinTypes.hpp"
 
 // idea of deduplication of read in *each and every* eqclass is from
 //Ntranos, Vasilis, et al. "Fast and accurate single-cell RNA-seq analysis by clustering of transcript-compatibility counts." Genome biology 17.1 (2016): 112
@@ -162,11 +163,13 @@ uint32_t dedupReads(
 
   // making a vector umi sequences
   std::vector<std::pair<uint64_t, std::string>> umis;
-  alevin::kmer::AlvKmer jellyObj(umiLength);
-  
+  alevin::types::AlevinUMIKmer umiObj;
+
   for(auto& umi: visitList){
-    jellyObj.fromNum(umi);
-    std::string umiseq = jellyObj.to_str();
+    umiObj.word__(0) = umi;
+    std::string umiseq = umiObj.toStr();
+    std::reverse(umiseq.begin(), umiseq.end());
+
     umis.emplace_back(std::make_pair(umi, umiseq));
     if (umiseq.size() != umiLength){
         std::cout << "Size mismatch from Jelly Object\n"
