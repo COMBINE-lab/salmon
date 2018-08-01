@@ -156,6 +156,9 @@ HAVE_SSTREAM=1
 )
 target_compile_options(salmon_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
 target_compile_options(salmon_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
+if(NOT CONDA_BUILD)
+  set_property(TARGET salmon_core PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+endif()
 
 # Build the Alevin library
 add_library(alevin_core STATIC ${ALEVIN_LIB_SRCS})
@@ -168,8 +171,16 @@ span_FEATURE_MAKE_SPAN_TO_STD=14
 target_compile_options(alevin_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
 target_compile_options(alevin_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
 
+if(NOT CONDA_BUILD)
+  set_property(TARGET alevin_core PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+endif()
+
 # Build the salmon executable
 add_executable(salmon ${SALMON_MAIN_SRCS} ${SALMON_ALIGN_SRCS})
+
+if(NOT CONDA_BUILD)
+  set_property(TARGET salmon PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+endif()
 
 add_executable(unitTests ${UNIT_TESTS_SRCS})
 

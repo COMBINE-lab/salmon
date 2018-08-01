@@ -116,7 +116,8 @@
 #include "SingleAlignmentFormatter.hpp"
 #include "ksw2pp/KSW2Aligner.hpp"
 #include "metro/metrohash64.h"
-#include "tsl/robin_map.h"
+#include "tsl/hopscotch_map.h"
+//#include "tsl/robin_map.h"
 //#include "TextBootstrapWriter.hpp"
 
 /****** QUASI MAPPING DECLARATIONS *********/
@@ -762,8 +763,9 @@ namespace salmon {
   }
 }
 
-using AlnCacheMap = //tsl::robin_map<uint64_t, int32_t, salmon::hashing::PassthroughHash>;
-  std::unordered_map<uint64_t, int32_t, salmon::hashing::PassthroughHash>;
+using AlnCacheMap = tsl::hopscotch_map<uint64_t, int32_t, salmon::hashing::PassthroughHash>;
+                    //tsl::robin_map<uint64_t, int32_t, salmon::hashing::PassthroughHash>;
+                    //std::unordered_map<uint64_t, int32_t, salmon::hashing::PassthroughHash>;
 
 inline int32_t getAlnScore(
                            ksw2pp::KSW2Aligner& aligner,
@@ -961,8 +963,8 @@ void processReadsQuasi(
   memset(&ez, 0, sizeof(ksw_extz_t));
   size_t numDropped{0};
 
-  AlnCacheMap alnCacheLeft; alnCacheLeft.reserve(16);
-  AlnCacheMap alnCacheRight; alnCacheRight.reserve(16);
+  AlnCacheMap alnCacheLeft; alnCacheLeft.reserve(32);
+  AlnCacheMap alnCacheRight; alnCacheRight.reserve(32);
 
   auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
