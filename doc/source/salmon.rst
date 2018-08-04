@@ -428,11 +428,11 @@ traditional rich equivalence classes.  We recommend 4 as a reasonable parameter
 for this option (it is what was used in the range-factorization paper).
 
 """"""""""""""
-``--useVBOpt``
+``--useEM``
 """"""""""""""
 
-Use the variational Bayesian EM algorithm rather than the "standard"
-EM algorithm to optimize abundance estimates.  The details of the VBEM
+Use the "standard" EM algorithm to optimize abundance estimates
+instead of the variational Bayesian EM algorithm.  The details of the VBEM
 algorithm can be found in [#salmon]_.  While both the standard EM and
 the VBEM produce accurate abundance estimates, there are some
 trade-offs between the approaches.  Specifically, the sparsity of
@@ -465,8 +465,8 @@ using VB optimization.
    of the different algorithms is an ongoing area of research.  However, preliminary
    testing suggests that the sparsity-inducing effect of running the VBEM with a small
    prior may lead, in general, to more accurate estimates (the current testing was
-   performed mostly through simulation).  If these results persist through more
-   thorough testing, the VBEM may become the default inference mode in future versions of Salmon.
+   performed mostly through simulation). Hence, the VBEM is the default, and the
+   standard EM algorithm is accessed via the `--useEM` flag.
 
 
 """""""""""""""""""

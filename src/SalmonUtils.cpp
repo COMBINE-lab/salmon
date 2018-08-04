@@ -2666,6 +2666,10 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm,
 
   auto logger = spdlog::get("jointLog");
 
+  logger->info("NOTE: We recommend using tximport (https://bioconductor.org/packages/release/bioc/html/tximport.html) "
+               "for aggregating transcript-level salmon abundance estimates to the gene level.  It is more versatile, "
+               "exposes more features, and allows considering multi-sample information during aggregation.");
+
   constexpr double minTPM = std::numeric_limits<double>::denorm_min();
   std::ifstream expFile(inputPath.string());
 
