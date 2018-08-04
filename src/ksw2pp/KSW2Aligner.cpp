@@ -127,8 +127,47 @@ KSW2Aligner::KSW2Aligner(std::vector<int8_t> mat) {
  * length - 1].
  * @return  Alphabet length - number of letters in recognized alphabet.
  */
-static int
-transformSequencesDNA(const char* const queryOriginal, const int queryLength,
+int
+KSW2Aligner::transformSequenceKSW2(const char* const queryOriginal, const int queryLength,
+                                   std::vector<unsigned char>& queryTransformed) {
+  // Alphabet is constructed from letters that are present in sequences.
+  // Each letter is assigned an ordinal number, starting from 0 up to
+  // alphabetLength - 1, and new query and target are created in which letters
+  // are replaced with their ordinal numbers. This query and target are used in
+  // all the calculations later.
+  queryTransformed.resize(queryLength, 0);
+
+  int i = 0;
+  for (int i = 0; i < queryLength; i++) {
+    uint8_t c = static_cast<uint8_t>(queryOriginal[i]);
+    queryTransformed[i] = seq_nt4_table_loc[c];
+  }
+  return 4;
+}
+
+/**
+ * from https://github.com/rob-p/edlib/blob/read-aligner/edlib/src/edlib.cpp
+ * Takes char query and char target, recognizes alphabet and transforms them
+ * into unsigned char sequences where elements in sequences are not any more
+ * letters of alphabet, but their index in alphabet. Most of internal edlib
+ * functions expect such transformed sequences. This function will allocate
+ * queryTransformed and targetTransformed, so make sure to free them when done.
+ * Example:
+ *   Original sequences: "ACT" and "CGT".
+ *   Alphabet would be recognized as ['A', 'C', 'T', 'G']. Alphabet length = 4.
+ *   Transformed sequences: [0, 1, 2] and [1, 3, 2].
+ * @param [in] queryOriginal
+ * @param [in] queryLength
+ * @param [in] targetOriginal
+ * @param [in] targetLength
+ * @param [out] queryTransformed  It will contain values in range [0, alphabet
+ * length - 1].
+ * @param [out] targetTransformed  It will contain values in range [0, alphabet
+ * length - 1].
+ * @return  Alphabet length - number of letters in recognized alphabet.
+ */
+int
+KSW2Aligner::transformSequencesKSW2(const char* const queryOriginal, const int queryLength,
                       const char* const targetOriginal, const int targetLength,
                       std::vector<unsigned char>& queryTransformed,
                       std::vector<unsigned char>& targetTransformed) {
@@ -172,7 +211,7 @@ int KSW2Aligner::operator()(const char* const queryOriginal,
   // auto ez = &result_;
   auto qlen = queryLength;
   auto tlen = targetLength;
-  int asize = transformSequencesDNA(queryOriginal, queryLength, targetOriginal,
+  int asize = transformSequencesKSW2(queryOriginal, queryLength, targetOriginal,
                                     targetLength, query_, target_);
   (void)asize;
   int8_t q = config_.gapo;
@@ -231,7 +270,7 @@ int KSW2Aligner::operator()(const char* const queryOriginal,
   // auto ez = &result_;
   auto qlen = queryLength;
   auto tlen = targetLength;
-  int asize = transformSequencesDNA(queryOriginal, queryLength, targetOriginal,
+  int asize = transformSequencesKSW2(queryOriginal, queryLength, targetOriginal,
                                     targetLength, query_, target_);
   (void)asize;
   int q = config_.gapo;

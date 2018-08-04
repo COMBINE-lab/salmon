@@ -1,4 +1,4 @@
-cmake_minimum_required (VERSION 3.1)
+cmake_minimum_required (VERSION 3.9)
 
 enable_testing()
 
@@ -51,7 +51,7 @@ endif()
 ## Set the standard required compile flags
 # Nov 18th --- removed -DHAVE_CONFIG_H
 set (REMOVE_WARNING_FLAGS "-Wno-unused-function;-Wno-unused-local-typedefs")
-set (TGT_COMPILE_FLAGS "-ftree-vectorize;-funroll-loops;-fPIC;-fomit-frame-pointer;-O3")
+set (TGT_COMPILE_FLAGS "-ftree-vectorize;-funroll-loops;-fPIC;-fomit-frame-pointer;-O3;-DNDEBUG")
 set (TGT_WARN_FLAGS "-Wall;-Wno-unknown-pragmas;-Wno-reorder;-Wno-unused-variable;-Wreturn-type;-Werror=return-type;${REMOVE_WARNING_FLAGS}")
 
 if (APPLE)
@@ -75,6 +75,8 @@ else ()
   set(CXXSTDFLAG "-std=c++11")
   set(GCCVERSION "5.2")
 endif()
+
+include(CheckIPOSupported)
 
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)

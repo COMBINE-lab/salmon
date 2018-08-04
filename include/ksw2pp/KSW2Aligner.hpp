@@ -48,6 +48,13 @@ public:
   KSW2Aligner(int8_t match = 2, int8_t mismatch = -4);
   KSW2Aligner(std::vector<int8_t> mat);
 
+  int transformSequenceKSW2(const char* const queryOriginal, const int queryLength,
+                            std::vector<unsigned char>& queryTransformed);
+
+  int transformSequencesKSW2(const char* const queryOriginal, const int queryLength,
+                             const char* const targetOriginal, const int targetLength,
+                             std::vector<unsigned char>& queryTransformed,
+                             std::vector<unsigned char>& targetTransformed);
   /**
    * Variants of the operator that require both an explicit type tag to
    * determine the type of alignment to perform, as well as a pointer to

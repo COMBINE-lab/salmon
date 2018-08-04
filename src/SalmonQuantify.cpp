@@ -116,8 +116,7 @@
 #include "SingleAlignmentFormatter.hpp"
 #include "ksw2pp/KSW2Aligner.hpp"
 #include "metro/metrohash64.h"
-#include "tsl/robin_map.h"
-//#include "TextBootstrapWriter.hpp"
+#include "tsl/hopscotch_map.h"
 
 /****** QUASI MAPPING DECLARATIONS *********/
 using MateStatus = rapmap::utils::MateStatus;
@@ -762,8 +761,9 @@ namespace salmon {
   }
 }
 
-using AlnCacheMap = //tsl::robin_map<uint64_t, int32_t, salmon::hashing::PassthroughHash>;
-  std::unordered_map<uint64_t, int32_t, salmon::hashing::PassthroughHash>;
+using AlnCacheMap = tsl::hopscotch_map<uint64_t, int32_t, salmon::hashing::PassthroughHash>;
+                    //tsl::robin_map<uint64_t, int32_t, salmon::hashing::PassthroughHash>;
+                    //std::unordered_map<uint64_t, int32_t, salmon::hashing::PassthroughHash>;
 
 inline int32_t getAlnScore(
                            ksw2pp::KSW2Aligner& aligner,
@@ -938,8 +938,8 @@ void processReadsQuasi(
   auto* qmLog = salmonOpts.qmLog.get();
   bool writeQuasimappings = (qmLog != nullptr);
 
-  std::string rc1; rc1.reserve(300);
-  std::string rc2; rc2.reserve(300);
+  std::string rc1; rc1.reserve(64);
+  std::string rc2; rc2.reserve(64);
 
   // TODO : further investigation of bandwidth and dropoff
   using ksw2pp::KSW2Aligner;
@@ -961,8 +961,8 @@ void processReadsQuasi(
   memset(&ez, 0, sizeof(ksw_extz_t));
   size_t numDropped{0};
 
-  AlnCacheMap alnCacheLeft; alnCacheLeft.reserve(16);
-  AlnCacheMap alnCacheRight; alnCacheRight.reserve(16);
+  AlnCacheMap alnCacheLeft; alnCacheLeft.reserve(32);
+  AlnCacheMap alnCacheRight; alnCacheRight.reserve(32);
 
   auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
@@ -1118,11 +1118,10 @@ void processReadsQuasi(
           auto* r2 = rp.second.seq.data();
           auto l1 = static_cast<int32_t>(rp.first.seq.length());
           auto l2 = static_cast<int32_t>(rp.second.seq.length());
-          rapmap::utils::reverseRead(rp.first.seq, rc1);
-          rapmap::utils::reverseRead(rp.second.seq, rc2);
-          // we will not break the const promise
-          char* r1rc = const_cast<char*>(rc1.data());
-          char* r2rc = const_cast<char*>(rc2.data());
+          // We compute the reverse complements below only if we
+          // need them and don't have them.
+          char* r1rc = nullptr;
+          char* r2rc = nullptr;
           int32_t bestScore{-1};
           std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
           size_t idx{0};
@@ -1138,6 +1137,14 @@ void processReadsQuasi(
             const uint32_t buf{8};
 
             if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
+              if (!h.fwd and !r1rc) {
+                rapmap::utils::reverseRead(rp.first.seq, rc1);
+                r1rc = const_cast<char*>(rc1.data());
+              }
+              if (!h.mateIsFwd and !r2rc) {
+                rapmap::utils::reverseRead(rp.second.seq, rc2);
+                r2rc = const_cast<char*>(rc2.data());
+              }
               auto* r1ptr = h.fwd ? r1 : r1rc;
               auto* r2ptr = h.mateIsFwd ? r2 : r2rc;
 
@@ -1153,6 +1160,10 @@ void processReadsQuasi(
                 score = s1 + s2;
               }
             } else if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_LEFT) {
+              if (!h.fwd and !r1rc) {
+                rapmap::utils::reverseRead(rp.first.seq, rc1);
+                r1rc = const_cast<char*>(rc1.data());
+              }
               auto* rptr = h.fwd ? r1 : r1rc;
 
               int32_t s =
@@ -1163,6 +1174,10 @@ void processReadsQuasi(
                 score = s;
               }
             } else if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_RIGHT) {
+              if (!h.fwd and !r2rc) {
+                rapmap::utils::reverseRead(rp.second.seq, rc2);
+                r2rc = const_cast<char*>(rc2.data());
+              }
               auto* rptr = h.fwd ? r2 : r2rc;
 
               int32_t s =
@@ -1595,9 +1610,8 @@ void processReadsQuasi(
           alnCache.clear();
           auto* r1 = rp.seq.data();
           auto l1 = static_cast<int32_t>(rp.seq.length());
-          rapmap::utils::reverseRead(rp.seq, rc1);
-          // we will not break the const promise
-          char* r1rc = const_cast<char*>(rc1.data());
+
+          char* r1rc = nullptr;
           int32_t bestScore{std::numeric_limits<int32_t>::min()};
           std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
           size_t idx{0};
@@ -1610,6 +1624,14 @@ void processReadsQuasi(
             char* tseq = const_cast<char*>(t.Sequence());
             const int32_t tlen = static_cast<int32_t>(t.RefLength);
             const uint32_t buf{8};
+
+            // compute the reverse complement only if we
+            // need it and don't have it
+            if (!h.fwd and !r1rc) {
+              rapmap::utils::reverseRead(rp.seq, rc1);
+              // we will not break the const promise
+              r1rc = const_cast<char*>(rc1.data());
+            }
 
             auto* rptr = h.fwd ? r1 : r1rc;
             int32_t s =

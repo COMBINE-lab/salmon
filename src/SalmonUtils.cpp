@@ -2445,7 +2445,7 @@ int contextSize = outsideContext + insideContext;
           // lengths we'll consider for this transcript.
           int32_t locFLDLow = (refLen < cdfMaxArg) ? 1 : fldLow;
           int32_t locFLDHigh = (refLen < cdfMaxArg) ? cdfMaxArg : fldHigh;
-
+          bool wasProcessed{false};
           if (alphas[it] >= minAlpha
               // available[it]
               and unprocessedLen > 0 and cdfMaxVal > minCDFMass) {
@@ -2614,25 +2614,30 @@ int contextSize = outsideContext + insideContext;
               effLength += (flWeight * flMassTotal);
               fl += gcSamp;
             }
+            wasProcessed = true;
           } // for the processed transcript
 
-          // throw caution to the wind
-          double thresh = noThreshold ? 1.0 : unprocessedLen;
-
-          if (noThreshold) {
-            if (unprocessedLen > 0.0 and effLength > thresh) {
-              effLensOut(it) = effLength;
+          if (wasProcessed) {
+            // throw caution to the wind
+            double thresh = noThreshold ? 1.0 : unprocessedLen;
+            if (noThreshold) {
+              if (unprocessedLen > 0.0 and effLength > thresh) {
+                effLensOut(it) = effLength;
+              } else {
+                effLensOut(it) = effLensIn(it);
+              }
             } else {
-              effLensOut(it) = effLensIn(it);
+              double offset = std::max(1.0, thresh);
+              double effLengthNoBias = static_cast<double>(elen);
+              auto barrierLength = [effLengthNoBias, offset](double x) -> double {
+                                     return std::max(x, std::min(effLengthNoBias, offset));
+                                   };
+              effLensOut(it) = barrierLength(effLength);
             }
           } else {
-            double offset = std::max(1.0, thresh);
-            double effLengthNoBias = static_cast<double>(elen);
-            auto barrierLength = [effLengthNoBias, offset](double x) -> double {
-              return std::max(x, std::min(effLengthNoBias, offset));
-            };
-            effLensOut(it) = barrierLength(effLength);
+            effLensOut(it) = static_cast<double>(elen);
           }
+
         }
       } // end parallel_for lambda
   );
@@ -2660,6 +2665,10 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm,
   using std::max;
 
   auto logger = spdlog::get("jointLog");
+
+  logger->info("NOTE: We recommend using tximport (https://bioconductor.org/packages/release/bioc/html/tximport.html) "
+               "for aggregating transcript-level salmon abundance estimates to the gene level.  It is more versatile, "
+               "exposes more features, and allows considering multi-sample information during aggregation.");
 
   constexpr double minTPM = std::numeric_limits<double>::denorm_min();
   std::ifstream expFile(inputPath.string());
