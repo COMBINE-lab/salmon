@@ -117,8 +117,6 @@
 #include "ksw2pp/KSW2Aligner.hpp"
 #include "metro/metrohash64.h"
 #include "tsl/hopscotch_map.h"
-//#include "tsl/robin_map.h"
-//#include "TextBootstrapWriter.hpp"
 
 /****** QUASI MAPPING DECLARATIONS *********/
 using MateStatus = rapmap::utils::MateStatus;
@@ -940,8 +938,8 @@ void processReadsQuasi(
   auto* qmLog = salmonOpts.qmLog.get();
   bool writeQuasimappings = (qmLog != nullptr);
 
-  std::string rc1; rc1.reserve(300);
-  std::string rc2; rc2.reserve(300);
+  std::string rc1; rc1.reserve(64);
+  std::string rc2; rc2.reserve(64);
 
   // TODO : further investigation of bandwidth and dropoff
   using ksw2pp::KSW2Aligner;

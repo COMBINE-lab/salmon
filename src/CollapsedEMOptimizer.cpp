@@ -559,6 +559,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
   VecT alphasPrime(transcripts.size(), 0.0);
   VecT expTheta(transcripts.size());
   Eigen::VectorXd effLens(transcripts.size());
+  double minAlpha = 1e-8;
 
   bool scaleCounts = (!sopt.useQuasi and !sopt.allowOrphans);
 
@@ -619,7 +620,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
   size_t itNum{0};
 
   // EM termination criterion, adopted from Bray et al. 2016
-  double minAlpha = 1e-8;
+  //double minAlpha = 1e-8;
   double cutoff = minAlpha;
 
   // Since we will use the same weights and transcript groups for each

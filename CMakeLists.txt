@@ -1,4 +1,4 @@
-cmake_minimum_required (VERSION 3.1)
+cmake_minimum_required (VERSION 3.9)
 
 enable_testing()
 
@@ -75,6 +75,8 @@ else ()
   set(CXXSTDFLAG "-std=c++11")
   set(GCCVERSION "5.2")
 endif()
+
+include(CheckIPOSupported)
 
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
