@@ -272,7 +272,7 @@ public:
     size_t numRecords = idx_->txpNames.size();
     auto log = sopt.jointLog.get();
 
-    log->info("Index contained {} targets", numRecords);
+    log->info("Index contained {:n} targets", numRecords);
     // transcripts_.resize(numRecords);
     std::vector<uint32_t> lengths;
     lengths.reserve(numRecords);
