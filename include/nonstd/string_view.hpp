@@ -6,10 +6,18 @@
 // Distributed under the Boost Software License, Version 1.0. 
 // (See accompanying file LICENSE.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 
+#pragma once
+
 #ifndef NONSTD_SV_LITE_H_INCLUDED
 #define NONSTD_SV_LITE_H_INCLUDED
 
-#define  string_view_lite_VERSION "1.0.0"
+#define  string_view_lite_MAJOR  1
+#define  string_view_lite_MINOR  0
+#define  string_view_lite_PATCH  0
+#define  string_view_lite_VERSION  nssv_STRINGIFY(string_view_lite_MAJOR) "." nssv_STRINGIFY(string_view_lite_MINOR) "." nssv_STRINGIFY(string_view_lite_PATCH)
+
+#define nssv_STRINGIFY(  x )  nssv_STRINGIFY_( x )
+#define nssv_STRINGIFY_( x )  #x
 
 // string-view lite configuration:
 
@@ -46,7 +54,7 @@
 // Compiler detection (C++20 is speculative):
 // Note: MSVC supports C++14 since it supports C++17.
 
-#ifdef _MSVC_LANG
+#if defined(_MSVC_LANG)
 # define nssv_MSVC_LANG  _MSVC_LANG
 #else
 # define nssv_MSVC_LANG  0
@@ -60,7 +68,7 @@
 
 // use C++17 std::string_view if available:
 
-#if defined( __has_include )
+#if defined(__has_include)
 # define nssv_HAS_INCLUDE( arg )  __has_include( arg )
 #else
 # define nssv_HAS_INCLUDE( arg )  0
@@ -193,13 +201,13 @@ using std::operator<<;
 
 #define nssv_COMPILER_VERSION( major, minor, patch )  (10 * ( 10 * major + minor) + patch)
 
-#if defined __clang__
+#if defined(__clang__)
 # define nssv_COMPILER_CLANG_VERSION  nssv_COMPILER_VERSION(__clang_major__, __clang_minor__, __clang_patchlevel__)
 #else
 # define nssv_COMPILER_CLANG_VERSION    0
 #endif
 
-#if defined __GNUC__
+#if defined(__GNUC__)
 # define nssv_COMPILER_GNUC_VERSION  nssv_COMPILER_VERSION(__GNUC__, __GNUC_MINOR__, __GNUC_PATCHLEVEL__)
 #else
 # define nssv_COMPILER_GNUC_VERSION    0
@@ -252,7 +260,7 @@ using std::operator<<;
 # define nssv_HAVE_NODISCARD  1
 #endif
 
-// For the rest, consider VC14 as C++11 for optional-lite:
+// For the rest, consider VC14 as C++11 for string_view lite:
 
 #if      nssv_COMPILER_MSVC_VERSION >= 140
 # undef  nssv_CPP11_OR_GREATER
@@ -333,11 +341,11 @@ using std::operator<<;
 
 // Clang, GNUC, MSVC warning suppression macros:
 
-#ifdef __clang__
+#if defined(__clang__)
 # pragma clang diagnostic ignored "-Wreserved-user-defined-literal"
 # pragma clang diagnostic push
 # pragma clang diagnostic ignored "-Wuser-defined-literals"
-#elif defined  __GNUC__
+#elif defined(__GNUC__)
 # pragma  GCC  diagnostic push
 # pragma  GCC  diagnostic ignored "-Wliteral-suffix"
 #endif // __clang__
@@ -352,9 +360,9 @@ using std::operator<<;
 # define nssv_DISABLE_MSVC_WARNINGS(codes)
 #endif
 
-#ifdef __clang__
+#if defined(__clang__)
 # define nssv_RESTORE_WARNINGS()  _Pragma("clang diagnostic pop")
-#elif defined __GNUC__
+#elif defined(__GNUC__)
 # define nssv_RESTORE_WARNINGS()  _Pragma("GCC diagnostic pop")
 #elif nssv_COMPILER_MSVC_VERSION >= 140
 # define nssv_RESTORE_WARNINGS()  __pragma(warning(pop ))
@@ -538,7 +546,7 @@ public:
     nssv_constexpr14 basic_string_view substr( size_type pos = 0, size_type n = npos ) const
     {
         if ( pos > size() )
-            throw std::out_of_range("nonst::string_view::copy()");
+            throw std::out_of_range("nonst::string_view::substr()");
 
         return basic_string_view( data() + pos, std::min( n, size() - pos ) );
     }

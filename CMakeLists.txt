@@ -645,27 +645,6 @@ ExternalProject_Add(libstadenio
     INSTALL_COMMAND make install
 )
 
-message("Build system will fetch SPDLOG")
-message("==================================================================")
-ExternalProject_Add(libspdlog
-    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/spdlog/archive/v0.16.1.tar.gz -o spdlog-v0.16.1.tar.gz &&
-                     ${SHASUM} 733260e1fbdcf1b3dc307fc585e4476240026de8be28eb905731d2ab0942deae spdlog-v0.16.1.tar.gz &&
-                     tar -xzf spdlog-v0.16.1.tar.gz 
-    ##
-    #URL https://github.com/COMBINE-lab/spdlog/archive/v0.12.0.tar.gz
-    #DOWNLOAD_NAME spdlog-v0.12.0.tar.gz
-    #TLS_VERIFY FALSE
-    #URL_HASH SHA1=c868b4d1a27c4d9fb3b748f0566a8f0390d83ffb
-    ##
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/spdlog-0.16.1
-    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    CONFIGURE_COMMAND ""
-    BUILD_COMMAND ""
-    BUILD_IN_SOURCE 1
-    INSTALL_COMMAND cp -r <SOURCE_DIR>/include/spdlog <INSTALL_DIR>/include
-)
-
 set (FAST_MALLOC_LIB "")
 set (HAVE_FAST_MALLOC FALSE)
 

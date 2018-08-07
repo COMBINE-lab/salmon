@@ -1371,12 +1371,12 @@ void processReadsQuasi(
         char red[] = "\x1b[30m";
         red[3] = '0' + static_cast<char>(fmt::RED);
         if (initialRound) {
-          fmt::print(stderr, "\033[A\r\r{}processed{} {} {}fragments{}\n",
+          fmt::print(stderr, "\033[A\r\r{}processed{} {:n} {}fragments{}\n",
                      green, red, numObservedFragments, green, RESET_COLOR);
-          fmt::print(stderr, "hits: {}, hits per frag:  {}", validHits,
+          fmt::print(stderr, "hits: {:n}, hits per frag:  {}", validHits,
                      validHits / static_cast<float>(prevObservedFrags));
         } else {
-          fmt::print(stderr, "\r\r{}processed{} {} {}fragments{}", green, red,
+          fmt::print(stderr, "\r\r{}processed{} {:n} {}fragments{}", green, red,
                      numObservedFragments, green, RESET_COLOR);
         }
         iomutex.unlock();
@@ -1753,12 +1753,12 @@ void processReadsQuasi(
         char red[] = "\x1b[30m";
         red[3] = '0' + static_cast<char>(fmt::RED);
         if (initialRound) {
-          fmt::print(stderr, "\033[A\r\r{}processed{} {} {}fragments{}\n",
+          fmt::print(stderr, "\033[A\r\r{}processed{} {:n} {}fragments{}\n",
                      green, red, numObservedFragments, green, RESET_COLOR);
-          fmt::print(stderr, "hits: {}; hits per frag:  {}", validHits,
+          fmt::print(stderr, "hits: {:n}; hits per frag:  {}", validHits,
                      validHits / static_cast<float>(prevObservedFrags));
         } else {
-          fmt::print(stderr, "\r\r{}processed{} {} {}fragments{}", green, red,
+          fmt::print(stderr, "\r\r{}processed{} {:n} {}fragments{}", green, red,
                      numObservedFragments, green, RESET_COLOR);
         }
         iomutex.unlock();
