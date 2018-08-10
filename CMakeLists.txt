@@ -54,6 +54,16 @@ set (REMOVE_WARNING_FLAGS "-Wno-unused-function;-Wno-unused-local-typedefs")
 set (TGT_COMPILE_FLAGS "-ftree-vectorize;-funroll-loops;-fPIC;-fomit-frame-pointer;-O3;-DNDEBUG")
 set (TGT_WARN_FLAGS "-Wall;-Wno-unknown-pragmas;-Wno-reorder;-Wno-unused-variable;-Wreturn-type;-Werror=return-type;${REMOVE_WARNING_FLAGS}")
 
+
+###
+# Sanitizers BEGIN
+###
+#list(APPEND TGT_COMPILE_FLAGS "-fsanitize=address")
+#set(CMAKE_LINK_FLAGS "-fsanitize=address")
+###
+# Sanitizers END 
+###
+
 if (APPLE)
 set(WARNING_IGNORE_FLAGS "-Wno-deprecated-register")
 list(APPEND TGT_WARN_FLAGS -Wno-deprecated-register)
@@ -68,11 +78,12 @@ if(CONDA_BUILD)
   set(CMAKE_CXX_EXTENSIONS OFF)
   set(CXXSTDFLAG "-std=c++11")
   set(GCCVERSION "4.8.2")
+  list(APPEND TGT_COMPILE_FLAGS "-DSALMON_DEPRECATED_COMPILER")
 else ()
-  set(CMAKE_CXX_STANDARD 11)
+  set(CMAKE_CXX_STANDARD 14)
   set(CMAKE_CXX_STANDARD_REQUIRED ON)
   set(CMAKE_CXX_EXTENSIONS OFF)
-  set(CXXSTDFLAG "-std=c++11")
+  set(CXXSTDFLAG "-std=c++14")
   set(GCCVERSION "5.2")
 endif()
 

@@ -906,7 +906,7 @@ salmon-based processing of single-cell RNA-seq data.
     }
 
     std::stringstream commentStream;
-    commentStream << "### salmon (single-cell-based) v" << salmon::version << "\n";
+    commentStream << "### alevin (dscRNA-seq quantification) v" << salmon::version << "\n";
     commentStream << "### [ program ] => salmon \n";
     commentStream << "### [ command ] => alevin \n";
     for (auto& opt : orderedOptions.options) {

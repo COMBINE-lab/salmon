@@ -753,6 +753,8 @@ namespace salmon {
   }
 }
 
+// Use a passthrough hash for the alignment cache, because
+// the key *is* the hash.
 namespace salmon {
   namespace hashing {
     struct PassthroughHash {
@@ -1656,8 +1658,6 @@ void processReadsQuasi(
                                            [&ctr, &scores, &numDropped, bestScore] (const QuasiAlignment& qa) -> bool {
                                              // soft filter
                                              bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
-                                             // strict filter
-                                             //bool rem = (scores[ctr] < bestScore);
                                              ++ctr;
                                              numDropped += rem ? 1 : 0;
                                              return rem;
@@ -1810,6 +1810,8 @@ void processReadsQuasi(
 
 /// DONE QUASI
 
+#if SALMON_DEPRECATED_COMPILER
+#pragma message ( "You are compiling salmon with -std=c++11 instead of -std=c++14; this ability is deprecated and will go away soon." )
 /**
  * This functor makes it easy to invoke the appropriate template function
  * for processing the reads, generalizing over the library type and read type
@@ -1894,7 +1896,7 @@ class ProcessFunctor {
     }
 
   };
-
+#endif // SALMON_DEPRECATED_COMPILER
 
 template <typename AlnT>
 void processReadLibrary(
@@ -1923,6 +1925,8 @@ void processReadLibrary(
   // These two deleters are highly redundant (identical in content, but have
   // different argument types). This will be resolved by generic lambdas as soon
   // as we can rely on c++14 (waiting on bioconda).
+#if SALMON_DEPRECATED_COMPILER
+#pragma message ( "You are compiling salmon with -std=c++11 instead of -std=c++14; this ability is deprecated and will go away soon." )
   auto pairedPtrDeleter = [&salmonOpts](paired_parser* p) -> void {
     try {
       p->stop();
@@ -1949,7 +1953,14 @@ void processReadLibrary(
     delete p;
   };
 
-  /** C++14 version 
+  std::unique_ptr<paired_parser, decltype(pairedPtrDeleter)> pairedParserPtr(
+                                                                             nullptr, pairedPtrDeleter);
+  std::unique_ptr<single_parser, decltype(singlePtrDeleter)> singleParserPtr(
+                                                                             nullptr, singlePtrDeleter);
+
+#else
+
+  /** C++14 version  **/
   auto parserPtrDeleter = [&salmonOpts](auto* p) -> void {
     try {
       p->stop();
@@ -1962,18 +1973,13 @@ void processReadLibrary(
     }
     delete p;
   };
-  **/
-
-  std::unique_ptr<paired_parser, decltype(pairedPtrDeleter)> pairedParserPtr(
-                                                                             nullptr, pairedPtrDeleter);
-  std::unique_ptr<single_parser, decltype(singlePtrDeleter)> singleParserPtr(
-                                                                             nullptr, singlePtrDeleter);
-  /** C++14 version
+  /** C++14 version **/
   std::unique_ptr<paired_parser, decltype(parserPtrDeleter)> pairedParserPtr(
                                                                              nullptr, parserPtrDeleter);
   std::unique_ptr<single_parser, decltype(parserPtrDeleter)> singleParserPtr(
                                                                              nullptr, parserPtrDeleter);
-  **/
+
+#endif //SALMON_DEPRECATED_COMPILER
 
   /** sequence-specific and GC-fragment bias vectors --- each thread gets it's
    * own **/
@@ -1988,24 +1994,8 @@ void processReadLibrary(
    *EffectiveLengthStats(numTxp));
    **/
 
-  // NOTE : When we can support C++14, we can replace the entire ProcessFunctor class above with this
-  // generic lambda.
-  /*
-    auto processFunctor = [&](size_t i, auto& parserPtr, auto* index) {
-      if (salmonOpts.qmFileName != "" and i == 0) {
-        rapmap::utils::writeSAMHeader(*index, salmonOpts.qmLog);
-      }
-      auto threadFun = [&, i]() -> void {
-                          processReadsQuasi(parserPtr.get(), readExp, rl, structureVec[i],
-                                            numObservedFragments, numAssignedFragments, numValidHits,
-                                            upperBoundHits, index, transcripts,
-                                            fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
-                                            salmonOpts, coverageThresh, iomutex, initialRound,
-                                            burnedIn, writeToCache);
-                        };
-      threads.emplace_back(threadFun);
-   };
-  */
+#if SALMON_DEPRECATED_COMPILER
+#pragma message ( "You are compiling salmon with -std=c++11 instead of -std=c++14; this ability is deprecated and will go away soon." )
 
   ProcessFunctor processFunctor(readExp, rl, structureVec,
                                  numObservedFragments, numAssignedFragments, numValidHits,
@@ -2013,6 +2003,25 @@ void processReadLibrary(
                                  fmCalc, clusterForest, fragLengthDist, observedBiasParams,
                                  salmonOpts, coverageThresh, iomutex, initialRound,
                                  burnedIn, writeToCache, threads);
+#else
+  // NOTE : When we can support C++14, we can replace the entire ProcessFunctor class above with this
+  // generic lambda.
+  auto processFunctor = [&](size_t i, auto& parserPtr, auto* index) {
+    if (salmonOpts.qmFileName != "" and i == 0) {
+      rapmap::utils::writeSAMHeader(*index, salmonOpts.qmLog);
+    }
+    auto threadFun = [&, i]() -> void {
+      processReadsQuasi(parserPtr.get(), readExp, rl, structureVec[i],
+                        numObservedFragments, numAssignedFragments, numValidHits,
+                        upperBoundHits, index, transcripts,
+                        fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
+                        salmonOpts, coverageThresh, iomutex, initialRound,
+                        burnedIn, writeToCache);
+    };
+    threads.emplace_back(threadFun);
+  };
+#endif // SALMON_DEPRECATED_COMPILER
+
   // If the read library is paired-end
   // ------ Paired-end --------
   bool isPairedEnd = rl.format().type == ReadType::PAIRED_END;

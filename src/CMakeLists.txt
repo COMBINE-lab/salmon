@@ -87,6 +87,9 @@ ksw2pp/ksw2_extf2_sse.c
 ksw2pp/ksw2_extz2_sse.c
 )
 
+# check if we know how to do IPO
+check_ipo_supported(RESULT HAS_IPOHAS_IPO)
+
 add_library(ksw2pp_sse2 OBJECT ${KSW2PP_ADVANCED_LIB_SRCS})
 add_library(ksw2pp_sse4 OBJECT ${KSW2PP_ADVANCED_LIB_SRCS})
 add_library(ksw2pp_basic OBJECT ${KSW2PP_BASIC_LIB_SRCS})
@@ -149,9 +152,6 @@ endif()
 
 set (TGT_RELEASE_FLAGS "${TGT_COMPILE_FLAGS};${TGT_WARN_FLAGS}")
 set (TGT_DEBUG_FLAGS "-g;${TGT_COMPILE_FLAGS};${TGT_WARN_FLAGS}")
-
-# check if we know how to do IPO
-check_ipo_supported(RESULT HAS_IPOHAS_IPO)
 
 # Build the Salmon library
 add_library(salmon_core STATIC ${SALMON_LIB_SRCS} )

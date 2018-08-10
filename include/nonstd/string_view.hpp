@@ -6,8 +6,6 @@
 // Distributed under the Boost Software License, Version 1.0. 
 // (See accompanying file LICENSE.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
 
-#pragma once
-
 #ifndef NONSTD_SV_LITE_H_INCLUDED
 #define NONSTD_SV_LITE_H_INCLUDED
 
@@ -54,7 +52,7 @@
 // Compiler detection (C++20 is speculative):
 // Note: MSVC supports C++14 since it supports C++17.
 
-#if defined(_MSVC_LANG)
+#ifdef _MSVC_LANG
 # define nssv_MSVC_LANG  _MSVC_LANG
 #else
 # define nssv_MSVC_LANG  0
@@ -68,7 +66,7 @@
 
 // use C++17 std::string_view if available:
 
-#if defined(__has_include)
+#if defined( __has_include )
 # define nssv_HAS_INCLUDE( arg )  __has_include( arg )
 #else
 # define nssv_HAS_INCLUDE( arg )  0
@@ -201,13 +199,13 @@ using std::operator<<;
 
 #define nssv_COMPILER_VERSION( major, minor, patch )  (10 * ( 10 * major + minor) + patch)
 
-#if defined(__clang__)
+#if defined __clang__
 # define nssv_COMPILER_CLANG_VERSION  nssv_COMPILER_VERSION(__clang_major__, __clang_minor__, __clang_patchlevel__)
 #else
 # define nssv_COMPILER_CLANG_VERSION    0
 #endif
 
-#if defined(__GNUC__)
+#if defined __GNUC__
 # define nssv_COMPILER_GNUC_VERSION  nssv_COMPILER_VERSION(__GNUC__, __GNUC_MINOR__, __GNUC_PATCHLEVEL__)
 #else
 # define nssv_COMPILER_GNUC_VERSION    0
@@ -260,7 +258,7 @@ using std::operator<<;
 # define nssv_HAVE_NODISCARD  1
 #endif
 
-// For the rest, consider VC14 as C++11 for string_view lite:
+// For the rest, consider VC14 as C++11 for optional-lite:
 
 #if      nssv_COMPILER_MSVC_VERSION >= 140
 # undef  nssv_CPP11_OR_GREATER
@@ -341,11 +339,11 @@ using std::operator<<;
 
 // Clang, GNUC, MSVC warning suppression macros:
 
-#if defined(__clang__)
+#ifdef __clang__
 # pragma clang diagnostic ignored "-Wreserved-user-defined-literal"
 # pragma clang diagnostic push
 # pragma clang diagnostic ignored "-Wuser-defined-literals"
-#elif defined(__GNUC__)
+#elif defined  __GNUC__
 # pragma  GCC  diagnostic push
 # pragma  GCC  diagnostic ignored "-Wliteral-suffix"
 #endif // __clang__
@@ -360,9 +358,9 @@ using std::operator<<;
 # define nssv_DISABLE_MSVC_WARNINGS(codes)
 #endif
 
-#if defined(__clang__)
+#ifdef __clang__
 # define nssv_RESTORE_WARNINGS()  _Pragma("clang diagnostic pop")
-#elif defined(__GNUC__)
+#elif defined __GNUC__
 # define nssv_RESTORE_WARNINGS()  _Pragma("GCC diagnostic pop")
 #elif nssv_COMPILER_MSVC_VERSION >= 140
 # define nssv_RESTORE_WARNINGS()  __pragma(warning(pop ))

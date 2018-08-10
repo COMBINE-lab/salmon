@@ -136,12 +136,12 @@ void VBEMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
     const std::vector<uint32_t>& txps = txpGroupLabels[eqID];
     const auto& auxs = txpGroupCombinedWeights[eqID];
 
-    double denom = 0.0;
     size_t groupSize = txpGroupCombinedWeights[eqID].size(); // txps.size();
     // If this is a single-transcript group,
     // then it gets the full count.  Otherwise,
     // update according to our VBEM rule.
     if (BOOST_LIKELY(groupSize > 1)) {
+      double denom = 0.0;
       for (size_t i = 0; i < groupSize; ++i) {
         auto tid = txps[i];
         auto aux = auxs[i];
@@ -197,12 +197,12 @@ void EMUpdate_(EQVecT& eqVec,
             const std::vector<uint32_t>& txps = tgroup.txps;
             const auto& auxs = kv.second.combinedWeights;
 
-            double denom = 0.0;
             size_t groupSize = kv.second.weights.size(); // txps.size();
             // If this is a single-transcript group,
             // then it gets the full count.  Otherwise,
             // update according to our VBEM rule.
             if (BOOST_LIKELY(groupSize > 1)) {
+              double denom = 0.0;
               for (size_t i = 0; i < groupSize; ++i) {
                 auto tid = txps[i];
                 auto aux = auxs[i];
@@ -286,12 +286,12 @@ void VBEMUpdate_(EQVecT& eqVec,
             const std::vector<uint32_t>& txps = tgroup.txps;
             const auto& auxs = kv.second.combinedWeights;
 
-            double denom = 0.0;
             size_t groupSize = kv.second.weights.size(); // txps.size();
             // If this is a single-transcript group,
             // then it gets the full count.  Otherwise,
             // update according to our VBEM rule.
             if (BOOST_LIKELY(groupSize > 1)) {
+              double denom = 0.0;
               for (size_t i = 0; i < groupSize; ++i) {
                 auto tid = txps[i];
                 auto aux = auxs[i];
@@ -329,7 +329,6 @@ size_t markDegenerateClasses(
     std::shared_ptr<spdlog::logger> jointLog, bool verbose = false) {
 
   size_t numDropped{0};
-  size_t idx{0};
   for (auto& kv : eqVec) {
     uint64_t count = kv.second.count;
     // for each transcript in this class
@@ -580,7 +579,6 @@ bool CollapsedEMOptimizer::gatherBootstraps(
     }
   }
 
-  bool useVBEM{sopt.useVBOpt};
   bool perTranscriptPrior{sopt.perTranscriptPrior};
   double priorValue{sopt.vbPrior};
 
@@ -616,12 +614,6 @@ bool CollapsedEMOptimizer::gatherBootstraps(
       markDegenerateClasses(eqVec, alphas, effLens, available, sopt.jointLog);
   sopt.jointLog->info("Marked {} weighted equivalence classes as degenerate",
                       numRemoved);
-
-  size_t itNum{0};
-
-  // EM termination criterion, adopted from Bray et al. 2016
-  //double minAlpha = 1e-8;
-  double cutoff = minAlpha;
 
   // Since we will use the same weights and transcript groups for each
   // of the bootstrap samples (only the count vector will change), it
