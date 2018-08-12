@@ -221,7 +221,7 @@ void optimizeCell(SCExpT& experiment,
                   bool quiet, std::atomic<uint64_t>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, bool txpLevel, bool naive,
-                  bool eqClassLevel){
+                  bool eqClassLevel, bool inDebugMode){
   // HACK: todo: major refactoring needed
   if (eqClassLevel){
     txpLevel = eqClassLevel;
@@ -232,11 +232,13 @@ void optimizeCell(SCExpT& experiment,
   // looping over until the end of the file
   while((trueBarcodeIdx = barcode++) < totalCells) {
     // per-cell level optimization
-    if(umiCount[trueBarcodeIdx] < 10){
+    if ( (not inDebugMode && umiCount[trueBarcodeIdx] < 10) ||
+         (inDebugMode && umiCount[trueBarcodeIdx] == 0) ) {
       //skip the barcode if no mapped UMI
       skippedCBcount.insert(trueBarcodeIdx);
       continue;
     }
+
     auto& trueBarcodeStr = trueBarcodes[trueBarcodeIdx];
 
     //extracting per-cell level eq class information
@@ -620,7 +622,8 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                numGenes,
                                aopt.txpLevel,
                                aopt.naive,
-                               aopt.eqClassLevel);
+                               aopt.eqClassLevel,
+                               aopt.debug);
   }
 
   for (auto& t : workerThreads) {
@@ -638,7 +641,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
       if (idx > lowRegionCutoffIdx){
         numLowConfidentBarcode--;
       }
-      else{
+      else if ( not aopt.debug ){
         std::cout<< "Skipped Barcodes are from High Confidence Region\n"
                  << " Should not happen"<<std::flush;
         exit(1);
@@ -676,9 +679,15 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
       aopt.jointLog->info("Starting Import of the {} count matrix.", mode);
       countMatrix.resize(trueBarcodes.size(),
                          std::vector<double> (numElem, 0.0));
-      alevin::whitelist::populate_count_matrix(aopt.outputDirectory,
-                                               numElem,
-                                               countMatrix);
+      auto zerod_cells = alevin::whitelist::populate_count_matrix(aopt.outputDirectory,
+                                                                  aopt.debug,
+                                                                  numElem,
+                                                                  countMatrix);
+      if (zerod_cells > 0) {
+        aopt.jointLog->warn("Found {} cells with no reads,"
+                            " ignoring due to debug mode.", zerod_cells);
+      }
+
       aopt.jointLog->info("Done Importing {} count matrix for dimension {}x{}",
                           mode, numCells, numGenes);
 

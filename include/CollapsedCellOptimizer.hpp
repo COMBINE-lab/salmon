@@ -69,7 +69,8 @@ void optimizeCell(SCExpT& experiment,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool doEM,
                   bool quiet,std::atomic<uint64_t>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                  uint32_t numGenes, bool txpLevel, bool naive, bool eqClassLevel);
+                  uint32_t numGenes, bool txpLevel, bool naive, bool eqClassLevel,
+                  bool inDebugMode);
 
 using VecT = CollapsedCellOptimizer::SerialVecType;
 
