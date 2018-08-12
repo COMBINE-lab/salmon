@@ -216,7 +216,7 @@ void optimizeCell(SCExpT& experiment,
                   std::deque<std::pair<TranscriptGroup, uint32_t>>& orderedTgroup,
                   std::shared_ptr<spdlog::logger>& jointlog,
                   bfs::path& outDir, std::vector<uint32_t>& umiCount,
-                  spp::sparse_hash_set<uint32_t>& skippedCBcount,
+                  std::vector<CellState>& skippedCB,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool doEM,
                   bool quiet, std::atomic<uint64_t>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
@@ -232,10 +232,10 @@ void optimizeCell(SCExpT& experiment,
   // looping over until the end of the file
   while((trueBarcodeIdx = barcode++) < totalCells) {
     // per-cell level optimization
-    if ( (not inDebugMode && umiCount[trueBarcodeIdx] < 10) ||
+    if ( (not inDebugMode && umiCount[trueBarcodeIdx] < 10) or
          (inDebugMode && umiCount[trueBarcodeIdx] == 0) ) {
       //skip the barcode if no mapped UMI
-      skippedCBcount.insert(trueBarcodeIdx);
+      skippedCB[trueBarcodeIdx].inActive = true;
       continue;
     }
 
@@ -419,7 +419,7 @@ void optimizeCell(SCExpT& experiment,
           }
         }
       }
-      gzw.writeAbundances(trueBarcodeStr, geneAlphas);
+      gzw.writeAbundances(inDebugMode, trueBarcodeStr, geneAlphas);
     }
     else {
       CollapsedCellOptimizer::SerialVecType alphas(transcripts.size(), 0.0);
@@ -440,7 +440,7 @@ void optimizeCell(SCExpT& experiment,
 
       if (txpLevel){
         // dump txp level counts in matrix
-        gzw.writeAbundances(trueBarcodeStr, alphas);
+        gzw.writeAbundances( inDebugMode, trueBarcodeStr, alphas);
       }
       else{
         //dump gene level counts in matrix
@@ -463,7 +463,7 @@ void optimizeCell(SCExpT& experiment,
           }
           geneAlphas[gid] += alphas[tid];
         }
-        gzw.writeAbundances(trueBarcodeStr, geneAlphas);
+        gzw.writeAbundances( inDebugMode, trueBarcodeStr, geneAlphas);
       }
       totalDedupCounts += totalcount;
     }
@@ -481,8 +481,6 @@ void optimizeCell(SCExpT& experiment,
       fmt::print(stderr, "\033[A\r\r{}Analyzed {} cells ({}{}%{} of all).{}\n",
                  green, cellCount, red, round(percentCompletion), green, RESET_COLOR);
     }
-
-    //found = jqueue.try_dequeue(trueBarcodeIdx);
   }
 }
 
@@ -595,7 +593,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
     }
   }
 
-  spp::sparse_hash_set<uint32_t> skippedCBcount;
+  std::vector<CellState> skippedCB (numCells);
   std::atomic<uint32_t> bcount{0};
   std::atomic<uint64_t> totalDedupCounts{0};
 
@@ -611,7 +609,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                std::ref(aopt.jointLog),
                                std::ref(aopt.outputDirectory),
                                std::ref(umiCount),
-                               std::ref(skippedCBcount),
+                               std::ref(skippedCB),
                                aopt.dumpBarcodeEq,
                                std::ref(gzw),
                                aopt.protocol.umiLength,
@@ -631,20 +629,30 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   }
   aopt.jointLog->info("Total {} UMI after deduplicating.",
                       totalDedupCounts);
-  if(skippedCBcount.size()>0){
+
+  uint32_t skippedCBcount {0};
+  for(auto cb: skippedCB){
+    if (cb.inActive) {
+      skippedCBcount += 1;
+    }
+  }
+
+  if( skippedCBcount > 0 ) {
     aopt.jointLog->warn("Skipped {} barcodes due to No mapped read",
-                        skippedCBcount.size());
+                        skippedCBcount);
     auto lowRegionCutoffIdx = numCells - numLowConfidentBarcode;
-    for (uint32_t idx: skippedCBcount){
+    for (size_t idx=0; idx < numCells; idx++){
       // not very efficient way but assuming the size is small enough
-      trueBarcodes.erase(trueBarcodes.begin() + idx);
-      if (idx > lowRegionCutoffIdx){
-        numLowConfidentBarcode--;
-      }
-      else if ( not aopt.debug ){
-        std::cout<< "Skipped Barcodes are from High Confidence Region\n"
-                 << " Should not happen"<<std::flush;
-        exit(1);
+      if (skippedCB[idx].inActive) {
+        trueBarcodes.erase(trueBarcodes.begin() + idx);
+        if (idx > lowRegionCutoffIdx){
+          numLowConfidentBarcode--;
+        }
+        else if ( not aopt.debug ){
+          std::cout<< "Skipped Barcodes are from High Confidence Region\n"
+                   << " Should not happen"<<std::flush;
+          exit(1);
+        }
       }
     }
     numCells = trueBarcodes.size();
