@@ -303,6 +303,10 @@ namespace salmon {
        "Dump barcode modified fastq file for downstream analysis by"
        " using coin toss for multi-mapping.")
       (
+       "debug", po::bool_switch()->default_value(alevin::defaults::debug),
+       "Enabling this mode mode will try to ignore segfaults based on no whitelist"
+       " mapping or no whitelist deduplicated count")
+      (
        "dumpBfh", po::bool_switch()->default_value(alevin::defaults::dumpBFH),
        "dump the big hash with all the barcodes and the UMI sequence.")
       (
