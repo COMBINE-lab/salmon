@@ -1,5 +1,18 @@
 cmake_minimum_required (VERSION 3.9)
 
+if(DEFINED ENV{CC})
+  set(CC $ENV{CC})
+else()
+  set(CC gcc)
+endif()
+message("CC: ${CC}")
+
+set(CC_VERSION "")
+if(${CC} MATCHES ^gcc-)
+  string(REGEX REPLACE "gcc-" "" CC_VERSION ${CC})
+endif()
+message("CC version: ${CC_VERSION}")
+
 enable_testing()
 
 project (Salmon)
@@ -167,10 +180,10 @@ if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
     endif()
 
     set (WARNING_IGNORE_FLAGS "${WARNING_IGNORE_FLAGS} -Wno-unused-local-typedefs")
-    set (BOOST_TOOLSET "gcc")
+    set (BOOST_TOOLSET "${CC}")
     set (BOOST_CONFIGURE_TOOLSET "--with-toolset=gcc")
     set (BCXX_FLAGS "${CXXSTDFLAG}")
-    set (BOOST_EXTRA_FLAGS toolset=gcc cxxflags=${BCXX_FLAGS})
+    set (BOOST_EXTRA_FLAGS toolset=${CC} cxxflags=${BCXX_FLAGS})
 # Tentatively, we support clang now
 elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
     set(CLANG TRUE)
@@ -410,6 +423,11 @@ elseif(FETCH_BOOST)
         INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
         #PATCH_COMMAND patch -p2 < ${CMAKE_CURRENT_SOURCE_DIR}/external/boost156.patch
 	CONFIGURE_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_66_0/bootstrap.sh ${BOOST_CONFIGURE_TOOLSET} ${BOOST_BUILD_LIBS} --prefix=<INSTALL_DIR>
+        ADD_CUSTOM_COMMAND(
+            OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_66_0/tools/build/src/user-config.jam
+            PRE_BUILD
+            COMMAND echo "using gcc : ${CC_VERSION} : ${CMAKE_CXX_COMPILER} ;"
+        )
 	BUILD_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_66_0/b2 -d0 -j2 ${BOOST_LIB_SUBSET} toolset=${BOOST_TOOLSET} ${BOOST_EXTRA_FLAGS} cxxflags=${BOOST_CXX_FLAGS} link=static install
         BUILD_IN_SOURCE 1
         INSTALL_COMMAND ""
