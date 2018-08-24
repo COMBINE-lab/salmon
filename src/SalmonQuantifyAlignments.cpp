@@ -185,7 +185,7 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
 
   double startingCumulativeMass =
       fmCalc.cumulativeLogMassAt(firstTimestepOfRound);
-  auto expectedLibraryFormat = alnLib.format();
+  LibraryFormat expectedLibraryFormat = alnLib.format();
   uint32_t numBurninFrags{salmonOpts.numBurninFrags};
   bool noLengthCorrection{salmonOpts.noLengthCorrection};
 
@@ -200,8 +200,8 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
 
   double maxZeroFrac{0.0};
 
-  auto isUnexpectedOrphan = [expectedLibraryFormat](FragT* aln) -> bool {
-    return (expectedLibraryFormat.type == ReadType::PAIRED_END and
+  auto isUnexpectedOrphan = [](FragT* aln, LibraryFormat expectedLibFormat) -> bool {
+    return (expectedLibFormat.type == ReadType::PAIRED_END and
             !aln->isPaired());
   };
 
@@ -226,7 +226,7 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
 
     // If we actually got some work
     if (miniBatch != nullptr) {
-
+      expectedLibraryFormat = alnLib.format();
       useAuxParams = (processedReads >= salmonOpts.numPreBurninFrags);
       bool considerCondProb = (useAuxParams or burnedIn);
       ++activeBatches;
@@ -288,7 +288,7 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
             double logFragProb = LOG_1;
             // If we are expecting a paired-end library, and this is an orphan,
             // then logFragProb should be small
-            if (isUnexpectedOrphan(aln)) {
+            if (isUnexpectedOrphan(aln, expectedLibraryFormat)) {
               logFragProb = LOG_EPSILON;
             }
 
@@ -335,11 +335,11 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
               detector->addSample(aln->libFormat());
               if (detector->canGuess()) {
                 detector->mostLikelyType(alnLib.getFormat());
-                expectedLibraryFormat = alnLib.getFormat();
+                expectedLibraryFormat = alnLib.format();
                 incompatPrior = salmonOpts.incompatPrior;
                 autoDetect = false;
               } else if (!detector->isActive()) {
-                expectedLibraryFormat = alnLib.getFormat();
+                expectedLibraryFormat = alnLib.format();
                 incompatPrior = salmonOpts.incompatPrior;
                 autoDetect = false;
               }

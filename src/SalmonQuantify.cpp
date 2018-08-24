@@ -219,7 +219,6 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
     incompatPrior = salmon::math::LOG_1;
   }
 
-  auto expectedLibraryFormat = readLib.format();
   uint64_t zeroProbFrags{0};
 
   // EQClass
@@ -237,8 +236,8 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
   double startingCumulativeMass =
       fmCalc.cumulativeLogMassAt(firstTimestepOfRound);
 
-  auto isUnexpectedOrphan = [expectedLibraryFormat](AlnT& aln) -> bool {
-    return (expectedLibraryFormat.type == ReadType::PAIRED_END and
+  auto isUnexpectedOrphan = [](AlnT& aln, LibraryFormat expectedLibFormat) -> bool {
+    return (expectedLibFormat.type == ReadType::PAIRED_END and
             aln.mateStatus != rapmap::utils::MateStatus::PAIRED_END_PAIRED);
   };
 
@@ -253,6 +252,7 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
       if (alnGroup.size() == 0) {
         continue;
       }
+      LibraryFormat expectedLibraryFormat = readLib.format();
       std::fill(libTypeCountsPerFrag.begin(), libTypeCountsPerFrag.end(), 0);
 
       // We start out with probability 0
@@ -340,7 +340,7 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
           double logFragProb = LOG_1;
           // If we are expecting a paired-end library, and this is an orphan,
           // then logFragProb should be small
-          if (isUnexpectedOrphan(aln)) {
+          if (isUnexpectedOrphan(aln, expectedLibraryFormat)) {
             logFragProb = LOG_EPSILON;
           }
 
