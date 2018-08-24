@@ -737,7 +737,7 @@ bool GZipWriter::writeAbundances(const SalmonOpts& sopt, ExpT& readExp) {
 
   // If we're using lightweight-alignment (FMD)
   // and not allowing orphans.
-  bool useScaledCounts = !(sopt.useQuasi or sopt.allowOrphans);
+  bool useScaledCounts = !(sopt.useQuasi or sopt.allowOrphans or sopt.alnMode);
   bfs::path fname = path_ / "quant.sf";
 
   std::unique_ptr<std::FILE, int (*)(std::FILE*)> output(
