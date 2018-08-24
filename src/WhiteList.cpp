@@ -197,11 +197,13 @@ namespace alevin {
       return numrtr / denom;
     }
 
-    void populate_count_matrix(boost::filesystem::path& outDir,
+    uint32_t populate_count_matrix(boost::filesystem::path& outDir,
+                               bool inDebugMode,
                                size_t numElem,
-                               DoubleMatrixT& countMatrix){
+                               DoubleMatrixT& countMatrix) {
       boost::iostreams::filtering_istream countMatrixStream;
       countMatrixStream.push(boost::iostreams::gzip_decompressor());
+      uint32_t zerod_cells {0};
 
       auto countMatFilename = outDir / "quants_mat.gz";
       if(not boost::filesystem::exists(countMatFilename)){
@@ -218,13 +220,20 @@ namespace alevin {
         double readCount = std::accumulate(cell.begin(), cell.end(), 0.0);
 
         if (readCount == 0){
-          std::cout<<"ERROR: Importing counts from binary\n"
-                   <<"Cell has 0 reads, should not happen.\n"
-                   <<"Saw total "<< cellCount << " Cells before Error"
-                   <<std::flush;
-          exit(1);
+          if (not inDebugMode) {
+            std::cout<<"ERROR: Importing counts from binary\n"
+                     <<"Cell has 0 reads, should not happen.\n"
+                     <<"Saw total "<< cellCount << " Cells before Error"
+                     <<std::flush;
+            exit(1);
+          }
+          else {
+            zerod_cells += 1;
+          }
         }
       }
+
+      return zerod_cells;
     }
 
     template <typename ProtocolT>

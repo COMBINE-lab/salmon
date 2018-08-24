@@ -31,9 +31,10 @@ namespace alevin {
     using DoubleMatrixT = std::vector<std::vector<double>> ;
     using DoubleVectorT = std::vector<double> ;
 
-    void populate_count_matrix(boost::filesystem::path& outDir,
-                               size_t numElem,
-                               DoubleMatrixT& countMatrix);
+    uint32_t populate_count_matrix(boost::filesystem::path& outDir,
+                                   bool inDebugMode,
+                                   size_t numElem,
+                                   DoubleMatrixT& countMatrix);
 
     template <typename ProtocolT>
     bool performWhitelisting(AlevinOpts<ProtocolT>& aopt,

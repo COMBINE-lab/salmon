@@ -665,7 +665,8 @@ bool GZipWriter::writeAbundances(
   return true;
 }
 
-bool GZipWriter::writeAbundances(std::string bcName,
+bool GZipWriter::writeAbundances(bool inDebugMode,
+                                 std::string bcName,
                                  std::vector<double>& alphas) {
 #if defined __APPLE__
   spin_lock::scoped_lock sl(writeMutex_);
@@ -696,7 +697,7 @@ bool GZipWriter::writeAbundances(std::string bcName,
                   elSize * num);
 
   double total_counts = std::accumulate(alphas.begin(), alphas.end(), 0.0);
-  if (not (total_counts > 0.0)){
+  if ( not inDebugMode and not (total_counts > 0.0)){
     std::cout<< "ERROR: cell doesn't have any read count" << std::flush;
     exit(1);
   }
