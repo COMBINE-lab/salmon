@@ -475,9 +475,16 @@ public:
           }
         }
         numAgree = numFmt1 + numFmt2;
-        double ratio = static_cast<double>(numFmt1) / (numFmt1 + numFmt2);
+        double ratio = numAgree > 0 ? (static_cast<double>(numFmt1) / (numFmt1 + numFmt2)) : 0.0;
 
-        if (std::abs(ratio - 0.5) > 0.01) {
+        if (numAgree == 0) {
+          errstr << "NOTE: Read Lib [" << rl.readFilesAsString() << "] :\n";
+          errstr << "\nFound no concordant and consistent mappings. "
+                    "If this is a paired-end library, are you sure the reads are properly paired? "
+                    "check the file: " << opath.string() << " for details\n";
+          log->warn(errstr.str());
+          errstr.clear();
+        } else if (std::abs(ratio - 0.5) > 0.01) {
           errstr << "NOTE: Read Lib [" << rl.readFilesAsString() << "] :\n";
           errstr << "\nDetected a *potential* strand bias > 1\% in an "
                     "unstranded protocol "
@@ -498,7 +505,7 @@ public:
         oa(cereal::make_nvp("num_assigned_fragments",
                             numAssignedFragments_.load()));
 
-        oa(cereal::make_nvp("num_frags_with_consistent_mappings", numAgree));
+        oa(cereal::make_nvp("num_frags_with_concordant_consistent_mappings", numAgree));
         oa(cereal::make_nvp("num_frags_with_inconsistent_or_orphan_mappings", numDisagree));
         oa(cereal::make_nvp("strand_mapping_bias", ratio));
       } else {
