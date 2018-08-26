@@ -494,7 +494,7 @@ public:
           errstr.clear();
         }
 
-        oa(cereal::make_nvp("read_files", rl.readFilesAsString()));
+        oa(cereal::make_nvp("read_files", rl.readFilesAsVector()));
         std::string expectedFormat = rl.format().toString();
         oa(cereal::make_nvp("expected_format", expectedFormat));
 

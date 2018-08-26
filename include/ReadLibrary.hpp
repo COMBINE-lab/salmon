@@ -182,6 +182,39 @@ public:
     return true;
   }
 
+  std::vector<std::string> readFilesAsVector() {
+    std::stringstream sstr;
+    std::vector<std::string> fnames;
+    if (isPairedEnd()) {
+      size_t n1 = mateOneFilenames_.size();
+      size_t n2 = mateTwoFilenames_.size();
+      if (n1 == 0 or n2 == 0 or n1 != n2) {
+        sstr << "LIBRARY INVALID --- You must provide #1 and #2 mated read "
+          "files with a paired-end library type";
+        fnames.push_back(sstr.str());
+      } else {
+        fnames.reserve(n1+n2);
+        for (size_t i = 0; i < n1; ++i) {
+          fnames.push_back(mateOneFilenames_[i]);
+          fnames.push_back(mateTwoFilenames_[i]);
+        }
+      }
+    } else {
+      size_t n = unmatedFilenames_.size();
+      if (n == 0) {
+        sstr << "LIBRARY INVALID --- You must provide unmated read files with "
+          "a single-end library type";
+        fnames.push_back(sstr.str());
+      } else {
+        for (size_t i = 0; i < n; ++i) {
+          fnames.push_back(unmatedFilenames_[i]);
+        }
+      }
+    }
+
+    return fnames;
+  }
+
   std::string readFilesAsString() {
     std::stringstream sstr;
     if (isPairedEnd()) {
@@ -191,13 +224,15 @@ public:
         sstr << "LIBRARY INVALID --- You must provide #1 and #2 mated read "
                 "files with a paired-end library type";
       } else {
+        if (n1 > 1) { sstr << "[ "; }
         for (size_t i = 0; i < n1; ++i) {
-          sstr << "( " << mateOneFilenames_[i] << ", " << mateTwoFilenames_[i]
-               << " )";
+          sstr << "[ " << mateOneFilenames_[i] << ", " << mateTwoFilenames_[i]
+               << "]";
           if (i != n1 - 1) {
             sstr << ", ";
           }
         }
+        if (n1 > 1) { sstr << " ]"; }
       }
     } else { // single end
       size_t n = unmatedFilenames_.size();
@@ -205,12 +240,14 @@ public:
         sstr << "LIBRARY INVALID --- You must provide unmated read files with "
                 "a single-end library type";
       } else {
+        sstr << "[ ";
         for (size_t i = 0; i < n; ++i) {
           sstr << unmatedFilenames_[i];
           if (i != n - 1) {
             sstr << ", ";
           }
         }
+        sstr << " ]";
       }
     } // end else
     return sstr.str();
