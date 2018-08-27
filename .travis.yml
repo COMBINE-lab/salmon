@@ -38,7 +38,7 @@ script:
       make -j 4 VERBOSE=1 && \
       make install && \
       ./src/salmon -h && \
-      make test VERBOSE=1
+      make CTEST_OUTPUT_ON_FAILURE=1 VERBOSE=1 test 
     - popd
 
 after_success:
