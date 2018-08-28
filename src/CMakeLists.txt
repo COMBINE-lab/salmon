@@ -243,7 +243,6 @@ target_link_libraries(unitTests
     ${TBB_LIBRARIES}
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
-    #${FAST_MALLOC_LIB}
     ${LIBRT}
     ${CMAKE_DL_LIBS}
     )

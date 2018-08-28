@@ -133,7 +133,7 @@ endif()
 set( BOOST_EXTRA_FLAGS "--layout=tagged" )
 ## this get's set differently below if we
 ## are on clang & apple
-set (NON_APPLECLANG_LIBS gomp rt)
+set (NON_APPLECLANG_LIBS gomp)
 
 if(UNIX AND NOT APPLE)
 	set(LIBRT rt)
