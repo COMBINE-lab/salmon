@@ -10,6 +10,7 @@ ${TBB_INCLUDE_DIRS}
 ${Boost_INCLUDE_DIRS}
 ${GAT_SOURCE_DIR}/external/install/include/rapmap
 ${GAT_SOURCE_DIR}/external/install/include/rapmap/digestpp
+${ICU_INC_DIRS}
 )
 
 set ( SALMON_MAIN_SRCS
@@ -208,7 +209,7 @@ target_link_libraries(salmon
     alevin_core
     gff
     ${Boost_LIBRARIES}
-    ${ICULIB}
+    ${ICU_LIBS}
     ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
@@ -233,7 +234,7 @@ target_link_libraries(unitTests
     alevin_core
     gff
     ${Boost_LIBRARIES}
-    ${ICULIB}
+    ${ICU_LIBS}
     ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}

@@ -84,7 +84,24 @@ else()
 set(WARNING_IGNORE_FLAGS "")
 endif()
 
-set (ICULIB "")
+## Prefer static to dynamic libraries
+SET(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
+
+include(CheckIPOSupported)
+
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
+# Do we require all these components?  Any others? 
+find_package(ICU COMPONENTS i18n io uc REQUIRED)
+if (ICU_FOUND)
+   message (STATUS "ICU_INCLUDE_DIRS = ${ICU_INCLUDE_DIRS}")
+   message (STATUS "ICU_LIBRARY_DIRECTORIES = ${ICU_LIBRARY_DIRS}")
+   message (STATUS "ICU_LIBRARIES = ${ICU_LIBRARIES}")
+endif()
+
+set (ICU_LIBS "")
+set (ICU_INC_DIRS "")
 
 if(CONDA_BUILD)
   message("Building with CONDA_BUILD flag")
@@ -94,7 +111,8 @@ if(CONDA_BUILD)
   set(CXXSTDFLAG "-std=c++11")
   set(GCCVERSION "4.8.2")
   if (APPLE)
-     set (ICULIB icu)
+     set (ICU_INC_DIRS ${ICU_INCLUDE_DIRS})
+     set (ICU_LIBS ${ICU_LIBRARIES})
   endif()
   list(APPEND TGT_COMPILE_FLAGS "-DSALMON_DEPRECATED_COMPILER")
 else ()
@@ -105,18 +123,10 @@ else ()
   set(GCCVERSION "5.2")
 endif()
 
-include(CheckIPOSupported)
-
-set(THREADS_PREFER_PTHREAD_FLAG ON)
-find_package(Threads REQUIRED)
-
 set (BOOST_CXX_FLAGS "${WARNING_IGNORE_FLAGS} ${CXXSTDFLAG}")
 if (FETCH_BOOST)
    set (BOOST_CXX_FLAGS "${BOOST_CXX_FLAGS} -I${CMAKE_CURRENT_SOURCE_DIR}/external/install/include -L${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib")
 endif()
-
-## Prefer static to dynamic libraries
-SET(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
 
 ##
 # OSX is strange (some might say, stupid in this regard).  Deal with it's quirkines here.
