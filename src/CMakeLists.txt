@@ -208,6 +208,7 @@ target_link_libraries(salmon
     alevin_core
     gff
     ${Boost_LIBRARIES}
+    ${ICULIB}
     ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
@@ -232,6 +233,7 @@ target_link_libraries(unitTests
     alevin_core
     gff
     ${Boost_LIBRARIES}
+    ${ICULIB}
     ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
