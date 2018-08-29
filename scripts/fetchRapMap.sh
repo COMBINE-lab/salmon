@@ -22,11 +22,11 @@ if [ -d ${INSTALL_DIR}/src/rapmap ] ; then
     rm -fr ${INSTALL_DIR}/src/rapmap
 fi
 
-SVER=salmon-v0.11.2
+SVER=salmon-v0.11.3
 #SVER=develop-salmon
 #SVER=pe-chaining
 
-EXPECTED_SHA256=ba6fcff2e13c06a63972c5a2da97b712b9fbc4c3cb70fd77ed04234c98b8bc89
+EXPECTED_SHA256=b863548383448c21a862cc568d648199401284d70aafce8d97e798da2033aec1
 
 
 mkdir -p ${EXTERNAL_DIR}
@@ -71,6 +71,7 @@ cp -r ${EXTERNAL_DIR}/RapMap/include/*.h ${INSTALL_DIR}/include/rapmap
 cp -r ${EXTERNAL_DIR}/RapMap/include/*.hpp ${INSTALL_DIR}/include/rapmap
 cp -r ${EXTERNAL_DIR}/RapMap/include/sparsepp ${INSTALL_DIR}/include/rapmap
 cp -r ${EXTERNAL_DIR}/RapMap/include/digestpp ${INSTALL_DIR}/include/rapmap
+cp -r ${EXTERNAL_DIR}/RapMap/include/chobo ${INSTALL_DIR}/include/rapmap
 
 ##
 # Remove some redundant files that might otherwise be duplicated

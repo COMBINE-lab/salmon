@@ -20,7 +20,7 @@ extern "C" {
 struct UnpairedRead {
   bam_seq_t* read = nullptr;
   double logProb;
-  LibraryFormat libFmt{ReadType::PAIRED_END, ReadOrientation::NONE,
+  LibraryFormat libFmt{ReadType::SINGLE_END, ReadOrientation::NONE,
                        ReadStrandedness::U};
 
   UnpairedRead()

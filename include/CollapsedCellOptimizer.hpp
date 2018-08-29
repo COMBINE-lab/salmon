@@ -32,6 +32,10 @@ using tgroupweightvec = std::vector<double>;
 namespace bfs = boost::filesystem;
 using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 
+struct CellState {
+  bool inActive;
+};
+
 class CollapsedCellOptimizer {
 public:
   using VecType = std::vector<tbb::atomic<double>>;
@@ -65,11 +69,12 @@ void optimizeCell(SCExpT& experiment,
                   std::deque<std::pair<TranscriptGroup, uint32_t>>& orderedTgroup,
                   std::shared_ptr<spdlog::logger>& jointlog,
                   bfs::path& outDir, std::vector<uint32_t>& umiCount,
-                  spp::sparse_hash_set<uint32_t>& skippedCBcount,
+                  std::vector<CellState>& skippedCBcount,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool doEM,
                   bool quiet,std::atomic<uint64_t>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                  uint32_t numGenes, bool txpLevel, bool naive, bool eqClassLevel);
+                  uint32_t numGenes, bool txpLevel, bool naive, bool eqClassLevel,
+                  bool inDebugMode);
 
 using VecT = CollapsedCellOptimizer::SerialVecType;
 

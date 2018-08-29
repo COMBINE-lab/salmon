@@ -46,7 +46,7 @@
 #include "SalmonConfig.hpp"
 #include "VersionChecker.hpp"
 
-int help(std::vector<std::string> opts) { //}int argc, char* argv[]) {
+int help(const std::vector<std::string>& opts) { //}int argc, char* argv[]) {
   fmt::MemoryWriter helpMsg;
   helpMsg.write("salmon v{}\n\n", salmon::version);
   helpMsg.write(
@@ -155,6 +155,7 @@ bool verbose = false;
 int main(int argc, char* argv[]) {
   using std::string;
   namespace po = boost::program_options;
+  std::setlocale(LC_ALL, "en_US.UTF-8");
 
   // With no arguments, print help
   if (argc == 1) {

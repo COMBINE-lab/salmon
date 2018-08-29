@@ -1,5 +1,18 @@
 cmake_minimum_required (VERSION 3.9)
 
+if(DEFINED ENV{CC})
+  set(CC $ENV{CC})
+else()
+  set(CC gcc)
+endif()
+message("CC: ${CC}")
+
+set(CC_VERSION "")
+if(${CC} MATCHES ^gcc-)
+  string(REGEX REPLACE "gcc-" "" CC_VERSION ${CC})
+endif()
+message("CC version: ${CC_VERSION}")
+
 enable_testing()
 
 project (Salmon)
@@ -54,6 +67,16 @@ set (REMOVE_WARNING_FLAGS "-Wno-unused-function;-Wno-unused-local-typedefs")
 set (TGT_COMPILE_FLAGS "-ftree-vectorize;-funroll-loops;-fPIC;-fomit-frame-pointer;-O3;-DNDEBUG")
 set (TGT_WARN_FLAGS "-Wall;-Wno-unknown-pragmas;-Wno-reorder;-Wno-unused-variable;-Wreturn-type;-Werror=return-type;${REMOVE_WARNING_FLAGS}")
 
+
+###
+# Sanitizers BEGIN
+###
+#list(APPEND TGT_COMPILE_FLAGS "-fsanitize=address")
+#set(CMAKE_LINK_FLAGS "-fsanitize=address")
+###
+# Sanitizers END 
+###
+
 if (APPLE)
 set(WARNING_IGNORE_FLAGS "-Wno-deprecated-register")
 list(APPEND TGT_WARN_FLAGS -Wno-deprecated-register)
@@ -61,33 +84,41 @@ else()
 set(WARNING_IGNORE_FLAGS "")
 endif()
 
-if(CONDA_BUILD)
-  message("Building with CONDA_BUILD flag")
-  set(CMAKE_CXX_STANDARD 11)
-  set(CMAKE_CXX_STANDARD_REQUIRED ON)
-  set(CMAKE_CXX_EXTENSIONS OFF)
-  set(CXXSTDFLAG "-std=c++11")
-  set(GCCVERSION "4.8.2")
-else ()
-  set(CMAKE_CXX_STANDARD 11)
-  set(CMAKE_CXX_STANDARD_REQUIRED ON)
-  set(CMAKE_CXX_EXTENSIONS OFF)
-  set(CXXSTDFLAG "-std=c++11")
-  set(GCCVERSION "5.2")
-endif()
+## Prefer static to dynamic libraries
+SET(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
 
 include(CheckIPOSupported)
 
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 
+set (ICU_LIBS "")
+set (ICU_INC_DIRS "")
+
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CXXSTDFLAG "-std=c++14")
+set(GCCVERSION "5.2")
+
+if(CONDA_BUILD)
+  message("Building with CONDA_BUILD flag")
+  if (APPLE)
+     # Do we require all these components?  Any others? 
+     find_package(ICU COMPONENTS data i18n io uc REQUIRED)
+     if (ICU_FOUND)
+       message (STATUS "ICU_INCLUDE_DIRS = ${ICU_INCLUDE_DIRS}")
+       message (STATUS "ICU_LIBRARIES = ${ICU_LIBRARIES}")
+     endif()
+     set (ICU_INC_DIRS ${ICU_INCLUDE_DIRS})
+     set (ICU_LIBS ${ICU_LIBRARIES})
+  endif()
+endif()
+
 set (BOOST_CXX_FLAGS "${WARNING_IGNORE_FLAGS} ${CXXSTDFLAG}")
 if (FETCH_BOOST)
    set (BOOST_CXX_FLAGS "${BOOST_CXX_FLAGS} -I${CMAKE_CURRENT_SOURCE_DIR}/external/install/include -L${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib")
 endif()
-
-## Prefer static to dynamic libraries
-SET(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
 
 ##
 # OSX is strange (some might say, stupid in this regard).  Deal with it's quirkines here.
@@ -109,7 +140,7 @@ endif()
 set( BOOST_EXTRA_FLAGS "--layout=tagged" )
 ## this get's set differently below if we
 ## are on clang & apple
-set (NON_APPLECLANG_LIBS gomp rt)
+set (NON_APPLECLANG_LIBS gomp)
 
 if(UNIX AND NOT APPLE)
 	set(LIBRT rt)
@@ -156,10 +187,10 @@ if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
     endif()
 
     set (WARNING_IGNORE_FLAGS "${WARNING_IGNORE_FLAGS} -Wno-unused-local-typedefs")
-    set (BOOST_TOOLSET "gcc")
+    set (BOOST_TOOLSET "${CC}")
     set (BOOST_CONFIGURE_TOOLSET "--with-toolset=gcc")
     set (BCXX_FLAGS "${CXXSTDFLAG}")
-    set (BOOST_EXTRA_FLAGS toolset=gcc cxxflags=${BCXX_FLAGS})
+    set (BOOST_EXTRA_FLAGS toolset=${CC} cxxflags=${BCXX_FLAGS})
 # Tentatively, we support clang now
 elseif ("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
     set(CLANG TRUE)
@@ -399,6 +430,11 @@ elseif(FETCH_BOOST)
         INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
         #PATCH_COMMAND patch -p2 < ${CMAKE_CURRENT_SOURCE_DIR}/external/boost156.patch
 	CONFIGURE_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_66_0/bootstrap.sh ${BOOST_CONFIGURE_TOOLSET} ${BOOST_BUILD_LIBS} --prefix=<INSTALL_DIR>
+        ADD_CUSTOM_COMMAND(
+            OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_66_0/tools/build/src/user-config.jam
+            PRE_BUILD
+            COMMAND echo "using gcc : ${CC_VERSION} : ${CMAKE_CXX_COMPILER} ;"
+        )
 	BUILD_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_66_0/b2 -d0 -j2 ${BOOST_LIB_SUBSET} toolset=${BOOST_TOOLSET} ${BOOST_EXTRA_FLAGS} cxxflags=${BOOST_CXX_FLAGS} link=static install
         BUILD_IN_SOURCE 1
         INSTALL_COMMAND ""
@@ -643,27 +679,6 @@ ExternalProject_Add(libstadenio
 
     BUILD_IN_SOURCE 1
     INSTALL_COMMAND make install
-)
-
-message("Build system will fetch SPDLOG")
-message("==================================================================")
-ExternalProject_Add(libspdlog
-    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/spdlog/archive/v0.16.1.tar.gz -o spdlog-v0.16.1.tar.gz &&
-                     ${SHASUM} 733260e1fbdcf1b3dc307fc585e4476240026de8be28eb905731d2ab0942deae spdlog-v0.16.1.tar.gz &&
-                     tar -xzf spdlog-v0.16.1.tar.gz 
-    ##
-    #URL https://github.com/COMBINE-lab/spdlog/archive/v0.12.0.tar.gz
-    #DOWNLOAD_NAME spdlog-v0.12.0.tar.gz
-    #TLS_VERIFY FALSE
-    #URL_HASH SHA1=c868b4d1a27c4d9fb3b748f0566a8f0390d83ffb
-    ##
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/spdlog-0.16.1
-    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    CONFIGURE_COMMAND ""
-    BUILD_COMMAND ""
-    BUILD_IN_SOURCE 1
-    INSTALL_COMMAND cp -r <SOURCE_DIR>/include/spdlog <INSTALL_DIR>/include
 )
 
 set (FAST_MALLOC_LIB "")

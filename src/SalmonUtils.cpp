@@ -2004,9 +2004,11 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
   public:
     CombineableBiasParams(uint32_t K, size_t numCondBins, size_t numGCBins)
         : expectGC(numCondBins, numGCBins,
-                   distribution_utils::DistributionSpace::LINEAR) {
-      expectPos5 = std::vector<SimplePosBias>(5);
-      expectPos3 = std::vector<SimplePosBias>(5);
+                   distribution_utils::DistributionSpace::LINEAR),
+          expectPos5(std::vector<SimplePosBias>(5)),
+          expectPos3(std::vector<SimplePosBias>(5)) {
+      //expectPos5 = std::vector<SimplePosBias>(5);
+      //expectPos3 = std::vector<SimplePosBias>(5);
     }
 
     std::vector<SimplePosBias> expectPos5;

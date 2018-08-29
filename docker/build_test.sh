@@ -1,2 +1,3 @@
 #! /bin/bash
-docker build -t combinelab/salmon:0.11.2 .
+SALMON_VERSION=0.11.3
+docker build -t combinelab/salmon:${SALMON_VERSION} -t combinelab/salmon:latest .

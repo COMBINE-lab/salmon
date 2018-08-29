@@ -10,6 +10,7 @@ ${TBB_INCLUDE_DIRS}
 ${Boost_INCLUDE_DIRS}
 ${GAT_SOURCE_DIR}/external/install/include/rapmap
 ${GAT_SOURCE_DIR}/external/install/include/rapmap/digestpp
+${ICU_INC_DIRS}
 )
 
 set ( SALMON_MAIN_SRCS
@@ -87,6 +88,9 @@ ksw2pp/ksw2_extf2_sse.c
 ksw2pp/ksw2_extz2_sse.c
 )
 
+# check if we know how to do IPO
+check_ipo_supported(RESULT HAS_IPOHAS_IPO)
+
 add_library(ksw2pp_sse2 OBJECT ${KSW2PP_ADVANCED_LIB_SRCS})
 add_library(ksw2pp_sse4 OBJECT ${KSW2PP_ADVANCED_LIB_SRCS})
 add_library(ksw2pp_basic OBJECT ${KSW2PP_BASIC_LIB_SRCS})
@@ -150,9 +154,6 @@ endif()
 set (TGT_RELEASE_FLAGS "${TGT_COMPILE_FLAGS};${TGT_WARN_FLAGS}")
 set (TGT_DEBUG_FLAGS "-g;${TGT_COMPILE_FLAGS};${TGT_WARN_FLAGS}")
 
-# check if we know how to do IPO
-check_ipo_supported(RESULT HAS_IPOHAS_IPO)
-
 # Build the Salmon library
 add_library(salmon_core STATIC ${SALMON_LIB_SRCS} )
 target_compile_definitions(salmon_core PUBLIC
@@ -208,6 +209,7 @@ target_link_libraries(salmon
     alevin_core
     gff
     ${Boost_LIBRARIES}
+    ${ICU_LIBS}
     ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
@@ -232,6 +234,7 @@ target_link_libraries(unitTests
     alevin_core
     gff
     ${Boost_LIBRARIES}
+    ${ICU_LIBS}
     ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
@@ -243,7 +246,6 @@ target_link_libraries(unitTests
     ${TBB_LIBRARIES}
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
-    ${FAST_MALLOC_LIB}
     ${LIBRT}
     ${CMAKE_DL_LIBS}
     )
@@ -275,8 +277,6 @@ add_dependencies(salmon libcereal)
 add_dependencies(alevin_core libstadenio)
 add_dependencies(salmon_core libstadenio)
 add_dependencies(salmon libstadenio)
-add_dependencies(salmon_core libspdlog)
-add_dependencies(salmon libspdlog)
 #add_dependencies(salmon_core libbwa)
 #add_dependencies(salmon libbwa)
 add_dependencies(salmon_core libgff)

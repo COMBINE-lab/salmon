@@ -58,6 +58,8 @@ struct AlevinOpts {
   bool useCorrelation;
   // don't run EM flag
   bool doEM;
+  // Avoid segfaults based on no whitelist mapping
+  bool debug;
   // perform naive deduplication
   bool naive;
   // perform eqclass level analysis instead of gene or txp level minsets

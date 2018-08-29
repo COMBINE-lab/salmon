@@ -665,6 +665,25 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
         whiteFile.close();
       }
       aopt.jointLog->info("Done importing white-list Barcodes");
+      if (aopt.debug) {
+        std::vector<std::string> skippedTrueBarcodes ;
+        for ( auto trueBarcode: trueBarcodes ) {
+          auto it = freqCounter.find(trueBarcode);
+          if (it == freqCounter.end() ) {
+            skippedTrueBarcodes.emplace_back(trueBarcode);
+          }
+        }
+
+        if ( skippedTrueBarcodes.size() > 0 ) {
+          aopt.jointLog->warn("Skipping {} Barcodes with 0 reads"
+                              "\n Assuming this is the required behavior.",
+                              skippedTrueBarcodes.size());
+          for (auto trueBarcode: skippedTrueBarcodes) {
+            trueBarcodes.erase(trueBarcode);
+          }
+        }
+      }
+
       aopt.jointLog->info("Total {} white-listed Barcodes", trueBarcodes.size());
     }
     else {
@@ -906,7 +925,7 @@ salmon-based processing of single-cell RNA-seq data.
     }
 
     std::stringstream commentStream;
-    commentStream << "### salmon (single-cell-based) v" << salmon::version << "\n";
+    commentStream << "### alevin (dscRNA-seq quantification) v" << salmon::version << "\n";
     commentStream << "### [ program ] => salmon \n";
     commentStream << "### [ command ] => alevin \n";
     for (auto& opt : orderedOptions.options) {

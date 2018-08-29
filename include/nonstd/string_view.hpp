@@ -9,7 +9,13 @@
 #ifndef NONSTD_SV_LITE_H_INCLUDED
 #define NONSTD_SV_LITE_H_INCLUDED
 
-#define  string_view_lite_VERSION "1.0.0"
+#define  string_view_lite_MAJOR  1
+#define  string_view_lite_MINOR  0
+#define  string_view_lite_PATCH  0
+#define  string_view_lite_VERSION  nssv_STRINGIFY(string_view_lite_MAJOR) "." nssv_STRINGIFY(string_view_lite_MINOR) "." nssv_STRINGIFY(string_view_lite_PATCH)
+
+#define nssv_STRINGIFY(  x )  nssv_STRINGIFY_( x )
+#define nssv_STRINGIFY_( x )  #x
 
 // string-view lite configuration:
 
@@ -538,7 +544,7 @@ public:
     nssv_constexpr14 basic_string_view substr( size_type pos = 0, size_type n = npos ) const
     {
         if ( pos > size() )
-            throw std::out_of_range("nonst::string_view::copy()");
+            throw std::out_of_range("nonst::string_view::substr()");
 
         return basic_string_view( data() + pos, std::min( n, size() - pos ) );
     }
