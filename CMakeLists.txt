@@ -104,7 +104,7 @@ if(CONDA_BUILD)
   set(GCCVERSION "4.8.2")
   if (APPLE)
      # Do we require all these components?  Any others? 
-     find_package(ICU COMPONENTS i18n io uc REQUIRED)
+     find_package(ICU COMPONENTS data i18n io uc REQUIRED)
      if (ICU_FOUND)
        message (STATUS "ICU_INCLUDE_DIRS = ${ICU_INCLUDE_DIRS}")
        message (STATUS "ICU_LIBRARIES = ${ICU_LIBRARIES}")
