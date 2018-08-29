@@ -92,14 +92,6 @@ include(CheckIPOSupported)
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 
-# Do we require all these components?  Any others? 
-find_package(ICU COMPONENTS i18n io uc REQUIRED)
-if (ICU_FOUND)
-   message (STATUS "ICU_INCLUDE_DIRS = ${ICU_INCLUDE_DIRS}")
-   message (STATUS "ICU_LIBRARY_DIRECTORIES = ${ICU_LIBRARY_DIRS}")
-   message (STATUS "ICU_LIBRARIES = ${ICU_LIBRARIES}")
-endif()
-
 set (ICU_LIBS "")
 set (ICU_INC_DIRS "")
 
@@ -111,6 +103,12 @@ if(CONDA_BUILD)
   set(CXXSTDFLAG "-std=c++11")
   set(GCCVERSION "4.8.2")
   if (APPLE)
+     # Do we require all these components?  Any others? 
+     find_package(ICU COMPONENTS i18n io uc REQUIRED)
+     if (ICU_FOUND)
+       message (STATUS "ICU_INCLUDE_DIRS = ${ICU_INCLUDE_DIRS}")
+       message (STATUS "ICU_LIBRARIES = ${ICU_LIBRARIES}")
+     endif()
      set (ICU_INC_DIRS ${ICU_INCLUDE_DIRS})
      set (ICU_LIBS ${ICU_LIBRARIES})
   endif()
