@@ -27,8 +27,8 @@
 namespace salmon {
 constexpr char majorVersion[] = "0";
 constexpr char minorVersion[] = "11";
-constexpr char patchVersion[] = "3";
-constexpr char version[] = "0.11.3";
+constexpr char patchVersion[] = "4";
+constexpr char version[] = "0.11.4";
 constexpr uint32_t indexVersion = 2;
 constexpr char requiredQuasiIndexVersion[] = "q5";
 } // namespace salmon
