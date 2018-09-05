@@ -109,6 +109,7 @@ namespace defaults {
   constexpr const bool isChromium{false};
   constexpr const bool isInDrop{false};
   constexpr const bool isGemcode{false};
+  constexpr const bool isCelseq{false};
   constexpr const bool dumpBarcodeEq{false};
   constexpr const bool noQuant{false};
   constexpr const bool noSoftMap{true};

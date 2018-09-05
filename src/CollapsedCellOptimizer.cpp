@@ -780,6 +780,14 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       size_t numLowConfidentBarcode);
 template
 bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
+                                      AlevinOpts<apt::Celseq>& aopt,
+                                      GZipWriter& gzw,
+                                      std::vector<std::string>& trueBarcodes,
+                                      std::vector<uint32_t>& umiCount,
+                                      CFreqMapT& freqCounter,
+                                      size_t numLowConfidentBarcode);
+template
+bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::Custom>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,

@@ -219,7 +219,7 @@ namespace salmon {
        "Must be used in conjunction with inDrop;")
       (
        "dumpBarcodeEq", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeEq),
-       "Dump JointEqClas with umi-barcode count.(Only DropSeq)")
+       "Dump JointEqClas with umi-barcode count.")
       (
        "dumpUmitoolsMap", po::bool_switch()->default_value(alevin::defaults::dumpUMIToolsMap),
        "Dump umi_tools readable whitelist map for downstream analysis.")
@@ -276,6 +276,9 @@ namespace salmon {
       (
        "gemcode", po::bool_switch()->default_value(alevin::defaults::isGemcode),
        "Use 10x gemcode v1 Single Cell protocol for the library.")
+      (
+       "celseq", po::bool_switch()->default_value(alevin::defaults::isCelseq),
+       "Use CelSeq2 Single Cell protocol for the library.")
       (
        "whitelist", po::value<std::string>(),
        "File containing white-list barcodes")

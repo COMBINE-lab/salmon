@@ -53,6 +53,10 @@ namespace alevin{
       Gemcode(): Rule(14, 10, BarcodeEnd::FIVE, 268435456){}
     };
 
+    struct Celseq : Rule{
+      Celseq(): Rule(6, 6, BarcodeEnd::FIVE, 4096){}
+    };
+
     //dummy class
     struct Custom : Rule{
       Custom() : Rule(0,0,BarcodeEnd::FIVE,0){}
