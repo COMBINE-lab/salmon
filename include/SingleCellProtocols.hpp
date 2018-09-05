@@ -56,8 +56,6 @@ namespace alevin{
     struct CELSeq : Rule{
       // WEHI SCORE's CEL-Seq2 starts from 5' end with a 8 bp barcode
       // and a 6 bp UMI.
-      // TODO: Don't really understand `maxValue`.
-      //       But observe it's approximately 2^(barcodeLength * 2).
       CELSeq(): Rule(8, 6, BarcodeEnd::FIVE, 65536){}
     };
 
