@@ -1810,93 +1810,6 @@ void processReadsQuasi(
 
 /// DONE QUASI
 
-#if SALMON_DEPRECATED_COMPILER
-#pragma message ( "You are compiling salmon with -std=c++11 instead of -std=c++14; this ability is deprecated and will go away soon." )
-/**
- * This functor makes it easy to invoke the appropriate template function
- * for processing the reads, generalizing over the library type and read type
- * (e.g. single vs. paired end).
- **/
-class ProcessFunctor {
-  private:
-    ReadExperimentT& readExp_;
-    ReadLibrary& rl_;
-    std::vector<AlnGroupVec<QuasiAlignment>>& structureVec_;
-    std::atomic<uint64_t>& numObservedFragments_;
-    std::atomic<uint64_t>& numAssignedFragments_;
-    std::atomic<uint64_t>& validHits_;
-    std::atomic<uint64_t>& upperBoundHits_;
-    std::vector<Transcript>& transcripts_;
-    ForgettingMassCalculator& fmCalc_;
-    ClusterForest& clusterForest_;
-    FragmentLengthDistribution& fragLengthDist_;
-    std::vector<BiasParams>& observedBiasParams_;
-    SalmonOpts& salmonOpts_;
-    double coverageThresh_;
-    std::mutex& iomutex_;
-    bool initialRound_;
-    std::atomic<bool>& burnedIn_;
-    volatile bool& writeToCache_;
-    std::vector<std::thread>& threads_;
-  public:
-    ProcessFunctor(
-                   ReadExperimentT& readExp,
-                   ReadLibrary& rl,
-                   std::vector<AlnGroupVec<QuasiAlignment>>& structureVec,
-                   std::atomic<uint64_t>& numObservedFragments,
-                   std::atomic<uint64_t>& numAssignedFragments,
-                   std::atomic<uint64_t>& validHits,
-                   std::atomic<uint64_t>& upperBoundHits,
-                   std::vector<Transcript>& transcripts,
-                   ForgettingMassCalculator& fmCalc,
-                   ClusterForest& clusterForest,
-                   FragmentLengthDistribution& fragLengthDist,
-                   std::vector<BiasParams>& observedBiasParams,
-                   SalmonOpts& salmonOpts,
-                   double coverageThresh,
-                   std::mutex& iomutex,
-                   bool initialRound,
-                   std::atomic<bool>& burnedIn,
-                   volatile bool& writeToCache,
-                   std::vector<std::thread>& threads
-                   ) :
-      readExp_(readExp), rl_(rl), structureVec_(structureVec),
-      numObservedFragments_(numObservedFragments),
-      numAssignedFragments_(numAssignedFragments),
-      validHits_(validHits),
-      upperBoundHits_(upperBoundHits),
-      transcripts_(transcripts),
-      fmCalc_(fmCalc),
-      clusterForest_(clusterForest),
-      fragLengthDist_(fragLengthDist),
-      observedBiasParams_(observedBiasParams),
-      salmonOpts_(salmonOpts),
-      coverageThresh_(coverageThresh),
-      iomutex_(iomutex),
-      initialRound_(initialRound),
-      burnedIn_(burnedIn),
-      writeToCache_(writeToCache),
-      threads_(threads) {}
-
-    template <typename ParserT, typename IndexT>
-    void operator()(size_t i, ParserT& parserPtr, IndexT* index) {
-      if (salmonOpts_.qmFileName != "" and i == 0) {
-        rapmap::utils::writeSAMHeader(*index, salmonOpts_.qmLog);
-      }
-      auto threadFun = [&, i]() -> void {
-        processReadsQuasi(
-                          parserPtr.get(), readExp_, rl_, structureVec_[i],
-                          numObservedFragments_, numAssignedFragments_, validHits_,
-                          upperBoundHits_, index, transcripts_,
-                          fmCalc_, clusterForest_, fragLengthDist_, observedBiasParams_[i],
-                          salmonOpts_, coverageThresh_, iomutex_, initialRound_,
-                          burnedIn_, writeToCache_);
-      };
-      threads_.emplace_back(threadFun);
-    }
-
-  };
-#endif // SALMON_DEPRECATED_COMPILER
 
 template <typename AlnT>
 void processReadLibrary(
@@ -1925,41 +1838,6 @@ void processReadLibrary(
   // These two deleters are highly redundant (identical in content, but have
   // different argument types). This will be resolved by generic lambdas as soon
   // as we can rely on c++14 (waiting on bioconda).
-#if SALMON_DEPRECATED_COMPILER
-#pragma message ( "You are compiling salmon with -std=c++11 instead of -std=c++14; this ability is deprecated and will go away soon." )
-  auto pairedPtrDeleter = [&salmonOpts](paired_parser* p) -> void {
-    try {
-      p->stop();
-    } catch (const std::exception& e) {
-      salmonOpts.jointLog->error("\n\n");
-      salmonOpts.jointLog->error("Processing reads : {}", e.what());
-      salmonOpts.jointLog->flush();
-      spdlog::drop_all();
-      std::exit(-1);
-    }
-    delete p;
-  };
-
-  auto singlePtrDeleter = [&salmonOpts](single_parser* p) -> void {
-    try {
-      p->stop();
-    } catch (const std::exception& e) {
-      salmonOpts.jointLog->error("\n\n");
-      salmonOpts.jointLog->error("Processing reads : {}", e.what());
-      salmonOpts.jointLog->flush();
-      spdlog::drop_all();
-      std::exit(-1);
-    }
-    delete p;
-  };
-
-  std::unique_ptr<paired_parser, decltype(pairedPtrDeleter)> pairedParserPtr(
-                                                                             nullptr, pairedPtrDeleter);
-  std::unique_ptr<single_parser, decltype(singlePtrDeleter)> singleParserPtr(
-                                                                             nullptr, singlePtrDeleter);
-
-#else
-
   /** C++14 version  **/
   auto parserPtrDeleter = [&salmonOpts](auto* p) -> void {
     try {
@@ -1979,8 +1857,6 @@ void processReadLibrary(
   std::unique_ptr<single_parser, decltype(parserPtrDeleter)> singleParserPtr(
                                                                              nullptr, parserPtrDeleter);
 
-#endif //SALMON_DEPRECATED_COMPILER
-
   /** sequence-specific and GC-fragment bias vectors --- each thread gets it's
    * own **/
   size_t numTxp = readExp.transcripts().size();
@@ -1993,17 +1869,6 @@ void processReadLibrary(
    * std::vector<EffectiveLengthStats> observedEffectiveLengths(numThreads,
    *EffectiveLengthStats(numTxp));
    **/
-
-#if SALMON_DEPRECATED_COMPILER
-#pragma message ( "You are compiling salmon with -std=c++11 instead of -std=c++14; this ability is deprecated and will go away soon." )
-
-  ProcessFunctor processFunctor(readExp, rl, structureVec,
-                                 numObservedFragments, numAssignedFragments, numValidHits,
-                                 upperBoundHits, transcripts,
-                                 fmCalc, clusterForest, fragLengthDist, observedBiasParams,
-                                 salmonOpts, coverageThresh, iomutex, initialRound,
-                                 burnedIn, writeToCache, threads);
-#else
   // NOTE : When we can support C++14, we can replace the entire ProcessFunctor class above with this
   // generic lambda.
   auto processFunctor = [&](size_t i, auto& parserPtr, auto* index) {
@@ -2020,7 +1885,6 @@ void processReadLibrary(
     };
     threads.emplace_back(threadFun);
   };
-#endif // SALMON_DEPRECATED_COMPILER
 
   // If the read library is paired-end
   // ------ Paired-end --------
