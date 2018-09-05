@@ -277,8 +277,8 @@ namespace salmon {
        "gemcode", po::bool_switch()->default_value(alevin::defaults::isGemcode),
        "Use 10x gemcode v1 Single Cell protocol for the library.")
       (
-       "celseq", po::bool_switch()->default_value(alevin::defaults::isCelseq),
-       "Use CelSeq2 Single Cell protocol for the library.")
+        "celseq", po::bool_switch()->default_value(alevin::defaults::isCELSeq),
+        "Use CEL-Seq2 Single Cell protocol for the library.")
       (
        "whitelist", po::value<std::string>(),
        "File containing white-list barcodes")

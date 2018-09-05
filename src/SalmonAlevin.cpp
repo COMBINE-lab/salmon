@@ -792,7 +792,6 @@ void processReadsQuasi(
         } else{
           //corrBarcodeIndex = barcodeMap[barcodeIndex];
           jointHitGroup.setBarcode(*barcodeIdx);
-
           aut::extractUMI(rp.first.seq, alevinOpts.protocol, umi);
 
           if ( umiLength != umi.size() ) {
@@ -1838,7 +1837,7 @@ int alevinQuant(AlevinOpts<apt::Gemcode>& aopt,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
 template
-int alevinQuant(AlevinOpts<apt::Celseq>& aopt,
+int alevinQuant(AlevinOpts<apt::CELSeq>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
@@ -1853,4 +1852,3 @@ int alevinQuant(AlevinOpts<apt::Custom>& aopt,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
-

@@ -549,9 +549,15 @@ bool writeFastq(AlevinOpts<ProtocolT>& aopt,
       for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
         auto& rp = rg[i];
         if(aopt.protocol.end == bcEnd::FIVE){
-          barcode = rp.first.seq.substr(0, aopt.protocol.barcodeLength);
-          umi = rp.first.seq.substr(aopt.protocol.barcodeLength,
-                                    aopt.protocol.umiLength);
+          //barcode = rp.first.seq.substr(0, aopt.protocol.barcodeLength);
+          //umi = rp.first.seq.substr(aopt.protocol.barcodeLength,
+          //                          aopt.protocol.umiLength);
+          // TODO: The above isn't valid for CEL-Seq2. I temporarily commented 
+          //       it out and replaced with a CEL-Seq2-specific format so that 
+          //       I could test my changes.
+          barcode = rp.first.seq.substr(aopt.protocol.umiLength, 
+                                        aopt.protocol.barcodeLength);
+          umi = rp.first.seq.substr(0, aopt.protocol.umiLength);
         }
         else if (aopt.protocol.end == bcEnd::THREE) {
           std::string seq = rp.first.seq;
@@ -988,11 +994,11 @@ salmon-based processing of single-cell RNA-seq data.
                        unmateFiles, readFiles);
     }
     else if(celseq){
-      AlevinOpts<apt::Celseq> aopt;
-      //aopt.jointLog->warn("Using 10x v1 Setting for Alevin");
+      AlevinOpts<apt::CELSeq> aopt;
+      //aopt.jointLog->warn("Using CEL-Seq Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
                        vm, commentString,
-                       unmateFiles, readFiles);
+                       barcodeFiles, readFiles);
     }
     else{
       AlevinOpts<apt::Custom> aopt;
