@@ -549,15 +549,23 @@ bool writeFastq(AlevinOpts<ProtocolT>& aopt,
       for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
         auto& rp = rg[i];
         if(aopt.protocol.end == bcEnd::FIVE){
-          //barcode = rp.first.seq.substr(0, aopt.protocol.barcodeLength);
-          //umi = rp.first.seq.substr(aopt.protocol.barcodeLength,
-          //                          aopt.protocol.umiLength);
-          // TODO: The above isn't valid for CEL-Seq2. I temporarily commented 
-          //       it out and replaced with a CEL-Seq2-specific format so that 
-          //       I could test my changes.
-          barcode = rp.first.seq.substr(aopt.protocol.umiLength, 
-                                        aopt.protocol.barcodeLength);
-          umi = rp.first.seq.substr(0, aopt.protocol.umiLength);
+          {
+            nonstd::optional<std::string> extractedSeq = aut::extractBarcode(rp.first.seq, aopt.protocol);
+            bool seqOk = (extractedSeq.has_value()) ? aut::sequenceCheck(*extractedSeq) : false;
+            if (not seqOk){
+              std::cerr<<"Can't extract barcode";
+              return false;
+            }
+            barcode = *extractedSeq;
+          }
+
+          {
+            bool seqOk = aut::extractUMI(rp.first.seq, aopt.protocol, umi);
+            if (not seqOk){
+              std::cerr<<"Can't extract UMI";
+              return false;
+            }
+          }
         }
         else if (aopt.protocol.end == bcEnd::THREE) {
           std::string seq = rp.first.seq;
