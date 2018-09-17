@@ -71,10 +71,12 @@ public:
 
                 //logger->info("read name {}", readName);
                 //logger->info("count {}", mcnt);
+                double maxScore{0};
                 for (uint64_t mappingCntr = 0; mappingCntr < mcnt; mappingCntr++) {
                     uint32_t puff_id{0}, fraglen{0};
                     rLenType lcnt{0}, rcnt{0};
                     refLenType reflPos{0}, refrPos{0};
+                    double reflScore{0}, refrScore{0};
                     bool lori, rori;
                     chunk.fill(puff_id);
                     chunk.fill(lcnt);
@@ -82,11 +84,13 @@ public:
                         chunk.fill(rcnt);
                     }
                     if (lcnt > 0) {
+                        chunk.fill(reflScore);
                         chunk.fill(reflPos);
                         lori = reflPos & PuffoutParser::HighBitMask;
                         reflPos = reflPos & PuffoutParser::LowBitsMask;
                     }
                     if (rcnt > 0) {
+                        chunk.fill(refrScore);
                         chunk.fill(refrPos);
                         rori = refrPos & PuffoutParser::HighBitMask;
                         refrPos = refrPos & PuffoutParser::LowBitsMask;
@@ -115,6 +119,8 @@ public:
                         jointHitGroup.addAlignment(qaln);
                     }
                     auto &h = jointHitGroup.alignments().back();
+                    h.score(reflScore + refrScore);
+                    if (h.score() > maxScore) maxScore = h.score();
                     switch (h.mateStatus) {
                         case MateStatus::PAIRED_END_LEFT: {
                             h.format = salmon::utils::hitType(h.pos, h.fwd);
@@ -153,6 +159,9 @@ public:
                         case MateStatus::SINGLE_END:
                             std::cerr << "single\n"; break;
                     }*/
+                }
+                for (auto &h : jointHitGroup.alignments()) {
+                    h.score(std::exp(-(maxScore - h.score())));
                 }
                 // sort alignments based on their TranscriptIDs
                 std::sort(jointHitGroup.alignments().begin(), jointHitGroup.alignments().end(),
