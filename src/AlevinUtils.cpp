@@ -545,28 +545,5 @@ namespace alevin {
     bool processAlevinOpts(AlevinOpts<apt::CELSeq>& aopt,
                            SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
-
-    /*
-    template bool sequenceCheck(std::string sequence,
-                                AlevinOpts<apt::DropSeq>& aopt,
-                                std::mutex& iomutex,
-                                Sequence seqType);
-    template bool sequenceCheck(std::string sequence,
-                                AlevinOpts<apt::InDrop>& aopt,
-                                std::mutex& iomutex,
-                                Sequence seqType);
-    template bool sequenceCheck(std::string sequence,
-                                AlevinOpts<apt::Chromium>& aopt,
-                                std::mutex& iomutex,
-                                Sequence seqType);
-    template bool sequenceCheck(std::string sequence,
-                                AlevinOpts<apt::Gemcode>& aopt,
-                                std::mutex& iomutex,
-                                Sequence seqType);
-    template bool sequenceCheck(std::string sequence,
-                                AlevinOpts<apt::Custom>& aopt,
-                                std::mutex& iomutex,
-                                Sequence seqType);
-    */
   }
 }
