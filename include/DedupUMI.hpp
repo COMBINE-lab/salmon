@@ -6,6 +6,8 @@
 
 #include <boost/graph/adjacency_list.hpp>
 #include <boost/graph/graph_traits.hpp>
+#include <boost/graph/connected_components.hpp>
+#include <boost/property_map/property_map.hpp>
 
 enum EdgeType {
   NoEdge,
@@ -14,20 +16,29 @@ enum EdgeType {
   YToX,
 };
 
-struct VertexType {
-  std::pair<uint32_t, uint32_t> vertex;
+struct SalmonEqClass {
+  std::vector<uint32_t> labels;
+  uint32_t count;
 };
 
 using UGroupT = spp::sparse_hash_map<uint64_t, uint32_t>;
 using TGroupT = std::vector<uint32_t>;
+using VertexType =  std::pair<uint32_t, uint32_t>;
 
 typedef boost::adjacency_list<boost::listS,
                               boost::vecS,
                               boost::directedS,
-                              std::pair<uint32_t, uint32_t>,
-                              EdgeType> DirectedGraph;
-typedef boost::graph_traits<DirectedGraph>::vertex_descriptor VertexT;
-typedef boost::graph_traits<DirectedGraph>::edge_descriptor EdgeT;
+                              boost::property<boost::vertex_name_t,
+                                              VertexType>> Graph;
+typedef boost::graph_traits<Graph>::vertex_descriptor VertexT;
+
+// taken from https://stackoverflow.com/questions/10405030/c-unordered-map-fail-when-used-with-a-vector-as-key
+template <typename Container>
+struct container_hash {
+  std::size_t operator()(Container const& c) const {
+    return boost::hash_range(c.begin(), c.end());
+  }
+};
 
 bool dedupClasses(std::vector<TGroupT> txpGroups,
                   std::vector<UGroupT> umiGroups,

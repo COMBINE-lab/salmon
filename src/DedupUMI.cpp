@@ -52,8 +52,8 @@ uint32_t getGeneId(spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap,
 
 
 // choosing list for edges and vector for adjacency container
-DirectedGraph graphFromCell(std::vector<TGroupT> txpGroups,
-                            std::vector<UGroupT> umiGroups) {
+Graph graphFromCell(std::vector<TGroupT> txpGroups,
+                    std::vector<UGroupT> umiGroups) {
   spp::sparse_hash_map<uint32_t, std::vector<uint32_t>> tidMap;
 
   // Get a map from each transcript to it's list of eq class
@@ -65,7 +65,7 @@ DirectedGraph graphFromCell(std::vector<TGroupT> txpGroups,
     }
   }
 
-  DirectedGraph g;
+  Graph g;
   AlignerEngine ae;
   // alevin kmer object
   alevin::types::AlevinUMIKmer umiObj;
@@ -85,7 +85,7 @@ DirectedGraph graphFromCell(std::vector<TGroupT> txpGroups,
     for ( size_t uId=0; uId<numUmis; uId++ ){
       std::pair<uint32_t, uint32_t> node (static_cast<uint32_t>(eqId),
                                           static_cast<uint32_t>(uId));
-      VertexT v1 = add_vertex(node, g);
+      VertexT v1 = add_vertex( Graph::vertex_property_type(node), g);
 
       for ( size_t uId_second=uId+1; uId_second<numUmis; uId_second++ ){
         std::pair<uint32_t, uint32_t> node_second (static_cast<uint32_t>(eqId),
@@ -97,14 +97,14 @@ DirectedGraph graphFromCell(std::vector<TGroupT> txpGroups,
 
         switch ( edge ) {
         case EdgeType::BiDirected:
-          add_edge(v1, v2, EdgeType::BiDirected, g);
-          add_edge(v2, v1, EdgeType::BiDirected, g);
+          add_edge(v1, v2, g);
+          add_edge(v2, v1, g);
           break;
         case EdgeType::XToY:
-          add_edge(v1, v2, EdgeType::XToY, g);
+          add_edge(v1, v2, g);
           break;
         case EdgeType::YToX:
-          add_edge(v2, v1, EdgeType::YToX, g);
+          add_edge(v2, v1, g);
           break;
         case EdgeType::NoEdge:
           break;
@@ -151,14 +151,14 @@ DirectedGraph graphFromCell(std::vector<TGroupT> txpGroups,
 
             switch ( edge ) {
             case EdgeType::BiDirected:
-              add_edge(v1, v2, EdgeType::BiDirected, g);
-              add_edge(v2, v1, EdgeType::BiDirected, g);
+              add_edge(v1, v2, g);
+              add_edge(v2, v1, g);
               break;
             case EdgeType::XToY:
-              add_edge(v1, v2, EdgeType::XToY, g);
+              add_edge(v1, v2, g);
               break;
             case EdgeType::YToX:
-              add_edge(v2, v1, EdgeType::YToX, g);
+              add_edge(v2, v1, g);
               break;
             case EdgeType::NoEdge:
               break;
@@ -172,10 +172,177 @@ DirectedGraph graphFromCell(std::vector<TGroupT> txpGroups,
   return g;
 }
 
+void collapseVertices(uint32_t vertex,
+                      Graph& g,
+                      std::vector<TGroupT>& txpGroups,
+                      boost::property_map<Graph,boost::vertex_name_t>::type& vertName,
+                      uint32_t& chosenTxp,
+                      std::vector<uint32_t>& largestMcc) {
+  VertexType vertexName = vertName[vertex];
+
+  for (uint32_t txp: txpGroups[vertexName.first]){
+    std::deque<uint32_t> bfsList;
+    bfsList.push_back(vertex);
+
+    spp::sparse_hash_set<uint32_t> visitedSet;
+    visitedSet.insert(vertex);
+
+    std::vector<uint32_t> currentMcc;
+    while ( bfsList.size() != 0 ){
+      uint32_t cv = bfsList.front();
+      bfsList.pop_front();
+      currentMcc.emplace_back(cv);
+
+      while (true){
+        uint32_t nextVertex = 0;//nv;
+        if (visitedSet.contains(nextVertex)) {
+          continue;
+        }
+        else{
+          visitedSet.insert(nextVertex);
+        }
+
+        // extract transcripts from new vertex
+        std::vector<uint32_t> nLabels;
+        for (uint32_t ntxp: nLabels) {
+          if (ntxp == txp){
+            bfsList.emplace_back(nextVertex);
+            break;
+          }
+        }
+      }//end-for
+    }//end-while
+
+    if (largestMcc.size() < currentMcc.size()) {
+      largestMcc = currentMcc;
+      chosenTxp = txp;
+    }
+  } //end-for
+}
+
+void getNumMolecules(Graph& g,
+                     std::vector<TGroupT>& txpGroups,
+                     spp::sparse_hash_map<uint32_t, uint32_t>& t2gMap,
+                     std::vector<SalmonEqClass>& salmonEqclasses){
+  // get connected components
+  std::vector<uint32_t> component( num_vertices(g) );
+  uint32_t numComps = connected_components(g, component.data());
+  spp::sparse_hash_map<std::vector<uint32_t>,
+                       uint32_t,
+                       container_hash<std::vector<uint32_t>>> eqclassHash;
+
+  // making sets of relevant connected vertices
+  std::vector<std::vector<uint32_t>> comps (numComps);
+  for (size_t i=0; i<component.size(); i++) {
+    comps[component[i]].emplace_back(static_cast<uint32_t>(i));
+  }
+
+  //property accessors
+  boost::property_map<Graph, boost::vertex_name_t>::type vertName
+    = boost::get(boost::vertex_name, g);
+
+  // iterating over connected components
+  for (auto& comp: comps) {
+    // more than one vertex in the component
+    if ( comp.size() > 1 ) {
+      spp::sparse_hash_set<uint32_t> vset(comp.begin(), comp.end());
+
+      while ( vset.size() != 0 ){
+        std::vector<uint32_t> bestMcc;
+        uint32_t bestCoveringTxp = std::numeric_limits<uint32_t>::max();
+        for (uint32_t vertex: vset) {
+          uint32_t coveringTxp;
+          std::vector<uint32_t> newMcc;
+
+          collapseVertices(vertex, g, txpGroups, vertName,
+                           coveringTxp, newMcc);
+          // choose the longer collapse: Greedy
+          if (bestMcc.size() < newMcc.size()) {
+            bestMcc = newMcc;
+            bestCoveringTxp = coveringTxp;
+          }
+        }// end-vset for
+
+        assert( bestCoveringTxp != std::numeric_limits<uint32_t>::max() );
+
+        // get the gene id
+        uint32_t bestCoveringGene = getGeneId(t2gMap, bestCoveringTxp);
+
+        spp::sparse_hash_set<uint32_t> globalGenes ;
+        for (size_t vId=0; vId<bestMcc.size(); vId++){
+          uint32_t vertex = bestMcc[vId];
+          spp::sparse_hash_set<uint32_t> localGenes;
+          VertexType vertexName = vertName[vertex];
+
+          for (uint32_t txp: txpGroups[vertexName.first]){
+            uint32_t gId = getGeneId(t2gMap, txp);
+            localGenes.insert(gId);
+          }
+
+          if (vId == 0) {
+            globalGenes = localGenes;
+          }
+          else {
+            spp::sparse_hash_set<uint32_t> intersect;
+            std::set_intersection (globalGenes.begin(),
+                                   globalGenes.end(),
+                                   localGenes.begin(),
+                                   localGenes.end(),
+                                   std::inserter(intersect,
+                                                 intersect.begin()));
+            globalGenes = intersect;
+          }
+        }//end-mcc for
+
+        assert(globalGenes.size() > 0);
+        assert(globalGenes.contains(bestCoveringGene));
+
+        for (auto rv: bestMcc){
+          vset.erase(rv);
+        }
+
+        std::vector<uint32_t> genesVec (globalGenes.begin(),
+                                      globalGenes.end());
+        std::sort (genesVec.begin(), genesVec.end());
+        eqclassHash[genesVec] += 1;
+      }//end-while
+    } // end-if comp.size()>1
+    else{
+      assert(comp.size() == 1);
+      uint32_t vertex = comp[0];
+      VertexType vertexName = vertName[vertex];
+      TGroupT txps = txpGroups[vertexName.first];
+
+      spp::sparse_hash_set<uint32_t> genes;
+      for (auto txp: txps) {
+        uint32_t gId = getGeneId(t2gMap, txp);
+        genes.insert(gId);
+      }
+
+      assert(genes.size() > 0);
+
+      std::vector<uint32_t> genesVec (genes.begin(), genes.end());
+      std::sort (genesVec.begin(), genesVec.end());
+      eqclassHash[genesVec] += 1;
+    }//end-else comp.size()==1
+  } //end-outer for comps iterator
+
+  for (auto& it: eqclassHash) {
+    SalmonEqClass eqclass = {
+      it.first,
+      it.second,
+    };
+    salmonEqclasses.emplace_back(eqclass);
+  }
+}
+
 bool dedupClasses(std::vector<TGroupT> txpGroups,
                   std::vector<UGroupT> umiGroups,
                   spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap){
   // make directed graph from eqclasses
-  DirectedGraph g = graphFromCell(txpGroups, umiGroups, txpToGeneMap);
+  Graph g = graphFromCell(txpGroups, umiGroups);
+  std::vector<SalmonEqClass> salmonEqclasses;
+
+  getNumMolecules(g, txpGroups, txpToGeneMap, salmonEqclasses);
   return true;
 }
