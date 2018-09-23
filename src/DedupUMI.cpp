@@ -1,11 +1,5 @@
 #include "DedupUMI.hpp"
 
-enum EdgeType {
-  NoEdge,
-  BiDirected,
-  XToY,
-  YToX,
-};
 
 EdgeType hasEdge(std::pair<std::string, uint32_t> &x,
                  std::pair<std::string, uint32_t> &y,
@@ -57,13 +51,10 @@ uint32_t getGeneId(spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap,
 }
 
 
-typedef boost::adjacency_list<boost::vecS,
-                              boost::vecS,
-                              boost::directedS> DirectedGraph;
-
-void graphFromCell(std::vector<TGroupT> txpGroups,
-                   std::vector<UGroupT> umiGroups,
-                   spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap) {
+// choosing list for edges and vector for adjacency container
+DirectedGraph graphFromCell(std::vector<TGroupT> txpGroups,
+                            std::vector<UGroupT> umiGroups,
+                            spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap) {
   spp::sparse_hash_map<uint32_t, std::vector<uint32_t>> tidMap;
   std::vector<bool> multiGeneVec;
 
@@ -85,19 +76,117 @@ void graphFromCell(std::vector<TGroupT> txpGroups,
     }
   }
 
-  //DirectedGraph g;
-  //AlignerEngine ae;
-  //for (size_t eqId=0; eqId<numClasses; eqId++) {
-  //  size_t numUmis = umiGroups[eqId].size();
-  //  for ( size_t uId=0; uId<numUmis; uId++ ){
-  //    
-  //  }
-  //}//end-for
+  DirectedGraph g;
+  AlignerEngine ae;
+  // alevin kmer object
+  alevin::types::AlevinUMIKmer umiObj;
+
+  //iterating over all eqclasses
+  for (size_t eqId=0; eqId<numClasses; eqId++) {
+    size_t numUmis = umiGroups[eqId].size();
+
+    // extracting umi sequences
+    std::vector<std::pair<std::string, uint32_t>> umiSeqCounts;
+
+    for(auto& it: umiGroups[eqId]) {
+      umiObj.word__(0) = it.first;
+      umiSeqCounts.emplace_back(std::make_pair(umiObj.toStr(), it.second));
+    }
+
+    for ( size_t uId=0; uId<numUmis; uId++ ){
+      std::pair<uint32_t, uint32_t> node (static_cast<uint32_t>(eqId),
+                                          static_cast<uint32_t>(uId));
+      VertexT v1 = add_vertex(node, g);
+
+      for ( size_t uId_second=uId+1; uId_second<numUmis; uId_second++ ){
+        std::pair<uint32_t, uint32_t> node_second (static_cast<uint32_t>(eqId),
+                                                   static_cast<uint32_t>(uId_second));
+        VertexT v2 = add_vertex(node_second, g);
+
+        //check if two UMI can be connected
+        EdgeType edge = hasEdge( umiSeqCounts[uId], umiSeqCounts[uId_second], ae );
+
+        switch ( edge ) {
+        case EdgeType::BiDirected:
+          add_edge(v1, v2, EdgeType::BiDirected, g);
+          add_edge(v2, v1, EdgeType::BiDirected, g);
+          break;
+        case EdgeType::XToY:
+          add_edge(v1, v2, EdgeType::XToY, g);
+          break;
+        case EdgeType::YToX:
+          add_edge(v2, v1, EdgeType::YToX, g);
+          break;
+        case EdgeType::NoEdge:
+          break;
+        };
+      }
+    }//end-inner-for
+
+    spp::sparse_hash_set<uint32_t> hSet;
+    // iterate over all the transcripts
+    for ( auto& txpEqPair: tidMap ) {
+      uint32_t txp = txpEqPair.first;
+      for (uint32_t eq2Id: txpEqPair.second) {
+        if (eq2Id < eqId) {
+          continue;
+        }
+
+        if ( hSet.contains(eq2Id) ) {
+          continue;
+        }
+        hSet.insert(eq2Id);
+
+        size_t num2Umis = umiGroups[eq2Id].size();
+
+        // extracting umi sequences
+        std::vector<std::pair<std::string, uint32_t>> umi2SeqCounts;
+
+        for(auto& it: umiGroups[eq2Id]) {
+          umiObj.word__(0) = it.first;
+          umi2SeqCounts.emplace_back(std::make_pair(umiObj.toStr(), it.second));
+        }
+
+        for ( size_t uId=0; uId<numUmis; uId++ ){
+          std::pair<uint32_t, uint32_t> node (static_cast<uint32_t>(eqId),
+                                              static_cast<uint32_t>(uId));
+          VertexT v1 = add_vertex(node, g);
+
+          for ( size_t uId_second=0; uId_second<num2Umis; uId_second++ ){
+            std::pair<uint32_t, uint32_t> node_second (static_cast<uint32_t>(eq2Id),
+                                                       static_cast<uint32_t>(uId_second));
+            VertexT v2 = add_vertex(node_second, g);
+
+            //check if two UMI can be connected
+            EdgeType edge = hasEdge( umiSeqCounts[uId], umi2SeqCounts[uId_second], ae );
+
+            switch ( edge ) {
+            case EdgeType::BiDirected:
+              add_edge(v1, v2, EdgeType::BiDirected, g);
+              add_edge(v2, v1, EdgeType::BiDirected, g);
+              break;
+            case EdgeType::XToY:
+              add_edge(v1, v2, EdgeType::XToY, g);
+              break;
+            case EdgeType::YToX:
+              add_edge(v2, v1, EdgeType::YToX, g);
+              break;
+            case EdgeType::NoEdge:
+              break;
+            };
+          } //end-for inner UMI
+        }//end-for outerUMI
+      }//end-for eq2Id
+    }//end-inner for for txp
+  }//end-outer-for
+
+  return g;
 }
 
 bool dedupClasses(std::vector<TGroupT> txpGroups,
                   std::vector<UGroupT> umiGroups,
                   spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap){
-  graphFromCell(txpGroups, umiGroups, txpToGeneMap);
+  // make directed graph from eqclasses
+  DirectedGraph g = graphFromCell(txpGroups, umiGroups, txpToGeneMap);
   return true;
 }
