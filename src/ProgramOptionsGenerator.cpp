@@ -246,14 +246,11 @@ namespace salmon {
        "em",po::bool_switch()->default_value(alevin::defaults::doEM),
        "do not run em")
       (
-       "eqClassLevel",po::bool_switch()->default_value(alevin::defaults::eqClassLevel),
-       "perform eqclass level analysis instead of gene/txp level min set analysis.")
-      (
-       "txpLevel",po::bool_switch()->default_value(alevin::defaults::txpLevel),
-       "perform txp level analysis instead of gene level")
-      (
        "noBarcode",po::bool_switch()->default_value(alevin::defaults::noBarcode),
        "this flag should be used when there is no barcode i.e. only one cell deduplication.")
+      (
+       "trimRight",po::value<uint32_t>()->default_value(alevin::defaults::trimRight),
+       "The number of bases to trim off the 5' (right) end of the read seequence.")
       (
        "freqThreshold",po::value<uint32_t>(),
        "threshold for the frequency of the barcodes");
@@ -286,8 +283,8 @@ namespace salmon {
        "noQuant", po::bool_switch()->default_value(alevin::defaults::noQuant),
        "Don't run downstream barcode-salmon model.")
       (
-       "naive", po::bool_switch()->default_value(alevin::defaults::naive),
-       "Run Gene level naive deduplication")
+       "axe", po::bool_switch()->default_value(alevin::defaults::axe),
+       "Run AlevinX deduplication, currently limited to just generating Gene Count Matrix")
       (
        "noSoftMap", po::bool_switch()->default_value(alevin::defaults::noSoftMap),
        "Don't use soft-assignment for quant instead do hard-assignment.")

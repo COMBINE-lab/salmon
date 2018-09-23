@@ -292,19 +292,18 @@ namespace alevin {
       aopt.debug = vm["debug"].as<bool>();
       aopt.useCorrelation = vm["useCorrelation"].as<bool>();
       aopt.noDedup = vm["noDedup"].as<bool>();
-      aopt.naive = vm["naive"].as<bool>();
+      aopt.axe = vm["axe"].as<bool>();
       aopt.noQuant = vm["noQuant"].as<bool>();
       aopt.noSoftMap = vm["noSoftMap"].as<bool>();
       aopt.dumpfq = vm["dumpfq"].as<bool>();
       aopt.dumpBFH = vm["dumpBfh"].as<bool>();
-      aopt.txpLevel = vm["txpLevel"].as<bool>();
-      aopt.eqClassLevel = vm["eqClassLevel"].as<bool>();
       aopt.nobarcode = vm["noBarcode"].as<bool>();
       aopt.dumpfeatures = vm["dumpFeatures"].as<bool>();
       aopt.dumpCsvCounts = vm["dumpCsvCounts"].as<bool>();
       aopt.dumpBarcodeEq = vm["dumpBarcodeEq"].as<bool>();
       aopt.dumpBarcodeMap = vm["dumpBarcodeMap"].as<bool>();
       aopt.dumpUmiToolsMap = vm["dumpUmitoolsMap"].as<bool>();
+      aopt.trimRight = vm["trimRight"].as<uint32_t>();
       aopt.lowRegionMinNumBarcodes = vm["lowRegionMinNumBarcodes"].as<uint32_t>();
       aopt.maxNumBarcodes = vm["maxNumBarcodes"].as<uint32_t>();
       if(vm.count("iupac")){
