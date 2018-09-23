@@ -53,10 +53,8 @@ uint32_t getGeneId(spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap,
 
 // choosing list for edges and vector for adjacency container
 DirectedGraph graphFromCell(std::vector<TGroupT> txpGroups,
-                            std::vector<UGroupT> umiGroups,
-                            spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap) {
+                            std::vector<UGroupT> umiGroups) {
   spp::sparse_hash_map<uint32_t, std::vector<uint32_t>> tidMap;
-  std::vector<bool> multiGeneVec;
 
   // Get a map from each transcript to it's list of eq class
   size_t numClasses = txpGroups.size();
@@ -64,15 +62,6 @@ DirectedGraph graphFromCell(std::vector<TGroupT> txpGroups,
     spp::sparse_hash_set<uint32_t> gSet;
     for ( uint32_t txp : txpGroups[eqId] ) {
       tidMap[txp].emplace_back(eqId);
-      uint32_t gId = getGeneId( txpToGeneMap, txp );
-      gSet.insert(gId);
-    }
-
-    if ( gSet.size() > 1 ) {
-      multiGeneVec.emplace_back(true);
-    }
-    else {
-      multiGeneVec.emplace_back(false);
     }
   }
 
