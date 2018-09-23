@@ -28,6 +28,7 @@ CollapsedGibbsSampler.cpp
 Salmon.cpp
 BuildSalmonIndex.cpp
 Dedup.cpp
+DedupUMI.cpp
 Alevin.cpp
 SalmonAlevin.cpp
 WhiteList.cpp

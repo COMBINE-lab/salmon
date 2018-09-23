@@ -171,8 +171,9 @@ void optimizeCell(SCExpT& experiment,
     }
 
     // perform the UMI deduplication step
-    bool dedupOk = dedupReads(geneAlphas, totalcount, txpGroups,
-                              umiGroups, eqCounts);
+    bool dedupOk = dedupClasses(//geneAlphas, totalcount, txpGroups,
+                                txpGroups, umiGroups, //eqCounts);
+                                txpToGeneMap);
     if( !dedupOk ){
       jointlog->error("Deduplication for cell {} failed \n"
                       "Please Report this on github.", trueBarcodeStr);
@@ -181,26 +182,27 @@ void optimizeCell(SCExpT& experiment,
     }
 
     // maintaining count for total number of predicted UMI
-    totalDedupCounts += totalcount;
+    totalDedupCounts += totalCount;
 
     // perform EM for resolving ambiguity
-    if ( doEM ) {
-      bool isEMok = runPerCellEM(txpgroups,
-                                 txpgroupcombinedweights,
-                                 origcounts,
-                                 transcripts,
-                                 totalcount,
-                                 geneAlphas,
-                                 jointlog,
-                                 activetranscriptids);
-      if( !isEMok ){
-        jointlog->error("EM iteration for cell {} failed \n"
-                        "Please Report this on github.", trueBarcodeStr);
-        jointlog->flush();
-        std::exit(1);
-      }
-    }
+    //if ( doEM ) {
+    //  bool isEMok = runPerCellEM(txpgroups,
+    //                             txpgroupcombinedweights,
+    //                             origcounts,
+    //                             transcripts,
+    //                             totalcount,
+    //                             geneAlphas,
+    //                             jointlog,
+    //                             activetranscriptids);
+    //  if( !isEMok ){
+    //    jointlog->error("EM iteration for cell {} failed \n"
+    //                    "Please Report this on github.", trueBarcodeStr);
+    //    jointlog->flush();
+    //    std::exit(1);
+    //  }
+    //}
 
+    // write the abundance for the cell
     gzw.writeAbundances( inDebugMode, trueBarcodeStr, geneAlphas );
 
     //printing on screen progress
