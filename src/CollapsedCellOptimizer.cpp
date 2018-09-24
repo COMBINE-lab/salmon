@@ -309,9 +309,6 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       std::vector<uint32_t>& umiCount,
                                       CFreqMapT& freqCounter,
                                       size_t numLowConfidentBarcode){
-  double relDiffTolerance{0.01};
-  uint32_t maxIter {10000};
-
   auto& fullEqMap = experiment.equivalenceClassBuilder().eqMap();
   size_t numCells = trueBarcodes.size();
   size_t numWorkerThreads{1};
