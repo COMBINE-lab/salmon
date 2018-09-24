@@ -53,14 +53,11 @@ public:
                 size_t numLowConfidentBarcode);
 };
 
-bool runPerCellEM(std::vector<std::vector<uint32_t>>& txpGroups,
-                  std::vector<std::vector<double>>& txpGroupCombinedWeights,
-                  std::vector<uint64_t>& txpGroupCounts,
-                  const std::vector<Transcript>& transcripts,
-                  uint64_t totalNumFrags,
+bool runPerCellEM(uint64_t totalNumFrags,
+                  size_t numGenes,
                   CollapsedCellOptimizer::SerialVecType& alphas,
-                  std::shared_ptr<spdlog::logger>& jointlog,
-                  std::unordered_set<uint32_t>& activeTxps);
+                  std::vector<SalmonEqClass>& salmonEqclasses,
+                  std::shared_ptr<spdlog::logger>& jointlog);
 
 void optimizeCell(SCExpT& experiment,
                   std::vector<std::string>& trueBarcodes,
@@ -71,7 +68,7 @@ void optimizeCell(SCExpT& experiment,
                   std::shared_ptr<spdlog::logger>& jointlog,
                   bfs::path& outDir, std::vector<uint32_t>& umiCount,
                   std::vector<CellState>& skippedCBcount,
-                  bool verbose, GZipWriter& gzw, size_t umiLength, bool doEM,
+                  bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
                   bool quiet,std::atomic<uint64_t>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, bool inDebugMode, bool axe);

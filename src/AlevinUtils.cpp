@@ -288,7 +288,7 @@ namespace alevin {
       aopt.jointLog = spdlog::create("alevinLog", std::begin(sinks), std::end(sinks));
 
       aopt.quiet = vm["quiet"].as<bool>();
-      aopt.doEM = vm["em"].as<bool>();
+      aopt.noEM = vm["noem"].as<bool>();
       aopt.debug = vm["debug"].as<bool>();
       aopt.useCorrelation = vm["useCorrelation"].as<bool>();
       aopt.noDedup = vm["noDedup"].as<bool>();

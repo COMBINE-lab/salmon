@@ -2,6 +2,50 @@
 #include "EMUtils.hpp"
 
 CollapsedCellOptimizer::CollapsedCellOptimizer() {}
+/*
+ * Use the "relax" EM algorithm over gene equivalence
+ * classes to estimate the latent variables (alphaOut)
+ * given the current estimates (alphaIn).
+ */
+void CellEMUpdate_(std::vector<SalmonEqClass>& eqVec,
+                   const CollapsedEMOptimizer::SerialVecType& alphaIn,
+                   CollapsedEMOptimizer::SerialVecType& alphaOut) {
+  assert(alphaIn.size() == alphaOut.size());
+
+  for (size_t eqID=0; eqID < eqVec.size(); eqID++) {
+    auto& kv = eqVec[eqID];
+
+    uint64_t count = kv.count;
+    // for each label in this class
+    const std::vector<uint32_t>& genes = kv.labels;
+    size_t groupSize = genes.size();
+
+    assert(groupSize > 0);
+
+    if (BOOST_LIKELY(groupSize > 1)) {
+      double denom = 0.0;
+      for (size_t i = 0; i < groupSize; ++i) {
+        auto gid = genes[i];
+        denom += alphaIn[gid];
+      }
+
+      if (denom > 0.0) {
+        double invDenom = count / denom;
+        for (size_t i = 0; i < groupSize; ++i) {
+          auto gid = genes[i];
+          double v = alphaIn[gid];
+          if (!std::isnan(v)) {
+            salmon::utils::incLoop(alphaOut[gid], v * invDenom);
+          }
+        }//end-for
+      }//endif for denom>0
+    }//end-if boost gsize>1
+    else {
+      salmon::utils::incLoop(alphaOut[genes.front()], count);
+    }
+  }//end-outer for
+}
+
 
 double truncateAlphas(VecT& alphas, double cutoff) {
   // Truncate tiny expression values
@@ -16,34 +60,24 @@ double truncateAlphas(VecT& alphas, double cutoff) {
   return alphaSum;
 }
 
-bool runPerCellEM(
-                  std::vector<std::vector<uint32_t>>& txpGroups,
-                  std::vector<std::vector<double>>& txpGroupCombinedWeights,
-                  std::vector<uint64_t>& txpGroupCounts,
-                  const std::vector<Transcript>& transcripts,
-                  uint64_t totalNumFrags,
+bool runPerCellEM(uint64_t totalNumFrags, size_t numGenes,
                   CollapsedCellOptimizer::SerialVecType& alphas,
-                  std::shared_ptr<spdlog::logger>& jointlog,
-                  std::unordered_set<uint32_t>& activeTranscriptIds){
+                  std::vector<SalmonEqClass>& salmonEqclasses,
+                  std::shared_ptr<spdlog::logger>& jointlog){
 
   // An EM termination criterion, adopted from Bray et al. 2016
   uint32_t minIter {50};
   double relDiffTolerance {0.01};
   uint32_t maxIter {10000};
-  size_t numClasses = txpGroups.size();
-  double uniformTxpWeight = 1.0 / activeTranscriptIds.size();
+  size_t numClasses = salmonEqclasses.size();
 
   std::vector<uint64_t> eqCounts(numClasses, 0);
-  CollapsedCellOptimizer::SerialVecType alphasPrime(transcripts.size(), 0.0);
+  CollapsedCellOptimizer::SerialVecType alphasPrime(numGenes, 0.0);
 
-  for (size_t i = 0; i < transcripts.size(); ++i) {
-    auto got = activeTranscriptIds.find( i );
-    if ( got == activeTranscriptIds.end() ){
-      alphas[i] = 0.0;
-    }
-    else{
-      alphas[i] = uniformTxpWeight * totalNumFrags;
-    }
+  assert( numGenes == alphas.size() );
+  for (size_t i = 0; i < numGenes; ++i) {
+    alphas[i] += 0.5;
+    alphas[i] *= 1e-3;
   }
 
   bool converged{false};
@@ -57,13 +91,11 @@ bool runPerCellEM(
 
   while (itNum < minIter or (itNum < maxIter and !converged)) {
 
-    EMUpdate_(txpGroups, txpGroupCombinedWeights,
-              txpGroupCounts, const_cast<std::vector<Transcript>&>(transcripts),
-              alphas, alphasPrime);
+    CellEMUpdate_(salmonEqclasses, alphas, alphasPrime);
 
     converged = true;
     maxRelDiff = -std::numeric_limits<double>::max();
-    for (size_t i = 0; i < transcripts.size(); ++i) {
+    for (size_t i = 0; i < numGenes; ++i) {
       if (alphasPrime[i] > alphaCheckCutoff) {
         double relDiff =
           std::abs(alphas[i] - alphasPrime[i]) / alphasPrime[i];
@@ -102,7 +134,7 @@ void optimizeCell(SCExpT& experiment,
                   std::shared_ptr<spdlog::logger>& jointlog,
                   bfs::path& outDir, std::vector<uint32_t>& umiCount,
                   std::vector<CellState>& skippedCB,
-                  bool verbose, GZipWriter& gzw, size_t umiLength, bool doEM,
+                  bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
                   bool quiet, std::atomic<uint64_t>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, bool inDebugMode, bool axe){
@@ -149,11 +181,11 @@ void optimizeCell(SCExpT& experiment,
 
             txpGroups.emplace_back(txps);
             umiGroups.emplace_back(bcIt->second);
-            eqCounts.push_back(eqCount);
 
             // for dumping per-cell eqclass vector
             if(verbose){
               eqIDs.push_back(static_cast<uint32_t>(key.second));
+              eqCounts.push_back(eqCount);
             }
           }
         });
@@ -171,8 +203,9 @@ void optimizeCell(SCExpT& experiment,
     }
 
     // perform the UMI deduplication step
-    bool dedupOk = dedupClasses(//geneAlphas, totalcount, txpGroups,
-                                txpGroups, umiGroups, //eqCounts);
+    std::vector<SalmonEqClass> salmonEqclasses;
+    bool dedupOk = dedupClasses(geneAlphas, totalCount, txpGroups,
+                                umiGroups, salmonEqclasses,
                                 txpToGeneMap);
     if( !dedupOk ){
       jointlog->error("Deduplication for cell {} failed \n"
@@ -185,22 +218,19 @@ void optimizeCell(SCExpT& experiment,
     totalDedupCounts += totalCount;
 
     // perform EM for resolving ambiguity
-    //if ( doEM ) {
-    //  bool isEMok = runPerCellEM(txpgroups,
-    //                             txpgroupcombinedweights,
-    //                             origcounts,
-    //                             transcripts,
-    //                             totalcount,
-    //                             geneAlphas,
-    //                             jointlog,
-    //                             activetranscriptids);
-    //  if( !isEMok ){
-    //    jointlog->error("EM iteration for cell {} failed \n"
-    //                    "Please Report this on github.", trueBarcodeStr);
-    //    jointlog->flush();
-    //    std::exit(1);
-    //  }
-    //}
+    if ( !noEM ) {
+      bool isEMok = runPerCellEM(totalCount,
+                                 numGenes,
+                                 geneAlphas,
+                                 salmonEqclasses,
+                                 jointlog);
+      if( !isEMok ){
+        jointlog->error("EM iteration for cell {} failed \n"
+                        "Please Report this on github.", trueBarcodeStr);
+        jointlog->flush();
+        std::exit(1);
+      }
+    }
 
     // write the abundance for the cell
     gzw.writeAbundances( inDebugMode, trueBarcodeStr, geneAlphas );
@@ -351,7 +381,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                aopt.dumpBarcodeEq,
                                std::ref(gzw),
                                aopt.protocol.umiLength,
-                               aopt.doEM,
+                               aopt.noEM,
                                aopt.quiet,
                                std::ref(totalDedupCounts),
                                std::ref(txpToGeneMap),

@@ -121,7 +121,7 @@ namespace defaults {
   constexpr const bool dumpUMIToolsMap{false};
   constexpr const bool dumpBarcodeMap{false};
   constexpr const bool dumpCSVCounts{false};
-  constexpr const bool doEM{false};
+  constexpr const bool noEM{false};
   constexpr const bool debug{false};
   constexpr const bool noBarcode{false};
   constexpr const uint32_t trimRight{0};

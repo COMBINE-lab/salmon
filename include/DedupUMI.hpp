@@ -43,8 +43,11 @@ struct container_hash {
   }
 };
 
-bool dedupClasses(std::vector<TGroupT> txpGroups,
-                  std::vector<UGroupT> umiGroups,
-                  spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap);
+bool dedupClasses(std::vector<double>& geneAlphas,
+                  uint64_t& totalUMICount,
+                  std::vector<TGroupT>& txpGroups,
+                  std::vector<UGroupT>& umiGroups,
+                  std::vector<SalmonEqClass>& salmonEqclasses,
+                  spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap);
 
 #endif // DEDUP_HPP

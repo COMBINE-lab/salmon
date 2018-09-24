@@ -243,7 +243,7 @@ namespace salmon {
        "umi length Parameter for unknown protocol. (end, umiLength, barcodeLength)"
        " should all be provided if using this option")
       (
-       "em",po::bool_switch()->default_value(alevin::defaults::doEM),
+       "noem",po::bool_switch()->default_value(alevin::defaults::noEM),
        "do not run em")
       (
        "noBarcode",po::bool_switch()->default_value(alevin::defaults::noBarcode),

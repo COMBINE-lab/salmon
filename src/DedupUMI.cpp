@@ -52,8 +52,8 @@ uint32_t getGeneId(spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap,
 
 
 // choosing list for edges and vector for adjacency container
-Graph graphFromCell(std::vector<TGroupT> txpGroups,
-                    std::vector<UGroupT> umiGroups) {
+Graph graphFromCell(std::vector<TGroupT>& txpGroups,
+                    std::vector<UGroupT>& umiGroups) {
   spp::sparse_hash_map<uint32_t, std::vector<uint32_t>> tidMap;
 
   // Get a map from each transcript to it's list of eq class
@@ -347,13 +347,24 @@ void getNumMolecules(Graph& g,
   }
 }
 
-bool dedupClasses(std::vector<TGroupT> txpGroups,
-                  std::vector<UGroupT> umiGroups,
-                  spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap){
+bool dedupClasses(std::vector<double>& geneAlphas,
+                  uint64_t& totalUMICount,
+                  std::vector<TGroupT>& txpGroups,
+                  std::vector<UGroupT>& umiGroups,
+                  std::vector<SalmonEqClass>& salmonEqclasses,
+                  spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap){
   // make directed graph from eqclasses
   Graph g = graphFromCell(txpGroups, umiGroups);
-  std::vector<SalmonEqClass> salmonEqclasses;
 
+  // make gene based eqclasses
   getNumMolecules(g, txpGroups, txpToGeneMap, salmonEqclasses);
+
+  for( auto& eqclass: salmonEqclasses ) {
+    totalUMICount += eqclass.count;
+    if ( eqclass.labels.size() == 1 ) {
+      geneAlphas[eqclass.labels[0]] += eqclass.count;
+    }
+  }
+
   return true;
 }

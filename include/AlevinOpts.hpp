@@ -59,7 +59,7 @@ struct AlevinOpts {
   // use correlation for white-listing
   bool useCorrelation;
   // don't run EM flag
-  bool doEM;
+  bool noEM;
   // Avoid segfaults based on no whitelist mapping
   bool debug;
   // perform naive deduplication
