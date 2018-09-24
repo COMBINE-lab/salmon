@@ -83,13 +83,17 @@ Graph graphFromCell(std::vector<TGroupT> txpGroups,
     }
 
     for ( size_t uId=0; uId<numUmis; uId++ ){
-      std::pair<uint32_t, uint32_t> node (static_cast<uint32_t>(eqId),
-                                          static_cast<uint32_t>(uId));
+      VertexType node = {
+        static_cast<uint32_t>(eqId),
+        static_cast<uint32_t>(uId)
+      };
       VertexT v1 = add_vertex( Graph::vertex_property_type(node), g);
 
       for ( size_t uId_second=uId+1; uId_second<numUmis; uId_second++ ){
-        std::pair<uint32_t, uint32_t> node_second (static_cast<uint32_t>(eqId),
-                                                   static_cast<uint32_t>(uId_second));
+        VertexType node_second = {
+          static_cast<uint32_t>(eqId),
+          static_cast<uint32_t>(uId_second)
+        };
         VertexT v2 = add_vertex(node_second, g);
 
         //check if two UMI can be connected
@@ -137,14 +141,18 @@ Graph graphFromCell(std::vector<TGroupT> txpGroups,
         }
 
         for ( size_t uId=0; uId<numUmis; uId++ ){
-          std::pair<uint32_t, uint32_t> node (static_cast<uint32_t>(eqId),
-                                              static_cast<uint32_t>(uId));
-          VertexT v1 = add_vertex(node, g);
+          VertexType node = {
+            static_cast<uint32_t>(eqId),
+            static_cast<uint32_t>(uId)
+          };
+          VertexT v1 = add_vertex( Graph::vertex_property_type(node), g);
 
           for ( size_t uId_second=0; uId_second<num2Umis; uId_second++ ){
-            std::pair<uint32_t, uint32_t> node_second (static_cast<uint32_t>(eq2Id),
-                                                       static_cast<uint32_t>(uId_second));
-            VertexT v2 = add_vertex(node_second, g);
+            VertexType node_second = {
+              static_cast<uint32_t>(eq2Id),
+              static_cast<uint32_t>(uId_second)
+            };
+            VertexT v2 = add_vertex( Graph::vertex_property_type(node_second), g);
 
             //check if two UMI can be connected
             EdgeType edge = hasEdge( umiSeqCounts[uId], umi2SeqCounts[uId_second], ae );
@@ -178,9 +186,9 @@ void collapseVertices(uint32_t vertex,
                       boost::property_map<Graph,boost::vertex_name_t>::type& vertName,
                       uint32_t& chosenTxp,
                       std::vector<uint32_t>& largestMcc) {
-  VertexType vertexName = vertName[vertex];
+  VertexType vertexName = vertName[boost::vertex(vertex, g)];
 
-  for (uint32_t txp: txpGroups[vertexName.first]){
+  for (uint32_t txp: txpGroups[vertexName.eqclassId]){
     std::deque<uint32_t> bfsList;
     bfsList.push_back(vertex);
 
@@ -193,8 +201,11 @@ void collapseVertices(uint32_t vertex,
       bfsList.pop_front();
       currentMcc.emplace_back(cv);
 
-      while (true){
-        uint32_t nextVertex = 0;//nv;
+      typename boost::graph_traits<Graph>::out_edge_iterator ei, ei_end;
+      for (boost::tie(ei, ei_end) = out_edges(vertex, g); ei != ei_end; ++ei) {
+        auto source = boost::source ( *ei, g );
+        auto nextVertex = boost::target ( *ei, g );
+
         if (visitedSet.contains(nextVertex)) {
           continue;
         }
@@ -203,14 +214,14 @@ void collapseVertices(uint32_t vertex,
         }
 
         // extract transcripts from new vertex
-        std::vector<uint32_t> nLabels;
-        for (uint32_t ntxp: nLabels) {
+        VertexType nvertexName = vertName[boost::vertex(nextVertex, g)];
+        for (uint32_t ntxp: txpGroups[nvertexName.eqclassId]) {
           if (ntxp == txp){
             bfsList.emplace_back(nextVertex);
             break;
           }
-        }
-      }//end-for
+        }//end-txp group for
+      }//end-neighbors-for
     }//end-while
 
     if (largestMcc.size() < currentMcc.size()) {
@@ -272,9 +283,9 @@ void getNumMolecules(Graph& g,
         for (size_t vId=0; vId<bestMcc.size(); vId++){
           uint32_t vertex = bestMcc[vId];
           spp::sparse_hash_set<uint32_t> localGenes;
-          VertexType vertexName = vertName[vertex];
+          VertexType vertexName = vertName[boost::vertex(vertex, g)];
 
-          for (uint32_t txp: txpGroups[vertexName.first]){
+          for (uint32_t txp: txpGroups[vertexName.eqclassId]){
             uint32_t gId = getGeneId(t2gMap, txp);
             localGenes.insert(gId);
           }
@@ -302,7 +313,7 @@ void getNumMolecules(Graph& g,
         }
 
         std::vector<uint32_t> genesVec (globalGenes.begin(),
-                                      globalGenes.end());
+                                        globalGenes.end());
         std::sort (genesVec.begin(), genesVec.end());
         eqclassHash[genesVec] += 1;
       }//end-while
@@ -310,8 +321,8 @@ void getNumMolecules(Graph& g,
     else{
       assert(comp.size() == 1);
       uint32_t vertex = comp[0];
-      VertexType vertexName = vertName[vertex];
-      TGroupT txps = txpGroups[vertexName.first];
+      VertexType vertexName = vertName[boost::vertex(vertex, g)];
+      TGroupT txps = txpGroups[vertexName.eqclassId];
 
       spp::sparse_hash_set<uint32_t> genes;
       for (auto txp: txps) {

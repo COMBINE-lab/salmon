@@ -20,10 +20,13 @@ struct SalmonEqClass {
   std::vector<uint32_t> labels;
   uint32_t count;
 };
+struct VertexType {
+  uint32_t eqclassId;
+  uint32_t umiId;
+};
 
 using UGroupT = spp::sparse_hash_map<uint64_t, uint32_t>;
 using TGroupT = std::vector<uint32_t>;
-using VertexType =  std::pair<uint32_t, uint32_t>;
 
 typedef boost::adjacency_list<boost::listS,
                               boost::vecS,
