@@ -8,8 +8,8 @@ CollapsedCellOptimizer::CollapsedCellOptimizer() {}
  * given the current estimates (alphaIn).
  */
 void CellEMUpdate_(std::vector<SalmonEqClass>& eqVec,
-                   const CollapsedEMOptimizer::SerialVecType& alphaIn,
-                   CollapsedEMOptimizer::SerialVecType& alphaOut) {
+                   const CollapsedCellOptimizer::SerialVecType& alphaIn,
+                   CollapsedCellOptimizer::SerialVecType& alphaOut) {
   assert(alphaIn.size() == alphaOut.size());
 
   for (size_t eqID=0; eqID < eqVec.size(); eqID++) {

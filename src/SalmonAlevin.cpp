@@ -90,7 +90,6 @@
 #include "SingleCellProtocols.hpp"
 #include "CollapsedCellOptimizer.hpp"
 #include "BarcodeGroup.hpp"
-#include "Dedup.hpp"
 
 // salmon includes
 #include "ClusterForest.hpp"
