@@ -124,6 +124,7 @@ namespace defaults {
   constexpr const bool debug{false};
   constexpr const bool noBarcode{false};
   constexpr const uint32_t trimRight{0};
+  constexpr const uint32_t numBootstraps{0};
   constexpr const uint32_t lowRegionMinNumBarcodes{200};
   constexpr const uint32_t maxNumBarcodes{100000};
 }

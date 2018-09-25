@@ -76,6 +76,8 @@ struct AlevinOpts {
   uint32_t lowRegionMinNumBarcodes;
   // maximum number of barcodes to use
   uint32_t maxNumBarcodes;
+  // number of bootstraps to perform
+  uint32_t numBootstraps;
 
   // Related to the logger
   std::shared_ptr<spdlog::logger> jointLog{nullptr};

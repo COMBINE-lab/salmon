@@ -218,6 +218,9 @@ namespace salmon {
        "w1", po::value<std::string>(),
        "Must be used in conjunction with inDrop;")
       (
+       "celseq", po::bool_switch()->default_value(alevin::defaults::isCELSeq),
+       "Use CEL-Seq2 Single Cell protocol for the library.")
+      (
        "dumpBarcodeEq", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeEq),
        "Dump JointEqClas with umi-barcode count.")
       (
@@ -252,18 +255,33 @@ namespace salmon {
        "trimRight",po::value<uint32_t>()->default_value(alevin::defaults::trimRight),
        "The number of bases to trim off the 5' (right) end of the read seequence.")
       (
+       "noSoftMap", po::bool_switch()->default_value(alevin::defaults::noSoftMap),
+       "Don't use soft-assignment for quant instead do hard-assignment.")
+      (
+       "noDedup", po::bool_switch()->default_value(alevin::defaults::noDedup),
+       "Stops the pipeline after CB sequence correction and quasi-mapping reads.")
+      (
+       "debug", po::bool_switch()->default_value(alevin::defaults::debug),
+       "Enabling this mode mode will try to ignore segfaults based on no whitelist"
+       " mapping or no whitelist deduplicated count")
+      (
        "freqThreshold",po::value<uint32_t>(),
        "threshold for the frequency of the barcodes");
     return alevindevs;
   }
 
-  po::options_description ProgramOptionsGenerator::getAlevinBasicOptions() {
+  po::options_description ProgramOptionsGenerator::getAlevinBasicOptions(SalmonOpts& sopt) {
     po::options_description alevinspec("\n"
                                        "alevin-specific Options");
     alevinspec.add_options()
+      ("version,v", "print version string")
+      ("help,h", "produce help message")
+      ("output,o", po::value<std::string>()->required(), "Output quantification directory.")
+      ("threads,p",
+       po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads),
+       "The number of threads to use concurrently.")
       (
-       "noDedup", po::bool_switch()->default_value(alevin::defaults::noDedup),
-       "Stops the pipeline after CB sequence correction and quasi-mapping reads.")
+       "tgMap", po::value<std::string>(), "transcript to gene map tsv file")
       (
        "dropseq", po::bool_switch()->default_value(alevin::defaults::isDropseq),
        "Use DropSeq Single Cell protocol for the library")
@@ -274,9 +292,6 @@ namespace salmon {
        "gemcode", po::bool_switch()->default_value(alevin::defaults::isGemcode),
        "Use 10x gemcode v1 Single Cell protocol for the library.")
       (
-        "celseq", po::bool_switch()->default_value(alevin::defaults::isCELSeq),
-        "Use CEL-Seq2 Single Cell protocol for the library.")
-      (
        "whitelist", po::value<std::string>(),
        "File containing white-list barcodes")
       (
@@ -286,8 +301,9 @@ namespace salmon {
        "naive", po::bool_switch()->default_value(alevin::defaults::naive),
        "Run naive deduplication, generating Gene Count Matrix")
       (
-       "noSoftMap", po::bool_switch()->default_value(alevin::defaults::noSoftMap),
-       "Don't use soft-assignment for quant instead do hard-assignment.")
+       "numBootstraps",po::value<uint32_t>()->default_value(alevin::defaults::numBootstraps),
+       "Generate median and standard deviation for cell x gene matrix quantification"
+       " estimates.")
       (
        "mrna", po::value<std::string>(),
        "path to a file containing mito-RNA gene, one per line")
@@ -303,10 +319,6 @@ namespace salmon {
        "Dump barcode modified fastq file for downstream analysis by"
        " using coin toss for multi-mapping.")
       (
-       "debug", po::bool_switch()->default_value(alevin::defaults::debug),
-       "Enabling this mode mode will try to ignore segfaults based on no whitelist"
-       " mapping or no whitelist deduplicated count")
-      (
        "dumpBfh", po::bool_switch()->default_value(alevin::defaults::dumpBFH),
        "dump the big hash with all the barcodes and the UMI sequence.")
       (
@@ -320,9 +332,7 @@ namespace salmon {
        "Minimum Number of CB to use for learning Low confidence region (Default: 200).")
       (
        "maxNumBarcodes", po::value<uint32_t>()->default_value(alevin::defaults::maxNumBarcodes),
-       "Maximum allowable limit to process the cell barcodes. (Default: 100000)")
-      (
-       "tgMap", po::value<std::string>(), "transcript to gene map tsv file");
+       "Maximum allowable limit to process the cell barcodes. (Default: 100000)");
     return alevinspec;
   }
 
