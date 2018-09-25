@@ -231,10 +231,10 @@ void getNumMolecules(alevin::graph::Graph& g,
         // get the gene id
         uint32_t bestCoveringGene = getGeneId(t2gMap, bestCoveringTxp);
 
-        spp::sparse_hash_set<uint32_t> globalGenes ;
+        std::unordered_set<uint32_t> globalGenes ;
         for (size_t vId=0; vId<bestMcc.size(); vId++){
           uint32_t vertex = bestMcc[vId];
-          spp::sparse_hash_set<uint32_t> localGenes;
+          std::unordered_set<uint32_t> localGenes;
           uint32_t eqclassId = g.getEqclassId(vertex);
 
           for (uint32_t txp: txpGroups[eqclassId]){
@@ -246,22 +246,30 @@ void getNumMolecules(alevin::graph::Graph& g,
             globalGenes = localGenes;
           }
           else {
-            spp::sparse_hash_set<uint32_t> intersect;
-            std::set_intersection (globalGenes.begin(),
-                                   globalGenes.end(),
-                                   localGenes.begin(),
-                                   localGenes.end(),
-                                   std::inserter(intersect,
-                                                 intersect.begin()));
+            std::unordered_set<uint32_t> intersect;
+            unordered_set_intersection (globalGenes.begin(),
+                                        globalGenes.end(),
+                                        localGenes.begin(),
+                                        localGenes.end(),
+                                        std::inserter(intersect,
+                                                      intersect.begin()));
+            if( intersect.size() == 0 ) {
+              std::cerr << "can't find a representative gene for a molecule\n"
+                        << "Please report this on gothub";
+              for (auto gene: globalGenes){
+                std::cerr<<gene<<",";
+              }
+              std::cerr<<std::endl;
+              for (auto gene: localGenes){
+                std::cerr<<gene<<",";
+              }
+              exit(1);
+            }
+
             globalGenes = intersect;
           }
         }//end-mcc for
 
-        if( globalGenes.size() == 0 ) {
-          std::cerr << "can't find a representative gene for a molecule\n"
-                    << "Please report this on gothub";
-          exit(1);
-        }
         assert(globalGenes.contains(bestCoveringGene));
 
         for (auto rv: bestMcc){

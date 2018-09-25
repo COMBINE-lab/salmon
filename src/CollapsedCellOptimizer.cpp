@@ -64,7 +64,7 @@ double truncateAlphas(VecT& alphas, double cutoff) {
   return alphaSum;
 }
 
-bool runPerCellEM(uint64_t totalNumFrags, size_t numGenes,
+bool runPerCellEM(uint64_t& totalNumFrags, size_t numGenes,
                   CollapsedCellOptimizer::SerialVecType& alphas,
                   std::vector<SalmonEqClass>& salmonEqclasses,
                   std::shared_ptr<spdlog::logger>& jointlog){

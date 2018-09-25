@@ -52,7 +52,7 @@ public:
                 size_t numLowConfidentBarcode);
 };
 
-bool runPerCellEM(uint64_t totalNumFrags,
+bool runPerCellEM(uint64_t& totalNumFrags,
                   size_t numGenes,
                   CollapsedCellOptimizer::SerialVecType& alphas,
                   std::vector<SalmonEqClass>& salmonEqclasses,

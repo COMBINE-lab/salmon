@@ -52,7 +52,7 @@ namespace alevin {
         // resize the component based on the number of vertices
         component.resize( vertexNames.size() );
 
-        typedef boost::adjacency_list < boost::vecS, boost::vecS, boost::directedS > AdjList;
+        typedef boost::adjacency_list < boost::vecS, boost::vecS, boost::undirectedS > AdjList;
         AdjList adjList ( vertexNames.size() );
 
         // iterating over edges and filling the graph
