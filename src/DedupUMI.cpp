@@ -30,16 +30,13 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
     }
   }
 
-  uint32_t count = 0;
   AlignerEngine ae;
   // alevin kmer object
   alevin::types::AlevinUMIKmer umiObj;
   spp::sparse_hash_map<VertexT, uint32_t, boost::hash<VertexT>> vertexIndexMap;
 
-  std::cout<<numClasses<<std::endl<<std::flush;
   //iterating over all eqclasses
   for (size_t eqId=0; eqId<numClasses; eqId++) {
-    std::cout<<"\r"<<eqId<<std::flush;
     size_t numUmis = umiGroups[eqId].size();
 
     //// extracting umi sequences
@@ -78,232 +75,233 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
       }
     }//end-inner-for
 
-    std::unordered_set<uint32_t> hSet;
+    spp::sparse_hash_set<uint32_t> hSet;
     TGroupT& tgroup = txpGroups[eqId];
     size_t numTxps = tgroup.size();
 
     // iterate over all the transcripts
     for ( auto& txp: tgroup ) {
-      count += 1;
       for (uint32_t eq2Id: tidMap[txp]) {
         if (eq2Id < eqId) {
           continue;
         }
 
-        //if ( hSet.contains(eq2Id) ) {
-        //  continue;
-        //}
-        //hSet.insert(eq2Id);
+        if ( hSet.contains(eq2Id) ) {
+          continue;
+        }
+        hSet.insert(eq2Id);
 
-        //size_t num2Umis = umiGroups[eq2Id].size();
+        size_t num2Umis = umiGroups[eq2Id].size();
 
-        //// extracting umi sequences
-        //std::vector<std::pair<std::string, uint32_t>> umi2SeqCounts;
+        // extracting umi sequences
+        std::vector<std::pair<std::string, uint32_t>> umi2SeqCounts;
 
-        //for(auto& it: umiGroups[eq2Id]) {
-        //  umiObj.word__(0) = it.first;
-        //  umi2SeqCounts.emplace_back(std::make_pair(umiObj.toStr(), it.second));
-        //}
+        for(auto& it: umiGroups[eq2Id]) {
+          umiObj.word__(0) = it.first;
+          umi2SeqCounts.emplace_back(std::make_pair(umiObj.toStr(), it.second));
+        }
 
-        //for ( size_t uId=0; uId<numUmis; uId++ ){
-        //  VertexT node (static_cast<uint32_t>(eqId), static_cast<uint32_t>(uId));
-        //  uint32_t v1 = alevin::graph::getVertexIndex(vertexIndexMap, node);
+        for ( size_t uId=0; uId<numUmis; uId++ ){
+          VertexT node (static_cast<uint32_t>(eqId), static_cast<uint32_t>(uId));
+          uint32_t v1 = alevin::graph::getVertexIndex(vertexIndexMap, node);
 
-        //  for ( size_t uId_second=0; uId_second<num2Umis; uId_second++ ){
-        //    VertexT node_second (static_cast<uint32_t>(eq2Id), static_cast<uint32_t>(uId_second));
-        //    uint32_t v2 = alevin::graph::getVertexIndex(vertexIndexMap, node_second);
+          for ( size_t uId_second=0; uId_second<num2Umis; uId_second++ ){
+            VertexT node_second (static_cast<uint32_t>(eq2Id), static_cast<uint32_t>(uId_second));
+            if ( node == node_second ) {
+              continue;
+            }
+            uint32_t v2 = alevin::graph::getVertexIndex(vertexIndexMap, node_second);
 
-        //    //check if two UMI can be connected
-        //    EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umi2SeqCounts[uId_second], ae );
+            //check if two UMI can be connected
+            EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umi2SeqCounts[uId_second], ae );
 
-        //    switch ( edge ) {
-        //    case EdgeType::BiDirected:
-        //      g.add_edge(v1, v2);
-        //      g.add_edge(v2, v1);
-        //      break;
-        //    case EdgeType::XToY:
-        //      g.add_edge(v1, v2);
-        //      break;
-        //    case EdgeType::YToX:
-        //      g.add_edge(v2, v1);
-        //      break;
-        //    case EdgeType::NoEdge:
-        //      break;
-        //    };
-        //  } //end-for inner UMI
-        //}//end-for outerUMI
+            switch ( edge ) {
+            case EdgeType::BiDirected:
+              g.add_edge(v1, v2);
+              g.add_edge(v2, v1);
+              break;
+            case EdgeType::XToY:
+              g.add_edge(v1, v2);
+              break;
+            case EdgeType::YToX:
+              g.add_edge(v2, v1);
+              break;
+            case EdgeType::NoEdge:
+              break;
+            };
+          } //end-for inner UMI
+        }//end-for outerUMI
       }//end-for eq2Id
     }//end-inner for for txp
   }//end-outer-for
-  std::cout<<std::endl<<count<<std::endl<<std::flush;
+
+  size_t num_vertices = vertexIndexMap.size();
+  g.vertexNames.resize(num_vertices);
+  for (auto& it: vertexIndexMap) {
+    g.vertexNames[it.second] = it.first;
+  } // Done populating graph object
 }
 
-//void collapseVertices(uint32_t vertex,
-//                      Graph& g,
-//                      std::vector<TGroupT>& txpGroups,
-//                      boost::property_map<Graph,boost::vertex_name_t>::type& vertName,
-//                      uint32_t& chosenTxp,
-//                      std::vector<uint32_t>& largestMcc) {
-//  VertexType vertexName = vertName[boost::vertex(vertex, g)];
-//
-//  for (uint32_t txp: txpGroups[vertexName.eqclassId]){
-//    std::deque<uint32_t> bfsList;
-//    bfsList.push_back(vertex);
-//
-//    spp::sparse_hash_set<uint32_t> visitedSet;
-//    visitedSet.insert(vertex);
-//
-//    std::vector<uint32_t> currentMcc;
-//    while ( bfsList.size() != 0 ){
-//      uint32_t cv = bfsList.front();
-//      bfsList.pop_front();
-//      currentMcc.emplace_back(cv);
-//
-//      typename boost::graph_traits<Graph>::out_edge_iterator ei, ei_end;
-//      for (boost::tie(ei, ei_end) = out_edges(vertex, g); ei != ei_end; ++ei) {
-//        auto source = boost::source ( *ei, g );
-//        auto nextVertex = boost::target ( *ei, g );
-//
-//        if (visitedSet.contains(nextVertex)) {
-//          continue;
-//        }
-//        else{
-//          visitedSet.insert(nextVertex);
-//        }
-//
-//        // extract transcripts from new vertex
-//        VertexType nvertexName = vertName[boost::vertex(nextVertex, g)];
-//        for (uint32_t ntxp: txpGroups[nvertexName.eqclassId]) {
-//          if (ntxp == txp){
-//            bfsList.emplace_back(nextVertex);
-//            break;
-//          }
-//        }//end-txp group for
-//      }//end-neighbors-for
-//    }//end-while
-//
-//    if (largestMcc.size() < currentMcc.size()) {
-//      largestMcc = currentMcc;
-//      chosenTxp = txp;
-//    }
-//  } //end-for
-//}
-//
-//void getNumMolecules(Graph& g,
-//                     std::vector<TGroupT>& txpGroups,
-//                     spp::sparse_hash_map<uint32_t, uint32_t>& t2gMap,
-//                     std::vector<SalmonEqClass>& salmonEqclasses){
-//  // get connected components
-//  std::vector<uint32_t> component( num_vertices(g) );
-//  uint32_t numComps = connected_components(g, component.data());
-//  spp::sparse_hash_map<std::vector<uint32_t>,
-//                       uint32_t,
-//                       container_hash<std::vector<uint32_t>>> eqclassHash;
-//
-//  // making sets of relevant connected vertices
-//  std::vector<std::vector<uint32_t>> comps (numComps);
-//  for (size_t i=0; i<component.size(); i++) {
-//    comps[component[i]].emplace_back(static_cast<uint32_t>(i));
-//  }
-//
-//  //property accessors
-//  boost::property_map<Graph, boost::vertex_name_t>::type vertName
-//    = boost::get(boost::vertex_name, g);
-//
-//  // iterating over connected components
-//  for (auto& comp: comps) {
-//    // more than one vertex in the component
-//    if ( comp.size() > 1 ) {
-//      spp::sparse_hash_set<uint32_t> vset(comp.begin(), comp.end());
-//
-//      while ( vset.size() != 0 ){
-//        std::vector<uint32_t> bestMcc;
-//        uint32_t bestCoveringTxp = std::numeric_limits<uint32_t>::max();
-//        for (uint32_t vertex: vset) {
-//          uint32_t coveringTxp;
-//          std::vector<uint32_t> newMcc;
-//
-//          collapseVertices(vertex, g, txpGroups, vertName,
-//                           coveringTxp, newMcc);
-//          // choose the longer collapse: Greedy
-//          if (bestMcc.size() < newMcc.size()) {
-//            bestMcc = newMcc;
-//            bestCoveringTxp = coveringTxp;
-//          }
-//        }// end-vset for
-//
-//        assert( bestCoveringTxp != std::numeric_limits<uint32_t>::max() );
-//
-//        // get the gene id
-//        uint32_t bestCoveringGene = getGeneId(t2gMap, bestCoveringTxp);
-//
-//        spp::sparse_hash_set<uint32_t> globalGenes ;
-//        for (size_t vId=0; vId<bestMcc.size(); vId++){
-//          uint32_t vertex = bestMcc[vId];
-//          spp::sparse_hash_set<uint32_t> localGenes;
-//          VertexType vertexName = vertName[boost::vertex(vertex, g)];
-//
-//          for (uint32_t txp: txpGroups[vertexName.eqclassId]){
-//            uint32_t gId = getGeneId(t2gMap, txp);
-//            localGenes.insert(gId);
-//          }
-//
-//          if (vId == 0) {
-//            globalGenes = localGenes;
-//          }
-//          else {
-//            spp::sparse_hash_set<uint32_t> intersect;
-//            std::set_intersection (globalGenes.begin(),
-//                                   globalGenes.end(),
-//                                   localGenes.begin(),
-//                                   localGenes.end(),
-//                                   std::inserter(intersect,
-//                                                 intersect.begin()));
-//            globalGenes = intersect;
-//          }
-//        }//end-mcc for
-//
-//        assert(globalGenes.size() > 0);
-//        assert(globalGenes.contains(bestCoveringGene));
-//
-//        for (auto rv: bestMcc){
-//          vset.erase(rv);
-//        }
-//
-//        std::vector<uint32_t> genesVec (globalGenes.begin(),
-//                                        globalGenes.end());
-//        std::sort (genesVec.begin(), genesVec.end());
-//        eqclassHash[genesVec] += 1;
-//      }//end-while
-//    } // end-if comp.size()>1
-//    else{
-//      assert(comp.size() == 1);
-//      uint32_t vertex = comp[0];
-//      VertexType vertexName = vertName[boost::vertex(vertex, g)];
-//      TGroupT txps = txpGroups[vertexName.eqclassId];
-//
-//      spp::sparse_hash_set<uint32_t> genes;
-//      for (auto txp: txps) {
-//        uint32_t gId = getGeneId(t2gMap, txp);
-//        genes.insert(gId);
-//      }
-//
-//      assert(genes.size() > 0);
-//
-//      std::vector<uint32_t> genesVec (genes.begin(), genes.end());
-//      std::sort (genesVec.begin(), genesVec.end());
-//      eqclassHash[genesVec] += 1;
-//    }//end-else comp.size()==1
-//  } //end-outer for comps iterator
-//
-//  for (auto& it: eqclassHash) {
-//    SalmonEqClass eqclass = {
-//      it.first,
-//      it.second,
-//    };
-//    salmonEqclasses.emplace_back(eqclass);
-//  }
-//}
+void collapseVertices(uint32_t vertex,
+                      alevin::graph::Graph& g,
+                      std::vector<TGroupT>& txpGroups,
+                      uint32_t& chosenTxp,
+                      std::vector<uint32_t>& largestMcc) {
+  uint32_t eqclassId = g.getEqclassId(vertex);
+  for (uint32_t txp: txpGroups[eqclassId]){
+    std::deque<uint32_t> bfsList;
+    bfsList.push_back(vertex);
+
+    spp::sparse_hash_set<uint32_t> visitedSet;
+    visitedSet.insert(vertex);
+
+    std::vector<uint32_t> currentMcc;
+    while ( bfsList.size() != 0 ){
+      uint32_t cv = bfsList.front();
+      bfsList.pop_front();
+      currentMcc.emplace_back(cv);
+
+      for (auto nextVertex: g.getNeighbors(vertex)) {
+        if (visitedSet.contains(nextVertex)) {
+          continue;
+        }
+        else{
+          visitedSet.insert(nextVertex);
+        }
+
+        // extract transcripts from new vertex
+        eqclassId = g.getEqclassId( nextVertex );
+        for (uint32_t ntxp: txpGroups[eqclassId]) {
+          if (ntxp == txp){
+            bfsList.emplace_back(nextVertex);
+            break;
+          }
+        }//end-txp group for
+      }//end-neighbors-for
+    }//end-while
+
+    if (largestMcc.size() < currentMcc.size()) {
+      largestMcc = currentMcc;
+      chosenTxp = txp;
+    }
+  } //end-for
+}
+
+void getNumMolecules(alevin::graph::Graph& g,
+                     std::vector<TGroupT>& txpGroups,
+                     spp::sparse_hash_map<uint32_t, uint32_t>& t2gMap,
+                     std::vector<SalmonEqClass>& salmonEqclasses){
+  // get connected components
+  std::vector<uint32_t> component;
+  uint32_t numComps = g.connected_components(component);
+  spp::sparse_hash_map<std::vector<uint32_t>,
+                       uint32_t,
+                       boost::hash<std::vector<uint32_t>>> eqclassHash;
+
+  // making sets of relevant connected vertices
+  std::vector<std::vector<uint32_t>> comps (numComps);
+  for (size_t i=0; i<component.size(); i++) {
+    comps[component[i]].emplace_back(static_cast<uint32_t>(i));
+  }
+
+  // iterating over connected components
+  for (auto& comp: comps) {
+    // more than one vertex in the component
+    if ( comp.size() > 1 ) {
+      spp::sparse_hash_set<uint32_t> vset(comp.begin(), comp.end());
+
+      while ( vset.size() != 0 ){
+        std::vector<uint32_t> bestMcc;
+        uint32_t bestCoveringTxp = std::numeric_limits<uint32_t>::max();
+        for (uint32_t vertex: vset) {
+          uint32_t coveringTxp;
+          std::vector<uint32_t> newMcc;
+
+          collapseVertices(vertex, g, txpGroups,
+                           coveringTxp, newMcc);
+          //choose the longer collapse: Greedy
+          if (bestMcc.size() < newMcc.size()) {
+            bestMcc = newMcc;
+            bestCoveringTxp = coveringTxp;
+          }
+        }// end-vset for
+
+        assert( bestCoveringTxp != std::numeric_limits<uint32_t>::max() );
+
+        // get the gene id
+        uint32_t bestCoveringGene = getGeneId(t2gMap, bestCoveringTxp);
+
+        spp::sparse_hash_set<uint32_t> globalGenes ;
+        for (size_t vId=0; vId<bestMcc.size(); vId++){
+          uint32_t vertex = bestMcc[vId];
+          spp::sparse_hash_set<uint32_t> localGenes;
+          uint32_t eqclassId = g.getEqclassId(vertex);
+
+          for (uint32_t txp: txpGroups[eqclassId]){
+            uint32_t gId = getGeneId(t2gMap, txp);
+            localGenes.insert(gId);
+          }
+
+          if (vId == 0) {
+            globalGenes = localGenes;
+          }
+          else {
+            spp::sparse_hash_set<uint32_t> intersect;
+            std::set_intersection (globalGenes.begin(),
+                                   globalGenes.end(),
+                                   localGenes.begin(),
+                                   localGenes.end(),
+                                   std::inserter(intersect,
+                                                 intersect.begin()));
+            globalGenes = intersect;
+          }
+        }//end-mcc for
+
+        if( globalGenes.size() == 0 ) {
+          std::cerr << "can't find a representative gene for a molecule\n"
+                    << "Please report this on gothub";
+          exit(1);
+        }
+        assert(globalGenes.contains(bestCoveringGene));
+
+        for (auto rv: bestMcc){
+          vset.erase(rv);
+        }
+
+        std::vector<uint32_t> genesVec (globalGenes.begin(),
+                                        globalGenes.end());
+        std::sort (genesVec.begin(), genesVec.end());
+        eqclassHash[genesVec] += 1;
+      }//end-while
+    } // end-if comp.size()>1
+    else{
+      assert(comp.size() == 1);
+      uint32_t vertex = comp[0];
+      uint32_t eqclassId = g.getEqclassId(vertex);
+      TGroupT txps = txpGroups[eqclassId];
+
+      spp::sparse_hash_set<uint32_t> genes;
+      for (auto txp: txps) {
+        uint32_t gId = getGeneId(t2gMap, txp);
+        genes.insert(gId);
+      }
+
+      assert(genes.size() > 0);
+
+      std::vector<uint32_t> genesVec (genes.begin(), genes.end());
+      std::sort (genesVec.begin(), genesVec.end());
+      eqclassHash[genesVec] += 1;
+    }//end-else comp.size()==1
+  } //end-outer for comps iterator
+
+  for (auto& it: eqclassHash) {
+    SalmonEqClass eqclass = {
+      it.first,
+      it.second,
+    };
+    salmonEqclasses.emplace_back(eqclass);
+  }
+}
 
 bool dedupClasses(std::vector<double>& geneAlphas,
                   uint64_t& totalUMICount,
@@ -316,14 +314,18 @@ bool dedupClasses(std::vector<double>& geneAlphas,
   graphFromCell(txpGroups, umiGroups, g);
 
   // make gene based eqclasses
-  //getNumMolecules(g, txpGroups, txpToGeneMap, salmonEqclasses);
+  getNumMolecules(g, txpGroups, txpToGeneMap, salmonEqclasses);
 
-  //for( auto& eqclass: salmonEqclasses ) {
-  //  totalUMICount += eqclass.count;
-  //  if ( eqclass.labels.size() == 1 ) {
-  //    geneAlphas[eqclass.labels[0]] += eqclass.count;
-  //  }
-  //}
+  for( auto& eqclass: salmonEqclasses ) {
+    if ( eqclass.labels.size() == 1 ) {
+      totalUMICount += eqclass.count;
+      geneAlphas[eqclass.labels.front()] += eqclass.count;
+    }
+    else if (eqclass.labels.size() == 0){
+      std::cerr<<"Eqclasses with No gene labels\n";
+      exit(1);
+    }
+  }
 
   return true;
 }

@@ -28,7 +28,7 @@ namespace alevin {
            y.first.c_str(), y.first.size(),
            edlibNewAlignConfig(1, EDLIB_MODE_NW, EDLIB_TASK_DISTANCE));
 
-        if ( ae.result().editDistance < 2 ){
+        if ( ae.result().editDistance == 1 ){
           return EdgeType::XToY;
         }
         else {
@@ -40,7 +40,7 @@ namespace alevin {
            y.first.c_str(), y.first.size(),
            edlibNewAlignConfig(1, EDLIB_MODE_NW, EDLIB_TASK_DISTANCE));
 
-        if ( ae.result().editDistance < 2 ){
+        if ( ae.result().editDistance == 1 ){
           return EdgeType::YToX;
         }
         else {

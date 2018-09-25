@@ -1,5 +1,6 @@
 #include "CollapsedCellOptimizer.hpp"
 #include "EMUtils.hpp"
+#include <assert.h>
 
 CollapsedCellOptimizer::CollapsedCellOptimizer() {}
 /*
@@ -15,12 +16,10 @@ void CellEMUpdate_(std::vector<SalmonEqClass>& eqVec,
   for (size_t eqID=0; eqID < eqVec.size(); eqID++) {
     auto& kv = eqVec[eqID];
 
-    uint64_t count = kv.count;
+    uint32_t count = kv.count;
     // for each label in this class
     const std::vector<uint32_t>& genes = kv.labels;
     size_t groupSize = genes.size();
-
-    assert(groupSize > 0);
 
     if (BOOST_LIKELY(groupSize > 1)) {
       double denom = 0.0;
@@ -35,13 +34,18 @@ void CellEMUpdate_(std::vector<SalmonEqClass>& eqVec,
           auto gid = genes[i];
           double v = alphaIn[gid];
           if (!std::isnan(v)) {
-            salmon::utils::incLoop(alphaOut[gid], v * invDenom);
+            alphaOut[gid] += v * invDenom;
           }
         }//end-for
       }//endif for denom>0
     }//end-if boost gsize>1
-    else {
-      salmon::utils::incLoop(alphaOut[genes.front()], count);
+    else if (groupSize == 1){
+      alphaOut[genes.front()] += count;
+    }
+    else{
+      std::cerr<<"0 Group size for salmonEqclasses in EM\n"
+               <<"Please report this on github";
+      exit(1);
     }
   }//end-outer for
 }
@@ -90,7 +94,6 @@ bool runPerCellEM(uint64_t totalNumFrags, size_t numGenes,
   constexpr double minWeight = std::numeric_limits<double>::denorm_min();
 
   while (itNum < minIter or (itNum < maxIter and !converged)) {
-
     CellEMUpdate_(salmonEqclasses, alphas, alphasPrime);
 
     converged = true;
@@ -115,6 +118,7 @@ bool runPerCellEM(uint64_t totalNumFrags, size_t numGenes,
   double alphaSum = 0.0;
   // Truncate tiny expression values
   alphaSum = truncateAlphas(alphas, minAlpha);
+  totalNumFrags = static_cast<uint64_t>(alphaSum);
 
   if (alphaSum < minWeight) {
     jointlog->error("Total alpha weight was too small! "
@@ -214,9 +218,6 @@ void optimizeCell(SCExpT& experiment,
       std::exit(1);
     }
 
-    // maintaining count for total number of predicted UMI
-    totalDedupCounts += totalCount;
-
     // perform EM for resolving ambiguity
     if ( !noEM ) {
       bool isEMok = runPerCellEM(totalCount,
@@ -231,6 +232,9 @@ void optimizeCell(SCExpT& experiment,
         std::exit(1);
       }
     }
+
+    // maintaining count for total number of predicted UMI
+    totalDedupCounts += totalCount;
 
     // write the abundance for the cell
     gzw.writeAbundances( inDebugMode, trueBarcodeStr, geneAlphas );
