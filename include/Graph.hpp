@@ -32,7 +32,7 @@ namespace alevin {
         return vertexNames.size();
       }
 
-      size_t num_edges(){
+      size_t num_edges() {
         size_t i = 0;
         for(auto& it: edges) {
           i += it.second.size();

@@ -64,8 +64,6 @@ struct AlevinOpts {
   bool debug;
   // perform naive deduplication
   bool naive;
-  // perform AlevinX based tasks
-  bool axe;
   // perform eqclass level analysis instead of gene or txp level minsets
   bool eqClassLevel;
   // perform txp level analysis instead of gene level

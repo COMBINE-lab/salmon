@@ -141,7 +141,7 @@ void optimizeCell(SCExpT& experiment,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
                   bool quiet, std::atomic<uint64_t>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                  uint32_t numGenes, bool inDebugMode, bool axe){
+                  uint32_t numGenes, bool inDebugMode){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
 
@@ -387,8 +387,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                std::ref(totalDedupCounts),
                                std::ref(txpToGeneMap),
                                numGenes,
-                               aopt.debug,
-                               aopt.axe);
+                               aopt.debug);
   }
 
   for (auto& t : workerThreads) {
