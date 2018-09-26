@@ -666,8 +666,10 @@ bool GZipWriter::writeAbundances(
 }
 
 bool GZipWriter::writeAbundances(bool inDebugMode,
-                                 std::string bcName,
-                                 std::vector<double>& alphas) {
+                                 bool writingVariation,
+                                 std::string& bcName,
+                                 std::vector<double>& alphas,
+                                 const char* fileName){
 #if defined __APPLE__
   spin_lock::scoped_lock sl(writeMutex_);
 #else
@@ -677,12 +679,12 @@ bool GZipWriter::writeAbundances(bool inDebugMode,
   if (!countMatrixStream_) {
     countMatrixStream_.reset(new boost::iostreams::filtering_ostream);
     countMatrixStream_->push(boost::iostreams::gzip_compressor(6));
-    auto countMatFilename = path_ / "alevin" / "quants_mat.gz";
+    auto countMatFilename = path_ / "alevin" / fileName;
     countMatrixStream_->push(boost::iostreams::file_sink(countMatFilename.string(),
                                                          std::ios_base::out | std::ios_base::binary));
   }
 
-  if (!bcNameStream_) {
+  if (!bcNameStream_ and not writingVariation) {
     auto bcNameFilename = path_ / "alevin" / "quants_mat_rows.txt";
     bcNameStream_.reset(new std::ofstream);
     bcNameStream_->open(bcNameFilename.string());

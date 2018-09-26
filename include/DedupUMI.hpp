@@ -12,6 +12,7 @@ struct SalmonEqClass {
 using UGroupT = spp::sparse_hash_map<uint64_t, uint32_t>;
 using TGroupT = std::vector<uint32_t>;
 
+// takem from https://stackoverflow.com/questions/896155/tr1unordered-set-union-and-intersection/896440
 template <typename InIt1, typename InIt2, typename OutIt>
 OutIt unordered_set_intersection(InIt1 b1, InIt1 e1, InIt2 b2, InIt2 e2, OutIt out) {
   while (!(b1 == e1)) {

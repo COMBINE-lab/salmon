@@ -122,9 +122,117 @@ bool runPerCellEM(uint64_t& totalNumFrags, size_t numGenes,
 
   if (alphaSum < minWeight) {
     jointlog->error("Total alpha weight was too small! "
-                    "Make sure you ran salmon correclty.");
+                    "Make sure you ran salmon correctly.");
     jointlog->flush();
     return false;
+  }
+
+  return true;
+}
+
+bool runBootstraps(uint64_t& totalNumFrags, size_t numGenes,
+                   CollapsedCellOptimizer::SerialVecType& geneAlphas,
+                   std::vector<SalmonEqClass>& salmonEqclasses,
+                   std::shared_ptr<spdlog::logger>& jointlog,
+                   uint32_t numBootstraps,
+                   CollapsedCellOptimizer::SerialVecType& variance){
+
+  // An EM termination criterion, adopted from Bray et al. 2016
+  uint32_t minIter {50};
+  double relDiffTolerance {0.01};
+  uint32_t maxIter {10000};
+  size_t numClasses = salmonEqclasses.size();
+
+  std::vector<uint64_t> eqCounts;
+  CollapsedCellOptimizer::SerialVecType mean(numGenes, 0.0);
+  CollapsedCellOptimizer::SerialVecType squareMean(numGenes, 0.0);
+  CollapsedCellOptimizer::SerialVecType alphas(numGenes, 0.0);
+  CollapsedCellOptimizer::SerialVecType alphasPrime(numGenes, 0.0);
+
+  //extracting weight of eqclasses for making discrete distribution
+  totalNumFrags = 0;
+  for (auto& eqclass: salmonEqclasses) {
+    totalNumFrags += eqclass.count;
+    eqCounts.emplace_back(eqclass.count);
+  }
+
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  // MultinomialSampler msamp(rd);
+  std::discrete_distribution<uint64_t> csamp(eqCounts.begin(),
+                                             eqCounts.end());
+
+  uint32_t bsNum {1};
+  while ( bsNum++ < numBootstraps) {
+    csamp.reset();
+
+    for (size_t sc = 0; sc < eqCounts.size(); ++sc) {
+      eqCounts[sc] = 0;
+    }
+
+    for (size_t fn = 0; fn < totalNumFrags; ++fn) {
+      ++eqCounts[csamp(gen)];
+    }
+
+    for (size_t i = 0; i < numGenes; ++i) {
+      alphas[i] += (geneAlphas[i] + 0.5) * 1e-3;
+    }
+
+    bool converged{false};
+    double maxRelDiff = -std::numeric_limits<double>::max();
+    size_t itNum = 0;
+
+    // EM termination criteria, adopted from Bray et al. 2016
+    double minAlpha = 1e-8;
+    double alphaCheckCutoff = 1e-2;
+    constexpr double minWeight = std::numeric_limits<double>::denorm_min();
+
+    while (itNum < minIter or (itNum < maxIter and !converged)) {
+      CellEMUpdate_(salmonEqclasses, alphas, alphasPrime);
+
+      converged = true;
+      maxRelDiff = -std::numeric_limits<double>::max();
+      for (size_t i = 0; i < numGenes; ++i) {
+        if (alphasPrime[i] > alphaCheckCutoff) {
+          double relDiff =
+            std::abs(alphas[i] - alphasPrime[i]) / alphasPrime[i];
+          maxRelDiff = (relDiff > maxRelDiff) ? relDiff : maxRelDiff;
+          if (relDiff > relDiffTolerance) {
+            converged = false;
+          }
+        }
+        alphas[i] = alphasPrime[i];
+        alphasPrime[i] = 0.0;
+      }
+
+      ++itNum;
+    }
+
+    // Truncate tiny expression values
+    double alphaSum = 0.0;
+    // Truncate tiny expression values
+    alphaSum = truncateAlphas(alphas, minAlpha);
+
+    if (alphaSum < minWeight) {
+      jointlog->error("Total alpha weight was too small! "
+                      "Make sure you ran salmon correclty.");
+      jointlog->flush();
+      return false;
+    }
+
+    for(size_t i=0; i<numGenes; i++) {
+      double alpha = alphas[i];
+      mean[i] += alpha;
+      squareMean[i] += alpha * alpha;
+    }
+  }//end-while
+
+
+  // calculate mean and variance of the values
+  for(size_t i=0; i<numGenes; i++) {
+    double meanAlpha = mean[i] / numBootstraps;
+    geneAlphas[i] = meanAlpha;
+    variance[i] = ( squareMean[i] / numBootstraps ) - (meanAlpha * meanAlpha);
   }
 
   return true;
@@ -141,7 +249,7 @@ void optimizeCell(SCExpT& experiment,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
                   bool quiet, std::atomic<uint64_t>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                  uint32_t numGenes, bool inDebugMode){
+                  uint32_t numGenes, bool inDebugMode, uint32_t numBootstraps){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
 
@@ -218,8 +326,38 @@ void optimizeCell(SCExpT& experiment,
       std::exit(1);
     }
 
+    if ( numBootstraps and noEM ) {
+      jointlog->error("Cannot perform bootstrapping with noEM");
+      jointlog->flush();
+      exit(1);
+    }
+
+    if ( numBootstraps > 0 ){
+      std::vector<double> BootVariance(numGenes, 0.0);
+      bool isBootstrappingOk = runBootstraps(totalCount,
+                                             numGenes,
+                                             geneAlphas,
+                                             salmonEqclasses,
+                                             jointlog,
+                                             numBootstraps,
+                                             BootVariance);
+      if( !isBootstrappingOk ){
+        jointlog->error("Bootstrapping failed \n"
+                        "Please Report this on github.");
+        jointlog->flush();
+        std::exit(1);
+      }
+
+      // write the abundance for the cell
+      gzw.writeAbundances( inDebugMode, false, trueBarcodeStr, geneAlphas,
+                           "quants_mat.gz");
+
+      // write bootstraps variance for the cells
+      gzw.writeAbundances( inDebugMode, true, trueBarcodeStr, BootVariance,
+                           "quants_var_mat.gz");
+    }//end-if
     // perform EM for resolving ambiguity
-    if ( !noEM ) {
+    else if ( !noEM ) {
       bool isEMok = runPerCellEM(totalCount,
                                  numGenes,
                                  geneAlphas,
@@ -231,13 +369,18 @@ void optimizeCell(SCExpT& experiment,
         jointlog->flush();
         std::exit(1);
       }
+
+      // write the abundance for the cell
+      gzw.writeAbundances( inDebugMode, false, trueBarcodeStr, geneAlphas,
+                           "quants_mat.gz");
+    }
+    else {
+      jointlog->warn("Not performing EM; this may result in discarding ambiguous reads");
+      jointlog->flush();
     }
 
     // maintaining count for total number of predicted UMI
     totalDedupCounts += totalCount;
-
-    // write the abundance for the cell
-    gzw.writeAbundances( inDebugMode, trueBarcodeStr, geneAlphas );
 
     //printing on screen progress
     const char RESET_COLOR[] = "\x1b[0m";
@@ -387,7 +530,8 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                std::ref(totalDedupCounts),
                                std::ref(txpToGeneMap),
                                numGenes,
-                               aopt.debug);
+                               aopt.debug,
+                               aopt.numBootstraps);
   }
 
   for (auto& t : workerThreads) {

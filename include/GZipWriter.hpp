@@ -50,8 +50,10 @@ public:
                        std::vector<Transcript>& transcripts);
 
   bool writeAbundances(bool inDebugMode,
-                       std::string bcName,
-                       std::vector<double>& alphas);
+                       bool writingVariation,
+                       std::string& bcName,
+                       std::vector<double>& alphas,
+                       const char* fileName);
 
   template <typename ExpT>
   bool writeEmptyAbundances(const SalmonOpts& sopt, ExpT& readExp);

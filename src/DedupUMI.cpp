@@ -253,22 +253,16 @@ void getNumMolecules(alevin::graph::Graph& g,
                                         localGenes.end(),
                                         std::inserter(intersect,
                                                       intersect.begin()));
-            if( intersect.size() == 0 ) {
-              std::cerr << "can't find a representative gene for a molecule\n"
-                        << "Please report this on gothub";
-              for (auto gene: globalGenes){
-                std::cerr<<gene<<",";
-              }
-              std::cerr<<std::endl;
-              for (auto gene: localGenes){
-                std::cerr<<gene<<",";
-              }
-              exit(1);
-            }
 
             globalGenes = intersect;
           }
         }//end-mcc for
+
+        if( globalGenes.size() == 0 ) {
+          std::cerr << "can't find a representative gene for a molecule\n"
+                    << "Please report this on gothub";
+          exit(1);
+        }
 
         assert(globalGenes.contains(bestCoveringGene));
 

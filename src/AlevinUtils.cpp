@@ -311,6 +311,11 @@ namespace alevin {
         aopt.iupac = vm["iupac"].as<std::string>();
       }
 
+      if ( aopt.numBootstraps > 0 and aopt.noEM ) {
+        aopt.jointLog->error("cannot perform bootstrapping with noEM option.");
+        return false;
+      }
+
       if (not vm.count("threads")) {
         auto tot_cores = std::thread::hardware_concurrency();
         aopt.numThreads = std::max(1, static_cast<int>(tot_cores/4.0));
