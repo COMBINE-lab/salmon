@@ -129,6 +129,105 @@ bool GZipWriter::writeEquivCounts(const SalmonOpts& opts, ExpT& experiment) {
   return true;
 }
 
+extern "C" {
+  void do_parse_bfh(const char*, const char*, const char*, uint64_t);
+}
+template <typename ExpT>
+bool GZipWriter::writeFIFO(boost::filesystem::path& outDir,
+                          ExpT& experiment, size_t umiLength,
+                          std::vector<std::string>& bcSeqVec,
+                          boost::filesystem::path& t2gFile,
+                          uint64_t num_threads) {
+  namespace bfs = boost::filesystem;
+
+  //bfs::path eqFilePath = outDir / "bfh.txt";
+  //std::ofstream equivFile(eqFilePath.string());
+
+  const char *fifo = "/tmp/bfh_fifo";
+  mkfifo(fifo, 0666);
+  int equivFile = open(fifo, O_RDWR);
+
+  auto& transcripts = experiment.transcripts();
+  const auto& eqVec =
+    experiment.equivalenceClassBuilder().eqMap().lock_table();
+
+  // Number of transcripts
+  std::string num_txps = std::to_string(transcripts.size())+"\n";
+  write(equivFile, num_txps.c_str(), num_txps.length());
+
+  // Number of barcodes
+  //equivFile << bcSeqVec.size() << '\n';
+  std::string num_bcs = std::to_string(bcSeqVec.size())+"\n";
+  write(equivFile, num_bcs.c_str(), num_bcs.length());
+
+  // Number of equivalence classes
+  //equivFile << eqVec.size() << '\n';
+  std::string num_eqs = std::to_string(eqVec.size())+"\n";
+  write(equivFile, num_eqs.c_str(), num_eqs.length());
+
+  //calling rust functions for deduplication,
+  std::thread caller(do_parse_bfh, fifo, t2gFile.c_str(),
+    outDir.c_str(), num_threads);
+
+  for (auto& t : transcripts) {
+    std::string refname = t.RefName + "\n";
+    write(equivFile, refname.c_str(), refname.length());
+    //equivFile << t.RefName << '\n';
+  }
+
+  for (auto& b : bcSeqVec) {
+    std::string cbname = b + "\n";
+    write(equivFile, cbname.c_str(), cbname.length());
+    //equivFile << b << '\n';
+  }
+
+  alevin::types::AlevinUMIKmer umiObj;
+
+  for (auto& eq : eqVec) {
+    uint64_t count = eq.second.count;
+    // for each transcript in this class
+    const TranscriptGroup& tgroup = eq.first;
+    const std::vector<uint32_t>& txps = tgroup.txps;
+
+    // group size
+    std::string group_txps_size = std::to_string(txps.size()) + "\t";
+    write(equivFile, group_txps_size.c_str(), group_txps_size.length());
+
+    // each group member
+    std::string tids;
+    for (auto tid : txps) {
+      tids += std::to_string(tid) + "\t";
+    }
+    write(equivFile, tids.c_str(), tids.length());
+
+    std::string bc_group;
+    const auto& bgroup = eq.second.barcodeGroup;
+    bc_group += std::to_string(count) + "\t" + std::to_string(bgroup.size());
+    for (auto  bcIt : bgroup){
+      auto bc = bcIt.first;
+      auto ugroup = bcIt.second;
+      bc_group += "\t" + std::to_string(bc) + "\t" + std::to_string(ugroup.size());
+      for (auto umiIt : ugroup){
+        auto umi = umiIt.first;
+        umiObj.word__(0) = umi;
+        auto count = umiIt.second;
+
+        std::string s = umiObj.toStr();
+        std::reverse(s.begin(), s.end());
+        bc_group += "\t" + s + "\t" + std::to_string(count);
+        //equivFile << '\t' << s << '\t' << count;
+      }
+    }
+    bc_group +=  "\n";
+    write(equivFile, bc_group.c_str(), bc_group.length());
+  }
+
+  close(equivFile);
+  unlink(fifo);
+  caller.join();
+  return true;
+}
+
 template <typename ExpT>
 bool GZipWriter::writeBFH(boost::filesystem::path& outDir,
                           ExpT& experiment, size_t umiLength,
@@ -192,7 +291,6 @@ bool GZipWriter::writeBFH(boost::filesystem::path& outDir,
   equivFile.close();
   return true;
 }
-
 
 /**
  * Write the equivalence class information to file.
@@ -883,6 +981,11 @@ template bool GZipWriter::writeEquivCounts<BulkAlignLibT<UnpairedRead>>(
 template bool GZipWriter::writeEquivCounts<BulkAlignLibT<ReadPair>>(
     const SalmonOpts& sopt, BulkAlignLibT<ReadPair>& readExp);
 
+template bool GZipWriter::writeFIFO<SCExpT>(boost::filesystem::path& outDir,
+                                           SCExpT& experiment, size_t umiLength,
+                                           std::vector<std::string>& bcSeqVec,
+                                           boost::filesystem::path& t2gFile,
+                                           uint64_t num_threads);
 template bool GZipWriter::writeBFH<SCExpT>(boost::filesystem::path& outDir,
                                            SCExpT& experiment, size_t umiLength,
                                            std::vector<std::string>& bcSeqVec);

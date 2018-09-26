@@ -32,6 +32,12 @@ public:
                         ExpT& experiment);
 
   template <typename ExpT>
+  bool writeFIFO(boost::filesystem::path& outDir,
+                ExpT& experiment, size_t umiLength,
+                std::vector<std::string>& bcSeqVec,
+                boost::filesystem::path& t2gFile,
+                uint64_t num_threads);
+  template <typename ExpT>
   bool writeBFH(boost::filesystem::path& outDir,
                 ExpT& experiment, size_t umiLength,
                 std::vector<std::string>& bcSeqVec);

@@ -724,7 +724,7 @@ void processReadsQuasi(
       readLenRight= rp.second.seq.length();
 
       bool tooShortLeft = (readLenLeft < minK);
-      bool tooShortRight = (readLenRight < minK);
+      bool tooShortRight = (readLenRight < (minK+alevinOpts.trimRight));
       tooManyHits = false;
       //localUpperBoundHits = 0;
       auto& jointHitGroup = structureVec[i];
@@ -806,7 +806,19 @@ void processReadsQuasi(
             if(isUmiIdxOk){
               jointHitGroup.setUMI(umiIdx.word(0));
 
-              rh = tooShortRight ? false : hitCollector(rp.second.seq, saSearcher, rightHCInfo);
+              auto seq_len = rp.second.seq.size();
+              if (alevinOpts.trimRight > 0) {
+                if ( tooShortRight ) {
+                  rh = false;
+                }
+                else{
+                  std::string sub_seq = rp.second.seq.substr(0, seq_len-alevinOpts.trimRight);
+                  rh = hitCollector(sub_seq, saSearcher, rightHCInfo);
+                }
+              }
+              else {
+                rh = tooShortRight ? false : hitCollector(rp.second.seq, saSearcher, rightHCInfo);
+              }
               rapmap::hit_manager::hitsToMappingsSimple(*qidx, mc,
                                                         MateStatus::PAIRED_END_RIGHT,
                                                         rightHCInfo, rightHits);
@@ -1676,10 +1688,17 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
     if(aopt.dumpBarcodeEq){
       gzw.writeEquivCounts(aopt, experiment);
     }
-
+    
     if(aopt.dumpBFH){
       gzw.writeBFH(aopt.outputDirectory, experiment,
                    aopt.protocol.umiLength, trueBarcodesVec);
+    }
+    if(aopt.axe){
+      jointLog->warn("Running Alevin in Axe mode");
+      gzw.writeFIFO(aopt.outputDirectory, experiment,
+                    aopt.protocol.umiLength, trueBarcodesVec,
+                    aopt.geneMapFile, sopt.numThreads);
+      exit(0);
     }
 
     std::vector<uint32_t> umiCount(trueBarcodesVec.size());

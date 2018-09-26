@@ -95,6 +95,8 @@ add_library(ksw2pp_sse2 OBJECT ${KSW2PP_ADVANCED_LIB_SRCS})
 add_library(ksw2pp_sse4 OBJECT ${KSW2PP_ADVANCED_LIB_SRCS})
 add_library(ksw2pp_basic OBJECT ${KSW2PP_BASIC_LIB_SRCS})
 
+get_target_property(ALEVINX_DIR alevinx LOCATION)
+
 set_target_properties(ksw2pp_sse2 PROPERTIES COMPILE_FLAGS "-O3 -msse2 -mno-sse4.1")
 set_target_properties(ksw2pp_sse2 PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;KSW_SSE2_ONLY;HAVE_KALLOC")
 set_target_properties(ksw2pp_sse4 PROPERTIES COMPILE_FLAGS "-O3 -msse4.1")
@@ -122,6 +124,7 @@ set ( UNIT_TESTS_SRCS
 link_directories(
 ${GAT_SOURCE_DIR}/lib
 ${GAT_SOURCE_DIR}/external/install/lib
+${ALEVINX_DIR}
 ${Boost_LIBRARY_DIRS}
 ${TBB_LIBRARY_DIRS}
 ${LAPACK_LIBRARY_DIR}
@@ -225,6 +228,7 @@ target_link_libraries(salmon
     ${LIBRT}
     ksw2pp
     ${CMAKE_DL_LIBS}
+    alvtools
 )
 
 # Link the executable
@@ -271,6 +275,8 @@ if (${FETCHED_TBB})
    add_dependencies(alevin_core libtbb)
    add_dependencies(salmon libtbb)
 endif()
+
+add_dependencies(salmon alevinx)
 
 add_dependencies(salmon_core libcereal)
 add_dependencies(salmon libcereal)
@@ -336,6 +342,12 @@ install(DIRECTORY
         DESTINATION ${INSTALL_LIB_DIR}
 	    FILES_MATCHING PATTERN "libtbb*.${SHARED_LIB_EXTENSION}*"
     )
+install(DIRECTORY
+    ${ALEVINX_DIR}/
+        DESTINATION ${INSTALL_LIB_DIR}
+	    FILES_MATCHING PATTERN "libalvtools.so"
+    )
+
 
 # install(FILES ${Boost_LIBRARIES}
 # 	           DESTINATION ${INSTALL_LIB_DIR})

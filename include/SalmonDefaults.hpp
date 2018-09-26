@@ -102,6 +102,7 @@ namespace defaults {
 namespace alevin {
 namespace defaults {
   constexpr const bool naive{false};
+  constexpr const bool axe{false};
   constexpr const bool noDedup{false};
   constexpr const bool txpLevel{false};
   constexpr const bool eqClassLevel{false};
@@ -123,6 +124,7 @@ namespace defaults {
   constexpr const bool doEM{false};
   constexpr const bool debug{false};
   constexpr const bool noBarcode{false};
+  constexpr const uint32_t trimRight{0};
   constexpr const uint32_t lowRegionMinNumBarcodes{200};
   constexpr const uint32_t maxNumBarcodes{100000};
 }

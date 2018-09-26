@@ -52,6 +52,8 @@ struct AlevinOpts {
   uint32_t numThreads;
   //threshold for the frequency of the barcodes
   uint32_t freqThreshold;
+  // sequences to trim from right in the read sequences
+  uint32_t trimRight;
   //no downstream salmon quant
   bool noQuant;
   // use correlation for white-listing
@@ -62,6 +64,8 @@ struct AlevinOpts {
   bool debug;
   // perform naive deduplication
   bool naive;
+  // perform AlevinX based tasks
+  bool axe;
   // perform eqclass level analysis instead of gene or txp level minsets
   bool eqClassLevel;
   // perform txp level analysis instead of gene level

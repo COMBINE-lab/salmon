@@ -766,6 +766,7 @@ set (CPACK_SOURCE_IGNORE_FILES
 message("CPACK_SOURCE_IGNORE_FILES = ${CPACK_SOURCE_IGNORE_FILES}")
 
 # Recurse into Salmon source directory
+add_subdirectory ( src-rs )
 add_subdirectory ( src )
 #add_dependencies(salmon RapMap)
 # build a CPack driven installer package

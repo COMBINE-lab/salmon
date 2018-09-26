@@ -1,0 +1,24 @@
+[package]
+name = "alvtools"
+version = "0.1.0"
+authors = ["Rob Patro <rob.patro@cs.stonybrook.edu>", "Avi Srivastava <asrivastava@cs.stonybrook.edu>"]
+
+[dependencies]
+clap = "2"
+hashers = "1.0.0"
+levenshtein = "1.0.3"
+petgraph = "0.4.12"
+bitvec = "0.5"
+rand = "0.4.3"
+rayon = "1.0"
+pbr = "1.0.1"
+log = "0.4"
+statrs = "0.9.0"
+libc = "0.2.43"
+
+[dependencies.pretty_env_logger]
+git = "https://github.com/k3yavi/pretty-env-logger"
+branch = "master"
+
+[lib]
+crate-type = ["cdylib"]

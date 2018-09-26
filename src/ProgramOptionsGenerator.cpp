@@ -255,6 +255,9 @@ namespace salmon {
        "noBarcode",po::bool_switch()->default_value(alevin::defaults::noBarcode),
        "this flag should be used when there is no barcode i.e. only one cell deduplication.")
       (
+       "trimRight",po::value<uint32_t>()->default_value(alevin::defaults::trimRight),
+       "The number of bases to trim off the 5' (right) end of the read seequence.")
+      (
        "freqThreshold",po::value<uint32_t>(),
        "threshold for the frequency of the barcodes");
     return alevindevs;
@@ -288,6 +291,9 @@ namespace salmon {
       (
        "naive", po::bool_switch()->default_value(alevin::defaults::naive),
        "Run Gene level naive deduplication")
+      (
+       "axe", po::bool_switch()->default_value(alevin::defaults::axe),
+       "Run AlevinX deduplication, currently limited to just generating Gene Count Matrix")
       (
        "noSoftMap", po::bool_switch()->default_value(alevin::defaults::noSoftMap),
        "Don't use soft-assignment for quant instead do hard-assignment.")
