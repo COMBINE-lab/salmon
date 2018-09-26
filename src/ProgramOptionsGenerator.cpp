@@ -301,8 +301,8 @@ namespace salmon {
        "naive", po::bool_switch()->default_value(alevin::defaults::naive),
        "Run naive deduplication, generating Gene Count Matrix")
       (
-       "numBootstraps",po::value<uint32_t>()->default_value(alevin::defaults::numBootstraps),
-       "Generate median and standard deviation for cell x gene matrix quantification"
+       "numCellBootstraps",po::value<uint32_t>()->default_value(alevin::defaults::numBootstraps),
+       "Generate mean and variance for cell x gene matrix quantification"
        " estimates.")
       (
        "mrna", po::value<std::string>(),

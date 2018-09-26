@@ -28,6 +28,15 @@ GZipWriter::~GZipWriter() {
   if (countMatrixStream_) {
     countMatrixStream_->reset();
   }
+  if (meanMatrixStream_) {
+    meanMatrixStream_->reset();
+  }
+  if (varMatrixStream_) {
+    varMatrixStream_->reset();
+  }
+  if (bcBootNameStream_) {
+    bcNameStream_->close();
+  }
   if (bcNameStream_) {
     bcNameStream_->close();
   }
@@ -39,6 +48,15 @@ void GZipWriter::close_all_streams(){
   }
   if (countMatrixStream_) {
     countMatrixStream_->reset();
+  }
+  if (meanMatrixStream_) {
+    meanMatrixStream_->reset();
+  }
+  if (varMatrixStream_) {
+    varMatrixStream_->reset();
+  }
+  if (bcBootNameStream_) {
+    varMatrixStream_->reset();
   }
   if (bcNameStream_) {
     bcNameStream_->close();
@@ -665,11 +683,62 @@ bool GZipWriter::writeAbundances(
   return true;
 }
 
-bool GZipWriter::writeAbundances(bool inDebugMode,
-                                 bool writingVariation,
+bool GZipWriter::writeBootstraps(bool inDebugMode,
                                  std::string& bcName,
                                  std::vector<double>& alphas,
-                                 const char* fileName){
+                                 std::vector<double>& variance){
+#if defined __APPLE__
+  spin_lock::scoped_lock sl(writeMutex_);
+#else
+  std::lock_guard<std::mutex> lock(writeMutex_);
+#endif
+  namespace bfs = boost::filesystem;
+  if (!meanMatrixStream_) {
+    meanMatrixStream_.reset(new boost::iostreams::filtering_ostream);
+    meanMatrixStream_->push(boost::iostreams::gzip_compressor(6));
+    auto meanMatFilename = path_ / "alevin" / "quants_mean_mat.gz";
+    meanMatrixStream_->push(boost::iostreams::file_sink(meanMatFilename.string(),
+                                                         std::ios_base::out | std::ios_base::binary));
+
+    varMatrixStream_.reset(new boost::iostreams::filtering_ostream);
+    varMatrixStream_->push(boost::iostreams::gzip_compressor(6));
+    auto varMatFilename = path_ / "alevin" / "quants_var_mat.gz";
+    varMatrixStream_->push(boost::iostreams::file_sink(varMatFilename.string(),
+                                                       std::ios_base::out | std::ios_base::binary));
+
+    auto bcBootNameFilename = path_ / "alevin" / "quants_boot_rows.txt";
+    bcBootNameStream_.reset(new std::ofstream);
+    bcBootNameStream_->open(bcBootNameFilename.string());
+  }
+
+  boost::iostreams::filtering_ostream& countfile = *meanMatrixStream_;
+  boost::iostreams::filtering_ostream& varfile = *varMatrixStream_;
+  std::ofstream& namefile = *bcBootNameStream_;
+
+  size_t num = alphas.size();
+  if (alphas.size() != variance.size()){
+    std::cerr<<"ERROR: Quants matrix and varicance matrix size differs"<<std::flush;
+    exit(1);
+  }
+  size_t elSize = sizeof(typename std::vector<double>::value_type);
+  countfile.write(reinterpret_cast<char*>(alphas.data()),
+                  elSize * num);
+  varfile.write(reinterpret_cast<char*>(variance.data()),
+                  elSize * num);
+
+  double total_counts = std::accumulate(alphas.begin(), alphas.end(), 0.0);
+  if ( not inDebugMode and not (total_counts > 0.0)){
+    std::cout<< "ERROR: cell doesn't have any read count" << std::flush;
+    exit(1);
+  }
+  bcName += "\n";
+  namefile.write(bcName.c_str(), bcName.size());
+  return true;
+}
+
+bool GZipWriter::writeAbundances(bool inDebugMode,
+                                 std::string& bcName,
+                                 std::vector<double>& alphas){
 #if defined __APPLE__
   spin_lock::scoped_lock sl(writeMutex_);
 #else
@@ -679,12 +748,12 @@ bool GZipWriter::writeAbundances(bool inDebugMode,
   if (!countMatrixStream_) {
     countMatrixStream_.reset(new boost::iostreams::filtering_ostream);
     countMatrixStream_->push(boost::iostreams::gzip_compressor(6));
-    auto countMatFilename = path_ / "alevin" / fileName;
+    auto countMatFilename = path_ / "alevin" / "quants_mat.gz";
     countMatrixStream_->push(boost::iostreams::file_sink(countMatFilename.string(),
                                                          std::ios_base::out | std::ios_base::binary));
   }
 
-  if (!bcNameStream_ and not writingVariation) {
+  if (!bcNameStream_) {
     auto bcNameFilename = path_ / "alevin" / "quants_mat_rows.txt";
     bcNameStream_.reset(new std::ofstream);
     bcNameStream_->open(bcNameFilename.string());

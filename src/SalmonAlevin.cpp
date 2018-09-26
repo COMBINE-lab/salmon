@@ -1722,9 +1722,8 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
     ////////////////////////////////////////////
 
     if(not aopt.noDedup) {
-      jointLog->info("Starting optimizer");
+      jointLog->info("Starting optimizer\n\n");
       jointLog->flush();
-      std::cout<< "\n\n";
 
       CollapsedCellOptimizer optimizer;
       bool optSuccess = optimizer.optimize(experiment, aopt,

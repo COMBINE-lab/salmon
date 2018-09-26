@@ -306,7 +306,7 @@ void getNumMolecules(alevin::graph::Graph& g,
 }
 
 bool dedupClasses(std::vector<double>& geneAlphas,
-                  uint64_t& totalUMICount,
+                  double& totalUMICount,
                   std::vector<TGroupT>& txpGroups,
                   std::vector<UGroupT>& umiGroups,
                   std::vector<SalmonEqClass>& salmonEqclasses,

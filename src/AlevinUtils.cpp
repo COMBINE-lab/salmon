@@ -304,11 +304,16 @@ namespace alevin {
       aopt.dumpBarcodeMap = vm["dumpBarcodeMap"].as<bool>();
       aopt.dumpUmiToolsMap = vm["dumpUmitoolsMap"].as<bool>();
       aopt.trimRight = vm["trimRight"].as<uint32_t>();
-      aopt.numBootstraps = vm["numBootstraps"].as<uint32_t>();
+      aopt.numBootstraps = vm["numCellBootstraps"].as<uint32_t>();
       aopt.lowRegionMinNumBarcodes = vm["lowRegionMinNumBarcodes"].as<uint32_t>();
       aopt.maxNumBarcodes = vm["maxNumBarcodes"].as<uint32_t>();
       if(vm.count("iupac")){
         aopt.iupac = vm["iupac"].as<std::string>();
+      }
+
+      if (sopt.numBootstraps>0) {
+        aopt.jointLog->error("Do you mean numCellBootstraps ?");
+        return false;
       }
 
       if ( aopt.numBootstraps > 0 and aopt.noEM ) {

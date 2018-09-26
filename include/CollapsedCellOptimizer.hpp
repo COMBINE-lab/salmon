@@ -52,7 +52,7 @@ public:
                 size_t numLowConfidentBarcode);
 };
 
-bool runPerCellEM(uint64_t& totalNumFrags,
+bool runPerCellEM(double& totalNumFrags,
                   size_t numGenes,
                   CollapsedCellOptimizer::SerialVecType& alphas,
                   std::vector<SalmonEqClass>& salmonEqclasses,
@@ -68,7 +68,7 @@ void optimizeCell(SCExpT& experiment,
                   bfs::path& outDir, std::vector<uint32_t>& umiCount,
                   std::vector<CellState>& skippedCBcount,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
-                  bool quiet,std::atomic<uint64_t>& totalDedupCounts,
+                  bool quiet, tbb::atomic<double>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, bool inDebugMode, uint32_t numBootstraps);
 

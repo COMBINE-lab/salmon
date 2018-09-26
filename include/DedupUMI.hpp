@@ -28,7 +28,7 @@ OutIt unordered_set_intersection(InIt1 b1, InIt1 e1, InIt2 b2, InIt2 e2, OutIt o
 }
 
 bool dedupClasses(std::vector<double>& geneAlphas,
-                  uint64_t& totalUMICount,
+                  double& totalUMICount,
                   std::vector<TGroupT>& txpGroups,
                   std::vector<UGroupT>& umiGroups,
                   std::vector<SalmonEqClass>& salmonEqclasses,

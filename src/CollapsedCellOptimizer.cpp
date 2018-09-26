@@ -64,7 +64,7 @@ double truncateAlphas(VecT& alphas, double cutoff) {
   return alphaSum;
 }
 
-bool runPerCellEM(uint64_t& totalNumFrags, size_t numGenes,
+bool runPerCellEM(double& totalNumFrags, size_t numGenes,
                   CollapsedCellOptimizer::SerialVecType& alphas,
                   std::vector<SalmonEqClass>& salmonEqclasses,
                   std::shared_ptr<spdlog::logger>& jointlog){
@@ -75,7 +75,6 @@ bool runPerCellEM(uint64_t& totalNumFrags, size_t numGenes,
   uint32_t maxIter {10000};
   size_t numClasses = salmonEqclasses.size();
 
-  std::vector<uint64_t> eqCounts(numClasses, 0);
   CollapsedCellOptimizer::SerialVecType alphasPrime(numGenes, 0.0);
 
   assert( numGenes == alphas.size() );
@@ -115,12 +114,9 @@ bool runPerCellEM(uint64_t& totalNumFrags, size_t numGenes,
   }
 
   // Truncate tiny expression values
-  double alphaSum = 0.0;
-  // Truncate tiny expression values
-  alphaSum = truncateAlphas(alphas, minAlpha);
-  totalNumFrags = static_cast<uint64_t>(alphaSum);
+  totalNumFrags = truncateAlphas(alphas, minAlpha);
 
-  if (alphaSum < minWeight) {
+  if (totalNumFrags < minWeight) {
     jointlog->error("Total alpha weight was too small! "
                     "Make sure you ran salmon correctly.");
     jointlog->flush();
@@ -130,7 +126,7 @@ bool runPerCellEM(uint64_t& totalNumFrags, size_t numGenes,
   return true;
 }
 
-bool runBootstraps(uint64_t& totalNumFrags, size_t numGenes,
+bool runBootstraps(size_t numGenes,
                    CollapsedCellOptimizer::SerialVecType& geneAlphas,
                    std::vector<SalmonEqClass>& salmonEqclasses,
                    std::shared_ptr<spdlog::logger>& jointlog,
@@ -150,19 +146,19 @@ bool runBootstraps(uint64_t& totalNumFrags, size_t numGenes,
   CollapsedCellOptimizer::SerialVecType alphasPrime(numGenes, 0.0);
 
   //extracting weight of eqclasses for making discrete distribution
-  totalNumFrags = 0;
+  uint32_t totalNumFrags = 0;
   for (auto& eqclass: salmonEqclasses) {
     totalNumFrags += eqclass.count;
     eqCounts.emplace_back(eqclass.count);
   }
 
+  // Multinomial Sampler
   std::random_device rd;
   std::mt19937 gen(rd());
-  // MultinomialSampler msamp(rd);
   std::discrete_distribution<uint64_t> csamp(eqCounts.begin(),
                                              eqCounts.end());
 
-  uint32_t bsNum {1};
+  uint32_t bsNum {0};
   while ( bsNum++ < numBootstraps) {
     csamp.reset();
 
@@ -206,7 +202,7 @@ bool runBootstraps(uint64_t& totalNumFrags, size_t numGenes,
       }
 
       ++itNum;
-    }
+    }//end-EM-while
 
     // Truncate tiny expression values
     double alphaSum = 0.0;
@@ -225,14 +221,13 @@ bool runBootstraps(uint64_t& totalNumFrags, size_t numGenes,
       mean[i] += alpha;
       squareMean[i] += alpha * alpha;
     }
-  }//end-while
-
+  }//end-boot-while
 
   // calculate mean and variance of the values
   for(size_t i=0; i<numGenes; i++) {
     double meanAlpha = mean[i] / numBootstraps;
     geneAlphas[i] = meanAlpha;
-    variance[i] = ( squareMean[i] / numBootstraps ) - (meanAlpha * meanAlpha);
+    variance[i] = (squareMean[i]/numBootstraps) - (meanAlpha*meanAlpha);
   }
 
   return true;
@@ -247,7 +242,7 @@ void optimizeCell(SCExpT& experiment,
                   bfs::path& outDir, std::vector<uint32_t>& umiCount,
                   std::vector<CellState>& skippedCB,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
-                  bool quiet, std::atomic<uint64_t>& totalDedupCounts,
+                  bool quiet, tbb::atomic<double>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, bool inDebugMode, uint32_t numBootstraps){
   size_t numCells {trueBarcodes.size()};
@@ -267,7 +262,7 @@ void optimizeCell(SCExpT& experiment,
     auto& trueBarcodeStr = trueBarcodes[trueBarcodeIdx];
 
     //extracting per-cell level eq class information
-    uint64_t totalCount{0};
+    double totalCount{0.0};
     std::vector<uint32_t> eqIDs;
     std::vector<uint32_t> eqCounts;
     std::vector<UGroupT> umiGroups;
@@ -332,32 +327,8 @@ void optimizeCell(SCExpT& experiment,
       exit(1);
     }
 
-    if ( numBootstraps > 0 ){
-      std::vector<double> BootVariance(numGenes, 0.0);
-      bool isBootstrappingOk = runBootstraps(totalCount,
-                                             numGenes,
-                                             geneAlphas,
-                                             salmonEqclasses,
-                                             jointlog,
-                                             numBootstraps,
-                                             BootVariance);
-      if( !isBootstrappingOk ){
-        jointlog->error("Bootstrapping failed \n"
-                        "Please Report this on github.");
-        jointlog->flush();
-        std::exit(1);
-      }
-
-      // write the abundance for the cell
-      gzw.writeAbundances( inDebugMode, false, trueBarcodeStr, geneAlphas,
-                           "quants_mat.gz");
-
-      // write bootstraps variance for the cells
-      gzw.writeAbundances( inDebugMode, true, trueBarcodeStr, BootVariance,
-                           "quants_var_mat.gz");
-    }//end-if
     // perform EM for resolving ambiguity
-    else if ( !noEM ) {
+    if ( !noEM ) {
       bool isEMok = runPerCellEM(totalCount,
                                  numGenes,
                                  geneAlphas,
@@ -369,18 +340,33 @@ void optimizeCell(SCExpT& experiment,
         jointlog->flush();
         std::exit(1);
       }
+    }
 
-      // write the abundance for the cell
-      gzw.writeAbundances( inDebugMode, false, trueBarcodeStr, geneAlphas,
-                           "quants_mat.gz");
-    }
-    else {
-      jointlog->warn("Not performing EM; this may result in discarding ambiguous reads");
-      jointlog->flush();
-    }
+    // write the abundance for the cell
+    gzw.writeAbundances( inDebugMode, trueBarcodeStr, geneAlphas);
 
     // maintaining count for total number of predicted UMI
-    totalDedupCounts += totalCount;
+    salmon::utils::incLoop(totalDedupCounts, totalCount);
+
+    if ( numBootstraps > 0 ){
+      std::vector<double> bootVariance(numGenes, 0.0);
+      bool isBootstrappingOk = runBootstraps(numGenes,
+                                             geneAlphas,
+                                             salmonEqclasses,
+                                             jointlog,
+                                             numBootstraps,
+                                             bootVariance);
+      if( !isBootstrappingOk ){
+        jointlog->error("Bootstrapping failed \n"
+                        "Please Report this on github.");
+        jointlog->flush();
+        std::exit(1);
+      }
+
+      // write the abundance for the cell
+      gzw.writeBootstraps( inDebugMode, trueBarcodeStr,
+                           geneAlphas, bootVariance );
+    }//end-if
 
     //printing on screen progress
     const char RESET_COLOR[] = "\x1b[0m";
@@ -505,9 +491,14 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
     }
   }
 
+  if (aopt.noEM) {
+    aopt.jointLog->warn("Not performing EM; this may result in discarding ambiguous reads\n");
+    aopt.jointLog->flush();
+  }
+
   std::vector<CellState> skippedCB (numCells);
   std::atomic<uint32_t> bcount{0};
-  std::atomic<uint64_t> totalDedupCounts{0};
+  tbb::atomic<double> totalDedupCounts{0.0};
 
   std::vector<std::thread> workerThreads;
   for (size_t tn = 0; tn < numWorkerThreads; ++tn) {
@@ -537,7 +528,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   for (auto& t : workerThreads) {
     t.join();
   }
-  aopt.jointLog->info("Total {} UMI after deduplicating.",
+  aopt.jointLog->info("Total {0:.2f} UMI after deduplicating.",
                       totalDedupCounts);
 
   uint32_t skippedCBcount {0};
