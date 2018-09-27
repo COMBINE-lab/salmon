@@ -731,7 +731,7 @@ bool GZipWriter::writeBootstraps(bool inDebugMode,
     std::cout<< "ERROR: cell doesn't have any read count" << std::flush;
     exit(1);
   }
-  bcName += "\n";
+  namefile << std::endl;
   namefile.write(bcName.c_str(), bcName.size());
   return true;
 }
@@ -772,8 +772,8 @@ bool GZipWriter::writeAbundances(bool inDebugMode,
     std::cout<< "ERROR: cell doesn't have any read count" << std::flush;
     exit(1);
   }
-  bcName += "\n";
   namefile.write(bcName.c_str(), bcName.size());
+  namefile << std::endl;
   return true;
 }
 

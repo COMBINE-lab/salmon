@@ -249,7 +249,6 @@ namespace alevin {
       // Count matrix file after the deduplicated counts
       // TODO::
       // 4. Using all txps i.e. not ignoring txp with 0 values in all the cells
-      std::cout<<freqCounter.size()<<std::flush;
       size_t numCells = trueBarcodes.size();
       size_t numGenes = geneIdxMap.size();
       size_t numFeatures{4};
