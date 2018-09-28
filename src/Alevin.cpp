@@ -553,8 +553,9 @@ bool writeFastq(AlevinOpts<ProtocolT>& aopt,
             nonstd::optional<std::string> extractedSeq = aut::extractBarcode(rp.first.seq, aopt.protocol);
             bool seqOk = (extractedSeq.has_value()) ? aut::sequenceCheck(*extractedSeq) : false;
             if (not seqOk){
-              std::cerr<<"Can't extract barcode";
-              return false;
+              continue;
+              //std::cerr<<"Can't extract barcode";
+              //return false;
             }
             barcode = *extractedSeq;
           }
@@ -960,7 +961,9 @@ salmon-based processing of single-cell RNA-seq data.
     barcodeFiles = sopt.mate1ReadFiles;
     readFiles = sopt.mate2ReadFiles;
     unmateFiles = sopt.unmatedReadFiles;
-    //
+
+    // enable validate mappings
+    sopt.validateMappings = true;
 
     if (dropseq){
       AlevinOpts<apt::DropSeq> aopt;
