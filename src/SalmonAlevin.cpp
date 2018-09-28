@@ -1124,9 +1124,9 @@ void processReadsQuasi(
                             std::remove_if(jointHits.begin(), jointHits.end(),
                                            [&ctr, &scores, &numDropped, bestScore] (const QuasiAlignment& qa) -> bool {
                                              // soft filter
-                                             bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
+                                             //bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
                                              //strict filter
-                                             //bool rem = (scores[ctr] < bestScore);
+                                             bool rem = (scores[ctr] < bestScore);
                                              ++ctr;
                                              numDropped += rem ? 1 : 0;
                                              return rem;
