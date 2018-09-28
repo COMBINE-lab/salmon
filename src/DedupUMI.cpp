@@ -310,7 +310,8 @@ bool dedupClasses(std::vector<double>& geneAlphas,
                   std::vector<TGroupT>& txpGroups,
                   std::vector<UGroupT>& umiGroups,
                   std::vector<SalmonEqClass>& salmonEqclasses,
-                  spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap){
+                  spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                  std::vector<uint8_t>& tiers){
   // make directed graph from eqclasses
   alevin::graph::Graph g;
   graphFromCell(txpGroups, umiGroups, g);
@@ -322,12 +323,28 @@ bool dedupClasses(std::vector<double>& geneAlphas,
     if ( eqclass.labels.size() == 1 ) {
       totalUMICount += eqclass.count;
       geneAlphas[eqclass.labels.front()] += eqclass.count;
+      tiers[eqclass.labels.front()] = 1;
     }
     else if (eqclass.labels.size() == 0){
       std::cerr<<"Eqclasses with No gene labels\n";
       exit(1);
     }
   }
+
+
+  // adding tiers to the genes
+  for( auto& eqclass: salmonEqclasses ) {
+    if ( eqclass.labels.size() > 1 ) {
+      for ( auto gene: eqclass.labels ){
+        if ( tiers[gene] == 1 ) {
+          tiers[gene] = 2;
+        }
+        else {
+          tiers[gene] = 3;
+        }
+      }//end-for
+    }//end-if
+  }//end-for
 
   return true;
 }

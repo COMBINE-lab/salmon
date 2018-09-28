@@ -28,6 +28,9 @@ GZipWriter::~GZipWriter() {
   if (countMatrixStream_) {
     countMatrixStream_->reset();
   }
+  if (tierMatrixStream_) {
+    tierMatrixStream_->reset();
+  }
   if (meanMatrixStream_) {
     meanMatrixStream_->reset();
   }
@@ -48,6 +51,9 @@ void GZipWriter::close_all_streams(){
   }
   if (countMatrixStream_) {
     countMatrixStream_->reset();
+  }
+  if (tierMatrixStream_) {
+    tierMatrixStream_->reset();
   }
   if (meanMatrixStream_) {
     meanMatrixStream_->reset();
@@ -738,7 +744,8 @@ bool GZipWriter::writeBootstraps(bool inDebugMode,
 
 bool GZipWriter::writeAbundances(bool inDebugMode,
                                  std::string& bcName,
-                                 std::vector<double>& alphas){
+                                 std::vector<double>& alphas,
+                                 std::vector<uint8_t>& tiers){
 #if defined __APPLE__
   spin_lock::scoped_lock sl(writeMutex_);
 #else
@@ -751,6 +758,12 @@ bool GZipWriter::writeAbundances(bool inDebugMode,
     auto countMatFilename = path_ / "alevin" / "quants_mat.gz";
     countMatrixStream_->push(boost::iostreams::file_sink(countMatFilename.string(),
                                                          std::ios_base::out | std::ios_base::binary));
+
+    tierMatrixStream_.reset(new boost::iostreams::filtering_ostream);
+    tierMatrixStream_->push(boost::iostreams::gzip_compressor(6));
+    auto tierMatFilename = path_ / "alevin" / "quants_tier_mat.gz";
+    tierMatrixStream_->push(boost::iostreams::file_sink(tierMatFilename.string(),
+                                                        std::ios_base::out | std::ios_base::binary));
   }
 
   if (!bcNameStream_) {
@@ -760,12 +773,16 @@ bool GZipWriter::writeAbundances(bool inDebugMode,
   }
 
   boost::iostreams::filtering_ostream& countfile = *countMatrixStream_;
+  boost::iostreams::filtering_ostream& tierfile = *tierMatrixStream_;
   std::ofstream& namefile = *bcNameStream_;
 
   size_t num = alphas.size();
   size_t elSize = sizeof(typename std::vector<double>::value_type);
+  size_t trSize = sizeof(typename std::vector<uint8_t>::value_type);
   countfile.write(reinterpret_cast<char*>(alphas.data()),
                   elSize * num);
+  tierfile.write(reinterpret_cast<char*>(tiers.data()),
+                  trSize * num);
 
   double total_counts = std::accumulate(alphas.begin(), alphas.end(), 0.0);
   if ( not inDebugMode and not (total_counts > 0.0)){

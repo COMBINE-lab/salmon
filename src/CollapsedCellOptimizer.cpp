@@ -268,6 +268,7 @@ void optimizeCell(SCExpT& experiment,
     std::vector<UGroupT> umiGroups;
     std::vector<tgrouplabelt> txpGroups;
     std::vector<double> geneAlphas(numGenes, 0.0);
+    std::vector<uint8_t> tiers (numGenes, 0);
 
     for (auto& key : orderedTgroup) {
       //traversing each class and copying relevant data.
@@ -313,7 +314,7 @@ void optimizeCell(SCExpT& experiment,
     std::vector<SalmonEqClass> salmonEqclasses;
     bool dedupOk = dedupClasses(geneAlphas, totalCount, txpGroups,
                                 umiGroups, salmonEqclasses,
-                                txpToGeneMap);
+                                txpToGeneMap, tiers);
     if( !dedupOk ){
       jointlog->error("Deduplication for cell {} failed \n"
                       "Please Report this on github.", trueBarcodeStr);
@@ -343,7 +344,8 @@ void optimizeCell(SCExpT& experiment,
     }
 
     // write the abundance for the cell
-    gzw.writeAbundances( inDebugMode, trueBarcodeStr, geneAlphas);
+    gzw.writeAbundances( inDebugMode, trueBarcodeStr,
+                         geneAlphas, tiers );
 
     // maintaining count for total number of predicted UMI
     salmon::utils::incLoop(totalDedupCounts, totalCount);

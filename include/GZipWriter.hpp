@@ -51,7 +51,8 @@ public:
 
   bool writeAbundances(bool inDebugMode,
                        std::string& bcName,
-                       std::vector<double>& alphas);
+                       std::vector<double>& alphas,
+                       std::vector<uint8_t>& tiers);
 
   bool writeBootstraps(bool inDebugMode,
                        std::string& bcName,
@@ -76,6 +77,7 @@ private:
   std::unique_ptr<boost::iostreams::filtering_ostream> countMatrixStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> meanMatrixStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> varMatrixStream_{nullptr};
+  std::unique_ptr<boost::iostreams::filtering_ostream> tierMatrixStream_{nullptr};
   std::unique_ptr<std::ofstream> bcNameStream_{nullptr};
   std::unique_ptr<std::ofstream> bcBootNameStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> cellEQStream_{nullptr};
