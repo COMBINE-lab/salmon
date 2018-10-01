@@ -185,7 +185,6 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
                               std::default_random_engine& randEng, bool initialRound,
                               std::atomic<bool>& burnedIn, double& maxZeroFrac,
                               AlevinOpts<ProtocolT>& alevinOpts,
-                      /*std::vector<uint64_t>& uniqueFLD,*/
                               std::mutex& iomutex){
 
   using salmon::math::LOG_0;
@@ -255,7 +254,8 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
     fmCalc.cumulativeLogMassAt(firstTimestepOfRound);
 
   auto isUnexpectedOrphan = [expectedLibraryFormat](AlnT& aln) -> bool {
-    return (expectedLibraryFormat.type == ReadType::PAIRED_END and aln.mateStatus != rapmap::utils::MateStatus::PAIRED_END_PAIRED);
+    return (expectedLibraryFormat.type == ReadType::PAIRED_END and
+            aln.mateStatus != rapmap::utils::MateStatus::PAIRED_END_PAIRED);
   };
 
   int i{0};
@@ -265,7 +265,6 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
     // for a single read).  Distribute the read's mass to the transcripts
     // where it potentially aligns.
     for (auto& alnGroup : batchHits) {
-
       // If we had no alignments for this read, then skip it
       if (alnGroup.size() == 0) {
         continue;

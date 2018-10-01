@@ -121,9 +121,9 @@ void densityCalculator(single_parser* parser,
 
       auto& rp = rg[i];
       std::string& seq = rp.seq;
-      if (aopt.protocol.end == bcEnd::THREE) {
-        std::reverse(seq.begin(), seq.end());
-      }
+      //if (aopt.protocol.end == bcEnd::THREE) {
+      //  std::reverse(seq.begin(), seq.end());
+      //}
 
       nonstd::optional<std::string> extractedBarcode = aut::extractBarcode(seq, aopt.protocol);
       bool seqOk = (extractedBarcode.has_value()) ? aut::sequenceCheck(*extractedBarcode) : false;
@@ -568,13 +568,13 @@ bool writeFastq(AlevinOpts<ProtocolT>& aopt,
             }
           }
         }
-        else if (aopt.protocol.end == bcEnd::THREE) {
-          std::string seq = rp.first.seq;
-          std::reverse(seq.begin(), seq.end());
-          barcode = rp.first.seq.substr(0, aopt.protocol.barcodeLength);
-          umi = rp.first.seq.substr(aopt.protocol.barcodeLength,
-                                    aopt.protocol.umiLength);
-        }
+        //else if (aopt.protocol.end == bcEnd::THREE) {
+        //  std::string seq = rp.first.seq;
+        //  std::reverse(seq.begin(), seq.end());
+        //  barcode = rp.first.seq.substr(0, aopt.protocol.barcodeLength);
+        //  umi = rp.first.seq.substr(aopt.protocol.barcodeLength,
+        //                            aopt.protocol.umiLength);
+        //}
 
         bool inTrueBc = trueBarcodes.find(barcode) != trueBarcodes.end();
         auto it = barcodeMap.find(barcode);
@@ -964,6 +964,7 @@ salmon-based processing of single-cell RNA-seq data.
 
     // enable validate mappings
     sopt.validateMappings = true;
+    sopt.minScoreFraction = 0.8;
 
     if (dropseq){
       AlevinOpts<apt::DropSeq> aopt;
