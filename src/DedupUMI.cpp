@@ -305,6 +305,45 @@ void getNumMolecules(alevin::graph::Graph& g,
   }
 }
 
+void assignTiers(std::vector<TGroupT>& txpGroups,
+                 spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                 std::vector<uint8_t>& tiers) {
+  // adding tiers to the genes
+  std::vector<std::vector<uint32_t>> geneClasses;
+  for (auto& eclass: txpGroups) {
+    spp::sparse_hash_set<uint32_t> genes;
+    for(auto txp: eclass){
+      uint32_t gene = getGeneId(txpToGeneMap, txp);
+      genes.insert(gene);
+    }
+
+    // first tier
+    if (genes.size() == 1){
+      tiers[*genes.begin()] = 1;
+    }
+    else {
+      // have to re parse for second and third tier
+      std::vector<uint32_t> geneClass (genes.begin(), genes.end());
+      geneClasses.emplace_back(geneClass);
+    }//end-else
+  }//end-for
+
+  for(auto& eclass: geneClasses) {
+    bool tier2flag = false;
+    for(auto gene: eclass) {
+      if (tiers[gene] == 1){
+        tier2flag = true;
+        break;
+      }
+    }//end gene for
+
+    uint8_t tierCategory = tier2flag ? 2:3;
+    for(auto gene: eclass){
+      tiers[gene] = tierCategory;
+    } //end-for
+  }//end eclass for
+}
+
 bool dedupClasses(std::vector<double>& geneAlphas,
                   double& totalUMICount,
                   std::vector<TGroupT>& txpGroups,
@@ -316,6 +355,9 @@ bool dedupClasses(std::vector<double>& geneAlphas,
   alevin::graph::Graph g;
   graphFromCell(txpGroups, umiGroups, g);
 
+  // assign tiers to the genes
+  assignTiers(txpGroups, txpToGeneMap, tiers);
+
   // make gene based eqclasses
   getNumMolecules(g, txpGroups, txpToGeneMap, salmonEqclasses);
 
@@ -323,28 +365,12 @@ bool dedupClasses(std::vector<double>& geneAlphas,
     if ( eqclass.labels.size() == 1 ) {
       totalUMICount += eqclass.count;
       geneAlphas[eqclass.labels.front()] += eqclass.count;
-      tiers[eqclass.labels.front()] = 1;
     }
     else if (eqclass.labels.size() == 0){
       std::cerr<<"Eqclasses with No gene labels\n";
       exit(1);
     }
   }
-
-
-  // adding tiers to the genes
-  for( auto& eqclass: salmonEqclasses ) {
-    if ( eqclass.labels.size() > 1 ) {
-      for ( auto gene: eqclass.labels ){
-        if ( tiers[gene] == 1 ) {
-          tiers[gene] = 2;
-        }
-        else {
-          tiers[gene] = 3;
-        }
-      }//end-for
-    }//end-if
-  }//end-for
 
   return true;
 }
