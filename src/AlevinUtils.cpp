@@ -434,8 +434,19 @@ namespace alevin {
       sopt.numThreads = aopt.numThreads;
       sopt.quiet = aopt.quiet;
       sopt.quantMode = SalmonQuantMode::MAP;
+
+      // enable validate mappings
+      sopt.validateMappings = true;
       bool optionsOK =
         salmon::utils::processQuantOptions(sopt, vm, vm["numBiasSamples"].as<int32_t>());
+      if (!vm.count("minScoreFraction")) {
+        sopt.minScoreFraction = alevin::defaults::minScoreFraction;
+        sopt.jointLog->info(
+                            "Using default value of {} for minScoreFraction in Alevin",
+                            sopt.minScoreFraction
+                            );
+      }
+
       if (!optionsOK) {
         if (aopt.jointLog) {
           aopt.jointLog->error("Could not properly process salmon-level options!");

@@ -962,10 +962,6 @@ salmon-based processing of single-cell RNA-seq data.
     readFiles = sopt.mate2ReadFiles;
     unmateFiles = sopt.unmatedReadFiles;
 
-    // enable validate mappings
-    sopt.validateMappings = true;
-    sopt.minScoreFraction = 0.8;
-
     if (dropseq){
       AlevinOpts<apt::DropSeq> aopt;
       //aopt.jointLog->warn("Using DropSeq Setting for Alevin");

@@ -127,6 +127,7 @@ namespace defaults {
   constexpr const uint32_t numBootstraps{0};
   constexpr const uint32_t lowRegionMinNumBarcodes{200};
   constexpr const uint32_t maxNumBarcodes{100000};
+  constexpr const double minScoreFraction{0.8};
 }
 }
 
