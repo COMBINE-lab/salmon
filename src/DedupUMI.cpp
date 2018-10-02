@@ -310,6 +310,7 @@ void assignTiers(std::vector<TGroupT>& txpGroups,
                  std::vector<uint8_t>& tiers) {
   // adding tiers to the genes
   std::vector<std::vector<uint32_t>> geneClasses;
+  spp::sparse_hash_map<uint32_t, uint32_t> vertexIndices;
   for (auto& eclass: txpGroups) {
     spp::sparse_hash_set<uint32_t> genes;
     for(auto txp: eclass){
@@ -325,12 +326,76 @@ void assignTiers(std::vector<TGroupT>& txpGroups,
       // have to re parse for second and third tier
       std::vector<uint32_t> geneClass (genes.begin(), genes.end());
       geneClasses.emplace_back(geneClass);
+
+      // populate gene indices
+      for(auto gene: geneClass){
+        if (!vertexIndices.contains(gene)){
+          vertexIndices[gene] = vertexIndices.size();
+        }
+      }
     }//end-else
   }//end-for
 
-  for(auto& eclass: geneClasses) {
+  //generating edges for the graph
+  spp::sparse_hash_map<uint32_t, spp::sparse_hash_set<uint32_t>> edges;
+  for (auto& geneClass: geneClasses) {
+    for (size_t i=0; i<geneClass.size()-1; i++) {
+      for(size_t j=i+1; j<geneClass.size(); j++) {
+        uint32_t gene_from = geneClass[i];
+        uint32_t gene_to = geneClass[j];
+
+        if (gene_from == gene_to) {
+          continue;
+        }
+
+        if (!vertexIndices.contains(gene_from) or
+            !vertexIndices.contains(gene_to)){
+          std::cerr<<"ERROR: Tier creation can't match indexToGene"<<std::flush;
+          std::exit(1);
+        }
+        uint32_t gfromIndex = vertexIndices[gene_from];
+        uint32_t gtoIndex = vertexIndices[gene_to];
+        edges[ gfromIndex ].insert( gtoIndex );
+      }//end-j
+    }//end-i
+  }//end-geneclass
+
+  // iterating over edges and filling the graph
+  typedef boost::adjacency_list < boost::vecS, boost::vecS, boost::undirectedS > AdjList;
+  AdjList adjList;
+  for (auto& it: edges) {
+    uint32_t source = it.first;
+    for(uint32_t target: it.second) {
+      boost::add_edge(source, target, adjList);
+    }
+  }
+
+  //find the connected component
+  std::vector<uint32_t> component(num_vertices(adjList));
+  uint32_t numComps = boost::connected_components(adjList, component.data());
+
+  // making sets of relevant connected vertices
+  std::vector<std::vector<uint32_t>> comps (numComps);
+  for (size_t i=0; i<component.size(); i++) {
+    comps[component[i]].emplace_back(static_cast<uint32_t>(i));
+  }
+
+  std::vector<uint32_t> indexToGene(vertexIndices.size());
+  for(auto& it: vertexIndices){
+    indexToGene[it.second] = it.first;
+  }
+
+  // iterating over connected components and assigning tiers
+  for (auto& comp: comps) {
     bool tier2flag = false;
-    for(auto gene: eclass) {
+    for(auto geneIndex: comp) {
+      if (geneIndex >= indexToGene.size()){
+        std::cerr<<"ERROR: {} gene Index > indexToGene size {}"
+                 << geneIndex << indexToGene.size()
+                 << std::flush;
+        std::exit(1);
+      }
+      uint32_t gene = indexToGene[geneIndex];
       if (tiers[gene] == 1){
         tier2flag = true;
         break;
@@ -338,7 +403,8 @@ void assignTiers(std::vector<TGroupT>& txpGroups,
     }//end gene for
 
     uint8_t tierCategory = tier2flag ? 2:3;
-    for(auto gene: eclass){
+    for(auto geneIndex: comp){
+      uint32_t gene = indexToGene[geneIndex];
       tiers[gene] = tierCategory;
     } //end-for
   }//end eclass for
