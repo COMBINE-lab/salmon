@@ -330,7 +330,8 @@ void assignTiers(std::vector<TGroupT>& txpGroups,
       // populate gene indices
       for(auto gene: geneClass){
         if (!vertexIndices.contains(gene)){
-          vertexIndices[gene] = vertexIndices.size();
+          auto gid = vertexIndices.size();
+          vertexIndices[gene] = gid;
         }
       }
     }//end-else
@@ -385,13 +386,19 @@ void assignTiers(std::vector<TGroupT>& txpGroups,
     indexToGene[it.second] = it.first;
   }
 
+  if(component.size() != vertexIndices.size()){
+    std::cerr<<"ERROR: tiers size doesn't match";
+    std::exit(1);
+  }
+
   // iterating over connected components and assigning tiers
   for (auto& comp: comps) {
     bool tier2flag = false;
     for(auto geneIndex: comp) {
       if (geneIndex >= indexToGene.size()){
-        std::cerr<<"ERROR: {} gene Index > indexToGene size {}"
-                 << geneIndex << indexToGene.size()
+        std::cerr<<"ERROR:" << geneIndex
+                 <<" gene Index > indexToGene size"
+                 << indexToGene.size()
                  << std::flush;
         std::exit(1);
       }
