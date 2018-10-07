@@ -581,9 +581,13 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
       aopt.jointLog->info("Clearing EqMap; Might take some time.");
       fullEqMap.clear();
 
-      aopt.jointLog->info("Starting Import of the gene count matrix.");
+      aopt.jointLog->info("Starting Import of the gene count matrix of size {}x{}.",
+                          trueBarcodes.size(), numGenes);
       countMatrix.resize(trueBarcodes.size(),
                          std::vector<double> (numGenes, 0.0));
+
+      aopt.jointLog->info("Done initializing the empty matrix.");
+      aopt.jointLog->flush();
       auto zerod_cells = alevin::whitelist::populate_count_matrix(aopt.outputDirectory,
                                                                   aopt.debug,
                                                                   numGenes,
@@ -595,6 +599,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
 
       aopt.jointLog->info("Done Importing gene count matrix for dimension {}x{}",
                           numCells, numGenes);
+      aopt.jointLog->flush();
 
       if (aopt.dumpCsvCounts){
         aopt.jointLog->info("Starting dumping cell v gene counts in csv format");
