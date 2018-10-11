@@ -133,7 +133,7 @@ inline void AlignmentModel::setBasesFromCIGAROp_(enum cigar_op op,
                                                  size_t& curReadBase) {
   switch (op) {
   case BAM_UNKNOWN:
-    std::cerr << "ENCOUNTERED UNKNOWN SYMBOL IN CIGAR STRING!\n";
+    std::cerr << "ENCOUNTERED UNKNOWN SYMBOL IN CIGAR STRING!" << std::endl;
     break;
   case BAM_CMATCH:
     // do nothing
@@ -163,6 +163,9 @@ inline void AlignmentModel::setBasesFromCIGAROp_(enum cigar_op op,
   case BAM_CPAD:
     curRefBase = ALN_PAD;
     curReadBase = ALN_PAD;
+    break;
+  default:
+    std::cerr << "ENCOUNTERED UNKNOWN (non -1) CIGAR OP : (" << op << ")!" << std::endl;
     break;
   }
 }
@@ -258,8 +261,8 @@ double AlignmentModel::logLikelihood(
     uint32_t opLen = cigar[cigarIdx] >> BAM_CIGAR_SHIFT;
     enum cigar_op op =
         static_cast<enum cigar_op>(cigar[cigarIdx] & BAM_CIGAR_MASK);
-    size_t curReadBase = samToTwoBit[bam_seqi(qseq, readIdx)];
-    size_t curRefBase = samToTwoBit[ref.baseAt(uTranscriptIdx, readStrand)];
+    size_t curReadBase = (BAM_CONSUME_SEQ(op)) ? samToTwoBit[bam_seqi(qseq, readIdx)] : 0;
+    size_t curRefBase = (BAM_CONSUME_REF(op)) ? samToTwoBit[ref.baseAt(uTranscriptIdx, readStrand)] : 0;
     advanceInRead = false;
     advanceInReference = false;
 
@@ -418,6 +421,7 @@ void AlignmentModel::update(
   int32_t readIdx{0};
   auto transcriptIdx = bam_pos(read);
   size_t transcriptLen = ref.RefLength;
+
   // if the read starts before the beginning of the transcript,
   // only consider the part overlapping the transcript
   if (transcriptIdx < 0) {
@@ -450,9 +454,9 @@ void AlignmentModel::update(
       uint32_t opLen = cigar[cigarIdx] >> BAM_CIGAR_SHIFT;
       enum cigar_op op =
           static_cast<enum cigar_op>(cigar[cigarIdx] & BAM_CIGAR_MASK);
-      size_t curReadBase = samToTwoBit[bam_seqi(qseq, readIdx)];
-      size_t curRefBase = samToTwoBit[ref.baseAt(uTranscriptIdx, readStrand)];
-      advanceInRead = false;
+
+      size_t curReadBase = (BAM_CONSUME_SEQ(op)) ? samToTwoBit[bam_seqi(qseq, readIdx)] : 0;
+      size_t curRefBase = (BAM_CONSUME_REF(op)) ? samToTwoBit[ref.baseAt(uTranscriptIdx, readStrand)] : 0;
       advanceInReference = false;
 
       for (size_t i = 0; i < opLen; ++i) {
@@ -475,6 +479,7 @@ void AlignmentModel::update(
             }
             return;
           }
+
           curReadBase = samToTwoBit[bam_seqi(qseq, readIdx)];
           readPosBin = static_cast<uint32_t>((readIdx * invLen));
           advanceInRead = false;
@@ -493,6 +498,7 @@ void AlignmentModel::update(
             }
             return;
           }
+
           curRefBase = samToTwoBit[ref.baseAt(uTranscriptIdx, readStrand)];
           advanceInReference = false;
         }
@@ -510,30 +516,6 @@ void AlignmentModel::update(
         if (BAM_CONSUME_SEQ(op)) {
           ++readIdx;
           advanceInRead = true;
-          /* DEBUG -- print what happened
-             std::cerr << "read name = " << bam_name(read) << "\n";
-             std::cerr << "curReadBase = " << readIdx << "\n";
-             std::cerr << "readLen = " << bam_seq_len(read) << "\n";
-             std::cerr << "ref = ";
-             for (size_t j = 0; j <
-             std::min(static_cast<size_t>(bam_seq_len(read)),
-             static_cast<size_t>(transcriptLen - transcriptIdx)); ++j) {
-             std::cerr << salmon::stringtools::samCodeToChar[ref.baseAt(j,
-             readStrand)];
-             }
-             std::cerr << "\n";
-             std::cerr << "read = ";
-             for (size_t j = 0; j < bam_seq_len(read); ++j) {
-             std::cerr << salmon::stringtools::samCodeToChar[bam_seqi(qseq, j)];
-             }
-             std::cerr << "\nCIGAR = ";
-             for (size_t j = 0; j < cigarLen; ++j) {
-             uint32_t opLen = cigar[j] >> BAM_CIGAR_SHIFT;
-             enum cigar_op op = static_cast<enum cigar_op>(cigar[j] &
-             BAM_CIGAR_MASK); std::cerr << opLen << opToChr(op);
-             }
-             std::cerr << "\n";
-             */
         }
         if (BAM_CONSUME_REF(op)) {
           ++uTranscriptIdx;

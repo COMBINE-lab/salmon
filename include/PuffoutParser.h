@@ -148,6 +148,10 @@ public:
                             // do nothing
                         }
                             break;
+                        case MateStatus::NOTHING: {
+                            std::cerr << "WARNING: shouldn't get a mateStatus of NOTHING\n";
+                        }
+                        break;
                     }
                     /*switch(jointHitGroup.alignments().back().mateStatus) {
                         case MateStatus::PAIRED_END_PAIRED:

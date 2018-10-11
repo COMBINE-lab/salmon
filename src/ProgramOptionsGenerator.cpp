@@ -1,4 +1,5 @@
 #include <vector>
+#include <iostream>
 
 #include "ProgramOptionsGenerator.hpp"
 #include "SalmonDefaults.hpp"
@@ -87,11 +88,20 @@ namespace salmon {
        po::bool_switch(&(sopt.validateMappings))->default_value(salmon::defaults::validateMappings),
        "[Quasi-mapping mode only] : Validate mappings using alignment-based verifcation. "
        "If this flag is passed, quasi-mappings will be validated to ensure that they could give "
-       "rise to a reasonable alignment before they are further used for quantification")
+       "rise to a reasonable alignment before they are further used for quantification.")
+      ("consensusSlack",
+       po::value<int32_t>(&(sopt.consensusSlack))->default_value(salmon::defaults::consensusSlack),
+       "[Quasi-mapping mode only] : The amount of slack allowed in the quasi-mapping consensus "
+       "mechanism.  Normally, a transcript must cover all hits to be considered for mapping.  "
+       "If this is set to a value, X, greater than 0, then a transcript can fail to cover up to "
+       "X hits before it is discounted as a mapping candidate.  The default value of this option "
+       "is 1 if --validateMappings is given and 0 otherwise."
+       )
       ("minScoreFraction",
-       po::value<double>(&sopt.minScoreFraction)->default_value(salmon::defaults::minScoreFraction),
+       po::value<double>(&sopt.minScoreFraction),
        "[Quasi-mapping mode only] : The fraction of the optimal possible alignment score that a "
-       "mapping must achieve in order to be considered \"valid\"."
+       "mapping must achieve in order to be considered \"valid\" --- should be in (0,1].\n"
+       "Salmon Default 0.65 and Alevin Default 0.8"
        )
       ("ma",
        po::value<int8_t>(&sopt.matchScore)->default_value(salmon::defaults::matchScore),
@@ -198,13 +208,81 @@ namespace salmon {
     return alignin;
   }
 
-  po::options_description ProgramOptionsGenerator::getAlevinSpecificOptions() {
+  po::options_description ProgramOptionsGenerator::getAlevinDevsOptions() {
+    po::options_description alevindevs("\n"
+                                       "alevin-developer Options");
+    alevindevs.add_options()
+      (
+       "indrop", po::bool_switch()->default_value(alevin::defaults::isInDrop),
+       "Use inDrop (not extensively tested) Single Cell protocol for the library. must specify w1 too.")
+      (
+       "w1", po::value<std::string>(),
+       "Must be used in conjunction with inDrop;")
+      (
+       "celseq", po::bool_switch()->default_value(alevin::defaults::isCELSeq),
+       "Use CEL-Seq2 Single Cell protocol for the library.")
+      (
+       "dumpBarcodeEq", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeEq),
+       "Dump JointEqClas with umi-barcode count.")
+      (
+       "dumpUmitoolsMap", po::bool_switch()->default_value(alevin::defaults::dumpUMIToolsMap),
+       "Dump umi_tools readable whitelist map for downstream analysis.")
+      (
+       "dumpBarcodeMap", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeMap),
+       "Dump BarcodeMap for downstream analysis.")
+      (
+       "iupac,u",po::value<std::string>(),
+       "<Deprecated>iupac code for cell-level barcodes.")
+      (
+       "end",po::value<uint32_t>(),
+       "Cell-Barcodes end (5 or 3) location in the read sequence from where barcode has to"
+       "be extracted. (end, umiLength, barcodeLength)"
+       " should all be provided if using this option")
+      (
+       "umiLength",po::value<uint32_t>(),
+       "umi length Parameter for unknown protocol. (end, umiLength, barcodeLength)"
+       " should all be provided if using this option")
+      (
+       "barcodeLength",po::value<uint32_t>(),
+       "umi length Parameter for unknown protocol. (end, umiLength, barcodeLength)"
+       " should all be provided if using this option")
+      (
+       "noem",po::bool_switch()->default_value(alevin::defaults::noEM),
+       "do not run em")
+      (
+       "noBarcode",po::bool_switch()->default_value(alevin::defaults::noBarcode),
+       "this flag should be used when there is no barcode i.e. only one cell deduplication.")
+      (
+       "trimRight",po::value<uint32_t>()->default_value(alevin::defaults::trimRight),
+       "The number of bases to trim off the 5' (right) end of the read seequence.")
+      (
+       "noSoftMap", po::bool_switch()->default_value(alevin::defaults::noSoftMap),
+       "Don't use soft-assignment for quant instead do hard-assignment.")
+      (
+       "noDedup", po::bool_switch()->default_value(alevin::defaults::noDedup),
+       "Stops the pipeline after CB sequence correction and quasi-mapping reads.")
+      (
+       "debug", po::bool_switch()->default_value(alevin::defaults::debug),
+       "Enabling this mode mode will try to ignore segfaults based on no whitelist"
+       " mapping or no whitelist deduplicated count")
+      (
+       "freqThreshold",po::value<uint32_t>(),
+       "threshold for the frequency of the barcodes");
+    return alevindevs;
+  }
+
+  po::options_description ProgramOptionsGenerator::getAlevinBasicOptions(SalmonOpts& sopt) {
     po::options_description alevinspec("\n"
                                        "alevin-specific Options");
     alevinspec.add_options()
+      ("version,v", "print version string")
+      ("help,h", "produce help message")
+      ("output,o", po::value<std::string>()->required(), "Output quantification directory.")
+      ("threads,p",
+       po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads),
+       "The number of threads to use concurrently.")
       (
-       "dedup", po::bool_switch()->default_value(alevin::defaults::dedup),
-       "Perform Directional per-cell deduplication")
+       "tgMap", po::value<std::string>(), "transcript to gene map tsv file")
       (
        "dropseq", po::bool_switch()->default_value(alevin::defaults::isDropseq),
        "Use DropSeq Single Cell protocol for the library")
@@ -215,26 +293,18 @@ namespace salmon {
        "gemcode", po::bool_switch()->default_value(alevin::defaults::isGemcode),
        "Use 10x gemcode v1 Single Cell protocol for the library.")
       (
-       "indrop", po::bool_switch()->default_value(alevin::defaults::isInDrop),
-       "Use inDrop (not extensively tested) Single Cell protocol for the library. must specify w1 too.")
-      (
-       "w1", po::value<std::string>(),
-       "Must be used in conjunction with inDrop;")
-      (
        "whitelist", po::value<std::string>(),
        "File containing white-list barcodes")
       (
-       "dumpbarcodeeq", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeEq),
-       "Dump JointEqClas with umi-barcode count.(Only DropSeq)")
-      (
-       "noquant", po::bool_switch()->default_value(alevin::defaults::noQuant),
+       "noQuant", po::bool_switch()->default_value(alevin::defaults::noQuant),
        "Don't run downstream barcode-salmon model.")
       (
        "naive", po::bool_switch()->default_value(alevin::defaults::naive),
-       "Run Gene level naive deduplication")
+       "Run naive deduplication, generating Gene Count Matrix")
       (
-       "nosoftmap", po::bool_switch()->default_value(alevin::defaults::noSoftMap),
-       "Don't use soft-assignment for quant instead do hard-assignment.")
+       "numCellBootstraps",po::value<uint32_t>()->default_value(alevin::defaults::numBootstraps),
+       "Generate mean and variance for cell x gene matrix quantification"
+       " estimates.")
       (
        "mrna", po::value<std::string>(),
        "path to a file containing mito-RNA gene, one per line")
@@ -242,58 +312,28 @@ namespace salmon {
        "rrna", po::value<std::string>(),
        "path to a file containing ribosomal RNA, one per line")
       (
-       "usecorrelation", po::bool_switch()->default_value(alevin::defaults::useCorrelation),
+       "useCorrelation", po::bool_switch()->default_value(alevin::defaults::useCorrelation),
        "Use pair-wise pearson correlation with True barcodes as a"
        " feature for white-list creation.")
       (
        "dumpfq", po::bool_switch()->default_value(alevin::defaults::dumpFQ),
        "Dump barcode modified fastq file for downstream analysis by"
-       "using coin toss for multi-mapping.")
+       " using coin toss for multi-mapping.")
       (
-       "dumpbfh", po::bool_switch()->default_value(alevin::defaults::dumpBFH),
+       "dumpBfh", po::bool_switch()->default_value(alevin::defaults::dumpBFH),
        "dump the big hash with all the barcodes and the UMI sequence.")
       (
-       "dumpfeatures", po::bool_switch()->default_value(alevin::defaults::dumpFeatures),
+       "dumpFeatures", po::bool_switch()->default_value(alevin::defaults::dumpFeatures),
        "Dump features for whitelist and downstream analysis.")
       (
-       "dumpumitoolsmap", po::bool_switch()->default_value(alevin::defaults::dumpUMIToolsMap),
-       "Dump umi_tools readable whitelist map for downstream analysis.")
-      (
-       "dumpbarcodemap", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeMap),
-       "Dump BarcodeMap for downstream analysis.")
-      (
-       "dumpcsvcounts", po::bool_switch()->default_value(alevin::defaults::dumpCSVCounts),
+       "dumpCsvCounts", po::bool_switch()->default_value(alevin::defaults::dumpCSVCounts),
        "Dump cell v transcripts count matrix in csv format.")
       (
-       "iupac,u",po::value<std::string>(),
-       "<Deprecated>iupac code for cell-level barcodes.")
+       "lowRegionMinNumBarcodes", po::value<uint32_t>()->default_value(alevin::defaults::lowRegionMinNumBarcodes),
+       "Minimum Number of CB to use for learning Low confidence region (Default: 200).")
       (
-       "end",po::value<uint32_t>(),
-       "Cell-Barcodes end (5 or 3) location in the read sequence from where barcode has to"
-       "be extracted. (end, umilength, barcodelength)"
-       " should all be provided if using this option")
-      (
-       "umilength",po::value<uint32_t>(),
-       "umi length Parameter for unknown protocol. (end, umilength, barcodelength)"
-       " should all be provided if using this option")
-      (
-       "barcodelength",po::value<uint32_t>(),
-       "umi length Parameter for unknown protocol. (end, umilength, barcodelength)"
-       " should all be provided if using this option")
-      (
-       "noem",po::bool_switch()->default_value(alevin::defaults::noEM),
-       "do not run em")
-      (
-       "txplevel",po::bool_switch()->default_value(alevin::defaults::txpLevel),
-       "perform txp level analysis instead of gene level")
-      (
-       "nobarcode",po::bool_switch()->default_value(alevin::defaults::noBarcode),
-       "this flag should be used when there is no barcode i.e. only one cell deduplication.")
-      (
-       "tgMap", po::value<std::string>(), "transcript to gene map tsv file")
-      (
-       "freqthreshold",po::value<uint32_t>(),
-       "threshold for the frequency of the barcodes");
+       "maxNumBarcodes", po::value<uint32_t>()->default_value(alevin::defaults::maxNumBarcodes),
+       "Maximum allowable limit to process the cell barcodes. (Default: 100000)");
     return alevinspec;
   }
 
@@ -304,17 +344,19 @@ namespace salmon {
     sopt.useMassBanking = salmon::defaults::useMassBanking;
     sopt.noRichEqClasses = salmon::defaults::noRichEqClasses;
 
+    auto onErrorModel = [&sopt](bool noErrorModel) -> void {
+      sopt.useErrorModel = !noErrorModel;
+    };
+
     po::options_description alnspec("\n"
                                       "alignment-specific options");
     alnspec.add_options()
-      ("useErrorModel",
-       po::bool_switch(&(sopt.useErrorModel))->default_value(salmon::defaults::useErrorModel),
-       "[experimental] : "
-       "Learn and apply an error model for the aligned reads.  This takes into "
-       "account the "
-       "the observed frequency of different types of mismatches when computing "
-       "the likelihood of "
-       "a given alignment.")
+      ("noErrorModel",
+       po::bool_switch()->default_value(salmon::defaults::noErrorModel)->notifier(onErrorModel),
+       "Turn off the alignment error model, which takes into "
+       "account the the observed frequency of different types of mismatches / "
+       "indels when computing the likelihood of a given alignment. Turning this off can "
+       "speed up alignment-based salmon, but can harm quantification accuracy.")
     ("numErrorBins",
      po::value<uint32_t>(&(sopt.numErrorBins))->default_value(salmon::defaults::numErrorBins),
      "The number of bins into which to divide "
@@ -494,9 +536,10 @@ namespace salmon {
        "<numPreAuxModelSamples> observations is to avoid applying these "
        "models before thier "
        "parameters have been learned sufficiently well.")
+      ("useEM", po::bool_switch(&(sopt.useEM))->default_value(salmon::defaults::useEM),
+       "Use the traditional EM algorithm for optimization in the batch passes.")
       ("useVBOpt", po::bool_switch(&(sopt.useVBOpt))->default_value(salmon::defaults::useVBOpt),
-       "Use the Variational Bayesian EM rather than the "
-       "traditional EM algorithm for optimization in the batch passes.")
+       "Use the Variational Bayesian EM [default]")
       ("rangeFactorizationBins",
        po::value<uint32_t>(&(sopt.rangeFactorizationBins))->default_value(salmon::defaults::rangeFactorizationBins),
        "Factorizes the likelihood used in quantification by adopting a new "
@@ -540,6 +583,8 @@ namespace salmon {
        "be interpreted as a transcript-level prior (i.e. each transcript "
        "will "
        "be given a prior read count of this value)")
+      ("sigDigits", po::value<uint32_t>(&(sopt.sigDigits))->default_value(salmon::defaults::sigDigits),
+       "The number of significant digits to write when outputting the EffectiveLength and NumReads columns")
       ("vbPrior", po::value<double>(&(sopt.vbPrior))->default_value(salmon::defaults::vbPrior),
        "The prior that will be used in the VBEM algorithm.  This is "
        "interpreted "
@@ -554,50 +599,6 @@ namespace salmon {
        "Write the names of un-mapped reads to the file unmapped_names.txt "
        "in the auxiliary directory.");
     return advanced;
-  }
-
-  po::options_description ProgramOptionsGenerator::getFMDOptions(mem_opt_t* memOptions, SalmonOpts& sopt) {
-    using std::string;
-    using std::vector;
-
-    po::options_description fmd("\noptions that apply to the old FMD index");
-    fmd.add_options()
-      ("minLen,k",
-       po::value<int>(&(memOptions->min_seed_len))->default_value(salmon::defaults::fmdMinSeedLength),
-       "(S)MEMs smaller than this size won't be considered.")
-      ("maxOcc,m",
-       po::value<int>(&(memOptions->max_occ))->default_value(salmon::defaults::maxSMEMOccs),
-       "(S)MEMs occuring more than this many times won't be considered.")
-      ("sensitive", po::bool_switch(&(sopt.sensitive))->default_value(salmon::defaults::fmdSensitive),
-       "Setting this option enables the splitting of SMEMs that are larger "
-       "than 1.5 times the minimum seed length (minLen/k above).  This may "
-       "reveal high scoring chains of MEMs "
-       "that are masked by long SMEMs.  However, this option makes "
-       "lightweight-alignment a bit slower and is "
-       "usually not necessary if the reference is of reasonable quality.")
-      ("extraSensitive",
-       po::bool_switch(&(sopt.extraSeedPass))->default_value(salmon::defaults::fmdExtraSeedPass),
-       "Setting this option enables an extra pass of \"seed\" search. "
-       "Enabling this option may improve sensitivity (the number of reads "
-       "having sufficient coverage), but will "
-       "typically slow down quantification by ~40%.  Consider enabling this "
-       "option if you find the mapping rate to "
-       "be significantly lower than expected.")
-      ("coverage,c", po::value<double>(&(sopt.coverageThresh))->default_value(salmon::defaults::fmdCoverageThresh),
-       "required coverage of read by union of SMEMs to consider it a \"hit\".")
-      ("splitWidth,s",
-       po::value<int>(&(memOptions->split_width))->default_value(salmon::defaults::fmdSplitWidth),
-       "If (S)MEM occurs fewer than this many times, search for smaller, "
-       "contained MEMs. "
-       "The default value will not split (S)MEMs, a higher value will "
-       "result in more MEMs being explore and, thus, will "
-       "result in increased running time.")
-      ("splitSpanningSeeds,b",
-       po::bool_switch(&(sopt.splitSpanningSeeds))->default_value(salmon::defaults::fmdSplitSpanningSeeds),
-       "Attempt to split seeds that happen to fall on the "
-       "boundary between two transcripts.  This can improve the  fragment "
-       "hit-rate, but is usually not necessary.");
-    return fmd;
   }
 
   po::options_description ProgramOptionsGenerator::getHiddenOptions(SalmonOpts& sopt) {
@@ -616,7 +617,9 @@ namespace salmon {
        po::value(&(sopt.numRequiredFragments))->default_value(salmon::defaults::numRequiredFrags),
        "[Deprecated]: The minimum number of observations (mapped reads) "
        "that must be observed before "
-       "the inference procedure will terminate.");
+       "the inference procedure will terminate.")
+      ("maxHashResizeThreads", po::value<uint32_t>(&(sopt.maxHashResizeThreads))->default_value(salmon::defaults::maxHashResizeThreads),
+       "Maximum number of threads to allow cuckoo hash map to use when / if it resizes");
     return hidden;
   }
 

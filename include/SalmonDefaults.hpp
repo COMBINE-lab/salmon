@@ -18,7 +18,8 @@ namespace defaults {
 
   // advanced
   constexpr const bool validateMappings{false};
-  constexpr const double minScoreFraction{0.85};
+  constexpr const int32_t consensusSlack{0};
+  constexpr const double minScoreFraction{0.65};
   constexpr const int8_t matchScore{2};
   constexpr const int8_t mismatchPenalty{-4};
   constexpr const int8_t gapOpenPenalty{5};
@@ -47,7 +48,9 @@ namespace defaults {
   constexpr const uint32_t numBiasSamples{2000000};
   constexpr const uint32_t numBurninFrags{5000000};
   constexpr const uint32_t numPreBurninFrags{1000000};
-  constexpr const bool useVBOpt{false};
+  constexpr const bool useEM{false};
+  constexpr const bool useVBOpt{true};
+  constexpr const uint32_t sigDigits{3};
   constexpr const uint32_t rangeFactorizationBins{0};
   constexpr const uint32_t numGibbsSamples{0};
   constexpr const bool noGammaDraw{false};
@@ -73,6 +76,7 @@ namespace defaults {
   constexpr const size_t numFragGCBins{25};
   constexpr const size_t numConditionalGCBins{3};
   constexpr const size_t numRequiredFrags{50000000}; // deprecated
+  constexpr const uint32_t maxHashResizeThreads{std::numeric_limits<uint32_t>::max()};
 
   // experimental / testing
   constexpr const bool noRichEqClasses{false};
@@ -84,7 +88,8 @@ namespace defaults {
   constexpr const bool useFSPD{false};
 
   // alignment-based mode
-  constexpr const bool useErrorModel{false}; // think about making this true by default
+  //constexpr const bool useErrorModel{true};
+  constexpr const bool noErrorModel{false};
   constexpr const bool useMassBanking{false};
   constexpr const bool gencodeRef{false};
   constexpr const uint32_t mappingCacheMemoryLimit{2000000};
@@ -96,13 +101,15 @@ namespace defaults {
 
 namespace alevin {
 namespace defaults {
-  constexpr const bool naive{true};
-  constexpr const bool dedup{true};
+  constexpr const bool naive{false};
+  constexpr const bool noDedup{false};
   constexpr const bool txpLevel{false};
+  constexpr const bool eqClassLevel{false};
   constexpr const bool isDropseq{false};
   constexpr const bool isChromium{false};
   constexpr const bool isInDrop{false};
   constexpr const bool isGemcode{false};
+  constexpr const bool isCELSeq{false};
   constexpr const bool dumpBarcodeEq{false};
   constexpr const bool noQuant{false};
   constexpr const bool noSoftMap{true};
@@ -113,8 +120,14 @@ namespace defaults {
   constexpr const bool dumpUMIToolsMap{false};
   constexpr const bool dumpBarcodeMap{false};
   constexpr const bool dumpCSVCounts{false};
-  constexpr const bool noEM{true};
+  constexpr const bool noEM{false};
+  constexpr const bool debug{false};
   constexpr const bool noBarcode{false};
+  constexpr const uint32_t trimRight{0};
+  constexpr const uint32_t numBootstraps{0};
+  constexpr const uint32_t lowRegionMinNumBarcodes{200};
+  constexpr const uint32_t maxNumBarcodes{100000};
+  constexpr const double minScoreFraction{0.8};
 }
 }
 

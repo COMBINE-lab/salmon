@@ -5,6 +5,7 @@
 #include "cereal/archives/json.hpp"
 
 #include "AlignmentLibrary.hpp"
+#include "AlevinTypes.hpp"
 #include "DistributionUtils.hpp"
 #include "GZipWriter.hpp"
 #include "ReadExperiment.hpp"
@@ -27,6 +28,18 @@ GZipWriter::~GZipWriter() {
   if (countMatrixStream_) {
     countMatrixStream_->reset();
   }
+  if (tierMatrixStream_) {
+    tierMatrixStream_->reset();
+  }
+  if (meanMatrixStream_) {
+    meanMatrixStream_->reset();
+  }
+  if (varMatrixStream_) {
+    varMatrixStream_->reset();
+  }
+  if (bcBootNameStream_) {
+    bcNameStream_->close();
+  }
   if (bcNameStream_) {
     bcNameStream_->close();
   }
@@ -38,6 +51,18 @@ void GZipWriter::close_all_streams(){
   }
   if (countMatrixStream_) {
     countMatrixStream_->reset();
+  }
+  if (tierMatrixStream_) {
+    tierMatrixStream_->reset();
+  }
+  if (meanMatrixStream_) {
+    meanMatrixStream_->reset();
+  }
+  if (varMatrixStream_) {
+    varMatrixStream_->reset();
+  }
+  if (bcBootNameStream_) {
+    varMatrixStream_->reset();
   }
   if (bcNameStream_) {
     bcNameStream_->close();
@@ -158,7 +183,8 @@ bool GZipWriter::writeBFH(boost::filesystem::path& outDir,
     equivFile << b << '\n';
   }
 
-  alevin::kmer::AlvKmer jellyObj(umiLength);
+  alevin::types::AlevinUMIKmer umiObj;
+
   for (auto& eq : eqVec) {
     uint64_t count = eq.second.count;
     // for each transcript in this class
@@ -177,9 +203,12 @@ bool GZipWriter::writeBFH(boost::filesystem::path& outDir,
       equivFile << "\t" << bc << "\t" << ugroup.size();
       for (auto umiIt : ugroup){
         auto umi = umiIt.first;
-        jellyObj.fromNum(umi);
+        umiObj.word__(0) = umi;
         auto count = umiIt.second;
-        equivFile << "\t" << jellyObj.to_str() << "\t" << count;
+
+        std::string s = umiObj.toStr();
+        std::reverse(s.begin(), s.end());
+        equivFile << "\t" << s << "\t" << count;
       }
     }
     equivFile << "\n";
@@ -271,10 +300,12 @@ bool GZipWriter::writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
     cereal::JSONOutputArchive oa(os);
 
     std::string sampType = "none";
+    std::string optType = "none";
 
     auto& transcripts = experiment.transcripts();
     oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
     oa(cereal::make_nvp("samp_type", sampType));
+    oa(cereal::make_nvp("opt_type", optType));
 
     oa(cereal::make_nvp("quant_errors", errors));
     auto libStrings = getLibTypeStrings(experiment);
@@ -551,6 +582,14 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment) {
     oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
     oa(cereal::make_nvp("samp_type", sampType));
 
+    std::string optType = "none";
+    if (opts.useEM) {
+      optType = "em";
+    } else {
+      optType = "vb";
+    }
+    oa(cereal::make_nvp("opt_type", optType));
+
     std::vector<std::string> errors;
     oa(cereal::make_nvp("quant_errors", errors));
 
@@ -650,8 +689,63 @@ bool GZipWriter::writeAbundances(
   return true;
 }
 
-bool GZipWriter::writeAbundances(std::string bcName,
-                                 std::vector<double>& alphas) {
+bool GZipWriter::writeBootstraps(bool inDebugMode,
+                                 std::string& bcName,
+                                 std::vector<double>& alphas,
+                                 std::vector<double>& variance){
+#if defined __APPLE__
+  spin_lock::scoped_lock sl(writeMutex_);
+#else
+  std::lock_guard<std::mutex> lock(writeMutex_);
+#endif
+  namespace bfs = boost::filesystem;
+  if (!meanMatrixStream_) {
+    meanMatrixStream_.reset(new boost::iostreams::filtering_ostream);
+    meanMatrixStream_->push(boost::iostreams::gzip_compressor(6));
+    auto meanMatFilename = path_ / "alevin" / "quants_mean_mat.gz";
+    meanMatrixStream_->push(boost::iostreams::file_sink(meanMatFilename.string(),
+                                                         std::ios_base::out | std::ios_base::binary));
+
+    varMatrixStream_.reset(new boost::iostreams::filtering_ostream);
+    varMatrixStream_->push(boost::iostreams::gzip_compressor(6));
+    auto varMatFilename = path_ / "alevin" / "quants_var_mat.gz";
+    varMatrixStream_->push(boost::iostreams::file_sink(varMatFilename.string(),
+                                                       std::ios_base::out | std::ios_base::binary));
+
+    auto bcBootNameFilename = path_ / "alevin" / "quants_boot_rows.txt";
+    bcBootNameStream_.reset(new std::ofstream);
+    bcBootNameStream_->open(bcBootNameFilename.string());
+  }
+
+  boost::iostreams::filtering_ostream& countfile = *meanMatrixStream_;
+  boost::iostreams::filtering_ostream& varfile = *varMatrixStream_;
+  std::ofstream& namefile = *bcBootNameStream_;
+
+  size_t num = alphas.size();
+  if (alphas.size() != variance.size()){
+    std::cerr<<"ERROR: Quants matrix and varicance matrix size differs"<<std::flush;
+    exit(1);
+  }
+  size_t elSize = sizeof(typename std::vector<double>::value_type);
+  countfile.write(reinterpret_cast<char*>(alphas.data()),
+                  elSize * num);
+  varfile.write(reinterpret_cast<char*>(variance.data()),
+                  elSize * num);
+
+  double total_counts = std::accumulate(alphas.begin(), alphas.end(), 0.0);
+  if ( not inDebugMode and not (total_counts > 0.0)){
+    std::cout<< "ERROR: cell doesn't have any read count" << std::flush;
+    exit(1);
+  }
+  namefile << std::endl;
+  namefile.write(bcName.c_str(), bcName.size());
+  return true;
+}
+
+bool GZipWriter::writeAbundances(bool inDebugMode,
+                                 std::string& bcName,
+                                 std::vector<double>& alphas,
+                                 std::vector<uint8_t>& tiers){
 #if defined __APPLE__
   spin_lock::scoped_lock sl(writeMutex_);
 #else
@@ -664,6 +758,12 @@ bool GZipWriter::writeAbundances(std::string bcName,
     auto countMatFilename = path_ / "alevin" / "quants_mat.gz";
     countMatrixStream_->push(boost::iostreams::file_sink(countMatFilename.string(),
                                                          std::ios_base::out | std::ios_base::binary));
+
+    tierMatrixStream_.reset(new boost::iostreams::filtering_ostream);
+    tierMatrixStream_->push(boost::iostreams::gzip_compressor(6));
+    auto tierMatFilename = path_ / "alevin" / "quants_tier_mat.gz";
+    tierMatrixStream_->push(boost::iostreams::file_sink(tierMatFilename.string(),
+                                                        std::ios_base::out | std::ios_base::binary));
   }
 
   if (!bcNameStream_) {
@@ -673,20 +773,24 @@ bool GZipWriter::writeAbundances(std::string bcName,
   }
 
   boost::iostreams::filtering_ostream& countfile = *countMatrixStream_;
+  boost::iostreams::filtering_ostream& tierfile = *tierMatrixStream_;
   std::ofstream& namefile = *bcNameStream_;
 
   size_t num = alphas.size();
   size_t elSize = sizeof(typename std::vector<double>::value_type);
+  size_t trSize = sizeof(typename std::vector<uint8_t>::value_type);
   countfile.write(reinterpret_cast<char*>(alphas.data()),
                   elSize * num);
+  tierfile.write(reinterpret_cast<char*>(tiers.data()),
+                  trSize * num);
 
   double total_counts = std::accumulate(alphas.begin(), alphas.end(), 0.0);
-  if (not (total_counts > 0.0)){
+  if ( not inDebugMode and not (total_counts > 0.0)){
     std::cout<< "ERROR: cell doesn't have any read count" << std::flush;
     exit(1);
   }
-  bcName += "\n";
   namefile.write(bcName.c_str(), bcName.size());
+  namefile << std::endl;
   return true;
 }
 
@@ -699,13 +803,15 @@ bool GZipWriter::writeEmptyAbundances(const SalmonOpts& sopt, ExpT& readExp) {
   bfs::path fname = path_ / "quant.sf";
   std::unique_ptr<std::FILE, int (*)(std::FILE*)> output(
       std::fopen(fname.c_str(), "w"), std::fclose);
-  fmt::print(output.get(), "Name\tLength\tEffectiveLength\tTPM\tNumReads\n");
+  auto* outputRaw = output.get();
+  fmt::print(outputRaw, "Name\tLength\tEffectiveLength\tTPM\tNumReads\n");
   // Now posterior has the transcript fraction
   std::vector<Transcript>& transcripts_ = readExp.transcripts();
   for (auto& transcript : transcripts_) {
-    fmt::print(output.get(), "{}\t{}\t{:.3f}\t{:f}\t{:f}\n", transcript.RefName,
-               transcript.CompleteLength,
-               static_cast<float>(transcript.CompleteLength), 0.0, 0.0);
+    fmt::print(outputRaw, "{}\t{}\t", transcript.RefName, transcript.CompleteLength);
+    fmt::print(outputRaw, "{:.{}f}\t", static_cast<float>(transcript.CompleteLength), sopt.sigDigits);
+    fmt::print(outputRaw, "{:f}\t", 0.0);
+    fmt::print(outputRaw, "{:.{}f}\n", 0.0, sopt.sigDigits);
   }
   return true;
 }
@@ -720,13 +826,13 @@ bool GZipWriter::writeAbundances(const SalmonOpts& sopt, ExpT& readExp) {
 
   // If we're using lightweight-alignment (FMD)
   // and not allowing orphans.
-  bool useScaledCounts = !(sopt.useQuasi or sopt.allowOrphans);
+  bool useScaledCounts = !(sopt.useQuasi or sopt.allowOrphans or sopt.alnMode);
   bfs::path fname = path_ / "quant.sf";
 
   std::unique_ptr<std::FILE, int (*)(std::FILE*)> output(
       std::fopen(fname.c_str(), "w"), std::fclose);
-
-  fmt::print(output.get(), "Name\tLength\tEffectiveLength\tTPM\tNumReads\n");
+  auto* outputRaw = output.get();
+  fmt::print(outputRaw, "Name\tLength\tEffectiveLength\tTPM\tNumReads\n");
 
   double numMappedFrags = readExp.upperBoundHits();
 
@@ -754,8 +860,10 @@ bool GZipWriter::writeAbundances(const SalmonOpts& sopt, ExpT& readExp) {
     double effLength = transcript.EffectiveLength;
     double tfrac = (npm / effLength) / tfracDenom;
     double tpm = tfrac * million;
-    fmt::print(output.get(), "{}\t{}\t{:.3f}\t{:f}\t{:f}\n", transcript.RefName,
-               transcript.CompleteLength, effLength, tpm, count);
+    fmt::print(outputRaw, "{}\t{}\t", transcript.RefName, transcript.CompleteLength);
+    fmt::print(outputRaw, "{:.{}f}\t", effLength, sopt.sigDigits);
+    fmt::print(outputRaw, "{:f}\t", tpm);
+    fmt::print(outputRaw, "{:.{}f}\n", count, sopt.sigDigits);
   }
   return true;
 }
@@ -943,6 +1051,10 @@ bool GZipWriter::writeEquivCounts<SCExpT, apt::Chromium>(
 template
 bool GZipWriter::writeEquivCounts<SCExpT, apt::Gemcode>(
                                                         const AlevinOpts<apt::Gemcode>& aopts,
+                                                        SCExpT& readExp);
+template
+bool GZipWriter::writeEquivCounts<SCExpT, apt::CELSeq>(
+                                                        const AlevinOpts<apt::CELSeq>& aopts,
                                                         SCExpT& readExp);
 template
 bool GZipWriter::writeEquivCounts<SCExpT, apt::Custom>(

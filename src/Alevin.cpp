@@ -48,6 +48,10 @@
 
 #include "cereal/types/vector.hpp"
 
+// utility includes
+#include "nonstd/string_view.hpp"
+#include "nonstd/optional.hpp"
+
 //alevin include
 #include "Filter.hpp"
 #include "AlevinOpts.hpp"
@@ -55,6 +59,7 @@
 #include "BarcodeModel.hpp"
 #include "SingleCellProtocols.hpp"
 #include "BarcodeGroup.hpp"
+#include "tsl/array_map.h"
 
 // salmon includes
 #include "FastxParser.hpp"
@@ -93,51 +98,44 @@ char red[] = "\x1b[30m";
 template <typename ProtocolT>
 void densityCalculator(single_parser* parser,
                        AlevinOpts<ProtocolT>& aopt,
-                       std::mutex& ioMutex,
                        CFreqMapT& freqCounter,
                        std::atomic<uint64_t>& usedNumBarcodes,
                        std::atomic<uint64_t>& totNumBarcodes){
   size_t rangeSize{0};
   uint32_t index;
-  std::string barcode;
 
   auto rg = parser->getReadGroup();
   auto log = aopt.jointLog;
 
-  auto updatefn = [](uint32_t &num) { ++num; };
-
+  uint64_t usedNumBarcodesLocal{0};
+  uint64_t totNumBarcodesLocal{0};
   while (parser->refill(rg)) {
     rangeSize = rg.size();
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
       //Sexy Progress monitor
-      totNumBarcodes += 1;
-      if (not aopt.quiet and totNumBarcodes % 500000 == 0) {
-        ioMutex.lock();
+      ++totNumBarcodesLocal;
+      if (not aopt.quiet and totNumBarcodesLocal % 500000 == 0) {
         fmt::print(stderr, "\r\r{}processed{} {} Million {}barcodes{}",
-                   green, red, totNumBarcodes/1000000, green, RESET_COLOR);
-        ioMutex.unlock();
+                   green, red, totNumBarcodesLocal/1000000, green, RESET_COLOR);
       }
 
       auto& rp = rg[i];
-      std::string seq = rp.seq;
-      if (aopt.protocol.end == bcEnd::THREE) {
-        std::reverse(seq.begin(), seq.end());
-      }
-      bool isExtractOk = aut::extractBarcode(seq, aopt.protocol, barcode);
-      if(!isExtractOk){
-        continue;
-      }
+      std::string& seq = rp.seq;
+      //if (aopt.protocol.end == bcEnd::THREE) {
+      //  std::reverse(seq.begin(), seq.end());
+      //}
 
-      bool seqOk = aut::sequenceCheck<ProtocolT>(barcode,
-                                                 aopt,
-                                                 ioMutex);
+      nonstd::optional<std::string> extractedBarcode = aut::extractBarcode(seq, aopt.protocol);
+      bool seqOk = (extractedBarcode.has_value()) ? aut::sequenceCheck(*extractedBarcode) : false;
       if (not seqOk){
         continue;
       }
-      freqCounter.upsert(barcode, updatefn, 1);
-      usedNumBarcodes += 1;
+      freqCounter[*extractedBarcode] += 1;
+      ++usedNumBarcodesLocal;
     }//end-for
   }//end-while
+  totNumBarcodes += totNumBarcodesLocal;
+  usedNumBarcodes += usedNumBarcodesLocal;
 }
 
 template <typename T>
@@ -304,11 +302,11 @@ uint32_t getLeftBoundary(std::vector<size_t>& sortedIdx,
 template <typename ProtocolT>
 void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
                         TrueBcsT& trueBarcodes, size_t& lowRegionNumBarcodes,
-                        std::unordered_map<uint32_t, std::string> colMap,
+                        std::unordered_map<uint32_t, nonstd::basic_string_view<char>> colMap,
                         AlevinOpts<ProtocolT>& aopt){
   std::vector<size_t> sortedIdx = sort_indexes(freqCounter);
-  size_t maxNumBarcodes { 100000 }, lowRegionMaxNumBarcodes { 1000 };
-  size_t lowRegionMinNumBarcodes { 200 };
+  size_t maxNumBarcodes { aopt.maxNumBarcodes }, lowRegionMaxNumBarcodes { 1000 };
+  size_t lowRegionMinNumBarcodes { aopt.lowRegionMinNumBarcodes };
   double lowConfidenceFraction { 0.5 };
   uint32_t topxBarcodes = std::min(maxNumBarcodes, freqCounter.size());
   uint64_t history { 0 };
@@ -384,7 +382,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
   threshold = topxBarcodes;
 
   if(aopt.dumpfeatures){
-    auto frequencyFileName = aopt.outputDirectory / "frequency.txt";
+    auto frequencyFileName = aopt.outputDirectory / "raw_cb_frequency.txt";
     std::ofstream freqFile;
     freqFile.open(frequencyFileName.string());
     for (auto i:sortedIdx){
@@ -400,7 +398,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
   }
 
   for (size_t i=0; i<threshold; i++){
-    trueBarcodes.insert(colMap[sortedIdx[i]]);
+    trueBarcodes.insert(nonstd::to_string(colMap[sortedIdx[i]]));
   }
   aopt.numCells = trueBarcodes.size();
 }
@@ -426,14 +424,17 @@ void indexBarcodes(AlevinOpts<ProtocolT>& aopt,
 
     for(const auto& neighbor : neighbors){
       uint32_t freq{0};
-      bool indexOk = freqCounter.find(neighbor, freq);
+      auto indexIt = freqCounter.find(neighbor);
+      bool indexOk = indexIt != freqCounter.end();
+      //bool indexOk = freqCounter.find(neighbor, freq);
       bool inTrueBc = trueBarcodes.find(neighbor) != trueBarcodes.end();
-      if(not inTrueBc and indexOk and freq > aopt.freqThreshold){
+      if(not inTrueBc and indexOk and *indexIt > aopt.freqThreshold){
         ZMatrix[neighbor].push_back(trueBarcode);
       }
     }
 
-    bool inTrueBc = freqCounter.contains(trueBarcode);
+    //bool inTrueBc = freqCounter.contains(trueBarcode);
+    bool inTrueBc = freqCounter.find(trueBarcode) != freqCounter.end();
     if (not inTrueBc){
       wrngWhiteListCount += 1;
     }
@@ -548,17 +549,32 @@ bool writeFastq(AlevinOpts<ProtocolT>& aopt,
       for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
         auto& rp = rg[i];
         if(aopt.protocol.end == bcEnd::FIVE){
-          barcode = rp.first.seq.substr(0, aopt.protocol.barcodeLength);
-          umi = rp.first.seq.substr(aopt.protocol.barcodeLength,
-                                    aopt.protocol.umiLength);
+          {
+            nonstd::optional<std::string> extractedSeq = aut::extractBarcode(rp.first.seq, aopt.protocol);
+            bool seqOk = (extractedSeq.has_value()) ? aut::sequenceCheck(*extractedSeq) : false;
+            if (not seqOk){
+              continue;
+              //std::cerr<<"Can't extract barcode";
+              //return false;
+            }
+            barcode = *extractedSeq;
+          }
+
+          {
+            bool seqOk = aut::extractUMI(rp.first.seq, aopt.protocol, umi);
+            if (not seqOk){
+              std::cerr<<"Can't extract UMI";
+              return false;
+            }
+          }
         }
-        else if (aopt.protocol.end == bcEnd::THREE) {
-          std::string seq = rp.first.seq;
-          std::reverse(seq.begin(), seq.end());
-          barcode = rp.first.seq.substr(0, aopt.protocol.barcodeLength);
-          umi = rp.first.seq.substr(aopt.protocol.barcodeLength,
-                                    aopt.protocol.umiLength);
-        }
+        //else if (aopt.protocol.end == bcEnd::THREE) {
+        //  std::string seq = rp.first.seq;
+        //  std::reverse(seq.begin(), seq.end());
+        //  barcode = rp.first.seq.substr(0, aopt.protocol.barcodeLength);
+        //  umi = rp.first.seq.substr(aopt.protocol.barcodeLength,
+        //                            aopt.protocol.umiLength);
+        //}
 
         bool inTrueBc = trueBarcodes.find(barcode) != trueBarcodes.end();
         auto it = barcodeMap.find(barcode);
@@ -624,9 +640,8 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
                      CFreqMapT& freqCounter,
                      size_t& numLowConfidentBarcode){
   if (not aopt.nobarcode){
-    //Avi -> HardCoding threads for Barcode Parsing
-    //2 for consuming 1 for generating since
-    //consumer thread is almost as fast as generator.
+    // Barcode processing always uses 2 threads now,
+    // one parsing thread and one consumer thread.
     std::unique_ptr<single_parser> singleParserPtr{nullptr};
     constexpr uint32_t miniBatchSize{5000};
     uint32_t numParsingThreads{aopt.numParsingThreads},
@@ -644,21 +659,8 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
                                             numParsingThreads, miniBatchSize));
 
     singleParserPtr->start();
-
-    for (decltype(numThreads) i = 0; i < numThreads; ++i) {
-      // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
-      // change value before the lambda below is evaluated --- crazy!
-      auto threadFun = [&, i]() -> void {
-        densityCalculator(singleParserPtr.get(), aopt, ioMutex,
-                          freqCounter, usedNumBarcodes, totNumBarcodes);
-      };
-      threads.emplace_back(threadFun);
-    }
-
-    for (auto& t : threads) {
-      t.join();
-    }
-
+    densityCalculator(singleParserPtr.get(), aopt,
+                      freqCounter, usedNumBarcodes, totNumBarcodes);
     singleParserPtr->stop();
 
     fmt::print(stderr, "\n\n");
@@ -678,15 +680,34 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
         whiteFile.close();
       }
       aopt.jointLog->info("Done importing white-list Barcodes");
+      if (aopt.debug) {
+        std::vector<std::string> skippedTrueBarcodes ;
+        for ( auto trueBarcode: trueBarcodes ) {
+          auto it = freqCounter.find(trueBarcode);
+          if (it == freqCounter.end() ) {
+            skippedTrueBarcodes.emplace_back(trueBarcode);
+          }
+        }
+
+        if ( skippedTrueBarcodes.size() > 0 ) {
+          aopt.jointLog->warn("Skipping {} Barcodes with 0 reads"
+                              "\n Assuming this is the required behavior.",
+                              skippedTrueBarcodes.size());
+          for (auto trueBarcode: skippedTrueBarcodes) {
+            trueBarcodes.erase(trueBarcode);
+          }
+        }
+      }
+
       aopt.jointLog->info("Total {} white-listed Barcodes", trueBarcodes.size());
     }
     else {
       std::vector<uint32_t> collapsedfrequency;
-      std::unordered_map<uint32_t, std::string> collapMap;
+      std::unordered_map<uint32_t, nonstd::basic_string_view<char>> collapMap;
       size_t ind{0};
-      for(const auto& fqIt : freqCounter.lock_table()){
-        collapsedfrequency.push_back(fqIt.second);
-        collapMap[ind] = fqIt.first;
+      for(auto fqIt = freqCounter.begin(); fqIt != freqCounter.end(); ++fqIt){
+        collapsedfrequency.push_back(fqIt.value());
+        collapMap[ind] = fqIt.key_sv();
         ind += 1;
       }
 
@@ -705,29 +726,54 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
 
     uint32_t mmBcCounts{0}, mmBcReadCount{0};
     std::unordered_set<std::string> softMapWhiteBcSet;
-    for(auto& softMapIt: barcodeSoftMap){
+    for(auto& softMapIt: barcodeSoftMap ){
+      auto indexIt = freqCounter.find(softMapIt.first);
+      bool indexOk = indexIt != freqCounter.end();
+      if ( not indexOk){
+        aopt.jointLog->error("Error: index not find in freq Counter\n"
+                             "Please Report the issue on github");
+        exit(1);
+      }
+
+      uint32_t numReads;
+      numReads = *indexIt;
+
       std::vector<std::pair<std::string, double>>& trBcVec = softMapIt.second;
-      if (trBcVec.size() > 1){
+      if (not aopt.noSoftMap and trBcVec.size() > 1){
         mmBcCounts += 1;
-        uint32_t numReads;
-        bool indexOk = freqCounter.find(softMapIt.first, numReads);
-        if ( not indexOk){
-          aopt.jointLog->error("Error: index not find in freq Counter\n"
-                               "Please Report the issue on github");
-          exit(1);
-        }
+
         for(std::pair<std::string, double> whtBc : trBcVec){
           softMapWhiteBcSet.insert(whtBc.first);
         }
         mmBcReadCount += numReads;
       }
 
+      // NOTE: Have to update the ambiguity resolution
       if (aopt.noSoftMap){
         while(trBcVec.size() != 1){
           trBcVec.pop_back();
         }
         trBcVec.front().second = 1.0;
       }
+
+      std::string trBc = trBcVec.front().first;
+      freqCounter[trBc] += numReads;
+      freqCounter.erase(softMapIt.first);
+    }
+
+    if(aopt.dumpfeatures){
+      auto frequencyFileName = aopt.outputDirectory / "filtered_cb_frequency.txt";
+      std::ofstream freqFile;
+      freqFile.open(frequencyFileName.string());
+      for(auto it = freqCounter.begin(); it != freqCounter.end(); ++it) {
+        auto trBc = it.key();
+        auto trIt = trueBarcodes.find(trBc);
+        if ( trIt != trueBarcodes.end() ) {
+          freqFile << trBc << "\t"
+                   << it.value() << "\n";
+        }
+      }
+      freqFile.close();
     }
 
     if (not aopt.noSoftMap){
@@ -755,8 +801,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
       }
       aopt.jointLog->info("Done dumping fastq File");
     }
-  }
-  else{
+  } else{
     trueBarcodes.insert("AAA");
   }
 }
@@ -789,6 +834,9 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
   TrueBcsT trueBarcodes;
   //frequency counter
   CFreqMapT freqCounter;
+  //freqCounter.set_max_resize_threads(sopt.maxHashResizeThreads);
+  freqCounter.reserve(2097152);
+
   size_t numLowConfidentBarcode;
 
   aopt.jointLog->info("Processing barcodes files (if Present) \n\n ");
@@ -833,28 +881,25 @@ int salmonBarcoding(int argc, char* argv[]) {
   //vector<string> mate2ReadFiles;
 
   SalmonOpts sopt;
-  mem_opt_t* memOptions = mem_opt_init();
-  memOptions->split_factor = 1.5;
   auto tot_cores = std::thread::hardware_concurrency();
   sopt.numThreads = std::max(1, static_cast<int>(tot_cores/4.0));
 
   salmon::ProgramOptionsGenerator pogen;
 
   auto inputOpt = pogen.getMappingInputOptions(sopt);
-  auto basicOpt = pogen.getBasicOptions(sopt);
   auto mapSpecOpt = pogen.getMappingSpecificOptions(sopt);
   auto advancedOpt = pogen.getAdvancedOptions(numBiasSamples, sopt);
-  auto fmdOpt = pogen.getFMDOptions(memOptions, sopt);
   auto hiddenOpt = pogen.getHiddenOptions(sopt);
   auto testingOpt = pogen.getTestingOptions(sopt);
   auto deprecatedOpt = pogen.getDeprecatedOptions(sopt);
-  auto alevinSpecOpt = pogen.getAlevinSpecificOptions();
+  auto alevinBasicOpt = pogen.getAlevinBasicOptions(sopt);
+  auto alevinDevsOpt = pogen.getAlevinDevsOptions();
 
   po::options_description all("alevin options");
-  all.add(inputOpt).add(alevinSpecOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt).add(fmdOpt).add(testingOpt).add(hiddenOpt).add(deprecatedOpt);
+  all.add(inputOpt).add(alevinBasicOpt).add(alevinDevsOpt).add(mapSpecOpt).add(advancedOpt).add(testingOpt).add(hiddenOpt).add(deprecatedOpt);
 
   po::options_description visible("alevin options");
-  visible.add(inputOpt).add(alevinSpecOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt).add(fmdOpt);
+  visible.add(inputOpt).add(alevinBasicOpt);
 
   po::variables_map vm;
   try {
@@ -885,16 +930,22 @@ salmon-based processing of single-cell RNA-seq data.
     bool indrop = vm["indrop"].as<bool>();
     bool chrom = vm["chromium"].as<bool>();
     bool gemcode = vm["gemcode"].as<bool>();
+    bool celseq = vm["celseq"].as<bool>();
 
-    if((dropseq and indrop) or
-       (dropseq and chrom) or
-       (chrom and indrop)){
-      fmt::print(stderr, "ERROR: Please specify only one scRNA protocol;");
+    uint8_t validate_num_protocols {0};
+    if (dropseq) validate_num_protocols += 1;
+    if (indrop) validate_num_protocols += 1;
+    if (chrom) validate_num_protocols += 1;
+    if (gemcode) validate_num_protocols += 1;
+    if (celseq) validate_num_protocols += 1;
+
+    if ( validate_num_protocols != 1 ) {
+      fmt::print(stderr, "ERROR: Please specify one and only one scRNA protocol;");
       exit(1);
     }
 
     std::stringstream commentStream;
-    commentStream << "### salmon (single-cell-based) v" << salmon::version << "\n";
+    commentStream << "### alevin (dscRNA-seq quantification) v" << salmon::version << "\n";
     commentStream << "### [ program ] => salmon \n";
     commentStream << "### [ command ] => alevin \n";
     for (auto& opt : orderedOptions.options) {
@@ -910,7 +961,6 @@ salmon-based processing of single-cell RNA-seq data.
     barcodeFiles = sopt.mate1ReadFiles;
     readFiles = sopt.mate2ReadFiles;
     unmateFiles = sopt.unmatedReadFiles;
-    //
 
     if (dropseq){
       AlevinOpts<apt::DropSeq> aopt;
@@ -949,6 +999,13 @@ salmon-based processing of single-cell RNA-seq data.
       initiatePipeline(aopt, sopt, orderedOptions,
                        vm, commentString,
                        unmateFiles, readFiles);
+    }
+    else if(celseq){
+      AlevinOpts<apt::CELSeq> aopt;
+      //aopt.jointLog->warn("Using CEL-Seq Setting for Alevin");
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString,
+                       barcodeFiles, readFiles);
     }
     else{
       AlevinOpts<apt::Custom> aopt;

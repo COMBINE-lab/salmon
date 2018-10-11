@@ -12,7 +12,7 @@ cd build
 
 echo "[Drone build] cmake configuration"
 
-cmake -DDO_QUIET_MAKE=TRUE ..
+cmake -DDO_QUIET_MAKE=TRUE -DBOOST_ROOT=/usr ..
 
 echo "[Drone build] making salmon and installing locally (this could take a while)"
 

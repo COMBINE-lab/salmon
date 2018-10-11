@@ -1,5 +1,5 @@
 #include <stdio.h> // for debugging only
-#include "ksw2.h"
+#include "ksw2pp/ksw2.h"
 
 #ifdef __SSE2__
 #include <emmintrin.h>

@@ -1,30 +1,19 @@
 include_directories(
 ${GAT_SOURCE_DIR}/include
 ${GAT_SOURCE_DIR}/include/eigen3
-${GAT_SOURCE_DIR}/include/ksw2pp
 ${GAT_SOURCE_DIR}/external
 ${GAT_SOURCE_DIR}/external/cereal/include
 ${GAT_SOURCE_DIR}/external/install/include
-${GAT_SOURCE_DIR}/external/install/include/jellyfish-2.2.6
-${GAT_SOURCE_DIR}/external/install/include/bwa
+#${GAT_SOURCE_DIR}/external/install/include/bwa
 ${ZLIB_INCLUDE_DIR}
 ${TBB_INCLUDE_DIRS}
 ${Boost_INCLUDE_DIRS}
 ${GAT_SOURCE_DIR}/external/install/include/rapmap
 ${GAT_SOURCE_DIR}/external/install/include/rapmap/digestpp
+${ICU_INC_DIRS}
 )
 
-if (JELLYFISH_FOUND)
-    include_directories(${JELLYFISH_INCLUDE_DIR})
-else()
-    include_directories(${GAT_SOURCE_DIR}/external/install/include/jellyfish-2.2.6)
-endif()
-
 set ( SALMON_MAIN_SRCS
-QSufSort.c
-is.c
-bwt_gen.c
-bwtindex.c
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapFileSystem.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndexer.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndex.cpp
@@ -32,12 +21,14 @@ ${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapUtils.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/HitManager.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/rank9b.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/bit_array.c
+EMUtils.cpp
 CollapsedEMOptimizer.cpp
 CollapsedCellOptimizer.cpp
 CollapsedGibbsSampler.cpp
 Salmon.cpp
 BuildSalmonIndex.cpp
-Dedup.cpp
+Graph.cpp
+DedupUMI.cpp
 Alevin.cpp
 SalmonAlevin.cpp
 WhiteList.cpp
@@ -48,7 +39,6 @@ SequenceBiasModel.cpp
 GZipWriter.cpp
 SalmonQuantMerge.cpp
 ProgramOptionsGenerator.cpp
-#${GAT_SOURCE_DIR}/external/install/src/rapmap/sais.c
 )
 
 set (SALMON_ALIGN_SRCS
@@ -64,10 +54,10 @@ set (ALEVIN_LIB_SRCS
 )
 
 set (SALMON_LIB_SRCS
+${GAT_SOURCE_DIR}/src/jellyfish/mer_dna.cc
 xxhash.c
 TranscriptGroup.cpp
 EffectiveLengthStats.cpp
-BWAUtils.cpp
 LibraryFormat.cpp
 GenomicFeature.cpp
 VersionChecker.cpp
@@ -80,6 +70,7 @@ SalmonExceptions.cpp
 SalmonStringUtils.cpp
 SimplePosBias.cpp
 SGSmooth.cpp
+${GAT_SOURCE_DIR}/src/metro/metrohash64.cpp
 )
 
 set (KSW2PP_BASIC_LIB_SRCS
@@ -98,19 +89,28 @@ ksw2pp/ksw2_extf2_sse.c
 ksw2pp/ksw2_extz2_sse.c
 )
 
+# check if we know how to do IPO
+check_ipo_supported(RESULT HAS_IPOHAS_IPO)
+
 add_library(ksw2pp_sse2 OBJECT ${KSW2PP_ADVANCED_LIB_SRCS})
 add_library(ksw2pp_sse4 OBJECT ${KSW2PP_ADVANCED_LIB_SRCS})
 add_library(ksw2pp_basic OBJECT ${KSW2PP_BASIC_LIB_SRCS})
 
-set_target_properties(ksw2pp_sse2 PROPERTIES COMPILE_FLAGS "-msse2 -mno-sse4.1")
+set_target_properties(ksw2pp_sse2 PROPERTIES COMPILE_FLAGS "-O3 -msse2 -mno-sse4.1")
 set_target_properties(ksw2pp_sse2 PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;KSW_SSE2_ONLY;HAVE_KALLOC")
-set_target_properties(ksw2pp_sse4 PROPERTIES COMPILE_FLAGS "-msse4.1")
+set_target_properties(ksw2pp_sse4 PROPERTIES COMPILE_FLAGS "-O3 -msse4.1")
 set_target_properties(ksw2pp_sse4 PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;HAVE_KALLOC")
 set_target_properties(ksw2pp_basic PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;HAVE_KALLOC")
+
+set_target_properties(ksw2pp_basic PROPERTIES INCLUDE_DIRECTORIES ${GAT_SOURCE_DIR}/include)
+set_target_properties(ksw2pp_sse4 PROPERTIES INCLUDE_DIRECTORIES ${GAT_SOURCE_DIR}/include)
 
 # Build the ksw2pp library
 add_library(ksw2pp STATIC $<TARGET_OBJECTS:ksw2pp_sse2> $<TARGET_OBJECTS:ksw2pp_sse4> $<TARGET_OBJECTS:ksw2pp_basic>)
 set_target_properties(ksw2pp PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;HAVE_KALLOC")
+if(NOT CONDA_BUILD AND HAS_IPO)
+  set_property(TARGET ksw2pp PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+endif()
 
 set ( UNIT_TESTS_SRCS
     ${GAT_SOURCE_DIR}/tests/UnitTests.cpp
@@ -130,7 +130,6 @@ ${BLAS_LIBRARY_DIR}
 )
 
 message("TBB_LIBRARIES = ${TBB_LIBRARIES}")
-message("Boost_LIBRARIES = ${Boost_LIBRARIES}")
 
 # Set the RPATH
 if (NOT APPLE)
@@ -152,14 +151,44 @@ else()
   set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
 endif()
 
+
+set (TGT_RELEASE_FLAGS "${TGT_COMPILE_FLAGS};${TGT_WARN_FLAGS}")
+set (TGT_DEBUG_FLAGS "-g;${TGT_COMPILE_FLAGS};${TGT_WARN_FLAGS}")
+
 # Build the Salmon library
 add_library(salmon_core STATIC ${SALMON_LIB_SRCS} )
+target_compile_definitions(salmon_core PUBLIC
+RAPMAP_SALMON_SUPPORT=1
+HAVE_ANSI_TERM=1
+HAVE_SSTREAM=1
+)
+target_compile_options(salmon_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
+target_compile_options(salmon_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
+if(NOT CONDA_BUILD AND HAS_IPO)
+  set_property(TARGET salmon_core PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+endif()
 
 # Build the Alevin library
 add_library(alevin_core STATIC ${ALEVIN_LIB_SRCS})
+target_compile_definitions(alevin_core PUBLIC
+RAPMAP_SALMON_SUPPORT=1
+HAVE_ANSI_TERM=1
+HAVE_SSTREAM=1
+span_FEATURE_MAKE_SPAN_TO_STD=14
+)
+target_compile_options(alevin_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
+target_compile_options(alevin_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
+
+if(NOT CONDA_BUILD AND HAS_IPO)
+  set_property(TARGET alevin_core PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+endif()
 
 # Build the salmon executable
 add_executable(salmon ${SALMON_MAIN_SRCS} ${SALMON_ALIGN_SRCS})
+
+if(NOT CONDA_BUILD AND HAS_IPO)
+  set_property(TARGET salmon PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+endif()
 
 add_executable(unitTests ${UNIT_TESTS_SRCS})
 
@@ -176,17 +205,17 @@ set (SUFFARRAY64_LIB ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort64.a)
 
 # Link the executable
 target_link_libraries(salmon
+    Threads::Threads
     salmon_core
     alevin_core
     gff
-    ${PTHREAD_LIB}
     ${Boost_LIBRARIES}
+    ${ICU_LIBS}
     ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
     ${SUFFARRAY64_LIB}
-    ${GAT_SOURCE_DIR}/external/install/lib/libjellyfish-2.0.a
-    ${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
+    #${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
     m
     ${LIBLZMA_LIBRARIES}
     ${BZIP2_LIBRARIES}
@@ -196,7 +225,33 @@ target_link_libraries(salmon
     ${FAST_MALLOC_LIB}
     ${LIBRT}
     ksw2pp
+    ${CMAKE_DL_LIBS}
 )
+
+# Link the executable
+target_link_libraries(unitTests
+    Threads::Threads
+    salmon_core
+    alevin_core
+    gff
+    ${Boost_LIBRARIES}
+    ${ICU_LIBS}
+    ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
+    ${ZLIB_LIBRARY}
+    ${SUFFARRAY_LIB}
+    ${SUFFARRAY64_LIB}
+    #${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
+    m
+    ${LIBLZMA_LIBRARIES}
+    ${BZIP2_LIBRARIES}
+    ${TBB_LIBRARIES}
+    ${LIBSALMON_LINKER_FLAGS}
+    ${NON_APPLECLANG_LIBS}
+    ${LIBRT}
+    ${CMAKE_DL_LIBS}
+    )
+
+add_dependencies(salmon unitTests)
 
 ##
 # External dependencies of salmon_core and salmon
@@ -206,19 +261,15 @@ if (${FETCHED_JEMALLOC})
    add_dependencies(salmon libjemalloc)
 endif()
 
-if (${fetched_boost})
+if (${FETCHED_BOOST})
    add_dependencies(alevin_core libboost)
    add_dependencies(salmon_core libboost)
    add_dependencies(salmon libboost)
 endif()
 
-if (${FETCHED_JELLYFISH})
-   add_dependencies(salmon_core libjellyfish)
-   add_dependencies(salmon libjellyfish)
-endif()
-
 if (${FETCHED_TBB})
    add_dependencies(salmon_core libtbb)
+   add_dependencies(alevin_core libtbb)
    add_dependencies(salmon libtbb)
 endif()
 
@@ -227,39 +278,12 @@ add_dependencies(salmon libcereal)
 add_dependencies(alevin_core libstadenio)
 add_dependencies(salmon_core libstadenio)
 add_dependencies(salmon libstadenio)
-add_dependencies(salmon_core libspdlog)
-add_dependencies(salmon libspdlog)
-add_dependencies(salmon_core libbwa)
-add_dependencies(salmon libbwa)
+#add_dependencies(salmon_core libbwa)
+#add_dependencies(salmon libbwa)
 add_dependencies(salmon_core libgff)
 add_dependencies(salmon libgff)
 add_dependencies(salmon_core libdivsufsort)
 add_dependencies(salmon libdivsufsort)
-
-# Link the executable
-target_link_libraries(unitTests
-    salmon_core
-    alevin_core
-    gff
-    ${PTHREAD_LIB}
-    ${Boost_LIBRARIES}
-    ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
-    ${ZLIB_LIBRARY}
-    ${SUFFARRAY_LIB}
-    ${SUFFARRAY64_LIB}
-    ${GAT_SOURCE_DIR}/external/install/lib/libjellyfish-2.0.a
-    ${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
-    m
-    ${LIBLZMA_LIBRARIES}
-    ${BZIP2_LIBRARIES}
-    ${TBB_LIBRARIES}
-    ${LIBSALMON_LINKER_FLAGS}
-    ${NON_APPLECLANG_LIBS}
-    ${FAST_MALLOC_LIB}
-    ${LIBRT}
-    )
-
-add_dependencies(salmon unitTests)
 
 ### No need for this, I think
 ##  This ensures that the salmon executable should work with or without `make install`
@@ -342,86 +366,7 @@ install(
 
 include(InstallRequiredSystemLibraries)
 add_test( NAME unit_tests COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${CMAKE_INSTALL_PREFIX} -P ${GAT_SOURCE_DIR}/cmake/UnitTests.cmake )
-add_test( NAME salmon_read_test_fmd COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/TestSalmonFMD.cmake )
 add_test( NAME salmon_read_test_quasi COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/TestSalmonQuasi.cmake )
 
-####
-#
-# Deprecated or currently unused
-#
-####
-
-
-# # use, i.e. don't skip the full RPATH for the build tree
-# SET(CMAKE_SKIP_BUILD_RPATH  FALSE)
-
-# # when building, don't use the install RPATH already
-# # (but later on when installing)
-# SET(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
-# MESSAGE( "LINK DIRECTORIES : ${CMAKE_LIBRARY_PATH}")
-# SET(CMAKE_INSTALL_RPATH "${CMAKE_LIBRARY_PATH}")
-
-# # add the automatically determined parts of the RPATH
-# # which point to directories outside the build tree to the install RPATH
-# SET(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
-
-
-# # the RPATH to be used when installing, but only if it's not a system directory
-# LIST(FIND CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES "${CMAKE_INSTALL_PREFIX}/lib" isSystemDir)
-# IF("${isSystemDir}" STREQUAL "-1")
-#    SET(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib")
-# ENDIF("${isSystemDir}" STREQUAL "-1")
-
-
-# set( BUILD_LUT_SRCS
-# BuildLUT.cpp
-# IndexedCounter.cpp
-# PerfectHashIndexer.cpp
-# )
-
-# add_executable( BuildLUT ${BUILD_LUT_SRCS} )
-# target_link_libraries( BuildLUT
-# 	${Boost_LIBRARIES} ${ZLIB_LIBRARY}
-# 	cmph # perfect hashing library
-# 	jellyfish-2.0 pthread
-#     gomp lib_activeobject lib_g2logger m tbb)
-
-# INSTALL(TARGETS BuildLUT DESTINATION ${PROJECT_SOURCE_DIR}/bin COMPONENT comp_buildlut)
-
-# set ( BUILD_INDEX_SRCS Indexer.cpp )
-
-# set( ANALYZE_TRANSCRIPT_GRAPH
-# AnalyzeTranscriptGraph.cpp
-# IndexedCounter.cpp
-# PerfectHashIndexer.cpp
-# )
-
-# set ( PROBES_TO_GENES_SRC MapProbesToGenes.cpp affymetrix_utils.cpp )
-# set( COMPUTE_TGRAPH_SRCS
-# ComputeTranscriptGraph.cpp
-# IndexedCounter.cpp
-# PerfectHashIndexer.cpp
-# )
-
-# add_executable( ComputeTranscriptGraph ${COMPUTE_TGRAPH_SRCS} )
-# target_link_libraries( ComputeTranscriptGraph
-# 	${Boost_LIBRARIES} ${ZLIB_LIBRARY}
-# 	cmph # perfect hashing library
-# 	jellyfish pthread
-#     gomp lib_activeobject lib_g2logger blas m tbb nnls)
-
-
-# add_executable( AnalyzeTranscriptGraph ${ANALYZE_TRANSCRIPT_GRAPH} )
-# target_link_libraries( AnalyzeTranscriptGraph
-# 	${Boost_LIBRARIES} ${ZLIB_LIBRARY}
-# 	cmph # perfect hashing library
-# 	jellyfish pthread
-#     gomp lib_activeobject lib_g2logger blas m tbb)
-
-
-#add_executable( BuildIndex ${BUILD_INDEX_SRCS} )
-#target_link_libraries( BuildIndex ${Boost_LIBRARIES} jellyfish pthread m tbb)
-
-
-#add_executable( TestTsnnls ${TEST_SRCS} )
-#target_link_libraries( TestTsnnls ${Boost_LIBRARIES} ${ZLIB_LIBRARY} blas lapack gomp lib_activeobject lib_g2logger tsnnls )
+# Remove this test since we are removing support for the FMD index. 
+# add_test( NAME salmon_read_test_fmd COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/TestSalmonFMD.cmake )

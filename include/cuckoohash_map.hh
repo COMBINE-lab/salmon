@@ -139,7 +139,7 @@ public:
   cuckoohash_map(const cuckoohash_map &other)
       : cuckoohash_map(other, std::allocator_traits<allocator_type>::
                                   select_on_container_copy_construction(
-                                      other.get_allocator())) {}
+                                  other.get_allocator())) { }
 
   /**
    * Copy constructor with separate allocator. If @p other is being modified
@@ -152,7 +152,8 @@ public:
       : hash_fn_(other.hash_fn_), eq_fn_(other.eq_fn_),
         buckets_(other.buckets_, alloc), all_locks_(alloc),
         minimum_load_factor_(other.minimum_load_factor()),
-        maximum_hashpower_(other.maximum_hashpower()) {
+        maximum_hashpower_(other.maximum_hashpower()),
+        max_resize_threads_(other.get_max_resize_threads()) {
     if (other.get_allocator() == alloc) {
       all_locks_ = other.all_locks_;
     } else {
@@ -180,7 +181,8 @@ public:
       : hash_fn_(std::move(other.hash_fn_)), eq_fn_(std::move(other.eq_fn_)),
         buckets_(std::move(other.buckets_), alloc), all_locks_(alloc),
         minimum_load_factor_(other.minimum_load_factor()),
-        maximum_hashpower_(other.maximum_hashpower()) {
+        maximum_hashpower_(other.maximum_hashpower()),
+        max_resize_threads_(other.get_max_resize_threads()) {
     if (other.get_allocator() == alloc) {
       all_locks_ = std::move(other.all_locks_);
     } else {
@@ -221,6 +223,7 @@ public:
         maximum_hashpower_.exchange(other.maximum_hashpower(),
                                     std::memory_order_release),
         std::memory_order_release);
+    std::swap(max_resize_threads_, other.max_resize_threads_);
   }
 
   /**
@@ -237,6 +240,7 @@ public:
     all_locks_ = other.all_locks_;
     minimum_load_factor_ = other.minimum_load_factor();
     maximum_hashpower_ = other.maximum_hashpower();
+    max_resize_threads_ = other.max_resize_threads_;
     return *this;
   }
 
@@ -254,6 +258,7 @@ public:
     all_locks_ = std::move(other.all_locks_);
     minimum_load_factor_ = std::move(other.minimum_load_factor());
     maximum_hashpower_ = std::move(other.maximum_hashpower());
+    max_resize_threads_ = std::move(other.max_resize_threads_);
     return *this;
   }
 
@@ -649,6 +654,10 @@ public:
    * @return true if the size of the table changed, false otherwise
    */
   bool reserve(size_type n) { return cuckoo_reserve<normal_mode>(n); }
+
+  void set_max_resize_threads(uint32_t t) { max_resize_threads_ = t; }
+
+  uint32_t get_max_resize_threads() const { return max_resize_threads_; }
 
   /**
    * Removes all elements in the table, calling their destructors.
@@ -1750,7 +1759,7 @@ private:
   template <typename F>
   void parallel_exec(size_type start, size_type end, F func) {
     static const size_type num_threads =
-        std::max(std::thread::hardware_concurrency(), 1U);
+      std::max(std::min(max_resize_threads_, std::thread::hardware_concurrency()), 1U);
     size_type work_per_thread = (end - start) / num_threads;
     std::vector<std::thread, rebind_alloc<std::thread>> threads(
         get_allocator());
@@ -1867,6 +1876,7 @@ private:
   // NO_MAXIMUM_HASHPOWER, this limit will be disregarded.
   std::atomic<size_type> maximum_hashpower_;
 
+  uint32_t max_resize_threads_{std::numeric_limits<uint32_t>::max()};
 public:
   /**
    * An ownership wrapper around a @ref cuckoohash_map table instance. When

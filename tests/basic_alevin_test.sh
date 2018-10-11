@@ -3,11 +3,11 @@ OUT=$PWD
 
 tfile=$(mktemp /tmp/foo.XXXXXXXXX)
 
-/usr/bin/time -o $tfile $ALVBIN alevin -lISR  -1 /mnt/scratch5/avi/alevin/data/10x/mohu/100/all_bcs.fq -2 /mnt/scratch5/avi/alevin/data/10x/mohu/100/all_reads.fq --chromium -o $OUT/prediction -i /mnt/scratch5/avi/alevin/testing/salmonData/index/ -p 20 --tgMap /mnt/scratch5/avi/alevin/data/mohu/gtf/txp2gene.tsv --mrna /mnt/scratch5/avi/alevin/data/mohu/gtf/mrna.txt --rrna /mnt/scratch5/avi/alevin/data/mohu/gtf/rrna.txt  --dumpbarcodeeq --dumpfeatures --dumpbarcodemap
+/usr/bin/time -o $tfile $ALVBIN alevin -lISR  -1 /mnt/scratch5/avi/alevin/data/10x/mohu/100/all_bcs.fq -2 /mnt/scratch5/avi/alevin/data/10x/mohu/100/all_reads.fq -o $OUT/prediction -i /mnt/scratch5/avi/alevin/data/mohu/salmon_index/ -p 20 --tgMap /mnt/scratch5/avi/alevin/data/mohu/gtf/txp2gene.tsv --dumpFeatures --dumpBfh --dumpBarcodeEq --dumpBarcodeMap --dumpCsvCounts --chromium #--end 5 --umiLength 10 --barcodeLength 16 
 
 cat $tfile
 
-#tar -xvzf alevin_test_data.tar.gz
+tar -xvzf alevin_test_data.tar.gz
 
 echo "Barcodes.txt"
 sort prediction/alevin/quants_mat_rows.txt > 1.txt
@@ -24,8 +24,8 @@ wc -l diff.txt
 echo "FAILED if above line > Zero"
 
 echo "frequency.txt"
-sort prediction/alevin/frequency.txt > 1.txt
-sort alevin_test_data/alevin/frequency.txt > 2.txt
+sort prediction/alevin/raw_cb_frequency.txt > 1.txt
+sort alevin_test_data/alevin/raw_cb_frequency.txt > 2.txt
 diff 1.txt 2.txt  > diff.txt
 wc -l diff.txt
 echo "FAILED if above line > Zero"

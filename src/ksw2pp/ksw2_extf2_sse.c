@@ -1,5 +1,5 @@
 #include <string.h>
-#include "ksw2.h"
+#include "ksw2pp/ksw2.h"
 
 #ifdef __SSE2__
 #include <emmintrin.h>
@@ -8,7 +8,15 @@
 #include <smmintrin.h>
 #endif
 
+#ifdef KSW_CPU_DISPATCH
+#ifdef __SSE4_1__
+void ksw_extf2_sse41(void *km, int qlen, const uint8_t *query, int tlen, const uint8_t *target, int8_t mch, int8_t mis, int8_t e, int w, int xdrop, ksw_extz_t *ez)
+#else
+  void ksw_extf2_sse2(void *km, int qlen, const uint8_t *query, int tlen, const uint8_t *target, int8_t mch, int8_t mis, int8_t e, int w, int xdrop, ksw_extz_t *ez)
+#endif
+#else
 void ksw_extf2_sse(void *km, int qlen, const uint8_t *query, int tlen, const uint8_t *target, int8_t mch, int8_t mis, int8_t e, int w, int xdrop, ksw_extz_t *ez)
+#endif // ~KSW_CPU_DISPATCH
 {
 	int32_t r, t, tlen_, qlen_, last_st, last_en, H0 = 0, last_H0_t = 0;
 	uint8_t *qr, *sf, *mem;

@@ -44,8 +44,8 @@ namespace alevin {
     bool extractUMI<apt::DropSeq>(std::string& read,
                                   apt::DropSeq& pt,
                                   std::string& umi){
-      std::cout<<"Incorrect call for umi extract";
-      exit(0);
+      umi = read.substr(pt.barcodeLength, pt.umiLength);
+      return true;
     }
     template <>
     bool extractUMI<apt::Chromium>(std::string& read,
@@ -69,6 +69,13 @@ namespace alevin {
       return true;
     }
     template <>
+    bool extractUMI<apt::CELSeq>(std::string& read,
+                                 apt::CELSeq& pt,
+                                 std::string& umi){
+      umi = read.substr(0, pt.umiLength);
+      return true;
+    }
+    template <>
     bool extractUMI<apt::InDrop>(std::string& read,
                                  apt::InDrop& pt,
                                  std::string& umi){
@@ -76,50 +83,60 @@ namespace alevin {
       exit(0);
     }
 
-
     template <>
-    bool extractBarcode<apt::DropSeq>(std::string& read,
-                                      apt::DropSeq& pt,
-                                      std::string& bc){
-      bc = read.substr(0, pt.barcodeLength);
-      return true;
+    nonstd::optional<std::string> extractBarcode<apt::DropSeq>(std::string& read,
+                                      apt::DropSeq& pt){
+      return (read.length() >= pt.barcodeLength) ?
+        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+      // = read.substr(0, pt.barcodeLength);
+    //return true;
     }
     template <>
-    bool extractBarcode<apt::Chromium>(std::string& read,
-                                       apt::Chromium& pt,
-                                       std::string& bc){
-      bc = read.substr(0, pt.barcodeLength);
-      return true;
+    nonstd::optional<std::string> extractBarcode<apt::Chromium>(std::string& read,
+                                       apt::Chromium& pt){
+      return (read.length() >= pt.barcodeLength) ?
+        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+      //return (read.length() >= pt.barcodeLength) ? (bc.append(read.data(), pt.barcodeLength), true) : false;
+      //bc = read.substr(0, pt.barcodeLength);
+      //return true;
     }
     template <>
-    bool extractBarcode<apt::Gemcode>(std::string& read,
-                                       apt::Gemcode& pt,
-                                       std::string& bc){
-      bc = read.substr(0, pt.barcodeLength);
-      return true;
+    nonstd::optional<std::string> extractBarcode<apt::Gemcode>(std::string& read,
+                                       apt::Gemcode& pt){
+      return (read.length() >= pt.barcodeLength) ?
+        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+      //return (read.length() >= pt.barcodeLength) ? (bc.append(read.data(), pt.barcodeLength), true) : false;
+      //bc = read.substr(0, pt.barcodeLength);
+      //return true;
     }
     template <>
-    bool extractBarcode<apt::Custom>(std::string& read,
-                                     apt::Custom& pt,
-                                     std::string& bc){
-      bc = read.substr(0, pt.barcodeLength);
-      return true;
+    nonstd::optional<std::string> extractBarcode<apt::Custom>(std::string& read,
+                                     apt::Custom& pt){
+      return (read.length() >= pt.barcodeLength) ?
+        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+      //return (read.length() >= pt.barcodeLength) ? (bc.append(read.data(), pt.barcodeLength), true) : false;
+      //bc = read.substr(0, pt.barcodeLength);
+      //return true;
     }
     template <>
-    bool extractBarcode<apt::InDrop>(std::string& read,
-                                     apt::InDrop& pt,
-                                     std::string& bc){
+    nonstd::optional<std::string> extractBarcode<apt::CELSeq>(std::string& read,
+                                    apt::CELSeq& pt){
+      return (read.length() >= (pt.umiLength + pt.barcodeLength)) ?
+        nonstd::optional<std::string>(read.substr(pt.umiLength, pt.barcodeLength)) : nonstd::nullopt;
+    }
+    template <>
+    nonstd::optional<std::string> extractBarcode<apt::InDrop>(std::string& read, apt::InDrop& pt){
       std::string::size_type index = read.find(pt.w1);
       if (index == std::string::npos){
-        return false;
+        return nonstd::nullopt;
       }
-      bc = read.substr(0, index);
+      auto bc = read.substr(0, index);
       if(bc.size()<8 or bc.size()>12){
-        return false;
+        return nonstd::nullopt;
       }
       uint32_t offset = bc.size()+pt.w1.size();
       bc += read.substr(offset, offset+8);
-      return true;
+      return nonstd::optional<std::string>(bc);
     }
 
     void getIndelNeighbors(
@@ -270,32 +287,38 @@ namespace alevin {
       std::vector<spdlog::sink_ptr> sinks{consoleSink, fileSink};
       aopt.jointLog = spdlog::create("alevinLog", std::begin(sinks), std::end(sinks));
 
-      uint32_t barEnd{0}, barcodeLength{0}, umiLength{0};
-
-      if(vm.count("end") and vm.count("barcodelength") and vm.count("umilength")){
-        barEnd = vm["end"].as<uint32_t>();
-        barcodeLength = vm["barcodelength"].as<uint32_t>();
-        umiLength = vm["umilength"].as<uint32_t>();
-      }
-
       aopt.quiet = vm["quiet"].as<bool>();
       aopt.noEM = vm["noem"].as<bool>();
-      aopt.useCorrelation = vm["usecorrelation"].as<bool>();
-      aopt.dedup = vm["dedup"].as<bool>();
+      aopt.debug = vm["debug"].as<bool>();
+      aopt.useCorrelation = vm["useCorrelation"].as<bool>();
+      aopt.noDedup = vm["noDedup"].as<bool>();
       aopt.naive = vm["naive"].as<bool>();
-      aopt.noQuant = vm["noquant"].as<bool>();
-      aopt.noSoftMap = vm["nosoftmap"].as<bool>();
+      aopt.noQuant = vm["noQuant"].as<bool>();
+      aopt.noSoftMap = vm["noSoftMap"].as<bool>();
       aopt.dumpfq = vm["dumpfq"].as<bool>();
-      aopt.dumpBFH = vm["dumpbfh"].as<bool>();
-      aopt.txpLevel = vm["txplevel"].as<bool>();
-      aopt.nobarcode = vm["nobarcode"].as<bool>();
-      aopt.dumpfeatures = vm["dumpfeatures"].as<bool>();
-      aopt.dumpCsvCounts = vm["dumpcsvcounts"].as<bool>();
-      aopt.dumpBarcodeEq = vm["dumpbarcodeeq"].as<bool>();
-      aopt.dumpBarcodeMap = vm["dumpbarcodemap"].as<bool>();
-      aopt.dumpUmiToolsMap = vm["dumpumitoolsmap"].as<bool>();
+      aopt.dumpBFH = vm["dumpBfh"].as<bool>();
+      aopt.nobarcode = vm["noBarcode"].as<bool>();
+      aopt.dumpfeatures = vm["dumpFeatures"].as<bool>();
+      aopt.dumpCsvCounts = vm["dumpCsvCounts"].as<bool>();
+      aopt.dumpBarcodeEq = vm["dumpBarcodeEq"].as<bool>();
+      aopt.dumpBarcodeMap = vm["dumpBarcodeMap"].as<bool>();
+      aopt.dumpUmiToolsMap = vm["dumpUmitoolsMap"].as<bool>();
+      aopt.trimRight = vm["trimRight"].as<uint32_t>();
+      aopt.numBootstraps = vm["numCellBootstraps"].as<uint32_t>();
+      aopt.lowRegionMinNumBarcodes = vm["lowRegionMinNumBarcodes"].as<uint32_t>();
+      aopt.maxNumBarcodes = vm["maxNumBarcodes"].as<uint32_t>();
       if(vm.count("iupac")){
         aopt.iupac = vm["iupac"].as<std::string>();
+      }
+
+      if (sopt.numBootstraps>0) {
+        aopt.jointLog->error("Do you mean numCellBootstraps ?");
+        return false;
+      }
+
+      if ( aopt.numBootstraps > 0 and aopt.noEM ) {
+        aopt.jointLog->error("cannot perform bootstrapping with noEM option.");
+        return false;
       }
 
       if (not vm.count("threads")) {
@@ -308,37 +331,70 @@ namespace alevin {
         aopt.numThreads = vm["threads"].as<uint32_t>();
       }  // things which needs to be updated for salmonOpts
 
-      //validate customized options for custom protocol
-      if (barEnd or barcodeLength or umiLength
-          or !aopt.protocol.barcodeLength or !aopt.protocol.umiLength){
-        if(!barEnd or !barcodeLength or !umiLength){
-          aopt.jointLog->error("\nERROR: if you are using any one"
-                               " of (end, umilength, barcodelength) flag\n"
-                               "you have to provide all of them explicitly.\n"
-                               "You can also use pre-defined single-cell protocols."
-                               "Exiting Now.");
+      // validate customized options for custom protocol
+      // NOTE : @k3yavi, I tried to clean this up a little bit
+      // because the previous logic was a little complicated.
+      // Please look over the below.
+      bool haveCustomEnd = vm.count("end");
+      bool haveCustomBC= vm.count("barcodeLength");
+      bool haveCustomUMI = vm.count("umiLength");
+
+      bool allCustom = (haveCustomEnd and haveCustomBC and haveCustomUMI);
+      bool noCustom = !(haveCustomEnd or haveCustomBC or haveCustomUMI);
+
+      // These are all or nothing.  Either the user must provide all 3
+      // or none of these options.
+      if (!(noCustom or allCustom)) {
+        aopt.jointLog->error("If you are using any one"
+                             " of (end, umilength, barcodelength) flag\n"
+                             "you have to provide all of them explicitly.\n"
+                             "You can also use pre-defined single-cell protocols."
+                             "Exiting Now.");
+        return false;
+      }
+
+      if (allCustom) {
+        uint32_t barEnd = vm["end"].as<uint32_t>();
+        uint32_t barcodeLength = vm["barcodeLength"].as<uint32_t>();
+        uint32_t umiLength = vm["umiLength"].as<uint32_t>();
+
+        // validate that BC and UMI lengths are OK
+        uint32_t maxBC{60};
+        uint32_t maxUMI{12};
+        if (barcodeLength < 1 or barcodeLength > maxBC) {
+          aopt.jointLog->error("Barcode length ({}) was not in the required length range [1, {}].\n"
+                               "Exiting now.", barcodeLength, maxBC);
+          return false;
+        }
+        if (umiLength < 1 or umiLength > maxUMI) {
+          aopt.jointLog->error("UMI length ({}) was not in the required length range [1, {}].\n"
+                               "Exiting now.", umiLength, maxUMI);
           return false;
         }
 
-        aopt.protocol.barcodeLength = barcodeLength;
-        aopt.protocol.umiLength = umiLength;
+        // validate that protocol end is OK and set it
         if (barEnd == 3) {
           aopt.protocol.end = BarcodeEnd::THREE;
         }
         else if (barEnd == 5) {
           aopt.protocol.end = BarcodeEnd::FIVE;
-        }
-        else{
-          aopt.jointLog->error("\nERROR: Wrong value for Barcode-end of read -> {}"
-                               "\nExiting now: please provide `5` for barcodes "
-                               "starting at 5' end or `3`` for barcode starting "
-                               "at 3' end.\n", barEnd);
+        } else{
+          aopt.jointLog->error("Wrong value for Barcode-end of read -> {}.\n"
+                               "Please provide `5` for barcodes "
+                               "starting at 5' end or `3` for barcode starting "
+                               "at 3' end.\nExiting now.", barEnd);
           return false;
         }
-        if (barcodeLength > 60 or umiLength > 12){
-          aopt.jointLog->error("\nERROR: umiLength/barcodeLength too long\n"
-                               "Exiting Now;");
-          return false;
+
+        // If all validation passed, then set the appropriate variables.
+        aopt.protocol.barcodeLength = barcodeLength;
+        aopt.protocol.umiLength = umiLength;
+        // Since we passed a custom UMI length and need to update the value here.
+        if (umiLength != alevin::types::AlevinUMIKmer::k()) {
+          alevin::types::AlevinUMIKmer::k(umiLength);
+          aopt.jointLog->info("A custom protocol (END, BC length, UMI length) = ({}, {}, {}) "
+                              "is being used.  Updating UMI k-mer length accordingly.",
+                              barEnd, barcodeLength, umiLength);
         }
       }
 
@@ -378,8 +434,19 @@ namespace alevin {
       sopt.numThreads = aopt.numThreads;
       sopt.quiet = aopt.quiet;
       sopt.quantMode = SalmonQuantMode::MAP;
+
+      // enable validate mappings
+      sopt.validateMappings = true;
       bool optionsOK =
         salmon::utils::processQuantOptions(sopt, vm, vm["numBiasSamples"].as<int32_t>());
+      if (!vm.count("minScoreFraction")) {
+        sopt.minScoreFraction = alevin::defaults::minScoreFraction;
+        sopt.jointLog->info(
+                            "Using default value of {} for minScoreFraction in Alevin",
+                            sopt.minScoreFraction
+                            );
+      }
+
       if (!optionsOK) {
         if (aopt.jointLog) {
           aopt.jointLog->error("Could not properly process salmon-level options!");
@@ -391,37 +458,12 @@ namespace alevin {
       return true;
     }
 
-    template <typename ProtocolT>
-    bool sequenceCheck(std::string sequence,
-                       AlevinOpts<ProtocolT>& aopt,
-                       std::mutex& iomutex,
+    //template <typename ProtocolT>
+    bool sequenceCheck(const std::string& sequence,
+                       //AlevinOpts<ProtocolT>& aopt,
+                       //std::mutex& iomutex,
                        Sequence seqType){
-      size_t lenSequnce;
-      auto log = aopt.jointLog;
-
-      lenSequnce = sequence.length();
-      if (lenSequnce == 0){
-        return false;
-      }
-
-      for(auto nt: sequence) {
-        if('N' == nt){
-          return false;
-        }
-        switch(nt){
-        case 'A':
-        case 'C':
-        case 'G':
-        case 'T':break;
-        default:
-          {
-            //log->error("Unidentified charachter {} --- non(A,C,G,T,N)"
-            //           " in barcode sequence", nt);
-            return false;
-          }
-        }//end-switch
-      }//end-for
-      return true;
+      return (sequence.length() > 0) and (sequence.find_first_not_of("ACGTacgt") == std::string::npos);
     }
 
     bool checkSetCoverage(std::vector<std::vector<uint32_t>>& tgroup,
@@ -520,26 +562,9 @@ namespace alevin {
     bool processAlevinOpts(AlevinOpts<apt::Custom>& aopt,
                            SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
-
-    template bool sequenceCheck(std::string sequence,
-                                AlevinOpts<apt::DropSeq>& aopt,
-                                std::mutex& iomutex,
-                                Sequence seqType);
-    template bool sequenceCheck(std::string sequence,
-                                AlevinOpts<apt::InDrop>& aopt,
-                                std::mutex& iomutex,
-                                Sequence seqType);
-    template bool sequenceCheck(std::string sequence,
-                                AlevinOpts<apt::Chromium>& aopt,
-                                std::mutex& iomutex,
-                                Sequence seqType);
-    template bool sequenceCheck(std::string sequence,
-                                AlevinOpts<apt::Gemcode>& aopt,
-                                std::mutex& iomutex,
-                                Sequence seqType);
-    template bool sequenceCheck(std::string sequence,
-                                AlevinOpts<apt::Custom>& aopt,
-                                std::mutex& iomutex,
-                                Sequence seqType);
+    template
+    bool processAlevinOpts(AlevinOpts<apt::CELSeq>& aopt,
+                           SalmonOpts& sopt,
+                           boost::program_options::variables_map& vm);
   }
 }

@@ -140,12 +140,15 @@ struct TGValue {
 template <typename TGValueType = TGValue>
 class EquivalenceClassBuilder {
 public:
-  EquivalenceClassBuilder(std::shared_ptr<spdlog::logger> loggerIn)
+  EquivalenceClassBuilder(std::shared_ptr<spdlog::logger> loggerIn, uint32_t maxResizeThreads)
       : logger_(loggerIn) {
+    countMap_.set_max_resize_threads(maxResizeThreads);
     countMap_.reserve(1000000);
   }
 
   //~EquivalenceClassBuilder() {}
+  void setMaxResizeThreads(uint32_t t) { countMap_.set_max_resize_threads(t); }
+  uint32_t getMaxResizeThreads() const { return countMap_.get_max_resize_threads(); }
 
   void start() { active_ = true; }
 
@@ -158,9 +161,9 @@ public:
       totalCount += kv.second.count;
     }
 
-    logger_->info("Computed {} rich equivalence classes "
+    logger_->info("Computed {:n} rich equivalence classes "
                   "for further processing", countMap_.size());
-    logger_->info("Counted {} total reads in the equivalence classes ",
+    logger_->info("Counted {:n} total reads in the equivalence classes ",
                   totalCount);
     return true;
   }
@@ -175,10 +178,10 @@ public:
       countVec_.push_back(kv);
     }
 
-    logger_->info("Computed {} rich equivalence classes "
+    logger_->info("Computed {:n} rich equivalence classes "
                   "for further processing",
                   countVec_.size());
-    logger_->info("Counted {} total reads in the equivalence classes ",
+    logger_->info("Counted {:n} total reads in the equivalence classes ",
                   totalCount);
     return true;
   }

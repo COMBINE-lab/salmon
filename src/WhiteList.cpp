@@ -27,15 +27,17 @@ namespace alevin {
     bool naive_bayes_predict(DoubleMatrixT& sigma,
                              DoubleMatrixT& theta,
                              DoubleVectorT& query,
-                             DoubleVectorT& classPrior){
-      double trueProbability = get_log_likelihood(classPrior[0],
-                                                  sigma[0],
-                                                  theta[0],
-                                                  query);
-      double falseProbability = get_log_likelihood(classPrior[1],
-                                                   sigma[1],
-                                                   theta[1],
-                                                   query);
+                             DoubleVectorT& classPrior,
+                             double& trueProbability,
+                             double& falseProbability){
+      trueProbability = get_log_likelihood(classPrior[0],
+                                           sigma[0],
+                                           theta[0],
+                                           query);
+      falseProbability = get_log_likelihood(classPrior[1],
+                                            sigma[1],
+                                            theta[1],
+                                            query);
 
       if ( trueProbability < falseProbability ){
         return false;
@@ -113,7 +115,9 @@ namespace alevin {
     std::vector<uint32_t> classifyBarcodes(DoubleMatrixT& featureCountsMatrix,
                                            size_t numCells, size_t numFeatures,
                                            size_t numLowConfidentBarcode,
-                                           size_t numTrueCells){
+                                           size_t numTrueCells,
+                                           std::vector<double>& trueProb,
+                                           std::vector<double>& falseProb){
 
       size_t numFalseCells { numLowConfidentBarcode };
       size_t numAmbiguousCells { numCells - numTrueCells - numLowConfidentBarcode };
@@ -130,6 +134,9 @@ namespace alevin {
                       classCount, classPrior, numClasses,
                       numTrueCells, numAmbiguousCells, numFalseCells);
 
+      //trueProb.resize(numAmbiguousCells, 0.0);
+      //falseProb.resize(numAmbiguousCells, 0.0);
+
       for (auto vec: sigma){
         for (auto cell : vec){
           std::cout<<cell<<"\t";
@@ -140,12 +147,17 @@ namespace alevin {
       for (i=0; i<numTrueCells; i++){
         selectedBarcodes.emplace_back(i);
       }
-      for (; i<numTrueCells+numAmbiguousCells; i++){
+      auto ambiguousCellOffset = numTrueCells + numAmbiguousCells;
+      for (; i<ambiguousCellOffset; i++){
+        double trPb{0.0}, flPb{0.0};
         if (naive_bayes_predict(sigma, theta,
                                 featureCountsMatrix[i],
-                                classPrior)){
+                                classPrior, trPb, flPb)){
           selectedBarcodes.emplace_back(i);
+
         }
+        trueProb.emplace_back( trPb );
+        falseProb.emplace_back( flPb );
       }
 
       return selectedBarcodes;
@@ -185,11 +197,13 @@ namespace alevin {
       return numrtr / denom;
     }
 
-    void populate_count_matrix(boost::filesystem::path& outDir,
+    uint32_t populate_count_matrix(boost::filesystem::path& outDir,
+                               bool inDebugMode,
                                size_t numElem,
-                               DoubleMatrixT& countMatrix){
+                               DoubleMatrixT& countMatrix) {
       boost::iostreams::filtering_istream countMatrixStream;
       countMatrixStream.push(boost::iostreams::gzip_decompressor());
+      uint32_t zerod_cells {0};
 
       auto countMatFilename = outDir / "quants_mat.gz";
       if(not boost::filesystem::exists(countMatFilename)){
@@ -206,13 +220,20 @@ namespace alevin {
         double readCount = std::accumulate(cell.begin(), cell.end(), 0.0);
 
         if (readCount == 0){
-          std::cout<<"ERROR: Importing counts from binary\n"
-                   <<"Cell has 0 reads, should not happen.\n"
-                   <<"Saw total "<< cellCount << " Cells before Error"
-                   <<std::flush;
-          exit(1);
+          if (not inDebugMode) {
+            std::cout<<"ERROR: Importing counts from binary\n"
+                     <<"Cell has 0 reads, should not happen.\n"
+                     <<"Saw total "<< cellCount << " Cells before Error"
+                     <<std::flush;
+            exit(1);
+          }
+          else {
+            zerod_cells += 1;
+          }
         }
       }
+
+      return zerod_cells;
     }
 
     template <typename ProtocolT>
@@ -228,7 +249,6 @@ namespace alevin {
       // Count matrix file after the deduplicated counts
       // TODO::
       // 4. Using all txps i.e. not ignoring txp with 0 values in all the cells
-
       size_t numCells = trueBarcodes.size();
       size_t numGenes = geneIdxMap.size();
       size_t numFeatures{4};
@@ -321,7 +341,6 @@ namespace alevin {
       DoubleMatrixT featureCountsMatrix( numCells, DoubleVectorT (numFeatures, 0.0));
 
       // loop over each barcode
-      // TODO:: This can be parallelized
       tbb::task_scheduler_init tbbScheduler(aopt.numThreads);
       tbb::parallel_for(
                         BlockedIndexRange(size_t(0), size_t(trueBarcodes.size())),
@@ -332,11 +351,12 @@ namespace alevin {
                           for (auto i : boost::irange(range.begin(), range.end())) {
                             uint32_t count_matrix_i = bcOrderMap[ trueBarcodes[i] ];
                             std::vector<double>& featureVector = featureCountsMatrix[i];
-                            std::string& currBarcodeName = trueBarcodes[i];
+                            const std::string& currBarcodeName = trueBarcodes[i];
                             uint32_t rawBarcodeFrequency{0};
 
                             // Alignment Rate
-                            bool indexOk = freqCounter.find(currBarcodeName, rawBarcodeFrequency);
+                            auto indexIt = freqCounter.find(currBarcodeName);
+                            bool indexOk = indexIt != freqCounter.end();
                             if ( not indexOk ){
                               aopt.jointLog->error("Error: index {} not found in freq Counter\n"
                                                    "Please Report the issue on github", currBarcodeName,
@@ -344,6 +364,7 @@ namespace alevin {
                               aopt.jointLog->flush();
                               exit(1);
                             }
+                            rawBarcodeFrequency = *indexIt;
                             featureVector[0] = rawBarcodeFrequency ?
                               umiCount[i] / static_cast<double>(rawBarcodeFrequency) : 0.0;
 
@@ -434,31 +455,42 @@ namespace alevin {
           whitelistStream1 << "\n";
           }*/
         for(size_t i=0; i<featureCountsMatrix.size(); i++){
-          featureStream << trueBarcodes[i]
-                        << "\t" << featureCountsMatrix[i][0]
-                        << "\t" << featureCountsMatrix[i][1]
-                        << "\t" << featureCountsMatrix[i][2]
-                        << "\t" << featureCountsMatrix[i][3]
-                        << "\t" << featureCountsMatrix[i][4]
-                        << "\t" << featureCountsMatrix[i][5]
-                        << "\t" << featureCountsMatrix[i][6]
-                        << "\n";
+          featureStream << trueBarcodes[i];
+          for(size_t j=0; j<numFeatures; j++) {
+            featureStream << "\t" << featureCountsMatrix[i][j];
+          }
+          featureStream << "\n";
         }
         featureStream.close();
       }
 
+      std::vector<double> trueProbs;
+      std::vector<double> falseProbs;
+
       std::vector<uint32_t> whitelistBarcodes =
         classifyBarcodes(featureCountsMatrix, numCells,
                          numFeatures, numLowConfidentBarcode,
-                         numTrueCells);
+                         numTrueCells, trueProbs, falseProbs);
 
       std::ofstream whitelistStream;
       auto whitelistFileName = aopt.outputDirectory / "whitelist.txt";
       whitelistStream.open(whitelistFileName.string());
+
+      std::ofstream predictionStream;
+      auto predictionFileName = aopt.outputDirectory / "predictions.txt";
+      predictionStream.open(predictionFileName.string());
+      predictionStream << "cb\ttrue_prob\tFalse_prob\n";
+
       for (auto i: whitelistBarcodes){
         whitelistStream << trueBarcodes[i] << "\n";
+        if (i >= numTrueCells) {
+          predictionStream << trueBarcodes[i] << "\t"
+                           << trueProbs[i-numTrueCells] << "\t"
+                           << falseProbs[i-numTrueCells] << "\t\n";
+        }
       }
       whitelistStream.close();
+      predictionStream.close();
 
       return true;
     }
@@ -484,6 +516,13 @@ namespace alevin {
                                       spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::Gemcode>& aopt,
+                                      std::vector<uint32_t>& umiCount,
+                                      DoubleMatrixT& geneCountsMatrix,
+                                      std::vector<std::string>& trueBarcodes,
+                                      CFreqMapT& freqCounter,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                                      size_t numLowConfidentBarcode);
+    template bool performWhitelisting(AlevinOpts<alevin::protocols::CELSeq>& aopt,
                                       std::vector<uint32_t>& umiCount,
                                       DoubleMatrixT& geneCountsMatrix,
                                       std::vector<std::string>& trueBarcodes,

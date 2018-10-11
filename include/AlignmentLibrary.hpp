@@ -15,7 +15,6 @@ extern "C" {
 #include "ClusterForest.hpp"
 #include "DistributionUtils.hpp"
 #include "EquivalenceClassBuilder.hpp"
-#include "ErrorModel.hpp"
 #include "FASTAParser.hpp"
 #include "FragmentLengthDistribution.hpp"
 #include "FragmentStartPositionDistribution.hpp"
@@ -58,7 +57,7 @@ public:
         libFmt_(libFmt), transcripts_(std::vector<Transcript>()),
         fragStartDists_(5), posBiasFW_(5), posBiasRC_(5), posBiasExpectFW_(5),
         posBiasExpectRC_(5), seqBiasModel_(1.0),
-        eqBuilder_(salmonOpts.jointLog), quantificationPasses_(0),
+        eqBuilder_(salmonOpts.jointLog, salmonOpts.maxHashResizeThreads), quantificationPasses_(0),
         expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0),
         expectedGC_(salmonOpts.numConditionalGCBins, salmonOpts.numFragGCBins,
                     distribution_utils::DistributionSpace::LOG),

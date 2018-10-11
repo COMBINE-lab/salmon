@@ -1,13 +1,6 @@
 #ifndef EXPERIMENT_HPP
 #define EXPERIMENT_HPP
 
-extern "C" {
-#include "bwa.h"
-#include "bwamem.h"
-#include "kvec.h"
-#include "utils.h"
-}
-
 // Our includes
 #include "ClusterForest.hpp"
 #include "DistributionUtils.hpp"
@@ -63,7 +56,7 @@ public:
         // transcriptFile_(transcriptFile),
         transcripts_(std::vector<Transcript>()), totalAssignedFragments_(0),
         fragStartDists_(5), posBiasFW_(5), posBiasRC_(5), posBiasExpectFW_(5),
-        posBiasExpectRC_(5), seqBiasModel_(1.0), eqBuilder_(sopt.jointLog),
+        posBiasExpectRC_(5), seqBiasModel_(1.0), eqBuilder_(sopt.jointLog, sopt.maxHashResizeThreads),
         expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0),
         expectedGC_(sopt.numConditionalGCBins, sopt.numFragGCBins,
                     distribution_utils::DistributionSpace::LOG),
@@ -129,6 +122,7 @@ public:
     // Check index version compatibility here
     SalmonIndexVersionInfo versionInfo;
     if (boost::iequals(indexDirectory.string(), "none")) {
+      std::cerr << "Index Type: None, Input type: Pufferfish pam file\n";
       versionInfo.indexType(SalmonIndexType::PUFFERFISH_OUTPUT); // pufferfish output without index
     }
     else {
@@ -136,7 +130,7 @@ public:
       versionInfo.load(versionPath);
       if (versionInfo.indexVersion() == 0) {
         fmt::MemoryWriter infostr;
-        infostr << "Error: The index version file " << versionPath.string()
+        infostr << "ReadExperiment Error: The index version file " << versionPath.string()
                 << " doesn't seem to exist.  Please try re-building the salmon "
                    "index.";
         throw std::invalid_argument(infostr.str());
@@ -151,6 +145,7 @@ public:
     salmonIndex_->load(indexDirectory, indexType);
     // Now we'll have either an FMD-based index, a QUASI index, or a Pufferfish index
     // dispatch on the correct type.
+    fmt::MemoryWriter infostr;
 
     switch (salmonIndex_->indexType()) {
     case SalmonIndexType::QUASI:
@@ -171,14 +166,14 @@ public:
       }
       break;
     case SalmonIndexType::FMD:
-      loadTranscriptsFromFMD();
+      infostr << "Error: This version of salmon does not support the FMD index mode.";
+      throw std::invalid_argument(infostr.str());
       break;
     case SalmonIndexType::PUFFERFISH_OUTPUT:
       puffoutFilePointer_ = new PuffoutFilePointer(readLibraries_[0].pufferfishOutput()[0]);
       loadTranscriptsFromPuffOut();
       break;
     }
-
 
     // Create the cluster forest for this set of transcripts
     clusters_.reset(new ClusterForest(transcripts_.size(), transcripts_));
@@ -292,7 +287,7 @@ public:
     size_t numRecords = idx_->txpNames.size();
     auto log = sopt.jointLog.get();
 
-    log->info("Index contained {} targets", numRecords);
+    log->info("Index contained {:n} targets", numRecords);
     // transcripts_.resize(numRecords);
     std::vector<uint32_t> lengths;
     lengths.reserve(numRecords);
@@ -340,145 +335,40 @@ public:
     setTranscriptLengthClasses_(lengths, posBiasFW_.size());
   }
 
-  void loadTranscriptsFromFMD() {
-    bwaidx_t* idx_ = salmonIndex_->bwaIndex();
-    size_t numRecords = idx_->bns->n_seqs;
-    std::vector<Transcript> transcripts_tmp;
-    auto log = spdlog::get("jointLog");
-    // transcripts_tmp.reserve(numRecords);
-    // transcripts_.reserve(numRecords);
 
-    log->info("Index contained {} targets", numRecords);
-    // transcripts_.resize(numRecords);
-    for (auto i : boost::irange(size_t(0), numRecords)) {
-      uint32_t id = i;
-      char* name = idx_->bns->anns[i].name;
-      uint32_t len = idx_->bns->anns[i].len;
-      // copy over the length, then we're done.
-      transcripts_tmp.emplace_back(id, name, len);
-    }
+    void loadTranscriptsFromPuffOut() {
+        size_t numRecords = puffoutFilePointer_->numRefs();
+        auto log = spdlog::get("jointLog");
 
-    std::sort(transcripts_tmp.begin(), transcripts_tmp.end(),
-              [](const Transcript& t1, const Transcript& t2) -> bool {
-                return t1.id < t2.id;
-              });
+        log->info("Index contained {} targets", numRecords);
+        // transcripts_.resize(numRecords);
+        std::vector<uint32_t> lengths;
+        lengths.reserve(numRecords);
+        double alpha = 0.005;
+        for (auto i : boost::irange(size_t(0), numRecords)) {
+            uint32_t id = i;
+            std::string name = puffoutFilePointer_->refName(i);
+            uint32_t len = puffoutFilePointer_->refLength(i);
+            // copy over the length, then we're done.
+            transcripts_.emplace_back(id, name.c_str(), len, alpha);
+            auto &txp = transcripts_.back();
+            /*txp.setCompleteLength(idx_->txpCompleteLens[i]);
+            // The transcript sequence
+            // auto txpSeq = idx_->seq.substr(idx_->txpOffsets[i], len);
 
-    double alpha = 0.005;
-    char nucTab[256];
-    nucTab[0] = 'A';
-    nucTab[1] = 'C';
-    nucTab[2] = 'G';
-    nucTab[3] = 'T';
-    for (size_t i = 4; i < 256; ++i) {
-      nucTab[i] = 'N';
-    }
+            // Set the transcript sequence
+            txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i],
+                                    sopt.gcBiasCorrect, sopt.reduceGCMemory);*/
+            lengths.push_back(txp.RefLength);
+            //std::cerr << "txp len:" << txp.RefLength << "\n";
 
-    std::vector<uint32_t> lengths;
-    lengths.reserve(transcripts_tmp.size());
-    size_t tnum = 0;
-    // Load the transcript sequence from file
-    for (auto& t : transcripts_tmp) {
-      transcripts_.emplace_back(t.id, t.RefName.c_str(), t.RefLength, alpha);
-      /* from BWA */
-      uint8_t* rseq = nullptr;
-      int64_t tstart, tend, compLen, l_pac = idx_->bns->l_pac;
-      tstart = idx_->bns->anns[t.id].offset;
-      tend = tstart + t.RefLength;
-      rseq = bns_get_seq(l_pac, idx_->pac, tstart, tend, &compLen);
-      if (compLen != t.RefLength) {
-        fmt::print(stderr,
-                   "For transcript {}, stored length ({}) != computed length "
-                   "({}) --- index may be corrupt. exiting\n",
-                   t.RefName, compLen, t.RefLength);
-        std::exit(1);
-      }
-      std::string seq(t.RefLength, ' ');
-      if (rseq != 0) {
-        for (int64_t i = 0; i < compLen; ++i) {
-          seq[i] = nucTab[rseq[i]];
         }
-      }
-
-      auto& txp = transcripts_.back();
-
-      // allocate space for the new copy
-      char* seqCopy = new char[seq.length() + 1];
-      std::strcpy(seqCopy, seq.c_str());
-      txp.setSequenceOwned(seqCopy);
-      txp.setSAMSequenceOwned(
-          salmon::stringtools::encodeSequenceInSAM(seq.c_str(), t.RefLength));
-      lengths.push_back(t.RefLength);
-      /*
-      // Length classes taken from
-      //
-      https://github.com/cole-trapnell-lab/cufflinks/blob/master/src/biascorrection.cpp
-      // ======
-      // Roberts, Adam, et al.
-      // "Improving RNA-Seq expression estimates by correcting for fragment
-      bias."
-      // Genome Biol 12.3 (2011): R22.
-      // ======
-      // perhaps, define these in a more data-driven way
-      if (txp.RefLength <= 791) {
-          txp.lengthClassIndex(0);
-      } else if (txp.RefLength <= 1265) {
-          txp.lengthClassIndex(1);
-      } else if (txp.RefLength <= 1707) {
-          txp.lengthClassIndex(2);
-      } else if (txp.RefLength <= 2433) {
-          txp.lengthClassIndex(3);
-      } else {
-          txp.lengthClassIndex(4);
-      }
-  */
-      free(rseq);
-      /* end BWA code */
-      ++tnum;
+        // ====== Done loading the transcripts from file
+        setTranscriptLengthClasses_(lengths, posBiasFW_.size());
+        log->info("read experiment | loaded transcripts from puffout -- pufferfish output");
     }
 
-    // Since we have the de-coded reference sequences, we no longer need
-    // the encoded sequences, so free them.
-    /** TEST OPT **/
-    // free(idx_->pac); idx_->pac = nullptr;
-    /** END TEST OPT **/
-    transcripts_tmp.clear();
-    // ====== Done loading the transcripts from file
-    setTranscriptLengthClasses_(lengths, posBiasFW_.size());
-  }
-
-  void loadTranscriptsFromPuffOut() {
-      size_t numRecords = puffoutFilePointer_->numRefs();
-      auto log = spdlog::get("jointLog");
-
-      log->info("Index contained {} targets", numRecords);
-      // transcripts_.resize(numRecords);
-      std::vector<uint32_t> lengths;
-      lengths.reserve(numRecords);
-      double alpha = 0.005;
-      for (auto i : boost::irange(size_t(0), numRecords)) {
-          uint32_t id = i;
-          std::string name = puffoutFilePointer_->refName(i);
-          uint32_t len = puffoutFilePointer_->refLength(i);
-          // copy over the length, then we're done.
-          transcripts_.emplace_back(id, name.c_str(), len, alpha);
-          auto &txp = transcripts_.back();
-          /*txp.setCompleteLength(idx_->txpCompleteLens[i]);
-          // The transcript sequence
-          // auto txpSeq = idx_->seq.substr(idx_->txpOffsets[i], len);
-
-          // Set the transcript sequence
-          txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i],
-                                  sopt.gcBiasCorrect, sopt.reduceGCMemory);*/
-          lengths.push_back(txp.RefLength);
-          //std::cerr << "txp len:" << txp.RefLength << "\n";
-
-      }
-      // ====== Done loading the transcripts from file
-      setTranscriptLengthClasses_(lengths, posBiasFW_.size());
-    log->info("read experiment | loaded transcripts from puffout -- pufferfish output");
-  }
-
-  template <typename CallbackT>
+    template <typename CallbackT>
   bool processReads(const uint32_t& numThreads, const SalmonOpts& sopt,
                     CallbackT& processReadLibrary) {
     std::atomic<bool> burnedIn{
@@ -493,7 +383,6 @@ public:
 
   ~ReadExperiment() {
     // ---- Get rid of things we no longer need --------
-    // bwa_idx_destroy(idx_);
   }
 
   ClusterForest& clusterForest() { return *clusters_.get(); }
@@ -634,9 +523,16 @@ public:
           }
         }
         numAgree = numFmt1 + numFmt2;
-        double ratio = static_cast<double>(numFmt1) / (numFmt1 + numFmt2);
+        double ratio = numAgree > 0 ? (static_cast<double>(numFmt1) / (numFmt1 + numFmt2)) : 0.0;
 
-        if (std::abs(ratio - 0.5) > 0.01) {
+        if (numAgree == 0) {
+          errstr << "NOTE: Read Lib [" << rl.readFilesAsString() << "] :\n";
+          errstr << "\nFound no concordant and consistent mappings. "
+                    "If this is a paired-end library, are you sure the reads are properly paired? "
+                    "check the file: " << opath.string() << " for details\n";
+          log->warn(errstr.str());
+          errstr.clear();
+        } else if (std::abs(ratio - 0.5) > 0.01) {
           errstr << "NOTE: Read Lib [" << rl.readFilesAsString() << "] :\n";
           errstr << "\nDetected a *potential* strand bias > 1\% in an "
                     "unstranded protocol "
@@ -646,7 +542,7 @@ public:
           errstr.clear();
         }
 
-        oa(cereal::make_nvp("read_files", rl.readFilesAsString()));
+        oa(cereal::make_nvp("read_files", rl.readFilesAsVector()));
         std::string expectedFormat = rl.format().toString();
         oa(cereal::make_nvp("expected_format", expectedFormat));
 
@@ -657,8 +553,8 @@ public:
         oa(cereal::make_nvp("num_assigned_fragments",
                             numAssignedFragments_.load()));
 
-        oa(cereal::make_nvp("num_consistent_mappings", numAgree));
-        oa(cereal::make_nvp("num_inconsistent_mappings", numDisagree));
+        oa(cereal::make_nvp("num_frags_with_concordant_consistent_mappings", numAgree));
+        oa(cereal::make_nvp("num_frags_with_inconsistent_or_orphan_mappings", numDisagree));
         oa(cereal::make_nvp("strand_mapping_bias", ratio));
       } else {
         numAgree = 0;
@@ -683,8 +579,8 @@ public:
         oa(cereal::make_nvp("num_assigned_fragments",
                             numAssignedFragments_.load()));
 
-        oa(cereal::make_nvp("num_consistent_mappings", numAgree));
-        oa(cereal::make_nvp("num_inconsistent_mappings", numDisagree));
+        oa(cereal::make_nvp("num_frags_with_consistent_mappings", numAgree));
+        oa(cereal::make_nvp("num_frags_with_inconsistent_or_orphan_mappings", numDisagree));
       } // end else
 
       double compatFragmentRatio =
@@ -857,7 +753,6 @@ private:
    * The index we've built on the set of transcripts.
    */
   std::unique_ptr<SalmonIndex> salmonIndex_{nullptr};
-  // bwaidx_t *idx_{nullptr};
   /**
    * The cluster forest maintains the dynamic relationship
    * defined by transcripts and reads --- if two transcripts

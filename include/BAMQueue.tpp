@@ -553,6 +553,9 @@ inline bool BAMQueue<FragT>::getFrag_(UnpairedRead& sread, FilterT filt) {
             !(bam_flag(sread.read) & BAM_FUNMAP) and
             sread.transcriptID() >= 0) {
             haveValidRead = true;
+            bool isFwd = !(bam_strand(sread.read));
+            int32_t startPos = bam_pos(sread.read); 
+            sread.libFmt = salmon::utils::hitType(startPos, isFwd);
         }
 
         if (!haveValidRead) { 

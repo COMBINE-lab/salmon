@@ -42,6 +42,7 @@
 #include "TranscriptGeneMap.hpp"
 
 #include "StadenUtils.hpp"
+#include "SalmonDefaults.hpp"
 
 namespace salmon {
 namespace utils {
@@ -740,63 +741,113 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
         return (fmt.length() == 1 and (fmt.front() == 'a' or fmt.front() == 'A'));
     };
 
-    bool autoLibType{false};
-    std::vector <ReadLibrary> peLibs{ReadLibrary(peFormat)};
-    std::vector <ReadLibrary> seLibs{ReadLibrary(seFormat)};
-    for (auto &opt : orderedOptions.options) {
-      // Update the library type
-      if (opt.string_key == "libType") {
-        if (!isAutoLibType(opt.value[0])) {
-          auto libFmt = parseLibraryFormatStringNew(opt.value[0]);
-          if (libFmt.type == ReadType::PAIRED_END) {
-            peFormat = libFmt;
-            peLibs.emplace_back(libFmt);
-          } else {
-            seFormat = libFmt;
-            seLibs.emplace_back(libFmt);
-          }
+  auto log = spdlog::get("jointLog");
+
+  bool sawLibType{false};
+  bool sawPairedLibrary{false};
+  bool sawUnpairedLibrary{false};
+  bool autoLibType{false};
+
+  std::vector<ReadLibrary> peLibs{peFormat};
+  std::vector<ReadLibrary> seLibs{seFormat};
+
+  for (auto& opt : orderedOptions.options) {
+    // Update the library type
+    if (opt.string_key == "libType") {
+      if (!isAutoLibType(opt.value[0])) {
+        auto libFmt = parseLibraryFormatStringNew(opt.value[0]);
+        if (libFmt.type == ReadType::PAIRED_END) {
+          peFormat = libFmt;
+          peLibs.emplace_back(libFmt);
         } else {
-          autoLibType = true;
+          seFormat = libFmt;
+          seLibs.emplace_back(libFmt);
         }
+      } else {
+        autoLibType = true;
       }
-
-      if (opt.string_key == "mates1") {
-        peLibs.back().addMates1(opt.value);
-        if (autoLibType) {
-          peLibs.back().enableAutodetect();
-        }
-      }
-      if (opt.string_key == "mates2") {
-        peLibs.back().addMates2(opt.value);
-        if (autoLibType) {
-          peLibs.back().enableAutodetect();
-        }
-      }
-      if (opt.string_key == "unmatedReads") {
-        seLibs.back().addUnmated(opt.value);
-        if (autoLibType) {
-          seLibs.back().enableAutodetect();
-        }
-      }
+      sawLibType = true;
     }
 
-    libs.reserve(peLibs.size() + seLibs.size());
-    for (auto &lib : boost::range::join(seLibs, peLibs)) {
-      if (lib.format().type == ReadType::SINGLE_END) {
-        if (lib.unmated().size() == 0) {
-          // Didn't use default single end library type
-          continue;
-        }
-      } else if (lib.format().type == ReadType::PAIRED_END) {
-        if (lib.mates1().size() == 0 or lib.mates2().size() == 0) {
-          // Didn't use default paired-end library type
-          continue;
-        }
+    if (opt.string_key == "mates1") {
+      if (!sawLibType) {
+        log->warn("Encountered a read file (--mates1/-1) before a "
+                  "library type specification.  The (--libType/-l) "
+                  "option must precede the input files.");
+        peLibs.clear();
+        return peLibs;
       }
-      libs.push_back(lib);
+      peLibs.back().addMates1(opt.value);
+      if (autoLibType) {
+        peLibs.back().enableAutodetect();
+      }
+      sawPairedLibrary = true;
     }
+    if (opt.string_key == "mates2") {
+      if (!sawLibType) {
+        log->warn("Encountered a read file (--mates2/-2) before a "
+                  "library type specification.  The (--libType/-l) "
+                  "option must precede the input files.");
+        peLibs.clear();
+        return peLibs;
+      }
+      peLibs.back().addMates2(opt.value);
+      if (autoLibType) {
+        peLibs.back().enableAutodetect();
+      }
+      sawPairedLibrary = true;
+    }
+    if (opt.string_key == "unmatedReads") {
+      if (!sawLibType) {
+        log->warn("Encountered a read file (--unmatedReads/-r) before a "
+                  "library type specification.  The (--libType/-l) "
+                  "option must precede the input files.");
+        seLibs.clear();
+        return seLibs;
+      }
+      seLibs.back().addUnmated(opt.value);
+      if (autoLibType) {
+        seLibs.back().enableAutodetect();
+      }
+      sawUnpairedLibrary = true;
+    }
+  }
 
-    auto log = spdlog::get("jointLog");
+  std::vector<ReadLibrary> libs;
+
+  // @Avi : Allow this temporarily for now, since there is some use to hijack
+  // this behavior in Alevin.  However, we should figure out a proper parsing
+  // strategy for that rather than abusing single & PE library types.  Once we
+  // fix that, we should uncomment the below.
+  /*
+  if (sawPairedLibrary and sawUnpairedLibrary) {
+    log->warn("It seems you have specified both paired-end and unpaired read "
+              "libraries.  Salmon does not accepted mixed library types, and "
+              "different library types should typically not be quantified together "
+              "anyway.  Please quantifiy distinct library types separately.");
+    return libs;
+  }
+  */
+  (void)sawPairedLibrary;
+  (void)sawUnpairedLibrary;
+
+  libs.reserve(peLibs.size() + seLibs.size());
+  for (auto& lib : boost::range::join(seLibs, peLibs)) {
+    if (lib.format().type == ReadType::SINGLE_END) {
+      if (lib.unmated().size() == 0) {
+        // Didn't use default single end library type
+        continue;
+      }
+    } else if (lib.format().type == ReadType::PAIRED_END) {
+      if (lib.mates1().size() == 0 or lib.mates2().size() == 0) {
+        // Didn't use default paired-end library type
+        continue;
+      }
+    }
+    libs.push_back(lib);
+  }
+
+    //auto log = spdlog::get("jointLog");
     size_t numLibs = libs.size();
     if (numLibs == 1) {
       log->info("There is 1 library.");
@@ -1322,29 +1373,103 @@ std::string getCurrentTimeAsString() {
   return time;
 }
 
-bool validateOptionsAlignment_(SalmonOpts& sopt) {
+  bool validateOptionsAlignment_(
+                                 SalmonOpts& sopt,
+                                 boost::program_options::variables_map& vm
+                                 ) {
   if (!sopt.sampleOutput and sopt.sampleUnaligned) {
     sopt.jointLog->warn(
         "You passed in the (-u/--sampleUnaligned) flag, but did not request a "
         "sampled "
         "output file (-s/--sampleOut).  This flag will be ignored!");
   }
+
+  if (sopt.useErrorModel and sopt.rangeFactorizationBins < 4) {
+    uint32_t nbins{4};
+    sopt.jointLog->info(
+                        "Usage of --useErrorModel implies use of range factorization. "
+                        "rangeFactorization bins is being set to {}", nbins
+                        );
+    sopt.rangeFactorizationBins = nbins;
+    sopt.useRangeFactorization = true;
+  }
   return true;
 }
 
-bool validateOptionsMapping_(SalmonOpts& sopt) {
+  bool validateOptionsMapping_(
+                               SalmonOpts& sopt,
+                               boost::program_options::variables_map& vm
+                               ) {
+  auto numUnpaired = sopt.unmatedReadFiles.size();
+  auto numLeft = sopt.mate1ReadFiles.size();
+  auto numRight = sopt.mate2ReadFiles.size();
+
+  // currently there is some strange use for this in alevin, I think ...
+  // check with avi.
+  if (numLeft + numRight > 0 and numUnpaired > 0) {
+      sopt.jointLog->warn("You seem to have passed in both un-paired reads and paired-end reads. "
+                          "It is not currently possible to quantify hybrid library types in salmon.");
+  }
+
+
+  if (numLeft + numRight > 0) {
+    if (numLeft != numRight) {
+      sopt.jointLog->error("You passed paired-end files to salmon, but you passed {} files to --mates1 "
+                           "and {} files to --mates2.  You must pass the same number of files to both flags",
+                           numLeft, numRight);
+      return false;
+    }
+   }
+
   if (sopt.mismatchPenalty > 0) {
     sopt.jointLog->warn(
                         "You set the mismatch penalty as {}, but it should be negative.  It is being negated to {}.",
                         sopt.mismatchPenalty, -sopt.mismatchPenalty);
     sopt.mismatchPenalty = -sopt.mismatchPenalty;
   }
+
+  // Make sure that consensusSlack is not negative
+  if (sopt.consensusSlack < 0) {
+    sopt.jointLog->error("You set consensusSlack as {}, but it must be a non-negative value.", sopt.consensusSlack);
+    return false;
+  }
+
+  // If we have validate mappings, then make sure we automatically enable
+  // range factorization
+  if (sopt.validateMappings) {
+    if (!vm.count("minScoreFraction")) {
+      sopt.minScoreFraction = salmon::defaults::minScoreFraction;
+      sopt.jointLog->info(
+                          "Usage of --validateMappings implies use of minScoreFraction. "
+                          "Since not explicitly specified, it is being set to {}", sopt.minScoreFraction
+                          );
+    }
+
+    if (sopt.rangeFactorizationBins < 4) {
+      uint32_t nbins{4};
+      sopt.jointLog->info(
+                          "Usage of --validateMappings implies use of range factorization. "
+                          "rangeFactorizationBins is being set to {}", nbins
+                          );
+      sopt.rangeFactorizationBins = nbins;
+      sopt.useRangeFactorization = true;
+    }
+    // If the consensus slack was not set explicitly, then it defaults to 1 with
+    // validateMappings
+    bool consensusSlackExplicit = !vm["consensusSlack"].defaulted();
+    if (!consensusSlackExplicit) {
+      sopt.consensusSlack = 1;
+      sopt.jointLog->info(
+                          "Usage of --validateMappings implies a default consensus slack of 1. "
+                          "Setting consensusSlack to {}.", sopt.consensusSlack);
+    }
+  }
   return true;
 }
 
 /**
  * In mapping mode, depending on what the user has requested, we may have to
- *write out some files.  Prepare loggers so we can do this asynchronously.
+ * write out some files.  Prepare loggers so we can do this asynchronously.
  **/
 bool createAuxMapLoggers_(SalmonOpts& sopt,
                           boost::program_options::variables_map& vm) {
@@ -1498,6 +1623,19 @@ bool createDirectoryVerbose_(boost::filesystem::path& dirPath) {
   return true;
 }
 
+
+/* Function used to check that 'opt1' and 'opt2' are not specified
+    at the same time. */
+// taken from : https://www.boost.org/doc/libs/1_67_0/libs/program_options/example/real.cpp
+  void conflicting_options(const boost::program_options::variables_map& vm,
+                          const char* opt1, const char* opt2){
+  if (vm.count(opt1) && !vm[opt1].defaulted()
+      && vm.count(opt2) && !vm[opt2].defaulted()) {
+    throw std::logic_error(std::string("Conflicting options '")
+                           + opt1 + "' and '" + opt2 + "'.");
+  }
+}
+
 /**
  * Validate the options for salmon, and create the necessary
  * output directories and logging infrastructure.
@@ -1574,6 +1712,9 @@ bool processQuantOptions(SalmonOpts& sopt,
   if (sopt.meta) {
     sopt.initUniform = true;
     sopt.noRichEqClasses = true;
+    // for now, meta mode uses the EM.
+    sopt.useEM = true;
+    sopt.useVBOpt = false;
     // sopt.incompatPrior = salmon::math::LOG_0;
     // sopt.ignoreIncompat = true;
   }
@@ -1646,6 +1787,23 @@ bool processQuantOptions(SalmonOpts& sopt,
   }
 
   // The growing list of thou shalt nots
+
+  {
+    try {
+      conflicting_options(vm, "useVBOpt", "useEM");
+    } catch (std::logic_error& e) {
+      jointLog->critical(e.what());
+      jointLog->flush();
+      return false;
+    }
+    // If the user passed useEM, but not useVBOpt, then
+    // turn off VB.  The fact that there is not a better
+    // way to handle this suggests a potential shortcoming
+    // of boost::program_options.
+    if(sopt.useEM) {
+      sopt.useVBOpt = false;
+    }
+  }
 
   /** Warnings, not errors **/
   {
@@ -1748,9 +1906,9 @@ bool processQuantOptions(SalmonOpts& sopt,
   // Validation that is different for alignment and mapping based modes.
   bool perModeValidate{true};
   if (sopt.quantMode == SalmonQuantMode::ALIGN) {
-    perModeValidate = validateOptionsAlignment_(sopt);
+    perModeValidate = validateOptionsAlignment_(sopt, vm);
   } else if (sopt.quantMode == SalmonQuantMode::MAP) {
-    perModeValidate = validateOptionsMapping_(sopt);
+    perModeValidate = validateOptionsMapping_(sopt, vm);
   }
 
   return perModeValidate;
@@ -1877,9 +2035,11 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
   public:
     CombineableBiasParams(uint32_t K, size_t numCondBins, size_t numGCBins)
         : expectGC(numCondBins, numGCBins,
-                   distribution_utils::DistributionSpace::LINEAR) {
-      expectPos5 = std::vector<SimplePosBias>(5);
-      expectPos3 = std::vector<SimplePosBias>(5);
+                   distribution_utils::DistributionSpace::LINEAR),
+          expectPos5(std::vector<SimplePosBias>(5)),
+          expectPos3(std::vector<SimplePosBias>(5)) {
+      //expectPos5 = std::vector<SimplePosBias>(5);
+      //expectPos3 = std::vector<SimplePosBias>(5);
     }
 
     std::vector<SimplePosBias> expectPos5;
@@ -2318,7 +2478,7 @@ int contextSize = outsideContext + insideContext;
           // lengths we'll consider for this transcript.
           int32_t locFLDLow = (refLen < cdfMaxArg) ? 1 : fldLow;
           int32_t locFLDHigh = (refLen < cdfMaxArg) ? cdfMaxArg : fldHigh;
-
+          bool wasProcessed{false};
           if (alphas[it] >= minAlpha
               // available[it]
               and unprocessedLen > 0 and cdfMaxVal > minCDFMass) {
@@ -2487,25 +2647,30 @@ int contextSize = outsideContext + insideContext;
               effLength += (flWeight * flMassTotal);
               fl += gcSamp;
             }
+            wasProcessed = true;
           } // for the processed transcript
 
-          // throw caution to the wind
-          double thresh = noThreshold ? 1.0 : unprocessedLen;
-
-          if (noThreshold) {
-            if (unprocessedLen > 0.0 and effLength > thresh) {
-              effLensOut(it) = effLength;
+          if (wasProcessed) {
+            // throw caution to the wind
+            double thresh = noThreshold ? 1.0 : unprocessedLen;
+            if (noThreshold) {
+              if (unprocessedLen > 0.0 and effLength > thresh) {
+                effLensOut(it) = effLength;
+              } else {
+                effLensOut(it) = effLensIn(it);
+              }
             } else {
-              effLensOut(it) = effLensIn(it);
+              double offset = std::max(1.0, thresh);
+              double effLengthNoBias = static_cast<double>(elen);
+              auto barrierLength = [effLengthNoBias, offset](double x) -> double {
+                                     return std::max(x, std::min(effLengthNoBias, offset));
+                                   };
+              effLensOut(it) = barrierLength(effLength);
             }
           } else {
-            double offset = std::max(1.0, thresh);
-            double effLengthNoBias = static_cast<double>(elen);
-            auto barrierLength = [effLengthNoBias, offset](double x) -> double {
-              return std::max(x, std::min(effLengthNoBias, offset));
-            };
-            effLensOut(it) = barrierLength(effLength);
+            effLensOut(it) = static_cast<double>(elen);
           }
+
         }
       } // end parallel_for lambda
   );
@@ -2533,6 +2698,10 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm,
   using std::max;
 
   auto logger = spdlog::get("jointLog");
+
+  logger->info("NOTE: We recommend using tximport (https://bioconductor.org/packages/release/bioc/html/tximport.html) "
+               "for aggregating transcript-level salmon abundance estimates to the gene level.  It is more versatile, "
+               "exposes more features, and allows considering multi-sample information during aggregation.");
 
   constexpr double minTPM = std::numeric_limits<double>::denorm_min();
   std::ifstream expFile(inputPath.string());
@@ -2596,15 +2765,14 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm,
     const size_t NE{expVals.size()};
 
     size_t tpmIdx{0};
-    double totalTPM{0.0};
     for (auto& tranExp : kv.second) {
       // expVals[0] = TPM
       // expVals[1] = count
       for (size_t i = 0; i < NE; ++i) {
         expVals[i] += tranExp.expVals[i];
       }
-      totalTPM += expVals[tpmIdx];
     }
+    double totalTPM = expVals[tpmIdx];
 
     // If this gene was expressed
     if (totalTPM > minTPM) {

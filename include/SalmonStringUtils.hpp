@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace salmon {
 
@@ -128,7 +129,7 @@ constexpr uint8_t charToSamEncode[] = {
     15, 15, 15, 15, 15, 15};
     */
 
-uint8_t* encodeSequenceInSAM(const char* src, size_t len);
+std::vector<uint8_t> encodeSequenceInSAM(const char* src, size_t len);
 
 /**
    Incomplete: currently only rev for 'ATCG'

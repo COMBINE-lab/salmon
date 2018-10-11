@@ -4,6 +4,7 @@
 #include <string>
 
 #include "AlevinOpts.hpp"
+#include "AlevinTypes.hpp"
 
 namespace alevin{
   namespace protocols {
@@ -17,7 +18,9 @@ namespace alevin{
         barcodeLength(barcodeLength_),
         umiLength(umiLength_),
         end(end_),
-        maxValue(maxValue_){}
+        maxValue(maxValue_){
+        alevin::types::AlevinUMIKmer::k(umiLength);
+      }
       uint32_t barcodeLength, umiLength, maxValue;
       BarcodeEnd end;
     };
@@ -50,9 +53,15 @@ namespace alevin{
       Gemcode(): Rule(14, 10, BarcodeEnd::FIVE, 268435456){}
     };
 
+    struct CELSeq : Rule{
+      // WEHI SCORE's CEL-Seq2 starts from 5' end with a 8 bp barcode
+      // and a 6 bp UMI.
+      CELSeq(): Rule(8, 6, BarcodeEnd::FIVE, 65536){}
+    };
+
     //dummy class
     struct Custom : Rule{
-      Custom() : Rule(0,0,BarcodeEnd::THREE,0){}
+      Custom() : Rule(0,0,BarcodeEnd::FIVE,0){}
     };
   }
 }
