@@ -259,6 +259,9 @@ namespace salmon {
        "noSoftMap", po::bool_switch()->default_value(alevin::defaults::noSoftMap),
        "Don't use soft-assignment for quant instead do hard-assignment.")
       (
+       "naiveEqclass", po::bool_switch()->default_value(alevin::defaults::naiveEqclass),
+       "Run naive per equivalence class deduplication, generating only total number of UMIs")
+      (
        "noDedup", po::bool_switch()->default_value(alevin::defaults::noDedup),
        "Stops the pipeline after CB sequence correction and quasi-mapping reads.")
       (
@@ -298,9 +301,6 @@ namespace salmon {
       (
        "noQuant", po::bool_switch()->default_value(alevin::defaults::noQuant),
        "Don't run downstream barcode-salmon model.")
-      (
-       "naive", po::bool_switch()->default_value(alevin::defaults::naive),
-       "Run naive deduplication, generating Gene Count Matrix")
       (
        "numCellBootstraps",po::value<uint32_t>()->default_value(alevin::defaults::numBootstraps),
        "Generate mean and variance for cell x gene matrix quantification"

@@ -101,7 +101,7 @@ namespace defaults {
 
 namespace alevin {
 namespace defaults {
-  constexpr const bool naive{false};
+  constexpr const bool naiveEqclass{false};
   constexpr const bool noDedup{false};
   constexpr const bool txpLevel{false};
   constexpr const bool eqClassLevel{false};

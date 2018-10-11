@@ -318,6 +318,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
   if (topxBarcodes == 0){
     aopt.jointLog->error("Can't find left Boundary.\n"
                          "Please Report this issue on github.");
+    aopt.jointLog->flush();
     exit(1);
   }
   else{
@@ -345,6 +346,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
                         invCovariance, normFactor);
     if (invCovariance == 0.0 or normFactor == 0.0){
       aopt.jointLog->error("Wrong invCovariance/Normfactor");
+      aopt.jointLog->flush();
       exit(1);
     }
 
@@ -732,6 +734,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
       if ( not indexOk){
         aopt.jointLog->error("Error: index not find in freq Counter\n"
                              "Please Report the issue on github");
+        aopt.jointLog->flush();
         exit(1);
       }
 

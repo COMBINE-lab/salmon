@@ -292,7 +292,7 @@ namespace alevin {
       aopt.debug = vm["debug"].as<bool>();
       aopt.useCorrelation = vm["useCorrelation"].as<bool>();
       aopt.noDedup = vm["noDedup"].as<bool>();
-      aopt.naive = vm["naive"].as<bool>();
+      aopt.naiveEqclass = vm["naiveEqclass"].as<bool>();
       aopt.noQuant = vm["noQuant"].as<bool>();
       aopt.noSoftMap = vm["noSoftMap"].as<bool>();
       aopt.dumpfq = vm["dumpfq"].as<bool>();
