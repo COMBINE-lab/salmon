@@ -813,7 +813,8 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
     }
   }
 
-  std::vector<ReadLibrary> libs;
+  // bad shadowed variable --- go home.
+  // std::vector<ReadLibrary> libs;
 
   // @Avi : Allow this temporarily for now, since there is some use to hijack
   // this behavior in Alevin.  However, we should figure out a proper parsing
