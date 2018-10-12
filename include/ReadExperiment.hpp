@@ -19,7 +19,7 @@
 #include "SpinLock.hpp" // RapMap's with try_lock
 #include "Transcript.hpp"
 #include "UtilityFunctions.hpp"
-#include "PuffoutFilePointer.h"
+#include "PuffoutFilePointer.hpp"
 
 // Logger includes
 #include "spdlog/spdlog.h"

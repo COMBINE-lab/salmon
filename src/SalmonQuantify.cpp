@@ -94,7 +94,7 @@
 #include "SalmonMath.hpp"
 #include "SalmonUtils.hpp"
 #include "Transcript.hpp"
-#include "PuffoutParser.h"
+#include "PuffoutParser.hpp"
 
 #include "AlignmentGroup.hpp"
 #include "BiasParams.hpp"
@@ -1934,88 +1934,89 @@ void processReadLibrary(
   bool isPairedEnd = rl.format().type == ReadType::PAIRED_END;
   bool isSingleEnd = rl.format().type == ReadType::SINGLE_END;
 
-  if (isPairedEnd) {
+  // TODO : @fataltes : Again, this is a bit of a temporary hack. I don't
+  // like the special case of having to check for the indexType here.
+  if (indexType != SalmonIndexType::PUFFERFISH_OUTPUT) {
+    if (isPairedEnd) {
+      if (rl.mates1().size() != rl.mates2().size()) {
+        salmonOpts.jointLog->error("The number of provided files for "
+                                   "-1 and -2 must be the same!");
+        std::exit(1);
+      }
 
-        if (indexType != SalmonIndexType::PUFFERFISH_OUTPUT) {
-            if (rl.mates1().size() != rl.mates2().size()) {
-                salmonOpts.jointLog->error("The number of provided files for "
-                                           "-1 and -2 must be the same!");
-                std::exit(1);
-            }
-
-            size_t numFiles = rl.mates1().size() + rl.mates2().size();
-            uint32_t numParsingThreads{1};
-            // HACK!
-            if (rl.mates1().size() > 1 and numThreads > 8) {
-                numParsingThreads = 2;
-            }
-            pairedParserPtr.reset(new paired_parser(rl.mates1(), rl.mates2(),
-                                                    numThreads, numParsingThreads,
-                                                    miniBatchSize));
-            pairedParserPtr->start();
-        }
-  } else if (isSingleEnd) {
-    uint32_t numParsingThreads{1};
-    // HACK!
-    if (rl.unmated().size() > 1 and numThreads > 8) {
-      numParsingThreads = 2;
+      size_t numFiles = rl.mates1().size() + rl.mates2().size();
+      uint32_t numParsingThreads{1};
+      // HACK!
+      if (rl.mates1().size() > 1 and numThreads > 8) {
+        numParsingThreads = 2;
+      }
+      pairedParserPtr.reset(new paired_parser(rl.mates1(), rl.mates2(),
+                                              numThreads, numParsingThreads,
+                                              miniBatchSize));
+      pairedParserPtr->start();
+    } else if (isSingleEnd) {
+      uint32_t numParsingThreads{1};
+      // HACK!
+      if (rl.unmated().size() > 1 and numThreads > 8) {
+        numParsingThreads = 2;
+      }
+      singleParserPtr.reset(new single_parser(rl.unmated(), numThreads,
+                                              numParsingThreads, miniBatchSize));
+      singleParserPtr->start();
     }
-    singleParserPtr.reset(new single_parser(rl.unmated(), numThreads,
-                                            numParsingThreads, miniBatchSize));
-    singleParserPtr->start();
   }
 
   switch (indexType) {
-    case SalmonIndexType::FMD: {
-      fmt::MemoryWriter infostr;
-      infostr << "This version of salmon does not support FMD indexing.";
-      throw std::invalid_argument(infostr.str());
-    } break;
-    case SalmonIndexType::QUASI: {
-      // True if we have a 64-bit SA index, false otherwise
-      bool largeIndex = sidx->is64BitQuasi();
-      bool perfectHashIndex = sidx->isPerfectHashQuasi();
-      for (size_t i = 0; i < numThreads; ++i) {
-        // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
-        // change value before the lambda below is evaluated --- crazy!
-        if (largeIndex) {
-          if (perfectHashIndex) { // Perfect Hash
-            if (isPairedEnd) {processFunctor(i, pairedParserPtr, sidx->quasiIndexPerfectHash64());}
-            else if (isSingleEnd) {processFunctor(i, singleParserPtr, sidx->quasiIndexPerfectHash64());}
-          } else { // Dense Hash
-            if (isPairedEnd) {processFunctor(i, pairedParserPtr, sidx->quasiIndex64());}
-            else if (isSingleEnd) {processFunctor(i, singleParserPtr, sidx->quasiIndex64());}
-          }
-        } else {
-          if (perfectHashIndex) { // Perfect Hash
-            if (isPairedEnd) { processFunctor(i, pairedParserPtr, sidx->quasiIndexPerfectHash32()); }
-            else if (isSingleEnd) { processFunctor(i, singleParserPtr, sidx->quasiIndexPerfectHash32()); }
-          } else { // Dense Hash
-            if (isPairedEnd) { processFunctor(i, pairedParserPtr, sidx->quasiIndex32()); }
-            else if (isSingleEnd) { processFunctor(i, singleParserPtr, sidx->quasiIndex32()); }
-          }
-        } // End spawn current thread
+  case SalmonIndexType::FMD: {
+    fmt::MemoryWriter infostr;
+    infostr << "This version of salmon does not support FMD indexing.";
+    throw std::invalid_argument(infostr.str());
+  } break;
+  case SalmonIndexType::QUASI: {
+    // True if we have a 64-bit SA index, false otherwise
+    bool largeIndex = sidx->is64BitQuasi();
+    bool perfectHashIndex = sidx->isPerfectHashQuasi();
+    for (size_t i = 0; i < numThreads; ++i) {
+      // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
+      // change value before the lambda below is evaluated --- crazy!
+      if (largeIndex) {
+        if (perfectHashIndex) { // Perfect Hash
+          if (isPairedEnd) {processFunctor(i, pairedParserPtr, sidx->quasiIndexPerfectHash64());}
+          else if (isSingleEnd) {processFunctor(i, singleParserPtr, sidx->quasiIndexPerfectHash64());}
+        } else { // Dense Hash
+          if (isPairedEnd) {processFunctor(i, pairedParserPtr, sidx->quasiIndex64());}
+          else if (isSingleEnd) {processFunctor(i, singleParserPtr, sidx->quasiIndex64());}
+        }
+      } else {
+        if (perfectHashIndex) { // Perfect Hash
+          if (isPairedEnd) { processFunctor(i, pairedParserPtr, sidx->quasiIndexPerfectHash32()); }
+          else if (isSingleEnd) { processFunctor(i, singleParserPtr, sidx->quasiIndexPerfectHash32()); }
+        } else { // Dense Hash
+          if (isPairedEnd) { processFunctor(i, pairedParserPtr, sidx->quasiIndex32()); }
+          else if (isSingleEnd) { processFunctor(i, singleParserPtr, sidx->quasiIndex32()); }
+        }
+      } // End spawn current thread
 
-                } // End spawn all threads
-            }   // End Quasi index
-                break;
-            case SalmonIndexType::PUFFERFISH_OUTPUT: {
-                //std::cerr << "salmon quantify -- processReadLibrary -- pufferfish output -- start\n";
-                for (size_t i = 0; i < numThreads; ++i) {
-                    auto threadFun = [&, i]() -> void {
-                        processMappingsPufferfish(readExp, rl, structureVec[i],
-                                                  numObservedFragments, numAssignedFragments, numValidHits,
-                                                  upperBoundHits, transcripts, fmCalc,
-                                                  clusterForest, fragLengthDist, observedBiasParams[i],
-                                                  salmonOpts, coverageThresh, iomutex, initialRound,
-                                                  burnedIn, writeToCache);
-                    };
-                    threads.emplace_back(threadFun);
-                }
-                //std::cerr << "salmon quantify -- processReadLibrary -- pufferfish output -- end\n";
-            } // End Pufferfish Output
-                break;
-        } // end switch
+    } // End spawn all threads
+  }   // End Quasi index
+    break;
+  case SalmonIndexType::PUFFERFISH_OUTPUT: {
+    //std::cerr << "salmon quantify -- processReadLibrary -- pufferfish output -- start\n";
+    for (size_t i = 0; i < numThreads; ++i) {
+      auto threadFun = [&, i]() -> void {
+        processMappingsPufferfish(readExp, rl, structureVec[i],
+                                  numObservedFragments, numAssignedFragments, numValidHits,
+                                  upperBoundHits, transcripts, fmCalc,
+                                  clusterForest, fragLengthDist, observedBiasParams[i],
+                                  salmonOpts, coverageThresh, iomutex, initialRound,
+                                  burnedIn, writeToCache);
+      };
+      threads.emplace_back(threadFun);
+    }
+    //std::cerr << "salmon quantify -- processReadLibrary -- pufferfish output -- end\n";
+  } // End Pufferfish Output
+    break;
+  } // end switch
 
   for (auto& t : threads) {
     t.join();

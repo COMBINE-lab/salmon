@@ -15,8 +15,7 @@
  * its paired-end status, the reads that should appear on the forward and
  * reverse strand, and the relative orientation of the reads.
  */
-class
-ReadLibrary {
+class ReadLibrary {
 public:
   /**
    * Construct a new ReadLibrary of the given format
@@ -264,7 +263,7 @@ public:
     } else { // single end
       size_t n = unmatedFilenames_.size();
       if (n == 0) {
-        sstr << "LIBRARY INVALID --- You mus files with "
+        sstr << "LIBRARY INVALID --- You must provide unmated read files with "
                 "a single-end library type";
       } else {
         sstr << "[ ";

@@ -9,7 +9,7 @@
 #include <fstream>
 #include <iostream>
 
-#include "PuffoutFilePointer.h"
+#include "PuffoutFilePointer.hpp"
 #include "AlignmentGroup.hpp"
 #include "RapMapUtils.hpp"
 
