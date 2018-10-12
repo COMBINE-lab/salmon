@@ -717,9 +717,29 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
   LibraryFormat seFormat(ReadType::SINGLE_END, ReadOrientation::NONE,
                          ReadStrandedness::U);
 
-  auto isAutoLibType = [](std::string& fmt) -> bool {
-    return (fmt.length() == 1 and (fmt.front() == 'a' or fmt.front() == 'A'));
-  };
+  std::vector <ReadLibrary> libs;
+
+  bool isInputPufferfishOutput = false;
+  for (auto& opt : orderedOptions.options) {
+    if (opt.string_key == "index") {
+      if (opt.value[0] == "none") {
+        isInputPufferfishOutput = true;
+      }
+    }
+  }
+  if (isInputPufferfishOutput) {
+    libs.push_back(peFormat);
+    libs.back().setInputIsPufferfishOutput();
+    for (auto& opt : orderedOptions.options) {
+      if (opt.string_key == "unmatedReads") {
+        libs.back().addPufferfishOutput(opt.value);
+      }
+    }
+  }
+  else {
+    auto isAutoLibType = [](std::string &fmt) -> bool {
+        return (fmt.length() == 1 and (fmt.front() == 'a' or fmt.front() == 'A'));
+    };
 
   auto log = spdlog::get("jointLog");
 
@@ -793,7 +813,8 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
     }
   }
 
-  std::vector<ReadLibrary> libs;
+  // bad shadowed variable --- go home.
+  // std::vector<ReadLibrary> libs;
 
   // @Avi : Allow this temporarily for now, since there is some use to hijack
   // this behavior in Alevin.  However, we should figure out a proper parsing
@@ -827,11 +848,13 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
     libs.push_back(lib);
   }
 
-  size_t numLibs = libs.size();
-  if (numLibs == 1) {
-    log->info("There is 1 library.");
-  } else if (numLibs > 1) {
-    log->info("There are {} libraries.", numLibs);
+    //auto log = spdlog::get("jointLog");
+    size_t numLibs = libs.size();
+    if (numLibs == 1) {
+      log->info("There is 1 library.");
+    } else if (numLibs > 1) {
+      log->info("There are {} libraries.", numLibs);
+    }
   }
   return libs;
 }

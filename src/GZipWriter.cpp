@@ -844,10 +844,13 @@ bool GZipWriter::writeAbundances(const SalmonOpts& sopt, ExpT& readExp) {
   }
 
   double tfracDenom{0.0};
+  //double s = 0;
   for (auto& transcript : transcripts_) {
+    //s += transcript.projectedCounts;
     double refLength = transcript.EffectiveLength;
     tfracDenom += (transcript.projectedCounts / numMappedFrags) / refLength;
   }
+  //std::cerr << "sum is : " << s << "\n";
 
   double million = 1000000.0;
   // Now posterior has the transcript fraction

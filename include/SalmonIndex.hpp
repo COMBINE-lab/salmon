@@ -42,7 +42,7 @@ public:
     versionInfo_.load(versionPath);
     if (versionInfo_.indexVersion() == 0) {
       fmt::MemoryWriter infostr;
-      infostr << "Error: The index version file " << versionPath.string()
+      infostr << "SalmonIndex Error: The index version file " << versionPath.string()
               << " doesn't seem to exist.  Please try re-building the salmon "
                  "index.";
       throw std::invalid_argument(infostr.str());
@@ -50,17 +50,27 @@ public:
     // Check index version compatibility here
 
     auto indexType = versionInfo_.indexType();
-    // Load the appropriate index type
-    if (indexType == SalmonIndexType::FMD) {
-      fmt::MemoryWriter infostr;
-      infostr << "Error: This version of salmon does not support FMD indexing.";
-      throw std::invalid_argument(infostr.str());
-    } else {
-      loadQuasiIndex_(indexDir);
-    }
-
-    loaded_ = true;
+    load(indexDir, indexType);
   }
+
+    void load(const boost::filesystem::path& indexDir, SalmonIndexType indexType) {
+      versionInfo_.indexType(indexType);
+      // Load the appropriate index type
+      switch (indexType) {
+          case SalmonIndexType::QUASI:
+              loadQuasiIndex_(indexDir); break;
+          case SalmonIndexType::PUFFERFISH_OUTPUT:
+              logger_->info("salmon index -- pufferfish output (no index)");
+              break;
+          case SalmonIndexType::FMD:
+              fmt::MemoryWriter infostr;
+              infostr << "Error: This version of salmon does not support FMD indexing.";
+              throw std::invalid_argument(infostr.str());
+              break;
+      }
+
+      loaded_ = true;
+    }
 
   bool build(boost::filesystem::path indexDir, std::vector<std::string>& argVec,
              uint32_t k) {

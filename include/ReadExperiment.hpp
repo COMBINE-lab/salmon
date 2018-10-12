@@ -19,6 +19,7 @@
 #include "SpinLock.hpp" // RapMap's with try_lock
 #include "Transcript.hpp"
 #include "UtilityFunctions.hpp"
+#include "PuffoutFilePointer.h"
 
 // Logger includes
 #include "spdlog/spdlog.h"
@@ -26,6 +27,7 @@
 // Boost includes
 #include <boost/filesystem.hpp>
 #include <boost/range/irange.hpp>
+#include <boost/algorithm/string.hpp>
 
 // Cereal includes
 #include "cereal/archives/json.hpp"
@@ -116,24 +118,32 @@ public:
     */
 
     // ==== Figure out the index type
-    boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
-    SalmonIndexVersionInfo versionInfo;
-    versionInfo.load(versionPath);
-    if (versionInfo.indexVersion() == 0) {
-      fmt::MemoryWriter infostr;
-      infostr << "Error: The index version file " << versionPath.string()
-              << " doesn't seem to exist.  Please try re-building the salmon "
-                 "index.";
-      throw std::invalid_argument(infostr.str());
-    }
+
     // Check index version compatibility here
-    auto indexType = versionInfo.indexType();
+    SalmonIndexVersionInfo versionInfo;
+    if (boost::iequals(indexDirectory.string(), "none")) {
+      std::cerr << "Index Type: None, Input type: Pufferfish pam file\n";
+      versionInfo.indexType(SalmonIndexType::PUFFERFISH_OUTPUT); // pufferfish output without index
+    }
+    else {
+      boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
+      versionInfo.load(versionPath);
+      if (versionInfo.indexVersion() == 0) {
+        fmt::MemoryWriter infostr;
+        infostr << "ReadExperiment Error: The index version file " << versionPath.string()
+                << " doesn't seem to exist.  Please try re-building the salmon "
+                   "index.";
+        throw std::invalid_argument(infostr.str());
+      }
+
+    }
+
     // ==== Figure out the index type
+    auto indexType = versionInfo.indexType();
 
     salmonIndex_.reset(new SalmonIndex(sopt.jointLog, indexType));
-    salmonIndex_->load(indexDirectory);
-
-    // Now we'll have either an FMD-based index or a QUASI index
+    salmonIndex_->load(indexDirectory, indexType);
+    // Now we'll have either an FMD-based index, a QUASI index, or a Pufferfish index
     // dispatch on the correct type.
     fmt::MemoryWriter infostr;
 
@@ -159,6 +169,10 @@ public:
       infostr << "Error: This version of salmon does not support the FMD index mode.";
       throw std::invalid_argument(infostr.str());
       break;
+    case SalmonIndexType::PUFFERFISH_OUTPUT:
+      puffoutFilePointer_ = new PuffoutFilePointer(readLibraries_[0].pufferfishOutput()[0]);
+      loadTranscriptsFromPuffOut();
+      break;
     }
 
     // Create the cluster forest for this set of transcripts
@@ -172,6 +186,7 @@ public:
   std::string getIndexSeqHash512() const { return salmonIndex_->seqHash512(); }
   std::string getIndexNameHash512() const { return salmonIndex_->nameHash512(); }
 
+    PuffoutFilePointer *getPuffoutFilePointer() { return puffoutFilePointer_; }
   std::vector<Transcript>& transcripts() { return transcripts_; }
   const std::vector<Transcript>& transcripts() const { return transcripts_; }
 
@@ -320,7 +335,40 @@ public:
     setTranscriptLengthClasses_(lengths, posBiasFW_.size());
   }
 
-  template <typename CallbackT>
+
+    void loadTranscriptsFromPuffOut() {
+        size_t numRecords = puffoutFilePointer_->numRefs();
+        auto log = spdlog::get("jointLog");
+
+        log->info("Index contained {} targets", numRecords);
+        // transcripts_.resize(numRecords);
+        std::vector<uint32_t> lengths;
+        lengths.reserve(numRecords);
+        double alpha = 0.005;
+        for (auto i : boost::irange(size_t(0), numRecords)) {
+            uint32_t id = i;
+            std::string name = puffoutFilePointer_->refName(i);
+            uint32_t len = puffoutFilePointer_->refLength(i);
+            // copy over the length, then we're done.
+            transcripts_.emplace_back(id, name.c_str(), len, alpha);
+            auto &txp = transcripts_.back();
+            /*txp.setCompleteLength(idx_->txpCompleteLens[i]);
+            // The transcript sequence
+            // auto txpSeq = idx_->seq.substr(idx_->txpOffsets[i], len);
+
+            // Set the transcript sequence
+            txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i],
+                                    sopt.gcBiasCorrect, sopt.reduceGCMemory);*/
+            lengths.push_back(txp.RefLength);
+            //std::cerr << "txp len:" << txp.RefLength << "\n";
+
+        }
+        // ====== Done loading the transcripts from file
+        setTranscriptLengthClasses_(lengths, posBiasFW_.size());
+        log->info("read experiment | loaded transcripts from puffout -- pufferfish output");
+    }
+
+    template <typename CallbackT>
   bool processReads(const uint32_t& numThreads, const SalmonOpts& sopt,
                     CallbackT& processReadLibrary) {
     std::atomic<bool> burnedIn{
@@ -758,6 +806,7 @@ private:
   // std::array<std::vector<double>, 2> expectedBias_;
   std::vector<double> expectedBias_;
   std::vector<double> conditionalMeans_;
+    PuffoutFilePointer *puffoutFilePointer_{nullptr};
 };
 
 #endif // EXPERIMENT_HPP

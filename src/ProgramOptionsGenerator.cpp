@@ -362,7 +362,7 @@ namespace salmon {
      "The number of bins into which to divide "
      "each read when learning and applying the error model.  For example, a "
      "value of 10 would mean that "
-     "effectively, a separate error model is leared and applied to each 10th "
+     "effectively, a separate error model is learned and applied to each 10th "
      "of the read, while a value of "
      "3 would mean that a separate error model is applied to the read "
      "beginning (first third), middle (second third) "

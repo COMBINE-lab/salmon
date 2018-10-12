@@ -15,7 +15,8 @@
  * its paired-end status, the reads that should appear on the forward and
  * reverse strand, and the relative orientation of the reads.
  */
-class ReadLibrary {
+class
+ReadLibrary {
 public:
   /**
    * Construct a new ReadLibrary of the given format
@@ -32,6 +33,8 @@ public:
       : fmt_(rl.fmt_), unmatedFilenames_(rl.unmatedFilenames_),
         mateOneFilenames_(rl.mateOneFilenames_),
         mateTwoFilenames_(rl.mateTwoFilenames_),
+        isInputPufferfishOutput_(rl.isInputPufferfishOutput_),
+        pufferfishFilenames_(rl.pufferfishFilenames_),
         libTypeCounts_(std::vector<std::atomic<uint64_t>>(
             LibraryFormat::maxLibTypeID() + 1)) {
     size_t mc = LibraryFormat::maxLibTypeID() + 1;
@@ -51,6 +54,8 @@ public:
       : fmt_(rl.fmt_), unmatedFilenames_(std::move(rl.unmatedFilenames_)),
         mateOneFilenames_(std::move(rl.mateOneFilenames_)),
         mateTwoFilenames_(std::move(rl.mateTwoFilenames_)),
+        isInputPufferfishOutput_(rl.isInputPufferfishOutput_),
+        pufferfishFilenames_(rl.pufferfishFilenames_),
         libTypeCounts_(std::vector<std::atomic<uint64_t>>(
             LibraryFormat::maxLibTypeID() + 1)) {
     size_t mc = LibraryFormat::maxLibTypeID() + 1;
@@ -86,12 +91,20 @@ public:
     unmatedFilenames_ = unmatedFilenames;
   }
 
-  /**
+    /**
+     * Add files containing pufferfish mapping outputs.
+     */
+    void addPufferfishOutput(const std::vector<std::string>& pufferfishFilenames) {
+      pufferfishFilenames_ = pufferfishFilenames;
+    }
+
+    /**
    * Return true if this read library is for paired-end reads and false
    * otherwise.
    */
   bool isPairedEnd() { return (fmt_.type == ReadType::PAIRED_END); }
 
+  bool isInputPufferfishOutput() { return isInputPufferfishOutput_;}
   /**
    * If this is set, attempt to automatically detect this library's type
    */
@@ -217,7 +230,21 @@ public:
 
   std::string readFilesAsString() {
     std::stringstream sstr;
-    if (isPairedEnd()) {
+    if (isInputPufferfishOutput()) {
+      size_t n = pufferfishFilenames_.size();
+      if (n == 0) {
+        sstr << "LIBRARY INVALID --- You must provide pufferfish output files with "
+                "a pufferfish library type (when index is none you should set value for unmated file)";
+      } else {
+        for (size_t i = 0; i < n; ++i) {
+          sstr << pufferfishFilenames_[i];
+          if (i != n - 1) {
+            sstr << ", ";
+          }
+        }
+      }
+    }
+    else if (isPairedEnd()) {
       size_t n1 = mateOneFilenames_.size();
       size_t n2 = mateTwoFilenames_.size();
       if (n1 == 0 or n2 == 0 or n1 != n2) {
@@ -237,7 +264,7 @@ public:
     } else { // single end
       size_t n = unmatedFilenames_.size();
       if (n == 0) {
-        sstr << "LIBRARY INVALID --- You must provide unmated read files with "
+        sstr << "LIBRARY INVALID --- You mus files with "
                 "a single-end library type";
       } else {
         sstr << "[ ";
@@ -261,6 +288,7 @@ public:
    */
   void checkValid() {
 
+    if (isInputPufferfishOutput_) return;
     bool readsOK{true};
 
     std::stringstream errorStream;
@@ -317,6 +345,11 @@ public:
    */
   const std::vector<std::string>& unmated() const { return unmatedFilenames_; }
 
+    /**
+   * Return the vector of files containing the pufferfish mapping outputs for the library.
+   */
+    const std::vector<std::string>& pufferfishOutput() const { return pufferfishFilenames_; }
+
   /**
    * Return the LibraryFormat object describing the format of this read library.
    */
@@ -329,6 +362,7 @@ public:
     numCompat_ += numCompat;
   }
 
+  inline void setInputIsPufferfishOutput() { isInputPufferfishOutput_ = true;}
   uint64_t numCompat() const { return numCompat_; }
 
   /**
@@ -352,6 +386,8 @@ private:
   std::vector<std::atomic<uint64_t>> libTypeCounts_;
   std::atomic<uint64_t> numCompat_;
   std::unique_ptr<LibraryTypeDetector> detector_{nullptr};
+  std::vector<std::string> pufferfishFilenames_;
+  bool isInputPufferfishOutput_{false};
 };
 
 #endif // READ_LIBRARY_HPP

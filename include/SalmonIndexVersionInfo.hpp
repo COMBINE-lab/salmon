@@ -4,8 +4,9 @@
 #include "boost/filesystem.hpp"
 #include "cereal/archives/json.hpp"
 #include "spdlog/fmt/fmt.h"
+#include <boost/algorithm/string.hpp>
 
-enum class SalmonIndexType : uint8_t { FMD, QUASI };
+enum class SalmonIndexType : uint8_t { FMD, QUASI, /*PUFFERFISH, */PUFFERFISH_OUTPUT };
 
 class SalmonIndexVersionInfo {
 public:
@@ -25,23 +26,29 @@ public:
    * Read the index version info from file
    */
   bool load(boost::filesystem::path& versionFile) {
-    namespace bfs = boost::filesystem;
-    if (!bfs::exists(versionFile)) {
-      fmt::MemoryWriter infostr;
-      infostr << "Error: The index version file " << versionFile.string()
-              << " doesn't seem to exist.  Please try re-building the salmon "
-                 "index.";
-      throw std::invalid_argument(infostr.str());
+    if (boost::iequals(versionFile.string(), "none")) {
+      std::cerr << "Index Type: None, Input type: Pufferfish pam file\n";
+      indexType_ = SalmonIndexType::PUFFERFISH_OUTPUT; // pufferfish output without index
     }
-    std::ifstream ifs(versionFile.string());
-    {
-      cereal::JSONInputArchive iarchive(ifs); // Create an input archive
-      iarchive(cereal::make_nvp("indexVersion", indexVersion_),
-               cereal::make_nvp("hasAuxIndex", hasAuxKmerIndex_),
-               cereal::make_nvp("auxKmerLength", auxKmerLength_),
-               cereal::make_nvp("indexType", indexType_));
+    else {
+      namespace bfs = boost::filesystem;
+      if (!bfs::exists(versionFile)) {
+        fmt::MemoryWriter infostr;
+        infostr << "SalmonIndexVersionInfo Error: The index version file " << versionFile.string()
+                << " doesn't seem to exist.  Please try re-building the salmon "
+                   "index.";
+        throw std::invalid_argument(infostr.str());
+      }
+      std::ifstream ifs(versionFile.string());
+      {
+        cereal::JSONInputArchive iarchive(ifs); // Create an input archive
+        iarchive(cereal::make_nvp("indexVersion", indexVersion_),
+                 cereal::make_nvp("hasAuxIndex", hasAuxKmerIndex_),
+                 cereal::make_nvp("auxKmerLength", auxKmerLength_),
+                 cereal::make_nvp("indexType", indexType_));
+      }
+      ifs.close();
     }
-    ifs.close();
     return true;
   }
 

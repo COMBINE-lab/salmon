@@ -94,6 +94,7 @@
 #include "SalmonMath.hpp"
 #include "SalmonUtils.hpp"
 #include "Transcript.hpp"
+#include "PuffoutParser.h"
 
 #include "AlignmentGroup.hpp"
 #include "BiasParams.hpp"
@@ -1508,7 +1509,6 @@ void processReadsQuasi(
   mc.maxSlack = salmonOpts.consensusSlack;
 
   rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> hcInfo;
-
   SACollector<RapMapIndexT> hitCollector(qidx);
   if (salmonOpts.fasterMapping) {
     hitCollector.enableNIP();
@@ -1810,8 +1810,49 @@ void processReadsQuasi(
 
 /// DONE QUASI
 
+/// START PUFFERFISH
+void processMappingsPufferfish(
+        ReadExperimentT &readExp, ReadLibrary &rl,
+        AlnGroupVec<QuasiAlignment> &structureVec,
+        std::atomic <uint64_t> &numObservedFragments,
+        std::atomic <uint64_t> &numAssignedFragments,
+        std::atomic <uint64_t> &validHits, std::atomic <uint64_t> &upperBoundHits,
+        std::vector <Transcript> &transcripts,
+        ForgettingMassCalculator &fmCalc, ClusterForest &clusterForest,
+        FragmentLengthDistribution &fragLengthDist, BiasParams &observedBiasParams,
+        /**
+         * NOTE : test new el model in future
+         * EffectiveLengthStats& obsEffLengths,
+         **/
+        SalmonOpts &salmonOpts, double coverageThresh,
+        std::mutex &iomutex, bool initialRound, std::atomic<bool> &burnedIn,
+        volatile bool &writeToCache) {
+    uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
+    // Seed with a real random value, if available
+    std::random_device rd;
 
-template <typename AlnT>
+    // Create a random uniform distribution
+    std::default_random_engine eng(rd());
+
+    uint64_t prevObservedFrags{1};
+    double maxZeroFrac{0.0};
+    PuffoutParser puffoutParser;
+    while (puffoutParser.nextChunkOfAlignments(readExp.getPuffoutFilePointer(), structureVec, iomutex)) {
+        //prevObservedFrags = numObservedFragments;
+        AlnGroupVecRange<QuasiAlignment> hitLists = {structureVec.begin(), structureVec.begin() + puffoutParser.getReadCnt()};
+        processMiniBatch<QuasiAlignment>(
+                readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
+                transcripts, clusterForest, fragLengthDist, observedBiasParams,
+                numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac);
+        numObservedFragments += puffoutParser.getReadCnt();
+        upperBoundHits += puffoutParser.getReadCnt();
+    }
+
+}
+
+/// DONE PUFFERFISH
+
+template<typename AlnT>
 void processReadLibrary(
     ReadExperimentT& readExp, ReadLibrary& rl, SalmonIndex* sidx,
     std::vector<Transcript>& transcripts, ClusterForest& clusterForest,
@@ -1822,7 +1863,7 @@ void processReadLibrary(
     std::atomic<uint64_t>& upperBoundHits, // upper bound on # of mapped frags
     bool initialRound, std::atomic<bool>& burnedIn,
     ForgettingMassCalculator& fmCalc,
-    FragmentLengthDistribution& fragLengthDist, 
+    FragmentLengthDistribution& fragLengthDist,
     SalmonOpts& salmonOpts, double coverageThresh, bool greedyChain,
     std::mutex& iomutex, size_t numThreads,
     std::vector<AlnGroupVec<AlnT>>& structureVec, volatile bool& writeToCache) {
@@ -1893,22 +1934,24 @@ void processReadLibrary(
 
   if (isPairedEnd) {
 
-    if (rl.mates1().size() != rl.mates2().size()) {
-      salmonOpts.jointLog->error("The number of provided files for "
-                                 "-1 and -2 must be the same!");
-      std::exit(1);
-    }
+        if (indexType != SalmonIndexType::PUFFERFISH_OUTPUT) {
+            if (rl.mates1().size() != rl.mates2().size()) {
+                salmonOpts.jointLog->error("The number of provided files for "
+                                           "-1 and -2 must be the same!");
+                std::exit(1);
+            }
 
-    size_t numFiles = rl.mates1().size() + rl.mates2().size();
-    uint32_t numParsingThreads{1};
-    // HACK!
-    if (rl.mates1().size() > 1 and numThreads > 8) {
-      numParsingThreads = 2;
-    }
-    pairedParserPtr.reset(new paired_parser(rl.mates1(), rl.mates2(),
-                                            numThreads, numParsingThreads,
-                                            miniBatchSize));
-    pairedParserPtr->start();
+            size_t numFiles = rl.mates1().size() + rl.mates2().size();
+            uint32_t numParsingThreads{1};
+            // HACK!
+            if (rl.mates1().size() > 1 and numThreads > 8) {
+                numParsingThreads = 2;
+            }
+            pairedParserPtr.reset(new paired_parser(rl.mates1(), rl.mates2(),
+                                                    numThreads, numParsingThreads,
+                                                    miniBatchSize));
+            pairedParserPtr->start();
+        }
   } else if (isSingleEnd) {
     uint32_t numParsingThreads{1};
     // HACK!
@@ -1951,10 +1994,26 @@ void processReadLibrary(
           }
         } // End spawn current thread
 
-      } // End spawn all threads
-    }   // End Quasi index
-    break;
-  } // end switch
+                } // End spawn all threads
+            }   // End Quasi index
+                break;
+            case SalmonIndexType::PUFFERFISH_OUTPUT: {
+                //std::cerr << "salmon quantify -- processReadLibrary -- pufferfish output -- start\n";
+                for (size_t i = 0; i < numThreads; ++i) {
+                    auto threadFun = [&, i]() -> void {
+                        processMappingsPufferfish(readExp, rl, structureVec[i],
+                                                  numObservedFragments, numAssignedFragments, numValidHits,
+                                                  upperBoundHits, transcripts, fmCalc,
+                                                  clusterForest, fragLengthDist, observedBiasParams[i],
+                                                  salmonOpts, coverageThresh, iomutex, initialRound,
+                                                  burnedIn, writeToCache);
+                    };
+                    threads.emplace_back(threadFun);
+                }
+                //std::cerr << "salmon quantify -- processReadLibrary -- pufferfish output -- end\n";
+            } // End Pufferfish Output
+                break;
+        } // end switch
 
   for (auto& t : threads) {
     t.join();
@@ -2375,11 +2434,6 @@ transcript abundance from RNA-seq reads
     }
     // ==== END: Library format processing ===
 
-    SalmonIndexVersionInfo versionInfo;
-    boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
-    versionInfo.load(versionPath);
-    auto idxType = versionInfo.indexType();
-
     ReadExperimentT experiment(readLibraries, indexDirectory, sopt);
 
     // This will be the class in charge of maintaining our
@@ -2411,23 +2465,31 @@ transcript abundance from RNA-seq reads
           }
         }
 
-        sopt.allowOrphans = !sopt.discardOrphansQuasi;
-        sopt.useQuasi = true;
-        quantifyLibrary<QuasiAlignment>(experiment, greedyChain, 
-                                        sopt, sopt.coverageThresh, sopt.numThreads);
-      } break;
-      }
-    } catch (const InsufficientAssignedFragments& iaf) {
-      sopt.jointLog->warn(iaf.what());
-      salmon::utils::writeCmdInfo(sopt, orderedOptions);
-      GZipWriter gzw(outputDirectory, jointLog);
-      gzw.writeEmptyAbundances(sopt, experiment);
-      // Write meta-information about the run
-      std::vector<std::string> errors{"insufficient_assigned_fragments"};
-      sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
-      gzw.writeEmptyMeta(sopt, experiment, errors);
-      std::exit(1);
-    }
+                    sopt.allowOrphans = !sopt.discardOrphansQuasi;
+                    sopt.useQuasi = true;
+                    quantifyLibrary<QuasiAlignment>(experiment, greedyChain,
+                                                    sopt, sopt.coverageThresh, sopt.numThreads);
+                }
+                    break;
+                case SalmonIndexType::PUFFERFISH_OUTPUT: {
+                    std::cerr << "salmon quantify 2 -- pufferfish output\n";
+                    sopt.useQuasi = true;
+                    quantifyLibrary<QuasiAlignment>(experiment, greedyChain, sopt, sopt.coverageThresh,
+                                                    sopt.numThreads);
+                }
+                    break;
+            }
+        } catch (const InsufficientAssignedFragments &iaf) {
+            sopt.jointLog->warn(iaf.what());
+            salmon::utils::writeCmdInfo(sopt, orderedOptions);
+            GZipWriter gzw(outputDirectory, jointLog);
+            gzw.writeEmptyAbundances(sopt, experiment);
+            // Write meta-information about the run
+            std::vector <std::string> errors{"insufficient_assigned_fragments"};
+            sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
+            gzw.writeEmptyMeta(sopt, experiment, errors);
+            std::exit(1);
+        }
 
     // Write out information about the command / run
     salmon::utils::writeCmdInfo(sopt, orderedOptions);

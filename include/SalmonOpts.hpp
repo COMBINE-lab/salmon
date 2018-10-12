@@ -262,6 +262,8 @@ struct SalmonOpts {
   std::vector<std::string> unmatedReadFiles;
   std::vector<std::string> mate1ReadFiles;
   std::vector<std::string> mate2ReadFiles;
+
+
 };
 
 #endif // SALMON_OPTS_HPP
