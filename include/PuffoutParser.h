@@ -77,7 +77,7 @@ public:
                     rLenType lcnt{0}, rcnt{0};
                     refLenType reflPos{0}, refrPos{0};
                     double reflScore{0}, refrScore{0};
-                    bool lori, rori;
+                    bool lori = false; bool rori = false;
                     chunk.fill(puff_id);
                     chunk.fill(lcnt);
                     if (puffoutFilePointer->isMappingPaired()) {
