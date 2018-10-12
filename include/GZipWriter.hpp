@@ -50,8 +50,14 @@ public:
                        std::vector<Transcript>& transcripts);
 
   bool writeAbundances(bool inDebugMode,
-                       std::string bcName,
-                       std::vector<double>& alphas);
+                       std::string& bcName,
+                       std::vector<double>& alphas,
+                       std::vector<uint8_t>& tiers);
+
+  bool writeBootstraps(bool inDebugMode,
+                       std::string& bcName,
+                       std::vector<double>& alphas,
+                       std::vector<double>& variance);
 
   template <typename ExpT>
   bool writeEmptyAbundances(const SalmonOpts& sopt, ExpT& readExp);
@@ -69,7 +75,11 @@ private:
   std::shared_ptr<spdlog::logger> logger_;
   std::unique_ptr<boost::iostreams::filtering_ostream> bsStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> countMatrixStream_{nullptr};
+  std::unique_ptr<boost::iostreams::filtering_ostream> meanMatrixStream_{nullptr};
+  std::unique_ptr<boost::iostreams::filtering_ostream> varMatrixStream_{nullptr};
+  std::unique_ptr<boost::iostreams::filtering_ostream> tierMatrixStream_{nullptr};
   std::unique_ptr<std::ofstream> bcNameStream_{nullptr};
+  std::unique_ptr<std::ofstream> bcBootNameStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> cellEQStream_{nullptr};
 // only one writer thread at a time
 #if defined __APPLE__

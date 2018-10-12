@@ -121,9 +121,9 @@ void densityCalculator(single_parser* parser,
 
       auto& rp = rg[i];
       std::string& seq = rp.seq;
-      if (aopt.protocol.end == bcEnd::THREE) {
-        std::reverse(seq.begin(), seq.end());
-      }
+      //if (aopt.protocol.end == bcEnd::THREE) {
+      //  std::reverse(seq.begin(), seq.end());
+      //}
 
       nonstd::optional<std::string> extractedBarcode = aut::extractBarcode(seq, aopt.protocol);
       bool seqOk = (extractedBarcode.has_value()) ? aut::sequenceCheck(*extractedBarcode) : false;
@@ -318,6 +318,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
   if (topxBarcodes == 0){
     aopt.jointLog->error("Can't find left Boundary.\n"
                          "Please Report this issue on github.");
+    aopt.jointLog->flush();
     exit(1);
   }
   else{
@@ -345,6 +346,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
                         invCovariance, normFactor);
     if (invCovariance == 0.0 or normFactor == 0.0){
       aopt.jointLog->error("Wrong invCovariance/Normfactor");
+      aopt.jointLog->flush();
       exit(1);
     }
 
@@ -553,8 +555,9 @@ bool writeFastq(AlevinOpts<ProtocolT>& aopt,
             nonstd::optional<std::string> extractedSeq = aut::extractBarcode(rp.first.seq, aopt.protocol);
             bool seqOk = (extractedSeq.has_value()) ? aut::sequenceCheck(*extractedSeq) : false;
             if (not seqOk){
-              std::cerr<<"Can't extract barcode";
-              return false;
+              continue;
+              //std::cerr<<"Can't extract barcode";
+              //return false;
             }
             barcode = *extractedSeq;
           }
@@ -567,13 +570,13 @@ bool writeFastq(AlevinOpts<ProtocolT>& aopt,
             }
           }
         }
-        else if (aopt.protocol.end == bcEnd::THREE) {
-          std::string seq = rp.first.seq;
-          std::reverse(seq.begin(), seq.end());
-          barcode = rp.first.seq.substr(0, aopt.protocol.barcodeLength);
-          umi = rp.first.seq.substr(aopt.protocol.barcodeLength,
-                                    aopt.protocol.umiLength);
-        }
+        //else if (aopt.protocol.end == bcEnd::THREE) {
+        //  std::string seq = rp.first.seq;
+        //  std::reverse(seq.begin(), seq.end());
+        //  barcode = rp.first.seq.substr(0, aopt.protocol.barcodeLength);
+        //  umi = rp.first.seq.substr(aopt.protocol.barcodeLength,
+        //                            aopt.protocol.umiLength);
+        //}
 
         bool inTrueBc = trueBarcodes.find(barcode) != trueBarcodes.end();
         auto it = barcodeMap.find(barcode);
@@ -731,6 +734,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
       if ( not indexOk){
         aopt.jointLog->error("Error: index not find in freq Counter\n"
                              "Please Report the issue on github");
+        aopt.jointLog->flush();
         exit(1);
       }
 
@@ -886,20 +890,19 @@ int salmonBarcoding(int argc, char* argv[]) {
   salmon::ProgramOptionsGenerator pogen;
 
   auto inputOpt = pogen.getMappingInputOptions(sopt);
-  auto basicOpt = pogen.getBasicOptions(sopt);
   auto mapSpecOpt = pogen.getMappingSpecificOptions(sopt);
   auto advancedOpt = pogen.getAdvancedOptions(numBiasSamples, sopt);
   auto hiddenOpt = pogen.getHiddenOptions(sopt);
   auto testingOpt = pogen.getTestingOptions(sopt);
   auto deprecatedOpt = pogen.getDeprecatedOptions(sopt);
-  auto alevinBasicOpt = pogen.getAlevinBasicOptions();
+  auto alevinBasicOpt = pogen.getAlevinBasicOptions(sopt);
   auto alevinDevsOpt = pogen.getAlevinDevsOptions();
 
   po::options_description all("alevin options");
-  all.add(inputOpt).add(alevinBasicOpt).add(alevinDevsOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt).add(testingOpt).add(hiddenOpt).add(deprecatedOpt);
+  all.add(inputOpt).add(alevinBasicOpt).add(alevinDevsOpt).add(mapSpecOpt).add(advancedOpt).add(testingOpt).add(hiddenOpt).add(deprecatedOpt);
 
   po::options_description visible("alevin options");
-  visible.add(inputOpt).add(alevinBasicOpt).add(basicOpt);
+  visible.add(inputOpt).add(alevinBasicOpt);
 
   po::variables_map vm;
   try {
@@ -961,7 +964,6 @@ salmon-based processing of single-cell RNA-seq data.
     barcodeFiles = sopt.mate1ReadFiles;
     readFiles = sopt.mate2ReadFiles;
     unmateFiles = sopt.unmatedReadFiles;
-    //
 
     if (dropseq){
       AlevinOpts<apt::DropSeq> aopt;

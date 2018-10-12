@@ -52,16 +52,18 @@ struct AlevinOpts {
   uint32_t numThreads;
   //threshold for the frequency of the barcodes
   uint32_t freqThreshold;
+  // sequences to trim from right in the read sequences
+  uint32_t trimRight;
   //no downstream salmon quant
   bool noQuant;
   // use correlation for white-listing
   bool useCorrelation;
   // don't run EM flag
-  bool doEM;
+  bool noEM;
   // Avoid segfaults based on no whitelist mapping
   bool debug;
   // perform naive deduplication
-  bool naive;
+  bool naiveEqclass;
   // perform eqclass level analysis instead of gene or txp level minsets
   bool eqClassLevel;
   // perform txp level analysis instead of gene level
@@ -74,6 +76,8 @@ struct AlevinOpts {
   uint32_t lowRegionMinNumBarcodes;
   // maximum number of barcodes to use
   uint32_t maxNumBarcodes;
+  // number of bootstraps to perform
+  uint32_t numBootstraps;
 
   // Related to the logger
   std::shared_ptr<spdlog::logger> jointLog{nullptr};

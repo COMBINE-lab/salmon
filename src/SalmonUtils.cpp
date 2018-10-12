@@ -42,6 +42,7 @@
 #include "TranscriptGeneMap.hpp"
 
 #include "StadenUtils.hpp"
+#include "SalmonDefaults.hpp"
 
 namespace salmon {
 namespace utils {
@@ -1414,6 +1415,14 @@ std::string getCurrentTimeAsString() {
   // If we have validate mappings, then make sure we automatically enable
   // range factorization
   if (sopt.validateMappings) {
+    if (!vm.count("minScoreFraction")) {
+      sopt.minScoreFraction = salmon::defaults::minScoreFraction;
+      sopt.jointLog->info(
+                          "Usage of --validateMappings implies use of minScoreFraction. "
+                          "Since not explicitly specified, it is being set to {}", sopt.minScoreFraction
+                          );
+    }
+
     if (sopt.rangeFactorizationBins < 4) {
       uint32_t nbins{4};
       sopt.jointLog->info(

@@ -28,6 +28,18 @@ GZipWriter::~GZipWriter() {
   if (countMatrixStream_) {
     countMatrixStream_->reset();
   }
+  if (tierMatrixStream_) {
+    tierMatrixStream_->reset();
+  }
+  if (meanMatrixStream_) {
+    meanMatrixStream_->reset();
+  }
+  if (varMatrixStream_) {
+    varMatrixStream_->reset();
+  }
+  if (bcBootNameStream_) {
+    bcNameStream_->close();
+  }
   if (bcNameStream_) {
     bcNameStream_->close();
   }
@@ -39,6 +51,18 @@ void GZipWriter::close_all_streams(){
   }
   if (countMatrixStream_) {
     countMatrixStream_->reset();
+  }
+  if (tierMatrixStream_) {
+    tierMatrixStream_->reset();
+  }
+  if (meanMatrixStream_) {
+    meanMatrixStream_->reset();
+  }
+  if (varMatrixStream_) {
+    varMatrixStream_->reset();
+  }
+  if (bcBootNameStream_) {
+    varMatrixStream_->reset();
   }
   if (bcNameStream_) {
     bcNameStream_->close();
@@ -665,9 +689,63 @@ bool GZipWriter::writeAbundances(
   return true;
 }
 
+bool GZipWriter::writeBootstraps(bool inDebugMode,
+                                 std::string& bcName,
+                                 std::vector<double>& alphas,
+                                 std::vector<double>& variance){
+#if defined __APPLE__
+  spin_lock::scoped_lock sl(writeMutex_);
+#else
+  std::lock_guard<std::mutex> lock(writeMutex_);
+#endif
+  namespace bfs = boost::filesystem;
+  if (!meanMatrixStream_) {
+    meanMatrixStream_.reset(new boost::iostreams::filtering_ostream);
+    meanMatrixStream_->push(boost::iostreams::gzip_compressor(6));
+    auto meanMatFilename = path_ / "alevin" / "quants_mean_mat.gz";
+    meanMatrixStream_->push(boost::iostreams::file_sink(meanMatFilename.string(),
+                                                         std::ios_base::out | std::ios_base::binary));
+
+    varMatrixStream_.reset(new boost::iostreams::filtering_ostream);
+    varMatrixStream_->push(boost::iostreams::gzip_compressor(6));
+    auto varMatFilename = path_ / "alevin" / "quants_var_mat.gz";
+    varMatrixStream_->push(boost::iostreams::file_sink(varMatFilename.string(),
+                                                       std::ios_base::out | std::ios_base::binary));
+
+    auto bcBootNameFilename = path_ / "alevin" / "quants_boot_rows.txt";
+    bcBootNameStream_.reset(new std::ofstream);
+    bcBootNameStream_->open(bcBootNameFilename.string());
+  }
+
+  boost::iostreams::filtering_ostream& countfile = *meanMatrixStream_;
+  boost::iostreams::filtering_ostream& varfile = *varMatrixStream_;
+  std::ofstream& namefile = *bcBootNameStream_;
+
+  size_t num = alphas.size();
+  if (alphas.size() != variance.size()){
+    std::cerr<<"ERROR: Quants matrix and varicance matrix size differs"<<std::flush;
+    exit(1);
+  }
+  size_t elSize = sizeof(typename std::vector<double>::value_type);
+  countfile.write(reinterpret_cast<char*>(alphas.data()),
+                  elSize * num);
+  varfile.write(reinterpret_cast<char*>(variance.data()),
+                  elSize * num);
+
+  double total_counts = std::accumulate(alphas.begin(), alphas.end(), 0.0);
+  if ( not inDebugMode and not (total_counts > 0.0)){
+    std::cout<< "ERROR: cell doesn't have any read count" << std::flush;
+    exit(1);
+  }
+  namefile << std::endl;
+  namefile.write(bcName.c_str(), bcName.size());
+  return true;
+}
+
 bool GZipWriter::writeAbundances(bool inDebugMode,
-                                 std::string bcName,
-                                 std::vector<double>& alphas) {
+                                 std::string& bcName,
+                                 std::vector<double>& alphas,
+                                 std::vector<uint8_t>& tiers){
 #if defined __APPLE__
   spin_lock::scoped_lock sl(writeMutex_);
 #else
@@ -680,6 +758,12 @@ bool GZipWriter::writeAbundances(bool inDebugMode,
     auto countMatFilename = path_ / "alevin" / "quants_mat.gz";
     countMatrixStream_->push(boost::iostreams::file_sink(countMatFilename.string(),
                                                          std::ios_base::out | std::ios_base::binary));
+
+    tierMatrixStream_.reset(new boost::iostreams::filtering_ostream);
+    tierMatrixStream_->push(boost::iostreams::gzip_compressor(6));
+    auto tierMatFilename = path_ / "alevin" / "quants_tier_mat.gz";
+    tierMatrixStream_->push(boost::iostreams::file_sink(tierMatFilename.string(),
+                                                        std::ios_base::out | std::ios_base::binary));
   }
 
   if (!bcNameStream_) {
@@ -689,20 +773,24 @@ bool GZipWriter::writeAbundances(bool inDebugMode,
   }
 
   boost::iostreams::filtering_ostream& countfile = *countMatrixStream_;
+  boost::iostreams::filtering_ostream& tierfile = *tierMatrixStream_;
   std::ofstream& namefile = *bcNameStream_;
 
   size_t num = alphas.size();
   size_t elSize = sizeof(typename std::vector<double>::value_type);
+  size_t trSize = sizeof(typename std::vector<uint8_t>::value_type);
   countfile.write(reinterpret_cast<char*>(alphas.data()),
                   elSize * num);
+  tierfile.write(reinterpret_cast<char*>(tiers.data()),
+                  trSize * num);
 
   double total_counts = std::accumulate(alphas.begin(), alphas.end(), 0.0);
   if ( not inDebugMode and not (total_counts > 0.0)){
     std::cout<< "ERROR: cell doesn't have any read count" << std::flush;
     exit(1);
   }
-  bcName += "\n";
   namefile.write(bcName.c_str(), bcName.size());
+  namefile << std::endl;
   return true;
 }
 

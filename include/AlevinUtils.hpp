@@ -37,6 +37,7 @@
 #include "AlevinOpts.hpp"
 #include "SingleCellProtocols.hpp"
 #include "BarcodeGroup.hpp"
+#include "SalmonDefaults.hpp"
 
 #include "SalmonConfig.hpp"
 #include "SalmonUtils.hpp"

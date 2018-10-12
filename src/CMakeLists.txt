@@ -27,7 +27,8 @@ CollapsedCellOptimizer.cpp
 CollapsedGibbsSampler.cpp
 Salmon.cpp
 BuildSalmonIndex.cpp
-Dedup.cpp
+Graph.cpp
+DedupUMI.cpp
 Alevin.cpp
 SalmonAlevin.cpp
 WhiteList.cpp
