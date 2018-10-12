@@ -244,7 +244,8 @@ void optimizeCell(SCExpT& experiment,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
                   bool quiet, tbb::atomic<double>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                  uint32_t numGenes, bool inDebugMode, uint32_t numBootstraps){
+                  uint32_t numGenes, bool inDebugMode, uint32_t numBootstraps,
+                  bool naiveEqclass){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
 
@@ -306,69 +307,90 @@ void optimizeCell(SCExpT& experiment,
       }
     }
 
-    if (verbose) {
-      gzw.writeCellEQVec(trueBarcodeIdx, eqIDs, eqCounts, true);
-    }
-
-    // perform the UMI deduplication step
-    std::vector<SalmonEqClass> salmonEqclasses;
-    bool dedupOk = dedupClasses(geneAlphas, totalCount, txpGroups,
-                                umiGroups, salmonEqclasses,
-                                txpToGeneMap, tiers);
-    if( !dedupOk ){
-      jointlog->error("Deduplication for cell {} failed \n"
-                      "Please Report this on github.", trueBarcodeStr);
-      jointlog->flush();
-      std::exit(1);
-    }
-
-    if ( numBootstraps and noEM ) {
-      jointlog->error("Cannot perform bootstrapping with noEM");
-      jointlog->flush();
-      exit(1);
-    }
-
-    // perform EM for resolving ambiguity
-    if ( !noEM ) {
-      bool isEMok = runPerCellEM(totalCount,
-                                 numGenes,
-                                 geneAlphas,
-                                 salmonEqclasses,
-                                 jointlog);
-      if( !isEMok ){
-        jointlog->error("EM iteration for cell {} failed \n"
+    if ( !naiveEqclass ) {
+      // perform the UMI deduplication step
+      std::vector<SalmonEqClass> salmonEqclasses;
+      bool dedupOk = dedupClasses(geneAlphas, totalCount, txpGroups,
+                                  umiGroups, salmonEqclasses,
+                                  txpToGeneMap, tiers);
+      if( !dedupOk ){
+        jointlog->error("Deduplication for cell {} failed \n"
                         "Please Report this on github.", trueBarcodeStr);
         jointlog->flush();
         std::exit(1);
       }
-    }
 
-    // write the abundance for the cell
-    gzw.writeAbundances( inDebugMode, trueBarcodeStr,
-                         geneAlphas, tiers );
-
-    // maintaining count for total number of predicted UMI
-    salmon::utils::incLoop(totalDedupCounts, totalCount);
-
-    if ( numBootstraps > 0 ){
-      std::vector<double> bootVariance(numGenes, 0.0);
-      bool isBootstrappingOk = runBootstraps(numGenes,
-                                             geneAlphas,
-                                             salmonEqclasses,
-                                             jointlog,
-                                             numBootstraps,
-                                             bootVariance);
-      if( !isBootstrappingOk ){
-        jointlog->error("Bootstrapping failed \n"
-                        "Please Report this on github.");
+      if ( numBootstraps and noEM ) {
+        jointlog->error("Cannot perform bootstrapping with noEM");
         jointlog->flush();
-        std::exit(1);
+        exit(1);
+      }
+
+      // perform EM for resolving ambiguity
+      if ( !noEM ) {
+        bool isEMok = runPerCellEM(totalCount,
+                                   numGenes,
+                                   geneAlphas,
+                                   salmonEqclasses,
+                                   jointlog);
+        if( !isEMok ){
+          jointlog->error("EM iteration for cell {} failed \n"
+                          "Please Report this on github.", trueBarcodeStr);
+          jointlog->flush();
+          std::exit(1);
+        }
       }
 
       // write the abundance for the cell
-      gzw.writeBootstraps( inDebugMode, trueBarcodeStr,
-                           geneAlphas, bootVariance );
-    }//end-if
+      gzw.writeAbundances( inDebugMode, trueBarcodeStr,
+                           geneAlphas, tiers );
+
+      // maintaining count for total number of predicted UMI
+      salmon::utils::incLoop(totalDedupCounts, totalCount);
+
+      if ( numBootstraps > 0 ){
+        std::vector<double> bootVariance(numGenes, 0.0);
+        bool isBootstrappingOk = runBootstraps(numGenes,
+                                               geneAlphas,
+                                               salmonEqclasses,
+                                               jointlog,
+                                               numBootstraps,
+                                               bootVariance);
+        if( !isBootstrappingOk ){
+          jointlog->error("Bootstrapping failed \n"
+                          "Please Report this on github.");
+          jointlog->flush();
+          std::exit(1);
+        }
+
+        // write the abundance for the cell
+        gzw.writeBootstraps( inDebugMode, trueBarcodeStr,
+                             geneAlphas, bootVariance );
+      }//end-if
+    }
+    else {
+      // doing per eqclass level naive deduplication
+      for (size_t eqId=0; eqId<umiGroups.size(); eqId++) {
+        spp::sparse_hash_set<uint64_t> umis;
+
+        for(auto& it: umiGroups[eqId]) {
+          umis.insert( it.first );
+        }
+        totalCount += umis.size();
+
+        // filling in the eqclass level deduplicated counts
+        if (verbose) {
+          eqCounts[eqId] = umis.size();
+        }
+      }
+
+      // maintaining count for total number of predicted UMI
+      salmon::utils::incLoop(totalDedupCounts, totalCount);
+    }
+
+    if (verbose) {
+      gzw.writeCellEQVec(trueBarcodeIdx, eqIDs, eqCounts, true);
+    }
 
     //printing on screen progress
     const char RESET_COLOR[] = "\x1b[0m";
@@ -524,7 +546,8 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                std::ref(txpToGeneMap),
                                numGenes,
                                aopt.debug,
-                               aopt.numBootstraps);
+                               aopt.numBootstraps,
+                               aopt.naiveEqclass);
   }
 
   for (auto& t : workerThreads) {

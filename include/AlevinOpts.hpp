@@ -63,7 +63,7 @@ struct AlevinOpts {
   // Avoid segfaults based on no whitelist mapping
   bool debug;
   // perform naive deduplication
-  bool naive;
+  bool naiveEqclass;
   // perform eqclass level analysis instead of gene or txp level minsets
   bool eqClassLevel;
   // perform txp level analysis instead of gene level
