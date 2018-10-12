@@ -912,6 +912,7 @@ void processReadsQuasi(
   mc.consistentHits = consistentHits;
   mc.doChaining = salmonOpts.validateMappings;
   mc.maxSlack = salmonOpts.consensusSlack;
+  if (mc.doChaining) { mc.considerMultiPos = true; }
 
   rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> leftHCInfo;
   rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> rightHCInfo;
@@ -1025,8 +1026,9 @@ void processReadsQuasi(
                                             tooManyHits, hctr);
         } else {
           rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, leftHits, rightHits,
-                                                 jointHits, readLenLeft,
-                                                 maxNumHits, tooManyHits, hctr);
+                                                 jointHits,
+                                                 mc,
+                                                 readLenLeft, maxNumHits, tooManyHits, hctr);
         }
 
         if (initialRound) {

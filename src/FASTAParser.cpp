@@ -131,6 +131,6 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs,
   }
 
   sopt.jointLog->info(
-      "replaced {} non-ACGT nucleotides with random nucleotides",
+      "replaced {:n} non-ACGT nucleotides with random nucleotides",
       numNucleotidesReplaced);
 }

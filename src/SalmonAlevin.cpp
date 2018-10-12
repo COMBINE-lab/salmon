@@ -853,7 +853,9 @@ void processReadsQuasi(
                                             tooManyHits, hctr);
         } else {
           rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, leftHits, rightHits,
-                                                 jointHits, readLenLeft,
+                                                 jointHits,
+                                                 mc,
+                                                 readLenLeft,
                                                  maxNumHits, tooManyHits, hctr);
         }
 
