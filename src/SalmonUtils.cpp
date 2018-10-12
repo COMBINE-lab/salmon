@@ -717,29 +717,22 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
   LibraryFormat seFormat(ReadType::SINGLE_END, ReadOrientation::NONE,
                          ReadStrandedness::U);
 
+  auto isAutoLibType = [](std::string &fmt) -> bool {
+    return (fmt.length() == 1 and (fmt.front() == 'a' or fmt.front() == 'A'));
+  };
+
   std::vector <ReadLibrary> libs;
 
   bool isInputPufferfishOutput = false;
   for (auto& opt : orderedOptions.options) {
     if (opt.string_key == "index") {
+      // [Rob] : @fataltes : not sure how much I like using "none" here ...
       if (opt.value[0] == "none") {
         isInputPufferfishOutput = true;
       }
     }
   }
-  if (isInputPufferfishOutput) {
-    libs.push_back(peFormat);
-    libs.back().setInputIsPufferfishOutput();
-    for (auto& opt : orderedOptions.options) {
-      if (opt.string_key == "unmatedReads") {
-        libs.back().addPufferfishOutput(opt.value);
-      }
-    }
-  }
-  else {
-    auto isAutoLibType = [](std::string &fmt) -> bool {
-        return (fmt.length() == 1 and (fmt.front() == 'a' or fmt.front() == 'A'));
-    };
+
 
   auto log = spdlog::get("jointLog");
 
@@ -747,6 +740,9 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
   bool sawPairedLibrary{false};
   bool sawUnpairedLibrary{false};
   bool autoLibType{false};
+
+  // TODO: @fataltes : hack for now.
+  LibraryFormat pufferfishFormat = peFormat;
 
   std::vector<ReadLibrary> peLibs{peFormat};
   std::vector<ReadLibrary> seLibs{seFormat};
@@ -763,6 +759,12 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
           seFormat = libFmt;
           seLibs.emplace_back(libFmt);
         }
+
+        // TODO: @fataltes : hack for now.
+        if (isInputPufferfishOutput) {
+          pufferfishFormat = libFmt;
+        }
+
       } else {
         autoLibType = true;
       }
@@ -805,11 +807,24 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
         seLibs.clear();
         return seLibs;
       }
-      seLibs.back().addUnmated(opt.value);
-      if (autoLibType) {
-        seLibs.back().enableAutodetect();
+
+      // TODO: @fataltes : This is a hack, as we currently use the unmatedReads argument
+      // to accept pufferfish mappings.  We will clean this up soon.
+      if (isInputPufferfishOutput) {
+        libs.push_back(pufferfishFormat);
+        libs.back().setInputIsPufferfishOutput();
+        libs.back().addPufferfishOutput(opt.value);
+        if (autoLibType) {
+          libs.back().enableAutodetect();
+        }
+      } else {
+        seLibs.back().addUnmated(opt.value);
+        if (autoLibType) {
+          seLibs.back().enableAutodetect();
+        }
+        sawUnpairedLibrary = true;
       }
-      sawUnpairedLibrary = true;
+
     }
   }
 
@@ -821,40 +836,41 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
   // strategy for that rather than abusing single & PE library types.  Once we
   // fix that, we should uncomment the below.
   /*
-  if (sawPairedLibrary and sawUnpairedLibrary) {
+    if (sawPairedLibrary and sawUnpairedLibrary) {
     log->warn("It seems you have specified both paired-end and unpaired read "
-              "libraries.  Salmon does not accepted mixed library types, and "
-              "different library types should typically not be quantified together "
-              "anyway.  Please quantifiy distinct library types separately.");
+    "libraries.  Salmon does not accepted mixed library types, and "
+    "different library types should typically not be quantified together "
+    "anyway.  Please quantifiy distinct library types separately.");
     return libs;
-  }
+    }
   */
-  (void)sawPairedLibrary;
-  (void)sawUnpairedLibrary;
+  if (!isInputPufferfishOutput) {
+    (void)sawPairedLibrary;
+    (void)sawUnpairedLibrary;
 
-  libs.reserve(peLibs.size() + seLibs.size());
-  for (auto& lib : boost::range::join(seLibs, peLibs)) {
-    if (lib.format().type == ReadType::SINGLE_END) {
-      if (lib.unmated().size() == 0) {
-        // Didn't use default single end library type
-        continue;
+    libs.reserve(peLibs.size() + seLibs.size());
+    for (auto& lib : boost::range::join(seLibs, peLibs)) {
+      if (lib.format().type == ReadType::SINGLE_END) {
+        if (lib.unmated().size() == 0) {
+          // Didn't use default single end library type
+          continue;
+        }
+      } else if (lib.format().type == ReadType::PAIRED_END) {
+        if (lib.mates1().size() == 0 or lib.mates2().size() == 0) {
+          // Didn't use default paired-end library type
+          continue;
+        }
       }
-    } else if (lib.format().type == ReadType::PAIRED_END) {
-      if (lib.mates1().size() == 0 or lib.mates2().size() == 0) {
-        // Didn't use default paired-end library type
-        continue;
-      }
+      libs.push_back(lib);
     }
-    libs.push_back(lib);
   }
-
-    //auto log = spdlog::get("jointLog");
-    size_t numLibs = libs.size();
-    if (numLibs == 1) {
-      log->info("There is 1 library.");
-    } else if (numLibs > 1) {
-      log->info("There are {} libraries.", numLibs);
-    }
+    
+  //auto log = spdlog::get("jointLog");
+  size_t numLibs = libs.size();
+  if (numLibs == 1) {
+    log->info("There is 1 library.");
+  } else if (numLibs > 1) {
+    log->info("There are {} libraries.", numLibs);
   }
   return libs;
 }
