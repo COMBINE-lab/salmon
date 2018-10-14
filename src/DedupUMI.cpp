@@ -82,7 +82,7 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
     // iterate over all the transcripts
     for ( auto& txp: tgroup ) {
       for (uint32_t eq2Id: tidMap[txp]) {
-        if (eq2Id < eqId) {
+        if (eq2Id <= eqId) {
           continue;
         }
 
