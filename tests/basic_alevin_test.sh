@@ -3,6 +3,8 @@ OUT=$PWD
 
 tfile=$(mktemp /tmp/foo.XXXXXXXXX)
 
+echo /usr/bin/time -o $tfile $ALVBIN alevin -lISR  -1 /mnt/scratch5/avi/alevin/data/10x/mohu/100/all_bcs.fq -2 /mnt/scratch5/avi/alevin/data/10x/mohu/100/all_reads.fq -o $OUT/prediction -i /mnt/scratch5/avi/alevin/data/mohu/salmon_index/ -p 20 --tgMap /mnt/scratch5/avi/alevin/data/mohu/gtf/txp2gene.tsv --dumpFeatures --dumpBfh --dumpBarcodeEq --dumpBarcodeMap --dumpCsvCounts --chromium #--end 5 --umiLength 10 --barcodeLength 16 
+
 /usr/bin/time -o $tfile $ALVBIN alevin -lISR  -1 /mnt/scratch5/avi/alevin/data/10x/mohu/100/all_bcs.fq -2 /mnt/scratch5/avi/alevin/data/10x/mohu/100/all_reads.fq -o $OUT/prediction -i /mnt/scratch5/avi/alevin/data/mohu/salmon_index/ -p 20 --tgMap /mnt/scratch5/avi/alevin/data/mohu/gtf/txp2gene.tsv --dumpFeatures --dumpBfh --dumpBarcodeEq --dumpBarcodeMap --dumpCsvCounts --chromium #--end 5 --umiLength 10 --barcodeLength 16 
 
 cat $tfile
