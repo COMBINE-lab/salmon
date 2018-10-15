@@ -17,29 +17,26 @@ namespace alevin {
       return index;
     }
 
-    bool is_one_edit(std::string& first,
-                     std::string& second) {
-      size_t seqLen = first.size();
-      uint32_t distance = 0;
-      for(size_t i=0; i<seqLen; i++) {
-        if (first[i] != second[i]) {
-          distance += 1;
-          if (distance > 1) {
-            return false;
-          }
-        }
-      }
-
-      return true;
+    // returns true if distance is 1
+    // returns false if distance is > 1
+    bool oneHamming(uint64_t k1, uint64_t k2) {
+      auto k1XORk2 = k1 ^ k2;
+      int pcnt = __builtin_popcountl(k1XORk2);
+      if (pcnt == 1) { return true; }
+      if (pcnt > 2) { return false; }
+      int lzero = __builtin_clzl(k1XORk2);
+      // if it's odd, then substract 1, otherwise keep the shift the same
+      int lshift = (lzero & 1) ? (lzero - 1) : lzero;
+      return (((k1XORk2 << lshift) & 0x3FFFFFFFFFFFFFFF) > 0) ? false : true;
     }
 
-    EdgeType hasEdge(std::pair<std::string, uint32_t> &x,
-                     std::pair<std::string, uint32_t> &y) {
-      if ( x.first.compare(y.first) == 0 ) {
+    EdgeType hasEdge(std::pair<uint64_t, uint32_t> &x,
+                     std::pair<uint64_t, uint32_t> &y) {
+      if ( x.first == y.first ) {
         return EdgeType::BiDirected;
       }
       if ( x.second > (2*y.second-1) ) {
-        if ( is_one_edit(x.first, y.first) ){
+        if ( oneHamming(x.first, y.first) ){
           return EdgeType::XToY;
         }
         else {
@@ -47,7 +44,7 @@ namespace alevin {
         }
       }
       else if (y.second > (2*x.second-1) ) {
-        if ( is_one_edit(x.first, y.first) ){
+        if ( oneHamming(x.first, y.first) ){
           return EdgeType::YToX;
         }
         else {

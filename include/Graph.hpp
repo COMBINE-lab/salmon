@@ -70,8 +70,8 @@ namespace alevin {
     uint32_t getVertexIndex(spp::sparse_hash_map<VertexT, uint32_t, boost::hash<VertexT>>& vertMap,
                             VertexT& node);
 
-    EdgeType hasEdge(std::pair<std::string, uint32_t> &x,
-                     std::pair<std::string, uint32_t> &y);
+    EdgeType hasEdge(std::pair<uint64_t, uint32_t> &x,
+                     std::pair<uint64_t, uint32_t> &y);
   }
 }
 

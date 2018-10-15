@@ -39,11 +39,10 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
     size_t numUmis = umiGroups[eqId].size();
 
     //// extracting umi sequences
-    std::vector<std::pair<std::string, uint32_t>> umiSeqCounts;
+    std::vector<std::pair<uint64_t, uint32_t>> umiSeqCounts;
 
     for(auto& it: umiGroups[eqId]) {
-      umiObj.word__(0) = it.first;
-      umiSeqCounts.emplace_back(std::make_pair(umiObj.toStr(), it.second));
+      umiSeqCounts.emplace_back(std::make_pair(it.first, it.second));
     }
 
     for ( size_t uId=0; uId<numUmis; uId++ ){
@@ -93,11 +92,10 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
         size_t num2Umis = umiGroups[eq2Id].size();
 
         // extracting umi sequences
-        std::vector<std::pair<std::string, uint32_t>> umi2SeqCounts;
+        std::vector<std::pair<uint64_t, uint32_t>> umi2SeqCounts;
 
         for(auto& it: umiGroups[eq2Id]) {
-          umiObj.word__(0) = it.first;
-          umi2SeqCounts.emplace_back(std::make_pair(umiObj.toStr(), it.second));
+          umi2SeqCounts.emplace_back(std::make_pair(it.first, it.second));
         }
 
         for ( size_t uId=0; uId<numUmis; uId++ ){
