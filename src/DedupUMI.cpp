@@ -30,7 +30,6 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
     }
   }
 
-  AlignerEngine ae;
   // alevin kmer object
   alevin::types::AlevinUMIKmer umiObj;
   spp::sparse_hash_map<VertexT, uint32_t, boost::hash<VertexT>> vertexIndexMap;
@@ -56,7 +55,7 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
         uint32_t v2 = alevin::graph::getVertexIndex(vertexIndexMap, node_second);
 
         //check if two UMI can be connected
-        EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umiSeqCounts[uId_second], ae );
+        EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umiSeqCounts[uId_second]);
 
         switch ( edge ) {
         case EdgeType::BiDirected:
@@ -113,7 +112,7 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
             uint32_t v2 = alevin::graph::getVertexIndex(vertexIndexMap, node_second);
 
             //check if two UMI can be connected
-            EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umi2SeqCounts[uId_second], ae );
+            EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umi2SeqCounts[uId_second]);
 
             switch ( edge ) {
             case EdgeType::BiDirected:

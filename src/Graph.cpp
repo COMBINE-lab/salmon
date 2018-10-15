@@ -17,18 +17,29 @@ namespace alevin {
       return index;
     }
 
+    bool is_one_edit(std::string& first,
+                     std::string& second) {
+      size_t seqLen = first.size();
+      uint32_t distance = 0;
+      for(size_t i=0; i<seqLen; i++) {
+        if (first[i] != second[i]) {
+          distance += 1;
+          if (distance > 1) {
+            return false;
+          }
+        }
+      }
+
+      return true;
+    }
+
     EdgeType hasEdge(std::pair<std::string, uint32_t> &x,
-                     std::pair<std::string, uint32_t> &y,
-                     AlignerEngine& ae) {
+                     std::pair<std::string, uint32_t> &y) {
       if ( x.first.compare(y.first) == 0 ) {
         return EdgeType::BiDirected;
       }
       if ( x.second > (2*y.second-1) ) {
-        ae(x.first.c_str(), x.first.size(),
-           y.first.c_str(), y.first.size(),
-           edlibNewAlignConfig(1, EDLIB_MODE_NW, EDLIB_TASK_DISTANCE));
-
-        if ( ae.result().editDistance == 1 ){
+        if ( is_one_edit(x.first, y.first) ){
           return EdgeType::XToY;
         }
         else {
@@ -36,11 +47,7 @@ namespace alevin {
         }
       }
       else if (y.second > (2*x.second-1) ) {
-        ae(x.first.c_str(), x.first.size(),
-           y.first.c_str(), y.first.size(),
-           edlibNewAlignConfig(1, EDLIB_MODE_NW, EDLIB_TASK_DISTANCE));
-
-        if ( ae.result().editDistance == 1 ){
+        if ( is_one_edit(x.first, y.first) ){
           return EdgeType::YToX;
         }
         else {
