@@ -17,6 +17,10 @@ namespace alevin {
       return index;
     }
 
+    // NOTE : I like our clever tricks here, but we should
+    // make note of how widely distributable the compiled code
+    // will be (i.e. which instructions will be used for popcountl
+    // and clzl, and which processors will they work on).
     // returns true if distance is 1
     // returns false if distance is > 1
     bool oneHamming(uint64_t k1, uint64_t k2) {

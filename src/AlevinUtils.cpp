@@ -228,6 +228,10 @@ namespace alevin {
       namespace bfs = boost::filesystem;
       namespace po = boost::program_options;
 
+      // mark in salmon options that we are running
+      // in alevin mode
+      sopt.alevinMode = true;
+
       //Create outputDirectory
       aopt.outputDirectory = vm["output"].as<std::string>() + "/alevin";
       if (!bfs::exists(aopt.outputDirectory)) {
