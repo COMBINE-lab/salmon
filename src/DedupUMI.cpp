@@ -1,4 +1,5 @@
 #include "DedupUMI.hpp"
+#include "tsl/hopscotch_map.h"
 
 uint32_t getGeneId(spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap,
                    uint32_t tId ) {
@@ -225,31 +226,24 @@ void getNumMolecules(alevin::graph::Graph& g,
 
         assert( bestCoveringTxp != std::numeric_limits<uint32_t>::max() );
 
-        std::unordered_set<uint32_t> globalTxps ;
+        tsl::hopscotch_map<uint32_t, uint32_t> globalTxpCounts;
         for (size_t vId=0; vId<bestMcc.size(); vId++){
           uint32_t vertex = bestMcc[vId];
           std::unordered_set<uint32_t> localTxps;
           uint32_t eqclassId = g.getEqclassId(vertex);
-
           for (uint32_t txp: txpGroups[eqclassId]){
-            localTxps.insert(txp);
-          }
-
-          if (vId == 0) {
-            globalTxps = localTxps;
-          }
-          else {
-            std::unordered_set<uint32_t> intersect;
-            unordered_set_intersection (globalTxps.begin(),
-                                        globalTxps.end(),
-                                        localTxps.begin(),
-                                        localTxps.end(),
-                                        std::inserter(intersect,
-                                                      intersect.begin()));
-
-            globalTxps = intersect;
+            globalTxpCounts[txp] += 1;
           }
         }//end-mcc for
+
+        // only transcripts that occur in *every* vertex, and hence
+        // have a count of bestMcc.size(), are in the proper intersection.
+        uint32_t requiredCount = bestMcc.size();
+        std::vector<uint32_t> globalTxps;
+        globalTxps.reserve(globalTxpCounts.size());
+        for (auto kv : globalTxpCounts) {
+          if (kv.second == requiredCount) { globalTxps.push_back(kv.first); }
+        }
 
         if( globalTxps.size() == 0 ) {
           std::cerr << "can't find a representative transcript for a molecule\n"
