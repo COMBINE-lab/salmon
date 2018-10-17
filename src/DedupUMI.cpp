@@ -210,7 +210,6 @@ void getNumMolecules(alevin::graph::Graph& g,
 
       while ( vset.size() != 0 ){
         std::vector<uint32_t> bestMcc;
-        uint32_t bestCoveringTxp = std::numeric_limits<uint32_t>::max();
         for (uint32_t vertex: vset) {
           uint32_t coveringTxp;
           std::vector<uint32_t> newMcc;
@@ -220,11 +219,8 @@ void getNumMolecules(alevin::graph::Graph& g,
           //choose the longer collapse: Greedy
           if (bestMcc.size() < newMcc.size()) {
             bestMcc = newMcc;
-            bestCoveringTxp = coveringTxp;
           }
         }// end-vset for
-
-        assert( bestCoveringTxp != std::numeric_limits<uint32_t>::max() );
 
         tsl::hopscotch_map<uint32_t, uint32_t> globalTxpCounts;
         for (size_t vId=0; vId<bestMcc.size(); vId++){
@@ -353,7 +349,7 @@ void assignTiers(std::vector<TGroupT>& txpGroups,
   }//end-geneclass
 
   // iterating over edges and filling the graph
-  typedef boost::adjacency_list < boost::vecS, boost::vecS, boost::undirectedS > AdjList;
+  typedef boost::adjacency_list < boost::vecS, boost::vecS, boost::directedS > AdjList;
   AdjList adjList;
   for (auto& it: edges) {
     uint32_t source = it.first;
