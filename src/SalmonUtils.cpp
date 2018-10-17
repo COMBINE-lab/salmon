@@ -1382,6 +1382,18 @@ std::string getCurrentTimeAsString() {
   auto numLeft = sopt.mate1ReadFiles.size();
   auto numRight = sopt.mate2ReadFiles.size();
 
+  /** Info, not warnings or errors, but informative messages to the user **/
+
+  // If not in alevin mode, inform the user about validateMappings
+  if (!sopt.alevinMode and !sopt.validateMappings) {
+    sopt.jointLog->info("\n\n"
+                        "NOTE: It appears you are running salmon without the `--validateMappings` option.\n"
+                        "Mapping validation can generally improve both the sensitivity and specificity of mapping,\n"
+                        "with only a moderate increase in use of computational resources. \n"
+                        "Unless there is a specific reason to do this (e.g. testing on clean simulated data),\n"
+                        "`--validateMappings` is generally recommended.\n");
+  }
+
   // currently there is some strange use for this in alevin, I think ...
   // check with avi.
   if (numLeft + numRight > 0 and numUnpaired > 0) {
