@@ -225,46 +225,46 @@ void getNumMolecules(alevin::graph::Graph& g,
 
         assert( bestCoveringTxp != std::numeric_limits<uint32_t>::max() );
 
-        // get the gene id
-        uint32_t bestCoveringGene = getGeneId(t2gMap, bestCoveringTxp);
-
-        std::unordered_set<uint32_t> globalGenes ;
+        std::unordered_set<uint32_t> globalTxps ;
         for (size_t vId=0; vId<bestMcc.size(); vId++){
           uint32_t vertex = bestMcc[vId];
-          std::unordered_set<uint32_t> localGenes;
+          std::unordered_set<uint32_t> localTxps;
           uint32_t eqclassId = g.getEqclassId(vertex);
 
           for (uint32_t txp: txpGroups[eqclassId]){
-            uint32_t gId = getGeneId(t2gMap, txp);
-            localGenes.insert(gId);
+            localTxps.insert(txp);
           }
 
           if (vId == 0) {
-            globalGenes = localGenes;
+            globalTxps = localTxps;
           }
           else {
             std::unordered_set<uint32_t> intersect;
-            unordered_set_intersection (globalGenes.begin(),
-                                        globalGenes.end(),
-                                        localGenes.begin(),
-                                        localGenes.end(),
+            unordered_set_intersection (globalTxps.begin(),
+                                        globalTxps.end(),
+                                        localTxps.begin(),
+                                        localTxps.end(),
                                         std::inserter(intersect,
                                                       intersect.begin()));
 
-            globalGenes = intersect;
+            globalTxps = intersect;
           }
         }//end-mcc for
 
-        if( globalGenes.size() == 0 ) {
-          std::cerr << "can't find a representative gene for a molecule\n"
-                    << "Please report this on gothub";
+        if( globalTxps.size() == 0 ) {
+          std::cerr << "can't find a representative transcript for a molecule\n"
+                    << "Please report this on github";
           exit(1);
         }
 
-        assert(globalGenes.contains(bestCoveringGene));
-
         for (auto rv: bestMcc){
           vset.erase(rv);
+        }
+
+        spp::sparse_hash_set<uint32_t> globalGenes;
+        for(auto txp: globalTxps){
+          uint32_t geneId = getGeneId(t2gMap, txp);
+          globalGenes.insert(geneId);
         }
 
         std::vector<uint32_t> genesVec (globalGenes.begin(),
