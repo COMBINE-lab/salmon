@@ -349,7 +349,7 @@ void assignTiers(std::vector<TGroupT>& txpGroups,
   }//end-geneclass
 
   // iterating over edges and filling the graph
-  typedef boost::adjacency_list < boost::vecS, boost::vecS, boost::directedS > AdjList;
+  typedef boost::adjacency_list < boost::vecS, boost::vecS, boost::undirectedS > AdjList;
   AdjList adjList;
   for (auto& it: edges) {
     uint32_t source = it.first;
