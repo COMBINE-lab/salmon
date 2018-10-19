@@ -139,7 +139,6 @@ bool runBootstraps(size_t numGenes,
   uint32_t maxIter {10000};
   size_t numClasses = salmonEqclasses.size();
 
-  std::vector<uint64_t> eqCounts;
   CollapsedCellOptimizer::SerialVecType mean(numGenes, 0.0);
   CollapsedCellOptimizer::SerialVecType squareMean(numGenes, 0.0);
   CollapsedCellOptimizer::SerialVecType alphas(numGenes, 0.0);
@@ -147,6 +146,7 @@ bool runBootstraps(size_t numGenes,
 
   //extracting weight of eqclasses for making discrete distribution
   uint32_t totalNumFrags = 0;
+  std::vector<uint64_t> eqCounts;
   for (auto& eqclass: salmonEqclasses) {
     totalNumFrags += eqclass.count;
     eqCounts.emplace_back(eqclass.count);
@@ -162,16 +162,16 @@ bool runBootstraps(size_t numGenes,
   while ( bsNum++ < numBootstraps) {
     csamp.reset();
 
-    for (size_t sc = 0; sc < eqCounts.size(); ++sc) {
-      eqCounts[sc] = 0;
+    for (size_t sc = 0; sc < numClasses; ++sc) {
+      salmonEqclasses[sc].count = 0;
     }
 
     for (size_t fn = 0; fn < totalNumFrags; ++fn) {
-      ++eqCounts[csamp(gen)];
+      salmonEqclasses[csamp(gen)].count += 1;
     }
 
     for (size_t i = 0; i < numGenes; ++i) {
-      alphas[i] += (geneAlphas[i] + 0.5) * 1e-3;
+      alphas[i] = (geneAlphas[i] + 0.5) * 1e-3;
     }
 
     bool converged{false};
