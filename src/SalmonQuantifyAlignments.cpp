@@ -163,6 +163,8 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
   using salmon::math::logAdd;
   using salmon::math::logSub;
 
+  auto orphanProb = salmonOpts.discardOrphansAln ? LOG_0 : LOG_EPSILON;
+
   // k-mers for sequence bias
   Mer leftMer;
   Mer rightMer;
@@ -289,7 +291,10 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
             // If we are expecting a paired-end library, and this is an orphan,
             // then logFragProb should be small
             if (isUnexpectedOrphan(aln, expectedLibraryFormat)) {
-              logFragProb = LOG_EPSILON;
+              logFragProb = orphanProb;
+              if (logFragProb == LOG_0) {
+                continue;
+              }
             }
 
             if (flen > 0.0 and aln->isPaired() and useFragLengthDist and

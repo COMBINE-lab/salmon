@@ -260,6 +260,7 @@ struct SalmonOpts {
 
   // for utility (may need to be cleaned up later)
   bool discardOrphansQuasi;
+  bool discardOrphansAln;
   double coverageThresh;
   std::vector<std::string> unmatedReadFiles;
   std::vector<std::string> mate1ReadFiles;
