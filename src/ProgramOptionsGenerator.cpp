@@ -199,6 +199,12 @@ namespace salmon {
     po::options_description alignin("\n"
                                       "alignment input options");
     alignin.add_options()
+    ("discardOrphans",
+       po::bool_switch(&(sopt.discardOrphansAln))->default_value(salmon::defaults::discardOrphansAln),
+       "[Alignment-based mode only] : Discard orphan alignments in the input "
+       ".  If this flag is passed, then only paired alignments will be "
+       "considered toward quantification estimates.  The default behavior is "
+       "to consider orphan alignments if no valid paired mappings exist.")
     ("libType,l", po::value<std::string>()->required(), "Format string describing the library type")
     ("alignments,a", po::value<vector<string>>()->multitoken()->required(),
      "input alignment (BAM) file(s).")

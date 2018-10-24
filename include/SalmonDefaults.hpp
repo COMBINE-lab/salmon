@@ -4,6 +4,7 @@
 namespace salmon {
 namespace defaults {
   // general
+  constexpr const bool discardOrphansAln{false};
   constexpr const bool discardOrphansQuasi{false};
   constexpr const bool allowOrphansFMD{false};
   constexpr const bool seqBiasCorrect{false};
