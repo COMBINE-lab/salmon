@@ -374,7 +374,30 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
     lowRegionNumBarcodes++;
     topxBarcodes++;
 
-    // keeping 1000 cells left of the left boundary for learning
+    uint64_t totalReads{0};
+    for(size_t i=0; i<topxBarcodes; i++){
+      totalReads += freqCounter[sortedIdx[i]];
+    }
+
+    uint64_t readsThrownCounter {0};
+    for(size_t i=topxBarcodes; i<freqCounter.size(); i++){
+      readsThrownCounter += freqCounter[sortedIdx[i]];
+    }
+    totalReads += readsThrownCounter;
+
+    double percentThrown = readsThrownCounter*100.0 / totalReads;
+    if (percentThrown > 50.0) {
+      aopt.jointLog->warn("Total {}% reads will be thrown away"
+                          " because of noisy Cellular barcodes.",
+                          percentThrown);
+    }
+    else{
+      aopt.jointLog->info("Total {}% reads will be thrown away"
+                          " because of noisy Cellular barcodes.",
+                          percentThrown);
+    }
+
+    // keeping some cells left of the left boundary for learning
     aopt.jointLog->info("Total {}{}{}(has {}{}{} low confidence)"
                         " barcodes",
                         green, topxBarcodes, RESET_COLOR,
@@ -389,7 +412,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
     freqFile.open(frequencyFileName.string());
     for (auto i:sortedIdx){
       uint32_t count = freqCounter[i];
-      if (topxBarcodes == 0 or count == 0){
+      if (count == 0){
         break;
       }
       freqFile << colMap[i] << "\t"

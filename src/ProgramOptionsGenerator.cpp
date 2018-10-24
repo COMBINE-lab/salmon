@@ -306,6 +306,16 @@ namespace salmon {
        "Generate mean and variance for cell x gene matrix quantification"
        " estimates.")
       (
+       "numCellBootstraps",po::value<uint32_t>()->default_value(alevin::defaults::numBootstraps),
+       "Generate mean and variance for cell x gene matrix quantification"
+       " estimates.")
+      (
+       "forceCells",po::value<uint32_t>()->default_value(alevin::defaults::forceCells),
+       "Explicitly specify the number of cells.")
+      (
+       "expectCells",po::value<uint32_t>()->default_value(alevin::defaults::expectCells),
+       "define a close upper bound on expected number of cells")
+      (
        "mrna", po::value<std::string>(),
        "path to a file containing mito-RNA gene, one per line")
       (
