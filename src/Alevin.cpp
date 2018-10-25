@@ -312,97 +312,117 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
   uint64_t history { 0 };
   uint32_t threshold;
 
-  topxBarcodes = getLeftBoundary(sortedIdx,
-                                 topxBarcodes,
-                                 freqCounter);
-  if (topxBarcodes == 0){
-    aopt.jointLog->error("Can't find left Boundary.\n"
-                         "Please Report this issue on github.");
-    aopt.jointLog->flush();
-    exit(1);
+  if (aopt.forceCells > 0) {
+    topxBarcodes = aopt.forceCells;
   }
-  else{
-    aopt.jointLog->info("Knee found left boundary at {} {} {}",
-                        green, topxBarcodes, RESET_COLOR);
-
-    double invCovariance {0.0}, normFactor{0.0};
-    uint32_t gaussThreshold;
-    bool isGaussOk = gaussianKDE(freqCounter, sortedIdx,
-                                 invCovariance, normFactor,
-                                 topxBarcodes, gaussThreshold);
-
-    if ( isGaussOk ){
-      topxBarcodes = gaussThreshold;
-      // consider only if within 10% of current prediction
-      aopt.jointLog->info("Gauss Corrected Boundary at {} {} {}",
-                          green, gaussThreshold, RESET_COLOR);
-    }
-    else{
-      aopt.jointLog->warn("Gauss Prediction {} Too far from knee prediction skipping it",
-                          gaussThreshold);
-    }
-
-    aopt.jointLog->info("Learned InvCov: {} normfactor: {}",
-                        invCovariance, normFactor);
-    if (invCovariance == 0.0 or normFactor == 0.0){
-      aopt.jointLog->error("Wrong invCovariance/Normfactor");
+  else if (aopt.expectCells > 0){
+    //topxBarcodes = getRightBoundary(sortedIdx,
+    //                                aopt.expectCells,
+    //                                freqCounter);
+    if (topxBarcodes == 0){
+      aopt.jointLog->error("Can't find Right Boundary.\n"
+                           "Please Report this issue on github.");
       aopt.jointLog->flush();
       exit(1);
     }
-
-    uint32_t fractionTrueBarcodes = static_cast<int>(lowConfidenceFraction * topxBarcodes);
-
-    if (fractionTrueBarcodes < lowRegionMinNumBarcodes){
-      lowRegionNumBarcodes = lowRegionMinNumBarcodes;
-    }
-    else if (fractionTrueBarcodes > lowRegionMaxNumBarcodes){
-      lowRegionNumBarcodes = lowRegionMaxNumBarcodes;
-    }
     else{
-      lowRegionNumBarcodes = fractionTrueBarcodes;
+      aopt.jointLog->info("Knee found Right boundary at {} {} {}",
+                          green, topxBarcodes, RESET_COLOR);
     }
-
-    // ignoring all the frequencies having same frequency as cutoff
-    // to imitate stable sort
-    topxBarcodes += lowRegionNumBarcodes;
-    uint32_t cutoffFrequency = freqCounter[sortedIdx[ topxBarcodes ]];
-    uint32_t nearestLeftFrequency = cutoffFrequency;
-    while(nearestLeftFrequency == cutoffFrequency){
-      nearestLeftFrequency = freqCounter[sortedIdx[--topxBarcodes]];
-      lowRegionNumBarcodes--;
-    }
-    lowRegionNumBarcodes++;
-    topxBarcodes++;
-
-    uint64_t totalReads{0};
-    for(size_t i=0; i<topxBarcodes; i++){
-      totalReads += freqCounter[sortedIdx[i]];
-    }
-
-    uint64_t readsThrownCounter {0};
-    for(size_t i=topxBarcodes; i<freqCounter.size(); i++){
-      readsThrownCounter += freqCounter[sortedIdx[i]];
-    }
-    totalReads += readsThrownCounter;
-
-    double percentThrown = readsThrownCounter*100.0 / totalReads;
-    if (percentThrown > 50.0) {
-      aopt.jointLog->warn("Total {}% reads will be thrown away"
-                          " because of noisy Cellular barcodes.",
-                          percentThrown);
-    }
-    else{
-      aopt.jointLog->info("Total {}% reads will be thrown away"
-                          " because of noisy Cellular barcodes.",
-                          percentThrown);
-    }
-
-    // keeping some cells left of the left boundary for learning
-    aopt.jointLog->info("Total {}{}{}(has {}{}{} low confidence)"
-                        " barcodes",
-                        green, topxBarcodes, RESET_COLOR,
-                        green, lowRegionNumBarcodes, RESET_COLOR);
   }
+  else{
+    topxBarcodes = getLeftBoundary(sortedIdx,
+                                   topxBarcodes,
+                                   freqCounter);
+    if (topxBarcodes == 0){
+      aopt.jointLog->error("Can't find left Boundary.\n"
+                           "Please Report this issue on github.");
+      aopt.jointLog->flush();
+      exit(1);
+    }
+    else{
+      aopt.jointLog->info("Knee found left boundary at {} {} {}",
+                          green, topxBarcodes, RESET_COLOR);
+
+      double invCovariance {0.0}, normFactor{0.0};
+      uint32_t gaussThreshold;
+      bool isGaussOk = gaussianKDE(freqCounter, sortedIdx,
+                                   invCovariance, normFactor,
+                                   topxBarcodes, gaussThreshold);
+
+      if ( isGaussOk ){
+        topxBarcodes = gaussThreshold;
+        // consider only if within 10% of current prediction
+        aopt.jointLog->info("Gauss Corrected Boundary at {} {} {}",
+                            green, gaussThreshold, RESET_COLOR);
+      }
+      else{
+        aopt.jointLog->warn("Gauss Prediction {} Too far from knee prediction skipping it",
+                            gaussThreshold);
+      }
+
+      aopt.jointLog->info("Learned InvCov: {} normfactor: {}",
+                          invCovariance, normFactor);
+      if (invCovariance == 0.0 or normFactor == 0.0){
+        aopt.jointLog->error("Wrong invCovariance/Normfactor");
+        aopt.jointLog->flush();
+        exit(1);
+      }
+    }
+  }//end-left-knee finding case
+
+  uint32_t fractionTrueBarcodes = static_cast<int>(lowConfidenceFraction * topxBarcodes);
+
+  if (fractionTrueBarcodes < lowRegionMinNumBarcodes){
+    lowRegionNumBarcodes = lowRegionMinNumBarcodes;
+  }
+  else if (fractionTrueBarcodes > lowRegionMaxNumBarcodes){
+    lowRegionNumBarcodes = lowRegionMaxNumBarcodes;
+  }
+  else{
+    lowRegionNumBarcodes = fractionTrueBarcodes;
+  }
+
+  // ignoring all the frequencies having same frequency as cutoff
+  // to imitate stable sort
+  topxBarcodes += lowRegionNumBarcodes;
+  uint32_t cutoffFrequency = freqCounter[sortedIdx[ topxBarcodes ]];
+  uint32_t nearestLeftFrequency = cutoffFrequency;
+  while(nearestLeftFrequency == cutoffFrequency){
+    nearestLeftFrequency = freqCounter[sortedIdx[--topxBarcodes]];
+    lowRegionNumBarcodes--;
+  }
+  lowRegionNumBarcodes++;
+  topxBarcodes++;
+
+  uint64_t totalReads{0};
+  for(size_t i=0; i<topxBarcodes; i++){
+    totalReads += freqCounter[sortedIdx[i]];
+  }
+
+  uint64_t readsThrownCounter {0};
+  for(size_t i=topxBarcodes; i<freqCounter.size(); i++){
+    readsThrownCounter += freqCounter[sortedIdx[i]];
+  }
+  totalReads += readsThrownCounter;
+
+  double percentThrown = readsThrownCounter*100.0 / totalReads;
+  if (percentThrown > 50.0) {
+    aopt.jointLog->warn("Total {}% reads will be thrown away"
+                        " because of noisy Cellular barcodes.",
+                        percentThrown);
+  }
+  else{
+    aopt.jointLog->info("Total {}% reads will be thrown away"
+                        " because of noisy Cellular barcodes.",
+                        percentThrown);
+  }
+
+  // keeping some cells left of the left boundary for learning
+  aopt.jointLog->info("Total {}{}{}(has {}{}{} low confidence)"
+                      " barcodes",
+                      green, topxBarcodes, RESET_COLOR,
+                      green, lowRegionNumBarcodes, RESET_COLOR);
 
   threshold = topxBarcodes;
 
@@ -739,7 +759,8 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
       //Calculate the knee using the frequency distribution
       //and get the true set of barcodes
       sampleTrueBarcodes(collapsedfrequency, trueBarcodes,
-                         numLowConfidentBarcode, collapMap, aopt);
+                           numLowConfidentBarcode, collapMap, aopt);
+
       aopt.jointLog->info("Done True Barcode Sampling");
     }
 
