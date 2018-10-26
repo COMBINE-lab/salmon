@@ -244,7 +244,7 @@ uint32_t getLeftBoundary(std::vector<size_t>& sortedIdx,
   double cumCount{0.0};
   std::vector<double> freqs(topxBarcodes);
   for(uint32_t i = 0; i < topxBarcodes; i++){
-    size_t ind = sortedIdx[topxBarcodes-i];
+    size_t ind = sortedIdx[topxBarcodes-i-1];
     cumCount += freqCounter[ind];
     freqs[i] = std::log(cumCount);
   }
@@ -265,12 +265,12 @@ uint32_t getLeftBoundary(std::vector<size_t>& sortedIdx,
 
     size_t nextBcIdx(j+1);
     std::vector<double> Y(topxBarcodes-nextBcIdx);
-    isUp = false;
     slope = y/x;
     // fill in the values for fitted line
     std::transform(X.begin()+nextBcIdx, X.end(), Y.begin(),
                    [slope](uint32_t i) {return i*slope;} );
 
+    isUp = false;
     double curveY, lineY;
     for(auto i=nextBcIdx; i<topxBarcodes; i++){
       curveY = freqs[i];
@@ -316,18 +316,30 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
     topxBarcodes = aopt.forceCells;
   }
   else if (aopt.expectCells > 0){
-    //topxBarcodes = getRightBoundary(sortedIdx,
-    //                                aopt.expectCells,
-    //                                freqCounter);
-    if (topxBarcodes == 0){
-      aopt.jointLog->error("Can't find Right Boundary.\n"
+    // Expect Cells algorithm is taken from
+    // https://github.com/10XGenomics/cellranger/blob/e5396c6c444acec6af84caa7d3655dd33a162852/lib/python/cellranger/stats.py#L138
+
+    constexpr uint32_t MAX_FILTERED_CELLS = 2;
+    constexpr double UPPER_CELL_QUANTILE = 0.01;
+    constexpr double FRACTION_MAX_FREQUENCY = 0.1;
+
+    uint32_t baselineBcs = std::max(1, static_cast<int32_t>( aopt.expectCells*UPPER_CELL_QUANTILE ));
+    double cutoffFrequency = std::max(1.0, freqCounter[sortedIdx[baselineBcs]] * FRACTION_MAX_FREQUENCY);
+    uint32_t maxNumCells = std::min(static_cast<uint32_t>(freqCounter.size()), aopt.expectCells * MAX_FILTERED_CELLS);
+
+    topxBarcodes = maxNumCells;
+    for(size_t i=baselineBcs; i<maxNumCells; i++){
+      if (freqCounter[sortedIdx[i]] < cutoffFrequency) {
+        topxBarcodes = i;
+        break;
+      }
+    }
+
+    if (topxBarcodes == maxNumCells){
+      aopt.jointLog->error("Can't find right Boundary.\n"
                            "Please Report this issue on github.");
       aopt.jointLog->flush();
       exit(1);
-    }
-    else{
-      aopt.jointLog->info("Knee found Right boundary at {} {} {}",
-                          green, topxBarcodes, RESET_COLOR);
     }
   }
   else{
