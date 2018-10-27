@@ -25,6 +25,9 @@ GZipWriter::~GZipWriter() {
   if (cellEQStream_){
     cellEQStream_->reset();
   }
+  if (umiGraphStream_){
+    umiGraphStream_->reset();
+  }
   if (countMatrixStream_) {
     countMatrixStream_->reset();
   }
@@ -38,16 +41,22 @@ GZipWriter::~GZipWriter() {
     varMatrixStream_->reset();
   }
   if (bcBootNameStream_) {
-    bcNameStream_->close();
+    bcNameStream_.reset();
   }
   if (bcNameStream_) {
-    bcNameStream_->close();
+    bcNameStream_.reset();
   }
 }
 
 void GZipWriter::close_all_streams(){
+  if (bsStream_) {
+    bsStream_->reset();
+  }
   if (cellEQStream_){
     cellEQStream_->reset();
+  }
+  if (umiGraphStream_){
+    umiGraphStream_->reset();
   }
   if (countMatrixStream_) {
     countMatrixStream_->reset();
@@ -62,7 +71,7 @@ void GZipWriter::close_all_streams(){
     varMatrixStream_->reset();
   }
   if (bcBootNameStream_) {
-    varMatrixStream_->reset();
+    bcBootNameStream_->close();
   }
   if (bcNameStream_) {
     bcNameStream_->close();
@@ -916,7 +925,8 @@ bool GZipWriter::writeBootstrap(const std::vector<T>& abund, bool quiet) {
   return true;
 }
 
-bool GZipWriter::writeCellEQVec(size_t barcode, const std::vector<uint32_t>& offsets, const std::vector<uint32_t>& counts, bool quiet) {
+bool GZipWriter::writeCellEQVec(size_t barcode, const std::vector<uint32_t>& offsets,
+                                const std::vector<uint32_t>& counts, bool quiet) {
 #if defined __APPLE__
   spin_lock::scoped_lock sl(writeMutex_);
 #else
@@ -947,6 +957,26 @@ bool GZipWriter::writeCellEQVec(size_t barcode, const std::vector<uint32_t>& off
   return true;
 }
 
+bool GZipWriter::writeUmiGraph(alevin::graph::Graph& g) {
+#if defined __APPLE__
+  spin_lock::scoped_lock sl(writeMutex_);
+#else
+  std::lock_guard<std::mutex> lock(writeMutex_);
+#endif
+  if (!umiGraphStream_) {
+    umiGraphStream_.reset(new boost::iostreams::filtering_ostream);
+    umiGraphStream_->push(boost::iostreams::gzip_compressor(6));
+    auto graphFilename = path_ / "alevin" / "cellUmiGraphs.gz";
+    umiGraphStream_->push(boost::iostreams::file_sink(graphFilename.string(),
+                                                      std::ios_base::out));
+  }
+
+  boost::iostreams::filtering_ostream& ofile = *umiGraphStream_;
+  ofile << g.num_vertices() << "\t" << g.num_edges();
+
+  ofile << std::endl;
+  return true;
+}
 
 using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 using BulkExpT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;

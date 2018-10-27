@@ -312,7 +312,7 @@ void optimizeCell(SCExpT& experiment,
       std::vector<SalmonEqClass> salmonEqclasses;
       bool dedupOk = dedupClasses(geneAlphas, totalCount, txpGroups,
                                   umiGroups, salmonEqclasses,
-                                  txpToGeneMap, tiers);
+                                  txpToGeneMap, tiers, gzw, true);
       if( !dedupOk ){
         jointlog->error("Deduplication for cell {} failed \n"
                         "Please Report this on github.", trueBarcodeStr);
