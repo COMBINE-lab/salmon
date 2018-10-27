@@ -972,7 +972,15 @@ bool GZipWriter::writeUmiGraph(alevin::graph::Graph& g) {
   }
 
   boost::iostreams::filtering_ostream& ofile = *umiGraphStream_;
-  ofile << g.num_vertices() << "\t" << g.num_edges();
+  ofile << g.num_vertices() << "\t" << g.num_edges() << "\t";
+  for(auto& edge: g.edges){
+    uint32_t source = edge.first;
+    ofile<< source;
+    for(uint32_t sink: edge.second) {
+      ofile<< "," << sink;
+    }
+    ofile<< "\t";
+  }
 
   ofile << std::endl;
   return true;

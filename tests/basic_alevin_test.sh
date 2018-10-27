@@ -3,7 +3,7 @@ OUT=$PWD
 
 tfile=$(mktemp /tmp/foo.XXXXXXXXX)
 
-/usr/bin/time -o $tfile $ALVBIN alevin -lISR  -1 /mnt/scratch5/avi/alevin/data/10x/mohu/100/all_bcs.fq -2 /mnt/scratch5/avi/alevin/data/10x/mohu/100/all_reads.fq -o $OUT/prediction -i /mnt/scratch5/avi/alevin/data/mohu/salmon_index/ -p 20 --tgMap /mnt/scratch5/avi/alevin/data/mohu/gtf/txp2gene.tsv --numCellBootstraps 100 --dumpFeatures --dumpBfh --dumpBarcodeEq --dumpBarcodeMap --dumpCsvCounts --chromium #--expectCells 1000  --end 5 --umiLength 10 --barcodeLength 16 
+/usr/bin/time -o $tfile $ALVBIN alevin -lISR  -1 /mnt/scratch5/avi/alevin/data/10x/mohu/100/all_bcs.fq -2 /mnt/scratch5/avi/alevin/data/10x/mohu/100/all_reads.fq -o $OUT/prediction -i /mnt/scratch5/avi/alevin/data/mohu/salmon_index/ -p 20 --tgMap /mnt/scratch5/avi/alevin/data/mohu/gtf/txp2gene.tsv --numCellBootstraps 100 --dumpFeatures --dumpBfh --dumpBarcodeEq --dumpBarcodeMap --dumpCsvCounts --chromium --dumpUmiGraph #--expectCells 1000  --end 5 --umiLength 10 --barcodeLength 16 
 
 cat $tfile
 
@@ -48,8 +48,8 @@ rm 1.txt 2.txt diff.txt
 
 #python2 alevin_test_data/src-py/alevin.py --txps 322667 --one prediction/alevin/quants_mat.csv --b1 prediction/alevin/barcodes.txt --two alevin_test_data/alevin/quants_mat.csv --b2 alevin_test_data/alevin/barcodes.txt  --type csv
 
-python2 alevin_test_data/src-py/alevin.py --txps 107450  --one prediction/alevin/quants_mat.gz --b1 prediction/alevin/quants_mat_rows.txt --two alevin_test_data/alevin/quants_mat.gz --b2 alevin_test_data/alevin/quants_mat_rows.txt --type sf
+python alevin_test_data/src-py/alevin.py --txps 107450  --one prediction/alevin/quants_mat.gz --b1 prediction/alevin/quants_mat_rows.txt --two alevin_test_data/alevin/quants_mat.gz --b2 alevin_test_data/alevin/quants_mat_rows.txt --type sf
 
-python2 alevin_test_data/src-py/alevin.py --txps 107450 --one prediction/alevin/cell_eq_mat.gz --b1 prediction/alevin/cell_eq_order.txt --two alevin_test_data/alevin/cell_eq_mat.gz --b2 alevin_test_data/alevin/cell_eq_order.txt --type eq
+python alevin_test_data/src-py/alevin.py --txps 107450 --one prediction/alevin/cell_eq_mat.gz --b1 prediction/alevin/cell_eq_order.txt --two alevin_test_data/alevin/cell_eq_mat.gz --b2 alevin_test_data/alevin/cell_eq_order.txt --type eq
 
 #python2 alevin_test_data/src-py/alevin.py --txps 322667 --one prediction/alevin/cell_eq_mat.gz --b1 prediction/alevin/barcodes.txt --two alevin_test_data/alevin/cell_eq_mat.gz --b2 alevin_test_data/alevin/barcodes.txt --type eq

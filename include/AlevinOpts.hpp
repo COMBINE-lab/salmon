@@ -40,6 +40,8 @@ struct AlevinOpts {
   bool dumpCsvCounts;
   // dump big fishing hash
   bool dumpBFH;
+  // dump per cell level umi-graph
+  bool dumpUmiGraph;
   //Stop progress sumps
   bool quiet;
   //flag for deduplication
