@@ -966,13 +966,13 @@ bool GZipWriter::writeUmiGraph(alevin::graph::Graph& g) {
   if (!umiGraphStream_) {
     umiGraphStream_.reset(new boost::iostreams::filtering_ostream);
     umiGraphStream_->push(boost::iostreams::gzip_compressor(6));
-    auto graphFilename = path_ / "alevin" / "cellUmiGraphs.gz";
+    auto graphFilename = path_ / "alevin" / "cell_umi_graphs.gz";
     umiGraphStream_->push(boost::iostreams::file_sink(graphFilename.string(),
                                                       std::ios_base::out));
   }
 
   boost::iostreams::filtering_ostream& ofile = *umiGraphStream_;
-  ofile << g.num_vertices() << "\t" << g.num_edges() << "\t";
+  ofile << g.num_vertices() << "\t";
   for(auto& edge: g.edges){
     uint32_t source = edge.first;
     ofile<< source;
