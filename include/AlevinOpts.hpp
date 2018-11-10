@@ -40,6 +40,8 @@ struct AlevinOpts {
   bool dumpCsvCounts;
   // dump big fishing hash
   bool dumpBFH;
+  // dump per cell level umi-graph
+  bool dumpUmiGraph;
   //Stop progress sumps
   bool quiet;
   //flag for deduplication
@@ -78,6 +80,10 @@ struct AlevinOpts {
   uint32_t maxNumBarcodes;
   // number of bootstraps to perform
   uint32_t numBootstraps;
+  // force the number of cells
+  uint32_t forceCells;
+  // define a close upper bound on expected number of cells
+  uint32_t expectCells;
 
   // Related to the logger
   std::shared_ptr<spdlog::logger> jointLog{nullptr};

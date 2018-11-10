@@ -245,7 +245,7 @@ void optimizeCell(SCExpT& experiment,
                   bool quiet, tbb::atomic<double>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, bool inDebugMode, uint32_t numBootstraps,
-                  bool naiveEqclass){
+                  bool naiveEqclass, bool dumpUmiGraph){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
 
@@ -312,7 +312,8 @@ void optimizeCell(SCExpT& experiment,
       std::vector<SalmonEqClass> salmonEqclasses;
       bool dedupOk = dedupClasses(geneAlphas, totalCount, txpGroups,
                                   umiGroups, salmonEqclasses,
-                                  txpToGeneMap, tiers);
+                                  txpToGeneMap, tiers, gzw,
+                                  dumpUmiGraph);
       if( !dedupOk ){
         jointlog->error("Deduplication for cell {} failed \n"
                         "Please Report this on github.", trueBarcodeStr);
@@ -547,7 +548,8 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                numGenes,
                                aopt.debug,
                                aopt.numBootstraps,
-                               aopt.naiveEqclass);
+                               aopt.naiveEqclass,
+                               aopt.dumpUmiGraph);
   }
 
   for (auto& t : workerThreads) {

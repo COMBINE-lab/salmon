@@ -300,17 +300,20 @@ namespace alevin {
       aopt.noQuant = vm["noQuant"].as<bool>();
       aopt.noSoftMap = vm["noSoftMap"].as<bool>();
       aopt.dumpfq = vm["dumpfq"].as<bool>();
-      aopt.dumpBFH = vm["dumpBfh"].as<bool>();
       aopt.nobarcode = vm["noBarcode"].as<bool>();
       aopt.dumpfeatures = vm["dumpFeatures"].as<bool>();
       aopt.dumpCsvCounts = vm["dumpCsvCounts"].as<bool>();
       aopt.dumpBarcodeEq = vm["dumpBarcodeEq"].as<bool>();
       aopt.dumpBarcodeMap = vm["dumpBarcodeMap"].as<bool>();
       aopt.dumpUmiToolsMap = vm["dumpUmitoolsMap"].as<bool>();
+      aopt.dumpBFH = vm["dumpBfh"].as<bool>();
+      aopt.dumpUmiGraph = vm["dumpUmiGraph"].as<bool>();
       aopt.trimRight = vm["trimRight"].as<uint32_t>();
       aopt.numBootstraps = vm["numCellBootstraps"].as<uint32_t>();
       aopt.lowRegionMinNumBarcodes = vm["lowRegionMinNumBarcodes"].as<uint32_t>();
       aopt.maxNumBarcodes = vm["maxNumBarcodes"].as<uint32_t>();
+      aopt.forceCells = vm["forceCells"].as<uint32_t>();
+      aopt.expectCells = vm["expectCells"].as<uint32_t>();
       if(vm.count("iupac")){
         aopt.iupac = vm["iupac"].as<std::string>();
       }

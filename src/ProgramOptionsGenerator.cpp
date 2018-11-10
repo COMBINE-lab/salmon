@@ -312,6 +312,12 @@ namespace salmon {
        "Generate mean and variance for cell x gene matrix quantification"
        " estimates.")
       (
+       "forceCells",po::value<uint32_t>()->default_value(alevin::defaults::forceCells),
+       "Explicitly specify the number of cells.")
+      (
+       "expectCells",po::value<uint32_t>()->default_value(alevin::defaults::expectCells),
+       "define a close upper bound on expected number of cells")
+      (
        "mrna", po::value<std::string>(),
        "path to a file containing mito-RNA gene, one per line")
       (
@@ -328,6 +334,9 @@ namespace salmon {
       (
        "dumpBfh", po::bool_switch()->default_value(alevin::defaults::dumpBFH),
        "dump the big hash with all the barcodes and the UMI sequence.")
+      (
+       "dumpUmiGraph", po::bool_switch()->default_value(alevin::defaults::dumpUmiGraph),
+       "dump the per cell level Umi Graph.")
       (
        "dumpFeatures", po::bool_switch()->default_value(alevin::defaults::dumpFeatures),
        "Dump features for whitelist and downstream analysis.")
