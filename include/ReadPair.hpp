@@ -57,6 +57,9 @@ struct ReadPair {
     staden::utils::bam_destroy(read2);
   }
 
+  inline bam_seq_t* getRead1() { return read1; }
+  inline bam_seq_t* getRead2() { return read2; }
+
   inline LibraryFormat& libFormat() { return libFmt; }
   inline bool isPaired() const {
     return (orphanStatus == salmon::utils::OrphanStatus::Paired);
