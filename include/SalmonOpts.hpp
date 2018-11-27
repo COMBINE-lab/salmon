@@ -257,6 +257,7 @@ struct SalmonOpts {
   int16_t mismatchPenalty;
   int16_t gapOpenPenalty;
   int16_t gapExtendPenalty;
+  bool mimicStrictBT2;
 
   // for utility (may need to be cleaned up later)
   bool discardOrphansQuasi;

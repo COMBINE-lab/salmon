@@ -1462,6 +1462,19 @@ std::string getCurrentTimeAsString() {
       sopt.rangeFactorizationBins = nbins;
       sopt.useRangeFactorization = true;
     }
+
+    if (sopt.mimicStrictBT2) {
+      sopt.jointLog->info(
+                          "Usage of --mimicStrictBT2 overrides other settings for mapping validation. Setting "
+                          "strict RSEM+Bowtie2-like parameters now.");
+      sopt.discardOrphansQuasi = true;
+      sopt.minScoreFraction = 0.8;
+      sopt.matchScore = 1;
+      sopt.mismatchPenalty = 0;
+      sopt.gapOpenPenalty = 50;
+      sopt.gapExtendPenalty = 30;
+    }
+
     // If the consensus slack was not set explicitly, then it defaults to 1 with
     // validateMappings
     bool consensusSlackExplicit = !vm["consensusSlack"].defaulted();

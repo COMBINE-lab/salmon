@@ -121,6 +121,12 @@ namespace salmon {
        po::value<int16_t>(&sopt.gapExtendPenalty)->default_value(salmon::defaults::gapExtendPenalty),
        "[Quasi-mapping mode only] : The value given to a gap extension in an alignment."
        )
+      ("mimicStrictBT2", // horrible flag name, think of something better
+       po::bool_switch(&(sopt.mimicStrictBT2))->default_value(salmon::defaults::mimicStrictBT2),
+       "[Quasi-mapping mode only] : Set flags to mimic the very strict parameters used by "
+       "RSEM+Bowtie2.  This increases --minScoreFraction to 0.8, disallows dovetailing reads, "
+       "discards orphans, and disallows gaps in alignments."
+       )
       ("allowOrphansFMD",
        po::bool_switch(&(sopt.allowOrphans))->default_value(salmon::defaults::allowOrphansFMD),
        "[FMD-mapping mode only] : Consider orphaned reads as valid hits when "

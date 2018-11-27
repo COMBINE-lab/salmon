@@ -776,6 +776,7 @@ inline int32_t getAlnScore(
                            int8_t mmcost,
                            int32_t maxScore,
                            rapmap::utils::ChainStatus chainStat,
+                           bool mimicStrictBT2,
                            uint32_t buf,
                            AlnCacheMap& alnCache) {
   // If this was a perfect match, don't bother to align or compute the score
@@ -798,11 +799,8 @@ inline int32_t getAlnScore(
   bool invalidStart = (pos < 0);
   if (invalidStart) { rptr += -pos; rlen += pos; pos = 0; }
 
-  // NOTE: TODO: Have a flag to trigger this behavior (probably)
-  // don't make default for release.
   // if we are trying to mimic Bowtie2 with RSEM params
-  bool mimicGapless{true};
-  if (invalidStart and mimicGapless) { return 0; }
+  if (invalidStart and mimicStrictBT2) { return 0; }
 
   if (pos < tlen) {
     bool doUngapped{(!invalidStart) and (chainStat == rapmap::utils::ChainStatus::UNGAPPED)};
@@ -982,6 +980,7 @@ void processReadsQuasi(
   aligner.config() = config;
   ksw_extz_t ez;
   memset(&ez, 0, sizeof(ksw_extz_t));
+  bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   size_t numDropped{0};
 
   AlnCacheMap alnCacheLeft; alnCacheLeft.reserve(32);
@@ -1173,10 +1172,12 @@ void processReadsQuasi(
               auto* r2ptr = h.mateIsFwd ? r2 : r2rc;
 
               int32_t s1 =
-                getAlnScore(aligner, ez, h.pos, r1ptr, l1, tseq, tlen, a, b, maxLeftScore, h.chainStatus.getLeft(), buf, alnCacheLeft);
+                getAlnScore(aligner, ez, h.pos, r1ptr, l1, tseq, tlen, a, b, maxLeftScore, h.chainStatus.getLeft(),
+                            mimicStrictBT2, buf, alnCacheLeft);
 
               int32_t s2 =
-                getAlnScore(aligner, ez, h.matePos, r2ptr, l2, tseq, tlen, a, b, maxRightScore, h.chainStatus.getRight(), buf, alnCacheRight);
+                getAlnScore(aligner, ez, h.matePos, r2ptr, l2, tseq, tlen, a, b, maxRightScore, h.chainStatus.getRight(),
+                            mimicStrictBT2, buf, alnCacheRight);
 
               // mimic RSEM's Bowtie2 scoring 
               /*
@@ -1187,6 +1188,20 @@ void processReadsQuasi(
               double minFragScore = minLeft + minRight;
               if ( (s1 - L1) < minLeft or (s2 - L2) < minRight ) {
               */
+              // throw away dovetailed reads
+              if (mimicStrictBT2) {
+                if (h.fwd == h.mateIsFwd) {
+                  s1 = 0;
+                  s2 = 0;
+                } else if (h.fwd and (h.pos > h.matePos)) {
+                  s1 = 0;
+                  s2 = 0;
+                } else if (h.mateIsFwd and (h.matePos > h.pos)) {
+                  s1 = 0;
+                  s2 = 0;
+                }
+              }
+
               // scores are of read ends combined
               //if ((s1 + s2) < (optFrac * (maxLeftScore + maxRightScore))) {
               // ends are scored separately
@@ -1203,7 +1218,8 @@ void processReadsQuasi(
               auto* rptr = h.fwd ? r1 : r1rc;
 
               int32_t s =
-                getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, a, b, maxLeftScore, h.chainStatus.getLeft(), buf, alnCacheLeft);
+                getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, a, b, maxLeftScore, h.chainStatus.getLeft(),
+                            mimicStrictBT2, buf, alnCacheLeft);
               if (s < (optFrac * maxLeftScore)) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
@@ -1217,7 +1233,8 @@ void processReadsQuasi(
               auto* rptr = h.fwd ? r2 : r2rc;
 
               int32_t s =
-                getAlnScore(aligner, ez, h.pos, rptr, l2, tseq, tlen, a, b, maxRightScore, h.chainStatus.getRight(), buf, alnCacheRight);
+                getAlnScore(aligner, ez, h.pos, rptr, l2, tseq, tlen, a, b, maxRightScore, h.chainStatus.getRight(),
+                            mimicStrictBT2, buf, alnCacheRight);
               if (s < (optFrac * maxRightScore)) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
@@ -1592,6 +1609,7 @@ void processReadsQuasi(
   aligner.config() = config;
   ksw_extz_t ez;
   memset(&ez, 0, sizeof(ksw_extz_t));
+  bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   size_t numDropped{0};
 
   //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
@@ -1672,7 +1690,8 @@ void processReadsQuasi(
 
             auto* rptr = h.fwd ? r1 : r1rc;
             int32_t s =
-              getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, a, b, maxReadScore, h.chainStatus.getLeft(), buf, alnCache);
+              getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, a, b, maxReadScore, h.chainStatus.getLeft(),
+                          mimicStrictBT2, buf, alnCache);
             if (s < (optFrac * maxReadScore)) {
               score = std::numeric_limits<decltype(score)>::min();
             } else {

@@ -654,7 +654,10 @@ inline int32_t getAlnScore(
   if (pos < tlen) {
     bool doUngapped{(!invalidStart) and (chainStat == rapmap::utils::ChainStatus::UNGAPPED)};
     buf = (doUngapped) ? 0 : buf;
-    uint32_t tlen1 = std::min(static_cast<uint32_t>(rlen+buf), static_cast<uint32_t>(tlen - pos));
+    auto lnobuf = static_cast<uint32_t>(tlen - pos);
+    auto lbuf = static_cast<uint32_t>(rlen+buf);
+    auto useBuf = (lbuf < lnobuf);
+    uint32_t tlen1 = std::min(lbuf, lnobuf);
     char* tseq1 = tseq + pos;
     ez.max_q = ez.max_t = ez.mqe_t = ez.mte_q = -1;
     ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
@@ -664,7 +667,8 @@ inline int32_t getAlnScore(
     bool didHash{false};
     if (!alnCache.empty()) {
       // hash the reference string
-      MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), tlen1, reinterpret_cast<uint8_t*>(&hashKey), 0);
+      uint32_t keyLen = useBuf ? tlen1 - buf : tlen1;
+      MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), keyLen, reinterpret_cast<uint8_t*>(&hashKey), 0);
       didHash = true;
       // see if we have this hash
       auto hit = alnCache.find(hashKey);
@@ -676,13 +680,17 @@ inline int32_t getAlnScore(
     // If we got here with s == -1, we don't have the score cached
     if (s == -1) {
       if (doUngapped) {
-        s = ungappedAln(tseq1, rptr, tlen1);
+        // signed version of tlen1
+        int32_t tlen1s = tlen1;
+        int32_t alnLen = rlen < tlen1s ? rlen : tlen1s;
+        s = ungappedAln(tseq1, rptr, alnLen);
       } else {
         aligner(rptr, rlen, tseq1, tlen1, &ez, ksw2pp::EnumToType<ksw2pp::KSW2AlignmentType::EXTENSION>());
         s = std::max(ez.mqe, ez.mte);
       }
       if (!didHash) {
-        MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), tlen1, reinterpret_cast<uint8_t*>(&hashKey), 0);
+        uint32_t keyLen = useBuf ? tlen1 - buf : tlen1;
+        MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), keyLen, reinterpret_cast<uint8_t*>(&hashKey), 0);
       }
       alnCache[hashKey] = s;
     }
