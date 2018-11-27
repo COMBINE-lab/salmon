@@ -1178,19 +1178,19 @@ void processReadsQuasi(
               int32_t s2 =
                 getAlnScore(aligner, ez, h.matePos, r2ptr, l2, tseq, tlen, a, b, maxRightScore, h.chainStatus.getRight(), buf, alnCacheRight);
 
-              
               // mimic RSEM's Bowtie2 scoring 
+              /*
               int32_t L1 = rp.first.seq.length();
               int32_t L2 = rp.second.seq.length();
               double minLeft = -0.1 * L1;
               double minRight = -0.1 * L2;
               double minFragScore = minLeft + minRight;
               if ( (s1 - L1) < minLeft or (s2 - L2) < minRight ) {
-
+              */
               // scores are of read ends combined
               //if ((s1 + s2) < (optFrac * (maxLeftScore + maxRightScore))) {
               // ends are scored separately
-              //if ((s1 < (optFrac * maxLeftScore)) or (s2 < (optFrac * maxRightScore))) {
+              if ((s1 < (optFrac * maxLeftScore)) or (s2 < (optFrac * maxRightScore))) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
                 score = s1 + s2;
