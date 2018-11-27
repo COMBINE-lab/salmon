@@ -838,10 +838,6 @@ inline int32_t getAlnScore(
       } else {
         aligner(rptr, rlen, tseq1, tlen1, &ez, ksw2pp::EnumToType<ksw2pp::KSW2AlignmentType::EXTENSION>());
         s = std::max(ez.mqe, ez.mte);
-        // signed version of tlen1
-        //int32_t tlen1s = tlen1;
-        //int32_t alnLen = rlen < tlen1s ? rlen : tlen1s;
-        //s = ungappedAln(tseq1, rptr, alnLen);
       }
       if (!didHash) {
         uint32_t keyLen = useBuf ? tlen1 - buf : tlen1;
