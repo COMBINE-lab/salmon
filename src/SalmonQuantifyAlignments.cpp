@@ -274,6 +274,7 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
               alnGroup->alignments().front()->transcriptID();
           std::unordered_set<size_t> observedTranscripts;
 
+          size_t sidx{0};
           for (auto& aln : alnGroup->alignments()) {
             auto transcriptID = aln->transcriptID();
             auto& transcript = refs[transcriptID];

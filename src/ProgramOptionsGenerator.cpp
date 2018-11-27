@@ -104,21 +104,21 @@ namespace salmon {
        "Salmon Default 0.65 and Alevin Default 0.8"
        )
       ("ma",
-       po::value<int8_t>(&sopt.matchScore)->default_value(salmon::defaults::matchScore),
+       po::value<int16_t>(&sopt.matchScore)->default_value(salmon::defaults::matchScore),
        "[Quasi-mapping mode only] : The value given to a match between read and reference nucleotides "
        "in an alignment."
        )
       ("mp",
-       po::value<int8_t>(&sopt.mismatchPenalty)->default_value(salmon::defaults::mismatchPenalty),
+       po::value<int16_t>(&sopt.mismatchPenalty)->default_value(salmon::defaults::mismatchPenalty),
        "[Quasi-mapping mode only] : The value given to a mis-match between read and reference nucleotides "
        "in an alignment."
        )
       ("go",
-       po::value<int8_t>(&sopt.gapOpenPenalty)->default_value(salmon::defaults::gapOpenPenalty),
+       po::value<int16_t>(&sopt.gapOpenPenalty)->default_value(salmon::defaults::gapOpenPenalty),
        "[Quasi-mapping mode only] : The value given to a gap opening in an alignment."
        )
       ("ge",
-       po::value<int8_t>(&sopt.gapExtendPenalty)->default_value(salmon::defaults::gapExtendPenalty),
+       po::value<int16_t>(&sopt.gapExtendPenalty)->default_value(salmon::defaults::gapExtendPenalty),
        "[Quasi-mapping mode only] : The value given to a gap extension in an alignment."
        )
       ("allowOrphansFMD",

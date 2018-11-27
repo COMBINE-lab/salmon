@@ -797,10 +797,20 @@ inline int32_t getAlnScore(
   int32_t s{-1};
   bool invalidStart = (pos < 0);
   if (invalidStart) { rptr += -pos; rlen += pos; pos = 0; }
+
+  // NOTE: TODO: Have a flag to trigger this behavior (probably)
+  // don't make default for release.
+  // if we are trying to mimic Bowtie2 with RSEM params
+  bool mimicGapless{true};
+  if (invalidStart and mimicGapless) { return 0; }
+
   if (pos < tlen) {
     bool doUngapped{(!invalidStart) and (chainStat == rapmap::utils::ChainStatus::UNGAPPED)};
     buf = (doUngapped) ? 0 : buf;
-    uint32_t tlen1 = std::min(static_cast<uint32_t>(rlen+buf), static_cast<uint32_t>(tlen - pos));
+    auto lnobuf = static_cast<uint32_t>(tlen - pos);
+    auto lbuf = static_cast<uint32_t>(rlen+buf);
+    auto useBuf = (lbuf < lnobuf);
+    uint32_t tlen1 = std::min(lbuf, lnobuf);
     char* tseq1 = tseq + pos;
     ez.max_q = ez.max_t = ez.mqe_t = ez.mte_q = -1;
     ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
@@ -810,7 +820,8 @@ inline int32_t getAlnScore(
     bool didHash{false};
     if (!alnCache.empty()) {
       // hash the reference string
-      MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), tlen1, reinterpret_cast<uint8_t*>(&hashKey), 0);
+      uint32_t keyLen = useBuf ? tlen1 - buf : tlen1;
+      MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), keyLen, reinterpret_cast<uint8_t*>(&hashKey), 0);
       didHash = true;
       // see if we have this hash
       auto hit = alnCache.find(hashKey);
@@ -822,13 +833,21 @@ inline int32_t getAlnScore(
     // If we got here with s == -1, we don't have the score cached
     if (s == -1) {
       if (doUngapped) {
-        s = ungappedAln(tseq1, rptr, tlen1);
+        // signed version of tlen1
+        int32_t tlen1s = tlen1;
+        int32_t alnLen = rlen < tlen1s ? rlen : tlen1s;
+        s = ungappedAln(tseq1, rptr, alnLen);
       } else {
         aligner(rptr, rlen, tseq1, tlen1, &ez, ksw2pp::EnumToType<ksw2pp::KSW2AlignmentType::EXTENSION>());
         s = std::max(ez.mqe, ez.mte);
+        // signed version of tlen1
+        //int32_t tlen1s = tlen1;
+        //int32_t alnLen = rlen < tlen1s ? rlen : tlen1s;
+        //s = ungappedAln(tseq1, rptr, alnLen);
       }
       if (!didHash) {
-        MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), tlen1, reinterpret_cast<uint8_t*>(&hashKey), 0);
+        uint32_t keyLen = useBuf ? tlen1 - buf : tlen1;
+        MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), keyLen, reinterpret_cast<uint8_t*>(&hashKey), 0);
       }
       alnCache[hashKey] = s;
     }
@@ -854,6 +873,7 @@ void processReadsQuasi(
     SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache) {
+
   uint64_t count_fwd = 0, count_bwd = 0;
   // Seed with a real random value, if available
   std::random_device rd;
@@ -953,11 +973,11 @@ void processReadsQuasi(
   config.dropoff = -1;
   config.gapo = salmonOpts.gapOpenPenalty;
   config.gape = salmonOpts.gapExtendPenalty;
-  config.bandwidth = 10;
+  config.bandwidth = 15;
   config.flag = 0;
   config.flag |= KSW_EZ_SCORE_ONLY;
-  int8_t a = salmonOpts.matchScore;
-  int8_t b = salmonOpts.mismatchPenalty;
+  int8_t a = static_cast<int8_t>(salmonOpts.matchScore);
+  int8_t b = static_cast<int8_t>(salmonOpts.mismatchPenalty);
   KSW2Aligner aligner(static_cast<int8_t>(a), static_cast<int8_t>(b));
   aligner.config() = config;
   ksw_extz_t ez;
@@ -1138,7 +1158,7 @@ void processReadsQuasi(
             auto& t = transcripts[h.tid];
             char* tseq = const_cast<char*>(t.Sequence());
             const int32_t tlen = static_cast<int32_t>(t.RefLength);
-            const uint32_t buf{8};
+            const uint32_t buf{10};
 
             if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
               if (!h.fwd and !r1rc) {
@@ -1158,7 +1178,19 @@ void processReadsQuasi(
               int32_t s2 =
                 getAlnScore(aligner, ez, h.matePos, r2ptr, l2, tseq, tlen, a, b, maxRightScore, h.chainStatus.getRight(), buf, alnCacheRight);
 
-              if ((s1 + s2) < (optFrac * (maxLeftScore + maxRightScore))) {
+              
+              // mimic RSEM's Bowtie2 scoring 
+              int32_t L1 = rp.first.seq.length();
+              int32_t L2 = rp.second.seq.length();
+              double minLeft = -0.1 * L1;
+              double minRight = -0.1 * L2;
+              double minFragScore = minLeft + minRight;
+              if ( (s1 - L1) < minLeft or (s2 - L2) < minRight ) {
+
+              // scores are of read ends combined
+              //if ((s1 + s2) < (optFrac * (maxLeftScore + maxRightScore))) {
+              // ends are scored separately
+              //if ((s1 < (optFrac * maxLeftScore)) or (s2 < (optFrac * maxRightScore))) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
                 score = s1 + s2;
@@ -1463,6 +1495,7 @@ void processReadsQuasi(
     SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache) {
+
   uint64_t count_fwd = 0, count_bwd = 0;
   // Seed with a real random value, if available
   std::random_device rd;
@@ -1549,12 +1582,12 @@ void processReadsQuasi(
   config.dropoff = -1;
   config.gapo = salmonOpts.gapOpenPenalty;
   config.gape = salmonOpts.gapExtendPenalty;
-  config.bandwidth = 10;
+  config.bandwidth = 15;
   config.flag = 0;
   config.flag |= KSW_EZ_SCORE_ONLY;
-  //config.flag |= KSW_EZ_APPROX_MAX | KSW_EZ_APPROX_DROP;
-  int8_t a = salmonOpts.matchScore;
-  int8_t b = salmonOpts.mismatchPenalty;
+
+  int8_t a = static_cast<int8_t>(salmonOpts.matchScore);
+  int8_t b = static_cast<int8_t>(salmonOpts.mismatchPenalty);
   KSW2Aligner aligner(static_cast<int8_t>(a), static_cast<int8_t>(b));
   aligner.config() = config;
   ksw_extz_t ez;
@@ -1627,7 +1660,7 @@ void processReadsQuasi(
             auto& t = transcripts[h.tid];
             char* tseq = const_cast<char*>(t.Sequence());
             const int32_t tlen = static_cast<int32_t>(t.RefLength);
-            const uint32_t buf{8};
+            const uint32_t buf{10};
 
             // compute the reverse complement only if we
             // need it and don't have it

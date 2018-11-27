@@ -1411,6 +1411,24 @@ std::string getCurrentTimeAsString() {
     }
    }
 
+
+  auto checkScoreValue = [&sopt](int16_t score, std::string sname) -> bool {
+                           using score_t = int8_t;
+                           auto minval = static_cast<int16_t>(std::numeric_limits<score_t>::min());
+                           auto maxval = static_cast<int16_t>(std::numeric_limits<score_t>::max());
+                           if (score <  minval or score > maxval) {
+                             sopt.jointLog->error("You set the {} as {}, but it must be in "
+                                                  "the range [{}, {}].", sname, score, minval, maxval);
+                             return false;
+                           }
+                           return true;
+                         };
+
+  if(!checkScoreValue(sopt.matchScore, "match score")) { return false; }
+  if(!checkScoreValue(sopt.mismatchPenalty, "mismatch penalty")) { return false; }
+  if(!checkScoreValue(sopt.gapOpenPenalty, "gap open penalty")) { return false; }
+  if(!checkScoreValue(sopt.gapExtendPenalty, "gap extend penalty")) { return false; }
+
   if (sopt.mismatchPenalty > 0) {
     sopt.jointLog->warn(
                         "You set the mismatch penalty as {}, but it should be negative.  It is being negated to {}.",

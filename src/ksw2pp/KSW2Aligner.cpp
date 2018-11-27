@@ -75,6 +75,8 @@ unsigned char seq_nt4_table_loc[256] = {
   unsigned int simd = x86_simd();
   haveSSE41 = (simd & SIMD_SSE4_1);
   haveSSE2 = (simd & SIMD_SSE2);
+  haveSSE41 = false;
+  haveSSE2 = false;
   query_.clear();
   target_.clear();
   kalloc_allocator_.reset(km_init());
@@ -100,6 +102,8 @@ KSW2Aligner::KSW2Aligner(std::vector<int8_t> mat) {
   unsigned int simd = x86_simd();
   haveSSE41 = (simd & SIMD_SSE4_1);
   haveSSE2 = (simd & SIMD_SSE2);
+  haveSSE41 = false;
+  haveSSE2 = false;
   query_.clear();
   target_.clear();
   kalloc_allocator_.reset(km_init());
@@ -227,7 +231,9 @@ int KSW2Aligner::operator()(const char* const queryOriginal,
                   target_.data(), config_.alphabetSize, mat_.data(), q, e, w, z,
                   config_.end_bonus, config_.flag, ez);
   } else {
-    std::abort();
+    ksw_extz(kalloc_allocator_.get(), qlen, query_.data(), tlen,
+             target_.data(), config_.alphabetSize, mat_.data(), q, e, w, z,
+             config_.flag, ez);
   }
   return ez->score;
 }
@@ -360,7 +366,9 @@ int KSW2Aligner::operator()(const uint8_t* const query_, const int queryLength,
                   config_.alphabetSize, mat_.data(), q, e, w, z, config_.end_bonus, config_.flag,
                   ez);
   } else {
-    std::abort();
+    ksw_extz(kalloc_allocator_.get(), qlen, query_, tlen, target_,
+                   config_.alphabetSize, mat_.data(), q, e, w, z, config_.flag,
+                   ez);
   }
   return ez->score;
 }

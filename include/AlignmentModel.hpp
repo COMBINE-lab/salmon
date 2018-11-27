@@ -84,13 +84,18 @@ private:
   constexpr static uint32_t numStates = 9;
   constexpr static uint32_t startStateIdx = 81;
 
+  struct AlnModelProb {
+    double fg{salmon::math::LOG_1};
+    double bg{salmon::math::LOG_1};
+  };
+
   /**
    * These functions, which work directly on bam_seq_t* types, drive the
    * update() and logLikelihood() methods above.
    */
   void update(bam_seq_t* read, Transcript& ref, double p, double mass,
               std::vector<AtomicMatrix<double>>& mismatchProfile);
-  double logLikelihood(bam_seq_t* read, Transcript& ref,
+  AlnModelProb logLikelihood(bam_seq_t* read, Transcript& ref,
                        std::vector<AtomicMatrix<double>>& mismatchProfile);
   bool hasIndel(bam_seq_t* r);
 

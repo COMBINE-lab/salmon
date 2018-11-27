@@ -253,10 +253,10 @@ struct SalmonOpts {
   bool validateMappings;
   int32_t consensusSlack;
   double minScoreFraction;
-  int8_t matchScore;
-  int8_t mismatchPenalty;
-  int8_t gapOpenPenalty;
-  int8_t gapExtendPenalty;
+  int16_t matchScore;
+  int16_t mismatchPenalty;
+  int16_t gapOpenPenalty;
+  int16_t gapExtendPenalty;
 
   // for utility (may need to be cleaned up later)
   bool discardOrphansQuasi;

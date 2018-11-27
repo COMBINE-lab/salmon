@@ -21,10 +21,10 @@ namespace defaults {
   constexpr const bool validateMappings{false};
   constexpr const int32_t consensusSlack{0};
   constexpr const double minScoreFraction{0.65};
-  constexpr const int8_t matchScore{2};
-  constexpr const int8_t mismatchPenalty{-4};
-  constexpr const int8_t gapOpenPenalty{5};
-  constexpr const int8_t gapExtendPenalty{3};
+  constexpr const int16_t matchScore{2};
+  constexpr const int16_t mismatchPenalty{-4};
+  constexpr const int16_t gapOpenPenalty{5};
+  constexpr const int16_t gapExtendPenalty{3};
   constexpr const bool alternativeInitMode{false};
   constexpr const char auxDir[] = "aux_info";
   constexpr const bool consistentHits{false};
