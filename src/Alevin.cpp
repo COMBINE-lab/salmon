@@ -995,6 +995,7 @@ salmon-based processing of single-cell RNA-seq data.
     uint8_t validate_num_protocols {0};
     if (dropseq) validate_num_protocols += 1;
     if (indrop) validate_num_protocols += 1;
+    if (chromV3) validate_num_protocols += 1;
     if (chrom) validate_num_protocols += 1;
     if (gemcode) validate_num_protocols += 1;
     if (celseq) validate_num_protocols += 1;
