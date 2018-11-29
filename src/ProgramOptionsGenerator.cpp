@@ -231,9 +231,6 @@ namespace salmon {
        "w1", po::value<std::string>(),
        "Must be used in conjunction with inDrop;")
       (
-       "celseq", po::bool_switch()->default_value(alevin::defaults::isCELSeq),
-       "Use CEL-Seq2 Single Cell protocol for the library.")
-      (
        "dumpBarcodeEq", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeEq),
        "Dump JointEqClas with umi-barcode count.")
       (
@@ -310,6 +307,12 @@ namespace salmon {
       (
        "gemcode", po::bool_switch()->default_value(alevin::defaults::isGemcode),
        "Use 10x gemcode v1 Single Cell protocol for the library.")
+      (
+       "celseq", po::bool_switch()->default_value(alevin::defaults::isCELSeq),
+       "Use CEL-Seq Single Cell protocol for the library.")
+      (
+       "celseq2", po::bool_switch()->default_value(alevin::defaults::isCELSeq2),
+       "Use CEL-Seq2 Single Cell protocol for the library.")
       (
        "whitelist", po::value<std::string>(),
        "File containing white-list barcodes")

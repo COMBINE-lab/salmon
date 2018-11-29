@@ -1096,6 +1096,10 @@ bool GZipWriter::writeEquivCounts<SCExpT, apt::CELSeq>(
                                                         const AlevinOpts<apt::CELSeq>& aopts,
                                                         SCExpT& readExp);
 template
+bool GZipWriter::writeEquivCounts<SCExpT, apt::CELSeq2>(
+                                                        const AlevinOpts<apt::CELSeq2>& aopts,
+                                                        SCExpT& readExp);
+template
 bool GZipWriter::writeEquivCounts<SCExpT, apt::Custom>(
                                                        const AlevinOpts<apt::Custom>& aopts,
                                                        SCExpT& readExp);

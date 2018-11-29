@@ -991,6 +991,7 @@ salmon-based processing of single-cell RNA-seq data.
     bool chrom = vm["chromium"].as<bool>();
     bool gemcode = vm["gemcode"].as<bool>();
     bool celseq = vm["celseq"].as<bool>();
+    bool celseq2 = vm["celseq2"].as<bool>();
 
     uint8_t validate_num_protocols {0};
     if (dropseq) validate_num_protocols += 1;
@@ -999,6 +1000,7 @@ salmon-based processing of single-cell RNA-seq data.
     if (chrom) validate_num_protocols += 1;
     if (gemcode) validate_num_protocols += 1;
     if (celseq) validate_num_protocols += 1;
+    if (celseq2) validate_num_protocols += 1;
 
     if ( validate_num_protocols != 1 ) {
       fmt::print(stderr, "ERROR: Please specify one and only one scRNA protocol;");
@@ -1071,6 +1073,13 @@ salmon-based processing of single-cell RNA-seq data.
     else if(celseq){
       AlevinOpts<apt::CELSeq> aopt;
       //aopt.jointLog->warn("Using CEL-Seq Setting for Alevin");
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString,
+                       barcodeFiles, readFiles);
+    }
+    else if(celseq2){
+      AlevinOpts<apt::CELSeq2> aopt;
+      //aopt.jointLog->warn("Using CEL-Seq2 Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
                        vm, commentString,
                        barcodeFiles, readFiles);

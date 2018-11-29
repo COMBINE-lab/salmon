@@ -62,6 +62,11 @@ namespace alevin{
       // and a 6 bp UMI.
       CELSeq(): Rule(8, 6, BarcodeEnd::FIVE, 65536){}
     };
+    struct CELSeq2 : Rule{
+      // WEHI SCORE's CEL-Seq2 starts from 5' end with a 8 bp barcode
+      // and a 6 bp UMI.
+      CELSeq2(): Rule(6, 6, BarcodeEnd::FIVE, 4096){}
+    };
 
     //dummy class
     struct Custom : Rule{

@@ -113,6 +113,7 @@ namespace defaults {
   constexpr const bool isInDrop{false};
   constexpr const bool isGemcode{false};
   constexpr const bool isCELSeq{false};
+  constexpr const bool isCELSeq2{false};
   constexpr const bool noQuant{false};
   constexpr const bool noSoftMap{true};
   constexpr const bool useCorrelation{false};

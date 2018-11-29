@@ -536,6 +536,13 @@ namespace alevin {
                                       CFreqMapT& freqCounter,
                                       spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                                       size_t numLowConfidentBarcode);
+    template bool performWhitelisting(AlevinOpts<alevin::protocols::CELSeq2>& aopt,
+                                      std::vector<uint32_t>& umiCount,
+                                      DoubleMatrixT& geneCountsMatrix,
+                                      std::vector<std::string>& trueBarcodes,
+                                      CFreqMapT& freqCounter,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                                      size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::Custom>& aopt,
                                       std::vector<uint32_t>& umiCount,
                                       DoubleMatrixT& geneCountsMatrix,
