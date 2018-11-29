@@ -628,6 +628,7 @@ inline int32_t getAlnScore(
                            char* tseq, int32_t tlen,
                            int8_t mscore,
                            int8_t mmcost,
+                           bool multiMapping,
                            int32_t maxScore,
                            rapmap::utils::ChainStatus chainStat,
                            uint32_t buf,
@@ -648,7 +649,7 @@ inline int32_t getAlnScore(
     return ungappedScore;
   };
 
-  int32_t s{-1};
+  int32_t s{std::numeric_limits<int32_t>::lowest()};
   bool invalidStart = (pos < 0);
   if (invalidStart) { rptr += -pos; rlen += pos; pos = 0; }
   if (pos < tlen) {
@@ -678,7 +679,7 @@ inline int32_t getAlnScore(
       }
     }
     // If we got here with s == -1, we don't have the score cached
-    if (s == -1) {
+    if (s == std::numeric_limits<int32_t>::lowest()) {
       if (doUngapped) {
         // signed version of tlen1
         int32_t tlen1s = tlen1;
@@ -688,11 +689,13 @@ inline int32_t getAlnScore(
         aligner(rptr, rlen, tseq1, tlen1, &ez, ksw2pp::EnumToType<ksw2pp::KSW2AlignmentType::EXTENSION>());
         s = std::max(ez.mqe, ez.mte);
       }
-      if (!didHash) {
-        uint32_t keyLen = useBuf ? tlen1 - buf : tlen1;
-        MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), keyLen, reinterpret_cast<uint8_t*>(&hashKey), 0);
+      if (multiMapping) {
+        if (!didHash) {
+          uint32_t keyLen = useBuf ? tlen1 - buf : tlen1;
+          MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), keyLen, reinterpret_cast<uint8_t*>(&hashKey), 0);
+        }
+        alnCache[hashKey] = s;
       }
-      alnCache[hashKey] = s;
     }
   }
   return s;
@@ -1093,8 +1096,9 @@ void processReadsQuasi(
           std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
           size_t idx{0};
           double optFrac{salmonOpts.minScoreFraction};
-          int32_t maxReadScore = a * sub_seq.length();
+          int32_t maxReadScore{a * static_cast<int32_t>(sub_seq.length())};
 
+          bool multiMapping{jointHits.size() > 1};
           for (auto& h : jointHits) {
             int32_t score{std::numeric_limits<int32_t>::min()};
             auto& t = transcripts[h.tid];
@@ -1113,7 +1117,7 @@ void processReadsQuasi(
             auto* rptr = h.fwd ? r1 : r1rc;
             int32_t s =
               getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, a, b,
-                          maxReadScore, h.chainStatus.getLeft(), buf, alnCache);
+                          multiMapping, maxReadScore, h.chainStatus.getLeft(), buf, alnCache);
             if (s < (optFrac * maxReadScore)) {
               score = std::numeric_limits<decltype(score)>::min();
             } else {

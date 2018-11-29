@@ -75,8 +75,6 @@ unsigned char seq_nt4_table_loc[256] = {
   unsigned int simd = x86_simd();
   haveSSE41 = (simd & SIMD_SSE4_1);
   haveSSE2 = (simd & SIMD_SSE2);
-  haveSSE41 = false;
-  haveSSE2 = false;
   query_.clear();
   target_.clear();
   kalloc_allocator_.reset(km_init());
@@ -102,8 +100,6 @@ KSW2Aligner::KSW2Aligner(std::vector<int8_t> mat) {
   unsigned int simd = x86_simd();
   haveSSE41 = (simd & SIMD_SSE4_1);
   haveSSE2 = (simd & SIMD_SSE2);
-  haveSSE41 = false;
-  haveSSE2 = false;
   query_.clear();
   target_.clear();
   kalloc_allocator_.reset(km_init());
