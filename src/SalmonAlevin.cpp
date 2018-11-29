@@ -648,7 +648,7 @@ inline int32_t getAlnScore(
     return ungappedScore;
   };
 
-  int32_t s{-1};
+  int32_t s{std::numeric_limits<int32_t>::lowest()};
   bool invalidStart = (pos < 0);
   if (invalidStart) { rptr += -pos; rlen += pos; pos = 0; }
   if (pos < tlen) {
@@ -678,7 +678,7 @@ inline int32_t getAlnScore(
       }
     }
     // If we got here with s == -1, we don't have the score cached
-    if (s == -1) {
+    if (s == std::numeric_limits<int32_t>::lowest()) {
       if (doUngapped) {
         // signed version of tlen1
         int32_t tlen1s = tlen1;
