@@ -776,6 +776,7 @@ inline int32_t getAlnScore(
                            int8_t mmcost,
                            int32_t maxScore,
                            rapmap::utils::ChainStatus chainStat,
+                           bool multiMapping, // was there > 1 hit for this read
                            bool mimicStrictBT2,
                            uint32_t buf,
                            AlnCacheMap& alnCache) {
@@ -839,11 +840,15 @@ inline int32_t getAlnScore(
         aligner(rptr, rlen, tseq1, tlen1, &ez, ksw2pp::EnumToType<ksw2pp::KSW2AlignmentType::EXTENSION>());
         s = std::max(ez.mqe, ez.mte);
       }
-      if (!didHash) {
-        uint32_t keyLen = useBuf ? tlen1 - buf : tlen1;
-        MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), keyLen, reinterpret_cast<uint8_t*>(&hashKey), 0);
-      }
-      alnCache[hashKey] = s;
+
+      if (multiMapping) { // don't bother to fill up a cache unless this is a multi-mapping read
+        if (!didHash) {
+          uint32_t keyLen = useBuf ? tlen1 - buf : tlen1;
+          MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), keyLen, reinterpret_cast<uint8_t*>(&hashKey), 0);
+        }
+        alnCache[hashKey] = s;
+      } // was a multi-mapper
+
     }
   }
   return s;
@@ -1145,8 +1150,9 @@ void processReadsQuasi(
           std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
           size_t idx{0};
           double optFrac{salmonOpts.minScoreFraction};
-          int32_t maxLeftScore = a * rp.first.seq.length();
-          int32_t maxRightScore = a * rp.second.seq.length();
+          int32_t maxLeftScore{a * static_cast<int32_t>(rp.first.seq.length())};
+          int32_t maxRightScore{a * static_cast<int32_t>(rp.second.seq.length())};
+          bool multiMapping{jointHits.size() > 1};
 
           for (auto& h : jointHits) {
             int32_t score{std::numeric_limits<int32_t>::min()};
@@ -1169,11 +1175,11 @@ void processReadsQuasi(
 
               int32_t s1 =
                 getAlnScore(aligner, ez, h.pos, r1ptr, l1, tseq, tlen, a, b, maxLeftScore, h.chainStatus.getLeft(),
-                            mimicStrictBT2, buf, alnCacheLeft);
+                            multiMapping, mimicStrictBT2, buf, alnCacheLeft);
 
               int32_t s2 =
                 getAlnScore(aligner, ez, h.matePos, r2ptr, l2, tseq, tlen, a, b, maxRightScore, h.chainStatus.getRight(),
-                            mimicStrictBT2, buf, alnCacheRight);
+                            multiMapping, mimicStrictBT2, buf, alnCacheRight);
 
               // mimic RSEM's Bowtie2 scoring 
               /*
@@ -1215,7 +1221,7 @@ void processReadsQuasi(
 
               int32_t s =
                 getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, a, b, maxLeftScore, h.chainStatus.getLeft(),
-                            mimicStrictBT2, buf, alnCacheLeft);
+                            multiMapping, mimicStrictBT2, buf, alnCacheLeft);
               if (s < (optFrac * maxLeftScore)) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
@@ -1230,7 +1236,7 @@ void processReadsQuasi(
 
               int32_t s =
                 getAlnScore(aligner, ez, h.pos, rptr, l2, tseq, tlen, a, b, maxRightScore, h.chainStatus.getRight(),
-                            mimicStrictBT2, buf, alnCacheRight);
+                            multiMapping, mimicStrictBT2, buf, alnCacheRight);
               if (s < (optFrac * maxRightScore)) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
@@ -1668,6 +1674,7 @@ void processReadsQuasi(
           size_t idx{0};
           double optFrac{salmonOpts.minScoreFraction};
           int32_t maxReadScore = a * rp.seq.length();
+          bool multiMapping{jointHits.size() > 1};
 
           for (auto& h : jointHits) {
             int32_t score{std::numeric_limits<int32_t>::min()};
@@ -1687,7 +1694,7 @@ void processReadsQuasi(
             auto* rptr = h.fwd ? r1 : r1rc;
             int32_t s =
               getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, a, b, maxReadScore, h.chainStatus.getLeft(),
-                          mimicStrictBT2, buf, alnCache);
+                          multiMapping, mimicStrictBT2, buf, alnCache);
             if (s < (optFrac * maxReadScore)) {
               score = std::numeric_limits<decltype(score)>::min();
             } else {
