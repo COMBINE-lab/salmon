@@ -109,6 +109,7 @@ namespace defaults {
   constexpr const bool eqClassLevel{false};
   constexpr const bool isDropseq{false};
   constexpr const bool isChromium{false};
+  constexpr const bool isChromiumV3{false};
   constexpr const bool isInDrop{false};
   constexpr const bool isGemcode{false};
   constexpr const bool isCELSeq{false};

@@ -55,6 +55,13 @@ namespace alevin {
       return true;
     }
     template <>
+    bool extractUMI<apt::ChromiumV3>(std::string& read,
+                                     apt::ChromiumV3& pt,
+                                     std::string& umi){
+      umi = read.substr(pt.barcodeLength, pt.umiLength);
+      return true;
+    }
+    template <>
     bool extractUMI<apt::Gemcode>(std::string& read,
                                    apt::Gemcode& pt,
                                    std::string& umi){
@@ -90,6 +97,15 @@ namespace alevin {
         nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
       // = read.substr(0, pt.barcodeLength);
     //return true;
+    }
+    template <>
+    nonstd::optional<std::string> extractBarcode<apt::ChromiumV3>(std::string& read,
+                                                                  apt::ChromiumV3& pt){
+      return (read.length() >= pt.barcodeLength) ?
+        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+      //return (read.length() >= pt.barcodeLength) ? (bc.append(read.data(), pt.barcodeLength), true) : false;
+      //bc = read.substr(0, pt.barcodeLength);
+      //return true;
     }
     template <>
     nonstd::optional<std::string> extractBarcode<apt::Chromium>(std::string& read,
@@ -555,6 +571,10 @@ namespace alevin {
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::InDrop>& aopt,
+                           SalmonOpts& sopt,
+                           boost::program_options::variables_map& vm);
+    template
+    bool processAlevinOpts(AlevinOpts<apt::ChromiumV3>& aopt,
                            SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
     template

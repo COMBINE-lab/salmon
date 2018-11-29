@@ -987,6 +987,7 @@ salmon-based processing of single-cell RNA-seq data.
 
     bool dropseq = vm["dropseq"].as<bool>();
     bool indrop = vm["indrop"].as<bool>();
+    bool chromV3 = vm["chromiumV3"].as<bool>();
     bool chrom = vm["chromium"].as<bool>();
     bool gemcode = vm["gemcode"].as<bool>();
     bool celseq = vm["celseq"].as<bool>();
@@ -994,6 +995,7 @@ salmon-based processing of single-cell RNA-seq data.
     uint8_t validate_num_protocols {0};
     if (dropseq) validate_num_protocols += 1;
     if (indrop) validate_num_protocols += 1;
+    if (chromV3) validate_num_protocols += 1;
     if (chrom) validate_num_protocols += 1;
     if (gemcode) validate_num_protocols += 1;
     if (celseq) validate_num_protocols += 1;
@@ -1044,6 +1046,13 @@ salmon-based processing of single-cell RNA-seq data.
         fmt::print(stderr, "ERROR: indrop needs w1 flag too.\n Exiting Now");
         exit(1);
       }
+    }
+    else if(chromV3){
+      AlevinOpts<apt::ChromiumV3> aopt;
+      //aopt.jointLog->warn("Using 10x v3 Setting for Alevin");
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString,
+                       barcodeFiles, readFiles);
     }
     else if(chrom){
       AlevinOpts<apt::Chromium> aopt;

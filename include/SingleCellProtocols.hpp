@@ -45,6 +45,10 @@ namespace alevin{
       }
     };
 
+    struct ChromiumV3 : Rule{
+      ChromiumV3(): Rule(16, 12, BarcodeEnd::FIVE, 4294967295){}
+    };
+
     struct Chromium : Rule{
       Chromium(): Rule(16, 10, BarcodeEnd::FIVE, 4294967295){}
     };

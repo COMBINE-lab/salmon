@@ -1080,6 +1080,10 @@ bool GZipWriter::writeEquivCounts<SCExpT, apt::InDrop>(
                                                        const AlevinOpts<apt::InDrop>& aopts,
                                                        SCExpT& readExp);
 template
+bool GZipWriter::writeEquivCounts<SCExpT, apt::ChromiumV3>(
+                                                         const AlevinOpts<apt::ChromiumV3>& aopts,
+                                                         SCExpT& readExp);
+template
 bool GZipWriter::writeEquivCounts<SCExpT, apt::Chromium>(
                                                          const AlevinOpts<apt::Chromium>& aopts,
                                                          SCExpT& readExp);
