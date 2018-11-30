@@ -793,6 +793,7 @@ void processReadsQuasi(
   }
   if (salmonOpts.validateMappings) {
     hitCollector.enableChainScoring();
+    hitCollector.setMaxMMPExtension(salmonOpts.maxMMPExtension);
   }
 
   SASearcher<RapMapIndexT> saSearcher(qidx);

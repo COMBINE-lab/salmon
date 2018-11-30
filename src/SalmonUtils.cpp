@@ -1453,6 +1453,12 @@ std::string getCurrentTimeAsString() {
                           );
     }
 
+    if (sopt.maxMMPExtension < 1) {
+      sopt.jointLog->error("The maximum MMP extension must be at least 1, but {} was provided.",
+                           sopt.maxMMPExtension);
+      return false;
+    }
+
     if (sopt.rangeFactorizationBins < 4) {
       uint32_t nbins{4};
       sopt.jointLog->info(
@@ -1472,7 +1478,7 @@ std::string getCurrentTimeAsString() {
       sopt.matchScore = 1;
       sopt.mismatchPenalty = 0;
       sopt.gapOpenPenalty = 50;
-      sopt.gapExtendPenalty = 30;
+      sopt.gapExtendPenalty = 50;
     }
 
     // If the consensus slack was not set explicitly, then it defaults to 1 with

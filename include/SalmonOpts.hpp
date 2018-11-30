@@ -258,6 +258,7 @@ struct SalmonOpts {
   int16_t gapOpenPenalty;
   int16_t gapExtendPenalty;
   bool mimicStrictBT2;
+  int32_t maxMMPExtension;
 
   // for utility (may need to be cleaned up later)
   bool discardOrphansQuasi;
