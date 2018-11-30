@@ -99,31 +99,39 @@ namespace salmon {
        )
       ("minScoreFraction",
        po::value<double>(&sopt.minScoreFraction),
-       "[Quasi-mapping mode only] : The fraction of the optimal possible alignment score that a "
+       "[Quasi-mapping mode (w / mapping validation) only] : The fraction of the optimal possible alignment score that a "
        "mapping must achieve in order to be considered \"valid\" --- should be in (0,1].\n"
        "Salmon Default 0.65 and Alevin Default 0.8"
        )
+      ("maxMMPExtension",
+       po::value<int32_t>(&sopt.maxMMPExtension)->default_value(salmon::defaults::maxMMPExtension),
+       "[Quasi-mapping mode (w / mapping validation) only] : Sets the maximum allowable MMP extension when collecting "
+       "suffix array intervals to be used in chaining.  This prevents MMPs from becoming too long, and potentially masking "
+       "intervals that would uncover other good quasi-mappings for the read.  This heuristic mimics the idea of the "
+       "maximum mappable safe prefix (MMSP) in selective alignment.  Setting a smaller value will potentially allow "
+       "for more sensitive, but slower, mapping."
+       )
       ("ma",
        po::value<int16_t>(&sopt.matchScore)->default_value(salmon::defaults::matchScore),
-       "[Quasi-mapping mode only] : The value given to a match between read and reference nucleotides "
+       "[Quasi-mapping mode (w / mapping validation) only] : The value given to a match between read and reference nucleotides "
        "in an alignment."
        )
       ("mp",
        po::value<int16_t>(&sopt.mismatchPenalty)->default_value(salmon::defaults::mismatchPenalty),
-       "[Quasi-mapping mode only] : The value given to a mis-match between read and reference nucleotides "
+       "[Quasi-mapping mode (w / mapping validation) only] : The value given to a mis-match between read and reference nucleotides "
        "in an alignment."
        )
       ("go",
        po::value<int16_t>(&sopt.gapOpenPenalty)->default_value(salmon::defaults::gapOpenPenalty),
-       "[Quasi-mapping mode only] : The value given to a gap opening in an alignment."
+       "[Quasi-mapping mode (w / mapping validation) only] : The value given to a gap opening in an alignment."
        )
       ("ge",
        po::value<int16_t>(&sopt.gapExtendPenalty)->default_value(salmon::defaults::gapExtendPenalty),
-       "[Quasi-mapping mode only] : The value given to a gap extension in an alignment."
+       "[Quasi-mapping mode (w / mapping validation) only] : The value given to a gap extension in an alignment."
        )
       ("mimicStrictBT2", // horrible flag name, think of something better
        po::bool_switch(&(sopt.mimicStrictBT2))->default_value(salmon::defaults::mimicStrictBT2),
-       "[Quasi-mapping mode only] : Set flags to mimic the very strict parameters used by "
+       "[Quasi-mapping mode (w / mapping validation) only] : Set flags to mimic the very strict parameters used by "
        "RSEM+Bowtie2.  This increases --minScoreFraction to 0.8, disallows dovetailing reads, "
        "discards orphans, and disallows gaps in alignments."
        )

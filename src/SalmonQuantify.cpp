@@ -947,6 +947,7 @@ void processReadsQuasi(
   }
   if (salmonOpts.validateMappings) {
     hitCollector.enableChainScoring();
+    hitCollector.setMaxMMPExtension(salmonOpts.maxMMPExtension);
   }
 
   SASearcher<RapMapIndexT> saSearcher(qidx);
@@ -1256,7 +1257,7 @@ void processReadsQuasi(
             // score are filtered out.
             jointHits.erase(
                             std::remove_if(jointHits.begin(), jointHits.end(),
-                                           [&ctr, &scores, &numDropped, bestScore] (const QuasiAlignment& qa) -> bool {
+                                           [&ctr, &scores, &numDropped] (const QuasiAlignment& qa) -> bool {
                                              // soft filter
                                              bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
                                              //strict filter
@@ -1270,7 +1271,8 @@ void processReadsQuasi(
             // soft filter
             double bestScoreD = static_cast<double>(bestScore);
             std::for_each(jointHits.begin(), jointHits.end(),
-                          [bestScoreD](QuasiAlignment& qa) -> void {
+                          [bestScoreD, writeQuasimappings](QuasiAlignment& qa) -> void {
+                            if (writeQuasimappings) { qa.alnScore(static_cast<int32_t>(qa.score())); }
                             double v = bestScoreD - qa.score();
                             qa.score(std::exp(-v));
                           });
@@ -1577,6 +1579,7 @@ void processReadsQuasi(
 
   if (salmonOpts.validateMappings) {
     hitCollector.enableChainScoring();
+    hitCollector.setMaxMMPExtension(salmonOpts.maxMMPExtension);
   }
 
   /**
@@ -1712,7 +1715,7 @@ void processReadsQuasi(
             // score are filtered out.
             jointHits.erase(
                             std::remove_if(jointHits.begin(), jointHits.end(),
-                                           [&ctr, &scores, &numDropped, bestScore] (const QuasiAlignment& qa) -> bool {
+                                           [&ctr, &scores, &numDropped] (const QuasiAlignment& qa) -> bool {
                                              // soft filter
                                              bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
                                              ++ctr;
@@ -1724,7 +1727,8 @@ void processReadsQuasi(
             // for soft filter
             double bestScoreD = static_cast<double>(bestScore);
             std::for_each(jointHits.begin(), jointHits.end(),
-                          [bestScoreD](QuasiAlignment& qa) -> void {
+                          [bestScoreD, writeQuasimappings](QuasiAlignment& qa) -> void {
+                            if (writeQuasimappings) { qa.alnScore(static_cast<int32_t>(qa.score())); }
                             double v = bestScoreD - qa.score();
                             qa.score(std::exp(-v));
                           });
