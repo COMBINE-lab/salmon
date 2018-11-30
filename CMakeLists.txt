@@ -627,8 +627,8 @@ message("Build system will compile libgff")
 message("==================================================================")
 externalproject_add(libgff
   DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-  DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/libgff/archive/v1.1.tar.gz -o libgff.tgz &&
-    ${SHASUM} 34597ecd3718e6d6e7a1dd4350220664be2c1cd992070d1218564a20d7aa5697  libgff.tgz &&
+  DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/libgff/archive/v1.2.tar.gz -o libgff.tgz &&
+    ${SHASUM} bfabf143da828e8db251104341b934458c19d3e3c592d418d228de42becf98eb libgff.tgz &&
     tar -xzvf libgff.tgz
   ##
   #URL https://github.com/COMBINE-lab/libgff/archive/v1.1.tar.gz
@@ -636,10 +636,10 @@ externalproject_add(libgff
   #URL_HASH SHA1=37b3147d78391d1fabbe6a0df313fbf516abbc6f
   #TLS_VERIFY FALSE
   ##
-  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-1.1
+  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-1.2
   #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
   INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-  BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-1.1/build
+  BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-1.2/build
   CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=${CMAKE_CURRENT_SOURCE_DIR}/external/install
 )
 externalproject_add_step(libgff makedir
