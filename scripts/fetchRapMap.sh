@@ -22,11 +22,11 @@ if [ -d ${INSTALL_DIR}/src/rapmap ] ; then
     rm -fr ${INSTALL_DIR}/src/rapmap
 fi
 
-#SVER=salmon-v0.11.3
-SVER=develop-salmon-refactor-chaining
+SVER=salmon-v0.12.0
+#SVER=develop-salmon
 #SVER=pe-chaining
 
-EXPECTED_SHA256=b863548383448c21a862cc568d648199401284d70aafce8d97e798da2033aec1
+EXPECTED_SHA256=3a48ac33d4c49e478085d5ada054f347a676e6dc4f7ba4db09ab5b249ddfc404
 
 
 mkdir -p ${EXTERNAL_DIR}
@@ -44,7 +44,7 @@ fi
 if [ -z "${hashcheck-}" ]; then
     echo "Couldn't find shasum command; can't verify contents of downloaded RapMap";
 else
-    if [[ $SVER != develop-salmon-refactor-chaining ]]; then
+    if [[ $SVER != develop-salmon ]]; then
         echo "${EXPECTED_SHA256}  ${EXTERNAL_DIR}/rapmap.zip" | ${hashcheck} -c - || { echo "rapmap.zip did not match expected SHA1! Exiting."; exit 1; }
     else
         echo "not testing sha since pulling from develop-salmon"

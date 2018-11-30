@@ -1386,7 +1386,7 @@ std::string getCurrentTimeAsString() {
 
   // If not in alevin mode, inform the user about validateMappings
   if (!sopt.alevinMode and !sopt.validateMappings) {
-    sopt.jointLog->info("\n\n"
+    sopt.jointLog->warn("\n\n"
                         "NOTE: It appears you are running salmon without the `--validateMappings` option.\n"
                         "Mapping validation can generally improve both the sensitivity and specificity of mapping,\n"
                         "with only a moderate increase in use of computational resources. \n"
