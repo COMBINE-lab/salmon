@@ -1256,7 +1256,7 @@ void processReadsQuasi(
             // score are filtered out.
             jointHits.erase(
                             std::remove_if(jointHits.begin(), jointHits.end(),
-                                           [&ctr, &scores, &numDropped, bestScore] (const QuasiAlignment& qa) -> bool {
+                                           [&ctr, &scores, &numDropped] (const QuasiAlignment& qa) -> bool {
                                              // soft filter
                                              bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
                                              //strict filter
@@ -1712,7 +1712,7 @@ void processReadsQuasi(
             // score are filtered out.
             jointHits.erase(
                             std::remove_if(jointHits.begin(), jointHits.end(),
-                                           [&ctr, &scores, &numDropped, bestScore] (const QuasiAlignment& qa) -> bool {
+                                           [&ctr, &scores, &numDropped] (const QuasiAlignment& qa) -> bool {
                                              // soft filter
                                              bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
                                              ++ctr;
