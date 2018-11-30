@@ -26,7 +26,7 @@ SVER=salmon-v0.12.0
 #SVER=develop-salmon
 #SVER=pe-chaining
 
-EXPECTED_SHA256=3a48ac33d4c49e478085d5ada054f347a676e6dc4f7ba4db09ab5b249ddfc404
+EXPECTED_SHA256=05102c0bbc8a0c0056a01cd0e8788fa5b504aee58ac226ab8c0e3ffec8019790
 
 
 mkdir -p ${EXTERNAL_DIR}
