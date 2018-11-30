@@ -126,7 +126,7 @@ namespace defaults {
   constexpr const bool dumpBarcodeMap{false};
   constexpr const bool dumpCSVCounts{false};
   constexpr const bool noEM{false};
-  constexpr const bool debug{false};
+  constexpr const bool debug{true};
   constexpr const bool noBarcode{false};
   constexpr const uint32_t trimRight{0};
   constexpr const uint32_t numBootstraps{0};
