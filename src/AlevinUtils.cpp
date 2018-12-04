@@ -79,7 +79,7 @@ namespace alevin {
     bool extractUMI<apt::CELSeq2>(std::string& read,
                                   apt::CELSeq2& pt,
                                   std::string& umi){
-      umi = read.substr(pt.barcodeLength, pt.umiLength);
+      umi = read.substr(0, pt.umiLength);
       return true;
     }
     template <>
@@ -144,11 +144,9 @@ namespace alevin {
     template <>
     nonstd::optional<std::string> extractBarcode<apt::CELSeq2>(std::string& read,
                                                                apt::CELSeq2& pt){
-      return (read.length() >= pt.barcodeLength) ?
-        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
-      //return (read.length() >= pt.barcodeLength) ? (bc.append(read.data(), pt.barcodeLength), true) : false;
-      //bc = read.substr(0, pt.barcodeLength);
-      //return true;
+      return (read.length() >= (pt.umiLength + pt.barcodeLength)) ?
+        nonstd::optional<std::string>(read.substr(pt.umiLength, pt.barcodeLength)) : nonstd::nullopt;
+
     }
     template <>
     nonstd::optional<std::string> extractBarcode<apt::CELSeq>(std::string& read,
