@@ -58,7 +58,9 @@ public:
   bool writeBootstraps(bool inDebugMode,
                        std::string& bcName,
                        std::vector<double>& alphas,
-                       std::vector<double>& variance);
+                       std::vector<double>& variance,
+                       bool useAllBootstraps,
+                       std::vector<std::vector<double>>& sampleEstimates);
 
   template <typename ExpT>
   bool writeEmptyAbundances(const SalmonOpts& sopt, ExpT& readExp);
@@ -81,6 +83,7 @@ private:
   std::unique_ptr<boost::iostreams::filtering_ostream> countMatrixStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> meanMatrixStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> varMatrixStream_{nullptr};
+  std::unique_ptr<boost::iostreams::filtering_ostream> fullBootstrapMatrixStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> tierMatrixStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> umiGraphStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> cellEQStream_{nullptr};

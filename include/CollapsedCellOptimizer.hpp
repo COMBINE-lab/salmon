@@ -71,7 +71,7 @@ void optimizeCell(SCExpT& experiment,
                   bool quiet, tbb::atomic<double>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, bool inDebugMode, uint32_t numBootstraps,
-                  bool naiveEqclass, bool dumpUmiGraph);
+                  bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps);
 
 using VecT = CollapsedCellOptimizer::SerialVecType;
 
