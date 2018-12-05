@@ -40,6 +40,9 @@ GZipWriter::~GZipWriter() {
   if (varMatrixStream_) {
     varMatrixStream_->reset();
   }
+  if (fullBootstrapMatrixStream_) {
+    fullBootstrapMatrixStream_->reset();
+  }
   if (bcBootNameStream_) {
     bcNameStream_.reset();
   }
@@ -69,6 +72,9 @@ void GZipWriter::close_all_streams(){
   }
   if (varMatrixStream_) {
     varMatrixStream_->reset();
+  }
+  if (fullBootstrapMatrixStream_) {
+    fullBootstrapMatrixStream_->reset();
   }
   if (bcBootNameStream_) {
     bcBootNameStream_->close();
@@ -701,7 +707,9 @@ bool GZipWriter::writeAbundances(
 bool GZipWriter::writeBootstraps(bool inDebugMode,
                                  std::string& bcName,
                                  std::vector<double>& alphas,
-                                 std::vector<double>& variance){
+                                 std::vector<double>& variance,
+                                 bool useAllBootstraps,
+                                 std::vector<std::vector<double>>& sampleEstimates){
 #if defined __APPLE__
   spin_lock::scoped_lock sl(writeMutex_);
 #else
@@ -726,6 +734,14 @@ bool GZipWriter::writeBootstraps(bool inDebugMode,
     bcBootNameStream_->open(bcBootNameFilename.string());
   }
 
+  if (useAllBootstraps and !fullBootstrapMatrixStream_) {
+    auto fullBootstrapsFilename = path_ / "alevin" / "quants_boot_mat.gz";
+    fullBootstrapMatrixStream_.reset(new boost::iostreams::filtering_ostream);
+    fullBootstrapMatrixStream_->push(boost::iostreams::gzip_compressor(6));
+    fullBootstrapMatrixStream_->push(boost::iostreams::file_sink(fullBootstrapsFilename.string(),
+                                                      std::ios_base::out | std::ios_base::binary));
+  }
+
   boost::iostreams::filtering_ostream& countfile = *meanMatrixStream_;
   boost::iostreams::filtering_ostream& varfile = *varMatrixStream_;
   std::ofstream& namefile = *bcBootNameStream_;
@@ -740,6 +756,14 @@ bool GZipWriter::writeBootstraps(bool inDebugMode,
                   elSize * num);
   varfile.write(reinterpret_cast<char*>(variance.data()),
                   elSize * num);
+
+  if (useAllBootstraps){
+    boost::iostreams::filtering_ostream& fullBootsfile = *fullBootstrapMatrixStream_;
+    for(auto& sample: sampleEstimates){
+      fullBootsfile.write(reinterpret_cast<char*>(sample.data()),
+                          elSize * num);
+    }
+  }
 
   double total_counts = std::accumulate(alphas.begin(), alphas.end(), 0.0);
   if ( not inDebugMode and not (total_counts > 0.0)){

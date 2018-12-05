@@ -131,7 +131,9 @@ bool runBootstraps(size_t numGenes,
                    std::vector<SalmonEqClass>& salmonEqclasses,
                    std::shared_ptr<spdlog::logger>& jointlog,
                    uint32_t numBootstraps,
-                   CollapsedCellOptimizer::SerialVecType& variance){
+                   CollapsedCellOptimizer::SerialVecType& variance,
+                   bool useAllBootstraps,
+                   std::vector<std::vector<double>>& sampleEstimates){
 
   // An EM termination criterion, adopted from Bray et al. 2016
   uint32_t minIter {50};
@@ -221,6 +223,10 @@ bool runBootstraps(size_t numGenes,
       mean[i] += alpha;
       squareMean[i] += alpha * alpha;
     }
+
+    if (useAllBootstraps) {
+      sampleEstimates.emplace_back(alphas);
+    }
   }//end-boot-while
 
   // calculate mean and variance of the values
@@ -245,7 +251,7 @@ void optimizeCell(SCExpT& experiment,
                   bool quiet, tbb::atomic<double>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, bool inDebugMode, uint32_t numBootstraps,
-                  bool naiveEqclass, bool dumpUmiGraph){
+                  bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
 
@@ -350,14 +356,20 @@ void optimizeCell(SCExpT& experiment,
       salmon::utils::incLoop(totalDedupCounts, totalCount);
 
       if ( numBootstraps > 0 ){
+        std::vector<std::vector<double>> sampleEstimates;
         std::vector<double> bootVariance(numGenes, 0.0);
+
         bool isBootstrappingOk = runBootstraps(numGenes,
                                                geneAlphas,
                                                salmonEqclasses,
                                                jointlog,
                                                numBootstraps,
-                                               bootVariance);
-        if( !isBootstrappingOk ){
+                                               bootVariance,
+                                               useAllBootstraps,
+                                               sampleEstimates);
+        if( not isBootstrappingOk or
+            (useAllBootstraps and sampleEstimates.size()!=numBootstraps)
+            ){
           jointlog->error("Bootstrapping failed \n"
                           "Please Report this on github.");
           jointlog->flush();
@@ -366,7 +378,8 @@ void optimizeCell(SCExpT& experiment,
 
         // write the abundance for the cell
         gzw.writeBootstraps( inDebugMode, trueBarcodeStr,
-                             geneAlphas, bootVariance );
+                             geneAlphas, bootVariance,
+                             useAllBootstraps, sampleEstimates);
       }//end-if
     }
     else {
@@ -549,7 +562,8 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                aopt.debug,
                                aopt.numBootstraps,
                                aopt.naiveEqclass,
-                               aopt.dumpUmiGraph);
+                               aopt.dumpUmiGraph,
+                               aopt.dumpfeatures);
   }
 
   for (auto& t : workerThreads) {
