@@ -1936,7 +1936,8 @@ void processReadLibrary(
     if (salmonOpts.qmFileName != "" and i == 0) {
       rapmap::utils::writeSAMHeader(*index, salmonOpts.qmLog);
     }
-    auto threadFun = [&, i]() -> void {
+    // TODO: understand why the index must be captured by value on old OSX compilers
+    auto threadFun = [&, i, index]() -> void {
       processReadsQuasi(parserPtr.get(), readExp, rl, structureVec[i],
                         numObservedFragments, numAssignedFragments, numValidHits,
                         upperBoundHits, index, transcripts,
