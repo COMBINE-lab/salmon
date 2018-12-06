@@ -150,7 +150,8 @@ private:
 
     // Free the memory used for the arg vector
     for (int32_t i = 0; i < quasiArgc; ++i) {
-      delete quasiArgv[i];
+      // I hate manual memory management
+      delete[] quasiArgv[i];
     }
     delete[] quasiArgv;
 

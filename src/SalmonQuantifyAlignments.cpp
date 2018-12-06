@@ -154,7 +154,10 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
   auto& observedGCMass = observedBiasParams.observedGCMass;
   auto& obsFwd = observedBiasParams.massFwd;
   auto& obsRC = observedBiasParams.massRC;
+  auto& observedPosBiasFwd = observedBiasParams.posBiasFW;
+  auto& observedPosBiasRC = observedBiasParams.posBiasRC;
 
+  bool posBiasCorrect = salmonOpts.posBiasCorrect;
   bool gcBiasCorrect = salmonOpts.gcBiasCorrect;
 
   using salmon::math::LOG_0;
@@ -162,6 +165,8 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
   using salmon::math::LOG_EPSILON;
   using salmon::math::logAdd;
   using salmon::math::logSub;
+
+  auto orphanProb = salmonOpts.discardOrphansAln ? LOG_0 : LOG_EPSILON;
 
   // k-mers for sequence bias
   Mer leftMer;
@@ -269,6 +274,7 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
               alnGroup->alignments().front()->transcriptID();
           std::unordered_set<size_t> observedTranscripts;
 
+          size_t sidx{0};
           for (auto& aln : alnGroup->alignments()) {
             auto transcriptID = aln->transcriptID();
             auto& transcript = refs[transcriptID];
@@ -289,7 +295,10 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
             // If we are expecting a paired-end library, and this is an orphan,
             // then logFragProb should be small
             if (isUnexpectedOrphan(aln, expectedLibraryFormat)) {
-              logFragProb = LOG_EPSILON;
+              logFragProb = orphanProb;
+              if (logFragProb == LOG_0) {
+                continue;
+              }
             }
 
             if (flen > 0.0 and aln->isPaired() and useFragLengthDist and
@@ -640,6 +649,50 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
               }
             }
 
+            if (posBiasCorrect) {
+              auto lengthClassIndex = transcript.lengthClassIndex();
+              switch (aln->mateStatus()) {
+              case rapmap::utils::MateStatus::PAIRED_END_PAIRED: {
+                // TODO: Handle the non opposite strand case
+                if (aln->isInward()) {
+                  auto* read1 = aln->getRead1();
+                  auto* read2 = aln->getRead2();
+                  int32_t posFW = aln->fwd() ? bam_pos(read1) : bam_pos(read2) + bam_seq_len(read2);
+                  int32_t posRC = aln->fwd() ? bam_pos(read2) + bam_seq_len(read2) : bam_pos(read1);
+                  posFW = posFW < 0 ? 0 : posFW;
+                  posFW = posFW >= static_cast<int32_t>(transcript.RefLength) ?
+                    static_cast<int32_t>(transcript.RefLength) - 1
+                    : posFW;
+                  posRC = posRC < 0 ? 0 : posRC;
+                  posRC = posRC >= static_cast<int32_t>(transcript.RefLength) ?
+                    static_cast<int32_t>(transcript.RefLength) - 1
+                    : posRC;
+                  observedPosBiasFwd[lengthClassIndex].addMass(
+                                                               posFW, transcript.RefLength, aln->logProb);
+                  observedPosBiasRC[lengthClassIndex].addMass(
+                                                              posRC, transcript.RefLength, aln->logProb);
+                }
+              } break;
+              case rapmap::utils::MateStatus::PAIRED_END_LEFT:
+              case rapmap::utils::MateStatus::PAIRED_END_RIGHT:
+              case rapmap::utils::MateStatus::SINGLE_END: {
+                int32_t pos = aln->pos();
+                pos = pos < 0 ? 0 : pos;
+                pos = pos >= static_cast<int32_t>(transcript.RefLength) ?
+                  static_cast<int32_t>(transcript.RefLength) - 1 : pos;
+                if (aln->fwd()) {
+                  observedPosBiasFwd[lengthClassIndex].addMass(
+                                                               pos, transcript.RefLength, aln->logProb);
+                } else {
+                  observedPosBiasRC[lengthClassIndex].addMass(
+                                                              pos, transcript.RefLength, aln->logProb);
+                }
+              } break;
+              default:
+                break;
+              }
+            }
+
             // Collect the GC-fragment bias samples
             if (gcBiasCorrect) {
               if (aln->isPaired()) {
@@ -892,6 +945,7 @@ bool quantifyLibrary(AlignmentLibraryT<FragT>& alnLib,
   bool initialRound{true};
   bool haveCache{false};
   bool doReset{true};
+  bool posBiasCorrect{salmonOpts.posBiasCorrect};
   bool gcBiasCorrect{salmonOpts.gcBiasCorrect};
   size_t maxCacheSize{salmonOpts.mappingCacheMemoryLimit};
 
@@ -1090,6 +1144,17 @@ bool quantifyLibrary(AlignmentLibraryT<FragT>& alnLib,
       fw.combineCounts(fwloc);
       rc.combineCounts(rcloc);
 
+      /**
+       * positional biases
+       **/
+      auto& posBiasesFW = alnLib.posBias(salmon::utils::Direction::FORWARD);
+      auto& posBiasesRC =
+        alnLib.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
+      for (size_t i = 0; i < posBiasesFW.size(); ++i) {
+        posBiasesFW[i].combine(gcp.posBiasFW[i]);
+        posBiasesRC[i].combine(gcp.posBiasRC[i]);
+      }
+
       globalMass = salmon::math::logAdd(globalMass, gcp.massFwd);
       globalMass = salmon::math::logAdd(globalMass, gcp.massRC);
       globalFwdMass = salmon::math::logAdd(globalFwdMass, gcp.massFwd);
@@ -1103,6 +1168,16 @@ bool quantifyLibrary(AlignmentLibraryT<FragT>& alnLib,
       alnLib.setGCFracForward(gcFracFwd);
     }
 
+    // finalize the positional biases
+    if (salmonOpts.posBiasCorrect) {
+      auto& posBiasesFW = alnLib.posBias(salmon::utils::Direction::FORWARD);
+      auto& posBiasesRC =
+        alnLib.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
+      for (size_t i = 0; i < posBiasesFW.size(); ++i) {
+        posBiasesFW[i].finalize();
+        posBiasesRC[i].finalize();
+      }
+    }
     /** END: aggregate thread-local bias parameters **/
 
     fmt::print(
@@ -1298,7 +1373,7 @@ bool processSample(AlignmentLibraryT<ReadT>& alnLib, size_t requiredObservations
   return true;
 }
 
-int salmonAlignmentQuantify(int argc, char* argv[]) {
+int salmonAlignmentQuantify(int argc, const char* argv[]) {
   using std::cerr;
   using std::vector;
   using std::string;

@@ -42,6 +42,7 @@
 #include "TranscriptGeneMap.hpp"
 
 #include "StadenUtils.hpp"
+#include "SalmonDefaults.hpp"
 
 namespace salmon {
 namespace utils {
@@ -1381,6 +1382,18 @@ std::string getCurrentTimeAsString() {
   auto numLeft = sopt.mate1ReadFiles.size();
   auto numRight = sopt.mate2ReadFiles.size();
 
+  /** Info, not warnings or errors, but informative messages to the user **/
+
+  // If not in alevin mode, inform the user about validateMappings
+  if (!sopt.alevinMode and !sopt.validateMappings) {
+    sopt.jointLog->warn("\n\n"
+                        "NOTE: It appears you are running salmon without the `--validateMappings` option.\n"
+                        "Mapping validation can generally improve both the sensitivity and specificity of mapping,\n"
+                        "with only a moderate increase in use of computational resources. \n"
+                        "Unless there is a specific reason to do this (e.g. testing on clean simulated data),\n"
+                        "`--validateMappings` is generally recommended.\n");
+  }
+
   // currently there is some strange use for this in alevin, I think ...
   // check with avi.
   if (numLeft + numRight > 0 and numUnpaired > 0) {
@@ -1398,6 +1411,24 @@ std::string getCurrentTimeAsString() {
     }
    }
 
+
+  auto checkScoreValue = [&sopt](int16_t score, std::string sname) -> bool {
+                           using score_t = int8_t;
+                           auto minval = static_cast<int16_t>(std::numeric_limits<score_t>::min());
+                           auto maxval = static_cast<int16_t>(std::numeric_limits<score_t>::max());
+                           if (score <  minval or score > maxval) {
+                             sopt.jointLog->error("You set the {} as {}, but it must be in "
+                                                  "the range [{}, {}].", sname, score, minval, maxval);
+                             return false;
+                           }
+                           return true;
+                         };
+
+  if(!checkScoreValue(sopt.matchScore, "match score")) { return false; }
+  if(!checkScoreValue(sopt.mismatchPenalty, "mismatch penalty")) { return false; }
+  if(!checkScoreValue(sopt.gapOpenPenalty, "gap open penalty")) { return false; }
+  if(!checkScoreValue(sopt.gapExtendPenalty, "gap extend penalty")) { return false; }
+
   if (sopt.mismatchPenalty > 0) {
     sopt.jointLog->warn(
                         "You set the mismatch penalty as {}, but it should be negative.  It is being negated to {}.",
@@ -1414,6 +1445,20 @@ std::string getCurrentTimeAsString() {
   // If we have validate mappings, then make sure we automatically enable
   // range factorization
   if (sopt.validateMappings) {
+    if (!vm.count("minScoreFraction")) {
+      sopt.minScoreFraction = salmon::defaults::minScoreFraction;
+      sopt.jointLog->info(
+                          "Usage of --validateMappings implies use of minScoreFraction. "
+                          "Since not explicitly specified, it is being set to {}", sopt.minScoreFraction
+                          );
+    }
+
+    if (sopt.maxMMPExtension < 1) {
+      sopt.jointLog->error("The maximum MMP extension must be at least 1, but {} was provided.",
+                           sopt.maxMMPExtension);
+      return false;
+    }
+
     if (sopt.rangeFactorizationBins < 4) {
       uint32_t nbins{4};
       sopt.jointLog->info(
@@ -1423,6 +1468,23 @@ std::string getCurrentTimeAsString() {
       sopt.rangeFactorizationBins = nbins;
       sopt.useRangeFactorization = true;
     }
+
+    if (sopt.mimicStrictBT2) {
+      sopt.jointLog->info(
+                          "Usage of --mimicStrictBT2 overrides other settings for mapping validation. Setting "
+                          "strict RSEM+Bowtie2-like parameters now.");
+      sopt.discardOrphansQuasi = true;
+      sopt.minScoreFraction = 0.8;
+      sopt.matchScore = 1;
+      sopt.mismatchPenalty = 0;
+      // NOTE: as a limitation of ksw2, we can't have
+      // (gapOpenPenalty + gapExtendPenalty) * 2 + matchScore < numeric_limits<int8_t>::max()
+      // these parameters below are sufficiently large penalties to
+      // prohibit gaps, while not overflowing the above condition
+      sopt.gapOpenPenalty = 25;
+      sopt.gapExtendPenalty = 25;
+    }
+
     // If the consensus slack was not set explicitly, then it defaults to 1 with
     // validateMappings
     bool consensusSlackExplicit = !vm["consensusSlack"].defaulted();

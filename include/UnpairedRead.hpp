@@ -52,6 +52,9 @@ struct UnpairedRead {
 
   ~UnpairedRead() { staden::utils::bam_destroy(read); }
 
+  inline bam_seq_t* getRead1() { return read; }
+  inline bam_seq_t* getRead2() { return read; }
+
   inline LibraryFormat& libFormat() { return libFmt; }
   inline bool isPaired() const { return false; }
   inline bool isLeftOrphan() const { return false; }

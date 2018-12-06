@@ -776,6 +776,8 @@ inline int32_t getAlnScore(
                            int8_t mmcost,
                            int32_t maxScore,
                            rapmap::utils::ChainStatus chainStat,
+                           bool multiMapping, // was there > 1 hit for this read
+                           bool mimicStrictBT2,
                            uint32_t buf,
                            AlnCacheMap& alnCache) {
   // If this was a perfect match, don't bother to align or compute the score
@@ -794,13 +796,20 @@ inline int32_t getAlnScore(
     return ungappedScore;
   };
 
-  int32_t s{-1};
+  int32_t s{std::numeric_limits<int32_t>::lowest()};
   bool invalidStart = (pos < 0);
   if (invalidStart) { rptr += -pos; rlen += pos; pos = 0; }
+
+  // if we are trying to mimic Bowtie2 with RSEM params
+  if (invalidStart and mimicStrictBT2) { return s; }
+
   if (pos < tlen) {
     bool doUngapped{(!invalidStart) and (chainStat == rapmap::utils::ChainStatus::UNGAPPED)};
     buf = (doUngapped) ? 0 : buf;
-    uint32_t tlen1 = std::min(static_cast<uint32_t>(rlen+buf), static_cast<uint32_t>(tlen - pos));
+    auto lnobuf = static_cast<uint32_t>(tlen - pos);
+    auto lbuf = static_cast<uint32_t>(rlen+buf);
+    auto useBuf = (lbuf < lnobuf);
+    uint32_t tlen1 = std::min(lbuf, lnobuf);
     char* tseq1 = tseq + pos;
     ez.max_q = ez.max_t = ez.mqe_t = ez.mte_q = -1;
     ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
@@ -810,7 +819,8 @@ inline int32_t getAlnScore(
     bool didHash{false};
     if (!alnCache.empty()) {
       // hash the reference string
-      MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), tlen1, reinterpret_cast<uint8_t*>(&hashKey), 0);
+      uint32_t keyLen = useBuf ? tlen1 - buf : tlen1;
+      MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), keyLen, reinterpret_cast<uint8_t*>(&hashKey), 0);
       didHash = true;
       // see if we have this hash
       auto hit = alnCache.find(hashKey);
@@ -820,17 +830,25 @@ inline int32_t getAlnScore(
       }
     }
     // If we got here with s == -1, we don't have the score cached
-    if (s == -1) {
+    if (s == std::numeric_limits<int32_t>::lowest()) {
       if (doUngapped) {
-        s = ungappedAln(tseq1, rptr, tlen1);
+        // signed version of tlen1
+        int32_t tlen1s = tlen1;
+        int32_t alnLen = rlen < tlen1s ? rlen : tlen1s;
+        s = ungappedAln(tseq1, rptr, alnLen);
       } else {
         aligner(rptr, rlen, tseq1, tlen1, &ez, ksw2pp::EnumToType<ksw2pp::KSW2AlignmentType::EXTENSION>());
         s = std::max(ez.mqe, ez.mte);
       }
-      if (!didHash) {
-        MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), tlen1, reinterpret_cast<uint8_t*>(&hashKey), 0);
-      }
-      alnCache[hashKey] = s;
+
+      if (multiMapping) { // don't bother to fill up a cache unless this is a multi-mapping read
+        if (!didHash) {
+          uint32_t keyLen = useBuf ? tlen1 - buf : tlen1;
+          MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), keyLen, reinterpret_cast<uint8_t*>(&hashKey), 0);
+        }
+        alnCache[hashKey] = s;
+      } // was a multi-mapper
+
     }
   }
   return s;
@@ -854,6 +872,7 @@ void processReadsQuasi(
     SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache) {
+
   uint64_t count_fwd = 0, count_bwd = 0;
   // Seed with a real random value, if available
   std::random_device rd;
@@ -912,6 +931,7 @@ void processReadsQuasi(
   mc.consistentHits = consistentHits;
   mc.doChaining = salmonOpts.validateMappings;
   mc.maxSlack = salmonOpts.consensusSlack;
+  if (mc.doChaining) { mc.considerMultiPos = true; }
 
   rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> leftHCInfo;
   rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> rightHCInfo;
@@ -927,6 +947,7 @@ void processReadsQuasi(
   }
   if (salmonOpts.validateMappings) {
     hitCollector.enableChainScoring();
+    hitCollector.setMaxMMPExtension(salmonOpts.maxMMPExtension);
   }
 
   SASearcher<RapMapIndexT> saSearcher(qidx);
@@ -952,15 +973,16 @@ void processReadsQuasi(
   config.dropoff = -1;
   config.gapo = salmonOpts.gapOpenPenalty;
   config.gape = salmonOpts.gapExtendPenalty;
-  config.bandwidth = 10;
+  config.bandwidth = 15;
   config.flag = 0;
   config.flag |= KSW_EZ_SCORE_ONLY;
-  int8_t a = salmonOpts.matchScore;
-  int8_t b = salmonOpts.mismatchPenalty;
+  int8_t a = static_cast<int8_t>(salmonOpts.matchScore);
+  int8_t b = static_cast<int8_t>(salmonOpts.mismatchPenalty);
   KSW2Aligner aligner(static_cast<int8_t>(a), static_cast<int8_t>(b));
   aligner.config() = config;
   ksw_extz_t ez;
   memset(&ez, 0, sizeof(ksw_extz_t));
+  bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   size_t numDropped{0};
 
   AlnCacheMap alnCacheLeft; alnCacheLeft.reserve(32);
@@ -1025,8 +1047,9 @@ void processReadsQuasi(
                                             tooManyHits, hctr);
         } else {
           rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, leftHits, rightHits,
-                                                 jointHits, readLenLeft,
-                                                 maxNumHits, tooManyHits, hctr);
+                                                 jointHits,
+                                                 mc,
+                                                 readLenLeft, maxNumHits, tooManyHits, hctr);
         }
 
         if (initialRound) {
@@ -1128,15 +1151,16 @@ void processReadsQuasi(
           std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
           size_t idx{0};
           double optFrac{salmonOpts.minScoreFraction};
-          int32_t maxLeftScore = a * rp.first.seq.length();
-          int32_t maxRightScore = a * rp.second.seq.length();
+          int32_t maxLeftScore{a * static_cast<int32_t>(rp.first.seq.length())};
+          int32_t maxRightScore{a * static_cast<int32_t>(rp.second.seq.length())};
+          bool multiMapping{jointHits.size() > 1};
 
           for (auto& h : jointHits) {
             int32_t score{std::numeric_limits<int32_t>::min()};
             auto& t = transcripts[h.tid];
             char* tseq = const_cast<char*>(t.Sequence());
             const int32_t tlen = static_cast<int32_t>(t.RefLength);
-            const uint32_t buf{8};
+            const uint32_t buf{10};
 
             if (h.mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
               if (!h.fwd and !r1rc) {
@@ -1151,12 +1175,40 @@ void processReadsQuasi(
               auto* r2ptr = h.mateIsFwd ? r2 : r2rc;
 
               int32_t s1 =
-                getAlnScore(aligner, ez, h.pos, r1ptr, l1, tseq, tlen, a, b, maxLeftScore, h.chainStatus.getLeft(), buf, alnCacheLeft);
+                getAlnScore(aligner, ez, h.pos, r1ptr, l1, tseq, tlen, a, b, maxLeftScore, h.chainStatus.getLeft(),
+                            multiMapping, mimicStrictBT2, buf, alnCacheLeft);
 
               int32_t s2 =
-                getAlnScore(aligner, ez, h.matePos, r2ptr, l2, tseq, tlen, a, b, maxRightScore, h.chainStatus.getRight(), buf, alnCacheRight);
+                getAlnScore(aligner, ez, h.matePos, r2ptr, l2, tseq, tlen, a, b, maxRightScore, h.chainStatus.getRight(),
+                            multiMapping, mimicStrictBT2, buf, alnCacheRight);
 
-              if ((s1 + s2) < (optFrac * (maxLeftScore + maxRightScore))) {
+              // mimic RSEM's Bowtie2 scoring 
+              /*
+              int32_t L1 = rp.first.seq.length();
+              int32_t L2 = rp.second.seq.length();
+              double minLeft = -0.1 * L1;
+              double minRight = -0.1 * L2;
+              double minFragScore = minLeft + minRight;
+              if ( (s1 - L1) < minLeft or (s2 - L2) < minRight ) {
+              */
+              // throw away dovetailed reads
+              if (mimicStrictBT2) {
+                if (h.fwd == h.mateIsFwd) {
+                  s1 = std::numeric_limits<int32_t>::min();
+                  s2 = std::numeric_limits<int32_t>::min();
+                } else if (h.fwd and (h.pos > h.matePos)) {
+                  s1 = std::numeric_limits<int32_t>::min();
+                  s2 = std::numeric_limits<int32_t>::min();
+                } else if (h.mateIsFwd and (h.matePos > h.pos)) {
+                  s1 = std::numeric_limits<int32_t>::min();
+                  s2 = std::numeric_limits<int32_t>::min();
+                }
+              }
+
+              // scores are of read ends combined
+              //if ((s1 + s2) < (optFrac * (maxLeftScore + maxRightScore))) {
+              // ends are scored separately
+              if ((s1 < (optFrac * maxLeftScore)) or (s2 < (optFrac * maxRightScore))) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
                 score = s1 + s2;
@@ -1169,7 +1221,8 @@ void processReadsQuasi(
               auto* rptr = h.fwd ? r1 : r1rc;
 
               int32_t s =
-                getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, a, b, maxLeftScore, h.chainStatus.getLeft(), buf, alnCacheLeft);
+                getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, a, b, maxLeftScore, h.chainStatus.getLeft(),
+                            multiMapping, mimicStrictBT2, buf, alnCacheLeft);
               if (s < (optFrac * maxLeftScore)) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
@@ -1183,7 +1236,8 @@ void processReadsQuasi(
               auto* rptr = h.fwd ? r2 : r2rc;
 
               int32_t s =
-                getAlnScore(aligner, ez, h.pos, rptr, l2, tseq, tlen, a, b, maxRightScore, h.chainStatus.getRight(), buf, alnCacheRight);
+                getAlnScore(aligner, ez, h.pos, rptr, l2, tseq, tlen, a, b, maxRightScore, h.chainStatus.getRight(),
+                            multiMapping, mimicStrictBT2, buf, alnCacheRight);
               if (s < (optFrac * maxRightScore)) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
@@ -1203,7 +1257,7 @@ void processReadsQuasi(
             // score are filtered out.
             jointHits.erase(
                             std::remove_if(jointHits.begin(), jointHits.end(),
-                                           [&ctr, &scores, &numDropped, bestScore] (const QuasiAlignment& qa) -> bool {
+                                           [&ctr, &scores, &numDropped] (const QuasiAlignment& qa) -> bool {
                                              // soft filter
                                              bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
                                              //strict filter
@@ -1217,7 +1271,8 @@ void processReadsQuasi(
             // soft filter
             double bestScoreD = static_cast<double>(bestScore);
             std::for_each(jointHits.begin(), jointHits.end(),
-                          [bestScoreD](QuasiAlignment& qa) -> void {
+                          [bestScoreD, writeQuasimappings](QuasiAlignment& qa) -> void {
+                            if (writeQuasimappings) { qa.alnScore(static_cast<int32_t>(qa.score())); }
                             double v = bestScoreD - qa.score();
                             qa.score(std::exp(-v));
                           });
@@ -1461,6 +1516,7 @@ void processReadsQuasi(
     SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache) {
+
   uint64_t count_fwd = 0, count_bwd = 0;
   // Seed with a real random value, if available
   std::random_device rd;
@@ -1523,6 +1579,7 @@ void processReadsQuasi(
 
   if (salmonOpts.validateMappings) {
     hitCollector.enableChainScoring();
+    hitCollector.setMaxMMPExtension(salmonOpts.maxMMPExtension);
   }
 
   /**
@@ -1547,16 +1604,17 @@ void processReadsQuasi(
   config.dropoff = -1;
   config.gapo = salmonOpts.gapOpenPenalty;
   config.gape = salmonOpts.gapExtendPenalty;
-  config.bandwidth = 10;
+  config.bandwidth = 15;
   config.flag = 0;
   config.flag |= KSW_EZ_SCORE_ONLY;
-  //config.flag |= KSW_EZ_APPROX_MAX | KSW_EZ_APPROX_DROP;
-  int8_t a = salmonOpts.matchScore;
-  int8_t b = salmonOpts.mismatchPenalty;
+
+  int8_t a = static_cast<int8_t>(salmonOpts.matchScore);
+  int8_t b = static_cast<int8_t>(salmonOpts.mismatchPenalty);
   KSW2Aligner aligner(static_cast<int8_t>(a), static_cast<int8_t>(b));
   aligner.config() = config;
   ksw_extz_t ez;
   memset(&ez, 0, sizeof(ksw_extz_t));
+  bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   size_t numDropped{0};
 
   //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
@@ -1619,13 +1677,14 @@ void processReadsQuasi(
           size_t idx{0};
           double optFrac{salmonOpts.minScoreFraction};
           int32_t maxReadScore = a * rp.seq.length();
+          bool multiMapping{jointHits.size() > 1};
 
           for (auto& h : jointHits) {
             int32_t score{std::numeric_limits<int32_t>::min()};
             auto& t = transcripts[h.tid];
             char* tseq = const_cast<char*>(t.Sequence());
             const int32_t tlen = static_cast<int32_t>(t.RefLength);
-            const uint32_t buf{8};
+            const uint32_t buf{10};
 
             // compute the reverse complement only if we
             // need it and don't have it
@@ -1637,7 +1696,8 @@ void processReadsQuasi(
 
             auto* rptr = h.fwd ? r1 : r1rc;
             int32_t s =
-              getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, a, b, maxReadScore, h.chainStatus.getLeft(), buf, alnCache);
+              getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, a, b, maxReadScore, h.chainStatus.getLeft(),
+                          multiMapping, mimicStrictBT2, buf, alnCache);
             if (s < (optFrac * maxReadScore)) {
               score = std::numeric_limits<decltype(score)>::min();
             } else {
@@ -1655,7 +1715,7 @@ void processReadsQuasi(
             // score are filtered out.
             jointHits.erase(
                             std::remove_if(jointHits.begin(), jointHits.end(),
-                                           [&ctr, &scores, &numDropped, bestScore] (const QuasiAlignment& qa) -> bool {
+                                           [&ctr, &scores, &numDropped] (const QuasiAlignment& qa) -> bool {
                                              // soft filter
                                              bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
                                              ++ctr;
@@ -1667,7 +1727,8 @@ void processReadsQuasi(
             // for soft filter
             double bestScoreD = static_cast<double>(bestScore);
             std::for_each(jointHits.begin(), jointHits.end(),
-                          [bestScoreD](QuasiAlignment& qa) -> void {
+                          [bestScoreD, writeQuasimappings](QuasiAlignment& qa) -> void {
+                            if (writeQuasimappings) { qa.alnScore(static_cast<int32_t>(qa.score())); }
                             double v = bestScoreD - qa.score();
                             qa.score(std::exp(-v));
                           });
@@ -1810,93 +1871,6 @@ void processReadsQuasi(
 
 /// DONE QUASI
 
-#if SALMON_DEPRECATED_COMPILER
-#pragma message ( "You are compiling salmon with -std=c++11 instead of -std=c++14; this ability is deprecated and will go away soon." )
-/**
- * This functor makes it easy to invoke the appropriate template function
- * for processing the reads, generalizing over the library type and read type
- * (e.g. single vs. paired end).
- **/
-class ProcessFunctor {
-  private:
-    ReadExperimentT& readExp_;
-    ReadLibrary& rl_;
-    std::vector<AlnGroupVec<QuasiAlignment>>& structureVec_;
-    std::atomic<uint64_t>& numObservedFragments_;
-    std::atomic<uint64_t>& numAssignedFragments_;
-    std::atomic<uint64_t>& validHits_;
-    std::atomic<uint64_t>& upperBoundHits_;
-    std::vector<Transcript>& transcripts_;
-    ForgettingMassCalculator& fmCalc_;
-    ClusterForest& clusterForest_;
-    FragmentLengthDistribution& fragLengthDist_;
-    std::vector<BiasParams>& observedBiasParams_;
-    SalmonOpts& salmonOpts_;
-    double coverageThresh_;
-    std::mutex& iomutex_;
-    bool initialRound_;
-    std::atomic<bool>& burnedIn_;
-    volatile bool& writeToCache_;
-    std::vector<std::thread>& threads_;
-  public:
-    ProcessFunctor(
-                   ReadExperimentT& readExp,
-                   ReadLibrary& rl,
-                   std::vector<AlnGroupVec<QuasiAlignment>>& structureVec,
-                   std::atomic<uint64_t>& numObservedFragments,
-                   std::atomic<uint64_t>& numAssignedFragments,
-                   std::atomic<uint64_t>& validHits,
-                   std::atomic<uint64_t>& upperBoundHits,
-                   std::vector<Transcript>& transcripts,
-                   ForgettingMassCalculator& fmCalc,
-                   ClusterForest& clusterForest,
-                   FragmentLengthDistribution& fragLengthDist,
-                   std::vector<BiasParams>& observedBiasParams,
-                   SalmonOpts& salmonOpts,
-                   double coverageThresh,
-                   std::mutex& iomutex,
-                   bool initialRound,
-                   std::atomic<bool>& burnedIn,
-                   volatile bool& writeToCache,
-                   std::vector<std::thread>& threads
-                   ) :
-      readExp_(readExp), rl_(rl), structureVec_(structureVec),
-      numObservedFragments_(numObservedFragments),
-      numAssignedFragments_(numAssignedFragments),
-      validHits_(validHits),
-      upperBoundHits_(upperBoundHits),
-      transcripts_(transcripts),
-      fmCalc_(fmCalc),
-      clusterForest_(clusterForest),
-      fragLengthDist_(fragLengthDist),
-      observedBiasParams_(observedBiasParams),
-      salmonOpts_(salmonOpts),
-      coverageThresh_(coverageThresh),
-      iomutex_(iomutex),
-      initialRound_(initialRound),
-      burnedIn_(burnedIn),
-      writeToCache_(writeToCache),
-      threads_(threads) {}
-
-    template <typename ParserT, typename IndexT>
-    void operator()(size_t i, ParserT& parserPtr, IndexT* index) {
-      if (salmonOpts_.qmFileName != "" and i == 0) {
-        rapmap::utils::writeSAMHeader(*index, salmonOpts_.qmLog);
-      }
-      auto threadFun = [&, i]() -> void {
-        processReadsQuasi(
-                          parserPtr.get(), readExp_, rl_, structureVec_[i],
-                          numObservedFragments_, numAssignedFragments_, validHits_,
-                          upperBoundHits_, index, transcripts_,
-                          fmCalc_, clusterForest_, fragLengthDist_, observedBiasParams_[i],
-                          salmonOpts_, coverageThresh_, iomutex_, initialRound_,
-                          burnedIn_, writeToCache_);
-      };
-      threads_.emplace_back(threadFun);
-    }
-
-  };
-#endif // SALMON_DEPRECATED_COMPILER
 
 template <typename AlnT>
 void processReadLibrary(
@@ -1925,41 +1899,6 @@ void processReadLibrary(
   // These two deleters are highly redundant (identical in content, but have
   // different argument types). This will be resolved by generic lambdas as soon
   // as we can rely on c++14 (waiting on bioconda).
-#if SALMON_DEPRECATED_COMPILER
-#pragma message ( "You are compiling salmon with -std=c++11 instead of -std=c++14; this ability is deprecated and will go away soon." )
-  auto pairedPtrDeleter = [&salmonOpts](paired_parser* p) -> void {
-    try {
-      p->stop();
-    } catch (const std::exception& e) {
-      salmonOpts.jointLog->error("\n\n");
-      salmonOpts.jointLog->error("Processing reads : {}", e.what());
-      salmonOpts.jointLog->flush();
-      spdlog::drop_all();
-      std::exit(-1);
-    }
-    delete p;
-  };
-
-  auto singlePtrDeleter = [&salmonOpts](single_parser* p) -> void {
-    try {
-      p->stop();
-    } catch (const std::exception& e) {
-      salmonOpts.jointLog->error("\n\n");
-      salmonOpts.jointLog->error("Processing reads : {}", e.what());
-      salmonOpts.jointLog->flush();
-      spdlog::drop_all();
-      std::exit(-1);
-    }
-    delete p;
-  };
-
-  std::unique_ptr<paired_parser, decltype(pairedPtrDeleter)> pairedParserPtr(
-                                                                             nullptr, pairedPtrDeleter);
-  std::unique_ptr<single_parser, decltype(singlePtrDeleter)> singleParserPtr(
-                                                                             nullptr, singlePtrDeleter);
-
-#else
-
   /** C++14 version  **/
   auto parserPtrDeleter = [&salmonOpts](auto* p) -> void {
     try {
@@ -1979,8 +1918,6 @@ void processReadLibrary(
   std::unique_ptr<single_parser, decltype(parserPtrDeleter)> singleParserPtr(
                                                                              nullptr, parserPtrDeleter);
 
-#endif //SALMON_DEPRECATED_COMPILER
-
   /** sequence-specific and GC-fragment bias vectors --- each thread gets it's
    * own **/
   size_t numTxp = readExp.transcripts().size();
@@ -1993,25 +1930,14 @@ void processReadLibrary(
    * std::vector<EffectiveLengthStats> observedEffectiveLengths(numThreads,
    *EffectiveLengthStats(numTxp));
    **/
-
-#if SALMON_DEPRECATED_COMPILER
-#pragma message ( "You are compiling salmon with -std=c++11 instead of -std=c++14; this ability is deprecated and will go away soon." )
-
-  ProcessFunctor processFunctor(readExp, rl, structureVec,
-                                 numObservedFragments, numAssignedFragments, numValidHits,
-                                 upperBoundHits, transcripts,
-                                 fmCalc, clusterForest, fragLengthDist, observedBiasParams,
-                                 salmonOpts, coverageThresh, iomutex, initialRound,
-                                 burnedIn, writeToCache, threads);
-#else
   // NOTE : When we can support C++14, we can replace the entire ProcessFunctor class above with this
   // generic lambda.
-  auto processFunctor = [&](size_t i, auto& parserPtr, auto* index) {
+  auto processFunctor = [&](size_t i, auto* parserPtr, auto* index) {
     if (salmonOpts.qmFileName != "" and i == 0) {
       rapmap::utils::writeSAMHeader(*index, salmonOpts.qmLog);
     }
-    auto threadFun = [&, i]() -> void {
-      processReadsQuasi(parserPtr.get(), readExp, rl, structureVec[i],
+    auto threadFun = [&, i, parserPtr, index]() -> void {
+      processReadsQuasi(parserPtr, readExp, rl, structureVec[i],
                         numObservedFragments, numAssignedFragments, numValidHits,
                         upperBoundHits, index, transcripts,
                         fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
@@ -2020,7 +1946,6 @@ void processReadLibrary(
     };
     threads.emplace_back(threadFun);
   };
-#endif // SALMON_DEPRECATED_COMPILER
 
   // If the read library is paired-end
   // ------ Paired-end --------
@@ -2071,19 +1996,19 @@ void processReadLibrary(
         // change value before the lambda below is evaluated --- crazy!
         if (largeIndex) {
           if (perfectHashIndex) { // Perfect Hash
-            if (isPairedEnd) {processFunctor(i, pairedParserPtr, sidx->quasiIndexPerfectHash64());}
-            else if (isSingleEnd) {processFunctor(i, singleParserPtr, sidx->quasiIndexPerfectHash64());}
+            if (isPairedEnd) {processFunctor(i, pairedParserPtr.get(), sidx->quasiIndexPerfectHash64());}
+            else if (isSingleEnd) {processFunctor(i, singleParserPtr.get(), sidx->quasiIndexPerfectHash64());}
           } else { // Dense Hash
-            if (isPairedEnd) {processFunctor(i, pairedParserPtr, sidx->quasiIndex64());}
-            else if (isSingleEnd) {processFunctor(i, singleParserPtr, sidx->quasiIndex64());}
+            if (isPairedEnd) {processFunctor(i, pairedParserPtr.get(), sidx->quasiIndex64());}
+            else if (isSingleEnd) {processFunctor(i, singleParserPtr.get(), sidx->quasiIndex64());}
           }
         } else {
           if (perfectHashIndex) { // Perfect Hash
-            if (isPairedEnd) { processFunctor(i, pairedParserPtr, sidx->quasiIndexPerfectHash32()); }
-            else if (isSingleEnd) { processFunctor(i, singleParserPtr, sidx->quasiIndexPerfectHash32()); }
+            if (isPairedEnd) { processFunctor(i, pairedParserPtr.get(), sidx->quasiIndexPerfectHash32()); }
+            else if (isSingleEnd) { processFunctor(i, singleParserPtr.get(), sidx->quasiIndexPerfectHash32()); }
           } else { // Dense Hash
-            if (isPairedEnd) { processFunctor(i, pairedParserPtr, sidx->quasiIndex32()); }
-            else if (isSingleEnd) { processFunctor(i, singleParserPtr, sidx->quasiIndex32()); }
+            if (isPairedEnd) { processFunctor(i, pairedParserPtr.get(), sidx->quasiIndex32()); }
+            else if (isSingleEnd) { processFunctor(i, singleParserPtr.get(), sidx->quasiIndex32()); }
           }
         } // End spawn current thread
 
@@ -2406,7 +2331,7 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
   jointLog->info("finished quantifyLibrary()");
 }
 
-int salmonQuantify(int argc, char* argv[]) {
+int salmonQuantify(int argc, const char* argv[]) {
   using std::cerr;
   using std::vector;
   using std::string;

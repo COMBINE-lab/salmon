@@ -45,12 +45,27 @@ namespace alevin{
       }
     };
 
+    struct ChromiumV3 : Rule{
+      ChromiumV3(): Rule(16, 12, BarcodeEnd::FIVE, 4294967295){}
+    };
+
     struct Chromium : Rule{
       Chromium(): Rule(16, 10, BarcodeEnd::FIVE, 4294967295){}
     };
 
     struct Gemcode : Rule{
       Gemcode(): Rule(14, 10, BarcodeEnd::FIVE, 268435456){}
+    };
+
+    struct CELSeq : Rule{
+      // WEHI SCORE's CEL-Seq2 starts from 5' end with a 8 bp barcode
+      // and a 6 bp UMI.
+      CELSeq(): Rule(8, 6, BarcodeEnd::FIVE, 65536){}
+    };
+    struct CELSeq2 : Rule{
+      // WEHI SCORE's CEL-Seq2 starts from 5' end with a 8 bp barcode
+      // and a 6 bp UMI.
+      CELSeq2(): Rule(6, 6, BarcodeEnd::FIVE, 4096){}
     };
 
     //dummy class

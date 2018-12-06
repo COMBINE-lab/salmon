@@ -38,6 +38,8 @@ struct SalmonOpts {
 
   SalmonQuantMode quantMode; // How quantification is done
 
+  bool alevinMode{false}; // are we running in alevin mode
+
   bool alternativeInitMode; // Weigh unique reads more heavily when initialzing
                             // the optimization.
 
@@ -251,13 +253,16 @@ struct SalmonOpts {
   bool validateMappings;
   int32_t consensusSlack;
   double minScoreFraction;
-  int8_t matchScore;
-  int8_t mismatchPenalty;
-  int8_t gapOpenPenalty;
-  int8_t gapExtendPenalty;
+  int16_t matchScore;
+  int16_t mismatchPenalty;
+  int16_t gapOpenPenalty;
+  int16_t gapExtendPenalty;
+  bool mimicStrictBT2;
+  int32_t maxMMPExtension;
 
   // for utility (may need to be cleaned up later)
   bool discardOrphansQuasi;
+  bool discardOrphansAln;
   double coverageThresh;
   std::vector<std::string> unmatedReadFiles;
   std::vector<std::string> mate1ReadFiles;

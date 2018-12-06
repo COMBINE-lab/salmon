@@ -178,7 +178,7 @@ void VBEMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
 template <typename EQVecT>
 void EMUpdate_(EQVecT& eqVec,
                std::vector<Transcript>& transcripts,
-	       std::vector<double>& priorAlphas,
+               std::vector<double>& priorAlphas,
                const CollapsedEMOptimizer::VecType& alphaIn,
                CollapsedEMOptimizer::VecType& alphaOut) {
 

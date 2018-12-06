@@ -14,6 +14,7 @@
 #include "SalmonOpts.hpp"
 #include "SalmonSpinLock.hpp"
 #include "AlevinOpts.hpp"
+#include "Graph.hpp"
 
 class GZipWriter {
 public:
@@ -50,8 +51,16 @@ public:
                        std::vector<Transcript>& transcripts);
 
   bool writeAbundances(bool inDebugMode,
-                       std::string bcName,
-                       std::vector<double>& alphas);
+                       std::string& bcName,
+                       std::vector<double>& alphas,
+                       std::vector<uint8_t>& tiers);
+
+  bool writeBootstraps(bool inDebugMode,
+                       std::string& bcName,
+                       std::vector<double>& alphas,
+                       std::vector<double>& variance,
+                       bool useAllBootstraps,
+                       std::vector<std::vector<double>>& sampleEstimates);
 
   template <typename ExpT>
   bool writeEmptyAbundances(const SalmonOpts& sopt, ExpT& readExp);
@@ -59,7 +68,10 @@ public:
   template <typename T>
   bool writeBootstrap(const std::vector<T>& abund, bool quiet = false);
 
-  bool writeCellEQVec(size_t barcode, const std::vector<uint32_t>& offsets, const std::vector<uint32_t>& counts, bool quiet = true);
+  bool writeCellEQVec(size_t barcode, const std::vector<uint32_t>& offsets,
+                      const std::vector<uint32_t>& counts, bool quiet = true);
+
+  bool writeUmiGraph(alevin::graph::Graph& g);
 
   bool setSamplingPath(const SalmonOpts& sopt);
 
@@ -69,8 +81,14 @@ private:
   std::shared_ptr<spdlog::logger> logger_;
   std::unique_ptr<boost::iostreams::filtering_ostream> bsStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> countMatrixStream_{nullptr};
-  std::unique_ptr<std::ofstream> bcNameStream_{nullptr};
+  std::unique_ptr<boost::iostreams::filtering_ostream> meanMatrixStream_{nullptr};
+  std::unique_ptr<boost::iostreams::filtering_ostream> varMatrixStream_{nullptr};
+  std::unique_ptr<boost::iostreams::filtering_ostream> fullBootstrapMatrixStream_{nullptr};
+  std::unique_ptr<boost::iostreams::filtering_ostream> tierMatrixStream_{nullptr};
+  std::unique_ptr<boost::iostreams::filtering_ostream> umiGraphStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> cellEQStream_{nullptr};
+  std::unique_ptr<std::ofstream> bcNameStream_{nullptr};
+  std::unique_ptr<std::ofstream> bcBootNameStream_{nullptr};
 // only one writer thread at a time
 #if defined __APPLE__
   spin_lock writeMutex_;

@@ -227,7 +227,9 @@ int KSW2Aligner::operator()(const char* const queryOriginal,
                   target_.data(), config_.alphabetSize, mat_.data(), q, e, w, z,
                   config_.end_bonus, config_.flag, ez);
   } else {
-    std::abort();
+    ksw_extz(kalloc_allocator_.get(), qlen, query_.data(), tlen,
+             target_.data(), config_.alphabetSize, mat_.data(), q, e, w, z,
+             config_.flag, ez);
   }
   return ez->score;
 }
@@ -360,7 +362,9 @@ int KSW2Aligner::operator()(const uint8_t* const query_, const int queryLength,
                   config_.alphabetSize, mat_.data(), q, e, w, z, config_.end_bonus, config_.flag,
                   ez);
   } else {
-    std::abort();
+    ksw_extz(kalloc_allocator_.get(), qlen, query_, tlen, target_,
+                   config_.alphabetSize, mat_.data(), q, e, w, z, config_.flag,
+                   ez);
   }
   return ez->score;
 }

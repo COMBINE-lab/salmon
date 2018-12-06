@@ -39,7 +39,7 @@ struct KSW2Config {
   int flag = 0;
   int alphabetSize = 5;
   int end_bonus = 10;
-  KSW2AlignmentType atype = KSW2AlignmentType::GLOBAL;
+  KSW2AlignmentType atype = KSW2AlignmentType::EXTENSION;
 };
 
 class KSW2Aligner {

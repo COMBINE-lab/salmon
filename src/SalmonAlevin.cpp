@@ -90,7 +90,6 @@
 #include "SingleCellProtocols.hpp"
 #include "CollapsedCellOptimizer.hpp"
 #include "BarcodeGroup.hpp"
-#include "Dedup.hpp"
 
 // salmon includes
 #include "ClusterForest.hpp"
@@ -122,6 +121,8 @@
 #include "PairAlignmentFormatter.hpp"
 #include "SingleAlignmentFormatter.hpp"
 #include "RapMapUtils.hpp"
+#include "ksw2pp/KSW2Aligner.hpp"
+#include "tsl/hopscotch_map.h"
 
 namespace alevin{
 
@@ -184,7 +185,6 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
                               std::default_random_engine& randEng, bool initialRound,
                               std::atomic<bool>& burnedIn, double& maxZeroFrac,
                               AlevinOpts<ProtocolT>& alevinOpts,
-                      /*std::vector<uint64_t>& uniqueFLD,*/
                               std::mutex& iomutex){
 
   using salmon::math::LOG_0;
@@ -254,7 +254,8 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
     fmCalc.cumulativeLogMassAt(firstTimestepOfRound);
 
   auto isUnexpectedOrphan = [expectedLibraryFormat](AlnT& aln) -> bool {
-    return (expectedLibraryFormat.type == ReadType::PAIRED_END and aln.mateStatus != rapmap::utils::MateStatus::PAIRED_END_PAIRED);
+    return (expectedLibraryFormat.type == ReadType::PAIRED_END and
+            aln.mateStatus != rapmap::utils::MateStatus::PAIRED_END_PAIRED);
   };
 
   int i{0};
@@ -264,7 +265,6 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
     // for a single read).  Distribute the read's mass to the transcripts
     // where it potentially aligns.
     for (auto& alnGroup : batchHits) {
-
       // If we had no alignments for this read, then skip it
       if (alnGroup.size() == 0) {
         continue;
@@ -605,8 +605,105 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
   }
 }
 
-/// START QUASI
+//Note: redundant code starts, first used in SalmonQuantify.cpp
 
+// Use a passthrough hash for the alignment cache, because
+// the key *is* the hash.
+namespace salmon {
+  namespace hashing {
+    struct PassthroughHash {
+      std::size_t operator()(uint64_t const& u) const { return u; }
+    };
+  }
+}
+
+using AlnCacheMap = tsl::hopscotch_map<uint64_t, int32_t, salmon::hashing::PassthroughHash>;
+                    //tsl::robin_map<uint64_t, int32_t, salmon::hashing::PassthroughHash>;
+                    //std::unordered_map<uint64_t, int32_t, salmon::hashing::PassthroughHash>;
+
+inline int32_t getAlnScore(
+                           ksw2pp::KSW2Aligner& aligner,
+                           ksw_extz_t& ez,
+                           int32_t pos, const char* rptr, int32_t rlen,
+                           char* tseq, int32_t tlen,
+                           int8_t mscore,
+                           int8_t mmcost,
+                           bool multiMapping,
+                           int32_t maxScore,
+                           rapmap::utils::ChainStatus chainStat,
+                           uint32_t buf,
+                           AlnCacheMap& alnCache) {
+  // If this was a perfect match, don't bother to align or compute the score
+  if (chainStat == rapmap::utils::ChainStatus::PERFECT) {
+    return maxScore;
+  }
+
+  auto ungappedAln = [mscore, mmcost](char* ref, const char* query, int32_t len) -> int32_t {
+    int32_t ungappedScore{0};
+    for (int32_t i = 0; i < len; ++i) {
+      char c1 = *(ref + i);
+      char c2 = *(query + i);
+      c1 = (c1 == 'N' or c2 == 'N') ? c2 : c1;
+      ungappedScore += (c1 == c2) ? mscore : mmcost;
+    }
+    return ungappedScore;
+  };
+
+  int32_t s{std::numeric_limits<int32_t>::lowest()};
+  bool invalidStart = (pos < 0);
+  if (invalidStart) { rptr += -pos; rlen += pos; pos = 0; }
+  if (pos < tlen) {
+    bool doUngapped{(!invalidStart) and (chainStat == rapmap::utils::ChainStatus::UNGAPPED)};
+    buf = (doUngapped) ? 0 : buf;
+    auto lnobuf = static_cast<uint32_t>(tlen - pos);
+    auto lbuf = static_cast<uint32_t>(rlen+buf);
+    auto useBuf = (lbuf < lnobuf);
+    uint32_t tlen1 = std::min(lbuf, lnobuf);
+    char* tseq1 = tseq + pos;
+    ez.max_q = ez.max_t = ez.mqe_t = ez.mte_q = -1;
+    ez.max = 0, ez.mqe = ez.mte = KSW_NEG_INF;
+    ez.n_cigar = 0;
+
+    uint64_t hashKey{0};
+    bool didHash{false};
+    if (!alnCache.empty()) {
+      // hash the reference string
+      uint32_t keyLen = useBuf ? tlen1 - buf : tlen1;
+      MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), keyLen, reinterpret_cast<uint8_t*>(&hashKey), 0);
+      didHash = true;
+      // see if we have this hash
+      auto hit = alnCache.find(hashKey);
+      // if so, we know the alignment score
+      if (hit != alnCache.end()) {
+        s = hit->second;
+      }
+    }
+    // If we got here with s == -1, we don't have the score cached
+    if (s == std::numeric_limits<int32_t>::lowest()) {
+      if (doUngapped) {
+        // signed version of tlen1
+        int32_t tlen1s = tlen1;
+        int32_t alnLen = rlen < tlen1s ? rlen : tlen1s;
+        s = ungappedAln(tseq1, rptr, alnLen);
+      } else {
+        aligner(rptr, rlen, tseq1, tlen1, &ez, ksw2pp::EnumToType<ksw2pp::KSW2AlignmentType::EXTENSION>());
+        s = std::max(ez.mqe, ez.mte);
+      }
+      if (multiMapping) {
+        if (!didHash) {
+          uint32_t keyLen = useBuf ? tlen1 - buf : tlen1;
+          MetroHash64::Hash(reinterpret_cast<uint8_t*>(tseq1), keyLen, reinterpret_cast<uint8_t*>(&hashKey), 0);
+        }
+        alnCache[hashKey] = s;
+      }
+    }
+  }
+  return s;
+}
+
+/////// REDUNDANT CODE END//
+
+/// START QUASI
 template <typename RapMapIndexT, typename ProtocolT>
 void processReadsQuasi(
                        paired_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
@@ -679,7 +776,8 @@ void processReadsQuasi(
 
   rapmap::utils::MappingConfig mc;
   mc.consistentHits = consistentHits;
-  mc.doChaining = false;
+  mc.doChaining = salmonOpts.validateMappings;
+  mc.maxSlack = salmonOpts.consensusSlack;
 
   rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> leftHCInfo;
   rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> rightHCInfo;
@@ -693,6 +791,10 @@ void processReadsQuasi(
   if (salmonOpts.quasiCoverage > 0.0) {
     hitCollector.setCoverageRequirement(salmonOpts.quasiCoverage);
   }
+  if (salmonOpts.validateMappings) {
+    hitCollector.enableChainScoring();
+    hitCollector.setMaxMMPExtension(salmonOpts.maxMMPExtension);
+  }
 
   SASearcher<RapMapIndexT> saSearcher(qidx);
   std::vector<QuasiAlignment> leftHits;
@@ -705,6 +807,34 @@ void processReadsQuasi(
   fmt::MemoryWriter sstream;
   auto* qmLog = salmonOpts.qmLog.get();
   bool writeQuasimappings = (qmLog != nullptr);
+
+  //////////////////////
+  // NOTE: validation mapping based new parameters
+  std::string rc1; rc1.reserve(300);
+
+  using ksw2pp::KSW2Aligner;
+  using ksw2pp::KSW2Config;
+  using ksw2pp::EnumToType;
+  using ksw2pp::KSW2AlignmentType;
+  KSW2Config config;
+  config.dropoff = -1;
+  config.gapo = salmonOpts.gapOpenPenalty;
+  config.gape = salmonOpts.gapExtendPenalty;
+  config.bandwidth = 10;
+  config.flag = 0;
+  config.flag |= KSW_EZ_SCORE_ONLY;
+  //config.flag |= KSW_EZ_APPROX_MAX | KSW_EZ_APPROX_DROP;
+  int8_t a = salmonOpts.matchScore;
+  int8_t b = salmonOpts.mismatchPenalty;
+  KSW2Aligner aligner(static_cast<int8_t>(a), static_cast<int8_t>(b));
+  aligner.config() = config;
+  ksw_extz_t ez;
+  memset(&ez, 0, sizeof(ksw_extz_t));
+  size_t numDropped{0};
+
+  //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
+  AlnCacheMap alnCache; alnCache.reserve(16);
+  //////////////////////
 
   auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
@@ -724,7 +854,7 @@ void processReadsQuasi(
       readLenRight= rp.second.seq.length();
 
       bool tooShortLeft = (readLenLeft < minK);
-      bool tooShortRight = (readLenRight < minK);
+      bool tooShortRight = (readLenRight < (minK+alevinOpts.trimRight));
       tooManyHits = false;
       //localUpperBoundHits = 0;
       auto& jointHitGroup = structureVec[i];
@@ -792,7 +922,6 @@ void processReadsQuasi(
         } else{
           //corrBarcodeIndex = barcodeMap[barcodeIndex];
           jointHitGroup.setBarcode(*barcodeIdx);
-
           aut::extractUMI(rp.first.seq, alevinOpts.protocol, umi);
 
           if ( umiLength != umi.size() ) {
@@ -807,7 +936,19 @@ void processReadsQuasi(
             if(isUmiIdxOk){
               jointHitGroup.setUMI(umiIdx.word(0));
 
-              rh = tooShortRight ? false : hitCollector(rp.second.seq, saSearcher, rightHCInfo);
+              auto seq_len = rp.second.seq.size();
+              if (alevinOpts.trimRight > 0) {
+                if ( tooShortRight ) {
+                  rh = false;
+                }
+                else{
+                  std::string sub_seq = rp.second.seq.substr(0, seq_len-alevinOpts.trimRight);
+                  rh = hitCollector(sub_seq, saSearcher, rightHCInfo);
+                }
+              }
+              else {
+                rh = tooShortRight ? false : hitCollector(rp.second.seq, saSearcher, rightHCInfo);
+              }
               rapmap::hit_manager::hitsToMappingsSimple(*qidx, mc,
                                                         MateStatus::PAIRED_END_RIGHT,
                                                         rightHCInfo, rightHits);
@@ -854,7 +995,9 @@ void processReadsQuasi(
                                             tooManyHits, hctr);
         } else {
           rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, leftHits, rightHits,
-                                                 jointHits, readLenLeft,
+                                                 jointHits,
+                                                 mc,
+                                                 readLenLeft,
                                                  maxNumHits, tooManyHits, hctr);
         }
 
@@ -939,6 +1082,84 @@ void processReadsQuasi(
                                });
           }
         }
+
+        // adding validate mapping code
+        bool tryAlign{salmonOpts.validateMappings};
+        if (tryAlign) {
+          alnCache.clear();
+          auto seq_len = rp.second.seq.size();
+          std::string sub_seq = rp.second.seq.substr(0, seq_len-alevinOpts.trimRight);
+          auto* r1 = sub_seq.data();
+          auto l1 = static_cast<int32_t>(sub_seq.length());
+
+          char* r1rc = nullptr;
+          int32_t bestScore{std::numeric_limits<int32_t>::min()};
+          std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
+          size_t idx{0};
+          double optFrac{salmonOpts.minScoreFraction};
+          int32_t maxReadScore{a * static_cast<int32_t>(sub_seq.length())};
+
+          bool multiMapping{jointHits.size() > 1};
+          for (auto& h : jointHits) {
+            int32_t score{std::numeric_limits<int32_t>::min()};
+            auto& t = transcripts[h.tid];
+            char* tseq = const_cast<char*>(t.Sequence());
+            const int32_t tlen = static_cast<int32_t>(t.RefLength);
+            const uint32_t buf{8};
+
+            // compute the reverse complement only if we
+            // need it and don't have it
+            if (!h.fwd and !r1rc) {
+              rapmap::utils::reverseRead(sub_seq, rc1);
+              // we will not break the const promise
+              r1rc = const_cast<char*>(rc1.data());
+            }
+
+            auto* rptr = h.fwd ? r1 : r1rc;
+            int32_t s =
+              getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, a, b,
+                          multiMapping, maxReadScore, h.chainStatus.getLeft(), buf, alnCache);
+            if (s < (optFrac * maxReadScore)) {
+              score = std::numeric_limits<decltype(score)>::min();
+            } else {
+              score = s;
+            }
+
+            bestScore = (score > bestScore) ? score : bestScore;
+            scores[idx] = score;
+            h.score(score);
+            ++idx;
+          }
+
+          uint32_t ctr{0};
+          if (bestScore > std::numeric_limits<int32_t>::min()) {
+            // Note --- with soft filtering, only those hits that are given the minimum possible
+            // score are filtered out.
+            jointHits.erase(
+                            std::remove_if(jointHits.begin(), jointHits.end(),
+                                           [&ctr, &scores, &numDropped, bestScore] (const QuasiAlignment& qa) -> bool {
+                                             // soft filter
+                                             //bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
+                                             //strict filter
+                                             bool rem = (scores[ctr] < bestScore);
+                                             ++ctr;
+                                             numDropped += rem ? 1 : 0;
+                                             return rem;
+                                           }),
+                            jointHits.end()
+                            );
+            // soft filter
+            double bestScoreD = static_cast<double>(bestScore);
+            std::for_each(jointHits.begin(), jointHits.end(),
+                          [bestScoreD, writeQuasimappings](QuasiAlignment& qa) -> void {
+                            if (writeQuasimappings) { qa.alnScore(static_cast<int32_t>(qa.score())); }
+                            double v = bestScoreD - qa.score();
+                            qa.score(std::exp(-v));
+                          });
+          } else {
+            jointHitGroup.clearAlignments();
+          }
+        } //end-if validate mapping
 
         bool needBiasSample = salmonOpts.biasCorrect;
 
@@ -1712,9 +1933,8 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
     ////////////////////////////////////////////
 
     if(not aopt.noDedup) {
-      jointLog->info("Starting optimizer");
+      jointLog->info("Starting optimizer\n\n");
       jointLog->flush();
-      std::cout<< "\n\n";
 
       CollapsedCellOptimizer optimizer;
       bool optSuccess = optimizer.optimize(experiment, aopt,
@@ -1822,6 +2042,14 @@ int alevinQuant(AlevinOpts<apt::InDrop>& aopt,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
 template
+int alevinQuant(AlevinOpts<apt::ChromiumV3>& aopt,
+                SalmonOpts& sopt,
+                SoftMapT& barcodeMap,
+                TrueBcsT& trueBarcodes,
+                boost::program_options::parsed_options& orderedOptions,
+                CFreqMapT& freqCounter,
+                size_t numLowConfidentBarcode);
+template
 int alevinQuant(AlevinOpts<apt::Chromium>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
@@ -1838,6 +2066,22 @@ int alevinQuant(AlevinOpts<apt::Gemcode>& aopt,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
 template
+int alevinQuant(AlevinOpts<apt::CELSeq>& aopt,
+                SalmonOpts& sopt,
+                SoftMapT& barcodeMap,
+                TrueBcsT& trueBarcodes,
+                boost::program_options::parsed_options& orderedOptions,
+                CFreqMapT& freqCounter,
+                size_t numLowConfidentBarcode);
+template
+int alevinQuant(AlevinOpts<apt::CELSeq2>& aopt,
+                SalmonOpts& sopt,
+                SoftMapT& barcodeMap,
+                TrueBcsT& trueBarcodes,
+                boost::program_options::parsed_options& orderedOptions,
+                CFreqMapT& freqCounter,
+                size_t numLowConfidentBarcode);
+template
 int alevinQuant(AlevinOpts<apt::Custom>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
@@ -1845,4 +2089,3 @@ int alevinQuant(AlevinOpts<apt::Custom>& aopt,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
-

@@ -209,7 +209,7 @@ char opToChr(enum cigar_op op) {
   return 'X';
 }
 
-double AlignmentModel::logLikelihood(
+AlignmentModel::AlnModelProb AlignmentModel::logLikelihood(
     bam_seq_t* read, Transcript& ref,
     std::vector<AtomicMatrix<double>>& transitionProbs) {
   using namespace salmon::stringtools;
@@ -231,7 +231,7 @@ double AlignmentModel::logLikelihood(
     std::lock_guard<std::mutex> l(outputMutex_);
     std::cerr << "transcript index = " << uTranscriptIdx
               << ", transcript length = " << transcriptLen << "\n";
-    return salmon::math::LOG_0;
+    return {salmon::math::LOG_0, salmon::math::LOG_1};
   }
 
   // std::stringstream readStream, matchStream, refStream;
@@ -243,11 +243,14 @@ double AlignmentModel::logLikelihood(
   int32_t readLen = bam_seq_len(read);
 
   if (cigarLen == 0 or !cigar) {
-    return salmon::math::LOG_EPSILON;
+    return {salmon::math::LOG_EPSILON, salmon::math::LOG_1};
   }
 
   salmon::stringtools::strand readStrand = salmon::stringtools::strand::forward;
+  // foreground likelihood
   double logLike = salmon::math::LOG_1;
+  // background likelihood
+  double bgLogLike = salmon::math::LOG_1;
 
   bool advanceInRead{false};
   bool advanceInReference{false};
@@ -284,7 +287,7 @@ double AlignmentModel::logLikelihood(
             }
             logger_->warn("(in logLikelihood()) CIGAR = {}", cigarStream.str());
           }
-          return logLike;
+          return {logLike, bgLogLike};
         }
         curReadBase = samToTwoBit[bam_seqi(qseq, readIdx)];
         readPosBin = static_cast<uint32_t>((readIdx * invLen));
@@ -302,7 +305,7 @@ double AlignmentModel::logLikelihood(
                 bam_name(read), ref.RefName, transcriptLen, ref.id,
                 bam_ref(read));
           }
-          return logLike;
+          return {logLike, bgLogLike};
         }
         curRefBase = samToTwoBit[ref.baseAt(uTranscriptIdx, readStrand)];
         advanceInReference = false;
@@ -313,6 +316,7 @@ double AlignmentModel::logLikelihood(
       curStateIdx = curRefBase * numStates + curReadBase;
       double tp = transitionProbs[readPosBin](prevStateIdx, curStateIdx);
       logLike += tp;
+      bgLogLike += transitionProbs[readPosBin](0, 0);
       prevStateIdx = curStateIdx;
       if (BAM_CONSUME_SEQ(op)) {
         ++readIdx;
@@ -335,20 +339,23 @@ double AlignmentModel::logLikelihood(
   }
   */
 
-  return logLike;
+  return {logLike, bgLogLike};
 }
 
 double AlignmentModel::logLikelihood(const ReadPair& hit, Transcript& ref) {
   double logLike = salmon::math::LOG_1;
+  double bg = salmon::math::LOG_1;
   if (BOOST_UNLIKELY(!isEnabled_)) {
     return logLike;
   }
 
   if (!hit.isPaired()) {
     if (hit.isLeftOrphan()) {
-      return logLikelihood(hit.read1, ref, transitionProbsLeft_);
+      auto alnLogProb = logLikelihood(hit.read1, ref, transitionProbsLeft_);
+      return alnLogProb.fg - alnLogProb.bg;
     } else {
-      return logLikelihood(hit.read1, ref, transitionProbsRight_);
+      auto alnLogProb = logLikelihood(hit.read1, ref, transitionProbsRight_);
+      return alnLogProb.fg - alnLogProb.bg;
     }
   }
 
@@ -361,23 +368,29 @@ double AlignmentModel::logLikelihood(const ReadPair& hit, Transcript& ref) {
   size_t rightLen = static_cast<size_t>(bam_seq_len(rightRead));
 
   if (leftRead) {
-    logLike += logLikelihood(leftRead, ref, transitionProbsLeft_);
+    auto alnLogProb = logLikelihood(leftRead, ref, transitionProbsLeft_);
+    logLike += alnLogProb.fg;
+    bg += alnLogProb.bg;
   }
 
   if (rightRead) {
-    logLike += logLikelihood(rightRead, ref, transitionProbsRight_);
+    auto alnLogProb = logLikelihood(rightRead, ref, transitionProbsRight_);
+    logLike += alnLogProb.fg;
+    bg += alnLogProb.bg;
   }
+
   if (logLike == salmon::math::LOG_0) {
     std::lock_guard<std::mutex> lock(outputMutex_);
     std::cerr << "orphan status: " << hit.orphanStatus << "\n";
     std::cerr << "error likelihood: " << logLike << "\n";
   }
 
-  return logLike;
+  return logLike - bg;
 }
 
 double AlignmentModel::logLikelihood(const UnpairedRead& hit, Transcript& ref) {
   double logLike = salmon::math::LOG_1;
+  double bg = salmon::math::LOG_1;
   if (BOOST_UNLIKELY(!isEnabled_)) {
     return logLike;
   }
@@ -390,15 +403,16 @@ double AlignmentModel::logLikelihood(const UnpairedRead& hit, Transcript& ref) {
       return logLike;
   }
   */
-
-  logLike += logLikelihood(read, ref, transitionProbsLeft_);
+  auto alnLogProb = logLikelihood(read, ref, transitionProbsLeft_);
+  logLike += alnLogProb.fg;
+  bg += alnLogProb.bg;
 
   if (logLike == salmon::math::LOG_0) {
     std::lock_guard<std::mutex> lock(outputMutex_);
     std::cerr << "error log likelihood: " << logLike << "\n";
   }
 
-  return logLike;
+  return logLike - bg;
 }
 
 void AlignmentModel::update(const UnpairedRead& hit, Transcript& ref, double p,

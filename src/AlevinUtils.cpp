@@ -55,6 +55,13 @@ namespace alevin {
       return true;
     }
     template <>
+    bool extractUMI<apt::ChromiumV3>(std::string& read,
+                                     apt::ChromiumV3& pt,
+                                     std::string& umi){
+      umi = read.substr(pt.barcodeLength, pt.umiLength);
+      return true;
+    }
+    template <>
     bool extractUMI<apt::Gemcode>(std::string& read,
                                    apt::Gemcode& pt,
                                    std::string& umi){
@@ -69,13 +76,26 @@ namespace alevin {
       return true;
     }
     template <>
+    bool extractUMI<apt::CELSeq2>(std::string& read,
+                                  apt::CELSeq2& pt,
+                                  std::string& umi){
+      umi = read.substr(0, pt.umiLength);
+      return true;
+    }
+    template <>
+    bool extractUMI<apt::CELSeq>(std::string& read,
+                                 apt::CELSeq& pt,
+                                 std::string& umi){
+      umi = read.substr(0, pt.umiLength);
+      return true;
+    }
+    template <>
     bool extractUMI<apt::InDrop>(std::string& read,
                                  apt::InDrop& pt,
                                  std::string& umi){
       std::cout<<"Incorrect call for umi extract";
       exit(0);
     }
-
 
     template <>
     nonstd::optional<std::string> extractBarcode<apt::DropSeq>(std::string& read,
@@ -84,6 +104,15 @@ namespace alevin {
         nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
       // = read.substr(0, pt.barcodeLength);
     //return true;
+    }
+    template <>
+    nonstd::optional<std::string> extractBarcode<apt::ChromiumV3>(std::string& read,
+                                                                  apt::ChromiumV3& pt){
+      return (read.length() >= pt.barcodeLength) ?
+        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+      //return (read.length() >= pt.barcodeLength) ? (bc.append(read.data(), pt.barcodeLength), true) : false;
+      //bc = read.substr(0, pt.barcodeLength);
+      //return true;
     }
     template <>
     nonstd::optional<std::string> extractBarcode<apt::Chromium>(std::string& read,
@@ -111,6 +140,19 @@ namespace alevin {
       //return (read.length() >= pt.barcodeLength) ? (bc.append(read.data(), pt.barcodeLength), true) : false;
       //bc = read.substr(0, pt.barcodeLength);
       //return true;
+    }
+    template <>
+    nonstd::optional<std::string> extractBarcode<apt::CELSeq2>(std::string& read,
+                                                               apt::CELSeq2& pt){
+      return (read.length() >= (pt.umiLength + pt.barcodeLength)) ?
+        nonstd::optional<std::string>(read.substr(pt.umiLength, pt.barcodeLength)) : nonstd::nullopt;
+
+    }
+    template <>
+    nonstd::optional<std::string> extractBarcode<apt::CELSeq>(std::string& read,
+                                                              apt::CELSeq& pt){
+      return (read.length() >= (pt.umiLength + pt.barcodeLength)) ?
+        nonstd::optional<std::string>(read.substr(pt.umiLength, pt.barcodeLength)) : nonstd::nullopt;
     }
     template <>
     nonstd::optional<std::string> extractBarcode<apt::InDrop>(std::string& read, apt::InDrop& pt){
@@ -216,6 +258,10 @@ namespace alevin {
       namespace bfs = boost::filesystem;
       namespace po = boost::program_options;
 
+      // mark in salmon options that we are running
+      // in alevin mode
+      sopt.alevinMode = true;
+
       //Create outputDirectory
       aopt.outputDirectory = vm["output"].as<std::string>() + "/alevin";
       if (!bfs::exists(aopt.outputDirectory)) {
@@ -276,27 +322,40 @@ namespace alevin {
       aopt.jointLog = spdlog::create("alevinLog", std::begin(sinks), std::end(sinks));
 
       aopt.quiet = vm["quiet"].as<bool>();
-      aopt.doEM = vm["em"].as<bool>();
+      aopt.noEM = vm["noem"].as<bool>();
       aopt.debug = vm["debug"].as<bool>();
       aopt.useCorrelation = vm["useCorrelation"].as<bool>();
       aopt.noDedup = vm["noDedup"].as<bool>();
-      aopt.naive = vm["naive"].as<bool>();
+      aopt.naiveEqclass = vm["naiveEqclass"].as<bool>();
       aopt.noQuant = vm["noQuant"].as<bool>();
       aopt.noSoftMap = vm["noSoftMap"].as<bool>();
       aopt.dumpfq = vm["dumpfq"].as<bool>();
-      aopt.dumpBFH = vm["dumpBfh"].as<bool>();
-      aopt.txpLevel = vm["txpLevel"].as<bool>();
-      aopt.eqClassLevel = vm["eqClassLevel"].as<bool>();
       aopt.nobarcode = vm["noBarcode"].as<bool>();
       aopt.dumpfeatures = vm["dumpFeatures"].as<bool>();
       aopt.dumpCsvCounts = vm["dumpCsvCounts"].as<bool>();
       aopt.dumpBarcodeEq = vm["dumpBarcodeEq"].as<bool>();
       aopt.dumpBarcodeMap = vm["dumpBarcodeMap"].as<bool>();
       aopt.dumpUmiToolsMap = vm["dumpUmitoolsMap"].as<bool>();
+      aopt.dumpBFH = vm["dumpBfh"].as<bool>();
+      aopt.dumpUmiGraph = vm["dumpUmiGraph"].as<bool>();
+      aopt.trimRight = vm["trimRight"].as<uint32_t>();
+      aopt.numBootstraps = vm["numCellBootstraps"].as<uint32_t>();
       aopt.lowRegionMinNumBarcodes = vm["lowRegionMinNumBarcodes"].as<uint32_t>();
       aopt.maxNumBarcodes = vm["maxNumBarcodes"].as<uint32_t>();
+      aopt.forceCells = vm["forceCells"].as<uint32_t>();
+      aopt.expectCells = vm["expectCells"].as<uint32_t>();
       if(vm.count("iupac")){
         aopt.iupac = vm["iupac"].as<std::string>();
+      }
+
+      if (sopt.numBootstraps>0) {
+        aopt.jointLog->error("Do you mean numCellBootstraps ?");
+        return false;
+      }
+
+      if ( aopt.numBootstraps > 0 and aopt.noEM ) {
+        aopt.jointLog->error("cannot perform bootstrapping with noEM option.");
+        return false;
       }
 
       if (not vm.count("threads")) {
@@ -412,8 +471,19 @@ namespace alevin {
       sopt.numThreads = aopt.numThreads;
       sopt.quiet = aopt.quiet;
       sopt.quantMode = SalmonQuantMode::MAP;
+
+      // enable validate mappings
+      sopt.validateMappings = true;
       bool optionsOK =
         salmon::utils::processQuantOptions(sopt, vm, vm["numBiasSamples"].as<int32_t>());
+      if (!vm.count("minScoreFraction")) {
+        sopt.minScoreFraction = alevin::defaults::minScoreFraction;
+        sopt.jointLog->info(
+                            "Using default value of {} for minScoreFraction in Alevin",
+                            sopt.minScoreFraction
+                            );
+      }
+
       if (!optionsOK) {
         if (aopt.jointLog) {
           aopt.jointLog->error("Could not properly process salmon-level options!");
@@ -518,6 +588,10 @@ namespace alevin {
                            SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
     template
+    bool processAlevinOpts(AlevinOpts<apt::ChromiumV3>& aopt,
+                           SalmonOpts& sopt,
+                           boost::program_options::variables_map& vm);
+    template
     bool processAlevinOpts(AlevinOpts<apt::Chromium>& aopt,
                            SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
@@ -529,28 +603,13 @@ namespace alevin {
     bool processAlevinOpts(AlevinOpts<apt::Custom>& aopt,
                            SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
-
-    /*
-    template bool sequenceCheck(std::string sequence,
-                                AlevinOpts<apt::DropSeq>& aopt,
-                                std::mutex& iomutex,
-                                Sequence seqType);
-    template bool sequenceCheck(std::string sequence,
-                                AlevinOpts<apt::InDrop>& aopt,
-                                std::mutex& iomutex,
-                                Sequence seqType);
-    template bool sequenceCheck(std::string sequence,
-                                AlevinOpts<apt::Chromium>& aopt,
-                                std::mutex& iomutex,
-                                Sequence seqType);
-    template bool sequenceCheck(std::string sequence,
-                                AlevinOpts<apt::Gemcode>& aopt,
-                                std::mutex& iomutex,
-                                Sequence seqType);
-    template bool sequenceCheck(std::string sequence,
-                                AlevinOpts<apt::Custom>& aopt,
-                                std::mutex& iomutex,
-                                Sequence seqType);
-    */
+    template
+    bool processAlevinOpts(AlevinOpts<apt::CELSeq>& aopt,
+                           SalmonOpts& sopt,
+                           boost::program_options::variables_map& vm);
+    template
+    bool processAlevinOpts(AlevinOpts<apt::CELSeq2>& aopt,
+                           SalmonOpts& sopt,
+                           boost::program_options::variables_map& vm);
   }
 }

@@ -7,105 +7,53 @@ matrix:
   include:
     - env: CC=gcc-7 CXX=g++-7 AR=gcc-ar-7 NM=gcc-nm-7 RANLIB=gcc-ranlib-7
     - env: CC=gcc-5 CXX=g++-5 AR=gcc-ar-5 NM=gcc-nm-5 RANLIB=gcc-ranlib-5
+    - language: python
+      python: "3.6"
+      name: Lint cmake files.
+      install: pip3 install cmakelint
+      script: scripts/lint.sh
+  allow_failures:
+    - name: Lint cmake files.
+  fast_finish: true
 
 install:
-    # https://launchpad.net/~ubuntu-toolchain-r/+archive/ubuntu/test
-    - sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
-    - sudo apt-get update -qq
-    - sudo apt-get install -qq zlib1g-dev libbz2-dev cmake
-    - |
-      if [[ "${CC}" =~ gcc- ]]; then
-        echo "Installing ${CC}."
-        sudo apt-get install -qq "${CC}"
-      fi
-    - |
-      if [[ "${CXX}" =~ g\+\+- ]]; then
-        echo "Installing ${CXX}."
-        sudo apt-get install -qq "${CXX}"
-      fi
+  # https://launchpad.net/~ubuntu-toolchain-r/+archive/ubuntu/test
+  - sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
+  - sudo apt-get update -qq
+  - sudo apt-get install -qq zlib1g-dev libbz2-dev cmake
+  - |
+    if [[ "${CC}" =~ gcc- ]]; then
+      echo "Installing ${CC}."
+      sudo apt-get install -qq "${CC}"
+    fi
+  - |
+    if [[ "${CXX}" =~ g\+\+- ]]; then
+      echo "Installing ${CXX}."
+      sudo apt-get install -qq "${CXX}"
+    fi
 
 script:
-    - LD_LIBRARY_PATH=${TRAVIS_BUILD_DIR}/lib:$LD_LIBRARY_PATH
-    - mkdir build
-    - pushd build
-    # Set make -j N considering Travis providing 2 cores.
-    # VERBOSE=1 to show the input commands in generatd Makefile for debug.
-    - |
-      cmake \
-        -DFETCH_BOOST=TRUE \
-        -DNO_RTM=TRUE \
-        .. && \
-      make -j 4 VERBOSE=1 && \
-      make install && \
-      ./src/salmon -h 
-    - |
-      make CTEST_OUTPUT_ON_FAILURE=1 VERBOSE=1 test 
-    - popd
+  - LD_LIBRARY_PATH=${TRAVIS_BUILD_DIR}/lib:$LD_LIBRARY_PATH
+  - mkdir build
+  - pushd build
+  # Set make -j N considering Travis providing 2 cores.
+  # VERBOSE=1 to show the input commands in generatd Makefile for debug.
+  - |
+    cmake \
+      -DFETCH_BOOST=TRUE \
+      -DNO_RTM=TRUE \
+      .. && \
+    make -j 4 VERBOSE=1 && \
+    make install && \
+    ./src/salmon -h
+  - |
+    make CTEST_OUTPUT_ON_FAILURE=1 VERBOSE=1 test
+  - popd
 
 after_success:
-    - ./scripts/push-binary.sh
+  - ./scripts/push-binary.sh
 
 after_failure:
-    - echo "Failure"
-    - ls -laR $TRAVIS_BUILD_DIR/build/Testing/
-    - cat $TRAVIS_BUILD_DIR/build/Testing/Temporary/*
-
-#whitelist
-#sudo: required
-#dist: precise
-#
-#branches:
-#    only:
-#        - master
-#        - develop
-#
-#language: cpp
-#
-#compiler: gcc
-#
-#addons:
-#  apt:
-#    sources:
-#      - boost-latest
-#      - kalakris-cmake
-#      - ubuntu-toolchain-r-test
-#      - george-edison55-precise-backports
-#    packages:
-#      - cmake
-#      - cmake-data
-#      - gcc-4.9
-#      - g++-4.9
-#
-#before_install:
-##    - echo "yes" | sudo apt-add-repository ppa:boost-latest
-##    - echo "yes" | sudo apt-add-repository ppa:mapnik/boost-backports-1-54
-##    - echo "yes" | sudo apt-add-repository ppa:h-rayflood/gcc-upper
-##    - echo "yes" | sudo add-apt-repository ppa:george-edison55/precise-backports
-##    - sudo apt-get clean -qq
-##    - sudo apt-get update -qq
-##    - sudo apt-mark showhold -qq
-##    - sudo apt-get install -qq cmake
-##    - sudo apt-get install -qq gcc-4.9 g++-4.9 
-#    - export CC="gcc-4.9"
-#    - export CXX="gcc-4.9"
-#    - sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-4.9 50
-#    - sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-4.9 50
-#
-#install:
-#    - export CXX="g++-4.9"
-#    - export CC="gcc-4.9"
-#
-#script: 
-#    - mkdir build 
-#    - cd build 
-#    - cmake -DCONDA_BUILD=TRUE -DFETCH_BOOST=TRUE -DNO_RTM=TRUE .. 
-#    - travis_wait 45 make 
-#    - travis_wait make install
-#    - travis_wait make test VERBOSE=1
-#
-#after_success: 
-#    - cd $TRAVIS_BUILD_DIR
-#    - ./scripts/push-binary.sh
-#      
-#after_failure:
-#    - cat $TRAVIS_BUILD_DIR/build/Testing/Temporary/LastTest.log
+  - echo "Failure"
+  - ls -laR $TRAVIS_BUILD_DIR/build/Testing/
+  - cat $TRAVIS_BUILD_DIR/build/Testing/Temporary/*

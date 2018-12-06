@@ -27,7 +27,8 @@ CollapsedCellOptimizer.cpp
 CollapsedGibbsSampler.cpp
 Salmon.cpp
 BuildSalmonIndex.cpp
-Dedup.cpp
+Graph.cpp
+DedupUMI.cpp
 Alevin.cpp
 SalmonAlevin.cpp
 WhiteList.cpp
@@ -364,7 +365,7 @@ install(
 )
 
 include(InstallRequiredSystemLibraries)
-add_test( NAME unit_tests COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${CMAKE_INSTALL_PREFIX} -P ${GAT_SOURCE_DIR}/cmake/UnitTests.cmake )
+add_test( NAME unit_tests COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/UnitTests.cmake )
 add_test( NAME salmon_read_test_quasi COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/TestSalmonQuasi.cmake )
 
 # Remove this test since we are removing support for the FMD index. 

@@ -121,9 +121,9 @@ void densityCalculator(single_parser* parser,
 
       auto& rp = rg[i];
       std::string& seq = rp.seq;
-      if (aopt.protocol.end == bcEnd::THREE) {
-        std::reverse(seq.begin(), seq.end());
-      }
+      //if (aopt.protocol.end == bcEnd::THREE) {
+      //  std::reverse(seq.begin(), seq.end());
+      //}
 
       nonstd::optional<std::string> extractedBarcode = aut::extractBarcode(seq, aopt.protocol);
       bool seqOk = (extractedBarcode.has_value()) ? aut::sequenceCheck(*extractedBarcode) : false;
@@ -244,7 +244,7 @@ uint32_t getLeftBoundary(std::vector<size_t>& sortedIdx,
   double cumCount{0.0};
   std::vector<double> freqs(topxBarcodes);
   for(uint32_t i = 0; i < topxBarcodes; i++){
-    size_t ind = sortedIdx[topxBarcodes-i];
+    size_t ind = sortedIdx[topxBarcodes-i-1];
     cumCount += freqCounter[ind];
     freqs[i] = std::log(cumCount);
   }
@@ -265,12 +265,12 @@ uint32_t getLeftBoundary(std::vector<size_t>& sortedIdx,
 
     size_t nextBcIdx(j+1);
     std::vector<double> Y(topxBarcodes-nextBcIdx);
-    isUp = false;
     slope = y/x;
     // fill in the values for fitted line
     std::transform(X.begin()+nextBcIdx, X.end(), Y.begin(),
                    [slope](uint32_t i) {return i*slope;} );
 
+    isUp = false;
     double curveY, lineY;
     for(auto i=nextBcIdx; i<topxBarcodes; i++){
       curveY = freqs[i];
@@ -312,72 +312,129 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
   uint64_t history { 0 };
   uint32_t threshold;
 
-  topxBarcodes = getLeftBoundary(sortedIdx,
-                                 topxBarcodes,
-                                 freqCounter);
-  if (topxBarcodes == 0){
-    aopt.jointLog->error("Can't find left Boundary.\n"
-                         "Please Report this issue on github.");
-    exit(1);
+  if (aopt.forceCells > 0) {
+    topxBarcodes = aopt.forceCells;
   }
-  else{
-    aopt.jointLog->info("Knee found left boundary at {} {} {}",
-                        green, topxBarcodes, RESET_COLOR);
+  else if (aopt.expectCells > 0){
+    // Expect Cells algorithm is taken from
+    // https://github.com/10XGenomics/cellranger/blob/e5396c6c444acec6af84caa7d3655dd33a162852/lib/python/cellranger/stats.py#L138
 
-    double invCovariance {0.0}, normFactor{0.0};
-    uint32_t gaussThreshold;
-    bool isGaussOk = gaussianKDE(freqCounter, sortedIdx,
-                                 invCovariance, normFactor,
-                                 topxBarcodes, gaussThreshold);
+    constexpr uint32_t MAX_FILTERED_CELLS = 2;
+    constexpr double UPPER_CELL_QUANTILE = 0.01;
+    constexpr double FRACTION_MAX_FREQUENCY = 0.1;
 
-    if ( isGaussOk ){
-      topxBarcodes = gaussThreshold;
-      // consider only if within 10% of current prediction
-      aopt.jointLog->info("Gauss Corrected Boundary at {} {} {}",
-                          green, gaussThreshold, RESET_COLOR);
+    uint32_t baselineBcs = std::max(1, static_cast<int32_t>( aopt.expectCells*UPPER_CELL_QUANTILE ));
+    double cutoffFrequency = std::max(1.0, freqCounter[sortedIdx[baselineBcs]] * FRACTION_MAX_FREQUENCY);
+    uint32_t maxNumCells = std::min(static_cast<uint32_t>(freqCounter.size()), aopt.expectCells * MAX_FILTERED_CELLS);
+
+    topxBarcodes = maxNumCells;
+    for(size_t i=baselineBcs; i<maxNumCells; i++){
+      if (freqCounter[sortedIdx[i]] < cutoffFrequency) {
+        topxBarcodes = i;
+        break;
+      }
     }
-    else{
-      aopt.jointLog->warn("Gauss Prediction {} Too far from knee prediction skipping it",
-                          gaussThreshold);
-    }
 
-    aopt.jointLog->info("Learned InvCov: {} normfactor: {}",
-                        invCovariance, normFactor);
-    if (invCovariance == 0.0 or normFactor == 0.0){
-      aopt.jointLog->error("Wrong invCovariance/Normfactor");
+    if (topxBarcodes == maxNumCells){
+      aopt.jointLog->error("Can't find right Boundary.\n"
+                           "Please Report this issue on github.");
+      aopt.jointLog->flush();
       exit(1);
     }
-
-    uint32_t fractionTrueBarcodes = static_cast<int>(lowConfidenceFraction * topxBarcodes);
-
-    if (fractionTrueBarcodes < lowRegionMinNumBarcodes){
-      lowRegionNumBarcodes = lowRegionMinNumBarcodes;
-    }
-    else if (fractionTrueBarcodes > lowRegionMaxNumBarcodes){
-      lowRegionNumBarcodes = lowRegionMaxNumBarcodes;
+  }
+  else{
+    topxBarcodes = getLeftBoundary(sortedIdx,
+                                   topxBarcodes,
+                                   freqCounter);
+    if (topxBarcodes == 0){
+      aopt.jointLog->error("Can't find left Boundary.\n"
+                           "Please Report this issue on github.");
+      aopt.jointLog->flush();
+      exit(1);
     }
     else{
-      lowRegionNumBarcodes = fractionTrueBarcodes;
-    }
+      aopt.jointLog->info("Knee found left boundary at {} {} {}",
+                          green, topxBarcodes, RESET_COLOR);
 
-    // ignoring all the frequencies having same frequency as cutoff
-    // to imitate stable sort
-    topxBarcodes += lowRegionNumBarcodes;
-    uint32_t cutoffFrequency = freqCounter[sortedIdx[ topxBarcodes ]];
-    uint32_t nearestLeftFrequency = cutoffFrequency;
-    while(nearestLeftFrequency == cutoffFrequency){
-      nearestLeftFrequency = freqCounter[sortedIdx[--topxBarcodes]];
-      lowRegionNumBarcodes--;
-    }
-    lowRegionNumBarcodes++;
-    topxBarcodes++;
+      double invCovariance {0.0}, normFactor{0.0};
+      uint32_t gaussThreshold;
+      bool isGaussOk = gaussianKDE(freqCounter, sortedIdx,
+                                   invCovariance, normFactor,
+                                   topxBarcodes, gaussThreshold);
 
-    // keeping 1000 cells left of the left boundary for learning
-    aopt.jointLog->info("Total {}{}{}(has {}{}{} low confidence)"
-                        " barcodes",
-                        green, topxBarcodes, RESET_COLOR,
-                        green, lowRegionNumBarcodes, RESET_COLOR);
+      if ( isGaussOk ){
+        topxBarcodes = gaussThreshold;
+        // consider only if within 10% of current prediction
+        aopt.jointLog->info("Gauss Corrected Boundary at {} {} {}",
+                            green, gaussThreshold, RESET_COLOR);
+      }
+      else{
+        aopt.jointLog->warn("Gauss Prediction {} Too far from knee prediction skipping it",
+                            gaussThreshold);
+      }
+
+      aopt.jointLog->info("Learned InvCov: {} normfactor: {}",
+                          invCovariance, normFactor);
+      if (invCovariance == 0.0 or normFactor == 0.0){
+        aopt.jointLog->error("Wrong invCovariance/Normfactor");
+        aopt.jointLog->flush();
+        exit(1);
+      }
+    }
+  }//end-left-knee finding case
+
+  uint32_t fractionTrueBarcodes = static_cast<int>(lowConfidenceFraction * topxBarcodes);
+
+  if (fractionTrueBarcodes < lowRegionMinNumBarcodes){
+    lowRegionNumBarcodes = lowRegionMinNumBarcodes;
   }
+  else if (fractionTrueBarcodes > lowRegionMaxNumBarcodes){
+    lowRegionNumBarcodes = lowRegionMaxNumBarcodes;
+  }
+  else{
+    lowRegionNumBarcodes = fractionTrueBarcodes;
+  }
+
+  // ignoring all the frequencies having same frequency as cutoff
+  // to imitate stable sort
+  topxBarcodes += lowRegionNumBarcodes;
+  uint32_t cutoffFrequency = freqCounter[sortedIdx[ topxBarcodes ]];
+  uint32_t nearestLeftFrequency = cutoffFrequency;
+  while(nearestLeftFrequency == cutoffFrequency){
+    nearestLeftFrequency = freqCounter[sortedIdx[--topxBarcodes]];
+    lowRegionNumBarcodes--;
+  }
+  lowRegionNumBarcodes++;
+  topxBarcodes++;
+
+  uint64_t totalReads{0};
+  for(size_t i=0; i<topxBarcodes; i++){
+    totalReads += freqCounter[sortedIdx[i]];
+  }
+
+  uint64_t readsThrownCounter {0};
+  for(size_t i=topxBarcodes; i<freqCounter.size(); i++){
+    readsThrownCounter += freqCounter[sortedIdx[i]];
+  }
+  totalReads += readsThrownCounter;
+
+  double percentThrown = readsThrownCounter*100.0 / totalReads;
+  if (percentThrown > 50.0) {
+    aopt.jointLog->warn("Total {}% reads will be thrown away"
+                        " because of noisy Cellular barcodes.",
+                        percentThrown);
+  }
+  else{
+    aopt.jointLog->info("Total {}% reads will be thrown away"
+                        " because of noisy Cellular barcodes.",
+                        percentThrown);
+  }
+
+  // keeping some cells left of the left boundary for learning
+  aopt.jointLog->info("Total {}{}{}(has {}{}{} low confidence)"
+                      " barcodes",
+                      green, topxBarcodes, RESET_COLOR,
+                      green, lowRegionNumBarcodes, RESET_COLOR);
 
   threshold = topxBarcodes;
 
@@ -387,7 +444,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
     freqFile.open(frequencyFileName.string());
     for (auto i:sortedIdx){
       uint32_t count = freqCounter[i];
-      if (topxBarcodes == 0 or count == 0){
+      if (count == 0){
         break;
       }
       freqFile << colMap[i] << "\t"
@@ -549,17 +606,32 @@ bool writeFastq(AlevinOpts<ProtocolT>& aopt,
       for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
         auto& rp = rg[i];
         if(aopt.protocol.end == bcEnd::FIVE){
-          barcode = rp.first.seq.substr(0, aopt.protocol.barcodeLength);
-          umi = rp.first.seq.substr(aopt.protocol.barcodeLength,
-                                    aopt.protocol.umiLength);
+          {
+            nonstd::optional<std::string> extractedSeq = aut::extractBarcode(rp.first.seq, aopt.protocol);
+            bool seqOk = (extractedSeq.has_value()) ? aut::sequenceCheck(*extractedSeq) : false;
+            if (not seqOk){
+              continue;
+              //std::cerr<<"Can't extract barcode";
+              //return false;
+            }
+            barcode = *extractedSeq;
+          }
+
+          {
+            bool seqOk = aut::extractUMI(rp.first.seq, aopt.protocol, umi);
+            if (not seqOk){
+              std::cerr<<"Can't extract UMI";
+              return false;
+            }
+          }
         }
-        else if (aopt.protocol.end == bcEnd::THREE) {
-          std::string seq = rp.first.seq;
-          std::reverse(seq.begin(), seq.end());
-          barcode = rp.first.seq.substr(0, aopt.protocol.barcodeLength);
-          umi = rp.first.seq.substr(aopt.protocol.barcodeLength,
-                                    aopt.protocol.umiLength);
-        }
+        //else if (aopt.protocol.end == bcEnd::THREE) {
+        //  std::string seq = rp.first.seq;
+        //  std::reverse(seq.begin(), seq.end());
+        //  barcode = rp.first.seq.substr(0, aopt.protocol.barcodeLength);
+        //  umi = rp.first.seq.substr(aopt.protocol.barcodeLength,
+        //                            aopt.protocol.umiLength);
+        //}
 
         bool inTrueBc = trueBarcodes.find(barcode) != trueBarcodes.end();
         auto it = barcodeMap.find(barcode);
@@ -699,7 +771,8 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
       //Calculate the knee using the frequency distribution
       //and get the true set of barcodes
       sampleTrueBarcodes(collapsedfrequency, trueBarcodes,
-                         numLowConfidentBarcode, collapMap, aopt);
+                           numLowConfidentBarcode, collapMap, aopt);
+
       aopt.jointLog->info("Done True Barcode Sampling");
     }
 
@@ -717,6 +790,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
       if ( not indexOk){
         aopt.jointLog->error("Error: index not find in freq Counter\n"
                              "Please Report the issue on github");
+        aopt.jointLog->flush();
         exit(1);
       }
 
@@ -852,7 +926,7 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
   }
 }
 
-int salmonBarcoding(int argc, char* argv[]) {
+int salmonBarcoding(int argc, const char* argv[]) {
   namespace bfs = boost::filesystem;
   namespace po = boost::program_options;
 
@@ -872,20 +946,19 @@ int salmonBarcoding(int argc, char* argv[]) {
   salmon::ProgramOptionsGenerator pogen;
 
   auto inputOpt = pogen.getMappingInputOptions(sopt);
-  auto basicOpt = pogen.getBasicOptions(sopt);
   auto mapSpecOpt = pogen.getMappingSpecificOptions(sopt);
   auto advancedOpt = pogen.getAdvancedOptions(numBiasSamples, sopt);
   auto hiddenOpt = pogen.getHiddenOptions(sopt);
   auto testingOpt = pogen.getTestingOptions(sopt);
   auto deprecatedOpt = pogen.getDeprecatedOptions(sopt);
-  auto alevinBasicOpt = pogen.getAlevinBasicOptions();
+  auto alevinBasicOpt = pogen.getAlevinBasicOptions(sopt);
   auto alevinDevsOpt = pogen.getAlevinDevsOptions();
 
   po::options_description all("alevin options");
-  all.add(inputOpt).add(alevinBasicOpt).add(alevinDevsOpt).add(basicOpt).add(mapSpecOpt).add(advancedOpt).add(testingOpt).add(hiddenOpt).add(deprecatedOpt);
+  all.add(inputOpt).add(alevinBasicOpt).add(alevinDevsOpt).add(mapSpecOpt).add(advancedOpt).add(testingOpt).add(hiddenOpt).add(deprecatedOpt);
 
   po::options_description visible("alevin options");
-  visible.add(inputOpt).add(alevinBasicOpt).add(basicOpt);
+  visible.add(inputOpt).add(alevinBasicOpt);
 
   po::variables_map vm;
   try {
@@ -914,13 +987,23 @@ salmon-based processing of single-cell RNA-seq data.
 
     bool dropseq = vm["dropseq"].as<bool>();
     bool indrop = vm["indrop"].as<bool>();
+    bool chromV3 = vm["chromiumV3"].as<bool>();
     bool chrom = vm["chromium"].as<bool>();
     bool gemcode = vm["gemcode"].as<bool>();
+    bool celseq = vm["celseq"].as<bool>();
+    bool celseq2 = vm["celseq2"].as<bool>();
 
-    if((dropseq and indrop) or
-       (dropseq and chrom) or
-       (chrom and indrop)){
-      fmt::print(stderr, "ERROR: Please specify only one scRNA protocol;");
+    uint8_t validate_num_protocols {0};
+    if (dropseq) validate_num_protocols += 1;
+    if (indrop) validate_num_protocols += 1;
+    if (chromV3) validate_num_protocols += 1;
+    if (chrom) validate_num_protocols += 1;
+    if (gemcode) validate_num_protocols += 1;
+    if (celseq) validate_num_protocols += 1;
+    if (celseq2) validate_num_protocols += 1;
+
+    if ( validate_num_protocols != 1 ) {
+      fmt::print(stderr, "ERROR: Please specify one and only one scRNA protocol;");
       exit(1);
     }
 
@@ -941,7 +1024,6 @@ salmon-based processing of single-cell RNA-seq data.
     barcodeFiles = sopt.mate1ReadFiles;
     readFiles = sopt.mate2ReadFiles;
     unmateFiles = sopt.unmatedReadFiles;
-    //
 
     if (dropseq){
       AlevinOpts<apt::DropSeq> aopt;
@@ -967,6 +1049,13 @@ salmon-based processing of single-cell RNA-seq data.
         exit(1);
       }
     }
+    else if(chromV3){
+      AlevinOpts<apt::ChromiumV3> aopt;
+      //aopt.jointLog->warn("Using 10x v3 Setting for Alevin");
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString,
+                       barcodeFiles, readFiles);
+    }
     else if(chrom){
       AlevinOpts<apt::Chromium> aopt;
       //aopt.jointLog->warn("Using 10x v2 Setting for Alevin");
@@ -980,6 +1069,20 @@ salmon-based processing of single-cell RNA-seq data.
       initiatePipeline(aopt, sopt, orderedOptions,
                        vm, commentString,
                        unmateFiles, readFiles);
+    }
+    else if(celseq){
+      AlevinOpts<apt::CELSeq> aopt;
+      //aopt.jointLog->warn("Using CEL-Seq Setting for Alevin");
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString,
+                       barcodeFiles, readFiles);
+    }
+    else if(celseq2){
+      AlevinOpts<apt::CELSeq2> aopt;
+      //aopt.jointLog->warn("Using CEL-Seq2 Setting for Alevin");
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString,
+                       barcodeFiles, readFiles);
     }
     else{
       AlevinOpts<apt::Custom> aopt;

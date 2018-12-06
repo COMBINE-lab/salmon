@@ -4,6 +4,7 @@
 namespace salmon {
 namespace defaults {
   // general
+  constexpr const bool discardOrphansAln{false};
   constexpr const bool discardOrphansQuasi{false};
   constexpr const bool allowOrphansFMD{false};
   constexpr const bool seqBiasCorrect{false};
@@ -20,10 +21,12 @@ namespace defaults {
   constexpr const bool validateMappings{false};
   constexpr const int32_t consensusSlack{0};
   constexpr const double minScoreFraction{0.65};
-  constexpr const int8_t matchScore{2};
-  constexpr const int8_t mismatchPenalty{-4};
-  constexpr const int8_t gapOpenPenalty{5};
-  constexpr const int8_t gapExtendPenalty{3};
+  constexpr const int16_t matchScore{2};
+  constexpr const int16_t mismatchPenalty{-4};
+  constexpr const int16_t gapOpenPenalty{5};
+  constexpr const int16_t gapExtendPenalty{3};
+  constexpr const bool mimicStrictBT2{false};
+  constexpr const int32_t maxMMPExtension{7};
   constexpr const bool alternativeInitMode{false};
   constexpr const char auxDir[] = "aux_info";
   constexpr const bool consistentHits{false};
@@ -101,29 +104,38 @@ namespace defaults {
 
 namespace alevin {
 namespace defaults {
-  constexpr const bool naive{false};
+  constexpr const bool naiveEqclass{false};
   constexpr const bool noDedup{false};
   constexpr const bool txpLevel{false};
   constexpr const bool eqClassLevel{false};
   constexpr const bool isDropseq{false};
   constexpr const bool isChromium{false};
+  constexpr const bool isChromiumV3{false};
   constexpr const bool isInDrop{false};
   constexpr const bool isGemcode{false};
-  constexpr const bool dumpBarcodeEq{false};
+  constexpr const bool isCELSeq{false};
+  constexpr const bool isCELSeq2{false};
   constexpr const bool noQuant{false};
   constexpr const bool noSoftMap{true};
   constexpr const bool useCorrelation{false};
   constexpr const bool dumpFQ{false};
+  constexpr const bool dumpBarcodeEq{false};
   constexpr const bool dumpFeatures{false};
   constexpr const bool dumpBFH{false};
+  constexpr const bool dumpUmiGraph{false};
   constexpr const bool dumpUMIToolsMap{false};
   constexpr const bool dumpBarcodeMap{false};
   constexpr const bool dumpCSVCounts{false};
-  constexpr const bool doEM{false};
-  constexpr const bool debug{false};
+  constexpr const bool noEM{false};
+  constexpr const bool debug{true};
   constexpr const bool noBarcode{false};
+  constexpr const uint32_t trimRight{0};
+  constexpr const uint32_t numBootstraps{0};
   constexpr const uint32_t lowRegionMinNumBarcodes{200};
   constexpr const uint32_t maxNumBarcodes{100000};
+  constexpr const double minScoreFraction{0.8};
+  constexpr const double expectCells{0};
+  constexpr const double forceCells{0};
 }
 }
 

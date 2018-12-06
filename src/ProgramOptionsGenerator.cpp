@@ -98,27 +98,42 @@ namespace salmon {
        "is 1 if --validateMappings is given and 0 otherwise."
        )
       ("minScoreFraction",
-       po::value<double>(&sopt.minScoreFraction)->default_value(salmon::defaults::minScoreFraction),
-       "[Quasi-mapping mode only] : The fraction of the optimal possible alignment score that a "
-       "mapping must achieve in order to be considered \"valid\" --- should be in (0,1]."
+       po::value<double>(&sopt.minScoreFraction),
+       "[Quasi-mapping mode (w / mapping validation) only] : The fraction of the optimal possible alignment score that a "
+       "mapping must achieve in order to be considered \"valid\" --- should be in (0,1].\n"
+       "Salmon Default 0.65 and Alevin Default 0.8"
+       )
+      ("maxMMPExtension",
+       po::value<int32_t>(&sopt.maxMMPExtension)->default_value(salmon::defaults::maxMMPExtension),
+       "[Quasi-mapping mode (w / mapping validation) only] : Sets the maximum allowable MMP extension when collecting "
+       "suffix array intervals to be used in chaining.  This prevents MMPs from becoming too long, and potentially masking "
+       "intervals that would uncover other good quasi-mappings for the read.  This heuristic mimics the idea of the "
+       "maximum mappable safe prefix (MMSP) in selective alignment.  Setting a smaller value will potentially allow "
+       "for more sensitive, but slower, mapping."
        )
       ("ma",
-       po::value<int8_t>(&sopt.matchScore)->default_value(salmon::defaults::matchScore),
-       "[Quasi-mapping mode only] : The value given to a match between read and reference nucleotides "
+       po::value<int16_t>(&sopt.matchScore)->default_value(salmon::defaults::matchScore),
+       "[Quasi-mapping mode (w / mapping validation) only] : The value given to a match between read and reference nucleotides "
        "in an alignment."
        )
       ("mp",
-       po::value<int8_t>(&sopt.mismatchPenalty)->default_value(salmon::defaults::mismatchPenalty),
-       "[Quasi-mapping mode only] : The value given to a mis-match between read and reference nucleotides "
+       po::value<int16_t>(&sopt.mismatchPenalty)->default_value(salmon::defaults::mismatchPenalty),
+       "[Quasi-mapping mode (w / mapping validation) only] : The value given to a mis-match between read and reference nucleotides "
        "in an alignment."
        )
       ("go",
-       po::value<int8_t>(&sopt.gapOpenPenalty)->default_value(salmon::defaults::gapOpenPenalty),
-       "[Quasi-mapping mode only] : The value given to a gap opening in an alignment."
+       po::value<int16_t>(&sopt.gapOpenPenalty)->default_value(salmon::defaults::gapOpenPenalty),
+       "[Quasi-mapping mode (w / mapping validation) only] : The value given to a gap opening in an alignment."
        )
       ("ge",
-       po::value<int8_t>(&sopt.gapExtendPenalty)->default_value(salmon::defaults::gapExtendPenalty),
-       "[Quasi-mapping mode only] : The value given to a gap extension in an alignment."
+       po::value<int16_t>(&sopt.gapExtendPenalty)->default_value(salmon::defaults::gapExtendPenalty),
+       "[Quasi-mapping mode (w / mapping validation) only] : The value given to a gap extension in an alignment."
+       )
+      ("mimicStrictBT2", // horrible flag name, think of something better
+       po::bool_switch(&(sopt.mimicStrictBT2))->default_value(salmon::defaults::mimicStrictBT2),
+       "[Quasi-mapping mode (w / mapping validation) only] : Set flags to mimic the very strict parameters used by "
+       "RSEM+Bowtie2.  This increases --minScoreFraction to 0.8, disallows dovetailing reads, "
+       "discards orphans, and disallows gaps in alignments."
        )
       ("allowOrphansFMD",
        po::bool_switch(&(sopt.allowOrphans))->default_value(salmon::defaults::allowOrphansFMD),
@@ -198,6 +213,12 @@ namespace salmon {
     po::options_description alignin("\n"
                                       "alignment input options");
     alignin.add_options()
+    ("discardOrphans",
+       po::bool_switch(&(sopt.discardOrphansAln))->default_value(salmon::defaults::discardOrphansAln),
+       "[Alignment-based mode only] : Discard orphan alignments in the input "
+       ".  If this flag is passed, then only paired alignments will be "
+       "considered toward quantification estimates.  The default behavior is "
+       "to consider orphan alignments if no valid paired mappings exist.")
     ("libType,l", po::value<std::string>()->required(), "Format string describing the library type")
     ("alignments,a", po::value<vector<string>>()->multitoken()->required(),
      "input alignment (BAM) file(s).")
@@ -219,7 +240,7 @@ namespace salmon {
        "Must be used in conjunction with inDrop;")
       (
        "dumpBarcodeEq", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeEq),
-       "Dump JointEqClas with umi-barcode count.(Only DropSeq)")
+       "Dump JointEqClas with umi-barcode count.")
       (
        "dumpUmitoolsMap", po::bool_switch()->default_value(alevin::defaults::dumpUMIToolsMap),
        "Dump umi_tools readable whitelist map for downstream analysis.")
@@ -243,33 +264,51 @@ namespace salmon {
        "umi length Parameter for unknown protocol. (end, umiLength, barcodeLength)"
        " should all be provided if using this option")
       (
-       "em",po::bool_switch()->default_value(alevin::defaults::doEM),
+       "noem",po::bool_switch()->default_value(alevin::defaults::noEM),
        "do not run em")
-      (
-       "eqClassLevel",po::bool_switch()->default_value(alevin::defaults::eqClassLevel),
-       "perform eqclass level analysis instead of gene/txp level min set analysis.")
-      (
-       "txpLevel",po::bool_switch()->default_value(alevin::defaults::txpLevel),
-       "perform txp level analysis instead of gene level")
       (
        "noBarcode",po::bool_switch()->default_value(alevin::defaults::noBarcode),
        "this flag should be used when there is no barcode i.e. only one cell deduplication.")
+      (
+       "trimRight",po::value<uint32_t>()->default_value(alevin::defaults::trimRight),
+       "The number of bases to trim off the 5' (right) end of the read seequence.")
+      (
+       "noSoftMap", po::bool_switch()->default_value(alevin::defaults::noSoftMap),
+       "Don't use soft-assignment for quant instead do hard-assignment.")
+      (
+       "naiveEqclass", po::bool_switch()->default_value(alevin::defaults::naiveEqclass),
+       "Run naive per equivalence class deduplication, generating only total number of UMIs")
+      (
+       "noDedup", po::bool_switch()->default_value(alevin::defaults::noDedup),
+       "Stops the pipeline after CB sequence correction and quasi-mapping reads.")
+      (
+       "debug", po::bool_switch()->default_value(alevin::defaults::debug),
+       "Enabling this mode mode will try to ignore segfaults based on no whitelist"
+       " mapping or no whitelist deduplicated count")
       (
        "freqThreshold",po::value<uint32_t>(),
        "threshold for the frequency of the barcodes");
     return alevindevs;
   }
 
-  po::options_description ProgramOptionsGenerator::getAlevinBasicOptions() {
+  po::options_description ProgramOptionsGenerator::getAlevinBasicOptions(SalmonOpts& sopt) {
     po::options_description alevinspec("\n"
                                        "alevin-specific Options");
     alevinspec.add_options()
+      ("version,v", "print version string")
+      ("help,h", "produce help message")
+      ("output,o", po::value<std::string>()->required(), "Output quantification directory.")
+      ("threads,p",
+       po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads),
+       "The number of threads to use concurrently.")
       (
-       "noDedup", po::bool_switch()->default_value(alevin::defaults::noDedup),
-       "Stops the pipeline after CB sequence correction and quasi-mapping reads.")
+       "tgMap", po::value<std::string>(), "transcript to gene map tsv file")
       (
        "dropseq", po::bool_switch()->default_value(alevin::defaults::isDropseq),
        "Use DropSeq Single Cell protocol for the library")
+      (
+       "chromiumV3", po::bool_switch()->default_value(alevin::defaults::isChromiumV3),
+       "Use 10x chromium v3 Single Cell protocol for the library.")
       (
        "chromium", po::bool_switch()->default_value(alevin::defaults::isChromium),
        "Use 10x chromium v2 Single Cell protocol for the library.")
@@ -277,17 +316,27 @@ namespace salmon {
        "gemcode", po::bool_switch()->default_value(alevin::defaults::isGemcode),
        "Use 10x gemcode v1 Single Cell protocol for the library.")
       (
+       "celseq", po::bool_switch()->default_value(alevin::defaults::isCELSeq),
+       "Use CEL-Seq Single Cell protocol for the library.")
+      (
+       "celseq2", po::bool_switch()->default_value(alevin::defaults::isCELSeq2),
+       "Use CEL-Seq2 Single Cell protocol for the library.")
+      (
        "whitelist", po::value<std::string>(),
        "File containing white-list barcodes")
       (
        "noQuant", po::bool_switch()->default_value(alevin::defaults::noQuant),
        "Don't run downstream barcode-salmon model.")
       (
-       "naive", po::bool_switch()->default_value(alevin::defaults::naive),
-       "Run Gene level naive deduplication")
+       "numCellBootstraps",po::value<uint32_t>()->default_value(alevin::defaults::numBootstraps),
+       "Generate mean and variance for cell x gene matrix quantification"
+       " estimates.")
       (
-       "noSoftMap", po::bool_switch()->default_value(alevin::defaults::noSoftMap),
-       "Don't use soft-assignment for quant instead do hard-assignment.")
+       "forceCells",po::value<uint32_t>()->default_value(alevin::defaults::forceCells),
+       "Explicitly specify the number of cells.")
+      (
+       "expectCells",po::value<uint32_t>()->default_value(alevin::defaults::expectCells),
+       "define a close upper bound on expected number of cells")
       (
        "mrna", po::value<std::string>(),
        "path to a file containing mito-RNA gene, one per line")
@@ -303,12 +352,11 @@ namespace salmon {
        "Dump barcode modified fastq file for downstream analysis by"
        " using coin toss for multi-mapping.")
       (
-       "debug", po::bool_switch()->default_value(alevin::defaults::debug),
-       "Enabling this mode mode will try to ignore segfaults based on no whitelist"
-       " mapping or no whitelist deduplicated count")
-      (
        "dumpBfh", po::bool_switch()->default_value(alevin::defaults::dumpBFH),
        "dump the big hash with all the barcodes and the UMI sequence.")
+      (
+       "dumpUmiGraph", po::bool_switch()->default_value(alevin::defaults::dumpUmiGraph),
+       "dump the per cell level Umi Graph.")
       (
        "dumpFeatures", po::bool_switch()->default_value(alevin::defaults::dumpFeatures),
        "Dump features for whitelist and downstream analysis.")
@@ -320,9 +368,7 @@ namespace salmon {
        "Minimum Number of CB to use for learning Low confidence region (Default: 200).")
       (
        "maxNumBarcodes", po::value<uint32_t>()->default_value(alevin::defaults::maxNumBarcodes),
-       "Maximum allowable limit to process the cell barcodes. (Default: 100000)")
-      (
-       "tgMap", po::value<std::string>(), "transcript to gene map tsv file");
+       "Maximum allowable limit to process the cell barcodes. (Default: 100000)");
     return alevinspec;
   }
 

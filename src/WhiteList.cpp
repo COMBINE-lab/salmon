@@ -249,7 +249,6 @@ namespace alevin {
       // Count matrix file after the deduplicated counts
       // TODO::
       // 4. Using all txps i.e. not ignoring txp with 0 values in all the cells
-
       size_t numCells = trueBarcodes.size();
       size_t numGenes = geneIdxMap.size();
       size_t numFeatures{4};
@@ -509,6 +508,13 @@ namespace alevin {
                                       CFreqMapT& freqCounter,
                                       spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                                       size_t numLowConfidentBarcode);
+    template bool performWhitelisting(AlevinOpts<alevin::protocols::ChromiumV3>& aopt,
+                                      std::vector<uint32_t>& umiCount,
+                                      DoubleMatrixT& geneCountsMatrix,
+                                      std::vector<std::string>& trueBarcodes,
+                                      CFreqMapT& freqCounter,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                                      size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::Chromium>& aopt,
                                       std::vector<uint32_t>& umiCount,
                                       DoubleMatrixT& geneCountsMatrix,
@@ -517,6 +523,20 @@ namespace alevin {
                                       spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::Gemcode>& aopt,
+                                      std::vector<uint32_t>& umiCount,
+                                      DoubleMatrixT& geneCountsMatrix,
+                                      std::vector<std::string>& trueBarcodes,
+                                      CFreqMapT& freqCounter,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                                      size_t numLowConfidentBarcode);
+    template bool performWhitelisting(AlevinOpts<alevin::protocols::CELSeq>& aopt,
+                                      std::vector<uint32_t>& umiCount,
+                                      DoubleMatrixT& geneCountsMatrix,
+                                      std::vector<std::string>& trueBarcodes,
+                                      CFreqMapT& freqCounter,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                                      size_t numLowConfidentBarcode);
+    template bool performWhitelisting(AlevinOpts<alevin::protocols::CELSeq2>& aopt,
                                       std::vector<uint32_t>& umiCount,
                                       DoubleMatrixT& geneCountsMatrix,
                                       std::vector<std::string>& trueBarcodes,

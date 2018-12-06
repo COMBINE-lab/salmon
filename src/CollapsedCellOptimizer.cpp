@@ -1,7 +1,55 @@
 #include "CollapsedCellOptimizer.hpp"
 #include "EMUtils.hpp"
+#include <assert.h>
 
 CollapsedCellOptimizer::CollapsedCellOptimizer() {}
+/*
+ * Use the "relax" EM algorithm over gene equivalence
+ * classes to estimate the latent variables (alphaOut)
+ * given the current estimates (alphaIn).
+ */
+void CellEMUpdate_(std::vector<SalmonEqClass>& eqVec,
+                   const CollapsedCellOptimizer::SerialVecType& alphaIn,
+                   CollapsedCellOptimizer::SerialVecType& alphaOut) {
+  assert(alphaIn.size() == alphaOut.size());
+
+  for (size_t eqID=0; eqID < eqVec.size(); eqID++) {
+    auto& kv = eqVec[eqID];
+
+    uint32_t count = kv.count;
+    // for each label in this class
+    const std::vector<uint32_t>& genes = kv.labels;
+    size_t groupSize = genes.size();
+
+    if (BOOST_LIKELY(groupSize > 1)) {
+      double denom = 0.0;
+      for (size_t i = 0; i < groupSize; ++i) {
+        auto gid = genes[i];
+        denom += alphaIn[gid];
+      }
+
+      if (denom > 0.0) {
+        double invDenom = count / denom;
+        for (size_t i = 0; i < groupSize; ++i) {
+          auto gid = genes[i];
+          double v = alphaIn[gid];
+          if (!std::isnan(v)) {
+            alphaOut[gid] += v * invDenom;
+          }
+        }//end-for
+      }//endif for denom>0
+    }//end-if boost gsize>1
+    else if (groupSize == 1){
+      alphaOut[genes.front()] += count;
+    }
+    else{
+      std::cerr<<"0 Group size for salmonEqclasses in EM\n"
+               <<"Please report this on github";
+      exit(1);
+    }
+  }//end-outer for
+}
+
 
 double truncateAlphas(VecT& alphas, double cutoff) {
   // Truncate tiny expression values
@@ -16,34 +64,23 @@ double truncateAlphas(VecT& alphas, double cutoff) {
   return alphaSum;
 }
 
-bool runPerCellEM(
-                  std::vector<std::vector<uint32_t>>& txpGroups,
-                  std::vector<std::vector<double>>& txpGroupCombinedWeights,
-                  std::vector<uint64_t>& txpGroupCounts,
-                  const std::vector<Transcript>& transcripts,
-                  uint64_t totalNumFrags,
+bool runPerCellEM(double& totalNumFrags, size_t numGenes,
                   CollapsedCellOptimizer::SerialVecType& alphas,
-                  std::shared_ptr<spdlog::logger>& jointlog,
-                  std::unordered_set<uint32_t>& activeTranscriptIds){
+                  std::vector<SalmonEqClass>& salmonEqclasses,
+                  std::shared_ptr<spdlog::logger>& jointlog){
 
   // An EM termination criterion, adopted from Bray et al. 2016
   uint32_t minIter {50};
   double relDiffTolerance {0.01};
   uint32_t maxIter {10000};
-  size_t numClasses = txpGroups.size();
-  double uniformTxpWeight = 1.0 / activeTranscriptIds.size();
+  size_t numClasses = salmonEqclasses.size();
 
-  std::vector<uint64_t> eqCounts(numClasses, 0);
-  CollapsedCellOptimizer::SerialVecType alphasPrime(transcripts.size(), 0.0);
+  CollapsedCellOptimizer::SerialVecType alphasPrime(numGenes, 0.0);
 
-  for (size_t i = 0; i < transcripts.size(); ++i) {
-    auto got = activeTranscriptIds.find( i );
-    if ( got == activeTranscriptIds.end() ){
-      alphas[i] = 0.0;
-    }
-    else{
-      alphas[i] = uniformTxpWeight * totalNumFrags;
-    }
+  assert( numGenes == alphas.size() );
+  for (size_t i = 0; i < numGenes; ++i) {
+    alphas[i] += 0.5;
+    alphas[i] *= 1e-3;
   }
 
   bool converged{false};
@@ -56,14 +93,11 @@ bool runPerCellEM(
   constexpr double minWeight = std::numeric_limits<double>::denorm_min();
 
   while (itNum < minIter or (itNum < maxIter and !converged)) {
-
-    EMUpdate_(txpGroups, txpGroupCombinedWeights,
-              txpGroupCounts, const_cast<std::vector<Transcript>&>(transcripts),
-              alphas, alphasPrime);
+    CellEMUpdate_(salmonEqclasses, alphas, alphasPrime);
 
     converged = true;
     maxRelDiff = -std::numeric_limits<double>::max();
-    for (size_t i = 0; i < transcripts.size(); ++i) {
+    for (size_t i = 0; i < numGenes; ++i) {
       if (alphasPrime[i] > alphaCheckCutoff) {
         double relDiff =
           std::abs(alphas[i] - alphasPrime[i]) / alphasPrime[i];
@@ -80,13 +114,11 @@ bool runPerCellEM(
   }
 
   // Truncate tiny expression values
-  double alphaSum = 0.0;
-  // Truncate tiny expression values
-  alphaSum = truncateAlphas(alphas, minAlpha);
+  totalNumFrags = truncateAlphas(alphas, minAlpha);
 
-  if (alphaSum < minWeight) {
+  if (totalNumFrags < minWeight) {
     jointlog->error("Total alpha weight was too small! "
-                    "Make sure you ran salmon correclty.");
+                    "Make sure you ran salmon correctly.");
     jointlog->flush();
     return false;
   }
@@ -94,119 +126,117 @@ bool runPerCellEM(
   return true;
 }
 
-void getMinSetTxps(std::vector<tgrouplabelt>& txpgroups,
-                   std::vector<UGroupT>& umigroups,
-                   size_t numTxps,
-                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap){
-  // get left and right set from Rob's figure and frequency of each txp
-  std::vector<uint32_t> txpCount(numTxps);
-  spp::sparse_hash_set<uint32_t> tgroupSet;
-  for(size_t i=0; i<txpgroups.size(); i++){
-    for (auto txp: txpgroups[i]){
-      txpCount[txp]++;
-    }
-    tgroupSet.insert(i);
+bool runBootstraps(size_t numGenes,
+                   CollapsedCellOptimizer::SerialVecType& geneAlphas,
+                   std::vector<SalmonEqClass>& salmonEqclasses,
+                   std::shared_ptr<spdlog::logger>& jointlog,
+                   uint32_t numBootstraps,
+                   CollapsedCellOptimizer::SerialVecType& variance,
+                   bool useAllBootstraps,
+                   std::vector<std::vector<double>>& sampleEstimates){
+
+  // An EM termination criterion, adopted from Bray et al. 2016
+  uint32_t minIter {50};
+  double relDiffTolerance {0.01};
+  uint32_t maxIter {10000};
+  size_t numClasses = salmonEqclasses.size();
+
+  CollapsedCellOptimizer::SerialVecType mean(numGenes, 0.0);
+  CollapsedCellOptimizer::SerialVecType squareMean(numGenes, 0.0);
+  CollapsedCellOptimizer::SerialVecType alphas(numGenes, 0.0);
+  CollapsedCellOptimizer::SerialVecType alphasPrime(numGenes, 0.0);
+
+  //extracting weight of eqclasses for making discrete distribution
+  uint32_t totalNumFrags = 0;
+  std::vector<uint64_t> eqCounts;
+  for (auto& eqclass: salmonEqclasses) {
+    totalNumFrags += eqclass.count;
+    eqCounts.emplace_back(eqclass.count);
   }
 
-  // initialize original index locations
-  std::vector<size_t> idx(numTxps);
-  iota(idx.begin(), idx.end(), 0);
+  // Multinomial Sampler
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::discrete_distribution<uint64_t> csamp(eqCounts.begin(),
+                                             eqCounts.end());
 
-  // sort indexes based on comparing values in txpCount
-  sort(idx.begin(), idx.end(),
-       [&txpCount](size_t i1, size_t i2) {return txpCount[i1] > txpCount[i2];});
+  uint32_t bsNum {0};
+  while ( bsNum++ < numBootstraps) {
+    csamp.reset();
 
-  size_t head{0};
-  spp::sparse_hash_set<uint32_t> minTxps;
-  while(tgroupSet.size() != 0){
-    // extract transcript id for most frequent txp
-    uint32_t tid = idx[head];
-    std::vector<uint32_t> removableTgroups;
+    for (size_t sc = 0; sc < numClasses; ++sc) {
+      salmonEqclasses[sc].count = 0;
+    }
 
-    // select which tgroup to remove
-    for (auto tgroupIdx: tgroupSet){
-      auto& tgroup = txpgroups[tgroupIdx];
-      if (std::find(tgroup.begin(), tgroup.end(), tid) != tgroup.end() ){
-        removableTgroups.emplace_back(tgroupIdx);
+    for (size_t fn = 0; fn < totalNumFrags; ++fn) {
+      salmonEqclasses[csamp(gen)].count += 1;
+    }
+
+    for (size_t i = 0; i < numGenes; ++i) {
+      alphas[i] = (geneAlphas[i] + 0.5) * 1e-3;
+    }
+
+    bool converged{false};
+    double maxRelDiff = -std::numeric_limits<double>::max();
+    size_t itNum = 0;
+
+    // EM termination criteria, adopted from Bray et al. 2016
+    double minAlpha = 1e-8;
+    double alphaCheckCutoff = 1e-2;
+    constexpr double minWeight = std::numeric_limits<double>::denorm_min();
+
+    while (itNum < minIter or (itNum < maxIter and !converged)) {
+      CellEMUpdate_(salmonEqclasses, alphas, alphasPrime);
+
+      converged = true;
+      maxRelDiff = -std::numeric_limits<double>::max();
+      for (size_t i = 0; i < numGenes; ++i) {
+        if (alphasPrime[i] > alphaCheckCutoff) {
+          double relDiff =
+            std::abs(alphas[i] - alphasPrime[i]) / alphasPrime[i];
+          maxRelDiff = (relDiff > maxRelDiff) ? relDiff : maxRelDiff;
+          if (relDiff > relDiffTolerance) {
+            converged = false;
+          }
+        }
+        alphas[i] = alphasPrime[i];
+        alphasPrime[i] = 0.0;
       }
+
+      ++itNum;
+    }//end-EM-while
+
+    // Truncate tiny expression values
+    double alphaSum = 0.0;
+    // Truncate tiny expression values
+    alphaSum = truncateAlphas(alphas, minAlpha);
+
+    if (alphaSum < minWeight) {
+      jointlog->error("Total alpha weight was too small! "
+                      "Make sure you ran salmon correclty.");
+      jointlog->flush();
+      return false;
     }
 
-    // remove tgroups relevant for this tid
-    for(auto tgroupIdx: removableTgroups){
-      tgroupSet.erase(tgroupIdx);
+    for(size_t i=0; i<numGenes; i++) {
+      double alpha = alphas[i];
+      mean[i] += alpha;
+      squareMean[i] += alpha * alpha;
     }
 
-    // if removed at least one tgroup then add to mintxps
-    if(removableTgroups.size() > 0){
-      minTxps.insert(tid);
+    if (useAllBootstraps) {
+      sampleEstimates.emplace_back(alphas);
     }
+  }//end-boot-while
 
-    // get next highest txp
-    head++;
+  // calculate mean and variance of the values
+  for(size_t i=0; i<numGenes; i++) {
+    double meanAlpha = mean[i] / numBootstraps;
+    geneAlphas[i] = meanAlpha;
+    variance[i] = (squareMean[i]/numBootstraps) - (meanAlpha*meanAlpha);
   }
 
-  // modify txp labels of eqclasses
-  // Very inefficient way O(n^2) but doing for checking
-  std::deque<spp::sparse_hash_set<uint32_t>> newTgroups;
-  std::deque<UGroupT> newUgroups;
-  for (size_t i=0; i<txpgroups.size(); i++){
-    auto& tgroup = txpgroups[i];
-    // extract new label by removing txps not in mintxps
-    spp::sparse_hash_set<uint32_t> newlabel;
-    spp::sparse_hash_set<uint32_t> geneSet;
-    for(auto txp: tgroup){
-      if (minTxps.contains(txp)){
-        newlabel.insert(txp);
-      }
-      if (txpToGeneMap.contains(txp)){
-        geneSet.insert(txpToGeneMap[txp]);
-      }
-      else{
-        std::cerr<< "Wrong Txp To gene Map"<<std::flush;
-        exit(1);
-      }
-    }
-
-    //TODO: Major Update required here when doing ambiguity resolution
-    if (geneSet.size() > 1){
-      continue;
-    }
-
-    // check if this label is already present in the vector
-    auto it = std::find(newTgroups.begin(), newTgroups.end(), newlabel);
-    if ( it != newTgroups.end() ){
-      // if found then just append UMI
-      auto index = std::distance(newTgroups.begin(), it);
-      auto& ugroup = newUgroups[index];
-      for (auto umi: umigroups[i]){
-        ugroup[umi.first] += umi.second;
-      }
-    }
-    else{
-      // if 1 length txp insert in front
-      if (newlabel.size() == 1){
-        newUgroups.push_front(umigroups[i]);
-        newTgroups.push_front(newlabel);
-      }
-      // else insert t last
-      else{
-        newUgroups.push_back(umigroups[i]);
-        newTgroups.push_back(newlabel);
-      }
-    }
-  }
-
-  // replace the present group with a new one
-  txpgroups.clear();
-  for(auto& tgroupSet: newTgroups){
-    std::vector<uint32_t> tgroup (tgroupSet.begin(), tgroupSet.end());
-    txpgroups.emplace_back(tgroup);
-  }
-
-  umigroups.clear();
-  for(auto& ugroup: newUgroups){
-    umigroups.emplace_back(ugroup);
-  }
+  return true;
 }
 
 void optimizeCell(SCExpT& experiment,
@@ -217,19 +247,15 @@ void optimizeCell(SCExpT& experiment,
                   std::shared_ptr<spdlog::logger>& jointlog,
                   bfs::path& outDir, std::vector<uint32_t>& umiCount,
                   std::vector<CellState>& skippedCB,
-                  bool verbose, GZipWriter& gzw, size_t umiLength, bool doEM,
-                  bool quiet, std::atomic<uint64_t>& totalDedupCounts,
+                  bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
+                  bool quiet, tbb::atomic<double>& totalDedupCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                  uint32_t numGenes, bool txpLevel, bool naive,
-                  bool eqClassLevel, bool inDebugMode){
-  // HACK: todo: major refactoring needed
-  if (eqClassLevel){
-    txpLevel = eqClassLevel;
-  }
+                  uint32_t numGenes, bool inDebugMode, uint32_t numBootstraps,
+                  bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
 
-  // looping over until the end of the file
+  // looping over until all the cells
   while((trueBarcodeIdx = barcode++) < totalCells) {
     // per-cell level optimization
     if ( (not inDebugMode && umiCount[trueBarcodeIdx] < 10) or
@@ -239,25 +265,17 @@ void optimizeCell(SCExpT& experiment,
       continue;
     }
 
+    // extracting the sequence of the barcode
     auto& trueBarcodeStr = trueBarcodes[trueBarcodeIdx];
 
     //extracting per-cell level eq class information
-    const std::vector<Transcript>& transcripts = experiment.transcripts();
-    std::unordered_set<uint32_t> activetranscriptids;
-    std::vector<tgrouplabelt> txpgroups;
-    std::vector<UGroupT> umigroups;
-    std::vector<tgroupweightvec> txpgroupcombinedweights;
-    std::vector<uint64_t> origcounts;
-    uint64_t totalcount{0};
-
-    spp::sparse_hash_map<uint32_t, spp::sparse_hash_set<uint64_t>> umiBiasList;
-
-    std::vector<double> geneAlphas(numGenes, 0.0);
-    spp::sparse_hash_map<uint32_t, spp::sparse_hash_map<uint64_t, uint32_t>> geneUmiGroup;
-
-    // equivalence class vector encoding for this cell (i.e. row)
+    double totalCount{0.0};
     std::vector<uint32_t> eqIDs;
-    std::vector<uint32_t> counts;
+    std::vector<uint32_t> eqCounts;
+    std::vector<UGroupT> umiGroups;
+    std::vector<tgrouplabelt> txpGroups;
+    std::vector<double> geneAlphas(numGenes, 0.0);
+    std::vector<uint8_t> tiers (numGenes, 0);
 
     for (auto& key : orderedTgroup) {
       //traversing each class and copying relevant data.
@@ -265,35 +283,24 @@ void optimizeCell(SCExpT& experiment,
           auto& bg = val.barcodeGroup;
           auto bcIt = bg.find(trueBarcodeIdx);
 
+          // sub-selecting bgroup of this barcode only
           if (bcIt != bg.end()){
-            // sub-selecting bgroup of this barcode only
+            // extracting txp labels
             const std::vector<uint32_t>& txps = key.first.txps;
+
+            // original counts of the UMI
             uint32_t eqCount {0};
             for(auto& ugroup: bcIt->second){
                 eqCount += ugroup.second;
             }
-            // Avi -> Major Hack
-            // Basically probStartpos is 1/effec_length.
-            // effec_length for all txp is 100
-            // Eqclass weights are set to 1 since sopt.noRichEqClasses is true
-            // Making aux as 1/#oftxps_in_class
-            // Ideally should be taken from eqclass.combinedWeights but
-            // ignoring for now
-            txpgroups.emplace_back(txps);
-            umigroups.emplace_back(bcIt->second);
 
+            txpGroups.emplace_back(txps);
+            umiGroups.emplace_back(bcIt->second);
+
+            // for dumping per-cell eqclass vector
             if(verbose){
               eqIDs.push_back(static_cast<uint32_t>(key.second));
-              counts.push_back(static_cast<uint32_t>(eqCount));
-            }
-            if (not txpLevel){
-              uint32_t geneId;
-              if ( alevin::utils::hasOneGene(txps, geneId,
-                                             txpToGeneMap, numGenes) ){
-                for (auto& umiIt:bcIt->second){
-                  geneUmiGroup[geneId][umiIt.first] += umiIt.second;
-                }
-              }
+              eqCounts.push_back(eqCount);
             }
           }
         });
@@ -306,168 +313,100 @@ void optimizeCell(SCExpT& experiment,
       }
     }
 
-    if (verbose) {
-      gzw.writeCellEQVec(trueBarcodeIdx, eqIDs, counts, true);
-    }
-
-    if (not txpLevel){
-      std::vector<uint32_t> dummyTxpGroup {0,1};
-      for (auto& geneUmis: geneUmiGroup){
-        auto eqCount = dedupReads(umiLength,
-                                  jointlog,
-                                  geneUmis.second,
-                                  umiBiasList,
-                                  dummyTxpGroup);
-        totalDedupCounts += eqCount;
-        geneAlphas[geneUmis.first] = eqCount;
-      }
-    }
-
-    if (not eqClassLevel){
-      getMinSetTxps(txpgroups, umigroups,
-                    transcripts.size(),
-                    txpToGeneMap);
-    }
-
-    if (txpLevel or doEM){
-      // this scope contains code for deduplicating and per-Eq class level
-      spp::sparse_hash_set<uint32_t> removableTgroups;
-      for (size_t i=0; i<txpgroups.size(); i++){
-        // sub-selecting bgroup of this barcode only
-        auto eqCount = dedupReads(umiLength,
-                                  jointlog,
-                                  umigroups[i],
-                                  umiBiasList,
-                                  txpgroups[i]);
-
-        if ( eqCount != 0 ) {
-          const std::vector<uint32_t>& txps = txpgroups[i];
-          // Avi -> Major Hack
-          // Basically probStartpos is 1/effec_length.
-          // effec_length for all txp is 100
-          // Eqclass weights are set to 1 since sopt.noRichEqClasses is true
-          // Making aux as 1/#oftxps_in_class
-          // Ideally should be taken from eqclass.combinedWeights but
-          // ignoring for now
-          if (doEM){
-            const tgroupweightvec auxs(txps.size(), 1.0/txps.size());
-            // convert to non-atomic
-            txpgroupcombinedweights.emplace_back(auxs.begin(), auxs.end());
-          }
-          origcounts.emplace_back(eqCount);
-
-          totalcount += eqCount;
-
-          // currently add only 1 length eqclass to active txps
-          for (auto& t : txps) {
-            activetranscriptids.insert(t);
-          }
-        }
-        else{
-          removableTgroups.insert(i);
-        }
-      }
-
-      // remove 0 count eqclass
-      std::vector<tgrouplabelt> newTgroups;
-      for(size_t i=0; i<txpgroups.size();i++){
-        if (not removableTgroups.contains(i)){
-          newTgroups.emplace_back(txpgroups[i]);
-        }
-      }
-      txpgroups = newTgroups;
-    }// end-if txpLevel
-
-    if( not doEM ){
-      // no em i.e. only eqclass mode
-      if ( txpLevel ){
-        for (size_t k=0; k<txpgroups.size(); k++){
-          uint32_t geneId;
-          if ( alevin::utils::hasOneGene(txpgroups[k], geneId,
-                                         txpToGeneMap, numGenes) ){
-            geneAlphas[geneId] += origcounts[k];
-            totalDedupCounts += origcounts[k];
-          }
-        }
-      }
-      else if( not naive ) {
-        // collision resolution based on the UMI in 1-length
-        // eqclasses after minset-ting
-        geneUmiGroup.clear();
-        for (size_t k=0; k<txpgroups.size(); k++){
-          uint32_t geneId;
-          // redundant if should be removed later
-          if ( alevin::utils::hasOneGene(txpgroups[k], geneId,
-                                         txpToGeneMap, numGenes)
-               and txpgroups[k].size() == 1 ){
-            if ( geneUmiGroup.contains(geneId) ){
-              for (auto umiIt: umigroups[k]){
-                if (geneUmiGroup[geneId].contains(umiIt.first)){
-                  geneAlphas[geneId] += 1;
-                  totalDedupCounts += 1;
-                }
-                else{
-                  geneUmiGroup[geneId][umiIt.first] += 1;
-                }
-              }
-            }
-            else{
-              for (auto umiIt: umigroups[k]){
-                geneUmiGroup[geneId][umiIt.first] += 1;
-              }
-            }
-          }
-        }
-      }
-      gzw.writeAbundances(inDebugMode, trueBarcodeStr, geneAlphas);
-    }
-    else {
-      CollapsedCellOptimizer::SerialVecType alphas(transcripts.size(), 0.0);
-      bool isEMok = runPerCellEM(txpgroups,
-                                 txpgroupcombinedweights,
-                                 origcounts,
-                                 transcripts,
-                                 totalcount,
-                                 alphas,
-                                 jointlog,
-                                 activetranscriptids);
-      if( !isEMok ){
-        jointlog->error("EM iteration for cell {} failed \n"
+    if ( !naiveEqclass ) {
+      // perform the UMI deduplication step
+      std::vector<SalmonEqClass> salmonEqclasses;
+      bool dedupOk = dedupClasses(geneAlphas, totalCount, txpGroups,
+                                  umiGroups, salmonEqclasses,
+                                  txpToGeneMap, tiers, gzw,
+                                  dumpUmiGraph);
+      if( !dedupOk ){
+        jointlog->error("Deduplication for cell {} failed \n"
                         "Please Report this on github.", trueBarcodeStr);
         jointlog->flush();
         std::exit(1);
       }
 
-      if (txpLevel){
-        // dump txp level counts in matrix
-        gzw.writeAbundances( inDebugMode, trueBarcodeStr, alphas);
+      if ( numBootstraps and noEM ) {
+        jointlog->error("Cannot perform bootstrapping with noEM");
+        jointlog->flush();
+        exit(1);
       }
-      else{
-        //dump gene level counts in matrix
-        std::vector<double> geneAlphas(numGenes, 0.0);
-        for (size_t tid=0; tid<alphas.size(); tid++){
-          uint32_t gid;
-          if(txpToGeneMap.contains(tid)){
-            gid = txpToGeneMap.at(tid);
-          }
-          else{
-            std::cerr << "Out of Range error for txp to gene Map: " << '\n' << std::flush;
-            std::cerr << tid << "\t not found" << std::flush;
-            exit(1);
-          }
-          if (gid > numGenes){
-            std::cerr<< "Gene id out of range"
-                     << "Please check txp2gene has the write entries"
-                     << std::flush;
-            exit(1);
-          }
-          geneAlphas[gid] += alphas[tid];
+
+      // perform EM for resolving ambiguity
+      if ( !noEM ) {
+        bool isEMok = runPerCellEM(totalCount,
+                                   numGenes,
+                                   geneAlphas,
+                                   salmonEqclasses,
+                                   jointlog);
+        if( !isEMok ){
+          jointlog->error("EM iteration for cell {} failed \n"
+                          "Please Report this on github.", trueBarcodeStr);
+          jointlog->flush();
+          std::exit(1);
         }
-        gzw.writeAbundances( inDebugMode, trueBarcodeStr, geneAlphas);
       }
-      totalDedupCounts += totalcount;
+
+      // write the abundance for the cell
+      gzw.writeAbundances( inDebugMode, trueBarcodeStr,
+                           geneAlphas, tiers );
+
+      // maintaining count for total number of predicted UMI
+      salmon::utils::incLoop(totalDedupCounts, totalCount);
+
+      if ( numBootstraps > 0 ){
+        std::vector<std::vector<double>> sampleEstimates;
+        std::vector<double> bootVariance(numGenes, 0.0);
+
+        bool isBootstrappingOk = runBootstraps(numGenes,
+                                               geneAlphas,
+                                               salmonEqclasses,
+                                               jointlog,
+                                               numBootstraps,
+                                               bootVariance,
+                                               useAllBootstraps,
+                                               sampleEstimates);
+        if( not isBootstrappingOk or
+            (useAllBootstraps and sampleEstimates.size()!=numBootstraps)
+            ){
+          jointlog->error("Bootstrapping failed \n"
+                          "Please Report this on github.");
+          jointlog->flush();
+          std::exit(1);
+        }
+
+        // write the abundance for the cell
+        gzw.writeBootstraps( inDebugMode, trueBarcodeStr,
+                             geneAlphas, bootVariance,
+                             useAllBootstraps, sampleEstimates);
+      }//end-if
+    }
+    else {
+      // doing per eqclass level naive deduplication
+      for (size_t eqId=0; eqId<umiGroups.size(); eqId++) {
+        spp::sparse_hash_set<uint64_t> umis;
+
+        for(auto& it: umiGroups[eqId]) {
+          umis.insert( it.first );
+        }
+        totalCount += umis.size();
+
+        // filling in the eqclass level deduplicated counts
+        if (verbose) {
+          eqCounts[eqId] = umis.size();
+        }
+      }
+
+      // maintaining count for total number of predicted UMI
+      salmon::utils::incLoop(totalDedupCounts, totalCount);
     }
 
+    if (verbose) {
+      gzw.writeCellEQVec(trueBarcodeIdx, eqIDs, eqCounts, true);
+    }
+
+    //printing on screen progress
     const char RESET_COLOR[] = "\x1b[0m";
     char green[] = "\x1b[30m";
     green[3] = '0' + static_cast<char>(fmt::GREEN);
@@ -541,9 +480,6 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       std::vector<uint32_t>& umiCount,
                                       CFreqMapT& freqCounter,
                                       size_t numLowConfidentBarcode){
-  double relDiffTolerance{0.01};
-  uint32_t maxIter {10000};
-
   auto& fullEqMap = experiment.equivalenceClassBuilder().eqMap();
   size_t numCells = trueBarcodes.size();
   size_t numWorkerThreads{1};
@@ -593,9 +529,14 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
     }
   }
 
+  if (aopt.noEM) {
+    aopt.jointLog->warn("Not performing EM; this may result in discarding ambiguous reads\n");
+    aopt.jointLog->flush();
+  }
+
   std::vector<CellState> skippedCB (numCells);
   std::atomic<uint32_t> bcount{0};
-  std::atomic<uint64_t> totalDedupCounts{0};
+  tbb::atomic<double> totalDedupCounts{0.0};
 
   std::vector<std::thread> workerThreads;
   for (size_t tn = 0; tn < numWorkerThreads; ++tn) {
@@ -613,21 +554,22 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                aopt.dumpBarcodeEq,
                                std::ref(gzw),
                                aopt.protocol.umiLength,
-                               aopt.doEM,
+                               aopt.noEM,
                                aopt.quiet,
                                std::ref(totalDedupCounts),
                                std::ref(txpToGeneMap),
                                numGenes,
-                               aopt.txpLevel,
-                               aopt.naive,
-                               aopt.eqClassLevel,
-                               aopt.debug);
+                               aopt.debug,
+                               aopt.numBootstraps,
+                               aopt.naiveEqclass,
+                               aopt.dumpUmiGraph,
+                               aopt.dumpfeatures);
   }
 
   for (auto& t : workerThreads) {
     t.join();
   }
-  aopt.jointLog->info("Total {} UMI after deduplicating.",
+  aopt.jointLog->info("Total {0:.2f} UMI after deduplicating.",
                       totalDedupCounts);
 
   uint32_t skippedCBcount {0};
@@ -660,19 +602,15 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
 
   gzw.close_all_streams();
 
-  bool txpLevel = aopt.txpLevel;
-  if (not txpLevel){//dump gene names
-    std::vector<std::string> geneNames(numGenes);
-    for (auto geneIdx : geneIdxMap) {
-      geneNames[geneIdx.second] = geneIdx.first;
-    }
-    boost::filesystem::path gFilePath = aopt.outputDirectory / "quants_mat_cols.txt";
-    std::ofstream gFile(gFilePath.string());
-    std::ostream_iterator<std::string> giterator(gFile, "\n");
-    std::copy(geneNames.begin(), geneNames.end(), giterator);
-    gFile.close();
+  std::vector<std::string> geneNames(numGenes);
+  for (auto geneIdx : geneIdxMap) {
+    geneNames[geneIdx.second] = geneIdx.first;
   }
-
+  boost::filesystem::path gFilePath = aopt.outputDirectory / "quants_mat_cols.txt";
+  std::ofstream gFile(gFilePath.string());
+  std::ostream_iterator<std::string> giterator(gFile, "\n");
+  std::copy(geneNames.begin(), geneNames.end(), giterator);
+  gFile.close();
 
   std::vector<std::vector<double>> countMatrix;
 
@@ -681,27 +619,29 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
     if(not hasWhitelist  or aopt.dumpCsvCounts){
       aopt.jointLog->info("Clearing EqMap; Might take some time.");
       fullEqMap.clear();
-      size_t numElem = txpLevel ? experiment.transcripts().size() : numGenes;
-      std::string mode = txpLevel ? "transcript" : "gene";
 
-      aopt.jointLog->info("Starting Import of the {} count matrix.", mode);
+      aopt.jointLog->info("Starting Import of the gene count matrix of size {}x{}.",
+                          trueBarcodes.size(), numGenes);
       countMatrix.resize(trueBarcodes.size(),
-                         std::vector<double> (numElem, 0.0));
+                         std::vector<double> (numGenes, 0.0));
+
+      aopt.jointLog->info("Done initializing the empty matrix.");
+      aopt.jointLog->flush();
       auto zerod_cells = alevin::whitelist::populate_count_matrix(aopt.outputDirectory,
                                                                   aopt.debug,
-                                                                  numElem,
+                                                                  numGenes,
                                                                   countMatrix);
       if (zerod_cells > 0) {
         aopt.jointLog->warn("Found {} cells with no reads,"
                             " ignoring due to debug mode.", zerod_cells);
       }
 
-      aopt.jointLog->info("Done Importing {} count matrix for dimension {}x{}",
-                          mode, numCells, numGenes);
+      aopt.jointLog->info("Done Importing gene count matrix for dimension {}x{}",
+                          numCells, numGenes);
+      aopt.jointLog->flush();
 
       if (aopt.dumpCsvCounts){
-        aopt.jointLog->info("Starting dumping cell v {} counts in csv format",
-                            mode);
+        aopt.jointLog->info("Starting dumping cell v gene counts in csv format");
         std::ofstream qFile;
         boost::filesystem::path qFilePath = aopt.outputDirectory / "quants_mat.csv";
         qFile.open(qFilePath.string());
@@ -716,7 +656,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
         aopt.jointLog->info("Finished dumping csv counts");
       }
 
-      if(not hasWhitelist and not txpLevel){
+      if( not hasWhitelist ){
         aopt.jointLog->info("Starting white listing");
         bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
                                                                           umiCount,
@@ -734,9 +674,6 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
           return false;
         }
         aopt.jointLog->info("Finished white listing");
-      }
-      else if(txpLevel){
-        aopt.jointLog->warn("can't perform whitelisting on txp level cell count matrix");
       }
     }
   } // end-if no barcode
@@ -764,6 +701,14 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       size_t numLowConfidentBarcode);
 template
 bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
+                                      AlevinOpts<apt::ChromiumV3>& aopt,
+                                      GZipWriter& gzw,
+                                      std::vector<std::string>& trueBarcodes,
+                                      std::vector<uint32_t>& umiCount,
+                                      CFreqMapT& freqCounter,
+                                      size_t numLowConfidentBarcode);
+template
+bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::Chromium>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
@@ -773,6 +718,22 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
 template
 bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       AlevinOpts<apt::Gemcode>& aopt,
+                                      GZipWriter& gzw,
+                                      std::vector<std::string>& trueBarcodes,
+                                      std::vector<uint32_t>& umiCount,
+                                      CFreqMapT& freqCounter,
+                                      size_t numLowConfidentBarcode);
+template
+bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
+                                      AlevinOpts<apt::CELSeq>& aopt,
+                                      GZipWriter& gzw,
+                                      std::vector<std::string>& trueBarcodes,
+                                      std::vector<uint32_t>& umiCount,
+                                      CFreqMapT& freqCounter,
+                                      size_t numLowConfidentBarcode);
+template
+bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
+                                      AlevinOpts<apt::CELSeq2>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount,

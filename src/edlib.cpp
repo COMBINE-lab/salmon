@@ -97,7 +97,8 @@ static int transformSequences(const char* queryOriginal, int queryLength,
 static int transformSequencesDNA(const char* const queryOriginal, const int queryLength,
                                  const char* const targetOriginal, const int targetLength,
                                  std::vector<unsigned char>& queryTransformed,
-                                 std::vector<unsigned char>& targetTransformed);
+                                 std::vector<unsigned char>& targetTransformed,
+                                 int32_t& hammingDist);
 
 static inline int ceilDiv(int x, int y);
 
@@ -161,8 +162,15 @@ void AlignerEngine::operator()(const char* const queryOriginal, const int queryL
 
     /*------------ TRANSFORM SEQUENCES AND RECOGNIZE ALPHABET -----------*/
     //unsigned char* query, * target;
-    int alphabetLength = transformSequencesDNA(queryOriginal, queryLength, targetOriginal, targetLength, query_, target_);
+    int32_t hammingDist = -1;
+    int alphabetLength = transformSequencesDNA(queryOriginal, queryLength, targetOriginal, targetLength, query_, target_, hammingDist);
     result_.alphabetLength = alphabetLength;
+    // in this special case, hamming distance must equal edit distance!
+    if (hammingDist == 1 or hammingDist == 0) {
+      result_.editDistance = hammingDist;
+      result_.alignmentLength = targetLength;
+      return;
+    }
     /*-------------------------------------------------------*/
 
 
@@ -1837,7 +1845,8 @@ static int transformSequences(const char* const queryOriginal, const int queryLe
 static int transformSequencesDNA(const char* const queryOriginal, const int queryLength,
                                  const char* const targetOriginal, const int targetLength,
                                  std::vector<unsigned char>& queryTransformed,
-                                 std::vector<unsigned char>& targetTransformed) {
+                                 std::vector<unsigned char>& targetTransformed,
+                                 int32_t& hammingDist) {
   // Alphabet is constructed from letters that are present in sequences.
   // Each letter is assigned an ordinal number, starting from 0 up to alphabetLength - 1,
   // and new query and target are created in which letters are replaced with their ordinal numbers.
@@ -1845,6 +1854,7 @@ static int transformSequencesDNA(const char* const queryOriginal, const int quer
   queryTransformed.resize(queryLength, 0);
   targetTransformed.resize(targetLength, 0);
 
+  hammingDist = 0;
   int i = 0;
   int lengthDiff = targetLength - queryLength;
   int m = queryLength < targetLength ? queryLength : targetLength;
@@ -1854,17 +1864,20 @@ static int transformSequencesDNA(const char* const queryOriginal, const int quer
         unsigned char c2 = static_cast<unsigned char>(targetOriginal[i]);
         queryTransformed[i] = edlibDNATable[c];
         targetTransformed[i] = edlibDNATable[c2];
+        hammingDist += (c == c2) ? 0 : 1;
   }
   if (lengthDiff > 0) {
     for (; i < M; i++) {
       unsigned char c = static_cast<unsigned char>(targetOriginal[i]);
       targetTransformed[i] = edlibDNATable[c];
     }
+    hammingDist = -1;
   } else if (lengthDiff < 0) {
     for (; i < M; i++) {
       unsigned char c = static_cast<unsigned char>(queryOriginal[i]);
       queryTransformed[i] = edlibDNATable[c];
     }
+    hammingDist = -1;
   }
   return 4;
 }
