@@ -93,7 +93,7 @@ int dualModeMessage() {
 /**
  * Bonus!
  */
-int salmonSwim(int argc, char* argv[]) {
+int salmonSwim(int argc, const char* argv[]) {
 
   std::cout << R"(
     _____       __
@@ -144,11 +144,11 @@ bibtex:
 )";
 }
 
-int salmonIndex(int argc, char* argv[]);
-int salmonQuantify(int argc, char* argv[]);
-int salmonAlignmentQuantify(int argc, char* argv[]);
-int salmonBarcoding(int argc, char* argv[]);
-int salmonQuantMerge(int argc, char* argv[]);
+int salmonIndex(int argc, const char* argv[]);
+int salmonQuantify(int argc, const char* argv[]);
+int salmonAlignmentQuantify(int argc, const char* argv[]);
+int salmonBarcoding(int argc, const char* argv[]);
+int salmonQuantMerge(int argc, const char* argv[]);
 
 bool verbose = false;
 
@@ -225,7 +225,7 @@ int main(int argc, char* argv[]) {
       opts.insert(opts.begin(), "--help");
     }
 
-    std::unordered_map<string, std::function<int(int, char* [])>> cmds(
+    std::unordered_map<string, std::function<int(int, const char* [])>> cmds(
         {{"index", salmonIndex},
          {"quant", salmonQuantify},
          {"quantmerge", salmonQuantMerge},
@@ -241,10 +241,10 @@ int main(int argc, char* argv[]) {
     */
 
     int32_t subCommandArgc = opts.size() + 1;
-    std::unique_ptr<char* []> argv2(new char*[subCommandArgc]);
+    std::unique_ptr<const char* []> argv2(new const char*[subCommandArgc]);
     argv2[0] = argv[0];
     for (int32_t i = 0; i < subCommandArgc - 1; ++i) {
-      argv2[i + 1] = &*opts[i].begin();
+      argv2[i + 1] = opts[i].c_str();
     }
 
     auto cmdMain = cmds.find(cmd);
@@ -262,11 +262,11 @@ int main(int argc, char* argv[]) {
         // detect mode-specific help request
         if (strncmp(argv2[1], "--help-alignment", 16) == 0) {
           std::vector<char> helpStr{'-', '-', 'h', 'e', 'l', 'p', '\0'};
-          char* helpArgv[] = {argv[0], &helpStr[0]};
+          const char* helpArgv[] = {argv[0], &helpStr[0]};
           return salmonAlignmentQuantify(2, helpArgv);
         } else if (strncmp(argv2[1], "--help-reads", 12) == 0) {
           std::vector<char> helpStr{'-', '-', 'h', 'e', 'l', 'p', '\0'};
-          char* helpArgv[] = {argv[0], &helpStr[0]};
+          const char* helpArgv[] = {argv[0], &helpStr[0]};
           return salmonQuantify(2, helpArgv);
         }
 

@@ -208,7 +208,7 @@ bool doMerge(QuantMergeOptions& qmOpts) {
   return true;
 }
 
-int salmonQuantMerge(int argc, char* argv[]) {
+int salmonQuantMerge(int argc, const char* argv[]) {
   using std::cerr;
   using std::vector;
   using std::string;

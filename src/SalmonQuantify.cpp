@@ -801,7 +801,7 @@ inline int32_t getAlnScore(
   if (invalidStart) { rptr += -pos; rlen += pos; pos = 0; }
 
   // if we are trying to mimic Bowtie2 with RSEM params
-  if (invalidStart and mimicStrictBT2) { return 0; }
+  if (invalidStart and mimicStrictBT2) { return s; }
 
   if (pos < tlen) {
     bool doUngapped{(!invalidStart) and (chainStat == rapmap::utils::ChainStatus::UNGAPPED)};
@@ -1194,14 +1194,14 @@ void processReadsQuasi(
               // throw away dovetailed reads
               if (mimicStrictBT2) {
                 if (h.fwd == h.mateIsFwd) {
-                  s1 = 0;
-                  s2 = 0;
+                  s1 = std::numeric_limits<int32_t>::min();
+                  s2 = std::numeric_limits<int32_t>::min();
                 } else if (h.fwd and (h.pos > h.matePos)) {
-                  s1 = 0;
-                  s2 = 0;
+                  s1 = std::numeric_limits<int32_t>::min();
+                  s2 = std::numeric_limits<int32_t>::min();
                 } else if (h.mateIsFwd and (h.matePos > h.pos)) {
-                  s1 = 0;
-                  s2 = 0;
+                  s1 = std::numeric_limits<int32_t>::min();
+                  s2 = std::numeric_limits<int32_t>::min();
                 }
               }
 
@@ -1932,13 +1932,12 @@ void processReadLibrary(
    **/
   // NOTE : When we can support C++14, we can replace the entire ProcessFunctor class above with this
   // generic lambda.
-  auto processFunctor = [&](size_t i, auto& parserPtr, auto* index) {
+  auto processFunctor = [&](size_t i, auto* parserPtr, auto* index) {
     if (salmonOpts.qmFileName != "" and i == 0) {
       rapmap::utils::writeSAMHeader(*index, salmonOpts.qmLog);
     }
-    // TODO: understand why the index must be captured by value on old OSX compilers
-    auto threadFun = [&, i, index]() -> void {
-      processReadsQuasi(parserPtr.get(), readExp, rl, structureVec[i],
+    auto threadFun = [&, i, parserPtr, index]() -> void {
+      processReadsQuasi(parserPtr, readExp, rl, structureVec[i],
                         numObservedFragments, numAssignedFragments, numValidHits,
                         upperBoundHits, index, transcripts,
                         fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
@@ -1997,19 +1996,19 @@ void processReadLibrary(
         // change value before the lambda below is evaluated --- crazy!
         if (largeIndex) {
           if (perfectHashIndex) { // Perfect Hash
-            if (isPairedEnd) {processFunctor(i, pairedParserPtr, sidx->quasiIndexPerfectHash64());}
-            else if (isSingleEnd) {processFunctor(i, singleParserPtr, sidx->quasiIndexPerfectHash64());}
+            if (isPairedEnd) {processFunctor(i, pairedParserPtr.get(), sidx->quasiIndexPerfectHash64());}
+            else if (isSingleEnd) {processFunctor(i, singleParserPtr.get(), sidx->quasiIndexPerfectHash64());}
           } else { // Dense Hash
-            if (isPairedEnd) {processFunctor(i, pairedParserPtr, sidx->quasiIndex64());}
-            else if (isSingleEnd) {processFunctor(i, singleParserPtr, sidx->quasiIndex64());}
+            if (isPairedEnd) {processFunctor(i, pairedParserPtr.get(), sidx->quasiIndex64());}
+            else if (isSingleEnd) {processFunctor(i, singleParserPtr.get(), sidx->quasiIndex64());}
           }
         } else {
           if (perfectHashIndex) { // Perfect Hash
-            if (isPairedEnd) { processFunctor(i, pairedParserPtr, sidx->quasiIndexPerfectHash32()); }
-            else if (isSingleEnd) { processFunctor(i, singleParserPtr, sidx->quasiIndexPerfectHash32()); }
+            if (isPairedEnd) { processFunctor(i, pairedParserPtr.get(), sidx->quasiIndexPerfectHash32()); }
+            else if (isSingleEnd) { processFunctor(i, singleParserPtr.get(), sidx->quasiIndexPerfectHash32()); }
           } else { // Dense Hash
-            if (isPairedEnd) { processFunctor(i, pairedParserPtr, sidx->quasiIndex32()); }
-            else if (isSingleEnd) { processFunctor(i, singleParserPtr, sidx->quasiIndex32()); }
+            if (isPairedEnd) { processFunctor(i, pairedParserPtr.get(), sidx->quasiIndex32()); }
+            else if (isSingleEnd) { processFunctor(i, singleParserPtr.get(), sidx->quasiIndex32()); }
           }
         } // End spawn current thread
 
@@ -2332,7 +2331,7 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
   jointLog->info("finished quantifyLibrary()");
 }
 
-int salmonQuantify(int argc, char* argv[]) {
+int salmonQuantify(int argc, const char* argv[]) {
   using std::cerr;
   using std::vector;
   using std::string;

@@ -926,7 +926,7 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
   }
 }
 
-int salmonBarcoding(int argc, char* argv[]) {
+int salmonBarcoding(int argc, const char* argv[]) {
   namespace bfs = boost::filesystem;
   namespace po = boost::program_options;
 
