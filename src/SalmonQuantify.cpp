@@ -797,6 +797,8 @@ inline int32_t getAlnScore(
   };
 
   int32_t s{std::numeric_limits<int32_t>::lowest()};
+  // TODO : Determine what is the most "appropriate" penalty for
+  // an overhang (based on the scoring function).
   bool invalidStart = (pos < 0);
   if (invalidStart) { rptr += -pos; rlen += pos; pos = 0; }
 
