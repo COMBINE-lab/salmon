@@ -23,8 +23,8 @@ namespace defaults {
   constexpr const double minScoreFraction{0.65};
   constexpr const int16_t matchScore{2};
   constexpr const int16_t mismatchPenalty{-4};
-  constexpr const int16_t gapOpenPenalty{5};
-  constexpr const int16_t gapExtendPenalty{3};
+  constexpr const int16_t gapOpenPenalty{4};
+  constexpr const int16_t gapExtendPenalty{2};
   constexpr const bool mimicStrictBT2{false};
   constexpr const int32_t maxMMPExtension{7};
   constexpr const bool alternativeInitMode{false};
