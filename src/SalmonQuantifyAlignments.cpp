@@ -1373,7 +1373,7 @@ bool processSample(AlignmentLibraryT<ReadT>& alnLib, size_t requiredObservations
   return true;
 }
 
-int salmonAlignmentQuantify(int argc, char* argv[]) {
+int salmonAlignmentQuantify(int argc, const char* argv[]) {
   using std::cerr;
   using std::vector;
   using std::string;

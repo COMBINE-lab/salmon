@@ -1477,8 +1477,12 @@ std::string getCurrentTimeAsString() {
       sopt.minScoreFraction = 0.8;
       sopt.matchScore = 1;
       sopt.mismatchPenalty = 0;
-      sopt.gapOpenPenalty = 50;
-      sopt.gapExtendPenalty = 50;
+      // NOTE: as a limitation of ksw2, we can't have
+      // (gapOpenPenalty + gapExtendPenalty) * 2 + matchScore < numeric_limits<int8_t>::max()
+      // these parameters below are sufficiently large penalties to
+      // prohibit gaps, while not overflowing the above condition
+      sopt.gapOpenPenalty = 25;
+      sopt.gapExtendPenalty = 25;
     }
 
     // If the consensus slack was not set explicitly, then it defaults to 1 with

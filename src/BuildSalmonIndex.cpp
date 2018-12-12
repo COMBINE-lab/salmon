@@ -43,7 +43,7 @@
 // http://stackoverflow.com/questions/108318/whats-the-simplest-way-to-test-whether-a-number-is-a-power-of-2-in-c
 bool isPowerOfTwo(uint32_t n) { return (n > 0 and (n & (n - 1)) == 0); }
 
-int salmonIndex(int argc, char* argv[]) {
+int salmonIndex(int argc, const char* argv[]) {
 
   using std::string;
   namespace bfs = boost::filesystem;
