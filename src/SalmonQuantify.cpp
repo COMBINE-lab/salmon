@@ -952,6 +952,8 @@ void processReadsQuasi(
     hitCollector.setMaxMMPExtension(salmonOpts.maxMMPExtension);
   }
 
+  bool hardFilter = salmonOpts.hardFilter;
+
   SASearcher<RapMapIndexT> saSearcher(qidx);
   std::vector<QuasiAlignment> leftHits;
   std::vector<QuasiAlignment> rightHits;
@@ -1149,7 +1151,7 @@ void processReadsQuasi(
           // need them and don't have them.
           char* r1rc = nullptr;
           char* r2rc = nullptr;
-          int32_t bestScore{-1};
+          int32_t bestScore{std::numeric_limits<int32_t>::lowest()};
           std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
           size_t idx{0};
           double optFrac{salmonOpts.minScoreFraction};
@@ -1259,24 +1261,24 @@ void processReadsQuasi(
             // score are filtered out.
             jointHits.erase(
                             std::remove_if(jointHits.begin(), jointHits.end(),
-                                           [&ctr, &scores, &numDropped] (const QuasiAlignment& qa) -> bool {
-                                             // soft filter
-                                             bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
-                                             //strict filter
-                                             //bool rem = (scores[ctr] < bestScore);
+                                           [&ctr, &scores, &numDropped, bestScore, hardFilter] (const QuasiAlignment& qa) -> bool {
+                                             // if soft filtering, we only drop things with an invalid score
+                                             // if hard filtering, we drop everything with a sub-optimal score.
+                                             bool rem = hardFilter ? (scores[ctr] < bestScore) :
+                                               (scores[ctr] == std::numeric_limits<int32_t>::min());
                                              ++ctr;
                                              numDropped += rem ? 1 : 0;
                                              return rem;
                                            }),
                             jointHits.end()
                             );
-            // soft filter
+
             double bestScoreD = static_cast<double>(bestScore);
             std::for_each(jointHits.begin(), jointHits.end(),
-                          [bestScoreD, writeQuasimappings](QuasiAlignment& qa) -> void {
+                          [bestScoreD, writeQuasimappings, hardFilter](QuasiAlignment& qa) -> void {
                             if (writeQuasimappings) { qa.alnScore(static_cast<int32_t>(qa.score())); }
                             double v = bestScoreD - qa.score();
-                            qa.score(std::exp(-v));
+                            qa.score( (hardFilter ? -1.0 : std::exp(-v)) );
                           });
           } else {
             jointHitGroup.clearAlignments();
@@ -1584,6 +1586,8 @@ void processReadsQuasi(
     hitCollector.setMaxMMPExtension(salmonOpts.maxMMPExtension);
   }
 
+  bool hardFilter = salmonOpts.hardFilter;
+
   /**
    * Setup related to mapping parameters
    **/
@@ -1674,7 +1678,7 @@ void processReadsQuasi(
           auto l1 = static_cast<int32_t>(rp.seq.length());
 
           char* r1rc = nullptr;
-          int32_t bestScore{std::numeric_limits<int32_t>::min()};
+          int32_t bestScore{std::numeric_limits<int32_t>::lowest()};
           std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
           size_t idx{0};
           double optFrac{salmonOpts.minScoreFraction};
@@ -1717,9 +1721,11 @@ void processReadsQuasi(
             // score are filtered out.
             jointHits.erase(
                             std::remove_if(jointHits.begin(), jointHits.end(),
-                                           [&ctr, &scores, &numDropped] (const QuasiAlignment& qa) -> bool {
-                                             // soft filter
-                                             bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
+                                           [&ctr, &scores, &numDropped, bestScore, hardFilter] (const QuasiAlignment& qa) -> bool {
+                                             // if soft filtering, we only drop things with an invalid score
+                                             // if hard filtering, we drop everything with a sub-optimal score.
+                                             bool rem = hardFilter ? (scores[ctr] < bestScore) :
+                                               (scores[ctr] == std::numeric_limits<int32_t>::min());
                                              ++ctr;
                                              numDropped += rem ? 1 : 0;
                                              return rem;
@@ -1729,10 +1735,10 @@ void processReadsQuasi(
             // for soft filter
             double bestScoreD = static_cast<double>(bestScore);
             std::for_each(jointHits.begin(), jointHits.end(),
-                          [bestScoreD, writeQuasimappings](QuasiAlignment& qa) -> void {
+                          [bestScoreD, writeQuasimappings, hardFilter](QuasiAlignment& qa) -> void {
                             if (writeQuasimappings) { qa.alnScore(static_cast<int32_t>(qa.score())); }
                             double v = bestScoreD - qa.score();
-                            qa.score(std::exp(-v));
+                            qa.score( (hardFilter ? -1.0 : std::exp(-v)) );
                           });
           } else {
             jointHitGroup.clearAlignments();

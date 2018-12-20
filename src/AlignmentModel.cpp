@@ -313,6 +313,7 @@ AlignmentModel::AlnModelProb AlignmentModel::logLikelihood(
 
       setBasesFromCIGAROp_(
           op, curRefBase, curReadBase); //, readStream, matchStream, refStream);
+
       curStateIdx = curRefBase * numStates + curReadBase;
       double tp = transitionProbs[readPosBin](prevStateIdx, curStateIdx);
       logLike += tp;
