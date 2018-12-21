@@ -31,6 +31,7 @@ namespace defaults {
   constexpr const bool alternativeInitMode{false};
   constexpr const char auxDir[] = "aux_info";
   constexpr const bool consistentHits{false};
+  constexpr const bool skipQuant{false};
   constexpr const bool dumpEq{false};
   constexpr const bool dumpEqWeights{false};
   constexpr const bool fasterMapping{false};

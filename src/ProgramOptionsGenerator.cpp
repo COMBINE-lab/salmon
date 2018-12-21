@@ -464,6 +464,9 @@ namespace salmon {
        "The sub-directory of the quantification directory where auxiliary "
        "information "
        "e.g. bootstraps, bias parameters, etc. will be written.")
+      ("skipQuant", po::bool_switch(&(sopt.skipQuant))->default_value(salmon::defaults::skipQuant),
+       "Skip performing the actual transcript quantification (including any Gibbs sampling or bootstrapping)."
+       )
       ("dumpEq", po::bool_switch(&(sopt.dumpEq))->default_value(salmon::defaults::dumpEq),
        "Dump the equivalence class counts "
        "that were computed during quasi-mapping")
