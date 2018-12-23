@@ -40,6 +40,10 @@ public:
   template <typename ExpT>
   bool writeMeta(const SalmonOpts& opts, const ExpT& experiment);
 
+  template <typename ProtocolT>
+  bool writeMetaAlevin(const AlevinOpts<ProtocolT>& opts,
+                       boost::filesystem::path aux_dir);
+
   template <typename ExpT>
   bool writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
                       std::vector<std::string>& errors);

@@ -395,6 +395,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
     lowRegionNumBarcodes = fractionTrueBarcodes;
   }
 
+  aopt.kneeCutoff = topxBarcodes;
   // ignoring all the frequencies having same frequency as cutoff
   // to imitate stable sort
   topxBarcodes += lowRegionNumBarcodes;
@@ -429,6 +430,8 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
                         " because of noisy Cellular barcodes.",
                         percentThrown);
   }
+  aopt.readsThrown = readsThrownCounter;
+  aopt.totalLowConfidenceCBs = topxBarcodes - aopt.kneeCutoff;
 
   // keeping some cells left of the left boundary for learning
   aopt.jointLog->info("Total {}{}{}(has {}{}{} low confidence)"
@@ -726,6 +729,9 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
                         green, usedNumBarcodes, RESET_COLOR,
                         red,totNumBarcodes, RESET_COLOR);
 
+    aopt.totalReads = totNumBarcodes;
+    aopt.totalUsedReads = usedNumBarcodes;
+
     //import whitelist barcodes if present
     if(boost::filesystem::exists(aopt.whitelistFile)){
       std::ifstream whiteFile(aopt.whitelistFile.string());
@@ -781,6 +787,9 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
 
     aopt.jointLog->info("Total Unique barcodes found: {}", freqCounter.size());
     aopt.jointLog->info("Used Barcodes except Whitelist: {}", barcodeSoftMap.size());
+
+    aopt.totalCBs = freqCounter.size();
+    aopt.totalUsedCBs = barcodeSoftMap.size();
 
     uint32_t mmBcCounts{0}, mmBcReadCount{0};
     std::unordered_set<std::string> softMapWhiteBcSet;

@@ -98,6 +98,17 @@ struct AlevinOpts {
   boost::filesystem::path rRnaFile;
   // Txp to gene map tsv file
   boost::filesystem::path geneMapFile;
+
+  //meta-info related tags
+  uint32_t totalReads;
+  uint32_t totalUsedReads;
+  uint32_t readsThrown;
+
+  uint32_t totalCBs;
+  uint32_t totalUsedCBs;
+
+  uint32_t kneeCutoff;
+  uint32_t totalLowConfidenceCBs;
 };
 
 #endif // ALEVIN_OPTS_HPP

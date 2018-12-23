@@ -1838,9 +1838,11 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
       }
     }
 
-    std::vector<std::string> trueBarcodesVec (trueBarcodes.begin(), trueBarcodes.end());
+    std::vector<std::string> trueBarcodesVec (trueBarcodes.begin(),
+                                              trueBarcodes.end());
     std::sort (trueBarcodesVec.begin(), trueBarcodesVec.end(),
-               [&freqCounter, &jointLog](const std::string& i, const std::string& j){
+               [&freqCounter, &jointLog](const std::string& i,
+                                         const std::string& j){
                  uint32_t iCount, jCount;
                  auto itI = freqCounter.find(i);
                  auto itJ = freqCounter.find(j);
@@ -2006,6 +2008,8 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
 
     // Write meta-information about the run
     gzw.writeMeta(sopt, experiment);
+
+    gzw.writeMetaAlevin(aopt, bfs::path(sopt.auxDir));
 
   } catch (po::error& e) {
     std::cerr << "Exception : [" << e.what() << "]. Exiting.\n";

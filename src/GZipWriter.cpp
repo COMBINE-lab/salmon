@@ -362,6 +362,37 @@ bool GZipWriter::writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
   return true;
 }
 
+template <typename ProtocolT>
+bool GZipWriter::writeMetaAlevin(const AlevinOpts<ProtocolT>& opts,
+                                 boost::filesystem::path aux_dir) {
+  namespace bfs = boost::filesystem;
+  bfs::path auxDir = path_ / aux_dir;
+  bfs::path info = auxDir / "alevin_meta_info.json";
+
+  {
+    std::ofstream os(info.string());
+    cereal::JSONOutputArchive oa(os);
+
+    oa(cereal::make_nvp("total_reads", opts.totalReads));
+    oa(cereal::make_nvp("reads_with_N",
+                        opts.totalReads - opts.totalUsedReads));
+    oa(cereal::make_nvp("noisy_reads", opts.readsThrown));
+
+    oa(cereal::make_nvp("total_cbs", opts.totalCBs));
+    oa(cereal::make_nvp("used_cbs", opts.totalUsedCBs));
+
+    oa(cereal::make_nvp("initial_whitelist", opts.kneeCutoff));
+    oa(cereal::make_nvp("low_conf_cbs", opts.totalLowConfidenceCBs));
+
+    if (opts.numBootstraps > 0) {
+      oa(cereal::make_nvp("num_bootstraps",
+                          opts.numBootstraps));
+    }
+  }
+
+  return true;
+}
+
 /**
  * Write the ``main'' metadata to file.  Currently this includes:
  *   -- Names of the target id's if bootstrapping / gibbs is performed
@@ -1127,3 +1158,29 @@ template
 bool GZipWriter::writeEquivCounts<SCExpT, apt::Custom>(
                                                        const AlevinOpts<apt::Custom>& aopts,
                                                        SCExpT& readExp);
+template bool
+GZipWriter::writeMetaAlevin<apt::DropSeq>(const AlevinOpts<apt::DropSeq>& opts,
+                                          boost::filesystem::path aux_dir);
+template bool
+GZipWriter::writeMetaAlevin<apt::InDrop>(const AlevinOpts<apt::InDrop>& opts,
+                                         boost::filesystem::path aux_dir);
+template bool
+GZipWriter::writeMetaAlevin<apt::Chromium>(const AlevinOpts<apt::Chromium>& opts,
+                                           boost::filesystem::path aux_dir);
+template bool
+GZipWriter::writeMetaAlevin<apt::ChromiumV3>(const AlevinOpts<apt::ChromiumV3>& opts,
+                                             boost::filesystem::path aux_dir);
+template bool
+GZipWriter::writeMetaAlevin<apt::CELSeq>(const AlevinOpts<apt::CELSeq>& opts,
+                                         boost::filesystem::path aux_dir);
+template bool
+GZipWriter::writeMetaAlevin<apt::CELSeq2>(const AlevinOpts<apt::CELSeq2>& opts,
+                                          boost::filesystem::path aux_dir);
+template bool
+GZipWriter::writeMetaAlevin<apt::Custom>(const AlevinOpts<apt::Custom>& opts,
+                                         boost::filesystem::path aux_dir);
+template bool
+GZipWriter::writeMetaAlevin<apt::Gemcode>(const AlevinOpts<apt::Gemcode>& opts,
+                                          boost::filesystem::path aux_dir);
+
+
