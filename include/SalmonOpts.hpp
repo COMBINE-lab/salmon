@@ -57,6 +57,7 @@ struct SalmonOpts {
   bool consistentHits; // Enforce consistency of hits gathered during
                        // quasi-mapping.
 
+  bool skipQuant; // Skip quantification step
   bool dumpEq; // Dump the equivalence classes and counts to file
 
   bool dumpEqWeights; // Dump the equivalence classes rich weights
@@ -258,6 +259,7 @@ struct SalmonOpts {
   int16_t gapOpenPenalty;
   int16_t gapExtendPenalty;
   bool mimicStrictBT2;
+  bool hardFilter;
   int32_t maxMMPExtension;
 
   // for utility (may need to be cleaned up later)

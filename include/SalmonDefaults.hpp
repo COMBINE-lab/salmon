@@ -25,11 +25,13 @@ namespace defaults {
   constexpr const int16_t mismatchPenalty{-4};
   constexpr const int16_t gapOpenPenalty{4};
   constexpr const int16_t gapExtendPenalty{2};
+  constexpr const bool hardFilter{false};
   constexpr const bool mimicStrictBT2{false};
   constexpr const int32_t maxMMPExtension{7};
   constexpr const bool alternativeInitMode{false};
   constexpr const char auxDir[] = "aux_info";
   constexpr const bool consistentHits{false};
+  constexpr const bool skipQuant{false};
   constexpr const bool dumpEq{false};
   constexpr const bool dumpEqWeights{false};
   constexpr const bool fasterMapping{false};

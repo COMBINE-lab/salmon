@@ -1459,10 +1459,18 @@ std::string getCurrentTimeAsString() {
       return false;
     }
 
-    if (sopt.rangeFactorizationBins < 4) {
+    if (sopt.hardFilter) {
+      // range factorization doesn't make sense with hard filtering
+      if (sopt.rangeFactorizationBins > 0) {
+        sopt.jointLog->info("The use of range-factorized equivalence classes does not make sense "
+                            "in conjunction with --hardFilter.  Disabling range-factorized equivalence classes. ");
+        sopt.rangeFactorizationBins = 0;
+        sopt.useRangeFactorization = false;
+      }
+    } else if (sopt.rangeFactorizationBins < 4) {
       uint32_t nbins{4};
       sopt.jointLog->info(
-                          "Usage of --validateMappings implies use of range factorization. "
+                          "Usage of --validateMappings, without --hardFilter implies use of range factorization. "
                           "rangeFactorizationBins is being set to {}", nbins
                           );
       sopt.rangeFactorizationBins = nbins;

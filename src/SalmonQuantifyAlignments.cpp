@@ -1277,93 +1277,94 @@ bool processSample(AlignmentLibraryT<ReadT>& alnLib, size_t requiredObservations
     std::exit(1);
   }
 
-  // EQCLASS
-  // NOTE: A side-effect of calling the optimizer is that
-  // the `EffectiveLength` field of each transcript is
-  // set to its final value.
-  CollapsedEMOptimizer optimizer;
-  jointLog->info("starting optimizer");
-  salmon::utils::normalizeAlphas(sopt, alnLib);
-  bool optSuccess = optimizer.optimize(alnLib, sopt, 0.01, 10000);
-  // If the optimizer didn't work, then bail out here.
-  if (!optSuccess) {
-    return false;
-  }
-  jointLog->info("finished optimizer");
-
-  // EQCLASS
-  fmt::print(stderr, "\n\nwriting output \n");
   GZipWriter gzw(outputDirectory, jointLog);
-  // Write the main results
-  gzw.writeAbundances(sopt, alnLib);
+
+  if (!sopt.skipQuant) {
+    // NOTE: A side-effect of calling the optimizer is that
+    // the `EffectiveLength` field of each transcript is
+    // set to its final value.
+    CollapsedEMOptimizer optimizer;
+    jointLog->info("starting optimizer");
+    salmon::utils::normalizeAlphas(sopt, alnLib);
+    bool optSuccess = optimizer.optimize(alnLib, sopt, 0.01, 10000);
+    // If the optimizer didn't work, then bail out here.
+    if (!optSuccess) {
+      return false;
+    }
+    jointLog->info("finished optimizer");
+
+    jointLog->info("writing output");
+    // Write the main results
+    gzw.writeAbundances(sopt, alnLib);
+
+    if (sopt.numGibbsSamples > 0) {
+
+      jointLog->info("Starting Gibbs Sampler");
+      CollapsedGibbsSampler sampler;
+      gzw.setSamplingPath(sopt);
+      // The function we'll use as a callback to write samples
+      std::function<bool(const std::vector<double>&)> bsWriter =
+        [&gzw](const std::vector<double>& alphas) -> bool {
+          return gzw.writeBootstrap(alphas);
+        };
+
+      bool sampleSuccess =
+        sampler.sample(alnLib, sopt, bsWriter, sopt.numGibbsSamples);
+      if (!sampleSuccess) {
+        jointLog->error("Encountered error during Gibb sampling .\n"
+                        "This should not happen.\n"
+                        "Please file a bug report on GitHub.\n");
+        return false;
+      }
+      jointLog->info("Finished Gibbs Sampler");
+    } else if (sopt.numBootstraps > 0) {
+      // The function we'll use as a callback to write samples
+      std::function<bool(const std::vector<double>&)> bsWriter =
+        [&gzw](const std::vector<double>& alphas) -> bool {
+          return gzw.writeBootstrap(alphas);
+        };
+
+      jointLog->info("Staring Bootstrapping");
+      gzw.setSamplingPath(sopt);
+      bool bootstrapSuccess =
+        optimizer.gatherBootstraps(alnLib, sopt, bsWriter, 0.01, 10000);
+      jointLog->info("Finished Bootstrapping");
+      if (!bootstrapSuccess) {
+        jointLog->error("Encountered error during bootstrapping.\n"
+                        "This should not happen.\n"
+                        "Please file a bug report on GitHub.\n");
+        return false;
+      }
+    }
+
+    // bfs::path libCountFilePath = outputDirectory / "lib_format_counts.json";
+    // alnLib.summarizeLibraryTypeCounts(libCountFilePath);
+
+    if (sopt.sampleOutput) {
+      // In this case, we should "re-convert" transcript
+      // masses to be counts in log space
+      auto nr = alnLib.numMappedFragments();
+      for (auto& t : alnLib.transcripts()) {
+        double m = t.mass(false) * nr;
+        if (m > 0.0) {
+          t.setMass(std::log(m));
+        }
+      }
+
+      bfs::path sampleFilePath = outputDirectory / "postSample.bam";
+      bool didSample = salmon::sampler::sampleLibrary<ReadT>(
+                                                             alnLib, sopt, burnedIn, sampleFilePath, sopt.sampleUnaligned);
+      if (!didSample) {
+        jointLog->warn("There may have been a problem generating the sampled "
+                       "output file; please check the log\n");
+      }
+    }
+  }
 
   // If we are dumping the equivalence classes, then
   // do it here.
   if (sopt.dumpEq) {
     gzw.writeEquivCounts(sopt, alnLib);
-  }
-
-  if (sopt.numGibbsSamples > 0) {
-
-    jointLog->info("Starting Gibbs Sampler");
-    CollapsedGibbsSampler sampler;
-    gzw.setSamplingPath(sopt);
-    // The function we'll use as a callback to write samples
-    std::function<bool(const std::vector<double>&)> bsWriter =
-        [&gzw](const std::vector<double>& alphas) -> bool {
-      return gzw.writeBootstrap(alphas);
-    };
-
-    bool sampleSuccess =
-        sampler.sample(alnLib, sopt, bsWriter, sopt.numGibbsSamples);
-    if (!sampleSuccess) {
-      jointLog->error("Encountered error during Gibb sampling .\n"
-                      "This should not happen.\n"
-                      "Please file a bug report on GitHub.\n");
-      return false;
-    }
-    jointLog->info("Finished Gibbs Sampler");
-  } else if (sopt.numBootstraps > 0) {
-    // The function we'll use as a callback to write samples
-    std::function<bool(const std::vector<double>&)> bsWriter =
-        [&gzw](const std::vector<double>& alphas) -> bool {
-      return gzw.writeBootstrap(alphas);
-    };
-
-    jointLog->info("Staring Bootstrapping");
-    gzw.setSamplingPath(sopt);
-    bool bootstrapSuccess =
-        optimizer.gatherBootstraps(alnLib, sopt, bsWriter, 0.01, 10000);
-    jointLog->info("Finished Bootstrapping");
-    if (!bootstrapSuccess) {
-      jointLog->error("Encountered error during bootstrapping.\n"
-                      "This should not happen.\n"
-                      "Please file a bug report on GitHub.\n");
-      return false;
-    }
-  }
-
-  // bfs::path libCountFilePath = outputDirectory / "lib_format_counts.json";
-  // alnLib.summarizeLibraryTypeCounts(libCountFilePath);
-
-  if (sopt.sampleOutput) {
-    // In this case, we should "re-convert" transcript
-    // masses to be counts in log space
-    auto nr = alnLib.numMappedFragments();
-    for (auto& t : alnLib.transcripts()) {
-      double m = t.mass(false) * nr;
-      if (m > 0.0) {
-        t.setMass(std::log(m));
-      }
-    }
-
-    bfs::path sampleFilePath = outputDirectory / "postSample.bam";
-    bool didSample = salmon::sampler::sampleLibrary<ReadT>(
-        alnLib, sopt, burnedIn, sampleFilePath, sopt.sampleUnaligned);
-    if (!didSample) {
-      jointLog->warn("There may have been a problem generating the sampled "
-                     "output file; please check the log\n");
-    }
   }
 
   sopt.runStopTime = salmon::utils::getCurrentTimeAsString();

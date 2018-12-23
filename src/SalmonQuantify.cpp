@@ -952,6 +952,8 @@ void processReadsQuasi(
     hitCollector.setMaxMMPExtension(salmonOpts.maxMMPExtension);
   }
 
+  bool hardFilter = salmonOpts.hardFilter;
+
   SASearcher<RapMapIndexT> saSearcher(qidx);
   std::vector<QuasiAlignment> leftHits;
   std::vector<QuasiAlignment> rightHits;
@@ -1149,7 +1151,7 @@ void processReadsQuasi(
           // need them and don't have them.
           char* r1rc = nullptr;
           char* r2rc = nullptr;
-          int32_t bestScore{-1};
+          int32_t bestScore{std::numeric_limits<int32_t>::lowest()};
           std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
           size_t idx{0};
           double optFrac{salmonOpts.minScoreFraction};
@@ -1259,24 +1261,24 @@ void processReadsQuasi(
             // score are filtered out.
             jointHits.erase(
                             std::remove_if(jointHits.begin(), jointHits.end(),
-                                           [&ctr, &scores, &numDropped] (const QuasiAlignment& qa) -> bool {
-                                             // soft filter
-                                             bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
-                                             //strict filter
-                                             //bool rem = (scores[ctr] < bestScore);
+                                           [&ctr, &scores, &numDropped, bestScore, hardFilter] (const QuasiAlignment& qa) -> bool {
+                                             // if soft filtering, we only drop things with an invalid score
+                                             // if hard filtering, we drop everything with a sub-optimal score.
+                                             bool rem = hardFilter ? (scores[ctr] < bestScore) :
+                                               (scores[ctr] == std::numeric_limits<int32_t>::min());
                                              ++ctr;
                                              numDropped += rem ? 1 : 0;
                                              return rem;
                                            }),
                             jointHits.end()
                             );
-            // soft filter
+
             double bestScoreD = static_cast<double>(bestScore);
             std::for_each(jointHits.begin(), jointHits.end(),
-                          [bestScoreD, writeQuasimappings](QuasiAlignment& qa) -> void {
+                          [bestScoreD, writeQuasimappings, hardFilter](QuasiAlignment& qa) -> void {
                             if (writeQuasimappings) { qa.alnScore(static_cast<int32_t>(qa.score())); }
                             double v = bestScoreD - qa.score();
-                            qa.score(std::exp(-v));
+                            qa.score( (hardFilter ? -1.0 : std::exp(-v)) );
                           });
           } else {
             jointHitGroup.clearAlignments();
@@ -1584,6 +1586,8 @@ void processReadsQuasi(
     hitCollector.setMaxMMPExtension(salmonOpts.maxMMPExtension);
   }
 
+  bool hardFilter = salmonOpts.hardFilter;
+
   /**
    * Setup related to mapping parameters
    **/
@@ -1674,7 +1678,7 @@ void processReadsQuasi(
           auto l1 = static_cast<int32_t>(rp.seq.length());
 
           char* r1rc = nullptr;
-          int32_t bestScore{std::numeric_limits<int32_t>::min()};
+          int32_t bestScore{std::numeric_limits<int32_t>::lowest()};
           std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
           size_t idx{0};
           double optFrac{salmonOpts.minScoreFraction};
@@ -1717,9 +1721,11 @@ void processReadsQuasi(
             // score are filtered out.
             jointHits.erase(
                             std::remove_if(jointHits.begin(), jointHits.end(),
-                                           [&ctr, &scores, &numDropped] (const QuasiAlignment& qa) -> bool {
-                                             // soft filter
-                                             bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
+                                           [&ctr, &scores, &numDropped, bestScore, hardFilter] (const QuasiAlignment& qa) -> bool {
+                                             // if soft filtering, we only drop things with an invalid score
+                                             // if hard filtering, we drop everything with a sub-optimal score.
+                                             bool rem = hardFilter ? (scores[ctr] < bestScore) :
+                                               (scores[ctr] == std::numeric_limits<int32_t>::min());
                                              ++ctr;
                                              numDropped += rem ? 1 : 0;
                                              return rem;
@@ -1729,10 +1735,10 @@ void processReadsQuasi(
             // for soft filter
             double bestScoreD = static_cast<double>(bestScore);
             std::for_each(jointHits.begin(), jointHits.end(),
-                          [bestScoreD, writeQuasimappings](QuasiAlignment& qa) -> void {
+                          [bestScoreD, writeQuasimappings, hardFilter](QuasiAlignment& qa) -> void {
                             if (writeQuasimappings) { qa.alnScore(static_cast<int32_t>(qa.score())); }
                             double v = bestScoreD - qa.score();
-                            qa.score(std::exp(-v));
+                            qa.score( (hardFilter ? -1.0 : std::exp(-v)) );
                           });
           } else {
             jointHitGroup.clearAlignments();
@@ -2497,82 +2503,95 @@ transcript abundance from RNA-seq reads
 
     GZipWriter gzw(outputDirectory, jointLog);
 
-    // Now that the streaming pass is complete, we have
-    // our initial estimates, and our rich equivalence
-    // classes.  Perform further optimization until
-    // convergence.
-    // NOTE: A side-effect of calling the optimizer is that
-    // the `EffectiveLength` field of each transcript is
-    // set to its final value.
-    CollapsedEMOptimizer optimizer;
-    jointLog->info("Starting optimizer");
-    salmon::utils::normalizeAlphas(sopt, experiment);
-    bool optSuccess = optimizer.optimize(experiment, sopt, 0.01, 10000);
+    if (!sopt.skipQuant) {
+      // Now that the streaming pass is complete, we have
+      // our initial estimates, and our rich equivalence
+      // classes.  Perform further optimization until
+      // convergence.
+      // NOTE: A side-effect of calling the optimizer is that
+      // the `EffectiveLength` field of each transcript is
+      // set to its final value.
+      CollapsedEMOptimizer optimizer;
+      jointLog->info("Starting optimizer");
+      salmon::utils::normalizeAlphas(sopt, experiment);
+      bool optSuccess = optimizer.optimize(experiment, sopt, 0.01, 10000);
 
-    if (!optSuccess) {
-      jointLog->error(
-          "The optimization algorithm failed. This is likely the result of "
-          "bad input (or a bug). If you cannot track down the cause, please "
-          "report this issue on GitHub.");
-      return 1;
+      if (!optSuccess) {
+        jointLog->error(
+                        "The optimization algorithm failed. This is likely the result of "
+                        "bad input (or a bug). If you cannot track down the cause, please "
+                        "report this issue on GitHub.");
+        return 1;
+      }
+      jointLog->info("Finished optimizer");
+
+      jointLog->info("writing output \n");
+
+      // Write the quantification results
+      gzw.writeAbundances(sopt, experiment);
+
+      if (sopt.numGibbsSamples > 0) {
+
+        jointLog->info("Starting Gibbs Sampler");
+        CollapsedGibbsSampler sampler;
+        gzw.setSamplingPath(sopt);
+        // The function we'll use as a callback to write samples
+        std::function<bool(const std::vector<double>&)> bsWriter =
+          [&gzw](const std::vector<double>& alphas) -> bool {
+            return gzw.writeBootstrap(alphas, true);
+          };
+
+        bool sampleSuccess =
+          // sampler.sampleMultipleChains(experiment, sopt, bsWriter,
+          // sopt.numGibbsSamples);
+          sampler.sample(experiment, sopt, bsWriter, sopt.numGibbsSamples);
+        if (!sampleSuccess) {
+          jointLog->error("Encountered error during Gibbs sampling.\n"
+                          "This should not happen.\n"
+                          "Please file a bug report on GitHub.\n");
+          return 1;
+        }
+        jointLog->info("Finished Gibbs Sampler");
+      } else if (sopt.numBootstraps > 0) {
+        gzw.setSamplingPath(sopt);
+        // The function we'll use as a callback to write samples
+        std::function<bool(const std::vector<double>&)> bsWriter =
+          [&gzw](const std::vector<double>& alphas) -> bool {
+            return gzw.writeBootstrap(alphas);
+          };
+
+        jointLog->info("Starting Bootstrapping");
+        bool bootstrapSuccess =
+          optimizer.gatherBootstraps(experiment, sopt, bsWriter, 0.01, 10000);
+        jointLog->info("Finished Bootstrapping");
+        if (!bootstrapSuccess) {
+          jointLog->error("Encountered error during bootstrapping.\n"
+                          "This should not happen.\n"
+                          "Please file a bug report on GitHub.\n");
+          return 1;
+        }
+      }
+
+      /** If the user requested gene-level abundances, then compute those now **/
+      if (vm.count("geneMap")) {
+        try {
+          salmon::utils::generateGeneLevelEstimates(sopt.geneMapPath,
+                                                    outputDirectory);
+        } catch (std::invalid_argument& e) {
+          fmt::print(stderr,
+                     "Error: [{}] when trying to compute gene-level "
+                     "estimates. The gene-level file(s) may not exist",
+                     e.what());
+        }
+      }
     }
-    jointLog->info("Finished optimizer");
-
-    size_t tnum{0};
-
-    jointLog->info("writing output \n");
-
-    bfs::path estFilePath = outputDirectory / "quant.sf";
-
-    // Write the main results
-    gzw.writeAbundances(sopt, experiment);
 
     // If we are dumping the equivalence classes, then
     // do it here.
     if (sopt.dumpEq) {
+      jointLog->info("writing equivalence class counts.");
       gzw.writeEquivCounts(sopt, experiment);
-    }
-
-    if (sopt.numGibbsSamples > 0) {
-
-      jointLog->info("Starting Gibbs Sampler");
-      CollapsedGibbsSampler sampler;
-      gzw.setSamplingPath(sopt);
-      // The function we'll use as a callback to write samples
-      std::function<bool(const std::vector<double>&)> bsWriter =
-          [&gzw](const std::vector<double>& alphas) -> bool {
-        return gzw.writeBootstrap(alphas, true);
-      };
-
-      bool sampleSuccess =
-          // sampler.sampleMultipleChains(experiment, sopt, bsWriter,
-          // sopt.numGibbsSamples);
-          sampler.sample(experiment, sopt, bsWriter, sopt.numGibbsSamples);
-      if (!sampleSuccess) {
-        jointLog->error("Encountered error during Gibbs sampling.\n"
-                        "This should not happen.\n"
-                        "Please file a bug report on GitHub.\n");
-        return 1;
-      }
-      jointLog->info("Finished Gibbs Sampler");
-    } else if (sopt.numBootstraps > 0) {
-      gzw.setSamplingPath(sopt);
-      // The function we'll use as a callback to write samples
-      std::function<bool(const std::vector<double>&)> bsWriter =
-          [&gzw](const std::vector<double>& alphas) -> bool {
-        return gzw.writeBootstrap(alphas);
-      };
-
-      jointLog->info("Starting Bootstrapping");
-      bool bootstrapSuccess =
-          optimizer.gatherBootstraps(experiment, sopt, bsWriter, 0.01, 10000);
-      jointLog->info("Finished Bootstrapping");
-      if (!bootstrapSuccess) {
-        jointLog->error("Encountered error during bootstrapping.\n"
-                        "This should not happen.\n"
-                        "Please file a bug report on GitHub.\n");
-        return 1;
-      }
+      jointLog->info("done writing equivalence class counts.");
     }
 
     bfs::path libCountFilePath = outputDirectory / "lib_format_counts.json";
@@ -2583,22 +2602,9 @@ transcript abundance from RNA-seq reads
       bfs::path distFileName = sopt.paramsDirectory / "flenDist.txt";
       {
         std::unique_ptr<std::FILE, int (*)(std::FILE*)> distOut(
-            std::fopen(distFileName.c_str(), "w"), std::fclose);
+                                                                std::fopen(distFileName.c_str(), "w"), std::fclose);
         fmt::print(distOut.get(), "{}\n",
                    experiment.fragmentLengthDistribution()->toString());
-      }
-    }
-
-    /** If the user requested gene-level abundances, then compute those now **/
-    if (vm.count("geneMap")) {
-      try {
-        salmon::utils::generateGeneLevelEstimates(sopt.geneMapPath,
-                                                  outputDirectory);
-      } catch (std::invalid_argument& e) {
-        fmt::print(stderr,
-                   "Error: [{}] when trying to compute gene-level "
-                   "estimates. The gene-level file(s) may not exist",
-                   e.what());
       }
     }
 
