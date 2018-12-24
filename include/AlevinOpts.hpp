@@ -117,6 +117,7 @@ struct AlevinOpts {
   uint32_t eqReads;
 
   uint32_t totalDedupUMIs;
+  uint32_t totalExpGenes;
 };
 
 #endif // ALEVIN_OPTS_HPP

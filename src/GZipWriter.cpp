@@ -397,6 +397,10 @@ bool GZipWriter::writeMetaAlevin(const AlevinOpts<ProtocolT>& opts,
     }
 
     oa(cereal::make_nvp("deduplicated_umis", opts.totalDedupUMIs));
+    oa(cereal::make_nvp("mean_umis_per_cell",
+                        opts.totalDedupUMIs / opts.intelligentCutoff));
+    oa(cereal::make_nvp("mean_genes_per_cell",
+                        opts.totalExpGenes / opts.intelligentCutoff));
   }
 
   return true;

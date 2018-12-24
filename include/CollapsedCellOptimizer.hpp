@@ -69,6 +69,7 @@ void optimizeCell(SCExpT& experiment,
                   std::vector<CellState>& skippedCBcount,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
                   bool quiet, tbb::atomic<double>& totalDedupCounts,
+                  tbb::atomic<uint32_t>& totalExpGeneCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, bool inDebugMode, uint32_t numBootstraps,
                   bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps);

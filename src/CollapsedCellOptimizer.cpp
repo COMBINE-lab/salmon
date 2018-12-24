@@ -249,6 +249,7 @@ void optimizeCell(SCExpT& experiment,
                   std::vector<CellState>& skippedCB,
                   bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
                   bool quiet, tbb::atomic<double>& totalDedupCounts,
+                  tbb::atomic<uint32_t>& totalExpGeneCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, bool inDebugMode, uint32_t numBootstraps,
                   bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps){
@@ -270,6 +271,7 @@ void optimizeCell(SCExpT& experiment,
 
     //extracting per-cell level eq class information
     double totalCount{0.0};
+    double totalExpGenes{0};
     std::vector<uint32_t> eqIDs;
     std::vector<uint32_t> eqCounts;
     std::vector<UGroupT> umiGroups;
@@ -352,8 +354,16 @@ void optimizeCell(SCExpT& experiment,
       gzw.writeAbundances( inDebugMode, trueBarcodeStr,
                            geneAlphas, tiers );
 
+
+      for (auto count: geneAlphas) {
+        if (count>0) {
+          totalExpGenes += 1;
+        }
+      }
+
       // maintaining count for total number of predicted UMI
       salmon::utils::incLoop(totalDedupCounts, totalCount);
+      totalExpGeneCounts += totalExpGenes;
 
       if ( numBootstraps > 0 ){
         std::vector<std::vector<double>> sampleEstimates;
@@ -537,6 +547,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   std::vector<CellState> skippedCB (numCells);
   std::atomic<uint32_t> bcount{0};
   tbb::atomic<double> totalDedupCounts{0.0};
+  tbb::atomic<uint32_t> totalExpGeneCounts{0};
 
   std::vector<std::thread> workerThreads;
   for (size_t tn = 0; tn < numWorkerThreads; ++tn) {
@@ -557,6 +568,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                aopt.noEM,
                                aopt.quiet,
                                std::ref(totalDedupCounts),
+                               std::ref(totalExpGeneCounts),
                                std::ref(txpToGeneMap),
                                numGenes,
                                aopt.debug,
@@ -572,6 +584,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   aopt.jointLog->info("Total {0:.2f} UMI after deduplicating.",
                       totalDedupCounts);
   aopt.totalDedupUMIs = totalDedupCounts;
+  aopt.totalExpGenes = totalExpGeneCounts;
 
   uint32_t skippedCBcount {0};
   for(auto cb: skippedCB){

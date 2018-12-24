@@ -482,7 +482,7 @@ namespace alevin {
       predictionStream.open(predictionFileName.string());
       predictionStream << "cb\ttrue_prob\tFalse_prob\n";
 
-      aopt.intelligentCutoff = trueBarcodes.size();
+      aopt.intelligentCutoff = whitelistBarcodes.size();
       for (auto i: whitelistBarcodes){
         whitelistStream << trueBarcodes[i] << "\n";
         if (i >= numTrueCells) {
