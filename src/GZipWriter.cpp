@@ -376,18 +376,27 @@ bool GZipWriter::writeMetaAlevin(const AlevinOpts<ProtocolT>& opts,
     oa(cereal::make_nvp("total_reads", opts.totalReads));
     oa(cereal::make_nvp("reads_with_N",
                         opts.totalReads - opts.totalUsedReads));
-    oa(cereal::make_nvp("noisy_reads", opts.readsThrown));
+    oa(cereal::make_nvp("noisy_cb_reads", opts.readsThrown));
+    oa(cereal::make_nvp("noisy_umi_reads", opts.noisyUmis));
+    oa(cereal::make_nvp("mapping_rate", opts.mappingRate));
+    oa(cereal::make_nvp("reads_in_eqclasses", opts.eqReads));
 
     oa(cereal::make_nvp("total_cbs", opts.totalCBs));
     oa(cereal::make_nvp("used_cbs", opts.totalUsedCBs));
 
-    oa(cereal::make_nvp("initial_whitelist", opts.kneeCutoff));
-    oa(cereal::make_nvp("low_conf_cbs", opts.totalLowConfidenceCBs));
+    if(not boost::filesystem::exists(opts.whitelistFile)){
+      oa(cereal::make_nvp("initial_whitelist", opts.kneeCutoff));
+      oa(cereal::make_nvp("low_conf_cbs", opts.totalLowConfidenceCBs));
+      oa(cereal::make_nvp("num_features", opts.numFeatures));
+    }
+    oa(cereal::make_nvp("final_num_cbs", opts.intelligentCutoff));
 
     if (opts.numBootstraps > 0) {
       oa(cereal::make_nvp("num_bootstraps",
                           opts.numBootstraps));
     }
+
+    oa(cereal::make_nvp("deduplicated_umis", opts.totalDedupUMIs));
   }
 
   return true;

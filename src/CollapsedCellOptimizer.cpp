@@ -571,6 +571,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   }
   aopt.jointLog->info("Total {0:.2f} UMI after deduplicating.",
                       totalDedupCounts);
+  aopt.totalDedupUMIs = totalDedupCounts;
 
   uint32_t skippedCBcount {0};
   for(auto cb: skippedCB){

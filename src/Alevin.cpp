@@ -780,6 +780,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
                            numLowConfidentBarcode, collapMap, aopt);
 
       aopt.jointLog->info("Done True Barcode Sampling");
+      aopt.intelligentCutoff = trueBarcodes.size();
     }
 
     indexBarcodes(aopt, freqCounter, trueBarcodes, barcodeSoftMap);

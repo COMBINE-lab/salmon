@@ -108,7 +108,15 @@ struct AlevinOpts {
   uint32_t totalUsedCBs;
 
   uint32_t kneeCutoff;
+  uint32_t intelligentCutoff;
   uint32_t totalLowConfidenceCBs;
+  uint32_t numFeatures;
+
+  uint32_t noisyUmis;
+  double mappingRate;
+  uint32_t eqReads;
+
+  uint32_t totalDedupUMIs;
 };
 
 #endif // ALEVIN_OPTS_HPP

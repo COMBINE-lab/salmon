@@ -1768,6 +1768,9 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
     jointLog->warn("Found {} reads with `N` in the UMI sequence and ignored the reads.\n"
                    "Please report on github if this number is too large", nSeqs);
   }
+  alevinOpts.noisyUmis = nSeqs;
+  alevinOpts.eqReads = totalAssignedFragments;
+  alevinOpts.mappingRate = experiment.effectiveMappingRate() * 100.0;
   //+++++++++++++++++++++++++++++++++++++++
   jointLog->info("Mapping rate = {}\%\n",
                  experiment.effectiveMappingRate() * 100.0);
