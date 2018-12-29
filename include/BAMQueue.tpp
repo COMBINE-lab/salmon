@@ -362,7 +362,6 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
 
             switch (alnType) {
                 case AlignmentType::UnmappedOrphan:
-                    ++numUnaligned_;
                     if (filt != nullptr) {
                         rpair.orphanStatus = salmon::utils::OrphanStatus::LeftOrphan;
                         filt->processFrag(&rpair);
