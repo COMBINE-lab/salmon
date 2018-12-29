@@ -52,7 +52,7 @@ namespace defaults {
   constexpr const bool noBiasLengthThreshold{false};
   constexpr const uint32_t numBiasSamples{2000000};
   constexpr const uint32_t numBurninFrags{5000000};
-  constexpr const uint32_t numPreBurninFrags{1000000};
+  constexpr const uint32_t numPreBurninFrags{5000};
   constexpr const bool useEM{false};
   constexpr const bool useVBOpt{true};
   constexpr const uint32_t sigDigits{3};
