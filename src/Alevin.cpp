@@ -777,7 +777,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
       //Calculate the knee using the frequency distribution
       //and get the true set of barcodes
       sampleTrueBarcodes(collapsedfrequency, trueBarcodes,
-                           numLowConfidentBarcode, collapMap, aopt);
+                         numLowConfidentBarcode, collapMap, aopt);
 
       aopt.jointLog->info("Done True Barcode Sampling");
       aopt.intelligentCutoff = trueBarcodes.size();

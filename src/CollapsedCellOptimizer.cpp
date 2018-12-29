@@ -321,7 +321,7 @@ void optimizeCell(SCExpT& experiment,
       bool dedupOk = dedupClasses(geneAlphas, totalCount, txpGroups,
                                   umiGroups, salmonEqclasses,
                                   txpToGeneMap, tiers, gzw,
-                                  dumpUmiGraph);
+                                  dumpUmiGraph, trueBarcodeStr);
       if( !dedupOk ){
         jointlog->error("Deduplication for cell {} failed \n"
                         "Please Report this on github.", trueBarcodeStr);

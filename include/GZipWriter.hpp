@@ -75,7 +75,7 @@ public:
   bool writeCellEQVec(size_t barcode, const std::vector<uint32_t>& offsets,
                       const std::vector<uint32_t>& counts, bool quiet = true);
 
-  bool writeUmiGraph(alevin::graph::Graph& g);
+  bool writeUmiGraph(alevin::graph::Graph& g, std::string& trueBarcodeStr);
 
   bool setSamplingPath(const SalmonOpts& sopt);
 

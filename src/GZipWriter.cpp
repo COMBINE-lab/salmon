@@ -1025,7 +1025,8 @@ bool GZipWriter::writeCellEQVec(size_t barcode, const std::vector<uint32_t>& off
   return true;
 }
 
-bool GZipWriter::writeUmiGraph(alevin::graph::Graph& g) {
+bool GZipWriter::writeUmiGraph(alevin::graph::Graph& g,
+                               std::string& cbString) {
 #if defined __APPLE__
   spin_lock::scoped_lock sl(writeMutex_);
 #else
@@ -1040,7 +1041,7 @@ bool GZipWriter::writeUmiGraph(alevin::graph::Graph& g) {
   }
 
   boost::iostreams::filtering_ostream& ofile = *umiGraphStream_;
-  ofile << g.num_vertices() << "\t";
+  ofile << cbString << "\t" << g.num_vertices() << "\t";
   for(auto& edge: g.edges){
     uint32_t source = edge.first;
     ofile<< source;

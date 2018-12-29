@@ -34,7 +34,8 @@ bool dedupClasses(std::vector<double>& geneAlphas,
                   std::vector<UGroupT>& umiGroups,
                   std::vector<SalmonEqClass>& salmonEqclasses,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                  std::vector<uint8_t>& tiers, 
-                  GZipWriter& gzw, bool dumpUmiGraph);
+                  std::vector<uint8_t>& tiers,
+                  GZipWriter& gzw, bool dumpUmiGraph,
+                  std::string& trueBarcodeStr);
 
 #endif // DEDUP_UMI_HPP

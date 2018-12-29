@@ -411,14 +411,14 @@ bool dedupClasses(std::vector<double>& geneAlphas,
                   std::vector<SalmonEqClass>& salmonEqclasses,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   std::vector<uint8_t>& tiers,
-                  GZipWriter& gzw,
-                  bool dumpUmiGraph){
+                  GZipWriter& gzw, bool dumpUmiGraph,
+                  std::string& trueBarcodeStr){
   // make directed graph from eqclasses
   alevin::graph::Graph g;
   graphFromCell(txpGroups, umiGroups, g);
 
   if (dumpUmiGraph){
-    gzw.writeUmiGraph(g);
+    gzw.writeUmiGraph(g, trueBarcodeStr);
   }
 
   // assign tiers to the genes
