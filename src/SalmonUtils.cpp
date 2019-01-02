@@ -1898,15 +1898,6 @@ bool processQuantOptions(SalmonOpts& sopt,
       }
     }
 
-    if (sopt.useFSPD) {
-      jointLog->critical("The --useFSPD option has been deprecated.  "
-                         "Positional bias modeling is available "
-                         "[experimentally] under the --posBias flag. "
-                         "Please remove the --useFSPD flag from your command.");
-      jointLog->flush();
-      return false;
-    }
-
     if (sopt.noFragLengthDist and !sopt.noEffectiveLengthCorrection) {
       jointLog->critical(
           "You cannot enable --noFragLengthDist without "

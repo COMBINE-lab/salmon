@@ -99,8 +99,6 @@ struct SalmonOpts {
   bool rankEqClasses; // Keep a separate equivalence class for each ordering (by
                       // conditional probability) of the the transcript labels
 
-  bool useFSPD; // Learn a non-uniform start distribution
-
   bool noSeqBiasModel; // Don't learn and use a sequence-specific bias model.
 
   bool noRichEqClasses; // Don't use rich equivalence classes --- forget the

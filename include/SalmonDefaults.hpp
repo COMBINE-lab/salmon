@@ -89,9 +89,6 @@ namespace defaults {
   constexpr const bool rankEqClasses{false};
   constexpr const bool dontExtrapolateCounts{false};
 
-  // purely deprecated --- will remove soon
-  constexpr const bool useFSPD{false};
-
   // alignment-based mode
   //constexpr const bool useErrorModel{true};
   constexpr const bool noErrorModel{false};

@@ -710,11 +710,6 @@ namespace salmon {
 
     po::options_description deprecated(
         "\ndeprecated options about which to inform the user");
-    deprecated.add_options()
-      ("useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(salmon::defaults::useFSPD),
-        "[deprecated] : "
-        "Consider / model non-uniformity in the fragment start positions "
-            "across the transcript.");
     return deprecated;
   }
 

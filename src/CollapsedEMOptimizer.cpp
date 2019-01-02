@@ -733,7 +733,6 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
       readExp.equivalenceClassBuilder().eqVec();
 
   bool noRichEq = sopt.noRichEqClasses;
-  bool useFSPD{sopt.useFSPD};
 
   bool useVBEM{sopt.useVBOpt};
   bool perTranscriptPrior{sopt.perTranscriptPrior};

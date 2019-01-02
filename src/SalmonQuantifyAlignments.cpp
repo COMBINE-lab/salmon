@@ -184,7 +184,6 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
   auto& fragLengthDist = *(alnLib.fragmentLengthDistribution());
   auto& alnMod = alnLib.alignmentModel();
 
-  bool useFSPD{salmonOpts.useFSPD};
   bool useFragLengthDist{!salmonOpts.noFragLengthDist};
   bool noFragLenFactor{salmonOpts.noFragLenFactor};
 
@@ -418,19 +417,6 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
             double fragStartLogDenominator{salmon::math::LOG_1};
 
             auto hitPos = aln->left();
-            if (useFSPD and burnedIn and hitPos < refLength) {
-              auto& fragStartDist =
-                  fragStartDists[transcript.lengthClassIndex()];
-              // Get the log(numerator) and log(denominator) for the fragment
-              // start position probability.
-              bool nonZeroProb = fragStartDist.logNumDenomMass(
-                  hitPos, refLength, logRefLength, fragStartLogNumerator,
-                  fragStartLogDenominator);
-              // Set the overall probability.
-              startPosProb = (nonZeroProb) ? fragStartLogNumerator -
-                                                 fragStartLogDenominator
-                                           : salmon::math::LOG_0;
-            }
 
             // The total auxiliary probabilty is the product (sum in log-space)
             // of The fragment length probabilty The mapping score (under error
@@ -788,14 +774,6 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
                   fragLengthDist.addVal(fragLength, logForgettingMass);
                 }
               }
-              // Update the fragment start position distribution
-              if (useFSPD) {
-                auto hitPos = aln->left();
-                auto& fragStartDist =
-                    fragStartDists[transcript.lengthClassIndex()];
-                fragStartDist.addVal(hitPos, transcript.RefLength,
-                                     logForgettingMass);
-              }
             }
           }
 
@@ -878,13 +856,6 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
       --activeBatches;
       processedReads += batchReads;
       if (processedReads >= numBurninFrags and !burnedIn) {
-        if (useFSPD) {
-          // update all of the fragment start position
-          // distributions
-          for (auto& fspd : fragStartDists) {
-            fspd.update();
-          }
-        }
         // NOTE: only one thread should succeed here, and that
         // thread will set burnedIn to true
         alnLib.updateTranscriptLengthsAtomic(burnedIn);
@@ -1223,17 +1194,6 @@ bool quantifyLibrary(AlignmentLibraryT<FragT>& alnLib,
                               alnLib.numMappedFragments(),
                               salmonOpts.numBurninFrags);
 
-    // If we didn't have a sufficient number of samples for burnin,
-    // then also ignore modeling of the fragment start position
-    // distribution.
-    if (salmonOpts.useFSPD) {
-      salmonOpts.useFSPD = false;
-      salmonOpts.jointLog->warn("Since only {} (< {}) fragments were observed, "
-                                "modeling of the fragment start position "
-                                "distribution has been disabled",
-                                alnLib.numMappedFragments(),
-                                salmonOpts.numBurninFrags);
-    }
   }
 
   // In this case, we have to give the structures held

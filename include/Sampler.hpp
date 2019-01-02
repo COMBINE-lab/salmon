@@ -99,7 +99,6 @@ void sampleMiniBatch(AlignmentLibraryT<FragT>& alnLib,
   using salmon::math::logAdd;
   using salmon::math::logSub;
 
-  bool useFSPD{salmonOpts.useFSPD};
   bool noLengthCorrection{salmonOpts.noLengthCorrection};
   bool useFragLengthDist{!salmonOpts.noFragLengthDist};
   bool useAuxParams = (processedReads >= salmonOpts.numPreBurninFrags);
@@ -258,11 +257,6 @@ void sampleMiniBatch(AlignmentLibraryT<FragT>& alnLib,
             // Allow for a non-uniform fragment start position distribution
             double startPosProb = -logRefLength;
             auto hitPos = aln->left();
-            if (useFSPD and burnedIn and hitPos < refLength) {
-              auto& fragStartDist =
-                  fragStartDists[transcript.lengthClassIndex()];
-              startPosProb = fragStartDist(hitPos, refLength, logRefLength);
-            }
 
             double auxProb = startPosProb + logFragProb + aln->logQualProb() +
                              errLike + logAlignCompatProb;

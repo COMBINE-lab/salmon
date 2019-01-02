@@ -222,7 +222,6 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
   bool updateCounts = initialRound;
   double incompatPrior = salmonOpts.incompatPrior;
   bool useReadCompat = incompatPrior != salmon::math::LOG_1;
-  bool useFSPD{salmonOpts.useFSPD};
   bool useFragLengthDist{!salmonOpts.noFragLengthDist};
   bool noFragLenFactor{salmonOpts.noFragLenFactor};
   bool useRankEqClasses{salmonOpts.rankEqClasses};
@@ -542,12 +541,6 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
             fragLengthDist.addVal(fragLength, logForgettingMass);
           }
 
-          if (useFSPD) {
-            auto hitPos = aln.hitPos();
-            auto& fragStartDist = fragStartDists[transcript.lengthClassIndex()];
-            fragStartDist.addVal(hitPos, transcript.RefLength,
-                                 logForgettingMass);
-          }
         }
       } // end normalize
 
@@ -588,13 +581,6 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
 
   numAssignedFragments += localNumAssignedFragments;
   if (numAssignedFragments >= numBurninFrags and !burnedIn) {
-    if (useFSPD) {
-      // update all of the fragment start position
-      // distributions
-      for (auto& fspd : fragStartDists) {
-        fspd.update();
-      }
-    }
     // NOTE: only one thread should succeed here, and that
     // thread will set burnedIn to true.
     readExp.updateTranscriptLengthsAtomic(burnedIn);
@@ -1636,16 +1622,6 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
                    "observed mappings.\n",
                    totalAssignedFragments, salmonOpts.numBurninFrags);
 
-    // If we didn't have a sufficient number of samples for burnin,
-    // then also ignore modeling of the fragment start position
-    // distribution.
-    if (salmonOpts.useFSPD) {
-      salmonOpts.useFSPD = false;
-      jointLog->warn("Since only {} (< {}) fragments were observed, modeling "
-                     "of the fragment start position "
-                     "distribution has been disabled",
-                     totalAssignedFragments, salmonOpts.numBurninFrags);
-    }
   }
 
   if (numObservedFragments <= prevNumObservedFragments) {

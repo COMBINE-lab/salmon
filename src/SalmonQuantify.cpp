@@ -203,7 +203,6 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
   bool updateCounts = initialRound;
   double incompatPrior = salmonOpts.incompatPrior;
   bool useReadCompat = incompatPrior != salmon::math::LOG_1;
-  bool useFSPD{salmonOpts.useFSPD};
   bool useFragLengthDist{!salmonOpts.noFragLengthDist};
   bool noFragLenFactor{salmonOpts.noFragLenFactor};
   bool useRankEqClasses{salmonOpts.rankEqClasses};
@@ -449,21 +448,6 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
           double fragStartLogDenominator{salmon::math::LOG_1};
 
           auto hitPos = aln.hitPos();
-          /** NOTE: no more FSPD
-          if (useFSPD and burnedIn and hitPos < refLength) {
-            auto& fragStartDist = fragStartDists[transcript.lengthClassIndex()];
-            // Get the log(numerator) and log(denominator) for the fragment
-            // start position
-            // probability.
-            bool nonZeroProb = fragStartDist.logNumDenomMass(
-                hitPos, refLength, logRefLength, fragStartLogNumerator,
-                fragStartLogDenominator);
-            // Set the overall probability.
-            startPosProb = (nonZeroProb)
-                               ? fragStartLogNumerator - fragStartLogDenominator
-                               : salmon::math::LOG_0;
-          }
-          **/
 
           // Increment the count of this type of read that we've seen
           ++libTypeCountsPerFrag[aln.libFormat().formatID()];
@@ -685,12 +669,6 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
             fragLengthDist.addVal(fragLength, logForgettingMass);
           }
 
-          if (useFSPD) {
-            auto hitPos = aln.hitPos();
-            auto& fragStartDist = fragStartDists[transcript.lengthClassIndex()];
-            fragStartDist.addVal(hitPos, transcript.RefLength,
-                                 logForgettingMass);
-          }
         }
       } // end normalize
 
@@ -723,13 +701,6 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
 
   numAssignedFragments += localNumAssignedFragments;
   if (numAssignedFragments >= numBurninFrags and !burnedIn) {
-    if (useFSPD) {
-      // update all of the fragment start position
-      // distributions
-      for (auto& fspd : fragStartDists) {
-        fspd.update();
-      }
-    }
     // NOTE: only one thread should succeed here, and that
     // thread will set burnedIn to true.
     readExp.updateTranscriptLengthsAtomic(burnedIn);
@@ -760,7 +731,8 @@ void processReadsQuasi(
      **/
     SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
-    volatile bool& writeToCache) {
+    volatile bool& writeToCache,
+    size_t threadID) {
 
   uint64_t count_fwd = 0, count_bwd = 0;
   // Seed with a real random value, if available
@@ -1364,8 +1336,13 @@ void processReadsQuasi(
 
     prevObservedFrags = numObservedFragments;
     AlnGroupVecRange<QuasiAlignment> hitLists = {structureVec.begin(), structureVec.begin()+rangeSize};
-    /*boost::make_iterator_range(
-      structureVec.begin(), structureVec.begin() + rangeSize);*/
+
+    /*
+    if (cachingMappings) {
+      salmon::utils::cacheMappings(hitLists);
+    }
+    */
+
     processMiniBatch<QuasiAlignment>(
         readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
         transcripts, clusterForest, fragLengthDist, observedBiasParams,
@@ -1406,7 +1383,8 @@ void processReadsQuasi(
      **/
     SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
-    volatile bool& writeToCache) {
+    volatile bool& writeToCache,
+    size_t threadID) {
 
   uint64_t count_fwd = 0, count_bwd = 0;
   // Seed with a real random value, if available
@@ -1837,7 +1815,7 @@ void processReadLibrary(
                         upperBoundHits, index, transcripts,
                         fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
                         salmonOpts, coverageThresh, iomutex, initialRound,
-                        burnedIn, writeToCache);
+                        burnedIn, writeToCache, i);
     };
     threads.emplace_back(threadFun);
   };
@@ -2191,17 +2169,6 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
                    "The effective lengths have been computed using the "
                    "observed mappings.\n",
                    totalAssignedFragments, salmonOpts.numBurninFrags);
-
-    // If we didn't have a sufficient number of samples for burnin,
-    // then also ignore modeling of the fragment start position
-    // distribution.
-    if (salmonOpts.useFSPD) {
-      salmonOpts.useFSPD = false;
-      jointLog->warn("Since only {} (< {}) fragments were observed, modeling "
-                     "of the fragment start position "
-                     "distribution has been disabled",
-                     totalAssignedFragments, salmonOpts.numBurninFrags);
-    }
   }
 
   if (numObservedFragments <= prevNumObservedFragments) {
