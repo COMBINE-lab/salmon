@@ -670,7 +670,7 @@ void processReadsQuasi(
   rapmap::utils::MappingConfig mc;
   mc.consistentHits = consistentHits;
   mc.doChaining = salmonOpts.validateMappings;
-  mc.maxSlack = salmonOpts.consensusSlack;
+  mc.consensusFraction = (salmonOpts.consensusSlack == 0.0) ? 1.0 : (1.0 - salmonOpts.consensusSlack);
 
   rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> leftHCInfo;
   rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> rightHCInfo;

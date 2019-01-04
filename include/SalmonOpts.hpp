@@ -250,7 +250,7 @@ struct SalmonOpts {
 
   // Related to alignment verification
   bool validateMappings;
-  int32_t consensusSlack;
+  float consensusSlack;
   double minScoreFraction;
   int16_t matchScore;
   int16_t mismatchPenalty;

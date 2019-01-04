@@ -90,12 +90,12 @@ namespace salmon {
        "If this flag is passed, quasi-mappings will be validated to ensure that they could give "
        "rise to a reasonable alignment before they are further used for quantification.")
       ("consensusSlack",
-       po::value<int32_t>(&(sopt.consensusSlack))->default_value(salmon::defaults::consensusSlack),
+       po::value<float>(&(sopt.consensusSlack))->default_value(salmon::defaults::consensusSlack),
        "[Quasi-mapping mode only] : The amount of slack allowed in the quasi-mapping consensus "
        "mechanism.  Normally, a transcript must cover all hits to be considered for mapping.  "
-       "If this is set to a value, X, greater than 0, then a transcript can fail to cover up to "
-       "X hits before it is discounted as a mapping candidate.  The default value of this option "
-       "is 1 if --validateMappings is given and 0 otherwise."
+       "If this is set to a fraction, X, greater than 0 (and in [0,1)), then a transcript can fail to cover up to "
+       "(100 * X)% of the hits before it is discounted as a mapping candidate.  The default value of this option "
+       "is 0.2 if --validateMappings is given and 0 otherwise."
        )
       ("minScoreFraction",
        po::value<double>(&sopt.minScoreFraction),

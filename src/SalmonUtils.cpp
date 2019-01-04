@@ -1437,8 +1437,8 @@ std::string getCurrentTimeAsString() {
   }
 
   // Make sure that consensusSlack is not negative
-  if (sopt.consensusSlack < 0) {
-    sopt.jointLog->error("You set consensusSlack as {}, but it must be a non-negative value.", sopt.consensusSlack);
+  if (sopt.consensusSlack < 0 or sopt.consensusSlack >= 1.0) {
+    sopt.jointLog->error("You set consensusSlack as {}, but it must in [0,1).", sopt.consensusSlack);
     return false;
   }
 
@@ -1497,9 +1497,9 @@ std::string getCurrentTimeAsString() {
     // validateMappings
     bool consensusSlackExplicit = !vm["consensusSlack"].defaulted();
     if (!consensusSlackExplicit) {
-      sopt.consensusSlack = 1;
+      sopt.consensusSlack = 0.2;
       sopt.jointLog->info(
-                          "Usage of --validateMappings implies a default consensus slack of 1. "
+                          "Usage of --validateMappings implies a default consensus slack of 0.2. "
                           "Setting consensusSlack to {}.", sopt.consensusSlack);
     }
   }
