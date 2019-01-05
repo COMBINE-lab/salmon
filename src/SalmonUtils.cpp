@@ -1383,6 +1383,12 @@ std::string getCurrentTimeAsString() {
   auto numRight = sopt.mate2ReadFiles.size();
 
   /** Info, not warnings or errors, but informative messages to the user **/
+  if (sopt.mimicBT2 or sopt.mimicStrictBT2) {
+    sopt.jointLog->info("The --mimicBT2 and --mimicStrictBT2 flags imply mapping validation (--validateMappings). "
+                        "Enabling mapping validation.");
+    sopt.validateMappings = true;
+  }
+
 
   // If not in alevin mode, inform the user about validateMappings
   if (!sopt.alevinMode and !sopt.validateMappings) {
@@ -1477,6 +1483,21 @@ std::string getCurrentTimeAsString() {
       sopt.useRangeFactorization = true;
     }
 
+
+    if (sopt.mimicBT2 and sopt.mimicStrictBT2) {
+      sopt.jointLog->error("You passed both the --mimicBT2 and --mimicStrictBT2 parameters.  These are mutually exclusive. "
+                            "Please select only one of these flags.");
+      return false;
+    }
+
+    if (sopt.mimicBT2) {
+      sopt.jointLog->info(
+                          "Usage of --mimicBT2 overrides other settings for mapping validation. Setting "
+                          "Bowtie2-like parameters now.");
+      sopt.discardOrphansQuasi = true;
+      sopt.noDovetail = true;
+    }
+
     if (sopt.mimicStrictBT2) {
       sopt.jointLog->info(
                           "Usage of --mimicStrictBT2 overrides other settings for mapping validation. Setting "
@@ -1491,6 +1512,7 @@ std::string getCurrentTimeAsString() {
       // prohibit gaps, while not overflowing the above condition
       sopt.gapOpenPenalty = 25;
       sopt.gapExtendPenalty = 25;
+      sopt.noDovetail = true;
     }
 
     // If the consensus slack was not set explicitly, then it defaults to 1 with

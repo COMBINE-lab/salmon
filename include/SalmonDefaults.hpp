@@ -27,6 +27,8 @@ namespace defaults {
   constexpr const int16_t gapExtendPenalty{2};
   constexpr const bool hardFilter{false};
   constexpr const bool mimicStrictBT2{false};
+  constexpr const bool mimicBT2{false};
+  constexpr const bool noDovetail{false};
   constexpr const int32_t maxMMPExtension{7};
   constexpr const bool alternativeInitMode{false};
   constexpr const char auxDir[] = "aux_info";

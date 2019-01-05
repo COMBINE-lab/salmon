@@ -129,6 +129,17 @@ namespace salmon {
        po::value<int16_t>(&sopt.gapExtendPenalty)->default_value(salmon::defaults::gapExtendPenalty),
        "[Quasi-mapping mode (w / mapping validation) only] : The value given to a gap extension in an alignment."
        )
+      ("noDovetail",
+       po::bool_switch(&(sopt.noDovetail))->default_value(salmon::defaults::noDovetail),
+       "[Quasi-mapping mode only] : Discard dovetailing mappings."
+       )
+      ("mimicBT2", // horrible flag name, think of something better
+       po::bool_switch(&(sopt.mimicBT2))->default_value(salmon::defaults::mimicBT2),
+       "[Quasi-mapping mode (w / mapping validation) only] : Set flags to mimic parameters similar to "
+       "Bowtie2 with --no-discordant and --no-mixed flags.  This increases disallows dovetailing reads, and "
+       "discards orphans. Note, this does not impose the very strict parameters assumed by RSEM+Bowtie2, "
+       "like gapless alignments.  For that behavior, use the --mimiStrictBT2 flag below."
+       )
       ("mimicStrictBT2", // horrible flag name, think of something better
        po::bool_switch(&(sopt.mimicStrictBT2))->default_value(salmon::defaults::mimicStrictBT2),
        "[Quasi-mapping mode (w / mapping validation) only] : Set flags to mimic the very strict parameters used by "

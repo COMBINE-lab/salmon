@@ -289,6 +289,23 @@ inline AlignmentType getPairedAlignmentType_(bam_seq_t* aln) {
     bool readIsMapped = !(bam_flag(aln) & BAM_FUNMAP);
     bool mateIsMapped = !(bam_flag(aln) & BAM_FMUNMAP);
 
+    /*
+    if (!mateIsMapped and !readIsMapped) {
+      AlignmentType::UnmappedPair;
+    }
+
+    if (readIsMapped) {
+      // NOTE: Assuming Bowtie2 flags, just for testing
+      char* tflag = bam_aux_find(aln, "YT");
+      if (tflag[1] == 'C') { return AlignmentType::MappedConcordantPair; }
+      else if (tflag[1] == 'D') { bam_set_flag(aln, BAM_FUNMAP); bam_set_flag(aln, BAM_FMUNMAP); return AlignmentType::UnmappedPair; }
+      else if (tflag[1] == 'U') { bam_set_flag(aln, BAM_FMUNMAP); return AlignmentType::MappedOrphan; }
+      else { std::cerr << "\n\n tag = " << tflag << ", should not occur\n\n"; }
+    } else {
+      return (!mateIsMapped and !readIsMapped) ? AlignmentType::UnmappedPair : AlignmentType::UnmappedOrphan;
+    }
+    */
+
     if (readIsMapped and mateIsMapped) {
         if ( bam_flag(aln) & BAM_FPROPER_PAIR ) {
             if (bam_ref(aln) == bam_mate_ref(aln)) {

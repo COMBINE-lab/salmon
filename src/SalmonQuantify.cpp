@@ -846,6 +846,8 @@ void processReadsQuasi(
   ksw_extz_t ez;
   memset(&ez, 0, sizeof(ksw_extz_t));
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
+  bool mimicBT2 = salmonOpts.mimicBT2;
+  bool noDovetail = salmonOpts.noDovetail;
   size_t numDropped{0};
 
   AlnCacheMap alnCacheLeft; alnCacheLeft.reserve(32);
@@ -1055,11 +1057,14 @@ void processReadsQuasi(
               if ( (s1 - L1) < minLeft or (s2 - L2) < minRight ) {
               */
               // throw away dovetailed reads
-              if (mimicStrictBT2) {
+              // if (mimicStrictBT2) {
+              if (h.fwd != h.mateIsFwd and noDovetail) {
+                /*
                 if (h.fwd == h.mateIsFwd) {
                   s1 = std::numeric_limits<int32_t>::min();
                   s2 = std::numeric_limits<int32_t>::min();
-                } else if (h.fwd and (h.pos > h.matePos)) {
+                }*/
+                if (h.fwd and (h.pos > h.matePos)) {
                   s1 = std::numeric_limits<int32_t>::min();
                   s2 = std::numeric_limits<int32_t>::min();
                 } else if (h.mateIsFwd and (h.matePos > h.pos)) {
@@ -1142,6 +1147,20 @@ void processReadsQuasi(
           } else {
             jointHitGroup.clearAlignments();
           }
+        } else if (noDovetail) {
+          jointHits.erase(
+                          std::remove_if(jointHits.begin(), jointHits.end(),
+                                         [](const QuasiAlignment& h) -> bool {
+                                           if (h.fwd != h.mateIsFwd) {
+                                             if (h.fwd and (h.pos > h.matePos)) {
+                                               return true;
+                                             } else if (h.mateIsFwd and (h.matePos > h.pos)) {
+                                               return true;
+                                             }
+                                           }
+                                           return false;
+                                         }),
+                          jointHits.end());
         }
 
         bool needBiasSample = salmonOpts.biasCorrect;

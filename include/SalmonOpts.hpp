@@ -257,6 +257,8 @@ struct SalmonOpts {
   int16_t gapOpenPenalty;
   int16_t gapExtendPenalty;
   bool mimicStrictBT2;
+  bool mimicBT2;
+  bool noDovetail;
   bool hardFilter;
   int32_t maxMMPExtension;
 
