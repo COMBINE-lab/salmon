@@ -9,6 +9,8 @@
 namespace selective_alignment {
   namespace utils {
 
+    enum class AlignmentPolicy : uint8_t { DEFAULT, BT2, BT2_STRICT };
+
     /// Get alignment score
     namespace salmon {
       namespace mapping {
@@ -45,7 +47,7 @@ inline int32_t getAlnScore(
                            int32_t maxScore,
                            rapmap::utils::ChainStatus chainStat,
                            bool multiMapping, // was there > 1 hit for this read
-                           bool mimicStrictBT2,
+                           AlignmentPolicy ap,
                            uint32_t buf,
                            AlnCacheMap& alnCache) {
   // If this was a perfect match, don't bother to align or compute the score
@@ -68,10 +70,20 @@ inline int32_t getAlnScore(
   // TODO : Determine what is the most "appropriate" penalty for
   // an overhang (based on the scoring function).
   bool invalidStart = (pos < 0);
+  bool invalidEnd = (pos + rlen >= tlen);
   if (invalidStart) { rptr += -pos; rlen += pos; pos = 0; }
 
   // if we are trying to mimic Bowtie2 with RSEM params
-  if (invalidStart and mimicStrictBT2) { return s; }
+  if (invalidStart or invalidEnd) {
+    switch (ap) {
+    case AlignmentPolicy::BT2:
+    case AlignmentPolicy::BT2_STRICT:
+      return s;
+    case AlignmentPolicy::DEFAULT:
+    default:
+      break;
+    }
+  }
 
   if (pos < tlen) {
     bool doUngapped{(!invalidStart) and (chainStat == rapmap::utils::ChainStatus::UNGAPPED)};

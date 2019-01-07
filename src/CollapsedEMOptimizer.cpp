@@ -754,7 +754,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   for (size_t i = 0; i < transcripts.size(); ++i) {
     auto& txp = transcripts[i];
     alphas[i] = txp.projectedCounts;
-
+    totalWeight += alphas[i];
     effLens(i) = useEffectiveLengths
                      ? std::exp(txp.getCachedLogEffectiveLength())
                      : txp.RefLength;
@@ -766,7 +766,6 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
     double uniqueCount = static_cast<double>(txp.uniqueCount() + 0.5);
     auto wi = uniqueCount * 1e-3 * effLens(i);
     alphasPrime[i] = wi;
-    totalWeight += wi;
     ++numActive;
     totalLen += effLens(i);
   }

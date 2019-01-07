@@ -723,6 +723,17 @@ void processReadsQuasi(
   aligner.config() = config;
   ksw_extz_t ez;
   memset(&ez, 0, sizeof(ksw_extz_t));
+  bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
+  bool mimicBT2 = salmonOpts.mimicBT2;
+  bool noDovetail = salmonOpts.noDovetail;
+
+  auto ap{selective_alignment::utils::AlignmentPolicy::DEFAULT};
+  if (mimicBT2) {
+    ap = selective_alignment::utils::AlignmentPolicy::BT2;
+  } else if (mimicStrictBT2) {
+    ap = selective_alignment::utils::AlignmentPolicy::BT2_STRICT;
+  }
+
   size_t numDropped{0};
 
   //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
@@ -993,7 +1004,6 @@ void processReadsQuasi(
           int32_t maxReadScore{a * static_cast<int32_t>(sub_seq.length())};
 
           bool multiMapping{jointHits.size() > 1};
-          constexpr bool mimicStrictBT2{false}; // for now, always false in alevin
 
           for (auto& h : jointHits) {
             int32_t score{std::numeric_limits<int32_t>::min()};
@@ -1014,7 +1024,7 @@ void processReadsQuasi(
             int32_t s =
               selective_alignment::utils::getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, a, b,
                                                       maxReadScore, h.chainStatus.getLeft(),
-                                                      multiMapping, mimicStrictBT2, buf, alnCache);
+                                                      multiMapping, ap, buf, alnCache);
             if (s < (optFrac * maxReadScore)) {
               score = std::numeric_limits<decltype(score)>::min();
             } else {
