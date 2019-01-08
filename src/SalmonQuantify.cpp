@@ -926,6 +926,20 @@ void processReadsQuasi(
                                                 MateStatus::PAIRED_END_RIGHT,
                                                 rightHCInfo, rightHits);
 
+      /*
+      std::cerr << "lh : " << lh << "\n";
+      std::cerr << "rh : " << rh << "\n";
+      std::cerr << "lh size : " << leftHits.size() << "\n";
+      std::cerr << "rh size : " << rightHits.size() << "\n";
+      if (leftHits.size() >= 1 and rightHits.size() >= 1) {
+        for (auto& lhit : leftHits) {
+          std::cerr << "left hit : " << transcripts[lhit.tid].RefName << ", " << lhit.fwd << ", " << lhit.pos << "\n";
+        }
+        for (auto& lhit : rightHits ) {
+          std::cerr << "right hit : " << transcripts[lhit.tid].RefName << ", " << lhit.fwd << ", " << lhit.pos << "\n";
+        }
+      }
+      */
       // Consider a read as too short if both ends are too short
       if (tooShortLeft and tooShortRight) {
         ++shortFragStats.numTooShort;

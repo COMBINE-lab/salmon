@@ -5,6 +5,7 @@
 #include "ksw2pp/KSW2Aligner.hpp"
 #include "metro/metrohash64.h"
 #include "tsl/hopscotch_map.h"
+//#include "edlib.h"
 
 namespace selective_alignment {
   namespace utils {
@@ -119,6 +120,16 @@ inline int32_t getAlnScore(
         int32_t alnLen = rlen < tlen1s ? rlen : tlen1s;
         s = ungappedAln(tseq1, rptr, alnLen);
       } else {
+        /*
+        auto startBuf = std::min(pos, static_cast<int32_t>(buf));
+        int32_t bpos = pos - startBuf;
+        char* tseqTemp = tseq + bpos;
+        uint32_t tlenTemp = tlen1 + startBuf;
+        EdlibAlignResult result = edlibAlign(rptr, rlen, tseqTemp, tlenTemp,
+                                             edlibNewAlignConfig(-1, EDLIB_MODE_HW, EDLIB_TASK_LOC));
+        auto spos = result.startLocations[0];
+        tseq1 = tseq + bpos + spos;
+        */
         aligner(rptr, rlen, tseq1, tlen1, &ez, ksw2pp::EnumToType<ksw2pp::KSW2AlignmentType::EXTENSION>());
         s = std::max(ez.mqe, ez.mte);
       }
