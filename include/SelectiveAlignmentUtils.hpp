@@ -5,7 +5,7 @@
 #include "ksw2pp/KSW2Aligner.hpp"
 #include "metro/metrohash64.h"
 #include "tsl/hopscotch_map.h"
-//#include "edlib.h"
+#include "edlib.h"
 
 namespace selective_alignment {
   namespace utils {
@@ -37,6 +37,171 @@ namespace selective_alignment {
     using AlnCacheMap = tsl::hopscotch_map<uint64_t, int32_t, salmon::hashing::PassthroughHash>;
     //tsl::robin_map<uint64_t, int32_t, salmon::hashing::PassthroughHash>;
     //std::unordered_map<uint64_t, int32_t, salmon::hashing::PassthroughHash>;
+
+
+    inline bool recoverOrphans(std::string& leftRead,
+                               std::string& rightRead,
+                               std::string& rc1,
+                               std::string& rc2,
+                               const std::vector<Transcript>& transcripts,
+                               const std::vector<rapmap::utils::QuasiAlignment>& leftHits,
+                               const std::vector<rapmap::utils::QuasiAlignment>& rightHits,
+                               std::vector<rapmap::utils::QuasiAlignment>& jointHits) {
+      using QuasiAlignment = rapmap::utils::QuasiAlignment;
+      auto* r1 = leftRead.data();
+      auto* r2 = rightRead.data();
+      auto l1 = static_cast<int32_t>(leftRead.length());
+      auto l2 = static_cast<int32_t>(rightRead.length());
+      // We compute the reverse complements below only if we
+      // need them and don't have them.
+      char* r1rc = nullptr;
+      char* r2rc = nullptr;
+
+      const char* windowSeq = nullptr;
+      int32_t windowLength = -1;
+
+      int32_t maxDistRight = l2 / 4;
+      int32_t maxDistLeft = l1 / 4;
+      constexpr const int32_t signedZero{0};
+      int32_t lreadLen = l1;
+      int32_t rreadLen = l2;
+
+      for (auto && lh : leftHits) {
+        auto txpID = lh.tid;
+        auto& txp = transcripts[lh.tid];
+        const char* tseq = txp.Sequence();
+
+        int32_t startPos = -1;
+        const char* rptr = r2;
+        auto rlen = l2;
+        auto maxDist = maxDistRight;
+
+        auto leftChainStatus = lh.chainStatus.getLeft();
+        auto rightChainStatus = rapmap::utils::ChainStatus::REGULAR;
+
+        int32_t lpos{lh.allPositions.front()};
+        int32_t rpos{-1};
+
+        bool lfwd = lh.fwd;
+        bool rfwd = !lfwd;
+
+        // if this hit is forward, look downstream, else upstream
+        if ( lh.fwd ) {
+          if (!r2rc){
+            rapmap::utils::reverseRead(rightRead, rc2);
+            r2rc = const_cast<char*>(rc2.data());
+          }
+          rptr = r2rc;
+          startPos = std::max(signedZero, static_cast<int32_t>(lpos));
+          windowLength = std::min(1000, static_cast<int32_t>(txp.RefLength - startPos));
+        } else {
+          rptr = r2;
+          int32_t endPos = std::min(static_cast<int32_t>(txp.RefLength), static_cast<int32_t>(lpos) + l1);
+          startPos = std::max(signedZero,  endPos - 1000);
+          windowLength = std::min(1000, endPos);
+        }
+        windowSeq = tseq + startPos;
+
+        EdlibAlignResult result = edlibAlign(rptr, rlen, windowSeq, windowLength,
+                                             edlibNewAlignConfig(maxDist, EDLIB_MODE_HW, EDLIB_TASK_DISTANCE));
+        if (result.editDistance > -1) {
+          rpos = startPos + result.endLocations[0] - l2;
+          // If we consider only a single position per transcript
+          int32_t startRead1 = std::max(lpos, signedZero);
+          int32_t startRead2 = std::max(rpos, signedZero);
+          bool read1First{(startRead1 < startRead2)};
+          int32_t fragStartPos = read1First ? startRead1 : startRead2;
+          int32_t fragEndPos = read1First ?
+            (startRead2 + l2) : (startRead1 + l1);
+          uint32_t fragLen = fragEndPos - fragStartPos;
+          jointHits.emplace_back(txpID,
+                                 lpos,
+                                 lfwd,
+                                 lreadLen,
+                                 fragLen, true);
+          // Fill in the mate info
+          auto& qaln = jointHits.back();
+          qaln.mateLen = rlen;
+          qaln.matePos = rpos;
+          qaln.mateIsFwd = rfwd;
+          jointHits.back().mateStatus = rapmap::utils::MateStatus::PAIRED_END_PAIRED;
+          jointHits.back().chainStatus = rapmap::utils::FragmentChainStatus(leftChainStatus, rightChainStatus);
+        }
+        edlibFreeAlignResult(result);
+      }
+
+      for (auto && rh : rightHits) {
+        auto txpID = rh.tid;
+        auto& txp = transcripts[rh.tid];
+        const char* tseq = txp.Sequence();
+
+        int32_t startPos = -1;
+        const char* rptr = r1;
+        auto rlen = l1;
+        auto maxDist = maxDistLeft;
+
+        auto leftChainStatus = rapmap::utils::ChainStatus::REGULAR;
+        auto rightChainStatus = rh.chainStatus.getRight();
+
+        int32_t lpos{-1};
+        int32_t rpos{rh.allPositions.front()};
+
+        bool lfwd = !rh.fwd;
+        bool rfwd = rh.fwd;
+
+        // if this hit is forward, look downstream, else upstream
+        if ( rh.fwd ) {
+          if (!r1rc){
+            rapmap::utils::reverseRead(leftRead, rc1);
+            r1rc = const_cast<char*>(rc1.data());
+          }
+          rptr = r1rc;
+          startPos = std::max(signedZero, static_cast<int32_t>(rpos));
+          windowLength = std::min(1000, static_cast<int32_t>(txp.RefLength - startPos));
+        } else {
+          rptr = r1;
+          int32_t endPos = std::min(static_cast<int32_t>(txp.RefLength), static_cast<int32_t>(rpos) + l2);
+          startPos = std::max(signedZero,  endPos - 1000);
+          windowLength = std::min(1000, endPos);
+        }
+        windowSeq = tseq + startPos;
+
+        EdlibAlignResult result = edlibAlign(rptr, rlen, windowSeq, windowLength,
+                                             edlibNewAlignConfig(maxDist, EDLIB_MODE_HW, EDLIB_TASK_DISTANCE));
+        if (result.editDistance > -1) {
+          lpos = startPos + result.endLocations[0] - l1;
+          // If we consider only a single position per transcript
+          int32_t startRead1 = std::max(lpos, signedZero);
+          int32_t startRead2 = std::max(rpos, signedZero);
+          bool read1First{(startRead1 < startRead2)};
+          int32_t fragStartPos = read1First ? startRead1 : startRead2;
+          int32_t fragEndPos = read1First ?
+            (startRead2 + l2) : (startRead1 + l1);
+          uint32_t fragLen = fragEndPos - fragStartPos;
+          jointHits.emplace_back(txpID,
+                                 lpos,
+                                 lfwd,
+                                 lreadLen,
+                                 fragLen, true);
+          // Fill in the mate info
+          auto& qaln = jointHits.back();
+          qaln.mateLen = rlen;
+          qaln.matePos = rpos;
+          qaln.mateIsFwd = rfwd;
+          jointHits.back().mateStatus = rapmap::utils::MateStatus::PAIRED_END_PAIRED;
+          jointHits.back().chainStatus = rapmap::utils::FragmentChainStatus(leftChainStatus, rightChainStatus);
+        }
+        edlibFreeAlignResult(result);
+      }
+
+      std::sort(jointHits.begin(), jointHits.end(), [](const QuasiAlignment& a, const QuasiAlignment& b) {
+          return a.tid < b.tid;
+        });
+
+
+      return true;
+    }
+
 
 inline int32_t getAlnScore(
                            ksw2pp::KSW2Aligner& aligner,

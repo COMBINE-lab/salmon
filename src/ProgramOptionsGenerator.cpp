@@ -133,6 +133,11 @@ namespace salmon {
        po::bool_switch(&(sopt.noDovetail))->default_value(salmon::defaults::noDovetail),
        "[Quasi-mapping mode only] : Discard dovetailing mappings."
        )
+      ("recoverOrphans",
+       po::bool_switch(&(sopt.recoverOrphans))->default_value(salmon::defaults::recoverOrphans),
+       "[Quasi-mapping mode only] : Attempt to recover the mates of orphaned reads. This uses edlib for "
+       "orphan recovery, and so introduces some computational overhead, but it can improve sensitivity."
+       )
       ("mimicBT2", // horrible flag name, think of something better
        po::bool_switch(&(sopt.mimicBT2))->default_value(salmon::defaults::mimicBT2),
        "[Quasi-mapping mode (w / mapping validation) only] : Set flags to mimic parameters similar to "

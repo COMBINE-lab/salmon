@@ -118,6 +118,7 @@
 #include "metro/metrohash64.h"
 #include "tsl/hopscotch_map.h"
 #include "SelectiveAlignmentUtils.hpp"
+#include "edlib.h"
 
 /****** QUASI MAPPING DECLARATIONS *********/
 using MateStatus = rapmap::utils::MateStatus;
@@ -850,6 +851,7 @@ void processReadsQuasi(
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   bool mimicBT2 = salmonOpts.mimicBT2;
   bool noDovetail = salmonOpts.noDovetail;
+  size_t numOrphansRescued{0};
 
   auto ap{selective_alignment::utils::AlignmentPolicy::DEFAULT};
   if (mimicBT2) {
@@ -953,10 +955,33 @@ void processReadsQuasi(
                                             readLenLeft, maxNumHits,
                                             tooManyHits, hctr);
         } else {
+          /*
+          if (salmonOpts.validateMappings) {
+            lh = rh = true;
+          }
+          */
           rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, leftHits, rightHits,
                                                  jointHits,
                                                  mc,
                                                  readLenLeft, maxNumHits, tooManyHits, hctr);
+          // IMPORTANT NOTE : Orphan recovery currently assumes a
+          // library type where mates are on separate strands
+          // so (IU, ISF, ISR).  If the library type is different
+          // we should either raise a warning / error, or implement
+          // library-type generic recovery.
+          if (jointHits.empty() and salmonOpts.recoverOrphans) {
+            if (leftHits.size() + rightHits.size() > 0) {
+              selective_alignment::utils::recoverOrphans(rp.first.seq,
+                                                         rp.second.seq,
+                                                         rc1,
+                                                         rc2,
+                                                         transcripts,
+                                                         leftHits,
+                                                         rightHits,
+                                                         jointHits);
+              if (!jointHits.empty()) { numOrphansRescued++; }
+            }
+          }
         }
 
         if (initialRound) {
@@ -1419,6 +1444,9 @@ void processReadsQuasi(
                               "{0:.2f}\% zero probability fragments",
                               maxZeroFrac);
   }
+
+  //salmonOpts.jointLog->info("Number of orphans rescued in this thread {}",
+  //                          numOrphansRescued);
 
   //salmonOpts.jointLog->info("Score filtering dropped {} total mappings", numDropped);
   readExp.updateShortFrags(shortFragStats);

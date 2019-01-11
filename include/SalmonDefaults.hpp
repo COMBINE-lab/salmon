@@ -29,6 +29,7 @@ namespace defaults {
   constexpr const bool mimicStrictBT2{false};
   constexpr const bool mimicBT2{false};
   constexpr const bool noDovetail{false};
+  constexpr const bool recoverOrphans{false};
   constexpr const int32_t maxMMPExtension{7};
   constexpr const bool alternativeInitMode{false};
   constexpr const char auxDir[] = "aux_info";

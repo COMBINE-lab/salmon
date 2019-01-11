@@ -1483,39 +1483,7 @@ std::string getCurrentTimeAsString() {
       sopt.useRangeFactorization = true;
     }
 
-
-    if (sopt.mimicBT2 and sopt.mimicStrictBT2) {
-      sopt.jointLog->error("You passed both the --mimicBT2 and --mimicStrictBT2 parameters.  These are mutually exclusive. "
-                            "Please select only one of these flags.");
-      return false;
-    }
-
-    if (sopt.mimicBT2) {
-      sopt.jointLog->info(
-                          "Usage of --mimicBT2 overrides other settings for mapping validation. Setting "
-                          "Bowtie2-like parameters now.");
-      sopt.discardOrphansQuasi = true;
-      sopt.noDovetail = true;
-    }
-
-    if (sopt.mimicStrictBT2) {
-      sopt.jointLog->info(
-                          "Usage of --mimicStrictBT2 overrides other settings for mapping validation. Setting "
-                          "strict RSEM+Bowtie2-like parameters now.");
-      sopt.discardOrphansQuasi = true;
-      sopt.minScoreFraction = 0.8;
-      sopt.matchScore = 1;
-      sopt.mismatchPenalty = 0;
-      // NOTE: as a limitation of ksw2, we can't have
-      // (gapOpenPenalty + gapExtendPenalty) * 2 + matchScore < numeric_limits<int8_t>::max()
-      // these parameters below are sufficiently large penalties to
-      // prohibit gaps, while not overflowing the above condition
-      sopt.gapOpenPenalty = 25;
-      sopt.gapExtendPenalty = 25;
-      sopt.noDovetail = true;
-    }
-
-    // If the consensus slack was not set explicitly, then it defaults to 1 with
+    // If the consensus slack was not set explicitly, then it defaults to 0.2 with
     // validateMappings
     bool consensusSlackExplicit = !vm["consensusSlack"].defaulted();
     if (!consensusSlackExplicit) {
@@ -1523,6 +1491,49 @@ std::string getCurrentTimeAsString() {
       sopt.jointLog->info(
                           "Usage of --validateMappings implies a default consensus slack of 0.2. "
                           "Setting consensusSlack to {}.", sopt.consensusSlack);
+    }
+
+    if (sopt.mimicBT2 and sopt.mimicStrictBT2) {
+      sopt.jointLog->error("You passed both the --mimicBT2 and --mimicStrictBT2 parameters.  These are mutually exclusive. "
+                            "Please select only one of these flags.");
+      return false;
+    }
+
+    if (sopt.mimicBT2 or sopt.mimicStrictBT2) {
+      sopt.jointLog->info("The --mimicBT2 and --mimicStrictBT2 flags imply orphan recovery (--recoverOrphans). "
+                          "Enabling orphan recovery.");
+      sopt.recoverOrphans = true;
+
+      sopt.maxReadOccs = 1000;
+      sopt.jointLog->info("The --mimicBT2 and --mimicStrictBT2 flags increases maxReadOccs to {}.", sopt.maxReadOccs);
+
+      sopt.consensusSlack = 0.35;
+      sopt.jointLog->info("The --mimicBT2 and --mimicStrictBT2 flags increases consensusSlack to {}.", sopt.consensusSlack);
+
+      if (sopt.mimicBT2) {
+        sopt.jointLog->info(
+                            "Usage of --mimicBT2 overrides other settings for mapping validation. Setting "
+                            "Bowtie2-like parameters now.");
+        sopt.discardOrphansQuasi = true;
+        sopt.noDovetail = true;
+      }
+
+      if (sopt.mimicStrictBT2) {
+        sopt.jointLog->info(
+                            "Usage of --mimicStrictBT2 overrides other settings for mapping validation. Setting "
+                            "strict RSEM+Bowtie2-like parameters now.");
+        sopt.discardOrphansQuasi = true;
+        sopt.noDovetail = true;
+        sopt.minScoreFraction = 0.8;
+        sopt.matchScore = 1;
+        sopt.mismatchPenalty = 0;
+        // NOTE: as a limitation of ksw2, we can't have
+        // (gapOpenPenalty + gapExtendPenalty) * 2 + matchScore < numeric_limits<int8_t>::max()
+        // these parameters below are sufficiently large penalties to
+        // prohibit gaps, while not overflowing the above condition
+        sopt.gapOpenPenalty = 25;
+        sopt.gapExtendPenalty = 25;
+      }
     }
   }
   return true;
