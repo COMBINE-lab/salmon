@@ -323,6 +323,9 @@ namespace salmon {
       (
        "tgMap", po::value<std::string>(), "transcript to gene map tsv file")
       (
+       "hash", po::value<std::string>(), "Secondary input point for Alevin "
+       "using Big freaking Hash (bfh.txt) file. Works Only with --chromium")
+      (
        "dropseq", po::bool_switch()->default_value(alevin::defaults::isDropseq),
        "Use DropSeq Single Cell protocol for the library")
       (

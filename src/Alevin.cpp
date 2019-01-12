@@ -87,6 +87,10 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
 
+template <typename ProtocolT>
+int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
+                       CFreqMapT& freqCounter);
+
 //colors for progress monitoring
 const char RESET_COLOR[] = "\x1b[0m";
 char green[] = "\x1b[30m";
@@ -908,17 +912,28 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
 
   size_t numLowConfidentBarcode;
 
-  aopt.jointLog->info("Processing barcodes files (if Present) \n\n ");
+  if(boost::filesystem::exists(aopt.bfhFile)) {
+    if (aopt.noQuant) {
+      aopt.jointLog->error("Can't use --noQuant with hashMode (--hash)");
+      aopt.jointLog->flush();
+      exit(1);
+    }
 
-  processBarcodes(barcodeFiles,
-                  readFiles,
-                  aopt,
-                  barcodeSoftMap,
-                  trueBarcodes,
-                  freqCounter,
-                  numLowConfidentBarcode);
+    salmonHashQuantify(aopt, freqCounter);
+    aopt.noQuant = true;
 
-  aopt.jointLog->flush();
+    aopt.jointLog->info("Done Processing");
+  } else {
+    aopt.jointLog->info("Processing barcodes files (if Present) \n\n ");
+    processBarcodes(barcodeFiles,
+                    readFiles,
+                    aopt,
+                    barcodeSoftMap,
+                    trueBarcodes,
+                    freqCounter,
+                    numLowConfidentBarcode);
+    aopt.jointLog->flush();
+  }
 
   if(!aopt.noQuant){
     aopt.jointLog->info("Done with Barcode Processing; Moving to Quantify\n");
