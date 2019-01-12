@@ -1665,13 +1665,13 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
 
 template <typename ProtocolT>
 void alevinOptimize( std::vector<std::string>& trueBarcodesVec,
-                     ReadExperimentT& experiment,
+                     std::vector<Transcript>& transcripts,
+                     EqMapT& fullEqMap,
                      AlevinOpts<ProtocolT>& aopt,
                      GZipWriter& gzw,
                      CFreqMapT& freqCounter,
                      size_t numLowConfidentBarcode) {
   std::vector<uint32_t> umiCount(trueBarcodesVec.size());
-  auto& fullEqMap = experiment.equivalenceClassBuilder().eqMap();
   for(auto& eq: fullEqMap.lock_table()){
     auto& bg = eq.second.barcodeGroup;
     for(auto& bcIt: bg){
@@ -1703,7 +1703,9 @@ void alevinOptimize( std::vector<std::string>& trueBarcodesVec,
     aopt.jointLog->flush();
 
     CollapsedCellOptimizer optimizer;
-    bool optSuccess = optimizer.optimize(experiment, aopt,
+    bool optSuccess = optimizer.optimize(fullEqMap,
+                                         aopt,
+                                         transcripts,
                                          gzw,
                                          trueBarcodesVec,
                                          umiCount,
@@ -1855,7 +1857,8 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
                    aopt.protocol.umiLength, trueBarcodesVec);
     }
 
-    alevinOptimize(trueBarcodesVec, experiment,
+    alevinOptimize(trueBarcodesVec, experiment.transcripts(),
+                   experiment.equivalenceClassBuilder().eqMap(),
                    aopt, gzw, freqCounter,
                    numLowConfidentBarcode);
     jointLog->flush();
