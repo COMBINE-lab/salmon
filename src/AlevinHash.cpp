@@ -1,9 +1,11 @@
 #include <unordered_set>
+#include <unordered_map>
 
+#include "BarcodeGroup.hpp"
 #include "AlevinOpts.hpp"
 #include "SingleCellProtocols.hpp"
-#include "BarcodeGroup.hpp"
 #include "GZipWriter.hpp"
+#include "TranscriptGroup.hpp"
 #include "CollapsedCellOptimizer.hpp"
 
 namespace apt = alevin::protocols;
@@ -27,10 +29,6 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
   bfs::path eqFilePath = aopt.bfhFile;
   std::ifstream equivFile(eqFilePath.string());
 
-  //  auto& transcripts = experiment.transcripts();
-  //  const auto& eqVec =
-  //    experiment.equivalenceClassBuilder().eqMap().lock_table();
-
   size_t numTxps, numBcs, numEqclasses;
 
   // Number of transcripts
@@ -42,6 +40,7 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
   // Number of equivalence classes
   equivFile >> numEqclasses;
 
+  std::vector<Transcript> transcripts;
   std::vector<std::string> txpNames (numTxps);
   for (size_t i=0; i<numTxps; i++) {
     equivFile >> txpNames[i] ;
@@ -58,6 +57,10 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
     }
   }
 
+  EqMapT countMap;
+  countMap.set_max_resize_threads(1);
+  countMap.reserve(1000000);
+
   alevin::types::AlevinUMIKmer umiObj;
   //printing on screen progress
   const char RESET_COLOR[] = "\x1b[0m";
@@ -68,24 +71,24 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
   std::cerr<<std::endl;
 
   for (size_t i=0; i<numEqclasses; i++) {
-    uint64_t count;
+    uint32_t count;
     size_t labelSize ;
     equivFile >> labelSize;
 
     std::vector<uint32_t> txps(labelSize);
     for (auto& tid : txps) { equivFile >> tid; }
+    auto txGroup = TranscriptGroup (txps);
 
     size_t bgroupSize;
     equivFile >> count >> bgroupSize;
-    SparseBarcodeMapType bgroup;
 
+    uint32_t countValidator {0};
     for (size_t j=0; j<bgroupSize; j++){
       uint32_t bc;
+      std::string bcName = bcNames[bc];
       size_t ugroupSize;
 
       equivFile >> bc >> ugroupSize;
-      auto& ugroup = bgroup[bc];
-
       for (size_t k=0; k<ugroupSize; k++){
         std::string umiSeq;
         uint64_t umiIndex;
@@ -101,9 +104,30 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
           exit(1);
         }
 
-        ugroup[umiIndex] = umiCount;
+        auto upfn = [bc, umiIndex, umiCount](SCTGValue& x) -> void {
+          // update the count
+          x.count += umiCount;
+          x.updateBarcodeGroup(bc, umiIndex, umiCount);
+        };
+
+        countValidator += umiCount;
+        std::vector<double> emptyWeights;
+        SCTGValue value(emptyWeights, umiCount,
+                        bc, umiIndex, umiCount);
+        countMap.upsert(txGroup, upfn, value);
+
+        //freqCounter[bcName] += umiCount;
       }// end-ugroup for
     }//end-bgroup for
+
+    if (count != countValidator){
+      aopt.jointLog->error("BFH eqclass count mismatch"
+                           "{} Orignial, validator {} "
+                           "Eqclass number {}",
+                           count, countValidator, i);
+      aopt.jointLog->flush();
+      exit(1);
+    }
 
     double completionFrac = i*100.0/numEqclasses;
     uint32_t percentCompletion {static_cast<uint32_t>(completionFrac)};
@@ -111,10 +135,13 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
       fmt::print(stderr, "\r{}Done Reading : {}{}%{}",
                  green, red, percentCompletion, RESET_COLOR);
     }
-  }
+  }//end-eqclass for
   std::cerr<<std::endl;
-
   equivFile.close();
+
+  GZipWriter gzw(aopt.outputDirectory, aopt.jointLog);
+  alevinOptimize(bcNames, transcripts, countMap,
+                 aopt, gzw, freqCounter, 0);
   return 0;
 }
 

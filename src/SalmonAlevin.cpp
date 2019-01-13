@@ -1733,7 +1733,6 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
                 TrueBcsT& trueBarcodes,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter, size_t numLowConfidentBarcode){
-
   using std::cerr;
   using std::vector;
   using std::string;
