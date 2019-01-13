@@ -29,8 +29,8 @@ Salmon.cpp
 BuildSalmonIndex.cpp
 Graph.cpp
 DedupUMI.cpp
-AlevinHash.cpp
 Alevin.cpp
+AlevinHash.cpp
 SalmonAlevin.cpp
 WhiteList.cpp
 SalmonQuantify.cpp

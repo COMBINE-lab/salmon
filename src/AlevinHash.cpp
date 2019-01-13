@@ -1,24 +1,4 @@
-#include <unordered_set>
-#include <unordered_map>
-
-#include "BarcodeGroup.hpp"
-#include "AlevinOpts.hpp"
-#include "SingleCellProtocols.hpp"
-#include "GZipWriter.hpp"
-#include "TranscriptGroup.hpp"
-#include "CollapsedCellOptimizer.hpp"
-
-namespace apt = alevin::protocols;
-namespace bfs = boost::filesystem;
-
-template <typename ProtocolT>
-void alevinOptimize( std::vector<std::string>& trueBarcodesVec,
-                     std::vector<Transcript>& transcripts,
-                     EqMapT& fullEqMap,
-                     AlevinOpts<ProtocolT>& aopt,
-                     GZipWriter& gzw,
-                     CFreqMapT& freqCounter,
-                     size_t numLowConfidentBarcode);
+#include "AlevinHash.hpp"
 
 template <typename ProtocolT>
 int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
@@ -116,7 +96,7 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
                         bc, umiIndex, umiCount);
         countMap.upsert(txGroup, upfn, value);
 
-        //freqCounter[bcName] += umiCount;
+        freqCounter[bcName] += umiCount;
       }// end-ugroup for
     }//end-bgroup for
 
@@ -140,8 +120,8 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
   equivFile.close();
 
   GZipWriter gzw(aopt.outputDirectory, aopt.jointLog);
-  alevinOptimize(bcNames, transcripts, countMap,
-                 aopt, gzw, freqCounter, 0);
+  //alevinOptimize(bcNames, transcripts, countMap,
+  //               aopt, gzw, freqCounter, 0);
   return 0;
 }
 

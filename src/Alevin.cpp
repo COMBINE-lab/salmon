@@ -55,6 +55,7 @@
 //alevin include
 #include "Filter.hpp"
 #include "AlevinOpts.hpp"
+#include "AlevinHash.hpp"
 #include "AlevinUtils.hpp"
 #include "BarcodeModel.hpp"
 #include "SingleCellProtocols.hpp"
@@ -86,10 +87,6 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
-
-template <typename ProtocolT>
-int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
-                       CFreqMapT& freqCounter);
 
 //colors for progress monitoring
 const char RESET_COLOR[] = "\x1b[0m";
