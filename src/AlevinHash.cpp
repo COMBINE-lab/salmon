@@ -1,7 +1,89 @@
 #include "AlevinHash.hpp"
 
+void loadIndexGetTranscripts(bfs::path& indexDirectory,
+                             std::vector<Transcript>& transcripts,
+                             std::shared_ptr<spdlog::logger>& jointLog) {
+  // ==== Figure out the index type
+  boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
+  SalmonIndexVersionInfo versionInfo;
+  versionInfo.load(versionPath);
+  if (versionInfo.indexVersion() == 0) {
+    jointLog->error("Error: The index version file  {}"
+                    " doesn't seem to exist.  "
+                    "Please try re-building the salmon index.",
+                    versionPath.string());
+    jointLog->flush();
+    exit(1);
+  }
+
+  // Check index version compatibility here
+  auto indexType = versionInfo.indexType();
+  // ==== Figure out the index type
+
+  SalmonIndex salmonIndex(jointLog, indexType);
+  salmonIndex.load(indexDirectory);
+
+  // Now we'll have either an FMD-based index or a QUASI index
+  // dispatch on the correct type.
+  switch (salmonIndex.indexType()) {
+  case SalmonIndexType::QUASI:
+    if (salmonIndex.is64BitQuasi()) {
+      jointLog->error("Error: This version of salmon does not support "
+                      "the index mode.");
+      jointLog->flush();
+      exit(1);
+
+      //if (salmonIndex.isPerfectHashQuasi()) {
+      //  loadTranscriptsFromQuasi(salmonIndex_->quasiIndexPerfectHash64(),
+      //                           sopt);
+      //} else {
+      //  loadTranscriptsFromQuasi(salmonIndex_->quasiIndex64(), sopt);
+      //}
+    } else {
+      if (salmonIndex.isPerfectHashQuasi()) {
+        auto* index = salmonIndex.quasiIndexPerfectHash32();
+        size_t numRecords = index->txpNames.size();
+        jointLog->info("Index contained {:n} targets", numRecords);
+
+        double alpha = 0.005;
+        for (auto i : boost::irange(size_t(0), numRecords)) {
+          uint32_t id = i;
+          const char* name = index->txpNames[i].c_str();
+          uint32_t len = index->txpLens[i];
+          // copy over the length, then we're done.
+          transcripts.emplace_back(id, name, len, alpha);
+        }
+        //loadTranscriptsFromQuasi(salmonIndex_->quasiIndexPerfectHash32(),
+        //                         sopt);
+      } else {
+        auto* index = salmonIndex.quasiIndex32();
+        size_t numRecords = index->txpNames.size();
+        jointLog->info("Index contained {:n} targets", numRecords);
+
+        double alpha = 0.005;
+        for (auto i : boost::irange(size_t(0), numRecords)) {
+          uint32_t id = i;
+          const char* name = index->txpNames[i].c_str();
+          uint32_t len = index->txpLens[i];
+          // copy over the length, then we're done.
+          transcripts.emplace_back(id, name, len, alpha);
+        }
+      //  loadTranscriptsFromQuasi(salmonIndex_->quasiIndex32(), sopt);
+      }
+    }
+    break;
+  case SalmonIndexType::FMD:
+    jointLog->error("Error: This version of salmon does not support "
+                   "the FMD index mode.");
+    jointLog->flush();
+    exit(1);
+  }
+}
+
 template <typename ProtocolT>
 int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
+                       bfs::path& indexDirectory,
+                       bfs::path& outputDirectory,
                        CFreqMapT& freqCounter) {
   aopt.jointLog->info("Reading BFH");
   aopt.jointLog->flush();
@@ -20,7 +102,6 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
   // Number of equivalence classes
   equivFile >> numEqclasses;
 
-  std::vector<Transcript> transcripts;
   std::vector<std::string> txpNames (numTxps);
   for (size_t i=0; i<numTxps; i++) {
     equivFile >> txpNames[i] ;
@@ -65,10 +146,11 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
     uint32_t countValidator {0};
     for (size_t j=0; j<bgroupSize; j++){
       uint32_t bc;
-      std::string bcName = bcNames[bc];
       size_t ugroupSize;
 
       equivFile >> bc >> ugroupSize;
+      std::string bcName = bcNames[bc];
+
       for (size_t k=0; k<ugroupSize; k++){
         std::string umiSeq;
         uint64_t umiIndex;
@@ -91,9 +173,7 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
         };
 
         countValidator += umiCount;
-        std::vector<double> emptyWeights;
-        SCTGValue value(emptyWeights, umiCount,
-                        bc, umiIndex, umiCount);
+        SCTGValue value(bc, umiIndex, umiCount);
         countMap.upsert(txGroup, upfn, value);
 
         freqCounter[bcName] += umiCount;
@@ -119,34 +199,56 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
   std::cerr<<std::endl;
   equivFile.close();
 
-  GZipWriter gzw(aopt.outputDirectory, aopt.jointLog);
-  //alevinOptimize(bcNames, transcripts, countMap,
-  //               aopt, gzw, freqCounter, 0);
+
+  std::vector<Transcript> transcripts;
+  loadIndexGetTranscripts(indexDirectory,
+                          transcripts,
+                          aopt.jointLog);
+  GZipWriter gzw(outputDirectory, aopt.jointLog);
+
+  alevinOptimize(bcNames, transcripts, countMap,
+                 aopt, gzw, freqCounter, 1000);
   return 0;
 }
 
 
 template
 int salmonHashQuantify(AlevinOpts<apt::Chromium>& aopt,
+                       bfs::path& indexDirectory,
+                       bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 template
 int salmonHashQuantify(AlevinOpts<apt::ChromiumV3>& aopt,
+                       bfs::path& indexDirectory,
+                       bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 template
 int salmonHashQuantify(AlevinOpts<apt::Gemcode>& aopt,
+                       bfs::path& indexDirectory,
+                       bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 template
 int salmonHashQuantify(AlevinOpts<apt::DropSeq>& aopt,
+                       bfs::path& indexDirectory,
+                       bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 template
 int salmonHashQuantify(AlevinOpts<apt::InDrop>& aopt,
+                       bfs::path& indexDirectory,
+                       bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 template
 int salmonHashQuantify(AlevinOpts<apt::CELSeq>& aopt,
+                       bfs::path& indexDirectory,
+                       bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 template
 int salmonHashQuantify(AlevinOpts<apt::CELSeq2>& aopt,
+                       bfs::path& indexDirectory,
+                       bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 template
 int salmonHashQuantify(AlevinOpts<apt::Custom>& aopt,
+                       bfs::path& indexDirectory,
+                       bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);

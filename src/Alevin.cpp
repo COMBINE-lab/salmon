@@ -916,7 +916,8 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
       exit(1);
     }
 
-    salmonHashQuantify(aopt, freqCounter);
+    salmonHashQuantify(aopt, sopt.indexDirectory,
+                       sopt.outputDirectory, freqCounter);
     aopt.noQuant = true;
 
     aopt.jointLog->info("Done Processing");
