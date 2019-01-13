@@ -31,63 +31,88 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
   //  const auto& eqVec =
   //    experiment.equivalenceClassBuilder().eqMap().lock_table();
 
-  size_t num_txps, num_bcs, num_eqclasses;
+  size_t numTxps, numBcs, numEqclasses;
 
   // Number of transcripts
-  equivFile >> num_txps;
+  equivFile >> numTxps;
 
   // Number of barcodes
-  equivFile >> num_bcs;
+  equivFile >> numBcs;
 
   // Number of equivalence classes
-  equivFile >> num_eqclasses;
+  equivFile >> numEqclasses;
 
-  std::vector<std::string> txp_names (num_txps);
-  for (size_t i=0; i<num_txps; i++) {
-    equivFile >> txp_names[i] ;
+  std::vector<std::string> txpNames (numTxps);
+  for (size_t i=0; i<numTxps; i++) {
+    equivFile >> txpNames[i] ;
   }
 
-  size_t bc_length {aopt.protocol.barcodeLength};
-  std::vector<std::string> bc_names (num_bcs);
-  for (size_t i=0; i<num_bcs; i++) {
-    equivFile >> bc_names[i] ;
-    if (bc_names[i].size() != bc_length) {
-      aopt.jointLog->error("CB {} has wrong length", bc_names[i]);
+  size_t bcLength {aopt.protocol.barcodeLength};
+  std::vector<std::string> bcNames (numBcs);
+  for (size_t i=0; i<numBcs; i++) {
+    equivFile >> bcNames[i] ;
+    if (bcNames[i].size() != bcLength) {
+      aopt.jointLog->error("CB {} has wrong length", bcNames[i]);
       aopt.jointLog->flush();
       exit(1);
     }
   }
 
-  //alevin::types::AlevinUMIKmer umiObj;
+  alevin::types::AlevinUMIKmer umiObj;
+  //printing on screen progress
+  const char RESET_COLOR[] = "\x1b[0m";
+  char green[] = "\x1b[30m";
+  green[3] = '0' + static_cast<char>(fmt::GREEN);
+  char red[] = "\x1b[30m";
+  red[3] = '0' + static_cast<char>(fmt::RED);
+  std::cerr<<std::endl;
 
-  //for (size_t i=0; i<num_eqclasses; i++) {
-  //  uint64_t count = eq.second.count;
-  //  // for each transcript in this class
-  //  const TranscriptGroup& tgroup = eq.first;
-  //  const std::vector<uint32_t>& txps = tgroup.txps;
+  for (size_t i=0; i<numEqclasses; i++) {
+    uint64_t count;
+    size_t labelSize ;
+    equivFile >> labelSize;
 
-  //  // group size
-  //  equivFile << txps.size() << '\t';
-  //  // each group member
-  //  for (auto tid : txps) { equivFile << tid << '\t'; }
-  //  const auto& bgroup = eq.second.barcodeGroup;
-  //  equivFile << count << "\t" << bgroup.size();
-  //  for (auto  bcIt : bgroup){
-  //    auto bc = bcIt.first;
-  //    auto ugroup = bcIt.second;
-  //    equivFile << "\t" << bc << "\t" << ugroup.size();
-  //    for (auto umiIt : ugroup){
-  //      auto umi = umiIt.first;
-  //      umiObj.word__(0) = umi;
-  //      auto count = umiIt.second;
+    std::vector<uint32_t> txps(labelSize);
+    for (auto& tid : txps) { equivFile >> tid; }
 
-  //      std::string s = umiObj.toStr();
-  //      std::reverse(s.begin(), s.end());
-  //      equivFile << "\t" << s << "\t" << count;
-  //    }
-  //  }
-  //  equivFile << "\n";
-  //}
+    size_t bgroupSize;
+    equivFile >> count >> bgroupSize;
+    SparseBarcodeMapType bgroup;
+
+    for (size_t j=0; j<bgroupSize; j++){
+      uint32_t bc;
+      size_t ugroupSize;
+
+      equivFile >> bc >> ugroupSize;
+      auto& ugroup = bgroup[bc];
+
+      for (size_t k=0; k<ugroupSize; k++){
+        std::string umiSeq;
+        uint64_t umiIndex;
+        uint32_t umiCount;
+        equivFile >> umiSeq >> umiCount;
+
+        bool isUmiIdxOk = umiObj.fromChars(umiSeq);
+        if(isUmiIdxOk){
+          umiIndex = umiObj.word(0);
+        } else {
+          aopt.jointLog->error("Umi Alevin Object conversion error");
+          aopt.jointLog->flush();
+          exit(1);
+        }
+
+        ugroup[umiIndex] = umiCount;
+      }// end-ugroup for
+    }//end-bgroup for
+
+    double completionFrac = i*100.0/numEqclasses;
+    uint32_t percentCompletion {static_cast<uint32_t>(completionFrac)};
+    if ( percentCompletion % 10 == 0 || percentCompletion > 95) {
+      fmt::print(stderr, "\r{}Done Reading : {}{}%{}",
+                 green, red, percentCompletion, RESET_COLOR);
+    }
+  }
+  std::cerr<<std::endl;
 
   equivFile.close();
   return 0;
