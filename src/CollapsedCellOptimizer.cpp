@@ -627,7 +627,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   std::vector<std::vector<double>> countMatrix;
 
   bool hasWhitelist = boost::filesystem::exists(aopt.whitelistFile);
-  if(not aopt.nobarcode){
+  if(not aopt.nobarcode and numLowConfidentBarcode>0){
     if(not hasWhitelist  or aopt.dumpCsvCounts){
       aopt.jointLog->info("Clearing EqMap; Might take some time.");
       fullEqMap.clear();

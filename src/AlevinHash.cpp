@@ -206,8 +206,14 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
                           aopt.jointLog);
   GZipWriter gzw(outputDirectory, aopt.jointLog);
 
+  if(boost::filesystem::exists(aopt.whitelistFile)){
+    aopt.jointLog->warn("can't use whitelist file in bfh Mode"
+                        ";Ignroing the file");
+    aopt.jointLog->flush();
+  }
+
   alevinOptimize(bcNames, transcripts, countMap,
-                 aopt, gzw, freqCounter, 1000);
+                 aopt, gzw, freqCounter, 0);
   return 0;
 }
 
