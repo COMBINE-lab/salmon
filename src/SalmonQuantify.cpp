@@ -118,6 +118,7 @@
 #include "metro/metrohash64.h"
 #include "tsl/hopscotch_map.h"
 #include "SelectiveAlignmentUtils.hpp"
+#include "MappingStatistics.hpp"
 #include "edlib.h"
 
 /****** QUASI MAPPING DECLARATIONS *********/
@@ -734,6 +735,7 @@ void processReadsQuasi(
     SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache,
+    MappingStatistics& mstats,
     std::atomic<uint64_t>& forbiddenReadsSkipped,
     size_t threadID) {
 
@@ -929,19 +931,22 @@ void processReadsQuasi(
                                                 rightHCInfo, rightHits);
 
       /*
-      std::cerr << "lh : " << lh << "\n";
-      std::cerr << "rh : " << rh << "\n";
-      std::cerr << "lh size : " << leftHits.size() << "\n";
-      std::cerr << "rh size : " << rightHits.size() << "\n";
-      if (leftHits.size() >= 1 and rightHits.size() >= 1) {
-        for (auto& lhit : leftHits) {
-          std::cerr << "left hit : " << transcripts[lhit.tid].RefName << ", " << lhit.fwd << ", " << lhit.pos << "\n";
-        }
-        for (auto& lhit : rightHits ) {
-          std::cerr << "right hit : " << transcripts[lhit.tid].RefName << ", " << lhit.fwd << ", " << lhit.pos << "\n";
+      if (rp.first.name == "SRR5023587.950") {
+        std::cerr << "lh : " << lh << "\n";
+        std::cerr << "rh : " << rh << "\n";
+        std::cerr << "lh size : " << leftHits.size() << "\n";
+        std::cerr << "rh size : " << rightHits.size() << "\n";
+        if (leftHits.size() >= 1 and rightHits.size() >= 1) {
+          for (auto& lhit : leftHits) {
+            std::cerr << "left hit : " << transcripts[lhit.tid].RefName << ", " << lhit.fwd << ", " << lhit.pos << "   :: tid == (" << lhit.tid << ")\n";
+          }
+          for (auto& lhit : rightHits ) {
+            std::cerr << "right hit : " << transcripts[lhit.tid].RefName << ", " << lhit.fwd << ", " << lhit.pos << "  :: tid == (" << lhit.tid << ")\n";
+          }
         }
       }
       */
+
       // Consider a read as too short if both ends are too short
       if (tooShortLeft and tooShortRight) {
         ++shortFragStats.numTooShort;
@@ -1445,6 +1450,7 @@ void processReadsQuasi(
                               maxZeroFrac);
   }
 
+  mstats.numOrphansRescued += numOrphansRescued;
   //salmonOpts.jointLog->info("Number of orphans rescued in this thread {}",
   //                          numOrphansRescued);
 
@@ -1473,6 +1479,7 @@ void processReadsQuasi(
     SalmonOpts& salmonOpts, double coverageThresh,
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache,
+    MappingStatistics& mstats,
     std::atomic<uint64_t>& forbiddenReadsSkipped,
     size_t threadID) {
 
@@ -1858,7 +1865,7 @@ void processReadLibrary(
     FragmentLengthDistribution& fragLengthDist, 
     SalmonOpts& salmonOpts, double coverageThresh, bool greedyChain,
     std::mutex& iomutex, size_t numThreads,
-    std::vector<AlnGroupVec<AlnT>>& structureVec, volatile bool& writeToCache) {
+    std::vector<AlnGroupVec<AlnT>>& structureVec, volatile bool& writeToCache, MappingStatistics& mstats) {
 
   std::vector<std::thread> threads;
 
@@ -1915,7 +1922,7 @@ void processReadLibrary(
                         upperBoundHits, index, transcripts,
                         fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
                         salmonOpts, coverageThresh, iomutex, initialRound,
-                        burnedIn, writeToCache, forbiddenSkipped, i);
+                        burnedIn, writeToCache, mstats, forbiddenSkipped, i);
     };
     threads.emplace_back(threadFun);
   };
@@ -2131,6 +2138,7 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
   size_t maxReadGroup{miniBatchSize};
   uint32_t structCacheSize = numQuantThreads * maxReadGroup * 10;
 
+  MappingStatistics mstats;
   // EQCLASS
   bool terminate{false};
 
@@ -2187,7 +2195,7 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
                                upperBoundHits, initialRound, burnedIn, fmCalc,
                                fragLengthDist, salmonOpts,
                                coverageThresh, greedyChain, ioMutex,
-                               numQuantThreads, groupVec, writeToCache);
+                               numQuantThreads, groupVec, writeToCache, mstats);
 
       numAssignedFragments = totalAssignedFragments - prevNumAssignedFragments;
       prevNumAssignedFragments = totalAssignedFragments;
@@ -2258,6 +2266,10 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
         std::exit(1);
       }
     } // end tooShortFrac > 0.0
+  }
+
+  if (salmonOpts.recoverOrphans) {
+    salmonOpts.jointLog->info("Number of orphans recovered using orphan rescue : {:n}", mstats.numOrphansRescued.load());
   }
 
   // If we didn't achieve burnin, then at least compute effective
