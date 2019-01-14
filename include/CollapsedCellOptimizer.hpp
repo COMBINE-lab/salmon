@@ -46,8 +46,9 @@ public:
 
   template <class ProtocolT>
   bool optimize(EqMapT& freqMap,
+                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                 AlevinOpts<ProtocolT>& aopt,
-                const std::vector<Transcript>& transcripts,
                 GZipWriter& gzw,
                 std::vector<std::string>& trueBarcodes,
                 std::vector<uint32_t>& umiCount,

@@ -1,81 +1,46 @@
 #include "AlevinHash.hpp"
 
-void loadIndexGetTranscripts(bfs::path& indexDirectory,
-                             std::vector<Transcript>& transcripts,
-                             std::shared_ptr<spdlog::logger>& jointLog) {
-  // ==== Figure out the index type
-  boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
-  SalmonIndexVersionInfo versionInfo;
-  versionInfo.load(versionPath);
-  if (versionInfo.indexVersion() == 0) {
-    jointLog->error("Error: The index version file  {}"
-                    " doesn't seem to exist.  "
-                    "Please try re-building the salmon index.",
-                    versionPath.string());
-    jointLog->flush();
-    exit(1);
+void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                     std::vector<std::string>& transcripts,
+                     const std::string& geneMapFile,
+                     spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap){
+  std::ifstream t2gFile(geneMapFile);
+
+  spp::sparse_hash_map<std::string, uint32_t> txpIdxMap(transcripts.size());
+
+  for (size_t i=0; i<transcripts.size(); i++){
+    txpIdxMap[ transcripts[i] ] = i;
   }
 
-  // Check index version compatibility here
-  auto indexType = versionInfo.indexType();
-  // ==== Figure out the index type
+  uint32_t tid, gid, geneCount{0};
+  std::string tStr, gStr;
+  if(t2gFile.is_open()) {
+    while( not t2gFile.eof() ) {
+      t2gFile >> tStr >> gStr;
 
-  SalmonIndex salmonIndex(jointLog, indexType);
-  salmonIndex.load(indexDirectory);
-
-  // Now we'll have either an FMD-based index or a QUASI index
-  // dispatch on the correct type.
-  switch (salmonIndex.indexType()) {
-  case SalmonIndexType::QUASI:
-    if (salmonIndex.is64BitQuasi()) {
-      jointLog->error("Error: This version of salmon does not support "
-                      "the index mode.");
-      jointLog->flush();
-      exit(1);
-
-      //if (salmonIndex.isPerfectHashQuasi()) {
-      //  loadTranscriptsFromQuasi(salmonIndex_->quasiIndexPerfectHash64(),
-      //                           sopt);
-      //} else {
-      //  loadTranscriptsFromQuasi(salmonIndex_->quasiIndex64(), sopt);
-      //}
-    } else {
-      if (salmonIndex.isPerfectHashQuasi()) {
-        auto* index = salmonIndex.quasiIndexPerfectHash32();
-        size_t numRecords = index->txpNames.size();
-        jointLog->info("Index contained {:n} targets", numRecords);
-
-        double alpha = 0.005;
-        for (auto i : boost::irange(size_t(0), numRecords)) {
-          uint32_t id = i;
-          const char* name = index->txpNames[i].c_str();
-          uint32_t len = index->txpLens[i];
-          // copy over the length, then we're done.
-          transcripts.emplace_back(id, name, len, alpha);
-        }
-        //loadTranscriptsFromQuasi(salmonIndex_->quasiIndexPerfectHash32(),
-        //                         sopt);
-      } else {
-        auto* index = salmonIndex.quasiIndex32();
-        size_t numRecords = index->txpNames.size();
-        jointLog->info("Index contained {:n} targets", numRecords);
-
-        double alpha = 0.005;
-        for (auto i : boost::irange(size_t(0), numRecords)) {
-          uint32_t id = i;
-          const char* name = index->txpNames[i].c_str();
-          uint32_t len = index->txpLens[i];
-          // copy over the length, then we're done.
-          transcripts.emplace_back(id, name, len, alpha);
-        }
-      //  loadTranscriptsFromQuasi(salmonIndex_->quasiIndex32(), sopt);
+      if(not txpIdxMap.contains(tStr)){
+        continue;
       }
+      tid = txpIdxMap[tStr];
+
+      if (geneIdxMap.contains(gStr)){
+        gid = geneIdxMap[gStr];
+      }
+      else{
+        gid = geneCount;
+        geneIdxMap[gStr] = gid;
+        geneCount++;
+      }
+
+      txpToGeneMap[tid] = gid;
     }
-    break;
-  case SalmonIndexType::FMD:
-    jointLog->error("Error: This version of salmon does not support "
-                   "the FMD index mode.");
-    jointLog->flush();
+    t2gFile.close();
+  }
+  if(txpToGeneMap.size() < transcripts.size()){
+    std::cerr << "ERROR: "
+              << "Txp to Gene Map not found for "
+              << transcripts.size() - txpToGeneMap.size()
+              <<" transcripts. Exiting" << std::flush;
     exit(1);
   }
 }
@@ -106,6 +71,14 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
   for (size_t i=0; i<numTxps; i++) {
     equivFile >> txpNames[i] ;
   }
+
+  spp::sparse_hash_map<uint32_t, uint32_t> txpToGeneMap;
+  spp::sparse_hash_map<std::string, uint32_t> geneIdxMap;
+
+  getTxpToGeneMap(txpToGeneMap,
+                  txpNames,
+                  aopt.geneMapFile.string(),
+                  geneIdxMap);
 
   size_t bcLength {aopt.protocol.barcodeLength};
   std::vector<std::string> bcNames (numBcs);
@@ -200,10 +173,6 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
   equivFile.close();
 
 
-  std::vector<Transcript> transcripts;
-  loadIndexGetTranscripts(indexDirectory,
-                          transcripts,
-                          aopt.jointLog);
   GZipWriter gzw(outputDirectory, aopt.jointLog);
 
   if(boost::filesystem::exists(aopt.whitelistFile)){
@@ -212,8 +181,8 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
     aopt.jointLog->flush();
   }
 
-  alevinOptimize(bcNames, transcripts, countMap,
-                 aopt, gzw, freqCounter, 0);
+  alevinOptimize(bcNames, txpToGeneMap, geneIdxMap,
+                 countMap, aopt, gzw, freqCounter, 0);
   return 0;
 }
 

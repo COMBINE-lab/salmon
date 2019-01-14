@@ -16,7 +16,8 @@ namespace bfs = boost::filesystem;
 
 template <typename ProtocolT>
 void alevinOptimize( std::vector<std::string>& trueBarcodesVec,
-                     std::vector<Transcript>& transcripts,
+                     spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                     spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                      EqMapT& fullEqMap,
                      AlevinOpts<ProtocolT>& aopt,
                      GZipWriter& gzw,

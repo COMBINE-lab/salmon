@@ -1665,7 +1665,8 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
 
 template <typename ProtocolT>
 void alevinOptimize( std::vector<std::string>& trueBarcodesVec,
-                     std::vector<Transcript>& transcripts,
+                     spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                     spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                      EqMapT& fullEqMap,
                      AlevinOpts<ProtocolT>& aopt,
                      GZipWriter& gzw,
@@ -1704,8 +1705,9 @@ void alevinOptimize( std::vector<std::string>& trueBarcodesVec,
 
     CollapsedCellOptimizer optimizer;
     bool optSuccess = optimizer.optimize(fullEqMap,
+                                         txpToGeneMap,
+                                         geneIdxMap,
                                          aopt,
-                                         transcripts,
                                          gzw,
                                          trueBarcodesVec,
                                          umiCount,
@@ -1724,6 +1726,54 @@ void alevinOptimize( std::vector<std::string>& trueBarcodesVec,
   else{
     aopt.jointLog->warn("No Dedup command given, is it what you want?");
   }
+}
+
+uint32_t getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                         const std::vector<Transcript>& transcripts,
+                         const std::string& geneMapFile,
+                         spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap){
+  std::string fname = geneMapFile;
+  std::ifstream t2gFile(fname);
+
+  spp::sparse_hash_map<std::string, uint32_t> txpIdxMap(transcripts.size());
+
+  for (size_t i=0; i<transcripts.size(); i++){
+    txpIdxMap[ transcripts[i].RefName ] = i;
+  }
+
+  uint32_t tid, gid, geneCount{0};
+  std::string tStr, gStr;
+  if(t2gFile.is_open()) {
+    while( not t2gFile.eof() ) {
+      t2gFile >> tStr >> gStr;
+
+      if(not txpIdxMap.contains(tStr)){
+        continue;
+      }
+      tid = txpIdxMap[tStr];
+
+      if (geneIdxMap.contains(gStr)){
+        gid = geneIdxMap[gStr];
+      }
+      else{
+        gid = geneCount;
+        geneIdxMap[gStr] = gid;
+        geneCount++;
+      }
+
+      txpToGeneMap[tid] = gid;
+    }
+    t2gFile.close();
+  }
+  if(txpToGeneMap.size() < transcripts.size()){
+    std::cerr << "ERROR: "
+              << "Txp to Gene Map not found for "
+              << transcripts.size() - txpToGeneMap.size()
+              <<" transcripts. Exiting" << std::flush;
+    exit(1);
+  }
+
+  return geneCount;
 }
 
 template <typename ProtocolT>
@@ -1856,7 +1906,34 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
                    aopt.protocol.umiLength, trueBarcodesVec);
     }
 
-    alevinOptimize(trueBarcodesVec, experiment.transcripts(),
+    if (aopt.dumpBarcodeEq and not aopt.noDedup){
+      std::ofstream oFile;
+      boost::filesystem::path oFilePath = aopt.outputDirectory / "cell_eq_order.txt";
+      oFile.open(oFilePath.string());
+      for (auto& bc : trueBarcodesVec) {
+        oFile << bc << "\n";
+      }
+      oFile.close();
+
+      {//dump transcripts names
+        boost::filesystem::path tFilePath = aopt.outputDirectory / "transcripts.txt";
+        std::ofstream tFile(tFilePath.string());
+        for (auto& txp: experiment.transcripts()) {
+          tFile << txp.RefName << "\n";
+        }
+        tFile.close();
+      }
+    }
+
+    spp::sparse_hash_map<uint32_t, uint32_t> txpToGeneMap;
+    spp::sparse_hash_map<std::string, uint32_t> geneIdxMap;
+
+    getTxpToGeneMap(txpToGeneMap,
+                    experiment.transcripts(),
+                    aopt.geneMapFile.string(),
+                    geneIdxMap);
+
+    alevinOptimize(trueBarcodesVec, txpToGeneMap, geneIdxMap,
                    experiment.equivalenceClassBuilder().eqMap(),
                    aopt, gzw, freqCounter,
                    numLowConfidentBarcode);
