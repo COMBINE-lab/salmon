@@ -931,7 +931,7 @@ void processReadsQuasi(
                                                 rightHCInfo, rightHits);
 
       /*
-      if (rp.first.name == "SRR5023587.950") {
+      if (rp.first.name == "SRR2013675.128") {
         std::cerr << "lh : " << lh << "\n";
         std::cerr << "rh : " << rh << "\n";
         std::cerr << "lh size : " << leftHits.size() << "\n";
@@ -965,6 +965,7 @@ void processReadsQuasi(
             lh = rh = true;
           }
           */
+          //auto tempMaxNumHits = salmonOpts.recoverOrphans ? 10000 : maxNumHits;
           rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, leftHits, rightHits,
                                                  jointHits,
                                                  mc,
@@ -974,7 +975,7 @@ void processReadsQuasi(
           // so (IU, ISF, ISR).  If the library type is different
           // we should either raise a warning / error, or implement
           // library-type generic recovery.
-          if (jointHits.empty() and salmonOpts.recoverOrphans) {
+          if (jointHits.empty() and salmonOpts.recoverOrphans and !tooManyHits) {
             if (leftHits.size() + rightHits.size() > 0) {
               selective_alignment::utils::recoverOrphans(rp.first.seq,
                                                          rp.second.seq,
