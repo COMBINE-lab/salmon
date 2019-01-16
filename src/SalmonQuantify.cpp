@@ -966,17 +966,27 @@ void processReadsQuasi(
           }
           */
           //auto tempMaxNumHits = salmonOpts.recoverOrphans ? 10000 : maxNumHits;
-          rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, leftHits, rightHits,
-                                                 jointHits,
-                                                 mc,
-                                                 readLenLeft, maxNumHits, tooManyHits, hctr);
+          rapmap::utils::MergeResult mergeRes = rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, leftHits, rightHits,
+                                                                                       jointHits,
+                                                                                       mc,
+                                                                                       readLenLeft, maxNumHits, tooManyHits, hctr);
           // IMPORTANT NOTE : Orphan recovery currently assumes a
           // library type where mates are on separate strands
           // so (IU, ISF, ISR).  If the library type is different
           // we should either raise a warning / error, or implement
           // library-type generic recovery.
-          if (jointHits.empty() and salmonOpts.recoverOrphans and !tooManyHits) {
+          bool mergeStatusOK = (mergeRes == rapmap::utils::MergeResult::HAD_EMPTY_INTERSECTION or
+                                mergeRes == rapmap::utils::MergeResult::HAD_ONLY_LEFT or
+                                mergeRes == rapmap::utils::MergeResult::HAD_ONLY_RIGHT);
+
+          if ( mergeStatusOK and salmonOpts.recoverOrphans and !tooManyHits) {
             if (leftHits.size() + rightHits.size() > 0) {
+              if (mergeRes == rapmap::utils::MergeResult::HAD_ONLY_LEFT) {
+                jointHits.clear();
+              }
+              if (mergeRes == rapmap::utils::MergeResult::HAD_ONLY_RIGHT) {
+                jointHits.clear();
+              }
               selective_alignment::utils::recoverOrphans(rp.first.seq,
                                                          rp.second.seq,
                                                          rc1,

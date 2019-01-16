@@ -1516,6 +1516,10 @@ std::string getCurrentTimeAsString() {
                             "Bowtie2-like parameters now.");
         sopt.discardOrphansQuasi = true;
         sopt.noDovetail = true;
+        sopt.minScoreFraction = 0.70;
+        sopt.mismatchPenalty = 3;
+        sopt.gapOpenPenalty = 5;
+        sopt.gapExtendPenalty = 1;
       }
 
       if (sopt.mimicStrictBT2) {

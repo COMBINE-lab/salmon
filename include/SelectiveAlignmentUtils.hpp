@@ -71,7 +71,8 @@ namespace selective_alignment {
       int32_t lreadLen = l1;
       int32_t rreadLen = l2;
 
-      auto recoverSingleOrphan = [&] (const QuasiAlignment& anchorHit, bool anchorIsLeft){
+      auto recoverSingleOrphan = [&] (const QuasiAlignment& anchorHit, bool anchorIsLeft) -> bool {
+        bool recovered = false;
         auto txpID = anchorHit.tid;
         auto& txp = transcripts[txpID];
         const char* tseq = txp.Sequence();
@@ -163,8 +164,10 @@ namespace selective_alignment {
           qaln.mateIsFwd = rfwd;
           jointHits.back().mateStatus = rapmap::utils::MateStatus::PAIRED_END_PAIRED;
           jointHits.back().chainStatus = rapmap::utils::FragmentChainStatus(leftChainStatus, rightChainStatus);
+          recovered = true;
         }
         edlibFreeAlignResult(result);
+        return recovered;
       };
 
       {
@@ -177,17 +180,30 @@ namespace selective_alignment {
         auto rightLen = std::distance(rightIt, rightEnd);
         jointHits.reserve(std::min(leftLen, rightLen));
 
+        bool didRecover{false};
+
         while ((leftIt != leftEnd) and (rightIt != rightEnd)) {
           uint32_t leftTxp, rightTxp;
           leftTxp = leftIt->tid;
           rightTxp = rightIt->tid;
           if (leftTxp < rightTxp) {
-            recoverSingleOrphan(*leftIt, true);
+            didRecover = recoverSingleOrphan(*leftIt, true);
             ++leftIt;
           } else if (rightTxp < leftTxp) {
-            recoverSingleOrphan(*rightIt, false);
+            didRecover = recoverSingleOrphan(*rightIt, false);
             ++rightIt;
           } else if (rightTxp == leftTxp) {
+
+            /*
+            didRecover = recoverSingleOrphan(*leftIt, true);
+            ++leftIt;
+            if(!didRecover) {
+              didRecover = recoverSingleOrphan(*rightIt, false);
+            }
+            ++rightIt;
+            */
+            //++leftIt; ++rightIt;
+
             // Should not happen!
             auto log = spdlog::get("jointLog");
 
@@ -208,6 +224,7 @@ namespace selective_alignment {
             log->flush();
             spdlog::drop_all();
             std::exit(1);
+
           }
         }
 
@@ -313,9 +330,15 @@ inline int32_t getAlnScore(
         char* tseqTemp = tseq + bpos;
         uint32_t tlenTemp = tlen1 + startBuf;
         EdlibAlignResult result = edlibAlign(rptr, rlen, tseqTemp, tlenTemp,
-                                             edlibNewAlignConfig(-1, EDLIB_MODE_HW, EDLIB_TASK_LOC));
+                                             edlibNewAlignConfig(-1, EDLIB_MODE_HW, EDLIB_TASK_PATH));
         auto spos = result.startLocations[0];
         tseq1 = tseq + bpos + spos;
+        auto* aln = result.alignment;
+        if (!aln or (aln[0] == 1 or aln[0] == 2)) {
+          edlibFreeAlignResult(result);
+          return s;
+        }
+        edlibFreeAlignResult(result);
         */
         aligner(rptr, rlen, tseq1, tlen1, &ez, ksw2pp::EnumToType<ksw2pp::KSW2AlignmentType::EXTENSION>());
         s = std::max(ez.mqe, ez.mte);
