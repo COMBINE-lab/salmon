@@ -133,23 +133,17 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
         bool isUmiIdxOk = umiObj.fromChars(umiSeq);
         if(isUmiIdxOk){
           umiIndex = umiObj.word(0);
-        } else {
-          aopt.jointLog->error("Umi Alevin Object conversion error");
-          aopt.jointLog->flush();
-          exit(1);
+          auto upfn = [bc, umiIndex, umiCount](SCTGValue& x) -> void {
+            // update the count
+            x.count += umiCount;
+            x.updateBarcodeGroup(bc, umiIndex, umiCount);
+          };
+	
+	  SCTGValue value(bc, umiIndex, umiCount);
+          countMap.upsert(txGroup, upfn, value);
+          freqCounter[bcName] += umiCount;
         }
-
-        auto upfn = [bc, umiIndex, umiCount](SCTGValue& x) -> void {
-          // update the count
-          x.count += umiCount;
-          x.updateBarcodeGroup(bc, umiIndex, umiCount);
-        };
-
         countValidator += umiCount;
-        SCTGValue value(bc, umiIndex, umiCount);
-        countMap.upsert(txGroup, upfn, value);
-
-        freqCounter[bcName] += umiCount;
       }// end-ugroup for
     }//end-bgroup for
 
