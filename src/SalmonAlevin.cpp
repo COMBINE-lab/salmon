@@ -492,7 +492,7 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
         }
 
         TranscriptGroup tg(txpIDs);
-        eqBuilder.addBarcodeGroup(std::move(tg), auxProbs, barcode, umi);
+        eqBuilder.addBarcodeGroup(std::move(tg), barcode, umi);
       }
 
       //+++++++++++++++++++++++++++++++++++++++
