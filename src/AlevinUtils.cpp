@@ -261,6 +261,7 @@ namespace alevin {
       // mark in salmon options that we are running
       // in alevin mode
       sopt.alevinMode = true;
+      if (sopt.initUniform) { aopt.initUniform = true; }
 
       //Create outputDirectory
       aopt.outputDirectory = vm["output"].as<std::string>() + "/alevin";

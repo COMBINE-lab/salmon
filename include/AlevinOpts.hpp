@@ -18,7 +18,8 @@ template <class protocolT>
 struct AlevinOpts {
   AlevinOpts(): numParsingThreads(1),
                 numConsumerThreads(2),
-                freqThreshold(10){}
+                freqThreshold(10),
+                initUniform{false}{}
 
   //IUPAC code for the cell-barcodes
   std::string iupac;
@@ -72,6 +73,8 @@ struct AlevinOpts {
   bool txpLevel;
   //do hard-assignment of error bcs
   bool noSoftMap;
+  // initialize EM with uniform prior
+  bool initUniform;
   //number of cells
   uint32_t numCells;
   // minimum number of CB to use for low confidence region

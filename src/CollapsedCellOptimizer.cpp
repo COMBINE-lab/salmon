@@ -67,7 +67,8 @@ double truncateAlphas(VecT& alphas, double cutoff) {
 bool runPerCellEM(double& totalNumFrags, size_t numGenes,
                   CollapsedCellOptimizer::SerialVecType& alphas,
                   std::vector<SalmonEqClass>& salmonEqclasses,
-                  std::shared_ptr<spdlog::logger>& jointlog){
+                  std::shared_ptr<spdlog::logger>& jointlog,
+                  bool initUniform){
 
   // An EM termination criterion, adopted from Bray et al. 2016
   uint32_t minIter {50};
@@ -75,6 +76,10 @@ bool runPerCellEM(double& totalNumFrags, size_t numGenes,
   uint32_t maxIter {10000};
   size_t numClasses = salmonEqclasses.size();
 
+  if ( initUniform ) {
+    double uniformPrior = 1/numGenes;
+    std::fill(alphas.begin(), alphas.end(), uniformPrior);
+  }
   CollapsedCellOptimizer::SerialVecType alphasPrime(numGenes, 0.0);
 
   assert( numGenes == alphas.size() );
@@ -251,7 +256,8 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   tbb::atomic<uint32_t>& totalExpGeneCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, bool inDebugMode, uint32_t numBootstraps,
-                  bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps){
+                  bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
+                  bool initUniform){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
 
@@ -292,7 +298,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
             // original counts of the UMI
             uint32_t eqCount {0};
             for(auto& ugroup: bcIt->second){
-                eqCount += ugroup.second;
+              eqCount += ugroup.second;
             }
 
             txpGroups.emplace_back(txps);
@@ -340,7 +346,8 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                                    numGenes,
                                    geneAlphas,
                                    salmonEqclasses,
-                                   jointlog);
+                                   jointlog,
+                                   initUniform);
         if( !isEMok ){
           jointlog->error("EM iteration for cell {} failed \n"
                           "Please Report this on github.", trueBarcodeStr);
@@ -469,6 +476,11 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
     aopt.jointLog->flush();
   }
 
+  if (aopt.initUniform) {
+    aopt.jointLog->warn("Using uniform initialization for EM");
+    aopt.jointLog->flush();
+  }
+
   std::vector<CellState> skippedCB (numCells);
   std::atomic<uint32_t> bcount{0};
   tbb::atomic<double> totalDedupCounts{0.0};
@@ -499,7 +511,8 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                aopt.numBootstraps,
                                aopt.naiveEqclass,
                                aopt.dumpUmiGraph,
-                               aopt.dumpfeatures);
+                               aopt.dumpfeatures,
+                               aopt.initUniform);
   }
 
   for (auto& t : workerThreads) {

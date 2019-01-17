@@ -1015,6 +1015,9 @@ salmon-based processing of single-cell RNA-seq data.
     bool gemcode = vm["gemcode"].as<bool>();
     bool celseq = vm["celseq"].as<bool>();
     bool celseq2 = vm["celseq2"].as<bool>();
+    bool custom = (vm.count("barcodeLength") and
+                   vm.count("umiLength") and
+                   vm.count("end"));
 
     uint8_t validate_num_protocols {0};
     if (dropseq) validate_num_protocols += 1;
@@ -1024,6 +1027,7 @@ salmon-based processing of single-cell RNA-seq data.
     if (gemcode) validate_num_protocols += 1;
     if (celseq) validate_num_protocols += 1;
     if (celseq2) validate_num_protocols += 1;
+    if (custom) validate_num_protocols += 1;
 
     if ( validate_num_protocols != 1 ) {
       fmt::print(stderr, "ERROR: Please specify one and only one scRNA protocol;");

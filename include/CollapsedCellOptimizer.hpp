@@ -60,7 +60,8 @@ bool runPerCellEM(double& totalNumFrags,
                   size_t numGenes,
                   CollapsedCellOptimizer::SerialVecType& alphas,
                   std::vector<SalmonEqClass>& salmonEqclasses,
-                  std::shared_ptr<spdlog::logger>& jointlog);
+                  std::shared_ptr<spdlog::logger>& jointlog,
+                  bool initUniform);
 
 void optimizeCell(std::vector<std::string>& trueBarcodes,
                   std::atomic<uint32_t>& barcode,
@@ -75,7 +76,8 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   tbb::atomic<uint32_t>& totalExpGeneCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, bool inDebugMode, uint32_t numBootstraps,
-                  bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps);
+                  bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
+                  bool initUniform);
 
 using VecT = CollapsedCellOptimizer::SerialVecType;
 
