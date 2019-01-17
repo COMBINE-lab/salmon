@@ -492,7 +492,7 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
         }
 
         TranscriptGroup tg(txpIDs);
-        eqBuilder.addBarcodeGroup(std::move(tg), auxProbs, barcode, umi);
+        eqBuilder.addBarcodeGroup(std::move(tg), barcode, umi);
       }
 
       //+++++++++++++++++++++++++++++++++++++++
@@ -1673,6 +1673,118 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
   jointLog->info("finished quantifyLibrary()");
 }
 
+template <typename ProtocolT>
+void alevinOptimize( std::vector<std::string>& trueBarcodesVec,
+                     spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                     spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                     EqMapT& fullEqMap,
+                     AlevinOpts<ProtocolT>& aopt,
+                     GZipWriter& gzw,
+                     CFreqMapT& freqCounter,
+                     size_t numLowConfidentBarcode) {
+  std::vector<uint32_t> umiCount(trueBarcodesVec.size());
+  for(auto& eq: fullEqMap.lock_table()){
+    auto& bg = eq.second.barcodeGroup;
+    for(auto& bcIt: bg){
+      size_t bcCount{0};
+      for(auto& ugIt: bcIt.second){
+        bcCount += ugIt.second;
+      }
+      auto bc = bcIt.first;
+      umiCount[bc] += bcCount;
+    }
+  }
+
+  if(aopt.dumpfeatures){
+    auto mapCountFileName = aopt.outputDirectory / "MappedUmi.txt";
+    std::ofstream mFile;
+    mFile.open(mapCountFileName.string());
+
+    for(size_t i=0; i<umiCount.size(); i++){
+      mFile<<trueBarcodesVec[i]<< "\t"<<umiCount[i]<<"\n";
+    }
+    mFile.close();
+  }
+  ////////////////////////////////////////////
+  // deduplication starts from here
+  ////////////////////////////////////////////
+
+  if(not aopt.noDedup) {
+    aopt.jointLog->info("Starting optimizer\n\n");
+    aopt.jointLog->flush();
+
+    CollapsedCellOptimizer optimizer;
+    bool optSuccess = optimizer.optimize(fullEqMap,
+                                         txpToGeneMap,
+                                         geneIdxMap,
+                                         aopt,
+                                         gzw,
+                                         trueBarcodesVec,
+                                         umiCount,
+                                         freqCounter,
+                                         numLowConfidentBarcode);
+    if (!optSuccess) {
+      aopt.jointLog->error(
+                      "The optimization algorithm failed. This is likely the result of "
+                      "bad input (or a bug). If you cannot track down the cause, please "
+                      "report this issue on GitHub.");
+      aopt.jointLog->flush();
+      exit(1);
+    }
+    aopt.jointLog->info("Finished optimizer");
+  }
+  else{
+    aopt.jointLog->warn("No Dedup command given, is it what you want?");
+  }
+}
+
+uint32_t getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                         const std::vector<Transcript>& transcripts,
+                         const std::string& geneMapFile,
+                         spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap){
+  std::string fname = geneMapFile;
+  std::ifstream t2gFile(fname);
+
+  spp::sparse_hash_map<std::string, uint32_t> txpIdxMap(transcripts.size());
+
+  for (size_t i=0; i<transcripts.size(); i++){
+    txpIdxMap[ transcripts[i].RefName ] = i;
+  }
+
+  uint32_t tid, gid, geneCount{0};
+  std::string tStr, gStr;
+  if(t2gFile.is_open()) {
+    while( not t2gFile.eof() ) {
+      t2gFile >> tStr >> gStr;
+
+      if(not txpIdxMap.contains(tStr)){
+        continue;
+      }
+      tid = txpIdxMap[tStr];
+
+      if (geneIdxMap.contains(gStr)){
+        gid = geneIdxMap[gStr];
+      }
+      else{
+        gid = geneCount;
+        geneIdxMap[gStr] = gid;
+        geneCount++;
+      }
+
+      txpToGeneMap[tid] = gid;
+    }
+    t2gFile.close();
+  }
+  if(txpToGeneMap.size() < transcripts.size()){
+    std::cerr << "ERROR: "
+              << "Txp to Gene Map not found for "
+              << transcripts.size() - txpToGeneMap.size()
+              <<" transcripts. Exiting" << std::flush;
+    exit(1);
+  }
+
+  return geneCount;
+}
 
 template <typename ProtocolT>
 int alevinQuant(AlevinOpts<ProtocolT>& aopt,
@@ -1681,7 +1793,6 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
                 TrueBcsT& trueBarcodes,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter, size_t numLowConfidentBarcode){
-
   using std::cerr;
   using std::vector;
   using std::string;
@@ -1805,59 +1916,37 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
                    aopt.protocol.umiLength, trueBarcodesVec);
     }
 
-    std::vector<uint32_t> umiCount(trueBarcodesVec.size());
-    auto& fullEqMap = experiment.equivalenceClassBuilder().eqMap();
-    for(auto& eq: fullEqMap.lock_table()){
-      auto& bg = eq.second.barcodeGroup;
-      for(auto& bcIt: bg){
-        size_t bcCount{0};
-        for(auto& ugIt: bcIt.second){
-          bcCount += ugIt.second;
+    if (aopt.dumpBarcodeEq and not aopt.noDedup){
+      std::ofstream oFile;
+      boost::filesystem::path oFilePath = aopt.outputDirectory / "cell_eq_order.txt";
+      oFile.open(oFilePath.string());
+      for (auto& bc : trueBarcodesVec) {
+        oFile << bc << "\n";
+      }
+      oFile.close();
+
+      {//dump transcripts names
+        boost::filesystem::path tFilePath = aopt.outputDirectory / "transcripts.txt";
+        std::ofstream tFile(tFilePath.string());
+        for (auto& txp: experiment.transcripts()) {
+          tFile << txp.RefName << "\n";
         }
-        auto bc = bcIt.first;
-        umiCount[bc] += bcCount;
+        tFile.close();
       }
     }
 
-    if(aopt.dumpfeatures){
-      auto mapCountFileName = aopt.outputDirectory / "MappedUmi.txt";
-      std::ofstream mFile;
-      mFile.open(mapCountFileName.string());
+    spp::sparse_hash_map<uint32_t, uint32_t> txpToGeneMap;
+    spp::sparse_hash_map<std::string, uint32_t> geneIdxMap;
 
-      for(size_t i=0; i<umiCount.size(); i++){
-        mFile<<trueBarcodesVec[i]<< "\t"<<umiCount[i]<<"\n";
-      }
-      mFile.close();
-    }
-    ////////////////////////////////////////////
-    // deduplication starts from here
-    ////////////////////////////////////////////
+    getTxpToGeneMap(txpToGeneMap,
+                    experiment.transcripts(),
+                    aopt.geneMapFile.string(),
+                    geneIdxMap);
 
-    if(not aopt.noDedup) {
-      jointLog->info("Starting optimizer\n\n");
-      jointLog->flush();
-
-      CollapsedCellOptimizer optimizer;
-      bool optSuccess = optimizer.optimize(experiment, aopt,
-                                           gzw,
-                                           trueBarcodesVec,
-                                           umiCount,
-                                           freqCounter,
-                                           numLowConfidentBarcode);
-      if (!optSuccess) {
-        jointLog->error(
-                        "The optimization algorithm failed. This is likely the result of "
-                        "bad input (or a bug). If you cannot track down the cause, please "
-                        "report this issue on GitHub.");
-        jointLog->flush();
-        exit(1);
-      }
-      jointLog->info("Finished optimizer");
-    }
-    else{
-      jointLog->warn("No Dedup command given, is it what you want?");
-    }
-
+    alevinOptimize(trueBarcodesVec, txpToGeneMap, geneIdxMap,
+                   experiment.equivalenceClassBuilder().eqMap(),
+                   aopt, gzw, freqCounter,
+                   numLowConfidentBarcode);
     jointLog->flush();
 
     bfs::path libCountFilePath = outputDirectory / "lib_format_counts.json";

@@ -67,7 +67,8 @@ double truncateAlphas(VecT& alphas, double cutoff) {
 bool runPerCellEM(double& totalNumFrags, size_t numGenes,
                   CollapsedCellOptimizer::SerialVecType& alphas,
                   std::vector<SalmonEqClass>& salmonEqclasses,
-                  std::shared_ptr<spdlog::logger>& jointlog){
+                  std::shared_ptr<spdlog::logger>& jointlog,
+                  bool initUniform){
 
   // An EM termination criterion, adopted from Bray et al. 2016
   uint32_t minIter {50};
@@ -75,6 +76,10 @@ bool runPerCellEM(double& totalNumFrags, size_t numGenes,
   uint32_t maxIter {10000};
   size_t numClasses = salmonEqclasses.size();
 
+  if ( initUniform ) {
+    double uniformPrior = 1/numGenes;
+    std::fill(alphas.begin(), alphas.end(), uniformPrior);
+  }
   CollapsedCellOptimizer::SerialVecType alphasPrime(numGenes, 0.0);
 
   assert( numGenes == alphas.size() );
@@ -239,8 +244,7 @@ bool runBootstraps(size_t numGenes,
   return true;
 }
 
-void optimizeCell(SCExpT& experiment,
-                  std::vector<std::string>& trueBarcodes,
+void optimizeCell(std::vector<std::string>& trueBarcodes,
                   std::atomic<uint32_t>& barcode,
                   size_t totalCells, eqMapT& eqMap,
                   std::deque<std::pair<TranscriptGroup, uint32_t>>& orderedTgroup,
@@ -252,7 +256,8 @@ void optimizeCell(SCExpT& experiment,
                   tbb::atomic<uint32_t>& totalExpGeneCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, bool inDebugMode, uint32_t numBootstraps,
-                  bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps){
+                  bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
+                  bool initUniform){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
 
@@ -293,7 +298,7 @@ void optimizeCell(SCExpT& experiment,
             // original counts of the UMI
             uint32_t eqCount {0};
             for(auto& ugroup: bcIt->second){
-                eqCount += ugroup.second;
+              eqCount += ugroup.second;
             }
 
             txpGroups.emplace_back(txps);
@@ -341,7 +346,8 @@ void optimizeCell(SCExpT& experiment,
                                    numGenes,
                                    geneAlphas,
                                    salmonEqclasses,
-                                   jointlog);
+                                   jointlog,
+                                   initUniform);
         if( !isEMok ){
           jointlog->error("EM iteration for cell {} failed \n"
                           "Please Report this on github.", trueBarcodeStr);
@@ -433,65 +439,18 @@ void optimizeCell(SCExpT& experiment,
   }
 }
 
-uint32_t getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                         const std::vector<Transcript>& transcripts,
-                         const std::string& geneMapFile,
-                         spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap){
-  std::string fname = geneMapFile;
-  std::ifstream t2gFile(fname);
-
-  spp::sparse_hash_map<std::string, uint32_t> txpIdxMap(transcripts.size());
-
-  for (size_t i=0; i<transcripts.size(); i++){
-    txpIdxMap[ transcripts[i].RefName ] = i;
-  }
-
-  uint32_t tid, gid, geneCount{0};
-  std::string tStr, gStr;
-  if(t2gFile.is_open()) {
-    while( not t2gFile.eof() ) {
-      t2gFile >> tStr >> gStr;
-
-      if(not txpIdxMap.contains(tStr)){
-        continue;
-      }
-      tid = txpIdxMap[tStr];
-
-      if (geneIdxMap.contains(gStr)){
-        gid = geneIdxMap[gStr];
-      }
-      else{
-        gid = geneCount;
-        geneIdxMap[gStr] = gid;
-        geneCount++;
-      }
-
-      txpToGeneMap[tid] = gid;
-    }
-    t2gFile.close();
-  }
-  if(txpToGeneMap.size() < transcripts.size()){
-    std::cerr << "ERROR: "
-              << "Txp to Gene Map not found for "
-              << transcripts.size() - txpToGeneMap.size()
-              <<" transcripts. Exiting" << std::flush;
-    exit(1);
-  }
-
-  return geneCount;
-}
-
-
 template <typename ProtocolT>
-bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
+bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
+                                      spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                                       AlevinOpts<ProtocolT>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount,
                                       CFreqMapT& freqCounter,
                                       size_t numLowConfidentBarcode){
-  auto& fullEqMap = experiment.equivalenceClassBuilder().eqMap();
   size_t numCells = trueBarcodes.size();
+  size_t numGenes = geneIdxMap.size();
   size_t numWorkerThreads{1};
 
   if (aopt.numThreads > 1) {
@@ -512,35 +471,13 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
     eqId++;
   }
 
-  spp::sparse_hash_map<uint32_t, uint32_t> txpToGeneMap;
-  spp::sparse_hash_map<std::string, uint32_t> geneIdxMap;
-
-  uint32_t numGenes = getTxpToGeneMap(txpToGeneMap,
-                                      experiment.transcripts(),
-                                      aopt.geneMapFile.string(),
-                                      geneIdxMap);
-
-  if (aopt.dumpBarcodeEq){
-    std::ofstream oFile;
-    boost::filesystem::path oFilePath = aopt.outputDirectory / "cell_eq_order.txt";
-    oFile.open(oFilePath.string());
-    for (auto& bc : trueBarcodes) {
-      oFile << bc << "\n";
-    }
-    oFile.close();
-
-    {//dump transcripts names
-      boost::filesystem::path tFilePath = aopt.outputDirectory / "transcripts.txt";
-      std::ofstream tFile(tFilePath.string());
-      for (auto& txp: experiment.transcripts()) {
-        tFile << txp.RefName << "\n";
-      }
-      tFile.close();
-    }
-  }
-
   if (aopt.noEM) {
     aopt.jointLog->warn("Not performing EM; this may result in discarding ambiguous reads\n");
+    aopt.jointLog->flush();
+  }
+
+  if (aopt.initUniform) {
+    aopt.jointLog->warn("Using uniform initialization for EM");
     aopt.jointLog->flush();
   }
 
@@ -552,7 +489,6 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   std::vector<std::thread> workerThreads;
   for (size_t tn = 0; tn < numWorkerThreads; ++tn) {
     workerThreads.emplace_back(optimizeCell,
-                               std::ref(experiment),
                                std::ref(trueBarcodes),
                                std::ref(bcount),
                                numCells,
@@ -575,7 +511,8 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                aopt.numBootstraps,
                                aopt.naiveEqclass,
                                aopt.dumpUmiGraph,
-                               aopt.dumpfeatures);
+                               aopt.dumpfeatures,
+                               aopt.initUniform);
   }
 
   for (auto& t : workerThreads) {
@@ -629,7 +566,7 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
   std::vector<std::vector<double>> countMatrix;
 
   bool hasWhitelist = boost::filesystem::exists(aopt.whitelistFile);
-  if(not aopt.nobarcode){
+  if(not aopt.nobarcode and numLowConfidentBarcode>0){
     if(not hasWhitelist  or aopt.dumpCsvCounts){
       aopt.jointLog->info("Clearing EqMap; Might take some time.");
       fullEqMap.clear();
@@ -698,7 +635,9 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
 
 namespace apt = alevin::protocols;
 template
-bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
+bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
+                                      spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                                       AlevinOpts<apt::DropSeq>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
@@ -706,7 +645,10 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       CFreqMapT& freqCounter,
                                       size_t numLowConfidentBarcode);
 template
-bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
+bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
+                                      spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+
                                       AlevinOpts<apt::InDrop>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
@@ -714,7 +656,10 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       CFreqMapT& freqCounter,
                                       size_t numLowConfidentBarcode);
 template
-bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
+bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
+                                      spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+
                                       AlevinOpts<apt::ChromiumV3>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
@@ -722,7 +667,10 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       CFreqMapT& freqCounter,
                                       size_t numLowConfidentBarcode);
 template
-bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
+bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
+                                      spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+
                                       AlevinOpts<apt::Chromium>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
@@ -730,7 +678,10 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       CFreqMapT& freqCounter,
                                       size_t numLowConfidentBarcode);
 template
-bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
+bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
+                                      spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+
                                       AlevinOpts<apt::Gemcode>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
@@ -738,7 +689,10 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       CFreqMapT& freqCounter,
                                       size_t numLowConfidentBarcode);
 template
-bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
+bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
+                                      spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+
                                       AlevinOpts<apt::CELSeq>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
@@ -746,7 +700,10 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       CFreqMapT& freqCounter,
                                       size_t numLowConfidentBarcode);
 template
-bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
+bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
+                                      spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+
                                       AlevinOpts<apt::CELSeq2>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
@@ -754,7 +711,10 @@ bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
                                       CFreqMapT& freqCounter,
                                       size_t numLowConfidentBarcode);
 template
-bool CollapsedCellOptimizer::optimize(SCExpT& experiment,
+bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
+                                      spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+
                                       AlevinOpts<apt::Custom>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,

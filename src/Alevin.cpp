@@ -55,6 +55,7 @@
 //alevin include
 #include "Filter.hpp"
 #include "AlevinOpts.hpp"
+#include "AlevinHash.hpp"
 #include "AlevinUtils.hpp"
 #include "BarcodeModel.hpp"
 #include "SingleCellProtocols.hpp"
@@ -908,17 +909,29 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
 
   size_t numLowConfidentBarcode;
 
-  aopt.jointLog->info("Processing barcodes files (if Present) \n\n ");
+  if(boost::filesystem::exists(aopt.bfhFile)) {
+    if (aopt.noQuant) {
+      aopt.jointLog->error("Can't use --noQuant with hashMode (--hash)");
+      aopt.jointLog->flush();
+      exit(1);
+    }
 
-  processBarcodes(barcodeFiles,
-                  readFiles,
-                  aopt,
-                  barcodeSoftMap,
-                  trueBarcodes,
-                  freqCounter,
-                  numLowConfidentBarcode);
+    salmonHashQuantify(aopt, sopt.indexDirectory,
+                       sopt.outputDirectory, freqCounter);
+    aopt.noQuant = true;
 
-  aopt.jointLog->flush();
+    aopt.jointLog->info("Done Processing");
+  } else {
+    aopt.jointLog->info("Processing barcodes files (if Present) \n\n ");
+    processBarcodes(barcodeFiles,
+                    readFiles,
+                    aopt,
+                    barcodeSoftMap,
+                    trueBarcodes,
+                    freqCounter,
+                    numLowConfidentBarcode);
+    aopt.jointLog->flush();
+  }
 
   if(!aopt.noQuant){
     aopt.jointLog->info("Done with Barcode Processing; Moving to Quantify\n");
@@ -1002,6 +1015,9 @@ salmon-based processing of single-cell RNA-seq data.
     bool gemcode = vm["gemcode"].as<bool>();
     bool celseq = vm["celseq"].as<bool>();
     bool celseq2 = vm["celseq2"].as<bool>();
+    bool custom = (vm.count("barcodeLength") and
+                   vm.count("umiLength") and
+                   vm.count("end"));
 
     uint8_t validate_num_protocols {0};
     if (dropseq) validate_num_protocols += 1;
@@ -1011,6 +1027,7 @@ salmon-based processing of single-cell RNA-seq data.
     if (gemcode) validate_num_protocols += 1;
     if (celseq) validate_num_protocols += 1;
     if (celseq2) validate_num_protocols += 1;
+    if (custom) validate_num_protocols += 1;
 
     if ( validate_num_protocols != 1 ) {
       fmt::print(stderr, "ERROR: Please specify one and only one scRNA protocol;");

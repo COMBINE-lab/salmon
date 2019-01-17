@@ -261,6 +261,7 @@ namespace alevin {
       // mark in salmon options that we are running
       // in alevin mode
       sopt.alevinMode = true;
+      if (sopt.initUniform) { aopt.initUniform = true; }
 
       //Create outputDirectory
       aopt.outputDirectory = vm["output"].as<std::string>() + "/alevin";
@@ -296,6 +297,15 @@ namespace alevin {
         if (!bfs::exists(aopt.whitelistFile)) {
           fmt::print(stderr,"\nWhitelist File {} does not exists\n Exiting Now",
                      aopt.whitelistFile.string());
+          return false;
+        }
+      }
+
+      if (vm.count("hash")){
+        aopt.bfhFile = vm["hash"].as<std::string>();
+        if (!bfs::exists(aopt.bfhFile)) {
+          fmt::print(stderr,"\nBfh File {} does not exists\n Exiting Now",
+                     aopt.bfhFile.string());
           return false;
         }
       }
@@ -396,8 +406,8 @@ namespace alevin {
         uint32_t umiLength = vm["umiLength"].as<uint32_t>();
 
         // validate that BC and UMI lengths are OK
-        uint32_t maxBC{60};
-        uint32_t maxUMI{12};
+        uint32_t maxBC{20};
+        uint32_t maxUMI{20};
         if (barcodeLength < 1 or barcodeLength > maxBC) {
           aopt.jointLog->error("Barcode length ({}) was not in the required length range [1, {}].\n"
                                "Exiting now.", barcodeLength, maxBC);

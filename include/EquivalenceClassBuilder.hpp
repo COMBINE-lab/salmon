@@ -26,38 +26,40 @@ using UMIT = uint64_t;
  **/
 struct SCTGValue {
   SCTGValue(const SCTGValue& o) {
-    weights = o.weights;
-    combinedWeights = o.combinedWeights;
     count = o.count;
     barcodeGroup = o.barcodeGroup;
   }
 
   SCTGValue(){}
   SCTGValue& operator=(const SCTGValue& o){
-    weights = o.weights;
-    combinedWeights = o.combinedWeights;
     count = o.count;
-    //count.store(o.count.load());
     barcodeGroup = o.barcodeGroup;
     return *this;
   }
 
-  SCTGValue(std::vector<double>& weightIn, uint64_t countIn)
-      : weights(weightIn.begin(), weightIn.end()) {
-    count = countIn;
-  }
+  SCTGValue(uint64_t countIn)
+    : count(countIn) {}
 
+  SCTGValue(std::vector<double>&, int)
+  { std::cerr<<"invalid initialization"<<std::endl; exit(1); }
   //////////////////////////////////////////////////////////////////
   //constructor for handling barcodes
-  SCTGValue(std::vector<double>& weightIn,
-          uint64_t countIn, uint32_t barcode, uint64_t umi) :
-    weights(weightIn.begin(), weightIn.end()) {
+  SCTGValue(uint64_t countIn, uint32_t barcode, uint64_t umi) {
     count = countIn;
     barcodeGroup[barcode][umi] = 1;
   }
 
+  SCTGValue(uint32_t barcode, uint64_t umi, uint32_t umiCount) {
+    count = umiCount;
+    barcodeGroup[barcode][umi] = umiCount;
+  }
+
   void updateBarcodeGroup(BarcodeT barcode, UMIT umi) {
     barcodeGroup[barcode][umi]++;
+  }
+
+  void updateBarcodeGroup(BarcodeT barcode, UMIT umi, uint32_t count) {
+    barcodeGroup[barcode][umi] += count;
   }
   //////////////////////////////////////////////////////////////////
 
@@ -116,6 +118,8 @@ struct TGValue {
   // We need this because otherwise the template will complain ... this **could be**
   // be instantiated, but isn't.  Figure out a cleaner way to do this;
   void updateBarcodeGroup(BarcodeT bc, UMIT umi) {}
+  TGValue(int, BarcodeT bc, UMIT umi)
+  { std::cerr<<"invalid initialization"<<std::endl; exit(1); }
 
   // const is a lie
   void normalizeAux() const {
@@ -189,33 +193,17 @@ public:
   //////////////////////////////////////////////////////////////////
   //function for alevin barcode level count indexing
   inline void addBarcodeGroup(TranscriptGroup&& g,
-                              std::vector<double>& weights,
                               uint32_t& barcode,
                               uint64_t& umi ){
-    auto upfn = [&weights, &barcode, &umi](TGValueType& x) -> void {
+    auto upfn = [&barcode, &umi](TGValueType& x) -> void {
       // update the count
       x.count++;
       // update the weights
-      for (size_t i = 0; i < x.weights.size(); ++i) {
-        x.weights[i] += weights[i];
-        //salmon::utils::incLoop(x.weights[i], weights[i]);
-      }
       x.updateBarcodeGroup(barcode, umi);
-      /*
-      try{
-        x.barcodeGroup.at(barcode).at(umi)++;
-      }
-      catch (const std::out_of_range& e) {
-        x.barcodeGroup[barcode][umi]  = 1;
-        //cuckoo hash updates: deprecated
-        //auto upbarfn = [](uint64_t &num) { ++num; };
-        //barcodeGroup.upsert(barcode, upbarfn, 1);
-      }
-      */
     };
 
     // have to lock since tbb operator= is not concurrency safe
-    TGValueType v(weights, 1, barcode, umi);
+    TGValueType v(1, barcode, umi);
     countMap_.upsert(g, upfn, v);
   }
   ////////////////////////////////////////////////////////////////
