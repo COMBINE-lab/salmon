@@ -193,15 +193,13 @@ namespace selective_alignment {
             didRecover = recoverSingleOrphan(*rightIt, false);
             ++rightIt;
           } else if (rightTxp == leftTxp) {
-
-            /*
             didRecover = recoverSingleOrphan(*leftIt, true);
             ++leftIt;
             if(!didRecover) {
               didRecover = recoverSingleOrphan(*rightIt, false);
             }
             ++rightIt;
-            */
+            /*
             //++leftIt; ++rightIt;
 
             // Should not happen!
@@ -224,7 +222,7 @@ namespace selective_alignment {
             log->flush();
             spdlog::drop_all();
             std::exit(1);
-
+            */
           }
         }
 
