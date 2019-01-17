@@ -1517,7 +1517,7 @@ std::string getCurrentTimeAsString() {
         sopt.discardOrphansQuasi = true;
         sopt.noDovetail = true;
         /*
-          sopt.minScoreFraction = 0.70;
+        sopt.minScoreFraction = 0.70;
         sopt.mismatchPenalty = 3;
         sopt.gapOpenPenalty = 5;
         sopt.gapExtendPenalty = 1;

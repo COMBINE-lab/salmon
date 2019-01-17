@@ -960,12 +960,6 @@ void processReadsQuasi(
                                             readLenLeft, maxNumHits,
                                             tooManyHits, hctr);
         } else {
-          /*
-          if (salmonOpts.validateMappings) {
-            lh = rh = true;
-          }
-          */
-          //auto tempMaxNumHits = salmonOpts.recoverOrphans ? 10000 : maxNumHits;
           rapmap::utils::MergeResult mergeRes = rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, leftHits, rightHits,
                                                                                        jointHits,
                                                                                        mc,
@@ -981,10 +975,8 @@ void processReadsQuasi(
 
           if ( mergeStatusOK and salmonOpts.recoverOrphans and !tooManyHits) {
             if (leftHits.size() + rightHits.size() > 0) {
-              if (mergeRes == rapmap::utils::MergeResult::HAD_ONLY_LEFT) {
-                jointHits.clear();
-              }
-              if (mergeRes == rapmap::utils::MergeResult::HAD_ONLY_RIGHT) {
+              if (mergeRes == rapmap::utils::MergeResult::HAD_ONLY_LEFT or
+                  mergeRes == rapmap::utils::MergeResult::HAD_ONLY_RIGHT) {
                 jointHits.clear();
               }
               selective_alignment::utils::recoverOrphans(rp.first.seq,
