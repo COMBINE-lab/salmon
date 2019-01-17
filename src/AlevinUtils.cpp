@@ -396,8 +396,8 @@ namespace alevin {
         uint32_t umiLength = vm["umiLength"].as<uint32_t>();
 
         // validate that BC and UMI lengths are OK
-        uint32_t maxBC{60};
-        uint32_t maxUMI{12};
+        uint32_t maxBC{20};
+        uint32_t maxUMI{20};
         if (barcodeLength < 1 or barcodeLength > maxBC) {
           aopt.jointLog->error("Barcode length ({}) was not in the required length range [1, {}].\n"
                                "Exiting now.", barcodeLength, maxBC);
