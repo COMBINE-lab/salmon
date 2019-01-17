@@ -50,14 +50,23 @@ struct SCTGValue {
   //////////////////////////////////////////////////////////////////
   //constructor for handling barcodes
   SCTGValue(std::vector<double>& weightIn,
-          uint64_t countIn, uint32_t barcode, uint64_t umi) :
+            uint64_t countIn, uint32_t barcode, uint64_t umi) :
     weights(weightIn.begin(), weightIn.end()) {
     count = countIn;
     barcodeGroup[barcode][umi] = 1;
   }
 
+  SCTGValue(uint32_t barcode, uint64_t umi, uint32_t umiCount) {
+    count = umiCount;
+    barcodeGroup[barcode][umi] = umiCount;
+  }
+
   void updateBarcodeGroup(BarcodeT barcode, UMIT umi) {
     barcodeGroup[barcode][umi]++;
+  }
+
+  void updateBarcodeGroup(BarcodeT barcode, UMIT umi, uint32_t count) {
+    barcodeGroup[barcode][umi] += count;
   }
   //////////////////////////////////////////////////////////////////
 

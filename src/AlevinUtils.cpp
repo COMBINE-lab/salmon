@@ -300,6 +300,15 @@ namespace alevin {
         }
       }
 
+      if (vm.count("hash")){
+        aopt.bfhFile = vm["hash"].as<std::string>();
+        if (!bfs::exists(aopt.bfhFile)) {
+          fmt::print(stderr,"\nBfh File {} does not exists\n Exiting Now",
+                     aopt.bfhFile.string());
+          return false;
+        }
+      }
+
       if (vm.count("tgMap")){
         aopt.geneMapFile = vm["tgMap"].as<std::string>();
         if (!bfs::exists(aopt.geneMapFile)) {

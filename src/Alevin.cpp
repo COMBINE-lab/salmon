@@ -55,6 +55,7 @@
 //alevin include
 #include "Filter.hpp"
 #include "AlevinOpts.hpp"
+#include "AlevinHash.hpp"
 #include "AlevinUtils.hpp"
 #include "BarcodeModel.hpp"
 #include "SingleCellProtocols.hpp"
@@ -908,17 +909,29 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
 
   size_t numLowConfidentBarcode;
 
-  aopt.jointLog->info("Processing barcodes files (if Present) \n\n ");
+  if(boost::filesystem::exists(aopt.bfhFile)) {
+    if (aopt.noQuant) {
+      aopt.jointLog->error("Can't use --noQuant with hashMode (--hash)");
+      aopt.jointLog->flush();
+      exit(1);
+    }
 
-  processBarcodes(barcodeFiles,
-                  readFiles,
-                  aopt,
-                  barcodeSoftMap,
-                  trueBarcodes,
-                  freqCounter,
-                  numLowConfidentBarcode);
+    salmonHashQuantify(aopt, sopt.indexDirectory,
+                       sopt.outputDirectory, freqCounter);
+    aopt.noQuant = true;
 
-  aopt.jointLog->flush();
+    aopt.jointLog->info("Done Processing");
+  } else {
+    aopt.jointLog->info("Processing barcodes files (if Present) \n\n ");
+    processBarcodes(barcodeFiles,
+                    readFiles,
+                    aopt,
+                    barcodeSoftMap,
+                    trueBarcodes,
+                    freqCounter,
+                    numLowConfidentBarcode);
+    aopt.jointLog->flush();
+  }
 
   if(!aopt.noQuant){
     aopt.jointLog->info("Done with Barcode Processing; Moving to Quantify\n");

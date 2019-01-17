@@ -20,6 +20,7 @@
 #include "SingleCellProtocols.hpp"
 #include "WhiteList.hpp"
 #include "DedupUMI.hpp"
+#include "TranscriptGroup.hpp"
 
 #include "cuckoohash_map.hh"
 #include "Eigen/Dense"
@@ -31,6 +32,7 @@ using tgrouplabelt = std::vector<uint32_t>;
 using tgroupweightvec = std::vector<double>;
 namespace bfs = boost::filesystem;
 using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
+using EqMapT = cuckoohash_map<TranscriptGroup, SCTGValue, TranscriptGroupHasher>;
 
 struct CellState {
   bool inActive;
@@ -43,7 +45,9 @@ public:
   CollapsedCellOptimizer();
 
   template <class ProtocolT>
-  bool optimize(SCExpT& readExp,
+  bool optimize(EqMapT& freqMap,
+                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                 AlevinOpts<ProtocolT>& aopt,
                 GZipWriter& gzw,
                 std::vector<std::string>& trueBarcodes,
@@ -58,8 +62,7 @@ bool runPerCellEM(double& totalNumFrags,
                   std::vector<SalmonEqClass>& salmonEqclasses,
                   std::shared_ptr<spdlog::logger>& jointlog);
 
-void optimizeCell(SCExpT& experiment,
-                  std::vector<std::string>& trueBarcodes,
+void optimizeCell(std::vector<std::string>& trueBarcodes,
                   std::atomic<uint32_t>& barcode,
                   size_t totalCells,
                   eqMapT& eqMap,

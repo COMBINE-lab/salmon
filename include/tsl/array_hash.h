@@ -374,7 +374,7 @@ public:
      * Return the position where the element was actually inserted.
      */
     template<class... ValueArgs>
-    const_iterator append(const_iterator end_of_bucket, const CharT* key, size_type key_size, 
+    const_iterator __attribute__((used)) append(const_iterator end_of_bucket, const CharT* key, size_type key_size, 
                           ValueArgs&&... value) 
     {
         const key_size_type key_sz = as_key_size_type(key_size);
