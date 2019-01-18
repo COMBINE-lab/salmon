@@ -49,9 +49,10 @@ struct SCTGValue {
     barcodeGroup[barcode][umi] = 1;
   }
 
-  SCTGValue(uint32_t barcode, uint64_t umi, uint32_t umiCount) {
-    count = umiCount;
-    barcodeGroup[barcode][umi] = umiCount;
+  SCTGValue(uint32_t countIn, uint32_t barcode,
+            uint64_t umi, bool bulkUpdate) {
+    count = countIn;
+    barcodeGroup[barcode][umi] = countIn;
   }
 
   void updateBarcodeGroup(BarcodeT barcode, UMIT umi) {

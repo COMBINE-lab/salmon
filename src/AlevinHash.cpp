@@ -138,8 +138,8 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
             x.count += umiCount;
             x.updateBarcodeGroup(bc, umiIndex, umiCount);
           };
-	
-	  SCTGValue value(bc, umiIndex, umiCount);
+
+          SCTGValue value(umiCount, bc, umiIndex, true);
           countMap.upsert(txGroup, upfn, value);
           freqCounter[bcName] += umiCount;
         }
