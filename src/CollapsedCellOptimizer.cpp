@@ -77,7 +77,7 @@ bool runPerCellEM(double& totalNumFrags, size_t numGenes,
   size_t numClasses = salmonEqclasses.size();
 
   if ( initUniform ) {
-    double uniformPrior = 1/numGenes;
+    double uniformPrior = 1.0/numGenes;
     std::fill(alphas.begin(), alphas.end(), uniformPrior);
   }
   CollapsedCellOptimizer::SerialVecType alphasPrime(numGenes, 0.0);
@@ -138,7 +138,8 @@ bool runBootstraps(size_t numGenes,
                    uint32_t numBootstraps,
                    CollapsedCellOptimizer::SerialVecType& variance,
                    bool useAllBootstraps,
-                   std::vector<std::vector<double>>& sampleEstimates){
+                   std::vector<std::vector<double>>& sampleEstimates,
+                   bool initUniform){
 
   // An EM termination criterion, adopted from Bray et al. 2016
   uint32_t minIter {50};
@@ -178,7 +179,11 @@ bool runBootstraps(size_t numGenes,
     }
 
     for (size_t i = 0; i < numGenes; ++i) {
-      alphas[i] = (geneAlphas[i] + 0.5) * 1e-3;
+      if ( initUniform ) {
+        alphas[i] = 1.0 / numGenes;
+      } else {
+        alphas[i] = (geneAlphas[i] + 0.5) * 1e-3;
+      }
     }
 
     bool converged{false};
@@ -382,7 +387,8 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                                                numBootstraps,
                                                bootVariance,
                                                useAllBootstraps,
-                                               sampleEstimates);
+                                               sampleEstimates,
+                                               initUniform);
         if( not isBootstrappingOk or
             (useAllBootstraps and sampleEstimates.size()!=numBootstraps)
             ){
