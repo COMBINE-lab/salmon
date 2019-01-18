@@ -1010,10 +1010,6 @@ using SCReadExperimentT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 template bool CollapsedEMOptimizer::optimize<BulkReadExperimentT>(
     BulkReadExperimentT& readExp, SalmonOpts& sopt, double relDiffTolerance,
     uint32_t maxIter);
-template bool CollapsedEMOptimizer::optimize<SCReadExperimentT>(
-                                                                  SCReadExperimentT& readExp, SalmonOpts& sopt, double relDiffTolerance,
-                                                                  uint32_t maxIter);
-
 
 template bool CollapsedEMOptimizer::optimize<BulkAlnLibT<UnpairedRead>>(
     BulkAlnLibT<UnpairedRead>& readExp, SalmonOpts& sopt,
@@ -1028,12 +1024,6 @@ template bool CollapsedEMOptimizer::gatherBootstraps<BulkReadExperimentT>(
     BulkReadExperimentT& readExp, SalmonOpts& sopt,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     double relDiffTolerance, uint32_t maxIter);
-
-template bool CollapsedEMOptimizer::gatherBootstraps<SCReadExperimentT>(
-                                                                          SCReadExperimentT& readExp, SalmonOpts& sopt,
-                                                                          std::function<bool(const std::vector<double>&)>& writeBootstrap,
-                                                                          double relDiffTolerance, uint32_t maxIter);
-
 
 template bool
 CollapsedEMOptimizer::gatherBootstraps<BulkAlnLibT<UnpairedRead>>(
