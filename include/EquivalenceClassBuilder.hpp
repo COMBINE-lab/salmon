@@ -66,7 +66,6 @@ struct SCTGValue {
   // const is a lie
   void normalizeAux() const {}
 
-  mutable std::vector<double> weights;
   uint64_t count{0};
   SparseBarcodeMapType barcodeGroup;
 };
@@ -128,7 +127,7 @@ struct TGValue {
   uint64_t count{0};
 };
 
-template <typename TGValueType = TGValue>
+template <typename TGValueType>
 class EquivalenceClassBuilder {
 public:
   EquivalenceClassBuilder(std::shared_ptr<spdlog::logger> loggerIn, uint32_t maxResizeThreads)
@@ -194,19 +193,7 @@ public:
   }
   ////////////////////////////////////////////////////////////////
 
-  inline void addGroup(TranscriptGroup&& g, std::vector<double>& weights) {
-
-    auto upfn = [&weights](TGValueType& x) -> void {
-      // update the count
-      x.count++;
-      // update the weights
-      for (size_t i = 0; i < x.weights.size(); ++i) {
-        x.weights[i] += weights[i];
-      }
-    };
-    TGValueType v(weights, 1);
-    countMap_.upsert(g, upfn, v);
-  }
+  inline void addGroup(TranscriptGroup&& g, std::vector<double>& weights);
 
   cuckoohash_map<TranscriptGroup, TGValueType, TranscriptGroupHasher>& eqMap(){
     return countMap_;
@@ -222,6 +209,21 @@ private:
   std::vector<std::pair<const TranscriptGroup, TGValueType>> countVec_;
   std::shared_ptr<spdlog::logger> logger_;
 };
+
+template <>
+inline void EquivalenceClassBuilder<TGValue>::addGroup(TranscriptGroup&& g,
+                                                       std::vector<double>& weights) {
+  auto upfn = [&weights](TGValue& x) -> void {
+    // update the count
+    x.count++;
+    // update the weights
+    for (size_t i = 0; i < x.weights.size(); ++i) {
+      x.weights[i] += weights[i];
+    }
+  };
+  TGValue v(weights, 1);
+  countMap_.upsert(g, upfn, v);
+}
 
 // explicit instantiations
 template class EquivalenceClassBuilder<TGValue>;
