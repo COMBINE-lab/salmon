@@ -1069,8 +1069,6 @@ template bool GZipWriter::writeBootstrap<int>(const std::vector<int>& abund,
 
 template bool GZipWriter::writeEquivCounts<BulkExpT>(const SalmonOpts& sopt,
                                              BulkExpT& readExp);
-template bool GZipWriter::writeEquivCounts<SCExpT>(const SalmonOpts& sopt,
-                                                           SCExpT& readExp);
 
 template bool GZipWriter::writeEquivCounts<BulkAlignLibT<UnpairedRead>>(
     const SalmonOpts& sopt, BulkAlignLibT<UnpairedRead>& readExp);

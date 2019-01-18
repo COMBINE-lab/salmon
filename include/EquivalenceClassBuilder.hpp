@@ -41,7 +41,7 @@ struct SCTGValue {
     : count(countIn) {}
 
   SCTGValue(std::vector<double>&, int)
-  { std::cerr<<"invalid initialization"<<std::endl; exit(1); }
+  { std::cerr<<"invalid initialization in eqbuilder"<<std::endl; exit(1); }
   //////////////////////////////////////////////////////////////////
   //constructor for handling barcodes
   SCTGValue(uint64_t countIn, uint32_t barcode, uint64_t umi) {
@@ -49,9 +49,10 @@ struct SCTGValue {
     barcodeGroup[barcode][umi] = 1;
   }
 
-  SCTGValue(uint32_t barcode, uint64_t umi, uint32_t umiCount) {
-    count = umiCount;
-    barcodeGroup[barcode][umi] = umiCount;
+  SCTGValue(uint32_t countIn, uint32_t barcode,
+            uint64_t umi, bool bulkUpdate) {
+    count = countIn;
+    barcodeGroup[barcode][umi] = countIn;
   }
 
   void updateBarcodeGroup(BarcodeT barcode, UMIT umi) {
@@ -64,22 +65,8 @@ struct SCTGValue {
   //////////////////////////////////////////////////////////////////
 
   // const is a lie
-  void normalizeAux() const {
-    double sumOfAux{0.0};
-    for (size_t i = 0; i < weights.size(); ++i) {
-      sumOfAux += weights[i];
-    }
-    double norm = 1.0 / sumOfAux;
-    for (size_t i = 0; i < weights.size(); ++i) {
-      weights[i] *= norm;
-    }
-  }
+  void normalizeAux() const {}
 
-  mutable std::vector<double> weights;
-
-  // The combined auxiliary and position weights.  These
-  // are filled in by the inference algorithm.
-  mutable std::vector<double> combinedWeights;
   uint64_t count{0};
   SparseBarcodeMapType barcodeGroup;
 };
@@ -119,7 +106,7 @@ struct TGValue {
   // be instantiated, but isn't.  Figure out a cleaner way to do this;
   void updateBarcodeGroup(BarcodeT bc, UMIT umi) {}
   TGValue(int, BarcodeT bc, UMIT umi)
-  { std::cerr<<"invalid initialization"<<std::endl; exit(1); }
+  { std::cerr<<"invalid initialization in eqbuilder"<<std::endl; exit(1); }
 
   // const is a lie
   void normalizeAux() const {
@@ -141,7 +128,7 @@ struct TGValue {
   uint64_t count{0};
 };
 
-template <typename TGValueType = TGValue>
+template <typename TGValueType>
 class EquivalenceClassBuilder {
 public:
   EquivalenceClassBuilder(std::shared_ptr<spdlog::logger> loggerIn, uint32_t maxResizeThreads)
@@ -161,7 +148,6 @@ public:
     size_t totalCount{0};
     auto lt = countMap_.lock_table();
     for (auto& kv : lt) {
-      kv.second.normalizeAux();
       totalCount += kv.second.count;
     }
 
@@ -208,19 +194,7 @@ public:
   }
   ////////////////////////////////////////////////////////////////
 
-  inline void addGroup(TranscriptGroup&& g, std::vector<double>& weights) {
-
-    auto upfn = [&weights](TGValueType& x) -> void {
-      // update the count
-      x.count++;
-      // update the weights
-      for (size_t i = 0; i < x.weights.size(); ++i) {
-        x.weights[i] += weights[i];
-      }
-    };
-    TGValueType v(weights, 1);
-    countMap_.upsert(g, upfn, v);
-  }
+  inline void addGroup(TranscriptGroup&& g, std::vector<double>& weights);
 
   cuckoohash_map<TranscriptGroup, TGValueType, TranscriptGroupHasher>& eqMap(){
     return countMap_;
@@ -236,6 +210,21 @@ private:
   std::vector<std::pair<const TranscriptGroup, TGValueType>> countVec_;
   std::shared_ptr<spdlog::logger> logger_;
 };
+
+template <>
+inline void EquivalenceClassBuilder<TGValue>::addGroup(TranscriptGroup&& g,
+                                                       std::vector<double>& weights) {
+  auto upfn = [&weights](TGValue& x) -> void {
+    // update the count
+    x.count++;
+    // update the weights
+    for (size_t i = 0; i < x.weights.size(); ++i) {
+      x.weights[i] += weights[i];
+    }
+  };
+  TGValue v(weights, 1);
+  countMap_.upsert(g, upfn, v);
+}
 
 // explicit instantiations
 template class EquivalenceClassBuilder<TGValue>;
