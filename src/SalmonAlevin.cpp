@@ -58,7 +58,6 @@
 #include <boost/lockfree/queue.hpp>
 #include <boost/program_options.hpp>
 #include <boost/range/irange.hpp>
-#include <boost/range/iterator_range.hpp>
 #include <boost/thread/thread.hpp>
 
 // TBB Includes
@@ -83,6 +82,9 @@
 #include "concurrentqueue.h"
 
 #include <cuckoohash_map.hh>
+
+// core includes
+#include "core/range.hpp"
 
 //alevin include
 #include "AlevinOpts.hpp"
@@ -148,8 +150,7 @@ namespace alevin{
   template <typename AlnT> using AlnGroupVec = std::vector<AlevinAlnGroup<AlnT>>;
 
   template <typename AlnT>
-  using AlnGroupVecRange =
-    boost::iterator_range<typename AlnGroupVec<AlnT>::iterator>;
+  using AlnGroupVecRange = core::range<typename AlnGroupVec<AlnT>::iterator>;
 
 #define __MOODYCAMEL__
 #if defined(__MOODYCAMEL__)
@@ -171,416 +172,6 @@ using bcEnd = BarcodeEnd;
 namespace aut = alevin::utils;
 using BlockedIndexRange = tbb::blocked_range<size_t>;
 using ReadExperimentT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
-
-
-template <typename AlnT, typename ProtocolT>
-void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc,
-                              uint64_t firstTimestepOfRound, ReadLibrary& readLib,
-                              const SalmonOpts& salmonOpts,
-                              AlnGroupVecRange<AlnT> batchHits,
-                              std::vector<Transcript>& transcripts,
-                              ClusterForest& clusterForest,
-                              FragmentLengthDistribution& fragLengthDist,
-                              BiasParams& observedBiasParams,
-                              std::atomic<uint64_t>& numAssignedFragments,
-                              std::default_random_engine& randEng, bool initialRound,
-                              std::atomic<bool>& burnedIn, double& maxZeroFrac,
-                              AlevinOpts<ProtocolT>& alevinOpts,
-                              std::mutex& iomutex){
-
-  using salmon::math::LOG_0;
-  using salmon::math::LOG_1;
-  using salmon::math::LOG_EPSILON;
-  using salmon::math::LOG_ONEHALF;
-  using salmon::math::logAdd;
-  using salmon::math::logSub;
-
-  const uint64_t numBurninFrags = salmonOpts.numBurninFrags;
-
-  auto& log = salmonOpts.jointLog;
-  //auto log = spdlog::get("jointLog");
-  size_t numTranscripts{transcripts.size()};
-  size_t localNumAssignedFragments{0};
-  size_t priorNumAssignedFragments{numAssignedFragments};
-  std::uniform_real_distribution<> uni(
-                                       0.0, 1.0 + std::numeric_limits<double>::min());
-  std::vector<uint64_t> libTypeCounts(LibraryFormat::maxLibTypeID() + 1);
-  bool hasCompatibleMapping{false};
-  uint64_t numCompatibleFragments{0};
-
-  std::vector<FragmentStartPositionDistribution>& fragStartDists =
-    readExp.fragmentStartPositionDistributions();
-  auto& biasModel = readExp.sequenceBiasModel();
-  auto& observedGCMass = observedBiasParams.observedGCMass;
-  auto& obsFwd = observedBiasParams.massFwd;
-  auto& obsRC = observedBiasParams.massRC;
-  auto& observedPosBiasFwd = observedBiasParams.posBiasFW;
-  auto& observedPosBiasRC = observedBiasParams.posBiasRC;
-
-  bool posBiasCorrect = salmonOpts.posBiasCorrect;
-  bool gcBiasCorrect = salmonOpts.gcBiasCorrect;
-  bool updateCounts = initialRound;
-  double incompatPrior = salmonOpts.incompatPrior;
-  bool useReadCompat = incompatPrior != salmon::math::LOG_1;
-  bool useFragLengthDist{!salmonOpts.noFragLengthDist};
-  bool noFragLenFactor{salmonOpts.noFragLenFactor};
-  bool useRankEqClasses{salmonOpts.rankEqClasses};
-  bool noLengthCorrection{salmonOpts.noLengthCorrection};
-  // JAN 13
-  bool useAuxParams = ((localNumAssignedFragments + numAssignedFragments) >= salmonOpts.numPreBurninFrags);
-
-  // If we're auto detecting the library type
-  auto* detector = readLib.getDetector();
-  bool autoDetect = (detector != nullptr) ? detector->isActive() : false;
-  // If we haven't detected yet, nothing is incompatible
-  if (autoDetect) { incompatPrior = salmon::math::LOG_1; }
-
-  auto expectedLibraryFormat = readLib.format();
-  uint64_t zeroProbFrags{0};
-
-  // EQClass
-  auto& eqBuilder = readExp.equivalenceClassBuilder();
-
-  // Build reverse map from transcriptID => hit id
-  using HitID = uint32_t;
-
-  double logForgettingMass{0.0};
-  uint64_t currentMinibatchTimestep{0};
-
-  // logForgettingMass and currentMinibatchTimestep are OUT parameters!
-  fmCalc.getLogMassAndTimestep(logForgettingMass, currentMinibatchTimestep);
-
-  double startingCumulativeMass =
-    fmCalc.cumulativeLogMassAt(firstTimestepOfRound);
-
-  auto isUnexpectedOrphan = [expectedLibraryFormat](AlnT& aln) -> bool {
-    return (expectedLibraryFormat.type == ReadType::PAIRED_END and
-            aln.mateStatus != rapmap::utils::MateStatus::PAIRED_END_PAIRED);
-  };
-
-  int i{0};
-  {
-    // Iterate over each group of alignments (a group consists of all alignments
-    // reported
-    // for a single read).  Distribute the read's mass to the transcripts
-    // where it potentially aligns.
-    for (auto& alnGroup : batchHits) {
-      // If we had no alignments for this read, then skip it
-      if (alnGroup.size() == 0) {
-        continue;
-      }
-
-      //extract barcode of the read
-      uint32_t barcode = alnGroup.barcode();
-      uint64_t umi = alnGroup.umi();
-
-      // We start out with probability 0
-      double sumOfAlignProbs{LOG_0};
-
-      // Record whether or not this read is unique to a single transcript.
-      bool transcriptUnique{true};
-
-      auto firstTranscriptID = alnGroup.alignments().front().transcriptID();
-      std::unordered_set<size_t> observedTranscripts;
-
-      std::vector<uint32_t> txpIDs;
-      std::vector<double> auxProbs;
-      double auxDenom = salmon::math::LOG_0;
-
-      uint32_t numInGroup{0};
-      uint32_t prevTxpID{0};
-
-      hasCompatibleMapping = false;
-
-      // For each alignment of this read
-      for (auto& aln : alnGroup.alignments()) {
-
-        useAuxParams = ((localNumAssignedFragments + numAssignedFragments) >= salmonOpts.numPreBurninFrags);
-        bool considerCondProb{burnedIn or useAuxParams};
-
-        auto transcriptID = aln.transcriptID();
-        auto& transcript = transcripts[transcriptID];
-        transcriptUnique =
-          transcriptUnique and (transcriptID == firstTranscriptID);
-
-        double refLength =
-          transcript.RefLength > 0 ? transcript.RefLength : 1.0;
-        double coverage = aln.score();
-        double logFragCov = (coverage > 0) ? std::log(coverage) : LOG_1;
-
-        // The alignment probability is the product of a
-        // transcript-level term (based on abundance and) an
-        // alignment-level term.
-        double logRefLength{salmon::math::LOG_0};
-
-        if (noLengthCorrection) {
-          logRefLength = 1.0;
-        } else if (salmonOpts.noEffectiveLengthCorrection or !burnedIn) {
-          logRefLength = std::log(static_cast<double>(transcript.RefLength));
-        } else {
-          logRefLength = transcript.getCachedLogEffectiveLength();
-        }
-
-        double transcriptLogCount = transcript.mass(initialRound);
-        auto flen = aln.fragLength();
-        // If we have a properly-paired read then use the "pedantic"
-        // definition here.
-        if (aln.mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED and
-            aln.fwd != aln.mateIsFwd) {
-          flen = aln.fragLengthPedantic(transcript.RefLength);
-        }
-
-
-        // If the transcript had a non-zero count (including pseudocount)
-        if (std::abs(transcriptLogCount) != LOG_0) {
-
-          // The probability of drawing a fragment of this length;
-          double logFragProb = LOG_1;
-          // If we are expecting a paired-end library, and this is an orphan,
-          // then logFragProb should be small
-          if (isUnexpectedOrphan(aln)) {
-            logFragProb = LOG_EPSILON;
-          }
-
-          if (flen > 0.0 and useFragLengthDist and considerCondProb) {
-            size_t fl = flen;
-            double lenProb = fragLengthDist.pmf(fl);
-            if (burnedIn) {
-              /* condition fragment length prob on txp length */
-              double refLengthCM = fragLengthDist.cmf(static_cast<size_t>(refLength));
-              bool computeMass = fl < refLength and !salmon::math::isLog0(refLengthCM);
-              logFragProb = (computeMass) ?
-                                      (lenProb - refLengthCM) :
-                salmon::math::LOG_EPSILON;
-              if (computeMass and refLengthCM < lenProb) {
-                // Threading is hard!  It's possible that an update to the PMF
-                //snuck in between when we asked to cache the CMF and when the
-                // "burnedIn" variable was last seen as false.
-                log->info("reference length = {}, CMF[refLen] = {}, fragLen = {},"
-                          "PMF[fragLen] = {}", refLength, std::exp(refLengthCM),
-                          aln.fragLength(), std::exp(lenProb));
-              }
-            } else if (useAuxParams) {
-              logFragProb = lenProb;
-            }
-            //logFragProb = lenProb;
-            //logFragProb = fragLengthDist.pmf(static_cast<size_t>(aln.fragLength()));
-          }
-
-          // TESTING
-          if (noFragLenFactor) {
-            logFragProb = LOG_1;
-          }
-
-          if (autoDetect) {
-            detector->addSample(aln.libFormat());
-            if (detector->canGuess()) {
-              detector->mostLikelyType(readLib.getFormat());
-              expectedLibraryFormat = readLib.getFormat();
-              incompatPrior = salmonOpts.incompatPrior;
-              autoDetect = false;
-            } else if (!detector->isActive()) {
-              expectedLibraryFormat = readLib.getFormat();
-              incompatPrior = salmonOpts.incompatPrior;
-              autoDetect = false;
-            }
-          }
-
-          // TODO: Maybe take the fragment length distribution into account
-          // for single-end fragments?
-
-          // The probability that the fragments align to the given strands in
-          // the
-          // given orientations.
-          bool isCompat =
-            salmon::utils::isCompatible(
-                                        aln.libFormat(),
-                                        expectedLibraryFormat,
-                                        static_cast<int32_t>(aln.pos),
-                                        aln.fwd,
-                                        aln.mateStatus);
-          double logAlignCompatProb = isCompat ? LOG_1 : incompatPrior;
-          if (!isCompat and salmonOpts.ignoreIncompat) {
-            aln.logProb = salmon::math::LOG_0;
-            continue;
-          }
-
-          // Allow for a non-uniform fragment start position distribution
-
-          double startPosProb{-logRefLength};
-          // DEC 9
-          if (aln.mateStatus == rapmap::utils::MateStatus::PAIRED_END_PAIRED and !noLengthCorrection) {
-            startPosProb = (flen <= refLength) ? -std::log(refLength - flen + 1) : salmon::math::LOG_EPSILON;
-          }
-
-          double fragStartLogNumerator{salmon::math::LOG_1};
-          double fragStartLogDenominator{salmon::math::LOG_1};
-
-          auto hitPos = aln.hitPos();
-
-          // Increment the count of this type of read that we've seen
-          ++libTypeCounts[aln.libFormat().formatID()];
-          //
-          if (!hasCompatibleMapping and logAlignCompatProb == LOG_1) { hasCompatibleMapping = true; }
-
-          // The total auxiliary probabilty is the product (sum in log-space) of
-          // The start position probability
-          // The fragment length probabilty
-          // The mapping score (coverage) probability
-          // The fragment compatibility probability
-          // The bias probability
-          double auxProb = logFragProb + logFragCov + logAlignCompatProb;
-
-          aln.logProb = transcriptLogCount + auxProb + startPosProb;
-
-          // If this alignment had a zero probability, then skip it
-          if (std::abs(aln.logProb) == LOG_0) {
-            continue;
-          }
-
-          sumOfAlignProbs = logAdd(sumOfAlignProbs, aln.logProb);
-
-          if (updateCounts and
-              observedTranscripts.find(transcriptID) ==
-              observedTranscripts.end()) {
-            transcripts[transcriptID].addTotalCount(1);
-            observedTranscripts.insert(transcriptID);
-          }
-          // EQCLASS
-          if (transcriptID < prevTxpID) {
-            std::cerr << "[ERROR] Transcript IDs are not in sorted order; "
-              "please report this bug on GitHub!\n";
-          }
-          prevTxpID = transcriptID;
-          txpIDs.push_back(transcriptID);
-          auxProbs.push_back(auxProb);
-          auxDenom = salmon::math::logAdd(auxDenom, auxProb);
-        } else {
-          aln.logProb = LOG_0;
-        }
-      }
-
-      // If this fragment has a zero probability,
-      // go to the next one
-      if (sumOfAlignProbs == LOG_0) {
-        ++zeroProbFrags;
-        continue;
-      } else { // otherwise, count it as assigned
-        ++localNumAssignedFragments;
-        if (hasCompatibleMapping) { ++numCompatibleFragments; }
-      }
-
-      auto eqSize = txpIDs.size();
-      if (eqSize > 0) {
-        if (useRankEqClasses and eqSize > 1) {
-          std::vector<int> inds(eqSize);
-          std::iota(inds.begin(), inds.end(), 0);
-          // Get the indices in order by conditional probability
-          std::sort(inds.begin(), inds.end(),
-                    [&auxProbs](int i, int j) -> bool { return auxProbs[i] < auxProbs[j]; });
-          {
-            decltype(txpIDs) txpIDsNew(txpIDs.size());
-            decltype(auxProbs) auxProbsNew(auxProbs.size());
-            for (size_t r = 0; r < eqSize; ++r) {
-              auto ind = inds[r];
-              txpIDsNew[r] = txpIDs[ind];
-              auxProbsNew[r] = auxProbs[ind];
-            }
-            std::swap(txpIDsNew, txpIDs);
-            std::swap(auxProbsNew, auxProbs);
-          }
-        }
-
-        TranscriptGroup tg(txpIDs);
-        eqBuilder.addBarcodeGroup(std::move(tg), barcode, umi);
-      }
-
-      //+++++++++++++++++++++++++++++++++++++++
-      // normalize the hits
-      for (auto& aln : alnGroup.alignments()) {
-        if (std::abs(aln.logProb) == LOG_0) {
-          continue;
-        }
-        // Normalize the log-probability of this alignment
-        aln.logProb -= sumOfAlignProbs;
-        // Get the transcript referenced in this alignment
-        auto transcriptID = aln.transcriptID();
-        auto& transcript = transcripts[transcriptID];
-
-        // Add the new mass to this transcript
-        double newMass = logForgettingMass + aln.logProb;
-        transcript.addMass(newMass);
-
-        // Paired-end
-        if (aln.libFormat().type == ReadType::PAIRED_END) {
-          // TODO: Is this right for *all* library types?
-          if (aln.fwd) {
-            obsFwd = salmon::math::logAdd(obsFwd, aln.logProb);
-          } else {
-            obsRC = salmon::math::logAdd(obsRC, aln.logProb);
-          }
-        } else if (aln.libFormat().type == ReadType::SINGLE_END) {
-          int32_t p = (aln.pos < 0) ? 0 : aln.pos;
-          if (static_cast<uint32_t>(p) >= transcript.RefLength) {
-            p = transcript.RefLength - 1;
-          }
-          // Single-end or orphan
-          if (aln.libFormat().strandedness == ReadStrandedness::S) {
-            obsFwd = salmon::math::logAdd(obsFwd, aln.logProb);
-          } else {
-            obsRC = salmon::math::logAdd(obsRC, aln.logProb);
-          }
-        }
-
-        double r = uni(randEng);
-        if (!burnedIn and r < std::exp(aln.logProb)) {
-
-          //Old fragment length calc: double fragLength = aln.fragLength();
-          auto fragLength = aln.fragLengthPedantic(transcript.RefLength);
-          if (fragLength > 0) {
-            fragLengthDist.addVal(fragLength, logForgettingMass);
-          }
-
-        }
-      } // end normalize
-
-      //+++++++++++++++++++++++++++++++++++++++
-
-      // update the single target transcript
-      if (transcriptUnique) {
-        if (updateCounts) {
-          transcripts[firstTranscriptID].addUniqueCount(1);
-        }
-
-        clusterForest.updateCluster(firstTranscriptID, 1.0, logForgettingMass,
-                                    updateCounts);
-      } else { // or the appropriate clusters
-        clusterForest.mergeClusters<AlnT>(alnGroup.alignments().begin(),
-                                          alnGroup.alignments().end());
-        clusterForest.updateCluster(
-                                    alnGroup.alignments().front().transcriptID(), 1.0,
-                                    logForgettingMass, updateCounts);
-      }
-    } // end read group
-  }   // end timer
-
-  if (zeroProbFrags > 0) {
-    auto batchReads = batchHits.size();
-    maxZeroFrac = std::max(maxZeroFrac, static_cast<double>(100.0 * zeroProbFrags) / batchReads);
-  }
-
-  numAssignedFragments += localNumAssignedFragments;
-  if (numAssignedFragments >= numBurninFrags and !burnedIn) {
-    // NOTE: only one thread should succeed here, and that
-    // thread will set burnedIn to true.
-    readExp.updateTranscriptLengthsAtomic(burnedIn);
-    fragLengthDist.cacheCMF();
-  }
-  if (initialRound) {
-    readLib.updateLibTypeCounts(libTypeCounts);
-    readLib.updateCompatCounts(numCompatibleFragments);
-  }
-}
 
 //Note: redundant code starts, first used in SalmonQuantify.cpp
 using AlnCacheMap = selective_alignment::utils::AlnCacheMap;
@@ -895,10 +486,9 @@ void processReadsQuasi(
   config.dropoff = -1;
   config.gapo = salmonOpts.gapOpenPenalty;
   config.gape = salmonOpts.gapExtendPenalty;
-  config.bandwidth = 10;
+  config.bandwidth = 15;
   config.flag = 0;
   config.flag |= KSW_EZ_SCORE_ONLY;
-  //config.flag |= KSW_EZ_APPROX_MAX | KSW_EZ_APPROX_DROP;
   int8_t a = salmonOpts.matchScore;
   int8_t b = salmonOpts.mismatchPenalty;
   KSW2Aligner aligner(static_cast<int8_t>(a), static_cast<int8_t>(b));
@@ -917,6 +507,7 @@ void processReadsQuasi(
   }
 
   size_t numDropped{0};
+  std::string readSubSeq;
 
   //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
   AlnCacheMap alnCache; alnCache.reserve(16);
@@ -939,7 +530,6 @@ void processReadsQuasi(
       readLenLeft = rp.first.seq.length();
       readLenRight= rp.second.seq.length();
 
-      bool tooShortLeft = (readLenLeft < minK);
       bool tooShortRight = (readLenRight < (minK+alevinOpts.trimRight));
       //localUpperBoundHits = 0;
       auto& jointHitGroup = structureVec[i];
@@ -987,6 +577,8 @@ void processReadsQuasi(
               if(trItLoc == trBcs.end()){
                 salmonOpts.jointLog->error("Wrong entry in barcode softmap.\n"
                                            "Please Report this on github");
+                salmonOpts.jointLog->flush();
+                spdlog::drop_all();
                 exit(1);
               } else{
                 barcodeIdx = trItLoc->second;
@@ -1015,10 +607,13 @@ void processReadsQuasi(
               auto seq_len = rp.second.seq.size();
               if (alevinOpts.trimRight > 0) {
                 if ( !tooShortRight ) {
-                  std::string sub_seq = rp.second.seq.substr(0, seq_len-alevinOpts.trimRight);
-                  auto rh = hitCollector(sub_seq, saSearcher, hcInfo);
+                  //std::string sub_seq = rp.second.seq.substr(0, seq_len-alevinOpts.trimRight);
+                  //auto rh = hitCollector(sub_seq, saSearcher, hcInfo);
+                  readSubSeq = rp.second.seq.substr(0, seq_len-alevinOpts.trimRight);
+                  auto rh = hitCollector(readSubSeq, saSearcher, hcInfo);
                 }
               } else {
+                readSubSeq = rp.second.seq;
                 auto rh = tooShortRight ? false : hitCollector(rp.second.seq, saSearcher, hcInfo);
               }
               rapmap::hit_manager::hitsToMappingsSimple(*qidx, mc,
@@ -1037,8 +632,8 @@ void processReadsQuasi(
         std::exit(1);
       }
       //////////////////////////////////////////////////////////////
-      // Consider a read as too short if both ends are too short
-      if (tooShortLeft and tooShortRight) {
+      // Consider a read as too short if the ``non-barcode'' end is too short
+      if (tooShortRight) {
         ++shortFragStats.numTooShort;
         shortFragStats.shortest = std::min(shortFragStats.shortest,
                                            std::max(readLenLeft, readLenRight));
@@ -1055,19 +650,23 @@ void processReadsQuasi(
 
         // adding validate mapping code
         bool tryAlign{salmonOpts.validateMappings};
-        if (tryAlign) {
+        if (tryAlign and !jointHits.empty()) {
           alnCache.clear();
+          /*
           auto seq_len = rp.second.seq.size();
           std::string sub_seq = rp.second.seq.substr(0, seq_len-alevinOpts.trimRight);
           auto* r1 = sub_seq.data();
           auto l1 = static_cast<int32_t>(sub_seq.length());
+          */
+          auto* r1 = readSubSeq.data();
+          auto l1 = static_cast<int32_t>(readSubSeq.length());
 
           char* r1rc = nullptr;
           int32_t bestScore{std::numeric_limits<int32_t>::min()};
           std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
           size_t idx{0};
           double optFrac{salmonOpts.minScoreFraction};
-          int32_t maxReadScore{a * static_cast<int32_t>(sub_seq.length())};
+          int32_t maxReadScore{a * static_cast<int32_t>(readSubSeq.length())};
 
           bool multiMapping{jointHits.size() > 1};
 
@@ -1081,7 +680,7 @@ void processReadsQuasi(
             // compute the reverse complement only if we
             // need it and don't have it
             if (!h.fwd and !r1rc) {
-              rapmap::utils::reverseRead(sub_seq, rc1);
+              rapmap::utils::reverseRead(readSubSeq, rc1);
               // we will not break the const promise
               r1rc = const_cast<char*>(rc1.data());
             }
@@ -1190,8 +789,7 @@ void processReadsQuasi(
     }
 
     prevObservedFrags = numObservedFragments;
-    AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(
-                                                                           structureVec.begin(), structureVec.begin() + rangeSize);
+    AlnGroupVecRange<QuasiAlignment> hitLists = {structureVec.begin(), structureVec.begin()+rangeSize};
     processMiniBatchSimple<QuasiAlignment>(
                                      readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
                                      transcripts, clusterForest, fragLengthDist, observedBiasParams,
