@@ -841,7 +841,7 @@ void processReadsQuasi(
   config.dropoff = -1;
   config.gapo = salmonOpts.gapOpenPenalty;
   config.gape = salmonOpts.gapExtendPenalty;
-  config.bandwidth = 15;
+  config.bandwidth = -1;
   config.flag = 0;
   config.flag |= KSW_EZ_SCORE_ONLY;
   int8_t a = static_cast<int8_t>(salmonOpts.matchScore);
