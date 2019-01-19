@@ -43,7 +43,9 @@ public:
   void clearAlignments() {
     auto vecLen = alignments_.size();
     alignments_.clear();
-    alignments_.shrink_to_fit();
+    if (vecLen > 10) {
+      alignments_.shrink_to_fit();
+    }
     isUniquelyMapped_ = true;
   }
 

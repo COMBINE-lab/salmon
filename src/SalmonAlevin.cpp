@@ -551,19 +551,9 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
         if (updateCounts) {
           transcripts[firstTranscriptID].addUniqueCount(1);
         }
+
         clusterForest.updateCluster(firstTranscriptID, 1.0, logForgettingMass,
                                     updateCounts);
-        /*
-        auto& aln = alnGroup.alignments().front();
-        // Get the transcript referenced in this alignment
-        auto transcriptID = aln.transcriptID();
-        auto& transcript = transcripts[transcriptID];
-        uint32_t p = (aln.pos < 0) ? 0 : aln.pos;
-        if (p >= transcript.RefLength) { p = transcript.RefLength - 1; }
-        auto nextPolyA = transcript.getNextPolyA(p+50);
-        auto dist = std::min(99999u, nextPolyA - p);
-        ++uniqueFLD[dist];
-        */
       } else { // or the appropriate clusters
         clusterForest.mergeClusters<AlnT>(alnGroup.alignments().begin(),
                                           alnGroup.alignments().end());
@@ -595,6 +585,202 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
 //Note: redundant code starts, first used in SalmonQuantify.cpp
 using AlnCacheMap = selective_alignment::utils::AlnCacheMap;
 /////// REDUNDANT CODE END//
+
+template <typename AlnT, typename ProtocolT>
+void processMiniBatchSimple(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc,
+                      uint64_t firstTimestepOfRound, ReadLibrary& readLib,
+                      const SalmonOpts& salmonOpts,
+                      AlnGroupVecRange<AlnT> batchHits,
+                      std::vector<Transcript>& transcripts,
+                      ClusterForest& clusterForest,
+                      FragmentLengthDistribution& fragLengthDist,
+                      BiasParams& observedBiasParams,
+                      std::atomic<uint64_t>& numAssignedFragments,
+                      std::default_random_engine& randEng, bool initialRound,
+                      std::atomic<bool>& burnedIn, double& maxZeroFrac,
+                      AlevinOpts<ProtocolT>& alevinOpts,
+                      std::mutex& iomutex){
+
+  using salmon::math::LOG_0;
+  using salmon::math::LOG_1;
+  using salmon::math::LOG_EPSILON;
+  using salmon::math::LOG_ONEHALF;
+  using salmon::math::logAdd;
+  using salmon::math::logSub;
+
+  const uint64_t numBurninFrags = salmonOpts.numBurninFrags;
+
+  auto& log = salmonOpts.jointLog;
+  size_t numTranscripts{transcripts.size()};
+  size_t localNumAssignedFragments{0};
+  size_t priorNumAssignedFragments{numAssignedFragments};
+  std::uniform_real_distribution<> uni(
+                                       0.0, 1.0 + std::numeric_limits<double>::min());
+  std::vector<uint64_t> libTypeCounts(LibraryFormat::maxLibTypeID() + 1);
+  bool hasCompatibleMapping{false};
+  uint64_t numCompatibleFragments{0};
+
+  std::vector<FragmentStartPositionDistribution>& fragStartDists =
+    readExp.fragmentStartPositionDistributions();
+
+  bool updateCounts = initialRound;
+  double incompatPrior = salmonOpts.incompatPrior;
+  bool useReadCompat = incompatPrior != salmon::math::LOG_1;
+
+  // If we're auto detecting the library type
+  auto* detector = readLib.getDetector();
+  bool autoDetect = (detector != nullptr) ? detector->isActive() : false;
+  // If we haven't detected yet, nothing is incompatible
+  if (autoDetect) { incompatPrior = salmon::math::LOG_1; }
+
+  double logForgettingMass{0.0};
+  uint64_t currentMinibatchTimestep{0};
+
+  // logForgettingMass and currentMinibatchTimestep are OUT parameters!
+  fmCalc.getLogMassAndTimestep(logForgettingMass, currentMinibatchTimestep);
+
+  auto expectedLibraryFormat = readLib.format();
+  uint64_t zeroProbFrags{0};
+
+  // EQClass
+  auto& eqBuilder = readExp.equivalenceClassBuilder();
+
+  // Build reverse map from transcriptID => hit id
+  using HitID = uint32_t;
+
+  int i{0};
+  {
+    // Iterate over each group of alignments (a group consists of all alignments
+    // reported
+    // for a single read).  Distribute the read's mass to the transcripts
+    // where it potentially aligns.
+    for (auto& alnGroup : batchHits) {
+      // If we had no alignments for this read, then skip it
+      if (alnGroup.size() == 0) {
+        continue;
+      }
+
+      //extract barcode of the read
+      uint32_t barcode = alnGroup.barcode();
+      uint64_t umi = alnGroup.umi();
+
+      // We start out with probability 0
+      double sumOfAlignProbs{LOG_0};
+
+      // Record whether or not this read is unique to a single transcript.
+      bool transcriptUnique{true};
+
+      auto firstTranscriptID = alnGroup.alignments().front().transcriptID();
+      std::vector<uint32_t> txpIDs;
+
+      uint32_t numInGroup{0};
+      uint32_t prevTxpID{0};
+
+      hasCompatibleMapping = false;
+
+      // For each alignment of this read
+      for (auto& aln : alnGroup.alignments()) {
+        auto transcriptID = aln.transcriptID();
+        auto& transcript = transcripts[transcriptID];
+        transcriptUnique =
+          transcriptUnique and (transcriptID == firstTranscriptID);
+
+        if (autoDetect) {
+            detector->addSample(aln.libFormat());
+            if (detector->canGuess()) {
+              detector->mostLikelyType(readLib.getFormat());
+              expectedLibraryFormat = readLib.getFormat();
+              incompatPrior = salmonOpts.incompatPrior;
+              autoDetect = false;
+            } else if (!detector->isActive()) {
+              expectedLibraryFormat = readLib.getFormat();
+              incompatPrior = salmonOpts.incompatPrior;
+              autoDetect = false;
+            }
+          }
+
+          // The probability that the fragments align to the given strands in
+          // the given orientations.
+          bool isCompat =
+            salmon::utils::isCompatible(
+                                        aln.libFormat(),
+                                        expectedLibraryFormat,
+                                        static_cast<int32_t>(aln.pos),
+                                        aln.fwd,
+                                        aln.mateStatus);
+          double logAlignCompatProb = isCompat ? LOG_1 : incompatPrior;
+          aln.logProb = logAlignCompatProb;
+          if (!isCompat and salmonOpts.ignoreIncompat) {
+            aln.logProb = salmon::math::LOG_0;
+            continue;
+          }
+
+          // Increment the count of this type of read that we've seen
+          ++libTypeCounts[aln.libFormat().formatID()];
+          if (!hasCompatibleMapping and logAlignCompatProb == LOG_1) { hasCompatibleMapping = true; }
+
+          // If this alignment had a zero probability, then skip it
+          if (std::abs(aln.logProb) == LOG_0) {
+            continue;
+          }
+
+          sumOfAlignProbs = logAdd(sumOfAlignProbs, aln.logProb);
+
+          if (transcriptID < prevTxpID) {
+            std::cerr << "[ERROR] Transcript IDs are not in sorted order; "
+              "please report this bug on GitHub!\n";
+          }
+          prevTxpID = transcriptID;
+          txpIDs.push_back(transcriptID);
+      }
+
+      // If this fragment has a zero probability,
+      // go to the next one
+      if (sumOfAlignProbs == LOG_0) {
+        ++zeroProbFrags;
+        continue;
+      } else { // otherwise, count it as assigned
+        ++localNumAssignedFragments;
+        if (hasCompatibleMapping) { ++numCompatibleFragments; }
+      }
+
+      auto eqSize = txpIDs.size();
+      if (eqSize > 0) {
+        TranscriptGroup tg(txpIDs);
+        eqBuilder.addBarcodeGroup(std::move(tg), barcode, umi);
+      }
+            // update the single target transcript
+      if (transcriptUnique) {
+        if (updateCounts) {
+          transcripts[firstTranscriptID].addUniqueCount(1);
+        }
+      } else { // or the appropriate clusters
+        clusterForest.mergeClusters<AlnT>(alnGroup.alignments().begin(),
+                                          alnGroup.alignments().end());
+        clusterForest.updateCluster(
+                                    alnGroup.alignments().front().transcriptID(), 1.0,
+                                    logForgettingMass, updateCounts);
+      }
+    } // end read group
+  }   // end timer
+
+  if (zeroProbFrags > 0) {
+    auto batchReads = batchHits.size();
+    maxZeroFrac = std::max(maxZeroFrac, static_cast<double>(100.0 * zeroProbFrags) / batchReads);
+  }
+
+  numAssignedFragments += localNumAssignedFragments;
+  if (numAssignedFragments >= numBurninFrags and !burnedIn) {
+    // NOTE: only one thread should succeed here, and that
+    // thread will set burnedIn to true.
+    readExp.updateTranscriptLengthsAtomic(burnedIn);
+    fragLengthDist.cacheCMF();
+  }
+  if (initialRound) {
+    readLib.updateLibTypeCounts(libTypeCounts);
+    readLib.updateCompatCounts(numCompatibleFragments);
+  }
+}
 
 /// START QUASI
 template <typename RapMapIndexT, typename ProtocolT>
@@ -661,7 +847,6 @@ void processReadsQuasi(
   bool consistentHits = salmonOpts.consistentHits;
   bool quiet = salmonOpts.quiet;
 
-  bool tooManyHits{false};
   size_t maxNumHits{salmonOpts.maxReadOccs};
   size_t readLenLeft{0};
   size_t readLenRight{0};
@@ -672,8 +857,7 @@ void processReadsQuasi(
   mc.doChaining = salmonOpts.validateMappings;
   mc.consensusFraction = (salmonOpts.consensusSlack == 0.0) ? 1.0 : (1.0 - salmonOpts.consensusSlack);
 
-  rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> leftHCInfo;
-  rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> rightHCInfo;
+  rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> hcInfo;
 
   if (salmonOpts.fasterMapping) {
     hitCollector.enableNIP();
@@ -690,8 +874,6 @@ void processReadsQuasi(
   }
 
   SASearcher<RapMapIndexT> saSearcher(qidx);
-  std::vector<QuasiAlignment> leftHits;
-  std::vector<QuasiAlignment> rightHits;
   rapmap::utils::HitCounters hctr;
   salmon::utils::MappingType mapType{salmon::utils::MappingType::UNMAPPED};
 
@@ -759,15 +941,11 @@ void processReadsQuasi(
 
       bool tooShortLeft = (readLenLeft < minK);
       bool tooShortRight = (readLenRight < (minK+alevinOpts.trimRight));
-      tooManyHits = false;
       //localUpperBoundHits = 0;
       auto& jointHitGroup = structureVec[i];
       jointHitGroup.clearAlignments();
       auto& jointHits = jointHitGroup.alignments();
-      leftHits.clear();
-      rightHits.clear();
-      leftHCInfo.clear();
-      rightHCInfo.clear();
+      hcInfo.clear();
       mapType = salmon::utils::MappingType::UNMAPPED;
 
       //////////////////////////////////////////////////////////////
@@ -777,7 +955,7 @@ void processReadsQuasi(
       std::string umi;//, barcode;
       nonstd::optional<std::string> barcode;
       nonstd::optional<uint32_t> barcodeIdx;
-      bool lh, rh, seqOk;
+      bool seqOk;
 
       if (alevinOpts.protocol.end == bcEnd::FIVE){
         if(alevinOpts.nobarcode){
@@ -819,64 +997,39 @@ void processReadsQuasi(
           }
         }
 
-        // If we don't have a barcode index by this point, we can't
-        // get a valid one.
-        if (not barcodeIdx) {
-          lh = rh = false;
-        } else{
+        // If we have a valid barcode
+        if (barcodeIdx) {
           //corrBarcodeIndex = barcodeMap[barcodeIndex];
           jointHitGroup.setBarcode(*barcodeIdx);
           aut::extractUMI(rp.first.seq, alevinOpts.protocol, umi);
 
           if ( umiLength != umi.size() ) {
-            lh = rh = false;
             smallSeqs += 1;
-          }
-          else{
+          } else{
             alevin::types::AlevinUMIKmer umiIdx;
             bool isUmiIdxOk = umiIdx.fromChars(umi);
 
-            lh = false;
             if(isUmiIdxOk){
               jointHitGroup.setUMI(umiIdx.word(0));
 
               auto seq_len = rp.second.seq.size();
               if (alevinOpts.trimRight > 0) {
-                if ( tooShortRight ) {
-                  rh = false;
-                }
-                else{
+                if ( !tooShortRight ) {
                   std::string sub_seq = rp.second.seq.substr(0, seq_len-alevinOpts.trimRight);
-                  rh = hitCollector(sub_seq, saSearcher, rightHCInfo);
+                  auto rh = hitCollector(sub_seq, saSearcher, hcInfo);
                 }
-              }
-              else {
-                rh = tooShortRight ? false : hitCollector(rp.second.seq, saSearcher, rightHCInfo);
+              } else {
+                auto rh = tooShortRight ? false : hitCollector(rp.second.seq, saSearcher, hcInfo);
               }
               rapmap::hit_manager::hitsToMappingsSimple(*qidx, mc,
                                                         MateStatus::PAIRED_END_RIGHT,
-                                                        rightHCInfo, rightHits);
-            }
-            else{
-              rh = false;
+                                                        hcInfo, jointHits);
+            } else{
               nSeqs += 1;
             }
           }
         }
-      }
-      //else if (alevinOpts.barcodeEnd == THREE
-      //  //have to handle 3 prime reverse complement
-      //  lh = tooShortLeft ? false : hitCollector(rp.first.seq,
-      //                                           leftHits, saSearcher,
-      //                                           MateStatus::PAIRED_END_LEFT,
-      //                                           consistentHits);
-
-      //  rh = tooShortRight ? false : hitCollector(rp.second.seq,
-      //                                            rightHits, saSearcher,
-      //                                            MateStatus::PAIRED_END_RIGHT,
-      //                                            consistentHits);
-      //}
-      else{
+      } else{
         salmonOpts.jointLog->error( "wrong barcode-end parameters.\n"
                                     "Please report this bug on Github");
         salmonOpts.jointLog->flush();
@@ -889,103 +1042,16 @@ void processReadsQuasi(
         ++shortFragStats.numTooShort;
         shortFragStats.shortest = std::min(shortFragStats.shortest,
                                            std::max(readLenLeft, readLenRight));
-      } else {
-        // If we actually attempted to map the fragment (it wasn't too short),
-        // then
-        // do the intersection.
-        if (strictIntersect) {
-          rapmap::utils::mergeLeftRightHits(leftHits, rightHits, jointHits,
-                                            readLenLeft, maxNumHits,
-                                            tooManyHits, hctr);
-        } else {
-          rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, leftHits, rightHits,
-                                                 jointHits,
-                                                 mc,
-                                                 readLenLeft,
-                                                 maxNumHits, tooManyHits, hctr);
-        }
-
-        if (initialRound) {
-          upperBoundHits += (jointHits.size() > 0);
-        }
-
-        // If the read mapped to > maxReadOccs places, discard it
-        if (jointHits.size() > salmonOpts.maxReadOccs) {
-          jointHitGroup.clearAlignments();
-        }
       }
 
-      // NOTE: This will currently not work with "strict intersect", i.e.
-      // nothing will be output here with strict intersect.
-      if (writeOrphanLinks) {
-        // If we are not using strict intersection, then joint hits
-        // can only be zero when either:
-        // 1) there are *no* hits or
-        // 2) there are hits for *both* the left and right reads, but not to the same txp
-        if (!strictIntersect and jointHits.size() == 0) {
-          if (leftHits.size() > 0 and rightHits.size() > 0) {
-            for (auto& h : leftHits) {
-              orphanLinks << h.transcriptID() << ',' << h.pos << "\t";
-            }
-            orphanLinks << ":";
-            for (auto& h : rightHits) {
-              orphanLinks << h.transcriptID() << ',' << h.pos << "\t";
-            }
-            orphanLinks << "\n";
-          }
-        }
+      if (initialRound) {
+        upperBoundHits += (jointHits.size() > 0);
       }
 
-      // If we have mappings, then process them.
-      bool isPaired{false};
-      if (jointHits.size() > 0) {
-        bool isPaired = jointHits.front().mateStatus ==
-          rapmap::utils::MateStatus::PAIRED_END_PAIRED;
-        if (isPaired) {
-          mapType = salmon::utils::MappingType::PAIRED_MAPPED;
-        }
-        // If we are ignoring orphans
-        if (!salmonOpts.allowOrphans) {
-          // If the mappings for the current read are not properly-paired (i.e.
-          // are orphans)
-          // then just clear the group.
-          if (!isPaired) {
-            jointHitGroup.clearAlignments();
-          }
-        } else {
-          // If these aren't paired-end reads --- so that
-          // we have orphans --- make sure we sort the
-          // mappings so that they are in transcript order
-          if (!isPaired) {
-            // Find the end of the hits for the left read
-            auto leftHitEndIt = std::partition_point(
-                                                     jointHits.begin(), jointHits.end(),
-                                                     [](const QuasiAlignment& q) -> bool {
-                                                       return q.mateStatus ==
-                                                         rapmap::utils::MateStatus::PAIRED_END_LEFT;
-                                                     });
-            // If we found left hits
-            bool foundLeftMappings = (leftHitEndIt > jointHits.begin());
-            // If we found right hits
-            bool foundRightMappings = (leftHitEndIt  < jointHits.end());
-
-            if (foundLeftMappings and foundRightMappings) {
-              mapType = salmon::utils::MappingType::BOTH_ORPHAN;
-            } else if (foundLeftMappings) {
-              mapType = salmon::utils::MappingType::LEFT_ORPHAN;
-            } else if (foundRightMappings) {
-              mapType = salmon::utils::MappingType::RIGHT_ORPHAN;
-            }
-
-            // Merge the hits so that the entire list is in order
-            // by transcript ID.
-            std::inplace_merge(
-                               jointHits.begin(), leftHitEndIt, jointHits.end(),
-                               [](const QuasiAlignment& a, const QuasiAlignment& b) -> bool {
-                                 return a.transcriptID() < b.transcriptID();
-                               });
-          }
-        }
+      // If the read mapped to > maxReadOccs places, discard it
+      if (jointHits.size() > salmonOpts.maxReadOccs) {
+        jointHitGroup.clearAlignments();
+      }
 
         // adding validate mapping code
         bool tryAlign{salmonOpts.validateMappings};
@@ -1067,140 +1133,16 @@ void processReadsQuasi(
           }
         } //end-if validate mapping
 
-        bool needBiasSample = salmonOpts.biasCorrect;
-
-        std::uniform_int_distribution<> dis(0, jointHits.size());
-        // Randomly select a hit from which to draw the bias sample.
-        int32_t hitSamp{dis(eng)};
-        int32_t hn{0};
-
-        for (auto& h : jointHits) {
-          // ---- Collect bias samples ------ //
-
-          // If bias correction is turned on, and we haven't sampled a mapping
-          // for this read yet, and we haven't collected the required number of
-          // samples overall.
-          if (needBiasSample and salmonOpts.numBiasSamples > 0 and isPaired and
-              hn == hitSamp) {
-            auto& t = transcripts[h.tid];
-
-            // The "start" position is the leftmost position if
-            // map to the forward strand, and the leftmost
-            // position + the read length if we map to the reverse complement.
-
-            // read 1
-            int32_t pos1 = static_cast<int32_t>(h.pos);
-            auto dir1 = salmon::utils::boolToDirection(h.fwd);
-            int32_t startPos1 = h.fwd ? pos1 : (pos1 + h.readLen - 1);
-
-            // read 2
-            int32_t pos2 = static_cast<int32_t>(h.matePos);
-            auto dir2 = salmon::utils::boolToDirection(h.mateIsFwd);
-            int32_t startPos2 = h.mateIsFwd ? pos2 : (pos2 + h.mateLen - 1);
-
-            bool success = false;
-
-            if ((dir1 != dir2) and // Shouldn't be from the same strand
-                (startPos1 > 0 and startPos1 < static_cast<int32_t>(t.RefLength)) and
-                (startPos2 > 0 and startPos2 < static_cast<int32_t>(t.RefLength))) {
-
-              const char* txpStart = t.Sequence();
-              const char* txpEnd = txpStart + t.RefLength;
-
-              const char* readStart1 = txpStart + startPos1;
-              auto& readBias1 = (h.fwd) ? readBiasFW : readBiasRC;
-
-              const char* readStart2 = txpStart + startPos2;
-              auto& readBias2 = (h.mateIsFwd) ? readBiasFW : readBiasRC;
-
-              int32_t fwPre = readBias1.contextBefore(!h.fwd);
-              int32_t fwPost = readBias1.contextAfter(!h.fwd);
-
-              int32_t rcPre = readBias2.contextBefore(!h.mateIsFwd);
-              int32_t rcPost = readBias2.contextAfter(!h.mateIsFwd);
-
-              bool read1RC = !h.fwd;
-              bool read2RC = !h.mateIsFwd;
-
-              if ((startPos1 >= readBias1.contextBefore(read1RC) and
-                   startPos1 + readBias1.contextAfter(read1RC) <
-                   static_cast<int32_t>(t.RefLength)) and
-                  (startPos2 >= readBias2.contextBefore(read2RC) and
-                   startPos2 + readBias2.contextAfter(read2RC) <
-                   static_cast<int32_t>(t.RefLength))) {
-
-                int32_t fwPos = (h.fwd) ? startPos1 : startPos2;
-                int32_t rcPos = (h.fwd) ? startPos2 : startPos1;
-                if (fwPos < rcPos) {
-                  leftMer.from_chars(txpStart + startPos1 -
-                                     readBias1.contextBefore(read1RC));
-                  rightMer.from_chars(txpStart + startPos2 -
-                                      readBias2.contextBefore(read2RC));
-                  if (read1RC) {
-                    leftMer.reverse_complement();
-                  } else {
-                    rightMer.reverse_complement();
-                  }
-
-                  success = readBias1.addSequence(leftMer, 1.0);
-                  success = readBias2.addSequence(rightMer, 1.0);
-                }
-              }
-
-              if (success) {
-                salmonOpts.numBiasSamples -= 1;
-                needBiasSample = false;
-              }
-            }
-          }
-          // ---- Collect bias samples ------ //
-          ++hn;
-
-          switch (h.mateStatus) {
-          case MateStatus::PAIRED_END_LEFT: {
-            h.format = salmon::utils::hitType(h.pos, h.fwd);
-          } break;
-          case MateStatus::PAIRED_END_RIGHT: {
-            // we pass in !h.fwd here because the right read
-            // will have the opposite orientation from its mate.
-            // NOTE : We will try recording what the mapped fragment
-            // actually is, not to infer what it's mate should be.
-            h.format = salmon::utils::hitType(h.pos, h.fwd);
-          } break;
-          case MateStatus::PAIRED_END_PAIRED: {
-            uint32_t end1Pos = (h.fwd) ? h.pos : h.pos + h.readLen;
-            uint32_t end2Pos =
-              (h.mateIsFwd) ? h.matePos : h.matePos + h.mateLen;
-            bool canDovetail = false;
-            h.format =
-              salmon::utils::hitType(end1Pos, h.fwd, h.readLen, end2Pos,
-                                     h.mateIsFwd, h.mateLen, canDovetail);
-          } break;
-          case MateStatus::SINGLE_END : {
-            // do nothing
-            //salmonOpts.jointLog->warn("");
-          } break;
-          default:
-            break;
-          }
-        }
-
         if (writeQuasimappings) {
           rapmap::utils::writeAlignmentsToStream(rp, formatter,
                                                  hctr, jointHits, sstream);
         }
 
-      } else {
-        // This read was completely unmapped.
-        mapType = salmon::utils::MappingType::UNMAPPED;
-      }
-
-      if (writeUnmapped and mapType != salmon::utils::MappingType::PAIRED_MAPPED) {
+      if (writeUnmapped and mapType == salmon::utils::MappingType::UNMAPPED) {
         // If we have no mappings --- then there's nothing to do
         // unless we're outputting names for un-mapped reads
         unmappedNames << rp.first.name << ' ' << salmon::utils::str(mapType) << '\n';
       }
-
 
       validHits += jointHits.size();
       localNumAssignedFragments += (jointHits.size() > 0);
@@ -1247,20 +1189,10 @@ void processReadsQuasi(
       sstream.clear();
     }
 
-    if (writeOrphanLinks) {
-      std::string outStr(orphanLinks.str());
-      // Get rid of last newline
-      if (!outStr.empty()) {
-        outStr.pop_back();
-        orphanLinkLogger->info(std::move(outStr));
-      }
-      orphanLinks.clear();
-    }
-
     prevObservedFrags = numObservedFragments;
     AlnGroupVecRange<QuasiAlignment> hitLists = boost::make_iterator_range(
                                                                            structureVec.begin(), structureVec.begin() + rangeSize);
-    processMiniBatch<QuasiAlignment>(
+    processMiniBatchSimple<QuasiAlignment>(
                                      readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
                                      transcripts, clusterForest, fragLengthDist, observedBiasParams,
                                      numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac,
