@@ -841,7 +841,7 @@ void processReadsQuasi(
   config.dropoff = -1;
   config.gapo = salmonOpts.gapOpenPenalty;
   config.gape = salmonOpts.gapExtendPenalty;
-  config.bandwidth = -1;
+  config.bandwidth = 15;
   config.flag = 0;
   config.flag |= KSW_EZ_SCORE_ONLY;
   int8_t a = static_cast<int8_t>(salmonOpts.matchScore);
@@ -931,7 +931,7 @@ void processReadsQuasi(
                                                 rightHCInfo, rightHits);
 
       /*
-      if (rp.first.name == "SRR2013675.128") {
+        if (rp.first.name == "SRR2013675.215") {
         std::cerr << "lh : " << lh << "\n";
         std::cerr << "rh : " << rh << "\n";
         std::cerr << "lh size : " << leftHits.size() << "\n";

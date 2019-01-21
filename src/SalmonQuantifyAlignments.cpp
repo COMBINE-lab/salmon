@@ -273,7 +273,7 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
               alnGroup->alignments().front()->transcriptID();
           std::unordered_set<size_t> observedTranscripts;
 
-          size_t sidx{0};
+          int sidx{0};
           for (auto& aln : alnGroup->alignments()) {
             auto transcriptID = aln->transcriptID();
             auto& transcript = refs[transcriptID];
@@ -403,6 +403,7 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
             // if (burnedIn and salmonOpts.useErrorModel) {
             if (useAuxParams and salmonOpts.useErrorModel) {
               errLike = alnMod.logLikelihood(*aln, transcript);
+              ++sidx;
             }
 
             // Allow for a non-uniform fragment start position distribution
@@ -764,7 +765,13 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
 
               // Update the error model
               if (salmonOpts.useErrorModel) {
-                alnMod.update(*aln, transcript, LOG_1, logForgettingMass);
+                // NOTE : JUST FOR TESTING --- doesn't work without bowtie2 scores
+                uint8_t* tl = reinterpret_cast<uint8_t*>(bam_aux_find(aln->getRead1(), "AS"));
+                uint8_t* tr = reinterpret_cast<uint8_t*>(bam_aux_find(aln->getRead2(), "AS"));
+                auto sl = bam_aux_i(tl);
+                auto sr = bam_aux_i(tr);
+                auto errLikeSimple = sl + sr;
+                alnMod.update(*aln, transcript, errLikeSimple, logForgettingMass);
               }
               // Update the fragment length distribution
               if (aln->isPaired() and !salmonOpts.noFragLengthDist) {

@@ -19,7 +19,9 @@ AlignmentModel::AlignmentModel(double alpha, uint32_t readBins)
       transitionProbsRight_(readBins,
                             AtomicMatrix<double>(numAlignmentStates(),
                                                  numAlignmentStates(), alpha)),
-      isEnabled_(true), readBins_(readBins), burnedIn_(false) {}
+      isEnabled_(true), readBins_(readBins), burnedIn_(false) {
+  
+}
 
 bool AlignmentModel::burnedIn() { return burnedIn_; }
 void AlignmentModel::burnedIn(bool burnedIn) { burnedIn_ = burnedIn; }
