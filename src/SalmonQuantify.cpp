@@ -736,7 +736,6 @@ void processReadsQuasi(
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache,
     MappingStatistics& mstats,
-    std::atomic<uint64_t>& forbiddenReadsSkipped,
     size_t threadID) {
 
   uint64_t count_fwd = 0, count_bwd = 0;
@@ -867,16 +866,6 @@ void processReadsQuasi(
   AlnCacheMap alnCacheLeft; alnCacheLeft.reserve(32);
   AlnCacheMap alnCacheRight; alnCacheRight.reserve(32);
 
-  /*
-  std::unordered_set<std::string> forbiddenReads;
-  std::ifstream ffile("forbidden.txt");
-  std::string rn;
-  while (std::getline(ffile, rn)) {
-    forbiddenReads.insert(rn);
-  }
-  salmonOpts.jointLog->info("Total # of forbidden reads : {}", forbiddenReads.size());
-  */
-
   auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
     rangeSize = rg.size();
@@ -907,13 +896,6 @@ void processReadsQuasi(
       leftHCInfo.clear();
       rightHCInfo.clear();
 
-      /*
-      if (forbiddenReads.find(rp.first.name) != forbiddenReads.end()) {
-        ++forbiddenReadsSkipped;
-        continue;
-      }
-      */
-
       mapType = salmon::utils::MappingType::UNMAPPED;
 
       bool lh = tooShortLeft
@@ -929,23 +911,6 @@ void processReadsQuasi(
       rapmap::hit_manager::hitsToMappingsSimple(*qidx, mc,
                                                 MateStatus::PAIRED_END_RIGHT,
                                                 rightHCInfo, rightHits);
-
-      /*
-        if (rp.first.name == "SRR2013675.215") {
-        std::cerr << "lh : " << lh << "\n";
-        std::cerr << "rh : " << rh << "\n";
-        std::cerr << "lh size : " << leftHits.size() << "\n";
-        std::cerr << "rh size : " << rightHits.size() << "\n";
-        if (leftHits.size() >= 1 and rightHits.size() >= 1) {
-          for (auto& lhit : leftHits) {
-            std::cerr << "left hit : " << transcripts[lhit.tid].RefName << ", " << lhit.fwd << ", " << lhit.pos << "   :: tid == (" << lhit.tid << ")\n";
-          }
-          for (auto& lhit : rightHits ) {
-            std::cerr << "right hit : " << transcripts[lhit.tid].RefName << ", " << lhit.fwd << ", " << lhit.pos << "  :: tid == (" << lhit.tid << ")\n";
-          }
-        }
-      }
-      */
 
       // Consider a read as too short if both ends are too short
       if (tooShortLeft and tooShortRight) {
@@ -1122,23 +1087,8 @@ void processReadsQuasi(
                 selective_alignment::utils::getAlnScore(aligner, ez, h.matePos, r2ptr, l2, tseq, tlen, a, b, maxRightScore, h.chainStatus.getRight(),
                             multiMapping, ap, buf, alnCacheRight);
 
-              // mimic RSEM's Bowtie2 scoring 
-              /*
-              int32_t L1 = rp.first.seq.length();
-              int32_t L2 = rp.second.seq.length();
-              double minLeft = -0.1 * L1;
-              double minRight = -0.1 * L2;
-              double minFragScore = minLeft + minRight;
-              if ( (s1 - L1) < minLeft or (s2 - L2) < minRight ) {
-              */
               // throw away dovetailed reads
-              // if (mimicStrictBT2) {
               if (h.fwd != h.mateIsFwd and noDovetail) {
-                /*
-                if (h.fwd == h.mateIsFwd) {
-                  s1 = std::numeric_limits<int32_t>::min();
-                  s2 = std::numeric_limits<int32_t>::min();
-                }*/
                 if (h.fwd and (h.pos > h.matePos)) {
                   s1 = std::numeric_limits<int32_t>::min();
                   s2 = std::numeric_limits<int32_t>::min();
@@ -1148,8 +1098,6 @@ void processReadsQuasi(
                 }
               }
 
-              // scores are of read ends combined
-              //if ((s1 + s2) < (optFrac * (maxLeftScore + maxRightScore))) {
               // ends are scored separately
               if ((s1 < (optFrac * maxLeftScore)) or (s2 < (optFrac * maxRightScore))) {
                 score = std::numeric_limits<decltype(score)>::min();
@@ -1483,7 +1431,6 @@ void processReadsQuasi(
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
     volatile bool& writeToCache,
     MappingStatistics& mstats,
-    std::atomic<uint64_t>& forbiddenReadsSkipped,
     size_t threadID) {
 
   uint64_t count_fwd = 0, count_bwd = 0;
@@ -1914,7 +1861,6 @@ void processReadLibrary(
    **/
   // NOTE : When we can support C++14, we can replace the entire ProcessFunctor class above with this
   // generic lambda.
-  std::atomic<uint64_t> forbiddenSkipped{0};
   auto processFunctor = [&](size_t i, auto* parserPtr, auto* index) {
     if (salmonOpts.qmFileName != "" and i == 0) {
       rapmap::utils::writeSAMHeader(*index, salmonOpts.qmLog);
@@ -1925,7 +1871,7 @@ void processReadLibrary(
                         upperBoundHits, index, transcripts,
                         fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
                         salmonOpts, coverageThresh, iomutex, initialRound,
-                        burnedIn, writeToCache, mstats, forbiddenSkipped, i);
+                        burnedIn, writeToCache, mstats, i);
     };
     threads.emplace_back(threadFun);
   };
@@ -2003,8 +1949,6 @@ void processReadLibrary(
   for (auto& t : threads) {
     t.join();
   }
-
-  //salmonOpts.jointLog->info("Forbidden reads skipped : {}", forbiddenSkipped.load());
 
   // If we don't have a sufficient number of assigned fragments, then
   // complain here!
