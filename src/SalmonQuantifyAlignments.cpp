@@ -33,6 +33,7 @@ extern "C" {
 
 #include "AlignmentLibrary.hpp"
 #include "BAMQueue.hpp"
+#include "BAMUtils.hpp"
 #include "ClusterForest.hpp"
 #include "FASTAParser.hpp"
 #include "LibraryFormat.hpp"
@@ -209,6 +210,32 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
             !aln->isPaired());
   };
 
+  auto alignerType = alnLib.getAlignerType();
+
+  bool haveASTag{true};
+  bool firstTagCheck{true};
+  auto getAlignerAssignedScore =
+    [&haveASTag, &firstTagCheck, alignerType](FragT* aln) -> double {
+      if (firstTagCheck) {
+        char* tp = bam_aux_find(aln->getRead1(), "AS");
+        haveASTag = (tp != NULL);
+      }
+      double score{LOG_0};
+      if (haveASTag and (alignerType == salmon::bam_utils::AlignerDetails::BOWTIE2)) {
+        uint8_t* tl = reinterpret_cast<uint8_t*>(bam_aux_find(aln->getRead1(), "AS"));
+        auto locScore = (tl != NULL) ? bam_aux_i(tl) : LOG_1;
+        if (aln->isPaired()) {
+          uint8_t* tr = reinterpret_cast<uint8_t*>(bam_aux_find(aln->getRead2(), "AS"));
+          locScore += (tr != NULL) ? bam_aux_i(tr) : LOG_1;
+        }
+        score = locScore;
+      } else {
+        score = LOG_1;
+      }
+      firstTagCheck = false;
+      return score;
+    };
+
   while (!doneParsing or !workQueue.empty()) {
     uint32_t zeroProbFrags{0};
 
@@ -273,6 +300,7 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
               alnGroup->alignments().front()->transcriptID();
           std::unordered_set<size_t> observedTranscripts;
 
+          //double maxLogAlnScore{LOG_0};
           int sidx{0};
           for (auto& aln : alnGroup->alignments()) {
             auto transcriptID = aln->transcriptID();
@@ -766,12 +794,8 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
               // Update the error model
               if (salmonOpts.useErrorModel) {
                 // NOTE : JUST FOR TESTING --- doesn't work without bowtie2 scores
-                uint8_t* tl = reinterpret_cast<uint8_t*>(bam_aux_find(aln->getRead1(), "AS"));
-                uint8_t* tr = reinterpret_cast<uint8_t*>(bam_aux_find(aln->getRead2(), "AS"));
-                auto sl = bam_aux_i(tl);
-                auto sr = bam_aux_i(tr);
-                auto errLikeSimple = sl + sr;
-                alnMod.update(*aln, transcript, errLikeSimple, logForgettingMass);
+                auto alignerScore = getAlignerAssignedScore(aln);
+                alnMod.update(*aln, transcript, alignerScore, logForgettingMass);
               }
               // Update the fragment length distribution
               if (aln->isPaired() and !salmonOpts.noFragLengthDist) {
