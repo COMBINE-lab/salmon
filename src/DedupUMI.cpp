@@ -144,7 +144,8 @@ void collapseVertices(uint32_t vertex,
                       alevin::graph::Graph& g,
                       std::vector<TGroupT>& txpGroups,
                       uint32_t& chosenTxp,
-                      std::vector<uint32_t>& largestMcc) {
+                      std::vector<uint32_t>& largestMcc,
+                      spp::sparse_hash_set<uint32_t>& processedSet) {
   uint32_t eqclassId = g.getEqclassId(vertex);
   for (uint32_t txp: txpGroups[eqclassId]){
     std::deque<uint32_t> bfsList;
@@ -160,7 +161,7 @@ void collapseVertices(uint32_t vertex,
       currentMcc.emplace_back(cv);
 
       for (auto nextVertex: g.getNeighbors(vertex)) {
-        if (visitedSet.contains(nextVertex)) {
+        if (visitedSet.contains(nextVertex) || !processedSet.contains(nextVertex)) {
           continue;
         }
         else{
@@ -202,8 +203,11 @@ void getNumMolecules(alevin::graph::Graph& g,
     comps[component[i]].emplace_back(static_cast<uint32_t>(i));
   }
 
+  spp::sparse_hash_map<size_t, uint32_t> compCounter;
   // iterating over connected components
   for (auto& comp: comps) {
+    compCounter[comp.size()] += 1;
+
     // more than one vertex in the component
     if ( comp.size() > 1 ) {
       spp::sparse_hash_set<uint32_t> vset(comp.begin(), comp.end());
@@ -215,7 +219,8 @@ void getNumMolecules(alevin::graph::Graph& g,
           std::vector<uint32_t> newMcc;
 
           collapseVertices(vertex, g, txpGroups,
-                           coveringTxp, newMcc);
+                           coveringTxp, newMcc,
+                           vset);
           //choose the longer collapse: Greedy
           if (bestMcc.size() < newMcc.size()) {
             bestMcc = newMcc;
@@ -282,6 +287,14 @@ void getNumMolecules(alevin::graph::Graph& g,
       eqclassHash[genesVec] += 1;
     }//end-else comp.size()==1
   } //end-outer for comps iterator
+
+  //size_t count{0};
+  //for (auto& it: compCounter) {
+  //  count += it.second;
+  //  std::cerr << "Size: " << it.first << " Count: " << it.second << std::endl;
+  //}
+  //std::cerr << "Total" << count << std::endl;
+  //std::cerr<<"\n\n\n\n";
 
   for (auto& it: eqclassHash) {
     SalmonEqClass eqclass = {
