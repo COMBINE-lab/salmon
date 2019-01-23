@@ -3,6 +3,7 @@
 
 #include <atomic>
 
+// class to collect statistics we may want about mapping / alignment
 class MappingStatistics {
 public:
   std::atomic<uint64_t> numOrphansRescued{0};

@@ -47,6 +47,7 @@ FASTAParser.cpp
 AlignmentModel.cpp
 FragmentLengthDistribution.cpp
 SalmonQuantifyAlignments.cpp
+BAMUtils.cpp
 )
 
 set (ALEVIN_LIB_SRCS
