@@ -56,7 +56,7 @@ double truncateAlphas(VecT& alphas, double cutoff) {
   double alphaSum = 0.0;
 
   for (size_t i = 0; i < alphas.size(); ++i) {
-    if (alphas[i] <= cutoff) {
+    if (alphas[i] < cutoff) {
       alphas[i] = 0.0;
     }
     alphaSum += alphas[i];
@@ -93,7 +93,7 @@ bool runPerCellEM(double& totalNumFrags, size_t numGenes,
   size_t itNum = 0;
 
   // EM termination criteria, adopted from Bray et al. 2016
-  double minAlpha = 1e-8;
+  double minAlpha = 1.0;
   double alphaCheckCutoff = 1e-2;
   constexpr double minWeight = std::numeric_limits<double>::denorm_min();
 

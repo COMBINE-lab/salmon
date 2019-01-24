@@ -56,6 +56,7 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
   bfs::path eqFilePath = aopt.bfhFile;
   std::ifstream equivFile(eqFilePath.string());
 
+  size_t numReads{0};
   size_t numTxps, numBcs, numEqclasses;
 
   // Number of transcripts
@@ -156,6 +157,7 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
       exit(1);
     }
 
+    numReads += countValidator;
     double completionFrac = i*100.0/numEqclasses;
     uint32_t percentCompletion {static_cast<uint32_t>(completionFrac)};
     if ( percentCompletion % 10 == 0 || percentCompletion > 95) {
@@ -174,6 +176,10 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
                         ";Ignroing the file");
     aopt.jointLog->flush();
   }
+
+  aopt.jointLog->info("Fount total {} reads in bfh Mode",
+                      numReads);
+  aopt.jointLog->flush();
 
   alevinOptimize(bcNames, txpToGeneMap, geneIdxMap,
                  countMap, aopt, gzw, freqCounter, 0);
