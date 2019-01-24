@@ -47,10 +47,12 @@ namespace alevin {
 
     EdgeType hasEdge(std::pair<uint64_t, uint32_t> &x,
                      std::pair<uint64_t, uint32_t> &y) {
+      if (x.first == y.first) { return EdgeType::BiDirected; }
+
       auto isOneHamming = oneHamming(x.first, y.first);
-      if (x.second > (2*y.second -1) and isOneHamming) {
+      if ((x.second > (2*y.second -1)) and isOneHamming) {
         return EdgeType::XToY ;
-      } else if (y.second > (2*x.second-1) and isOneHamming) {
+      } else if ((y.second > (2*x.second-1)) and isOneHamming) {
         return EdgeType::YToX ;
       } else if (isOneHamming) {
         return EdgeType::BiDirected;
