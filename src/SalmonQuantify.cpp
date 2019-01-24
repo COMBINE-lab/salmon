@@ -940,8 +940,15 @@ void processReadsQuasi(
 
           if ( mergeStatusOK and salmonOpts.recoverOrphans and !tooManyHits) {
             if (leftHits.size() + rightHits.size() > 0) {
-              if (mergeRes == rapmap::utils::MergeResult::HAD_ONLY_LEFT or
-                  mergeRes == rapmap::utils::MergeResult::HAD_ONLY_RIGHT) {
+              if (mergeRes == rapmap::utils::MergeResult::HAD_ONLY_LEFT) {
+                // In this case, we've "moved" the left hit's into joint, so put them back into
+                // left and make sure joint is clear.
+                leftHits.swap(jointHits);
+                jointHits.clear();
+              } else if (mergeRes == rapmap::utils::MergeResult::HAD_ONLY_RIGHT) {
+                // In this case, we've "moved" the right hit's into joint, so put them back into
+                // right and make sure joint is clear.
+                rightHits.swap(jointHits);
                 jointHits.clear();
               }
               selective_alignment::utils::recoverOrphans(rp.first.seq,
