@@ -262,7 +262,8 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, bool inDebugMode, uint32_t numBootstraps,
                   bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
-                  bool initUniform){
+                  bool initUniform, std::atomic<uint64_t>& totalUniEdgesCounts,
+                  std::atomic<uint64_t>& totalBiEdgesCounts){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
 
@@ -331,7 +332,8 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
       bool dedupOk = dedupClasses(geneAlphas, totalCount, txpGroups,
                                   umiGroups, salmonEqclasses,
                                   txpToGeneMap, tiers, gzw,
-                                  dumpUmiGraph, trueBarcodeStr);
+                                  dumpUmiGraph, trueBarcodeStr,
+                                  totalUniEdgesCounts, totalBiEdgesCounts);
       if( !dedupOk ){
         jointlog->error("Deduplication for cell {} failed \n"
                         "Please Report this on github.", trueBarcodeStr);
@@ -491,6 +493,8 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   std::atomic<uint32_t> bcount{0};
   tbb::atomic<double> totalDedupCounts{0.0};
   tbb::atomic<uint32_t> totalExpGeneCounts{0};
+  std::atomic<uint64_t> totalBiEdgesCounts{0};
+  std::atomic<uint64_t> totalUniEdgesCounts{0};
 
   std::vector<std::thread> workerThreads;
   for (size_t tn = 0; tn < numWorkerThreads; ++tn) {
@@ -518,7 +522,9 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                aopt.naiveEqclass,
                                aopt.dumpUmiGraph,
                                aopt.dumpfeatures,
-                               aopt.initUniform);
+                               aopt.initUniform,
+                               std::ref(totalUniEdgesCounts),
+                               std::ref(totalBiEdgesCounts));
   }
 
   for (auto& t : workerThreads) {
@@ -526,6 +532,11 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   }
   aopt.jointLog->info("Total {0:.2f} UMI after deduplicating.",
                       totalDedupCounts);
+  aopt.jointLog->info("Total {} BiDirected Edges.",
+                      totalBiEdgesCounts);
+  aopt.jointLog->info("Total {} UniDirected Edges.",
+                      totalUniEdgesCounts);
+
   aopt.totalDedupUMIs = totalDedupCounts;
   aopt.totalExpGenes = totalExpGeneCounts;
 

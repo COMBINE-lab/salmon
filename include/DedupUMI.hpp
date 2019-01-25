@@ -36,6 +36,8 @@ bool dedupClasses(std::vector<double>& geneAlphas,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   std::vector<uint8_t>& tiers,
                   GZipWriter& gzw, bool dumpUmiGraph,
-                  std::string& trueBarcodeStr);
+                  std::string& trueBarcodeStr,
+                  std::atomic<uint64_t>& totalUniEdgesCounts,
+                  std::atomic<uint64_t>& totalBiEdgesCounts);
 
 #endif // DEDUP_UMI_HPP

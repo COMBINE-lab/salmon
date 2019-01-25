@@ -18,7 +18,9 @@ uint32_t getGeneId(spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap,
 // choosing list for edges and vector for adjacency container
 void graphFromCell(std::vector<TGroupT>& txpGroups,
                    std::vector<UGroupT>& umiGroups,
-                   alevin::graph::Graph& g) {
+                   alevin::graph::Graph& g,
+                   std::atomic<uint64_t>& totalUniEdgesCounts,
+                   std::atomic<uint64_t>& totalBiEdgesCounts) {
   using namespace alevin::graph;
   spp::sparse_hash_map<uint32_t, std::vector<uint32_t>> tidMap;
 
@@ -59,13 +61,16 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
 
         switch ( edge ) {
         case EdgeType::BiDirected:
+          totalBiEdgesCounts += 1;
           g.add_edge(v1, v2);
           g.add_edge(v2, v1);
           break;
         case EdgeType::XToY:
+          totalUniEdgesCounts += 1;
           g.add_edge(v1, v2);
           break;
         case EdgeType::YToX:
+          totalUniEdgesCounts += 1;
           g.add_edge(v2, v1);
           break;
         case EdgeType::NoEdge:
@@ -115,13 +120,16 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
 
             switch ( edge ) {
             case EdgeType::BiDirected:
+              totalBiEdgesCounts += 1;
               g.add_edge(v1, v2);
               g.add_edge(v2, v1);
               break;
             case EdgeType::XToY:
+              totalUniEdgesCounts += 1;
               g.add_edge(v1, v2);
               break;
             case EdgeType::YToX:
+              totalUniEdgesCounts += 1;
               g.add_edge(v2, v1);
               break;
             case EdgeType::NoEdge:
@@ -425,10 +433,14 @@ bool dedupClasses(std::vector<double>& geneAlphas,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   std::vector<uint8_t>& tiers,
                   GZipWriter& gzw, bool dumpUmiGraph,
-                  std::string& trueBarcodeStr){
+                  std::string& trueBarcodeStr,
+                  std::atomic<uint64_t>& totalUniEdgesCounts,
+                  std::atomic<uint64_t>& totalBiEdgesCounts){
   // make directed graph from eqclasses
   alevin::graph::Graph g;
-  graphFromCell(txpGroups, umiGroups, g);
+  graphFromCell(txpGroups, umiGroups, g,
+                totalUniEdgesCounts,
+                totalBiEdgesCounts);
 
   if (dumpUmiGraph){
     gzw.writeUmiGraph(g, trueBarcodeStr);
