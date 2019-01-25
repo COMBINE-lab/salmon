@@ -93,7 +93,7 @@ bool runPerCellEM(double& totalNumFrags, size_t numGenes,
   size_t itNum = 0;
 
   // EM termination criteria, adopted from Bray et al. 2016
-  double minAlpha = 1.0;
+  double minAlpha = 1e-8;
   double alphaCheckCutoff = 1e-2;
   constexpr double minWeight = std::numeric_limits<double>::denorm_min();
 
