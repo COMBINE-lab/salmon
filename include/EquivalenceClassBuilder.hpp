@@ -194,6 +194,15 @@ public:
   }
   ////////////////////////////////////////////////////////////////
 
+
+  // If we have range-factorized equivalence classes, then
+  // TranscriptGroup.txps.size() is *not* equal to the number of transcripts in
+  // this equivalence class.  This function provides a generic way to get the
+  // actual number of transcripts that label each equivalence class.
+  // NOTE:  It is only valid to call this function once the finish() method has
+  // been called on the EquivalenceClassBuilder.
+  inline size_t getNumTranscriptsForClass(size_t eqIdx) const;
+
   inline void addGroup(TranscriptGroup&& g, std::vector<double>& weights);
 
   cuckoohash_map<TranscriptGroup, TGValueType, TranscriptGroupHasher>& eqMap(){
@@ -224,6 +233,16 @@ inline void EquivalenceClassBuilder<TGValue>::addGroup(TranscriptGroup&& g,
   };
   TGValue v(weights, 1);
   countMap_.upsert(g, upfn, v);
+}
+
+template <>
+inline size_t EquivalenceClassBuilder<TGValue>::getNumTranscriptsForClass(size_t eqIdx) const {
+  return countVec_[eqIdx].second.weights.size();
+}
+
+template <>
+inline size_t EquivalenceClassBuilder<SCTGValue>::getNumTranscriptsForClass(size_t eqIdx) const {
+  return countVec_[eqIdx].first.txps.size();
 }
 
 // explicit instantiations

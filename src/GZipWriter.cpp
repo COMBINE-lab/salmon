@@ -698,8 +698,8 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment) {
     os << "UniqueCount\tAmbigCount\n";
 
     auto& transcripts = experiment.transcripts();
-    auto& eqVec =
-        const_cast<ExpT&>(experiment).equivalenceClassBuilder().eqVec();
+    auto& eqBuilder = const_cast<ExpT&>(experiment).equivalenceClassBuilder();
+    auto& eqVec = eqBuilder.eqVec();
 
     class CountPair {
     public:
@@ -708,12 +708,18 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment) {
     };
 
     std::vector<CountPair> counts(transcripts.size());
-    for (auto& eq : eqVec) {
+    for (size_t eqIdx = 0; eqIdx < eqVec.size(); ++eqIdx) {
+      auto& eq = eqVec[eqIdx];
+
+      // NOTE: this function is safe only if we've populated eqVec_ member.
+      auto groupSize = eqBuilder.getNumTranscriptsForClass(eqIdx);
       uint64_t count = eq.second.count;
       const TranscriptGroup& tgroup = eq.first;
       const std::vector<uint32_t>& txps = tgroup.txps;
-      if (txps.size() > 1) {
-        for (auto tid : txps) {
+
+      if (groupSize > 1) {
+        for (size_t i = 0; i < groupSize; ++i) {
+          auto tid = txps[i];
           counts[tid].potential += count;
         }
       } else {
