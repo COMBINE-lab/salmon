@@ -340,7 +340,7 @@ given by ``--fldMean``).
 One potential artifact that may arise from *alignment-free* mapping techniques is
 *spurious mappings*.  These may either be reads that do not arise from some target being
 quantified, but nonetheless exhibit some match against them (e.g. contaminants) or, more
-commonly, mapping a read to a larget set of quantification targets than would be
+commonly, mapping a read to a large set of quantification targets than would be
 supported by an optimal or near-optimal alignment.
 
 If you pass the ``--validateMappings`` flag to Salmon, it will run an extension
