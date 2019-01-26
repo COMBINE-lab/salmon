@@ -1500,9 +1500,11 @@ std::string getCurrentTimeAsString() {
     }
 
     if (sopt.mimicBT2 or sopt.mimicStrictBT2) {
+      /*
       sopt.jointLog->info("The --mimicBT2 and --mimicStrictBT2 flags imply orphan recovery (--recoverOrphans). "
                           "Enabling orphan recovery.");
       sopt.recoverOrphans = true;
+      */
 
       sopt.maxReadOccs = 1000;
       sopt.jointLog->info("The --mimicBT2 and --mimicStrictBT2 flags increases maxReadOccs to {}.", sopt.maxReadOccs);

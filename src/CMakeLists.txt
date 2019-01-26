@@ -228,6 +228,7 @@ target_link_libraries(salmon
     ${LIBRT}
     ksw2pp
     ${CMAKE_DL_LIBS}
+    #asan
 )
 
 # Link the executable
@@ -251,6 +252,7 @@ target_link_libraries(unitTests
     ${NON_APPLECLANG_LIBS}
     ${LIBRT}
     ${CMAKE_DL_LIBS}
+    #asan
     )
 
 add_dependencies(salmon unitTests)
