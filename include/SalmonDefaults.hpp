@@ -41,7 +41,6 @@ namespace defaults {
   constexpr const uint32_t minAssignedFrags{10};
   constexpr const bool reduceGCMemory{false};
   constexpr const uint32_t biasSpeedSamp{5};
-  constexpr const bool strictIntersect{false};
   constexpr const uint32_t maxFragLength{1000};
   constexpr const uint32_t fragLenPriorMean{250};
   constexpr const uint32_t fragLenPriorSD{25};

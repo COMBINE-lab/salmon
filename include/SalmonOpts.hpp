@@ -152,8 +152,6 @@ struct SalmonOpts {
                           // length pmf when evaluating gc-bias for effective
                           // length correction.
 
-  bool strictIntersect; // Use strict rather than fuzzy intersection in
-                        // quasi-mapping
   bool useMassBanking;  // DEPRECATED
 
   bool sensitive; // Perform splitting of long SMEMs into MEMs

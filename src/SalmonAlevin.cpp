@@ -434,7 +434,6 @@ void processReadsQuasi(
   //uint64_t localUpperBoundHits{0};
   size_t rangeSize{0};
   uint64_t localNumAssignedFragments{0};
-  bool strictIntersect = salmonOpts.strictIntersect;
   bool consistentHits = salmonOpts.consistentHits;
   bool quiet = salmonOpts.quiet;
 

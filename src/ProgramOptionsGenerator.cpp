@@ -180,14 +180,6 @@ namespace salmon {
        "Force hits gathered during "
        "quasi-mapping to be \"consistent\" (i.e. co-linear and "
        "approximately the right distance apart).")
-      ("strictIntersect",
-       po::bool_switch(&(sopt.strictIntersect))->default_value(salmon::defaults::strictIntersect),
-       "Modifies how orphans are "
-       "assigned.  When this flag is set, if the intersection of the "
-       "quasi-mappings for the left and right "
-       "is empty, then all mappings for the left and all mappings for the "
-       "right read are reported as orphaned "
-       "quasi-mappings")
       ("fasterMapping",
        po::bool_switch(&(sopt.fasterMapping))->default_value(salmon::defaults::fasterMapping),
        "[Developer]: Disables some extra checks during quasi-mapping. This "

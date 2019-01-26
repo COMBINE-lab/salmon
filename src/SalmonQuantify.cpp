@@ -782,7 +782,6 @@ void processReadsQuasi(
   //uint64_t localUpperBoundHits{0};
   size_t rangeSize{0};
   uint64_t localNumAssignedFragments{0};
-  bool strictIntersect = salmonOpts.strictIntersect;
   bool consistentHits = salmonOpts.consistentHits;
   bool quiet = salmonOpts.quiet;
 
@@ -912,55 +911,48 @@ void processReadsQuasi(
                                                 MateStatus::PAIRED_END_RIGHT,
                                                 rightHCInfo, rightHits);
 
+      rapmap::utils::MergeResult mergeRes{rapmap::utils::MergeResult::HAD_NONE};
       // Consider a read as too short if both ends are too short
       if (tooShortLeft and tooShortRight) {
         ++shortFragStats.numTooShort;
         shortFragStats.shortest = std::min(shortFragStats.shortest,
                                            std::max(readLenLeft, readLenRight));
       } else {
-        // If we actually attempted to map the fragment (it wasn't too short),
-        // then do the intersection.
-        if (strictIntersect) {
-          rapmap::utils::mergeLeftRightHits(leftHits, rightHits, jointHits,
-                                            readLenLeft, maxNumHits,
-                                            tooManyHits, hctr);
-        } else {
-          rapmap::utils::MergeResult mergeRes = rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, leftHits, rightHits,
-                                                                                       jointHits,
-                                                                                       mc,
-                                                                                       readLenLeft, maxNumHits, tooManyHits, hctr);
-          // IMPORTANT NOTE : Orphan recovery currently assumes a
-          // library type where mates are on separate strands
-          // so (IU, ISF, ISR).  If the library type is different
-          // we should either raise a warning / error, or implement
-          // library-type generic recovery.
-          bool mergeStatusOK = (mergeRes == rapmap::utils::MergeResult::HAD_EMPTY_INTERSECTION or
-                                mergeRes == rapmap::utils::MergeResult::HAD_ONLY_LEFT or
-                                mergeRes == rapmap::utils::MergeResult::HAD_ONLY_RIGHT);
+        rapmap::utils::MergeResult mergeRes = rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, leftHits, rightHits,
+                                                                                     jointHits,
+                                                                                     mc,
+                                                                                     readLenLeft, maxNumHits, tooManyHits, hctr);
+        // IMPORTANT NOTE : Orphan recovery currently assumes a
+        // library type where mates are on separate strands
+        // so (IU, ISF, ISR).  If the library type is different
+        // we should either raise a warning / error, or implement
+        // library-type generic recovery.
+        bool mergeStatusOK = (mergeRes == rapmap::utils::MergeResult::HAD_EMPTY_INTERSECTION or
+                              mergeRes == rapmap::utils::MergeResult::HAD_ONLY_LEFT or
+                              mergeRes == rapmap::utils::MergeResult::HAD_ONLY_RIGHT);
 
-          if ( mergeStatusOK and salmonOpts.recoverOrphans and !tooManyHits) {
-            if (leftHits.size() + rightHits.size() > 0) {
-              if (mergeRes == rapmap::utils::MergeResult::HAD_ONLY_LEFT) {
-                // In this case, we've "moved" the left hit's into joint, so put them back into
-                // left and make sure joint is clear.
-                leftHits.swap(jointHits);
-                jointHits.clear();
-              } else if (mergeRes == rapmap::utils::MergeResult::HAD_ONLY_RIGHT) {
-                // In this case, we've "moved" the right hit's into joint, so put them back into
-                // right and make sure joint is clear.
-                rightHits.swap(jointHits);
-                jointHits.clear();
-              }
-              selective_alignment::utils::recoverOrphans(rp.first.seq,
-                                                         rp.second.seq,
-                                                         rc1,
-                                                         rc2,
-                                                         transcripts,
-                                                         leftHits,
-                                                         rightHits,
-                                                         jointHits);
-              if (!jointHits.empty()) { numOrphansRescued++; }
+        if ( mergeStatusOK and salmonOpts.recoverOrphans and !tooManyHits) {
+          if (leftHits.size() + rightHits.size() > 0) {
+            if (mergeRes == rapmap::utils::MergeResult::HAD_ONLY_LEFT) {
+              // In this case, we've "moved" the left hit's into joint, so put them back into
+              // left and make sure joint is clear.
+              leftHits.swap(jointHits);
+              jointHits.clear();
+            } else if (mergeRes == rapmap::utils::MergeResult::HAD_ONLY_RIGHT) {
+              // In this case, we've "moved" the right hit's into joint, so put them back into
+              // right and make sure joint is clear.
+              rightHits.swap(jointHits);
+              jointHits.clear();
             }
+            selective_alignment::utils::recoverOrphans(rp.first.seq,
+                                                       rp.second.seq,
+                                                       rc1,
+                                                       rc2,
+                                                       transcripts,
+                                                       leftHits,
+                                                       rightHits,
+                                                       jointHits);
+            if (!jointHits.empty()) { numOrphansRescued++; }
           }
         }
 
@@ -974,15 +966,13 @@ void processReadsQuasi(
         }
       }
 
-      // NOTE: This will currently not work with "strict intersect", i.e.
-      // nothing will be output here with strict intersect.
       if (writeOrphanLinks) {
         // If we are not using strict intersection, then joint hits
         // can only be zero when either:
         // 1) there are *no* hits or
         // 2) there are hits for *both* the left and right reads, but not to the
         // same txp
-        if (!strictIntersect and jointHits.size() == 0) {
+        if (jointHits.size() == 0) {
           if (leftHits.size() > 0 and rightHits.size() > 0) {
             for (auto& h : leftHits) {
               orphanLinks << h.transcriptID() << ',' << h.pos << "\t";
@@ -1011,39 +1001,6 @@ void processReadsQuasi(
           // then just clear the group.
           if (!isPaired) {
             jointHitGroup.clearAlignments();
-          }
-        } else {
-          // If these aren't paired-end reads --- so that
-          // we have orphans --- make sure we sort the
-          // mappings so that they are in transcript order
-          if (!isPaired) {
-            // Find the end of the hits for the left read
-            auto leftHitEndIt = std::partition_point(
-                jointHits.begin(), jointHits.end(),
-                [](const QuasiAlignment& q) -> bool {
-                  return q.mateStatus ==
-                         rapmap::utils::MateStatus::PAIRED_END_LEFT;
-                });
-            // If we found left hits
-            bool foundLeftMappings = (leftHitEndIt > jointHits.begin());
-            // If we found right hits
-            bool foundRightMappings = (leftHitEndIt < jointHits.end());
-
-            if (foundLeftMappings and foundRightMappings) {
-              mapType = salmon::utils::MappingType::BOTH_ORPHAN;
-            } else if (foundLeftMappings) {
-              mapType = salmon::utils::MappingType::LEFT_ORPHAN;
-            } else if (foundRightMappings) {
-              mapType = salmon::utils::MappingType::RIGHT_ORPHAN;
-            }
-
-            // Merge the hits so that the entire list is in order
-            // by transcript ID.
-            std::inplace_merge(
-                jointHits.begin(), leftHitEndIt, jointHits.end(),
-                [](const QuasiAlignment& a, const QuasiAlignment& b) -> bool {
-                  return a.transcriptID() < b.transcriptID();
-                });
           }
         }
 
