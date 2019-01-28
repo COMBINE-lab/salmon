@@ -129,6 +129,11 @@ namespace salmon {
        po::value<int16_t>(&sopt.gapExtendPenalty)->default_value(salmon::defaults::gapExtendPenalty),
        "[Quasi-mapping mode (w / mapping validation) only] : The value given to a gap extension in an alignment."
        )
+      ("bandwidth",
+       po::value<int32_t>(&sopt.dpBandwidth)->default_value(salmon::defaults::dpBandwidth),
+       "[Quasi-mapping mode (w / mapping validation) only] : The value used for the bandwidth passed to ksw2.  A smaller "
+       "bandwidth can make the alignment verification run more quickly, but could possibly miss valid alignments."
+       )
       ("noDovetail",
        po::bool_switch(&(sopt.noDovetail))->default_value(salmon::defaults::noDovetail),
        "[Quasi-mapping mode only] : Discard dovetailing mappings."

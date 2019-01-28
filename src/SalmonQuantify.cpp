@@ -839,7 +839,7 @@ void processReadsQuasi(
   config.dropoff = -1;
   config.gapo = salmonOpts.gapOpenPenalty;
   config.gape = salmonOpts.gapExtendPenalty;
-  config.bandwidth = 15;
+  config.bandwidth = salmonOpts.dpBandwidth;
   config.flag = 0;
   config.flag |= KSW_EZ_SCORE_ONLY;
   int8_t a = static_cast<int8_t>(salmonOpts.matchScore);
@@ -860,7 +860,8 @@ void processReadsQuasi(
     ap = selective_alignment::utils::AlignmentPolicy::BT2_STRICT;
   }
 
-  size_t numDropped{0};
+  size_t numMappingsDropped{0};
+  size_t numFragsDropped{0};
 
   AlnCacheMap alnCacheLeft; alnCacheLeft.reserve(32);
   AlnCacheMap alnCacheRight; alnCacheRight.reserve(32);
@@ -874,28 +875,35 @@ void processReadsQuasi(
                                  "--- this shouldn't happen.\n"
                                  "Please report this bug on GitHub",
                                  rangeSize, structureVec.size());
+      salmonOpts.jointLog->flush();
+      spdlog::drop_all();
       std::exit(1);
     }
 
     for (size_t i = 0; i < rangeSize; ++i) { // For all the reads in this batch
       auto& rp = rg[i];
 
-      readLenLeft = rp.first.seq.length();
-      readLenRight = rp.second.seq.length();
-      bool tooShortLeft = (readLenLeft < minK);
-      bool tooShortRight = (readLenRight < minK);
-      tooManyHits = false;
-      //localUpperBoundHits = 0;
+      // -- start resetting local variables
+      // reset the status of local variables that we'll use
+      // for this read.
       auto& jointHitGroup = structureVec[i];
       jointHitGroup.clearAlignments();
       auto& jointHits = jointHitGroup.alignments();
+
       leftHits.clear();
       rightHits.clear();
 
       leftHCInfo.clear();
       rightHCInfo.clear();
+      tooManyHits = false;
 
       mapType = salmon::utils::MappingType::UNMAPPED;
+      // -- done resetting local varaibles
+
+      readLenLeft = rp.first.seq.length();
+      readLenRight = rp.second.seq.length();
+      bool tooShortLeft = (readLenLeft < minK);
+      bool tooShortRight = (readLenRight < minK);
 
       bool lh = tooShortLeft
         ? false : hitCollector(rp.first.seq, saSearcher, leftHCInfo);
@@ -988,7 +996,7 @@ void processReadsQuasi(
 
       // If we have mappings, then process them.
       bool isPaired{false};
-      if (jointHits.size() > 0) {
+      if (!jointHits.empty()) {
         bool isPaired = jointHits.front().mateStatus ==
                         rapmap::utils::MateStatus::PAIRED_END_PAIRED;
         if (isPaired) {
@@ -1005,7 +1013,7 @@ void processReadsQuasi(
         }
 
         bool tryAlign{salmonOpts.validateMappings};
-        if (tryAlign) {
+        if (tryAlign and !jointHits.empty()) {
           alnCacheLeft.clear();
           alnCacheRight.clear();
           auto* r1 = rp.first.seq.data();
@@ -1112,13 +1120,13 @@ void processReadsQuasi(
             // score are filtered out.
             jointHits.erase(
                             std::remove_if(jointHits.begin(), jointHits.end(),
-                                           [&ctr, &scores, &numDropped, bestScore, hardFilter] (const QuasiAlignment& qa) -> bool {
+                                           [&ctr, &scores, &numMappingsDropped, bestScore, hardFilter] (const QuasiAlignment& qa) -> bool {
                                              // if soft filtering, we only drop things with an invalid score
                                              // if hard filtering, we drop everything with a sub-optimal score.
                                              bool rem = hardFilter ? (scores[ctr] < bestScore) :
                                                (scores[ctr] == std::numeric_limits<int32_t>::min());
                                              ++ctr;
-                                             numDropped += rem ? 1 : 0;
+                                             numMappingsDropped += rem ? 1 : 0;
                                              return rem;
                                            }),
                             jointHits.end()
@@ -1132,6 +1140,7 @@ void processReadsQuasi(
                             qa.score( (hardFilter ? -1.0 : std::exp(-v)) );
                           });
           } else {
+            ++numFragsDropped;
             jointHitGroup.clearAlignments();
           }
         } else if (noDovetail) {
@@ -1366,6 +1375,9 @@ void processReadsQuasi(
   }
 
   mstats.numOrphansRescued += numOrphansRescued;
+  mstats.numMappingsFiltered += numMappingsDropped;
+  mstats.numFragmentsFiltered += numFragsDropped;
+
   //salmonOpts.jointLog->info("Number of orphans rescued in this thread {}",
   //                          numOrphansRescued);
 
@@ -1486,7 +1498,7 @@ void processReadsQuasi(
   config.dropoff = -1;
   config.gapo = salmonOpts.gapOpenPenalty;
   config.gape = salmonOpts.gapExtendPenalty;
-  config.bandwidth = 15;
+  config.bandwidth = salmonOpts.dpBandwidth;
   config.flag = 0;
   config.flag |= KSW_EZ_SCORE_ONLY;
 
@@ -1506,7 +1518,9 @@ void processReadsQuasi(
   } else if (mimicStrictBT2) {
     ap = selective_alignment::utils::AlignmentPolicy::BT2_STRICT;
   }
-  size_t numDropped{0};
+  size_t numMappingsDropped{0};
+  size_t numFragsDropped{0};
+
 
   //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
   AlnCacheMap alnCache; alnCache.reserve(16);
@@ -1519,6 +1533,8 @@ void processReadsQuasi(
                                  "--- this shouldn't happen.\n"
                                  "Please report this bug on GitHub",
                                  rangeSize, structureVec.size());
+      salmonOpts.jointLog->flush();
+      spdlog::drop_all();
       std::exit(1);
     }
 
@@ -1606,13 +1622,13 @@ void processReadsQuasi(
             // score are filtered out.
             jointHits.erase(
                             std::remove_if(jointHits.begin(), jointHits.end(),
-                                           [&ctr, &scores, &numDropped, bestScore, hardFilter] (const QuasiAlignment& qa) -> bool {
+                                           [&ctr, &scores, &numMappingsDropped, bestScore, hardFilter] (const QuasiAlignment& qa) -> bool {
                                              // if soft filtering, we only drop things with an invalid score
                                              // if hard filtering, we drop everything with a sub-optimal score.
                                              bool rem = hardFilter ? (scores[ctr] < bestScore) :
                                                (scores[ctr] == std::numeric_limits<int32_t>::min());
                                              ++ctr;
-                                             numDropped += rem ? 1 : 0;
+                                             numMappingsDropped += rem ? 1 : 0;
                                              return rem;
                                            }),
                             jointHits.end()
@@ -1626,6 +1642,7 @@ void processReadsQuasi(
                             qa.score( (hardFilter ? -1.0 : std::exp(-v)) );
                           });
           } else {
+            ++numFragsDropped;
             jointHitGroup.clearAlignments();
           }
         }
@@ -1760,6 +1777,8 @@ void processReadsQuasi(
                               "{0:.2f}\% zero probability fragments",
                               maxZeroFrac);
   }
+  mstats.numMappingsFiltered += numMappingsDropped;
+  mstats.numFragmentsFiltered += numFragsDropped;
 }
 
 /// DONE QUASI
@@ -2182,7 +2201,10 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
   if (salmonOpts.recoverOrphans) {
     salmonOpts.jointLog->info("Number of orphans recovered using orphan rescue : {:n}", mstats.numOrphansRescued.load());
   }
-
+  if (salmonOpts.validateMappings) {
+    salmonOpts.jointLog->info("Number of mappings discarded because of alignment score : {:n}", mstats.numMappingsFiltered.load());
+    salmonOpts.jointLog->info("Number of fragments entirely discarded because of alignment score : {:n}", mstats.numFragmentsFiltered.load());
+  }
   // If we didn't achieve burnin, then at least compute effective
   // lengths and mention this to the user.
   if (totalAssignedFragments < salmonOpts.numBurninFrags) {
