@@ -72,23 +72,23 @@ SalmonExceptions.cpp
 SalmonStringUtils.cpp
 SimplePosBias.cpp
 SGSmooth.cpp
-${GAT_SOURCE_DIR}/src/metro/metrohash64.cpp
+${GAT_SOURCE_DIR}/external/install/src/rapmap/metro/metrohash64.cpp
 )
 
 set (KSW2PP_BASIC_LIB_SRCS
-ksw2pp/kalloc.c
-ksw2pp/ksw2_extd.c
-ksw2pp/ksw2_extz.c
-ksw2pp/ksw2_gg.c
-ksw2pp/ksw2_gg2.c
-ksw2pp/ksw2_gg2_sse.c
-ksw2pp/KSW2Aligner.cpp
+${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/kalloc.c
+${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_extd.c
+${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_extz.c
+${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_gg.c
+${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_gg2.c
+${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_gg2_sse.c
+${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/KSW2Aligner.cpp
 )
 
 set (KSW2PP_ADVANCED_LIB_SRCS
-ksw2pp/ksw2_extd2_sse.c
-ksw2pp/ksw2_extf2_sse.c
-ksw2pp/ksw2_extz2_sse.c
+${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_extd2_sse.c
+${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_extf2_sse.c
+${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_extz2_sse.c
 )
 
 # check if we know how to do IPO
@@ -104,13 +104,13 @@ set_target_properties(ksw2pp_sse4 PROPERTIES COMPILE_FLAGS "-O3 -msse4.1")
 set_target_properties(ksw2pp_sse4 PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;HAVE_KALLOC")
 set_target_properties(ksw2pp_basic PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;HAVE_KALLOC")
 
-set_target_properties(ksw2pp_basic PROPERTIES INCLUDE_DIRECTORIES ${GAT_SOURCE_DIR}/include)
-set_target_properties(ksw2pp_sse4 PROPERTIES INCLUDE_DIRECTORIES ${GAT_SOURCE_DIR}/include)
+set_target_properties(ksw2pp_basic PROPERTIES INCLUDE_DIRECTORIES ${GAT_SOURCE_DIR}/external/install/include/rapmap)
+set_target_properties(ksw2pp_sse4 PROPERTIES INCLUDE_DIRECTORIES ${GAT_SOURCE_DIR}/external/install/include/rapmap)
 
 # Build the ksw2pp library
 add_library(ksw2pp STATIC $<TARGET_OBJECTS:ksw2pp_sse2> $<TARGET_OBJECTS:ksw2pp_sse4> $<TARGET_OBJECTS:ksw2pp_basic>)
 set_target_properties(ksw2pp PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;HAVE_KALLOC")
-if(NOT CONDA_BUILD AND HAS_IPO)
+if(HAS_IPO)
   set_property(TARGET ksw2pp PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
@@ -166,7 +166,7 @@ HAVE_SSTREAM=1
 )
 target_compile_options(salmon_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
 target_compile_options(salmon_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
-if(NOT CONDA_BUILD AND HAS_IPO)
+if(HAS_IPO)
   set_property(TARGET salmon_core PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
@@ -181,14 +181,14 @@ span_FEATURE_MAKE_SPAN_TO_STD=14
 target_compile_options(alevin_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
 target_compile_options(alevin_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
 
-if(NOT CONDA_BUILD AND HAS_IPO)
+if(HAS_IPO)
   set_property(TARGET alevin_core PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
 # Build the salmon executable
 add_executable(salmon ${SALMON_MAIN_SRCS} ${SALMON_ALIGN_SRCS})
 
-if(NOT CONDA_BUILD AND HAS_IPO)
+if(HAS_IPO)
   set_property(TARGET salmon PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 

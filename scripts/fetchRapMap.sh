@@ -66,12 +66,17 @@ rm ${EXTERNAL_DIR}/RapMap/include/xxhash.h
 cp -r ${EXTERNAL_DIR}/RapMap/external/libdivsufsort.zip ${EXTERNAL_DIR}
 cp -r ${EXTERNAL_DIR}/RapMap/src/*.c ${INSTALL_DIR}/src/rapmap
 cp -r ${EXTERNAL_DIR}/RapMap/src/*.cpp ${INSTALL_DIR}/src/rapmap
+cp -r ${EXTERNAL_DIR}/RapMap/src/metro ${INSTALL_DIR}/src/rapmap
+cp -r ${EXTERNAL_DIR}/RapMap/src/ksw2pp ${INSTALL_DIR}/src/rapmap
 cp -r ${EXTERNAL_DIR}/RapMap/include/tclap ${INSTALL_DIR}/include/rapmap
 cp -r ${EXTERNAL_DIR}/RapMap/include/*.h ${INSTALL_DIR}/include/rapmap
 cp -r ${EXTERNAL_DIR}/RapMap/include/*.hpp ${INSTALL_DIR}/include/rapmap
 cp -r ${EXTERNAL_DIR}/RapMap/include/sparsepp ${INSTALL_DIR}/include/rapmap
 cp -r ${EXTERNAL_DIR}/RapMap/include/digestpp ${INSTALL_DIR}/include/rapmap
 cp -r ${EXTERNAL_DIR}/RapMap/include/chobo ${INSTALL_DIR}/include/rapmap
+cp -r ${EXTERNAL_DIR}/RapMap/include/metro ${INSTALL_DIR}/include/rapmap
+cp -r ${EXTERNAL_DIR}/RapMap/include/ksw2pp ${INSTALL_DIR}/include/rapmap
+cp -r ${EXTERNAL_DIR}/RapMap/include/tsl ${INSTALL_DIR}/include/rapmap
 
 ##
 # Remove some redundant files that might otherwise be duplicated
