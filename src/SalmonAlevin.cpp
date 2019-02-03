@@ -674,7 +674,7 @@ void processReadsQuasi(
             auto& t = transcripts[h.tid];
             char* tseq = const_cast<char*>(t.Sequence());
             const int32_t tlen = static_cast<int32_t>(t.RefLength);
-            const uint32_t buf{8};
+            const uint32_t buf{20};
 
             // compute the reverse complement only if we
             // need it and don't have it
