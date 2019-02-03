@@ -995,7 +995,6 @@ void processReadsQuasi(
       }
 
       // If we have mappings, then process them.
-      bool isPaired{false};
       if (!jointHits.empty()) {
         bool isPaired = jointHits.front().mateStatus ==
                         rapmap::utils::MateStatus::PAIRED_END_PAIRED;
@@ -1591,7 +1590,7 @@ void processReadsQuasi(
             auto& t = transcripts[h.tid];
             char* tseq = const_cast<char*>(t.Sequence());
             const int32_t tlen = static_cast<int32_t>(t.RefLength);
-            const uint32_t buf{10};
+            const uint32_t buf{20};
 
             // compute the reverse complement only if we
             // need it and don't have it
