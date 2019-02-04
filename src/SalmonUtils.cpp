@@ -1383,12 +1383,11 @@ std::string getCurrentTimeAsString() {
   auto numRight = sopt.mate2ReadFiles.size();
 
   /** Info, not warnings or errors, but informative messages to the user **/
-  if (sopt.mimicBT2 or sopt.mimicStrictBT2) {
-    sopt.jointLog->info("The --mimicBT2 and --mimicStrictBT2 flags imply mapping validation (--validateMappings). "
+  if (sopt.mimicBT2 or sopt.mimicStrictBT2 or sopt.hardFilter) {
+    sopt.jointLog->info("The --mimicBT2, --mimicStrictBT2 and --hardFilter flags imply mapping validation (--validateMappings). "
                         "Enabling mapping validation.");
     sopt.validateMappings = true;
   }
-
 
   // If not in alevin mode, inform the user about validateMappings
   if (!sopt.alevinMode and !sopt.validateMappings) {
@@ -1518,12 +1517,6 @@ std::string getCurrentTimeAsString() {
                             "Bowtie2-like parameters now.");
         sopt.discardOrphansQuasi = true;
         sopt.noDovetail = true;
-        /*
-        sopt.minScoreFraction = 0.70;
-        sopt.mismatchPenalty = 3;
-        sopt.gapOpenPenalty = 5;
-        sopt.gapExtendPenalty = 1;
-        */
       }
 
       if (sopt.mimicStrictBT2) {
