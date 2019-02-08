@@ -4,7 +4,7 @@ Alevin
 Alevin is a tool --- integrated with the salmon software --- that introduces a family of algorithms for quantification and analysis of 3' tagged-end single-cell sequencing data. Currently alevin supports the following two major droplet based single-cell protocols:
 
 1. Drop-seq
-2. 10x-Chromium v1/2
+2. 10x-Chromium v1/2/3
 
 Alevin works under the same indexing scheme (as salmon) for the reference, and consumes the set of FASTA/Q files(s) containing the Cellular Barcode(CB) + Unique Molecule identifier (UMI) in one read file and the read sequence in the other.  Given just the transcriptome and the raw read files, alevin generates a cell-by-gene count matrix (in a fraction of the time compared to other tools).
 
@@ -191,6 +191,8 @@ A typical run of alevin will generate 4 files:
 * *quants\_mat\_cols.txt* -- Column Header (Gene-ids) of the matrix.
 * *quants\_mat\_rows.txt* -- Row Index (CB-ids) of the matrix.
 * *quants\_tier\_mat.gz* -- Tier categorization of the matrix. 
+
+Along with the Cell-v-Gene count matrix, alevin dumps a 3-fold categorization of each estimated count value of a gene(each cell disjointly) in the form of tiers. Tier 1 is the set of genes where all the reads are uniquely mapping. Tier 2 is genes that have ambiguously mapping reads, but connected to unique read evidence as well, that can be used by the EM to resolve the multimapping reads. Tier 3 is the genes that have no unique evidence and the read counts are, therefore, distributed between these genes according to an uninformative prior.
 
 Alevin can also dump the count-matrix in a human readable -- comma-separated-value (_CSV_) format, if given flag `--dumpCsvCounts` which generates a new output file called `quants_mat.csv`.
 
