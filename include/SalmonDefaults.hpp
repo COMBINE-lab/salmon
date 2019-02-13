@@ -135,7 +135,7 @@ namespace defaults {
   constexpr const uint32_t numBootstraps{0};
   constexpr const uint32_t lowRegionMinNumBarcodes{200};
   constexpr const uint32_t maxNumBarcodes{100000};
-  constexpr const double minScoreFraction{0.85};
+  constexpr const double minScoreFraction{0.87};
   constexpr const float consensusSlack{0.6};
   constexpr const double expectCells{0};
   constexpr const double forceCells{0};

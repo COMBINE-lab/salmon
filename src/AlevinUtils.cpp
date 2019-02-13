@@ -490,7 +490,7 @@ namespace alevin {
         sopt.minScoreFraction = alevin::defaults::minScoreFraction;
         sopt.consensusSlack = alevin::defaults::consensusSlack;
         sopt.jointLog->info(
-                            "Using default value of {} for minScoreFraction in Alevin",
+                            "Using default value of {} for minScoreFraction in Alevin\n"
                             "Using default value of {} for consensusSlack in Alevin",
                             sopt.minScoreFraction,
                             sopt.consensusSlack
