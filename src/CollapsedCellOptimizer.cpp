@@ -467,6 +467,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
 
   //get the keys of the map
   std::deque<std::pair<TranscriptGroup, uint32_t>> orderedTgroup;
+  //spp::sparse_hash_set<uint64_t> uniqueUmisCounter;
   uint32_t eqId{0};
   for(const auto& kv : fullEqMap.lock_table()){
     // assuming the iteration through lock table is always same
@@ -477,7 +478,17 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
       orderedTgroup.push_back(std::make_pair(kv.first, eqId));
     }
     eqId++;
+
+    //for (auto& bg: kv.second.barcodeGroup) {
+    //  for (auto& ugroup: bg.second){
+    //    uniqueUmisCounter.insert(ugroup.first);
+    //  }
+    //}//end-for
   }
+
+  //aopt.jointLog->info("Total {} Unique Umis found\n",
+  //                    uniqueUmisCounter.size());
+  //aopt.jointLog->flush();
 
   if (aopt.noEM) {
     aopt.jointLog->warn("Not performing EM; this may result in discarding ambiguous reads\n");

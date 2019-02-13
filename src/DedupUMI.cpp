@@ -36,6 +36,7 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
   // alevin kmer object
   alevin::types::AlevinUMIKmer umiObj;
   spp::sparse_hash_map<VertexT, uint32_t, boost::hash<VertexT>> vertexIndexMap;
+  vertexIndexMap.reserve(numClasses);
 
   //iterating over all eqclasses
   for (size_t eqId=0; eqId<numClasses; eqId++) {

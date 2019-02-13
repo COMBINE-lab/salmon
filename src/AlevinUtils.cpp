@@ -488,9 +488,12 @@ namespace alevin {
         salmon::utils::processQuantOptions(sopt, vm, vm["numBiasSamples"].as<int32_t>());
       if (!vm.count("minScoreFraction")) {
         sopt.minScoreFraction = alevin::defaults::minScoreFraction;
+        sopt.consensusSlack = alevin::defaults::consensusSlack;
         sopt.jointLog->info(
                             "Using default value of {} for minScoreFraction in Alevin",
-                            sopt.minScoreFraction
+                            "Using default value of {} for consensusSlack in Alevin",
+                            sopt.minScoreFraction,
+                            sopt.consensusSlack
                             );
       }
 
