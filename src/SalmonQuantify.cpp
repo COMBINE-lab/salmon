@@ -2548,7 +2548,9 @@ transcript abundance from RNA-seq reads
     gzw.writeMeta(sopt, experiment);
 
   } catch (po::error& e) {
-    std::cerr << "Exception : [" << e.what() << "]. Exiting.\n";
+    std::cerr << "(mapping-based mode) Exception : [" << e.what() << "].\n";
+    std::cerr << "Please be sure you are passing correct options, and that you are running in the intended mode.\n";
+    std::cerr << "alignment-based mode is detected and enabled via the \'-a\' flag. Exiting.\n";
     std::exit(1);
   } catch (const spdlog::spdlog_ex& ex) {
     std::cerr << "logger failed with : [" << ex.what() << "]. Exiting.\n";
