@@ -101,7 +101,7 @@ namespace salmon {
        po::value<double>(&sopt.minScoreFraction),
        "[Quasi-mapping mode (w / mapping validation) only] : The fraction of the optimal possible alignment score that a "
        "mapping must achieve in order to be considered \"valid\" --- should be in (0,1].\n"
-       "Salmon Default 0.65 and Alevin Default 0.8"
+       "Salmon Default 0.65 and Alevin Default 0.87"
        )
       ("maxMMPExtension",
        po::value<int32_t>(&sopt.maxMMPExtension)->default_value(salmon::defaults::maxMMPExtension),
@@ -371,6 +371,10 @@ namespace salmon {
        "useCorrelation", po::bool_switch()->default_value(alevin::defaults::useCorrelation),
        "Use pair-wise pearson correlation with True barcodes as a"
        " feature for white-list creation.")
+      (
+       "keepCBFraction", po::value<double>(),
+       "fraction of CB to keep, value must be in range (0,1], use 1 to quantify all CB."
+       )
       (
        "dumpfq", po::bool_switch()->default_value(alevin::defaults::dumpFQ),
        "Dump barcode modified fastq file for downstream analysis by"

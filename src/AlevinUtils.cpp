@@ -368,6 +368,20 @@ namespace alevin {
         return false;
       }
 
+      if ( vm.count("keepCBFraction") ) {
+        if ( vm.count("whitelist") ) {
+          aopt.jointLog->error("keepCBFraction and whitelist cannot be used together");
+          aopt.jointLog->flush();
+          exit(1);
+        }
+
+        aopt.keepCBFraction = vm["keepCBFraction"].as<double>();
+        aopt.jointLog->warn("Force Cells to {} fraction of All possible CB."
+                            "This is not recommended way to run the pipeline,"
+                            "and it might slow the pipeline",
+                            aopt.keepCBFraction);
+      }
+
       if (not vm.count("threads")) {
         auto tot_cores = std::thread::hardware_concurrency();
         aopt.numThreads = std::max(1, static_cast<int>(tot_cores/4.0));
