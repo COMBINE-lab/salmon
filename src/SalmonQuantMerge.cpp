@@ -35,6 +35,8 @@ public:
   std::vector<std::string> samples;
   std::vector<std::string> names;
   std::string outputName;
+  bool genesQuant;
+  std::string missingValue;
   std::string outputCol;
   std::shared_ptr<spdlog::logger> log;
   TargetColumn tcol;
@@ -121,7 +123,8 @@ bool doMerge(QuantMergeOptions& qmOpts) {
   std::unordered_map<std::string, std::vector<ExpressionRecord>> recs;
   for (uint32_t n = 0; n < qmOpts.samples.size(); ++n) {
     auto& sampDir = qmOpts.samples[n];
-    auto quantFile = boost::filesystem::path(sampDir) / "quant.sf";
+    auto quantFile = boost::filesystem::path(sampDir) /
+      (qmOpts.genesQuant?"quant.genes.sf":"quant.sf");
     if (boost::filesystem::exists(quantFile) and
         boost::filesystem::is_regular_file(quantFile)) {
       qmOpts.log->info("Parsing {}", quantFile.string());
@@ -192,7 +195,7 @@ bool doMerge(QuantMergeOptions& qmOpts) {
         ++nextTrec;
       } else {
         ++missingValues;
-        outFile << '\t' << "NA";
+        outFile << '\t' << qmOpts.missingValue;
       }
     }
     outFile << '\n';
@@ -201,8 +204,8 @@ bool doMerge(QuantMergeOptions& qmOpts) {
 
   if (missingValues > 0) {
     qmOpts.log->warn(
-        "There were {} missing entries (recorded as \"NA\") in the output",
-        missingValues);
+        "There were {} missing entries (recorded as \"{}\") in the output",
+        missingValues, qmOpts.missingValue);
   }
 
   return true;
@@ -218,21 +221,25 @@ int salmonQuantMerge(int argc, const char* argv[]) {
   QuantMergeOptions qmOpts;
   po::options_description generic("\n"
                                   "basic options");
-  generic.add_options()("version,v", "print version string")(
-      "help,h", "produce help message")(
-      "quants",
+  generic.add_options()("version,v", "print version string")
+    ("help,h", "produce help message")
+    ("quants",
       po::value<vector<string>>(&qmOpts.samples)->multitoken()->required(),
-      "List of quantification directories.")(
-      "names", po::value<vector<string>>(&qmOpts.names)->multitoken(),
-      "Optional list of names to give to the samples.")(
-      "column,c",
-      po::value<string>(&qmOpts.outputCol)->required()->default_value("TPM"),
-      "The name of the column that will be merged together into the output "
-      "files. "
-      "The options are {len, elen, tpm, numreads}")(
-
-      "output,o", po::value<std::string>(&qmOpts.outputName)->required(),
-      "Output quantification file.");
+     "List of quantification directories.")
+    ("names", po::value<vector<string>>(&qmOpts.names)->multitoken(),
+     "Optional list of names to give to the samples.")
+    ("column,c",
+     po::value<string>(&qmOpts.outputCol)->required()->default_value("TPM"),
+     "The name of the column that will be merged together into the output "
+     "files. "
+     "The options are {len, elen, tpm, numreads}")
+    ("genes", po::bool_switch(&(qmOpts.genesQuant))->default_value(false),
+     "Use gene quantification instead of transcript.")
+    ("missing",
+     po::value<string>(&qmOpts.missingValue)->required()->default_value("NA"),
+     "The value of missing values.")
+    ("output,o", po::value<std::string>(&qmOpts.outputName)->required(),
+     "Output quantification file.");
 
   po::options_description all("salmon quantmerge options");
   all.add(generic);
