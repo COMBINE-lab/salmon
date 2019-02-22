@@ -1296,7 +1296,7 @@ bool processSample(AlignmentLibraryT<ReadT>& alnLib, size_t requiredObservations
       // The function we'll use as a callback to write samples
       std::function<bool(const std::vector<double>&)> bsWriter =
         [&gzw](const std::vector<double>& alphas) -> bool {
-          return gzw.writeBootstrap(alphas);
+          return gzw.writeBootstrap(alphas, true);
         };
 
       bool sampleSuccess =
