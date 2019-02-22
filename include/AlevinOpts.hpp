@@ -119,6 +119,7 @@ struct AlevinOpts {
 
   uint32_t noisyUmis;
   double mappingRate;
+  double keepCBFraction;
   uint32_t eqReads;
 
   uint32_t totalDedupUMIs;

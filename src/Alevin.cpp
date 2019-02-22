@@ -775,6 +775,11 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
         ind += 1;
       }
 
+      if (aopt.keepCBFraction > 0.0) {
+        aopt.forceCells = std::min(static_cast<int>(aopt.keepCBFraction * freqCounter.size()),
+                                   737000);
+      }
+
       //Calculate the knee using the frequency distribution
       //and get the true set of barcodes
       sampleTrueBarcodes(collapsedfrequency, trueBarcodes,
