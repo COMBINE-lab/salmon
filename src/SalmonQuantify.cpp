@@ -1069,7 +1069,6 @@ void processReadsQuasi(
                 }
               }
 
-              // ends are scored separately
               if ((s1 < (optFrac * maxLeftScore)) or (s2 < (optFrac * maxRightScore))) {
                 score = std::numeric_limits<decltype(score)>::min();
               } else {
@@ -1554,7 +1553,6 @@ void processReadsQuasi(
       rapmap::hit_manager::hitsToMappingsSimple(*qidx, mc,
                                                 MateStatus::SINGLE_END,
                                                 hcInfo, jointHits);
-
 
       // If the fragment was too short, record it
       if (tooShort) {
