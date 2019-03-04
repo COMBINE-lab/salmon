@@ -1383,6 +1383,11 @@ std::string getCurrentTimeAsString() {
   auto numRight = sopt.mate2ReadFiles.size();
 
   /** Info, not warnings or errors, but informative messages to the user **/
+  if (sopt.mimicBT2 or sopt.mimicStrictBT2 or sopt.hardFilter) {
+    sopt.jointLog->info("The --mimicBT2, --mimicStrictBT2 and --hardFilter flags imply mapping validation (--validateMappings). "
+                        "Enabling mapping validation.");
+    sopt.validateMappings = true;
+  }
 
   // If not in alevin mode, inform the user about validateMappings
   if (!sopt.alevinMode and !sopt.validateMappings) {
@@ -1390,6 +1395,8 @@ std::string getCurrentTimeAsString() {
                         "NOTE: It appears you are running salmon without the `--validateMappings` option.\n"
                         "Mapping validation can generally improve both the sensitivity and specificity of mapping,\n"
                         "with only a moderate increase in use of computational resources. \n"
+                        "Mapping validation is planned to become a default option (i.e. turned on by default) in\n"
+                        "the next release of salmon.\n"
                         "Unless there is a specific reason to do this (e.g. testing on clean simulated data),\n"
                         "`--validateMappings` is generally recommended.\n");
   }
@@ -1437,8 +1444,8 @@ std::string getCurrentTimeAsString() {
   }
 
   // Make sure that consensusSlack is not negative
-  if (sopt.consensusSlack < 0) {
-    sopt.jointLog->error("You set consensusSlack as {}, but it must be a non-negative value.", sopt.consensusSlack);
+  if (sopt.consensusSlack < 0 or sopt.consensusSlack >= 1.0) {
+    sopt.jointLog->error("You set consensusSlack as {}, but it must in [0,1).", sopt.consensusSlack);
     return false;
   }
 
@@ -1459,40 +1466,77 @@ std::string getCurrentTimeAsString() {
       return false;
     }
 
-    if (sopt.rangeFactorizationBins < 4) {
+    if (sopt.hardFilter) {
+      // range factorization doesn't make sense with hard filtering
+      if (sopt.rangeFactorizationBins > 0) {
+        sopt.jointLog->info("The use of range-factorized equivalence classes does not make sense "
+                            "in conjunction with --hardFilter.  Disabling range-factorized equivalence classes. ");
+        sopt.rangeFactorizationBins = 0;
+        sopt.useRangeFactorization = false;
+      }
+    } else if (sopt.rangeFactorizationBins < 4) {
       uint32_t nbins{4};
       sopt.jointLog->info(
-                          "Usage of --validateMappings implies use of range factorization. "
+                          "Usage of --validateMappings, without --hardFilter implies use of range factorization. "
                           "rangeFactorizationBins is being set to {}", nbins
                           );
       sopt.rangeFactorizationBins = nbins;
       sopt.useRangeFactorization = true;
     }
 
-    if (sopt.mimicStrictBT2) {
-      sopt.jointLog->info(
-                          "Usage of --mimicStrictBT2 overrides other settings for mapping validation. Setting "
-                          "strict RSEM+Bowtie2-like parameters now.");
-      sopt.discardOrphansQuasi = true;
-      sopt.minScoreFraction = 0.8;
-      sopt.matchScore = 1;
-      sopt.mismatchPenalty = 0;
-      // NOTE: as a limitation of ksw2, we can't have
-      // (gapOpenPenalty + gapExtendPenalty) * 2 + matchScore < numeric_limits<int8_t>::max()
-      // these parameters below are sufficiently large penalties to
-      // prohibit gaps, while not overflowing the above condition
-      sopt.gapOpenPenalty = 25;
-      sopt.gapExtendPenalty = 25;
-    }
-
-    // If the consensus slack was not set explicitly, then it defaults to 1 with
+    // If the consensus slack was not set explicitly, then it defaults to 0.2 with
     // validateMappings
     bool consensusSlackExplicit = !vm["consensusSlack"].defaulted();
     if (!consensusSlackExplicit) {
-      sopt.consensusSlack = 1;
+      sopt.consensusSlack = 0.2;
       sopt.jointLog->info(
-                          "Usage of --validateMappings implies a default consensus slack of 1. "
+                          "Usage of --validateMappings implies a default consensus slack of 0.2. "
                           "Setting consensusSlack to {}.", sopt.consensusSlack);
+    }
+
+    if (sopt.mimicBT2 and sopt.mimicStrictBT2) {
+      sopt.jointLog->error("You passed both the --mimicBT2 and --mimicStrictBT2 parameters.  These are mutually exclusive. "
+                            "Please select only one of these flags.");
+      return false;
+    }
+
+    if (sopt.mimicBT2 or sopt.mimicStrictBT2) {
+      /*
+      sopt.jointLog->info("The --mimicBT2 and --mimicStrictBT2 flags imply orphan recovery (--recoverOrphans). "
+                          "Enabling orphan recovery.");
+      sopt.recoverOrphans = true;
+      */
+
+      sopt.maxReadOccs = 1000;
+      sopt.jointLog->info("The --mimicBT2 and --mimicStrictBT2 flags increases maxReadOccs to {}.", sopt.maxReadOccs);
+
+      sopt.consensusSlack = 0.35;
+      sopt.jointLog->info("The --mimicBT2 and --mimicStrictBT2 flags increases consensusSlack to {}.", sopt.consensusSlack);
+
+      if (sopt.mimicBT2) {
+        sopt.jointLog->info(
+                            "Usage of --mimicBT2 overrides other settings for mapping validation. Setting "
+                            "Bowtie2-like parameters now.");
+        sopt.discardOrphansQuasi = true;
+        sopt.noDovetail = true;
+      }
+
+      if (sopt.mimicStrictBT2) {
+        sopt.jointLog->info(
+                            "Usage of --mimicStrictBT2 overrides other settings for mapping validation. Setting "
+                            "strict RSEM+Bowtie2-like parameters now.");
+        sopt.discardOrphansQuasi = true;
+        sopt.noDovetail = true;
+        sopt.minScoreFraction = 0.8;
+        sopt.matchScore = 1;
+        sopt.mismatchPenalty = 0;
+        // NOTE: as a limitation of ksw2, we can't have
+        // (gapOpenPenalty + gapExtendPenalty) * 2 + matchScore < numeric_limits<int8_t>::max()
+        // these parameters below are sufficiently large penalties to
+        // prohibit gaps, while not overflowing the above condition
+        sopt.gapOpenPenalty = 25;
+        sopt.gapExtendPenalty = 25;
+      }
     }
   }
   return true;
@@ -1888,15 +1932,6 @@ bool processQuantOptions(SalmonOpts& sopt,
         jointLog->flush();
         return false;
       }
-    }
-
-    if (sopt.useFSPD) {
-      jointLog->critical("The --useFSPD option has been deprecated.  "
-                         "Positional bias modeling is available "
-                         "[experimentally] under the --posBias flag. "
-                         "Please remove the --useFSPD flag from your command.");
-      jointLog->flush();
-      return false;
     }
 
     if (sopt.noFragLengthDist and !sopt.noEffectiveLengthCorrection) {

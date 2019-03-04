@@ -362,6 +362,50 @@ bool GZipWriter::writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
   return true;
 }
 
+template <typename ProtocolT>
+bool GZipWriter::writeMetaAlevin(const AlevinOpts<ProtocolT>& opts,
+                                 boost::filesystem::path aux_dir) {
+  namespace bfs = boost::filesystem;
+  bfs::path auxDir = path_ / aux_dir;
+  bfs::path info = auxDir / "alevin_meta_info.json";
+
+  {
+    std::ofstream os(info.string());
+    cereal::JSONOutputArchive oa(os);
+
+    oa(cereal::make_nvp("total_reads", opts.totalReads));
+    oa(cereal::make_nvp("reads_with_N",
+                        opts.totalReads - opts.totalUsedReads));
+    oa(cereal::make_nvp("noisy_cb_reads", opts.readsThrown));
+    oa(cereal::make_nvp("noisy_umi_reads", opts.noisyUmis));
+    oa(cereal::make_nvp("mapping_rate", opts.mappingRate));
+    oa(cereal::make_nvp("reads_in_eqclasses", opts.eqReads));
+
+    oa(cereal::make_nvp("total_cbs", opts.totalCBs));
+    oa(cereal::make_nvp("used_cbs", opts.totalUsedCBs));
+
+    if(not boost::filesystem::exists(opts.whitelistFile)){
+      oa(cereal::make_nvp("initial_whitelist", opts.kneeCutoff));
+      oa(cereal::make_nvp("low_conf_cbs", opts.totalLowConfidenceCBs));
+      oa(cereal::make_nvp("num_features", opts.numFeatures));
+    }
+    oa(cereal::make_nvp("final_num_cbs", opts.intelligentCutoff));
+
+    if (opts.numBootstraps > 0) {
+      oa(cereal::make_nvp("num_bootstraps",
+                          opts.numBootstraps));
+    }
+
+    oa(cereal::make_nvp("deduplicated_umis", opts.totalDedupUMIs));
+    oa(cereal::make_nvp("mean_umis_per_cell",
+                        opts.totalDedupUMIs / opts.intelligentCutoff));
+    oa(cereal::make_nvp("mean_genes_per_cell",
+                        opts.totalExpGenes / opts.intelligentCutoff));
+  }
+
+  return true;
+}
+
 /**
  * Write the ``main'' metadata to file.  Currently this includes:
  *   -- Names of the target id's if bootstrapping / gibbs is performed
@@ -654,8 +698,8 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment) {
     os << "UniqueCount\tAmbigCount\n";
 
     auto& transcripts = experiment.transcripts();
-    auto& eqVec =
-        const_cast<ExpT&>(experiment).equivalenceClassBuilder().eqVec();
+    auto& eqBuilder = const_cast<ExpT&>(experiment).equivalenceClassBuilder();
+    auto& eqVec = eqBuilder.eqVec();
 
     class CountPair {
     public:
@@ -664,12 +708,18 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment) {
     };
 
     std::vector<CountPair> counts(transcripts.size());
-    for (auto& eq : eqVec) {
+    for (size_t eqIdx = 0; eqIdx < eqVec.size(); ++eqIdx) {
+      auto& eq = eqVec[eqIdx];
+
+      // NOTE: this function is safe only if we've populated eqVec_ member.
+      auto groupSize = eqBuilder.getNumTranscriptsForClass(eqIdx);
       uint64_t count = eq.second.count;
       const TranscriptGroup& tgroup = eq.first;
       const std::vector<uint32_t>& txps = tgroup.txps;
-      if (txps.size() > 1) {
-        for (auto tid : txps) {
+
+      if (groupSize > 1) {
+        for (size_t i = 0; i < groupSize; ++i) {
+          auto tid = txps[i];
           counts[tid].potential += count;
         }
       } else {
@@ -981,7 +1031,8 @@ bool GZipWriter::writeCellEQVec(size_t barcode, const std::vector<uint32_t>& off
   return true;
 }
 
-bool GZipWriter::writeUmiGraph(alevin::graph::Graph& g) {
+bool GZipWriter::writeUmiGraph(alevin::graph::Graph& g,
+                               std::string& cbString) {
 #if defined __APPLE__
   spin_lock::scoped_lock sl(writeMutex_);
 #else
@@ -996,7 +1047,7 @@ bool GZipWriter::writeUmiGraph(alevin::graph::Graph& g) {
   }
 
   boost::iostreams::filtering_ostream& ofile = *umiGraphStream_;
-  ofile << g.num_vertices() << "\t";
+  ofile << cbString << "\t" << g.num_vertices() << "\t";
   for(auto& edge: g.edges){
     uint32_t source = edge.first;
     ofile<< source;
@@ -1024,8 +1075,6 @@ template bool GZipWriter::writeBootstrap<int>(const std::vector<int>& abund,
 
 template bool GZipWriter::writeEquivCounts<BulkExpT>(const SalmonOpts& sopt,
                                              BulkExpT& readExp);
-template bool GZipWriter::writeEquivCounts<SCExpT>(const SalmonOpts& sopt,
-                                                           SCExpT& readExp);
 
 template bool GZipWriter::writeEquivCounts<BulkAlignLibT<UnpairedRead>>(
     const SalmonOpts& sopt, BulkAlignLibT<UnpairedRead>& readExp);
@@ -1127,3 +1176,29 @@ template
 bool GZipWriter::writeEquivCounts<SCExpT, apt::Custom>(
                                                        const AlevinOpts<apt::Custom>& aopts,
                                                        SCExpT& readExp);
+template bool
+GZipWriter::writeMetaAlevin<apt::DropSeq>(const AlevinOpts<apt::DropSeq>& opts,
+                                          boost::filesystem::path aux_dir);
+template bool
+GZipWriter::writeMetaAlevin<apt::InDrop>(const AlevinOpts<apt::InDrop>& opts,
+                                         boost::filesystem::path aux_dir);
+template bool
+GZipWriter::writeMetaAlevin<apt::Chromium>(const AlevinOpts<apt::Chromium>& opts,
+                                           boost::filesystem::path aux_dir);
+template bool
+GZipWriter::writeMetaAlevin<apt::ChromiumV3>(const AlevinOpts<apt::ChromiumV3>& opts,
+                                             boost::filesystem::path aux_dir);
+template bool
+GZipWriter::writeMetaAlevin<apt::CELSeq>(const AlevinOpts<apt::CELSeq>& opts,
+                                         boost::filesystem::path aux_dir);
+template bool
+GZipWriter::writeMetaAlevin<apt::CELSeq2>(const AlevinOpts<apt::CELSeq2>& opts,
+                                          boost::filesystem::path aux_dir);
+template bool
+GZipWriter::writeMetaAlevin<apt::Custom>(const AlevinOpts<apt::Custom>& opts,
+                                         boost::filesystem::path aux_dir);
+template bool
+GZipWriter::writeMetaAlevin<apt::Gemcode>(const AlevinOpts<apt::Gemcode>& opts,
+                                          boost::filesystem::path aux_dir);
+
+

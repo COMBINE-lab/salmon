@@ -733,7 +733,6 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
       readExp.equivalenceClassBuilder().eqVec();
 
   bool noRichEq = sopt.noRichEqClasses;
-  bool useFSPD{sopt.useFSPD};
 
   bool useVBEM{sopt.useVBOpt};
   bool perTranscriptPrior{sopt.perTranscriptPrior};
@@ -755,7 +754,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   for (size_t i = 0; i < transcripts.size(); ++i) {
     auto& txp = transcripts[i];
     alphas[i] = txp.projectedCounts;
-
+    totalWeight += alphas[i];
     effLens(i) = useEffectiveLengths
                      ? std::exp(txp.getCachedLogEffectiveLength())
                      : txp.RefLength;
@@ -767,7 +766,6 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
     double uniqueCount = static_cast<double>(txp.uniqueCount() + 0.5);
     auto wi = uniqueCount * 1e-3 * effLens(i);
     alphasPrime[i] = wi;
-    totalWeight += wi;
     ++numActive;
     totalLen += effLens(i);
   }
@@ -1012,10 +1010,6 @@ using SCReadExperimentT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 template bool CollapsedEMOptimizer::optimize<BulkReadExperimentT>(
     BulkReadExperimentT& readExp, SalmonOpts& sopt, double relDiffTolerance,
     uint32_t maxIter);
-template bool CollapsedEMOptimizer::optimize<SCReadExperimentT>(
-                                                                  SCReadExperimentT& readExp, SalmonOpts& sopt, double relDiffTolerance,
-                                                                  uint32_t maxIter);
-
 
 template bool CollapsedEMOptimizer::optimize<BulkAlnLibT<UnpairedRead>>(
     BulkAlnLibT<UnpairedRead>& readExp, SalmonOpts& sopt,
@@ -1030,12 +1024,6 @@ template bool CollapsedEMOptimizer::gatherBootstraps<BulkReadExperimentT>(
     BulkReadExperimentT& readExp, SalmonOpts& sopt,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     double relDiffTolerance, uint32_t maxIter);
-
-template bool CollapsedEMOptimizer::gatherBootstraps<SCReadExperimentT>(
-                                                                          SCReadExperimentT& readExp, SalmonOpts& sopt,
-                                                                          std::function<bool(const std::vector<double>&)>& writeBootstrap,
-                                                                          double relDiffTolerance, uint32_t maxIter);
-
 
 template bool
 CollapsedEMOptimizer::gatherBootstraps<BulkAlnLibT<UnpairedRead>>(

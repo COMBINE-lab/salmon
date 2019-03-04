@@ -205,6 +205,9 @@ int parseReads(
     if (ksv == -3) {
       --numParsing;
       return -3;
+    } else if (ksv < -1) {
+      --numParsing;
+      return ksv;
     }
 
     // If we hit the end of the file and have any reads in our local buffer
@@ -216,6 +219,11 @@ int parseReads(
         fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
       }
       numWaiting = 0;
+    } else if (numObtained > 0){
+      curMaxDelay = MIN_BACKOFF_ITERS;
+      while (!seqContainerQueue_.try_enqueue(std::move(local))) {
+        fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
+      }
     }
     // destroy the parser and close the file
     kseq_destroy(seq);
@@ -309,6 +317,11 @@ int parseReadPair(
         fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
       }
       numWaiting = 0;
+    } else if (numObtained > 0){
+      curMaxDelay = MIN_BACKOFF_ITERS;
+      while (!seqContainerQueue_.try_enqueue(std::move(local))) {
+        fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
+      }
     }
     // destroy the parser and close the file
     kseq_destroy(seq);

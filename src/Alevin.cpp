@@ -55,6 +55,7 @@
 //alevin include
 #include "Filter.hpp"
 #include "AlevinOpts.hpp"
+#include "AlevinHash.hpp"
 #include "AlevinUtils.hpp"
 #include "BarcodeModel.hpp"
 #include "SingleCellProtocols.hpp"
@@ -395,6 +396,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
     lowRegionNumBarcodes = fractionTrueBarcodes;
   }
 
+  aopt.kneeCutoff = topxBarcodes;
   // ignoring all the frequencies having same frequency as cutoff
   // to imitate stable sort
   topxBarcodes += lowRegionNumBarcodes;
@@ -429,6 +431,8 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
                         " because of noisy Cellular barcodes.",
                         percentThrown);
   }
+  aopt.readsThrown = readsThrownCounter;
+  aopt.totalLowConfidenceCBs = topxBarcodes - aopt.kneeCutoff;
 
   // keeping some cells left of the left boundary for learning
   aopt.jointLog->info("Total {}{}{}(has {}{}{} low confidence)"
@@ -726,6 +730,9 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
                         green, usedNumBarcodes, RESET_COLOR,
                         red,totNumBarcodes, RESET_COLOR);
 
+    aopt.totalReads = totNumBarcodes;
+    aopt.totalUsedReads = usedNumBarcodes;
+
     //import whitelist barcodes if present
     if(boost::filesystem::exists(aopt.whitelistFile)){
       std::ifstream whiteFile(aopt.whitelistFile.string());
@@ -768,12 +775,18 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
         ind += 1;
       }
 
+      if (aopt.keepCBFraction > 0.0) {
+        aopt.forceCells = std::min(static_cast<int>(aopt.keepCBFraction * freqCounter.size()),
+                                   737000);
+      }
+
       //Calculate the knee using the frequency distribution
       //and get the true set of barcodes
       sampleTrueBarcodes(collapsedfrequency, trueBarcodes,
-                           numLowConfidentBarcode, collapMap, aopt);
+                         numLowConfidentBarcode, collapMap, aopt);
 
       aopt.jointLog->info("Done True Barcode Sampling");
+      aopt.intelligentCutoff = trueBarcodes.size();
     }
 
     indexBarcodes(aopt, freqCounter, trueBarcodes, barcodeSoftMap);
@@ -781,6 +794,9 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
 
     aopt.jointLog->info("Total Unique barcodes found: {}", freqCounter.size());
     aopt.jointLog->info("Used Barcodes except Whitelist: {}", barcodeSoftMap.size());
+
+    aopt.totalCBs = freqCounter.size();
+    aopt.totalUsedCBs = barcodeSoftMap.size();
 
     uint32_t mmBcCounts{0}, mmBcReadCount{0};
     std::unordered_set<std::string> softMapWhiteBcSet;
@@ -898,17 +914,29 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
 
   size_t numLowConfidentBarcode;
 
-  aopt.jointLog->info("Processing barcodes files (if Present) \n\n ");
+  if(boost::filesystem::exists(aopt.bfhFile)) {
+    if (aopt.noQuant) {
+      aopt.jointLog->error("Can't use --noQuant with hashMode (--hash)");
+      aopt.jointLog->flush();
+      exit(1);
+    }
 
-  processBarcodes(barcodeFiles,
-                  readFiles,
-                  aopt,
-                  barcodeSoftMap,
-                  trueBarcodes,
-                  freqCounter,
-                  numLowConfidentBarcode);
+    salmonHashQuantify(aopt, sopt.indexDirectory,
+                       sopt.outputDirectory, freqCounter);
+    aopt.noQuant = true;
 
-  aopt.jointLog->flush();
+    aopt.jointLog->info("Done Processing");
+  } else {
+    aopt.jointLog->info("Processing barcodes files (if Present) \n\n ");
+    processBarcodes(barcodeFiles,
+                    readFiles,
+                    aopt,
+                    barcodeSoftMap,
+                    trueBarcodes,
+                    freqCounter,
+                    numLowConfidentBarcode);
+    aopt.jointLog->flush();
+  }
 
   if(!aopt.noQuant){
     aopt.jointLog->info("Done with Barcode Processing; Moving to Quantify\n");
@@ -992,6 +1020,9 @@ salmon-based processing of single-cell RNA-seq data.
     bool gemcode = vm["gemcode"].as<bool>();
     bool celseq = vm["celseq"].as<bool>();
     bool celseq2 = vm["celseq2"].as<bool>();
+    bool custom = (vm.count("barcodeLength") and
+                   vm.count("umiLength") and
+                   vm.count("end"));
 
     uint8_t validate_num_protocols {0};
     if (dropseq) validate_num_protocols += 1;
@@ -1001,6 +1032,7 @@ salmon-based processing of single-cell RNA-seq data.
     if (gemcode) validate_num_protocols += 1;
     if (celseq) validate_num_protocols += 1;
     if (celseq2) validate_num_protocols += 1;
+    if (custom) validate_num_protocols += 1;
 
     if ( validate_num_protocols != 1 ) {
       fmt::print(stderr, "ERROR: Please specify one and only one scRNA protocol;");

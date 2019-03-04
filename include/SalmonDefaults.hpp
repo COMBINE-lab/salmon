@@ -19,24 +19,29 @@ namespace defaults {
 
   // advanced
   constexpr const bool validateMappings{false};
-  constexpr const int32_t consensusSlack{0};
+  constexpr const float consensusSlack{0.0};
   constexpr const double minScoreFraction{0.65};
   constexpr const int16_t matchScore{2};
   constexpr const int16_t mismatchPenalty{-4};
-  constexpr const int16_t gapOpenPenalty{5};
-  constexpr const int16_t gapExtendPenalty{3};
+  constexpr const int16_t gapOpenPenalty{4};
+  constexpr const int16_t gapExtendPenalty{2};
+  constexpr const int32_t dpBandwidth{15};
+  constexpr const bool hardFilter{false};
   constexpr const bool mimicStrictBT2{false};
+  constexpr const bool mimicBT2{false};
+  constexpr const bool noDovetail{false};
+  constexpr const bool recoverOrphans{false};
   constexpr const int32_t maxMMPExtension{7};
   constexpr const bool alternativeInitMode{false};
   constexpr const char auxDir[] = "aux_info";
   constexpr const bool consistentHits{false};
+  constexpr const bool skipQuant{false};
   constexpr const bool dumpEq{false};
   constexpr const bool dumpEqWeights{false};
   constexpr const bool fasterMapping{false};
   constexpr const uint32_t minAssignedFrags{10};
   constexpr const bool reduceGCMemory{false};
   constexpr const uint32_t biasSpeedSamp{5};
-  constexpr const bool strictIntersect{false};
   constexpr const uint32_t maxFragLength{1000};
   constexpr const uint32_t fragLenPriorMean{250};
   constexpr const uint32_t fragLenPriorSD{25};
@@ -50,7 +55,7 @@ namespace defaults {
   constexpr const bool noBiasLengthThreshold{false};
   constexpr const uint32_t numBiasSamples{2000000};
   constexpr const uint32_t numBurninFrags{5000000};
-  constexpr const uint32_t numPreBurninFrags{1000000};
+  constexpr const uint32_t numPreBurninFrags{5000};
   constexpr const bool useEM{false};
   constexpr const bool useVBOpt{true};
   constexpr const uint32_t sigDigits{3};
@@ -86,9 +91,6 @@ namespace defaults {
   constexpr const bool noFragLengthFactor{false};
   constexpr const bool rankEqClasses{false};
   constexpr const bool dontExtrapolateCounts{false};
-
-  // purely deprecated --- will remove soon
-  constexpr const bool useFSPD{false};
 
   // alignment-based mode
   //constexpr const bool useErrorModel{true};
@@ -133,9 +135,11 @@ namespace defaults {
   constexpr const uint32_t numBootstraps{0};
   constexpr const uint32_t lowRegionMinNumBarcodes{200};
   constexpr const uint32_t maxNumBarcodes{100000};
-  constexpr const double minScoreFraction{0.8};
-  constexpr const double expectCells{0};
-  constexpr const double forceCells{0};
+  constexpr const double minScoreFraction{0.87};
+  constexpr const float consensusSlack{0.6};
+  constexpr const uint32_t expectCells{0};
+  constexpr const uint32_t forceCells{0};
+  constexpr const double keepCBFraction{0.0};
 }
 }
 

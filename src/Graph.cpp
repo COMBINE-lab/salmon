@@ -34,30 +34,30 @@ namespace alevin {
       return (((k1XORk2 << lshift) & 0x3FFFFFFFFFFFFFFF) > 0) ? false : true;
     }
 
+    bool kHamming(uint64_t k1, uint64_t k2, size_t maxDist) {
+      size_t dist {0};
+      for (size_t i=0; i<20; i+=2) {
+        auto pcnt1 = ( k1 << i) & 0xC000000000000000;
+        auto pcnt2 = ( k2 << i) & 0xC000000000000000;
+        if (pcnt1 != pcnt2) { dist++; }
+        if (dist > maxDist) { return false; }
+      }
+      return true;
+    }
+
     EdgeType hasEdge(std::pair<uint64_t, uint32_t> &x,
                      std::pair<uint64_t, uint32_t> &y) {
-      if ( x.first == y.first ) {
+      if (x.first == y.first) { return EdgeType::BiDirected; }
+
+      auto isOneHamming = oneHamming(x.first, y.first);
+      if ((x.second > (2*y.second -1)) and isOneHamming) {
+        return EdgeType::XToY ;
+      } else if ((y.second > (2*x.second-1)) and isOneHamming) {
+        return EdgeType::YToX ;
+      } else if (isOneHamming) {
         return EdgeType::BiDirected;
       }
-      if ( x.second > (2*y.second-1) ) {
-        if ( oneHamming(x.first, y.first) ){
-          return EdgeType::XToY;
-        }
-        else {
-          return EdgeType::NoEdge;
-        }
-      }
-      else if (y.second > (2*x.second-1) ) {
-        if ( oneHamming(x.first, y.first) ){
-          return EdgeType::YToX;
-        }
-        else {
-          return EdgeType::NoEdge;
-        }
-      }
-      else{
-        return EdgeType::NoEdge;
-      }
+      return EdgeType::NoEdge;
     }
   }
 }

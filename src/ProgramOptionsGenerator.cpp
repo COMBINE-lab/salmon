@@ -90,18 +90,18 @@ namespace salmon {
        "If this flag is passed, quasi-mappings will be validated to ensure that they could give "
        "rise to a reasonable alignment before they are further used for quantification.")
       ("consensusSlack",
-       po::value<int32_t>(&(sopt.consensusSlack))->default_value(salmon::defaults::consensusSlack),
+       po::value<float>(&(sopt.consensusSlack))->default_value(salmon::defaults::consensusSlack),
        "[Quasi-mapping mode only] : The amount of slack allowed in the quasi-mapping consensus "
        "mechanism.  Normally, a transcript must cover all hits to be considered for mapping.  "
-       "If this is set to a value, X, greater than 0, then a transcript can fail to cover up to "
-       "X hits before it is discounted as a mapping candidate.  The default value of this option "
-       "is 1 if --validateMappings is given and 0 otherwise."
+       "If this is set to a fraction, X, greater than 0 (and in [0,1)), then a transcript can fail to cover up to "
+       "(100 * X)% of the hits before it is discounted as a mapping candidate.  The default value of this option "
+       "is 0.2 if --validateMappings is given and 0 otherwise."
        )
       ("minScoreFraction",
        po::value<double>(&sopt.minScoreFraction),
        "[Quasi-mapping mode (w / mapping validation) only] : The fraction of the optimal possible alignment score that a "
        "mapping must achieve in order to be considered \"valid\" --- should be in (0,1].\n"
-       "Salmon Default 0.65 and Alevin Default 0.8"
+       "Salmon Default 0.65 and Alevin Default 0.87"
        )
       ("maxMMPExtension",
        po::value<int32_t>(&sopt.maxMMPExtension)->default_value(salmon::defaults::maxMMPExtension),
@@ -129,11 +129,40 @@ namespace salmon {
        po::value<int16_t>(&sopt.gapExtendPenalty)->default_value(salmon::defaults::gapExtendPenalty),
        "[Quasi-mapping mode (w / mapping validation) only] : The value given to a gap extension in an alignment."
        )
+      ("bandwidth",
+       po::value<int32_t>(&sopt.dpBandwidth)->default_value(salmon::defaults::dpBandwidth),
+       "[Quasi-mapping mode (w / mapping validation) only] : The value used for the bandwidth passed to ksw2.  A smaller "
+       "bandwidth can make the alignment verification run more quickly, but could possibly miss valid alignments."
+       )
+      ("noDovetail",
+       po::bool_switch(&(sopt.noDovetail))->default_value(salmon::defaults::noDovetail),
+       "[Quasi-mapping mode only] : Discard dovetailing mappings."
+       )
+      ("recoverOrphans",
+       po::bool_switch(&(sopt.recoverOrphans))->default_value(salmon::defaults::recoverOrphans),
+       "[Quasi-mapping mode only] : Attempt to recover the mates of orphaned reads. This uses edlib for "
+       "orphan recovery, and so introduces some computational overhead, but it can improve sensitivity."
+       )
+      ("mimicBT2", // horrible flag name, think of something better
+       po::bool_switch(&(sopt.mimicBT2))->default_value(salmon::defaults::mimicBT2),
+       "[Quasi-mapping mode (w / mapping validation) only] : Set flags to mimic parameters similar to "
+       "Bowtie2 with --no-discordant and --no-mixed flags.  This increases disallows dovetailing reads, and "
+       "discards orphans. Note, this does not impose the very strict parameters assumed by RSEM+Bowtie2, "
+       "like gapless alignments.  For that behavior, use the --mimiStrictBT2 flag below."
+       )
       ("mimicStrictBT2", // horrible flag name, think of something better
        po::bool_switch(&(sopt.mimicStrictBT2))->default_value(salmon::defaults::mimicStrictBT2),
        "[Quasi-mapping mode (w / mapping validation) only] : Set flags to mimic the very strict parameters used by "
        "RSEM+Bowtie2.  This increases --minScoreFraction to 0.8, disallows dovetailing reads, "
        "discards orphans, and disallows gaps in alignments."
+       )
+      ("hardFilter",
+       po::bool_switch(&(sopt.hardFilter))->default_value(salmon::defaults::hardFilter),
+       "[Quasi-mapping mode (w / mapping validation) only] : Instead of weighting mappings by their alignment score, "
+       "this flag will discard any mappings with sub-optimal alignment score.  The default option of soft-filtering "
+       "(i.e. weighting mappings by their alignment score) usually yields slightly more accurate abundance estimates "
+       "but this flag may be desirable if you want more accurate 'naive' equivalence classes, rather "
+       "than range factorized equivalence classes."
        )
       ("allowOrphansFMD",
        po::bool_switch(&(sopt.allowOrphans))->default_value(salmon::defaults::allowOrphansFMD),
@@ -156,14 +185,6 @@ namespace salmon {
        "Force hits gathered during "
        "quasi-mapping to be \"consistent\" (i.e. co-linear and "
        "approximately the right distance apart).")
-      ("strictIntersect",
-       po::bool_switch(&(sopt.strictIntersect))->default_value(salmon::defaults::strictIntersect),
-       "Modifies how orphans are "
-       "assigned.  When this flag is set, if the intersection of the "
-       "quasi-mappings for the left and right "
-       "is empty, then all mappings for the left and all mappings for the "
-       "right read are reported as orphaned "
-       "quasi-mappings")
       ("fasterMapping",
        po::bool_switch(&(sopt.fasterMapping))->default_value(salmon::defaults::fasterMapping),
        "[Developer]: Disables some extra checks during quasi-mapping. This "
@@ -304,6 +325,9 @@ namespace salmon {
       (
        "tgMap", po::value<std::string>(), "transcript to gene map tsv file")
       (
+       "hash", po::value<std::string>(), "Secondary input point for Alevin "
+       "using Big freaking Hash (bfh.txt) file. Works Only with --chromium")
+      (
        "dropseq", po::bool_switch()->default_value(alevin::defaults::isDropseq),
        "Use DropSeq Single Cell protocol for the library")
       (
@@ -347,6 +371,10 @@ namespace salmon {
        "useCorrelation", po::bool_switch()->default_value(alevin::defaults::useCorrelation),
        "Use pair-wise pearson correlation with True barcodes as a"
        " feature for white-list creation.")
+      (
+       "keepCBFraction", po::value<double>(),
+       "fraction of CB to keep, value must be in range (0,1], use 1 to quantify all CB."
+       )
       (
        "dumpfq", po::bool_switch()->default_value(alevin::defaults::dumpFQ),
        "Dump barcode modified fastq file for downstream analysis by"
@@ -456,6 +484,9 @@ namespace salmon {
        "The sub-directory of the quantification directory where auxiliary "
        "information "
        "e.g. bootstraps, bias parameters, etc. will be written.")
+      ("skipQuant", po::bool_switch(&(sopt.skipQuant))->default_value(salmon::defaults::skipQuant),
+       "Skip performing the actual transcript quantification (including any Gibbs sampling or bootstrapping)."
+       )
       ("dumpEq", po::bool_switch(&(sopt.dumpEq))->default_value(salmon::defaults::dumpEq),
        "Dump the equivalence class counts "
        "that were computed during quasi-mapping")
@@ -699,11 +730,6 @@ namespace salmon {
 
     po::options_description deprecated(
         "\ndeprecated options about which to inform the user");
-    deprecated.add_options()
-      ("useFSPD", po::bool_switch(&(sopt.useFSPD))->default_value(salmon::defaults::useFSPD),
-        "[deprecated] : "
-        "Consider / model non-uniformity in the fragment start positions "
-            "across the transcript.");
     return deprecated;
   }
 

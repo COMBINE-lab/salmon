@@ -33,6 +33,7 @@ extern "C" {
 
 #include "AlignmentLibrary.hpp"
 #include "BAMQueue.hpp"
+#include "BAMUtils.hpp"
 #include "ClusterForest.hpp"
 #include "FASTAParser.hpp"
 #include "LibraryFormat.hpp"
@@ -184,7 +185,6 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
   auto& fragLengthDist = *(alnLib.fragmentLengthDistribution());
   auto& alnMod = alnLib.alignmentModel();
 
-  bool useFSPD{salmonOpts.useFSPD};
   bool useFragLengthDist{!salmonOpts.noFragLengthDist};
   bool noFragLenFactor{salmonOpts.noFragLenFactor};
 
@@ -209,6 +209,32 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
     return (expectedLibFormat.type == ReadType::PAIRED_END and
             !aln->isPaired());
   };
+
+  auto alignerType = alnLib.getAlignerType();
+
+  bool haveASTag{true};
+  bool firstTagCheck{true};
+  auto getAlignerAssignedScore =
+    [&haveASTag, &firstTagCheck, alignerType](FragT* aln) -> double {
+      if (firstTagCheck) {
+        char* tp = bam_aux_find(aln->getRead1(), "AS");
+        haveASTag = (tp != NULL);
+      }
+      double score{LOG_0};
+      if (haveASTag and (alignerType == salmon::bam_utils::AlignerDetails::BOWTIE2)) {
+        uint8_t* tl = reinterpret_cast<uint8_t*>(bam_aux_find(aln->getRead1(), "AS"));
+        auto locScore = (tl != NULL) ? bam_aux_i(tl) : LOG_1;
+        if (aln->isPaired()) {
+          uint8_t* tr = reinterpret_cast<uint8_t*>(bam_aux_find(aln->getRead2(), "AS"));
+          locScore += (tr != NULL) ? bam_aux_i(tr) : LOG_1;
+        }
+        score = locScore;
+      } else {
+        score = LOG_1;
+      }
+      firstTagCheck = false;
+      return score;
+    };
 
   while (!doneParsing or !workQueue.empty()) {
     uint32_t zeroProbFrags{0};
@@ -274,7 +300,8 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
               alnGroup->alignments().front()->transcriptID();
           std::unordered_set<size_t> observedTranscripts;
 
-          size_t sidx{0};
+          //double maxLogAlnScore{LOG_0};
+          int sidx{0};
           for (auto& aln : alnGroup->alignments()) {
             auto transcriptID = aln->transcriptID();
             auto& transcript = refs[transcriptID];
@@ -404,6 +431,7 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
             // if (burnedIn and salmonOpts.useErrorModel) {
             if (useAuxParams and salmonOpts.useErrorModel) {
               errLike = alnMod.logLikelihood(*aln, transcript);
+              ++sidx;
             }
 
             // Allow for a non-uniform fragment start position distribution
@@ -418,19 +446,6 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
             double fragStartLogDenominator{salmon::math::LOG_1};
 
             auto hitPos = aln->left();
-            if (useFSPD and burnedIn and hitPos < refLength) {
-              auto& fragStartDist =
-                  fragStartDists[transcript.lengthClassIndex()];
-              // Get the log(numerator) and log(denominator) for the fragment
-              // start position probability.
-              bool nonZeroProb = fragStartDist.logNumDenomMass(
-                  hitPos, refLength, logRefLength, fragStartLogNumerator,
-                  fragStartLogDenominator);
-              // Set the overall probability.
-              startPosProb = (nonZeroProb) ? fragStartLogNumerator -
-                                                 fragStartLogDenominator
-                                           : salmon::math::LOG_0;
-            }
 
             // The total auxiliary probabilty is the product (sum in log-space)
             // of The fragment length probabilty The mapping score (under error
@@ -778,7 +793,8 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
 
               // Update the error model
               if (salmonOpts.useErrorModel) {
-                alnMod.update(*aln, transcript, LOG_1, logForgettingMass);
+                auto alignerScore = getAlignerAssignedScore(aln);
+                alnMod.update(*aln, transcript, alignerScore, logForgettingMass);
               }
               // Update the fragment length distribution
               if (aln->isPaired() and !salmonOpts.noFragLengthDist) {
@@ -787,14 +803,6 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
                 if (fragLength > 0) {
                   fragLengthDist.addVal(fragLength, logForgettingMass);
                 }
-              }
-              // Update the fragment start position distribution
-              if (useFSPD) {
-                auto hitPos = aln->left();
-                auto& fragStartDist =
-                    fragStartDists[transcript.lengthClassIndex()];
-                fragStartDist.addVal(hitPos, transcript.RefLength,
-                                     logForgettingMass);
               }
             }
           }
@@ -878,13 +886,6 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
       --activeBatches;
       processedReads += batchReads;
       if (processedReads >= numBurninFrags and !burnedIn) {
-        if (useFSPD) {
-          // update all of the fragment start position
-          // distributions
-          for (auto& fspd : fragStartDists) {
-            fspd.update();
-          }
-        }
         // NOTE: only one thread should succeed here, and that
         // thread will set burnedIn to true
         alnLib.updateTranscriptLengthsAtomic(burnedIn);
@@ -1223,17 +1224,6 @@ bool quantifyLibrary(AlignmentLibraryT<FragT>& alnLib,
                               alnLib.numMappedFragments(),
                               salmonOpts.numBurninFrags);
 
-    // If we didn't have a sufficient number of samples for burnin,
-    // then also ignore modeling of the fragment start position
-    // distribution.
-    if (salmonOpts.useFSPD) {
-      salmonOpts.useFSPD = false;
-      salmonOpts.jointLog->warn("Since only {} (< {}) fragments were observed, "
-                                "modeling of the fragment start position "
-                                "distribution has been disabled",
-                                alnLib.numMappedFragments(),
-                                salmonOpts.numBurninFrags);
-    }
   }
 
   // In this case, we have to give the structures held
@@ -1277,93 +1267,94 @@ bool processSample(AlignmentLibraryT<ReadT>& alnLib, size_t requiredObservations
     std::exit(1);
   }
 
-  // EQCLASS
-  // NOTE: A side-effect of calling the optimizer is that
-  // the `EffectiveLength` field of each transcript is
-  // set to its final value.
-  CollapsedEMOptimizer optimizer;
-  jointLog->info("starting optimizer");
-  salmon::utils::normalizeAlphas(sopt, alnLib);
-  bool optSuccess = optimizer.optimize(alnLib, sopt, 0.01, 10000);
-  // If the optimizer didn't work, then bail out here.
-  if (!optSuccess) {
-    return false;
-  }
-  jointLog->info("finished optimizer");
-
-  // EQCLASS
-  fmt::print(stderr, "\n\nwriting output \n");
   GZipWriter gzw(outputDirectory, jointLog);
-  // Write the main results
-  gzw.writeAbundances(sopt, alnLib);
+
+  if (!sopt.skipQuant) {
+    // NOTE: A side-effect of calling the optimizer is that
+    // the `EffectiveLength` field of each transcript is
+    // set to its final value.
+    CollapsedEMOptimizer optimizer;
+    jointLog->info("starting optimizer");
+    salmon::utils::normalizeAlphas(sopt, alnLib);
+    bool optSuccess = optimizer.optimize(alnLib, sopt, 0.01, 10000);
+    // If the optimizer didn't work, then bail out here.
+    if (!optSuccess) {
+      return false;
+    }
+    jointLog->info("finished optimizer");
+
+    jointLog->info("writing output");
+    // Write the main results
+    gzw.writeAbundances(sopt, alnLib);
+
+    if (sopt.numGibbsSamples > 0) {
+
+      jointLog->info("Starting Gibbs Sampler");
+      CollapsedGibbsSampler sampler;
+      gzw.setSamplingPath(sopt);
+      // The function we'll use as a callback to write samples
+      std::function<bool(const std::vector<double>&)> bsWriter =
+        [&gzw](const std::vector<double>& alphas) -> bool {
+          return gzw.writeBootstrap(alphas, true);
+        };
+
+      bool sampleSuccess =
+        sampler.sample(alnLib, sopt, bsWriter, sopt.numGibbsSamples);
+      if (!sampleSuccess) {
+        jointLog->error("Encountered error during Gibb sampling .\n"
+                        "This should not happen.\n"
+                        "Please file a bug report on GitHub.\n");
+        return false;
+      }
+      jointLog->info("Finished Gibbs Sampler");
+    } else if (sopt.numBootstraps > 0) {
+      // The function we'll use as a callback to write samples
+      std::function<bool(const std::vector<double>&)> bsWriter =
+        [&gzw](const std::vector<double>& alphas) -> bool {
+          return gzw.writeBootstrap(alphas);
+        };
+
+      jointLog->info("Staring Bootstrapping");
+      gzw.setSamplingPath(sopt);
+      bool bootstrapSuccess =
+        optimizer.gatherBootstraps(alnLib, sopt, bsWriter, 0.01, 10000);
+      jointLog->info("Finished Bootstrapping");
+      if (!bootstrapSuccess) {
+        jointLog->error("Encountered error during bootstrapping.\n"
+                        "This should not happen.\n"
+                        "Please file a bug report on GitHub.\n");
+        return false;
+      }
+    }
+
+    // bfs::path libCountFilePath = outputDirectory / "lib_format_counts.json";
+    // alnLib.summarizeLibraryTypeCounts(libCountFilePath);
+
+    if (sopt.sampleOutput) {
+      // In this case, we should "re-convert" transcript
+      // masses to be counts in log space
+      auto nr = alnLib.numMappedFragments();
+      for (auto& t : alnLib.transcripts()) {
+        double m = t.mass(false) * nr;
+        if (m > 0.0) {
+          t.setMass(std::log(m));
+        }
+      }
+
+      bfs::path sampleFilePath = outputDirectory / "postSample.bam";
+      bool didSample = salmon::sampler::sampleLibrary<ReadT>(
+                                                             alnLib, sopt, burnedIn, sampleFilePath, sopt.sampleUnaligned);
+      if (!didSample) {
+        jointLog->warn("There may have been a problem generating the sampled "
+                       "output file; please check the log\n");
+      }
+    }
+  }
 
   // If we are dumping the equivalence classes, then
   // do it here.
   if (sopt.dumpEq) {
     gzw.writeEquivCounts(sopt, alnLib);
-  }
-
-  if (sopt.numGibbsSamples > 0) {
-
-    jointLog->info("Starting Gibbs Sampler");
-    CollapsedGibbsSampler sampler;
-    gzw.setSamplingPath(sopt);
-    // The function we'll use as a callback to write samples
-    std::function<bool(const std::vector<double>&)> bsWriter =
-        [&gzw](const std::vector<double>& alphas) -> bool {
-      return gzw.writeBootstrap(alphas);
-    };
-
-    bool sampleSuccess =
-        sampler.sample(alnLib, sopt, bsWriter, sopt.numGibbsSamples);
-    if (!sampleSuccess) {
-      jointLog->error("Encountered error during Gibb sampling .\n"
-                      "This should not happen.\n"
-                      "Please file a bug report on GitHub.\n");
-      return false;
-    }
-    jointLog->info("Finished Gibbs Sampler");
-  } else if (sopt.numBootstraps > 0) {
-    // The function we'll use as a callback to write samples
-    std::function<bool(const std::vector<double>&)> bsWriter =
-        [&gzw](const std::vector<double>& alphas) -> bool {
-      return gzw.writeBootstrap(alphas);
-    };
-
-    jointLog->info("Staring Bootstrapping");
-    gzw.setSamplingPath(sopt);
-    bool bootstrapSuccess =
-        optimizer.gatherBootstraps(alnLib, sopt, bsWriter, 0.01, 10000);
-    jointLog->info("Finished Bootstrapping");
-    if (!bootstrapSuccess) {
-      jointLog->error("Encountered error during bootstrapping.\n"
-                      "This should not happen.\n"
-                      "Please file a bug report on GitHub.\n");
-      return false;
-    }
-  }
-
-  // bfs::path libCountFilePath = outputDirectory / "lib_format_counts.json";
-  // alnLib.summarizeLibraryTypeCounts(libCountFilePath);
-
-  if (sopt.sampleOutput) {
-    // In this case, we should "re-convert" transcript
-    // masses to be counts in log space
-    auto nr = alnLib.numMappedFragments();
-    for (auto& t : alnLib.transcripts()) {
-      double m = t.mass(false) * nr;
-      if (m > 0.0) {
-        t.setMass(std::log(m));
-      }
-    }
-
-    bfs::path sampleFilePath = outputDirectory / "postSample.bam";
-    bool didSample = salmon::sampler::sampleLibrary<ReadT>(
-        alnLib, sopt, burnedIn, sampleFilePath, sopt.sampleUnaligned);
-    if (!didSample) {
-      jointLog->warn("There may have been a problem generating the sampled "
-                     "output file; please check the log\n");
-    }
   }
 
   sopt.runStopTime = salmon::utils::getCurrentTimeAsString();

@@ -261,6 +261,7 @@ namespace alevin {
       // mark in salmon options that we are running
       // in alevin mode
       sopt.alevinMode = true;
+      if (sopt.initUniform) { aopt.initUniform = true; }
 
       //Create outputDirectory
       aopt.outputDirectory = vm["output"].as<std::string>() + "/alevin";
@@ -296,6 +297,15 @@ namespace alevin {
         if (!bfs::exists(aopt.whitelistFile)) {
           fmt::print(stderr,"\nWhitelist File {} does not exists\n Exiting Now",
                      aopt.whitelistFile.string());
+          return false;
+        }
+      }
+
+      if (vm.count("hash")){
+        aopt.bfhFile = vm["hash"].as<std::string>();
+        if (!bfs::exists(aopt.bfhFile)) {
+          fmt::print(stderr,"\nBfh File {} does not exists\n Exiting Now",
+                     aopt.bfhFile.string());
           return false;
         }
       }
@@ -358,6 +368,20 @@ namespace alevin {
         return false;
       }
 
+      if ( vm.count("keepCBFraction") ) {
+        if ( vm.count("whitelist") ) {
+          aopt.jointLog->error("keepCBFraction and whitelist cannot be used together");
+          aopt.jointLog->flush();
+          exit(1);
+        }
+
+        aopt.keepCBFraction = vm["keepCBFraction"].as<double>();
+        aopt.jointLog->warn("Force Cells to {} fraction of All possible CB."
+                            "This is not recommended way to run the pipeline,"
+                            "and it might slow the pipeline",
+                            aopt.keepCBFraction);
+      }
+
       if (not vm.count("threads")) {
         auto tot_cores = std::thread::hardware_concurrency();
         aopt.numThreads = std::max(1, static_cast<int>(tot_cores/4.0));
@@ -396,8 +420,8 @@ namespace alevin {
         uint32_t umiLength = vm["umiLength"].as<uint32_t>();
 
         // validate that BC and UMI lengths are OK
-        uint32_t maxBC{60};
-        uint32_t maxUMI{12};
+        uint32_t maxBC{20};
+        uint32_t maxUMI{20};
         if (barcodeLength < 1 or barcodeLength > maxBC) {
           aopt.jointLog->error("Barcode length ({}) was not in the required length range [1, {}].\n"
                                "Exiting now.", barcodeLength, maxBC);
@@ -478,9 +502,12 @@ namespace alevin {
         salmon::utils::processQuantOptions(sopt, vm, vm["numBiasSamples"].as<int32_t>());
       if (!vm.count("minScoreFraction")) {
         sopt.minScoreFraction = alevin::defaults::minScoreFraction;
+        sopt.consensusSlack = alevin::defaults::consensusSlack;
         sopt.jointLog->info(
-                            "Using default value of {} for minScoreFraction in Alevin",
-                            sopt.minScoreFraction
+                            "Using default value of {} for minScoreFraction in Alevin\n"
+                            "Using default value of {} for consensusSlack in Alevin",
+                            sopt.minScoreFraction,
+                            sopt.consensusSlack
                             );
       }
 

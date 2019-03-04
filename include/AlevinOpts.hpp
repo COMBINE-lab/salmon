@@ -18,7 +18,8 @@ template <class protocolT>
 struct AlevinOpts {
   AlevinOpts(): numParsingThreads(1),
                 numConsumerThreads(2),
-                freqThreshold(10){}
+                freqThreshold(10),
+                initUniform{false}{}
 
   //IUPAC code for the cell-barcodes
   std::string iupac;
@@ -72,6 +73,8 @@ struct AlevinOpts {
   bool txpLevel;
   //do hard-assignment of error bcs
   bool noSoftMap;
+  // initialize EM with uniform prior
+  bool initUniform;
   //number of cells
   uint32_t numCells;
   // minimum number of CB to use for low confidence region
@@ -98,6 +101,29 @@ struct AlevinOpts {
   boost::filesystem::path rRnaFile;
   // Txp to gene map tsv file
   boost::filesystem::path geneMapFile;
+  // Bfh file
+  boost::filesystem::path bfhFile;
+
+  //meta-info related tags
+  uint32_t totalReads;
+  uint32_t totalUsedReads;
+  uint32_t readsThrown;
+
+  uint32_t totalCBs;
+  uint32_t totalUsedCBs;
+
+  uint32_t kneeCutoff;
+  uint32_t intelligentCutoff;
+  uint32_t totalLowConfidenceCBs;
+  uint32_t numFeatures;
+
+  uint32_t noisyUmis;
+  double mappingRate;
+  double keepCBFraction;
+  uint32_t eqReads;
+
+  uint32_t totalDedupUMIs;
+  uint32_t totalExpGenes;
 };
 
 #endif // ALEVIN_OPTS_HPP

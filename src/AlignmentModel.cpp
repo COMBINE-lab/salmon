@@ -19,7 +19,9 @@ AlignmentModel::AlignmentModel(double alpha, uint32_t readBins)
       transitionProbsRight_(readBins,
                             AtomicMatrix<double>(numAlignmentStates(),
                                                  numAlignmentStates(), alpha)),
-      isEnabled_(true), readBins_(readBins), burnedIn_(false) {}
+      isEnabled_(true), readBins_(readBins), burnedIn_(false) {
+  
+}
 
 bool AlignmentModel::burnedIn() { return burnedIn_; }
 void AlignmentModel::burnedIn(bool burnedIn) { burnedIn_ = burnedIn; }
@@ -313,6 +315,7 @@ AlignmentModel::AlnModelProb AlignmentModel::logLikelihood(
 
       setBasesFromCIGAROp_(
           op, curRefBase, curReadBase); //, readStream, matchStream, refStream);
+
       curStateIdx = curRefBase * numStates + curReadBase;
       double tp = transitionProbs[readPosBin](prevStateIdx, curStateIdx);
       logLike += tp;

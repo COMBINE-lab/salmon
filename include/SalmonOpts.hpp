@@ -57,6 +57,7 @@ struct SalmonOpts {
   bool consistentHits; // Enforce consistency of hits gathered during
                        // quasi-mapping.
 
+  bool skipQuant; // Skip quantification step
   bool dumpEq; // Dump the equivalence classes and counts to file
 
   bool dumpEqWeights; // Dump the equivalence classes rich weights
@@ -97,8 +98,6 @@ struct SalmonOpts {
 
   bool rankEqClasses; // Keep a separate equivalence class for each ordering (by
                       // conditional probability) of the the transcript labels
-
-  bool useFSPD; // Learn a non-uniform start distribution
 
   bool noSeqBiasModel; // Don't learn and use a sequence-specific bias model.
 
@@ -153,8 +152,6 @@ struct SalmonOpts {
                           // length pmf when evaluating gc-bias for effective
                           // length correction.
 
-  bool strictIntersect; // Use strict rather than fuzzy intersection in
-                        // quasi-mapping
   bool useMassBanking;  // DEPRECATED
 
   bool sensitive; // Perform splitting of long SMEMs into MEMs
@@ -251,13 +248,18 @@ struct SalmonOpts {
 
   // Related to alignment verification
   bool validateMappings;
-  int32_t consensusSlack;
+  float consensusSlack;
   double minScoreFraction;
   int16_t matchScore;
   int16_t mismatchPenalty;
   int16_t gapOpenPenalty;
   int16_t gapExtendPenalty;
+  int32_t dpBandwidth;
   bool mimicStrictBT2;
+  bool mimicBT2;
+  bool noDovetail;
+  bool recoverOrphans;
+  bool hardFilter;
   int32_t maxMMPExtension;
 
   // for utility (may need to be cleaned up later)

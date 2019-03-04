@@ -12,6 +12,7 @@ extern "C" {
 #include "AlignmentGroup.hpp"
 #include "AlignmentModel.hpp"
 #include "BAMQueue.hpp"
+#include "BAMUtils.hpp"
 #include "ClusterForest.hpp"
 #include "DistributionUtils.hpp"
 #include "EquivalenceClassBuilder.hpp"
@@ -104,6 +105,9 @@ public:
     std::cerr << "done\n";
 
     SAM_hdr* header = bq->header();
+
+    // Figure out aligner information from the header if we can
+    aligner_ = salmon::bam_utils::inferAlignerFromHeader(header);
 
     // The transcript file existed, so load up the transcripts
     double alpha = 0.005;
@@ -206,6 +210,8 @@ for (auto& txp : transcripts_) {
   std::string getIndexNameHash256() const { return ""; }
   std::string getIndexSeqHash512() const { return ""; }
   std::string getIndexNameHash512() const { return ""; }
+
+  salmon::bam_utils::AlignerDetails getAlignerType() const { return aligner_; }
 
   // TODO: Make same as mapping-based
   void updateTranscriptLengthsAtomic(std::atomic<bool>& done) {
@@ -560,6 +566,8 @@ private:
   std::vector<double> expectedBias_;
   std::unique_ptr<LibraryTypeDetector> detector_{nullptr};
   std::vector<double> conditionalMeans_;
+
+  salmon::bam_utils::AlignerDetails aligner_{salmon::bam_utils::AlignerDetails::UNKNOWN};
 };
 
 #endif // ALIGNMENT_LIBRARY_HPP

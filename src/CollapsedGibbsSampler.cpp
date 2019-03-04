@@ -887,11 +887,6 @@ template bool CollapsedGibbsSampler::sample<BulkExpT>(
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     uint32_t maxIter);
 
-template bool CollapsedGibbsSampler::sample<SCExpT>(
-                                                            SCExpT& readExp, SalmonOpts& sopt,
-                                                            std::function<bool(const std::vector<double>&)>& writeBootstrap,
-                                                            uint32_t maxIter);
-
 template bool CollapsedGibbsSampler::sample<BulkAlignLibT<UnpairedRead>>(
     BulkAlignLibT<UnpairedRead>& readExp, SalmonOpts& sopt,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,

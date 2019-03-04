@@ -72,7 +72,9 @@ set(TGT_WARN_FLAGS "-Wall;-Wno-unknown-pragmas;-Wno-reorder;-Wno-unused-variable
 # Sanitizers BEGIN
 ###
 #list(APPEND TGT_COMPILE_FLAGS "-fsanitize=address")
+#list(APPEND TGT_COMPILE_FLAGS "-fsanitize=undefined")
 #set(CMAKE_LINK_FLAGS "-fsanitize=address")
+#list(APPEND CMAKE_LINK_FLAGS "-fsanitize=undefined")
 ###
 # Sanitizers END
 ###

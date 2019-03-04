@@ -41,7 +41,11 @@ public:
   void addAlignment(FragT& p) { alignments_.push_back(p); }
 
   void clearAlignments() {
+    auto vecLen = alignments_.size();
     alignments_.clear();
+    if (vecLen > 10) {
+      alignments_.shrink_to_fit();
+    }
     isUniquelyMapped_ = true;
   }
 

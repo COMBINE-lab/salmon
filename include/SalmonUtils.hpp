@@ -294,6 +294,18 @@ LibraryFormat hitType(int32_t end1Start, bool end1Fwd, uint32_t len1,
  */
 LibraryFormat hitType(int32_t readStart, bool isForward);
 
+/**
+ *  Cache the mappings provided in an efficient binary format
+ *  to the provided file handle.
+ *  NOTE: This function assumes the file handle is unique to
+ *  the calling thread, no attempt is made to synchronize
+ *  output between multiple threads.
+ */
+  //template <typename AlnT>
+  //using AlnGroupVecRange = core::range<typename AlnGroupVec<AlnT>::iterator>;
+  //void cacheMappings(AlnGroupVecRange<QuasiAlignment> hits, std::ofstream& ofile);
+
+
 } // namespace utils
 } // namespace salmon
 
