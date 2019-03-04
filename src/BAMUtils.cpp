@@ -1,4 +1,7 @@
 #include "BAMUtils.hpp"
+#include <unordered_map>
+#include <string>
+#include <functional>
 #include <algorithm>
 #include <cctype>
 
@@ -26,7 +29,7 @@ namespace salmon {
     }
 
     AlignerDetails inferAlignerFromHeader(SAM_hdr* header) {
-      std::unordered_map<std::string, AlignerDetails> alignerNameToType =
+      std::unordered_map<std::string, AlignerDetails> alignerNameToType = 
         {
          {"bowtie2", AlignerDetails::BOWTIE2},
          {"star", AlignerDetails::STAR},
