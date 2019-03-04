@@ -1395,6 +1395,8 @@ std::string getCurrentTimeAsString() {
                         "NOTE: It appears you are running salmon without the `--validateMappings` option.\n"
                         "Mapping validation can generally improve both the sensitivity and specificity of mapping,\n"
                         "with only a moderate increase in use of computational resources. \n"
+                        "Mapping validation is planned to become a default option (i.e. turned on by default) in\n"
+                        "the next release of salmon.\n"
                         "Unless there is a specific reason to do this (e.g. testing on clean simulated data),\n"
                         "`--validateMappings` is generally recommended.\n");
   }

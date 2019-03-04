@@ -793,7 +793,6 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
 
               // Update the error model
               if (salmonOpts.useErrorModel) {
-                // NOTE : JUST FOR TESTING --- doesn't work without bowtie2 scores
                 auto alignerScore = getAlignerAssignedScore(aln);
                 alnMod.update(*aln, transcript, alignerScore, logForgettingMass);
               }
