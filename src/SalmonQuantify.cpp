@@ -795,6 +795,7 @@ void processReadsQuasi(
   mc.consistentHits = consistentHits;
   mc.doChaining = salmonOpts.validateMappings;
   mc.consensusFraction = (salmonOpts.consensusSlack == 0.0) ? 1.0 : (1.0 - salmonOpts.consensusSlack);
+  mc.allowDovetail = salmonOpts.allowDovetail;
   if (mc.doChaining) { mc.considerMultiPos = true; }
 
   rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> leftHCInfo;
@@ -850,7 +851,7 @@ void processReadsQuasi(
   memset(&ez, 0, sizeof(ksw_extz_t));
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   bool mimicBT2 = salmonOpts.mimicBT2;
-  bool noDovetail = salmonOpts.noDovetail;
+  bool noDovetail = !salmonOpts.allowDovetail;
   size_t numOrphansRescued{0};
 
   auto ap{selective_alignment::utils::AlignmentPolicy::DEFAULT};
@@ -862,6 +863,7 @@ void processReadsQuasi(
 
   size_t numMappingsDropped{0};
   size_t numFragsDropped{0};
+  size_t numDovetailed{0};
 
   AlnCacheMap alnCacheLeft; alnCacheLeft.reserve(32);
   AlnCacheMap alnCacheRight; alnCacheRight.reserve(32);
@@ -938,6 +940,8 @@ void processReadsQuasi(
         bool mergeStatusOK = (mergeRes == rapmap::utils::MergeResult::HAD_EMPTY_INTERSECTION or
                               mergeRes == rapmap::utils::MergeResult::HAD_ONLY_LEFT or
                               mergeRes == rapmap::utils::MergeResult::HAD_ONLY_RIGHT);
+
+        numDovetailed += (mergeRes == rapmap::utils::MergeResult::HAD_DISCORDANT) ? 1 : 0;
 
         if ( mergeStatusOK and salmonOpts.recoverOrphans and !tooManyHits) {
           if (leftHits.size() + rightHits.size() > 0) {
@@ -1375,7 +1379,7 @@ void processReadsQuasi(
   mstats.numOrphansRescued += numOrphansRescued;
   mstats.numMappingsFiltered += numMappingsDropped;
   mstats.numFragmentsFiltered += numFragsDropped;
-
+  mstats.numDovetailed += numDovetailed;
   //salmonOpts.jointLog->info("Number of orphans rescued in this thread {}",
   //                          numOrphansRescued);
 
@@ -1452,7 +1456,9 @@ void processReadsQuasi(
   mc.consistentHits = consistentHits;
   mc.doChaining = salmonOpts.validateMappings;
   mc.consensusFraction = (salmonOpts.consensusSlack == 0.0) ? 1.0 : (1.0 - salmonOpts.consensusSlack);
-
+  mc.allowDovetail = salmonOpts.allowDovetail;
+  if (mc.doChaining) { mc.considerMultiPos = true; }
+  
   rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> hcInfo;
 
   SACollector<RapMapIndexT> hitCollector(qidx);
@@ -1508,7 +1514,7 @@ void processReadsQuasi(
   memset(&ez, 0, sizeof(ksw_extz_t));
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   bool mimicBT2 = salmonOpts.mimicBT2;
-  bool noDovetail = salmonOpts.noDovetail;
+  bool noDovetail = !salmonOpts.allowDovetail;
 
   auto ap{selective_alignment::utils::AlignmentPolicy::DEFAULT};
   if (mimicBT2) {
@@ -1518,7 +1524,6 @@ void processReadsQuasi(
   }
   size_t numMappingsDropped{0};
   size_t numFragsDropped{0};
-
 
   //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
   AlnCacheMap alnCache; alnCache.reserve(16);
@@ -2201,6 +2206,9 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
   if (salmonOpts.validateMappings) {
     salmonOpts.jointLog->info("Number of mappings discarded because of alignment score : {:n}", mstats.numMappingsFiltered.load());
     salmonOpts.jointLog->info("Number of fragments entirely discarded because of alignment score : {:n}", mstats.numFragmentsFiltered.load());
+  }
+  if (!salmonOpts.allowDovetail) {
+    salmonOpts.jointLog->info("Number of fragments discarded because they have only dovetail (discordant) mappings : {:n}", mstats.numDovetailed.load());
   }
   // If we didn't achieve burnin, then at least compute effective
   // lengths and mention this to the user.

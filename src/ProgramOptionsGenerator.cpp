@@ -134,9 +134,9 @@ namespace salmon {
        "[Quasi-mapping mode (w / mapping validation) only] : The value used for the bandwidth passed to ksw2.  A smaller "
        "bandwidth can make the alignment verification run more quickly, but could possibly miss valid alignments."
        )
-      ("noDovetail",
-       po::bool_switch(&(sopt.noDovetail))->default_value(salmon::defaults::noDovetail),
-       "[Quasi-mapping mode only] : Discard dovetailing mappings."
+      ("allowDovetail",
+       po::bool_switch(&(sopt.allowDovetail))->default_value(salmon::defaults::allowDovetail),
+       "[Quasi-mapping mode only] : allow dovetailing mappings."
        )
       ("recoverOrphans",
        po::bool_switch(&(sopt.recoverOrphans))->default_value(salmon::defaults::recoverOrphans),

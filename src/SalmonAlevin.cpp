@@ -496,7 +496,7 @@ void processReadsQuasi(
   memset(&ez, 0, sizeof(ksw_extz_t));
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   bool mimicBT2 = salmonOpts.mimicBT2;
-  bool noDovetail = salmonOpts.noDovetail;
+  bool noDovetail = !salmonOpts.allowDovetail;
 
   auto ap{selective_alignment::utils::AlignmentPolicy::DEFAULT};
   if (mimicBT2) {
