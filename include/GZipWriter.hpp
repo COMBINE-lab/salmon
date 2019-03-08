@@ -15,6 +15,7 @@
 #include "SalmonSpinLock.hpp"
 #include "AlevinOpts.hpp"
 #include "Graph.hpp"
+#include "MappingStatistics.hpp"
 
 class GZipWriter {
 public:
@@ -38,7 +39,7 @@ public:
                 std::vector<std::string>& bcSeqVec);
 
   template <typename ExpT>
-  bool writeMeta(const SalmonOpts& opts, const ExpT& experiment);
+  bool writeMeta(const SalmonOpts& opts, const ExpT& experiment, const MappingStatistics& mstats);
 
   template <typename ProtocolT>
   bool writeMetaAlevin(const AlevinOpts<ProtocolT>& opts,

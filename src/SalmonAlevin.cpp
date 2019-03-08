@@ -126,6 +126,7 @@
 #include "ksw2pp/KSW2Aligner.hpp"
 #include "tsl/hopscotch_map.h"
 #include "SelectiveAlignmentUtils.hpp"
+#include "MappingStatistics.hpp"
 
 namespace alevin{
 
@@ -1524,7 +1525,8 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
     sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
 
     // Write meta-information about the run
-    gzw.writeMeta(sopt, experiment);
+    MappingStatistics mstats;
+    gzw.writeMeta(sopt, experiment, mstats);
 
     gzw.writeMetaAlevin(aopt, bfs::path(sopt.auxDir));
 

@@ -1359,7 +1359,8 @@ bool processSample(AlignmentLibraryT<ReadT>& alnLib, size_t requiredObservations
 
   sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
   // Write meta-information about the run
-  gzw.writeMeta(sopt, alnLib);
+  MappingStatistics mstats;
+  gzw.writeMeta(sopt, alnLib, mstats);
 
   return true;
 }

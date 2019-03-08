@@ -863,7 +863,6 @@ void processReadsQuasi(
 
   size_t numMappingsDropped{0};
   size_t numFragsDropped{0};
-  size_t numDovetailed{0};
 
   AlnCacheMap alnCacheLeft; alnCacheLeft.reserve(32);
   AlnCacheMap alnCacheRight; alnCacheRight.reserve(32);
@@ -943,8 +942,6 @@ void processReadsQuasi(
         bool mergeStatusOK = (mergeRes == rapmap::utils::MergeResult::HAD_EMPTY_INTERSECTION or
                               mergeRes == rapmap::utils::MergeResult::HAD_ONLY_LEFT or
                               mergeRes == rapmap::utils::MergeResult::HAD_ONLY_RIGHT);
-
-        numDovetailed += (mergeRes == rapmap::utils::MergeResult::HAD_DISCORDANT) ? 1 : 0;
 
         if ( mergeStatusOK and salmonOpts.recoverOrphans and !tooManyHits) {
           if (leftHits.size() + rightHits.size() > 0) {
@@ -1382,7 +1379,7 @@ void processReadsQuasi(
   mstats.numOrphansRescued += numOrphansRescued;
   mstats.numMappingsFiltered += numMappingsDropped;
   mstats.numFragmentsFiltered += numFragsDropped;
-  mstats.numDovetailed += numDovetailed;
+  mstats.numDovetails += hctr.numDovetails;
   //salmonOpts.jointLog->info("Number of orphans rescued in this thread {}",
   //                          numOrphansRescued);
 
@@ -2040,6 +2037,7 @@ void processReadLibrary(
 template <typename AlnT>
 void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
                      SalmonOpts& salmonOpts,
+                     MappingStatistics& mstats,
                      double coverageThresh, uint32_t numQuantThreads) {
 
   bool burnedIn = (salmonOpts.numBurninFrags == 0);
@@ -2073,7 +2071,6 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
   size_t maxReadGroup{miniBatchSize};
   uint32_t structCacheSize = numQuantThreads * maxReadGroup * 10;
 
-  MappingStatistics mstats;
   // EQCLASS
   bool terminate{false};
 
@@ -2211,7 +2208,7 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
     salmonOpts.jointLog->info("Number of fragments entirely discarded because of alignment score : {:n}", mstats.numFragmentsFiltered.load());
   }
   if (!salmonOpts.allowDovetail) {
-    salmonOpts.jointLog->info("Number of fragments discarded because they have only dovetail (discordant) mappings : {:n}", mstats.numDovetailed.load());
+    salmonOpts.jointLog->info("Number of fragments discarded because they have only dovetail (discordant) mappings : {:n}", mstats.numDovetails.load());
   }
   // If we didn't achieve burnin, then at least compute effective
   // lengths and mention this to the user.
@@ -2358,6 +2355,7 @@ transcript abundance from RNA-seq reads
     versionInfo.load(versionPath);
     auto idxType = versionInfo.indexType();
 
+    MappingStatistics mstats;
     ReadExperimentT experiment(readLibraries, indexDirectory, sopt);
 
     // This will be the class in charge of maintaining our
@@ -2391,8 +2389,8 @@ transcript abundance from RNA-seq reads
 
         sopt.allowOrphans = !sopt.discardOrphansQuasi;
         sopt.useQuasi = true;
-        quantifyLibrary<QuasiAlignment>(experiment, greedyChain, 
-                                        sopt, sopt.coverageThresh, sopt.numThreads);
+        quantifyLibrary<QuasiAlignment>(experiment, greedyChain,
+                                        sopt, mstats, sopt.coverageThresh, sopt.numThreads);
       } break;
       }
     } catch (const InsufficientAssignedFragments& iaf) {
@@ -2554,7 +2552,7 @@ transcript abundance from RNA-seq reads
     sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
 
     // Write meta-information about the run
-    gzw.writeMeta(sopt, experiment);
+    gzw.writeMeta(sopt, experiment, mstats);
 
   } catch (po::error& e) {
     std::cerr << "(mapping-based mode) Exception : [" << e.what() << "].\n";
