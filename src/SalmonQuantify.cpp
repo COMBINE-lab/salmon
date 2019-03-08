@@ -910,6 +910,7 @@ void processReadsQuasi(
       bool lh = tooShortLeft
         ? false : hitCollector(rp.first.seq, saSearcher, leftHCInfo);
 
+
       bool rh = tooShortRight
         ? false : hitCollector(rp.second.seq, saSearcher, rightHCInfo);
 
@@ -920,6 +921,7 @@ void processReadsQuasi(
       rapmap::hit_manager::hitsToMappingsSimple(*qidx, mc,
                                                 MateStatus::PAIRED_END_RIGHT,
                                                 rightHCInfo, rightHits);
+
 
       rapmap::utils::MergeResult mergeRes{rapmap::utils::MergeResult::HAD_NONE};
       // Consider a read as too short if both ends are too short
@@ -932,6 +934,7 @@ void processReadsQuasi(
                                                                                      jointHits,
                                                                                      mc,
                                                                                      readLenLeft, maxNumHits, tooManyHits, hctr);
+
         // IMPORTANT NOTE : Orphan recovery currently assumes a
         // library type where mates are on separate strands
         // so (IU, ISF, ISR).  If the library type is different
@@ -1145,7 +1148,7 @@ void processReadsQuasi(
             ++numFragsDropped;
             jointHitGroup.clearAlignments();
           }
-        } else if (noDovetail) {
+        } else if (isPaired and noDovetail) {
           jointHits.erase(
                           std::remove_if(jointHits.begin(), jointHits.end(),
                                          [](const QuasiAlignment& h) -> bool {
