@@ -118,7 +118,6 @@
 #include "metro/metrohash64.h"
 #include "tsl/hopscotch_map.h"
 #include "SelectiveAlignmentUtils.hpp"
-#include "MappingStatistics.hpp"
 #include "edlib.h"
 
 /****** QUASI MAPPING DECLARATIONS *********/

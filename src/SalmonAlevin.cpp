@@ -126,7 +126,6 @@
 #include "ksw2pp/KSW2Aligner.hpp"
 #include "tsl/hopscotch_map.h"
 #include "SelectiveAlignmentUtils.hpp"
-#include "MappingStatistics.hpp"
 
 namespace alevin{
 
