@@ -257,7 +257,7 @@ struct SalmonOpts {
   int32_t dpBandwidth;
   bool mimicStrictBT2;
   bool mimicBT2;
-  bool noDovetail;
+  bool allowDovetail;
   bool recoverOrphans;
   bool hardFilter;
   int32_t maxMMPExtension;

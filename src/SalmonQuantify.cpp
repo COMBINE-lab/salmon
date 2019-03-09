@@ -118,7 +118,6 @@
 #include "metro/metrohash64.h"
 #include "tsl/hopscotch_map.h"
 #include "SelectiveAlignmentUtils.hpp"
-#include "MappingStatistics.hpp"
 #include "edlib.h"
 
 /****** QUASI MAPPING DECLARATIONS *********/
@@ -795,6 +794,7 @@ void processReadsQuasi(
   mc.consistentHits = consistentHits;
   mc.doChaining = salmonOpts.validateMappings;
   mc.consensusFraction = (salmonOpts.consensusSlack == 0.0) ? 1.0 : (1.0 - salmonOpts.consensusSlack);
+  mc.allowDovetail = salmonOpts.allowDovetail;
   if (mc.doChaining) { mc.considerMultiPos = true; }
 
   rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> leftHCInfo;
@@ -850,7 +850,7 @@ void processReadsQuasi(
   memset(&ez, 0, sizeof(ksw_extz_t));
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   bool mimicBT2 = salmonOpts.mimicBT2;
-  bool noDovetail = salmonOpts.noDovetail;
+  bool noDovetail = !salmonOpts.allowDovetail;
   size_t numOrphansRescued{0};
 
   auto ap{selective_alignment::utils::AlignmentPolicy::DEFAULT};
@@ -908,6 +908,7 @@ void processReadsQuasi(
       bool lh = tooShortLeft
         ? false : hitCollector(rp.first.seq, saSearcher, leftHCInfo);
 
+
       bool rh = tooShortRight
         ? false : hitCollector(rp.second.seq, saSearcher, rightHCInfo);
 
@@ -918,6 +919,7 @@ void processReadsQuasi(
       rapmap::hit_manager::hitsToMappingsSimple(*qidx, mc,
                                                 MateStatus::PAIRED_END_RIGHT,
                                                 rightHCInfo, rightHits);
+
 
       rapmap::utils::MergeResult mergeRes{rapmap::utils::MergeResult::HAD_NONE};
       // Consider a read as too short if both ends are too short
@@ -930,6 +932,7 @@ void processReadsQuasi(
                                                                                      jointHits,
                                                                                      mc,
                                                                                      readLenLeft, maxNumHits, tooManyHits, hctr);
+
         // IMPORTANT NOTE : Orphan recovery currently assumes a
         // library type where mates are on separate strands
         // so (IU, ISF, ISR).  If the library type is different
@@ -1141,7 +1144,7 @@ void processReadsQuasi(
             ++numFragsDropped;
             jointHitGroup.clearAlignments();
           }
-        } else if (noDovetail) {
+        } else if (isPaired and noDovetail) {
           jointHits.erase(
                           std::remove_if(jointHits.begin(), jointHits.end(),
                                          [](const QuasiAlignment& h) -> bool {
@@ -1375,7 +1378,7 @@ void processReadsQuasi(
   mstats.numOrphansRescued += numOrphansRescued;
   mstats.numMappingsFiltered += numMappingsDropped;
   mstats.numFragmentsFiltered += numFragsDropped;
-
+  mstats.numDovetails += hctr.numDovetails;
   //salmonOpts.jointLog->info("Number of orphans rescued in this thread {}",
   //                          numOrphansRescued);
 
@@ -1452,7 +1455,9 @@ void processReadsQuasi(
   mc.consistentHits = consistentHits;
   mc.doChaining = salmonOpts.validateMappings;
   mc.consensusFraction = (salmonOpts.consensusSlack == 0.0) ? 1.0 : (1.0 - salmonOpts.consensusSlack);
-
+  mc.allowDovetail = salmonOpts.allowDovetail;
+  if (mc.doChaining) { mc.considerMultiPos = true; }
+  
   rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> hcInfo;
 
   SACollector<RapMapIndexT> hitCollector(qidx);
@@ -1508,7 +1513,7 @@ void processReadsQuasi(
   memset(&ez, 0, sizeof(ksw_extz_t));
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   bool mimicBT2 = salmonOpts.mimicBT2;
-  bool noDovetail = salmonOpts.noDovetail;
+  bool noDovetail = !salmonOpts.allowDovetail;
 
   auto ap{selective_alignment::utils::AlignmentPolicy::DEFAULT};
   if (mimicBT2) {
@@ -1518,7 +1523,6 @@ void processReadsQuasi(
   }
   size_t numMappingsDropped{0};
   size_t numFragsDropped{0};
-
 
   //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
   AlnCacheMap alnCache; alnCache.reserve(16);
@@ -2032,6 +2036,7 @@ void processReadLibrary(
 template <typename AlnT>
 void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
                      SalmonOpts& salmonOpts,
+                     MappingStatistics& mstats,
                      double coverageThresh, uint32_t numQuantThreads) {
 
   bool burnedIn = (salmonOpts.numBurninFrags == 0);
@@ -2065,7 +2070,6 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
   size_t maxReadGroup{miniBatchSize};
   uint32_t structCacheSize = numQuantThreads * maxReadGroup * 10;
 
-  MappingStatistics mstats;
   // EQCLASS
   bool terminate{false};
 
@@ -2201,6 +2205,9 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
   if (salmonOpts.validateMappings) {
     salmonOpts.jointLog->info("Number of mappings discarded because of alignment score : {:n}", mstats.numMappingsFiltered.load());
     salmonOpts.jointLog->info("Number of fragments entirely discarded because of alignment score : {:n}", mstats.numFragmentsFiltered.load());
+  }
+  if (!salmonOpts.allowDovetail) {
+    salmonOpts.jointLog->info("Number of fragments discarded because they have only dovetail (discordant) mappings : {:n}", mstats.numDovetails.load());
   }
   // If we didn't achieve burnin, then at least compute effective
   // lengths and mention this to the user.
@@ -2347,6 +2354,7 @@ transcript abundance from RNA-seq reads
     versionInfo.load(versionPath);
     auto idxType = versionInfo.indexType();
 
+    MappingStatistics mstats;
     ReadExperimentT experiment(readLibraries, indexDirectory, sopt);
 
     // This will be the class in charge of maintaining our
@@ -2380,8 +2388,8 @@ transcript abundance from RNA-seq reads
 
         sopt.allowOrphans = !sopt.discardOrphansQuasi;
         sopt.useQuasi = true;
-        quantifyLibrary<QuasiAlignment>(experiment, greedyChain, 
-                                        sopt, sopt.coverageThresh, sopt.numThreads);
+        quantifyLibrary<QuasiAlignment>(experiment, greedyChain,
+                                        sopt, mstats, sopt.coverageThresh, sopt.numThreads);
       } break;
       }
     } catch (const InsufficientAssignedFragments& iaf) {
@@ -2543,7 +2551,7 @@ transcript abundance from RNA-seq reads
     sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
 
     // Write meta-information about the run
-    gzw.writeMeta(sopt, experiment);
+    gzw.writeMeta(sopt, experiment, mstats);
 
   } catch (po::error& e) {
     std::cerr << "(mapping-based mode) Exception : [" << e.what() << "].\n";

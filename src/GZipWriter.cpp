@@ -414,7 +414,7 @@ bool GZipWriter::writeMetaAlevin(const AlevinOpts<ProtocolT>& opts,
  *   -- A json file with information about the run
  */
 template <typename ExpT>
-bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment) {
+bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const MappingStatistics& mstats) {
 
   namespace bfs = boost::filesystem;
 
@@ -685,6 +685,9 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment) {
     oa(cereal::make_nvp("num_bootstraps", numSamples));
     oa(cereal::make_nvp("num_processed", experiment.numObservedFragments()));
     oa(cereal::make_nvp("num_mapped", experiment.numMappedFragments()));
+    oa(cereal::make_nvp("num_dovetail_fragments", mstats.numDovetails.load()));
+    oa(cereal::make_nvp("num_fragments_filtered_vm", mstats.numFragmentsFiltered.load()));
+    oa(cereal::make_nvp("num_alignments_below_threshold_for_mapped_fragments_vm", mstats.numMappingsFiltered.load()));
     oa(cereal::make_nvp("percent_mapped",
                         experiment.effectiveMappingRate() * 100.0));
     oa(cereal::make_nvp("call", std::string("quant")));
@@ -1108,16 +1111,20 @@ template bool GZipWriter::writeEmptyAbundances<BulkAlignLibT<ReadPair>>(
 
 template bool
 GZipWriter::writeMeta<BulkExpT>(const SalmonOpts& opts,
-                                      const BulkExpT& experiment);
+                                const BulkExpT& experiment,
+                                const MappingStatistics& mstats);
 template bool
 GZipWriter::writeMeta<SCExpT>(const SalmonOpts& opts,
-                                      const SCExpT& experiment);
+                              const SCExpT& experiment,
+                              const MappingStatistics& mstats);
 
-template bool GZipWriter::writeMeta<BulkAlignLibT<UnpairedRead>>(
-    const SalmonOpts& opts, const BulkAlignLibT<UnpairedRead>& experiment);
+template bool
+GZipWriter::writeMeta<BulkAlignLibT<UnpairedRead>>(const SalmonOpts& opts, const BulkAlignLibT<UnpairedRead>& experiment,
+                                                   const MappingStatistics& mstats);
 
-template bool GZipWriter::writeMeta<BulkAlignLibT<ReadPair>>(
-    const SalmonOpts& opts, const BulkAlignLibT<ReadPair>& experiment);
+template bool
+GZipWriter::writeMeta<BulkAlignLibT<ReadPair>>(const SalmonOpts& opts, const BulkAlignLibT<ReadPair>& experiment,
+                                               const MappingStatistics& mstats);
 
 template bool
 GZipWriter::writeEmptyMeta<BulkExpT>(const SalmonOpts& opts,

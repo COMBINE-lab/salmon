@@ -1518,7 +1518,6 @@ std::string getCurrentTimeAsString() {
                             "Usage of --mimicBT2 overrides other settings for mapping validation. Setting "
                             "Bowtie2-like parameters now.");
         sopt.discardOrphansQuasi = true;
-        sopt.noDovetail = true;
       }
 
       if (sopt.mimicStrictBT2) {
@@ -1526,7 +1525,6 @@ std::string getCurrentTimeAsString() {
                             "Usage of --mimicStrictBT2 overrides other settings for mapping validation. Setting "
                             "strict RSEM+Bowtie2-like parameters now.");
         sopt.discardOrphansQuasi = true;
-        sopt.noDovetail = true;
         sopt.minScoreFraction = 0.8;
         sopt.matchScore = 1;
         sopt.mismatchPenalty = 0;
