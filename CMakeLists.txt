@@ -87,7 +87,9 @@ set(WARNING_IGNORE_FLAGS "")
 endif()
 
 ## Prefer static to dynamic libraries
-set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
+if(NOT DEFINED $ENV{USE_SHARED_LIBS})
+  set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
+endif()
 
 include(CheckIPOSupported)
 
@@ -281,6 +283,8 @@ endif()
 # We want static, multithreaded boost libraries
 ##
 if(CONDA_BUILD)
+  set(Boost_USE_STATIC_LIBS OFF)
+elseif($ENV{USE_SHARED_LIBS})   # CI failed when using an OR statement above...
   set(Boost_USE_STATIC_LIBS OFF)
 else()
   set(Boost_USE_STATIC_LIBS ON)
@@ -479,56 +483,70 @@ message("BOOST LIBRARIES = ${Boost_LIBRARIES}")
 
 set(EXTERNAL_LIBRARY_PATH $CMAKE_CURRENT_SOURCE_DIR/lib)
 
-message("Build system will build libdivsufsort")
-message("==================================================================")
-include(ExternalProject)
-externalproject_add(libdivsufsort
-  DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-  URL ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort.zip
-  # Note: This zip comes from the fetched rapmap.zip, whose SHA we check
-  # so we souldn't need to check this one separately.
-  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master
-  INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-  #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
-  BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master/build
-  CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DBUILD_DIVSUFSORT64=TRUE -DUSE_OPENMP=TRUE -DBUILD_SHARED_LIBS=FALSE
-)
-externalproject_add_step(libdivsufsort makedir
-  COMMAND mkdir -p <SOURCE_DIR>/build
-  COMMENT "Make build directory"
-  DEPENDEES download
-  DEPENDERS configure)
+find_package(libdivsufsort)
+if(NOT LIBDIVSUFSORT_FOUND)
+  message("Build system will build libdivsufsort")
+  message("==================================================================")
+  include(ExternalProject)
+  externalproject_add(libdivsufsort
+    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+    URL ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort.zip
+    # Note: This zip comes from the fetched rapmap.zip, whose SHA we check
+    # so we souldn't need to check this one separately.
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master
+    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
+    #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
+    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master/build
+    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DBUILD_DIVSUFSORT64=TRUE -DUSE_OPENMP=TRUE -DBUILD_SHARED_LIBS=FALSE
+  )
+  externalproject_add_step(libdivsufsort makedir
+    COMMAND mkdir -p <SOURCE_DIR>/build
+    COMMENT "Make build directory"
+    DEPENDEES download
+    DEPENDERS configure)
 
-set(SUFFARRAY_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
+  set(SUFFARRAY_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
+  set(FETCHED_LIBDIVSUFSORT TRUE)
+else()
+  set(SUFFARRAY_LIB ${SUFFARRAY_LIBRARY})
+  set(SUFFARRAY_LIB64 "")
+  set(SUFFARRAY_INCLUDE_DIRS ${SUFFARRAY_INCLUDE_DIR})
+endif()
 
-message("Build system will fetch and build the Cereal serialization library")
-message("==================================================================")
-include(ExternalProject)
-externalproject_add(libcereal
-  DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-  DOWNLOAD_COMMAND curl -k -L https://github.com/USCiLab/cereal/archive/v1.2.2.tar.gz -o cereal-v1.2.2.tar.gz &&
-    ${SHASUM} 1921f26d2e1daf9132da3c432e2fd02093ecaedf846e65d7679ddf868c7289c4  cereal-v1.2.2.tar.gz &&
-    tar -xzvf cereal-v1.2.2.tar.gz
 
-  ##
-  #URL https://github.com/USCiLab/cereal/archive/v1.2.2.tar.gz
-  #DOWNLOAD_NAME cereal-v1.2.2.tar.gz
-  #TLS_VERIFY FALSE
-  #URL_HASH SHA1=ffddf5fc5313cfbb893e07823ca8c473084eebca
-  ##
-  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.2.2
-  INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-  #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
-  BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.2.2/build
-  CONFIGURE_COMMAND ""
-  BUILD_COMMAND ""
-  INSTALL_COMMAND sh -c "mkdir -p <INSTALL_DIR>/include && cp -r <SOURCE_DIR>/include/cereal <INSTALL_DIR>/include"
-)
-externalproject_add_step(libcereal makedir
-  COMMAND mkdir -p <SOURCE_DIR>/build
-  COMMENT "Make build directory"
-  DEPENDEES download
-  DEPENDERS configure)
+find_package(Cereal)
+if (NOT CEREAL_FOUND)
+  message("Build system will fetch and build the Cereal serialization library")
+  message("==================================================================")
+  include(ExternalProject)
+  externalproject_add(libcereal
+    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+    DOWNLOAD_COMMAND curl -k -L https://github.com/USCiLab/cereal/archive/v1.2.2.tar.gz -o cereal-v1.2.2.tar.gz &&
+      ${SHASUM} 1921f26d2e1daf9132da3c432e2fd02093ecaedf846e65d7679ddf868c7289c4  cereal-v1.2.2.tar.gz &&
+      tar -xzvf cereal-v1.2.2.tar.gz
+
+    ##
+    #URL https://github.com/USCiLab/cereal/archive/v1.2.2.tar.gz
+    #DOWNLOAD_NAME cereal-v1.2.2.tar.gz
+    #TLS_VERIFY FALSE
+    #URL_HASH SHA1=ffddf5fc5313cfbb893e07823ca8c473084eebca
+    ##
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.2.2
+    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
+    #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
+    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.2.2/build
+    CONFIGURE_COMMAND ""
+    BUILD_COMMAND ""
+    INSTALL_COMMAND sh -c "mkdir -p <INSTALL_DIR>/include && cp -r <SOURCE_DIR>/include/cereal <INSTALL_DIR>/include"
+  )
+  externalproject_add_step(libcereal makedir
+    COMMAND mkdir -p <SOURCE_DIR>/build
+    COMMENT "Make build directory"
+    DEPENDEES download
+    DEPENDERS configure)
+
+  set(FETCHED_CEREAL TRUE)
+endif()
 
 ## Try and find TBB first
 find_package(TBB 2018.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy)
@@ -625,30 +643,34 @@ endif()
 
 message("TBB_LIBRARIES = ${TBB_LIBRARIES}")
 
-message("Build system will compile libgff")
-message("==================================================================")
-externalproject_add(libgff
-  DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-  DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/libgff/archive/v1.2.tar.gz -o libgff.tgz &&
-    ${SHASUM} bfabf143da828e8db251104341b934458c19d3e3c592d418d228de42becf98eb libgff.tgz &&
-    tar -xzvf libgff.tgz
-  ##
-  #URL https://github.com/COMBINE-lab/libgff/archive/v1.1.tar.gz
-  #DOWNLOAD_NAME libff.tgz
-  #URL_HASH SHA1=37b3147d78391d1fabbe6a0df313fbf516abbc6f
-  #TLS_VERIFY FALSE
-  ##
-  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-1.2
-  #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
-  INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-  BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-1.2/build
-  CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=${CMAKE_CURRENT_SOURCE_DIR}/external/install
-)
-externalproject_add_step(libgff makedir
-  COMMAND mkdir -p <SOURCE_DIR>/build
-  COMMENT "Make build directory"
-  DEPENDEES download
-  DEPENDERS configure)
+find_package(libgff)
+if(NOT LIBGFF_FOUND)
+  message("Build system will compile libgff")
+  message("==================================================================")
+  externalproject_add(libgff
+    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/libgff/archive/v1.2.tar.gz -o libgff.tgz &&
+      ${SHASUM} bfabf143da828e8db251104341b934458c19d3e3c592d418d228de42becf98eb libgff.tgz &&
+      tar -xzvf libgff.tgz
+    ##
+    #URL https://github.com/COMBINE-lab/libgff/archive/v1.1.tar.gz
+    #DOWNLOAD_NAME libff.tgz
+    #URL_HASH SHA1=37b3147d78391d1fabbe6a0df313fbf516abbc6f
+    #TLS_VERIFY FALSE
+    ##
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-1.2
+    #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
+    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
+    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-1.2/build
+    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=${CMAKE_CURRENT_SOURCE_DIR}/external/install
+  )
+  externalproject_add_step(libgff makedir
+    COMMAND mkdir -p <SOURCE_DIR>/build
+    COMMENT "Make build directory"
+    DEPENDEES download
+    DEPENDERS configure)
+  set(FETCHED_GFF TRUE)
+endif()
 
 # Because of the way that Apple has changed SIP
 # in el capitan, some headers may be in a new location
@@ -663,25 +685,32 @@ else()
   set(LZFLAG "")
 endif()
 
-message("Build system will compile Staden IOLib")
-message("==================================================================")
-externalproject_add(libstadenio
-  DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-  DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/staden-io_lib/archive/v1.14.8.1.tar.gz -o staden-io_lib-v1.14.8.tar.gz &&
-    ${SHASUM} f6f30eefa478cfb708f3109a35fb6ffa0e24951d9d971985df2cef5919dd0bc3 staden-io_lib-v1.14.8.tar.gz &&
-    mkdir -p staden-io_lib-1.14.8 &&
-    tar -xzf staden-io_lib-v1.14.8.tar.gz --strip-components=1 -C staden-io_lib-1.14.8 &&
-    rm -fr staden-io_lib &&
-    mv -f staden-io_lib-1.14.8 staden-io_lib
-  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/staden-io_lib
-  INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-  CONFIGURE_COMMAND ./configure --enable-shared=no --without-libcurl --prefix=<INSTALL_DIR> LDFLAGS=${LIBSTADEN_LDFLAGS} CFLAGS=${LIBSTADEN_CFLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
-  BUILD_COMMAND make ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS+=${STADEN_INC} CFLAGS+=${STADEN_LIB} LDFLAGS+=${EXTRA_CMAKE_LIBRARY_FLAGS} CFLAGS+=${EXTRA_CMAKE_INCLUDE_FLAGS} CFLAGS+=${LZFLAG}
+find_package(CURL)
+find_package(libstadenio)
+if (NOT LIBSTADENIO_FOUND)
+  message("Build system will compile Staden IOLib")
+  message("==================================================================")
+  externalproject_add(libstadenio
+    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/staden-io_lib/archive/v1.14.8.1.tar.gz -o staden-io_lib-v1.14.8.tar.gz &&
+      ${SHASUM} f6f30eefa478cfb708f3109a35fb6ffa0e24951d9d971985df2cef5919dd0bc3 staden-io_lib-v1.14.8.tar.gz &&
+      mkdir -p staden-io_lib-1.14.8 &&
+      tar -xzf staden-io_lib-v1.14.8.tar.gz --strip-components=1 -C staden-io_lib-1.14.8 &&
+      rm -fr staden-io_lib &&
+      mv -f staden-io_lib-1.14.8 staden-io_lib
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/staden-io_lib
+    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
+    CONFIGURE_COMMAND ./configure --enable-shared=no --without-libcurl --prefix=<INSTALL_DIR> LDFLAGS=${LIBSTADEN_LDFLAGS} CFLAGS=${LIBSTADEN_CFLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
+    BUILD_COMMAND make ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS+=${STADEN_INC} CFLAGS+=${STADEN_LIB} LDFLAGS+=${EXTRA_CMAKE_LIBRARY_FLAGS} CFLAGS+=${EXTRA_CMAKE_INCLUDE_FLAGS} CFLAGS+=${LZFLAG}
 
 
-  BUILD_IN_SOURCE 1
-  INSTALL_COMMAND make install
-)
+    BUILD_IN_SOURCE 1
+    INSTALL_COMMAND make install
+  )
+
+  set(FETCHED_STADEN TRUE)
+  set(STADEN_LIBRARIES "${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a")
+endif()
 
 set(FAST_MALLOC_LIB "")
 set(HAVE_FAST_MALLOC FALSE)
