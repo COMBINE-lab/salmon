@@ -284,7 +284,7 @@ endif()
 ##
 if(CONDA_BUILD)
   set(Boost_USE_STATIC_LIBS OFF)
-elseif($ENV{USE_SHARED_LIBS})   # CI failed when using an OR statement above...
+elseif(DEFINED $ENV{USE_SHARED_LIBS})   # CI failed when using an OR statement above...
   set(Boost_USE_STATIC_LIBS OFF)
 else()
   set(Boost_USE_STATIC_LIBS ON)
