@@ -201,7 +201,7 @@ add_executable(unitTests ${UNIT_TESTS_SRCS})
 #set_target_properties(salmon_core salmon PROPERTIES LINK_SEARCH_END_STATIC TRUE)
 
 # our suffix array construction libraries
-if(NOT ${SUFFARRAY_LIB})
+if(NOT LIBDIVSUFSORT_FOUND)
   set (SUFFARRAY_LIB ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort.a)
   set (SUFFARRAY64_LIB ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort64.a)
 endif()
