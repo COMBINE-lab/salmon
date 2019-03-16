@@ -87,7 +87,7 @@ set(WARNING_IGNORE_FLAGS "")
 endif()
 
 ## Prefer static to dynamic libraries
-if(NOT DEFINED $ENV{USE_SHARED_LIBS})
+if(NOT DEFINED ENV{USE_SHARED_LIBS})
   set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
 endif()
 
@@ -284,7 +284,7 @@ endif()
 ##
 if(CONDA_BUILD)
   set(Boost_USE_STATIC_LIBS OFF)
-elseif(DEFINED $ENV{USE_SHARED_LIBS})   # CI failed when using an OR statement above...
+elseif(DEFINED ENV{USE_SHARED_LIBS})   # CI failed when using an OR statement above...
   set(Boost_USE_STATIC_LIBS OFF)
 else()
   set(Boost_USE_STATIC_LIBS ON)
