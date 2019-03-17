@@ -3,7 +3,7 @@ find_path(SUFFARRAY_INCLUDE_DIR divsufsort.h
 	HINTS ${SUFFARRAY_ROOT} ENV SUFFARRAY_ROOT
   PATH_SUFFIXES include)
 
-find_library(SUFFARRAY_LIBRARY NAMES divsufsort libdivsufsort
+find_library(SUFFARRAY_LIBRARY NAMES divsufsort divsufsort64 libdivsufsort libdivsufsort64
   HINTS ${SUFFARRAY_ROOT} ENV SUFFARRAY_ROOT PATH_SUFFIXES lib lib64)
 
 include(FindPackageHandleStandardArgs)
