@@ -203,7 +203,9 @@ add_executable(unitTests ${UNIT_TESTS_SRCS})
 # our suffix array construction libraries
 if(NOT LIBDIVSUFSORT_FOUND)
   set (SUFFARRAY_LIB ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort.a)
-  set (SUFFARRAY64_LIB ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort64.a)
+  set (SUFFARRAY_LIB64 ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort64.a)
+  message ("Setting libdivsufsort = ${SUFFARRAY_LIB}") 
+  message ("Setting libdivsufsort64 = ${SUFFARRAY_LIB64}") 
 endif()
 
 
@@ -218,7 +220,7 @@ target_link_libraries(salmon
     ${STADEN_LIBRARIES} ${CURL_LIBRARIES}
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
-    ${SUFFARRAY64_LIB}
+    ${SUFFARRAY_LIB64}
     #${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
     m
     ${LIBLZMA_LIBRARIES}
@@ -245,7 +247,7 @@ target_link_libraries(unitTests
     ${STADEN_LIBRARIES} ${CURL_LIBRARIES}
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
-    ${SUFFARRAY64_LIB}
+    ${SUFFARRAY_LIB64}
     #${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
     m
     ${LIBLZMA_LIBRARIES}
