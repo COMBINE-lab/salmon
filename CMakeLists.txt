@@ -17,6 +17,8 @@ enable_testing()
 
 project(Salmon)
 
+option(USE_SHARED_LIBS "Use shared instead of static libraries" OFF)
+
 # auto-populate version:
 # from https://stackoverflow.com/questions/47066115/cmake-get-version-from-multi-line-text-file
 file(READ "current_version.txt" ver)
@@ -87,7 +89,7 @@ set(WARNING_IGNORE_FLAGS "")
 endif()
 
 ## Prefer static to dynamic libraries
-if(NOT DEFINED ENV{USE_SHARED_LIBS})
+if(NOT USE_SHARED_LIBS)
   set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
 endif()
 
@@ -284,7 +286,7 @@ endif()
 ##
 if(CONDA_BUILD)
   set(Boost_USE_STATIC_LIBS OFF)
-elseif(DEFINED ENV{USE_SHARED_LIBS})   # CI failed when using an OR statement above...
+elseif(USE_SHARED_LIBS)   # CI failed when using an OR statement above...
   set(Boost_USE_STATIC_LIBS OFF)
 else()
   set(Boost_USE_STATIC_LIBS ON)
@@ -510,7 +512,8 @@ if(NOT LIBDIVSUFSORT_FOUND)
 else()
   message("SUFFARRAY_LIB = ${SUFFARRAY_LIBRARY}")
   set(SUFFARRAY_LIB ${SUFFARRAY_LIBRARY})
-  set(SUFFARRAY_LIB64 "")
+  message("SUFFARRAY_LIB64 = ${SUFFARRAY_LIBRARY64}")
+  set(SUFFARRAY_LIB64 ${SUFFARRAY_LIBRARY64})
   set(SUFFARRAY_INCLUDE_DIRS ${SUFFARRAY_INCLUDE_DIR})
 endif()
 
