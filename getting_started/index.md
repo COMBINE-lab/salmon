@@ -43,14 +43,14 @@ Another way to get started with Salmon is to download the pre-compiled binaries 
 If you've downloaded a specific binary, you simply decompress it like so:
 
 ```
-$ tar xzvf salmon-0.10.2_linux_x86_64.tar.gz
+$ tar xzvf salmon-0.13.1_linux_x86_64.tar.gz
 ```
 
-then, the binary will be located in the `bin` directory inside of the uncompressed folder; for example `salmon-0.10.2_linux_x86_64/bin/salmon` in the example above.  You can either run salmon directly using the full path, or place it into your PATH variable for easier execution.  The rest of the tutorial below will assume that you've placed the `salmon` executable in your path, so that simply running `salmon` will invoke the program.  You can test that salmon is running on your system and get a list of available commands using the `-h` command; you should see output like the following
+then, the binary will be located in the `bin` directory inside of the uncompressed folder.  You can either run salmon directly using the full path, or place it into your PATH variable for easier execution.  The rest of the tutorial below will assume that you've placed the `salmon` executable in your path, so that simply running `salmon` will invoke the program.  You can test that salmon is running on your system and get a list of available commands using the `-h` command; you should see output like the following
 
 ```
 $ salmon -h
-salmon v0.10.2
+salmon v0.13.1
 
 Usage:  salmon -h|--help or
         salmon -v|--version or
@@ -150,7 +150,7 @@ echo "Processing sample ${samp}"
 salmon quant -i athal_index -l A \
          -1 ${fn}/${samp}_1.fastq.gz \
          -2 ${fn}/${samp}_2.fastq.gz \
-         -p 8 -o quants/${samp}_quant
+         -p 8 --validateMappings -o quants/${samp}_quant
 done 
 ```
 
