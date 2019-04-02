@@ -148,7 +148,9 @@ bool GZipWriter::writeEquivCounts(const SalmonOpts& opts, ExpT& experiment) {
     const TranscriptGroup& tgroup = eq.first;
     const std::vector<uint32_t>& txps = tgroup.txps;
     // group size
-    uint32_t groupSize = eq.second.weights.size();
+    //uint32_t groupSize = eq.second.weights.size();
+    uint32_t groupSize = tgroup.txps.size();
+
     equivFile << groupSize << '\t';
     // each group member
     for (uint32_t i = 0; i < groupSize; i++) {
@@ -343,6 +345,13 @@ bool GZipWriter::writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
     // For now, this vector is empty unless we dumped the equivalence classes
     // with weights.  In which case it contains the string "scalar_weights".
     std::vector<std::string> props;
+
+
+    bool isRangeFactorizationOn = opts.rangeFactorizationBins ;
+    if(isRangeFactorizationOn){
+      props.push_back("range_factorized") ;
+    }
+
     oa(cereal::make_nvp("eq_class_properties", props));
 
     oa(cereal::make_nvp("length_classes", experiment.getLengthQuantiles()));
@@ -674,6 +683,11 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
     std::vector<std::string> props;
     if (opts.dumpEqWeights) {
       props.push_back("scalar_weights");
+    }
+
+    bool isRangeFactorizationOn = opts.rangeFactorizationBins ;
+    if(isRangeFactorizationOn){
+      props.push_back("range_factorized") ;
     }
     oa(cereal::make_nvp("eq_class_properties", props));
 
