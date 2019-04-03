@@ -341,15 +341,19 @@ bool GZipWriter::writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
 
     // True if we dumped the equivalence classes, false otherwise
     oa(cereal::make_nvp("serialized_eq_classes", false));
+    oa(cereal::make_nvp("num_eq_classes", 0));
 
     // For now, this vector is empty unless we dumped the equivalence classes
     // with weights.  In which case it contains the string "scalar_weights".
     std::vector<std::string> props;
 
-
-    bool isRangeFactorizationOn = opts.rangeFactorizationBins ;
+    bool isRangeFactorizationOn = opts.rangeFactorizationBins;
+    bool dumpRichWeights = opts.dumpEqWeights;
     if(isRangeFactorizationOn){
       props.push_back("range_factorized") ;
+    }
+    if (dumpRichWeights) {
+      props.push_back("scalar_weights");
     }
 
     oa(cereal::make_nvp("eq_class_properties", props));
@@ -675,20 +679,27 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
 
     oa(cereal::make_nvp("num_targets", transcripts.size()));
 
+    auto& eqBuilder = const_cast<ExpT&>(experiment).equivalenceClassBuilder();
+    auto num_eq_classes_opt = eqBuilder.numEqClasses();
+    size_t num_eq_classes = num_eq_classes_opt ? (*num_eq_classes_opt) : 0;
+    oa(cereal::make_nvp("num_eq_classes", num_eq_classes));
+
     // True if we dumped the equivalence classes, false otherwise
     oa(cereal::make_nvp("serialized_eq_classes", opts.dumpEq));
 
     // For now, this vector is empty unless we dumped the equivalence classes
     // with weights.  In which case it contains the string "scalar_weights".
     std::vector<std::string> props;
+    bool isRangeFactorizationOn = opts.rangeFactorizationBins ;
+    bool dumpRichWeights = opts.dumpEqWeights;
+    if(isRangeFactorizationOn){
+      props.push_back("range_factorized") ;
+    }
     if (opts.dumpEqWeights) {
       props.push_back("scalar_weights");
     }
 
-    bool isRangeFactorizationOn = opts.rangeFactorizationBins ;
-    if(isRangeFactorizationOn){
-      props.push_back("range_factorized") ;
-    }
+
     oa(cereal::make_nvp("eq_class_properties", props));
 
     oa(cereal::make_nvp("length_classes", experiment.getLengthQuantiles()));
