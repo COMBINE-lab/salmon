@@ -39,6 +39,7 @@ public:
         mass_(salmon::math::LOG_0), sharedCount_(0.0),
         avgMassBias_(salmon::math::LOG_0), active_(false) {
     uniqueCount_.store(0);
+    totalCount_.store(0); // thanks @come-raczy
     lastUpdate_.store(0);
     lastTimestepUpdated_.store(0);
     cachedEffectiveLength_.store(salmon::math::LOG_0);
@@ -50,6 +51,7 @@ public:
         priorMass_(std::log(alpha * len)), mass_(salmon::math::LOG_0),
         sharedCount_(0.0), avgMassBias_(salmon::math::LOG_0), active_(false) {
     uniqueCount_.store(0);
+    totalCount_.store(0); // thanks @come-raczy
     lastUpdate_.store(0);
     lastTimestepUpdated_.store(0);
     cachedEffectiveLength_.store(std::log(static_cast<double>(RefLength)));
