@@ -889,24 +889,31 @@ bool GZipWriter::writeSparseAbundances(bool inDebugMode,
 
   size_t num = alphas.size();
   size_t elSize = sizeof(typename std::vector<double>::value_type);
-  size_t flagSize = sizeof(typename std::vector<char>::value_type);
+  size_t flagSize = sizeof(typename std::vector<uint8_t>::value_type);
   //size_t trSize = sizeof(typename std::vector<uint8_t>::value_type);
 
-  std::vector<char> alphasFlag (num, 0);
+  std::vector<uint8_t> alphasFlag;
   std::vector<double> alphasSparse;
-  size_t numSparse {0};
-  for (size_t i=0; i<num; i++) {
-    if (alphas[i] > 0.0) {
-      numSparse += 1;
-      alphasFlag[i] = 1;
-      alphasSparse.emplace_back(alphas[i]);
+  alphasSparse.reserve(num/2);
+
+  for (size_t i=0; i<num; i+=8) {
+    uint8_t flag {0};
+    for (size_t j=0; j<8; i++) {
+      size_t vectorIndex = i+j;
+      if (vectorIndex >= num) { break; }
+
+      if (alphas[vectorIndex] > 0.0) {
+        alphasSparse.emplace_back(alphas[vectorIndex]);
+        flag |= 1 << j;
+      }
     }
+    alphasFlag.emplace_back(flag);
   }
 
   countfile.write(reinterpret_cast<char*>(alphasFlag.data()),
-                  flagSize * num);
+                  flagSize * alphasFlag.size());
   countfile.write(reinterpret_cast<char*>(alphasSparse.data()),
-                  elSize * numSparse);
+                  elSize * alphasSparse.size());
   //tierfile.write(reinterpret_cast<char*>(tiers.data()),
   //                trSize * num);
 
