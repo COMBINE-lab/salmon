@@ -892,19 +892,19 @@ bool GZipWriter::writeSparseAbundances(bool inDebugMode,
   size_t flagSize = sizeof(typename std::vector<uint8_t>::value_type);
   //size_t trSize = sizeof(typename std::vector<uint8_t>::value_type);
 
-  std::vector<uint8_t> alphasFlag;
   std::vector<double> alphasSparse;
   alphasSparse.reserve(num/2);
+  std::vector<uint8_t> alphasFlag;
 
   for (size_t i=0; i<num; i+=8) {
     uint8_t flag {0};
-    for (size_t j=0; j<8; i++) {
+    for (size_t j=0; j<8; j++) {
       size_t vectorIndex = i+j;
       if (vectorIndex >= num) { break; }
 
       if (alphas[vectorIndex] > 0.0) {
         alphasSparse.emplace_back(alphas[vectorIndex]);
-        flag |= 1 << j;
+        flag |= 128 >> j;
       }
     }
     alphasFlag.emplace_back(flag);
