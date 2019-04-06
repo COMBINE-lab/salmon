@@ -60,6 +60,11 @@ public:
                        std::vector<double>& alphas,
                        std::vector<uint8_t>& tiers);
 
+  bool writeSparseAbundances(bool inDebugMode,
+                             std::string& bcName,
+                             std::vector<double>& alphas,
+                             std::vector<uint8_t>& tiers);
+
   bool writeBootstraps(bool inDebugMode,
                        std::string& bcName,
                        std::vector<double>& alphas,
