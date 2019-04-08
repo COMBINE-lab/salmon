@@ -857,6 +857,34 @@ bool GZipWriter::writeSparseAbundances(bool inDebugMode,
                                        std::string& bcName,
                                        std::vector<double>& alphas,
                                        std::vector<uint8_t>& tiers){
+
+  // construct the output vectors outside of the critical section
+  // since e.g. this is more non-trivial work than in the dense case.
+  double total_counts = 0.0;
+  size_t num = alphas.size();
+  std::vector<float> alphasSparse;
+  alphasSparse.reserve(num/2);
+  std::vector<uint8_t> alphasFlag;
+
+  size_t elSize = sizeof(decltype(alphasSparse)::value_type);
+  size_t flagSize = sizeof(decltype(alphasFlag)::value_type);
+  //size_t trSize = sizeof(typename std::vector<uint8_t>::value_type);
+
+  for (size_t i=0; i<num; i+=8) {
+    uint8_t flag {0};
+    for (size_t j=0; j<8; j++) {
+      size_t vectorIndex = i+j;
+      if (vectorIndex >= num) { break; }
+
+      if (alphas[vectorIndex] > std::numeric_limits<float>::min()) {
+        total_counts += alphas[vectorIndex];
+        alphasSparse.emplace_back(alphas[vectorIndex]);
+        flag |= 128 >> j;
+      }
+    }
+    alphasFlag.emplace_back(flag);
+  }
+
 #if defined __APPLE__
   spin_lock::scoped_lock sl(writeMutex_);
 #else
@@ -869,7 +897,6 @@ bool GZipWriter::writeSparseAbundances(bool inDebugMode,
     auto countMatFilename = path_ / "alevin" / "quants_mat.gz";
     countMatrixStream_->push(boost::iostreams::file_sink(countMatFilename.string(),
                                                          std::ios_base::out | std::ios_base::binary));
-
     //tierMatrixStream_.reset(new boost::iostreams::filtering_ostream);
     //tierMatrixStream_->push(boost::iostreams::gzip_compressor(6));
     //auto tierMatFilename = path_ / "alevin" / "quants_tier_mat.gz";
@@ -887,29 +914,6 @@ bool GZipWriter::writeSparseAbundances(bool inDebugMode,
   //boost::iostreams::filtering_ostream& tierfile = *tierMatrixStream_;
   std::ofstream& namefile = *bcNameStream_;
 
-  size_t num = alphas.size();
-  size_t elSize = sizeof(typename std::vector<double>::value_type);
-  size_t flagSize = sizeof(typename std::vector<uint8_t>::value_type);
-  //size_t trSize = sizeof(typename std::vector<uint8_t>::value_type);
-
-  std::vector<double> alphasSparse;
-  alphasSparse.reserve(num/2);
-  std::vector<uint8_t> alphasFlag;
-
-  for (size_t i=0; i<num; i+=8) {
-    uint8_t flag {0};
-    for (size_t j=0; j<8; j++) {
-      size_t vectorIndex = i+j;
-      if (vectorIndex >= num) { break; }
-
-      if (alphas[vectorIndex] > 0.0) {
-        alphasSparse.emplace_back(alphas[vectorIndex]);
-        flag |= 128 >> j;
-      }
-    }
-    alphasFlag.emplace_back(flag);
-  }
-
   countfile.write(reinterpret_cast<char*>(alphasFlag.data()),
                   flagSize * alphasFlag.size());
   countfile.write(reinterpret_cast<char*>(alphasSparse.data()),
@@ -917,7 +921,6 @@ bool GZipWriter::writeSparseAbundances(bool inDebugMode,
   //tierfile.write(reinterpret_cast<char*>(tiers.data()),
   //                trSize * num);
 
-  double total_counts = std::accumulate(alphas.begin(), alphas.end(), 0.0);
   if ( not inDebugMode and not (total_counts > 0.0)){
     std::cout<< "ERROR: cell doesn't have any read count" << std::flush;
     exit(1);
