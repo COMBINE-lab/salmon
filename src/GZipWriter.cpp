@@ -865,6 +865,7 @@ bool GZipWriter::writeSparseAbundances(bool inDebugMode,
   std::vector<float> alphasSparse;
   alphasSparse.reserve(num/2);
   std::vector<uint8_t> alphasFlag;
+  alphasFlag.reserve(static_cast<size_t>(std::ceil(num/8)));
 
   size_t elSize = sizeof(decltype(alphasSparse)::value_type);
   size_t flagSize = sizeof(decltype(alphasFlag)::value_type);
