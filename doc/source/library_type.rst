@@ -52,7 +52,7 @@ So, for example, if you wanted to specify a fragment library of strand-specific
 paired-end reads, oriented toward each other, where read 1 comes from the
 forward strand and read 2 comes from the reverse strand, you would specify ``-l
 ISF`` on the command line.  This designates that the library being processed has
-the type "ISF" meaning, **I**\ nward (the relative orientation), **S**\ tranted
+the type "ISF" meaning, **I**\ nward (the relative orientation), **S**\ tranded
 (the protocol is strand-specific), **F**\ orward (read 1 comes from the forward
 strand).
 

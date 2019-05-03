@@ -9,12 +9,33 @@ containing your reads.  Optionally, Salmon can make use of pre-computed
 alignments (in the form of a SAM/BAM file) to the transcripts rather than the
 raw reads.
 
-The **quasi-mapping**-based mode of Salmon runs in two phases; indexing and
+The **mapping**-based mode of Salmon runs in two phases; indexing and
 quantification. The indexing step is independent of the reads, and only need to
 be run one for a particular set of reference transcripts. The quantification
 step, obviously, is specific to the set of RNA-seq reads and is thus run more
 frequently. For a more complete description of all available options in Salmon,
 see below.
+
+.. note:: Mapping validation in mapping-based mode
+
+   Mapping validation, enabled by the ``--validateMappings`` flag, is a major
+   feature enhancement introduced in recent versions of salmon. When salmon is
+   run with mapping validation, it adopts a considerably more sensitive scheme
+   that we have developed for finding the potential mapping loci of a read, and
+   score potential mapping loci using the chaining algorithm introdcued in
+   minimap2 [#minimap2]_. Finally, it scores and validates these mappings using
+   the score-only, SIMD, dynamic programming algorithm of ksw2 [#ksw2]_. The use
+   of mapping validation implies the use of range factorization, as mapping
+   scores become very meaningful with this option. Mapping validation can
+   improve the accuracy, sometimes considerably, over the faster, but
+   less-precise default mapping algorithm. As of salmon v0.13.1, we highly
+   recommend all users adopt mapping validation unless they have a specific
+   reason to avoid it. It is likely that this option will be enabled by default
+   in a future release. Also, there are a number of options and flags that allow
+   the user to control details about how the scoring is carried out, including
+   setting match, mismatch, and gap scores, and choosing the minimum score
+   below which an alignment will be considered invalid, and therefore not
+   used for the purposes of quantification. 
 
 The **alignment**-based mode of Salmon does not require indexing.  Rather, you can 
 simply provide Salmon with a FASTA file of the transcripts and a SAM/BAM file
@@ -69,33 +90,22 @@ set of alignments.
     to process fragments more quickly than they can be provided via the parser.
  
     
-Preparing transcriptome indices (Quasi-index and FMD-index-based modes) 
+Preparing transcriptome indices (mapping-based mode) 
 ----------------------------------------------------------
 
 One of the novel and innovative features of Salmon is its ability to accurately
-quantify transcripts using *quasi-mappings*. Quasi-mappings 
-are mappings of reads to transcript positions that are computed without
-performing a base-to-base alignment of the read to the transcript.  Quasi-mapping
-is typically **much** faster to compute than traditional (or full)
-alignments, and can sometimes provide superior accuracy by being more robust 
-to errors in the read or genomic variation from the reference sequence.  More details
-about quasi-mappings, and how they are computed, can be found `here <http://bioinformatics.oxfordjournals.org/content/32/12/i192.full>`_.
+quantify transcripts using *quasi-mapping*, with or without mapping validation.
+Quasi-mapping is typically **much** faster to compute than traditional (or full)
+alignments. More details about quasi-mappings, and how they are computed, can be
+found `here <http://bioinformatics.oxfordjournals.org/content/32/12/i192.full>`_.
 
-Salmon currently supports two different methods for mapping reads to transcriptomes;
-(SMEM-based) lightweight-alignment and quasi-mapping.  SMEM-based mapping is the original 
-lightweight-alignment method used by Salmon, and quasi-mapping is a newer and 
-considerably faster alternative.  Both methods are currently exposed via the 
-same ``quant`` command, but the methods require different indices so that 
-SMEM-based mapping cannot be used with a quasi-mapping index and vice-versa.
-
-If you want to use Salmon in quasi-mapping-based mode, then you first
-have to build an Salmon index for your transcriptome.  Assume that
-``transcripts.fa`` contains the set of transcripts you wish to quantify. First,
-you run the Salmon indexer:
+If you want to use Salmon in mapping-based mode, then you first have to build an
+Salmon index for your transcriptome. Assume that ``transcripts.fa`` contains the
+set of transcripts you wish to quantify. First, you run the Salmon indexer:
 
 ::
     
-    > ./bin/salmon index -t transcripts.fa -i transcripts_index --type quasi -k 31 
+    > ./bin/salmon index -t transcripts.fa -i transcripts_index -k 31 
     
 This will build the quasi-mapping-based index, using an auxiliary k-mer hash
 over k-mers of length 31.  While quasi-mapping will make used of arbitrarily 
@@ -103,27 +113,12 @@ long matches between the query and reference, the `k` size selected here will
 act as the *minimum* acceptable length for a valid match.  Thus, a smaller 
 value of `k` may slightly improve sensitivty.  We find that a `k` of 31 seems
 to work well for reads of 75bp or longer, but you might consider a smaller 
-`k` if you plan to deal with shorter reads. Note that there is also a 
-`k` parameter that can be passed to the ``quant`` command.  However, this has
-no effect if one is using a quasi-mapping index, as the `k` value provided
-during the index building phase overrides any `k` provided during
-quantification in this case.  Since quasi-mapping is the default index type in 
-Salmon, you can actually leave off the ``--type quasi`` parameter when building 
-the index.  To build a lightweight-alignment (FMD-based) index instead, one
-would use the following command:
+`k` if you plan to deal with shorter reads. Also, a shoter value of `k` may
+improve sensitivity even more when using the `--validateMappings` flag.  So,
+if you are seeing a smaller mapping rate than you might expect, consider building
+the index with a slightly smaller `k`.  
 
-::
-    
-    > ./bin/salmon index -t transcripts.fa -i transcripts_index --type fmd
-
-Note that no value of `k` is given here.  However, the SMEM-based mapping index
-makes use of a parameter `k` that is passed in during the ``quant`` phase (the
-default value is `19`).
-
-
-
-
-Quantifying in non-alignment-based mode
+Quantifying in mapping-based mode
 ---------------------------------------
 
 Then, you can quantify any set of reads (say, paired-end reads in files
@@ -132,19 +127,15 @@ Then, you can quantify any set of reads (say, paired-end reads in files
 
 ::
 
-    > ./bin/salmon quant -i transcripts_index -l <LIBTYPE> -1 reads1.fq -2 reads2.fq -o transcripts_quant
+    > ./bin/salmon quant -i transcripts_index -l <LIBTYPE> -1 reads1.fq -2 reads2.fq --validateMappings -o transcripts_quant
 
 If you are using single-end reads, then you pass them to Salmon with 
 the ``-r`` flag like:
 
 ::
 
-    > ./bin/salmon quant -i transcripts_index -l <LIBTYPE> -r reads.fq -o transcripts_quant
+    > ./bin/salmon quant -i transcripts_index -l <LIBTYPE> -r reads.fq --validateMappings -o transcripts_quant
 
-
-This same ``quant`` command will work with either index (quasi-mapping or
-SMEM-based), and Salmon will automatically determine the type of index being 
-read and perform the appropriate lightweight mapping accordingly.
 
 .. note:: Order of command-line parameters
 
@@ -175,15 +166,15 @@ below, assume we have two replicates ``lib_1`` and ``lib_2``.  The left and righ
 ``lib_2`` are ``lib_2_1.fq`` and ``lib_2_2.fq``, respectively.  The following are both valid
 ways to input these reads to Salmon::
 
-  > salmon quant -i index -l IU -1 lib_1_1.fq lib_2_1.fq -2 lib_1_2.fq lib_2_2.fq -o out
+  > salmon quant -i index -l IU -1 lib_1_1.fq lib_2_1.fq -2 lib_1_2.fq lib_2_2.fq --validateMappings -o out
 
-  > salmon quant -i index -l IU -1 <(cat lib_1_1.fq lib_2_1.fq) -2 <(cat lib_1_2.fq lib_2_2.fq) -o out
+  > salmon quant -i index -l IU -1 <(cat lib_1_1.fq lib_2_1.fq) -2 <(cat lib_1_2.fq lib_2_2.fq) --validateMappings -o out
 
 Similarly, both of these approaches can be adopted if the files are gzipped as well::
 
-   > salmon quant -i index -l IU -1 lib_1_1.fq.gz lib_2_1.fq.gz -2 lib_1_2.fq.gz lib_2_2.fq.gz -o out
+   > salmon quant -i index -l IU -1 lib_1_1.fq.gz lib_2_1.fq.gz -2 lib_1_2.fq.gz lib_2_2.fq.gz --validateMappings -o out
 
-   > salmon quant -i index -l IU -1 <(gunzip -c lib_1_1.fq.gz lib_2_1.fq.gz) -2 <(gunzip -c lib_1_2.fq.gz lib_2_2.fq.gz) -o out
+   > salmon quant -i index -l IU -1 <(gunzip -c lib_1_1.fq.gz lib_2_1.fq.gz) -2 <(gunzip -c lib_1_2.fq.gz lib_2_2.fq.gz) --validateMappings -o out
 
 In each pair of commands, the first command lets Salmon natively parse the files, while the latter command
 creates, on-the-fly, an input stream that consists of the concatenation of both files.  Both methods work, and
@@ -267,11 +258,12 @@ values here can speed up the run substantially.
 
 .. note:: Default number of threads
 
-	The default behavior is for Salmon to probe the number of available hardware threads and 
-    to use this number.  Thus, if you want to use fewer threads (e.g., if you are running multiple
-    instances of Salmon simultaneously), you will likely want to set this option explicitly in 
-    accordance with the desired per-process resource usage.
-    
+  The default behavior is for Salmon to probe the number of available hardware
+  threads and to use this number. Thus, if you want to use fewer threads (e.g.,
+  if you are running multiple instances of Salmon simultaneously), you will
+  likely want to set this option explicitly in accordance with the desired
+  per-process resource usage.
+
 
 """"""""""""
 ``--dumpEq``
@@ -341,12 +333,14 @@ One potential artifact that may arise from *alignment-free* mapping techniques i
 *spurious mappings*.  These may either be reads that do not arise from some target being
 quantified, but nonetheless exhibit some match against them (e.g. contaminants) or, more
 commonly, mapping a read to a larger set of quantification targets than would be
-supported by an optimal or near-optimal alignment.
+supported by an optimal or near-optimal alignment.  Further, such mapping techniques
+can manifest a lack of sensitivity, where they fail to find the optimal (or all
+equally-optimal) mapping positions for a fragment.
 
 If you pass the ``--validateMappings`` flag to Salmon, it will run an extension
 alignment dynamic program on the quasi-mappings it produces. The alignment
 procedure used to validate these mappings makes use of the highly-efficient and
-SIMD-parallelized `ksw2 <https://github.com/lh3/ksw2>`_ library.  Moreover, Salmon
+SIMD-parallelized ksw2 [#ksw2]_ library.  Moreover, Salmon
 makes use of an intelligent alignment cache to avoid re-computing alignment scores
 against redundant transcript sequences (e.g. when a read maps to the same exon in
 multiple different transcripts).  The exact parameters used for scoring alignments,
@@ -791,6 +785,10 @@ References
    
 .. [#roberts] Roberts, Adam, et al. "Improving RNA-Seq expression estimates by correcting for fragment bias." Genome Biology 12.3 (2011): 1.
 
-.. [#salmon] Patro, Rob, et al. "Salmon provides fast and bias-aware quantification of transcript expression." Nature Methods (2017). Advanced Online Publication. doi: 10.1038/nmeth.4197
+.. [#salmon] Patro, Rob, et al. "Salmon provides fast and bias-aware quantification of transcript expression." Nature Methods (2017). Advanced Online Publication. doi: 10.1038/nmeth.4197..
 
-.. [#alpine] Love, Michael I., Hogenesch, John B., Irizarry, Rafael A. "Modeling of RNA-seq fragment sequence bias reduces systematic errors in transcript abundance estimation." Nature Biotechnology 34.12 (2016). doi: 10.1038/nbt.3682
+.. [#alpine] Love, Michael I., Hogenesch, John B., Irizarry, Rafael A. "Modeling of RNA-seq fragment sequence bias reduces systematic errors in transcript abundance estimation." Nature Biotechnology 34.12 (2016). doi: 10.1038/nbt.368.2..
+
+.. [#minimap2] Li, Heng. "Minimap2: pairwise alignment for nucleotide sequences." Bioinformatics 34.18 (2018): 3094-3100. 
+
+.. [#ksw2] `Global alignment and alignment extension <https://github.com/lh3/ksw2>`_. 
