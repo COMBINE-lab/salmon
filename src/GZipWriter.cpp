@@ -337,7 +337,10 @@ bool GZipWriter::writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
     std::string mapTypeStr = opts.alnMode ? "alignment" : "mapping";
     oa(cereal::make_nvp("mapping_type", mapTypeStr));
 
-    oa(cereal::make_nvp("num_targets", transcripts.size()));
+    auto numValidTargets = transcripts.size();
+    auto numDecoys = experiment.getNumDecoys();
+    oa(cereal::make_nvp("num_targets", numValidTargets));
+    oa(cereal::make_nvp("num_decoy_targets", numDecoys));
 
     // True if we dumped the equivalence classes, false otherwise
     oa(cereal::make_nvp("serialized_eq_classes", false));
@@ -677,7 +680,10 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
     std::string mapTypeStr = opts.alnMode ? "alignment" : "mapping";
     oa(cereal::make_nvp("mapping_type", mapTypeStr));
 
-    oa(cereal::make_nvp("num_targets", transcripts.size()));
+    auto numValidTargets = transcripts.size();
+    auto numDecoys = experiment.getNumDecoys();
+    oa(cereal::make_nvp("num_targets", numValidTargets));
+    oa(cereal::make_nvp("num_decoy_targets", numDecoys));
 
     auto& eqBuilder = const_cast<ExpT&>(experiment).equivalenceClassBuilder();
     auto num_eq_classes_opt = eqBuilder.numEqClasses();

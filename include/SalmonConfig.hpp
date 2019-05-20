@@ -29,8 +29,8 @@ constexpr char majorVersion[] = "0";
 constexpr char minorVersion[] = "13";
 constexpr char patchVersion[] = "2";
 constexpr char version[] = "0.13.2";
-constexpr uint32_t indexVersion = 2;
-constexpr char requiredQuasiIndexVersion[] = "q5";
+constexpr uint32_t indexVersion = 3;
+constexpr char requiredQuasiIndexVersion[] = "q6";
 } // namespace salmon
 
 #endif // SALMON_CONFIG_HPP

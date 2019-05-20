@@ -271,6 +271,7 @@ public:
   void loadTranscriptsFromQuasi(QuasiIndexT* idx_, const SalmonOpts& sopt) {
     size_t numRecords = idx_->txpNames.size();
     auto log = sopt.jointLog.get();
+    numDecoys_ = 0;
 
     log->info("Index contained {:n} targets", numRecords);
     // transcripts_.resize(numRecords);
@@ -291,6 +292,10 @@ public:
       // Set the transcript sequence
       txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i],
                               sopt.gcBiasCorrect, sopt.reduceGCMemory);
+      bool isDecoy = idx_->isDecoy(i);
+      txp.setDecoy(isDecoy);
+      if (isDecoy) { ++numDecoys_; }
+
       lengths.push_back(txp.RefLength);
       /*
       // Length classes taken from
@@ -645,6 +650,10 @@ public:
     return lengthQuantiles_;
   }
 
+  const uint64_t getNumDecoys() const {
+    return numDecoys_;
+  }
+
 private:
   void setTranscriptLengthClasses_(std::vector<uint32_t>& lengths,
                                    size_t nbins) {
@@ -758,6 +767,8 @@ private:
   // std::array<std::vector<double>, 2> expectedBias_;
   std::vector<double> expectedBias_;
   std::vector<double> conditionalMeans_;
+
+  uint64_t numDecoys_{0};
 };
 
 #endif // EXPERIMENT_HPP

@@ -456,6 +456,12 @@ public:
     return polyAPos_[r];
   }
 
+  void setDecoy(bool isDecoy) {
+    isDecoy_ = isDecoy;
+  }
+
+  bool isDecoy() const { return isDecoy_; }
+
   // Will *not* delete seq on destruction
   void setSequenceBorrowed(const char* seq, bool needGC = false,
                            bool reduceGCMemory = false) {
@@ -704,6 +710,7 @@ private:
   // pair of reads mapping to it.
   std::atomic<bool> hasAnchorFragment_{false};
   bool active_;
+  bool isDecoy_{false};
 
   bool reduceGCMemory_{false};
   double gcFracLen_{0.0};
