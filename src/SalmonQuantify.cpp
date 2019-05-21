@@ -1387,6 +1387,7 @@ void processReadsQuasi(
   mstats.numMappingsFiltered += numMappingsDropped;
   mstats.numFragmentsFiltered += numFragsDropped;
   mstats.numDovetails += hctr.numDovetails;
+  mstats.numDecoyFragments += numDecoyFrags;
   //salmonOpts.jointLog->info("Number of orphans rescued in this thread {}",
   //                          numOrphansRescued);
 
@@ -1797,6 +1798,7 @@ void processReadsQuasi(
   }
   mstats.numMappingsFiltered += numMappingsDropped;
   mstats.numFragmentsFiltered += numFragsDropped;
+  mstats.numDecoyFragments += numDecoyFrags;
 }
 
 /// DONE QUASI
@@ -2222,10 +2224,12 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
   if (salmonOpts.validateMappings) {
     salmonOpts.jointLog->info("Number of mappings discarded because of alignment score : {:n}", mstats.numMappingsFiltered.load());
     salmonOpts.jointLog->info("Number of fragments entirely discarded because of alignment score : {:n}", mstats.numFragmentsFiltered.load());
+    salmonOpts.jointLog->info("Number of fragments discarded because they are best-mapped to decoys : {:n}", mstats.numDecoyFragments.load());
   }
   if (!salmonOpts.allowDovetail) {
     salmonOpts.jointLog->info("Number of fragments discarded because they have only dovetail (discordant) mappings : {:n}", mstats.numDovetails.load());
   }
+
   // If we didn't achieve burnin, then at least compute effective
   // lengths and mention this to the user.
   if (totalAssignedFragments < salmonOpts.numBurninFrags) {
