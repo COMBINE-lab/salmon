@@ -1113,7 +1113,7 @@ void processReadsQuasi(
             }
 
             bestScore = (!isDecoy and (score > bestScore)) ? score : bestScore;
-            bestDecoyScore = (isDecoy and (score > bestScore)) ? score : bestScore;
+            bestDecoyScore = (isDecoy and (score > bestDecoyScore)) ? score : bestDecoyScore;
             scores[idx] = score;
             decoyVec[idx] = isDecoy;
             h.score(score);
@@ -1621,7 +1621,7 @@ void processReadsQuasi(
             }
 
             bestScore = (!isDecoy and (score > bestScore)) ? score : bestScore;
-            bestDecoyScore = (isDecoy and (score > bestScore)) ? score : bestScore;
+            bestDecoyScore = (isDecoy and (score > bestDecoyScore)) ? score : bestDecoyScore;
             scores[idx] = score;
             decoyVec[idx] = isDecoy;
             h.score(score);
