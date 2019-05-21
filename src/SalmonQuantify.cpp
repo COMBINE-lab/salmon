@@ -862,6 +862,7 @@ void processReadsQuasi(
 
   size_t numMappingsDropped{0};
   size_t numFragsDropped{0};
+  size_t numDecoyFrags{0};
 
   AlnCacheMap alnCacheLeft; alnCacheLeft.reserve(32);
   AlnCacheMap alnCacheRight; alnCacheRight.reserve(32);
@@ -1121,7 +1122,8 @@ void processReadsQuasi(
           }
 
           uint32_t ctr{0};
-          if (bestScore > std::numeric_limits<int32_t>::min() and bestScore >= bestDecoyScore) {
+          bool bestHitDecoy = (bestScore < bestDecoyScore);
+          if (bestScore > std::numeric_limits<int32_t>::min() and !bestHitDecoy) {
             // Note --- with soft filtering, only those hits that are given the minimum possible
             // score are filtered out.
             jointHits.erase(
@@ -1146,6 +1148,7 @@ void processReadsQuasi(
                             qa.score( (hardFilter ? -1.0 : std::exp(-v)) );
                           });
           } else {
+            numDecoyFrags += bestHitDecoy ? 1 : 0;
             ++numFragsDropped;
             jointHitGroup.clearAlignments();
           }
@@ -1528,6 +1531,7 @@ void processReadsQuasi(
   }
   size_t numMappingsDropped{0};
   size_t numFragsDropped{0};
+  size_t numDecoyFrags{0};
 
   //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
   AlnCacheMap alnCache; alnCache.reserve(16);
@@ -1629,7 +1633,8 @@ void processReadsQuasi(
           }
 
           uint32_t ctr{0};
-          if (bestScore > std::numeric_limits<int32_t>::min() and bestScore >= bestDecoyScore) {
+          bool bestHitDecoy = (bestScore < bestDecoyScore);
+          if (bestScore > std::numeric_limits<int32_t>::min() and !bestHitDecoy) {
             // Note --- with soft filtering, only those hits that are given the minimum possible
             // score are filtered out.
             jointHits.erase(
@@ -1654,6 +1659,7 @@ void processReadsQuasi(
                             qa.score( (hardFilter ? -1.0 : std::exp(-v)) );
                           });
           } else {
+            numDecoyFrags += bestHitDecoy ? 1 : 0;
             ++numFragsDropped;
             jointHitGroup.clearAlignments();
           }
