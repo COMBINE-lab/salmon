@@ -41,6 +41,9 @@ The **alignment**-based mode of Salmon does not require indexing.  Rather, you c
 simply provide Salmon with a FASTA file of the transcripts and a SAM/BAM file
 containing the alignments you wish to use for quantification.
 
+Salmon is, and will continue to be, `freely and actively supported on a best-effort basis <https://oceangenomics.com/about/#open>`_.
+If you are in need of industrial-grade technical support, please consider the options at `oceangenomics.com/support <https://oceangenomics.com/support>`_.
+
 Using Salmon
 ------------
 
