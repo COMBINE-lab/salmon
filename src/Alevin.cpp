@@ -524,21 +524,21 @@ void indexBarcodes(AlevinOpts<ProtocolT>& aopt,
     }
   }//end-for
 
-  if(aopt.dumpBarcodeMap){
-    auto dumpMapFile = aopt.outputDirectory / "barcodeSoftMaps.txt";
-    std::ofstream mapFile;
-    mapFile.open(dumpMapFile.string());
+  //if(aopt.dumpBarcodeMap){
+  //  auto dumpMapFile = aopt.outputDirectory / "barcodeSoftMaps.txt";
+  //  std::ofstream mapFile;
+  //  mapFile.open(dumpMapFile.string());
 
-    for(const auto& softMapIt: barcodeSoftMap){
-      auto trBcVec = softMapIt.second;
-      mapFile << softMapIt.first << "\t" << trBcVec.size();
-      for (auto trBc: trBcVec){
-        mapFile << "\t" << trBc.first << "\t" << trBc.second;
-      }
-      mapFile << "\n";
-    }
-    mapFile.close();
-  }
+  //  for(const auto& softMapIt: barcodeSoftMap){
+  //    auto trBcVec = softMapIt.second;
+  //    mapFile << softMapIt.first << "\t" << trBcVec.size();
+  //    for (auto trBc: trBcVec){
+  //      mapFile << "\t" << trBc.first << "\t" << trBc.second;
+  //    }
+  //    mapFile << "\n";
+  //  }
+  //  mapFile.close();
+  //}
 }
 
 template <typename ProtocolT>
@@ -754,8 +754,6 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
     aopt.totalCBs = freqCounter.size();
     aopt.totalUsedCBs = barcodeSoftMap.size();
 
-    uint32_t mmBcCounts{0}, mmBcReadCount{0};
-    std::unordered_set<std::string> softMapWhiteBcSet;
     for(auto& softMapIt: barcodeSoftMap ){
       auto indexIt = freqCounter.find(softMapIt.first);
       bool indexOk = indexIt != freqCounter.end();
@@ -766,29 +764,15 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
         exit(1);
       }
 
-      uint32_t numReads;
-      numReads = *indexIt;
-
+      // NOTE: Need more clever way for ambiguity resolution.
       std::vector<std::pair<std::string, double>>& trBcVec = softMapIt.second;
-      if (not aopt.noSoftMap and trBcVec.size() > 1){
-        mmBcCounts += 1;
-
-        for(std::pair<std::string, double> whtBc : trBcVec){
-          softMapWhiteBcSet.insert(whtBc.first);
-        }
-        mmBcReadCount += numReads;
+      while(trBcVec.size() != 1){
+        trBcVec.pop_back();
       }
-
-      // NOTE: Have to update the ambiguity resolution
-      if (aopt.noSoftMap){
-        while(trBcVec.size() != 1){
-          trBcVec.pop_back();
-        }
-        trBcVec.front().second = 1.0;
-      }
+      trBcVec.front().second = 1.0;
 
       std::string trBc = trBcVec.front().first;
-      freqCounter[trBc] += numReads;
+      freqCounter[trBc] += *indexIt;
       freqCounter.erase(softMapIt.first);
     }
 
@@ -805,14 +789,6 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
         }
       }
       freqFile.close();
-    }
-
-    if (not aopt.noSoftMap){
-      aopt.jointLog->info("Total Ambiguous Barcodes(soft-assigned):  {}", mmBcCounts);
-      aopt.jointLog->info("Total CB-level Soft-Assignable Reads:  {}", mmBcReadCount);
-      aopt.jointLog->info("Total whitelist-cells ambiguous reads can be assigned to: {}",
-                          softMapWhiteBcSet.size());
-      aopt.jointLog->info("Expected gain/cell using Alevin: {}", mmBcReadCount/softMapWhiteBcSet.size());
     }
 
     if (aopt.dumpfq){

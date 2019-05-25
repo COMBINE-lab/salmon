@@ -25,8 +25,6 @@ struct AlevinOpts {
   std::string iupac;
   //protocol to use for single cell
   protocolT protocol;
-  //Dump soft-mapping of corrected barcodes
-  bool dumpBarcodeMap;
   //dump barcodes fq files
   bool dumpfq;
   //dump CB features for whitelisting
@@ -69,8 +67,6 @@ struct AlevinOpts {
   bool eqClassLevel;
   // perform txp level analysis instead of gene level
   bool txpLevel;
-  //do hard-assignment of error bcs
-  bool noSoftMap;
   // initialize EM with uniform prior
   bool initUniform;
   //number of cells

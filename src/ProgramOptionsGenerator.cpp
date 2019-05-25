@@ -263,9 +263,6 @@ namespace salmon {
        "dumpBarcodeEq", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeEq),
        "Dump JointEqClas with umi-barcode count.")
       (
-       "dumpBarcodeMap", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeMap),
-       "Dump BarcodeMap for downstream analysis.")
-      (
        "iupac,u",po::value<std::string>(),
        "<Deprecated>iupac code for cell-level barcodes.")
       (
@@ -290,9 +287,6 @@ namespace salmon {
       (
        "trimRight",po::value<uint32_t>()->default_value(alevin::defaults::trimRight),
        "The number of bases to trim off the 5' (right) end of the read seequence.")
-      (
-       "noSoftMap", po::bool_switch()->default_value(alevin::defaults::noSoftMap),
-       "Don't use soft-assignment for quant instead do hard-assignment.")
       (
        "naiveEqclass", po::bool_switch()->default_value(alevin::defaults::naiveEqclass),
        "Run naive per equivalence class deduplication, generating only total number of UMIs")
