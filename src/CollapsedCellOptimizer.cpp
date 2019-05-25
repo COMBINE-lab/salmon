@@ -594,68 +594,66 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   std::vector<std::vector<double>> countMatrix;
 
   bool hasWhitelist = boost::filesystem::exists(aopt.whitelistFile);
-  if(not aopt.nobarcode and numLowConfidentBarcode>0){
-    if(not hasWhitelist  or aopt.dumpCsvCounts){
-      aopt.jointLog->info("Clearing EqMap; Might take some time.");
-      fullEqMap.clear();
+  if(numLowConfidentBarcode>0 and ( not hasWhitelist  or aopt.dumpCsvCounts )){
+    aopt.jointLog->info("Clearing EqMap; Might take some time.");
+    fullEqMap.clear();
 
-      aopt.jointLog->info("Starting Import of the gene count matrix of size {}x{}.",
-                          trueBarcodes.size(), numGenes);
-      countMatrix.resize(trueBarcodes.size(),
-                         std::vector<double> (numGenes, 0.0));
+    aopt.jointLog->info("Starting Import of the gene count matrix of size {}x{}.",
+                        trueBarcodes.size(), numGenes);
+    countMatrix.resize(trueBarcodes.size(),
+                       std::vector<double> (numGenes, 0.0));
 
-      aopt.jointLog->info("Done initializing the empty matrix.");
-      aopt.jointLog->flush();
-      auto zerod_cells = alevin::whitelist::populate_count_matrix(aopt.outputDirectory,
-                                                                  aopt.debug,
-                                                                  numGenes,
-                                                                  countMatrix);
-      if (zerod_cells > 0) {
-        aopt.jointLog->warn("Found {} cells with no reads,"
-                            " ignoring due to debug mode.", zerod_cells);
-      }
-
-      aopt.jointLog->info("Done Importing gene count matrix for dimension {}x{}",
-                          numCells, numGenes);
-      aopt.jointLog->flush();
-
-      if (aopt.dumpCsvCounts){
-        aopt.jointLog->info("Starting dumping cell v gene counts in csv format");
-        std::ofstream qFile;
-        boost::filesystem::path qFilePath = aopt.outputDirectory / "quants_mat.csv";
-        qFile.open(qFilePath.string());
-        for (auto& row : countMatrix) {
-          for (auto cell : row) {
-            qFile << cell << ',';
-          }
-          qFile << "\n";
-        }
-        qFile.close();
-
-        aopt.jointLog->info("Finished dumping csv counts");
-      }
-
-      if( not hasWhitelist ){
-        aopt.jointLog->info("Starting white listing");
-        bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
-                                                                          umiCount,
-                                                                          countMatrix,
-                                                                          trueBarcodes,
-                                                                          freqCounter,
-                                                                          geneIdxMap,
-                                                                          numLowConfidentBarcode);
-        if (!whitelistingSuccess) {
-          aopt.jointLog->error(
-                               "The white listing algorithm failed. This is likely the result of "
-                               "bad input (or a bug). If you cannot track down the cause, please "
-                               "report this issue on GitHub.");
-          aopt.jointLog->flush();
-          return false;
-        }
-        aopt.jointLog->info("Finished white listing");
-      }
+    aopt.jointLog->info("Done initializing the empty matrix.");
+    aopt.jointLog->flush();
+    auto zerod_cells = alevin::whitelist::populate_count_matrix(aopt.outputDirectory,
+                                                                aopt.debug,
+                                                                numGenes,
+                                                                countMatrix);
+    if (zerod_cells > 0) {
+      aopt.jointLog->warn("Found {} cells with no reads,"
+                          " ignoring due to debug mode.", zerod_cells);
     }
-  } // end-if no barcode
+
+    aopt.jointLog->info("Done Importing gene count matrix for dimension {}x{}",
+                        numCells, numGenes);
+    aopt.jointLog->flush();
+
+    if (aopt.dumpCsvCounts){
+      aopt.jointLog->info("Starting dumping cell v gene counts in csv format");
+      std::ofstream qFile;
+      boost::filesystem::path qFilePath = aopt.outputDirectory / "quants_mat.csv";
+      qFile.open(qFilePath.string());
+      for (auto& row : countMatrix) {
+        for (auto cell : row) {
+          qFile << cell << ',';
+        }
+        qFile << "\n";
+      }
+      qFile.close();
+
+      aopt.jointLog->info("Finished dumping csv counts");
+    }
+
+    if( not hasWhitelist ){
+      aopt.jointLog->info("Starting white listing");
+      bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
+                                                                        umiCount,
+                                                                        countMatrix,
+                                                                        trueBarcodes,
+                                                                        freqCounter,
+                                                                        geneIdxMap,
+                                                                        numLowConfidentBarcode);
+      if (!whitelistingSuccess) {
+        aopt.jointLog->error(
+                             "The white listing algorithm failed. This is likely the result of "
+                             "bad input (or a bug). If you cannot track down the cause, please "
+                             "report this issue on GitHub.");
+        aopt.jointLog->flush();
+        return false;
+      }
+      aopt.jointLog->info("Finished white listing");
+    }
+  } //end-if whitelisting
 
   return true;
 } //end-optimize

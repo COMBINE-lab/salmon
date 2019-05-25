@@ -656,160 +656,155 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
                      TrueBcsT& trueBarcodes,
                      CFreqMapT& freqCounter,
                      size_t& numLowConfidentBarcode){
-  if (not aopt.nobarcode){
-    // Barcode processing always uses 2 threads now,
-    // one parsing thread and one consumer thread.
-    std::unique_ptr<single_parser> singleParserPtr{nullptr};
-    constexpr uint32_t miniBatchSize{5000};
-    uint32_t numParsingThreads{aopt.numParsingThreads},
-      numThreads{aopt.numConsumerThreads};
-    std::vector<std::thread> threads;
-    std::mutex ioMutex;
-    std::atomic<uint64_t> totNumBarcodes{0}, usedNumBarcodes{0};
+  // Barcode processing always uses 2 threads now,
+  // one parsing thread and one consumer thread.
+  std::unique_ptr<single_parser> singleParserPtr{nullptr};
+  constexpr uint32_t miniBatchSize{5000};
+  uint32_t numParsingThreads{aopt.numParsingThreads}, numThreads{aopt.numConsumerThreads};
+  std::vector<std::thread> threads;
+  std::mutex ioMutex;
+  std::atomic<uint64_t> totNumBarcodes{0}, usedNumBarcodes{0};
 
-    if (aopt.numThreads <= 3) {
-      numThreads = 1;
-    }
+  if (aopt.numThreads <= 3) {
+    numThreads = 1;
+  }
 
-    //Populating Barcode Density Vector
-    singleParserPtr.reset(new single_parser(barcodeFiles, numThreads,
-                                            numParsingThreads, miniBatchSize));
+  //Populating Barcode Density Vector
+  singleParserPtr.reset(new single_parser(barcodeFiles, numThreads,
+                                          numParsingThreads, miniBatchSize));
 
-    singleParserPtr->start();
-    densityCalculator(singleParserPtr.get(), aopt,
-                      freqCounter, usedNumBarcodes, totNumBarcodes);
-    singleParserPtr->stop();
+  singleParserPtr->start();
+  densityCalculator(singleParserPtr.get(), aopt,
+                    freqCounter, usedNumBarcodes, totNumBarcodes);
+  singleParserPtr->stop();
 
-    fmt::print(stderr, "\n\n");
-    aopt.jointLog->info("Done barcode density calculation.");
-    aopt.jointLog->info("# Barcodes Used: {}{}{} / {}{}{}.",
-                        green, usedNumBarcodes, RESET_COLOR,
-                        red,totNumBarcodes, RESET_COLOR);
+  fmt::print(stderr, "\n\n");
+  aopt.jointLog->info("Done barcode density calculation.");
+  aopt.jointLog->info("# Barcodes Used: {}{}{} / {}{}{}.",
+                      green, usedNumBarcodes, RESET_COLOR,
+                      red,totNumBarcodes, RESET_COLOR);
 
-    aopt.totalReads = totNumBarcodes;
-    aopt.totalUsedReads = usedNumBarcodes;
+  aopt.totalReads = totNumBarcodes;
+  aopt.totalUsedReads = usedNumBarcodes;
 
-    //import whitelist barcodes if present
-    if(boost::filesystem::exists(aopt.whitelistFile)){
-      std::ifstream whiteFile(aopt.whitelistFile.string());
-      std::string whtBc;
-      if(whiteFile.is_open()) {
-        while(getline(whiteFile, whtBc)) {
-          trueBarcodes.insert(whtBc);
-        }
-        whiteFile.close();
+  //import whitelist barcodes if present
+  if(boost::filesystem::exists(aopt.whitelistFile)){
+    std::ifstream whiteFile(aopt.whitelistFile.string());
+    std::string whtBc;
+    if(whiteFile.is_open()) {
+      while(getline(whiteFile, whtBc)) {
+        trueBarcodes.insert(whtBc);
       }
-      aopt.jointLog->info("Done importing white-list Barcodes");
-      if (aopt.debug) {
-        std::vector<std::string> skippedTrueBarcodes ;
-        for ( auto trueBarcode: trueBarcodes ) {
-          auto it = freqCounter.find(trueBarcode);
-          if (it == freqCounter.end() ) {
-            skippedTrueBarcodes.emplace_back(trueBarcode);
-          }
-        }
-
-        if ( skippedTrueBarcodes.size() > 0 ) {
-          aopt.jointLog->warn("Skipping {} Barcodes with 0 reads"
-                              "\n Assuming this is the required behavior.",
-                              skippedTrueBarcodes.size());
-          for (auto trueBarcode: skippedTrueBarcodes) {
-            trueBarcodes.erase(trueBarcode);
-          }
+      whiteFile.close();
+    }
+    aopt.jointLog->info("Done importing white-list Barcodes");
+    if (aopt.debug) {
+      std::vector<std::string> skippedTrueBarcodes ;
+      for ( auto trueBarcode: trueBarcodes ) {
+        auto it = freqCounter.find(trueBarcode);
+        if (it == freqCounter.end() ) {
+          skippedTrueBarcodes.emplace_back(trueBarcode);
         }
       }
 
-      aopt.jointLog->info("Total {} white-listed Barcodes", trueBarcodes.size());
-    }
-    else {
-      std::vector<uint32_t> collapsedfrequency;
-      std::unordered_map<uint32_t, nonstd::basic_string_view<char>> collapMap;
-      size_t ind{0};
-      for(auto fqIt = freqCounter.begin(); fqIt != freqCounter.end(); ++fqIt){
-        collapsedfrequency.push_back(fqIt.value());
-        collapMap[ind] = fqIt.key_sv();
-        ind += 1;
-      }
-
-      if (aopt.keepCBFraction > 0.0) {
-        aopt.forceCells = std::min(static_cast<int>(aopt.keepCBFraction * freqCounter.size()),
-                                   737000);
-      }
-
-      //Calculate the knee using the frequency distribution
-      //and get the true set of barcodes
-      sampleTrueBarcodes(collapsedfrequency, trueBarcodes,
-                         numLowConfidentBarcode, collapMap, aopt);
-
-      aopt.jointLog->info("Done True Barcode Sampling");
-      aopt.intelligentCutoff = trueBarcodes.size();
-    }
-
-    indexBarcodes(aopt, freqCounter, trueBarcodes, barcodeSoftMap);
-    aopt.jointLog->info("Done indexing Barcodes");
-
-    aopt.jointLog->info("Total Unique barcodes found: {}", freqCounter.size());
-    aopt.jointLog->info("Used Barcodes except Whitelist: {}", barcodeSoftMap.size());
-
-    aopt.totalCBs = freqCounter.size();
-    aopt.totalUsedCBs = barcodeSoftMap.size();
-
-    for(auto& softMapIt: barcodeSoftMap ){
-      auto indexIt = freqCounter.find(softMapIt.first);
-      bool indexOk = indexIt != freqCounter.end();
-      if ( not indexOk){
-        aopt.jointLog->error("Error: index not find in freq Counter\n"
-                             "Please Report the issue on github");
-        aopt.jointLog->flush();
-        exit(1);
-      }
-
-      // NOTE: Need more clever way for ambiguity resolution.
-      std::vector<std::pair<std::string, double>>& trBcVec = softMapIt.second;
-      while(trBcVec.size() != 1){
-        trBcVec.pop_back();
-      }
-      trBcVec.front().second = 1.0;
-
-      std::string trBc = trBcVec.front().first;
-      freqCounter[trBc] += *indexIt;
-      freqCounter.erase(softMapIt.first);
-    }
-
-    if(aopt.dumpfeatures){
-      auto frequencyFileName = aopt.outputDirectory / "filtered_cb_frequency.txt";
-      std::ofstream freqFile;
-      freqFile.open(frequencyFileName.string());
-      for(auto it = freqCounter.begin(); it != freqCounter.end(); ++it) {
-        auto trBc = it.key();
-        auto trIt = trueBarcodes.find(trBc);
-        if ( trIt != trueBarcodes.end() ) {
-          freqFile << trBc << "\t"
-                   << it.value() << "\n";
+      if ( skippedTrueBarcodes.size() > 0 ) {
+        aopt.jointLog->warn("Skipping {} Barcodes with 0 reads"
+                            "\n Assuming this is the required behavior.",
+                            skippedTrueBarcodes.size());
+        for (auto trueBarcode: skippedTrueBarcodes) {
+          trueBarcodes.erase(trueBarcode);
         }
       }
-      freqFile.close();
     }
 
-    if (aopt.dumpfq){
-      std::unique_ptr<paired_parser_qual> pairedParserQualPtr{nullptr};
-      pairedParserQualPtr.reset(new paired_parser_qual(barcodeFiles, readFiles,
-                                                       1, 1, miniBatchSize));
-      pairedParserQualPtr->start();
-      bool isDumpok = writeFastq(aopt, pairedParserQualPtr.get(),
-                                 barcodeSoftMap, ioMutex, trueBarcodes);
-      pairedParserQualPtr->stop();
-      if(!isDumpok){
-        aopt.jointLog->error("Not able to dump fastq."
-                             "Something went wrong.\n"
-                             "Please report this issue to github");
-        aopt.jointLog->flush();
-        std::exit(1);
-      }
-      aopt.jointLog->info("Done dumping fastq File");
+    aopt.jointLog->info("Total {} white-listed Barcodes", trueBarcodes.size());
+  }
+  else {
+    std::vector<uint32_t> collapsedfrequency;
+    std::unordered_map<uint32_t, nonstd::basic_string_view<char>> collapMap;
+    size_t ind{0};
+    for(auto fqIt = freqCounter.begin(); fqIt != freqCounter.end(); ++fqIt){
+      collapsedfrequency.push_back(fqIt.value());
+      collapMap[ind] = fqIt.key_sv();
+      ind += 1;
     }
-  } else{
-    trueBarcodes.insert("AAA");
+
+    if (aopt.keepCBFraction > 0.0) {
+      aopt.forceCells = std::min(static_cast<int>(aopt.keepCBFraction * freqCounter.size()),
+                                 737000);
+    }
+
+    //Calculate the knee using the frequency distribution
+    //and get the true set of barcodes
+    sampleTrueBarcodes(collapsedfrequency, trueBarcodes,
+                       numLowConfidentBarcode, collapMap, aopt);
+
+    aopt.jointLog->info("Done True Barcode Sampling");
+    aopt.intelligentCutoff = trueBarcodes.size();
+  }
+
+  indexBarcodes(aopt, freqCounter, trueBarcodes, barcodeSoftMap);
+  aopt.jointLog->info("Done indexing Barcodes");
+
+  aopt.jointLog->info("Total Unique barcodes found: {}", freqCounter.size());
+  aopt.jointLog->info("Used Barcodes except Whitelist: {}", barcodeSoftMap.size());
+
+  aopt.totalCBs = freqCounter.size();
+  aopt.totalUsedCBs = barcodeSoftMap.size();
+
+  for(auto& softMapIt: barcodeSoftMap ){
+    auto indexIt = freqCounter.find(softMapIt.first);
+    bool indexOk = indexIt != freqCounter.end();
+    if ( not indexOk){
+      aopt.jointLog->error("Error: index not find in freq Counter\n"
+                           "Please Report the issue on github");
+      aopt.jointLog->flush();
+      exit(1);
+    }
+
+    // NOTE: Need more clever way for ambiguity resolution.
+    std::vector<std::pair<std::string, double>>& trBcVec = softMapIt.second;
+    while(trBcVec.size() != 1){
+      trBcVec.pop_back();
+    }
+    trBcVec.front().second = 1.0;
+
+    std::string trBc = trBcVec.front().first;
+    freqCounter[trBc] += *indexIt;
+    freqCounter.erase(softMapIt.first);
+  }
+
+  if(aopt.dumpfeatures){
+    auto frequencyFileName = aopt.outputDirectory / "filtered_cb_frequency.txt";
+    std::ofstream freqFile;
+    freqFile.open(frequencyFileName.string());
+    for(auto it = freqCounter.begin(); it != freqCounter.end(); ++it) {
+      auto trBc = it.key();
+      auto trIt = trueBarcodes.find(trBc);
+      if ( trIt != trueBarcodes.end() ) {
+        freqFile << trBc << "\t"
+                 << it.value() << "\n";
+      }
+    }
+    freqFile.close();
+  }
+
+  if (aopt.dumpfq){
+    std::unique_ptr<paired_parser_qual> pairedParserQualPtr{nullptr};
+    pairedParserQualPtr.reset(new paired_parser_qual(barcodeFiles, readFiles,
+                                                     1, 1, miniBatchSize));
+    pairedParserQualPtr->start();
+    bool isDumpok = writeFastq(aopt, pairedParserQualPtr.get(),
+                               barcodeSoftMap, ioMutex, trueBarcodes);
+    pairedParserQualPtr->stop();
+    if(!isDumpok){
+      aopt.jointLog->error("Not able to dump fastq."
+                           "Something went wrong.\n"
+                           "Please report this issue to github");
+      aopt.jointLog->flush();
+      std::exit(1);
+    }
+    aopt.jointLog->info("Done dumping fastq File");
   }
 }
 

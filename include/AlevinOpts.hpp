@@ -29,8 +29,6 @@ struct AlevinOpts {
   bool dumpfq;
   //dump CB features for whitelisting
   bool dumpfeatures;
-  //flag for using barcoding or just single cell dedup
-  bool nobarcode;
   //eqclass level barcode count
   bool dumpBarcodeEq;
   //dump cellvtxp matrix in csv
