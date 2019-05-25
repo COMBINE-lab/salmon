@@ -539,50 +539,6 @@ void indexBarcodes(AlevinOpts<ProtocolT>& aopt,
     }
     mapFile.close();
   }
-
-  if(aopt.dumpUmiToolsMap){
-    std::random_device rd;
-    std::mt19937 mt(rd());
-    std::uniform_real_distribution<double> dist(0.0, 1.0);
-    std::unordered_map<std::string, std::vector<std::string>> umitoolsMap;
-
-    for(auto trBc: trueBarcodes){
-      umitoolsMap[trBc] = std::vector<std::string>();
-    }
-
-    auto umitoolsMapFile = aopt.outputDirectory / "umitoolsMap.txt";
-    std::ofstream utFile;
-    utFile.open(umitoolsMapFile.string());
-    for(const auto& softMapIt: barcodeSoftMap){
-      std::string trBc, bc{softMapIt.first};
-      auto trBcVec = softMapIt.second;
-
-      if(trBcVec.size() == 1){
-        trBc = trBcVec.front().first;
-      }
-      else{
-        double rn = dist(mt);
-        for(auto dp: trBcVec){
-          if(rn < dp.second){
-            trBc = dp.first;
-            break;
-          }
-        }
-      }
-
-      umitoolsMap[trBc].push_back(bc);
-    }
-
-    for (auto elem: umitoolsMap){
-      auto trBc = elem.first;
-      utFile << trBc << "\t";
-      for (auto bc : elem.second){
-        utFile << bc << ",";
-      }
-      utFile << "\b\n";
-    }
-    utFile.close();
-  }
 }
 
 template <typename ProtocolT>

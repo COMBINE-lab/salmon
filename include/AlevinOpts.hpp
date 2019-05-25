@@ -27,8 +27,6 @@ struct AlevinOpts {
   protocolT protocol;
   //Dump soft-mapping of corrected barcodes
   bool dumpBarcodeMap;
-  //umi_tools supported whitelist
-  bool dumpUmiToolsMap;
   //dump barcodes fq files
   bool dumpfq;
   //dump CB features for whitelisting

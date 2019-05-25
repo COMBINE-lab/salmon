@@ -263,9 +263,6 @@ namespace salmon {
        "dumpBarcodeEq", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeEq),
        "Dump JointEqClas with umi-barcode count.")
       (
-       "dumpUmitoolsMap", po::bool_switch()->default_value(alevin::defaults::dumpUMIToolsMap),
-       "Dump umi_tools readable whitelist map for downstream analysis.")
-      (
        "dumpBarcodeMap", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeMap),
        "Dump BarcodeMap for downstream analysis.")
       (
