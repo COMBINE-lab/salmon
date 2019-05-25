@@ -682,7 +682,7 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
 
     auto numValidTargets = transcripts.size();
     auto numDecoys = experiment.getNumDecoys();
-    oa(cereal::make_nvp("num_targets", numValidTargets));
+    oa(cereal::make_nvp("num_valid_targets", numValidTargets));
     oa(cereal::make_nvp("num_decoy_targets", numDecoys));
 
     auto& eqBuilder = const_cast<ExpT&>(experiment).equivalenceClassBuilder();

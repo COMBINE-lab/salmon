@@ -1852,7 +1852,6 @@ void processReadLibrary(
 
   /** sequence-specific and GC-fragment bias vectors --- each thread gets it's
    * own **/
-  size_t numTxp = readExp.transcripts().size();
   std::vector<BiasParams> observedBiasParams(
       numThreads, BiasParams(salmonOpts.numConditionalGCBins,
                              salmonOpts.numFragGCBins, false));
@@ -1952,6 +1951,10 @@ void processReadLibrary(
   for (auto& t : threads) {
     t.join();
   }
+
+  // At this point, if we were using decoy transcripts, we don't need them anymore and can get
+  // rid of them.
+  readExp.dropDecoyTranscripts();
 
   // If we don't have a sufficient number of assigned fragments, then
   // complain here!

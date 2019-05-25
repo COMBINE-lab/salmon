@@ -280,6 +280,15 @@ public:
     double alpha = 0.005;
     for (auto i : boost::irange(size_t(0), numRecords)) {
       uint32_t id = i;
+      bool isDecoy = idx_->isDecoy(i);
+
+      if (isDecoy and !sopt.validateMappings) {
+        log->warn("The index contains decoy sequence, but these should not be used in the "
+                  "absence of selective-alignment (--validateMappings, --mimicBT2 or --mimicBT2Strict). "
+                  "Skipping loading of decoys.");
+        break;
+      }
+
       const char* name = idx_->txpNames[i].c_str();
       uint32_t len = idx_->txpLens[i];
       // copy over the length, then we're done.
@@ -288,11 +297,9 @@ public:
       txp.setCompleteLength(idx_->txpCompleteLens[i]);
       // The transcript sequence
       // auto txpSeq = idx_->seq.substr(idx_->txpOffsets[i], len);
-
       // Set the transcript sequence
       txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i],
                               sopt.gcBiasCorrect, sopt.reduceGCMemory);
-      bool isDecoy = idx_->isDecoy(i);
       txp.setDecoy(isDecoy);
       if (isDecoy) { ++numDecoys_; }
 
@@ -323,6 +330,13 @@ public:
     }
     // ====== Done loading the transcripts from file
     setTranscriptLengthClasses_(lengths, posBiasFW_.size());
+  }
+
+  void dropDecoyTranscripts() {
+    if (numDecoys_ > 0) {
+      size_t numValidTargets = transcripts_.size() - numDecoys_;
+      transcripts_.resize(numValidTargets);
+    }
   }
 
   template <typename CallbackT>
