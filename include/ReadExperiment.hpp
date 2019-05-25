@@ -283,7 +283,7 @@ public:
       bool isDecoy = idx_->isDecoy(i);
 
       if (isDecoy and !sopt.validateMappings) {
-        log->warn("The index contains decoy sequence, but these should not be used in the "
+        log->warn("The index contains decoy targets, but these should not be used in the "
                   "absence of selective-alignment (--validateMappings, --mimicBT2 or --mimicBT2Strict). "
                   "Skipping loading of decoys.");
         break;
