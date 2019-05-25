@@ -1218,16 +1218,16 @@ void alevinOptimize( std::vector<std::string>& trueBarcodesVec,
     }
   }
 
-  if(aopt.dumpfeatures){
-    auto mapCountFileName = aopt.outputDirectory / "MappedUmi.txt";
-    std::ofstream mFile;
-    mFile.open(mapCountFileName.string());
+  //if(aopt.dumpfeatures){
+  //  auto mapCountFileName = aopt.outputDirectory / "MappedUmi.txt";
+  //  std::ofstream mFile;
+  //  mFile.open(mapCountFileName.string());
 
-    for(size_t i=0; i<umiCount.size(); i++){
-      mFile<<trueBarcodesVec[i]<< "\t"<<umiCount[i]<<"\n";
-    }
-    mFile.close();
-  }
+  //  for(size_t i=0; i<umiCount.size(); i++){
+  //    mFile<<trueBarcodesVec[i]<< "\t"<<umiCount[i]<<"\n";
+  //  }
+  //  mFile.close();
+  //}
   ////////////////////////////////////////////
   // deduplication starts from here
   ////////////////////////////////////////////

@@ -435,16 +435,6 @@ namespace alevin {
         std::ofstream featureStream;
         auto featureFileName = aopt.outputDirectory / "featureDump.txt";
         featureStream.open(featureFileName.string());
-        /*for (size_t i=0; i<numTrueCells; i++){
-          whitelistStream1 << trueBarcodes[i] << "\n";
-          }*/
-        /*for (size_t i=0; i<geneCountsMatrix.size(); i++){
-          whitelistStream1<< trueBarcodes[i] << "\t";
-          for ( auto cell: geneCountsMatrix[i] ){
-          whitelistStream1 << cell << "\t";
-          }
-          whitelistStream1 << "\n";
-          }*/
         for(size_t i=0; i<featureCountsMatrix.size(); i++){
           featureStream << trueBarcodes[i];
           for(size_t j=0; j<numFeatures; j++) {

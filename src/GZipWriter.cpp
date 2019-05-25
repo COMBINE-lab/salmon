@@ -44,7 +44,10 @@ GZipWriter::~GZipWriter() {
     fullBootstrapMatrixStream_->reset();
   }
   if (bcBootNameStream_) {
-    bcNameStream_.reset();
+    bcBootNameStream_.reset();
+  }
+  if (bcFeaturesStream_) {
+    bcFeaturesStream_.reset();
   }
   if (bcNameStream_) {
     bcNameStream_.reset();
@@ -78,6 +81,9 @@ void GZipWriter::close_all_streams(){
   }
   if (bcBootNameStream_) {
     bcBootNameStream_->close();
+  }
+  if (bcFeaturesStream_) {
+    bcFeaturesStream_->close();
   }
   if (bcNameStream_) {
     bcNameStream_->close();
@@ -925,6 +931,8 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
 }
 
 bool GZipWriter::writeAbundances(std::string& bcName,
+                                 std::string& features,
+                                 uint8_t featureCode,
                                  std::vector<double>& alphas,
                                  std::vector<uint8_t>& tiers){
 #if defined __APPLE__
@@ -951,11 +959,30 @@ bool GZipWriter::writeAbundances(std::string& bcName,
     auto bcNameFilename = path_ / "alevin" / "quants_mat_rows.txt";
     bcNameStream_.reset(new std::ofstream);
     bcNameStream_->open(bcNameFilename.string());
+
+    auto bcFeaturesFilename = path_ / "alevin" / "featureDump.txt";
+    bcFeaturesStream_.reset(new std::ofstream);
+    bcFeaturesStream_->open(bcFeaturesFilename.string());
+
+    std::string header = "CB\tCorrectedReads\tMappedReads\tMappingRate\tDedupRate\tMeanByMax\tNumGenesOverMean";
+    if (featureCode == 2) {
+      header + ="\tmRnaFraction\trRnaFraction";
+    } else if (featureCode == 3) {
+      header += "\tmRnaFraction";
+    } else if (featureCode == 4) {
+      header += "\trRnaFraction";
+    } else {
+      std::cerr<< "Wrong Feature Code: " << featureCode << std::flush;
+      exit(1);
+    }
+    header += "\n";
+    bcFeaturesStream_->write(header.c_str(), header.size());
   }
 
   boost::iostreams::filtering_ostream& countfile = *countMatrixStream_;
   boost::iostreams::filtering_ostream& tierfile = *tierMatrixStream_;
   std::ofstream& namefile = *bcNameStream_;
+  std::ofstream& featuresfile = *bcFeaturesStream_;
 
   size_t num = alphas.size();
   size_t elSize = sizeof(typename std::vector<double>::value_type);
@@ -967,6 +994,10 @@ bool GZipWriter::writeAbundances(std::string& bcName,
 
   namefile.write(bcName.c_str(), bcName.size());
   namefile << std::endl;
+
+  featuresfile.write(features.c_str(), features.size());
+  featuresfile << std::endl;
+
   return true;
 }
 

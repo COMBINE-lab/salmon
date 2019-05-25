@@ -523,22 +523,6 @@ void indexBarcodes(AlevinOpts<ProtocolT>& aopt,
       barcodeSoftMap[barcode].emplace_back(updateVal);
     }
   }//end-for
-
-  //if(aopt.dumpBarcodeMap){
-  //  auto dumpMapFile = aopt.outputDirectory / "barcodeSoftMaps.txt";
-  //  std::ofstream mapFile;
-  //  mapFile.open(dumpMapFile.string());
-
-  //  for(const auto& softMapIt: barcodeSoftMap){
-  //    auto trBcVec = softMapIt.second;
-  //    mapFile << softMapIt.first << "\t" << trBcVec.size();
-  //    for (auto trBc: trBcVec){
-  //      mapFile << "\t" << trBc.first << "\t" << trBc.second;
-  //    }
-  //    mapFile << "\n";
-  //  }
-  //  mapFile.close();
-  //}
 }
 
 template <typename ProtocolT>
@@ -771,20 +755,20 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
     freqCounter.erase(softMapIt.first);
   }
 
-  if(aopt.dumpfeatures){
-    auto frequencyFileName = aopt.outputDirectory / "filtered_cb_frequency.txt";
-    std::ofstream freqFile;
-    freqFile.open(frequencyFileName.string());
-    for(auto it = freqCounter.begin(); it != freqCounter.end(); ++it) {
-      auto trBc = it.key();
-      auto trIt = trueBarcodes.find(trBc);
-      if ( trIt != trueBarcodes.end() ) {
-        freqFile << trBc << "\t"
-                 << it.value() << "\n";
-      }
-    }
-    freqFile.close();
-  }
+  //if(aopt.dumpfeatures){
+  //  auto frequencyFileName = aopt.outputDirectory / "filtered_cb_frequency.txt";
+  //  std::ofstream freqFile;
+  //  freqFile.open(frequencyFileName.string());
+  //  for(auto it = freqCounter.begin(); it != freqCounter.end(); ++it) {
+  //    auto trBc = it.key();
+  //    auto trIt = trueBarcodes.find(trBc);
+  //    if ( trIt != trueBarcodes.end() ) {
+  //      freqFile << trBc << "\t"
+  //               << it.value() << "\n";
+  //    }
+  //  }
+  //  freqFile.close();
+  //}
 
   if (aopt.dumpfq){
     std::unique_ptr<paired_parser_qual> pairedParserQualPtr{nullptr};
