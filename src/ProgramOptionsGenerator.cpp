@@ -291,10 +291,6 @@ namespace salmon {
        "noDedup", po::bool_switch()->default_value(alevin::defaults::noDedup),
        "Stops the pipeline after CB sequence correction and quasi-mapping reads.")
       (
-       "debug", po::bool_switch()->default_value(alevin::defaults::debug),
-       "Enabling this mode mode will try to ignore segfaults based on no whitelist"
-       " mapping or no whitelist deduplicated count")
-      (
        "freqThreshold",po::value<uint32_t>(),
        "threshold for the frequency of the barcodes");
     return alevindevs;

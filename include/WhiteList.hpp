@@ -32,7 +32,6 @@ namespace alevin {
     using DoubleVectorT = std::vector<double> ;
 
     uint32_t populate_count_matrix(boost::filesystem::path& outDir,
-                                   bool inDebugMode,
                                    size_t numElem,
                                    DoubleMatrixT& countMatrix);
 

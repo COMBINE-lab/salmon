@@ -788,8 +788,7 @@ bool GZipWriter::writeAbundances(
   return true;
 }
 
-bool GZipWriter::writeBootstraps(bool inDebugMode,
-                                 std::string& bcName,
+bool GZipWriter::writeBootstraps(std::string& bcName,
                                  std::vector<double>& alphas,
                                  std::vector<double>& variance,
                                  bool useAllBootstraps,
@@ -849,24 +848,17 @@ bool GZipWriter::writeBootstraps(bool inDebugMode,
     }
   }
 
-  double total_counts = std::accumulate(alphas.begin(), alphas.end(), 0.0);
-  if ( not inDebugMode and not (total_counts > 0.0)){
-    std::cout<< "ERROR: cell doesn't have any read count" << std::flush;
-    exit(1);
-  }
   namefile << std::endl;
   namefile.write(bcName.c_str(), bcName.size());
   return true;
 }
 
-bool GZipWriter::writeSparseAbundances(bool inDebugMode,
-                                       std::string& bcName,
+bool GZipWriter::writeSparseAbundances(std::string& bcName,
                                        std::vector<double>& alphas,
                                        std::vector<uint8_t>& tiers){
 
   // construct the output vectors outside of the critical section
   // since e.g. this is more non-trivial work than in the dense case.
-  double total_counts = 0.0;
   size_t num = alphas.size();
   std::vector<float> alphasSparse;
   alphasSparse.reserve(num/2);
@@ -884,7 +876,6 @@ bool GZipWriter::writeSparseAbundances(bool inDebugMode,
       if (vectorIndex >= num) { break; }
 
       if (alphas[vectorIndex] > std::numeric_limits<float>::min()) {
-        total_counts += alphas[vectorIndex];
         alphasSparse.emplace_back(alphas[vectorIndex]);
         flag |= 128 >> j;
       }
@@ -928,17 +919,12 @@ bool GZipWriter::writeSparseAbundances(bool inDebugMode,
   //tierfile.write(reinterpret_cast<char*>(tiers.data()),
   //                trSize * num);
 
-  if ( not inDebugMode and not (total_counts > 0.0)){
-    std::cout<< "ERROR: cell doesn't have any read count" << std::flush;
-    exit(1);
-  }
   namefile.write(bcName.c_str(), bcName.size());
   namefile << std::endl;
   return true;
 }
 
-bool GZipWriter::writeAbundances(bool inDebugMode,
-                                 std::string& bcName,
+bool GZipWriter::writeAbundances(std::string& bcName,
                                  std::vector<double>& alphas,
                                  std::vector<uint8_t>& tiers){
 #if defined __APPLE__
@@ -979,11 +965,6 @@ bool GZipWriter::writeAbundances(bool inDebugMode,
   tierfile.write(reinterpret_cast<char*>(tiers.data()),
                   trSize * num);
 
-  double total_counts = std::accumulate(alphas.begin(), alphas.end(), 0.0);
-  if ( not inDebugMode and not (total_counts > 0.0)){
-    std::cout<< "ERROR: cell doesn't have any read count" << std::flush;
-    exit(1);
-  }
   namefile.write(bcName.c_str(), bcName.size());
   namefile << std::endl;
   return true;

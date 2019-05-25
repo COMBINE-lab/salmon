@@ -55,18 +55,15 @@ public:
   bool writeAbundances(std::vector<double>& alphas,
                        std::vector<Transcript>& transcripts);
 
-  bool writeAbundances(bool inDebugMode,
-                       std::string& bcName,
+  bool writeAbundances(std::string& bcName,
                        std::vector<double>& alphas,
                        std::vector<uint8_t>& tiers);
 
-  bool writeSparseAbundances(bool inDebugMode,
-                             std::string& bcName,
+  bool writeSparseAbundances(std::string& bcName,
                              std::vector<double>& alphas,
                              std::vector<uint8_t>& tiers);
 
-  bool writeBootstraps(bool inDebugMode,
-                       std::string& bcName,
+  bool writeBootstraps(std::string& bcName,
                        std::vector<double>& alphas,
                        std::vector<double>& variance,
                        bool useAllBootstraps,

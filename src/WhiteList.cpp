@@ -198,7 +198,6 @@ namespace alevin {
     }
 
     uint32_t populate_count_matrix(boost::filesystem::path& outDir,
-                               bool inDebugMode,
                                size_t numElem,
                                DoubleMatrixT& countMatrix) {
       boost::iostreams::filtering_istream countMatrixStream;
@@ -220,16 +219,7 @@ namespace alevin {
         double readCount = std::accumulate(cell.begin(), cell.end(), 0.0);
 
         if (readCount == 0){
-          if (not inDebugMode) {
-            std::cout<<"ERROR: Importing counts from binary\n"
-                     <<"Cell has 0 reads, should not happen.\n"
-                     <<"Saw total "<< cellCount << " Cells before Error"
-                     <<std::flush;
-            exit(1);
-          }
-          else {
-            zerod_cells += 1;
-          }
+          zerod_cells += 1;
         }
       }
 

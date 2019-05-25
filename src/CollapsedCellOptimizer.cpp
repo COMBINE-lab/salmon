@@ -260,7 +260,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   bool quiet, tbb::atomic<double>& totalDedupCounts,
                   tbb::atomic<uint32_t>& totalExpGeneCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                  uint32_t numGenes, bool inDebugMode, uint32_t numBootstraps,
+                  uint32_t numGenes, uint32_t numBootstraps,
                   bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
                   bool initUniform, std::atomic<uint64_t>& totalUniEdgesCounts,
                   std::atomic<uint64_t>& totalBiEdgesCounts){
@@ -270,8 +270,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
   // looping over until all the cells
   while((trueBarcodeIdx = barcode++) < totalCells) {
     // per-cell level optimization
-    if ( (not inDebugMode && umiCount[trueBarcodeIdx] < 10) or
-         (inDebugMode && umiCount[trueBarcodeIdx] == 0) ) {
+    if ( umiCount[trueBarcodeIdx] == 0 ) {
       //skip the barcode if no mapped UMI
       skippedCB[trueBarcodeIdx].inActive = true;
       continue;
@@ -364,7 +363,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
       }
 
       // write the abundance for the cell
-      gzw.writeAbundances( inDebugMode, trueBarcodeStr,
+      gzw.writeAbundances( trueBarcodeStr,
                            geneAlphas, tiers );
 
 
@@ -401,7 +400,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         }
 
         // write the abundance for the cell
-        gzw.writeBootstraps( inDebugMode, trueBarcodeStr,
+        gzw.writeBootstraps( trueBarcodeStr,
                              geneAlphas, bootVariance,
                              useAllBootstraps, sampleEstimates);
       }//end-if
@@ -528,7 +527,6 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                std::ref(totalExpGeneCounts),
                                std::ref(txpToGeneMap),
                                numGenes,
-                               aopt.debug,
                                aopt.numBootstraps,
                                aopt.naiveEqclass,
                                aopt.dumpUmiGraph,
@@ -569,11 +567,6 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
         if (idx > lowRegionCutoffIdx){
           numLowConfidentBarcode--;
         }
-        else if ( not aopt.debug ){
-          std::cout<< "Skipped Barcodes are from High Confidence Region\n"
-                   << " Should not happen"<<std::flush;
-          exit(1);
-        }
       }
     }
     numCells = trueBarcodes.size();
@@ -606,12 +599,10 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
     aopt.jointLog->info("Done initializing the empty matrix.");
     aopt.jointLog->flush();
     auto zerod_cells = alevin::whitelist::populate_count_matrix(aopt.outputDirectory,
-                                                                aopt.debug,
                                                                 numGenes,
                                                                 countMatrix);
     if (zerod_cells > 0) {
-      aopt.jointLog->warn("Found {} cells with no reads,"
-                          " ignoring due to debug mode.", zerod_cells);
+      aopt.jointLog->warn("Found {} cells with no deduplicated UMI", zerod_cells);
     }
 
     aopt.jointLog->info("Done Importing gene count matrix for dimension {}x{}",
