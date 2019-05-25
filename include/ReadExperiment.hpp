@@ -284,7 +284,7 @@ public:
 
       if (isDecoy and !sopt.validateMappings) {
         log->warn("The index contains decoy targets, but these should not be used in the "
-                  "absence of selective-alignment (--validateMappings, --mimicBT2 or --mimicBT2Strict). "
+                  "absence of selective-alignment (--validateMappings, --mimicBT2 or --mimicStrictBT2). "
                   "Skipping loading of decoys.");
         break;
       }
