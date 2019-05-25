@@ -364,8 +364,8 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
       }
 
       // write the abundance for the cell
-      gzw.writeSparseAbundances( inDebugMode, trueBarcodeStr,
-                                 geneAlphas, tiers );
+      gzw.writeAbundances( inDebugMode, trueBarcodeStr,
+                           geneAlphas, tiers );
 
 
       for (auto count: geneAlphas) {
