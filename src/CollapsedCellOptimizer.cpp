@@ -724,22 +724,65 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
       aopt.jointLog->flush();
       return false;
     }
+
     aopt.jointLog->info("Finished white listing");
+    aopt.jointLog->flush();
   } //end-if whitelisting
 
   if (aopt.dumpMtx){
     aopt.jointLog->info("Starting dumping cell v gene counts in mtx format");
-    std::ofstream qFile;
-    boost::filesystem::path qFilePath = aopt.outputDirectory / "quants_mat.mtx";
-    qFile.open(qFilePath.string());
-    for (auto& row : countMatrix) {
-      for (auto cell : row) {
-        qFile << cell << ',';
-      }
-      qFile << "\n";
-    }
-    qFile.close();
+    boost::filesystem::path qFilePath = aopt.outputDirectory / "quants_mat.mtx.gz";
 
+    boost::iostreams::filtering_ostream qFile;
+    qFile.push(boost::iostreams::gzip_compressor(6));
+    qFile.push(boost::iostreams::file_sink(qFilePath.string(),
+                                           std::ios_base::out | std::ios_base::binary));
+
+    // mtx header
+    qFile << "%%MatrixMarket\tmatrix\tcoordinate\treal\tgeneral" << std::endl
+          << numCells << "\t" << numGenes << "\t" << totalExpGeneCounts << std::endl;
+
+    {
+      uint32_t zerod_cells {0};
+      size_t elSize = sizeof(typename std::vector<double>::value_type);
+
+      auto countMatFilename = aopt.outputDirectory / "quants_mat.gz";
+      if(not boost::filesystem::exists(countMatFilename)){
+        std::cout<<"ERROR: Can't import Binary file quants.mat.gz, it doesn't exist" <<std::flush;
+        exit(1);
+      }
+
+      boost::iostreams::filtering_istream countMatrixStream;
+      countMatrixStream.push(boost::iostreams::gzip_decompressor());
+      countMatrixStream.push(boost::iostreams::file_source(countMatFilename.string(),
+                                                           std::ios_base::in | std::ios_base::binary));
+
+      std::vector<double> cell (numGenes, 0.0);
+      for (size_t cellCount=0; cellCount<numCells; cellCount++){
+        countMatrixStream.read(reinterpret_cast<char*>(cell.data()), elSize * numGenes);
+
+        double readCount = std::accumulate(cell.begin(), cell.end(), 0.0);
+        if (readCount == 0){
+          zerod_cells += 1;
+        }
+
+        for (size_t geneCount=0; geneCount<numGenes; geneCount++){
+          double count = cell[geneCount];
+          if (count > 0.0) {
+            qFile << cellCount+1
+                  << "\t" << geneCount+1
+                  << "\t" << count
+                  << std::endl;
+          }
+        }//end-for
+      }
+
+      if (zerod_cells > 0) {
+        aopt.jointLog->warn("Found {} cells with 0 counts", zerod_cells);
+      }
+    }
+
+    boost::iostreams::close(qFile);
     aopt.jointLog->info("Finished dumping counts into mtx");
   }
 

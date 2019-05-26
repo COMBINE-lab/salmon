@@ -188,10 +188,11 @@ namespace alevin {
         size_t cellId {0};
         while( std::getline( featuresfile, line) ) {
           cellId += 1;
-          std::stringstream buffer(line);
+          if (cellId == 1) { continue; }
 
           size_t featureId {0};
           std::vector<double> features;
+          std::stringstream buffer(line);
           while( getline( buffer, token, '\t') ) {
             featureId += 1;
             if (featureId > 4) { features.emplace_back( std::strtod(token.c_str(),
@@ -205,7 +206,7 @@ namespace alevin {
             exit(1);
           }
 
-          featureCountsMatrix[cellId-1] = features;
+          featureCountsMatrix[cellId-2] = features;
         }
 
         if (cellId-1 != numCells) {
@@ -215,6 +216,7 @@ namespace alevin {
           exit(1);
         }
         aopt.jointLog->info("Done making feature Matrix");
+        aopt.jointLog->flush();
       } // done populating features
 
       std::vector<double> trueProbs, falseProbs;
