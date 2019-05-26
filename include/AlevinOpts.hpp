@@ -53,8 +53,6 @@ struct AlevinOpts {
   uint32_t trimRight;
   //no downstream salmon quant
   bool noQuant;
-  // use correlation for white-listing
-  bool useCorrelation;
   // don't run EM flag
   bool noEM;
   // Avoid segfaults based on no whitelist mapping

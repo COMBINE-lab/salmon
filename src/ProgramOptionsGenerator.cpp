@@ -352,10 +352,6 @@ namespace salmon {
        "rrna", po::value<std::string>(),
        "path to a file containing ribosomal RNA, one per line")
       (
-       "useCorrelation", po::bool_switch()->default_value(alevin::defaults::useCorrelation),
-       "Use pair-wise pearson correlation with True barcodes as a"
-       " feature for white-list creation.")
-      (
        "keepCBFraction", po::value<double>(),
        "fraction of CB to keep, value must be in range (0,1], use 1 to quantify all CB."
        )

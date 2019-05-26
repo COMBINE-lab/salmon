@@ -112,12 +112,6 @@ The list of mitochondrial genes which are to be used as a feature for CB whiteli
 The list of ribosomal genes which are to be used as a feature for CB whitelising naive Bayes classification.
 
 """"""""""""
-``--useCorrelation``
-""""""""""""
-
-If activated, in CB whitelist classification alevin computes the cell-by-cell pearson correlation of each candidate CB with putative true set of CB.  This flag can slow down alevin's processing.
-
-""""""""""""
 ``--dumpfq``
 """"""""""""
 

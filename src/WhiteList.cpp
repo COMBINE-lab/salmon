@@ -163,360 +163,131 @@ namespace alevin {
       return selectedBarcodes;
     }
 
-    double getPearsonCorrelation(std::vector<double>& first,
-                                 std::vector<double>& second){
-      if (first.size() != second.size()){
-        std::cout << "correlation vectors size does not match" << std::flush;
-        exit(1);
-      }
-
-      size_t num_elem = first.size();
-      double f_sum = std::accumulate(first.begin(), first.end(), 0.0);
-      double f_sq_sum = std::accumulate( first.begin(), first.end(), 0.0,
-                                         [](const double& l, const double& r){
-                                           return (l + r*r);} );
-      double s_sum = std::accumulate(second.begin(), second.end(), 0.0);
-      double s_sq_sum = std::accumulate( second.begin(), second.end(), 0.0,
-                                         [](const double& l, const double& r){
-                                           return (l + r*r);} );
-
-      double p_sum = std::inner_product(first.begin(), first.end(),
-                                        second.begin(), 0.0);
-
-      double numrtr = p_sum-( (f_sum*s_sum) / num_elem);
-
-      double f_std = f_sq_sum - pow(f_sum, 2)/num_elem;
-      double s_std = s_sq_sum - pow(s_sum, 2)/num_elem;
-
-      double denom = pow(f_std * s_std , 0.5);
-
-      if (denom == 0.0 or numrtr == 0.0){
-        return 0.0;
-      }
-
-      return numrtr / denom;
-    }
-
-    uint32_t populate_count_matrix(boost::filesystem::path& outDir,
-                               size_t numElem,
-                               DoubleMatrixT& countMatrix) {
-      boost::iostreams::filtering_istream countMatrixStream;
-      countMatrixStream.push(boost::iostreams::gzip_decompressor());
-      uint32_t zerod_cells {0};
-
-      auto countMatFilename = outDir / "quants_mat.gz";
-      if(not boost::filesystem::exists(countMatFilename)){
-        std::cout<<"ERROR: Can't import Binary file quants.mat.gz, it doesn't exist" <<std::flush;
-        exit(1);
-      }
-      countMatrixStream.push(boost::iostreams::file_source(countMatFilename.string(),
-                                                           std::ios_base::in | std::ios_base::binary));
-      size_t elSize = sizeof(typename std::vector<double>::value_type);
-      size_t cellCount {0};
-      for (auto& cell: countMatrix){
-        cellCount += 1;
-        countMatrixStream.read(reinterpret_cast<char*>(cell.data()), elSize * numElem);
-        double readCount = std::accumulate(cell.begin(), cell.end(), 0.0);
-
-        if (readCount == 0){
-          zerod_cells += 1;
-        }
-      }
-
-      return zerod_cells;
-    }
-
     template <typename ProtocolT>
     bool performWhitelisting(AlevinOpts<ProtocolT>& aopt,
                              std::vector<uint32_t>& umiCount,
-                             DoubleMatrixT& geneCountsMatrix,
                              std::vector<std::string>& trueBarcodes,
-                             CFreqMapT& freqCounter,
-                             spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                             CFreqMapT& freqCounter, bool useRibo, bool useMito,
                              size_t numLowConfidentBarcode){
-      // freqCounter has frequency of reads for all detected Barcodes
-      // umiCount has frequency of UMI per-cell after knee selection
-      // Count matrix file after the deduplicated counts
-      // TODO::
-      // 4. Using all txps i.e. not ignoring txp with 0 values in all the cells
       size_t numCells = trueBarcodes.size();
-      size_t numGenes = geneIdxMap.size();
-      size_t numFeatures{4};
-      if (aopt.useCorrelation){
-        numFeatures += 1;
-      }
-
-      spp::sparse_hash_set<uint32_t> mRnaGenes, rRnaGenes;
-      bool useMitoRna {false}, useRiboRna{false};
-      boost::filesystem::path barcodeOrderFile = aopt.outputDirectory / "quants_mat_rows.txt";
-      spp::sparse_hash_map<std::string, uint32_t> bcOrderMap;
-
-      if(boost::filesystem::exists(barcodeOrderFile)){
-        std::ifstream bcFile(barcodeOrderFile.string());
-        std::string bc;
-        if(bcFile.is_open()) {
-          uint32_t count = 0;
-          while(getline(bcFile, bc)) {
-            bcOrderMap[bc] = count;
-            count += 1;
-          }
-          bcFile.close();
-        }
-        aopt.jointLog->info("Done importing order of barcodes \"quants_mat_rows.txt\" file.");
-        aopt.jointLog->info("Total {} barcodes found", bcOrderMap.size());
-        assert(bcOrderMap.size() == numCells);
-      }
-      else{
-        aopt.jointLog->error("quants_mat_rows.txt file not found. It contains the order of "
-                             "the cells counts was dumped.");
-        aopt.jointLog->flush();
-        exit(1);
-      }
-
-      if(boost::filesystem::exists(aopt.mRnaFile)){
-        numFeatures += 1;
-        useMitoRna = true;
-        std::ifstream mRnaFile(aopt.mRnaFile.string());
-        std::string gene;
-        size_t skippedGenes {0};
-        if(mRnaFile.is_open()) {
-          while(getline(mRnaFile, gene)) {
-            if (geneIdxMap.contains(gene)){
-              mRnaGenes.insert(geneIdxMap[ gene ]);
-            }
-            else{
-              skippedGenes += 1;
-            }
-          }
-          mRnaFile.close();
-        }
-        if (skippedGenes > 0){
-          aopt.jointLog->warn("{} mitorna gene(s) does not have transcript in the reference",
-                              skippedGenes);
-        }
-        aopt.jointLog->info("Total {} usable mRna genes", mRnaGenes.size());
-      }
-      else{
-        aopt.jointLog->warn("mrna file not provided; using is 1 less feature for whitelisting");
-      }
-
-      if(boost::filesystem::exists(aopt.rRnaFile)){
-        numFeatures += 1;
-        useRiboRna = true;
-        std::ifstream rRnaFile(aopt.rRnaFile.string());
-        std::string gene;
-        size_t skippedGenes {0};
-        if(rRnaFile.is_open()) {
-          while(getline(rRnaFile, gene)) {
-            if (geneIdxMap.contains(gene)){
-              rRnaGenes.insert(geneIdxMap[ gene ]);
-            }
-            else{
-              skippedGenes += 1;
-            }
-          }
-          rRnaFile.close();
-        }
-        if (skippedGenes > 0){
-          aopt.jointLog->warn("{} ribosomal rna gene(s) does not have transcript in the reference",
-                              skippedGenes);
-        }
-        aopt.jointLog->info("Total {} usable rRna genes", rRnaGenes.size());
-      }
-      else{
-        aopt.jointLog->warn("rrna file not provided; using is 1 less feature for whitelisting");
-      }
-
-      aopt.jointLog->info("Starting to make feature Matrix");
-      DoubleMatrixT featureCountsMatrix( numCells, DoubleVectorT (numFeatures, 0.0));
-
-      // loop over each barcode
-      tbb::task_scheduler_init tbbScheduler(aopt.numThreads);
-      tbb::parallel_for(
-                        BlockedIndexRange(size_t(0), size_t(trueBarcodes.size())),
-                        [&featureCountsMatrix, &trueBarcodes,
-                         &freqCounter, &aopt, &umiCount, &geneCountsMatrix,
-                         useMitoRna, useRiboRna, &bcOrderMap,
-                         &mRnaGenes, &rRnaGenes, numGenes](const BlockedIndexRange& range) -> void {
-                          for (auto i : boost::irange(range.begin(), range.end())) {
-                            uint32_t count_matrix_i = bcOrderMap[ trueBarcodes[i] ];
-                            std::vector<double>& featureVector = featureCountsMatrix[i];
-                            const std::string& currBarcodeName = trueBarcodes[i];
-                            uint32_t rawBarcodeFrequency{0};
-
-                            // Alignment Rate
-                            auto indexIt = freqCounter.find(currBarcodeName);
-                            bool indexOk = indexIt != freqCounter.end();
-                            if ( not indexOk ){
-                              aopt.jointLog->error("Error: index {} not found in freq Counter\n"
-                                                   "Please Report the issue on github", currBarcodeName,
-                                                   freqCounter.size());
-                              aopt.jointLog->flush();
-                              exit(1);
-                            }
-                            rawBarcodeFrequency = *indexIt;
-                            featureVector[0] = rawBarcodeFrequency ?
-                              umiCount[i] / static_cast<double>(rawBarcodeFrequency) : 0.0;
-
-                            double totalCellCount{0.0}, maxCount{0.0};
-                            double mitoCount {0.0}, riboCount {0.0};
-                            DoubleVectorT& geneCounts = geneCountsMatrix[count_matrix_i];
-
-                            for (size_t j=0; j<geneCounts.size(); j++){
-                              auto count = geneCounts[j];
-                              totalCellCount += count;
-                              if (count>maxCount){
-                                maxCount = count;
-                              }
-                              if (useMitoRna and mRnaGenes.contains(j)){
-                                mitoCount += count;
-                              }
-                              if (useRiboRna and rRnaGenes.contains(j)){
-                                riboCount += count;
-                              }
-                            }
-
-                            double meanCount = totalCellCount / numGenes;
-                            // meanMaxCount
-                            featureVector[1] = maxCount ? meanCount / maxCount : 0.0 ;
-                            // dedup Rate
-                            featureVector[2] = umiCount[i] ? 1.0 - (totalCellCount / umiCount[i]) : 0.0;
-
-                            //count of genes over mean
-                            size_t overMeanCount{0};
-                            for (auto count: geneCounts){
-                              if (count > meanCount){
-                                overMeanCount += 1;
-                              }
-                            }
-                            featureVector[3] = overMeanCount;
-
-                            size_t curFeatIdx = 4;
-                            if (useMitoRna) {
-                              featureVector[curFeatIdx] = mitoCount ? mitoCount/totalCellCount : 0.0;
-                              curFeatIdx += 1;
-                            }
-                            if (useRiboRna) {
-                              featureVector[curFeatIdx] = riboCount ? riboCount/totalCellCount : 0.0;
-                            }
-                          }
-                        });
-
-      aopt.jointLog->info("Done making regular featues");
-      size_t numTrueCells = ( numCells - numLowConfidentBarcode ) / 2;
-
-      if (aopt.useCorrelation){
-        aopt.jointLog->info("Starting to Make correlation Matrix (Heavy!)");
-        tbb::parallel_for(
-                          BlockedIndexRange(size_t(0), size_t(numCells)),
-                          [&featureCountsMatrix, numTrueCells,
-                           &geneCountsMatrix, numFeatures](const BlockedIndexRange& range) -> void {
-                            for (auto i : boost::irange(range.begin(), range.end())) {
-                              double maxCorr = 0.0;
-                              for(size_t j=0; j<numTrueCells; j++){
-                                if (i == j){
-                                  continue;
-                                }
-                                double currCorr = getPearsonCorrelation(geneCountsMatrix[i],
-                                                                        geneCountsMatrix[j]);
-                                if (currCorr > maxCorr){
-                                  maxCorr = currCorr;
-                                }
-                              }
-                              featureCountsMatrix[i][numFeatures-1] = maxCorr;
-                            }
-                          });
-      }
-
-      aopt.jointLog->info("Done making feature Matrix");
+      size_t numFeatures {5};
+      if (useMito) { ++numFeatures; }
+      if (useRibo) { ++numFeatures; }
       aopt.numFeatures = numFeatures;
 
-      std::vector<double> trueProbs;
-      std::vector<double> falseProbs;
+      aopt.jointLog->info("Starting to make feature Matrix");
+      size_t numTrueCells = ( numCells - numLowConfidentBarcode ) / 2;
+      DoubleMatrixT featureCountsMatrix( numCells, DoubleVectorT (numFeatures, 0.0));
 
+      {
+        // populating features
+        boost::filesystem::path featuresFileName = aopt.outputDirectory / "featureDump.txt";
+        std::ifstream featuresfile(featuresFileName.string());
+
+        std::string line, token;
+        size_t cellId {0};
+        while( std::getline( featuresfile, line) ) {
+          cellId += 1;
+          std::stringstream buffer(line);
+
+          size_t featureId {0};
+          std::vector<double> features;
+          while( getline( buffer, token, '\t') ) {
+            featureId += 1;
+            if (featureId > 4) { features.emplace_back( std::strtod(token.c_str(),
+                                                                    nullptr)); }
+          }
+
+          if (features.size() != numFeatures) {
+            aopt.jointLog->error("Size of the feature file doesn't match.\n"
+                                 "Please report the error on github.");
+            aopt.jointLog->flush();
+            exit(1);
+          }
+
+          featureCountsMatrix[cellId-1] = features;
+        }
+
+        if (cellId-1 != numCells) {
+          aopt.jointLog->error("The features file has less number of cells.\n"
+                               "Please report the error on github.");
+          aopt.jointLog->flush();
+          exit(1);
+        }
+        aopt.jointLog->info("Done making feature Matrix");
+      } // done populating features
+
+      std::vector<double> trueProbs, falseProbs;
       std::vector<uint32_t> whitelistBarcodes =
         classifyBarcodes(featureCountsMatrix, numCells,
                          numFeatures, numLowConfidentBarcode,
                          numTrueCells, trueProbs, falseProbs);
 
-      std::ofstream whitelistStream;
       auto whitelistFileName = aopt.outputDirectory / "whitelist.txt";
-      whitelistStream.open(whitelistFileName.string());
-
-      std::ofstream predictionStream;
-      auto predictionFileName = aopt.outputDirectory / "predictions.txt";
-      predictionStream.open(predictionFileName.string());
-      predictionStream << "cb\ttrue_prob\tFalse_prob\n";
-
-      aopt.intelligentCutoff = whitelistBarcodes.size();
+      std::ofstream whitelistStream(whitelistFileName.string());
       for (auto i: whitelistBarcodes){
-        whitelistStream << trueBarcodes[i] << "\n";
-        if (i >= numTrueCells) {
-          predictionStream << trueBarcodes[i] << "\t"
-                           << trueProbs[i-numTrueCells] << "\t"
-                           << falseProbs[i-numTrueCells] << "\t\n";
-        }
+        whitelistStream << trueBarcodes[i] << std::endl;
       }
       whitelistStream.close();
-      predictionStream.close();
+
+      if (aopt.dumpfeatures) {
+        std::ofstream predictionStream;
+        auto predictionFileName = aopt.outputDirectory / "predictions.txt";
+        predictionStream.open(predictionFileName.string());
+        predictionStream << "cb\ttrue_prob\tFalse_prob\n";
+
+        aopt.intelligentCutoff = whitelistBarcodes.size();
+        for (auto i: whitelistBarcodes){
+          if (i >= numTrueCells) {
+            predictionStream << trueBarcodes[i] << "\t"
+                             << trueProbs[i-numTrueCells] << "\t"
+                             << falseProbs[i-numTrueCells] << "\t\n";
+          }
+        }
+        predictionStream.close();
+      }//end-if dumpfeatures
 
       return true;
     }
     template bool performWhitelisting(AlevinOpts<alevin::protocols::DropSeq>& aopt,
                                       std::vector<uint32_t>& umiCount,
-                                      DoubleMatrixT& geneCountsMatrix,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter,
-                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                                      CFreqMapT& freqCounter, bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::InDrop>& aopt,
                                       std::vector<uint32_t>& umiCount,
-                                      DoubleMatrixT& geneCountsMatrix,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter,
-                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                                      CFreqMapT& freqCounter, bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::ChromiumV3>& aopt,
                                       std::vector<uint32_t>& umiCount,
-                                      DoubleMatrixT& geneCountsMatrix,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter,
-                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                                      CFreqMapT& freqCounter, bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::Chromium>& aopt,
                                       std::vector<uint32_t>& umiCount,
-                                      DoubleMatrixT& geneCountsMatrix,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter,
-                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                                      CFreqMapT& freqCounter, bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::Gemcode>& aopt,
                                       std::vector<uint32_t>& umiCount,
-                                      DoubleMatrixT& geneCountsMatrix,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter,
-                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                                      CFreqMapT& freqCounter, bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::CELSeq>& aopt,
                                       std::vector<uint32_t>& umiCount,
-                                      DoubleMatrixT& geneCountsMatrix,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter,
-                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                                      CFreqMapT& freqCounter, bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::CELSeq2>& aopt,
                                       std::vector<uint32_t>& umiCount,
-                                      DoubleMatrixT& geneCountsMatrix,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter,
-                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                                      CFreqMapT& freqCounter, bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::Custom>& aopt,
                                       std::vector<uint32_t>& umiCount,
-                                      DoubleMatrixT& geneCountsMatrix,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter,
-                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                                      CFreqMapT& freqCounter, bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
   }
 }

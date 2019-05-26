@@ -530,6 +530,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   size_t numCells = trueBarcodes.size();
   size_t numGenes = geneIdxMap.size();
   size_t numWorkerThreads{1};
+  bool hasWhitelist = boost::filesystem::exists(aopt.whitelistFile);
 
   if (aopt.numThreads > 1) {
     numWorkerThreads = aopt.numThreads - 1;
@@ -548,17 +549,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
       orderedTgroup.push_back(std::make_pair(kv.first, eqId));
     }
     eqId++;
-
-    //for (auto& bg: kv.second.barcodeGroup) {
-    //  for (auto& ugroup: bg.second){
-    //    uniqueUmisCounter.insert(ugroup.first);
-    //  }
-    //}//end-for
   }
-
-  //aopt.jointLog->info("Total {} Unique Umis found\n",
-  //                    uniqueUmisCounter.size());
-  //aopt.jointLog->flush();
 
   if (aopt.noEM) {
     aopt.jointLog->warn("Not performing EM; this may result in discarding ambiguous reads\n");
@@ -571,6 +562,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   }
 
   spp::sparse_hash_set<uint32_t> mRnaGenes, rRnaGenes;
+  bool useMito {false}, useRibo {false};
   if(boost::filesystem::exists(aopt.mRnaFile)) {
     std::ifstream mRnaFile(aopt.mRnaFile.string());
     std::string gene;
@@ -591,8 +583,9 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                           skippedGenes);
     }
     aopt.jointLog->info("Total {} usable mRna genes", mRnaGenes.size());
+    if (mRnaGenes.size() > 0 ) { useMito = true; }
   }
-  else{
+  else if (hasWhitelist) {
     aopt.jointLog->warn("mrna file not provided; using is 1 less feature for whitelisting");
   }
 
@@ -616,8 +609,9 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                           skippedGenes);
     }
     aopt.jointLog->info("Total {} usable rRna genes", rRnaGenes.size());
+    if (rRnaGenes.size() > 0 ) { useRibo = true; }
   }
-  else{
+  else if (hasWhitelist) {
     aopt.jointLog->warn("rrna file not provided; using is 1 less feature for whitelisting");
   }
 
@@ -710,67 +704,44 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   std::copy(geneNames.begin(), geneNames.end(), giterator);
   gFile.close();
 
-  std::vector<std::vector<double>> countMatrix;
-
-  bool hasWhitelist = boost::filesystem::exists(aopt.whitelistFile);
-  if(numLowConfidentBarcode>0 and ( not hasWhitelist  or aopt.dumpCsvCounts )){
+  if( not hasWhitelist ){
     aopt.jointLog->info("Clearing EqMap; Might take some time.");
     fullEqMap.clear();
 
-    aopt.jointLog->info("Starting Import of the gene count matrix of size {}x{}.",
-                        trueBarcodes.size(), numGenes);
-    countMatrix.resize(trueBarcodes.size(),
-                       std::vector<double> (numGenes, 0.0));
-
-    aopt.jointLog->info("Done initializing the empty matrix.");
-    aopt.jointLog->flush();
-    auto zerod_cells = alevin::whitelist::populate_count_matrix(aopt.outputDirectory,
-                                                                numGenes,
-                                                                countMatrix);
-    if (zerod_cells > 0) {
-      aopt.jointLog->warn("Found {} cells with no deduplicated UMI", zerod_cells);
+    aopt.jointLog->info("Starting white listing");
+    bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
+                                                                      umiCount,
+                                                                      trueBarcodes,
+                                                                      freqCounter,
+                                                                      useRibo,
+                                                                      useMito,
+                                                                      numLowConfidentBarcode);
+    if (!whitelistingSuccess) {
+      aopt.jointLog->error(
+                           "The white listing algorithm failed. This is likely the result of "
+                           "bad input (or a bug). If you cannot track down the cause, please "
+                           "report this issue on GitHub.");
+      aopt.jointLog->flush();
+      return false;
     }
-
-    aopt.jointLog->info("Done Importing gene count matrix for dimension {}x{}",
-                        numCells, numGenes);
-    aopt.jointLog->flush();
-
-    if (aopt.dumpCsvCounts){
-      aopt.jointLog->info("Starting dumping cell v gene counts in csv format");
-      std::ofstream qFile;
-      boost::filesystem::path qFilePath = aopt.outputDirectory / "quants_mat.csv";
-      qFile.open(qFilePath.string());
-      for (auto& row : countMatrix) {
-        for (auto cell : row) {
-          qFile << cell << ',';
-        }
-        qFile << "\n";
-      }
-      qFile.close();
-
-      aopt.jointLog->info("Finished dumping csv counts");
-    }
-
-    if( not hasWhitelist ){
-      aopt.jointLog->info("Starting white listing");
-      bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
-                                                                        umiCount,
-                                                                        countMatrix,
-                                                                        trueBarcodes,
-                                                                        freqCounter,
-                                                                        geneIdxMap,
-                                                                        numLowConfidentBarcode);
-      if (!whitelistingSuccess) {
-        aopt.jointLog->error(
-                             "The white listing algorithm failed. This is likely the result of "
-                             "bad input (or a bug). If you cannot track down the cause, please "
-                             "report this issue on GitHub.");
-        aopt.jointLog->flush();
-        return false;
-      }
-      aopt.jointLog->info("Finished white listing");
-    }
+    aopt.jointLog->info("Finished white listing");
   } //end-if whitelisting
+
+  //if (aopt.dumpCsvCounts){
+  //  aopt.jointLog->info("Starting dumping cell v gene counts in csv format");
+  //  std::ofstream qFile;
+  //  boost::filesystem::path qFilePath = aopt.outputDirectory / "quants_mat.csv";
+  //  qFile.open(qFilePath.string());
+  //  for (auto& row : countMatrix) {
+  //    for (auto cell : row) {
+  //      qFile << cell << ',';
+  //    }
+  //    qFile << "\n";
+  //  }
+  //  qFile.close();
+
+  //  aopt.jointLog->info("Finished dumping csv counts");
+  //}
 
   return true;
 } //end-optimize

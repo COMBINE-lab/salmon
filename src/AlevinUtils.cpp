@@ -333,7 +333,6 @@ namespace alevin {
 
       aopt.quiet = vm["quiet"].as<bool>();
       aopt.noEM = vm["noem"].as<bool>();
-      aopt.useCorrelation = vm["useCorrelation"].as<bool>();
       aopt.noDedup = vm["noDedup"].as<bool>();
       aopt.naiveEqclass = vm["naiveEqclass"].as<bool>();
       aopt.noQuant = vm["noQuant"].as<bool>();
