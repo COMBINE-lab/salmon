@@ -431,20 +431,6 @@ namespace alevin {
       aopt.jointLog->info("Done making feature Matrix");
       aopt.numFeatures = numFeatures;
 
-      if (aopt.dumpfeatures){
-        std::ofstream featureStream;
-        auto featureFileName = aopt.outputDirectory / "featureDump.txt";
-        featureStream.open(featureFileName.string());
-        for(size_t i=0; i<featureCountsMatrix.size(); i++){
-          featureStream << trueBarcodes[i];
-          for(size_t j=0; j<numFeatures; j++) {
-            featureStream << "\t" << featureCountsMatrix[i][j];
-          }
-          featureStream << "\n";
-        }
-        featureStream.close();
-      }
-
       std::vector<double> trueProbs;
       std::vector<double> falseProbs;
 

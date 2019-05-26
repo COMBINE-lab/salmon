@@ -964,18 +964,15 @@ bool GZipWriter::writeAbundances(std::string& bcName,
     bcFeaturesStream_.reset(new std::ofstream);
     bcFeaturesStream_->open(bcFeaturesFilename.string());
 
-    std::string header = "CB\tCorrectedReads\tMappedReads\tMappingRate\tDedupRate\tMeanByMax\tNumGenesOverMean";
+    std::string header = "CB\tCorrectedReads\tMappedReads\tDeduplicatedReads"
+      "\tMappingRate\tDedupRate\tMeanByMax\tNumGenesExpressed\tNumGenesOverMean";
     if (featureCode == 2) {
-      header + ="\tmRnaFraction\trRnaFraction";
+      header += "\tmRnaFraction\trRnaFraction";
     } else if (featureCode == 3) {
       header += "\tmRnaFraction";
     } else if (featureCode == 4) {
       header += "\trRnaFraction";
-    } else {
-      std::cerr<< "Wrong Feature Code: " << featureCode << std::flush;
-      exit(1);
-    }
-    header += "\n";
+    } header += "\n";
     bcFeaturesStream_->write(header.c_str(), header.size());
   }
 

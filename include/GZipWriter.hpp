@@ -56,6 +56,8 @@ public:
                        std::vector<Transcript>& transcripts);
 
   bool writeAbundances(std::string& bcName,
+                       std::string& features,
+                       uint8_t featureCode,
                        std::vector<double>& alphas,
                        std::vector<uint8_t>& tiers);
 
@@ -95,6 +97,7 @@ private:
   std::unique_ptr<boost::iostreams::filtering_ostream> umiGraphStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> cellEQStream_{nullptr};
   std::unique_ptr<std::ofstream> bcNameStream_{nullptr};
+  std::unique_ptr<std::ofstream> bcFeaturesStream_{nullptr};
   std::unique_ptr<std::ofstream> bcBootNameStream_{nullptr};
 // only one writer thread at a time
 #if defined __APPLE__

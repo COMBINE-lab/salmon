@@ -755,21 +755,6 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
     freqCounter.erase(softMapIt.first);
   }
 
-  //if(aopt.dumpfeatures){
-  //  auto frequencyFileName = aopt.outputDirectory / "filtered_cb_frequency.txt";
-  //  std::ofstream freqFile;
-  //  freqFile.open(frequencyFileName.string());
-  //  for(auto it = freqCounter.begin(); it != freqCounter.end(); ++it) {
-  //    auto trBc = it.key();
-  //    auto trIt = trueBarcodes.find(trBc);
-  //    if ( trIt != trueBarcodes.end() ) {
-  //      freqFile << trBc << "\t"
-  //               << it.value() << "\n";
-  //    }
-  //  }
-  //  freqFile.close();
-  //}
-
   if (aopt.dumpfq){
     std::unique_ptr<paired_parser_qual> pairedParserQualPtr{nullptr};
     pairedParserQualPtr.reset(new paired_parser_qual(barcodeFiles, readFiles,

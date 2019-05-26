@@ -262,7 +262,8 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, uint32_t numBootstraps,
                   bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
-                  bool initUniform, std::atomic<uint64_t>& totalUniEdgesCounts,
+                  bool initUniform, CFreqMapT& freqCounter,
+                  std::atomic<uint64_t>& totalUniEdgesCounts,
                   std::atomic<uint64_t>& totalBiEdgesCounts){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
@@ -362,16 +363,65 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         }
       }
 
+      std::string features;
+      {
+        std::stringstream featuresStream;
+        featuresStream << trueBarcodeStr;
+
+        // Making features
+        double totalUmiCount {0.0};
+        double maxNumUmi {0.0};
+        for (auto count: geneAlphas) {
+          if (count>0) {
+            totalUmiCount += count;
+            totalExpGenes += 1;
+            if (count > maxNumUmi) { maxNumUmi = count; }
+          }
+        }
+
+        uint32_t numGenesOverMean {0};
+        double meanNumUmi {totalUmiCount / totalExpGenes};
+        double meanByMax = maxNumUmi ? meanNumUmi / maxNumUmi : 0.0;
+        for (auto count: geneAlphas) {
+          if (count > meanNumUmi) { ++numGenesOverMean; }
+        }
+
+
+        auto indexIt = freqCounter.find(trueBarcodeStr);
+        bool indexOk = indexIt != freqCounter.end();
+        if ( not indexOk ){
+          jointlog->error("Error: index {} not found in freq Counter\n"
+                               "Please Report the issue on github", trueBarcodeStr);
+          jointlog->flush();
+          exit(1);
+        }
+
+        uint64_t numRawReads = *indexIt;
+        uint64_t numMappedReads { umiCount[trueBarcodeIdx] };
+        double mappingRate = numRawReads ?
+          numMappedReads / static_cast<double>(numRawReads) : 0.0;
+        double deduplicationRate = numMappedReads ?
+          1.0 - (totalUmiCount / numMappedReads) : 0.0;
+
+        featuresStream << "\t" << numRawReads
+                 << "\t" << numMappedReads
+                 << "\t" << totalUmiCount
+                 << "\t" << totalExpGenes
+                 << "\t" << mappingRate
+                 << "\t" << deduplicationRate
+                 << "\t" << meanByMax
+                 << "\t" << numGenesOverMean;
+
+        features = featuresStream.str();
+      } // end making features
+
+
       // write the abundance for the cell
       gzw.writeAbundances( trueBarcodeStr,
+                           features,
+                           0,
                            geneAlphas, tiers );
 
-
-      for (auto count: geneAlphas) {
-        if (count>0) {
-          totalExpGenes += 1;
-        }
-      }
 
       // maintaining count for total number of predicted UMI
       salmon::utils::incLoop(totalDedupCounts, totalCount);
@@ -532,6 +582,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                aopt.dumpUmiGraph,
                                aopt.dumpfeatures,
                                aopt.initUniform,
+                               std::ref(freqCounter),
                                std::ref(totalUniEdgesCounts),
                                std::ref(totalBiEdgesCounts));
   }
