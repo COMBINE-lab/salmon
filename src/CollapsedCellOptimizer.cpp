@@ -727,21 +727,21 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
     aopt.jointLog->info("Finished white listing");
   } //end-if whitelisting
 
-  //if (aopt.dumpCsvCounts){
-  //  aopt.jointLog->info("Starting dumping cell v gene counts in csv format");
-  //  std::ofstream qFile;
-  //  boost::filesystem::path qFilePath = aopt.outputDirectory / "quants_mat.csv";
-  //  qFile.open(qFilePath.string());
-  //  for (auto& row : countMatrix) {
-  //    for (auto cell : row) {
-  //      qFile << cell << ',';
-  //    }
-  //    qFile << "\n";
-  //  }
-  //  qFile.close();
+  if (aopt.dumpMtx){
+    aopt.jointLog->info("Starting dumping cell v gene counts in mtx format");
+    std::ofstream qFile;
+    boost::filesystem::path qFilePath = aopt.outputDirectory / "quants_mat.mtx";
+    qFile.open(qFilePath.string());
+    for (auto& row : countMatrix) {
+      for (auto cell : row) {
+        qFile << cell << ',';
+      }
+      qFile << "\n";
+    }
+    qFile.close();
 
-  //  aopt.jointLog->info("Finished dumping csv counts");
-  //}
+    aopt.jointLog->info("Finished dumping counts into mtx");
+  }
 
   return true;
 } //end-optimize

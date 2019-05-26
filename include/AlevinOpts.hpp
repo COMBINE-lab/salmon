@@ -32,7 +32,7 @@ struct AlevinOpts {
   //eqclass level barcode count
   bool dumpBarcodeEq;
   //dump cellvtxp matrix in csv
-  bool dumpCsvCounts;
+  bool dumpMtx;
   // dump big fishing hash
   bool dumpBFH;
   // dump per cell level umi-graph

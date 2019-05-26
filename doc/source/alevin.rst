@@ -131,10 +131,10 @@ Alevin internally uses a potentially big data-structure to concisely maintain al
 If activated, alevin dumps all the features used by the CB classification and their counts at each cell level. Generally, this is used for the purposes of debugging.
 
 """"""""""""
-``--dumpCsvCounts``
+``--dumpMtx``
 """"""""""""
 
-This flags is used to internally convert the default binary format of alevin for gene-count matrix into a human readable csv (comma separated) format. The expression of all the gene in one cell is written in one row, while columns represents the genes.
+This flags is used to internally convert the default binary format of alevin for gene-count matrix into a human readable mtx (matrix market exchange) sparse format. 
 
 """"""""""""""""""""""
 ``--forceCells``
@@ -188,7 +188,7 @@ A typical run of alevin will generate 4 files:
 
 Along with the Cell-v-Gene count matrix, alevin dumps a 3-fold categorization of each estimated count value of a gene(each cell disjointly) in the form of tiers. Tier 1 is the set of genes where all the reads are uniquely mapping. Tier 2 is genes that have ambiguously mapping reads, but connected to unique read evidence as well, that can be used by the EM to resolve the multimapping reads. Tier 3 is the genes that have no unique evidence and the read counts are, therefore, distributed between these genes according to an uninformative prior.
 
-Alevin can also dump the count-matrix in a human readable -- comma-separated-value (_CSV_) format, if given flag `--dumpCsvCounts` which generates a new output file called `quants_mat.csv`.
+Alevin can also dump the count-matrix in a human readable -- matrix-market-exchange (_mtx_) format, if given flag `--dumpMtx` which generates a new output file called `quants_mat.mtx`.
 
 Misc
 ----

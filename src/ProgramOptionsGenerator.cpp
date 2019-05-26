@@ -369,8 +369,8 @@ namespace salmon {
        "dumpFeatures", po::bool_switch()->default_value(alevin::defaults::dumpFeatures),
        "Dump features for whitelist and downstream analysis.")
       (
-       "dumpCsvCounts", po::bool_switch()->default_value(alevin::defaults::dumpCSVCounts),
-       "Dump cell v transcripts count matrix in csv format.")
+       "dumpMtx", po::bool_switch()->default_value(alevin::defaults::dumpMtx),
+       "Dump cell v transcripts count matrix in sparse mtx format.")
       (
        "lowRegionMinNumBarcodes", po::value<uint32_t>()->default_value(alevin::defaults::lowRegionMinNumBarcodes),
        "Minimum Number of CB to use for learning Low confidence region (Default: 200).")

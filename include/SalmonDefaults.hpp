@@ -123,7 +123,7 @@ namespace defaults {
   constexpr const bool dumpFeatures{false};
   constexpr const bool dumpBFH{false};
   constexpr const bool dumpUmiGraph{false};
-  constexpr const bool dumpCSVCounts{false};
+  constexpr const bool dumpMtx{false};
   constexpr const bool noEM{false};
   constexpr const bool debug{true};
   constexpr const uint32_t trimRight{0};
