@@ -966,11 +966,11 @@ bool GZipWriter::writeAbundances(std::string& bcName,
 
     std::string header = "CB\tCorrectedReads\tMappedReads\tDeduplicatedReads"
       "\tMappingRate\tDedupRate\tMeanByMax\tNumGenesExpressed\tNumGenesOverMean";
-    if (featureCode == 2) {
+    if (featureCode == 3) {
       header += "\tmRnaFraction\trRnaFraction";
-    } else if (featureCode == 3) {
+    } else if (featureCode == 1) {
       header += "\tmRnaFraction";
-    } else if (featureCode == 4) {
+    } else if (featureCode == 2) {
       header += "\trRnaFraction";
     } header += "\n";
     bcFeaturesStream_->write(header.c_str(), header.size());

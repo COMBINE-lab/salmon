@@ -77,9 +77,10 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   uint32_t numGenes, uint32_t numBootstraps,
                   bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
                   bool initUniform, CFreqMapT& freqCounter,
+                  spp::sparse_hash_set<uint32_t>& mRnaGenes,
+                  spp::sparse_hash_set<uint32_t>& rRnaGenes,
                   std::atomic<uint64_t>& totalUniEdgesCounts,
                   std::atomic<uint64_t>& totalBiEdgesCounts);
-
 
 using VecT = CollapsedCellOptimizer::SerialVecType;
 

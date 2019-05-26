@@ -263,6 +263,8 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   uint32_t numGenes, uint32_t numBootstraps,
                   bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
                   bool initUniform, CFreqMapT& freqCounter,
+                  spp::sparse_hash_set<uint32_t>& mRnaGenes,
+                  spp::sparse_hash_set<uint32_t>& rRnaGenes,
                   std::atomic<uint64_t>& totalUniEdgesCounts,
                   std::atomic<uint64_t>& totalBiEdgesCounts){
   size_t numCells {trueBarcodes.size()};
@@ -364,6 +366,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
       }
 
       std::string features;
+      uint8_t featureCode {0};
       {
         std::stringstream featuresStream;
         featuresStream << trueBarcodeStr;
@@ -380,12 +383,20 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         }
 
         uint32_t numGenesOverMean {0};
+        double mitoCount {0.0}, riboCount {0.0};
         double meanNumUmi {totalUmiCount / totalExpGenes};
         double meanByMax = maxNumUmi ? meanNumUmi / maxNumUmi : 0.0;
-        for (auto count: geneAlphas) {
+        for (size_t j=0; j<geneAlphas.size(); j++){
+          auto count = geneAlphas[j];
           if (count > meanNumUmi) { ++numGenesOverMean; }
-        }
 
+          if (mRnaGenes.contains(j)){
+            mitoCount += count;
+          }
+          if (rRnaGenes.contains(j)){
+            riboCount += count;
+          }
+        }
 
         auto indexIt = freqCounter.find(trueBarcodeStr);
         bool indexOk = indexIt != freqCounter.end();
@@ -404,13 +415,23 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
           1.0 - (totalUmiCount / numMappedReads) : 0.0;
 
         featuresStream << "\t" << numRawReads
-                 << "\t" << numMappedReads
-                 << "\t" << totalUmiCount
-                 << "\t" << totalExpGenes
-                 << "\t" << mappingRate
-                 << "\t" << deduplicationRate
-                 << "\t" << meanByMax
-                 << "\t" << numGenesOverMean;
+                       << "\t" << numMappedReads
+                       << "\t" << totalUmiCount
+                       << "\t" << mappingRate
+                       << "\t" << deduplicationRate
+                       << "\t" << meanByMax
+                       << "\t" << totalExpGenes
+                       << "\t" << numGenesOverMean;
+
+        if (mRnaGenes.size() > 1) {
+          featureCode += 1;
+          featuresStream << "\t" << mitoCount / totalUmiCount;
+        }
+
+        if (rRnaGenes.size() > 1) {
+          featureCode += 2;
+          featuresStream << "\t" << riboCount / totalUmiCount;
+        }
 
         features = featuresStream.str();
       } // end making features
@@ -419,7 +440,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
       // write the abundance for the cell
       gzw.writeAbundances( trueBarcodeStr,
                            features,
-                           0,
+                           featureCode,
                            geneAlphas, tiers );
 
 
@@ -549,6 +570,58 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
     aopt.jointLog->flush();
   }
 
+  spp::sparse_hash_set<uint32_t> mRnaGenes, rRnaGenes;
+  if(boost::filesystem::exists(aopt.mRnaFile)) {
+    std::ifstream mRnaFile(aopt.mRnaFile.string());
+    std::string gene;
+    size_t skippedGenes {0};
+    if(mRnaFile.is_open()) {
+      while(getline(mRnaFile, gene)) {
+        if (geneIdxMap.contains(gene)){
+          mRnaGenes.insert(geneIdxMap[ gene ]);
+        }
+        else{
+          skippedGenes += 1;
+        }
+      }
+      mRnaFile.close();
+    }
+    if (skippedGenes > 0){
+      aopt.jointLog->warn("{} mitorna gene(s) does not have transcript in the reference",
+                          skippedGenes);
+    }
+    aopt.jointLog->info("Total {} usable mRna genes", mRnaGenes.size());
+  }
+  else{
+    aopt.jointLog->warn("mrna file not provided; using is 1 less feature for whitelisting");
+  }
+
+  if(boost::filesystem::exists(aopt.rRnaFile)){
+    std::ifstream rRnaFile(aopt.rRnaFile.string());
+    std::string gene;
+    size_t skippedGenes {0};
+    if(rRnaFile.is_open()) {
+      while(getline(rRnaFile, gene)) {
+        if (geneIdxMap.contains(gene)){
+          rRnaGenes.insert(geneIdxMap[ gene ]);
+        }
+        else{
+          skippedGenes += 1;
+        }
+      }
+      rRnaFile.close();
+    }
+    if (skippedGenes > 0){
+      aopt.jointLog->warn("{} ribosomal rna gene(s) does not have transcript in the reference",
+                          skippedGenes);
+    }
+    aopt.jointLog->info("Total {} usable rRna genes", rRnaGenes.size());
+  }
+  else{
+    aopt.jointLog->warn("rrna file not provided; using is 1 less feature for whitelisting");
+  }
+
+
   std::vector<CellState> skippedCB (numCells);
   std::atomic<uint32_t> bcount{0};
   tbb::atomic<double> totalDedupCounts{0.0};
@@ -583,6 +656,8 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                aopt.dumpfeatures,
                                aopt.initUniform,
                                std::ref(freqCounter),
+                               std::ref(rRnaGenes),
+                               std::ref(mRnaGenes),
                                std::ref(totalUniEdgesCounts),
                                std::ref(totalBiEdgesCounts));
   }
