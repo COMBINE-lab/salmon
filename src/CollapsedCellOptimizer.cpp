@@ -331,10 +331,11 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
     if ( !naiveEqclass ) {
       // perform the UMI deduplication step
       std::vector<SalmonEqClass> salmonEqclasses;
+      spp::sparse_hash_map<uint16_t, uint32_t> numMolHash;
       bool dedupOk = dedupClasses(geneAlphas, totalCount, txpGroups,
                                   umiGroups, salmonEqclasses,
                                   txpToGeneMap, tiers, gzw,
-                                  dumpUmiGraph, trueBarcodeStr,
+                                  dumpUmiGraph, trueBarcodeStr, numMolHash,
                                   totalUniEdgesCounts, totalBiEdgesCounts);
       if( !dedupOk ){
         jointlog->error("Deduplication for cell {} failed \n"
@@ -402,7 +403,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         bool indexOk = indexIt != freqCounter.end();
         if ( not indexOk ){
           jointlog->error("Error: index {} not found in freq Counter\n"
-                               "Please Report the issue on github", trueBarcodeStr);
+                          "Please Report the issue on github", trueBarcodeStr);
           jointlog->flush();
           exit(84);
         }
@@ -414,6 +415,19 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         double deduplicationRate = numMappedReads ?
           1.0 - (totalUmiCount / numMappedReads) : 0.0;
 
+        // Feature created after discussion with Mehrtash
+        double averageNumMolPerArbo {0.0};
+        size_t totalNumArborescence {0};
+        std::stringstream arboString ;
+        for (auto& it: numMolHash) {
+          totalNumArborescence += it.second;
+          averageNumMolPerArbo += (it.first * it.second);
+          if (dumpUmiGraph) {
+            arboString << "\t" << it.first << ":" << it.second;
+          }
+        }
+        averageNumMolPerArbo /= totalNumArborescence;
+
         featuresStream << "\t" << numRawReads
                        << "\t" << numMappedReads
                        << "\t" << totalUmiCount
@@ -422,6 +436,12 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                        << "\t" << meanByMax
                        << "\t" << totalExpGenes
                        << "\t" << numGenesOverMean;
+
+        if (dumpUmiGraph) {
+          featuresStream << arboString.rdbuf();
+        } else {
+          featuresStream << "\t" << averageNumMolPerArbo;
+        }
 
         if (mRnaGenes.size() > 1) {
           featureCode += 1;
@@ -441,7 +461,9 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
       gzw.writeAbundances( trueBarcodeStr,
                            features,
                            featureCode,
-                           geneAlphas, tiers );
+                           geneAlphas,
+                           tiers,
+                           dumpUmiGraph);
 
 
       // maintaining count for total number of predicted UMI

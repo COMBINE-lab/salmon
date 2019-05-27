@@ -170,7 +170,7 @@ namespace alevin {
                              CFreqMapT& freqCounter, bool useRibo, bool useMito,
                              size_t numLowConfidentBarcode){
       size_t numCells = trueBarcodes.size();
-      size_t numFeatures {5};
+      size_t numFeatures {6};
       if (useMito) { ++numFeatures; }
       if (useRibo) { ++numFeatures; }
       aopt.numFeatures = numFeatures;
@@ -195,6 +195,7 @@ namespace alevin {
           std::stringstream buffer(line);
           while( getline( buffer, token, '\t') ) {
             featureId += 1;
+            if (aopt.dumpUmiGraph and featureId > 4+numFeatures) { break; }
             if (featureId > 4) { features.emplace_back( std::strtod(token.c_str(),
                                                                     nullptr)); }
           }

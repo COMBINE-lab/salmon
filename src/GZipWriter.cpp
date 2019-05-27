@@ -934,7 +934,8 @@ bool GZipWriter::writeAbundances(std::string& bcName,
                                  std::string& features,
                                  uint8_t featureCode,
                                  std::vector<double>& alphas,
-                                 std::vector<uint8_t>& tiers){
+                                 std::vector<uint8_t>& tiers,
+                                 bool dumpUmiGraph){
 #if defined __APPLE__
   spin_lock::scoped_lock sl(writeMutex_);
 #else
@@ -972,6 +973,8 @@ bool GZipWriter::writeAbundances(std::string& bcName,
       header += "\tmRnaFraction";
     } else if (featureCode == 2) {
       header += "\trRnaFraction";
+    } else if (dumpUmiGraph) {
+      header += "\tArborescenceCount";
     } header += "\n";
     bcFeaturesStream_->write(header.c_str(), header.size());
   }
