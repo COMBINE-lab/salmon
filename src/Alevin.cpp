@@ -713,8 +713,8 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
     }
 
     if (aopt.keepCBFraction > 0.0) {
-      aopt.forceCells = std::min(static_cast<int>(aopt.keepCBFraction * freqCounter.size()),
-                                 100000);
+      aopt.forceCells = std::min(static_cast<uint32_t>(aopt.keepCBFraction * freqCounter.size()),
+                                 aopt.maxNumBarcodes);
     }
 
     //Calculate the knee using the frequency distribution

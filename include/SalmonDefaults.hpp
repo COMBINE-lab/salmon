@@ -135,7 +135,7 @@ namespace defaults {
   constexpr const uint32_t expectCells{0};
   constexpr const uint32_t forceCells{0};
   constexpr const double keepCBFraction{0.0};
-  constexpr const uint32_t freqThreshold{100};
+  constexpr const uint32_t freqThreshold{10};
 }
 }
 

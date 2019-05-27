@@ -934,18 +934,10 @@ void processReadLibrary(
     }
 
     pairedParserPtr->stop();
-    /*std::vector<uint64_t> uniqueFLD(100000, 0);
-    for (size_t i = 0; i < numThreads; ++i) {
-      for (size_t j = 0; j < uniqueFLD.size(); ++j) {
-        uniqueFLD[j] += uniqueFLDs[i][j];
-      }
-    }
-    std::ofstream testDist("uniqueFLDNew.bin");
-    uint64_t s = uniqueFLD.size();
-    testDist.write(reinterpret_cast<char*>(&s), sizeof(s));
-    testDist.write(reinterpret_cast<char*>(uniqueFLD.data()), sizeof(s)*uniqueFLD.size());
-    testDist.close();
-    */
+
+    // At this point, if we were using decoy transcripts, we don't need them anymore and can get
+    // rid of them.
+    readExp.dropDecoyTranscripts();
 
     //+++++++++++++++++++++++++++++++++++++++
     /** GC-fragment bias **/
