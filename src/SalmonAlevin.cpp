@@ -1242,7 +1242,7 @@ void alevinOptimize( std::vector<std::string>& trueBarcodesVec,
                       "bad input (or a bug). If you cannot track down the cause, please "
                       "report this issue on GitHub.");
       aopt.jointLog->flush();
-      exit(1);
+      exit(74);
     }
     aopt.jointLog->info("Finished optimizer");
   }

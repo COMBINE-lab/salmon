@@ -838,7 +838,7 @@ bool GZipWriter::writeBootstraps(std::string& bcName,
   size_t num = alphas.size();
   if (alphas.size() != variance.size()){
     std::cerr<<"ERROR: Quants matrix and varicance matrix size differs"<<std::flush;
-    exit(1);
+    exit(74);
   }
   size_t elSize = sizeof(typename std::vector<double>::value_type);
   countfile.write(reinterpret_cast<char*>(alphas.data()),

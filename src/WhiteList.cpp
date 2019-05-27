@@ -203,7 +203,7 @@ namespace alevin {
             aopt.jointLog->error("Size of the feature file doesn't match.\n"
                                  "Please report the error on github.");
             aopt.jointLog->flush();
-            exit(1);
+            exit(84);
           }
 
           featureCountsMatrix[cellId-2] = features;
@@ -213,7 +213,7 @@ namespace alevin {
           aopt.jointLog->error("The features file has less number of cells.\n"
                                "Please report the error on github.");
           aopt.jointLog->flush();
-          exit(1);
+          exit(84);
         }
         aopt.jointLog->info("Done making feature Matrix");
         aopt.jointLog->flush();

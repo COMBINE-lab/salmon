@@ -10,7 +10,7 @@ uint32_t getGeneId(spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap,
     std::cerr << "Out of Range error for txp to gene Map: "
               << '\n' << std::flush;
     std::cerr << tId << "\t not found" << std::flush;
-    exit(1);
+    exit(74);
   }
 }
 
@@ -258,7 +258,7 @@ void getNumMolecules(alevin::graph::Graph& g,
         if( globalTxps.size() == 0 ) {
           std::cerr << "can't find a representative transcript for a molecule\n"
                     << "Please report this on github";
-          exit(1);
+          exit(74);
         }
 
         for (auto rv: bestMcc){
@@ -361,7 +361,7 @@ void assignTiers(std::vector<TGroupT>& txpGroups,
         if (!vertexIndices.contains(gene_from) or
             !vertexIndices.contains(gene_to)){
           std::cerr<<"ERROR: Tier creation can't match indexToGene"<<std::flush;
-          std::exit(1);
+          std::exit(74);
         }
         uint32_t gfromIndex = vertexIndices[gene_from];
         uint32_t gtoIndex = vertexIndices[gene_to];
@@ -397,7 +397,7 @@ void assignTiers(std::vector<TGroupT>& txpGroups,
 
   if(component.size() != vertexIndices.size()){
     std::cerr<<"ERROR: tiers size doesn't match";
-    std::exit(1);
+    std::exit(74);
   }
 
   // iterating over connected components and assigning tiers
@@ -409,7 +409,7 @@ void assignTiers(std::vector<TGroupT>& txpGroups,
                  <<" gene Index > indexToGene size"
                  << indexToGene.size()
                  << std::flush;
-        std::exit(1);
+        std::exit(74);
       }
       uint32_t gene = indexToGene[geneIndex];
       if (tiers[gene] == 1){
@@ -460,7 +460,7 @@ bool dedupClasses(std::vector<double>& geneAlphas,
     }
     else if (eqclass.labels.size() == 0){
       std::cerr<<"Eqclasses with No gene labels\n";
-      exit(1);
+      exit(74);
     }
   }
 

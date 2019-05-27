@@ -187,7 +187,7 @@ bool gaussianKDE(const std::vector<uint32_t>& freqCounter,
 
   if (covariance == 0){
     std::cout << "0 Covariance error for Gaussian kde"<<std::flush;
-    exit(1);
+    exit(64);
   }
 
   const double PI = 3.1415926535897;
@@ -340,7 +340,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
       aopt.jointLog->error("Can't find right Boundary.\n"
                            "Please Report this issue on github.");
       aopt.jointLog->flush();
-      exit(1);
+      exit(64);
     }
   }
   else{
@@ -351,7 +351,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
       aopt.jointLog->error("Can't find left Boundary.\n"
                            "Please Report this issue on github.");
       aopt.jointLog->flush();
-      exit(1);
+      exit(64);
     }
     else{
       aopt.jointLog->info("Knee found left boundary at {} {} {}",
@@ -379,7 +379,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
       if (invCovariance == 0.0 or normFactor == 0.0){
         aopt.jointLog->error("Wrong invCovariance/Normfactor");
         aopt.jointLog->flush();
-        exit(1);
+        exit(64);
       }
     }
   }//end-left-knee finding case
@@ -740,7 +740,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
       aopt.jointLog->error("Error: index not find in freq Counter\n"
                            "Please Report the issue on github");
       aopt.jointLog->flush();
-      exit(1);
+      exit(64);
     }
 
     // NOTE: Need more clever way for ambiguity resolution.
@@ -768,7 +768,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
                            "Something went wrong.\n"
                            "Please report this issue to github");
       aopt.jointLog->flush();
-      std::exit(1);
+      std::exit(64);
     }
     aopt.jointLog->info("Done dumping fastq File");
   }

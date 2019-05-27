@@ -340,7 +340,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         jointlog->error("Deduplication for cell {} failed \n"
                         "Please Report this on github.", trueBarcodeStr);
         jointlog->flush();
-        std::exit(1);
+        std::exit(74);
       }
 
       if ( numBootstraps and noEM ) {
@@ -361,7 +361,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
           jointlog->error("EM iteration for cell {} failed \n"
                           "Please Report this on github.", trueBarcodeStr);
           jointlog->flush();
-          std::exit(1);
+          std::exit(74);
         }
       }
 
@@ -404,7 +404,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
           jointlog->error("Error: index {} not found in freq Counter\n"
                                "Please Report the issue on github", trueBarcodeStr);
           jointlog->flush();
-          exit(1);
+          exit(84);
         }
 
         uint64_t numRawReads = *indexIt;
@@ -467,7 +467,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
           jointlog->error("Bootstrapping failed \n"
                           "Please Report this on github.");
           jointlog->flush();
-          std::exit(1);
+          std::exit(74);
         }
 
         // write the abundance for the cell
@@ -749,7 +749,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
       auto countMatFilename = aopt.outputDirectory / "quants_mat.gz";
       if(not boost::filesystem::exists(countMatFilename)){
         std::cout<<"ERROR: Can't import Binary file quants.mat.gz, it doesn't exist" <<std::flush;
-        exit(1);
+        exit(84);
       }
 
       boost::iostreams::filtering_istream countMatrixStream;

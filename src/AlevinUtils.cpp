@@ -94,7 +94,7 @@ namespace alevin {
                                  apt::InDrop& pt,
                                  std::string& umi){
       std::cout<<"Incorrect call for umi extract";
-      exit(0);
+      exit(1);
     }
 
     template <>
@@ -231,7 +231,7 @@ namespace alevin {
       if(barcodeLength > seqSize){
         std::cout<<"Sequence-Size " << barcodeLength << "greater than specified "
                  << seqSize <<".\nPlease report the issue on Github.\n" ;
-        exit(1);
+        exit(64);
       }
 
       for (size_t i=0; i<barcodeLength; i++){
