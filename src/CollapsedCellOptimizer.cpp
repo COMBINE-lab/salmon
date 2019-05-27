@@ -458,12 +458,12 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
 
 
       // write the abundance for the cell
-      gzw.writeAbundances( trueBarcodeStr,
-                           features,
-                           featureCode,
-                           geneAlphas,
-                           tiers,
-                           dumpUmiGraph);
+      gzw.writeSparseAbundances( trueBarcodeStr,
+                                 features,
+                                 featureCode,
+                                 geneAlphas,
+                                 tiers,
+                                 dumpUmiGraph );
 
 
       // maintaining count for total number of predicted UMI
