@@ -291,7 +291,7 @@ namespace salmon {
        "noDedup", po::bool_switch()->default_value(alevin::defaults::noDedup),
        "Stops the pipeline after CB sequence correction and quasi-mapping reads.")
       (
-       "freqThreshold",po::value<uint32_t>(),
+       "freqThreshold", po::value<uint32_t>()->default_value(alevin::defaults::freqThreshold),
        "threshold for the frequency of the barcodes");
     return alevindevs;
   }

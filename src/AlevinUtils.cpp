@@ -346,6 +346,7 @@ namespace alevin {
       aopt.numBootstraps = vm["numCellBootstraps"].as<uint32_t>();
       aopt.lowRegionMinNumBarcodes = vm["lowRegionMinNumBarcodes"].as<uint32_t>();
       aopt.maxNumBarcodes = vm["maxNumBarcodes"].as<uint32_t>();
+      aopt.freqThreshold = vm["freqThreshold"].as<uint32_t>();
       aopt.forceCells = vm["forceCells"].as<uint32_t>();
       aopt.expectCells = vm["expectCells"].as<uint32_t>();
       if(vm.count("iupac")){

@@ -315,6 +315,9 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
 
   if (aopt.forceCells > 0) {
     topxBarcodes = aopt.forceCells;
+    while( freqCounter[sortedIdx[topxBarcodes]] < aopt.freqThreshold ) {
+      --topxBarcodes;
+    }
   }
   else if (aopt.expectCells > 0){
     // Expect Cells algorithm is taken from
@@ -342,8 +345,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
       aopt.jointLog->flush();
       exit(64);
     }
-  }
-  else{
+  } else{
     topxBarcodes = getLeftBoundary(sortedIdx,
                                    topxBarcodes,
                                    freqCounter);
@@ -712,7 +714,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
 
     if (aopt.keepCBFraction > 0.0) {
       aopt.forceCells = std::min(static_cast<int>(aopt.keepCBFraction * freqCounter.size()),
-                                 737000);
+                                 100000);
     }
 
     //Calculate the knee using the frequency distribution
