@@ -322,7 +322,9 @@ void processMiniBatchSimple(ReadExperimentT& readExp, ForgettingMassCalculator& 
               "please report this bug on GitHub!\n";
           }
           prevTxpID = transcriptID;
-          txpIDs.push_back(transcriptID);
+          if (not transcripts[transcriptID].isDecoy()) {
+            txpIDs.push_back(transcriptID);
+          }
       }
 
       // If this fragment has a zero probability,
