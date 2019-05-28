@@ -269,7 +269,7 @@ namespace alevin {
         seqArchive(numberOfDecoys);
         seqArchive(firstDecoyIndex);
 
-        if (txpNames.size()-numberOfDecoys != firstDecoyIndex) {
+        if ( numberOfDecoys>0 && (txpNames.size()-numberOfDecoys != firstDecoyIndex) ) {
           jointLog->error("Error reading txpInfo and the number of decoys.\n"
                           "Total Refs: {}\nDecoys: {} \nFirstIndex: {}",
                           txpNames.size(), numberOfDecoys, firstDecoyIndex);
