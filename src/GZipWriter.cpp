@@ -722,9 +722,11 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
     oa(cereal::make_nvp("num_bootstraps", numSamples));
     oa(cereal::make_nvp("num_processed", experiment.numObservedFragments()));
     oa(cereal::make_nvp("num_mapped", experiment.numMappedFragments()));
+    oa(cereal::make_nvp("num_decoy_fragments", mstats.numDecoyFragments.load()));
     oa(cereal::make_nvp("num_dovetail_fragments", mstats.numDovetails.load()));
     oa(cereal::make_nvp("num_fragments_filtered_vm", mstats.numFragmentsFiltered.load()));
-    oa(cereal::make_nvp("num_alignments_below_threshold_for_mapped_fragments_vm", mstats.numMappingsFiltered.load()));
+    oa(cereal::make_nvp("num_alignments_below_threshold_for_mapped_fragments_vm",
+                        mstats.numMappingsFiltered.load()));
     oa(cereal::make_nvp("percent_mapped",
                         experiment.effectiveMappingRate() * 100.0));
     oa(cereal::make_nvp("call", std::string("quant")));
@@ -947,9 +949,11 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
       header += "\tmRnaFraction";
     } else if (featureCode == 2) {
       header += "\trRnaFraction";
-    } else if (dumpUmiGraph) {
-      header += "\tArborescenceCount";
-    } header += "\n";
+    } else {
+      std::cerr<<"Error: Wrong feature code: " << featureCode << std::flush;
+      exit(74);
+    }
+    header += "\tArborescenceCount\n";
     bcFeaturesStream_->write(header.c_str(), header.size());
   }
 
