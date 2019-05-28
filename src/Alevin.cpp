@@ -84,6 +84,8 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
+                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
@@ -116,6 +118,7 @@ void densityCalculator(single_parser* parser,
       //Sexy Progress monitor
       ++totNumBarcodesLocal;
       if (not aopt.quiet and totNumBarcodesLocal % 500000 == 0) {
+        aopt.jointLog->flush();
         fmt::print(stderr, "\r\r{}processed{} {} Million {}barcodes{}",
                    green, red, totNumBarcodesLocal/1000000, green, RESET_COLOR);
       }
@@ -789,6 +792,22 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
     exit(1);
   }
 
+  spp::sparse_hash_map<uint32_t, uint32_t> txpToGeneMap;
+  spp::sparse_hash_map<std::string, uint32_t> geneIdxMap;
+
+  auto txpInfoFile = sopt.indexDirectory / "txpInfo.bin";
+  if(!boost::filesystem::exists(txpInfoFile)){
+    aopt.jointLog->error("Index Directory or the txpInfo.bin: {} doesn't exist.",
+                         txpInfoFile.string());
+    aopt.jointLog->flush();
+    exit(1);
+  }
+
+  aut::getTxpToGeneMap(txpToGeneMap, geneIdxMap,
+                       aopt.geneMapFile.string(),
+                       txpInfoFile.string(),
+                       aopt.jointLog);
+
   // If we're supposed to be quiet, set the global logger level to >= warn
   if (aopt.quiet) {
     spdlog::set_level(spdlog::level::warn); //Set global log level to warn
@@ -836,7 +855,8 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
   if(!aopt.noQuant){
     aopt.jointLog->info("Done with Barcode Processing; Moving to Quantify\n");
     alevinQuant(aopt, sopt, barcodeSoftMap, trueBarcodes,
-                orderedOptions, freqCounter, numLowConfidentBarcode);
+                txpToGeneMap, geneIdxMap, orderedOptions,
+                freqCounter, numLowConfidentBarcode);
   }
   else{
     boost::filesystem::path cmdInfoPath = vm["output"].as<std::string>();

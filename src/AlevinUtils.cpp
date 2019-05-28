@@ -250,6 +250,82 @@ namespace alevin {
                         neighbors);
     }
 
+    void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                         spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                         const std::string& t2gFileName,
+                         const std::string& refNamesFile,
+                         std::shared_ptr<spdlog::logger>& jointLog){
+      size_t numDupTxps;
+      uint64_t numberOfDecoys, firstDecoyIndex;
+      spp::sparse_hash_map<std::string, uint32_t> txpIdxMap;
+      // reading in the binary file
+      {
+        jointLog->info("Loading Transcript Info ");
+        std::ifstream seqStream(refNamesFile);
+        cereal::BinaryInputArchive seqArchive(seqStream);
+
+        std::vector<std::string> txpNames;
+        seqArchive(txpNames);
+        seqArchive(numberOfDecoys);
+        seqArchive(firstDecoyIndex);
+
+        if (txpNames.size()-numberOfDecoys != firstDecoyIndex) {
+          jointLog->error("Error reading txpInfo and the number of decoys.\n"
+                          "Total Refs: {}\nDecoys: {} \nFirstIndex: {}",
+                          txpNames.size(), numberOfDecoys, firstDecoyIndex);
+          jointLog->flush();
+          exit(1);
+        }
+
+        for (size_t i=0; i<txpNames.size(); i++){
+          txpIdxMap[txpNames[i]] = i;
+        }
+        seqStream.close();
+        numDupTxps = txpNames.size() - txpIdxMap.size();
+      }
+
+      if ( numDupTxps > 0){
+        jointLog->warn("Found {} transcripts with duplicate names");
+      }
+
+      std::ifstream t2gFile(t2gFileName);
+      uint32_t tid, gid, geneCount{0};
+      std::string tStr, gStr;
+      if(t2gFile.is_open()) {
+        while( not t2gFile.eof() ) {
+          t2gFile >> tStr >> gStr;
+
+          if(not txpIdxMap.contains(tStr)){
+            continue;
+          }
+          tid = txpIdxMap[tStr];
+
+          if (geneIdxMap.contains(gStr)){
+            gid = geneIdxMap[gStr];
+          }
+          else{
+            gid = geneCount;
+            geneIdxMap[gStr] = gid;
+            geneCount++;
+          }
+
+          txpToGeneMap[tid] = gid;
+        }
+        t2gFile.close();
+      }
+
+      if(txpToGeneMap.size() + numberOfDecoys < txpIdxMap.size()){
+        jointLog->error( "ERROR: "
+                         "Txp to Gene Map not found for {}"
+                         " transcripts. Exiting",
+                         txpIdxMap.size() - txpToGeneMap.size()
+                         );
+        jointLog->flush();
+        exit(1);
+      }
+
+      jointLog->info("Found all transcripts to gene mappings");
+    }
 
     template <typename ProtocolT>
     bool processAlevinOpts(AlevinOpts<ProtocolT>& aopt,

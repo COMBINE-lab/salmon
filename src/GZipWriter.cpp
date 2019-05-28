@@ -949,7 +949,7 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
       header += "\tmRnaFraction";
     } else if (featureCode == 2) {
       header += "\trRnaFraction";
-    } else {
+    } else if (featureCode != 0) {
       std::cerr<<"Error: Wrong feature code: " << featureCode << std::flush;
       exit(74);
     }

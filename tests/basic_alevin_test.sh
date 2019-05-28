@@ -3,8 +3,8 @@ OUT=$PWD
 
 tfile=$(mktemp /tmp/foo.XXXXXXXXX) 
 
-#/usr/bin/time -o $tfile $ALVBIN alevin -lISR --chromium -1 /mnt/scratch5/avi/alevin/data/10x/v2/mohu/100/all_bcs.fq -2 /mnt/scratch5/avi/alevin/data/10x/v2/mohu/100/all_reads.fq -o $OUT/prediction -i /mnt/scratch5/avi/alevin/data/mohu/salmon_index -p 10 --tgMap /mnt/scratch5/avi/alevin/data/mohu/gtf/txp2gene.tsv #--dumpUmiGraph --numCellBootstraps 100  --dumpBfh --dumpBarcodeEq  --dumpMtx --expectCells 1001  --end 6 --umiLength 10 --barcodeLength 16
-/usr/bin/time -o $tfile $ALVBIN alevin -lISR --chromium -1 /mnt/scratch5/avi/alevin/data/10x/v2/mohu/100/all_bcs.fq -2 /mnt/scratch5/avi/alevin/data/10x/v2/mohu/100/all_reads.fq -o $OUT/prediction -i /mnt/scratch1/hirak/mappings-matter/data/txome_index/human/gencode/salmon_kdp_23_mashmap -p 20 --tgMap /mnt/scratch1/hirak/mappings-matter/data/gtf/txp2gene.tsv &&
+/usr/bin/time -o $tfile $ALVBIN alevin -lISR --chromium -1 /mnt/scratch5/avi/alevin/data/10x/v2/mohu/100/all_bcs.fq -2 /mnt/scratch5/avi/alevin/data/10x/v2/mohu/100/all_reads.fq -o $OUT/prediction -i /mnt/scratch5/avi/alevin/data/mohu/salmon_index -p 10 --tgMap /mnt/scratch5/avi/alevin/data/mohu/gtf/txp2gene.tsv && #--dumpUmiGraph --numCellBootstraps 100  --dumpBfh --dumpBarcodeEq  --dumpMtx --expectCells 1001  --end 6 --umiLength 10 --barcodeLength 16
+#/usr/bin/time -o $tfile $ALVBIN alevin -lISR --chromium -1 /mnt/scratch5/avi/alevin/data/10x/v2/mohu/100/all_bcs.fq -2 /mnt/scratch5/avi/alevin/data/10x/v2/mohu/100/all_reads.fq -o $OUT/prediction -i /mnt/scratch1/hirak/mappings-matter/data/txome_index/human/gencode/salmon_kdp_23_mashmap_ordered -p 20 --tgMap /mnt/scratch1/hirak/mappings-matter/data/gtf/txp2gene.tsv &&
 
 cat $tfile  
 

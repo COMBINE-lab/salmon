@@ -94,6 +94,11 @@ namespace alevin{
       return true;
     }
 
+    void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                         spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                         const std::string& t2gFile, const std::string& refNamesFile,
+                         std::shared_ptr<spdlog::logger>& jointLog);
+
     bool checkSetCoverage(std::vector<std::vector<uint32_t>>& tgroup,
                           std::vector<uint32_t> txps);
 
