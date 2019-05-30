@@ -707,7 +707,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
   uint64_t readsThrown{0};
   for(auto fqIt = freqCounter.begin(); fqIt != freqCounter.end(); ++fqIt){
     std::string cb_seq = std::string(fqIt.key_sv()).c_str();
-    if (trueBarcodes.find(cb_seq) != trueBarcodes.end() ) {
+    if (trueBarcodes.find(cb_seq) == trueBarcodes.end() ) {
       readsThrown += fqIt.value();
     }
   }
