@@ -414,31 +414,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
   lowRegionNumBarcodes++;
   topxBarcodes++;
 
-  uint64_t totalReads{0};
-  for(size_t i=0; i<topxBarcodes; i++){
-    totalReads += freqCounter[sortedIdx[i]];
-  }
-
-  uint64_t readsThrownCounter {0};
-  for(size_t i=topxBarcodes; i<freqCounter.size(); i++){
-    readsThrownCounter += freqCounter[sortedIdx[i]];
-  }
-  totalReads += readsThrownCounter;
-
-  double percentThrown = readsThrownCounter*100.0 / totalReads;
-  if (percentThrown > 50.0) {
-    aopt.jointLog->warn("Total {}% reads will be thrown away"
-                        " because of noisy Cellular barcodes.",
-                        percentThrown);
-  }
-  else{
-    aopt.jointLog->info("Total {}% reads will be thrown away"
-                        " because of noisy Cellular barcodes.",
-                        percentThrown);
-  }
-  aopt.readsThrown = readsThrownCounter;
   aopt.totalLowConfidenceCBs = topxBarcodes - aopt.kneeCutoff;
-
   // keeping some cells left of the left boundary for learning
   aopt.jointLog->info("Total {}{}{}(has {}{}{} low confidence)"
                       " barcodes",
@@ -726,8 +702,29 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
                        numLowConfidentBarcode, collapMap, aopt);
 
     aopt.jointLog->info("Done True Barcode Sampling");
-    aopt.intelligentCutoff = trueBarcodes.size();
   }
+
+  uint64_t readsThrown{0};
+  for(auto fqIt = freqCounter.begin(); fqIt != freqCounter.end(); ++fqIt){
+    std::string cb_seq = std::string(fqIt.key_sv()).c_str();
+    if (trueBarcodes.find(cb_seq) != trueBarcodes.end() ) {
+      readsThrown += fqIt.value();
+    }
+  }
+
+  double percentThrown = readsThrown*100.0 / totNumBarcodes;
+  if (percentThrown > 50.0) {
+    aopt.jointLog->warn("Total {}% reads will be thrown away"
+                        " because of noisy Cellular barcodes.",
+                        percentThrown);
+  }
+  else{
+    aopt.jointLog->info("Total {}% reads will be thrown away"
+                        " because of noisy Cellular barcodes.",
+                        percentThrown);
+  }
+  aopt.readsThrown = readsThrown;
+  aopt.intelligentCutoff = trueBarcodes.size();
 
   indexBarcodes(aopt, freqCounter, trueBarcodes, barcodeSoftMap);
   aopt.jointLog->info("Done indexing Barcodes");
@@ -736,7 +733,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
   aopt.jointLog->info("Used Barcodes except Whitelist: {}", barcodeSoftMap.size());
 
   aopt.totalCBs = freqCounter.size();
-  aopt.totalUsedCBs = barcodeSoftMap.size();
+  aopt.totalUsedCBs = barcodeSoftMap.size()+trueBarcodes.size();
 
   for(auto& softMapIt: barcodeSoftMap ){
     auto indexIt = freqCounter.find(softMapIt.first);
