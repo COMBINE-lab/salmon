@@ -862,6 +862,7 @@ void processReadsQuasi(
 
   size_t numMappingsDropped{0};
   size_t numFragsDropped{0};
+  size_t numDecoyFrags{0};
 
   AlnCacheMap alnCacheLeft; alnCacheLeft.reserve(32);
   AlnCacheMap alnCacheRight; alnCacheRight.reserve(32);
@@ -1027,7 +1028,9 @@ void processReadsQuasi(
           char* r1rc = nullptr;
           char* r2rc = nullptr;
           int32_t bestScore{std::numeric_limits<int32_t>::lowest()};
+          int32_t bestDecoyScore{std::numeric_limits<int32_t>::lowest()};
           std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
+          std::vector<bool> decoyVec(jointHits.size(), false);
           size_t idx{0};
           double optFrac{salmonOpts.minScoreFraction};
           int32_t maxLeftScore{a * static_cast<int32_t>(rp.first.seq.length())};
@@ -1037,6 +1040,7 @@ void processReadsQuasi(
           for (auto& h : jointHits) {
             int32_t score{std::numeric_limits<int32_t>::min()};
             auto& t = transcripts[h.tid];
+            bool isDecoy = t.isDecoy();
             char* tseq = const_cast<char*>(t.Sequence());
             const int32_t tlen = static_cast<int32_t>(t.RefLength);
             const uint32_t buf{20};
@@ -1109,23 +1113,26 @@ void processReadsQuasi(
               }
             }
 
-            bestScore = (score > bestScore) ? score : bestScore;
+            bestScore = (!isDecoy and (score > bestScore)) ? score : bestScore;
+            bestDecoyScore = (isDecoy and (score > bestDecoyScore)) ? score : bestDecoyScore;
             scores[idx] = score;
+            decoyVec[idx] = isDecoy;
             h.score(score);
             ++idx;
           }
 
           uint32_t ctr{0};
-          if (bestScore > std::numeric_limits<int32_t>::min()) {
+          bool bestHitDecoy = (bestScore < bestDecoyScore);
+          if (bestScore > std::numeric_limits<int32_t>::min() and !bestHitDecoy) {
             // Note --- with soft filtering, only those hits that are given the minimum possible
             // score are filtered out.
             jointHits.erase(
                             std::remove_if(jointHits.begin(), jointHits.end(),
-                                           [&ctr, &scores, &numMappingsDropped, bestScore, hardFilter] (const QuasiAlignment& qa) -> bool {
+                                           [&ctr, &scores, &decoyVec, &numMappingsDropped, bestScore, hardFilter] (const QuasiAlignment& qa) -> bool {
                                              // if soft filtering, we only drop things with an invalid score
                                              // if hard filtering, we drop everything with a sub-optimal score.
-                                             bool rem = hardFilter ? (scores[ctr] < bestScore) :
-                                               (scores[ctr] == std::numeric_limits<int32_t>::min());
+                                             bool rem = decoyVec[ctr] ? true : (hardFilter ? (scores[ctr] < bestScore) :
+                                                                                (scores[ctr] == std::numeric_limits<int32_t>::min()));
                                              ++ctr;
                                              numMappingsDropped += rem ? 1 : 0;
                                              return rem;
@@ -1141,6 +1148,7 @@ void processReadsQuasi(
                             qa.score( (hardFilter ? -1.0 : std::exp(-v)) );
                           });
           } else {
+            numDecoyFrags += bestHitDecoy ? 1 : 0;
             ++numFragsDropped;
             jointHitGroup.clearAlignments();
           }
@@ -1379,6 +1387,7 @@ void processReadsQuasi(
   mstats.numMappingsFiltered += numMappingsDropped;
   mstats.numFragmentsFiltered += numFragsDropped;
   mstats.numDovetails += hctr.numDovetails;
+  mstats.numDecoyFragments += numDecoyFrags;
   //salmonOpts.jointLog->info("Number of orphans rescued in this thread {}",
   //                          numOrphansRescued);
 
@@ -1523,6 +1532,7 @@ void processReadsQuasi(
   }
   size_t numMappingsDropped{0};
   size_t numFragsDropped{0};
+  size_t numDecoyFrags{0};
 
   //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
   AlnCacheMap alnCache; alnCache.reserve(16);
@@ -1581,7 +1591,9 @@ void processReadsQuasi(
 
           char* r1rc = nullptr;
           int32_t bestScore{std::numeric_limits<int32_t>::lowest()};
+          int32_t bestDecoyScore{std::numeric_limits<int32_t>::lowest()};
           std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
+          std::vector<bool> decoyVec(jointHits.size(), false);
           size_t idx{0};
           double optFrac{salmonOpts.minScoreFraction};
           int32_t maxReadScore = a * rp.seq.length();
@@ -1590,6 +1602,7 @@ void processReadsQuasi(
           for (auto& h : jointHits) {
             int32_t score{std::numeric_limits<int32_t>::min()};
             auto& t = transcripts[h.tid];
+            bool isDecoy = t.isDecoy();
             char* tseq = const_cast<char*>(t.Sequence());
             const int32_t tlen = static_cast<int32_t>(t.RefLength);
             const uint32_t buf{20};
@@ -1611,23 +1624,27 @@ void processReadsQuasi(
             } else {
               score = s;
             }
-            bestScore = (score > bestScore) ? score : bestScore;
+
+            bestScore = (!isDecoy and (score > bestScore)) ? score : bestScore;
+            bestDecoyScore = (isDecoy and (score > bestDecoyScore)) ? score : bestDecoyScore;
             scores[idx] = score;
+            decoyVec[idx] = isDecoy;
             h.score(score);
             ++idx;
           }
 
           uint32_t ctr{0};
-          if (bestScore > std::numeric_limits<int32_t>::min()) {
+          bool bestHitDecoy = (bestScore < bestDecoyScore);
+          if (bestScore > std::numeric_limits<int32_t>::min() and !bestHitDecoy) {
             // Note --- with soft filtering, only those hits that are given the minimum possible
             // score are filtered out.
             jointHits.erase(
                             std::remove_if(jointHits.begin(), jointHits.end(),
-                                           [&ctr, &scores, &numMappingsDropped, bestScore, hardFilter] (const QuasiAlignment& qa) -> bool {
+                                           [&ctr, &scores, &decoyVec, &numMappingsDropped, bestScore, hardFilter] (const QuasiAlignment& qa) -> bool {
                                              // if soft filtering, we only drop things with an invalid score
                                              // if hard filtering, we drop everything with a sub-optimal score.
-                                             bool rem = hardFilter ? (scores[ctr] < bestScore) :
-                                               (scores[ctr] == std::numeric_limits<int32_t>::min());
+                                             bool rem = decoyVec[ctr] ? true : (hardFilter ? (scores[ctr] < bestScore) :
+                                                                                (scores[ctr] == std::numeric_limits<int32_t>::min()));
                                              ++ctr;
                                              numMappingsDropped += rem ? 1 : 0;
                                              return rem;
@@ -1643,6 +1660,7 @@ void processReadsQuasi(
                             qa.score( (hardFilter ? -1.0 : std::exp(-v)) );
                           });
           } else {
+            numDecoyFrags += bestHitDecoy ? 1 : 0;
             ++numFragsDropped;
             jointHitGroup.clearAlignments();
           }
@@ -1780,6 +1798,7 @@ void processReadsQuasi(
   }
   mstats.numMappingsFiltered += numMappingsDropped;
   mstats.numFragmentsFiltered += numFragsDropped;
+  mstats.numDecoyFragments += numDecoyFrags;
 }
 
 /// DONE QUASI
@@ -1833,7 +1852,6 @@ void processReadLibrary(
 
   /** sequence-specific and GC-fragment bias vectors --- each thread gets it's
    * own **/
-  size_t numTxp = readExp.transcripts().size();
   std::vector<BiasParams> observedBiasParams(
       numThreads, BiasParams(salmonOpts.numConditionalGCBins,
                              salmonOpts.numFragGCBins, false));
@@ -1933,6 +1951,10 @@ void processReadLibrary(
   for (auto& t : threads) {
     t.join();
   }
+
+  // At this point, if we were using decoy transcripts, we don't need them anymore and can get
+  // rid of them.
+  readExp.dropDecoyTranscripts();
 
   // If we don't have a sufficient number of assigned fragments, then
   // complain here!
@@ -2205,10 +2227,12 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
   if (salmonOpts.validateMappings) {
     salmonOpts.jointLog->info("Number of mappings discarded because of alignment score : {:n}", mstats.numMappingsFiltered.load());
     salmonOpts.jointLog->info("Number of fragments entirely discarded because of alignment score : {:n}", mstats.numFragmentsFiltered.load());
+    salmonOpts.jointLog->info("Number of fragments discarded because they are best-mapped to decoys : {:n}", mstats.numDecoyFragments.load());
   }
   if (!salmonOpts.allowDovetail) {
     salmonOpts.jointLog->info("Number of fragments discarded because they have only dovetail (discordant) mappings : {:n}", mstats.numDovetails.load());
   }
+
   // If we didn't achieve burnin, then at least compute effective
   // lengths and mention this to the user.
   if (totalAssignedFragments < salmonOpts.numBurninFrags) {

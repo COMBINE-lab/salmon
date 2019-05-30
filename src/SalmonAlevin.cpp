@@ -390,7 +390,8 @@ void processReadsQuasi(
                        std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
                        volatile bool& writeToCache, AlevinOpts<ProtocolT>& alevinOpts,
                        SoftMapT& barcodeMap,
-                       spp::sparse_hash_map<std::string, uint32_t>& trBcs
+                       spp::sparse_hash_map<std::string, uint32_t>& trBcs,
+                       MappingStatistics& mstats
                        /*,std::vector<uint64_t>& uniqueFLD*/) {
   uint64_t count_fwd = 0, count_bwd = 0;
   // Seed with a real random value, if available
@@ -506,6 +507,7 @@ void processReadsQuasi(
   }
 
   size_t numDropped{0};
+  size_t numDecoyFrags{0};
   std::string readSubSeq;
 
   //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
@@ -547,15 +549,9 @@ void processReadsQuasi(
       bool seqOk;
 
       if (alevinOpts.protocol.end == bcEnd::FIVE){
-        if(alevinOpts.nobarcode){
-          barcodeIdx = 0;
-          seqOk = true;
-          alevinOpts.protocol.barcodeLength = 0;
-        } else {
-          barcode = aut::extractBarcode(rp.first.seq, alevinOpts.protocol);
-          seqOk = (barcode.has_value()) ?
-            aut::sequenceCheck(*barcode, Sequence::BARCODE) : false;
-        }
+        barcode = aut::extractBarcode(rp.first.seq, alevinOpts.protocol);
+        seqOk = (barcode.has_value()) ?
+          aut::sequenceCheck(*barcode, Sequence::BARCODE) : false;
 
         // If we have a barcode sequence, but not yet an index
         if (seqOk and (not barcodeIdx)) {
@@ -662,7 +658,9 @@ void processReadsQuasi(
 
           char* r1rc = nullptr;
           int32_t bestScore{std::numeric_limits<int32_t>::min()};
+          int32_t bestDecoyScore{std::numeric_limits<int32_t>::lowest()};
           std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
+          std::vector<bool> decoyVec(jointHits.size(), false);
           size_t idx{0};
           double optFrac{salmonOpts.minScoreFraction};
           int32_t maxReadScore{a * static_cast<int32_t>(readSubSeq.length())};
@@ -672,6 +670,7 @@ void processReadsQuasi(
           for (auto& h : jointHits) {
             int32_t score{std::numeric_limits<int32_t>::min()};
             auto& t = transcripts[h.tid];
+            bool isDecoy = t.isDecoy();
             char* tseq = const_cast<char*>(t.Sequence());
             const int32_t tlen = static_cast<int32_t>(t.RefLength);
             const uint32_t buf{20};
@@ -695,23 +694,26 @@ void processReadsQuasi(
               score = s;
             }
 
-            bestScore = (score > bestScore) ? score : bestScore;
+            bestScore = (!isDecoy and (score > bestScore)) ? score : bestScore;
+            bestDecoyScore = (isDecoy and (score > bestDecoyScore)) ? score : bestDecoyScore;
             scores[idx] = score;
+            decoyVec[idx] = isDecoy;
             h.score(score);
             ++idx;
           }
 
           uint32_t ctr{0};
-          if (bestScore > std::numeric_limits<int32_t>::min()) {
+          bool bestHitDecoy = (bestScore < bestDecoyScore);
+          if (bestScore > std::numeric_limits<int32_t>::min() and !bestHitDecoy) {
             // Note --- with soft filtering, only those hits that are given the minimum possible
             // score are filtered out.
             jointHits.erase(
                             std::remove_if(jointHits.begin(), jointHits.end(),
-                                           [&ctr, &scores, &numDropped, bestScore] (const QuasiAlignment& qa) -> bool {
+                                           [&ctr, &scores, &decoyVec, &numDropped, bestScore] (const QuasiAlignment& qa) -> bool {
                                              // soft filter
                                              //bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
                                              //strict filter
-                                             bool rem = (scores[ctr] < bestScore);
+                                             bool rem = decoyVec[ctr] ? true : (scores[ctr] < bestScore);
                                              ++ctr;
                                              numDropped += rem ? 1 : 0;
                                              return rem;
@@ -727,6 +729,8 @@ void processReadsQuasi(
                             qa.score(std::exp(-v));
                           });
           } else {
+            numDecoyFrags += bestHitDecoy ? 1 : 0;
+            ++numDropped;
             jointHitGroup.clearAlignments();
           }
         } //end-if validate mapping
@@ -801,6 +805,7 @@ void processReadsQuasi(
                               maxZeroFrac);
   }
 
+  mstats.numDecoyFragments += numDecoyFrags;
   readExp.updateShortFrags(shortFragStats);
 }
 
@@ -823,7 +828,7 @@ void processReadLibrary(
                         std::vector<AlnGroupVec<AlnT>>& structureVec, volatile bool& writeToCache,
                         AlevinOpts<ProtocolT>& alevinOpts,
                         SoftMapT& barcodeMap,
-                        spp::sparse_hash_map<std::string, uint32_t>& trBcs) {
+                        spp::sparse_hash_map<std::string, uint32_t>& trBcs, MappingStatistics& mstats) {
 
   std::vector<std::thread> threads;
 
@@ -882,7 +887,8 @@ void processReadLibrary(
                                                                             upperBoundHits, smallSeqs, nSeqs, sidx->quasiIndexPerfectHash64(), transcripts,
                                                                             fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
                                                                             salmonOpts, iomutex, initialRound,
-                                                                            burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs/*, uniqueFLDs[i]*/);
+                                                                            burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs,
+                                                                            mstats/*, uniqueFLDs[i]*/);
           };
           threads.emplace_back(threadFun);
         } else { // Dense Hash
@@ -896,7 +902,8 @@ void processReadLibrary(
                                                                           upperBoundHits, smallSeqs, nSeqs, sidx->quasiIndex64(), transcripts, fmCalc,
                                                                           clusterForest, fragLengthDist, observedBiasParams[i],
                                                                           salmonOpts, iomutex, initialRound,
-                                                                          burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs/*, uniqueFLDs[i]*/);
+                                                                          burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs,
+                                                                          mstats/*, uniqueFLDs[i]*/);
           };
           threads.emplace_back(threadFun);
         }
@@ -912,7 +919,8 @@ void processReadLibrary(
                                                                             upperBoundHits, smallSeqs, nSeqs, sidx->quasiIndexPerfectHash32(), transcripts,
                                                                             fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
                                                                             salmonOpts, iomutex, initialRound,
-                                                                            burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs/*, uniqueFLDs[i]*/);
+                                                                            burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs,
+                                                                            mstats/*, uniqueFLDs[i]*/);
           };
           threads.emplace_back(threadFun);
         } else { // Dense Hash
@@ -926,7 +934,8 @@ void processReadLibrary(
                                                                           upperBoundHits, smallSeqs, nSeqs, sidx->quasiIndex32(), transcripts, fmCalc,
                                                                           clusterForest, fragLengthDist, observedBiasParams[i],
                                                                           salmonOpts, iomutex, initialRound,
-                                                                          burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs/*, uniqueFLDs[i]*/);
+                                                                          burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs,
+                                                                          mstats/*, uniqueFLDs[i]*/);
           };
           threads.emplace_back(threadFun);
         }
@@ -940,18 +949,10 @@ void processReadLibrary(
     }
 
     pairedParserPtr->stop();
-    /*std::vector<uint64_t> uniqueFLD(100000, 0);
-    for (size_t i = 0; i < numThreads; ++i) {
-      for (size_t j = 0; j < uniqueFLD.size(); ++j) {
-        uniqueFLD[j] += uniqueFLDs[i][j];
-      }
-    }
-    std::ofstream testDist("uniqueFLDNew.bin");
-    uint64_t s = uniqueFLD.size();
-    testDist.write(reinterpret_cast<char*>(&s), sizeof(s));
-    testDist.write(reinterpret_cast<char*>(uniqueFLD.data()), sizeof(s)*uniqueFLD.size());
-    testDist.close();
-    */
+
+    // At this point, if we were using decoy transcripts, we don't need them anymore and can get
+    // rid of them.
+    readExp.dropDecoyTranscripts();
 
     //+++++++++++++++++++++++++++++++++++++++
     /** GC-fragment bias **/
@@ -1032,6 +1033,7 @@ void processReadLibrary(
 template <typename AlnT, typename ProtocolT>
 void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
                      SalmonOpts& salmonOpts,
+                     MappingStatistics& mstats,
                      uint32_t numQuantThreads,
                      AlevinOpts<ProtocolT>& alevinOpts,
                      SoftMapT& barcodeMap,
@@ -1096,7 +1098,7 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
                              fragLengthDist, salmonOpts,
                              greedyChain, ioMutex,
                              numQuantThreads, groupVec, writeToCache,
-                             alevinOpts, barcodeMap, trBcs);
+                             alevinOpts, barcodeMap, trBcs, mstats);
 
     numAssignedFragments = totalAssignedFragments - prevNumAssignedFragments;
   };
@@ -1151,16 +1153,13 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
   //+++++++++++++++++++++++++++++++++++++++
   // If we didn't achieve burnin, then at least compute effective
   // lengths and mention this to the user.
+
+  salmonOpts.jointLog->info("Number of fragments discarded because they are best-mapped to decoys : {:n}",
+                            mstats.numDecoyFragments.load());
+
   if (totalAssignedFragments < salmonOpts.numBurninFrags) {
     std::atomic<bool> dummyBool{false};
     experiment.updateTranscriptLengthsAtomic(dummyBool);
-
-    jointLog->warn("Only {} fragments were mapped, but the number of burn-in "
-                   "fragments was set to {}.\n"
-                   "The effective lengths have been computed using the "
-                   "observed mappings.\n",
-                   totalAssignedFragments, salmonOpts.numBurninFrags);
-
   }
 
   if (numObservedFragments <= prevNumObservedFragments) {
@@ -1224,16 +1223,6 @@ void alevinOptimize( std::vector<std::string>& trueBarcodesVec,
     }
   }
 
-  if(aopt.dumpfeatures){
-    auto mapCountFileName = aopt.outputDirectory / "MappedUmi.txt";
-    std::ofstream mFile;
-    mFile.open(mapCountFileName.string());
-
-    for(size_t i=0; i<umiCount.size(); i++){
-      mFile<<trueBarcodesVec[i]<< "\t"<<umiCount[i]<<"\n";
-    }
-    mFile.close();
-  }
   ////////////////////////////////////////////
   // deduplication starts from here
   ////////////////////////////////////////////
@@ -1258,7 +1247,7 @@ void alevinOptimize( std::vector<std::string>& trueBarcodesVec,
                       "bad input (or a bug). If you cannot track down the cause, please "
                       "report this issue on GitHub.");
       aopt.jointLog->flush();
-      exit(1);
+      exit(74);
     }
     aopt.jointLog->info("Finished optimizer");
   }
@@ -1267,59 +1256,13 @@ void alevinOptimize( std::vector<std::string>& trueBarcodesVec,
   }
 }
 
-uint32_t getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                         const std::vector<Transcript>& transcripts,
-                         const std::string& geneMapFile,
-                         spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap){
-  std::string fname = geneMapFile;
-  std::ifstream t2gFile(fname);
-
-  spp::sparse_hash_map<std::string, uint32_t> txpIdxMap(transcripts.size());
-
-  for (size_t i=0; i<transcripts.size(); i++){
-    txpIdxMap[ transcripts[i].RefName ] = i;
-  }
-
-  uint32_t tid, gid, geneCount{0};
-  std::string tStr, gStr;
-  if(t2gFile.is_open()) {
-    while( not t2gFile.eof() ) {
-      t2gFile >> tStr >> gStr;
-
-      if(not txpIdxMap.contains(tStr)){
-        continue;
-      }
-      tid = txpIdxMap[tStr];
-
-      if (geneIdxMap.contains(gStr)){
-        gid = geneIdxMap[gStr];
-      }
-      else{
-        gid = geneCount;
-        geneIdxMap[gStr] = gid;
-        geneCount++;
-      }
-
-      txpToGeneMap[tid] = gid;
-    }
-    t2gFile.close();
-  }
-  if(txpToGeneMap.size() < transcripts.size()){
-    std::cerr << "ERROR: "
-              << "Txp to Gene Map not found for "
-              << transcripts.size() - txpToGeneMap.size()
-              <<" transcripts. Exiting" << std::flush;
-    exit(1);
-  }
-
-  return geneCount;
-}
-
 template <typename ProtocolT>
 int alevinQuant(AlevinOpts<ProtocolT>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
+                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter, size_t numLowConfidentBarcode){
   using std::cerr;
@@ -1354,6 +1297,7 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
     versionInfo.load(versionPath);
     auto idxType = versionInfo.indexType();
 
+    MappingStatistics mstats;
     ReadExperimentT experiment(readLibraries, indexDirectory, sopt);
     //experiment.computePolyAPositions();
 
@@ -1421,7 +1365,7 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
       sopt.numThreads -= 1;
     }
     quantifyLibrary<QuasiAlignment>(experiment, greedyChain, sopt,
-                                    sopt.numThreads, aopt,
+                                    mstats, sopt.numThreads, aopt,
                                     barcodeMap, trueBarcodesIndexMap);
 
     // Write out information about the command / run
@@ -1463,14 +1407,6 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
         tFile.close();
       }
     }
-
-    spp::sparse_hash_map<uint32_t, uint32_t> txpToGeneMap;
-    spp::sparse_hash_map<std::string, uint32_t> geneIdxMap;
-
-    getTxpToGeneMap(txpToGeneMap,
-                    experiment.transcripts(),
-                    aopt.geneMapFile.string(),
-                    geneIdxMap);
 
     alevinOptimize(trueBarcodesVec, txpToGeneMap, geneIdxMap,
                    experiment.equivalenceClassBuilder().eqMap(),
@@ -1524,7 +1460,6 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
     sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
 
     // Write meta-information about the run
-    MappingStatistics mstats;
     gzw.writeMeta(sopt, experiment, mstats);
 
     gzw.writeMetaAlevin(aopt, bfs::path(sopt.auxDir));
@@ -1552,6 +1487,8 @@ int alevinQuant(AlevinOpts<apt::DropSeq>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
+                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
@@ -1560,6 +1497,8 @@ int alevinQuant(AlevinOpts<apt::InDrop>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
+                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
@@ -1568,6 +1507,8 @@ int alevinQuant(AlevinOpts<apt::ChromiumV3>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
+                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
@@ -1576,6 +1517,8 @@ int alevinQuant(AlevinOpts<apt::Chromium>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
+                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
@@ -1584,6 +1527,8 @@ int alevinQuant(AlevinOpts<apt::Gemcode>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
+                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
@@ -1592,6 +1537,8 @@ int alevinQuant(AlevinOpts<apt::CELSeq>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
+                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
@@ -1600,6 +1547,8 @@ int alevinQuant(AlevinOpts<apt::CELSeq2>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
+                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
@@ -1608,6 +1557,8 @@ int alevinQuant(AlevinOpts<apt::Custom>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
+                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);

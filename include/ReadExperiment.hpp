@@ -271,6 +271,7 @@ public:
   void loadTranscriptsFromQuasi(QuasiIndexT* idx_, const SalmonOpts& sopt) {
     size_t numRecords = idx_->txpNames.size();
     auto log = sopt.jointLog.get();
+    numDecoys_ = 0;
 
     log->info("Index contained {:n} targets", numRecords);
     // transcripts_.resize(numRecords);
@@ -279,6 +280,15 @@ public:
     double alpha = 0.005;
     for (auto i : boost::irange(size_t(0), numRecords)) {
       uint32_t id = i;
+      bool isDecoy = idx_->isDecoy(i);
+
+      if (isDecoy and !sopt.validateMappings) {
+        log->warn("The index contains decoy targets, but these should not be used in the "
+                  "absence of selective-alignment (--validateMappings, --mimicBT2 or --mimicStrictBT2). "
+                  "Skipping loading of decoys.");
+        break;
+      }
+
       const char* name = idx_->txpNames[i].c_str();
       uint32_t len = idx_->txpLens[i];
       // copy over the length, then we're done.
@@ -287,10 +297,12 @@ public:
       txp.setCompleteLength(idx_->txpCompleteLens[i]);
       // The transcript sequence
       // auto txpSeq = idx_->seq.substr(idx_->txpOffsets[i], len);
-
       // Set the transcript sequence
       txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i],
                               sopt.gcBiasCorrect, sopt.reduceGCMemory);
+      txp.setDecoy(isDecoy);
+      if (isDecoy) { ++numDecoys_; }
+
       lengths.push_back(txp.RefLength);
       /*
       // Length classes taken from
@@ -318,6 +330,13 @@ public:
     }
     // ====== Done loading the transcripts from file
     setTranscriptLengthClasses_(lengths, posBiasFW_.size());
+  }
+
+  void dropDecoyTranscripts() {
+    if (numDecoys_ > 0) {
+      size_t numValidTargets = transcripts_.size() - numDecoys_;
+      transcripts_.resize(numValidTargets);
+    }
   }
 
   template <typename CallbackT>
@@ -645,6 +664,10 @@ public:
     return lengthQuantiles_;
   }
 
+  const uint64_t getNumDecoys() const {
+    return numDecoys_;
+  }
+
 private:
   void setTranscriptLengthClasses_(std::vector<uint32_t>& lengths,
                                    size_t nbins) {
@@ -758,6 +781,8 @@ private:
   // std::array<std::vector<double>, 2> expectedBias_;
   std::vector<double> expectedBias_;
   std::vector<double> conditionalMeans_;
+
+  uint64_t numDecoys_{0};
 };
 
 #endif // EXPERIMENT_HPP

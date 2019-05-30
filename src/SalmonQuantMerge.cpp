@@ -111,16 +111,18 @@ bool validateOptions(boost::program_options::variables_map& vm,
   return true;
 }
 
+template <typename LenT>
 struct ExpressionRecord {
   uint32_t snum;
-  uint32_t len;
+  LenT len;
   double effectiveLen;
   double tpm;
   double numReads;
 };
 
+template <typename LenT>
 bool doMerge(QuantMergeOptions& qmOpts) {
-  std::unordered_map<std::string, std::vector<ExpressionRecord>> recs;
+  std::unordered_map<std::string, std::vector<ExpressionRecord<LenT>>> recs;
   for (uint32_t n = 0; n < qmOpts.samples.size(); ++n) {
     auto& sampDir = qmOpts.samples[n];
     auto quantFile = boost::filesystem::path(sampDir) /
@@ -132,7 +134,7 @@ bool doMerge(QuantMergeOptions& qmOpts) {
       std::string header;
       std::getline(ifile, header);
       std::string targetName;
-      uint32_t len;
+      LenT len;
       double effectiveLen, tpm, numReads;
       while (ifile >> targetName >> len >> effectiveLen >> tpm >> numReads) {
         recs[targetName].push_back({n, len, effectiveLen, tpm, numReads});
@@ -278,8 +280,15 @@ a single file.
     validateOptions(vm, qmOpts, consoleLog);
     qmOpts.print();
 
-    doMerge(qmOpts);
 
+    using gene_len_t = double;
+    using transcript_len_t = uint32_t;
+
+    if (qmOpts.genesQuant) {
+      doMerge<gene_len_t>(qmOpts);
+    } else {
+      doMerge<transcript_len_t>(qmOpts);
+    }
   } catch (po::error& e) {
     std::cerr << "Exception : [" << e.what() << "]. Exiting.\n";
     std::exit(1);

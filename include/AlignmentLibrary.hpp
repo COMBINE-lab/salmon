@@ -443,6 +443,10 @@ for (auto& txp : transcripts_) {
     return lengthQuantiles_;
   }
 
+  const uint64_t getNumDecoys() const {
+    return numDecoys_;
+  }
+
 private:
   void setTranscriptLengthClasses_(std::vector<uint32_t>& lengths,
                                    size_t nbins) {
@@ -568,6 +572,7 @@ private:
   std::vector<double> conditionalMeans_;
 
   salmon::bam_utils::AlignerDetails aligner_{salmon::bam_utils::AlignerDetails::UNKNOWN};
+  uint64_t numDecoys_{0};
 };
 
 #endif // ALIGNMENT_LIBRARY_HPP

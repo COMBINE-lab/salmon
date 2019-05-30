@@ -263,12 +263,6 @@ namespace salmon {
        "dumpBarcodeEq", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeEq),
        "Dump JointEqClas with umi-barcode count.")
       (
-       "dumpUmitoolsMap", po::bool_switch()->default_value(alevin::defaults::dumpUMIToolsMap),
-       "Dump umi_tools readable whitelist map for downstream analysis.")
-      (
-       "dumpBarcodeMap", po::bool_switch()->default_value(alevin::defaults::dumpBarcodeMap),
-       "Dump BarcodeMap for downstream analysis.")
-      (
        "iupac,u",po::value<std::string>(),
        "<Deprecated>iupac code for cell-level barcodes.")
       (
@@ -288,14 +282,8 @@ namespace salmon {
        "noem",po::bool_switch()->default_value(alevin::defaults::noEM),
        "do not run em")
       (
-       "noBarcode",po::bool_switch()->default_value(alevin::defaults::noBarcode),
-       "this flag should be used when there is no barcode i.e. only one cell deduplication.")
-      (
        "trimRight",po::value<uint32_t>()->default_value(alevin::defaults::trimRight),
        "The number of bases to trim off the 5' (right) end of the read seequence.")
-      (
-       "noSoftMap", po::bool_switch()->default_value(alevin::defaults::noSoftMap),
-       "Don't use soft-assignment for quant instead do hard-assignment.")
       (
        "naiveEqclass", po::bool_switch()->default_value(alevin::defaults::naiveEqclass),
        "Run naive per equivalence class deduplication, generating only total number of UMIs")
@@ -303,11 +291,7 @@ namespace salmon {
        "noDedup", po::bool_switch()->default_value(alevin::defaults::noDedup),
        "Stops the pipeline after CB sequence correction and quasi-mapping reads.")
       (
-       "debug", po::bool_switch()->default_value(alevin::defaults::debug),
-       "Enabling this mode mode will try to ignore segfaults based on no whitelist"
-       " mapping or no whitelist deduplicated count")
-      (
-       "freqThreshold",po::value<uint32_t>(),
+       "freqThreshold", po::value<uint32_t>()->default_value(alevin::defaults::freqThreshold),
        "threshold for the frequency of the barcodes");
     return alevindevs;
   }
@@ -368,10 +352,6 @@ namespace salmon {
        "rrna", po::value<std::string>(),
        "path to a file containing ribosomal RNA, one per line")
       (
-       "useCorrelation", po::bool_switch()->default_value(alevin::defaults::useCorrelation),
-       "Use pair-wise pearson correlation with True barcodes as a"
-       " feature for white-list creation.")
-      (
        "keepCBFraction", po::value<double>(),
        "fraction of CB to keep, value must be in range (0,1], use 1 to quantify all CB."
        )
@@ -389,8 +369,8 @@ namespace salmon {
        "dumpFeatures", po::bool_switch()->default_value(alevin::defaults::dumpFeatures),
        "Dump features for whitelist and downstream analysis.")
       (
-       "dumpCsvCounts", po::bool_switch()->default_value(alevin::defaults::dumpCSVCounts),
-       "Dump cell v transcripts count matrix in csv format.")
+       "dumpMtx", po::bool_switch()->default_value(alevin::defaults::dumpMtx),
+       "Dump cell v transcripts count matrix in sparse mtx format.")
       (
        "lowRegionMinNumBarcodes", po::value<uint32_t>()->default_value(alevin::defaults::lowRegionMinNumBarcodes),
        "Minimum Number of CB to use for learning Low confidence region (Default: 200).")

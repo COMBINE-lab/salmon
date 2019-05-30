@@ -32,17 +32,14 @@ namespace alevin {
     using DoubleVectorT = std::vector<double> ;
 
     uint32_t populate_count_matrix(boost::filesystem::path& outDir,
-                                   bool inDebugMode,
                                    size_t numElem,
                                    DoubleMatrixT& countMatrix);
 
     template <typename ProtocolT>
     bool performWhitelisting(AlevinOpts<ProtocolT>& aopt,
                              std::vector<uint32_t>& umiCount,
-                             DoubleMatrixT& countMatrix,
                              std::vector<std::string>& trueBarcodes,
-                             CFreqMapT& freqCounter,
-                             spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                             CFreqMapT& freqCounter, bool useRibo, bool useMito,
                              size_t numLowConfidentBarcode);
   }
 }

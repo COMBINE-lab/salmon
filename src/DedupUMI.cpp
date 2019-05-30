@@ -10,7 +10,7 @@ uint32_t getGeneId(spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap,
     std::cerr << "Out of Range error for txp to gene Map: "
               << '\n' << std::flush;
     std::cerr << tId << "\t not found" << std::flush;
-    exit(1);
+    exit(74);
   }
 }
 
@@ -197,6 +197,8 @@ void collapseVertices(uint32_t vertex,
 
 void getNumMolecules(alevin::graph::Graph& g,
                      std::vector<TGroupT>& txpGroups,
+                     std::vector<UGroupT>& umiGroups,
+                     spp::sparse_hash_map<uint16_t, uint32_t>& numMolHash,
                      spp::sparse_hash_map<uint32_t, uint32_t>& t2gMap,
                      std::vector<SalmonEqClass>& salmonEqclasses){
   // get connected components
@@ -205,6 +207,7 @@ void getNumMolecules(alevin::graph::Graph& g,
   spp::sparse_hash_map<std::vector<uint32_t>,
                        uint32_t,
                        boost::hash<std::vector<uint32_t>>> eqclassHash;
+
 
   // making sets of relevant connected vertices
   std::vector<std::vector<uint32_t>> comps (numComps);
@@ -258,12 +261,19 @@ void getNumMolecules(alevin::graph::Graph& g,
         if( globalTxps.size() == 0 ) {
           std::cerr << "can't find a representative transcript for a molecule\n"
                     << "Please report this on github";
-          exit(1);
+          exit(74);
         }
 
+        uint16_t readspmol {0};
         for (auto rv: bestMcc){
+          uint32_t eId = g.getEqclassId(rv);
+          uint32_t uId = g.getUId(rv);
+          auto it = umiGroups[eId].begin();
+          std::advance(it, uId);
+          readspmol += it->second;
           vset.erase(rv);
         }
+        numMolHash[readspmol] += 1;
 
         spp::sparse_hash_set<uint32_t> globalGenes;
         for(auto txp: globalTxps){
@@ -280,6 +290,12 @@ void getNumMolecules(alevin::graph::Graph& g,
     else{
       assert(comp.size() == 1);
       uint32_t vertex = comp[0];
+      uint32_t eId = g.getEqclassId(vertex);
+      uint32_t uId = g.getUId(vertex);
+      auto it = umiGroups[eId].begin();
+      std::advance(it, uId);
+      numMolHash[it->second] += 1;
+
       uint32_t eqclassId = g.getEqclassId(vertex);
       TGroupT txps = txpGroups[eqclassId];
 
@@ -296,14 +312,6 @@ void getNumMolecules(alevin::graph::Graph& g,
       eqclassHash[genesVec] += 1;
     }//end-else comp.size()==1
   } //end-outer for comps iterator
-
-  //size_t count{0};
-  //for (auto& it: compCounter) {
-  //  count += it.second;
-  //  std::cerr << "Size: " << it.first << " Count: " << it.second << std::endl;
-  //}
-  //std::cerr << "Total" << count << std::endl;
-  //std::cerr<<"\n\n\n\n";
 
   for (auto& it: eqclassHash) {
     SalmonEqClass eqclass = {
@@ -361,7 +369,7 @@ void assignTiers(std::vector<TGroupT>& txpGroups,
         if (!vertexIndices.contains(gene_from) or
             !vertexIndices.contains(gene_to)){
           std::cerr<<"ERROR: Tier creation can't match indexToGene"<<std::flush;
-          std::exit(1);
+          std::exit(74);
         }
         uint32_t gfromIndex = vertexIndices[gene_from];
         uint32_t gtoIndex = vertexIndices[gene_to];
@@ -397,7 +405,7 @@ void assignTiers(std::vector<TGroupT>& txpGroups,
 
   if(component.size() != vertexIndices.size()){
     std::cerr<<"ERROR: tiers size doesn't match";
-    std::exit(1);
+    std::exit(74);
   }
 
   // iterating over connected components and assigning tiers
@@ -409,7 +417,7 @@ void assignTiers(std::vector<TGroupT>& txpGroups,
                  <<" gene Index > indexToGene size"
                  << indexToGene.size()
                  << std::flush;
-        std::exit(1);
+        std::exit(74);
       }
       uint32_t gene = indexToGene[geneIndex];
       if (tiers[gene] == 1){
@@ -435,6 +443,7 @@ bool dedupClasses(std::vector<double>& geneAlphas,
                   std::vector<uint8_t>& tiers,
                   GZipWriter& gzw, bool dumpUmiGraph,
                   std::string& trueBarcodeStr,
+                  spp::sparse_hash_map<uint16_t, uint32_t>& numMolHash,
                   std::atomic<uint64_t>& totalUniEdgesCounts,
                   std::atomic<uint64_t>& totalBiEdgesCounts){
   // make directed graph from eqclasses
@@ -451,7 +460,8 @@ bool dedupClasses(std::vector<double>& geneAlphas,
   assignTiers(txpGroups, txpToGeneMap, tiers);
 
   // make gene based eqclasses
-  getNumMolecules(g, txpGroups, txpToGeneMap, salmonEqclasses);
+  getNumMolecules(g, txpGroups, umiGroups, numMolHash,
+                  txpToGeneMap, salmonEqclasses);
 
   for( auto& eqclass: salmonEqclasses ) {
     if ( eqclass.labels.size() == 1 ) {
@@ -460,7 +470,7 @@ bool dedupClasses(std::vector<double>& geneAlphas,
     }
     else if (eqclass.labels.size() == 0){
       std::cerr<<"Eqclasses with No gene labels\n";
-      exit(1);
+      exit(74);
     }
   }
 
