@@ -803,9 +803,18 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
     exit(1);
   }
 
+  auto headerFile = sopt.indexDirectory / "header.json";
+  if(!boost::filesystem::exists(headerFile)){
+    aopt.jointLog->error("Index Directory or the header.json: {} doesn't exist.",
+                         headerFile.string());
+    aopt.jointLog->flush();
+    exit(1);
+  }
+
   aut::getTxpToGeneMap(txpToGeneMap, geneIdxMap,
                        aopt.geneMapFile.string(),
                        txpInfoFile.string(),
+                       headerFile.string(),
                        aopt.jointLog);
 
   // If we're supposed to be quiet, set the global logger level to >= warn

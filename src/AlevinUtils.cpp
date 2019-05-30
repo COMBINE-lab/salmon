@@ -254,12 +254,38 @@ namespace alevin {
                          spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                          const std::string& t2gFileName,
                          const std::string& refNamesFile,
+                         const std::string& headerFile,
                          std::shared_ptr<spdlog::logger>& jointLog){
       size_t numDupTxps;
       uint64_t numberOfDecoys, firstDecoyIndex;
       spp::sparse_hash_map<std::string, uint32_t> txpIdxMap;
       // reading in the binary file
       {
+        jointLog->info("Loading Header");
+        {
+          IndexHeader h;
+          std::ifstream indexStream(headerFile);
+          {
+            cereal::JSONInputArchive ar(indexStream);
+            ar(h);
+          }
+          indexStream.close();
+
+          if (h.version() != salmon::requiredQuasiIndexVersion) {
+            jointLog->critical(
+                               "I found a quasi-index with version {}, but I require {}. "
+                               "Please re-index the reference.",
+                               h.version(), salmon::requiredQuasiIndexVersion);
+            std::exit(1);
+          }
+          if (h.indexType() != IndexType::QUASI) {
+            jointLog->critical("The index {} does not appear to be of the "
+                               "appropriate type (quasi)",
+                               headerFile);
+            std::exit(1);
+          }
+        }
+
         jointLog->info("Loading Transcript Info ");
         std::ifstream seqStream(refNamesFile);
         cereal::BinaryInputArchive seqArchive(seqStream);
