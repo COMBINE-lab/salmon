@@ -232,6 +232,7 @@ namespace alevin {
         whitelistStream << trueBarcodes[i] << std::endl;
       }
       whitelistStream.close();
+      aopt.intelligentCutoff = whitelistBarcodes.size();
 
       if (aopt.dumpfeatures) {
         std::ofstream predictionStream;
@@ -239,7 +240,6 @@ namespace alevin {
         predictionStream.open(predictionFileName.string());
         predictionStream << "cb\ttrue_prob\tFalse_prob\n";
 
-        aopt.intelligentCutoff = whitelistBarcodes.size();
         for (auto i: whitelistBarcodes){
           if (i >= numTrueCells) {
             predictionStream << trueBarcodes[i] << "\t"
