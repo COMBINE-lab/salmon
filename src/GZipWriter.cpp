@@ -400,6 +400,10 @@ bool GZipWriter::writeMetaAlevin(const AlevinOpts<ProtocolT>& opts,
                         opts.totalReads - opts.totalUsedReads));
     oa(cereal::make_nvp("noisy_cb_reads", opts.readsThrown));
     oa(cereal::make_nvp("noisy_umi_reads", opts.noisyUmis));
+    oa(cereal::make_nvp("used_reads", opts.totalUsedReads
+                        - opts.readsThrown
+                        - opts.noisyUmis
+                        - opts.noisyUmis));
     oa(cereal::make_nvp("mapping_rate", opts.mappingRate));
     oa(cereal::make_nvp("reads_in_eqclasses", opts.eqReads));
 

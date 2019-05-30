@@ -688,7 +688,8 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   aopt.jointLog->info("Total {} UniDirected Edges.",
                       totalUniEdgesCounts);
 
-  aopt.totalDedupUMIs = totalDedupCounts;
+  //adjusting for float
+  aopt.totalDedupUMIs = totalDedupCounts+1;
   aopt.totalExpGenes = totalExpGeneCounts;
 
   uint32_t skippedCBcount {0};
