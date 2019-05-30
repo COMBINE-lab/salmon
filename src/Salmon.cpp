@@ -210,7 +210,7 @@ int main(int argc, char* argv[]) {
 
     if (!vm.count("no-version-check")) {
       std::string versionMessage = getVersionMessage();
-      std::cout << versionMessage;
+      std::cerr << versionMessage;
     }
 
     // po::notify(vm);
