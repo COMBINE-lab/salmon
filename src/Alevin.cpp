@@ -84,6 +84,8 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
+                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
@@ -116,6 +118,7 @@ void densityCalculator(single_parser* parser,
       //Sexy Progress monitor
       ++totNumBarcodesLocal;
       if (not aopt.quiet and totNumBarcodesLocal % 500000 == 0) {
+        aopt.jointLog->flush();
         fmt::print(stderr, "\r\r{}processed{} {} Million {}barcodes{}",
                    green, red, totNumBarcodesLocal/1000000, green, RESET_COLOR);
       }
@@ -187,7 +190,7 @@ bool gaussianKDE(const std::vector<uint32_t>& freqCounter,
 
   if (covariance == 0){
     std::cout << "0 Covariance error for Gaussian kde"<<std::flush;
-    exit(1);
+    exit(64);
   }
 
   const double PI = 3.1415926535897;
@@ -315,6 +318,9 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
 
   if (aopt.forceCells > 0) {
     topxBarcodes = aopt.forceCells;
+    while( freqCounter[sortedIdx[topxBarcodes]] < aopt.freqThreshold ) {
+      --topxBarcodes;
+    }
   }
   else if (aopt.expectCells > 0){
     // Expect Cells algorithm is taken from
@@ -340,10 +346,9 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
       aopt.jointLog->error("Can't find right Boundary.\n"
                            "Please Report this issue on github.");
       aopt.jointLog->flush();
-      exit(1);
+      exit(64);
     }
-  }
-  else{
+  } else{
     topxBarcodes = getLeftBoundary(sortedIdx,
                                    topxBarcodes,
                                    freqCounter);
@@ -351,7 +356,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
       aopt.jointLog->error("Can't find left Boundary.\n"
                            "Please Report this issue on github.");
       aopt.jointLog->flush();
-      exit(1);
+      exit(64);
     }
     else{
       aopt.jointLog->info("Knee found left boundary at {} {} {}",
@@ -379,7 +384,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
       if (invCovariance == 0.0 or normFactor == 0.0){
         aopt.jointLog->error("Wrong invCovariance/Normfactor");
         aopt.jointLog->flush();
-        exit(1);
+        exit(64);
       }
     }
   }//end-left-knee finding case
@@ -711,8 +716,8 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
     }
 
     if (aopt.keepCBFraction > 0.0) {
-      aopt.forceCells = std::min(static_cast<int>(aopt.keepCBFraction * freqCounter.size()),
-                                 737000);
+      aopt.forceCells = std::min(static_cast<uint32_t>(aopt.keepCBFraction * freqCounter.size()),
+                                 aopt.maxNumBarcodes);
     }
 
     //Calculate the knee using the frequency distribution
@@ -740,7 +745,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
       aopt.jointLog->error("Error: index not find in freq Counter\n"
                            "Please Report the issue on github");
       aopt.jointLog->flush();
-      exit(1);
+      exit(64);
     }
 
     // NOTE: Need more clever way for ambiguity resolution.
@@ -768,7 +773,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
                            "Something went wrong.\n"
                            "Please report this issue to github");
       aopt.jointLog->flush();
-      std::exit(1);
+      std::exit(64);
     }
     aopt.jointLog->info("Done dumping fastq File");
   }
@@ -786,6 +791,22 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
   if (!isOptionsOk){
     exit(1);
   }
+
+  spp::sparse_hash_map<uint32_t, uint32_t> txpToGeneMap;
+  spp::sparse_hash_map<std::string, uint32_t> geneIdxMap;
+
+  auto txpInfoFile = sopt.indexDirectory / "txpInfo.bin";
+  if(!boost::filesystem::exists(txpInfoFile)){
+    aopt.jointLog->error("Index Directory or the txpInfo.bin: {} doesn't exist.",
+                         txpInfoFile.string());
+    aopt.jointLog->flush();
+    exit(1);
+  }
+
+  aut::getTxpToGeneMap(txpToGeneMap, geneIdxMap,
+                       aopt.geneMapFile.string(),
+                       txpInfoFile.string(),
+                       aopt.jointLog);
 
   // If we're supposed to be quiet, set the global logger level to >= warn
   if (aopt.quiet) {
@@ -834,7 +855,8 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
   if(!aopt.noQuant){
     aopt.jointLog->info("Done with Barcode Processing; Moving to Quantify\n");
     alevinQuant(aopt, sopt, barcodeSoftMap, trueBarcodes,
-                orderedOptions, freqCounter, numLowConfidentBarcode);
+                txpToGeneMap, geneIdxMap, orderedOptions,
+                freqCounter, numLowConfidentBarcode);
   }
   else{
     boost::filesystem::path cmdInfoPath = vm["output"].as<std::string>();

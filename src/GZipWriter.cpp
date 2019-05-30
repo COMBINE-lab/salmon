@@ -722,9 +722,11 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
     oa(cereal::make_nvp("num_bootstraps", numSamples));
     oa(cereal::make_nvp("num_processed", experiment.numObservedFragments()));
     oa(cereal::make_nvp("num_mapped", experiment.numMappedFragments()));
+    oa(cereal::make_nvp("num_decoy_fragments", mstats.numDecoyFragments.load()));
     oa(cereal::make_nvp("num_dovetail_fragments", mstats.numDovetails.load()));
     oa(cereal::make_nvp("num_fragments_filtered_vm", mstats.numFragmentsFiltered.load()));
-    oa(cereal::make_nvp("num_alignments_below_threshold_for_mapped_fragments_vm", mstats.numMappingsFiltered.load()));
+    oa(cereal::make_nvp("num_alignments_below_threshold_for_mapped_fragments_vm",
+                        mstats.numMappingsFiltered.load()));
     oa(cereal::make_nvp("percent_mapped",
                         experiment.effectiveMappingRate() * 100.0));
     oa(cereal::make_nvp("call", std::string("quant")));
@@ -838,7 +840,7 @@ bool GZipWriter::writeBootstraps(std::string& bcName,
   size_t num = alphas.size();
   if (alphas.size() != variance.size()){
     std::cerr<<"ERROR: Quants matrix and varicance matrix size differs"<<std::flush;
-    exit(1);
+    exit(74);
   }
   size_t elSize = sizeof(typename std::vector<double>::value_type);
   countfile.write(reinterpret_cast<char*>(alphas.data()),
@@ -860,8 +862,11 @@ bool GZipWriter::writeBootstraps(std::string& bcName,
 }
 
 bool GZipWriter::writeSparseAbundances(std::string& bcName,
+                                       std::string& features,
+                                       uint8_t featureCode,
                                        std::vector<double>& alphas,
-                                       std::vector<uint8_t>& tiers){
+                                       std::vector<uint8_t>& tiers,
+                                       bool dumpUmiGraph){
 
   // construct the output vectors outside of the critical section
   // since e.g. this is more non-trivial work than in the dense case.
@@ -871,9 +876,14 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
   std::vector<uint8_t> alphasFlag;
   alphasFlag.reserve(static_cast<size_t>(std::ceil(num/8)));
 
+  std::vector<uint8_t> tiersSparse;
+  tiersSparse.reserve(num/2);
+  std::vector<uint8_t> tiersFlag;
+  tiersFlag.reserve(static_cast<size_t>(std::ceil(num/8)));
+
   size_t elSize = sizeof(decltype(alphasSparse)::value_type);
   size_t flagSize = sizeof(decltype(alphasFlag)::value_type);
-  //size_t trSize = sizeof(typename std::vector<uint8_t>::value_type);
+  size_t trSize = sizeof(decltype(tiersSparse)::value_type);
 
   for (size_t i=0; i<num; i+=8) {
     uint8_t flag {0};
@@ -889,6 +899,20 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
     alphasFlag.emplace_back(flag);
   }
 
+  for (size_t i=0; i<num; i+=8) {
+    uint8_t flag {0};
+    for (size_t j=0; j<8; j++) {
+      size_t vectorIndex = i+j;
+      if (vectorIndex >= num) { break; }
+
+      if (tiers[vectorIndex] > std::numeric_limits<uint8_t>::min()) {
+        tiersSparse.emplace_back(tiers[vectorIndex]);
+        flag |= 128 >> j;
+      }
+    }
+    tiersFlag.emplace_back(flag);
+  }
+
 #if defined __APPLE__
   spin_lock::scoped_lock sl(writeMutex_);
 #else
@@ -901,32 +925,59 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
     auto countMatFilename = path_ / "alevin" / "quants_mat.gz";
     countMatrixStream_->push(boost::iostreams::file_sink(countMatFilename.string(),
                                                          std::ios_base::out | std::ios_base::binary));
-    //tierMatrixStream_.reset(new boost::iostreams::filtering_ostream);
-    //tierMatrixStream_->push(boost::iostreams::gzip_compressor(6));
-    //auto tierMatFilename = path_ / "alevin" / "quants_tier_mat.gz";
-    //tierMatrixStream_->push(boost::iostreams::file_sink(tierMatFilename.string(),
-    //                                                    std::ios_base::out | std::ios_base::binary));
+    tierMatrixStream_.reset(new boost::iostreams::filtering_ostream);
+    tierMatrixStream_->push(boost::iostreams::gzip_compressor(6));
+    auto tierMatFilename = path_ / "alevin" / "quants_tier_mat.gz";
+    tierMatrixStream_->push(boost::iostreams::file_sink(tierMatFilename.string(),
+                                                        std::ios_base::out | std::ios_base::binary));
   }
 
   if (!bcNameStream_) {
     auto bcNameFilename = path_ / "alevin" / "quants_mat_rows.txt";
     bcNameStream_.reset(new std::ofstream);
     bcNameStream_->open(bcNameFilename.string());
+
+    auto bcFeaturesFilename = path_ / "alevin" / "featureDump.txt";
+    bcFeaturesStream_.reset(new std::ofstream);
+    bcFeaturesStream_->open(bcFeaturesFilename.string());
+
+    std::string header = "CB\tCorrectedReads\tMappedReads\tDeduplicatedReads"
+      "\tMappingRate\tDedupRate\tMeanByMax\tNumGenesExpressed\tNumGenesOverMean";
+    if (featureCode == 3) {
+      header += "\tmRnaFraction\trRnaFraction";
+    } else if (featureCode == 1) {
+      header += "\tmRnaFraction";
+    } else if (featureCode == 2) {
+      header += "\trRnaFraction";
+    } else if (featureCode != 0) {
+      std::cerr<<"Error: Wrong feature code: " << featureCode << std::flush;
+      exit(74);
+    }
+    header += "\tArborescenceCount\n";
+    bcFeaturesStream_->write(header.c_str(), header.size());
   }
 
   boost::iostreams::filtering_ostream& countfile = *countMatrixStream_;
-  //boost::iostreams::filtering_ostream& tierfile = *tierMatrixStream_;
+  boost::iostreams::filtering_ostream& tierfile = *tierMatrixStream_;
   std::ofstream& namefile = *bcNameStream_;
+  std::ofstream& featuresfile = *bcFeaturesStream_;
 
   countfile.write(reinterpret_cast<char*>(alphasFlag.data()),
                   flagSize * alphasFlag.size());
   countfile.write(reinterpret_cast<char*>(alphasSparse.data()),
                   elSize * alphasSparse.size());
-  //tierfile.write(reinterpret_cast<char*>(tiers.data()),
-  //                trSize * num);
+
+  tierfile.write(reinterpret_cast<char*>(tiersFlag.data()),
+                 flagSize * tiersFlag.size());
+  tierfile.write(reinterpret_cast<char*>(tiersSparse.data()),
+                 trSize * tiersSparse.size());
 
   namefile.write(bcName.c_str(), bcName.size());
   namefile << std::endl;
+
+  featuresfile.write(features.c_str(), features.size());
+  featuresfile << std::endl;
+
   return true;
 }
 
@@ -934,7 +985,8 @@ bool GZipWriter::writeAbundances(std::string& bcName,
                                  std::string& features,
                                  uint8_t featureCode,
                                  std::vector<double>& alphas,
-                                 std::vector<uint8_t>& tiers){
+                                 std::vector<uint8_t>& tiers,
+                                 bool dumpUmiGraph){
 #if defined __APPLE__
   spin_lock::scoped_lock sl(writeMutex_);
 #else
@@ -972,6 +1024,8 @@ bool GZipWriter::writeAbundances(std::string& bcName,
       header += "\tmRnaFraction";
     } else if (featureCode == 2) {
       header += "\trRnaFraction";
+    } else if (dumpUmiGraph) {
+      header += "\tArborescenceCount";
     } header += "\n";
     bcFeaturesStream_->write(header.c_str(), header.size());
   }

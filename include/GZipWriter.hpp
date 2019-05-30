@@ -59,11 +59,15 @@ public:
                        std::string& features,
                        uint8_t featureCode,
                        std::vector<double>& alphas,
-                       std::vector<uint8_t>& tiers);
+                       std::vector<uint8_t>& tiers,
+                       bool dumpUmiGraph);
 
   bool writeSparseAbundances(std::string& bcName,
+                             std::string& features,
+                             uint8_t featureCode,
                              std::vector<double>& alphas,
-                             std::vector<uint8_t>& tiers);
+                             std::vector<uint8_t>& tiers,
+                             bool dumpUmiGraph);
 
   bool writeBootstraps(std::string& bcName,
                        std::vector<double>& alphas,

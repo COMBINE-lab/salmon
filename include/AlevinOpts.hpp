@@ -18,7 +18,6 @@ template <class protocolT>
 struct AlevinOpts {
   AlevinOpts(): numParsingThreads(1),
                 numConsumerThreads(2),
-                freqThreshold(10),
                 initUniform{false}{}
 
   //IUPAC code for the cell-barcodes

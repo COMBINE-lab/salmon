@@ -170,7 +170,7 @@ namespace alevin {
                              CFreqMapT& freqCounter, bool useRibo, bool useMito,
                              size_t numLowConfidentBarcode){
       size_t numCells = trueBarcodes.size();
-      size_t numFeatures {5};
+      size_t numFeatures {6};
       if (useMito) { ++numFeatures; }
       if (useRibo) { ++numFeatures; }
       aopt.numFeatures = numFeatures;
@@ -195,6 +195,7 @@ namespace alevin {
           std::stringstream buffer(line);
           while( getline( buffer, token, '\t') ) {
             featureId += 1;
+            if (aopt.dumpUmiGraph and featureId > 4+numFeatures) { break; }
             if (featureId > 4) { features.emplace_back( std::strtod(token.c_str(),
                                                                     nullptr)); }
           }
@@ -203,7 +204,7 @@ namespace alevin {
             aopt.jointLog->error("Size of the feature file doesn't match.\n"
                                  "Please report the error on github.");
             aopt.jointLog->flush();
-            exit(1);
+            exit(84);
           }
 
           featureCountsMatrix[cellId-2] = features;
@@ -213,7 +214,7 @@ namespace alevin {
           aopt.jointLog->error("The features file has less number of cells.\n"
                                "Please report the error on github.");
           aopt.jointLog->flush();
-          exit(1);
+          exit(84);
         }
         aopt.jointLog->info("Done making feature Matrix");
         aopt.jointLog->flush();
