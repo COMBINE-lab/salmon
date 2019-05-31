@@ -376,7 +376,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         double totalUmiCount {0.0};
         double maxNumUmi {0.0};
         for (auto count: geneAlphas) {
-          if (count>0) {
+          if (count>0.0) {
             totalUmiCount += count;
             totalExpGenes += 1;
             if (count > maxNumUmi) { maxNumUmi = count; }
@@ -766,12 +766,28 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
           << numCells << "\t" << numGenes << "\t" << totalExpGeneCounts << std::endl;
 
     {
+
+      auto popcount = [](uint8_t n) {
+        size_t count {0};
+        while (n) {
+          n &= n-1;
+          ++count;
+        }
+        return count;
+      };
+
       uint32_t zerod_cells {0};
-      size_t elSize = sizeof(typename std::vector<double>::value_type);
+      size_t numFlags = (numGenes/8)+1;
+      std::vector<uint8_t> alphasFlag (numFlags, 0);
+      size_t flagSize = sizeof(decltype(alphasFlag)::value_type);
+
+      std::vector<float> alphasSparse;
+      alphasSparse.reserve(numFlags/2);
+      size_t elSize = sizeof(decltype(alphasSparse)::value_type);
 
       auto countMatFilename = aopt.outputDirectory / "quants_mat.gz";
       if(not boost::filesystem::exists(countMatFilename)){
-        std::cout<<"ERROR: Can't import Binary file quants.mat.gz, it doesn't exist" <<std::flush;
+        std::cout<<"ERROR: Can't import Binary file quants.mat.gz, it doesn't exist" << std::flush;
         exit(84);
       }
 
@@ -780,25 +796,74 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
       countMatrixStream.push(boost::iostreams::file_source(countMatFilename.string(),
                                                            std::ios_base::in | std::ios_base::binary));
 
-      std::vector<double> cell (numGenes, 0.0);
       for (size_t cellCount=0; cellCount<numCells; cellCount++){
-        countMatrixStream.read(reinterpret_cast<char*>(cell.data()), elSize * numGenes);
+        countMatrixStream.read(reinterpret_cast<char*>(alphasFlag.data()), flagSize * numFlags);
 
-        double readCount = std::accumulate(cell.begin(), cell.end(), 0.0);
-        if (readCount == 0){
-          zerod_cells += 1;
+        size_t numExpGenes {0};
+        std::vector<size_t> indices;
+        for (size_t j=0; j<alphasFlag.size(); j++) {
+          uint8_t flag = alphasFlag[j];
+          size_t numNonZeros = popcount(flag);
+          numExpGenes += numNonZeros;
+
+          for (size_t i=0; i<8; i++){
+            if (flag & (128 >> i)) {
+              indices.emplace_back( (i*8)+j );
+            }
+          }
         }
 
-        for (size_t geneCount=0; geneCount<numGenes; geneCount++){
-          double count = cell[geneCount];
-          if (count > 0.0) {
-            qFile << cellCount+1
-                  << "\t" << geneCount+1
-                  << "\t" << count
-                  << std::endl;
-          }
-        }//end-for
-      }
+        if (indices.size() != numExpGenes) {
+          aopt.jointLog->error("binary format reading error {}: {}: {}",
+                               indices.size(), numExpGenes);
+          aopt.jointLog->flush();
+          exit(84);
+        }
+
+
+        alphasSparse.clear();
+        alphasSparse.resize(numExpGenes);
+        countMatrixStream.read(reinterpret_cast<char*>(alphasSparse.data()), elSize * numExpGenes);
+
+        float readCount {0.0};
+        readCount += std::accumulate(alphasSparse.begin(), alphasSparse.end(), 0.0);
+
+        for(size_t i=0; i<numExpGenes; i++) {
+          qFile << cellCount+1 << "\t"
+                << indices[i] << "\t"
+                << alphasSparse[i] <<  std::endl;
+        }
+
+        //size_t alphasSparseCounter {0};
+        //for (size_t i=0; i<numGenes; i+=8) {
+        //  uint8_t flag = alphasFlag[i];
+        //  for (size_t j=0; j<8; j++) {
+        //    size_t vectorIndex = i+j;
+        //    if (vectorIndex >= numGenes) { break; }
+
+        //    if ( flag & (1<<(7-j)) ) {
+        //      if (alphasSparseCounter >= numExpGenes) {
+        //        aopt.jointLog->error("binary format reading error {}: {}: {}",
+        //                             alphasSparseCounter, numExpGenes, readCount);
+        //        aopt.jointLog->flush();
+        //        exit(84);
+        //      }
+
+        //      float count = alphasSparse[alphasSparseCounter];
+        //      readCount += count;
+        //      qFile << cellCount+1 << "\t"
+        //            << vectorIndex+1 << "\t"
+        //            << count << std::endl;
+
+        //      ++alphasSparseCounter;
+        //    }
+        //  }
+        //}
+
+        if (readCount == 0.0){
+          zerod_cells += 1;
+        }
+      } // end-for each cell
 
       if (zerod_cells > 0) {
         aopt.jointLog->warn("Found {} cells with 0 counts", zerod_cells);
