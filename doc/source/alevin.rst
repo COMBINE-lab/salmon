@@ -105,6 +105,8 @@ If Alevin is passed the ``--noDedup`` option, the pipeline only performs CB corr
 
 The list of mitochondrial genes which are to be used as a feature for CB whitelising naive Bayes classification.
 
+.. note:: It is generally advisable to not use nuclear mitrochondrial genes in this as they can be both up and/or down regulated which might cancel out the usefulness of this feature. Please check issue `#367 <https://github.com/COMBINE-lab/salmon/issues/367>`_ in salmon repo to know more about it.
+
 """"""""""""
 ``--rrna``
 """"""""""""
