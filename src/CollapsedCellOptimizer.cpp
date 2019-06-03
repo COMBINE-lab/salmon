@@ -493,9 +493,9 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         }
 
         // write the abundance for the cell
-        gzw.writeBootstraps( trueBarcodeStr,
-                             geneAlphas, bootVariance,
-                             useAllBootstraps, sampleEstimates);
+        gzw.writeSparseBootstraps( trueBarcodeStr,
+                                   geneAlphas, bootVariance,
+                                   useAllBootstraps, sampleEstimates);
       }//end-if
     }
     else {
