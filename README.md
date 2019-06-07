@@ -20,6 +20,7 @@ $ salmon index -t gentrome.fa -d decoys.txt -i combined_index
 | human (ensembl)      | [**human.tar.gz**](http://bit.ly/2HUU7S6) | [Homo_sapiens.GRCh38.dna.toplevel.fa.gz](http://ftp.ensembl.org/pub/release-91/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.toplevel.fa.gz) | [Homo_sapiens.GRCh38.91.gtf.gz](http://ftp.ensembl.org/pub/release-91/gtf/homo_sapiens/Homo_sapiens.GRCh38.91.gtf.gz) |
 | mouse (ensembl)     | [**mouse.tar.gz**](http://bit.ly/2Xoop4X) | [Mus_musculus.GRCm38.dna.toplevel.fa.gz](http://ftp.ensembl.org/pub/release-91/fasta/mus_musculus/dna/Mus_musculus.GRCm38.dna.toplevel.fa.gz) | [Mus_musculus.GRCm38.91.gtf.gz](http://ftp.ensembl.org/pub/release-91/gtf/mus_musculus/Mus_musculus.GRCm38.91.gtf.gz) |
 | drosophila (ensembl) | [**drosophila.tar.gz**](http://bit.ly/2KrlCnF) | [Drosophila_melanogaster.BDGP6.dna.toplevel.fa.gz](http://ftp.ensembl.org/pub/release-91/fasta/drosophila_melanogaster/dna/Drosophila_melanogaster.BDGP6.dna.toplevel.fa.gz) | [Drosophila_melanogaster.BDGP6.91.gtf.gz](http://ftp.ensembl.org/pub/release-91/gtf/drosophila_melanogaster/Drosophila_melanogaster.BDGP6.91.gtf.gz) |
+| zebrafish (ensembl) | [**zebrafish.tar.gz**](http://bit.ly/2IpxRyF) | [Danio_rerio.GRCz11.dna.toplevel.fa.gz](http://ftp.ensembl.org/pub/release-96/fasta/danio_rerio/dna/Danio_rerio.GRCz11.dna.toplevel.fa.gz) | [Danio_rerio.GRCz11.96.gtf.gz](http://ftp.ensembl.org/pub/release-96/gtf/danio_rerio/Danio_rerio.GRCz11.96.gtf.gz) |
 
 What is Salmon?
 ===============
