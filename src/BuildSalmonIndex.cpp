@@ -52,6 +52,7 @@ int salmonIndex(int argc, const char* argv[]) {
   bool useStreamingParser = true;
 
   string indexTypeStr = "quasi";
+  string decoyList;
   uint32_t saSampInterval = 1;
   uint32_t auxKmerLen = 0;
   uint32_t numThreads{2};
@@ -90,6 +91,11 @@ int salmonIndex(int argc, const char* argv[]) {
       "dense hash.  This "
       "will require less memory (especially during quantification), but will "
       "take longer to construct")(
+      "decoys,d",
+      po::value<string>(&decoyList),
+      "Treat these sequences as decoys that may have sequence homologous to some "
+      "known transcript"
+      )(
       "type",
       po::value<string>(&indexTypeStr)->default_value("quasi")->required(),
       "The type of index to build; the only option is \"quasi\" in this version of salmon.");
@@ -149,6 +155,11 @@ Creates a salmon index.
       bfs::create_directories(indexDirectory);
     }
 
+    bool haveDecoys{false};
+    if (vm.count("decoys")) {
+      haveDecoys = true;
+    }
+
     bfs::path logPath = indexDirectory / "indexing.log";
     size_t max_q_size = 2097152;
     // spdlog::set_async_mode(max_q_size);
@@ -204,6 +215,10 @@ Creates a salmon index.
       }
       if (keepDuplicates) {
         argVec->push_back("--keepDuplicates");
+      }
+      if (haveDecoys) {
+        argVec->push_back("--decoys");
+        argVec->push_back(decoyList);
       }
 
       sidx.reset(new SalmonIndex(jointLog, SalmonIndexType::QUASI));

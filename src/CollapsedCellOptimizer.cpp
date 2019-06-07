@@ -260,9 +260,12 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   bool quiet, tbb::atomic<double>& totalDedupCounts,
                   tbb::atomic<uint32_t>& totalExpGeneCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                  uint32_t numGenes, bool inDebugMode, uint32_t numBootstraps,
+                  uint32_t numGenes, uint32_t numBootstraps,
                   bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
-                  bool initUniform, std::atomic<uint64_t>& totalUniEdgesCounts,
+                  bool initUniform, CFreqMapT& freqCounter,
+                  spp::sparse_hash_set<uint32_t>& mRnaGenes,
+                  spp::sparse_hash_set<uint32_t>& rRnaGenes,
+                  std::atomic<uint64_t>& totalUniEdgesCounts,
                   std::atomic<uint64_t>& totalBiEdgesCounts){
   size_t numCells {trueBarcodes.size()};
   size_t trueBarcodeIdx;
@@ -270,8 +273,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
   // looping over until all the cells
   while((trueBarcodeIdx = barcode++) < totalCells) {
     // per-cell level optimization
-    if ( (not inDebugMode && umiCount[trueBarcodeIdx] < 10) or
-         (inDebugMode && umiCount[trueBarcodeIdx] == 0) ) {
+    if ( umiCount[trueBarcodeIdx] == 0 ) {
       //skip the barcode if no mapped UMI
       skippedCB[trueBarcodeIdx].inActive = true;
       continue;
@@ -329,16 +331,17 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
     if ( !naiveEqclass ) {
       // perform the UMI deduplication step
       std::vector<SalmonEqClass> salmonEqclasses;
+      spp::sparse_hash_map<uint16_t, uint32_t> numMolHash;
       bool dedupOk = dedupClasses(geneAlphas, totalCount, txpGroups,
                                   umiGroups, salmonEqclasses,
                                   txpToGeneMap, tiers, gzw,
-                                  dumpUmiGraph, trueBarcodeStr,
+                                  dumpUmiGraph, trueBarcodeStr, numMolHash,
                                   totalUniEdgesCounts, totalBiEdgesCounts);
       if( !dedupOk ){
         jointlog->error("Deduplication for cell {} failed \n"
                         "Please Report this on github.", trueBarcodeStr);
         jointlog->flush();
-        std::exit(1);
+        std::exit(74);
       }
 
       if ( numBootstraps and noEM ) {
@@ -359,20 +362,109 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
           jointlog->error("EM iteration for cell {} failed \n"
                           "Please Report this on github.", trueBarcodeStr);
           jointlog->flush();
-          std::exit(1);
+          std::exit(74);
         }
       }
+
+      std::string features;
+      uint8_t featureCode {0};
+      {
+        std::stringstream featuresStream;
+        featuresStream << trueBarcodeStr;
+
+        // Making features
+        double totalUmiCount {0.0};
+        double maxNumUmi {0.0};
+        for (auto count: geneAlphas) {
+          if (count>0.0) {
+            totalUmiCount += count;
+            totalExpGenes += 1;
+            if (count > maxNumUmi) { maxNumUmi = count; }
+          }
+        }
+
+        uint32_t numGenesOverMean {0};
+        double mitoCount {0.0}, riboCount {0.0};
+        double meanNumUmi {totalUmiCount / totalExpGenes};
+        double meanByMax = maxNumUmi ? meanNumUmi / maxNumUmi : 0.0;
+        for (size_t j=0; j<geneAlphas.size(); j++){
+          auto count = geneAlphas[j];
+          if (count > meanNumUmi) { ++numGenesOverMean; }
+
+          if (mRnaGenes.contains(j)){
+            mitoCount += count;
+          }
+          if (rRnaGenes.contains(j)){
+            riboCount += count;
+          }
+        }
+
+        auto indexIt = freqCounter.find(trueBarcodeStr);
+        bool indexOk = indexIt != freqCounter.end();
+        if ( not indexOk ){
+          jointlog->error("Error: index {} not found in freq Counter\n"
+                          "Please Report the issue on github", trueBarcodeStr);
+          jointlog->flush();
+          exit(84);
+        }
+
+        uint64_t numRawReads = *indexIt;
+        uint64_t numMappedReads { umiCount[trueBarcodeIdx] };
+        double mappingRate = numRawReads ?
+          numMappedReads / static_cast<double>(numRawReads) : 0.0;
+        double deduplicationRate = numMappedReads ?
+          1.0 - (totalUmiCount / numMappedReads) : 0.0;
+
+        // Feature created after discussion with Mehrtash
+        double averageNumMolPerArbo {0.0};
+        size_t totalNumArborescence {0};
+        std::stringstream arboString ;
+        for (auto& it: numMolHash) {
+          totalNumArborescence += it.second;
+          averageNumMolPerArbo += (it.first * it.second);
+          if (dumpUmiGraph) {
+            arboString << "\t" << it.first << ":" << it.second;
+          }
+        }
+        averageNumMolPerArbo /= totalNumArborescence;
+
+        featuresStream << "\t" << numRawReads
+                       << "\t" << numMappedReads
+                       << "\t" << totalUmiCount
+                       << "\t" << mappingRate
+                       << "\t" << deduplicationRate
+                       << "\t" << meanByMax
+                       << "\t" << totalExpGenes
+                       << "\t" << numGenesOverMean;
+
+        if (dumpUmiGraph) {
+          featuresStream << arboString.rdbuf();
+        } else {
+          featuresStream << "\t" << averageNumMolPerArbo;
+        }
+
+        if (mRnaGenes.size() > 1) {
+          featureCode += 1;
+          featuresStream << "\t" << mitoCount / totalUmiCount;
+        }
+
+        if (rRnaGenes.size() > 1) {
+          featureCode += 2;
+          featuresStream << "\t" << riboCount / totalUmiCount;
+        }
+
+        features = featuresStream.str();
+      } // end making features
+
 
       // write the abundance for the cell
-      gzw.writeAbundances( inDebugMode, trueBarcodeStr,
-                           geneAlphas, tiers );
+      gzw.writeSparseAbundances( trueBarcodeStr,
+                                 features,
+                                 featureCode,
+                                 geneAlphas,
+                                 tiers,
+                                 dumpUmiGraph );
 
-
-      for (auto count: geneAlphas) {
-        if (count>0) {
-          totalExpGenes += 1;
-        }
-      }
 
       // maintaining count for total number of predicted UMI
       salmon::utils::incLoop(totalDedupCounts, totalCount);
@@ -397,11 +489,11 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
           jointlog->error("Bootstrapping failed \n"
                           "Please Report this on github.");
           jointlog->flush();
-          std::exit(1);
+          std::exit(74);
         }
 
         // write the abundance for the cell
-        gzw.writeBootstraps( inDebugMode, trueBarcodeStr,
+        gzw.writeBootstraps( trueBarcodeStr,
                              geneAlphas, bootVariance,
                              useAllBootstraps, sampleEstimates);
       }//end-if
@@ -460,6 +552,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   size_t numCells = trueBarcodes.size();
   size_t numGenes = geneIdxMap.size();
   size_t numWorkerThreads{1};
+  bool hasWhitelist = boost::filesystem::exists(aopt.whitelistFile);
 
   if (aopt.numThreads > 1) {
     numWorkerThreads = aopt.numThreads - 1;
@@ -478,17 +571,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
       orderedTgroup.push_back(std::make_pair(kv.first, eqId));
     }
     eqId++;
-
-    //for (auto& bg: kv.second.barcodeGroup) {
-    //  for (auto& ugroup: bg.second){
-    //    uniqueUmisCounter.insert(ugroup.first);
-    //  }
-    //}//end-for
   }
-
-  //aopt.jointLog->info("Total {} Unique Umis found\n",
-  //                    uniqueUmisCounter.size());
-  //aopt.jointLog->flush();
 
   if (aopt.noEM) {
     aopt.jointLog->warn("Not performing EM; this may result in discarding ambiguous reads\n");
@@ -499,6 +582,61 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
     aopt.jointLog->warn("Using uniform initialization for EM");
     aopt.jointLog->flush();
   }
+
+  spp::sparse_hash_set<uint32_t> mRnaGenes, rRnaGenes;
+  bool useMito {false}, useRibo {false};
+  if(boost::filesystem::exists(aopt.mRnaFile)) {
+    std::ifstream mRnaFile(aopt.mRnaFile.string());
+    std::string gene;
+    size_t skippedGenes {0};
+    if(mRnaFile.is_open()) {
+      while(getline(mRnaFile, gene)) {
+        if (geneIdxMap.contains(gene)){
+          mRnaGenes.insert(geneIdxMap[ gene ]);
+        }
+        else{
+          skippedGenes += 1;
+        }
+      }
+      mRnaFile.close();
+    }
+    if (skippedGenes > 0){
+      aopt.jointLog->warn("{} mitorna gene(s) does not have transcript in the reference",
+                          skippedGenes);
+    }
+    aopt.jointLog->info("Total {} usable mRna genes", mRnaGenes.size());
+    if (mRnaGenes.size() > 0 ) { useMito = true; }
+  }
+  else if (hasWhitelist) {
+    aopt.jointLog->warn("mrna file not provided; using is 1 less feature for whitelisting");
+  }
+
+  if(boost::filesystem::exists(aopt.rRnaFile)){
+    std::ifstream rRnaFile(aopt.rRnaFile.string());
+    std::string gene;
+    size_t skippedGenes {0};
+    if(rRnaFile.is_open()) {
+      while(getline(rRnaFile, gene)) {
+        if (geneIdxMap.contains(gene)){
+          rRnaGenes.insert(geneIdxMap[ gene ]);
+        }
+        else{
+          skippedGenes += 1;
+        }
+      }
+      rRnaFile.close();
+    }
+    if (skippedGenes > 0){
+      aopt.jointLog->warn("{} ribosomal rna gene(s) does not have transcript in the reference",
+                          skippedGenes);
+    }
+    aopt.jointLog->info("Total {} usable rRna genes", rRnaGenes.size());
+    if (rRnaGenes.size() > 0 ) { useRibo = true; }
+  }
+  else if (hasWhitelist) {
+    aopt.jointLog->warn("rrna file not provided; using is 1 less feature for whitelisting");
+  }
+
 
   std::vector<CellState> skippedCB (numCells);
   std::atomic<uint32_t> bcount{0};
@@ -528,12 +666,14 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                std::ref(totalExpGeneCounts),
                                std::ref(txpToGeneMap),
                                numGenes,
-                               aopt.debug,
                                aopt.numBootstraps,
                                aopt.naiveEqclass,
                                aopt.dumpUmiGraph,
                                aopt.dumpfeatures,
                                aopt.initUniform,
+                               std::ref(freqCounter),
+                               std::ref(rRnaGenes),
+                               std::ref(mRnaGenes),
                                std::ref(totalUniEdgesCounts),
                                std::ref(totalBiEdgesCounts));
   }
@@ -548,7 +688,8 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   aopt.jointLog->info("Total {} UniDirected Edges.",
                       totalUniEdgesCounts);
 
-  aopt.totalDedupUMIs = totalDedupCounts;
+  //adjusting for float
+  aopt.totalDedupUMIs = totalDedupCounts+1;
   aopt.totalExpGenes = totalExpGeneCounts;
 
   uint32_t skippedCBcount {0};
@@ -569,11 +710,6 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
         if (idx > lowRegionCutoffIdx){
           numLowConfidentBarcode--;
         }
-        else if ( not aopt.debug ){
-          std::cout<< "Skipped Barcodes are from High Confidence Region\n"
-                   << " Should not happen"<<std::flush;
-          exit(1);
-        }
       }
     }
     numCells = trueBarcodes.size();
@@ -591,71 +727,152 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   std::copy(geneNames.begin(), geneNames.end(), giterator);
   gFile.close();
 
-  std::vector<std::vector<double>> countMatrix;
+  if( not hasWhitelist ){
+    aopt.jointLog->info("Clearing EqMap; Might take some time.");
+    fullEqMap.clear();
 
-  bool hasWhitelist = boost::filesystem::exists(aopt.whitelistFile);
-  if(not aopt.nobarcode and numLowConfidentBarcode>0){
-    if(not hasWhitelist  or aopt.dumpCsvCounts){
-      aopt.jointLog->info("Clearing EqMap; Might take some time.");
-      fullEqMap.clear();
-
-      aopt.jointLog->info("Starting Import of the gene count matrix of size {}x{}.",
-                          trueBarcodes.size(), numGenes);
-      countMatrix.resize(trueBarcodes.size(),
-                         std::vector<double> (numGenes, 0.0));
-
-      aopt.jointLog->info("Done initializing the empty matrix.");
+    aopt.jointLog->info("Starting white listing");
+    bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
+                                                                      umiCount,
+                                                                      trueBarcodes,
+                                                                      freqCounter,
+                                                                      useRibo,
+                                                                      useMito,
+                                                                      numLowConfidentBarcode);
+    if (!whitelistingSuccess) {
+      aopt.jointLog->error(
+                           "The white listing algorithm failed. This is likely the result of "
+                           "bad input (or a bug). If you cannot track down the cause, please "
+                           "report this issue on GitHub.");
       aopt.jointLog->flush();
-      auto zerod_cells = alevin::whitelist::populate_count_matrix(aopt.outputDirectory,
-                                                                  aopt.debug,
-                                                                  numGenes,
-                                                                  countMatrix);
-      if (zerod_cells > 0) {
-        aopt.jointLog->warn("Found {} cells with no reads,"
-                            " ignoring due to debug mode.", zerod_cells);
+      return false;
+    }
+
+    aopt.jointLog->info("Finished white listing");
+    aopt.jointLog->flush();
+  } //end-if whitelisting
+
+  if (aopt.dumpMtx){
+    aopt.jointLog->info("Starting dumping cell v gene counts in mtx format");
+    boost::filesystem::path qFilePath = aopt.outputDirectory / "quants_mat.mtx.gz";
+
+    boost::iostreams::filtering_ostream qFile;
+    qFile.push(boost::iostreams::gzip_compressor(6));
+    qFile.push(boost::iostreams::file_sink(qFilePath.string(),
+                                           std::ios_base::out | std::ios_base::binary));
+
+    // mtx header
+    qFile << "%%MatrixMarket\tmatrix\tcoordinate\treal\tgeneral" << std::endl
+          << numCells << "\t" << numGenes << "\t" << totalExpGeneCounts << std::endl;
+
+    {
+
+      auto popcount = [](uint8_t n) {
+        size_t count {0};
+        while (n) {
+          n &= n-1;
+          ++count;
+        }
+        return count;
+      };
+
+      uint32_t zerod_cells {0};
+      size_t numFlags = (numGenes/8)+1;
+      std::vector<uint8_t> alphasFlag (numFlags, 0);
+      size_t flagSize = sizeof(decltype(alphasFlag)::value_type);
+
+      std::vector<float> alphasSparse;
+      alphasSparse.reserve(numFlags/2);
+      size_t elSize = sizeof(decltype(alphasSparse)::value_type);
+
+      auto countMatFilename = aopt.outputDirectory / "quants_mat.gz";
+      if(not boost::filesystem::exists(countMatFilename)){
+        std::cout<<"ERROR: Can't import Binary file quants.mat.gz, it doesn't exist" << std::flush;
+        exit(84);
       }
 
-      aopt.jointLog->info("Done Importing gene count matrix for dimension {}x{}",
-                          numCells, numGenes);
-      aopt.jointLog->flush();
+      boost::iostreams::filtering_istream countMatrixStream;
+      countMatrixStream.push(boost::iostreams::gzip_decompressor());
+      countMatrixStream.push(boost::iostreams::file_source(countMatFilename.string(),
+                                                           std::ios_base::in | std::ios_base::binary));
 
-      if (aopt.dumpCsvCounts){
-        aopt.jointLog->info("Starting dumping cell v gene counts in csv format");
-        std::ofstream qFile;
-        boost::filesystem::path qFilePath = aopt.outputDirectory / "quants_mat.csv";
-        qFile.open(qFilePath.string());
-        for (auto& row : countMatrix) {
-          for (auto cell : row) {
-            qFile << cell << ',';
+      for (size_t cellCount=0; cellCount<numCells; cellCount++){
+        countMatrixStream.read(reinterpret_cast<char*>(alphasFlag.data()), flagSize * numFlags);
+
+        size_t numExpGenes {0};
+        std::vector<size_t> indices;
+        for (size_t j=0; j<alphasFlag.size(); j++) {
+          uint8_t flag = alphasFlag[j];
+          size_t numNonZeros = popcount(flag);
+          numExpGenes += numNonZeros;
+
+          for (size_t i=0; i<8; i++){
+            if (flag & (128 >> i)) {
+              indices.emplace_back( (i*8)+j );
+            }
           }
-          qFile << "\n";
         }
-        qFile.close();
 
-        aopt.jointLog->info("Finished dumping csv counts");
-      }
-
-      if( not hasWhitelist ){
-        aopt.jointLog->info("Starting white listing");
-        bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
-                                                                          umiCount,
-                                                                          countMatrix,
-                                                                          trueBarcodes,
-                                                                          freqCounter,
-                                                                          geneIdxMap,
-                                                                          numLowConfidentBarcode);
-        if (!whitelistingSuccess) {
-          aopt.jointLog->error(
-                               "The white listing algorithm failed. This is likely the result of "
-                               "bad input (or a bug). If you cannot track down the cause, please "
-                               "report this issue on GitHub.");
+        if (indices.size() != numExpGenes) {
+          aopt.jointLog->error("binary format reading error {}: {}: {}",
+                               indices.size(), numExpGenes);
           aopt.jointLog->flush();
-          return false;
+          exit(84);
         }
-        aopt.jointLog->info("Finished white listing");
+
+
+        alphasSparse.clear();
+        alphasSparse.resize(numExpGenes);
+        countMatrixStream.read(reinterpret_cast<char*>(alphasSparse.data()), elSize * numExpGenes);
+
+        float readCount {0.0};
+        readCount += std::accumulate(alphasSparse.begin(), alphasSparse.end(), 0.0);
+
+        for(size_t i=0; i<numExpGenes; i++) {
+          qFile << cellCount+1 << "\t"
+                << indices[i] << "\t"
+                << alphasSparse[i] <<  std::endl;
+        }
+
+        //size_t alphasSparseCounter {0};
+        //for (size_t i=0; i<numGenes; i+=8) {
+        //  uint8_t flag = alphasFlag[i];
+        //  for (size_t j=0; j<8; j++) {
+        //    size_t vectorIndex = i+j;
+        //    if (vectorIndex >= numGenes) { break; }
+
+        //    if ( flag & (1<<(7-j)) ) {
+        //      if (alphasSparseCounter >= numExpGenes) {
+        //        aopt.jointLog->error("binary format reading error {}: {}: {}",
+        //                             alphasSparseCounter, numExpGenes, readCount);
+        //        aopt.jointLog->flush();
+        //        exit(84);
+        //      }
+
+        //      float count = alphasSparse[alphasSparseCounter];
+        //      readCount += count;
+        //      qFile << cellCount+1 << "\t"
+        //            << vectorIndex+1 << "\t"
+        //            << count << std::endl;
+
+        //      ++alphasSparseCounter;
+        //    }
+        //  }
+        //}
+
+        if (readCount == 0.0){
+          zerod_cells += 1;
+        }
+      } // end-for each cell
+
+      if (zerod_cells > 0) {
+        aopt.jointLog->warn("Found {} cells with 0 counts", zerod_cells);
       }
     }
-  } // end-if no barcode
+
+    boost::iostreams::close(qFile);
+    aopt.jointLog->info("Finished dumping counts into mtx");
+  }
 
   return true;
 } //end-optimize

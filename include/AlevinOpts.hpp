@@ -18,27 +18,20 @@ template <class protocolT>
 struct AlevinOpts {
   AlevinOpts(): numParsingThreads(1),
                 numConsumerThreads(2),
-                freqThreshold(10),
                 initUniform{false}{}
 
   //IUPAC code for the cell-barcodes
   std::string iupac;
   //protocol to use for single cell
   protocolT protocol;
-  //Dump soft-mapping of corrected barcodes
-  bool dumpBarcodeMap;
-  //umi_tools supported whitelist
-  bool dumpUmiToolsMap;
   //dump barcodes fq files
   bool dumpfq;
   //dump CB features for whitelisting
   bool dumpfeatures;
-  //flag for using barcoding or just single cell dedup
-  bool nobarcode;
   //eqclass level barcode count
   bool dumpBarcodeEq;
   //dump cellvtxp matrix in csv
-  bool dumpCsvCounts;
+  bool dumpMtx;
   // dump big fishing hash
   bool dumpBFH;
   // dump per cell level umi-graph
@@ -59,8 +52,6 @@ struct AlevinOpts {
   uint32_t trimRight;
   //no downstream salmon quant
   bool noQuant;
-  // use correlation for white-listing
-  bool useCorrelation;
   // don't run EM flag
   bool noEM;
   // Avoid segfaults based on no whitelist mapping
@@ -71,8 +62,6 @@ struct AlevinOpts {
   bool eqClassLevel;
   // perform txp level analysis instead of gene level
   bool txpLevel;
-  //do hard-assignment of error bcs
-  bool noSoftMap;
   // initialize EM with uniform prior
   bool initUniform;
   //number of cells

@@ -44,6 +44,10 @@ namespace alevin {
         return vertexNames[vertex].first;
       }
 
+      uint32_t getUId(uint32_t vertex) {
+        return vertexNames[vertex].second;
+      }
+
       const spp::sparse_hash_set<uint32_t>& getNeighbors(uint32_t vertex) {
         return edges[vertex];
       }

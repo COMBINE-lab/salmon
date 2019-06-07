@@ -247,6 +247,25 @@ private:
     return true;
   }
 
+  bool isDecoy(uint64_t tid){
+    bool decoy{false};
+    if (largeQuasi_) {
+      if (perfectHashQuasi_) {
+        decoy = quasiIndexPerfectHash64_->isDecoy(tid);
+      } else {
+        decoy = quasiIndex64_->isDecoy(tid);
+      }
+    } else {
+      if (perfectHashQuasi_) {
+        decoy = quasiIndexPerfectHash32_->isDecoy(tid);
+      } else {
+        decoy = quasiIndex32_->isDecoy(tid);
+      }
+    }
+    // should not get here
+    return decoy;
+  }
+
   bool loaded_;
   SalmonIndexVersionInfo versionInfo_;
   // Can't think of a generally better way to do this now

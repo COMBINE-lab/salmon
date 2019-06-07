@@ -9,6 +9,7 @@
 
 // Logger includes
 #include "spdlog/spdlog.h"
+#include "nonstd/optional.hpp"
 
 #include "SalmonUtils.hpp"
 #include "TranscriptGroup.hpp"
@@ -211,6 +212,11 @@ public:
 
   std::vector<std::pair<const TranscriptGroup, TGValueType>>& eqVec() {
     return countVec_;
+  }
+
+  // The returned value is only valid when the class is finalized!
+  nonstd::optional<size_t> numEqClasses() const {
+    return (active_) ? nonstd::nullopt : nonstd::optional<size_t>(countVec_.size());
   }
 
 private:

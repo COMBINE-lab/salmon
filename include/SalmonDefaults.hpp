@@ -118,19 +118,14 @@ namespace defaults {
   constexpr const bool isCELSeq{false};
   constexpr const bool isCELSeq2{false};
   constexpr const bool noQuant{false};
-  constexpr const bool noSoftMap{true};
-  constexpr const bool useCorrelation{false};
   constexpr const bool dumpFQ{false};
   constexpr const bool dumpBarcodeEq{false};
   constexpr const bool dumpFeatures{false};
   constexpr const bool dumpBFH{false};
   constexpr const bool dumpUmiGraph{false};
-  constexpr const bool dumpUMIToolsMap{false};
-  constexpr const bool dumpBarcodeMap{false};
-  constexpr const bool dumpCSVCounts{false};
+  constexpr const bool dumpMtx{false};
   constexpr const bool noEM{false};
   constexpr const bool debug{true};
-  constexpr const bool noBarcode{false};
   constexpr const uint32_t trimRight{0};
   constexpr const uint32_t numBootstraps{0};
   constexpr const uint32_t lowRegionMinNumBarcodes{200};
@@ -140,6 +135,7 @@ namespace defaults {
   constexpr const uint32_t expectCells{0};
   constexpr const uint32_t forceCells{0};
   constexpr const double keepCBFraction{0.0};
+  constexpr const uint32_t freqThreshold{10};
 }
 }
 

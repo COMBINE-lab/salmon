@@ -39,6 +39,7 @@ public:
         mass_(salmon::math::LOG_0), sharedCount_(0.0),
         avgMassBias_(salmon::math::LOG_0), active_(false) {
     uniqueCount_.store(0);
+    totalCount_.store(0); // thanks @come-raczy
     lastUpdate_.store(0);
     lastTimestepUpdated_.store(0);
     cachedEffectiveLength_.store(salmon::math::LOG_0);
@@ -50,6 +51,7 @@ public:
         priorMass_(std::log(alpha * len)), mass_(salmon::math::LOG_0),
         sharedCount_(0.0), avgMassBias_(salmon::math::LOG_0), active_(false) {
     uniqueCount_.store(0);
+    totalCount_.store(0); // thanks @come-raczy
     lastUpdate_.store(0);
     lastTimestepUpdated_.store(0);
     cachedEffectiveLength_.store(std::log(static_cast<double>(RefLength)));
@@ -454,6 +456,12 @@ public:
     return polyAPos_[r];
   }
 
+  void setDecoy(bool isDecoy) {
+    isDecoy_ = isDecoy;
+  }
+
+  bool isDecoy() const { return isDecoy_; }
+
   // Will *not* delete seq on destruction
   void setSequenceBorrowed(const char* seq, bool needGC = false,
                            bool reduceGCMemory = false) {
@@ -702,6 +710,7 @@ private:
   // pair of reads mapping to it.
   std::atomic<bool> hasAnchorFragment_{false};
   bool active_;
+  bool isDecoy_{false};
 
   bool reduceGCMemory_{false};
   double gcFracLen_{0.0};

@@ -201,8 +201,12 @@ add_executable(unitTests ${UNIT_TESTS_SRCS})
 #set_target_properties(salmon_core salmon PROPERTIES LINK_SEARCH_END_STATIC TRUE)
 
 # our suffix array construction libraries
-set (SUFFARRAY_LIB ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort.a)
-set (SUFFARRAY64_LIB ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort64.a)
+if(NOT LIBDIVSUFSORT_FOUND)
+  set (SUFFARRAY_LIB ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort.a)
+  set (SUFFARRAY_LIB64 ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort64.a)
+  message ("Setting libdivsufsort = ${SUFFARRAY_LIB}") 
+  message ("Setting libdivsufsort64 = ${SUFFARRAY_LIB64}") 
+endif()
 
 
 # Link the executable
@@ -213,10 +217,10 @@ target_link_libraries(salmon
     gff
     ${Boost_LIBRARIES}
     ${ICU_LIBS}
-    ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
+    ${STADEN_LIBRARIES} ${CURL_LIBRARIES}
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
-    ${SUFFARRAY64_LIB}
+    ${SUFFARRAY_LIB64}
     #${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
     m
     ${LIBLZMA_LIBRARIES}
@@ -240,10 +244,10 @@ target_link_libraries(unitTests
     gff
     ${Boost_LIBRARIES}
     ${ICU_LIBS}
-    ${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a
+    ${STADEN_LIBRARIES} ${CURL_LIBRARIES}
     ${ZLIB_LIBRARY}
     ${SUFFARRAY_LIB}
-    ${SUFFARRAY64_LIB}
+    ${SUFFARRAY_LIB64}
     #${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
     m
     ${LIBLZMA_LIBRARIES}
@@ -279,17 +283,29 @@ if (${FETCHED_TBB})
    add_dependencies(salmon libtbb)
 endif()
 
-add_dependencies(salmon_core libcereal)
-add_dependencies(salmon libcereal)
-add_dependencies(alevin_core libstadenio)
-add_dependencies(salmon_core libstadenio)
-add_dependencies(salmon libstadenio)
+if (${FETCHED_CEREAL})
+  add_dependencies(salmon_core libcereal)
+  add_dependencies(salmon libcereal)
+endif()
+
+if (${FETCHED_STADEN})
+  add_dependencies(alevin_core libstadenio)
+  add_dependencies(salmon_core libstadenio)
+  add_dependencies(salmon libstadenio)
+endif()
+
 #add_dependencies(salmon_core libbwa)
 #add_dependencies(salmon libbwa)
-add_dependencies(salmon_core libgff)
-add_dependencies(salmon libgff)
-add_dependencies(salmon_core libdivsufsort)
-add_dependencies(salmon libdivsufsort)
+
+if (${FETCHED_GFF})
+  add_dependencies(salmon_core libgff)
+  add_dependencies(salmon libgff)
+endif()
+
+if (${FETCHED_LIBDIVSUFSORT})
+  add_dependencies(salmon_core libdivsufsort)
+  add_dependencies(salmon libdivsufsort)
+endif()
 
 ### No need for this, I think
 ##  This ensures that the salmon executable should work with or without `make install`
