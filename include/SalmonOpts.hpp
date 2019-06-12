@@ -172,6 +172,8 @@ struct SalmonOpts {
 
   boost::filesystem::path geneMapPath; // Gene map path
 
+  boost::filesystem::path utrMapPath; // UTR map path
+
   bool quiet; // Be quiet during quantification.
 
   bool useEM; // Use "regular" EM in the batch passes

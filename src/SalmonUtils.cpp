@@ -1742,6 +1742,21 @@ bool processQuantOptions(SalmonOpts& sopt,
     sopt.geneMapPath = geneMapPath;
   }
 
+  // Verify the utrMap before we start doing any real work.
+  bfs::path utrMapPath;
+  if (vm.count("utrMap")) {
+    // Make sure the provided file exists
+    utrMapPath = vm["utrMap"].as<std::string>();
+    if (!bfs::exists(utrMapPath)) {
+      std::cerr << "ERROR: Could not find transcript <=> gene map file "
+                << utrMapPath << "\n";
+      std::cerr << "Exiting now: please either omit the \'geneMap\' option or "
+        "provide a valid file\n";
+      return false;
+    }
+    sopt.utrMapPath = utrMapPath;
+  }
+
   /**
    * Create some necessary directories
    **/

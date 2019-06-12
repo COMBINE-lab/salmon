@@ -55,6 +55,15 @@ namespace salmon {
        "transcript identifier and the \"gene_id\" is assumed to contain the "
        "corresponding "
        "gene identifier.")
+      ("utrMap", po::value<string>(),
+       "File containing a tsv structure format to mention the gene "
+       "corresponding trandscript "
+       "and the start and the end position that gives the UTR of in "
+       "format ."
+       "The structure of the file is as following "
+       "<gene id> <transcript id> <start of UTR> <end of UTR> <tab-delimited list of transcript id>"
+       "The list of the transcripts compatible transcripts contain where the UTR"
+       "can be replaced with.")
       ("meta", po::bool_switch(&(sopt.meta))->default_value(salmon::defaults::metaMode),
        "If you're using Salmon on a metagenomic dataset, consider setting this "
        "flag to disable parts of the "
