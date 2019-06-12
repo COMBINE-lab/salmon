@@ -94,6 +94,7 @@
 #include "SalmonMath.hpp"
 #include "SalmonUtils.hpp"
 #include "Transcript.hpp"
+#include "UTRModel.hpp"
 
 #include "AlignmentGroup.hpp"
 #include "BiasParams.hpp"
@@ -2318,6 +2319,7 @@ transcript abundance from RNA-seq reads
 
     po::notify(vm);
 
+
     // If we're supposed to be quiet, set the global logger level to >= warn
     if (sopt.quiet) {
       spdlog::set_level(spdlog::level::warn); // Set global log level to info
@@ -2348,6 +2350,11 @@ transcript abundance from RNA-seq reads
         spdlog::drop_all();
       }
       std::exit(1);
+    }
+
+    if(vm.count("utrMap")){
+      commentStream << "UTR Map path " << sopt.utrMapPath << "\n" ;
+      std::exit(1) ;
     }
 
     auto fileLog = sopt.fileLog;
