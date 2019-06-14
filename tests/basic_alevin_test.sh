@@ -1,4 +1,4 @@
-ALVBIN=$1
+ALVBIN=$1 #"/mnt/scratch6/salmon_ci/COMBINE-lab/salmon/master/build/salmon-latest_linux_x86_64/bin/salmon"
 OUT=$PWD
 
 tfile=$(mktemp /tmp/foo.XXXXXXXXX) 

@@ -703,15 +703,19 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
     aopt.jointLog->warn("Skipped {} barcodes due to No mapped read",
                         skippedCBcount);
     auto lowRegionCutoffIdx = numCells - numLowConfidentBarcode;
+    std::vector<std::string> retainedTrueBarcodes ;
     for (size_t idx=0; idx < numCells; idx++){
       // not very efficient way but assuming the size is small enough
       if (skippedCB[idx].inActive) {
-        trueBarcodes.erase(trueBarcodes.begin() + idx);
         if (idx > lowRegionCutoffIdx){
           numLowConfidentBarcode--;
         }
+      } else {
+        retainedTrueBarcodes.emplace_back(trueBarcodes[idx]);
       }
     }
+
+    trueBarcodes = retainedTrueBarcodes;
     numCells = trueBarcodes.size();
   }
 
@@ -731,7 +735,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
     aopt.jointLog->info("Clearing EqMap; Might take some time.");
     fullEqMap.clear();
 
-    aopt.jointLog->info("Starting white listing");
+    aopt.jointLog->info("Starting white listing of {} cells", trueBarcodes.size());
     bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
                                                                       umiCount,
                                                                       trueBarcodes,
