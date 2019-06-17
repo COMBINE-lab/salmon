@@ -833,7 +833,8 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
         readCount += std::accumulate(alphasSparse.begin(), alphasSparse.end(), 0.0);
 
         for(size_t i=0; i<numExpGenes; i++) {
-          qFile << cellCount+1 << "\t"
+          qFile << std::fixed
+                << cellCount+1 << "\t"
                 << indices[i] << "\t"
                 << alphasSparse[i] <<  std::endl;
         }
