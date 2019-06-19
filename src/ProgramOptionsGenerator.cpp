@@ -352,7 +352,7 @@ namespace salmon {
        "rrna", po::value<std::string>(),
        "path to a file containing ribosomal RNA, one per line")
       (
-       "keepCBFraction", po::value<double>(),
+       "keepCBFraction", po::value<double>()->default_value(alevin::defaults::keepCBFraction),
        "fraction of CB to keep, value must be in range (0,1], use 1 to quantify all CB."
        )
       (

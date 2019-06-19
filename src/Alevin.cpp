@@ -708,7 +708,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
       ind += 1;
     }
 
-    if (aopt.keepCBFraction > 0.0) {
+    if (aopt.keepCBFraction != 0.0) {
       aopt.forceCells = std::min(static_cast<uint32_t>(aopt.keepCBFraction * freqCounter.size()),
                                  aopt.maxNumBarcodes);
       aopt.jointLog->info("Forcing to use {} cells", aopt.forceCells);
