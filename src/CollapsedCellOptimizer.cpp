@@ -731,7 +731,12 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   std::copy(geneNames.begin(), geneNames.end(), giterator);
   gFile.close();
 
-  if( not hasWhitelist ){
+  if ( numLowConfidentBarcode < aopt.lowRegionMinNumBarcodes ) {
+    aopt.jointLog->warn("Num Low confidence barcodes too less {} < {}."
+                        "Not performing whitelisting",
+                        numLowConfidentBarcode,
+                        aopt.lowRegionMinNumBarcodes);
+  } else if( not hasWhitelist ){
     aopt.jointLog->info("Clearing EqMap; Might take some time.");
     fullEqMap.clear();
 

@@ -317,10 +317,14 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
   uint32_t threshold;
 
   if (aopt.forceCells > 0) {
-    topxBarcodes = aopt.forceCells;
+    topxBarcodes = aopt.forceCells - 1;
+    size_t belowThresholdCb {0};
     while( freqCounter[sortedIdx[topxBarcodes]] < aopt.freqThreshold ) {
       --topxBarcodes;
+      ++belowThresholdCb;
     }
+    aopt.jointLog->info("Throwing {} barcodes with < {} reads", belowThresholdCb, aopt.freqThreshold);
+    aopt.jointLog->flush();
   }
   else if (aopt.expectCells > 0){
     // Expect Cells algorithm is taken from
@@ -393,33 +397,42 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
 
   if (fractionTrueBarcodes < lowRegionMinNumBarcodes){
     lowRegionNumBarcodes = lowRegionMinNumBarcodes;
-  }
-  else if (fractionTrueBarcodes > lowRegionMaxNumBarcodes){
+  } else if (fractionTrueBarcodes > lowRegionMaxNumBarcodes){
     lowRegionNumBarcodes = lowRegionMaxNumBarcodes;
-  }
-  else{
+  } else {
     lowRegionNumBarcodes = fractionTrueBarcodes;
   }
 
-  aopt.kneeCutoff = topxBarcodes;
+
   // ignoring all the frequencies having same frequency as cutoff
   // to imitate stable sort
+  aopt.kneeCutoff = topxBarcodes;
+  size_t totalUsableBarcodes = lowRegionNumBarcodes + topxBarcodes + 1;
+  if (totalUsableBarcodes > freqCounter.size()) {
+    size_t offset = freqCounter.size() - topxBarcodes - 1;
+    lowRegionNumBarcodes = offset;
+  }
   topxBarcodes += lowRegionNumBarcodes;
+
   uint32_t cutoffFrequency = freqCounter[sortedIdx[ topxBarcodes ]];
   uint32_t nearestLeftFrequency = cutoffFrequency;
-  while(nearestLeftFrequency == cutoffFrequency){
+  while(nearestLeftFrequency == cutoffFrequency && lowRegionNumBarcodes != 0){
     nearestLeftFrequency = freqCounter[sortedIdx[--topxBarcodes]];
-    lowRegionNumBarcodes--;
+    if (lowRegionNumBarcodes > lowRegionMinNumBarcodes)  { lowRegionNumBarcodes--; }
   }
-  lowRegionNumBarcodes++;
-  topxBarcodes++;
 
-  aopt.totalLowConfidenceCBs = topxBarcodes - aopt.kneeCutoff;
+  if ( lowRegionNumBarcodes != 0 ) {
+    lowRegionNumBarcodes++;
+    topxBarcodes++;
+  }
+
+  aopt.totalLowConfidenceCBs = lowRegionNumBarcodes;
   // keeping some cells left of the left boundary for learning
   aopt.jointLog->info("Total {}{}{}(has {}{}{} low confidence)"
                       " barcodes",
-                      green, topxBarcodes, RESET_COLOR,
+                      green, topxBarcodes+1, RESET_COLOR,
                       green, lowRegionNumBarcodes, RESET_COLOR);
+  aopt.jointLog->flush();
 
   threshold = topxBarcodes;
 
@@ -489,6 +502,7 @@ void indexBarcodes(AlevinOpts<ProtocolT>& aopt,
   }
 
   std::string barcode;
+  size_t numBarcodesCorrected {0};
   std::vector<std::pair<std::string, double>> dumpPair;
 
   for(auto& ZRow:ZMatrix){ //loop over every row of sparse matrix
@@ -500,10 +514,13 @@ void indexBarcodes(AlevinOpts<ProtocolT>& aopt,
                                         ZRow.second,
                                         freqCounter,
                                         dumpPair);
+    numBarcodesCorrected += dumpPair.size();
     for(auto& updateVal: dumpPair){
       barcodeSoftMap[barcode].emplace_back(updateVal);
     }
   }//end-for
+
+  aopt.jointLog->info("Total {} CB got sequence corrected", numBarcodesCorrected);
 }
 
 template <typename ProtocolT>
@@ -694,6 +711,8 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
     if (aopt.keepCBFraction > 0.0) {
       aopt.forceCells = std::min(static_cast<uint32_t>(aopt.keepCBFraction * freqCounter.size()),
                                  aopt.maxNumBarcodes);
+      aopt.jointLog->info("Forcing to use {} cells", aopt.forceCells);
+      aopt.jointLog->flush();
     }
 
     //Calculate the knee using the frequency distribution
@@ -832,7 +851,7 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
   //freqCounter.set_max_resize_threads(sopt.maxHashResizeThreads);
   freqCounter.reserve(2097152);
 
-  size_t numLowConfidentBarcode;
+  size_t numLowConfidentBarcode {0};
 
   if(boost::filesystem::exists(aopt.bfhFile)) {
     if (aopt.noQuant) {
