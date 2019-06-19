@@ -731,34 +731,36 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   std::copy(geneNames.begin(), geneNames.end(), giterator);
   gFile.close();
 
-  if ( numLowConfidentBarcode < aopt.lowRegionMinNumBarcodes ) {
-    aopt.jointLog->warn("Num Low confidence barcodes too less {} < {}."
-                        "Not performing whitelisting",
-                        numLowConfidentBarcode,
-                        aopt.lowRegionMinNumBarcodes);
-  } else if( not hasWhitelist ){
+  if( not hasWhitelist ){
     aopt.jointLog->info("Clearing EqMap; Might take some time.");
     fullEqMap.clear();
 
-    aopt.jointLog->info("Starting white listing of {} cells", trueBarcodes.size());
-    bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
-                                                                      umiCount,
-                                                                      trueBarcodes,
-                                                                      freqCounter,
-                                                                      useRibo,
-                                                                      useMito,
-                                                                      numLowConfidentBarcode);
-    if (!whitelistingSuccess) {
-      aopt.jointLog->error(
-                           "The white listing algorithm failed. This is likely the result of "
-                           "bad input (or a bug). If you cannot track down the cause, please "
-                           "report this issue on GitHub.");
-      aopt.jointLog->flush();
-      return false;
-    }
+    if ( numLowConfidentBarcode < aopt.lowRegionMinNumBarcodes ) {
+      aopt.jointLog->warn("Num Low confidence barcodes too less {} < {}."
+                          "Can't performing whitelisting; Skipping",
+                          numLowConfidentBarcode,
+                          aopt.lowRegionMinNumBarcodes);
+    } else {
+      aopt.jointLog->info("Starting white listing of {} cells", trueBarcodes.size());
+      bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
+                                                                        umiCount,
+                                                                        trueBarcodes,
+                                                                        freqCounter,
+                                                                        useRibo,
+                                                                        useMito,
+                                                                        numLowConfidentBarcode);
+      if (!whitelistingSuccess) {
+        aopt.jointLog->error(
+                             "The white listing algorithm failed. This is likely the result of "
+                             "bad input (or a bug). If you cannot track down the cause, please "
+                             "report this issue on GitHub.");
+        aopt.jointLog->flush();
+        return false;
+      }
 
-    aopt.jointLog->info("Finished white listing");
-    aopt.jointLog->flush();
+      aopt.jointLog->info("Finished white listing");
+      aopt.jointLog->flush();
+    }
   } //end-if whitelisting
 
   if (aopt.dumpMtx){
@@ -839,8 +841,8 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
 
         for(size_t i=0; i<numExpGenes; i++) {
           qFile << std::fixed
-                << cellCount+1 << "\t"
-                << indices[i] << "\t"
+                << cellCount + 1 << "\t"
+                << indices[i] + 1 << "\t"
                 << alphasSparse[i] <<  std::endl;
         }
 
