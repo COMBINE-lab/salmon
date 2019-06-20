@@ -1044,7 +1044,6 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
         flag |= 128 >> j;
       }
     }
-    std::cout << bcName << i << "\t" << unsigned(flag) << std::endl << std::flush;
     alphasFlag.emplace_back(flag);
   }
 
