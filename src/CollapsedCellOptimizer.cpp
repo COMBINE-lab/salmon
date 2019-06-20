@@ -819,7 +819,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
 
           for (size_t i=0; i<8; i++){
             if (flag & (128 >> i)) {
-              indices.emplace_back( (i*8)+j );
+              indices.emplace_back( i+(8*j) );
             }
           }
         }
