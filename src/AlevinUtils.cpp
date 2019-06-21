@@ -465,14 +465,14 @@ namespace alevin {
         return false;
       }
 
-      if ( vm.count("keepCBFraction") ) {
+      aopt.keepCBFraction = vm["keepCBFraction"].as<double>();
+      if ( aopt.keepCBFraction > 0.0 ) {
         if ( vm.count("whitelist") ) {
           aopt.jointLog->error("keepCBFraction and whitelist cannot be used together");
           aopt.jointLog->flush();
           exit(1);
         }
 
-        aopt.keepCBFraction = vm["keepCBFraction"].as<double>();
         aopt.jointLog->warn("Force Cells to {} fraction of All possible CB."
                             "This is not recommended way to run the pipeline,"
                             "and it might slow the pipeline",

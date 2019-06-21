@@ -865,6 +865,150 @@ bool GZipWriter::writeBootstraps(std::string& bcName,
   return true;
 }
 
+bool GZipWriter::writeSparseBootstraps(std::string& bcName,
+                                       std::vector<double>& alphas,
+                                       std::vector<double>& variance,
+                                       bool useAllBootstraps,
+                                       std::vector<std::vector<double>>& sampleEstimates){
+  size_t num = alphas.size();
+  std::vector<float> meanSparse, varSparse;
+  std::vector<std::vector<float>> bootSparse;
+  meanSparse.reserve(num/2);
+  varSparse.reserve(num/2);
+  if (useAllBootstraps){ bootSparse.reserve(num/2); }
+
+  std::vector<uint8_t> meanFlag, varFlag;
+  std::vector<std::vector<uint8_t>> bootFlag;
+  meanFlag.reserve(static_cast<size_t>(std::ceil(num/8)));
+  varFlag.reserve(static_cast<size_t>(std::ceil(num/8)));
+  if (useAllBootstraps) { bootFlag.reserve(num); }
+
+  size_t elSize = sizeof(decltype(meanSparse)::value_type);
+  size_t flagSize = sizeof(decltype(meanFlag)::value_type);
+
+  for (size_t i=0; i<num; i+=8) {
+    uint8_t flag {0};
+    for (size_t j=0; j<8; j++) {
+      size_t vectorIndex = i+j;
+      if (vectorIndex >= num) { break; }
+
+      if (alphas[vectorIndex] > std::numeric_limits<float>::min()) {
+        meanSparse.emplace_back(alphas[vectorIndex]);
+        flag |= 128 >> j;
+      }
+    }
+    meanFlag.emplace_back(flag);
+  }
+
+  for (size_t i=0; i<num; i+=8) {
+    uint8_t flag {0};
+    for (size_t j=0; j<8; j++) {
+      size_t vectorIndex = i+j;
+      if (vectorIndex >= num) { break; }
+
+      if (variance[vectorIndex] > std::numeric_limits<uint8_t>::min()) {
+        varSparse.emplace_back(variance[vectorIndex]);
+        flag |= 128 >> j;
+      }
+    }
+    varFlag.emplace_back(flag);
+  }
+
+  if (useAllBootstraps) {
+    for(auto& sample: sampleEstimates){
+      std::vector<float> sampleSparse;
+      std::vector<uint8_t> sampleFlag;
+      for (size_t i=0; i<num; i+=8) {
+        uint8_t flag {0};
+        for (size_t j=0; j<8; j++) {
+          size_t vectorIndex = i+j;
+          if (vectorIndex >= num) { break; }
+
+          if (sample[vectorIndex] > std::numeric_limits<uint8_t>::min()) {
+            sampleSparse.emplace_back(sample[vectorIndex]);
+            flag |= 128 >> j;
+          }
+        }
+        sampleFlag.emplace_back(flag);
+      }
+
+      bootFlag.emplace_back(sampleFlag);
+      bootSparse.emplace_back(sampleSparse);
+    }
+  }
+
+#if defined __APPLE__
+  spin_lock::scoped_lock sl(writeMutex_);
+#else
+  std::lock_guard<std::mutex> lock(writeMutex_);
+#endif
+  namespace bfs = boost::filesystem;
+  if (!meanMatrixStream_) {
+    meanMatrixStream_.reset(new boost::iostreams::filtering_ostream);
+    meanMatrixStream_->push(boost::iostreams::gzip_compressor(6));
+    auto meanMatFilename = path_ / "alevin" / "quants_mean_mat.gz";
+    meanMatrixStream_->push(boost::iostreams::file_sink(meanMatFilename.string(),
+                                                         std::ios_base::out | std::ios_base::binary));
+
+    varMatrixStream_.reset(new boost::iostreams::filtering_ostream);
+    varMatrixStream_->push(boost::iostreams::gzip_compressor(6));
+    auto varMatFilename = path_ / "alevin" / "quants_var_mat.gz";
+    varMatrixStream_->push(boost::iostreams::file_sink(varMatFilename.string(),
+                                                       std::ios_base::out | std::ios_base::binary));
+
+    auto bcBootNameFilename = path_ / "alevin" / "quants_boot_rows.txt";
+    bcBootNameStream_.reset(new std::ofstream);
+    bcBootNameStream_->open(bcBootNameFilename.string());
+  }
+
+  if (useAllBootstraps and !fullBootstrapMatrixStream_) {
+    auto fullBootstrapsFilename = path_ / "alevin" / "quants_boot_mat.gz";
+    fullBootstrapMatrixStream_.reset(new boost::iostreams::filtering_ostream);
+    fullBootstrapMatrixStream_->push(boost::iostreams::gzip_compressor(6));
+    fullBootstrapMatrixStream_->push(boost::iostreams::file_sink(fullBootstrapsFilename.string(),
+                                                      std::ios_base::out | std::ios_base::binary));
+  }
+
+  boost::iostreams::filtering_ostream& countfile = *meanMatrixStream_;
+  boost::iostreams::filtering_ostream& varfile = *varMatrixStream_;
+  std::ofstream& namefile = *bcBootNameStream_;
+
+  if (alphas.size() != variance.size()){
+    std::cerr<<"ERROR: Quants matrix and varicance matrix size differs"<<std::flush;
+    exit(74);
+  }
+
+  countfile.write(reinterpret_cast<char*>(meanFlag.data()),
+                  flagSize * meanFlag.size());
+  countfile.write(reinterpret_cast<char*>(meanSparse.data()),
+                  elSize * meanSparse.size());
+
+  varfile.write(reinterpret_cast<char*>(varFlag.data()),
+                flagSize * varFlag.size());
+  varfile.write(reinterpret_cast<char*>(varSparse.data()),
+                elSize * varSparse.size());
+
+  if (useAllBootstraps) {
+    boost::iostreams::filtering_ostream& fullBootsfile = *fullBootstrapMatrixStream_;
+    if (bootSparse.size() != bootSparse.size()) {
+      std::cerr<< "ERROR: all bootstrap dumping error" << std::flush;
+      exit(74);
+    }
+
+    for (size_t i=0; i<bootSparse.size(); i++) {
+      fullBootsfile.write(reinterpret_cast<char*>(bootFlag[i].data()),
+                          flagSize * bootFlag[i].size());
+      fullBootsfile.write(reinterpret_cast<char*>(bootSparse[i].data()),
+                          elSize * bootSparse[i].size());
+    }
+  }
+
+  namefile.write(bcName.c_str(), bcName.size());
+  namefile << std::endl;
+
+  return true;
+}
+
 bool GZipWriter::writeSparseAbundances(std::string& bcName,
                                        std::string& features,
                                        uint8_t featureCode,

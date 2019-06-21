@@ -75,6 +75,12 @@ public:
                        bool useAllBootstraps,
                        std::vector<std::vector<double>>& sampleEstimates);
 
+  bool writeSparseBootstraps(std::string& bcName,
+                             std::vector<double>& alphas,
+                             std::vector<double>& variance,
+                             bool useAllBootstraps,
+                             std::vector<std::vector<double>>& sampleEstimates);
+
   template <typename ExpT>
   bool writeEmptyAbundances(const SalmonOpts& sopt, ExpT& readExp);
 
