@@ -2,9 +2,27 @@
 [![Documentation Status](https://readthedocs.org/projects/salmon/badge/?version=latest)](http://salmon.readthedocs.org/en/latest)
 [![install with bioconda](https://img.shields.io/badge/install%20with-bioconda-brightgreen.svg?style=flat-square)](http://bioconda.github.io/recipes/salmon/README.html)
 
+
 **Try out alevin (salmon's single-cell processing module)!  Get started with the [tutorial](https://combine-lab.github.io/alevin-tutorial/#blog)**
 
 **Help guide the development of Salmon, [take our survey](https://docs.google.com/forms/d/e/1FAIpQLSeWhBNE_fA_0uVHvbAlAulDmfmowv7rAYla879DZpqCARyRTQ/viewform)**
+
+### Pre-computed decoy transcriptomes 
+
+Below, you can find download some pre-processed transcriptomes for common species (if you have a particular species or a particular annotation request, let us know).  You can easily build your own decoy-enhanced transcriptome using the the `genereateDecoyTranscriptome.sh` script from the [SalmonTools](https://github.com/COMBINE-lab/SalmonTools) repository.  However, we are providing these for convenience.  Below, you can simply download the file in the "transcriptome with decoys" column, and unzip the archive with `tar xzvf`.  Each decompressed directory contains a `gentrome.fa` file and `decoys.txt` file that can be provided to `salmon` as:
+
+```
+$ salmon index -t gentrome.fa -d decoys.txt -i combined_index
+```
+
+| description |transcriptome with decoys  |   link to base genome | link to annotation |
+| -------- | ------------- | ------------ | -------------|
+| human (GENCODE v29) | [**human_GENCODEv29.tar.gz**](http://bit.ly/2ZcBj6w) | [GRCh38.primary_assembly.genome.fa.gz](http://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_29/GRCh38.primary_assembly.genome.fa.gz) | [gencode.v29.annotation.gtf.gz](http://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_29/gencode.v29.annotation.gtf.gz) |
+| mouse (GENCODE vM21) | [**mouse_GENCODEvM21.tar.gz**](http://bit.ly/2WRlQuX) | [GRCm38.primary_assembly.genome.fa.gz](http://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_M21/GRCm38.primary_assembly.genome.fa.gz) | [gencode.vM21.annotation.gtf.gz](http://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_M21/gencode.vM21.annotation.gtf.gz) |
+| human (ensembl)      | [**human.tar.gz**](http://bit.ly/2HUU7S6) | [Homo_sapiens.GRCh38.dna.toplevel.fa.gz](http://ftp.ensembl.org/pub/release-91/fasta/homo_sapiens/dna/Homo_sapiens.GRCh38.dna.toplevel.fa.gz) | [Homo_sapiens.GRCh38.91.gtf.gz](http://ftp.ensembl.org/pub/release-91/gtf/homo_sapiens/Homo_sapiens.GRCh38.91.gtf.gz) |
+| mouse (ensembl)     | [**mouse.tar.gz**](http://bit.ly/2Xoop4X) | [Mus_musculus.GRCm38.dna.toplevel.fa.gz](http://ftp.ensembl.org/pub/release-91/fasta/mus_musculus/dna/Mus_musculus.GRCm38.dna.toplevel.fa.gz) | [Mus_musculus.GRCm38.91.gtf.gz](http://ftp.ensembl.org/pub/release-91/gtf/mus_musculus/Mus_musculus.GRCm38.91.gtf.gz) |
+| drosophila (ensembl) | [**drosophila.tar.gz**](http://bit.ly/2KrlCnF) | [Drosophila_melanogaster.BDGP6.dna.toplevel.fa.gz](http://ftp.ensembl.org/pub/release-91/fasta/drosophila_melanogaster/dna/Drosophila_melanogaster.BDGP6.dna.toplevel.fa.gz) | [Drosophila_melanogaster.BDGP6.91.gtf.gz](http://ftp.ensembl.org/pub/release-91/gtf/drosophila_melanogaster/Drosophila_melanogaster.BDGP6.91.gtf.gz) |
+| zebrafish (ensembl) | [**zebrafish.tar.gz**](http://bit.ly/2IpxRyF) | [Danio_rerio.GRCz11.dna.toplevel.fa.gz](http://ftp.ensembl.org/pub/release-96/fasta/danio_rerio/dna/Danio_rerio.GRCz11.dna.toplevel.fa.gz) | [Danio_rerio.GRCz11.96.gtf.gz](http://ftp.ensembl.org/pub/release-96/gtf/danio_rerio/Danio_rerio.GRCz11.96.gtf.gz) |
 
 What is Salmon?
 ===============
