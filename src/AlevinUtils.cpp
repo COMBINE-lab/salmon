@@ -311,7 +311,8 @@ namespace alevin {
       }
 
       if ( numDupTxps > 0){
-        jointLog->warn("Found {} transcripts with duplicate names");
+        jointLog->warn("Found {} transcripts with duplicate names",
+                      numDupTxps);
       }
 
       std::ifstream t2gFile(t2gFileName);
