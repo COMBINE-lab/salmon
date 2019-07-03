@@ -92,7 +92,7 @@ ${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_extz2_sse.c
 )
 
 # check if we know how to do IPO
-check_ipo_supported(RESULT HAS_IPOHAS_IPO)
+check_ipo_supported(RESULT HAS_IPO)
 
 add_library(ksw2pp_sse2 OBJECT ${KSW2PP_ADVANCED_LIB_SRCS})
 add_library(ksw2pp_sse4 OBJECT ${KSW2PP_ADVANCED_LIB_SRCS})

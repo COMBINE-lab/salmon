@@ -311,7 +311,8 @@ namespace alevin {
       }
 
       if ( numDupTxps > 0){
-        jointLog->warn("Found {} transcripts with duplicate names");
+        jointLog->warn("Found {} transcripts with duplicate names",
+                      numDupTxps);
       }
 
       std::ifstream t2gFile(t2gFileName);
@@ -465,14 +466,14 @@ namespace alevin {
         return false;
       }
 
-      if ( vm.count("keepCBFraction") ) {
+      aopt.keepCBFraction = vm["keepCBFraction"].as<double>();
+      if ( aopt.keepCBFraction > 0.0 ) {
         if ( vm.count("whitelist") ) {
           aopt.jointLog->error("keepCBFraction and whitelist cannot be used together");
           aopt.jointLog->flush();
           exit(1);
         }
 
-        aopt.keepCBFraction = vm["keepCBFraction"].as<double>();
         aopt.jointLog->warn("Force Cells to {} fraction of All possible CB."
                             "This is not recommended way to run the pipeline,"
                             "and it might slow the pipeline",

@@ -1,9 +1,9 @@
-ALVBIN=$1
+ALVBIN=$1 #"/mnt/scratch6/salmon_ci/COMBINE-lab/salmon/master/build/salmon-latest_linux_x86_64/bin/salmon"
 OUT=$PWD
 
 tfile=$(mktemp /tmp/foo.XXXXXXXXX) 
 
-/usr/bin/time -o $tfile $ALVBIN alevin -lISR --chromium -1 /mnt/scratch5/avi/alevin/data/10x/v2/mohu/100/all_bcs.fq -2 /mnt/scratch5/avi/alevin/data/10x/v2/mohu/100/all_reads.fq -o $OUT/prediction -i /mnt/scratch5/avi/alevin/data/mohu/salmon_index -p 20 --tgMap /mnt/scratch5/avi/alevin/data/mohu/gtf/txp2gene.tsv  --dumpFeatures  && 
+/usr/bin/time -o $tfile $ALVBIN alevin -lISR --chromium -1 /mnt/scratch5/avi/alevin/data/10x/v2/mohu/100/all_bcs.fq -2 /mnt/scratch5/avi/alevin/data/10x/v2/mohu/100/all_reads.fq -o $OUT/prediction -i /mnt/scratch5/avi/alevin/data/mohu/salmon_index -p 20 --tgMap /mnt/scratch5/avi/alevin/data/mohu/gtf/txp2gene.tsv --dumpMtx
 #--dumpUmiGraph --numCellBootstraps 100  --dumpBfh --dumpBarcodeEq  --dumpMtx --expectCells 1001  --end 6 --umiLength 10 --barcodeLength 16
 
 cat $tfile  

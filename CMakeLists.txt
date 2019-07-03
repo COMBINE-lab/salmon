@@ -711,6 +711,9 @@ if (NOT LIBSTADENIO_FOUND)
     BUILD_IN_SOURCE 1
     INSTALL_COMMAND make install
   )
+  if(NOT LIBLZMA_FOUND)
+  	ExternalProject_Add_StepDependencies(libstadenio build liblzma)
+  endif()
 
   set(FETCHED_STADEN TRUE)
   set(STADEN_LIBRARIES "${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a")
