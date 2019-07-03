@@ -757,6 +757,11 @@ void processReadsQuasi(
   spdlog::logger* unmappedLogger =
       (writeUnmapped) ? salmonOpts.unmappedLog.get() : nullptr;
 
+  // Decide if need discover novel UTR attachment
+  bool attachUTR =
+    (salmonOpts.utrMapPath != "") ? true : false ;
+
+
   // Write unmapped reads
   fmt::MemoryWriter orphanLinks;
   bool writeOrphanLinks = salmonOpts.writeOrphanLinks;
@@ -849,6 +854,7 @@ void processReadsQuasi(
   aligner.config() = config;
   ksw_extz_t ez;
   memset(&ez, 0, sizeof(ksw_extz_t));
+
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   bool mimicBT2 = salmonOpts.mimicBT2;
   bool noDovetail = !salmonOpts.allowDovetail;
@@ -2352,10 +2358,6 @@ transcript abundance from RNA-seq reads
       std::exit(1);
     }
 
-    if(vm.count("utrMap")){
-      commentStream << "UTR Map path " << sopt.utrMapPath << "\n" ;
-      std::exit(1) ;
-    }
 
     auto fileLog = sopt.fileLog;
     auto jointLog = sopt.jointLog;
