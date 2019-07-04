@@ -1,5 +1,5 @@
 Salmon
-===============e
+===============
 
 Salmon is a tool for **wicked-fast** transcript quantification from RNA-seq
 data.  It requires a set of target transcripts (either from a reference or
@@ -114,7 +114,7 @@ details about quasi-mapping can be found `in this paper <http://bioinformatics.o
 If you want to use Salmon in mapping-based mode, then you first have to build a
 salmon index for your transcriptome. Assume that ``transcripts.fa`` contains the
 set of transcripts you wish to quantify. We generally recommend that you build a
-*decoy-aware* transcriptome file, which can be done with the
+*decoy-aware* transcriptome file and do quantification using selective alignment, which can be done with the
 `generateDecoyTranscriptome.sh
 <https://github.com/COMBINE-lab/SalmonTools/blob/master/scripts/generateDecoyTranscriptome.sh>`_
 script, whose instructions you can find `in this README 
@@ -125,7 +125,7 @@ run the salmon indexer:
     
     > ./bin/salmon index -t transcripts.fa -i transcripts_index -decoys decoys.txt -k 31
     
-This will build the quasi-mapping-based index, using an auxiliary k-mer hash
+This will build the mapping-based index, using an auxiliary k-mer hash
 over k-mers of length 31.  While the mapping algorithms will make used of arbitrarily 
 long matches between the query and reference, the `k` size selected here will 
 act as the *minimum* acceptable length for a valid match.  Thus, a smaller 
@@ -135,6 +135,12 @@ to work well for reads of 75bp or longer, but you might consider a smaller
 improve sensitivity even more when using selective alignment (enabled via the `--validateMappings` flag).  So,
 if you are seeing a smaller mapping rate than you might expect, consider building
 the index with a slightly smaller `k`.  
+
+.. note:: Decoy-augmented transcriptomes and quasi-mapping
+   Currently, the use of decoy-augmented transcriptomes is only supported in 
+   conjunction with selective-alignment (via the `--validateMappings`, `--mimicBT2`
+   or `--mimicStrictBT2` flags.  For the time being, if you wish to quantify using 
+   quasi-mapping, you should not build a decoy-augmented index.
 
 Quantifying in mapping-based mode
 ---------------------------------------
