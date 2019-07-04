@@ -341,14 +341,20 @@ namespace alevin {
         t2gFile.close();
       }
 
-      if(txpToGeneMap.size() + numberOfDecoys < txpIdxMap.size()){
-        jointLog->error( "ERROR: "
-                         "Txp to Gene Map not found for {}"
-                         " transcripts. Exiting",
-                         txpIdxMap.size() - txpToGeneMap.size()
-                         );
-        jointLog->flush();
-        exit(1);
+      for ( auto it: txpIdxMap ) {
+        if (txpToGeneMap.find( it.second ) == txpToGeneMap.end() ) {
+          jointLog->error( "ERROR: Can't find gene mapping for : ",
+                           it.first );
+          if(txpToGeneMap.size() + numberOfDecoys < txpIdxMap.size()) {
+            jointLog->error( "ERROR: "
+                             "Txp to Gene Map not found for {}"
+                             " transcripts. Exiting",
+                             txpIdxMap.size() - txpToGeneMap.size()
+                             );
+            jointLog->flush();
+          }
+          exit(1);
+        }
       }
 
       jointLog->info("Found all transcripts to gene mappings");

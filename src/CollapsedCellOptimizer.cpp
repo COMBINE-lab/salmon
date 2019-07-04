@@ -740,6 +740,11 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                           "Can't performing whitelisting; Skipping",
                           numLowConfidentBarcode,
                           aopt.lowRegionMinNumBarcodes);
+
+    } else if (trueBarcodes.size() - numLowConfidentBarcode < 90) {
+        aopt.jointLog->warn("Num High confidence barcodes too less {} < 90."
+                            "Can't performing whitelisting; Skipping",
+                            trueBarcodes.size() - numLowConfidentBarcode);
     } else {
       aopt.jointLog->info("Starting white listing of {} cells", trueBarcodes.size());
       bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,

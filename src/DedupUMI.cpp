@@ -7,9 +7,8 @@ uint32_t getGeneId(spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap,
     return txpToGeneMap.at(tId);
   }
   else{
-    std::cerr << "Out of Range error for txp to gene Map: "
-              << '\n' << std::flush;
-    std::cerr << tId << "\t not found" << std::flush;
+    std::cerr << "\n\n\nOut of Range error for txp to gene Map: "
+              << tId << "\t not found" << std::flush;
     exit(74);
   }
 }

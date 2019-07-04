@@ -881,6 +881,7 @@ void processReadsQuasi(
       std::exit(1);
     }
 
+    bool tryAlign{salmonOpts.validateMappings};
     for (size_t i = 0; i < rangeSize; ++i) { // For all the reads in this batch
       auto& rp = rg[i];
 
@@ -921,6 +922,16 @@ void processReadsQuasi(
                                                 MateStatus::PAIRED_END_RIGHT,
                                                 rightHCInfo, rightHits);
 
+      if (!tryAlign) {
+        leftHits.erase( std::remove_if(leftHits.begin(), leftHits.end(),
+                                       [&transcripts](QuasiAlignment& a) {
+                                         return a.tid >= transcripts.size(); }),
+                        leftHits.end() );
+        rightHits.erase( std::remove_if(rightHits.begin(), rightHits.end(),
+                                        [&transcripts](QuasiAlignment& a) {
+                                          return a.tid >= transcripts.size(); }),
+                         rightHits.end() );
+      }
 
       rapmap::utils::MergeResult mergeRes{rapmap::utils::MergeResult::HAD_NONE};
       // Consider a read as too short if both ends are too short
@@ -1015,7 +1026,6 @@ void processReadsQuasi(
           }
         }
 
-        bool tryAlign{salmonOpts.validateMappings};
         if (tryAlign and !jointHits.empty()) {
           alnCacheLeft.clear();
           alnCacheRight.clear();
@@ -1550,6 +1560,7 @@ void processReadsQuasi(
       std::exit(1);
     }
 
+    bool tryAlign{salmonOpts.validateMappings};
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
       auto& rp = rg[i];
       readLen = rp.seq.length();
@@ -1568,6 +1579,13 @@ void processReadsQuasi(
                                                 MateStatus::SINGLE_END,
                                                 hcInfo, jointHits);
 
+      if (!tryAlign) {
+        jointHits.erase( std::remove_if(jointHits.begin(), jointHits.end(),
+                                       [&transcripts](QuasiAlignment& a) {
+                                         return a.tid >= transcripts.size(); }),
+                         jointHits.end() );
+      }
+
       // If the fragment was too short, record it
       if (tooShort) {
         ++shortFragStats.numTooShort;
@@ -1583,7 +1601,6 @@ void processReadsQuasi(
         jointHitGroup.clearAlignments();
       }
 
-        bool tryAlign{salmonOpts.validateMappings};
         if (tryAlign) {
           alnCache.clear();
           auto* r1 = rp.seq.data();
