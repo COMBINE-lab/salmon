@@ -258,7 +258,7 @@ namespace alevin {
                          std::shared_ptr<spdlog::logger>& jointLog){
       size_t numDupTxps;
       uint64_t numberOfDecoys, firstDecoyIndex;
-      spp::sparse_hash_map<std::string, uint32_t> txpIdxMap;
+      spp::sparse_hash_map<std::string, std::vector<uint32_t>> txpIdxMap;
       // reading in the binary file
       {
         jointLog->info("Loading Header");
@@ -304,7 +304,7 @@ namespace alevin {
         }
 
         for (size_t i=0; i<txpNames.size(); i++){
-          txpIdxMap[txpNames[i]] = i;
+          txpIdxMap[txpNames[i]].emplace_back(i);
         }
         seqStream.close();
         numDupTxps = txpNames.size() - txpIdxMap.size();
@@ -316,7 +316,8 @@ namespace alevin {
       }
 
       std::ifstream t2gFile(t2gFileName);
-      uint32_t tid, gid, geneCount{0};
+      uint32_t gid, geneCount{0};
+      std::vector<uint32_t> tids;
       std::string tStr, gStr;
       if(t2gFile.is_open()) {
         while( not t2gFile.eof() ) {
@@ -325,7 +326,7 @@ namespace alevin {
           if(not txpIdxMap.contains(tStr)){
             continue;
           }
-          tid = txpIdxMap[tStr];
+          tids = txpIdxMap[tStr];
 
           if (geneIdxMap.contains(gStr)){
             gid = geneIdxMap[gStr];
@@ -336,24 +337,28 @@ namespace alevin {
             geneCount++;
           }
 
+          for (auto tid: tids) {
           txpToGeneMap[tid] = gid;
+          }
         }
         t2gFile.close();
       }
 
       for ( auto it: txpIdxMap ) {
-        if (txpToGeneMap.find( it.second ) == txpToGeneMap.end() ) {
-          jointLog->error( "ERROR: Can't find gene mapping for : ",
-                           it.first );
-          if(txpToGeneMap.size() + numberOfDecoys < txpIdxMap.size()) {
-            jointLog->error( "ERROR: "
-                             "Txp to Gene Map not found for {}"
-                             " transcripts. Exiting",
-                             txpIdxMap.size() - txpToGeneMap.size()
-                             );
-            jointLog->flush();
+        for (auto tid: it.second) {
+          if (txpToGeneMap.find( tid ) == txpToGeneMap.end() ) {
+            jointLog->error( "ERROR: Can't find gene mapping for : ",
+                             it.first );
+            if(txpToGeneMap.size() + numberOfDecoys < txpIdxMap.size()) {
+              jointLog->error( "ERROR: "
+                               "Txp to Gene Map not found for {}"
+                               " transcripts. Exiting",
+                               txpIdxMap.size() - txpToGeneMap.size()
+                               );
+              jointLog->flush();
+            }
+            exit(1);
           }
-          exit(1);
         }
       }
 
