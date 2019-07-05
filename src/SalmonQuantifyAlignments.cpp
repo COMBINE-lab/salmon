@@ -1365,6 +1365,81 @@ bool processSample(AlignmentLibraryT<ReadT>& alnLib, size_t requiredObservations
   return true;
 }
 
+bool processEqclasses( AlignmentLibraryT<UnpairedRead>& alnLib, SalmonOpts& sopt,
+                       boost::filesystem::path outputDirectory) {
+  auto& jointLog = sopt.jointLog;
+  // EQCLASS
+  alnLib.equivalenceClassBuilder().setMaxResizeThreads(sopt.maxHashResizeThreads);
+  alnLib.equivalenceClassBuilder().start();
+
+  GZipWriter gzw(outputDirectory, jointLog);
+
+  // NOTE: A side-effect of calling the optimizer is that
+  // the `EffectiveLength` field of each transcript is
+  // set to its final value.
+  CollapsedEMOptimizer optimizer;
+  jointLog->info("starting optimizer");
+  salmon::utils::normalizeAlphas(sopt, alnLib);
+  bool optSuccess = optimizer.optimize(alnLib, sopt, 0.01, 10000);
+  // If the optimizer didn't work, then bail out here.
+  if (!optSuccess) {
+    return false;
+  }
+  jointLog->info("finished optimizer");
+
+  jointLog->info("writing output");
+  // Write the main results
+  gzw.writeAbundances(sopt, alnLib);
+
+  if (sopt.numGibbsSamples > 0) {
+
+    jointLog->info("Starting Gibbs Sampler");
+    CollapsedGibbsSampler sampler;
+    gzw.setSamplingPath(sopt);
+    // The function we'll use as a callback to write samples
+    std::function<bool(const std::vector<double>&)> bsWriter =
+      [&gzw](const std::vector<double>& alphas) -> bool {
+        return gzw.writeBootstrap(alphas, true);
+      };
+
+    bool sampleSuccess =
+      sampler.sample(alnLib, sopt, bsWriter, sopt.numGibbsSamples);
+    if (!sampleSuccess) {
+      jointLog->error("Encountered error during Gibb sampling .\n"
+                      "This should not happen.\n"
+                      "Please file a bug report on GitHub.\n");
+      return false;
+    }
+    jointLog->info("Finished Gibbs Sampler");
+  } else if (sopt.numBootstraps > 0) {
+    // The function we'll use as a callback to write samples
+    std::function<bool(const std::vector<double>&)> bsWriter =
+      [&gzw](const std::vector<double>& alphas) -> bool {
+        return gzw.writeBootstrap(alphas);
+      };
+
+    jointLog->info("Staring Bootstrapping");
+    gzw.setSamplingPath(sopt);
+    bool bootstrapSuccess =
+      optimizer.gatherBootstraps(alnLib, sopt, bsWriter, 0.01, 10000);
+    jointLog->info("Finished Bootstrapping");
+    if (!bootstrapSuccess) {
+      jointLog->error("Encountered error during bootstrapping.\n"
+                      "This should not happen.\n"
+                      "Please file a bug report on GitHub.\n");
+      return false;
+    }
+  }
+
+  sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
+
+  // Write meta-information about the run
+  MappingStatistics mstats;
+  gzw.writeMeta(sopt, alnLib, mstats);
+
+  return true;
+}
+
 int salmonAlignmentQuantify(int argc, const char* argv[]) {
   using std::cerr;
   using std::vector;
@@ -1421,6 +1496,23 @@ transcript abundance from RNA-seq reads
     }
     auto numThreads = sopt.numThreads;
 
+    bool hasAlignments {false};
+    bool hasEqclasses {false};
+    vector<string> alignmentFileNames;
+    string eqclassesFileName;
+    if (vm.count["alignments"]) {
+      alignmentFileNames = vm["alignments"].as<vector<string>>();
+    }
+    if (vm.count["eqclasses"]) {
+      eqclassesFileName = vm["eqclasses"].as<string>();
+    }
+
+    if ( !hasEqclasses and !hasEqclasses ) {
+      fmt::print(stderr, "salmon requires at least one alignment input "
+                 ". Neither alignments (BAM) nor eqclasses given as input. \n");
+      std::exit(1);
+    }
+
     if (sopt.forgettingFactor <= 0.5 or sopt.forgettingFactor > 1.0) {
       fmt::print(stderr,
                  "The forgetting factor must be in (0.5, 1.0], "
@@ -1463,13 +1555,25 @@ transcript abundance from RNA-seq reads
     auto outputDirectory = sopt.outputDirectory;
 
     // ==== Library format processing ===
-    vector<string> alignmentFileNames = vm["alignments"].as<vector<string>>();
     vector<bfs::path> alignmentFiles;
-    for (auto& alignmentFileName : alignmentFileNames) {
-      bfs::path alignmentFile(alignmentFileName);
+
+    if ( hasAlignments ) {
+      for (auto& alignmentFileName : alignmentFileNames) {
+        bfs::path alignmentFile(alignmentFileName);
+        if (!bfs::exists(alignmentFile)) {
+          std::stringstream ss;
+          ss << "The provided alignment file: " << alignmentFile
+             << " does not exist!\n";
+          throw std::invalid_argument(ss.str());
+        } else {
+          alignmentFiles.push_back(alignmentFile);
+        }
+      }
+    } else {
+      bfs::path alignmentFile(eqclassesFileName);
       if (!bfs::exists(alignmentFile)) {
         std::stringstream ss;
-        ss << "The provided alignment file: " << alignmentFile
+        ss << "The provided eqclasses file: " << alignmentFile
            << " does not exist!\n";
         throw std::invalid_argument(ss.str());
       } else {
@@ -1483,22 +1587,28 @@ transcript abundance from RNA-seq reads
     // Get the library format string
     std::string libFmtStr = vm["libType"].as<std::string>();
 
-    // If we're auto-detecting, set things up appropriately
-    bool autoDetectFmt =
+    if ( hasEqclasses ) {
+      libFmt = LibraryFormat(ReadType::SINGLE_END, ReadOrientation::NONE,
+                             ReadStrandedness::U);
+    } else {
+      // If we're auto-detecting, set things up appropriately
+      bool autoDetectFmt =
         (libFmtStr == "a" or
          libFmtStr == "A"); //(autoTypes.find(libFmtStr) != autoTypes.end());
-    if (autoDetectFmt) {
+      if (autoDetectFmt) {
 
-      bool isPairedEnd = salmon::utils::peekBAMIsPaired(alignmentFiles.front());
-      if (isPairedEnd) {
-        libFmt = LibraryFormat(ReadType::PAIRED_END, ReadOrientation::TOWARD,
-                               ReadStrandedness::U);
-      } else {
-        libFmt = LibraryFormat(ReadType::SINGLE_END, ReadOrientation::NONE,
-                               ReadStrandedness::U);
+        bool isPairedEnd = salmon::utils::peekBAMIsPaired(alignmentFiles.front());
+
+        if (isPairedEnd) {
+          libFmt = LibraryFormat(ReadType::PAIRED_END, ReadOrientation::TOWARD,
+                                 ReadStrandedness::U);
+        } else {
+          libFmt = LibraryFormat(ReadType::SINGLE_END, ReadOrientation::NONE,
+                                 ReadStrandedness::U);
+        }
+      } else { // Parse the provided type
+        libFmt = salmon::utils::parseLibraryFormatStringNew(libFmtStr);
       }
-    } else { // Parse the provided type
-      libFmt = salmon::utils::parseLibraryFormatStringNew(libFmtStr);
     }
 
     if (libFmt.check()) {
@@ -1545,16 +1655,40 @@ transcript abundance from RNA-seq reads
         // sopt.gcBiasCorrect = false;
       }
 
-      AlignmentLibraryT<UnpairedRead> alnLib(alignmentFiles, transcriptFile,
-                                            libFmt, sopt);
+      if ( hasEqclasses ) {
+        std::vector<string> tnames;
+        std::vector<std::vector<uint64_t>> eqclasses;
+        std::vector<std::vector<double>> auxs_vals;
+        std::vector<uint32_t> eqclass_counts;
+        {
+          // reading eqclass
+          salmon::utils::readEquivCounts(alignmentFiles[0], tnames, eqclasses,
+                                         auxs_vals, eqclass_counts);
+        }
 
-      if (autoDetectFmt) {
-        alnLib.enableAutodetect();
+        AlignmentLibraryT<UnpairedRead> alnLib(alignmentFiles, transcriptFile,
+                                               libFmt, sopt, hasEqclasses,
+                                               tnames);
+
+        success = processEqclasses(alnLib, sopt, outputDirectory);
+      } else {
+        AlignmentLibraryT<UnpairedRead> alnLib(alignmentFiles, transcriptFile,
+                                               libFmt, sopt);
+
+        if (autoDetectFmt) {
+          alnLib.enableAutodetect();
+        }
+        success = processSample<UnpairedRead>(alnLib, requiredObservations, sopt,
+                                              outputDirectory);
       }
-      success = processSample<UnpairedRead>(alnLib, requiredObservations, sopt,
-                                            outputDirectory);
     } break;
     case ReadType::PAIRED_END: {
+      if (hasEqclasses) {
+        jointLog->error(" Cannot quantify eqclasses in mode \n"
+                        " Please report this on github");
+        std::exit(1);
+      }
+
       AlignmentLibraryT<ReadPair> alnLib(alignmentFiles, transcriptFile, libFmt,
                                         sopt);
       if (autoDetectFmt) {

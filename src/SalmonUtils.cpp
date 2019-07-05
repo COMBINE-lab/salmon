@@ -1878,6 +1878,16 @@ bool processQuantOptions(SalmonOpts& sopt,
     }
   }
 
+  {
+    try {
+      conflicting_options(vm, "alignments", "eqclasses");
+    } catch (std::logic_error& e) {
+      jointLog->critical(e.what());
+      jointLog->flush();
+      return false;
+    }
+  }
+
   /** Warnings, not errors **/
   {
     if (sopt.numBurninFrags < sopt.numPreBurninFrags) {
@@ -1976,6 +1986,61 @@ bool processQuantOptions(SalmonOpts& sopt,
   }
 
   return perModeValidate;
+}
+
+bool readEquivCounts(std::string eqFilePath, std::vector<string>& tnames,
+                     std::vector<std::vector<uint64_t>>& eqclasses,
+                     std::vector<std::vector<double>>& auxs_vals,
+                     std::vector<uint32_t>& eqclass_counts ) {
+
+  namespace bfs = boost::filesystem;
+  bfs::path eqFilePath = eqFilePath;
+
+  std::ifstream equivFile(eqFilePath.string());
+
+  size_t numTxps, numEqClasses;
+  // Number of transcripts
+  equivFile >> numTxps;
+
+  // Number of equivalence classes
+  equivFile >> numEqClasses';
+
+  string tname;
+  for (size_t i = 0; i < numTxps; ++i) {
+    equivFile >> tname;
+    tnames.emplace_back(tname);
+  }
+
+  for (size_t i= 0; i < numEqClasses; ++i) {
+    size_t classLength;
+    equivFile >> classLength;
+
+    // each group member
+    uint64_t tid;
+    std::vector<uint64_t> tids;
+    for (size_t i = 0; i < classLength; i++) {
+      equivFile >> tid;
+      tids.emplace_back(tid);
+    }
+
+    double aux;
+    std::vector<double> auxs;
+    for (size_t i = 0; i < classLength; i++) {
+      equivFile >> aux;
+      auxs.emplace_back(aux);
+    }
+
+    // count for this class
+    uint64_t count;
+    equivFile >> count;
+
+    eqclasses.emplace_back(tids);
+    auxs_vals.emplace_back(auxs);
+    eqclass_counts.emplace_back(count);
+  }
+
+  equivFile.close();
+  return true;
 }
 
 /**

@@ -280,7 +280,9 @@ int main(int argc, char* argv[]) {
         bool useSalmonAlign{false};
         for (int32_t i = 0; i < subCommandArgc; ++i) {
           if (strncmp(argv2[i], "-a", 2) == 0 or
-              strncmp(argv2[i], "--alignments", 12) == 0) {
+              strncmp(argv2[i], "-e", 2) == 0 or
+              strncmp(argv2[i], "--alignments", 12) == 0 or
+              strncmp(argv2[i], "--eqclasses", 11) == 0) {
             useSalmonAlign = true;
             break;
           }

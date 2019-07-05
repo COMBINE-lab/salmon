@@ -204,6 +204,78 @@ for (auto& txp : transcripts_) {
     bq->start(nff, onlyProcessAmbiguousAlignments);
   }
 
+  AlignmentLibrary(std::vector<boost::filesystem::path>& alnFiles,
+                   const boost::filesystem::path& transcriptFile,
+                   LibraryFormat libFmt, SalmonOpts& salmonOpts,
+                   bool eqClassMode_, std::vector<string>& tnames)
+      : alignmentFiles_(alnFiles), transcriptFile_(transcriptFile),
+        libFmt_(libFmt), transcripts_(std::vector<Transcript>()),
+        fragStartDists_(5), posBiasFW_(5), posBiasRC_(5), posBiasExpectFW_(5),
+        posBiasExpectRC_(5), seqBiasModel_(1.0),
+        eqBuilder_(salmonOpts.jointLog, salmonOpts.maxHashResizeThreads), quantificationPasses_(0),
+        expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0),
+        expectedGC_(salmonOpts.numConditionalGCBins, salmonOpts.numFragGCBins,
+                    distribution_utils::DistributionSpace::LOG),
+        observedGC_(salmonOpts.numConditionalGCBins, salmonOpts.numFragGCBins,
+                    distribution_utils::DistributionSpace::LOG) {
+    namespace bfs = boost::filesystem;
+
+    // Make sure the alignment file exists.
+    for (auto& alignmentFile : alignmentFiles_) {
+      if (!bfs::exists(alignmentFile)) {
+        std::stringstream ss;
+        ss << "The provided alignment file: " << alignmentFile
+           << " does not exist!\n";
+        throw std::invalid_argument(ss.str());
+      }
+    }
+
+    // Make sure the transcript file exists.
+    if (!bfs::exists(transcriptFile_)) {
+      std::stringstream ss;
+      ss << "The provided transcript file: " << transcriptFile_
+         << " does not exist!\n";
+      throw std::invalid_argument(ss.str());
+    }
+
+    // The transcript file existed, so load up the transcripts
+    double alpha = 0.005;
+    for (size_t i = 0; i < tnames.size(); ++i) {
+      transcripts_.emplace_back(i, tnames[i], 100, alpha);
+    }
+
+    FASTAParser fp(transcriptFile.string());
+
+    fmt::print(stderr, "Populating targets from aln = {}, fasta = {} . . .",
+               alnFiles.front(), transcriptFile_);
+    fp.populateTargets(transcripts_, salmonOpts);
+
+    std::vector<uint32_t> lengths;
+    lengths.reserve(transcripts_.size());
+    for (auto& txp : transcripts_) {
+      lengths.push_back(txp.RefLength);
+    }
+    setTranscriptLengthClasses_(lengths, posBiasFW_.size());
+
+    fmt::print(stderr, "done\n");
+
+    // Create the cluster forest for this set of transcripts
+    clusters_.reset(new ClusterForest(transcripts_.size(), transcripts_));
+
+    // Initialize the fragment length distribution
+    size_t maxFragLen = salmonOpts.fragLenDistMax;
+    size_t meanFragLen = salmonOpts.fragLenDistPriorMean;
+    size_t fragLenStd = salmonOpts.fragLenDistPriorSD;
+    size_t fragLenKernelN = 4;
+    double fragLenKernelP = 0.5;
+    flDist_.reset(new FragmentLengthDistribution(1.0, maxFragLen, meanFragLen,
+                                                 fragLenStd, fragLenKernelN,
+                                                 fragLenKernelP, 1));
+
+    alnMod_.reset(new AlignmentModel(1.0, salmonOpts.numErrorBins));
+    alnMod_->setLogger(salmonOpts.jointLog);
+  }
+
   EQBuilderT& equivalenceClassBuilder() { return eqBuilder_; }
 
   std::string getIndexSeqHash256() const { return ""; }
