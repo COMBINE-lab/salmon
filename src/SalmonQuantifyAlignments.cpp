@@ -1368,10 +1368,6 @@ bool processSample(AlignmentLibraryT<ReadT>& alnLib, size_t requiredObservations
 bool processEqclasses( AlignmentLibraryT<UnpairedRead>& alnLib, SalmonOpts& sopt,
                        boost::filesystem::path outputDirectory) {
   auto& jointLog = sopt.jointLog;
-  // EQCLASS
-  alnLib.equivalenceClassBuilder().setMaxResizeThreads(sopt.maxHashResizeThreads);
-  alnLib.equivalenceClassBuilder().start();
-
   GZipWriter gzw(outputDirectory, jointLog);
 
   // NOTE: A side-effect of calling the optimizer is that
@@ -1500,10 +1496,10 @@ transcript abundance from RNA-seq reads
     bool hasEqclasses {false};
     vector<string> alignmentFileNames;
     string eqclassesFileName;
-    if (vm.count["alignments"]) {
+    if (vm.count("alignments")) {
       alignmentFileNames = vm["alignments"].as<vector<string>>();
     }
-    if (vm.count["eqclasses"]) {
+    if (vm.count("eqclasses")) {
       eqclassesFileName = vm["eqclasses"].as<string>();
     }
 
@@ -1586,15 +1582,15 @@ transcript abundance from RNA-seq reads
                          ReadStrandedness::U);
     // Get the library format string
     std::string libFmtStr = vm["libType"].as<std::string>();
+    bool autoDetectFmt =
+      (libFmtStr == "a" or
+       libFmtStr == "A"); //(autoTypes.find(libFmtStr) != autoTypes.end());
 
     if ( hasEqclasses ) {
       libFmt = LibraryFormat(ReadType::SINGLE_END, ReadOrientation::NONE,
                              ReadStrandedness::U);
     } else {
       // If we're auto-detecting, set things up appropriately
-      bool autoDetectFmt =
-        (libFmtStr == "a" or
-         libFmtStr == "A"); //(autoTypes.find(libFmtStr) != autoTypes.end());
       if (autoDetectFmt) {
 
         bool isPairedEnd = salmon::utils::peekBAMIsPaired(alignmentFiles.front());
@@ -1669,6 +1665,9 @@ transcript abundance from RNA-seq reads
         AlignmentLibraryT<UnpairedRead> alnLib(alignmentFiles, transcriptFile,
                                                libFmt, sopt, hasEqclasses,
                                                tnames);
+        // EQCLASS
+        alnLib.equivalenceClassBuilder().setMaxResizeThreads(sopt.maxHashResizeThreads);
+        alnLib.equivalenceClassBuilder().start();
 
         success = processEqclasses(alnLib, sopt, outputDirectory);
       } else {

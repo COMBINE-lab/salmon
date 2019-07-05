@@ -207,7 +207,7 @@ for (auto& txp : transcripts_) {
   AlignmentLibrary(std::vector<boost::filesystem::path>& alnFiles,
                    const boost::filesystem::path& transcriptFile,
                    LibraryFormat libFmt, SalmonOpts& salmonOpts,
-                   bool eqClassMode_, std::vector<string>& tnames)
+                   bool eqClassMode_, std::vector<std::string>& tnames)
       : alignmentFiles_(alnFiles), transcriptFile_(transcriptFile),
         libFmt_(libFmt), transcripts_(std::vector<Transcript>()),
         fragStartDists_(5), posBiasFW_(5), posBiasRC_(5), posBiasExpectFW_(5),
@@ -241,7 +241,7 @@ for (auto& txp : transcripts_) {
     // The transcript file existed, so load up the transcripts
     double alpha = 0.005;
     for (size_t i = 0; i < tnames.size(); ++i) {
-      transcripts_.emplace_back(i, tnames[i], 100, alpha);
+      transcripts_.emplace_back(i, tnames[i].c_str(), 100, alpha);
     }
 
     FASTAParser fp(transcriptFile.string());

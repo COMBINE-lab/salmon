@@ -1988,13 +1988,14 @@ bool processQuantOptions(SalmonOpts& sopt,
   return perModeValidate;
 }
 
-bool readEquivCounts(std::string eqFilePath, std::vector<string>& tnames,
+bool readEquivCounts(boost::filesystem::path& eqFilePathString,
+                     std::vector<string>& tnames,
                      std::vector<std::vector<uint64_t>>& eqclasses,
                      std::vector<std::vector<double>>& auxs_vals,
                      std::vector<uint32_t>& eqclass_counts ) {
 
   namespace bfs = boost::filesystem;
-  bfs::path eqFilePath = eqFilePath;
+  bfs::path eqFilePath {eqFilePathString};
 
   std::ifstream equivFile(eqFilePath.string());
 
@@ -2003,7 +2004,7 @@ bool readEquivCounts(std::string eqFilePath, std::vector<string>& tnames,
   equivFile >> numTxps;
 
   // Number of equivalence classes
-  equivFile >> numEqClasses';
+  equivFile >> numEqClasses;
 
   string tname;
   for (size_t i = 0; i < numTxps; ++i) {
