@@ -205,10 +205,10 @@ for (auto& txp : transcripts_) {
   }
 
   AlignmentLibrary(std::vector<boost::filesystem::path>& alnFiles,
-                   const boost::filesystem::path& transcriptFile,
+                   boost::filesystem::path& transcriptFile,
                    LibraryFormat libFmt, SalmonOpts& salmonOpts,
                    bool eqClassMode_, std::vector<std::string>& tnames,
-                   std::vector<uint32_t>& tlens)
+                   std::vector<double>& tefflens)
       : alignmentFiles_(alnFiles), transcriptFile_(transcriptFile),
         libFmt_(libFmt), transcripts_(std::vector<Transcript>()),
         fragStartDists_(5), posBiasFW_(5), posBiasRC_(5), posBiasExpectFW_(5),
@@ -231,37 +231,11 @@ for (auto& txp : transcripts_) {
       }
     }
 
-    // Make sure the transcript file exists.
-    if (!bfs::exists(transcriptFile_)) {
-      std::stringstream ss;
-      ss << "The provided transcript file: " << transcriptFile_
-         << " does not exist!\n";
-      throw std::invalid_argument(ss.str());
-    }
-
     // The transcript file existed, so load up the transcripts
     double alpha = 0.005;
     for (size_t i = 0; i < tnames.size(); ++i) {
-      transcripts_.emplace_back(i, tnames[i].c_str(), tlens[i], alpha);
+      transcripts_.emplace_back(i, tnames[i].c_str(), tefflens[i], alpha);
     }
-
-    FASTAParser fp(transcriptFile.string());
-
-    fmt::print(stderr, "Populating targets from aln = {}, fasta = {} . . .",
-               alnFiles.front(), transcriptFile_);
-    fp.populateTargets(transcripts_, salmonOpts);
-
-    std::vector<uint32_t> lengths;
-    lengths.reserve(transcripts_.size());
-    for (auto& txp : transcripts_) {
-      lengths.push_back(txp.RefLength);
-    }
-    setTranscriptLengthClasses_(lengths, posBiasFW_.size());
-
-    fmt::print(stderr, "done\n");
-
-    // Create the cluster forest for this set of transcripts
-    clusters_.reset(new ClusterForest(transcripts_.size(), transcripts_));
 
     // Initialize the fragment length distribution
     size_t maxFragLen = salmonOpts.fragLenDistMax;

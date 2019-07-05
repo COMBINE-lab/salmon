@@ -145,7 +145,7 @@ bool GZipWriter::writeEquivCounts(const SalmonOpts& opts, ExpT& experiment) {
   equivFile << eqVec.size() << '\n';
 
   for (auto& t : transcripts) {
-    equivFile << t.RefName << "\t" << t.RefLength << '\n';
+    equivFile << t.RefName << '\n';
   }
 
   for (auto& eq : eqVec) {

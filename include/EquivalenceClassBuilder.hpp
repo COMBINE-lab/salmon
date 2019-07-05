@@ -208,7 +208,8 @@ public:
 
   inline void populateTargets(std::vector<std::vector<uint32_t>>& eqclasses,
                               std::vector<std::vector<double>>& auxs_vals,
-                              std::vector<uint32_t>& eqclass_counts );
+                              std::vector<uint32_t>& eqclass_counts,
+                              std::vector<Transcript>& transcripts);
 
   cuckoohash_map<TranscriptGroup, TGValueType, TranscriptGroupHasher>& eqMap(){
     return countMap_;
@@ -249,12 +250,21 @@ template <>
 inline void EquivalenceClassBuilder<TGValue>::populateTargets(
                                       std::vector<std::vector<uint32_t>>& eqclasses,
                                       std::vector<std::vector<double>>& auxs_vals,
-                                      std::vector<uint32_t>& eqclass_counts ) {
+                                      std::vector<uint32_t>& eqclass_counts,
+                                      std::vector<Transcript>& transcripts) {
   for (size_t i = 0; i < eqclass_counts.size(); ++i) {
-    TGValue val(auxs_vals[i], eqclass_counts[i]);
-    TranscriptGroup tgroup(eqclasses[i]);
+    uint32_t count = eqclass_counts[i];
+    auto& tids = eqclasses[i];
+
+    TGValue val(auxs_vals[i], count);
+    TranscriptGroup tgroup(tids);
 
     countVec_.emplace_back(std::make_pair(std::move(tgroup), val));
+    for (uint32_t tid: tids) {
+      transcripts[tid].addTotalCount(count);
+    }
+
+    if ( tids.size() == 1 ) { transcripts[tids[0]].addUniqueCount(count); }
   }
 }
 

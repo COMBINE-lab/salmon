@@ -1366,7 +1366,8 @@ bool processSample(AlignmentLibraryT<ReadT>& alnLib, size_t requiredObservations
 }
 
 bool processEqclasses( AlignmentLibraryT<UnpairedRead>& alnLib, SalmonOpts& sopt,
-                       boost::filesystem::path outputDirectory) {
+                       boost::filesystem::path outputDirectory,
+                       size_t numMappedFrags) {
   auto& jointLog = sopt.jointLog;
   GZipWriter gzw(outputDirectory, jointLog);
 
@@ -1375,55 +1376,58 @@ bool processEqclasses( AlignmentLibraryT<UnpairedRead>& alnLib, SalmonOpts& sopt
   // set to its final value.
   CollapsedEMOptimizer optimizer;
   jointLog->info("starting optimizer");
-  salmon::utils::normalizeAlphas(sopt, alnLib);
+
+  {
+    // setting no effective length correction, as we are taking effective lens as input
+    sopt.noEffectiveLengthCorrection = true;
+    sopt.initUniform = true;
+    jointLog->warn("Using Uniform Prior");
+  }
+
+  //salmon::utils::normalizeAlphas(sopt, alnLib);
   bool optSuccess = optimizer.optimize(alnLib, sopt, 0.01, 10000);
   // If the optimizer didn't work, then bail out here.
   if (!optSuccess) {
     return false;
   }
   jointLog->info("finished optimizer");
-
   jointLog->info("writing output");
+  jointLog->flush();
+
   // Write the main results
-  gzw.writeAbundances(sopt, alnLib);
+  {
+    bfs::path fname = outputDirectory / "quant.sf";
 
-  if (sopt.numGibbsSamples > 0) {
+    std::unique_ptr<std::FILE, int (*)(std::FILE*)> output(std::fopen(fname.c_str(), "w"), std::fclose);
+    auto* outputRaw = output.get();
+    fmt::print(outputRaw, "Name\tLength\tEffectiveLength\tTPM\tNumReads\n");
 
-    jointLog->info("Starting Gibbs Sampler");
-    CollapsedGibbsSampler sampler;
-    gzw.setSamplingPath(sopt);
-    // The function we'll use as a callback to write samples
-    std::function<bool(const std::vector<double>&)> bsWriter =
-      [&gzw](const std::vector<double>& alphas) -> bool {
-        return gzw.writeBootstrap(alphas, true);
-      };
-
-    bool sampleSuccess =
-      sampler.sample(alnLib, sopt, bsWriter, sopt.numGibbsSamples);
-    if (!sampleSuccess) {
-      jointLog->error("Encountered error during Gibb sampling .\n"
-                      "This should not happen.\n"
-                      "Please file a bug report on GitHub.\n");
-      return false;
+    bool useScaledCounts = !(sopt.useQuasi or sopt.allowOrphans or sopt.alnMode);
+    std::vector<Transcript>& transcripts_ = alnLib.transcripts();
+    for (auto& transcript : transcripts_) {
+      transcript.projectedCounts = useScaledCounts
+        ? (transcript.mass(false) * numMappedFrags)
+        : transcript.sharedCount();
     }
-    jointLog->info("Finished Gibbs Sampler");
-  } else if (sopt.numBootstraps > 0) {
-    // The function we'll use as a callback to write samples
-    std::function<bool(const std::vector<double>&)> bsWriter =
-      [&gzw](const std::vector<double>& alphas) -> bool {
-        return gzw.writeBootstrap(alphas);
-      };
 
-    jointLog->info("Staring Bootstrapping");
-    gzw.setSamplingPath(sopt);
-    bool bootstrapSuccess =
-      optimizer.gatherBootstraps(alnLib, sopt, bsWriter, 0.01, 10000);
-    jointLog->info("Finished Bootstrapping");
-    if (!bootstrapSuccess) {
-      jointLog->error("Encountered error during bootstrapping.\n"
-                      "This should not happen.\n"
-                      "Please file a bug report on GitHub.\n");
-      return false;
+    double tfracDenom{0.0};
+    for (auto& transcript : transcripts_) {
+      double refLength = transcript.EffectiveLength;
+      tfracDenom += (transcript.projectedCounts / numMappedFrags) / refLength;
+    }
+
+    double million = 1000000.0;
+    // Now posterior has the transcript fraction
+    for (auto& transcript : transcripts_) {
+      double count = transcript.projectedCounts;
+      double npm = (transcript.projectedCounts / numMappedFrags);
+      double effLength = transcript.EffectiveLength;
+      double tfrac = (npm / effLength) / tfracDenom;
+      double tpm = tfrac * million;
+      fmt::print(outputRaw, "{}\t{}\t", transcript.RefName, transcript.CompleteLength);
+      fmt::print(outputRaw, "{:.{}f}\t", effLength, sopt.sigDigits);
+      fmt::print(outputRaw, "{:f}\t", tpm);
+      fmt::print(outputRaw, "{:.{}f}\n", count, sopt.sigDigits);
     }
   }
 
@@ -1655,27 +1659,55 @@ transcript abundance from RNA-seq reads
 
       if ( hasEqclasses ) {
         std::vector<string> tnames;
-        std::vector<uint32_t> tlens;
+        std::vector<double> tefflens;
         std::vector<uint32_t> eqclass_counts;
         std::vector<std::vector<uint32_t>> eqclasses;
         std::vector<std::vector<double>> auxs_vals;
         {
           // reading eqclass
-          salmon::utils::readEquivCounts(alignmentFiles[0], tnames, tlens,
-                                         eqclasses, auxs_vals, eqclass_counts);
+          bool parseOK = salmon::utils::readEquivCounts(alignmentFiles[0], tnames, tefflens,
+                                                        eqclasses, auxs_vals, eqclass_counts);
+          if (!parseOK){
+            jointLog->error("Eqclass Parsing error");
+            exit(1);
+          }
+
           std::stringstream errfmt;
           errfmt << "Found total " << eqclasses.size() << " eqclasses and "
                  << tnames.size() << " transcripts";
           jointLog->info(errfmt.str());
           jointLog->flush();
+
+          if ( /*tefflens.size() != 0 and*/ (tefflens.size() != tnames.size()) ){
+            std::stringstream errfmt;
+            errfmt << "Number of effective lens: " << tefflens.size()
+                   << " is not equal to number of transcripts: " << tnames.size();
+            jointLog->error(errfmt.str());
+            jointLog->flush();
+            exit(1);
+          }
+
+          if ( eqclasses.size() != auxs_vals.size() or
+               eqclasses.size() != eqclass_counts.size() ) {
+            jointLog->error("Different size of the eqclasses object");
+            jointLog->flush();
+            exit(1);
+          }
         }
 
         AlignmentLibraryT<UnpairedRead> alnLib(alignmentFiles, transcriptFile,
                                                libFmt, sopt, hasEqclasses,
-                                               tnames, tlens);
+                                               tnames, tefflens);
+
+        jointLog->info("Created AlignmentLibrary object");
+        jointLog->flush();
+
         // EQCLASS
-        alnLib.equivalenceClassBuilder().populateTargets(eqclasses, auxs_vals, eqclass_counts);
-        success = processEqclasses(alnLib, sopt, outputDirectory);
+        alnLib.equivalenceClassBuilder().populateTargets(eqclasses, auxs_vals,
+                                                         eqclass_counts,
+                                                         alnLib.transcripts());
+        success = processEqclasses(alnLib, sopt, outputDirectory,
+                                   std::accumulate(eqclass_counts.begin(), eqclass_counts.end(), 0));
       } else {
         AlignmentLibraryT<UnpairedRead> alnLib(alignmentFiles, transcriptFile,
                                                libFmt, sopt);

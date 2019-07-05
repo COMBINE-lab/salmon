@@ -1990,7 +1990,7 @@ bool processQuantOptions(SalmonOpts& sopt,
 
 bool readEquivCounts(boost::filesystem::path& eqFilePathString,
                      std::vector<string>& tnames,
-                     std::vector<uint32_t>& tlens,
+                     std::vector<double>& tefflens,
                      std::vector<std::vector<uint32_t>>& eqclasses,
                      std::vector<std::vector<double>>& auxs_vals,
                      std::vector<uint32_t>& eqclass_counts ) {
@@ -2008,11 +2008,11 @@ bool readEquivCounts(boost::filesystem::path& eqFilePathString,
   equivFile >> numEqClasses;
 
   string tname;
-  uint32_t tlen;
+  std::unordered_map<string, size_t> nameToIndex;
   for (size_t i = 0; i < numTxps; ++i) {
-    equivFile >> tname >> tlen;
+    equivFile >> tname;
     tnames.emplace_back(tname);
-    tlens.emplace_back(tlen);
+    nameToIndex[tname] = i;
   }
 
   for (size_t i= 0; i < numEqClasses; ++i) {
@@ -2041,6 +2041,32 @@ bool readEquivCounts(boost::filesystem::path& eqFilePathString,
     eqclasses.emplace_back(tids);
     auxs_vals.emplace_back(auxs);
     eqclass_counts.emplace_back(count);
+  }
+
+  tefflens.resize(nameToIndex.size());
+  std::vector<size_t> indexList(nameToIndex.size());
+  std::iota(indexList.begin(), indexList.end(), 0);
+  std::unordered_set<size_t> indexSet(indexList.begin(), indexList.end());
+
+  double tlen;
+  while (equivFile >> tname >> tlen) {
+    size_t index {0};
+    auto it = nameToIndex.find(tname);
+    if ( it != nameToIndex.end() ) {
+      index = it->second;
+    } else {
+      std::cerr<< "Missing effective lens for " << it->first << std::flush;
+      return false;
+    }
+
+    indexSet.erase(index);
+    tefflens[index] = tlen;
+  }
+
+  if (indexSet.size() > 0) {
+    std::cerr<< "Missing effective lens for " << indexSet.size()
+             << " txps" << std::flush;
+    return false;
   }
 
   equivFile.close();

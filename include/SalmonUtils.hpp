@@ -116,7 +116,7 @@ transcriptToGeneMapFromFasta(const std::string& transcriptsFile);
 
 bool readEquivCounts(boost::filesystem::path& eqFilePathString,
                      std::vector<string>& tnames,
-                     std::vector<uint32_t>& tlens,
+                     std::vector<double>& tlens,
                      std::vector<std::vector<uint32_t>>& eqclasses,
                      std::vector<std::vector<double>>& auxs_vals,
                      std::vector<uint32_t>& eqclass_counts );
