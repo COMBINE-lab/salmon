@@ -1498,14 +1498,16 @@ transcript abundance from RNA-seq reads
     string eqclassesFileName;
     if (vm.count("alignments")) {
       alignmentFileNames = vm["alignments"].as<vector<string>>();
+      hasAlignments = true;
     }
     if (vm.count("eqclasses")) {
       eqclassesFileName = vm["eqclasses"].as<string>();
+      hasEqclasses = true;
     }
 
-    if ( !hasEqclasses and !hasEqclasses ) {
-      fmt::print(stderr, "salmon requires at least one alignment input "
-                 ". Neither alignments (BAM) nor eqclasses given as input. \n");
+    if ( !hasAlignments and !hasEqclasses ) {
+      fmt::print(stderr, "salmon requires at least one alignment input\n"
+                 "Neither alignments (BAM) nor eqclasses given as input. \n");
       std::exit(1);
     }
 
@@ -1536,7 +1538,7 @@ transcript abundance from RNA-seq reads
     sopt.alnMode = true;
     sopt.quantMode = SalmonQuantMode::ALIGN;
     bool optionsOK =
-        salmon::utils::processQuantOptions(sopt, vm, numBiasSamples);
+      salmon::utils::processQuantOptions(sopt, vm, numBiasSamples);
     if (!optionsOK) {
       if (sopt.jointLog) {
         sopt.jointLog->flush();
@@ -1653,18 +1655,24 @@ transcript abundance from RNA-seq reads
 
       if ( hasEqclasses ) {
         std::vector<string> tnames;
+        std::vector<uint32_t> tlens;
+        std::vector<uint32_t> eqclass_counts;
         std::vector<std::vector<uint32_t>> eqclasses;
         std::vector<std::vector<double>> auxs_vals;
-        std::vector<uint32_t> eqclass_counts;
         {
           // reading eqclass
-          salmon::utils::readEquivCounts(alignmentFiles[0], tnames, eqclasses,
-                                         auxs_vals, eqclass_counts);
+          salmon::utils::readEquivCounts(alignmentFiles[0], tnames, tlens,
+                                         eqclasses, auxs_vals, eqclass_counts);
+          std::stringstream errfmt;
+          errfmt << "Found total " << eqclasses.size() << " eqclasses and "
+                 << tnames.size() << " transcripts";
+          jointLog->info(errfmt.str());
+          jointLog->flush();
         }
 
         AlignmentLibraryT<UnpairedRead> alnLib(alignmentFiles, transcriptFile,
                                                libFmt, sopt, hasEqclasses,
-                                               tnames);
+                                               tnames, tlens);
         // EQCLASS
         alnLib.equivalenceClassBuilder().populateTargets(eqclasses, auxs_vals, eqclass_counts);
         success = processEqclasses(alnLib, sopt, outputDirectory);

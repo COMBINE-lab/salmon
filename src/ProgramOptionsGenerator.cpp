@@ -243,7 +243,7 @@ namespace salmon {
     ("libType,l", po::value<std::string>()->required(), "Format string describing the library type")
     ("alignments,a", po::value<vector<string>>()->multitoken(),
      "input alignment (BAM) file(s).")
-    ("eqclasses, e", po::value<string>(),
+    ("eqclasses,e", po::value<string>(),
      "input salmon weighted equivalence class file.")
     ("targets,t", po::value<std::string>()->required(),
      "FASTA format file containing target transcripts.");

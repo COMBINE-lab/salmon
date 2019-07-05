@@ -1990,6 +1990,7 @@ bool processQuantOptions(SalmonOpts& sopt,
 
 bool readEquivCounts(boost::filesystem::path& eqFilePathString,
                      std::vector<string>& tnames,
+                     std::vector<uint32_t>& tlens,
                      std::vector<std::vector<uint32_t>>& eqclasses,
                      std::vector<std::vector<double>>& auxs_vals,
                      std::vector<uint32_t>& eqclass_counts ) {
@@ -2007,9 +2008,11 @@ bool readEquivCounts(boost::filesystem::path& eqFilePathString,
   equivFile >> numEqClasses;
 
   string tname;
+  uint32_t tlen;
   for (size_t i = 0; i < numTxps; ++i) {
-    equivFile >> tname;
+    equivFile >> tname >> tlen;
     tnames.emplace_back(tname);
+    tlens.emplace_back(tlen);
   }
 
   for (size_t i= 0; i < numEqClasses; ++i) {
