@@ -1223,7 +1223,7 @@ bool GZipWriter::writeEmptyAbundances(const SalmonOpts& sopt, ExpT& readExp) {
 }
 
 template <typename ExpT>
-bool GZipWriter::writeAbundances(const SalmonOpts& sopt, ExpT& readExp) {
+bool GZipWriter::writeAbundances(const SalmonOpts& sopt, ExpT& readExp, bool explicitSum) {
 
   namespace bfs = boost::filesystem;
 
@@ -1238,11 +1238,19 @@ bool GZipWriter::writeAbundances(const SalmonOpts& sopt, ExpT& readExp) {
   std::unique_ptr<std::FILE, int (*)(std::FILE*)> output(
       std::fopen(fname.c_str(), "w"), std::fclose);
   auto* outputRaw = output.get();
+
   fmt::print(outputRaw, "Name\tLength\tEffectiveLength\tTPM\tNumReads\n");
-
-  double numMappedFrags = readExp.upperBoundHits();
-
   std::vector<Transcript>& transcripts_ = readExp.transcripts();
+
+  double numMappedFrags;
+  if ( explicitSum ) {
+    for (auto& transcript : transcripts_) {
+        numMappedFrags += transcript.sharedCount();
+    }
+  } else {
+    numMappedFrags = readExp.upperBoundHits();
+  }
+
   for (auto& transcript : transcripts_) {
     transcript.projectedCounts = useScaledCounts
                                      ? (transcript.mass(false) * numMappedFrags)
@@ -1410,14 +1418,15 @@ template bool GZipWriter::writeBFH<SCExpT>(boost::filesystem::path& outDir,
                                            std::vector<std::string>& bcSeqVec);
 
 template bool GZipWriter::writeAbundances<BulkExpT>(const SalmonOpts& sopt,
-                                            BulkExpT& readExp);
-template bool GZipWriter::writeAbundances<SCExpT>(const SalmonOpts& sopt,
-                                                          SCExpT& readExp);
+                                                    BulkExpT& readExp,
+                                                    bool explicitSum);
 
-template bool GZipWriter::writeAbundances<BulkAlignLibT<UnpairedRead>>(
-    const SalmonOpts& sopt, BulkAlignLibT<UnpairedRead>& readExp);
-template bool GZipWriter::writeAbundances<BulkAlignLibT<ReadPair>>(
-    const SalmonOpts& sopt, BulkAlignLibT<ReadPair>& readExp);
+template bool GZipWriter::writeAbundances<BulkAlignLibT<UnpairedRead>>(const SalmonOpts& sopt,
+                                                                       BulkAlignLibT<UnpairedRead>& readExp,
+                                                                       bool explicitSum);
+template bool GZipWriter::writeAbundances<BulkAlignLibT<ReadPair>>(const SalmonOpts& sopt,
+                                                                   BulkAlignLibT<ReadPair>& readExp,
+                                                                   bool explicitSum);
 
 template bool GZipWriter::writeEmptyAbundances<BulkExpT>(const SalmonOpts& sopt,
                                                  BulkExpT& readExp);

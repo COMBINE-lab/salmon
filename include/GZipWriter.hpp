@@ -50,7 +50,7 @@ public:
                       std::vector<std::string>& errors);
 
   template <typename ExpT>
-  bool writeAbundances(const SalmonOpts& sopt, ExpT& readExp);
+  bool writeAbundances(const SalmonOpts& sopt, ExpT& readExp, bool explicitSum);
 
   bool writeAbundances(std::vector<double>& alphas,
                        std::vector<Transcript>& transcripts);

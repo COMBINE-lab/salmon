@@ -1285,7 +1285,7 @@ bool processSample(AlignmentLibraryT<ReadT>& alnLib, size_t requiredObservations
 
     jointLog->info("writing output");
     // Write the main results
-    gzw.writeAbundances(sopt, alnLib);
+    gzw.writeAbundances(sopt, alnLib, false);
 
     if (sopt.numGibbsSamples > 0) {
 
@@ -1366,8 +1366,7 @@ bool processSample(AlignmentLibraryT<ReadT>& alnLib, size_t requiredObservations
 }
 
 bool processEqclasses( AlignmentLibraryT<UnpairedRead>& alnLib, SalmonOpts& sopt,
-                       boost::filesystem::path outputDirectory,
-                       size_t numMappedFrags) {
+                       boost::filesystem::path outputDirectory) {
   auto& jointLog = sopt.jointLog;
   GZipWriter gzw(outputDirectory, jointLog);
 
@@ -1395,47 +1394,8 @@ bool processEqclasses( AlignmentLibraryT<UnpairedRead>& alnLib, SalmonOpts& sopt
   jointLog->flush();
 
   // Write the main results
-  {
-    bfs::path fname = outputDirectory / "quant.sf";
-
-    std::unique_ptr<std::FILE, int (*)(std::FILE*)> output(std::fopen(fname.c_str(), "w"), std::fclose);
-    auto* outputRaw = output.get();
-    fmt::print(outputRaw, "Name\tLength\tEffectiveLength\tTPM\tNumReads\n");
-
-    bool useScaledCounts = !(sopt.useQuasi or sopt.allowOrphans or sopt.alnMode);
-    std::vector<Transcript>& transcripts_ = alnLib.transcripts();
-    for (auto& transcript : transcripts_) {
-      transcript.projectedCounts = useScaledCounts
-        ? (transcript.mass(false) * numMappedFrags)
-        : transcript.sharedCount();
-    }
-
-    double tfracDenom{0.0};
-    for (auto& transcript : transcripts_) {
-      double refLength = transcript.EffectiveLength;
-      tfracDenom += (transcript.projectedCounts / numMappedFrags) / refLength;
-    }
-
-    double million = 1000000.0;
-    // Now posterior has the transcript fraction
-    for (auto& transcript : transcripts_) {
-      double count = transcript.projectedCounts;
-      double npm = (transcript.projectedCounts / numMappedFrags);
-      double effLength = transcript.EffectiveLength;
-      double tfrac = (npm / effLength) / tfracDenom;
-      double tpm = tfrac * million;
-      fmt::print(outputRaw, "{}\t{}\t", transcript.RefName, transcript.CompleteLength);
-      fmt::print(outputRaw, "{:.{}f}\t", effLength, sopt.sigDigits);
-      fmt::print(outputRaw, "{:f}\t", tpm);
-      fmt::print(outputRaw, "{:.{}f}\n", count, sopt.sigDigits);
-    }
-  }
-
+  gzw.writeAbundances(sopt, alnLib, true);
   sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
-
-  // Write meta-information about the run
-  MappingStatistics mstats;
-  gzw.writeMeta(sopt, alnLib, mstats);
 
   return true;
 }
@@ -1706,8 +1666,7 @@ transcript abundance from RNA-seq reads
         alnLib.equivalenceClassBuilder().populateTargets(eqclasses, auxs_vals,
                                                          eqclass_counts,
                                                          alnLib.transcripts());
-        success = processEqclasses(alnLib, sopt, outputDirectory,
-                                   std::accumulate(eqclass_counts.begin(), eqclass_counts.end(), 0));
+        success = processEqclasses(alnLib, sopt, outputDirectory);
       } else {
         AlignmentLibraryT<UnpairedRead> alnLib(alignmentFiles, transcriptFile,
                                                libFmt, sopt);

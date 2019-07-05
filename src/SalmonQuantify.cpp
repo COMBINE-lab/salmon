@@ -2475,7 +2475,7 @@ transcript abundance from RNA-seq reads
       jointLog->info("writing output \n");
 
       // Write the quantification results
-      gzw.writeAbundances(sopt, experiment);
+      gzw.writeAbundances(sopt, experiment, false);
 
       if (sopt.numGibbsSamples > 0) {
 
