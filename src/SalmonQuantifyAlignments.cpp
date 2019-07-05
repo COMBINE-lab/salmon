@@ -1653,7 +1653,7 @@ transcript abundance from RNA-seq reads
 
       if ( hasEqclasses ) {
         std::vector<string> tnames;
-        std::vector<std::vector<uint64_t>> eqclasses;
+        std::vector<std::vector<uint32_t>> eqclasses;
         std::vector<std::vector<double>> auxs_vals;
         std::vector<uint32_t> eqclass_counts;
         {
@@ -1666,9 +1666,7 @@ transcript abundance from RNA-seq reads
                                                libFmt, sopt, hasEqclasses,
                                                tnames);
         // EQCLASS
-        alnLib.equivalenceClassBuilder().setMaxResizeThreads(sopt.maxHashResizeThreads);
-        alnLib.equivalenceClassBuilder().start();
-
+        alnLib.equivalenceClassBuilder().populateTargets(eqclasses, auxs_vals, eqclass_counts);
         success = processEqclasses(alnLib, sopt, outputDirectory);
       } else {
         AlignmentLibraryT<UnpairedRead> alnLib(alignmentFiles, transcriptFile,

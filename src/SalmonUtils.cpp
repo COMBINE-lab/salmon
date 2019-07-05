@@ -1990,7 +1990,7 @@ bool processQuantOptions(SalmonOpts& sopt,
 
 bool readEquivCounts(boost::filesystem::path& eqFilePathString,
                      std::vector<string>& tnames,
-                     std::vector<std::vector<uint64_t>>& eqclasses,
+                     std::vector<std::vector<uint32_t>>& eqclasses,
                      std::vector<std::vector<double>>& auxs_vals,
                      std::vector<uint32_t>& eqclass_counts ) {
 
@@ -2018,7 +2018,7 @@ bool readEquivCounts(boost::filesystem::path& eqFilePathString,
 
     // each group member
     uint64_t tid;
-    std::vector<uint64_t> tids;
+    std::vector<uint32_t> tids;
     for (size_t i = 0; i < classLength; i++) {
       equivFile >> tid;
       tids.emplace_back(tid);

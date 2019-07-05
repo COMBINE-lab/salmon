@@ -206,6 +206,10 @@ public:
 
   inline void addGroup(TranscriptGroup&& g, std::vector<double>& weights);
 
+  inline void populateTargets(std::vector<std::vector<uint32_t>>& eqclasses,
+                              std::vector<std::vector<double>>& auxs_vals,
+                              std::vector<uint32_t>& eqclass_counts );
+
   cuckoohash_map<TranscriptGroup, TGValueType, TranscriptGroupHasher>& eqMap(){
     return countMap_;
   }
@@ -239,6 +243,19 @@ inline void EquivalenceClassBuilder<TGValue>::addGroup(TranscriptGroup&& g,
   };
   TGValue v(weights, 1);
   countMap_.upsert(g, upfn, v);
+}
+
+template <>
+inline void EquivalenceClassBuilder<TGValue>::populateTargets(
+                                      std::vector<std::vector<uint32_t>>& eqclasses,
+                                      std::vector<std::vector<double>>& auxs_vals,
+                                      std::vector<uint32_t>& eqclass_counts ) {
+  for (size_t i = 0; i < eqclass_counts.size(); ++i) {
+    TGValue val(auxs_vals[i], eqclass_counts[i]);
+    TranscriptGroup tgroup(eqclasses[i]);
+
+    countVec_.emplace_back(std::make_pair(std::move(tgroup), val));
+  }
 }
 
 template <>
