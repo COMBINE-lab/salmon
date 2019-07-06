@@ -41,7 +41,7 @@ process quantSim {
   	    """
 	else
 	    """
-      ${params.salmon} quant -p 16 -i ${index} -l A -1 ${basepath}_${sample}/sample_02_1_shuffled.fa.gz -2 ${basepath}_${sample}/sample_02_2_shuffled.fa.gz -o sim_quants/${cond}_${sample} --useVBOpt --vbPrior 1e-5 --validateMappings --minScoreFraction 0.95 --rangeFactorizationBins 4 --vbPrior 1e-2 --preTranscriptPrior
+      ${params.salmon} quant -p 16 -i ${index} -l A -1 ${basepath}_${sample}/sample_02_1_shuffled.fa.gz -2 ${basepath}_${sample}/sample_02_2_shuffled.fa.gz -o sim_quants/${cond}_${sample} --useVBOpt --vbPrior 1e-5 --validateMappings --minScoreFraction 0.95 --rangeFactorizationBins 4 --vbPrior 1e-2 --perTranscriptPrior
 	    """
 }
 
