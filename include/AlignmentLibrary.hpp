@@ -205,11 +205,10 @@ for (auto& txp : transcripts_) {
   }
 
   AlignmentLibrary(std::vector<boost::filesystem::path>& alnFiles,
-                   boost::filesystem::path& transcriptFile,
                    LibraryFormat libFmt, SalmonOpts& salmonOpts,
                    bool eqClassMode_, std::vector<std::string>& tnames,
                    std::vector<double>& tefflens)
-      : alignmentFiles_(alnFiles), transcriptFile_(transcriptFile),
+      : alignmentFiles_(alnFiles),
         libFmt_(libFmt), transcripts_(std::vector<Transcript>()),
         fragStartDists_(5), posBiasFW_(5), posBiasRC_(5), posBiasExpectFW_(5),
         posBiasExpectRC_(5), seqBiasModel_(1.0),
@@ -234,7 +233,7 @@ for (auto& txp : transcripts_) {
     // The transcript file existed, so load up the transcripts
     double alpha = 0.005;
     for (size_t i = 0; i < tnames.size(); ++i) {
-      transcripts_.emplace_back(i, tnames[i].c_str(), tefflens[i], alpha);
+      transcripts_.emplace_back(i, tnames[i].c_str(), tefflens[i], true, alpha);
     }
 
     // Initialize the fragment length distribution

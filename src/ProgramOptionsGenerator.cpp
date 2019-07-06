@@ -245,7 +245,7 @@ namespace salmon {
      "input alignment (BAM) file(s).")
     ("eqclasses,e", po::value<string>(),
      "input salmon weighted equivalence class file.")
-    ("targets,t", po::value<std::string>()->required(),
+    ("targets,t", po::value<std::string>(),
      "FASTA format file containing target transcripts.");
 
     return alignin;

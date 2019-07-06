@@ -1378,8 +1378,8 @@ bool processEqclasses( AlignmentLibraryT<UnpairedRead>& alnLib, SalmonOpts& sopt
 
   {
     // setting no effective length correction, as we are taking effective lens as input
-    sopt.noEffectiveLengthCorrection = true;
     sopt.initUniform = true;
+    sopt.eqClassMode = true;
     jointLog->warn("Using Uniform Prior");
   }
 
@@ -1583,7 +1583,8 @@ transcript abundance from RNA-seq reads
     // ==== END: Library format processing ===
 
     // The transcript file contains the target sequences
-    bfs::path transcriptFile(vm["targets"].as<std::string>());
+    bfs::path transcriptFile;
+    if (hasAlignments) { transcriptFile = vm["targets"].as<std::string>(); }
 
     // Currently, one thread is used for parsing the alignment file.
     // Hopefully, in the future, samtools will implemented multi-threaded
@@ -1655,7 +1656,7 @@ transcript abundance from RNA-seq reads
           }
         }
 
-        AlignmentLibraryT<UnpairedRead> alnLib(alignmentFiles, transcriptFile,
+        AlignmentLibraryT<UnpairedRead> alnLib(alignmentFiles,
                                                libFmt, sopt, hasEqclasses,
                                                tnames, tefflens);
 

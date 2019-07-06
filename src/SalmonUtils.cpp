@@ -1700,13 +1700,24 @@ bool createDirectoryVerbose_(boost::filesystem::path& dirPath) {
 /* Function used to check that 'opt1' and 'opt2' are not specified
     at the same time. */
 // taken from : https://www.boost.org/doc/libs/1_67_0/libs/program_options/example/real.cpp
-  void conflicting_options(const boost::program_options::variables_map& vm,
+void conflicting_options(const boost::program_options::variables_map& vm,
                           const char* opt1, const char* opt2){
   if (vm.count(opt1) && !vm[opt1].defaulted()
       && vm.count(opt2) && !vm[opt2].defaulted()) {
     throw std::logic_error(std::string("Conflicting options '")
                            + opt1 + "' and '" + opt2 + "'.");
   }
+}
+
+/* Function used to check that of 'for_what' is specified, then
+   'required_option' is specified too. */
+// taken from : https://www.boost.org/doc/libs/1_67_0/libs/program_options/example/real.cpp
+void option_dependency(const boost::program_options::variables_map& vm,
+                       const char* for_what, const char* required_option){
+  if (vm.count(for_what) && !vm[for_what].defaulted())
+    if (vm.count(required_option) == 0 || vm[required_option].defaulted())
+      throw std::logic_error(string("Option '") + for_what 
+                             + "' requires option '" + required_option + "'.");
 }
 
 /**
@@ -1881,6 +1892,16 @@ bool processQuantOptions(SalmonOpts& sopt,
   {
     try {
       conflicting_options(vm, "alignments", "eqclasses");
+    } catch (std::logic_error& e) {
+      jointLog->critical(e.what());
+      jointLog->flush();
+      return false;
+    }
+  }
+
+  {
+    try {
+      option_dependency(vm, "alignments", "targets");
     } catch (std::logic_error& e) {
       jointLog->critical(e.what());
       jointLog->flush();

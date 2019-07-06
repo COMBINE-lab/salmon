@@ -1242,7 +1242,7 @@ bool GZipWriter::writeAbundances(const SalmonOpts& sopt, ExpT& readExp, bool exp
   fmt::print(outputRaw, "Name\tLength\tEffectiveLength\tTPM\tNumReads\n");
   std::vector<Transcript>& transcripts_ = readExp.transcripts();
 
-  double numMappedFrags;
+  double numMappedFrags {0.0};
   if ( explicitSum ) {
     for (auto& transcript : transcripts_) {
         numMappedFrags += transcript.sharedCount();
