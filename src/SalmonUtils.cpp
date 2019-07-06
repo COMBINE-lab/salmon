@@ -1888,6 +1888,30 @@ bool processQuantOptions(SalmonOpts& sopt,
       sopt.useVBOpt = false;
     }
   }
+  
+  {
+    try {
+      conflicting_options(vm, "perNucleotidePrior", "perTranscriptPrior");
+    } catch (std::logic_error& e) {
+      jointLog->critical(e.what());
+      jointLog->flush();
+      return false;
+    }
+    // If the user passed useEM, but not useVBOpt, then
+    // turn off VB.  The fact that there is not a better
+    // way to handle this suggests a potential shortcoming
+    // of boost::program_options.
+    if(sopt.perNucleotidePrior) {
+      sopt.perTranscriptPrior = false;
+    }
+  }
+
+  // If we are in vbOpt mode, and using a perNucleotidePrior, and the user didn't change the default
+  // vbPrior, then divide this value by 1000.
+  if (sopt.useVBOpt and sopt.perNucleotidePrior and vm["vbPrior"].defaulted()) {
+    sopt.vbPrior = 1e-5;
+    jointLog->info("Using per-nucleotide prior with the default VB prior.  Setting the default prior to {}",sopt.vbPrior);
+  }
 
   {
     try {

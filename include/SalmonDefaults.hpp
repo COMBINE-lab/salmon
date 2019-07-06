@@ -66,8 +66,9 @@ namespace defaults {
   constexpr const uint32_t thinningFactor{16};
   constexpr const uint32_t numBootstraps{0};
   constexpr const bool quiet{false};
-  constexpr const bool perTranscriptPrior{false};
-  constexpr const double vbPrior{1e-5};
+  constexpr const bool perTranscriptPrior{true};
+  constexpr const bool perNucleotidePrior{false};
+  constexpr const double vbPrior{1e-2};
   constexpr const bool writeOrphanLinks{false};
   constexpr const bool writeUnmappedNames{false};
   constexpr const double quasiCoverage{0.0};

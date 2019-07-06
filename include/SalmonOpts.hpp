@@ -230,8 +230,9 @@ struct SalmonOpts {
                 // the sequence-specific "foreground" distribution.
 
   // Related to the prior of the VBEM algorithm
-  double vbPrior{1e-3};
-  bool perTranscriptPrior{false};
+  double vbPrior{1e-2};
+  bool perTranscriptPrior{true};
+  bool perNucleotidePrior{false};
   // Related to the fragment length distribution
   size_t fragLenDistMax;
   size_t fragLenDistPriorMean;

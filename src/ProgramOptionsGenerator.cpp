@@ -631,14 +631,22 @@ namespace salmon {
        "be interpreted as a transcript-level prior (i.e. each transcript "
        "will "
        "be given a prior read count of this value)")
+      ("perNucleotidePrior", po::bool_switch(&(sopt.perNucleotidePrior))->default_value(salmon::defaults::perNucleotidePrior),
+       "The "
+       "prior (either the default or the argument provided via --vbPrior) "
+       "will "
+       "be interpreted as a nucleotide-level prior (i.e. each nucleotide "
+       "will "
+       "be given a prior read count of this value)")
       ("sigDigits", po::value<uint32_t>(&(sopt.sigDigits))->default_value(salmon::defaults::sigDigits),
        "The number of significant digits to write when outputting the EffectiveLength and NumReads columns")
       ("vbPrior", po::value<double>(&(sopt.vbPrior))->default_value(salmon::defaults::vbPrior),
        "The prior that will be used in the VBEM algorithm.  This is "
        "interpreted "
-       "as a per-nucleotide prior, unless the --perTranscriptPrior flag "
-       "is also given, in which case this is used as a transcript-level "
-       "prior")
+       "as a per-transcript prior, unless the --perNucleotidePrior flag "
+       "is also given.  If the --perNucleotidePrior flag is given, this is used as a nucleotide-level "
+       "prior.  If the default is used, it will be divided by 1000 before being used as a nucleotide-level "
+       "prior, i.e. the default per-nucleotide prior will be 1e-5.")
       ("writeOrphanLinks",
        po::bool_switch(&(sopt.writeOrphanLinks))->default_value(salmon::defaults::writeOrphanLinks),
        "Write the transcripts that are linked by orphaned reads.")
