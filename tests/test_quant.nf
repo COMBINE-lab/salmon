@@ -37,11 +37,11 @@ process quantSim {
 	script:
 	if (cond == 'A')
 	    """
-      ${params.salmon} quant -p 16 -i ${index} -l A -1 ${basepath}_${sample}/sample_01_1_shuffled.fa.gz -2 ${basepath}_${sample}/sample_01_2_shuffled.fa.gz -o sim_quants/${cond}_${sample} --useVBOpt --vbPrior 1e-5 --validateMappings --minScoreFraction 0.95  --rangeFactorizationBins 4 --vbPrior 1e-2 --perTranscriptPrior
+      ${params.salmon} quant -p 16 -i ${index} -l A -1 ${basepath}_${sample}/sample_01_1_shuffled.fa.gz -2 ${basepath}_${sample}/sample_01_2_shuffled.fa.gz -o sim_quants/${cond}_${sample} --useVBOpt --validateMappings --minScoreFraction 0.95  --rangeFactorizationBins 4 --vbPrior 1e-2 --perTranscriptPrior
   	    """
 	else
 	    """
-      ${params.salmon} quant -p 16 -i ${index} -l A -1 ${basepath}_${sample}/sample_02_1_shuffled.fa.gz -2 ${basepath}_${sample}/sample_02_2_shuffled.fa.gz -o sim_quants/${cond}_${sample} --useVBOpt --vbPrior 1e-5 --validateMappings --minScoreFraction 0.95 --rangeFactorizationBins 4 --vbPrior 1e-2 --perTranscriptPrior
+      ${params.salmon} quant -p 16 -i ${index} -l A -1 ${basepath}_${sample}/sample_02_1_shuffled.fa.gz -2 ${basepath}_${sample}/sample_02_2_shuffled.fa.gz -o sim_quants/${cond}_${sample} --useVBOpt --validateMappings --minScoreFraction 0.95 --rangeFactorizationBins 4 --vbPrior 1e-2 --perTranscriptPrior
 	    """
 }
 
