@@ -62,6 +62,16 @@ void computeSmoothedEffectiveLengths(size_t maxLength,
                                      std::vector<double>& correctionFactors,
                                      DistributionSpace outputSpace);
 
+/**
+ * Return the logCMF from a "snapshot" of the input distribution at the current
+ * point in time.  This provides the ability to quickly recall approximate cumulative
+ * probabilities quickly, versus having to compute them each time.
+ *
+ * \param fld A pointer to the fragment length distribution.
+ */
+std::vector<double> evaluateLogCMF(FragmentLengthDistribution* fld);
+
+
 } // namespace distribution_utils
 
 #endif // __DISTRIBUTION_UTILS__

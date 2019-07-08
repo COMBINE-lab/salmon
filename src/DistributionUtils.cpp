@@ -86,4 +86,22 @@ std::vector<int32_t> samplesFromLogPMF(FragmentLengthDistribution* fld,
   }
   return samples;
 }
+
+
+std::vector<double> evaluateLogCMF(FragmentLengthDistribution* fld) {
+  std::vector<double> logPMFTemp;
+  size_t minVal;
+  size_t maxVal;
+  fld->dumpPMF(logPMFTemp, minVal, maxVal);
+  std::vector<double> logPMF(maxVal + 1, salmon::math::LOG_EPSILON);
+  double sum = salmon::math::LOG_0;
+  for (size_t i = 0; i < minVal; ++i) {
+    sum = salmon::math::logAdd(sum, logPMF[i]);
+  }
+  for (size_t i = minVal; i < maxVal; ++i) {
+    sum  = salmon::math::logAdd(sum, logPMFTemp[i-minVal]);
+  }
+  return fld->cmf(logPMF);
+}
+
 } // namespace distribution_utils

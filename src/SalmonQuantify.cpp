@@ -251,20 +251,7 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
   // we are burned in or this is a single-end library, then the CMF is already
   // cached, so we don't need to worry about doing this work ourselves.
   if (modelSingleFragProb and !singleEndLib and !burnedIn) {
-    // Convert the PMF to non-log scale
-    std::vector<double> logPMFTemp;
-    size_t minVal;
-    size_t maxVal;
-    fragLengthDist.dumpPMF(logPMFTemp, minVal, maxVal);
-    std::vector<double> logPMF(maxVal + 1, salmon::math::LOG_EPSILON);
-    double sum = salmon::math::LOG_0;
-    for (size_t i = 0; i < minVal; ++i) {
-      sum = salmon::math::logAdd(sum, logPMF[i]);
-    }
-    for (size_t i = minVal; i < maxVal; ++i) {
-      sum  = salmon::math::logAdd(sum, logPMFTemp[i-minVal]);
-    }
-    cachedCMF = fragLengthDist.cmf(logPMF);
+    cachedCMF = distribution_utils::evaluateLogCMF(&fragLengthDist);
   }
   // A utility function to get the cached CMF within this mini-batch.  If the
   // FragmentLengthDistribution class has already cached the CMF, use that.  Otherwise,
@@ -374,7 +361,7 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
 
           // if we are modeling fragment probabilities for single-end mappings
           // and this is either a single-end library or an orphan.
-          if (modelSingleFragProb and (singleEndLib or isUnexpectedOrphan(aln, expectedLibraryFormat))) {
+          if (modelSingleFragProb and useFragLengthDist and (singleEndLib or isUnexpectedOrphan(aln, expectedLibraryFormat))) {
             // if this is forward, then the "virtual" mate would be downstream
             // if thsi is rc, then the "virtual" mate would be upstream
             int32_t maxFragLen = 0;
