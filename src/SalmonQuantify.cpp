@@ -212,6 +212,9 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
   bool useAuxParams = ((localNumAssignedFragments + numAssignedFragments) >=
                        salmonOpts.numPreBurninFrags);
 
+  bool singleEndLib = !readLib.isPairedEnd();
+  bool modelSingleFragProb = !salmonOpts.noSingleFragProb;
+
   // If we're auto detecting the library type
   auto* detector = readLib.getDetector();
   bool autoDetect = (detector != nullptr) ? detector->isActive() : false;
@@ -240,6 +243,35 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
   auto isUnexpectedOrphan = [](AlnT& aln, LibraryFormat expectedLibFormat) -> bool {
     return (expectedLibFormat.type == ReadType::PAIRED_END and
             aln.mateStatus != rapmap::utils::MateStatus::PAIRED_END_PAIRED);
+  };
+
+  std::vector<double> cachedCMF;
+  // If we are going to attempt to model single mappings (part of a fragment)
+  // then cache the FLD cumulative distribution for this mini-batch.  If
+  // we are burned in or this is a single-end library, then the CMF is already
+  // cached, so we don't need to worry about doing this work ourselves.
+  if (modelSingleFragProb and !singleEndLib and !burnedIn) {
+    // Convert the PMF to non-log scale
+    std::vector<double> logPMFTemp;
+    size_t minVal;
+    size_t maxVal;
+    fragLengthDist.dumpPMF(logPMFTemp, minVal, maxVal);
+    std::vector<double> logPMF(maxVal + 1, salmon::math::LOG_EPSILON);
+    double sum = salmon::math::LOG_0;
+    for (size_t i = 0; i < minVal; ++i) {
+      sum = salmon::math::logAdd(sum, logPMF[i]);
+    }
+    for (size_t i = minVal; i < maxVal; ++i) {
+      sum  = salmon::math::logAdd(sum, logPMFTemp[i-minVal]);
+    }
+    cachedCMF = fragLengthDist.cmf(logPMF);
+  }
+  // A utility function to get the cached CMF within this mini-batch.  If the
+  // FragmentLengthDistribution class has already cached the CMF, use that.  Otherwise,
+  // use the one we've computed above.
+  auto getCachedCMF = [singleEndLib, &burnedIn, &cachedCMF, &fragLengthDist](size_t len) -> double {
+                        return (singleEndLib or burnedIn) ? fragLengthDist.cmf(len) :
+                          ((len < cachedCMF.size()) ? cachedCMF[len] : cachedCMF.back());
   };
 
   int i{0};
@@ -340,9 +372,33 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
           // The probability of drawing a fragment of this length;
           double logFragProb = LOG_1;
 
-          // If we are expecting a paired-end library, and this is an orphan,
-          // then logFragProb should be small
-          if (isUnexpectedOrphan(aln, expectedLibraryFormat)) {
+          // if we are modeling fragment probabilities for single-end mappings
+          // and this is either a single-end library or an orphan.
+          if (modelSingleFragProb and (singleEndLib or isUnexpectedOrphan(aln, expectedLibraryFormat))) {
+            // if this is forward, then the "virtual" mate would be downstream
+            // if thsi is rc, then the "virtual" mate would be upstream
+            int32_t maxFragLen = 0;
+            int32_t sTxpLen = static_cast<int32_t>(transcript.CompleteLength);
+            if (aln.fwd) {
+              int32_t p1 = (aln.pos < 0) ? 0 : aln.pos;
+              p1 = (p1 > sTxpLen) ? sTxpLen : p1;
+              maxFragLen = (sTxpLen - p1);
+            } else {
+              int32_t p1 = aln.pos + aln.readLen;
+              p1 = (p1 < 0) ? 0 : p1;
+              p1 = (p1 > sTxpLen) ? sTxpLen : p1;
+              maxFragLen = (p1);
+            }
+
+            double refLengthCM =
+              getCachedCMF(static_cast<size_t>(transcript.CompleteLength));
+            bool computeMass = !salmon::math::isLog0(refLengthCM);
+            double maxLenProb = getCachedCMF(maxFragLen);
+            logFragProb = (computeMass) ? (maxLenProb - refLengthCM)
+                                        : salmon::math::LOG_EPSILON;
+          } else if (isUnexpectedOrphan(aln, expectedLibraryFormat)) {
+            // If we are expecting a paired-end library, and this is an orphan,
+            // then logFragProb should be small
             logFragProb = LOG_EPSILON;
           }
 
@@ -1927,6 +1983,7 @@ void processReadLibrary(
     singleParserPtr.reset(new single_parser(rl.unmated(), numThreads,
                                             numParsingThreads, miniBatchSize));
     singleParserPtr->start();
+    fragLengthDist.cacheCMF();
   }
 
   switch (indexType) {

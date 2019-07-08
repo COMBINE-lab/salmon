@@ -52,6 +52,7 @@ namespace defaults {
   constexpr const bool noLengthCorrection{false};
   constexpr const bool noEffectiveLengthCorrection{false};
   constexpr const bool noFragLengthDist{false};
+  constexpr const bool noSingleFragProb{false};
   constexpr const bool noBiasLengthThreshold{false};
   constexpr const uint32_t numBiasSamples{2000000};
   constexpr const uint32_t numBurninFrags{5000000};

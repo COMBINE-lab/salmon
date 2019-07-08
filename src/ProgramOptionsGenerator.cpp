@@ -542,6 +542,12 @@ namespace salmon {
        "from a transcript.  If this flag is passed in, the "
        "fragment length distribution is not taken "
        "into account when computing this probability.")
+      ("noSingleFragProb",
+       po::bool_switch(&(sopt.noSingleFragProb))->default_value(salmon::defaults::noSingleFragProb),
+       "Disables the estimation of an associated fragment length probability for single-end reads or for "
+       "orphaned mappings in paired-end libraries.  The default behavior is to consider the probability of "
+       "all possible fragment lengths associated with the retained mapping.  Enabling this flag (i.e. turning this "
+       "default behavior off) will simply not attempt to estimate a fragment length probability in such cases.")
       ("noFragLengthDist",
        po::bool_switch(&(sopt.noFragLengthDist))->default_value(salmon::defaults::noFragLengthDist),
        "[experimental] : "

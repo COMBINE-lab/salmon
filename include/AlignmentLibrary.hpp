@@ -257,6 +257,12 @@ for (auto& txp : transcripts_) {
   std::string getIndexSeqHash512() const { return ""; }
   std::string getIndexNameHash512() const { return ""; }
 
+  /**
+   * Return true if this read library is for paired-end reads and false
+   * otherwise.
+   */
+  bool isPairedEnd() { return (libFmt_.type == ReadType::PAIRED_END); }
+
   salmon::bam_utils::AlignerDetails getAlignerType() const { return aligner_; }
 
   // TODO: Make same as mapping-based

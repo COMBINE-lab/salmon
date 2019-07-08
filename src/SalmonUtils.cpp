@@ -1888,7 +1888,7 @@ bool processQuantOptions(SalmonOpts& sopt,
       sopt.useVBOpt = false;
     }
   }
-  
+
   {
     try {
       conflicting_options(vm, "perNucleotidePrior", "perTranscriptPrior");

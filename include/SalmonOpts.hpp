@@ -81,7 +81,8 @@ struct SalmonOpts {
   bool noFragLengthDist; // Don't give a fragment assignment a likelihood based
                          // on an emperically observed fragment length
                          // distribution.
-
+  bool noSingleFragProb; // Don't attempt to model frag length for single-end
+                         // (or orphaned) mappings.
   bool noEffectiveLengthCorrection; // Don't take the fragment length
                                     // distribution into account when computing
                                     // the probability that a
