@@ -104,4 +104,63 @@ std::vector<double> evaluateLogCMF(FragmentLengthDistribution* fld) {
   return fld->cmf(logPMF);
 }
 
+
+  LogCMFCache::LogCMFCache(FragmentLengthDistribution* fld,
+                           bool singleEndLib, size_t fragUpdateThresh) :
+    fld_(fld),
+    singleEndLib_(singleEndLib),
+    fragUpdateThresh_(fragUpdateThresh){
+  }
+
+  void LogCMFCache::refresh(size_t processedReads, bool burnedIn) {
+      // The number of fragments we've seen since last time we re-cached the CMF
+      size_t numNewFragments = static_cast<size_t>(processedReads - prevProcessedReads_);
+      // We need to re-cache the CMF if this is our first pass through or if we've seen
+      // at least fragUpdateThresh new fragments
+      bool needFreshCMF = ((numNewFragments >= fragUpdateThresh_) or (prevProcessedReads_ == 0));
+      // If we have a single-end library or we are burned in, then we don't need to
+      // re-cache the CMF any more
+      bool updateCachedCMF = (!singleEndLib_ and !burnedIn and needFreshCMF);
+
+      // If we are going to attempt to model single mappings (part of a fragment)
+      // then cache the FLD cumulative distribution for this mini-batch.  If
+      // we are burned in or this is a single-end library, then the CMF is already
+      // cached, so we don't need to worry about doing this work ourselves.
+      if (updateCachedCMF) {
+        cachedCMF_ = distribution_utils::evaluateLogCMF(fld_);
+      }
+
+      if ((numNewFragments >= fragUpdateThresh_) or (prevProcessedReads_ == 0)) {
+        prevProcessedReads_ = processedReads;
+      }
+  }
+
+  double LogCMFCache::getAmbigFragLengthProb(bool fwd, int32_t pos, int32_t rlen, int32_t tlen, bool burnedIn) const {
+    // if this is forward, then the "virtual" mate would be downstream
+    // if thsi is rc, then the "virtual" mate would be upstream
+    int32_t maxFragLen = 0;
+    int32_t sTxpLen = static_cast<int32_t>(tlen);
+    if (fwd) {
+      int32_t p1 = (pos < 0) ? 0 : pos;
+      p1 = (p1 > sTxpLen) ? sTxpLen : p1;
+      maxFragLen = (sTxpLen - p1);
+    } else {
+      int32_t p1 = pos + rlen;
+      p1 = (p1 < 0) ? 0 : p1;
+      p1 = (p1 > sTxpLen) ? sTxpLen : p1;
+      maxFragLen = (p1);
+    }
+
+    bool useFLD = (singleEndLib_ or burnedIn);
+    double refLengthCM = cmfValue_(static_cast<size_t>(tlen), useFLD);
+    bool computeMass = !salmon::math::isLog0(refLengthCM);
+    double maxLenProb = cmfValue_(maxFragLen, useFLD);
+    return  (computeMass) ? (maxLenProb - refLengthCM) : salmon::math::LOG_EPSILON;
+  }
+
+  inline double LogCMFCache::cmfValue_(size_t len, bool useFLD) const {
+    return (useFLD) ? fld_->cmf(len) :
+      (len < cachedCMF_.size()) ? cachedCMF_[len] : cachedCMF_.back();
+  }
+
 } // namespace distribution_utils
