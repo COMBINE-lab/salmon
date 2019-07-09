@@ -793,7 +793,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
       };
 
       uint32_t zerod_cells {0};
-      size_t numFlags = (numGenes/8)+1;
+      size_t numFlags = std::ceil(numGenes/8);
       std::vector<uint8_t> alphasFlag (numFlags, 0);
       size_t flagSize = sizeof(decltype(alphasFlag)::value_type);
 
@@ -843,6 +843,10 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
 
         float readCount {0.0};
         readCount += std::accumulate(alphasSparse.begin(), alphasSparse.end(), 0.0);
+        if (readCount > 1000000) {
+          aopt.jointLog->warn("A cell has more 1M count, Possible error");
+          aopt.jointLog->flush();
+        }
 
         for(size_t i=0; i<numExpGenes; i++) {
           qFile << std::fixed
