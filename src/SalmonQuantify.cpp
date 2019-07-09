@@ -167,7 +167,8 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
                        */
                       std::atomic<uint64_t>& numAssignedFragments,
                       std::default_random_engine& randEng, bool initialRound,
-                      std::atomic<bool>& burnedIn, double& maxZeroFrac) {
+                      std::atomic<bool>& burnedIn, double& maxZeroFrac,
+                      distribution_utils::LogCMFCache& logCMFCache) {
 
   using salmon::math::LOG_0;
   using salmon::math::LOG_1;
@@ -245,21 +246,9 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
             aln.mateStatus != rapmap::utils::MateStatus::PAIRED_END_PAIRED);
   };
 
-  std::vector<double> cachedCMF;
-  // If we are going to attempt to model single mappings (part of a fragment)
-  // then cache the FLD cumulative distribution for this mini-batch.  If
-  // we are burned in or this is a single-end library, then the CMF is already
-  // cached, so we don't need to worry about doing this work ourselves.
-  if (modelSingleFragProb and !singleEndLib and !burnedIn) {
-    cachedCMF = distribution_utils::evaluateLogCMF(&fragLengthDist);
+  if (modelSingleFragProb) {
+    logCMFCache.refresh(numAssignedFragments.load(), burnedIn.load());
   }
-  // A utility function to get the cached CMF within this mini-batch.  If the
-  // FragmentLengthDistribution class has already cached the CMF, use that.  Otherwise,
-  // use the one we've computed above.
-  auto getCachedCMF = [singleEndLib, &burnedIn, &cachedCMF, &fragLengthDist](size_t len) -> double {
-                        return (singleEndLib or burnedIn) ? fragLengthDist.cmf(len) :
-                          ((len < cachedCMF.size()) ? cachedCMF[len] : cachedCMF.back());
-  };
 
   int i{0};
   {
@@ -362,27 +351,9 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
           // if we are modeling fragment probabilities for single-end mappings
           // and this is either a single-end library or an orphan.
           if (modelSingleFragProb and useFragLengthDist and (singleEndLib or isUnexpectedOrphan(aln, expectedLibraryFormat))) {
-            // if this is forward, then the "virtual" mate would be downstream
-            // if thsi is rc, then the "virtual" mate would be upstream
-            int32_t maxFragLen = 0;
-            int32_t sTxpLen = static_cast<int32_t>(transcript.CompleteLength);
-            if (aln.fwd) {
-              int32_t p1 = (aln.pos < 0) ? 0 : aln.pos;
-              p1 = (p1 > sTxpLen) ? sTxpLen : p1;
-              maxFragLen = (sTxpLen - p1);
-            } else {
-              int32_t p1 = aln.pos + aln.readLen;
-              p1 = (p1 < 0) ? 0 : p1;
-              p1 = (p1 > sTxpLen) ? sTxpLen : p1;
-              maxFragLen = (p1);
-            }
-
-            double refLengthCM =
-              getCachedCMF(static_cast<size_t>(transcript.CompleteLength));
-            bool computeMass = !salmon::math::isLog0(refLengthCM);
-            double maxLenProb = getCachedCMF(maxFragLen);
-            logFragProb = (computeMass) ? (maxLenProb - refLengthCM)
-                                        : salmon::math::LOG_EPSILON;
+            // get the probability for a fragment of "ambiguous" length --- i.e. only the maximum length is bounded but
+            // the fragment length is not completely characterized.
+            logFragProb = logCMFCache.getAmbigFragLengthProb(aln.fwd, aln.pos, aln.readLen, transcript.CompleteLength, burnedIn.load());
           } else if (isUnexpectedOrphan(aln, expectedLibraryFormat)) {
             // If we are expecting a paired-end library, and this is an orphan,
             // then logFragProb should be small
@@ -792,6 +763,8 @@ void processReadsQuasi(
   uint64_t hitListCount{0};
   salmon::utils::ShortFragStats shortFragStats;
   double maxZeroFrac{0.0};
+  // false below because in this function, we have a paired-end library
+  distribution_utils::LogCMFCache logCMFCache(&fragLengthDist, false);
 
   // Write unmapped reads
   fmt::MemoryWriter unmappedNames;
@@ -1427,7 +1400,7 @@ void processReadsQuasi(
          * NOTE : test new el model in future
          * obsEffLengths,
          */
-        numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac);
+        numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac, logCMFCache);
   }
 
   if (maxZeroFrac > 0.0) {
@@ -1485,6 +1458,8 @@ void processReadsQuasi(
   salmon::utils::ShortFragStats shortFragStats;
   bool tooShort{false};
   double maxZeroFrac{0.0};
+  // true below because in this function, we have a single-end library
+  distribution_utils::LogCMFCache logCMFCache(&fragLengthDist, true);
 
   // Write unmapped reads
   fmt::MemoryWriter unmappedNames;
@@ -1847,7 +1822,7 @@ void processReadsQuasi(
          * NOTE : test new el model in future
          * obsEffLengths,
          **/
-        numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac);
+        numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac, logCMFCache);
   }
   readExp.updateShortFrags(shortFragStats);
 

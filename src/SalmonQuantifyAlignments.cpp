@@ -113,6 +113,7 @@ inline bool tryToGetWork(MiniBatchQueue<AlignmentGroup<FragT*>>& workQueue,
   return foundWork;
 }
 
+
 template <typename FragT>
 void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
                       ForgettingMassCalculator& fmCalc,
@@ -201,7 +202,8 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
   bool modelSingleFragProb = !salmonOpts.noSingleFragProb;
   size_t prevProcessedReads{0};
   size_t fragUpdateThresh{100000};
-  std::vector<double> cachedCMF;
+
+  distribution_utils::LogCMFCache logCMFCache(&fragLengthDist, singleEndLib);
 
   std::chrono::microseconds sleepTime(1);
   MiniBatchInfo<AlignmentGroup<FragT*>>* miniBatch = nullptr;
@@ -283,36 +285,13 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
       using HitIDVector = std::vector<size_t>;
       using HitProbVector = std::vector<double>;
 
-      /** Related to re-caching the logCMF of the fragment length distribution **/
-
-      // The number of fragments we've seen since last time we re-cached the CMF
-      size_t numNewFragments = static_cast<size_t>(processedReads - prevProcessedReads);
-      // We need to re-cache the CMF if this is our first pass through or if we've seen
-      // at least fragUpdateThresh new fragments
-      bool needFreshCMF = ((numNewFragments >= fragUpdateThresh) or (prevProcessedReads == 0));
-      // If we have a single-end library or we are burned in, then we don't need to
-      // re-cache the CMF any more
-      bool updateCachedCMF = (modelSingleFragProb and !singleEndLib and !burnedIn and needFreshCMF);
-
       // If we are going to attempt to model single mappings (part of a fragment)
       // then cache the FLD cumulative distribution for this mini-batch.  If
       // we are burned in or this is a single-end library, then the CMF is already
       // cached, so we don't need to worry about doing this work ourselves.
-      if (modelSingleFragProb and !singleEndLib and !burnedIn and updateCachedCMF) {
-        cachedCMF = distribution_utils::evaluateLogCMF(&fragLengthDist);
+      if (modelSingleFragProb) {
+        logCMFCache.refresh(processedReads.load(), burnedIn.load());
       }
-      // A utility function to get the cached CMF within this mini-batch.  If the
-      // FragmentLengthDistribution class has already cached the CMF, use that.  Otherwise,
-      // use the one we've computed above.
-      auto getCachedCMF = [singleEndLib, &burnedIn, &cachedCMF, &fragLengthDist](size_t len) -> double {
-        return (singleEndLib or burnedIn) ? fragLengthDist.cmf(len) :
-        ((len < cachedCMF.size()) ? cachedCMF[len] : cachedCMF.back());
-      };
-      if ((numNewFragments >= fragUpdateThresh) or (prevProcessedReads == 0)) {
-        prevProcessedReads = processedReads;
-      }
-
-      /** End of logCMF re-caching logic **/
 
       {
         // Iterate over each group of alignments (a group consists of all
@@ -358,27 +337,7 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
             // if we are modeling fragment probabilities for single-end mappings
             // and this is either a single-end library or an orphan.
             if (modelSingleFragProb and useFragLengthDist and (singleEndLib or isUnexpectedOrphan(aln, expectedLibraryFormat))) {
-              // if this is forward, then the "virtual" mate would be downstream
-              // if thsi is rc, then the "virtual" mate would be upstream
-              int32_t maxFragLen = 0;
-              int32_t sTxpLen = static_cast<int32_t>(transcript.CompleteLength);
-              if (aln->fwd()) {
-                int32_t p1 = (aln->pos() < 0) ? 0 : aln->pos();
-                p1 = (p1 > sTxpLen) ? sTxpLen : p1;
-                maxFragLen = (sTxpLen - p1);
-              } else {
-                int32_t p1 = aln->pos() + aln->readLen();
-                p1 = (p1 < 0) ? 0 : p1;
-                p1 = (p1 > sTxpLen) ? sTxpLen : p1;
-                maxFragLen = (p1);
-              }
-
-              double refLengthCM =
-                getCachedCMF(static_cast<size_t>(transcript.CompleteLength));
-              bool computeMass = !salmon::math::isLog0(refLengthCM);
-              double maxLenProb = getCachedCMF(maxFragLen);
-              logFragProb = (computeMass) ? (maxLenProb - refLengthCM)
-                : salmon::math::LOG_EPSILON;
+              logFragProb = logCMFCache.getAmbigFragLengthProb(aln->fwd(), aln->pos(), aln->readLen(), transcript.CompleteLength, burnedIn.load());
             } else if (isUnexpectedOrphan(aln, expectedLibraryFormat)) {
               // If we are expecting a paired-end library, and this is an orphan,
               // then logFragProb should be small
