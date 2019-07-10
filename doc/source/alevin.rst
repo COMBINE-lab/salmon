@@ -130,7 +130,7 @@ Alevin internally uses a potentially big data-structure to concisely maintain al
 ``--dumpFeatures``
 """"""""""""
 
-If activated, alevin dumps all the features used by the CB classification and their counts at each cell level. Generally, this is used for the purposes of debugging.
+If activated, alevin dumps all the features used by the CB classification and their counts at each cell level. It's generally used in pair with other command line flags.
 
 """"""""""""
 ``--dumpMtx``
@@ -152,6 +152,8 @@ Just like `forceCells` flag, it's yet another way of skipping the knee calculati
 ``--numCellBootstraps``
 """"""""""""""""""""""
 Alevin provides an estimate of the inferential uncertainty in the estimation of per cell level gene count matrix by performing bootstrapping of the reads in per-cell level equivalence classes. This command line flag informs Alevin to perform certain number of bootstrap and generate the mean and variance of the count matrix. This option generates three additional file, namely, `quants_mean_mat.gz`, `quants_var_mat.gz` and `quants_boot_rows.txt`. The format of the files stay the same as `quants_mat.gz` while the row order is saved in `quants_boot_rows.txt` and the column order is stays the same as in file `quants_mat_cols.txt`.
+
+.. note:: Alevin can also dump the full bootstrap cell-gene count matrix of a experiment. To generate inferential replicates of the experiemnt, `--numCellBootstraps` has to be paired with `--dumpFeatures` which generates a file with name `quants_boot_mat.gz`. The output format is the same as `quants_mat.gz` and we fit the 3D cube of the cell-inference-gene counts in 2D as follows: if an experiment has C cells, G genes and N inferential replicates; alevin output file `quants_boot_mat.gz` would contain C*N rows and G columns while, starting from top, the first N rows would represent 1 cell and it's inferential replicate and similarly for the next cells onwards. For more information on using inferential replicates for differential expression analysis, check out `tximport<https://github.com/mikelove/tximport>_` and our [#swish] paper.
 
 """"""""""""""""""""""
 ``--debug``
@@ -192,6 +194,12 @@ Along with the Cell-v-Gene count matrix, alevin dumps a 3-fold categorization of
 
 Alevin can also dump the count-matrix in a human readable -- matrix-market-exchange (_mtx_) format, if given flag `--dumpMtx` which generates a new output file called `quants_mat.mtx`.
 
+Tutorial & Parsers
+------------------
+
+We have compiled a step-by-step resource to help and get started in using aleivn. We have tutorials on how to get input, run and generate output using alevin's framework which can be found `here <https://combine-lab.github.io/alevin-tutorial/#blog>`_.
+The tutorial also covers the topic of integrating alevin with downstream analysis tools like Seurat and Monocle.
+
 Misc
 ----
 
@@ -206,9 +214,27 @@ suggestions --- please contact us (`asrivastava@cs.stonybrook.edu` and/or
 
 .. The paper describing this method is published in BioArxiv XXXX. (update this when it appears)
 
+Citation
+----
+@article{srivastava2019alevin,
+  title={Alevin efficiently estimates accurate gene abundances from dscRNA-seq data},
+  author={Srivastava, Avi and Malik, Laraib and Smith, Tom and Sudbery, Ian and Patro, Rob},
+  journal={Genome biology},
+  volume={20},
+  number={1},
+  pages={65},
+  year={2019},
+  publisher={BioMed Central}
+}
+
 References
 ----------
 
+.. [#swish] Zhu, Anqi, et al. "Nonparametric expression analysis using inferential replicate counts." BioRxiv (2019): 561084.
+
+.. [#monocle] Qiu, Xiaojie, et al. "Reversed graph embedding resolves complex single-cell trajectories." Nature methods 14.10 (2017): 979.
+
+.. [#seurat] Butler, Andrew, et al. "Integrating single-cell transcriptomic data across different conditions, technologies, and species." Nature biotechnology 36.5 (2018): 411.
 
 .. [#dropseq] Macosko, Evan Z., et al. "Highly parallel genome-wide expression profiling of individual cells using nanoliter droplets." Cell 161.5 (2015): 1202-1214.
    
