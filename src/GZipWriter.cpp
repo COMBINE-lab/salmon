@@ -2,6 +2,7 @@
 #include <fstream>
 #include <numeric>
 
+#include "parallel_hashmap/phmap.h"
 #include "cereal/archives/json.hpp"
 
 #include "AlignmentLibrary.hpp"
@@ -12,6 +13,7 @@
 #include "ReadPair.hpp"
 #include "SalmonOpts.hpp"
 #include "UnpairedRead.hpp"
+#include "TranscriptGroup.hpp"
 #include "SingleCellProtocols.hpp"
 
 GZipWriter::GZipWriter(const boost::filesystem::path path,
@@ -134,42 +136,90 @@ bool GZipWriter::writeEquivCounts(const SalmonOpts& opts, ExpT& experiment) {
   std::ofstream equivFile(eqFilePath.string());
 
   auto& transcripts = experiment.transcripts();
-  auto& eqVec =
-      experiment.equivalenceClassBuilder().eqVec();
+  auto& eqBuilder = experiment.equivalenceClassBuilder();
+  auto& eqVec = eqBuilder.eqVec();
+  size_t numEqClasses = eqVec.size();
   bool dumpRichWeights = opts.dumpEqWeights;
+
+  // we need this scope, but will fill it in only if we need to
+  phmap::flat_hash_map<TranscriptGroup, uint64_t, TranscriptGroupHasher> collapsedMap;
+
+  if (!dumpRichWeights) {
+    // if we are using range-factorization, but don't want weights,
+    // collapse the equivalence classes into naive ones.
+    logger_->info("Collapsing factorization information into simplified equivalence classes.");
+
+    // if we are using range-factorization, but don't want weights,
+    // collapse the equivalence classes into naive ones.
+    collapsedMap.reserve(eqVec.size());
+    for (size_t eqIdx = 0; eqIdx < eqVec.size(); ++eqIdx) {
+      auto& eq = eqVec[eqIdx];
+      const TranscriptGroup& tgroup = eq.first;
+      const std::vector<uint32_t>& txps = tgroup.txps;
+      uint64_t count = eq.second.count;
+      const uint32_t groupSize = eqBuilder.getNumTranscriptsForClass(eqIdx);
+
+      // make a key from the IDs, and copy over to
+      std::vector<uint32_t> txpIDs(groupSize);
+      auto bit = txps.begin();
+      auto eit = txps.begin()+groupSize;
+      std::copy(bit, eit, txpIDs.begin());
+
+      TranscriptGroup key(txpIDs);
+      collapsedMap[key] += count;
+    }
+
+    numEqClasses = collapsedMap.size();
+    logger_->info("done.");
+  }
 
   // Number of transcripts
   equivFile << transcripts.size() << '\n';
 
   // Number of equivalence classes
-  equivFile << eqVec.size() << '\n';
+  equivFile << numEqClasses << '\n';
 
+  // Transcript names
   for (auto& t : transcripts) {
     equivFile << t.RefName << '\n';
   }
 
-  for (auto& eq : eqVec) {
-    uint64_t count = eq.second.count;
-    // for each transcript in this class
-    const TranscriptGroup& tgroup = eq.first;
-    const std::vector<uint32_t>& txps = tgroup.txps;
-    // group size
-    //uint32_t groupSize = eq.second.weights.size();
-    uint32_t groupSize = tgroup.txps.size();
+  // If we are dumping eq weights, then just go over what
+  // we have
+  if (dumpRichWeights) {
 
-    equivFile << groupSize << '\t';
-    // each group member
-    for (uint32_t i = 0; i < groupSize; i++) {
-      equivFile << txps[i] << '\t';
-    }
-    if (dumpRichWeights) {
+    for (size_t eqIdx = 0; eqIdx < eqVec.size(); ++eqIdx) {
+      auto& eq = eqVec[eqIdx];
+      uint64_t count = eq.second.count;
+      const TranscriptGroup& tgroup = eq.first;
+      const std::vector<uint32_t>& txps = tgroup.txps;
       const auto& auxs = eq.second.combinedWeights;
-      for (auto aux : auxs) {
-        equivFile << aux << '\t';
+      const uint32_t groupSize = eqBuilder.getNumTranscriptsForClass(eqIdx);
+
+      equivFile << groupSize << '\t';
+      for (uint32_t i = 0; i < groupSize; ++i) {
+        equivFile << txps[i] << '\t';
       }
+      for (uint32_t i = 0; i < groupSize; ++i) {
+        equivFile << auxs[i] << '\t';
+      }
+      equivFile << count << '\n';
     }
-    // count for this class
-    equivFile << count << '\n';
+  } else {
+    // Otherwise, go over the collapsed map with the simplified
+    // classes.
+
+    // dump the size, txp ids and count
+    for (auto&& kv : collapsedMap) {
+      auto& txps = kv.first.txps;
+      auto& count = kv.second;
+      const uint32_t groupSize = txps.size();
+      equivFile << groupSize << '\t';
+      for (uint32_t i = 0; i < groupSize; ++i) {
+        equivFile << txps[i] << '\t';
+      }
+      equivFile << count << '\n';
+    }
   }
 
   equivFile.close();
@@ -356,7 +406,7 @@ bool GZipWriter::writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
     // with weights.  In which case it contains the string "scalar_weights".
     std::vector<std::string> props;
 
-    bool isRangeFactorizationOn = opts.rangeFactorizationBins;
+    bool isRangeFactorizationOn = (opts.rangeFactorizationBins > 0);
     bool dumpRichWeights = opts.dumpEqWeights;
     if(isRangeFactorizationOn){
       props.push_back("range_factorized") ;

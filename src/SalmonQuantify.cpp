@@ -2550,6 +2550,62 @@ transcript abundance from RNA-seq reads
                      e.what());
         }
       }
+    } else if (sopt.dumpEqWeights) { // sopt.skipQuant == true
+      jointLog->info("Finalizing combined weights for equivalence classes.");
+      // if we are skipping the quantification, and we are dumping equivalence class weights,
+      // then fill in the combinedWeights of the equivalence classes so that `--dumpEqWeights` makes sense.
+      auto& eqVec =
+        experiment.equivalenceClassBuilder().eqVec();
+      bool noRichEq = sopt.noRichEqClasses;
+      bool useEffectiveLengths = !sopt.noEffectiveLengthCorrection;
+      std::vector<Transcript>& transcripts = experiment.transcripts();
+      Eigen::VectorXd effLens(transcripts.size());
+
+      for (size_t i = 0; i < transcripts.size(); ++i) {
+        auto& txp = transcripts[i];
+        effLens(i) = useEffectiveLengths
+          ? std::exp(txp.getCachedLogEffectiveLength())
+          : txp.RefLength;
+      }
+
+      for (size_t eqID = 0; eqID < eqVec.size(); ++eqID){
+        // The vector entry
+        auto& kv = eqVec[eqID];
+        // The label of the equivalence class
+        const TranscriptGroup& k = kv.first;
+        // The size of the label
+        size_t classSize = kv.second.weights.size(); // k.txps.size();
+        // The weights of the label
+        auto& v = kv.second;
+
+        // Iterate over each weight and set it
+        double wsum{0.0};
+
+        for (size_t i = 0; i < classSize; ++i) {
+          auto tid = k.txps[i];
+          double el = effLens(tid);
+          if (el <= 1.0) {
+            el = 1.0;
+          }
+          if (noRichEq) {
+            // Keep length factor separate for the time being
+            v.weights[i] = 1.0;
+          }
+          // meaningful values.
+          auto probStartPos = 1.0 / el;
+
+          // combined weight
+          double wt = sopt.eqClassMode ? v.weights[i] : v.count * v.weights[i] * probStartPos;
+          v.combinedWeights.push_back(wt);
+          wsum += wt;
+        }
+
+        double wnorm = 1.0 / wsum;
+        for (size_t i = 0; i < classSize; ++i) {
+          v.combinedWeights[i] = v.combinedWeights[i] * wnorm;
+        }
+      }
+      jointLog->info("done.");
     }
 
     // If we are dumping the equivalence classes, then

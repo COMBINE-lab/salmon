@@ -764,7 +764,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
     txp.EffectiveLength = effLens(i);
 
     double uniqueCount = static_cast<double>(txp.uniqueCount() + 0.5);
-    auto wi = uniqueCount * 1e-3 * effLens(i);
+    auto wi = (sopt.initUniform) ? 100.0 : (uniqueCount * 1e-3 * effLens(i));
     alphasPrime[i] = wi;
     ++numActive;
     totalLen += effLens(i);
@@ -896,7 +896,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
       needBias = false;
 
       if ( sopt.eqClassMode ) {
-        jointLog->error("Eqclass Mode should not be perform bias correction");
+        jointLog->error("Eqclass Mode should not be performing bias correction");
         jointLog->flush();
         exit(1);
       }
