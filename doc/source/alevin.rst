@@ -153,7 +153,7 @@ Just like `forceCells` flag, it's yet another way of skipping the knee calculati
 """"""""""""""""""""""
 Alevin provides an estimate of the inferential uncertainty in the estimation of per cell level gene count matrix by performing bootstrapping of the reads in per-cell level equivalence classes. This command line flag informs Alevin to perform certain number of bootstrap and generate the mean and variance of the count matrix. This option generates three additional file, namely, `quants_mean_mat.gz`, `quants_var_mat.gz` and `quants_boot_rows.txt`. The format of the files stay the same as `quants_mat.gz` while the row order is saved in `quants_boot_rows.txt` and the column order is stays the same as in file `quants_mat_cols.txt`.
 
-.. note:: Alevin can also dump the full bootstrap cell-gene count matrix of a experiment. To generate inferential replicates of the experiemnt, `--numCellBootstraps` has to be paired with `--dumpFeatures` which generates a file with name `quants_boot_mat.gz`. The output format is the same as `quants_mat.gz` and we fit the 3D cube of the cell-inference-gene counts in 2D as follows: if an experiment has C cells, G genes and N inferential replicates; alevin output file `quants_boot_mat.gz` would contain C*N rows and G columns while, starting from top, the first N rows would represent 1 cell and it's inferential replicate and similarly for the next cells onwards. For more information on using inferential replicates for differential expression analysis, check out `tximport<https://github.com/mikelove/tximport>_` and our [#swish] paper.
+.. note:: Alevin can also dump the full bootstrap cell-gene count matrix of a experiment. To generate inferential replicates of the experiemnt, `--numCellBootstraps` has to be paired with `--dumpFeatures` which generates a file with name `quants_boot_mat.gz`. The output format is the same as `quants_mat.gz` and we fit the 3D cube of the cell-inference-gene counts in 2D as follows: if an experiment has C cells, G genes and N inferential replicates; alevin output file `quants_boot_mat.gz` would contain C*N rows and G columns while, starting from top, the first N rows would represent 1 cell and it's inferential replicate and similarly for the next cells onwards. For more information on importing and using inferential replicates for single-cell data in generating improved differential expression analysis, check out `tximport<https://github.com/mikelove/tximport>`_ and our `Swish <https://www.biorxiv.org/content/10.1101/561084v2>`_ paper.
 
 """"""""""""""""""""""
 ``--debug``
@@ -194,11 +194,16 @@ Along with the Cell-v-Gene count matrix, alevin dumps a 3-fold categorization of
 
 Alevin can also dump the count-matrix in a human readable -- matrix-market-exchange (_mtx_) format, if given flag `--dumpMtx` which generates a new output file called `quants_mat.mtx`.
 
+Quality Check
+-------------
+
+Alevin generated gene-count matrix can be visualized for various quality checks using `alevinQC <https://csoneson.github.io/alevinQC/>`_ , a shiny based R package and it is actively supported by `Charlotte Soneson<https://csoneson.github.io/>`_.
+
 Tutorial & Parsers
 ------------------
 
-We have compiled a step-by-step resource to help and get started in using aleivn. We have tutorials on how to get input, run and generate output using alevin's framework which can be found `here <https://combine-lab.github.io/alevin-tutorial/#blog>`_.
-The tutorial also covers the topic of integrating alevin with downstream analysis tools like Seurat and Monocle.
+We have compiled a step-by-step resource to help get started with aleivn. We have tutorials on how to get input, run and generate output using alevin's framework which can be found here at `Alevin Tutorials<https://combine-lab.github.io/alevin-tutorial/#blog>`_.
+The tutorial also covers the topic of integrating alevin with downstream analysis tools like Seurat and Monocle. If you are interested in parsing various output binary formats like `quants_mat.gz`, `quants_tier_mat.gz`, `cell_umigraph.gz` etc. of alevin in python, checkout our companion repo for `python parsing <https://github.com/k3yavi/vpolo/blob/master/vpolo/alevin/parser.py>`_. This repo is also available on pip and can be installed through `pip install vpolo`. We cover how to use this library on our alevin-tutorial website too.
 
 Misc
 ----
