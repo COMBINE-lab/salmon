@@ -10,6 +10,8 @@
 #include <memory> // for shared_ptr
 #include <ostream>
 
+#include "SalmonDefaults.hpp"
+
 enum class SalmonQuantMode { MAP = 1, ALIGN = 2 };
 
 /**
@@ -39,7 +41,7 @@ struct SalmonOpts {
   SalmonQuantMode quantMode; // How quantification is done
 
   bool alevinMode{false}; // are we running in alevin mode
-  bool eqClassMode{false}; // are we running in eqclass mode
+  bool eqClassMode{salmon::defaults::eqClassMode}; // are we running in eqclass mode
 
   bool alternativeInitMode; // Weigh unique reads more heavily when initialzing
                             // the optimization.

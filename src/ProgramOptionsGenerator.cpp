@@ -470,13 +470,16 @@ namespace salmon {
        "Skip performing the actual transcript quantification (including any Gibbs sampling or bootstrapping)."
        )
       ("dumpEq", po::bool_switch(&(sopt.dumpEq))->default_value(salmon::defaults::dumpEq),
-       "Dump the equivalence class counts "
-       "that were computed during quasi-mapping")
+       "Dump the simple equivalence class counts "
+       "that were computed during mapping or alignment.")
       ("dumpEqWeights,d",
        po::bool_switch(&(sopt.dumpEqWeights))->default_value(salmon::defaults::dumpEqWeights),
-       "Includes \"rich\" equivlance class weights in the output when "
-       "equivalence "
-       "class information is being dumped to file.")
+       "Dump conditional probabilities associated with transcripts when "
+       "equivalence class information is being dumped to file. Note, this will "
+       "dump the factorization that is actually used by salmon's offline phase "
+       "for inference.  If you are using range-factorized equivalence classes (the default) "
+       "then the same transcript set may appear multiple times with different associated "
+       "conditional probabilities.")
       ("minAssignedFrags",
        po::value<std::uint64_t>(&(sopt.minRequiredFrags))->default_value(salmon::defaults::minAssignedFrags),
        "The minimum number of fragments that must be assigned to the "
@@ -601,10 +604,11 @@ namespace salmon {
        "the conditional probabilities with which fragments are generated "
        "from different transcripts.  This is a more "
        "fine-grained factorization than the normal rich equivalence "
-       "classes.  The default value (0) corresponds to "
-       "the standard rich equivalence classes, and larger values imply a "
-       "more fine-grained factorization.  If range factorization "
-       "is enabled, a common value to select for this parameter is 4.")
+       "classes.  The default value (4) corresponds to "
+       "the default used in Zakeri et al. 2017 (doi: 10.1093/bioinformatics/btx262), "
+       "and larger values imply a more fine-grained factorization.  If range factorization "
+       "is enabled, a common value to select for this parameter is 4. A value of "
+       "0 signifies the use of basic rich equivalence classes.")
       ("numGibbsSamples",
        po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(salmon::defaults::numGibbsSamples),
        "Number of Gibbs sampling rounds to "

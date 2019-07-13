@@ -26,6 +26,7 @@ namespace defaults {
   constexpr const int16_t gapOpenPenalty{4};
   constexpr const int16_t gapExtendPenalty{2};
   constexpr const int32_t dpBandwidth{15};
+  constexpr const bool eqClassMode{false};
   constexpr const bool hardFilter{false};
   constexpr const bool mimicStrictBT2{false};
   constexpr const bool mimicBT2{false};
@@ -60,7 +61,7 @@ namespace defaults {
   constexpr const bool useEM{false};
   constexpr const bool useVBOpt{true};
   constexpr const uint32_t sigDigits{3};
-  constexpr const uint32_t rangeFactorizationBins{0};
+  constexpr const uint32_t rangeFactorizationBins{4};
   constexpr const uint32_t numGibbsSamples{0};
   constexpr const bool noGammaDraw{false};
   constexpr const bool bootstrapReproject{false};
