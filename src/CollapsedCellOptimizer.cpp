@@ -793,7 +793,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
       };
 
       uint32_t zerod_cells {0};
-      size_t numFlags = std::ceil(numGenes/8);
+      size_t numFlags = std::ceil(numGenes/8.0);
       std::vector<uint8_t> alphasFlag (numFlags, 0);
       size_t flagSize = sizeof(decltype(alphasFlag)::value_type);
 

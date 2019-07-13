@@ -879,8 +879,8 @@ bool GZipWriter::writeSparseBootstraps(std::string& bcName,
 
   std::vector<uint8_t> meanFlag, varFlag;
   std::vector<std::vector<uint8_t>> bootFlag;
-  meanFlag.reserve(static_cast<size_t>(std::ceil(num/8)));
-  varFlag.reserve(static_cast<size_t>(std::ceil(num/8)));
+  meanFlag.reserve(static_cast<size_t>(std::ceil(num/8.0)));
+  varFlag.reserve(static_cast<size_t>(std::ceil(num/8.0)));
   if (useAllBootstraps) { bootFlag.reserve(num); }
 
   size_t elSize = sizeof(decltype(meanSparse)::value_type);
@@ -1022,12 +1022,12 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
   std::vector<float> alphasSparse;
   alphasSparse.reserve(num/2);
   std::vector<uint8_t> alphasFlag;
-  alphasFlag.reserve(static_cast<size_t>(std::ceil(num/8)));
+  alphasFlag.reserve(static_cast<size_t>(std::ceil(num/8.0)));
 
   std::vector<uint8_t> tiersSparse;
   tiersSparse.reserve(num/2);
   std::vector<uint8_t> tiersFlag;
-  tiersFlag.reserve(static_cast<size_t>(std::ceil(num/8)));
+  tiersFlag.reserve(static_cast<size_t>(std::ceil(num/8.0)));
 
   size_t elSize = sizeof(decltype(alphasSparse)::value_type);
   size_t flagSize = sizeof(decltype(alphasFlag)::value_type);
