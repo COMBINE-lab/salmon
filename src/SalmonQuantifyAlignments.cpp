@@ -1719,6 +1719,12 @@ transcript abundance from RNA-seq reads
           jointLog->info(errfmt.str());
           jointLog->flush();
 
+          if ( tefflens.size() == 0 ) {
+            tefflens.resize(tnames.size(), 100);
+            jointLog->warn("No effective lens found in the eqclass file;"
+                           "Ignore this warning if using uniform prior");
+          }
+
           if ( /*tefflens.size() != 0 and*/ (tefflens.size() != tnames.size()) ){
             std::stringstream errfmt;
             errfmt << "Number of effective lens: " << tefflens.size()
