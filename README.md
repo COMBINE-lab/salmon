@@ -9,7 +9,7 @@
 
 ### Pre-computed decoy transcriptomes 
 
-Below, you can find download some pre-processed transcriptomes for common species (if you have a particular species or a particular annotation request, let us know).  You can easily build your own decoy-enhanced transcriptome using the the `genereateDecoyTranscriptome.sh` script from the [SalmonTools](https://github.com/COMBINE-lab/SalmonTools) repository.  However, we are providing these for convenience.  [Here](http://bit.ly/30yn3FJ), you can simply download the relevant file according to the species and unzip the archive with `tar xzvf`.  Each decompressed directory contains a `gentrome.fa` file and `decoys.txt` file that can be provided to `salmon` as:
+[Here](http://bit.ly/30yn3FJ), you can find download some pre-processed transcriptomes for common species (if you have a particular species or a particular annotation request, let us know).  You can easily build your own decoy-enhanced transcriptome using the the `genereateDecoyTranscriptome.sh` script from the [SalmonTools](https://github.com/COMBINE-lab/SalmonTools) repository.  However, we are providing these for convenience. You can simply download the relevant file according to the species and unzip the archive with `tar xzvf`.  Each decompressed directory contains a `gentrome.fa` file and `decoys.txt` file that can be provided to `salmon` as:
 
 ```
 $ salmon index -t gentrome.fa -d decoys.txt -i combined_index
