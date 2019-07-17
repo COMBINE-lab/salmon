@@ -256,6 +256,8 @@ for (auto& txp : transcripts_) {
   std::string getIndexNameHash256() const { return ""; }
   std::string getIndexSeqHash512() const { return ""; }
   std::string getIndexNameHash512() const { return ""; }
+  std::string getIndexDecoySeqHash256() const { return ""; }
+  std::string getIndexDecoyNameHash256() const { return ""; }
 
   /**
    * Return true if this read library is for paired-end reads and false

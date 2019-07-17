@@ -171,6 +171,8 @@ public:
   std::string getIndexNameHash256() const { return salmonIndex_->nameHash256(); }
   std::string getIndexSeqHash512() const { return salmonIndex_->seqHash512(); }
   std::string getIndexNameHash512() const { return salmonIndex_->nameHash512(); }
+  std::string getIndexDecoySeqHash256() const { return salmonIndex_->decoySeqHash256(); }
+  std::string getIndexDecoyNameHash256() const { return salmonIndex_->decoyNameHash256(); }
 
   std::vector<Transcript>& transcripts() { return transcripts_; }
   const std::vector<Transcript>& transcripts() const { return transcripts_; }

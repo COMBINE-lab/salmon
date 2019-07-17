@@ -32,7 +32,8 @@ public:
   SalmonIndex(std::shared_ptr<spdlog::logger>& logger,
               SalmonIndexType indexType)
       : loaded_(false), versionInfo_(0, false, 0, indexType), logger_(logger),
-        seqHash256_(""), nameHash256_(""), seqHash512_(""), nameHash512_("") {}
+        seqHash256_(""), nameHash256_(""), seqHash512_(""), nameHash512_(""),
+        decoySeqHash256_(""), decoyNameHash256_("") {}
 
   void load(const boost::filesystem::path& indexDir) {
     namespace bfs = boost::filesystem;
@@ -126,6 +127,8 @@ public:
   std::string nameHash256() const { return nameHash256_; }
   std::string seqHash512() const { return seqHash512_; }
   std::string nameHash512() const { return nameHash512_; }
+  std::string decoySeqHash256() const { return decoySeqHash256_; }
+  std::string decoyNameHash256() const { return decoyNameHash256_; }
 
 private:
   bool buildQuasiIndex_(boost::filesystem::path indexDir,
@@ -195,6 +198,8 @@ private:
       nameHash256_ = h.nameHash256();
       seqHash512_ = h.seqHash512();
       nameHash512_ = h.nameHash512();
+      decoySeqHash256_ = h.decoySeqHash256();
+      decoyNameHash256_ = h.decoyNameHash256();
 
       // Is the quasi-index using a perfect hash
       perfectHashQuasi_ = h.perfectHash();
@@ -288,6 +293,8 @@ private:
   std::string nameHash256_;
   std::string seqHash512_;
   std::string nameHash512_;
+  std::string decoySeqHash256_;
+  std::string decoyNameHash256_;
 };
 
 #endif //__SALMON_INDEX_HPP
