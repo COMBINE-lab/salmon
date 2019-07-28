@@ -422,6 +422,8 @@ bool GZipWriter::writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
     oa(cereal::make_nvp("index_name_hash", experiment.getIndexNameHash256()));
     oa(cereal::make_nvp("index_seq_hash512", experiment.getIndexSeqHash512()));
     oa(cereal::make_nvp("index_name_hash512", experiment.getIndexNameHash512()));
+    oa(cereal::make_nvp("index_decoy_seq_hash", experiment.getIndexDecoySeqHash256()));
+    oa(cereal::make_nvp("index_decoy_name_hash", experiment.getIndexDecoyNameHash256()));
     oa(cereal::make_nvp("num_bootstraps", 0));
     oa(cereal::make_nvp("num_processed", experiment.numObservedFragments()));
     oa(cereal::make_nvp("num_mapped", experiment.numMappedFragments()));
@@ -773,6 +775,8 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
     oa(cereal::make_nvp("index_name_hash", experiment.getIndexNameHash256()));
     oa(cereal::make_nvp("index_seq_hash512", experiment.getIndexSeqHash512()));
     oa(cereal::make_nvp("index_name_hash512", experiment.getIndexNameHash512()));
+    oa(cereal::make_nvp("index_decoy_seq_hash", experiment.getIndexDecoySeqHash256()));
+    oa(cereal::make_nvp("index_decoy_name_hash", experiment.getIndexDecoyNameHash256()));
     oa(cereal::make_nvp("num_bootstraps", numSamples));
     oa(cereal::make_nvp("num_processed", experiment.numObservedFragments()));
     oa(cereal::make_nvp("num_mapped", experiment.numMappedFragments()));
