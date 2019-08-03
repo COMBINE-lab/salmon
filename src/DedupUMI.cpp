@@ -53,11 +53,13 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
       uint32_t v1 = alevin::graph::getVertexIndex(vertexIndexMap, node);
 
       for ( size_t uId_second=uId+1; uId_second<numUmis; uId_second++ ){
-        VertexT node_second (static_cast<uint32_t>(eqId), static_cast<uint32_t>(uId_second));
-        uint32_t v2 = alevin::graph::getVertexIndex(vertexIndexMap, node_second);
 
         //check if two UMI can be connected
         EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umiSeqCounts[uId_second]);
+	if ( edge == EdgeType::NoEdge ) { continue; }        
+
+        VertexT node_second (static_cast<uint32_t>(eqId), static_cast<uint32_t>(uId_second));
+        uint32_t v2 = alevin::graph::getVertexIndex(vertexIndexMap, node_second);
 
         switch ( edge ) {
         case EdgeType::BiDirected:
@@ -109,14 +111,14 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
           uint32_t v1 = alevin::graph::getVertexIndex(vertexIndexMap, node);
 
           for ( size_t uId_second=0; uId_second<num2Umis; uId_second++ ){
-            VertexT node_second (static_cast<uint32_t>(eq2Id), static_cast<uint32_t>(uId_second));
-            if ( node == node_second ) {
-              continue;
-            }
-            uint32_t v2 = alevin::graph::getVertexIndex(vertexIndexMap, node_second);
-
             //check if two UMI can be connected
             EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umi2SeqCounts[uId_second]);
+            VertexT node_second (static_cast<uint32_t>(eq2Id), static_cast<uint32_t>(uId_second));
+            if ( node == node_second or edge == EdgeType::NoEdge ) {
+              continue;
+            }
+
+            uint32_t v2 = alevin::graph::getVertexIndex(vertexIndexMap, node_second);
 
             switch ( edge ) {
             case EdgeType::BiDirected:
