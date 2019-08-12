@@ -2125,7 +2125,6 @@ bool readEquivCounts(boost::filesystem::path& eqFilePathString,
   if (indexSet.size() > 0) {
     std::cerr<< "Missing effective lens for " << indexSet.size()
              << " txps" << std::flush;
-    return false;
   }
 
   equivFile.close();
