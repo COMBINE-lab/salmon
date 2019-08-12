@@ -621,12 +621,16 @@ endif()
 # so that CMake won't complain
 ##
 if(TBB_WILL_RECONFIGURE)
-  set(TBB_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
-  set(TBB_LIBRARY_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib)
-  #set(TBB_LIBRARIES tbb tbbmalloc)
-  set(TBB_LIBRARIES ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib/libtbb.${SHARED_LIB_EXTENSION}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib/libtbbmalloc.${SHARED_LIB_EXTENSION}
-  )
+    set(TBB_INCLUDE_DIRS ${TBB_INSTALL_DIR}/include)
+    set(TBB_INCLUDE_DIR ${TBB_INSTALL_DIR}/include)
+    set(TBB_LIBRARY_DIRS ${TBB_INSTALL_DIR}/lib)
+    set(TBB_LIB_DIR ${TBB_INSTALL_DIR}/lib)
+    #set(TBB_LIBRARIES tbb tbbmalloc)
+    set(TBB_LIBRARIES ${TBB_INSTALL_DIR}/lib/libtbb.${SHARED_LIB_EXTENSION}
+			${TBB_INSTALL_DIR}/lib/libtbbmalloc.${SHARED_LIB_EXTENSION}
+	   )
+    message("TBB_INCLUDE_DIRS = ${TBB_INCLUDE_DIRS}")
+    message("TBB_LIBRARY_DIRS = ${TBB_LIBRARY_DIRS}")
 endif()
 
 ##
@@ -643,7 +647,6 @@ if(TBB_RECONFIGURE)
   message("TBB_INSTALL_DIR = ${TBB_INSTALL_DIR}")
   find_package(TBB)
 endif()
-
 
 message("TBB_LIBRARIES = ${TBB_LIBRARIES}")
 
@@ -802,8 +805,14 @@ set(CPACK_SOURCE_IGNORE_FILES
 
 message("CPACK_SOURCE_IGNORE_FILES = ${CPACK_SOURCE_IGNORE_FILES}")
 
-# Recurse into Salmon source directory
-add_subdirectory( src )
+# Recurse into pufferfish source directory 
+# and build the library 
+#set(BUILD_PUFF_FOR_SALMON FALSE)
+#add_subdirectory(external/pufferfish)
+
+# and then the main salmon source directory
+add_subdirectory(src)
+
 #add_dependencies(salmon RapMap)
 # build a CPack driven installer package
 include(CPack)

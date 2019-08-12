@@ -1871,6 +1871,22 @@ bool processQuantOptions(SalmonOpts& sopt,
   }
 
   // The growing list of thou shalt nots
+  {
+    try {
+      conflicting_options(vm, "validateMappings", "noSA");
+      conflicting_options(vm, "mimicBT2", "noSA");
+      conflicting_options(vm, "mimicStrictBT2", "noSA");
+      conflicting_options(vm, "hardFilter", "noSA");
+    } catch (std::logic_error& e) {
+      jointLog->critical(e.what());
+      jointLog->flush();
+      return false;
+    }
+
+    if (sopt.disableSA) {
+      sopt.validateMappings = false;
+    }
+  }
 
   {
     try {
@@ -1897,10 +1913,8 @@ bool processQuantOptions(SalmonOpts& sopt,
       jointLog->flush();
       return false;
     }
-    // If the user passed useEM, but not useVBOpt, then
-    // turn off VB.  The fact that there is not a better
-    // way to handle this suggests a potential shortcoming
-    // of boost::program_options.
+    // If the user passed perNucleotidePrior, then
+    // turn off perTranscriptPrior.
     if(sopt.perNucleotidePrior) {
       sopt.perTranscriptPrior = false;
     }

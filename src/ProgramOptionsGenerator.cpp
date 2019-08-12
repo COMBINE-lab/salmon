@@ -84,10 +84,15 @@ namespace salmon {
        "to consider orphan mappings if no valid paired mappings exist.  This "
        "flag is independent of the option to "
        "write the orphaned mappings to file (--writeOrphanLinks).")
+      ("noSA",
+       po::bool_switch(&(sopt.disableSA))->default_value(salmon::defaults::disableSA),
+       "[Quasi-mapping mode only] : Disable selective-alignment in favor of basic quasi-mapping. "
+       "If this flag is passed, selective-alignment and alignment scoring of reads will be disabled."
+       )
       ("validateMappings",
        po::bool_switch(&(sopt.validateMappings))->default_value(salmon::defaults::validateMappings),
        "[Quasi-mapping mode only] : Validate mappings using alignment-based verifcation. "
-       "If this flag is passed, quasi-mappings will be validated to ensure that they could give "
+       "If this flag is passed, mappings will be validated to ensure that they could give "
        "rise to a reasonable alignment before they are further used for quantification.")
       ("consensusSlack",
        po::value<float>(&(sopt.consensusSlack))->default_value(salmon::defaults::consensusSlack),

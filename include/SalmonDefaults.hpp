@@ -18,7 +18,8 @@ namespace defaults {
   constexpr const bool disableMappingCache{true};
 
   // advanced
-  constexpr const bool validateMappings{false};
+  constexpr const bool validateMappings{true};
+  constexpr const bool disableSA{false};
   constexpr const float consensusSlack{0.0};
   constexpr const double minScoreFraction{0.65};
   constexpr const int16_t matchScore{2};

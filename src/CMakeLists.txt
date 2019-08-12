@@ -75,6 +75,10 @@ SGSmooth.cpp
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/metro/metrohash64.cpp
 )
 
+# check if we know how to do IPO
+check_ipo_supported(RESULT HAS_IPO)
+
+if (NOT BUILD_PUFF_FOR_SALMON)
 set (KSW2PP_BASIC_LIB_SRCS
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/kalloc.c
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_extd.c
@@ -90,9 +94,6 @@ ${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_extd2_sse.c
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_extf2_sse.c
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_extz2_sse.c
 )
-
-# check if we know how to do IPO
-check_ipo_supported(RESULT H)
 
 add_library(ksw2pp_sse2 OBJECT ${KSW2PP_ADVANCED_LIB_SRCS})
 add_library(ksw2pp_sse4 OBJECT ${KSW2PP_ADVANCED_LIB_SRCS})
@@ -112,6 +113,8 @@ add_library(ksw2pp STATIC $<TARGET_OBJECTS:ksw2pp_sse2> $<TARGET_OBJECTS:ksw2pp_
 set_target_properties(ksw2pp PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;HAVE_KALLOC")
 if(HAS_IPO)
   set_property(TARGET ksw2pp PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+endif()
+
 endif()
 
 set ( UNIT_TESTS_SRCS
