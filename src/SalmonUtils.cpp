@@ -44,8 +44,12 @@
 #include "StadenUtils.hpp"
 #include "SalmonDefaults.hpp"
 
+#include "pufferfish/Util.hpp"
+
 namespace salmon {
 namespace utils {
+
+  using MateStatus = pufferfish::util::MateStatus;
 
 std::string str(const MappingType& mt) {
   switch (mt) {
@@ -122,10 +126,10 @@ std::ostream& operator<<(std::ostream& os, OrphanStatus s) {
 }
 
 bool isCompatible(const LibraryFormat observed, const LibraryFormat expected,
-                  int32_t start, bool isForward, rapmap::utils::MateStatus ms) {
+                  int32_t start, bool isForward, MateStatus ms) {
   // If we're dealing with a single end read.
   bool compat{false};
-  if (ms != rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
+  if (ms != MateStatus::PAIRED_END_PAIRED) {
     compat = compatibleHit(expected, start, isForward, ms);
   } else {
     compat = compatibleHit(expected, observed);
@@ -135,11 +139,11 @@ bool isCompatible(const LibraryFormat observed, const LibraryFormat expected,
 
 double logAlignFormatProb(const LibraryFormat observed,
                           const LibraryFormat expected, int32_t start,
-                          bool isForward, rapmap::utils::MateStatus ms,
+                          bool isForward, MateStatus ms,
                           double incompatPrior) {
   // If we're dealing with a single end read.
   bool compat{false};
-  if (ms != rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
+  if (ms != MateStatus::PAIRED_END_PAIRED) {
     compat = compatibleHit(expected, start, isForward, ms);
   } else {
     compat = compatibleHit(expected, observed);

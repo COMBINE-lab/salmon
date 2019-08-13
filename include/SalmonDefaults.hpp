@@ -51,6 +51,7 @@ namespace defaults {
   constexpr const uint32_t maxSMEMOccs{200};
   constexpr const bool initUniform{false};
   constexpr const uint32_t maxReadOccs{200};
+  constexpr const uint32_t maxOccsPerHit{1000};
   constexpr const bool noLengthCorrection{false};
   constexpr const bool noEffectiveLengthCorrection{false};
   constexpr const bool noFragLengthDist{false};

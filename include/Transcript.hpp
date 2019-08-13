@@ -15,12 +15,14 @@
 #include <limits>
 #include <memory>
 
-#include "rapmap/bit_array.h"
-#include "rapmap/rank9b.h"
+//#include "rapmap/bit_array.h"
+#include "pufferfish/compact_vector/compact_vector.hpp"
+#include "pufferfish/rank9b.hpp"
 
 class Transcript {
   static constexpr const uint32_t adapterBindingLength{5};
 public:
+  /*
   struct BitArrayDeleter {
     void operator()(BIT_ARRAY* b) {
       if (b != nullptr) {
@@ -28,7 +30,9 @@ public:
       }
     }
   };
-  using BitArrayPointer = std::unique_ptr<BIT_ARRAY, BitArrayDeleter>;
+  */
+  using BitArray = compact::vector<uint64_t,1>;
+  //using BitArrayPointer = std::unique_ptr<BIT_ARRAY, BitArrayDeleter>;
   using Rank9bPointer = std::unique_ptr<rank9b>;
 
   Transcript()
@@ -462,11 +466,13 @@ public:
    * Return the next polyA site that occurs in this transcript
    * after position p
    **/
+  /*
   inline int32_t getNextPolyA(int32_t p) {
     if (p+1 >= static_cast<int32_t>(RefLength)) { return RefLength; }
     auto r = polyARank_->rank(p+1);
     return polyAPos_[r];
   }
+  */
 
   void setDecoy(bool isDecoy) {
     isDecoy_ = isDecoy;
@@ -652,20 +658,22 @@ private:
         GCCount_[i] = totGC;
       }
     } else {
-      BIT_ARRAY* rawArray = bit_array_create(RefLength);
+      gcBitArray_.resize(RefLength);
+      //BIT_ARRAY* rawArray = bit_array_create(RefLength);
       for (size_t i = 0; i < RefLength; ++i) {
         auto c = std::toupper(seq[i]);
         if (c == 'G' or c == 'C') {
-          bit_array_set_bit(rawArray, i);
+          gcBitArray_[i] = 1;
+          //bit_array_set_bit(rawArray, i);
         }
       }
-      gcBitArray_.reset(rawArray);
-      gcRank_.reset(new rank9b(gcBitArray_->words, RefLength));
-      // computeGCContentSampled_(gcSampFactor);
+      //gcBitArray_.reset(rawArray);
+      gcRank_.reset(new rank9b(gcBitArray_.get(), RefLength));
     }
   }
 
   void computePolyAPositions_() {
+    /*
     polyAPos_.clear();
     BIT_ARRAY* rawArray = bit_array_create(RefLength);
     std::string polyA(adapterBindingLength, 'A');
@@ -689,14 +697,9 @@ private:
     polyAPos_.push_back(RefLength);
     polyABitArray_.reset(rawArray);
     polyARank_.reset(new rank9b(polyABitArray_->words, RefLength));
-    /*
-    if (polyAPos_.size() >= 3) {
-      std::cerr << polyAView << "; RefLength = " << RefLength << " polyAs = [";
-      for (auto x : polyAPos_) { std::cerr << " " << x; }
-      std::cerr << "]\n";
-    }
     */
   }
+
 
   // NOTE 10.2
   std::vector<uint8_t> SAMSequence_;
@@ -728,11 +731,12 @@ private:
   double gcFracLen_{0.0};
   uint32_t lastRegularSample_{0};
   std::vector<uint32_t> GCCount_;
-  BitArrayPointer gcBitArray_{nullptr};
+  //BitArrayPointer gcBitArray_{nullptr};
+  BitArray gcBitArray_;
   Rank9bPointer gcRank_{nullptr};
-  BitArrayPointer polyABitArray_{nullptr};
-  Rank9bPointer polyARank_{nullptr};
-  std::vector<int32_t> polyAPos_;
+  //BitArrayPointer polyABitArray_{nullptr};
+  //Rank9bPointer polyARank_{nullptr};
+  //std::vector<int32_t> polyAPos_;
 };
 
 #endif // TRANSCRIPT

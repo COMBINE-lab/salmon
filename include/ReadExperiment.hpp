@@ -139,6 +139,7 @@ public:
 
     switch (salmonIndex_->indexType()) {
     case SalmonIndexType::QUASI:
+      /*
       if (salmonIndex_->is64BitQuasi()) {
         if (salmonIndex_->isPerfectHashQuasi()) {
           loadTranscriptsFromQuasi(salmonIndex_->quasiIndexPerfectHash64(),
@@ -154,11 +155,20 @@ public:
           loadTranscriptsFromQuasi(salmonIndex_->quasiIndex32(), sopt);
         }
       }
+      */
+      infostr << "Error: This version of salmon does not support a RapMap-based index.";
+      throw std::invalid_argument(infostr.str());
       break;
     case SalmonIndexType::FMD:
       infostr << "Error: This version of salmon does not support the FMD index mode.";
       throw std::invalid_argument(infostr.str());
       break;
+    case SalmonIndexType::PUFF:
+      if (salmonIndex_->isSparse()){
+        loadTranscriptsFromPuff(salmonIndex_->puffSparseIndex(), sopt);
+      } else {
+        loadTranscriptsFromPuff(salmonIndex_->puffIndex(), sopt);
+      }
     }
 
     // Create the cluster forest for this set of transcripts
@@ -268,6 +278,51 @@ public:
   }
 
   SalmonIndex* getIndex() { return salmonIndex_.get(); }
+
+  template <typename PuffIndexT>
+  void loadTranscriptsFromPuff(PuffIndexT* idx_, const SalmonOpts& sopt) {
+    // Get the list of reference names
+    const auto& refNames = idx_->getFullRefNames();
+    const auto& refLengths = idx_->getFullRefLengths();
+    const auto& completeRefLengths = idx_->getFullRefLengthsComplete();
+
+    size_t numRecords = refNames.size();
+    auto log = sopt.jointLog.get();
+    numDecoys_ = 0;
+
+    log->info("Index contained {:n} targets", numRecords);
+    // transcripts_.resize(numRecords);
+    std::vector<uint32_t> lengths;
+    lengths.reserve(numRecords);
+    double alpha = 0.005;
+    for (auto i : boost::irange(size_t(0), numRecords)) {
+      uint32_t id = i;
+      bool isDecoy = idx_->isDecoy(i);
+
+      if (isDecoy and !sopt.validateMappings) {
+        log->warn("The index contains decoy targets, but these should not be used in the "
+                  "absence of selective-alignment (--validateMappings, --mimicBT2 or --mimicStrictBT2). "
+                  "Skipping loading of decoys.");
+        break;
+      }
+
+      const char* name = refNames[i].c_str();
+      uint32_t len = refLengths[i];
+      // copy over the length, then we're done.
+      transcripts_.emplace_back(id, name, len, alpha);
+      auto& txp = transcripts_.back();
+      txp.setCompleteLength(completeRefLengths[i]);
+
+      // TODO : we don't do this yet, have to rethink with new index
+      //txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i],
+      //                        sopt.gcBiasCorrect, sopt.reduceGCMemory);
+      txp.setDecoy(isDecoy);
+      if (isDecoy) { ++numDecoys_; }
+      lengths.push_back(txp.RefLength);
+    }
+    // ====== Done loading the transcripts from file
+    setTranscriptLengthClasses_(lengths, posBiasFW_.size());
+  }
 
   template <typename QuasiIndexT>
   void loadTranscriptsFromQuasi(QuasiIndexT* idx_, const SalmonOpts& sopt) {

@@ -8,19 +8,23 @@ ${GAT_SOURCE_DIR}/external/install/include
 ${ZLIB_INCLUDE_DIR}
 ${TBB_INCLUDE_DIRS}
 ${Boost_INCLUDE_DIRS}
+${GAT_SOURCE_DIR}/external/install/include
+${GAT_SOURCE_DIR}/external/install/include/pufferfish
+${GAT_SOURCE_DIR}/external/install/include/pufferfish/digestpp
+
 ${GAT_SOURCE_DIR}/external/install/include/rapmap
 ${GAT_SOURCE_DIR}/external/install/include/rapmap/digestpp
 ${ICU_INC_DIRS}
 )
 
 set ( SALMON_MAIN_SRCS
-${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapFileSystem.cpp
-${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndexer.cpp
-${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndex.cpp
-${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapUtils.cpp
-${GAT_SOURCE_DIR}/external/install/src/rapmap/HitManager.cpp
-${GAT_SOURCE_DIR}/external/install/src/rapmap/rank9b.cpp
-${GAT_SOURCE_DIR}/external/install/src/rapmap/bit_array.c
+#${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapFileSystem.cpp
+#${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndexer.cpp
+#${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndex.cpp
+#${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapUtils.cpp
+#${GAT_SOURCE_DIR}/external/install/src/rapmap/HitManager.cpp
+#${GAT_SOURCE_DIR}/external/install/src/rapmap/rank9b.cpp
+#${GAT_SOURCE_DIR}/external/install/src/rapmap/bit_array.c
 EMUtils.cpp
 CollapsedEMOptimizer.cpp
 CollapsedCellOptimizer.cpp
@@ -28,11 +32,12 @@ CollapsedGibbsSampler.cpp
 Salmon.cpp
 BuildSalmonIndex.cpp
 Graph.cpp
-DedupUMI.cpp
-Alevin.cpp
-AlevinHash.cpp
-SalmonAlevin.cpp
-WhiteList.cpp
+## PUFF_INTEGRATION
+# DedupUMI.cpp
+# Alevin.cpp
+# AlevinHash.cpp
+# SalmonAlevin.cpp
+# WhiteList.cpp
 SalmonQuantify.cpp
 FragmentLengthDistribution.cpp
 FragmentStartPositionDistribution.cpp
@@ -72,13 +77,15 @@ SalmonExceptions.cpp
 SalmonStringUtils.cpp
 SimplePosBias.cpp
 SGSmooth.cpp
-${GAT_SOURCE_DIR}/external/install/src/rapmap/metro/metrohash64.cpp
+${GAT_SOURCE_DIR}/external/install/src/pufferfish/metro/metrohash64.cpp
 )
 
 # check if we know how to do IPO
 check_ipo_supported(RESULT HAS_IPO)
 
 if (NOT BUILD_PUFF_FOR_SALMON)
+message("BUILDING OUR OWN KSW2PP")
+message("BUILD_PUFF_FOR_SALMON IS = ${BUILD_PUFF_FOR_SALMON}")
 set (KSW2PP_BASIC_LIB_SRCS
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/kalloc.c
 ${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_extd.c
@@ -112,7 +119,7 @@ set_target_properties(ksw2pp_sse4 PROPERTIES INCLUDE_DIRECTORIES ${GAT_SOURCE_DI
 add_library(ksw2pp STATIC $<TARGET_OBJECTS:ksw2pp_sse2> $<TARGET_OBJECTS:ksw2pp_sse4> $<TARGET_OBJECTS:ksw2pp_basic>)
 set_target_properties(ksw2pp PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;HAVE_KALLOC")
 if(HAS_IPO)
-  set_property(TARGET ksw2pp PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+  #set_property(TARGET ksw2pp PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
 endif()
@@ -120,8 +127,8 @@ endif()
 set ( UNIT_TESTS_SRCS
     ${GAT_SOURCE_DIR}/tests/UnitTests.cpp
     FragmentLengthDistribution.cpp
-    ${GAT_SOURCE_DIR}/external/install/src/rapmap/rank9b.cpp
-    ${GAT_SOURCE_DIR}/external/install/src/rapmap/bit_array.c
+    ${GAT_SOURCE_DIR}/external/install/src/pufferfish/rank9b.cpp
+    #${GAT_SOURCE_DIR}/external/install/src/rapmap/bit_array.c
 )
 
 
@@ -164,35 +171,37 @@ set (TGT_DEBUG_FLAGS "-g;${TGT_COMPILE_FLAGS};${TGT_WARN_FLAGS}")
 add_library(salmon_core STATIC ${SALMON_LIB_SRCS} )
 target_compile_definitions(salmon_core PUBLIC
 RAPMAP_SALMON_SUPPORT=1
+PUFFERFISH_SALMON_SUPPORT=1
 HAVE_ANSI_TERM=1
 HAVE_SSTREAM=1
 )
 target_compile_options(salmon_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
 target_compile_options(salmon_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
 if(HAS_IPO)
-  set_property(TARGET salmon_core PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+  #set_property(TARGET salmon_core PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
 # Build the Alevin library
-add_library(alevin_core STATIC ${ALEVIN_LIB_SRCS})
-target_compile_definitions(alevin_core PUBLIC
-RAPMAP_SALMON_SUPPORT=1
-HAVE_ANSI_TERM=1
-HAVE_SSTREAM=1
-span_FEATURE_MAKE_SPAN_TO_STD=14
-)
-target_compile_options(alevin_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
-target_compile_options(alevin_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
+# PUFF_INTEGRATION
+# add_library(alevin_core STATIC ${ALEVIN_LIB_SRCS})
+# target_compile_definitions(alevin_core PUBLIC
+# RAPMAP_SALMON_SUPPORT=1
+# HAVE_ANSI_TERM=1
+# HAVE_SSTREAM=1
+# span_FEATURE_MAKE_SPAN_TO_STD=14
+#)
+#target_compile_options(alevin_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
+#target_compile_options(alevin_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
 
 if(HAS_IPO)
-  set_property(TARGET alevin_core PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+  #set_property(TARGET alevin_core PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
 # Build the salmon executable
 add_executable(salmon ${SALMON_MAIN_SRCS} ${SALMON_ALIGN_SRCS})
 
 if(HAS_IPO)
-  set_property(TARGET salmon PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+  #set_property(TARGET salmon PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
 add_executable(unitTests ${UNIT_TESTS_SRCS})
@@ -216,7 +225,12 @@ endif()
 target_link_libraries(salmon
     Threads::Threads
     salmon_core
-    alevin_core
+## PUFF_INTEGRATION    
+#    alevin_core
+    puffer 
+    twopaco
+    graphdump
+    ntcard
     gff
     ${Boost_LIBRARIES}
     ${ICU_LIBS}
@@ -243,7 +257,8 @@ target_link_libraries(salmon
 target_link_libraries(unitTests
     Threads::Threads
     salmon_core
-    alevin_core
+## PUFF_INTEGRATION
+#    alevin_core
     gff
     ${Boost_LIBRARIES}
     ${ICU_LIBS}
@@ -275,14 +290,16 @@ if (${FETCHED_JEMALLOC})
 endif()
 
 if (${FETCHED_BOOST})
-   add_dependencies(alevin_core libboost)
+## PUFF_INTEGRATION
+#   add_dependencies(alevin_core libboost)
    add_dependencies(salmon_core libboost)
    add_dependencies(salmon libboost)
 endif()
 
 if (${FETCHED_TBB})
    add_dependencies(salmon_core libtbb)
-   add_dependencies(alevin_core libtbb)
+## PUFF_INTEGRATION
+#   add_dependencies(alevin_core libtbb)
    add_dependencies(salmon libtbb)
 endif()
 
@@ -292,7 +309,8 @@ if (${FETCHED_CEREAL})
 endif()
 
 if (${FETCHED_STADEN})
-  add_dependencies(alevin_core libstadenio)
+## PUFF_INTEGRATION
+#  add_dependencies(alevin_core libstadenio)
   add_dependencies(salmon_core libstadenio)
   add_dependencies(salmon libstadenio)
 endif()

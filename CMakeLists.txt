@@ -261,17 +261,19 @@ set(GAT_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 
 ###
 #
-#  Grab RapMap sources for quasi-mapping code --- DURING CONFIGURE TIME!
+#  Grab pufferfish source --- DURING CONFIGURE TIME!
 #
 ####
-if(NOT FETCHED_RAPMAP)
-  exec_program(${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetchRapMap.sh RETURN_VALUE FETCH_RM_SCRIPT_RET)
-  message(STATUS "fetch RAPMAP exit code ${FETCH_RM_SCRIPT_RET}")
-  if(NOT (FETCH_RM_SCRIPT_RET EQUAL 0))
-    message(FATAL_ERROR "Could not fetch RapMap source [fetchRapMap.sh returned exit code ${FETCH_RM_SCRIPT_RET}].")
+if(NOT FETCHED_PUFFERFISH)
+  exec_program(${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetchPufferfish.sh RETURN_VALUE FETCH_PF_SCRIPT_RET)
+  message(STATUS "fetch PUFFERFISH exit code ${FETCH_PF_SCRIPT_RET}")
+  if(NOT (FETCH_PF_SCRIPT_RET EQUAL 0))
+    message(FATAL_ERROR "Could not fetch pufferfish source [fetchPufferfish.sh returned exit code ${FETCH_PF_SCRIPT_RET}].")
   endif()
-  set(FETCHED_RAPMAP TRUE CACHE BOOL "Has RapMap been fetched?" FORCE)
+  set(FETCHED_PUFFERFISH TRUE CACHE BOOL "Has pufferfish been fetched?" FORCE)
 endif()
+
+
 
 ##
 # Super-secret override
@@ -807,8 +809,8 @@ message("CPACK_SOURCE_IGNORE_FILES = ${CPACK_SOURCE_IGNORE_FILES}")
 
 # Recurse into pufferfish source directory 
 # and build the library 
-#set(BUILD_PUFF_FOR_SALMON FALSE)
-#add_subdirectory(external/pufferfish)
+set(BUILD_PUFF_FOR_SALMON TRUE)
+add_subdirectory(external/pufferfish)
 
 # and then the main salmon source directory
 add_subdirectory(src)

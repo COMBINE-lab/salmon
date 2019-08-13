@@ -5,7 +5,7 @@
 #include "cereal/archives/json.hpp"
 #include "spdlog/fmt/fmt.h"
 
-enum class SalmonIndexType : uint8_t { FMD, QUASI };
+enum class SalmonIndexType : uint8_t { FMD, QUASI, PUFF };
 
 class SalmonIndexVersionInfo {
 public:
@@ -14,7 +14,7 @@ public:
    */
   SalmonIndexVersionInfo()
       : indexVersion_(0), hasAuxKmerIndex_(false), auxKmerLength_(0),
-        indexType_(SalmonIndexType::QUASI) {}
+        indexType_(SalmonIndexType::PUFF) {}
 
   SalmonIndexVersionInfo(uint32_t indexVersionIn, bool hasAuxKmerIndexIn,
                          uint32_t auxKmerLengthIn, SalmonIndexType indexTypeIn)

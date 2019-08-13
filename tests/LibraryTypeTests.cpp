@@ -83,7 +83,7 @@ SCENARIO("Paired-end library types have proper compatibility") {
 SCENARIO("Single-end library types have proper compatibility") {
 
     using salmon::utils::compatibleHit;
-    using rapmap::utils::MateStatus;
+    using pufferfish::util::MateStatus;
 
     GIVEN("A series of observed [single-end] library formats") {
         std::unordered_map<std::string, LibraryFormat> refFM =

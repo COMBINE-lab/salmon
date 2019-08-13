@@ -527,6 +527,9 @@ namespace salmon {
        po::bool_switch(&(sopt.initUniform))->default_value(salmon::defaults::initUniform),
        "initialize the offline inference with uniform parameters, rather "
        "than seeding with online parameters.")
+      ("maxOccsPerHit",
+       po::value<uint32_t>(&(sopt.maxOccsPerHit))->default_value(salmon::defaults::maxOccsPerHit),
+       "When collecting \"hits\" (MEMs), hits having more than maxOccsPerHit occurrences won't be considered.")
       ("maxReadOcc,w",
        po::value<uint32_t>(&(sopt.maxReadOccs))->default_value(salmon::defaults::maxReadOccs),
        "Reads \"mapping\" to more than this many places won't be "
