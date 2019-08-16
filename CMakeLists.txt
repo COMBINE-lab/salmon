@@ -487,37 +487,37 @@ message("BOOST LIBRARIES = ${Boost_LIBRARIES}")
 
 set(EXTERNAL_LIBRARY_PATH $CMAKE_CURRENT_SOURCE_DIR/lib)
 
-find_package(libdivsufsort)
-if(NOT LIBDIVSUFSORT_FOUND)
-  message("Build system will build libdivsufsort")
-  message("==================================================================")
-  include(ExternalProject)
-  externalproject_add(libdivsufsort
-    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    URL ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort.zip
-    # Note: This zip comes from the fetched rapmap.zip, whose SHA we check
-    # so we souldn't need to check this one separately.
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master
-    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
-    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master/build
-    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DBUILD_DIVSUFSORT64=TRUE -DUSE_OPENMP=TRUE -DBUILD_SHARED_LIBS=FALSE
-  )
-  externalproject_add_step(libdivsufsort makedir
-    COMMAND mkdir -p <SOURCE_DIR>/build
-    COMMENT "Make build directory"
-    DEPENDEES download
-    DEPENDERS configure)
-
-  set(SUFFARRAY_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
-  set(FETCHED_LIBDIVSUFSORT TRUE)
-else()
-  message("SUFFARRAY_LIB = ${SUFFARRAY_LIBRARY}")
-  set(SUFFARRAY_LIB ${SUFFARRAY_LIBRARY})
-  message("SUFFARRAY_LIB64 = ${SUFFARRAY_LIBRARY64}")
-  set(SUFFARRAY_LIB64 ${SUFFARRAY_LIBRARY64})
-  set(SUFFARRAY_INCLUDE_DIRS ${SUFFARRAY_INCLUDE_DIR})
-endif()
+#find_package(libdivsufsort)
+#if(NOT LIBDIVSUFSORT_FOUND)
+#  message("Build system will build libdivsufsort")
+#  message("==================================================================")
+#  include(ExternalProject)
+#  externalproject_add(libdivsufsort
+#    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+#    URL ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort.zip
+#    # Note: This zip comes from the fetched rapmap.zip, whose SHA we check
+#    # so we souldn't need to check this one separately.
+#    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master
+#    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
+#    #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
+#    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master/build
+#    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DBUILD_DIVSUFSORT64=TRUE -DUSE_OPENMP=TRUE -DBUILD_SHARED_LIBS=FALSE
+#  )
+#  externalproject_add_step(libdivsufsort makedir
+#    COMMAND mkdir -p <SOURCE_DIR>/build
+#    COMMENT "Make build directory"
+#    DEPENDEES download
+#    DEPENDERS configure)
+#
+#  set(SUFFARRAY_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
+#  set(FETCHED_LIBDIVSUFSORT TRUE)
+#else()
+#  message("SUFFARRAY_LIB = ${SUFFARRAY_LIBRARY}")
+#  set(SUFFARRAY_LIB ${SUFFARRAY_LIBRARY})
+#  message("SUFFARRAY_LIB64 = ${SUFFARRAY_LIBRARY64}")
+#  set(SUFFARRAY_LIB64 ${SUFFARRAY_LIBRARY64})
+#  set(SUFFARRAY_INCLUDE_DIRS ${SUFFARRAY_INCLUDE_DIR})
+#endif()
 
 
 find_package(Cereal)

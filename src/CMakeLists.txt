@@ -214,12 +214,12 @@ add_executable(unitTests ${UNIT_TESTS_SRCS})
 #set_target_properties(salmon_core salmon PROPERTIES LINK_SEARCH_END_STATIC TRUE)
 
 # our suffix array construction libraries
-if(NOT LIBDIVSUFSORT_FOUND)
-  set (SUFFARRAY_LIB ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort.a)
-  set (SUFFARRAY_LIB64 ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort64.a)
-  message ("Setting libdivsufsort = ${SUFFARRAY_LIB}") 
-  message ("Setting libdivsufsort64 = ${SUFFARRAY_LIB64}") 
-endif()
+#if(NOT LIBDIVSUFSORT_FOUND)
+#  set (SUFFARRAY_LIB ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort.a)
+#  set (SUFFARRAY_LIB64 ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort64.a)
+#  message ("Setting libdivsufsort = ${SUFFARRAY_LIB}") 
+#  message ("Setting libdivsufsort64 = ${SUFFARRAY_LIB64}") 
+#endif()
 
 
 # Link the executable
@@ -237,8 +237,8 @@ target_link_libraries(salmon
     ${ICU_LIBS}
     ${STADEN_LIBRARIES} ${CURL_LIBRARIES}
     ${ZLIB_LIBRARY}
-    ${SUFFARRAY_LIB}
-    ${SUFFARRAY_LIB64}
+    #${SUFFARRAY_LIB}
+    #${SUFFARRAY_LIB64}
     #${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
     m
     ${LIBLZMA_LIBRARIES}
@@ -265,8 +265,8 @@ target_link_libraries(unitTests
     ${ICU_LIBS}
     ${STADEN_LIBRARIES} ${CURL_LIBRARIES}
     ${ZLIB_LIBRARY}
-    ${SUFFARRAY_LIB}
-    ${SUFFARRAY_LIB64}
+    #${SUFFARRAY_LIB}
+    #${SUFFARRAY_LIB64}
     #${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
     m
     ${LIBLZMA_LIBRARIES}
