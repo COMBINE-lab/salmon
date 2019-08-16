@@ -139,23 +139,6 @@ public:
 
     switch (salmonIndex_->indexType()) {
     case SalmonIndexType::QUASI:
-      /*
-      if (salmonIndex_->is64BitQuasi()) {
-        if (salmonIndex_->isPerfectHashQuasi()) {
-          loadTranscriptsFromQuasi(salmonIndex_->quasiIndexPerfectHash64(),
-                                   sopt);
-        } else {
-          loadTranscriptsFromQuasi(salmonIndex_->quasiIndex64(), sopt);
-        }
-      } else {
-        if (salmonIndex_->isPerfectHashQuasi()) {
-          loadTranscriptsFromQuasi(salmonIndex_->quasiIndexPerfectHash32(),
-                                   sopt);
-        } else {
-          loadTranscriptsFromQuasi(salmonIndex_->quasiIndex32(), sopt);
-        }
-      }
-      */
       infostr << "Error: This version of salmon does not support a RapMap-based index.";
       throw std::invalid_argument(infostr.str());
       break;
@@ -291,13 +274,18 @@ public:
     numDecoys_ = 0;
 
     log->info("Index contained {:n} targets", numRecords);
-    // transcripts_.resize(numRecords);
+    transcripts_.reserve(numRecords);
     std::vector<uint32_t> lengths;
     lengths.reserve(numRecords);
+    size_t numIndexedRefs = idx_->getIndexedRefCount();
+    auto k = idx_->k();
+    int64_t numShort{0};
     double alpha = 0.005;
     for (auto i : boost::irange(size_t(0), numRecords)) {
       uint32_t id = i;
-      bool isDecoy = idx_->isDecoy(i);
+      bool isShort = refLengths[i] <= k;
+      bool isDecoy = idx_->isDecoy(i - numShort);
+      numShort += isShort ? 1 : 0;
 
       if (isDecoy and !sopt.validateMappings) {
         log->warn("The index contains decoy targets, but these should not be used in the "
@@ -313,13 +301,17 @@ public:
       auto& txp = transcripts_.back();
       txp.setCompleteLength(completeRefLengths[i]);
 
-      // TODO : we don't do this yet, have to rethink with new index
+      // TODO : PF_INTEGRATION
+      // we don't do this yet, have to rethink with new index
       //txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i],
       //                        sopt.gcBiasCorrect, sopt.reduceGCMemory);
       txp.setDecoy(isDecoy);
       if (isDecoy) { ++numDecoys_; }
       lengths.push_back(txp.RefLength);
     }
+    sopt.jointLog->info("Number of decoys : {:n}", numDecoys_);
+    sopt.jointLog->info("First decoy index : {:n} ", idx_->firstDecoyIndex());
+    //std::exit(1);
     // ====== Done loading the transcripts from file
     setTranscriptLengthClasses_(lengths, posBiasFW_.size());
   }
@@ -331,7 +323,7 @@ public:
     numDecoys_ = 0;
 
     log->info("Index contained {:n} targets", numRecords);
-    // transcripts_.resize(numRecords);
+    transcripts_.reserve(numRecords);
     std::vector<uint32_t> lengths;
     lengths.reserve(numRecords);
     double alpha = 0.005;

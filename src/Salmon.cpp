@@ -147,7 +147,8 @@ bibtex:
 int salmonIndex(int argc, const char* argv[]);
 int salmonQuantify(int argc, const char* argv[]);
 int salmonAlignmentQuantify(int argc, const char* argv[]);
-int salmonBarcoding(int argc, const char* argv[]);
+// TODO : PF_INTEGRATION
+//int salmonBarcoding(int argc, const char* argv[]);
 int salmonQuantMerge(int argc, const char* argv[]);
 
 bool verbose = false;
@@ -229,7 +230,8 @@ int main(int argc, char* argv[]) {
         {{"index", salmonIndex},
          {"quant", salmonQuantify},
          {"quantmerge", salmonQuantMerge},
-         {"alevin", salmonBarcoding},
+         // TODO : PF_INTEGRATION
+         //{"alevin", salmonBarcoding},
          {"swim", salmonSwim}});
 
     /*

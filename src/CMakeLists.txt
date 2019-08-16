@@ -27,7 +27,8 @@ set ( SALMON_MAIN_SRCS
 #${GAT_SOURCE_DIR}/external/install/src/rapmap/bit_array.c
 EMUtils.cpp
 CollapsedEMOptimizer.cpp
-CollapsedCellOptimizer.cpp
+## PUFF_INTEGRATION
+# CollapsedCellOptimizer.cpp
 CollapsedGibbsSampler.cpp
 Salmon.cpp
 BuildSalmonIndex.cpp

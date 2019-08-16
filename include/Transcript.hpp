@@ -107,6 +107,7 @@ public:
     avgMassBias_.store(other.avgMassBias_.load());
     hasAnchorFragment_.store(other.hasAnchorFragment_.load());
     active_ = other.active_;
+    isDecoy_ = other.isDecoy_;
   }
 
   Transcript& operator=(Transcript&& other) {
@@ -138,6 +139,7 @@ public:
     avgMassBias_.store(other.avgMassBias_.load());
     hasAnchorFragment_.store(other.hasAnchorFragment_.load());
     active_ = other.active_;
+    isDecoy_ = other.isDecoy_;
     return *this;
   }
 
