@@ -557,6 +557,10 @@ endif()
 ## Try and find TBB first
 find_package(TBB 2018.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy)
 
+if (TBB_FOUND)
+  message("TBB VERSION ${TBB_VERSION}")
+endif()
+
 ##
 #
 # Fetch and build Intel's Threading Building Blocks library.
