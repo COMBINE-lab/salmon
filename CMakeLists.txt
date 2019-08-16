@@ -575,7 +575,7 @@ endif()
 message("Build system will fetch and build Intel Threading Building Blocks")
 message("==================================================================")
 # These are useful for the custom install step we'll do later
-set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2018_U3)
+set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2019_U8)
 set(TBB_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
 
 if("${TBB_COMPILER}" STREQUAL "gcc")
@@ -588,16 +588,10 @@ set(TBB_CXXFLAGS "${TBB_CXXFLAGS} ${CXXSTDFLAG}")
 
 externalproject_add(libtbb
   DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-  DOWNLOAD_COMMAND curl -k -L https://github.com/01org/tbb/archive/2018_U3.tar.gz -o tbb-2018_U3.tgz &&
-    ${SHASUM} 23793c8645480148e9559df96b386b780f92194c80120acce79fcdaae0d81f45 tbb-2018_U3.tgz &&
-    tar -xzvf tbb-2018_U3.tgz
-  ##
-  #URL https://github.com/01org/tbb/archive/2018_U3.tar.gz
-  #DOWNLOAD_NAME 2018_U3.tar.gz
-  #URL_HASH SHA1=d6cf16a42ece60aad6a722b369e1a2aa753347b4
-  #TLS_VERIFY FALSE
-  ##
-  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2018_U3
+  DOWNLOAD_COMMAND curl -k -L https://github.com/intel/tbb/archive/2019_U8.tar.gz -o tbb-2019_U8.tgz &&
+    ${SHASUM} 7b1fd8caea14be72ae4175896510bf99c809cd7031306a1917565e6de7382fba tbb-2019_U8.tgz &&
+    tar -xzvf tbb-2019_U8.tgz
+  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2019_U8
   INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
   PATCH_COMMAND "${TBB_PATCH_STEP}"
   CONFIGURE_COMMAND ""
