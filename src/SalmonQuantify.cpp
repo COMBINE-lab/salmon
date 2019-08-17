@@ -982,6 +982,7 @@ void processReadsQuasi(
 
       hctr.numMappedAtLeastAKmer += (leftHits.size() > 0 || rightHits.size() > 0) ? 1 : 0;
 
+      // TODO : PF_INTEGRATION
       /*
       if (!tryAlign) {
         leftHits.erase( std::remove_if(leftHits.begin(), leftHits.end(),
@@ -1012,7 +1013,7 @@ void processReadsQuasi(
                                                         salmonOpts.fragLenDistMax,
                                                         totLen,
                                                         salmonOpts.minScoreFraction,
-                                                        mpol);
+                                                        mpol, hctr);
 
         // IMPORTANT NOTE : Orphan recovery currently assumes a
         // library type where mates are on separate strands
@@ -1032,47 +1033,6 @@ void processReadsQuasi(
         }
 
         hctr.peHits += jointHits.size();
-
-        /*
-        rapmap::utils::MergeResult mergeRes = rapmap::utils::mergeLeftRightHitsFuzzy(lh, rh, leftHits, rightHits,
-                                                                                     jointHits,
-                                                                                     mc,
-                                                                                     readLenLeft, maxNumHits, tooManyHits, hctr);
-
-        // IMPORTANT NOTE : Orphan recovery currently assumes a
-        // library type where mates are on separate strands
-        // so (IU, ISF, ISR).  If the library type is different
-        // we should either raise a warning / error, or implement
-        // library-type generic recovery.
-        bool mergeStatusOK = (mergeRes == rapmap::utils::MergeResult::HAD_EMPTY_INTERSECTION or
-                              mergeRes == rapmap::utils::MergeResult::HAD_ONLY_LEFT or
-                              mergeRes == rapmap::utils::MergeResult::HAD_ONLY_RIGHT);
-
-        if ( mergeStatusOK and salmonOpts.recoverOrphans and !tooManyHits) {
-          if (leftHits.size() + rightHits.size() > 0) {
-            if (mergeRes == rapmap::utils::MergeResult::HAD_ONLY_LEFT) {
-              // In this case, we've "moved" the left hit's into joint, so put them back into
-              // left and make sure joint is clear.
-              leftHits.swap(jointHits);
-              jointHits.clear();
-            } else if (mergeRes == rapmap::utils::MergeResult::HAD_ONLY_RIGHT) {
-              // In this case, we've "moved" the right hit's into joint, so put them back into
-              // right and make sure joint is clear.
-              rightHits.swap(jointHits);
-              jointHits.clear();
-            }
-            selective_alignment::utils::recoverOrphans(rp.first.seq,
-                                                       rp.second.seq,
-                                                       rc1,
-                                                       rc2,
-                                                       transcripts,
-                                                       leftHits,
-                                                       rightHits,
-                                                       jointHits);
-            if (!jointHits.empty()) { numOrphansRescued++; }
-          }
-        }
-        */
 
         if (initialRound) {
           upperBoundHits += (jointHits.size() > 0);
@@ -1147,16 +1107,20 @@ void processReadsQuasi(
             auto tid = qidx->getRefId(jointHit.tid);
             auto& t = transcripts[tid];
             bool isDecoy = qidx->isDecoy(jointHit.tid);
-            bool isDecoy2 = t.isDecoy();
-            if (isDecoy != isDecoy2) {
-              std::cerr << "WAT!!!!\n";
-            }
 
-            if (isDecoy) {
-              bestDecoyScore = (hitScore > bestDecoyScore) ? hitScore : bestDecoyScore;
+            // if the current score doesn't even match the best decoy,
+            // go to the next mapping.
+            if (hitScore < bestDecoyScore) {
+              ++idx;
+              continue;
+            } else if (isDecoy) {
+              // otherwise, if this is a decoy, its score is at least as good
+              // as the bestDecoyScore, so update that and go to the next mapping
+              bestDecoyScore = hitScore;
               ++idx;
               continue;
             }
+            // otherwise, we have a "high-scoring" hit to a non-decoy
 
             // removing duplicate hits from a read to the same transcript
             auto it = bestScorePerTranscript.find(tid);
@@ -1495,11 +1459,10 @@ void processReadsQuasi(
   mstats.numOrphansRescued += numOrphansRescued;
   mstats.numMappingsFiltered += numMappingsDropped;
   mstats.numFragmentsFiltered += numFragsDropped;
-  // TODO : PF_INTEGRATION
-  //mstats.numDovetails += hctr.numDovetails;
+  mstats.numDovetails += hctr.numDovetails;
   mstats.numDecoyFragments += numDecoyFrags;
-  //salmonOpts.jointLog->info("Number of orphans rescued in this thread {}",
-  //                          numOrphansRescued);
+  salmonOpts.jointLog->info("Number of orphans rescued in this thread {}",
+                            numOrphansRescued);
 
   //salmonOpts.jointLog->info("Score filtering dropped {} total mappings", numDropped);
   readExp.updateShortFrags(shortFragStats);
