@@ -847,7 +847,7 @@ void processReadsQuasi(
 
   pufferfish::util::AlignmentConfig aconf;
   aconf.refExtendLength = 20;
-  aconf.fullAlignment = true;
+  aconf.fullAlignment = false;
   aconf.matchScore = salmonOpts.matchScore;
   aconf.gapExtendPenalty = salmonOpts.gapExtendPenalty;
   aconf.gapOpenPenalty = salmonOpts.gapOpenPenalty;
@@ -880,10 +880,6 @@ void processReadsQuasi(
   fmt::MemoryWriter sstream;
   auto* qmLog = salmonOpts.qmLog.get();
   bool writeQuasimappings = (qmLog != nullptr);
-
-  /*
-   size_t numOrphansRescued{0};
-  */
 
   /*
   auto ap{selective_alignment::utils::AlignmentPolicy::DEFAULT};
@@ -1103,14 +1099,16 @@ void processReadsQuasi(
 
           for (auto &&jointHit : jointHits) {
             auto hitScore = puffaligner.calculateAlignments(rp.first.seq, rp.second.seq, jointHit, hctr, isMultimapping, false);
+            bool validScore = (hitScore != invalidScore);
+            numMappingsDropped += validScore ? 0 : 1;
             scores[idx] = hitScore;
             auto tid = qidx->getRefId(jointHit.tid);
             auto& t = transcripts[tid];
-            bool isDecoy = qidx->isDecoy(jointHit.tid);
+            bool isDecoy = t.isDecoy();
 
             // if the current score doesn't even match the best decoy,
             // go to the next mapping.
-            if (hitScore < bestDecoyScore) {
+            if (hitScore < bestDecoyScore or !validScore) {
               ++idx;
               continue;
             } else if (isDecoy) {
@@ -1141,14 +1139,22 @@ void processReadsQuasi(
               scores[idx] = invalidScore;
             }
 
-            bestScore = (!isDecoy and (hitScore > bestScore)) ? hitScore : bestScore;
+            bestScore = (hitScore > bestScore) ? hitScore : bestScore;
             perm.push_back(std::make_pair(idx, tid));
             ++idx;
           }
 
           bool bestHitDecoy = (bestScore < bestDecoyScore);
-          //if (bestHitDecoy) { std::cerr << "bestHitDecoy\n"; }
           if (bestScore > invalidScore and !bestHitDecoy) {
+
+            // throw away any pairs for which we should not produce valid alignments :
+            // ======
+            // If we are doing soft-filtering (default), we remove those not exceeding the bestDecoyScore
+            // If we are doing hard-filtering, we remove those less than the bestScore
+            perm.erase(std::remove_if(perm.begin(), perm.end(),
+                       [&scores, hardFilter, bestScore, bestDecoyScore, hardFilter](const std::pair<int32_t, int32_t>& idxtid) -> bool {
+                             return !hardFilter ?  scores[idxtid.first] < bestDecoyScore : scores[idxtid.first] < bestScore;
+                           }), perm.end());
             // Unlike RapMap, pufferfish doesn't guarantee the hits computed above are in order
             // by transcript, so we find the permutation of indices that puts things in transcript
             // order.
@@ -1163,56 +1169,48 @@ void processReadsQuasi(
               int32_t tid = idxTxp.second;
               auto& jointHit = jointHits[ctr];
 
-              // if soft filtering, we only drop things with an invalid score
-              // if hard filtering, we drop everything with a sub-optimal score.
-              auto cscore = scores[ctr];
-              bool skip = cscore < bestDecoyScore ? true : (hardFilter ? (scores[ctr] < bestScore) :
-                                                            (scores[ctr] == invalidScore));
-              numMappingsDropped += skip ? 1 : 0;
-              if (!skip) {
-                double currScore = scores[ctr];
-                double v = bestScoreD - currScore;
-                // why -1?
-                double estAlnProb = hardFilter ? -1.0 : std::exp(-v);
+              double currScore = scores[ctr];
+              double v = bestScoreD - currScore;
+              // why -1?
+              double estAlnProb = hardFilter ? -1.0 : std::exp(-v);
 
-                if (jointHit.isOrphan()) {
-                  readLen = jointHit.isLeftAvailable() ? readLen : mateLen;
-                  jointAlignments.emplace_back(tid,           // reference id
-                                               jointHit.orphanClust()->getTrFirstHitPos(),     // reference pos
-                                               jointHit.orphanClust()->isFw,     // fwd direction
-                                               readLen, // read length
-                                               jointHit.orphanClust()->cigar, // cigar string
-                                               jointHit.fragmentLen,       // fragment length
-                                               false);
-                  auto &qaln = jointAlignments.back();
-                  // NOTE : score should not be filled in from a double
-                  qaln.score = !tryAlign ? static_cast<int32_t >(jointHit.orphanClust()->coverage):jointHit.alignmentScore;
-                  qaln.estAlnProb(estAlnProb);
-                  // NOTE : wth is numHits?
-                  qaln.numHits = static_cast<uint32_t >(jointHits.size());//orphanClust()->coverage;
-                  qaln.mateStatus = jointHit.mateStatus;
-                } else {
-                  jointAlignments.emplace_back(tid,           // reference id
-                                               jointHit.leftClust->getTrFirstHitPos(),     // reference pos
-                                               jointHit.leftClust->isFw,     // fwd direction
-                                               readLen, // read length
-                                               jointHit.leftClust->cigar, // cigar string
-                                               jointHit.fragmentLen,       // fragment length
-                                               true);         // properly paired
-                  // Fill in the mate info
-                  auto &qaln = jointAlignments.back();
-                  qaln.mateLen = mateLen;
-                  qaln.mateCigar = jointHit.rightClust->cigar;
-                  qaln.matePos = static_cast<int32_t >(jointHit.rightClust->getTrFirstHitPos());
-                  qaln.mateIsFwd = jointHit.rightClust->isFw;
-                  qaln.mateStatus = MateStatus::PAIRED_END_PAIRED;
-                  // NOTE : wth is numHits?
-                  qaln.numHits = static_cast<uint32_t >(jointHits.size());
-                  // NOTE : score should not be filled in from a double
-                  qaln.score = !tryAlign ? static_cast<int32_t >(jointHit.leftClust->coverage):jointHit.alignmentScore;
-                  qaln.estAlnProb(estAlnProb);
-                  qaln.mateScore = !tryAlign ? static_cast<int32_t >(jointHit.rightClust->coverage):jointHit.mateAlignmentScore;
-                }
+              if (jointHit.isOrphan()) {
+                readLen = jointHit.isLeftAvailable() ? readLen : mateLen;
+                jointAlignments.emplace_back(tid,           // reference id
+                                             jointHit.orphanClust()->getTrFirstHitPos(),     // reference pos
+                                             jointHit.orphanClust()->isFw,     // fwd direction
+                                             readLen, // read length
+                                             jointHit.orphanClust()->cigar, // cigar string
+                                             jointHit.fragmentLen,       // fragment length
+                                             false);
+                auto &qaln = jointAlignments.back();
+                // NOTE : score should not be filled in from a double
+                qaln.score = !tryAlign ? static_cast<int32_t >(jointHit.orphanClust()->coverage):jointHit.alignmentScore;
+                qaln.estAlnProb(estAlnProb);
+                // NOTE : wth is numHits?
+                qaln.numHits = static_cast<uint32_t >(jointHits.size());//orphanClust()->coverage;
+                qaln.mateStatus = jointHit.mateStatus;
+              } else {
+                jointAlignments.emplace_back(tid,           // reference id
+                                             jointHit.leftClust->getTrFirstHitPos(),     // reference pos
+                                             jointHit.leftClust->isFw,     // fwd direction
+                                             readLen, // read length
+                                             jointHit.leftClust->cigar, // cigar string
+                                             jointHit.fragmentLen,       // fragment length
+                                             true);         // properly paired
+                // Fill in the mate info
+                auto &qaln = jointAlignments.back();
+                qaln.mateLen = mateLen;
+                qaln.mateCigar = jointHit.rightClust->cigar;
+                qaln.matePos = static_cast<int32_t >(jointHit.rightClust->getTrFirstHitPos());
+                qaln.mateIsFwd = jointHit.rightClust->isFw;
+                qaln.mateStatus = MateStatus::PAIRED_END_PAIRED;
+                // NOTE : wth is numHits?
+                qaln.numHits = static_cast<uint32_t >(jointHits.size());
+                // NOTE : score should not be filled in from a double
+                qaln.score = !tryAlign ? static_cast<int32_t >(jointHit.leftClust->coverage):jointHit.alignmentScore;
+                qaln.estAlnProb(estAlnProb);
+                qaln.mateScore = !tryAlign ? static_cast<int32_t >(jointHit.rightClust->coverage):jointHit.mateAlignmentScore;
               }
             }
             // done moving our alinged / score jointMEMs over to QuasiAlignment objects
@@ -1376,8 +1374,8 @@ void processReadsQuasi(
                       << '\n';
       }
 
-      validHits += jointHits.size();
-      localNumAssignedFragments += (jointHits.size() > 0);
+      validHits += jointAlignments.size();
+      localNumAssignedFragments += (jointAlignments.size() > 0);
       locRead++;
       ++numObservedFragments;
       if (!quiet and numObservedFragments % 500000 == 0) {
