@@ -281,11 +281,12 @@ public:
     auto k = idx_->k();
     int64_t numShort{0};
     double alpha = 0.005;
+    auto& allRefSeq = idx_->refseq_;
+    auto& refAccumLengths = idx_->refAccumLengths_;
     for (auto i : boost::irange(size_t(0), numRecords)) {
       uint32_t id = i;
       bool isShort = refLengths[i] <= k;
       bool isDecoy = idx_->isDecoy(i - numShort);
-      numShort += isShort ? 1 : 0;
 
       if (isDecoy and !sopt.validateMappings) {
         log->warn("The index contains decoy targets, but these should not be used in the "
@@ -302,11 +303,24 @@ public:
       txp.setCompleteLength(completeRefLengths[i]);
 
       // TODO : PF_INTEGRATION
-      // we don't do this yet, have to rethink with new index
-      //txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i],
-      //                        sopt.gcBiasCorrect, sopt.reduceGCMemory);
+      // We won't every have the sequence for a decoy
+      // NOTE : The below is a huge hack right now.  Since we have
+      // the whole reference sequence in 2-bit in the index, there is
+      // really no reason to convert to ASCII and keep a duplicate
+      // copy around.
+      if (!isDecoy and !isShort and sopt.biasCorrect or sopt.gcBiasCorrect) {
+        auto tid = i - numShort;
+        int64_t refAccPos = tid > 0 ? refAccumLengths[tid - 1] : 0;
+        int64_t refTotalLength = refAccumLengths[tid] - refAccPos;
+        if (len != refTotalLength) {
+          log->warn("len : {:n}, but txp.RefLenght : {:n}", len, txp.RefLength);
+        }
+        char* tseq = pufferfish::util::getRefSeqOwned(allRefSeq, refAccPos, refTotalLength);
+        txp.setSequenceOwned(tseq, sopt.gcBiasCorrect, sopt.reduceGCMemory);
+      }
       txp.setDecoy(isDecoy);
       if (isDecoy) { ++numDecoys_; }
+      numShort += isShort ? 1 : 0;
       lengths.push_back(txp.RefLength);
     }
     sopt.jointLog->info("Number of decoys : {:n}", numDecoys_);
