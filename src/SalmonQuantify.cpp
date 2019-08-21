@@ -850,7 +850,7 @@ void processReadsQuasi(
   aconf.matchScore = salmonOpts.matchScore;
   aconf.gapExtendPenalty = salmonOpts.gapExtendPenalty;
   aconf.gapOpenPenalty = salmonOpts.gapOpenPenalty;
-  aconf.minScoreFraction = consensusFraction;
+  aconf.minScoreFraction = salmonOpts.minScoreFraction;
   aconf.mimicBT2 = mimicBT2;
 
   PuffAligner puffaligner(qidx->refseq_, qidx->refAccumLengths_, qidx->k(), aconf, aligner);
@@ -1007,7 +1007,7 @@ void processReadsQuasi(
         mergeRes = pufferfish::util::joinReadsAndFilter(leftHits, rightHits, jointHits,
                                                         salmonOpts.fragLenDistMax,
                                                         totLen,
-                                                        salmonOpts.minScoreFraction,
+                                                        consensusFraction,
                                                         mpol, hctr);
 
         // IMPORTANT NOTE : Orphan recovery currently assumes a
@@ -1571,7 +1571,7 @@ void processReadsQuasi(
   aconf.matchScore = salmonOpts.matchScore;
   aconf.gapExtendPenalty = salmonOpts.gapExtendPenalty;
   aconf.gapOpenPenalty = salmonOpts.gapOpenPenalty;
-  aconf.minScoreFraction = consensusFraction;
+  aconf.minScoreFraction = salmonOpts.minScoreFraction;
   aconf.mimicBT2 = mimicBT2;
 
   PuffAligner puffaligner(qidx->refseq_, qidx->refAccumLengths_, qidx->k(), aconf, aligner);
@@ -1669,7 +1669,7 @@ void processReadsQuasi(
        } else {
          pufferfish::util::joinReadsAndFilterSingle(hits, jointHits,
                                                     readLen,
-                                                    salmonOpts.minScoreFraction); //todo @rob, this shouldn't be minScoreFraction
+                                                    consensusFraction); //todo @rob, this shouldn't be minScoreFraction
          hctr.peHits += jointHits.size();
          if (initialRound) {
            upperBoundHits += (jointHits.size() > 0);
