@@ -805,7 +805,6 @@ void processReadsQuasi(
   bool quiet = salmonOpts.quiet;
 
   bool tooManyHits{false};
-  size_t maxNumHits{salmonOpts.maxReadOccs};
   size_t readLenLeft{0};
   size_t readLenRight{0};
 
@@ -1470,14 +1469,14 @@ void processReadsQuasi(
 
 // To use the parser in the following, we get ReadGroups until none is
 // available.
-template <typename RapMapIndexT>
+template <typename IndexT>
 void processReadsQuasi(
     single_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
     AlnGroupVec<QuasiAlignment>& structureVec,
     std::atomic<uint64_t>& numObservedFragments,
     std::atomic<uint64_t>& numAssignedFragments,
     std::atomic<uint64_t>& validHits, std::atomic<uint64_t>& upperBoundHits,
-    RapMapIndexT* qidx, std::vector<Transcript>& transcripts,
+    IndexT* qidx, std::vector<Transcript>& transcripts,
     ForgettingMassCalculator& fmCalc, ClusterForest& clusterForest,
     FragmentLengthDistribution& fragLengthDist, BiasParams& observedBiasParams,
     /**
@@ -1490,395 +1489,468 @@ void processReadsQuasi(
     MappingStatistics& mstats,
     size_t threadID) {
 
-  // uint64_t count_fwd = 0, count_bwd = 0;
-  // // Seed with a real random value, if available
-  // std::random_device rd;
+   uint64_t count_fwd = 0, count_bwd = 0;
+   // Seed with a real random value, if available
+   std::random_device rd;
 
-  // // Create a random uniform distribution
-  // std::default_random_engine eng(rd());
+   // Create a random uniform distribution
+   std::default_random_engine eng(rd());
 
-  // uint64_t prevObservedFrags{1};
-  // uint64_t leftHitCount{0};
-  // uint64_t hitListCount{0};
-  // salmon::utils::ShortFragStats shortFragStats;
-  // bool tooShort{false};
-  // double maxZeroFrac{0.0};
-  // // true below because in this function, we have a single-end library
-  // distribution_utils::LogCMFCache logCMFCache(&fragLengthDist, true);
+   uint64_t prevObservedFrags{1};
+   uint64_t leftHitCount{0};
+   uint64_t hitListCount{0};
+   salmon::utils::ShortFragStats shortFragStats;
+   bool tooShort{false};
+   double maxZeroFrac{0.0};
+   // true below because in this function, we have a single-end library
+   distribution_utils::LogCMFCache logCMFCache(&fragLengthDist, true);
 
-  // // Write unmapped reads
-  // fmt::MemoryWriter unmappedNames;
-  // bool writeUnmapped = salmonOpts.writeUnmappedNames;
-  // spdlog::logger* unmappedLogger =
-  //     (writeUnmapped) ? salmonOpts.unmappedLog.get() : nullptr;
+   // Write unmapped reads
+   fmt::MemoryWriter unmappedNames;
+   bool writeUnmapped = salmonOpts.writeUnmappedNames;
+   spdlog::logger* unmappedLogger =
+       (writeUnmapped) ? salmonOpts.unmappedLog.get() : nullptr;
 
-  // auto& readBiasFW = observedBiasParams.seqBiasModelFW;
-  // auto& readBiasRC = observedBiasParams.seqBiasModelRC;
-  // Mer context;
-
-  // const char* txomeStr = qidx->seq.c_str();
-
-  // //auto expectedLibType = rl.format();
-
-  // uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
-  // size_t minK = rapmap::utils::my_mer::k();
-
-  // size_t locRead{0};
-  // //uint64_t localUpperBoundHits{0};
-  // size_t rangeSize{0};
-
-  // //bool tooManyHits{false};
-  // size_t readLen{0};
-  // size_t maxNumHits{salmonOpts.maxReadOccs};
-  // bool consistentHits{salmonOpts.consistentHits};
-  // bool quiet{salmonOpts.quiet};
-
-  // rapmap::utils::MappingConfig mc;
-  // mc.consistentHits = consistentHits;
-  // mc.doChaining = salmonOpts.validateMappings;
-  // mc.consensusFraction = (salmonOpts.consensusSlack == 0.0) ? 1.0 : (1.0 - salmonOpts.consensusSlack);
-  // mc.allowDovetail = salmonOpts.allowDovetail;
-  // if (mc.doChaining) { mc.considerMultiPos = true; }
-  
-  // rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> hcInfo;
-
-  // SACollector<RapMapIndexT> hitCollector(qidx);
-  // if (salmonOpts.fasterMapping) {
-  //   hitCollector.enableNIP();
-  // } else {
-  //   hitCollector.disableNIP();
-  // }
-
-  // hitCollector.setStrictCheck(true);
-  // if (salmonOpts.quasiCoverage > 0.0) {
-  //   hitCollector.setCoverageRequirement(salmonOpts.quasiCoverage);
-  // }
-
-  // if (salmonOpts.validateMappings) {
-  //   hitCollector.enableChainScoring();
-  //   hitCollector.setMaxMMPExtension(salmonOpts.maxMMPExtension);
-  // }
-
-  // bool hardFilter = salmonOpts.hardFilter;
-
-  // /**
-  //  * Setup related to mapping parameters
-  //  **/
-  // SASearcher<RapMapIndexT> saSearcher(qidx);
-  // rapmap::utils::HitCounters hctr;
-
-  // SingleAlignmentFormatter<RapMapIndexT*> formatter(qidx);
-  // fmt::MemoryWriter sstream;
-  // auto* qmLog = salmonOpts.qmLog.get();
-  // bool writeQuasimappings = (qmLog != nullptr);
-
-  // std::string rc1; rc1.reserve(300);
-
-  // // TODO : further investigation of bandwidth and dropoff
-  // using ksw2pp::KSW2Aligner;
-  // using ksw2pp::KSW2Config;
-  // using ksw2pp::EnumToType;
-  // using ksw2pp::KSW2AlignmentType;
-  // KSW2Config config;
-  // config.dropoff = -1;
-  // config.gapo = salmonOpts.gapOpenPenalty;
-  // config.gape = salmonOpts.gapExtendPenalty;
-  // config.bandwidth = salmonOpts.dpBandwidth;
-  // config.flag = 0;
-  // config.flag |= KSW_EZ_SCORE_ONLY;
-
-  // int8_t a = static_cast<int8_t>(salmonOpts.matchScore);
-  // int8_t b = static_cast<int8_t>(salmonOpts.mismatchPenalty);
-  // KSW2Aligner aligner(static_cast<int8_t>(a), static_cast<int8_t>(b));
-  // aligner.config() = config;
-  // ksw_extz_t ez;
-  // memset(&ez, 0, sizeof(ksw_extz_t));
-  // bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
-  // bool mimicBT2 = salmonOpts.mimicBT2;
-  // bool noDovetail = !salmonOpts.allowDovetail;
-
-  // auto ap{selective_alignment::utils::AlignmentPolicy::DEFAULT};
-  // if (mimicBT2) {
-  //   ap = selective_alignment::utils::AlignmentPolicy::BT2;
-  // } else if (mimicStrictBT2) {
-  //   ap = selective_alignment::utils::AlignmentPolicy::BT2_STRICT;
-  // }
-  // size_t numMappingsDropped{0};
-  // size_t numFragsDropped{0};
-  // size_t numDecoyFrags{0};
-
-  // //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
-  // AlnCacheMap alnCache; alnCache.reserve(16);
-
-  // auto rg = parser->getReadGroup();
-  // while (parser->refill(rg)) {
-  //   rangeSize = rg.size();
-  //   if (rangeSize > structureVec.size()) {
-  //     salmonOpts.jointLog->error("rangeSize = {}, but structureVec.size() = {} "
-  //                                "--- this shouldn't happen.\n"
-  //                                "Please report this bug on GitHub",
-  //                                rangeSize, structureVec.size());
-  //     salmonOpts.jointLog->flush();
-  //     spdlog::drop_all();
-  //     std::exit(1);
-  //   }
-
-  //   bool tryAlign{salmonOpts.validateMappings};
-  //   for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
-  //     auto& rp = rg[i];
-  //     readLen = rp.seq.length();
-  //     tooShort = (readLen < minK);
-  //     //tooManyHits = false;
-  //     //localUpperBoundHits = 0;
-  //     auto& jointHitGroup = structureVec[i];
-  //     auto& jointHits = jointHitGroup.alignments();
-  //     jointHitGroup.clearAlignments();
-  //     hcInfo.clear();
-
-  //     bool lh = tooShort ? false
-  //       : hitCollector(rp.seq, saSearcher, hcInfo);
-
-  //     rapmap::hit_manager::hitsToMappingsSimple(*qidx, mc,
-  //                                               MateStatus::SINGLE_END,
-  //                                               hcInfo, jointHits);
-
-  //     if (!tryAlign) {
-  //       jointHits.erase( std::remove_if(jointHits.begin(), jointHits.end(),
-  //                                      [&transcripts](QuasiAlignment& a) {
-  //                                        return a.tid >= transcripts.size(); }),
-  //                        jointHits.end() );
-  //     }
-
-  //     // If the fragment was too short, record it
-  //     if (tooShort) {
-  //       ++shortFragStats.numTooShort;
-  //       shortFragStats.shortest = std::min(shortFragStats.shortest, readLen);
-  //     }
-
-  //     if (initialRound) {
-  //       upperBoundHits += (jointHits.size() > 0);
-  //     }
-
-  //     // If the read mapped to > maxReadOccs places, discard it
-  //     if (jointHits.size() > salmonOpts.maxReadOccs) {
-  //       jointHitGroup.clearAlignments();
-  //     }
-
-  //       if (tryAlign) {
-  //         alnCache.clear();
-  //         auto* r1 = rp.seq.data();
-  //         auto l1 = static_cast<int32_t>(rp.seq.length());
-
-  //         char* r1rc = nullptr;
-  //         int32_t bestScore{std::numeric_limits<int32_t>::lowest()};
-  //         int32_t bestDecoyScore{std::numeric_limits<int32_t>::lowest()};
-  //         std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
-  //         std::vector<bool> decoyVec(jointHits.size(), false);
-  //         size_t idx{0};
-  //         double optFrac{salmonOpts.minScoreFraction};
-  //         int32_t maxReadScore = a * rp.seq.length();
-  //         bool multiMapping{jointHits.size() > 1};
-
-  //         for (auto& h : jointHits) {
-  //           int32_t score{std::numeric_limits<int32_t>::min()};
-  //           auto& t = transcripts[h.tid];
-  //           bool isDecoy = t.isDecoy();
-  //           char* tseq = const_cast<char*>(t.Sequence());
-  //           const int32_t tlen = static_cast<int32_t>(t.RefLength);
-  //           const uint32_t buf{20};
-
-  //           // compute the reverse complement only if we
-  //           // need it and don't have it
-  //           if (!h.fwd and !r1rc) {
-  //             rapmap::utils::reverseRead(rp.seq, rc1);
-  //             // we will not break the const promise
-  //             r1rc = const_cast<char*>(rc1.data());
-  //           }
-
-  //           auto* rptr = h.fwd ? r1 : r1rc;
-  //           int32_t s =
-  //             selective_alignment::utils::getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, a, b, maxReadScore, h.chainStatus.getLeft(),
-  //                         multiMapping, ap, buf, alnCache);
-  //           if (s < (optFrac * maxReadScore)) {
-  //             score = std::numeric_limits<decltype(score)>::min();
-  //           } else {
-  //             score = s;
-  //           }
-
-  //           bestScore = (!isDecoy and (score > bestScore)) ? score : bestScore;
-  //           bestDecoyScore = (isDecoy and (score > bestDecoyScore)) ? score : bestDecoyScore;
-  //           scores[idx] = score;
-  //           decoyVec[idx] = isDecoy;
-  //           h.score(score);
-  //           ++idx;
-  //         }
-
-  //         uint32_t ctr{0};
-  //         bool bestHitDecoy = (bestScore < bestDecoyScore);
-  //         if (bestScore > std::numeric_limits<int32_t>::min() and !bestHitDecoy) {
-  //           // Note --- with soft filtering, only those hits that are given the minimum possible
-  //           // score are filtered out.
-  //           jointHits.erase(
-  //                           std::remove_if(jointHits.begin(), jointHits.end(),
-  //                                          [&ctr, &scores, &decoyVec, &numMappingsDropped, bestScore, hardFilter] (const QuasiAlignment& qa) -> bool {
-  //                                            // if soft filtering, we only drop things with an invalid score
-  //                                            // if hard filtering, we drop everything with a sub-optimal score.
-  //                                            bool rem = decoyVec[ctr] ? true : (hardFilter ? (scores[ctr] < bestScore) :
-  //                                                                               (scores[ctr] == std::numeric_limits<int32_t>::min()));
-  //                                            ++ctr;
-  //                                            numMappingsDropped += rem ? 1 : 0;
-  //                                            return rem;
-  //                                          }),
-  //                           jointHits.end()
-  //                           );
-  //           // for soft filter
-  //           double bestScoreD = static_cast<double>(bestScore);
-  //           std::for_each(jointHits.begin(), jointHits.end(),
-  //                         [bestScoreD, writeQuasimappings, hardFilter](QuasiAlignment& qa) -> void {
-  //                           if (writeQuasimappings) { qa.alnScore(static_cast<int32_t>(qa.score())); }
-  //                           double v = bestScoreD - qa.score();
-  //                           qa.score( (hardFilter ? -1.0 : std::exp(-v)) );
-  //                         });
-  //         } else {
-  //           numDecoyFrags += bestHitDecoy ? 1 : 0;
-  //           ++numFragsDropped;
-  //           jointHitGroup.clearAlignments();
-  //         }
-  //       }
+   auto& readBiasFW = observedBiasParams.seqBiasModelFW;
+   auto& readBiasRC = observedBiasParams.seqBiasModelRC;
+   Mer context;
 
 
-  //     bool needBiasSample = salmonOpts.biasCorrect;
+   uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
+   size_t minK = qidx->k();
 
-  //     for (auto& h : jointHits) {
+   size_t locRead{0};
+   //uint64_t localUpperBoundHits{0};
+   size_t rangeSize{0};
 
-  //       // ---- Collect bias samples ------ //
-  //       int32_t pos = static_cast<int32_t>(h.pos);
-  //       auto dir = salmon::utils::boolToDirection(h.fwd);
+   bool tooManyHits{false};
+   size_t readLen{0};
+   bool consistentHits{salmonOpts.consistentHits};
+   bool quiet{salmonOpts.quiet};
 
-  //       // If bias correction is turned on, and we haven't sampled a mapping
-  //       // for this read yet, and we haven't collected the required number of
-  //       // samples overall.
-  //       if (needBiasSample and salmonOpts.numBiasSamples > 0) {
-  //         // the "start" position is the leftmost position if
-  //         // we hit the forward strand, and the leftmost
-  //         // position + the read length if we hit the reverse complement
-  //         int32_t startPos = h.fwd ? pos : pos + h.readLen;
 
-  //         auto& t = transcripts[h.tid];
-  //         if (startPos > 0 and startPos < static_cast<int32_t>(t.RefLength)) {
-  //           auto& readBias = (h.fwd) ? readBiasFW : readBiasRC;
-  //           const char* txpStart = t.Sequence();
-  //           const char* readStart = txpStart + startPos;
-  //           const char* txpEnd = txpStart + t.RefLength;
 
-  //           bool success{false};
-  //           // If the context exists around the read, add it to the observed
-  //           // read start sequences.
-  //           if (startPos >= readBias.contextBefore(!h.fwd) and
-  //               startPos + readBias.contextAfter(!h.fwd) < static_cast<int32_t>(t.RefLength)) {
-  //             context.from_chars(txpStart + startPos -
-  //                                readBias.contextBefore(!h.fwd));
-  //             if (!h.fwd) {
-  //               context.reverse_complement();
-  //             }
-  //             success = readBias.addSequence(context, 1.0);
-  //           }
+  //******* Setting up pufferfish mapping
+  constexpr const int32_t invalidScore = std::numeric_limits<int32_t>::min();
+  MemCollector<IndexT> memCollector(qidx);
+  memCollector.configureMemClusterer(salmonOpts.maxOccsPerHit);
+  double consensusFraction = (salmonOpts.consensusSlack == 0.0) ? 1.0 : (1.0 - salmonOpts.consensusSlack);
+  memCollector.setConsensusFraction(consensusFraction);
 
-  //           if (success) {
-  //             salmonOpts.numBiasSamples -= 1;
-  //             needBiasSample = false;
-  //           }
-  //         }
-  //       }
-  //       // ---- Collect bias samples ------ //
+  pufferfish::util::CachedVectorMap<size_t, std::vector<pufferfish::util::MemCluster>, std::hash<size_t>> hits;
 
-  //       switch (h.mateStatus) {
-  //       case MateStatus::SINGLE_END: {
-  //         h.format = salmon::utils::hitType(h.pos, h.fwd);
-  //       } break;
-  //       default:
-  //         break;
-  //       }
-  //     }
+  std::vector<pufferfish::util::MemCluster> recoveredHits;
+  std::vector<pufferfish::util::JointMems> jointHits;
+  PairedAlignmentFormatter<IndexT*> formatter(qidx);
+  pufferfish::util::QueryCache qc;
 
-  //     if (writeQuasimappings) {
-  //       rapmap::utils::writeAlignmentsToStream(rp, formatter, hctr, jointHits,
-  //                                              sstream);
-  //     }
+  //Initialize ksw aligner
+  ksw2pp::KSW2Config config;
+  config.dropoff = -1;
+  config.gapo = salmonOpts.gapOpenPenalty;
+  config.gape = salmonOpts.gapExtendPenalty;
+  config.bandwidth = salmonOpts.dpBandwidth;
+  config.flag = 0;
+  config.flag |= KSW_EZ_RIGHT;
+  config.flag |= KSW_EZ_SCORE_ONLY;
+  int8_t a = static_cast<int8_t>(salmonOpts.matchScore);
+  int8_t b = static_cast<int8_t>(salmonOpts.mismatchPenalty);
+  ksw2pp::KSW2Aligner aligner(static_cast<int8_t>(a), static_cast<int8_t>(b));
+  aligner.config() = config;
+  ksw_extz_t ez;
+  bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
+  bool mimicBT2 = salmonOpts.mimicBT2;
+  bool noDovetail = !salmonOpts.allowDovetail;
+  size_t numOrphansRescued{0};
 
-  //     if (writeUnmapped and jointHits.empty()) {
-  //       // If we have no mappings --- then there's nothing to do
-  //       // unless we're outputting names for un-mapped reads
-  //       unmappedNames << rp.name << " u\n";
-  //     }
+  phmap::flat_hash_map<uint32_t, std::pair<int32_t, int32_t>> bestScorePerTranscript;
 
-  //     validHits += jointHits.size();
-  //     locRead++;
-  //     ++numObservedFragments;
-  //     if (!quiet and numObservedFragments % 500000 == 0) {
-  //       iomutex.lock();
-  //       const char RESET_COLOR[] = "\x1b[0m";
-  //       char green[] = "\x1b[30m";
-  //       green[3] = '0' + static_cast<char>(fmt::GREEN);
-  //       char red[] = "\x1b[30m";
-  //       red[3] = '0' + static_cast<char>(fmt::RED);
-  //       if (initialRound) {
-  //         fmt::print(stderr, "\033[A\r\r{}processed{} {:n} {}fragments{}\n",
-  //                    green, red, numObservedFragments, green, RESET_COLOR);
-  //         fmt::print(stderr, "hits: {:n}; hits per frag:  {}", validHits,
-  //                    validHits / static_cast<float>(prevObservedFrags));
-  //       } else {
-  //         fmt::print(stderr, "\r\r{}processed{} {:n} {}fragments{}", green, red,
-  //                    numObservedFragments, green, RESET_COLOR);
-  //       }
-  //       iomutex.unlock();
-  //     }
+  pufferfish::util::AlignmentConfig aconf;
+  aconf.refExtendLength = 20;
+  aconf.fullAlignment = false;
+  aconf.matchScore = salmonOpts.matchScore;
+  aconf.gapExtendPenalty = salmonOpts.gapExtendPenalty;
+  aconf.gapOpenPenalty = salmonOpts.gapOpenPenalty;
+  aconf.minScoreFraction = consensusFraction;
+  aconf.mimicBT2 = mimicBT2;
 
-  //   } // end for i < j->nb_filled
+  PuffAligner puffaligner(qidx->refseq_, qidx->refAccumLengths_, qidx->k(), aconf, aligner);
 
-  //   if (writeUnmapped) {
-  //     std::string outStr(unmappedNames.str());
-  //     // Get rid of last newline
-  //     if (!outStr.empty()) {
-  //       outStr.pop_back();
-  //       unmappedLogger->info(std::move(outStr));
-  //     }
-  //     unmappedNames.clear();
-  //   }
+  pufferfish::util::MappingConstraintPolicy mpol;
+  mpol.noDovetail = !salmonOpts.allowDovetail;
 
-  //   if (writeQuasimappings) {
-  //     std::string outStr(sstream.str());
-  //     // Get rid of last newline
-  //     if (!outStr.empty()) {
-  //       outStr.pop_back();
-  //       qmLog->info(std::move(outStr));
-  //     }
-  //     sstream.clear();
-  //   }
+  using pufferfish::util::BestHitReferenceType;
+  BestHitReferenceType bestHitRefType{BestHitReferenceType::UNKNOWN};
+  BestHitReferenceType hitRefType{BestHitReferenceType::UNKNOWN};
+  //*******
 
-  //   prevObservedFrags = numObservedFragments;
-  //   AlnGroupVecRange<QuasiAlignment> hitLists = {structureVec.begin(), structureVec.begin()+rangeSize};
-  //     /*boost::make_iterator_range(
-  //       structurevec.begin(), structurevec.begin() + rangesize);*/
-  //   processMiniBatch<QuasiAlignment>(
-  //       readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
-  //       transcripts, clusterForest, fragLengthDist, observedBiasParams,
-  //       /**
-  //        * NOTE : test new el model in future
-  //        * obsEffLengths,
-  //        **/
-  //       numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac, logCMFCache);
-  // }
-  // readExp.updateShortFrags(shortFragStats);
 
-  // if (maxZeroFrac > 0.0) {
-  //   salmonOpts.jointLog->info("Thread saw mini-batch with a maximum of "
-  //                             "{0:.2f}\% zero probability fragments",
-  //                             maxZeroFrac);
-  // }
-  // mstats.numMappingsFiltered += numMappingsDropped;
-  // mstats.numFragmentsFiltered += numFragsDropped;
-  // mstats.numDecoyFragments += numDecoyFrags;
+  bool hardFilter = salmonOpts.hardFilter;
+
+  pufferfish::util::HitCounters hctr;
+  salmon::utils::MappingType mapType{salmon::utils::MappingType::UNMAPPED};
+
+   fmt::MemoryWriter sstream;
+   auto* qmLog = salmonOpts.qmLog.get();
+   bool writeQuasimappings = (qmLog != nullptr);
+
+   std::string rc1; rc1.reserve(300);
+
+   // will hold the permutation to use to put the transcripts in order
+   std::vector<std::pair<int32_t, int32_t>> perm;
+
+   size_t numMappingsDropped{0};
+   size_t numFragsDropped{0};
+   size_t numDecoyFrags{0};
+
+   //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
+   AlnCacheMap alnCache; alnCache.reserve(16);
+
+   auto rg = parser->getReadGroup();
+   while (parser->refill(rg)) {
+     rangeSize = rg.size();
+     if (rangeSize > structureVec.size()) {
+       salmonOpts.jointLog->error("rangeSize = {}, but structureVec.size() = {} "
+                                  "--- this shouldn't happen.\n"
+                                  "Please report this bug on GitHub",
+                                  rangeSize, structureVec.size());
+       salmonOpts.jointLog->flush();
+       spdlog::drop_all();
+       std::exit(1);
+     }
+
+     bool tryAlign{salmonOpts.validateMappings};
+     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
+       auto& rp = rg[i];
+       readLen = rp.seq.length();
+       tooShort = (readLen < minK);
+       //tooManyHits = false;
+       //localUpperBoundHits = 0;
+       auto& jointHitGroup = structureVec[i];
+       jointHitGroup.clearAlignments();
+       auto& jointAlignments = jointHitGroup.alignments();
+
+       perm.clear();
+       hits.clear();
+       jointHits.clear();
+       memCollector.clear();
+       jointAlignments.clear();
+       tooManyHits = false;
+
+       bool lh = tooShort ? false :
+                 memCollector(rp.seq,
+                              qc,
+                              true, // isLeft
+                              false // verbose
+                 );
+
+       memCollector.findChains(rp.seq,
+                               hits,
+                               salmonOpts.fragLenDistMax,
+                               MateStatus::SINGLE_END,
+                               true, // heuristic chaining
+                               true, // isLeft
+                               false // verbose
+                               );
+       // TODO : PF_INTEGRATION
+/*
+       if (!tryAlign) {
+         jointHits.erase( std::remove_if(jointHits.begin(), jointHits.end(),
+                                        [&transcripts](QuasiAlignment& a) {
+                                          return a.tid >= transcripts.size(); }),
+                          jointHits.end() );
+       }
+*/
+
+       // If the fragment was too short, record it
+       if (tooShort) {
+         ++shortFragStats.numTooShort;
+         shortFragStats.shortest = std::min(shortFragStats.shortest, readLen);
+       } else {
+         pufferfish::util::joinReadsAndFilterSingle(hits, jointHits,
+                                                    readLen,
+                                                    salmonOpts.minScoreFraction); //todo @rob, this shouldn't be minScoreFraction
+         hctr.peHits += jointHits.size();
+         if (initialRound) {
+           upperBoundHits += (jointHits.size() > 0);
+         }
+
+         // If the read mapped to > maxReadOccs places, discard it
+         if (jointHits.size() > salmonOpts.maxReadOccs) {
+           jointHitGroup.clearAlignments();
+         }
+
+       }
+
+
+       if (tryAlign and !jointHits.empty()) {
+
+         // clear the aligner for this read
+         puffaligner.clear();
+         bestScorePerTranscript.clear();
+
+         // the best scores start out as invalid
+         int32_t bestScore = invalidScore;
+         int32_t bestDecoyScore = invalidScore;
+         std::vector<decltype(bestScore)> scores(jointHits.size(), 0);
+         size_t idx{0};
+         bool isMultimapping = (jointHits.size() > 1);
+
+         for (auto &&jointHit : jointHits) {
+           auto hitScore = puffaligner.calculateAlignments(rp.seq, jointHit, hctr, isMultimapping, false);
+           bool validScore = (hitScore != invalidScore);
+           numMappingsDropped += validScore ? 0 : 1;
+           scores[idx] = hitScore;
+           auto tid = qidx->getRefId(jointHit.tid);
+           auto &t = transcripts[tid];
+           bool isDecoy = t.isDecoy();
+
+           // if the current score doesn't even match the best decoy,
+           // go to the next mapping.
+           if (hitScore < bestDecoyScore or !validScore) {
+             ++idx;
+             continue;
+           } else if (isDecoy) {
+             // otherwise, if this is a decoy, its score is at least as good
+             // as the bestDecoyScore, so update that and go to the next mapping
+             bestDecoyScore = hitScore;
+             ++idx;
+             continue;
+           }
+           // otherwise, we have a "high-scoring" hit to a non-decoy
+
+           // removing duplicate hits from a read to the same transcript
+           auto it = bestScorePerTranscript.find(tid);
+           if (it == bestScorePerTranscript.end()) {
+             // if we didn't have any alignment for this transcript yet, then
+             // this is the current best
+             bestScorePerTranscript[tid].first = hitScore;
+             bestScorePerTranscript[tid].second = idx;
+           } else if (hitScore > it->second.first) {
+             // otherwise, if we had an alignment for this transcript and it's
+             // better than the current best, then set the best score to this
+             // alignment's score, and invalidate the previous alignment
+             it->second.first = hitScore;
+             scores[it->second.second] = invalidScore;
+             it->second.second = idx;
+           } else {
+             // otherwise, there is already a better mapping for this transcript.
+             scores[idx] = invalidScore;
+           }
+
+           bestScore = (hitScore > bestScore) ? hitScore : bestScore;
+           perm.push_back(std::make_pair(idx, tid));
+           ++idx;
+         }
+
+
+         bool bestHitDecoy = (bestScore < bestDecoyScore);
+         if (bestScore > invalidScore and !bestHitDecoy) {
+
+           // throw away any pairs for which we should not produce valid alignments :
+           // ======
+           // If we are doing soft-filtering (default), we remove those not exceeding the bestDecoyScore
+           // If we are doing hard-filtering, we remove those less than the bestScore
+           perm.erase(std::remove_if(perm.begin(), perm.end(),
+                                     [&scores, hardFilter, bestScore, bestDecoyScore](
+                                             const std::pair<int32_t, int32_t> &idxtid) -> bool {
+                                         return !hardFilter ? scores[idxtid.first] < bestDecoyScore :
+                                                scores[idxtid.first] < bestScore;
+                                     }), perm.end());
+           // Unlike RapMap, pufferfish doesn't guarantee the hits computed above are in order
+           // by transcript, so we find the permutation of indices that puts things in transcript
+           // order.
+           std::sort(perm.begin(), perm.end(), [](const std::pair<int32_t, int32_t> &p1,
+                                                  const std::pair<int32_t, int32_t> &p2) {
+               return p1.second < p2.second;
+           });
+
+           // moving our alinged / score jointMEMs over to QuasiAlignment objects
+           double bestScoreD = static_cast<double>(bestScore);
+           for (auto &idxTxp : perm) {
+             int32_t ctr = idxTxp.first;
+             int32_t tid = idxTxp.second;
+             auto &jointHit = jointHits[ctr];
+
+             double currScore = scores[ctr];
+             double v = bestScoreD - currScore;
+             // why -1?
+             double estAlnProb = hardFilter ? -1.0 : std::exp(-v);
+
+             // moving our alinged / score jointMEMs over to QuasiAlignment objects
+             double bestScoreD = static_cast<double>(bestScore);
+             for (auto &idxTxp : perm) {
+               int32_t ctr = idxTxp.first;
+               int32_t tid = idxTxp.second;
+               auto &jointHit = jointHits[ctr];
+
+               double currScore = scores[ctr];
+               double v = bestScoreD - currScore;
+               // why -1?
+               double estAlnProb = hardFilter ? -1.0 : std::exp(-v);
+               jointAlignments.emplace_back(tid,           // reference id
+                                            jointHit.orphanClust()->getTrFirstHitPos(),     // reference pos
+                                            jointHit.orphanClust()->isFw,     // fwd direction
+                                            readLen, // read length
+                                            jointHit.orphanClust()->cigar, // cigar string
+                                            jointHit.fragmentLen,       // fragment length
+                                            false);
+               auto &qaln = jointAlignments.back();
+               qaln.mateLen = readLen;
+               qaln.mateCigar = "";
+               qaln.matePos = 0;       // jointHit.rightClust->getTrFirstHitPos();
+               qaln.mateIsFwd = false; // jointHit.rightClust->isFw;
+               qaln.mateStatus = MateStatus::SINGLE_END;
+               qaln.estAlnProb(estAlnProb);
+               qaln.numHits = static_cast<uint32_t >(jointHits.size());//orphanClust()->coverage;
+               qaln.score = !tryAlign ? static_cast<int32_t >(jointHit.orphanClust()->coverage)
+                                      : jointHit.alignmentScore;
+               qaln.numHits = static_cast<uint32_t >(jointHits.size());//orphanClust()->coverage;
+               qaln.mateScore = 0;
+
+             }
+             // done moving our alinged / score jointMEMs over to QuasiAlignment objects
+           }
+         } else {
+           numDecoyFrags += bestHitDecoy ? 1 : 0;
+           ++numFragsDropped;
+           jointHitGroup.clearAlignments();
+         }
+       }
+
+       bool needBiasSample = salmonOpts.biasCorrect;
+
+       std::uniform_int_distribution<> dis(0, jointAlignments.size());
+       // Randomly select a hit from which to draw the bias sample.
+       int32_t hitSamp{dis(eng)};
+       int32_t hn{0};
+
+       // ---- Collect bias samples ------ //
+       for (auto& h : jointAlignments) {
+
+         int32_t pos = static_cast<int32_t>(h.pos);
+
+         // If bias correction is turned on, and we haven't sampled a mapping
+         // for this read yet, and we haven't collected the required number of
+         // samples overall.
+       if (needBiasSample and salmonOpts.numBiasSamples > 0 and hn == hitSamp) {
+           // the "start" position is the leftmost position if
+           // we hit the forward strand, and the leftmost
+           // position + the read length if we hit the reverse complement
+           int32_t startPos = h.fwd ? pos : pos + h.readLen;
+
+           auto& t = transcripts[h.tid];
+           if (startPos > 0 and startPos < static_cast<int32_t>(t.RefLength)) {
+             auto& readBias = (h.fwd) ? readBiasFW : readBiasRC;
+             const char* txpStart = t.Sequence();
+
+             bool success{false};
+             // If the context exists around the read, add it to the observed
+             // read start sequences.
+             if (startPos >= readBias.contextBefore(!h.fwd) and
+                 startPos + readBias.contextAfter(!h.fwd) < static_cast<int32_t>(t.RefLength)) {
+               context.from_chars(txpStart + startPos -
+                                  readBias.contextBefore(!h.fwd));
+               if (!h.fwd) {
+                 context.reverse_complement();
+               }
+               success = readBias.addSequence(context, 1.0);
+             }
+
+             if (success) {
+               salmonOpts.numBiasSamples -= 1;
+               needBiasSample = false;
+             }
+           }
+         }
+         // ---- Collect bias samples ------ //
+
+         switch (h.mateStatus) {
+         case MateStatus::SINGLE_END: {
+           h.format = salmon::utils::hitType(h.pos, h.fwd);
+         } break;
+         default:
+           break;
+         }
+       }
+
+       if (writeQuasimappings) {
+         writeAlignmentsToStreamSingle(rp, formatter, jointAlignments, sstream, false);
+       }
+
+       if (writeUnmapped and jointHits.empty()) {
+         // If we have no mappings --- then there's nothing to do
+         // unless we're outputting names for un-mapped reads
+         unmappedNames << rp.name << " u\n";
+       }
+
+       validHits += jointHits.size();
+       locRead++;
+       ++numObservedFragments;
+       if (!quiet and numObservedFragments % 500000 == 0) {
+         iomutex.lock();
+         const char RESET_COLOR[] = "\x1b[0m";
+         char green[] = "\x1b[30m";
+         green[3] = '0' + static_cast<char>(fmt::GREEN);
+         char red[] = "\x1b[30m";
+         red[3] = '0' + static_cast<char>(fmt::RED);
+         if (initialRound) {
+           fmt::print(stderr, "\033[A\r\r{}processed{} {:n} {}fragments{}\n",
+                      green, red, numObservedFragments, green, RESET_COLOR);
+           fmt::print(stderr, "hits: {:n}; hits per frag:  {}", validHits,
+                      validHits / static_cast<float>(prevObservedFrags));
+         } else {
+           fmt::print(stderr, "\r\r{}processed{} {:n} {}fragments{}", green, red,
+                      numObservedFragments, green, RESET_COLOR);
+         }
+         iomutex.unlock();
+       }
+
+     } // end for i < j->nb_filled
+
+     if (writeUnmapped) {
+       std::string outStr(unmappedNames.str());
+       // Get rid of last newline
+       if (!outStr.empty()) {
+         outStr.pop_back();
+         unmappedLogger->info(std::move(outStr));
+       }
+       unmappedNames.clear();
+     }
+
+     if (writeQuasimappings) {
+       std::string outStr(sstream.str());
+       // Get rid of last newline
+       if (!outStr.empty()) {
+         outStr.pop_back();
+         qmLog->info(std::move(outStr));
+       }
+       sstream.clear();
+     }
+
+     prevObservedFrags = numObservedFragments;
+     AlnGroupVecRange<QuasiAlignment> hitLists = {structureVec.begin(), structureVec.begin()+rangeSize};
+       /*boost::make_iterator_range(
+         structurevec.begin(), structurevec.begin() + rangesize);*/
+     processMiniBatch<QuasiAlignment>(
+         readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
+         transcripts, clusterForest, fragLengthDist, observedBiasParams,
+         /**
+          * NOTE : test new el model in future
+          * obsEffLengths,
+          **/
+         numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac, logCMFCache);
+   }
+   readExp.updateShortFrags(shortFragStats);
+
+   if (maxZeroFrac > 0.0) {
+     salmonOpts.jointLog->info("Thread saw mini-batch with a maximum of "
+                               "{0:.2f}\% zero probability fragments",
+                               maxZeroFrac);
+   }
+   mstats.numMappingsFiltered += numMappingsDropped;
+   mstats.numFragmentsFiltered += numFragsDropped;
+   mstats.numDecoyFragments += numDecoyFrags;
 }
 
 /// DONE QUASI
