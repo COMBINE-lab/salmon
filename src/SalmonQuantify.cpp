@@ -1764,19 +1764,6 @@ void processReadsQuasi(
                                                   const std::pair<int32_t, int32_t> &p2) {
                return p1.second < p2.second;
            });
-
-           // moving our alinged / score jointMEMs over to QuasiAlignment objects
-           double bestScoreD = static_cast<double>(bestScore);
-           for (auto &idxTxp : perm) {
-             int32_t ctr = idxTxp.first;
-             int32_t tid = idxTxp.second;
-             auto &jointHit = jointHits[ctr];
-
-             double currScore = scores[ctr];
-             double v = bestScoreD - currScore;
-             // why -1?
-             double estAlnProb = hardFilter ? -1.0 : std::exp(-v);
-
              // moving our alinged / score jointMEMs over to QuasiAlignment objects
              double bestScoreD = static_cast<double>(bestScore);
              for (auto &idxTxp : perm) {
@@ -1808,7 +1795,7 @@ void processReadsQuasi(
                qaln.numHits = static_cast<uint32_t >(jointHits.size());//orphanClust()->coverage;
                qaln.mateScore = 0;
 
-             }
+
              // done moving our alinged / score jointMEMs over to QuasiAlignment objects
            }
          } else {
