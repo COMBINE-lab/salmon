@@ -738,7 +738,7 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
 
 
 template <typename IndexT>
-bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& memCollector, ksw2pp::KSW2Aligner& aligner,
+inline bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& memCollector, ksw2pp::KSW2Aligner& aligner,
                         pufferfish::util::AlignmentConfig& aconf, pufferfish::util::MappingConstraintPolicy& mpol) {
   memCollector.configureMemClusterer(salmonOpts.maxOccsPerHit);
   double consensusFraction = (salmonOpts.consensusSlack == 0.0) ? 1.0 : (1.0 - salmonOpts.consensusSlack);
@@ -779,6 +779,53 @@ bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& memCollect
   return true;
 }
 
+
+template <typename PuffIdxT>
+inline void updateRefMappings(PuffIdxT& qidx, uint32_t tid, int32_t hitScore, size_t idx,
+                  const std::vector<Transcript>& transcripts,
+                  int32_t invalidScore,
+                  int32_t& bestScore, int32_t& bestDecoyScore,
+                  std::vector<int32_t>& scores,
+                  phmap::flat_hash_map<uint32_t, std::pair<int32_t, int32_t>>& bestScorePerTranscript,
+                  std::vector<std::pair<int32_t, int32_t>>& perm) {
+  scores[idx] = hitScore;
+  auto& t = transcripts[tid];
+  bool isDecoy = t.isDecoy();
+
+  // if the current score doesn't even match the best decoy,
+  // go to the next mapping.
+  if (hitScore < bestDecoyScore or (hitScore == invalidScore)) {
+    return;
+  } else if (isDecoy) {
+    // otherwise, if this is a decoy, its score is at least as good
+    // as the bestDecoyScore, so update that and go to the next mapping
+    bestDecoyScore = hitScore;
+    return;
+  }
+  // otherwise, we have a "high-scoring" hit to a non-decoy
+
+  // removing duplicate hits from a read to the same transcript
+  auto it = bestScorePerTranscript.find(tid);
+  if (it == bestScorePerTranscript.end()) {
+    // if we didn't have any alignment for this transcript yet, then
+    // this is the current best
+    bestScorePerTranscript[tid].first = hitScore;
+    bestScorePerTranscript[tid].second = idx;
+  } else if (hitScore > it->second.first) {
+    // otherwise, if we had an alignment for this transcript and it's
+    // better than the current best, then set the best score to this
+    // alignment's score, and invalidate the previous alignment
+    it->second.first = hitScore;
+    scores[it->second.second] = invalidScore;
+    it->second.second = idx;
+  } else {
+    // otherwise, there is already a better mapping for this transcript.
+    scores[idx] = invalidScore;
+  }
+
+  bestScore = (hitScore > bestScore) ? hitScore : bestScore;
+  perm.push_back(std::make_pair(idx, tid));
+}
 
 /// START QUASI
 template <typename IndexT>
@@ -1105,46 +1152,9 @@ void processReadsQuasi(
             auto hitScore = puffaligner.calculateAlignments(rp.first.seq, rp.second.seq, jointHit, hctr, isMultimapping, false);
             bool validScore = (hitScore != invalidScore);
             numMappingsDropped += validScore ? 0 : 1;
-            scores[idx] = hitScore;
             auto tid = qidx->getRefId(jointHit.tid);
-            auto& t = transcripts[tid];
-            bool isDecoy = t.isDecoy();
-
-            // if the current score doesn't even match the best decoy,
-            // go to the next mapping.
-            if (hitScore < bestDecoyScore or !validScore) {
-              ++idx;
-              continue;
-            } else if (isDecoy) {
-              // otherwise, if this is a decoy, its score is at least as good
-              // as the bestDecoyScore, so update that and go to the next mapping
-              bestDecoyScore = hitScore;
-              ++idx;
-              continue;
-            }
-            // otherwise, we have a "high-scoring" hit to a non-decoy
-
-            // removing duplicate hits from a read to the same transcript
-            auto it = bestScorePerTranscript.find(tid);
-            if (it == bestScorePerTranscript.end()) {
-              // if we didn't have any alignment for this transcript yet, then
-              // this is the current best
-              bestScorePerTranscript[tid].first = hitScore;
-              bestScorePerTranscript[tid].second = idx;
-            } else if (hitScore > it->second.first) {
-              // otherwise, if we had an alignment for this transcript and it's
-              // better than the current best, then set the best score to this
-              // alignment's score, and invalidate the previous alignment
-              it->second.first = hitScore;
-              scores[it->second.second] = invalidScore;
-              it->second.second = idx;
-            } else {
-              // otherwise, there is already a better mapping for this transcript.
-              scores[idx] = invalidScore;
-            }
-
-            bestScore = (hitScore > bestScore) ? hitScore : bestScore;
-            perm.push_back(std::make_pair(idx, tid));
+            updateRefMappings(qidx, tid, hitScore, idx, transcripts, invalidScore, bestScore, bestDecoyScore,
+                              scores, bestScorePerTranscript, perm);
             ++idx;
           }
 
@@ -1675,49 +1685,11 @@ void processReadsQuasi(
            auto hitScore = puffaligner.calculateAlignments(rp.seq, jointHit, hctr, isMultimapping, false);
            bool validScore = (hitScore != invalidScore);
            numMappingsDropped += validScore ? 0 : 1;
-           scores[idx] = hitScore;
            auto tid = qidx->getRefId(jointHit.tid);
-           auto &t = transcripts[tid];
-           bool isDecoy = t.isDecoy();
-
-           // if the current score doesn't even match the best decoy,
-           // go to the next mapping.
-           if (hitScore < bestDecoyScore or !validScore) {
-             ++idx;
-             continue;
-           } else if (isDecoy) {
-             // otherwise, if this is a decoy, its score is at least as good
-             // as the bestDecoyScore, so update that and go to the next mapping
-             bestDecoyScore = hitScore;
-             ++idx;
-             continue;
-           }
-           // otherwise, we have a "high-scoring" hit to a non-decoy
-
-           // removing duplicate hits from a read to the same transcript
-           auto it = bestScorePerTranscript.find(tid);
-           if (it == bestScorePerTranscript.end()) {
-             // if we didn't have any alignment for this transcript yet, then
-             // this is the current best
-             bestScorePerTranscript[tid].first = hitScore;
-             bestScorePerTranscript[tid].second = idx;
-           } else if (hitScore > it->second.first) {
-             // otherwise, if we had an alignment for this transcript and it's
-             // better than the current best, then set the best score to this
-             // alignment's score, and invalidate the previous alignment
-             it->second.first = hitScore;
-             scores[it->second.second] = invalidScore;
-             it->second.second = idx;
-           } else {
-             // otherwise, there is already a better mapping for this transcript.
-             scores[idx] = invalidScore;
-           }
-
-           bestScore = (hitScore > bestScore) ? hitScore : bestScore;
-           perm.push_back(std::make_pair(idx, tid));
+           updateRefMappings(qidx, tid, hitScore, idx, transcripts, invalidScore, bestScore, bestDecoyScore,
+                             scores, bestScorePerTranscript, perm);
            ++idx;
          }
-
 
          bool bestHitDecoy = (bestScore < bestDecoyScore);
          if (bestScore > invalidScore and !bestHitDecoy) {
