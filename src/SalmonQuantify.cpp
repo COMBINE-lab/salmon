@@ -94,6 +94,7 @@
 #include "SalmonMath.hpp"
 #include "SalmonUtils.hpp"
 #include "Transcript.hpp"
+#include "SalmonMappingUtils.hpp"
 
 #include "AlignmentGroup.hpp"
 #include "BiasParams.hpp"
@@ -736,97 +737,6 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
 }
 
 
-
-template <typename IndexT>
-inline bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& memCollector, ksw2pp::KSW2Aligner& aligner,
-                        pufferfish::util::AlignmentConfig& aconf, pufferfish::util::MappingConstraintPolicy& mpol) {
-  memCollector.configureMemClusterer(salmonOpts.maxOccsPerHit);
-  double consensusFraction = (salmonOpts.consensusSlack == 0.0) ? 1.0 : (1.0 - salmonOpts.consensusSlack);
-  memCollector.setConsensusFraction(consensusFraction);
-
-  //Initialize ksw aligner
-  ksw2pp::KSW2Config config;
-  config.dropoff = -1;
-  config.gapo = salmonOpts.gapOpenPenalty;
-  config.gape = salmonOpts.gapExtendPenalty;
-  config.bandwidth = salmonOpts.dpBandwidth;
-  config.flag = 0;
-  config.flag |= KSW_EZ_RIGHT;
-  config.flag |= KSW_EZ_SCORE_ONLY;
-  int8_t a = static_cast<int8_t>(salmonOpts.matchScore);
-  int8_t b = static_cast<int8_t>(salmonOpts.mismatchPenalty);
-  ksw2pp::KSW2Aligner aligner2(static_cast<int8_t>(a), static_cast<int8_t>(b));
-  aligner2.config() = config;
-  std::swap(aligner, aligner2);
-
-  aconf.refExtendLength = 20;
-  aconf.fullAlignment = false;
-  aconf.matchScore = salmonOpts.matchScore;
-  aconf.gapExtendPenalty = salmonOpts.gapExtendPenalty;
-  aconf.gapOpenPenalty = salmonOpts.gapOpenPenalty;
-  aconf.minScoreFraction = salmonOpts.minScoreFraction;
-  aconf.mimicBT2 = salmonOpts.mimicBT2;
-
-  mpol.noOrphans = !salmonOpts.allowOrphans;
-  // TODO : PF_INTEGRATION
-  // decide how we want to set this
-  // I think we don't want to allow general discordant reads
-  // e.g. both map to same strand or map too far away, but
-  // we want the "allowDovetail" option to determine if
-  // a dovetail read is considered concordant or discordant
-  mpol.noDiscordant = true;
-  mpol.noDovetail = !salmonOpts.allowDovetail;
-  return true;
-}
-
-
-template <typename PuffIdxT>
-inline void updateRefMappings(PuffIdxT& qidx, uint32_t tid, int32_t hitScore, size_t idx,
-                  const std::vector<Transcript>& transcripts,
-                  int32_t invalidScore,
-                  int32_t& bestScore, int32_t& bestDecoyScore,
-                  std::vector<int32_t>& scores,
-                  phmap::flat_hash_map<uint32_t, std::pair<int32_t, int32_t>>& bestScorePerTranscript,
-                  std::vector<std::pair<int32_t, int32_t>>& perm) {
-  scores[idx] = hitScore;
-  auto& t = transcripts[tid];
-  bool isDecoy = t.isDecoy();
-
-  // if the current score doesn't even match the best decoy,
-  // go to the next mapping.
-  if (hitScore < bestDecoyScore or (hitScore == invalidScore)) {
-    return;
-  } else if (isDecoy) {
-    // otherwise, if this is a decoy, its score is at least as good
-    // as the bestDecoyScore, so update that and go to the next mapping
-    bestDecoyScore = hitScore;
-    return;
-  }
-  // otherwise, we have a "high-scoring" hit to a non-decoy
-
-  // removing duplicate hits from a read to the same transcript
-  auto it = bestScorePerTranscript.find(tid);
-  if (it == bestScorePerTranscript.end()) {
-    // if we didn't have any alignment for this transcript yet, then
-    // this is the current best
-    bestScorePerTranscript[tid].first = hitScore;
-    bestScorePerTranscript[tid].second = idx;
-  } else if (hitScore > it->second.first) {
-    // otherwise, if we had an alignment for this transcript and it's
-    // better than the current best, then set the best score to this
-    // alignment's score, and invalidate the previous alignment
-    it->second.first = hitScore;
-    scores[it->second.second] = invalidScore;
-    it->second.second = idx;
-  } else {
-    // otherwise, there is already a better mapping for this transcript.
-    scores[idx] = invalidScore;
-  }
-
-  bestScore = (hitScore > bestScore) ? hitScore : bestScore;
-  perm.push_back(std::make_pair(idx, tid));
-}
-
 /// START QUASI
 template <typename IndexT>
 void processReadsQuasi(
@@ -906,7 +816,7 @@ void processReadsQuasi(
   ksw2pp::KSW2Aligner aligner;
   pufferfish::util::AlignmentConfig aconf;
   pufferfish::util::MappingConstraintPolicy mpol;
-  bool initOK = initMapperSettings(salmonOpts, memCollector, aligner, aconf, mpol);
+  bool initOK = salmon::mapping_utils::initMapperSettings(salmonOpts, memCollector, aligner, aconf, mpol);
   PuffAligner puffaligner(qidx->refseq_, qidx->refAccumLengths_, qidx->k(), aconf, aligner);
 
   pufferfish::util::CachedVectorMap<size_t, std::vector<pufferfish::util::MemCluster>, std::hash<size_t>> leftHits;
@@ -1153,7 +1063,7 @@ void processReadsQuasi(
             bool validScore = (hitScore != invalidScore);
             numMappingsDropped += validScore ? 0 : 1;
             auto tid = qidx->getRefId(jointHit.tid);
-            updateRefMappings(qidx, tid, hitScore, idx, transcripts, invalidScore, bestScore, bestDecoyScore,
+            salmon::mapping_utils::updateRefMappings(tid, hitScore, idx, transcripts, invalidScore, bestScore, bestDecoyScore,
                               scores, bestScorePerTranscript, perm);
             ++idx;
           }
@@ -1161,73 +1071,17 @@ void processReadsQuasi(
           bool bestHitDecoy = (bestScore < bestDecoyScore);
           if (bestScore > invalidScore and !bestHitDecoy) {
 
-            // throw away any pairs for which we should not produce valid alignments :
-            // ======
-            // If we are doing soft-filtering (default), we remove those not exceeding the bestDecoyScore
-            // If we are doing hard-filtering, we remove those less than the bestScore
-            perm.erase(std::remove_if(perm.begin(), perm.end(),
-                       [&scores, hardFilter, bestScore, bestDecoyScore, hardFilter](const std::pair<int32_t, int32_t>& idxtid) -> bool {
-                             return !hardFilter ?  scores[idxtid.first] < bestDecoyScore : scores[idxtid.first] < bestScore;
-                           }), perm.end());
-            // Unlike RapMap, pufferfish doesn't guarantee the hits computed above are in order
-            // by transcript, so we find the permutation of indices that puts things in transcript
-            // order.
-            std::sort(perm.begin(), perm.end(), [](const std::pair<int32_t, int32_t>& p1,
-                                                  const std::pair<int32_t, int32_t>& p2) {
-                                                  return p1.second < p2.second;});
-
-            // moving our alinged / score jointMEMs over to QuasiAlignment objects
-            double bestScoreD = static_cast<double>(bestScore);
-            for (auto& idxTxp : perm) {
-              int32_t ctr = idxTxp.first;
-              int32_t tid = idxTxp.second;
-              auto& jointHit = jointHits[ctr];
-
-              double currScore = scores[ctr];
-              double v = bestScoreD - currScore;
-              // why -1?
-              double estAlnProb = hardFilter ? -1.0 : std::exp(-v);
-
-              if (jointHit.isOrphan()) {
-                readLen = jointHit.isLeftAvailable() ? readLen : mateLen;
-                jointAlignments.emplace_back(tid,           // reference id
-                                             jointHit.orphanClust()->getTrFirstHitPos(),     // reference pos
-                                             jointHit.orphanClust()->isFw,     // fwd direction
-                                             readLen, // read length
-                                             jointHit.orphanClust()->cigar, // cigar string
-                                             jointHit.fragmentLen,       // fragment length
-                                             false);
-                auto &qaln = jointAlignments.back();
-                // NOTE : score should not be filled in from a double
-                qaln.score = !tryAlign ? static_cast<int32_t >(jointHit.orphanClust()->coverage):jointHit.alignmentScore;
-                qaln.estAlnProb(estAlnProb);
-                // NOTE : wth is numHits?
-                qaln.numHits = static_cast<uint32_t >(jointHits.size());//orphanClust()->coverage;
-                qaln.mateStatus = jointHit.mateStatus;
-              } else {
-                jointAlignments.emplace_back(tid,           // reference id
-                                             jointHit.leftClust->getTrFirstHitPos(),     // reference pos
-                                             jointHit.leftClust->isFw,     // fwd direction
-                                             readLen, // read length
-                                             jointHit.leftClust->cigar, // cigar string
-                                             jointHit.fragmentLen,       // fragment length
-                                             true);         // properly paired
-                // Fill in the mate info
-                auto &qaln = jointAlignments.back();
-                qaln.mateLen = mateLen;
-                qaln.mateCigar = jointHit.rightClust->cigar;
-                qaln.matePos = static_cast<int32_t >(jointHit.rightClust->getTrFirstHitPos());
-                qaln.mateIsFwd = jointHit.rightClust->isFw;
-                qaln.mateStatus = MateStatus::PAIRED_END_PAIRED;
-                // NOTE : wth is numHits?
-                qaln.numHits = static_cast<uint32_t >(jointHits.size());
-                // NOTE : score should not be filled in from a double
-                qaln.score = !tryAlign ? static_cast<int32_t >(jointHit.leftClust->coverage):jointHit.alignmentScore;
-                qaln.estAlnProb(estAlnProb);
-                qaln.mateScore = !tryAlign ? static_cast<int32_t >(jointHit.rightClust->coverage):jointHit.mateAlignmentScore;
-              }
-            }
-            // done moving our alinged / score jointMEMs over to QuasiAlignment objects
+            salmon::mapping_utils::filterAndCollectAlignments(jointHits,
+                                       scores,
+                                       perm,
+                                       readLen,
+                                       mateLen,
+                                       false, // true for single-end false otherwise
+                                       tryAlign,
+                                       hardFilter,
+                                       bestScore,
+                                       bestDecoyScore,
+                                       jointAlignments);
           } else {
             numDecoyFrags += bestHitDecoy ? 1 : 0;
             ++numFragsDropped;
@@ -1551,11 +1405,9 @@ void processReadsQuasi(
   ksw2pp::KSW2Aligner aligner;
   pufferfish::util::AlignmentConfig aconf;
   pufferfish::util::MappingConstraintPolicy mpol;
-  bool initOK = initMapperSettings(salmonOpts, memCollector, aligner, aconf, mpol);
+  bool initOK = salmon::mapping_utils::initMapperSettings(salmonOpts, memCollector, aligner, aconf, mpol);
   PuffAligner puffaligner(qidx->refseq_, qidx->refAccumLengths_, qidx->k(), aconf, aligner);
 
-  salmonOpts.jointLog->info("gapo : {}, gape : {}, bandwidth : {}", aligner.config().gapo, aligner.config().gape,
-                            aligner.config().bandwidth);
   pufferfish::util::CachedVectorMap<size_t, std::vector<pufferfish::util::MemCluster>, std::hash<size_t>> hits;
   std::vector<pufferfish::util::MemCluster> recoveredHits;
   std::vector<pufferfish::util::JointMems> jointHits;
@@ -1686,65 +1538,24 @@ void processReadsQuasi(
            bool validScore = (hitScore != invalidScore);
            numMappingsDropped += validScore ? 0 : 1;
            auto tid = qidx->getRefId(jointHit.tid);
-           updateRefMappings(qidx, tid, hitScore, idx, transcripts, invalidScore, bestScore, bestDecoyScore,
+           salmon::mapping_utils::updateRefMappings(tid, hitScore, idx, transcripts, invalidScore, bestScore, bestDecoyScore,
                              scores, bestScorePerTranscript, perm);
            ++idx;
          }
 
          bool bestHitDecoy = (bestScore < bestDecoyScore);
          if (bestScore > invalidScore and !bestHitDecoy) {
-
-           // throw away any pairs for which we should not produce valid alignments :
-           // ======
-           // If we are doing soft-filtering (default), we remove those not exceeding the bestDecoyScore
-           // If we are doing hard-filtering, we remove those less than the bestScore
-           perm.erase(std::remove_if(perm.begin(), perm.end(),
-                                     [&scores, hardFilter, bestScore, bestDecoyScore](
-                                             const std::pair<int32_t, int32_t> &idxtid) -> bool {
-                                         return !hardFilter ? scores[idxtid.first] < bestDecoyScore :
-                                                scores[idxtid.first] < bestScore;
-                                     }), perm.end());
-           // Unlike RapMap, pufferfish doesn't guarantee the hits computed above are in order
-           // by transcript, so we find the permutation of indices that puts things in transcript
-           // order.
-           std::sort(perm.begin(), perm.end(), [](const std::pair<int32_t, int32_t> &p1,
-                                                  const std::pair<int32_t, int32_t> &p2) {
-               return p1.second < p2.second;
-           });
-             // moving our alinged / score jointMEMs over to QuasiAlignment objects
-             double bestScoreD = static_cast<double>(bestScore);
-             for (auto &idxTxp : perm) {
-               int32_t ctr = idxTxp.first;
-               int32_t tid = idxTxp.second;
-               auto &jointHit = jointHits[ctr];
-
-               double currScore = scores[ctr];
-               double v = bestScoreD - currScore;
-               // why -1?
-               double estAlnProb = hardFilter ? -1.0 : std::exp(-v);
-               jointAlignments.emplace_back(tid,           // reference id
-                                            jointHit.orphanClust()->getTrFirstHitPos(),     // reference pos
-                                            jointHit.orphanClust()->isFw,     // fwd direction
-                                            readLen, // read length
-                                            jointHit.orphanClust()->cigar, // cigar string
-                                            jointHit.fragmentLen,       // fragment length
-                                            false);
-               auto &qaln = jointAlignments.back();
-               qaln.mateLen = readLen;
-               qaln.mateCigar = "";
-               qaln.matePos = 0;       // jointHit.rightClust->getTrFirstHitPos();
-               qaln.mateIsFwd = false; // jointHit.rightClust->isFw;
-               qaln.mateStatus = MateStatus::SINGLE_END;
-               qaln.estAlnProb(estAlnProb);
-               qaln.numHits = static_cast<uint32_t >(jointHits.size());//orphanClust()->coverage;
-               qaln.score = !tryAlign ? static_cast<int32_t >(jointHit.orphanClust()->coverage)
-                                      : jointHit.alignmentScore;
-               qaln.numHits = static_cast<uint32_t >(jointHits.size());//orphanClust()->coverage;
-               qaln.mateScore = 0;
-
-
-             // done moving our alinged / score jointMEMs over to QuasiAlignment objects
-           }
+           salmon::mapping_utils::filterAndCollectAlignments(jointHits,
+                                      scores,
+                                      perm,
+                                      readLen,
+                                      readLen,
+                                      true, // true for single-end false otherwise
+                                      tryAlign,
+                                      hardFilter,
+                                      bestScore,
+                                      bestDecoyScore,
+                                      jointAlignments);
          } else {
            numDecoyFrags += bestHitDecoy ? 1 : 0;
            ++numFragsDropped;
