@@ -735,6 +735,51 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
   }
 }
 
+
+
+template <typename IndexT>
+bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& memCollector, ksw2pp::KSW2Aligner& aligner,
+                        pufferfish::util::AlignmentConfig& aconf, pufferfish::util::MappingConstraintPolicy& mpol) {
+  memCollector.configureMemClusterer(salmonOpts.maxOccsPerHit);
+  double consensusFraction = (salmonOpts.consensusSlack == 0.0) ? 1.0 : (1.0 - salmonOpts.consensusSlack);
+  memCollector.setConsensusFraction(consensusFraction);
+
+  //Initialize ksw aligner
+  ksw2pp::KSW2Config config;
+  config.dropoff = -1;
+  config.gapo = salmonOpts.gapOpenPenalty;
+  config.gape = salmonOpts.gapExtendPenalty;
+  config.bandwidth = salmonOpts.dpBandwidth;
+  config.flag = 0;
+  config.flag |= KSW_EZ_RIGHT;
+  config.flag |= KSW_EZ_SCORE_ONLY;
+  int8_t a = static_cast<int8_t>(salmonOpts.matchScore);
+  int8_t b = static_cast<int8_t>(salmonOpts.mismatchPenalty);
+  ksw2pp::KSW2Aligner aligner2(static_cast<int8_t>(a), static_cast<int8_t>(b));
+  aligner2.config() = config;
+  std::swap(aligner, aligner2);
+
+  aconf.refExtendLength = 20;
+  aconf.fullAlignment = false;
+  aconf.matchScore = salmonOpts.matchScore;
+  aconf.gapExtendPenalty = salmonOpts.gapExtendPenalty;
+  aconf.gapOpenPenalty = salmonOpts.gapOpenPenalty;
+  aconf.minScoreFraction = salmonOpts.minScoreFraction;
+  aconf.mimicBT2 = salmonOpts.mimicBT2;
+
+  mpol.noOrphans = !salmonOpts.allowOrphans;
+  // TODO : PF_INTEGRATION
+  // decide how we want to set this
+  // I think we don't want to allow general discordant reads
+  // e.g. both map to same strand or map too far away, but
+  // we want the "allowDovetail" option to determine if
+  // a dovetail read is considered concordant or discordant
+  mpol.noDiscordant = true;
+  mpol.noDovetail = !salmonOpts.allowDovetail;
+  return true;
+}
+
+
 /// START QUASI
 template <typename IndexT>
 void processReadsQuasi(
@@ -811,64 +856,24 @@ void processReadsQuasi(
   //******* Setting up pufferfish mapping
   constexpr const int32_t invalidScore = std::numeric_limits<int32_t>::min();
   MemCollector<IndexT> memCollector(qidx);
-  memCollector.configureMemClusterer(salmonOpts.maxOccsPerHit);
-  double consensusFraction = (salmonOpts.consensusSlack == 0.0) ? 1.0 : (1.0 - salmonOpts.consensusSlack);
-  memCollector.setConsensusFraction(consensusFraction);
+  ksw2pp::KSW2Aligner aligner;
+  pufferfish::util::AlignmentConfig aconf;
+  pufferfish::util::MappingConstraintPolicy mpol;
+  bool initOK = initMapperSettings(salmonOpts, memCollector, aligner, aconf, mpol);
+  PuffAligner puffaligner(qidx->refseq_, qidx->refAccumLengths_, qidx->k(), aconf, aligner);
 
   pufferfish::util::CachedVectorMap<size_t, std::vector<pufferfish::util::MemCluster>, std::hash<size_t>> leftHits;
   pufferfish::util::CachedVectorMap<size_t, std::vector<pufferfish::util::MemCluster>, std::hash<size_t>> rightHits;
-
   std::vector<pufferfish::util::MemCluster> recoveredHits;
   std::vector<pufferfish::util::JointMems> jointHits;
   PairedAlignmentFormatter<IndexT*> formatter(qidx);
   pufferfish::util::QueryCache qc;
 
-  //Initialize ksw aligner
-  ksw2pp::KSW2Config config;
-  config.dropoff = -1;
-  config.gapo = salmonOpts.gapOpenPenalty;
-  config.gape = salmonOpts.gapExtendPenalty;
-  config.bandwidth = salmonOpts.dpBandwidth;
-  config.flag = 0;
-  config.flag |= KSW_EZ_RIGHT;
-  config.flag |= KSW_EZ_SCORE_ONLY;
-  int8_t a = static_cast<int8_t>(salmonOpts.matchScore);
-  int8_t b = static_cast<int8_t>(salmonOpts.mismatchPenalty);
-  ksw2pp::KSW2Aligner aligner(static_cast<int8_t>(a), static_cast<int8_t>(b));
-  aligner.config() = config;
-  ksw_extz_t ez;
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   bool mimicBT2 = salmonOpts.mimicBT2;
   bool noDovetail = !salmonOpts.allowDovetail;
   size_t numOrphansRescued{0};
-
   phmap::flat_hash_map<uint32_t, std::pair<int32_t, int32_t>> bestScorePerTranscript;
-
-  pufferfish::util::AlignmentConfig aconf;
-  aconf.refExtendLength = 20;
-  aconf.fullAlignment = false;
-  aconf.matchScore = salmonOpts.matchScore;
-  aconf.gapExtendPenalty = salmonOpts.gapExtendPenalty;
-  aconf.gapOpenPenalty = salmonOpts.gapOpenPenalty;
-  aconf.minScoreFraction = salmonOpts.minScoreFraction;
-  aconf.mimicBT2 = mimicBT2;
-
-  PuffAligner puffaligner(qidx->refseq_, qidx->refAccumLengths_, qidx->k(), aconf, aligner);
-
-  pufferfish::util::MappingConstraintPolicy mpol;
-  mpol.noOrphans = !salmonOpts.allowOrphans;
-  // TODO : PF_INTEGRATION
-  // decide how we want to set this
-  // I think we don't want to allow general discordant reads
-  // e.g. both map to same strand or map too far away, but
-  // we want the "allowDovetail" option to determine if
-  // a dovetail read is considered concordant or discordant
-  mpol.noDiscordant = true;
-  mpol.noDovetail = !salmonOpts.allowDovetail;
-
-  using pufferfish::util::BestHitReferenceType;
-  BestHitReferenceType bestHitRefType{BestHitReferenceType::UNKNOWN};
-  BestHitReferenceType hitRefType{BestHitReferenceType::UNKNOWN};
   //*******
 
   bool hardFilter = salmonOpts.hardFilter;
@@ -1007,7 +1012,7 @@ void processReadsQuasi(
         mergeRes = pufferfish::util::joinReadsAndFilter(leftHits, rightHits, jointHits,
                                                         salmonOpts.fragLenDistMax,
                                                         totLen,
-                                                        consensusFraction,
+                                                        memCollector.getConsensusFraction(),
                                                         mpol, hctr);
 
         // IMPORTANT NOTE : Orphan recovery currently assumes a
@@ -1533,55 +1538,25 @@ void processReadsQuasi(
   //******* Setting up pufferfish mapping
   constexpr const int32_t invalidScore = std::numeric_limits<int32_t>::min();
   MemCollector<IndexT> memCollector(qidx);
-  memCollector.configureMemClusterer(salmonOpts.maxOccsPerHit);
-  double consensusFraction = (salmonOpts.consensusSlack == 0.0) ? 1.0 : (1.0 - salmonOpts.consensusSlack);
-  memCollector.setConsensusFraction(consensusFraction);
+  ksw2pp::KSW2Aligner aligner;
+  pufferfish::util::AlignmentConfig aconf;
+  pufferfish::util::MappingConstraintPolicy mpol;
+  bool initOK = initMapperSettings(salmonOpts, memCollector, aligner, aconf, mpol);
+  PuffAligner puffaligner(qidx->refseq_, qidx->refAccumLengths_, qidx->k(), aconf, aligner);
 
+  salmonOpts.jointLog->info("gapo : {}, gape : {}, bandwidth : {}", aligner.config().gapo, aligner.config().gape,
+                            aligner.config().bandwidth);
   pufferfish::util::CachedVectorMap<size_t, std::vector<pufferfish::util::MemCluster>, std::hash<size_t>> hits;
-
   std::vector<pufferfish::util::MemCluster> recoveredHits;
   std::vector<pufferfish::util::JointMems> jointHits;
   PairedAlignmentFormatter<IndexT*> formatter(qidx);
   pufferfish::util::QueryCache qc;
+  phmap::flat_hash_map<uint32_t, std::pair<int32_t, int32_t>> bestScorePerTranscript;
 
-  //Initialize ksw aligner
-  ksw2pp::KSW2Config config;
-  config.dropoff = -1;
-  config.gapo = salmonOpts.gapOpenPenalty;
-  config.gape = salmonOpts.gapExtendPenalty;
-  config.bandwidth = salmonOpts.dpBandwidth;
-  config.flag = 0;
-  config.flag |= KSW_EZ_RIGHT;
-  config.flag |= KSW_EZ_SCORE_ONLY;
-  int8_t a = static_cast<int8_t>(salmonOpts.matchScore);
-  int8_t b = static_cast<int8_t>(salmonOpts.mismatchPenalty);
-  ksw2pp::KSW2Aligner aligner(static_cast<int8_t>(a), static_cast<int8_t>(b));
-  aligner.config() = config;
-  ksw_extz_t ez;
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   bool mimicBT2 = salmonOpts.mimicBT2;
   bool noDovetail = !salmonOpts.allowDovetail;
   size_t numOrphansRescued{0};
-
-  phmap::flat_hash_map<uint32_t, std::pair<int32_t, int32_t>> bestScorePerTranscript;
-
-  pufferfish::util::AlignmentConfig aconf;
-  aconf.refExtendLength = 20;
-  aconf.fullAlignment = false;
-  aconf.matchScore = salmonOpts.matchScore;
-  aconf.gapExtendPenalty = salmonOpts.gapExtendPenalty;
-  aconf.gapOpenPenalty = salmonOpts.gapOpenPenalty;
-  aconf.minScoreFraction = salmonOpts.minScoreFraction;
-  aconf.mimicBT2 = mimicBT2;
-
-  PuffAligner puffaligner(qidx->refseq_, qidx->refAccumLengths_, qidx->k(), aconf, aligner);
-
-  pufferfish::util::MappingConstraintPolicy mpol;
-  mpol.noDovetail = !salmonOpts.allowDovetail;
-
-  using pufferfish::util::BestHitReferenceType;
-  BestHitReferenceType bestHitRefType{BestHitReferenceType::UNKNOWN};
-  BestHitReferenceType hitRefType{BestHitReferenceType::UNKNOWN};
   //*******
 
 
@@ -1669,7 +1644,7 @@ void processReadsQuasi(
        } else {
          pufferfish::util::joinReadsAndFilterSingle(hits, jointHits,
                                                     readLen,
-                                                    consensusFraction); //todo @rob, this shouldn't be minScoreFraction
+                                                    memCollector.getConsensusFraction()); 
          hctr.peHits += jointHits.size();
          if (initialRound) {
            upperBoundHits += (jointHits.size() > 0);
