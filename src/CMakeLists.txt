@@ -290,6 +290,7 @@ add_dependencies(salmon unitTests)
 # External dependencies of salmon_core and salmon
 ##
 if (${FETCHED_JEMALLOC})
+   add_dependencies(alevin_core libjemalloc)
    add_dependencies(salmon_core libjemalloc)
    add_dependencies(salmon libjemalloc)
 endif()
@@ -297,11 +298,13 @@ endif()
 if (${FETCHED_BOOST})
 ## PUFF_INTEGRATION
 #   add_dependencies(alevin_core libboost)
+   add_dependencies(alevin_core libboost)
    add_dependencies(salmon_core libboost)
    add_dependencies(salmon libboost)
 endif()
 
 if (${FETCHED_TBB})
+   add_dependencies(alevin_core libtbb)
    add_dependencies(salmon_core libtbb)
 ## PUFF_INTEGRATION
 #   add_dependencies(alevin_core libtbb)
@@ -309,6 +312,7 @@ if (${FETCHED_TBB})
 endif()
 
 if (${FETCHED_CEREAL})
+  add_dependencies(alevin_core libcereal)
   add_dependencies(salmon_core libcereal)
   add_dependencies(salmon libcereal)
 endif()
@@ -325,13 +329,9 @@ endif()
 #add_dependencies(salmon libbwa)
 
 if (${FETCHED_GFF})
+  add_dependencies(alevin_core libgff)
   add_dependencies(salmon_core libgff)
   add_dependencies(salmon libgff)
-endif()
-
-if (${FETCHED_LIBDIVSUFSORT})
-  add_dependencies(salmon_core libdivsufsort)
-  add_dependencies(salmon libdivsufsort)
 endif()
 
 ### No need for this, I think
