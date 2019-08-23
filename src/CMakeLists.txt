@@ -316,6 +316,7 @@ endif()
 if (${FETCHED_STADEN})
 ## PUFF_INTEGRATION
 #  add_dependencies(alevin_core libstadenio)
+  add_dependencies(alevin_core libstadenio)
   add_dependencies(salmon_core libstadenio)
   add_dependencies(salmon libstadenio)
 endif()
