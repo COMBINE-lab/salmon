@@ -263,6 +263,8 @@ namespace alevin {
       {
         jointLog->info("Loading Header");
         {
+          // @avi --- do we need this
+          /*
           IndexHeader h;
           std::ifstream indexStream(headerFile);
           {
@@ -284,16 +286,34 @@ namespace alevin {
                                headerFile);
             std::exit(1);
           }
+          */
         }
 
-        jointLog->info("Loading Transcript Info ");
-        std::ifstream seqStream(refNamesFile);
-        cereal::BinaryInputArchive seqArchive(seqStream);
-
         std::vector<std::string> txpNames;
-        seqArchive(txpNames);
-        seqArchive(numberOfDecoys);
-        seqArchive(firstDecoyIndex);
+        {
+          std::ifstream ctstream(refNamesFile);
+          cereal::BinaryInputArchive contigTableArchive(ctstream);
+          contigTableArchive(txpNames);
+          ctstream.close();
+        }
+
+        uint64_t numberOfDecoys;
+        uint64_t firstDecoyIndex;
+        {
+          std::ifstream hstream(headerFile);
+          cereal::JSONInputArchive headerArchive(hstream);
+          headerArchive( cereal::make_nvp("num_decoys", numberOfDecoys) );
+          headerArchive( cereal::make_nvp("first_decoy_index", firstDecoyIndex) );
+          hstream.close();
+        }
+        //jointLog->info("Loading Transcript Info ");
+        //std::ifstream seqStream(refNamesFile);
+        //cereal::BinaryInputArchive seqArchive(seqStream);
+
+        //std::vector<std::string> txpNames;
+        //seqArchive(txpNames);
+        //seqArchive(numberOfDecoys);
+        //seqArchive(firstDecoyIndex);
 
         if ( numberOfDecoys>0 && (txpNames.size()-numberOfDecoys != firstDecoyIndex) ) {
           jointLog->error("Error reading txpInfo and the number of decoys.\n"
@@ -306,7 +326,7 @@ namespace alevin {
         for (size_t i=0; i<txpNames.size(); i++){
           txpIdxMap[txpNames[i]].emplace_back(i);
         }
-        seqStream.close();
+        //seqStream.close();
         numDupTxps = txpNames.size() - txpIdxMap.size();
       }
 

@@ -1,3 +1,6 @@
+#ifndef __ALEVIN_HASH_HPP__
+#define __ALEVIN_HASH_HPP__
+
 #include <unordered_set>
 #include <unordered_map>
 
@@ -29,3 +32,4 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
                        bfs::path& indexDirectory,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
+#endif // __ALEVIN_HASH_HPP__

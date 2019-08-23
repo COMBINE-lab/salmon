@@ -28,17 +28,19 @@ set ( SALMON_MAIN_SRCS
 EMUtils.cpp
 CollapsedEMOptimizer.cpp
 ## PUFF_INTEGRATION
-# CollapsedCellOptimizer.cpp
+CollapsedCellOptimizer.cpp
+##
 CollapsedGibbsSampler.cpp
 Salmon.cpp
 BuildSalmonIndex.cpp
 Graph.cpp
 ## PUFF_INTEGRATION
-# DedupUMI.cpp
-# Alevin.cpp
-# AlevinHash.cpp
-# SalmonAlevin.cpp
-# WhiteList.cpp
+DedupUMI.cpp
+Alevin.cpp
+AlevinHash.cpp
+SalmonAlevin.cpp
+WhiteList.cpp
+##
 SalmonQuantify.cpp
 FragmentLengthDistribution.cpp
 FragmentStartPositionDistribution.cpp
@@ -175,6 +177,7 @@ RAPMAP_SALMON_SUPPORT=1
 PUFFERFISH_SALMON_SUPPORT=1
 HAVE_ANSI_TERM=1
 HAVE_SSTREAM=1
+span_FEATURE_MAKE_SPAN_TO_STD=14
 )
 target_compile_options(salmon_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
 target_compile_options(salmon_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
@@ -184,15 +187,16 @@ endif()
 
 # Build the Alevin library
 # PUFF_INTEGRATION
-# add_library(alevin_core STATIC ${ALEVIN_LIB_SRCS})
-# target_compile_definitions(alevin_core PUBLIC
-# RAPMAP_SALMON_SUPPORT=1
-# HAVE_ANSI_TERM=1
-# HAVE_SSTREAM=1
-# span_FEATURE_MAKE_SPAN_TO_STD=14
-#)
-#target_compile_options(alevin_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
-#target_compile_options(alevin_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
+add_library(alevin_core STATIC ${ALEVIN_LIB_SRCS})
+target_compile_definitions(alevin_core PUBLIC
+RAPMAP_SALMON_SUPPORT=1
+PUFFERFISH_SALMON_SUPPORT=1
+HAVE_ANSI_TERM=1
+HAVE_SSTREAM=1
+span_FEATURE_MAKE_SPAN_TO_STD=14
+)
+target_compile_options(alevin_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
+target_compile_options(alevin_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
 
 if(HAS_IPO)
   #set_property(TARGET alevin_core PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
@@ -202,7 +206,7 @@ endif()
 add_executable(salmon ${SALMON_MAIN_SRCS} ${SALMON_ALIGN_SRCS})
 
 if(HAS_IPO)
-  #set_property(TARGET salmon PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+  set_property(TARGET salmon PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
 add_executable(unitTests ${UNIT_TESTS_SRCS})
@@ -226,8 +230,6 @@ add_executable(unitTests ${UNIT_TESTS_SRCS})
 target_link_libraries(salmon
     Threads::Threads
     salmon_core
-## PUFF_INTEGRATION    
-#    alevin_core
     puffer 
     twopaco
     graphdump
@@ -249,6 +251,8 @@ target_link_libraries(salmon
     ${FAST_MALLOC_LIB}
     ${LIBRT}
     ksw2pp
+## PUFF_INTEGRATION    
+    alevin_core
     ${CMAKE_DL_LIBS}
     #asan
     #ubsan
@@ -257,9 +261,9 @@ target_link_libraries(salmon
 # Link the executable
 target_link_libraries(unitTests
     Threads::Threads
-    salmon_core
 ## PUFF_INTEGRATION
-#    alevin_core
+    alevin_core
+    salmon_core
     gff
     ${Boost_LIBRARIES}
     ${ICU_LIBS}

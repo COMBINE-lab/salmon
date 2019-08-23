@@ -113,25 +113,26 @@
 #include "ForgettingMassCalculator.hpp"
 #include "FragmentLengthDistribution.hpp"
 #include "GZipWriter.hpp"
-#include "HitManager.hpp"
+#include "SalmonMappingUtils.hpp"
 
-#include "RapMapUtils.hpp"
 #include "ReadExperiment.hpp"
-#include "SACollector.hpp"
-#include "SASearcher.hpp"
 #include "SalmonOpts.hpp"
-#include "PairAlignmentFormatter.hpp"
-#include "SingleAlignmentFormatter.hpp"
-#include "RapMapUtils.hpp"
-#include "ksw2pp/KSW2Aligner.hpp"
-#include "tsl/hopscotch_map.h"
-#include "SelectiveAlignmentUtils.hpp"
+#include "PairedAlignmentFormatter.hpp"
+
+#include "pufferfish/Util.hpp"
+#include "pufferfish/MemCollector.hpp"
+#include "pufferfish/MemChainer.hpp"
+#include "pufferfish/SAMWriter.hpp"
+#include "pufferfish/PuffAligner.hpp"
+#include "pufferfish/ksw2pp/KSW2Aligner.hpp"
+#include "pufferfish/metro/metrohash64.h"
+#include "pufferfish/SelectiveAlignmentUtils.hpp"
 
 namespace alevin{
 
   /****** QUASI MAPPING DECLARATIONS *********/
-  using MateStatus = rapmap::utils::MateStatus;
-  using QuasiAlignment = rapmap::utils::QuasiAlignment;
+  using MateStatus = pufferfish::util::MateStatus;
+  using QuasiAlignment = pufferfish::util::QuasiAlignment;
   /****** QUASI MAPPING DECLARATIONS  *******/
 
   using paired_parser = fastx_parser::FastxParser<fastx_parser::ReadPair>;
@@ -172,9 +173,6 @@ using bcEnd = BarcodeEnd;
 namespace aut = alevin::utils;
 using BlockedIndexRange = tbb::blocked_range<size_t>;
 using ReadExperimentT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
-
-//Note: redundant code starts, first used in SalmonQuantify.cpp
-using AlnCacheMap = selective_alignment::utils::AlnCacheMap;
 /////// REDUNDANT CODE END//
 
 template <typename AlnT, typename ProtocolT>
@@ -374,7 +372,7 @@ void processMiniBatchSimple(ReadExperimentT& readExp, ForgettingMassCalculator& 
 }
 
 /// START QUASI
-template <typename RapMapIndexT, typename ProtocolT>
+template <typename IndexT, typename ProtocolT>
 void processReadsQuasi(
                        paired_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
                        AlnGroupVec<QuasiAlignment>& structureVec,
@@ -383,7 +381,7 @@ void processReadsQuasi(
                        std::atomic<uint64_t>& validHits, std::atomic<uint64_t>& upperBoundHits,
                        std::atomic<uint32_t>& smallSeqs,
                        std::atomic<uint32_t>& nSeqs,
-                       RapMapIndexT* qidx, std::vector<Transcript>& transcripts,
+                       IndexT* qidx, std::vector<Transcript>& transcripts,
                        ForgettingMassCalculator& fmCalc, ClusterForest& clusterForest,
                        FragmentLengthDistribution& fragLengthDist, BiasParams& observedBiasParams,
                        SalmonOpts& salmonOpts,
@@ -429,7 +427,7 @@ void processReadsQuasi(
   //auto expectedLibType = rl.format();
 
   uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
-  size_t minK = rapmap::utils::my_mer::k();
+  size_t minK = qidx->k();
 
   size_t locRead{0};
   //uint64_t localUpperBoundHits{0};
@@ -441,35 +439,30 @@ void processReadsQuasi(
   size_t maxNumHits{salmonOpts.maxReadOccs};
   size_t readLenLeft{0};
   size_t readLenRight{0};
-  SACollector<RapMapIndexT> hitCollector(qidx);
 
-  rapmap::utils::MappingConfig mc;
-  mc.consistentHits = consistentHits;
-  mc.doChaining = salmonOpts.validateMappings;
-  mc.consensusFraction = (salmonOpts.consensusSlack == 0.0) ? 1.0 : (1.0 - salmonOpts.consensusSlack);
+  constexpr const int32_t invalidScore = std::numeric_limits<int32_t>::min();
+  MemCollector<IndexT> memCollector(qidx);
+  ksw2pp::KSW2Aligner aligner;
+  pufferfish::util::AlignmentConfig aconf;
+  pufferfish::util::MappingConstraintPolicy mpol;
+  bool initOK = salmon::mapping_utils::initMapperSettings(salmonOpts, memCollector, aligner, aconf, mpol);
+  PuffAligner puffaligner(qidx->refseq_, qidx->refAccumLengths_, qidx->k(), aconf, aligner);
 
-  rapmap::hit_manager::HitCollectorInfo<rapmap::utils::SAIntervalHit<typename RapMapIndexT::IndexType>> hcInfo;
+  pufferfish::util::CachedVectorMap<size_t, std::vector<pufferfish::util::MemCluster>, std::hash<size_t>> hits;
+  std::vector<pufferfish::util::MemCluster> recoveredHits;
+  std::vector<pufferfish::util::JointMems> jointHits;
+  PairedAlignmentFormatter<IndexT*> formatter(qidx);
+  pufferfish::util::QueryCache qc;
+  phmap::flat_hash_map<uint32_t, std::pair<int32_t, int32_t>> bestScorePerTranscript;
 
-  if (salmonOpts.fasterMapping) {
-    hitCollector.enableNIP();
-  } else {
-    hitCollector.disableNIP();
-  }
-  hitCollector.setStrictCheck(true);
-  if (salmonOpts.quasiCoverage > 0.0) {
-    hitCollector.setCoverageRequirement(salmonOpts.quasiCoverage);
-  }
-  if (salmonOpts.validateMappings) {
-    hitCollector.enableChainScoring();
-    hitCollector.setMaxMMPExtension(salmonOpts.maxMMPExtension);
-  }
+  bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
+  bool mimicBT2 = salmonOpts.mimicBT2;
+  bool noDovetail = !salmonOpts.allowDovetail;
 
-  SASearcher<RapMapIndexT> saSearcher(qidx);
-  rapmap::utils::HitCounters hctr;
+  pufferfish::util::HitCounters hctr;
   salmon::utils::MappingType mapType{salmon::utils::MappingType::UNMAPPED};
+  bool hardFilter = salmonOpts.hardFilter;
 
-
-  PairAlignmentFormatter<RapMapIndexT*> formatter(qidx);
   fmt::MemoryWriter sstream;
   auto* qmLog = salmonOpts.qmLog.get();
   bool writeQuasimappings = (qmLog != nullptr);
@@ -477,41 +470,24 @@ void processReadsQuasi(
   //////////////////////
   // NOTE: validation mapping based new parameters
   std::string rc1; rc1.reserve(300);
+  // will hold the permutation to use to put the transcripts in order
+  std::vector<std::pair<int32_t, int32_t>> perm;
+  //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
+  AlnCacheMap alnCache; alnCache.reserve(16);
 
-  using ksw2pp::KSW2Aligner;
-  using ksw2pp::KSW2Config;
-  using ksw2pp::EnumToType;
-  using ksw2pp::KSW2AlignmentType;
-  KSW2Config config;
-  config.dropoff = -1;
-  config.gapo = salmonOpts.gapOpenPenalty;
-  config.gape = salmonOpts.gapExtendPenalty;
-  config.bandwidth = salmonOpts.dpBandwidth;
-  config.flag = 0;
-  config.flag |= KSW_EZ_SCORE_ONLY;
-  int8_t a = salmonOpts.matchScore;
-  int8_t b = salmonOpts.mismatchPenalty;
-  KSW2Aligner aligner(static_cast<int8_t>(a), static_cast<int8_t>(b));
-  aligner.config() = config;
-  ksw_extz_t ez;
-  memset(&ez, 0, sizeof(ksw_extz_t));
-  bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
-  bool mimicBT2 = salmonOpts.mimicBT2;
-  bool noDovetail = !salmonOpts.allowDovetail;
-
+  /*
   auto ap{selective_alignment::utils::AlignmentPolicy::DEFAULT};
   if (mimicBT2) {
     ap = selective_alignment::utils::AlignmentPolicy::BT2;
   } else if (mimicStrictBT2) {
     ap = selective_alignment::utils::AlignmentPolicy::BT2_STRICT;
   }
+  */
 
   size_t numDropped{0};
+  size_t numMappingsDropped{0};
   size_t numDecoyFrags{0};
   std::string readSubSeq;
-
-  //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
-  AlnCacheMap alnCache; alnCache.reserve(16);
   //////////////////////
 
   auto rg = parser->getReadGroup();
@@ -535,8 +511,14 @@ void processReadsQuasi(
       //localUpperBoundHits = 0;
       auto& jointHitGroup = structureVec[i];
       jointHitGroup.clearAlignments();
-      auto& jointHits = jointHitGroup.alignments();
-      hcInfo.clear();
+      auto& jointAlignments= jointHitGroup.alignments();
+
+      perm.clear();
+      hits.clear();
+      jointHits.clear();
+      memCollector.clear();
+      //jointAlignments.clear();
+      readSubSeq.clear();
       mapType = salmon::utils::MappingType::UNMAPPED;
 
       //////////////////////////////////////////////////////////////
@@ -605,15 +587,30 @@ void processReadsQuasi(
                   //std::string sub_seq = rp.second.seq.substr(0, seq_len-alevinOpts.trimRight);
                   //auto rh = hitCollector(sub_seq, saSearcher, hcInfo);
                   readSubSeq = rp.second.seq.substr(0, seq_len-alevinOpts.trimRight);
-                  auto rh = hitCollector(readSubSeq, saSearcher, hcInfo);
+                  auto rh = memCollector(readSubSeq, qc,
+                                         true, // isLeft
+                                         false // verbose
+                                         );
+                  //auto rh = hitCollector(readSubSeq, saSearcher, hcInfo);
                 }
               } else {
                 readSubSeq = rp.second.seq;
-                auto rh = tooShortRight ? false : hitCollector(rp.second.seq, saSearcher, hcInfo);
+                auto rh = tooShortRight ? false : memCollector(readSubSeq, qc,
+                                       true, // isLeft
+                                       false // verbose
+                                       );
               }
-              rapmap::hit_manager::hitsToMappingsSimple(*qidx, mc,
-                                                        MateStatus::PAIRED_END_RIGHT,
-                                                        hcInfo, jointHits);
+              memCollector.findChains(readSubSeq, hits,
+                                      salmonOpts.fragLenDistMax,
+                                      MateStatus::PAIRED_END_RIGHT,
+                                      true, // heuristic chaining
+                                      true, // isLeft
+                                      false // verbose
+                                      );
+
+              pufferfish::util::joinReadsAndFilterSingle(hits, jointHits,
+                                                         readSubSeq.length(),
+                                                         memCollector.getConsensusFraction());
             } else{
               nSeqs += 1;
             }
@@ -646,88 +643,42 @@ void processReadsQuasi(
         // adding validate mapping code
         bool tryAlign{salmonOpts.validateMappings};
         if (tryAlign and !jointHits.empty()) {
-          alnCache.clear();
-          /*
-          auto seq_len = rp.second.seq.size();
-          std::string sub_seq = rp.second.seq.substr(0, seq_len-alevinOpts.trimRight);
-          auto* r1 = sub_seq.data();
-          auto l1 = static_cast<int32_t>(sub_seq.length());
-          */
-          auto* r1 = readSubSeq.data();
-          auto l1 = static_cast<int32_t>(readSubSeq.length());
+          puffaligner.clear();
+          bestScorePerTranscript.clear();
 
-          char* r1rc = nullptr;
-          int32_t bestScore{std::numeric_limits<int32_t>::min()};
-          int32_t bestDecoyScore{std::numeric_limits<int32_t>::lowest()};
-          std::vector<decltype(bestScore)> scores(jointHits.size(), bestScore);
-          std::vector<bool> decoyVec(jointHits.size(), false);
+          //auto* r1 = readSubSeq.data();
+          //auto l1 = static_cast<int32_t>(readSubSeq.length());
+
+          // the best scores start out as invalid
+          int32_t bestScore = invalidScore;
+          int32_t bestDecoyScore = invalidScore;
+          std::vector<decltype(bestScore)> scores(jointHits.size(), 0);
           size_t idx{0};
-          double optFrac{salmonOpts.minScoreFraction};
-          int32_t maxReadScore{a * static_cast<int32_t>(readSubSeq.length())};
+          bool isMultimapping = (jointHits.size() > 1);
 
-          bool multiMapping{jointHits.size() > 1};
-
-          for (auto& h : jointHits) {
-            int32_t score{std::numeric_limits<int32_t>::min()};
-            auto& t = transcripts[h.tid];
-            bool isDecoy = t.isDecoy();
-            char* tseq = const_cast<char*>(t.Sequence());
-            const int32_t tlen = static_cast<int32_t>(t.RefLength);
-            const uint32_t buf{20};
-
-            // compute the reverse complement only if we
-            // need it and don't have it
-            if (!h.fwd and !r1rc) {
-              rapmap::utils::reverseRead(readSubSeq, rc1);
-              // we will not break the const promise
-              r1rc = const_cast<char*>(rc1.data());
-            }
-
-            auto* rptr = h.fwd ? r1 : r1rc;
-            int32_t s =
-              selective_alignment::utils::getAlnScore(aligner, ez, h.pos, rptr, l1, tseq, tlen, a, b,
-                                                      maxReadScore, h.chainStatus.getLeft(),
-                                                      multiMapping, ap, buf, alnCache);
-            if (s < (optFrac * maxReadScore)) {
-              score = std::numeric_limits<decltype(score)>::min();
-            } else {
-              score = s;
-            }
-
-            bestScore = (!isDecoy and (score > bestScore)) ? score : bestScore;
-            bestDecoyScore = (isDecoy and (score > bestDecoyScore)) ? score : bestDecoyScore;
-            scores[idx] = score;
-            decoyVec[idx] = isDecoy;
-            h.score(score);
+          for (auto &&jointHit : jointHits) {
+            auto hitScore = puffaligner.calculateAlignments(readSubSeq, jointHit, hctr, isMultimapping, false);
+            bool validScore = (hitScore != invalidScore);
+            numMappingsDropped += validScore ? 0 : 1;
+            auto tid = qidx->getRefId(jointHit.tid);
+            salmon::mapping_utils::updateRefMappings(tid, hitScore, idx, transcripts, invalidScore, bestScore, bestDecoyScore,
+                                                     scores, bestScorePerTranscript, perm);
             ++idx;
           }
 
-          uint32_t ctr{0};
           bool bestHitDecoy = (bestScore < bestDecoyScore);
-          if (bestScore > std::numeric_limits<int32_t>::min() and !bestHitDecoy) {
-            // Note --- with soft filtering, only those hits that are given the minimum possible
-            // score are filtered out.
-            jointHits.erase(
-                            std::remove_if(jointHits.begin(), jointHits.end(),
-                                           [&ctr, &scores, &decoyVec, &numDropped, bestScore] (const QuasiAlignment& qa) -> bool {
-                                             // soft filter
-                                             //bool rem = (scores[ctr] == std::numeric_limits<int32_t>::min());
-                                             //strict filter
-                                             bool rem = decoyVec[ctr] ? true : (scores[ctr] < bestScore);
-                                             ++ctr;
-                                             numDropped += rem ? 1 : 0;
-                                             return rem;
-                                           }),
-                            jointHits.end()
-                            );
-            // soft filter
-            double bestScoreD = static_cast<double>(bestScore);
-            std::for_each(jointHits.begin(), jointHits.end(),
-                          [bestScoreD, writeQuasimappings](QuasiAlignment& qa) -> void {
-                            if (writeQuasimappings) { qa.alnScore(static_cast<int32_t>(qa.score())); }
-                            double v = bestScoreD - qa.score();
-                            qa.score(std::exp(-v));
-                          });
+          if (bestScore > invalidScore and !bestHitDecoy) {
+            salmon::mapping_utils::filterAndCollectAlignments(jointHits,
+                                                              scores,
+                                                              perm,
+                                                              readSubSeq.length(),
+                                                              readSubSeq.length(),
+                                                              false, // true for single-end false otherwise
+                                                              tryAlign,
+                                                              hardFilter,
+                                                              bestScore,
+                                                              bestDecoyScore,
+                                                              jointAlignments);
           } else {
             numDecoyFrags += bestHitDecoy ? 1 : 0;
             ++numDropped;
@@ -736,8 +687,11 @@ void processReadsQuasi(
         } //end-if validate mapping
 
         if (writeQuasimappings) {
+          writeAlignmentsToStream(rp, formatter, jointAlignments, sstream, false);
+          /*
           rapmap::utils::writeAlignmentsToStream(rp, formatter,
                                                  hctr, jointHits, sstream);
+          */
         }
 
       if (writeUnmapped and mapType == salmon::utils::MappingType::UNMAPPED) {
@@ -746,8 +700,8 @@ void processReadsQuasi(
         unmappedNames << rp.first.name << ' ' << salmon::utils::str(mapType) << '\n';
       }
 
-      validHits += jointHits.size();
-      localNumAssignedFragments += (jointHits.size() > 0);
+      validHits += jointAlignments.size();
+      localNumAssignedFragments += (jointAlignments.size() > 0);
       locRead++;
       ++numObservedFragments;
       if (!quiet and numObservedFragments % 500000 == 0) {
@@ -868,80 +822,31 @@ void processReadLibrary(
     std::vector<std::vector<uint64_t>> uniqueFLDs(numThreads);
     for (size_t i = 0; i < numThreads; ++i) { uniqueFLDs[i] = std::vector<uint64_t>(100000, 0); }
     */
+    auto processFunctor = [&](size_t i, auto* parserPtr, auto* index) {
+     if(salmonOpts.qmFileName != "" and i == 0) {
+       writeSAMHeader(*index, salmonOpts.qmLog);
+     }
+     auto threadFun = [&, i, parserPtr, index]() -> void {
+                        processReadsQuasi(parserPtr,
+                                          readExp, rl, structureVec[i],
+                                          numObservedFragments, numAssignedFragments, numValidHits,
+                                          upperBoundHits, smallSeqs, nSeqs, index, transcripts,
+                                          fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
+                                          salmonOpts, iomutex, initialRound,
+                                          burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs,
+                                          mstats);
+     };
+     threads.emplace_back(threadFun);
+    };
 
-    // True if we have a 64-bit SA index, false otherwise
-    bool largeIndex = sidx->is64BitQuasi();
-    bool perfectHashIndex = sidx->isPerfectHashQuasi();
+    // True if we have a sparse index, false otherwise
+    bool isSparse = sidx->isSparse();
     for (size_t i = 0; i < numThreads; ++i) {
-      // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
-      // change value before the lambda below is evaluated --- crazy!
-      if (largeIndex) {
-        if (perfectHashIndex) { // Perfect Hash
-          if (salmonOpts.qmFileName != "" and i == 0) {
-            rapmap::utils::writeSAMHeader(*(sidx->quasiIndexPerfectHash64()), salmonOpts.qmLog);
-          }
-          auto threadFun = [&, i]() -> void {
-            processReadsQuasi<RapMapSAIndex<int64_t, PerfectHash<int64_t>>>(
-                                                                            pairedParserPtr.get(), readExp, rl, structureVec[i],
-                                                                            numObservedFragments, numAssignedFragments, numValidHits,
-                                                                            upperBoundHits, smallSeqs, nSeqs, sidx->quasiIndexPerfectHash64(), transcripts,
-                                                                            fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
-                                                                            salmonOpts, iomutex, initialRound,
-                                                                            burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs,
-                                                                            mstats/*, uniqueFLDs[i]*/);
-          };
-          threads.emplace_back(threadFun);
-        } else { // Dense Hash
-          if (salmonOpts.qmFileName != "" and i == 0) {
-            rapmap::utils::writeSAMHeader(*(sidx->quasiIndex64()), salmonOpts.qmLog);
-          }
-          auto threadFun = [&, i]() -> void {
-            processReadsQuasi<RapMapSAIndex<int64_t, DenseHash<int64_t>>>(
-                                                                          pairedParserPtr.get(), readExp, rl, structureVec[i],
-                                                                          numObservedFragments, numAssignedFragments, numValidHits,
-                                                                          upperBoundHits, smallSeqs, nSeqs, sidx->quasiIndex64(), transcripts, fmCalc,
-                                                                          clusterForest, fragLengthDist, observedBiasParams[i],
-                                                                          salmonOpts, iomutex, initialRound,
-                                                                          burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs,
-                                                                          mstats/*, uniqueFLDs[i]*/);
-          };
-          threads.emplace_back(threadFun);
-        }
+      if (isSparse) {
+        processFunctor(i, pairedParserPtr.get(), sidx->puffSparseIndex());
       } else {
-        if (perfectHashIndex) { // Perfect Hash
-          if (salmonOpts.qmFileName != "" and i == 0) {
-            rapmap::utils::writeSAMHeader(*(sidx->quasiIndexPerfectHash32()), salmonOpts.qmLog);
-          }
-          auto threadFun = [&, i]() -> void {
-            processReadsQuasi<RapMapSAIndex<int32_t, PerfectHash<int32_t>>>(
-                                                                            pairedParserPtr.get(), readExp, rl, structureVec[i],
-                                                                            numObservedFragments, numAssignedFragments, numValidHits,
-                                                                            upperBoundHits, smallSeqs, nSeqs, sidx->quasiIndexPerfectHash32(), transcripts,
-                                                                            fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
-                                                                            salmonOpts, iomutex, initialRound,
-                                                                            burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs,
-                                                                            mstats/*, uniqueFLDs[i]*/);
-          };
-          threads.emplace_back(threadFun);
-        } else { // Dense Hash
-          if (salmonOpts.qmFileName != "" and i == 0) {
-            rapmap::utils::writeSAMHeader(*(sidx->quasiIndex32()), salmonOpts.qmLog);
-          }
-          auto threadFun = [&, i]() -> void {
-            processReadsQuasi<RapMapSAIndex<int32_t, DenseHash<int32_t>>>(
-                                                                          pairedParserPtr.get(), readExp, rl, structureVec[i],
-                                                                          numObservedFragments, numAssignedFragments, numValidHits,
-                                                                          upperBoundHits, smallSeqs, nSeqs, sidx->quasiIndex32(), transcripts, fmCalc,
-                                                                          clusterForest, fragLengthDist, observedBiasParams[i],
-                                                                          salmonOpts, iomutex, initialRound,
-                                                                          burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs,
-                                                                          mstats/*, uniqueFLDs[i]*/);
-          };
-          threads.emplace_back(threadFun);
-        }
-
-      } // End spawn current thread
-
+        processFunctor(i, pairedParserPtr.get(), sidx->puffIndex());
+      }
     } // End spawn all threads
 
     for (auto& t : threads) {
@@ -1131,7 +1036,9 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
          numObservedFragments)
       : 0.0;
     if (tooShortFrac > 0.0) {
-      size_t minK = rapmap::utils::my_mer::k();
+      auto* sidx = experiment.getIndex();
+      bool isSparse = sidx->isSparse();
+      size_t minK = (isSparse) ? sidx->puffSparseIndex()->k() : sidx->puffIndex()->k();
       fmt::print(stderr, "\n\n");
       salmonOpts.jointLog->warn("{}% of fragments were shorter than the k used "
                                 "to build the index ({}).\n"
