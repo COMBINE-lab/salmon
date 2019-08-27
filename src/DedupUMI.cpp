@@ -178,8 +178,8 @@ void collapseVertices(uint32_t vertex,
         }
 
         // extract transcripts from new vertex
-        eqclassId = g.getEqclassId( nextVertex );
-        for (uint32_t ntxp: txpGroups[eqclassId]) {
+        uint32_t neqclassId = g.getEqclassId( nextVertex );
+        for (uint32_t ntxp: txpGroups[neqclassId]) {
           if (ntxp == txp){
             bfsList.emplace_back(nextVertex);
             break;
