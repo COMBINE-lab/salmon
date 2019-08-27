@@ -83,6 +83,13 @@ namespace alevin {
       return true;
     }
     template <>
+    bool extractUMI<apt::QuartzSeq2>(std::string& read,
+                                     apt::QuartzSeq2& pt,
+                                     std::string& umi){
+      umi = read.substr(0, pt.umiLength);
+      return true;
+    }
+    template <>
     bool extractUMI<apt::CELSeq>(std::string& read,
                                  apt::CELSeq& pt,
                                  std::string& umi){
@@ -144,6 +151,13 @@ namespace alevin {
     template <>
     nonstd::optional<std::string> extractBarcode<apt::CELSeq2>(std::string& read,
                                                                apt::CELSeq2& pt){
+      return (read.length() >= (pt.umiLength + pt.barcodeLength)) ?
+        nonstd::optional<std::string>(read.substr(pt.umiLength, pt.barcodeLength)) : nonstd::nullopt;
+
+    }
+    template <>
+    nonstd::optional<std::string> extractBarcode<apt::QuartzSeq2>(std::string& read,
+                                                                  apt::QuartzSeq2& pt){
       return (read.length() >= (pt.umiLength + pt.barcodeLength)) ?
         nonstd::optional<std::string>(read.substr(pt.umiLength, pt.barcodeLength)) : nonstd::nullopt;
 
@@ -765,6 +779,10 @@ namespace alevin {
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::CELSeq2>& aopt,
+                           SalmonOpts& sopt,
+                           boost::program_options::variables_map& vm);
+    template
+    bool processAlevinOpts(AlevinOpts<apt::QuartzSeq2>& aopt,
                            SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
   }

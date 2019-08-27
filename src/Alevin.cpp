@@ -960,6 +960,7 @@ salmon-based processing of single-cell RNA-seq data.
     bool gemcode = vm["gemcode"].as<bool>();
     bool celseq = vm["celseq"].as<bool>();
     bool celseq2 = vm["celseq2"].as<bool>();
+    bool quartzseq2 = vm["quartzseq2"].as<bool>();
     bool custom = (vm.count("barcodeLength") and
                    vm.count("umiLength") and
                    vm.count("end"));
@@ -972,6 +973,7 @@ salmon-based processing of single-cell RNA-seq data.
     if (gemcode) validate_num_protocols += 1;
     if (celseq) validate_num_protocols += 1;
     if (celseq2) validate_num_protocols += 1;
+    if (quartzseq2) validate_num_protocols += 1;
     if (custom) validate_num_protocols += 1;
 
     if ( validate_num_protocols != 1 ) {
@@ -1052,6 +1054,13 @@ salmon-based processing of single-cell RNA-seq data.
     else if(celseq2){
       AlevinOpts<apt::CELSeq2> aopt;
       //aopt.jointLog->warn("Using CEL-Seq2 Setting for Alevin");
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString,
+                       barcodeFiles, readFiles);
+    }
+    else if(quartzseq2){
+      AlevinOpts<apt::QuartzSeq2> aopt;
+      //aopt.jointLog->warn("Using Quartz-Seq2 Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
                        vm, commentString,
                        barcodeFiles, readFiles);

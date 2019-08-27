@@ -288,6 +288,11 @@ namespace alevin {
                                       std::vector<std::string>& trueBarcodes,
                                       CFreqMapT& freqCounter, bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
+    template bool performWhitelisting(AlevinOpts<alevin::protocols::QuartzSeq2>& aopt,
+                                      std::vector<uint32_t>& umiCount,
+                                      std::vector<std::string>& trueBarcodes,
+                                      CFreqMapT& freqCounter, bool useRibo, bool useMito,
+                                      size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::Custom>& aopt,
                                       std::vector<uint32_t>& umiCount,
                                       std::vector<std::string>& trueBarcodes,
