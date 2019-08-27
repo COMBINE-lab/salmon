@@ -2,7 +2,8 @@
 #define READ_PAIR
 
 #include "LibraryFormat.hpp"
-#include "RapMapUtils.hpp"
+//#include "RapMapUtils.hpp"
+#include "pufferfish/Util.hpp"
 #include "SalmonMath.hpp"
 #include "SalmonUtils.hpp"
 #include "StadenUtils.hpp"
@@ -76,19 +77,19 @@ struct ReadPair {
     return (isPaired() or isLeftOrphan()) ? read1 : nullptr;
   }
 
-  inline rapmap::utils::MateStatus mateStatus() const {
+  inline pufferfish::util::MateStatus mateStatus() const {
     if (isPaired()) {
-      return rapmap::utils::MateStatus::PAIRED_END_PAIRED;
+      return pufferfish::util::MateStatus::PAIRED_END_PAIRED;
     } else if (isLeftOrphan()) {
-      return rapmap::utils::MateStatus::PAIRED_END_LEFT;
+      return pufferfish::util::MateStatus::PAIRED_END_LEFT;
     } else if (isRightOrphan()) {
-      return rapmap::utils::MateStatus::PAIRED_END_RIGHT;
+      return pufferfish::util::MateStatus::PAIRED_END_RIGHT;
     }
 
     std::cerr << "ReadPair.hpp : mateStatus() --- should not get here ";
     std::cerr << "this may be a bug.  Please report it\n";
 
-    return rapmap::utils::MateStatus::PAIRED_END_PAIRED;
+    return pufferfish::util::MateStatus::PAIRED_END_PAIRED;
   }
 
   inline int32_t pos() const { return left(); }

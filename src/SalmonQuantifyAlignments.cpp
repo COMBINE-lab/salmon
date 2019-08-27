@@ -61,12 +61,15 @@ extern "C" {
 #include "TextBootstrapWriter.hpp"
 #include "TranscriptCluster.hpp"
 #include "spdlog/spdlog.h"
+#include "pufferfish/Util.hpp"
 
 namespace bfs = boost::filesystem;
 using salmon::math::LOG_0;
 using salmon::math::LOG_1;
 using salmon::math::logAdd;
 using salmon::math::logSub;
+
+using MateStatus = pufferfish::util::MateStatus;
 
 constexpr uint32_t miniBatchSize{1000};
 
@@ -686,7 +689,7 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
             if (posBiasCorrect) {
               auto lengthClassIndex = transcript.lengthClassIndex();
               switch (aln->mateStatus()) {
-              case rapmap::utils::MateStatus::PAIRED_END_PAIRED: {
+              case MateStatus::PAIRED_END_PAIRED: {
                 // TODO: Handle the non opposite strand case
                 if (aln->isInward()) {
                   auto* read1 = aln->getRead1();
@@ -707,9 +710,9 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
                                                               posRC, transcript.RefLength, aln->logProb);
                 }
               } break;
-              case rapmap::utils::MateStatus::PAIRED_END_LEFT:
-              case rapmap::utils::MateStatus::PAIRED_END_RIGHT:
-              case rapmap::utils::MateStatus::SINGLE_END: {
+              case MateStatus::PAIRED_END_LEFT:
+              case MateStatus::PAIRED_END_RIGHT:
+              case MateStatus::SINGLE_END: {
                 int32_t pos = aln->pos();
                 pos = pos < 0 ? 0 : pos;
                 pos = pos >= static_cast<int32_t>(transcript.RefLength) ?

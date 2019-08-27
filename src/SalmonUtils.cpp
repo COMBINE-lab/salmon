@@ -44,8 +44,12 @@
 #include "StadenUtils.hpp"
 #include "SalmonDefaults.hpp"
 
+#include "pufferfish/Util.hpp"
+
 namespace salmon {
 namespace utils {
+
+  using MateStatus = pufferfish::util::MateStatus;
 
 std::string str(const MappingType& mt) {
   switch (mt) {
@@ -122,10 +126,10 @@ std::ostream& operator<<(std::ostream& os, OrphanStatus s) {
 }
 
 bool isCompatible(const LibraryFormat observed, const LibraryFormat expected,
-                  int32_t start, bool isForward, rapmap::utils::MateStatus ms) {
+                  int32_t start, bool isForward, MateStatus ms) {
   // If we're dealing with a single end read.
   bool compat{false};
-  if (ms != rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
+  if (ms != MateStatus::PAIRED_END_PAIRED) {
     compat = compatibleHit(expected, start, isForward, ms);
   } else {
     compat = compatibleHit(expected, observed);
@@ -135,11 +139,11 @@ bool isCompatible(const LibraryFormat observed, const LibraryFormat expected,
 
 double logAlignFormatProb(const LibraryFormat observed,
                           const LibraryFormat expected, int32_t start,
-                          bool isForward, rapmap::utils::MateStatus ms,
+                          bool isForward, MateStatus ms,
                           double incompatPrior) {
   // If we're dealing with a single end read.
   bool compat{false};
-  if (ms != rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
+  if (ms != MateStatus::PAIRED_END_PAIRED) {
     compat = compatibleHit(expected, start, isForward, ms);
   } else {
     compat = compatibleHit(expected, observed);
@@ -2420,7 +2424,6 @@ int contextSize = outsideContext + insideContext;
   };
   tbb::combinable<CombineableBiasParams> expectedDist(getBiasParams);
   std::atomic<size_t> numBackgroundTranscripts{0};
-  std::atomic<size_t> numExpressedTranscripts{0};
 
   tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(transcripts.size())),
@@ -2461,11 +2464,7 @@ int contextSize = outsideContext + insideContext;
 
           // Skip transcripts with trivial expression or that are too
           // short
-          if (alphas[it] < minAlpha or
-              unprocessedLen <= 0) { // or txp.uniqueUpdateFraction() < 0.90) {
-            if (alphas[it] >= minAlpha) {
-              ++numExpressedTranscripts;
-            }
+          if (alphas[it] < minAlpha or unprocessedLen <= 0) { // or txp.uniqueUpdateFraction() < 0.90) {
             continue;
           }
           ++numBackgroundTranscripts;
@@ -2605,8 +2604,8 @@ int contextSize = outsideContext + insideContext;
    * via simple summation.  Here, we combine the locally-computed
    * bias terms.
    */
-  SBModel exp5;
-  SBModel exp3;
+  SBModel& exp5 = readExp.readBiasModelExpected(salmon::utils::Direction::FORWARD);
+  SBModel& exp3 = readExp.readBiasModelExpected(salmon::utils::Direction::REVERSE_COMPLEMENT);
 
   auto& pos5Exp = readExp.posBiasExpected(salmon::utils::Direction::FORWARD);
   auto& pos3Exp =
@@ -2801,7 +2800,6 @@ int contextSize = outsideContext + insideContext;
                 tsl.unlock();
               }
             }
-            ++numProcessed;
 
             size_t sp = static_cast<size_t>((fl > 0) ? fl - 1 : 0);
             double prevFLMass = conditionalCDF(sp);
@@ -2887,18 +2885,10 @@ int contextSize = outsideContext + insideContext;
           } else {
             effLensOut(it) = static_cast<double>(elen);
           }
-
+          ++numProcessed;
         }
       } // end parallel_for lambda
   );
-
-  // Copy over the expected sequence bias models
-  if (seqBiasCorrect) {
-    readExp.setReadBiasModelExpected(std::move(exp5),
-                                     salmon::utils::Direction::FORWARD);
-    readExp.setReadBiasModelExpected(
-        std::move(exp3), salmon::utils::Direction::REVERSE_COMPLEMENT);
-  }
 
   sopt.jointLog->info("processed bias for 100.0% of the transcripts");
   return effLensOut;

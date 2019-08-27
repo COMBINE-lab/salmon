@@ -15,6 +15,7 @@
 #include "TranscriptGroup.hpp"
 #include "concurrentqueue.h"
 #include "cuckoohash_map.hh"
+#include "pufferfish/sparsepp/spp.h"
 
 struct EmptyBarcodeMapType {};
 using SparseBarcodeMapType = spp::sparse_hash_map<uint32_t, spp::sparse_hash_map<uint64_t, uint32_t>>;

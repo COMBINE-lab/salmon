@@ -28,7 +28,8 @@ extern "C" {
 
 #include "GenomicFeature.hpp"
 #include "LibraryFormat.hpp"
-#include "RapMapUtils.hpp"
+//#include "RapMapUtils.hpp"
+#include "pufferfish/Util.hpp"
 #include "ReadLibrary.hpp"
 #include "SalmonConfig.hpp"
 #include "TranscriptGeneMap.hpp"
@@ -44,7 +45,7 @@ using std::string;
 using NameVector = std::vector<string>;
 using IndexVector = std::vector<size_t>;
 using KmerVector = std::vector<uint64_t>;
-using MateStatus = rapmap::utils::MateStatus;
+using MateStatus = pufferfish::util::MateStatus;
 
 // Keep track of the type of mapping that was obtained for this read
 enum class MappingType : uint8_t {
@@ -273,11 +274,11 @@ template <typename AlnLibT>
 void normalizeAlphas(const SalmonOpts& sopt, AlnLibT& alnLib);
 
 bool isCompatible(const LibraryFormat observed, const LibraryFormat expected,
-                  int32_t start, bool isForward, rapmap::utils::MateStatus ms);
+                  int32_t start, bool isForward, MateStatus ms);
 
 double logAlignFormatProb(const LibraryFormat observed,
                           const LibraryFormat expected, int32_t start,
-                          bool isForward, rapmap::utils::MateStatus ms,
+                          bool isForward, MateStatus ms,
                           double incompatPrior);
 
 bool compatibleHit(const LibraryFormat expected, int32_t start, bool isForward,

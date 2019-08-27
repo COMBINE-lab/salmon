@@ -13,7 +13,7 @@
 
 #include "SingleCellProtocols.hpp"
 #include "BarcodeGroup.hpp"
-#include "RapMapUtils.hpp"
+//#include "RapMapUtils.hpp"
 #include "SingleCellProtocols.hpp"
 
 #include "tbb/parallel_for.h"

@@ -311,7 +311,7 @@
     #define PHMAP_HAVE_STD_STRING_VIEW 1
 #endif
 
-#if (defined(_MSVC_LANG) && _MSVC_LANG >= 201402) || __cplusplus >= 201402
+#if (defined(_MSVC_LANG) && _MSVC_LANG >= 201402) || __cplusplus >= 201703
     #define PHMAP_HAVE_SHARED_MUTEX 1
 #endif
 

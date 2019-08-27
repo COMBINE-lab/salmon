@@ -1,7 +1,7 @@
 #ifndef __ALEVIN_TYPES_HPP__
 #define __ALEVIN_TYPES_HPP__
 
-#include "rapmap/Kmer.hpp"
+#include "pufferfish/Kmer.hpp"
 
 namespace alevin {
 namespace types {

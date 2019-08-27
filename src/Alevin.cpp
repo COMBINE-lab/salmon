@@ -811,17 +811,17 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
   spp::sparse_hash_map<uint32_t, uint32_t> txpToGeneMap;
   spp::sparse_hash_map<std::string, uint32_t> geneIdxMap;
 
-  auto txpInfoFile = sopt.indexDirectory / "txpInfo.bin";
+  auto txpInfoFile = sopt.indexDirectory / "ctable.bin";
   if(!boost::filesystem::exists(txpInfoFile)){
-    aopt.jointLog->error("Index Directory or the txpInfo.bin: {} doesn't exist.",
+    aopt.jointLog->error("Index Directory or the ctable.bin: {} doesn't exist.",
                          txpInfoFile.string());
     aopt.jointLog->flush();
     exit(1);
   }
 
-  auto headerFile = sopt.indexDirectory / "header.json";
+  auto headerFile = sopt.indexDirectory / "info.json";
   if(!boost::filesystem::exists(headerFile)){
-    aopt.jointLog->error("Index Directory or the header.json: {} doesn't exist.",
+    aopt.jointLog->error("Index Directory or the info.json: {} doesn't exist.",
                          headerFile.string());
     aopt.jointLog->flush();
     exit(1);

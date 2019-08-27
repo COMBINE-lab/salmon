@@ -153,7 +153,6 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
 void collapseVertices(uint32_t vertex,
                       alevin::graph::Graph& g,
                       std::vector<TGroupT>& txpGroups,
-                      uint32_t& chosenTxp,
                       std::vector<uint32_t>& largestMcc,
                       spp::sparse_hash_set<uint32_t>& processedSet) {
   uint32_t eqclassId = g.getEqclassId(vertex);
@@ -179,8 +178,8 @@ void collapseVertices(uint32_t vertex,
         }
 
         // extract transcripts from new vertex
-        eqclassId = g.getEqclassId( nextVertex );
-        for (uint32_t ntxp: txpGroups[eqclassId]) {
+        uint32_t neqclassId = g.getEqclassId( nextVertex );
+        for (uint32_t ntxp: txpGroups[neqclassId]) {
           if (ntxp == txp){
             bfsList.emplace_back(nextVertex);
             break;
@@ -191,7 +190,6 @@ void collapseVertices(uint32_t vertex,
 
     if (largestMcc.size() < currentMcc.size()) {
       largestMcc = currentMcc;
-      chosenTxp = txp;
     }
   } //end-for
 }
@@ -228,11 +226,10 @@ void getNumMolecules(alevin::graph::Graph& g,
       while ( vset.size() != 0 ){
         std::vector<uint32_t> bestMcc;
         for (uint32_t vertex: vset) {
-          uint32_t coveringTxp;
           std::vector<uint32_t> newMcc;
 
           collapseVertices(vertex, g, txpGroups,
-                           coveringTxp, newMcc,
+                           newMcc,
                            vset);
           //choose the longer collapse: Greedy
           if (bestMcc.size() < newMcc.size()) {
@@ -243,8 +240,8 @@ void getNumMolecules(alevin::graph::Graph& g,
         tsl::hopscotch_map<uint32_t, uint32_t> globalTxpCounts;
         for (size_t vId=0; vId<bestMcc.size(); vId++){
           uint32_t vertex = bestMcc[vId];
-          std::unordered_set<uint32_t> localTxps;
           uint32_t eqclassId = g.getEqclassId(vertex);
+
           for (uint32_t txp: txpGroups[eqclassId]){
             globalTxpCounts[txp] += 1;
           }
@@ -261,7 +258,7 @@ void getNumMolecules(alevin::graph::Graph& g,
 
         if( globalTxps.size() == 0 ) {
           std::cerr << "can't find a representative transcript for a molecule\n"
-                    << "Please report this on github";
+                    << "Please report this on github "; 
           exit(74);
         }
 

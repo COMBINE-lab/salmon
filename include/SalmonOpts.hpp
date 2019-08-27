@@ -267,6 +267,7 @@ struct SalmonOpts {
   bool recoverOrphans;
   bool hardFilter;
   int32_t maxMMPExtension;
+  uint32_t maxOccsPerHit;
 
   // for utility (may need to be cleaned up later)
   bool discardOrphansQuasi;

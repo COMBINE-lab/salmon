@@ -261,17 +261,19 @@ set(GAT_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 
 ###
 #
-#  Grab RapMap sources for quasi-mapping code --- DURING CONFIGURE TIME!
+#  Grab pufferfish source --- DURING CONFIGURE TIME!
 #
 ####
-if(NOT FETCHED_RAPMAP)
-  exec_program(${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetchRapMap.sh RETURN_VALUE FETCH_RM_SCRIPT_RET)
-  message(STATUS "fetch RAPMAP exit code ${FETCH_RM_SCRIPT_RET}")
-  if(NOT (FETCH_RM_SCRIPT_RET EQUAL 0))
-    message(FATAL_ERROR "Could not fetch RapMap source [fetchRapMap.sh returned exit code ${FETCH_RM_SCRIPT_RET}].")
+if(NOT FETCHED_PUFFERFISH)
+  exec_program(${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetchPufferfish.sh RETURN_VALUE FETCH_PF_SCRIPT_RET)
+  message(STATUS "fetch PUFFERFISH exit code ${FETCH_PF_SCRIPT_RET}")
+  if(NOT (FETCH_PF_SCRIPT_RET EQUAL 0))
+    message(FATAL_ERROR "Could not fetch pufferfish source [fetchPufferfish.sh returned exit code ${FETCH_PF_SCRIPT_RET}].")
   endif()
-  set(FETCHED_RAPMAP TRUE CACHE BOOL "Has RapMap been fetched?" FORCE)
+  set(FETCHED_PUFFERFISH TRUE CACHE BOOL "Has pufferfish been fetched?" FORCE)
 endif()
+
+
 
 ##
 # Super-secret override
@@ -485,37 +487,37 @@ message("BOOST LIBRARIES = ${Boost_LIBRARIES}")
 
 set(EXTERNAL_LIBRARY_PATH $CMAKE_CURRENT_SOURCE_DIR/lib)
 
-find_package(libdivsufsort)
-if(NOT LIBDIVSUFSORT_FOUND)
-  message("Build system will build libdivsufsort")
-  message("==================================================================")
-  include(ExternalProject)
-  externalproject_add(libdivsufsort
-    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    URL ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort.zip
-    # Note: This zip comes from the fetched rapmap.zip, whose SHA we check
-    # so we souldn't need to check this one separately.
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master
-    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
-    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master/build
-    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DBUILD_DIVSUFSORT64=TRUE -DUSE_OPENMP=TRUE -DBUILD_SHARED_LIBS=FALSE
-  )
-  externalproject_add_step(libdivsufsort makedir
-    COMMAND mkdir -p <SOURCE_DIR>/build
-    COMMENT "Make build directory"
-    DEPENDEES download
-    DEPENDERS configure)
-
-  set(SUFFARRAY_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
-  set(FETCHED_LIBDIVSUFSORT TRUE)
-else()
-  message("SUFFARRAY_LIB = ${SUFFARRAY_LIBRARY}")
-  set(SUFFARRAY_LIB ${SUFFARRAY_LIBRARY})
-  message("SUFFARRAY_LIB64 = ${SUFFARRAY_LIBRARY64}")
-  set(SUFFARRAY_LIB64 ${SUFFARRAY_LIBRARY64})
-  set(SUFFARRAY_INCLUDE_DIRS ${SUFFARRAY_INCLUDE_DIR})
-endif()
+#find_package(libdivsufsort)
+#if(NOT LIBDIVSUFSORT_FOUND)
+#  message("Build system will build libdivsufsort")
+#  message("==================================================================")
+#  include(ExternalProject)
+#  externalproject_add(libdivsufsort
+#    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+#    URL ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort.zip
+#    # Note: This zip comes from the fetched rapmap.zip, whose SHA we check
+#    # so we souldn't need to check this one separately.
+#    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master
+#    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
+#    #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
+#    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master/build
+#    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DBUILD_DIVSUFSORT64=TRUE -DUSE_OPENMP=TRUE -DBUILD_SHARED_LIBS=FALSE
+#  )
+#  externalproject_add_step(libdivsufsort makedir
+#    COMMAND mkdir -p <SOURCE_DIR>/build
+#    COMMENT "Make build directory"
+#    DEPENDEES download
+#    DEPENDERS configure)
+#
+#  set(SUFFARRAY_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
+#  set(FETCHED_LIBDIVSUFSORT TRUE)
+#else()
+#  message("SUFFARRAY_LIB = ${SUFFARRAY_LIBRARY}")
+#  set(SUFFARRAY_LIB ${SUFFARRAY_LIBRARY})
+#  message("SUFFARRAY_LIB64 = ${SUFFARRAY_LIBRARY64}")
+#  set(SUFFARRAY_LIB64 ${SUFFARRAY_LIBRARY64})
+#  set(SUFFARRAY_INCLUDE_DIRS ${SUFFARRAY_INCLUDE_DIR})
+#endif()
 
 
 find_package(Cereal)
@@ -555,6 +557,10 @@ endif()
 ## Try and find TBB first
 find_package(TBB 2018.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy)
 
+if (TBB_FOUND)
+  message("TBB VERSION ${TBB_VERSION}")
+endif()
+
 ##
 #
 # Fetch and build Intel's Threading Building Blocks library.
@@ -573,7 +579,7 @@ endif()
 message("Build system will fetch and build Intel Threading Building Blocks")
 message("==================================================================")
 # These are useful for the custom install step we'll do later
-set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2018_U3)
+set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2019_U8)
 set(TBB_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
 
 if("${TBB_COMPILER}" STREQUAL "gcc")
@@ -586,16 +592,10 @@ set(TBB_CXXFLAGS "${TBB_CXXFLAGS} ${CXXSTDFLAG}")
 
 externalproject_add(libtbb
   DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-  DOWNLOAD_COMMAND curl -k -L https://github.com/01org/tbb/archive/2018_U3.tar.gz -o tbb-2018_U3.tgz &&
-    ${SHASUM} 23793c8645480148e9559df96b386b780f92194c80120acce79fcdaae0d81f45 tbb-2018_U3.tgz &&
-    tar -xzvf tbb-2018_U3.tgz
-  ##
-  #URL https://github.com/01org/tbb/archive/2018_U3.tar.gz
-  #DOWNLOAD_NAME 2018_U3.tar.gz
-  #URL_HASH SHA1=d6cf16a42ece60aad6a722b369e1a2aa753347b4
-  #TLS_VERIFY FALSE
-  ##
-  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2018_U3
+  DOWNLOAD_COMMAND curl -k -L https://github.com/intel/tbb/archive/2019_U8.tar.gz -o tbb-2019_U8.tgz &&
+    ${SHASUM} 7b1fd8caea14be72ae4175896510bf99c809cd7031306a1917565e6de7382fba tbb-2019_U8.tgz &&
+    tar -xzvf tbb-2019_U8.tgz
+  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2019_U8
   INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
   PATCH_COMMAND "${TBB_PATCH_STEP}"
   CONFIGURE_COMMAND ""
@@ -645,7 +645,7 @@ if(TBB_RECONFIGURE)
   set(CMAKE_PREFIX_PATH ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
   set(TBB_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
   message("TBB_INSTALL_DIR = ${TBB_INSTALL_DIR}")
-  find_package(TBB)
+  find_package(TBB 2018.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy)
 endif()
 
 message("TBB_LIBRARIES = ${TBB_LIBRARIES}")
@@ -731,12 +731,12 @@ if(Jemalloc_FOUND)
   ##
   # Don't be so stringent about the version yet
   ##
-  #if (NOT (${JEMALLOC_VERSION} VERSION_LESS 5.1.0))
+  #if (NOT (${JEMALLOC_VERSION} VERSION_LESS 5.2.1))
     message("Found Jemalloc library --- using this memory allocator")
     set(FAST_MALLOC_LIB ${JEMALLOC_LIBRARIES})
     set(HAVE_FAST_MALLOC TRUE)
   #else()
-  #  message("Fond Jemalloc version ${JEMALLOC_VERSION}, but require >= 5.1.0. Downloading newer version")
+  #  message("Fond Jemalloc version ${JEMALLOC_VERSION}, but require >= 5.2.1. Downloading newer version")
   #endif()
 endif()
 
@@ -751,11 +751,11 @@ if(NOT HAVE_FAST_MALLOC)
   message("==================================================================")
   externalproject_add(libjemalloc
       DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-      DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/jemalloc/archive/5.1.0.tar.gz -o jemalloc-5.1.0.tar.gz &&
-        ${SHASUM} ff28aef89df724bd7b6bd6fde8597695514e0e3404d1afad2f1eb8b55ef378d3  jemalloc-5.1.0.tar.gz &&
-        tar -xzf jemalloc-5.1.0.tar.gz
+      DOWNLOAD_COMMAND curl -k -L https://github.com/jemalloc/jemalloc/archive/5.2.1.tar.gz -o jemalloc-5.2.1.tar.gz &&
+        ${SHASUM} ed51b0b37098af4ca6ed31c22324635263f8ad6471889e0592a9c0dba9136aea jemalloc-5.2.1.tar.gz &&
+        tar -xzf jemalloc-5.2.1.tar.gz
 
-      SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-5.1.0
+      SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-5.2.1
       BUILD_IN_SOURCE TRUE
       INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
       CONFIGURE_COMMAND sh -c "${JEMALLOC_FLAGS} ./autogen.sh --disable-debug --prefix=<INSTALL_DIR>"
@@ -807,8 +807,8 @@ message("CPACK_SOURCE_IGNORE_FILES = ${CPACK_SOURCE_IGNORE_FILES}")
 
 # Recurse into pufferfish source directory 
 # and build the library 
-#set(BUILD_PUFF_FOR_SALMON FALSE)
-#add_subdirectory(external/pufferfish)
+set(BUILD_PUFF_FOR_SALMON TRUE)
+add_subdirectory(external/pufferfish)
 
 # and then the main salmon source directory
 add_subdirectory(src)

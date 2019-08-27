@@ -41,7 +41,9 @@
 
 #include "SalmonConfig.hpp"
 #include "SalmonUtils.hpp"
-#include "IndexHeader.hpp"
+// #include "IndexHeader.hpp"
+
+#include "pufferfish/sparsepp/spp.h"
 
 namespace alevin{
   namespace utils{
