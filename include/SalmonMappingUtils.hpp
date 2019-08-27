@@ -160,6 +160,9 @@ inline void filterAndCollectAlignments(
                                        int32_t bestScore,
                                        int32_t bestDecoyScore,
                                        std::vector<pufferfish::util::QuasiAlignment>& jointAlignments) {
+
+  auto invalidScore = std::numeric_limits<decltype(bestDecoyScore)>::min();
+  if (bestDecoyScore == invalidScore) { bestDecoyScore = invalidScore + 1 ;}
   // throw away any pairs for which we should not produce valid alignments :
   // ======
   // If we are doing soft-filtering (default), we remove those not exceeding the bestDecoyScore
@@ -168,6 +171,7 @@ inline void filterAndCollectAlignments(
                             [&scores, hardFilter, bestScore, bestDecoyScore](const std::pair<int32_t, int32_t>& idxtid) -> bool {
                               return !hardFilter ?  scores[idxtid.first] < bestDecoyScore : scores[idxtid.first] < bestScore;
                             }), perm.end());
+
   // Unlike RapMap, pufferfish doesn't guarantee the hits computed above are in order
   // by transcript, so we find the permutation of indices that puts things in transcript
   // order.

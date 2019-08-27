@@ -1542,7 +1542,7 @@ void processReadsQuasi(
                              scores, bestScorePerTranscript, perm);
            ++idx;
          }
-
+         
          bool bestHitDecoy = (bestScore < bestDecoyScore);
          if (bestScore > invalidScore and !bestHitDecoy) {
            salmon::mapping_utils::filterAndCollectAlignments(jointHits,
@@ -1620,7 +1620,7 @@ void processReadsQuasi(
        }
 
        if (writeQuasimappings) {
-         writeAlignmentsToStreamSingle(rp, formatter, jointAlignments, sstream, false);
+         writeAlignmentsToStreamSingle(rp, formatter, jointAlignments, sstream, false, true);
        }
 
        if (writeUnmapped and jointHits.empty()) {
@@ -1629,7 +1629,7 @@ void processReadsQuasi(
          unmappedNames << rp.name << " u\n";
        }
 
-       validHits += jointHits.size();
+       validHits += jointAlignments.size();
        locRead++;
        ++numObservedFragments;
        if (!quiet and numObservedFragments % 500000 == 0) {
