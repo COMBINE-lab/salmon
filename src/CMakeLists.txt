@@ -121,8 +121,8 @@ set_target_properties(ksw2pp_sse4 PROPERTIES INCLUDE_DIRECTORIES ${GAT_SOURCE_DI
 # Build the ksw2pp library
 add_library(ksw2pp STATIC $<TARGET_OBJECTS:ksw2pp_sse2> $<TARGET_OBJECTS:ksw2pp_sse4> $<TARGET_OBJECTS:ksw2pp_basic>)
 set_target_properties(ksw2pp PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;HAVE_KALLOC")
-if(HAS_IPO)
-  #set_property(TARGET ksw2pp PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+if(HAS_IPO AND (NOT NO_IPO))
+  set_property(TARGET ksw2pp PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
 endif()
@@ -181,8 +181,8 @@ span_FEATURE_MAKE_SPAN_TO_STD=14
 )
 target_compile_options(salmon_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
 target_compile_options(salmon_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
-if(HAS_IPO)
-  #set_property(TARGET salmon_core PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+if(HAS_IPO AND (NOT NO_IPO))
+  set_property(TARGET salmon_core PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
 # Build the Alevin library
@@ -198,14 +198,14 @@ span_FEATURE_MAKE_SPAN_TO_STD=14
 target_compile_options(alevin_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
 target_compile_options(alevin_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
 
-if(HAS_IPO)
-  #set_property(TARGET alevin_core PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+if(HAS_IPO AND (NOT NO_IPO))
+  set_property(TARGET alevin_core PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
 # Build the salmon executable
 add_executable(salmon ${SALMON_MAIN_SRCS} ${SALMON_ALIGN_SRCS})
 
-if(HAS_IPO)
+if(HAS_IPO AND (NOT NO_IPO))
   set_property(TARGET salmon PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
