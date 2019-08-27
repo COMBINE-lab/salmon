@@ -240,8 +240,8 @@ void getNumMolecules(alevin::graph::Graph& g,
         tsl::hopscotch_map<uint32_t, uint32_t> globalTxpCounts;
         for (size_t vId=0; vId<bestMcc.size(); vId++){
           uint32_t vertex = bestMcc[vId];
-          std::unordered_set<uint32_t> localTxps;
           uint32_t eqclassId = g.getEqclassId(vertex);
+
           for (uint32_t txp: txpGroups[eqclassId]){
             globalTxpCounts[txp] += 1;
           }
@@ -258,7 +258,7 @@ void getNumMolecules(alevin::graph::Graph& g,
 
         if( globalTxps.size() == 0 ) {
           std::cerr << "can't find a representative transcript for a molecule\n"
-                    << "Please report this on github";
+                    << "Please report this on github "; 
           exit(74);
         }
 

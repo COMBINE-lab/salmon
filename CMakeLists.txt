@@ -731,12 +731,12 @@ if(Jemalloc_FOUND)
   ##
   # Don't be so stringent about the version yet
   ##
-  #if (NOT (${JEMALLOC_VERSION} VERSION_LESS 5.1.0))
+  #if (NOT (${JEMALLOC_VERSION} VERSION_LESS 5.2.1))
     message("Found Jemalloc library --- using this memory allocator")
     set(FAST_MALLOC_LIB ${JEMALLOC_LIBRARIES})
     set(HAVE_FAST_MALLOC TRUE)
   #else()
-  #  message("Fond Jemalloc version ${JEMALLOC_VERSION}, but require >= 5.1.0. Downloading newer version")
+  #  message("Fond Jemalloc version ${JEMALLOC_VERSION}, but require >= 5.2.1. Downloading newer version")
   #endif()
 endif()
 
@@ -751,11 +751,11 @@ if(NOT HAVE_FAST_MALLOC)
   message("==================================================================")
   externalproject_add(libjemalloc
       DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-      DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/jemalloc/archive/5.1.0.tar.gz -o jemalloc-5.1.0.tar.gz &&
-        ${SHASUM} ff28aef89df724bd7b6bd6fde8597695514e0e3404d1afad2f1eb8b55ef378d3  jemalloc-5.1.0.tar.gz &&
-        tar -xzf jemalloc-5.1.0.tar.gz
+      DOWNLOAD_COMMAND curl -k -L https://github.com/jemalloc/jemalloc/archive/5.2.1.tar.gz -o jemalloc-5.2.1.tar.gz &&
+        ${SHASUM} ed51b0b37098af4ca6ed31c22324635263f8ad6471889e0592a9c0dba9136aea jemalloc-5.2.1.tar.gz &&
+        tar -xzf jemalloc-5.2.1.tar.gz
 
-      SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-5.1.0
+      SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-5.2.1
       BUILD_IN_SOURCE TRUE
       INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
       CONFIGURE_COMMAND sh -c "${JEMALLOC_FLAGS} ./autogen.sh --disable-debug --prefix=<INSTALL_DIR>"
