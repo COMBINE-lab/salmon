@@ -86,6 +86,18 @@ ${GAT_SOURCE_DIR}/external/install/src/pufferfish/metro/metrohash64.cpp
 # check if we know how to do IPO
 check_ipo_supported(RESULT HAS_IPO)
 
+if (DEFINED NO_IPO)
+  message("NO_IPO = ${NO_IPO}")
+else()
+  message("NO_IPO = FALSE")
+  set(NO_IPO FALSE)
+endif()
+
+if(HAS_IPO AND (NOT NO_IPO))
+  set_property(TARGET ksw2pp PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+endif()
+
+
 if (NOT BUILD_PUFF_FOR_SALMON)
 message("BUILDING OUR OWN KSW2PP")
 message("BUILD_PUFF_FOR_SALMON IS = ${BUILD_PUFF_FOR_SALMON}")
@@ -121,10 +133,6 @@ set_target_properties(ksw2pp_sse4 PROPERTIES INCLUDE_DIRECTORIES ${GAT_SOURCE_DI
 # Build the ksw2pp library
 add_library(ksw2pp STATIC $<TARGET_OBJECTS:ksw2pp_sse2> $<TARGET_OBJECTS:ksw2pp_sse4> $<TARGET_OBJECTS:ksw2pp_basic>)
 set_target_properties(ksw2pp PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;HAVE_KALLOC")
-if(HAS_IPO AND (NOT NO_IPO))
-  set_property(TARGET ksw2pp PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
-endif()
-
 endif()
 
 set ( UNIT_TESTS_SRCS
