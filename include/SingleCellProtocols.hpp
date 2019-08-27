@@ -57,6 +57,10 @@ namespace alevin{
       Gemcode(): Rule(14, 10, BarcodeEnd::FIVE, 268435456){}
     };
 
+    struct QuartzSeq2 : Rule{
+      QuartzSeq2(): Rule(15, 8, BarcodeEnd::FIVE, 1073741824){}
+    };
+
     struct CELSeq : Rule{
       // WEHI SCORE's CEL-Seq2 starts from 5' end with a 8 bp barcode
       // and a 6 bp UMI.
