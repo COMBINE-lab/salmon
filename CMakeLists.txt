@@ -561,7 +561,11 @@ if (${TBB_FOUND})
   if (${TBB_VERSION} VERSION_GREATER_EQUAL 2018.0)
   message("FOUND SUITABLE TBB VERSION : ${TBB_VERSION}")
   set(TBB_TARGET_EXISTED TRUE)
+  else()
+    set(TBB_TARGET_EXISTED FALSE)
   endif()
+else()
+  set(TBB_TARGET_EXISTED FALSE)
 endif()
 
 ##
@@ -569,7 +573,7 @@ endif()
 # Fetch and build Intel's Threading Building Blocks library.
 #
 ##
-if((NOT ${TBB_FOUND}) OR (${TBB_FOUND} AND (${TBB_VERSION} VERSION_LESS 2018.0)))
+if(NOT ${TBB_TARGET_EXISTED})
 
 set(TBB_WILL_RECONFIGURE TRUE)
 # Set the appropriate compiler
