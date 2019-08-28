@@ -91,6 +91,7 @@ endif()
 ## Prefer static to dynamic libraries
 if(NOT USE_SHARED_LIBS)
   set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
+  set(MALLOC_STATIC_BUILD_FLAG "--enable-static")
 endif()
 
 include(CheckIPOSupported)
@@ -783,7 +784,7 @@ if(NOT HAVE_FAST_MALLOC)
       SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-5.2.1
       BUILD_IN_SOURCE TRUE
       INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-      CONFIGURE_COMMAND sh -c "${JEMALLOC_FLAGS} ./autogen.sh --disable-debug --prefix=<INSTALL_DIR>"
+      CONFIGURE_COMMAND sh -c "${JEMALLOC_FLAGS} ./autogen.sh --disable-debug ${MALLOC_STATIC_BUILD_FLAG} --prefix=<INSTALL_DIR>"
       INSTALL_COMMAND cp -r lib <INSTALL_DIR>/ && cp -r include <INSTALL_DIR>/
       )
 
