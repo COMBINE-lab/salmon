@@ -557,9 +557,11 @@ endif()
 ## Try and find TBB first
 find_package(TBB 2018.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy)
 
-if (${TBB_FOUND} AND (${TBB_VERSION} VERSION_GREATER_EQUAL 2018.0))
+if (${TBB_FOUND})
+  if (${TBB_VERSION} VERSION_GREATER_EQUAL 2018.0)
   message("FOUND SUITABLE TBB VERSION : ${TBB_VERSION}")
   set(TBB_TARGET_EXISTED TRUE)
+  endif()
 endif()
 
 ##
