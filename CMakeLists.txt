@@ -66,7 +66,7 @@ endif()
 ## Set the standard required compile flags
 # Nov 18th --- removed -DHAVE_CONFIG_H
 set(REMOVE_WARNING_FLAGS "-Wno-unused-function;-Wno-unused-local-typedefs")
-set(TGT_COMPILE_FLAGS "-ftree-vectorize;-funroll-loops;-fPIC;-fomit-frame-pointer;-O3;-DNDEBUG")
+set(TGT_COMPILE_FLAGS "-ftree-vectorize;-funroll-loops;-fPIC;-fomit-frame-pointer;-O3;-DNDEBUG;-DSTX_NO_STD_STRING_VIEW")
 set(TGT_WARN_FLAGS "-Wall;-Wno-unknown-pragmas;-Wno-reorder;-Wno-unused-variable;-Wreturn-type;-Werror=return-type;${REMOVE_WARNING_FLAGS}")
 
 
@@ -556,6 +556,7 @@ endif()
 
 ## Try and find TBB first
 find_package(TBB 2018.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy)
+set(TBB_VERSION ${TBB_VERSION_MAJOR}.${TBB_VERSION_MINOR})
 
 if (TBB_FOUND)
   message("TBB VERSION ${TBB_VERSION}")
@@ -621,13 +622,15 @@ endif()
 # so that CMake won't complain
 ##
 if(TBB_WILL_RECONFIGURE)
+    set(TBB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
     set(TBB_INCLUDE_DIRS ${TBB_INSTALL_DIR}/include)
     set(TBB_INCLUDE_DIR ${TBB_INSTALL_DIR}/include)
     set(TBB_LIBRARY_DIRS ${TBB_INSTALL_DIR}/lib)
+    set(TBB_LIBRARY ${TBB_INSTALL_DIR}/lib)
     set(TBB_LIB_DIR ${TBB_INSTALL_DIR}/lib)
     #set(TBB_LIBRARIES tbb tbbmalloc)
     set(TBB_LIBRARIES ${TBB_INSTALL_DIR}/lib/libtbb.${SHARED_LIB_EXTENSION}
-			${TBB_INSTALL_DIR}/lib/libtbbmalloc.${SHARED_LIB_EXTENSION}
+    			${TBB_INSTALL_DIR}/lib/libtbbmalloc.${SHARED_LIB_EXTENSION}
 	   )
     message("TBB_INCLUDE_DIRS = ${TBB_INCLUDE_DIRS}")
     message("TBB_LIBRARY_DIRS = ${TBB_LIBRARY_DIRS}")
@@ -642,13 +645,26 @@ if(TBB_RECONFIGURE)
   unset(TBB_FOUND CACHE)
   unset(TBB_INSTALL_DIR CACHE)
   unset(CMAKE_PREFIX_PATH CACHE)
+  unset(TBB_INCLUDE_DIRS CACHE)
+  unset(TBB_INCLUDE_DIR CACHE)
+  unset(TBB_LIBRARY_DIRS CACHE)
+  unset(TBB_LIBRARY CACHE)
+  unset(TBB_LIBRARIES CACHE)
   set(CMAKE_PREFIX_PATH ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
   set(TBB_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
+  set(TBB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
   message("TBB_INSTALL_DIR = ${TBB_INSTALL_DIR}")
   find_package(TBB 2018.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy)
+  message("[in TBB_RECONFIGURE] TBB_LIBRARIES = ${TBB_LIBRARIES}")
 endif()
 
 message("TBB_LIBRARIES = ${TBB_LIBRARIES}")
+#message("TBB_FOUND        ${TBB_FOUND}       ")
+#message("TBB_INSTALL_DIR  ${TBB_INSTALL_DIR}")
+#message("TBB_INCLUDE_DIRS ${TBB_INCLUDE_DIRS}")
+#message("TBB_INCLUDE_DIR  ${TBB_INCLUDE_DIR} ")
+#message("TBB_LIBRARY_DIRS ${TBB_LIBRARY_DIRS}")
+#message("TBB_LIBRARIES    ${TBB_LIBRARIES}   ")
 
 find_package(libgff)
 if(NOT LIBGFF_FOUND)
