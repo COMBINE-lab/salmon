@@ -40,32 +40,35 @@ SCENARIO("GC sampling works properly") {
 	txpsUnSampled[tn].setSequenceBorrowed(txpSeqs[tn], true, false);
       }
       
-      for (size_t tn = 0; tn < 1000; ++tn) {
-	WHEN("Computing GC content") {
-	  auto l = txpsSampled[tn].RefLength;
-	  for (size_t i = 0; i < l; ++i) {
-	    THEN("Sampled is the same as unsampled") {
-	      REQUIRE(txpsSampled[tn].gcAt(i) == txpsUnSampled[tn].gcAt(i));
-	    }
-	  }
-	}
+      WHEN("Computing GC content ") {
+
+        THEN("Sampled is the same as unsampled : ") {
+          for (size_t tn = 0; tn < 1000; ++tn) {
+            auto l = txpsSampled[tn].RefLength;
+            for (size_t i = 0; i < l; ++i) {
+              REQUIRE(txpsSampled[tn].gcAt(i) == txpsUnSampled[tn].gcAt(i));
+            }
+          }
+        }
+
       }
 
-  for (size_t tn = 0; tn < 1000; ++tn) {
-    WHEN("Computing GC contexts") {
-      auto l = txpsSampled[tn].RefLength;
-      for (size_t i = 0; i < 1000; ++i) {
-        bool v1, v2;
-        auto s = dis(gen);
-        auto len = dis(gen);
-        decltype(s) e = s + len;
-        if ( static_cast<decltype(l)>(s) >= l ) { s = l/2; }
-        if ( static_cast<decltype(l)>(s) + len >= l ) { e= l-1; }
+      WHEN("Computing GC contexts") {
         THEN("Sampled contexts are the same as unsampled contexts") {
+        for (size_t tn = 0; tn < 1000; ++tn) {
+          auto l = txpsSampled[tn].RefLength;
+          for (size_t i = 0; i < 1000; ++i) {
+            bool v1, v2;
+            auto s = dis(gen);
+            auto len = dis(gen);
+            decltype(s) e = s + len;
+            if ( static_cast<decltype(l)>(s) >= l ) { s = l/2; }
+            if ( static_cast<decltype(l)>(s) + len >= l ) { e= l-1; }
             REQUIRE(txpsSampled[tn].gcDesc(s, e, v1) == txpsUnSampled[tn].gcDesc(s, e, v2));
+            }
+          }
         }
-      }
-    }
+
       }
 
       for (size_t tn = 0; tn < 1000; ++tn) {

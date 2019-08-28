@@ -661,6 +661,7 @@ private:
       }
     } else {
       gcBitArray_.resize(RefLength);
+      gcBitArray_.clear_mem();
       //BIT_ARRAY* rawArray = bit_array_create(RefLength);
       for (size_t i = 0; i < RefLength; ++i) {
         auto c = std::toupper(seq[i]);
