@@ -556,10 +556,14 @@ endif()
 
 ## Try and find TBB first
 find_package(TBB 2018.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy)
-set(TBB_VERSION ${TBB_VERSION_MAJOR}.${TBB_VERSION_MINOR})
 
-if (TBB_FOUND)
-  message("TBB VERSION ${TBB_VERSION}")
+if(${TBB_VERSION} VERSION_LESS 2018.0)
+message("2019.0 < 2018.0 !?")
+endif()
+
+if (TBB_FOUND AND (NOT (${TBB_VERSION} VERSION_LESS 2018.0)))
+  message("FOUND SUITABLE TBB VERSION : ${TBB_VERSION}")
+  set(TBB_TARGET_EXISTED TRUE)
 endif()
 
 ##
@@ -567,7 +571,7 @@ endif()
 # Fetch and build Intel's Threading Building Blocks library.
 #
 ##
-if((NOT TBB_FOUND) OR (TBB_FOUND AND (TBB_VERSION VERSION_LESS 2018.0)))
+if((NOT ${TBB_FOUND}) OR (${TBB_FOUND} AND (${TBB_VERSION} VERSION_LESS 2018.0)))
 
 set(TBB_WILL_RECONFIGURE TRUE)
 # Set the appropriate compiler
@@ -604,6 +608,9 @@ externalproject_add(libtbb
   INSTALL_COMMAND sh -c "mkdir -p ${TBB_INSTALL_DIR}/include && mkdir -p ${TBB_INSTALL_DIR}/lib && cp ${TBB_SOURCE_DIR}/build/LIBS_release/*.${SHARED_LIB_EXTENSION}* ${TBB_INSTALL_DIR}/lib && cp -r ${TBB_SOURCE_DIR}/include/* ${TBB_INSTALL_DIR}/include"
   BUILD_IN_SOURCE 1
 )
+
+
+
 
 set(RECONFIG_FLAGS ${RECONFIG_FLAGS} -DTBB_WILL_RECONFIGURE=FALSE -DTBB_RECONFIGURE=TRUE)
 externalproject_add_step(libtbb reconfigure
