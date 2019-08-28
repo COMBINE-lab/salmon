@@ -1,6 +1,6 @@
 /**
 >HEADER
-    Copyright (c) 2014, 2015, 2016, 2017 Rob Patro robp@cs.stonybrook.edu
+    Copyright (c) 2014-2019 Rob Patro rob@cs.umd.edu
 
     This file is part of Salmon.
 
@@ -26,9 +26,9 @@
 
 namespace salmon {
 constexpr char majorVersion[] = "0";
-constexpr char minorVersion[] = "15";
+constexpr char minorVersion[] = "99";
 constexpr char patchVersion[] = "0";
-constexpr char version[] = "0.15.0";
+constexpr char version[] = "0.99.0";
 constexpr uint32_t indexVersion = 4;
 constexpr char requiredQuasiIndexVersion[] = "q6";
 } // namespace salmon
