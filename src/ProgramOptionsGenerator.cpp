@@ -207,7 +207,14 @@ namespace salmon {
        "31-mer can yield a mapping).  "
        "Since coverage by exact matching, large, MMPs is a rather strict "
        "condition, this value should likely "
-       "be set to something low, if used.");
+       "be set to something low, if used.")
+      ("hitFilterPolicy",
+       po::value<string>(&sopt.hitFilterPolicyStr)->default_value(salmon::defaults::hitFilterPolicyStr),
+       "Determines the policy by which hits are filtered in selective alignment.  Filtering hits after "
+       "chaining (the default) is more sensitive, but more computationally intensive, because it performs "
+       "the chaining dynamic program for all hits.  Filtering before chaining is faster, but some true hits "
+       "may be missed.  The options are BEFORE, AFTER, and BOTH."
+       );
       return mapspec;
   }
 

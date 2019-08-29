@@ -10,6 +10,7 @@
 #include <memory> // for shared_ptr
 #include <ostream>
 
+#include "pufferfish/Util.hpp"
 #include "SalmonDefaults.hpp"
 
 enum class SalmonQuantMode { MAP = 1, ALIGN = 2 };
@@ -76,6 +77,9 @@ struct SalmonOpts {
 
   double quasiCoverage; // [Experimental]: Default of 0.  The coverage by MMPs
                         // required for a read to be considered mapped.
+
+  std::string hitFilterPolicyStr{salmon::defaults::hitFilterPolicyStr};
+  pufferfish::util::HitFilterPolicy hitFilterPolicy{pufferfish::util::HitFilterPolicy::FILTER_AFTER_CHAINING};
 
   bool splitSpanningSeeds; // Attempt to split seeds that span multiple
                            // transcripts.

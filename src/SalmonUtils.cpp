@@ -1874,6 +1874,23 @@ bool processQuantOptions(SalmonOpts& sopt,
     sopt.numConditionalGCBins = 1;
   }
 
+  {
+    std::transform(sopt.hitFilterPolicyStr.begin(), sopt.hitFilterPolicyStr.end(),
+                   sopt.hitFilterPolicyStr.begin(), ::toupper);
+    if ( sopt.hitFilterPolicyStr == "BEFORE" ) {
+      sopt.hitFilterPolicy = pufferfish::util::HitFilterPolicy::FILTER_BEFORE_CHAINING;
+    } else if ( sopt.hitFilterPolicyStr == "AFTER" ) {
+      sopt.hitFilterPolicy = pufferfish::util::HitFilterPolicy::FILTER_AFTER_CHAINING;
+    } else if ( sopt.hitFilterPolicyStr == "BOTH" ) {
+      sopt.hitFilterPolicy = pufferfish::util::HitFilterPolicy::FILTER_BEFORE_AND_AFTER_CHAINING;
+    } else {
+      jointLog->critical("The argument {} for --hitFilterPolicy is invalid. Valid options are "
+                         "BEFORE, AFTER and BOTH.", sopt.hitFilterPolicyStr);
+      jointLog->flush();
+      return false;
+    }
+  }
+
   // The growing list of thou shalt nots
   {
     try {
