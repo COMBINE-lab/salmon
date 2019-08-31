@@ -82,7 +82,7 @@ inline bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& mem
   std::swap(aligner, aligner2);
 
   aconf.refExtendLength = 20;
-  aconf.fullAlignment = false;
+  aconf.fullAlignment = salmonOpts.mimicBT2 ? true : false;
   aconf.matchScore = salmonOpts.matchScore;
   aconf.gapExtendPenalty = salmonOpts.gapExtendPenalty;
   aconf.gapOpenPenalty = salmonOpts.gapOpenPenalty;
@@ -169,8 +169,9 @@ inline void filterAndCollectAlignments(
   // If we are doing soft-filtering (default), we remove those not exceeding the bestDecoyScore
   // If we are doing hard-filtering, we remove those less than the bestScore
   perm.erase(std::remove_if(perm.begin(), perm.end(),
-                            [&scores, hardFilter, bestScore, bestDecoyScore](const std::pair<int32_t, int32_t>& idxtid) -> bool {
+                            [&scores, hardFilter, bestScore, bestDecoyScore, invalidScore](const std::pair<int32_t, int32_t>& idxtid) -> bool {
                               return !hardFilter ?  scores[idxtid.first] < bestDecoyScore : scores[idxtid.first] < bestScore;
+                              //return !hardFilter ?  scores[idxtid.first] == invalidScore : scores[idxtid.first] < bestScore;
                             }), perm.end());
 
   // Unlike RapMap, pufferfish doesn't guarantee the hits computed above are in order
