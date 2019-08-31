@@ -69,8 +69,15 @@ inline bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& mem
   //Initialize ksw aligner
   ksw2pp::KSW2Config config;
   config.dropoff = -1;
-  config.gapo = salmonOpts.gapOpenPenalty;
-  config.gape = salmonOpts.gapExtendPenalty;
+  if (salmonOpts.mimicBT2){
+    config.gapo = 5;//salmonOpts.gapOpenPenalty;
+    config.gape = 3;//salmonOpts.gapExtendPenalty;
+    salmonOpts.matchScore = 0;
+    salmonOpts.mismatchPenalty = -6;
+  } else {
+    config.gapo = salmonOpts.gapOpenPenalty;
+    config.gape = salmonOpts.gapExtendPenalty;
+  }
   config.bandwidth = salmonOpts.dpBandwidth;
   config.flag = 0;
   config.flag |= KSW_EZ_RIGHT;
