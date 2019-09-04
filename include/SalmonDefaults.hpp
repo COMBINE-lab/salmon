@@ -31,6 +31,8 @@ namespace defaults {
   constexpr const bool hardFilter{false};
   constexpr const bool mimicStrictBT2{false};
   constexpr const bool mimicBT2{false};
+  constexpr const bool softclipOverhangs{false};
+  constexpr const bool fullLengthAlignment{false};
   constexpr const bool allowDovetail{false};
   constexpr const bool recoverOrphans{false};
   constexpr const int32_t maxMMPExtension{7};

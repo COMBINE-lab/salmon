@@ -1492,7 +1492,7 @@ std::string getCurrentTimeAsString() {
     // validateMappings
     bool consensusSlackExplicit = !vm["consensusSlack"].defaulted();
     if (!consensusSlackExplicit) {
-      sopt.consensusSlack = 0.2;
+      sopt.consensusSlack = 0.35;
       sopt.jointLog->info(
                           "Usage of --validateMappings implies a default consensus slack of 0.2. "
                           "Setting consensusSlack to {}.", sopt.consensusSlack);
@@ -1514,7 +1514,7 @@ std::string getCurrentTimeAsString() {
       sopt.maxReadOccs = 1000;
       sopt.jointLog->info("The --mimicBT2 and --mimicStrictBT2 flags increases maxReadOccs to {}.", sopt.maxReadOccs);
 
-      sopt.consensusSlack = 0.35;
+      sopt.consensusSlack = 0.5;
       sopt.jointLog->info("The --mimicBT2 and --mimicStrictBT2 flags increases consensusSlack to {}.", sopt.consensusSlack);
 
       if (sopt.mimicBT2) {
@@ -1522,12 +1522,31 @@ std::string getCurrentTimeAsString() {
                             "Usage of --mimicBT2 overrides other settings for mapping validation. Setting "
                             "Bowtie2-like parameters now.");
         sopt.discardOrphansQuasi = true;
+        if (sopt.softclipOverhangs) {
+          sopt.jointLog->info("Softclipping of overhangs is not allowed in mimicBT2 mode; setting to false.");
+          sopt.softclipOverhangs = false;
+        }
+
+        sopt.matchScore = 2;
+        sopt.mismatchPenalty = -4;
+        sopt.gapOpenPenalty = 5;
+        sopt.gapExtendPenalty = 3;
+        /*
+        sopt.matchScore = 0;
+        sopt.mismatchPenalty = -6;
+        sopt.gapOpenPenalty = 5;
+        sopt.gapExtendPenalty = 3;
+        */
       }
 
       if (sopt.mimicStrictBT2) {
         sopt.jointLog->info(
                             "Usage of --mimicStrictBT2 overrides other settings for mapping validation. Setting "
                             "strict RSEM+Bowtie2-like parameters now.");
+        if (sopt.softclipOverhangs) {
+          sopt.jointLog->info("Softclipping of overhangs is not allowed in mimicStrictBT2 mode; setting to false.");
+          sopt.softclipOverhangs = false;
+        }
         sopt.discardOrphansQuasi = true;
         sopt.minScoreFraction = 0.8;
         sopt.matchScore = 1;

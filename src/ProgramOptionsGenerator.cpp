@@ -161,6 +161,22 @@ namespace salmon {
        "RSEM+Bowtie2.  This increases --minScoreFraction to 0.8, disallows dovetailing reads, "
        "discards orphans, and disallows gaps in alignments."
        )
+      ("softclipOverhangs", 
+       po::bool_switch(&(sopt.softclipOverhangs))->default_value(salmon::defaults::softclipOverhangs),
+       "[selective-alignment mode only] : Allow soft-clipping of reads that overhang the beginning or ends "
+       "of the transcript.  In this case, the overhaning section of the read will simply be unaligned, and "
+       "will not contribute or detract from the alignment score.  The default policy is to force an end-to-end "
+       "alignemnt of the entire read, so that overhanings will result in some deletion of nucleotides from the "
+       "read."
+       )
+      ("fullLengthAlignment", 
+       po::bool_switch(&(sopt.fullLengthAlignment))->default_value(salmon::defaults::fullLengthAlignment),
+       "[selective-alignment mode only] : Perform selective alignment over the full length of the read, beginning "
+       "from the (approximate) initial mapping location and using extension alignment.  This is in contrast with the "
+       "default behavior which is to only perform alignment between the MEMs in the optimal chain (and before the "
+       "first and after the last MEM if applicable).  The default strategy forces the MEMs to belong to the alignment, "
+       "but has the benefit that it can discover indels prior to the first hit shared between the read and reference."
+       )
       ("hardFilter",
        po::bool_switch(&(sopt.hardFilter))->default_value(salmon::defaults::hardFilter),
        "[Quasi-mapping mode (w / mapping validation) only] : Instead of weighting mappings by their alignment score, "

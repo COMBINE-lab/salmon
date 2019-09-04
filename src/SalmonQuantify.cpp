@@ -831,6 +831,7 @@ void processReadsQuasi(
   bool noDovetail = !salmonOpts.allowDovetail;
   size_t numOrphansRescued{0};
   phmap::flat_hash_map<uint32_t, std::pair<int32_t, int32_t>> bestScorePerTranscript;
+  uint64_t firstDecoyIndex = qidx->firstDecoyIndex();
   //*******
 
   bool hardFilter = salmonOpts.hardFilter;
@@ -970,6 +971,7 @@ void processReadsQuasi(
                                                         salmonOpts.fragLenDistMax,
                                                         totLen,
                                                         memCollector.getConsensusFraction(),
+                                                        firstDecoyIndex,
                                                         mpol, hctr);
 
         // IMPORTANT NOTE : Orphan recovery currently assumes a

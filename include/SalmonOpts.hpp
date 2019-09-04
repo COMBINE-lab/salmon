@@ -267,6 +267,8 @@ struct SalmonOpts {
   int32_t dpBandwidth;
   bool mimicStrictBT2;
   bool mimicBT2;
+  bool softclipOverhangs;
+  bool fullLengthAlignment;
   bool allowDovetail;
   bool recoverOrphans;
   bool hardFilter;

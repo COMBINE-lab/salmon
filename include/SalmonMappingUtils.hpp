@@ -69,15 +69,8 @@ inline bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& mem
   //Initialize ksw aligner
   ksw2pp::KSW2Config config;
   config.dropoff = -1;
-  if (salmonOpts.mimicBT2){
-    config.gapo = 5;//salmonOpts.gapOpenPenalty;
-    config.gape = 3;//salmonOpts.gapExtendPenalty;
-    salmonOpts.matchScore = 0;
-    salmonOpts.mismatchPenalty = -6;
-  } else {
-    config.gapo = salmonOpts.gapOpenPenalty;
-    config.gape = salmonOpts.gapExtendPenalty;
-  }
+  config.gapo = salmonOpts.gapOpenPenalty;
+  config.gape = salmonOpts.gapExtendPenalty;
   config.bandwidth = salmonOpts.dpBandwidth;
   config.flag = 0;
   config.flag |= KSW_EZ_RIGHT;
@@ -89,12 +82,14 @@ inline bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& mem
   std::swap(aligner, aligner2);
 
   aconf.refExtendLength = 20;
-  aconf.fullAlignment = salmonOpts.mimicBT2 ? true : false;
+  aconf.fullAlignment = salmonOpts.fullLengthAlignment;
   aconf.matchScore = salmonOpts.matchScore;
   aconf.gapExtendPenalty = salmonOpts.gapExtendPenalty;
   aconf.gapOpenPenalty = salmonOpts.gapOpenPenalty;
   aconf.minScoreFraction = salmonOpts.minScoreFraction;
   aconf.mimicBT2 = salmonOpts.mimicBT2;
+  aconf.mimicBT2Strict = salmonOpts.mimicStrictBT2;
+  aconf.allowOverhangSoftclip = salmonOpts.softclipOverhangs;
 
   mpol.noOrphans = !salmonOpts.allowOrphans;
   // TODO : PF_INTEGRATION
