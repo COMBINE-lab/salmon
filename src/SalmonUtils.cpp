@@ -1902,9 +1902,11 @@ bool processQuantOptions(SalmonOpts& sopt,
       sopt.hitFilterPolicy = pufferfish::util::HitFilterPolicy::FILTER_AFTER_CHAINING;
     } else if ( sopt.hitFilterPolicyStr == "BOTH" ) {
       sopt.hitFilterPolicy = pufferfish::util::HitFilterPolicy::FILTER_BEFORE_AND_AFTER_CHAINING;
+    } else if ( sopt.hitFilterPolicyStr == "NONE" ) {
+      sopt.hitFilterPolicy = pufferfish::util::HitFilterPolicy::DO_NOT_FILTER;
     } else {
       jointLog->critical("The argument {} for --hitFilterPolicy is invalid. Valid options are "
-                         "BEFORE, AFTER and BOTH.", sopt.hitFilterPolicyStr);
+                         "BEFORE, AFTER, BOTH and NONE.", sopt.hitFilterPolicyStr);
       jointLog->flush();
       return false;
     }

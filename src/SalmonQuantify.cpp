@@ -1031,6 +1031,7 @@ void processReadsQuasi(
         }
       }
 
+      //salmonOpts.jointLog->info("num hits before alignment = {:n}", jointHits.size());
       // If we have mappings, then process them.
       if (!jointHits.empty()) {
         bool isPaired = jointHits.front().mateStatus ==
@@ -1329,9 +1330,10 @@ void processReadsQuasi(
   mstats.numFragmentsFiltered += numFragsDropped;
   mstats.numDovetails += hctr.numDovetails;
   mstats.numDecoyFragments += numDecoyFrags;
+  /*
   salmonOpts.jointLog->info("Number of orphans rescued in this thread {}",
                             numOrphansRescued);
-
+  */
   //salmonOpts.jointLog->info("Score filtering dropped {} total mappings", numDropped);
   readExp.updateShortFrags(shortFragStats);
 }

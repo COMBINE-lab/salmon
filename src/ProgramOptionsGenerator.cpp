@@ -229,7 +229,7 @@ namespace salmon {
        "Determines the policy by which hits are filtered in selective alignment.  Filtering hits after "
        "chaining (the default) is more sensitive, but more computationally intensive, because it performs "
        "the chaining dynamic program for all hits.  Filtering before chaining is faster, but some true hits "
-       "may be missed.  The options are BEFORE, AFTER, and BOTH."
+       "may be missed.  The options are BEFORE, AFTER, BOTH and NONE."
        );
       return mapspec;
   }
