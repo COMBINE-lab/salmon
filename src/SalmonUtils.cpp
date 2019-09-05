@@ -1923,8 +1923,18 @@ bool processQuantOptions(SalmonOpts& sopt,
       return false;
     }
 
+    // currently, with the pufferfish based index
+    // we have not tested SA-free methods.  So let's
+    // disable this ability and give a warning.
     if (sopt.disableSA) {
-      sopt.validateMappings = false;
+      jointLog->critical("Note: Alignment-free mapping (i.e. mapping without subsequent selective-alignment) "
+                         "has not yet been throughly tested under the pufferfish-based index and using the "
+                         "pufferfish-based mapping strategies.  Thus, disabling of selective-alignment "
+                         "is not currently allowed.  We will explore re-enabling this option in future "
+                         "versions of salmon.");
+      jointLog->flush();
+      return false;
+      //sopt.validateMappings = false;
     }
   }
 

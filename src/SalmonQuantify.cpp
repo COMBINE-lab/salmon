@@ -2121,7 +2121,7 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
     salmonOpts.jointLog->info("Number of fragments discarded because they are best-mapped to decoys : {:n}", mstats.numDecoyFragments.load());
   }
   if (!salmonOpts.allowDovetail) {
-    salmonOpts.jointLog->info("Number of fragments discarded because they have only dovetail (discordant) mappings : {:n}", mstats.numDovetails.load());
+    salmonOpts.jointLog->info("Number of fragments discarded because they have only dovetail (discordant) mappings to valid targets : {:n}", mstats.numDovetails.load());
   }
 
   // If we didn't achieve burnin, then at least compute effective
