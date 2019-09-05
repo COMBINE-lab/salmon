@@ -185,6 +185,7 @@ namespace salmon {
        "but this flag may be desirable if you want more accurate 'naive' equivalence classes, rather "
        "than range factorized equivalence classes."
        )
+      /*
       ("allowOrphansFMD",
        po::bool_switch(&(sopt.allowOrphans))->default_value(salmon::defaults::allowOrphansFMD),
        "[FMD-mapping mode only] : Consider orphaned reads as valid hits when "
@@ -193,6 +194,7 @@ namespace salmon {
        "more transcripts to be detected), but may decrease specificity as "
        "orphaned alignments are more likely "
        "to be spurious.")
+      */
       ("writeMappings,z", po::value<string>(&sopt.qmFileName)
        ->default_value(salmon::defaults::quasiMappingDefaultFile)
        ->implicit_value(salmon::defaults::quasiMappingImplicitFile),
@@ -201,18 +203,19 @@ namespace salmon {
        "format.  By default, output will be directed to "
        "stdout, but an alternative file name can be "
        "provided instead.")
+      /*
       ("consistentHits,c",
        po::bool_switch(&(sopt.consistentHits))->default_value(salmon::defaults::consistentHits),
        "Force hits gathered during "
        "quasi-mapping to be \"consistent\" (i.e. co-linear and "
        "approximately the right distance apart).")
+      */
       ("fasterMapping",
        po::bool_switch(&(sopt.fasterMapping))->default_value(salmon::defaults::fasterMapping),
        "[Developer]: Disables some extra checks during quasi-mapping. This "
-       "may make mapping a "
-       "little bit faster at the potential cost of returning too many "
-       "mappings (i.e. some sub-optimal mappings) "
-       "for certain reads.")
+       "may make mapping a little bit faster at the potential cost of "
+       "missing some difficult alignments.")
+      /*
       ("quasiCoverage,x",
        po::value<double>(&(sopt.quasiCoverage))->default_value(salmon::defaults::quasiCoverage),
        "[Experimental]: The fraction of the read that must be covered by "
@@ -224,6 +227,7 @@ namespace salmon {
        "Since coverage by exact matching, large, MMPs is a rather strict "
        "condition, this value should likely "
        "be set to something low, if used.")
+      */
       ("hitFilterPolicy",
        po::value<string>(&sopt.hitFilterPolicyStr)->default_value(salmon::defaults::hitFilterPolicyStr),
        "Determines the policy by which hits are filtered in selective alignment.  Filtering hits after "
