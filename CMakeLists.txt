@@ -134,7 +134,7 @@ if(APPLE)
   # To allow ourselves to build a dynamic library, we have to tell the compiler
   # that, yes, the symbols will be around at runtime.
   list(APPEND TGT_COMPILE_FLAGS "-undefined dynamic_lookup;-Wno-unused-command-line-argument")
-  set(LIBSALMON_LINKER_FLAGS "-all_load")
+  # set(LIBSALMON_LINKER_FLAGS "-all_load")
   # In order to "think different", we also have to use non-standard suffixes
   # for our shared libraries
   set(SHARED_LIB_EXTENSION "dylib")
@@ -297,6 +297,7 @@ endif()
 
 set(Boost_USE_MULTITHREADED ON)
 #set(Boost_USE_STATIC_RUNTIME OFF)
+set(Boost_USE_DEBUG_RUNTIME OFF)
 
 find_package(ZLIB)
 if(NOT ZLIB_FOUND)
@@ -314,6 +315,8 @@ if("${CMAKE_LIBRARY_PATH}" STREQUAL "")
 else()
   set(EXTRA_CMAKE_LIBRARY_FLAGS "-L${CMAKE_LIBRARY_PATH}")
 endif()
+
+find_package(Iconv REQUIRED)
 
 find_package(LibLZMA)
 if(NOT LIBLZMA_FOUND)
@@ -379,11 +382,14 @@ endif()
 ##
 # Set the latest version and look for what we need
 ##
-set(Boost_ADDITIONAL_VERSIONS "1.59.0" "1.60.0" "1.61.0" "1.62" "1.63" "1.64" "1.65" "1.66")
+set(Boost_ADDITIONAL_VERSIONS "1.59.0" "1.60.0" "1.61.0" "1.62.0" "1.63.0" "1.64.0" "1.65.0" "1.66.0" "1.67.0" "1.68.0" "1.69.0" "1.70.0" "1.71.0")
+if (NOT BOOST_RECONFIGURE)
 find_package(Boost 1.59.0 COMPONENTS iostreams filesystem system timer chrono program_options)
 message("BOOST_INCLUDEDIR = ${BOOST_INCLUDEDIR}")
 message("BOOST_LIBRARYDIR = ${BOOST_LIBRARYDIR}")
 message("Boost_FOUND = ${Boost_FOUND}")
+endif()
+
 include(ExternalProject)
 
 ##
@@ -400,7 +406,9 @@ if(BOOST_RECONFIGURE)
   unset(Boost_LIBRARIES CACHE)
   unset(BOOST_ROOT CACHE)
   unset(CMAKE_PREFIX_PATH CACHE)
-
+  unset(Boost::diagnostic_definitions CACHE)
+  unset(Boost::disable_autolinking CACHE)
+  unset(Boost::dynamic_linking CACHE)
   set(BOOST_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
   set(CMAKE_PREFIX_PATH ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
   set(Boost_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
@@ -423,6 +431,10 @@ if((NOT Boost_FOUND) AND (NOT FETCH_BOOST))
     "To fetch and build boost locally, call cmake with -DFETCH_BOOST=TRUE"
   )
 elseif(FETCH_BOOST)
+  if(NOT DEFINED BOOST_BUILD_THREADS)
+    set(BOOST_BUILD_THREADS 2)
+  endif()
+
   ## Let the rest of the build process know we're going to be fetching boost
   set(BOOST_LIB_SUBSET --with-iostreams --with-atomic --with-chrono --with-container --with-date_time --with-exception
     --with-filesystem --with-graph --with-graph_parallel --with-math
@@ -434,19 +446,19 @@ elseif(FETCH_BOOST)
   message("==================================================================")
   externalproject_add(libboost
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L  http://downloads.sourceforge.net/project/boost/boost/1.66.0/boost_1_66_0.tar.gz -o boost_1_66_0.tar.gz &&
-      ${SHASUM} bd0df411efd9a585e5a2212275f8762079fed8842264954675a4fddc46cfcf60 boost_1_66_0.tar.gz &&
-      tar xzf boost_1_66_0.tar.gz
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_66_0
+    DOWNLOAD_COMMAND curl -k -L https://dl.bintray.com/boostorg/release/1.71.0/source/boost_1_71_0.tar.gz -o boost_1_71_0.tar.gz &&
+      ${SHASUM} 96b34f7468f26a141f6020efb813f1a2f3dfb9797ecf76a7d7cbd843cc95f5bd boost_1_71_0.tar.gz &&
+      tar xzf boost_1_71_0.tar.gz
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_71_0
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     #PATCH_COMMAND patch -p2 < ${CMAKE_CURRENT_SOURCE_DIR}/external/boost156.patch
-    CONFIGURE_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_66_0/bootstrap.sh ${BOOST_CONFIGURE_TOOLSET} ${BOOST_BUILD_LIBS} --prefix=<INSTALL_DIR>
+    CONFIGURE_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_71_0/bootstrap.sh ${BOOST_CONFIGURE_TOOLSET} ${BOOST_BUILD_LIBS} --prefix=<INSTALL_DIR>
     add_custom_command(
-      OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_66_0/tools/build/src/user-config.jam
+      OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_71_0/tools/build/src/user-config.jam
       PRE_BUILD
       COMMAND echo "using gcc : ${CC_VERSION} : ${CMAKE_CXX_COMPILER} ;"
     )
-    BUILD_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_66_0/b2 -d0 -j2 ${BOOST_LIB_SUBSET} toolset=${BOOST_TOOLSET} ${BOOST_EXTRA_FLAGS} cxxflags=${BOOST_CXX_FLAGS} link=static install
+    BUILD_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_71_0/b2 -d0 -j${BOOST_BUILD_THREADS} ${BOOST_LIB_SUBSET} toolset=${BOOST_TOOLSET} ${BOOST_EXTRA_FLAGS} cxxflags=${BOOST_CXX_FLAGS} link=static install
       BUILD_IN_SOURCE 1
       INSTALL_COMMAND ""
   )
@@ -663,6 +675,11 @@ if(TBB_RECONFIGURE)
   set(CMAKE_PREFIX_PATH ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
   set(TBB_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
   set(TBB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
+  set(TBB_INCLUDE_DIRS ${TBB_INSTALL_DIR}/include)
+  set(TBB_INCLUDE_DIR ${TBB_INSTALL_DIR}/include)
+  set(TBB_LIBRARY_DIRS ${TBB_INSTALL_DIR}/lib)
+  set(TBB_LIBRARY ${TBB_INSTALL_DIR}/lib)
+  set(TBB_LIB_DIR ${TBB_INSTALL_DIR}/lib)
   message("TBB_INSTALL_DIR = ${TBB_INSTALL_DIR}")
   find_package(TBB 2018.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy)
   message("[in TBB_RECONFIGURE] TBB_LIBRARIES = ${TBB_LIBRARIES}")

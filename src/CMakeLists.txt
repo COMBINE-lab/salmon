@@ -4,7 +4,6 @@ ${GAT_SOURCE_DIR}/include/eigen3
 ${GAT_SOURCE_DIR}/external
 ${GAT_SOURCE_DIR}/external/cereal/include
 ${GAT_SOURCE_DIR}/external/install/include
-#${GAT_SOURCE_DIR}/external/install/include/bwa
 ${ZLIB_INCLUDE_DIR}
 ${TBB_INCLUDE_DIRS}
 ${Boost_INCLUDE_DIRS}
@@ -18,13 +17,6 @@ ${ICU_INC_DIRS}
 )
 
 set ( SALMON_MAIN_SRCS
-#${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapFileSystem.cpp
-#${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndexer.cpp
-#${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapSAIndex.cpp
-#${GAT_SOURCE_DIR}/external/install/src/rapmap/RapMapUtils.cpp
-#${GAT_SOURCE_DIR}/external/install/src/rapmap/HitManager.cpp
-#${GAT_SOURCE_DIR}/external/install/src/rapmap/rank9b.cpp
-#${GAT_SOURCE_DIR}/external/install/src/rapmap/bit_array.c
 EMUtils.cpp
 CollapsedEMOptimizer.cpp
 ## PUFF_INTEGRATION
@@ -139,7 +131,6 @@ set ( UNIT_TESTS_SRCS
     ${GAT_SOURCE_DIR}/tests/UnitTests.cpp
     FragmentLengthDistribution.cpp
     ${GAT_SOURCE_DIR}/external/install/src/pufferfish/rank9b.cpp
-    #${GAT_SOURCE_DIR}/external/install/src/rapmap/bit_array.c
 )
 
 
@@ -238,7 +229,6 @@ add_executable(unitTests ${UNIT_TESTS_SRCS})
 target_link_libraries(salmon
     Threads::Threads
     salmon_core
-    puffer 
     twopaco
     graphdump
     ntcard
@@ -260,7 +250,9 @@ target_link_libraries(salmon
     ${LIBRT}
     ksw2pp
 ## PUFF_INTEGRATION    
+    Iconv::Iconv
     alevin_core
+    puffer 
     ${CMAKE_DL_LIBS}
     #asan
     #ubsan
@@ -277,15 +269,13 @@ target_link_libraries(unitTests
     ${ICU_LIBS}
     ${STADEN_LIBRARIES} ${CURL_LIBRARIES}
     ${ZLIB_LIBRARY}
-    #${SUFFARRAY_LIB}
-    #${SUFFARRAY_LIB64}
-    #${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
     m
     ${LIBLZMA_LIBRARIES}
     ${BZIP2_LIBRARIES}
     ${TBB_LIBRARIES}
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
+    Iconv::Iconv
     ${LIBRT}
     ${CMAKE_DL_LIBS}
     #asan
