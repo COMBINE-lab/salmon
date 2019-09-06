@@ -228,6 +228,7 @@ add_executable(unitTests ${UNIT_TESTS_SRCS})
 # Link the executable
 target_link_libraries(salmon
     Threads::Threads
+    puffer 
     salmon_core
     twopaco
     graphdump
@@ -252,7 +253,6 @@ target_link_libraries(salmon
 ## PUFF_INTEGRATION    
     Iconv::Iconv
     alevin_core
-    puffer 
     ${CMAKE_DL_LIBS}
     #asan
     #ubsan
