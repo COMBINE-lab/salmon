@@ -251,7 +251,6 @@ target_link_libraries(salmon
     ${LIBRT}
     ksw2pp
 ## PUFF_INTEGRATION    
-    Iconv::Iconv
     alevin_core
     ${CMAKE_DL_LIBS}
     #asan
@@ -265,9 +264,10 @@ target_link_libraries(unitTests
     alevin_core
     salmon_core
     gff
+    ${STADEN_LIBRARIES} 
     ${Boost_LIBRARIES}
     ${ICU_LIBS}
-    ${STADEN_LIBRARIES} ${CURL_LIBRARIES}
+    ${CURL_LIBRARIES}
     ${ZLIB_LIBRARY}
     m
     ${LIBLZMA_LIBRARIES}
@@ -275,12 +275,16 @@ target_link_libraries(unitTests
     ${TBB_LIBRARIES}
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
-    Iconv::Iconv
     ${LIBRT}
     ${CMAKE_DL_LIBS}
     #asan
     #ubsan
 )
+
+if(NOT Iconv_IS_BUILT_IN)
+  target_link_libraries(unitTests Iconv::Iconv)
+  target_link_libraries(salmon Iconv::Iconv)
+endif()
 
 add_dependencies(salmon unitTests)
 

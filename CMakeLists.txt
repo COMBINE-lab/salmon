@@ -317,6 +317,9 @@ else()
 endif()
 
 find_package(Iconv REQUIRED)
+if(NOT Iconv_IS_BUILT_IN)
+  set(ICONV_LIB Iconv::Iconv)
+endif()
 
 find_package(LibLZMA)
 if(NOT LIBLZMA_FOUND)
