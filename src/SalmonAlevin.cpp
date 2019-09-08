@@ -689,7 +689,7 @@ void processReadsQuasi(
         } //end-if validate mapping
 
         if (writeQuasimappings) {
-          writeAlignmentsToStream(rp, formatter, jointAlignments, sstream, false);
+          writeAlignmentsToStream(rp, formatter, jointAlignments, sstream, false, true);
           /*
           rapmap::utils::writeAlignmentsToStream(rp, formatter,
                                                  hctr, jointHits, sstream);
