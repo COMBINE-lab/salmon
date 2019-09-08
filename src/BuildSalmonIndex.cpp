@@ -88,7 +88,13 @@ int salmonIndex(int argc, const char* argv[]) {
               "retained and quantified separately.")(
       "threads,p",
       po::value<uint32_t>(&idxOpt.p)->default_value(2)->required(),
-      "Number of threads to use (only used for computing bias features)")(
+      "Number of threads to use (only used for computing bias features)")
+	("filterSize,f",
+	po::value<int32_t>(&idxOpt.filt_size)->default_value(-1),
+       "The size of the Bloom filter that will be used by TwoPaCo during indexing. "
+	"The filter will be of size 2^{filterSize}. The default value of -1 means that "
+	"the filter size will be automatically set based on the number of distinct "
+	"k-mers in the input, as estimated by nthll.")(
       "sparse", po::bool_switch(&idxOpt.isSparse)->default_value(false),
       "Build the index using a sparse sampling of k-mer positions "
       "This will require less memory (especially during quantification), but will "
