@@ -1073,7 +1073,6 @@ void processReadsQuasi(
 
           bool bestHitDecoy = (bestScore < bestDecoyScore);
           if (bestScore > invalidScore and !bestHitDecoy) {
-
             salmon::mapping_utils::filterAndCollectAlignments(jointHits,
                                        scores,
                                        perm,
