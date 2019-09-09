@@ -409,6 +409,7 @@ namespace alevin {
       // mark in salmon options that we are running
       // in alevin mode
       sopt.alevinMode = true;
+      sopt.hardFilter = true;
       if (sopt.initUniform) { aopt.initUniform = true; }
 
       //Create outputDirectory
