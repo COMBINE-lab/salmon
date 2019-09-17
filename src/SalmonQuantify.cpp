@@ -739,7 +739,7 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
 
 /// START QUASI
 template <typename IndexT>
-void processReadsQuasi(
+void processReads(
     paired_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
     AlnGroupVec<QuasiAlignment>& structureVec,
     std::atomic<uint64_t>& numObservedFragments,
@@ -1081,6 +1081,7 @@ void processReadsQuasi(
                                        false, // true for single-end false otherwise
                                        tryAlign,
                                        hardFilter,
+                                       salmonOpts.scoreExp,
                                        bestScore,
                                        bestDecoyScore,
                                        jointAlignments);
@@ -1342,7 +1343,7 @@ void processReadsQuasi(
 // To use the parser in the following, we get ReadGroups until none is
 // available.
 template <typename IndexT>
-void processReadsQuasi(
+void processReads(
     single_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
     AlnGroupVec<QuasiAlignment>& structureVec,
     std::atomic<uint64_t>& numObservedFragments,
@@ -1556,6 +1557,7 @@ void processReadsQuasi(
                                       true, // true for single-end false otherwise
                                       tryAlign,
                                       hardFilter,
+                                      salmonOpts.scoreExp,
                                       bestScore,
                                       bestDecoyScore,
                                       jointAlignments);
@@ -1768,7 +1770,7 @@ void processReadLibrary(
       writeSAMHeader(*index, salmonOpts.qmLog);
     }
     auto threadFun = [&, i, parserPtr, index]() -> void {
-      processReadsQuasi(parserPtr, readExp, rl, structureVec[i],
+      processReads(parserPtr, readExp, rl, structureVec[i],
                         numObservedFragments, numAssignedFragments, numValidHits,
                         upperBoundHits, index, transcripts,
                         fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],

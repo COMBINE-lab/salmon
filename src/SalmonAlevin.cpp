@@ -678,6 +678,7 @@ void processReadsQuasi(
                                                               false, // true for single-end false otherwise
                                                               tryAlign,
                                                               hardFilter,
+                                                              salmonOpts.scoreExp,
                                                               bestScore,
                                                               bestDecoyScore,
                                                               jointAlignments);

@@ -160,6 +160,7 @@ inline void filterAndCollectAlignments(
                                        bool singleEnd,
                                        bool tryAlign,
                                        bool hardFilter,
+                                       double scoreExp,
                                        int32_t bestScore,
                                        int32_t bestDecoyScore,
                                        std::vector<pufferfish::util::QuasiAlignment>& jointAlignments) {
@@ -193,7 +194,7 @@ inline void filterAndCollectAlignments(
     double currScore = scores[ctr];
     double v = bestScoreD - currScore;
     // why -1?
-    double estAlnProb = hardFilter ? -1.0 : std::exp(-v);
+    double estAlnProb = hardFilter ? -1.0 : std::exp(- scoreExp * v );
 
     if (singleEnd or jointHit.isOrphan()) {
       readLen = jointHit.isLeftAvailable() ? readLen : mateLen;
@@ -215,7 +216,7 @@ inline void filterAndCollectAlignments(
         qaln.mateLen = readLen;
         qaln.mateCigar.clear();
         qaln.matePos = 0;
-        qaln.mateIsFwd = false;
+        qaln.mateIsFwd = true;
         qaln.mateScore = 0;
         qaln.mateStatus = MateStatus::SINGLE_END;
       }

@@ -102,6 +102,12 @@ namespace salmon {
        "(100 * X)% of the hits before it is discounted as a mapping candidate.  The default value of this option "
        "is 0.2 if --validateMappings is given and 0 otherwise."
        )
+      ("scoreExp", 
+      po::value<double>(&sopt.scoreExp)->default_value(salmon::defaults::scoreExp),
+      "[Quasi-mapping mode (w / mapping validation) only] : The factor by which sub-optimal alignment scores are "
+      "downweighted to produce a probability.  If the best alignment score for the current read is S, and the score "
+      "for a particular alignment is w, then the probability will be computed porportional to exp( - scoreExp * (S-w) )."
+      )
       ("minScoreFraction",
        po::value<double>(&sopt.minScoreFraction),
        "[Quasi-mapping mode (w / mapping validation) only] : The fraction of the optimal possible alignment score that a "

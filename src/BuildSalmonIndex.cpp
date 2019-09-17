@@ -95,6 +95,13 @@ int salmonIndex(int argc, const char* argv[]) {
 	"The filter will be of size 2^{filterSize}. The default value of -1 means that "
 	"the filter size will be automatically set based on the number of distinct "
 	"k-mers in the input, as estimated by nthll.")(
+    "tmpdir",
+    po::value<std::string>(&idxOpt.twopaco_tmp_dir)->default_value(""),
+    "The directory location that will be used for TwoPaCo temporary files; it "
+    "will be created if need be and be removed prior to indexing completion. The "
+    "default value will cause a (temporary) subdirectory of the salmon index "
+    "directory to be used for this purpose."
+    )(
       "sparse", po::bool_switch(&idxOpt.isSparse)->default_value(false),
       "Build the index using a sparse sampling of k-mer positions "
       "This will require less memory (especially during quantification), but will "

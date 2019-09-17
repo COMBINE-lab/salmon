@@ -260,6 +260,7 @@ struct SalmonOpts {
   bool disableSA;
   float consensusSlack;
   double minScoreFraction;
+  double scoreExp;
   int16_t matchScore;
   int16_t mismatchPenalty;
   int16_t gapOpenPenalty;
