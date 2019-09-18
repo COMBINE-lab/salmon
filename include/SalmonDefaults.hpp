@@ -80,6 +80,10 @@ namespace defaults {
   constexpr const bool writeUnmappedNames{false};
   constexpr const double quasiCoverage{0.0};
   const std::string hitFilterPolicyStr{"AFTER"};
+  // ASE-specific
+  constexpr const bool aseMode{false};
+  constexpr const char pseudoVCFFiles[] = "";
+
 
    // FMD-specific options
   constexpr const int fmdMinSeedLength{19};

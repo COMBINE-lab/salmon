@@ -240,7 +240,19 @@ namespace salmon {
        "chaining (the default) is more sensitive, but more computationally intensive, because it performs "
        "the chaining dynamic program for all hits.  Filtering before chaining is faster, but some true hits "
        "may be missed.  The options are BEFORE, AFTER, BOTH and NONE."
+       )
+      ("aseMode",
+       po::bool_switch(&(sopt.aseMode))->default_value(salmon::defaults::aseMode),
+       "[Quasi-mapping mode only] : Attempt to recover the mates of orphaned reads. This uses edlib for "
+       "orphan recovery, and so introduces some computational overhead, but it can improve sensitivity."
+       )
+      ("pseudoVCFFiles", po::value<string>(&sopt.pseudoVCFFiles)
+       ->default_value(salmon::defaults::quasiMappingDefaultFile),
+       "This option should be set in conjunction with  "
+       "vcfproj produced tsv like files to create a"
+       "SNP/INDEL location aware datastructure"
        );
+      
       return mapspec;
   }
 

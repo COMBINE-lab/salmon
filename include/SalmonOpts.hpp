@@ -276,6 +276,11 @@ struct SalmonOpts {
   int32_t maxMMPExtension;
   uint32_t maxOccsPerHit;
 
+  // Related to ASE based mapping
+  bool aseMode{false} ; // Implements allele specific expression checks
+  std::string pseudoVCFFiles ; // should be produced
+                                            // with vcfproj
+
   // for utility (may need to be cleaned up later)
   bool discardOrphansQuasi;
   bool discardOrphansAln;

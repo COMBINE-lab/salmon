@@ -33,6 +33,7 @@ extern "C" {
 #include "ReadLibrary.hpp"
 #include "SalmonConfig.hpp"
 #include "TranscriptGeneMap.hpp"
+#include "TranscriptAlleleMap.hpp"
 
 template <typename EqBuilderT> class ReadExperiment;
 class LibraryFormat;
@@ -115,6 +116,9 @@ TranscriptGeneMap readTranscriptToGeneMap(std::ifstream& ifile);
 TranscriptGeneMap
 transcriptToGeneMapFromFasta(const std::string& transcriptsFile);
 
+TranscriptAlleleMap
+fillTranscriptAlleleMap(std::ifstream& pseudoVCFFilesStream) ;
+
 bool readEquivCounts(boost::filesystem::path& eqFilePathString,
                      std::vector<string>& tnames,
                      std::vector<double>& tlens,
@@ -174,6 +178,9 @@ inline void incLoop(tbb::atomic<double>& val, double inc) {
     returnedMass = val.compare_and_swap(newMass, oldMass);
   } while (returnedMass != oldMass);
 }
+
+std::vector<std::string> split(const std::string& str,
+                                 int delimiter(int) = ::isspace) ;
 
 std::string getCurrentTimeAsString();
 

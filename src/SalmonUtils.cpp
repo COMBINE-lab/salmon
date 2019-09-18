@@ -40,6 +40,7 @@
 #include "GenomicFeature.hpp"
 #include "SGSmooth.hpp"
 #include "TranscriptGeneMap.hpp"
+#include "TranscriptAlleleMap.hpp"
 
 #include "StadenUtils.hpp"
 #include "SalmonDefaults.hpp"
@@ -651,6 +652,7 @@ LibraryFormat hitType(int32_t start, bool isForward) {
 using std::string;
 using NameVector = std::vector<string>;
 using IndexVector = std::vector<size_t>;
+using IndexVectorList = std::vector<std::vector<size_t>>;
 using KmerVector = std::vector<uint64_t>;
 
 /**
@@ -1291,6 +1293,45 @@ transcriptToGeneMapFromFasta(const std::string& transcriptsFile) {
   return TranscriptGeneMap(transcriptNames, geneNames, t2g);
 }
 
+TranscriptAlleleMap
+fillTranscriptAlleleMap(std::ifstream& pseudoVCFFilesStream){
+
+  // Get the logger
+  auto logger = spdlog::get("jointLog") ;
+
+  std::unordered_map<std::string, size_t> transcriptNameMap ;
+  IndexVectorList transcriptToAlleleMap ;
+
+  std::string line ;
+  size_t transcriptCounter{0} ;
+
+  while(std::getline(pseudoVCFFilesStream, line)){
+    auto lineVec = split(line) ;
+
+    if(lineVec.size() < 2){
+      logger->warn("The pseudo vcf file is not well formed") ;
+    }else{
+      std::string transcriptName = lineVec[0] ;
+      IndexVector allelePosVector ;
+      allelePosVector.resize(lineVec.size() - 1) ;
+      for(size_t i = 0 ; i < lineVec.size() - 1 ; ++i){
+        allelePosVector[i] = std::stoul(lineVec[i]) ;
+      }
+      // sort positions
+      std::sort(allelePosVector.begin(), allelePosVector.end()) ;
+
+      transcriptToAlleleMap.push_back(allelePosVector) ;
+      transcriptNameMap[transcriptName] = transcriptCounter ;
+      ++transcriptCounter ;
+    }
+  }
+
+  return TranscriptAlleleMap(transcriptNameMap, transcriptToAlleleMap) ;
+
+}
+
+
+
 class ExpressionRecord {
 public:
   ExpressionRecord(const std::string& targetIn, uint32_t lengthIn,
@@ -1331,7 +1372,7 @@ public:
 
 // From : http://stackoverflow.com/questions/9435385/split-a-string-using-c11
 std::vector<std::string> split(const std::string& str,
-                               int delimiter(int) = ::isspace) {
+                               int delimiter(int) /*(int) = ::isspace */) {
   using namespace std;
   vector<string> result;
   auto e = str.end();
