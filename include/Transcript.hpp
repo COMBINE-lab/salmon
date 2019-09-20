@@ -540,6 +540,11 @@ public:
   double EffectiveLength;
   uint32_t id;
 
+  // Allele specific update of both
+  // tids
+  uint32_t idP{std::numeric_limits<uint32_t>::max()} ;
+  uint32_t idM{std::numeric_limits<uint32_t>::max()} ;
+
   double uniqueCounts{0.0};
   double totalCounts{0.0};
   double projectedCounts{0.0};

@@ -479,6 +479,190 @@ bool CollapsedGibbsSampler::sample(
   return true;
 }
 
+// For allele specific computation
+
+template <typename ExpT>
+bool CollapsedGibbsSampler::sample(
+    ExpT& readExp, SalmonOpts& sopt,
+    std::vector<Transcript>& mergedTranscripts,
+    std::unordered_map<size_t, size_t>& alleleToMergeTranacriptMapping,
+    std::function<bool(const std::vector<double>&)>& writeBootstrap,
+    uint32_t numSamples) {
+
+  namespace bfs = boost::filesystem;
+  auto& jointLog = sopt.jointLog;
+  tbb::task_scheduler_init tbbScheduler(sopt.numThreads);
+  std::vector<Transcript>& transcripts = readExp.transcripts();
+
+  // Fill in the effective length vector
+  Eigen::VectorXd effLens(transcripts.size());
+
+  auto& eqVec =
+      readExp.equivalenceClassBuilder().eqVec();
+
+  using VecT = CollapsedGibbsSampler::VecType;
+
+  std::vector<std::vector<int>> allSamples(
+      numSamples, std::vector<int>(transcripts.size(), 0));
+
+  std::vector<double> alphasIn(transcripts.size(), 0.0);
+  std::vector<double> alphasInit(transcripts.size(), 0.0);
+
+  bool useScaledCounts = (!sopt.useQuasi and !sopt.allowOrphans);
+  auto numMappedFragments = (useScaledCounts) ? readExp.upperBoundHits()
+                                              : readExp.numMappedFragments();
+  uint32_t numInternalRounds = sopt.thinningFactor;
+  size_t numTranscripts{transcripts.size()};
+
+  for (size_t i = 0; i < transcripts.size(); ++i) {
+    auto& txp = transcripts[i];
+    auto& parentTxp = alleleToMergeTranacriptMapping[txp.id] ;
+    alphasIn[i] = parentTxp.projectedCounts;
+    alphasInit[i] = parentTxp.projectedCounts;
+    effLens(i) = txp.EffectiveLength;
+  }
+
+  bool perTranscriptPrior = (sopt.useVBOpt) ? sopt.perTranscriptPrior : true;
+  double priorValue = (sopt.useVBOpt) ? sopt.vbPrior : 1e-4;
+  std::vector<double> priorAlphas = populatePriorAlphasGibbs_(
+      transcripts, effLens, priorValue, perTranscriptPrior);
+  /** DEBUG
+  for (size_t i = 0; i < priorAlphas.size(); ++i) {
+    auto& v = priorAlphas[i];
+    if (!std::isfinite(v)) {
+      std::cerr << "prior for transcript " << i << " is " << v << ", eff length
+  = " << effLens(i) << "\n";
+    }
+  }
+  **/
+
+  std::vector<bool> active(numTranscripts, false);
+  size_t countMapSize{0};
+  std::vector<uint32_t> offsetMap(eqVec.size(), 0);
+  for (size_t i = 0; i < eqVec.size(); ++i) {
+    if (eqVec[i].first.valid) {
+      countMapSize +=
+          eqVec[i].second.weights.size(); // eqVec[i].first.txps.size();
+      for (auto t : eqVec[i].first.txps) {
+        active[t] = true;
+      }
+      if (i < eqVec.size() - 1) {
+        offsetMap[i + 1] = countMapSize;
+      }
+    }
+  }
+
+  std::vector<uint32_t> activeList;
+  activeList.reserve(numTranscripts);
+  for (size_t i = 0; i < numTranscripts; ++i) {
+    if (active[i]) {
+      activeList.push_back(i);
+    } else {
+      alphasIn[i] = 0.0;
+      alphasInit[i] = 0.0;
+    }
+  }
+
+  // will hold estimated counts
+  std::vector<double> alphas(numTranscripts, 0.0);
+  std::vector<double> mu(numTranscripts, 0.0);
+  std::vector<uint64_t> countMap(countMapSize, 0);
+  std::vector<double> probMap(countMapSize, 0.0);
+
+  /*
+  std::random_device rd;
+  MultinomialSampler ms(rd);
+  initCountMap_(eqVec, transcripts, alphasIn, priorAlphas, ms, countMap,
+  probMap, effLens, allSamples[0]);
+  */
+
+  uint32_t nchains{1};
+  if (numSamples >= 50) {
+    nchains = 2;
+  }
+  if (numSamples >= 100) {
+    nchains = 4;
+  }
+  if (numSamples >= 200) {
+    nchains = 8;
+  }
+
+  std::vector<uint32_t> newChainIter{0};
+  if (nchains > 1) {
+    auto step = numSamples / nchains;
+    for (size_t i = 1; i < nchains; ++i) {
+      newChainIter.push_back(i * step);
+    }
+  }
+
+  auto nextChainStart = newChainIter.begin();
+
+  // For each sample this thread should generate
+  std::unique_ptr<ez::ezETAProgressBar> pbar{nullptr};
+  if (!sopt.quiet) {
+    pbar.reset(new ez::ezETAProgressBar(numSamples));
+    pbar->start();
+  }
+  //bool isFirstSample{true};
+  for (size_t sampleID = 0; sampleID < numSamples; ++sampleID) {
+    if (pbar) {
+      ++(*pbar);
+    }
+    // If we should start a new chain here, then do it!
+    if (nextChainStart < newChainIter.end() and sampleID == *nextChainStart) {
+      alphasIn = alphasInit;
+      ++nextChainStart;
+    }
+    /*
+      if (!isFirstSample) {
+          // the counts start at what they were last round.
+        allSamples[sampleID] = allSamples[sampleID-1];
+      }
+      */
+
+    // Thin the chain by a factor of (numInternalRounds)
+    for (size_t i = 0; i < numInternalRounds; ++i) {
+      sampleRoundNonCollapsedMultithreaded_(
+          eqVec,      // encodes equivalence classes
+          active,     // the set of active transcripts
+          activeList, // the list of active transcript ids
+          countMap,   // the count of reads in each eq coming from each eq class
+          probMap, // the probability of reads in each eq class coming from each
+                   // txp
+          mu,      // transcript fractions
+          effLens, // the effective transcript lengths
+          priorAlphas, // the prior transcript counts
+          alphasIn, // [input/output param] the (hard) fragment counts per txp
+                    // from the previous iteration
+          offsetMap, // where the information begins for each equivalence class
+          sopt.noGammaDraw      // true if we should skip the Gamma draw, false otherwise
+      );
+    }
+
+    if (sopt.dontExtrapolateCounts) {
+      alphas = alphasIn;
+    } else {
+      double denom{0.0};
+      for (size_t tn = 0; tn < numTranscripts; ++tn) {
+        denom += mu[tn] * effLens[tn];
+      }
+      double scale = numMappedFragments / denom;
+      double asum = {0.0};
+
+      // A read cutoff for a txp to be present, adopted from Bray et al. 2016
+      double minAlpha = 1e-8;
+      for (size_t tn = 0; tn < numTranscripts; ++tn) {
+        alphas[tn] = (mu[tn] * effLens[tn]) * scale;
+        alphas[tn] = (alphas[tn] > minAlpha) ? alphas[tn] : 0.0;
+        asum += alphas[tn];
+      }
+    }
+    writeBootstrap(alphas);
+    //isFirstSample = false;
+  }
+  return true;
+}
+
 /*
 void initCountMap_(
     std::vector<std::pair<const TranscriptGroup, TGValue>>& eqVec,

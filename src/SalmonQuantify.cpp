@@ -2359,6 +2359,75 @@ transcript abundance from RNA-seq reads
       // Write the quantification results
       gzw.writeAbundances(sopt, experiment, false);
 
+      // Merge the quant values from both the allele
+      // transcripts to create a new collapsed class
+      // to work on
+      {
+        // Go over transcripts and give individual allele
+        // mapping to an unique transcript id so that it can
+        // be tracked
+
+
+        std::unordered_map<std::string, size_t> mergedTranscriptNameMap ;
+        std::unordered_map<size_t, size_t> alleleToMergeTranacriptMapping ;
+
+        // Merged transcript vector
+        std::vector<Transcript> mergedTranscripts ;
+
+        std::vector<Transcript>& transcripts = experiment.transcripts() ;
+        for(auto& transcript : transcripts){
+          auto transcriptName = transcript.RefName ;
+          std::string::size_type n  = transcriptName.find("_") ;
+          if(n != std::string::npos){
+            std::string transcriptMainName = transcriptName.substr(0, n) ;
+            if(mergedTranscriptNameMap.find(transcriptMainName) != mergedTranscriptNameMap.end()){
+              // We have this transcript
+              // therefore we just increase the
+              // mass by the amount of this allele
+              auto& mergedTxp = mergedTranscripts[mergedTranscriptNameMap[transcriptMainName]] ;
+              if(mergedTxp.idP == std::numeric_limits<uint32_t>::max()){
+                mergedTxp.idP = transcript.id ;
+              }else{
+                mergedTxp.idM = transcript.id ;
+              }
+
+              // update mass, projectedCounts
+              mergedTxp.projectedCounts += transcript.projectedCounts ;
+              mergedTxp.addMass(transcript.mass(false)) ;
+            }else{
+              // We will create a transcript class with the values of one
+              // of the alleles and set the mass to be equal to that of this
+              // allele
+              mergedTranscripts.emplace_back(Transcript(mergedTranscriptID,
+                                                        transcriptMainName.c_str(),
+                                                        transcript.RefName,
+                                                        )
+                                             ) ;
+              auto& mergedTxp = mergedTranscripts.back();
+
+              if(mergedTxp.idP == std::numeric_limits<uint32_t>::max()){
+                mergedTxp.idP = transcript.id ;
+              }else{
+                mergedTxp.idM = transcript.id ;
+              }
+
+              // Set mass, projectedCounts, effectiveLength
+              mergedTxp.setMass(transcript.mass(false)) ;
+              mergedTxp.projectedCounts = transcript.projectedCounts ;
+              mergedTxp.EffectiveLength = transcript.EffectiveLength ;
+              mergedTranscriptNameMap[transcriptMainName] = mergedTranscripts.size() - 1;
+
+            }
+            alleleToMergeTranacriptMapping[transcript.id] =
+              mergedTranscriptNameMap[transcriptMainName] ;
+          }
+        }
+
+        jointLog->info("Starting Gibbs Sampler on allelic transcripts") ;
+        CollapsedGibbsSampler sampler ;
+        // Call sampler from here
+      }
+
       if (sopt.numGibbsSamples > 0) {
 
         jointLog->info("Starting Gibbs Sampler");
