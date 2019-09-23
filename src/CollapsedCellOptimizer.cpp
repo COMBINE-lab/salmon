@@ -3,6 +3,83 @@
 #include <assert.h>
 
 CollapsedCellOptimizer::CollapsedCellOptimizer() {}
+
+/*
+ * Use the "relax" VBEM algorithm over gene equivalence
+ * classes to estimate the latent variables (alphaOut)
+ * given the current estimates (alphaIn).
+ */
+void CellVBEMUpdate_(std::vector<SalmonEqClass>& eqVec,
+                     const CollapsedCellOptimizer::SerialVecType& alphaIn,
+                     CollapsedCellOptimizer::SerialVecType& alphaOut) {
+  assert(alphaIn.size() == alphaOut.size());
+
+  size_t M = alphaIn.size();
+  // filling all the prior values with uniform prior
+  std::vector<double> priorAlphas(M, 1.0);
+  std::vector<double> expTheta(M);
+
+  float alphaSum = {0.0};
+  for (size_t i = 0; i < M; ++i) {
+    alphaSum += alphaIn[i] + priorAlphas[i];
+  }
+
+  double logNorm = boost::math::digamma(alphaSum);
+
+  for (size_t i = 0; i < M; ++i) {
+    auto ap = alphaIn[i] + priorAlphas[i];
+    if (ap > ::digammaMin) {
+      expTheta[i] =
+        std::exp(boost::math::digamma(ap) - logNorm);
+    } else {
+      expTheta[i] = 0.0;
+    }
+    alphaOut[i] = 0.0;
+  }
+
+  for (size_t eqID = 0; eqID < eqVec.size(); ++eqID) {
+    auto& kv = eqVec[eqID];
+
+    uint32_t count = kv.count;
+    const std::vector<uint32_t>& genes = kv.labels;
+    size_t groupSize = genes.size();
+
+    // get conditional probabilities
+    //const auto& auxs = txpGroupCombinedWeights[eqID];
+    std::vector<double> auxs (genes.size(), 1.0);
+
+    if (BOOST_LIKELY(groupSize > 1)) {
+      double denom = 0.0;
+      for (size_t i = 0; i < groupSize; ++i) {
+        auto gid = genes[i];
+        auto aux = auxs[i];
+        if (expTheta[gid] > 0.0) {
+          double v = expTheta[gid] * aux;
+          denom += v;
+        }
+      }
+
+      if (denom > 0.0) {
+        double invDenom = count / denom;
+        for (size_t i = 0; i < groupSize; ++i) {
+          auto gid = genes[i];
+          auto aux = auxs[i];
+          if (expTheta[gid] > 0.0) {
+            double v = expTheta[gid] * aux;
+            salmon::utils::incLoop(alphaOut[gid], v * invDenom);
+          }
+        }// end-for groupsize
+      }// end-if denom>0
+    } else if (groupSize == 1){
+      alphaOut[genes.front()] += count;
+    } else{
+      std::cerr<<"0 Group size for salmonEqclasses in EM\n"
+               <<"Please report this on github";
+      exit(1);
+    }
+  }//end-outer for
+}
+
 /*
  * Use the "relax" EM algorithm over gene equivalence
  * classes to estimate the latent variables (alphaOut)
@@ -37,12 +114,11 @@ void CellEMUpdate_(std::vector<SalmonEqClass>& eqVec,
             alphaOut[gid] += v * invDenom;
           }
         }//end-for
-      }//endif for denom>0
+      }//end-if denom>0
     }//end-if boost gsize>1
     else if (groupSize == 1){
       alphaOut[genes.front()] += count;
-    }
-    else{
+    } else{
       std::cerr<<"0 Group size for salmonEqclasses in EM\n"
                <<"Please report this on github";
       exit(1);

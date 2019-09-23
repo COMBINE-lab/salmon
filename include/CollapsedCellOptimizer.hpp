@@ -26,13 +26,17 @@
 #include "Eigen/Dense"
 #include "concurrentqueue.h"
 
+#include <boost/math/special_functions/digamma.hpp>
+
+namespace bfs = boost::filesystem;
 using JqueueT = moodycamel::ConcurrentQueue<uint32_t>;
 using eqMapT = cuckoohash_map<TranscriptGroup, SCTGValue, TranscriptGroupHasher>;
 using tgrouplabelt = std::vector<uint32_t>;
 using tgroupweightvec = std::vector<double>;
-namespace bfs = boost::filesystem;
 using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 using EqMapT = cuckoohash_map<TranscriptGroup, SCTGValue, TranscriptGroupHasher>;
+
+constexpr double digammaMin = 1e-10;
 
 struct CellState {
   bool inActive;
