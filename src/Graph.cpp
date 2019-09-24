@@ -46,15 +46,22 @@ namespace alevin {
     }
 
     EdgeType hasEdge(std::pair<uint64_t, uint32_t> &x,
-                     std::pair<uint64_t, uint32_t> &y) {
+                     std::pair<uint64_t, uint32_t> &y,
+                     uint32_t umiEditDistance) {
       if (x.first == y.first) { return EdgeType::BiDirected; }
 
-      auto isOneHamming = oneHamming(x.first, y.first);
-      if ((x.second > (2*y.second -1)) and isOneHamming) {
+      bool isCollapsable;
+      if (umiEditDistance == 1) {
+        isCollapsable = oneHamming(x.first, y.first);
+      } else {
+        isCollapsable = kHamming(x.first, y.first, umiEditDistance);
+      }
+
+      if ((x.second > (2*y.second -1)) and isCollapsable) {
         return EdgeType::XToY ;
-      } else if ((y.second > (2*x.second-1)) and isOneHamming) {
+      } else if ((y.second > (2*x.second-1)) and isCollapsable) {
         return EdgeType::YToX ;
-      } else if (isOneHamming) {
+      } else if (isCollapsable) {
         return EdgeType::BiDirected;
       }
       return EdgeType::NoEdge;

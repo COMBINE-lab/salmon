@@ -48,6 +48,8 @@ struct AlevinOpts {
   uint32_t numThreads;
   //threshold for the frequency of the barcodes
   uint32_t freqThreshold;
+  // maximum allowable edit distance for UMI collapsing
+  uint32_t umiEditDistance;
   // sequences to trim from right in the read sequences
   uint32_t trimRight;
   //no downstream salmon quant

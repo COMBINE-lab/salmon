@@ -331,7 +331,7 @@ bool runBootstraps(size_t numGenes,
 void optimizeCell(std::vector<std::string>& trueBarcodes,
                   std::vector<std::vector<double>>& priorAlphas,
                   std::atomic<uint32_t>& barcode,
-                  size_t totalCells, eqMapT& eqMap,
+                  size_t totalCells, uint32_t umiEditDistance, eqMapT& eqMap,
                   std::deque<std::pair<TranscriptGroup, uint32_t>>& orderedTgroup,
                   std::shared_ptr<spdlog::logger>& jointlog,
                   std::vector<uint32_t>& umiCount,
@@ -419,7 +419,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
       spp::sparse_hash_map<uint16_t, uint32_t> numMolHash;
       bool dedupOk = dedupClasses(geneAlphas, totalCount, txpGroups,
                                   umiGroups, salmonEqclasses,
-                                  txpToGeneMap, tiers, gzw,
+                                  txpToGeneMap, tiers, gzw, umiEditDistance,
                                   dumpUmiGraph, trueBarcodeStr, numMolHash,
                                   totalUniEdgesCounts, totalBiEdgesCounts);
       if( !dedupOk ){
@@ -762,6 +762,16 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
         }
         fileReader.close();
       }
+
+      for (auto& gname: gnames) {
+        if (!geneIdxMap.contains(gname)) {
+          aopt.jointLog->error("prior file has gene {} not in txp2gene map",
+                               gname);
+          aopt.jointLog->flush();
+          std::exit(84);
+        }
+      }
+
       aopt.jointLog->info("Done importing Gene names for Prior w/ {} genes",
                           gnames.size());
     }
@@ -799,6 +809,32 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                             priorAlphas.size(), priorAlphas[0].size());
       }
     }//end-matrix reading scope
+
+    {
+      //rearragngement of vectors
+      std::vector<std::vector<double>> temps(cnames.size(), std::vector<double>(gnames.size(), 0.0) );
+      for (size_t i=0; i<trueBarcodes.size(); i++) {
+        auto& cname = trueBarcodes[i];
+        auto it = std::find(cnames.begin(), cnames.end(), cname);
+        if (it != cnames.end()) {
+            size_t cIdx = distance(cnames.begin(), it);
+            for (size_t j=0; j<gnames.size(); j++) {
+              auto& gname = gnames[j];
+              uint32_t gIdx = geneIdxMap[gname];
+              if (priorAlphas[cIdx][j] > 0) { temps[i][gIdx] = priorAlphas[cIdx][j]; }
+            }
+        } else {
+          aopt.jointLog->error("Can't find prior for CB: {}", cname);
+          aopt.jointLog->flush();
+          std::exit(84);
+        }
+      } //end-for
+
+      priorAlphas = temps;
+      aopt.jointLog->info("Done Rearranging Matrix for Prior of {} X {}",
+                          priorAlphas.size(), priorAlphas[0].size());
+
+    } // end-rearrangment
   }
 
   std::vector<std::thread> workerThreads;
@@ -808,6 +844,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                std::ref(priorAlphas),
                                std::ref(bcount),
                                numCells,
+                               aopt.umiEditDistance,
                                std::ref(fullEqMap),
                                std::ref(orderedTgroup),
                                std::ref(aopt.jointLog),
