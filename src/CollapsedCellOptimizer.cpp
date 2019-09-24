@@ -1,5 +1,4 @@
 #include "CollapsedCellOptimizer.hpp"
-#include "EMUtils.hpp"
 #include <assert.h>
 
 CollapsedCellOptimizer::CollapsedCellOptimizer() {}
@@ -11,12 +10,11 @@ CollapsedCellOptimizer::CollapsedCellOptimizer() {}
  */
 void CellVBEMUpdate_(std::vector<SalmonEqClass>& eqVec,
                      const CollapsedCellOptimizer::SerialVecType& alphaIn,
+                     const CollapsedCellOptimizer::SerialVecType& priorAlphas,
                      CollapsedCellOptimizer::SerialVecType& alphaOut) {
   assert(alphaIn.size() == alphaOut.size());
 
   size_t M = alphaIn.size();
-  // filling all the prior values with uniform prior
-  std::vector<double> priorAlphas(M, 1.0);
   std::vector<double> expTheta(M);
 
   float alphaSum = {0.0};
@@ -142,9 +140,10 @@ double truncateAlphas(VecT& alphas, double cutoff) {
 
 bool runPerCellEM(double& totalNumFrags, size_t numGenes,
                   CollapsedCellOptimizer::SerialVecType& alphas,
+                  CollapsedCellOptimizer::SerialVecType& priorAlphas,
                   std::vector<SalmonEqClass>& salmonEqclasses,
                   std::shared_ptr<spdlog::logger>& jointlog,
-                  bool initUniform){
+                  bool initUniform, bool useVBEM){
 
   // An EM termination criterion, adopted from Bray et al. 2016
   uint32_t minIter {50};
@@ -174,7 +173,11 @@ bool runPerCellEM(double& totalNumFrags, size_t numGenes,
   constexpr double minWeight = std::numeric_limits<double>::denorm_min();
 
   while (itNum < minIter or (itNum < maxIter and !converged)) {
-    CellEMUpdate_(salmonEqclasses, alphas, alphasPrime);
+    if (useVBEM) {
+      CellVBEMUpdate_(salmonEqclasses, alphas, priorAlphas, alphasPrime);
+    } else {
+      CellEMUpdate_(salmonEqclasses, alphas, alphasPrime);
+    }
 
     converged = true;
     maxRelDiff = -std::numeric_limits<double>::max();
@@ -326,13 +329,14 @@ bool runBootstraps(size_t numGenes,
 }
 
 void optimizeCell(std::vector<std::string>& trueBarcodes,
+                  std::vector<std::vector<double>>& priorAlphas,
                   std::atomic<uint32_t>& barcode,
                   size_t totalCells, eqMapT& eqMap,
                   std::deque<std::pair<TranscriptGroup, uint32_t>>& orderedTgroup,
                   std::shared_ptr<spdlog::logger>& jointlog,
-                  bfs::path& outDir, std::vector<uint32_t>& umiCount,
+                  std::vector<uint32_t>& umiCount,
                   std::vector<CellState>& skippedCB,
-                  bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
+                  bool verbose, GZipWriter& gzw, bool noEM, bool useVBEM,
                   bool quiet, tbb::atomic<double>& totalDedupCounts,
                   tbb::atomic<uint32_t>& totalExpGeneCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
@@ -357,6 +361,11 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
 
     // extracting the sequence of the barcode
     auto& trueBarcodeStr = trueBarcodes[trueBarcodeIdx];
+
+    CollapsedCellOptimizer::SerialVecType priorCellAlphas;
+    if (useVBEM) {
+      priorCellAlphas = priorAlphas[trueBarcodeIdx];
+    }
 
     //extracting per-cell level eq class information
     double totalCount{0.0};
@@ -431,9 +440,11 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         bool isEMok = runPerCellEM(totalCount,
                                    numGenes,
                                    geneAlphas,
+                                   priorCellAlphas,
                                    salmonEqclasses,
                                    jointlog,
-                                   initUniform);
+                                   initUniform,
+                                   useVBEM);
         if( !isEMok ){
           jointlog->error("EM iteration for cell {} failed \n"
                           "Please Report this on github.", trueBarcodeStr);
@@ -522,7 +533,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
           featureCode += 2;
           featuresStream << "\t" << riboCount / totalUmiCount;
         }
-        
+
         if (dumpUmiGraph) {
           featuresStream << arboString.rdbuf();
         } else {
@@ -708,35 +719,104 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
     }
     aopt.jointLog->info("Total {} usable rRna genes", rRnaGenes.size());
     if (rRnaGenes.size() > 0 ) { useRibo = true; }
-  }
-  else if (hasWhitelist) {
+  } else if (hasWhitelist) {
     aopt.jointLog->warn("rrna file not provided; using is 1 less feature for whitelisting");
   }
 
 
-  std::vector<CellState> skippedCB (numCells);
   std::atomic<uint32_t> bcount{0};
   tbb::atomic<double> totalDedupCounts{0.0};
   tbb::atomic<uint32_t> totalExpGeneCounts{0};
   std::atomic<uint64_t> totalBiEdgesCounts{0};
   std::atomic<uint64_t> totalUniEdgesCounts{0};
 
+  std::vector<CellState> skippedCB (numCells);
+  std::vector<std::vector<double>> priorAlphas;
+  if (aopt.useVBEM) {
+    auto path = boost::filesystem::path(aopt.vbemPriorFile);
+    auto mfile = path / "quants_mat.csv";
+    auto gfile = path / "quants_mat_cols.txt";
+    auto cfile = path / "quants_mat_rows.txt";
+
+    std::vector<std::string> cnames;
+    if(boost::filesystem::exists(cfile)){
+      std::ifstream fileReader(cfile.string());
+      std::string data;
+      if(fileReader.is_open()) {
+        while(getline(fileReader, data)) {
+          cnames.emplace_back(data);
+        }
+        fileReader.close();
+      }
+      aopt.jointLog->info("Done importing Cellular Barcodes for Prior w/ {} cbs",
+                          cnames.size());
+    }
+
+    std::vector<std::string> gnames;
+    if(boost::filesystem::exists(gfile)){
+      std::ifstream fileReader(gfile.string());
+      std::string data;
+      if(fileReader.is_open()) {
+        while(getline(fileReader, data)) {
+          gnames.emplace_back(data);
+        }
+        fileReader.close();
+      }
+      aopt.jointLog->info("Done importing Gene names for Prior w/ {} genes",
+                          gnames.size());
+    }
+
+    { // starting reading prior matrix
+      if(boost::filesystem::exists(mfile)){
+        std::ifstream fileReader(mfile.string());
+        std::string data;
+
+        if(fileReader.is_open()) {
+          while(getline(fileReader, data)) {
+            CollapsedCellOptimizer::SerialVecType cellCount(gnames.size(), 0);
+            std::stringstream ss(data);
+
+            size_t idxPtr {0};
+            while( ss.good() ) {
+              std::string substr;
+              getline( ss, substr, ',' );
+              double count = std::stoi(substr);
+
+              cellCount[idxPtr] = count;
+              if ( ++idxPtr == gnames.size() ) { break; }
+            }//end-while
+
+            if (cellCount.size() != gnames.size()) {
+              aopt.jointLog->error("Incomplete Prior File");
+              aopt.jointLog->flush();
+              std::exit(84);
+            }
+            priorAlphas.emplace_back(cellCount);
+          }//end-outer-while
+          fileReader.close();
+        }
+        aopt.jointLog->info("Done importing Matrix for Prior of {} X {}",
+                            priorAlphas.size(), priorAlphas[0].size());
+      }
+    }//end-matrix reading scope
+  }
+
   std::vector<std::thread> workerThreads;
   for (size_t tn = 0; tn < numWorkerThreads; ++tn) {
     workerThreads.emplace_back(optimizeCell,
                                std::ref(trueBarcodes),
+                               std::ref(priorAlphas),
                                std::ref(bcount),
                                numCells,
                                std::ref(fullEqMap),
                                std::ref(orderedTgroup),
                                std::ref(aopt.jointLog),
-                               std::ref(aopt.outputDirectory),
                                std::ref(umiCount),
                                std::ref(skippedCB),
                                aopt.dumpBarcodeEq,
                                std::ref(gzw),
-                               aopt.protocol.umiLength,
                                aopt.noEM,
+                               aopt.useVBEM,
                                aopt.quiet,
                                std::ref(totalDedupCounts),
                                std::ref(totalExpGeneCounts),
@@ -931,32 +1011,6 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                 << alphasSparse[i] <<  std::endl;
         }
 
-        //size_t alphasSparseCounter {0};
-        //for (size_t i=0; i<numGenes; i+=8) {
-        //  uint8_t flag = alphasFlag[i];
-        //  for (size_t j=0; j<8; j++) {
-        //    size_t vectorIndex = i+j;
-        //    if (vectorIndex >= numGenes) { break; }
-
-        //    if ( flag & (1<<(7-j)) ) {
-        //      if (alphasSparseCounter >= numExpGenes) {
-        //        aopt.jointLog->error("binary format reading error {}: {}: {}",
-        //                             alphasSparseCounter, numExpGenes, readCount);
-        //        aopt.jointLog->flush();
-        //        exit(84);
-        //      }
-
-        //      float count = alphasSparse[alphasSparseCounter];
-        //      readCount += count;
-        //      qFile << cellCount+1 << "\t"
-        //            << vectorIndex+1 << "\t"
-        //            << count << std::endl;
-
-        //      ++alphasSparseCounter;
-        //    }
-        //  }
-        //}
-
         if (readCount == 0.0){
           zerod_cells += 1;
         }
@@ -990,7 +1044,6 @@ template
 bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                       spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                       spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-
                                       AlevinOpts<apt::InDrop>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
@@ -1001,7 +1054,6 @@ template
 bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                       spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                       spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-
                                       AlevinOpts<apt::ChromiumV3>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
@@ -1012,7 +1064,6 @@ template
 bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                       spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                       spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-
                                       AlevinOpts<apt::Chromium>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
@@ -1023,7 +1074,6 @@ template
 bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                       spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                       spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-
                                       AlevinOpts<apt::Gemcode>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
@@ -1034,7 +1084,6 @@ template
 bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                       spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                       spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-
                                       AlevinOpts<apt::CELSeq>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
@@ -1045,7 +1094,6 @@ template
 bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                       spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                       spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-
                                       AlevinOpts<apt::CELSeq2>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
@@ -1067,7 +1115,6 @@ template
 bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                       spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                       spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-
                                       AlevinOpts<apt::Custom>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,

@@ -322,6 +322,9 @@ namespace salmon {
        "noem",po::bool_switch()->default_value(alevin::defaults::noEM),
        "do not run em")
       (
+       "vbemPrior", po::value<std::string>(),
+       "a mtx file containing VBEM priors")
+      (
        "trimRight",po::value<uint32_t>()->default_value(alevin::defaults::trimRight),
        "The number of bases to trim off the 5' (right) end of the read seequence.")
       (

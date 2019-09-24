@@ -54,6 +54,8 @@ struct AlevinOpts {
   bool noQuant;
   // don't run EM flag
   bool noEM;
+  // use vbem
+  bool useVBEM;
   // Avoid segfaults based on no whitelist mapping
   bool debug;
   // perform naive deduplication
@@ -84,6 +86,8 @@ struct AlevinOpts {
   boost::filesystem::path outputDirectory;
   // barcode white-list File path
   boost::filesystem::path whitelistFile;
+  // alevin matrix eds file with vbem Priors
+  boost::filesystem::path vbemPriorFile;
   // barcode mitochondrial genes File path
   boost::filesystem::path mRnaFile;
   // barcode ribosomal gene File path

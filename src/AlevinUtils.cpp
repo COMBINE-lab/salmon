@@ -450,6 +450,17 @@ namespace alevin {
         }
       }
 
+      if (vm.count("vbemPrior")){
+        aopt.vbemPriorFile = vm["vbemPrior"].as<std::string>();
+        aopt.useVBEM = true;
+
+        if (!bfs::exists(aopt.vbemPriorFile)) {
+          fmt::print(stderr,"\nVBEM Prior File {} does not exists\n Exiting Now",
+                     aopt.vbemPriorFile.string());
+          return false;
+        }
+      }
+
       if (vm.count("hash")){
         aopt.bfhFile = vm["hash"].as<std::string>();
         if (!bfs::exists(aopt.bfhFile)) {
