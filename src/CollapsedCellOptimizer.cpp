@@ -733,109 +733,112 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   std::vector<CellState> skippedCB (numCells);
   std::vector<std::vector<double>> priorAlphas;
   if (aopt.useVBEM) {
-    auto path = boost::filesystem::path(aopt.vbemPriorFile);
-    auto mfile = path / "quants_mat.csv";
-    auto gfile = path / "quants_mat_cols.txt";
-    auto cfile = path / "quants_mat_rows.txt";
+    if (not aopt.initUniform) {
+      auto path = boost::filesystem::path(aopt.vbemPriorFile);
+      auto mfile = path / "quants_mat.csv";
+      auto gfile = path / "quants_mat_cols.txt";
+      auto cfile = path / "quants_mat_rows.txt";
 
-    std::vector<std::string> cnames;
-    if(boost::filesystem::exists(cfile)){
-      std::ifstream fileReader(cfile.string());
-      std::string data;
-      if(fileReader.is_open()) {
-        while(getline(fileReader, data)) {
-          cnames.emplace_back(data);
-        }
-        fileReader.close();
-      }
-      aopt.jointLog->info("Done importing Cellular Barcodes for Prior w/ {} cbs",
-                          cnames.size());
-    }
-
-    std::vector<std::string> gnames;
-    if(boost::filesystem::exists(gfile)){
-      std::ifstream fileReader(gfile.string());
-      std::string data;
-      if(fileReader.is_open()) {
-        while(getline(fileReader, data)) {
-          gnames.emplace_back(data);
-        }
-        fileReader.close();
-      }
-
-      for (auto& gname: gnames) {
-        if (!geneIdxMap.contains(gname)) {
-          aopt.jointLog->error("prior file has gene {} not in txp2gene map",
-                               gname);
-          aopt.jointLog->flush();
-          std::exit(84);
-        }
-      }
-
-      aopt.jointLog->info("Done importing Gene names for Prior w/ {} genes",
-                          gnames.size());
-    }
-
-    { // starting reading prior matrix
-      if(boost::filesystem::exists(mfile)){
-        std::ifstream fileReader(mfile.string());
+      std::vector<std::string> cnames;
+      if(boost::filesystem::exists(cfile)){
+        std::ifstream fileReader(cfile.string());
         std::string data;
-
         if(fileReader.is_open()) {
           while(getline(fileReader, data)) {
-            CollapsedCellOptimizer::SerialVecType cellCount(gnames.size(), 0);
-            std::stringstream ss(data);
-
-            size_t idxPtr {0};
-            while( ss.good() ) {
-              std::string substr;
-              getline( ss, substr, ',' );
-              double count = std::stoi(substr);
-
-              cellCount[idxPtr] = count;
-              if ( ++idxPtr == gnames.size() ) { break; }
-            }//end-while
-
-            if (cellCount.size() != gnames.size()) {
-              aopt.jointLog->error("Incomplete Prior File");
-              aopt.jointLog->flush();
-              std::exit(84);
-            }
-            priorAlphas.emplace_back(cellCount);
-          }//end-outer-while
+            cnames.emplace_back(data);
+          }
           fileReader.close();
         }
-        aopt.jointLog->info("Done importing Matrix for Prior of {} X {}",
-                            priorAlphas.size(), priorAlphas[0].size());
+        aopt.jointLog->info("Done importing Cellular Barcodes for Prior w/ {} cbs",
+                            cnames.size());
       }
-    }//end-matrix reading scope
 
-    {
-      //rearragngement of vectors
-      std::vector<std::vector<double>> temps(cnames.size(), std::vector<double>(gnames.size(), 0.0) );
-      for (size_t i=0; i<trueBarcodes.size(); i++) {
-        auto& cname = trueBarcodes[i];
-        auto it = std::find(cnames.begin(), cnames.end(), cname);
-        if (it != cnames.end()) {
+      std::vector<std::string> gnames;
+      if(boost::filesystem::exists(gfile)){
+        std::ifstream fileReader(gfile.string());
+        std::string data;
+        if(fileReader.is_open()) {
+          while(getline(fileReader, data)) {
+            gnames.emplace_back(data);
+          }
+          fileReader.close();
+        }
+
+        for (auto& gname: gnames) {
+          if (!geneIdxMap.contains(gname)) {
+            aopt.jointLog->error("prior file has gene {} not in txp2gene map",
+                                 gname);
+            aopt.jointLog->flush();
+            std::exit(84);
+          }
+        }
+
+        aopt.jointLog->info("Done importing Gene names for Prior w/ {} genes",
+                            gnames.size());
+      }
+
+      { // starting reading prior matrix
+        if(boost::filesystem::exists(mfile)){
+          std::ifstream fileReader(mfile.string());
+          std::string data;
+
+          if(fileReader.is_open()) {
+            while(getline(fileReader, data)) {
+              CollapsedCellOptimizer::SerialVecType cellCount(gnames.size(), 0);
+              std::stringstream ss(data);
+
+              size_t idxPtr {0};
+              while( ss.good() ) {
+                std::string substr;
+                getline( ss, substr, ',' );
+                double count = std::stoi(substr);
+
+                cellCount[idxPtr] = count;
+                if ( ++idxPtr == gnames.size() ) { break; }
+              }//end-while
+
+              if (cellCount.size() != gnames.size()) {
+                aopt.jointLog->error("Incomplete Prior File");
+                aopt.jointLog->flush();
+                std::exit(84);
+              }
+              priorAlphas.emplace_back(cellCount);
+            }//end-outer-while
+            fileReader.close();
+          }
+          aopt.jointLog->info("Done importing Matrix for Prior of {} X {}",
+                              priorAlphas.size(), priorAlphas[0].size());
+        }
+      }//end-matrix reading scope
+
+      {
+        //rearragngement of vectors
+        std::vector<std::vector<double>> temps(trueBarcodes.size(), std::vector<double>(gnames.size(), 0.0) );
+        for (size_t i=0; i<trueBarcodes.size(); i++) {
+          auto& cname = trueBarcodes[i];
+          auto it = std::find(cnames.begin(), cnames.end(), cname);
+          if (it != cnames.end()) {
             size_t cIdx = distance(cnames.begin(), it);
             for (size_t j=0; j<gnames.size(); j++) {
               auto& gname = gnames[j];
               uint32_t gIdx = geneIdxMap[gname];
               if (priorAlphas[cIdx][j] > 0) { temps[i][gIdx] = priorAlphas[cIdx][j]; }
             }
-        } else {
-          aopt.jointLog->error("Can't find prior for CB: {}", cname);
-          aopt.jointLog->flush();
-          std::exit(84);
-        }
-      } //end-for
+          } else {
+            aopt.jointLog->error("Can't find prior for CB: {}", cname);
+            aopt.jointLog->flush();
+            std::exit(84);
+          }
+        } //end-for
 
-      priorAlphas = temps;
-      aopt.jointLog->info("Done Rearranging Matrix for Prior of {} X {}",
-                          priorAlphas.size(), priorAlphas[0].size());
-
-    } // end-rearrangment
-  }
+        priorAlphas = temps;
+        aopt.jointLog->info("Done Rearranging Matrix for Prior of {} X {}",
+                            priorAlphas.size(), priorAlphas[0].size());
+      } // end-rearrangment
+    } else { //end-else not initUniform
+      priorAlphas = std::vector<std::vector<double>> (numCells, std::vector<double>(numGenes, 1e-2) );
+    }
+  }//end-if useVBEM
 
   std::vector<std::thread> workerThreads;
   for (size_t tn = 0; tn < numWorkerThreads; ++tn) {
