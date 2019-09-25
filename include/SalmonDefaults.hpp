@@ -146,6 +146,7 @@ namespace defaults {
   constexpr const uint32_t forceCells{0};
   constexpr const double keepCBFraction{0.0};
   constexpr const uint32_t freqThreshold{10};
+  constexpr const uint32_t umiEditDistance{1};
 }
 }
 

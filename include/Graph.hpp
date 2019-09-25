@@ -75,7 +75,8 @@ namespace alevin {
                             VertexT& node);
 
     EdgeType hasEdge(std::pair<uint64_t, uint32_t> &x,
-                     std::pair<uint64_t, uint32_t> &y);
+                     std::pair<uint64_t, uint32_t> &y,
+                     uint32_t umiEditDistance);
   }
 }
 

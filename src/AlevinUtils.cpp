@@ -450,6 +450,17 @@ namespace alevin {
         }
       }
 
+      if (vm.count("vbemPrior")){
+        aopt.vbemPriorFile = vm["vbemPrior"].as<std::string>();
+        aopt.useVBEM = true;
+
+        if (!bfs::exists(aopt.vbemPriorFile)) {
+          fmt::print(stderr,"\nVBEM Prior File {} does not exists\n Exiting Now",
+                     aopt.vbemPriorFile.string());
+          return false;
+        }
+      }
+
       if (vm.count("hash")){
         aopt.bfhFile = vm["hash"].as<std::string>();
         if (!bfs::exists(aopt.bfhFile)) {
@@ -496,8 +507,16 @@ namespace alevin {
       aopt.lowRegionMinNumBarcodes = vm["lowRegionMinNumBarcodes"].as<uint32_t>();
       aopt.maxNumBarcodes = vm["maxNumBarcodes"].as<uint32_t>();
       aopt.freqThreshold = vm["freqThreshold"].as<uint32_t>();
+      aopt.umiEditDistance = vm["umiEditDistance"].as<uint32_t>();
       aopt.forceCells = vm["forceCells"].as<uint32_t>();
       aopt.expectCells = vm["expectCells"].as<uint32_t>();
+
+      if (aopt.umiEditDistance > 4 ) {
+        aopt.jointLog->error("Too high edit distance collapsing {}, expected <= 4",
+                             aopt.umiEditDistance);
+        return false;
+      }
+
       if(vm.count("iupac")){
         aopt.iupac = vm["iupac"].as<std::string>();
       }

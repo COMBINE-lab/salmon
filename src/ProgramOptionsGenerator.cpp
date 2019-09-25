@@ -306,21 +306,8 @@ namespace salmon {
        "iupac,u",po::value<std::string>(),
        "<Deprecated>iupac code for cell-level barcodes.")
       (
-       "end",po::value<uint32_t>(),
-       "Cell-Barcodes end (5 or 3) location in the read sequence from where barcode has to"
-       "be extracted. (end, umiLength, barcodeLength)"
-       " should all be provided if using this option")
-      (
-       "umiLength",po::value<uint32_t>(),
-       "umi length Parameter for unknown protocol. (end, umiLength, barcodeLength)"
-       " should all be provided if using this option")
-      (
-       "barcodeLength",po::value<uint32_t>(),
-       "umi length Parameter for unknown protocol. (end, umiLength, barcodeLength)"
-       " should all be provided if using this option")
-      (
-       "noem",po::bool_switch()->default_value(alevin::defaults::noEM),
-       "do not run em")
+       "vbemPrior", po::value<std::string>(),
+       "a mtx file containing VBEM priors")
       (
        "trimRight",po::value<uint32_t>()->default_value(alevin::defaults::trimRight),
        "The number of bases to trim off the 5' (right) end of the read seequence.")
@@ -329,10 +316,7 @@ namespace salmon {
        "Run naive per equivalence class deduplication, generating only total number of UMIs")
       (
        "noDedup", po::bool_switch()->default_value(alevin::defaults::noDedup),
-       "Stops the pipeline after CB sequence correction and quasi-mapping reads.")
-      (
-       "freqThreshold", po::value<uint32_t>()->default_value(alevin::defaults::freqThreshold),
-       "threshold for the frequency of the barcodes");
+       "Stops the pipeline after CB sequence correction and quasi-mapping reads.");
     return alevindevs;
   }
 
@@ -398,6 +382,28 @@ namespace salmon {
        "keepCBFraction", po::value<double>()->default_value(alevin::defaults::keepCBFraction),
        "fraction of CB to keep, value must be in range (0,1], use 1 to quantify all CB."
        )
+      (
+       "end",po::value<uint32_t>(),
+       "Cell-Barcodes end (5 or 3) location in the read sequence from where barcode has to"
+       "be extracted. (end, umiLength, barcodeLength)"
+       " should all be provided if using this option")
+      (
+       "umiLength",po::value<uint32_t>(),
+       "umi length Parameter for unknown protocol. (end, umiLength, barcodeLength)"
+       " should all be provided if using this option")
+      (
+       "barcodeLength",po::value<uint32_t>(),
+       "umi length Parameter for unknown protocol. (end, umiLength, barcodeLength)"
+       " should all be provided if using this option")
+      (
+       "noem",po::bool_switch()->default_value(alevin::defaults::noEM),
+       "do not run em")
+      (
+       "freqThreshold", po::value<uint32_t>()->default_value(alevin::defaults::freqThreshold),
+       "threshold for the frequency of the barcodes")
+      (
+       "umiEditDistance", po::value<uint32_t>()->default_value(alevin::defaults::umiEditDistance),
+       "Maximum allowble edit distance to collapse UMIs, Expect delay in running time if != 1")
       (
        "dumpfq", po::bool_switch()->default_value(alevin::defaults::dumpFQ),
        "Dump barcode modified fastq file for downstream analysis by"

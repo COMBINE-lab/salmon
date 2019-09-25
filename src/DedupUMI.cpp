@@ -18,6 +18,7 @@ uint32_t getGeneId(spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap,
 void graphFromCell(std::vector<TGroupT>& txpGroups,
                    std::vector<UGroupT>& umiGroups,
                    alevin::graph::Graph& g,
+                   uint32_t umiEditDistance,
                    std::atomic<uint64_t>& totalUniEdgesCounts,
                    std::atomic<uint64_t>& totalBiEdgesCounts) {
   using namespace alevin::graph;
@@ -55,8 +56,8 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
       for ( size_t uId_second=uId+1; uId_second<numUmis; uId_second++ ){
 
         //check if two UMI can be connected
-        EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umiSeqCounts[uId_second]);
-	if ( edge == EdgeType::NoEdge ) { continue; }        
+        EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umiSeqCounts[uId_second], umiEditDistance );
+        if ( edge == EdgeType::NoEdge ) { continue; }
 
         VertexT node_second (static_cast<uint32_t>(eqId), static_cast<uint32_t>(uId_second));
         uint32_t v2 = alevin::graph::getVertexIndex(vertexIndexMap, node_second);
@@ -112,7 +113,7 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
 
           for ( size_t uId_second=0; uId_second<num2Umis; uId_second++ ){
             //check if two UMI can be connected
-            EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umi2SeqCounts[uId_second]);
+            EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umi2SeqCounts[uId_second], umiEditDistance );
             VertexT node_second (static_cast<uint32_t>(eq2Id), static_cast<uint32_t>(uId_second));
             if ( node == node_second or edge == EdgeType::NoEdge ) {
               continue;
@@ -439,14 +440,15 @@ bool dedupClasses(std::vector<double>& geneAlphas,
                   std::vector<SalmonEqClass>& salmonEqclasses,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   std::vector<uint8_t>& tiers,
-                  GZipWriter& gzw, bool dumpUmiGraph,
-                  std::string& trueBarcodeStr,
+                  GZipWriter& gzw, uint32_t umiEditDistance,
+                  bool dumpUmiGraph, std::string& trueBarcodeStr,
                   spp::sparse_hash_map<uint16_t, uint32_t>& numMolHash,
                   std::atomic<uint64_t>& totalUniEdgesCounts,
                   std::atomic<uint64_t>& totalBiEdgesCounts){
   // make directed graph from eqclasses
   alevin::graph::Graph g;
   graphFromCell(txpGroups, umiGroups, g,
+                umiEditDistance,
                 totalUniEdgesCounts,
                 totalBiEdgesCounts);
 
