@@ -20,7 +20,7 @@
 using namespace std;
 
 FragmentLengthDistribution::FragmentLengthDistribution(
-    double alpha, size_t max_val, size_t prior_mu, size_t prior_sigma,
+    double alpha, size_t max_val, double prior_mu, double prior_sigma,
     size_t kernel_n, double kernel_p, size_t bin_size)
     : hist_(max_val / bin_size + 1), cachedCMF_(hist_.size()),
       haveCachedCMF_(false), totMass_(salmon::math::LOG_0),
@@ -34,7 +34,7 @@ FragmentLengthDistribution::FragmentLengthDistribution(
   double tot = log(alpha);
 
   // Set to prior distribution
-  if (prior_mu) {
+  if (prior_mu > 0.0) {
     boost::math::normal norm(prior_mu / bin_size,
                              prior_sigma / (bin_size * bin_size));
 

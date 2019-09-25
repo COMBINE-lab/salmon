@@ -107,7 +107,9 @@ inline bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& mem
 inline void updateRefMappings(uint32_t tid, int32_t hitScore, size_t idx,
                   const std::vector<Transcript>& transcripts,
                   int32_t invalidScore,
-                  int32_t& bestScore, int32_t& bestDecoyScore,
+                  int32_t& bestScore, 
+                  int32_t& secondBestScore,
+                  int32_t& bestDecoyScore,
                   std::vector<int32_t>& scores,
                   phmap::flat_hash_map<uint32_t, std::pair<int32_t, int32_t>>& bestScorePerTranscript,
                   std::vector<std::pair<int32_t, int32_t>>& perm) {
@@ -145,8 +147,12 @@ inline void updateRefMappings(uint32_t tid, int32_t hitScore, size_t idx,
     // otherwise, there is already a better mapping for this transcript.
     scores[idx] = invalidScore;
   }
-
-  bestScore = (hitScore > bestScore) ? hitScore : bestScore;
+  
+  if (hitScore > bestScore) {
+    secondBestScore = bestScore;
+    bestScore = hitScore;
+  }
+  //bestScore = (hitScore > bestScore) ? hitScore : bestScore;
   perm.push_back(std::make_pair(idx, tid));
 }
 
@@ -162,19 +168,23 @@ inline void filterAndCollectAlignments(
                                        bool hardFilter,
                                        double scoreExp,
                                        int32_t bestScore,
+                                       int32_t secondBestScore,
                                        int32_t bestDecoyScore,
                                        std::vector<pufferfish::util::QuasiAlignment>& jointAlignments) {
 
   auto invalidScore = std::numeric_limits<decltype(bestDecoyScore)>::min();
   if (bestDecoyScore == invalidScore) { bestDecoyScore = invalidScore + 1 ;}
+  
+  //auto filterScore = (bestDecoyScore < secondBestScore) ? secondBestScore : bestDecoyScore;
+
   // throw away any pairs for which we should not produce valid alignments :
   // ======
   // If we are doing soft-filtering (default), we remove those not exceeding the bestDecoyScore
   // If we are doing hard-filtering, we remove those less than the bestScore
   perm.erase(std::remove_if(perm.begin(), perm.end(),
-                            [&scores, hardFilter, bestScore, bestDecoyScore, invalidScore](const std::pair<int32_t, int32_t>& idxtid) -> bool {
+                            [&scores, hardFilter, bestScore, secondBestScore, bestDecoyScore, invalidScore](const std::pair<int32_t, int32_t>& idxtid) -> bool {
                               return !hardFilter ?  scores[idxtid.first] < bestDecoyScore : scores[idxtid.first] < bestScore;
-                              //return !hardFilter ?  scores[idxtid.first] == invalidScore : scores[idxtid.first] < bestScore;
+                              //return !hardFilter ?  scores[idxtid.first] < filterScore : scores[idxtid.first] < bestScore; 
                             }), perm.end());
 
   // Unlike RapMap, pufferfish doesn't guarantee the hits computed above are in order

@@ -68,8 +68,8 @@ public:
     }
 
     size_t maxFragLen = sopt.fragLenDistMax;
-    size_t meanFragLen = sopt.fragLenDistPriorMean;
-    size_t fragLenStd = sopt.fragLenDistPriorSD;
+    double meanFragLen = sopt.fragLenDistPriorMean;
+    double fragLenStd = sopt.fragLenDistPriorSD;
     size_t fragLenKernelN = 4;
     double fragLenKernelP = 0.5;
     fragLengthDist_.reset(
@@ -319,9 +319,12 @@ public:
         txp.setSequenceOwned(tseq, sopt.gcBiasCorrect, sopt.reduceGCMemory);
       }
       txp.setDecoy(isDecoy);
-      if (isDecoy) { ++numDecoys_; }
       numShort += isShort ? 1 : 0;
-      lengths.push_back(txp.RefLength);
+      if (isDecoy) { 
+        ++numDecoys_; 
+      } else { // only use this reference for length class computation if not a decoy
+        lengths.push_back(txp.RefLength);
+      }
     }
     sopt.jointLog->info("Number of decoys : {:n}", numDecoys_);
     sopt.jointLog->info("First decoy index : {:n} ", idx_->firstDecoyIndex());
