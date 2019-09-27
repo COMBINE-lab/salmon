@@ -66,6 +66,8 @@ namespace alevin{
                        //std::mutex& iomutex,
                        Sequence seq = Sequence::BARCODE);
 
+    bool recoverBarcode(std::string& sequence);
+
     template <typename ProtocolT>
     bool processAlevinOpts(AlevinOpts<ProtocolT>& aopt,
                              SalmonOpts& sopt,

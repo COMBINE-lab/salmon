@@ -34,9 +34,9 @@ namespace alevin {
       return (((k1XORk2 << lshift) & 0x3FFFFFFFFFFFFFFF) > 0) ? false : true;
     }
 
-    bool kHamming(uint64_t k1, uint64_t k2, size_t maxDist) {
+    bool kHamming(uint64_t k1, uint64_t k2, size_t maxDist, uint32_t umiLength) {
       size_t dist {0};
-      for (size_t i=0; i<20; i+=2) {
+      for (size_t i=0; i<2*umiLength; i+=2) {
         auto pcnt1 = ( k1 << i) & 0xC000000000000000;
         auto pcnt2 = ( k2 << i) & 0xC000000000000000;
         if (pcnt1 != pcnt2) { dist++; }
@@ -47,14 +47,15 @@ namespace alevin {
 
     EdgeType hasEdge(std::pair<uint64_t, uint32_t> &x,
                      std::pair<uint64_t, uint32_t> &y,
-                     uint32_t umiEditDistance) {
+                     uint32_t umiEditDistance,
+                     uint32_t umiLength) {
       if (x.first == y.first) { return EdgeType::BiDirected; }
 
       bool isCollapsable;
       if (umiEditDistance == 1) {
         isCollapsable = oneHamming(x.first, y.first);
       } else {
-        isCollapsable = kHamming(x.first, y.first, umiEditDistance);
+        isCollapsable = kHamming(x.first, y.first, umiEditDistance, umiLength);
       }
 
       if ((x.second > (2*y.second -1)) and isCollapsable) {

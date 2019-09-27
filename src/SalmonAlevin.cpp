@@ -535,6 +535,11 @@ void processReadsQuasi(
         seqOk = (barcode.has_value()) ?
           aut::sequenceCheck(*barcode, Sequence::BARCODE) : false;
 
+        if (not seqOk){
+          bool recovered = aut::recoverBarcode(*barcode);
+          if (recovered) { seqOk = true; }
+        }
+
         // If we have a barcode sequence, but not yet an index
         if (seqOk and (not barcodeIdx)) {
           // If we get here, we have a sequence-valid barcode.

@@ -132,7 +132,8 @@ void densityCalculator(single_parser* parser,
       nonstd::optional<std::string> extractedBarcode = aut::extractBarcode(seq, aopt.protocol);
       bool seqOk = (extractedBarcode.has_value()) ? aut::sequenceCheck(*extractedBarcode) : false;
       if (not seqOk){
-        continue;
+        bool recovered = aut::recoverBarcode(*extractedBarcode);
+        if (not recovered) { continue; }
       }
       freqCounter[*extractedBarcode] += 1;
       ++usedNumBarcodesLocal;
@@ -552,9 +553,8 @@ bool writeFastq(AlevinOpts<ProtocolT>& aopt,
             nonstd::optional<std::string> extractedSeq = aut::extractBarcode(rp.first.seq, aopt.protocol);
             bool seqOk = (extractedSeq.has_value()) ? aut::sequenceCheck(*extractedSeq) : false;
             if (not seqOk){
-              continue;
-              //std::cerr<<"Can't extract barcode";
-              //return false;
+              bool recovered = aut::recoverBarcode(*extractedSeq);
+              if (not recovered) { continue; }
             }
             barcode = *extractedSeq;
           }

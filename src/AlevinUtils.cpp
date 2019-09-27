@@ -696,6 +696,15 @@ namespace alevin {
       return (sequence.length() > 0) and (sequence.find_first_not_of("ACGTacgt") == std::string::npos);
     }
 
+    bool recoverBarcode(std::string& sequence){
+      size_t pos = sequence.find_first_of("Nn");
+      if (pos == std::string::npos) { return false; }
+
+      // Randomly assigning 'A' to first base with 'N'
+      sequence[pos] = 'A';
+      return sequenceCheck(sequence);
+    }
+
     bool checkSetCoverage(std::vector<std::vector<uint32_t>>& tgroup,
                           std::vector<uint32_t> txps){
       // make sparse hash set for constant membership check

@@ -18,7 +18,7 @@ uint32_t getGeneId(spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap,
 void graphFromCell(std::vector<TGroupT>& txpGroups,
                    std::vector<UGroupT>& umiGroups,
                    alevin::graph::Graph& g,
-                   uint32_t umiEditDistance,
+                   uint32_t umiEditDistance, uint32_t umiLength,
                    std::atomic<uint64_t>& totalUniEdgesCounts,
                    std::atomic<uint64_t>& totalBiEdgesCounts) {
   using namespace alevin::graph;
@@ -56,7 +56,7 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
       for ( size_t uId_second=uId+1; uId_second<numUmis; uId_second++ ){
 
         //check if two UMI can be connected
-        EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umiSeqCounts[uId_second], umiEditDistance );
+        EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umiSeqCounts[uId_second], umiEditDistance, umiLength );
         if ( edge == EdgeType::NoEdge ) { continue; }
 
         VertexT node_second (static_cast<uint32_t>(eqId), static_cast<uint32_t>(uId_second));
@@ -113,7 +113,7 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
 
           for ( size_t uId_second=0; uId_second<num2Umis; uId_second++ ){
             //check if two UMI can be connected
-            EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umi2SeqCounts[uId_second], umiEditDistance );
+            EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umi2SeqCounts[uId_second], umiEditDistance, umiLength );
             VertexT node_second (static_cast<uint32_t>(eq2Id), static_cast<uint32_t>(uId_second));
             if ( node == node_second or edge == EdgeType::NoEdge ) {
               continue;
@@ -438,6 +438,7 @@ bool dedupClasses(std::vector<double>& geneAlphas,
                   std::vector<TGroupT>& txpGroups,
                   std::vector<UGroupT>& umiGroups,
                   std::vector<SalmonEqClass>& salmonEqclasses,
+                  uint32_t umiLength,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   std::vector<uint8_t>& tiers,
                   GZipWriter& gzw, uint32_t umiEditDistance,
@@ -449,6 +450,7 @@ bool dedupClasses(std::vector<double>& geneAlphas,
   alevin::graph::Graph g;
   graphFromCell(txpGroups, umiGroups, g,
                 umiEditDistance,
+                umiLength,
                 totalUniEdgesCounts,
                 totalBiEdgesCounts);
 
