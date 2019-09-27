@@ -242,8 +242,8 @@ struct SalmonOpts {
   bool perNucleotidePrior{false};
   // Related to the fragment length distribution
   size_t fragLenDistMax;
-  size_t fragLenDistPriorMean;
-  size_t fragLenDistPriorSD;
+  double fragLenDistPriorMean;
+  double fragLenDistPriorSD;
 
   // Related to the logger
   std::shared_ptr<spdlog::logger> jointLog{nullptr};

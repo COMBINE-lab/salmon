@@ -158,8 +158,8 @@ for (auto& txp : transcripts_) {
 
     // Initialize the fragment length distribution
     size_t maxFragLen = salmonOpts.fragLenDistMax;
-    size_t meanFragLen = salmonOpts.fragLenDistPriorMean;
-    size_t fragLenStd = salmonOpts.fragLenDistPriorSD;
+    double meanFragLen = salmonOpts.fragLenDistPriorMean;
+    double fragLenStd = salmonOpts.fragLenDistPriorSD;
     size_t fragLenKernelN = 4;
     double fragLenKernelP = 0.5;
     flDist_.reset(new FragmentLengthDistribution(1.0, maxFragLen, meanFragLen,
@@ -238,8 +238,8 @@ for (auto& txp : transcripts_) {
 
     // Initialize the fragment length distribution
     size_t maxFragLen = salmonOpts.fragLenDistMax;
-    size_t meanFragLen = salmonOpts.fragLenDistPriorMean;
-    size_t fragLenStd = salmonOpts.fragLenDistPriorSD;
+    double meanFragLen = salmonOpts.fragLenDistPriorMean;
+    double fragLenStd = salmonOpts.fragLenDistPriorSD;
     size_t fragLenKernelN = 4;
     double fragLenKernelP = 0.5;
     flDist_.reset(new FragmentLengthDistribution(1.0, maxFragLen, meanFragLen,

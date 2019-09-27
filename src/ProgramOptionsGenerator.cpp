@@ -551,10 +551,10 @@ namespace salmon {
        "The maximum fragment length to consider when building the empirical "
        "distribution")
       ("fldMean",
-       po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(salmon::defaults::fragLenPriorMean),
+       po::value<double>(&(sopt.fragLenDistPriorMean))->default_value(salmon::defaults::fragLenPriorMean),
        "The mean used in the fragment length distribution prior")
       ("fldSD",
-       po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(salmon::defaults::fragLenPriorSD),
+       po::value<double>(&(sopt.fragLenDistPriorSD))->default_value(salmon::defaults::fragLenPriorSD),
        "The standard deviation used in the fragment length distribution "
        "prior")
       ("forgettingFactor,f",

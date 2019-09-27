@@ -1056,6 +1056,7 @@ void processReads(
 
           // the best scores start out as invalid
           int32_t bestScore = invalidScore;
+          int32_t secondBestScore = invalidScore;
           int32_t bestDecoyScore = invalidScore;
           std::vector<decltype(bestScore)> scores(jointHits.size(), 0);
           size_t idx{0};
@@ -1066,7 +1067,7 @@ void processReads(
             bool validScore = (hitScore != invalidScore);
             numMappingsDropped += validScore ? 0 : 1;
             auto tid = qidx->getRefId(jointHit.tid);
-            salmon::mapping_utils::updateRefMappings(tid, hitScore, idx, transcripts, invalidScore, bestScore, bestDecoyScore,
+            salmon::mapping_utils::updateRefMappings(tid, hitScore, idx, transcripts, invalidScore, bestScore, secondBestScore, bestDecoyScore,
                               scores, bestScorePerTranscript, perm);
             ++idx;
           }
@@ -1083,6 +1084,7 @@ void processReads(
                                        hardFilter,
                                        salmonOpts.scoreExp,
                                        bestScore,
+                                       secondBestScore,
                                        bestDecoyScore,
                                        jointAlignments);
           } else {
@@ -1532,6 +1534,7 @@ void processReads(
 
          // the best scores start out as invalid
          int32_t bestScore = invalidScore;
+         int32_t secondBestScore = invalidScore;
          int32_t bestDecoyScore = invalidScore;
          std::vector<decltype(bestScore)> scores(jointHits.size(), 0);
          size_t idx{0};
@@ -1542,7 +1545,7 @@ void processReads(
            bool validScore = (hitScore != invalidScore);
            numMappingsDropped += validScore ? 0 : 1;
            auto tid = qidx->getRefId(jointHit.tid);
-           salmon::mapping_utils::updateRefMappings(tid, hitScore, idx, transcripts, invalidScore, bestScore, bestDecoyScore,
+           salmon::mapping_utils::updateRefMappings(tid, hitScore, idx, transcripts, invalidScore, bestScore, secondBestScore, bestDecoyScore,
                              scores, bestScorePerTranscript, perm);
            ++idx;
          }
@@ -1559,6 +1562,7 @@ void processReads(
                                       hardFilter,
                                       salmonOpts.scoreExp,
                                       bestScore,
+                                      secondBestScore,
                                       bestDecoyScore,
                                       jointAlignments);
          } else {
