@@ -751,6 +751,11 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
         }
         aopt.jointLog->info("Done importing Cellular Barcodes for Prior w/ {} cbs",
                             cnames.size());
+      } else {
+        aopt.jointLog->error("prior file (quants_mat_rows.txt): {} doesn't exist",
+                             cfile.string());
+        aopt.jointLog->flush();
+        std::exit(84);
       }
 
       std::vector<std::string> gnames;
@@ -775,6 +780,11 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
 
         aopt.jointLog->info("Done importing Gene names for Prior w/ {} genes",
                             gnames.size());
+      } else {
+        aopt.jointLog->error("prior file (quants_mat_cols.txt): {} doesn't exist",
+                             cfile.string());
+        aopt.jointLog->flush();
+        std::exit(84);
       }
 
       { // starting reading prior matrix
@@ -791,7 +801,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
               while( ss.good() ) {
                 std::string substr;
                 getline( ss, substr, ',' );
-                double count = std::stoi(substr);
+                double count = std::stod(substr);
 
                 cellCount[idxPtr] = count;
                 if ( ++idxPtr == gnames.size() ) { break; }
