@@ -17,12 +17,17 @@ void CellVBEMUpdate_(std::vector<SalmonEqClass>& eqVec,
   size_t M = alphaIn.size();
   std::vector<double> expTheta(M);
 
-  float alphaSum = {0.0};
+  double alphaSum = {0.0};
   for (size_t i = 0; i < M; ++i) {
     alphaSum += alphaIn[i] + priorAlphas[i];
   }
 
-  double logNorm = boost::math::digamma(alphaSum);
+  double logNorm;
+  if (alphaSum > ::digammaMin) {
+    logNorm = boost::math::digamma(alphaSum);
+  } else {
+    logNorm = 0.0;
+  }
 
   for (size_t i = 0; i < M; ++i) {
     auto ap = alphaIn[i] + priorAlphas[i];
