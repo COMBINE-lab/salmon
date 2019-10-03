@@ -828,7 +828,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
 
       {
         //rearragngement of vectors
-        std::vector<std::vector<double>> temps(trueBarcodes.size(), std::vector<double>(gnames.size(), 0.0) );
+        std::vector<std::vector<double>> temps(trueBarcodes.size(), std::vector<double>(numGenes, 0.0) );
         for (size_t i=0; i<trueBarcodes.size(); i++) {
           auto& cname = trueBarcodes[i];
           auto it = std::find(cnames.begin(), cnames.end(), cname);
