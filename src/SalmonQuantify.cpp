@@ -212,7 +212,6 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
   bool gcBiasCorrect = salmonOpts.gcBiasCorrect;
   bool updateCounts = initialRound;
   double incompatPrior = salmonOpts.incompatPrior;
-  bool useReadCompat = incompatPrior != salmon::math::LOG_1;
   bool useFragLengthDist{!salmonOpts.noFragLengthDist};
   bool noFragLenFactor{salmonOpts.noFragLenFactor};
   bool useRankEqClasses{salmonOpts.rankEqClasses};

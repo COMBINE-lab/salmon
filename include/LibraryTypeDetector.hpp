@@ -18,7 +18,7 @@ public:
                          LibraryFormat::maxLibTypeID() + 1)) {}
 
   LibraryTypeDetector(const LibraryTypeDetector& other) {
-    active_ = other.active_;
+    active_.store(other.active_.load());
     type_ = other.type_;
     numSamplesNeeded_.store(other.numSamplesNeeded_.load());
     libTypeCounts_ =
@@ -28,13 +28,13 @@ public:
     }
   }
 
-  bool isActive() { return active_; }
+  bool isActive() { return active_.load(); }
   bool canGuess() { return numSamplesNeeded_ <= 0; }
 
   bool mostLikelyType(LibraryFormat& ifmt) {
     bool ret{false};
     if (mut_.try_lock()) {
-      if (active_) {
+      if (active_.load()) {
         if (type_ == ReadType::SINGLE_END) {
           uint64_t nf{0};
           uint64_t nr{0};
@@ -130,7 +130,7 @@ public:
         log->info("Automatically detected most likely library type as {}",
                   ifmt.toString());
 
-        active_ = false;
+        active_.store(false);
         ret = true;
       } // end if active_
 
@@ -148,7 +148,7 @@ public:
 
 private:
   // set to false once we have guessed the type
-  bool active_{true};
+  std::atomic_bool active_{true};
   std::mutex mut_;
 
   // single or paired-end

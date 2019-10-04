@@ -514,53 +514,88 @@ public:
     uint64_t numFmt2{0};
     uint64_t numAgree{0};
     uint64_t numDisagree{0};
+    uint64_t numDisagreeUnstranded{0};
+    uint64_t numDisagreeStranded{0};
 
     for (auto& rl : readLibraries_) {
       auto fmt = rl.format();
       auto& counts = rl.libTypeCounts();
 
-      // If the format is un-stranded, check that
-      // we have a similar number of mappings in both
-      // directions and then aggregate the forward and
-      // reverse counts.
+      oa(cereal::make_nvp("read_files", rl.readFilesAsString()));
+      std::string expectedFormat = rl.format().toString();
+      oa(cereal::make_nvp("expected_format", expectedFormat));
+
+      double compatFragmentRatio =
+          rl.numCompat() / static_cast<double>(numAssignedFragments_);
+      oa(cereal::make_nvp("compatible_fragment_ratio", compatFragmentRatio));
+      oa(cereal::make_nvp("num_compatible_fragments", rl.numCompat()));
+      oa(cereal::make_nvp("num_assigned_fragments",
+                          numAssignedFragments_.load()));
+
+      std::vector<ReadStrandedness> strands;
+      // How we should define sense and antisense 
+      switch (fmt.orientation) {
+      case ReadOrientation::SAME:
+      case ReadOrientation::NONE:
+        strands.push_back(ReadStrandedness::S);
+        strands.push_back(ReadStrandedness::A);
+        break;
+      case ReadOrientation::AWAY:
+      case ReadOrientation::TOWARD:
+        strands.push_back(ReadStrandedness::SA);
+        strands.push_back(ReadStrandedness::AS);
+        break;
+      }
+
+      // fmt1 is :
+      // reads that arise from sense, or 
+      // fragments whose first read arises from sense
+      fmt1.type = fmt.type;
+      fmt1.orientation = fmt.orientation;
+      fmt1.strandedness = strands[0];
+      // fmt 2 is :
+      // reads that arise from antisense, or
+      // fragments whose first read arises from antisense
+      fmt2.type = fmt.type;
+      fmt2.orientation = fmt.orientation;
+      fmt2.strandedness = strands[1];
+
+      numFmt1 = 0;
+      numFmt2 = 0;
+
+      for (size_t i = 0; i < counts.size(); ++i) {
+        // This counts agree or disagree when the 
+        // provided or detected library type is *not*
+        // unstranded
+        if (i == fmt.formatID()) {
+          numAgree = counts[i];
+        } else {
+          numDisagreeStranded += counts[i];
+        }
+
+        // Regardless of if the provided or detected
+        // library type is unstranded, count the 
+        // sense and antisense compatible reads
+        if (i == fmt1.formatID()) {
+          numFmt1 = counts[i];
+        } else if (i == fmt2.formatID()) {
+          numFmt2 = counts[i];
+        } else {
+          // collect this number for if
+          // we have an unstranded library type
+          numDisagreeUnstranded += counts[i];
+        }
+      }
+
+      double ratio = 0.0;
+
+      // If the provided or detected library type is *unstranded*
       if (fmt.strandedness == ReadStrandedness::U) {
-        std::vector<ReadStrandedness> strands;
-        switch (fmt.orientation) {
-        case ReadOrientation::SAME:
-        case ReadOrientation::NONE:
-          strands.push_back(ReadStrandedness::S);
-          strands.push_back(ReadStrandedness::A);
-          break;
-        case ReadOrientation::AWAY:
-        case ReadOrientation::TOWARD:
-          strands.push_back(ReadStrandedness::AS);
-          strands.push_back(ReadStrandedness::SA);
-          break;
-        }
-
-        fmt1.type = fmt.type;
-        fmt1.orientation = fmt.orientation;
-        fmt1.strandedness = strands[0];
-        fmt2.type = fmt.type;
-        fmt2.orientation = fmt.orientation;
-        fmt2.strandedness = strands[1];
-
-        numFmt1 = 0;
-        numFmt2 = 0;
-        numAgree = 0;
-        numDisagree = 0;
-
-        for (size_t i = 0; i < counts.size(); ++i) {
-          if (i == fmt1.formatID()) {
-            numFmt1 = counts[i];
-          } else if (i == fmt2.formatID()) {
-            numFmt2 = counts[i];
-          } else {
-            numDisagree += counts[i];
-          }
-        }
+        // overwrite numAgree, since that was computed for 
+        // a stranded library 
         numAgree = numFmt1 + numFmt2;
-        double ratio = numAgree > 0 ? (static_cast<double>(numFmt1) / (numFmt1 + numFmt2)) : 0.0;
+        numDisagree = numDisagreeUnstranded;
+        ratio = numAgree > 0 ? (static_cast<double>(numFmt1) / (numFmt1 + numFmt2)) : 0.0;
 
         if (numAgree == 0) {
           errstr << "NOTE: Read Lib [" << rl.readFilesAsString() << "] :\n";
@@ -570,6 +605,9 @@ public:
           log->warn(errstr.str());
           errstr.clear();
         } else if (std::abs(ratio - 0.5) > 0.01) {
+          // check that we have a similar number of mappings in both
+          // directions and then aggregate the forward and
+          // reverse counts.
           errstr << "NOTE: Read Lib [" << rl.readFilesAsString() << "] :\n";
           errstr << "\nDetected a *potential* strand bias > 1\% in an "
                     "unstranded protocol "
@@ -578,50 +616,16 @@ public:
           log->warn(errstr.str());
           errstr.clear();
         }
-
-        oa(cereal::make_nvp("read_files", rl.readFilesAsVector()));
-        std::string expectedFormat = rl.format().toString();
-        oa(cereal::make_nvp("expected_format", expectedFormat));
-
-        double compatFragmentRatio =
-            rl.numCompat() / static_cast<double>(numAssignedFragments_);
-        oa(cereal::make_nvp("compatible_fragment_ratio", compatFragmentRatio));
-        oa(cereal::make_nvp("num_compatible_fragments", rl.numCompat()));
-        oa(cereal::make_nvp("num_assigned_fragments",
-                            numAssignedFragments_.load()));
-
-        oa(cereal::make_nvp("num_frags_with_concordant_consistent_mappings", numAgree));
-        oa(cereal::make_nvp("num_frags_with_inconsistent_or_orphan_mappings", numDisagree));
-        oa(cereal::make_nvp("strand_mapping_bias", ratio));
       } else {
-        numAgree = 0;
-        numDisagree = 0;
-
-        for (size_t i = 0; i < counts.size(); ++i) {
-          if (i == fmt.formatID()) {
-            numAgree = counts[i];
-          } else {
-            numDisagree += counts[i];
-          }
-        } // end for
-
-        oa(cereal::make_nvp("read_files", rl.readFilesAsString()));
-        std::string expectedFormat = rl.format().toString();
-        oa(cereal::make_nvp("expected_format", expectedFormat));
-
-        double compatFragmentRatio =
-            rl.numCompat() / static_cast<double>(numAssignedFragments_);
-        oa(cereal::make_nvp("compatible_fragment_ratio", compatFragmentRatio));
-        oa(cereal::make_nvp("num_compatible_fragments", rl.numCompat()));
-        oa(cereal::make_nvp("num_assigned_fragments",
-                            numAssignedFragments_.load()));
-
-        oa(cereal::make_nvp("num_frags_with_consistent_mappings", numAgree));
-        oa(cereal::make_nvp("num_frags_with_inconsistent_or_orphan_mappings", numDisagree));
+        // If the provided or detected library type is *stranded*
+        numDisagree = numDisagreeStranded;
+        ratio = numAgree > 0 ? (static_cast<double>(numFmt1) / (numFmt1 + numFmt2)) : 0.0;
       } // end else
 
-      double compatFragmentRatio =
-          rl.numCompat() / static_cast<double>(numAssignedFragments_);
+      oa(cereal::make_nvp("num_frags_with_concordant_consistent_mappings", numAgree));
+      oa(cereal::make_nvp("num_frags_with_inconsistent_or_orphan_mappings", numDisagree));
+      oa(cereal::make_nvp("strand_mapping_bias", ratio));
+
       double disagreeRatio = 1.0 - compatFragmentRatio;
       if (disagreeRatio > 0.05) {
         errstr << "NOTE: Read Lib [" << rl.readFilesAsString() << "] :\n";
