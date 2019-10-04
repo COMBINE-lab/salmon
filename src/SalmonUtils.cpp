@@ -1464,12 +1464,6 @@ std::string getCurrentTimeAsString() {
                           );
     }
 
-    if (sopt.maxMMPExtension < 1) {
-      sopt.jointLog->error("The maximum MMP extension must be at least 1, but {} was provided.",
-                           sopt.maxMMPExtension);
-      return false;
-    }
-
     if (sopt.hardFilter) {
       // range factorization doesn't make sense with hard filtering
       if (sopt.rangeFactorizationBins > 0) {

@@ -114,14 +114,6 @@ namespace salmon {
        "mapping must achieve in order to be considered \"valid\" --- should be in (0,1].\n"
        "Salmon Default 0.65 and Alevin Default 0.87"
        )
-      ("maxMMPExtension",
-       po::value<int32_t>(&sopt.maxMMPExtension)->default_value(salmon::defaults::maxMMPExtension),
-       "[Quasi-mapping mode (w / mapping validation) only] : Sets the maximum allowable MMP extension when collecting "
-       "suffix array intervals to be used in chaining.  This prevents MMPs from becoming too long, and potentially masking "
-       "intervals that would uncover other good quasi-mappings for the read.  This heuristic mimics the idea of the "
-       "maximum mappable safe prefix (MMSP) in selective alignment.  Setting a smaller value will potentially allow "
-       "for more sensitive, but slower, mapping."
-       )
       ("ma",
        po::value<int16_t>(&sopt.matchScore)->default_value(salmon::defaults::matchScore),
        "[Quasi-mapping mode (w / mapping validation) only] : The value given to a match between read and reference nucleotides "
