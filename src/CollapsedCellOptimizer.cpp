@@ -437,12 +437,6 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                        << "\t" << totalExpGenes
                        << "\t" << numGenesOverMean;
 
-        if (dumpUmiGraph) {
-          featuresStream << arboString.rdbuf();
-        } else {
-          featuresStream << "\t" << averageNumMolPerArbo;
-        }
-
         if (mRnaGenes.size() > 1) {
           featureCode += 1;
           featuresStream << "\t" << mitoCount / totalUmiCount;
@@ -451,6 +445,12 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         if (rRnaGenes.size() > 1) {
           featureCode += 2;
           featuresStream << "\t" << riboCount / totalUmiCount;
+        }
+
+        if (dumpUmiGraph) {
+          featuresStream << arboString.rdbuf();
+        } else {
+          featuresStream << "\t" << averageNumMolPerArbo;
         }
 
         features = featuresStream.str();
@@ -788,7 +788,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
       };
 
       uint32_t zerod_cells {0};
-      size_t numFlags = (numGenes/8)+1;
+      size_t numFlags = std::ceil(numGenes/8);
       std::vector<uint8_t> alphasFlag (numFlags, 0);
       size_t flagSize = sizeof(decltype(alphasFlag)::value_type);
 
