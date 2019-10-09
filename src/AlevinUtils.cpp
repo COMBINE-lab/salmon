@@ -268,86 +268,49 @@ namespace alevin {
                          spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                          const std::string& t2gFileName,
                          const std::string& refNamesFile,
+                         const std::string& refLengthFile,
                          const std::string& headerFile,
                          std::shared_ptr<spdlog::logger>& jointLog){
-      size_t numDupTxps;
+      size_t numDupTxps, kSize;
       uint64_t numberOfDecoys, firstDecoyIndex;
       spp::sparse_hash_map<std::string, std::vector<uint32_t>> txpIdxMap;
       // reading in the binary file
+      std::vector<std::string> txpNames;
       {
-        jointLog->info("Loading Header");
-        {
-          // @avi --- do we need this
-          /*
-          IndexHeader h;
-          std::ifstream indexStream(headerFile);
-          {
-            cereal::JSONInputArchive ar(indexStream);
-            ar(h);
-          }
-          indexStream.close();
-
-          if (h.version() != salmon::requiredQuasiIndexVersion) {
-            jointLog->critical(
-                               "I found a quasi-index with version {}, but I require {}. "
-                               "Please re-index the reference.",
-                               h.version(), salmon::requiredQuasiIndexVersion);
-            std::exit(1);
-          }
-          if (h.indexType() != IndexType::QUASI) {
-            jointLog->critical("The index {} does not appear to be of the "
-                               "appropriate type (quasi)",
-                               headerFile);
-            std::exit(1);
-          }
-          */
-        }
-
-        std::vector<std::string> txpNames;
-        {
-          std::ifstream ctstream(refNamesFile);
-          cereal::BinaryInputArchive contigTableArchive(ctstream);
-          contigTableArchive(txpNames);
-          ctstream.close();
-        }
-
-        uint64_t numberOfDecoys;
-        uint64_t firstDecoyIndex;
-        {
-          std::ifstream hstream(headerFile);
-          cereal::JSONInputArchive headerArchive(hstream);
-          headerArchive( cereal::make_nvp("num_decoys", numberOfDecoys) );
-          headerArchive( cereal::make_nvp("first_decoy_index", firstDecoyIndex) );
-          hstream.close();
-        }
-        //jointLog->info("Loading Transcript Info ");
-        //std::ifstream seqStream(refNamesFile);
-        //cereal::BinaryInputArchive seqArchive(seqStream);
-
-        //std::vector<std::string> txpNames;
-        //seqArchive(txpNames);
-        //seqArchive(numberOfDecoys);
-        //seqArchive(firstDecoyIndex);
-
-        if ( numberOfDecoys>0 && (txpNames.size()-numberOfDecoys != firstDecoyIndex) ) {
-          jointLog->error("Error reading txpInfo and the number of decoys.\n"
-                          "Total Refs: {}\nDecoys: {} \nFirstIndex: {}",
-                          txpNames.size(), numberOfDecoys, firstDecoyIndex);
-          jointLog->flush();
-          exit(1);
-        }
-
-        for (size_t i=0; i<txpNames.size(); i++){
-          txpIdxMap[txpNames[i]].emplace_back(i);
-        }
-        //seqStream.close();
-        numDupTxps = txpNames.size() - txpIdxMap.size();
+        std::ifstream ctstream(refNamesFile);
+        cereal::BinaryInputArchive contigTableArchive(ctstream);
+        contigTableArchive(txpNames);
+        ctstream.close();
       }
 
-      if ( numDupTxps > 0){
-        jointLog->warn("Found {} transcripts with duplicate names",
-                      numDupTxps);
+      std::vector<uint32_t> txpLengths;
+      {
+        std::ifstream ctstream(refLengthFile);
+        cereal::BinaryInputArchive contigTableArchive(ctstream);
+        contigTableArchive(txpLengths);
+        ctstream.close();
       }
+
+      {
+        std::ifstream hstream(headerFile);
+        cereal::JSONInputArchive headerArchive(hstream);
+        headerArchive( cereal::make_nvp("num_decoys", numberOfDecoys) );
+        headerArchive( cereal::make_nvp("first_decoy_index", firstDecoyIndex) );
+        headerArchive( cereal::make_nvp("k", kSize) );
+        hstream.close();
+      }
+
+      size_t numShort {0};
+      for (size_t i=0; i<txpNames.size(); i++){
+        txpIdxMap[txpNames[i]].emplace_back(i);
+        if (txpLengths[i] <= kSize) { numShort += 1; }
+      }
+
+      numDupTxps = txpNames.size() - txpIdxMap.size();
+      jointLog->info("Found {} transcripts(+{} decoys, +{} short and +{}"
+                     " duplicate names in the index)",
+                     txpNames.size() - numberOfDecoys - numShort - numDupTxps ,
+                     numberOfDecoys, numShort, numDupTxps);
 
       std::ifstream t2gFile(t2gFileName);
       uint32_t gid, geneCount{0};
@@ -357,10 +320,19 @@ namespace alevin {
         while( not t2gFile.eof() ) {
           t2gFile >> tStr >> gStr;
 
-          if(not txpIdxMap.contains(tStr)){
+          if(not txpIdxMap.contains(tStr)  ){
             continue;
           }
+
           tids = txpIdxMap[tStr];
+          bool isDecoy {false};
+          for (auto tid: tids) {
+            if ( tid >= firstDecoyIndex + numShort ) {
+              isDecoy = true ;
+              break;
+            }
+          }
+          if (isDecoy) { continue; }
 
           if (geneIdxMap.contains(gStr)){
             gid = geneIdxMap[gStr];
@@ -372,25 +344,29 @@ namespace alevin {
           }
 
           for (auto tid: tids) {
-          txpToGeneMap[tid] = gid;
+            if (txpToGeneMap.find(tid) != txpToGeneMap.end() &&
+                txpToGeneMap[tid] != gid ) {
+              jointLog->warn("Dual txp to gene map for txp {}", txpNames[tid]);
+            }
+            txpToGeneMap[tid] = gid;
           }
         }
         t2gFile.close();
       }
 
+      jointLog->info( "Filled with {} txp to gene entries ", txpToGeneMap.size());
       for ( auto it: txpIdxMap ) {
         for (auto tid: it.second) {
-          if (txpToGeneMap.find( tid ) == txpToGeneMap.end() ) {
-            jointLog->error( "ERROR: Can't find gene mapping for : ",
-                             it.first );
-            if(txpToGeneMap.size() + numberOfDecoys < txpIdxMap.size()) {
-              jointLog->error( "ERROR: "
-                               "Txp to Gene Map not found for {}"
-                               " transcripts. Exiting",
-                               txpIdxMap.size() - txpToGeneMap.size()
-                               );
-              jointLog->flush();
-            }
+          if (tid < firstDecoyIndex + numShort &&
+              txpToGeneMap.find( tid ) == txpToGeneMap.end() ) {
+            jointLog->error( "ERROR: Can't find gene mapping for : {} w/ index {}",
+                             it.first, tid );
+            jointLog->error( "ERROR: "
+                             "Txp to Gene Map not found for {}"
+                             " transcripts. Exiting",
+                             txpIdxMap.size() - txpToGeneMap.size() - numberOfDecoys
+                             );
+            jointLog->flush();
             exit(1);
           }
         }

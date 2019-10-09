@@ -671,7 +671,11 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   }
 
   if (aopt.initUniform) {
-    aopt.jointLog->warn("Using uniform initialization for EM");
+    if (aopt.useVBEM) {
+      aopt.jointLog->warn("Using uniform initialization for VBEM");
+    } else {
+      aopt.jointLog->warn("Using uniform initialization for EM");
+    }
     aopt.jointLog->flush();
   }
 
@@ -792,6 +796,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
         std::exit(84);
       }
 
+      double priorMolCounts {0.0};
       { // starting reading prior matrix
         if(boost::filesystem::exists(mfile)){
           std::ifstream fileReader(mfile.string());
@@ -808,6 +813,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                 getline( ss, substr, ',' );
                 double count = std::stod(substr);
 
+                priorMolCounts += count;
                 cellCount[idxPtr] = count;
                 if ( ++idxPtr == gnames.size() ) { break; }
               }//end-while
@@ -826,9 +832,11 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
         }
       }//end-matrix reading scope
 
+      double priorWeight = 886883.00 / priorMolCounts ;
+      aopt.jointLog->info( "Prior Weight: {}/ {}", priorWeight, priorMolCounts);
       {
         //rearragngement of vectors
-        std::vector<std::vector<double>> temps(trueBarcodes.size(), std::vector<double>(numGenes, 0.0) );
+        std::vector<std::vector<double>> temps(trueBarcodes.size(), std::vector<double>(numGenes, priorWeight * 1e-2));
         for (size_t i=0; i<trueBarcodes.size(); i++) {
           auto& cname = trueBarcodes[i];
           auto it = std::find(cnames.begin(), cnames.end(), cname);
@@ -837,7 +845,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
             for (size_t j=0; j<gnames.size(); j++) {
               auto& gname = gnames[j];
               uint32_t gIdx = geneIdxMap[gname];
-              if (priorAlphas[cIdx][j] > 0) { temps[i][gIdx] = priorAlphas[cIdx][j]; }
+              if (priorAlphas[cIdx][j] > 0) { temps[i][gIdx] += priorWeight * priorAlphas[cIdx][j]; }
             }
           } else {
             aopt.jointLog->error("Can't find prior for CB: {}", cname);

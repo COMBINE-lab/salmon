@@ -819,6 +819,14 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
     exit(1);
   }
 
+  auto txpLengthFile = sopt.indexDirectory / "reflengths.bin";
+  if(!boost::filesystem::exists(txpLengthFile)){
+    aopt.jointLog->error("Index Directory or the reflengths.bin: {} doesn't exist.",
+                         txpLengthFile.string());
+    aopt.jointLog->flush();
+    exit(1);
+  }
+
   auto headerFile = sopt.indexDirectory / "info.json";
   if(!boost::filesystem::exists(headerFile)){
     aopt.jointLog->error("Index Directory or the info.json: {} doesn't exist.",
@@ -830,6 +838,7 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
   aut::getTxpToGeneMap(txpToGeneMap, geneIdxMap,
                        aopt.geneMapFile.string(),
                        txpInfoFile.string(),
+                       txpLengthFile.string(),
                        headerFile.string(),
                        aopt.jointLog);
 
