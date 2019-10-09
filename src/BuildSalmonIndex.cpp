@@ -108,9 +108,9 @@ int salmonIndex(int argc, const char* argv[]) {
       "take longer to construct and can slow down mapping / alignment")(
       "decoys,d",
       po::value<string>(&idxOpt.decoy_file),
-      "Treat these sequences ids from the reference as the decoys that may have sequence
-       homologous to some known transcript. for example in case of Genome, provide a list
-       of chromosome name --- one per line"
+      "Treat these sequences ids from the reference as the decoys that may have sequence "
+      "homologous to some known transcript. for example in case of Genome, provide a list "
+      " of chromosome name --- one per line"
       )(
       "type",
       po::value<string>(&indexTypeStr)->default_value("puff")->required(),
