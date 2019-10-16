@@ -126,7 +126,188 @@ void sampleRoundNonCollapsedMultithreaded_(
           txpCount[i] = 0.0;
         }
       });
-   
+
+  } else {
+   tbb::parallel_for(
+      BlockedIndexRange(
+          size_t(0), size_t(activeList.size())), // 1024 is grainsize, use only
+                                                 // with simple_partitioner
+      [&, beta](const BlockedIndexRange& range) -> void {
+        GeneratorType::reference gen = localGenerator.local();
+        for (auto activeIdx : boost::irange(range.begin(), range.end())) {
+          auto i = activeList[activeIdx];
+          double ci = static_cast<double>(txpCount[i] + priorAlphas[i]);
+          std::gamma_distribution<double> d(ci, 1.0 / (beta + effLens(i)));
+          muGlobal[i] = d(gen);
+          txpCount[i] = 0.0;
+          /** DEBUG
+          if (std::isnan(muGlobal[i]) or std::isinf(muGlobal[i])) {
+            std::cerr << "txpCount = " << txpCount[i] << ", prior = " <<
+          priorAlphas[i] << ", alpha = " << ci << ", beta = " << (1.0 / (beta +
+          effLens(i))) << ", mu = " << muGlobal[i] << "\n"; std::exit(1);
+          }
+          **/
+        }
+      });
+  }
+
+  /**
+   * These will store "thread local" parameters
+   * for the threads doing local sampling of equivalence class counts.
+   */
+  class CombineableTxpCounts {
+  public:
+    CombineableTxpCounts(uint32_t numTxp) : txpCount(numTxp, 0) {
+      gen.reset(
+          new pcg32_unique(pcg_extras::seed_seq_from<std::random_device>()));
+    }
+    std::vector<int> txpCount;
+    std::unique_ptr<pcg32_unique> gen{nullptr};
+  };
+  tbb::combinable<CombineableTxpCounts> combineableCounts(txpCount.size());
+
+  std::mutex writeMut;
+  // resample within each equivalence class
+  tbb::parallel_for(
+      BlockedIndexRange(size_t(0), size_t(eqVec.size())),
+      [&](const BlockedIndexRange& range) -> void {
+
+        auto& txpCountLoc = combineableCounts.local().txpCount;
+        auto& gen = *(combineableCounts.local().gen.get());
+        for (auto eqid : boost::irange(range.begin(), range.end())) {
+          auto& eqClass = eqVec[eqid];
+          size_t offset = offsetMap[eqid];
+
+          // get total number of reads for an equivalence class
+          uint64_t classCount = eqClass.second.count;
+
+          // for each transcript in this class
+          const TranscriptGroup& tgroup = eqClass.first;
+          const size_t groupSize =
+              eqClass.second.weights.size(); // tgroup.txps.size();
+          if (tgroup.valid) {
+            const std::vector<uint32_t>& txps = tgroup.txps;
+            const auto& auxs = eqClass.second.combinedWeights;
+            const auto& weights = eqClass.second.weights;
+
+            double denom = 0.0;
+            // If this is a single-transcript group,
+            // then it gets the full count --- otherwise,
+            // sample!
+            if (BOOST_LIKELY(groupSize > 1)) {
+              // For each transcript in the group
+              double muSum = 0.0;
+              for (size_t i = 0; i < groupSize; ++i) {
+                auto tid = txps[i];
+                size_t gi = offset + i;
+                probMap[gi] = (1000.0 * muGlobal[tid]) * weights[i];
+                muSum += probMap[gi];
+                denom += probMap[gi];
+              }
+
+              if (denom <= ::minEQClassWeight) {
+                {
+                  std::lock_guard<std::mutex> lg(writeMut);
+                  std::cerr
+                      << "[WARNING] eq class denom was too small : denom = "
+                      << denom << ", numReads = " << classCount
+                      << ". Distributing reads evenly for this class\n";
+                }
+
+                denom = 0.0;
+                muSum = 0.0;
+                for (size_t i = 0; i < groupSize; ++i) {
+                  auto tid = txps[i];
+                  size_t gi = offset + i;
+                  probMap[gi] = 1.0 / effLens(tid);
+                  muSum += probMap[gi];
+                  denom += probMap[gi];
+                }
+
+                // If it's still too small --- divide evenly
+                if (denom <= ::minEQClassWeight) {
+                  for (size_t i = 0; i < groupSize; ++i) {
+                    auto tid = txps[i];
+                    size_t gi = offset + i;
+                    probMap[gi] = 1.0;
+                  }
+                  denom = groupSize;
+                  muSum = groupSize;
+                }
+              }
+
+              if (denom > ::minEQClassWeight) {
+                // Local multinomial
+                std::discrete_distribution<int> dist(probMap.begin() + offset,
+                                                     probMap.begin() + offset +
+                                                         groupSize);
+                for (size_t s = 0; s < classCount; ++s) {
+                  auto ind = dist(gen);
+                  ++txpCountLoc[txps[ind]];
+                }
+              }
+            } // do nothing if group size less than 2
+            else {
+              auto tid = txps[0];
+              txpCountLoc[tid] += static_cast<int>(classCount);
+            }
+          } // valid group
+        }   // loop over all eq classes
+      });
+
+  auto combineCounts = [&txpCount](const CombineableTxpCounts& p) -> void {
+    for (size_t i = 0; i < txpCount.size(); ++i) {
+      txpCount[i] += static_cast<double>(p.txpCount[i]);
+    }
+  };
+  combineableCounts.combine_each(combineCounts);
+}
+
+/*
+  Exactly same as the previous function but specially
+  curtailed for allele-specific expression estimates. The
+  equivalence classes that has alleleic expression present
+  are to be treated differently. For diploid transcriptome
+  that is the case for all the transcripts.
+ */
+template <typename EQVecT>
+void sampleRoundNonCollapsedMultithreaded1_(
+    EQVecT& eqVec,
+    std::vector<bool>& active, std::vector<uint32_t>& activeList,
+    std::vector<uint64_t>& countMap, std::vector<double>& probMap,
+    std::vector<double>& muGlobal, Eigen::VectorXd& effLens,
+    const std::vector<double>& priorAlphas, std::vector<double>& txpCount,
+    std::vector<uint32_t>& offsetMap,
+    bool noGammaDraw) {
+
+  // generate coeff for \mu from \alpha and \effLens
+  double beta = 0.1;
+  double norm = 0.0;
+
+  // Sample the transcript fractions \mu from a gamma distribution, and
+  // reset txpCounts to zero for each transcript.
+  typedef tbb::enumerable_thread_specific<pcg32_unique> GeneratorType;
+  auto getGenerator = []() -> pcg32_unique {
+    return pcg32_unique(pcg_extras::seed_seq_from<std::random_device>());
+  };
+  GeneratorType localGenerator(getGenerator);
+
+  // Compute the mu to be used in the equiv class resampling
+  // If we are doing a gamma draw (including shot-noise)
+  if (noGammaDraw) {
+   tbb::parallel_for(
+      BlockedIndexRange(
+          size_t(0), size_t(activeList.size())), // 1024 is grainsize, use only
+                                                 // with simple_partitioner
+      [&, beta](const BlockedIndexRange& range) -> void {
+        for (auto activeIdx : boost::irange(range.begin(), range.end())) {
+          auto i = activeList[activeIdx];
+          double ci = static_cast<double>(txpCount[i] + priorAlphas[i]);
+          muGlobal[i] = ci / effLens(i);
+          txpCount[i] = 0.0;
+        }
+      });
+
   } else {
    tbb::parallel_for(
       BlockedIndexRange(
@@ -301,9 +482,12 @@ std::vector<double> populatePriorAlphasGibbs_(
 }
 
 template <typename ExpT>
-bool CollapsedGibbsSampler::sample(
+bool CollapsedGibbsSampler::sampleAllele(
     ExpT& readExp, SalmonOpts& sopt,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
+    std::unordered_map<std::string, size_t>& mergedTranscriptNameMap,
+    std::unordered_map<size_t, size_t>& alleleToMergeTranacriptMapping,
+    std::vector<Transcript>& mergedTranscripts,
     uint32_t numSamples) {
 
   namespace bfs = boost::filesystem;
@@ -319,8 +503,9 @@ bool CollapsedGibbsSampler::sample(
 
   using VecT = CollapsedGibbsSampler::VecType;
 
-  std::vector<std::vector<int>> allSamples(
-      numSamples, std::vector<int>(transcripts.size(), 0));
+  // Deprecated
+  //std::vector<std::vector<int>> allSamples(
+  //    numSamples, std::vector<int>(transcripts.size(), 0));
 
   std::vector<double> alphasIn(transcripts.size(), 0.0);
   std::vector<double> alphasInit(transcripts.size(), 0.0);
@@ -484,8 +669,6 @@ bool CollapsedGibbsSampler::sample(
 template <typename ExpT>
 bool CollapsedGibbsSampler::sample(
     ExpT& readExp, SalmonOpts& sopt,
-    std::vector<Transcript>& mergedTranscripts,
-    std::unordered_map<size_t, size_t>& alleleToMergeTranacriptMapping,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     uint32_t numSamples) {
 
@@ -516,9 +699,9 @@ bool CollapsedGibbsSampler::sample(
 
   for (size_t i = 0; i < transcripts.size(); ++i) {
     auto& txp = transcripts[i];
-    auto& parentTxp = alleleToMergeTranacriptMapping[txp.id] ;
-    alphasIn[i] = parentTxp.projectedCounts;
-    alphasInit[i] = parentTxp.projectedCounts;
+    // auto& parentTxp = alleleToMergeTranacriptMapping[txp.id] ;
+    alphasIn[i] = txp.projectedCounts;
+    alphasInit[i] = txp.projectedCounts;
     effLens(i) = txp.EffectiveLength;
   }
 

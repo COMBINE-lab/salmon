@@ -2358,21 +2358,26 @@ transcript abundance from RNA-seq reads
 
       // Write the quantification results
       gzw.writeAbundances(sopt, experiment, false);
-
       // Merge the quant values from both the allele
       // transcripts to create a new collapsed class
       // to work on
-      {
+      if(sopt.aseMode){
         // Go over transcripts and give individual allele
         // mapping to an unique transcript id so that it can
         // be tracked
 
+        sopt.jointLog->info(
+                            "Normal EM is done salmon will now enter into "
+                            "ASE mode and quantify the uncertainty of the allelic "
+                            "expressions."
+        );
 
         std::unordered_map<std::string, size_t> mergedTranscriptNameMap ;
         std::unordered_map<size_t, size_t> alleleToMergeTranacriptMapping ;
 
         // Merged transcript vector
         std::vector<Transcript> mergedTranscripts ;
+        size_t mergedTranscriptID{0} ;
 
         std::vector<Transcript>& transcripts = experiment.transcripts() ;
         for(auto& transcript : transcripts){
@@ -2398,9 +2403,11 @@ transcript abundance from RNA-seq reads
               // We will create a transcript class with the values of one
               // of the alleles and set the mass to be equal to that of this
               // allele
-              mergedTranscripts.emplace_back(Transcript(mergedTranscriptID,
+              mergedTranscripts.emplace_back(
+                                             Transcript(
+                                                        mergedTranscriptID,
                                                         transcriptMainName.c_str(),
-                                                        transcript.RefName,
+                                                        transcript.RefLength
                                                         )
                                              ) ;
               auto& mergedTxp = mergedTranscripts.back();
@@ -2416,11 +2423,13 @@ transcript abundance from RNA-seq reads
               mergedTxp.projectedCounts = transcript.projectedCounts ;
               mergedTxp.EffectiveLength = transcript.EffectiveLength ;
               mergedTranscriptNameMap[transcriptMainName] = mergedTranscripts.size() - 1;
+              mergedTranscriptID++ ;
 
             }
             alleleToMergeTranacriptMapping[transcript.id] =
               mergedTranscriptNameMap[transcriptMainName] ;
           }
+
         }
 
         jointLog->info("Starting Gibbs Sampler on allelic transcripts") ;
