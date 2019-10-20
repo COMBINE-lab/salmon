@@ -4,6 +4,7 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#include <algorithm>
 
 #include "tbb/blocked_range.h"
 #include "tbb/combinable.h"
@@ -76,6 +77,45 @@ divide_work(Iterator begin, Iterator end, std::size_t n) {
   return ranges;
 }
 
+// For all combination of transcripts adopted from
+// https://stackoverflow.com/questions/12991758/creating-all-possible-k-combinations-of-n-items-in-c/28698654
+//
+void comb(size_t n,
+          size_t r,
+          std::vector<std::pair<size_t, size_t>>& combinations
+          ){
+  std::vector<bool> v(n);
+  std::fill(v.begin(), v.begin() + r, true);
+  combinations.resize((n*(n-1))/2) ;
+
+  size_t index = 0 ;
+  do {
+    std::vector<int> tmp ;
+    for (int i = 0; i < n; ++i) {
+      if (v[i]) {
+        tmp.push_back(i);
+      }
+    }
+    combinations[index++] = {tmp[0],tmp[1]} ;
+  } while (std::prev_permutation(v.begin(), v.end()));
+}
+
+
+template <typename EQVecT>
+void sampleRoundCollapsed_(
+                           EQVecT& eqVec,
+                           std::vector<bool>& active, std::vector<uint32_t>& activeList,
+                           std::vector<uint64_t>& countMap, std::vector<double>& probMap,
+                           std::vector<double>& muGlobal, Eigen::VectorXd& effLens,
+                           const std::vector<double>& priorAlphas, std::vector<double>& txpCount,
+                           std::vector<uint32_t>& offsetMap,
+                           std::map<std::pair<uint32_t, uint32_t>, double>& mutualScore,
+                           bool noGammaDraw,
+                           bool minNormalize,
+                           bool regularizeByWeight) {
+}
+
+
 /**
  * This non-collapsed Gibbs step is largely inspired by the method first
  * introduced by  Turro et al. [1].  Given the current estimates `txpCount` of
@@ -97,7 +137,10 @@ void sampleRoundNonCollapsedMultithreaded_(
     std::vector<double>& muGlobal, Eigen::VectorXd& effLens,
     const std::vector<double>& priorAlphas, std::vector<double>& txpCount,
     std::vector<uint32_t>& offsetMap,
-    bool noGammaDraw) {
+    std::vector<double>& mutualScoreMap,
+    bool noGammaDraw,
+    bool minNormalize,
+    bool regularizeByWeight) {
 
   // generate coeff for \mu from \alpha and \effLens
   double beta = 0.1;
@@ -113,6 +156,14 @@ void sampleRoundNonCollapsedMultithreaded_(
 
   // Compute the mu to be used in the equiv class resampling
   // If we are doing a gamma draw (including shot-noise)
+
+  // get the minimum element
+  auto minTxpCountIt = std::min_element(txpCount.begin(), txpCount.end(),
+                                        [](const double &t1, const double &t2){
+                                          return ((t1 > 0) && (t2 <= 0 || t1 < t2)) ;
+                                        }
+                                        );
+  auto minTxpCount = *minTxpCountIt;
   if (noGammaDraw) {
    tbb::parallel_for(
       BlockedIndexRange(
@@ -121,7 +172,9 @@ void sampleRoundNonCollapsedMultithreaded_(
       [&, beta](const BlockedIndexRange& range) -> void {
         for (auto activeIdx : boost::irange(range.begin(), range.end())) {
           auto i = activeList[activeIdx];
-          double ci = static_cast<double>(txpCount[i] + priorAlphas[i]);
+          double num = (minNormalize) ? (static_cast<double>(txpCount[i])/ static_cast<double> (minTxpCount)): static_cast<double>(txpCount[i]);
+          // double ci = static_cast<double>(num + priorAlphas[i]);
+          double ci = static_cast<double>(num);
           muGlobal[i] = ci / effLens(i);
           txpCount[i] = 0.0;
         }
@@ -136,7 +189,9 @@ void sampleRoundNonCollapsedMultithreaded_(
         GeneratorType::reference gen = localGenerator.local();
         for (auto activeIdx : boost::irange(range.begin(), range.end())) {
           auto i = activeList[activeIdx];
-          double ci = static_cast<double>(txpCount[i] + priorAlphas[i]);
+          double num = (minNormalize) ? (static_cast<double>(txpCount[i])/ static_cast<double> (minTxpCount)): static_cast<double>(txpCount[i]);
+          // double ci = static_cast<double>(num + priorAlphas[i]);
+          double ci = static_cast<double>(num);
           std::gamma_distribution<double> d(ci, 1.0 / (beta + effLens(i)));
           muGlobal[i] = d(gen);
           txpCount[i] = 0.0;
@@ -200,7 +255,10 @@ void sampleRoundNonCollapsedMultithreaded_(
               for (size_t i = 0; i < groupSize; ++i) {
                 auto tid = txps[i];
                 size_t gi = offset + i;
-                probMap[gi] = (1000.0 * muGlobal[tid]) * weights[i];
+                if(regularizeByWeight)
+                  probMap[gi] = (1000.0 * muGlobal[tid]);
+                else
+                  probMap[gi] = (1000.0 * muGlobal[tid]) * weights[i];
                 muSum += probMap[gi];
                 denom += probMap[gi];
               }
@@ -238,6 +296,12 @@ void sampleRoundNonCollapsedMultithreaded_(
 
               if (denom > ::minEQClassWeight) {
                 // Local multinomial
+                if(regularizeByWeight){
+                  for(size_t i = 0 ; i < groupSize; ++i){
+                    size_t gi = offset + i ;
+                    probMap[gi] += mutualScoreMap[gi] ;
+                  }
+                }
                 std::discrete_distribution<int> dist(probMap.begin() + offset,
                                                      probMap.begin() + offset +
                                                          groupSize);
@@ -751,6 +815,7 @@ bool CollapsedGibbsSampler::sample(
   std::vector<double> mu(numTranscripts, 0.0);
   std::vector<uint64_t> countMap(countMapSize, 0);
   std::vector<double> probMap(countMapSize, 0.0);
+  std::vector<double> mutualScoreMap(countMapSize, 0.0);
 
   /*
   std::random_device rd;
@@ -787,6 +852,119 @@ bool CollapsedGibbsSampler::sample(
     pbar->start();
   }
   //bool isFirstSample{true};
+  bool minNormalize{true} ;
+  bool regularizeByWeight{true};
+
+  std::map<std::pair<uint32_t, uint32_t>, double> mutualScore ;
+  if(regularizeByWeight){
+    for (size_t eqID = 0; eqID < eqVec.size(); ++eqID) {
+      if (eqVec[eqID].first.valid) {
+        auto labelSize = eqVec[eqID].second.weights.size() ;
+        if( labelSize == 1){
+          auto tid = eqVec[eqID].first.txps[0] ;
+          auto tidp = std::make_pair(tid, tid) ;
+          if (mutualScore.find(tidp) != mutualScore.end()){
+            mutualScore[tidp] += eqVec[eqID].second.weights[0]*eqVec[eqID].second.weights[0] ;
+          }else{
+            mutualScore[tidp] = eqVec[eqID].second.weights[0]*eqVec[eqID].second.weights[0] ;
+          }
+        }else if( labelSize == 2){
+          auto tid = eqVec[eqID].first.txps[0] ;
+          auto tidOther = eqVec[eqID].first.txps[1] ;
+          auto tidp = std::make_pair(tid, tidOther) ;
+          if (mutualScore.find(tidp) != mutualScore.end()){
+            mutualScore[tidp] += eqVec[eqID].second.weights[0]*eqVec[eqID].second.weights[1] ;
+          }else{
+            mutualScore[tidp] = eqVec[eqID].second.weights[0]*eqVec[eqID].second.weights[1] ;
+          }
+        }else{
+          std::vector<std::pair<size_t, size_t>> combinations ;
+          auto& txps = eqVec[eqID].first.txps ;
+          for(size_t j = 0; j < txps.size() ; ++j){
+            auto tidp = std::make_pair(txps[j], txps[j]) ;
+            double w = eqVec[eqID].second.weights[j]*eqVec[eqID].second.weights[j] ;
+            if(mutualScore.find(tidp) != mutualScore.end()){
+               mutualScore[tidp] += w ;
+            }else{
+               mutualScore[tidp] = w ;
+            }
+          }
+
+          comb(labelSize, 2, combinations) ;
+          for(auto tp : combinations){
+            auto tid = eqVec[eqID].first.txps[tp.first] ;
+            auto tidOther = eqVec[eqID].first.txps[tp.second] ;
+            auto tidp = std::make_pair(tid, tidOther) ;
+            if (mutualScore.find(tidp) != mutualScore.end()){
+              mutualScore[tidp] += eqVec[eqID].second.weights[tp.first]*eqVec[eqID].second.weights[tp.second];
+            }else{
+              mutualScore[tidp] = eqVec[eqID].second.weights[tp.first]*eqVec[eqID].second.weights[tp.second];
+            }
+          }
+        }
+      }
+    }
+
+    size_t globalIndex{0} ;
+    for(size_t i = 0; i < eqVec.size(); ++i){
+      if(eqVec[i].first.valid){
+        auto& txps = eqVec[i].first.txps ;
+        auto groupSize = eqVec[i].second.weights.size() ;
+        // std::cout << i << "\t" << globalIndex << "\t" << countMapSize << "\t" << groupSize << "-----\n" ;
+        if(groupSize == 1){
+          auto tidp = std::make_pair(txps[0], txps[0]) ;
+          if (mutualScore.find(tidp) != mutualScore.end()){
+            mutualScoreMap[globalIndex] = mutualScore[tidp] ;
+          }else{
+            std::cout << "This should not happen " << i
+                      << "\t" << tidp.first
+                      << "\t" << tidp.second << "\n" ;
+            std::exit(2) ;
+          }
+        }else if(groupSize == 2){
+          auto tidp = std::make_pair(txps[0], txps[1]) ;
+          if (mutualScore.find(tidp) != mutualScore.end()){
+            mutualScoreMap[globalIndex] = mutualScore[tidp] ;
+          }else{
+            std::cout << "This should not happen " << i
+                      << "\t" << tidp.first
+                      << "\t" << tidp.second << "\n" ;
+            std::exit(2) ;
+          }
+
+          mutualScoreMap[globalIndex] = mutualScore[tidp] ;
+          mutualScoreMap[globalIndex + 1] = mutualScoreMap[globalIndex] ;
+        }else{
+
+          for(size_t j = 0 ; j < groupSize; ++j){
+            double cumWeight{0.0} ;
+            for(size_t k = 0 ; k < groupSize ; ++k){
+              std::pair<uint32_t, uint32_t> tidp ;
+              if(j <= k){
+                tidp = std::make_pair(txps[j], txps[k]) ;
+              }else{
+                tidp = std::make_pair(txps[k], txps[j]) ;
+              }
+              if (mutualScore.find(tidp) != mutualScore.end()){
+                cumWeight += mutualScore[tidp] ;
+              }else{
+                std::cout << "This should not happen " << i
+                          << "\t" << tidp.first
+                          << "\t" << tidp.second << "\n" ;
+                std::exit(2) ;
+              }
+            }
+            mutualScoreMap[globalIndex + j] = cumWeight ;
+          }
+        }
+        globalIndex += groupSize ;
+      } // valid block
+    } // second for loop
+
+  }
+  std::cout << "Done calculating weights \n" ;
+
+
   for (size_t sampleID = 0; sampleID < numSamples; ++sampleID) {
     if (pbar) {
       ++(*pbar);
@@ -800,6 +978,7 @@ bool CollapsedGibbsSampler::sample(
       if (!isFirstSample) {
           // the counts start at what they were last round.
         allSamples[sampleID] = allSamples[sampleID-1];
+        bool minNormalize{true} ;
       }
       */
 
@@ -818,7 +997,10 @@ bool CollapsedGibbsSampler::sample(
           alphasIn, // [input/output param] the (hard) fragment counts per txp
                     // from the previous iteration
           offsetMap, // where the information begins for each equivalence class
-          sopt.noGammaDraw      // true if we should skip the Gamma draw, false otherwise
+          mutualScoreMap, // A vector of weights per equivalence class
+          sopt.noGammaDraw,      // true if we should skip the Gamma draw, false otherwise
+          minNormalize, // Normalize by min
+          regularizeByWeight // Regularize by the equivalence class weights
       );
     }
 
