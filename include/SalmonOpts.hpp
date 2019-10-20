@@ -216,6 +216,8 @@ struct SalmonOpts {
 
   uint32_t numGibbsSamples; // Number of rounds of Gibbs sampling to perform
   bool noGammaDraw;
+  bool minNormalize;
+  bool regularizeByWeight;
   uint32_t numBootstraps;   // Number of bootstrap samples to draw
   uint32_t thinningFactor;  // Gibbs chain thinning factor
   bool bootstrapReproject{false}; // In bootstrapping, re-project the parameters

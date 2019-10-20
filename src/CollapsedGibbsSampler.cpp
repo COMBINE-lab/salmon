@@ -172,7 +172,7 @@ void sampleRoundNonCollapsedMultithreaded_(
       [&, beta](const BlockedIndexRange& range) -> void {
         for (auto activeIdx : boost::irange(range.begin(), range.end())) {
           auto i = activeList[activeIdx];
-          double num = (minNormalize) ? (static_cast<double>(txpCount[i])/ static_cast<double> (minTxpCount)): static_cast<double>(txpCount[i]);
+          double num = (minNormalize) ? (static_cast<double>(txpCount[i])/ static_cast<double> (minTxpCount)): static_cast<double>(txpCount[i] + priorAlphas[i]);
           // double ci = static_cast<double>(num + priorAlphas[i]);
           double ci = static_cast<double>(num);
           muGlobal[i] = ci / effLens(i);
@@ -189,7 +189,7 @@ void sampleRoundNonCollapsedMultithreaded_(
         GeneratorType::reference gen = localGenerator.local();
         for (auto activeIdx : boost::irange(range.begin(), range.end())) {
           auto i = activeList[activeIdx];
-          double num = (minNormalize) ? (static_cast<double>(txpCount[i])/ static_cast<double> (minTxpCount)): static_cast<double>(txpCount[i]);
+          double num = (minNormalize) ? (static_cast<double>(txpCount[i])/ static_cast<double> (minTxpCount)): static_cast<double>(txpCount[i] + priorAlphas[i]);
           // double ci = static_cast<double>(num + priorAlphas[i]);
           double ci = static_cast<double>(num);
           std::gamma_distribution<double> d(ci, 1.0 / (beta + effLens(i)));
@@ -852,8 +852,8 @@ bool CollapsedGibbsSampler::sample(
     pbar->start();
   }
   //bool isFirstSample{true};
-  bool minNormalize{true} ;
-  bool regularizeByWeight{true};
+  bool minNormalize{sopt.minNormalize} ;
+  bool regularizeByWeight{sopt.regularizeByWeight};
 
   std::map<std::pair<uint32_t, uint32_t>, double> mutualScore ;
   if(regularizeByWeight){

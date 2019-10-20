@@ -673,6 +673,14 @@ namespace salmon {
        po::bool_switch(&(sopt.noGammaDraw))->default_value(salmon::defaults::noGammaDraw),
        "This switch will disable drawing transcript fractions from a Gamma distribution during Gibbs sampling.  In this case "
        "the sampler does not account for shot-noise, but only assignment ambiguity")
+      ("minNormalize",
+       po::bool_switch(&(sopt.minNormalize))->default_value(salmon::defaults::minNormalize),
+       "This switch will disable drawing transcript fractions from a Gamma distribution during Gibbs sampling.  In this case "
+       "the sampler does not account for shot-noise, but only assignment ambiguity")
+      ("noGammaDraw",
+       po::bool_switch(&(sopt.regularizeByWeight))->default_value(salmon::defaults::regularizeByWeight),
+       "This switch will disable drawing transcript fractions from a Gamma distribution during Gibbs sampling.  In this case "
+       "the sampler does not account for shot-noise, but only assignment ambiguity")
       ("numBootstraps",
        po::value<uint32_t>(&(sopt.numBootstraps))->default_value(salmon::defaults::numBootstraps),
        "Number of bootstrap samples to generate. Note: "
