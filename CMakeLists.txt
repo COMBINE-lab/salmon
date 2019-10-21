@@ -359,7 +359,7 @@ if(NOT BZIP2_FOUND)
   message("=======================================")
 externalproject_add(libbz2
   DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-  DOWNLOAD_COMMAND curl -k -L http://www.bzip.org/1.0.6/bzip2-1.0.6.tar.gz -o bzip2-1.0.6.tar.gz &&
+  DOWNLOAD_COMMAND curl -k -L https://sourceware.org/pub/bzip2/bzip2-1.0.6.tar.gz -o bzip2-1.0.6.tar.gz &&
     ${SHASUM} a2848f34fcd5d6cf47def00461fcb528a0484d8edef8208d6d2e2909dc61d9cd bzip2-1.0.6.tar.gz &&
     tar -xzvf  bzip2-1.0.6.tar.gz
   #URL http://www.bzip.org/1.0.6/bzip2-1.0.6.tar.gz
