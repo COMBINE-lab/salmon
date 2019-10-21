@@ -113,10 +113,11 @@ struct AlevinOpts {
   uint32_t totalLowConfidenceCBs;
   uint32_t numFeatures;
 
+  uint32_t eqReads;
   uint32_t noisyUmis;
   double mappingRate;
   double keepCBFraction;
-  uint32_t eqReads;
+  double vbemNorm;
 
   uint32_t totalDedupUMIs;
   uint32_t totalExpGenes;

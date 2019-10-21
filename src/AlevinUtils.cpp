@@ -430,6 +430,12 @@ namespace alevin {
         aopt.vbemPriorFile = vm["vbemPrior"].as<std::string>();
         aopt.useVBEM = true;
 
+        aopt.vbemNorm = vm["vbemNorm"].as<double>();
+        if (aopt.vbemNorm == 0.0) {
+          fmt::print(stderr,"\nVBEM Normalization Factor not provided");
+          return false;
+        }
+
         if (!bfs::exists(aopt.vbemPriorFile)) {
           fmt::print(stderr,"\nVBEM Prior File {} does not exists\n Exiting Now",
                      aopt.vbemPriorFile.string());

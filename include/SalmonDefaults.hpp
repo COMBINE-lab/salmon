@@ -139,13 +139,14 @@ namespace defaults {
   constexpr const uint32_t numBootstraps{0};
   constexpr const uint32_t lowRegionMinNumBarcodes{200};
   constexpr const uint32_t maxNumBarcodes{100000};
-  constexpr const double minScoreFraction{0.87};
-  constexpr const float consensusSlack{0.6};
   constexpr const uint32_t expectCells{0};
   constexpr const uint32_t forceCells{0};
-  constexpr const double keepCBFraction{0.0};
   constexpr const uint32_t freqThreshold{10};
   constexpr const uint32_t umiEditDistance{1};
+  constexpr const float consensusSlack{0.6};
+  constexpr const double keepCBFraction{0.0};
+  constexpr const double minScoreFraction{0.87};
+  constexpr const double vbemNorm{0.0};
 }
 }
 

@@ -778,15 +778,22 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
           fileReader.close();
         }
 
+        size_t priorOnlyGenes {0};
         for (auto& gname: gnames) {
           if (!geneIdxMap.contains(gname)) {
-            aopt.jointLog->error("prior file has gene {} not in txp2gene map",
-                                 gname);
-            aopt.jointLog->flush();
-            std::exit(84);
+            priorOnlyGenes += 1;
+            //aopt.jointLog->warn("prior file has gene {} not in txp2gene map",
+            //                     gname);
+            //aopt.jointLog->flush();
+            //std::exit(84);
           }
         }
 
+        if (priorOnlyGenes > 0) {
+          aopt.jointLog->warn("prior file has {} genes not in txp2gene map",
+                              priorOnlyGenes);
+          aopt.jointLog->flush();
+        }
         aopt.jointLog->info("Done importing Gene names for Prior w/ {} genes",
                             gnames.size());
       } else {
@@ -832,7 +839,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
         }
       }//end-matrix reading scope
 
-      double priorWeight = 886883.00 / priorMolCounts ;
+      double priorWeight = aopt.vbemNorm / priorMolCounts ;
       aopt.jointLog->info( "Prior Weight: {}/ {}", priorWeight, priorMolCounts);
       {
         //rearragngement of vectors
@@ -844,8 +851,10 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
             size_t cIdx = distance(cnames.begin(), it);
             for (size_t j=0; j<gnames.size(); j++) {
               auto& gname = gnames[j];
-              uint32_t gIdx = geneIdxMap[gname];
-              if (priorAlphas[cIdx][j] > 0) { temps[i][gIdx] += priorWeight * priorAlphas[cIdx][j]; }
+              if (priorAlphas[cIdx][j] > 0 && geneIdxMap.contains(gname)) {
+                uint32_t gIdx = geneIdxMap[gname];
+                temps[i][gIdx] += priorWeight * priorAlphas[cIdx][j];
+              }
             }
           } else {
             aopt.jointLog->error("Can't find prior for CB: {}", cname);
