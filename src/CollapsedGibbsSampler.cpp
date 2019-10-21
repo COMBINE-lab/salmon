@@ -138,6 +138,7 @@ void sampleRoundNonCollapsedMultithreaded_(
     const std::vector<double>& priorAlphas, std::vector<double>& txpCount,
     std::vector<uint32_t>& offsetMap,
     std::vector<double>& mutualScoreMap,
+    double lambda,
     bool noGammaDraw,
     bool minNormalize,
     bool regularizeByWeight) {
@@ -299,7 +300,7 @@ void sampleRoundNonCollapsedMultithreaded_(
                 if(regularizeByWeight){
                   for(size_t i = 0 ; i < groupSize; ++i){
                     size_t gi = offset + i ;
-                    probMap[gi] += mutualScoreMap[gi] ;
+                    probMap[gi] += lambda * mutualScoreMap[gi] ;
                   }
                 }
                 std::discrete_distribution<int> dist(probMap.begin() + offset,
@@ -854,6 +855,7 @@ bool CollapsedGibbsSampler::sample(
   //bool isFirstSample{true};
   bool minNormalize{sopt.minNormalize} ;
   bool regularizeByWeight{sopt.regularizeByWeight};
+  double lambda{sopt.lambda};
 
   std::map<std::pair<uint32_t, uint32_t>, double> mutualScore ;
   if(regularizeByWeight){
@@ -998,6 +1000,7 @@ bool CollapsedGibbsSampler::sample(
                     // from the previous iteration
           offsetMap, // where the information begins for each equivalence class
           mutualScoreMap, // A vector of weights per equivalence class
+          lambda, // the regularization weight 
           sopt.noGammaDraw,      // true if we should skip the Gamma draw, false otherwise
           minNormalize, // Normalize by min
           regularizeByWeight // Regularize by the equivalence class weights

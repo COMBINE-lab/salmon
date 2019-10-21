@@ -669,6 +669,10 @@ namespace salmon {
        po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(salmon::defaults::numGibbsSamples),
        "Number of Gibbs sampling rounds to "
        "perform.")
+      ("lambda",
+       po::value<double>(&(sopt.lambda))->default_value(salmon::defaults::lambda),
+       "Regularization weight"
+       "to be multiplied with weight")
       ("noGammaDraw",
        po::bool_switch(&(sopt.noGammaDraw))->default_value(salmon::defaults::noGammaDraw),
        "This switch will disable drawing transcript fractions from a Gamma distribution during Gibbs sampling.  In this case "
@@ -677,7 +681,7 @@ namespace salmon {
        po::bool_switch(&(sopt.minNormalize))->default_value(salmon::defaults::minNormalize),
        "This switch will disable drawing transcript fractions from a Gamma distribution during Gibbs sampling.  In this case "
        "the sampler does not account for shot-noise, but only assignment ambiguity")
-      ("noGammaDraw",
+      ("regularizeByWeight",
        po::bool_switch(&(sopt.regularizeByWeight))->default_value(salmon::defaults::regularizeByWeight),
        "This switch will disable drawing transcript fractions from a Gamma distribution during Gibbs sampling.  In this case "
        "the sampler does not account for shot-noise, but only assignment ambiguity")

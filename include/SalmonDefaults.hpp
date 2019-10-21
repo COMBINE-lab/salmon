@@ -69,6 +69,7 @@ namespace defaults {
   constexpr const uint32_t rangeFactorizationBins{4};
   constexpr const uint32_t numGibbsSamples{0};
   constexpr const bool noGammaDraw{false};
+  constexpr const bool lambda{0.0};
   constexpr const bool minNormalize{false};
   constexpr const bool regularizeByWeight{false};
   constexpr const bool bootstrapReproject{false};
