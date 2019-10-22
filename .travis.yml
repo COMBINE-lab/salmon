@@ -37,6 +37,7 @@ before_script:
   - sudo sh cmake-3.15.2-Linux-x86_64.sh --prefix=/usr/local --exclude-subdir
 
 script:
+  - PATH=/usr/local/bin:$PATH
   - LD_LIBRARY_PATH=${TRAVIS_BUILD_DIR}/lib:$LD_LIBRARY_PATH
   - mkdir build
   - pushd build
