@@ -18,8 +18,6 @@ matrix:
 
 install:
   # https://launchpad.net/~ubuntu-toolchain-r/+archive/ubuntu/test
-  - wget https://cmake.org/files/v3.15/cmake-3.15.2-Linux-x86_64.sh
-  - sudo sh https://cmake.org/files/v3.15/cmake-3.15.2-Linux-x86_64.sh --prefix=/usr/local --exclude-subdir
   - sudo add-apt-repository -y ppa:ubuntu-toolchain-r/test
   - sudo apt-get update -qq
   - sudo apt-get install -qq zlib1g-dev libbz2-dev cmake
@@ -33,6 +31,10 @@ install:
       echo "Installing ${CXX}."
       sudo apt-get install -qq "${CXX}"
     fi
+
+before_script:
+  - wget https://cmake.org/files/v3.15/cmake-3.15.2-Linux-x86_64.sh
+  - sudo sh https://cmake.org/files/v3.15/cmake-3.15.2-Linux-x86_64.sh --prefix=/usr/local --exclude-subdir
 
 script:
   - LD_LIBRARY_PATH=${TRAVIS_BUILD_DIR}/lib:$LD_LIBRARY_PATH
