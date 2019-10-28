@@ -300,16 +300,26 @@ namespace alevin {
         hstream.close();
       }
 
-      // kk this is tricky.
-      // firstDecoyIndex is the index of the first decoy *after*
-      // removing short transcripts
       size_t numShort {0};
-      size_t i {0};
-      while ( i-numShort < firstDecoyIndex ) {
-        if (txpLengths[i] <= kSize) { numShort += 1; }
-        txpIdxMap[txpNames[i]].emplace_back(i);
-        i += 1;
-      }
+      {
+        // kk this is tricky.
+        // firstDecoyIndex is the index of the first decoy *after*
+        // removing short transcripts but the reported mappings are
+        // in full vector i.e. including small transcripts
+        size_t i {0};
+        if (numberOfDecoys > 0) {
+          while ( i-numShort < firstDecoyIndex ) {
+            if (txpLengths[i] <= kSize) { numShort += 1; }
+            txpIdxMap[txpNames[i]].emplace_back(i);
+            i += 1;
+          }
+        } else {
+          for (size_t i=0; i < txpNames.size(); i++) {
+            if (txpLengths[i] <= kSize) { numShort += 1; }
+            txpIdxMap[txpNames[i]].emplace_back(i);
+          } // end-for
+        } // end else
+      } // end block for populating txpIdxMap
 
       for (auto it: txpIdxMap) {
         size_t bucketLen = it.second.size();
