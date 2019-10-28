@@ -271,7 +271,7 @@ namespace alevin {
                          const std::string& refLengthFile,
                          const std::string& headerFile,
                          std::shared_ptr<spdlog::logger>& jointLog){
-      size_t numDupTxps, kSize;
+      size_t  kSize, numDupTxps{0};
       uint64_t numberOfDecoys, firstDecoyIndex;
       spp::sparse_hash_map<std::string, std::vector<uint32_t>> txpIdxMap;
       // reading in the binary file
@@ -308,9 +308,12 @@ namespace alevin {
       while ( i-numShort < firstDecoyIndex ) {
         if (txpLengths[i] <= kSize) { numShort += 1; }
         txpIdxMap[txpNames[i]].emplace_back(i);
-        if ( txpIdxMap[txpNames[i]].size() > 1 ) { numDupTxps += 1; }
-
         i += 1;
+      }
+
+      for (auto it: txpIdxMap) {
+        size_t bucketLen = it.second.size();
+        if (bucketLen > 1) { numDupTxps += (bucketLen - 1); }
       }
 
       jointLog->info("Found {} transcripts(+{} decoys, +{} short and +{}"
