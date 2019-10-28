@@ -300,13 +300,19 @@ namespace alevin {
         hstream.close();
       }
 
+      // kk this is tricky.
+      // firstDecoyIndex is the index of the first decoy *after*
+      // removing short transcripts
       size_t numShort {0};
-      for (size_t i=0; i<txpNames.size(); i++){
-        txpIdxMap[txpNames[i]].emplace_back(i);
+      size_t i {0};
+      while ( i-numShort < firstDecoyIndex ) {
         if (txpLengths[i] <= kSize) { numShort += 1; }
+        txpIdxMap[txpNames[i]].emplace_back(i);
+        if ( txpIdxMap[txpNames[i]].size() > 1 ) { numDupTxps += 1; }
+
+        i += 1;
       }
 
-      numDupTxps = txpNames.size() - txpIdxMap.size();
       jointLog->info("Found {} transcripts(+{} decoys, +{} short and +{}"
                      " duplicate names in the index)",
                      txpNames.size() - numberOfDecoys - numShort - numDupTxps ,
@@ -325,15 +331,6 @@ namespace alevin {
           }
 
           tids = txpIdxMap[tStr];
-          bool isDecoy {false};
-          for (auto tid: tids) {
-            if ( tid >= firstDecoyIndex + numShort ) {
-              isDecoy = true ;
-              break;
-            }
-          }
-          if (isDecoy) { continue; }
-
           if (geneIdxMap.contains(gStr)){
             gid = geneIdxMap[gStr];
           }
