@@ -22,8 +22,8 @@ if [ -d ${INSTALL_DIR}/src/rapmap ] ; then
     rm -fr ${INSTALL_DIR}/src/rapmap
 fi
 
-#SVER=salmon-v0.14.1
-SVER=develop-salmon
+SVER=salmon-v0.15.0
+#SVER=develop-salmon
 #SVER=pe-chaining
 
 EXPECTED_SHA256=c458bc97a761ea944924098870d27a4d4ab922b84312dd1f351ce46567c024f2
