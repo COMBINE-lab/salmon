@@ -10,7 +10,7 @@
 ### Pre-computed decoy transcriptomes 
 
 Although the precomputed decoys (<=v.14.2) are still compatible with the latest major release (v1.0.0). We highly recommend updating your index using the full genome, as it gives significantly higher accuracy, for more information please check our extensive benchmarking on comparing different alignment methods and their performance on RNA-seq quantification in the latest revised preprint [manuscript](https://www.biorxiv.org/content/10.1101/657874v2). tl;dr: fast is good but fast and accurate is better !
-Please use the [tutorial](https://combine-lab.github.io/alevin-tutorial/2019/selective-alignment/) for a step-by-step guide on to efficiently index the reference transcriptome and genome for accurate gentrome based RNA-seq quantification.
+Please use the [tutorial](https://combine-lab.github.io/alevin-tutorial/2019/selective-alignment/) for a step-by-step guide on how to efficiently index the reference transcriptome and genome for accurate gentrome based RNA-seq quantification.
 
 **Facing problems with Indexing ?, [Check if anyone else already had this problem in the issues section or fill the index generation request form](https://forms.gle/3baJc5SYrkSWb1z48)**
 
