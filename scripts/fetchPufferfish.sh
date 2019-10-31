@@ -26,7 +26,7 @@ SVER=salmon-v1.0.0
 #SVER=develop
 #SVER=pe-chaining
 
-EXPECTED_SHA256=07c547162db99576907166e5566aa589cf412ed8d1b718698bf9b113a87021a6
+EXPECTED_SHA256=4406ff6b5d676a3c1eb1a0f9241fadb5d368dbf32e1382a55b35fe42a6d76d3e
 
 mkdir -p ${EXTERNAL_DIR}
 curl -k -L https://github.com/COMBINE-lab/pufferfish/archive/${SVER}.zip -o ${EXTERNAL_DIR}/pufferfish.zip
