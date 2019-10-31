@@ -66,7 +66,7 @@ endif()
 ## Set the standard required compile flags
 # Nov 18th --- removed -DHAVE_CONFIG_H
 set(REMOVE_WARNING_FLAGS "-Wno-unused-function;-Wno-unused-local-typedefs")
-set(TGT_COMPILE_FLAGS "-ftree-vectorize;-funroll-loops;-fPIC;-fomit-frame-pointer;-O3;-DNDEBUG")
+set(TGT_COMPILE_FLAGS "-ftree-vectorize;-funroll-loops;-fPIC;-fomit-frame-pointer;-O3;-DNDEBUG;-DSTX_NO_STD_STRING_VIEW")
 set(TGT_WARN_FLAGS "-Wall;-Wno-unknown-pragmas;-Wno-reorder;-Wno-unused-variable;-Wreturn-type;-Werror=return-type;${REMOVE_WARNING_FLAGS}")
 
 
@@ -91,6 +91,7 @@ endif()
 ## Prefer static to dynamic libraries
 if(NOT USE_SHARED_LIBS)
   set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
+  set(MALLOC_STATIC_BUILD_FLAG "--enable-static")
 endif()
 
 include(CheckIPOSupported)
@@ -133,7 +134,7 @@ if(APPLE)
   # To allow ourselves to build a dynamic library, we have to tell the compiler
   # that, yes, the symbols will be around at runtime.
   list(APPEND TGT_COMPILE_FLAGS "-undefined dynamic_lookup;-Wno-unused-command-line-argument")
-  set(LIBSALMON_LINKER_FLAGS "-all_load")
+  # set(LIBSALMON_LINKER_FLAGS "-all_load")
   # In order to "think different", we also have to use non-standard suffixes
   # for our shared libraries
   set(SHARED_LIB_EXTENSION "dylib")
@@ -261,17 +262,19 @@ set(GAT_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 
 ###
 #
-#  Grab RapMap sources for quasi-mapping code --- DURING CONFIGURE TIME!
+#  Grab pufferfish source --- DURING CONFIGURE TIME!
 #
 ####
-if(NOT FETCHED_RAPMAP)
-  exec_program(${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetchRapMap.sh RETURN_VALUE FETCH_RM_SCRIPT_RET)
-  message(STATUS "fetch RAPMAP exit code ${FETCH_RM_SCRIPT_RET}")
-  if(NOT (FETCH_RM_SCRIPT_RET EQUAL 0))
-    message(FATAL_ERROR "Could not fetch RapMap source [fetchRapMap.sh returned exit code ${FETCH_RM_SCRIPT_RET}].")
+if(NOT FETCHED_PUFFERFISH)
+  exec_program(${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetchPufferfish.sh RETURN_VALUE FETCH_PF_SCRIPT_RET)
+  message(STATUS "fetch PUFFERFISH exit code ${FETCH_PF_SCRIPT_RET}")
+  if(NOT (FETCH_PF_SCRIPT_RET EQUAL 0))
+    message(FATAL_ERROR "Could not fetch pufferfish source [fetchPufferfish.sh returned exit code ${FETCH_PF_SCRIPT_RET}].")
   endif()
-  set(FETCHED_RAPMAP TRUE CACHE BOOL "Has RapMap been fetched?" FORCE)
+  set(FETCHED_PUFFERFISH TRUE CACHE BOOL "Has pufferfish been fetched?" FORCE)
 endif()
+
+
 
 ##
 # Super-secret override
@@ -294,6 +297,7 @@ endif()
 
 set(Boost_USE_MULTITHREADED ON)
 #set(Boost_USE_STATIC_RUNTIME OFF)
+set(Boost_USE_DEBUG_RUNTIME OFF)
 
 find_package(ZLIB)
 if(NOT ZLIB_FOUND)
@@ -310,6 +314,11 @@ if("${CMAKE_LIBRARY_PATH}" STREQUAL "")
   set(EXTRA_CMAKE_LIBRARY_FLAGS "")
 else()
   set(EXTRA_CMAKE_LIBRARY_FLAGS "-L${CMAKE_LIBRARY_PATH}")
+endif()
+
+find_package(Iconv REQUIRED)
+if(NOT Iconv_IS_BUILT_IN)
+  set(ICONV_LIB Iconv::Iconv)
 endif()
 
 find_package(LibLZMA)
@@ -350,7 +359,7 @@ if(NOT BZIP2_FOUND)
   message("=======================================")
 externalproject_add(libbz2
   DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-  DOWNLOAD_COMMAND curl -k -L http://www.bzip.org/1.0.6/bzip2-1.0.6.tar.gz -o bzip2-1.0.6.tar.gz &&
+  DOWNLOAD_COMMAND curl -k -L https://sourceware.org/pub/bzip2/bzip2-1.0.6.tar.gz -o bzip2-1.0.6.tar.gz &&
     ${SHASUM} a2848f34fcd5d6cf47def00461fcb528a0484d8edef8208d6d2e2909dc61d9cd bzip2-1.0.6.tar.gz &&
     tar -xzvf  bzip2-1.0.6.tar.gz
   #URL http://www.bzip.org/1.0.6/bzip2-1.0.6.tar.gz
@@ -376,11 +385,14 @@ endif()
 ##
 # Set the latest version and look for what we need
 ##
-set(Boost_ADDITIONAL_VERSIONS "1.59.0" "1.60.0" "1.61.0" "1.62" "1.63" "1.64" "1.65" "1.66")
+set(Boost_ADDITIONAL_VERSIONS "1.59.0" "1.60.0" "1.61.0" "1.62.0" "1.63.0" "1.64.0" "1.65.0" "1.66.0" "1.67.0" "1.68.0" "1.69.0" "1.70.0" "1.71.0")
+if (NOT BOOST_RECONFIGURE)
 find_package(Boost 1.59.0 COMPONENTS iostreams filesystem system timer chrono program_options)
 message("BOOST_INCLUDEDIR = ${BOOST_INCLUDEDIR}")
 message("BOOST_LIBRARYDIR = ${BOOST_LIBRARYDIR}")
 message("Boost_FOUND = ${Boost_FOUND}")
+endif()
+
 include(ExternalProject)
 
 ##
@@ -397,7 +409,9 @@ if(BOOST_RECONFIGURE)
   unset(Boost_LIBRARIES CACHE)
   unset(BOOST_ROOT CACHE)
   unset(CMAKE_PREFIX_PATH CACHE)
-
+  unset(Boost::diagnostic_definitions CACHE)
+  unset(Boost::disable_autolinking CACHE)
+  unset(Boost::dynamic_linking CACHE)
   set(BOOST_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
   set(CMAKE_PREFIX_PATH ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
   set(Boost_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
@@ -420,6 +434,10 @@ if((NOT Boost_FOUND) AND (NOT FETCH_BOOST))
     "To fetch and build boost locally, call cmake with -DFETCH_BOOST=TRUE"
   )
 elseif(FETCH_BOOST)
+  if(NOT DEFINED BOOST_BUILD_THREADS)
+    set(BOOST_BUILD_THREADS 2)
+  endif()
+
   ## Let the rest of the build process know we're going to be fetching boost
   set(BOOST_LIB_SUBSET --with-iostreams --with-atomic --with-chrono --with-container --with-date_time --with-exception
     --with-filesystem --with-graph --with-graph_parallel --with-math
@@ -431,19 +449,19 @@ elseif(FETCH_BOOST)
   message("==================================================================")
   externalproject_add(libboost
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L  http://downloads.sourceforge.net/project/boost/boost/1.66.0/boost_1_66_0.tar.gz -o boost_1_66_0.tar.gz &&
-      ${SHASUM} bd0df411efd9a585e5a2212275f8762079fed8842264954675a4fddc46cfcf60 boost_1_66_0.tar.gz &&
-      tar xzf boost_1_66_0.tar.gz
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_66_0
+    DOWNLOAD_COMMAND curl -k -L https://dl.bintray.com/boostorg/release/1.71.0/source/boost_1_71_0.tar.gz -o boost_1_71_0.tar.gz &&
+      ${SHASUM} 96b34f7468f26a141f6020efb813f1a2f3dfb9797ecf76a7d7cbd843cc95f5bd boost_1_71_0.tar.gz &&
+      tar xzf boost_1_71_0.tar.gz
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_71_0
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     #PATCH_COMMAND patch -p2 < ${CMAKE_CURRENT_SOURCE_DIR}/external/boost156.patch
-    CONFIGURE_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_66_0/bootstrap.sh ${BOOST_CONFIGURE_TOOLSET} ${BOOST_BUILD_LIBS} --prefix=<INSTALL_DIR>
+    CONFIGURE_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_71_0/bootstrap.sh ${BOOST_CONFIGURE_TOOLSET} ${BOOST_BUILD_LIBS} --prefix=<INSTALL_DIR>
     add_custom_command(
-      OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_66_0/tools/build/src/user-config.jam
+      OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_71_0/tools/build/src/user-config.jam
       PRE_BUILD
       COMMAND echo "using gcc : ${CC_VERSION} : ${CMAKE_CXX_COMPILER} ;"
     )
-    BUILD_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_66_0/b2 -d0 -j2 ${BOOST_LIB_SUBSET} toolset=${BOOST_TOOLSET} ${BOOST_EXTRA_FLAGS} cxxflags=${BOOST_CXX_FLAGS} link=static install
+    BUILD_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_71_0/b2 -d0 -j${BOOST_BUILD_THREADS} ${BOOST_LIB_SUBSET} toolset=${BOOST_TOOLSET} ${BOOST_EXTRA_FLAGS} cxxflags=${BOOST_CXX_FLAGS} link=static install
       BUILD_IN_SOURCE 1
       INSTALL_COMMAND ""
   )
@@ -485,37 +503,37 @@ message("BOOST LIBRARIES = ${Boost_LIBRARIES}")
 
 set(EXTERNAL_LIBRARY_PATH $CMAKE_CURRENT_SOURCE_DIR/lib)
 
-find_package(libdivsufsort)
-if(NOT LIBDIVSUFSORT_FOUND)
-  message("Build system will build libdivsufsort")
-  message("==================================================================")
-  include(ExternalProject)
-  externalproject_add(libdivsufsort
-    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    URL ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort.zip
-    # Note: This zip comes from the fetched rapmap.zip, whose SHA we check
-    # so we souldn't need to check this one separately.
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master
-    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
-    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master/build
-    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DBUILD_DIVSUFSORT64=TRUE -DUSE_OPENMP=TRUE -DBUILD_SHARED_LIBS=FALSE
-  )
-  externalproject_add_step(libdivsufsort makedir
-    COMMAND mkdir -p <SOURCE_DIR>/build
-    COMMENT "Make build directory"
-    DEPENDEES download
-    DEPENDERS configure)
-
-  set(SUFFARRAY_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
-  set(FETCHED_LIBDIVSUFSORT TRUE)
-else()
-  message("SUFFARRAY_LIB = ${SUFFARRAY_LIBRARY}")
-  set(SUFFARRAY_LIB ${SUFFARRAY_LIBRARY})
-  message("SUFFARRAY_LIB64 = ${SUFFARRAY_LIBRARY64}")
-  set(SUFFARRAY_LIB64 ${SUFFARRAY_LIBRARY64})
-  set(SUFFARRAY_INCLUDE_DIRS ${SUFFARRAY_INCLUDE_DIR})
-endif()
+#find_package(libdivsufsort)
+#if(NOT LIBDIVSUFSORT_FOUND)
+#  message("Build system will build libdivsufsort")
+#  message("==================================================================")
+#  include(ExternalProject)
+#  externalproject_add(libdivsufsort
+#    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+#    URL ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort.zip
+#    # Note: This zip comes from the fetched rapmap.zip, whose SHA we check
+#    # so we souldn't need to check this one separately.
+#    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master
+#    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
+#    #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
+#    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master/build
+#    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DBUILD_DIVSUFSORT64=TRUE -DUSE_OPENMP=TRUE -DBUILD_SHARED_LIBS=FALSE
+#  )
+#  externalproject_add_step(libdivsufsort makedir
+#    COMMAND mkdir -p <SOURCE_DIR>/build
+#    COMMENT "Make build directory"
+#    DEPENDEES download
+#    DEPENDERS configure)
+#
+#  set(SUFFARRAY_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
+#  set(FETCHED_LIBDIVSUFSORT TRUE)
+#else()
+#  message("SUFFARRAY_LIB = ${SUFFARRAY_LIBRARY}")
+#  set(SUFFARRAY_LIB ${SUFFARRAY_LIBRARY})
+#  message("SUFFARRAY_LIB64 = ${SUFFARRAY_LIBRARY64}")
+#  set(SUFFARRAY_LIB64 ${SUFFARRAY_LIBRARY64})
+#  set(SUFFARRAY_INCLUDE_DIRS ${SUFFARRAY_INCLUDE_DIR})
+#endif()
 
 
 find_package(Cereal)
@@ -555,12 +573,23 @@ endif()
 ## Try and find TBB first
 find_package(TBB 2018.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy)
 
+if (${TBB_FOUND})
+  if (${TBB_VERSION} VERSION_GREATER_EQUAL 2018.0)
+  message("FOUND SUITABLE TBB VERSION : ${TBB_VERSION}")
+  set(TBB_TARGET_EXISTED TRUE)
+  else()
+    set(TBB_TARGET_EXISTED FALSE)
+  endif()
+else()
+  set(TBB_TARGET_EXISTED FALSE)
+endif()
+
 ##
 #
 # Fetch and build Intel's Threading Building Blocks library.
 #
 ##
-if((NOT TBB_FOUND) OR (TBB_FOUND AND (TBB_VERSION VERSION_LESS 2018.0)))
+if(NOT ${TBB_TARGET_EXISTED})
 
 set(TBB_WILL_RECONFIGURE TRUE)
 # Set the appropriate compiler
@@ -573,7 +602,7 @@ endif()
 message("Build system will fetch and build Intel Threading Building Blocks")
 message("==================================================================")
 # These are useful for the custom install step we'll do later
-set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2018_U3)
+set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2019_U8)
 set(TBB_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
 
 if("${TBB_COMPILER}" STREQUAL "gcc")
@@ -586,16 +615,10 @@ set(TBB_CXXFLAGS "${TBB_CXXFLAGS} ${CXXSTDFLAG}")
 
 externalproject_add(libtbb
   DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-  DOWNLOAD_COMMAND curl -k -L https://github.com/01org/tbb/archive/2018_U3.tar.gz -o tbb-2018_U3.tgz &&
-    ${SHASUM} 23793c8645480148e9559df96b386b780f92194c80120acce79fcdaae0d81f45 tbb-2018_U3.tgz &&
-    tar -xzvf tbb-2018_U3.tgz
-  ##
-  #URL https://github.com/01org/tbb/archive/2018_U3.tar.gz
-  #DOWNLOAD_NAME 2018_U3.tar.gz
-  #URL_HASH SHA1=d6cf16a42ece60aad6a722b369e1a2aa753347b4
-  #TLS_VERIFY FALSE
-  ##
-  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2018_U3
+  DOWNLOAD_COMMAND curl -k -L https://github.com/intel/tbb/archive/2019_U8.tar.gz -o tbb-2019_U8.tgz &&
+    ${SHASUM} 7b1fd8caea14be72ae4175896510bf99c809cd7031306a1917565e6de7382fba tbb-2019_U8.tgz &&
+    tar -xzvf tbb-2019_U8.tgz
+  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2019_U8
   INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
   PATCH_COMMAND "${TBB_PATCH_STEP}"
   CONFIGURE_COMMAND ""
@@ -603,6 +626,9 @@ externalproject_add(libtbb
   INSTALL_COMMAND sh -c "mkdir -p ${TBB_INSTALL_DIR}/include && mkdir -p ${TBB_INSTALL_DIR}/lib && cp ${TBB_SOURCE_DIR}/build/LIBS_release/*.${SHARED_LIB_EXTENSION}* ${TBB_INSTALL_DIR}/lib && cp -r ${TBB_SOURCE_DIR}/include/* ${TBB_INSTALL_DIR}/include"
   BUILD_IN_SOURCE 1
 )
+
+
+
 
 set(RECONFIG_FLAGS ${RECONFIG_FLAGS} -DTBB_WILL_RECONFIGURE=FALSE -DTBB_RECONFIGURE=TRUE)
 externalproject_add_step(libtbb reconfigure
@@ -621,12 +647,18 @@ endif()
 # so that CMake won't complain
 ##
 if(TBB_WILL_RECONFIGURE)
-  set(TBB_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
-  set(TBB_LIBRARY_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib)
-  #set(TBB_LIBRARIES tbb tbbmalloc)
-  set(TBB_LIBRARIES ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib/libtbb.${SHARED_LIB_EXTENSION}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib/libtbbmalloc.${SHARED_LIB_EXTENSION}
-  )
+    set(TBB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
+    set(TBB_INCLUDE_DIRS ${TBB_INSTALL_DIR}/include)
+    set(TBB_INCLUDE_DIR ${TBB_INSTALL_DIR}/include)
+    set(TBB_LIBRARY_DIRS ${TBB_INSTALL_DIR}/lib)
+    set(TBB_LIBRARY ${TBB_INSTALL_DIR}/lib)
+    set(TBB_LIB_DIR ${TBB_INSTALL_DIR}/lib)
+    #set(TBB_LIBRARIES tbb tbbmalloc)
+    set(TBB_LIBRARIES ${TBB_INSTALL_DIR}/lib/libtbb.${SHARED_LIB_EXTENSION}
+    			${TBB_INSTALL_DIR}/lib/libtbbmalloc.${SHARED_LIB_EXTENSION}
+	   )
+    message("TBB_INCLUDE_DIRS = ${TBB_INCLUDE_DIRS}")
+    message("TBB_LIBRARY_DIRS = ${TBB_LIBRARY_DIRS}")
 endif()
 
 ##
@@ -638,14 +670,31 @@ if(TBB_RECONFIGURE)
   unset(TBB_FOUND CACHE)
   unset(TBB_INSTALL_DIR CACHE)
   unset(CMAKE_PREFIX_PATH CACHE)
+  unset(TBB_INCLUDE_DIRS CACHE)
+  unset(TBB_INCLUDE_DIR CACHE)
+  unset(TBB_LIBRARY_DIRS CACHE)
+  unset(TBB_LIBRARY CACHE)
+  unset(TBB_LIBRARIES CACHE)
   set(CMAKE_PREFIX_PATH ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
   set(TBB_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
+  set(TBB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
+  set(TBB_INCLUDE_DIRS ${TBB_INSTALL_DIR}/include)
+  set(TBB_INCLUDE_DIR ${TBB_INSTALL_DIR}/include)
+  set(TBB_LIBRARY_DIRS ${TBB_INSTALL_DIR}/lib)
+  set(TBB_LIBRARY ${TBB_INSTALL_DIR}/lib)
+  set(TBB_LIB_DIR ${TBB_INSTALL_DIR}/lib)
   message("TBB_INSTALL_DIR = ${TBB_INSTALL_DIR}")
-  find_package(TBB)
+  find_package(TBB 2018.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy)
+  message("[in TBB_RECONFIGURE] TBB_LIBRARIES = ${TBB_LIBRARIES}")
 endif()
 
-
 message("TBB_LIBRARIES = ${TBB_LIBRARIES}")
+#message("TBB_FOUND        ${TBB_FOUND}       ")
+#message("TBB_INSTALL_DIR  ${TBB_INSTALL_DIR}")
+#message("TBB_INCLUDE_DIRS ${TBB_INCLUDE_DIRS}")
+#message("TBB_INCLUDE_DIR  ${TBB_INCLUDE_DIR} ")
+#message("TBB_LIBRARY_DIRS ${TBB_LIBRARY_DIRS}")
+#message("TBB_LIBRARIES    ${TBB_LIBRARIES}   ")
 
 find_package(libgff)
 if(NOT LIBGFF_FOUND)
@@ -711,6 +760,9 @@ if (NOT LIBSTADENIO_FOUND)
     BUILD_IN_SOURCE 1
     INSTALL_COMMAND make install
   )
+  if(NOT LIBLZMA_FOUND)
+  	ExternalProject_Add_StepDependencies(libstadenio build liblzma)
+  endif()
 
   set(FETCHED_STADEN TRUE)
   set(STADEN_LIBRARIES "${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a")
@@ -725,12 +777,12 @@ if(Jemalloc_FOUND)
   ##
   # Don't be so stringent about the version yet
   ##
-  #if (NOT (${JEMALLOC_VERSION} VERSION_LESS 5.1.0))
+  #if (NOT (${JEMALLOC_VERSION} VERSION_LESS 5.2.1))
     message("Found Jemalloc library --- using this memory allocator")
     set(FAST_MALLOC_LIB ${JEMALLOC_LIBRARIES})
     set(HAVE_FAST_MALLOC TRUE)
   #else()
-  #  message("Fond Jemalloc version ${JEMALLOC_VERSION}, but require >= 5.1.0. Downloading newer version")
+  #  message("Fond Jemalloc version ${JEMALLOC_VERSION}, but require >= 5.2.1. Downloading newer version")
   #endif()
 endif()
 
@@ -745,14 +797,14 @@ if(NOT HAVE_FAST_MALLOC)
   message("==================================================================")
   externalproject_add(libjemalloc
       DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-      DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/jemalloc/archive/5.1.0.tar.gz -o jemalloc-5.1.0.tar.gz &&
-        ${SHASUM} ff28aef89df724bd7b6bd6fde8597695514e0e3404d1afad2f1eb8b55ef378d3  jemalloc-5.1.0.tar.gz &&
-        tar -xzf jemalloc-5.1.0.tar.gz
+      DOWNLOAD_COMMAND curl -k -L https://github.com/jemalloc/jemalloc/archive/5.2.1.tar.gz -o jemalloc-5.2.1.tar.gz &&
+        ${SHASUM} ed51b0b37098af4ca6ed31c22324635263f8ad6471889e0592a9c0dba9136aea jemalloc-5.2.1.tar.gz &&
+        tar -xzf jemalloc-5.2.1.tar.gz
 
-      SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-5.1.0
+      SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-5.2.1
       BUILD_IN_SOURCE TRUE
       INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-      CONFIGURE_COMMAND sh -c "${JEMALLOC_FLAGS} ./autogen.sh --disable-debug --prefix=<INSTALL_DIR>"
+      CONFIGURE_COMMAND sh -c "${JEMALLOC_FLAGS} ./autogen.sh --disable-debug ${MALLOC_STATIC_BUILD_FLAG} --prefix=<INSTALL_DIR>"
       INSTALL_COMMAND cp -r lib <INSTALL_DIR>/ && cp -r include <INSTALL_DIR>/
       )
 
@@ -799,8 +851,14 @@ set(CPACK_SOURCE_IGNORE_FILES
 
 message("CPACK_SOURCE_IGNORE_FILES = ${CPACK_SOURCE_IGNORE_FILES}")
 
-# Recurse into Salmon source directory
-add_subdirectory( src )
+# Recurse into pufferfish source directory 
+# and build the library 
+set(BUILD_PUFF_FOR_SALMON TRUE)
+add_subdirectory(external/pufferfish)
+
+# and then the main salmon source directory
+add_subdirectory(src)
+
 #add_dependencies(salmon RapMap)
 # build a CPack driven installer package
 include(CPack)

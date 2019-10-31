@@ -18,6 +18,7 @@ template <class protocolT>
 struct AlevinOpts {
   AlevinOpts(): numParsingThreads(1),
                 numConsumerThreads(2),
+                useVBEM{false},
                 initUniform{false}{}
 
   //IUPAC code for the cell-barcodes
@@ -48,12 +49,16 @@ struct AlevinOpts {
   uint32_t numThreads;
   //threshold for the frequency of the barcodes
   uint32_t freqThreshold;
+  // maximum allowable edit distance for UMI collapsing
+  uint32_t umiEditDistance;
   // sequences to trim from right in the read sequences
   uint32_t trimRight;
   //no downstream salmon quant
   bool noQuant;
   // don't run EM flag
   bool noEM;
+  // use vbem
+  bool useVBEM;
   // Avoid segfaults based on no whitelist mapping
   bool debug;
   // perform naive deduplication
@@ -84,6 +89,8 @@ struct AlevinOpts {
   boost::filesystem::path outputDirectory;
   // barcode white-list File path
   boost::filesystem::path whitelistFile;
+  // alevin matrix eds file with vbem Priors
+  boost::filesystem::path vbemPriorFile;
   // barcode mitochondrial genes File path
   boost::filesystem::path mRnaFile;
   // barcode ribosomal gene File path
@@ -106,10 +113,11 @@ struct AlevinOpts {
   uint32_t totalLowConfidenceCBs;
   uint32_t numFeatures;
 
+  uint32_t eqReads;
   uint32_t noisyUmis;
   double mappingRate;
   double keepCBFraction;
-  uint32_t eqReads;
+  double vbemNorm;
 
   uint32_t totalDedupUMIs;
   uint32_t totalExpGenes;

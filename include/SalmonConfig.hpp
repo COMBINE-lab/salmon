@@ -1,6 +1,6 @@
 /**
 >HEADER
-    Copyright (c) 2014, 2015, 2016, 2017 Rob Patro robp@cs.stonybrook.edu
+    Copyright (c) 2014-2019 Rob Patro rob@cs.umd.edu
 
     This file is part of Salmon.
 
@@ -25,12 +25,12 @@
 #include <string>
 
 namespace salmon {
-constexpr char majorVersion[] = "0";
-constexpr char minorVersion[] = "14";
-constexpr char patchVersion[] = "1";
-constexpr char version[] = "0.14.1";
-constexpr uint32_t indexVersion = 4;
-constexpr char requiredQuasiIndexVersion[] = "q6";
+constexpr char majorVersion[] = "1";
+constexpr char minorVersion[] = "0";
+constexpr char patchVersion[] = "0";
+constexpr char version[] = "1.0.0";
+constexpr uint32_t indexVersion = 5;
+constexpr char requiredQuasiIndexVersion[] = "p7";
 } // namespace salmon
 
 #endif // SALMON_CONFIG_HPP

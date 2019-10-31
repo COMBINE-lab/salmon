@@ -2,6 +2,7 @@
 #include <fstream>
 #include <numeric>
 
+#include "parallel_hashmap/phmap.h"
 #include "cereal/archives/json.hpp"
 
 #include "AlignmentLibrary.hpp"
@@ -12,6 +13,7 @@
 #include "ReadPair.hpp"
 #include "SalmonOpts.hpp"
 #include "UnpairedRead.hpp"
+#include "TranscriptGroup.hpp"
 #include "SingleCellProtocols.hpp"
 
 GZipWriter::GZipWriter(const boost::filesystem::path path,
@@ -134,42 +136,90 @@ bool GZipWriter::writeEquivCounts(const SalmonOpts& opts, ExpT& experiment) {
   std::ofstream equivFile(eqFilePath.string());
 
   auto& transcripts = experiment.transcripts();
-  auto& eqVec =
-      experiment.equivalenceClassBuilder().eqVec();
+  auto& eqBuilder = experiment.equivalenceClassBuilder();
+  auto& eqVec = eqBuilder.eqVec();
+  size_t numEqClasses = eqVec.size();
   bool dumpRichWeights = opts.dumpEqWeights;
+
+  // we need this scope, but will fill it in only if we need to
+  phmap::flat_hash_map<TranscriptGroup, uint64_t, TranscriptGroupHasher> collapsedMap;
+
+  if (!dumpRichWeights) {
+    // if we are using range-factorization, but don't want weights,
+    // collapse the equivalence classes into naive ones.
+    logger_->info("Collapsing factorization information into simplified equivalence classes.");
+
+    // if we are using range-factorization, but don't want weights,
+    // collapse the equivalence classes into naive ones.
+    collapsedMap.reserve(eqVec.size());
+    for (size_t eqIdx = 0; eqIdx < eqVec.size(); ++eqIdx) {
+      auto& eq = eqVec[eqIdx];
+      const TranscriptGroup& tgroup = eq.first;
+      const std::vector<uint32_t>& txps = tgroup.txps;
+      uint64_t count = eq.second.count;
+      const uint32_t groupSize = eqBuilder.getNumTranscriptsForClass(eqIdx);
+
+      // make a key from the IDs, and copy over to
+      std::vector<uint32_t> txpIDs(groupSize);
+      auto bit = txps.begin();
+      auto eit = txps.begin()+groupSize;
+      std::copy(bit, eit, txpIDs.begin());
+
+      TranscriptGroup key(txpIDs);
+      collapsedMap[key] += count;
+    }
+
+    numEqClasses = collapsedMap.size();
+    logger_->info("done.");
+  }
 
   // Number of transcripts
   equivFile << transcripts.size() << '\n';
 
   // Number of equivalence classes
-  equivFile << eqVec.size() << '\n';
+  equivFile << numEqClasses << '\n';
 
+  // Transcript names
   for (auto& t : transcripts) {
     equivFile << t.RefName << '\n';
   }
 
-  for (auto& eq : eqVec) {
-    uint64_t count = eq.second.count;
-    // for each transcript in this class
-    const TranscriptGroup& tgroup = eq.first;
-    const std::vector<uint32_t>& txps = tgroup.txps;
-    // group size
-    //uint32_t groupSize = eq.second.weights.size();
-    uint32_t groupSize = tgroup.txps.size();
+  // If we are dumping eq weights, then just go over what
+  // we have
+  if (dumpRichWeights) {
 
-    equivFile << groupSize << '\t';
-    // each group member
-    for (uint32_t i = 0; i < groupSize; i++) {
-      equivFile << txps[i] << '\t';
-    }
-    if (dumpRichWeights) {
+    for (size_t eqIdx = 0; eqIdx < eqVec.size(); ++eqIdx) {
+      auto& eq = eqVec[eqIdx];
+      uint64_t count = eq.second.count;
+      const TranscriptGroup& tgroup = eq.first;
+      const std::vector<uint32_t>& txps = tgroup.txps;
       const auto& auxs = eq.second.combinedWeights;
-      for (auto aux : auxs) {
-        equivFile << aux << '\t';
+      const uint32_t groupSize = eqBuilder.getNumTranscriptsForClass(eqIdx);
+
+      equivFile << groupSize << '\t';
+      for (uint32_t i = 0; i < groupSize; ++i) {
+        equivFile << txps[i] << '\t';
       }
+      for (uint32_t i = 0; i < groupSize; ++i) {
+        equivFile << auxs[i] << '\t';
+      }
+      equivFile << count << '\n';
     }
-    // count for this class
-    equivFile << count << '\n';
+  } else {
+    // Otherwise, go over the collapsed map with the simplified
+    // classes.
+
+    // dump the size, txp ids and count
+    for (auto&& kv : collapsedMap) {
+      auto& txps = kv.first.txps;
+      auto& count = kv.second;
+      const uint32_t groupSize = txps.size();
+      equivFile << groupSize << '\t';
+      for (uint32_t i = 0; i < groupSize; ++i) {
+        equivFile << txps[i] << '\t';
+      }
+      equivFile << count << '\n';
+    }
   }
 
   equivFile.close();
@@ -356,7 +406,7 @@ bool GZipWriter::writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
     // with weights.  In which case it contains the string "scalar_weights".
     std::vector<std::string> props;
 
-    bool isRangeFactorizationOn = opts.rangeFactorizationBins;
+    bool isRangeFactorizationOn = (opts.rangeFactorizationBins > 0);
     bool dumpRichWeights = opts.dumpEqWeights;
     if(isRangeFactorizationOn){
       props.push_back("range_factorized") ;
@@ -372,6 +422,8 @@ bool GZipWriter::writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
     oa(cereal::make_nvp("index_name_hash", experiment.getIndexNameHash256()));
     oa(cereal::make_nvp("index_seq_hash512", experiment.getIndexSeqHash512()));
     oa(cereal::make_nvp("index_name_hash512", experiment.getIndexNameHash512()));
+    oa(cereal::make_nvp("index_decoy_seq_hash", experiment.getIndexDecoySeqHash256()));
+    oa(cereal::make_nvp("index_decoy_name_hash", experiment.getIndexDecoyNameHash256()));
     oa(cereal::make_nvp("num_bootstraps", 0));
     oa(cereal::make_nvp("num_processed", experiment.numObservedFragments()));
     oa(cereal::make_nvp("num_mapped", experiment.numMappedFragments()));
@@ -723,6 +775,8 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
     oa(cereal::make_nvp("index_name_hash", experiment.getIndexNameHash256()));
     oa(cereal::make_nvp("index_seq_hash512", experiment.getIndexSeqHash512()));
     oa(cereal::make_nvp("index_name_hash512", experiment.getIndexNameHash512()));
+    oa(cereal::make_nvp("index_decoy_seq_hash", experiment.getIndexDecoySeqHash256()));
+    oa(cereal::make_nvp("index_decoy_name_hash", experiment.getIndexDecoyNameHash256()));
     oa(cereal::make_nvp("num_bootstraps", numSamples));
     oa(cereal::make_nvp("num_processed", experiment.numObservedFragments()));
     oa(cereal::make_nvp("num_mapped", experiment.numMappedFragments()));
@@ -879,8 +933,8 @@ bool GZipWriter::writeSparseBootstraps(std::string& bcName,
 
   std::vector<uint8_t> meanFlag, varFlag;
   std::vector<std::vector<uint8_t>> bootFlag;
-  meanFlag.reserve(static_cast<size_t>(std::ceil(num/8)));
-  varFlag.reserve(static_cast<size_t>(std::ceil(num/8)));
+  meanFlag.reserve(static_cast<size_t>(std::ceil(num/8.0)));
+  varFlag.reserve(static_cast<size_t>(std::ceil(num/8.0)));
   if (useAllBootstraps) { bootFlag.reserve(num); }
 
   size_t elSize = sizeof(decltype(meanSparse)::value_type);
@@ -1022,12 +1076,12 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
   std::vector<float> alphasSparse;
   alphasSparse.reserve(num/2);
   std::vector<uint8_t> alphasFlag;
-  alphasFlag.reserve(static_cast<size_t>(std::ceil(num/8)));
+  alphasFlag.reserve(static_cast<size_t>(std::ceil(num/8.0)));
 
   std::vector<uint8_t> tiersSparse;
   tiersSparse.reserve(num/2);
   std::vector<uint8_t> tiersFlag;
-  tiersFlag.reserve(static_cast<size_t>(std::ceil(num/8)));
+  tiersFlag.reserve(static_cast<size_t>(std::ceil(num/8.0)));
 
   size_t elSize = sizeof(decltype(alphasSparse)::value_type);
   size_t flagSize = sizeof(decltype(alphasFlag)::value_type);
@@ -1223,7 +1277,7 @@ bool GZipWriter::writeEmptyAbundances(const SalmonOpts& sopt, ExpT& readExp) {
 }
 
 template <typename ExpT>
-bool GZipWriter::writeAbundances(const SalmonOpts& sopt, ExpT& readExp) {
+bool GZipWriter::writeAbundances(const SalmonOpts& sopt, ExpT& readExp, bool explicitSum) {
 
   namespace bfs = boost::filesystem;
 
@@ -1238,11 +1292,19 @@ bool GZipWriter::writeAbundances(const SalmonOpts& sopt, ExpT& readExp) {
   std::unique_ptr<std::FILE, int (*)(std::FILE*)> output(
       std::fopen(fname.c_str(), "w"), std::fclose);
   auto* outputRaw = output.get();
+
   fmt::print(outputRaw, "Name\tLength\tEffectiveLength\tTPM\tNumReads\n");
-
-  double numMappedFrags = readExp.upperBoundHits();
-
   std::vector<Transcript>& transcripts_ = readExp.transcripts();
+
+  double numMappedFrags {0.0};
+  if ( explicitSum ) {
+    for (auto& transcript : transcripts_) {
+        numMappedFrags += transcript.sharedCount();
+    }
+  } else {
+    numMappedFrags = readExp.upperBoundHits();
+  }
+
   for (auto& transcript : transcripts_) {
     transcript.projectedCounts = useScaledCounts
                                      ? (transcript.mass(false) * numMappedFrags)
@@ -1410,14 +1472,15 @@ template bool GZipWriter::writeBFH<SCExpT>(boost::filesystem::path& outDir,
                                            std::vector<std::string>& bcSeqVec);
 
 template bool GZipWriter::writeAbundances<BulkExpT>(const SalmonOpts& sopt,
-                                            BulkExpT& readExp);
-template bool GZipWriter::writeAbundances<SCExpT>(const SalmonOpts& sopt,
-                                                          SCExpT& readExp);
+                                                    BulkExpT& readExp,
+                                                    bool explicitSum);
 
-template bool GZipWriter::writeAbundances<BulkAlignLibT<UnpairedRead>>(
-    const SalmonOpts& sopt, BulkAlignLibT<UnpairedRead>& readExp);
-template bool GZipWriter::writeAbundances<BulkAlignLibT<ReadPair>>(
-    const SalmonOpts& sopt, BulkAlignLibT<ReadPair>& readExp);
+template bool GZipWriter::writeAbundances<BulkAlignLibT<UnpairedRead>>(const SalmonOpts& sopt,
+                                                                       BulkAlignLibT<UnpairedRead>& readExp,
+                                                                       bool explicitSum);
+template bool GZipWriter::writeAbundances<BulkAlignLibT<ReadPair>>(const SalmonOpts& sopt,
+                                                                   BulkAlignLibT<ReadPair>& readExp,
+                                                                   bool explicitSum);
 
 template bool GZipWriter::writeEmptyAbundances<BulkExpT>(const SalmonOpts& sopt,
                                                  BulkExpT& readExp);
@@ -1500,6 +1563,10 @@ bool GZipWriter::writeEquivCounts<SCExpT, apt::CELSeq2>(
                                                         const AlevinOpts<apt::CELSeq2>& aopts,
                                                         SCExpT& readExp);
 template
+bool GZipWriter::writeEquivCounts<SCExpT, apt::QuartzSeq2>(
+                                                        const AlevinOpts<apt::QuartzSeq2>& aopts,
+                                                        SCExpT& readExp);
+template
 bool GZipWriter::writeEquivCounts<SCExpT, apt::Custom>(
                                                        const AlevinOpts<apt::Custom>& aopts,
                                                        SCExpT& readExp);
@@ -1521,6 +1588,9 @@ GZipWriter::writeMetaAlevin<apt::CELSeq>(const AlevinOpts<apt::CELSeq>& opts,
 template bool
 GZipWriter::writeMetaAlevin<apt::CELSeq2>(const AlevinOpts<apt::CELSeq2>& opts,
                                           boost::filesystem::path aux_dir);
+template bool
+GZipWriter::writeMetaAlevin<apt::QuartzSeq2>(const AlevinOpts<apt::QuartzSeq2>& opts,
+                                             boost::filesystem::path aux_dir);
 template bool
 GZipWriter::writeMetaAlevin<apt::Custom>(const AlevinOpts<apt::Custom>& opts,
                                          boost::filesystem::path aux_dir);

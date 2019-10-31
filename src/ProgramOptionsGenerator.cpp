@@ -84,10 +84,15 @@ namespace salmon {
        "to consider orphan mappings if no valid paired mappings exist.  This "
        "flag is independent of the option to "
        "write the orphaned mappings to file (--writeOrphanLinks).")
+      ("noSA",
+       po::bool_switch(&(sopt.disableSA))->default_value(salmon::defaults::disableSA),
+       "[Quasi-mapping mode only] : Disable selective-alignment in favor of basic quasi-mapping. "
+       "If this flag is passed, selective-alignment and alignment scoring of reads will be disabled."
+       )
       ("validateMappings",
        po::bool_switch(&(sopt.validateMappings))->default_value(salmon::defaults::validateMappings),
        "[Quasi-mapping mode only] : Validate mappings using alignment-based verifcation. "
-       "If this flag is passed, quasi-mappings will be validated to ensure that they could give "
+       "If this flag is passed, mappings will be validated to ensure that they could give "
        "rise to a reasonable alignment before they are further used for quantification.")
       ("consensusSlack",
        po::value<float>(&(sopt.consensusSlack))->default_value(salmon::defaults::consensusSlack),
@@ -97,19 +102,17 @@ namespace salmon {
        "(100 * X)% of the hits before it is discounted as a mapping candidate.  The default value of this option "
        "is 0.2 if --validateMappings is given and 0 otherwise."
        )
+      ("scoreExp", 
+      po::value<double>(&sopt.scoreExp)->default_value(salmon::defaults::scoreExp),
+      "[Quasi-mapping mode (w / mapping validation) only] : The factor by which sub-optimal alignment scores are "
+      "downweighted to produce a probability.  If the best alignment score for the current read is S, and the score "
+      "for a particular alignment is w, then the probability will be computed porportional to exp( - scoreExp * (S-w) )."
+      )
       ("minScoreFraction",
        po::value<double>(&sopt.minScoreFraction),
        "[Quasi-mapping mode (w / mapping validation) only] : The fraction of the optimal possible alignment score that a "
        "mapping must achieve in order to be considered \"valid\" --- should be in (0,1].\n"
        "Salmon Default 0.65 and Alevin Default 0.87"
-       )
-      ("maxMMPExtension",
-       po::value<int32_t>(&sopt.maxMMPExtension)->default_value(salmon::defaults::maxMMPExtension),
-       "[Quasi-mapping mode (w / mapping validation) only] : Sets the maximum allowable MMP extension when collecting "
-       "suffix array intervals to be used in chaining.  This prevents MMPs from becoming too long, and potentially masking "
-       "intervals that would uncover other good quasi-mappings for the read.  This heuristic mimics the idea of the "
-       "maximum mappable safe prefix (MMSP) in selective alignment.  Setting a smaller value will potentially allow "
-       "for more sensitive, but slower, mapping."
        )
       ("ma",
        po::value<int16_t>(&sopt.matchScore)->default_value(salmon::defaults::matchScore),
@@ -156,6 +159,22 @@ namespace salmon {
        "RSEM+Bowtie2.  This increases --minScoreFraction to 0.8, disallows dovetailing reads, "
        "discards orphans, and disallows gaps in alignments."
        )
+      ("softclipOverhangs", 
+       po::bool_switch(&(sopt.softclipOverhangs))->default_value(salmon::defaults::softclipOverhangs),
+       "[selective-alignment mode only] : Allow soft-clipping of reads that overhang the beginning or ends "
+       "of the transcript.  In this case, the overhaning section of the read will simply be unaligned, and "
+       "will not contribute or detract from the alignment score.  The default policy is to force an end-to-end "
+       "alignemnt of the entire read, so that overhanings will result in some deletion of nucleotides from the "
+       "read."
+       )
+      ("fullLengthAlignment", 
+       po::bool_switch(&(sopt.fullLengthAlignment))->default_value(salmon::defaults::fullLengthAlignment),
+       "[selective-alignment mode only] : Perform selective alignment over the full length of the read, beginning "
+       "from the (approximate) initial mapping location and using extension alignment.  This is in contrast with the "
+       "default behavior which is to only perform alignment between the MEMs in the optimal chain (and before the "
+       "first and after the last MEM if applicable).  The default strategy forces the MEMs to belong to the alignment, "
+       "but has the benefit that it can discover indels prior to the first hit shared between the read and reference."
+       )
       ("hardFilter",
        po::bool_switch(&(sopt.hardFilter))->default_value(salmon::defaults::hardFilter),
        "[Quasi-mapping mode (w / mapping validation) only] : Instead of weighting mappings by their alignment score, "
@@ -164,6 +183,7 @@ namespace salmon {
        "but this flag may be desirable if you want more accurate 'naive' equivalence classes, rather "
        "than range factorized equivalence classes."
        )
+      /*
       ("allowOrphansFMD",
        po::bool_switch(&(sopt.allowOrphans))->default_value(salmon::defaults::allowOrphansFMD),
        "[FMD-mapping mode only] : Consider orphaned reads as valid hits when "
@@ -172,6 +192,7 @@ namespace salmon {
        "more transcripts to be detected), but may decrease specificity as "
        "orphaned alignments are more likely "
        "to be spurious.")
+      */
       ("writeMappings,z", po::value<string>(&sopt.qmFileName)
        ->default_value(salmon::defaults::quasiMappingDefaultFile)
        ->implicit_value(salmon::defaults::quasiMappingImplicitFile),
@@ -180,18 +201,19 @@ namespace salmon {
        "format.  By default, output will be directed to "
        "stdout, but an alternative file name can be "
        "provided instead.")
+      /*
       ("consistentHits,c",
        po::bool_switch(&(sopt.consistentHits))->default_value(salmon::defaults::consistentHits),
        "Force hits gathered during "
        "quasi-mapping to be \"consistent\" (i.e. co-linear and "
        "approximately the right distance apart).")
+      */
       ("fasterMapping",
        po::bool_switch(&(sopt.fasterMapping))->default_value(salmon::defaults::fasterMapping),
        "[Developer]: Disables some extra checks during quasi-mapping. This "
-       "may make mapping a "
-       "little bit faster at the potential cost of returning too many "
-       "mappings (i.e. some sub-optimal mappings) "
-       "for certain reads.")
+       "may make mapping a little bit faster at the potential cost of "
+       "missing some difficult alignments.")
+      /*
       ("quasiCoverage,x",
        po::value<double>(&(sopt.quasiCoverage))->default_value(salmon::defaults::quasiCoverage),
        "[Experimental]: The fraction of the read that must be covered by "
@@ -202,7 +224,15 @@ namespace salmon {
        "31-mer can yield a mapping).  "
        "Since coverage by exact matching, large, MMPs is a rather strict "
        "condition, this value should likely "
-       "be set to something low, if used.");
+       "be set to something low, if used.")
+      */
+      ("hitFilterPolicy",
+       po::value<string>(&sopt.hitFilterPolicyStr)->default_value(salmon::defaults::hitFilterPolicyStr),
+       "Determines the policy by which hits are filtered in selective alignment.  Filtering hits after "
+       "chaining (the default) is more sensitive, but more computationally intensive, because it performs "
+       "the chaining dynamic program for all hits.  Filtering before chaining is faster, but some true hits "
+       "may be missed.  The options are BEFORE, AFTER, BOTH and NONE."
+       );
       return mapspec;
   }
 
@@ -241,9 +271,11 @@ namespace salmon {
        "considered toward quantification estimates.  The default behavior is "
        "to consider orphan alignments if no valid paired mappings exist.")
     ("libType,l", po::value<std::string>()->required(), "Format string describing the library type")
-    ("alignments,a", po::value<vector<string>>()->multitoken()->required(),
+    ("alignments,a", po::value<vector<string>>()->multitoken(),
      "input alignment (BAM) file(s).")
-    ("targets,t", po::value<std::string>()->required(),
+    ("eqclasses,e", po::value<string>(),
+     "input salmon weighted equivalence class file.")
+    ("targets,t", po::value<std::string>(),
      "FASTA format file containing target transcripts.");
 
     return alignin;
@@ -266,21 +298,11 @@ namespace salmon {
        "iupac,u",po::value<std::string>(),
        "<Deprecated>iupac code for cell-level barcodes.")
       (
-       "end",po::value<uint32_t>(),
-       "Cell-Barcodes end (5 or 3) location in the read sequence from where barcode has to"
-       "be extracted. (end, umiLength, barcodeLength)"
-       " should all be provided if using this option")
+       "vbemPrior", po::value<std::string>(),
+       "a mtx file containing VBEM priors")
       (
-       "umiLength",po::value<uint32_t>(),
-       "umi length Parameter for unknown protocol. (end, umiLength, barcodeLength)"
-       " should all be provided if using this option")
-      (
-       "barcodeLength",po::value<uint32_t>(),
-       "umi length Parameter for unknown protocol. (end, umiLength, barcodeLength)"
-       " should all be provided if using this option")
-      (
-       "noem",po::bool_switch()->default_value(alevin::defaults::noEM),
-       "do not run em")
+       "vbemNorm",po::value<double>()->default_value(alevin::defaults::vbemNorm),
+       "Variational Bayesian global normalization factor. Usually the total number of deduplicated UMIs.")
       (
        "trimRight",po::value<uint32_t>()->default_value(alevin::defaults::trimRight),
        "The number of bases to trim off the 5' (right) end of the read seequence.")
@@ -289,10 +311,7 @@ namespace salmon {
        "Run naive per equivalence class deduplication, generating only total number of UMIs")
       (
        "noDedup", po::bool_switch()->default_value(alevin::defaults::noDedup),
-       "Stops the pipeline after CB sequence correction and quasi-mapping reads.")
-      (
-       "freqThreshold", po::value<uint32_t>()->default_value(alevin::defaults::freqThreshold),
-       "threshold for the frequency of the barcodes");
+       "Stops the pipeline after CB sequence correction and quasi-mapping reads.");
     return alevindevs;
   }
 
@@ -330,6 +349,9 @@ namespace salmon {
        "celseq2", po::bool_switch()->default_value(alevin::defaults::isCELSeq2),
        "Use CEL-Seq2 Single Cell protocol for the library.")
       (
+       "quartzseq2", po::bool_switch()->default_value(alevin::defaults::isQuartzSeq2),
+       "Use Quartz-Seq2 v3.2 Single Cell protocol for the library assumes 15 length barcode and 8 length UMI.")
+      (
        "whitelist", po::value<std::string>(),
        "File containing white-list barcodes")
       (
@@ -355,6 +377,28 @@ namespace salmon {
        "keepCBFraction", po::value<double>()->default_value(alevin::defaults::keepCBFraction),
        "fraction of CB to keep, value must be in range (0,1], use 1 to quantify all CB."
        )
+      (
+       "end",po::value<uint32_t>(),
+       "Cell-Barcodes end (5 or 3) location in the read sequence from where barcode has to"
+       "be extracted. (end, umiLength, barcodeLength)"
+       " should all be provided if using this option")
+      (
+       "umiLength",po::value<uint32_t>(),
+       "umi length Parameter for unknown protocol. (end, umiLength, barcodeLength)"
+       " should all be provided if using this option")
+      (
+       "barcodeLength",po::value<uint32_t>(),
+       "umi length Parameter for unknown protocol. (end, umiLength, barcodeLength)"
+       " should all be provided if using this option")
+      (
+       "noem",po::bool_switch()->default_value(alevin::defaults::noEM),
+       "do not run em")
+      (
+       "freqThreshold", po::value<uint32_t>()->default_value(alevin::defaults::freqThreshold),
+       "threshold for the frequency of the barcodes")
+      (
+       "umiEditDistance", po::value<uint32_t>()->default_value(alevin::defaults::umiEditDistance),
+       "Maximum allowble edit distance to collapse UMIs, Expect delay in running time if != 1")
       (
        "dumpfq", po::bool_switch()->default_value(alevin::defaults::dumpFQ),
        "Dump barcode modified fastq file for downstream analysis by"
@@ -468,13 +512,16 @@ namespace salmon {
        "Skip performing the actual transcript quantification (including any Gibbs sampling or bootstrapping)."
        )
       ("dumpEq", po::bool_switch(&(sopt.dumpEq))->default_value(salmon::defaults::dumpEq),
-       "Dump the equivalence class counts "
-       "that were computed during quasi-mapping")
+       "Dump the simple equivalence class counts "
+       "that were computed during mapping or alignment.")
       ("dumpEqWeights,d",
        po::bool_switch(&(sopt.dumpEqWeights))->default_value(salmon::defaults::dumpEqWeights),
-       "Includes \"rich\" equivlance class weights in the output when "
-       "equivalence "
-       "class information is being dumped to file.")
+       "Dump conditional probabilities associated with transcripts when "
+       "equivalence class information is being dumped to file. Note, this will "
+       "dump the factorization that is actually used by salmon's offline phase "
+       "for inference.  If you are using range-factorized equivalence classes (the default) "
+       "then the same transcript set may appear multiple times with different associated "
+       "conditional probabilities.")
       ("minAssignedFrags",
        po::value<std::uint64_t>(&(sopt.minRequiredFrags))->default_value(salmon::defaults::minAssignedFrags),
        "The minimum number of fragments that must be assigned to the "
@@ -499,10 +546,10 @@ namespace salmon {
        "The maximum fragment length to consider when building the empirical "
        "distribution")
       ("fldMean",
-       po::value<size_t>(&(sopt.fragLenDistPriorMean))->default_value(salmon::defaults::fragLenPriorMean),
+       po::value<double>(&(sopt.fragLenDistPriorMean))->default_value(salmon::defaults::fragLenPriorMean),
        "The mean used in the fragment length distribution prior")
       ("fldSD",
-       po::value<size_t>(&(sopt.fragLenDistPriorSD))->default_value(salmon::defaults::fragLenPriorSD),
+       po::value<double>(&(sopt.fragLenDistPriorSD))->default_value(salmon::defaults::fragLenPriorSD),
        "The standard deviation used in the fragment length distribution "
        "prior")
       ("forgettingFactor,f",
@@ -517,6 +564,9 @@ namespace salmon {
        po::bool_switch(&(sopt.initUniform))->default_value(salmon::defaults::initUniform),
        "initialize the offline inference with uniform parameters, rather "
        "than seeding with online parameters.")
+      ("maxOccsPerHit",
+       po::value<uint32_t>(&(sopt.maxOccsPerHit))->default_value(salmon::defaults::maxOccsPerHit),
+       "When collecting \"hits\" (MEMs), hits having more than maxOccsPerHit occurrences won't be considered.")
       ("maxReadOcc,w",
        po::value<uint32_t>(&(sopt.maxReadOccs))->default_value(salmon::defaults::maxReadOccs),
        "Reads \"mapping\" to more than this many places won't be "
@@ -540,6 +590,12 @@ namespace salmon {
        "from a transcript.  If this flag is passed in, the "
        "fragment length distribution is not taken "
        "into account when computing this probability.")
+      ("noSingleFragProb",
+       po::bool_switch(&(sopt.noSingleFragProb))->default_value(salmon::defaults::noSingleFragProb),
+       "Disables the estimation of an associated fragment length probability for single-end reads or for "
+       "orphaned mappings in paired-end libraries.  The default behavior is to consider the probability of "
+       "all possible fragment lengths associated with the retained mapping.  Enabling this flag (i.e. turning this "
+       "default behavior off) will simply not attempt to estimate a fragment length probability in such cases.")
       ("noFragLengthDist",
        po::bool_switch(&(sopt.noFragLengthDist))->default_value(salmon::defaults::noFragLengthDist),
        "[experimental] : "
@@ -593,10 +649,11 @@ namespace salmon {
        "the conditional probabilities with which fragments are generated "
        "from different transcripts.  This is a more "
        "fine-grained factorization than the normal rich equivalence "
-       "classes.  The default value (0) corresponds to "
-       "the standard rich equivalence classes, and larger values imply a "
-       "more fine-grained factorization.  If range factorization "
-       "is enabled, a common value to select for this parameter is 4.")
+       "classes.  The default value (4) corresponds to "
+       "the default used in Zakeri et al. 2017 (doi: 10.1093/bioinformatics/btx262), "
+       "and larger values imply a more fine-grained factorization.  If range factorization "
+       "is enabled, a common value to select for this parameter is 4. A value of "
+       "0 signifies the use of basic rich equivalence classes.")
       ("numGibbsSamples",
        po::value<uint32_t>(&(sopt.numGibbsSamples))->default_value(salmon::defaults::numGibbsSamples),
        "Number of Gibbs sampling rounds to "
@@ -629,14 +686,22 @@ namespace salmon {
        "be interpreted as a transcript-level prior (i.e. each transcript "
        "will "
        "be given a prior read count of this value)")
+      ("perNucleotidePrior", po::bool_switch(&(sopt.perNucleotidePrior))->default_value(salmon::defaults::perNucleotidePrior),
+       "The "
+       "prior (either the default or the argument provided via --vbPrior) "
+       "will "
+       "be interpreted as a nucleotide-level prior (i.e. each nucleotide "
+       "will "
+       "be given a prior read count of this value)")
       ("sigDigits", po::value<uint32_t>(&(sopt.sigDigits))->default_value(salmon::defaults::sigDigits),
        "The number of significant digits to write when outputting the EffectiveLength and NumReads columns")
       ("vbPrior", po::value<double>(&(sopt.vbPrior))->default_value(salmon::defaults::vbPrior),
        "The prior that will be used in the VBEM algorithm.  This is "
        "interpreted "
-       "as a per-nucleotide prior, unless the --perTranscriptPrior flag "
-       "is also given, in which case this is used as a transcript-level "
-       "prior")
+       "as a per-transcript prior, unless the --perNucleotidePrior flag "
+       "is also given.  If the --perNucleotidePrior flag is given, this is used as a nucleotide-level "
+       "prior.  If the default is used, it will be divided by 1000 before being used as a nucleotide-level "
+       "prior, i.e. the default per-nucleotide prior will be 1e-5.")
       ("writeOrphanLinks",
        po::bool_switch(&(sopt.writeOrphanLinks))->default_value(salmon::defaults::writeOrphanLinks),
        "Write the transcripts that are linked by orphaned reads.")

@@ -83,6 +83,13 @@ namespace alevin {
       return true;
     }
     template <>
+    bool extractUMI<apt::QuartzSeq2>(std::string& read,
+                                     apt::QuartzSeq2& pt,
+                                     std::string& umi){
+      umi = read.substr(0, pt.umiLength);
+      return true;
+    }
+    template <>
     bool extractUMI<apt::CELSeq>(std::string& read,
                                  apt::CELSeq& pt,
                                  std::string& umi){
@@ -144,6 +151,13 @@ namespace alevin {
     template <>
     nonstd::optional<std::string> extractBarcode<apt::CELSeq2>(std::string& read,
                                                                apt::CELSeq2& pt){
+      return (read.length() >= (pt.umiLength + pt.barcodeLength)) ?
+        nonstd::optional<std::string>(read.substr(pt.umiLength, pt.barcodeLength)) : nonstd::nullopt;
+
+    }
+    template <>
+    nonstd::optional<std::string> extractBarcode<apt::QuartzSeq2>(std::string& read,
+                                                                  apt::QuartzSeq2& pt){
       return (read.length() >= (pt.umiLength + pt.barcodeLength)) ?
         nonstd::optional<std::string>(read.substr(pt.umiLength, pt.barcodeLength)) : nonstd::nullopt;
 
@@ -254,79 +268,82 @@ namespace alevin {
                          spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                          const std::string& t2gFileName,
                          const std::string& refNamesFile,
+                         const std::string& refLengthFile,
                          const std::string& headerFile,
                          std::shared_ptr<spdlog::logger>& jointLog){
-      size_t numDupTxps;
+      size_t  kSize, numDupTxps{0};
       uint64_t numberOfDecoys, firstDecoyIndex;
-      spp::sparse_hash_map<std::string, uint32_t> txpIdxMap;
+      spp::sparse_hash_map<std::string, std::vector<uint32_t>> txpIdxMap;
       // reading in the binary file
+      std::vector<std::string> txpNames;
       {
-        jointLog->info("Loading Header");
-        {
-          IndexHeader h;
-          std::ifstream indexStream(headerFile);
-          {
-            cereal::JSONInputArchive ar(indexStream);
-            ar(h);
-          }
-          indexStream.close();
-
-          if (h.version() != salmon::requiredQuasiIndexVersion) {
-            jointLog->critical(
-                               "I found a quasi-index with version {}, but I require {}. "
-                               "Please re-index the reference.",
-                               h.version(), salmon::requiredQuasiIndexVersion);
-            std::exit(1);
-          }
-          if (h.indexType() != IndexType::QUASI) {
-            jointLog->critical("The index {} does not appear to be of the "
-                               "appropriate type (quasi)",
-                               headerFile);
-            std::exit(1);
-          }
-        }
-
-        jointLog->info("Loading Transcript Info ");
-        std::ifstream seqStream(refNamesFile);
-        cereal::BinaryInputArchive seqArchive(seqStream);
-
-        std::vector<std::string> txpNames;
-        seqArchive(txpNames);
-        seqArchive(numberOfDecoys);
-        seqArchive(firstDecoyIndex);
-
-        if ( numberOfDecoys>0 && (txpNames.size()-numberOfDecoys != firstDecoyIndex) ) {
-          jointLog->error("Error reading txpInfo and the number of decoys.\n"
-                          "Total Refs: {}\nDecoys: {} \nFirstIndex: {}",
-                          txpNames.size(), numberOfDecoys, firstDecoyIndex);
-          jointLog->flush();
-          exit(1);
-        }
-
-        for (size_t i=0; i<txpNames.size(); i++){
-          txpIdxMap[txpNames[i]] = i;
-        }
-        seqStream.close();
-        numDupTxps = txpNames.size() - txpIdxMap.size();
+        std::ifstream ctstream(refNamesFile);
+        cereal::BinaryInputArchive contigTableArchive(ctstream);
+        contigTableArchive(txpNames);
+        ctstream.close();
       }
 
-      if ( numDupTxps > 0){
-        jointLog->warn("Found {} transcripts with duplicate names",
-                      numDupTxps);
+      std::vector<uint32_t> txpLengths;
+      {
+        std::ifstream ctstream(refLengthFile);
+        cereal::BinaryInputArchive contigTableArchive(ctstream);
+        contigTableArchive(txpLengths);
+        ctstream.close();
       }
+
+      {
+        std::ifstream hstream(headerFile);
+        cereal::JSONInputArchive headerArchive(hstream);
+        headerArchive( cereal::make_nvp("num_decoys", numberOfDecoys) );
+        headerArchive( cereal::make_nvp("first_decoy_index", firstDecoyIndex) );
+        headerArchive( cereal::make_nvp("k", kSize) );
+        hstream.close();
+      }
+
+      size_t numShort {0};
+      {
+        // kk this is tricky.
+        // firstDecoyIndex is the index of the first decoy *after*
+        // removing short transcripts but the reported mappings are
+        // in full vector i.e. including small transcripts
+        size_t i {0};
+        if (numberOfDecoys > 0) {
+          while ( i-numShort < firstDecoyIndex ) {
+            if (txpLengths[i] <= kSize) { numShort += 1; }
+            txpIdxMap[txpNames[i]].emplace_back(i);
+            i += 1;
+          }
+        } else {
+          for (size_t i=0; i < txpNames.size(); i++) {
+            if (txpLengths[i] <= kSize) { numShort += 1; }
+            txpIdxMap[txpNames[i]].emplace_back(i);
+          } // end-for
+        } // end else
+      } // end block for populating txpIdxMap
+
+      for (auto it: txpIdxMap) {
+        size_t bucketLen = it.second.size();
+        if (bucketLen > 1) { numDupTxps += (bucketLen - 1); }
+      }
+
+      jointLog->info("Found {} transcripts(+{} decoys, +{} short and +{}"
+                     " duplicate names in the index)",
+                     txpNames.size() - numberOfDecoys - numShort - numDupTxps ,
+                     numberOfDecoys, numShort, numDupTxps);
 
       std::ifstream t2gFile(t2gFileName);
-      uint32_t tid, gid, geneCount{0};
+      uint32_t gid, geneCount{0};
+      std::vector<uint32_t> tids;
       std::string tStr, gStr;
       if(t2gFile.is_open()) {
         while( not t2gFile.eof() ) {
           t2gFile >> tStr >> gStr;
 
-          if(not txpIdxMap.contains(tStr)){
+          if(not txpIdxMap.contains(tStr)  ){
             continue;
           }
-          tid = txpIdxMap[tStr];
 
+          tids = txpIdxMap[tStr];
           if (geneIdxMap.contains(gStr)){
             gid = geneIdxMap[gStr];
           }
@@ -336,19 +353,33 @@ namespace alevin {
             geneCount++;
           }
 
-          txpToGeneMap[tid] = gid;
+          for (auto tid: tids) {
+            if (txpToGeneMap.find(tid) != txpToGeneMap.end() &&
+                txpToGeneMap[tid] != gid ) {
+              jointLog->warn("Dual txp to gene map for txp {}", txpNames[tid]);
+            }
+            txpToGeneMap[tid] = gid;
+          }
         }
         t2gFile.close();
       }
 
-      if(txpToGeneMap.size() + numberOfDecoys < txpIdxMap.size()){
-        jointLog->error( "ERROR: "
-                         "Txp to Gene Map not found for {}"
-                         " transcripts. Exiting",
-                         txpIdxMap.size() - txpToGeneMap.size()
-                         );
-        jointLog->flush();
-        exit(1);
+      jointLog->info( "Filled with {} txp to gene entries ", txpToGeneMap.size());
+      for ( auto it: txpIdxMap ) {
+        for (auto tid: it.second) {
+          if (tid < firstDecoyIndex + numShort &&
+              txpToGeneMap.find( tid ) == txpToGeneMap.end() ) {
+            jointLog->error( "ERROR: Can't find gene mapping for : {} w/ index {}",
+                             it.first, tid );
+            jointLog->error( "ERROR: "
+                             "Txp to Gene Map not found for {}"
+                             " transcripts. Exiting",
+                             txpIdxMap.size() - txpToGeneMap.size() - numberOfDecoys
+                             );
+            jointLog->flush();
+            exit(1);
+          }
+        }
       }
 
       jointLog->info("Found all transcripts to gene mappings");
@@ -364,6 +395,7 @@ namespace alevin {
       // mark in salmon options that we are running
       // in alevin mode
       sopt.alevinMode = true;
+      sopt.hardFilter = true;
       if (sopt.initUniform) { aopt.initUniform = true; }
 
       //Create outputDirectory
@@ -400,6 +432,23 @@ namespace alevin {
         if (!bfs::exists(aopt.whitelistFile)) {
           fmt::print(stderr,"\nWhitelist File {} does not exists\n Exiting Now",
                      aopt.whitelistFile.string());
+          return false;
+        }
+      }
+
+      if (vm.count("vbemPrior")){
+        aopt.vbemPriorFile = vm["vbemPrior"].as<std::string>();
+        aopt.useVBEM = true;
+
+        aopt.vbemNorm = vm["vbemNorm"].as<double>();
+        if (aopt.vbemNorm == 0.0) {
+          fmt::print(stderr,"\nVBEM Normalization Factor not provided");
+          return false;
+        }
+
+        if (!bfs::exists(aopt.vbemPriorFile)) {
+          fmt::print(stderr,"\nVBEM Prior File {} does not exists\n Exiting Now",
+                     aopt.vbemPriorFile.string());
           return false;
         }
       }
@@ -450,8 +499,16 @@ namespace alevin {
       aopt.lowRegionMinNumBarcodes = vm["lowRegionMinNumBarcodes"].as<uint32_t>();
       aopt.maxNumBarcodes = vm["maxNumBarcodes"].as<uint32_t>();
       aopt.freqThreshold = vm["freqThreshold"].as<uint32_t>();
+      aopt.umiEditDistance = vm["umiEditDistance"].as<uint32_t>();
       aopt.forceCells = vm["forceCells"].as<uint32_t>();
       aopt.expectCells = vm["expectCells"].as<uint32_t>();
+
+      if (aopt.umiEditDistance > 4 ) {
+        aopt.jointLog->error("Too high edit distance collapsing {}, expected <= 4",
+                             aopt.umiEditDistance);
+        return false;
+      }
+
       if(vm.count("iupac")){
         aopt.iupac = vm["iupac"].as<std::string>();
       }
@@ -596,6 +653,9 @@ namespace alevin {
 
       // enable validate mappings
       sopt.validateMappings = true;
+      // @k3yavi --- doing this for now as a result of our testing.
+      // let me know if you have any other thoughts.
+      sopt.hitFilterPolicyStr = "BEFORE";
       bool optionsOK =
         salmon::utils::processQuantOptions(sopt, vm, vm["numBiasSamples"].as<int32_t>());
       if (!vm.count("minScoreFraction")) {
@@ -626,6 +686,15 @@ namespace alevin {
                        //std::mutex& iomutex,
                        Sequence seqType){
       return (sequence.length() > 0) and (sequence.find_first_not_of("ACGTacgt") == std::string::npos);
+    }
+
+    bool recoverBarcode(std::string& sequence){
+      size_t pos = sequence.find_first_of("Nn");
+      if (pos == std::string::npos) { return false; }
+
+      // Randomly assigning 'A' to first base with 'N'
+      sequence[pos] = 'A';
+      return sequenceCheck(sequence);
     }
 
     bool checkSetCoverage(std::vector<std::vector<uint32_t>>& tgroup,
@@ -734,6 +803,10 @@ namespace alevin {
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::CELSeq2>& aopt,
+                           SalmonOpts& sopt,
+                           boost::program_options::variables_map& vm);
+    template
+    bool processAlevinOpts(AlevinOpts<apt::QuartzSeq2>& aopt,
                            SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
   }

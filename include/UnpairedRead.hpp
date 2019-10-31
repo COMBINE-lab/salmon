@@ -13,7 +13,8 @@ extern "C" {
 }
 
 #include "LibraryFormat.hpp"
-#include "RapMapUtils.hpp"
+//#include "RapMapUtils.hpp"
+#include "pufferfish/Util.hpp"
 #include "SalmonMath.hpp"
 #include "StadenUtils.hpp"
 
@@ -54,6 +55,8 @@ struct UnpairedRead {
 
   inline bam_seq_t* getRead1() { return read; }
   inline bam_seq_t* getRead2() { return read; }
+  inline int32_t readLen() { return bam_seq_len(getRead1()); }
+  inline int32_t mateLen() { return bam_seq_len(getRead2()); }
 
   inline LibraryFormat& libFormat() { return libFmt; }
   inline bool isPaired() const { return false; }
@@ -61,8 +64,8 @@ struct UnpairedRead {
   inline bool isRightOrphan() const { return false; }
   inline bam_seq_t* get5PrimeRead() { return read; }
 
-  inline rapmap::utils::MateStatus mateStatus() const {
-    return rapmap::utils::MateStatus::SINGLE_END;
+  inline pufferfish::util::MateStatus mateStatus() const {
+    return pufferfish::util::MateStatus::SINGLE_END;
   }
 
   inline int32_t pos() const { return left(); }

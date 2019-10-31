@@ -7,7 +7,7 @@ if (TAR_RESULT)
     message(FATAL_ERROR "Error untarring sample_data.tgz")
 endif()
 
-set(SALMON_QUASI_INDEX_CMD ${CMAKE_BINARY_DIR}/salmon index -t transcripts.fasta -i sample_salmon_quasi_index --type quasi)
+set(SALMON_QUASI_INDEX_CMD ${CMAKE_BINARY_DIR}/salmon index -t transcripts.fasta -i sample_salmon_quasi_index)
 execute_process(COMMAND ${SALMON_QUASI_INDEX_CMD}
                 WORKING_DIRECTORY ${TOPLEVEL_DIR}/sample_data
                 RESULT_VARIABLE SALMON_QUASI_INDEX_RESULT

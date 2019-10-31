@@ -38,6 +38,7 @@
 #include "spdlog/fmt/fmt.h"
 #include "spdlog/fmt/ostr.h"
 #include "spdlog/spdlog.h"
+#include "pufferfish/ProgOpts.hpp"
 
 // Cool way to do this from
 // http://stackoverflow.com/questions/108318/whats-the-simplest-way-to-test-whether-a-number-is-a-power-of-2-in-c
@@ -61,13 +62,15 @@ int salmonIndex(int argc, const char* argv[]) {
   bool gencodeRef{false};
   bool keepDuplicates{false};
 
+  pufferfish::IndexOptions idxOpt;
+
   po::options_description generic("Command Line Options");
   generic.add_options()("version,v", "print version string")(
       "help,h", "produce help message")("transcripts,t",
                                         po::value<string>()->required(),
                                         "Transcript fasta file.")(
       "kmerLen,k",
-      po::value<uint32_t>(&auxKmerLen)->default_value(31)->required(),
+      po::value<uint32_t>(&idxOpt.k)->default_value(31)->required(),
       "The size of k-mers that should be used for the quasi index.")(
       "index,i", po::value<string>()->required(), "salmon index.")(
       "gencode", po::bool_switch(&gencodeRef)->default_value(false),
@@ -77,28 +80,41 @@ int salmonIndex(int argc, const char* argv[]) {
       "will be used in the "
       "output and when looking for these transcripts in a gene to transcript "
       "GTF.")("keepDuplicates",
-              po::bool_switch(&keepDuplicates)->default_value(false),
+              po::bool_switch(&idxOpt.keep_duplicates)->default_value(false),
               "This flag will disable the default indexing behavior of "
               "discarding sequence-identical duplicate "
               "transcripts.  If this flag is passed, then duplicate "
               "transcripts that appear in the input will be "
               "retained and quantified separately.")(
       "threads,p",
-      po::value<uint32_t>(&numThreads)->default_value(2)->required(),
-      "Number of threads to use (only used for computing bias features)")(
-      "perfectHash", po::bool_switch(&perfectHash)->default_value(false),
-      "[quasi index only] Build the index using a perfect hash rather than a "
-      "dense hash.  This "
-      "will require less memory (especially during quantification), but will "
-      "take longer to construct")(
+      po::value<uint32_t>(&idxOpt.p)->default_value(2)->required(),
+      "Number of threads to use (only used for computing bias features)")
+	("filterSize,f",
+	po::value<int32_t>(&idxOpt.filt_size)->default_value(-1),
+       "The size of the Bloom filter that will be used by TwoPaCo during indexing. "
+	"The filter will be of size 2^{filterSize}. The default value of -1 means that "
+	"the filter size will be automatically set based on the number of distinct "
+	"k-mers in the input, as estimated by nthll.")(
+    "tmpdir",
+    po::value<std::string>(&idxOpt.twopaco_tmp_dir)->default_value(""),
+    "The directory location that will be used for TwoPaCo temporary files; it "
+    "will be created if need be and be removed prior to indexing completion. The "
+    "default value will cause a (temporary) subdirectory of the salmon index "
+    "directory to be used for this purpose."
+    )(
+      "sparse", po::bool_switch(&idxOpt.isSparse)->default_value(false),
+      "Build the index using a sparse sampling of k-mer positions "
+      "This will require less memory (especially during quantification), but will "
+      "take longer to construct and can slow down mapping / alignment")(
       "decoys,d",
-      po::value<string>(&decoyList),
-      "Treat these sequences as decoys that may have sequence homologous to some "
-      "known transcript"
+      po::value<string>(&idxOpt.decoy_file),
+      "Treat these sequences ids from the reference as the decoys that may have sequence "
+      "homologous to some known transcript. for example in case of Genome, provide a list "
+      " of chromosome name --- one per line"
       )(
       "type",
-      po::value<string>(&indexTypeStr)->default_value("quasi")->required(),
-      "The type of index to build; the only option is \"quasi\" in this version of salmon.");
+      po::value<string>(&indexTypeStr)->default_value("puff")->required(),
+      "The type of index to build; the only option is \"puff\" in this version of salmon.");
 
   po::variables_map vm;
   int ret = 0;
@@ -123,14 +139,19 @@ Creates a salmon index.
       errWriter << "Error: FMD indexing is not supported in this version of salmon.";
       throw(std::logic_error(errWriter.str()));
     }
-    if (indexTypeStr != "quasi") {
+    if (indexTypeStr == "quasi") {
       fmt::MemoryWriter errWriter;
-      errWriter << "Error: If explicitly provided, the index type must be \"quasi\"."
+      errWriter << "Error: RapMap-based indexing is not supported in this version of salmon.";
+      throw(std::logic_error(errWriter.str()));
+    }
+    if (indexTypeStr != "puff") {
+      fmt::MemoryWriter errWriter;
+      errWriter << "Error: If explicitly provided, the index type must be \"puff\"."
                 << "You passed [" << indexTypeStr << "], but this is not supported.";
       throw(std::logic_error(errWriter.str()));
     }
 
-    bool useQuasi = (indexTypeStr == "quasi");
+    bool usePuff = (indexTypeStr == "puff");
     string transcriptFile = vm["transcripts"].as<string>();
     bfs::path indexDirectory(vm["index"].as<string>());
 
@@ -171,64 +192,31 @@ Creates a salmon index.
     auto fileLog = spdlog::create("fLog", {fileSink});
     auto jointLog = spdlog::create("jLog", {fileSink, consoleSink});
 
-    std::vector<std::string> transcriptFiles = {transcriptFile};
+    idxOpt.rfile = {transcriptFile};
     fmt::MemoryWriter infostr;
-
-    bfs::path outputPrefix;
-    std::unique_ptr<std::vector<std::string>> argVec(new std::vector<std::string>);
-    fmt::MemoryWriter optWriter;
 
     std::unique_ptr<SalmonIndex> sidx = nullptr;
     // Build a quasi-mapping index
-    if (useQuasi) {
-      outputPrefix = indexDirectory;
-      argVec->push_back("dummy");
-      argVec->push_back("-k");
-
-      if (auxKmerLen == 0) {
+    if (usePuff) {
+      idxOpt.outdir = indexDirectory.string();
+      if (idxOpt.k == 0) {
         jointLog->info(
-            "You cannot have a k-mer length of 0 with the quasi-index.");
+            "You cannot have a k-mer length of 0 with the pufferfish index.");
         jointLog->info("Setting to the default value of 31.");
-        auxKmerLen = 31;
+        idxOpt.k = 31;
       }
 
-      optWriter << auxKmerLen;
-      argVec->push_back(optWriter.str());
-      optWriter.clear();
-
-      argVec->push_back("-t");
-      argVec->push_back(transcriptFile);
-      argVec->push_back("-i");
-      argVec->push_back(outputPrefix.string());
-
-      argVec->push_back("-x");
-      optWriter << numThreads;
-      argVec->push_back(optWriter.str());
-      optWriter.clear();
-
-      if (perfectHash) {
-        argVec->push_back("--perfectHash");
-      }
       if (gencodeRef) {
-        argVec->push_back("-s");
-        argVec->push_back("\"|\"");
+        idxOpt.header_sep = "|";
       }
-      if (keepDuplicates) {
-        argVec->push_back("--keepDuplicates");
-      }
-      if (haveDecoys) {
-        argVec->push_back("--decoys");
-        argVec->push_back(decoyList);
-      }
-
-      sidx.reset(new SalmonIndex(jointLog, SalmonIndexType::QUASI));
+      sidx.reset(new SalmonIndex(jointLog, SalmonIndexType::PUFF));
     } else {
-      jointLog->error("This version of salmon does not support FMD indexing.");
+      jointLog->error("This version of salmon does not support FMD or RapMap-based indexing.");
       return 1;
     }
 
     jointLog->info("building index");
-    sidx->build(indexDirectory, *(argVec.get()), auxKmerLen);
+    sidx->build(indexDirectory, idxOpt);
     jointLog->info("done building index");
     // If we want to build the auxiliary k-mer index, do it here.
     /*

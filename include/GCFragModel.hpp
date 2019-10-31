@@ -34,12 +34,13 @@ struct GCDesc {
     return fragFrac == other.fragFrac and contextFrac == other.contextFrac;
   }
 
-  std::ostream& operator<<(std::ostream& os) {
-    os << "{ fragFrac : " << fragFrac << ", contextFrac : " << contextFrac << "}\n";
-    return os;
-  }
+  friend std::ostream& operator<<(std::ostream& os, const GCDesc& c);
 };
 
+inline std::ostream& operator<<(std::ostream& os, const GCDesc& c) {
+    os << "{ fragFrac : " << c.fragFrac << ", contextFrac : " << c.contextFrac << "}\n";
+    return os;
+}
 
 
 

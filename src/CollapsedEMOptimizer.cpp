@@ -764,7 +764,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
     txp.EffectiveLength = effLens(i);
 
     double uniqueCount = static_cast<double>(txp.uniqueCount() + 0.5);
-    auto wi = uniqueCount * 1e-3 * effLens(i);
+    auto wi = (sopt.initUniform) ? 100.0 : (uniqueCount * 1e-3 * effLens(i));
     alphasPrime[i] = wi;
     ++numActive;
     totalLen += effLens(i);
@@ -806,7 +806,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   // by the effective length term.
   tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(eqVec.size())),
-      [&eqVec, &effLens, noRichEq](const BlockedIndexRange& range) -> void {
+      [&eqVec, &effLens, noRichEq, &sopt](const BlockedIndexRange& range) -> void {
         // For each index in the equivalence class vector
         for (auto eqID : boost::irange(range.begin(), range.end())) {
           // The vector entry
@@ -835,8 +835,9 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
             auto probStartPos = 1.0 / el;
 
             // combined weight
-            v.combinedWeights.push_back(v.count * v.weights[i] * probStartPos);
-            wsum += v.combinedWeights.back();
+            double wt = sopt.eqClassMode ? v.weights[i] : v.count * v.weights[i] * probStartPos;
+            v.combinedWeights.push_back(wt);
+            wsum += wt;
           }
 
           double wnorm = 1.0 / wsum;
@@ -893,6 +894,12 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
       }
       updateEqClassWeights(eqVec, effLens);
       needBias = false;
+
+      if ( sopt.eqClassMode ) {
+        jointLog->error("Eqclass Mode should not be performing bias correction");
+        jointLog->flush();
+        exit(1);
+      }
     }
 
     if (useVBEM) {
@@ -906,6 +913,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
       	}
       }
       */
+
       EMUpdate_(eqVec, transcripts, priorAlphas, alphas, alphasPrime);
     }
 

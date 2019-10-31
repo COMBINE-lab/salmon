@@ -23,10 +23,9 @@ What is Salmon?
 
 Salmon is a **wicked**-fast program to produce a highly-accurate, transcript-level quantification estimates from 
 RNA-seq data.  Salmon achieves its accuracy and speed via a number of different innovations, including the 
-use of *quasi-mapping* (accurate but fast-to-compute proxies for traditional read alignments), and 
+use of *selective-alignment* (accurate but fast-to-compute proxies for traditional read alignments), and 
 massively-parallel stochastic collapsed variational inference.  The result is a versatile tool that fits nicely
-into many different pipelines.  For example, you can choose to make use of our *quasi-mapping* algorithm by providing Salmon with raw sequencing reads, or, if it is more convenient, you can provide Salmon with regular alignments (e.g. an **unsorted** BAM file produced with your favorite aligner), and it will use the same **wicked**-fast, state-of-the-art inference algorithm 
-to estimate transcript-level abundances for your experiment.
+into many different pipelines.  For example, you can choose to make use of our *selective-alignment* algorithm by providing Salmon with raw sequencing reads, or, if it is more convenient, you can provide Salmon with regular alignments (e.g. an **unsorted** BAM file with alignments to the transcriptome produced with your favorite aligner), and it will use the same **wicked**-fast, state-of-the-art inference algorithm to estimate transcript-level abundances for your experiment.
 
 Give salmon a try!  You can find the latest binary releases [here](https://github.com/COMBINE-lab/salmon/releases).
 

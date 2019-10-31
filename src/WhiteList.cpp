@@ -1,6 +1,7 @@
 #include "WhiteList.hpp"
 #include "tbb/task_scheduler_init.h"
 #include <cassert>
+#include <sstream>
 
 namespace alevin {
   namespace whitelist {
@@ -283,6 +284,11 @@ namespace alevin {
                                       CFreqMapT& freqCounter, bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::CELSeq2>& aopt,
+                                      std::vector<uint32_t>& umiCount,
+                                      std::vector<std::string>& trueBarcodes,
+                                      CFreqMapT& freqCounter, bool useRibo, bool useMito,
+                                      size_t numLowConfidentBarcode);
+    template bool performWhitelisting(AlevinOpts<alevin::protocols::QuartzSeq2>& aopt,
                                       std::vector<uint32_t>& umiCount,
                                       std::vector<std::string>& trueBarcodes,
                                       CFreqMapT& freqCounter, bool useRibo, bool useMito,

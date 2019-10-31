@@ -15,6 +15,7 @@
 #include "TranscriptGroup.hpp"
 #include "concurrentqueue.h"
 #include "cuckoohash_map.hh"
+#include "pufferfish/sparsepp/spp.h"
 
 struct EmptyBarcodeMapType {};
 using SparseBarcodeMapType = spp::sparse_hash_map<uint32_t, spp::sparse_hash_map<uint64_t, uint32_t>>;
@@ -206,6 +207,11 @@ public:
 
   inline void addGroup(TranscriptGroup&& g, std::vector<double>& weights);
 
+  inline void populateTargets(std::vector<std::vector<uint32_t>>& eqclasses,
+                              std::vector<std::vector<double>>& auxs_vals,
+                              std::vector<uint32_t>& eqclass_counts,
+                              std::vector<Transcript>& transcripts);
+
   cuckoohash_map<TranscriptGroup, TGValueType, TranscriptGroupHasher>& eqMap(){
     return countMap_;
   }
@@ -239,6 +245,28 @@ inline void EquivalenceClassBuilder<TGValue>::addGroup(TranscriptGroup&& g,
   };
   TGValue v(weights, 1);
   countMap_.upsert(g, upfn, v);
+}
+
+template <>
+inline void EquivalenceClassBuilder<TGValue>::populateTargets(
+                                      std::vector<std::vector<uint32_t>>& eqclasses,
+                                      std::vector<std::vector<double>>& auxs_vals,
+                                      std::vector<uint32_t>& eqclass_counts,
+                                      std::vector<Transcript>& transcripts) {
+  for (size_t i = 0; i < eqclass_counts.size(); ++i) {
+    uint32_t count = eqclass_counts[i];
+    auto& tids = eqclasses[i];
+
+    TGValue val(auxs_vals[i], count);
+    TranscriptGroup tgroup(tids);
+
+    countVec_.emplace_back(std::make_pair(std::move(tgroup), val));
+    for (uint32_t tid: tids) {
+      transcripts[tid].addTotalCount(count);
+    }
+
+    if ( tids.size() == 1 ) { transcripts[tids[0]].addUniqueCount(count); }
+  }
 }
 
 template <>

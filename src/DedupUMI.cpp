@@ -7,9 +7,8 @@ uint32_t getGeneId(spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap,
     return txpToGeneMap.at(tId);
   }
   else{
-    std::cerr << "Out of Range error for txp to gene Map: "
-              << '\n' << std::flush;
-    std::cerr << tId << "\t not found" << std::flush;
+    std::cerr << "\n\n\nOut of Range error for txp to gene Map: "
+              << tId << "\t not found" << std::flush;
     exit(74);
   }
 }
@@ -19,6 +18,7 @@ uint32_t getGeneId(spp::sparse_hash_map<uint32_t, uint32_t> &txpToGeneMap,
 void graphFromCell(std::vector<TGroupT>& txpGroups,
                    std::vector<UGroupT>& umiGroups,
                    alevin::graph::Graph& g,
+                   uint32_t umiEditDistance, uint32_t umiLength,
                    std::atomic<uint64_t>& totalUniEdgesCounts,
                    std::atomic<uint64_t>& totalBiEdgesCounts) {
   using namespace alevin::graph;
@@ -54,11 +54,13 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
       uint32_t v1 = alevin::graph::getVertexIndex(vertexIndexMap, node);
 
       for ( size_t uId_second=uId+1; uId_second<numUmis; uId_second++ ){
-        VertexT node_second (static_cast<uint32_t>(eqId), static_cast<uint32_t>(uId_second));
-        uint32_t v2 = alevin::graph::getVertexIndex(vertexIndexMap, node_second);
 
         //check if two UMI can be connected
-        EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umiSeqCounts[uId_second]);
+        EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umiSeqCounts[uId_second], umiEditDistance, umiLength );
+        if ( edge == EdgeType::NoEdge ) { continue; }
+
+        VertexT node_second (static_cast<uint32_t>(eqId), static_cast<uint32_t>(uId_second));
+        uint32_t v2 = alevin::graph::getVertexIndex(vertexIndexMap, node_second);
 
         switch ( edge ) {
         case EdgeType::BiDirected:
@@ -110,14 +112,14 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
           uint32_t v1 = alevin::graph::getVertexIndex(vertexIndexMap, node);
 
           for ( size_t uId_second=0; uId_second<num2Umis; uId_second++ ){
+            //check if two UMI can be connected
+            EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umi2SeqCounts[uId_second], umiEditDistance, umiLength );
             VertexT node_second (static_cast<uint32_t>(eq2Id), static_cast<uint32_t>(uId_second));
-            if ( node == node_second ) {
+            if ( node == node_second or edge == EdgeType::NoEdge ) {
               continue;
             }
-            uint32_t v2 = alevin::graph::getVertexIndex(vertexIndexMap, node_second);
 
-            //check if two UMI can be connected
-            EdgeType edge = alevin::graph::hasEdge( umiSeqCounts[uId], umi2SeqCounts[uId_second]);
+            uint32_t v2 = alevin::graph::getVertexIndex(vertexIndexMap, node_second);
 
             switch ( edge ) {
             case EdgeType::BiDirected:
@@ -152,7 +154,6 @@ void graphFromCell(std::vector<TGroupT>& txpGroups,
 void collapseVertices(uint32_t vertex,
                       alevin::graph::Graph& g,
                       std::vector<TGroupT>& txpGroups,
-                      uint32_t& chosenTxp,
                       std::vector<uint32_t>& largestMcc,
                       spp::sparse_hash_set<uint32_t>& processedSet) {
   uint32_t eqclassId = g.getEqclassId(vertex);
@@ -178,8 +179,8 @@ void collapseVertices(uint32_t vertex,
         }
 
         // extract transcripts from new vertex
-        eqclassId = g.getEqclassId( nextVertex );
-        for (uint32_t ntxp: txpGroups[eqclassId]) {
+        uint32_t neqclassId = g.getEqclassId( nextVertex );
+        for (uint32_t ntxp: txpGroups[neqclassId]) {
           if (ntxp == txp){
             bfsList.emplace_back(nextVertex);
             break;
@@ -190,7 +191,6 @@ void collapseVertices(uint32_t vertex,
 
     if (largestMcc.size() < currentMcc.size()) {
       largestMcc = currentMcc;
-      chosenTxp = txp;
     }
   } //end-for
 }
@@ -227,11 +227,10 @@ void getNumMolecules(alevin::graph::Graph& g,
       while ( vset.size() != 0 ){
         std::vector<uint32_t> bestMcc;
         for (uint32_t vertex: vset) {
-          uint32_t coveringTxp;
           std::vector<uint32_t> newMcc;
 
           collapseVertices(vertex, g, txpGroups,
-                           coveringTxp, newMcc,
+                           newMcc,
                            vset);
           //choose the longer collapse: Greedy
           if (bestMcc.size() < newMcc.size()) {
@@ -242,8 +241,8 @@ void getNumMolecules(alevin::graph::Graph& g,
         tsl::hopscotch_map<uint32_t, uint32_t> globalTxpCounts;
         for (size_t vId=0; vId<bestMcc.size(); vId++){
           uint32_t vertex = bestMcc[vId];
-          std::unordered_set<uint32_t> localTxps;
           uint32_t eqclassId = g.getEqclassId(vertex);
+
           for (uint32_t txp: txpGroups[eqclassId]){
             globalTxpCounts[txp] += 1;
           }
@@ -260,7 +259,7 @@ void getNumMolecules(alevin::graph::Graph& g,
 
         if( globalTxps.size() == 0 ) {
           std::cerr << "can't find a representative transcript for a molecule\n"
-                    << "Please report this on github";
+                    << "Please report this on github "; 
           exit(74);
         }
 
@@ -439,16 +438,19 @@ bool dedupClasses(std::vector<double>& geneAlphas,
                   std::vector<TGroupT>& txpGroups,
                   std::vector<UGroupT>& umiGroups,
                   std::vector<SalmonEqClass>& salmonEqclasses,
+                  uint32_t umiLength,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   std::vector<uint8_t>& tiers,
-                  GZipWriter& gzw, bool dumpUmiGraph,
-                  std::string& trueBarcodeStr,
+                  GZipWriter& gzw, uint32_t umiEditDistance,
+                  bool dumpUmiGraph, std::string& trueBarcodeStr,
                   spp::sparse_hash_map<uint16_t, uint32_t>& numMolHash,
                   std::atomic<uint64_t>& totalUniEdgesCounts,
                   std::atomic<uint64_t>& totalBiEdgesCounts){
   // make directed graph from eqclasses
   alevin::graph::Graph g;
   graphFromCell(txpGroups, umiGroups, g,
+                umiEditDistance,
+                umiLength,
                 totalUniEdgesCounts,
                 totalBiEdgesCounts);
 

@@ -41,7 +41,9 @@
 
 #include "SalmonConfig.hpp"
 #include "SalmonUtils.hpp"
-#include "IndexHeader.hpp"
+// #include "IndexHeader.hpp"
+
+#include "pufferfish/sparsepp/spp.h"
 
 namespace alevin{
   namespace utils{
@@ -63,6 +65,8 @@ namespace alevin{
                        //AlevinOpts<ProtocolT>& aopt,
                        //std::mutex& iomutex,
                        Sequence seq = Sequence::BARCODE);
+
+    bool recoverBarcode(std::string& sequence);
 
     template <typename ProtocolT>
     bool processAlevinOpts(AlevinOpts<ProtocolT>& aopt,
@@ -97,7 +101,8 @@ namespace alevin{
     void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                          spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                          const std::string& t2gFile, const std::string& refNamesFile,
-                           const std::string& headerFile,
+                         const std::string& refLengthFile,
+                         const std::string& headerFile,
                          std::shared_ptr<spdlog::logger>& jointLog);
 
     bool checkSetCoverage(std::vector<std::vector<uint32_t>>& tgroup,

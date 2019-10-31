@@ -158,8 +158,8 @@ for (auto& txp : transcripts_) {
 
     // Initialize the fragment length distribution
     size_t maxFragLen = salmonOpts.fragLenDistMax;
-    size_t meanFragLen = salmonOpts.fragLenDistPriorMean;
-    size_t fragLenStd = salmonOpts.fragLenDistPriorSD;
+    double meanFragLen = salmonOpts.fragLenDistPriorMean;
+    double fragLenStd = salmonOpts.fragLenDistPriorSD;
     size_t fragLenKernelN = 4;
     double fragLenKernelP = 0.5;
     flDist_.reset(new FragmentLengthDistribution(1.0, maxFragLen, meanFragLen,
@@ -204,12 +204,66 @@ for (auto& txp : transcripts_) {
     bq->start(nff, onlyProcessAmbiguousAlignments);
   }
 
+  AlignmentLibrary(std::vector<boost::filesystem::path>& alnFiles,
+                   LibraryFormat libFmt, SalmonOpts& salmonOpts,
+                   bool eqClassMode_, std::vector<std::string>& tnames,
+                   std::vector<double>& tefflens)
+      : alignmentFiles_(alnFiles),
+        libFmt_(libFmt), transcripts_(std::vector<Transcript>()),
+        fragStartDists_(5), posBiasFW_(5), posBiasRC_(5), posBiasExpectFW_(5),
+        posBiasExpectRC_(5), seqBiasModel_(1.0),
+        eqBuilder_(salmonOpts.jointLog, salmonOpts.maxHashResizeThreads), quantificationPasses_(0),
+        expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0),
+        expectedGC_(salmonOpts.numConditionalGCBins, salmonOpts.numFragGCBins,
+                    distribution_utils::DistributionSpace::LOG),
+        observedGC_(salmonOpts.numConditionalGCBins, salmonOpts.numFragGCBins,
+                    distribution_utils::DistributionSpace::LOG) {
+    namespace bfs = boost::filesystem;
+
+    // Make sure the alignment file exists.
+    for (auto& alignmentFile : alignmentFiles_) {
+      if (!bfs::exists(alignmentFile)) {
+        std::stringstream ss;
+        ss << "The provided eqClass file: " << alignmentFile
+           << " does not exist!\n";
+        throw std::invalid_argument(ss.str());
+      }
+    }
+
+    // The transcript file existed, so load up the transcripts
+    double alpha = 0.005;
+    for (size_t i = 0; i < tnames.size(); ++i) {
+      transcripts_.emplace_back(i, tnames[i].c_str(), tefflens[i], true, alpha);
+    }
+
+    // Initialize the fragment length distribution
+    size_t maxFragLen = salmonOpts.fragLenDistMax;
+    double meanFragLen = salmonOpts.fragLenDistPriorMean;
+    double fragLenStd = salmonOpts.fragLenDistPriorSD;
+    size_t fragLenKernelN = 4;
+    double fragLenKernelP = 0.5;
+    flDist_.reset(new FragmentLengthDistribution(1.0, maxFragLen, meanFragLen,
+                                                 fragLenStd, fragLenKernelN,
+                                                 fragLenKernelP, 1));
+
+    alnMod_.reset(new AlignmentModel(1.0, salmonOpts.numErrorBins));
+    alnMod_->setLogger(salmonOpts.jointLog);
+  }
+
   EQBuilderT& equivalenceClassBuilder() { return eqBuilder_; }
 
   std::string getIndexSeqHash256() const { return ""; }
   std::string getIndexNameHash256() const { return ""; }
   std::string getIndexSeqHash512() const { return ""; }
   std::string getIndexNameHash512() const { return ""; }
+  std::string getIndexDecoySeqHash256() const { return ""; }
+  std::string getIndexDecoyNameHash256() const { return ""; }
+
+  /**
+   * Return true if this read library is for paired-end reads and false
+   * otherwise.
+   */
+  bool isPairedEnd() { return (libFmt_.type == ReadType::PAIRED_END); }
 
   salmon::bam_utils::AlignerDetails getAlignerType() const { return aligner_; }
 

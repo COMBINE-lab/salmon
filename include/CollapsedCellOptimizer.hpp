@@ -26,13 +26,17 @@
 #include "Eigen/Dense"
 #include "concurrentqueue.h"
 
+#include <boost/math/special_functions/digamma.hpp>
+
+namespace bfs = boost::filesystem;
 using JqueueT = moodycamel::ConcurrentQueue<uint32_t>;
 using eqMapT = cuckoohash_map<TranscriptGroup, SCTGValue, TranscriptGroupHasher>;
 using tgrouplabelt = std::vector<uint32_t>;
 using tgroupweightvec = std::vector<double>;
-namespace bfs = boost::filesystem;
 using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 using EqMapT = cuckoohash_map<TranscriptGroup, SCTGValue, TranscriptGroupHasher>;
+
+constexpr double digammaMin = 1e-10;
 
 struct CellState {
   bool inActive;
@@ -56,25 +60,26 @@ public:
                 size_t numLowConfidentBarcode);
 };
 
-bool runPerCellEM(double& totalNumFrags,
-                  size_t numGenes,
+bool runPerCellEM(double& totalNumFrags, size_t numGenes,
                   CollapsedCellOptimizer::SerialVecType& alphas,
+                  const CollapsedCellOptimizer::SerialVecType& priorAlphas,
                   std::vector<SalmonEqClass>& salmonEqclasses,
                   std::shared_ptr<spdlog::logger>& jointlog,
-                  bool initUniform);
+                  bool initUniform, bool useVBEM);
 
 void optimizeCell(std::vector<std::string>& trueBarcodes,
+                  const std::vector<std::vector<double>>& priorAlphas,
                   std::atomic<uint32_t>& barcode,
-                  size_t totalCells, eqMapT& eqMap,
+                  size_t totalCells, uint32_t umiEditDistance, eqMapT& eqMap,
                   std::deque<std::pair<TranscriptGroup, uint32_t>>& orderedTgroup,
                   std::shared_ptr<spdlog::logger>& jointlog,
-                  bfs::path& outDir, std::vector<uint32_t>& umiCount,
+                  std::vector<uint32_t>& umiCount,
                   std::vector<CellState>& skippedCB,
-                  bool verbose, GZipWriter& gzw, size_t umiLength, bool noEM,
+                  bool verbose, GZipWriter& gzw, bool noEM, bool useVBEM,
                   bool quiet, tbb::atomic<double>& totalDedupCounts,
                   tbb::atomic<uint32_t>& totalExpGeneCounts,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                  uint32_t numGenes, uint32_t numBootstraps,
+                  uint32_t numGenes, uint32_t umiLength, uint32_t numBootstraps,
                   bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
                   bool initUniform, CFreqMapT& freqCounter,
                   spp::sparse_hash_set<uint32_t>& mRnaGenes,

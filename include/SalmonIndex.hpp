@@ -10,29 +10,23 @@
 #include "cereal/types/vector.hpp"
 #include "spdlog/spdlog.h"
 
-#include "BooMap.hpp"
-#include "FrugalBooMap.hpp"
-#include "IndexHeader.hpp"
-#include "RapMapSAIndex.hpp"
+#include "pufferfish/ProgOpts.hpp"
+#include "pufferfish/PufferfishIndex.hpp"
+#include "pufferfish/PufferfishSparseIndex.hpp"
+
 #include "SalmonConfig.hpp"
 #include "SalmonIndexVersionInfo.hpp"
 
 // declaration of quasi index function
-int rapMapSAIndex(int argc, char* argv[]);
-
-template <typename IndexT>
-using DenseHash =
-    spp::sparse_hash_map<uint64_t, rapmap::utils::SAInterval<IndexT>,
-                         rapmap::utils::KmerKeyHasher>;
-template <typename IndexT>
-using PerfectHash = FrugalBooMap<uint64_t, rapmap::utils::SAInterval<IndexT>>;
+int pufferfishIndex(pufferfish::IndexOptions& indexOpts);
 
 class SalmonIndex {
 public:
   SalmonIndex(std::shared_ptr<spdlog::logger>& logger,
               SalmonIndexType indexType)
       : loaded_(false), versionInfo_(0, false, 0, indexType), logger_(logger),
-        seqHash256_(""), nameHash256_(""), seqHash512_(""), nameHash512_("") {}
+        seqHash256_(""), nameHash256_(""), seqHash512_(""), nameHash512_(""),
+        decoySeqHash256_(""), decoyNameHash256_("") {}
 
   void load(const boost::filesystem::path& indexDir) {
     namespace bfs = boost::filesystem;
@@ -55,19 +49,29 @@ public:
       fmt::MemoryWriter infostr;
       infostr << "Error: This version of salmon does not support FMD indexing.";
       throw std::invalid_argument(infostr.str());
+    } else if (indexType == SalmonIndexType::QUASI) {
+      fmt::MemoryWriter infostr;
+      infostr << "Error: This version of salmon does not support indexing using the RapMap index.";
+      throw std::invalid_argument(infostr.str());
+    } else if (indexType == SalmonIndexType::PUFF) {
+      loadPuffIndex_(indexDir);
     } else {
-      loadQuasiIndex_(indexDir);
+      fmt::MemoryWriter infostr;
+      infostr << "Error: Unknown index type.";
+      throw std::invalid_argument(infostr.str());
     }
 
     loaded_ = true;
   }
 
-  bool build(boost::filesystem::path indexDir, std::vector<std::string>& argVec,
-             uint32_t k) {
+  bool build(boost::filesystem::path indexDir, pufferfish::IndexOptions& idxOpt) {
     namespace bfs = boost::filesystem;
     switch (versionInfo_.indexType()) {
     case SalmonIndexType::QUASI:
-      return buildQuasiIndex_(indexDir, argVec, k);
+      logger_->error("This version of salmon does not support a RapMap-based index.");
+      return false;
+    case SalmonIndexType::PUFF:
+      return buildPuffIndex_(indexDir, idxOpt);
     case SalmonIndexType::FMD:
       logger_->error("This version of salmon does not support FMD indexing.");
       return false;
@@ -77,90 +81,40 @@ public:
     }
   }
 
-  bool loaded() { return loaded_; }
+  bool loaded() const { return loaded_; }
+  bool isSparse() const { return sparse_; }
+  bool is64BitQuasi() const { return largeQuasi_; }
+  bool isPerfectHashQuasi() const { return perfectHashQuasi_; }
 
-  bool is64BitQuasi() { return largeQuasi_; }
-  bool isPerfectHashQuasi() { return perfectHashQuasi_; }
-
-  RapMapSAIndex<int32_t, DenseHash<int32_t>>* quasiIndex32() {
-    return quasiIndex32_.get();
-  }
-  RapMapSAIndex<int64_t, DenseHash<int64_t>>* quasiIndex64() {
-    return quasiIndex64_.get();
-  }
-
-  RapMapSAIndex<int32_t, PerfectHash<int32_t>>* quasiIndexPerfectHash32() {
-    return quasiIndexPerfectHash32_.get();
-  }
-  RapMapSAIndex<int64_t, PerfectHash<int64_t>>* quasiIndexPerfectHash64() {
-    return quasiIndexPerfectHash64_.get();
-  }
+  PufferfishIndex* puffIndex() { return pfi_.get(); }
+  PufferfishSparseIndex* puffSparseIndex() { return pfi_sparse_.get(); }
 
   SalmonIndexType indexType() { return versionInfo_.indexType(); }
-
-  const char* transcriptomeSeq() {
-    if (loaded_) {
-      if (is64BitQuasi()) {
-        return quasiIndex64_->seq.c_str();
-      } else {
-        return quasiIndex32_->seq.c_str();
-      }
-    } else {
-      return nullptr;
-    }
-  }
-
-  uint64_t transcriptOffset(uint64_t id) {
-    if (loaded_) {
-      if (is64BitQuasi()) {
-        return quasiIndex64_->txpOffsets[id];
-      } else {
-        return quasiIndex32_->txpOffsets[id];
-      }
-    } else {
-      return std::numeric_limits<uint64_t>::max();
-    }
-  }
 
   std::string seqHash256() const { return seqHash256_; }
   std::string nameHash256() const { return nameHash256_; }
   std::string seqHash512() const { return seqHash512_; }
   std::string nameHash512() const { return nameHash512_; }
+  std::string decoySeqHash256() const { return decoySeqHash256_; }
+  std::string decoyNameHash256() const { return decoyNameHash256_; }
 
 private:
-  bool buildQuasiIndex_(boost::filesystem::path indexDir,
-                        std::vector<std::string>& quasiArgVec, uint32_t k) {
+  bool buildPuffIndex_(boost::filesystem::path indexDir, pufferfish::IndexOptions& idxOpt) {
     namespace bfs = boost::filesystem;
-    int32_t quasiArgc = static_cast<int32_t>(quasiArgVec.size());
-    char** quasiArgv = new char*[quasiArgc];
-    for (int32_t i = 0; i < quasiArgc; ++i) {
-      auto& arg = quasiArgVec[i];
-      quasiArgv[i] = new char[arg.size() + 1];
-      std::strcpy(quasiArgv[i], arg.c_str());
-    }
-
-    int ret = rapMapSAIndex(quasiArgc, quasiArgv);
-
+    std::cerr << "out : " << idxOpt.outdir << "\n";
+    int ret = pufferfishIndex(idxOpt);
     bfs::path versionFile = indexDir / "versionInfo.json";
     versionInfo_.indexVersion(salmon::indexVersion);
     versionInfo_.hasAuxKmerIndex(false);
-    versionInfo_.auxKmerLength(k);
-    versionInfo_.indexType(SalmonIndexType::QUASI);
+    versionInfo_.auxKmerLength(idxOpt.k);
+    versionInfo_.indexType(SalmonIndexType::PUFF);
     versionInfo_.save(versionFile);
-
-    // Free the memory used for the arg vector
-    for (int32_t i = 0; i < quasiArgc; ++i) {
-      // I hate manual memory management
-      delete[] quasiArgv[i];
-    }
-    delete[] quasiArgv;
-
-    return (ret == 0);
+    return ret;
   }
 
-  bool loadQuasiIndex_(const boost::filesystem::path& indexDir) {
+  bool loadPuffIndex_(const boost::filesystem::path& indexDir) {
     namespace bfs = boost::filesystem;
-    logger_->info("Loading Quasi index");
+    logger_->info("Loading pufferfish index");
     // Read the actual Quasi index
     { // quasi-based
       boost::filesystem::path indexPath = indexDir;
@@ -169,24 +123,32 @@ private:
         indexStr.push_back('/');
       }
 
-      IndexHeader h;
-      std::ifstream indexStream(indexStr + "header.json");
+      std::string sampling_type_;
+      int version_;
+      std::ifstream indexStream(indexStr + "info.json");
       {
         cereal::JSONInputArchive ar(indexStream);
-        ar(h);
+        ar(cereal::make_nvp("sampling_type", sampling_type_),
+           cereal::make_nvp("SeqHash", seqHash256_),
+           cereal::make_nvp("NameHash", nameHash256_),
+           cereal::make_nvp("DecoySeqHash", decoySeqHash256_),
+           cereal::make_nvp("DecoyNameHash", decoyNameHash256_),
+           cereal::make_nvp("index_version", version_)
+           );
       }
       indexStream.close();
 
+      /*
       if (h.version() != salmon::requiredQuasiIndexVersion) {
         logger_->critical(
-            "I found a quasi-index with version {}, but I require {}. "
+            "I found an index with version {}, but I require {}. "
             "Please re-index the reference.",
             h.version(), salmon::requiredQuasiIndexVersion);
         std::exit(1);
       }
-      if (h.indexType() != IndexType::QUASI) {
+      if (h.indexType() != SalmonIndexType::PUFF) {
         logger_->critical("The index {} does not appear to be of the "
-                          "appropriate type (quasi)",
+                          "appropriate type (pufferfish)",
                           indexStr);
         std::exit(1);
       }
@@ -195,76 +157,37 @@ private:
       nameHash256_ = h.nameHash256();
       seqHash512_ = h.seqHash512();
       nameHash512_ = h.nameHash512();
+      decoySeqHash256_ = h.decoySeqHash256();
+      decoyNameHash256_ = h.decoyNameHash256();
+      */
 
       // Is the quasi-index using a perfect hash
-      perfectHashQuasi_ = h.perfectHash();
+      // perfectHashQuasi_ = h.perfectHash();
+      sparse_ = (sampling_type_ == "sparse");
 
-      if (h.bigSA()) {
-        largeQuasi_ = true;
-        logger_->info("Loading 64-bit quasi index");
-        if (perfectHashQuasi_) {
-          quasiIndexPerfectHash64_.reset(
-              new RapMapSAIndex<int64_t, PerfectHash<int64_t>>);
-          if (!quasiIndexPerfectHash64_->load(indexStr)) {
-            fmt::print(stderr, "Couldn't open index [{}] --- ", indexPath);
-            fmt::print(stderr, "Please make sure that 'salmon index' has been "
-                               "run successfully\n");
-            std::exit(1);
-          }
-        } else {
-          quasiIndex64_.reset(new RapMapSAIndex<int64_t, DenseHash<int64_t>>);
-          if (!quasiIndex64_->load(indexStr)) {
-            fmt::print(stderr, "Couldn't open index [{}] --- ", indexPath);
-            fmt::print(stderr, "Please make sure that 'salmon index' has been "
-                               "run successfully\n");
-            std::exit(1);
-          }
-        }
-      } else { // 32-bit index
-        logger_->info("Loading 32-bit quasi index");
-
-        if (perfectHashQuasi_) {
-          quasiIndexPerfectHash32_.reset(
-              new RapMapSAIndex<int32_t, PerfectHash<int32_t>>);
-          if (!quasiIndexPerfectHash32_->load(indexStr)) {
-            fmt::print(stderr, "Couldn't open index [{}] --- ", indexPath);
-            fmt::print(stderr, "Please make sure that 'salmon index' has been "
-                               "run successfully\n");
-            std::exit(1);
-          }
-        } else {
-          quasiIndex32_.reset(new RapMapSAIndex<int32_t, DenseHash<int32_t>>);
-          if (!quasiIndex32_->load(indexStr)) {
-            fmt::print(stderr, "Couldn't open index [{}] --- ", indexPath);
-            fmt::print(stderr, "Please make sure that 'salmon index' has been "
-                               "run successfully\n");
-            std::exit(1);
-          }
-        }
+      if (sparse_) {
+        logger_->info("Loading sparse pufferfish index.");
+        pfi_sparse_.reset(new PufferfishSparseIndex(indexStr));
+      } else {
+        logger_->info("Loading dense pufferfish index.");
+        pfi_.reset(new PufferfishIndex(indexStr));
       }
     }
     logger_->info("done");
     return true;
   }
 
+  /*
   bool isDecoy(uint64_t tid){
     bool decoy{false};
-    if (largeQuasi_) {
-      if (perfectHashQuasi_) {
-        decoy = quasiIndexPerfectHash64_->isDecoy(tid);
-      } else {
-        decoy = quasiIndex64_->isDecoy(tid);
-      }
+    if (perfectHashQuasi_) {
+      decoy = quasiIndexPerfectHash32_->isDecoy(tid);
     } else {
-      if (perfectHashQuasi_) {
-        decoy = quasiIndexPerfectHash32_->isDecoy(tid);
-      } else {
-        decoy = quasiIndex32_->isDecoy(tid);
-      }
+      decoy = quasiIndex32_->isDecoy(tid);
     }
-    // should not get here
     return decoy;
   }
+  */
 
   bool loaded_;
   SalmonIndexVersionInfo versionInfo_;
@@ -273,21 +196,17 @@ private:
   bool largeQuasi_{false};
   bool perfectHashQuasi_{false};
 
-  std::unique_ptr<RapMapSAIndex<int32_t, DenseHash<int32_t>>> quasiIndex32_{
-      nullptr};
-  std::unique_ptr<RapMapSAIndex<int64_t, DenseHash<int64_t>>> quasiIndex64_{
-      nullptr};
-
-  std::unique_ptr<RapMapSAIndex<int32_t, PerfectHash<int32_t>>>
-      quasiIndexPerfectHash32_{nullptr};
-  std::unique_ptr<RapMapSAIndex<int64_t, PerfectHash<int64_t>>>
-      quasiIndexPerfectHash64_{nullptr};
+  bool sparse_{false};
+  std::unique_ptr<PufferfishIndex> pfi_{nullptr};
+  std::unique_ptr<PufferfishSparseIndex> pfi_sparse_{nullptr};
 
   std::shared_ptr<spdlog::logger> logger_;
   std::string seqHash256_;
   std::string nameHash256_;
   std::string seqHash512_;
   std::string nameHash512_;
+  std::string decoySeqHash256_;
+  std::string decoyNameHash256_;
 };
 
 #endif //__SALMON_INDEX_HPP

@@ -68,8 +68,8 @@ public:
     }
 
     size_t maxFragLen = sopt.fragLenDistMax;
-    size_t meanFragLen = sopt.fragLenDistPriorMean;
-    size_t fragLenStd = sopt.fragLenDistPriorSD;
+    double meanFragLen = sopt.fragLenDistPriorMean;
+    double fragLenStd = sopt.fragLenDistPriorSD;
     size_t fragLenKernelN = 4;
     double fragLenKernelP = 0.5;
     fragLengthDist_.reset(
@@ -139,26 +139,19 @@ public:
 
     switch (salmonIndex_->indexType()) {
     case SalmonIndexType::QUASI:
-      if (salmonIndex_->is64BitQuasi()) {
-        if (salmonIndex_->isPerfectHashQuasi()) {
-          loadTranscriptsFromQuasi(salmonIndex_->quasiIndexPerfectHash64(),
-                                   sopt);
-        } else {
-          loadTranscriptsFromQuasi(salmonIndex_->quasiIndex64(), sopt);
-        }
-      } else {
-        if (salmonIndex_->isPerfectHashQuasi()) {
-          loadTranscriptsFromQuasi(salmonIndex_->quasiIndexPerfectHash32(),
-                                   sopt);
-        } else {
-          loadTranscriptsFromQuasi(salmonIndex_->quasiIndex32(), sopt);
-        }
-      }
+      infostr << "Error: This version of salmon does not support a RapMap-based index.";
+      throw std::invalid_argument(infostr.str());
       break;
     case SalmonIndexType::FMD:
       infostr << "Error: This version of salmon does not support the FMD index mode.";
       throw std::invalid_argument(infostr.str());
       break;
+    case SalmonIndexType::PUFF:
+      if (salmonIndex_->isSparse()){
+        loadTranscriptsFromPuff(salmonIndex_->puffSparseIndex(), sopt);
+      } else {
+        loadTranscriptsFromPuff(salmonIndex_->puffIndex(), sopt);
+      }
     }
 
     // Create the cluster forest for this set of transcripts
@@ -171,6 +164,8 @@ public:
   std::string getIndexNameHash256() const { return salmonIndex_->nameHash256(); }
   std::string getIndexSeqHash512() const { return salmonIndex_->seqHash512(); }
   std::string getIndexNameHash512() const { return salmonIndex_->nameHash512(); }
+  std::string getIndexDecoySeqHash256() const { return salmonIndex_->decoySeqHash256(); }
+  std::string getIndexDecoyNameHash256() const { return salmonIndex_->decoyNameHash256(); }
 
   std::vector<Transcript>& transcripts() { return transcripts_; }
   const std::vector<Transcript>& transcripts() const { return transcripts_; }
@@ -267,6 +262,77 @@ public:
 
   SalmonIndex* getIndex() { return salmonIndex_.get(); }
 
+  template <typename PuffIndexT>
+  void loadTranscriptsFromPuff(PuffIndexT* idx_, const SalmonOpts& sopt) {
+    // Get the list of reference names
+    const auto& refNames = idx_->getFullRefNames();
+    const auto& refLengths = idx_->getFullRefLengths();
+    const auto& completeRefLengths = idx_->getFullRefLengthsComplete();
+
+    size_t numRecords = refNames.size();
+    auto log = sopt.jointLog.get();
+    numDecoys_ = 0;
+
+    log->info("Index contained {:n} targets", numRecords);
+    transcripts_.reserve(numRecords);
+    std::vector<uint32_t> lengths;
+    lengths.reserve(numRecords);
+    size_t numIndexedRefs = idx_->getIndexedRefCount();
+    auto k = idx_->k();
+    int64_t numShort{0};
+    double alpha = 0.005;
+    auto& allRefSeq = idx_->refseq_;
+    auto& refAccumLengths = idx_->refAccumLengths_;
+    for (auto i : boost::irange(size_t(0), numRecords)) {
+      uint32_t id = i;
+      bool isShort = refLengths[i] <= k;
+      bool isDecoy = idx_->isDecoy(i - numShort);
+
+      if (isDecoy and !sopt.validateMappings) {
+        log->warn("The index contains decoy targets, but these should not be used in the "
+                  "absence of selective-alignment (--validateMappings, --mimicBT2 or --mimicStrictBT2). "
+                  "Skipping loading of decoys.");
+        break;
+      }
+
+      const char* name = refNames[i].c_str();
+      uint32_t len = refLengths[i];
+      // copy over the length, then we're done.
+      transcripts_.emplace_back(id, name, len, alpha);
+      auto& txp = transcripts_.back();
+      txp.setCompleteLength(completeRefLengths[i]);
+
+      // TODO : PF_INTEGRATION
+      // We won't every have the sequence for a decoy
+      // NOTE : The below is a huge hack right now.  Since we have
+      // the whole reference sequence in 2-bit in the index, there is
+      // really no reason to convert to ASCII and keep a duplicate
+      // copy around.
+      if (!isDecoy and !isShort and sopt.biasCorrect or sopt.gcBiasCorrect) {
+        auto tid = i - numShort;
+        int64_t refAccPos = tid > 0 ? refAccumLengths[tid - 1] : 0;
+        int64_t refTotalLength = refAccumLengths[tid] - refAccPos;
+        if (len != refTotalLength) {
+          log->warn("len : {:n}, but txp.RefLenght : {:n}", len, txp.RefLength);
+        }
+        char* tseq = pufferfish::util::getRefSeqOwned(allRefSeq, refAccPos, refTotalLength);
+        txp.setSequenceOwned(tseq, sopt.gcBiasCorrect, sopt.reduceGCMemory);
+      }
+      txp.setDecoy(isDecoy);
+      numShort += isShort ? 1 : 0;
+      if (isDecoy) { 
+        ++numDecoys_; 
+      } else { // only use this reference for length class computation if not a decoy
+        lengths.push_back(txp.RefLength);
+      }
+    }
+    sopt.jointLog->info("Number of decoys : {:n}", numDecoys_);
+    sopt.jointLog->info("First decoy index : {:n} ", idx_->firstDecoyIndex());
+    //std::exit(1);
+    // ====== Done loading the transcripts from file
+    setTranscriptLengthClasses_(lengths, posBiasFW_.size());
+  }
+
   template <typename QuasiIndexT>
   void loadTranscriptsFromQuasi(QuasiIndexT* idx_, const SalmonOpts& sopt) {
     size_t numRecords = idx_->txpNames.size();
@@ -274,7 +340,7 @@ public:
     numDecoys_ = 0;
 
     log->info("Index contained {:n} targets", numRecords);
-    // transcripts_.resize(numRecords);
+    transcripts_.reserve(numRecords);
     std::vector<uint32_t> lengths;
     lengths.reserve(numRecords);
     double alpha = 0.005;
@@ -448,53 +514,88 @@ public:
     uint64_t numFmt2{0};
     uint64_t numAgree{0};
     uint64_t numDisagree{0};
+    uint64_t numDisagreeUnstranded{0};
+    uint64_t numDisagreeStranded{0};
 
     for (auto& rl : readLibraries_) {
       auto fmt = rl.format();
       auto& counts = rl.libTypeCounts();
 
-      // If the format is un-stranded, check that
-      // we have a similar number of mappings in both
-      // directions and then aggregate the forward and
-      // reverse counts.
+      oa(cereal::make_nvp("read_files", rl.readFilesAsString()));
+      std::string expectedFormat = rl.format().toString();
+      oa(cereal::make_nvp("expected_format", expectedFormat));
+
+      double compatFragmentRatio =
+          rl.numCompat() / static_cast<double>(numAssignedFragments_);
+      oa(cereal::make_nvp("compatible_fragment_ratio", compatFragmentRatio));
+      oa(cereal::make_nvp("num_compatible_fragments", rl.numCompat()));
+      oa(cereal::make_nvp("num_assigned_fragments",
+                          numAssignedFragments_.load()));
+
+      std::vector<ReadStrandedness> strands;
+      // How we should define sense and antisense 
+      switch (fmt.orientation) {
+      case ReadOrientation::SAME:
+      case ReadOrientation::NONE:
+        strands.push_back(ReadStrandedness::S);
+        strands.push_back(ReadStrandedness::A);
+        break;
+      case ReadOrientation::AWAY:
+      case ReadOrientation::TOWARD:
+        strands.push_back(ReadStrandedness::SA);
+        strands.push_back(ReadStrandedness::AS);
+        break;
+      }
+
+      // fmt1 is :
+      // reads that arise from sense, or 
+      // fragments whose first read arises from sense
+      fmt1.type = fmt.type;
+      fmt1.orientation = fmt.orientation;
+      fmt1.strandedness = strands[0];
+      // fmt 2 is :
+      // reads that arise from antisense, or
+      // fragments whose first read arises from antisense
+      fmt2.type = fmt.type;
+      fmt2.orientation = fmt.orientation;
+      fmt2.strandedness = strands[1];
+
+      numFmt1 = 0;
+      numFmt2 = 0;
+
+      for (size_t i = 0; i < counts.size(); ++i) {
+        // This counts agree or disagree when the 
+        // provided or detected library type is *not*
+        // unstranded
+        if (i == fmt.formatID()) {
+          numAgree = counts[i];
+        } else {
+          numDisagreeStranded += counts[i];
+        }
+
+        // Regardless of if the provided or detected
+        // library type is unstranded, count the 
+        // sense and antisense compatible reads
+        if (i == fmt1.formatID()) {
+          numFmt1 = counts[i];
+        } else if (i == fmt2.formatID()) {
+          numFmt2 = counts[i];
+        } else {
+          // collect this number for if
+          // we have an unstranded library type
+          numDisagreeUnstranded += counts[i];
+        }
+      }
+
+      double ratio = 0.0;
+
+      // If the provided or detected library type is *unstranded*
       if (fmt.strandedness == ReadStrandedness::U) {
-        std::vector<ReadStrandedness> strands;
-        switch (fmt.orientation) {
-        case ReadOrientation::SAME:
-        case ReadOrientation::NONE:
-          strands.push_back(ReadStrandedness::S);
-          strands.push_back(ReadStrandedness::A);
-          break;
-        case ReadOrientation::AWAY:
-        case ReadOrientation::TOWARD:
-          strands.push_back(ReadStrandedness::AS);
-          strands.push_back(ReadStrandedness::SA);
-          break;
-        }
-
-        fmt1.type = fmt.type;
-        fmt1.orientation = fmt.orientation;
-        fmt1.strandedness = strands[0];
-        fmt2.type = fmt.type;
-        fmt2.orientation = fmt.orientation;
-        fmt2.strandedness = strands[1];
-
-        numFmt1 = 0;
-        numFmt2 = 0;
-        numAgree = 0;
-        numDisagree = 0;
-
-        for (size_t i = 0; i < counts.size(); ++i) {
-          if (i == fmt1.formatID()) {
-            numFmt1 = counts[i];
-          } else if (i == fmt2.formatID()) {
-            numFmt2 = counts[i];
-          } else {
-            numDisagree += counts[i];
-          }
-        }
+        // overwrite numAgree, since that was computed for 
+        // a stranded library 
         numAgree = numFmt1 + numFmt2;
-        double ratio = numAgree > 0 ? (static_cast<double>(numFmt1) / (numFmt1 + numFmt2)) : 0.0;
+        numDisagree = numDisagreeUnstranded;
+        ratio = numAgree > 0 ? (static_cast<double>(numFmt1) / (numFmt1 + numFmt2)) : 0.0;
 
         if (numAgree == 0) {
           errstr << "NOTE: Read Lib [" << rl.readFilesAsString() << "] :\n";
@@ -504,6 +605,9 @@ public:
           log->warn(errstr.str());
           errstr.clear();
         } else if (std::abs(ratio - 0.5) > 0.01) {
+          // check that we have a similar number of mappings in both
+          // directions and then aggregate the forward and
+          // reverse counts.
           errstr << "NOTE: Read Lib [" << rl.readFilesAsString() << "] :\n";
           errstr << "\nDetected a *potential* strand bias > 1\% in an "
                     "unstranded protocol "
@@ -512,50 +616,16 @@ public:
           log->warn(errstr.str());
           errstr.clear();
         }
-
-        oa(cereal::make_nvp("read_files", rl.readFilesAsVector()));
-        std::string expectedFormat = rl.format().toString();
-        oa(cereal::make_nvp("expected_format", expectedFormat));
-
-        double compatFragmentRatio =
-            rl.numCompat() / static_cast<double>(numAssignedFragments_);
-        oa(cereal::make_nvp("compatible_fragment_ratio", compatFragmentRatio));
-        oa(cereal::make_nvp("num_compatible_fragments", rl.numCompat()));
-        oa(cereal::make_nvp("num_assigned_fragments",
-                            numAssignedFragments_.load()));
-
-        oa(cereal::make_nvp("num_frags_with_concordant_consistent_mappings", numAgree));
-        oa(cereal::make_nvp("num_frags_with_inconsistent_or_orphan_mappings", numDisagree));
-        oa(cereal::make_nvp("strand_mapping_bias", ratio));
       } else {
-        numAgree = 0;
-        numDisagree = 0;
-
-        for (size_t i = 0; i < counts.size(); ++i) {
-          if (i == fmt.formatID()) {
-            numAgree = counts[i];
-          } else {
-            numDisagree += counts[i];
-          }
-        } // end for
-
-        oa(cereal::make_nvp("read_files", rl.readFilesAsString()));
-        std::string expectedFormat = rl.format().toString();
-        oa(cereal::make_nvp("expected_format", expectedFormat));
-
-        double compatFragmentRatio =
-            rl.numCompat() / static_cast<double>(numAssignedFragments_);
-        oa(cereal::make_nvp("compatible_fragment_ratio", compatFragmentRatio));
-        oa(cereal::make_nvp("num_compatible_fragments", rl.numCompat()));
-        oa(cereal::make_nvp("num_assigned_fragments",
-                            numAssignedFragments_.load()));
-
-        oa(cereal::make_nvp("num_frags_with_consistent_mappings", numAgree));
-        oa(cereal::make_nvp("num_frags_with_inconsistent_or_orphan_mappings", numDisagree));
+        // If the provided or detected library type is *stranded*
+        numDisagree = numDisagreeStranded;
+        ratio = numAgree > 0 ? (static_cast<double>(numFmt1) / (numFmt1 + numFmt2)) : 0.0;
       } // end else
 
-      double compatFragmentRatio =
-          rl.numCompat() / static_cast<double>(numAssignedFragments_);
+      oa(cereal::make_nvp("num_frags_with_concordant_consistent_mappings", numAgree));
+      oa(cereal::make_nvp("num_frags_with_inconsistent_or_orphan_mappings", numDisagree));
+      oa(cereal::make_nvp("strand_mapping_bias", ratio));
+
       double disagreeRatio = 1.0 - compatFragmentRatio;
       if (disagreeRatio > 0.05) {
         errstr << "NOTE: Read Lib [" << rl.readFilesAsString() << "] :\n";

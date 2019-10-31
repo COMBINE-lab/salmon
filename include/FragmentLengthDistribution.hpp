@@ -67,9 +67,9 @@ public:
    * LengthDistribution Constructor.
    * @param alpha double that sets the average pseudo-counts (logged).
    * @param max_val an integer that sets the maximum allowable length.
-   * @param prior_mu a size_t for the mean of the prior gaussian distribution.
+   * @param prior_mu a double for the mean of the prior gaussian distribution.
             If 0, a uniform distribution is used instead.
-   * @param prior_sigma a size_t for the standard deviation of the prior
+   * @param prior_sigma a double for the standard deviation of the prior
    *        gaussian distribution.
    * @param kernel_n a size_t specifying the number of trials in the kernel
    *        binomial distribution. Must be odd.
@@ -78,8 +78,8 @@ public:
    * @param bin_size a size_t specifying the size of bins to use internally to
    *        reduce the number of parameters in the distribution.
    */
-  FragmentLengthDistribution(double alpha, size_t max_val, size_t prior_mu,
-                             size_t prior_sigma, size_t kernel_n,
+  FragmentLengthDistribution(double alpha, size_t max_val, double prior_mu,
+                             double prior_sigma, size_t kernel_n,
                              double kernel_p, size_t bin_size = 1);
   /**
    * An accessor for the maximum allowed length.

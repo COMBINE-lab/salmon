@@ -44,8 +44,12 @@
 #include "StadenUtils.hpp"
 #include "SalmonDefaults.hpp"
 
+#include "pufferfish/Util.hpp"
+
 namespace salmon {
 namespace utils {
+
+  using MateStatus = pufferfish::util::MateStatus;
 
 std::string str(const MappingType& mt) {
   switch (mt) {
@@ -122,10 +126,10 @@ std::ostream& operator<<(std::ostream& os, OrphanStatus s) {
 }
 
 bool isCompatible(const LibraryFormat observed, const LibraryFormat expected,
-                  int32_t start, bool isForward, rapmap::utils::MateStatus ms) {
+                  int32_t start, bool isForward, MateStatus ms) {
   // If we're dealing with a single end read.
   bool compat{false};
-  if (ms != rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
+  if (ms != MateStatus::PAIRED_END_PAIRED) {
     compat = compatibleHit(expected, start, isForward, ms);
   } else {
     compat = compatibleHit(expected, observed);
@@ -135,11 +139,11 @@ bool isCompatible(const LibraryFormat observed, const LibraryFormat expected,
 
 double logAlignFormatProb(const LibraryFormat observed,
                           const LibraryFormat expected, int32_t start,
-                          bool isForward, rapmap::utils::MateStatus ms,
+                          bool isForward, MateStatus ms,
                           double incompatPrior) {
   // If we're dealing with a single end read.
   bool compat{false};
-  if (ms != rapmap::utils::MateStatus::PAIRED_END_PAIRED) {
+  if (ms != MateStatus::PAIRED_END_PAIRED) {
     compat = compatibleHit(expected, start, isForward, ms);
   } else {
     compat = compatibleHit(expected, observed);
@@ -1460,12 +1464,6 @@ std::string getCurrentTimeAsString() {
                           );
     }
 
-    if (sopt.maxMMPExtension < 1) {
-      sopt.jointLog->error("The maximum MMP extension must be at least 1, but {} was provided.",
-                           sopt.maxMMPExtension);
-      return false;
-    }
-
     if (sopt.hardFilter) {
       // range factorization doesn't make sense with hard filtering
       if (sopt.rangeFactorizationBins > 0) {
@@ -1488,7 +1486,7 @@ std::string getCurrentTimeAsString() {
     // validateMappings
     bool consensusSlackExplicit = !vm["consensusSlack"].defaulted();
     if (!consensusSlackExplicit) {
-      sopt.consensusSlack = 0.2;
+      sopt.consensusSlack = 0.35;
       sopt.jointLog->info(
                           "Usage of --validateMappings implies a default consensus slack of 0.2. "
                           "Setting consensusSlack to {}.", sopt.consensusSlack);
@@ -1510,7 +1508,7 @@ std::string getCurrentTimeAsString() {
       sopt.maxReadOccs = 1000;
       sopt.jointLog->info("The --mimicBT2 and --mimicStrictBT2 flags increases maxReadOccs to {}.", sopt.maxReadOccs);
 
-      sopt.consensusSlack = 0.35;
+      sopt.consensusSlack = 0.5;
       sopt.jointLog->info("The --mimicBT2 and --mimicStrictBT2 flags increases consensusSlack to {}.", sopt.consensusSlack);
 
       if (sopt.mimicBT2) {
@@ -1518,12 +1516,31 @@ std::string getCurrentTimeAsString() {
                             "Usage of --mimicBT2 overrides other settings for mapping validation. Setting "
                             "Bowtie2-like parameters now.");
         sopt.discardOrphansQuasi = true;
+        if (sopt.softclipOverhangs) {
+          sopt.jointLog->info("Softclipping of overhangs is not allowed in mimicBT2 mode; setting to false.");
+          sopt.softclipOverhangs = false;
+        }
+
+        sopt.matchScore = 2;
+        sopt.mismatchPenalty = -4;
+        sopt.gapOpenPenalty = 5;
+        sopt.gapExtendPenalty = 3;
+        /*
+        sopt.matchScore = 0;
+        sopt.mismatchPenalty = -6;
+        sopt.gapOpenPenalty = 5;
+        sopt.gapExtendPenalty = 3;
+        */
       }
 
       if (sopt.mimicStrictBT2) {
         sopt.jointLog->info(
                             "Usage of --mimicStrictBT2 overrides other settings for mapping validation. Setting "
                             "strict RSEM+Bowtie2-like parameters now.");
+        if (sopt.softclipOverhangs) {
+          sopt.jointLog->info("Softclipping of overhangs is not allowed in mimicStrictBT2 mode; setting to false.");
+          sopt.softclipOverhangs = false;
+        }
         sopt.discardOrphansQuasi = true;
         sopt.minScoreFraction = 0.8;
         sopt.matchScore = 1;
@@ -1700,13 +1717,24 @@ bool createDirectoryVerbose_(boost::filesystem::path& dirPath) {
 /* Function used to check that 'opt1' and 'opt2' are not specified
     at the same time. */
 // taken from : https://www.boost.org/doc/libs/1_67_0/libs/program_options/example/real.cpp
-  void conflicting_options(const boost::program_options::variables_map& vm,
+void conflicting_options(const boost::program_options::variables_map& vm,
                           const char* opt1, const char* opt2){
   if (vm.count(opt1) && !vm[opt1].defaulted()
       && vm.count(opt2) && !vm[opt2].defaulted()) {
     throw std::logic_error(std::string("Conflicting options '")
                            + opt1 + "' and '" + opt2 + "'.");
   }
+}
+
+/* Function used to check that of 'for_what' is specified, then
+   'required_option' is specified too. */
+// taken from : https://www.boost.org/doc/libs/1_67_0/libs/program_options/example/real.cpp
+void option_dependency(const boost::program_options::variables_map& vm,
+                       const char* for_what, const char* required_option){
+  if (vm.count(for_what) && !vm[for_what].defaulted())
+    if (vm.count(required_option) == 0 || vm[required_option].defaulted())
+      throw std::logic_error(string("Option '") + for_what 
+                             + "' requires option '" + required_option + "'.");
 }
 
 /**
@@ -1859,7 +1887,52 @@ bool processQuantOptions(SalmonOpts& sopt,
     sopt.numConditionalGCBins = 1;
   }
 
+  {
+    std::transform(sopt.hitFilterPolicyStr.begin(), sopt.hitFilterPolicyStr.end(),
+                   sopt.hitFilterPolicyStr.begin(), ::toupper);
+    if ( sopt.hitFilterPolicyStr == "BEFORE" ) {
+      sopt.hitFilterPolicy = pufferfish::util::HitFilterPolicy::FILTER_BEFORE_CHAINING;
+    } else if ( sopt.hitFilterPolicyStr == "AFTER" ) {
+      sopt.hitFilterPolicy = pufferfish::util::HitFilterPolicy::FILTER_AFTER_CHAINING;
+    } else if ( sopt.hitFilterPolicyStr == "BOTH" ) {
+      sopt.hitFilterPolicy = pufferfish::util::HitFilterPolicy::FILTER_BEFORE_AND_AFTER_CHAINING;
+    } else if ( sopt.hitFilterPolicyStr == "NONE" ) {
+      sopt.hitFilterPolicy = pufferfish::util::HitFilterPolicy::DO_NOT_FILTER;
+    } else {
+      jointLog->critical("The argument {} for --hitFilterPolicy is invalid. Valid options are "
+                         "BEFORE, AFTER, BOTH and NONE.", sopt.hitFilterPolicyStr);
+      jointLog->flush();
+      return false;
+    }
+  }
+
   // The growing list of thou shalt nots
+  {
+    try {
+      conflicting_options(vm, "validateMappings", "noSA");
+      conflicting_options(vm, "mimicBT2", "noSA");
+      conflicting_options(vm, "mimicStrictBT2", "noSA");
+      conflicting_options(vm, "hardFilter", "noSA");
+    } catch (std::logic_error& e) {
+      jointLog->critical(e.what());
+      jointLog->flush();
+      return false;
+    }
+
+    // currently, with the pufferfish based index
+    // we have not tested SA-free methods.  So let's
+    // disable this ability and give a warning.
+    if (sopt.disableSA) {
+      jointLog->critical("Note: Alignment-free mapping (i.e. mapping without subsequent selective-alignment) "
+                         "has not yet been throughly tested under the pufferfish-based index and using the "
+                         "pufferfish-based mapping strategies.  Thus, disabling of selective-alignment "
+                         "is not currently allowed.  We will explore re-enabling this option in future "
+                         "versions of salmon.");
+      jointLog->flush();
+      return false;
+      //sopt.validateMappings = false;
+    }
+  }
 
   {
     try {
@@ -1875,6 +1948,48 @@ bool processQuantOptions(SalmonOpts& sopt,
     // of boost::program_options.
     if(sopt.useEM) {
       sopt.useVBOpt = false;
+    }
+  }
+
+  {
+    try {
+      conflicting_options(vm, "perNucleotidePrior", "perTranscriptPrior");
+    } catch (std::logic_error& e) {
+      jointLog->critical(e.what());
+      jointLog->flush();
+      return false;
+    }
+    // If the user passed perNucleotidePrior, then
+    // turn off perTranscriptPrior.
+    if(sopt.perNucleotidePrior) {
+      sopt.perTranscriptPrior = false;
+    }
+  }
+
+  // If we are in vbOpt mode, and using a perNucleotidePrior, and the user didn't change the default
+  // vbPrior, then divide this value by 1000.
+  if (sopt.useVBOpt and sopt.perNucleotidePrior and vm["vbPrior"].defaulted()) {
+    sopt.vbPrior = 1e-5;
+    jointLog->info("Using per-nucleotide prior with the default VB prior.  Setting the default prior to {}",sopt.vbPrior);
+  }
+
+  {
+    try {
+      conflicting_options(vm, "alignments", "eqclasses");
+    } catch (std::logic_error& e) {
+      jointLog->critical(e.what());
+      jointLog->flush();
+      return false;
+    }
+  }
+
+  {
+    try {
+      option_dependency(vm, "alignments", "targets");
+    } catch (std::logic_error& e) {
+      jointLog->critical(e.what());
+      jointLog->flush();
+      return false;
     }
   }
 
@@ -1976,6 +2091,90 @@ bool processQuantOptions(SalmonOpts& sopt,
   }
 
   return perModeValidate;
+}
+
+bool readEquivCounts(boost::filesystem::path& eqFilePathString,
+                     std::vector<string>& tnames,
+                     std::vector<double>& tefflens,
+                     std::vector<std::vector<uint32_t>>& eqclasses,
+                     std::vector<std::vector<double>>& auxs_vals,
+                     std::vector<uint32_t>& eqclass_counts ) {
+
+  namespace bfs = boost::filesystem;
+  bfs::path eqFilePath {eqFilePathString};
+
+  std::ifstream equivFile(eqFilePath.string());
+
+  size_t numTxps, numEqClasses;
+  // Number of transcripts
+  equivFile >> numTxps;
+
+  // Number of equivalence classes
+  equivFile >> numEqClasses;
+
+  string tname;
+  std::unordered_map<string, size_t> nameToIndex;
+  for (size_t i = 0; i < numTxps; ++i) {
+    equivFile >> tname;
+    tnames.emplace_back(tname);
+    nameToIndex[tname] = i;
+  }
+
+  for (size_t i= 0; i < numEqClasses; ++i) {
+    size_t classLength;
+    equivFile >> classLength;
+
+    // each group member
+    uint64_t tid;
+    std::vector<uint32_t> tids;
+    for (size_t i = 0; i < classLength; i++) {
+      equivFile >> tid;
+      tids.emplace_back(tid);
+    }
+
+    double aux;
+    std::vector<double> auxs;
+    for (size_t i = 0; i < classLength; i++) {
+      equivFile >> aux;
+      auxs.emplace_back(aux);
+    }
+
+    // count for this class
+    uint64_t count;
+    equivFile >> count;
+
+    eqclasses.emplace_back(tids);
+    auxs_vals.emplace_back(auxs);
+    eqclass_counts.emplace_back(count);
+  }
+
+  tefflens.resize(nameToIndex.size());
+  std::vector<size_t> indexList(nameToIndex.size());
+  std::iota(indexList.begin(), indexList.end(), 0);
+  std::unordered_set<size_t> indexSet(indexList.begin(), indexList.end());
+
+  double tlen;
+  while (equivFile >> tname >> tlen) {
+    size_t index {0};
+    auto it = nameToIndex.find(tname);
+    if ( it != nameToIndex.end() ) {
+      index = it->second;
+    } else {
+      std::cerr<< "Missing effective lens for " << it->first << std::flush;
+      return false;
+    }
+
+    indexSet.erase(index);
+    tefflens[index] = tlen;
+  }
+
+  if (indexSet.size() > 0) {
+    std::cerr<< "Missing effective lens for " << indexSet.size()
+             << " txps" << std::flush;
+  }
+
+  equivFile.close();
+  return true;
 }
 
 /**
@@ -2267,7 +2466,6 @@ int contextSize = outsideContext + insideContext;
   };
   tbb::combinable<CombineableBiasParams> expectedDist(getBiasParams);
   std::atomic<size_t> numBackgroundTranscripts{0};
-  std::atomic<size_t> numExpressedTranscripts{0};
 
   tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(transcripts.size())),
@@ -2308,11 +2506,7 @@ int contextSize = outsideContext + insideContext;
 
           // Skip transcripts with trivial expression or that are too
           // short
-          if (alphas[it] < minAlpha or
-              unprocessedLen <= 0) { // or txp.uniqueUpdateFraction() < 0.90) {
-            if (alphas[it] >= minAlpha) {
-              ++numExpressedTranscripts;
-            }
+          if (alphas[it] < minAlpha or unprocessedLen <= 0) { // or txp.uniqueUpdateFraction() < 0.90) {
             continue;
           }
           ++numBackgroundTranscripts;
@@ -2452,8 +2646,8 @@ int contextSize = outsideContext + insideContext;
    * via simple summation.  Here, we combine the locally-computed
    * bias terms.
    */
-  SBModel exp5;
-  SBModel exp3;
+  SBModel& exp5 = readExp.readBiasModelExpected(salmon::utils::Direction::FORWARD);
+  SBModel& exp3 = readExp.readBiasModelExpected(salmon::utils::Direction::REVERSE_COMPLEMENT);
 
   auto& pos5Exp = readExp.posBiasExpected(salmon::utils::Direction::FORWARD);
   auto& pos3Exp =
@@ -2648,7 +2842,6 @@ int contextSize = outsideContext + insideContext;
                 tsl.unlock();
               }
             }
-            ++numProcessed;
 
             size_t sp = static_cast<size_t>((fl > 0) ? fl - 1 : 0);
             double prevFLMass = conditionalCDF(sp);
@@ -2734,18 +2927,10 @@ int contextSize = outsideContext + insideContext;
           } else {
             effLensOut(it) = static_cast<double>(elen);
           }
-
+          ++numProcessed;
         }
       } // end parallel_for lambda
   );
-
-  // Copy over the expected sequence bias models
-  if (seqBiasCorrect) {
-    readExp.setReadBiasModelExpected(std::move(exp5),
-                                     salmon::utils::Direction::FORWARD);
-    readExp.setReadBiasModelExpected(
-        std::move(exp3), salmon::utils::Direction::REVERSE_COMPLEMENT);
-  }
 
   sopt.jointLog->info("processed bias for 100.0% of the transcripts");
   return effLensOut;

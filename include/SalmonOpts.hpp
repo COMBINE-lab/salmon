@@ -10,6 +10,9 @@
 #include <memory> // for shared_ptr
 #include <ostream>
 
+#include "pufferfish/Util.hpp"
+#include "SalmonDefaults.hpp"
+
 enum class SalmonQuantMode { MAP = 1, ALIGN = 2 };
 
 /**
@@ -39,6 +42,7 @@ struct SalmonOpts {
   SalmonQuantMode quantMode; // How quantification is done
 
   bool alevinMode{false}; // are we running in alevin mode
+  bool eqClassMode{salmon::defaults::eqClassMode}; // are we running in eqclass mode
 
   bool alternativeInitMode; // Weigh unique reads more heavily when initialzing
                             // the optimization.
@@ -74,13 +78,17 @@ struct SalmonOpts {
   double quasiCoverage; // [Experimental]: Default of 0.  The coverage by MMPs
                         // required for a read to be considered mapped.
 
+  std::string hitFilterPolicyStr{salmon::defaults::hitFilterPolicyStr};
+  pufferfish::util::HitFilterPolicy hitFilterPolicy{pufferfish::util::HitFilterPolicy::FILTER_AFTER_CHAINING};
+
   bool splitSpanningSeeds; // Attempt to split seeds that span multiple
                            // transcripts.
 
   bool noFragLengthDist; // Don't give a fragment assignment a likelihood based
                          // on an emperically observed fragment length
                          // distribution.
-
+  bool noSingleFragProb; // Don't attempt to model frag length for single-end
+                         // (or orphaned) mappings.
   bool noEffectiveLengthCorrection; // Don't take the fragment length
                                     // distribution into account when computing
                                     // the probability that a
@@ -229,12 +237,13 @@ struct SalmonOpts {
                 // the sequence-specific "foreground" distribution.
 
   // Related to the prior of the VBEM algorithm
-  double vbPrior{1e-3};
-  bool perTranscriptPrior{false};
+  double vbPrior{1e-2};
+  bool perTranscriptPrior{true};
+  bool perNucleotidePrior{false};
   // Related to the fragment length distribution
   size_t fragLenDistMax;
-  size_t fragLenDistPriorMean;
-  size_t fragLenDistPriorSD;
+  double fragLenDistPriorMean;
+  double fragLenDistPriorSD;
 
   // Related to the logger
   std::shared_ptr<spdlog::logger> jointLog{nullptr};
@@ -248,8 +257,10 @@ struct SalmonOpts {
 
   // Related to alignment verification
   bool validateMappings;
+  bool disableSA;
   float consensusSlack;
   double minScoreFraction;
+  double scoreExp;
   int16_t matchScore;
   int16_t mismatchPenalty;
   int16_t gapOpenPenalty;
@@ -257,10 +268,12 @@ struct SalmonOpts {
   int32_t dpBandwidth;
   bool mimicStrictBT2;
   bool mimicBT2;
+  bool softclipOverhangs;
+  bool fullLengthAlignment;
   bool allowDovetail;
   bool recoverOrphans;
   bool hardFilter;
-  int32_t maxMMPExtension;
+  uint32_t maxOccsPerHit;
 
   // for utility (may need to be cleaned up later)
   bool discardOrphansQuasi;

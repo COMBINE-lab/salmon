@@ -123,7 +123,7 @@ run the salmon indexer:
 
 ::
     
-    > ./bin/salmon index -t transcripts.fa -i transcripts_index -decoys decoys.txt -k 31
+    > ./bin/salmon index -t transcripts.fa -i transcripts_index --decoys decoys.txt -k 31
     
 This will build the mapping-based index, using an auxiliary k-mer hash
 over k-mers of length 31.  While the mapping algorithms will make used of arbitrarily 

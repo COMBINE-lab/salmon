@@ -132,7 +132,8 @@ void densityCalculator(single_parser* parser,
       nonstd::optional<std::string> extractedBarcode = aut::extractBarcode(seq, aopt.protocol);
       bool seqOk = (extractedBarcode.has_value()) ? aut::sequenceCheck(*extractedBarcode) : false;
       if (not seqOk){
-        continue;
+        bool recovered = aut::recoverBarcode(*extractedBarcode);
+        if (not recovered) { continue; }
       }
       freqCounter[*extractedBarcode] += 1;
       ++usedNumBarcodesLocal;
@@ -552,9 +553,8 @@ bool writeFastq(AlevinOpts<ProtocolT>& aopt,
             nonstd::optional<std::string> extractedSeq = aut::extractBarcode(rp.first.seq, aopt.protocol);
             bool seqOk = (extractedSeq.has_value()) ? aut::sequenceCheck(*extractedSeq) : false;
             if (not seqOk){
-              continue;
-              //std::cerr<<"Can't extract barcode";
-              //return false;
+              bool recovered = aut::recoverBarcode(*extractedSeq);
+              if (not recovered) { continue; }
             }
             barcode = *extractedSeq;
           }
@@ -811,17 +811,25 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
   spp::sparse_hash_map<uint32_t, uint32_t> txpToGeneMap;
   spp::sparse_hash_map<std::string, uint32_t> geneIdxMap;
 
-  auto txpInfoFile = sopt.indexDirectory / "txpInfo.bin";
+  auto txpInfoFile = sopt.indexDirectory / "ctable.bin";
   if(!boost::filesystem::exists(txpInfoFile)){
-    aopt.jointLog->error("Index Directory or the txpInfo.bin: {} doesn't exist.",
+    aopt.jointLog->error("Index Directory or the ctable.bin: {} doesn't exist.",
                          txpInfoFile.string());
     aopt.jointLog->flush();
     exit(1);
   }
 
-  auto headerFile = sopt.indexDirectory / "header.json";
+  auto txpLengthFile = sopt.indexDirectory / "reflengths.bin";
+  if(!boost::filesystem::exists(txpLengthFile)){
+    aopt.jointLog->error("Index Directory or the reflengths.bin: {} doesn't exist.",
+                         txpLengthFile.string());
+    aopt.jointLog->flush();
+    exit(1);
+  }
+
+  auto headerFile = sopt.indexDirectory / "info.json";
   if(!boost::filesystem::exists(headerFile)){
-    aopt.jointLog->error("Index Directory or the header.json: {} doesn't exist.",
+    aopt.jointLog->error("Index Directory or the info.json: {} doesn't exist.",
                          headerFile.string());
     aopt.jointLog->flush();
     exit(1);
@@ -830,6 +838,7 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
   aut::getTxpToGeneMap(txpToGeneMap, geneIdxMap,
                        aopt.geneMapFile.string(),
                        txpInfoFile.string(),
+                       txpLengthFile.string(),
                        headerFile.string(),
                        aopt.jointLog);
 
@@ -960,6 +969,7 @@ salmon-based processing of single-cell RNA-seq data.
     bool gemcode = vm["gemcode"].as<bool>();
     bool celseq = vm["celseq"].as<bool>();
     bool celseq2 = vm["celseq2"].as<bool>();
+    bool quartzseq2 = vm["quartzseq2"].as<bool>();
     bool custom = (vm.count("barcodeLength") and
                    vm.count("umiLength") and
                    vm.count("end"));
@@ -972,6 +982,7 @@ salmon-based processing of single-cell RNA-seq data.
     if (gemcode) validate_num_protocols += 1;
     if (celseq) validate_num_protocols += 1;
     if (celseq2) validate_num_protocols += 1;
+    if (quartzseq2) validate_num_protocols += 1;
     if (custom) validate_num_protocols += 1;
 
     if ( validate_num_protocols != 1 ) {
@@ -1052,6 +1063,13 @@ salmon-based processing of single-cell RNA-seq data.
     else if(celseq2){
       AlevinOpts<apt::CELSeq2> aopt;
       //aopt.jointLog->warn("Using CEL-Seq2 Setting for Alevin");
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString,
+                       barcodeFiles, readFiles);
+    }
+    else if(quartzseq2){
+      AlevinOpts<apt::QuartzSeq2> aopt;
+      //aopt.jointLog->warn("Using Quartz-Seq2 Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
                        vm, commentString,
                        barcodeFiles, readFiles);
