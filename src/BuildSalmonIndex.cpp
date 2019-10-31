@@ -181,7 +181,7 @@ Creates a salmon index.
       haveDecoys = true;
     }
 
-    bfs::path logPath = indexDirectory / "indexing.log";
+    bfs::path logPath = indexDirectory / "pre_indexing.log";
     size_t max_q_size = 2097152;
     // spdlog::set_async_mode(max_q_size);
 
