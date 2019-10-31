@@ -22,11 +22,11 @@ if [ -d ${INSTALL_DIR}/src/pufferfish ] ; then
     rm -fr ${INSTALL_DIR}/src/pufferfish
 fi
 
-#SVER=salmon-v0.14.1
-SVER=develop
+SVER=salmon-v1.0.0
+#SVER=develop
 #SVER=pe-chaining
 
-EXPECTED_SHA256=fabac2f360513b803aa3567415eddcd97261ab8a23d4f600af5f98ee8ffd944b
+EXPECTED_SHA256=d01fecd9e9bb244e51d44d73b7b408bcb2e8f1e2c0dbf97fa9f584bdb772403c
 
 
 mkdir -p ${EXTERNAL_DIR}
