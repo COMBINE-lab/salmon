@@ -9,14 +9,10 @@
 
 ### Pre-computed decoy transcriptomes 
 
-[Here](http://bit.ly/30yn3FJ), you can find download some pre-processed transcriptomes for common species (if you have a particular species or a particular annotation request, let us know).  You can easily build your own decoy-enhanced transcriptome using the the `genereateDecoyTranscriptome.sh` script from the [SalmonTools](https://github.com/COMBINE-lab/SalmonTools) repository.  However, we are providing these for convenience. You can simply download the relevant file according to the species and unzip the archive with `tar xzvf`.  Each decompressed directory contains a `gentrome.fa` file and `decoys.txt` file that can be provided to `salmon` as:
+Although the precomputed decoys (<=v.14.2) are still compatible with the latest major release (v1.0.0). We highly recommend updating your index using the full genome, as it gives significantly higher accuracy, for more information please check our extensive benchmarking on comparing different alignment methods and their performance on RNA-seq quantification in the latest revised preprint [manuscript](https://www.biorxiv.org/content/10.1101/657874v2). tl;dr: fast is good but fast and accurate is better !
+Please use the [tutorial](https://combine-lab.github.io/alevin-tutorial/2019/selective-alignment/) for a step-by-step guide on to efficiently index the reference transcriptome and genome for accurate gentrome based RNA-seq quantification.
 
-```
-$ salmon index -t gentrome.fa -d decoys.txt -i combined_index
-```
-
-**Can't find your organism in the list ?, [Fill the decoy generation request form](https://forms.gle/3baJc5SYrkSWb1z48)**
-
+**Facing problems with Indexing ?, [Check if anyone else already had this problem in the issues section or fill the index generation request form](https://forms.gle/3baJc5SYrkSWb1z48)**
 
 What is Salmon?
 ===============
