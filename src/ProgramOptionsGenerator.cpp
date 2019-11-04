@@ -407,6 +407,9 @@ namespace salmon {
        "dumpBfh", po::bool_switch()->default_value(alevin::defaults::dumpBFH),
        "dump the big hash with all the barcodes and the UMI sequence.")
       (
+       "dumpArboFragCounts", po::bool_switch()->default_value(alevin::defaults::dumpArboFragCounts),
+       "dump the gene-v-cell matrix for the total number of fragments used in the UMI deduplicaiton.")
+      (
        "dumpUmiGraph", po::bool_switch()->default_value(alevin::defaults::dumpUmiGraph),
        "dump the per cell level Umi Graph.")
       (

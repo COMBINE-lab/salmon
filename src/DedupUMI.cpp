@@ -198,14 +198,15 @@ void collapseVertices(uint32_t vertex,
 void getNumMolecules(alevin::graph::Graph& g,
                      std::vector<TGroupT>& txpGroups,
                      std::vector<UGroupT>& umiGroups,
-                     spp::sparse_hash_map<uint16_t, uint32_t>& numMolHash,
                      spp::sparse_hash_map<uint32_t, uint32_t>& t2gMap,
+                     std::vector<double>& arboEqClassCount,
+                     uint32_t& totalArboFragments,
                      std::vector<SalmonEqClass>& salmonEqclasses){
   // get connected components
   std::vector<uint32_t> component;
   uint32_t numComps = g.connected_components(component);
   spp::sparse_hash_map<std::vector<uint32_t>,
-                       uint32_t,
+                       std::pair<uint32_t, uint32_t>,
                        boost::hash<std::vector<uint32_t>>> eqclassHash;
 
 
@@ -259,7 +260,7 @@ void getNumMolecules(alevin::graph::Graph& g,
 
         if( globalTxps.size() == 0 ) {
           std::cerr << "can't find a representative transcript for a molecule\n"
-                    << "Please report this on github "; 
+                    << "Please report this on github ";
           exit(74);
         }
 
@@ -272,7 +273,6 @@ void getNumMolecules(alevin::graph::Graph& g,
           readspmol += it->second;
           vset.erase(rv);
         }
-        numMolHash[readspmol] += 1;
 
         spp::sparse_hash_set<uint32_t> globalGenes;
         for(auto txp: globalTxps){
@@ -283,7 +283,9 @@ void getNumMolecules(alevin::graph::Graph& g,
         std::vector<uint32_t> genesVec (globalGenes.begin(),
                                         globalGenes.end());
         std::sort (genesVec.begin(), genesVec.end());
-        eqclassHash[genesVec] += 1;
+        eqclassHash[genesVec].first += 1;
+        eqclassHash[genesVec].second += readspmol;
+        totalArboFragments += readspmol;
       }//end-while
     } // end-if comp.size()>1
     else{
@@ -293,7 +295,7 @@ void getNumMolecules(alevin::graph::Graph& g,
       uint32_t uId = g.getUId(vertex);
       auto it = umiGroups[eId].begin();
       std::advance(it, uId);
-      numMolHash[it->second] += 1;
+      uint16_t readspmol = it->second;
 
       uint32_t eqclassId = g.getEqclassId(vertex);
       TGroupT txps = txpGroups[eqclassId];
@@ -308,16 +310,19 @@ void getNumMolecules(alevin::graph::Graph& g,
 
       std::vector<uint32_t> genesVec (genes.begin(), genes.end());
       std::sort (genesVec.begin(), genesVec.end());
-      eqclassHash[genesVec] += 1;
+      eqclassHash[genesVec].first += 1;
+      eqclassHash[genesVec].second += readspmol;
+      totalArboFragments += readspmol;
     }//end-else comp.size()==1
   } //end-outer for comps iterator
 
   for (auto& it: eqclassHash) {
     SalmonEqClass eqclass = {
       it.first,
-      it.second,
+      it.second.first,
     };
     salmonEqclasses.emplace_back(eqclass);
+    arboEqClassCount.emplace_back(it.second.second);
   }
 }
 
@@ -443,7 +448,8 @@ bool dedupClasses(std::vector<double>& geneAlphas,
                   std::vector<uint8_t>& tiers,
                   GZipWriter& gzw, uint32_t umiEditDistance,
                   bool dumpUmiGraph, std::string& trueBarcodeStr,
-                  spp::sparse_hash_map<uint16_t, uint32_t>& numMolHash,
+                  std::vector<double>& arboEqClassCount,
+                  uint32_t& totalArboFragments,
                   std::atomic<uint64_t>& totalUniEdgesCounts,
                   std::atomic<uint64_t>& totalBiEdgesCounts){
   // make directed graph from eqclasses
@@ -462,8 +468,9 @@ bool dedupClasses(std::vector<double>& geneAlphas,
   assignTiers(txpGroups, txpToGeneMap, tiers);
 
   // make gene based eqclasses
-  getNumMolecules(g, txpGroups, umiGroups, numMolHash,
-                  txpToGeneMap, salmonEqclasses);
+  getNumMolecules(g, txpGroups, umiGroups,
+                  txpToGeneMap, arboEqClassCount,
+                  totalArboFragments, salmonEqclasses);
 
   for( auto& eqclass: salmonEqclasses ) {
     if ( eqclass.labels.size() == 1 ) {

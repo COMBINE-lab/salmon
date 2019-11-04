@@ -67,6 +67,8 @@ public:
                              uint8_t featureCode,
                              std::vector<double>& alphas,
                              std::vector<uint8_t>& tiers,
+                             std::vector<double>& arboFragCounts,
+                             bool dumpArboFragCounts,
                              bool dumpUmiGraph);
 
   bool writeBootstraps(std::string& bcName,
@@ -102,6 +104,7 @@ private:
   std::unique_ptr<boost::iostreams::filtering_ostream> countMatrixStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> meanMatrixStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> varMatrixStream_{nullptr};
+  std::unique_ptr<boost::iostreams::filtering_ostream> arboMatrixStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> fullBootstrapMatrixStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> tierMatrixStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> umiGraphStream_{nullptr};

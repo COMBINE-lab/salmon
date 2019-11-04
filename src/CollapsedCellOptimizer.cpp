@@ -347,7 +347,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, uint32_t umiLength, uint32_t numBootstraps,
                   bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
-                  bool initUniform, CFreqMapT& freqCounter,
+                  bool initUniform, CFreqMapT& freqCounter, bool dumpArboFragCounts,
                   spp::sparse_hash_set<uint32_t>& mRnaGenes,
                   spp::sparse_hash_set<uint32_t>& rRnaGenes,
                   std::atomic<uint64_t>& totalUniEdgesCounts,
@@ -420,12 +420,14 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
 
     if ( !naiveEqclass ) {
       // perform the UMI deduplication step
+      uint32_t totalArboFragments {0};
+      std::vector<double> arboEqClassCount;
       std::vector<SalmonEqClass> salmonEqclasses;
-      spp::sparse_hash_map<uint16_t, uint32_t> numMolHash;
       bool dedupOk = dedupClasses(geneAlphas, totalCount, txpGroups,
                                   umiGroups, salmonEqclasses, umiLength,
                                   txpToGeneMap, tiers, gzw, umiEditDistance,
-                                  dumpUmiGraph, trueBarcodeStr, numMolHash,
+                                  dumpUmiGraph, trueBarcodeStr,
+                                  arboEqClassCount, totalArboFragments,
                                   totalUniEdgesCounts, totalBiEdgesCounts);
       if( !dedupOk ){
         jointlog->error("Deduplication for cell {} failed \n"
@@ -457,6 +459,44 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
           std::exit(74);
         }
       }
+
+      std::vector<double> arboFragCounts;
+      { // working out Arborescence level stats
+        if (dumpArboFragCounts) {
+          arboFragCounts.resize(numGenes, 0.0);
+          for( size_t i=0; i<salmonEqclasses.size(); i++ ) {
+            auto& eqclass = salmonEqclasses[i];
+            auto eqCount = arboEqClassCount[i];
+
+            if ( eqclass.labels.size() == 1 ) {
+              arboFragCounts[eqclass.labels.front()] += eqCount;
+            }
+            else if (eqclass.labels.size() > 1){
+
+              // calculate the division probabilities
+              std::vector<double> probs(eqclass.labels.size(), 0.0);
+              for (auto gid: eqclass.labels) {
+                probs.emplace_back( geneAlphas[gid] );
+              }
+
+              double norm = std::accumulate(probs.begin(), probs.end(), 0.0);
+              if (norm == 0.0) {
+                std::cerr<< "Arborescence featrure error" << std::flush;
+                exit(74);
+              }
+
+              for (size_t j=0; eqclass.labels.size(); j++) {
+                auto gid = eqclass.labels[j];
+                arboFragCounts[gid] += (eqCount * probs[j]) / norm;
+              }
+            }
+            else {
+              std::cerr<<"Eqclasses with No gene labels\n" << std::flush;
+              exit(74);
+            }
+          } //end-for
+        } //end-if
+      } // end populatin arbo level stats
 
       std::string features;
       uint8_t featureCode {0};
@@ -507,19 +547,6 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         double deduplicationRate = numMappedReads ?
           1.0 - (totalUmiCount / numMappedReads) : 0.0;
 
-        // Feature created after discussion with Mehrtash
-        double averageNumMolPerArbo {0.0};
-        size_t totalNumArborescence {0};
-        std::stringstream arboString ;
-        for (auto& it: numMolHash) {
-          totalNumArborescence += it.second;
-          averageNumMolPerArbo += (it.first * it.second);
-          if (dumpUmiGraph) {
-            arboString << "\t" << it.first << ":" << it.second;
-          }
-        }
-        averageNumMolPerArbo /= totalNumArborescence;
-
         featuresStream << "\t" << numRawReads
                        << "\t" << numMappedReads
                        << "\t" << totalUmiCount
@@ -539,12 +566,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
           featuresStream << "\t" << riboCount / totalUmiCount;
         }
 
-        if (dumpUmiGraph) {
-          featuresStream << arboString.rdbuf();
-        } else {
-          featuresStream << "\t" << averageNumMolPerArbo;
-        }
-
+        featuresStream << "\t" << totalArboFragments / totalUmiCount;
         features = featuresStream.str();
       } // end making features
 
@@ -555,6 +577,8 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                                  featureCode,
                                  geneAlphas,
                                  tiers,
+                                 arboFragCounts,
+                                 dumpArboFragCounts,
                                  dumpUmiGraph );
 
 
@@ -901,6 +925,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                aopt.dumpfeatures,
                                aopt.initUniform,
                                std::ref(freqCounter),
+                               aopt.dumpArboFragCounts,
                                std::ref(rRnaGenes),
                                std::ref(mRnaGenes),
                                std::ref(totalUniEdgesCounts),
