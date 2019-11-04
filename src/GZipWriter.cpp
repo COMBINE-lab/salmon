@@ -1087,7 +1087,7 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
   alphasFlag.reserve(static_cast<size_t>(std::ceil(num/8.0)));
 
   std::vector<float> arboFragSparse;
-  if (dumpArboFragCounts) { arboFragSparse.reserve(num/2); }
+  std::vector<uint8_t> arboFlag;
 
   std::vector<uint8_t> tiersSparse;
   tiersSparse.reserve(num/2);
@@ -1113,13 +1113,22 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
   }
 
   if (dumpArboFragCounts) {
-    for (size_t i=0; i<num; i++) {
-      if (arboFragCounts[i] > std::numeric_limits<float>::min()) {
-        arboFragSparse.emplace_back(arboFragCounts[i]);
-      }
-    }
+    arboFragSparse.reserve(num/2);
+    arboFlag.reserve(static_cast<size_t>(std::ceil(num/8.0)));
 
-    if (arboFragSparse.size() != alphasSparse.size()) { return false; }
+    for (size_t i=0; i<num; i+=8) {
+      uint8_t flag {0};
+      for (size_t j=0; j<8; j++) {
+        size_t vectorIndex = i+j;
+        if (vectorIndex >= num) { break; }
+
+        if (arboFragCounts[vectorIndex] > std::numeric_limits<float>::min()) {
+          arboFragSparse.emplace_back(arboFragCounts[vectorIndex]);
+          flag |= 128 >> j;
+        }
+      }
+      arboFlag.emplace_back(flag);
+    }
   } //end-if
 
   for (size_t i=0; i<num; i+=8) {
@@ -1157,7 +1166,7 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
     if (dumpArboFragCounts) {
       arboMatrixStream_.reset(new boost::iostreams::filtering_ostream);
       arboMatrixStream_->push(boost::iostreams::gzip_compressor(6));
-      auto arboMatFilename = path_ / "alevin" / "quants_arbo_mat.gz";
+      auto arboMatFilename = path_ / "alevin" / "quants_frag_mat.gz";
       arboMatrixStream_->push(boost::iostreams::file_sink(arboMatFilename.string(),
                                                           std::ios_base::out | std::ios_base::binary));
     }
@@ -1200,10 +1209,12 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
   countfile.write(reinterpret_cast<char*>(alphasSparse.data()),
                   elSize * alphasSparse.size());
 
-  arbofile.write(reinterpret_cast<char*>(alphasFlag.data()),
-                 flagSize * alphasFlag.size());
-  arbofile.write(reinterpret_cast<char*>(alphasSparse.data()),
-                 elSize * arboFragSparse.size());
+  if (dumpArboFragCounts) {
+    arbofile.write(reinterpret_cast<char*>(arboFlag.data()),
+                   flagSize * arboFlag.size());
+    arbofile.write(reinterpret_cast<char*>(arboFragSparse.data()),
+                   elSize * arboFragSparse.size());
+  }
 
   tierfile.write(reinterpret_cast<char*>(tiersFlag.data()),
                  flagSize * tiersFlag.size());

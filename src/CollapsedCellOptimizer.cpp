@@ -429,6 +429,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                                   dumpUmiGraph, trueBarcodeStr,
                                   arboEqClassCount, totalArboFragments,
                                   totalUniEdgesCounts, totalBiEdgesCounts);
+
       if( !dedupOk ){
         jointlog->error("Deduplication for cell {} failed \n"
                         "Please Report this on github.", trueBarcodeStr);
@@ -466,15 +467,24 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
           arboFragCounts.resize(numGenes, 0.0);
           for( size_t i=0; i<salmonEqclasses.size(); i++ ) {
             auto& eqclass = salmonEqclasses[i];
-            auto eqCount = arboEqClassCount[i];
+            double eqCount = arboEqClassCount[i];
+            size_t numLabels = eqclass.labels.size();
 
-            if ( eqclass.labels.size() == 1 ) {
-              arboFragCounts[eqclass.labels.front()] += eqCount;
+            for (auto gid: eqclass.labels) {
+              if (gid >= numGenes) {
+                std::cerr<< gid << "more than number of genes" << std::flush;
+                exit(74);
+              }
             }
-            else if (eqclass.labels.size() > 1){
+
+            if ( numLabels == 1 ) {
+              auto gid = eqclass.labels.front();
+              arboFragCounts[gid] += eqCount;
+            }
+            else if ( numLabels > 1 ){
 
               // calculate the division probabilities
-              std::vector<double> probs(eqclass.labels.size(), 0.0);
+              std::vector<double> probs(numLabels, 0.0);
               for (auto gid: eqclass.labels) {
                 probs.emplace_back( geneAlphas[gid] );
               }
@@ -485,7 +495,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                 exit(74);
               }
 
-              for (size_t j=0; eqclass.labels.size(); j++) {
+              for (size_t j=0; j<numLabels; j++) {
                 auto gid = eqclass.labels[j];
                 arboFragCounts[gid] += (eqCount * probs[j]) / norm;
               }
@@ -570,17 +580,22 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         features = featuresStream.str();
       } // end making features
 
-
       // write the abundance for the cell
-      gzw.writeSparseAbundances( trueBarcodeStr,
-                                 features,
-                                 featureCode,
-                                 geneAlphas,
-                                 tiers,
-                                 arboFragCounts,
-                                 dumpArboFragCounts,
-                                 dumpUmiGraph );
+      bool isWriteOk = gzw.writeSparseAbundances( trueBarcodeStr,
+                                                  features,
+                                                  featureCode,
+                                                  geneAlphas,
+                                                  tiers,
+                                                  arboFragCounts,
+                                                  dumpArboFragCounts,
+                                                  dumpUmiGraph );
 
+      if( not isWriteOk ){
+        jointlog->error("Gzip Writer failed \n"
+                        "Please Report this on github.");
+        jointlog->flush();
+        std::exit(74);
+      }
 
       // maintaining count for total number of predicted UMI
       salmon::utils::incLoop(totalDedupCounts, totalCount);

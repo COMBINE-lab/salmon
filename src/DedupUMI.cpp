@@ -479,8 +479,13 @@ bool dedupClasses(std::vector<double>& geneAlphas,
     }
     else if (eqclass.labels.size() == 0){
       std::cerr<<"Eqclasses with No gene labels\n";
-      exit(74);
+      return false;
     }
+  }
+
+  if (arboEqClassCount.size() != salmonEqclasses.size()) {
+    std::cerr<<"Incorrect Arborescence features\n";
+    return false;
   }
 
   return true;
