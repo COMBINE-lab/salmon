@@ -27,6 +27,7 @@
 #include "concurrentqueue.h"
 
 #include <boost/math/special_functions/digamma.hpp>
+#include <boost/random.hpp>
 
 namespace bfs = boost::filesystem;
 using JqueueT = moodycamel::ConcurrentQueue<uint32_t>;

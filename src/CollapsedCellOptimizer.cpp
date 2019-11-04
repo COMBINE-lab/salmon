@@ -382,6 +382,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
     std::vector<double> geneAlphas(numGenes, 0.0);
     std::vector<uint8_t> tiers (numGenes, 0);
 
+    size_t fragmentCountValidator {0};
     for (auto& key : orderedTgroup) {
       //traversing each class and copying relevant data.
       bool isKeyPresent = eqMap.find_fn(key.first, [&](const SCTGValue& val){
@@ -393,17 +394,20 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
             // extracting txp labels
             const std::vector<uint32_t>& txps = key.first.txps;
 
-            // original counts of the UMI
-            uint32_t eqCount {0};
-            for(auto& ugroup: bcIt->second){
-              eqCount += ugroup.second;
-            }
-
             txpGroups.emplace_back(txps);
             umiGroups.emplace_back(bcIt->second);
+            for(auto& ugroup: bcIt->second){
+              fragmentCountValidator += ugroup.second;
+            }
 
             // for dumping per-cell eqclass vector
             if(verbose){
+              // original counts of the UMI
+              uint32_t eqCount {0};
+              for(auto& ugroup: bcIt->second){
+                eqCount += ugroup.second;
+              }
+
               eqIDs.push_back(static_cast<uint32_t>(key.second));
               eqCounts.push_back(eqCount);
             }
@@ -416,6 +420,13 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         jointlog->flush();
         exit(1);
       }
+    }
+
+    if (fragmentCountValidator != umiCount[trueBarcodeIdx]) {
+      jointlog->error("Feature count in feature dump doesn't map"
+                      "with eqclasses frament counts\n");
+      jointlog->flush();
+      exit(1);
     }
 
     if ( !naiveEqclass ) {
@@ -465,6 +476,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
       { // working out Arborescence level stats
         if (dumpArboFragCounts) {
           arboFragCounts.resize(numGenes, 0.0);
+
           for( size_t i=0; i<salmonEqclasses.size(); i++ ) {
             auto& eqclass = salmonEqclasses[i];
             double eqCount = arboEqClassCount[i];
@@ -484,20 +496,16 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
             else if ( numLabels > 1 ){
 
               // calculate the division probabilities
-              std::vector<double> probs(numLabels, 0.0);
+              std::vector<double> probs;
               for (auto gid: eqclass.labels) {
                 probs.emplace_back( geneAlphas[gid] );
               }
+              std::discrete_distribution<> dist(probs.begin(), probs.end());
+              boost::random::mt19937 gen;
 
-              double norm = std::accumulate(probs.begin(), probs.end(), 0.0);
-              if (norm == 0.0) {
-                std::cerr<< "Arborescence featrure error" << std::flush;
-                exit(74);
-              }
-
-              for (size_t j=0; j<numLabels; j++) {
-                auto gid = eqclass.labels[j];
-                arboFragCounts[gid] += (eqCount * probs[j]) / norm;
+              for (size_t j=0; j<eqCount; j++) {
+                auto gid = eqclass.labels[dist(gen)];
+                arboFragCounts[gid] += 1;
               }
             }
             else {
