@@ -131,6 +131,8 @@ private:
         ar(cereal::make_nvp("sampling_type", sampling_type_),
            cereal::make_nvp("SeqHash", seqHash256_),
            cereal::make_nvp("NameHash", nameHash256_),
+           cereal::make_nvp("SeqHash512", seqHash512_),
+           cereal::make_nvp("NameHash512", nameHash512_),
            cereal::make_nvp("DecoySeqHash", decoySeqHash256_),
            cereal::make_nvp("DecoyNameHash", decoyNameHash256_),
            cereal::make_nvp("index_version", version_)
