@@ -64,10 +64,10 @@ public:
 
   bool writeSparseAbundances(std::string& bcName,
                              std::string& features,
+                             std::string& arboData,
                              uint8_t featureCode,
                              std::vector<double>& alphas,
                              std::vector<uint8_t>& tiers,
-                             std::vector<double>& arboFragCounts,
                              bool dumpArboFragCounts,
                              bool dumpUmiGraph);
 
@@ -104,11 +104,11 @@ private:
   std::unique_ptr<boost::iostreams::filtering_ostream> countMatrixStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> meanMatrixStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> varMatrixStream_{nullptr};
-  std::unique_ptr<boost::iostreams::filtering_ostream> arboMatrixStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> fullBootstrapMatrixStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> tierMatrixStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> umiGraphStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> cellEQStream_{nullptr};
+  std::unique_ptr<boost::iostreams::filtering_ostream> arboMatrixStream_{nullptr};
   std::unique_ptr<std::ofstream> bcNameStream_{nullptr};
   std::unique_ptr<std::ofstream> bcFeaturesStream_{nullptr};
   std::unique_ptr<std::ofstream> bcBootNameStream_{nullptr};

@@ -347,7 +347,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, uint32_t umiLength, uint32_t numBootstraps,
                   bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
-                  bool initUniform, CFreqMapT& freqCounter, bool dumpArboFragCounts,
+                  bool initUniform, CFreqMapT& freqCounter, bool dumpArborescences,
                   spp::sparse_hash_set<uint32_t>& mRnaGenes,
                   spp::sparse_hash_set<uint32_t>& rRnaGenes,
                   std::atomic<uint64_t>& totalUniEdgesCounts,
@@ -431,14 +431,14 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
 
     if ( !naiveEqclass ) {
       // perform the UMI deduplication step
-      uint32_t totalArboFragments {0};
-      std::vector<double> arboEqClassCount;
       std::vector<SalmonEqClass> salmonEqclasses;
+      std::vector<spp::sparse_hash_map<uint16_t, uint16_t>> arboEqClassCount;
       bool dedupOk = dedupClasses(geneAlphas, totalCount, txpGroups,
                                   umiGroups, salmonEqclasses, umiLength,
                                   txpToGeneMap, tiers, gzw, umiEditDistance,
                                   dumpUmiGraph, trueBarcodeStr,
-                                  arboEqClassCount, totalArboFragments,
+                                  arboEqClassCount,
+                                  dumpArborescences,
                                   totalUniEdgesCounts, totalBiEdgesCounts);
 
       if( !dedupOk ){
@@ -472,14 +472,18 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         }
       }
 
-      std::vector<double> arboFragCounts;
+      std::string arboData;
       { // working out Arborescence level stats
-        if (dumpArboFragCounts) {
-          arboFragCounts.resize(numGenes, 0.0);
+        if (dumpArborescences) {
+          size_t totalCellFrags {0};
+          std::stringstream arboDataStream;
+
+          std::vector<spp::sparse_hash_map<uint16_t, uint32_t>> arboFragCounts;
+          arboFragCounts.resize(numGenes);
 
           for( size_t i=0; i<salmonEqclasses.size(); i++ ) {
             auto& eqclass = salmonEqclasses[i];
-            double eqCount = arboEqClassCount[i];
+            auto& eqCounts = arboEqClassCount[i];
             size_t numLabels = eqclass.labels.size();
 
             for (auto gid: eqclass.labels) {
@@ -491,7 +495,10 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
 
             if ( numLabels == 1 ) {
               auto gid = eqclass.labels.front();
-              arboFragCounts[gid] += eqCount;
+              for (auto it: eqCounts) {
+                arboFragCounts[gid][it.first] += it.second;
+                totalCellFrags += (it.first * it.second);
+              }
             }
             else if ( numLabels > 1 ){
 
@@ -500,19 +507,59 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
               for (auto gid: eqclass.labels) {
                 probs.emplace_back( geneAlphas[gid] );
               }
-              std::discrete_distribution<> dist(probs.begin(), probs.end());
-              boost::random::mt19937 gen;
 
-              for (size_t j=0; j<eqCount; j++) {
-                auto gid = eqclass.labels[dist(gen)];
-                arboFragCounts[gid] += 1;
+              size_t arboId {0}, totalGeneFrags {0};
+              size_t numArbos = eqCounts.size();
+              std::vector<uint16_t> arboLengths(numArbos);
+              std::vector<uint16_t> arboCounts(numArbos);
+              for (auto it: eqCounts) {
+                arboLengths[arboId] = it.first;
+                arboCounts[arboId] = it.second;
+
+                totalGeneFrags += (it.second * it.first);
+                arboId += 1;
               }
+
+              std::discrete_distribution<> geneDist(probs.begin(), probs.end());
+              std::discrete_distribution<> arboDist(arboCounts.begin(), arboCounts.end());
+
+              boost::random::mt19937 geneGen;
+              boost::random::mt19937 arboGen;
+
+              for (size_t j=0; j < totalGeneFrags; j++) {
+                auto gid = eqclass.labels[geneDist(geneGen)];
+                auto arboLength = arboLengths[arboDist(arboGen)];
+                arboFragCounts[gid][arboLength] += 1;
+              }
+
+              totalCellFrags += totalGeneFrags;
             }
             else {
               std::cerr<<"Eqclasses with No gene labels\n" << std::flush;
               exit(74);
             }
           } //end-for
+
+          // populating arbo txt file
+          std::stringstream arboGeneData;
+          size_t gid {0}, numExpGenes {0};
+          for (auto& arboDist: arboFragCounts) {
+            if (arboDist.size() > 0) {
+              numExpGenes += 1;
+
+              arboGeneData << gid << "\t" << arboDist.size() ;
+              for(auto it: arboDist) {
+                arboGeneData << "\t" << it.first << "\t" << it.second;
+              }
+              arboGeneData << std::endl;
+            }
+
+            gid += 1;
+          } // done populating arboGeneData
+
+          arboDataStream << trueBarcodeStr << "\t" << numExpGenes << "\t"
+                         << totalCellFrags << "\n" << arboGeneData.str();
+          arboData = arboDataStream.str();
         } //end-if
       } // end populatin arbo level stats
 
@@ -584,18 +631,17 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
           featuresStream << "\t" << riboCount / totalUmiCount;
         }
 
-        featuresStream << "\t" << totalArboFragments / totalUmiCount;
         features = featuresStream.str();
       } // end making features
 
       // write the abundance for the cell
       bool isWriteOk = gzw.writeSparseAbundances( trueBarcodeStr,
                                                   features,
+                                                  arboData,
                                                   featureCode,
                                                   geneAlphas,
                                                   tiers,
-                                                  arboFragCounts,
-                                                  dumpArboFragCounts,
+                                                  dumpArborescences,
                                                   dumpUmiGraph );
 
       if( not isWriteOk ){
@@ -948,7 +994,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                aopt.dumpfeatures,
                                aopt.initUniform,
                                std::ref(freqCounter),
-                               aopt.dumpArboFragCounts,
+                               aopt.dumpArborescences,
                                std::ref(rRnaGenes),
                                std::ref(mRnaGenes),
                                std::ref(totalUniEdgesCounts),

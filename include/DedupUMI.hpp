@@ -38,8 +38,8 @@ bool dedupClasses(std::vector<double>& geneAlphas,
                   std::vector<uint8_t>& tiers,
                   GZipWriter& gzw, uint32_t umiEditDistance,
                   bool dumpUmiGraph, std::string& trueBarcodeStr,
-                  std::vector<double>& arboEqClassCount,
-                  uint32_t& totalArboFragments,
+                  std::vector<spp::sparse_hash_map<uint16_t, uint16_t>>& arboEqClassCount,
+                  bool dumpArborescences,
                   std::atomic<uint64_t>& totalUniEdgesCounts,
                   std::atomic<uint64_t>& totalBiEdgesCounts);
 

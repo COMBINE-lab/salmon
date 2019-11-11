@@ -128,7 +128,7 @@ namespace defaults {
   constexpr const bool isQuartzSeq2{false};
   constexpr const bool noQuant{false};
   constexpr const bool dumpFQ{false};
-  constexpr const bool dumpArboFragCounts{false};
+  constexpr const bool dumpArborescences{false};
   constexpr const bool dumpBarcodeEq{false};
   constexpr const bool dumpFeatures{false};
   constexpr const bool dumpBFH{false};

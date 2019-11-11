@@ -1071,11 +1071,11 @@ bool GZipWriter::writeSparseBootstraps(std::string& bcName,
 
 bool GZipWriter::writeSparseAbundances(std::string& bcName,
                                        std::string& features,
+                                       std::string& arboData,
                                        uint8_t featureCode,
                                        std::vector<double>& alphas,
                                        std::vector<uint8_t>& tiers,
-                                       std::vector<double>& arboFragCounts,
-                                       bool dumpArboFragCounts,
+                                       bool dumpArborescences,
                                        bool dumpUmiGraph){
 
   // construct the output vectors outside of the critical section
@@ -1085,9 +1085,6 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
   alphasSparse.reserve(num/2);
   std::vector<uint8_t> alphasFlag;
   alphasFlag.reserve(static_cast<size_t>(std::ceil(num/8.0)));
-
-  std::vector<float> arboFragSparse;
-  std::vector<uint8_t> arboFlag;
 
   std::vector<uint8_t> tiersSparse;
   tiersSparse.reserve(num/2);
@@ -1111,25 +1108,6 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
     }
     alphasFlag.emplace_back(flag);
   }
-
-  if (dumpArboFragCounts) {
-    arboFragSparse.reserve(num/2);
-    arboFlag.reserve(static_cast<size_t>(std::ceil(num/8.0)));
-
-    for (size_t i=0; i<num; i+=8) {
-      uint8_t flag {0};
-      for (size_t j=0; j<8; j++) {
-        size_t vectorIndex = i+j;
-        if (vectorIndex >= num) { break; }
-
-        if (arboFragCounts[vectorIndex] > std::numeric_limits<float>::min()) {
-          arboFragSparse.emplace_back(arboFragCounts[vectorIndex]);
-          flag |= 128 >> j;
-        }
-      }
-      arboFlag.emplace_back(flag);
-    }
-  } //end-if
 
   for (size_t i=0; i<num; i+=8) {
     uint8_t flag {0};
@@ -1163,10 +1141,10 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
     tierMatrixStream_->push(boost::iostreams::file_sink(tierMatFilename.string(),
                                                         std::ios_base::out | std::ios_base::binary));
 
-    if (dumpArboFragCounts) {
+    if (dumpArborescences) {
       arboMatrixStream_.reset(new boost::iostreams::filtering_ostream);
       arboMatrixStream_->push(boost::iostreams::gzip_compressor(6));
-      auto arboMatFilename = path_ / "alevin" / "quants_frag_mat.gz";
+      auto arboMatFilename = path_ / "alevin" / "arborescence_dump.txt.gz";
       arboMatrixStream_->push(boost::iostreams::file_sink(arboMatFilename.string(),
                                                           std::ios_base::out | std::ios_base::binary));
     }
@@ -1209,11 +1187,8 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
   countfile.write(reinterpret_cast<char*>(alphasSparse.data()),
                   elSize * alphasSparse.size());
 
-  if (dumpArboFragCounts) {
-    arbofile.write(reinterpret_cast<char*>(arboFlag.data()),
-                   flagSize * arboFlag.size());
-    arbofile.write(reinterpret_cast<char*>(arboFragSparse.data()),
-                   elSize * arboFragSparse.size());
+  if (dumpArborescences) {
+    arbofile.write(arboData.c_str(), arboData.size());
   }
 
   tierfile.write(reinterpret_cast<char*>(tiersFlag.data()),

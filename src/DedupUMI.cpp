@@ -195,18 +195,17 @@ void collapseVertices(uint32_t vertex,
   } //end-for
 }
 
-void getNumMolecules(alevin::graph::Graph& g,
-                     std::vector<TGroupT>& txpGroups,
-                     std::vector<UGroupT>& umiGroups,
-                     spp::sparse_hash_map<uint32_t, uint32_t>& t2gMap,
-                     std::vector<double>& arboEqClassCount,
-                     uint32_t& totalArboFragments,
-                     std::vector<SalmonEqClass>& salmonEqclasses){
+void getNumMoleculesWithArborescence(alevin::graph::Graph& g,
+                                     std::vector<TGroupT>& txpGroups,
+                                     std::vector<UGroupT>& umiGroups,
+                                     spp::sparse_hash_map<uint32_t, uint32_t>& t2gMap,
+                                     std::vector<spp::sparse_hash_map<uint16_t, uint16_t>>& arboEqClassCount,
+                                     std::vector<SalmonEqClass>& salmonEqclasses){
   // get connected components
   std::vector<uint32_t> component;
   uint32_t numComps = g.connected_components(component);
   spp::sparse_hash_map<std::vector<uint32_t>,
-                       std::pair<uint32_t, uint32_t>,
+                       std::pair<uint32_t, spp::sparse_hash_map<uint16_t, uint16_t>>,
                        boost::hash<std::vector<uint32_t>>> eqclassHash;
 
 
@@ -284,8 +283,7 @@ void getNumMolecules(alevin::graph::Graph& g,
                                         globalGenes.end());
         std::sort (genesVec.begin(), genesVec.end());
         eqclassHash[genesVec].first += 1;
-        eqclassHash[genesVec].second += readspmol;
-        totalArboFragments += readspmol;
+        eqclassHash[genesVec].second[readspmol] += 1;
       }//end-while
     } // end-if comp.size()>1
     else{
@@ -311,8 +309,7 @@ void getNumMolecules(alevin::graph::Graph& g,
       std::vector<uint32_t> genesVec (genes.begin(), genes.end());
       std::sort (genesVec.begin(), genesVec.end());
       eqclassHash[genesVec].first += 1;
-      eqclassHash[genesVec].second += readspmol;
-      totalArboFragments += readspmol;
+      eqclassHash[genesVec].second[readspmol] += 1;
     }//end-else comp.size()==1
   } //end-outer for comps iterator
 
@@ -321,8 +318,133 @@ void getNumMolecules(alevin::graph::Graph& g,
       it.first,
       it.second.first,
     };
+
     salmonEqclasses.emplace_back(eqclass);
     arboEqClassCount.emplace_back(it.second.second);
+  }
+}
+
+void getNumMolecules(alevin::graph::Graph& g,
+                     std::vector<TGroupT>& txpGroups,
+                     std::vector<UGroupT>& umiGroups,
+                     spp::sparse_hash_map<uint32_t, uint32_t>& t2gMap,
+                     std::vector<SalmonEqClass>& salmonEqclasses){
+  // get connected components
+  std::vector<uint32_t> component;
+  uint32_t numComps = g.connected_components(component);
+  spp::sparse_hash_map<std::vector<uint32_t>,
+                       uint32_t,
+                       boost::hash<std::vector<uint32_t>>> eqclassHash;
+
+
+  // making sets of relevant connected vertices
+  std::vector<std::vector<uint32_t>> comps (numComps);
+  for (size_t i=0; i<component.size(); i++) {
+    comps[component[i]].emplace_back(static_cast<uint32_t>(i));
+  }
+
+  spp::sparse_hash_map<size_t, uint32_t> compCounter;
+  // iterating over connected components
+  for (auto& comp: comps) {
+    compCounter[comp.size()] += 1;
+
+    // more than one vertex in the component
+    if ( comp.size() > 1 ) {
+      spp::sparse_hash_set<uint32_t> vset(comp.begin(), comp.end());
+
+      while ( vset.size() != 0 ){
+        std::vector<uint32_t> bestMcc;
+        for (uint32_t vertex: vset) {
+          std::vector<uint32_t> newMcc;
+
+          collapseVertices(vertex, g, txpGroups,
+                           newMcc,
+                           vset);
+          //choose the longer collapse: Greedy
+          if (bestMcc.size() < newMcc.size()) {
+            bestMcc = newMcc;
+          }
+        }// end-vset for
+
+        tsl::hopscotch_map<uint32_t, uint32_t> globalTxpCounts;
+        for (size_t vId=0; vId<bestMcc.size(); vId++){
+          uint32_t vertex = bestMcc[vId];
+          uint32_t eqclassId = g.getEqclassId(vertex);
+
+          for (uint32_t txp: txpGroups[eqclassId]){
+            globalTxpCounts[txp] += 1;
+          }
+        }//end-mcc for
+
+        // only transcripts that occur in *every* vertex, and hence
+        // have a count of bestMcc.size(), are in the proper intersection.
+        uint32_t requiredCount = bestMcc.size();
+        std::vector<uint32_t> globalTxps;
+        globalTxps.reserve(globalTxpCounts.size());
+        for (auto kv : globalTxpCounts) {
+          if (kv.second == requiredCount) { globalTxps.push_back(kv.first); }
+        }
+
+        if( globalTxps.size() == 0 ) {
+          std::cerr << "can't find a representative transcript for a molecule\n"
+                    << "Please report this on github ";
+          exit(74);
+        }
+
+        uint16_t readspmol {0};
+        for (auto rv: bestMcc){
+          uint32_t eId = g.getEqclassId(rv);
+          uint32_t uId = g.getUId(rv);
+          auto it = umiGroups[eId].begin();
+          std::advance(it, uId);
+          readspmol += it->second;
+          vset.erase(rv);
+        }
+
+        spp::sparse_hash_set<uint32_t> globalGenes;
+        for(auto txp: globalTxps){
+          uint32_t geneId = getGeneId(t2gMap, txp);
+          globalGenes.insert(geneId);
+        }
+
+        std::vector<uint32_t> genesVec (globalGenes.begin(),
+                                        globalGenes.end());
+        std::sort (genesVec.begin(), genesVec.end());
+        eqclassHash[genesVec] += 1;
+      }//end-while
+    } // end-if comp.size()>1
+    else{
+      assert(comp.size() == 1);
+      uint32_t vertex = comp[0];
+      uint32_t eId = g.getEqclassId(vertex);
+      uint32_t uId = g.getUId(vertex);
+      auto it = umiGroups[eId].begin();
+      std::advance(it, uId);
+      uint16_t readspmol = it->second;
+
+      uint32_t eqclassId = g.getEqclassId(vertex);
+      TGroupT txps = txpGroups[eqclassId];
+
+      spp::sparse_hash_set<uint32_t> genes;
+      for (auto txp: txps) {
+        uint32_t gId = getGeneId(t2gMap, txp);
+        genes.insert(gId);
+      }
+
+      assert(genes.size() > 0);
+
+      std::vector<uint32_t> genesVec (genes.begin(), genes.end());
+      std::sort (genesVec.begin(), genesVec.end());
+      eqclassHash[genesVec] += 1;
+    }//end-else comp.size()==1
+  } //end-outer for comps iterator
+
+  for (auto& it: eqclassHash) {
+    SalmonEqClass eqclass = {
+      it.first,
+      it.second,
+    };
+    salmonEqclasses.emplace_back(eqclass);
   }
 }
 
@@ -448,8 +570,8 @@ bool dedupClasses(std::vector<double>& geneAlphas,
                   std::vector<uint8_t>& tiers,
                   GZipWriter& gzw, uint32_t umiEditDistance,
                   bool dumpUmiGraph, std::string& trueBarcodeStr,
-                  std::vector<double>& arboEqClassCount,
-                  uint32_t& totalArboFragments,
+                  std::vector<spp::sparse_hash_map<uint16_t, uint16_t>>& arboEqClassCount,
+                  bool dumpArborescences,
                   std::atomic<uint64_t>& totalUniEdgesCounts,
                   std::atomic<uint64_t>& totalBiEdgesCounts){
   // make directed graph from eqclasses
@@ -467,10 +589,17 @@ bool dedupClasses(std::vector<double>& geneAlphas,
   // assign tiers to the genes
   assignTiers(txpGroups, txpToGeneMap, tiers);
 
-  // make gene based eqclasses
-  getNumMolecules(g, txpGroups, umiGroups,
-                  txpToGeneMap, arboEqClassCount,
-                  totalArboFragments, salmonEqclasses);
+  if (dumpArborescences) {
+    // make gene based eqclasses
+    getNumMoleculesWithArborescence(g, txpGroups, umiGroups,
+                                    txpToGeneMap, arboEqClassCount,
+                                    salmonEqclasses);
+  } else {
+    // make gene based eqclasses
+    getNumMolecules(g, txpGroups, umiGroups,
+                    txpToGeneMap,
+                    salmonEqclasses);
+  }
 
   for( auto& eqclass: salmonEqclasses ) {
     if ( eqclass.labels.size() == 1 ) {
@@ -483,7 +612,7 @@ bool dedupClasses(std::vector<double>& geneAlphas,
     }
   }
 
-  if (arboEqClassCount.size() != salmonEqclasses.size()) {
+  if (dumpArborescences and arboEqClassCount.size() != salmonEqclasses.size()) {
     std::cerr<<"Incorrect Arborescence features\n";
     return false;
   }

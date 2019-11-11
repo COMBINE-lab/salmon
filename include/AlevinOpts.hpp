@@ -28,7 +28,7 @@ struct AlevinOpts {
   //dump barcodes fq files
   bool dumpfq;
   // dump Arborescence Fragment Counts
-  bool dumpArboFragCounts;
+  bool dumpArborescences;
   //dump CB features for whitelisting
   bool dumpfeatures;
   //eqclass level barcode count
