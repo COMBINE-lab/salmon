@@ -936,6 +936,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
       aopt.jointLog->info( "Prior Weight: {}/ {}", priorWeight, priorMolCounts);
       {
         //rearragngement of vectors
+        size_t noPriorCellCount {0};
         std::vector<std::vector<double>> temps(trueBarcodes.size(), std::vector<double>(numGenes, priorWeight * 1e-2));
         for (size_t i=0; i<trueBarcodes.size(); i++) {
           auto& cname = trueBarcodes[i];
@@ -950,15 +951,18 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
               }
             }
           } else {
-            aopt.jointLog->error("Can't find prior for CB: {}", cname);
-            aopt.jointLog->flush();
-            std::exit(84);
+            noPriorCellCount += 1;
           }
         } //end-for
 
         priorAlphas = temps;
+
         aopt.jointLog->info("Done Rearranging Matrix for Prior of {} X {}",
                             priorAlphas.size(), priorAlphas[0].size());
+        if (noPriorCellCount > 0) {
+          aopt.jointLog->warn("Can't find prior and using uniform priors for {} cells", noPriorCellCount);
+        }
+        aopt.jointLog->flush();
       } // end-rearrangment
     } else { //end-else not initUniform
       priorAlphas = std::vector<std::vector<double>> (numCells, std::vector<double>(numGenes, 1e-2) );
