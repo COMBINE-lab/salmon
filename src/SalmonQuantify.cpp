@@ -857,6 +857,7 @@ void processReads(
   size_t numMappingsDropped{0};
   size_t numFragsDropped{0};
   size_t numDecoyFrags{0};
+  const double decoyThreshold = salmonOpts.decoyThreshold;
 
   uint32_t readLen{0}, mateLen{0}, totLen{0};
 
@@ -1054,10 +1055,14 @@ void processReads(
           bestScorePerTranscript.clear();
 
           // the best scores start out as invalid
+          /*
           int32_t bestScore = invalidScore;
           int32_t secondBestScore = invalidScore;
           int32_t bestDecoyScore = invalidScore;
-          std::vector<decltype(bestScore)> scores(jointHits.size(), 0);
+          */
+
+          salmon::mapping_utils::MappingScoreInfo msi = {invalidScore, invalidScore, invalidScore, decoyThreshold};
+          std::vector<decltype(msi.bestScore)> scores(jointHits.size(), 0);
           size_t idx{0};
           bool isMultimapping = (jointHits.size() > 1);
 
@@ -1066,13 +1071,15 @@ void processReads(
             bool validScore = (hitScore != invalidScore);
             numMappingsDropped += validScore ? 0 : 1;
             auto tid = qidx->getRefId(jointHit.tid);
-            salmon::mapping_utils::updateRefMappings(tid, hitScore, idx, transcripts, invalidScore, bestScore, secondBestScore, bestDecoyScore,
+            salmon::mapping_utils::updateRefMappings(tid, hitScore, idx, transcripts, invalidScore, msi, 
+                              //bestScore, secondBestScore, bestDecoyScore,
                               scores, bestScorePerTranscript, perm);
             ++idx;
           }
 
-          bool bestHitDecoy = (bestScore < bestDecoyScore);
-          if (bestScore > invalidScore and !bestHitDecoy) {
+          //bool bestHitDecoy = (msi.bestScore < msi.bestDecoyScore);
+          bool bestHitDecoy = msi.haveOnlyDecoyMappings();
+          if (msi.bestScore > invalidScore and !bestHitDecoy) {
             salmon::mapping_utils::filterAndCollectAlignments(jointHits,
                                        scores,
                                        perm,
@@ -1082,9 +1089,12 @@ void processReads(
                                        tryAlign,
                                        hardFilter,
                                        salmonOpts.scoreExp,
+                                       msi,
+                                       /*
                                        bestScore,
                                        secondBestScore,
                                        bestDecoyScore,
+                                       */
                                        jointAlignments);
           } else {
             numDecoyFrags += bestHitDecoy ? 1 : 0;
@@ -1444,6 +1454,7 @@ void processReads(
    size_t numMappingsDropped{0};
    size_t numFragsDropped{0};
    size_t numDecoyFrags{0};
+   const double decoyThreshold = salmonOpts.decoyThreshold;
 
    //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
    AlnCacheMap alnCache; alnCache.reserve(16);
@@ -1532,10 +1543,14 @@ void processReads(
          bestScorePerTranscript.clear();
 
          // the best scores start out as invalid
+         /*
          int32_t bestScore = invalidScore;
          int32_t secondBestScore = invalidScore;
          int32_t bestDecoyScore = invalidScore;
-         std::vector<decltype(bestScore)> scores(jointHits.size(), 0);
+         */
+         salmon::mapping_utils::MappingScoreInfo msi = {invalidScore, invalidScore, invalidScore, decoyThreshold};
+
+         std::vector<decltype(msi.bestScore)> scores(jointHits.size(), 0);
          size_t idx{0};
          bool isMultimapping = (jointHits.size() > 1);
 
@@ -1544,13 +1559,16 @@ void processReads(
            bool validScore = (hitScore != invalidScore);
            numMappingsDropped += validScore ? 0 : 1;
            auto tid = qidx->getRefId(jointHit.tid);
-           salmon::mapping_utils::updateRefMappings(tid, hitScore, idx, transcripts, invalidScore, bestScore, secondBestScore, bestDecoyScore,
+           salmon::mapping_utils::updateRefMappings(tid, hitScore, idx, transcripts, invalidScore, 
+                            msi,
+                            //bestScore, secondBestScore, bestDecoyScore,
                              scores, bestScorePerTranscript, perm);
            ++idx;
          }
          
-         bool bestHitDecoy = (bestScore < bestDecoyScore);
-         if (bestScore > invalidScore and !bestHitDecoy) {
+         //bool bestHitDecoy = (msi.bestScore < msi.bestDecoyScore);
+         bool bestHitDecoy = msi.haveOnlyDecoyMappings();
+         if (msi.bestScore > invalidScore and !bestHitDecoy) {
            salmon::mapping_utils::filterAndCollectAlignments(jointHits,
                                       scores,
                                       perm,
@@ -1560,9 +1578,12 @@ void processReads(
                                       tryAlign,
                                       hardFilter,
                                       salmonOpts.scoreExp,
+                                      msi,
+                                      /*
                                       bestScore,
                                       secondBestScore,
                                       bestDecoyScore,
+                                      */
                                       jointAlignments);
          } else {
            numDecoyFrags += bestHitDecoy ? 1 : 0;

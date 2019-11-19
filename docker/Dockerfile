@@ -47,3 +47,7 @@ RUN curl -k -L https://github.com/COMBINE-lab/salmon/archive/v${SALMON_VERSION}.
 #    cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local && make && make install
 
 ENV PATH /home/salmon-${SALMON_VERSION}/bin:${PATH}
+ENV LD_LIBRARY_PATH "/usr/local/lib:${LD_LIBRARY_PATH}"
+
+RUN echo "export PATH=$PATH" > /etc/environment
+RUN echo "export LD_LIBRARY_PATH=$LD_LIBRARY_PATH" > /etc/environment

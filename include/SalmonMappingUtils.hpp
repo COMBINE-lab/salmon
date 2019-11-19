@@ -58,6 +58,19 @@ namespace salmon {
 
     using MateStatus = pufferfish::util::MateStatus;
 
+    struct MappingScoreInfo {
+      int32_t bestScore;
+      int32_t secondBestScore;
+      int32_t bestDecoyScore;
+      double decoyThresh;
+      bool haveOnlyDecoyMappings() const {
+        // if the best non-decoy mapping has score less than decoyThresh * bestDecoyScore
+        // and if the bestDecoyScore is a valid value, then we have no valid non-decoy mappings.
+        return (bestScore < static_cast<int32_t>(decoyThresh * bestDecoyScore)) and 
+               (bestDecoyScore > std::numeric_limits<decltype(bestDecoyScore)>::min());
+      }
+    };
+
 template <typename IndexT>
 inline bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& memCollector, ksw2pp::KSW2Aligner& aligner,
                         pufferfish::util::AlignmentConfig& aconf, pufferfish::util::MappingConstraintPolicy& mpol) {
@@ -107,26 +120,32 @@ inline bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& mem
 inline void updateRefMappings(uint32_t tid, int32_t hitScore, size_t idx,
                   const std::vector<Transcript>& transcripts,
                   int32_t invalidScore,
+                  salmon::mapping_utils::MappingScoreInfo& msi,
+                  /*
                   int32_t& bestScore, 
                   int32_t& secondBestScore,
                   int32_t& bestDecoyScore,
+                  */
                   std::vector<int32_t>& scores,
                   phmap::flat_hash_map<uint32_t, std::pair<int32_t, int32_t>>& bestScorePerTranscript,
                   std::vector<std::pair<int32_t, int32_t>>& perm) {
   scores[idx] = hitScore;
   auto& t = transcripts[tid];
   bool isDecoy = t.isDecoy();
+  double decoyCutoff = static_cast<int32_t>(msi.decoyThresh * msi.bestDecoyScore);
 
-  // if the current score doesn't even match the best decoy,
-  // go to the next mapping.
-  if (hitScore < bestDecoyScore or (hitScore == invalidScore)) {
+  //if (hitScore < decoyCutoff or (hitScore == invalidScore)) { }
+
+  if (isDecoy) {
+    // if this is a decoy and its score is at least as good
+    // as the bestDecoyScore, then update that and go to the next mapping
+     msi.bestDecoyScore = std::max(hitScore, msi.bestDecoyScore);
+     return;
+  } else if (hitScore < decoyCutoff or (hitScore == invalidScore)) {
+    // if the current score is to a valid target but doesn't 
+    // exceed the necessary decoy threshold, then skip it.
     return;
-  } else if (isDecoy) {
-    // otherwise, if this is a decoy, its score is at least as good
-    // as the bestDecoyScore, so update that and go to the next mapping
-    bestDecoyScore = hitScore;
-    return;
-  }
+  } 
   // otherwise, we have a "high-scoring" hit to a non-decoy
 
   // removing duplicate hits from a read to the same transcript
@@ -148,9 +167,9 @@ inline void updateRefMappings(uint32_t tid, int32_t hitScore, size_t idx,
     scores[idx] = invalidScore;
   }
   
-  if (hitScore > bestScore) {
-    secondBestScore = bestScore;
-    bestScore = hitScore;
+  if (hitScore > msi.bestScore) {
+    msi.secondBestScore = msi.bestScore;
+    msi.bestScore = hitScore;
   }
   //bestScore = (hitScore > bestScore) ? hitScore : bestScore;
   perm.push_back(std::make_pair(idx, tid));
@@ -167,14 +186,20 @@ inline void filterAndCollectAlignments(
                                        bool tryAlign,
                                        bool hardFilter,
                                        double scoreExp,
-                                       int32_t bestScore,
+                                       // intentionally passing by value below --- come back
+                                       // and make sure it's necessary
+                                       salmon::mapping_utils::MappingScoreInfo msi,
+                                       /*int32_t bestScore,
                                        int32_t secondBestScore,
                                        int32_t bestDecoyScore,
+                                       */
                                        std::vector<pufferfish::util::QuasiAlignment>& jointAlignments) {
 
-  auto invalidScore = std::numeric_limits<decltype(bestDecoyScore)>::min();
-  if (bestDecoyScore == invalidScore) { bestDecoyScore = invalidScore + 1 ;}
-  
+  auto invalidScore = std::numeric_limits<decltype(msi.bestDecoyScore)>::min();
+  if (msi.bestDecoyScore == invalidScore) { msi.bestDecoyScore = invalidScore + 1 ;}
+
+  int32_t decoyThreshold = static_cast<decltype(msi.bestDecoyScore)>(msi.decoyThresh * msi.bestDecoyScore);
+
   //auto filterScore = (bestDecoyScore < secondBestScore) ? secondBestScore : bestDecoyScore;
 
   // throw away any pairs for which we should not produce valid alignments :
@@ -182,8 +207,8 @@ inline void filterAndCollectAlignments(
   // If we are doing soft-filtering (default), we remove those not exceeding the bestDecoyScore
   // If we are doing hard-filtering, we remove those less than the bestScore
   perm.erase(std::remove_if(perm.begin(), perm.end(),
-                            [&scores, hardFilter, bestScore, secondBestScore, bestDecoyScore, invalidScore](const std::pair<int32_t, int32_t>& idxtid) -> bool {
-                              return !hardFilter ?  scores[idxtid.first] < bestDecoyScore : scores[idxtid.first] < bestScore;
+                            [&scores, hardFilter, &msi, decoyThreshold, invalidScore](const std::pair<int32_t, int32_t>& idxtid) -> bool {
+                              return !hardFilter ?  scores[idxtid.first] < decoyThreshold : scores[idxtid.first] < msi.bestScore;
                               //return !hardFilter ?  scores[idxtid.first] < filterScore : scores[idxtid.first] < bestScore; 
                             }), perm.end());
 
@@ -195,7 +220,7 @@ inline void filterAndCollectAlignments(
                                         return p1.second < p2.second;});
 
   // moving our alinged / score jointMEMs over to QuasiAlignment objects
-  double bestScoreD = static_cast<double>(bestScore);
+  double bestScoreD = static_cast<double>(msi.bestScore);
   for (auto& idxTxp : perm) {
     int32_t ctr = idxTxp.first;
     int32_t tid = idxTxp.second;

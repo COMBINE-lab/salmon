@@ -78,6 +78,7 @@ namespace defaults {
   constexpr const bool writeOrphanLinks{false};
   constexpr const bool writeUnmappedNames{false};
   constexpr const double quasiCoverage{0.0};
+  constexpr const double decoyThreshold{1.0};
   const std::string hitFilterPolicyStr{"AFTER"};
 
    // FMD-specific options
