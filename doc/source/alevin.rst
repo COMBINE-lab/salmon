@@ -219,7 +219,7 @@ suggestions --- please contact us (`asrivastava@cs.stonybrook.edu` and/or
 
 .. The paper describing this method is published in BioArxiv XXXX. (update this when it appears)
 
-Citation
+BibTex
 ----
 | @article{srivastava2019alevin,
 |   title={Alevin efficiently estimates accurate gene abundances from dscRNA-seq data},
@@ -231,6 +231,10 @@ Citation
 |   year={2019},
 |   publisher={BioMed Central}
 | }
+
+DOI
+----
+https://doi.org/10.1186/s13059-019-1670-y
 
 References
 ----------
