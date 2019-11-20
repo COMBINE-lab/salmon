@@ -456,6 +456,15 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
 
       // perform EM for resolving ambiguity
       if ( !noEM ) {
+        if ( useVBEM ) {
+          // down weighing priors for tier 2 estimates
+          for (size_t j=0; j<numGenes; j++) {
+            if (tiers[j] == 2) {
+              priorCellAlphas[j] /= 2;
+            }
+          }
+        }
+
         bool isEMok = runPerCellEM(totalCount,
                                    numGenes,
                                    geneAlphas,
@@ -682,8 +691,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                                    geneAlphas, bootVariance,
                                    useAllBootstraps, sampleEstimates);
       }//end-if
-    }
-    else {
+    } else {
       // doing per eqclass level naive deduplication
       for (size_t eqId=0; eqId<umiGroups.size(); eqId++) {
         spp::sparse_hash_set<uint64_t> umis;
