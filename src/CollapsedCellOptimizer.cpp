@@ -343,7 +343,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   std::vector<CellState>& skippedCB,
                   bool verbose, GZipWriter& gzw, bool noEM, bool useVBEM,
                   bool quiet, tbb::atomic<double>& totalDedupCounts,
-                  tbb::atomic<uint32_t>& totalExpGeneCounts,
+                  tbb::atomic<uint32_t>& totalExpGeneCounts, double priorWeight,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, uint32_t umiLength, uint32_t numBootstraps,
                   bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
@@ -456,11 +456,11 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
 
       // perform EM for resolving ambiguity
       if ( !noEM ) {
-        if ( useVBEM ) {
+        if ( useVBEM and not initUniform) {
           // down weighing priors for tier 2 estimates
           for (size_t j=0; j<numGenes; j++) {
             if (tiers[j] == 2) {
-              priorCellAlphas[j] /= 2;
+              priorCellAlphas[j] = priorWeight * 1e-2;
             }
           }
         }
@@ -834,6 +834,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   }
 
 
+  double priorWeight {1.0};
   std::atomic<uint32_t> bcount{0};
   tbb::atomic<double> totalDedupCounts{0.0};
   tbb::atomic<uint32_t> totalExpGeneCounts{0};
@@ -940,7 +941,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
         }
       }//end-matrix reading scope
 
-      double priorWeight = aopt.vbemNorm / priorMolCounts ;
+      priorWeight = aopt.vbemNorm / priorMolCounts ;
       aopt.jointLog->info( "Prior Weight: {}/ {}", priorWeight, priorMolCounts);
       {
         //rearragngement of vectors
@@ -997,6 +998,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                aopt.quiet,
                                std::ref(totalDedupCounts),
                                std::ref(totalExpGeneCounts),
+                               priorWeight,
                                std::ref(txpToGeneMap),
                                numGenes,
                                aopt.protocol.umiLength,
