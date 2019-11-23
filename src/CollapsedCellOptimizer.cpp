@@ -517,7 +517,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                 probs.emplace_back( geneAlphas[gid] );
               }
 
-              size_t arboId {0}, totalGeneFrags {0};
+              size_t arboId {0}, totalGeneFrags {0}, totalUmis{0};
               size_t numArbos = eqCounts.size();
               std::vector<uint16_t> arboLengths(numArbos);
               std::vector<uint16_t> arboCounts(numArbos);
@@ -525,8 +525,9 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                 arboLengths[arboId] = it.first;
                 arboCounts[arboId] = it.second;
 
-                totalGeneFrags += (it.second * it.first);
                 arboId += 1;
+                totalUmis += it.second;
+                totalGeneFrags += (it.second * it.first);
               }
 
               std::discrete_distribution<> geneDist(probs.begin(), probs.end());
@@ -535,7 +536,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
               boost::random::mt19937 geneGen;
               boost::random::mt19937 arboGen;
 
-              for (size_t j=0; j < totalGeneFrags; j++) {
+              for (size_t j=0; j < totalUmis; j++) {
                 auto gid = eqclass.labels[geneDist(geneGen)];
                 auto arboLength = arboLengths[arboDist(arboGen)];
                 arboFragCounts[gid][arboLength] += 1;
