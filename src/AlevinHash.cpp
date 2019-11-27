@@ -52,6 +52,7 @@ size_t readBfh(bfs::path& eqFilePath,
                std::vector<std::string>& bcNames,
                CFreqMapT& freqCounter,
                TrueBcsT& trueBarcodes,
+               size_t& totalNormalized,
                bool hasWhitelist
                ) {
   if (hasWhitelist && trueBarcodes.size() == 0) {
@@ -195,6 +196,7 @@ size_t readBfh(bfs::path& eqFilePath,
       return 0;
     }
 
+    totalNormalized += normalizer;
     numReads += (countValidator - normalizer);
     double completionFrac = i*100.0/numEqclasses;
     uint32_t percentCompletion {static_cast<uint32_t>(completionFrac)};
@@ -226,6 +228,7 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
 
   EqMapT countMap;
   size_t numReads {0};
+  size_t totalNormalized {0};
   std::vector<std::string> txpNames, bcNames;
   { // Populating Bfh
     aopt.jointLog->info("Reading BFH");
@@ -237,6 +240,7 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
                         countMap, bcNames,
                         freqCounter,
                         trueBarcodes,
+                        totalNormalized,
                         hasWhitelist );
     if( numReads == 0 ){
       aopt.jointLog->error("error reading bfh");
@@ -244,7 +248,11 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
       std::exit(74);
     }
 
-    aopt.jointLog->info("Fount total {} reads in bfh Mode",
+    if (totalNormalized > 0) {
+      aopt.jointLog->warn("Skipped {} reads due to external whitelist",
+                          totalNormalized);
+    }
+    aopt.jointLog->info("Fount total {} reads in bfh",
                         numReads);
     aopt.jointLog->flush();
   } // Done populating Bfh
