@@ -50,8 +50,16 @@ size_t readBfh(bfs::path& eqFilePath,
                size_t bcLength,
                EqMapT &countMap,
                std::vector<std::string>& bcNames,
-               CFreqMapT& freqCounter
+               CFreqMapT& freqCounter,
+               TrueBcsT& trueBarcodes,
+               bool hasWhitelist
                ) {
+  if (hasWhitelist && trueBarcodes.size() == 0) {
+    fmt::print(stderr, "whitelist file had 0 CB");
+    std::cerr<<std::endl<<std::flush;;
+    return 0;
+  }
+
   std::ifstream equivFile(eqFilePath.string());
 
   size_t numReads{0};
@@ -74,12 +82,44 @@ size_t readBfh(bfs::path& eqFilePath,
   bcNames.resize(numBcs);
   for (size_t i=0; i<numBcs; i++) {
     equivFile >> bcNames[i] ;
+
     if (bcNames[i].size() != bcLength) {
       fmt::print(stderr, "CB {} has wrong length", bcNames[i]);
       std::cerr<<std::endl<<std::flush;;
       return 0;
     }
   }
+
+  spp::sparse_hash_map<size_t, size_t> barcodeMap;
+  { // bcname and bc index rearrangement based on external whitelist
+    if (not hasWhitelist) {
+      for (size_t i=0; i<bcNames.size(); i++) {
+        barcodeMap[i] = i;
+      }
+    } else {
+      // convert set to indexed vector
+      size_t idx{0};
+      spp::sparse_hash_map<std::string, size_t> trueBarcodeMap;
+      for (auto& bc: trueBarcodes) {
+        trueBarcodeMap[bc] = idx;
+        idx += 1;
+      }
+
+      // extracting relevant barcodes
+      for (size_t i=0; i<bcNames.size(); i++) {
+        if (trueBarcodeMap.contains(bcNames[i])) {
+          barcodeMap[i] = trueBarcodeMap[ bcNames[i] ];
+        }
+      }
+
+      bcNames.clear();
+      bcNames.resize(trueBarcodeMap.size());
+      for(auto& it: trueBarcodeMap) {
+        bcNames[it.second] = it.first;
+      }
+
+    } // end else case of not hasWhitelist
+  } // end name/index rearrangement
 
   countMap.set_max_resize_threads(1);
   countMap.reserve(1000000);
@@ -105,34 +145,44 @@ size_t readBfh(bfs::path& eqFilePath,
     size_t bgroupSize;
     equivFile >> count >> bgroupSize;
 
+    size_t normalizer{0};
     uint32_t countValidator {0};
     for (size_t j=0; j<bgroupSize; j++){
-      uint32_t bc;
       size_t ugroupSize;
+      std::string bcName;
+      bool skipCB {false};
+      uint32_t old_bc, new_bc;
 
-      equivFile >> bc >> ugroupSize;
-      std::string bcName = bcNames[bc];
+      equivFile >> old_bc >> ugroupSize;
+      if (not barcodeMap.contains(old_bc)) {
+        skipCB = true;
+      } else {
+        new_bc = barcodeMap[old_bc];
+        bcName = bcNames[new_bc];
+      }
 
       for (size_t k=0; k<ugroupSize; k++){
         std::string umiSeq;
-        uint64_t umiIndex;
         uint32_t umiCount;
-        equivFile >> umiSeq >> umiCount;
 
+        equivFile >> umiSeq >> umiCount;
+        countValidator += umiCount;
+        if (skipCB) {normalizer += umiCount; continue;}
+
+        uint64_t umiIndex;
         bool isUmiIdxOk = umiObj.fromChars(umiSeq);
         if(isUmiIdxOk){
           umiIndex = umiObj.word(0);
-          auto upfn = [bc, umiIndex, umiCount](SCTGValue& x) -> void {
+          auto upfn = [new_bc, umiIndex, umiCount](SCTGValue& x) -> void {
             // update the count
             x.count += umiCount;
-            x.updateBarcodeGroup(bc, umiIndex, umiCount);
+            x.updateBarcodeGroup(new_bc, umiIndex, umiCount);
           };
 
-          SCTGValue value(umiCount, bc, umiIndex, true);
+          SCTGValue value(umiCount, new_bc, umiIndex, true);
           countMap.upsert(txGroup, upfn, value);
           freqCounter[bcName] += umiCount;
         }
-        countValidator += umiCount;
       }// end-ugroup for
     }//end-bgroup for
 
@@ -145,12 +195,13 @@ size_t readBfh(bfs::path& eqFilePath,
       return 0;
     }
 
-    numReads += countValidator;
+    numReads += (countValidator - normalizer);
     double completionFrac = i*100.0/numEqclasses;
     uint32_t percentCompletion {static_cast<uint32_t>(completionFrac)};
     if ( percentCompletion % 10 == 0 || percentCompletion > 95) {
-      fmt::print(stderr, "\r{}Done Reading : {}{}%{}",
-                 green, red, percentCompletion, RESET_COLOR);
+      fmt::print(stderr, "\r{}Done Reading : {}{}%{} and skipped reads: {}{}{}",
+                 green, red, percentCompletion, green,
+                 red, normalizer, RESET_COLOR);
     }
   }//end-eqclass for
   std::cerr<<std::endl;
@@ -163,6 +214,16 @@ template <typename ProtocolT>
 int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter) {
+  TrueBcsT trueBarcodes;
+  bool hasWhitelist = boost::filesystem::exists(aopt.whitelistFile);
+  if( hasWhitelist ){
+    alevin::utils::readWhitelist(aopt.whitelistFile,
+                                 trueBarcodes);
+
+    aopt.jointLog->info("Done importing white-list Barcodes");
+    aopt.jointLog->info("Total {} white-listed Barcodes", trueBarcodes.size());
+  }
+
   EqMapT countMap;
   size_t numReads {0};
   std::vector<std::string> txpNames, bcNames;
@@ -174,9 +235,11 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
                         txpNames,
                         aopt.protocol.barcodeLength,
                         countMap, bcNames,
-                        freqCounter );
+                        freqCounter,
+                        trueBarcodes,
+                        hasWhitelist );
     if( numReads == 0 ){
-      aopt.jointLog->error("can't read bfh");
+      aopt.jointLog->error("error reading bfh");
       aopt.jointLog->flush();
       std::exit(74);
     }
@@ -185,16 +248,6 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
                         numReads);
     aopt.jointLog->flush();
   } // Done populating Bfh
-
-  bool hasWhitelist = boost::filesystem::exists(aopt.whitelistFile);
-  if( hasWhitelist ){
-    TrueBcsT trueBarcodes;
-    alevin::utils::readWhitelist(aopt.whitelistFile,
-                                 trueBarcodes);
-
-    aopt.jointLog->info("Done importing white-list Barcodes");
-    aopt.jointLog->info("Total {} white-listed Barcodes", trueBarcodes.size());
-  }
 
   // extracting meta data for calling alevinOptimize
   aopt.jointLog->info("Reading transcript to gene Map");
