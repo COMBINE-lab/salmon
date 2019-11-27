@@ -16,9 +16,7 @@ namespace alevin{
     /*
       Caluclates Probability argmax_A {P(b | A,d)}
     */
-    template <typename ProtocolT>
-    bool calculateAlnProbability(AlevinOpts<ProtocolT>& aopt,
-                                 const std::string& s1,
+    bool calculateAlnProbability(const std::string& s1,
                                  const std::string& s2,
                                  double& probability){
       int32_t l1{static_cast<int32_t>(s1.size())}, l2 {static_cast<int32_t>(s2.size())};
@@ -157,11 +155,8 @@ namespace alevin{
       return idx;
     }
 
-    template <typename ProtocolT>
     void coinTossBarcodeModel(std::string barcode,
-                              AlevinOpts<ProtocolT>& aopt,
                               const std::vector<std::string>& trueBarcodes,
-                              const CFreqMapT& freqCounter,
                               MapT& dumpPair){
       if(trueBarcodes.size() == 1){
         dumpPair.push_back(std::make_pair(trueBarcodes.front(), 1.0));
@@ -172,8 +167,7 @@ namespace alevin{
 
         for(const std::string trueBarcode: trueBarcodes){
           //save the sequence of the true barcodes for dumping
-          bool isOneEdit = calculateAlnProbability(aopt,
-                                                   trueBarcode,
+          bool isOneEdit = calculateAlnProbability(trueBarcode,
                                                    barcode,
                                                    alnProbability);
           if(!isOneEdit){

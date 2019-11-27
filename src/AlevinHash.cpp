@@ -161,21 +161,8 @@ size_t readBfh(bfs::path& eqFilePath,
 
 template <typename ProtocolT>
 int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
-                       bfs::path& indexDirectory,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter) {
-
-  bool hasWhitelist = boost::filesystem::exists(aopt.whitelistFile);
-  TrueBcsT trueBarcodes;
-
-  if( hasWhitelist ){
-    alevin::utils::readWhitelist(aopt.whitelistFile,
-                                 trueBarcodes);
-    aopt.jointLog->info("Done importing white-list Barcodes");
-    aopt.jointLog->info("Total {} white-listed Barcodes", trueBarcodes.size());
-  }
-
-
   EqMapT countMap;
   size_t numReads {0};
   std::vector<std::string> txpNames, bcNames;
@@ -199,6 +186,16 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
     aopt.jointLog->flush();
   } // Done populating Bfh
 
+  bool hasWhitelist = boost::filesystem::exists(aopt.whitelistFile);
+  if( hasWhitelist ){
+    TrueBcsT trueBarcodes;
+    alevin::utils::readWhitelist(aopt.whitelistFile,
+                                 trueBarcodes);
+
+    aopt.jointLog->info("Done importing white-list Barcodes");
+    aopt.jointLog->info("Total {} white-listed Barcodes", trueBarcodes.size());
+  }
+
   // extracting meta data for calling alevinOptimize
   aopt.jointLog->info("Reading transcript to gene Map");
   spp::sparse_hash_map<uint32_t, uint32_t> txpToGeneMap;
@@ -217,46 +214,37 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
 
 template
 int salmonHashQuantify(AlevinOpts<apt::Chromium>& aopt,
-                       bfs::path& indexDirectory,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 template
 int salmonHashQuantify(AlevinOpts<apt::ChromiumV3>& aopt,
-                       bfs::path& indexDirectory,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 template
 int salmonHashQuantify(AlevinOpts<apt::Gemcode>& aopt,
-                       bfs::path& indexDirectory,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 template
 int salmonHashQuantify(AlevinOpts<apt::DropSeq>& aopt,
-                       bfs::path& indexDirectory,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 template
 int salmonHashQuantify(AlevinOpts<apt::InDrop>& aopt,
-                       bfs::path& indexDirectory,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 template
 int salmonHashQuantify(AlevinOpts<apt::CELSeq>& aopt,
-                       bfs::path& indexDirectory,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 template
 int salmonHashQuantify(AlevinOpts<apt::CELSeq2>& aopt,
-                       bfs::path& indexDirectory,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 template
 int salmonHashQuantify(AlevinOpts<apt::QuartzSeq2>& aopt,
-                       bfs::path& indexDirectory,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 template
 int salmonHashQuantify(AlevinOpts<apt::Custom>& aopt,
-                       bfs::path& indexDirectory,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);

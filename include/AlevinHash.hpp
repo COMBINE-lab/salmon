@@ -30,7 +30,6 @@ void alevinOptimize( std::vector<std::string>& trueBarcodesVec,
 
 template <typename ProtocolT>
 int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
-                       bfs::path& indexDirectory,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 #endif // __ALEVIN_HASH_HPP__
