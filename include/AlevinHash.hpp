@@ -7,6 +7,7 @@
 #include "spdlog/spdlog.h"
 
 #include "AlevinOpts.hpp"
+#include "AlevinUtils.hpp"
 #include "SingleCellProtocols.hpp"
 #include "GZipWriter.hpp"
 #include "TranscriptGroup.hpp"

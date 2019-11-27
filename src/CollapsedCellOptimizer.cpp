@@ -747,6 +747,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   size_t numGenes = geneIdxMap.size();
   size_t numWorkerThreads{1};
   bool hasWhitelist = boost::filesystem::exists(aopt.whitelistFile);
+  bool usingHashMode = boost::filesystem::exists(aopt.bfhFile);
 
   if (aopt.numThreads > 1) {
     numWorkerThreads = aopt.numThreads - 1;
@@ -783,57 +784,57 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
 
   spp::sparse_hash_set<uint32_t> mRnaGenes, rRnaGenes;
   bool useMito {false}, useRibo {false};
-  if(boost::filesystem::exists(aopt.mRnaFile)) {
-    std::ifstream mRnaFile(aopt.mRnaFile.string());
-    std::string gene;
-    size_t skippedGenes {0};
-    if(mRnaFile.is_open()) {
-      while(getline(mRnaFile, gene)) {
-        if (geneIdxMap.contains(gene)){
-          mRnaGenes.insert(geneIdxMap[ gene ]);
+  if( not hasWhitelist ) {
+    if (boost::filesystem::exists(aopt.mRnaFile)) {
+      std::ifstream mRnaFile(aopt.mRnaFile.string());
+      std::string gene;
+      size_t skippedGenes {0};
+      if(mRnaFile.is_open()) {
+        while(getline(mRnaFile, gene)) {
+          if (geneIdxMap.contains(gene)){
+            mRnaGenes.insert(geneIdxMap[ gene ]);
+          }
+          else{
+            skippedGenes += 1;
+          }
         }
-        else{
-          skippedGenes += 1;
-        }
+        mRnaFile.close();
       }
-      mRnaFile.close();
-    }
-    if (skippedGenes > 0){
-      aopt.jointLog->warn("{} mitorna gene(s) does not have transcript in the reference",
-                          skippedGenes);
-    }
-    aopt.jointLog->info("Total {} usable mRna genes", mRnaGenes.size());
-    if (mRnaGenes.size() > 0 ) { useMito = true; }
-  }
-  else if (hasWhitelist) {
-    aopt.jointLog->warn("mrna file not provided; using is 1 less feature for whitelisting");
-  }
-
-  if(boost::filesystem::exists(aopt.rRnaFile)){
-    std::ifstream rRnaFile(aopt.rRnaFile.string());
-    std::string gene;
-    size_t skippedGenes {0};
-    if(rRnaFile.is_open()) {
-      while(getline(rRnaFile, gene)) {
-        if (geneIdxMap.contains(gene)){
-          rRnaGenes.insert(geneIdxMap[ gene ]);
-        }
-        else{
-          skippedGenes += 1;
-        }
+      if (skippedGenes > 0){
+        aopt.jointLog->warn("{} mitorna gene(s) does not have transcript in the reference",
+                            skippedGenes);
       }
-      rRnaFile.close();
+      aopt.jointLog->info("Total {} usable mRna genes", mRnaGenes.size());
+      if (mRnaGenes.size() > 0 ) { useMito = true; }
+    } else if ( not usingHashMode ) {
+      aopt.jointLog->warn("mrna file not provided; using is 1 less feature for whitelisting");
     }
-    if (skippedGenes > 0){
-      aopt.jointLog->warn("{} ribosomal rna gene(s) does not have transcript in the reference",
-                          skippedGenes);
-    }
-    aopt.jointLog->info("Total {} usable rRna genes", rRnaGenes.size());
-    if (rRnaGenes.size() > 0 ) { useRibo = true; }
-  } else if (hasWhitelist) {
-    aopt.jointLog->warn("rrna file not provided; using is 1 less feature for whitelisting");
-  }
 
+    if(boost::filesystem::exists(aopt.rRnaFile)){
+      std::ifstream rRnaFile(aopt.rRnaFile.string());
+      std::string gene;
+      size_t skippedGenes {0};
+      if(rRnaFile.is_open()) {
+        while(getline(rRnaFile, gene)) {
+          if (geneIdxMap.contains(gene)){
+            rRnaGenes.insert(geneIdxMap[ gene ]);
+          }
+          else{
+            skippedGenes += 1;
+          }
+        }
+        rRnaFile.close();
+      }
+      if (skippedGenes > 0){
+        aopt.jointLog->warn("{} ribosomal rna gene(s) does not have transcript in the reference",
+                            skippedGenes);
+      }
+      aopt.jointLog->info("Total {} usable rRna genes", rRnaGenes.size());
+      if (rRnaGenes.size() > 0 ) { useRibo = true; }
+    } else if ( not usingHashMode ) {
+      aopt.jointLog->warn("rrna file not provided; using is 1 less feature for whitelisting");
+    }
+  } // done populating mRNA and rRNA genes
 
   double priorWeight {1.0};
   std::atomic<uint32_t> bcount{0};
@@ -1069,7 +1070,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   std::copy(geneNames.begin(), geneNames.end(), giterator);
   gFile.close();
 
-  if( not hasWhitelist ){
+  if( not hasWhitelist and not usingHashMode){
     aopt.jointLog->info("Clearing EqMap; Might take some time.");
     fullEqMap.clear();
 
@@ -1105,6 +1106,10 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
       aopt.jointLog->flush();
     }
   } //end-if whitelisting
+  else if ( usingHashMode and not hasWhitelist ) {
+    aopt.jointLog->warn("intelligent whitelisting is disabled in hash mode; skipping");
+    aopt.jointLog->flush();
+  }
 
   if (aopt.dumpMtx){
     aopt.jointLog->info("Starting dumping cell v gene counts in mtx format");

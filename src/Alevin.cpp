@@ -671,15 +671,10 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
 
   //import whitelist barcodes if present
   if(boost::filesystem::exists(aopt.whitelistFile)){
-    std::ifstream whiteFile(aopt.whitelistFile.string());
-    std::string whtBc;
-    if(whiteFile.is_open()) {
-      while(getline(whiteFile, whtBc)) {
-        trueBarcodes.insert(whtBc);
-      }
-      whiteFile.close();
-    }
+    aut::readWhitelist(aopt.whitelistFile,
+                       trueBarcodes);
     aopt.jointLog->info("Done importing white-list Barcodes");
+
     std::vector<std::string> skippedTrueBarcodes ;
     for ( auto trueBarcode: trueBarcodes ) {
       auto it = freqCounter.find(trueBarcode);

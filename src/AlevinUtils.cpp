@@ -698,6 +698,18 @@ namespace alevin {
       return sequenceCheck(sequence);
     }
 
+    void readWhitelist(bfs::path& filePath,
+                       TrueBcsT& trueBarcodes) {
+      std::ifstream whiteFile(filePath.string());
+      std::string whtBc;
+      if(whiteFile.is_open()) {
+        while(getline(whiteFile, whtBc)) {
+          trueBarcodes.insert(whtBc);
+        }
+        whiteFile.close();
+      }
+    }
+
     bool checkSetCoverage(std::vector<std::vector<uint32_t>>& tgroup,
                           std::vector<uint32_t> txps){
       // make sparse hash set for constant membership check

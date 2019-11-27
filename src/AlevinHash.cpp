@@ -45,15 +45,13 @@ void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
   }
 }
 
-template <typename ProtocolT>
-int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
-                       bfs::path& indexDirectory,
-                       bfs::path& outputDirectory,
-                       CFreqMapT& freqCounter) {
-  aopt.jointLog->info("Reading BFH");
-  aopt.jointLog->flush();
-
-  bfs::path eqFilePath = aopt.bfhFile;
+size_t readBfh(bfs::path& eqFilePath,
+               std::vector<std::string>& txpNames,
+               size_t bcLength,
+               EqMapT &countMap,
+               std::vector<std::string>& bcNames,
+               CFreqMapT& freqCounter
+               ) {
   std::ifstream equivFile(eqFilePath.string());
 
   size_t numReads{0};
@@ -68,31 +66,21 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
   // Number of equivalence classes
   equivFile >> numEqclasses;
 
-  std::vector<std::string> txpNames (numTxps);
+  txpNames.resize(numTxps);
   for (size_t i=0; i<numTxps; i++) {
     equivFile >> txpNames[i] ;
   }
 
-  spp::sparse_hash_map<uint32_t, uint32_t> txpToGeneMap;
-  spp::sparse_hash_map<std::string, uint32_t> geneIdxMap;
-
-  getTxpToGeneMap(txpToGeneMap,
-                  txpNames,
-                  aopt.geneMapFile.string(),
-                  geneIdxMap);
-
-  size_t bcLength {aopt.protocol.barcodeLength};
-  std::vector<std::string> bcNames (numBcs);
+  bcNames.resize(numBcs);
   for (size_t i=0; i<numBcs; i++) {
     equivFile >> bcNames[i] ;
     if (bcNames[i].size() != bcLength) {
-      aopt.jointLog->error("CB {} has wrong length", bcNames[i]);
-      aopt.jointLog->flush();
-      exit(1);
+      fmt::print(stderr, "CB {} has wrong length", bcNames[i]);
+      std::cerr<<std::endl<<std::flush;;
+      return 0;
     }
   }
 
-  EqMapT countMap;
   countMap.set_max_resize_threads(1);
   countMap.reserve(1000000);
 
@@ -149,12 +137,12 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
     }//end-bgroup for
 
     if (count != countValidator){
-      aopt.jointLog->error("BFH eqclass count mismatch"
-                           "{} Orignial, validator {} "
-                           "Eqclass number {}",
-                           count, countValidator, i);
-      aopt.jointLog->flush();
-      exit(1);
+      fmt::print(stderr, "BFH eqclass count mismatch"
+                 "{} Orignial, validator {} "
+                 "Eqclass number {}",
+                 count, countValidator, i);
+      std::cerr<<std::endl<<std::flush;;
+      return 0;
     }
 
     numReads += countValidator;
@@ -168,19 +156,59 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
   std::cerr<<std::endl;
   equivFile.close();
 
+  return numReads;
+}
 
-  GZipWriter gzw(outputDirectory, aopt.jointLog);
+template <typename ProtocolT>
+int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
+                       bfs::path& indexDirectory,
+                       bfs::path& outputDirectory,
+                       CFreqMapT& freqCounter) {
 
-  if(boost::filesystem::exists(aopt.whitelistFile)){
-    aopt.jointLog->warn("can't use whitelist file in bfh Mode"
-                        ";Ignroing the file");
-    aopt.jointLog->flush();
+  bool hasWhitelist = boost::filesystem::exists(aopt.whitelistFile);
+  TrueBcsT trueBarcodes;
+
+  if( hasWhitelist ){
+    alevin::utils::readWhitelist(aopt.whitelistFile,
+                                 trueBarcodes);
+    aopt.jointLog->info("Done importing white-list Barcodes");
+    aopt.jointLog->info("Total {} white-listed Barcodes", trueBarcodes.size());
   }
 
-  aopt.jointLog->info("Fount total {} reads in bfh Mode",
-                      numReads);
-  aopt.jointLog->flush();
 
+  EqMapT countMap;
+  size_t numReads {0};
+  std::vector<std::string> txpNames, bcNames;
+  { // Populating Bfh
+    aopt.jointLog->info("Reading BFH");
+    aopt.jointLog->flush();
+
+    numReads = readBfh( aopt.bfhFile,
+                        txpNames,
+                        aopt.protocol.barcodeLength,
+                        countMap, bcNames,
+                        freqCounter );
+    if( numReads == 0 ){
+      aopt.jointLog->error("can't read bfh");
+      aopt.jointLog->flush();
+      std::exit(74);
+    }
+
+    aopt.jointLog->info("Fount total {} reads in bfh Mode",
+                        numReads);
+    aopt.jointLog->flush();
+  } // Done populating Bfh
+
+  // extracting meta data for calling alevinOptimize
+  aopt.jointLog->info("Reading transcript to gene Map");
+  spp::sparse_hash_map<uint32_t, uint32_t> txpToGeneMap;
+  spp::sparse_hash_map<std::string, uint32_t> geneIdxMap;
+  getTxpToGeneMap(txpToGeneMap,
+                  txpNames,
+                  aopt.geneMapFile.string(),
+                  geneIdxMap);
+
+  GZipWriter gzw(outputDirectory, aopt.jointLog);
   alevinOptimize(bcNames, txpToGeneMap, geneIdxMap,
                  countMap, aopt, gzw, freqCounter, 0);
   return 0;
