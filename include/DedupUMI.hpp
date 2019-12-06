@@ -5,9 +5,9 @@
 #include "GZipWriter.hpp"
 #include "AlevinUtils.hpp"
 
-struct SalmonEqClass<CountT> {
+struct SalmonEqClass {
   std::vector<uint32_t> labels;
-  CountT count;
+  uint32_t count;
 };
 
 using UGroupT = spp::sparse_hash_map<uint64_t, uint32_t>;

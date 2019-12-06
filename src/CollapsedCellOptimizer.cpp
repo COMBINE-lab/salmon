@@ -138,46 +138,78 @@ void CellEMUpdate_(std::vector<SalmonEqClass>& eqVec,
 void CellArboUpdate_(std::vector<SalmonEqClass>& eqVec,
                      const CollapsedCellOptimizer::SerialVecType& alphaIn,
                      CollapsedCellOptimizer::SerialVecType& alphaOut,
-                     const std::vector<CollapsedCellOptimizer::SerialVecType>& arboGeneProbs){
+                     const std::vector<CollapsedCellOptimizer::SerialVecType>& arboGeneProbs,
+                     const std::vector<spp::sparse_hash_map<uint16_t, uint16_t>>& arboEqClassCount){
   assert(alphaIn.size() == alphaOut.size());
 
   for (size_t eqID=0; eqID < eqVec.size(); ++eqID) {
     auto& kv = eqVec[eqID];
+    auto& arboDist = arboEqClassCount[eqID];
 
     uint32_t count = kv.count;
     // for each label in this class
     const std::vector<uint32_t>& genes = kv.labels;
     size_t groupSize = genes.size();
 
-    // get conditional probabilities
-    //const auto& auxs = txpGroupCombinedWeights[eqID];
-    std::vector<double> auxs (genes.size(), 1.0);
+    size_t countValidator{0};
+    for (auto it: arboDist) {
+      auto arboLength = it.first;
+      auto arboFreq = it.second;
 
-    if (BOOST_LIKELY(groupSize > 1)) {
-      double denom = 0.0;
-      for (size_t i = 0; i < groupSize; ++i) {
-        auto gid = genes[i];
-        auto aux = auxs[i];
-        denom += alphaIn[gid] * aux;
+      countValidator += arboFreq;
+      // get conditional probabilities
+      std::vector<double> auxs (genes.size(), 0.0);
+      {
+        double arboNorm {0.0};
+        for(size_t g=0; g<groupSize; ++g) {
+          auto gid = genes[g];
+          auxs[g] = arboGeneProbs[gid][arboLength];
+
+          arboNorm += auxs[g];
+        }
+
+        if (arboNorm == 0.0) {
+          std::fill(auxs.begin(), auxs.end(), 1.0);
+          std::cerr<<"WARNING: auxNorm becoming zero" << std::endl << std::flush;
+        } else {
+          std::transform(auxs.begin(), auxs.end(), auxs.begin(), [&arboNorm](auto& c){return c / arboNorm;});
+        }
       }
 
-      if (denom > 0.0) {
-        double invDenom = count / denom;
+      if (BOOST_LIKELY(groupSize > 1)) {
+        double denom = 0.0;
         for (size_t i = 0; i < groupSize; ++i) {
           auto gid = genes[i];
           auto aux = auxs[i];
-          double v = alphaIn[gid] * aux;
-          if (!std::isnan(v)) {
-            alphaOut[gid] += v * invDenom;
-          }
-        }//end-for
-      }//end-if denom>0
-    }//end-if boost gsize>1
-    else if (groupSize == 1){
-      alphaOut[genes.front()] += count;
-    } else{
-      std::cerr<<"0 Group size for salmonEqclasses in EM\n"
-               <<"Please report this on github";
+          denom += alphaIn[gid] * aux;
+        }
+
+        if (denom > 0.0) {
+          double invDenom = arboFreq / denom;
+          for (size_t i = 0; i < groupSize; ++i) {
+            auto gid = genes[i];
+            auto aux = auxs[i];
+            double v = alphaIn[gid] * aux;
+            if (!std::isnan(v)) {
+              alphaOut[gid] += v * invDenom;
+            }
+          }//end-for
+        }//end-if denom>0
+      }//end-if boost gsize>1
+      else if (groupSize == 1){
+        alphaOut[genes.front()] += arboFreq;
+      } else{
+        std::cerr<<"0 Group size for salmonEqclasses in EM\n"
+                 <<"Please report this on github";
+        exit(1);
+      }
+    } // end arboDist for
+
+    if (countValidator != count) {
+      std::cerr<<"Arborescence frequency won't match eqclass count"
+               << countValidator << " V " << count
+               << std::endl
+               << std::flush;
       exit(1);
     }
   }//end-outer for
@@ -200,6 +232,7 @@ bool runPerCellEM(double& totalNumFrags, size_t numGenes,
                   CollapsedCellOptimizer::SerialVecType& alphas,
                   const CollapsedCellOptimizer::SerialVecType& priorAlphas,
                   std::vector<SalmonEqClass>& salmonEqclasses,
+                  const std::vector<spp::sparse_hash_map<uint16_t, uint16_t>>& arboEqClassCount,
                   std::shared_ptr<spdlog::logger>& jointlog,
                   bool initUniform, bool useVBEM, bool useArborescence,
                   const std::vector<CollapsedCellOptimizer::SerialVecType>& arboGeneProbs){
@@ -235,7 +268,8 @@ bool runPerCellEM(double& totalNumFrags, size_t numGenes,
     if (useVBEM) {
       CellVBEMUpdate_(salmonEqclasses, alphas, priorAlphas, alphasPrime);
     } else if (useArborescence) {
-      CellArboUpdate_(salmonEqclasses, alphas, alphasPrime, arboGeneProbs);
+      CellArboUpdate_(salmonEqclasses, alphas, alphasPrime,
+                      arboGeneProbs, arboEqClassCount);
     }
     else {
       CellEMUpdate_(salmonEqclasses, alphas, alphasPrime);
@@ -489,6 +523,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
     }
 
     if ( !naiveEqclass ) {
+
       // perform the UMI deduplication step
       std::vector<SalmonEqClass> salmonEqclasses;
       std::vector<spp::sparse_hash_map<uint16_t, uint16_t>> arboEqClassCount;
@@ -497,7 +532,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                                   txpToGeneMap, tiers, gzw, umiEditDistance,
                                   dumpUmiGraph, trueBarcodeStr,
                                   arboEqClassCount,
-                                  dumpArborescences,
+                                  dumpArborescences or useArborescence ,
                                   totalUniEdgesCounts, totalBiEdgesCounts);
 
       if( !dedupOk ){
@@ -529,6 +564,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                                    geneAlphas,
                                    priorCellAlphas,
                                    salmonEqclasses,
+                                   arboEqClassCount,
                                    jointlog,
                                    initUniform,
                                    useVBEM,

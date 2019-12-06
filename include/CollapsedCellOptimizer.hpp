@@ -65,6 +65,7 @@ bool runPerCellEM(double& totalNumFrags, size_t numGenes,
                   CollapsedCellOptimizer::SerialVecType& alphas,
                   const CollapsedCellOptimizer::SerialVecType& priorAlphas,
                   std::vector<SalmonEqClass>& salmonEqclasses,
+                  const std::vector<spp::sparse_hash_map<uint16_t, uint16_t>>& arboEqClassCount,
                   std::shared_ptr<spdlog::logger>& jointlog,
                   bool initUniform, bool useVBEM, bool useArborescence,
                   const std::vector<CollapsedCellOptimizer::SerialVecType>& arboGeneProbs);
