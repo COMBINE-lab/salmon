@@ -1041,9 +1041,9 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
     }
   }//end-if useVBEM
 
+  bool useArborescence = true;
   std::vector<CollapsedCellOptimizer::SerialVecType> arboGeneProbs;
   {
-    bool useArborescence = true;
     if (useArborescence) {
       std::string arboFile = "/mnt/scratch7/avi/snare-seq/counts/rna/simulation_testing/quants/testing/arbos.tsv";
       size_t maxArboLength = 62;
@@ -1110,7 +1110,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                std::ref(freqCounter),
                                aopt.dumpArborescences,
                                useArborescence,
-                               std::ref{arboGeneProbs},
+                               std::ref(arboGeneProbs),
                                std::ref(mRnaGenes),
                                std::ref(rRnaGenes),
                                std::ref(totalUniEdgesCounts),

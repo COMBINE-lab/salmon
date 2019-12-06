@@ -66,7 +66,9 @@ bool runPerCellEM(double& totalNumFrags, size_t numGenes,
                   const CollapsedCellOptimizer::SerialVecType& priorAlphas,
                   std::vector<SalmonEqClass>& salmonEqclasses,
                   std::shared_ptr<spdlog::logger>& jointlog,
-                  bool initUniform, bool useVBEM);
+                  bool initUniform, bool useVBEM, bool useArborescence,
+                  const std::vector<CollapsedCellOptimizer::SerialVecType>& arboGeneProbs);
+
 
 void optimizeCell(std::vector<std::string>& trueBarcodes,
                   const std::vector<std::vector<double>>& priorAlphas,
@@ -83,6 +85,8 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   uint32_t numGenes, uint32_t umiLength, uint32_t numBootstraps,
                   bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
                   bool initUniform, CFreqMapT& freqCounter, bool dumpArboFragCounts,
+                  bool useArborescence,
+                  const std::vector<CollapsedCellOptimizer::SerialVecType>& arboGeneProbs,
                   spp::sparse_hash_set<uint32_t>& mRnaGenes,
                   spp::sparse_hash_set<uint32_t>& rRnaGenes,
                   std::atomic<uint64_t>& totalUniEdgesCounts,
