@@ -163,15 +163,25 @@ void CellArboUpdate_(std::vector<SalmonEqClass>& eqVec,
         double arboNorm {0.0};
         for(size_t g=0; g<groupSize; ++g) {
           auto gid = genes[g];
-          auxs[g] = arboGeneProbs[gid][arboLength];
+          auxs[g] = arboGeneProbs[gid][arboLength - 1];
 
           arboNorm += auxs[g];
         }
 
         if (arboNorm == 0.0) {
-          std::fill(auxs.begin(), auxs.end(), 1.0);
-          std::cerr<<"WARNING: auxNorm becoming zero" << std::endl << std::flush;
+          //if (groupSize == 1) {
+            std::fill(auxs.begin(), auxs.end(), 1.0);
+            //} else {
+            //std::cerr<<"WARNING: arboNorm becoming zero\t"
+            //         << arboNorm << "\t"
+            //         << arboLength << "\t"
+            //         << arboFreq << "\t"
+            //         << groupSize
+            //         << std::endl << std::flush;
+            //exit(1);
+            //}
         } else {
+          //std::cout<<"I was here";
           std::transform(auxs.begin(), auxs.end(), auxs.begin(), [&arboNorm](auto& c){return c / arboNorm;});
         }
       }
@@ -1081,35 +1091,56 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   std::vector<CollapsedCellOptimizer::SerialVecType> arboGeneProbs;
   {
     if (useArborescence) {
+      //%%%%%%%%%% Hardcoded for testing
       std::string arboFile = "/mnt/scratch7/avi/snare-seq/counts/rna/simulation_testing/quants/testing/arbos.tsv";
       size_t maxArboLength = 62;
+      arboGeneProbs.resize(numGenes);
+      for( auto &it : arboGeneProbs ) {
+        it.resize( maxArboLength );
+      }
+      //%%%%%%%%%%%%%%%
 
       if(boost::filesystem::exists(arboFile)){
         std::ifstream fileReader(arboFile);
-        std::string data;
         double totalProbCount {0.0};
+        std::string data;
 
         if(fileReader.is_open()) {
+          size_t gid {0};
           while(getline(fileReader, data)) {
-            CollapsedCellOptimizer::SerialVecType arboCount(maxArboLength, 0.0);
+            size_t idxPtr {0};
+            std::string count_str;
             std::stringstream ss(data);
 
-            size_t idxPtr {0};
-            while( ss.good() ) {
-              std::string substr;
-              getline( ss, substr, '\t' );
-              double count = std::stod(substr);
+            while( getline(ss, count_str, ',') ) {
+              double count = std::stod(count_str);
 
               totalProbCount += count;
-              arboCount[idxPtr] = count;
+              arboGeneProbs[gid][idxPtr] = count;
+
+              idxPtr += 1;
+              if (idxPtr > maxArboLength) {
+                aopt.jointLog->error("Wrong Max Arbo Length: {} found {}",
+                                     maxArboLength, idxPtr);
+                aopt.jointLog->flush();
+                std::exit(84);
+              }
             }//end-while
 
-            arboGeneProbs.emplace_back(arboCount);
+            gid += 1;
+            if (gid > numGenes) {
+              aopt.jointLog->error("Wrong Number of Genes: {} found {}",
+                                   numGenes, gid);
+              aopt.jointLog->flush();
+              std::exit(84);
+            }
           }//end-outer-while
           fileReader.close();
         }
+
         aopt.jointLog->info("Done importing Arbo Lengths of {} x {} w/ {} total probs",
                             arboGeneProbs.size(), maxArboLength, totalProbCount);
+        aopt.jointLog->flush();
       }
     }
   }// use arborescence length model
