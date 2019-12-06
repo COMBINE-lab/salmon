@@ -129,6 +129,59 @@ void CellEMUpdate_(std::vector<SalmonEqClass>& eqVec,
   }//end-outer for
 }
 
+/*
+ * Use the "relax" EM algorithm over gene equivalence
+ * classes to estimate the latent variables (alphaOut)
+ * given the current estimates (alphaIn) using
+ * arborescence as the aux probabilities
+ */
+void CellArboUpdate_(std::vector<SalmonEqClass>& eqVec,
+                     const CollapsedCellOptimizer::SerialVecType& alphaIn,
+                     CollapsedCellOptimizer::SerialVecType& alphaOut,
+                     const std::vector<CollapsedCellOptimizer::SerialVecType>& arboGeneProbs){
+  assert(alphaIn.size() == alphaOut.size());
+
+  for (size_t eqID=0; eqID < eqVec.size(); ++eqID) {
+    auto& kv = eqVec[eqID];
+
+    uint32_t count = kv.count;
+    // for each label in this class
+    const std::vector<uint32_t>& genes = kv.labels;
+    size_t groupSize = genes.size();
+
+    // get conditional probabilities
+    //const auto& auxs = txpGroupCombinedWeights[eqID];
+    std::vector<double> auxs (genes.size(), 1.0);
+
+    if (BOOST_LIKELY(groupSize > 1)) {
+      double denom = 0.0;
+      for (size_t i = 0; i < groupSize; ++i) {
+        auto gid = genes[i];
+        auto aux = auxs[i];
+        denom += alphaIn[gid] * aux;
+      }
+
+      if (denom > 0.0) {
+        double invDenom = count / denom;
+        for (size_t i = 0; i < groupSize; ++i) {
+          auto gid = genes[i];
+          auto aux = auxs[i];
+          double v = alphaIn[gid] * aux;
+          if (!std::isnan(v)) {
+            alphaOut[gid] += v * invDenom;
+          }
+        }//end-for
+      }//end-if denom>0
+    }//end-if boost gsize>1
+    else if (groupSize == 1){
+      alphaOut[genes.front()] += count;
+    } else{
+      std::cerr<<"0 Group size for salmonEqclasses in EM\n"
+               <<"Please report this on github";
+      exit(1);
+    }
+  }//end-outer for
+}
 
 double truncateAlphas(VecT& alphas, double cutoff) {
   // Truncate tiny expression values
@@ -148,7 +201,8 @@ bool runPerCellEM(double& totalNumFrags, size_t numGenes,
                   const CollapsedCellOptimizer::SerialVecType& priorAlphas,
                   std::vector<SalmonEqClass>& salmonEqclasses,
                   std::shared_ptr<spdlog::logger>& jointlog,
-                  bool initUniform, bool useVBEM){
+                  bool initUniform, bool useVBEM, bool useArborescence,
+                  const std::vector<CollapsedCellOptimizer::SerialVecType>& arboGeneProbs){
 
   // An EM termination criterion, adopted from Bray et al. 2016
   uint32_t minIter {50};
@@ -180,7 +234,10 @@ bool runPerCellEM(double& totalNumFrags, size_t numGenes,
   while (itNum < minIter or (itNum < maxIter and !converged)) {
     if (useVBEM) {
       CellVBEMUpdate_(salmonEqclasses, alphas, priorAlphas, alphasPrime);
-    } else {
+    } else if (useArborescence) {
+      CellArboUpdate_(salmonEqclasses, alphas, alphasPrime, arboGeneProbs);
+    }
+    else {
       CellEMUpdate_(salmonEqclasses, alphas, alphasPrime);
     }
 
@@ -348,6 +405,8 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   uint32_t numGenes, uint32_t umiLength, uint32_t numBootstraps,
                   bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
                   bool initUniform, CFreqMapT& freqCounter, bool dumpArborescences,
+                  bool useArborescence,
+                  const std::vector<CollapsedCellOptimizer::SerialVecType>& arboGeneProbs,
                   spp::sparse_hash_set<uint32_t>& mRnaGenes,
                   spp::sparse_hash_set<uint32_t>& rRnaGenes,
                   std::atomic<uint64_t>& totalUniEdgesCounts,
@@ -472,7 +531,9 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                                    salmonEqclasses,
                                    jointlog,
                                    initUniform,
-                                   useVBEM);
+                                   useVBEM,
+                                   useArborescence,
+                                   arboGeneProbs);
         if( !isEMok ){
           jointlog->error("EM iteration for cell {} failed \n"
                           "Please Report this on github.", trueBarcodeStr);
@@ -980,6 +1041,43 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
     }
   }//end-if useVBEM
 
+  std::vector<CollapsedCellOptimizer::SerialVecType> arboGeneProbs;
+  {
+    bool useArborescence = true;
+    if (useArborescence) {
+      std::string arboFile = "/mnt/scratch7/avi/snare-seq/counts/rna/simulation_testing/quants/testing/arbos.tsv";
+      size_t maxArboLength = 62;
+
+      if(boost::filesystem::exists(arboFile)){
+        std::ifstream fileReader(arboFile);
+        std::string data;
+        double totalProbCount {0.0};
+
+        if(fileReader.is_open()) {
+          while(getline(fileReader, data)) {
+            CollapsedCellOptimizer::SerialVecType arboCount(maxArboLength, 0.0);
+            std::stringstream ss(data);
+
+            size_t idxPtr {0};
+            while( ss.good() ) {
+              std::string substr;
+              getline( ss, substr, '\t' );
+              double count = std::stod(substr);
+
+              totalProbCount += count;
+              arboCount[idxPtr] = count;
+            }//end-while
+
+            arboGeneProbs.emplace_back(arboCount);
+          }//end-outer-while
+          fileReader.close();
+        }
+        aopt.jointLog->info("Done importing Arbo Lengths of {} x {} w/ {} total probs",
+                            arboGeneProbs.size(), maxArboLength, totalProbCount);
+      }
+    }
+  }// use arborescence length model
+
   std::vector<std::thread> workerThreads;
   for (size_t tn = 0; tn < numWorkerThreads; ++tn) {
     workerThreads.emplace_back(optimizeCell,
@@ -1011,8 +1109,10 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                aopt.initUniform,
                                std::ref(freqCounter),
                                aopt.dumpArborescences,
-                               std::ref(rRnaGenes),
+                               useArborescence,
+                               std::ref{arboGeneProbs},
                                std::ref(mRnaGenes),
+                               std::ref(rRnaGenes),
                                std::ref(totalUniEdgesCounts),
                                std::ref(totalBiEdgesCounts));
   }
