@@ -686,6 +686,12 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
       }
     }
 
+    if (trueBarcode.size() == 737280) {
+      aopt.jointLog->error("Wrong whitelist provided\n"
+                           "Please check https://salmon.readthedocs.io/en/develop/alevin.html#whitelist");
+      aopt.jointLog->flush();
+      exit(64);
+    }
     aopt.jointLog->info("Total {} white-listed Barcodes", trueBarcodes.size());
   }
   else {
