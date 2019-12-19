@@ -669,6 +669,12 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
     aut::readWhitelist(aopt.whitelistFile,
                        trueBarcodes);
     aopt.jointLog->info("Done importing white-list Barcodes");
+    if (trueBarcodes.size() == 737280) {
+      aopt.jointLog->error("Wrong whitelist provided\n"
+                           "Please check https://salmon.readthedocs.io/en/develop/alevin.html#whitelist");
+      aopt.jointLog->flush();
+      exit(64);
+    }
 
     std::vector<std::string> skippedTrueBarcodes ;
     for ( auto trueBarcode: trueBarcodes ) {
