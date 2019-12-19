@@ -313,7 +313,7 @@ public:
         int64_t refAccPos = tid > 0 ? refAccumLengths[tid - 1] : 0;
         int64_t refTotalLength = refAccumLengths[tid] - refAccPos;
         if (len != refTotalLength) {
-          log->warn("len : {:n}, but txp.RefLenght : {:n}", len, txp.RefLength);
+          log->warn("len : {:n}, but txp.RefLength : {:n}", len, txp.RefLength);
         }
         char* tseq = pufferfish::util::getRefSeqOwned(allRefSeq, refAccPos, refTotalLength);
         txp.setSequenceOwned(tseq, sopt.gcBiasCorrect, sopt.reduceGCMemory);
