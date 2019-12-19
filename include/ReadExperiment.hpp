@@ -308,12 +308,12 @@ public:
       // the whole reference sequence in 2-bit in the index, there is
       // really no reason to convert to ASCII and keep a duplicate
       // copy around.
-      if (!isDecoy and !isShort and sopt.biasCorrect or sopt.gcBiasCorrect) {
+      if (!isDecoy and !isShort and (sopt.biasCorrect or sopt.gcBiasCorrect)) {
         auto tid = i - numShort;
         int64_t refAccPos = tid > 0 ? refAccumLengths[tid - 1] : 0;
         int64_t refTotalLength = refAccumLengths[tid] - refAccPos;
         if (len != refTotalLength) {
-          log->warn("len : {:n}, but txp.RefLength : {:n}", len, txp.RefLength);
+          log->warn("len : {:n}, but txp.RefLength : {:n} :: refTotalLength : {:n}", len, txp.RefLength, refTotalLength);
         }
         char* tseq = pufferfish::util::getRefSeqOwned(allRefSeq, refAccPos, refTotalLength);
         txp.setSequenceOwned(tseq, sopt.gcBiasCorrect, sopt.reduceGCMemory);
