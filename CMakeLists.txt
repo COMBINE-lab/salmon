@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.9)
+cmake_minimum_required(VERSION 3.12)
 
 if(DEFINED ENV{CC})
   set(CC $ENV{CC})
@@ -543,20 +543,14 @@ if (NOT CEREAL_FOUND)
   include(ExternalProject)
   externalproject_add(libcereal
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/USCiLab/cereal/archive/v1.2.2.tar.gz -o cereal-v1.2.2.tar.gz &&
-      ${SHASUM} 1921f26d2e1daf9132da3c432e2fd02093ecaedf846e65d7679ddf868c7289c4  cereal-v1.2.2.tar.gz &&
-      tar -xzvf cereal-v1.2.2.tar.gz
+    DOWNLOAD_COMMAND curl -k -L https://github.com/USCiLab/cereal/archive/v1.3.0.tar.gz -o cereal-v1.3.0.tar.gz &&
+      ${SHASUM} 329ea3e3130b026c03a4acc50e168e7daff4e6e661bc6a7dfec0d77b570851d5 cereal-v1.3.0.tar.gz &&
+      tar -xzvf cereal-v1.3.0.tar.gz
 
-    ##
-    #URL https://github.com/USCiLab/cereal/archive/v1.2.2.tar.gz
-    #DOWNLOAD_NAME cereal-v1.2.2.tar.gz
-    #TLS_VERIFY FALSE
-    #URL_HASH SHA1=ffddf5fc5313cfbb893e07823ca8c473084eebca
-    ##
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.2.2
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.3.0
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
-    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.2.2/build
+    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.3.0/build
     CONFIGURE_COMMAND ""
     BUILD_COMMAND ""
     INSTALL_COMMAND sh -c "mkdir -p <INSTALL_DIR>/include && cp -r <SOURCE_DIR>/include/cereal <INSTALL_DIR>/include"

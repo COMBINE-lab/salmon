@@ -49,6 +49,7 @@ namespace alevin{
   namespace utils{
 
     namespace apt = alevin::protocols;
+    namespace bfs = boost::filesystem;
 
     constexpr uint32_t uint32_max = std::numeric_limits<uint32_t>::max();
 
@@ -68,6 +69,9 @@ namespace alevin{
 
     bool recoverBarcode(std::string& sequence);
 
+    void readWhitelist(bfs::path& filePath,
+                       TrueBcsT& trueBarcodes);
+
     template <typename ProtocolT>
     bool processAlevinOpts(AlevinOpts<ProtocolT>& aopt,
                              SalmonOpts& sopt,
@@ -84,10 +88,9 @@ namespace alevin{
     template <typename OrderedOptionsT>
     bool writeCmdInfo(boost::filesystem::path cmdInfoPath,
                       OrderedOptionsT& orderedOptions) {
-      namespace bfs = boost::filesystem;
       std::ofstream os(cmdInfoPath.string());
       cereal::JSONOutputArchive oa(os);
-      oa(cereal::make_nvp("Salmon_version:", std::string(salmon::version)));
+      oa(cereal::make_nvp("salmon_version:", std::string(salmon::version)));
       for (auto& opt : orderedOptions.options) {
         if (opt.value.size() == 1) {
           oa(cereal::make_nvp(opt.string_key, opt.value.front()));

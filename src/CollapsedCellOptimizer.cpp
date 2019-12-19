@@ -1,5 +1,6 @@
 #include "CollapsedCellOptimizer.hpp"
 #include <assert.h>
+#include <random>
 
 CollapsedCellOptimizer::CollapsedCellOptimizer() {}
 
@@ -343,11 +344,11 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   std::vector<CellState>& skippedCB,
                   bool verbose, GZipWriter& gzw, bool noEM, bool useVBEM,
                   bool quiet, tbb::atomic<double>& totalDedupCounts,
-                  tbb::atomic<uint32_t>& totalExpGeneCounts,
+                  tbb::atomic<uint32_t>& totalExpGeneCounts, double priorWeight,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, uint32_t umiLength, uint32_t numBootstraps,
                   bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
-                  bool initUniform, CFreqMapT& freqCounter,
+                  bool initUniform, CFreqMapT& freqCounter, bool dumpArborescences,
                   spp::sparse_hash_set<uint32_t>& mRnaGenes,
                   spp::sparse_hash_set<uint32_t>& rRnaGenes,
                   std::atomic<uint64_t>& totalUniEdgesCounts,
@@ -382,6 +383,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
     std::vector<double> geneAlphas(numGenes, 0.0);
     std::vector<uint8_t> tiers (numGenes, 0);
 
+    size_t fragmentCountValidator {0};
     for (auto& key : orderedTgroup) {
       //traversing each class and copying relevant data.
       bool isKeyPresent = eqMap.find_fn(key.first, [&](const SCTGValue& val){
@@ -393,17 +395,20 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
             // extracting txp labels
             const std::vector<uint32_t>& txps = key.first.txps;
 
-            // original counts of the UMI
-            uint32_t eqCount {0};
-            for(auto& ugroup: bcIt->second){
-              eqCount += ugroup.second;
-            }
-
             txpGroups.emplace_back(txps);
             umiGroups.emplace_back(bcIt->second);
+            for(auto& ugroup: bcIt->second){
+              fragmentCountValidator += ugroup.second;
+            }
 
             // for dumping per-cell eqclass vector
             if(verbose){
+              // original counts of the UMI
+              uint32_t eqCount {0};
+              for(auto& ugroup: bcIt->second){
+                eqCount += ugroup.second;
+              }
+
               eqIDs.push_back(static_cast<uint32_t>(key.second));
               eqCounts.push_back(eqCount);
             }
@@ -418,15 +423,25 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
       }
     }
 
+    if (fragmentCountValidator != umiCount[trueBarcodeIdx]) {
+      jointlog->error("Feature count in feature dump doesn't map"
+                      "with eqclasses frament counts\n");
+      jointlog->flush();
+      exit(1);
+    }
+
     if ( !naiveEqclass ) {
       // perform the UMI deduplication step
       std::vector<SalmonEqClass> salmonEqclasses;
-      spp::sparse_hash_map<uint16_t, uint32_t> numMolHash;
+      std::vector<spp::sparse_hash_map<uint16_t, uint16_t>> arboEqClassCount;
       bool dedupOk = dedupClasses(geneAlphas, totalCount, txpGroups,
                                   umiGroups, salmonEqclasses, umiLength,
                                   txpToGeneMap, tiers, gzw, umiEditDistance,
-                                  dumpUmiGraph, trueBarcodeStr, numMolHash,
+                                  dumpUmiGraph, trueBarcodeStr,
+                                  arboEqClassCount,
+                                  dumpArborescences,
                                   totalUniEdgesCounts, totalBiEdgesCounts);
+
       if( !dedupOk ){
         jointlog->error("Deduplication for cell {} failed \n"
                         "Please Report this on github.", trueBarcodeStr);
@@ -442,6 +457,15 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
 
       // perform EM for resolving ambiguity
       if ( !noEM ) {
+        if ( useVBEM and not initUniform) {
+          // down weighing priors for tier 2 estimates
+          for (size_t j=0; j<numGenes; j++) {
+            if (tiers[j] == 2) {
+              priorCellAlphas[j] = priorWeight * 1e-2;
+            }
+          }
+        }
+
         bool isEMok = runPerCellEM(totalCount,
                                    numGenes,
                                    geneAlphas,
@@ -457,6 +481,98 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
           std::exit(74);
         }
       }
+
+      std::string arboData;
+      { // working out Arborescence level stats
+        if (dumpArborescences) {
+          size_t totalCellFrags {0};
+          std::stringstream arboDataStream;
+
+          std::vector<spp::sparse_hash_map<uint16_t, uint32_t>> arboFragCounts;
+          arboFragCounts.resize(numGenes);
+
+          for( size_t i=0; i<salmonEqclasses.size(); i++ ) {
+            auto& eqclass = salmonEqclasses[i];
+            auto& eqCounts = arboEqClassCount[i];
+            size_t numLabels = eqclass.labels.size();
+
+            for (auto gid: eqclass.labels) {
+              if (gid >= numGenes) {
+                std::cerr<< gid << "more than number of genes" << std::flush;
+                exit(74);
+              }
+            }
+
+            if ( numLabels == 1 ) {
+              auto gid = eqclass.labels.front();
+              for (auto it: eqCounts) {
+                arboFragCounts[gid][it.first] += it.second;
+                totalCellFrags += (it.first * it.second);
+              }
+            }
+            else if ( numLabels > 1 ){
+
+              // calculate the division probabilities
+              std::vector<double> probs;
+              for (auto gid: eqclass.labels) {
+                probs.emplace_back( geneAlphas[gid] );
+              }
+
+              size_t arboId {0}, totalGeneFrags {0}, totalUmis{0};
+              size_t numArbos = eqCounts.size();
+              std::vector<uint16_t> arboLengths(numArbos);
+              std::vector<uint16_t> arboCounts(numArbos);
+              for (auto it: eqCounts) {
+                arboLengths[arboId] = it.first;
+                arboCounts[arboId] = it.second;
+
+                arboId += 1;
+                totalUmis += it.second;
+                totalGeneFrags += (it.second * it.first);
+              }
+
+              std::discrete_distribution<> geneDist(probs.begin(), probs.end());
+              std::discrete_distribution<> arboDist(arboCounts.begin(), arboCounts.end());
+
+              std::mt19937 geneGen;
+              std::mt19937 arboGen;
+
+              for (size_t j=0; j < totalUmis; j++) {
+                auto gid = eqclass.labels[geneDist(geneGen)];
+                auto arboLength = arboLengths[arboDist(arboGen)];
+                arboFragCounts[gid][arboLength] += 1;
+              }
+
+              totalCellFrags += totalGeneFrags;
+            }
+            else {
+              std::cerr<<"Eqclasses with No gene labels\n" << std::flush;
+              exit(74);
+            }
+          } //end-for
+
+          // populating arbo txt file
+          std::stringstream arboGeneData;
+          size_t gid {0}, numExpGenes {0};
+          for (auto& arboDist: arboFragCounts) {
+            if (arboDist.size() > 0) {
+              numExpGenes += 1;
+
+              arboGeneData << gid << "\t" << arboDist.size() ;
+              for(auto it: arboDist) {
+                arboGeneData << "\t" << it.first << "\t" << it.second;
+              }
+              arboGeneData << std::endl;
+            }
+
+            gid += 1;
+          } // done populating arboGeneData
+
+          arboDataStream << trueBarcodeStr << "\t" << numExpGenes << "\t"
+                         << totalCellFrags << "\n" << arboGeneData.str();
+          arboData = arboDataStream.str();
+        } //end-if
+      } // end populatin arbo level stats
 
       std::string features;
       uint8_t featureCode {0};
@@ -507,19 +623,6 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         double deduplicationRate = numMappedReads ?
           1.0 - (totalUmiCount / numMappedReads) : 0.0;
 
-        // Feature created after discussion with Mehrtash
-        double averageNumMolPerArbo {0.0};
-        size_t totalNumArborescence {0};
-        std::stringstream arboString ;
-        for (auto& it: numMolHash) {
-          totalNumArborescence += it.second;
-          averageNumMolPerArbo += (it.first * it.second);
-          if (dumpUmiGraph) {
-            arboString << "\t" << it.first << ":" << it.second;
-          }
-        }
-        averageNumMolPerArbo /= totalNumArborescence;
-
         featuresStream << "\t" << numRawReads
                        << "\t" << numMappedReads
                        << "\t" << totalUmiCount
@@ -539,24 +642,25 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
           featuresStream << "\t" << riboCount / totalUmiCount;
         }
 
-        if (dumpUmiGraph) {
-          featuresStream << arboString.rdbuf();
-        } else {
-          featuresStream << "\t" << averageNumMolPerArbo;
-        }
-
         features = featuresStream.str();
       } // end making features
 
-
       // write the abundance for the cell
-      gzw.writeSparseAbundances( trueBarcodeStr,
-                                 features,
-                                 featureCode,
-                                 geneAlphas,
-                                 tiers,
-                                 dumpUmiGraph );
+      bool isWriteOk = gzw.writeSparseAbundances( trueBarcodeStr,
+                                                  features,
+                                                  arboData,
+                                                  featureCode,
+                                                  geneAlphas,
+                                                  tiers,
+                                                  dumpArborescences,
+                                                  dumpUmiGraph );
 
+      if( not isWriteOk ){
+        jointlog->error("Gzip Writer failed \n"
+                        "Please Report this on github.");
+        jointlog->flush();
+        std::exit(74);
+      }
 
       // maintaining count for total number of predicted UMI
       salmon::utils::incLoop(totalDedupCounts, totalCount);
@@ -589,8 +693,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                                    geneAlphas, bootVariance,
                                    useAllBootstraps, sampleEstimates);
       }//end-if
-    }
-    else {
+    } else {
       // doing per eqclass level naive deduplication
       for (size_t eqId=0; eqId<umiGroups.size(); eqId++) {
         spp::sparse_hash_set<uint64_t> umis;
@@ -645,6 +748,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   size_t numGenes = geneIdxMap.size();
   size_t numWorkerThreads{1};
   bool hasWhitelist = boost::filesystem::exists(aopt.whitelistFile);
+  bool usingHashMode = boost::filesystem::exists(aopt.bfhFile);
 
   if (aopt.numThreads > 1) {
     numWorkerThreads = aopt.numThreads - 1;
@@ -681,58 +785,59 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
 
   spp::sparse_hash_set<uint32_t> mRnaGenes, rRnaGenes;
   bool useMito {false}, useRibo {false};
-  if(boost::filesystem::exists(aopt.mRnaFile)) {
-    std::ifstream mRnaFile(aopt.mRnaFile.string());
-    std::string gene;
-    size_t skippedGenes {0};
-    if(mRnaFile.is_open()) {
-      while(getline(mRnaFile, gene)) {
-        if (geneIdxMap.contains(gene)){
-          mRnaGenes.insert(geneIdxMap[ gene ]);
+  if( not hasWhitelist ) {
+    if (boost::filesystem::exists(aopt.mRnaFile)) {
+      std::ifstream mRnaFile(aopt.mRnaFile.string());
+      std::string gene;
+      size_t skippedGenes {0};
+      if(mRnaFile.is_open()) {
+        while(getline(mRnaFile, gene)) {
+          if (geneIdxMap.contains(gene)){
+            mRnaGenes.insert(geneIdxMap[ gene ]);
+          }
+          else{
+            skippedGenes += 1;
+          }
         }
-        else{
-          skippedGenes += 1;
-        }
+        mRnaFile.close();
       }
-      mRnaFile.close();
-    }
-    if (skippedGenes > 0){
-      aopt.jointLog->warn("{} mitorna gene(s) does not have transcript in the reference",
-                          skippedGenes);
-    }
-    aopt.jointLog->info("Total {} usable mRna genes", mRnaGenes.size());
-    if (mRnaGenes.size() > 0 ) { useMito = true; }
-  }
-  else if (hasWhitelist) {
-    aopt.jointLog->warn("mrna file not provided; using is 1 less feature for whitelisting");
-  }
-
-  if(boost::filesystem::exists(aopt.rRnaFile)){
-    std::ifstream rRnaFile(aopt.rRnaFile.string());
-    std::string gene;
-    size_t skippedGenes {0};
-    if(rRnaFile.is_open()) {
-      while(getline(rRnaFile, gene)) {
-        if (geneIdxMap.contains(gene)){
-          rRnaGenes.insert(geneIdxMap[ gene ]);
-        }
-        else{
-          skippedGenes += 1;
-        }
+      if (skippedGenes > 0){
+        aopt.jointLog->warn("{} mitorna gene(s) does not have transcript in the reference",
+                            skippedGenes);
       }
-      rRnaFile.close();
+      aopt.jointLog->info("Total {} usable mRna genes", mRnaGenes.size());
+      if (mRnaGenes.size() > 0 ) { useMito = true; }
+    } else if ( not usingHashMode ) {
+      aopt.jointLog->warn("mrna file not provided; using is 1 less feature for whitelisting");
     }
-    if (skippedGenes > 0){
-      aopt.jointLog->warn("{} ribosomal rna gene(s) does not have transcript in the reference",
-                          skippedGenes);
+
+    if(boost::filesystem::exists(aopt.rRnaFile)){
+      std::ifstream rRnaFile(aopt.rRnaFile.string());
+      std::string gene;
+      size_t skippedGenes {0};
+      if(rRnaFile.is_open()) {
+        while(getline(rRnaFile, gene)) {
+          if (geneIdxMap.contains(gene)){
+            rRnaGenes.insert(geneIdxMap[ gene ]);
+          }
+          else{
+            skippedGenes += 1;
+          }
+        }
+        rRnaFile.close();
+      }
+      if (skippedGenes > 0){
+        aopt.jointLog->warn("{} ribosomal rna gene(s) does not have transcript in the reference",
+                            skippedGenes);
+      }
+      aopt.jointLog->info("Total {} usable rRna genes", rRnaGenes.size());
+      if (rRnaGenes.size() > 0 ) { useRibo = true; }
+    } else if ( not usingHashMode ) {
+      aopt.jointLog->warn("rrna file not provided; using is 1 less feature for whitelisting");
     }
-    aopt.jointLog->info("Total {} usable rRna genes", rRnaGenes.size());
-    if (rRnaGenes.size() > 0 ) { useRibo = true; }
-  } else if (hasWhitelist) {
-    aopt.jointLog->warn("rrna file not provided; using is 1 less feature for whitelisting");
-  }
+  } // done populating mRNA and rRNA genes
 
-
+  double priorWeight {1.0};
   std::atomic<uint32_t> bcount{0};
   tbb::atomic<double> totalDedupCounts{0.0};
   tbb::atomic<uint32_t> totalExpGeneCounts{0};
@@ -839,10 +944,11 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
         }
       }//end-matrix reading scope
 
-      double priorWeight = aopt.vbemNorm / priorMolCounts ;
+      priorWeight = aopt.vbemNorm / priorMolCounts ;
       aopt.jointLog->info( "Prior Weight: {}/ {}", priorWeight, priorMolCounts);
       {
         //rearragngement of vectors
+        size_t noPriorCellCount {0};
         std::vector<std::vector<double>> temps(trueBarcodes.size(), std::vector<double>(numGenes, priorWeight * 1e-2));
         for (size_t i=0; i<trueBarcodes.size(); i++) {
           auto& cname = trueBarcodes[i];
@@ -857,15 +963,18 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
               }
             }
           } else {
-            aopt.jointLog->error("Can't find prior for CB: {}", cname);
-            aopt.jointLog->flush();
-            std::exit(84);
+            noPriorCellCount += 1;
           }
         } //end-for
 
         priorAlphas = temps;
+
         aopt.jointLog->info("Done Rearranging Matrix for Prior of {} X {}",
                             priorAlphas.size(), priorAlphas[0].size());
+        if (noPriorCellCount > 0) {
+          aopt.jointLog->warn("Can't find prior and using uniform priors for {} cells", noPriorCellCount);
+        }
+        aopt.jointLog->flush();
       } // end-rearrangment
     } else { //end-else not initUniform
       priorAlphas = std::vector<std::vector<double>> (numCells, std::vector<double>(numGenes, 1e-2) );
@@ -892,6 +1001,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                aopt.quiet,
                                std::ref(totalDedupCounts),
                                std::ref(totalExpGeneCounts),
+                               priorWeight,
                                std::ref(txpToGeneMap),
                                numGenes,
                                aopt.protocol.umiLength,
@@ -901,6 +1011,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                aopt.dumpfeatures,
                                aopt.initUniform,
                                std::ref(freqCounter),
+                               aopt.dumpArborescences,
                                std::ref(rRnaGenes),
                                std::ref(mRnaGenes),
                                std::ref(totalUniEdgesCounts),
@@ -960,7 +1071,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   std::copy(geneNames.begin(), geneNames.end(), giterator);
   gFile.close();
 
-  if( not hasWhitelist ){
+  if( not hasWhitelist and not usingHashMode){
     aopt.jointLog->info("Clearing EqMap; Might take some time.");
     fullEqMap.clear();
 
@@ -996,6 +1107,10 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
       aopt.jointLog->flush();
     }
   } //end-if whitelisting
+  else if ( usingHashMode and not hasWhitelist ) {
+    aopt.jointLog->warn("intelligent whitelisting is disabled in hash mode; skipping");
+    aopt.jointLog->flush();
+  }
 
   if (aopt.dumpMtx){
     aopt.jointLog->info("Starting dumping cell v gene counts in mtx format");

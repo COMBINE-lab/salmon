@@ -78,6 +78,7 @@ namespace defaults {
   constexpr const bool writeOrphanLinks{false};
   constexpr const bool writeUnmappedNames{false};
   constexpr const double quasiCoverage{0.0};
+  constexpr const double decoyThreshold{1.0};
   const std::string hitFilterPolicyStr{"AFTER"};
 
    // FMD-specific options
@@ -128,6 +129,7 @@ namespace defaults {
   constexpr const bool isQuartzSeq2{false};
   constexpr const bool noQuant{false};
   constexpr const bool dumpFQ{false};
+  constexpr const bool dumpArborescences{false};
   constexpr const bool dumpBarcodeEq{false};
   constexpr const bool dumpFeatures{false};
   constexpr const bool dumpBFH{false};

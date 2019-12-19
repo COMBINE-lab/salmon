@@ -114,6 +114,13 @@ namespace salmon {
        "mapping must achieve in order to be considered \"valid\" --- should be in (0,1].\n"
        "Salmon Default 0.65 and Alevin Default 0.87"
        )
+      ("decoyThreshold",
+       po::value<double>(&sopt.decoyThreshold)->default_value(salmon::defaults::decoyThreshold),
+       "For an alignemnt to an annotated transcript to be considered invalid, it must have an alignment "
+       "score < (decoyThreshold * bestDecoyScore).  A value of 1.0 means that any alignment strictly worse than "
+       "the best decoy alignment will be discarded.  A smaller value will allow reads to be allocated to transcripts "
+       "even if they strictly align better to the decoy sequence."
+      )
       ("ma",
        po::value<int16_t>(&sopt.matchScore)->default_value(salmon::defaults::matchScore),
        "[Quasi-mapping mode (w / mapping validation) only] : The value given to a match between read and reference nucleotides "
@@ -406,6 +413,9 @@ namespace salmon {
       (
        "dumpBfh", po::bool_switch()->default_value(alevin::defaults::dumpBFH),
        "dump the big hash with all the barcodes and the UMI sequence.")
+      (
+       "dumpArborescences", po::bool_switch()->default_value(alevin::defaults::dumpArborescences),
+       "dump the gene-v-cell matrix for the total number of fragments used in the UMI deduplicaiton.")
       (
        "dumpUmiGraph", po::bool_switch()->default_value(alevin::defaults::dumpUmiGraph),
        "dump the per cell level Umi Graph.")

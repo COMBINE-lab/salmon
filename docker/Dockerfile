@@ -4,9 +4,9 @@
 FROM ubuntu:18.04
 MAINTAINER salmon.maintainer@gmail.com
 
-ENV PACKAGES git gcc make g++ cmake libboost-all-dev liblzma-dev libbz2-dev \
-    ca-certificates zlib1g-dev curl unzip autoconf
-ENV SALMON_VERSION 1.0.0
+ENV PACKAGES git gcc make g++ libboost-all-dev liblzma-dev libbz2-dev \
+    ca-certificates zlib1g-dev libcurl4-openssl-dev curl unzip autoconf apt-transport-https ca-certificates gnupg software-properties-common wget
+ENV SALMON_VERSION 1.1.0
 
 # salmon binary will be installed in /home/salmon/bin/salmon
 
@@ -15,8 +15,21 @@ ENV SALMON_VERSION 1.0.0
 WORKDIR /home
 
 RUN apt-get update && \
+    apt remove -y libcurl4 && \
     apt-get install -y --no-install-recommends ${PACKAGES} && \
     apt-get clean
+
+RUN wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | apt-key add -
+
+RUN apt-add-repository 'deb https://apt.kitware.com/ubuntu/ bionic main'
+
+RUN apt-get update
+
+RUN apt-key --keyring /etc/apt/trusted.gpg del C1F34CDD40CD72DA
+
+RUN apt-get install kitware-archive-keyring
+
+RUN apt-get install -y cmake
 
 RUN curl -k -L https://github.com/COMBINE-lab/salmon/archive/v${SALMON_VERSION}.tar.gz -o salmon-v${SALMON_VERSION}.tar.gz && \
     tar xzf salmon-v${SALMON_VERSION}.tar.gz && \
@@ -34,3 +47,7 @@ RUN curl -k -L https://github.com/COMBINE-lab/salmon/archive/v${SALMON_VERSION}.
 #    cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local && make && make install
 
 ENV PATH /home/salmon-${SALMON_VERSION}/bin:${PATH}
+ENV LD_LIBRARY_PATH "/usr/local/lib:${LD_LIBRARY_PATH}"
+
+RUN echo "export PATH=$PATH" > /etc/environment
+RUN echo "export LD_LIBRARY_PATH=$LD_LIBRARY_PATH" > /etc/environment

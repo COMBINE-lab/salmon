@@ -489,6 +489,7 @@ namespace alevin {
       aopt.naiveEqclass = vm["naiveEqclass"].as<bool>();
       aopt.noQuant = vm["noQuant"].as<bool>();
       aopt.dumpfq = vm["dumpfq"].as<bool>();
+      aopt.dumpArborescences = vm["dumpArborescences"].as<bool>();
       aopt.dumpfeatures = vm["dumpFeatures"].as<bool>();
       aopt.dumpMtx = vm["dumpMtx"].as<bool>();
       aopt.dumpBarcodeEq = vm["dumpBarcodeEq"].as<bool>();
@@ -695,6 +696,18 @@ namespace alevin {
       // Randomly assigning 'A' to first base with 'N'
       sequence[pos] = 'A';
       return sequenceCheck(sequence);
+    }
+
+    void readWhitelist(bfs::path& filePath,
+                       TrueBcsT& trueBarcodes) {
+      std::ifstream whiteFile(filePath.string());
+      std::string whtBc;
+      if(whiteFile.is_open()) {
+        while(getline(whiteFile, whtBc)) {
+          trueBarcodes.insert(whtBc);
+        }
+        whiteFile.close();
+      }
     }
 
     bool checkSetCoverage(std::vector<std::vector<uint32_t>>& tgroup,

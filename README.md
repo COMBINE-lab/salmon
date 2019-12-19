@@ -9,7 +9,8 @@
 
 ### Pre-computed decoy transcriptomes 
 
-Although the precomputed decoys are still compatible with the latest major release (v1.0.0). We highly recommend updating your index using the full genome if memory permits, as it yeilds higher accuracy. For more information, please check our extensive benchmarking on comparing different alignment methods and their influence on RNA-seq quantification in the latest revised preprint [manuscript](https://www.biorxiv.org/content/10.1101/657874v2).
+tl;dr: fast is good but fast and accurate is better !
+Although the precomputed decoys (<=v.14.2) are still compatible with the latest major release (v1.0.0). We highly recommend updating your index using the full genome, as it gives significantly higher accuracy, for more information please check our extensive benchmarking on comparing different alignment methods and their performance on RNA-seq quantification in the latest revised preprint [manuscript](https://www.biorxiv.org/content/10.1101/657874v2).
 Please use the [tutorial](https://combine-lab.github.io/alevin-tutorial/2019/selective-alignment/) for a step-by-step guide on how to efficiently index the reference transcriptome and genome for accurate gentrome based RNA-seq quantification.
 
 **Facing problems with Indexing ?, Check if anyone else already had this problem in the issues section or fill the index generation [request form](https://forms.gle/3baJc5SYrkSWb1z48)**
@@ -26,6 +27,8 @@ into many different pipelines.  For example, you can choose to make use of our *
 Give salmon a try!  You can find the latest binary releases [here](https://github.com/COMBINE-lab/salmon/releases).
 
 The current version number of the master branch of Salmon can be found [**here**](http://combine-lab.github.io/salmon/version_info/latest)
+
+**NOTE**: Salmon works by (quasi)-mapping sequencing reads directly to the *transcriptome*.  This means the Salmon index should be built on a set of target transcripts, **not** on the *genome* of the underlying organism.  If indexing appears to be taking a very long time, or using a tremendous amount of memory (which it should not), please ensure that you are not attempting to build an index on the genome of your organism!
 
 Documentation
 ==============

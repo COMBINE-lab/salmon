@@ -53,7 +53,6 @@
 #include "nonstd/optional.hpp"
 
 //alevin include
-#include "Filter.hpp"
 #include "AlevinOpts.hpp"
 #include "AlevinHash.hpp"
 #include "AlevinUtils.hpp"
@@ -511,9 +510,7 @@ void indexBarcodes(AlevinOpts<ProtocolT>& aopt,
     //Avi -> have to work more on model
     dumpPair.clear();
     alevin::model::coinTossBarcodeModel(barcode,
-                                        aopt,
                                         ZRow.second,
-                                        freqCounter,
                                         dumpPair);
     numBarcodesCorrected += dumpPair.size();
     for(auto& updateVal: dumpPair){
@@ -528,7 +525,6 @@ template <typename ProtocolT>
 bool writeFastq(AlevinOpts<ProtocolT>& aopt,
                 paired_parser_qual* parser,
                 SoftMapT& barcodeMap,
-                std::mutex& ioMutex,
                 TrueBcsT& trueBarcodes){
   size_t rangeSize{0};
   uint32_t totNumBarcodes{0};
@@ -644,7 +640,6 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
   constexpr uint32_t miniBatchSize{5000};
   uint32_t numParsingThreads{aopt.numParsingThreads}, numThreads{aopt.numConsumerThreads};
   std::vector<std::thread> threads;
-  std::mutex ioMutex;
   std::atomic<uint64_t> totNumBarcodes{0}, usedNumBarcodes{0};
 
   if (aopt.numThreads <= 3) {
@@ -671,15 +666,16 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
 
   //import whitelist barcodes if present
   if(boost::filesystem::exists(aopt.whitelistFile)){
-    std::ifstream whiteFile(aopt.whitelistFile.string());
-    std::string whtBc;
-    if(whiteFile.is_open()) {
-      while(getline(whiteFile, whtBc)) {
-        trueBarcodes.insert(whtBc);
-      }
-      whiteFile.close();
-    }
+    aut::readWhitelist(aopt.whitelistFile,
+                       trueBarcodes);
     aopt.jointLog->info("Done importing white-list Barcodes");
+    if (trueBarcodes.size() == 737280) {
+      aopt.jointLog->error("Wrong whitelist provided\n"
+                           "Please check https://salmon.readthedocs.io/en/develop/alevin.html#whitelist");
+      aopt.jointLog->flush();
+      exit(64);
+    }
+
     std::vector<std::string> skippedTrueBarcodes ;
     for ( auto trueBarcode: trueBarcodes ) {
       auto it = freqCounter.find(trueBarcode);
@@ -782,7 +778,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
                                                      1, 1, miniBatchSize));
     pairedParserQualPtr->start();
     bool isDumpok = writeFastq(aopt, pairedParserQualPtr.get(),
-                               barcodeSoftMap, ioMutex, trueBarcodes);
+                               barcodeSoftMap, trueBarcodes);
     pairedParserQualPtr->stop();
     if(!isDumpok){
       aopt.jointLog->error("Not able to dump fastq."
@@ -869,8 +865,7 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
       exit(1);
     }
 
-    salmonHashQuantify(aopt, sopt.indexDirectory,
-                       sopt.outputDirectory, freqCounter);
+    salmonHashQuantify(aopt, sopt.outputDirectory, freqCounter);
     aopt.noQuant = true;
 
     aopt.jointLog->info("Done Processing");

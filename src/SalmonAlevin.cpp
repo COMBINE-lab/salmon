@@ -175,20 +175,17 @@ using BlockedIndexRange = tbb::blocked_range<size_t>;
 using ReadExperimentT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 /////// REDUNDANT CODE END//
 
-template <typename AlnT, typename ProtocolT>
+template <typename AlnT>
 void processMiniBatchSimple(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc,
-                      uint64_t firstTimestepOfRound, ReadLibrary& readLib,
+                      ReadLibrary& readLib,
                       const SalmonOpts& salmonOpts,
                       AlnGroupVecRange<AlnT> batchHits,
                       std::vector<Transcript>& transcripts,
                       ClusterForest& clusterForest,
                       FragmentLengthDistribution& fragLengthDist,
-                      BiasParams& observedBiasParams,
                       std::atomic<uint64_t>& numAssignedFragments,
-                      std::default_random_engine& randEng, bool initialRound,
-                      std::atomic<bool>& burnedIn, double& maxZeroFrac,
-                      AlevinOpts<ProtocolT>& alevinOpts,
-                      std::mutex& iomutex){
+                      bool initialRound,
+                      std::atomic<bool>& burnedIn, double& maxZeroFrac){
 
   using salmon::math::LOG_0;
   using salmon::math::LOG_1;
@@ -386,7 +383,7 @@ void processReadsQuasi(
                        FragmentLengthDistribution& fragLengthDist, BiasParams& observedBiasParams,
                        SalmonOpts& salmonOpts,
                        std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
-                       volatile bool& writeToCache, AlevinOpts<ProtocolT>& alevinOpts,
+                       AlevinOpts<ProtocolT>& alevinOpts,
                        SoftMapT& barcodeMap,
                        spp::sparse_hash_map<std::string, uint32_t>& trBcs,
                        MappingStatistics& mstats
@@ -487,6 +484,7 @@ void processReadsQuasi(
   size_t numDropped{0};
   size_t numMappingsDropped{0};
   size_t numDecoyFrags{0};
+  const double decoyThreshold = salmonOpts.decoyThreshold;
   std::string readSubSeq;
   //////////////////////
 
@@ -655,10 +653,14 @@ void processReadsQuasi(
           //auto l1 = static_cast<int32_t>(readSubSeq.length());
 
           // the best scores start out as invalid
+          /*
           int32_t bestScore = invalidScore;
           int32_t secondBestScore = invalidScore;
           int32_t bestDecoyScore = invalidScore;
-          std::vector<decltype(bestScore)> scores(jointHits.size(), 0);
+          */
+          salmon::mapping_utils::MappingScoreInfo msi = {invalidScore, invalidScore, invalidScore, decoyThreshold};
+
+          std::vector<decltype(msi.bestScore)> scores(jointHits.size(), 0);
           size_t idx{0};
           bool isMultimapping = (jointHits.size() > 1);
 
@@ -669,13 +671,16 @@ void processReadsQuasi(
             bool validScore = (hitScore != invalidScore);
             numMappingsDropped += validScore ? 0 : 1;
             auto tid = qidx->getRefId(jointHit.tid);
-            salmon::mapping_utils::updateRefMappings(tid, hitScore, idx, transcripts, invalidScore, bestScore, secondBestScore, bestDecoyScore,
+            salmon::mapping_utils::updateRefMappings(tid, hitScore, idx, transcripts, invalidScore, 
+                                                     msi,
+                                                     //bestScore, secondBestScore, bestDecoyScore,
                                                      scores, bestScorePerTranscript, perm);
             ++idx;
           }
 
-          bool bestHitDecoy = (bestScore < bestDecoyScore);
-          if (bestScore > invalidScore and !bestHitDecoy) {
+          //bool bestHitDecoy = (msi.bestScore < msi.bestDecoyScore);
+          bool bestHitDecoy = msi.haveOnlyDecoyMappings();
+          if (msi.bestScore > invalidScore and !bestHitDecoy) {
             salmon::mapping_utils::filterAndCollectAlignments(jointHits,
                                                               scores,
                                                               perm,
@@ -685,9 +690,12 @@ void processReadsQuasi(
                                                               tryAlign,
                                                               hardFilter,
                                                               salmonOpts.scoreExp,
+                                                              msi,
+                                                              /*
                                                               bestScore,
                                                               secondBestScore,
                                                               bestDecoyScore,
+                                                              */
                                                               jointAlignments);
           } else {
             numDecoyFrags += bestHitDecoy ? 1 : 0;
@@ -758,10 +766,9 @@ void processReadsQuasi(
     prevObservedFrags = numObservedFragments;
     AlnGroupVecRange<QuasiAlignment> hitLists = {structureVec.begin(), structureVec.begin()+rangeSize};
     processMiniBatchSimple<QuasiAlignment>(
-                                     readExp, fmCalc, firstTimestepOfRound, rl, salmonOpts, hitLists,
-                                     transcripts, clusterForest, fragLengthDist, observedBiasParams,
-                                     numAssignedFragments, eng, initialRound, burnedIn, maxZeroFrac,
-                                     alevinOpts, /*uniqueFLD,*/ iomutex);
+                                     readExp, fmCalc, rl, salmonOpts, hitLists,
+                                     transcripts, clusterForest, fragLengthDist,
+                                     numAssignedFragments, initialRound, burnedIn, maxZeroFrac);
   }
 
   if (maxZeroFrac > 5.0) {
@@ -787,9 +794,9 @@ void processReadLibrary(
                         bool initialRound,
                         std::atomic<bool>& burnedIn, ForgettingMassCalculator& fmCalc,
                         FragmentLengthDistribution& fragLengthDist,
-                        SalmonOpts& salmonOpts, bool greedyChain,
+                        SalmonOpts& salmonOpts,
                         std::mutex& iomutex, size_t numThreads,
-                        std::vector<AlnGroupVec<AlnT>>& structureVec, volatile bool& writeToCache,
+                        std::vector<AlnGroupVec<AlnT>>& structureVec,
                         AlevinOpts<ProtocolT>& alevinOpts,
                         SoftMapT& barcodeMap,
                         spp::sparse_hash_map<std::string, uint32_t>& trBcs, MappingStatistics& mstats) {
@@ -843,7 +850,7 @@ void processReadLibrary(
                                           upperBoundHits, smallSeqs, nSeqs, index, transcripts,
                                           fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
                                           salmonOpts, iomutex, initialRound,
-                                          burnedIn, writeToCache, alevinOpts, barcodeMap, trBcs,
+                                          burnedIn, alevinOpts, barcodeMap, trBcs,
                                           mstats);
      };
      threads.emplace_back(threadFun);
@@ -946,7 +953,7 @@ void processReadLibrary(
  *
  */
 template <typename AlnT, typename ProtocolT>
-void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
+void quantifyLibrary(ReadExperimentT& experiment,
                      SalmonOpts& salmonOpts,
                      MappingStatistics& mstats,
                      uint32_t numQuantThreads,
@@ -999,7 +1006,6 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
     groupVec.emplace_back(maxReadGroup);
   }
 
-  bool writeToCache = !salmonOpts.disableMappingCache;
   auto processReadLibraryCallback =
     [&](ReadLibrary& rl, SalmonIndex* sidx,
         std::vector<Transcript>& transcripts, ClusterForest& clusterForest,
@@ -1011,8 +1017,8 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
                              numObservedFragments, totalAssignedFragments,
                              upperBoundHits, smallSeqs, nSeqs, initialRound, burnedIn, fmCalc,
                              fragLengthDist, salmonOpts,
-                             greedyChain, ioMutex,
-                             numQuantThreads, groupVec, writeToCache,
+                             ioMutex,
+                             numQuantThreads, groupVec,
                              alevinOpts, barcodeMap, trBcs, mstats);
 
     numAssignedFragments = totalAssignedFragments - prevNumAssignedFragments;
@@ -1192,7 +1198,6 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
     auto jointLog = aopt.jointLog;
     auto indexDirectory = sopt.indexDirectory;
     auto outputDirectory = sopt.outputDirectory;
-    bool greedyChain = true;
 
     jointLog->info("parsing read library format");
 
@@ -1281,7 +1286,7 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
     if(sopt.numThreads > 1){
       sopt.numThreads -= 1;
     }
-    quantifyLibrary<QuasiAlignment>(experiment, greedyChain, sopt,
+    quantifyLibrary<QuasiAlignment>(experiment, sopt,
                                     mstats, sopt.numThreads, aopt,
                                     barcodeMap, trueBarcodesIndexMap);
 

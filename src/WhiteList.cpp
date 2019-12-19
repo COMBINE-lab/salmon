@@ -171,7 +171,7 @@ namespace alevin {
                              CFreqMapT& freqCounter, bool useRibo, bool useMito,
                              size_t numLowConfidentBarcode){
       size_t numCells = trueBarcodes.size();
-      size_t numFeatures {6};
+      size_t numFeatures {5};
       if (useMito) { ++numFeatures; }
       if (useRibo) { ++numFeatures; }
       aopt.numFeatures = numFeatures;

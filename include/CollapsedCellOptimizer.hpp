@@ -27,6 +27,7 @@
 #include "concurrentqueue.h"
 
 #include <boost/math/special_functions/digamma.hpp>
+#include <boost/random.hpp>
 
 namespace bfs = boost::filesystem;
 using JqueueT = moodycamel::ConcurrentQueue<uint32_t>;
@@ -77,11 +78,11 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   std::vector<CellState>& skippedCB,
                   bool verbose, GZipWriter& gzw, bool noEM, bool useVBEM,
                   bool quiet, tbb::atomic<double>& totalDedupCounts,
-                  tbb::atomic<uint32_t>& totalExpGeneCounts,
+                  tbb::atomic<uint32_t>& totalExpGeneCounts, double priorWeight,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, uint32_t umiLength, uint32_t numBootstraps,
                   bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
-                  bool initUniform, CFreqMapT& freqCounter,
+                  bool initUniform, CFreqMapT& freqCounter, bool dumpArboFragCounts,
                   spp::sparse_hash_set<uint32_t>& mRnaGenes,
                   spp::sparse_hash_set<uint32_t>& rRnaGenes,
                   std::atomic<uint64_t>& totalUniEdgesCounts,
