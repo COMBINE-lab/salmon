@@ -1,5 +1,6 @@
 #include "CollapsedCellOptimizer.hpp"
 #include <assert.h>
+#include <random>
 
 CollapsedCellOptimizer::CollapsedCellOptimizer() {}
 
@@ -533,8 +534,8 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
               std::discrete_distribution<> geneDist(probs.begin(), probs.end());
               std::discrete_distribution<> arboDist(arboCounts.begin(), arboCounts.end());
 
-              boost::random::mt19937 geneGen;
-              boost::random::mt19937 arboGen;
+              std::mt19937 geneGen;
+              std::mt19937 arboGen;
 
               for (size_t j=0; j < totalUmis; j++) {
                 auto gid = eqclass.labels[geneDist(geneGen)];
