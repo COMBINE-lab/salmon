@@ -327,7 +327,10 @@ public:
       }
     }
     sopt.jointLog->info("Number of decoys : {:n}", numDecoys_);
-    sopt.jointLog->info("First decoy index : {:n} ", idx_->firstDecoyIndex());
+    auto firstDecoyIndex = idx_->firstDecoyIndex();
+    if (firstDecoyIndex < numRecords) {
+      sopt.jointLog->info("First decoy index : {:n} ", firstDecoyIndex);
+    }
     //std::exit(1);
     // ====== Done loading the transcripts from file
     setTranscriptLengthClasses_(lengths, posBiasFW_.size());
