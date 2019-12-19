@@ -22,11 +22,11 @@ if [ -d ${INSTALL_DIR}/src/pufferfish ] ; then
     rm -fr ${INSTALL_DIR}/src/pufferfish
 fi
 
-#SVER=salmon-v1.0.0
-SVER=develop
+SVER=salmon-v1.1.0
+#SVER=develop
 #SVER=pe-chaining
 
-EXPECTED_SHA256=4406ff6b5d676a3c1eb1a0f9241fadb5d368dbf32e1382a55b35fe42a6d76d3e
+EXPECTED_SHA256=aa51d7123f38568b1c9da5ab4f925b1705c5b3569048911b0aae4ea5cf7edac7
 
 mkdir -p ${EXTERNAL_DIR}
 curl -k -L https://github.com/COMBINE-lab/pufferfish/archive/${SVER}.zip -o ${EXTERNAL_DIR}/pufferfish.zip
