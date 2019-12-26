@@ -567,13 +567,16 @@ bool CollapsedEMOptimizer::gatherBootstraps(
 
   uint32_t numBootstraps = sopt.numBootstraps;
 
-  auto& eqVec =
-      readExp.equivalenceClassBuilder().eqVec();
+  auto& eqBuilder = readExp.equivalenceClassBuilder();
+  auto& eqVec = eqBuilder.eqVec();
 
   std::unordered_set<uint32_t> activeTranscriptIDs;
-  for (auto& kv : eqVec) {
-    auto& tg = kv.first;
-    for (auto& t : tg.txps) {
+  const size_t numClasses = eqVec.size();
+  for (size_t cid = 0; cid < numClasses; ++cid) { 
+    auto nt = eqBuilder.getNumTranscriptsForClass(cid);
+    auto& txps = eqVec[cid].first.txps;
+    for (size_t tctr = 0; tctr < nt; ++tctr) {
+      auto t = txps[tctr];
       transcripts[t].setActive();
       activeTranscriptIDs.insert(t);
     }
@@ -625,13 +628,27 @@ bool CollapsedEMOptimizer::gatherBootstraps(
   std::vector<uint64_t> origCounts;
   uint64_t totalCount{0};
 
-  for (auto& kv : eqVec) {
+  for (size_t cid = 0; cid < numClasses; ++cid) { 
+    const auto& kv = eqVec[cid];
     uint64_t count = kv.second.count;
+
     // for each transcript in this class
     const TranscriptGroup& tgroup = kv.first;
     if (tgroup.valid) {
-      const std::vector<uint32_t>& txps = tgroup.txps;
+      //const std::vector<uint32_t>& txps = tgroup.txps;
+      const auto numTranscripts = eqBuilder.getNumTranscriptsForClass(cid);
+      std::vector<uint32_t> txps(tgroup.txps.begin(), tgroup.txps.begin()+numTranscripts);
       const auto& auxs = kv.second.combinedWeights;
+      
+      if (txps.size() != auxs.size()) {
+        sopt.jointLog->critical(
+            "# of transcripts ({}) should match length of weight vec. ({})",
+            txps.size(), auxs.size());
+        sopt.jointLog->flush();
+        spdlog::drop_all();
+        std::exit(1);
+      }
+      
       txpGroups.push_back(txps);
       // Convert to non-atomic
       txpGroupCombinedWeights.emplace_back(auxs.begin(), auxs.end());
