@@ -92,6 +92,27 @@ struct ReadPair {
     return pufferfish::util::MateStatus::PAIRED_END_PAIRED;
   }
 
+  inline bool haveASTag() const {
+    uint8_t* tp = reinterpret_cast<uint8_t*>(bam_aux_find(read1, "AS"));
+    return !(tp == NULL);
+  }
+
+  inline int32_t getAS() const {
+    int32_t s{0};
+    auto bf1 = bam_flag(read1);
+    auto bf2 = bam_flag(read2);
+    // if the read is mapped
+    if (!(bf1 & BAM_FUNMAP)) {
+      uint8_t* tl = reinterpret_cast<uint8_t*>(bam_aux_find(read1, "AS"));
+      s += (tl == NULL) ? 0 : bam_aux_i(tl); 
+    }
+    if (!(bf2 & BAM_FUNMAP)) {
+      uint8_t* tr = reinterpret_cast<uint8_t*>(bam_aux_find(read2, "AS"));
+      s += (tr == NULL) ? 0 : bam_aux_i(tr);
+    }
+    return s;
+  }
+
   inline int32_t pos() const { return left(); }
   inline bool fwd() const { return !bam_strand(read1); }
   inline bool isInward() const {

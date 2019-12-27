@@ -68,6 +68,16 @@ struct UnpairedRead {
     return pufferfish::util::MateStatus::SINGLE_END;
   }
 
+  inline bool haveASTag() const { 
+    uint8_t* tp = reinterpret_cast<uint8_t*>(bam_aux_find(read, "AS"));
+    return !(tp == NULL);
+  }
+
+  inline int32_t getAS() const {
+    uint8_t* tp = reinterpret_cast<uint8_t*>(bam_aux_find(read, "AS"));
+    return (tp == NULL) ? 0 : bam_aux_i(tp);
+  }
+
   inline int32_t pos() const { return left(); }
   inline bool fwd() const { return !bam_strand(read); }
   inline bool isInward() const { return false; }
