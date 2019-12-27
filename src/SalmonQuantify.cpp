@@ -997,13 +997,18 @@ void processReads(
           upperBoundHits += (jointHits.size() > 0);
         }
 
+        // FIXME: This clears the alignment group, but that contains nothing 
+        // at this point.  We should either check only once we are at the alignment
+        // phase (and therefore filter nothing based on pre-alignment hits), or 
+        // clear the jointHits at this point.
+
         // If the read mapped to > maxReadOccs places, discard it
         if (jointHits.size() > salmonOpts.maxReadOccs) {
           jointAlignmentGroup.clearAlignments();
         }
       }
 
-      // TODO : PF_INTEGRATION
+      // TODO: PF_INTEGRATION
       // NOTE : Under our new definition of orphans, alignments of read ends
       // can be orphans even if the other read end aligns to the same reference.
       // It only matters that the alignments were not paired.  Thus, it is possible
@@ -1089,6 +1094,7 @@ void processReads(
                                        tryAlign,
                                        hardFilter,
                                        salmonOpts.scoreExp,
+                                       salmonOpts.minAlnProb,
                                        msi,
                                        /*
                                        bestScore,
@@ -1528,6 +1534,11 @@ void processReads(
            upperBoundHits += (jointHits.size() > 0);
          }
 
+        // FIXME: This clears the alignment group, but that contains nothing 
+        // at this point.  We should either check only once we are at the alignment
+        // phase (and therefore filter nothing based on pre-alignment hits), or 
+        // clear the jointHits at this point.
+
          // If the read mapped to > maxReadOccs places, discard it
          if (jointHits.size() > salmonOpts.maxReadOccs) {
            jointHitGroup.clearAlignments();
@@ -1578,6 +1589,7 @@ void processReads(
                                       tryAlign,
                                       hardFilter,
                                       salmonOpts.scoreExp,
+                                      salmonOpts.minAlnProb,
                                       msi,
                                       /*
                                       bestScore,

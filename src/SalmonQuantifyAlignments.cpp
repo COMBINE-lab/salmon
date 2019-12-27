@@ -222,11 +222,23 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
 
   auto alignerType = alnLib.getAlignerType();
 
-  bool haveASTag{true};
+  bool haveASTag{false};
   bool firstTagCheck{true};
+  
+  // If we are dealing with RapMap or Pufferfish mappings, then we 
+  // don't expect CIGAR strings.  However, with recent versions 
+  // at least any version that we could consider to be reasonable 
+  // to run in alignment mode, we should have the `AS` tag. We set 
+  // this the variable so we know this and deal with 
+  // alignment score appropriately (and don't expect CIGAR strings).
+  // NOTE: If we are reading in pufferfish or RapMap alignments, we expect the AS tag,
+  // we will raise an exception if we don't have it.
+  bool useASWithoutCIGAR = ((alignerType == salmon::bam_utils::AlignerDetails::PUFFERFISH) or 
+                            (alignerType == salmon::bam_utils::AlignerDetails::RAPMAP));
+
   auto getAlignerAssignedScore =
     [&haveASTag, &firstTagCheck, alignerType](FragT* aln) -> double {
-      if (firstTagCheck) {
+      if (firstTagCheck and !haveASTag) {
         char* tp = bam_aux_find(aln->getRead1(), "AS");
         haveASTag = (tp != NULL);
       }
@@ -300,7 +312,7 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
         // Iterate over each group of alignments (a group consists of all
         // alignments reported for a single read).  Distribute the read's mass
         // proportionally dependent on the current
-        for (auto alnGroup : alignmentGroups) {
+        for (auto& alnGroup : alignmentGroups) {
 
           // EQCLASS
           std::vector<uint32_t> txpIDs;
@@ -317,6 +329,44 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
           auto firstTranscriptID =
               alnGroup->alignments().front()->transcriptID();
           std::unordered_set<size_t> observedTranscripts;
+
+          int32_t bestAS = std::numeric_limits<int32_t>::min();
+
+          // TODO: Use the AS tag to get the appropriate score for 
+          // reads aligned with pufferfish or RapMap.
+          /*
+          // If we are using the AS tag without CIGAR strings
+          if ( useASWithoutCIGAR ) {
+            // Loop over all of the alignments to find the maximum score, which 
+            // we will need to compute the alignment probability.
+            for (auto& aln : alnGroup->alignments()) {
+              switch aln->fragType() {
+                case ReadType::PAIRED_END: 
+                  bam_flag(rpair.read1) & BAM_FREAD1
+                  break;
+                case ReadType::SIGNLE_END:
+                  auto* r = aln->getRead1();
+                  if (bam_flag(r) & BAM_FREAD1) {
+                    uint8_t* tl = reinterpret_cast<uint8_t*>(bam_aux_find(aln->getRead1(), "AS")); 
+                  }
+                  break;
+                case pufferfish::util::MateStatus::PAIRED_END_LEFT:
+                  break;
+                case pufferfish::util::MateStatus::SINGLE_END:
+                  break;
+                default:
+                  break;
+              }
+              uint8_t* tl = reinterpret_cast<uint8_t*>(bam_aux_find(aln->getRead1(), "AS"));
+              if (tl )
+              int32_t locScore = (tl != NULL) ? bam_aux_i(tl) : LOG_1;
+              if (aln->isPaired()) {
+                uint8_t* tr = reinterpret_cast<uint8_t*>(bam_aux_find(aln->getRead2(), "AS"));
+                locScore += (tr != NULL) ? bam_aux_i(tr) : LOG_1;
+              }
+            }
+          }
+          */
 
           //double maxLogAlnScore{LOG_0};
           int sidx{0};

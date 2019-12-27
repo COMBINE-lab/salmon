@@ -275,6 +275,7 @@ struct SalmonOpts {
   bool hardFilter;
   uint32_t maxOccsPerHit;
   double decoyThreshold;
+  double minAlnProb;
 
   // for utility (may need to be cleaned up later)
   bool discardOrphansQuasi;

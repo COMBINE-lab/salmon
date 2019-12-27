@@ -186,6 +186,7 @@ inline void filterAndCollectAlignments(
                                        bool tryAlign,
                                        bool hardFilter,
                                        double scoreExp,
+                                       double minAlnProb,
                                        // intentionally passing by value below --- come back
                                        // and make sure it's necessary
                                        salmon::mapping_utils::MappingScoreInfo msi,
@@ -230,6 +231,8 @@ inline void filterAndCollectAlignments(
     double v = bestScoreD - currScore;
     // why -1?
     double estAlnProb = hardFilter ? -1.0 : std::exp(- scoreExp * v );
+    // skip any alignment with aln prob < minAlnProb
+    if (!hardFilter and (estAlnProb < minAlnProb)) { continue; }
 
     if (singleEnd or jointHit.isOrphan()) {
       readLen = jointHit.isLeftAvailable() ? readLen : mateLen;

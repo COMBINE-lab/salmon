@@ -80,6 +80,7 @@ namespace defaults {
   constexpr const double quasiCoverage{0.0};
   constexpr const double decoyThreshold{1.0};
   const std::string hitFilterPolicyStr{"AFTER"};
+  constexpr const double minAlnProb{1e-5};
 
    // FMD-specific options
   constexpr const int fmdMinSeedLength{19};

@@ -690,6 +690,7 @@ void processReadsQuasi(
                                                               tryAlign,
                                                               hardFilter,
                                                               salmonOpts.scoreExp,
+                                                              salmonOpts.minAlnProb,
                                                               msi,
                                                               /*
                                                               bestScore,
