@@ -10,9 +10,8 @@ ${Boost_INCLUDE_DIRS}
 ${GAT_SOURCE_DIR}/external/install/include
 ${GAT_SOURCE_DIR}/external/install/include/pufferfish
 ${GAT_SOURCE_DIR}/external/install/include/pufferfish/digestpp
-
-${GAT_SOURCE_DIR}/external/install/include/rapmap
-${GAT_SOURCE_DIR}/external/install/include/rapmap/digestpp
+#${GAT_SOURCE_DIR}/external/install/include/rapmap
+#${GAT_SOURCE_DIR}/external/install/include/rapmap/digestpp
 ${ICU_INC_DIRS}
 )
 
