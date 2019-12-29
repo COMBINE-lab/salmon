@@ -134,19 +134,19 @@ bool writeVectorToFile(boost::filesystem::path path,
  */
 template <typename ExpT>
 bool GZipWriter::writeEquivCounts(const SalmonOpts& opts, ExpT& experiment) {
-
   namespace bfs = boost::filesystem;
 
   bfs::path auxDir = path_ / opts.auxDir;
   bool auxSuccess = boost::filesystem::create_directories(auxDir);
 
-  // uncomment these lines and comment the below to write gzipped equivalence classes
-  //bfs::path eqFilePath = auxDir / "eq_classes.txt.gz";
-  //std::unique_ptr<std::ostream> equivFilePtr(new zstr::ofstream(eqFilePath.string()));
-  //std::ofstream equivFile(eqFilePath.string());
+  // write gzipped equivalence classes
+  bfs::path eqFilePath = auxDir / "eq_classes.txt.gz";
+  std::unique_ptr<std::ostream> equivFilePtr(new zstr::ofstream(eqFilePath.string()));
 
-  bfs::path eqFilePath = auxDir / "eq_classes.txt";
-  std::unique_ptr<std::ostream> equivFilePtr(new std::ofstream(eqFilePath.string()));
+  // write uncompressed equivalence classes
+  //bfs::path eqFilePath = auxDir / "eq_classes.txt";
+  //std::unique_ptr<std::ostream> equivFilePtr(new std::ofstream(eqFilePath.string()));
+  //std::ofstream equivFile(eqFilePath.string());
 
   auto& transcripts = experiment.transcripts();
   auto& eqBuilder = experiment.equivalenceClassBuilder();
@@ -426,6 +426,8 @@ bool GZipWriter::writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
     if (dumpRichWeights) {
       props.push_back("scalar_weights");
     }
+    // write down that we are gzipping the eq classes
+    props.push_back("gzipped");
 
     oa(cereal::make_nvp("eq_class_properties", props));
 
@@ -778,7 +780,8 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
     if (opts.dumpEqWeights) {
       props.push_back("scalar_weights");
     }
-
+    // write down that we are gzipping the eq classes
+    props.push_back("gzipped");
 
     oa(cereal::make_nvp("eq_class_properties", props));
 
