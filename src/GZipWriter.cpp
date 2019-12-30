@@ -238,9 +238,11 @@ bool GZipWriter::writeEquivCounts(const SalmonOpts& opts, ExpT& experiment) {
   return true;
 }
 
+// FIXME(@k3yavi): We should probably be writing down the umiLength in the BFH files
+// somewhere.
 template <typename ExpT>
 bool GZipWriter::writeBFH(boost::filesystem::path& outDir,
-                          ExpT& experiment, size_t umiLength,
+                          ExpT& experiment, size_t /*umiLength*/,
                           std::vector<std::string>& bcSeqVec) {
   namespace bfs = boost::filesystem;
 
@@ -1078,6 +1080,8 @@ bool GZipWriter::writeSparseBootstraps(std::string& bcName,
   return true;
 }
 
+// FIXME(@k3yavi): The dumpUmiGraph parameter is un-used so I commented out the name
+// should we be doing something with it?
 bool GZipWriter::writeSparseAbundances(std::string& bcName,
                                        std::string& features,
                                        std::string& arboData,
@@ -1085,7 +1089,7 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
                                        std::vector<double>& alphas,
                                        std::vector<uint8_t>& tiers,
                                        bool dumpArborescences,
-                                       bool dumpUmiGraph){
+                                       bool /*dumpUmiGraph*/){
 
   // construct the output vectors outside of the critical section
   // since e.g. this is more non-trivial work than in the dense case.

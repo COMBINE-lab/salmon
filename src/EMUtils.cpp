@@ -8,7 +8,7 @@ template <typename VecT>
 void EMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
                std::vector<std::vector<double>>& txpGroupCombinedWeights,
                const std::vector<uint64_t>& txpGroupCounts,
-               std::vector<Transcript>& transcripts, const VecT& alphaIn,
+               const VecT& alphaIn,
                VecT& alphaOut) {
 
   assert(alphaIn.size() == alphaOut.size());
@@ -70,14 +70,14 @@ template
 void EMUpdate_<std::vector<double>>(std::vector<std::vector<uint32_t>>& txpGroupLabels,
                                     std::vector<std::vector<double>>& txpGroupCombinedWeights,
                                     const std::vector<uint64_t>& txpGroupCounts,
-                                    std::vector<Transcript>& transcripts, const std::vector<double>& alphaIn,
+                                    const std::vector<double>& alphaIn,
                                     std::vector<double>& alphaOut);
 
 template
 void EMUpdate_<std::vector<tbb::atomic<double>>>(std::vector<std::vector<uint32_t>>& txpGroupLabels,
                                                  std::vector<std::vector<double>>& txpGroupCombinedWeights,
                                                  const std::vector<uint64_t>& txpGroupCounts,
-                                                 std::vector<Transcript>& transcripts, const std::vector<tbb::atomic<double>>& alphaIn,
+                                                 const std::vector<tbb::atomic<double>>& alphaIn,
                                                  std::vector<tbb::atomic<double>>& alphaOut);
 
 template

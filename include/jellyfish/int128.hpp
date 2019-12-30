@@ -50,7 +50,7 @@ void __print_digits(std::ostream& os, unsigned __int128 x,
   os.write(ptr, buf + sizeof(buf) - ptr);
 }
 
-inline bool is_negative(unsigned __int128 x) { return false; }
+inline bool is_negative(unsigned __int128 /*x*/) { return false; }
 inline bool is_negative(__int128 x) { return x < 0; }
 
 template<typename T>

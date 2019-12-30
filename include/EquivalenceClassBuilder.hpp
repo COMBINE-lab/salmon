@@ -52,7 +52,7 @@ struct SCTGValue {
   }
 
   SCTGValue(uint32_t countIn, uint32_t barcode,
-            uint64_t umi, bool bulkUpdate) {
+            uint64_t umi, bool /*bulkUpdate*/) {
     count = countIn;
     barcodeGroup[barcode][umi] = countIn;
   }
@@ -98,7 +98,7 @@ struct TGValue {
   //////////////////////////////////////////////////////////////////
   //constructor for handling barcodes
   TGValue(std::vector<double>& weightIn,
-          uint64_t countIn, uint32_t barcode, uint64_t umi) :
+          uint64_t countIn, uint32_t /*barcode*/, uint64_t /*umi*/) :
     weights(weightIn.begin(), weightIn.end()) {
     count = countIn;
   }
@@ -106,8 +106,8 @@ struct TGValue {
 
   // We need this because otherwise the template will complain ... this **could be**
   // be instantiated, but isn't.  Figure out a cleaner way to do this;
-  void updateBarcodeGroup(BarcodeT bc, UMIT umi) {}
-  TGValue(int, BarcodeT bc, UMIT umi)
+  void updateBarcodeGroup(BarcodeT /*bc*/, UMIT /*umi*/) {}
+  TGValue(int, BarcodeT /*bc*/, UMIT /*umi*/)
   { std::cerr<<"invalid initialization in eqbuilder"<<std::endl; exit(1); }
 
   // const is a lie

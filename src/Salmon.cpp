@@ -46,7 +46,7 @@
 #include "SalmonConfig.hpp"
 #include "VersionChecker.hpp"
 
-int help(const std::vector<std::string>& opts) { //}int argc, char* argv[]) {
+int help(const std::vector<std::string>& /*opts*/) { 
   fmt::MemoryWriter helpMsg;
   helpMsg.write("salmon v{}\n\n", salmon::version);
   helpMsg.write(
@@ -93,7 +93,7 @@ int dualModeMessage() {
 /**
  * Bonus!
  */
-int salmonSwim(int argc, const char* argv[]) {
+int salmonSwim(int /*argc*/, const char* /*argv*/[]) {
 
   std::cout << R"(
     _____       __

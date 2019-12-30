@@ -92,8 +92,8 @@ divide_work(Iterator begin, Iterator end, std::size_t n) {
 template <typename EQVecT>
 void sampleRoundNonCollapsedMultithreaded_(
     EQVecT& eqVec,
-    std::vector<bool>& active, std::vector<uint32_t>& activeList,
-    std::vector<uint64_t>& countMap, std::vector<double>& probMap,
+    /*std::vector<bool>& active,*/ std::vector<uint32_t>& activeList,
+    /*std::vector<uint64_t>& countMap,*/ std::vector<double>& probMap,
     std::vector<double>& muGlobal, Eigen::VectorXd& effLens,
     const std::vector<double>& priorAlphas, std::vector<double>& txpCount,
     std::vector<uint32_t>& offsetMap,
@@ -443,9 +443,9 @@ bool CollapsedGibbsSampler::sample(
     for (size_t i = 0; i < numInternalRounds; ++i) {
       sampleRoundNonCollapsedMultithreaded_(
           eqVec,      // encodes equivalence classes
-          active,     // the set of active transcripts
+          /*active,     // the set of active transcripts*/
           activeList, // the list of active transcript ids
-          countMap,   // the count of reads in each eq coming from each eq class
+          /*countMap,   // the count of reads in each eq coming from each eq class*/
           probMap, // the probability of reads in each eq class coming from each
                    // txp
           mu,      // transcript fractions

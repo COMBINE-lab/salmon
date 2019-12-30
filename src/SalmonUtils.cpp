@@ -2093,6 +2093,10 @@ bool processQuantOptions(SalmonOpts& sopt,
   return perModeValidate;
 }
 
+// TODO: Check the use-case of this.  If we still want to support it, then update
+// it to read from a potentially gzipped equivalence class file.  Also, the eq file 
+// is in a non-standard format (effective lengths at the end), so get this info some
+// other way.
 bool readEquivCounts(boost::filesystem::path& eqFilePathString,
                      std::vector<string>& tnames,
                      std::vector<double>& tefflens,

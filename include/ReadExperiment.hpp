@@ -737,7 +737,7 @@ public:
     return lengthQuantiles_;
   }
 
-  const uint64_t getNumDecoys() const {
+  uint64_t getNumDecoys() const {
     return numDecoys_;
   }
 

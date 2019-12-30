@@ -61,7 +61,7 @@ public:
     cachedEffectiveLength_.store(std::log(static_cast<double>(RefLength)));
   }
 
-  Transcript(size_t idIn, const char* name, double len, bool updateEffLength, double alpha = 0.05)
+  Transcript(size_t idIn, const char* name, double len, bool /*updateEffLength*/, double alpha = 0.05)
     : RefName(name), RefLength(len), CompleteLength(len),
       EffectiveLength(len), id(idIn), logPerBasePrior_(std::log(alpha)),
       priorMass_(std::log(alpha * len)), mass_(salmon::math::LOG_0),
@@ -245,17 +245,13 @@ public:
    *
    */
   double computeLogEffectiveLength(std::vector<double>& logPMF,
-                                   double logFLDMean, size_t minVal,
+                                   size_t minVal,
                                    size_t maxVal) {
 
     double effectiveLength = salmon::math::LOG_0;
     double refLen = static_cast<double>(RefLength);
     double logRefLength = std::log(refLen);
 
-    // JUNE 17 (just ensure it's >= 1)
-    // if (logRefLength <= logFLDMean) {
-    //    effectiveLength = logRefLength;
-    //} else {
     uint32_t mval = maxVal;
     size_t clen = minVal;
     size_t maxLen = std::min(RefLength, mval);
@@ -265,11 +261,9 @@ public:
           effectiveLength, logPMF[i] + std::log(refLen - clen + 1));
       ++clen;
     }
-    //}
     if (salmon::math::isLog0(effectiveLength) or
         std::exp(effectiveLength) < 1.0) {
       effectiveLength = logRefLength;
-      // effectiveLength = //salmon::math::LOG_1;
     }
 
     return effectiveLength;
@@ -284,9 +278,9 @@ public:
     cachedEffectiveLength_.store(l);
   }
 
-  void updateEffectiveLength(std::vector<double>& logPMF, double logFLDMean,
+  void updateEffectiveLength(std::vector<double>& logPMF, double /*logFLDMean*/,
                              size_t minVal, size_t maxVal) {
-    double cel = computeLogEffectiveLength(logPMF, logFLDMean, minVal, maxVal);
+    double cel = computeLogEffectiveLength(logPMF, minVal, maxVal);
     cachedEffectiveLength_.store(cel);
   }
 
@@ -487,7 +481,7 @@ public:
                            bool reduceGCMemory = false) {
     Sequence_ = std::unique_ptr<const char, void (*)(const char*)>(
         seq,                 // store seq
-        [](const char* p) {} // do nothing deleter
+        [](const char* /*p*/) {} // do nothing deleter
     );
     if (needGC) {
       computeGCContent_(reduceGCMemory);

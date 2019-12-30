@@ -206,7 +206,7 @@ for (auto& txp : transcripts_) {
 
   AlignmentLibrary(std::vector<boost::filesystem::path>& alnFiles,
                    LibraryFormat libFmt, SalmonOpts& salmonOpts,
-                   bool eqClassMode_, std::vector<std::string>& tnames,
+                   bool /*eqClassMode_*/, std::vector<std::string>& tnames,
                    std::vector<double>& tefflens)
       : alignmentFiles_(alnFiles),
         libFmt_(libFmt), transcripts_(std::vector<Transcript>()),
@@ -497,7 +497,7 @@ for (auto& txp : transcripts_) {
     return lengthQuantiles_;
   }
 
-  const uint64_t getNumDecoys() const {
+  uint64_t getNumDecoys() const {
     return numDecoys_;
   }
 
