@@ -10,6 +10,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "json.hpp"
 #include "tbb/combinable.h"
 #include "tbb/parallel_for.h"
 
@@ -2199,14 +2200,20 @@ bool readEquivCounts(boost::filesystem::path& eqFilePathString,
 }
 
 /**
- * @param log : The logger to which we should write any messages
- * @param auxTargetFile : The name of the file containing any auxiliary target names
+ * @param sopt : The salmon options object that tells us the relevant files and contains the pointer 
+ *              to the logger object
  * @param transcripts : The list of transcript objects
  * 
- * If the auxTargetFile is not empty (i.e. if the file exists)
+ * If the auxTargetFile is not empty (i.e. if the file exists), then read the auxiliary targets
+ * and mark them as such in the transcripts vector.  This function will also write a file containing
+ * the IDs of the targets marked as auxiliary to the file aux_target_ids.json in the `aux_info` directory.
  **/
-void markAuxiliaryTargets(std::shared_ptr<spdlog::logger> log, const std::string& auxTargetFile, std::vector<Transcript>& transcripts) {
+void markAuxiliaryTargets(SalmonOpts& sopt, std::vector<Transcript>& transcripts) { 
+  
   namespace bfs = boost::filesystem;
+  auto& log = sopt.jointLog;
+  const std::string& auxTargetFile = sopt.auxTargetFile;
+
   // If the aux file is empty or doesn't exist
   if (auxTargetFile == "") { 
     return; 
@@ -2226,15 +2233,18 @@ void markAuxiliaryTargets(std::shared_ptr<spdlog::logger> log, const std::string
   spp::sparse_hash_set<std::string> auxTargetNames;
   std::string tname;
   while (auxFile >> tname) { auxTargetNames.insert(tname); }
-
+  auxFile.close();
   log->info("Parsed {:n} auxiliary targets from {}", auxTargetNames.size(), auxTargetFile);
 
-  size_t numAuxFound = 0;
+  size_t tid = 0;
+  std::vector<size_t> auxIDs;
   for (auto& txp : transcripts) {
     bool isAux = auxTargetNames.contains(txp.RefName);
     txp.setSkipBiasCorrection(isAux);
-    numAuxFound += isAux ? 1 : 0;
+    if (isAux) { auxIDs.push_back(tid); }
+    ++tid;
   }
+  size_t numAuxFound = auxIDs.size();
 
   if (numAuxFound != auxTargetNames.size()) {
     log->warn("While {:n} auxiliary target names were found in {}, only {:n} were actually found "
@@ -2242,7 +2252,22 @@ void markAuxiliaryTargets(std::shared_ptr<spdlog::logger> log, const std::string
               "transcript names in the index as expected.", auxTargetNames.size(), auxTargetFile, 
               numAuxFound, auxTargetFile);
   }
-  auxFile.close();
+
+  // write down the aux target ids in the output directory
+  bfs::path auxDir = sopt.outputDirectory / sopt.auxDir;
+  if (!bfs::exists(auxDir)) {
+    log->warn("The salmon aux directory {} did not exist.  Cannot write aux_target_ids.json!", auxDir);
+  }
+  bfs::path auxIDFilePath = sopt.outputDirectory / sopt.auxDir / "aux_target_ids.json";
+  std::ofstream auxIDFile(auxIDFilePath.string());
+  if (auxIDFile.is_open()) {
+    nlohmann::json o;
+    o["aux_target_ids"] = auxIDs;
+    auxIDFile << o;
+  } else {
+    log->warn("Could not properly open the aux_target_ids file {}.", auxIDFilePath.string());
+  }
+  auxIDFile.close();
 }
 
 /**

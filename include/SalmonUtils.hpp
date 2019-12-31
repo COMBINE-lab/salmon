@@ -124,13 +124,13 @@ bool readEquivCounts(boost::filesystem::path& eqFilePathString,
                      std::vector<uint32_t>& eqclass_counts );
 
 /**
- * @param log : The logger to which we should write any messages
- * @param auxTargetFile : The name of the file containing any auxiliary target names
+ * @param sopt : The salmon options object that tells us the relevant files and contains the pointer 
+ *              to the logger object
  * @param transcripts : The list of transcript objects
  * 
  * If the auxTargetFile is not empty (i.e. if the file exists)
  **/
-void markAuxiliaryTargets(std::shared_ptr<spdlog::logger> log, const std::string& auxTargetFile, std::vector<Transcript>& transcripts);
+void markAuxiliaryTargets(SalmonOpts& sopt, std::vector<Transcript>& transcripts);
 
 /*
 template <typename AbundanceVecT, typename ReadExpT>

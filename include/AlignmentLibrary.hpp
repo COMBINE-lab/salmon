@@ -198,7 +198,7 @@ for (auto& txp : transcripts_) {
           pmf, DistributionSpace::LINEAR);
     }
 
-    salmon::utils::markAuxiliaryTargets(salmonOpts.jointLog, salmonOpts.auxTargetFile, transcripts_);
+    salmon::utils::markAuxiliaryTargets(salmonOpts, transcripts_);
 
     // Start parsing the alignments
     NullFragmentFilter<FragT>* nff = nullptr;
@@ -250,7 +250,7 @@ for (auto& txp : transcripts_) {
 
     alnMod_.reset(new AlignmentModel(1.0, salmonOpts.numErrorBins));
     alnMod_->setLogger(salmonOpts.jointLog);
-    salmon::utils::markAuxiliaryTargets(salmonOpts.jointLog, salmonOpts.auxTargetFile, transcripts_);
+    salmon::utils::markAuxiliaryTargets(salmonOpts, transcripts_);
   }
 
   EQBuilderT& equivalenceClassBuilder() { return eqBuilder_; }
