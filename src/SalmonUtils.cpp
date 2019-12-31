@@ -2106,6 +2106,8 @@ bool readEquivCounts(boost::filesystem::path& eqFilePathString,
                      std::vector<std::vector<double>>& auxs_vals,
                      std::vector<uint32_t>& eqclass_counts ) {
 
+  auto l = spdlog::get("jointLog");
+
   namespace bfs = boost::filesystem;
   bfs::path eqFilePath {eqFilePathString};
 
@@ -2174,7 +2176,7 @@ bool readEquivCounts(boost::filesystem::path& eqFilePathString,
     if ( it != nameToIndex.end() ) {
       index = it->second;
     } else {
-      std::cerr<< "Missing effective lens for " << it->first << std::flush;
+      l->warn("Missing effective lens for {}", it->first);
       return false;
     }
 
@@ -2183,8 +2185,12 @@ bool readEquivCounts(boost::filesystem::path& eqFilePathString,
   }
 
   if (indexSet.size() > 0) {
-    std::cerr<< "Missing effective lens for " << indexSet.size()
-             << " txps" << std::flush;
+    l->warn("Missing effective lens for {} transcripts; setting to 100.0.", indexSet.size());
+    l->warn("NOTE: Since effective lengths are not provided, please do not rely on the TPM field \n"
+            "in the ouput quantifications.  Only the NumReads field will be reliable.");
+    for (auto& idx : indexSet) {
+      tefflens[idx] = 100.0;
+    }
   }
 
   //equivFile.close();
