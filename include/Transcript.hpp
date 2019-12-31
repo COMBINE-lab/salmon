@@ -41,11 +41,9 @@ public:
         EffectiveLength(-1.0), id(std::numeric_limits<uint32_t>::max()),
         logPerBasePrior_(salmon::math::LOG_0), priorMass_(salmon::math::LOG_0),
         mass_(salmon::math::LOG_0), sharedCount_(0.0),
-        avgMassBias_(salmon::math::LOG_0), active_(false) {
+        avgMassBias_(salmon::math::LOG_0), active_(false), skipBiasCorrection_(false) {
     uniqueCount_.store(0);
     totalCount_.store(0); // thanks @come-raczy
-    lastUpdate_.store(0);
-    lastTimestepUpdated_.store(0);
     cachedEffectiveLength_.store(salmon::math::LOG_0);
   }
 
@@ -53,11 +51,9 @@ public:
       : RefName(name), RefLength(len), CompleteLength(len),
         EffectiveLength(-1.0), id(idIn), logPerBasePrior_(std::log(alpha)),
         priorMass_(std::log(alpha * len)), mass_(salmon::math::LOG_0),
-        sharedCount_(0.0), avgMassBias_(salmon::math::LOG_0), active_(false) {
+        sharedCount_(0.0), avgMassBias_(salmon::math::LOG_0), active_(false), skipBiasCorrection_(false) {
     uniqueCount_.store(0);
     totalCount_.store(0); // thanks @come-raczy
-    lastUpdate_.store(0);
-    lastTimestepUpdated_.store(0);
     cachedEffectiveLength_.store(std::log(static_cast<double>(RefLength)));
   }
 
@@ -65,11 +61,9 @@ public:
     : RefName(name), RefLength(len), CompleteLength(len),
       EffectiveLength(len), id(idIn), logPerBasePrior_(std::log(alpha)),
       priorMass_(std::log(alpha * len)), mass_(salmon::math::LOG_0),
-      sharedCount_(0.0), avgMassBias_(salmon::math::LOG_0), active_(false) {
+      sharedCount_(0.0), avgMassBias_(salmon::math::LOG_0), active_(false), skipBiasCorrection_(false) {
     uniqueCount_.store(0);
     totalCount_.store(0); // thanks @come-raczy
-    lastUpdate_.store(0);
-    lastTimestepUpdated_.store(0);
     cachedEffectiveLength_.store(std::log(len));
   }
 
@@ -96,10 +90,8 @@ public:
 
     uniqueCount_.store(other.uniqueCount_);
     totalCount_.store(other.totalCount_.load());
-    lastTimestepUpdated_.store(other.lastTimestepUpdated_.load());
     sharedCount_.store(other.sharedCount_.load());
     mass_.store(other.mass_.load());
-    lastUpdate_.store(other.lastUpdate_.load());
     cachedEffectiveLength_.store(other.cachedEffectiveLength_.load());
     lengthClassIndex_ = other.lengthClassIndex_;
     logPerBasePrior_ = other.logPerBasePrior_;
@@ -108,6 +100,7 @@ public:
     hasAnchorFragment_.store(other.hasAnchorFragment_.load());
     active_ = other.active_;
     isDecoy_ = other.isDecoy_;
+    skipBiasCorrection_ = other.skipBiasCorrection_;
   }
 
   Transcript& operator=(Transcript&& other) {
@@ -128,10 +121,8 @@ public:
 
     uniqueCount_.store(other.uniqueCount_);
     totalCount_.store(other.totalCount_.load());
-    lastTimestepUpdated_.store(other.lastTimestepUpdated_.load());
     sharedCount_.store(other.sharedCount_.load());
     mass_.store(other.mass_.load());
-    lastUpdate_.store(other.lastUpdate_.load());
     cachedEffectiveLength_.store(other.cachedEffectiveLength_.load());
     lengthClassIndex_ = other.lengthClassIndex_;
     logPerBasePrior_ = other.logPerBasePrior_;
@@ -140,6 +131,7 @@ public:
     hasAnchorFragment_.store(other.hasAnchorFragment_.load());
     active_ = other.active_;
     isDecoy_ = other.isDecoy_;
+    skipBiasCorrection_ = other.skipBiasCorrection_;
     return *this;
   }
 
@@ -196,13 +188,6 @@ public:
 
   inline void addSharedCount(double sc) {
     salmon::utils::incLoop(sharedCount_, sc);
-  }
-
-  inline void setLastTimestepUpdated(uint64_t currentTimestep) {
-    uint64_t oldTimestep = lastTimestepUpdated_;
-    if (currentTimestep > oldTimestep) {
-      lastTimestepUpdated_ = currentTimestep;
-    }
   }
 
   inline void addBias(double bias) {
@@ -284,30 +269,7 @@ public:
     cachedEffectiveLength_.store(cel);
   }
 
-  /**
-   * If we should update the effective length, then do it and cache the result.
-   * Otherwise, return the cached result.
-   */
-  /*
-  double getLogEffectiveLength(const FragmentLengthDistribution& fragLengthDist,
-                               size_t currObs, size_t burnInObs, bool
-  forceUpdate=false) { if (forceUpdate or (lastUpdate_ == 0) or (currObs -
-  lastUpdate_ >= 250000) or (lastUpdate_ < burnInObs and currObs > burnInObs)) {
-          // compute new number
-          lastUpdate_.store(currObs);
-          double cel = computeLogEffectiveLength(fragLengthDist);
-          cachedEffectiveLength_.store(cel);
-          //priorMass_ = cel + logPerBasePrior_;
-          return cachedEffectiveLength_.load();
-      } else {
-          // return cached number
-          return cachedEffectiveLength_.load();
-      }
-  }
-  */
-
   double perBasePrior() { return std::exp(logPerBasePrior_); }
-  inline size_t lastTimestepUpdated() { return lastTimestepUpdated_.load(); }
 
   void lengthClassIndex(uint32_t ind) { lengthClassIndex_ = ind; }
   uint32_t lengthClassIndex() const { return lengthClassIndex_; }
@@ -528,6 +490,9 @@ public:
 
   void computePolyAPositions() { computePolyAPositions_(); }
 
+  void setSkipBiasCorrection(bool skip) { skipBiasCorrection_ = skip; }
+  bool skipBiasCorrection() const { return skipBiasCorrection_; }
+
   std::string RefName;
   uint32_t RefLength;
   uint32_t CompleteLength;
@@ -707,13 +672,10 @@ private:
 
   std::atomic<size_t> uniqueCount_;
   std::atomic<size_t> totalCount_;
-  // The most recent timestep at which this transcript's mass was updated.
-  std::atomic<size_t> lastTimestepUpdated_;
   double priorMass_;
   tbb::atomic<double> mass_;
   tbb::atomic<double> sharedCount_;
   tbb::atomic<double> cachedEffectiveLength_;
-  tbb::atomic<size_t> lastUpdate_;
   tbb::atomic<double> avgMassBias_;
   uint32_t lengthClassIndex_;
   double logPerBasePrior_;
@@ -723,6 +685,7 @@ private:
   std::atomic<bool> hasAnchorFragment_{false};
   bool active_;
   bool isDecoy_{false};
+  bool skipBiasCorrection_{false};
 
   bool reduceGCMemory_{false};
   double gcFracLen_{0.0};

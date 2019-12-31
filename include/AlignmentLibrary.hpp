@@ -198,6 +198,8 @@ for (auto& txp : transcripts_) {
           pmf, DistributionSpace::LINEAR);
     }
 
+    salmon::utils::markAuxiliaryTargets(salmonOpts.jointLog, salmonOpts.auxTargetFile, transcripts_);
+
     // Start parsing the alignments
     NullFragmentFilter<FragT>* nff = nullptr;
     bool onlyProcessAmbiguousAlignments = false;
@@ -248,6 +250,7 @@ for (auto& txp : transcripts_) {
 
     alnMod_.reset(new AlignmentModel(1.0, salmonOpts.numErrorBins));
     alnMod_->setLogger(salmonOpts.jointLog);
+    salmon::utils::markAuxiliaryTargets(salmonOpts.jointLog, salmonOpts.auxTargetFile, transcripts_);
   }
 
   EQBuilderT& equivalenceClassBuilder() { return eqBuilder_; }
@@ -502,6 +505,7 @@ for (auto& txp : transcripts_) {
   }
 
 private:
+
   void setTranscriptLengthClasses_(std::vector<uint32_t>& lengths,
                                    size_t nbins) {
     auto n = lengths.size();

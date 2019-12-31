@@ -154,6 +154,8 @@ public:
       }
     }
 
+    salmon::utils::markAuxiliaryTargets(sopt.jointLog, sopt.auxTargetFile, transcripts_);
+    
     // Create the cluster forest for this set of transcripts
     clusters_.reset(new ClusterForest(transcripts_.size(), transcripts_));
   }

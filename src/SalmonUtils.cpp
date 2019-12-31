@@ -26,6 +26,7 @@
 #include "TryableSpinLock.hpp"
 #include "UnpairedRead.hpp"
 #include "TranscriptGroup.hpp"
+#include "Transcript.hpp"
 
 #include "spdlog/fmt/fmt.h"
 #include "spdlog/fmt/ostr.h"
@@ -2198,6 +2199,53 @@ bool readEquivCounts(boost::filesystem::path& eqFilePathString,
 }
 
 /**
+ * @param log : The logger to which we should write any messages
+ * @param auxTargetFile : The name of the file containing any auxiliary target names
+ * @param transcripts : The list of transcript objects
+ * 
+ * If the auxTargetFile is not empty (i.e. if the file exists)
+ **/
+void markAuxiliaryTargets(std::shared_ptr<spdlog::logger> log, const std::string& auxTargetFile, std::vector<Transcript>& transcripts) {
+  namespace bfs = boost::filesystem;
+  // If the aux file is empty or doesn't exist
+  if (auxTargetFile == "") { 
+    return; 
+  } else if (!bfs::exists(auxTargetFile)) { 
+    log->warn("The auxiliary target file {}, does not exist.  No targets will be treated as auxiliary.", 
+               auxTargetFile);
+    return; 
+  }
+
+  std::ifstream auxFile(auxTargetFile);
+  if (!auxFile.good()) { 
+    log->warn("Could not open the auxiliary target file {}. No targets will be treated as auxiliary.",
+               auxTargetFile);
+    return;
+  }
+
+  spp::sparse_hash_set<std::string> auxTargetNames;
+  std::string tname;
+  while (auxFile >> tname) { auxTargetNames.insert(tname); }
+
+  log->info("Parsed {:n} auxiliary targets from {}", auxTargetNames.size(), auxTargetFile);
+
+  size_t numAuxFound = 0;
+  for (auto& txp : transcripts) {
+    bool isAux = auxTargetNames.contains(txp.RefName);
+    txp.setSkipBiasCorrection(isAux);
+    numAuxFound += isAux ? 1 : 0;
+  }
+
+  if (numAuxFound != auxTargetNames.size()) {
+    log->warn("While {:n} auxiliary target names were found in {}, only {:n} were actually found "
+              "among tanscripts in the index.  Please make sure that the names in {} match the "
+              "transcript names in the index as expected.", auxTargetNames.size(), auxTargetFile, 
+              numAuxFound, auxTargetFile);
+  }
+  auxFile.close();
+}
+
+/**
  * Computes (and returns) new effective lengths for the transcripts
  * based on the current abundance estimates (alphas) and the current
  * effective lengths (effLensIn).  This approach to sequence-specifc bias is
@@ -2503,6 +2551,10 @@ int contextSize = outsideContext + insideContext;
 
           // Get the transcript
           const auto& txp = transcripts[it];
+
+          // If this transcript is in the list of transcripts for which the user 
+          // has requested we skip bias correction, then do so
+          if (txp.skipBiasCorrection()) { continue; }
 
           // Get the reference length and the
           // "initial" effective length (not considering any biases)

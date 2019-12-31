@@ -79,6 +79,7 @@ struct SalmonOpts {
                         // required for a read to be considered mapped.
 
   std::string hitFilterPolicyStr{salmon::defaults::hitFilterPolicyStr};
+  std::string auxTargetFile{salmon::defaults::auxTargetFile};
   pufferfish::util::HitFilterPolicy hitFilterPolicy{pufferfish::util::HitFilterPolicy::FILTER_AFTER_CHAINING};
 
   bool splitSpanningSeeds; // Attempt to split seeds that span multiple

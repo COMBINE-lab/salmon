@@ -81,6 +81,7 @@ namespace defaults {
   constexpr const double decoyThreshold{1.0};
   const std::string hitFilterPolicyStr{"AFTER"};
   constexpr const double minAlnProb{1e-5};
+  const std::string auxTargetFile{""};
 
    // FMD-specific options
   constexpr const int fmdMinSeedLength{19};

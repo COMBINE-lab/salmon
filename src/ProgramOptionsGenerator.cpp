@@ -55,10 +55,15 @@ namespace salmon {
        "transcript identifier and the \"gene_id\" is assumed to contain the "
        "corresponding "
        "gene identifier.")
+      ("auxTargetFile", po::value(&(sopt.auxTargetFile))->default_value(salmon::defaults::auxTargetFile),
+      "A file containing a list of \"auxiliary\" targets.  These are valid targets (i.e., not decoys) to "
+      "which fragments are allowed to map and be assigned, and which will be quantified, but for which "
+      "auxiliary models like sequence-specific and fragment-GC bias correction should not be applied."
+      )
       ("meta", po::bool_switch(&(sopt.meta))->default_value(salmon::defaults::metaMode),
        "If you're using Salmon on a metagenomic dataset, consider setting this "
-       "flag to disable parts of the "
-       "abundance estimation model that make less sense for metagenomic data.");
+       "flag to disable parts of the abundance estimation model that make less "
+       "sense for metagenomic data.");
 
     // use rich eq classes by default
     sopt.noRichEqClasses = salmon::defaults::noRichEqClasses;
@@ -796,7 +801,7 @@ namespace salmon {
     return testing;
   }
 
-  po::options_description ProgramOptionsGenerator::getDeprecatedOptions(SalmonOpts& sopt) {
+  po::options_description ProgramOptionsGenerator::getDeprecatedOptions(SalmonOpts& /*sopt*/) {
     using std::string;
     using std::vector;
 

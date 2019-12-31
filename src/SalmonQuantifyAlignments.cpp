@@ -590,7 +590,6 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
 
             double newMass = logForgettingMass + aln->logProb;
             transcript.addMass(newMass);
-            transcript.setLastTimestepUpdated(currentMinibatchTimestep);
 
             // ---- Collect seq-specific bias samples ------ //
             auto getCIGARLength = [](bam_seq_t* s) -> uint32_t {
