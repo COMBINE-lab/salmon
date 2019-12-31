@@ -35,7 +35,7 @@ WhiteList.cpp
 SalmonQuantify.cpp
 FragmentLengthDistribution.cpp
 FragmentStartPositionDistribution.cpp
-SequenceBiasModel.cpp
+# SequenceBiasModel.cpp
 GZipWriter.cpp
 SalmonQuantMerge.cpp
 ProgramOptionsGenerator.cpp

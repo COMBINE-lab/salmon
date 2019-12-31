@@ -57,7 +57,7 @@ public:
       : alignmentFiles_(alnFiles), transcriptFile_(transcriptFile),
         libFmt_(libFmt), transcripts_(std::vector<Transcript>()),
         fragStartDists_(5), posBiasFW_(5), posBiasRC_(5), posBiasExpectFW_(5),
-        posBiasExpectRC_(5), seqBiasModel_(1.0),
+        posBiasExpectRC_(5), /*seqBiasModel_(1.0),*/
         eqBuilder_(salmonOpts.jointLog, salmonOpts.maxHashResizeThreads), quantificationPasses_(0),
         expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0),
         expectedGC_(salmonOpts.numConditionalGCBins, salmonOpts.numFragGCBins,
@@ -211,7 +211,7 @@ for (auto& txp : transcripts_) {
       : alignmentFiles_(alnFiles),
         libFmt_(libFmt), transcripts_(std::vector<Transcript>()),
         fragStartDists_(5), posBiasFW_(5), posBiasRC_(5), posBiasExpectFW_(5),
-        posBiasExpectRC_(5), seqBiasModel_(1.0),
+        posBiasExpectRC_(5), /*seqBiasModel_(1.0),*/
         eqBuilder_(salmonOpts.jointLog, salmonOpts.maxHashResizeThreads), quantificationPasses_(0),
         expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0),
         expectedGC_(salmonOpts.numConditionalGCBins, salmonOpts.numFragGCBins,
@@ -343,7 +343,7 @@ for (auto& txp : transcripts_) {
 
   inline AlignmentModel& alignmentModel() { return *alnMod_.get(); }
 
-  SequenceBiasModel& sequenceBiasModel() { return seqBiasModel_; }
+  // SequenceBiasModel& sequenceBiasModel() { return seqBiasModel_; }
 
   //    inline tbb::concurrent_queue<FragT*>& fragmentQueue() {
   inline tbb::concurrent_queue<FragT*>& fragmentQueue() {
@@ -569,7 +569,7 @@ private:
   // std::unique_ptr<t_pool, std::function<void(t_pool*)>> threadPool_;
   std::unique_ptr<BAMQueue<FragT>> bq;
 
-  SequenceBiasModel seqBiasModel_;
+  // SequenceBiasModel seqBiasModel_;
 
   /**
    * The cluster forest maintains the dynamic relationship

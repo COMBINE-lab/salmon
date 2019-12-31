@@ -201,7 +201,7 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
 
   std::vector<FragmentStartPositionDistribution>& fragStartDists =
       readExp.fragmentStartPositionDistributions();
-  auto& biasModel = readExp.sequenceBiasModel();
+  //auto& biasModel = readExp.sequenceBiasModel();
   auto& observedGCMass = observedBiasParams.observedGCMass;
   auto& obsFwd = observedBiasParams.massFwd;
   auto& obsRC = observedBiasParams.massRC;

@@ -14,7 +14,7 @@
 #include "SalmonIndex.hpp"
 #include "SalmonOpts.hpp"
 #include "SalmonUtils.hpp"
-#include "SequenceBiasModel.hpp"
+// #include "SequenceBiasModel.hpp"
 #include "SimplePosBias.hpp"
 #include "SpinLock.hpp" // RapMap's with try_lock
 #include "Transcript.hpp"
@@ -54,7 +54,7 @@ public:
         // transcriptFile_(transcriptFile),
         transcripts_(std::vector<Transcript>()), totalAssignedFragments_(0),
         fragStartDists_(5), posBiasFW_(5), posBiasRC_(5), posBiasExpectFW_(5),
-        posBiasExpectRC_(5), seqBiasModel_(1.0), eqBuilder_(sopt.jointLog, sopt.maxHashResizeThreads),
+        posBiasExpectRC_(5), /*seqBiasModel_(1.0),*/ eqBuilder_(sopt.jointLog, sopt.maxHashResizeThreads),
         expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0),
         expectedGC_(sopt.numConditionalGCBins, sopt.numFragGCBins,
                     distribution_utils::DistributionSpace::LOG),
@@ -464,7 +464,7 @@ public:
     }
   }
 
-  SequenceBiasModel& sequenceBiasModel() { return seqBiasModel_; }
+  // SequenceBiasModel& sequenceBiasModel() { return seqBiasModel_; }
 
   bool softReset() {
     if (quantificationPasses_ == 0) {
@@ -814,7 +814,7 @@ private:
    */
   std::vector<FragmentStartPositionDistribution> fragStartDists_;
 
-  SequenceBiasModel seqBiasModel_;
+  // SequenceBiasModel seqBiasModel_;
 
   /** Keeps track of the number of passes that have been
    *  made through the alignment file.
