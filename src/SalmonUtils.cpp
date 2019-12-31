@@ -46,6 +46,8 @@
 
 #include "pufferfish/Util.hpp"
 
+#include "zstr.hpp"
+
 namespace salmon {
 namespace utils {
 
@@ -2107,45 +2109,53 @@ bool readEquivCounts(boost::filesystem::path& eqFilePathString,
   namespace bfs = boost::filesystem;
   bfs::path eqFilePath {eqFilePathString};
 
-  std::ifstream equivFile(eqFilePath.string());
+  std::unique_ptr<std::istream> equivFilePtr = nullptr;
+  if (eqFilePath.extension() == ".gz") {
+    equivFilePtr.reset(new zstr::ifstream(eqFilePath.string()));
+  } else {
+    equivFilePtr.reset(new std::ifstream(eqFilePath.string()));
+  }
+  //std::ifstream equivFile(eqFilePath.string());
 
   size_t numTxps, numEqClasses;
   // Number of transcripts
-  equivFile >> numTxps;
+  (*equivFilePtr) >> numTxps;
 
   // Number of equivalence classes
-  equivFile >> numEqClasses;
+  (*equivFilePtr) >> numEqClasses;
 
+  tnames.reserve(numTxps);
+  eqclasses.reserve(numEqClasses);
   string tname;
   std::unordered_map<string, size_t> nameToIndex;
   for (size_t i = 0; i < numTxps; ++i) {
-    equivFile >> tname;
+    (*equivFilePtr) >> tname;
     tnames.emplace_back(tname);
     nameToIndex[tname] = i;
   }
 
   for (size_t i= 0; i < numEqClasses; ++i) {
     size_t classLength;
-    equivFile >> classLength;
+    (*equivFilePtr) >> classLength;
 
     // each group member
     uint64_t tid;
-    std::vector<uint32_t> tids;
+    std::vector<uint32_t> tids; tids.reserve(classLength);
     for (size_t i = 0; i < classLength; i++) {
-      equivFile >> tid;
+      (*equivFilePtr) >> tid;
       tids.emplace_back(tid);
     }
 
     double aux;
-    std::vector<double> auxs;
+    std::vector<double> auxs; auxs.reserve(classLength);
     for (size_t i = 0; i < classLength; i++) {
-      equivFile >> aux;
+      (*equivFilePtr) >> aux;
       auxs.emplace_back(aux);
     }
 
     // count for this class
     uint64_t count;
-    equivFile >> count;
+    (*equivFilePtr) >> count;
 
     eqclasses.emplace_back(tids);
     auxs_vals.emplace_back(auxs);
@@ -2158,7 +2168,7 @@ bool readEquivCounts(boost::filesystem::path& eqFilePathString,
   std::unordered_set<size_t> indexSet(indexList.begin(), indexList.end());
 
   double tlen;
-  while (equivFile >> tname >> tlen) {
+  while ((*equivFilePtr) >> tname >> tlen) {
     size_t index {0};
     auto it = nameToIndex.find(tname);
     if ( it != nameToIndex.end() ) {
@@ -2177,7 +2187,7 @@ bool readEquivCounts(boost::filesystem::path& eqFilePathString,
              << " txps" << std::flush;
   }
 
-  equivFile.close();
+  //equivFile.close();
   return true;
 }
 
