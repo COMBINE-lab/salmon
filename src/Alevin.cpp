@@ -71,8 +71,6 @@
 using paired_parser_qual = fastx_parser::FastxParser<fastx_parser::ReadQualPair>;
 using single_parser = fastx_parser::FastxParser<fastx_parser::ReadSeq>;
 
-constexpr uint32_t miniBatchSize{5000};
-
 /* ALEVIN DECLERATIONS*/
 using bcEnd = BarcodeEnd;
 namespace apt = alevin::protocols;
@@ -604,9 +602,9 @@ bool writeFastq(AlevinOpts<ProtocolT>& aopt,
 
         totNumBarcodes += 1;
         if (totNumBarcodes % 500000 == 0) {
-          char red[] = "\x1b[30m";
-          red[3] = '0' + static_cast<char>(fmt::RED);
-          fmt::print(stderr, "\r\r{}Dumped{} {} {}reads{}", green, red,
+          char lred[] = "\x1b[30m";
+          lred[3] = '0' + static_cast<char>(fmt::RED);
+          fmt::print(stderr, "\r\r{}Dumped{} {} {}reads{}", green, lred,
                      totNumBarcodes, green, RESET_COLOR);
         }
       }//end-for
