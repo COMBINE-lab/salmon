@@ -6,4 +6,12 @@ path_classifiers:
   # for library code. You can tag further files as being library code by adding them
   # to the `library` section. Test if we can have a list.
   library:
-    - exclude: [external, include/core, include/eigen3, include/jellyfish, include/nonstd, include/parallel_hashmap, include/spdlog, include/stx]
+    - exclude:
+      - external
+      - include/core
+      - include/eigen3
+      - include/jellyfish
+      - include/nonstd
+      - include/parallel_hashmap
+      - include/spdlog
+      - include/stx
