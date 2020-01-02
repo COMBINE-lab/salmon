@@ -4,7 +4,7 @@ path_classifiers:
     - doc
   # The default behavior is to tag library code as `library`. Results are hidden 
   # for library code. You can tag further files as being library code by adding them
-  # to the `library` section. Test if we can have a list.
+  # to the `library` section. Test if we can have a list. Just about to give up on LGTM.
   library:
     - external
     - include/core
