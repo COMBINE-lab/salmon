@@ -252,7 +252,7 @@ target_link_libraries(salmon
 ## PUFF_INTEGRATION    
     alevin_core
     ${CMAKE_DL_LIBS}
-    #asan
+    ${ASAN_LIB}
     #ubsan
 )
 
@@ -276,7 +276,7 @@ target_link_libraries(unitTests
     ${NON_APPLECLANG_LIBS}
     ${LIBRT}
     ${CMAKE_DL_LIBS}
-    #asan
+    ${ASAN_LIB}
     #ubsan
 )
 
