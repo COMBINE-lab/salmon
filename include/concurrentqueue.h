@@ -3654,3 +3654,5 @@ inline void swap(typename ConcurrentQueue<T, Traits>::ImplicitProducerKVP& a, ty
 #if defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
+
+// lgtm [cpp/assignment-does-not-return-this]

@@ -68,15 +68,21 @@ endif()
 set(REMOVE_WARNING_FLAGS "-Wno-unused-function;-Wno-unused-local-typedefs")
 set(TGT_COMPILE_FLAGS "-ftree-vectorize;-funroll-loops;-fPIC;-fomit-frame-pointer;-O3;-DNDEBUG;-DSTX_NO_STD_STRING_VIEW")
 set(TGT_WARN_FLAGS "-Wall;-Wno-unknown-pragmas;-Wno-reorder;-Wno-unused-variable;-Wreturn-type;-Werror=return-type;${REMOVE_WARNING_FLAGS}")
-
+#set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address")
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
 
 ###
 # Sanitizers BEGIN
 ###
-#list(APPEND TGT_COMPILE_FLAGS "-fsanitize=address")
+if (ASAN_BUILD)
+  list(APPEND TGT_COMPILE_FLAGS "-fsanitize=address")
 #list(APPEND TGT_COMPILE_FLAGS "-fsanitize=undefined")
 #set(CMAKE_LINK_FLAGS "-fsanitize=address")
 #list(APPEND CMAKE_LINK_FLAGS "-fsanitize=undefined")
+  set(ASAN_LIB "asan")
+else()
+  set(ASAN_LIB "")
+endif()
 ###
 # Sanitizers END
 ###
@@ -778,6 +784,10 @@ if(Jemalloc_FOUND)
   #else()
   #  message("Fond Jemalloc version ${JEMALLOC_VERSION}, but require >= 5.2.1. Downloading newer version")
   #endif()
+endif()
+
+if (ASAN_BUILD)
+  set(FAST_MALLOC_LIB "")
 endif()
 
 if(CONDA_BUILD)

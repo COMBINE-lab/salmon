@@ -525,10 +525,12 @@ private:
 
   inline double gcCountInterp_(int32_t p) const {
     int32_t sRefLength = static_cast<int32_t>(RefLength);
-    if (p >= sRefLength) {
-      p = sRefLength - 1;
+    uint64_t extraCount = 0;
+    if ((p+1) >= sRefLength) {
+      extraCount = gcBitArray_[(RefLength-1)];
+      p = sRefLength - 2;
     }
-    return static_cast<double>(gcRank_->rank(p + 1));
+    return static_cast<double>(gcRank_->rank(p + 1) + extraCount);
   }
 
   /** Previous GC count interp implementation (May 23, 2017) **/

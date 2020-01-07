@@ -320,7 +320,6 @@ inline AlignmentType getPairedAlignmentType_(bam_seq_t* aln) {
                 return AlignmentType::MappedOrphan;
             }
         } else {
-            // FIXME
             // NOTE: Since (currently) discordant pairs can cause us to
             // drop alignments that should be sampled, treat these guys 
             // as orphans for the time being.

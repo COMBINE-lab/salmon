@@ -1092,6 +1092,7 @@ TranscriptGeneMap transcriptGeneMapFromGTF(const std::string& fname,
   TranscriptKey tkey = TranscriptKey::GENE_ID;
 
   if (key == "gene_id") {
+    // This is the default initalization above.
   } else if (key == "gene_name") {
     tkey = TranscriptKey::GENE_NAME;
   } else {
@@ -1352,11 +1353,22 @@ std::vector<std::string> split(const std::string& str,
 }
 
 std::string getCurrentTimeAsString() {
-  // Get the time at the start of the run
+  // Get the current time as a string
   std::time_t result = std::time(NULL);
-  auto time = std::string(std::asctime(std::localtime(&result)));
-  time.pop_back(); // remove the newline
-  return time;
+
+  // old non-threadsafe version
+  //auto time = std::string(std::asctime(std::localtime(&result)));
+  //time.pop_back(); // remove the newline
+  //return time;
+
+  struct tm local_tm;
+  // NOTE: localtime_r may not exist on windows systems.  This is OK
+  // as salmon doesn't support windows 
+  ::localtime_r(&result, &local_tm);
+  char buffer[80] = {0};
+  std::strftime(buffer, sizeof(buffer),"%a %b %d %H:%M:%S %Y", &local_tm);
+  std::string str(buffer);
+  return str;
 }
 
   bool validateOptionsAlignment_(

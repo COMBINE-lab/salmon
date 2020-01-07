@@ -122,7 +122,7 @@ void PeqTable::reset(int alphabetLength, std::vector<unsigned char>& query) {
   int maxNumBlocks = ceilDiv(queryLength, WORD_SIZE);
   // table of dimensions alphabetLength+1 x maxNumBlocks. Last symbol is wildcard.
   if (prevQueryLength_ != queryLength) {
-    peq_.resize((alphabetLength + 1) * maxNumBlocks, 0);
+    peq_.resize((static_cast<size_t>(alphabetLength) + 1) * maxNumBlocks, 0);
     prevQueryLength_ = queryLength;
   }
 

@@ -19,6 +19,10 @@
 <HEADER
 **/
 
+#ifndef __SALMON_MAPPING_UTILS__
+#define __SALMON_MAPPING_UTILS__
+
+
 #include <algorithm>
 #include <atomic>
 #include <cassert>
@@ -286,3 +290,5 @@ inline void filterAndCollectAlignments(
 
   } // namespace mapping_utils
 } // namespace salmon
+
+#endif //__SALMON_MAPPING_UTILS__
