@@ -768,26 +768,27 @@ if (NOT LIBSTADENIO_FOUND)
   set(STADEN_LIBRARIES "${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a")
 endif()
 
-set(FAST_MALLOC_LIB "")
-set(HAVE_FAST_MALLOC FALSE)
-
-# See if we have Jemalloc
-find_package(Jemalloc)
-if(Jemalloc_FOUND)
-  ##
-  # Don't be so stringent about the version yet
-  ##
-  #if (NOT (${JEMALLOC_VERSION} VERSION_LESS 5.2.1))
-    message("Found Jemalloc library --- using this memory allocator")
-    set(FAST_MALLOC_LIB ${JEMALLOC_LIBRARIES})
-    set(HAVE_FAST_MALLOC TRUE)
-  #else()
-  #  message("Fond Jemalloc version ${JEMALLOC_VERSION}, but require >= 5.2.1. Downloading newer version")
-  #endif()
-endif()
-
 if (ASAN_BUILD)
   set(FAST_MALLOC_LIB "")
+  set(HAVE_FAST_MALLOC TRUE)
+else()
+  set(FAST_MALLOC_LIB "")
+  set(HAVE_FAST_MALLOC FALSE)
+
+  # See if we have Jemalloc
+  find_package(Jemalloc)
+  if(Jemalloc_FOUND)
+    ##
+    # Don't be so stringent about the version yet
+    ##
+    #if (NOT (${JEMALLOC_VERSION} VERSION_LESS 5.2.1))
+      message("Found Jemalloc library --- using this memory allocator")
+      set(FAST_MALLOC_LIB ${JEMALLOC_LIBRARIES})
+      set(HAVE_FAST_MALLOC TRUE)
+    #else()
+    #  message("Fond Jemalloc version ${JEMALLOC_VERSION}, but require >= 5.2.1. Downloading newer version")
+    #endif()
+  endif()
 endif()
 
 if(CONDA_BUILD)
