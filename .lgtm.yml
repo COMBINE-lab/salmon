@@ -1,0 +1,28 @@
+path_classifiers:
+  docs:
+    # Identify the top-level file called `generate_javadoc.py` as documentation-related.
+    - doc
+  # The default behavior is to tag library code as `library`. Results are hidden 
+  # for library code. You can tag further files as being library code by adding them
+  # to the `library` section. Test if we can have a list.
+  library:
+    - external
+    - include/core
+    - include/eigen3
+    - include/jellyfish
+    - include/nonstd
+    - include/parallel_hashmap
+    - include/spdlog
+    - include/stx
+
+extraction:
+  cpp:
+    configure:
+      command:
+        - mkdir build
+        - cd build
+        - cmake -DFETCH_STADEN=TRUE ..
+    index:
+      build_command:
+        - cd build
+        - make

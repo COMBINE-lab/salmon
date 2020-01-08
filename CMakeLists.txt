@@ -747,7 +747,13 @@ else()
 endif()
 
 find_package(CURL)
-find_package(libstadenio)
+
+if (FETCH_STADEN)
+  set(LIBSTADEN_FOUND FALSE)
+else ()
+  find_package(libstadenio)
+endif()
+
 if (NOT LIBSTADENIO_FOUND)
   message("Build system will compile Staden IOLib")
   message("==================================================================")
