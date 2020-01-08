@@ -84,7 +84,7 @@ namespace alevin {
                          DoubleMatrixT& sigma,
                          std::vector<uint32_t>& classCount,
                          DoubleVectorT& classPrior,
-                         size_t numClasses,
+                         /*size_t numClasses,*/
                          size_t numTrueCells,
                          size_t numAmbiguousCells,
                          size_t numFalseCells){
@@ -132,7 +132,7 @@ namespace alevin {
       DoubleMatrixT sigma (numClasses, DoubleVectorT (numFeatures, 0.0));
 
       naive_bayes_fit(featureCountsMatrix, theta, sigma,
-                      classCount, classPrior, numClasses,
+                      classCount, classPrior, /*numClasses,*/
                       numTrueCells, numAmbiguousCells, numFalseCells);
 
       //trueProb.resize(numAmbiguousCells, 0.0);
@@ -166,9 +166,9 @@ namespace alevin {
 
     template <typename ProtocolT>
     bool performWhitelisting(AlevinOpts<ProtocolT>& aopt,
-                             std::vector<uint32_t>& umiCount,
+                             std::vector<uint32_t>& /*umiCount*/,
                              std::vector<std::string>& trueBarcodes,
-                             CFreqMapT& freqCounter, bool useRibo, bool useMito,
+                             CFreqMapT& /*freqCounter*/, bool useRibo, bool useMito,
                              size_t numLowConfidentBarcode){
       size_t numCells = trueBarcodes.size();
       size_t numFeatures {5};

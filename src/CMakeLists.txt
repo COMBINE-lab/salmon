@@ -10,9 +10,8 @@ ${Boost_INCLUDE_DIRS}
 ${GAT_SOURCE_DIR}/external/install/include
 ${GAT_SOURCE_DIR}/external/install/include/pufferfish
 ${GAT_SOURCE_DIR}/external/install/include/pufferfish/digestpp
-
-${GAT_SOURCE_DIR}/external/install/include/rapmap
-${GAT_SOURCE_DIR}/external/install/include/rapmap/digestpp
+#${GAT_SOURCE_DIR}/external/install/include/rapmap
+#${GAT_SOURCE_DIR}/external/install/include/rapmap/digestpp
 ${ICU_INC_DIRS}
 )
 
@@ -36,7 +35,7 @@ WhiteList.cpp
 SalmonQuantify.cpp
 FragmentLengthDistribution.cpp
 FragmentStartPositionDistribution.cpp
-SequenceBiasModel.cpp
+# SequenceBiasModel.cpp
 GZipWriter.cpp
 SalmonQuantMerge.cpp
 ProgramOptionsGenerator.cpp
@@ -253,7 +252,7 @@ target_link_libraries(salmon
 ## PUFF_INTEGRATION    
     alevin_core
     ${CMAKE_DL_LIBS}
-    #asan
+    ${ASAN_LIB}
     #ubsan
 )
 
@@ -277,7 +276,7 @@ target_link_libraries(unitTests
     ${NON_APPLECLANG_LIBS}
     ${LIBRT}
     ${CMAKE_DL_LIBS}
-    #asan
+    ${ASAN_LIB}
     #ubsan
 )
 

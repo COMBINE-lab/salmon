@@ -81,7 +81,10 @@ def main(args):
                     xs = map(str, x)
                     ofile.write('\t'.join(xs) + '\n')
                     numBoot += 1
-                except:
+                except Exception as ex:
+                    logging.info("read all bootstrap values")
+                    break
+                except BaseException:
                     logging.info("read all bootstrap values")
                     break
 

@@ -68,15 +68,21 @@ endif()
 set(REMOVE_WARNING_FLAGS "-Wno-unused-function;-Wno-unused-local-typedefs")
 set(TGT_COMPILE_FLAGS "-ftree-vectorize;-funroll-loops;-fPIC;-fomit-frame-pointer;-O3;-DNDEBUG;-DSTX_NO_STD_STRING_VIEW")
 set(TGT_WARN_FLAGS "-Wall;-Wno-unknown-pragmas;-Wno-reorder;-Wno-unused-variable;-Wreturn-type;-Werror=return-type;${REMOVE_WARNING_FLAGS}")
-
+#set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address")
+#set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
 
 ###
 # Sanitizers BEGIN
 ###
-#list(APPEND TGT_COMPILE_FLAGS "-fsanitize=address")
+if (ASAN_BUILD)
+  list(APPEND TGT_COMPILE_FLAGS "-fsanitize=address")
 #list(APPEND TGT_COMPILE_FLAGS "-fsanitize=undefined")
 #set(CMAKE_LINK_FLAGS "-fsanitize=address")
 #list(APPEND CMAKE_LINK_FLAGS "-fsanitize=undefined")
+  set(ASAN_LIB "asan")
+else()
+  set(ASAN_LIB "")
+endif()
 ###
 # Sanitizers END
 ###
@@ -176,6 +182,14 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
                             "either clang or g++ >= ${GCCVERSION}")
     elseif(NOT (GCC_VERSION VERSION_GREATER ${GCCVERSION} OR GCC_VERSION VERSION_EQUAL ${GCCVERSION}))
       message(FATAL_ERROR "${PROJECT_NAME} requires g++ ${GCCVERSION} or greater.")
+    endif()
+    
+    if(GCC_VERSION VERSION_GREATER_EQUAL "7.1")
+      list(APPEND TGT_WARN_FLAGS "-Wno-int-in-bool-context")
+    endif()
+    
+    if(GCC_VERSION VERSION_GREATER_EQUAL "9.1")
+      list(APPEND TGT_WARN_FLAGS "-Wno-deprecated-copy")
     endif()
 
     set(GCC TRUE)
@@ -733,9 +747,13 @@ else()
 endif()
 
 find_package(CURL)
-# to test LGTM
-# find_package(libstadenio)
-#
+
+if (FETCH_STADEN)
+  set(LIBSTADEN_FOUND FALSE)
+else ()
+  find_package(libstadenio)
+endif()
+
 if (NOT LIBSTADENIO_FOUND)
   message("Build system will compile Staden IOLib")
   message("==================================================================")
@@ -764,22 +782,27 @@ if (NOT LIBSTADENIO_FOUND)
   set(STADEN_LIBRARIES "${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a")
 endif()
 
-set(FAST_MALLOC_LIB "")
-set(HAVE_FAST_MALLOC FALSE)
+if (ASAN_BUILD)
+  set(FAST_MALLOC_LIB "")
+  set(HAVE_FAST_MALLOC TRUE)
+else()
+  set(FAST_MALLOC_LIB "")
+  set(HAVE_FAST_MALLOC FALSE)
 
-# See if we have Jemalloc
-find_package(Jemalloc)
-if(Jemalloc_FOUND)
-  ##
-  # Don't be so stringent about the version yet
-  ##
-  #if (NOT (${JEMALLOC_VERSION} VERSION_LESS 5.2.1))
-    message("Found Jemalloc library --- using this memory allocator")
-    set(FAST_MALLOC_LIB ${JEMALLOC_LIBRARIES})
-    set(HAVE_FAST_MALLOC TRUE)
-  #else()
-  #  message("Fond Jemalloc version ${JEMALLOC_VERSION}, but require >= 5.2.1. Downloading newer version")
-  #endif()
+  # See if we have Jemalloc
+  find_package(Jemalloc)
+  if(Jemalloc_FOUND)
+    ##
+    # Don't be so stringent about the version yet
+    ##
+    #if (NOT (${JEMALLOC_VERSION} VERSION_LESS 5.2.1))
+      message("Found Jemalloc library --- using this memory allocator")
+      set(FAST_MALLOC_LIB ${JEMALLOC_LIBRARIES})
+      set(HAVE_FAST_MALLOC TRUE)
+    #else()
+    #  message("Fond Jemalloc version ${JEMALLOC_VERSION}, but require >= 5.2.1. Downloading newer version")
+    #endif()
+  endif()
 endif()
 
 if(CONDA_BUILD)
@@ -801,6 +824,7 @@ if(NOT HAVE_FAST_MALLOC)
       BUILD_IN_SOURCE TRUE
       INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
       CONFIGURE_COMMAND sh -c "${JEMALLOC_FLAGS} ./autogen.sh --disable-debug ${MALLOC_STATIC_BUILD_FLAG} --prefix=<INSTALL_DIR>"
+      #CONFIGURE_COMMAND sh -c "${JEMALLOC_FLAGS} ./autogen.sh ${MALLOC_STATIC_BUILD_FLAG} --prefix=<INSTALL_DIR>"
       INSTALL_COMMAND cp -r lib <INSTALL_DIR>/ && cp -r include <INSTALL_DIR>/
       )
 

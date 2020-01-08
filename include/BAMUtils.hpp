@@ -21,6 +21,7 @@ namespace salmon {
        BWA_MEM,       // BWA-MEM aligner
        MINIMAP2,      // minimap2 aligner
        RAPMAP,        // rapmap aligner/mapper
+       PUFFERFISH,    // pufferfish / puffalign aligner
        UNKNOWN
       };
 

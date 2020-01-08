@@ -104,8 +104,7 @@ template <typename VecT>
 void VBEMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
                  std::vector<std::vector<double>>& txpGroupCombinedWeights,
                  const std::vector<uint64_t>& txpGroupCounts,
-                 std::vector<Transcript>& transcripts,
-                 std::vector<double>& priorAlphas, double totLen,
+                 std::vector<double>& priorAlphas, 
                  const VecT& alphaIn, VecT& alphaOut, VecT& expTheta) {
 
   assert(alphaIn.size() == alphaOut.size());
@@ -177,7 +176,6 @@ void VBEMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
  */
 template <typename EQVecT>
 void EMUpdate_(EQVecT& eqVec,
-               std::vector<Transcript>& transcripts,
                std::vector<double>& priorAlphas,
                const CollapsedEMOptimizer::VecType& alphaIn,
                CollapsedEMOptimizer::VecType& alphaOut) {
@@ -238,8 +236,7 @@ void EMUpdate_(EQVecT& eqVec,
  */
 template <typename EQVecT>
 void VBEMUpdate_(EQVecT& eqVec,
-                 std::vector<Transcript>& transcripts,
-                 std::vector<double>& priorAlphas, double totLen,
+                 std::vector<double>& priorAlphas, 
                  const CollapsedEMOptimizer::VecType& alphaIn,
                  CollapsedEMOptimizer::VecType& alphaOut,
                  CollapsedEMOptimizer::VecType& expTheta) {
@@ -253,8 +250,8 @@ void VBEMUpdate_(EQVecT& eqVec,
 
   double logNorm = boost::math::digamma(alphaSum);
 
-  tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(transcripts.size())),
-                    [logNorm, totLen, &priorAlphas, &alphaIn, &alphaOut,
+  tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(priorAlphas.size())),
+                    [logNorm, &priorAlphas, &alphaIn, &alphaOut,
                      &expTheta](const BlockedIndexRange& range) -> void {
 
                       // double prior = priorAlpha;
@@ -325,7 +322,7 @@ void VBEMUpdate_(EQVecT& eqVec,
 template <typename VecT, typename EQVecT>
 size_t markDegenerateClasses(
     EQVecT& eqVec,
-    VecT& alphaIn, Eigen::VectorXd& effLens, std::vector<bool>& available,
+    VecT& alphaIn, std::vector<bool>& available,
     std::shared_ptr<spdlog::logger> jointLog, bool verbose = false) {
 
   size_t numDropped{0};
@@ -373,7 +370,6 @@ size_t markDegenerateClasses(
       errstream << "}\n";
       errstream << "============================\n\n";
 
-      bool verbose{false};
       if (verbose) {
         jointLog->info(errstream.str());
       }
@@ -460,10 +456,10 @@ bool doBootstrap(
     while (itNum < minIter or (itNum < maxIter and !converged)) {
 
       if (useVBEM) {
-        VBEMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, transcripts,
-                    priorAlphas, totalLen, alphas, alphasPrime, expTheta);
+        VBEMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, 
+                    priorAlphas, alphas, alphasPrime, expTheta);
       } else {
-        EMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, transcripts,
+        EMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, 
                   alphas, alphasPrime);
       }
 
@@ -489,10 +485,10 @@ bool doBootstrap(
     // counts
     if (sopt.bootstrapReproject) {
       if (useVBEM) {
-        VBEMUpdate_(txpGroups, txpGroupCombinedWeights, origCounts, transcripts,
-                    priorAlphas, totalLen, alphas, alphasPrime, expTheta);
+        VBEMUpdate_(txpGroups, txpGroupCombinedWeights, origCounts, 
+                    priorAlphas, alphas, alphasPrime, expTheta);
       } else {
-        EMUpdate_(txpGroups, txpGroupCombinedWeights, origCounts, transcripts,
+        EMUpdate_(txpGroups, txpGroupCombinedWeights, origCounts, 
                   alphas, alphasPrime);
       }
     }
@@ -567,13 +563,16 @@ bool CollapsedEMOptimizer::gatherBootstraps(
 
   uint32_t numBootstraps = sopt.numBootstraps;
 
-  auto& eqVec =
-      readExp.equivalenceClassBuilder().eqVec();
+  auto& eqBuilder = readExp.equivalenceClassBuilder();
+  auto& eqVec = eqBuilder.eqVec();
 
   std::unordered_set<uint32_t> activeTranscriptIDs;
-  for (auto& kv : eqVec) {
-    auto& tg = kv.first;
-    for (auto& t : tg.txps) {
+  const size_t numClasses = eqVec.size();
+  for (size_t cid = 0; cid < numClasses; ++cid) { 
+    auto nt = eqBuilder.getNumTranscriptsForClass(cid);
+    auto& txps = eqVec[cid].first.txps;
+    for (size_t tctr = 0; tctr < nt; ++tctr) {
+      auto t = txps[tctr];
       transcripts[t].setActive();
       activeTranscriptIDs.insert(t);
     }
@@ -611,7 +610,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
       transcripts, effLens, priorValue, perTranscriptPrior);
 
   auto numRemoved =
-      markDegenerateClasses(eqVec, alphas, effLens, available, sopt.jointLog);
+      markDegenerateClasses(eqVec, alphas, available, sopt.jointLog);
   sopt.jointLog->info("Marked {} weighted equivalence classes as degenerate",
                       numRemoved);
 
@@ -625,13 +624,27 @@ bool CollapsedEMOptimizer::gatherBootstraps(
   std::vector<uint64_t> origCounts;
   uint64_t totalCount{0};
 
-  for (auto& kv : eqVec) {
+  for (size_t cid = 0; cid < numClasses; ++cid) { 
+    const auto& kv = eqVec[cid];
     uint64_t count = kv.second.count;
+
     // for each transcript in this class
     const TranscriptGroup& tgroup = kv.first;
     if (tgroup.valid) {
-      const std::vector<uint32_t>& txps = tgroup.txps;
+      //const std::vector<uint32_t>& txps = tgroup.txps;
+      const auto numTranscripts = eqBuilder.getNumTranscriptsForClass(cid);
+      std::vector<uint32_t> txps(tgroup.txps.begin(), tgroup.txps.begin()+numTranscripts);
       const auto& auxs = kv.second.combinedWeights;
+      
+      if (txps.size() != auxs.size()) {
+        sopt.jointLog->critical(
+            "# of transcripts ({}) should match length of weight vec. ({})",
+            txps.size(), auxs.size());
+        sopt.jointLog->flush();
+        spdlog::drop_all();
+        std::exit(1);
+      }
+      
       txpGroups.push_back(txps);
       // Convert to non-atomic
       txpGroupCombinedWeights.emplace_back(auxs.begin(), auxs.end());
@@ -848,7 +861,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
       });
 
   auto numRemoved =
-      markDegenerateClasses(eqVec, alphas, effLens, available, sopt.jointLog);
+      markDegenerateClasses(eqVec, alphas, available, sopt.jointLog);
   sopt.jointLog->info("Marked {} weighted equivalence classes as degenerate",
                       numRemoved);
 
@@ -903,7 +916,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
     }
 
     if (useVBEM) {
-      VBEMUpdate_(eqVec, transcripts, priorAlphas, totalLen, alphas,
+      VBEMUpdate_(eqVec, priorAlphas, alphas,
                   alphasPrime, expTheta);
     } else {
       /*
@@ -914,7 +927,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
       }
       */
 
-      EMUpdate_(eqVec, transcripts, priorAlphas, alphas, alphasPrime);
+      EMUpdate_(eqVec, priorAlphas, alphas, alphasPrime);
     }
 
     converged = true;
@@ -944,7 +957,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
         alphaSum = truncateCountVector(alphas, cutoff);
       }
       if (useVBEM) {
-        VBEMUpdate_(eqVec, transcripts, priorAlphas, totalLen, alphas,
+        VBEMUpdate_(eqVec, priorAlphas, alphas,
     alphasPrime, expTheta); } else { EMUpdate_(eqVec, transcripts, alphas,
     alphasPrime);
       }

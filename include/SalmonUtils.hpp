@@ -37,6 +37,7 @@ extern "C" {
 template <typename EqBuilderT> class ReadExperiment;
 class LibraryFormat;
 class FragmentLengthDistribution;
+class Transcript;
 
 namespace salmon {
 namespace utils {
@@ -121,6 +122,15 @@ bool readEquivCounts(boost::filesystem::path& eqFilePathString,
                      std::vector<std::vector<uint32_t>>& eqclasses,
                      std::vector<std::vector<double>>& auxs_vals,
                      std::vector<uint32_t>& eqclass_counts );
+
+/**
+ * @param sopt : The salmon options object that tells us the relevant files and contains the pointer 
+ *              to the logger object
+ * @param transcripts : The list of transcript objects
+ * 
+ * If the auxTargetFile is not empty (i.e. if the file exists)
+ **/
+void markAuxiliaryTargets(SalmonOpts& sopt, std::vector<Transcript>& transcripts);
 
 /*
 template <typename AbundanceVecT, typename ReadExpT>

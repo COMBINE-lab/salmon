@@ -93,7 +93,7 @@ public:
     }
   }
 
-  T operator()(size_t rowInd, size_t colInd, bool normalized = true) {
+  T operator()(size_t rowInd, size_t colInd /*, bool normalized = true*/) {
     size_t k = rowInd * nCol_ + colInd;
     if (logSpace_) {
       return storage_[k] - rowsums_[rowInd];

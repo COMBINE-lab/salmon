@@ -11,7 +11,6 @@ Options:
 """
 from docopt import docopt
 from Bio import SeqIO
-import itertools
 import random
 import copy
 import math
@@ -49,7 +48,6 @@ def main(args):
     nMut = 0
     totLen = 0
     nextMut = currBase + randCeilFloor(random.expovariate(mutRate))
-    mutList = []
     for i, s in enumerate(seqs):
         lenS = len(s.seq)
         firstBase = currBase
@@ -75,7 +73,6 @@ def main(args):
             sys.stderr.write("processed {} records; performed {} mutations; rate = {:.2f}%\r\r".format(i, nMut, (100.0 * nMut) / totLen))
         # print("\n")/tmp/hg18_transcripts_mut0.001.fa/tmp/hg18_transcripts_mut0.001.fa/tmp/hg18_transcripts_mut0.001.fa
         # print('Num Rec = {}, Num Mut = {}, Tot. length = {}, rate = {}'.format(i, nMut, totLen, (100.0 * nMut) / totLen))
-        # print(mutList)
     print("\ndone.")
 
 if __name__ == "__main__":

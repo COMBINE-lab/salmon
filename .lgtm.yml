@@ -14,3 +14,15 @@ path_classifiers:
     - include/parallel_hashmap
     - include/spdlog
     - include/stx
+
+extraction:
+  cpp:
+    configure:
+      command:
+        - mkdir build
+        - cd build
+        - cmake -DFETCH_STADEN=TRUE ..
+    index:
+      build_command:
+        - cd build
+        - make

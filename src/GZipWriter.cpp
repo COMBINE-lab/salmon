@@ -1,6 +1,7 @@
 #include <ctime>
 #include <fstream>
 #include <numeric>
+#include <memory>
 
 #include "parallel_hashmap/phmap.h"
 #include "cereal/archives/json.hpp"
@@ -15,6 +16,7 @@
 #include "UnpairedRead.hpp"
 #include "TranscriptGroup.hpp"
 #include "SingleCellProtocols.hpp"
+#include "zstr.hpp"
 
 GZipWriter::GZipWriter(const boost::filesystem::path path,
                        std::shared_ptr<spdlog::logger> logger)
@@ -132,14 +134,19 @@ bool writeVectorToFile(boost::filesystem::path path,
  */
 template <typename ExpT>
 bool GZipWriter::writeEquivCounts(const SalmonOpts& opts, ExpT& experiment) {
-
   namespace bfs = boost::filesystem;
 
   bfs::path auxDir = path_ / opts.auxDir;
   bool auxSuccess = boost::filesystem::create_directories(auxDir);
-  bfs::path eqFilePath = auxDir / "eq_classes.txt";
 
-  std::ofstream equivFile(eqFilePath.string());
+  // write gzipped equivalence classes
+  bfs::path eqFilePath = auxDir / "eq_classes.txt.gz";
+  std::unique_ptr<std::ostream> equivFilePtr(new zstr::ofstream(eqFilePath.string()));
+
+  // write uncompressed equivalence classes
+  //bfs::path eqFilePath = auxDir / "eq_classes.txt";
+  //std::unique_ptr<std::ostream> equivFilePtr(new std::ofstream(eqFilePath.string()));
+  //std::ofstream equivFile(eqFilePath.string());
 
   auto& transcripts = experiment.transcripts();
   auto& eqBuilder = experiment.equivalenceClassBuilder();
@@ -151,8 +158,6 @@ bool GZipWriter::writeEquivCounts(const SalmonOpts& opts, ExpT& experiment) {
   phmap::flat_hash_map<TranscriptGroup, uint64_t, TranscriptGroupHasher> collapsedMap;
 
   if (!dumpRichWeights) {
-    // if we are using range-factorization, but don't want weights,
-    // collapse the equivalence classes into naive ones.
     logger_->info("Collapsing factorization information into simplified equivalence classes.");
 
     // if we are using range-factorization, but don't want weights,
@@ -180,14 +185,14 @@ bool GZipWriter::writeEquivCounts(const SalmonOpts& opts, ExpT& experiment) {
   }
 
   // Number of transcripts
-  equivFile << transcripts.size() << '\n';
+  (*equivFilePtr) << transcripts.size() << '\n';
 
   // Number of equivalence classes
-  equivFile << numEqClasses << '\n';
+  (*equivFilePtr) << numEqClasses << '\n';
 
   // Transcript names
   for (auto& t : transcripts) {
-    equivFile << t.RefName << '\n';
+    (*equivFilePtr) << t.RefName << '\n';
   }
 
   // If we are dumping eq weights, then just go over what
@@ -202,14 +207,14 @@ bool GZipWriter::writeEquivCounts(const SalmonOpts& opts, ExpT& experiment) {
       const auto& auxs = eq.second.combinedWeights;
       const uint32_t groupSize = eqBuilder.getNumTranscriptsForClass(eqIdx);
 
-      equivFile << groupSize << '\t';
+      (*equivFilePtr) << groupSize << '\t';
       for (uint32_t i = 0; i < groupSize; ++i) {
-        equivFile << txps[i] << '\t';
+        (*equivFilePtr) << txps[i] << '\t';
       }
       for (uint32_t i = 0; i < groupSize; ++i) {
-        equivFile << auxs[i] << '\t';
+        (*equivFilePtr) << auxs[i] << '\t';
       }
-      equivFile << count << '\n';
+      (*equivFilePtr) << count << '\n';
     }
   } else {
     // Otherwise, go over the collapsed map with the simplified
@@ -220,21 +225,24 @@ bool GZipWriter::writeEquivCounts(const SalmonOpts& opts, ExpT& experiment) {
       auto& txps = kv.first.txps;
       auto& count = kv.second;
       const uint32_t groupSize = txps.size();
-      equivFile << groupSize << '\t';
+      (*equivFilePtr) << groupSize << '\t';
       for (uint32_t i = 0; i < groupSize; ++i) {
-        equivFile << txps[i] << '\t';
+        (*equivFilePtr) << txps[i] << '\t';
       }
-      equivFile << count << '\n';
+      (*equivFilePtr) << count << '\n';
     }
   }
 
-  equivFile.close();
+  // NOTE: no close via the ostream interface, will happen upon destruction.
+  // equivFilePtr->close();
   return true;
 }
 
+// FIXME(@k3yavi): We should probably be writing down the umiLength in the BFH files
+// somewhere.
 template <typename ExpT>
 bool GZipWriter::writeBFH(boost::filesystem::path& outDir,
-                          ExpT& experiment, size_t umiLength,
+                          ExpT& experiment, size_t /*umiLength*/,
                           std::vector<std::string>& bcSeqVec) {
   namespace bfs = boost::filesystem;
 
@@ -420,6 +428,8 @@ bool GZipWriter::writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
     if (dumpRichWeights) {
       props.push_back("scalar_weights");
     }
+    // write down that we are gzipping the eq classes
+    props.push_back("gzipped");
 
     oa(cereal::make_nvp("eq_class_properties", props));
 
@@ -772,7 +782,8 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
     if (opts.dumpEqWeights) {
       props.push_back("scalar_weights");
     }
-
+    // write down that we are gzipping the eq classes
+    props.push_back("gzipped");
 
     oa(cereal::make_nvp("eq_class_properties", props));
 
@@ -1069,6 +1080,8 @@ bool GZipWriter::writeSparseBootstraps(std::string& bcName,
   return true;
 }
 
+// FIXME(@k3yavi): The dumpUmiGraph parameter is un-used so I commented out the name
+// should we be doing something with it?
 bool GZipWriter::writeSparseAbundances(std::string& bcName,
                                        std::string& features,
                                        std::string& arboData,
@@ -1076,7 +1089,7 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
                                        std::vector<double>& alphas,
                                        std::vector<uint8_t>& tiers,
                                        bool dumpArborescences,
-                                       bool dumpUmiGraph){
+                                       bool /*dumpUmiGraph*/){
 
   // construct the output vectors outside of the critical section
   // since e.g. this is more non-trivial work than in the dense case.

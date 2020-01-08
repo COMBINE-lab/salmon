@@ -10,6 +10,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include "json.hpp"
 #include "tbb/combinable.h"
 #include "tbb/parallel_for.h"
 
@@ -26,6 +27,7 @@
 #include "TryableSpinLock.hpp"
 #include "UnpairedRead.hpp"
 #include "TranscriptGroup.hpp"
+#include "Transcript.hpp"
 
 #include "spdlog/fmt/fmt.h"
 #include "spdlog/fmt/ostr.h"
@@ -45,6 +47,8 @@
 #include "SalmonDefaults.hpp"
 
 #include "pufferfish/Util.hpp"
+
+#include "zstr.hpp"
 
 namespace salmon {
 namespace utils {
@@ -1088,6 +1092,7 @@ TranscriptGeneMap transcriptGeneMapFromGTF(const std::string& fname,
   TranscriptKey tkey = TranscriptKey::GENE_ID;
 
   if (key == "gene_id") {
+    // This is the default initalization above.
   } else if (key == "gene_name") {
     tkey = TranscriptKey::GENE_NAME;
   } else {
@@ -1348,11 +1353,22 @@ std::vector<std::string> split(const std::string& str,
 }
 
 std::string getCurrentTimeAsString() {
-  // Get the time at the start of the run
+  // Get the current time as a string
   std::time_t result = std::time(NULL);
-  auto time = std::string(std::asctime(std::localtime(&result)));
-  time.pop_back(); // remove the newline
-  return time;
+
+  // old non-threadsafe version
+  //auto time = std::string(std::asctime(std::localtime(&result)));
+  //time.pop_back(); // remove the newline
+  //return time;
+
+  struct tm local_tm;
+  // NOTE: localtime_r may not exist on windows systems.  This is OK
+  // as salmon doesn't support windows 
+  ::localtime_r(&result, &local_tm);
+  char buffer[80] = {0};
+  std::strftime(buffer, sizeof(buffer),"%a %b %d %H:%M:%S %Y", &local_tm);
+  std::string str(buffer);
+  return str;
 }
 
   bool validateOptionsAlignment_(
@@ -2093,6 +2109,10 @@ bool processQuantOptions(SalmonOpts& sopt,
   return perModeValidate;
 }
 
+// TODO: Check the use-case of this.  If we still want to support it, then update
+// it to read from a potentially gzipped equivalence class file.  Also, the eq file 
+// is in a non-standard format (effective lengths at the end), so get this info some
+// other way.
 bool readEquivCounts(boost::filesystem::path& eqFilePathString,
                      std::vector<string>& tnames,
                      std::vector<double>& tefflens,
@@ -2100,48 +2120,58 @@ bool readEquivCounts(boost::filesystem::path& eqFilePathString,
                      std::vector<std::vector<double>>& auxs_vals,
                      std::vector<uint32_t>& eqclass_counts ) {
 
+  auto l = spdlog::get("jointLog");
+
   namespace bfs = boost::filesystem;
   bfs::path eqFilePath {eqFilePathString};
 
-  std::ifstream equivFile(eqFilePath.string());
+  std::unique_ptr<std::istream> equivFilePtr = nullptr;
+  if (eqFilePath.extension() == ".gz") {
+    equivFilePtr.reset(new zstr::ifstream(eqFilePath.string()));
+  } else {
+    equivFilePtr.reset(new std::ifstream(eqFilePath.string()));
+  }
+  //std::ifstream equivFile(eqFilePath.string());
 
   size_t numTxps, numEqClasses;
   // Number of transcripts
-  equivFile >> numTxps;
+  (*equivFilePtr) >> numTxps;
 
   // Number of equivalence classes
-  equivFile >> numEqClasses;
+  (*equivFilePtr) >> numEqClasses;
 
+  tnames.reserve(numTxps);
+  eqclasses.reserve(numEqClasses);
   string tname;
   std::unordered_map<string, size_t> nameToIndex;
   for (size_t i = 0; i < numTxps; ++i) {
-    equivFile >> tname;
+    (*equivFilePtr) >> tname;
     tnames.emplace_back(tname);
     nameToIndex[tname] = i;
   }
 
   for (size_t i= 0; i < numEqClasses; ++i) {
     size_t classLength;
-    equivFile >> classLength;
+    (*equivFilePtr) >> classLength;
 
     // each group member
     uint64_t tid;
-    std::vector<uint32_t> tids;
+    std::vector<uint32_t> tids; tids.reserve(classLength);
     for (size_t i = 0; i < classLength; i++) {
-      equivFile >> tid;
+      (*equivFilePtr) >> tid;
       tids.emplace_back(tid);
     }
 
     double aux;
-    std::vector<double> auxs;
+    std::vector<double> auxs; auxs.reserve(classLength);
     for (size_t i = 0; i < classLength; i++) {
-      equivFile >> aux;
+      (*equivFilePtr) >> aux;
       auxs.emplace_back(aux);
     }
 
     // count for this class
     uint64_t count;
-    equivFile >> count;
+    (*equivFilePtr) >> count;
 
     eqclasses.emplace_back(tids);
     auxs_vals.emplace_back(auxs);
@@ -2154,13 +2184,13 @@ bool readEquivCounts(boost::filesystem::path& eqFilePathString,
   std::unordered_set<size_t> indexSet(indexList.begin(), indexList.end());
 
   double tlen;
-  while (equivFile >> tname >> tlen) {
+  while ((*equivFilePtr) >> tname >> tlen) {
     size_t index {0};
     auto it = nameToIndex.find(tname);
     if ( it != nameToIndex.end() ) {
       index = it->second;
     } else {
-      std::cerr<< "Missing effective lens for " << it->first << std::flush;
+      l->warn("Missing effective lens for {}", it->first);
       return false;
     }
 
@@ -2169,12 +2199,87 @@ bool readEquivCounts(boost::filesystem::path& eqFilePathString,
   }
 
   if (indexSet.size() > 0) {
-    std::cerr<< "Missing effective lens for " << indexSet.size()
-             << " txps" << std::flush;
+    l->warn("Missing effective lens for {} transcripts; setting to 100.0.", indexSet.size());
+    l->warn("NOTE: Since effective lengths are not provided, please do not rely on the TPM field \n"
+            "in the ouput quantifications.  Only the NumReads field will be reliable.");
+    for (auto& idx : indexSet) {
+      tefflens[idx] = 100.0;
+    }
   }
 
-  equivFile.close();
+  //equivFile.close();
   return true;
+}
+
+/**
+ * @param sopt : The salmon options object that tells us the relevant files and contains the pointer 
+ *              to the logger object
+ * @param transcripts : The list of transcript objects
+ * 
+ * If the auxTargetFile is not empty (i.e. if the file exists), then read the auxiliary targets
+ * and mark them as such in the transcripts vector.  This function will also write a file containing
+ * the IDs of the targets marked as auxiliary to the file aux_target_ids.json in the `aux_info` directory.
+ **/
+void markAuxiliaryTargets(SalmonOpts& sopt, std::vector<Transcript>& transcripts) { 
+  
+  namespace bfs = boost::filesystem;
+  auto& log = sopt.jointLog;
+  const std::string& auxTargetFile = sopt.auxTargetFile;
+
+  // If the aux file is empty or doesn't exist
+  if (auxTargetFile == "") { 
+    return; 
+  } else if (!bfs::exists(auxTargetFile)) { 
+    log->warn("The auxiliary target file {}, does not exist.  No targets will be treated as auxiliary.", 
+               auxTargetFile);
+    return; 
+  }
+
+  std::ifstream auxFile(auxTargetFile);
+  if (!auxFile.good()) { 
+    log->warn("Could not open the auxiliary target file {}. No targets will be treated as auxiliary.",
+               auxTargetFile);
+    return;
+  }
+
+  spp::sparse_hash_set<std::string> auxTargetNames;
+  std::string tname;
+  while (auxFile >> tname) { auxTargetNames.insert(tname); }
+  auxFile.close();
+  log->info("Parsed {:n} auxiliary targets from {}", auxTargetNames.size(), auxTargetFile);
+
+  size_t tid = 0;
+  std::vector<size_t> auxIDs;
+  for (auto& txp : transcripts) {
+    bool isAux = auxTargetNames.contains(txp.RefName);
+    txp.setSkipBiasCorrection(isAux);
+    if (isAux) { auxIDs.push_back(tid); }
+    ++tid;
+  }
+  size_t numAuxFound = auxIDs.size();
+
+  if (numAuxFound != auxTargetNames.size()) {
+    log->warn("While {:n} auxiliary target names were found in {}, only {:n} were actually found "
+              "among tanscripts in the index.  Please make sure that the names in {} match the "
+              "transcript names in the index as expected.", auxTargetNames.size(), auxTargetFile, 
+              numAuxFound, auxTargetFile);
+  }
+
+  // write down the aux target ids in the output directory
+  bfs::path auxDir = sopt.outputDirectory / sopt.auxDir;
+  if (!bfs::exists(auxDir)) {
+    log->warn("The salmon aux directory {} did not exist.  Cannot write aux_target_ids.json!", auxDir);
+  }
+  bfs::path auxIDFilePath = sopt.outputDirectory / sopt.auxDir / "aux_target_ids.json";
+  std::ofstream auxIDFile(auxIDFilePath.string());
+  if (auxIDFile.is_open()) {
+    nlohmann::json o;
+    o["aux_target_ids"] = auxIDs;
+    auxIDFile << o;
+  } else {
+    log->warn("Could not properly open the aux_target_ids file {}.", auxIDFilePath.string());
+  }
+  auxIDFile.close();
 }
 
 /**
@@ -2483,6 +2588,10 @@ int contextSize = outsideContext + insideContext;
 
           // Get the transcript
           const auto& txp = transcripts[it];
+
+          // If this transcript is in the list of transcripts for which the user 
+          // has requested we skip bias correction, then do so
+          if (txp.skipBiasCorrection()) { continue; }
 
           // Get the reference length and the
           // "initial" effective length (not considering any biases)

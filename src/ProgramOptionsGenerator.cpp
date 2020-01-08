@@ -55,10 +55,15 @@ namespace salmon {
        "transcript identifier and the \"gene_id\" is assumed to contain the "
        "corresponding "
        "gene identifier.")
+      ("auxTargetFile", po::value(&(sopt.auxTargetFile))->default_value(salmon::defaults::auxTargetFile),
+      "A file containing a list of \"auxiliary\" targets.  These are valid targets (i.e., not decoys) to "
+      "which fragments are allowed to map and be assigned, and which will be quantified, but for which "
+      "auxiliary models like sequence-specific and fragment-GC bias correction should not be applied."
+      )
       ("meta", po::bool_switch(&(sopt.meta))->default_value(salmon::defaults::metaMode),
        "If you're using Salmon on a metagenomic dataset, consider setting this "
-       "flag to disable parts of the "
-       "abundance estimation model that make less sense for metagenomic data.");
+       "flag to disable parts of the abundance estimation model that make less "
+       "sense for metagenomic data.");
 
     // use rich eq classes by default
     sopt.noRichEqClasses = salmon::defaults::noRichEqClasses;
@@ -189,6 +194,15 @@ namespace salmon {
        "(i.e. weighting mappings by their alignment score) usually yields slightly more accurate abundance estimates "
        "but this flag may be desirable if you want more accurate 'naive' equivalence classes, rather "
        "than range factorized equivalence classes."
+       )
+       ("minAlnProb",
+       po::value<double>(&(sopt.minAlnProb))->default_value(salmon::defaults::minAlnProb),
+       "[selective-alignment mode only] : Any mapping whose alignment probability (as computed by "
+       "P(aln) = exp(-scoreExp * difference from best mapping score) is less than minAlnProb will "
+       "not be considered as a valid alignment for this read.  The goal of this flag is to remove "
+       "very low probability alignments that are unlikely to have any non-trivial effect on the "
+       "final quantifications.  Filtering such alignments reduces the number of variables that need "
+       "to be considered and can result in slightly faster inference and 'cleaner' equivalence classes."
        )
       /*
       ("allowOrphansFMD",
@@ -485,6 +499,14 @@ namespace salmon {
        "\'|\' character.  These reduced names will be used in "
        "the output and when looking for these transcripts in a gene to "
        "transcript GTF.")
+      ("scoreExp", 
+      po::value<double>(&sopt.scoreExp)->default_value(salmon::defaults::scoreExp),
+      "The factor by which sub-optimal alignment scores are "
+      "downweighted to produce a probability.  If the best alignment score for the current read is S, and the score "
+      "for a particular alignment is w, then the probability will be computed porportional to exp( - scoreExp * (S-w) ). "
+      "NOTE: This flag only has an effect if you are parsing alignments produced by salmon itself (i.e. pufferfish or "
+      "RapMap in selective-alignment mode)."
+      )
       (
        "mappingCacheMemoryLimit",
        po::value<uint32_t>(&(sopt.mappingCacheMemoryLimit))
@@ -779,7 +801,7 @@ namespace salmon {
     return testing;
   }
 
-  po::options_description ProgramOptionsGenerator::getDeprecatedOptions(SalmonOpts& sopt) {
+  po::options_description ProgramOptionsGenerator::getDeprecatedOptions(SalmonOpts& /*sopt*/) {
     using std::string;
     using std::vector;
 

@@ -21,6 +21,8 @@ namespace salmon {
         return "minimap2";
       case AlignerDetails::RAPMAP:
         return "RapMap";
+      case AlignerDetails::PUFFERFISH:
+        return "pufferfish";
       case AlignerDetails::UNKNOWN:
         return "unknown";
       default:
@@ -35,7 +37,8 @@ namespace salmon {
          {"star", AlignerDetails::STAR},
          {"bwa", AlignerDetails::BWA_MEM},
          {"minimap2", AlignerDetails::MINIMAP2},
-         {"rapmap", AlignerDetails::RAPMAP}
+         {"rapmap", AlignerDetails::RAPMAP},
+         {"pufferfish", AlignerDetails::PUFFERFISH}
         };
 
       AlignerDetails aligner = AlignerDetails::UNKNOWN;

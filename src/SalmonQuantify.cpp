@@ -201,7 +201,7 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
 
   std::vector<FragmentStartPositionDistribution>& fragStartDists =
       readExp.fragmentStartPositionDistributions();
-  auto& biasModel = readExp.sequenceBiasModel();
+  //auto& biasModel = readExp.sequenceBiasModel();
   auto& observedGCMass = observedBiasParams.observedGCMass;
   auto& obsFwd = observedBiasParams.massFwd;
   auto& obsRC = observedBiasParams.massRC;
@@ -751,11 +751,11 @@ void processReads(
      * NOTE : test new el model in future
      * EffectiveLengthStats& obsEffLengths,
      **/
-    SalmonOpts& salmonOpts, double coverageThresh,
+    SalmonOpts& salmonOpts, 
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
-    volatile bool& writeToCache,
+    volatile bool& /*writeToCache*/,
     MappingStatistics& mstats,
-    size_t threadID) {
+    size_t /*threadID*/) {
 
   uint64_t count_fwd = 0, count_bwd = 0;
   // Seed with a real random value, if available
@@ -974,6 +974,8 @@ void processReads(
                                                         firstDecoyIndex,
                                                         mpol, hctr);
 
+        tooManyHits = jointHits.size() > salmonOpts.maxReadOccs;
+
         // IMPORTANT NOTE : Orphan recovery currently assumes a
         // library type where mates are on separate strands
         // so (IU, ISF, ISR).  If the library type is different
@@ -997,13 +999,18 @@ void processReads(
           upperBoundHits += (jointHits.size() > 0);
         }
 
+        // FIXME: This clears the alignment group, but that contains nothing 
+        // at this point.  We should either check only once we are at the alignment
+        // phase (and therefore filter nothing based on pre-alignment hits), or 
+        // clear the jointHits at this point.
+
         // If the read mapped to > maxReadOccs places, discard it
-        if (jointHits.size() > salmonOpts.maxReadOccs) {
+        if (tooManyHits) {
           jointAlignmentGroup.clearAlignments();
         }
       }
 
-      // TODO : PF_INTEGRATION
+      // TODO: PF_INTEGRATION
       // NOTE : Under our new definition of orphans, alignments of read ends
       // can be orphans even if the other read end aligns to the same reference.
       // It only matters that the alignments were not paired.  Thus, it is possible
@@ -1089,6 +1096,7 @@ void processReads(
                                        tryAlign,
                                        hardFilter,
                                        salmonOpts.scoreExp,
+                                       salmonOpts.minAlnProb,
                                        msi,
                                        /*
                                        bestScore,
@@ -1367,11 +1375,11 @@ void processReads(
      * NOTE : test new el model in future
      * EffectiveLengthStats& obsEffLengths,
      **/
-    SalmonOpts& salmonOpts, double coverageThresh,
+    SalmonOpts& salmonOpts, 
     std::mutex& iomutex, bool initialRound, std::atomic<bool>& burnedIn,
-    volatile bool& writeToCache,
+    volatile bool& /*writeToCache*/,
     MappingStatistics& mstats,
-    size_t threadID) {
+    size_t /*threadID*/) {
 
    uint64_t count_fwd = 0, count_bwd = 0;
    // Seed with a real random value, if available
@@ -1477,8 +1485,6 @@ void processReads(
        auto& rp = rg[i];
        readLen = rp.seq.length();
        tooShort = (readLen < minK);
-       //tooManyHits = false;
-       //localUpperBoundHits = 0;
        auto& jointHitGroup = structureVec[i];
        jointHitGroup.clearAlignments();
        auto& jointAlignments = jointHitGroup.alignments();
@@ -1528,8 +1534,14 @@ void processReads(
            upperBoundHits += (jointHits.size() > 0);
          }
 
+        // FIXME: This clears the alignment group, but that contains nothing 
+        // at this point.  We should either check only once we are at the alignment
+        // phase (and therefore filter nothing based on pre-alignment hits), or 
+        // clear the jointHits at this point.
+
          // If the read mapped to > maxReadOccs places, discard it
-         if (jointHits.size() > salmonOpts.maxReadOccs) {
+         tooManyHits = jointHits.size() > salmonOpts.maxReadOccs;
+         if (tooManyHits) {
            jointHitGroup.clearAlignments();
          }
 
@@ -1578,6 +1590,7 @@ void processReads(
                                       tryAlign,
                                       hardFilter,
                                       salmonOpts.scoreExp,
+                                      salmonOpts.minAlnProb,
                                       msi,
                                       /*
                                       bestScore,
@@ -1742,7 +1755,7 @@ void processReadLibrary(
     bool initialRound, std::atomic<bool>& burnedIn,
     ForgettingMassCalculator& fmCalc,
     FragmentLengthDistribution& fragLengthDist, 
-    SalmonOpts& salmonOpts, double coverageThresh, bool greedyChain,
+    SalmonOpts& salmonOpts,  
     std::mutex& iomutex, size_t numThreads,
     std::vector<AlnGroupVec<AlnT>>& structureVec, volatile bool& writeToCache, MappingStatistics& mstats) {
 
@@ -1798,7 +1811,7 @@ void processReadLibrary(
                         numObservedFragments, numAssignedFragments, numValidHits,
                         upperBoundHits, index, transcripts,
                         fmCalc, clusterForest, fragLengthDist, observedBiasParams[i],
-                        salmonOpts, coverageThresh, iomutex, initialRound,
+                        salmonOpts, iomutex, initialRound,
                         burnedIn, writeToCache, mstats, i);
     };
     threads.emplace_back(threadFun);
@@ -1976,10 +1989,10 @@ void processReadLibrary(
  *
  */
 template <typename AlnT>
-void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
+void quantifyLibrary(ReadExperimentT& experiment, 
                      SalmonOpts& salmonOpts,
                      MappingStatistics& mstats,
-                     double coverageThresh, uint32_t numQuantThreads) {
+                     uint32_t numQuantThreads) {
 
   bool burnedIn = (salmonOpts.numBurninFrags == 0);
   uint64_t numRequiredFragments = salmonOpts.numRequiredFragments;
@@ -2067,7 +2080,7 @@ void quantifyLibrary(ReadExperimentT& experiment, bool greedyChain,
                                numObservedFragments, totalAssignedFragments,
                                upperBoundHits, initialRound, burnedIn, fmCalc,
                                fragLengthDist, salmonOpts,
-                               coverageThresh, greedyChain, ioMutex,
+                               ioMutex,
                                numQuantThreads, groupVec, writeToCache, mstats);
 
       numAssignedFragments = totalAssignedFragments - prevNumAssignedFragments;
@@ -2272,7 +2285,6 @@ transcript abundance from RNA-seq reads
     auto jointLog = sopt.jointLog;
     auto indexDirectory = sopt.indexDirectory;
     auto outputDirectory = sopt.outputDirectory;
-    bool greedyChain = true;
 
     jointLog->info("parsing read library format");
 
@@ -2335,8 +2347,8 @@ transcript abundance from RNA-seq reads
 
         sopt.allowOrphans = !sopt.discardOrphansQuasi;
         sopt.useQuasi = true;
-        quantifyLibrary<QuasiAlignment>(experiment, greedyChain,
-                                        sopt, mstats, sopt.coverageThresh, sopt.numThreads);
+        quantifyLibrary<QuasiAlignment>(experiment, 
+                                        sopt, mstats, sopt.numThreads);
       } break;
       }
     } catch (const InsufficientAssignedFragments& iaf) {

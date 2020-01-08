@@ -19,6 +19,10 @@
 <HEADER
 **/
 
+#ifndef __SALMON_MAPPING_UTILS__
+#define __SALMON_MAPPING_UTILS__
+
+
 #include <algorithm>
 #include <atomic>
 #include <cassert>
@@ -186,6 +190,7 @@ inline void filterAndCollectAlignments(
                                        bool tryAlign,
                                        bool hardFilter,
                                        double scoreExp,
+                                       double minAlnProb,
                                        // intentionally passing by value below --- come back
                                        // and make sure it's necessary
                                        salmon::mapping_utils::MappingScoreInfo msi,
@@ -230,6 +235,8 @@ inline void filterAndCollectAlignments(
     double v = bestScoreD - currScore;
     // why -1?
     double estAlnProb = hardFilter ? -1.0 : std::exp(- scoreExp * v );
+    // skip any alignment with aln prob < minAlnProb
+    if (!hardFilter and (estAlnProb < minAlnProb)) { continue; }
 
     if (singleEnd or jointHit.isOrphan()) {
       readLen = jointHit.isLeftAvailable() ? readLen : mateLen;
@@ -283,3 +290,5 @@ inline void filterAndCollectAlignments(
 
   } // namespace mapping_utils
 } // namespace salmon
+
+#endif //__SALMON_MAPPING_UTILS__

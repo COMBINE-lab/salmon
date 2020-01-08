@@ -92,8 +92,8 @@ divide_work(Iterator begin, Iterator end, std::size_t n) {
 template <typename EQVecT>
 void sampleRoundNonCollapsedMultithreaded_(
     EQVecT& eqVec,
-    std::vector<bool>& active, std::vector<uint32_t>& activeList,
-    std::vector<uint64_t>& countMap, std::vector<double>& probMap,
+    /*std::vector<bool>& active,*/ std::vector<uint32_t>& activeList,
+    /*std::vector<uint64_t>& countMap,*/ std::vector<double>& probMap,
     std::vector<double>& muGlobal, Eigen::VectorXd& effLens,
     const std::vector<double>& priorAlphas, std::vector<double>& txpCount,
     std::vector<uint32_t>& offsetMap,
@@ -314,8 +314,8 @@ bool CollapsedGibbsSampler::sample(
   // Fill in the effective length vector
   Eigen::VectorXd effLens(transcripts.size());
 
-  auto& eqVec =
-      readExp.equivalenceClassBuilder().eqVec();
+  auto& eqBuilder = readExp.equivalenceClassBuilder();
+  auto& eqVec = eqBuilder.eqVec();
 
   using VecT = CollapsedGibbsSampler::VecType;
 
@@ -357,9 +357,12 @@ bool CollapsedGibbsSampler::sample(
   std::vector<uint32_t> offsetMap(eqVec.size(), 0);
   for (size_t i = 0; i < eqVec.size(); ++i) {
     if (eqVec[i].first.valid) {
-      countMapSize +=
-          eqVec[i].second.weights.size(); // eqVec[i].first.txps.size();
-      for (auto t : eqVec[i].first.txps) {
+      size_t numTranscripts = eqBuilder.getNumTranscriptsForClass(i);
+      countMapSize += numTranscripts;
+          // eqVec[i].second.weights.size(); 
+      const auto& txpVec = eqVec[i].first.txps;
+      for (size_t tidx = 0; tidx < numTranscripts; ++tidx) {
+        auto t = txpVec[tidx];
         active[t] = true;
       }
       if (i < eqVec.size() - 1) {
@@ -440,9 +443,9 @@ bool CollapsedGibbsSampler::sample(
     for (size_t i = 0; i < numInternalRounds; ++i) {
       sampleRoundNonCollapsedMultithreaded_(
           eqVec,      // encodes equivalence classes
-          active,     // the set of active transcripts
+          /*active,     // the set of active transcripts*/
           activeList, // the list of active transcript ids
-          countMap,   // the count of reads in each eq coming from each eq class
+          /*countMap,   // the count of reads in each eq coming from each eq class*/
           probMap, // the probability of reads in each eq class coming from each
                    // txp
           mu,      // transcript fractions
