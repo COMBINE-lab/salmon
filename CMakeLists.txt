@@ -183,6 +183,14 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
     elseif(NOT (GCC_VERSION VERSION_GREATER ${GCCVERSION} OR GCC_VERSION VERSION_EQUAL ${GCCVERSION}))
       message(FATAL_ERROR "${PROJECT_NAME} requires g++ ${GCCVERSION} or greater.")
     endif()
+    
+    if(GCC_VERSION VERSION_GREATER_EQUAL "7.1")
+      list(APPEND TGT_WARN_FLAGS "-Wno-int-in-bool-context")
+    endif()
+    
+    if(GCC_VERSION VERSION_GREATER_EQUAL "9.1")
+      list(APPEND TGT_WARN_FLAGS "-Wno-deprecated-copy")
+    endif()
 
     set(GCC TRUE)
 
@@ -810,6 +818,7 @@ if(NOT HAVE_FAST_MALLOC)
       BUILD_IN_SOURCE TRUE
       INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
       CONFIGURE_COMMAND sh -c "${JEMALLOC_FLAGS} ./autogen.sh --disable-debug ${MALLOC_STATIC_BUILD_FLAG} --prefix=<INSTALL_DIR>"
+      #CONFIGURE_COMMAND sh -c "${JEMALLOC_FLAGS} ./autogen.sh ${MALLOC_STATIC_BUILD_FLAG} --prefix=<INSTALL_DIR>"
       INSTALL_COMMAND cp -r lib <INSTALL_DIR>/ && cp -r include <INSTALL_DIR>/
       )
 
