@@ -21,7 +21,7 @@ extraction:
       command:
         - mkdir build
         - cd build
-        - cmake -DFETCH_STADEN=TRUE ..
+        - cmake -DFETCH_STADEN=TRUE -DNO_IPO=TRUE ..
     index:
       build_command:
         - cd build
