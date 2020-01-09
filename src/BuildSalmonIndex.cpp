@@ -203,6 +203,14 @@ Creates a salmon index.
         idxOpt.k = 31;
       }
 
+      // give the user a warning if they are not using any decoy file
+      if (idxOpt.decoy_file.empty()) {
+        jointLog->warn("The salmon index is being built without any decoy sequences.  It is recommended that "
+                      "decoy sequence (either computed auxiliary decoy sequence or the genome of the organism) "
+                      "be provided during indexing. Further details can be found at "
+                      "https://salmon.readthedocs.io/en/latest/salmon.html#preparing-transcriptome-indices-mapping-based-mode.");
+      }
+
       if (gencodeRef) {
         idxOpt.header_sep = "|";
       }

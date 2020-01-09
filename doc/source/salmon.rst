@@ -16,33 +16,32 @@ step, obviously, is specific to the set of RNA-seq reads and is thus run more
 frequently. For a more complete description of all available options in Salmon,
 see below.
 
-.. note:: Mapping validation in mapping-based mode
+.. note:: Selective alignment
 
-   Selective alignment, enabled by the ``--validateMappings`` flag, is a major
-   feature enhancement introduced in recent versions of salmon. When salmon is
-   run with selective alignment, it adopts a considerably more sensitive scheme
-   that we have developed for finding the potential mapping loci of a read, and
-   score potential mapping loci using the chaining algorithm introdcued in
-   minimap2 [#minimap2]_. It scores and validates these mappings using
-   the score-only, SIMD, dynamic programming algorithm of ksw2 [#ksw2]_.
-   Finally, we recommend using selective alignment with a *decoy-aware* transcriptome,
-   to mitigate potential spurious mapping of reads that actually arise from some
-   unannotated genomic locus that is sequence-similar to an annotated transcriptome.
-   The selective-alignment algorithm, the use of a decoy-aware transcriptome, and
-   the influence of running salmon with different mapping and alignment strategies
-   is covered in detail in the paper `Alignment and mapping methodology influence transcript abundance estimation <https://www.biorxiv.org/content/10.1101/657874v1>`_.
+   Selective alignment, first introduced by the ``--validateMappings`` flag
+   in salmon, and now the default mapping strategy (in version 1.0.0
+   forward), is a major feature enhancement introduced in recent versions of
+   salmon. When salmon is run with selective alignment, it adopts a
+   considerably more sensitive scheme that we have developed for finding the
+   potential mapping loci of a read, and score potential mapping loci using
+   the chaining algorithm introdcued in minimap2 [#minimap2]_. It scores and
+   validates these mappings using the score-only, SIMD, dynamic programming
+   algorithm of ksw2 [#ksw2]_. Finally, we recommend using selective
+   alignment with a *decoy-aware* transcriptome, to mitigate potential
+   spurious mapping of reads that actually arise from some unannotated
+   genomic locus that is sequence-similar to an annotated transcriptome. The
+   selective-alignment algorithm, the use of a decoy-aware transcriptome, and
+   the influence of running salmon with different mapping and alignment
+   strategies is covered in detail in the paper `Alignment and mapping methodology influence transcript abundance estimation <https://www.biorxiv.org/content/10.1101/657874v1>`_.
 
    The use of selective alignment implies the use of range factorization, as mapping
    scores become very meaningful with this option. Selective alignment can
    improve the accuracy, sometimes considerably, over the faster, but
-   less-precise default mapping algorithm. As of salmon v0.13.1, we highly
-   recommend all users adopt selective alignment unless they have a specific
-   reason to avoid it. It is likely that this option will be enabled by default
-   in a future release. Also, there are a number of options and flags that allow
-   the user to control details about how the scoring is carried out, including
-   setting match, mismatch, and gap scores, and choosing the minimum score
-   below which an alignment will be considered invalid, and therefore not
-   used for the purposes of quantification. 
+   less-precise mapping algorithm that was previously used.  Also, there are a number of 
+   options and flags that allow the user to control details about how the scoring is 
+   carried out, including setting match, mismatch, and gap scores, and choosing the minimum 
+   score below which an alignment will be considered invalid, and therefore not used for the
+   purposes of quantification. 
 
 The **alignment**-based mode of Salmon does not require indexing.  Rather, you can 
 simply provide Salmon with a FASTA file of the transcripts and a SAM/BAM file
@@ -105,21 +104,33 @@ Preparing transcriptome indices (mapping-based mode)
 
 One of the novel and innovative features of Salmon is its ability to accurately
 quantify transcripts without having previously aligned the reads using its fast,
-built-in mapping algorithms (either *quasi-mapping* or *selective alignment*).
-These approaches are typically **much** faster to compute than traditional (or
-full) alignments. Further details about the selective alignment algorithm can be
-found `here <https://www.biorxiv.org/content/10.1101/657874v1>`_ and more
-details about quasi-mapping can be found `in this paper <http://bioinformatics.oxfordjournals.org/content/32/12/i192.full>`_.
+built-in selective-alignment mapping algorithm. Further details about the selective alignment algorithm can be
+found `here <https://www.biorxiv.org/content/10.1101/657874v1>`_.
 
 If you want to use Salmon in mapping-based mode, then you first have to build a
 salmon index for your transcriptome. Assume that ``transcripts.fa`` contains the
 set of transcripts you wish to quantify. We generally recommend that you build a
-*decoy-aware* transcriptome file and do quantification using selective alignment, which can be done with the
-`generateDecoyTranscriptome.sh
-<https://github.com/COMBINE-lab/SalmonTools/blob/master/scripts/generateDecoyTranscriptome.sh>`_
-script, whose instructions you can find `in this README 
-<https://github.com/COMBINE-lab/SalmonTools/blob/master/README.md>`_. First, you
-run the salmon indexer:
+*decoy-aware* transcriptome file. 
+
+There are two options for generating a decoy-aware transcriptome:
+
+- The first is to compute a set of decoy sequences by mapping the annotated transcripts you wish to index
+  against a hard-masked version of the organism's genome.  This can be done with e.g. 
+  `MashMap2  <https://github.com/marbl/MashMap>`_, and we provide some simple scripts to 
+  greatly simplify this whole process.  Specifically, you can use the 
+  `generateDecoyTranscriptome.sh <https://github.com/COMBINE-lab/SalmonTools/blob/master/scripts/generateDecoyTranscriptome.sh>`_
+  script, whose instructions you can find `in this README <https://github.com/COMBINE-lab/SalmonTools/blob/master/README.md>`_. 
+
+- The second is to use the entire genome of the organism as the decoy sequence. This can be 
+  done by concatenating the genome to the end of the transcriptome you want to index and populating 
+  the `decoys.txt` file with the chromosome names.  Detailed instructions on how to prepare this 
+  type of decoy sequence is available `here <https://combine-lab.github.io/alevin-tutorial/2019/selective-alignment/>`_.
+  This scheme provides a more comprehensive set of decoys, but, obviously, requires considerably more memory to build the index.
+
+Finally, pre-built versions of both the *partial* decoy and *full* decoy (i.e. using the whole genome) salmon indices 
+for some common organisms are available via refgenie `here <http://refgenomes.databio.org/>`_.
+
+If you are not using a pre-computed index, you run the salmon indexer as so:
 
 ::
     
@@ -135,12 +146,6 @@ to work well for reads of 75bp or longer, but you might consider a smaller
 improve sensitivity even more when using selective alignment (enabled via the `--validateMappings` flag).  So,
 if you are seeing a smaller mapping rate than you might expect, consider building
 the index with a slightly smaller `k`.  
-
-.. note:: Decoy-augmented transcriptomes and quasi-mapping
-   Currently, the use of decoy-augmented transcriptomes is only supported in 
-   conjunction with selective-alignment (via the `--validateMappings`, `--mimicBT2`
-   or `--mimicStrictBT2` flags.  For the time being, if you wish to quantify using 
-   quasi-mapping, you should not build a decoy-augmented index.
 
 Quantifying in mapping-based mode
 ---------------------------------------
