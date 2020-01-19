@@ -339,7 +339,18 @@ bool CollapsedGibbsSampler::sample(
   }
 
   bool perTranscriptPrior = (sopt.useVBOpt) ? sopt.perTranscriptPrior : true;
-  double priorValue = (sopt.useVBOpt) ? sopt.vbPrior : 1e-4;
+  // for Gibbs sampling, we really want a notion of the uncertainty, and we 
+  // should steer away from sparsity more than we do when computing an MLE/MAP
+  // we set the minimum prior to 1 or 1e-3 if it is per-nucleotide
+  double prior = 1e-3; // prior to use if main algo was EM
+  if (sopt.useVBOpt) {
+    if (perTranscriptPrior) {
+      prior = (sopt.vbPrior  < 1.0) ? 1.0 : sopt.vbPrior;
+    } else { // per-nucleotide
+      prior = (sopt.vbPrior < 1e-3) ? 1e-3 : sopt.vbPrior;
+    } 
+  }
+  double priorValue = prior;
   std::vector<double> priorAlphas = populatePriorAlphasGibbs_(
       transcripts, effLens, priorValue, perTranscriptPrior);
   /** DEBUG
