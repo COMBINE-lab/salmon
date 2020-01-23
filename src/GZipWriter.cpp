@@ -13,6 +13,7 @@
 #include "ReadExperiment.hpp"
 #include "ReadPair.hpp"
 #include "SalmonOpts.hpp"
+#include "SalmonUtils.hpp"
 #include "UnpairedRead.hpp"
 #include "TranscriptGroup.hpp"
 #include "SingleCellProtocols.hpp"
@@ -376,6 +377,7 @@ template <typename ExpT>
 bool GZipWriter::writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
                                 std::vector<std::string>& errors) {
   namespace bfs = boost::filesystem;
+  using salmon::utils::DuplicateTargetStatus;
 
   bfs::path auxDir = path_ / opts.auxDir;
   bool auxSuccess = boost::filesystem::create_directories(auxDir);
@@ -406,6 +408,19 @@ bool GZipWriter::writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
 
     std::string mapTypeStr = opts.alnMode ? "alignment" : "mapping";
     oa(cereal::make_nvp("mapping_type", mapTypeStr));
+
+    auto has_dups = experiment.index_retains_duplicates();
+    switch(has_dups) {
+      case DuplicateTargetStatus::RETAINED_DUPLICATES:
+        oa(cereal::make_nvp("keep_duplicates", true));
+        break;
+      case DuplicateTargetStatus::REMOVED_DUPLICATES:
+        oa(cereal::make_nvp("keep_duplicates", false));
+        break;
+      case DuplicateTargetStatus::UNKNOWN:
+      default:
+        break;
+    }
 
     auto numValidTargets = transcripts.size();
     auto numDecoys = experiment.getNumDecoys();
@@ -511,6 +526,7 @@ template <typename ExpT>
 bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const MappingStatistics& mstats) {
 
   namespace bfs = boost::filesystem;
+  using salmon::utils::DuplicateTargetStatus;
 
   bfs::path auxDir = path_ / opts.auxDir;
   bool auxSuccess = boost::filesystem::create_directories(auxDir);
@@ -757,6 +773,19 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
 
     std::string mapTypeStr = opts.alnMode ? "alignment" : "mapping";
     oa(cereal::make_nvp("mapping_type", mapTypeStr));
+
+    auto has_dups = experiment.index_retains_duplicates();
+    switch(has_dups) {
+      case DuplicateTargetStatus::RETAINED_DUPLICATES:
+        oa(cereal::make_nvp("keep_duplicates", true));
+        break;
+      case DuplicateTargetStatus::REMOVED_DUPLICATES:
+        oa(cereal::make_nvp("keep_duplicates", false));
+        break;
+      case DuplicateTargetStatus::UNKNOWN:
+      default:
+        break;
+    }
 
     auto numValidTargets = transcripts.size();
     auto numDecoys = experiment.getNumDecoys();

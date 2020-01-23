@@ -58,6 +58,12 @@ enum class MappingType : uint8_t {
   SINGLE_MAPPED = 5
 };
 
+enum class DuplicateTargetStatus : uint8_t { 
+  UNKNOWN = 0, 
+  RETAINED_DUPLICATES = 1, 
+  REMOVED_DUPLICATES = 2 
+};
+
 std::string str(const MappingType& mt);
 
 // To keep track of short fragments (shorter than the k-mer length)

@@ -9,11 +9,13 @@
 #include "cereal/archives/json.hpp"
 #include "cereal/types/vector.hpp"
 #include "spdlog/spdlog.h"
+#include "json.hpp"
 
 #include "pufferfish/ProgOpts.hpp"
 #include "pufferfish/PufferfishIndex.hpp"
 #include "pufferfish/PufferfishSparseIndex.hpp"
 
+#include "SalmonUtils.hpp"
 #include "SalmonConfig.hpp"
 #include "SalmonIndexVersionInfo.hpp"
 
@@ -98,6 +100,10 @@ public:
   std::string decoySeqHash256() const { return decoySeqHash256_; }
   std::string decoyNameHash256() const { return decoyNameHash256_; }
 
+  salmon::utils::DuplicateTargetStatus index_retains_duplicates() const { 
+    return keep_duplicates_; 
+  }
+
 private:
   bool buildPuffIndex_(boost::filesystem::path indexDir, pufferfish::IndexOptions& idxOpt) {
     namespace bfs = boost::filesystem;
@@ -126,19 +132,46 @@ private:
       std::string sampling_type_;
       int version_;
       std::ifstream indexStream(indexStr + "info.json");
-      {
-        cereal::JSONInputArchive ar(indexStream);
-        ar(cereal::make_nvp("sampling_type", sampling_type_),
-           cereal::make_nvp("SeqHash", seqHash256_),
-           cereal::make_nvp("NameHash", nameHash256_),
-           cereal::make_nvp("SeqHash512", seqHash512_),
-           cereal::make_nvp("NameHash512", nameHash512_),
-           cereal::make_nvp("DecoySeqHash", decoySeqHash256_),
-           cereal::make_nvp("DecoyNameHash", decoyNameHash256_),
-           cereal::make_nvp("index_version", version_)
-           );
+      if (indexStream.is_open()) {
+        nlohmann::json info_arch;
+        indexStream >> info_arch;
+
+        sampling_type_ = info_arch["sampling_type"];
+        seqHash256_ = info_arch["SeqHash"];
+        nameHash256_ = info_arch["NameHash"];
+        seqHash512_ = info_arch["SeqHash512"];
+        nameHash512_ = info_arch["NameHash512"];
+        decoySeqHash256_ = info_arch["DecoySeqHash"];
+        decoyNameHash256_ = info_arch["DecoyNameHash"];
+        version_ = info_arch["index_version"];
+        (void) version_;
+        if (info_arch.find("keep_duplicates") != info_arch.end()) {
+          bool kd = info_arch["keep_duplicates"];
+          keep_duplicates_ = kd ? salmon::utils::DuplicateTargetStatus::RETAINED_DUPLICATES : 
+            salmon::utils::DuplicateTargetStatus::REMOVED_DUPLICATES;
+        } else {
+          logger_->warn("The index did not record if the `--keepDuplicates` flag was used. "
+          "Please consider re-indexing with a newer version of salmon that will propagate this information.");
+        }
+      } else {
+        logger_->critical(
+            "Could not properly open the info.json file from the index : {}.",
+            indexStr + "info.json");
       }
       indexStream.close();
+      /*
+      cereal::JSONInputArchive ar(indexStream);
+      ar(cereal::make_nvp("sampling_type", sampling_type_),
+         cereal::make_nvp("SeqHash", seqHash256_),
+         cereal::make_nvp("NameHash", nameHash256_),
+         cereal::make_nvp("SeqHash512", seqHash512_),
+         cereal::make_nvp("NameHash512", nameHash512_),
+         cereal::make_nvp("DecoySeqHash", decoySeqHash256_),
+         cereal::make_nvp("DecoyNameHash", decoyNameHash256_),
+         cereal::make_nvp("index_version", version_));
+      }
+      indexStream.close();
+      */
 
       /*
       if (h.version() != salmon::requiredQuasiIndexVersion) {
@@ -198,6 +231,7 @@ private:
   bool largeQuasi_{false};
   bool perfectHashQuasi_{false};
 
+  salmon::utils::DuplicateTargetStatus keep_duplicates_{salmon::utils::DuplicateTargetStatus::UNKNOWN};
   bool sparse_{false};
   std::unique_ptr<PufferfishIndex> pfi_{nullptr};
   std::unique_ptr<PufferfishSparseIndex> pfi_sparse_{nullptr};

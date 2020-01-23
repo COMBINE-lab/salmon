@@ -504,6 +504,10 @@ for (auto& txp : transcripts_) {
     return numDecoys_;
   }
 
+  salmon::utils::DuplicateTargetStatus index_retains_duplicates() const { 
+    return salmon::utils::DuplicateTargetStatus::UNKNOWN; 
+  }
+
 private:
 
   void setTranscriptLengthClasses_(std::vector<uint32_t>& lengths,
