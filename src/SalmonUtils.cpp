@@ -1942,7 +1942,7 @@ bool processQuantOptions(SalmonOpts& sopt,
       jointLog->critical("Note: Alignment-free mapping (i.e. mapping without subsequent selective-alignment) "
                          "has not yet been throughly tested under the pufferfish-based index and using the "
                          "pufferfish-based mapping strategies.  Thus, disabling of selective-alignment "
-                         "is not currently allowed.  We will explore re-enabling this option in future "
+                         "is not currently allowed.  We may, potentially explore re-enabling this option in future "
                          "versions of salmon.");
       jointLog->flush();
       return false;
