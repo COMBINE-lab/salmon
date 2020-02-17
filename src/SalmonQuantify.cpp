@@ -18,7 +18,6 @@
     along with Salmon.  If not, see <http://www.gnu.org/licenses/>.
 <HEADER
 **/
-
 #include <algorithm>
 #include <atomic>
 #include <cassert>
