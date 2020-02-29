@@ -83,6 +83,11 @@ namespace alevin{
                     std::string& umi);
 
     template <typename ProtocolT>
+    void getReadSequence(ProtocolT& pt,
+                         std::string& seq,
+                         std::string& subseq);
+
+    template <typename ProtocolT>
     nonstd::optional<std::string> extractBarcode(std::string& read, ProtocolT& pt);
 
     template <typename OrderedOptionsT>
@@ -100,10 +105,6 @@ namespace alevin{
       }
       return true;
     }
-
-    template <typename ProtocolT>
-    bool readFeatures(AlevinOpts<ProtocolT>& aopt,
-                      std::string& filePath);
 
     void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                          spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,

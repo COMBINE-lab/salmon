@@ -379,8 +379,11 @@ namespace salmon {
        "whitelist", po::value<std::string>(),
        "File containing white-list barcodes")
       (
-       "features", po::value<std::string>(),
-       "File containing features based on 10x format. This flag should be used with citeseq")
+       "featureStart", po::value<size_t>(),
+       "This flag should be used with citeseq and specifies the starting index of the feature barcode on Read2.")
+      (
+       "featureLength", po::value<size_t>(),
+       "This flag should be used with citeseq and specifies the length of the feature barcode.")
       (
        "noQuant", po::bool_switch()->default_value(alevin::defaults::noQuant),
        "Don't run downstream barcode-salmon model.")

@@ -41,6 +41,68 @@ namespace alevin {
 
 
     template <>
+    void getReadSequence(apt::CITESeq& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq.substr(protocol.featureStart,
+                          protocol.featureLength);
+    }
+    template <>
+    void getReadSequence(apt::DropSeq& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq;
+    }
+    template <>
+    void getReadSequence(apt::Chromium& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq;
+    }
+    template <>
+    void getReadSequence(apt::ChromiumV3& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq;
+    }
+    template <>
+    void getReadSequence(apt::CELSeq& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq;
+    }
+    template <>
+    void getReadSequence(apt::CELSeq2& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq;
+    }
+    template <>
+    void getReadSequence(apt::QuartzSeq2& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq;
+    }
+    template <>
+    void getReadSequence(apt::Custom& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq;
+    }
+    template <>
+    void getReadSequence(apt::Gemcode& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq;
+    }
+    template <>
+    void getReadSequence(apt::InDrop& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq;
+    }
+
+    template <>
     bool extractUMI<apt::DropSeq>(std::string& read,
                                   apt::DropSeq& pt,
                                   std::string& umi){
@@ -724,19 +786,6 @@ namespace alevin {
       }
     }
 
-    template <typename ProtocolT>
-    bool readFeatures(AlevinOpts<ProtocolT>& aopt,
-                      std::string& filePath
-                      ){
-      if (!bfs::exists(filePath)) {
-        fmt::print(stderr,"\features File {} does not exists\n Exiting Now",
-                   filePath);
-        return false;
-      }
-
-      return false;
-    }
-
     bool checkSetCoverage(std::vector<std::vector<uint32_t>>& tgroup,
                           std::vector<uint32_t> txps){
       // make sparse hash set for constant membership check
@@ -853,8 +902,5 @@ namespace alevin {
     bool processAlevinOpts(AlevinOpts<apt::QuartzSeq2>& aopt,
                            SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
-    template
-    bool readFeatures(AlevinOpts<apt::CITESeq>& aopt,
-                      std::string& filePath);
   }
 }

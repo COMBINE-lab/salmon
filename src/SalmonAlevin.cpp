@@ -597,7 +597,7 @@ void processReadsQuasi(
                   //auto rh = hitCollector(readSubSeq, saSearcher, hcInfo);
                 }
               } else {
-                readSubSeq = rp.second.seq;
+                aut::getReadSequence(alevinOpts.protocol, rp.second.seq, readSubSeq);
                 auto rh = tooShortRight ? false : memCollector(readSubSeq, qc,
                                        true, // isLeft
                                        false // verbose

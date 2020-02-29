@@ -1028,14 +1028,10 @@ salmon-based processing of single-cell RNA-seq data.
       }
     }
     else if(citeseq){
-      if(vm.count("features") != 0){
+      if(vm.count("featureStart") != 0 and vm.count("featureLength") != 0){
         AlevinOpts<apt::CITESeq> aopt;
-        std::string filePath = vm["features"].as<std::string>();
-        bool featOk = aut::readFeatures(aopt, filePath);
-        if(!featOk) {
-          fmt::print(stderr, "ERROR: In reading features file.\n Exiting Now");
-          exit(1);
-        }
+        aopt.protocol.setFeatureLength(vm["featureLength"].as<size_t>());
+        aopt.protocol.setFeatureStart(vm["featureStart"].as<size_t>());
 
         //aopt.jointLog->warn("Using InDrop Setting for Alevin");
         initiatePipeline(aopt, sopt, orderedOptions,
@@ -1043,7 +1039,7 @@ salmon-based processing of single-cell RNA-seq data.
                          barcodeFiles, readFiles);
       }
       else{
-        fmt::print(stderr, "ERROR: citeseq needs features flag too.\n Exiting Now");
+        fmt::print(stderr, "ERROR: citeseq needs featureStart and featureLength flag too.\n Exiting Now");
         exit(1);
       }
     }
