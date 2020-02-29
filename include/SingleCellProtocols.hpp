@@ -45,6 +45,10 @@ namespace alevin{
       }
     };
 
+    struct CITESeq : Rule{
+      CITESeq(): Rule(16, 12, BarcodeEnd::FIVE, 4294967295){}
+    };
+
     struct ChromiumV3 : Rule{
       ChromiumV3(): Rule(16, 12, BarcodeEnd::FIVE, 4294967295){}
     };

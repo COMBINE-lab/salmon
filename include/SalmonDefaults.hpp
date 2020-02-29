@@ -126,6 +126,7 @@ namespace defaults {
   constexpr const bool isChromiumV3{false};
   constexpr const bool isInDrop{false};
   constexpr const bool isGemcode{false};
+  constexpr const bool isCITESeq{false};
   constexpr const bool isCELSeq{false};
   constexpr const bool isCELSeq2{false};
   constexpr const bool isQuartzSeq2{false};

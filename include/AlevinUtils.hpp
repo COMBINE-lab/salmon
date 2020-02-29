@@ -101,6 +101,10 @@ namespace alevin{
       return true;
     }
 
+    template <typename ProtocolT>
+    bool readFeatures(AlevinOpts<ProtocolT>& aopt,
+                      std::string& filePath);
+
     void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                          spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                          const std::string& t2gFile, const std::string& refNamesFile,

@@ -48,6 +48,13 @@ namespace alevin {
       return true;
     }
     template <>
+    bool extractUMI<apt::CITESeq>(std::string& read,
+                                  apt::CITESeq& pt,
+                                  std::string& umi){
+      umi = read.substr(pt.barcodeLength, pt.umiLength);
+      return true;
+    }
+    template <>
     bool extractUMI<apt::Chromium>(std::string& read,
                                    apt::Chromium& pt,
                                    std::string& umi){
@@ -111,6 +118,14 @@ namespace alevin {
         nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
       // = read.substr(0, pt.barcodeLength);
     //return true;
+    }
+    template <>
+    nonstd::optional<std::string> extractBarcode<apt::CITESeq>(std::string& read,
+                                                               apt::CITESeq& pt){
+      return (read.length() >= pt.barcodeLength) ?
+        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+      // = read.substr(0, pt.barcodeLength);
+      //return true;
     }
     template <>
     nonstd::optional<std::string> extractBarcode<apt::ChromiumV3>(std::string& read,
@@ -709,6 +724,19 @@ namespace alevin {
       }
     }
 
+    template <typename ProtocolT>
+    bool readFeatures(AlevinOpts<ProtocolT>& aopt,
+                      std::string& filePath
+                      ){
+      if (!bfs::exists(filePath)) {
+        fmt::print(stderr,"\features File {} does not exists\n Exiting Now",
+                   filePath);
+        return false;
+      }
+
+      return false;
+    }
+
     bool checkSetCoverage(std::vector<std::vector<uint32_t>>& tgroup,
                           std::vector<uint32_t> txps){
       // make sparse hash set for constant membership check
@@ -790,6 +818,10 @@ namespace alevin {
                            SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
     template
+    bool processAlevinOpts(AlevinOpts<apt::CITESeq>& aopt,
+                           SalmonOpts& sopt,
+                           boost::program_options::variables_map& vm);
+    template
     bool processAlevinOpts(AlevinOpts<apt::InDrop>& aopt,
                            SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
@@ -821,5 +853,8 @@ namespace alevin {
     bool processAlevinOpts(AlevinOpts<apt::QuartzSeq2>& aopt,
                            SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
+    template
+    bool readFeatures(AlevinOpts<apt::CITESeq>& aopt,
+                      std::string& filePath);
   }
 }

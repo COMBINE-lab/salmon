@@ -1603,6 +1603,10 @@ bool GZipWriter::writeEquivCounts<SCExpT, apt::DropSeq>(
                                                         const AlevinOpts<apt::DropSeq>& aopts,
                                                         SCExpT& readExp);
 template
+bool GZipWriter::writeEquivCounts<SCExpT, apt::CITESeq>(
+                                                        const AlevinOpts<apt::CITESeq>& aopts,
+                                                        SCExpT& readExp);
+template
 bool GZipWriter::writeEquivCounts<SCExpT, apt::InDrop>(
                                                        const AlevinOpts<apt::InDrop>& aopts,
                                                        SCExpT& readExp);
@@ -1636,6 +1640,9 @@ bool GZipWriter::writeEquivCounts<SCExpT, apt::Custom>(
                                                        SCExpT& readExp);
 template bool
 GZipWriter::writeMetaAlevin<apt::DropSeq>(const AlevinOpts<apt::DropSeq>& opts,
+                                          boost::filesystem::path aux_dir);
+template bool
+GZipWriter::writeMetaAlevin<apt::CITESeq>(const AlevinOpts<apt::CITESeq>& opts,
                                           boost::filesystem::path aux_dir);
 template bool
 GZipWriter::writeMetaAlevin<apt::InDrop>(const AlevinOpts<apt::InDrop>& opts,
