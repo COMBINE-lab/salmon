@@ -364,6 +364,9 @@ namespace salmon {
        "gemcode", po::bool_switch()->default_value(alevin::defaults::isGemcode),
        "Use 10x gemcode v1 Single Cell protocol for the library.")
       (
+       "citeseq", po::bool_switch()->default_value(alevin::defaults::isCITESeq),
+       "Use CITESeq Single Cell protocol for the library, 16 CB, 12 UMI and features.")
+      (
        "celseq", po::bool_switch()->default_value(alevin::defaults::isCELSeq),
        "Use CEL-Seq Single Cell protocol for the library.")
       (
@@ -375,6 +378,12 @@ namespace salmon {
       (
        "whitelist", po::value<std::string>(),
        "File containing white-list barcodes")
+      (
+       "featureStart", po::value<size_t>(),
+       "This flag should be used with citeseq and specifies the starting index of the feature barcode on Read2.")
+      (
+       "featureLength", po::value<size_t>(),
+       "This flag should be used with citeseq and specifies the length of the feature barcode.")
       (
        "noQuant", po::bool_switch()->default_value(alevin::defaults::noQuant),
        "Don't run downstream barcode-salmon model.")

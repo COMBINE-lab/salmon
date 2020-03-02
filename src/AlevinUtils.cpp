@@ -41,8 +41,77 @@ namespace alevin {
 
 
     template <>
+    void getReadSequence(apt::CITESeq& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq.substr(protocol.featureStart,
+                          protocol.featureLength);
+    }
+    template <>
+    void getReadSequence(apt::DropSeq& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq;
+    }
+    template <>
+    void getReadSequence(apt::Chromium& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq;
+    }
+    template <>
+    void getReadSequence(apt::ChromiumV3& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq;
+    }
+    template <>
+    void getReadSequence(apt::CELSeq& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq;
+    }
+    template <>
+    void getReadSequence(apt::CELSeq2& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq;
+    }
+    template <>
+    void getReadSequence(apt::QuartzSeq2& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq;
+    }
+    template <>
+    void getReadSequence(apt::Custom& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq;
+    }
+    template <>
+    void getReadSequence(apt::Gemcode& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq;
+    }
+    template <>
+    void getReadSequence(apt::InDrop& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq;
+    }
+
+    template <>
     bool extractUMI<apt::DropSeq>(std::string& read,
                                   apt::DropSeq& pt,
+                                  std::string& umi){
+      umi = read.substr(pt.barcodeLength, pt.umiLength);
+      return true;
+    }
+    template <>
+    bool extractUMI<apt::CITESeq>(std::string& read,
+                                  apt::CITESeq& pt,
                                   std::string& umi){
       umi = read.substr(pt.barcodeLength, pt.umiLength);
       return true;
@@ -111,6 +180,14 @@ namespace alevin {
         nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
       // = read.substr(0, pt.barcodeLength);
     //return true;
+    }
+    template <>
+    nonstd::optional<std::string> extractBarcode<apt::CITESeq>(std::string& read,
+                                                               apt::CITESeq& pt){
+      return (read.length() >= pt.barcodeLength) ?
+        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+      // = read.substr(0, pt.barcodeLength);
+      //return true;
     }
     template <>
     nonstd::optional<std::string> extractBarcode<apt::ChromiumV3>(std::string& read,
@@ -787,6 +864,10 @@ namespace alevin {
 
     template
     bool processAlevinOpts(AlevinOpts<apt::DropSeq>& aopt,
+                           SalmonOpts& sopt,
+                           boost::program_options::variables_map& vm);
+    template
+    bool processAlevinOpts(AlevinOpts<apt::CITESeq>& aopt,
                            SalmonOpts& sopt,
                            boost::program_options::variables_map& vm);
     template

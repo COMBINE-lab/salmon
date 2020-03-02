@@ -957,6 +957,7 @@ salmon-based processing of single-cell RNA-seq data.
 
     bool dropseq = vm["dropseq"].as<bool>();
     bool indrop = vm["indrop"].as<bool>();
+    bool citeseq = vm["citeseq"].as<bool>();
     bool chromV3 = vm["chromiumV3"].as<bool>();
     bool chrom = vm["chromium"].as<bool>();
     bool gemcode = vm["gemcode"].as<bool>();
@@ -970,6 +971,7 @@ salmon-based processing of single-cell RNA-seq data.
     uint8_t validate_num_protocols {0};
     if (dropseq) validate_num_protocols += 1;
     if (indrop) validate_num_protocols += 1;
+    if (citeseq) validate_num_protocols += 1;
     if (chromV3) validate_num_protocols += 1;
     if (chrom) validate_num_protocols += 1;
     if (gemcode) validate_num_protocols += 1;
@@ -1022,6 +1024,22 @@ salmon-based processing of single-cell RNA-seq data.
       }
       else{
         fmt::print(stderr, "ERROR: indrop needs w1 flag too.\n Exiting Now");
+        exit(1);
+      }
+    }
+    else if(citeseq){
+      if(vm.count("featureStart") != 0 and vm.count("featureLength") != 0){
+        AlevinOpts<apt::CITESeq> aopt;
+        aopt.protocol.setFeatureLength(vm["featureLength"].as<size_t>());
+        aopt.protocol.setFeatureStart(vm["featureStart"].as<size_t>());
+
+        //aopt.jointLog->warn("Using InDrop Setting for Alevin");
+        initiatePipeline(aopt, sopt, orderedOptions,
+                         vm, commentString,
+                         barcodeFiles, readFiles);
+      }
+      else{
+        fmt::print(stderr, "ERROR: citeseq needs featureStart and featureLength flag too.\n Exiting Now");
         exit(1);
       }
     }

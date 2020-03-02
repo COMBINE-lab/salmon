@@ -597,7 +597,7 @@ void processReadsQuasi(
                   //auto rh = hitCollector(readSubSeq, saSearcher, hcInfo);
                 }
               } else {
-                readSubSeq = rp.second.seq;
+                aut::getReadSequence(alevinOpts.protocol, rp.second.seq, readSubSeq);
                 auto rh = tooShortRight ? false : memCollector(readSubSeq, qc,
                                        true, // isLeft
                                        false // verbose
@@ -1407,6 +1407,16 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
 namespace apt = alevin::protocols;
 template
 int alevinQuant(AlevinOpts<apt::DropSeq>& aopt,
+                SalmonOpts& sopt,
+                SoftMapT& barcodeMap,
+                TrueBcsT& trueBarcodes,
+                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                boost::program_options::parsed_options& orderedOptions,
+                CFreqMapT& freqCounter,
+                size_t numLowConfidentBarcode);
+template
+int alevinQuant(AlevinOpts<apt::CITESeq>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,

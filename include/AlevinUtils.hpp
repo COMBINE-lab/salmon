@@ -83,6 +83,11 @@ namespace alevin{
                     std::string& umi);
 
     template <typename ProtocolT>
+    void getReadSequence(ProtocolT& pt,
+                         std::string& seq,
+                         std::string& subseq);
+
+    template <typename ProtocolT>
     nonstd::optional<std::string> extractBarcode(std::string& read, ProtocolT& pt);
 
     template <typename OrderedOptionsT>
