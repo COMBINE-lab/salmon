@@ -26,9 +26,10 @@ VersionChecker::VersionChecker(boost::asio::io_service& io_service,
   request_stream << "Accept: */*\r\n";
   request_stream << "Connection: close\r\n\r\n";
 
+
+  deadline_.expires_from_now(boost::posix_time::seconds(1));
   deadline_.async_wait(boost::bind(&VersionChecker::cancel_upgrade_check, this,
                                    boost::asio::placeholders::error));
-  deadline_.expires_from_now(boost::posix_time::seconds(1));
 
   // Start an asynchronous resolve to translate the server and service names
   // into a list of endpoints.
