@@ -298,6 +298,25 @@ uint32_t getLeftBoundary(std::vector<size_t>& sortedIdx,
   return 0;
 }
 
+
+void dumpFeatures(std::string& frequencyFileName,
+                  std::vector<size_t>& sortedIdx,
+                  const std::vector<uint32_t>& freqCounter,
+                  std::unordered_map<uint32_t, nonstd::basic_string_view<char>>& colMap
+                  ){
+  std::ofstream freqFile;
+  freqFile.open(frequencyFileName);
+  for (auto i:sortedIdx){
+    uint32_t count = freqCounter[i];
+    if (count == 0){
+      break;
+    }
+    freqFile << colMap[i] << "\t"
+             << count << "\n";
+  }
+  freqFile.close();
+}
+
 /*
   Knee calculation and sample true set of barcodes
  */
@@ -312,7 +331,6 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
   double lowConfidenceFraction { 0.5 };
   uint32_t topxBarcodes = std::min(maxNumBarcodes, freqCounter.size());
   uint64_t history { 0 };
-  uint32_t threshold;
 
   if (aopt.forceCells > 0) {
     topxBarcodes = aopt.forceCells - 1;
@@ -432,25 +450,12 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
                       green, lowRegionNumBarcodes, RESET_COLOR);
   aopt.jointLog->flush();
 
-  threshold = topxBarcodes;
-
-  if(aopt.dumpfeatures){
-    auto frequencyFileName = aopt.outputDirectory / "raw_cb_frequency.txt";
-    std::ofstream freqFile;
-    freqFile.open(frequencyFileName.string());
-    for (auto i:sortedIdx){
-      uint32_t count = freqCounter[i];
-      if (count == 0){
-        break;
-      }
-      freqFile << colMap[i] << "\t"
-               << count << "\n";
-      topxBarcodes--;
-    }
-    freqFile.close();
+  if (aopt.dumpfeatures) {
+    auto frequencyFileName = (aopt.outputDirectory / "raw_cb_frequency.txt").string();
+    dumpFeatures(frequencyFileName, sortedIdx, freqCounter, colMap);
   }
 
-  for (size_t i=0; i<threshold; i++){
+  for (size_t i=0; i<topxBarcodes; i++){
     trueBarcodes.insert(nonstd::to_string(colMap[sortedIdx[i]]));
   }
   aopt.numCells = trueBarcodes.size();
@@ -691,6 +696,22 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
     }
 
     aopt.jointLog->info("Total {} white-listed Barcodes", trueBarcodes.size());
+
+    if (aopt.dumpfeatures) {
+      aopt.jointLog->info("Sorting and dumping raw barcodes");
+      auto frequencyFileName = (aopt.outputDirectory / "raw_cb_frequency.txt").string();
+      std::vector<uint32_t> collapsedfrequency;
+      std::unordered_map<uint32_t, nonstd::basic_string_view<char>> collapMap;
+      size_t ind{0};
+      for(auto fqIt = freqCounter.begin(); fqIt != freqCounter.end(); ++fqIt){
+        collapsedfrequency.push_back(fqIt.value());
+        collapMap[ind] = fqIt.key_sv();
+        ind += 1;
+      }
+
+      std::vector<size_t> sortedIdx = sort_indexes(collapsedfrequency);
+      dumpFeatures(frequencyFileName, sortedIdx, collapsedfrequency, collapMap);
+    }
   }
   else {
     std::vector<uint32_t> collapsedfrequency;
