@@ -107,6 +107,15 @@ inline bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& mem
   aconf.mimicBT2 = salmonOpts.mimicBT2;
   aconf.mimicBT2Strict = salmonOpts.mimicStrictBT2;
   aconf.allowOverhangSoftclip = salmonOpts.softclipOverhangs;
+  aconf.allowSoftclip  = salmonOpts.softclip; 
+
+  aconf.alignmentMode = pufferfish::util::PuffAlignmentMode::SCORE_ONLY;
+
+  // we actually care about the softclips in the cigar string 
+  // if we are writing output and softclipping is enabled
+  if ( (!salmonOpts.qmFileName.empty()) and (salmonOpts.softclip or salmonOpts.softclipOverhangs) ) {
+    aconf.alignmentMode = pufferfish::util::PuffAlignmentMode::APPROXIMATE_CIGAR;
+  }
 
   mpol.noOrphans = !salmonOpts.allowOrphans;
   // TODO : PF_INTEGRATION

@@ -171,6 +171,16 @@ namespace salmon {
        "RSEM+Bowtie2.  This increases --minScoreFraction to 0.8, disallows dovetailing reads, "
        "discards orphans, and disallows gaps in alignments."
        )
+      ("softclip", 
+       po::bool_switch(&(sopt.softclip))->default_value(salmon::defaults::softclip),
+       "[selective-alignment mode only (experimental)] : Allos soft-clipping of reads during selective-alignment. If this "
+       "option is provided, then regions at the beginning or end of the read can be withheld from alignment "
+       "without any effect on the resulting score (i.e. neither adding nor removing from the score).  This "
+       "will drastically reduce the penalty if there are mismatches at the beginning or end of the read "
+       "due to e.g. low-quality bases or adapters.  NOTE: Even with soft-clipping enabled, the read must still "
+       "achieve a score of at least minScoreFraction * maximum achievable score, where the maximum achievable "
+       "score is computed based on the full (un-clipped) read length."
+      )
       ("softclipOverhangs", 
        po::bool_switch(&(sopt.softclipOverhangs))->default_value(salmon::defaults::softclipOverhangs),
        "[selective-alignment mode only] : Allow soft-clipping of reads that overhang the beginning or ends "
