@@ -543,17 +543,19 @@ namespace alevin {
         }
       }
 
-      if (noTgMap && vm.count("tgMap")){
-        aopt.geneMapFile = vm["tgMap"].as<std::string>();
-        if (!bfs::exists(aopt.geneMapFile)) {
-          fmt::print(stderr,"\nTranscript to Gene Map File {} does not exists\n Exiting Now",
-                     aopt.geneMapFile.string());
+      if (not noTgMap) {
+        if (vm.count("tgMap")){
+          aopt.geneMapFile = vm["tgMap"].as<std::string>();
+          if (!bfs::exists(aopt.geneMapFile)) {
+            fmt::print(stderr,"\nTranscript to Gene Map File {} does not exists\n Exiting Now",
+                       aopt.geneMapFile.string());
+            return false;
+          }
+        }
+        else{
+          fmt::print(stderr,"\nTranscript to Gene Map File not provided\n Exiting Now");
           return false;
         }
-      }
-      else{
-        fmt::print(stderr,"\nTranscript to Gene Map File not provided\n Exiting Now");
-        return false;
       }
 
       //create logger
