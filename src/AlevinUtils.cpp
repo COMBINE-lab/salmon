@@ -141,7 +141,13 @@ namespace alevin {
     bool extractUMI<apt::Custom>(std::string& read,
                                  apt::Custom& pt,
                                  std::string& umi){
-      umi = read.substr(pt.barcodeLength, pt.umiLength);
+      if ( pt.end == BarcodeEnd::FIVE ) {
+        umi = read.substr(pt.barcodeLength, pt.umiLength);
+      } else if (pt.end == BarcodeEnd::THREE ) {
+        umi = read.substr(0, pt.umiLength);
+      } else {
+        return false;
+      }
       return true;
     }
     template <>
@@ -178,52 +184,43 @@ namespace alevin {
                                       apt::DropSeq& pt){
       return (read.length() >= pt.barcodeLength) ?
         nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
-      // = read.substr(0, pt.barcodeLength);
-    //return true;
     }
     template <>
     nonstd::optional<std::string> extractBarcode<apt::CITESeq>(std::string& read,
                                                                apt::CITESeq& pt){
       return (read.length() >= pt.barcodeLength) ?
         nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
-      // = read.substr(0, pt.barcodeLength);
-      //return true;
     }
     template <>
     nonstd::optional<std::string> extractBarcode<apt::ChromiumV3>(std::string& read,
                                                                   apt::ChromiumV3& pt){
       return (read.length() >= pt.barcodeLength) ?
         nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
-      //return (read.length() >= pt.barcodeLength) ? (bc.append(read.data(), pt.barcodeLength), true) : false;
-      //bc = read.substr(0, pt.barcodeLength);
-      //return true;
     }
     template <>
     nonstd::optional<std::string> extractBarcode<apt::Chromium>(std::string& read,
                                        apt::Chromium& pt){
       return (read.length() >= pt.barcodeLength) ?
         nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
-      //return (read.length() >= pt.barcodeLength) ? (bc.append(read.data(), pt.barcodeLength), true) : false;
-      //bc = read.substr(0, pt.barcodeLength);
-      //return true;
     }
     template <>
     nonstd::optional<std::string> extractBarcode<apt::Gemcode>(std::string& read,
                                        apt::Gemcode& pt){
       return (read.length() >= pt.barcodeLength) ?
         nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
-      //return (read.length() >= pt.barcodeLength) ? (bc.append(read.data(), pt.barcodeLength), true) : false;
-      //bc = read.substr(0, pt.barcodeLength);
-      //return true;
     }
     template <>
     nonstd::optional<std::string> extractBarcode<apt::Custom>(std::string& read,
                                      apt::Custom& pt){
-      return (read.length() >= pt.barcodeLength) ?
-        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
-      //return (read.length() >= pt.barcodeLength) ? (bc.append(read.data(), pt.barcodeLength), true) : false;
-      //bc = read.substr(0, pt.barcodeLength);
-      //return true;
+      if (pt.end == BarcodeEnd::FIVE) {
+        return (read.length() >= pt.barcodeLength) ?
+          nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+      } else if (pt.end == BarcodeEnd::THREE) {
+        return (read.length() >= (pt.umiLength + pt.barcodeLength)) ?
+          nonstd::optional<std::string>(read.substr(pt.umiLength, pt.barcodeLength)) : nonstd::nullopt;
+      } else {
+        return nonstd::nullopt;
+      }
     }
     template <>
     nonstd::optional<std::string> extractBarcode<apt::QuartzSeq2>(std::string& read,
