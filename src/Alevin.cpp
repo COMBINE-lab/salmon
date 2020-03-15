@@ -815,10 +815,10 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
                       SalmonOpts& sopt,
                       OrderedOptionsT& orderedOptions,
                       boost::program_options::variables_map& vm,
-                      std::string commentString,
+                      std::string commentString, bool noTgMap,
                       std::vector<std::string> barcodeFiles,
                       std::vector<std::string> readFiles){
-  bool isOptionsOk = aut::processAlevinOpts(aopt, sopt, vm);
+  bool isOptionsOk = aut::processAlevinOpts(aopt, sopt, noTgMap, vm);
   if (!isOptionsOk){
     exit(1);
   }
@@ -855,7 +855,7 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
                        txpInfoFile.string(),
                        txpLengthFile.string(),
                        headerFile.string(),
-                       aopt.jointLog);
+                       aopt.jointLog, noTgMap);
 
   // If we're supposed to be quiet, set the global logger level to >= warn
   if (aopt.quiet) {
@@ -976,6 +976,7 @@ salmon-based processing of single-cell RNA-seq data.
     red[3] = '0' + static_cast<char>(fmt::RED);
 
 
+    bool noTgMap {false};
     bool dropseq = vm["dropseq"].as<bool>();
     bool indrop = vm["indrop"].as<bool>();
     bool citeseq = vm["citeseq"].as<bool>();
@@ -992,7 +993,7 @@ salmon-based processing of single-cell RNA-seq data.
     uint8_t validate_num_protocols {0};
     if (dropseq) validate_num_protocols += 1;
     if (indrop) validate_num_protocols += 1;
-    if (citeseq) validate_num_protocols += 1;
+    if (citeseq) { validate_num_protocols += 1; noTgMap = true;}
     if (chromV3) validate_num_protocols += 1;
     if (chrom) validate_num_protocols += 1;
     if (gemcode) validate_num_protocols += 1;
@@ -1028,7 +1029,7 @@ salmon-based processing of single-cell RNA-seq data.
       AlevinOpts<apt::DropSeq> aopt;
       //aopt.jointLog->warn("Using DropSeq Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
-                       vm, commentString,
+                       vm, commentString, noTgMap,
                        barcodeFiles, readFiles);
     }
     else if(indrop){
@@ -1040,7 +1041,7 @@ salmon-based processing of single-cell RNA-seq data.
         aopt.protocol.setW1(w1);
         //aopt.jointLog->warn("Using InDrop Setting for Alevin");
         initiatePipeline(aopt, sopt, orderedOptions,
-                         vm, commentString,
+                         vm, commentString, noTgMap,
                          barcodeFiles, readFiles);
       }
       else{
@@ -1056,7 +1057,7 @@ salmon-based processing of single-cell RNA-seq data.
 
         //aopt.jointLog->warn("Using InDrop Setting for Alevin");
         initiatePipeline(aopt, sopt, orderedOptions,
-                         vm, commentString,
+                         vm, commentString, noTgMap,
                          barcodeFiles, readFiles);
       }
       else{
@@ -1068,49 +1069,49 @@ salmon-based processing of single-cell RNA-seq data.
       AlevinOpts<apt::ChromiumV3> aopt;
       //aopt.jointLog->warn("Using 10x v3 Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
-                       vm, commentString,
+                       vm, commentString, noTgMap,
                        barcodeFiles, readFiles);
     }
     else if(chrom){
       AlevinOpts<apt::Chromium> aopt;
       //aopt.jointLog->warn("Using 10x v2 Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
-                       vm, commentString,
+                       vm, commentString, noTgMap,
                        barcodeFiles, readFiles);
     }
     else if(gemcode){
       AlevinOpts<apt::Gemcode> aopt;
       //aopt.jointLog->warn("Using 10x v1 Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
-                       vm, commentString,
+                       vm, commentString, noTgMap,
                        unmateFiles, readFiles);
     }
     else if(celseq){
       AlevinOpts<apt::CELSeq> aopt;
       //aopt.jointLog->warn("Using CEL-Seq Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
-                       vm, commentString,
+                       vm, commentString, noTgMap,
                        barcodeFiles, readFiles);
     }
     else if(celseq2){
       AlevinOpts<apt::CELSeq2> aopt;
       //aopt.jointLog->warn("Using CEL-Seq2 Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
-                       vm, commentString,
+                       vm, commentString, noTgMap,
                        barcodeFiles, readFiles);
     }
     else if(quartzseq2){
       AlevinOpts<apt::QuartzSeq2> aopt;
       //aopt.jointLog->warn("Using Quartz-Seq2 Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
-                       vm, commentString,
+                       vm, commentString, noTgMap,
                        barcodeFiles, readFiles);
     }
     else{
       AlevinOpts<apt::Custom> aopt;
       //aopt.jointLog->warn("Using Custom Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
-                       vm, commentString,
+                       vm, commentString, noTgMap,
                        barcodeFiles, readFiles);
     }
 
