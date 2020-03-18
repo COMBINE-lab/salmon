@@ -141,7 +141,13 @@ namespace alevin {
     bool extractUMI<apt::Custom>(std::string& read,
                                  apt::Custom& pt,
                                  std::string& umi){
-      umi = read.substr(pt.barcodeLength, pt.umiLength);
+      if ( pt.end == BarcodeEnd::FIVE ) {
+        umi = read.substr(pt.barcodeLength, pt.umiLength);
+      } else if (pt.end == BarcodeEnd::THREE ) {
+        umi = read.substr(0, pt.umiLength);
+      } else {
+        return false;
+      }
       return true;
     }
     template <>
@@ -178,52 +184,43 @@ namespace alevin {
                                       apt::DropSeq& pt){
       return (read.length() >= pt.barcodeLength) ?
         nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
-      // = read.substr(0, pt.barcodeLength);
-    //return true;
     }
     template <>
     nonstd::optional<std::string> extractBarcode<apt::CITESeq>(std::string& read,
                                                                apt::CITESeq& pt){
       return (read.length() >= pt.barcodeLength) ?
         nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
-      // = read.substr(0, pt.barcodeLength);
-      //return true;
     }
     template <>
     nonstd::optional<std::string> extractBarcode<apt::ChromiumV3>(std::string& read,
                                                                   apt::ChromiumV3& pt){
       return (read.length() >= pt.barcodeLength) ?
         nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
-      //return (read.length() >= pt.barcodeLength) ? (bc.append(read.data(), pt.barcodeLength), true) : false;
-      //bc = read.substr(0, pt.barcodeLength);
-      //return true;
     }
     template <>
     nonstd::optional<std::string> extractBarcode<apt::Chromium>(std::string& read,
                                        apt::Chromium& pt){
       return (read.length() >= pt.barcodeLength) ?
         nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
-      //return (read.length() >= pt.barcodeLength) ? (bc.append(read.data(), pt.barcodeLength), true) : false;
-      //bc = read.substr(0, pt.barcodeLength);
-      //return true;
     }
     template <>
     nonstd::optional<std::string> extractBarcode<apt::Gemcode>(std::string& read,
                                        apt::Gemcode& pt){
       return (read.length() >= pt.barcodeLength) ?
         nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
-      //return (read.length() >= pt.barcodeLength) ? (bc.append(read.data(), pt.barcodeLength), true) : false;
-      //bc = read.substr(0, pt.barcodeLength);
-      //return true;
     }
     template <>
     nonstd::optional<std::string> extractBarcode<apt::Custom>(std::string& read,
                                      apt::Custom& pt){
-      return (read.length() >= pt.barcodeLength) ?
-        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
-      //return (read.length() >= pt.barcodeLength) ? (bc.append(read.data(), pt.barcodeLength), true) : false;
-      //bc = read.substr(0, pt.barcodeLength);
-      //return true;
+      if (pt.end == BarcodeEnd::FIVE) {
+        return (read.length() >= pt.barcodeLength) ?
+          nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+      } else if (pt.end == BarcodeEnd::THREE) {
+        return (read.length() >= (pt.umiLength + pt.barcodeLength)) ?
+          nonstd::optional<std::string>(read.substr(pt.umiLength, pt.barcodeLength)) : nonstd::nullopt;
+      } else {
+        return nonstd::nullopt;
+      }
     }
     template <>
     nonstd::optional<std::string> extractBarcode<apt::QuartzSeq2>(std::string& read,
@@ -346,7 +343,8 @@ namespace alevin {
                          const std::string& refNamesFile,
                          const std::string& refLengthFile,
                          const std::string& headerFile,
-                         std::shared_ptr<spdlog::logger>& jointLog){
+                         std::shared_ptr<spdlog::logger>& jointLog,
+                         bool noTgMap){
       size_t  kSize, numDupTxps{0};
       uint64_t numberOfDecoys, firstDecoyIndex;
       spp::sparse_hash_map<std::string, std::vector<uint32_t>> txpIdxMap;
@@ -407,38 +405,45 @@ namespace alevin {
                      txpNames.size() - numberOfDecoys - numShort - numDupTxps ,
                      numberOfDecoys, numShort, numDupTxps);
 
-      std::ifstream t2gFile(t2gFileName);
-      uint32_t gid, geneCount{0};
-      std::vector<uint32_t> tids;
-      std::string tStr, gStr;
-      if(t2gFile.is_open()) {
-        while( not t2gFile.eof() ) {
-          t2gFile >> tStr >> gStr;
-
-          if(not txpIdxMap.contains(tStr)  ){
-            continue;
-          }
-
-          tids = txpIdxMap[tStr];
-          if (geneIdxMap.contains(gStr)){
-            gid = geneIdxMap[gStr];
-          }
-          else{
-            gid = geneCount;
-            geneIdxMap[gStr] = gid;
-            geneCount++;
-          }
-
-          for (auto tid: tids) {
-            if (txpToGeneMap.find(tid) != txpToGeneMap.end() &&
-                txpToGeneMap[tid] != gid ) {
-              jointLog->warn("Dual txp to gene map for txp {}", txpNames[tid]);
-            }
-            txpToGeneMap[tid] = gid;
-          }
+      if (noTgMap){ // mapping the protein name to itself
+        for (size_t i=0; i<txpNames.size(); i++) {
+          geneIdxMap[txpNames[i]] = i;
+          txpToGeneMap[i] = i;
         }
-        t2gFile.close();
-      }
+      } else {
+        std::ifstream t2gFile(t2gFileName);
+        uint32_t gid, geneCount{0};
+        std::vector<uint32_t> tids;
+        std::string tStr, gStr;
+        if(t2gFile.is_open()) {
+          while( not t2gFile.eof() ) {
+            t2gFile >> tStr >> gStr;
+
+            if(not txpIdxMap.contains(tStr)  ){
+              continue;
+            }
+
+            tids = txpIdxMap[tStr];
+            if (geneIdxMap.contains(gStr)){
+              gid = geneIdxMap[gStr];
+            }
+            else{
+              gid = geneCount;
+              geneIdxMap[gStr] = gid;
+              geneCount++;
+            }
+
+            for (auto tid: tids) {
+              if (txpToGeneMap.find(tid) != txpToGeneMap.end() &&
+                  txpToGeneMap[tid] != gid ) {
+                jointLog->warn("Dual txp to gene map for txp {}", txpNames[tid]);
+              }
+              txpToGeneMap[tid] = gid;
+            }
+          }
+          t2gFile.close();
+        }
+      } // done parsing txp to gene map file
 
       jointLog->info( "Filled with {} txp to gene entries ", txpToGeneMap.size());
       for ( auto it: txpIdxMap ) {
@@ -463,7 +468,7 @@ namespace alevin {
 
     template <typename ProtocolT>
     bool processAlevinOpts(AlevinOpts<ProtocolT>& aopt,
-                           SalmonOpts& sopt,
+                           SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm){
       namespace bfs = boost::filesystem;
       namespace po = boost::program_options;
@@ -538,17 +543,19 @@ namespace alevin {
         }
       }
 
-      if (vm.count("tgMap")){
-        aopt.geneMapFile = vm["tgMap"].as<std::string>();
-        if (!bfs::exists(aopt.geneMapFile)) {
-          fmt::print(stderr,"\nTranscript to Gene Map File {} does not exists\n Exiting Now",
-                     aopt.geneMapFile.string());
+      if (not noTgMap) {
+        if (vm.count("tgMap")){
+          aopt.geneMapFile = vm["tgMap"].as<std::string>();
+          if (!bfs::exists(aopt.geneMapFile)) {
+            fmt::print(stderr,"\nTranscript to Gene Map File {} does not exists\n Exiting Now",
+                       aopt.geneMapFile.string());
+            return false;
+          }
+        }
+        else{
+          fmt::print(stderr,"\nTranscript to Gene Map File not provided\n Exiting Now");
           return false;
         }
-      }
-      else{
-        fmt::print(stderr,"\nTranscript to Gene Map File not provided\n Exiting Now");
-        return false;
       }
 
       //create logger
@@ -864,43 +871,43 @@ namespace alevin {
 
     template
     bool processAlevinOpts(AlevinOpts<apt::DropSeq>& aopt,
-                           SalmonOpts& sopt,
+                           SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::CITESeq>& aopt,
-                           SalmonOpts& sopt,
+                           SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::InDrop>& aopt,
-                           SalmonOpts& sopt,
+                           SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::ChromiumV3>& aopt,
-                           SalmonOpts& sopt,
+                           SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::Chromium>& aopt,
-                           SalmonOpts& sopt,
+                           SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::Gemcode>& aopt,
-                           SalmonOpts& sopt,
+                           SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::Custom>& aopt,
-                           SalmonOpts& sopt,
+                           SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::CELSeq>& aopt,
-                           SalmonOpts& sopt,
+                           SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::CELSeq2>& aopt,
-                           SalmonOpts& sopt,
+                           SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::QuartzSeq2>& aopt,
-                           SalmonOpts& sopt,
+                           SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
   }
 }

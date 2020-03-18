@@ -529,7 +529,8 @@ void processReadsQuasi(
       nonstd::optional<uint32_t> barcodeIdx;
       bool seqOk;
 
-      if (alevinOpts.protocol.end == bcEnd::FIVE){
+      if (alevinOpts.protocol.end == bcEnd::FIVE ||
+          alevinOpts.protocol.end == bcEnd::THREE){
         barcode = aut::extractBarcode(rp.first.seq, alevinOpts.protocol);
         seqOk = (barcode.has_value()) ?
           aut::sequenceCheck(*barcode, Sequence::BARCODE) : false;
