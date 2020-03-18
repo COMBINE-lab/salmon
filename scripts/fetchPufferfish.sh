@@ -26,7 +26,7 @@ fi
 SVER=develop
 #SVER=pe-chaining
 
-EXPECTED_SHA256=aa51d7123f38568b1c9da5ab4f925b1705c5b3569048911b0aae4ea5cf7edac7
+EXPECTED_SHA256=eaac806bcc35e05aae0bc8c2cdeba6b9fad2c38542e0d274c180f7cdae60eb1f
 
 mkdir -p ${EXTERNAL_DIR}
 curl -k -L https://github.com/COMBINE-lab/pufferfish/archive/${SVER}.zip -o ${EXTERNAL_DIR}/pufferfish.zip
