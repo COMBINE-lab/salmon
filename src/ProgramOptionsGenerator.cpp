@@ -115,10 +115,18 @@ namespace salmon {
       )
       ("minScoreFraction",
        po::value<double>(&sopt.minScoreFraction),
-       "[Quasi-mapping mode (w / mapping validation) only] : The fraction of the optimal possible alignment score that a "
+       "[selective alignment mode only] : The fraction of the optimal possible alignment score that a "
        "mapping must achieve in order to be considered \"valid\" --- should be in (0,1].\n"
        "Salmon Default 0.65 and Alevin Default 0.87"
        )
+      ("disableChainingHeuristic",
+      po::bool_switch(&(sopt.disableChainingHeuristic))->default_value(salmon::defaults::disableChainingHeuristic),
+      "[selective alignment mode only] : By default, the heuristic of (Li 2018) is implemented, which terminates "
+      "the chaining DP once a given number of valid backpointers are found.  This speeds up the seed (MEM) "
+      "chaining step, but may result in sub-optimal chains in complex situations (e.g. sequences with many repeats and "
+      "overlapping repeats).  Passing this flag will disable the chaining heuristic, and perform the full chaining "
+      "dynamic program, guaranteeing the optimal chain is found in this step."
+      )
       ("decoyThreshold",
        po::value<double>(&sopt.decoyThreshold)->default_value(salmon::defaults::decoyThreshold),
        "For an alignemnt to an annotated transcript to be considered invalid, it must have an alignment "

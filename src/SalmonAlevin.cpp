@@ -455,6 +455,7 @@ void processReadsQuasi(
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   bool mimicBT2 = salmonOpts.mimicBT2;
   bool noDovetail = !salmonOpts.allowDovetail;
+  bool useChainingHeuristic = !salmonOpts.disableChainingHeuristic;
 
   pufferfish::util::HitCounters hctr;
   salmon::utils::MappingType mapType{salmon::utils::MappingType::UNMAPPED};
@@ -607,7 +608,7 @@ void processReadsQuasi(
               memCollector.findChains(readSubSeq, hits,
                                       salmonOpts.fragLenDistMax,
                                       MateStatus::PAIRED_END_RIGHT,
-                                      true, // heuristic chaining
+                                      useChainingHeuristic, // heuristic chaining
                                       true, // isLeft
                                       false // verbose
                                       );
@@ -661,7 +662,7 @@ void processReadsQuasi(
           */
           salmon::mapping_utils::MappingScoreInfo msi = {invalidScore, invalidScore, invalidScore, decoyThreshold};
 
-          std::vector<decltype(msi.bestScore)> scores(jointHits.size(), 0);
+          std::vector<decltype(msi.bestScore)> scores(jointHits.size(), invalidScore);
           size_t idx{0};
           bool isMultimapping = (jointHits.size() > 1);
 

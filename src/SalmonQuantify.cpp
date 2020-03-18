@@ -827,6 +827,7 @@ void processReads(
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   bool mimicBT2 = salmonOpts.mimicBT2;
   bool noDovetail = !salmonOpts.allowDovetail;
+  bool useChainingHeuristic = !salmonOpts.disableChainingHeuristic;
   size_t numOrphansRescued{0};
   phmap::flat_hash_map<uint32_t, std::pair<int32_t, int32_t>> bestScorePerTranscript;
   uint64_t firstDecoyIndex = qidx->firstDecoyIndex();
@@ -924,7 +925,7 @@ void processReads(
                               leftHits,
                               salmonOpts.fragLenDistMax,
                               MateStatus::PAIRED_END_LEFT,
-                              true, // heuristic chaining
+                              useChainingHeuristic, // heuristic chaining
                               true, // isLeft
                               false // verbose
                               );
@@ -932,7 +933,7 @@ void processReads(
                               rightHits,
                               salmonOpts.fragLenDistMax,
                               MateStatus::PAIRED_END_RIGHT,
-                              true,  // heuristic chaining
+                              useChainingHeuristic,  // heuristic chaining
                               false, // isLeft
                               false  // verbose
                               );
@@ -1068,7 +1069,7 @@ void processReads(
           */
 
           salmon::mapping_utils::MappingScoreInfo msi = {invalidScore, invalidScore, invalidScore, decoyThreshold};
-          std::vector<decltype(msi.bestScore)> scores(jointHits.size(), 0);
+          std::vector<decltype(msi.bestScore)> scores(jointHits.size(), invalidScore);
           size_t idx{0};
           bool isMultimapping = (jointHits.size() > 1);
 
@@ -1440,6 +1441,7 @@ void processReads(
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   bool mimicBT2 = salmonOpts.mimicBT2;
   bool noDovetail = !salmonOpts.allowDovetail;
+  bool useChainingHeuristic = !salmonOpts.disableChainingHeuristic;
   size_t numOrphansRescued{0};
   //*******
 
@@ -1506,7 +1508,7 @@ void processReads(
                                hits,
                                salmonOpts.fragLenDistMax,
                                MateStatus::SINGLE_END,
-                               true, // heuristic chaining
+                               useChainingHeuristic, // heuristic chaining
                                true, // isLeft
                                false // verbose
                                );
@@ -1529,6 +1531,7 @@ void processReads(
                                                     readLen,
                                                     memCollector.getConsensusFraction()); 
          hctr.peHits += jointHits.size();
+
          if (initialRound) {
            upperBoundHits += (jointHits.size() > 0);
          }
@@ -1561,7 +1564,7 @@ void processReads(
          */
          salmon::mapping_utils::MappingScoreInfo msi = {invalidScore, invalidScore, invalidScore, decoyThreshold};
 
-         std::vector<decltype(msi.bestScore)> scores(jointHits.size(), 0);
+         std::vector<decltype(msi.bestScore)> scores(jointHits.size(), invalidScore);
          size_t idx{0};
          bool isMultimapping = (jointHits.size() > 1);
 
