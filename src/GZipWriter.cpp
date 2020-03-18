@@ -1109,8 +1109,6 @@ bool GZipWriter::writeSparseBootstraps(std::string& bcName,
   return true;
 }
 
-// FIXME(@k3yavi): The dumpUmiGraph parameter is un-used so I commented out the name
-// should we be doing something with it?
 bool GZipWriter::writeSparseAbundances(std::string& bcName,
                                        std::string& features,
                                        std::string& arboData,
@@ -1118,7 +1116,7 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
                                        std::vector<double>& alphas,
                                        std::vector<uint8_t>& tiers,
                                        bool dumpArborescences,
-                                       bool /*dumpUmiGraph*/){
+                                       bool dumpUmiGraph){
 
   // construct the output vectors outside of the critical section
   // since e.g. this is more non-trivial work than in the dense case.
@@ -1212,8 +1210,9 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
     } else if (featureCode != 0) {
       std::cerr<<"Error: Wrong feature code: " << featureCode << std::flush;
       exit(74);
-    }
-    header += "\tArborescenceCount\n";
+    } else if (dumpUmiGraph) {
+      header += "\tArborescenceCount";
+    } header += "\n";
     bcFeaturesStream_->write(header.c_str(), header.size());
   }
 
