@@ -619,7 +619,7 @@ namespace alevin {
                             "This is not recommended way to run the pipeline,"
                             "and it might slow the pipeline",
                             aopt.keepCBFraction);
-      }
+      } else if (noTgMap) { aopt.keepCBFraction = 1.0;  }
 
       if (not vm.count("threads")) {
         auto tot_cores = std::thread::hardware_concurrency();
@@ -743,7 +743,11 @@ namespace alevin {
       bool optionsOK =
         salmon::utils::processQuantOptions(sopt, vm, vm["numBiasSamples"].as<int32_t>());
       if (!vm.count("minScoreFraction")) {
-        sopt.minScoreFraction = alevin::defaults::minScoreFraction;
+        if (noTgMap) {
+          sopt.minScoreFraction = alevin::defaults::minScoreCiteSeqFraction;
+        } else {
+          sopt.minScoreFraction = alevin::defaults::minScoreFraction;
+        }
         sopt.consensusSlack = alevin::defaults::consensusSlack;
         sopt.jointLog->info(
                             "Using default value of {} for minScoreFraction in Alevin\n"
