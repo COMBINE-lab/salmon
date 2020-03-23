@@ -675,10 +675,15 @@ void processReadsQuasi(
             bool validScore = (hitScore != invalidScore);
             numMappingsDropped += validScore ? 0 : 1;
             auto tid = qidx->getRefId(jointHit.tid);
-
+            
+            // NOTE: Here, we know that the read arising from the transcriptome is the "right"
+            // read (read 2).  So we interpret compatibility in that context.
+            // TODO: Make this code more generic and modular (account for the possibility of different library)
+            // protocols or setups where the reads are not always "paired-end" and the transcriptomic read is not
+            // always read 2 (@k3yavi).
             bool isCompat = (expectedLibraryFormat.strandedness == ReadStrandedness::U) or 
-                           (jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::S)) or
-                           (!jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::A));
+                            (jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::AS)) or
+                            (!jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::SA));
 
             salmon::mapping_utils::updateRefMappings(tid, hitScore, isCompat, idx, transcripts, invalidScore, 
                                                      msi,
