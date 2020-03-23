@@ -501,6 +501,8 @@ void processReadsQuasi(
       std::exit(1);
     }
 
+    LibraryFormat expectedLibraryFormat = rl.format();
+
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
       auto& rp = rg[i];
       readLenLeft = rp.first.seq.length();
@@ -673,7 +675,12 @@ void processReadsQuasi(
             bool validScore = (hitScore != invalidScore);
             numMappingsDropped += validScore ? 0 : 1;
             auto tid = qidx->getRefId(jointHit.tid);
-            salmon::mapping_utils::updateRefMappings(tid, hitScore, idx, transcripts, invalidScore, 
+
+            bool isCompat = (expectedLibraryFormat.strandedness == ReadStrandedness::U) or 
+                           (jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::S)) or
+                           (!jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::A));
+
+            salmon::mapping_utils::updateRefMappings(tid, hitScore, isCompat, idx, transcripts, invalidScore, 
                                                      msi,
                                                      //bestScore, secondBestScore, bestDecoyScore,
                                                      scores, bestScorePerTranscript, perm);

@@ -104,6 +104,7 @@ namespace defaults {
   constexpr const bool noFragLengthFactor{false};
   constexpr const bool rankEqClasses{false};
   constexpr const bool dontExtrapolateCounts{false};
+  constexpr const bool disableAlignmentCache{false};
 
   // alignment-based mode
   //constexpr const bool useErrorModel{true};

@@ -874,6 +874,8 @@ void processReads(
       spdlog::drop_all();
       std::exit(1);
     }
+    
+    LibraryFormat expectedLibraryFormat = rl.format();
 
     bool tryAlign{salmonOpts.validateMappings};
     for (size_t i = 0; i < rangeSize; ++i) { // For all the reads in this batch
@@ -1078,7 +1080,15 @@ void processReads(
             bool validScore = (hitScore != invalidScore);
             numMappingsDropped += validScore ? 0 : 1;
             auto tid = qidx->getRefId(jointHit.tid);
-            salmon::mapping_utils::updateRefMappings(tid, hitScore, idx, transcripts, invalidScore, msi, 
+
+            //jointHit.leftClust->getTrFirstHitPos, jointHit.leftClust->isFw, jointHit.mateStatus
+            /*
+              bool isCompat = salmon::utils::isCompatible(
+              aln.libFormat(), expectedLibraryFormat,
+              static_cast<int32_t>(aln.pos), aln.fwd, aln.mateStatus);
+            */
+            bool isCompat{true};
+            salmon::mapping_utils::updateRefMappings(tid, hitScore, isCompat, idx, transcripts, invalidScore, msi,
                               //bestScore, secondBestScore, bestDecoyScore,
                               scores, bestScorePerTranscript, perm);
             ++idx;
@@ -1481,6 +1491,8 @@ void processReads(
        std::exit(1);
      }
 
+     LibraryFormat expectedLibraryFormat = rl.format();
+
      bool tryAlign{salmonOpts.validateMappings};
      for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
        auto& rp = rg[i];
@@ -1573,7 +1585,12 @@ void processReads(
            bool validScore = (hitScore != invalidScore);
            numMappingsDropped += validScore ? 0 : 1;
            auto tid = qidx->getRefId(jointHit.tid);
-           salmon::mapping_utils::updateRefMappings(tid, hitScore, idx, transcripts, invalidScore, 
+          
+           bool isCompat = (expectedLibraryFormat.strandedness == ReadStrandedness::U) or 
+                           (jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::S)) or
+                           (!jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::A));
+
+           salmon::mapping_utils::updateRefMappings(tid, hitScore, isCompat, idx, transcripts, invalidScore, 
                             msi,
                             //bestScore, secondBestScore, bestDecoyScore,
                              scores, bestScorePerTranscript, perm);

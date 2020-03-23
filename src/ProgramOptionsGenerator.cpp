@@ -815,6 +815,10 @@ namespace salmon {
         "account the "
         "goodness-of-fit of an alignment with the empirical fragment length "
         "distribution")
+      ("disableAlignmentCache",
+      po::bool_switch(&(sopt.disableAlignmentCache))->default_value(salmon::defaults::disableAlignmentCache),
+        "[TESTING OPTION]: Turn of the alignment cache.  This will hurt performance but "
+        "can help debug any issues that might result from caching")
       ("rankEqClasses",
       po::bool_switch(&(sopt.rankEqClasses))->default_value(salmon::defaults::rankEqClasses),
         "[TESTING OPTION]: Keep separate equivalence classes for each distinct "
