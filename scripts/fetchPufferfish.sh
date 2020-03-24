@@ -76,7 +76,7 @@ cp ${EXTERNAL_DIR}/pufferfish/include/select.hpp ${INSTALL_DIR}/include/pufferfi
 cp ${EXTERNAL_DIR}/pufferfish/include/Util.hpp ${INSTALL_DIR}/include/pufferfish
 cp ${EXTERNAL_DIR}/pufferfish/include/PairedAlignmentFormatter.hpp ${INSTALL_DIR}/include/pufferfish
 #cp ${EXTERNAL_DIR}/pufferfish/include/SingleAlignmentFormatter.hpp ${INSTALL_DIR}/include/pufferfish
-cp ${EXTERNAL_DIR}/pufferfish/include/SelectiveAlignmentUtils.hpp ${INSTALL_DIR}/include/pufferfish
+cp ${EXTERNAL_DIR}/pufferfish/include/libdivide.h ${INSTALL_DIR}/include/pufferfish
 cp ${EXTERNAL_DIR}/pufferfish/include/PuffAligner.hpp ${INSTALL_DIR}/include/pufferfish
 cp ${EXTERNAL_DIR}/pufferfish/include/MemCollector.hpp ${INSTALL_DIR}/include/pufferfish
 cp ${EXTERNAL_DIR}/pufferfish/include/MemChainer.hpp ${INSTALL_DIR}/include/pufferfish
