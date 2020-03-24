@@ -76,7 +76,6 @@ cp ${EXTERNAL_DIR}/pufferfish/include/select.hpp ${INSTALL_DIR}/include/pufferfi
 cp ${EXTERNAL_DIR}/pufferfish/include/Util.hpp ${INSTALL_DIR}/include/pufferfish
 cp ${EXTERNAL_DIR}/pufferfish/include/PairedAlignmentFormatter.hpp ${INSTALL_DIR}/include/pufferfish
 #cp ${EXTERNAL_DIR}/pufferfish/include/SingleAlignmentFormatter.hpp ${INSTALL_DIR}/include/pufferfish
-cp ${EXTERNAL_DIR}/pufferfish/include/libdivide.h ${INSTALL_DIR}/include/pufferfish
 cp ${EXTERNAL_DIR}/pufferfish/include/PuffAligner.hpp ${INSTALL_DIR}/include/pufferfish
 cp ${EXTERNAL_DIR}/pufferfish/include/MemCollector.hpp ${INSTALL_DIR}/include/pufferfish
 cp ${EXTERNAL_DIR}/pufferfish/include/MemChainer.hpp ${INSTALL_DIR}/include/pufferfish
@@ -84,6 +83,7 @@ cp ${EXTERNAL_DIR}/pufferfish/include/CommonTypes.hpp ${INSTALL_DIR}/include/puf
 cp ${EXTERNAL_DIR}/pufferfish/include/SAMWriter.hpp ${INSTALL_DIR}/include/pufferfish
 cp ${EXTERNAL_DIR}/pufferfish/include/PufferfishConfig.hpp ${INSTALL_DIR}/include/pufferfish
 cp ${EXTERNAL_DIR}/pufferfish/include/BinWriter.hpp ${INSTALL_DIR}/include/pufferfish
+cp -r ${EXTERNAL_DIR}/pufferfish/include/libdivide ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/ksw2pp ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/compact_vector ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/metro ${INSTALL_DIR}/include/pufferfish
