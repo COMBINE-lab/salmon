@@ -295,7 +295,6 @@ bool GZipWriter::writeBFH(boost::filesystem::path& outDir,
         auto count = umiIt.second;
 
         std::string s = umiObj.toStr();
-        std::reverse(s.begin(), s.end());
         equivFile << "\t" << s << "\t" << count;
       }
     }

@@ -739,7 +739,7 @@ namespace alevin {
       sopt.validateMappings = true;
       // @k3yavi --- doing this for now as a result of our testing.
       // let me know if you have any other thoughts.
-      sopt.hitFilterPolicyStr = "BEFORE";
+      sopt.hitFilterPolicyStr = "BOTH";
       bool optionsOK =
         salmon::utils::processQuantOptions(sopt, vm, vm["numBiasSamples"].as<int32_t>());
       if (!vm.count("minScoreFraction")) {
