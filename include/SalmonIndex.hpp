@@ -26,7 +26,7 @@ class SalmonIndex {
 public:
   SalmonIndex(std::shared_ptr<spdlog::logger>& logger,
               SalmonIndexType indexType)
-      : loaded_(false), versionInfo_(0, false, 0, indexType), logger_(logger),
+      : loaded_(false), versionInfo_(0, false, 0, indexType, ""), logger_(logger),
         seqHash256_(""), nameHash256_(""), seqHash512_(""), nameHash512_(""),
         decoySeqHash256_(""), decoyNameHash256_("") {}
 
@@ -114,6 +114,7 @@ private:
     versionInfo_.hasAuxKmerIndex(false);
     versionInfo_.auxKmerLength(idxOpt.k);
     versionInfo_.indexType(SalmonIndexType::PUFF);
+    versionInfo_.salmonVersion(salmon::version);
     versionInfo_.save(versionFile);
     return ret;
   }

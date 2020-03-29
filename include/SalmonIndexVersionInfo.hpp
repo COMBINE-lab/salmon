@@ -1,6 +1,7 @@
 #ifndef __SALMON_INDEX_VERSION_INFO_HPP__
 #define __SALMON_INDEX_VERSION_INFO_HPP__
 
+#include "SalmonConfig.hpp"
 #include "boost/filesystem.hpp"
 #include "cereal/archives/json.hpp"
 #include "spdlog/fmt/fmt.h"
@@ -17,9 +18,9 @@ public:
         indexType_(SalmonIndexType::PUFF) {}
 
   SalmonIndexVersionInfo(uint32_t indexVersionIn, bool hasAuxKmerIndexIn,
-                         uint32_t auxKmerLengthIn, SalmonIndexType indexTypeIn)
+                         uint32_t auxKmerLengthIn, SalmonIndexType indexTypeIn, std::string sverIn)
       : indexVersion_(indexVersionIn), hasAuxKmerIndex_(hasAuxKmerIndexIn),
-        auxKmerLength_(auxKmerLengthIn), indexType_(indexTypeIn) {}
+        auxKmerLength_(auxKmerLengthIn), indexType_(indexTypeIn), salmonVersion_(sverIn) {}
 
   /**
    * Read the index version info from file
@@ -39,7 +40,8 @@ public:
       iarchive(cereal::make_nvp("indexVersion", indexVersion_),
                cereal::make_nvp("hasAuxIndex", hasAuxKmerIndex_),
                cereal::make_nvp("auxKmerLength", auxKmerLength_),
-               cereal::make_nvp("indexType", indexType_));
+               cereal::make_nvp("indexType", indexType_),
+               cereal::make_nvp("salmonVersion", salmonVersion_));
     }
     ifs.close();
     return true;
@@ -52,7 +54,8 @@ public:
       oarchive(cereal::make_nvp("indexVersion", indexVersion_),
                cereal::make_nvp("hasAuxIndex", hasAuxKmerIndex_),
                cereal::make_nvp("auxKmerLength", auxKmerLength_),
-               cereal::make_nvp("indexType", indexType_));
+               cereal::make_nvp("indexType", indexType_),
+               cereal::make_nvp("salmonVersion", salmonVersion_));
     }
     ofs.close();
     return true;
@@ -70,11 +73,15 @@ public:
   SalmonIndexType indexType() { return indexType_; }
   void indexType(SalmonIndexType indexTypeIn) { indexType_ = indexTypeIn; };
 
+  std::string salmonVersion() const { return salmonVersion_; }
+  void salmonVersion(const std::string& sv) { salmonVersion_ = sv; }
+
 private:
   uint32_t indexVersion_;
   bool hasAuxKmerIndex_;
   uint32_t auxKmerLength_;
   SalmonIndexType indexType_;
+  std::string salmonVersion_;
 };
 
 #endif // __SALMON_INDEX_VERSION_INFO_HPP__
