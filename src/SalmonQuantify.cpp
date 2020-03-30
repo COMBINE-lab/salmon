@@ -1087,7 +1087,73 @@ void processReads(
               aln.libFormat(), expectedLibraryFormat,
               static_cast<int32_t>(aln.pos), aln.fwd, aln.mateStatus);
             */
-            bool isCompat{true};
+
+            bool isUnstranded = expectedLibraryFormat.strandedness == ReadStrandedness::U;
+            bool isOrphan = jointHit.isOrphan();
+            // if the protocol is unstranded:
+            // (1) an orphan is always compatible
+            // (2) a paired-end mapping is compatible if the ends are on separate strands
+            bool isCompat = isUnstranded ? (isOrphan ? true  : (jointHit.leftClust->isFw != jointHit.rightClust->isFw)) : false;
+
+            // if the mapping hasn't been determined to be compatible yet
+            if (!isCompat) {
+              // if this is an orphan mapping 
+              if (isOrphan) {
+                bool isLeft = jointHit.isLeftAvailable();
+                // ISF
+                // if the expectation is ISF, then this read is compatible if
+                // (1) we observed the left read and it is forward 
+                // (2) we observed the right read and it is not foward
+
+                // ISR
+                // if the expectation is ISR, then this read is compatible if 
+                // (1) we observed the left read and it is not forward
+                // (2) we observed the right read and it is foward
+                isCompat = (expectedLibraryFormat.strandedness == ReadStrandedness::SA) ? 
+                           ((isLeft and jointHit.leftClust->isFw) or (!isLeft and !jointHit.rightClust->isFw)) : 
+                           ((expectedLibraryFormat.strandedness == ReadStrandedness::AS) ?
+                           ((isLeft and !jointHit.leftClust->isFw) or (!isLeft and jointHit.rightClust->isFw)) : false);
+              } else {
+                bool leftIsFw = jointHit.leftClust->isFw;
+                bool rightIsFw = jointHit.rightClust->isFw;
+                // paired-end paired
+                isCompat = (expectedLibraryFormat.strandedness == ReadStrandedness::SA) ? 
+                           (leftIsFw and !rightIsFw) :
+                           ((expectedLibraryFormat.strandedness == ReadStrandedness::AS) ? 
+                            (!leftIsFw and rightIsFw) : false);
+              }
+            }
+
+            // alternative compat
+            /*
+            switch (h.mateStatus) {
+              case MateStatus::PAIRED_END_LEFT: {
+                h.format = salmon::utils::hitType(jointHit.leftClust->getTrFirstHitPos(), jointHit.leftClust->isFw());
+              } break;
+              case MateStatus::PAIRED_END_RIGHT: {
+                // we pass in !h.fwd here because the right read
+                // will have the opposite orientation from its mate.
+                // NOTE : We will try recording what the mapped fragment
+                // actually is, not to infer what it's mate should be.
+                h.format = salmon::utils::hitType(h.pos, h.fwd);
+              } break;
+              case MateStatus::PAIRED_END_PAIRED: {
+                uint32_t end1Pos = (h.fwd) ? h.pos : h.pos + h.readLen;
+                uint32_t end2Pos =
+                    (h.mateIsFwd) ? h.matePos : h.matePos + h.mateLen;
+                bool canDovetail = false;
+                h.format =
+                    salmon::utils::hitType(end1Pos, h.fwd, h.readLen, end2Pos,
+                                          h.mateIsFwd, h.mateLen, canDovetail);
+              } break;
+              case MateStatus::SINGLE_END: {
+                // do nothing
+              } break;
+              default:
+                break;
+            }
+            */
+
             salmon::mapping_utils::updateRefMappings(tid, hitScore, isCompat, idx, transcripts, invalidScore, msi,
                               //bestScore, secondBestScore, bestDecoyScore,
                               scores, bestScorePerTranscript, perm);
