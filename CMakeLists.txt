@@ -461,9 +461,11 @@ elseif(FETCH_BOOST)
   message("==================================================================")
   externalproject_add(libboost
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://dl.bintray.com/boostorg/release/1.71.0/source/boost_1_71_0.tar.gz -o boost_1_71_0.tar.gz &&
-      ${SHASUM} 96b34f7468f26a141f6020efb813f1a2f3dfb9797ecf76a7d7cbd843cc95f5bd boost_1_71_0.tar.gz &&
-      tar xzf boost_1_71_0.tar.gz
+    DOWNLOAD_COMMAND curl -k -L https://github.com/boostorg/boost/archive/boost-1.71.0.tar.gz -o boost_1_71_0.tar.gz &&
+      #${SHASUM} 96b34f7468f26a141f6020efb813f1a2f3dfb9797ecf76a7d7cbd843cc95f5bd boost_1_71_0.tar.gz &&
+      ${SHASUM} 5a2831f582446fbb675a5d8b9c7f086273c66ccaee3f55e266e7d1683eeaf015 boost_1_71_0.tar.gz &&
+      tar xzf boost_1_71_0.tar.gz && 
+      mv boost-boost-1.71.0 boost_1_71_0
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_71_0
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     #PATCH_COMMAND patch -p2 < ${CMAKE_CURRENT_SOURCE_DIR}/external/boost156.patch
