@@ -1081,13 +1081,6 @@ void processReads(
             numMappingsDropped += validScore ? 0 : 1;
             auto tid = qidx->getRefId(jointHit.tid);
 
-            //jointHit.leftClust->getTrFirstHitPos, jointHit.leftClust->isFw, jointHit.mateStatus
-            /*
-              bool isCompat = salmon::utils::isCompatible(
-              aln.libFormat(), expectedLibraryFormat,
-              static_cast<int32_t>(aln.pos), aln.fwd, aln.mateStatus);
-            */
-
             bool isUnstranded = expectedLibraryFormat.strandedness == ReadStrandedness::U;
             bool isOrphan = jointHit.isOrphan();
             // if the protocol is unstranded:
@@ -1125,26 +1118,25 @@ void processReads(
             }
 
             // alternative compat
-            /*
-            switch (h.mateStatus) {
-              case MateStatus::PAIRED_END_LEFT: {
-                h.format = salmon::utils::hitType(jointHit.leftClust->getTrFirstHitPos(), jointHit.leftClust->isFw());
-              } break;
+            /**
+            LibraryFormat lf(ReadType::SINGLE_END, ReadOrientation::NONE, ReadStrandedness::U);
+            MateStatus ms = isOrphan ? 
+                            (jointHit.isLeftAvailable() ? MateStatus::PAIRED_END_LEFT : MateStatus::PAIRED_END_RIGHT) :
+                            MateStatus::PAIRED_END_PAIRED;
+            switch (ms) {
+              case MateStatus::PAIRED_END_LEFT: 
               case MateStatus::PAIRED_END_RIGHT: {
-                // we pass in !h.fwd here because the right read
-                // will have the opposite orientation from its mate.
-                // NOTE : We will try recording what the mapped fragment
-                // actually is, not to infer what it's mate should be.
-                h.format = salmon::utils::hitType(h.pos, h.fwd);
+                lf = salmon::utils::hitType(jointHit.orphanClust()->getTrFirstHitPos(), jointHit.orphanClust()->isFw);
               } break;
               case MateStatus::PAIRED_END_PAIRED: {
-                uint32_t end1Pos = (h.fwd) ? h.pos : h.pos + h.readLen;
-                uint32_t end2Pos =
-                    (h.mateIsFwd) ? h.matePos : h.matePos + h.mateLen;
+                uint32_t end1Pos = (jointHit.leftClust->isFw) ? jointHit.leftClust->getTrFirstHitPos() : 
+                                   jointHit.leftClust->getTrFirstHitPos() + jointHit.leftClust->readLen;
+                uint32_t end2Pos = (jointHit.rightClust->isFw) ? jointHit.rightClust->getTrFirstHitPos() : 
+                                   jointHit.rightClust->getTrFirstHitPos() + jointHit.rightClust->readLen;
                 bool canDovetail = false;
-                h.format =
-                    salmon::utils::hitType(end1Pos, h.fwd, h.readLen, end2Pos,
-                                          h.mateIsFwd, h.mateLen, canDovetail);
+                lf =
+                    salmon::utils::hitType(end1Pos, jointHit.leftClust->isFw, jointHit.leftClust->readLen, end2Pos,
+                                          jointHit.rightClust->isFw, jointHit.rightClust->readLen, canDovetail);
               } break;
               case MateStatus::SINGLE_END: {
                 // do nothing
@@ -1152,7 +1144,16 @@ void processReads(
               default:
                 break;
             }
-            */
+
+            auto p = isOrphan ? jointHit.orphanClust()->getTrFirstHitPos() : jointHit.leftClust->getTrFirstHitPos();
+            auto fw = isOrphan ? jointHit.orphanClust()->isFw : jointHit.leftClust->isFw;
+            bool isCompatRef = salmon::utils::isCompatible(lf, expectedLibraryFormat, static_cast<int32_t>(p), fw, ms);
+
+            if (isCompat != isCompatRef) {
+              std::cerr << "\n\n\nERROR: simple implemntation says compatiable is [" <<  isCompat << "], but ref. implementation says [" << isCompatRef << "]\n\n";
+            }
+            **/
+            // end of alternative compat
 
             salmon::mapping_utils::updateRefMappings(tid, hitScore, isCompat, idx, transcripts, invalidScore, msi,
                               //bestScore, secondBestScore, bestDecoyScore,
