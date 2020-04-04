@@ -743,18 +743,23 @@ namespace alevin {
       bool optionsOK =
         salmon::utils::processQuantOptions(sopt, vm, vm["numBiasSamples"].as<int32_t>());
       if (!vm.count("minScoreFraction")) {
-        if (noTgMap) {
-          sopt.minScoreFraction = alevin::defaults::minScoreCiteSeqFraction;
+        // @k3yavi --- do we really want to detect CITE-seq here just by
+        // virtue of not having a TG map?  Maybe we should set explicitly?
+        // I propose the following; let me know what you think:
+        if (vm["citeseq"].as<bool>()) {
+          int32_t l = aopt.protocol.barcodeLength + aopt.protocol.umiLength;
+          sopt.minScoreFraction = salmon::utils::compute_1_edit_threshold(l, sopt);
+          aopt.jointLog->info("set CITE-seq minScoreFraction parameter to : {}",
+                              sopt.minScoreFraction);
         } else {
           sopt.minScoreFraction = alevin::defaults::minScoreFraction;
         }
+
         sopt.consensusSlack = alevin::defaults::consensusSlack;
         sopt.jointLog->info(
-                            "Using default value of {} for minScoreFraction in Alevin\n"
-                            "Using default value of {} for consensusSlack in Alevin",
-                            sopt.minScoreFraction,
-                            sopt.consensusSlack
-                            );
+            "Using default value of {} for minScoreFraction in Alevin\n"
+            "Using default value of {} for consensusSlack in Alevin",
+            sopt.minScoreFraction, sopt.consensusSlack);
       }
 
       if (!optionsOK) {

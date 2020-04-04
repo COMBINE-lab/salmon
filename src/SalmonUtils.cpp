@@ -3219,6 +3219,20 @@ void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
   }
   */
 }
+
+double compute_1_edit_threshold(int32_t l, const SalmonOpts& sopt) {
+  int32_t match = sopt.matchScore;
+  int32_t mismatch = (sopt.mismatchPenalty < 0) ? sopt.mismatchPenalty : -sopt.mismatchPenalty;
+  int32_t go = (sopt.gapOpenPenalty < 0) ? sopt.gapOpenPenalty : -sopt.gapOpenPenalty;
+  int32_t ge = (sopt.gapExtendPenalty < 0) ? sopt.gapExtendPenalty : -sopt.gapExtendPenalty;
+
+  // cost of subst = mismatch - cost of losing a match
+  // cost of deletion = gap open + gap extend - cost of losing a match
+  int32_t edit_cost = std::min(mismatch - match, go + ge - match);
+  int32_t max_score = l * match;
+  return  (static_cast<double>(max_score + edit_cost) - 0.5) / max_score;
+}
+
 } // namespace utils
 } // namespace salmon
 

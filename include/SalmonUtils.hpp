@@ -318,6 +318,8 @@ LibraryFormat hitType(int32_t end1Start, bool end1Fwd, uint32_t len1,
  */
 LibraryFormat hitType(int32_t readStart, bool isForward);
 
+double compute_1_edit_threshold(int32_t l, const SalmonOpts& sopt);
+
 /**
  *  Cache the mappings provided in an efficient binary format
  *  to the provided file handle.
