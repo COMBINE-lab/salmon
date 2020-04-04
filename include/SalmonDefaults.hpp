@@ -154,7 +154,7 @@ namespace defaults {
   constexpr const float consensusSlack{0.6};
   constexpr const double keepCBFraction{0.0};
   constexpr const double minScoreFraction{0.87};
-  constexpr const double minScoreCiteSeqFraction{0.01};
+  constexpr const double minScoreCiteSeqFraction{0.6};
   constexpr const double vbemNorm{0.0};
 }
 }
