@@ -422,7 +422,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
 
   // ignoring all the frequencies having same frequency as cutoff
   // to imitate stable sort
-  aopt.kneeCutoff = topxBarcodes;
+  aopt.kneeCutoff = topxBarcodes + 1;
   size_t totalUsableBarcodes = lowRegionNumBarcodes + topxBarcodes + 1;
   if (totalUsableBarcodes > freqCounter.size()) {
     size_t offset = freqCounter.size() - topxBarcodes - 1;
