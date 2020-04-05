@@ -91,7 +91,7 @@ namespace salmon {
        "write the orphaned mappings to file (--writeOrphanLinks).")
       ("noSA",
        po::bool_switch(&(sopt.disableSA))->default_value(salmon::defaults::disableSA),
-       "[Quasi-mapping mode only] : Disable selective-alignment in favor of basic quasi-mapping. "
+       "[Not currently supported] : Disable selective-alignment in favor of basic quasi-mapping. "
        "If this flag is passed, selective-alignment and alignment scoring of reads will be disabled."
        )
       ("validateMappings",
@@ -203,7 +203,8 @@ namespace salmon {
        "from the (approximate) initial mapping location and using extension alignment.  This is in contrast with the "
        "default behavior which is to only perform alignment between the MEMs in the optimal chain (and before the "
        "first and after the last MEM if applicable).  The default strategy forces the MEMs to belong to the alignment, "
-       "but has the benefit that it can discover indels prior to the first hit shared between the read and reference."
+       "but has the benefit that it can discover indels prior to the first hit shared between the read and reference. Except in "
+       "very rare circumstances, the default mode should be more accurate."
        )
       ("hardFilter",
        po::bool_switch(&(sopt.hardFilter))->default_value(salmon::defaults::hardFilter),

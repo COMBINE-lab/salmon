@@ -1081,8 +1081,15 @@ void processReads(
             numMappingsDropped += validScore ? 0 : 1;
             auto tid = qidx->getRefId(jointHit.tid);
 
+            // ----- compatibility determination 
+            // This code is to determine if a given PE mapping is _compatible_ or not with
+            // the expected library format.  This is to remove stochasticity in mapping.
+            // Specifically, if there are equally highest-scoring alignments to a target
+            // we will always prefer the one that is compatible.
+
             bool isUnstranded = expectedLibraryFormat.strandedness == ReadStrandedness::U;
             bool isOrphan = jointHit.isOrphan();
+            
             // if the protocol is unstranded:
             // (1) an orphan is always compatible
             // (2) a paired-end mapping is compatible if the ends are on separate strands
@@ -1116,6 +1123,7 @@ void processReads(
                             (!leftIsFw and rightIsFw) : false);
               }
             }
+            // ----- end compatibility determination 
 
             // alternative compat
             /**
@@ -1161,7 +1169,6 @@ void processReads(
             ++idx;
           }
 
-          //bool bestHitDecoy = (msi.bestScore < msi.bestDecoyScore);
           bool bestHitDecoy = msi.haveOnlyDecoyMappings();
           if (msi.bestScore > invalidScore and !bestHitDecoy) {
             salmon::mapping_utils::filterAndCollectAlignments(jointHits,
@@ -1187,7 +1194,7 @@ void processReads(
             jointAlignmentGroup.clearAlignments();
           }
         } else if (isPaired and noDovetail) {
-          salmonOpts.jointLog->warn("HAVE NOT THOUGHT ABOUT THIS CODE-PATH YET!");
+          salmonOpts.jointLog->critical("This code path is not yet implemented!");
           jointAlignments.erase(
                           std::remove_if(jointAlignments.begin(), jointAlignments.end(),
                                          [](const QuasiAlignment& h) -> bool {
