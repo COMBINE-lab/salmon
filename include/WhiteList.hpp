@@ -37,9 +37,8 @@ namespace alevin {
 
     template <typename ProtocolT>
     bool performWhitelisting(AlevinOpts<ProtocolT>& aopt,
-                             std::vector<uint32_t>& umiCount,
                              std::vector<std::string>& trueBarcodes,
-                             CFreqMapT& freqCounter, bool useRibo, bool useMito,
+                             bool useRibo, bool useMito,
                              size_t numLowConfidentBarcode);
   }
 }

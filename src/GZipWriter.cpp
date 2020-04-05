@@ -497,6 +497,9 @@ bool GZipWriter::writeMetaAlevin(const AlevinOpts<ProtocolT>& opts,
       oa(cereal::make_nvp("low_conf_cbs", opts.totalLowConfidenceCBs));
       oa(cereal::make_nvp("num_features", opts.numFeatures));
     }
+    if(opts.numNoMapCB > 0) {
+      oa(cereal::make_nvp("no_read_mapping_cbs", opts.numNoMapCB));
+    }
     oa(cereal::make_nvp("final_num_cbs", opts.intelligentCutoff));
 
     if (opts.numBootstraps > 0) {
@@ -1506,6 +1509,110 @@ bool GZipWriter::writeUmiGraph(alevin::graph::Graph& g,
 
   ofile << std::endl;
   return true;
+}
+
+void GZipWriter::writeMtx(std::shared_ptr<spdlog::logger>& jointLog, 
+              boost::filesystem::path& outputDirectory, 
+              size_t numGenes, size_t numCells, size_t totalExpGeneCounts) {
+    jointLog->info("Starting dumping cell v gene counts in mtx format");
+    boost::filesystem::path qFilePath = outputDirectory / "quants_mat.mtx.gz";
+
+    boost::iostreams::filtering_ostream qFile;
+    qFile.push(boost::iostreams::gzip_compressor(6));
+    qFile.push(boost::iostreams::file_sink(qFilePath.string(),
+                                           std::ios_base::out | std::ios_base::binary));
+
+    // mtx header
+    qFile << "%%MatrixMarket\tmatrix\tcoordinate\treal\tgeneral" << std::endl
+          << numCells << "\t" << numGenes << "\t" << totalExpGeneCounts << std::endl;
+
+    {
+
+      auto popcount = [](uint8_t n) {
+        size_t count {0};
+        while (n) {
+          n &= n-1;
+          ++count;
+        }
+        return count;
+      };
+
+      uint32_t zerod_cells {0};
+      size_t numFlags = std::ceil(numGenes/8.0);
+      std::vector<uint8_t> alphasFlag (numFlags, 0);
+      size_t flagSize = sizeof(decltype(alphasFlag)::value_type);
+
+      std::vector<float> alphasSparse;
+      alphasSparse.reserve(numFlags/2);
+      size_t elSize = sizeof(decltype(alphasSparse)::value_type);
+
+      auto countMatFilename = outputDirectory / "quants_mat.gz";
+      if(not boost::filesystem::exists(countMatFilename)){
+        jointLog->error("Can't import Binary file quants.mat.gz, it doesn't exist");
+        jointLog->flush();
+        exit(84);
+      }
+
+      boost::iostreams::filtering_istream countMatrixStream;
+      countMatrixStream.push(boost::iostreams::gzip_decompressor());
+      countMatrixStream.push(boost::iostreams::file_source(countMatFilename.string(),
+                                                           std::ios_base::in | std::ios_base::binary));
+
+      for (size_t cellCount=0; cellCount<numCells; cellCount++){
+        countMatrixStream.read(reinterpret_cast<char*>(alphasFlag.data()), flagSize * numFlags);
+
+        size_t numExpGenes {0};
+        std::vector<size_t> indices;
+        for (size_t j=0; j<alphasFlag.size(); j++) {
+          uint8_t flag = alphasFlag[j];
+          size_t numNonZeros = popcount(flag);
+          numExpGenes += numNonZeros;
+
+          for (size_t i=0; i<8; i++){
+            if (flag & (128 >> i)) {
+              indices.emplace_back( i+(8*j) );
+            }
+          }
+        }
+
+        if (indices.size() != numExpGenes) {
+          jointLog->error("binary format reading error {}: {}: {}",
+                           indices.size(), numExpGenes);
+          jointLog->flush();
+          exit(84);
+        }
+
+
+        alphasSparse.clear();
+        alphasSparse.resize(numExpGenes);
+        countMatrixStream.read(reinterpret_cast<char*>(alphasSparse.data()), elSize * numExpGenes);
+
+        float readCount {0.0};
+        readCount += std::accumulate(alphasSparse.begin(), alphasSparse.end(), 0.0);
+        if (readCount > 1000000) {
+          jointLog->warn("A cell has more 1M count, Possible error");
+          jointLog->flush();
+        }
+
+        for(size_t i=0; i<numExpGenes; i++) {
+          qFile << std::fixed
+                << cellCount + 1 << "\t"
+                << indices[i] + 1 << "\t"
+                << alphasSparse[i] <<  std::endl;
+        }
+
+        if (readCount == 0.0){
+          zerod_cells += 1;
+        }
+      } // end-for each cell
+
+      if (zerod_cells > 0) {
+        jointLog->warn("Found {} cells with 0 counts", zerod_cells);
+      }
+    }
+
+    boost::iostreams::close(qFile);
+    jointLog->info("Finished dumping counts into mtx");
 }
 
 using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;

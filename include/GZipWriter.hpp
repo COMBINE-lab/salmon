@@ -96,6 +96,10 @@ public:
 
   bool setSamplingPath(const SalmonOpts& sopt);
 
+  void writeMtx(std::shared_ptr<spdlog::logger>& jointLog, 
+                boost::filesystem::path& outputDirectory,
+                size_t numGenes, size_t numCells, size_t totalExpGeneCounts);
+
 private:
   boost::filesystem::path path_;
   boost::filesystem::path bsPath_;

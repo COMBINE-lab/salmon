@@ -632,9 +632,6 @@ namespace alevin {
       }  // things which needs to be updated for salmonOpts
 
       // validate customized options for custom protocol
-      // NOTE : @k3yavi, I tried to clean this up a little bit
-      // because the previous logic was a little complicated.
-      // Please look over the below.
       bool haveCustomEnd = vm.count("end");
       bool haveCustomBC= vm.count("barcodeLength");
       bool haveCustomUMI = vm.count("umiLength");
@@ -737,17 +734,12 @@ namespace alevin {
 
       // enable validate mappings
       sopt.validateMappings = true;
-      // @k3yavi --- doing this for now as a result of our testing.
-      // let me know if you have any other thoughts.
       sopt.hitFilterPolicyStr = "BOTH";
       bool optionsOK =
         salmon::utils::processQuantOptions(sopt, vm, vm["numBiasSamples"].as<int32_t>());
       if (!vm.count("minScoreFraction")) {
-        // @k3yavi --- do we really want to detect CITE-seq here just by
-        // virtue of not having a TG map?  Maybe we should set explicitly?
-        // I propose the following; let me know what you think:
-        if (vm["citeseq"].as<bool>()) {
-          int32_t l = aopt.protocol.barcodeLength + aopt.protocol.umiLength;
+        if (noTgMap) {
+          int32_t l = vm["featureLength"].as<size_t>();
           sopt.minScoreFraction = salmon::utils::compute_1_edit_threshold(l, sopt);
           aopt.jointLog->info("set CITE-seq minScoreFraction parameter to : {}",
                               sopt.minScoreFraction);

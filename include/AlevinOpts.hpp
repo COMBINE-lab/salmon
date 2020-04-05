@@ -19,6 +19,7 @@ struct AlevinOpts {
   AlevinOpts(): numParsingThreads(1),
                 numConsumerThreads(2),
                 useVBEM{false},
+                numNoMapCB(0),
                 initUniform{false}{}
 
   //IUPAC code for the cell-barcodes
@@ -114,6 +115,7 @@ struct AlevinOpts {
   uint32_t intelligentCutoff;
   uint32_t totalLowConfidenceCBs;
   uint32_t numFeatures;
+  uint32_t numNoMapCB;
 
   uint32_t eqReads;
   uint32_t noisyUmis;
