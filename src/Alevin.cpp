@@ -339,6 +339,9 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
       --topxBarcodes;
       ++belowThresholdCb;
     }
+
+    // converting 0 index to 1 index
+    ++topxBarcodes;
     aopt.jointLog->info("Throwing {} barcodes with < {} reads", belowThresholdCb, aopt.freqThreshold);
     aopt.jointLog->flush();
   }
@@ -357,7 +360,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
     topxBarcodes = maxNumCells;
     for(size_t i=baselineBcs; i<maxNumCells; i++){
       if (freqCounter[sortedIdx[i]] < cutoffFrequency) {
-        topxBarcodes = i;
+        topxBarcodes = i + 1;
         break;
       }
     }
@@ -422,7 +425,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
 
   // ignoring all the frequencies having same frequency as cutoff
   // to imitate stable sort
-  aopt.kneeCutoff = topxBarcodes + 1;
+  aopt.kneeCutoff = topxBarcodes;
   size_t totalUsableBarcodes = lowRegionNumBarcodes + topxBarcodes + 1;
   if (totalUsableBarcodes > freqCounter.size()) {
     size_t offset = freqCounter.size() - topxBarcodes - 1;
