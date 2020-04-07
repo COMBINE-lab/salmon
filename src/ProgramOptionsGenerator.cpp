@@ -232,13 +232,6 @@ namespace salmon {
        "format.  By default, output will be directed to "
        "stdout, but an alternative file name can be "
        "provided instead.")
-       /*
-      ("fasterMapping",
-       po::bool_switch(&(sopt.fasterMapping))->default_value(salmon::defaults::fasterMapping),
-       "[Developer]: Disables some extra checks during quasi-mapping. This "
-       "may make mapping a little bit faster at the potential cost of "
-       "missing some difficult alignments.")
-       */
       ("hitFilterPolicy",
        po::value<string>(&sopt.hitFilterPolicyStr)->default_value(salmon::defaults::hitFilterPolicyStr),
        "[selective-alignment mode only] : Determines the policy by which hits are filtered in selective alignment.  Filtering hits after "
