@@ -1045,9 +1045,12 @@ void processReads(
       if (!jointHits.empty()) {
         bool isPaired = jointHits.front().mateStatus ==
                         MateStatus::PAIRED_END_PAIRED;
+        /*
         if (isPaired) {
           mapType = salmon::utils::MappingType::PAIRED_MAPPED;
         }
+        */
+
         // If we are ignoring orphans
         if (!salmonOpts.allowOrphans) {
           // If the mappings for the current read are not properly-paired (i.e.
@@ -1188,7 +1191,27 @@ void processReads(
                                        bestDecoyScore,
                                        */
                                        jointAlignments);
+
+            if (!jointAlignments.empty()) {
+              auto& h = jointAlignments.front();
+              switch (h.mateStatus) {
+              case pufferfish::util::MateStatus::PAIRED_END_PAIRED:
+                mapType = salmon::utils::MappingType::PAIRED_MAPPED;
+                break;
+              case pufferfish::util::MateStatus::PAIRED_END_LEFT:
+                mapType = salmon::utils::MappingType::LEFT_ORPHAN;
+                break;
+              case pufferfish::util::MateStatus::PAIRED_END_RIGHT:
+                mapType = salmon::utils::MappingType::RIGHT_ORPHAN;
+                break;
+              default:
+                mapType = salmon::utils::MappingType::UNMAPPED;
+                break;
+              }
+            }
+
           } else {
+            mapType = bestHitDecoy ? salmon::utils::MappingType::DECOY : salmon::utils::MappingType::UNMAPPED;
             numDecoyFrags += bestHitDecoy ? 1 : 0;
             ++numFragsDropped;
             jointAlignmentGroup.clearAlignments();
@@ -1576,6 +1599,7 @@ void processReads(
        jointHitGroup.clearAlignments();
        auto& jointAlignments = jointHitGroup.alignments();
 
+       mapType = salmon::utils::MappingType::UNMAPPED;
        perm.clear();
        hits.clear();
        jointHits.clear();
@@ -1691,7 +1715,11 @@ void processReads(
                                       bestDecoyScore,
                                       */
                                       jointAlignments);
+            if (!jointAlignments.empty()) {
+              mapType = salmon::utils::MappingType::SINGLE_MAPPED;
+            }
          } else {
+           mapType = (bestHitDecoy) ? salmon::utils::MappingType::DECOY : salmon::utils::MappingType::UNMAPPED;
            numDecoyFrags += bestHitDecoy ? 1 : 0;
            ++numFragsDropped;
            jointHitGroup.clearAlignments();
@@ -1758,7 +1786,7 @@ void processReads(
          writeAlignmentsToStreamSingle(rp, formatter, jointAlignments, sstream, false, true);
        }
 
-       if (writeUnmapped and jointHits.empty()) {
+       if (writeUnmapped and mapType != salmon::utils::MappingType::SINGLE_MAPPED) {
          // If we have no mappings --- then there's nothing to do
          // unless we're outputting names for un-mapped reads
          unmappedNames << rp.name << " u\n";

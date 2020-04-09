@@ -28,7 +28,6 @@ extern "C" {
 
 #include "GenomicFeature.hpp"
 #include "LibraryFormat.hpp"
-//#include "RapMapUtils.hpp"
 #include "pufferfish/Util.hpp"
 #include "ReadLibrary.hpp"
 #include "SalmonConfig.hpp"
@@ -55,7 +54,8 @@ enum class MappingType : uint8_t {
   RIGHT_ORPHAN = 2,
   BOTH_ORPHAN = 3,
   PAIRED_MAPPED = 4,
-  SINGLE_MAPPED = 5
+  SINGLE_MAPPED = 5,
+  DECOY = 6
 };
 
 enum class DuplicateTargetStatus : uint8_t { 

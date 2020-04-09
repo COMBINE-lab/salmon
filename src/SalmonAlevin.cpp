@@ -489,6 +489,7 @@ void processReadsQuasi(
   std::string readSubSeq;
   //////////////////////
 
+  bool tryAlign{salmonOpts.validateMappings};
   auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
     rangeSize = rg.size();
@@ -648,7 +649,6 @@ void processReadsQuasi(
       }
 
         // adding validate mapping code
-        bool tryAlign{salmonOpts.validateMappings};
         if (tryAlign and !jointHits.empty()) {
           puffaligner.clear();
           bestScorePerTranscript.clear();
@@ -712,10 +712,14 @@ void processReadsQuasi(
                                                               bestDecoyScore,
                                                               */
                                                               jointAlignments);
+            if (!jointAlignments.empty()) {
+              mapType = salmon::utils::MappingType::SINGLE_MAPPED;
+            }
           } else {
             numDecoyFrags += bestHitDecoy ? 1 : 0;
             ++numDropped;
             jointHitGroup.clearAlignments();
+            mapType = (bestHitDecoy) ? salmon::utils::MappingType::DECOY : salmon::utils::MappingType::UNMAPPED;
           }
         } //end-if validate mapping
 
@@ -727,7 +731,7 @@ void processReadsQuasi(
           */
         }
 
-      if (writeUnmapped and mapType == salmon::utils::MappingType::UNMAPPED) {
+      if (writeUnmapped and mapType != salmon::utils::MappingType::SINGLE_MAPPED) {
         // If we have no mappings --- then there's nothing to do
         // unless we're outputting names for un-mapped reads
         unmappedNames << rp.first.name << ' ' << salmon::utils::str(mapType) << '\n';

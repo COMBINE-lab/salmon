@@ -69,6 +69,8 @@ std::string str(const MappingType& mt) {
     return "mp";
   case MappingType::SINGLE_MAPPED:
     return "ms";
+  case MappingType::DECOY:
+    return "d";
   }
   // should never get here!
   return "E";
