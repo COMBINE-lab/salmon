@@ -122,7 +122,7 @@ size_t readBfh(bfs::path& eqFilePath,
     } // end else case of not hasWhitelist
   } // end name/index rearrangement
 
-  countMap.set_max_resize_threads(1);
+  countMap.max_num_worker_threads(1);
   countMap.reserve(1000000);
 
   alevin::types::AlevinUMIKmer umiObj;

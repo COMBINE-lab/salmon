@@ -1191,8 +1191,9 @@ void processReads(
                                        bestDecoyScore,
                                        */
                                        jointAlignments);
-
+            // if we have alignments
             if (!jointAlignments.empty()) {
+              // chose the mapType based on the mate status
               auto& h = jointAlignments.front();
               switch (h.mateStatus) {
               case pufferfish::util::MateStatus::PAIRED_END_PAIRED:
@@ -1211,6 +1212,7 @@ void processReads(
             }
 
           } else {
+            // if we had decoy hits, our type is decoy, otherwise it's unmapped
             mapType = bestHitDecoy ? salmon::utils::MappingType::DECOY : salmon::utils::MappingType::UNMAPPED;
             numDecoyFrags += bestHitDecoy ? 1 : 0;
             ++numFragsDropped;
@@ -1715,10 +1717,13 @@ void processReads(
                                       bestDecoyScore,
                                       */
                                       jointAlignments);
+            // if we have any alignments, then they are 
+            // just single mapped.
             if (!jointAlignments.empty()) {
               mapType = salmon::utils::MappingType::SINGLE_MAPPED;
             }
          } else {
+           // if we had decoy hits, our type is decoy, otherwise it's unmapped
            mapType = (bestHitDecoy) ? salmon::utils::MappingType::DECOY : salmon::utils::MappingType::UNMAPPED;
            numDecoyFrags += bestHitDecoy ? 1 : 0;
            ++numFragsDropped;

@@ -801,24 +801,28 @@ void processReadsQuasi(
 
 template <typename AlnT, typename ProtocolT>
 void processReadLibrary(
-                        ReadExperimentT& readExp, ReadLibrary& rl, SalmonIndex* sidx,
-                        std::vector<Transcript>& transcripts, ClusterForest& clusterForest,
-                        std::atomic<uint64_t>&
-                        numObservedFragments, // total number of reads we've looked at
-                        std::atomic<uint64_t>&
-                        numAssignedFragments,              // total number of assigned reads
+                        ReadExperimentT& readExp, 
+                        ReadLibrary& rl, 
+                        SalmonIndex* sidx,
+                        std::vector<Transcript>& transcripts, 
+                        ClusterForest& clusterForest,
+                        std::atomic<uint64_t>& numObservedFragments, // total number of reads we've looked at
+                        std::atomic<uint64_t>& numAssignedFragments, // total number of assigned reads
                         std::atomic<uint64_t>& upperBoundHits, // upper bound on # of mapped frags
                         std::atomic<uint32_t>& smallSeqs,
                         std::atomic<uint32_t>& nSeqs,
                         bool initialRound,
-                        std::atomic<bool>& burnedIn, ForgettingMassCalculator& fmCalc,
+                        std::atomic<bool>& burnedIn, 
+                        ForgettingMassCalculator& fmCalc,
                         FragmentLengthDistribution& fragLengthDist,
                         SalmonOpts& salmonOpts,
-                        std::mutex& iomutex, size_t numThreads,
+                        std::mutex& iomutex, 
+                        size_t numThreads,
                         std::vector<AlnGroupVec<AlnT>>& structureVec,
                         AlevinOpts<ProtocolT>& alevinOpts,
                         SoftMapT& barcodeMap,
-                        spp::sparse_hash_map<std::string, uint32_t>& trBcs, MappingStatistics& mstats) {
+                        spp::sparse_hash_map<std::string, uint32_t>& trBcs, 
+                        MappingStatistics& mstats) {
 
   std::vector<std::thread> threads;
 

@@ -31,11 +31,11 @@
 
 namespace bfs = boost::filesystem;
 using JqueueT = moodycamel::ConcurrentQueue<uint32_t>;
-using eqMapT = cuckoohash_map<TranscriptGroup, SCTGValue, TranscriptGroupHasher>;
+using eqMapT = libcuckoo::cuckoohash_map<TranscriptGroup, SCTGValue, TranscriptGroupHasher>;
 using tgrouplabelt = std::vector<uint32_t>;
 using tgroupweightvec = std::vector<double>;
 using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
-using EqMapT = cuckoohash_map<TranscriptGroup, SCTGValue, TranscriptGroupHasher>;
+using EqMapT = libcuckoo::cuckoohash_map<TranscriptGroup, SCTGValue, TranscriptGroupHasher>;
 
 constexpr double digammaMin = 1e-10;
 
