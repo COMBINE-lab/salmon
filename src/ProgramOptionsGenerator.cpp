@@ -17,7 +17,9 @@ namespace salmon {
       ("seqBias", po::bool_switch(&(sopt.biasCorrect))->default_value(salmon::defaults::seqBiasCorrect),
        "Perform sequence-specific bias correction.")
       ("gcBias", po::bool_switch(&(sopt.gcBiasCorrect))->default_value(salmon::defaults::gcBiasCorrect),
-       "[beta for single-end reads] Perform fragment GC bias correction")
+       "[beta for single-end reads] Perform fragment GC bias correction.")
+      ("posBias", po::bool_switch(&(sopt.posBiasCorrect))->default_value(salmon::defaults::posBiasCorrect),
+        "Perform positional bias correction.")
       ("threads,p",
        po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads),
        "The number of threads to use concurrently.")
@@ -82,26 +84,25 @@ namespace salmon {
     mapspec.add_options()
       ("discardOrphansQuasi",
        po::bool_switch(&(sopt.discardOrphansQuasi))->default_value(salmon::defaults::discardOrphansQuasi),
-       "[Quasi-mapping mode only] : Discard orphan mappings in quasi-mapping "
+       "[selective-alignment mode only] : Discard orphan mappings in quasi-mapping "
        "mode.  If this flag is passed "
        "then only paired mappings will be considered toward quantification "
        "estimates.  The default behavior is "
        "to consider orphan mappings if no valid paired mappings exist.  This "
        "flag is independent of the option to "
        "write the orphaned mappings to file (--writeOrphanLinks).")
+       /*
       ("noSA",
        po::bool_switch(&(sopt.disableSA))->default_value(salmon::defaults::disableSA),
-       "[Quasi-mapping mode only] : Disable selective-alignment in favor of basic quasi-mapping. "
+       "[Not currently supported] : Disable selective-alignment in favor of basic quasi-mapping. "
        "If this flag is passed, selective-alignment and alignment scoring of reads will be disabled."
-       )
+       )*/
       ("validateMappings",
        po::bool_switch(&(sopt.validateMappings))->default_value(salmon::defaults::validateMappings),
-       "[Quasi-mapping mode only] : Validate mappings using alignment-based verifcation. "
-       "If this flag is passed, mappings will be validated to ensure that they could give "
-       "rise to a reasonable alignment before they are further used for quantification.")
+       "[*deprecated* (no effect; selective-alignment is the default)]")
       ("consensusSlack",
        po::value<float>(&(sopt.consensusSlack))->default_value(salmon::defaults::consensusSlack),
-       "[Quasi-mapping mode only] : The amount of slack allowed in the quasi-mapping consensus "
+       "[selective-alignment mode only] : The amount of slack allowed in the quasi-mapping consensus "
        "mechanism.  Normally, a transcript must cover all hits to be considered for mapping.  "
        "If this is set to a fraction, X, greater than 0 (and in [0,1)), then a transcript can fail to cover up to "
        "(100 * X)% of the hits before it is discounted as a mapping candidate.  The default value of this option "
@@ -109,68 +110,86 @@ namespace salmon {
        )
       ("scoreExp", 
       po::value<double>(&sopt.scoreExp)->default_value(salmon::defaults::scoreExp),
-      "[Quasi-mapping mode (w / mapping validation) only] : The factor by which sub-optimal alignment scores are "
+      "[selective-alignment mode only] : The factor by which sub-optimal alignment scores are "
       "downweighted to produce a probability.  If the best alignment score for the current read is S, and the score "
       "for a particular alignment is w, then the probability will be computed porportional to exp( - scoreExp * (S-w) )."
       )
       ("minScoreFraction",
        po::value<double>(&sopt.minScoreFraction),
-       "[Quasi-mapping mode (w / mapping validation) only] : The fraction of the optimal possible alignment score that a "
+       "[selective-alignment mode only] : The fraction of the optimal possible alignment score that a "
        "mapping must achieve in order to be considered \"valid\" --- should be in (0,1].\n"
        "Salmon Default 0.65 and Alevin Default 0.87"
        )
+      ("disableChainingHeuristic",
+      po::bool_switch(&(sopt.disableChainingHeuristic))->default_value(salmon::defaults::disableChainingHeuristic),
+      "[selective-alignment mode only] : By default, the heuristic of (Li 2018) is implemented, which terminates "
+      "the chaining DP once a given number of valid backpointers are found.  This speeds up the seed (MEM) "
+      "chaining step, but may result in sub-optimal chains in complex situations (e.g. sequences with many repeats and "
+      "overlapping repeats).  Passing this flag will disable the chaining heuristic, and perform the full chaining "
+      "dynamic program, guaranteeing the optimal chain is found in this step."
+      )
       ("decoyThreshold",
        po::value<double>(&sopt.decoyThreshold)->default_value(salmon::defaults::decoyThreshold),
-       "For an alignemnt to an annotated transcript to be considered invalid, it must have an alignment "
+       "[selective-alignment mode only] : For an alignemnt to an annotated transcript to be considered invalid, it must have an alignment "
        "score < (decoyThreshold * bestDecoyScore).  A value of 1.0 means that any alignment strictly worse than "
        "the best decoy alignment will be discarded.  A smaller value will allow reads to be allocated to transcripts "
        "even if they strictly align better to the decoy sequence."
       )
       ("ma",
        po::value<int16_t>(&sopt.matchScore)->default_value(salmon::defaults::matchScore),
-       "[Quasi-mapping mode (w / mapping validation) only] : The value given to a match between read and reference nucleotides "
+       "[selective-alignment mode only] : The value given to a match between read and reference nucleotides "
        "in an alignment."
        )
       ("mp",
        po::value<int16_t>(&sopt.mismatchPenalty)->default_value(salmon::defaults::mismatchPenalty),
-       "[Quasi-mapping mode (w / mapping validation) only] : The value given to a mis-match between read and reference nucleotides "
+       "[selective-alignment mode only] : The value given to a mis-match between read and reference nucleotides "
        "in an alignment."
        )
       ("go",
        po::value<int16_t>(&sopt.gapOpenPenalty)->default_value(salmon::defaults::gapOpenPenalty),
-       "[Quasi-mapping mode (w / mapping validation) only] : The value given to a gap opening in an alignment."
+       "[selective-alignment mode only] : The value given to a gap opening in an alignment."
        )
       ("ge",
        po::value<int16_t>(&sopt.gapExtendPenalty)->default_value(salmon::defaults::gapExtendPenalty),
-       "[Quasi-mapping mode (w / mapping validation) only] : The value given to a gap extension in an alignment."
+       "[selective-alignment mode only] : The value given to a gap extension in an alignment."
        )
       ("bandwidth",
        po::value<int32_t>(&sopt.dpBandwidth)->default_value(salmon::defaults::dpBandwidth),
-       "[Quasi-mapping mode (w / mapping validation) only] : The value used for the bandwidth passed to ksw2.  A smaller "
+       "[selective-alignment mode only] : The value used for the bandwidth passed to ksw2.  A smaller "
        "bandwidth can make the alignment verification run more quickly, but could possibly miss valid alignments."
        )
       ("allowDovetail",
        po::bool_switch(&(sopt.allowDovetail))->default_value(salmon::defaults::allowDovetail),
-       "[Quasi-mapping mode only] : allow dovetailing mappings."
+       "[selective-alignment mode only] : allow dovetailing mappings."
        )
       ("recoverOrphans",
        po::bool_switch(&(sopt.recoverOrphans))->default_value(salmon::defaults::recoverOrphans),
-       "[Quasi-mapping mode only] : Attempt to recover the mates of orphaned reads. This uses edlib for "
+       "[selective-alignment mode only] : Attempt to recover the mates of orphaned reads. This uses edlib for "
        "orphan recovery, and so introduces some computational overhead, but it can improve sensitivity."
        )
       ("mimicBT2", // horrible flag name, think of something better
        po::bool_switch(&(sopt.mimicBT2))->default_value(salmon::defaults::mimicBT2),
-       "[Quasi-mapping mode (w / mapping validation) only] : Set flags to mimic parameters similar to "
+       "[selective-alignment mode only] : Set flags to mimic parameters similar to "
        "Bowtie2 with --no-discordant and --no-mixed flags.  This increases disallows dovetailing reads, and "
        "discards orphans. Note, this does not impose the very strict parameters assumed by RSEM+Bowtie2, "
        "like gapless alignments.  For that behavior, use the --mimiStrictBT2 flag below."
        )
       ("mimicStrictBT2", // horrible flag name, think of something better
        po::bool_switch(&(sopt.mimicStrictBT2))->default_value(salmon::defaults::mimicStrictBT2),
-       "[Quasi-mapping mode (w / mapping validation) only] : Set flags to mimic the very strict parameters used by "
+       "[selective-alignment mode only] : Set flags to mimic the very strict parameters used by "
        "RSEM+Bowtie2.  This increases --minScoreFraction to 0.8, disallows dovetailing reads, "
        "discards orphans, and disallows gaps in alignments."
        )
+      ("softclip", 
+       po::bool_switch(&(sopt.softclip))->default_value(salmon::defaults::softclip),
+       "[selective-alignment mode only (experimental)] : Allos soft-clipping of reads during selective-alignment. If this "
+       "option is provided, then regions at the beginning or end of the read can be withheld from alignment "
+       "without any effect on the resulting score (i.e. neither adding nor removing from the score).  This "
+       "will drastically reduce the penalty if there are mismatches at the beginning or end of the read "
+       "due to e.g. low-quality bases or adapters.  NOTE: Even with soft-clipping enabled, the read must still "
+       "achieve a score of at least minScoreFraction * maximum achievable score, where the maximum achievable "
+       "score is computed based on the full (un-clipped) read length."
+      )
       ("softclipOverhangs", 
        po::bool_switch(&(sopt.softclipOverhangs))->default_value(salmon::defaults::softclipOverhangs),
        "[selective-alignment mode only] : Allow soft-clipping of reads that overhang the beginning or ends "
@@ -185,11 +204,12 @@ namespace salmon {
        "from the (approximate) initial mapping location and using extension alignment.  This is in contrast with the "
        "default behavior which is to only perform alignment between the MEMs in the optimal chain (and before the "
        "first and after the last MEM if applicable).  The default strategy forces the MEMs to belong to the alignment, "
-       "but has the benefit that it can discover indels prior to the first hit shared between the read and reference."
+       "but has the benefit that it can discover indels prior to the first hit shared between the read and reference. Except in "
+       "very rare circumstances, the default mode should be more accurate."
        )
       ("hardFilter",
        po::bool_switch(&(sopt.hardFilter))->default_value(salmon::defaults::hardFilter),
-       "[Quasi-mapping mode (w / mapping validation) only] : Instead of weighting mappings by their alignment score, "
+       "[selective-alignemnt mode only] : Instead of weighting mappings by their alignment score, "
        "this flag will discard any mappings with sub-optimal alignment score.  The default option of soft-filtering "
        "(i.e. weighting mappings by their alignment score) usually yields slightly more accurate abundance estimates "
        "but this flag may be desirable if you want more accurate 'naive' equivalence classes, rather "
@@ -204,16 +224,6 @@ namespace salmon {
        "final quantifications.  Filtering such alignments reduces the number of variables that need "
        "to be considered and can result in slightly faster inference and 'cleaner' equivalence classes."
        )
-      /*
-      ("allowOrphansFMD",
-       po::bool_switch(&(sopt.allowOrphans))->default_value(salmon::defaults::allowOrphansFMD),
-       "[FMD-mapping mode only] : Consider orphaned reads as valid hits when "
-       "performing lightweight-alignment.  This option will increase "
-       "sensitivity (allow more reads to map and "
-       "more transcripts to be detected), but may decrease specificity as "
-       "orphaned alignments are more likely "
-       "to be spurious.")
-      */
       ("writeMappings,z", po::value<string>(&sopt.qmFileName)
        ->default_value(salmon::defaults::quasiMappingDefaultFile)
        ->implicit_value(salmon::defaults::quasiMappingImplicitFile),
@@ -222,38 +232,17 @@ namespace salmon {
        "format.  By default, output will be directed to "
        "stdout, but an alternative file name can be "
        "provided instead.")
-      /*
-      ("consistentHits,c",
-       po::bool_switch(&(sopt.consistentHits))->default_value(salmon::defaults::consistentHits),
-       "Force hits gathered during "
-       "quasi-mapping to be \"consistent\" (i.e. co-linear and "
-       "approximately the right distance apart).")
-      */
-      ("fasterMapping",
-       po::bool_switch(&(sopt.fasterMapping))->default_value(salmon::defaults::fasterMapping),
-       "[Developer]: Disables some extra checks during quasi-mapping. This "
-       "may make mapping a little bit faster at the potential cost of "
-       "missing some difficult alignments.")
-      /*
-      ("quasiCoverage,x",
-       po::value<double>(&(sopt.quasiCoverage))->default_value(salmon::defaults::quasiCoverage),
-       "[Experimental]: The fraction of the read that must be covered by "
-       "MMPs (of length >= 31) if "
-       "this read is to be considered as \"mapped\".  This may help to "
-       "avoid \"spurious\" mappings. "
-       "A value of 0 (the default) denotes no coverage threshold (a single "
-       "31-mer can yield a mapping).  "
-       "Since coverage by exact matching, large, MMPs is a rather strict "
-       "condition, this value should likely "
-       "be set to something low, if used.")
-      */
       ("hitFilterPolicy",
        po::value<string>(&sopt.hitFilterPolicyStr)->default_value(salmon::defaults::hitFilterPolicyStr),
-       "Determines the policy by which hits are filtered in selective alignment.  Filtering hits after "
+       "[selective-alignment mode only] : Determines the policy by which hits are filtered in selective alignment.  Filtering hits after "
        "chaining (the default) is more sensitive, but more computationally intensive, because it performs "
        "the chaining dynamic program for all hits.  Filtering before chaining is faster, but some true hits "
        "may be missed.  The options are BEFORE, AFTER, BOTH and NONE."
        );
+
+      sopt.disableSA = salmon::defaults::disableSA;
+      sopt.fasterMapping = salmon::defaults::fasterMapping;
+      
       return mapspec;
   }
 
@@ -287,7 +276,7 @@ namespace salmon {
     alignin.add_options()
     ("discardOrphans",
        po::bool_switch(&(sopt.discardOrphansAln))->default_value(salmon::defaults::discardOrphansAln),
-       "[Alignment-based mode only] : Discard orphan alignments in the input "
+       "[alignment-based mode only] : Discard orphan alignments in the input "
        ".  If this flag is passed, then only paired alignments will be "
        "considered toward quantification estimates.  The default behavior is "
        "to consider orphan alignments if no valid paired mappings exist.")
@@ -364,6 +353,9 @@ namespace salmon {
        "gemcode", po::bool_switch()->default_value(alevin::defaults::isGemcode),
        "Use 10x gemcode v1 Single Cell protocol for the library.")
       (
+       "citeseq", po::bool_switch()->default_value(alevin::defaults::isCITESeq),
+       "Use CITESeq Single Cell protocol for the library, 16 CB, 12 UMI and features.")
+      (
        "celseq", po::bool_switch()->default_value(alevin::defaults::isCELSeq),
        "Use CEL-Seq Single Cell protocol for the library.")
       (
@@ -375,6 +367,12 @@ namespace salmon {
       (
        "whitelist", po::value<std::string>(),
        "File containing white-list barcodes")
+      (
+       "featureStart", po::value<size_t>(),
+       "This flag should be used with citeseq and specifies the starting index of the feature barcode on Read2.")
+      (
+       "featureLength", po::value<size_t>(),
+       "This flag should be used with citeseq and specifies the length of the feature barcode.")
       (
        "noQuant", po::bool_switch()->default_value(alevin::defaults::noQuant),
        "Don't run downstream barcode-salmon model.")
@@ -773,8 +771,6 @@ namespace salmon {
     po::options_description testing("\n"
                                     "testing options");
     testing.add_options()
-      ("posBias", po::bool_switch(&(sopt.posBiasCorrect))->default_value(salmon::defaults::posBiasCorrect),
-                          "[experimental] Perform positional bias correction")
       ("noRichEqClasses",
       po::bool_switch(&(sopt.noRichEqClasses))->default_value(salmon::defaults::noRichEqClasses),
         "[TESTING OPTION]: Disable \"rich\" equivalent classes.  If this flag is "
@@ -788,6 +784,10 @@ namespace salmon {
         "account the "
         "goodness-of-fit of an alignment with the empirical fragment length "
         "distribution")
+      ("disableAlignmentCache",
+      po::bool_switch(&(sopt.disableAlignmentCache))->default_value(salmon::defaults::disableAlignmentCache),
+        "[TESTING OPTION]: Turn of the alignment cache.  This will hurt performance but "
+        "can help debug any issues that might result from caching")
       ("rankEqClasses",
       po::bool_switch(&(sopt.rankEqClasses))->default_value(salmon::defaults::rankEqClasses),
         "[TESTING OPTION]: Keep separate equivalence classes for each distinct "

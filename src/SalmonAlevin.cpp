@@ -455,6 +455,7 @@ void processReadsQuasi(
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   bool mimicBT2 = salmonOpts.mimicBT2;
   bool noDovetail = !salmonOpts.allowDovetail;
+  bool useChainingHeuristic = !salmonOpts.disableChainingHeuristic;
 
   pufferfish::util::HitCounters hctr;
   salmon::utils::MappingType mapType{salmon::utils::MappingType::UNMAPPED};
@@ -488,6 +489,7 @@ void processReadsQuasi(
   std::string readSubSeq;
   //////////////////////
 
+  bool tryAlign{salmonOpts.validateMappings};
   auto rg = parser->getReadGroup();
   while (parser->refill(rg)) {
     rangeSize = rg.size();
@@ -499,6 +501,8 @@ void processReadsQuasi(
                                  rangeSize, structureVec.size());
       std::exit(1);
     }
+
+    LibraryFormat expectedLibraryFormat = rl.format();
 
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
       auto& rp = rg[i];
@@ -528,7 +532,8 @@ void processReadsQuasi(
       nonstd::optional<uint32_t> barcodeIdx;
       bool seqOk;
 
-      if (alevinOpts.protocol.end == bcEnd::FIVE){
+      if (alevinOpts.protocol.end == bcEnd::FIVE ||
+          alevinOpts.protocol.end == bcEnd::THREE){
         barcode = aut::extractBarcode(rp.first.seq, alevinOpts.protocol);
         seqOk = (barcode.has_value()) ?
           aut::sequenceCheck(*barcode, Sequence::BARCODE) : false;
@@ -597,7 +602,7 @@ void processReadsQuasi(
                   //auto rh = hitCollector(readSubSeq, saSearcher, hcInfo);
                 }
               } else {
-                readSubSeq = rp.second.seq;
+                aut::getReadSequence(alevinOpts.protocol, rp.second.seq, readSubSeq);
                 auto rh = tooShortRight ? false : memCollector(readSubSeq, qc,
                                        true, // isLeft
                                        false // verbose
@@ -606,7 +611,7 @@ void processReadsQuasi(
               memCollector.findChains(readSubSeq, hits,
                                       salmonOpts.fragLenDistMax,
                                       MateStatus::PAIRED_END_RIGHT,
-                                      true, // heuristic chaining
+                                      useChainingHeuristic, // heuristic chaining
                                       true, // isLeft
                                       false // verbose
                                       );
@@ -644,7 +649,6 @@ void processReadsQuasi(
       }
 
         // adding validate mapping code
-        bool tryAlign{salmonOpts.validateMappings};
         if (tryAlign and !jointHits.empty()) {
           puffaligner.clear();
           bestScorePerTranscript.clear();
@@ -660,7 +664,7 @@ void processReadsQuasi(
           */
           salmon::mapping_utils::MappingScoreInfo msi = {invalidScore, invalidScore, invalidScore, decoyThreshold};
 
-          std::vector<decltype(msi.bestScore)> scores(jointHits.size(), 0);
+          std::vector<decltype(msi.bestScore)> scores(jointHits.size(), invalidScore);
           size_t idx{0};
           bool isMultimapping = (jointHits.size() > 1);
 
@@ -671,7 +675,17 @@ void processReadsQuasi(
             bool validScore = (hitScore != invalidScore);
             numMappingsDropped += validScore ? 0 : 1;
             auto tid = qidx->getRefId(jointHit.tid);
-            salmon::mapping_utils::updateRefMappings(tid, hitScore, idx, transcripts, invalidScore, 
+            
+            // NOTE: Here, we know that the read arising from the transcriptome is the "right"
+            // read (read 2).  So we interpret compatibility in that context.
+            // TODO: Make this code more generic and modular (account for the possibility of different library)
+            // protocols or setups where the reads are not always "paired-end" and the transcriptomic read is not
+            // always read 2 (@k3yavi).
+            bool isCompat = (expectedLibraryFormat.strandedness == ReadStrandedness::U) or 
+                            (jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::AS)) or
+                            (!jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::SA));
+
+            salmon::mapping_utils::updateRefMappings(tid, hitScore, isCompat, idx, transcripts, invalidScore, 
                                                      msi,
                                                      //bestScore, secondBestScore, bestDecoyScore,
                                                      scores, bestScorePerTranscript, perm);
@@ -698,10 +712,14 @@ void processReadsQuasi(
                                                               bestDecoyScore,
                                                               */
                                                               jointAlignments);
+            if (!jointAlignments.empty()) {
+              mapType = salmon::utils::MappingType::SINGLE_MAPPED;
+            }
           } else {
             numDecoyFrags += bestHitDecoy ? 1 : 0;
             ++numDropped;
             jointHitGroup.clearAlignments();
+            mapType = (bestHitDecoy) ? salmon::utils::MappingType::DECOY : salmon::utils::MappingType::UNMAPPED;
           }
         } //end-if validate mapping
 
@@ -713,7 +731,7 @@ void processReadsQuasi(
           */
         }
 
-      if (writeUnmapped and mapType == salmon::utils::MappingType::UNMAPPED) {
+      if (writeUnmapped and mapType != salmon::utils::MappingType::SINGLE_MAPPED) {
         // If we have no mappings --- then there's nothing to do
         // unless we're outputting names for un-mapped reads
         unmappedNames << rp.first.name << ' ' << salmon::utils::str(mapType) << '\n';
@@ -783,24 +801,28 @@ void processReadsQuasi(
 
 template <typename AlnT, typename ProtocolT>
 void processReadLibrary(
-                        ReadExperimentT& readExp, ReadLibrary& rl, SalmonIndex* sidx,
-                        std::vector<Transcript>& transcripts, ClusterForest& clusterForest,
-                        std::atomic<uint64_t>&
-                        numObservedFragments, // total number of reads we've looked at
-                        std::atomic<uint64_t>&
-                        numAssignedFragments,              // total number of assigned reads
+                        ReadExperimentT& readExp, 
+                        ReadLibrary& rl, 
+                        SalmonIndex* sidx,
+                        std::vector<Transcript>& transcripts, 
+                        ClusterForest& clusterForest,
+                        std::atomic<uint64_t>& numObservedFragments, // total number of reads we've looked at
+                        std::atomic<uint64_t>& numAssignedFragments, // total number of assigned reads
                         std::atomic<uint64_t>& upperBoundHits, // upper bound on # of mapped frags
                         std::atomic<uint32_t>& smallSeqs,
                         std::atomic<uint32_t>& nSeqs,
                         bool initialRound,
-                        std::atomic<bool>& burnedIn, ForgettingMassCalculator& fmCalc,
+                        std::atomic<bool>& burnedIn, 
+                        ForgettingMassCalculator& fmCalc,
                         FragmentLengthDistribution& fragLengthDist,
                         SalmonOpts& salmonOpts,
-                        std::mutex& iomutex, size_t numThreads,
+                        std::mutex& iomutex, 
+                        size_t numThreads,
                         std::vector<AlnGroupVec<AlnT>>& structureVec,
                         AlevinOpts<ProtocolT>& alevinOpts,
                         SoftMapT& barcodeMap,
-                        spp::sparse_hash_map<std::string, uint32_t>& trBcs, MappingStatistics& mstats) {
+                        spp::sparse_hash_map<std::string, uint32_t>& trBcs, 
+                        MappingStatistics& mstats) {
 
   std::vector<std::thread> threads;
 
@@ -1407,6 +1429,16 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
 namespace apt = alevin::protocols;
 template
 int alevinQuant(AlevinOpts<apt::DropSeq>& aopt,
+                SalmonOpts& sopt,
+                SoftMapT& barcodeMap,
+                TrueBcsT& trueBarcodes,
+                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                boost::program_options::parsed_options& orderedOptions,
+                CFreqMapT& freqCounter,
+                size_t numLowConfidentBarcode);
+template
+int alevinQuant(AlevinOpts<apt::CITESeq>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,

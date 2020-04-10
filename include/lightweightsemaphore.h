@@ -117,6 +117,7 @@ public:
 		assert(initialCount >= 0);
 		kern_return_t rc = semaphore_create(mach_task_self(), &m_sema, SYNC_POLICY_FIFO, initialCount);
 		assert(rc == KERN_SUCCESS);
+		(void)rc;
 	}
 
 	~Semaphore()
@@ -176,6 +177,7 @@ public:
 		assert(initialCount >= 0);
 		int rc = sem_init(&m_sema, 0, initialCount);
 		assert(rc == 0);
+		(void)rc;
 	}
 
 	~Semaphore()
@@ -208,8 +210,8 @@ public:
 		const int usecs_in_1_sec = 1000000;
 		const int nsecs_in_1_sec = 1000000000;
 		clock_gettime(CLOCK_REALTIME, &ts);
-		ts.tv_sec += usecs / usecs_in_1_sec;
-		ts.tv_nsec += (usecs % usecs_in_1_sec) * 1000;
+		ts.tv_sec += (time_t)(usecs / usecs_in_1_sec);
+		ts.tv_nsec += (long)(usecs % usecs_in_1_sec) * 1000;
 		// sem_timedwait bombs if you have more than 1e9 in tv_nsec
 		// so we have to clean things up before passing it in
 		if (ts.tv_nsec >= nsecs_in_1_sec) {

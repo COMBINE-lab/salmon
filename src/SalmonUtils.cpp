@@ -69,6 +69,8 @@ std::string str(const MappingType& mt) {
     return "mp";
   case MappingType::SINGLE_MAPPED:
     return "ms";
+  case MappingType::DECOY:
+    return "d";
   }
   // should never get here!
   return "E";
@@ -1942,7 +1944,7 @@ bool processQuantOptions(SalmonOpts& sopt,
       jointLog->critical("Note: Alignment-free mapping (i.e. mapping without subsequent selective-alignment) "
                          "has not yet been throughly tested under the pufferfish-based index and using the "
                          "pufferfish-based mapping strategies.  Thus, disabling of selective-alignment "
-                         "is not currently allowed.  We will explore re-enabling this option in future "
+                         "is not currently allowed.  We may, potentially explore re-enabling this option in future "
                          "versions of salmon.");
       jointLog->flush();
       return false;
@@ -1987,6 +1989,13 @@ bool processQuantOptions(SalmonOpts& sopt,
   if (sopt.useVBOpt and sopt.perNucleotidePrior and vm["vbPrior"].defaulted()) {
     sopt.vbPrior = 1e-5;
     jointLog->info("Using per-nucleotide prior with the default VB prior.  Setting the default prior to {}",sopt.vbPrior);
+  }
+
+  // If the maxHashResizeThreads was defaulted, then set it equal to the regular number 
+  // of threads.
+  if (vm["maxHashResizeThreads"].defaulted()) {
+    sopt.maxHashResizeThreads = sopt.numThreads;
+    jointLog->info("setting maxHashResizeThreads to {}", sopt.maxHashResizeThreads);
   }
 
   {
@@ -3219,6 +3228,20 @@ void generateGeneLevelEstimates(boost::filesystem::path& geneMapPath,
   }
   */
 }
+
+double compute_1_edit_threshold(int32_t l, const SalmonOpts& sopt) {
+  int32_t match = sopt.matchScore;
+  int32_t mismatch = (sopt.mismatchPenalty < 0) ? sopt.mismatchPenalty : -sopt.mismatchPenalty;
+  int32_t go = (sopt.gapOpenPenalty < 0) ? sopt.gapOpenPenalty : -sopt.gapOpenPenalty;
+  int32_t ge = (sopt.gapExtendPenalty < 0) ? sopt.gapExtendPenalty : -sopt.gapExtendPenalty;
+
+  // cost of subst = mismatch - cost of losing a match
+  // cost of deletion = gap open + gap extend - cost of losing a match
+  int32_t edit_cost = std::min(mismatch - match, go + ge - match);
+  int32_t max_score = l * match;
+  return  (static_cast<double>(max_score + edit_cost) - 0.5) / max_score;
+}
+
 } // namespace utils
 } // namespace salmon
 

@@ -1040,6 +1040,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   }
 
   if( skippedCBcount > 0 ) {
+    aopt.numNoMapCB = skippedCBcount;
     aopt.jointLog->warn("Skipped {} barcodes due to No mapped read",
                         skippedCBcount);
     auto lowRegionCutoffIdx = numCells - numLowConfidentBarcode;
@@ -1080,17 +1081,16 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                           "Can't performing whitelisting; Skipping",
                           numLowConfidentBarcode,
                           aopt.lowRegionMinNumBarcodes);
-
+      aopt.intelligentCutoff = trueBarcodes.size();
     } else if (trueBarcodes.size() - numLowConfidentBarcode < 90) {
         aopt.jointLog->warn("Num High confidence barcodes too less {} < 90."
                             "Can't performing whitelisting; Skipping",
                             trueBarcodes.size() - numLowConfidentBarcode);
+      aopt.intelligentCutoff = trueBarcodes.size();
     } else {
       aopt.jointLog->info("Starting white listing of {} cells", trueBarcodes.size());
       bool whitelistingSuccess = alevin::whitelist::performWhitelisting(aopt,
-                                                                        umiCount,
                                                                         trueBarcodes,
-                                                                        freqCounter,
                                                                         useRibo,
                                                                         useMito,
                                                                         numLowConfidentBarcode);
@@ -1113,104 +1113,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   }
 
   if (aopt.dumpMtx){
-    aopt.jointLog->info("Starting dumping cell v gene counts in mtx format");
-    boost::filesystem::path qFilePath = aopt.outputDirectory / "quants_mat.mtx.gz";
-
-    boost::iostreams::filtering_ostream qFile;
-    qFile.push(boost::iostreams::gzip_compressor(6));
-    qFile.push(boost::iostreams::file_sink(qFilePath.string(),
-                                           std::ios_base::out | std::ios_base::binary));
-
-    // mtx header
-    qFile << "%%MatrixMarket\tmatrix\tcoordinate\treal\tgeneral" << std::endl
-          << numCells << "\t" << numGenes << "\t" << totalExpGeneCounts << std::endl;
-
-    {
-
-      auto popcount = [](uint8_t n) {
-        size_t count {0};
-        while (n) {
-          n &= n-1;
-          ++count;
-        }
-        return count;
-      };
-
-      uint32_t zerod_cells {0};
-      size_t numFlags = std::ceil(numGenes/8.0);
-      std::vector<uint8_t> alphasFlag (numFlags, 0);
-      size_t flagSize = sizeof(decltype(alphasFlag)::value_type);
-
-      std::vector<float> alphasSparse;
-      alphasSparse.reserve(numFlags/2);
-      size_t elSize = sizeof(decltype(alphasSparse)::value_type);
-
-      auto countMatFilename = aopt.outputDirectory / "quants_mat.gz";
-      if(not boost::filesystem::exists(countMatFilename)){
-        std::cout<<"ERROR: Can't import Binary file quants.mat.gz, it doesn't exist" << std::flush;
-        exit(84);
-      }
-
-      boost::iostreams::filtering_istream countMatrixStream;
-      countMatrixStream.push(boost::iostreams::gzip_decompressor());
-      countMatrixStream.push(boost::iostreams::file_source(countMatFilename.string(),
-                                                           std::ios_base::in | std::ios_base::binary));
-
-      for (size_t cellCount=0; cellCount<numCells; cellCount++){
-        countMatrixStream.read(reinterpret_cast<char*>(alphasFlag.data()), flagSize * numFlags);
-
-        size_t numExpGenes {0};
-        std::vector<size_t> indices;
-        for (size_t j=0; j<alphasFlag.size(); j++) {
-          uint8_t flag = alphasFlag[j];
-          size_t numNonZeros = popcount(flag);
-          numExpGenes += numNonZeros;
-
-          for (size_t i=0; i<8; i++){
-            if (flag & (128 >> i)) {
-              indices.emplace_back( i+(8*j) );
-            }
-          }
-        }
-
-        if (indices.size() != numExpGenes) {
-          aopt.jointLog->error("binary format reading error {}: {}: {}",
-                               indices.size(), numExpGenes);
-          aopt.jointLog->flush();
-          exit(84);
-        }
-
-
-        alphasSparse.clear();
-        alphasSparse.resize(numExpGenes);
-        countMatrixStream.read(reinterpret_cast<char*>(alphasSparse.data()), elSize * numExpGenes);
-
-        float readCount {0.0};
-        readCount += std::accumulate(alphasSparse.begin(), alphasSparse.end(), 0.0);
-        if (readCount > 1000000) {
-          aopt.jointLog->warn("A cell has more 1M count, Possible error");
-          aopt.jointLog->flush();
-        }
-
-        for(size_t i=0; i<numExpGenes; i++) {
-          qFile << std::fixed
-                << cellCount + 1 << "\t"
-                << indices[i] + 1 << "\t"
-                << alphasSparse[i] <<  std::endl;
-        }
-
-        if (readCount == 0.0){
-          zerod_cells += 1;
-        }
-      } // end-for each cell
-
-      if (zerod_cells > 0) {
-        aopt.jointLog->warn("Found {} cells with 0 counts", zerod_cells);
-      }
-    }
-
-    boost::iostreams::close(qFile);
-    aopt.jointLog->info("Finished dumping counts into mtx");
+    gzw.writeMtx(aopt.jointLog, aopt.outputDirectory, numGenes, numCells, totalExpGeneCounts);
   }
 
   return true;
@@ -1223,6 +1126,16 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                       spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                       spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                                       AlevinOpts<apt::DropSeq>& aopt,
+                                      GZipWriter& gzw,
+                                      std::vector<std::string>& trueBarcodes,
+                                      std::vector<uint32_t>& umiCount,
+                                      CFreqMapT& freqCounter,
+                                      size_t numLowConfidentBarcode);
+template
+bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
+                                      spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                                      AlevinOpts<apt::CITESeq>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount,

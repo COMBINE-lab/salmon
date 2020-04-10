@@ -21,7 +21,7 @@ struct BarcodeGroupStringHasherMetro {
   }
 };
 
-//using CFreqMapT = cuckoohash_map<std::string, uint32_t, BarcodeGroupStringHasher>;
+//using CFreqMapT = libcuckoo::cuckoohash_map<std::string, uint32_t, BarcodeGroupStringHasher>;
 using CFreqMapT = tsl::array_map<char, uint32_t, BarcodeGroupStringHasherMetro>;
 
 using MapT = std::vector<std::pair<std::string, double>>;

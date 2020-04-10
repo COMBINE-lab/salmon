@@ -60,57 +60,62 @@ int salmonIndex(int argc, const char* argv[]) {
   bool useQuasi{false};
   bool perfectHash{false};
   bool gencodeRef{false};
+  bool featuresRef{false};
   bool keepDuplicates{false};
 
   pufferfish::IndexOptions idxOpt;
 
   po::options_description generic("Command Line Options");
-  generic.add_options()("version,v", "print version string")(
-      "help,h", "produce help message")("transcripts,t",
-                                        po::value<string>()->required(),
-                                        "Transcript fasta file.")(
-      "kmerLen,k",
+  generic.add_options()
+    ("version,v", "print version string")
+    ("help,h", "produce help message")
+    ("transcripts,t", po::value<string>()->required(), "Transcript fasta file.")
+    ("kmerLen,k",
       po::value<uint32_t>(&idxOpt.k)->default_value(31)->required(),
-      "The size of k-mers that should be used for the quasi index.")(
-      "index,i", po::value<string>()->required(), "salmon index.")(
-      "gencode", po::bool_switch(&gencodeRef)->default_value(false),
+      "The size of k-mers that should be used for the quasi index.")
+    ("index,i", po::value<string>()->required(), "salmon index.")
+    ("gencode", po::bool_switch(&gencodeRef)->default_value(false),
       "This flag will expect the input transcript fasta to be in GENCODE "
       "format, and will split the transcript name at the first \'|\' character. "
       "These reduced names will be used in the output and when looking for these "
       "transcripts in a gene to transcript "
-      "GTF.")("keepDuplicates",
-              po::bool_switch(&idxOpt.keep_duplicates)->default_value(false),
-              "This flag will disable the default indexing behavior of "
-              "discarding sequence-identical duplicate "
-              "transcripts.  If this flag is passed, then duplicate "
-              "transcripts that appear in the input will be "
-              "retained and quantified separately.")(
-      "threads,p", po::value<uint32_t>(&idxOpt.p)->default_value(2)->required(),
-      "Number of threads to use during indexing.")(
-      "keepFixedFasta",
-      po::bool_switch(&idxOpt.keep_fixed_fasta)->default_value(false),
+      "GTF.")
+    ("features", po::bool_switch(&featuresRef)->default_value(false),
+     "This flag will expect the input reference to be in the tsv file "
+     "format, and will split the feature name at the first \'tab\' character. "
+     "These reduced names will be used in the output and when looking for the "
+     "sequence of the features."
+     "GTF.")
+    ("keepDuplicates",po::bool_switch(&idxOpt.keep_duplicates)->default_value(false),
+      "This flag will disable the default indexing behavior of "
+       "discarding sequence-identical duplicate "
+       "transcripts.  If this flag is passed, then duplicate "
+       "transcripts that appear in the input will be "
+       "retained and quantified separately.")
+    ("threads,p", po::value<uint32_t>(&idxOpt.p)->default_value(2)->required(),
+      "Number of threads to use during indexing.")
+    ("keepFixedFasta",po::bool_switch(&idxOpt.keep_fixed_fasta)->default_value(false),
       "Retain the fixed fasta file (without short transcripts and duplicates, "
-      "clipped, etc.) generated during indexing")(
-      "filterSize,f", po::value<int32_t>(&idxOpt.filt_size)->default_value(-1),
+      "clipped, etc.) generated during indexing")
+    ("filterSize,f", po::value<int32_t>(&idxOpt.filt_size)->default_value(-1),
       "The size of the Bloom filter that will be used by TwoPaCo during indexing. "
       "The filter will be of size 2^{filterSize}. The default value of -1 "
       "means that the filter size will be automatically set based on the number of "
-      "distinct k-mers in the input, as estimated by nthll.")(
-      "tmpdir",
-      po::value<std::string>(&idxOpt.twopaco_tmp_dir)->default_value(""),
+      "distinct k-mers in the input, as estimated by nthll.")
+    ("tmpdir",po::value<std::string>(&idxOpt.twopaco_tmp_dir)->default_value(""),
       "The directory location that will be used for TwoPaCo temporary files; "
       "it will be created if need be and be removed prior to indexing completion. "
       "The default value will cause a (temporary) subdirectory of the salmon index "
-      "directory to be used for this purpose.")(
-      "sparse", po::bool_switch(&idxOpt.isSparse)->default_value(false),
+      "directory to be used for this purpose.")
+    ("sparse", po::bool_switch(&idxOpt.isSparse)->default_value(false),
       "Build the index using a sparse sampling of k-mer positions "
       "This will require less memory (especially during quantification), but "
-      "will take longer to construct and can slow down mapping / alignment")(
-      "decoys,d", po::value<string>(&idxOpt.decoy_file),
+      "will take longer to construct and can slow down mapping / alignment")
+    ("decoys,d", po::value<string>(&idxOpt.decoy_file),
       "Treat these sequences ids from the reference as the decoys that may "
       "have sequence homologous to some known transcript. for example in "
-      "case of the genome, provide a list of chromosome name --- one per line")(
-      "type",
+      "case of the genome, provide a list of chromosome name --- one per line")
+    ("type",
       po::value<string>(&indexTypeStr)->default_value("puff")->required(),
       "The type of index to build; the only option is \"puff\" in this version "
       "of salmon.");
@@ -203,9 +208,19 @@ Creates a salmon index.
         idxOpt.k = 31;
       }
 
+      // give the user a warning if they are not using any decoy file
+      if (idxOpt.decoy_file.empty()) {
+        jointLog->warn("The salmon index is being built without any decoy sequences.  It is recommended that "
+                      "decoy sequence (either computed auxiliary decoy sequence or the genome of the organism) "
+                      "be provided during indexing. Further details can be found at "
+                      "https://salmon.readthedocs.io/en/latest/salmon.html#preparing-transcriptome-indices-mapping-based-mode.");
+      }
+
       if (gencodeRef) {
         idxOpt.header_sep = "|";
       }
+
+      if (featuresRef) { idxOpt.featuresRef = true; }
       sidx.reset(new SalmonIndex(jointLog, SalmonIndexType::PUFF));
     } else {
       jointLog->error("This version of salmon does not support FMD or "

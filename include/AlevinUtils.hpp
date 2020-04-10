@@ -74,13 +74,18 @@ namespace alevin{
 
     template <typename ProtocolT>
     bool processAlevinOpts(AlevinOpts<ProtocolT>& aopt,
-                             SalmonOpts& sopt,
-                             boost::program_options::variables_map& vm);
+                           SalmonOpts& sopt, bool noTgMap,
+                           boost::program_options::variables_map& vm);
 
     template <typename ProtocolT>
     bool extractUMI(std::string& read,
                     ProtocolT& pt,
                     std::string& umi);
+
+    template <typename ProtocolT>
+    void getReadSequence(ProtocolT& pt,
+                         std::string& seq,
+                         std::string& subseq);
 
     template <typename ProtocolT>
     nonstd::optional<std::string> extractBarcode(std::string& read, ProtocolT& pt);
@@ -106,7 +111,8 @@ namespace alevin{
                          const std::string& t2gFile, const std::string& refNamesFile,
                          const std::string& refLengthFile,
                          const std::string& headerFile,
-                         std::shared_ptr<spdlog::logger>& jointLog);
+                         std::shared_ptr<spdlog::logger>& jointLog,
+                         bool noTgMap);
 
     bool checkSetCoverage(std::vector<std::vector<uint32_t>>& tgroup,
                           std::vector<uint32_t> txps);

@@ -135,13 +135,13 @@ class EquivalenceClassBuilder {
 public:
   EquivalenceClassBuilder(std::shared_ptr<spdlog::logger> loggerIn, uint32_t maxResizeThreads)
       : logger_(loggerIn) {
-    countMap_.set_max_resize_threads(maxResizeThreads);
+    countMap_.max_num_worker_threads(maxResizeThreads);
     countMap_.reserve(1000000);
   }
 
   //~EquivalenceClassBuilder() {}
-  void setMaxResizeThreads(uint32_t t) { countMap_.set_max_resize_threads(t); }
-  uint32_t getMaxResizeThreads() const { return countMap_.get_max_resize_threads(); }
+  void setMaxResizeThreads(uint32_t t) { countMap_.max_num_worker_threads(t); }
+  uint32_t getMaxResizeThreads() const { return countMap_.max_num_worker_threads(); }
 
   void start() { active_ = true; }
 
@@ -212,7 +212,7 @@ public:
                               std::vector<uint32_t>& eqclass_counts,
                               std::vector<Transcript>& transcripts);
 
-  cuckoohash_map<TranscriptGroup, TGValueType, TranscriptGroupHasher>& eqMap(){
+  libcuckoo::cuckoohash_map<TranscriptGroup, TGValueType, TranscriptGroupHasher>& eqMap(){
     return countMap_;
   }
 
@@ -227,7 +227,7 @@ public:
 
 private:
   std::atomic<bool> active_;
-  cuckoohash_map<TranscriptGroup, TGValueType, TranscriptGroupHasher> countMap_;
+  libcuckoo::cuckoohash_map<TranscriptGroup, TGValueType, TranscriptGroupHasher> countMap_;
   std::vector<std::pair<const TranscriptGroup, TGValueType>> countVec_;
   std::shared_ptr<spdlog::logger> logger_;
 };

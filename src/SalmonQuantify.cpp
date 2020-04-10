@@ -18,7 +18,6 @@
     along with Salmon.  If not, see <http://www.gnu.org/licenses/>.
 <HEADER
 **/
-
 #include <algorithm>
 #include <atomic>
 #include <cassert>
@@ -828,6 +827,7 @@ void processReads(
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   bool mimicBT2 = salmonOpts.mimicBT2;
   bool noDovetail = !salmonOpts.allowDovetail;
+  bool useChainingHeuristic = !salmonOpts.disableChainingHeuristic;
   size_t numOrphansRescued{0};
   phmap::flat_hash_map<uint32_t, std::pair<int32_t, int32_t>> bestScorePerTranscript;
   uint64_t firstDecoyIndex = qidx->firstDecoyIndex();
@@ -874,6 +874,8 @@ void processReads(
       spdlog::drop_all();
       std::exit(1);
     }
+    
+    LibraryFormat expectedLibraryFormat = rl.format();
 
     bool tryAlign{salmonOpts.validateMappings};
     for (size_t i = 0; i < rangeSize; ++i) { // For all the reads in this batch
@@ -925,7 +927,7 @@ void processReads(
                               leftHits,
                               salmonOpts.fragLenDistMax,
                               MateStatus::PAIRED_END_LEFT,
-                              true, // heuristic chaining
+                              useChainingHeuristic, // heuristic chaining
                               true, // isLeft
                               false // verbose
                               );
@@ -933,7 +935,7 @@ void processReads(
                               rightHits,
                               salmonOpts.fragLenDistMax,
                               MateStatus::PAIRED_END_RIGHT,
-                              true,  // heuristic chaining
+                              useChainingHeuristic,  // heuristic chaining
                               false, // isLeft
                               false  // verbose
                               );
@@ -1043,9 +1045,12 @@ void processReads(
       if (!jointHits.empty()) {
         bool isPaired = jointHits.front().mateStatus ==
                         MateStatus::PAIRED_END_PAIRED;
+        /*
         if (isPaired) {
           mapType = salmon::utils::MappingType::PAIRED_MAPPED;
         }
+        */
+
         // If we are ignoring orphans
         if (!salmonOpts.allowOrphans) {
           // If the mappings for the current read are not properly-paired (i.e.
@@ -1069,7 +1074,7 @@ void processReads(
           */
 
           salmon::mapping_utils::MappingScoreInfo msi = {invalidScore, invalidScore, invalidScore, decoyThreshold};
-          std::vector<decltype(msi.bestScore)> scores(jointHits.size(), 0);
+          std::vector<decltype(msi.bestScore)> scores(jointHits.size(), invalidScore);
           size_t idx{0};
           bool isMultimapping = (jointHits.size() > 1);
 
@@ -1078,13 +1083,95 @@ void processReads(
             bool validScore = (hitScore != invalidScore);
             numMappingsDropped += validScore ? 0 : 1;
             auto tid = qidx->getRefId(jointHit.tid);
-            salmon::mapping_utils::updateRefMappings(tid, hitScore, idx, transcripts, invalidScore, msi, 
+
+            // ----- compatibility determination 
+            // This code is to determine if a given PE mapping is _compatible_ or not with
+            // the expected library format.  This is to remove stochasticity in mapping.
+            // Specifically, if there are equally highest-scoring alignments to a target
+            // we will always prefer the one that is compatible.
+
+            bool isUnstranded = expectedLibraryFormat.strandedness == ReadStrandedness::U;
+            bool isOrphan = jointHit.isOrphan();
+            
+            // if the protocol is unstranded:
+            // (1) an orphan is always compatible
+            // (2) a paired-end mapping is compatible if the ends are on separate strands
+            bool isCompat = isUnstranded ? (isOrphan ? true  : (jointHit.leftClust->isFw != jointHit.rightClust->isFw)) : false;
+
+            // if the mapping hasn't been determined to be compatible yet
+            if (!isCompat) {
+              // if this is an orphan mapping 
+              if (isOrphan) {
+                bool isLeft = jointHit.isLeftAvailable();
+                // ISF
+                // if the expectation is ISF, then this read is compatible if
+                // (1) we observed the left read and it is forward 
+                // (2) we observed the right read and it is not foward
+
+                // ISR
+                // if the expectation is ISR, then this read is compatible if 
+                // (1) we observed the left read and it is not forward
+                // (2) we observed the right read and it is foward
+                isCompat = (expectedLibraryFormat.strandedness == ReadStrandedness::SA) ? 
+                           ((isLeft and jointHit.leftClust->isFw) or (!isLeft and !jointHit.rightClust->isFw)) : 
+                           ((expectedLibraryFormat.strandedness == ReadStrandedness::AS) ?
+                           ((isLeft and !jointHit.leftClust->isFw) or (!isLeft and jointHit.rightClust->isFw)) : false);
+              } else {
+                bool leftIsFw = jointHit.leftClust->isFw;
+                bool rightIsFw = jointHit.rightClust->isFw;
+                // paired-end paired
+                isCompat = (expectedLibraryFormat.strandedness == ReadStrandedness::SA) ? 
+                           (leftIsFw and !rightIsFw) :
+                           ((expectedLibraryFormat.strandedness == ReadStrandedness::AS) ? 
+                            (!leftIsFw and rightIsFw) : false);
+              }
+            }
+            // ----- end compatibility determination 
+
+            // alternative compat
+            /**
+            LibraryFormat lf(ReadType::SINGLE_END, ReadOrientation::NONE, ReadStrandedness::U);
+            MateStatus ms = isOrphan ? 
+                            (jointHit.isLeftAvailable() ? MateStatus::PAIRED_END_LEFT : MateStatus::PAIRED_END_RIGHT) :
+                            MateStatus::PAIRED_END_PAIRED;
+            switch (ms) {
+              case MateStatus::PAIRED_END_LEFT: 
+              case MateStatus::PAIRED_END_RIGHT: {
+                lf = salmon::utils::hitType(jointHit.orphanClust()->getTrFirstHitPos(), jointHit.orphanClust()->isFw);
+              } break;
+              case MateStatus::PAIRED_END_PAIRED: {
+                uint32_t end1Pos = (jointHit.leftClust->isFw) ? jointHit.leftClust->getTrFirstHitPos() : 
+                                   jointHit.leftClust->getTrFirstHitPos() + jointHit.leftClust->readLen;
+                uint32_t end2Pos = (jointHit.rightClust->isFw) ? jointHit.rightClust->getTrFirstHitPos() : 
+                                   jointHit.rightClust->getTrFirstHitPos() + jointHit.rightClust->readLen;
+                bool canDovetail = false;
+                lf =
+                    salmon::utils::hitType(end1Pos, jointHit.leftClust->isFw, jointHit.leftClust->readLen, end2Pos,
+                                          jointHit.rightClust->isFw, jointHit.rightClust->readLen, canDovetail);
+              } break;
+              case MateStatus::SINGLE_END: {
+                // do nothing
+              } break;
+              default:
+                break;
+            }
+
+            auto p = isOrphan ? jointHit.orphanClust()->getTrFirstHitPos() : jointHit.leftClust->getTrFirstHitPos();
+            auto fw = isOrphan ? jointHit.orphanClust()->isFw : jointHit.leftClust->isFw;
+            bool isCompatRef = salmon::utils::isCompatible(lf, expectedLibraryFormat, static_cast<int32_t>(p), fw, ms);
+
+            if (isCompat != isCompatRef) {
+              std::cerr << "\n\n\nERROR: simple implemntation says compatiable is [" <<  isCompat << "], but ref. implementation says [" << isCompatRef << "]\n\n";
+            }
+            **/
+            // end of alternative compat
+
+            salmon::mapping_utils::updateRefMappings(tid, hitScore, isCompat, idx, transcripts, invalidScore, msi,
                               //bestScore, secondBestScore, bestDecoyScore,
                               scores, bestScorePerTranscript, perm);
             ++idx;
           }
 
-          //bool bestHitDecoy = (msi.bestScore < msi.bestDecoyScore);
           bool bestHitDecoy = msi.haveOnlyDecoyMappings();
           if (msi.bestScore > invalidScore and !bestHitDecoy) {
             salmon::mapping_utils::filterAndCollectAlignments(jointHits,
@@ -1104,13 +1191,35 @@ void processReads(
                                        bestDecoyScore,
                                        */
                                        jointAlignments);
+            // if we have alignments
+            if (!jointAlignments.empty()) {
+              // chose the mapType based on the mate status
+              auto& h = jointAlignments.front();
+              switch (h.mateStatus) {
+              case pufferfish::util::MateStatus::PAIRED_END_PAIRED:
+                mapType = salmon::utils::MappingType::PAIRED_MAPPED;
+                break;
+              case pufferfish::util::MateStatus::PAIRED_END_LEFT:
+                mapType = salmon::utils::MappingType::LEFT_ORPHAN;
+                break;
+              case pufferfish::util::MateStatus::PAIRED_END_RIGHT:
+                mapType = salmon::utils::MappingType::RIGHT_ORPHAN;
+                break;
+              default:
+                mapType = salmon::utils::MappingType::UNMAPPED;
+                break;
+              }
+            }
+
           } else {
+            // if we had decoy hits, our type is decoy, otherwise it's unmapped
+            mapType = bestHitDecoy ? salmon::utils::MappingType::DECOY : salmon::utils::MappingType::UNMAPPED;
             numDecoyFrags += bestHitDecoy ? 1 : 0;
             ++numFragsDropped;
             jointAlignmentGroup.clearAlignments();
           }
         } else if (isPaired and noDovetail) {
-          salmonOpts.jointLog->warn("HAVE NOT THOUGHT ABOUT THIS CODE-PATH YET!");
+          salmonOpts.jointLog->critical("This code path is not yet implemented!");
           jointAlignments.erase(
                           std::remove_if(jointAlignments.begin(), jointAlignments.end(),
                                          [](const QuasiAlignment& h) -> bool {
@@ -1441,6 +1550,7 @@ void processReads(
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   bool mimicBT2 = salmonOpts.mimicBT2;
   bool noDovetail = !salmonOpts.allowDovetail;
+  bool useChainingHeuristic = !salmonOpts.disableChainingHeuristic;
   size_t numOrphansRescued{0};
   //*******
 
@@ -1480,6 +1590,8 @@ void processReads(
        std::exit(1);
      }
 
+     LibraryFormat expectedLibraryFormat = rl.format();
+
      bool tryAlign{salmonOpts.validateMappings};
      for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
        auto& rp = rg[i];
@@ -1489,6 +1601,7 @@ void processReads(
        jointHitGroup.clearAlignments();
        auto& jointAlignments = jointHitGroup.alignments();
 
+       mapType = salmon::utils::MappingType::UNMAPPED;
        perm.clear();
        hits.clear();
        jointHits.clear();
@@ -1507,7 +1620,7 @@ void processReads(
                                hits,
                                salmonOpts.fragLenDistMax,
                                MateStatus::SINGLE_END,
-                               true, // heuristic chaining
+                               useChainingHeuristic, // heuristic chaining
                                true, // isLeft
                                false // verbose
                                );
@@ -1530,6 +1643,7 @@ void processReads(
                                                     readLen,
                                                     memCollector.getConsensusFraction()); 
          hctr.peHits += jointHits.size();
+
          if (initialRound) {
            upperBoundHits += (jointHits.size() > 0);
          }
@@ -1562,7 +1676,7 @@ void processReads(
          */
          salmon::mapping_utils::MappingScoreInfo msi = {invalidScore, invalidScore, invalidScore, decoyThreshold};
 
-         std::vector<decltype(msi.bestScore)> scores(jointHits.size(), 0);
+         std::vector<decltype(msi.bestScore)> scores(jointHits.size(), invalidScore);
          size_t idx{0};
          bool isMultimapping = (jointHits.size() > 1);
 
@@ -1571,7 +1685,12 @@ void processReads(
            bool validScore = (hitScore != invalidScore);
            numMappingsDropped += validScore ? 0 : 1;
            auto tid = qidx->getRefId(jointHit.tid);
-           salmon::mapping_utils::updateRefMappings(tid, hitScore, idx, transcripts, invalidScore, 
+          
+           bool isCompat = (expectedLibraryFormat.strandedness == ReadStrandedness::U) or 
+                           (jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::S)) or
+                           (!jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::A));
+
+           salmon::mapping_utils::updateRefMappings(tid, hitScore, isCompat, idx, transcripts, invalidScore, 
                             msi,
                             //bestScore, secondBestScore, bestDecoyScore,
                              scores, bestScorePerTranscript, perm);
@@ -1598,7 +1717,14 @@ void processReads(
                                       bestDecoyScore,
                                       */
                                       jointAlignments);
+            // if we have any alignments, then they are 
+            // just single mapped.
+            if (!jointAlignments.empty()) {
+              mapType = salmon::utils::MappingType::SINGLE_MAPPED;
+            }
          } else {
+           // if we had decoy hits, our type is decoy, otherwise it's unmapped
+           mapType = (bestHitDecoy) ? salmon::utils::MappingType::DECOY : salmon::utils::MappingType::UNMAPPED;
            numDecoyFrags += bestHitDecoy ? 1 : 0;
            ++numFragsDropped;
            jointHitGroup.clearAlignments();
@@ -1665,7 +1791,7 @@ void processReads(
          writeAlignmentsToStreamSingle(rp, formatter, jointAlignments, sstream, false, true);
        }
 
-       if (writeUnmapped and jointHits.empty()) {
+       if (writeUnmapped and mapType != salmon::utils::MappingType::SINGLE_MAPPED) {
          // If we have no mappings --- then there's nothing to do
          // unless we're outputting names for un-mapped reads
          unmappedNames << rp.name << " u\n";

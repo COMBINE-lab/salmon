@@ -45,6 +45,17 @@ namespace alevin{
       }
     };
 
+    struct CITESeq : Rule{
+      CITESeq(): Rule(16, 12, BarcodeEnd::FIVE, 4294967295){
+        featureLength = 15;
+        featureStart = 10;
+      }
+
+      size_t featureLength, featureStart;
+      void setFeatureLength(size_t length) { featureLength = length; }
+      void setFeatureStart(size_t startIdx) { featureStart = startIdx; }
+    };
+
     struct ChromiumV3 : Rule{
       ChromiumV3(): Rule(16, 12, BarcodeEnd::FIVE, 4294967295){}
     };

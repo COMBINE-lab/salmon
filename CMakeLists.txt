@@ -42,8 +42,8 @@ message("version: ${CPACK_PACKAGE_VERSION}")
 set(PROJECT_VERSION ${CPACK_PACKAGE_VERSION})
 set(CPACK_GENERATOR "TGZ")
 set(CPACK_SOURCE_GENERATOR "TGZ")
-set(CPACK_PACKAGE_VENDOR "Stony Brook University")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Salmon - Wicked-fast RNA-seq isoform quantification using lightweight mapping")
+set(CPACK_PACKAGE_VENDOR "University of Maryland")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Salmon - Wicked-fast RNA-seq isoform quantification using selective alignment")
 set(CPACK_PACKAGE_NAME
   "${CMAKE_PROJECT_NAME}-${CPACK_PACKAGE_VERSION_MAJOR}.${CPACK_PACKAGE_VERSION_MINOR}.${CPACK_PACKAGE_VERSION_PATCH}")
 set(CPACK_SOURCE_PACKAGE_FILE_NAME
@@ -59,9 +59,11 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE "${default_build_type}" CACHE
       STRING "Choose the type of build." FORCE)
   # Set the possible values of build type for cmake-gui
-  set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
-    "Debug" "Release")
+  #set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
+  #  "Debug" "Release")
 endif()
+
+message(STATUS "CMAKE_BUILD_TYPE = ${CMAKE_BUILD_TYPE}")
 
 ## Set the standard required compile flags
 # Nov 18th --- removed -DHAVE_CONFIG_H
@@ -288,8 +290,6 @@ if(NOT FETCHED_PUFFERFISH)
   set(FETCHED_PUFFERFISH TRUE CACHE BOOL "Has pufferfish been fetched?" FORCE)
 endif()
 
-
-
 ##
 # Super-secret override
 ##
@@ -459,23 +459,25 @@ elseif(FETCH_BOOST)
     --with-timer)
   set(BOOST_WILL_RECONFIGURE TRUE)
   set(FETCH_BOOST FALSE)
+  set(BOOST_FETCHED_VERSION "1_72_0")
   message("Build system will fetch and build Boost")
   message("==================================================================")
   externalproject_add(libboost
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://dl.bintray.com/boostorg/release/1.71.0/source/boost_1_71_0.tar.gz -o boost_1_71_0.tar.gz &&
-      ${SHASUM} 96b34f7468f26a141f6020efb813f1a2f3dfb9797ecf76a7d7cbd843cc95f5bd boost_1_71_0.tar.gz &&
-      tar xzf boost_1_71_0.tar.gz
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_71_0
+    DOWNLOAD_COMMAND curl -k -L https://sourceforge.net/projects/boost/files/boost/1.72.0/boost_1_72_0.tar.gz/download -o boost_1_72_0.tar.gz &&
+      #${SHASUM} 96b34f7468f26a141f6020efb813f1a2f3dfb9797ecf76a7d7cbd843cc95f5bd boost_1_71_0.tar.gz &&
+      ${SHASUM} c66e88d5786f2ca4dbebb14e06b566fb642a1a6947ad8cc9091f9f445134143f boost_${BOOST_FETCHED_VERSION}.tar.gz &&
+      tar xzf boost_${BOOST_FETCHED_VERSION}.tar.gz 
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_${BOOST_FETCHED_VERSION}
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     #PATCH_COMMAND patch -p2 < ${CMAKE_CURRENT_SOURCE_DIR}/external/boost156.patch
-    CONFIGURE_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_71_0/bootstrap.sh ${BOOST_CONFIGURE_TOOLSET} ${BOOST_BUILD_LIBS} --prefix=<INSTALL_DIR>
+    CONFIGURE_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_${BOOST_FETCHED_VERSION}/bootstrap.sh ${BOOST_CONFIGURE_TOOLSET} ${BOOST_BUILD_LIBS} --prefix=<INSTALL_DIR>
     add_custom_command(
-      OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_71_0/tools/build/src/user-config.jam
+      OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_${BOOST_FETCHED_VERSION}/tools/build/src/user-config.jam
       PRE_BUILD
       COMMAND echo "using gcc : ${CC_VERSION} : ${CMAKE_CXX_COMPILER} ;"
     )
-    BUILD_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_1_71_0/b2 -d0 -j${BOOST_BUILD_THREADS} ${BOOST_LIB_SUBSET} toolset=${BOOST_TOOLSET} ${BOOST_EXTRA_FLAGS} cxxflags=${BOOST_CXX_FLAGS} link=static install
+    BUILD_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ${CMAKE_CURRENT_SOURCE_DIR}/external/boost_${BOOST_FETCHED_VERSION}/b2 -d0 -j${BOOST_BUILD_THREADS} ${BOOST_LIB_SUBSET} toolset=${BOOST_TOOLSET} ${BOOST_EXTRA_FLAGS} cxxflags=${BOOST_CXX_FLAGS} link=static install
       BUILD_IN_SOURCE 1
       INSTALL_COMMAND ""
   )
@@ -610,7 +612,7 @@ endif()
 message("Build system will fetch and build Intel Threading Building Blocks")
 message("==================================================================")
 # These are useful for the custom install step we'll do later
-set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2019_U8)
+set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/oneTBB-2019_U8)
 set(TBB_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
 
 if("${TBB_COMPILER}" STREQUAL "gcc")
@@ -624,9 +626,9 @@ set(TBB_CXXFLAGS "${TBB_CXXFLAGS} ${CXXSTDFLAG}")
 externalproject_add(libtbb
   DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
   DOWNLOAD_COMMAND curl -k -L https://github.com/intel/tbb/archive/2019_U8.tar.gz -o tbb-2019_U8.tgz &&
-    ${SHASUM} 7b1fd8caea14be72ae4175896510bf99c809cd7031306a1917565e6de7382fba tbb-2019_U8.tgz &&
+    ${SHASUM} 6b540118cbc79f9cbc06a35033c18156c21b84ab7b6cf56d773b168ad2b68566 tbb-2019_U8.tgz &&
     tar -xzvf tbb-2019_U8.tgz
-  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/tbb-2019_U8
+  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/oneTBB-2019_U8 
   INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
   PATCH_COMMAND "${TBB_PATCH_STEP}"
   CONFIGURE_COMMAND ""

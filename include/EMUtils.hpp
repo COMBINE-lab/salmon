@@ -12,6 +12,9 @@ void EMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
                const VecT& alphaIn,
                VecT& alphaOut);
 
+/**
+ * set entries with values <= cutoff to 0.
+ **/
 template <typename VecT>
 double truncateCountVector(VecT& alphas, double cutoff);
 

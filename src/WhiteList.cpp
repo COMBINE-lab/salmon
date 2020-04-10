@@ -166,9 +166,8 @@ namespace alevin {
 
     template <typename ProtocolT>
     bool performWhitelisting(AlevinOpts<ProtocolT>& aopt,
-                             std::vector<uint32_t>& /*umiCount*/,
                              std::vector<std::string>& trueBarcodes,
-                             CFreqMapT& /*freqCounter*/, bool useRibo, bool useMito,
+                             bool useRibo, bool useMito,
                              size_t numLowConfidentBarcode){
       size_t numCells = trueBarcodes.size();
       size_t numFeatures {5};
@@ -254,49 +253,44 @@ namespace alevin {
       return true;
     }
     template bool performWhitelisting(AlevinOpts<alevin::protocols::DropSeq>& aopt,
-                                      std::vector<uint32_t>& umiCount,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter, bool useRibo, bool useMito,
+                                      bool useRibo, bool useMito,
+                                      size_t numLowConfidentBarcode);
+    template bool performWhitelisting(AlevinOpts<alevin::protocols::CITESeq>& aopt,
+                                      std::vector<std::string>& trueBarcodes,
+                                      bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::InDrop>& aopt,
-                                      std::vector<uint32_t>& umiCount,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter, bool useRibo, bool useMito,
+                                      bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::ChromiumV3>& aopt,
-                                      std::vector<uint32_t>& umiCount,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter, bool useRibo, bool useMito,
+                                      bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::Chromium>& aopt,
-                                      std::vector<uint32_t>& umiCount,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter, bool useRibo, bool useMito,
+                                      bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::Gemcode>& aopt,
-                                      std::vector<uint32_t>& umiCount,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter, bool useRibo, bool useMito,
+                                      bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::CELSeq>& aopt,
-                                      std::vector<uint32_t>& umiCount,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter, bool useRibo, bool useMito,
+                                      bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::CELSeq2>& aopt,
-                                      std::vector<uint32_t>& umiCount,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter, bool useRibo, bool useMito,
+                                      bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::QuartzSeq2>& aopt,
-                                      std::vector<uint32_t>& umiCount,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter, bool useRibo, bool useMito,
+                                      bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::Custom>& aopt,
-                                      std::vector<uint32_t>& umiCount,
                                       std::vector<std::string>& trueBarcodes,
-                                      CFreqMapT& freqCounter, bool useRibo, bool useMito,
+                                      bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
   }
 }

@@ -13,6 +13,7 @@
 #include "ReadExperiment.hpp"
 #include "ReadPair.hpp"
 #include "SalmonOpts.hpp"
+#include "SalmonUtils.hpp"
 #include "UnpairedRead.hpp"
 #include "TranscriptGroup.hpp"
 #include "SingleCellProtocols.hpp"
@@ -294,7 +295,6 @@ bool GZipWriter::writeBFH(boost::filesystem::path& outDir,
         auto count = umiIt.second;
 
         std::string s = umiObj.toStr();
-        std::reverse(s.begin(), s.end());
         equivFile << "\t" << s << "\t" << count;
       }
     }
@@ -376,6 +376,7 @@ template <typename ExpT>
 bool GZipWriter::writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
                                 std::vector<std::string>& errors) {
   namespace bfs = boost::filesystem;
+  using salmon::utils::DuplicateTargetStatus;
 
   bfs::path auxDir = path_ / opts.auxDir;
   bool auxSuccess = boost::filesystem::create_directories(auxDir);
@@ -406,6 +407,19 @@ bool GZipWriter::writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
 
     std::string mapTypeStr = opts.alnMode ? "alignment" : "mapping";
     oa(cereal::make_nvp("mapping_type", mapTypeStr));
+
+    auto has_dups = experiment.index_retains_duplicates();
+    switch(has_dups) {
+      case DuplicateTargetStatus::RETAINED_DUPLICATES:
+        oa(cereal::make_nvp("keep_duplicates", true));
+        break;
+      case DuplicateTargetStatus::REMOVED_DUPLICATES:
+        oa(cereal::make_nvp("keep_duplicates", false));
+        break;
+      case DuplicateTargetStatus::UNKNOWN:
+      default:
+        break;
+    }
 
     auto numValidTargets = transcripts.size();
     auto numDecoys = experiment.getNumDecoys();
@@ -483,6 +497,9 @@ bool GZipWriter::writeMetaAlevin(const AlevinOpts<ProtocolT>& opts,
       oa(cereal::make_nvp("low_conf_cbs", opts.totalLowConfidenceCBs));
       oa(cereal::make_nvp("num_features", opts.numFeatures));
     }
+    if(opts.numNoMapCB > 0) {
+      oa(cereal::make_nvp("no_read_mapping_cbs", opts.numNoMapCB));
+    }
     oa(cereal::make_nvp("final_num_cbs", opts.intelligentCutoff));
 
     if (opts.numBootstraps > 0) {
@@ -511,6 +528,7 @@ template <typename ExpT>
 bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const MappingStatistics& mstats) {
 
   namespace bfs = boost::filesystem;
+  using salmon::utils::DuplicateTargetStatus;
 
   bfs::path auxDir = path_ / opts.auxDir;
   bool auxSuccess = boost::filesystem::create_directories(auxDir);
@@ -757,6 +775,19 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
 
     std::string mapTypeStr = opts.alnMode ? "alignment" : "mapping";
     oa(cereal::make_nvp("mapping_type", mapTypeStr));
+
+    auto has_dups = experiment.index_retains_duplicates();
+    switch(has_dups) {
+      case DuplicateTargetStatus::RETAINED_DUPLICATES:
+        oa(cereal::make_nvp("keep_duplicates", true));
+        break;
+      case DuplicateTargetStatus::REMOVED_DUPLICATES:
+        oa(cereal::make_nvp("keep_duplicates", false));
+        break;
+      case DuplicateTargetStatus::UNKNOWN:
+      default:
+        break;
+    }
 
     auto numValidTargets = transcripts.size();
     auto numDecoys = experiment.getNumDecoys();
@@ -1080,8 +1111,6 @@ bool GZipWriter::writeSparseBootstraps(std::string& bcName,
   return true;
 }
 
-// FIXME(@k3yavi): The dumpUmiGraph parameter is un-used so I commented out the name
-// should we be doing something with it?
 bool GZipWriter::writeSparseAbundances(std::string& bcName,
                                        std::string& features,
                                        std::string& arboData,
@@ -1089,7 +1118,7 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
                                        std::vector<double>& alphas,
                                        std::vector<uint8_t>& tiers,
                                        bool dumpArborescences,
-                                       bool /*dumpUmiGraph*/){
+                                       bool dumpUmiGraph){
 
   // construct the output vectors outside of the critical section
   // since e.g. this is more non-trivial work than in the dense case.
@@ -1183,8 +1212,9 @@ bool GZipWriter::writeSparseAbundances(std::string& bcName,
     } else if (featureCode != 0) {
       std::cerr<<"Error: Wrong feature code: " << featureCode << std::flush;
       exit(74);
-    }
-    header += "\tArborescenceCount\n";
+    } else if (dumpUmiGraph) {
+      header += "\tArborescenceCount";
+    } header += "\n";
     bcFeaturesStream_->write(header.c_str(), header.size());
   }
 
@@ -1481,6 +1511,110 @@ bool GZipWriter::writeUmiGraph(alevin::graph::Graph& g,
   return true;
 }
 
+void GZipWriter::writeMtx(std::shared_ptr<spdlog::logger>& jointLog, 
+              boost::filesystem::path& outputDirectory, 
+              size_t numGenes, size_t numCells, size_t totalExpGeneCounts) {
+    jointLog->info("Starting dumping cell v gene counts in mtx format");
+    boost::filesystem::path qFilePath = outputDirectory / "quants_mat.mtx.gz";
+
+    boost::iostreams::filtering_ostream qFile;
+    qFile.push(boost::iostreams::gzip_compressor(6));
+    qFile.push(boost::iostreams::file_sink(qFilePath.string(),
+                                           std::ios_base::out | std::ios_base::binary));
+
+    // mtx header
+    qFile << "%%MatrixMarket\tmatrix\tcoordinate\treal\tgeneral" << std::endl
+          << numCells << "\t" << numGenes << "\t" << totalExpGeneCounts << std::endl;
+
+    {
+
+      auto popcount = [](uint8_t n) {
+        size_t count {0};
+        while (n) {
+          n &= n-1;
+          ++count;
+        }
+        return count;
+      };
+
+      uint32_t zerod_cells {0};
+      size_t numFlags = std::ceil(numGenes/8.0);
+      std::vector<uint8_t> alphasFlag (numFlags, 0);
+      size_t flagSize = sizeof(decltype(alphasFlag)::value_type);
+
+      std::vector<float> alphasSparse;
+      alphasSparse.reserve(numFlags/2);
+      size_t elSize = sizeof(decltype(alphasSparse)::value_type);
+
+      auto countMatFilename = outputDirectory / "quants_mat.gz";
+      if(not boost::filesystem::exists(countMatFilename)){
+        jointLog->error("Can't import Binary file quants.mat.gz, it doesn't exist");
+        jointLog->flush();
+        exit(84);
+      }
+
+      boost::iostreams::filtering_istream countMatrixStream;
+      countMatrixStream.push(boost::iostreams::gzip_decompressor());
+      countMatrixStream.push(boost::iostreams::file_source(countMatFilename.string(),
+                                                           std::ios_base::in | std::ios_base::binary));
+
+      for (size_t cellCount=0; cellCount<numCells; cellCount++){
+        countMatrixStream.read(reinterpret_cast<char*>(alphasFlag.data()), flagSize * numFlags);
+
+        size_t numExpGenes {0};
+        std::vector<size_t> indices;
+        for (size_t j=0; j<alphasFlag.size(); j++) {
+          uint8_t flag = alphasFlag[j];
+          size_t numNonZeros = popcount(flag);
+          numExpGenes += numNonZeros;
+
+          for (size_t i=0; i<8; i++){
+            if (flag & (128 >> i)) {
+              indices.emplace_back( i+(8*j) );
+            }
+          }
+        }
+
+        if (indices.size() != numExpGenes) {
+          jointLog->error("binary format reading error {}: {}: {}",
+                           indices.size(), numExpGenes);
+          jointLog->flush();
+          exit(84);
+        }
+
+
+        alphasSparse.clear();
+        alphasSparse.resize(numExpGenes);
+        countMatrixStream.read(reinterpret_cast<char*>(alphasSparse.data()), elSize * numExpGenes);
+
+        float readCount {0.0};
+        readCount += std::accumulate(alphasSparse.begin(), alphasSparse.end(), 0.0);
+        if (readCount > 1000000) {
+          jointLog->warn("A cell has more 1M count, Possible error");
+          jointLog->flush();
+        }
+
+        for(size_t i=0; i<numExpGenes; i++) {
+          qFile << std::fixed
+                << cellCount + 1 << "\t"
+                << indices[i] + 1 << "\t"
+                << alphasSparse[i] <<  std::endl;
+        }
+
+        if (readCount == 0.0){
+          zerod_cells += 1;
+        }
+      } // end-for each cell
+
+      if (zerod_cells > 0) {
+        jointLog->warn("Found {} cells with 0 counts", zerod_cells);
+      }
+    }
+
+    boost::iostreams::close(qFile);
+    jointLog->info("Finished dumping counts into mtx");
+}
+
 using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 using BulkExpT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;
 template <typename FragT>
@@ -1574,6 +1708,10 @@ bool GZipWriter::writeEquivCounts<SCExpT, apt::DropSeq>(
                                                         const AlevinOpts<apt::DropSeq>& aopts,
                                                         SCExpT& readExp);
 template
+bool GZipWriter::writeEquivCounts<SCExpT, apt::CITESeq>(
+                                                        const AlevinOpts<apt::CITESeq>& aopts,
+                                                        SCExpT& readExp);
+template
 bool GZipWriter::writeEquivCounts<SCExpT, apt::InDrop>(
                                                        const AlevinOpts<apt::InDrop>& aopts,
                                                        SCExpT& readExp);
@@ -1607,6 +1745,9 @@ bool GZipWriter::writeEquivCounts<SCExpT, apt::Custom>(
                                                        SCExpT& readExp);
 template bool
 GZipWriter::writeMetaAlevin<apt::DropSeq>(const AlevinOpts<apt::DropSeq>& opts,
+                                          boost::filesystem::path aux_dir);
+template bool
+GZipWriter::writeMetaAlevin<apt::CITESeq>(const AlevinOpts<apt::CITESeq>& opts,
                                           boost::filesystem::path aux_dir);
 template bool
 GZipWriter::writeMetaAlevin<apt::InDrop>(const AlevinOpts<apt::InDrop>& opts,

@@ -45,6 +45,7 @@ script:
   # VERBOSE=1 to show the input commands in generatd Makefile for debug.
   - |
     cmake \
+      -DCMAKE_BUILD_TYPE=RELEASE \
       -DFETCH_BOOST=TRUE \
       -DNO_RTM=TRUE \
       .. && \

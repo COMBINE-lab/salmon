@@ -22,11 +22,10 @@ if [ -d ${INSTALL_DIR}/src/pufferfish ] ; then
     rm -fr ${INSTALL_DIR}/src/pufferfish
 fi
 
-#SVER=salmon-v1.1.0
-SVER=develop
-#SVER=pe-chaining
+SVER=salmon-v1.2.0
+#SVER=develop
 
-EXPECTED_SHA256=aa51d7123f38568b1c9da5ab4f925b1705c5b3569048911b0aae4ea5cf7edac7
+EXPECTED_SHA256=4c5958db43e30894c80171a535808000afac49bae23e356d4d3fbfe44d9597ad
 
 mkdir -p ${EXTERNAL_DIR}
 curl -k -L https://github.com/COMBINE-lab/pufferfish/archive/${SVER}.zip -o ${EXTERNAL_DIR}/pufferfish.zip
@@ -84,6 +83,7 @@ cp ${EXTERNAL_DIR}/pufferfish/include/CommonTypes.hpp ${INSTALL_DIR}/include/puf
 cp ${EXTERNAL_DIR}/pufferfish/include/SAMWriter.hpp ${INSTALL_DIR}/include/pufferfish
 cp ${EXTERNAL_DIR}/pufferfish/include/PufferfishConfig.hpp ${INSTALL_DIR}/include/pufferfish
 cp ${EXTERNAL_DIR}/pufferfish/include/BinWriter.hpp ${INSTALL_DIR}/include/pufferfish
+cp -r ${EXTERNAL_DIR}/pufferfish/include/libdivide ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/ksw2pp ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/compact_vector ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/metro ${INSTALL_DIR}/include/pufferfish

@@ -107,6 +107,15 @@ inline bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& mem
   aconf.mimicBT2 = salmonOpts.mimicBT2;
   aconf.mimicBT2Strict = salmonOpts.mimicStrictBT2;
   aconf.allowOverhangSoftclip = salmonOpts.softclipOverhangs;
+  aconf.allowSoftclip  = salmonOpts.softclip; 
+  aconf.useAlignmentCache = !salmonOpts.disableAlignmentCache;
+  aconf.alignmentMode = pufferfish::util::PuffAlignmentMode::SCORE_ONLY;
+
+  // we actually care about the softclips in the cigar string 
+  // if we are writing output and softclipping (or softclipping of overhangs) is enabled
+  if ( (!salmonOpts.qmFileName.empty()) and (salmonOpts.softclip or salmonOpts.softclipOverhangs) ) {
+    aconf.alignmentMode = pufferfish::util::PuffAlignmentMode::APPROXIMATE_CIGAR;
+  }
 
   mpol.noOrphans = !salmonOpts.allowOrphans;
   // TODO : PF_INTEGRATION
@@ -117,11 +126,13 @@ inline bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& mem
   // a dovetail read is considered concordant or discordant
   mpol.noDiscordant = true;
   mpol.noDovetail = !salmonOpts.allowDovetail;
+  aconf.noDovetail = mpol.noDovetail;
+
   return true;
 }
 
 
-inline void updateRefMappings(uint32_t tid, int32_t hitScore, size_t idx,
+inline void updateRefMappings(uint32_t tid, int32_t hitScore, bool isCompat, size_t idx,
                   const std::vector<Transcript>& transcripts,
                   int32_t invalidScore,
                   salmon::mapping_utils::MappingScoreInfo& msi,
@@ -159,7 +170,7 @@ inline void updateRefMappings(uint32_t tid, int32_t hitScore, size_t idx,
     // this is the current best
     bestScorePerTranscript[tid].first = hitScore;
     bestScorePerTranscript[tid].second = idx;
-  } else if (hitScore > it->second.first) {
+  } else if ((hitScore > it->second.first) or (hitScore == it->second.first and isCompat)) {
     // otherwise, if we had an alignment for this transcript and it's
     // better than the current best, then set the best score to this
     // alignment's score, and invalidate the previous alignment

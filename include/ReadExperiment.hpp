@@ -743,6 +743,10 @@ public:
     return numDecoys_;
   }
 
+  salmon::utils::DuplicateTargetStatus index_retains_duplicates() const { 
+    return salmonIndex_->index_retains_duplicates(); 
+  }
+
 private:
   void setTranscriptLengthClasses_(std::vector<uint32_t>& lengths,
                                    size_t nbins) {

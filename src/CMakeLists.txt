@@ -88,44 +88,6 @@ if(HAS_IPO AND (NOT NO_IPO))
   set_property(TARGET ksw2pp PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
-
-if (NOT BUILD_PUFF_FOR_SALMON)
-message("BUILDING OUR OWN KSW2PP")
-message("BUILD_PUFF_FOR_SALMON IS = ${BUILD_PUFF_FOR_SALMON}")
-set (KSW2PP_BASIC_LIB_SRCS
-${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/kalloc.c
-${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_extd.c
-${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_extz.c
-${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_gg.c
-${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_gg2.c
-${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_gg2_sse.c
-${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/KSW2Aligner.cpp
-)
-
-set (KSW2PP_ADVANCED_LIB_SRCS
-${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_extd2_sse.c
-${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_extf2_sse.c
-${GAT_SOURCE_DIR}/external/install/src/rapmap/ksw2pp/ksw2_extz2_sse.c
-)
-
-add_library(ksw2pp_sse2 OBJECT ${KSW2PP_ADVANCED_LIB_SRCS})
-add_library(ksw2pp_sse4 OBJECT ${KSW2PP_ADVANCED_LIB_SRCS})
-add_library(ksw2pp_basic OBJECT ${KSW2PP_BASIC_LIB_SRCS})
-
-set_target_properties(ksw2pp_sse2 PROPERTIES COMPILE_FLAGS "-O3 -msse -msse2 -mno-sse4.1")
-set_target_properties(ksw2pp_sse2 PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;KSW_SSE2_ONLY;HAVE_KALLOC")
-set_target_properties(ksw2pp_sse4 PROPERTIES COMPILE_FLAGS "-O3 -msse -msse2 -msse3 -mssse3 -msse4 -msse4.1")
-set_target_properties(ksw2pp_sse4 PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;HAVE_KALLOC")
-set_target_properties(ksw2pp_basic PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;HAVE_KALLOC")
-
-set_target_properties(ksw2pp_basic PROPERTIES INCLUDE_DIRECTORIES ${GAT_SOURCE_DIR}/external/install/include/rapmap)
-set_target_properties(ksw2pp_sse4 PROPERTIES INCLUDE_DIRECTORIES ${GAT_SOURCE_DIR}/external/install/include/rapmap)
-
-# Build the ksw2pp library
-add_library(ksw2pp STATIC $<TARGET_OBJECTS:ksw2pp_sse2> $<TARGET_OBJECTS:ksw2pp_sse4> $<TARGET_OBJECTS:ksw2pp_basic>)
-set_target_properties(ksw2pp PROPERTIES COMPILE_DEFINITIONS "KSW_CPU_DISPATCH;HAVE_KALLOC")
-endif()
-
 set ( UNIT_TESTS_SRCS
     ${GAT_SOURCE_DIR}/tests/UnitTests.cpp
     FragmentLengthDistribution.cpp
@@ -175,6 +137,7 @@ RAPMAP_SALMON_SUPPORT=1
 PUFFERFISH_SALMON_SUPPORT=1
 HAVE_ANSI_TERM=1
 HAVE_SSTREAM=1
+STX_NO_STD_STRING_VIEW=1
 span_FEATURE_MAKE_SPAN_TO_STD=14
 )
 target_compile_options(salmon_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")

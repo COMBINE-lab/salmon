@@ -28,7 +28,6 @@ extern "C" {
 
 #include "GenomicFeature.hpp"
 #include "LibraryFormat.hpp"
-//#include "RapMapUtils.hpp"
 #include "pufferfish/Util.hpp"
 #include "ReadLibrary.hpp"
 #include "SalmonConfig.hpp"
@@ -55,7 +54,14 @@ enum class MappingType : uint8_t {
   RIGHT_ORPHAN = 2,
   BOTH_ORPHAN = 3,
   PAIRED_MAPPED = 4,
-  SINGLE_MAPPED = 5
+  SINGLE_MAPPED = 5,
+  DECOY = 6
+};
+
+enum class DuplicateTargetStatus : uint8_t { 
+  UNKNOWN = 0, 
+  RETAINED_DUPLICATES = 1, 
+  REMOVED_DUPLICATES = 2 
 };
 
 std::string str(const MappingType& mt);
@@ -311,6 +317,8 @@ LibraryFormat hitType(int32_t end1Start, bool end1Fwd, uint32_t len1,
  *  is compatible.
  */
 LibraryFormat hitType(int32_t readStart, bool isForward);
+
+double compute_1_edit_threshold(int32_t l, const SalmonOpts& sopt);
 
 /**
  *  Cache the mappings provided in an efficient binary format

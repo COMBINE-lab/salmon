@@ -122,7 +122,7 @@ size_t readBfh(bfs::path& eqFilePath,
     } // end else case of not hasWhitelist
   } // end name/index rearrangement
 
-  countMap.set_max_resize_threads(1);
+  countMap.max_num_worker_threads(1);
   countMap.reserve(1000000);
 
   alevin::types::AlevinUMIKmer umiObj;
@@ -290,6 +290,10 @@ int salmonHashQuantify(AlevinOpts<apt::DropSeq>& aopt,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 template
+int salmonHashQuantify(AlevinOpts<apt::CITESeq>& aopt,
+                       bfs::path& outputDirectory,
+                       CFreqMapT& freqCounter);
+template
 int salmonHashQuantify(AlevinOpts<apt::InDrop>& aopt,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
@@ -309,3 +313,4 @@ template
 int salmonHashQuantify(AlevinOpts<apt::Custom>& aopt,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
+

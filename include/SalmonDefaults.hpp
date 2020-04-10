@@ -1,6 +1,8 @@
 #ifndef SALMON_DEFAULTS_HPP
 #define SALMON_DEFAULTS_HPP
 
+#include <thread>
+
 namespace salmon {
 namespace defaults {
   // general
@@ -28,10 +30,12 @@ namespace defaults {
   constexpr const int16_t gapOpenPenalty{4};
   constexpr const int16_t gapExtendPenalty{2};
   constexpr const int32_t dpBandwidth{15};
+  constexpr const bool disableChainingHeuristic{false};
   constexpr const bool eqClassMode{false};
   constexpr const bool hardFilter{false};
   constexpr const bool mimicStrictBT2{false};
   constexpr const bool mimicBT2{false};
+  constexpr const bool softclip{false};
   constexpr const bool softclipOverhangs{false};
   constexpr const bool fullLengthAlignment{false};
   constexpr const bool allowDovetail{false};
@@ -95,13 +99,14 @@ namespace defaults {
   constexpr const size_t numFragGCBins{25};
   constexpr const size_t numConditionalGCBins{3};
   constexpr const size_t numRequiredFrags{50000000}; // deprecated
-  constexpr const uint32_t maxHashResizeThreads{std::numeric_limits<uint32_t>::max()};
+  const uint32_t maxHashResizeThreads{std::thread::hardware_concurrency()};
 
   // experimental / testing
   constexpr const bool noRichEqClasses{false};
   constexpr const bool noFragLengthFactor{false};
   constexpr const bool rankEqClasses{false};
   constexpr const bool dontExtrapolateCounts{false};
+  constexpr const bool disableAlignmentCache{false};
 
   // alignment-based mode
   //constexpr const bool useErrorModel{true};
@@ -126,6 +131,7 @@ namespace defaults {
   constexpr const bool isChromiumV3{false};
   constexpr const bool isInDrop{false};
   constexpr const bool isGemcode{false};
+  constexpr const bool isCITESeq{false};
   constexpr const bool isCELSeq{false};
   constexpr const bool isCELSeq2{false};
   constexpr const bool isQuartzSeq2{false};
