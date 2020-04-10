@@ -1,6 +1,8 @@
 #ifndef SALMON_DEFAULTS_HPP
 #define SALMON_DEFAULTS_HPP
 
+#include <thread>
+
 namespace salmon {
 namespace defaults {
   // general
@@ -97,7 +99,7 @@ namespace defaults {
   constexpr const size_t numFragGCBins{25};
   constexpr const size_t numConditionalGCBins{3};
   constexpr const size_t numRequiredFrags{50000000}; // deprecated
-  constexpr const uint32_t maxHashResizeThreads{std::numeric_limits<uint32_t>::max()};
+  const uint32_t maxHashResizeThreads{std::thread::hardware_concurrency()};
 
   // experimental / testing
   constexpr const bool noRichEqClasses{false};
