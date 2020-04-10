@@ -1991,6 +1991,13 @@ bool processQuantOptions(SalmonOpts& sopt,
     jointLog->info("Using per-nucleotide prior with the default VB prior.  Setting the default prior to {}",sopt.vbPrior);
   }
 
+  // If the maxHashResizeThreads was defaulted, then set it equal to the regular number 
+  // of threads.
+  if (vm["maxHashResizeThreads"].defaulted()) {
+    sopt.maxHashResizeThreads = sopt.numThreads;
+    jointLog->info("setting maxHashResizeThreads to {}", sopt.maxHashResizeThreads);
+  }
+
   {
     try {
       conflicting_options(vm, "alignments", "eqclasses");

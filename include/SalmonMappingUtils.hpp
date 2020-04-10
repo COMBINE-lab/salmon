@@ -126,6 +126,8 @@ inline bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& mem
   // a dovetail read is considered concordant or discordant
   mpol.noDiscordant = true;
   mpol.noDovetail = !salmonOpts.allowDovetail;
+  aconf.noDovetail = mpol.noDovetail;
+
   return true;
 }
 
