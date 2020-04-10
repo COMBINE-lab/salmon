@@ -12,4 +12,4 @@
  9. Add release notes for the tagged master version.
  10. Upload the pre-compiled linux binary (from the CI server) to GitHub.
  11. Place a new version file on the website and update the old one.
- 12. (not technically part of release) Reset the relevant changes (steps 1,2) on the develop branch so they now point to a non-tagged RapMap.
+ 12. (not technically part of release) Reset the relevant changes (steps 1,2) on the develop branch so they now point to a non-tagged pufferfish.
