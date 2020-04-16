@@ -43,14 +43,14 @@ Another way to get started with Salmon is to download the pre-compiled binaries 
 If you've downloaded a specific binary, you simply decompress it like so:
 
 ```
-$ tar xzvf salmon-0.14.0_linux_x86_64.tar.gz
+$ tar xzvf salmon-1.2.0_linux_x86_64.tar.gz
 ```
 
 then, the binary will be located in the `bin` directory inside of the uncompressed folder.  You can either run salmon directly using the full path, or place it into your PATH variable for easier execution.  The rest of the tutorial below will assume that you've placed the `salmon` executable in your path, so that simply running `salmon` will invoke the program.  You can test that salmon is running on your system and get a list of available commands using the `-h` command; you should see output like the following
 
 ```
 $ salmon -h
-salmon v0.14.0
+salmon v1.2.0
 
 Usage:  salmon -h|--help or
         salmon -v|--version or
