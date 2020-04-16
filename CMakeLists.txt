@@ -277,6 +277,21 @@ set(GAT_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 # set(CMAKE_VERBOSE_MAKEFILE true)
 
 ###
+# check if numeric_limits<__int128_t> is defined
+###
+try_compile(HAVE_INT128_NUMERIC_LIMITS ${CMAKE_BINARY_DIR} 
+            SOURCES ${GAT_SOURCE_DIR}/tests/compile_tests/int128_numeric_limits.cpp
+            CXX_STANDARD 14
+            CXX_STANDARD_REQUIRED ON 
+            )
+if(HAVE_INT128_NUMERIC_LIMITS)
+  message("setting -DHAVE_NUMERIC_LIMITS128")
+  list(APPEND TGT_COMPILE_FLAGS "-DHAVE_NUMERIC_LIMITS128")
+else()
+  message("not setting -DHAVE_NUMERIC_LIMITS128")
+endif()
+
+###
 #
 #  Grab pufferfish source --- DURING CONFIGURE TIME!
 #
