@@ -173,7 +173,8 @@ and optionally aggregate them to the gene level for gene-level differential expr
 You can read more about how to import salmon's results into DESeq2 by reading the `tximport` section
 of the excellent [DESeq2 vignette](https://bioconductor.org/packages/DESeq2).
 For instructions on importing for use with edgeR or limma, see the 
-[tximport vignette](http://bioconductor.org/packages/tximport).
+[tximport vignette](http://bioconductor.org/packages/release/bioc/vignettes/tximport/inst/doc/tximport.html).
+For using salmon with swish for transcript level analysis, see the [swish vignette](https://bioconductor.org/packages/release/bioc/vignettes/fishpond/inst/doc/swish.html).
 For preparing salmon output for use with sleuth, 
 see the [wasabi](https://github.com/COMBINE-lab/wasabi) package.
 
