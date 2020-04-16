@@ -162,6 +162,7 @@ After the salmon commands finish running, you should have a directory named `qua
 
 That's it!  Quantifying your RNA-seq data with salmon is that simple (and fast).
 Once you have your quantification results you can use them for downstream analysis with differential expression tools like 
+[swish](https://bioconductor.org/packages/release/bioc/html/fishpond.html),
 [DESeq2](https://bioconductor.org/packages/DESeq2),
 [edgeR](https://bioconductor.org/packages/edgeR),
 [limma](https://bioconductor.org/packages/limma), or
