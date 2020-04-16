@@ -120,6 +120,16 @@ namespace salmon {
        "mapping must achieve in order to be considered \"valid\" --- should be in (0,1].\n"
        "Salmon Default 0.65 and Alevin Default 0.87"
        )
+      ("mismatchSeedSkip",
+       po::value<uint32_t>(&sopt.mismatchSeedSkip)->default_value(salmon::defaults::mismatchSeedSkip),
+       "[selective-alignment mode only] : After a k-mer hit is extended to a uni-MEM, the uni-MEM extension "
+       "can terminate for one of 3 reasons; the end of the read, the end of the unitig, or a mismatch.  If the "
+       "extension ends because of a mismatch, this is likely the result of a sequencing error.  To avoid looking "
+       "up many k-mers that will likely fail to be located in the index, the search procedure skips by a factor "
+       "of mismatchSeedSkip until it either (1) finds another match or (2) is k-bases past the mismatch position. "
+       "This value controls that skip length.  A smaller value can increase sensitivity, while a larger value "
+       "can speed up seeding."
+      )
       ("disableChainingHeuristic",
       po::bool_switch(&(sopt.disableChainingHeuristic))->default_value(salmon::defaults::disableChainingHeuristic),
       "[selective-alignment mode only] : By default, the heuristic of (Li 2018) is implemented, which terminates "

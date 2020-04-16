@@ -1471,6 +1471,16 @@ std::string getCurrentTimeAsString() {
     return false;
   }
 
+  if (sopt.mismatchSeedSkip < 1) {
+    sopt.jointLog->warn("The mismatchSeedSkip was set to {}, but it cannot be < 1.  Setting mismatchSeedSkip to 1");
+    sopt.mismatchSeedSkip = 1;
+  }
+
+  if (sopt.mismatchSeedSkip > 31) {
+    sopt.jointLog->warn("Setting the mismatchSeedSkip too high can hurt the sensitivity of mapping.  Consider "
+    "setting a lower mismatchSeedSkip.");
+  }
+
   // If we have validate mappings, then make sure we automatically enable
   // range factorization
   if (sopt.validateMappings) {

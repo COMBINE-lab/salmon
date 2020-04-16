@@ -82,7 +82,8 @@ inline bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& mem
   double consensusFraction = (salmonOpts.consensusSlack == 0.0) ? 1.0 : (1.0 - salmonOpts.consensusSlack);
   memCollector.setConsensusFraction(consensusFraction);
   memCollector.setHitFilterPolicy(salmonOpts.hitFilterPolicy);
-
+  memCollector.setAltSkip(salmonOpts.mismatchSeedSkip);
+  
   //Initialize ksw aligner
   ksw2pp::KSW2Config config;
   config.dropoff = -1;

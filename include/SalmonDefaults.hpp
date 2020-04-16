@@ -30,6 +30,7 @@ namespace defaults {
   constexpr const int16_t gapOpenPenalty{4};
   constexpr const int16_t gapExtendPenalty{2};
   constexpr const int32_t dpBandwidth{15};
+  constexpr const uint32_t mismatchSeedSkip{5};
   constexpr const bool disableChainingHeuristic{false};
   constexpr const bool eqClassMode{false};
   constexpr const bool hardFilter{false};
