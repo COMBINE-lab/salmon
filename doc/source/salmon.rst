@@ -21,9 +21,9 @@ see below.
    Selective alignment, first introduced by the ``--validateMappings`` flag
    in salmon, and now the default mapping strategy (in version 1.0.0
    forward), is a major feature enhancement introduced in recent versions of
-   salmon. With selective alignment, salmon adopts a
+   salmon. When salmon is run with selective alignment, it adopts a
    considerably more sensitive scheme that we have developed for finding the
-   potential mapping loci of a read, and scoreing the potential mapping loci using
+   potential mapping loci of a read, and score potential mapping loci using
    the chaining algorithm introdcued in minimap2 [#minimap2]_. It scores and
    validates these mappings using the score-only, SIMD, dynamic programming
    algorithm of ksw2 [#ksw2]_. Finally, we recommend using selective
@@ -88,11 +88,11 @@ set of alignments.
     8 --- 12 threads results in the maximum speed, threads allocated above this
     limit will likely spend most of their time idle / sleeping.
 
-    For selective-alignment-based Salmon, the story is somewhat different.
+    For quasi-mapping-based Salmon, the story is somewhat different.
     Generally, performance continues to improve as more threads are made
-    available.  This is because the determination of the potential mapping
+    available.  This is because the determiniation of the potential mapping
     locations of each read is, generally, the slowest step in
-    selective-alignment-based quantification.  Since this process is
+    quasi-mapping-based quantification.  Since this process is
     trivially parallelizable (and well-parallelized within Salmon), more
     threads generally equates to faster quantification. However, there may
     still be a limit to the return on invested threads, when Salmon can begin
@@ -102,12 +102,12 @@ set of alignments.
 Preparing transcriptome indices (mapping-based mode) 
 ----------------------------------------------------------
 
-One of the novel and innovative features of salmon is its ability to accurately
+One of the novel and innovative features of Salmon is its ability to accurately
 quantify transcripts without having previously aligned the reads using its fast,
 built-in selective-alignment mapping algorithm. Further details about the selective alignment algorithm can be
-found `here <https://www.biorxiv.org/content/10.1101/657874v2>`_.
+found `here <https://www.biorxiv.org/content/10.1101/657874v1>`_.
 
-If you want to use salmon in mapping-based mode, then you first have to build a
+If you want to use Salmon in mapping-based mode, then you first have to build a
 salmon index for your transcriptome. Assume that ``transcripts.fa`` contains the
 set of transcripts you wish to quantify. We generally recommend that you build a
 *decoy-aware* transcriptome file. 
@@ -140,9 +140,9 @@ This will build the mapping-based index, using an auxiliary k-mer hash
 over k-mers of length 31.  While the mapping algorithms will make used of arbitrarily 
 long matches between the query and reference, the `k` size selected here will 
 act as the *minimum* acceptable length for a valid match.  Thus, a smaller 
-value of `k` may slightly improve sensitivity.  We find that a `k` of 31 seems
+value of `k` may slightly improve sensitivty.  We find that a `k` of 31 seems
 to work well for reads of 75bp or longer, but you might consider a smaller 
-`k` if you plan to deal with shorter reads. Also, a shorter value of `k` may
+`k` if you plan to deal with shorter reads. Also, a shoter value of `k` may
 improve sensitivity even more when using selective alignment (enabled via the `--validateMappings` flag).  So,
 if you are seeing a smaller mapping rate than you might expect, consider building
 the index with a slightly smaller `k`.  
@@ -257,20 +257,6 @@ mode, and a description of each, run ``salmon quant --help-alignment``.
     coordinates.  This avoids the necessity of having to re-map the reads. However,
     we have very limited experience with this tool so far.
 
-.. note:: Requirements for SAM/BAM files
-
-    Salmon expects that the alignment files provided have all of the
-    alignment records for a read collated.  Specifically, all of the 
-    alignments for a read should appear contiguously within the alignment 
-    file.  Further, for paired end reads, the alignment for a read's mate
-    should appear directly after the alignemnt for the read in the file.
-    This is the default behavior for Bowtie2 (at least when run with the 
-    recommended `--no-discordant` and `--no-mixed` flags), and STAR 
-    (when projecting to transcriptomic coordinates).  Many alignment tools 
-    will write the results this way, but these constraints are worth checking 
-    if you get unexpected results or if salmon produces warnings while parsing 
-    the alignment file.
-
 .. topic:: Multiple alignment files
     
     If your alignments for the sample you want to quantify appear in multiple 
@@ -293,11 +279,6 @@ The particularly important ones are explained here, but you can always run
 """""""""""""""""""""""""""""""
 ``--validateMappings``
 """""""""""""""""""""""""""""""
-
-**Note** : Since v1.0.0, selective-alignment is the default (and only) mapping 
-based approach.  The text below lists the effects and benefits of using selective-alignemnt,
-but the option itself will no longer change the behavior of salmon (the default behavior 
-is as if this option was passed, and selective-alignment cannot be disabled). 
 
 Enables selective alignment of the sequencing reads when mapping them to the transcriptome.
 This can improve both the sensitivity and specificity of mapping and, as a result, can
@@ -361,77 +342,6 @@ quantification, this flag can produce easier-to-understand equivalence classes
 if that is the primary object of study.
 
 """""""""""""""""""""""""
-``--softclip``
-"""""""""""""""""""""""""
-
-**[currently beta]** This flag allows
-soft-clipping at the beginning and end of reads when they are scored with
-selective-alignment. If used in conjunction with the ``--writeMappings`` flag,
-then the CIGAR strings in the resulting SAM output will designate any
-soft-clipping that occurs at the beginning or end of the read. Note: To pass
-the selective-alignment filter, the read must still obtain a score of at
-least maximum achievable score * minScoreFraction, but softclipping allows
-omitting a poor quality sub-alignment at the beginning or end of the read
-with no change to the resulting score for the rest of the alignment (rather
-than forcing a negative score for these sub-alignments).
-
-"""""""""""""""""""""""""
-``--decoyThreshold``
-"""""""""""""""""""""""""
-
-For an alignment to an annotated transcript to be considered invalid, it must have an alignment
-score s such that s :math:`<` (``decoyThreshold`` * ``bestDecoyScore``). A value of 1.0 means
-that any alignment strictly worse than the best decoy alignment will be
-discarded. A smaller value will allow reads to be allocated to transcripts
-even if they strictly align better to the decoy sequence. The previous
-behavior of salmon was to discard any mappings to annotated transcripts that
-were strictly worse than the best decoy alignment. This is equivalent to
-setting ``--decoyThreshold`` 1.0, which is the default behavior.
-
-"""""""""""""""""""""""""
-``--minAlnProb``
-"""""""""""""""""""""""""
-
-When selective alignment is carried out on a read, each alignment A is
-assigned a probability given by :math:`e^{-(\text{scoreExp} * (\text{bestScore} - \text{score}(A)))}`,
-where the default scoreExp is just 1.0. Depending on how much worse a given
-alignment is compared to the best alignment for a read, this can result in an
-exceedingly small alignment probability. The ``--minAlnProb`` option lets one set
-the alignment probability below which an alignment's probability will be
-truncated to 0. This allows skipping the alignments for a fragment that are
-unlikely to be true (and which could increase the difficulty of inference in
-some cases). The default value is ``1e-5``.
-
-"""""""""""""""""""""""""""""""
-``--disableChainingHeuristic``
-"""""""""""""""""""""""""""""""
-
-Passing this flag will turn off the heuristic of Li 2018 that is used to
-speed up the MEM chaining step, where the inner loop of the chaining
-algorithm is terminated after a small number of previous pointers for a given
-MEM have been found. Passing this flag can improve the sensitivity of
-alignment to sequences that are highly repetitive (especially those with
-overlapping repetition), but it can make the chaining step somewhat slower.
-
-"""""""""""""""""""""""""
-``--auxTargetFile``
-"""""""""""""""""""""""""
-
-This option takes an argument `file`. The file passed to this
-option should be a list of targets (i.e. sequences indexed during indexing,
-or aligned against in the provided BAM file) for which auxiliary models
-(sequence-specific, fragment-GC, and position-specific bias correction)
-should not be applied. The format of this file is to provide one target name
-per-line, in a newline separated file. Unlike decoy sequences, this list of
-sequences is provided to the quant command, and can be different between
-different runs if so-desired. Also, unlike decoy sequences, the auxiliary
-targets will be quantified (e.g. they will have entries in quant.sf and can
-have reads assigned to them). To aid in metadata tracking of targets marked
-as auxiliary, the ``aux_info`` directory contains a new file ``aux_target_ids.json``,
-which contains a json file listing the indices of targets that were treated
-as "auxiliary" targets in the current run.
-
-"""""""""""""""""""""""""
 ``--skipQuant``
 """""""""""""""""""""""""
 
@@ -469,25 +379,12 @@ values here can speed up the run substantially.
   likely want to set this option explicitly in accordance with the desired
   per-process resource usage.
 
-"""""""""""""""""""""""""""
-``-d``, ``--dumpEqWeights``
-"""""""""""""""""""""""""""
-
-If salmon is passed the ``--dumpEqWeights`` option, it will write a file in the auxiliary
-directory, called ``eq_classes.txt`` that contains the equivalence classes 
-used for quantification.  It will, unlike ``--dumpEq`` below, output the 
-conditional probabilities associated with transcripts when 
-equivalence class information is being dumped to file. Note, this will 
-dump the factorization that is actually used by salmon's offline phase 
-for inference.  If you are using range-factorized equivalence classes (the default) 
-then the same transcript set may appear multiple times with different associated "
-conditional probabilities.
 
 """"""""""""""""""""""
 ``--dumpEq``
 """"""""""""""""""""""
 
-If salmon is passed the ``--dumpEq`` option, it will write a file in the auxiliary
+If Salmon is passed the ``--dumpEq`` option, it will write a file in the auxiliary
 directory, called ``eq_classes.txt`` that contains the equivalence classes and corresponding
 counts that were computed during quasi-mapping.  The file has a format described in
 :ref:`eq-class-file`.
@@ -569,6 +466,15 @@ sets the bandwidth parameter of the relevant calls to ksw2's alignment function.
 This determines how wide an area around the diagonal in the DP matrix should be
 calculated.
 
+"""""""""""""""""""""""""""""""
+``--maxMMPExtension``
+"""""""""""""""""""""""""""""""
+
+This flag (which should only be used with selective alignment) limits the length
+that a mappable prefix of a fragment may be extended before another search along
+the fragment is started. Smaller values for this flag can improve the
+sensitivity of mapping, but could increase run time.
+
 """"""""""""""""""
 ``--ma``
 """"""""""""""""""
@@ -638,16 +544,19 @@ between these different optimization approaches. Also, the VBEM tends to
 converge after fewer iterations, so it may result in a shorter runtime;
 especially if you are computing many bootstrap samples.
 
-The default prior used in the VB optimization is a *per-transcript* prior
-of 1e-3 reads per-transcript.  This behavior can be modified in two
+The default prior used in the VB optimization is a *per-nucleotide* prior
+of 1e-5 reads per-nucleotide.  This means that a transcript of length 100000 will
+have a prior count of 1 fragment, while a transcript of length 50000 will have
+a prior count of 0.5 fragments, etc.  This behavior can be modified in two
 ways.  First, the prior itself can be modified via Salmon's ``--vbPrior``
 option.  The argument to this option is the value you wish to place as the
-*per-transcript* prior.  Additionally, you can modify the behavior to use
-a *per-nucleotide* prior (the default for this is 1e-5). This means that a transcript 
-of length 100000 will have a prior count of 1 fragment, while a transcript of length 
-50000 will have a prior count of 0.5 fragments, etc.  This behavior is invoked by 
-passing ``--perNucleotidePrior`` to salmon.  In this case, whatever value is set
-by ``--vbPrior`` will be used as the nucleotide-level prior.
+*per-nucleotide* prior.  Additonally, you can modify the behavior to use
+a *per-transcript* rather than a *per-nucleotide* prior by passing the flag
+``--perTranscriptPrior`` to Salmon.  In this case, whatever value is set
+by ``--vbPrior`` will be used as the transcript-level prior, so that the
+prior count is no longer dependent on the transcript length.  However,
+the default behavior of a *per-nucleotide* prior is recommended when
+using VB optimization.
 
 .. note:: Choosing between EM and VBEM algorithms
 
@@ -658,28 +567,6 @@ by ``--vbPrior`` will be used as the nucleotide-level prior.
    performed mostly through simulation). Hence, the VBEM is the default, and the
    standard EM algorithm is accessed via the `--useEM` flag.
 
-"""""""""""""""""""""""""""""""
-``--numGibbsSamples``
-"""""""""""""""""""""""""""""""
-
-Just as with the bootstrap procedure above, this option produces samples that allow
-us to estimate the variance in abundance estimates.  However, in this case the
-samples are generated using posterior Gibbs sampling over the fragment equivalence
-classes rather than bootstrapping.  We are currently analyzing these different approaches
-to assess the potential trade-offs in time / accuracy.  The ``--numBootstraps`` and
-``--numGibbsSamples`` options are mutually exclusive (i.e. in a given run, you must
-set at most one of these options to a positive integer.)
-
-"""""""""""""""""""""""""""""""
-``--thinningFactor``
-"""""""""""""""""""""""""""""""
-
-This option is only valid with ``--numGibbsSamples``, and it sets the thinning factor 
-for the Gibbs chains.  This option is passed a value ``k``, and only samples from every 
-``k``-th iteration of the Gibbs chain will be written down.  Increasing the thinning 
-factor can reduce the auto-correlation between Gibbs samples, but it will obviously 
-take longer to produce the same number of output samples compared to having run with 
-a smaller value of ``--thinningFactor``.  The default value is 16. 
 
 """""""""""""""""""""""""""""
 ``--numBootstraps``
@@ -695,6 +582,18 @@ expression) tools that can make use of such uncertainty estimates.  This option
 takes a positive integer that dictates the number of bootstrap samples to compute.
 The more samples computed, the better the estimates of varaiance, but the
 more computation (and time) required.
+
+"""""""""""""""""""""""""""""""
+``--numGibbsSamples``
+"""""""""""""""""""""""""""""""
+
+Just as with the bootstrap procedure above, this option produces samples that allow
+us to estimate the variance in abundance estimates.  However, in this case the
+samples are generated using posterior Gibbs sampling over the fragment equivalence
+classes rather than bootstrapping.  We are currently analyzing these different approaches
+to assess the potential trade-offs in time / accuracy.  The ``--numBootstraps`` and
+``--numGibbsSamples`` options are mutually exclusive (i.e. in a given run, you must
+set at most one of these options to a positive integer.)
 
 """""""""""""""""""""
 ``--seqBias``
@@ -770,7 +669,8 @@ non-uniform coverage biases that are sometimes present in RNA-seq data
 of models are learned for different length classes of transcripts, as
 is done in Roberts et al. [#roberts]_. *Note*: The positional bias
 model is relatively new, and is still undergoing testing.  It replaces
-the previous `--useFSPD` option, which is now deprecated.
+the previous `--useFSPD` option, which is now deprecated.  This
+feature should be considered as *experimental* in the current release.
 
 
 """""""""""""""""""""""""""""

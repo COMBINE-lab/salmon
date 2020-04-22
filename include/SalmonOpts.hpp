@@ -258,7 +258,7 @@ struct SalmonOpts {
 
   // Related to alignment verification
   bool validateMappings;
-  bool disableSA;
+  bool disableSA{false}; // this cannot be done right now.
   float consensusSlack;
   bool disableChainingHeuristic;
   bool disableAlignmentCache;
@@ -269,6 +269,7 @@ struct SalmonOpts {
   int16_t gapOpenPenalty;
   int16_t gapExtendPenalty;
   int32_t dpBandwidth;
+  uint32_t mismatchSeedSkip;
   bool mimicStrictBT2;
   bool mimicBT2;
   bool softclip;

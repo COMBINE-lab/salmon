@@ -20,7 +20,7 @@ from DockerHub using:
 Requirements for Building from Source
 -------------------------------------
 
-* A C++14 conformant compiler. 
+* A C++11 conformant compiler (currently tested with GCC>=4.7 and Clang>=3.4)
 * CMake_. Salmon uses the CMake build system to check, fetch and install
   dependencies, and to compile and install Salmon. CMake is available for all
   major platforms (though Salmon is currently unsupported on Windows.)
@@ -28,7 +28,7 @@ Requirements for Building from Source
 Installation
 ============
 
-After downloading the salmon source distribution and unpacking it, change into the top-level directory:
+After downloading the Salmon source distribution and unpacking it, change into the top-level directory:
 
 ::
 
@@ -42,8 +42,8 @@ Then, create and out-of-source build directory and change into it:
     > cd build
 
 
-Salmon makes extensive use of Boost_.  We recommend installing a recent 
-version system-wide if possible. If Boost is not installed on your
+Salmon makes extensive use of Boost_.  We recommend installing the most
+recent version (1.55) systemwide if possible. If Boost is not installed on your
 system, the build process will fetch, compile and install it locally.  However,
 if you already have a recent version of Boost available on your system, it make
 sense to tell the build system to use that.
