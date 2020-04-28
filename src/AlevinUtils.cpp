@@ -604,6 +604,12 @@ namespace alevin {
         return false;
       }
 
+      if (aopt.numGibbsSamples > 0 and aopt.numBootstraps > 0) {
+        aopt.jointLog->error("Either of --numCellGibbsSamples or --numCellBootstraps "
+                             "can be used");
+        return false;
+      }
+
       if ( aopt.numBootstraps > 0 and aopt.noEM ) {
         aopt.jointLog->error("cannot perform bootstrapping with noEM option.");
         return false;
