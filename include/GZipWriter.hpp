@@ -92,6 +92,11 @@ public:
   bool writeCellEQVec(size_t barcode, const std::vector<uint32_t>& offsets,
                       const std::vector<uint32_t>& counts, bool quiet = true);
 
+  bool writeDedupCellEQVec(size_t barcode, 
+                           const std::vector<std::vector<uint32_t>>& labels,
+                           const std::vector<uint32_t>& counts,
+                           bool quiet = true);
+
   bool writeUmiGraph(alevin::graph::Graph& g, std::string& trueBarcodeStr);
 
   bool setSamplingPath(const SalmonOpts& sopt);
@@ -112,6 +117,7 @@ private:
   std::unique_ptr<boost::iostreams::filtering_ostream> tierMatrixStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> umiGraphStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> cellEQStream_{nullptr};
+  std::unique_ptr<boost::iostreams::filtering_ostream> cellDedupEQStream_{nullptr};
   std::unique_ptr<boost::iostreams::filtering_ostream> arboMatrixStream_{nullptr};
   std::unique_ptr<std::ofstream> bcNameStream_{nullptr};
   std::unique_ptr<std::ofstream> bcFeaturesStream_{nullptr};

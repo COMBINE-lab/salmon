@@ -449,6 +449,20 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         std::exit(74);
       }
 
+
+      bool writeDedupEqClasses{true};
+      if ( writeDedupEqClasses ){
+        std::vector<std::vector<uint32_t>> labelsEq ;
+        std::vector<uint32_t> countsEq ;
+        labelsEq.resize(salmonEqclasses.size());
+        countsEq.resize(salmonEqclasses.size());
+        for(size_t salEqId = 0 ; salEqId < salmonEqclasses.size(); ++salEqId){
+          labelsEq[salEqId] = salmonEqclasses[salEqId].labels;
+          countsEq[salEqId] = salmonEqclasses[salEqId].count;
+        }
+        gzw.writeDedupCellEQVec(trueBarcodeIdx, labelsEq, countsEq, true);
+      }
+
       if ( numBootstraps and noEM ) {
         jointlog->error("Cannot perform bootstrapping with noEM");
         jointlog->flush();
