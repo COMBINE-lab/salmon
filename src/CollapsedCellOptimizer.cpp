@@ -559,7 +559,8 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   bool quiet, tbb::atomic<double>& totalDedupCounts,
                   tbb::atomic<uint32_t>& totalExpGeneCounts, double priorWeight,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                  uint32_t numGenes, uint32_t umiLength, uint32_t numBootstraps,
+                  uint32_t numGenes, uint32_t umiLength, 
+                  uint32_t numBootstraps, uint32_t numGibbsSamples,
                   bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
                   bool initUniform, CFreqMapT& freqCounter, bool dumpArborescences,
                   spp::sparse_hash_set<uint32_t>& mRnaGenes,
@@ -892,8 +893,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
       // maintaining count for total number of predicted UMI
       salmon::utils::incLoop(totalDedupCounts, totalCount);
       totalExpGeneCounts += totalExpGenes;
-
-      uint32_t numGibbsSamples = 10 ;
+      
       if ( numGibbsSamples > 0 ) {
         std::vector<std::vector<double>> sampleEstimates;
         std::vector<double>  sampleVariance(numGenes, 0.0);
@@ -1263,6 +1263,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                numGenes,
                                aopt.protocol.umiLength,
                                aopt.numBootstraps,
+                               aopt.numGibbsSamples,
                                aopt.naiveEqclass,
                                aopt.dumpUmiGraph,
                                aopt.dumpfeatures,

@@ -391,6 +391,10 @@ namespace salmon {
        "Generate mean and variance for cell x gene matrix quantification"
        " estimates.")
       (
+       "numCellGibbsSamples",po::value<uint32_t>()->default_value(alevin::defaults::numGibbsSamples),
+       "Generate mean and variance for cell x gene matrix quantification by running gibbs chain"
+       " estimates.")
+      (
        "forceCells",po::value<uint32_t>()->default_value(alevin::defaults::forceCells),
        "Explicitly specify the number of cells.")
       (

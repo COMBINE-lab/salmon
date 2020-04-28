@@ -580,6 +580,7 @@ namespace alevin {
       aopt.dumpUmiGraph = vm["dumpUmiGraph"].as<bool>();
       aopt.trimRight = vm["trimRight"].as<uint32_t>();
       aopt.numBootstraps = vm["numCellBootstraps"].as<uint32_t>();
+      aopt.numGibbsSamples = vm["numCellGibbsSamples"].as<uint32_t>();
       aopt.lowRegionMinNumBarcodes = vm["lowRegionMinNumBarcodes"].as<uint32_t>();
       aopt.maxNumBarcodes = vm["maxNumBarcodes"].as<uint32_t>();
       aopt.freqThreshold = vm["freqThreshold"].as<uint32_t>();
