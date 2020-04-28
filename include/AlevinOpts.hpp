@@ -40,6 +40,9 @@ struct AlevinOpts {
   bool dumpBFH;
   // dump per cell level umi-graph
   bool dumpUmiGraph;
+  // dump per cell level de-duplicated 
+  // equivalence class
+  bool dumpCellEq;
   //Stop progress sumps
   bool quiet;
   //flag for deduplication

@@ -578,6 +578,7 @@ namespace alevin {
       aopt.dumpBarcodeEq = vm["dumpBarcodeEq"].as<bool>();
       aopt.dumpBFH = vm["dumpBfh"].as<bool>();
       aopt.dumpUmiGraph = vm["dumpUmiGraph"].as<bool>();
+      aopt.dumpCellEq = vm["dumpCellEq"].as<bool>();
       aopt.trimRight = vm["trimRight"].as<uint32_t>();
       aopt.numBootstraps = vm["numCellBootstraps"].as<uint32_t>();
       aopt.numGibbsSamples = vm["numCellGibbsSamples"].as<uint32_t>();

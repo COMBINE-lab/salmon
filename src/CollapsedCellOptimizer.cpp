@@ -561,7 +561,8 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, uint32_t umiLength, 
                   uint32_t numBootstraps, uint32_t numGibbsSamples,
-                  bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
+                  bool naiveEqclass, bool dumpUmiGraph,
+                  bool dumpCellEq, bool useAllBootstraps,
                   bool initUniform, CFreqMapT& freqCounter, bool dumpArborescences,
                   spp::sparse_hash_set<uint32_t>& mRnaGenes,
                   spp::sparse_hash_set<uint32_t>& rRnaGenes,
@@ -663,9 +664,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         std::exit(74);
       }
 
-
-      bool writeDedupEqClasses{true};
-      if ( writeDedupEqClasses ){
+      if ( dumpCellEq ){
         std::vector<std::vector<uint32_t>> labelsEq ;
         std::vector<uint32_t> countsEq ;
         labelsEq.resize(salmonEqclasses.size());
@@ -1266,6 +1265,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                aopt.numGibbsSamples,
                                aopt.naiveEqclass,
                                aopt.dumpUmiGraph,
+                               aopt.dumpCellEq,
                                aopt.dumpfeatures,
                                aopt.initUniform,
                                std::ref(freqCounter),

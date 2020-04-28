@@ -446,6 +446,9 @@ namespace salmon {
        "dumpUmiGraph", po::bool_switch()->default_value(alevin::defaults::dumpUmiGraph),
        "dump the per cell level Umi Graph.")
       (
+       "dumpCellEq", po::bool_switch()->default_value(alevin::defaults::dumpCellEq),
+       "dump the per cell level deduplicated equivalence classes.")
+      (
        "dumpFeatures", po::bool_switch()->default_value(alevin::defaults::dumpFeatures),
        "Dump features for whitelist and downstream analysis.")
       (

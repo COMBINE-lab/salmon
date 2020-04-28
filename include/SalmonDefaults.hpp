@@ -143,6 +143,7 @@ namespace defaults {
   constexpr const bool dumpFeatures{false};
   constexpr const bool dumpBFH{false};
   constexpr const bool dumpUmiGraph{false};
+  constexpr const bool dumpCellEq{false};
   constexpr const bool dumpMtx{false};
   constexpr const bool noEM{false};
   constexpr const bool debug{true};
