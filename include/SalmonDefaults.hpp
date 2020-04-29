@@ -143,11 +143,13 @@ namespace defaults {
   constexpr const bool dumpFeatures{false};
   constexpr const bool dumpBFH{false};
   constexpr const bool dumpUmiGraph{false};
+  constexpr const bool dumpCellEq{false};
   constexpr const bool dumpMtx{false};
   constexpr const bool noEM{false};
   constexpr const bool debug{true};
   constexpr const uint32_t trimRight{0};
   constexpr const uint32_t numBootstraps{0};
+  constexpr const uint32_t numGibbsSamples{0};
   constexpr const uint32_t lowRegionMinNumBarcodes{200};
   constexpr const uint32_t maxNumBarcodes{100000};
   constexpr const uint32_t expectCells{0};

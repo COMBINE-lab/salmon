@@ -1,6 +1,9 @@
-#include "CollapsedCellOptimizer.hpp"
 #include <assert.h>
 #include <random>
+#include <boost/math/distributions/gamma.hpp>
+
+#include "CollapsedCellOptimizer.hpp"
+#include "ezETAProgressBar.hpp"
 
 CollapsedCellOptimizer::CollapsedCellOptimizer() {}
 
@@ -216,6 +219,216 @@ bool runPerCellEM(double& totalNumFrags, size_t numGenes,
   return true;
 }
 
+bool runGibbsSamples(size_t numGenes,
+                   CollapsedCellOptimizer::SerialVecType& geneAlphas,
+                   std::vector<double>& sampleMean,
+                   std::vector<double>& sampleVariance,
+                   std::vector<SalmonEqClass>& salmonEqclasses,
+                   std::shared_ptr<spdlog::logger>& jointlog,
+                   uint32_t numSamples,
+                   std::vector<std::vector<double>>& sampleEstimates,
+                   bool quiet = true){
+
+  
+  constexpr double minEQClassWeight = std::numeric_limits<double>::denorm_min();
+  constexpr double minWeight = std::numeric_limits<double>::denorm_min();
+  
+  uint32_t numInternalRounds{16};
+  size_t numClasses = salmonEqclasses.size();
+
+  // gibbs related
+  CollapsedCellOptimizer::SerialVecType alphas(numGenes, 0.0);
+  CollapsedCellOptimizer::SerialVecType mean(numGenes, 0.0);
+  CollapsedCellOptimizer::SerialVecType squareMean(numGenes, 0.0);
+  CollapsedCellOptimizer::SerialVecType alphasIn(numGenes, 0.0);
+  CollapsedCellOptimizer::SerialVecType alphasInit(numGenes, 0.0);
+
+  //extracting weight of eqclasses for making discrete distribution
+  uint32_t totalNumFrags = 0;
+  std::vector<uint64_t> eqCounts;
+  
+  std::vector<bool> active(numGenes, false);
+  for (auto& eqclass: salmonEqclasses) {
+    for (size_t j = 0; j < eqclass.labels.size(); ++j) {
+      auto geneIdx = eqclass.labels[j];
+      active[geneIdx] = true;
+    }
+    totalNumFrags += eqclass.count;
+    eqCounts.emplace_back(eqclass.count);
+  }
+
+  // make active list (genes that are present in equivalence classes)
+  std::vector<uint32_t> activeList;
+  activeList.reserve(numGenes);
+  for (size_t i = 0; i < numGenes; ++i) {
+    if (active[i]) {
+      activeList.push_back(i);
+    }
+    alphasIn[i] = geneAlphas[i];
+    alphasInit[i] = geneAlphas[i]; 
+  }
+
+  double prior = 1e-3;
+  std::vector<double> priorAlphas(numGenes, prior);
+
+  std::vector<uint32_t> offsetMap(numClasses, 0);
+  size_t countMapSize{0};
+  for (size_t i = 0; i < numClasses ; ++i){
+    countMapSize += salmonEqclasses[i].labels.size();
+    if(i < numClasses - 1) {
+      offsetMap[i + 1] = countMapSize;
+    }
+  }
+
+  // hold the estimated counts, active list
+  std::vector<double> mu(numGenes, 0.0);
+  std::vector<uint64_t> countMap(countMapSize, 0);
+  std::vector<double> probMap(countMapSize, 0.0);
+
+  uint32_t nchains{1};
+  if (numSamples >= 50) {
+    nchains = 2;
+  }
+  if (numSamples >= 100) {
+    nchains = 4;
+  }
+  if (numSamples >= 200) {
+    nchains = 8;
+  }
+
+  std::random_device rd;
+  std::mt19937 gen(rd());
+
+  std::vector<uint32_t> newChainIter{0};
+  if (nchains > 1) {
+    auto step = numSamples / nchains;
+    for (size_t i = 1; i < nchains; ++i) {
+      newChainIter.push_back(i * step);
+    }
+  }
+  auto nextChainStart = newChainIter.begin();
+  
+  // For each sample this thread should generate
+  std::unique_ptr<ez::ezETAProgressBar> pbar{nullptr};
+  if (!quiet) {
+    pbar.reset(new ez::ezETAProgressBar(numSamples));
+    pbar->start();
+  }
+
+  for (size_t sampleID = 0; sampleID < numSamples; ++sampleID) {
+
+    if (pbar) {
+      ++(*pbar);
+    }
+    // If we should start a new chain here, then do it!
+    if (nextChainStart < newChainIter.end() and sampleID == *nextChainStart) {
+      alphasIn = alphasInit;
+      ++nextChainStart;
+    }
+
+    // Since for single cell data we don't estimate the exact fragment length
+    // essentially it will be treated as a single end read, there for from the
+    // definition of effective length, 
+    // l_e = l_i - l_f + 1
+    // we assume l_e = 1
+    // The rest of the gibbs sample would pretty much follow from 
+    // the principle of bulk RNA-seq
+    
+    // The mean transcript fraction are sampled from
+    // ~ Gam( prior[i] + geneAlphas[i], \Beta + 1 )
+    // Given these transcript fractions, the reads are
+    // re-assigned within each equivalence class by sampling from
+    // a multinomial distribution according to these means
+    for (size_t roundIdx = 0; roundIdx < numInternalRounds; ++roundIdx) {
+      double beta = 0.1;
+      double norm = 0.0;
+
+      // first phase: Calculate mean transcript fraction from Gamma
+      for(size_t activeIdx = 0; activeIdx < activeList.size(); ++activeIdx) {
+        auto i = activeList[activeIdx];
+        double ci = static_cast<double>(alphas[i] + priorAlphas[i]);
+        std::gamma_distribution<double> d(ci, 1.0 / (beta + 1.0));
+        mu[i] = d(gen);
+        alphas[i] = 0.0 ;
+      }
+
+      // second phase: sample from the trandcript fractions 
+      // re-assign them back to equivalence classes
+      for (size_t eqId = 0; eqId < numClasses; ++eqId) {
+        size_t offset = offsetMap[eqId];
+        size_t classCount = salmonEqclasses[eqId].count ;
+        const std::vector<uint32_t>& geneLabels = salmonEqclasses[eqId].labels;
+        size_t groupSize = geneLabels.size();
+        
+        double muSum{0.0};
+        double denom{0.0};
+        if (groupSize > 1) {
+          double uniformWeight = 1.0 / static_cast<double>(groupSize);
+          for (size_t i = 0; i < groupSize; ++i) {
+            auto gid = geneLabels[i];
+            size_t globalIndex = offset + i;
+            probMap[globalIndex] = (1000.0 * mu[gid]) * uniformWeight ;
+            muSum += probMap[globalIndex];
+            denom += probMap[globalIndex];
+          }
+          // we might be working with tiny values and
+          // the denominator can become very small
+          if (denom <= minEQClassWeight) {
+            denom = 0.0;
+            muSum = 0.0;
+            for (size_t i = 0; i < groupSize; ++i) {
+              auto gid = geneLabels[i];
+              size_t globalIndex = offset + i;
+              probMap[globalIndex] = 1.0 ;
+              muSum += probMap[globalIndex];
+              denom += probMap[globalIndex];
+            }
+          }
+          // Assuming previous step worked
+          // re-sample from a multinomial
+          // fill in only subpart of alpha
+          if (denom > minEQClassWeight) {
+            std::discrete_distribution<int> dist(probMap.begin() + offset,
+                                                probMap.begin() + offset + groupSize
+                                                );
+            for (size_t s = 0; s < classCount ; ++s){
+              auto ind = dist(gen);
+              ++alphas[geneLabels[ind]];
+            }
+          }else{
+            jointlog->warn("the probabilities are too small "
+                      "Make sure you ran salmon correclty.");
+            jointlog->flush();
+          }
+        }else{
+          auto gid = geneLabels[0];
+          alphas[gid] += static_cast<double>(classCount);
+        }
+      }
+    }
+
+    // internal rounds are done
+    // TODO: can extrapolate the counts
+    // but as effective length is not at play, but imo it
+    // would hardly affect anything
+    
+    // updated values are in alpha let's put them in the estimation vector
+    // Calculate mean and square mean for later
+    for (size_t i=0; i<numGenes; i++) {
+      double alpha = alphas[i];
+      mean[i] += alpha;
+      squareMean[i] += alpha * alpha;
+    }
+    sampleEstimates.emplace_back(alphas);
+  }
+  for ( size_t i=0; i<numGenes; i++ ) {
+    double meanAlpha = mean[i] / numSamples;
+    sampleMean[i] = meanAlpha;
+    sampleVariance[i] = (squareMean[i]/numSamples) - (meanAlpha*meanAlpha);
+  } 
+  return true;
+}
+
 bool runBootstraps(size_t numGenes,
                    CollapsedCellOptimizer::SerialVecType& geneAlphas,
                    std::vector<SalmonEqClass>& salmonEqclasses,
@@ -346,8 +559,10 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   bool quiet, tbb::atomic<double>& totalDedupCounts,
                   tbb::atomic<uint32_t>& totalExpGeneCounts, double priorWeight,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                  uint32_t numGenes, uint32_t umiLength, uint32_t numBootstraps,
-                  bool naiveEqclass, bool dumpUmiGraph, bool useAllBootstraps,
+                  uint32_t numGenes, uint32_t umiLength, 
+                  uint32_t numBootstraps, uint32_t numGibbsSamples,
+                  bool naiveEqclass, bool dumpUmiGraph,
+                  bool dumpCellEq, bool useAllBootstraps,
                   bool initUniform, CFreqMapT& freqCounter, bool dumpArborescences,
                   spp::sparse_hash_set<uint32_t>& mRnaGenes,
                   spp::sparse_hash_set<uint32_t>& rRnaGenes,
@@ -449,8 +664,20 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         std::exit(74);
       }
 
-      if ( numBootstraps and noEM ) {
-        jointlog->error("Cannot perform bootstrapping with noEM");
+      if ( dumpCellEq ){
+        std::vector<std::vector<uint32_t>> labelsEq ;
+        std::vector<uint32_t> countsEq ;
+        labelsEq.resize(salmonEqclasses.size());
+        countsEq.resize(salmonEqclasses.size());
+        for(size_t salEqId = 0 ; salEqId < salmonEqclasses.size(); ++salEqId){
+          labelsEq[salEqId] = salmonEqclasses[salEqId].labels;
+          countsEq[salEqId] = salmonEqclasses[salEqId].count;
+        }
+        gzw.writeDedupCellEQVec(trueBarcodeIdx, labelsEq, countsEq, true);
+      }
+
+      if ( (numBootstraps and noEM) or (numGibbsSamples and noEM) ) {
+        jointlog->error("Cannot perform bootstrapping/gibbs with noEM");
         jointlog->flush();
         exit(1);
       }
@@ -665,6 +892,35 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
       // maintaining count for total number of predicted UMI
       salmon::utils::incLoop(totalDedupCounts, totalCount);
       totalExpGeneCounts += totalExpGenes;
+      
+      if ( numGibbsSamples > 0 ) {
+        std::vector<std::vector<double>> sampleEstimates;
+        std::vector<double>  sampleVariance(numGenes, 0.0);
+        std::vector<double> sampleMean(numGenes, 0.0);
+
+        bool isGibbsOk = runGibbsSamples(
+          numGenes,
+          geneAlphas,
+          sampleMean,
+          sampleVariance,
+          salmonEqclasses,
+          jointlog,
+          numGibbsSamples,
+          sampleEstimates
+        );
+
+        if( not isGibbsOk or (sampleEstimates.size()!=numGibbsSamples)){
+          jointlog->error("Gibbs failed failed \n"
+                          "Please Report this on github.");
+          jointlog->flush();
+          std::exit(74);
+        }
+
+        // write the abundance for the cell
+        gzw.writeSparseBootstraps( trueBarcodeStr,
+                                   sampleMean, sampleVariance,
+                                   true, sampleEstimates);
+      }//end-gibbs-if
 
       if ( numBootstraps > 0 ){
         std::vector<std::vector<double>> sampleEstimates;
@@ -1006,8 +1262,10 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                numGenes,
                                aopt.protocol.umiLength,
                                aopt.numBootstraps,
+                               aopt.numGibbsSamples,
                                aopt.naiveEqclass,
                                aopt.dumpUmiGraph,
+                               aopt.dumpCellEq,
                                aopt.dumpfeatures,
                                aopt.initUniform,
                                std::ref(freqCounter),
