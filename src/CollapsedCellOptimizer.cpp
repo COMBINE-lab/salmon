@@ -676,8 +676,8 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         gzw.writeDedupCellEQVec(trueBarcodeIdx, labelsEq, countsEq, true);
       }
 
-      if ( numBootstraps and noEM ) {
-        jointlog->error("Cannot perform bootstrapping with noEM");
+      if ( (numBootstraps and noEM) or (numGibbsSamples and noEM) ) {
+        jointlog->error("Cannot perform bootstrapping/gibbs with noEM");
         jointlog->flush();
         exit(1);
       }
