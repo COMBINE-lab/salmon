@@ -696,12 +696,16 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
     } else {
       // doing per eqclass level naive deduplication
       for (size_t eqId=0; eqId<umiGroups.size(); eqId++) {
-        spp::sparse_hash_set<uint64_t> umis;
+        size_t numFeats = txpGroups[eqId].size();
+        if (numFeats > 1) { continue; };
 
+        spp::sparse_hash_set<uint64_t> umis;
         for(auto& it: umiGroups[eqId]) {
           umis.insert( it.first );
         }
+
         totalCount += umis.size();
+        geneAlphas[ txpGroups[eqId][0] ] += umis.size();
 
         // filling in the eqclass level deduplicated counts
         if (verbose) {
@@ -709,8 +713,28 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
         }
       }
 
+      std::string emptyString = "";
+      // write the abundance for the cell
+      bool isWriteOk = gzw.writeSparseAbundances( trueBarcodeStr,
+                                                  emptyString,
+						  emptyString,
+                                                  0,
+                                                  geneAlphas,
+                                                  tiers,
+                                                  false,
+                                                  false );
+
+
+      if( not isWriteOk ){
+        jointlog->error("Gzip Writer failed \n"
+                        "Please Report this on github.");
+        jointlog->flush();
+        std::exit(74);
+      }
+
       // maintaining count for total number of predicted UMI
       salmon::utils::incLoop(totalDedupCounts, totalCount);
+      totalExpGeneCounts += totalExpGenes;
     }
 
     if (verbose) {
@@ -1072,7 +1096,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   std::copy(geneNames.begin(), geneNames.end(), giterator);
   gFile.close();
 
-  if( not hasWhitelist and not usingHashMode){
+  if( not aopt.naiveEqclass and  not hasWhitelist and not usingHashMode){
     aopt.jointLog->info("Clearing EqMap; Might take some time.");
     fullEqMap.clear();
 
