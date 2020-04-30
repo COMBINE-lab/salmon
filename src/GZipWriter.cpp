@@ -30,6 +30,9 @@ GZipWriter::~GZipWriter() {
   if (cellEQStream_){
     cellEQStream_->reset();
   }
+  if (cellDedupEQStream_){
+    cellDedupEQStream_->reset();
+  }
   if (umiGraphStream_){
     umiGraphStream_->reset();
   }
@@ -68,6 +71,9 @@ void GZipWriter::close_all_streams(){
   }
   if (cellEQStream_){
     cellEQStream_->reset();
+  }
+  if (cellDedupEQStream_){
+    cellDedupEQStream_->reset();
   }
   if (umiGraphStream_){
     umiGraphStream_->reset();
@@ -1475,6 +1481,49 @@ bool GZipWriter::writeCellEQVec(size_t barcode, const std::vector<uint32_t>& off
   ofile.write(reinterpret_cast<char*>(const_cast<uint32_t*>(offsets.data())), elSize * num);
   ofile.write(reinterpret_cast<char*>(const_cast<uint32_t*>(counts.data())), elSize * num);
 
+  if (!quiet) {
+    logger_->info("wrote EQ vector for barcode ID {}", barcode);
+  }
+  return true;
+}
+
+// TODO: complete this method
+bool GZipWriter::writeDedupCellEQVec(
+  size_t barcode, 
+  const std::vector<std::vector<uint32_t>>& labels,
+  const std::vector<uint32_t>& counts,
+  bool quiet
+  ) {
+#if defined __APPLE__
+  spin_lock::scoped_lock sl(writeMutex_);
+#else
+  std::lock_guard<std::mutex> lock(writeMutex_);
+#endif
+  if (!cellDedupEQStream_) {
+    cellDedupEQStream_.reset(new boost::iostreams::filtering_ostream);
+    cellDedupEQStream_->push(boost::iostreams::gzip_compressor(6));
+    auto ceqFilename = path_ / "alevin" / "cell_dedup_eq_mat.gz";
+    cellDedupEQStream_->push(boost::iostreams::file_sink(ceqFilename.string(),
+                                                    std::ios_base::out | std::ios_base::binary));
+  }
+  
+  boost::iostreams::filtering_ostream& ofile = *cellDedupEQStream_;
+  size_t num = labels.size();
+  size_t elSize = sizeof(typename std::vector<uint32_t>::value_type);
+  // write the barcode
+  ofile.write(reinterpret_cast<char*>(&barcode), sizeof(barcode));
+  // write the number of elements in the list
+  ofile.write(reinterpret_cast<char*>(&num), sizeof(barcode));
+  // write the individual labels
+  for (size_t i = 0 ; i < num ; ++i) {
+    size_t labelLength = labels[i].size();
+    // write the length of the equivalence class vector
+    ofile.write(reinterpret_cast<char*>(&labelLength), sizeof(barcode));
+    // write the label vector
+    ofile.write(reinterpret_cast<char*>(const_cast<uint32_t*>(labels[i].data())), elSize * labelLength);
+  }
+  ofile.write(reinterpret_cast<char*>(const_cast<uint32_t*>(counts.data())), elSize * num);
+  // write the offsets and counts
   if (!quiet) {
     logger_->info("wrote EQ vector for barcode ID {}", barcode);
   }

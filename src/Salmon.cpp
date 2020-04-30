@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -209,7 +210,15 @@ int main(int argc, char* argv[]) {
       std::exit(0);
     }
 
-    if (!vm.count("no-version-check")) {
+    const char* no_version_env_ptr = std::getenv("SALMON_NO_VERSION_CHECK");
+    std::string no_version_env = (no_version_env_ptr == nullptr) ? "" : std::string(no_version_env_ptr);
+    std::transform(no_version_env.begin(), no_version_env.end(), no_version_env.begin(), 
+                   [](unsigned char c){ return std::toupper(c); } // correct
+                  );
+    bool skip_version_check = vm.count("no-version-check") or (no_version_env == "1") 
+                              or (no_version_env == "TRUE") or (no_version_env == "T");
+
+    if (!skip_version_check) {
       std::string versionMessage = getVersionMessage();
       std::cerr << versionMessage;
     }
