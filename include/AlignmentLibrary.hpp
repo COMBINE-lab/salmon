@@ -111,6 +111,9 @@ public:
 
     // The transcript file existed, so load up the transcripts
     double alpha = 0.005;
+    // we know how many we will have, so reserve the space for 
+    // them.
+    transcripts_.reserve(header->nref);
     for (decltype(header->nref) i = 0; i < header->nref; ++i) {
       transcripts_.emplace_back(i, header->ref[i].name, header->ref[i].len,
                                 alpha);

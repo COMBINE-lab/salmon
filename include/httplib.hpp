@@ -1405,7 +1405,7 @@ socket_t create_socket(const char *host, int port, Fn fn,
 
   // Get address info
   struct addrinfo hints;
-  struct addrinfo *result;
+  struct addrinfo *result = nullptr;
 
   memset(&hints, 0, sizeof(struct addrinfo));
   hints.ai_family = AF_UNSPEC;
@@ -1416,6 +1416,7 @@ socket_t create_socket(const char *host, int port, Fn fn,
   auto service = std::to_string(port);
 
   if (getaddrinfo(host, service.c_str(), &hints, &result)) {
+    if (result != nullptr) { freeaddrinfo(result); }
     return INVALID_SOCKET;
   }
 
@@ -3757,7 +3758,7 @@ inline Client::Client(const std::string &host, int port,
       host_and_port_(host_ + ":" + std::to_string(port_)),
       client_cert_path_(client_cert_path), client_key_path_(client_key_path) {}
 
-inline Client::~Client() {}
+inline Client::~Client() { stop(); }
 
 inline bool Client::is_valid() const { return true; }
 
