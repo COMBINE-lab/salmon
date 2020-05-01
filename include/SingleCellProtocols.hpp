@@ -46,7 +46,7 @@ namespace alevin{
     };
 
     struct CITESeq : Rule{
-      CITESeq(): Rule(16, 12, BarcodeEnd::FIVE, 4294967295){
+      CITESeq(): Rule(16, 10, BarcodeEnd::FIVE, 4294967295){
         featureLength = 15;
         featureStart = 10;
       }
