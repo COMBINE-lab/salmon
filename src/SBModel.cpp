@@ -1,4 +1,5 @@
 #include "SBModel.hpp"
+#include "jellyfish/mer_dna.hpp"
 #include <sstream>
 #include <utility>
 
@@ -61,7 +62,8 @@ SBModel::SBModel() : _trained(false) {
   }
 
   // Set k equal to the size of the contexts we'll parse.
-  _mer.k(_contextLength);
+  //_mer.k(_contextLength);
+  _sbmer.k(_contextLength);
 
   // To hold all probabilities the matrix must be 4^{max_order + 1} by
   // context-length
@@ -113,21 +115,26 @@ bool SBModel::writeBinary(boost::iostreams::filtering_ostream& out) const {
 
 double SBModel::evaluateLog(const char* seqIn) {
   double p = 0;
-  Mer mer;
-  mer.from_chars(seqIn);
+  //Mer mer;
+  //mer.from_chars(seqIn);
+  SBMer sbmer;
+  sbmer.fromChars(seqIn);
 
   for (int32_t i = 0; i < _contextLength; ++i) {
-    uint64_t idx = mer.get_bits(_shifts[i], _widths[i]);
+    //uint64_t idx = mer.get_bits(_shifts[i], _widths[i]);
+    uint64_t idx = sbmer.get_bits(_shifts[i], _widths[i]);
     p += _probs(idx, i);
   }
   return p;
 }
 
-double SBModel::evaluateLog(const Mer& mer) {
+double SBModel::evaluateLog(const SBMer& sbmer) {
   double p = 0;
 
   for (int32_t i = 0; i < _contextLength; ++i) {
-    uint64_t idx = mer.get_bits(_shifts[i], _widths[i]);
+    //uint64_t idx = mer.get_bits(_shifts[i], _widths[i]);
+    uint64_t idx = sbmer.get_bits(_shifts[i], _widths[i]);
+
     p += _probs(idx, i);
   }
   return p;
@@ -183,16 +190,19 @@ void SBModel::dumpConditionalProbabilities(std::ostream& os) {
 }
 
 bool SBModel::addSequence(const char* seqIn, bool revCmp, double weight) {
-  _mer.from_chars(seqIn);
+  //_mer.from_chars(seqIn);
+  bool ok = _sbmer.fromChars(seqIn);
   if (revCmp) {
-    _mer.reverse_complement();
+    //_mer.reverse_complement();
+    _sbmer.rc();
   }
-  return addSequence(_mer, weight);
+  return addSequence(_sbmer, weight);
 }
 
-bool SBModel::addSequence(const Mer& mer, double weight) {
+bool SBModel::addSequence(const SBMer& sbmer, double weight) {
   for (int32_t i = 0; i < _contextLength; ++i) {
-    uint64_t idx = mer.get_bits(_shifts[i], _widths[i]);
+    //uint64_t idx = mer.get_bits(_shifts[i], _widths[i]);
+    uint64_t idx = sbmer.get_bits(_shifts[i], _widths[i]);
     _probs(idx, i) += weight;
   }
   return true;

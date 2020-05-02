@@ -174,9 +174,13 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
   auto orphanProb = salmonOpts.discardOrphansAln ? LOG_0 : LOG_EPSILON;
 
   // k-mers for sequence bias
-  Mer leftMer;
-  Mer rightMer;
-  Mer context;
+  //Mer leftMer;
+  //Mer rightMer;
+  //Mer context;
+  SBMer leftMer;
+  SBMer rightMer;
+  SBMer context;
+
 
   auto& refs = alnLib.transcripts();
   auto& clusterForest = alnLib.clusterForest();
@@ -656,14 +660,15 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
                       int32_t fwPos = (fwd1) ? startPos1 : startPos2;
                       int32_t rcPos = (fwd1) ? startPos2 : startPos1;
                       if (fwPos < rcPos) {
-                        leftMer.from_chars(txpStart + startPos1 -
+                        leftMer.fromChars(txpStart + startPos1 -
                                            readBias1.contextBefore(read1RC));
-                        rightMer.from_chars(txpStart + startPos2 -
+                        rightMer.fromChars(txpStart + startPos2 -
                                             readBias2.contextBefore(read2RC));
+ 
                         if (read1RC) {
-                          leftMer.reverse_complement();
+                          leftMer.rc();
                         } else {
-                          rightMer.reverse_complement();
+                          rightMer.rc();
                         }
 
                         success = readBias1.addSequence(leftMer, 1.0);
@@ -692,10 +697,11 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
                     if (startPos1 >= readBias1.contextBefore(!fwd1) and
                         startPos1 + readBias1.contextAfter(!fwd1) <
                         static_cast<int32_t>(transcript.RefLength)) {
-                      context.from_chars(txpStart + startPos1 -
+                      context.fromChars(txpStart + startPos1 -
                                          readBias1.contextBefore(!fwd1));
+
                       if (!fwd1) {
-                        context.reverse_complement();
+                        context.rc();
                       }
                       success = readBias1.addSequence(context, 1.0);
                     }

@@ -49,7 +49,7 @@
 
 
 // Jellyfish 2 include
-#include "jellyfish/mer_dna.hpp"
+// #include "jellyfish/mer_dna.hpp"
 
 // Boost Includes
 #include <boost/container/flat_map.hpp>
@@ -418,8 +418,8 @@ void processReadsQuasi(
     observedBiasParams
     .seqBiasModelRC; // readExp.readBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
   // k-mers for sequence bias context
-  Mer leftMer;
-  Mer rightMer;
+  // Mer leftMer;
+  // Mer rightMer;
 
   //auto expectedLibType = rl.format();
 

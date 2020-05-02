@@ -791,8 +791,11 @@ void processReads(
           .seqBiasModelRC; // readExp.readBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
 
   // k-mers for sequence bias context
-  Mer leftMer;
-  Mer rightMer;
+  //Mer leftMer;
+  //Mer rightMer;
+  SBMer leftMer;
+  SBMer rightMer;
+
 
   uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
   size_t minK = qidx->k();
@@ -1300,14 +1303,14 @@ void processReads(
                 int32_t fwPos = (h.fwd) ? startPos1 : startPos2;
                 int32_t rcPos = (h.fwd) ? startPos2 : startPos1;
                 if (fwPos < rcPos) {
-                  leftMer.from_chars(txpStart + startPos1 -
+                  leftMer.fromChars(txpStart + startPos1 -
                                      readBias1.contextBefore(read1RC));
-                  rightMer.from_chars(txpStart + startPos2 -
+                  rightMer.fromChars(txpStart + startPos2 -
                                       readBias2.contextBefore(read2RC));
                   if (read1RC) {
-                    leftMer.reverse_complement();
+                    leftMer.rc();
                   } else {
-                    rightMer.reverse_complement();
+                    rightMer.rc();
                   }
 
                   success = readBias1.addSequence(leftMer, 1.0);
@@ -1514,8 +1517,8 @@ void processReads(
 
    auto& readBiasFW = observedBiasParams.seqBiasModelFW;
    auto& readBiasRC = observedBiasParams.seqBiasModelRC;
-   Mer context;
-
+   //Mer context;
+   SBMer context;
 
    uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
    size_t minK = qidx->k();
@@ -1762,10 +1765,10 @@ void processReads(
              // read start sequences.
              if (startPos >= readBias.contextBefore(!h.fwd) and
                  startPos + readBias.contextAfter(!h.fwd) < static_cast<int32_t>(t.RefLength)) {
-               context.from_chars(txpStart + startPos -
+               context.fromChars(txpStart + startPos -
                                   readBias.contextBefore(!h.fwd));
                if (!h.fwd) {
-                 context.reverse_complement();
+                 context.rc();
                }
                success = readBias.addSequence(context, 1.0);
              }

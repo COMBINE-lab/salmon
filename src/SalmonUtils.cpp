@@ -37,7 +37,7 @@
 #include "gff.h"
 
 #include "FastxParser.hpp"
-#include "jellyfish/mer_dna.hpp"
+//#include "jellyfish/mer_dna.hpp"
 
 #include "GenomicFeature.hpp"
 #include "SGSmooth.hpp"
@@ -2656,10 +2656,14 @@ int contextSize = outsideContext + insideContext;
           revComplement(tseq, refLen, rcSeq);
           const char* rseq = rcSeq.c_str();
 
-          Mer fwmer;
-          fwmer.from_chars(tseq);
-          Mer rcmer;
-          rcmer.from_chars(rseq);
+          // Mer fwmer;
+          // Mer rcmer;
+          // fwmer.from_chars(tseq);
+          //rcmer.from_chars(rseq);
+          SBMer fwmer;
+          SBMer rcmer;
+          fwmer.fromChars(tseq);
+          rcmer.fromChars(rseq);
           int32_t contextLength{expectSeqFW.getContextLength()};
 
           if (gcBiasCorrect and seqBiasCorrect) {
@@ -2692,8 +2696,10 @@ int contextSize = outsideContext + insideContext;
               }
 
               // shift the context one nucleotide to the right
-              fwmer.shift_left(tseq[fragStartPos + contextLength]);
-              rcmer.shift_left(rseq[fragStartPos + contextLength]);
+              //fwmer.shift_left(tseq[fragStartPos + contextLength]);
+              //rcmer.shift_left(rseq[fragStartPos + contextLength]);
+              fwmer.append(tseq[fragStartPos + contextLength]);
+              rcmer.append(rseq[fragStartPos + contextLength]);
             } // end: Seq-specific bias
 
             // fragment-GC bias
@@ -2929,10 +2935,15 @@ int contextSize = outsideContext + insideContext;
             // and seqFactorsRC will contain the sequence-specific bias for each
             // position on the 3' strand.
             if (seqBiasCorrect) {
-              Mer mer;
-              Mer rcmer;
-              mer.from_chars(tseq);
-              rcmer.from_chars(rseq);
+              //Mer mer;
+              //Mer rcmer;
+              //mer.from_chars(tseq);
+              //rcmer.from_chars(rseq);
+              SBMer mer;
+              SBMer rcmer;
+              mer.fromChars(tseq);
+              rcmer.fromChars(rseq);
+ 
               int32_t contextLength{exp5.getContextLength()};
 
               for (int32_t fragStart = 0; fragStart < refLen - K; ++fragStart) {
@@ -2948,8 +2959,10 @@ int contextSize = outsideContext + insideContext;
                                                      exp3.evaluateLog(rcmer));
                 }
                 // shift the context one nucleotide to the right
-                mer.shift_left(tseq[fragStart + contextLength]);
-                rcmer.shift_left(rseq[fragStart + contextLength]);
+                //mer.shift_left(tseq[fragStart + contextLength]);
+                //rcmer.shift_left(rseq[fragStart + contextLength]);
+                mer.append(tseq[fragStart + contextLength]);
+                rcmer.append(rseq[fragStart + contextLength]);
               }
               // We need these in 5' -> 3' order, so reverse them
               seqFactorsRC.reverseInPlace();
