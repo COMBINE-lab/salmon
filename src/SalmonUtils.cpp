@@ -2652,18 +2652,21 @@ int contextSize = outsideContext + insideContext;
           windowLensTP.setZero();
 
           // This transcript's sequence
-          const char* tseq = txp.Sequence();
-          revComplement(tseq, refLen, rcSeq);
-          const char* rseq = rcSeq.c_str();
-
-          // Mer fwmer;
-          // Mer rcmer;
-          // fwmer.from_chars(tseq);
-          //rcmer.from_chars(rseq);
+          bool have_seq = txp.have_sequence();
           SBMer fwmer;
           SBMer rcmer;
-          fwmer.fromChars(tseq);
-          rcmer.fromChars(rseq);
+
+          const char* tseq = have_seq ? txp.Sequence() : nullptr;
+          // only do this if we have the sequence, we may not if just pos. bias.
+          if (have_seq) { 
+            revComplement(tseq, refLen, rcSeq);
+            fwmer.fromChars(tseq);
+            rcmer.fromChars(rcSeq);
+          }
+          // may be empty, but we shouldn't actually
+          // use it unless it is meaningful.
+          const char* rseq = rcSeq.c_str();
+
           int32_t contextLength{expectSeqFW.getContextLength()};
 
           if (gcBiasCorrect and seqBiasCorrect) {
@@ -2893,8 +2896,15 @@ int contextSize = outsideContext + insideContext;
             std::vector<double> posFactorsRC(refLen, 1.0);
 
             // This transcript's sequence
-            const char* tseq = txp.Sequence();
-            revComplement(tseq, refLen, rcSeq);
+            bool have_seq = txp.have_sequence();
+            const char* tseq = have_seq ? txp.Sequence() : nullptr;
+            // only do this if we have the sequence, we may not if just pos.
+            // bias.
+            if (have_seq) {
+              revComplement(tseq, refLen, rcSeq);
+            }
+            // may be empty, but we shouldn't actually
+            // use it unless it is meaningful.
             const char* rseq = rcSeq.c_str();
 
             int32_t fl = locFLDLow;

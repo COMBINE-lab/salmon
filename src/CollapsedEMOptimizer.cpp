@@ -8,7 +8,8 @@
 #include "tbb/parallel_for_each.h"
 #include "tbb/parallel_reduce.h"
 #include "tbb/partitioner.h"
-#include "tbb/task_scheduler_init.h"
+// <-- deprecated in TBB --> #include "tbb/task_scheduler_init.h"
+#include "tbb/global_control.h"
 
 //#include "fastapprox.h"
 #include <boost/math/special_functions/digamma.hpp>
@@ -721,7 +722,8 @@ template <typename ExpT>
 bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
                                     double relDiffTolerance, uint32_t maxIter) {
 
-  tbb::task_scheduler_init tbbScheduler(sopt.numThreads);
+  // <-- deprecated in TBB --> tbb::task_scheduler_init tbbScheduler(sopt.numThreads);
+  tbb::global_control c(tbb::global_control::max_allowed_parallelism, sopt.numThreads);
   std::vector<Transcript>& transcripts = readExp.transcripts();
   std::vector<bool> available(transcripts.size(), false);
 

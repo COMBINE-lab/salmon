@@ -480,6 +480,8 @@ public:
     }
   }
 
+  bool have_sequence() const { if (Sequence_) { return true; } else { return false; } }
+  
   const char* Sequence() const { return Sequence_.get(); }
 
   uint8_t* SAMSequence() const { return const_cast<uint8_t*>(SAMSequence_.data()); }
