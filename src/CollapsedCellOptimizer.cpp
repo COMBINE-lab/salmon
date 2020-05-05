@@ -556,8 +556,8 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   std::vector<uint32_t>& umiCount,
                   std::vector<CellState>& skippedCB,
                   bool verbose, GZipWriter& gzw, bool noEM, bool useVBEM,
-                  bool quiet, tbb::atomic<double>& totalDedupCounts,
-                  tbb::atomic<uint32_t>& totalExpGeneCounts, double priorWeight,
+                  bool quiet, std::atomic<double>& totalDedupCounts,
+                  std::atomic<uint32_t>& totalExpGeneCounts, double priorWeight,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, uint32_t umiLength, 
                   uint32_t numBootstraps, uint32_t numGibbsSamples,
@@ -1119,8 +1119,8 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
 
   double priorWeight {1.0};
   std::atomic<uint32_t> bcount{0};
-  tbb::atomic<double> totalDedupCounts{0.0};
-  tbb::atomic<uint32_t> totalExpGeneCounts{0};
+  std::atomic<double> totalDedupCounts{0.0};
+  std::atomic<uint32_t> totalExpGeneCounts{0};
   std::atomic<uint64_t> totalBiEdgesCounts{0};
   std::atomic<uint64_t> totalUniEdgesCounts{0};
 

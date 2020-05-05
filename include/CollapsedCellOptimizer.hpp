@@ -6,9 +6,6 @@
 #include <functional>
 #include <thread>
 
-#include "tbb/atomic.h"
-#include "tbb/task_scheduler_init.h"
-
 #include <boost/filesystem.hpp>
 
 #include "ReadExperiment.hpp"
@@ -45,7 +42,7 @@ struct CellState {
 
 class CollapsedCellOptimizer {
 public:
-  using VecType = std::vector<tbb::atomic<double>>;
+  using VecType = std::vector<std::atomic<double>>;
   using SerialVecType = std::vector<double>;
   CollapsedCellOptimizer();
 
@@ -77,8 +74,8 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
                   std::vector<uint32_t>& umiCount,
                   std::vector<CellState>& skippedCB,
                   bool verbose, GZipWriter& gzw, bool noEM, bool useVBEM,
-                  bool quiet, tbb::atomic<double>& totalDedupCounts,
-                  tbb::atomic<uint32_t>& totalExpGeneCounts, double priorWeight,
+                  bool quiet, std::atomic<double>& totalDedupCounts,
+                  std::atomic<uint32_t>& totalExpGeneCounts, double priorWeight,
                   spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                   uint32_t numGenes, uint32_t umiLength,
                   uint32_t numBootstraps, uint32_t numGibbsSamples,

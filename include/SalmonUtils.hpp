@@ -159,15 +159,12 @@ updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
  * val + inc (*in log-space*).  Update occurs in a loop in case other
  * threads update in the meantime.
  */
-inline void incLoopLog(tbb::atomic<double>& val, double inc) {
+inline void incLoopLog(std::atomic<double>& val, double inc) {
   double oldMass = val.load();
-  double returnedMass = oldMass;
-  double newMass{salmon::math::LOG_0};
+  double newMass;
   do {
-    oldMass = returnedMass;
     newMass = salmon::math::logAdd(oldMass, inc);
-    returnedMass = val.compare_and_swap(newMass, oldMass);
-  } while (returnedMass != oldMass);
+  } while (! val.compare_exchange_strong(oldMass, newMass));
 }
 
 /*
@@ -180,6 +177,7 @@ inline void incLoop(double& val, double inc) { val += inc; }
  * val + inc.  Update occurs in a loop in case other
  * threads update in the meantime.
  */
+/*
 inline void incLoop(tbb::atomic<double>& val, double inc) {
   double oldMass = val.load();
   double returnedMass = oldMass;
@@ -189,6 +187,14 @@ inline void incLoop(tbb::atomic<double>& val, double inc) {
     newMass = oldMass + inc;
     returnedMass = val.compare_and_swap(newMass, oldMass);
   } while (returnedMass != oldMass);
+}*/
+
+inline void incLoop(std::atomic<double>& val, double inc) {
+  double oldMass = val.load();
+  double newMass;
+  do {
+    newMass = oldMass + inc;
+  } while (!val.compare_exchange_strong(oldMass, newMass));
 }
 
 std::string getCurrentTimeAsString();

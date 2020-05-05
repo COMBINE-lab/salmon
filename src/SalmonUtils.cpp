@@ -3333,58 +3333,18 @@ template void salmon::utils::normalizeAlphas<BulkAlignLibT<ReadPair>>(
     const SalmonOpts& sopt, BulkAlignLibT<ReadPair>& alnLib);
 
 // explicit instantiations for effective length updates ---
-/*
 template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
-                                      ReadExperiment>(
-    SalmonOpts& sopt, ReadExperiment& readExp, Eigen::VectorXd& effLensIn,
-    std::vector<tbb::atomic<double>>& alphas, bool finalRound);
-
-template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<double>, ReadExperiment>(
-    SalmonOpts& sopt, ReadExperiment& readExp, Eigen::VectorXd& effLensIn,
-    std::vector<double>& alphas, bool finalRound);
-
-template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
-                                      AlignmentLibrary<ReadPair>>(
-    SalmonOpts& sopt, AlignmentLibrary<ReadPair>& readExp,
-    Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
-    bool finalRound);
-
-template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<double>,
-                                      AlignmentLibrary<ReadPair>>(
-    SalmonOpts& sopt, AlignmentLibrary<ReadPair>& readExp,
-    Eigen::VectorXd& effLensIn, std::vector<double>& alphas, bool finalRound);
-
-template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
-                                      AlignmentLibrary<UnpairedRead>>(
-    SalmonOpts& sopt, AlignmentLibrary<UnpairedRead>& readExp,
-    Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
-    bool finalRound);
-
-template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<double>,
-                                      AlignmentLibrary<UnpairedRead>>(
-    SalmonOpts& sopt, AlignmentLibrary<UnpairedRead>& readExp,
-    Eigen::VectorXd& effLensIn, std::vector<double>& alphas, bool finalRound);
-*/
-
-// explicit instantiations for effective length updates ---
-template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
+salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
                                       BulkExpT>(
     SalmonOpts& sopt, BulkExpT& readExp, Eigen::VectorXd& effLensIn,
-    std::vector<tbb::atomic<double>>& alphas, std::vector<bool>& available,
+    std::vector<std::atomic<double>>& alphas, std::vector<bool>& available,
     bool finalRound);
 
 template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
+salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
                                       SCExpT>(
                                                       SalmonOpts& sopt, SCExpT& readExp, Eigen::VectorXd& effLensIn,
-                                                      std::vector<tbb::atomic<double>>& alphas, std::vector<bool>& available,
+                                                      std::vector<std::atomic<double>>& alphas, std::vector<bool>& available,
                                                       bool finalRound);
 
 template Eigen::VectorXd
@@ -3398,10 +3358,10 @@ salmon::utils::updateEffectiveLengths<std::vector<double>, SCExpT>(
                                                                            std::vector<double>& alphas, std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
+salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
                                       BulkAlignLibT<ReadPair>>(
     SalmonOpts& sopt, BulkAlignLibT<ReadPair>& readExp,
-    Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
+    Eigen::VectorXd& effLensIn, std::vector<std::atomic<double>>& alphas,
     std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
@@ -3412,10 +3372,10 @@ salmon::utils::updateEffectiveLengths<std::vector<double>,
     std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
+salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
                                       BulkAlignLibT<UnpairedRead>>(
     SalmonOpts& sopt, BulkAlignLibT<UnpairedRead>& readExp,
-    Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
+    Eigen::VectorXd& effLensIn, std::vector<std::atomic<double>>& alphas,
     std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd

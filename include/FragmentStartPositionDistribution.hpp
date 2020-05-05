@@ -9,7 +9,7 @@
 #ifndef FRAGMENT_START_POSITION_DISTRIBUTION
 #define FRAGMENT_START_POSITION_DISTRIBUTION
 
-#include "tbb/atomic.h"
+// #include "tbb/atomic.h"
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -26,12 +26,12 @@ class FragmentStartPositionDistribution {
   /**
    * A private vector that stores the observed (logged) mass for each length.
    */
-  std::vector<tbb::atomic<double>> pmf_;
-  std::vector<tbb::atomic<double>> cmf_;
+  std::vector<std::atomic<double>> pmf_;
+  std::vector<std::atomic<double>> cmf_;
   /**
    * A private double that stores the total observed (logged) mass.
    */
-  tbb::atomic<double> totMass_;
+  std::atomic<double> totMass_;
   /**
    * A private double that stores the (logged) sum of the product of observed
    * lengths and masses for quick mean calculations.

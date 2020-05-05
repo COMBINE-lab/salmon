@@ -1,42 +1,53 @@
 #ifndef ATOMIC_MATRIX
 #define ATOMIC_MATRIX
 
-#include "tbb/atomic.h"
 #include "tbb/concurrent_vector.h"
 
 #include "SalmonMath.hpp"
+#include "SalmonUtils.hpp"
 
 #include <vector>
 
 template <typename T> class AtomicMatrix {
 public:
+  AtomicMatrix() {
+    nRow_ = 0;
+    nCol_ = 0;
+    alpha_ = salmon::math::LOG_0;
+    logSpace_ = true;
+  }
+
   AtomicMatrix(size_t nRow, size_t nCol, T alpha, bool logSpace = true)
-      : storage_(nRow * nCol, logSpace ? std::log(alpha) : alpha),
-        rowsums_(nRow, logSpace ? std::log(nCol * alpha) : nCol * alpha),
-        nRow_(nRow), nCol_(nCol), alpha_(alpha), logSpace_(logSpace) {}
+      : nRow_(nRow), nCol_(nCol), alpha_(alpha), logSpace_(logSpace) {
+
+          decltype(storage_) storage_tmp(nRow * nCol);
+          std::swap(storage_, storage_tmp);
+          T e = logSpace ? std::log(alpha) : alpha;
+          std::fill(storage_.begin(), storage_.end(), e);
+
+          decltype(rowsums_) rowsums_tmp(nRow);
+          std::swap(rowsums_, rowsums_tmp);
+          T ers = logSpace ? std::log(nCol * alpha) : nCol * alpha;
+          std::fill(rowsums_.begin(), rowsums_.end(), ers);
+        }
+
+  AtomicMatrix& operator=(AtomicMatrix&& o) {
+    std::swap(storage_, o.storage_);
+    std::swap(rowsums_, o.rowsums_);
+    nRow_ = o.nRow_;
+    nCol_ = o.nCol_;
+    alpha_ = o.alpha_;
+    logSpace_ = o.logSpace_;
+    return *this;
+  }
 
   void incrementUnnormalized(size_t rowInd, size_t colInd, T amt) {
     using salmon::math::logAdd;
     size_t k = rowInd * nCol_ + colInd;
     if (logSpace_) {
-      T oldVal = storage_[k];
-      T retVal = oldVal;
-      T newVal = logAdd(oldVal, amt);
-      do {
-        oldVal = retVal;
-        newVal = logAdd(oldVal, amt);
-        retVal = storage_[k].compare_and_swap(newVal, oldVal);
-      } while (retVal != oldVal);
-
+      salmon::utils::incLoopLog(storage_[k], amt);
     } else {
-      T oldVal = storage_[k];
-      T retVal = oldVal;
-      T newVal = oldVal + amt;
-      do {
-        oldVal = retVal;
-        newVal = oldVal + amt;
-        retVal = storage_[k].compare_and_swap(newVal, oldVal);
-      } while (retVal != oldVal);
+      salmon::utils::incLoop(storage_[k], amt);
     }
   }
 
@@ -55,41 +66,11 @@ public:
     using salmon::math::logAdd;
     size_t k = rowInd * nCol_ + colInd;
     if (logSpace_) {
-      T oldVal = storage_[k];
-      T retVal = oldVal;
-      T newVal = logAdd(oldVal, amt);
-      do {
-        oldVal = retVal;
-        newVal = logAdd(oldVal, amt);
-        retVal = storage_[k].compare_and_swap(newVal, oldVal);
-      } while (retVal != oldVal);
-
-      oldVal = rowsums_[rowInd];
-      retVal = oldVal;
-      newVal = logAdd(oldVal, amt);
-      do {
-        oldVal = retVal;
-        newVal = logAdd(oldVal, amt);
-        retVal = rowsums_[rowInd].compare_and_swap(newVal, oldVal);
-      } while (retVal != oldVal);
+      salmon::utils::incLoopLog(storage_[k], amt);
+      salmon::utils::incLoopLog(rowsums_[rowInd], amt);
     } else {
-      T oldVal = storage_[k];
-      T retVal = oldVal;
-      T newVal = oldVal + amt;
-      do {
-        oldVal = retVal;
-        newVal = oldVal + amt;
-        retVal = storage_[k].compare_and_swap(newVal, oldVal);
-      } while (retVal != oldVal);
-
-      oldVal = rowsums_[rowInd];
-      retVal = oldVal;
-      newVal = oldVal + amt;
-      do {
-        oldVal = retVal;
-        newVal = oldVal + amt;
-        retVal = rowsums_[rowInd].compare_and_swap(newVal, oldVal);
-      } while (retVal != oldVal);
+      salmon::utils::incLoop(storage_[k], amt);
+      salmon::utils::incLoop(rowsums_[rowInd], amt);
     }
   }
 
@@ -106,8 +87,8 @@ public:
   size_t nCol() const { return nCol_; }
 
 private:
-  std::vector<tbb::atomic<T>> storage_;
-  std::vector<tbb::atomic<T>> rowsums_;
+  std::vector<std::atomic<T>> storage_;
+  std::vector<std::atomic<T>> rowsums_;
   size_t nRow_, nCol_;
   T alpha_;
   bool logSpace_;

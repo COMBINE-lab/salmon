@@ -13,14 +13,15 @@
 #include "UnpairedRead.hpp"
 
 AlignmentModel::AlignmentModel(double alpha, uint32_t readBins)
-    : transitionProbsLeft_(readBins,
-                           AtomicMatrix<double>(numAlignmentStates(),
-                                                numAlignmentStates(), alpha)),
-      transitionProbsRight_(readBins,
-                            AtomicMatrix<double>(numAlignmentStates(),
-                                                 numAlignmentStates(), alpha)),
+    : transitionProbsLeft_(readBins), transitionProbsRight_(readBins),
       isEnabled_(true), readBins_(readBins), burnedIn_(false) {
-  
+
+  for (size_t i = 0; i < readBins; ++i) {
+    transitionProbsLeft_[i] = std::move(AtomicMatrix<double>(
+        numAlignmentStates(), numAlignmentStates(), alpha));
+    transitionProbsRight_[i] = std::move(AtomicMatrix<double>(
+        numAlignmentStates(), numAlignmentStates(), alpha));
+  }
 }
 
 bool AlignmentModel::burnedIn() { return burnedIn_; }

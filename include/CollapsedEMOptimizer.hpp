@@ -1,11 +1,9 @@
 #ifndef COLLAPSED_EM_OPTIMIZER_HPP
 #define COLLAPSED_EM_OPTIMIZER_HPP
 
+#include <atomic>
 #include <functional>
 #include <unordered_map>
-
-#include "tbb/atomic.h"
-#include "tbb/task_scheduler_init.h"
 
 #include "ReadExperiment.hpp"
 #include "SalmonOpts.hpp"
@@ -17,7 +15,7 @@ class BootstrapWriter;
 
 class CollapsedEMOptimizer {
 public:
-  using VecType = std::vector<tbb::atomic<double>>;
+  using VecType = std::vector<std::atomic<double>>;
   using SerialVecType = std::vector<double>;
   CollapsedEMOptimizer();
 

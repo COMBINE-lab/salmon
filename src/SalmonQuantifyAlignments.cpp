@@ -16,7 +16,6 @@ extern "C" {
 #include <memory>
 #include <mutex>
 #include <random>
-#include <tbb/atomic.h>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>

@@ -3,10 +3,6 @@
 
 #include <functional>
 #include <unordered_map>
-
-#include "tbb/atomic.h"
-#include "tbb/task_scheduler_init.h"
-
 #include "SalmonOpts.hpp"
 
 #include "Eigen/Dense"

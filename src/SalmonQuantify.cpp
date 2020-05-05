@@ -69,7 +69,6 @@
 #include "tbb/parallel_for_each.h"
 #include "tbb/parallel_reduce.h"
 #include "tbb/partitioner.h"
-#include "tbb/task_scheduler_init.h"
 
 // logger includes
 #include "spdlog/spdlog.h"
