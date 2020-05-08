@@ -407,6 +407,8 @@ bool GZipWriter::writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
     oa(cereal::make_nvp("library_types", libStrings));
 
     oa(cereal::make_nvp("frag_dist_length", 0));
+    oa(cereal::make_nvp("frag_length_mean", 0.0));
+    oa(cereal::make_nvp("frag_length_sd", 0.0));
     oa(cereal::make_nvp("seq_bias_correct", false));
     oa(cereal::make_nvp("gc_bias_correct", false));
     oa(cereal::make_nvp("num_bias_bins", 0));
@@ -571,9 +573,9 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
 
   bfs::path fldPath = auxDir / "fld.gz";
   int32_t numFLDSamples{10000};
-  auto fldSamples = distribution_utils::samplesFromLogPMF(
+  auto fldSummary = distribution_utils::samplesFromLogPMF(
       experiment.fragmentLengthDistribution(), numFLDSamples);
-  writeVectorToFile(fldPath, fldSamples);
+  writeVectorToFile(fldPath, fldSummary.samples);
 
   bfs::path normBiasPath = auxDir / "expected_bias.gz";
   writeVectorToFile(normBiasPath, experiment.expectedSeqBias());
@@ -774,7 +776,9 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
     oa(cereal::make_nvp("num_libraries", libStrings.size()));
     oa(cereal::make_nvp("library_types", libStrings));
 
-    oa(cereal::make_nvp("frag_dist_length", fldSamples.size()));
+    oa(cereal::make_nvp("frag_dist_length", fldSummary.samples.size()));
+    oa(cereal::make_nvp("frag_length_mean", fldSummary.mean));
+    oa(cereal::make_nvp("frag_length_sd", fldSummary.sd));
     oa(cereal::make_nvp("seq_bias_correct", opts.biasCorrect));
     oa(cereal::make_nvp("gc_bias_correct", opts.gcBiasCorrect));
     oa(cereal::make_nvp("num_bias_bins", bcounts.size()));

@@ -12,13 +12,23 @@ class Transcript;
 namespace distribution_utils {
 enum class DistributionSpace : uint8_t { LOG = 0, LINEAR = 1 };
 
+class DistSummary {
+public:
+DistSummary(double mean_in, double sd_in, uint32_t support) :
+  mean(mean_in), sd(sd_in), samples(support,0) {}
+
+double mean;
+double sd;
+std::vector<int32_t> samples;
+};
+
 /**
  *  Draw samples from the provided fragment length distribution.
  *  \param fld A pointer to the FragmentLengthDistribution from which
  *             samples will be drawn.
  *  \param numSamples  The number of samples to draw.
  */
-std::vector<int32_t> samplesFromLogPMF(FragmentLengthDistribution* fld,
+DistSummary samplesFromLogPMF(FragmentLengthDistribution* fld,
                                        int32_t numSamples);
 
 /**

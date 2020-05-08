@@ -177,17 +177,6 @@ inline void incLoop(double& val, double inc) { val += inc; }
  * val + inc.  Update occurs in a loop in case other
  * threads update in the meantime.
  */
-/*
-inline void incLoop(tbb::atomic<double>& val, double inc) {
-  double oldMass = val.load();
-  double returnedMass = oldMass;
-  double newMass{oldMass + inc};
-  do {
-    oldMass = returnedMass;
-    newMass = oldMass + inc;
-    returnedMass = val.compare_and_swap(newMass, oldMass);
-  } while (returnedMass != oldMass);
-}*/
 
 inline void incLoop(std::atomic<double>& val, double inc) {
   double oldMass = val.load();

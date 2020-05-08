@@ -54,7 +54,7 @@ void computeSmoothedEffectiveLengths(size_t maxLength,
   }
 }
 
-std::vector<int32_t> samplesFromLogPMF(FragmentLengthDistribution* fld,
+DistSummary samplesFromLogPMF(FragmentLengthDistribution* fld,
                                        int32_t numSamples) {
   std::vector<double> logPMF;
   size_t minVal;
@@ -70,21 +70,29 @@ std::vector<int32_t> samplesFromLogPMF(FragmentLengthDistribution* fld,
   }
 
   // Create the non-logged pmf
+  double mean = salmon::math::LOG_0;
+  double var = 0.0;
   std::vector<double> pmf(maxVal + 1, 0.0);
   for (size_t i = minVal; i < maxVal; ++i) {
+    mean = (i > 0) ? (salmon::math::logAdd(mean, std::log(i)+logPMF[i-minVal])) : mean;
     pmf[i] = std::exp(logPMF[i - minVal]);
+    var += pmf[i] * (i*i);
   }
+  mean = std::exp(mean);
+  var -= mean*mean;
+  double sd = std::sqrt(var);
 
   // generate samples
   std::random_device rd;
   std::mt19937 gen(rd());
   std::discrete_distribution<int32_t> dist(pmf.begin(), pmf.end());
 
+  DistSummary ds(mean, sd, pmf.size());
   std::vector<int32_t> samples(pmf.size());
   for (int32_t i = 0; i < numSamples; ++i) {
-    ++samples[dist(gen)];
+    ++(ds.samples[dist(gen)]);
   }
-  return samples;
+  return ds;
 }
 
 
