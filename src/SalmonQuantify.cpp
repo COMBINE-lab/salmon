@@ -1219,6 +1219,13 @@ void processReads(
             numDecoyFrags += bestHitDecoy ? 1 : 0;
             ++numFragsDropped;
             jointAlignmentGroup.clearAlignments();
+            // TODO: Create alignment objects for the decoys so that we can write
+            // decoy alignments to file
+            /**
+            if (bestHitDecoy) {
+               salmon::mapping_utils::filterAndCollectAlignmentsDecoy(...);
+            }
+            **/
           }
         } else if (isPaired and noDovetail) {
           salmonOpts.jointLog->critical("This code path is not yet implemented!");
