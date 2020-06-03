@@ -823,6 +823,7 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
                       std::vector<std::string> readFiles){
   bool isOptionsOk = aut::processAlevinOpts(aopt, sopt, noTgMap, vm);
   if (!isOptionsOk){
+    aopt.jointLog->flush();
     exit(1);
   }
 
