@@ -255,6 +255,16 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
     logCMFCache.refresh(numAssignedFragments.load(), burnedIn.load());
   }
 
+  // A cache to avoid fld updates _within_ the set of alignments of a fragment 
+  size_t maxCacheLen{salmonOpts.fragLenDistMax};
+  // cache for the pmf and cmf
+  std::vector<double> pmfCache(maxCacheLen+1, salmon::math::LOG_0);
+  std::vector<double> cmfCache(maxCacheLen+1, salmon::math::LOG_0);
+  // "generation" counters to avoid using stale values
+  // the generation gets updated for each new fragment
+  std::vector<uint64_t> pmfGen(maxCacheLen+1, 0);
+  std::vector<uint64_t> cmfGen(maxCacheLen+1, 0);
+  uint64_t currGen{0};
   int i{0};
   {
     // Iterate over each group of alignments (a group consists of all alignments
@@ -262,6 +272,7 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
     // for a single read).  Distribute the read's mass to the transcripts
     // where it potentially aligns.
     for (auto& alnGroup : batchHits) {
+      ++currGen;
       // If we had no alignments for this read, then skip it
       if (alnGroup.size() == 0) {
         continue;
@@ -308,11 +319,10 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
       uint32_t prevTxpID{0};
 
       hasCompatibleMapping = false;
+      useAuxParams = ((localNumAssignedFragments + numAssignedFragments) >=
+                      salmonOpts.numPreBurninFrags);
       // For each alignment of this read
       for (auto& aln : alnGroup.alignments()) {
-
-        useAuxParams = ((localNumAssignedFragments + numAssignedFragments) >=
-                        salmonOpts.numPreBurninFrags);
         bool considerCondProb{burnedIn or useAuxParams};
 
         auto transcriptID = aln.transcriptID();
@@ -367,11 +377,20 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
 
           if (flen > 0.0 and useFragLengthDist and considerCondProb) {
             size_t fl = flen;
-            double lenProb = fragLengthDist.pmf(fl);
+            size_t klen = (fl > maxCacheLen) ? maxCacheLen : fl; 
+            double lenProb = (pmfGen[klen] < currGen) ? fragLengthDist.pmf(fl) : pmfCache[klen]; 
+            pmfCache[klen] = lenProb; 
+            pmfGen[klen] = currGen;
+
             if (burnedIn) {
               /* condition fragment length prob on txp length */
+              size_t rlen = (static_cast<size_t>(refLength) > maxCacheLen) ? maxCacheLen : static_cast<size_t>(refLength);
               double refLengthCM =
-                  fragLengthDist.cmf(static_cast<size_t>(refLength));
+                (cmfGen[rlen] < currGen) ? 
+                  fragLengthDist.cmf(static_cast<size_t>(rlen)) : cmfCache[rlen];
+              cmfCache[rlen] = refLengthCM;
+              cmfGen[klen] = currGen;
+
               bool computeMass =
                   fl < refLength and !salmon::math::isLog0(refLengthCM);
               logFragProb = (computeMass) ? (lenProb - refLengthCM)
