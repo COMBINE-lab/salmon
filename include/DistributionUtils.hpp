@@ -96,6 +96,45 @@ private:
   std::vector<double> cachedCMF_;
 };
 
+template <typename T>
+class VersionedValue {
+  public:
+    T val{T()};
+    uint64_t gen{0};
+};
+
+// A simple cache where values are retreived by their index
+// and the cached items are versioned
+template <typename T>
+class IndexedVersionedCache {
+  public:
+
+  IndexedVersionedCache(size_t max_index) :
+    cache_(max_index+1), max_index_(max_index), current_gen_(0) {}
+
+  inline void increment_generation() { ++current_gen_; }
+
+  inline bool get_value(size_t index, T& v) {
+    size_t idx = (index > max_index_) ? max_index_ : index;
+    const VersionedValue<T>& vv = cache_[idx];
+    bool is_stale = vv.gen < current_gen_;
+    v = vv.val;
+    return is_stale;
+  }
+
+  inline void update_value(size_t index, T v) {
+    size_t idx = (index > max_index_) ? max_index_ : index;
+    VersionedValue<T>& vv = cache_[idx];
+    vv.val = v;
+    vv.gen = current_gen_;
+  }
+
+  private:
+  std::vector<VersionedValue<T>> cache_;
+  size_t max_index_{0};
+  uint64_t current_gen_{0};
+};
+
 } // namespace distribution_utils
 
 #endif // __DISTRIBUTION_UTILS__
