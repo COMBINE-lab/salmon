@@ -257,6 +257,8 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
 
   const size_t maxCacheLen{salmonOpts.fragLenDistMax};
   // Caches to avoid fld updates _within_ the set of alignments of a fragment 
+  auto fetchPMF = [&fragLengthDist](size_t l) -> double { return fragLengthDist.pmf(l); };
+  auto fetchCMF = [&fragLengthDist](size_t l) -> double { return fragLengthDist.cmf(l); };
   distribution_utils::IndexedVersionedCache<double> pmfCache(maxCacheLen);
   distribution_utils::IndexedVersionedCache<double> cmfCache(maxCacheLen);
 
@@ -374,20 +376,12 @@ void processMiniBatch(ReadExperimentT& readExp, ForgettingMassCalculator& fmCalc
 
           if (flen > 0.0 and useFragLengthDist and considerCondProb) {
             size_t fl = flen;
-            double lenProb;
-            if (!pmfCache.get_value(fl, lenProb)) {
-              lenProb = fragLengthDist.pmf(fl);
-              pmfCache.update_value(fl, lenProb);
-            }
+            double lenProb = pmfCache.get_or_update(fl, fetchPMF);
 
             if (burnedIn) {
               /* condition fragment length prob on txp length */
               size_t rlen = static_cast<size_t>(refLength);
-              double refLengthCM;
-              if (!cmfCache.get_value(rlen, refLengthCM)) {
-                refLengthCM = fragLengthDist.cmf(rlen);
-                cmfCache.update_value(rlen, refLengthCM);
-              }
+              double refLengthCM = cmfCache.get_or_update(fl, fetchCMF);
 
               bool computeMass =
                   fl < refLength and !salmon::math::isLog0(refLengthCM);
