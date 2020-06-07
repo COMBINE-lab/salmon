@@ -133,11 +133,12 @@ class IndexedVersionedCache {
   inline T get_or_update(size_t index, F& gen_value) {
     size_t idx = (index > max_index_) ? max_index_ : index;
     VersionedValue<T>& vv = cache_[idx];
-    bool is_stale = vv.gen < current_gen_;
-    if (is_stale) {
+    // if the current value is stale, compute a new one and cache it
+    if (vv.gen < current_gen_) {
       vv.val = gen_value(idx);
       vv.gen = current_gen_;
     }
+    // return the (possibly newly) cached value
     return vv.val;
   }
 
