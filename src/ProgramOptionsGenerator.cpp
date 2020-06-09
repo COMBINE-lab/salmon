@@ -413,7 +413,7 @@ namespace salmon {
       (
        "end",po::value<uint32_t>(),
        "Cell-Barcodes end (5 or 3) location in the read sequence from where barcode has to"
-       "be extracted. (end, umiLength, barcodeLength)"
+       " be extracted. (end, umiLength, barcodeLength)"
        " should all be provided if using this option")
       (
        "umiLength",po::value<uint32_t>(),
@@ -421,7 +421,7 @@ namespace salmon {
        " should all be provided if using this option")
       (
        "barcodeLength",po::value<uint32_t>(),
-       "umi length Parameter for unknown protocol. (end, umiLength, barcodeLength)"
+       "barcode length Parameter for unknown protocol. (end, umiLength, barcodeLength)"
        " should all be provided if using this option")
       (
        "noem",po::bool_switch()->default_value(alevin::defaults::noEM),
