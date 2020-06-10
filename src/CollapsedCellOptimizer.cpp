@@ -542,6 +542,7 @@ bool runBootstraps(size_t numGenes,
     double meanAlpha = mean[i] / numBootstraps;
     geneAlphas[i] = meanAlpha;
     variance[i] = (squareMean[i]/numBootstraps) - (meanAlpha*meanAlpha);
+    variance[i] *= (numBootstraps / static_cast<double>(numBootstraps - 1));
   }
 
   return true;
