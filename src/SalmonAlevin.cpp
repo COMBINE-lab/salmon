@@ -449,7 +449,6 @@ void processReadsQuasi(
   std::vector<pufferfish::util::JointMems> jointHits;
   PairedAlignmentFormatter<IndexT*> formatter(qidx);
   pufferfish::util::QueryCache qc;
-  phmap::flat_hash_map<uint32_t, std::pair<int32_t, int32_t>> bestScorePerTranscript;
 
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   bool mimicBT2 = salmonOpts.mimicBT2;
@@ -467,9 +466,6 @@ void processReadsQuasi(
   //////////////////////
   // NOTE: validation mapping based new parameters
   std::string rc1; rc1.reserve(300);
-  // will hold the permutation to use to put the transcripts in order
-  std::vector<std::pair<int32_t, int32_t>> perm;
-  //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
   AlnCacheMap alnCache; alnCache.reserve(16);
 
   /*
@@ -485,6 +481,12 @@ void processReadsQuasi(
   size_t numMappingsDropped{0};
   size_t numDecoyFrags{0};
   const double decoyThreshold = salmonOpts.decoyThreshold;
+
+  salmon::mapping_utils::MappingScoreInfo msi(decoyThreshold);
+  // we only collect detailed decoy information if we will be 
+  // writing output to SAM.
+  msi.collect_decoys(writeQuasimappings);
+
   std::string readSubSeq;
   //////////////////////
 
@@ -514,7 +516,6 @@ void processReadsQuasi(
       jointHitGroup.clearAlignments();
       auto& jointAlignments= jointHitGroup.alignments();
 
-      perm.clear();
       hits.clear();
       jointHits.clear();
       memCollector.clear();
@@ -650,20 +651,8 @@ void processReadsQuasi(
         // adding validate mapping code
         if (tryAlign and !jointHits.empty()) {
           puffaligner.clear();
-          bestScorePerTranscript.clear();
+          msi.clear(jointHits.size());
 
-          //auto* r1 = readSubSeq.data();
-          //auto l1 = static_cast<int32_t>(readSubSeq.length());
-
-          // the best scores start out as invalid
-          /*
-          int32_t bestScore = invalidScore;
-          int32_t secondBestScore = invalidScore;
-          int32_t bestDecoyScore = invalidScore;
-          */
-          salmon::mapping_utils::MappingScoreInfo msi = {invalidScore, invalidScore, invalidScore, decoyThreshold};
-
-          std::vector<decltype(msi.bestScore)> scores(jointHits.size(), invalidScore);
           size_t idx{0};
           bool isMultimapping = (jointHits.size() > 1);
 
@@ -685,18 +674,13 @@ void processReadsQuasi(
                             (!jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::SA));
 
             salmon::mapping_utils::updateRefMappings(tid, hitScore, isCompat, idx, transcripts, invalidScore, 
-                                                     msi,
-                                                     //bestScore, secondBestScore, bestDecoyScore,
-                                                     scores, bestScorePerTranscript, perm);
+                                                     msi);
             ++idx;
           }
 
-          //bool bestHitDecoy = (msi.bestScore < msi.bestDecoyScore);
           bool bestHitDecoy = msi.haveOnlyDecoyMappings();
           if (msi.bestScore > invalidScore and !bestHitDecoy) {
             salmon::mapping_utils::filterAndCollectAlignments(jointHits,
-                                                              scores,
-                                                              perm,
                                                               readSubSeq.length(),
                                                               readSubSeq.length(),
                                                               false, // true for single-end false otherwise
@@ -705,11 +689,6 @@ void processReadsQuasi(
                                                               salmonOpts.scoreExp,
                                                               salmonOpts.minAlnProb,
                                                               msi,
-                                                              /*
-                                                              bestScore,
-                                                              secondBestScore,
-                                                              bestDecoyScore,
-                                                              */
                                                               jointAlignments);
             if (!jointAlignments.empty()) {
               mapType = salmon::utils::MappingType::SINGLE_MAPPED;
@@ -717,17 +696,32 @@ void processReadsQuasi(
           } else {
             numDecoyFrags += bestHitDecoy ? 1 : 0;
             ++numDropped;
-            jointHitGroup.clearAlignments();
             mapType = (bestHitDecoy) ? salmon::utils::MappingType::DECOY : salmon::utils::MappingType::UNMAPPED;
+            if (bestHitDecoy) {
+              salmon::mapping_utils::filterAndCollectAlignments(
+                  jointHits, readSubSeq.length(),
+                  readSubSeq.length(),
+                  false, // true for single-end false otherwise
+                  tryAlign, hardFilter, salmonOpts.scoreExp,
+                  salmonOpts.minAlnProb, msi,
+                  jointAlignments);
+            } else {
+              jointHitGroup.clearAlignments();
+            }
           }
         } //end-if validate mapping
 
         if (writeQuasimappings) {
           writeAlignmentsToStream(rp, formatter, jointAlignments, sstream, true, true);
-          /*
-          rapmap::utils::writeAlignmentsToStream(rp, formatter,
-                                                 hctr, jointHits, sstream);
-          */
+        }
+
+        // We've kept decoy aignments around to this point so that we can
+        // potentially write these alignments to the SAM file.  However, if 
+        // we got to this point and only have decoy mappings, then clear the 
+        // mappings here because none of the procesing below is relevant for 
+        // decoys.
+        if (mapType == salmon::utils::MappingType::DECOY) {
+          jointHitGroup.clearAlignments();
         }
 
       if (writeUnmapped and mapType != salmon::utils::MappingType::SINGLE_MAPPED) {

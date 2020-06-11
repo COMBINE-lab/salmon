@@ -56,23 +56,77 @@
 #include "pufferfish/ksw2pp/KSW2Aligner.hpp"
 #include "pufferfish/metro/metrohash64.h"
 #include "pufferfish/SelectiveAlignmentUtils.hpp"
+#include "pufferfish/chobo/small_vector.hpp"
+#include "parallel_hashmap/phmap.h"
 
 namespace salmon {
   namespace mapping_utils {
 
     using MateStatus = pufferfish::util::MateStatus;
+    constexpr const int32_t invalid_score_ = std::numeric_limits<int32_t>::min();
+    constexpr const int32_t invalid_index_ = std::numeric_limits<int32_t>::min();
+    constexpr const size_t static_vec_size = 32;
 
-    struct MappingScoreInfo {
+    class MappingScoreInfo {
+    public:
+      MappingScoreInfo()
+          : bestScore(invalid_score_), secondBestScore(invalid_score_),
+            bestDecoyScore(invalid_score_), decoyThresh(1.0), collect_decoy_info_(false) {}
+
+      MappingScoreInfo(double decoyThreshIn) : MappingScoreInfo() {
+        decoyThresh = decoyThreshIn;
+      }
+
+      void collect_decoys(bool do_collect) { collect_decoy_info_ = do_collect; }
+      bool collect_decoys() const { return collect_decoy_info_; }
+
+      // clear everything but the decoy threshold 
+      void clear(size_t num_hits) {
+        bestScore = invalid_score_;
+        secondBestScore = invalid_score_;
+        bestDecoyScore = invalid_score_;
+        scores_.clear(); scores_.resize(num_hits, invalid_score_);
+        bestScorePerTranscript_.clear();
+        perm_.clear();
+        // NOTE: we do _not_ reset decoyThresh here
+        if (collect_decoy_info_) {
+          bool revert_to_static = best_decoy_hits.size() > static_vec_size;
+          best_decoy_hits.clear();
+          if (revert_to_static) { best_decoy_hits.revert_to_static(); }
+        }
+      }
+
+      bool haveOnlyDecoyMappings() const {
+        // if the best non-decoy mapping has score less than decoyThresh *
+        // bestDecoyScore and if the bestDecoyScore is a valid value, then we
+        // have no valid non-decoy mappings.
+        return (bestScore < static_cast<int32_t>(decoyThresh * bestDecoyScore)) and
+               (bestDecoyScore > std::numeric_limits<decltype(bestDecoyScore)>::min());
+      }
+      
+      inline bool update_decoy_mappings(int32_t hitScore, size_t idx, uint32_t tid) {
+        const bool better_score = hitScore > bestDecoyScore;
+        if (hitScore > bestDecoyScore) {
+          bestDecoyScore = hitScore;
+          if (collect_decoy_info_) { 
+            best_decoy_hits.clear();
+            best_decoy_hits.push_back(std::make_pair(static_cast<int32_t>(idx), static_cast<int32_t>(tid)));
+          }
+        } else if (collect_decoy_info_ and (hitScore == bestDecoyScore)){
+          best_decoy_hits.push_back(std::make_pair(static_cast<int32_t>(idx), static_cast<int32_t>(tid)));
+        }
+        return better_score;
+      }
+
       int32_t bestScore;
       int32_t secondBestScore;
       int32_t bestDecoyScore;
       double decoyThresh;
-      bool haveOnlyDecoyMappings() const {
-        // if the best non-decoy mapping has score less than decoyThresh * bestDecoyScore
-        // and if the bestDecoyScore is a valid value, then we have no valid non-decoy mappings.
-        return (bestScore < static_cast<int32_t>(decoyThresh * bestDecoyScore)) and 
-               (bestDecoyScore > std::numeric_limits<decltype(bestDecoyScore)>::min());
-      }
+      chobo::small_vector<std::pair<int32_t, int32_t>> best_decoy_hits;
+      bool collect_decoy_info_;
+      std::vector<int32_t> scores_;
+      phmap::flat_hash_map<uint32_t, std::pair<int32_t, int32_t>> bestScorePerTranscript_;
+      std::vector<std::pair<int32_t, int32_t>> perm_;
     };
 
 template <typename IndexT>
@@ -136,15 +190,8 @@ inline bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& mem
 inline void updateRefMappings(uint32_t tid, int32_t hitScore, bool isCompat, size_t idx,
                   const std::vector<Transcript>& transcripts,
                   int32_t invalidScore,
-                  salmon::mapping_utils::MappingScoreInfo& msi,
-                  /*
-                  int32_t& bestScore, 
-                  int32_t& secondBestScore,
-                  int32_t& bestDecoyScore,
-                  */
-                  std::vector<int32_t>& scores,
-                  phmap::flat_hash_map<uint32_t, std::pair<int32_t, int32_t>>& bestScorePerTranscript,
-                  std::vector<std::pair<int32_t, int32_t>>& perm) {
+                  salmon::mapping_utils::MappingScoreInfo& msi) {
+  auto& scores = msi.scores_;
   scores[idx] = hitScore;
   auto& t = transcripts[tid];
   bool isDecoy = t.isDecoy();
@@ -153,10 +200,13 @@ inline void updateRefMappings(uint32_t tid, int32_t hitScore, bool isCompat, siz
   //if (hitScore < decoyCutoff or (hitScore == invalidScore)) { }
 
   if (isDecoy) {
-    // if this is a decoy and its score is at least as good
-    // as the bestDecoyScore, then update that and go to the next mapping
-     msi.bestDecoyScore = std::max(hitScore, msi.bestDecoyScore);
-     return;
+    // NOTE: decide here if we need to process any of this if the 
+    // current score is < the best (non-decoy) score. I think not.
+
+    // if this is a decoy and its score is better than the best decoy score
+    bool did_update = msi.update_decoy_mappings(hitScore, idx, tid);
+    (void)did_update;
+    return;
   } else if (hitScore < decoyCutoff or (hitScore == invalidScore)) {
     // if the current score is to a valid target but doesn't 
     // exceed the necessary decoy threshold, then skip it.
@@ -164,6 +214,8 @@ inline void updateRefMappings(uint32_t tid, int32_t hitScore, bool isCompat, siz
   } 
   // otherwise, we have a "high-scoring" hit to a non-decoy
 
+  auto& perm = msi.perm_;
+  auto& bestScorePerTranscript = msi.bestScorePerTranscript_;
   // removing duplicate hits from a read to the same transcript
   auto it = bestScorePerTranscript.find(tid);
   if (it == bestScorePerTranscript.end()) {
@@ -187,15 +239,12 @@ inline void updateRefMappings(uint32_t tid, int32_t hitScore, bool isCompat, siz
     msi.secondBestScore = msi.bestScore;
     msi.bestScore = hitScore;
   }
-  //bestScore = (hitScore > bestScore) ? hitScore : bestScore;
   perm.push_back(std::make_pair(idx, tid));
 }
 
 
 inline void filterAndCollectAlignments(
                                        std::vector<pufferfish::util::JointMems>& jointHits,
-                                       const std::vector<int32_t>& scores,
-                                       std::vector<std::pair<int32_t, int32_t>>& perm,
                                        uint32_t readLen,
                                        uint32_t mateLen,
                                        bool singleEnd,
@@ -203,13 +252,7 @@ inline void filterAndCollectAlignments(
                                        bool hardFilter,
                                        double scoreExp,
                                        double minAlnProb,
-                                       // intentionally passing by value below --- come back
-                                       // and make sure it's necessary
-                                       salmon::mapping_utils::MappingScoreInfo msi,
-                                       /*int32_t bestScore,
-                                       int32_t secondBestScore,
-                                       int32_t bestDecoyScore,
-                                       */
+                                       salmon::mapping_utils::MappingScoreInfo& msi,
                                        std::vector<pufferfish::util::QuasiAlignment>& jointAlignments) {
 
   auto invalidScore = std::numeric_limits<decltype(msi.bestDecoyScore)>::min();
@@ -218,6 +261,8 @@ inline void filterAndCollectAlignments(
   int32_t decoyThreshold = static_cast<decltype(msi.bestDecoyScore)>(msi.decoyThresh * msi.bestDecoyScore);
 
   //auto filterScore = (bestDecoyScore < secondBestScore) ? secondBestScore : bestDecoyScore;
+  auto& scores = msi.scores_;
+  auto& perm = msi.perm_;
 
   // throw away any pairs for which we should not produce valid alignments :
   // ======
@@ -299,6 +344,89 @@ inline void filterAndCollectAlignments(
   }
   // done moving our alinged / score jointMEMs over to QuasiAlignment objects
 }
+
+
+inline void filterAndCollectAlignmentsDecoy(
+                                       std::vector<pufferfish::util::JointMems>& jointHits,
+                                       uint32_t readLen,
+                                       uint32_t mateLen,
+                                       bool singleEnd,
+                                       bool tryAlign,
+                                       bool hardFilter,
+                                       double scoreExp,
+                                       double minAlnProb,
+                                       salmon::mapping_utils::MappingScoreInfo& msi,
+                                       std::vector<pufferfish::util::QuasiAlignment>& jointAlignments) {
+// NOTE: this function should only be called in the case that we have valid decoy mappings to report.
+// Currently, this happens only when there are *no valid non-decoy* mappings.
+// Further, this function will only add equally *best* decoy mappings to the output jointAlignments object
+// regardless of the the status of hardFilter (i.e. no sub-optimal decoy mappings will be reported).
+(void) hardFilter;
+(void) minAlnProb;
+double estAlnProb = 1.0; //std::exp(-scoreExp * 0.0);
+for (auto& idxTxp : msi.best_decoy_hits) {
+  int32_t ctr = idxTxp.first;
+  int32_t tid = idxTxp.second;
+  auto& jointHit = jointHits[ctr];
+
+  if (singleEnd or jointHit.isOrphan()) {
+    readLen = jointHit.isLeftAvailable() ? readLen : mateLen;
+    jointAlignments.emplace_back(
+        tid,                                        // reference id
+        jointHit.orphanClust()->getTrFirstHitPos(), // reference pos
+        jointHit.orphanClust()->isFw,               // fwd direction
+        readLen,                                    // read length
+        jointHit.orphanClust()->cigar,              // cigar string
+        jointHit.fragmentLen,                       // fragment length
+        false);
+    auto& qaln = jointAlignments.back();
+    // NOTE : score should not be filled in from a double
+    qaln.score = !tryAlign
+                     ? static_cast<int32_t>(jointHit.orphanClust()->coverage)
+                     : jointHit.alignmentScore;
+    qaln.estAlnProb(estAlnProb);
+    // NOTE : wth is numHits?
+    qaln.numHits =
+        static_cast<uint32_t>(jointHits.size()); // orphanClust()->coverage;
+    qaln.mateStatus = jointHit.mateStatus;
+    if (singleEnd) {
+      qaln.mateLen = readLen;
+      qaln.mateCigar.clear();
+      qaln.matePos = 0;
+      qaln.mateIsFwd = true;
+      qaln.mateScore = 0;
+      qaln.mateStatus = MateStatus::SINGLE_END;
+    }
+  } else {
+    jointAlignments.emplace_back(
+        tid,                                    // reference id
+        jointHit.leftClust->getTrFirstHitPos(), // reference pos
+        jointHit.leftClust->isFw,               // fwd direction
+        readLen,                                // read length
+        jointHit.leftClust->cigar,              // cigar string
+        jointHit.fragmentLen,                   // fragment length
+        true);                                  // properly paired
+    // Fill in the mate info
+    auto& qaln = jointAlignments.back();
+    qaln.mateLen = mateLen;
+    qaln.mateCigar = jointHit.rightClust->cigar;
+    qaln.matePos =
+        static_cast<int32_t>(jointHit.rightClust->getTrFirstHitPos());
+    qaln.mateIsFwd = jointHit.rightClust->isFw;
+    qaln.mateStatus = MateStatus::PAIRED_END_PAIRED;
+    // NOTE : wth is numHits?
+    qaln.numHits = static_cast<uint32_t>(jointHits.size());
+    // NOTE : score should not be filled in from a double
+    qaln.score = !tryAlign ? static_cast<int32_t>(jointHit.leftClust->coverage)
+                           : jointHit.alignmentScore;
+    qaln.estAlnProb(estAlnProb);
+    qaln.mateScore = !tryAlign
+                         ? static_cast<int32_t>(jointHit.rightClust->coverage)
+                         : jointHit.mateAlignmentScore;
+  }
+} // end for over best decoy hits
+}
+
 
   } // namespace mapping_utils
 } // namespace salmon
