@@ -204,12 +204,12 @@ target_link_libraries(salmon
     #${SUFFARRAY_LIB64}
     #${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
     m
+    ${FAST_MALLOC_LIB}
     ${LIBLZMA_LIBRARIES}
     ${BZIP2_LIBRARIES}
     ${TBB_LIBRARIES}
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
-    ${FAST_MALLOC_LIB}
     ${LIBRT}
     ksw2pp
 ## PUFF_INTEGRATION    
