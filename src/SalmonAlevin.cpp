@@ -568,7 +568,6 @@ void processReadsQuasi(
                 exit(1);
               } else{
                 barcodeIdx = trItLoc->second;
-		*barcode = trItLoc->first;
               }
             }
             // If it wasn't in the barcode map, it's not valid
