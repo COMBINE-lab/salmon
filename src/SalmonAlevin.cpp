@@ -568,6 +568,7 @@ void processReadsQuasi(
                 exit(1);
               } else{
                 barcodeIdx = trItLoc->second;
+		*barcode = trItLoc->first;
               }
             }
             // If it wasn't in the barcode map, it's not valid
@@ -590,7 +591,7 @@ void processReadsQuasi(
             if(isUmiIdxOk){
               jointHitGroup.setUMI(umiIdx.word(0));
 	      if (writeQuasimappings) {
-	      	extraBAMtags += "\tCR:Z:";
+	      	extraBAMtags += "\tCB:Z:";
 	      	extraBAMtags += *barcode;
 	      	extraBAMtags += "\tUR:Z:";
 	      	extraBAMtags += umi;
