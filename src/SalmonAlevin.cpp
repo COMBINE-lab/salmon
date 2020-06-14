@@ -509,6 +509,7 @@ void processReadsQuasi(
       auto& rp = rg[i];
       readLenLeft = rp.first.seq.length();
       readLenRight= rp.second.seq.length();
+      std::string extraBAMtags("");
 
       bool tooShortRight = (readLenRight < (minK+alevinOpts.trimRight));
       //localUpperBoundHits = 0;
@@ -588,6 +589,12 @@ void processReadsQuasi(
 
             if(isUmiIdxOk){
               jointHitGroup.setUMI(umiIdx.word(0));
+	      if (writeQuasimappings) {
+	      	extraBAMtags += "\tCR:Z:";
+	      	extraBAMtags += *barcode;
+	      	extraBAMtags += "\tUR:Z:";
+	      	extraBAMtags += umi;
+	      }
 
               auto seq_len = rp.second.seq.size();
               if (alevinOpts.trimRight > 0) {
@@ -712,7 +719,7 @@ void processReadsQuasi(
         } //end-if validate mapping
 
         if (writeQuasimappings) {
-          writeAlignmentsToStream(rp, formatter, jointAlignments, sstream, true, true);
+          writeAlignmentsToStream(rp, formatter, jointAlignments, sstream, true, true, extraBAMtags);
         }
 
         // We've kept decoy aignments around to this point so that we can
