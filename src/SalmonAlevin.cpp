@@ -505,8 +505,10 @@ void processReadsQuasi(
     LibraryFormat expectedLibraryFormat = rl.format();
 
     std::string extraBAMtags;
-    size_t reserveSize { alevinOpts.protocol.barcodeLength + alevinOpts.protocol.umiLength + 12};
-    extraBAMtags.reserve(reserveSize);
+    if(writeQuasimappings) {
+    	size_t reserveSize { alevinOpts.protocol.barcodeLength + alevinOpts.protocol.umiLength + 12};
+    	extraBAMtags.reserve(reserveSize);
+    }
 
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
       auto& rp = rg[i];
