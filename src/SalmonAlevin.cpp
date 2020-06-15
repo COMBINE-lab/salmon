@@ -477,7 +477,6 @@ void processReadsQuasi(
   }
   */
 
-  size_t numDropped{0};
   size_t numMappingsDropped{0};
   size_t numDecoyFrags{0};
   const double decoyThreshold = salmonOpts.decoyThreshold;
@@ -702,10 +701,9 @@ void processReadsQuasi(
             }
           } else {
             numDecoyFrags += bestHitDecoy ? 1 : 0;
-            ++numDropped;
             mapType = (bestHitDecoy) ? salmon::utils::MappingType::DECOY : salmon::utils::MappingType::UNMAPPED;
             if (bestHitDecoy) {
-              salmon::mapping_utils::filterAndCollectAlignments(
+              salmon::mapping_utils::filterAndCollectAlignmentsDecoy(
                   jointHits, readSubSeq.length(),
                   readSubSeq.length(),
                   false, // true for single-end false otherwise
