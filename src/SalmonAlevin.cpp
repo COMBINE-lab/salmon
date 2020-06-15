@@ -504,11 +504,14 @@ void processReadsQuasi(
 
     LibraryFormat expectedLibraryFormat = rl.format();
 
+    std::string extraBAMtags;
+    size_t reserveSize { alevinOpts.protocol.barcodeLength + alevinOpts.protocol.umiLength + 12};
+    extraBAMtags.reserve(reserveSize);
+
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
       auto& rp = rg[i];
       readLenLeft = rp.first.seq.length();
       readLenRight= rp.second.seq.length();
-      std::string extraBAMtags("");
 
       bool tooShortRight = (readLenRight < (minK+alevinOpts.trimRight));
       //localUpperBoundHits = 0;
@@ -530,6 +533,7 @@ void processReadsQuasi(
       std::string umi;//, barcode;
       nonstd::optional<std::string> barcode;
       nonstd::optional<uint32_t> barcodeIdx;
+      extraBAMtags.clear();
       bool seqOk;
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
