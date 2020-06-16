@@ -45,6 +45,7 @@ SBModel::SBModel() : _trained(false) {
 
   _marginals = Eigen::MatrixXd(4, _contextLength);
   _marginals.setZero();
+  _marginals.array() += _prior_prob;
 
   _shifts.clear();
   _widths.clear();
@@ -70,6 +71,7 @@ SBModel::SBModel() : _trained(false) {
   _probs = Eigen::MatrixXd(constExprPow(4, maxOrder + 1), _contextLength);
   // We have no intial observations
   _probs.setZero();
+  _probs.array() += _prior_prob;
 }
 
 bool SBModel::writeBinary(boost::iostreams::filtering_ostream& out) const {
@@ -244,7 +246,7 @@ bool SBModel::normalize() {
     // std::cerr << "pos = " << pos << ", marginals = " << _marginals.col(pos)
     // << '\n';
   }
-
+  
   double logSmall = std::log(1e-5);
   auto takeLog = [logSmall](double x) -> double {
     return (x > 0.0) ? std::log(x) : logSmall;

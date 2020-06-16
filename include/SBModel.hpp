@@ -94,6 +94,7 @@ private:
   std::vector<int32_t> _order;
   std::vector<int32_t> _shifts;
   std::vector<int32_t> _widths;
+  constexpr static const double _prior_prob = 1e-10;
 };
 
 #endif //__SB_MODEL_HPP__
