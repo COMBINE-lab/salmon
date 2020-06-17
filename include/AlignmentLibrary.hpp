@@ -27,9 +27,10 @@ extern "C" {
 #include "SalmonOpts.hpp"
 #include "SalmonUtils.hpp"
 #include "SimplePosBias.hpp"
-#include "SpinLock.hpp" // RapMap's with try_lock
+#include "SpinLock.hpp" // From pufferfish, with try_lock
 #include "Transcript.hpp"
 #include "concurrentqueue.h"
+#include "parallel_hashmap/phmap.h"
 
 // Boost includes
 #include <boost/filesystem.hpp>
@@ -38,6 +39,7 @@ extern "C" {
 #include <functional>
 #include <memory>
 #include <vector>
+#include <stdexcept>
 
 template <typename T> class NullFragmentFilter;
 
@@ -108,6 +110,43 @@ public:
 
     // Figure out aligner information from the header if we can
     aligner_ = salmon::bam_utils::inferAlignerFromHeader(header);
+
+    // in this case check for decoys and make a list of their names
+    phmap::flat_hash_set<std::string> decoys;
+    if (aligner_ == salmon::bam_utils::AlignerDetails::PUFFERFISH) {
+     // for each reference
+     for (decltype(header->nref) i = 0; i < header->nref; ++i) {
+       // for each tag 
+       SAM_hdr_tag *tag;
+	     for (tag = header->ref[i].tag; tag; tag = tag->next) {
+         // if this tag marks it as a decoy
+         if ((tag->len == 4) and (std::strncmp(tag->str, "DS:D", 4) == 0)) {
+           decoys.insert(header->ref[i].name);
+           break;
+         } // end if decoy tag
+
+       } // end for each tag
+      } // end for each referecne
+    }
+    
+    if (!decoys.empty()) {
+        bq->forceEndParsing();
+        bq.reset();
+        salmonOpts.jointLog->error(
+        "Salmon is being run in alignment-mode with a SAM/BAM file that contains decoy\n"
+        "sequences (marked as such during salmon indexing). This SAM/BAM file had {}\n"
+        "such sequences tagged in the header. Since alignments to decoys are not\n"
+        "intended for decoy-level quantification, this functionality is not currently\n"
+        "supported.  If you wish to run salmon with this SAM/BAM file, please \n"
+        "filter out / remove decoy transcripts (those tagged with `DS:D`) from the \n"
+        "header, and all SAM/BAM records that represent alignments to decoys \n"
+        "(those tagged with `XT:A:D`). If you believe you are receiving this message\n"
+        "in error, please report this issue on GitHub.", decoys.size());
+        salmonOpts.jointLog->flush();
+        std::stringstream ss;
+        ss << "\nCannot quantify from SAM/BAM file containing decoy transcripts or alignment records!\n";
+        throw std::runtime_error(ss.str());
+    }
 
     // The transcript file existed, so load up the transcripts
     double alpha = 0.005;

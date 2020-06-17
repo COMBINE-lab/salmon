@@ -116,7 +116,7 @@ void BAMQueue<FragT>::reset() {
 template <typename FragT>
 BAMQueue<FragT>::~BAMQueue() {
     fmt::print(stderr, "\nFreeing memory used by read queue . . . ");
-    parsingThread_->join();
+    if (parsingThread_) { parsingThread_->join(); }
     fmt::print(stderr, "\nJoined parsing thread . . . ");
   
     for (auto& file : files_) {
