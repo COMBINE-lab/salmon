@@ -41,7 +41,7 @@ void computeSmoothedEffectiveLengths(size_t maxLength,
                                   ? correctionFactors[maxLen - 1]
                                   : correctionFactors[origLen];
 
-    double effLen = origLen - correctionFactor + 1.0;
+    double effLen = origLen - correctionFactor;
     if (effLen < 1.0) {
       effLen = origLen;
     }

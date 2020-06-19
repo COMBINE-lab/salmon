@@ -204,10 +204,8 @@ target_link_libraries(salmon
     #${SUFFARRAY_LIB64}
     #${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
     m
-    ${FAST_MALLOC_LIB}
     ${LIBLZMA_LIBRARIES}
     ${BZIP2_LIBRARIES}
-    ${TBB_LIBRARIES}
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
     ${LIBRT}
@@ -216,6 +214,8 @@ target_link_libraries(salmon
     alevin_core
     ${CMAKE_DL_LIBS}
     ${ASAN_LIB}
+    ${FAST_MALLOC_LIB}
+    ${TBB_LIBRARIES}
     #ubsan
 )
 
