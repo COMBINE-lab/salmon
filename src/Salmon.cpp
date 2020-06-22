@@ -56,12 +56,11 @@ int help(const std::vector<std::string>& /*opts*/) {
       "        salmon -c|--cite or \n"
       "        salmon [--no-version-check] <COMMAND> [-h | options]\n\n");
   helpMsg.write("Commands:\n");
-  helpMsg.write("     index Create a salmon index\n");
-  helpMsg.write("     quant Quantify a sample\n");
-  helpMsg.write("     alevin single cell analysis\n");
-  helpMsg.write("     swim  Perform super-secret operation\n");
-  helpMsg.write(
-      "     quantmerge Merge multiple quantifications into a single file\n");
+  helpMsg.write("     index      : create a salmon index\n");
+  helpMsg.write("     quant      : quantify a sample\n");
+  helpMsg.write("     alevin     : single cell analysis\n");
+  helpMsg.write("     swim       : perform super-secret operation\n");
+  helpMsg.write("     quantmerge : merge multiple quantifications into a single file\n");
 
   std::cout << helpMsg.str();
   return 0;
