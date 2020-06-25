@@ -212,10 +212,10 @@ target_link_libraries(salmon
     ksw2pp
 ## PUFF_INTEGRATION    
     alevin_core
-    ${CMAKE_DL_LIBS}
     ${ASAN_LIB}
     ${FAST_MALLOC_LIB}
     ${TBB_LIBRARIES}
+    ${CMAKE_DL_LIBS}
     #ubsan
 )
 
@@ -238,8 +238,8 @@ target_link_libraries(unitTests
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
     ${LIBRT}
-    ${CMAKE_DL_LIBS}
     ${ASAN_LIB}
+    ${CMAKE_DL_LIBS}
     #ubsan
 )
 
