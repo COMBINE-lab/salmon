@@ -139,9 +139,6 @@ inline bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& mem
   memCollector.setAltSkip(salmonOpts.mismatchSeedSkip);
   memCollector.setChainSubOptThresh(salmonOpts.pre_merge_chain_sub_thresh);
 
-  double pre_merge_chain_sub_thresh;
-  double post_merge_chain_sub_thresh;
- 
   //Initialize ksw aligner
   ksw2pp::KSW2Config config;
   config.dropoff = -1;
