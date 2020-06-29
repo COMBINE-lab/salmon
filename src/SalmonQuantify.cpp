@@ -954,6 +954,24 @@ void processReads(
                               );
 
       hctr.numMappedAtLeastAKmer += (leftHits.size() > 0 || rightHits.size() > 0) ? 1 : 0;
+      /*
+      salmonOpts.jointLog->info("\n\n mappings for left end \n\n");
+
+      for (auto&& h : leftHits) {
+        salmonOpts.jointLog->info("hit to : {}", qidx->refName( h.first ));
+        for (auto&& mc : *h.second) {
+          salmonOpts.jointLog->info("\t ori : {}, pos : {}, score : {}", (mc.isFw ? "fw" : "rc"),  mc.getTrFirstHitPos(), mc.score);
+        }
+      }
+
+      salmonOpts.jointLog->info("\n\n mappings for right end \n\n");
+      for (auto&& h : rightHits) {
+        salmonOpts.jointLog->info("hit to : {}", qidx->refName( h.first ));
+        for (auto&& mc : *h.second) {
+          salmonOpts.jointLog->info("\t ori : {}, pos : {}, score : {}", (mc.isFw ? "fw" : "rc"), mc.getTrFirstHitPos(), mc.score);
+        }
+      }
+      */
 
       // TODO : PF_INTEGRATION
       /*
@@ -1013,6 +1031,16 @@ void processReads(
         if (initialRound) {
           upperBoundHits += (jointHits.size() > 0);
         }
+
+      /*
+      salmonOpts.jointLog->info("\n\n mappings for joined ends \n\n");
+      for (auto&& h : jointHits) {
+        salmonOpts.jointLog->info("hit to : {}", qidx->refName( h.tid ));
+        salmonOpts.jointLog->info("\t lpos : {}, rpos : {}, score : {}", h.leftClust->getTrFirstHitPos(), 
+        h.rightClust->getTrFirstHitPos(), h.coverage());
+      }
+      */
+
 
         // FIXME: This clears the alignment group, but that contains nothing 
         // at this point.  We should either check only once we are at the alignment
@@ -2387,7 +2415,7 @@ int salmonQuantify(int argc, const char* argv[]) {
       auto hstring = R"(
 Quant
 ==========
-Perform dual-phase, mapping-based estimation of
+Perform dual-phase, selective-alignment-based estimation of
 transcript abundance from RNA-seq reads
 )";
       std::cout << hstring << std::endl;
@@ -2403,7 +2431,7 @@ transcript abundance from RNA-seq reads
     }
 
     std::stringstream commentStream;
-    commentStream << "### salmon (mapping-based) v" << salmon::version << "\n";
+    commentStream << "### salmon (selective-alignment-based) v" << salmon::version << "\n";
     commentStream << "### [ program ] => salmon \n";
     commentStream << "### [ command ] => quant \n";
     for (auto& opt : orderedOptions.options) {

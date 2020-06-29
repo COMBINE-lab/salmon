@@ -102,12 +102,39 @@ namespace salmon {
        "[*deprecated* (no effect; selective-alignment is the default)]")
       ("consensusSlack",
        po::value<float>(&(sopt.consensusSlack))->default_value(salmon::defaults::consensusSlack),
-       "[selective-alignment mode only] : The amount of slack allowed in the quasi-mapping consensus "
-       "mechanism.  Normally, a transcript must cover all hits to be considered for mapping.  "
-       "If this is set to a fraction, X, greater than 0 (and in [0,1)), then a transcript can fail to cover up to "
-       "(100 * X)% of the hits before it is discounted as a mapping candidate.  The default value of this option "
-       "is 0.2 if --validateMappings is given and 0 otherwise."
+       "[selective-alignment mode only] : The amount of slack allowed in the selective-alignment "
+       "filtering mechanism.  If this is set to a fraction, X, greater than 0 (and in [0,1)), then "
+       "uniMEM chains with scores below (100 * X)% of the best chain score for a read, and read pairs "
+       "with a sum of chain scores below (100 * X)% of the best chain score for a read pair "
+       "will be discounted as a mapping candidates.  The default value of this option is 0.35."
        )
+      ("preMergeChainSubThresh",
+       po::value<double>(&(sopt.pre_merge_chain_sub_thresh))->default_value(salmon::defaults::pre_merge_chain_sub_thresh),
+       "[selective-alignment mode only] : The threshold of sub-optimal chains, compared to the best chain on a given "
+       "target, that will be retained and passed to the next phase of mapping.  Specifically, if the best chain "
+       "for a read (or read-end in paired-end mode) to target t has score X_t, then all chains for this read with "
+       "score >= X_t * preMergeChainSubThresh will be retained and passed to subsequent mapping phases.  This value "
+       "must be in the range [0, 1]."
+      )
+      ("postMergeChainSubThresh",
+       po::value<double>(&(sopt.post_merge_chain_sub_thresh))->default_value(salmon::defaults::post_merge_chain_sub_thresh),
+       "[selective-alignment mode only] : The threshold of sub-optimal chain pairs, compared to the best chain pair "
+       "on a given target, that will be retained and passed to the next phase of mapping.  This is different than  "
+       "preMergeChainSubThresh, because this is applied to pairs of chains (from the ends of paired-end reads) after "
+       "merging (i.e. after checking concordancy constraints etc.).  Specifically, if the best chain pair "
+       "to target t has score X_t, then all chain pairs for this read pair with score "
+       ">= X_t * postMergeChainSubThresh will be retained and passed to subsequent mapping phases.  This value "
+       "must be in the range [0, 1]. Note: This option is only meaningful for paired-end libraries, and is ignored "
+       "for single-end libraries."
+      )
+      ("orphanChainSubThresh",
+       po::value<double>(&(sopt.orphan_chain_sub_thresh))->default_value(salmon::defaults::orphan_chain_sub_thresh),
+       "[selective-alignment mode only] : This threshold sets a global sub-optimality threshold for chains "
+       "corresponding to orphan mappings.  That is, if the merging procedure results in no concordant mappings "
+       "then only orphan mappings with a chain score >= orphanChainSubThresh * bestChainScore will be "
+       "retained and passed to subsequent mapping phases.  This value must be in the range [0, 1]. Note: This "
+       "option is only meaningful for paired-end libraries, and is ignored for single-end libraries."
+      )
       ("scoreExp", 
       po::value<double>(&sopt.scoreExp)->default_value(salmon::defaults::scoreExp),
       "[selective-alignment mode only] : The factor by which sub-optimal alignment scores are "

@@ -77,7 +77,7 @@ int dualModeMessage() {
     alignment-based algorithm will be used, otherwise the algorithm for
     quantifying from raw reads will be used.
 
-    to view the help for salmon's quasi-mapping-based mode, use the command
+    to view the help for salmon's selective-alignment-based mode, use the command
 
     salmon quant --help-reads
 

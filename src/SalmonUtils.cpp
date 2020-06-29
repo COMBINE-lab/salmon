@@ -1423,23 +1423,24 @@ std::string getCurrentTimeAsString() {
                         "`--validateMappings` is generally recommended.\n");
   }
 
+  bool is_pe_library = (numLeft + numRight > 0);
+  bool is_se_library = (numUnpaired > 0);
+
   // currently there is some strange use for this in alevin, I think ...
   // check with avi.
-  if (numLeft + numRight > 0 and numUnpaired > 0) {
+  if (is_pe_library and is_se_library) {
       sopt.jointLog->warn("You seem to have passed in both un-paired reads and paired-end reads. "
                           "It is not currently possible to quantify hybrid library types in salmon.");
   }
 
-
-  if (numLeft + numRight > 0) {
+  if (is_pe_library) {
     if (numLeft != numRight) {
       sopt.jointLog->error("You passed paired-end files to salmon, but you passed {} files to --mates1 "
                            "and {} files to --mates2.  You must pass the same number of files to both flags",
                            numLeft, numRight);
       return false;
     }
-   }
-
+  } 
 
   auto checkScoreValue = [&sopt](int16_t score, std::string sname) -> bool {
                            using score_t = int8_t;
@@ -1510,7 +1511,7 @@ std::string getCurrentTimeAsString() {
       sopt.useRangeFactorization = true;
     }
 
-    // If the consensus slack was not set explicitly, then it defaults to 0.2 with
+    // If the consensus slack was not set explicitly, then it defaults to 0.35 with
     // validateMappings
     bool consensusSlackExplicit = !vm["consensusSlack"].defaulted();
     if (!consensusSlackExplicit) {
@@ -1519,6 +1520,52 @@ std::string getCurrentTimeAsString() {
                           "Usage of --validateMappings implies a default consensus slack of 0.2. "
                           "Setting consensusSlack to {}.", sopt.consensusSlack);
     }
+
+    bool pre_merge_chain_sub_thresh_explicit = !vm["preMergeChainSubThresh"].defaulted();
+    bool post_merge_chain_sub_thresh_explicit = !vm["postMergeChainSubThresh"].defaulted();
+    bool orphan_chain_sub_thresh_explicit = !vm["orphanChainSubThresh"].defaulted();
+
+    // for a single-end library, we set 
+    if ( is_se_library ) {
+
+      // The default of preMergeChainSubThresh for single-end libraries is 1.0, so set that here
+      if (!pre_merge_chain_sub_thresh_explicit) {
+        sopt.pre_merge_chain_sub_thresh = 1.0;
+      }
+
+      // for single-end libraries, postMergeChainSubThresh and orphanChainSubThresh are meaningless 
+      if (post_merge_chain_sub_thresh_explicit) {
+        sopt.jointLog->warn("The postMergeChainSubThresh is not meaningful for single-end "
+        "libraries.  Setting this value to 1.0 and ignoring");
+      }
+      if (orphan_chain_sub_thresh_explicit) {
+        sopt.jointLog->warn("The orphanChainSubThresh is not meaningful for single-end "
+        "libraries.  Setting this value to 1.0 and ignoring");
+      }
+      sopt.post_merge_chain_sub_thresh = 1.0;
+      sopt.orphan_chain_sub_thresh = 1.0;
+    }
+
+    // value range check for filters
+    // pre-merge
+    if (sopt.pre_merge_chain_sub_thresh < 0 or sopt.pre_merge_chain_sub_thresh > 1.0) {
+      sopt.jointLog->error("You set preMergeChainSubThresh as {}, but it must in [0,1].", 
+        sopt.pre_merge_chain_sub_thresh);
+      return false;
+    }
+    // post-merge
+    if (sopt.post_merge_chain_sub_thresh < 0 or sopt.post_merge_chain_sub_thresh > 1.0) {
+      sopt.jointLog->error("You set postMergeChainSubThresh as {}, but it must in [0,1].", 
+        sopt.post_merge_chain_sub_thresh);
+      return false;
+    }
+    // orphan
+    if (sopt.orphan_chain_sub_thresh < 0 or sopt.orphan_chain_sub_thresh > 1.0) {
+      sopt.jointLog->error("You set orphanChainSubThresh as {}, but it must in [0,1].", 
+        sopt.orphan_chain_sub_thresh);
+      return false;
+    }
+
 
     if (sopt.mimicBT2 and sopt.mimicStrictBT2) {
       sopt.jointLog->error("You passed both the --mimicBT2 and --mimicStrictBT2 parameters.  These are mutually exclusive. "
@@ -1875,6 +1922,7 @@ bool processQuantOptions(SalmonOpts& sopt,
   //    std::make_shared<spdlog::sinks::ansicolor_sink>(rawConsoleSink);
   auto consoleSink =
       std::make_shared<spdlog::sinks::ansicolor_stderr_sink_mt>();
+  consoleSink->set_color(spdlog::level::warn, consoleSink->magenta);
   auto consoleLog = spdlog::create("stderrLog", {consoleSink});
   auto fileLog = spdlog::create("fileLog", {fileSink});
   std::vector<spdlog::sink_ptr> sinks{consoleSink, fileSink};
