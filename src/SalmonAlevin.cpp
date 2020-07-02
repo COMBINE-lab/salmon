@@ -663,6 +663,7 @@ void processReadsQuasi(
         // adding validate mapping code
         if (tryAlign and !jointHits.empty()) {
           puffaligner.clear();
+          puffaligner.getScoreStatus().reset();
           msi.clear(jointHits.size());
 
           size_t idx{0};

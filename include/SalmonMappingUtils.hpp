@@ -156,6 +156,9 @@ inline bool initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& mem
 
   aconf.refExtendLength = 20;
   aconf.fullAlignment = salmonOpts.fullLengthAlignment;
+  aconf.mismatchPenalty = salmonOpts.mismatchPenalty;
+  aconf.bestStrata = false;
+  aconf.decoyPresent = false;
   aconf.matchScore = salmonOpts.matchScore;
   aconf.gapExtendPenalty = salmonOpts.gapExtendPenalty;
   aconf.gapOpenPenalty = salmonOpts.gapOpenPenalty;

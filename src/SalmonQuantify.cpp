@@ -1104,6 +1104,7 @@ void processReads(
         if (tryAlign and !jointHits.empty()) {
           // clear the aligner for this read
           puffaligner.clear();
+          puffaligner.getScoreStatus().reset();
           msi.clear(jointHits.size());
           
           size_t idx{0};
@@ -1717,6 +1718,7 @@ void processReads(
 
          // clear the aligner for this read
          puffaligner.clear();
+         puffaligner.getScoreStatus().reset();
          msi.clear(jointHits.size());
          
          size_t idx{0};
