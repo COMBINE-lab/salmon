@@ -370,6 +370,7 @@ inline void filterAndCollectAlignmentsDecoy(
 // regardless of the the status of hardFilter (i.e. no sub-optimal decoy mappings will be reported).
 (void) hardFilter;
 (void) minAlnProb;
+(void) scoreExp;
 double estAlnProb = 1.0; //std::exp(-scoreExp * 0.0);
 for (auto& idxTxp : msi.best_decoy_hits) {
   int32_t ctr = idxTxp.first;
