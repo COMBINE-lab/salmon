@@ -1075,7 +1075,7 @@ TranscriptGeneMap transcriptGeneMapFromGTF(const std::string& fname,
   auto logger = spdlog::get("jointLog");
 
   // Use GffReader to read the file
-  GffReader reader(const_cast<char*>(fname.c_str()));
+  GffReader reader(const_cast<char*>(fname.c_str()), true, false);
   // Remember the optional attributes
   reader.readAll(true);
 

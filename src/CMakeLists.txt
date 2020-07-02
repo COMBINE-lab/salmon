@@ -10,6 +10,7 @@ ${Boost_INCLUDE_DIRS}
 ${GAT_SOURCE_DIR}/external/install/include
 ${GAT_SOURCE_DIR}/external/install/include/pufferfish
 ${GAT_SOURCE_DIR}/external/install/include/pufferfish/digestpp
+${LIB_GFF_INCLUDE_DIR}
 #${GAT_SOURCE_DIR}/external/install/include/rapmap
 #${GAT_SOURCE_DIR}/external/install/include/rapmap/digestpp
 ${ICU_INC_DIRS}
@@ -102,6 +103,7 @@ ${Boost_LIBRARY_DIRS}
 ${TBB_LIBRARY_DIRS}
 ${LAPACK_LIBRARY_DIR}
 ${BLAS_LIBRARY_DIR}
+${LIB_GFF_LIBRARY_DIR}
 )
 
 message("TBB_LIBRARIES = ${TBB_LIBRARIES}")

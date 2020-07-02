@@ -723,14 +723,22 @@ message("TBB_LIBRARIES = ${TBB_LIBRARIES}")
 #message("TBB_LIBRARY_DIRS ${TBB_LIBRARY_DIRS}")
 #message("TBB_LIBRARIES    ${TBB_LIBRARIES}   ")
 
-find_package(libgff)
-if(NOT LIBGFF_FOUND)
+find_package(libgff 2.0.0 
+HINTS ${LIB_GFF_PATH} ${GFF_ROOT}
+)
+if(libgff_FOUND)
+  message(STATUS "libgff ver. ${LIB_GFF_VERSION} found.")
+  message(STATUS "    include: ${LIB_GFF_INCLUDE_DIR}")
+  message(STATUS "    lib    : ${LIB_GFF_LIBRARY_DIR}")
+endif()
+
+if(NOT libgff_FOUND)
   message("Build system will compile libgff")
   message("==================================================================")
   externalproject_add(libgff
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/libgff/archive/v1.2.tar.gz -o libgff.tgz &&
-      ${SHASUM} bfabf143da828e8db251104341b934458c19d3e3c592d418d228de42becf98eb libgff.tgz &&
+    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/libgff/archive/v2.0.0.tar.gz -o libgff.tgz &&
+      ${SHASUM} 7656b19459a7ca7d2fd0fcec4f2e0fd0deec1b4f39c703a114e8f4c22d82a99c libgff.tgz &&
       tar -xzvf libgff.tgz
     ##
     #URL https://github.com/COMBINE-lab/libgff/archive/v1.1.tar.gz
@@ -738,11 +746,11 @@ if(NOT LIBGFF_FOUND)
     #URL_HASH SHA1=37b3147d78391d1fabbe6a0df313fbf516abbc6f
     #TLS_VERIFY FALSE
     ##
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-1.2
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-2.0.0
     #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-1.2/build
-    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=${CMAKE_CURRENT_SOURCE_DIR}/external/install
+    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-2.0.0/build
+    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER} -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} 
   )
   externalproject_add_step(libgff makedir
     COMMAND mkdir -p <SOURCE_DIR>/build
@@ -750,6 +758,7 @@ if(NOT LIBGFF_FOUND)
     DEPENDEES download
     DEPENDERS configure)
   set(FETCHED_GFF TRUE)
+  set(LIB_GFF_PATH ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
 endif()
 
 # Because of the way that Apple has changed SIP
