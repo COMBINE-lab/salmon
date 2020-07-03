@@ -667,12 +667,12 @@ void processReadsQuasi(
           msi.clear(jointHits.size());
 
           size_t idx{0};
-          bool isMultimapping = (jointHits.size() > 1);
+          bool is_multimapping = (jointHits.size() > 1);
 
           for (auto &&jointHit : jointHits) {
             // for alevin, currently, we need these to have a mate status of PAIRED_END_RIGHT
             jointHit.mateStatus = MateStatus::PAIRED_END_RIGHT;
-            auto hitScore = puffaligner.calculateAlignments(readSubSeq, jointHit, hctr, isMultimapping, false);
+            auto hitScore = puffaligner.calculateAlignments(readSubSeq, jointHit, hctr, is_multimapping, false);
             bool validScore = (hitScore != invalidScore);
             numMappingsDropped += validScore ? 0 : 1;
             auto tid = qidx->getRefId(jointHit.tid);

@@ -26,7 +26,7 @@ namespace defaults {
   constexpr const double minScoreFraction{0.65};
   constexpr const double pre_merge_chain_sub_thresh{0.75};
   constexpr const double post_merge_chain_sub_thresh{0.9};
-  constexpr const double orphan_chain_sub_thresh{1.0};
+  constexpr const double orphan_chain_sub_thresh{0.9};
   constexpr const double scoreExp{1.0};
   constexpr const int16_t matchScore{2};
   constexpr const int16_t mismatchPenalty{-4};

@@ -1525,8 +1525,9 @@ std::string getCurrentTimeAsString() {
     bool post_merge_chain_sub_thresh_explicit = !vm["postMergeChainSubThresh"].defaulted();
     bool orphan_chain_sub_thresh_explicit = !vm["orphanChainSubThresh"].defaulted();
 
-    // for a single-end library, we set 
-    if ( is_se_library ) {
+    // for a single-end library (or effectively so by being single-cell), we set 
+    // pre_merge_chain_sub_thresh to 1.0 by default
+    if ( is_se_library or sopt.alevinMode ) {
 
       // The default of preMergeChainSubThresh for single-end libraries is 1.0, so set that here
       if (!pre_merge_chain_sub_thresh_explicit) {
@@ -1536,11 +1537,13 @@ std::string getCurrentTimeAsString() {
       // for single-end libraries, postMergeChainSubThresh and orphanChainSubThresh are meaningless 
       if (post_merge_chain_sub_thresh_explicit) {
         sopt.jointLog->warn("The postMergeChainSubThresh is not meaningful for single-end "
-        "libraries.  Setting this value to 1.0 and ignoring");
+        "(or effectively single-end — e.g. tagged-end single-cell) libraries.  Setting this value "
+        "to 1.0 and ignoring");
       }
       if (orphan_chain_sub_thresh_explicit) {
         sopt.jointLog->warn("The orphanChainSubThresh is not meaningful for single-end "
-        "libraries.  Setting this value to 1.0 and ignoring");
+        "(or effectively single-end — e.g. tagged-end single-cell) libraries.  Setting this value "
+        "to 1.0 and ignoring");
       }
       sopt.post_merge_chain_sub_thresh = 1.0;
       sopt.orphan_chain_sub_thresh = 1.0;
