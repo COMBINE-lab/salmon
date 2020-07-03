@@ -84,7 +84,7 @@ namespace salmon {
     mapspec.add_options()
       ("discardOrphansQuasi",
        po::bool_switch(&(sopt.discardOrphansQuasi))->default_value(salmon::defaults::discardOrphansQuasi),
-       "[selective-alignment mode only] : Discard orphan mappings in quasi-mapping "
+       "[selective-alignment mode only] : Discard orphan mappings in selective-alignment "
        "mode.  If this flag is passed "
        "then only paired mappings will be considered toward quantification "
        "estimates.  The default behavior is "
@@ -264,7 +264,7 @@ namespace salmon {
       ("writeMappings,z", po::value<string>(&sopt.qmFileName)
        ->default_value(salmon::defaults::quasiMappingDefaultFile)
        ->implicit_value(salmon::defaults::quasiMappingImplicitFile),
-       "If this option is provided, then the quasi-mapping "
+       "If this option is provided, then the selective-alignment "
        "results will be written out in SAM-compatible "
        "format.  By default, output will be directed to "
        "stdout, but an alternative file name can be "
@@ -358,7 +358,7 @@ namespace salmon {
        "Run naive per equivalence class deduplication, generating only total number of UMIs")
       (
        "noDedup", po::bool_switch()->default_value(alevin::defaults::noDedup),
-       "Stops the pipeline after CB sequence correction and quasi-mapping reads.");
+       "Stops the pipeline after CB sequence correction and selective-alignment of reads.");
     return alevindevs;
   }
 

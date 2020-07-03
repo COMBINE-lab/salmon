@@ -1705,7 +1705,7 @@ bool createAuxMapLoggers_(SalmonOpts& sopt,
     sopt.orphanLinkLog = outLog;
   }
 
-  // Determine what we'll do with quasi-mapping results
+  // Determine what we'll do with selective-alignment results
   bool writeQuasimappings = (sopt.qmFileName != "");
 
   if (writeQuasimappings) {
@@ -1732,7 +1732,7 @@ bool createAuxMapLoggers_(SalmonOpts& sopt,
         // Make sure file opened successfully.
         if (!sopt.qmFile.is_open()) {
           jointLog->error(
-              "Could not create file for writing quasi-mappings [{}]",
+              "Could not create file for writing selective-alignments [{}]",
               sopt.qmFileName);
           return false;
         }
@@ -1906,7 +1906,7 @@ bool processQuantOptions(SalmonOpts& sopt,
     bfs::path indexDirectory(vm["index"].as<string>());
     sopt.indexDirectory = indexDirectory;
 
-    // Determine what we'll do with quasi-mapping results
+    // Determine what we'll do with selective-alignment results
     bool writeQuasimappings = (sopt.qmFileName != "");
 
     // make it larger if we're writing mappings or
