@@ -563,6 +563,7 @@ namespace alevin {
       auto logPath = aopt.outputDirectory / "alevin.log";
       auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(logPath.string(), true);
       auto consoleSink = std::make_shared<spdlog::sinks::ansicolor_stderr_sink_mt>();
+      consoleSink->set_color(spdlog::level::warn, consoleSink->magenta);
       std::vector<spdlog::sink_ptr> sinks{consoleSink, fileSink};
       aopt.jointLog = spdlog::create("alevinLog", std::begin(sinks), std::end(sinks));
 
