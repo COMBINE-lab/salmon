@@ -34,15 +34,12 @@ FragmentStartPositionDistribution::FragmentStartPositionDistribution(
   }
 }
 
-inline void logAddMass(tbb::atomic<double>& bin, double newMass) {
-  double oldVal = bin;
-  double retVal = oldVal;
-  double newVal = 0.0;
-  do {
-    oldVal = retVal;
+inline void logAddMass(std::atomic<double>& bin, double newMass) {
+  double oldVal = bin.load();
+  double newVal;
+  do{
     newVal = salmon::math::logAdd(oldVal, newMass);
-    retVal = bin.compare_and_swap(newVal, oldVal);
-  } while (retVal != oldVal);
+  } while (!bin.compare_exchange_strong(oldVal, newVal));
 }
 
 void FragmentStartPositionDistribution::addVal(int32_t hitPos, uint32_t txpLen,

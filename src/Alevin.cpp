@@ -823,6 +823,7 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
                       std::vector<std::string> readFiles){
   bool isOptionsOk = aut::processAlevinOpts(aopt, sopt, noTgMap, vm);
   if (!isOptionsOk){
+    aopt.jointLog->flush();
     exit(1);
   }
 
@@ -1003,7 +1004,7 @@ salmon-based processing of single-cell RNA-seq data.
     if (celseq) validate_num_protocols += 1;
     if (celseq2) validate_num_protocols += 1;
     if (quartzseq2) validate_num_protocols += 1;
-    if (custom) validate_num_protocols += 1;
+    if (custom and !noTgMap) validate_num_protocols += 1;
 
     if ( validate_num_protocols != 1 ) {
       fmt::print(stderr, "ERROR: Please specify one and only one scRNA protocol;");

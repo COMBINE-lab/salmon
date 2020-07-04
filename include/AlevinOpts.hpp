@@ -40,6 +40,9 @@ struct AlevinOpts {
   bool dumpBFH;
   // dump per cell level umi-graph
   bool dumpUmiGraph;
+  // dump per cell level de-duplicated 
+  // equivalence class
+  bool dumpCellEq;
   //Stop progress sumps
   bool quiet;
   //flag for deduplication
@@ -80,6 +83,8 @@ struct AlevinOpts {
   uint32_t maxNumBarcodes;
   // number of bootstraps to perform
   uint32_t numBootstraps;
+  // number of gibbs samples to perform
+  uint32_t numGibbsSamples;
   // force the number of cells
   uint32_t forceCells;
   // define a close upper bound on expected number of cells

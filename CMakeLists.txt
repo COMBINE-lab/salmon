@@ -68,7 +68,7 @@ message(STATUS "CMAKE_BUILD_TYPE = ${CMAKE_BUILD_TYPE}")
 ## Set the standard required compile flags
 # Nov 18th --- removed -DHAVE_CONFIG_H
 set(REMOVE_WARNING_FLAGS "-Wno-unused-function;-Wno-unused-local-typedefs")
-set(TGT_COMPILE_FLAGS "-ftree-vectorize;-funroll-loops;-fPIC;-fomit-frame-pointer;-O3;-DNDEBUG;-DSTX_NO_STD_STRING_VIEW")
+set(TGT_COMPILE_FLAGS "-ftree-vectorize;-funroll-loops;-fPIC;-fomit-frame-pointer;-O3;-DNDEBUG;-DSTX_NO_STD_STRING_VIEW;-D__STDC_FORMAT_MACROS")
 set(TGT_WARN_FLAGS "-Wall;-Wno-unknown-pragmas;-Wno-reorder;-Wno-unused-variable;-Wreturn-type;-Werror=return-type;${REMOVE_WARNING_FLAGS}")
 #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address")
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
@@ -596,10 +596,15 @@ if (NOT CEREAL_FOUND)
 endif()
 
 ## Try and find TBB first
-find_package(TBB 2018.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy)
+find_package(TBB 2019.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy)
 
+## NOTE: we actually require at least 2019 U4 or greater
+## since we are using tbb::global_control.  However, they 
+## seem not to have tagged minor version numbers in their 
+## source.  Check before release if we can bump to the 2020
+## version (requires having tbb 2020 for OSX).
 if (${TBB_FOUND})
-  if (${TBB_VERSION} VERSION_GREATER_EQUAL 2018.0)
+  if (${TBB_VERSION} VERSION_GREATER_EQUAL 2019.0)
   message("FOUND SUITABLE TBB VERSION : ${TBB_VERSION}")
   set(TBB_TARGET_EXISTED TRUE)
   else()
@@ -627,7 +632,7 @@ endif()
 message("Build system will fetch and build Intel Threading Building Blocks")
 message("==================================================================")
 # These are useful for the custom install step we'll do later
-set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/oneTBB-2019_U8)
+set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/oneTBB-2020.2)
 set(TBB_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
 
 if("${TBB_COMPILER}" STREQUAL "gcc")
@@ -640,10 +645,10 @@ set(TBB_CXXFLAGS "${TBB_CXXFLAGS} ${CXXSTDFLAG}")
 
 externalproject_add(libtbb
   DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-  DOWNLOAD_COMMAND curl -k -L https://github.com/intel/tbb/archive/2019_U8.tar.gz -o tbb-2019_U8.tgz &&
-    ${SHASUM} 6b540118cbc79f9cbc06a35033c18156c21b84ab7b6cf56d773b168ad2b68566 tbb-2019_U8.tgz &&
-    tar -xzvf tbb-2019_U8.tgz
-  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/oneTBB-2019_U8 
+  DOWNLOAD_COMMAND curl -k -L https://github.com/oneapi-src/oneTBB/archive/v2020.2.tar.gz  -o tbb-2020_U2.tgz &&
+    ${SHASUM} 4804320e1e6cbe3a5421997b52199e3c1a3829b2ecb6489641da4b8e32faf500 tbb-2020_U2.tgz &&
+    tar -xzvf tbb-2020_U2.tgz
+  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/oneTBB-2020.2
   INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
   PATCH_COMMAND "${TBB_PATCH_STEP}"
   CONFIGURE_COMMAND ""
@@ -651,9 +656,6 @@ externalproject_add(libtbb
   INSTALL_COMMAND sh -c "mkdir -p ${TBB_INSTALL_DIR}/include && mkdir -p ${TBB_INSTALL_DIR}/lib && cp ${TBB_SOURCE_DIR}/build/LIBS_release/*.${SHARED_LIB_EXTENSION}* ${TBB_INSTALL_DIR}/lib && cp -r ${TBB_SOURCE_DIR}/include/* ${TBB_INSTALL_DIR}/include"
   BUILD_IN_SOURCE 1
 )
-
-
-
 
 set(RECONFIG_FLAGS ${RECONFIG_FLAGS} -DTBB_WILL_RECONFIGURE=FALSE -DTBB_RECONFIGURE=TRUE)
 externalproject_add_step(libtbb reconfigure
@@ -721,14 +723,22 @@ message("TBB_LIBRARIES = ${TBB_LIBRARIES}")
 #message("TBB_LIBRARY_DIRS ${TBB_LIBRARY_DIRS}")
 #message("TBB_LIBRARIES    ${TBB_LIBRARIES}   ")
 
-find_package(libgff)
-if(NOT LIBGFF_FOUND)
+find_package(libgff 2.0.0 
+HINTS ${LIB_GFF_PATH} ${GFF_ROOT}
+)
+if(libgff_FOUND)
+  message(STATUS "libgff ver. ${LIB_GFF_VERSION} found.")
+  message(STATUS "    include: ${LIB_GFF_INCLUDE_DIR}")
+  message(STATUS "    lib    : ${LIB_GFF_LIBRARY_DIR}")
+endif()
+
+if(NOT libgff_FOUND)
   message("Build system will compile libgff")
   message("==================================================================")
   externalproject_add(libgff
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/libgff/archive/v1.2.tar.gz -o libgff.tgz &&
-      ${SHASUM} bfabf143da828e8db251104341b934458c19d3e3c592d418d228de42becf98eb libgff.tgz &&
+    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/libgff/archive/v2.0.0.tar.gz -o libgff.tgz &&
+      ${SHASUM} 7656b19459a7ca7d2fd0fcec4f2e0fd0deec1b4f39c703a114e8f4c22d82a99c libgff.tgz &&
       tar -xzvf libgff.tgz
     ##
     #URL https://github.com/COMBINE-lab/libgff/archive/v1.1.tar.gz
@@ -736,11 +746,11 @@ if(NOT LIBGFF_FOUND)
     #URL_HASH SHA1=37b3147d78391d1fabbe6a0df313fbf516abbc6f
     #TLS_VERIFY FALSE
     ##
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-1.2
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-2.0.0
     #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-1.2/build
-    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=${CMAKE_CURRENT_SOURCE_DIR}/external/install
+    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-2.0.0/build
+    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER} -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} 
   )
   externalproject_add_step(libgff makedir
     COMMAND mkdir -p <SOURCE_DIR>/build
@@ -748,6 +758,7 @@ if(NOT LIBGFF_FOUND)
     DEPENDEES download
     DEPENDERS configure)
   set(FETCHED_GFF TRUE)
+  set(LIB_GFF_PATH ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
 endif()
 
 # Because of the way that Apple has changed SIP

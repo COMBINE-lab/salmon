@@ -4,13 +4,14 @@
 #include <boost/iostreams/filtering_stream.hpp>
 
 #include "UtilityFunctions.hpp"
-#include "jellyfish/mer_dna.hpp"
+//#include "jellyfish/mer_dna.hpp"
 //#include "rapmap/Kmer.hpp"
+#include "pufferfish/Kmer.hpp"
 #include <Eigen/Dense>
 #include <cmath>
 
-using Mer = jellyfish::mer_dna_ns::mer_base_static<uint64_t, 4>;
-//using Mer = combinelib::kmers::Kmer<32,2>;
+//using Mer = jellyfish::mer_dna_ns::mer_base_static<uint64_t, 4>;
+using SBMer = combinelib::kmers::Kmer<32,4>;
 
 class SBModel {
 public:
@@ -31,13 +32,13 @@ public:
   }
 
   bool addSequence(const char* seqIn, bool revCmp, double weight = 1.0);
-  bool addSequence(const Mer& mer, double weight);
+  bool addSequence(const SBMer& sbmer, double weight);
 
   Eigen::MatrixXd& counts();
   Eigen::MatrixXd& marginals();
 
   double evaluateLog(const char* seqIn);
-  double evaluateLog(const Mer& mer);
+  double evaluateLog(const SBMer& sbmer);
 
   bool normalize();
 
@@ -88,10 +89,12 @@ private:
   Eigen::MatrixXd _probs;
   Eigen::MatrixXd _marginals;
 
-  Mer _mer;
+  //Mer _mer;
+  SBMer _sbmer;
   std::vector<int32_t> _order;
   std::vector<int32_t> _shifts;
   std::vector<int32_t> _widths;
+  constexpr static const double _prior_prob = 1e-10;
 };
 
 #endif //__SB_MODEL_HPP__

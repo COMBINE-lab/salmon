@@ -9,6 +9,7 @@
 
 #include "FragmentLengthDistribution.hpp"
 #include "SalmonMath.hpp"
+#include "SalmonUtils.hpp"
 #include <boost/assign.hpp>
 #include <boost/math/distributions/binomial.hpp>
 #include <boost/math/distributions/normal.hpp>
@@ -22,7 +23,7 @@ using namespace std;
 FragmentLengthDistribution::FragmentLengthDistribution(
     double alpha, size_t max_val, double prior_mu, double prior_sigma,
     size_t kernel_n, double kernel_p, size_t bin_size)
-    : hist_(max_val / bin_size + 1), cachedCMF_(hist_.size()),
+    : /*hist_(max_val / bin_size + 1),*/ cachedCMF_(hist_.size()),
       haveCachedCMF_(false), totMass_(salmon::math::LOG_0),
       sum_(salmon::math::LOG_0), min_(max_val / bin_size), binSize_(bin_size) {
 
@@ -38,6 +39,9 @@ FragmentLengthDistribution::FragmentLengthDistribution(
     boost::math::normal norm(prior_mu / bin_size,
                              prior_sigma / (bin_size * bin_size));
 
+    std::vector<std::atomic<double>> hist_tmp(max_val / bin_size + 1);
+    std::swap(hist_, hist_tmp);
+
     for (size_t i = 0; i <= max_val; ++i) {
       double norm_mass =
           boost::math::cdf(norm, i + 0.5) - boost::math::cdf(norm, i - 0.5);
@@ -45,16 +49,17 @@ FragmentLengthDistribution::FragmentLengthDistribution(
       if (norm_mass != 0) {
         mass = tot + log(norm_mass);
       }
-      hist_[i].compare_and_swap(mass, hist_[i]);
-      sum_.compare_and_swap(logAdd(sum_, log((double)i) + mass), sum_);
-      totMass_.compare_and_swap(logAdd(totMass_, mass), totMass_);
+      hist_[i].store(mass);
+      sum_.store(logAdd(sum_, log((double)i) + mass));
+      totMass_.store(logAdd(totMass_, mass));
     }
   } else {
-    hist_ =
-        vector<tbb::atomic<double>>(max_val + 1, tot - log((double)max_val));
-    hist_[0].compare_and_swap(salmon::math::LOG_0, hist_[0]);
-    sum_.compare_and_swap(
-        hist_[1] + log((double)(max_val * (max_val + 1))) - log(2.), sum_);
+    std::vector<std::atomic<double>> hist_tmp(max_val + 1);
+    std::swap(hist_, hist_tmp);
+    std::fill(hist_.begin(), hist_.end(), tot - log((double)max_val));
+    
+    hist_[0].store(salmon::math::LOG_0);
+    sum_.store(hist_[1] + log((double)(max_val * (max_val + 1))) - log(2.));
     totMass_ = tot;
   }
 
@@ -96,28 +101,9 @@ void FragmentLengthDistribution::addVal(size_t len, double mass) {
   for (size_t i = 0; i < kernel_.size(); i++) {
     if (offset > 0 && offset < hist_.size()) {
       double kMass = mass + kernel_[i];
-      double oldVal = hist_[offset];
-      double retVal = oldVal;
-      double newVal = 0.0;
-      do {
-        oldVal = retVal;
-        newVal = logAdd(oldVal, kMass);
-        retVal = hist_[offset].compare_and_swap(newVal, oldVal);
-      } while (retVal != oldVal);
-
-      retVal = sum_;
-      do {
-        oldVal = retVal;
-        newVal = logAdd(oldVal, log(static_cast<double>(offset)) + kMass);
-        retVal = sum_.compare_and_swap(newVal, oldVal);
-      } while (retVal != oldVal);
-
-      retVal = totMass_;
-      do {
-        oldVal = retVal;
-        newVal = logAdd(oldVal, kMass);
-        retVal = totMass_.compare_and_swap(newVal, oldVal);
-      } while (retVal != oldVal);
+      salmon::utils::incLoopLog(hist_[offset], kMass);
+      salmon::utils::incLoopLog(sum_, std::log(static_cast<double>(offset)) + kMass);
+      salmon::utils::incLoopLog(totMass_, kMass);
     }
     offset++;
   }

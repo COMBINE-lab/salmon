@@ -260,6 +260,9 @@ struct SalmonOpts {
   bool validateMappings;
   bool disableSA{false}; // this cannot be done right now.
   float consensusSlack;
+  double pre_merge_chain_sub_thresh;
+  double post_merge_chain_sub_thresh;
+  double orphan_chain_sub_thresh;
   bool disableChainingHeuristic;
   bool disableAlignmentCache;
   double minScoreFraction;

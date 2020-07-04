@@ -29,7 +29,6 @@
 #include "tbb/parallel_for.h"
 #include "tbb/parallel_for_each.h"
 #include "tbb/parallel_sort.h"
-#include "tbb/task_scheduler_init.h"
 
 #include "GenomicFeature.hpp"
 #include "SalmonIndex.hpp"

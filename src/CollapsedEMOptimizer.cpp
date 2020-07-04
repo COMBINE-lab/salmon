@@ -8,7 +8,8 @@
 #include "tbb/parallel_for_each.h"
 #include "tbb/parallel_reduce.h"
 #include "tbb/partitioner.h"
-#include "tbb/task_scheduler_init.h"
+// <-- deprecated in TBB --> #include "tbb/task_scheduler_init.h"
+#include "tbb/global_control.h"
 
 //#include "fastapprox.h"
 #include <boost/math/special_functions/digamma.hpp>
@@ -41,7 +42,7 @@ constexpr double minWeight = std::numeric_limits<double>::min();
 // A bit more conservative of a minimum as an argument to the digamma function.
 constexpr double digammaMin = 1e-10;
 
-double normalize(std::vector<tbb::atomic<double>>& vec) {
+double normalize(std::vector<std::atomic<double>>& vec) {
   double sum{0.0};
   for (auto& v : vec) {
     sum += v;
@@ -721,7 +722,8 @@ template <typename ExpT>
 bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
                                     double relDiffTolerance, uint32_t maxIter) {
 
-  tbb::task_scheduler_init tbbScheduler(sopt.numThreads);
+  // <-- deprecated in TBB --> tbb::task_scheduler_init tbbScheduler(sopt.numThreads);
+  tbb::global_control c(tbb::global_control::max_allowed_parallelism, sopt.numThreads);
   std::vector<Transcript>& transcripts = readExp.transcripts();
   std::vector<bool> available(transcripts.size(), false);
 
@@ -736,8 +738,8 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
 
   using VecT = CollapsedEMOptimizer::VecType;
   // With atomics
-  VecType alphas(transcripts.size(), 0.0);
-  VecType alphasPrime(transcripts.size(), 0.0);
+  VecType alphas(transcripts.size());
+  VecType alphasPrime(transcripts.size());
   VecType expTheta(transcripts.size());
 
   Eigen::VectorXd effLens(transcripts.size());
@@ -798,7 +800,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   // over to the alphas
   if (sopt.initUniform) {
     for (size_t i = 0; i < alphas.size(); ++i) {
-      alphas[i] = alphasPrime[i];
+      alphas[i].store(alphasPrime[i].load());
       alphasPrime[i] = 1.0;
     }
   } else { // otherwise, initalize with a linear combination of the true and
@@ -940,8 +942,8 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
           converged = false;
         }
       }
-      alphas[i] = alphasPrime[i];
-      alphasPrime[i] = 0.0;
+      alphas[i].store(alphasPrime[i].load());
+      alphasPrime[i].store(0.0);
     }
 
     /* -- v0.8.x

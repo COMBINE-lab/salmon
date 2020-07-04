@@ -49,7 +49,7 @@
 
 
 // Jellyfish 2 include
-#include "jellyfish/mer_dna.hpp"
+// #include "jellyfish/mer_dna.hpp"
 
 // Boost Includes
 #include <boost/container/flat_map.hpp>
@@ -70,7 +70,6 @@
 #include "tbb/parallel_for_each.h"
 #include "tbb/parallel_reduce.h"
 #include "tbb/partitioner.h"
-#include "tbb/task_scheduler_init.h"
 
 // logger includes
 #include "spdlog/spdlog.h"
@@ -418,8 +417,8 @@ void processReadsQuasi(
     observedBiasParams
     .seqBiasModelRC; // readExp.readBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
   // k-mers for sequence bias context
-  Mer leftMer;
-  Mer rightMer;
+  // Mer leftMer;
+  // Mer rightMer;
 
   //auto expectedLibType = rl.format();
 
@@ -450,7 +449,6 @@ void processReadsQuasi(
   std::vector<pufferfish::util::JointMems> jointHits;
   PairedAlignmentFormatter<IndexT*> formatter(qidx);
   pufferfish::util::QueryCache qc;
-  phmap::flat_hash_map<uint32_t, std::pair<int32_t, int32_t>> bestScorePerTranscript;
 
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
   bool mimicBT2 = salmonOpts.mimicBT2;
@@ -468,9 +466,6 @@ void processReadsQuasi(
   //////////////////////
   // NOTE: validation mapping based new parameters
   std::string rc1; rc1.reserve(300);
-  // will hold the permutation to use to put the transcripts in order
-  std::vector<std::pair<int32_t, int32_t>> perm;
-  //std::vector<salmon::mapping::CacheEntry> alnCache; alnCache.reserve(15);
   AlnCacheMap alnCache; alnCache.reserve(16);
 
   /*
@@ -482,10 +477,15 @@ void processReadsQuasi(
   }
   */
 
-  size_t numDropped{0};
   size_t numMappingsDropped{0};
   size_t numDecoyFrags{0};
   const double decoyThreshold = salmonOpts.decoyThreshold;
+
+  salmon::mapping_utils::MappingScoreInfo msi(decoyThreshold);
+  // we only collect detailed decoy information if we will be 
+  // writing output to SAM.
+  msi.collect_decoys(writeQuasimappings);
+
   std::string readSubSeq;
   //////////////////////
 
@@ -504,6 +504,12 @@ void processReadsQuasi(
 
     LibraryFormat expectedLibraryFormat = rl.format();
 
+    std::string extraBAMtags;
+    if(writeQuasimappings) {
+    	size_t reserveSize { alevinOpts.protocol.barcodeLength + alevinOpts.protocol.umiLength + 12};
+    	extraBAMtags.reserve(reserveSize);
+    }
+
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
       auto& rp = rg[i];
       readLenLeft = rp.first.seq.length();
@@ -515,7 +521,6 @@ void processReadsQuasi(
       jointHitGroup.clearAlignments();
       auto& jointAlignments= jointHitGroup.alignments();
 
-      perm.clear();
       hits.clear();
       jointHits.clear();
       memCollector.clear();
@@ -530,6 +535,7 @@ void processReadsQuasi(
       std::string umi;//, barcode;
       nonstd::optional<std::string> barcode;
       nonstd::optional<uint32_t> barcodeIdx;
+      extraBAMtags.clear();
       bool seqOk;
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
@@ -588,6 +594,12 @@ void processReadsQuasi(
 
             if(isUmiIdxOk){
               jointHitGroup.setUMI(umiIdx.word(0));
+	      if (writeQuasimappings) {
+	      	extraBAMtags += "\tCB:Z:";
+	      	extraBAMtags += *barcode;
+	      	extraBAMtags += "\tUR:Z:";
+	      	extraBAMtags += umi;
+	      }
 
               auto seq_len = rp.second.seq.size();
               if (alevinOpts.trimRight > 0) {
@@ -651,27 +663,16 @@ void processReadsQuasi(
         // adding validate mapping code
         if (tryAlign and !jointHits.empty()) {
           puffaligner.clear();
-          bestScorePerTranscript.clear();
+          puffaligner.getScoreStatus().reset();
+          msi.clear(jointHits.size());
 
-          //auto* r1 = readSubSeq.data();
-          //auto l1 = static_cast<int32_t>(readSubSeq.length());
-
-          // the best scores start out as invalid
-          /*
-          int32_t bestScore = invalidScore;
-          int32_t secondBestScore = invalidScore;
-          int32_t bestDecoyScore = invalidScore;
-          */
-          salmon::mapping_utils::MappingScoreInfo msi = {invalidScore, invalidScore, invalidScore, decoyThreshold};
-
-          std::vector<decltype(msi.bestScore)> scores(jointHits.size(), invalidScore);
           size_t idx{0};
-          bool isMultimapping = (jointHits.size() > 1);
+          bool is_multimapping = (jointHits.size() > 1);
 
           for (auto &&jointHit : jointHits) {
             // for alevin, currently, we need these to have a mate status of PAIRED_END_RIGHT
             jointHit.mateStatus = MateStatus::PAIRED_END_RIGHT;
-            auto hitScore = puffaligner.calculateAlignments(readSubSeq, jointHit, hctr, isMultimapping, false);
+            auto hitScore = puffaligner.calculateAlignments(readSubSeq, jointHit, hctr, is_multimapping, false);
             bool validScore = (hitScore != invalidScore);
             numMappingsDropped += validScore ? 0 : 1;
             auto tid = qidx->getRefId(jointHit.tid);
@@ -686,18 +687,13 @@ void processReadsQuasi(
                             (!jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::SA));
 
             salmon::mapping_utils::updateRefMappings(tid, hitScore, isCompat, idx, transcripts, invalidScore, 
-                                                     msi,
-                                                     //bestScore, secondBestScore, bestDecoyScore,
-                                                     scores, bestScorePerTranscript, perm);
+                                                     msi);
             ++idx;
           }
 
-          //bool bestHitDecoy = (msi.bestScore < msi.bestDecoyScore);
           bool bestHitDecoy = msi.haveOnlyDecoyMappings();
           if (msi.bestScore > invalidScore and !bestHitDecoy) {
             salmon::mapping_utils::filterAndCollectAlignments(jointHits,
-                                                              scores,
-                                                              perm,
                                                               readSubSeq.length(),
                                                               readSubSeq.length(),
                                                               false, // true for single-end false otherwise
@@ -706,29 +702,38 @@ void processReadsQuasi(
                                                               salmonOpts.scoreExp,
                                                               salmonOpts.minAlnProb,
                                                               msi,
-                                                              /*
-                                                              bestScore,
-                                                              secondBestScore,
-                                                              bestDecoyScore,
-                                                              */
                                                               jointAlignments);
             if (!jointAlignments.empty()) {
               mapType = salmon::utils::MappingType::SINGLE_MAPPED;
             }
           } else {
             numDecoyFrags += bestHitDecoy ? 1 : 0;
-            ++numDropped;
-            jointHitGroup.clearAlignments();
             mapType = (bestHitDecoy) ? salmon::utils::MappingType::DECOY : salmon::utils::MappingType::UNMAPPED;
+            if (bestHitDecoy) {
+              salmon::mapping_utils::filterAndCollectAlignmentsDecoy(
+                  jointHits, readSubSeq.length(),
+                  readSubSeq.length(),
+                  false, // true for single-end false otherwise
+                  tryAlign, hardFilter, salmonOpts.scoreExp,
+                  salmonOpts.minAlnProb, msi,
+                  jointAlignments);
+            } else {
+              jointHitGroup.clearAlignments();
+            }
           }
         } //end-if validate mapping
 
         if (writeQuasimappings) {
-          writeAlignmentsToStream(rp, formatter, jointAlignments, sstream, true, true);
-          /*
-          rapmap::utils::writeAlignmentsToStream(rp, formatter,
-                                                 hctr, jointHits, sstream);
-          */
+          writeAlignmentsToStream(rp, formatter, jointAlignments, sstream, true, true, extraBAMtags);
+        }
+
+        // We've kept decoy aignments around to this point so that we can
+        // potentially write these alignments to the SAM file.  However, if 
+        // we got to this point and only have decoy mappings, then clear the 
+        // mappings here because none of the procesing below is relevant for 
+        // decoys.
+        if (mapType == salmon::utils::MappingType::DECOY) {
+          jointHitGroup.clearAlignments();
         }
 
       if (writeUnmapped and mapType != salmon::utils::MappingType::SINGLE_MAPPED) {

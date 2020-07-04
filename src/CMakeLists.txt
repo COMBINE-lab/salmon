@@ -10,6 +10,7 @@ ${Boost_INCLUDE_DIRS}
 ${GAT_SOURCE_DIR}/external/install/include
 ${GAT_SOURCE_DIR}/external/install/include/pufferfish
 ${GAT_SOURCE_DIR}/external/install/include/pufferfish/digestpp
+${LIB_GFF_INCLUDE_DIR}
 #${GAT_SOURCE_DIR}/external/install/include/rapmap
 #${GAT_SOURCE_DIR}/external/install/include/rapmap/digestpp
 ${ICU_INC_DIRS}
@@ -102,6 +103,7 @@ ${Boost_LIBRARY_DIRS}
 ${TBB_LIBRARY_DIRS}
 ${LAPACK_LIBRARY_DIR}
 ${BLAS_LIBRARY_DIR}
+${LIB_GFF_LIBRARY_DIR}
 )
 
 message("TBB_LIBRARIES = ${TBB_LIBRARIES}")
@@ -206,16 +208,16 @@ target_link_libraries(salmon
     m
     ${LIBLZMA_LIBRARIES}
     ${BZIP2_LIBRARIES}
-    ${TBB_LIBRARIES}
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
-    ${FAST_MALLOC_LIB}
     ${LIBRT}
     ksw2pp
 ## PUFF_INTEGRATION    
     alevin_core
-    ${CMAKE_DL_LIBS}
     ${ASAN_LIB}
+    ${FAST_MALLOC_LIB}
+    ${TBB_LIBRARIES}
+    ${CMAKE_DL_LIBS}
     #ubsan
 )
 
@@ -238,8 +240,8 @@ target_link_libraries(unitTests
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
     ${LIBRT}
-    ${CMAKE_DL_LIBS}
     ${ASAN_LIB}
+    ${CMAKE_DL_LIBS}
     #ubsan
 )
 

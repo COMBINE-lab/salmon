@@ -7,7 +7,6 @@
 #include "SalmonStringUtils.hpp"
 #include "SalmonUtils.hpp"
 #include "SequenceBiasModel.hpp"
-#include "tbb/atomic.h"
 #include "stx/string_view.hpp"
 #include "IOUtils.hpp"
 #include <atomic>
@@ -480,6 +479,8 @@ public:
     }
   }
 
+  bool have_sequence() const { if (Sequence_) { return true; } else { return false; } }
+  
   const char* Sequence() const { return Sequence_.get(); }
 
   uint8_t* SAMSequence() const { return const_cast<uint8_t*>(SAMSequence_.data()); }
@@ -675,10 +676,10 @@ private:
   std::atomic<size_t> uniqueCount_;
   std::atomic<size_t> totalCount_;
   double priorMass_;
-  tbb::atomic<double> mass_;
-  tbb::atomic<double> sharedCount_;
-  tbb::atomic<double> cachedEffectiveLength_;
-  tbb::atomic<double> avgMassBias_;
+  std::atomic<double> mass_;
+  std::atomic<double> sharedCount_;
+  std::atomic<double> cachedEffectiveLength_;
+  std::atomic<double> avgMassBias_;
   uint32_t lengthClassIndex_;
   double logPerBasePrior_;
   // In a paired-end protocol, a transcript has

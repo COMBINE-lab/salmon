@@ -42,8 +42,8 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs,
 
   constexpr char bases[] = {'A', 'C', 'G', 'T'};
   // Create a random uniform distribution
-  std::random_device rd;
-  std::default_random_engine eng(rd());
+  constexpr const uint64_t randseed{271828}; 
+  std::default_random_engine eng(randseed);
   std::uniform_int_distribution<> dis(0, 3);
   uint64_t numNucleotidesReplaced{0};
 

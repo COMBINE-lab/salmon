@@ -2,7 +2,7 @@
 #define EM_UTILS_HPP
 
 #include <vector>
-#include "tbb/atomic.h"
+#include <atomic>
 #include "Transcript.hpp"
 
 template <typename VecT>

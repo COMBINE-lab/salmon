@@ -74,14 +74,14 @@ void EMUpdate_<std::vector<double>>(std::vector<std::vector<uint32_t>>& txpGroup
                                     std::vector<double>& alphaOut);
 
 template
-void EMUpdate_<std::vector<tbb::atomic<double>>>(std::vector<std::vector<uint32_t>>& txpGroupLabels,
+void EMUpdate_<std::vector<std::atomic<double>>>(std::vector<std::vector<uint32_t>>& txpGroupLabels,
                                                  std::vector<std::vector<double>>& txpGroupCombinedWeights,
                                                  const std::vector<uint64_t>& txpGroupCounts,
-                                                 const std::vector<tbb::atomic<double>>& alphaIn,
-                                                 std::vector<tbb::atomic<double>>& alphaOut);
+                                                 const std::vector<std::atomic<double>>& alphaIn,
+                                                 std::vector<std::atomic<double>>& alphaOut);
 
 template
 double truncateCountVector<std::vector<double>>(std::vector<double>& alphas, double cutoff);
 
 template
-double truncateCountVector<std::vector<tbb::atomic<double>>>(std::vector<tbb::atomic<double>>& alphas, double cutoff);
+double truncateCountVector<std::vector<std::atomic<double>>>(std::vector<std::atomic<double>>& alphas, double cutoff);

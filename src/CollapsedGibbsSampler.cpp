@@ -12,7 +12,8 @@
 #include "tbb/parallel_for_each.h"
 #include "tbb/parallel_reduce.h"
 #include "tbb/partitioner.h"
-#include "tbb/task_scheduler_init.h"
+// <-- deprecated in TBB --> #include "tbb/task_scheduler_init.h"
+#include "tbb/global_control.h"
 
 //#include "fastapprox.h"
 #include <boost/filesystem.hpp>
@@ -308,7 +309,10 @@ bool CollapsedGibbsSampler::sample(
 
   namespace bfs = boost::filesystem;
   auto& jointLog = sopt.jointLog;
-  tbb::task_scheduler_init tbbScheduler(sopt.numThreads);
+  
+  // <-- deprecated in TBB --> tbb::task_scheduler_init tbbScheduler(sopt.numThreads);
+  tbb::global_control c(tbb::global_control::max_allowed_parallelism, sopt.numThreads);
+
   std::vector<Transcript>& transcripts = readExp.transcripts();
 
   // Fill in the effective length vector

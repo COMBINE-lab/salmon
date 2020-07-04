@@ -16,7 +16,6 @@ extern "C" {
 #include <memory>
 #include <mutex>
 #include <random>
-#include <tbb/atomic.h>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -174,9 +173,13 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
   auto orphanProb = salmonOpts.discardOrphansAln ? LOG_0 : LOG_EPSILON;
 
   // k-mers for sequence bias
-  Mer leftMer;
-  Mer rightMer;
-  Mer context;
+  //Mer leftMer;
+  //Mer rightMer;
+  //Mer context;
+  SBMer leftMer;
+  SBMer rightMer;
+  SBMer context;
+
 
   auto& refs = alnLib.transcripts();
   auto& clusterForest = alnLib.clusterForest();
@@ -208,6 +211,13 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
 
   distribution_utils::LogCMFCache logCMFCache(&fragLengthDist, singleEndLib);
 
+  const size_t maxCacheLen{salmonOpts.fragLenDistMax};
+  // Caches to avoid fld updates _within_ the set of alignments of a fragment 
+  auto fetchPMF = [&fragLengthDist](size_t l) -> double { return fragLengthDist.pmf(l); };
+  auto fetchCMF = [&fragLengthDist](size_t l) -> double { return fragLengthDist.cmf(l); };
+  distribution_utils::IndexedVersionedCache<double> pmfCache(maxCacheLen);
+  distribution_utils::IndexedVersionedCache<double> cmfCache(maxCacheLen);
+  
   std::chrono::microseconds sleepTime(1);
   MiniBatchInfo<AlignmentGroup<FragT*>>* miniBatch = nullptr;
   bool updateCounts = initialRound;
@@ -314,6 +324,8 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
         // alignments reported for a single read).  Distribute the read's mass
         // proportionally dependent on the current
         for (auto& alnGroup : alignmentGroups) {
+          pmfCache.increment_generation();
+          cmfCache.increment_generation();
 
           // EQCLASS
           std::vector<uint32_t> txpIDs;
@@ -392,12 +404,15 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
 
             if (flen > 0.0 and aln->isPaired() and useFragLengthDist and
                 considerCondProb) {
+              
               size_t fl = flen;
-              double lenProb = fragLengthDist.pmf(fl);
+              double lenProb = pmfCache.get_or_update(fl, fetchPMF);
+
               if (burnedIn) {
                 /* condition fragment length prob on txp length */
-                double refLengthCM =
-                    fragLengthDist.cmf(static_cast<size_t>(refLength));
+                size_t rlen = static_cast<size_t>(refLength);
+                double refLengthCM = cmfCache.get_or_update(fl, fetchCMF);
+
                 bool computeMass =
                     fl < refLength and !salmon::math::isLog0(refLengthCM);
                 logFragProb = (computeMass) ? (lenProb - refLengthCM)
@@ -656,14 +671,15 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
                       int32_t fwPos = (fwd1) ? startPos1 : startPos2;
                       int32_t rcPos = (fwd1) ? startPos2 : startPos1;
                       if (fwPos < rcPos) {
-                        leftMer.from_chars(txpStart + startPos1 -
+                        leftMer.fromChars(txpStart + startPos1 -
                                            readBias1.contextBefore(read1RC));
-                        rightMer.from_chars(txpStart + startPos2 -
+                        rightMer.fromChars(txpStart + startPos2 -
                                             readBias2.contextBefore(read2RC));
+ 
                         if (read1RC) {
-                          leftMer.reverse_complement();
+                          leftMer.rc();
                         } else {
-                          rightMer.reverse_complement();
+                          rightMer.rc();
                         }
 
                         success = readBias1.addSequence(leftMer, 1.0);
@@ -692,10 +708,11 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
                     if (startPos1 >= readBias1.contextBefore(!fwd1) and
                         startPos1 + readBias1.contextAfter(!fwd1) <
                         static_cast<int32_t>(transcript.RefLength)) {
-                      context.from_chars(txpStart + startPos1 -
+                      context.fromChars(txpStart + startPos1 -
                                          readBias1.contextBefore(!fwd1));
+
                       if (!fwd1) {
-                        context.reverse_complement();
+                        context.rc();
                       }
                       success = readBias1.addSequence(context, 1.0);
                     }

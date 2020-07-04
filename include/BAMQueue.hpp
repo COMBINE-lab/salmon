@@ -10,7 +10,6 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
-#include <tbb/atomic.h>
 #include <thread>
 #include <vector>
 

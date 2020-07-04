@@ -11,13 +11,30 @@
 //      https://www.apache.org/licenses/LICENSE-2.0
 // ---------------------------------------------------------------------------
 
+#ifdef _MSC_VER
+    #pragma warning(push)  
+    #pragma warning(disable : 4514) // unreferenced inline function has been removed
+    #pragma warning(disable : 4710) // function not inlined
+    #pragma warning(disable : 4711) // selected for automatic inline expansion
+#endif
+
 #include <memory>
 #include <utility>
 
+#if defined(PHMAP_USE_ABSL_HASH) && !defined(ABSL_HASH_HASH_H_)
+    namespace absl { template <class T> struct Hash; };
+#endif
+
 namespace phmap {
 
+#if defined(PHMAP_USE_ABSL_HASH)
+    template <class T> using Hash = ::absl::Hash<T>;
+#else
     template <class T> struct Hash;
+#endif
+
     template <class T> struct EqualTo;
+    template <class T> struct Less;
     template <class T> using Allocator      = typename std::allocator<T>;
     template<class T1, class T2> using Pair = typename std::pair<T1, T2>;
 
@@ -29,13 +46,8 @@ namespace phmap {
         template <class T, class E = void>
         struct HashEq 
         {
-#if defined(PHMAP_USE_ABSL_HASHEQ)
-            using Hash = absl::Hash<T>;
-            using Eq   = phmap::EqualTo<T>;
-#else
             using Hash = phmap::Hash<T>;
             using Eq   = phmap::EqualTo<T>;
-#endif
         };
 
         template <class T>
@@ -54,6 +66,7 @@ namespace phmap {
 
     }  // namespace container_internal
 
+    // ------------- forward declarations for hash containers ----------------------------------
     template <class T, 
               class Hash  = phmap::container_internal::hash_default_hash<T>,
               class Eq    = phmap::container_internal::hash_default_eq<T>,
@@ -114,9 +127,28 @@ namespace phmap {
               class Mutex = phmap::NullMutex>   // use std::mutex to enable internal locks
         class parallel_node_hash_map;
 
+    // ------------- forward declarations for btree containers ----------------------------------
+    template <typename Key, typename Compare = phmap::Less<Key>,
+              typename Alloc = phmap::Allocator<Key>>
+        class btree_set;
 
+    template <typename Key, typename Compare = phmap::Less<Key>,
+              typename Alloc = phmap::Allocator<Key>>
+        class btree_multiset;
+
+    template <typename Key, typename Value, typename Compare = phmap::Less<Key>,
+              typename Alloc = phmap::Allocator<phmap::container_internal::Pair<const Key, Value>>>
+        class btree_map;
+    
+    template <typename Key, typename Value, typename Compare = phmap::Less<Key>,
+              typename Alloc = phmap::Allocator<phmap::container_internal::Pair<const Key, Value>>>
+        class btree_multimap;
 
 }  // namespace phmap
 
+
+#ifdef _MSC_VER
+     #pragma warning(pop)  
+#endif
 
 #endif // phmap_fwd_decl_h_guard_

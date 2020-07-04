@@ -10,7 +10,6 @@
 #ifndef FRAGMENT_LENGTH_DISTRIBUTION
 #define FRAGMENT_LENGTH_DISTRIBUTION
 
-#include "tbb/atomic.h"
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -33,7 +32,7 @@ class FragmentLengthDistribution {
   /**
    * A private vector that stores the observed (logged) mass for each length.
    */
-  std::vector<tbb::atomic<double>> hist_;
+  std::vector<std::atomic<double>> hist_;
 
   /**
    * A private vector that stores the observed (logged) mass for each length.
@@ -47,12 +46,12 @@ class FragmentLengthDistribution {
   /**
    * A private double that stores the total observed (logged) mass.
    */
-  tbb::atomic<double> totMass_;
+  std::atomic<double> totMass_;
   /**
    * A private double that stores the (logged) sum of the product of observed
    * lengths and masses for quick mean calculations.
    */
-  tbb::atomic<double> sum_;
+  std::atomic<double> sum_;
   /**
    * A private int that stores the minimum observed length.
    */

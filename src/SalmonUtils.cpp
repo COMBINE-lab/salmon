@@ -37,7 +37,7 @@
 #include "gff.h"
 
 #include "FastxParser.hpp"
-#include "jellyfish/mer_dna.hpp"
+//#include "jellyfish/mer_dna.hpp"
 
 #include "GenomicFeature.hpp"
 #include "SGSmooth.hpp"
@@ -1075,7 +1075,7 @@ TranscriptGeneMap transcriptGeneMapFromGTF(const std::string& fname,
   auto logger = spdlog::get("jointLog");
 
   // Use GffReader to read the file
-  GffReader reader(const_cast<char*>(fname.c_str()));
+  GffReader reader(const_cast<char*>(fname.c_str()), true, false);
   // Remember the optional attributes
   reader.readAll(true);
 
@@ -1423,23 +1423,24 @@ std::string getCurrentTimeAsString() {
                         "`--validateMappings` is generally recommended.\n");
   }
 
+  bool is_pe_library = (numLeft + numRight > 0);
+  bool is_se_library = (numUnpaired > 0);
+
   // currently there is some strange use for this in alevin, I think ...
   // check with avi.
-  if (numLeft + numRight > 0 and numUnpaired > 0) {
+  if (is_pe_library and is_se_library) {
       sopt.jointLog->warn("You seem to have passed in both un-paired reads and paired-end reads. "
                           "It is not currently possible to quantify hybrid library types in salmon.");
   }
 
-
-  if (numLeft + numRight > 0) {
+  if (is_pe_library) {
     if (numLeft != numRight) {
       sopt.jointLog->error("You passed paired-end files to salmon, but you passed {} files to --mates1 "
                            "and {} files to --mates2.  You must pass the same number of files to both flags",
                            numLeft, numRight);
       return false;
     }
-   }
-
+  } 
 
   auto checkScoreValue = [&sopt](int16_t score, std::string sname) -> bool {
                            using score_t = int8_t;
@@ -1510,7 +1511,7 @@ std::string getCurrentTimeAsString() {
       sopt.useRangeFactorization = true;
     }
 
-    // If the consensus slack was not set explicitly, then it defaults to 0.2 with
+    // If the consensus slack was not set explicitly, then it defaults to 0.35 with
     // validateMappings
     bool consensusSlackExplicit = !vm["consensusSlack"].defaulted();
     if (!consensusSlackExplicit) {
@@ -1519,6 +1520,55 @@ std::string getCurrentTimeAsString() {
                           "Usage of --validateMappings implies a default consensus slack of 0.2. "
                           "Setting consensusSlack to {}.", sopt.consensusSlack);
     }
+
+    bool pre_merge_chain_sub_thresh_explicit = !vm["preMergeChainSubThresh"].defaulted();
+    bool post_merge_chain_sub_thresh_explicit = !vm["postMergeChainSubThresh"].defaulted();
+    bool orphan_chain_sub_thresh_explicit = !vm["orphanChainSubThresh"].defaulted();
+
+    // for a single-end library (or effectively so by being single-cell), we set 
+    // pre_merge_chain_sub_thresh to 1.0 by default
+    if ( is_se_library or sopt.alevinMode ) {
+
+      // The default of preMergeChainSubThresh for single-end libraries is 1.0, so set that here
+      if (!pre_merge_chain_sub_thresh_explicit) {
+        sopt.pre_merge_chain_sub_thresh = 1.0;
+      }
+
+      // for single-end libraries, postMergeChainSubThresh and orphanChainSubThresh are meaningless 
+      if (post_merge_chain_sub_thresh_explicit) {
+        sopt.jointLog->warn("The postMergeChainSubThresh is not meaningful for single-end "
+        "(or effectively single-end — e.g. tagged-end single-cell) libraries.  Setting this value "
+        "to 1.0 and ignoring");
+      }
+      if (orphan_chain_sub_thresh_explicit) {
+        sopt.jointLog->warn("The orphanChainSubThresh is not meaningful for single-end "
+        "(or effectively single-end — e.g. tagged-end single-cell) libraries.  Setting this value "
+        "to 1.0 and ignoring");
+      }
+      sopt.post_merge_chain_sub_thresh = 1.0;
+      sopt.orphan_chain_sub_thresh = 1.0;
+    }
+
+    // value range check for filters
+    // pre-merge
+    if (sopt.pre_merge_chain_sub_thresh < 0 or sopt.pre_merge_chain_sub_thresh > 1.0) {
+      sopt.jointLog->error("You set preMergeChainSubThresh as {}, but it must in [0,1].", 
+        sopt.pre_merge_chain_sub_thresh);
+      return false;
+    }
+    // post-merge
+    if (sopt.post_merge_chain_sub_thresh < 0 or sopt.post_merge_chain_sub_thresh > 1.0) {
+      sopt.jointLog->error("You set postMergeChainSubThresh as {}, but it must in [0,1].", 
+        sopt.post_merge_chain_sub_thresh);
+      return false;
+    }
+    // orphan
+    if (sopt.orphan_chain_sub_thresh < 0 or sopt.orphan_chain_sub_thresh > 1.0) {
+      sopt.jointLog->error("You set orphanChainSubThresh as {}, but it must in [0,1].", 
+        sopt.orphan_chain_sub_thresh);
+      return false;
+    }
+
 
     if (sopt.mimicBT2 and sopt.mimicStrictBT2) {
       sopt.jointLog->error("You passed both the --mimicBT2 and --mimicStrictBT2 parameters.  These are mutually exclusive. "
@@ -1655,7 +1705,7 @@ bool createAuxMapLoggers_(SalmonOpts& sopt,
     sopt.orphanLinkLog = outLog;
   }
 
-  // Determine what we'll do with quasi-mapping results
+  // Determine what we'll do with selective-alignment results
   bool writeQuasimappings = (sopt.qmFileName != "");
 
   if (writeQuasimappings) {
@@ -1682,7 +1732,7 @@ bool createAuxMapLoggers_(SalmonOpts& sopt,
         // Make sure file opened successfully.
         if (!sopt.qmFile.is_open()) {
           jointLog->error(
-              "Could not create file for writing quasi-mappings [{}]",
+              "Could not create file for writing selective-alignments [{}]",
               sopt.qmFileName);
           return false;
         }
@@ -1856,7 +1906,7 @@ bool processQuantOptions(SalmonOpts& sopt,
     bfs::path indexDirectory(vm["index"].as<string>());
     sopt.indexDirectory = indexDirectory;
 
-    // Determine what we'll do with quasi-mapping results
+    // Determine what we'll do with selective-alignment results
     bool writeQuasimappings = (sopt.qmFileName != "");
 
     // make it larger if we're writing mappings or
@@ -1875,6 +1925,7 @@ bool processQuantOptions(SalmonOpts& sopt,
   //    std::make_shared<spdlog::sinks::ansicolor_sink>(rawConsoleSink);
   auto consoleSink =
       std::make_shared<spdlog::sinks::ansicolor_stderr_sink_mt>();
+  consoleSink->set_color(spdlog::level::warn, consoleSink->magenta);
   auto consoleLog = spdlog::create("stderrLog", {consoleSink});
   auto fileLog = spdlog::create("fileLog", {fileSink});
   std::vector<spdlog::sink_ptr> sinks{consoleSink, fileSink};
@@ -2652,14 +2703,21 @@ int contextSize = outsideContext + insideContext;
           windowLensTP.setZero();
 
           // This transcript's sequence
-          const char* tseq = txp.Sequence();
-          revComplement(tseq, refLen, rcSeq);
+          bool have_seq = txp.have_sequence();
+          SBMer fwmer;
+          SBMer rcmer;
+
+          const char* tseq = have_seq ? txp.Sequence() : nullptr;
+          // only do this if we have the sequence, we may not if just pos. bias.
+          if (have_seq) { 
+            revComplement(tseq, refLen, rcSeq);
+            fwmer.fromChars(tseq);
+            rcmer.fromChars(rcSeq);
+          }
+          // may be empty, but we shouldn't actually
+          // use it unless it is meaningful.
           const char* rseq = rcSeq.c_str();
 
-          Mer fwmer;
-          fwmer.from_chars(tseq);
-          Mer rcmer;
-          rcmer.from_chars(rseq);
           int32_t contextLength{expectSeqFW.getContextLength()};
 
           if (gcBiasCorrect and seqBiasCorrect) {
@@ -2692,8 +2750,10 @@ int contextSize = outsideContext + insideContext;
               }
 
               // shift the context one nucleotide to the right
-              fwmer.shift_left(tseq[fragStartPos + contextLength]);
-              rcmer.shift_left(rseq[fragStartPos + contextLength]);
+              //fwmer.shift_left(tseq[fragStartPos + contextLength]);
+              //rcmer.shift_left(rseq[fragStartPos + contextLength]);
+              fwmer.append(tseq[fragStartPos + contextLength]);
+              rcmer.append(rseq[fragStartPos + contextLength]);
             } // end: Seq-specific bias
 
             // fragment-GC bias
@@ -2887,8 +2947,15 @@ int contextSize = outsideContext + insideContext;
             std::vector<double> posFactorsRC(refLen, 1.0);
 
             // This transcript's sequence
-            const char* tseq = txp.Sequence();
-            revComplement(tseq, refLen, rcSeq);
+            bool have_seq = txp.have_sequence();
+            const char* tseq = have_seq ? txp.Sequence() : nullptr;
+            // only do this if we have the sequence, we may not if just pos.
+            // bias.
+            if (have_seq) {
+              revComplement(tseq, refLen, rcSeq);
+            }
+            // may be empty, but we shouldn't actually
+            // use it unless it is meaningful.
             const char* rseq = rcSeq.c_str();
 
             int32_t fl = locFLDLow;
@@ -2929,10 +2996,15 @@ int contextSize = outsideContext + insideContext;
             // and seqFactorsRC will contain the sequence-specific bias for each
             // position on the 3' strand.
             if (seqBiasCorrect) {
-              Mer mer;
-              Mer rcmer;
-              mer.from_chars(tseq);
-              rcmer.from_chars(rseq);
+              //Mer mer;
+              //Mer rcmer;
+              //mer.from_chars(tseq);
+              //rcmer.from_chars(rseq);
+              SBMer mer;
+              SBMer rcmer;
+              mer.fromChars(tseq);
+              rcmer.fromChars(rseq);
+ 
               int32_t contextLength{exp5.getContextLength()};
 
               for (int32_t fragStart = 0; fragStart < refLen - K; ++fragStart) {
@@ -2948,8 +3020,10 @@ int contextSize = outsideContext + insideContext;
                                                      exp3.evaluateLog(rcmer));
                 }
                 // shift the context one nucleotide to the right
-                mer.shift_left(tseq[fragStart + contextLength]);
-                rcmer.shift_left(rseq[fragStart + contextLength]);
+                //mer.shift_left(tseq[fragStart + contextLength]);
+                //rcmer.shift_left(rseq[fragStart + contextLength]);
+                mer.append(tseq[fragStart + contextLength]);
+                rcmer.append(rseq[fragStart + contextLength]);
               }
               // We need these in 5' -> 3' order, so reverse them
               seqFactorsRC.reverseInPlace();
@@ -3310,58 +3384,18 @@ template void salmon::utils::normalizeAlphas<BulkAlignLibT<ReadPair>>(
     const SalmonOpts& sopt, BulkAlignLibT<ReadPair>& alnLib);
 
 // explicit instantiations for effective length updates ---
-/*
 template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
-                                      ReadExperiment>(
-    SalmonOpts& sopt, ReadExperiment& readExp, Eigen::VectorXd& effLensIn,
-    std::vector<tbb::atomic<double>>& alphas, bool finalRound);
-
-template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<double>, ReadExperiment>(
-    SalmonOpts& sopt, ReadExperiment& readExp, Eigen::VectorXd& effLensIn,
-    std::vector<double>& alphas, bool finalRound);
-
-template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
-                                      AlignmentLibrary<ReadPair>>(
-    SalmonOpts& sopt, AlignmentLibrary<ReadPair>& readExp,
-    Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
-    bool finalRound);
-
-template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<double>,
-                                      AlignmentLibrary<ReadPair>>(
-    SalmonOpts& sopt, AlignmentLibrary<ReadPair>& readExp,
-    Eigen::VectorXd& effLensIn, std::vector<double>& alphas, bool finalRound);
-
-template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
-                                      AlignmentLibrary<UnpairedRead>>(
-    SalmonOpts& sopt, AlignmentLibrary<UnpairedRead>& readExp,
-    Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
-    bool finalRound);
-
-template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<double>,
-                                      AlignmentLibrary<UnpairedRead>>(
-    SalmonOpts& sopt, AlignmentLibrary<UnpairedRead>& readExp,
-    Eigen::VectorXd& effLensIn, std::vector<double>& alphas, bool finalRound);
-*/
-
-// explicit instantiations for effective length updates ---
-template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
+salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
                                       BulkExpT>(
     SalmonOpts& sopt, BulkExpT& readExp, Eigen::VectorXd& effLensIn,
-    std::vector<tbb::atomic<double>>& alphas, std::vector<bool>& available,
+    std::vector<std::atomic<double>>& alphas, std::vector<bool>& available,
     bool finalRound);
 
 template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
+salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
                                       SCExpT>(
                                                       SalmonOpts& sopt, SCExpT& readExp, Eigen::VectorXd& effLensIn,
-                                                      std::vector<tbb::atomic<double>>& alphas, std::vector<bool>& available,
+                                                      std::vector<std::atomic<double>>& alphas, std::vector<bool>& available,
                                                       bool finalRound);
 
 template Eigen::VectorXd
@@ -3375,10 +3409,10 @@ salmon::utils::updateEffectiveLengths<std::vector<double>, SCExpT>(
                                                                            std::vector<double>& alphas, std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
+salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
                                       BulkAlignLibT<ReadPair>>(
     SalmonOpts& sopt, BulkAlignLibT<ReadPair>& readExp,
-    Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
+    Eigen::VectorXd& effLensIn, std::vector<std::atomic<double>>& alphas,
     std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
@@ -3389,10 +3423,10 @@ salmon::utils::updateEffectiveLengths<std::vector<double>,
     std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<tbb::atomic<double>>,
+salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
                                       BulkAlignLibT<UnpairedRead>>(
     SalmonOpts& sopt, BulkAlignLibT<UnpairedRead>& readExp,
-    Eigen::VectorXd& effLensIn, std::vector<tbb::atomic<double>>& alphas,
+    Eigen::VectorXd& effLensIn, std::vector<std::atomic<double>>& alphas,
     std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd

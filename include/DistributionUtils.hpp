@@ -12,13 +12,23 @@ class Transcript;
 namespace distribution_utils {
 enum class DistributionSpace : uint8_t { LOG = 0, LINEAR = 1 };
 
+class DistSummary {
+public:
+DistSummary(double mean_in, double sd_in, uint32_t support) :
+  mean(mean_in), sd(sd_in), samples(support,0) {}
+
+double mean;
+double sd;
+std::vector<int32_t> samples;
+};
+
 /**
  *  Draw samples from the provided fragment length distribution.
  *  \param fld A pointer to the FragmentLengthDistribution from which
  *             samples will be drawn.
  *  \param numSamples  The number of samples to draw.
  */
-std::vector<int32_t> samplesFromLogPMF(FragmentLengthDistribution* fld,
+DistSummary samplesFromLogPMF(FragmentLengthDistribution* fld,
                                        int32_t numSamples);
 
 /**
@@ -84,6 +94,58 @@ private:
   size_t fragUpdateThresh_{100000};
   size_t prevProcessedReads_{0};
   std::vector<double> cachedCMF_;
+};
+
+template <typename T>
+class VersionedValue {
+  public:
+    T val{T()};
+    uint64_t gen{0};
+};
+
+// A simple cache where values are retreived by their index
+// and the cached items are versioned
+template <typename T>
+class IndexedVersionedCache {
+  public:
+
+  IndexedVersionedCache(size_t max_index) :
+    cache_(max_index+1), max_index_(max_index), current_gen_(0) {}
+
+  inline void increment_generation() { ++current_gen_; }
+
+  inline bool get_value(size_t index, T& v) {
+    size_t idx = (index > max_index_) ? max_index_ : index;
+    const VersionedValue<T>& vv = cache_[idx];
+    bool is_stale = vv.gen < current_gen_;
+    v = vv.val;
+    return is_stale;
+  }
+
+  inline void update_value(size_t index, T v) {
+    size_t idx = (index > max_index_) ? max_index_ : index;
+    VersionedValue<T>& vv = cache_[idx];
+    vv.val = v;
+    vv.gen = current_gen_;
+  }
+
+  template <typename F>
+  inline T get_or_update(size_t index, F& gen_value) {
+    size_t idx = (index > max_index_) ? max_index_ : index;
+    VersionedValue<T>& vv = cache_[idx];
+    // if the current value is stale, compute a new one and cache it
+    if (vv.gen < current_gen_) {
+      vv.val = gen_value(idx);
+      vv.gen = current_gen_;
+    }
+    // return the (possibly newly) cached value
+    return vv.val;
+  }
+
+  private:
+  std::vector<VersionedValue<T>> cache_;
+  size_t max_index_{0};
+  uint64_t current_gen_{0};
 };
 
 } // namespace distribution_utils
