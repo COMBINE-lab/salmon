@@ -3398,7 +3398,7 @@ std::random_device get_random_device() {
 using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 using BulkExpT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;
 template <typename FragT>
-using BulkAlignLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>>;
+using BulkAlignLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>, AlignmentModel>;
 
 // explicit instantiations for writing abundances ---
 template void salmon::utils::writeAbundances<BulkAlignLibT<ReadPair>>(

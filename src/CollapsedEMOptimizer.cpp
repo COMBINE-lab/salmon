@@ -1031,7 +1031,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
 
 using BulkReadExperimentT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;
 template <typename FragT>
-using BulkAlnLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>>;
+using BulkAlnLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>, AlignmentModel>;
 using SCReadExperimentT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 
 

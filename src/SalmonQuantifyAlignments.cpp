@@ -80,8 +80,8 @@ using MiniBatchQueue = tbb::concurrent_queue<MiniBatchInfo<FragT>*>;
 using PriorAbundanceVector = std::vector<double>;
 using PosteriorAbundanceVector = std::vector<double>;
 
-template <typename FragT>
-using AlignmentLibraryT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>>;
+template <typename FragT, typename AlignModelT>
+using AlignmentLibraryT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>, AlignModelT>;
 
 struct RefSeq {
   RefSeq(char* name, uint32_t len) : RefName(name), RefLength(len) {}
@@ -116,8 +116,8 @@ inline bool tryToGetWork(MiniBatchQueue<AlignmentGroup<FragT*>>& workQueue,
 }
 
 
-template <typename FragT>
-void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
+template <typename FragT, typename AlignModelT>
+void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
                       ForgettingMassCalculator& fmCalc,
                       uint64_t firstTimestepOfRound,
                       MiniBatchQueue<AlignmentGroup<FragT*>>& workQueue,
@@ -1003,8 +1003,8 @@ void processMiniBatch(AlignmentLibraryT<FragT>& alnLib,
  *  specified by `libFmt`.
  *
  */
-template <typename FragT>
-bool quantifyLibrary(AlignmentLibraryT<FragT>& alnLib,
+template <typename FragT, typename AlignModelT>
+bool quantifyLibrary(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
                      size_t numRequiredFragments, SalmonOpts& salmonOpts) {
 
   std::atomic<bool> burnedIn{salmonOpts.numBurninFrags == 0};
@@ -1104,7 +1104,7 @@ bool quantifyLibrary(AlignmentLibraryT<FragT>& alnLib,
 
     for (uint32_t i = 0; i < currentQuantThreads; ++i) {
       workers.emplace_back(
-          processMiniBatch<FragT>, std::ref(alnLib), std::ref(fmCalc),
+          processMiniBatch<FragT, AlignModelT>, std::ref(alnLib), std::ref(fmCalc),
           firstTimestepOfRound, std::ref(*workQueuePtr), processedCachePtr,
           std::ref(workAvailable), std::ref(cvmutex), std::ref(doneParsing),
           std::ref(activeBatches), std::ref(salmonOpts),
@@ -1331,8 +1331,8 @@ bool quantifyLibrary(AlignmentLibraryT<FragT>& alnLib,
   return burnedIn.load();
 }
 
-template <typename ReadT>
-bool processSample(AlignmentLibraryT<ReadT>& alnLib, size_t requiredObservations,
+template <typename ReadT, typename AlignModelT>
+bool processSample(AlignmentLibraryT<ReadT, AlignModelT>& alnLib, size_t requiredObservations,
                    SalmonOpts& sopt, boost::filesystem::path outputDirectory) {
 
   auto& jointLog = sopt.jointLog;
@@ -1523,7 +1523,7 @@ bool processSample(AlignmentLibraryT<ReadT>& alnLib, size_t requiredObservations
   return true;
 }
 
-bool processEqClasses( AlignmentLibraryT<UnpairedRead>& alnLib, SalmonOpts& sopt,
+bool processEqClasses( AlignmentLibraryT<UnpairedRead, AlignmentModel>& alnLib, SalmonOpts& sopt,
                        boost::filesystem::path outputDirectory) {
   auto& jointLog = sopt.jointLog;
   GZipWriter gzw(outputDirectory, jointLog);
@@ -1820,9 +1820,9 @@ transcript abundance from RNA-seq reads
           }
         }
 
-        AlignmentLibraryT<UnpairedRead> alnLib(alignmentFiles,
-                                               libFmt, sopt, hasEqclasses,
-                                               tnames, tefflens);
+        AlignmentLibraryT<UnpairedRead, AlignmentModel> alnLib(alignmentFiles,
+                                                               libFmt, sopt, hasEqclasses,
+                                                               tnames, tefflens);
 
         jointLog->info("Created AlignmentLibrary object");
         jointLog->flush();
@@ -1833,7 +1833,7 @@ transcript abundance from RNA-seq reads
                                                          alnLib.transcripts());
         success = processEqClasses(alnLib, sopt, outputDirectory);
       } else {
-        AlignmentLibraryT<UnpairedRead> alnLib(alignmentFiles, transcriptFile,
+        AlignmentLibraryT<UnpairedRead, AlignmentModel> alnLib(alignmentFiles, transcriptFile,
                                                libFmt, sopt);
 
         if (autoDetectFmt) {
@@ -1850,7 +1850,7 @@ transcript abundance from RNA-seq reads
         std::exit(1);
       }
 
-      AlignmentLibraryT<ReadPair> alnLib(alignmentFiles, transcriptFile, libFmt,
+      AlignmentLibraryT<ReadPair, AlignmentModel> alnLib(alignmentFiles, transcriptFile, libFmt,
                                         sopt);
       if (autoDetectFmt) {
         alnLib.enableAutodetect();

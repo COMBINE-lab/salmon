@@ -69,12 +69,12 @@ using MiniBatchQueue = tbb::concurrent_queue<MiniBatchInfo<FragT>*>;
 template <typename FragT>
 using OutputQueue = tbb::concurrent_bounded_queue<FragT*>;
 
-template <typename FragT>
-using AlignmentLibraryT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>>;
+template <typename FragT, typename AlignModelT>
+using AlignmentLibraryT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>, AlignModelT>;
 
 
-template <typename FragT>
-void sampleMiniBatch(AlignmentLibraryT<FragT>& alnLib,
+template <typename FragT, typename AlignModelT>
+void sampleMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
                      MiniBatchQueue<AlignmentGroup<FragT*>>& workQueue,
                      std::condition_variable& workAvailable,
                      std::mutex& cvmutex, volatile bool& doneParsing,
@@ -339,8 +339,8 @@ void sampleMiniBatch(AlignmentLibraryT<FragT>& alnLib,
  *  Sample the alignments in the provided library given in current
  *  estimates of transcript abundance.
  */
-template <typename FragT>
-bool sampleLibrary(AlignmentLibraryT<FragT>& alnLib,
+template <typename FragT, typename AlignModelT>
+bool sampleLibrary(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
                    const SalmonOpts& salmonOpts, bool burnedIn,
                    bfs::path& sampleFilePath, bool sampleUnaligned) {
 
@@ -402,7 +402,7 @@ bool sampleLibrary(AlignmentLibraryT<FragT>& alnLib,
   size_t numProc{0};
   for (uint32_t i = 0; i < salmonOpts.numQuantThreads; ++i) {
     workers.emplace_back(
-        sampleMiniBatch<FragT>, std::ref(alnLib), std::ref(workQueue),
+        sampleMiniBatch<FragT, AlignModelT>, std::ref(alnLib), std::ref(workQueue),
         std::ref(workAvailable), std::ref(cvmutex), std::ref(doneParsing),
         std::ref(activeBatches), std::ref(salmonOpts), std::ref(burnedIn),
         std::ref(processedReads), std::ref(outQueue));

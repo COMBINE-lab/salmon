@@ -911,7 +911,7 @@ static_cast<int>(allSamples[sampleID][tn]);
 using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 using BulkExpT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;
 template <typename FragT>
-using BulkAlignLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>>;
+using BulkAlignLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>, AlignmentModel>;
 
 template bool CollapsedGibbsSampler::sample<BulkExpT>(
     BulkExpT& readExp, SalmonOpts& sopt,

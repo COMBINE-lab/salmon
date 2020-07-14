@@ -367,9 +367,9 @@ std::vector<std::string> getLibTypeStrings(const ExpT& experiment) {
   return libStrings;
 }
 
-template <typename AlnT, typename EQBuilderT>
+template <typename AlnT, typename EQBuilderT, typename AlignModelT>
 std::vector<std::string>
-getLibTypeStrings(const AlignmentLibrary<AlnT, EQBuilderT>& experiment) {
+getLibTypeStrings(const AlignmentLibrary<AlnT, EQBuilderT, AlignModelT>& experiment) {
   std::vector<std::string> libStrings;
   libStrings.push_back(experiment.format().toString());
   return libStrings;
@@ -1670,7 +1670,7 @@ void GZipWriter::writeMtx(std::shared_ptr<spdlog::logger>& jointLog,
 using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 using BulkExpT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;
 template <typename FragT>
-using BulkAlignLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>>;
+using BulkAlignLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>, AlignmentModel>;
 
 template bool
 GZipWriter::writeBootstrap<double>(const std::vector<double>& abund,
