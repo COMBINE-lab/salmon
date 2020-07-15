@@ -1030,8 +1030,8 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
 }
 
 using BulkReadExperimentT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;
-template <typename FragT>
-using BulkAlnLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>, AlignmentModel>;
+template <typename FragT,typename AlignModelT>
+using BulkAlnLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>,AlignModelT>;
 using SCReadExperimentT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 
 
@@ -1039,12 +1039,16 @@ template bool CollapsedEMOptimizer::optimize<BulkReadExperimentT>(
     BulkReadExperimentT& readExp, SalmonOpts& sopt, double relDiffTolerance,
     uint32_t maxIter);
 
-template bool CollapsedEMOptimizer::optimize<BulkAlnLibT<UnpairedRead>>(
-    BulkAlnLibT<UnpairedRead>& readExp, SalmonOpts& sopt,
+template bool CollapsedEMOptimizer::optimize<BulkAlnLibT<UnpairedRead,AlignmentModel>>(
+    BulkAlnLibT<UnpairedRead,AlignmentModel>& readExp, SalmonOpts& sopt,
     double relDiffTolerance, uint32_t maxIter);
 
-template bool CollapsedEMOptimizer::optimize<BulkAlnLibT<ReadPair>>(
-    BulkAlnLibT<ReadPair>& readExp, SalmonOpts& sopt,
+template bool CollapsedEMOptimizer::optimize<BulkAlnLibT<UnpairedRead,ONTAlignmentModel>>(
+    BulkAlnLibT<UnpairedRead,ONTAlignmentModel>& readExp, SalmonOpts& sopt,
+    double relDiffTolerance, uint32_t maxIter);
+
+template bool CollapsedEMOptimizer::optimize<BulkAlnLibT<ReadPair,AlignmentModel>>(
+    BulkAlnLibT<ReadPair,AlignmentModel>& readExp, SalmonOpts& sopt,
     double relDiffTolerance, uint32_t maxIter);
 
 
@@ -1054,14 +1058,20 @@ template bool CollapsedEMOptimizer::gatherBootstraps<BulkReadExperimentT>(
     double relDiffTolerance, uint32_t maxIter);
 
 template bool
-CollapsedEMOptimizer::gatherBootstraps<BulkAlnLibT<UnpairedRead>>(
-    BulkAlnLibT<UnpairedRead>& readExp, SalmonOpts& sopt,
+CollapsedEMOptimizer::gatherBootstraps<BulkAlnLibT<UnpairedRead,AlignmentModel>>(
+    BulkAlnLibT<UnpairedRead,AlignmentModel>& readExp, SalmonOpts& sopt,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     double relDiffTolerance, uint32_t maxIter);
 
 template bool
-CollapsedEMOptimizer::gatherBootstraps<BulkAlnLibT<ReadPair>>(
-    BulkAlnLibT<ReadPair>& readExp, SalmonOpts& sopt,
+CollapsedEMOptimizer::gatherBootstraps<BulkAlnLibT<UnpairedRead,ONTAlignmentModel>>(
+    BulkAlnLibT<UnpairedRead,ONTAlignmentModel>& readExp, SalmonOpts& sopt,
+    std::function<bool(const std::vector<double>&)>& writeBootstrap,
+    double relDiffTolerance, uint32_t maxIter);
+
+template bool
+CollapsedEMOptimizer::gatherBootstraps<BulkAlnLibT<ReadPair,AlignmentModel>>(
+    BulkAlnLibT<ReadPair,AlignmentModel>& readExp, SalmonOpts& sopt,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     double relDiffTolerance, uint32_t maxIter);
 // Unused / old

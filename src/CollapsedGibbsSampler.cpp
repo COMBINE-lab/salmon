@@ -910,21 +910,26 @@ static_cast<int>(allSamples[sampleID][tn]);
 
 using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 using BulkExpT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;
-template <typename FragT>
-using BulkAlignLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>, AlignmentModel>;
+template <typename FragT,typename AlignModelT>
+using BulkAlignLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>, AlignModelT>;
 
 template bool CollapsedGibbsSampler::sample<BulkExpT>(
     BulkExpT& readExp, SalmonOpts& sopt,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     uint32_t maxIter);
 
-template bool CollapsedGibbsSampler::sample<BulkAlignLibT<UnpairedRead>>(
-    BulkAlignLibT<UnpairedRead>& readExp, SalmonOpts& sopt,
+template bool CollapsedGibbsSampler::sample<BulkAlignLibT<UnpairedRead,AlignmentModel>>(
+    BulkAlignLibT<UnpairedRead,AlignmentModel>& readExp, SalmonOpts& sopt,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     uint32_t maxIter);
 
-template bool CollapsedGibbsSampler::sample<BulkAlignLibT<ReadPair>>(
-    BulkAlignLibT<ReadPair>& readExp, SalmonOpts& sopt,
+template bool CollapsedGibbsSampler::sample<BulkAlignLibT<UnpairedRead,ONTAlignmentModel>>(
+    BulkAlignLibT<UnpairedRead,ONTAlignmentModel>& readExp, SalmonOpts& sopt,
+    std::function<bool(const std::vector<double>&)>& writeBootstrap,
+    uint32_t maxIter);
+
+template bool CollapsedGibbsSampler::sample<BulkAlignLibT<ReadPair,AlignmentModel>>(
+    BulkAlignLibT<ReadPair,AlignmentModel>& readExp, SalmonOpts& sopt,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     uint32_t maxIter);
 /*

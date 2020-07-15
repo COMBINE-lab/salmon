@@ -44,6 +44,7 @@ extern "C" {
 
 #include "SalmonDefaults.hpp"
 #include "AlignmentModel.hpp"
+#include "ONTAlignmentModel.hpp"
 #include "BiasParams.hpp"
 #include "CollapsedEMOptimizer.hpp"
 #include "CollapsedGibbsSampler.hpp"
@@ -1783,6 +1784,9 @@ transcript abundance from RNA-seq reads
       }
     }
 
+    // Alignment model
+    const bool ontModel = vm["ont"].as<bool>();
+
     // Just so we have the variable around
     LibraryFormat libFmt(ReadType::PAIRED_END, ReadOrientation::TOWARD,
                          ReadStrandedness::U);
@@ -1862,7 +1866,11 @@ transcript abundance from RNA-seq reads
         EqClassInfo eqinfo(jointLog, alignmentFiles[0]);
         success = runSingleEndEqClasses(alignmentFiles, libFmt, sopt, eqinfo);
       } else {
-        success = runSingleEndSample<AlignmentModel>(alignmentFiles, transcriptFile, libFmt, sopt, autoDetectFmt, requiredObservations);
+        if(!ontModel) {
+          success = runSingleEndSample<AlignmentModel>(alignmentFiles, transcriptFile, libFmt, sopt, autoDetectFmt, requiredObservations);
+        } else {
+          success = runSingleEndSample<ONTAlignmentModel>(alignmentFiles, transcriptFile, libFmt, sopt, autoDetectFmt, requiredObservations);
+        }
       }
     } break;
     case ReadType::PAIRED_END: {

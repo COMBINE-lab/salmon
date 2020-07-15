@@ -1,32 +1,17 @@
 #ifndef ALIGNMENT_MODEL
 #define ALIGNMENT_MODEL
 
-#include <atomic>
-#include <memory>
 #include <mutex>
 
-// logger includes
-#include "spdlog/spdlog.h"
-
+#include "AlignmentCommon.hpp"
 #include "AtomicMatrix.hpp"
 #include "tbb/concurrent_vector.h"
 
-extern "C" {
-#include "io_lib/os.h"
-#include "io_lib/scram.h"
-#undef max
-#undef min
-}
-
-struct UnpairedRead;
-struct ReadPair;
-class Transcript;
-
-class AlignmentModel {
+class AlignmentModel
+  : public AlignmentCommon
+{
 public:
   AlignmentModel(double alpha, uint32_t readBins = 4);
-  bool burnedIn();
-  void burnedIn(bool burnedIn);
 
   /**
    *  For unpaired reads, update the error model to account
@@ -51,12 +36,6 @@ public:
    * current error model.
    */
   double logLikelihood(const ReadPair&, Transcript& ref);
-
-  bool hasIndel(UnpairedRead& r);
-  bool hasIndel(ReadPair& r);
-
-  void setLogger(std::shared_ptr<spdlog::logger> logger);
-  bool hasLogger();
 
   void normalize();
 
@@ -97,7 +76,6 @@ private:
               std::vector<AtomicMatrix<double>>& mismatchProfile);
   AlnModelProb logLikelihood(bam_seq_t* read, Transcript& ref,
                        std::vector<AtomicMatrix<double>>& mismatchProfile);
-  bool hasIndel(bam_seq_t* r);
 
   // NOTE: Do these need to be concurrent_vectors as before?
   // Store the mismatch probability tables for the left and right reads
@@ -107,8 +85,6 @@ private:
   bool isEnabled_;
   // size_t maxLen_;
   size_t readBins_;
-  std::atomic<bool> burnedIn_;
-  std::shared_ptr<spdlog::logger> logger_;
   // Maintain a mutex in case the error model wants to talk to the
   // console / log.
   std::mutex outputMutex_;

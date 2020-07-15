@@ -11,6 +11,7 @@ extern "C" {
 // Our includes
 #include "AlignmentGroup.hpp"
 #include "AlignmentModel.hpp"
+#include "ONTAlignmentModel.hpp"
 #include "BAMQueue.hpp"
 #include "BAMUtils.hpp"
 #include "ClusterForest.hpp"

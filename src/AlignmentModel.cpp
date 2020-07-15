@@ -14,7 +14,7 @@
 
 AlignmentModel::AlignmentModel(double alpha, uint32_t readBins)
     : transitionProbsLeft_(readBins), transitionProbsRight_(readBins),
-      isEnabled_(true), readBins_(readBins), burnedIn_(false) {
+      isEnabled_(true), readBins_(readBins) {
 
   for (size_t i = 0; i < readBins; ++i) {
     transitionProbsLeft_[i] = std::move(AtomicMatrix<double>(
@@ -22,45 +22,6 @@ AlignmentModel::AlignmentModel(double alpha, uint32_t readBins)
     transitionProbsRight_[i] = std::move(AtomicMatrix<double>(
         numAlignmentStates(), numAlignmentStates(), alpha));
   }
-}
-
-bool AlignmentModel::burnedIn() { return burnedIn_; }
-void AlignmentModel::burnedIn(bool burnedIn) { burnedIn_ = burnedIn; }
-
-void AlignmentModel::setLogger(std::shared_ptr<spdlog::logger> logger) {
-  logger_ = logger;
-}
-
-bool AlignmentModel::hasLogger() { return (logger_) ? true : false; }
-
-bool AlignmentModel::hasIndel(ReadPair& hit) {
-  if (!hit.isPaired()) {
-    return hasIndel(hit.read1);
-  }
-  return hasIndel(hit.read1) or hasIndel(hit.read2);
-}
-
-bool AlignmentModel::hasIndel(UnpairedRead& hit) { return hasIndel(hit.read); }
-
-bool AlignmentModel::hasIndel(bam_seq_t* read) {
-  uint32_t* cigar = bam_cigar(read);
-  uint32_t cigarLen = bam_cigar_len(read);
-
-  for (uint32_t cigarIdx = 0; cigarIdx < cigarLen; ++cigarIdx) {
-    uint32_t opLen = cigar[cigarIdx] >> BAM_CIGAR_SHIFT;
-    enum cigar_op op =
-        static_cast<enum cigar_op>(cigar[cigarIdx] & BAM_CIGAR_MASK);
-
-    switch (op) {
-    case BAM_CINS:
-      return true;
-    case BAM_CDEL:
-      return true;
-    default:
-      break;
-    }
-  }
-  return false;
 }
 
 /*
