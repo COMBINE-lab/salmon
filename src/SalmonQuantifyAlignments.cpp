@@ -1523,7 +1523,8 @@ bool processSample(AlignmentLibraryT<ReadT, AlignModelT>& alnLib, size_t require
   return true;
 }
 
-bool processEqClasses( AlignmentLibraryT<UnpairedRead, AlignmentModel>& alnLib, SalmonOpts& sopt,
+template<typename AlignModelT>
+bool processEqClasses( AlignmentLibraryT<UnpairedRead, AlignModelT>& alnLib, SalmonOpts& sopt,
                        boost::filesystem::path outputDirectory) {
   auto& jointLog = sopt.jointLog;
   GZipWriter gzw(outputDirectory, jointLog);
@@ -1556,6 +1557,87 @@ bool processEqClasses( AlignmentLibraryT<UnpairedRead, AlignmentModel>& alnLib, 
   sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
 
   return true;
+}
+
+//
+// Quantification helper functions for SINGLE_END reads when has Eq
+// classes
+struct EqClassInfo {
+  std::vector<std::string> tnames;
+  std::vector<double>      tefflens;
+  std::vector<uint32_t>    eqclass_counts;
+  std::vector<std::vector<uint32_t>> eqclasses;
+  std::vector<std::vector<double>> auxs_vals;
+
+  template<typename LoggerT>
+  EqClassInfo(LoggerT jointLog, bfs::path& alignmentFile) {
+    // reading eqclass
+    bool parseOK = salmon::utils::readEquivCounts(alignmentFile, tnames, tefflens,
+                                                  eqclasses, auxs_vals, eqclass_counts);
+    if (!parseOK){
+      jointLog->error("Eqclass Parsing error");
+      exit(1);
+    }
+
+    std::stringstream errfmt;
+    errfmt << "Found total " << eqclasses.size() << " eqclasses and "
+           << tnames.size() << " transcripts";
+    jointLog->info(errfmt.str());
+    jointLog->flush();
+
+    if ( tefflens.size() == 0 ) {
+      tefflens.resize(tnames.size(), 100);
+      jointLog->warn("No effective lens found in the eqclass file;"
+                     "Ignore this warning if using uniform prior");
+    }
+
+    if ( /*tefflens.size() != 0 and*/ (tefflens.size() != tnames.size()) ){
+      std::stringstream errfmt;
+      errfmt << "Number of effective lens: " << tefflens.size()
+             << " is not equal to number of transcripts: " << tnames.size();
+      jointLog->error(errfmt.str());
+      jointLog->flush();
+      exit(1);
+    }
+
+    if ( eqclasses.size() != auxs_vals.size() or
+         eqclasses.size() != eqclass_counts.size() ) {
+      jointLog->error("Different size of the eqclasses object");
+      jointLog->flush();
+      exit(1);
+    }
+  }
+};
+
+bool runSingleEndEqClasses(std::vector<bfs::path>& alignmentFiles,
+                           LibraryFormat& libFmt, SalmonOpts& sopt,
+                           EqClassInfo& eqinfo) {
+  AlignmentLibraryT<UnpairedRead, AlignmentModel> alnLib(alignmentFiles,
+                                                      libFmt, sopt, true,
+                                                      eqinfo.tnames, eqinfo.tefflens);
+  sopt.jointLog->info("Created AlignmentLibrary object");
+  sopt.jointLog->flush();
+
+  // EQCLASS
+  alnLib.equivalenceClassBuilder().populateTargets(eqinfo.eqclasses, eqinfo.auxs_vals,
+                                                   eqinfo.eqclass_counts,
+                                                   alnLib.transcripts());
+  return processEqClasses(alnLib, sopt, sopt.outputDirectory);
+}
+
+//
+// Quantification helper functions for SINGLE_END reads with no eq
+// classes.
+template<typename AlignModelT>
+bool runSingleEndSample(std::vector<bfs::path>& alignmentFiles, bfs::path& transcriptFile,
+                        LibraryFormat& libFmt, SalmonOpts& sopt,
+                        bool autoDetectFmt, size_t requiredObservations) {
+  AlignmentLibraryT<UnpairedRead, AlignModelT> alnLib(alignmentFiles, transcriptFile, libFmt, sopt);
+
+  if (autoDetectFmt) {
+    alnLib.enableAutodetect();
+  }
+  return processSample<UnpairedRead>(alnLib, requiredObservations, sopt, sopt.outputDirectory);
 }
 
 int salmonAlignmentQuantify(int argc, const char* argv[]) {
@@ -1777,70 +1859,10 @@ transcript abundance from RNA-seq reads
       }
 
       if ( hasEqclasses ) {
-        std::vector<string> tnames;
-        std::vector<double> tefflens;
-        std::vector<uint32_t> eqclass_counts;
-        std::vector<std::vector<uint32_t>> eqclasses;
-        std::vector<std::vector<double>> auxs_vals;
-        {
-          // reading eqclass
-          bool parseOK = salmon::utils::readEquivCounts(alignmentFiles[0], tnames, tefflens,
-                                                        eqclasses, auxs_vals, eqclass_counts);
-          if (!parseOK){
-            jointLog->error("Eqclass Parsing error");
-            exit(1);
-          }
-
-          std::stringstream errfmt;
-          errfmt << "Found total " << eqclasses.size() << " eqclasses and "
-                 << tnames.size() << " transcripts";
-          jointLog->info(errfmt.str());
-          jointLog->flush();
-
-          if ( tefflens.size() == 0 ) {
-            tefflens.resize(tnames.size(), 100);
-            jointLog->warn("No effective lens found in the eqclass file;"
-                           "Ignore this warning if using uniform prior");
-          }
-
-          if ( /*tefflens.size() != 0 and*/ (tefflens.size() != tnames.size()) ){
-            std::stringstream errfmt;
-            errfmt << "Number of effective lens: " << tefflens.size()
-                   << " is not equal to number of transcripts: " << tnames.size();
-            jointLog->error(errfmt.str());
-            jointLog->flush();
-            exit(1);
-          }
-
-          if ( eqclasses.size() != auxs_vals.size() or
-               eqclasses.size() != eqclass_counts.size() ) {
-            jointLog->error("Different size of the eqclasses object");
-            jointLog->flush();
-            exit(1);
-          }
-        }
-
-        AlignmentLibraryT<UnpairedRead, AlignmentModel> alnLib(alignmentFiles,
-                                                               libFmt, sopt, hasEqclasses,
-                                                               tnames, tefflens);
-
-        jointLog->info("Created AlignmentLibrary object");
-        jointLog->flush();
-
-        // EQCLASS
-        alnLib.equivalenceClassBuilder().populateTargets(eqclasses, auxs_vals,
-                                                         eqclass_counts,
-                                                         alnLib.transcripts());
-        success = processEqClasses(alnLib, sopt, outputDirectory);
+        EqClassInfo eqinfo(jointLog, alignmentFiles[0]);
+        success = runSingleEndEqClasses(alignmentFiles, libFmt, sopt, eqinfo);
       } else {
-        AlignmentLibraryT<UnpairedRead, AlignmentModel> alnLib(alignmentFiles, transcriptFile,
-                                               libFmt, sopt);
-
-        if (autoDetectFmt) {
-          alnLib.enableAutodetect();
-        }
-        success = processSample<UnpairedRead>(alnLib, requiredObservations, sopt,
-                                              outputDirectory);
+        success = runSingleEndSample<AlignmentModel>(alignmentFiles, transcriptFile, libFmt, sopt, autoDetectFmt, requiredObservations);
       }
     } break;
     case ReadType::PAIRED_END: {
@@ -1849,14 +1871,11 @@ transcript abundance from RNA-seq reads
                         " Please report this on github");
         std::exit(1);
       }
-
-      AlignmentLibraryT<ReadPair, AlignmentModel> alnLib(alignmentFiles, transcriptFile, libFmt,
-                                        sopt);
+      AlignmentLibraryT<ReadPair, AlignmentModel> alnLib(alignmentFiles, transcriptFile, libFmt, sopt);
       if (autoDetectFmt) {
         alnLib.enableAutodetect();
       }
-      success = processSample<ReadPair>(alnLib, requiredObservations, sopt,
-                                        outputDirectory);
+      success = processSample<ReadPair>(alnLib, requiredObservations, sopt, sopt.outputDirectory);
     } break;
     default:
       std::stringstream errfmt;
