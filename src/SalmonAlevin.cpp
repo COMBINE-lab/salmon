@@ -392,6 +392,8 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                        std::mutex& iomutex, 
                        AlevinOpts<ProtocolT>& alevinOpts,
                        MappingStatistics& mstats) {
+  (void) numAssignedFragments;
+  (void) fragLengthDist;
   uint64_t count_fwd = 0, count_bwd = 0;
   // Seed with a real random value, if available
   std::random_device rd;
@@ -463,7 +465,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
   // NOTE: validation mapping based new parameters
   std::string rc1; rc1.reserve(300);
   AlnCacheMap alnCache; alnCache.reserve(16);
-
   /*
   auto ap{selective_alignment::utils::AlignmentPolicy::DEFAULT};
   if (mimicBT2) {
@@ -483,6 +484,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
   msi.collect_decoys(writeQuasimappings);
 
   std::string readSubSeq;
+  std::string umi;
   //////////////////////
 
   bool tryAlign{salmonOpts.validateMappings};
@@ -528,7 +530,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
       // extracting barcodes
       size_t barcodeLength = alevinOpts.protocol.barcodeLength;
       size_t umiLength = alevinOpts.protocol.umiLength;
-      std::string umi;//, barcode;
+      umi.clear();
       nonstd::optional<std::string> barcode;
       nonstd::optional<uint32_t> barcodeIdx;
       extraBAMtags.clear();
@@ -680,17 +682,45 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
         if (mapType == salmon::utils::MappingType::SINGLE_MAPPED) {
           // na
           bw << static_cast<uint32_t>(jointAlignments.size()); 
-          // rl
-          bw << static_cast<uint16_t>(readLenRight); 
-          // bc 
-          bw << *barcode;
+          // read length
+          // bw << static_cast<uint16_t>(readLenRight); 
+
+          // bc
+          // if we can if the barcode into an integer 
+          if ( alevinOpts.protocol.barcodeLength <= 32 ) { 
+            alevin::types::AlevinCellBarcodeKmer bck;
+            bool ok = bck.fromChars(*barcode);
+            if (ok) {
+              if (alevinOpts.protocol.barcodeLength <= 16) { // can use 32-bit int
+                uint32_t shortbck = static_cast<uint32_t>((0xFFFFFFFF00000000 & bck.word(0) >> 32));
+                bw << shortbck;
+              } else { // must use 64-bit int
+                bw << bck.word(0);
+              }
+            }
+          } else { // must use a string for the barcode
+            bw << *barcode;
+          }
+
           // umi
-          bw << umi;
+          if ( alevinOpts.protocol.barcodeLength <= 16 ) { // if we can use 32-bit int 
+            uint64_t umiint = jointHitGroup.umi();
+            uint32_t shortumi = static_cast<uint32_t>((0xFFFFFFFF00000000 & umiint >> 32));
+            bw << shortumi;
+          } else if ( alevinOpts.protocol.barcodeLength <= 32 ) { // if we can use 64-bit int
+            uint64_t umiint = jointHitGroup.umi();
+            bw << umiint;
+          } else { // must use string
+            bw << umi;
+          }
+
+
           for (auto& aln : jointAlignments) {
-            uint8_t is_fw = aln.fwd ? 1 : 0;
-            bw << is_fw;
-            bw << aln.tid;
-            bw << static_cast<uint32_t>((aln.pos < 0) ? 0 : aln.pos);
+            uint32_t fw_mask = aln.fwd ? 0x80000000 : 0x00000000;
+            //bw << is_fw;
+            bw << (aln.tid | fw_mask);
+            // position 
+            //bw << static_cast<uint32_t>((aln.pos < 0) ? 0 : aln.pos);
           }
           ++num_reads_in_chunk;
         }
@@ -1230,7 +1260,7 @@ void sc_align_read_library(ReadExperimentT& readExp,
                       std::vector<AlnGroupVec<AlnT>>& structureVec,
                       AlevinOpts<ProtocolT>& alevinOpts, 
                       MappingStatistics& mstats) {
-
+  (void) burnedIn;
   std::vector<std::thread> threads;
   std::atomic<uint64_t> numValidHits{0};
   rl.checkValid();
@@ -1513,8 +1543,12 @@ void do_sc_align(ReadExperimentT& experiment,
   auto chunk_offset = bw.num_bytes() - sizeof(uint64_t);
   std::atomic<uint64_t> num_chunks{0};
 
+  // ### start of tags 
+
   // Tags we will have
   // write the tag meta-information section
+
+  // File-level tag description 
   uint16_t file_level_tags{2};
   bw << file_level_tags;
 
@@ -1526,16 +1560,54 @@ void do_sc_align(ReadExperimentT& experiment,
   bw << std::string("ulen");
   bw << type_id;
 
+  // read-level tag description
   uint16_t read_level_tags{2};
   bw << read_level_tags;
+
+  // barcode
   bw << std::string("b");
-  bw << type_id;
-  bw << std::string("u");
+  if ( alevinOpts.protocol.barcodeLength > 32 ) {
+    type_id = 8;
+  } else if ( alevinOpts.protocol.barcodeLength > 16 ) {
+    // 17 - 32 bases
+    type_id = 4;
+  } else {
+    // <= 16 bases 
+    type_id = 3;
+  }
   bw << type_id;
 
-  uint16_t aln_level_tags{0};
+  // umi
+  bw << std::string("u");
+  if ( alevinOpts.protocol.umiLength > 32 ) {
+    type_id = 8;
+  } else if ( alevinOpts.protocol.umiLength > 16 ) {
+    // 17 - 32 bases
+    type_id = 4;
+  } else {
+    // <= 16 bases 
+    type_id = 3;
+  }
+  bw << type_id;
+
+  // alignment-level tag description
+  uint16_t aln_level_tags{1};
   bw << aln_level_tags;
-  // end of tags 
+  // we maintain orientation
+  //bw << std::string("orientation");
+  //type_id = 1;
+  //bw << type_id;
+
+  // and reference id
+  bw << std::string("compressed_ori_refid");
+  type_id = 3;
+  bw << type_id;
+
+  // ### end of tag definitions
+
+  // the actual file-level tags
+  bw << static_cast<uint16_t>(alevinOpts.protocol.barcodeLength);
+  bw << static_cast<uint16_t>(alevinOpts.protocol.umiLength);
 
   rad_file << bw;
   bw.clear();
@@ -1563,7 +1635,7 @@ void do_sc_align(ReadExperimentT& experiment,
         FragmentLengthDistribution& fragLengthDist,
         std::atomic<uint64_t>& numAssignedFragments, size_t numQuantThreads,
         std::atomic<bool>& burnedIn) -> void {
-
+    (void) clusterForest;
     sc_align_read_library<AlnT>(experiment, rl, sidx, transcripts, 
                              numObservedFragments, numAssignedFragments,
                              smallSeqs, nSeqs, burnedIn, 
