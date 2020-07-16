@@ -510,7 +510,7 @@ bool doBootstrap(
 
     if (alphaSum < ::minWeight) {
       jointLog->error("Total alpha weight was too small! "
-                      "Make sure you ran salmon correclty.");
+                      "Make sure you ran salmon correctly.");
       return false;
     }
 
@@ -803,7 +803,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
       alphas[i].store(alphasPrime[i].load());
       alphasPrime[i] = 1.0;
     }
-  } else { // otherwise, initalize with a linear combination of the true and
+  } else { // otherwise, initialize with a linear combination of the true and
            // uniform alphas
     for (size_t i = 0; i < alphas.size(); ++i) {
       auto uniAbund = (metaGenomeMode or altInitMode) ? alphasPrime[i].load()
@@ -980,7 +980,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   /* -- v0.8.x
   if (alphaSum < ::minWeight) {
     jointLog->error("Total alpha weight was too small! "
-                    "Make sure you ran salmon correclty.");
+                    "Make sure you ran salmon correctly.");
     return false;
   }
   */
@@ -1005,7 +1005,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
 
   if (alphaSum < ::minWeight) {
     jointLog->error("Total alpha weight was too small! "
-                    "Make sure you ran salmon correclty.");
+                    "Make sure you ran salmon correctly.");
     return false;
   }
 

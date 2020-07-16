@@ -232,7 +232,7 @@ namespace salmon {
        "[selective-alignment mode only] : Allow soft-clipping of reads that overhang the beginning or ends "
        "of the transcript.  In this case, the overhaning section of the read will simply be unaligned, and "
        "will not contribute or detract from the alignment score.  The default policy is to force an end-to-end "
-       "alignemnt of the entire read, so that overhanings will result in some deletion of nucleotides from the "
+       "alignment of the entire read, so that overhanings will result in some deletion of nucleotides from the "
        "read."
        )
       ("fullLengthAlignment", 
@@ -578,7 +578,7 @@ namespace salmon {
        po::bool_switch(&(sopt.alternativeInitMode))->default_value(salmon::defaults::alternativeInitMode),
        "[Experimental]: Use an alternative strategy (rather than simple "
        "interpolation between) the "
-       "online and uniform abundance estimates to initalize the EM / VBEM "
+       "online and uniform abundance estimates to initialize the EM / VBEM "
        "algorithm.")
       ("auxDir",
        po::value<std::string>(&(sopt.auxDir))->default_value(salmon::defaults::auxDir),
@@ -713,7 +713,7 @@ namespace salmon {
        "purpose "
        "of ignoring the auxiliary models for the first "
        "<numPreAuxModelSamples> observations is to avoid applying these "
-       "models before thier "
+       "models before their "
        "parameters have been learned sufficiently well.")
       ("useEM", po::bool_switch(&(sopt.useEM))->default_value(salmon::defaults::useEM),
        "Use the traditional EM algorithm for optimization in the batch passes.")

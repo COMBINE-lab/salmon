@@ -521,7 +521,7 @@ bool runBootstraps(size_t numGenes,
 
     if (alphaSum < minWeight) {
       jointlog->error("Total alpha weight was too small! "
-                      "Make sure you ran salmon correclty.");
+                      "Make sure you ran salmon correctly.");
       jointlog->flush();
       return false;
     }
