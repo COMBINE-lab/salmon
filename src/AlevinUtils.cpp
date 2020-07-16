@@ -567,6 +567,7 @@ namespace alevin {
       std::vector<spdlog::sink_ptr> sinks{consoleSink, fileSink};
       aopt.jointLog = spdlog::create("alevinLog", std::begin(sinks), std::end(sinks));
 
+      aopt.just_align = vm["justAlign"].as<bool>();
       aopt.quiet = vm["quiet"].as<bool>();
       aopt.noEM = vm["noem"].as<bool>();
       aopt.noDedup = vm["noDedup"].as<bool>();
@@ -589,6 +590,12 @@ namespace alevin {
       aopt.umiEditDistance = vm["umiEditDistance"].as<uint32_t>();
       aopt.forceCells = vm["forceCells"].as<uint32_t>();
       aopt.expectCells = vm["expectCells"].as<uint32_t>();
+
+      if (aopt.just_align) {
+        aopt.jointLog->info("The --justAlign flag was passed to alevin. The "
+        "reads will be selectively aligned and the output written to a PAM file."
+        "Arguments passed that correspond to other processing steps will be ignored");
+      }
 
       if (aopt.umiEditDistance > 4 ) {
         aopt.jointLog->error("Too high edit distance collapsing {}, expected <= 4",

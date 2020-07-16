@@ -85,6 +85,10 @@
 // core includes
 #include "core/range.hpp"
 
+// radicl includes
+#include "radicl/BasicBinWriter.hpp"
+#include "radicl/RADHeader.hpp"
+
 //alevin include
 #include "AlevinOpts.hpp"
 #include "AlevinUtils.hpp"
@@ -366,6 +370,408 @@ void processMiniBatchSimple(ReadExperimentT& readExp, ForgettingMassCalculator& 
     readLib.updateCompatCounts(numCompatibleFragments);
   }
 }
+
+
+/**
+ * Perform selective alignment of sc reads and produce output file.
+ **/
+template <typename IndexT, typename ProtocolT>
+void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
+                       AlnGroupVec<QuasiAlignment>& structureVec,
+                       std::atomic<uint64_t>& numObservedFragments,
+                       std::atomic<uint64_t>& numAssignedFragments,
+                       std::atomic<uint64_t>& validHits, 
+                       std::atomic<uint32_t>& smallSeqs,
+                       std::atomic<uint32_t>& nSeqs,
+                       IndexT* qidx, std::vector<Transcript>& transcripts,
+                       FragmentLengthDistribution& fragLengthDist, 
+                       SalmonOpts& salmonOpts,
+                       std::atomic<uint64_t>& num_chunks,
+                       std::ofstream& rad_file,
+                       std::mutex& fileMutex,
+                       std::mutex& iomutex, 
+                       AlevinOpts<ProtocolT>& alevinOpts,
+                       MappingStatistics& mstats) {
+  uint64_t count_fwd = 0, count_bwd = 0;
+  // Seed with a real random value, if available
+  std::random_device rd;
+
+  // Create a random uniform distribution
+  std::default_random_engine eng(rd());
+
+  uint64_t prevObservedFrags{1};
+  uint64_t leftHitCount{0};
+  uint64_t hitListCount{0};
+  salmon::utils::ShortFragStats shortFragStats;
+  double maxZeroFrac{0.0};
+
+  // Write unmapped reads
+  fmt::MemoryWriter unmappedNames;
+  bool writeUnmapped = salmonOpts.writeUnmappedNames;
+  spdlog::logger* unmappedLogger = (writeUnmapped) ? salmonOpts.unmappedLog.get() : nullptr;
+
+  // Write unmapped reads
+  fmt::MemoryWriter orphanLinks;
+  bool writeOrphanLinks = salmonOpts.writeOrphanLinks;
+  spdlog::logger* orphanLinkLogger = (writeOrphanLinks) ? salmonOpts.orphanLinkLog.get() : nullptr;
+
+  BasicBinWriter bw;
+  uint32_t num_reads_in_chunk{0};
+  bw << num_reads_in_chunk;
+  bw << num_reads_in_chunk;
+
+  size_t minK = qidx->k();
+  size_t locRead{0};
+  size_t rangeSize{0};
+  uint64_t localNumAssignedFragments{0};
+
+  bool consistentHits = salmonOpts.consistentHits;
+  bool quiet = salmonOpts.quiet;
+
+  size_t maxNumHits{salmonOpts.maxReadOccs};
+  size_t readLenLeft{0};
+  size_t readLenRight{0};
+
+  constexpr const int32_t invalidScore = std::numeric_limits<int32_t>::min();
+  MemCollector<IndexT> memCollector(qidx);
+  ksw2pp::KSW2Aligner aligner;
+  pufferfish::util::AlignmentConfig aconf;
+  pufferfish::util::MappingConstraintPolicy mpol;
+  bool initOK = salmon::mapping_utils::initMapperSettings(salmonOpts, memCollector, aligner, aconf, mpol);
+  PuffAligner puffaligner(qidx->refseq_, qidx->refAccumLengths_, qidx->k(), aconf, aligner);
+
+  pufferfish::util::CachedVectorMap<size_t, std::vector<pufferfish::util::MemCluster>, std::hash<size_t>> hits;
+  std::vector<pufferfish::util::MemCluster> recoveredHits;
+  std::vector<pufferfish::util::JointMems> jointHits;
+  PairedAlignmentFormatter<IndexT*> formatter(qidx);
+  pufferfish::util::QueryCache qc;
+
+  bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
+  bool mimicBT2 = salmonOpts.mimicBT2;
+  bool noDovetail = !salmonOpts.allowDovetail;
+  bool useChainingHeuristic = !salmonOpts.disableChainingHeuristic;
+
+  pufferfish::util::HitCounters hctr;
+  salmon::utils::MappingType mapType{salmon::utils::MappingType::UNMAPPED};
+  bool hardFilter = salmonOpts.hardFilter;
+
+  fmt::MemoryWriter sstream;
+  auto* qmLog = salmonOpts.qmLog.get();
+  bool writeQuasimappings = (qmLog != nullptr);
+
+  //////////////////////
+  // NOTE: validation mapping based new parameters
+  std::string rc1; rc1.reserve(300);
+  AlnCacheMap alnCache; alnCache.reserve(16);
+
+  /*
+  auto ap{selective_alignment::utils::AlignmentPolicy::DEFAULT};
+  if (mimicBT2) {
+    ap = selective_alignment::utils::AlignmentPolicy::BT2;
+  } else if (mimicStrictBT2) {
+    ap = selective_alignment::utils::AlignmentPolicy::BT2_STRICT;
+  }
+  */
+
+  size_t numMappingsDropped{0};
+  size_t numDecoyFrags{0};
+  const double decoyThreshold = salmonOpts.decoyThreshold;
+
+  salmon::mapping_utils::MappingScoreInfo msi(decoyThreshold);
+  // we only collect detailed decoy information if we will be 
+  // writing output to SAM.
+  msi.collect_decoys(writeQuasimappings);
+
+  std::string readSubSeq;
+  //////////////////////
+
+  bool tryAlign{salmonOpts.validateMappings};
+  auto rg = parser->getReadGroup();
+  while (parser->refill(rg)) {
+    rangeSize = rg.size();
+
+    if (rangeSize > structureVec.size()) {
+      salmonOpts.jointLog->error("rangeSize = {}, but structureVec.size() = {} "
+                                 "--- this shouldn't happen.\n"
+                                 "Please report this bug on GitHub",
+                                 rangeSize, structureVec.size());
+      std::exit(1);
+    }
+
+    LibraryFormat expectedLibraryFormat = rl.format();
+
+    std::string extraBAMtags;
+    if(writeQuasimappings) {
+    	size_t reserveSize { alevinOpts.protocol.barcodeLength + alevinOpts.protocol.umiLength + 12};
+    	extraBAMtags.reserve(reserveSize);
+    }
+
+    for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
+      auto& rp = rg[i];
+      readLenLeft = rp.first.seq.length();
+      readLenRight= rp.second.seq.length();
+
+      bool tooShortRight = (readLenRight < (minK+alevinOpts.trimRight));
+      //localUpperBoundHits = 0;
+      auto& jointHitGroup = structureVec[i];
+      jointHitGroup.clearAlignments();
+      auto& jointAlignments= jointHitGroup.alignments();
+
+      hits.clear();
+      jointHits.clear();
+      memCollector.clear();
+      //jointAlignments.clear();
+      readSubSeq.clear();
+      mapType = salmon::utils::MappingType::UNMAPPED;
+
+      //////////////////////////////////////////////////////////////
+      // extracting barcodes
+      size_t barcodeLength = alevinOpts.protocol.barcodeLength;
+      size_t umiLength = alevinOpts.protocol.umiLength;
+      std::string umi;//, barcode;
+      nonstd::optional<std::string> barcode;
+      nonstd::optional<uint32_t> barcodeIdx;
+      extraBAMtags.clear();
+      bool seqOk;
+
+      if (alevinOpts.protocol.end == bcEnd::FIVE ||
+          alevinOpts.protocol.end == bcEnd::THREE){
+        barcode = aut::extractBarcode(rp.first.seq, alevinOpts.protocol);
+        seqOk = (barcode.has_value()) ?
+          aut::sequenceCheck(*barcode, Sequence::BARCODE) : false;
+
+        if (not seqOk){
+          bool recovered = aut::recoverBarcode(*barcode);
+          if (recovered) { seqOk = true; }
+        }
+
+        // If we have a valid barcode
+        if (seqOk) {
+          // corrBarcodeIndex = barcodeMap[barcodeIndex];
+          // jointHitGroup.setBarcode(*barcodeIdx);
+          aut::extractUMI(rp.first.seq, alevinOpts.protocol, umi);
+
+          if (umiLength != umi.size()) {
+            smallSeqs += 1;
+          } else {
+            alevin::types::AlevinUMIKmer umiIdx;
+            bool isUmiIdxOk = umiIdx.fromChars(umi);
+
+            if (isUmiIdxOk) {
+              jointHitGroup.setUMI(umiIdx.word(0));
+
+              auto seq_len = rp.second.seq.size();
+              if (alevinOpts.trimRight > 0) {
+                if (!tooShortRight) {
+                  readSubSeq = rp.second.seq.substr(0, seq_len - alevinOpts.trimRight);
+                  auto rh = memCollector(readSubSeq, qc,
+                                         true, // isLeft
+                                         false // verbose
+                  );
+                }
+              } else {
+                aut::getReadSequence(alevinOpts.protocol, rp.second.seq, readSubSeq);
+                auto rh = tooShortRight ? false
+                                        : memCollector(readSubSeq, qc,
+                                                       true, // isLeft
+                                                       false // verbose
+                                          );
+              }
+              memCollector.findChains(
+                  readSubSeq, hits, salmonOpts.fragLenDistMax,
+                  MateStatus::PAIRED_END_RIGHT,
+                  useChainingHeuristic, // heuristic chaining
+                  true,                 // isLeft
+                  false                 // verbose
+              );
+
+              pufferfish::util::joinReadsAndFilterSingle(
+                  hits, jointHits, readSubSeq.length(),
+                  memCollector.getConsensusFraction());
+            } else {
+              nSeqs += 1;
+            }
+          }
+        }
+      } else{
+        salmonOpts.jointLog->error( "wrong barcode-end parameters.\n"
+                                    "Please report this bug on Github");
+        salmonOpts.jointLog->flush();
+        spdlog::drop_all();
+        std::exit(1);
+      }
+      //////////////////////////////////////////////////////////////
+      // Consider a read as too short if the ``non-barcode'' end is too short
+      if (tooShortRight) {
+        ++shortFragStats.numTooShort;
+        shortFragStats.shortest = std::min(shortFragStats.shortest,
+                                           std::max(readLenLeft, readLenRight));
+      }
+
+
+      // If the read mapped to > maxReadOccs places, discard it
+      if (jointHits.size() > salmonOpts.maxReadOccs) {
+        jointHitGroup.clearAlignments();
+      }
+
+        if (!jointHits.empty()) {
+          puffaligner.clear();
+          puffaligner.getScoreStatus().reset();
+          msi.clear(jointHits.size());
+
+          size_t idx{0};
+          bool is_multimapping = (jointHits.size() > 1);
+
+          for (auto &&jointHit : jointHits) {
+            // for alevin, currently, we need these to have a mate status of PAIRED_END_RIGHT
+            jointHit.mateStatus = MateStatus::PAIRED_END_RIGHT;
+            auto hitScore = puffaligner.calculateAlignments(readSubSeq, jointHit, hctr, is_multimapping, false);
+            bool validScore = (hitScore != invalidScore);
+            numMappingsDropped += validScore ? 0 : 1;
+            auto tid = qidx->getRefId(jointHit.tid);
+            
+            // NOTE: Here, we know that the read arising from the transcriptome is the "right"
+            // read (read 2).  So we interpret compatibility in that context.
+            // TODO: Make this code more generic and modular (account for the possibility of different library)
+            // protocols or setups where the reads are not always "paired-end" and the transcriptomic read is not
+            // always read 2 (@k3yavi).
+            bool isCompat = (expectedLibraryFormat.strandedness == ReadStrandedness::U) or 
+                            (jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::AS)) or
+                            (!jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::SA));
+
+            salmon::mapping_utils::updateRefMappings(tid, hitScore, isCompat, idx, transcripts, invalidScore, 
+                                                     msi);
+            ++idx;
+          }
+
+          bool bestHitDecoy = msi.haveOnlyDecoyMappings();
+          if (msi.bestScore > invalidScore and !bestHitDecoy) {
+            salmon::mapping_utils::filterAndCollectAlignments(jointHits,
+                                                              readSubSeq.length(),
+                                                              readSubSeq.length(),
+                                                              false, // true for single-end false otherwise
+                                                              tryAlign,
+                                                              hardFilter,
+                                                              salmonOpts.scoreExp,
+                                                              salmonOpts.minAlnProb,
+                                                              msi,
+                                                              jointAlignments);
+            if (!jointAlignments.empty()) {
+              mapType = salmon::utils::MappingType::SINGLE_MAPPED;
+            }
+          } else {
+            numDecoyFrags += bestHitDecoy ? 1 : 0;
+            mapType = (bestHitDecoy) ? salmon::utils::MappingType::DECOY : salmon::utils::MappingType::UNMAPPED;
+            if (bestHitDecoy) {
+              salmon::mapping_utils::filterAndCollectAlignmentsDecoy(
+                  jointHits, readSubSeq.length(),
+                  readSubSeq.length(),
+                  false, // true for single-end false otherwise
+                  tryAlign, hardFilter, salmonOpts.scoreExp,
+                  salmonOpts.minAlnProb, msi,
+                  jointAlignments);
+            } else {
+              jointHitGroup.clearAlignments();
+            }
+          }
+        } //end-if validate mapping
+
+        // NOTE: Think if we should put decoy mappings in the RAD file
+        if (mapType == salmon::utils::MappingType::SINGLE_MAPPED) {
+          // na
+          bw << static_cast<uint32_t>(jointAlignments.size()); 
+          // rl
+          bw << static_cast<uint16_t>(readLenRight); 
+          // bc 
+          bw << *barcode;
+          // umi
+          bw << umi;
+          for (auto& aln : jointAlignments) {
+            uint8_t is_fw = aln.fwd ? 1 : 0;
+            bw << is_fw;
+            bw << aln.tid;
+            bw << static_cast<uint32_t>((aln.pos < 0) ? 0 : aln.pos);
+          }
+          ++num_reads_in_chunk;
+        }
+
+
+        if (num_reads_in_chunk > 5000) {
+          ++num_chunks;
+          uint32_t num_bytes = bw.num_bytes();
+          bw.write_integer_at_offset(0, num_bytes);
+          bw.write_integer_at_offset(sizeof(num_bytes), num_reads_in_chunk);
+          fileMutex.lock();
+          rad_file << bw;
+          fileMutex.unlock();
+          bw.clear();
+          num_reads_in_chunk = 0;
+
+          // reserve space for headers of next chunk
+          bw << num_reads_in_chunk;
+          bw << num_reads_in_chunk;
+        }
+        /*
+        if (writeQuasimappings) {
+          writeAlignmentsToStream(rp, formatter, jointAlignments, sstream, true, true, extraBAMtags);
+        }
+        */
+
+        validHits += jointAlignments.size();
+        localNumAssignedFragments += (jointAlignments.size() > 0);
+        locRead++;
+        ++numObservedFragments;
+        jointHitGroup.clearAlignments();
+
+        if (!quiet and numObservedFragments % 500000 == 0) {
+          iomutex.lock();
+          const char RESET_COLOR[] = "\x1b[0m";
+          char green[] = "\x1b[30m";
+          green[3] = '0' + static_cast<char>(fmt::GREEN);
+          char red[] = "\x1b[30m";
+          red[3] = '0' + static_cast<char>(fmt::RED);
+          fmt::print(
+              stderr, "\033[A\r\r{}processed{} {} Million {}fragments{}\n",
+              green, red, numObservedFragments / 1000000, green, RESET_COLOR);
+          fmt::print(stderr, "hits: {}, hits per frag:  {}", validHits,
+                     validHits / static_cast<float>(prevObservedFrags));
+          iomutex.unlock();
+        }
+
+    } // end for i < j->nb_filled
+
+    prevObservedFrags = numObservedFragments;
+    /*
+    AlnGroupVecRange<QuasiAlignment> hitLists = {structureVec.begin(), structureVec.begin()+rangeSize};
+    processMiniBatchSimple<QuasiAlignment>(
+                                     readExp, fmCalc, rl, salmonOpts, hitLists,
+                                     transcripts, clusterForest, fragLengthDist,
+                                     numAssignedFragments, initialRound, burnedIn, maxZeroFrac);
+                                     */
+  }
+
+  // If we have any unwritten records left to write
+  if (num_reads_in_chunk > 0) {
+    ++num_chunks;
+    uint32_t num_bytes = bw.num_bytes();
+    bw.write_integer_at_offset(0, num_bytes);
+    bw.write_integer_at_offset(sizeof(num_bytes), num_reads_in_chunk);
+    fileMutex.lock();
+    rad_file << bw;
+    fileMutex.unlock();
+    bw.clear();
+    num_reads_in_chunk = 0;
+  }
+
+  if (maxZeroFrac > 5.0) {
+    salmonOpts.jointLog->info("Thread saw mini-batch with a maximum of {0:.2f}\% zero probability fragments",
+                              maxZeroFrac);
+  }
+
+  mstats.numDecoyFragments += numDecoyFrags;
+  readExp.updateShortFrags(shortFragStats);
+}
+// END SC_ALIGN
 
 /// START QUASI
 template <typename IndexT, typename ProtocolT>
@@ -805,6 +1211,91 @@ void processReadsQuasi(
 }
 
 template <typename AlnT, typename ProtocolT>
+void sc_align_read_library(ReadExperimentT& readExp, 
+                      ReadLibrary& rl, 
+                      SalmonIndex* sidx, 
+                      std::vector<Transcript>& transcripts, 
+                      std::atomic<uint64_t>& numObservedFragments, // total number of reads we've looked at
+                      std::atomic<uint64_t>& numAssignedFragments, // total number of assigned reads
+                      std::atomic<uint32_t>& smallSeqs, 
+                      std::atomic<uint32_t>& nSeqs, 
+                      std::atomic<bool>& burnedIn, 
+                      FragmentLengthDistribution& fragLengthDist, 
+                      SalmonOpts& salmonOpts,
+                      std::atomic<uint64_t>& num_chunks,
+                      std::ofstream& rad_file,
+                      std::mutex& fileMutex,
+                      std::mutex& ioMutex, 
+                      size_t numThreads, 
+                      std::vector<AlnGroupVec<AlnT>>& structureVec,
+                      AlevinOpts<ProtocolT>& alevinOpts, 
+                      MappingStatistics& mstats) {
+
+  std::vector<std::thread> threads;
+  std::atomic<uint64_t> numValidHits{0};
+  rl.checkValid();
+  auto indexType = sidx->indexType();
+  std::unique_ptr<paired_parser> pairedParserPtr{nullptr};
+
+  // If the read library is paired-end
+  // ------ Paired-end --------
+  if (rl.format().type == ReadType::PAIRED_END) {
+
+    if (rl.mates1().size() != rl.mates2().size()) {
+      salmonOpts.jointLog->error("The number of provided files for "
+                                 "-1 and -2 must be the same!");
+      std::exit(1);
+    }
+
+    size_t numFiles = rl.mates1().size() + rl.mates2().size();
+    uint32_t numParsingThreads{1};
+    // HACK!
+    if(numThreads > 1){
+      numThreads -= 1;
+    }
+    if (rl.mates1().size() > 1 and numThreads > 8) { numParsingThreads = 2; numThreads -= 1;}
+    pairedParserPtr.reset(new paired_parser(rl.mates1(), rl.mates2(), numThreads, numParsingThreads, miniBatchSize));
+    pairedParserPtr->start();
+
+    auto processFunctor = [&](size_t i, auto* parserPtr, auto* index) {
+     if(salmonOpts.qmFileName != "" and i == 0) {
+       writeSAMHeader(*index, salmonOpts.qmLog);
+     }
+     auto threadFun = [&, i, parserPtr, index]() -> void {
+                        process_reads_sc_align(parserPtr,
+                                          readExp, rl, structureVec[i],
+                                          numObservedFragments, numAssignedFragments, numValidHits,
+                                          smallSeqs, nSeqs, index, transcripts,
+                                          fragLengthDist, 
+                                          salmonOpts, num_chunks, rad_file, fileMutex, ioMutex, 
+                                          alevinOpts, 
+                                          mstats);
+     };
+     threads.emplace_back(threadFun);
+    };
+
+    // True if we have a sparse index, false otherwise
+    bool isSparse = sidx->isSparse();
+    for (size_t i = 0; i < numThreads; ++i) {
+      if (isSparse) {
+        processFunctor(i, pairedParserPtr.get(), sidx->puffSparseIndex());
+      } else {
+        processFunctor(i, pairedParserPtr.get(), sidx->puffIndex());
+      }
+    } // End spawn all threads
+
+    for (auto& t : threads) {
+      t.join();
+    }
+
+    pairedParserPtr->stop();
+
+    // DONE!
+  }
+}
+
+
+template <typename AlnT, typename ProtocolT>
 void processReadLibrary(
                         ReadExperimentT& readExp, 
                         ReadLibrary& rl, 
@@ -973,6 +1464,190 @@ void processReadLibrary(
   }
 }
 
+/**
+ * Selectively align the reads and write a PAM file out.
+ */
+template <typename AlnT, typename ProtocolT>
+void do_sc_align(ReadExperimentT& experiment,
+                 SalmonOpts& salmonOpts,
+                 MappingStatistics& mstats,
+                 uint32_t numQuantThreads,
+                 AlevinOpts<ProtocolT>& alevinOpts) {
+
+  auto& refs = experiment.transcripts();
+  size_t numTranscripts = refs.size();
+
+  std::atomic<uint64_t> numObservedFragments{0};
+  std::atomic<uint32_t> smallSeqs{0};
+  std::atomic<uint32_t> nSeqs{0};
+
+  auto jointLog = salmonOpts.jointLog;
+  bool initialRound{true};
+  uint32_t roundNum{0};
+
+  std::mutex fileMutex;
+  std::mutex ioMutex;
+
+  // RAD file path 
+  boost::filesystem::path rad_file_path = salmonOpts.outputDirectory / "map.rad";
+
+  std::ofstream rad_file(rad_file_path.string());
+
+  if (!rad_file.good()) {
+    alevinOpts.jointLog->error("Could not open {} for writing.", rad_file_path.string());
+    throw std::runtime_error("error creating output file.");
+  }
+
+  BasicBinWriter bw;
+  //  RADHeader
+  RADHeader rh;
+  // right now, all formats are effectively single-end
+  rh.is_paired(false);
+  for (auto& r : refs) {
+    rh.add_refname(r.RefName);
+  }
+  rh.dump_to_bin(bw);
+  
+  // where we will write the number of chunks when we know
+  // how many there are
+  auto chunk_offset = bw.num_bytes() - sizeof(uint64_t);
+  std::atomic<uint64_t> num_chunks{0};
+
+  // Tags we will have
+  // write the tag meta-information section
+  uint16_t file_level_tags{2};
+  bw << file_level_tags;
+
+  // cblen
+  uint8_t type_id{2};
+  bw << std::string("cblen");
+  bw << type_id;
+
+  bw << std::string("ulen");
+  bw << type_id;
+
+  uint16_t read_level_tags{2};
+  bw << read_level_tags;
+  bw << std::string("b");
+  bw << type_id;
+  bw << std::string("u");
+  bw << type_id;
+
+  uint16_t aln_level_tags{0};
+  bw << aln_level_tags;
+  // end of tags 
+
+  rad_file << bw;
+  bw.clear();
+
+  size_t numPrevObservedFragments = 0;
+
+  size_t maxReadGroup{miniBatchSize};
+  uint32_t structCacheSize = numQuantThreads * maxReadGroup * 10;
+
+  // EQCLASS
+  bool terminate{false};
+
+  // This structure is a vector of vectors of alignment
+  // groups.  Each thread will get its own vector, so we
+  // allocate these up front to save time and allow
+  // reuse.
+  std::vector<AlnGroupVec<AlnT>> groupVec;
+  for (size_t i = 0; i < numQuantThreads; ++i) {
+    groupVec.emplace_back(maxReadGroup);
+  }
+
+  auto processReadLibraryCallback =
+    [&](ReadLibrary& rl, SalmonIndex* sidx,
+        std::vector<Transcript>& transcripts, ClusterForest& clusterForest,
+        FragmentLengthDistribution& fragLengthDist,
+        std::atomic<uint64_t>& numAssignedFragments, size_t numQuantThreads,
+        std::atomic<bool>& burnedIn) -> void {
+
+    sc_align_read_library<AlnT>(experiment, rl, sidx, transcripts, 
+                             numObservedFragments, numAssignedFragments,
+                             smallSeqs, nSeqs, burnedIn, 
+                             fragLengthDist, salmonOpts,
+                             num_chunks,
+                             rad_file,
+                             fileMutex,
+                             ioMutex, numQuantThreads, groupVec,
+                             alevinOpts, mstats);
+  };
+
+  if (!salmonOpts.quiet) {
+    salmonOpts.jointLog->flush();
+    fmt::print(stderr, "\n\n\n\n");
+  }
+
+  // Process all of the reads
+  experiment.processReads(numQuantThreads, salmonOpts,
+                          processReadLibraryCallback);
+  experiment.setNumObservedFragments(numObservedFragments);
+
+  // EQCLASS
+  // changing it to alevin based finish
+  bool done = experiment.equivalenceClassBuilder().alv_finish();
+  // skip the extra online rounds
+
+  if (!salmonOpts.quiet) {
+    fmt::print(stderr, "\n\n\n\n");
+  }
+
+  // Report statistics about short fragments
+  salmon::utils::ShortFragStats shortFragStats = experiment.getShortFragStats();
+  if (shortFragStats.numTooShort > 0) {
+    double tooShortFrac =
+      (numObservedFragments > 0)
+      ? (static_cast<double>(shortFragStats.numTooShort) /
+         numObservedFragments)
+      : 0.0;
+    if (tooShortFrac > 0.0) {
+      auto* sidx = experiment.getIndex();
+      bool isSparse = sidx->isSparse();
+      size_t minK = (isSparse) ? sidx->puffSparseIndex()->k() : sidx->puffIndex()->k();
+      fmt::print(stderr, "\n\n");
+      salmonOpts.jointLog->warn("{}% of fragments were shorter than the k used "
+                                "to build the index ({}).\n"
+                                "If this fraction is too large, consider "
+                                "re-building the index with a smaller k.\n"
+                                "The minimum read size found was {}.\n\n",
+                                tooShortFrac * 100.0, minK,
+                                shortFragStats.shortest);
+
+      // If *all* fragments were too short, then halt now
+      if (shortFragStats.numTooShort == numObservedFragments) {
+        salmonOpts.jointLog->error(
+                                   "All fragments were too short to quasi-map.  I won't proceed.");
+        std::exit(1);
+      }
+    } // end tooShortFrac > 0.0
+  }
+
+  //+++++++++++++++++++++++++++++++++++++++
+  // If we didn't achieve burnin, then at least compute effective
+  // lengths and mention this to the user.
+
+  salmonOpts.jointLog->info("Number of fragments discarded because they are best-mapped to decoys : {:n}",
+                            mstats.numDecoyFragments.load());
+
+  if (smallSeqs > 100) {
+    jointLog->warn("Found {} reads with CB+UMI length smaller than expected.\n"
+                   "Please report on github if this number is too large", smallSeqs);
+  }
+  if (nSeqs > 100) {
+    jointLog->warn("Found {} reads with `N` in the UMI sequence and ignored the reads.\n"
+                   "Please report on github if this number is too large", nSeqs);
+  }
+
+  rad_file.seekp(chunk_offset);
+  uint64_t nc = num_chunks.load();
+  rad_file.write(reinterpret_cast<char*>(&nc), sizeof(nc));
+
+  rad_file.close();
+  jointLog->info("finished sc_align()");
+}
+                     
 /**
  *  Quantify the targets given in the file `transcriptFile` using the
  *  reads in the given set of `readLibraries`, and write the results
@@ -1152,6 +1827,7 @@ void quantifyLibrary(ReadExperimentT& experiment,
   jointLog->info("finished quantifyLibrary()");
 }
 
+
 template <typename ProtocolT>
 void alevinOptimize( std::vector<std::string>& trueBarcodesVec,
                      spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
@@ -1205,6 +1881,76 @@ void alevinOptimize( std::vector<std::string>& trueBarcodesVec,
   else{
     aopt.jointLog->warn("No Dedup command given, is it what you want?");
   }
+}
+
+
+template <typename ProtocolT>
+int alevin_sc_align(AlevinOpts<ProtocolT>& aopt,
+                    SalmonOpts& sopt,
+                    boost::program_options::parsed_options& orderedOptions){
+  using std::cerr;
+  using std::vector;
+  using std::string;
+  namespace bfs = boost::filesystem;
+  namespace po = boost::program_options;
+  try{
+    //auto fileLog = sopt.fileLog;
+    auto jointLog = aopt.jointLog;
+    auto indexDirectory = sopt.indexDirectory;
+    auto outputDirectory = sopt.outputDirectory;
+
+    jointLog->info("parsing read library format");
+
+    // ==== Library format processing ===
+    vector<ReadLibrary> readLibraries =
+      salmon::utils::extractReadLibraries(orderedOptions);
+
+    if (readLibraries.size() == 0) {
+      jointLog->error("Failed to successfully parse any complete read libraries."
+                      " Please make sure you provided arguments properly to -1, -2 (for paired-end libraries)"
+                      " or -r (for single-end libraries), and that the library format option (-l) comes before,"
+                      " the read libraries.");
+      std::exit(1);
+    }
+    // ==== END: Library format processing ===
+
+    SalmonIndexVersionInfo versionInfo;
+    boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
+    versionInfo.load(versionPath);
+    auto idxType = versionInfo.indexType();
+
+    MappingStatistics mstats;
+    ReadExperimentT experiment(readLibraries, indexDirectory, sopt);
+
+    // This will be the class in charge of maintaining our
+    // rich equivalence classes
+    experiment.equivalenceClassBuilder().setMaxResizeThreads(sopt.maxHashResizeThreads);
+    experiment.equivalenceClassBuilder().start();
+
+    auto indexType = experiment.getIndex()->indexType();
+
+    sopt.allowOrphans = true;
+    sopt.useQuasi = true;
+    if(sopt.numThreads > 1){
+      sopt.numThreads -= 1;
+    }
+    do_sc_align<QuasiAlignment>(experiment, sopt,
+                                mstats, sopt.numThreads, aopt);
+ } catch (po::error& e) {
+    std::cerr << "Exception : [" << e.what() << "]. Exiting.\n";
+    std::exit(1);
+  } catch (const spdlog::spdlog_ex& ex) {
+    std::cerr << "logger failed with : [" << ex.what() << "]. Exiting.\n";
+    std::exit(1);
+  } catch (std::exception& e) {
+    std::cerr << "Exception : [" << e.what() << "]\n";
+    std::cerr << " alevin (sc-align) was invoked improperly.\n";
+    std::cerr << "For usage information, try "
+              << " alevin --help\nExiting.\n";
+    std::exit(1);
+  }
+
+  return 0;
 }
 
 template <typename ProtocolT>
@@ -1432,6 +2178,12 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
 }
 
 namespace apt = alevin::protocols;
+
+template 
+int alevin_sc_align(AlevinOpts<apt::DropSeq>& aopt,
+                    SalmonOpts& sopt,
+                    boost::program_options::parsed_options& orderedOptions);
+
 template
 int alevinQuant(AlevinOpts<apt::DropSeq>& aopt,
                 SalmonOpts& sopt,
@@ -1442,6 +2194,11 @@ int alevinQuant(AlevinOpts<apt::DropSeq>& aopt,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
+
+template 
+int alevin_sc_align(AlevinOpts<apt::CITESeq>& aopt,
+                    SalmonOpts& sopt,
+                    boost::program_options::parsed_options& orderedOptions);
 template
 int alevinQuant(AlevinOpts<apt::CITESeq>& aopt,
                 SalmonOpts& sopt,
@@ -1452,6 +2209,11 @@ int alevinQuant(AlevinOpts<apt::CITESeq>& aopt,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
+
+template 
+int alevin_sc_align(AlevinOpts<apt::InDrop>& aopt,
+                    SalmonOpts& sopt,
+                    boost::program_options::parsed_options& orderedOptions);
 template
 int alevinQuant(AlevinOpts<apt::InDrop>& aopt,
                 SalmonOpts& sopt,
@@ -1462,6 +2224,11 @@ int alevinQuant(AlevinOpts<apt::InDrop>& aopt,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
+
+template 
+int alevin_sc_align(AlevinOpts<apt::ChromiumV3>& aopt,
+                    SalmonOpts& sopt,
+                    boost::program_options::parsed_options& orderedOptions);
 template
 int alevinQuant(AlevinOpts<apt::ChromiumV3>& aopt,
                 SalmonOpts& sopt,
@@ -1472,6 +2239,11 @@ int alevinQuant(AlevinOpts<apt::ChromiumV3>& aopt,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
+
+template 
+int alevin_sc_align(AlevinOpts<apt::Chromium>& aopt,
+                    SalmonOpts& sopt,
+                    boost::program_options::parsed_options& orderedOptions);
 template
 int alevinQuant(AlevinOpts<apt::Chromium>& aopt,
                 SalmonOpts& sopt,
@@ -1482,6 +2254,11 @@ int alevinQuant(AlevinOpts<apt::Chromium>& aopt,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
+
+template 
+int alevin_sc_align(AlevinOpts<apt::Gemcode>& aopt,
+                    SalmonOpts& sopt,
+                    boost::program_options::parsed_options& orderedOptions);
 template
 int alevinQuant(AlevinOpts<apt::Gemcode>& aopt,
                 SalmonOpts& sopt,
@@ -1492,6 +2269,11 @@ int alevinQuant(AlevinOpts<apt::Gemcode>& aopt,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
+
+template 
+int alevin_sc_align(AlevinOpts<apt::CELSeq>& aopt,
+                    SalmonOpts& sopt,
+                    boost::program_options::parsed_options& orderedOptions);
 template
 int alevinQuant(AlevinOpts<apt::CELSeq>& aopt,
                 SalmonOpts& sopt,
@@ -1502,6 +2284,11 @@ int alevinQuant(AlevinOpts<apt::CELSeq>& aopt,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
+                
+template 
+int alevin_sc_align(AlevinOpts<apt::CELSeq2>& aopt,
+                    SalmonOpts& sopt,
+                    boost::program_options::parsed_options& orderedOptions);
 template
 int alevinQuant(AlevinOpts<apt::CELSeq2>& aopt,
                 SalmonOpts& sopt,
@@ -1512,6 +2299,11 @@ int alevinQuant(AlevinOpts<apt::CELSeq2>& aopt,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
+
+template 
+int alevin_sc_align(AlevinOpts<apt::QuartzSeq2>& aopt,
+                    SalmonOpts& sopt,
+                    boost::program_options::parsed_options& orderedOptions);
 template
 int alevinQuant(AlevinOpts<apt::QuartzSeq2>& aopt,
                 SalmonOpts& sopt,
@@ -1522,6 +2314,11 @@ int alevinQuant(AlevinOpts<apt::QuartzSeq2>& aopt,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
                 size_t numLowConfidentBarcode);
+
+template 
+int alevin_sc_align(AlevinOpts<apt::Custom>& aopt,
+                    SalmonOpts& sopt,
+                    boost::program_options::parsed_options& orderedOptions);
 template
 int alevinQuant(AlevinOpts<apt::Custom>& aopt,
                 SalmonOpts& sopt,

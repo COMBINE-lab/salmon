@@ -77,6 +77,11 @@ namespace apt = alevin::protocols;
 namespace aut = alevin::utils;
 
 template <typename ProtocolT>
+int alevin_sc_align(AlevinOpts<ProtocolT>& aopt,
+                    SalmonOpts& sopt,
+                    boost::program_options::parsed_options& orderedOptions);
+
+template <typename ProtocolT>
 int alevinQuant(AlevinOpts<ProtocolT>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
@@ -627,8 +632,8 @@ bool writeFastq(AlevinOpts<ProtocolT>& aopt,
 }
 
 /*
-  function to Rapidly parse through the barcode file, generate density
-  of each Unique barcode, use knee method to select true barcodes and
+  function to rapidly parse through the barcode file, generate the density
+  of each Unique barcode, use the knee method to select true barcodes and
   use our model to generate mapping of each 16M barcodes to true/null
   barcode.
  */
@@ -867,6 +872,18 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
   }
   else {
     fmt::print(stderr, "{}\n\n", commentString);
+  }
+
+  if (aopt.just_align) {
+    // if we are just aligning 
+    auto rc = alevin_sc_align(aopt, sopt, orderedOptions);
+    if (rc == 0) {
+      aopt.jointLog->info("sc-align successful.");
+      std::exit(0);
+    } else {
+      aopt.jointLog->error("sc-align exited with return code {}", rc);
+      std::exit(rc);
+    }
   }
 
   /*

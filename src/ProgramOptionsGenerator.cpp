@@ -369,6 +369,9 @@ namespace salmon {
       ("version,v", "print version string")
       ("help,h", "produce help message")
       ("output,o", po::value<std::string>()->required(), "Output quantification directory.")
+      ("justAlign,j", po::bool_switch()->default_value(alevin::defaults::just_align),
+       "just selectively align the data and write the results to a PAM file.  Do not perform "
+       "the rest of the quantification procedure.")
       ("threads,p",
        po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads),
        "The number of threads to use concurrently.")

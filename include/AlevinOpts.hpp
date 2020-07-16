@@ -45,6 +45,9 @@ struct AlevinOpts {
   bool dumpCellEq;
   //Stop progress sumps
   bool quiet;
+  // just perform alignment and produce 
+  // an output directory with a PAM file. 
+  bool just_align;
   //flag for deduplication
   bool noDedup;
   //Number of generator threads
