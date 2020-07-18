@@ -691,8 +691,10 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
             alevin::types::AlevinCellBarcodeKmer bck;
             bool ok = bck.fromChars(*barcode);
             if (ok) {
+              //alevinOpts.jointLog->info("BARCODE : {} \t ENC : {} ", *barcode, bck.word(0));
               if (alevinOpts.protocol.barcodeLength <= 16) { // can use 32-bit int
-                uint32_t shortbck = static_cast<uint32_t>(((0xFFFFFFFF00000000 & bck.word(0)) >> 32));
+                uint32_t shortbck = static_cast<uint32_t>(0x00000000FFFFFFFF & bck.word(0));
+                //alevinOpts.jointLog->info("shortbck : {} ", shortbck);
                 bw << shortbck;
               } else { // must use 64-bit int
                 bw << bck.word(0);
@@ -705,7 +707,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           // umi
           if ( alevinOpts.protocol.barcodeLength <= 16 ) { // if we can use 32-bit int 
             uint64_t umiint = jointHitGroup.umi();
-            uint32_t shortumi = static_cast<uint32_t>(((0xFFFFFFFF00000000 & umiint) >> 32));
+            uint32_t shortumi = static_cast<uint32_t>(0x00000000FFFFFFFF & umiint);
             bw << shortumi;
           } else if ( alevinOpts.protocol.barcodeLength <= 32 ) { // if we can use 64-bit int
             uint64_t umiint = jointHitGroup.umi();
