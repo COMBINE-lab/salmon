@@ -692,7 +692,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
             bool ok = bck.fromChars(*barcode);
             if (ok) {
               if (alevinOpts.protocol.barcodeLength <= 16) { // can use 32-bit int
-                uint32_t shortbck = static_cast<uint32_t>((0xFFFFFFFF00000000 & bck.word(0) >> 32));
+                uint32_t shortbck = static_cast<uint32_t>(((0xFFFFFFFF00000000 & bck.word(0)) >> 32));
                 bw << shortbck;
               } else { // must use 64-bit int
                 bw << bck.word(0);
@@ -705,7 +705,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           // umi
           if ( alevinOpts.protocol.barcodeLength <= 16 ) { // if we can use 32-bit int 
             uint64_t umiint = jointHitGroup.umi();
-            uint32_t shortumi = static_cast<uint32_t>((0xFFFFFFFF00000000 & umiint >> 32));
+            uint32_t shortumi = static_cast<uint32_t>(((0xFFFFFFFF00000000 & umiint) >> 32));
             bw << shortumi;
           } else if ( alevinOpts.protocol.barcodeLength <= 32 ) { // if we can use 64-bit int
             uint64_t umiint = jointHitGroup.umi();
@@ -797,7 +797,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
     salmonOpts.jointLog->info("Thread saw mini-batch with a maximum of {0:.2f}\% zero probability fragments",
                               maxZeroFrac);
   }
-
+  numAssignedFragments += localNumAssignedFragments;
   mstats.numDecoyFragments += numDecoyFrags;
   readExp.updateShortFrags(shortFragStats);
 }
@@ -1656,7 +1656,7 @@ void do_sc_align(ReadExperimentT& experiment,
   experiment.processReads(numQuantThreads, salmonOpts,
                           processReadLibraryCallback);
   experiment.setNumObservedFragments(numObservedFragments);
-
+  
   // EQCLASS
   // changing it to alevin based finish
   bool done = experiment.equivalenceClassBuilder().alv_finish();
@@ -1699,7 +1699,7 @@ void do_sc_align(ReadExperimentT& experiment,
   //+++++++++++++++++++++++++++++++++++++++
   // If we didn't achieve burnin, then at least compute effective
   // lengths and mention this to the user.
-
+  salmonOpts.jointLog->info("Selectively-aligned {} total fragments out of {}", experiment.numAssignedFragments(), numObservedFragments.load() );
   salmonOpts.jointLog->info("Number of fragments discarded because they are best-mapped to decoys : {:n}",
                             mstats.numDecoyFragments.load());
 
@@ -2006,6 +2006,11 @@ int alevin_sc_align(AlevinOpts<ProtocolT>& aopt,
     if(sopt.numThreads > 1){
       sopt.numThreads -= 1;
     }
+
+    if (aopt.protocol.barcodeLength <= 32) {
+      alevin::types::AlevinCellBarcodeKmer::k(aopt.protocol.barcodeLength);
+    }
+
     do_sc_align<QuasiAlignment>(experiment, sopt,
                                 mstats, sopt.numThreads, aopt);
  } catch (po::error& e) {
