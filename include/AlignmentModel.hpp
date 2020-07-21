@@ -40,20 +40,7 @@ public:
   void normalize();
 
 private:
-  enum AlignmentModelChar {
-    ALN_A = 0,
-    ALN_C = 1,
-    ALN_G = 2,
-    ALN_T = 3,
-    ALN_DASH = 4,
-    ALN_SOFT_CLIP = 5,
-    ALN_HARD_CLIP = 6,
-    ALN_PAD = 7,
-    ALN_REF_SKIP = 8
-  };
 
-  void setBasesFromCIGAROp_(enum cigar_op op, size_t& curRefBase,
-                            size_t& curReadBase);
   // std::stringstream& readStr, std::stringstream& matchStr,
   // std::stringstream& refstr);
 
