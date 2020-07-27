@@ -357,6 +357,9 @@ namespace salmon {
        "naiveEqclass", po::bool_switch()->default_value(alevin::defaults::naiveEqclass),
        "Run naive per equivalence class deduplication, generating only total number of UMIs")
       (
+       "noWhitelist", po::bool_switch()->default_value(alevin::defaults::noWhitelist),
+       "Stops the pipeline after UMI deduplication and quantification; not perform intelligent whitelisting.")
+      (
        "noDedup", po::bool_switch()->default_value(alevin::defaults::noDedup),
        "Stops the pipeline after CB sequence correction and selective-alignment of reads.");
     return alevindevs;

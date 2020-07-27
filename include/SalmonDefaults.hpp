@@ -128,6 +128,7 @@ namespace alevin {
 namespace defaults {
   constexpr const bool naiveEqclass{false};
   constexpr const bool noDedup{false};
+  constexpr const bool noWhitelist{false};
   constexpr const bool txpLevel{false};
   constexpr const bool eqClassLevel{false};
   constexpr const bool isDropseq{false};

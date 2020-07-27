@@ -50,6 +50,8 @@ struct AlevinOpts {
   bool just_align;
   //flag for deduplication
   bool noDedup;
+  //flag for not performing external whitelisting
+  bool noWhitelist;
   //Number of generator threads
   uint32_t numParsingThreads;
   //Number of consumer threads

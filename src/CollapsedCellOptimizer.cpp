@@ -1355,7 +1355,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   std::copy(geneNames.begin(), geneNames.end(), giterator);
   gFile.close();
 
-  if( not aopt.naiveEqclass and  not hasWhitelist and not usingHashMode){
+  if( not aopt.noWhitelist and  not aopt.naiveEqclass and  not hasWhitelist and not usingHashMode){
     aopt.jointLog->info("Clearing EqMap; Might take some time.");
     fullEqMap.clear();
 
@@ -1390,8 +1390,8 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
       aopt.jointLog->flush();
     }
   } //end-if whitelisting
-  else if ( usingHashMode and not hasWhitelist ) {
-    aopt.jointLog->warn("intelligent whitelisting is disabled in hash mode; skipping");
+  else if ( aopt.noWhitelist and usingHashMode and not hasWhitelist ) {
+    aopt.jointLog->warn("intelligent whitelisting is disabled ; skipping");
     aopt.jointLog->flush();
   }
 
