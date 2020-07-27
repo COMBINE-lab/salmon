@@ -53,6 +53,12 @@ protected:
   static void setBasesFromCIGAROp_(enum cigar_op op, size_t& curRefBase, size_t& curReadBase);
   static char opToChr(enum cigar_op op);
 
+  struct ErrorCount {
+    int32_t ims;   // indels and mismatches
+    int32_t clips; // soft clips
+  };
+  bool computeErrorCount(bam_seq_t* read, Transcript& ref, ErrorCount& counts);
+
   std::shared_ptr<spdlog::logger> logger_;
   std::atomic<bool> burnedIn_;
 };

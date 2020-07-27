@@ -3,6 +3,7 @@
 #include "ReadPair.hpp"
 #include "Transcript.hpp"
 #include "UnpairedRead.hpp"
+#include "SalmonStringUtils.hpp"
 
 bool AlignmentCommon::hasIndel(ReadPair& hit) {
   if (!hit.isPaired())
@@ -115,4 +116,108 @@ char AlignmentCommon::opToChr(enum cigar_op op) {
     break;
   }
   return 'X';
+}
+
+bool AlignmentCommon::computeErrorCount(bam_seq_t* read, Transcript& ref, ErrorCount& counts) {
+  using namespace salmon::stringtools;
+
+  auto         transcriptIdx = bam_pos(read);
+  const size_t transcriptLen = ref.RefLength;
+  int32_t readIdx{0};
+
+  // if the read starts before the beginning of the transcript,
+  // only consider the part overlapping the transcript
+  if (transcriptIdx < 0) {
+    readIdx = -transcriptIdx;
+    transcriptIdx = 0;
+  }
+  // unsigned version of transcriptIdx
+  size_t uTranscriptIdx = static_cast<size_t>(transcriptIdx);
+
+  uint32_t*      cigar       = bam_cigar(read);
+  const uint32_t cigarLen    = bam_cigar_len(read);
+  if (cigarLen == 0 || !cigar)
+    return false;
+
+  uint8_t*       qseq        = reinterpret_cast<uint8_t*>(bam_seq(read));
+  const int32_t  readLen     = bam_seq_len(read);
+
+  const strand readStrand = strand::forward;
+  bool advanceInRead{false};
+  bool advanceInReference{false};
+
+  uint32_t errors = 0;
+  uint32_t clips  = 0;
+
+  for (uint32_t cigarIdx = 0; cigarIdx < cigarLen; ++cigarIdx) {
+    uint32_t opLen = cigar[cigarIdx] >> BAM_CIGAR_SHIFT;
+    enum cigar_op op =
+      static_cast<enum cigar_op>(cigar[cigarIdx] & BAM_CIGAR_MASK);
+
+    size_t curReadBase = (BAM_CONSUME_SEQ(op)) ? samToTwoBit[bam_seqi(qseq, readIdx)] : 0;
+    size_t curRefBase = (BAM_CONSUME_REF(op)) ? samToTwoBit[ref.baseAt(uTranscriptIdx, readStrand)] : 0;
+    advanceInReference = false;
+
+    for (size_t i = 0; i < opLen; ++i) {
+      if (advanceInRead) {
+        // Shouldn't happen!
+        if (readIdx >= readLen) {
+          if (logger_) {
+            logger_->warn("CIGAR string for read [{}] "
+                          "seems inconsistent. It refers to non-existant "
+                          "positions in the read ({} >= {})!",
+                          bam_name(read), readIdx, readLen);
+            std::stringstream cigarStream;
+            for (size_t j = 0; j < cigarLen; ++j) {
+              uint32_t opLen = cigar[j] >> BAM_CIGAR_SHIFT;
+              enum cigar_op op =
+                static_cast<enum cigar_op>(cigar[j] & BAM_CIGAR_MASK);
+              cigarStream << opLen << opToChr(op);
+            }
+            logger_->warn("CIGAR = {}", cigarStream.str());
+          }
+          return false;
+        }
+
+        curReadBase = samToTwoBit[bam_seqi(qseq, readIdx)];
+        advanceInRead = false;
+      }
+      if (advanceInReference) {
+        // Shouldn't happen!
+        if (uTranscriptIdx >= transcriptLen) {
+          if (logger_) {
+            logger_->warn(
+                          "CIGAR string for read [{}] "
+                          "seems inconsistent. It refers to non-existant "
+                          "positions in the reference! Transcript name "
+                          "is {}, length is {}, id is {}. Read things refid is {}",
+                          bam_name(read), ref.RefName, transcriptLen, ref.id,
+                          bam_ref(read));
+          }
+          return false;
+        }
+
+        curRefBase = samToTwoBit[ref.baseAt(uTranscriptIdx, readStrand)];
+        advanceInReference = false;
+      }
+      setBasesFromCIGAROp_(op, curRefBase, curReadBase);
+      if(curRefBase == ALN_SOFT_CLIP)
+        ++clips;
+      else if(curRefBase != curReadBase)
+        ++errors;
+
+      if (BAM_CONSUME_SEQ(op)) {
+        ++readIdx;
+        advanceInRead = true;
+      }
+      if (BAM_CONSUME_REF(op)) {
+        ++uTranscriptIdx;
+        advanceInReference = true;
+      }
+    }
+  }
+
+  counts.ims   = errors;
+  counts.clips = clips;
+  return true;
 }
