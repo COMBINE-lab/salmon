@@ -218,12 +218,12 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
   distribution_utils::LogCMFCache logCMFCache(&fragLengthDist, singleEndLib);
 
   const size_t maxCacheLen{salmonOpts.fragLenDistMax};
-  // Caches to avoid fld updates _within_ the set of alignments of a fragment 
+  // Caches to avoid fld updates _within_ the set of alignments of a fragment
   auto fetchPMF = [&fragLengthDist](size_t l) -> double { return fragLengthDist.pmf(l); };
   auto fetchCMF = [&fragLengthDist](size_t l) -> double { return fragLengthDist.cmf(l); };
   distribution_utils::IndexedVersionedCache<double> pmfCache(maxCacheLen);
   distribution_utils::IndexedVersionedCache<double> cmfCache(maxCacheLen);
-  
+
   std::chrono::microseconds sleepTime(1);
   MiniBatchInfo<AlignmentGroup<FragT*>>* miniBatch = nullptr;
   bool updateCounts = initialRound;
@@ -240,16 +240,16 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
 
   bool haveASTag{false};
   bool firstTagCheck{true};
-  
-  // If we are dealing with RapMap or Pufferfish mappings, then we 
-  // don't expect CIGAR strings.  However, with recent versions 
-  // at least any version that we could consider to be reasonable 
-  // to run in alignment mode, we should have the `AS` tag. We set 
-  // this the variable so we know this and deal with 
+
+  // If we are dealing with RapMap or Pufferfish mappings, then we
+  // don't expect CIGAR strings.  However, with recent versions
+  // at least any version that we could consider to be reasonable
+  // to run in alignment mode, we should have the `AS` tag. We set
+  // this the variable so we know this and deal with
   // alignment score appropriately (and don't expect CIGAR strings).
   // NOTE: If we are reading in pufferfish or RapMap alignments, we expect the AS tag,
   // we will raise an exception if we don't have it.
-  bool useASWithoutCIGAR = ((alignerType == salmon::bam_utils::AlignerDetails::PUFFERFISH) or 
+  bool useASWithoutCIGAR = ((alignerType == salmon::bam_utils::AlignerDetails::PUFFERFISH) or
                             (alignerType == salmon::bam_utils::AlignerDetails::RAPMAP));
 
   auto getAlignerAssignedScore =
@@ -294,697 +294,598 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
     uint64_t batchReads{0};
 
     // If we actually got some work
-    if (miniBatch != nullptr) {
-      expectedLibraryFormat = alnLib.format();
-      useAuxParams = (processedReads >= salmonOpts.numPreBurninFrags);
-      bool considerCondProb = (useAuxParams or burnedIn);
-      ++activeBatches;
-      batchReads = 0;
-      zeroProbFrags = 0;
+    if (miniBatch == nullptr)
+      continue;
 
-      // double logForgettingMass = fmCalc();
-      double logForgettingMass{0.0};
-      uint64_t currentMinibatchTimestep{0};
-      // logForgettingMass and currentMinibatchTimestep are OUT parameters!
-      fmCalc.getLogMassAndTimestep(logForgettingMass, currentMinibatchTimestep);
-      miniBatch->logForgettingMass = logForgettingMass;
+    expectedLibraryFormat = alnLib.format();
+    useAuxParams = (processedReads >= salmonOpts.numPreBurninFrags);
+    bool considerCondProb = (useAuxParams or burnedIn);
+    ++activeBatches;
+    batchReads = 0;
+    zeroProbFrags = 0;
 
-      std::vector<AlignmentGroup<FragT*>*>& alignmentGroups =
-          *(miniBatch->alignments);
+    // double logForgettingMass = fmCalc();
+    double logForgettingMass{0.0};
+    uint64_t currentMinibatchTimestep{0};
+    // logForgettingMass and currentMinibatchTimestep are OUT parameters!
+    fmCalc.getLogMassAndTimestep(logForgettingMass, currentMinibatchTimestep);
+    miniBatch->logForgettingMass = logForgettingMass;
 
-      using TranscriptID = size_t;
-      using HitIDVector = std::vector<size_t>;
-      using HitProbVector = std::vector<double>;
+    using TranscriptID = size_t;
+    using HitIDVector = std::vector<size_t>;
+    using HitProbVector = std::vector<double>;
 
-      // If we are going to attempt to model single mappings (part of a fragment)
-      // then cache the FLD cumulative distribution for this mini-batch.  If
-      // we are burned in or this is a single-end library, then the CMF is already
-      // cached, so we don't need to worry about doing this work ourselves.
-      if (modelSingleFragProb) {
-        logCMFCache.refresh(processedReads.load(), burnedIn.load());
-      }
+    // If we are going to attempt to model single mappings (part of a fragment)
+    // then cache the FLD cumulative distribution for this mini-batch.  If
+    // we are burned in or this is a single-end library, then the CMF is already
+    // cached, so we don't need to worry about doing this work ourselves.
+    if (modelSingleFragProb) {
+      logCMFCache.refresh(processedReads.load(), burnedIn.load());
+    }
 
-      {
-        bool checkedASTag = false;
-        // Iterate over each group of alignments (a group consists of all
-        // alignments reported for a single read).  Distribute the read's mass
-        // proportionally dependent on the current
-        for (auto& alnGroup : alignmentGroups) {
-          pmfCache.increment_generation();
-          cmfCache.increment_generation();
+    bool checkedASTag = false;
+    // Iterate over each group of alignments (a group consists of all
+    // alignments reported for a single read).  Distribute the read's mass
+    // proportionally dependent on the current
+    for (auto& alnGroup : *(miniBatch->alignments)) {
+      pmfCache.increment_generation();
+      cmfCache.increment_generation();
 
-          // EQCLASS
-          std::vector<uint32_t> txpIDs;
-          std::vector<double> auxProbs;
-          double auxDenom = salmon::math::LOG_0;
+      // EQCLASS
+      std::vector<uint32_t> txpIDs;
+      std::vector<double> auxProbs;
+      double auxDenom = salmon::math::LOG_0;
 
-          // The alignments must be sorted by transcript id
-          alnGroup->sortHits();
+      // The alignments must be sorted by transcript id
+      alnGroup->sortHits();
 
-          double sumOfAlignProbs{LOG_0};
+      double sumOfAlignProbs{LOG_0};
 
-          // update the cluster-level properties
-          bool transcriptUnique{true};
-          auto firstTranscriptID =
-              alnGroup->alignments().front()->transcriptID();
-          std::unordered_set<size_t> observedTranscripts;
+      // update the cluster-level properties
+      bool transcriptUnique{true};
+      auto firstTranscriptID =
+        alnGroup->alignments().front()->transcriptID();
+      std::unordered_set<size_t> observedTranscripts;
 
-          int32_t bestAS = std::numeric_limits<int32_t>::min();
+      int32_t bestAS = std::numeric_limits<int32_t>::min();
 
-          // TODO: Use the AS tag to get the appropriate score for 
-          // reads aligned with pufferfish or RapMap.
-          
-          // If we are using the AS tag without CIGAR strings
-          if (useASWithoutCIGAR) {
-            // Loop over all of the alignments to find the maximum score, which 
-            // we will need to compute the alignment probability.
-            for (auto& aln : alnGroup->alignments()) {
-              if (!checkedASTag) {
-                checkedASTag = true;
-                if (! aln->haveASTag() ) {
-                  log->critical("salmon is being run in alignment mode with a SAM/BAM file generated by {}, but the "
-                  "alignment records do not seem to have the AS tag.  In this case, quantifying from alignments is not "
-                  "recommended or supported.", salmon::bam_utils::to_string(alignerType));
-                  spdlog::drop_all();
-                  std::exit(1);
-                }
-                haveASTag = true;
-              }
+      // TODO: Use the AS tag to get the appropriate score for
+      // reads aligned with pufferfish or RapMap.
 
-              int32_t score = aln->getAS();
-              bestAS = (score > bestAS) ? score : bestAS;
+      // If we are using the AS tag without CIGAR strings
+      if (useASWithoutCIGAR) {
+        // Loop over all of the alignments to find the maximum score, which
+        // we will need to compute the alignment probability.
+        for (auto& aln : alnGroup->alignments()) {
+          if (!checkedASTag) {
+            checkedASTag = true;
+            if (! aln->haveASTag() ) {
+              log->critical("salmon is being run in alignment mode with a SAM/BAM file generated by {}, but the "
+                            "alignment records do not seem to have the AS tag.  In this case, quantifying from alignments is not "
+                            "recommended or supported.", salmon::bam_utils::to_string(alignerType));
+              spdlog::drop_all();
+              std::exit(1);
             }
+            haveASTag = true;
           }
 
-          //double maxLogAlnScore{LOG_0};
-          int sidx{0};
-          for (auto& aln : alnGroup->alignments()) {
-            auto transcriptID = aln->transcriptID();
-            auto& transcript = refs[transcriptID];
-            transcriptUnique =
-                transcriptUnique and (transcriptID == firstTranscriptID);
-
-            double refLength =
-                transcript.RefLength > 0 ? transcript.RefLength : 1.0;
-            auto flen = aln->fragLen();
-            // If we have a properly-paired read then use the "pedantic"
-            // definition here.
-            if (aln->isPaired() and aln->isInward()) {
-              flen = aln->fragLengthPedantic(refLength);
-            }
-
-            // The probability of drawing a fragment of this length;
-            double logFragProb = LOG_1;
-            // if we are modeling fragment probabilities for single-end mappings
-            // and this is either a single-end library or an orphan.
-            if (modelSingleFragProb and useFragLengthDist and (singleEndLib or isUnexpectedOrphan(aln, expectedLibraryFormat))) {
-              logFragProb = logCMFCache.getAmbigFragLengthProb(aln->fwd(), aln->pos(), aln->readLen(), transcript.CompleteLength, burnedIn.load());
-            } else if (isUnexpectedOrphan(aln, expectedLibraryFormat)) {
-              // If we are expecting a paired-end library, and this is an orphan,
-              // then logFragProb should be small
-              logFragProb = orphanProb;
-              if (logFragProb == LOG_0) {
-                continue;
-              }
-            }
-
-            if (flen > 0.0 and aln->isPaired() and useFragLengthDist and
-                considerCondProb) {
-              
-              size_t fl = flen;
-              double lenProb = pmfCache.get_or_update(fl, fetchPMF);
-
-              if (burnedIn) {
-                /* condition fragment length prob on txp length */
-                size_t rlen = static_cast<size_t>(refLength);
-                double refLengthCM = cmfCache.get_or_update(fl, fetchCMF);
-
-                bool computeMass =
-                    fl < refLength and !salmon::math::isLog0(refLengthCM);
-                logFragProb = (computeMass) ? (lenProb - refLengthCM)
-                                            : salmon::math::LOG_EPSILON;
-                if (computeMass and refLengthCM < lenProb) {
-                  // Threading is hard!  It's possible that an update to the PMF
-                  // snuck in between when we asked to cache the CMF and when
-                  // the "burnedIn" variable was last seen as false.
-                  log->info("reference length = {}, CMF[refLen] = {}, fragLen "
-                            "= {}, PMF[fragLen] = {}",
-                            refLength, std::exp(refLengthCM), aln->fragLen(),
-                            std::exp(lenProb));
-                }
-              } else if (useAuxParams) {
-                logFragProb = lenProb;
-              }
-            }
-
-            /*
-            if (!salmonOpts.noFragLengthDist and useAuxParams) {
-                if(aln->isPaired() and flen > 0) {
-                    logFragProb = fragLengthDist.pmf(static_cast<size_t>(flen));
-                }
-            }
-            */
-
-            // TESTING
-            if (noFragLenFactor) {
-              logFragProb = LOG_1;
-            }
-
-            if (autoDetect) {
-              detector->addSample(aln->libFormat());
-              if (detector->canGuess()) {
-                detector->mostLikelyType(alnLib.getFormat());
-                expectedLibraryFormat = alnLib.format();
-                incompatPrior = salmonOpts.incompatPrior;
-                autoDetect = false;
-              } else if (!detector->isActive()) {
-                expectedLibraryFormat = alnLib.format();
-                incompatPrior = salmonOpts.incompatPrior;
-                autoDetect = false;
-              }
-            }
-            // @TODO: handle this case better
-            // double fragProb = cdf(fragLengthDist, fragLength + 0.5) -
-            // cdf(fragLengthDist, fragLength - 0.5);  fragProb =
-            // std::max(fragProb, 1e-3);  fragProb /= cdf(fragLengthDist,
-            // refLength);
-
-            // The alignment probability is the product of a
-            // transcript-level term (based on abundance and) an
-            // alignment-level term.
-            double logRefLength{salmon::math::LOG_0};
-            if (noLengthCorrection) {
-              logRefLength = 1.0;
-            } else if (salmonOpts.noEffectiveLengthCorrection or !burnedIn) {
-              logRefLength = std::log(transcript.RefLength);
-            } else {
-              logRefLength = transcript.getCachedLogEffectiveLength();
-            }
-
-            // The probability that the fragments align to the given strands in
-            // the given orientations.
-            bool isCompat = salmon::utils::isCompatible(
-                aln->libFormat(), expectedLibraryFormat, aln->pos(), aln->fwd(),
-                aln->mateStatus());
-            double logAlignCompatProb = isCompat ? LOG_1 : incompatPrior;
-            if (!isCompat and salmonOpts.ignoreIncompat) {
-              aln->logProb = salmon::math::LOG_0;
-              continue;
-            }
-            /*
-      double logAlignCompatProb =
-          (useReadCompat) ?
-          (salmon::utils::logAlignFormatProb(
-                aln->libFormat(),
-                expectedLibraryFormat,
-                aln->pos(),
-                aln->fwd(), aln->mateStatus(), salmonOpts.incompatPrior)
-          ) : LOG_1;
-
-      if (logAlignCompatProb != salmon::math::LOG_1) {
-          aln->logProb = salmon::math::LOG_0;
-          std::cerr <<"here\n";
-          continue;
+          int32_t score = aln->getAS();
+          bestAS = (score > bestAS) ? score : bestAS;
+        }
       }
-            */
 
-            // Adjustment to the likelihood due to the
-            // error model
-            double errLike = salmon::math::LOG_1;
-            if (useASWithoutCIGAR) {
-              int32_t alnScore = aln->getAS();
-              // NOTE: we work directly in log space here, so the log
-              // prob is -scoreExp * (S-w) rather than exp^(-scoreExp * (S-w))
-              errLike = -salmonOpts.scoreExp * (bestAS - alnScore);
-            } else if (useAuxParams and salmonOpts.useErrorModel) {
-              errLike = alnMod.logLikelihood(*aln, transcript);
-              ++sidx;
-            }
+      //double maxLogAlnScore{LOG_0};
+      int sidx{0};
+      for (auto& aln : alnGroup->alignments()) {
+        auto transcriptID = aln->transcriptID();
+        auto& transcript = refs[transcriptID];
+        transcriptUnique =
+          transcriptUnique and (transcriptID == firstTranscriptID);
 
-            // Allow for a non-uniform fragment start position distribution
-            double startPosProb{-logRefLength};
-            if (aln->isPaired() and !noLengthCorrection) {
-              startPosProb = (flen <= refLength)
-                                 ? -std::log(refLength - flen + 1)
-                                 : salmon::math::LOG_EPSILON;
-            }
+        double refLength =
+          transcript.RefLength > 0 ? transcript.RefLength : 1.0;
+        auto flen = aln->fragLen();
+        // If we have a properly-paired read then use the "pedantic"
+        // definition here.
+        if (aln->isPaired() and aln->isInward()) {
+          flen = aln->fragLengthPedantic(refLength);
+        }
 
-            double fragStartLogNumerator{salmon::math::LOG_1};
-            double fragStartLogDenominator{salmon::math::LOG_1};
-
-            auto hitPos = aln->left();
-
-            // The total auxiliary probabilty is the product (sum in log-space)
-            // of The fragment length probabilty The mapping score (under error
-            // model) probability The fragment compatibility probability
-
-            // The auxProb does *not* account for the start position
-            // probability!
-            double auxProb = logFragProb + errLike + logAlignCompatProb;
-
-            // The overall mass of this transcript, which is used to
-            // account for this transcript's relaive abundance
-            double transcriptLogCount = transcript.mass(initialRound);
-
-            if (transcriptLogCount != LOG_0 and auxProb != LOG_0 and
-                startPosProb != LOG_0) {
-              aln->logProb = transcriptLogCount + auxProb + startPosProb;
-
-              sumOfAlignProbs = logAdd(sumOfAlignProbs, aln->logProb);
-              if (updateCounts and observedTranscripts.find(transcriptID) ==
-                                       observedTranscripts.end()) {
-                refs[transcriptID].addTotalCount(1);
-                observedTranscripts.insert(transcriptID);
-              }
-              // EQCLASS
-              txpIDs.push_back(transcriptID);
-              auxProbs.push_back(auxProb);
-              auxDenom = salmon::math::logAdd(auxDenom, auxProb);
-
-            } else {
-              aln->logProb = LOG_0;
-            }
-          }
-
-          // If we have a 0-probability fragment
-          if (sumOfAlignProbs == LOG_0) {
-            ++zeroProbFrags;
-            ++batchReads;
+        // The probability of drawing a fragment of this length;
+        double logFragProb = LOG_1;
+        // if we are modeling fragment probabilities for single-end mappings
+        // and this is either a single-end library or an orphan.
+        if (modelSingleFragProb and useFragLengthDist and (singleEndLib or isUnexpectedOrphan(aln, expectedLibraryFormat))) {
+          logFragProb = logCMFCache.getAmbigFragLengthProb(aln->fwd(), aln->pos(), aln->readLen(), transcript.CompleteLength, burnedIn.load());
+        } else if (isUnexpectedOrphan(aln, expectedLibraryFormat)) {
+          // If we are expecting a paired-end library, and this is an orphan,
+          // then logFragProb should be small
+          logFragProb = orphanProb;
+          if (logFragProb == LOG_0) {
             continue;
           }
+        }
 
+        if (flen > 0.0 and aln->isPaired() and useFragLengthDist and
+            considerCondProb) {
+
+          size_t fl = flen;
+          double lenProb = pmfCache.get_or_update(fl, fetchPMF);
+
+          if (burnedIn) {
+            /* condition fragment length prob on txp length */
+            size_t rlen = static_cast<size_t>(refLength);
+            double refLengthCM = cmfCache.get_or_update(fl, fetchCMF);
+
+            bool computeMass =
+              fl < refLength and !salmon::math::isLog0(refLengthCM);
+            logFragProb = (computeMass) ? (lenProb - refLengthCM)
+                   : salmon::math::LOG_EPSILON;
+            if (computeMass and refLengthCM < lenProb) {
+              // Threading is hard!  It's possible that an update to the PMF
+              // snuck in between when we asked to cache the CMF and when
+              // the "burnedIn" variable was last seen as false.
+              log->info("reference length = {}, CMF[refLen] = {}, fragLen "
+                        "= {}, PMF[fragLen] = {}",
+                        refLength, std::exp(refLengthCM), aln->fragLen(),
+                        std::exp(lenProb));
+            }
+          } else if (useAuxParams) {
+            logFragProb = lenProb;
+          }
+        }
+
+        // TESTING
+        if (noFragLenFactor) {
+          logFragProb = LOG_1;
+        }
+
+        if (autoDetect) {
+          detector->addSample(aln->libFormat());
+          if (detector->canGuess()) {
+            detector->mostLikelyType(alnLib.getFormat());
+            expectedLibraryFormat = alnLib.format();
+            incompatPrior = salmonOpts.incompatPrior;
+            autoDetect = false;
+          } else if (!detector->isActive()) {
+            expectedLibraryFormat = alnLib.format();
+            incompatPrior = salmonOpts.incompatPrior;
+            autoDetect = false;
+          }
+        }
+        // @TODO: handle this case better
+        // double fragProb = cdf(fragLengthDist, fragLength + 0.5) -
+        // cdf(fragLengthDist, fragLength - 0.5);  fragProb =
+        // std::max(fragProb, 1e-3);  fragProb /= cdf(fragLengthDist,
+        // refLength);
+
+        // The alignment probability is the product of a
+        // transcript-level term (based on abundance and) an
+        // alignment-level term.
+        double logRefLength{salmon::math::LOG_0};
+        if (noLengthCorrection) {
+          logRefLength = 1.0;
+        } else if (salmonOpts.noEffectiveLengthCorrection or !burnedIn) {
+          logRefLength = std::log(transcript.RefLength);
+        } else {
+          logRefLength = transcript.getCachedLogEffectiveLength();
+        }
+
+        // The probability that the fragments align to the given strands in
+        // the given orientations.
+        bool isCompat = salmon::utils::isCompatible(
+                                                    aln->libFormat(), expectedLibraryFormat, aln->pos(), aln->fwd(),
+                                                    aln->mateStatus());
+        double logAlignCompatProb = isCompat ? LOG_1 : incompatPrior;
+        if (!isCompat and salmonOpts.ignoreIncompat) {
+          aln->logProb = salmon::math::LOG_0;
+          continue;
+        }
+
+        // Adjustment to the likelihood due to the
+        // error model
+        double errLike = salmon::math::LOG_1;
+        if (useASWithoutCIGAR) {
+          int32_t alnScore = aln->getAS();
+          // NOTE: we work directly in log space here, so the log
+          // prob is -scoreExp * (S-w) rather than exp^(-scoreExp * (S-w))
+          errLike = -salmonOpts.scoreExp * (bestAS - alnScore);
+        } else if (useAuxParams and salmonOpts.useErrorModel) {
+          errLike = alnMod.logLikelihood(*aln, transcript);
+          ++sidx;
+        }
+
+        // Allow for a non-uniform fragment start position distribution
+        double startPosProb{-logRefLength};
+        if (aln->isPaired() and !noLengthCorrection) {
+          startPosProb = (flen <= refLength)
+            ? -std::log(refLength - flen + 1)
+            : salmon::math::LOG_EPSILON;
+        }
+
+        double fragStartLogNumerator{salmon::math::LOG_1};
+        double fragStartLogDenominator{salmon::math::LOG_1};
+
+        auto hitPos = aln->left();
+
+        // The total auxiliary probabilty is the product (sum in log-space)
+        // of The fragment length probabilty The mapping score (under error
+        // model) probability The fragment compatibility probability
+
+        // The auxProb does *not* account for the start position
+        // probability!
+        double auxProb = logFragProb + errLike + logAlignCompatProb;
+
+        // The overall mass of this transcript, which is used to
+        // account for this transcript's relaive abundance
+        double transcriptLogCount = transcript.mass(initialRound);
+
+        if (transcriptLogCount != LOG_0 and auxProb != LOG_0 and
+            startPosProb != LOG_0) {
+          aln->logProb = transcriptLogCount + auxProb + startPosProb;
+
+          sumOfAlignProbs = logAdd(sumOfAlignProbs, aln->logProb);
+          if (updateCounts and observedTranscripts.find(transcriptID) ==
+              observedTranscripts.end()) {
+            refs[transcriptID].addTotalCount(1);
+            observedTranscripts.insert(transcriptID);
+          }
           // EQCLASS
-          double auxProbSum{0.0};
-          for (auto& p : auxProbs) {
-            p = std::exp(p - auxDenom);
-            auxProbSum += p;
+          txpIDs.push_back(transcriptID);
+          auxProbs.push_back(auxProb);
+          auxDenom = salmon::math::logAdd(auxDenom, auxProb);
+
+        } else {
+          aln->logProb = LOG_0;
+        }
+      }
+
+      // If we have a 0-probability fragment
+      if (sumOfAlignProbs == LOG_0) {
+        ++zeroProbFrags;
+        ++batchReads;
+        continue;
+      }
+
+      // EQCLASS
+      double auxProbSum{0.0};
+      for (auto& p : auxProbs) {
+        p = std::exp(p - auxDenom);
+        auxProbSum += p;
+      }
+
+      if (txpIDs.size() > 0) {
+
+        if (rangeFactorization > 0) {
+          int txpsSize = txpIDs.size();
+          int rangeCount = std::sqrt(txpsSize) + rangeFactorization;
+
+          for (int32_t i = 0; i < txpsSize; i++) {
+            int rangeNumber = auxProbs[i] * rangeCount;
+            txpIDs.push_back(rangeNumber);
           }
+        }
 
-          if (txpIDs.size() > 0) {
+        TranscriptGroup tg(txpIDs);
+        eqBuilder.addGroup(std::move(tg), auxProbs);
+      }
 
-            if (rangeFactorization > 0) {
-              int txpsSize = txpIDs.size();
-              int rangeCount = std::sqrt(txpsSize) + rangeFactorization;
+      // Are we doing bias correction?
+      bool needBiasSample = salmonOpts.biasCorrect;
 
-              for (int32_t i = 0; i < txpsSize; i++) {
-                int rangeNumber = auxProbs[i] * rangeCount;
-                txpIDs.push_back(rangeNumber);
-              }
-            }
+      // Normalize the scores
+      for (auto& aln : alnGroup->alignments()) {
+        if (aln->logProb == LOG_0) {
+          continue;
+        }
+        aln->logProb -= sumOfAlignProbs;
 
-            TranscriptGroup tg(txpIDs);
-            eqBuilder.addGroup(std::move(tg), auxProbs);
-          }
+        auto transcriptID = aln->transcriptID();
+        auto& transcript = refs[transcriptID];
 
-          // Are we doing bias correction?
-          bool needBiasSample = salmonOpts.biasCorrect;
+        double newMass = logForgettingMass + aln->logProb;
+        transcript.addMass(newMass);
 
-          // Normalize the scores
-          for (auto& aln : alnGroup->alignments()) {
-            if (aln->logProb == LOG_0) {
-              continue;
-            }
-            aln->logProb -= sumOfAlignProbs;
-
-            auto transcriptID = aln->transcriptID();
-            auto& transcript = refs[transcriptID];
-
-            double newMass = logForgettingMass + aln->logProb;
-            transcript.addMass(newMass);
-
-            // ---- Collect seq-specific bias samples ------ //
-            auto getCIGARLength = [](bam_seq_t* s) -> uint32_t {
-              auto cl = bam_cigar_len(s);
-              decltype(cl) k, end;
-              end = 0; // bam_pos(s);
-              uint32_t* cigar = bam_cigar(s);
-              for (k = 0; k < cl; ++k) {
-                int op = cigar[k] & BAM_CIGAR_MASK;
-                if (BAM_CONSUME_SEQ(op)) {
-                  end += cigar[k] >> BAM_CIGAR_SHIFT;
-                }
-              }
-              return end;
-            };
-
-            bool success = false;
-            if (needBiasSample and salmonOpts.numBiasSamples > 0) {
-              const char* txpStart = transcript.Sequence();
-              const char* txpEnd = txpStart + transcript.RefLength;
-              if (aln->isPaired()) {
-                ReadPair* alnp = reinterpret_cast<ReadPair*>(aln);
-                bam_seq_t* r1 = alnp->read1;
-                bam_seq_t* r2 = alnp->read2;
-                if (r1 != nullptr and r2 != nullptr) {
-                  int32_t pos1 = bam_pos(r1);
-                  bool fwd1{bam_strand(r1) == 0};
-                  int32_t startPos1 =
-                      fwd1 ? pos1 : pos1 + getCIGARLength(r1) - 1;
-
-                  int32_t pos2 = bam_pos(r2);
-                  bool fwd2{bam_strand(r2) == 0};
-                  int32_t startPos2 =
-                      fwd2 ? pos2 : pos2 + getCIGARLength(r2) - 1;
-
-                  // Shouldn't be from the same strand and they should be in the
-                  // right order
-                  if ((fwd1 != fwd2) and // Shouldn't be from the same strand
-                      (startPos1 > 0 and startPos1 < static_cast<int32_t>(transcript.RefLength)) and
-                      (startPos2 > 0 and startPos2 < static_cast<int32_t>(transcript.RefLength))) {
-
-                    const char* readStart1 = txpStart + startPos1;
-                    auto& readBias1 = (fwd1) ? readBiasFW : readBiasRC;
-
-                    const char* readStart2 = txpStart + startPos2;
-                    auto& readBias2 = (fwd2) ? readBiasFW : readBiasRC;
-
-                    int32_t fwPre = readBias1.contextBefore(!fwd1);
-                    int32_t fwPost = readBias1.contextAfter(!fwd1);
-
-                    int32_t rcPre = readBias2.contextBefore(!fwd2);
-                    int32_t rcPost = readBias2.contextAfter(!fwd2);
-
-                    bool read1RC = !fwd1;
-                    bool read2RC = !fwd2;
-
-                    if ((startPos1 >= readBias1.contextBefore(read1RC) and
-                         startPos1 + readBias1.contextAfter(read1RC) <
-                         static_cast<int32_t>(transcript.RefLength)) and
-                        (startPos2 >= readBias2.contextBefore(read2RC) and
-                         startPos2 + readBias2.contextAfter(read2RC) <
-                         static_cast<int32_t>(transcript.RefLength))) {
-
-                      int32_t fwPos = (fwd1) ? startPos1 : startPos2;
-                      int32_t rcPos = (fwd1) ? startPos2 : startPos1;
-                      if (fwPos < rcPos) {
-                        leftMer.fromChars(txpStart + startPos1 -
-                                           readBias1.contextBefore(read1RC));
-                        rightMer.fromChars(txpStart + startPos2 -
-                                            readBias2.contextBefore(read2RC));
- 
-                        if (read1RC) {
-                          leftMer.rc();
-                        } else {
-                          rightMer.rc();
-                        }
-
-                        success = readBias1.addSequence(leftMer, 1.0);
-                        success = readBias2.addSequence(rightMer, 1.0);
-                      }
-                    }
-                  }
-                }
-              } else { // unpaired read
-                UnpairedRead* alnp = reinterpret_cast<UnpairedRead*>(aln);
-                bam_seq_t* r1 = alnp->read;
-                if (r1 != nullptr) {
-                  int32_t pos1 = bam_pos(r1);
-                  bool fwd1{bam_strand(r1) == 0};
-                  int32_t startPos1 =
-                      fwd1 ? pos1 : pos1 + getCIGARLength(r1) - 1;
-
-                  if (startPos1 > 0 and startPos1 < static_cast<int32_t>(transcript.RefLength)) {
-
-                    const char* txpStart = transcript.Sequence();
-                    const char* txpEnd = txpStart + transcript.RefLength;
-
-                    const char* readStart1 = txpStart + startPos1;
-                    auto& readBias1 = (fwd1) ? readBiasFW : readBiasRC;
-
-                    if (startPos1 >= readBias1.contextBefore(!fwd1) and
-                        startPos1 + readBias1.contextAfter(!fwd1) <
-                        static_cast<int32_t>(transcript.RefLength)) {
-                      context.fromChars(txpStart + startPos1 -
-                                         readBias1.contextBefore(!fwd1));
-
-                      if (!fwd1) {
-                        context.rc();
-                      }
-                      success = readBias1.addSequence(context, 1.0);
-                    }
-                  }
-                }
-              } // end unpaired read
-              if (success) {
-                salmonOpts.numBiasSamples -= 1;
-                needBiasSample = false;
-              }
-            }
-            // ---- Collect seq-specific bias samples ------ //
-
-            /**
-             * Update the auxiliary models.
-             **/
-            // Paired-end
-            if (aln->isPaired()) {
-              // TODO: Is this right for *all* library types?
-              if (aln->fwd()) {
-                obsFwd = salmon::math::logAdd(obsFwd, aln->logProb);
-              } else {
-                obsRC = salmon::math::logAdd(obsRC, aln->logProb);
-              }
-            } else if (aln->libFormat().type == ReadType::SINGLE_END) {
-              // Single-end or orphan
-              if (aln->libFormat().strandedness == ReadStrandedness::S) {
-                obsFwd = salmon::math::logAdd(obsFwd, aln->logProb);
-              } else {
-                obsRC = salmon::math::logAdd(obsRC, aln->logProb);
-              }
-            }
-
-            if (posBiasCorrect) {
-              auto lengthClassIndex = transcript.lengthClassIndex();
-              switch (aln->mateStatus()) {
-              case MateStatus::PAIRED_END_PAIRED: {
-                // TODO: Handle the non opposite strand case
-                if (aln->isInward()) {
-                  auto* read1 = aln->getRead1();
-                  auto* read2 = aln->getRead2();
-                  int32_t posFW = aln->fwd() ? bam_pos(read1) : bam_pos(read2) + bam_seq_len(read2);
-                  int32_t posRC = aln->fwd() ? bam_pos(read2) + bam_seq_len(read2) : bam_pos(read1);
-                  posFW = posFW < 0 ? 0 : posFW;
-                  posFW = posFW >= static_cast<int32_t>(transcript.RefLength) ?
-                    static_cast<int32_t>(transcript.RefLength) - 1
-                    : posFW;
-                  posRC = posRC < 0 ? 0 : posRC;
-                  posRC = posRC >= static_cast<int32_t>(transcript.RefLength) ?
-                    static_cast<int32_t>(transcript.RefLength) - 1
-                    : posRC;
-                  observedPosBiasFwd[lengthClassIndex].addMass(
-                                                               posFW, transcript.RefLength, aln->logProb);
-                  observedPosBiasRC[lengthClassIndex].addMass(
-                                                              posRC, transcript.RefLength, aln->logProb);
-                }
-              } break;
-              case MateStatus::PAIRED_END_LEFT:
-              case MateStatus::PAIRED_END_RIGHT:
-              case MateStatus::SINGLE_END: {
-                int32_t pos = aln->pos();
-                pos = pos < 0 ? 0 : pos;
-                pos = pos >= static_cast<int32_t>(transcript.RefLength) ?
-                  static_cast<int32_t>(transcript.RefLength) - 1 : pos;
-                if (aln->fwd()) {
-                  observedPosBiasFwd[lengthClassIndex].addMass(
-                                                               pos, transcript.RefLength, aln->logProb);
-                } else {
-                  observedPosBiasRC[lengthClassIndex].addMass(
-                                                              pos, transcript.RefLength, aln->logProb);
-                }
-              } break;
-              default:
-                break;
-              }
-            }
-
-            // Collect the GC-fragment bias samples
-            if (gcBiasCorrect) {
-              if (aln->isPaired()) {
-                ReadPair* alnp = reinterpret_cast<ReadPair*>(aln);
-                bam_seq_t* r1 = alnp->read1;
-                bam_seq_t* r2 = alnp->read2;
-                if (r1 != nullptr and r2 != nullptr) {
-                  bool fwd1{bam_strand(r1) == 0};
-                  bool fwd2{bam_strand(r2) == 0};
-                  int32_t start = alnp->left();
-                  int32_t stop = alnp->right();
-
-                  if (start >= 0 and stop < static_cast<int32_t>(transcript.RefLength)) {
-                    bool valid{false};
-                    auto desc = transcript.gcDesc(start, stop, valid);
-                    if (valid) {
-                      observedGCMass.inc(desc, aln->logProb);
-                    }
-                  }
-                }
-              } else if (expectedLibraryFormat.type == ReadType::SINGLE_END) {
-                // Both expected and observed should be single end here
-                UnpairedRead* alnp = reinterpret_cast<UnpairedRead*>(aln);
-                bam_seq_t* r = alnp->read;
-                if (r != nullptr) {
-                  bool fwd{alnp->fwd()};
-                  // For single-end reads, simply assume that every fragment
-                  // has a length equal to the conditional mean (given the
-                  // current transcript's length).
-                  auto cmeans = alnLib.condMeans();
-                  auto cmean = static_cast<int32_t>(
-                      (transcript.RefLength >= cmeans.size())
-                          ? cmeans.back()
-                          : cmeans[transcript.RefLength]);
-                  int32_t start =
-                      fwd ? alnp->pos() : std::max(0, alnp->pos() - cmean);
-                  int32_t stop = start + cmean;
-                  // WITH CONTEXT
-                  if (start >= 0 and stop < static_cast<int32_t>(transcript.RefLength)) {
-                    bool valid{false};
-                    auto desc = transcript.gcDesc(start, stop, valid);
-                    if (valid) {
-                      observedGCMass.inc(desc, aln->logProb);
-                    }
-                  }
-                }
-              }
-            }
-            // END: GC-fragment bias
-
-            double r = uni(eng);
-            if (!burnedIn and r < std::exp(aln->logProb)) {
-              /**
-               * Update the bias sequence-specific bias model
-               **/
-
-              /*
-              if (needBiasSample and salmonOpts.numBiasSamples > 0 and isPaired)
-              {
-              // the "start" position is the leftmost position if
-              // we hit the forward strand, and the leftmost
-              // position + the read length if we hit the reverse complement
-              bam_seq_t* r = aln->get5PrimeRead();
-              if (r) {
-                  bool fwd{bam_strand(r) == 0};
-                  int32_t pos{bam_pos(r)};
-                  int32_t startPos = fwd ? pos : pos + bam_seq_len(r);
-                  auto dir = salmon::utils::boolToDirection(fwd);
-
-                                  if (startPos > 0 and startPos <
-              transcript.RefLength) { auto& readBias = (fwd) ? readBiasFW :
-              readBiasRC; const char* txpStart = transcript.Sequence(); const
-              char* readStart = txpStart + startPos; const char* txpEnd =
-              txpStart + transcript.RefLength; bool success =
-              readBias.update(txpStart, readStart, txpEnd, dir); if (success) {
-                                          salmonOpts.numBiasSamples -= 1;
-                                          needBiasSample = false;
-                                      }
+        // ---- Collect seq-specific bias samples ------ //
+        auto getCIGARLength = [](bam_seq_t* s) -> uint32_t {
+                                auto cl = bam_cigar_len(s);
+                                decltype(cl) k, end;
+                                end = 0; // bam_pos(s);
+                                uint32_t* cigar = bam_cigar(s);
+                                for (k = 0; k < cl; ++k) {
+                                  int op = cigar[k] & BAM_CIGAR_MASK;
+                                  if (BAM_CONSUME_SEQ(op)) {
+                                    end += cigar[k] >> BAM_CIGAR_SHIFT;
                                   }
-                              }
-                          }
-                          */
+                                }
+                                return end;
+                              };
 
-              // Update the error model
-              if (!useASWithoutCIGAR and salmonOpts.useErrorModel) {
-                auto alignerScore = getAlignerAssignedScore(aln);
-                alnMod.update(*aln, transcript, alignerScore, logForgettingMass);
+        bool success = false;
+        if (needBiasSample and salmonOpts.numBiasSamples > 0) {
+          const char* txpStart = transcript.Sequence();
+          const char* txpEnd = txpStart + transcript.RefLength;
+          if (aln->isPaired()) {
+            ReadPair* alnp = reinterpret_cast<ReadPair*>(aln);
+            bam_seq_t* r1 = alnp->read1;
+            bam_seq_t* r2 = alnp->read2;
+            if (r1 != nullptr and r2 != nullptr) {
+              int32_t pos1 = bam_pos(r1);
+              bool fwd1{bam_strand(r1) == 0};
+              int32_t startPos1 =
+                fwd1 ? pos1 : pos1 + getCIGARLength(r1) - 1;
+
+              int32_t pos2 = bam_pos(r2);
+              bool fwd2{bam_strand(r2) == 0};
+              int32_t startPos2 =
+                fwd2 ? pos2 : pos2 + getCIGARLength(r2) - 1;
+
+              // Shouldn't be from the same strand and they should be in the
+              // right order
+              if ((fwd1 != fwd2) and // Shouldn't be from the same strand
+                  (startPos1 > 0 and startPos1 < static_cast<int32_t>(transcript.RefLength)) and
+                  (startPos2 > 0 and startPos2 < static_cast<int32_t>(transcript.RefLength))) {
+
+                const char* readStart1 = txpStart + startPos1;
+                auto& readBias1 = (fwd1) ? readBiasFW : readBiasRC;
+
+                const char* readStart2 = txpStart + startPos2;
+                auto& readBias2 = (fwd2) ? readBiasFW : readBiasRC;
+
+                int32_t fwPre = readBias1.contextBefore(!fwd1);
+                int32_t fwPost = readBias1.contextAfter(!fwd1);
+
+                int32_t rcPre = readBias2.contextBefore(!fwd2);
+                int32_t rcPost = readBias2.contextAfter(!fwd2);
+
+                bool read1RC = !fwd1;
+                bool read2RC = !fwd2;
+
+                if ((startPos1 >= readBias1.contextBefore(read1RC) and
+                     startPos1 + readBias1.contextAfter(read1RC) <
+                     static_cast<int32_t>(transcript.RefLength)) and
+                    (startPos2 >= readBias2.contextBefore(read2RC) and
+                     startPos2 + readBias2.contextAfter(read2RC) <
+                     static_cast<int32_t>(transcript.RefLength))) {
+
+                  int32_t fwPos = (fwd1) ? startPos1 : startPos2;
+                  int32_t rcPos = (fwd1) ? startPos2 : startPos1;
+                  if (fwPos < rcPos) {
+                    leftMer.fromChars(txpStart + startPos1 -
+                                      readBias1.contextBefore(read1RC));
+                    rightMer.fromChars(txpStart + startPos2 -
+                                       readBias2.contextBefore(read2RC));
+
+                    if (read1RC) {
+                      leftMer.rc();
+                    } else {
+                      rightMer.rc();
+                    }
+
+                    success = readBias1.addSequence(leftMer, 1.0);
+                    success = readBias2.addSequence(rightMer, 1.0);
+                  }
+                }
               }
-              // Update the fragment length distribution
-              if (aln->isPaired() and !salmonOpts.noFragLengthDist) {
-                double fragLength =
-                    aln->fragLengthPedantic(transcript.RefLength);
-                if (fragLength > 0) {
-                  fragLengthDist.addVal(fragLength, logForgettingMass);
+            }
+          } else { // unpaired read
+            UnpairedRead* alnp = reinterpret_cast<UnpairedRead*>(aln);
+            bam_seq_t* r1 = alnp->read;
+            if (r1 != nullptr) {
+              int32_t pos1 = bam_pos(r1);
+              bool fwd1{bam_strand(r1) == 0};
+              int32_t startPos1 =
+                fwd1 ? pos1 : pos1 + getCIGARLength(r1) - 1;
+
+              if (startPos1 > 0 and startPos1 < static_cast<int32_t>(transcript.RefLength)) {
+
+                const char* txpStart = transcript.Sequence();
+                const char* txpEnd = txpStart + transcript.RefLength;
+
+                const char* readStart1 = txpStart + startPos1;
+                auto& readBias1 = (fwd1) ? readBiasFW : readBiasRC;
+
+                if (startPos1 >= readBias1.contextBefore(!fwd1) and
+                    startPos1 + readBias1.contextAfter(!fwd1) <
+                    static_cast<int32_t>(transcript.RefLength)) {
+                  context.fromChars(txpStart + startPos1 -
+                                    readBias1.contextBefore(!fwd1));
+
+                  if (!fwd1) {
+                    context.rc();
+                  }
+                  success = readBias1.addSequence(context, 1.0);
+                }
+              }
+            }
+          } // end unpaired read
+          if (success) {
+            salmonOpts.numBiasSamples -= 1;
+            needBiasSample = false;
+          }
+        }
+        // ---- Collect seq-specific bias samples ------ //
+
+        /**
+         * Update the auxiliary models.
+         **/
+        // Paired-end
+        if (aln->isPaired()) {
+          // TODO: Is this right for *all* library types?
+          if (aln->fwd()) {
+            obsFwd = salmon::math::logAdd(obsFwd, aln->logProb);
+          } else {
+            obsRC = salmon::math::logAdd(obsRC, aln->logProb);
+          }
+        } else if (aln->libFormat().type == ReadType::SINGLE_END) {
+          // Single-end or orphan
+          if (aln->libFormat().strandedness == ReadStrandedness::S) {
+            obsFwd = salmon::math::logAdd(obsFwd, aln->logProb);
+          } else {
+            obsRC = salmon::math::logAdd(obsRC, aln->logProb);
+          }
+        }
+
+        if (posBiasCorrect) {
+          auto lengthClassIndex = transcript.lengthClassIndex();
+          switch (aln->mateStatus()) {
+          case MateStatus::PAIRED_END_PAIRED: {
+            // TODO: Handle the non opposite strand case
+            if (aln->isInward()) {
+              auto* read1 = aln->getRead1();
+              auto* read2 = aln->getRead2();
+              int32_t posFW = aln->fwd() ? bam_pos(read1) : bam_pos(read2) + bam_seq_len(read2);
+              int32_t posRC = aln->fwd() ? bam_pos(read2) + bam_seq_len(read2) : bam_pos(read1);
+              posFW = posFW < 0 ? 0 : posFW;
+              posFW = posFW >= static_cast<int32_t>(transcript.RefLength) ?
+                static_cast<int32_t>(transcript.RefLength) - 1
+                : posFW;
+              posRC = posRC < 0 ? 0 : posRC;
+              posRC = posRC >= static_cast<int32_t>(transcript.RefLength) ?
+                static_cast<int32_t>(transcript.RefLength) - 1
+                : posRC;
+              observedPosBiasFwd[lengthClassIndex].addMass(
+                                                           posFW, transcript.RefLength, aln->logProb);
+              observedPosBiasRC[lengthClassIndex].addMass(
+                                                          posRC, transcript.RefLength, aln->logProb);
+            }
+          } break;
+          case MateStatus::PAIRED_END_LEFT:
+          case MateStatus::PAIRED_END_RIGHT:
+          case MateStatus::SINGLE_END: {
+            int32_t pos = aln->pos();
+            pos = pos < 0 ? 0 : pos;
+            pos = pos >= static_cast<int32_t>(transcript.RefLength) ?
+              static_cast<int32_t>(transcript.RefLength) - 1 : pos;
+            if (aln->fwd()) {
+              observedPosBiasFwd[lengthClassIndex].addMass(
+                                                           pos, transcript.RefLength, aln->logProb);
+            } else {
+              observedPosBiasRC[lengthClassIndex].addMass(
+                                                          pos, transcript.RefLength, aln->logProb);
+            }
+          } break;
+          default:
+            break;
+          }
+        }
+
+        // Collect the GC-fragment bias samples
+        if (gcBiasCorrect) {
+          if (aln->isPaired()) {
+            ReadPair* alnp = reinterpret_cast<ReadPair*>(aln);
+            bam_seq_t* r1 = alnp->read1;
+            bam_seq_t* r2 = alnp->read2;
+            if (r1 != nullptr and r2 != nullptr) {
+              bool fwd1{bam_strand(r1) == 0};
+              bool fwd2{bam_strand(r2) == 0};
+              int32_t start = alnp->left();
+              int32_t stop = alnp->right();
+
+              if (start >= 0 and stop < static_cast<int32_t>(transcript.RefLength)) {
+                bool valid{false};
+                auto desc = transcript.gcDesc(start, stop, valid);
+                if (valid) {
+                  observedGCMass.inc(desc, aln->logProb);
+                }
+              }
+            }
+          } else if (expectedLibraryFormat.type == ReadType::SINGLE_END) {
+            // Both expected and observed should be single end here
+            UnpairedRead* alnp = reinterpret_cast<UnpairedRead*>(aln);
+            bam_seq_t* r = alnp->read;
+            if (r != nullptr) {
+              bool fwd{alnp->fwd()};
+              // For single-end reads, simply assume that every fragment
+              // has a length equal to the conditional mean (given the
+              // current transcript's length).
+              auto cmeans = alnLib.condMeans();
+              auto cmean = static_cast<int32_t>(
+                                                (transcript.RefLength >= cmeans.size())
+                                                ? cmeans.back()
+                                                : cmeans[transcript.RefLength]);
+              int32_t start =
+                fwd ? alnp->pos() : std::max(0, alnp->pos() - cmean);
+              int32_t stop = start + cmean;
+              // WITH CONTEXT
+              if (start >= 0 and stop < static_cast<int32_t>(transcript.RefLength)) {
+                bool valid{false};
+                auto desc = transcript.gcDesc(start, stop, valid);
+                if (valid) {
+                  observedGCMass.inc(desc, aln->logProb);
                 }
               }
             }
           }
+        }
+        // END: GC-fragment bias
 
-          // update the single target transcript
-          if (transcriptUnique) {
-            if (updateCounts) {
-              refs[firstTranscriptID].addUniqueCount(1);
-            }
-            clusterForest.updateCluster(firstTranscriptID, 1, logForgettingMass,
-                                        updateCounts);
-          } else { // or the appropriate clusters
-            // ughh . . . C++ still has some very rough edges
-            clusterForest.template mergeClusters<FragT>(
-                alnGroup->alignments().begin(), alnGroup->alignments().end());
-            clusterForest.updateCluster(
-                alnGroup->alignments().front()->transcriptID(), 1,
-                logForgettingMass, updateCounts);
+        double r = uni(eng);
+        if (!burnedIn and r < std::exp(aln->logProb)) {
+          /**
+           * Update the bias sequence-specific bias model
+           **/
+
+          // Update the error model
+          if (!useASWithoutCIGAR and salmonOpts.useErrorModel) {
+            auto alignerScore = getAlignerAssignedScore(aln);
+            alnMod.update(*aln, transcript, alignerScore, logForgettingMass);
           }
-
-          ++batchReads;
-        } // end read group
-      }   // end timer
-
-      double individualTotal = LOG_0;
-      {
-        /*
-        // M-step
-        for (auto kv = hitList.begin(); kv != hitList.end(); ++kv) {
-            auto transcriptID = kv->first;
-            // The target must be a valid transcript
-            if (transcriptID >= numTranscripts or transcriptID < 0) {std::cerr
-        << "index " << transcriptID << " out of bounds\n"; }
-
-            auto& transcript = refs[transcriptID];
-
-            // The prior probability
-            double hitMass{LOG_0};
-
-            // The set of alignments that match transcriptID
-            auto& hits = kv->second;
-            std::for_each(hits.begin(), hits.end(), [&](FragT* aln) -> void {
-                    if (!std::isfinite(aln->logProb)) { log->warn("hitMass =
-        {}\n", aln->logProb); } hitMass = logAdd(hitMass, aln->logProb);
-            });
-
-            // Lock the target
-            if (hitMass == LOG_0) {
-                log->warn("\n\n\n\nA set of *valid* alignments for a read
-        appeared to " "have 0 probability.  This should not happen.  Please
-        report " "this bug.  exiting!");
-
-                std::cerr << "\n\n\n\nA set of *valid* alignments for a read
-        appeared to "
-                          << "have 0 probability.  This should not happen.
-        Please report "
-                          << "this bug.  exiting!";
-                std::exit(1);
+          // Update the fragment length distribution
+          if (aln->isPaired() and !salmonOpts.noFragLengthDist) {
+            double fragLength =
+              aln->fragLengthPedantic(transcript.RefLength);
+            if (fragLength > 0) {
+              fragLengthDist.addVal(fragLength, logForgettingMass);
             }
+          }
+        }
+      }
 
-            double updateMass = logForgettingMass + hitMass;
-            individualTotal = logAdd(individualTotal, updateMass);
-            transcript.addMass(updateMass);
+      // update the single target transcript
+      if (transcriptUnique) {
+        if (updateCounts) {
+          refs[firstTranscriptID].addUniqueCount(1);
+        }
+        clusterForest.updateCluster(firstTranscriptID, 1, logForgettingMass,
+                                    updateCounts);
+      } else { // or the appropriate clusters
+        // ughh . . . C++ still has some very rough edges
+        clusterForest.template mergeClusters<FragT>(
+                                                    alnGroup->alignments().begin(), alnGroup->alignments().end());
+        clusterForest.updateCluster(
+                                    alnGroup->alignments().front()->transcriptID(), 1,
+                                    logForgettingMass, updateCounts);
+      }
 
-           // unlock the target
-        } // end for
-        */
-      } // end timer
+      ++batchReads;
+    } // end read group
 
+    double individualTotal = LOG_0;
       // If we're not keeping around a cache, then
       // reclaim the memory for these fragments and alignments
       // and delete the mini batch.
-      if (processedCache == nullptr) {
-        miniBatch->release(fragmentQueue, alignmentGroupQueue);
-        delete miniBatch;
-      } else {
-        // Otherwise, just put the mini-batch on the processed queue
-        // to be re-used in the next round.
-        processedCache->push(miniBatch);
-      }
-      --activeBatches;
-      processedReads += batchReads;
-      if (processedReads >= numBurninFrags and !burnedIn) {
-        // NOTE: only one thread should succeed here, and that
-        // thread will set burnedIn to true
-        alnLib.updateTranscriptLengthsAtomic(burnedIn);
-        fragLengthDist.cacheCMF();
-      }
+    if (processedCache == nullptr) {
+      miniBatch->release(fragmentQueue, alignmentGroupQueue);
+      delete miniBatch;
+    } else {
+      // Otherwise, just put the mini-batch on the processed queue
+      // to be re-used in the next round.
+      processedCache->push(miniBatch);
+    }
+    --activeBatches;
+    processedReads += batchReads;
+    if (processedReads >= numBurninFrags and !burnedIn) {
+      // NOTE: only one thread should succeed here, and that
+      // thread will set burnedIn to true
+      alnLib.updateTranscriptLengthsAtomic(burnedIn);
+      fragLengthDist.cacheCMF();
+    }
 
-      if (zeroProbFrags > 0) {
-        maxZeroFrac =
-            std::max(maxZeroFrac,
-                     static_cast<double>(100.0 * zeroProbFrags) / batchReads);
-      }
+    if (zeroProbFrags > 0) {
+      maxZeroFrac =
+        std::max(maxZeroFrac,
+                 static_cast<double>(100.0 * zeroProbFrags) / batchReads);
     }
 
     miniBatch = nullptr;
