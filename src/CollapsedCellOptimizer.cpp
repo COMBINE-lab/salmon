@@ -1390,7 +1390,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
       aopt.jointLog->flush();
     }
   } //end-if whitelisting
-  else if ( aopt.noWhitelist and usingHashMode and not hasWhitelist ) {
+  else if ( aopt.noWhitelist or ( usingHashMode and not hasWhitelist ) ) {
     aopt.jointLog->warn("intelligent whitelisting is disabled ; skipping");
     aopt.jointLog->flush();
   }
