@@ -118,33 +118,6 @@ inline bool tryToGetWork(MiniBatchQueue<AlignmentGroup<FragT*>>& workQueue,
   return foundWork;
 }
 
-// Record the primary alignment for each alignment. primaryIndex[i] is
-// the index of the primary alignment for the i-th
-// alignment. primaryIndex[i] == i means it is a primary alignment
-// itself.
-template<typename FragT>
-void recordPrimaryIndex(const std::vector<FragT>& alignments, std::vector<int>& primaryIndex, bool debug = false) {
-  if(alignments.size() > primaryIndex.size())
-    primaryIndex.resize(alignments.size(), 0);
-
-  // Assume that a primary (or supplementary alignment is followed by secondary alignments)
-  size_t curPrimary = 0;
-  for(size_t i = 0; i < alignments.size(); ++i) {
-    if(alignments[i]->isSecondary())
-      primaryIndex[i] = curPrimary;
-    else
-      primaryIndex[i] = curPrimary = i;
-    if(debug) {
-      std::ostringstream os;
-      auto& curAln = alignments[i];
-      os << "record " << i << ' ' << curAln->getName() << ' ' << bam_flag(curAln->getRead1()) << ' '
-             << curAln->transcriptID() << ' ' << curAln->pos() << ' '
-             << curAln->readLen() << ' ' << primaryIndex[i] << ' '<< alignments[i]->isSecondary() << '\n';
-      std::cerr << os.str();
-    }
-  }
-}
-
 template <typename FragT, typename AlignModelT>
 void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
                       ForgettingMassCalculator& fmCalc,
@@ -373,39 +346,11 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
       // output (large reads), also record position of primary
       // alignment (that may contain the sequence).
       const auto& alignments = alnGroup->alignments();
-      //  !strcmp("142:999|4de465ae-b223-4f80-9f03-8dcc8583d2ea", alignments[0]->getName());
-      // !strcmp("123:360|002345d3-6f35-4287-8be3-0cde37022e26", alignments[0]->getName());
-      // !strcmp("138:367|aae24f7a-f2c2-480e-8f69-299873d24752", alignments[0]->getName());
-      const bool debug = !strcmp("129:1511|e46d4d46-e082-478f-8def-6b920f8ca6bd", alignments[0]->getName());
-      if(debug) {
-        std::ostringstream os;
-        os << "before oxford " << salmonOpts.oxfordNanoporeModel << '\n';
-        for(size_t i = 0; i < alignments.size(); ++i) {
-          auto& curAln = alignments[i];
-          os << curAln->getName() << ' ' << bam_flag(curAln->getRead1()) << ' '
-             << curAln->transcriptID() << ' ' << curAln->pos() << ' '
-             << curAln->readLen() << '\n';
-        }
-        std::cerr << os.str() << std::flush;
-      }
       if(!salmonOpts.oxfordNanoporeModel)
         alnGroup->sortHits();
       else
         //alnGroup->sortHits();
-        alnGroup->sortHits(primaryIndex, debug);
-
-      if(debug) {
-        std::ostringstream os;
-        os << "after oxford " << salmonOpts.oxfordNanoporeModel << '\n';
-        for(size_t i = 0; i < alignments.size(); ++i) {
-          auto& curAln = alignments[i];
-          os << curAln->getName() << ' ' << bam_flag(curAln->getRead1()) << ' '
-             << curAln->transcriptID() << ' ' << curAln->pos() << ' '
-             << curAln->readLen() << ' ' << primaryIndex[i] << '\n';
-        }
-        std::cerr << os.str() << std::flush;
-        //        exit(1);
-      }
+        alnGroup->sortHits(primaryIndex);
 
       double sumOfAlignProbs{LOG_0};
 

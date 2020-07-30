@@ -53,11 +53,21 @@ double ONTAlignmentModel::logLikelihood(const UnpairedRead& hit, const UnpairedR
   // Likelihood, based on average number of errors to get a read
   // further away from mode (as number of errors).
   using boost::math::binomial;
+  if(p <= 0) {
+    if(hasLogger())
+      logger_->warn("Negative probability!!!, read {}", bam_name(hit.read));
+    return salmon::math::LOG_1;
+  }
+
   binomial errorDist(alignLen, p);
   const int32_t errorMedian = median(errorDist);
   const int32_t offMedian = std::abs(errorMedian - counts.ims);
   const double errorLikelihood = cdf(errorDist, std::max(errorMedian - offMedian, (int32_t)0)) +
     cdf(complement(errorDist, std::min(errorMedian + offMedian, (int32_t)alignLen)));
+  if(errorLikelihood <= 0.0) {
+    if(logger_)
+      logger_->warn("negative likelihood!!!, read {}", bam_name(hit.read));
+  }
 
   // Likelihood to have so many bases soft clipped based on the
   // average error rate.

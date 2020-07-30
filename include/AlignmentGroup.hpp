@@ -73,7 +73,7 @@ public:
    * primaryIndex the index in the sorted vector of the primary
    * alignment for each alignment.
    */
-  void sortHits(std::vector<int>& primaryIndex, bool debug = false);
+  void sortHits(std::vector<int>& primaryIndex);
 
 private:
   std::vector<FragT> alignments_;
@@ -87,7 +87,7 @@ private:
 // Implementation
 
 template <typename FragT, typename BCType, typename UMIType>
-void AlignmentGroup<FragT, BCType, UMIType>::sortHits(std::vector<int>& primaryIndex, bool debug) {
+void AlignmentGroup<FragT, BCType, UMIType>::sortHits(std::vector<int>& primaryIndex) {
   // Create initial primaryIndex
   if(primaryIndex.size() < alignments_.size())
     primaryIndex.resize(alignments_.size(), 0);
@@ -106,18 +106,6 @@ void AlignmentGroup<FragT, BCType, UMIType>::sortHits(std::vector<int>& primaryI
             [&](const int x, const int y) -> bool {
               return alignments_[x]->transcriptID() < alignments_[y]->transcriptID();
             });
-  if(debug) {
-    std::ostringstream os;
-    os << "perm";
-    for(auto x : permutation)
-      os << ' ' << x;
-    os << '\n';
-    os << "primary";
-    for(auto x : primaryIndex)
-      os << ' ' << x;
-    os << '\n';
-    std::cerr << os.str();
-  }
 
   // Update primaryIndex
   chobo::small_vector<int> permutation2(alignments_.size());
@@ -125,21 +113,6 @@ void AlignmentGroup<FragT, BCType, UMIType>::sortHits(std::vector<int>& primaryI
     permutation2[permutation[i]] = i;
   for(size_t i = 0; i < alignments_.size(); ++i)
     primaryIndex[i] = permutation2[primaryIndex[i]];
-
-  if(debug) {
-    std::ostringstream os;
-    os << "perm2";
-    for(auto x : permutation)
-      os << ' ' << x;
-    os << "\npermutation2";
-    for(auto x : permutation2)
-      os << ' ' << x;
-    os << "\nprimary2";
-    for(auto x : primaryIndex)
-      os << ' ' << x;
-    os << '\n';
-    std::cerr << os.str();
-  }
 
   // Reorder alignments in place
   permute(permutation, alignments_, primaryIndex);

@@ -49,7 +49,7 @@ private:
   bool isEnabled_;
   // size_t maxLen_;
   size_t readBins_;
-  std::shared_ptr<spdlog::logger> logger_;
+
   // Maintain a mutex in case the error model wants to talk to the
   // console / log.
   std::mutex outputMutex_;
