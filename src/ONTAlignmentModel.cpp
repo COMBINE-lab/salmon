@@ -25,15 +25,15 @@ ONTAlignmentModel::ONTAlignmentModel(double alpha, uint32_t readBins)
   }
 }
 
-double ONTAlignmentModel::logLikelihood(const UnpairedRead& hit, Transcript& ref) {
+double ONTAlignmentModel::logLikelihood(const UnpairedRead& hit, const UnpairedRead& primary, Transcript& ref) {
   ErrorCount counts;
-  if(!computeErrorCount(hit.read, ref, counts)) {
+  if(!computeErrorCount(hit.read, primary.read, ref, counts, "logLikelihood")) {
     if(logger_)
       logger_->warn("in update() error parsing CIGAR string");
     return salmon::math::LOG_1;
   }
 
-  const uint32_t readLen   = bam_seq_len(hit.read);
+  const uint32_t readLen   = alnLen(hit, primary);
   const uint32_t alignLen  = readLen - counts.clips;
   const double   errorRate = (double)counts.ims / alignLen;
 
@@ -61,10 +61,9 @@ double ONTAlignmentModel::logLikelihood(const UnpairedRead& hit, Transcript& ref
 
   // Likelihood to have so many bases soft clipped based on the
   // average error rate.
-  using boost::math::geometric;
-  geometric clipDist(1.0 - p);
-  const double clipLikelihood = 1.0 - cdf(clipDist, counts.clips);
-  std::cerr << "clip " << clipLikelihood << '\n';
+  // using boost::math::geometric;
+  // geometric clipDist(1.0 - p);
+  // const double clipLikelihood = 1.0 - cdf(clipDist, counts.clips);
 
   return log(errorLikelihood); // + log(clipLikelihood);
 }
@@ -76,8 +75,8 @@ double ONTAlignmentModel::logLikelihood(const UnpairedRead& hit, Transcript& ref
 // The probability p in each bin is estimated as the empirical mean of
 // the number of errors in the reads (all reads counted the same at
 // this point: indels and mutations).
-void ONTAlignmentModel::update(const UnpairedRead& hit, Transcript& ref, double p,
-                               double mass) {
+void ONTAlignmentModel::update(const UnpairedRead& hit, const UnpairedRead& primary,
+                               Transcript& ref, double p, double mass) {
   if (mass == salmon::math::LOG_0) {
     return;
   }
@@ -86,14 +85,14 @@ void ONTAlignmentModel::update(const UnpairedRead& hit, Transcript& ref, double 
   }
 
   ErrorCount counts;
-  if(!computeErrorCount(hit.read, ref, counts)) {
+  if(!computeErrorCount(hit.read, primary.read, ref, counts, "update")) {
     if(logger_)
       logger_->warn("in update() error parsing CIGAR string");
     return;
   }
 
   // Not taking p and mass into account. What's up with those?
-  const int32_t readLen   = bam_seq_len(hit.read);
+  const int32_t readLen   = alnLen(hit, primary);
   const int32_t alignLen  = readLen - counts.clips;
   const double  errorRate = (double)counts.ims / alignLen;
   if(errorRate > 1.0) { // Should not happen

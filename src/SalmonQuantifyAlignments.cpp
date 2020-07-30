@@ -63,6 +63,8 @@ extern "C" {
 #include "spdlog/spdlog.h"
 #include "pufferfish/Util.hpp"
 
+std::mutex dieMutex;
+
 namespace bfs = boost::filesystem;
 using salmon::math::LOG_0;
 using salmon::math::LOG_1;
@@ -116,6 +118,32 @@ inline bool tryToGetWork(MiniBatchQueue<AlignmentGroup<FragT*>>& workQueue,
   return foundWork;
 }
 
+// Record the primary alignment for each alignment. primaryIndex[i] is
+// the index of the primary alignment for the i-th
+// alignment. primaryIndex[i] == i means it is a primary alignment
+// itself.
+template<typename FragT>
+void recordPrimaryIndex(const std::vector<FragT>& alignments, std::vector<int>& primaryIndex, bool debug = false) {
+  if(alignments.size() > primaryIndex.size())
+    primaryIndex.resize(alignments.size(), 0);
+
+  // Assume that a primary (or supplementary alignment is followed by secondary alignments)
+  size_t curPrimary = 0;
+  for(size_t i = 0; i < alignments.size(); ++i) {
+    if(alignments[i]->isSecondary())
+      primaryIndex[i] = curPrimary;
+    else
+      primaryIndex[i] = curPrimary = i;
+    if(debug) {
+      std::ostringstream os;
+      auto& curAln = alignments[i];
+      os << "record " << i << ' ' << curAln->getName() << ' ' << bam_flag(curAln->getRead1()) << ' '
+             << curAln->transcriptID() << ' ' << curAln->pos() << ' '
+             << curAln->readLen() << ' ' << primaryIndex[i] << ' '<< alignments[i]->isSecondary() << '\n';
+      std::cerr << os.str();
+    }
+  }
+}
 
 template <typename FragT, typename AlignModelT>
 void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
@@ -194,6 +222,11 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
 
   std::vector<FragmentStartPositionDistribution>& fragStartDists =
       alnLib.fragmentStartPositionDistributions();
+
+  // A vector used to record find the primary alignment corresponding
+  // to a secondary alignment, even after the alignment group is
+  // sorted differently. Used only for large read
+  std::vector<int> primaryIndex;
 
   auto& fragLengthDist = *(alnLib.fragmentLengthDistribution());
   auto& alnMod = alnLib.alignmentModel();
@@ -336,8 +369,43 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
       std::vector<double> auxProbs;
       double auxDenom = salmon::math::LOG_0;
 
-      // The alignments must be sorted by transcript id
-      alnGroup->sortHits();
+      // The alignments must be sorted by transcript id. For minimap2
+      // output (large reads), also record position of primary
+      // alignment (that may contain the sequence).
+      const auto& alignments = alnGroup->alignments();
+      //  !strcmp("142:999|4de465ae-b223-4f80-9f03-8dcc8583d2ea", alignments[0]->getName());
+      // !strcmp("123:360|002345d3-6f35-4287-8be3-0cde37022e26", alignments[0]->getName());
+      // !strcmp("138:367|aae24f7a-f2c2-480e-8f69-299873d24752", alignments[0]->getName());
+      const bool debug = !strcmp("129:1511|e46d4d46-e082-478f-8def-6b920f8ca6bd", alignments[0]->getName());
+      if(debug) {
+        std::ostringstream os;
+        os << "before oxford " << salmonOpts.oxfordNanoporeModel << '\n';
+        for(size_t i = 0; i < alignments.size(); ++i) {
+          auto& curAln = alignments[i];
+          os << curAln->getName() << ' ' << bam_flag(curAln->getRead1()) << ' '
+             << curAln->transcriptID() << ' ' << curAln->pos() << ' '
+             << curAln->readLen() << '\n';
+        }
+        std::cerr << os.str() << std::flush;
+      }
+      if(!salmonOpts.oxfordNanoporeModel)
+        alnGroup->sortHits();
+      else
+        //alnGroup->sortHits();
+        alnGroup->sortHits(primaryIndex, debug);
+
+      if(debug) {
+        std::ostringstream os;
+        os << "after oxford " << salmonOpts.oxfordNanoporeModel << '\n';
+        for(size_t i = 0; i < alignments.size(); ++i) {
+          auto& curAln = alignments[i];
+          os << curAln->getName() << ' ' << bam_flag(curAln->getRead1()) << ' '
+             << curAln->transcriptID() << ' ' << curAln->pos() << ' '
+             << curAln->readLen() << ' ' << primaryIndex[i] << '\n';
+        }
+        std::cerr << os.str() << std::flush;
+        //        exit(1);
+      }
 
       double sumOfAlignProbs{LOG_0};
 
@@ -376,7 +444,8 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
 
       //double maxLogAlnScore{LOG_0};
       int sidx{0};
-      for (auto& aln : alnGroup->alignments()) {
+      for(size_t alnIndex = 0; alnIndex < alignments.size(); ++alnIndex) {
+        auto& aln = alignments[alnIndex];
         auto transcriptID = aln->transcriptID();
         auto& transcript = refs[transcriptID];
         transcriptUnique =
@@ -491,7 +560,8 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
           // prob is -scoreExp * (S-w) rather than exp^(-scoreExp * (S-w))
           errLike = -salmonOpts.scoreExp * (bestAS - alnScore);
         } else if (useAuxParams and salmonOpts.useErrorModel) {
-          errLike = alnMod.logLikelihood(*aln, transcript);
+          auto& primaryAln = salmonOpts.oxfordNanoporeModel ? alignments[primaryIndex[alnIndex]] : aln;
+          errLike = alnMod.logLikelihood(*aln, *primaryAln, transcript);
           ++sidx;
         }
 
@@ -574,7 +644,8 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
       bool needBiasSample = salmonOpts.biasCorrect;
 
       // Normalize the scores
-      for (auto& aln : alnGroup->alignments()) {
+      for (size_t alnIndex = 0; alnIndex < alignments.size(); ++alnIndex) {
+        auto& aln = alignments[alnIndex];
         if (aln->logProb == LOG_0) {
           continue;
         }
@@ -829,7 +900,8 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
           // Update the error model
           if (!useASWithoutCIGAR and salmonOpts.useErrorModel) {
             auto alignerScore = getAlignerAssignedScore(aln);
-            alnMod.update(*aln, transcript, alignerScore, logForgettingMass);
+            auto& primaryAln = salmonOpts.oxfordNanoporeModel ? alignments[primaryIndex[alnIndex]] : aln;
+            alnMod.update(*aln, *primaryAln, transcript, alignerScore, logForgettingMass);
           }
           // Update the fragment length distribution
           if (aln->isPaired() and !salmonOpts.noFragLengthDist) {

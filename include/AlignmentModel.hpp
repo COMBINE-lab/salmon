@@ -14,28 +14,34 @@ public:
   AlignmentModel(double alpha, uint32_t readBins = 4);
 
   /**
-   *  For unpaired reads, update the error model to account
-   *  for errors we've observed in this read pair.
+   *  For unpaired reads, update the error model to account for errors
+   *  we've observed in this read pair. primaryAln contains the first
+   *  alignment in the alignment group.
    */
-  void update(const UnpairedRead&, Transcript& ref, double p, double mass);
+  void update(const UnpairedRead& aln, const UnpairedRead& primaryAln,
+              Transcript& ref, double p, double mass);
 
   /**
-   * Compute the log-likelihood of the observed unpaired alignment given the
-   * current error model.
+   * Compute the log-likelihood of the observed unpaired alignment
+   * given the current error model. primaryAln contains the first
+   * alignment in the alignment group.
    */
-  double logLikelihood(const UnpairedRead&, Transcript& ref);
+  double logLikelihood(const UnpairedRead&, const UnpairedRead& primaryAln, Transcript& ref);
+
+  // The primaryAln is ignored by the ReadPair overlaods (at least for now)
 
   /**
-   *  For paired-end reads, update the error model to account
-   *  for errors we've observed in this read pair.
+   *  For paired-end reads, update the error model to account for
+   *  errors we've observed in this read pair.
    */
-  void update(const ReadPair&, Transcript& ref, double p, double mass);
+  void update(const ReadPair& aln, const ReadPair& primaryAln,
+              Transcript& ref, double p, double mass);
 
   /**
    * Compute the log-likelihood of the observed paire-end alignment given the
    * current error model.
    */
-  double logLikelihood(const ReadPair&, Transcript& ref);
+  double logLikelihood(const ReadPair& aln, const ReadPair& primaryAln, Transcript& ref);
 
   void normalize();
 
@@ -59,9 +65,9 @@ private:
    * These functions, which work directly on bam_seq_t* types, drive the
    * update() and logLikelihood() methods above.
    */
-  void update(bam_seq_t* read, Transcript& ref, double p, double mass,
+  void update(bam_seq_t* read, bam_seq_t* primary, Transcript& ref, double p, double mass,
               std::vector<AtomicMatrix<double>>& mismatchProfile);
-  AlnModelProb logLikelihood(bam_seq_t* read, Transcript& ref,
+  AlnModelProb logLikelihood(bam_seq_t* read, bam_seq_t* primary, Transcript& ref,
                        std::vector<AtomicMatrix<double>>& mismatchProfile);
 
   // NOTE: Do these need to be concurrent_vectors as before?

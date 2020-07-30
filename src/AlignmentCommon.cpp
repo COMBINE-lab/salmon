@@ -118,7 +118,8 @@ char AlignmentCommon::opToChr(enum cigar_op op) {
   return 'X';
 }
 
-bool AlignmentCommon::computeErrorCount(bam_seq_t* read, Transcript& ref, ErrorCount& counts) {
+bool AlignmentCommon::computeErrorCount(bam_seq_t* read, bam_seq_t* primary, Transcript& ref, ErrorCount& counts,
+                                        const char* src) {
   using namespace salmon::stringtools;
 
   auto         transcriptIdx = bam_pos(read);
@@ -139,82 +140,109 @@ bool AlignmentCommon::computeErrorCount(bam_seq_t* read, Transcript& ref, ErrorC
   if (cigarLen == 0 || !cigar)
     return false;
 
-  uint8_t*       qseq        = reinterpret_cast<uint8_t*>(bam_seq(read));
-  const int32_t  readLen     = bam_seq_len(read);
-
+  const bool    usePrimary = bam_seq_len(read) == 0 && primary != nullptr;
+  uint8_t*      qseq       = reinterpret_cast<uint8_t*>(!usePrimary ? bam_seq(read) : bam_seq(primary));
+  const int32_t readLen    = !usePrimary ? bam_seq_len(read) : bam_seq_len(primary);
   const strand readStrand = strand::forward;
-  bool advanceInRead{false};
-  bool advanceInReference{false};
 
   uint32_t errors = 0;
   uint32_t clips  = 0;
 
-  for (uint32_t cigarIdx = 0; cigarIdx < cigarLen; ++cigarIdx) {
+  // Go through every operation in the CIGAR string as long as we
+  // still point within the sequences. Note that here we allow readIdx
+  // == readLen. This happens when there is a hard clip (H) as the
+  // last operation and it is not an error. Similarly, it is possible
+  // to have uTranscriptIdx == transcriptLen (read that extend beyond
+  // the end of the reference) and it is not an error if the following
+  // operations do not consuming reference sequence.
+  for (uint32_t cigarIdx = 0; cigarIdx < cigarLen && readIdx <= readLen && uTranscriptIdx <= transcriptLen; ++cigarIdx) {
     uint32_t opLen = cigar[cigarIdx] >> BAM_CIGAR_SHIFT;
     enum cigar_op op =
       static_cast<enum cigar_op>(cigar[cigarIdx] & BAM_CIGAR_MASK);
 
-    size_t curReadBase = (BAM_CONSUME_SEQ(op)) ? samToTwoBit[bam_seqi(qseq, readIdx)] : 0;
-    size_t curRefBase = (BAM_CONSUME_REF(op)) ? samToTwoBit[ref.baseAt(uTranscriptIdx, readStrand)] : 0;
-    advanceInReference = false;
+    // Only "matching" (meaning match or mismatch need to look at each
+    // base of query and reference sequences. Otherwise, advance block by block
+    switch(op) {
+    case BAM_CSOFT_CLIP:
+      readIdx += opLen; // Fallthrough
+    case BAM_CHARD_CLIP:
+      clips += opLen;
+      continue;
 
-    for (size_t i = 0; i < opLen; ++i) {
-      if (advanceInRead) {
-        // Shouldn't happen!
-        if (readIdx >= readLen) {
-          if (logger_) {
-            logger_->warn("CIGAR string for read [{}] "
-                          "seems inconsistent. It refers to non-existant "
-                          "positions in the read ({} >= {})!",
-                          bam_name(read), readIdx, readLen);
-            std::stringstream cigarStream;
-            for (size_t j = 0; j < cigarLen; ++j) {
-              uint32_t opLen = cigar[j] >> BAM_CIGAR_SHIFT;
-              enum cigar_op op =
-                static_cast<enum cigar_op>(cigar[j] & BAM_CIGAR_MASK);
-              cigarStream << opLen << opToChr(op);
-            }
-            logger_->warn("CIGAR = {}", cigarStream.str());
-          }
-          return false;
-        }
+    case BAM_CDEL:
+      errors += opLen; // Fallthrough
+    case BAM_CREF_SKIP:
+      uTranscriptIdx += opLen;
+      continue;
 
-        curReadBase = samToTwoBit[bam_seqi(qseq, readIdx)];
-        advanceInRead = false;
-      }
-      if (advanceInReference) {
-        // Shouldn't happen!
-        if (uTranscriptIdx >= transcriptLen) {
-          if (logger_) {
-            logger_->warn(
-                          "CIGAR string for read [{}] "
-                          "seems inconsistent. It refers to non-existant "
-                          "positions in the reference! Transcript name "
-                          "is {}, length is {}, id is {}. Read things refid is {}",
-                          bam_name(read), ref.RefName, transcriptLen, ref.id,
-                          bam_ref(read));
-          }
-          return false;
-        }
+    case BAM_CBASE_MISMATCH:
+      errors += opLen; // Falltrhough
+    case BAM_CBASE_MATCH:
+      readIdx += opLen;
+      uTranscriptIdx += opLen;
+      continue;
 
-        curRefBase = samToTwoBit[ref.baseAt(uTranscriptIdx, readStrand)];
-        advanceInReference = false;
-      }
-      setBasesFromCIGAROp_(op, curRefBase, curReadBase);
-      if(curRefBase == ALN_SOFT_CLIP)
-        ++clips;
-      else if(curRefBase != curReadBase)
-        ++errors;
+    case BAM_CINS:
+      errors += opLen;
+      readIdx += opLen;
+      continue;
 
-      if (BAM_CONSUME_SEQ(op)) {
-        ++readIdx;
-        advanceInRead = true;
-      }
-      if (BAM_CONSUME_REF(op)) {
-        ++uTranscriptIdx;
-        advanceInReference = true;
-      }
+    case BAM_CPAD:
+      continue;
+
+    case BAM_CMATCH:
+      break; // Examine base by base
+
+    case BAM_UNKNOWN:
+      if(logger_)
+        logger_->warn("in {} found unknown CIGAR operation for read {}",
+                      src, bam_name(read));
+      return false;
+
+    default:
+      if(logger_)
+        logger_-> warn("in {} found a bug, parsing read {}", src, bam_name(read));
+      return false;
     }
+
+    // "Match". Count mismatches
+    for (size_t i = 0; i < opLen && readIdx < readLen && uTranscriptIdx < transcriptLen; ++i) {
+      const auto curReadBase = samToTwoBit[bam_seqi(qseq, readIdx)];
+      const auto curRefBase = samToTwoBit[ref.baseAt(uTranscriptIdx, readStrand)];
+      errors += curReadBase != curRefBase;
+
+      ++readIdx;
+      ++uTranscriptIdx;
+    }
+  }
+
+  if (readIdx > readLen) {
+    if (logger_) {
+      std::stringstream cigarStream;
+      for (size_t j = 0; j < cigarLen; ++j) {
+        uint32_t opLen = cigar[j] >> BAM_CIGAR_SHIFT;
+        enum cigar_op op =
+          static_cast<enum cigar_op>(cigar[j] & BAM_CIGAR_MASK);
+        cigarStream << opLen << opToChr(op);
+      }
+      logger_->warn("in {} CIGAR [{}] string for read [{}] "
+                    "seems inconsistent. It refers to non-existant "
+                    "positions in the read ({} >= {})! {}",
+                    src, cigarStream.str(), bam_name(read), readIdx, readLen, usePrimary);
+    }
+    return false;
+  }
+  if (uTranscriptIdx > transcriptLen) {
+    if (logger_) {
+      logger_->warn(
+                    "CIGAR string for read [{}] "
+                    "seems inconsistent. It refers to non-existant "
+                    "positions in the reference! Transcript name "
+                    "is {}, length is {}, id is {}. Read things refid is {}",
+                    bam_name(read), ref.RefName, transcriptLen, ref.id,
+                    bam_ref(read));
+    }
+    return false;
   }
 
   counts.ims   = errors;

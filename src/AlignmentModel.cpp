@@ -93,7 +93,7 @@ matchStr, std::stringstream& refStr) { using salmon::stringtools::twoBitToChar;
 */
 
 AlignmentModel::AlnModelProb AlignmentModel::logLikelihood(
-    bam_seq_t* read, Transcript& ref,
+    bam_seq_t* read, bam_seq_t* primary, Transcript& ref,
     std::vector<AtomicMatrix<double>>& transitionProbs) {
   using namespace salmon::stringtools;
   bool useQual{false};
@@ -121,6 +121,7 @@ AlignmentModel::AlnModelProb AlignmentModel::logLikelihood(
 
   uint32_t* cigar = bam_cigar(read);
   uint32_t cigarLen = bam_cigar_len(read);
+  
   uint8_t* qseq = reinterpret_cast<uint8_t*>(bam_seq(read));
   uint8_t* qualStr = reinterpret_cast<uint8_t*>(bam_qual(read));
   int32_t readLen = bam_seq_len(read);
@@ -226,7 +227,7 @@ AlignmentModel::AlnModelProb AlignmentModel::logLikelihood(
   return {logLike, bgLogLike};
 }
 
-double AlignmentModel::logLikelihood(const ReadPair& hit, Transcript& ref) {
+double AlignmentModel::logLikelihood(const ReadPair& hit, const ReadPair& primary, Transcript& ref) {
   double logLike = salmon::math::LOG_1;
   double bg = salmon::math::LOG_1;
   if (BOOST_UNLIKELY(!isEnabled_)) {
@@ -235,10 +236,10 @@ double AlignmentModel::logLikelihood(const ReadPair& hit, Transcript& ref) {
 
   if (!hit.isPaired()) {
     if (hit.isLeftOrphan()) {
-      auto alnLogProb = logLikelihood(hit.read1, ref, transitionProbsLeft_);
+      auto alnLogProb = logLikelihood(hit.read1, nullptr, ref, transitionProbsLeft_);
       return alnLogProb.fg - alnLogProb.bg;
     } else {
-      auto alnLogProb = logLikelihood(hit.read1, ref, transitionProbsRight_);
+      auto alnLogProb = logLikelihood(hit.read1, nullptr, ref, transitionProbsRight_);
       return alnLogProb.fg - alnLogProb.bg;
     }
   }
@@ -252,13 +253,13 @@ double AlignmentModel::logLikelihood(const ReadPair& hit, Transcript& ref) {
   size_t rightLen = static_cast<size_t>(bam_seq_len(rightRead));
 
   if (leftRead) {
-    auto alnLogProb = logLikelihood(leftRead, ref, transitionProbsLeft_);
+    auto alnLogProb = logLikelihood(leftRead, nullptr, ref, transitionProbsLeft_);
     logLike += alnLogProb.fg;
     bg += alnLogProb.bg;
   }
 
   if (rightRead) {
-    auto alnLogProb = logLikelihood(rightRead, ref, transitionProbsRight_);
+    auto alnLogProb = logLikelihood(rightRead, nullptr, ref, transitionProbsRight_);
     logLike += alnLogProb.fg;
     bg += alnLogProb.bg;
   }
@@ -272,7 +273,7 @@ double AlignmentModel::logLikelihood(const ReadPair& hit, Transcript& ref) {
   return logLike - bg;
 }
 
-double AlignmentModel::logLikelihood(const UnpairedRead& hit, Transcript& ref) {
+double AlignmentModel::logLikelihood(const UnpairedRead& hit, const UnpairedRead& primary, Transcript& ref) {
   double logLike = salmon::math::LOG_1;
   double bg = salmon::math::LOG_1;
   if (BOOST_UNLIKELY(!isEnabled_)) {
@@ -287,7 +288,7 @@ double AlignmentModel::logLikelihood(const UnpairedRead& hit, Transcript& ref) {
       return logLike;
   }
   */
-  auto alnLogProb = logLikelihood(read, ref, transitionProbsLeft_);
+  auto alnLogProb = logLikelihood(read, primary.read, ref, transitionProbsLeft_);
   logLike += alnLogProb.fg;
   bg += alnLogProb.bg;
 
@@ -299,20 +300,20 @@ double AlignmentModel::logLikelihood(const UnpairedRead& hit, Transcript& ref) {
   return logLike - bg;
 }
 
-void AlignmentModel::update(const UnpairedRead& hit, Transcript& ref, double p,
-                            double mass) {
+void AlignmentModel::update(const UnpairedRead& hit, const UnpairedRead& primary,
+                            Transcript& ref, double p, double mass) {
   if (mass == salmon::math::LOG_0) {
     return;
   }
   if (BOOST_UNLIKELY(!isEnabled_)) {
     return;
   }
-  bam_seq_t* leftRead = hit.read;
-  update(leftRead, ref, p, mass, transitionProbsLeft_);
+  update(hit.read, primary.read, ref, p, mass, transitionProbsLeft_);
 }
 
 void AlignmentModel::update(
-    bam_seq_t* read, Transcript& ref, double p, double mass,
+    bam_seq_t* read, bam_seq_t* primary,
+    Transcript& ref, double p, double mass,
     std::vector<AtomicMatrix<double>>& transitionProbs) {
   using namespace salmon::stringtools;
   bool useQual{false};
@@ -331,9 +332,10 @@ void AlignmentModel::update(
 
   uint32_t* cigar = bam_cigar(read);
   uint32_t cigarLen = bam_cigar_len(read);
-  uint8_t* qseq = reinterpret_cast<uint8_t*>(bam_seq(read));
-  uint8_t* qualStr = reinterpret_cast<uint8_t*>(bam_qual(read));
-  int32_t readLen = bam_seq_len(read);
+  const bool usePrimary = bam_seq_len(read) == 0 && primary != nullptr;
+  uint8_t* qseq = reinterpret_cast<uint8_t*>(!usePrimary ? bam_seq(read) : bam_seq(primary));
+  uint8_t* qualStr = reinterpret_cast<uint8_t*>(!usePrimary ? bam_qual(read) : bam_qual(primary));
+  int32_t readLen = !usePrimary ? bam_seq_len(read) : bam_seq_len(primary);
 
   if (cigarLen > 0 and cigar) {
 
@@ -424,8 +426,8 @@ void AlignmentModel::update(
   } // if we had a cigar string
 }
 
-void AlignmentModel::update(const ReadPair& hit, Transcript& ref, double p,
-                            double mass) {
+void AlignmentModel::update(const ReadPair& hit, const ReadPair& primary,
+                            Transcript& ref, double p, double mass) {
   if (mass == salmon::math::LOG_0) {
     return;
   }
@@ -438,14 +440,14 @@ void AlignmentModel::update(const ReadPair& hit, Transcript& ref, double p,
         (bam_pos(hit.read1) < bam_pos(hit.read2)) ? hit.read1 : hit.read2;
     bam_seq_t* rightRead =
         (bam_pos(hit.read1) < bam_pos(hit.read2)) ? hit.read2 : hit.read1;
-    update(leftRead, ref, p, mass, transitionProbsLeft_);
-    update(rightRead, ref, p, mass, transitionProbsRight_);
+    update(leftRead, nullptr, ref, p, mass, transitionProbsLeft_);
+    update(rightRead, nullptr, ref, p, mass, transitionProbsRight_);
   } else if (hit.isLeftOrphan()) {
     bam_seq_t* read = hit.read1;
-    update(read, ref, p, mass, transitionProbsLeft_);
+    update(read, nullptr, ref, p, mass, transitionProbsLeft_);
   } else if (hit.isRightOrphan()) {
     bam_seq_t* read = hit.read1;
-    update(read, ref, p, mass, transitionProbsRight_);
+    update(read, nullptr, ref, p, mass, transitionProbsRight_);
   }
 }
 

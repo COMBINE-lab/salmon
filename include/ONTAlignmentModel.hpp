@@ -25,16 +25,19 @@ public:
   ~ONTAlignmentModel() { }
 
   /**
-   *  For unpaired reads, update the error model to account
-   *  for errors we've observed in this read pair.
+   *  For unpaired reads, update the error model to account for errors
+   *  we've observed in this read pair. primaryAln contains the first
+   *  alignment in the alignment group.
    */
-  void update(const UnpairedRead&, Transcript& ref, double p, double mass);
+  void update(const UnpairedRead& aln, const UnpairedRead& primaryAln,
+              Transcript& ref, double p, double mass);
 
   /**
-   * Compute the log-likelihood of the observed unpaired alignment given the
-   * current error model.
+   * Compute the log-likelihood of the observed unpaired alignment
+   * given the current error model. primaryAln contains the first
+   * alignment in the alignment group.
    */
-  double logLikelihood(const UnpairedRead&, Transcript& ref);
+  double logLikelihood(const UnpairedRead& aln, const UnpairedRead& primaryAln, Transcript& ref);
 
   void normalize();
 

@@ -170,4 +170,34 @@ inline uint32_t indexForKmer(const char* s, uint32_t K,
   return idx;
 }
 
+// Range iterator to fill vector upon construction (E.g., std::vector<int> v(range{0}, range{5}) -> [0, 1, 2, 3, 4]).
+struct range : std::iterator<std::forward_iterator_tag,int> {
+  int x;
+  range(int x_) : x(x_) { }
+  range& operator++() { ++x; return *this; }
+  int operator*() const { return x; }
+  int operator-(const range& rhs) const { return x - rhs.x; }
+  bool operator!=(const range& rhs) const { return rhs.x != x; }
+};
+
+// Permute in place the elements of ary according to the permutation
+// vector. permutation is destroyed in the process (all elements set
+// to -1). The elements of permutation must be signed integers.
+template<typename V1, typename V2, typename V3>
+void permute(V1& permutation, V2& ary1, V3& ary2) {
+  for(size_t i = 0; i < permutation.size(); ++i) {
+    if(permutation[i] < 0) continue;
+    int cur = i;
+    int next = permutation[cur];
+    permutation[cur] = -1;
+    while(next != i) {
+      std::swap(ary1[cur], ary1[next]);
+      std::swap(ary2[cur], ary2[next]);
+      cur = next;
+      next = permutation[cur];
+      permutation[cur] = -1;
+    }
+  }
+}
+
 #endif // UTILITY_FUNCTIONS_HPP

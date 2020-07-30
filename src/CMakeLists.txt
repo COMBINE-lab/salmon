@@ -60,6 +60,7 @@ AlevinUtils.cpp
 
 set (SALMON_LIB_SRCS
 ${GAT_SOURCE_DIR}/src/jellyfish/mer_dna.cc
+backtrace.cc
 xxhash.c
 TranscriptGroup.cpp
 EffectiveLengthStats.cpp

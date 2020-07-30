@@ -172,7 +172,10 @@ void sampleMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
           bool transcriptUnique{true};
           auto firstTranscriptID =
               alnGroup->alignments().front()->transcriptID();
-          for (auto& aln : alnGroup->alignments()) {
+          const auto primaryAlignment = alnGroup->alignments().begin();
+          const auto endAlignment     = alnGroup->alignments().end();
+          for(auto curAln = primaryAlignment; curAln != endAlignment; ++curAln) {
+            auto& aln = *curAln;
             auto transcriptID = aln->transcriptID();
             auto& transcript = refs[transcriptID];
             transcriptUnique =
@@ -255,7 +258,7 @@ void sampleMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
             // error model
             double errLike = salmon::math::LOG_1;
             if (burnedIn and salmonOpts.useErrorModel) {
-              errLike = alnMod.logLikelihood(*aln, transcript);
+              errLike = alnMod.logLikelihood(*aln, **primaryAlignment, transcript);
             }
 
             // Allow for a non-uniform fragment start position distribution

@@ -292,6 +292,9 @@ struct SalmonOpts {
   std::vector<std::string> unmatedReadFiles;
   std::vector<std::string> mate1ReadFiles;
   std::vector<std::string> mate2ReadFiles;
+
+  // Oxford nanopore error model
+  bool oxfordNanoporeModel;
 };
 
 #endif // SALMON_OPTS_HPP

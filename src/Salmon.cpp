@@ -18,7 +18,7 @@
     along with salmon.  If not, see <http://www.gnu.org/licenses/>.
 <HEADER
 **/
-
+#include <backtrace.hpp>
 #include <boost/thread/thread.hpp>
 
 #include <cstdint>
@@ -154,6 +154,7 @@ int salmonQuantMerge(int argc, const char* argv[]);
 bool verbose = false;
 
 int main(int argc, char* argv[]) {
+  show_backtrace();
   using std::string;
   namespace po = boost::program_options;
   std::setlocale(LC_ALL, "en_US.UTF-8");

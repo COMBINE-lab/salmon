@@ -14,6 +14,7 @@ extern "C" {
 
 #include "ReadPair.hpp"
 #include "SalmonMath.hpp"
+#include "UtilityFunctions.hpp"
 #include <vector>
 
 struct EmptyCellInfo {};
@@ -50,8 +51,8 @@ public:
   }
 
   inline bool& isUniquelyMapped() { return isUniquelyMapped_; }
-  inline size_t numAlignments() { return alignments_.size(); }
-  inline size_t size() { return numAlignments(); }
+  inline size_t numAlignments() const { return alignments_.size(); }
+  inline size_t size() const { return numAlignments(); }
 
   template <typename Archive> void serialize(Archive& archive) {
     archive(alignments_);
@@ -67,6 +68,13 @@ public:
               });
   }
 
+  /**
+   * Sort the alignments by their transcript ids and returns in
+   * primaryIndex the index in the sorted vector of the primary
+   * alignment for each alignment.
+   */
+  void sortHits(std::vector<int>& primaryIndex, bool debug = false);
+
 private:
   std::vector<FragT> alignments_;
   std::string* read_;
@@ -74,5 +82,68 @@ private:
   BCType barcode_;
   UMIType umi_;
 };
+
+
+// Implementation
+
+template <typename FragT, typename BCType, typename UMIType>
+void AlignmentGroup<FragT, BCType, UMIType>::sortHits(std::vector<int>& primaryIndex, bool debug) {
+  // Create initial primaryIndex
+  if(primaryIndex.size() < alignments_.size())
+    primaryIndex.resize(alignments_.size(), 0);
+
+  //  int curPrimary = 0;
+  for(int i = 0; i < alignments_.size(); ++i) {
+    if(alignments_[i]->isSecondary())
+      primaryIndex[i] = 0;
+    else
+      primaryIndex[i] = i;
+  }
+
+  // Create permuation array of sorted alignments
+  chobo::small_vector<int> permutation(range{0}, range{alignments_.size()});
+  std::sort(permutation.begin(), permutation.end(),
+            [&](const int x, const int y) -> bool {
+              return alignments_[x]->transcriptID() < alignments_[y]->transcriptID();
+            });
+  if(debug) {
+    std::ostringstream os;
+    os << "perm";
+    for(auto x : permutation)
+      os << ' ' << x;
+    os << '\n';
+    os << "primary";
+    for(auto x : primaryIndex)
+      os << ' ' << x;
+    os << '\n';
+    std::cerr << os.str();
+  }
+
+  // Update primaryIndex
+  chobo::small_vector<int> permutation2(alignments_.size());
+  for(size_t i = 0; i < permutation.size(); ++i)
+    permutation2[permutation[i]] = i;
+  for(size_t i = 0; i < alignments_.size(); ++i)
+    primaryIndex[i] = permutation2[primaryIndex[i]];
+
+  if(debug) {
+    std::ostringstream os;
+    os << "perm2";
+    for(auto x : permutation)
+      os << ' ' << x;
+    os << "\npermutation2";
+    for(auto x : permutation2)
+      os << ' ' << x;
+    os << "\nprimary2";
+    for(auto x : primaryIndex)
+      os << ' ' << x;
+    os << '\n';
+    std::cerr << os.str();
+  }
+
+  // Reorder alignments in place
+  permute(permutation, alignments_, primaryIndex);
+}
+
 
 #endif // ALIGNMENT_GROUP

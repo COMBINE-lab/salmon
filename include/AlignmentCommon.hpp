@@ -3,6 +3,8 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
+
 
 // logger includes
 #include "spdlog/spdlog.h"
@@ -53,14 +55,23 @@ protected:
   static void setBasesFromCIGAROp_(enum cigar_op op, size_t& curRefBase, size_t& curReadBase);
   static char opToChr(enum cigar_op op);
 
+  template<typename T>
+  static int32_t alnLen(const T& aln, const T& primary) {
+    const auto l = aln.readLen();
+    return l != 0 ? l : primary.readLen();
+  }
+
   struct ErrorCount {
     int32_t ims;   // indels and mismatches
     int32_t clips; // soft clips
   };
-  bool computeErrorCount(bam_seq_t* read, Transcript& ref, ErrorCount& counts);
+  bool computeErrorCount(bam_seq_t* read, bam_seq_t* primary, Transcript& ref, ErrorCount& counts,
+                         const char* src);
 
   std::shared_ptr<spdlog::logger> logger_;
   std::atomic<bool> burnedIn_;
+
+  std::mutex throwMutex_;
 };
 
 #endif /* __ALIGNMENTCOMMON_H__ */
