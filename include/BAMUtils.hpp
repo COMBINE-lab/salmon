@@ -9,6 +9,7 @@ extern "C" {
 }
 
 #include <unordered_map>
+#include <string>
 
 namespace salmon {
   namespace bam_utils {
