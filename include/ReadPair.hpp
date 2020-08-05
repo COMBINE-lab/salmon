@@ -207,6 +207,7 @@ struct ReadPair {
       return bam_pos(read1) + bam_seq_len(read1);
     }
   }
+  inline bool isPrimary() const { return !(bam_flag(read1) & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY)); }
   inline bool isSecondary() const { return (bam_flag(read1) & BAM_FSECONDARY) || (bam_flag(read2) & BAM_FSECONDARY); }
 
   inline ReadType fragType() const { return ReadType::PAIRED_END; }

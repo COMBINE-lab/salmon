@@ -346,11 +346,13 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
       // output (large reads), also record position of primary
       // alignment (that may contain the sequence).
       const auto& alignments = alnGroup->alignments();
-      if(!salmonOpts.oxfordNanoporeModel)
-        alnGroup->sortHits();
-      else
-        //alnGroup->sortHits();
-        alnGroup->sortHits(primaryIndex);
+      alnGroup->sortHits();
+      // The primary alignment of the group (or first one if doesn't matter)
+      FragT* alnPrimary =
+        !salmonOpts.oxfordNanoporeModel
+        ? alignments.front()
+        : *std::find_if(alignments.cbegin(), alignments.cend(),
+                        [](FragT* a) -> bool { return a->isPrimary(); });
 
       double sumOfAlignProbs{LOG_0};
 
@@ -505,8 +507,7 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
           // prob is -scoreExp * (S-w) rather than exp^(-scoreExp * (S-w))
           errLike = -salmonOpts.scoreExp * (bestAS - alnScore);
         } else if (useAuxParams and salmonOpts.useErrorModel) {
-          auto& primaryAln = salmonOpts.oxfordNanoporeModel ? alignments[primaryIndex[alnIndex]] : aln;
-          errLike = alnMod.logLikelihood(*aln, *primaryAln, transcript);
+          errLike = alnMod.logLikelihood(*aln, *alnPrimary, transcript);
           ++sidx;
         }
 
@@ -845,8 +846,7 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
           // Update the error model
           if (!useASWithoutCIGAR and salmonOpts.useErrorModel) {
             auto alignerScore = getAlignerAssignedScore(aln);
-            auto& primaryAln = salmonOpts.oxfordNanoporeModel ? alignments[primaryIndex[alnIndex]] : aln;
-            alnMod.update(*aln, *primaryAln, transcript, alignerScore, logForgettingMass);
+            alnMod.update(*aln, *alnPrimary, transcript, alignerScore, logForgettingMass);
           }
           // Update the fragment length distribution
           if (aln->isPaired() and !salmonOpts.noFragLengthDist) {

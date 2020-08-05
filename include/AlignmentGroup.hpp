@@ -68,13 +68,6 @@ public:
               });
   }
 
-  /**
-   * Sort the alignments by their transcript ids and returns in
-   * primaryIndex the index in the sorted vector of the primary
-   * alignment for each alignment.
-   */
-  void sortHits(std::vector<int>& primaryIndex);
-
 private:
   std::vector<FragT> alignments_;
   std::string* read_;
@@ -82,41 +75,5 @@ private:
   BCType barcode_;
   UMIType umi_;
 };
-
-
-// Implementation
-
-template <typename FragT, typename BCType, typename UMIType>
-void AlignmentGroup<FragT, BCType, UMIType>::sortHits(std::vector<int>& primaryIndex) {
-  // Create initial primaryIndex
-  if(primaryIndex.size() < alignments_.size())
-    primaryIndex.resize(alignments_.size(), 0);
-
-  //  int curPrimary = 0;
-  for(int i = 0; i < alignments_.size(); ++i) {
-    if(alignments_[i]->isSecondary())
-      primaryIndex[i] = 0;
-    else
-      primaryIndex[i] = i;
-  }
-
-  // Create permuation array of sorted alignments
-  chobo::small_vector<int> permutation(range{0}, range{alignments_.size()});
-  std::sort(permutation.begin(), permutation.end(),
-            [&](const int x, const int y) -> bool {
-              return alignments_[x]->transcriptID() < alignments_[y]->transcriptID();
-            });
-
-  // Update primaryIndex
-  chobo::small_vector<int> permutation2(alignments_.size());
-  for(size_t i = 0; i < permutation.size(); ++i)
-    permutation2[permutation[i]] = i;
-  for(size_t i = 0; i < alignments_.size(); ++i)
-    primaryIndex[i] = permutation2[primaryIndex[i]];
-
-  // Reorder alignments in place
-  permute(permutation, alignments_, primaryIndex);
-}
-
 
 #endif // ALIGNMENT_GROUP

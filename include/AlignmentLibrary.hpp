@@ -211,7 +211,6 @@ for (auto& txp : transcripts_) {
 
     alnMod_.reset(new AlignModelT(1.0, salmonOpts.numErrorBins));
     alnMod_->setLogger(salmonOpts.jointLog);
-    std::cerr << "alnMod_ logger " << (void*) alnMod_->hasLogger() << std::endl;
 
     if (libFmt.type == ReadType::SINGLE_END) {
       // Convert the PMF to non-log scale

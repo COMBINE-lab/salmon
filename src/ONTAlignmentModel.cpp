@@ -29,20 +29,20 @@ double ONTAlignmentModel::logLikelihood(const UnpairedRead& hit, const UnpairedR
   ErrorCount counts;
   if(!computeErrorCount(hit.read, primary.read, ref, counts, "logLikelihood")) {
     if(logger_)
-      logger_->warn("in update() error parsing CIGAR string");
+      logger_->warn("in logLikelihood() error parsing CIGAR string");
     return salmon::math::LOG_1;
   }
 
   const uint32_t readLen   = alnLen(hit, primary);
   const uint32_t alignLen  = readLen - counts.clips;
-  const double   errorRate = (double)counts.ims / alignLen;
+  const double   errorRate = (double)counts.ims() / alignLen;
 
   int32_t bin = std::min(alignLen / binLen, (uint32_t)errorModel_.size() - 1);
   auto& average = errorModel_[bin];
   if(average.number == 0) { // Falls into a bin that is empty after training
     if(logger_)
-      logger_->warn("read {} of length {} has no trained error model",
-                    bam_name(hit.read), bam_seq_len(hit.read));
+      logger_->warn("read {} (length {} - align length {}) has no trained error model",
+                    bam_name(hit.read), readLen, alignLen);
     return salmon::math::LOG_1;
   }
 
@@ -54,14 +54,14 @@ double ONTAlignmentModel::logLikelihood(const UnpairedRead& hit, const UnpairedR
   // further away from mode (as number of errors).
   using boost::math::binomial;
   if(p <= 0) {
-    if(hasLogger())
+    if(logger_)
       logger_->warn("Negative probability!!!, read {}", bam_name(hit.read));
     return salmon::math::LOG_1;
   }
 
   binomial errorDist(alignLen, p);
   const int32_t errorMedian = median(errorDist);
-  const int32_t offMedian = std::abs(errorMedian - counts.ims);
+  const int32_t offMedian = std::abs(errorMedian - counts.ims());
   const double errorLikelihood = cdf(errorDist, std::max(errorMedian - offMedian, (int32_t)0)) +
     cdf(complement(errorDist, std::min(errorMedian + offMedian, (int32_t)alignLen)));
   if(errorLikelihood <= 0.0) {
@@ -104,7 +104,7 @@ void ONTAlignmentModel::update(const UnpairedRead& hit, const UnpairedRead& prim
   // Not taking p and mass into account. What's up with those?
   const int32_t readLen   = alnLen(hit, primary);
   const int32_t alignLen  = readLen - counts.clips;
-  const double  errorRate = (double)counts.ims / alignLen;
+  const double  errorRate = (double)counts.ims() / alignLen;
   if(errorRate > 1.0) { // Should not happen
     if (logger_) {
       logger_->warn("(in update()) CIGAR string for read [{}] "
@@ -120,11 +120,12 @@ void ONTAlignmentModel::update(const UnpairedRead& hit, const UnpairedRead& prim
   salmon::utils::incLoop(errorModel_[bin].sum, errorRate);
 }
 
-void ONTAlignmentModel::print_model(std::ostream& os) {
+void ONTAlignmentModel::printModel(std::ostream& os) {
   for(size_t i = 0; i < errorModel_.size(); ++i) {
+    if(errorModel_[i].number == 0) continue;
     const auto p = (errorModel_[i].sum / errorModel_[i].number);
     const auto n = i * binLen;
     os << (i * binLen) << " - " << ((i+1) * binLen) << ' ' << p
-       << ' ' << (n > 9 * (1.0 - p) / p && n > 9 * p / (1.0 - p)) <<'\n';
+       << ' ' << errorModel_[i].number <<'\n';
   }
 }

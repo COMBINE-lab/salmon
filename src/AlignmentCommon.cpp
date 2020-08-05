@@ -143,10 +143,12 @@ bool AlignmentCommon::computeErrorCount(bam_seq_t* read, bam_seq_t* primary, Tra
   const bool    usePrimary = bam_seq_len(read) == 0 && primary != nullptr;
   uint8_t*      qseq       = reinterpret_cast<uint8_t*>(!usePrimary ? bam_seq(read) : bam_seq(primary));
   const int32_t readLen    = !usePrimary ? bam_seq_len(read) : bam_seq_len(primary);
-  const strand readStrand = strand::forward;
-
-  uint32_t errors = 0;
-  uint32_t clips  = 0;
+  // If using the primary sequence and the reverse flag is different
+  // between the current sequence and the primary, then we use the
+  // reverse strand.
+  const strand readStrand = usePrimary && (bam_flag(primary) & BAM_FREVERSE) != (bam_flag(read) & BAM_FREVERSE)
+    ? strand::reverse : strand::forward;
+  counts.clear();
 
   // Go through every operation in the CIGAR string as long as we
   // still point within the sequences. Note that here we allow readIdx
@@ -164,29 +166,35 @@ bool AlignmentCommon::computeErrorCount(bam_seq_t* read, bam_seq_t* primary, Tra
     // base of query and reference sequences. Otherwise, advance block by block
     switch(op) {
     case BAM_CSOFT_CLIP:
-      readIdx += opLen; // Fallthrough
-    case BAM_CHARD_CLIP:
-      clips += opLen;
+      readIdx      += opLen;    // Fallthrough
+      counts.clips += opLen;
       continue;
 
     case BAM_CDEL:
-      errors += opLen; // Fallthrough
+      counts.deletions += opLen; // Fallthrough
     case BAM_CREF_SKIP:
-      uTranscriptIdx += opLen;
+      uTranscriptIdx   += opLen;
       continue;
 
     case BAM_CBASE_MISMATCH:
-      errors += opLen; // Falltrhough
+      counts.mismatches += opLen;
+      readIdx           += opLen;
+      uTranscriptIdx    += opLen;
+      continue;
+
     case BAM_CBASE_MATCH:
-      readIdx += opLen;
+      counts.matches += opLen;
+      readIdx        += opLen;
       uTranscriptIdx += opLen;
       continue;
 
     case BAM_CINS:
-      errors += opLen;
-      readIdx += opLen;
+      counts.insertions += opLen;
+      readIdx           += opLen;
       continue;
 
+    case BAM_CHARD_CLIP:
+      counts.hclips += opLen; // Fallthrough
     case BAM_CPAD:
       continue;
 
@@ -207,9 +215,14 @@ bool AlignmentCommon::computeErrorCount(bam_seq_t* read, bam_seq_t* primary, Tra
 
     // "Match". Count mismatches
     for (size_t i = 0; i < opLen && readIdx < readLen && uTranscriptIdx < transcriptLen; ++i) {
-      const auto curReadBase = samToTwoBit[bam_seqi(qseq, readIdx)];
-      const auto curRefBase = samToTwoBit[ref.baseAt(uTranscriptIdx, readStrand)];
-      errors += curReadBase != curRefBase;
+      const auto curReadBase  =
+        readStrand == strand::forward
+        ? samToTwoBit[bam_seqi(qseq, readIdx)]
+        : 3 - samToTwoBit[bam_seqi(qseq, readLen - readIdx - 1)];
+      const auto curRefBase   = samToTwoBit[ref.baseAt(uTranscriptIdx)];
+      const int  isMatch      = curReadBase == curRefBase;
+      counts.matches         += isMatch;
+      counts.mismatches      += !isMatch;
 
       ++readIdx;
       ++uTranscriptIdx;
@@ -244,8 +257,5 @@ bool AlignmentCommon::computeErrorCount(bam_seq_t* read, bam_seq_t* primary, Tra
     }
     return false;
   }
-
-  counts.ims   = errors;
-  counts.clips = clips;
   return true;
 }

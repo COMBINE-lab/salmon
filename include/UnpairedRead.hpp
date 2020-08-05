@@ -92,6 +92,7 @@ struct UnpairedRead {
   inline bool isLeft() const { return !isRight(); }
   inline int32_t left() const { return bam_pos(read); }
   inline int32_t right() const { return left() + bam_seq_len(read); }
+  inline bool isPrimary() const { return !(bam_flag(read) & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY)); }
   inline bool isSecondary() const { return bam_flag(read) & BAM_FSECONDARY; }
   // will always be at least the length of a single read
   inline uint32_t fragLen() const { return 0; }

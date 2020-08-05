@@ -62,8 +62,17 @@ protected:
   }
 
   struct ErrorCount {
-    int32_t ims;   // indels and mismatches
+    int32_t insertions, deletions, mismatches, matches;
     int32_t clips; // soft clips
+    int32_t hclips; // hard clips
+
+    // Indels + mismatches
+    int32_t ims() const { return insertions + deletions + mismatches; }
+    // Should be equal to the length of the query sequence
+    int32_t length() const { return insertions + mismatches + matches + clips; }
+    void clear() {
+      insertions = deletions = mismatches = matches = clips = hclips = 0;
+    }
   };
   bool computeErrorCount(bam_seq_t* read, bam_seq_t* primary, Transcript& ref, ErrorCount& counts,
                          const char* src);

@@ -41,7 +41,7 @@ public:
 
   void normalize();
 
-  void print_model(std::ostream&);
+  void printModel(std::ostream&);
 
 private:
   // void ONTAlignmentModel::update(bam_seq_t* read, Transcript& ref, double p, double mass,
