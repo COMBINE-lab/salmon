@@ -571,6 +571,7 @@ namespace alevin {
       aopt.quiet = vm["quiet"].as<bool>();
       aopt.noEM = vm["noem"].as<bool>();
       aopt.noDedup = vm["noDedup"].as<bool>();
+      aopt.noWhitelist = vm["noWhitelist"].as<bool>();
       aopt.naiveEqclass = vm["naiveEqclass"].as<bool>();
       aopt.noQuant = vm["noQuant"].as<bool>();
       aopt.dumpfq = vm["dumpfq"].as<bool>();
