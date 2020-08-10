@@ -7,6 +7,7 @@
 #include <boost/math/distributions/binomial.hpp>
 #include <boost/math/distributions/geometric.hpp>
 
+// #include "dbg.hpp"
 
 #include "ONTAlignmentModel.hpp"
 #include "SalmonMath.hpp"
@@ -17,15 +18,20 @@
 ONTAlignmentModel::ONTAlignmentModel(double alpha, uint32_t readBins)
     : isEnabled_(true)
     , readBins_(readBins)
+    , printed(false)
     , errorModel_(maxReadLen / binLen + 1)
-{
-  for(auto& avg: errorModel_) {
-    avg.number = 0;
-    avg.sum    = 0.0;
-  }
-}
+    , clipModel_(maxReadLen / binLen + 1)
+{ }
 
 double ONTAlignmentModel::logLikelihood(const UnpairedRead& hit, const UnpairedRead& primary, Transcript& ref) {
+  if(!printed) {
+    std::cerr << "print model\n";
+    std::unique_lock<std::mutex> lock(outputMutex_, std::try_to_lock);
+    if(lock.owns_lock()) {
+        printed = true;
+        printModel(std::cerr);
+      }
+  }
   ErrorCount counts;
   if(!computeErrorCount(hit.read, primary.read, ref, counts, "logLikelihood")) {
     if(logger_)
@@ -37,9 +43,11 @@ double ONTAlignmentModel::logLikelihood(const UnpairedRead& hit, const UnpairedR
   const uint32_t alignLen  = readLen - counts.clips;
   const double   errorRate = (double)counts.ims() / alignLen;
 
-  int32_t bin = std::min(alignLen / binLen, (uint32_t)errorModel_.size() - 1);
-  auto& average = errorModel_[bin];
-  if(average.number == 0) { // Falls into a bin that is empty after training
+  const int32_t errorBin = std::min(alignLen / binLen, (uint32_t)errorModel_.size() - 1);
+  const int32_t clipBin  = std::min(readLen / binLen, (uint32_t)clipModel_.size() - 1);
+  const auto&   errorAvg = errorModel_[errorBin];
+  const auto&   clipAvg  = clipModel_[clipBin];
+  if(errorAvg.mass == 0.0 || clipAvg.mass == 0.0) { // Falls into a bin that is empty after training
     if(logger_)
       logger_->warn("read {} (length {} - align length {}) has no trained error model",
                     bam_name(hit.read), readLen, alignLen);
@@ -48,34 +56,41 @@ double ONTAlignmentModel::logLikelihood(const UnpairedRead& hit, const UnpairedR
 
   // Binomial / Geometric distribution probability of an event (an
   // error in the sequence, whether a mismatch of indel).
-  const double p = average.sum / average.number;
+  const double errorP = errorAvg.sum / errorAvg.mass;
 
-  // Likelihood, based on average number of errors to get a read
+  // Likelihood, based on average mass of errors to get a read
   // further away from mode (as number of errors).
   using boost::math::binomial;
-  if(p <= 0) {
+  if(BOOST_UNLIKELY(errorP <= 0)) {
     if(logger_)
       logger_->warn("Negative probability!!!, read {}", bam_name(hit.read));
     return salmon::math::LOG_1;
   }
 
-  binomial errorDist(alignLen, p);
-  const int32_t errorMedian = median(errorDist);
-  const int32_t offMedian = std::abs(errorMedian - counts.ims());
-  const double errorLikelihood = cdf(errorDist, std::max(errorMedian - offMedian, (int32_t)0)) +
-    cdf(complement(errorDist, std::min(errorMedian + offMedian, (int32_t)alignLen)));
-  if(errorLikelihood <= 0.0) {
+  binomial      errorDist(alignLen, errorP);
+  const int32_t errorMedian     = median(errorDist);
+  const int32_t offMedian       = std::abs(errorMedian - counts.ims());
+  const double  errorLikelihood =  cdf(errorDist, std::max(errorMedian - offMedian, (int32_t)0)) +
+    1.0 - cdf(complement(errorDist, std::min(errorMedian + offMedian, (int32_t)alignLen)));
+  if(BOOST_UNLIKELY(errorLikelihood <= 0.0)) {
     if(logger_)
-      logger_->warn("negative likelihood!!!, read {}", bam_name(hit.read));
+      logger_->warn("negative error likelihood!!!, read {}", bam_name(hit.read));
   }
 
   // Likelihood to have so many bases soft clipped based on the
   // average error rate.
-  // using boost::math::geometric;
-  // geometric clipDist(1.0 - p);
-  // const double clipLikelihood = 1.0 - cdf(clipDist, counts.clips);
+  using        boost::math::geometric;
+  const double clipP          = clipAvg.mass / clipAvg.sum; // p = 1 / mean
+  geometric    clipDist(clipP);
+  const double clipLikelihood = 1.0 - cdf(clipDist, counts.clips + counts.hclips);
+  //  { dbg() << "clipP " << clipP << " clips " << (counts.clips + counts.hclips) << " likelihood " << clipLikelihood << ' ' << log(errorLikelihood) << ' ' << log(clipLikelihood) << '\n'; }
+  if(BOOST_UNLIKELY(errorLikelihood <= 0.0)) {
+    if(logger_)
+      logger_->warn("negative clip likelihood!!!, read {}", bam_name(hit.read));
+  }
 
-  return log(errorLikelihood); // + log(clipLikelihood);
+  auto const res = log(errorLikelihood); // + log(clipLikelihood);
+  return res;
 }
 
 // Update the probability model. The reads are binned based on their
@@ -93,7 +108,7 @@ void ONTAlignmentModel::update(const UnpairedRead& hit, const UnpairedRead& prim
   if (BOOST_UNLIKELY(!isEnabled_)) {
     return;
   }
-
+ 
   ErrorCount counts;
   if(!computeErrorCount(hit.read, primary.read, ref, counts, "update")) {
     if(logger_)
@@ -101,31 +116,50 @@ void ONTAlignmentModel::update(const UnpairedRead& hit, const UnpairedRead& prim
     return;
   }
 
+  // Update error model
   // Not taking p and mass into account. What's up with those?
   const int32_t readLen   = alnLen(hit, primary);
   const int32_t alignLen  = readLen - counts.clips;
   const double  errorRate = (double)counts.ims() / alignLen;
-  if(errorRate > 1.0) { // Should not happen
+  const double  clipRate  = (double)(counts.clips + counts.hclips) / (readLen + counts.hclips);
+  if(errorRate > 1.0 || clipRate > 1.0) { // Should not happen
     if (logger_) {
       logger_->warn("(in update()) CIGAR string for read [{}] "
                     "seems inconsistent. It implied an error rate "
-                    "greater than 1",
-                    bam_name(hit.read));
+                    "greater than 1: {} {}",
+                    bam_name(hit.read), errorRate, clipRate);
     }
     return;
   }
 
-  int32_t bin = std::min(alignLen / binLen, (uint32_t)errorModel_.size() - 1);
-  ++errorModel_[bin].number;
-  salmon::utils::incLoop(errorModel_[bin].sum, errorRate);
+  const double newMass = mass;
+  { int32_t binIndex = std::min(alignLen / binLen, (uint32_t)errorModel_.size() - 1);
+    auto& bin = errorModel_[binIndex];
+    salmon::utils::incLoop(bin.mass, newMass);
+    salmon::utils::incLoop(bin.sum, newMass * errorRate);
+  }
+
+  // Update clip model
+  { int32_t binIndex = std::min(readLen / binLen, (uint32_t)clipModel_.size() - 1);
+    auto& bin = clipModel_[binIndex];
+    salmon::utils::incLoop(bin.mass, newMass);
+    salmon::utils::incLoop(bin.sum, (binIndex + 1) * binLen * newMass * clipRate);
+  }
 }
 
 void ONTAlignmentModel::printModel(std::ostream& os) {
-  for(size_t i = 0; i < errorModel_.size(); ++i) {
-    if(errorModel_[i].number == 0) continue;
-    const auto p = (errorModel_[i].sum / errorModel_[i].number);
-    const auto n = i * binLen;
-    os << (i * binLen) << " - " << ((i+1) * binLen) << ' ' << p
-       << ' ' << errorModel_[i].number <<'\n';
-  }
+  //  dbg d(os);
+
+  // d << "Model\n";
+  // for(size_t i = 0; i < std::max(errorModel_.size(), clipModel_.size()); ++i) {
+  //   const auto errorP = errorModel_[i].mass != 0.0 ? (errorModel_[i].sum / errorModel_[i].mass) : 0.0;
+  //   const auto clipP = clipModel_[i].mass != 0.0 ? (clipModel_[i].sum / clipModel_[i].mass) : 0.0;
+  //   if(errorP == 0.0 && clipP == 0.0) continue;
+
+  //   const auto n = i * binLen;
+  //   d << (i * binLen) << " - " << ((i+1) * binLen) << ' ' << errorP
+  //      << ' ' << errorModel_[i].mass.load()
+  //      << ' ' << clipP << ' ' << clipModel_[i].mass.load() << '\n';
+  // }
+  // d << "--------------\n";
 }

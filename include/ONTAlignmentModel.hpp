@@ -52,15 +52,21 @@ private:
 
   // Maintain a mutex in case the error model wants to talk to the
   // console / log.
+  bool printed;
   std::mutex outputMutex_;
 
+  struct average {
+    std::atomic<double> mass;
+    std::atomic<double> sum;
+    average() : mass(0.0), sum(0.0) { }
+  };
   // Error model. Probability parameter p of the binomial distribution
   // B(p,n) for each read in a bin (based on length n).
-  struct average {
-    std::atomic<uint32_t> number;
-    std::atomic<double>   sum;
-  };
   std::vector<average> errorModel_;
+
+  // Clip length model. Geometric distribution with parameter
+  // p. Binned for read size.
+  std::vector<average> clipModel_;
 };
 
 #endif // ERROR_MODEL

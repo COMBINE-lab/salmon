@@ -84,9 +84,9 @@ struct UnpairedRead {
   // return 0 on success, -1 on failure
   int writeToFile(scram_fd* fp) { return scram_put_seq(fp, read); }
 
-  inline char* getName() { return bam_name(read); }
+  inline char* getName() const { return bam_name(read); }
 
-  inline uint32_t getNameLength() { return bam_name_len(read); }
+  inline uint32_t getNameLength() const { return bam_name_len(read); }
 
   inline bool isRight() const { return bam_flag(read) & BAM_FREVERSE; }
   inline bool isLeft() const { return !isRight(); }

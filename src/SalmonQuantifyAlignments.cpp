@@ -30,6 +30,7 @@ extern "C" {
 #include <boost/program_options.hpp>
 #include <boost/timer/timer.hpp>
 
+#include "dbg.hpp"
 #include "AlignmentLibrary.hpp"
 #include "BAMQueue.hpp"
 #include "BAMUtils.hpp"
@@ -571,7 +572,12 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
       }
 
       if (txpIDs.size() > 0) {
-
+        { dbg d;
+          d << "--: " << alignments.front()->getName();
+          for(int32_t i = 0; i < txpIDs.size(); ++i)
+            d << ' ' << refs[txpIDs[i]].RefName << ':' << auxProbs[i];
+          d << '\n';
+        }
         if (rangeFactorization > 0) {
           int txpsSize = txpIDs.size();
           int rangeCount = std::sqrt(txpsSize) + rangeFactorization;
@@ -581,7 +587,6 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
             txpIDs.push_back(rangeNumber);
           }
         }
-
         TranscriptGroup tg(txpIDs);
         eqBuilder.addGroup(std::move(tg), auxProbs);
       }
