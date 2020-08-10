@@ -355,18 +355,18 @@ size_t markDegenerateClasses(
 
       errstream << "denom = 0, count = " << count << "\n";
       errstream << "class = { ";
-      for (auto e : txps) {
-        errstream << e << " ";
+      for (size_t tn = 0; tn < groupSize; ++tn) {
+        errstream << txps[tn] << " ";
       }
       errstream << "}\n";
       errstream << "alphas = { ";
-      for (auto e : txps) {
-        errstream << alphaIn[e] << " ";
+      for (size_t tn = 0; tn < groupSize; ++tn) {
+        errstream << alphaIn[txps[tn]] << " ";
       }
       errstream << "}\n";
       errstream << "weights = { ";
-      for (auto e : auxs) {
-        errstream << e << " ";
+      for (size_t tn = 0; tn < groupSize; ++tn) {
+        errstream << auxs[tn] << " ";
       }
       errstream << "}\n";
       errstream << "============================\n\n";
