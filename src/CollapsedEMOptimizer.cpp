@@ -348,30 +348,30 @@ size_t markDegenerateClasses(
       }
     }
     if (denom <= ::minEQClassWeight) {
-      fmt::MemoryWriter errstream;
-
-      errstream << "\nDropping weighted eq class\n";
-      errstream << "============================\n";
-
-      errstream << "denom = 0, count = " << count << "\n";
-      errstream << "class = { ";
-      for (size_t tn = 0; tn < groupSize; ++tn) {
-        errstream << txps[tn] << " ";
-      }
-      errstream << "}\n";
-      errstream << "alphas = { ";
-      for (size_t tn = 0; tn < groupSize; ++tn) {
-        errstream << alphaIn[txps[tn]] << " ";
-      }
-      errstream << "}\n";
-      errstream << "weights = { ";
-      for (size_t tn = 0; tn < groupSize; ++tn) {
-        errstream << auxs[tn] << " ";
-      }
-      errstream << "}\n";
-      errstream << "============================\n\n";
-
       if (verbose) {
+        fmt::MemoryWriter errstream;
+
+        errstream << "\nDropping weighted eq class\n";
+        errstream << "============================\n";
+
+        errstream << "denom = 0, count = " << count << "\n";
+        errstream << "class = { ";
+        for (size_t tn = 0; tn < groupSize; ++tn) {
+          errstream << txps[tn] << " ";
+        }
+        errstream << "}\n";
+        errstream << "alphas = { ";
+        for (size_t tn = 0; tn < groupSize; ++tn) {
+          errstream << alphaIn[txps[tn]] << " ";
+        }
+        errstream << "}\n";
+        errstream << "weights = { ";
+        for (size_t tn = 0; tn < groupSize; ++tn) {
+          errstream << auxs[tn] << " ";
+        }
+        errstream << "}\n";
+        errstream << "============================\n\n";
+
         jointLog->info(errstream.str());
       }
       ++numDropped;

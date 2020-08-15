@@ -62,20 +62,35 @@ protected:
   }
 
   struct ErrorCount {
-    int32_t insertions, deletions, mismatches, matches;
-    int32_t clips; // soft clips
-    int32_t hclips; // hard clips
+  protected:
+    int32_t insertions_, deletions_, mismatches_, matches_;
+    int32_t sclips_, hclips_; // soft and hard clips
+    int32_t fclips_, bclips_; // clips at front and at back
+    friend AlignmentCommon;
 
+  public:
+    inline int32_t clips() const { return sclips_ + hclips_; }
     // Indels + mismatches
-    int32_t ims() const { return insertions + deletions + mismatches; }
+    inline int32_t ims() const { return insertions_ + deletions_ + mismatches_; }
     // Should be equal to the length of the query sequence
-    int32_t length() const { return insertions + mismatches + matches + clips; }
+    inline int32_t length() const { return insertions_ + mismatches_ + matches_ + sclips_; }
     void clear() {
-      insertions = deletions = mismatches = matches = clips = hclips = 0;
+      insertions_ = deletions_ = mismatches_ = matches_ = sclips_ = hclips_ = fclips_ = bclips_ = 0;
     }
+    inline int32_t insertions() const { return insertions_; }
+    inline int32_t deletions() const { return deletions_; }
+    inline int32_t mismatches() const { return mismatches_; }
+    inline int32_t matches() const { return matches_; }
+    inline int32_t sclips() const { return sclips_; }
+    inline int32_t hclips() const { return hclips_; }
+    inline int32_t fclips() const { return fclips_; }
+    inline int32_t bclips() const { return bclips_; }
+
+    bool computeErrorCount(bam_seq_t* read, bam_seq_t* primary, Transcript& ref,
+                           const char* src);
   };
-  bool computeErrorCount(bam_seq_t* read, bam_seq_t* primary, Transcript& ref, ErrorCount& counts,
-                         const char* src);
+  bool computeErrorCount(bam_seq_t* read, bam_seq_t* primary, Transcript& ref,
+                         ErrorCount& counts, const char* src);
 
   std::shared_ptr<spdlog::logger> logger_;
   std::atomic<bool> burnedIn_;

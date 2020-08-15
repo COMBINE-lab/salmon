@@ -135,7 +135,7 @@ struct ReadPair {
 
   inline char* getName() const { return bam_name(read1); }
 
-  inline uint32_t getNameLength() {
+  inline uint32_t getNameLength() const {
     uint32_t l = bam_name_len(read1);
     char* r = getName();
     if (l > 2 and r[l - 2] == '/') {

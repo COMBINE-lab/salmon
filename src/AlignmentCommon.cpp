@@ -166,35 +166,43 @@ bool AlignmentCommon::computeErrorCount(bam_seq_t* read, bam_seq_t* primary, Tra
     // base of query and reference sequences. Otherwise, advance block by block
     switch(op) {
     case BAM_CSOFT_CLIP:
-      readIdx      += opLen;    // Fallthrough
-      counts.clips += opLen;
+      readIdx          += opLen;
+      counts.sclips_   += opLen;
+      if(cigarIdx == 0)
+        counts.fclips_ += opLen;
+      else
+        counts.bclips_ += opLen;
       continue;
 
     case BAM_CDEL:
-      counts.deletions += opLen; // Fallthrough
+      counts.deletions_ += opLen; // Fallthrough
     case BAM_CREF_SKIP:
-      uTranscriptIdx   += opLen;
-      continue;
-
-    case BAM_CBASE_MISMATCH:
-      counts.mismatches += opLen;
-      readIdx           += opLen;
       uTranscriptIdx    += opLen;
       continue;
 
+    case BAM_CBASE_MISMATCH:
+      counts.mismatches_ += opLen;
+      readIdx            += opLen;
+      uTranscriptIdx     += opLen;
+      continue;
+
     case BAM_CBASE_MATCH:
-      counts.matches += opLen;
-      readIdx        += opLen;
-      uTranscriptIdx += opLen;
+      counts.matches_ += opLen;
+      readIdx         += opLen;
+      uTranscriptIdx  += opLen;
       continue;
 
     case BAM_CINS:
-      counts.insertions += opLen;
-      readIdx           += opLen;
+      counts.insertions_ += opLen;
+      readIdx            += opLen;
       continue;
 
     case BAM_CHARD_CLIP:
-      counts.hclips += opLen; // Fallthrough
+      counts.hclips_   += opLen;
+      if(cigarIdx == 0)
+        counts.fclips_ += opLen;
+      else
+        counts.bclips_ += opLen;      // Fallthrough
     case BAM_CPAD:
       continue;
 
@@ -216,13 +224,13 @@ bool AlignmentCommon::computeErrorCount(bam_seq_t* read, bam_seq_t* primary, Tra
     // "Match". Count mismatches
     for (size_t i = 0; i < opLen && readIdx < readLen && uTranscriptIdx < transcriptLen; ++i) {
       const auto curReadBase  =
-        readStrand == strand::forward
+        readStrand           == strand::forward
         ? samToTwoBit[bam_seqi(qseq, readIdx)]
         : 3 - samToTwoBit[bam_seqi(qseq, readLen - readIdx - 1)];
       const auto curRefBase   = samToTwoBit[ref.baseAt(uTranscriptIdx)];
       const int  isMatch      = curReadBase == curRefBase;
-      counts.matches         += isMatch;
-      counts.mismatches      += !isMatch;
+      counts.matches_        += isMatch;
+      counts.mismatches_     += !isMatch;
 
       ++readIdx;
       ++uTranscriptIdx;
