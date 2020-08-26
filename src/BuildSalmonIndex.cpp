@@ -220,6 +220,11 @@ Creates a salmon index.
       }
 
       if (featuresRef) { idxOpt.featuresRef = true; }
+      
+      // by default we expect to be indexing transcriptome references 
+      // so set the expect_transcriptome flag 
+      idxOpt.expect_transcriptome = true;
+
       sidx.reset(new SalmonIndex(jointLog, SalmonIndexType::PUFF));
     } else {
       jointLog->error("This version of salmon does not support FMD or "
