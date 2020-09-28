@@ -373,8 +373,12 @@ namespace salmon {
       ("help,h", "produce help message")
       ("output,o", po::value<std::string>()->required(), "Output quantification directory.")
       ("justAlign,j", po::bool_switch()->default_value(alevin::defaults::just_align),
-       "just selectively align the data and write the results to a PAM file.  Do not perform "
+       "just selectively align the data and write the results to a RAD file.  Do not perform "
        "the rest of the quantification procedure.")
+      ("sketchMode", po::bool_switch()->default_value(alevin::defaults::sketch_mode),
+       "perform sketching rather than selective alignment and write the results to a RAD file. "
+       "Requires the `--justAlign` flag. Do not perform the rest of the quantification procedure." 
+      )
       ("threads,p",
        po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads),
        "The number of threads to use concurrently.")

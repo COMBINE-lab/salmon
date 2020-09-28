@@ -46,8 +46,9 @@ struct AlevinOpts {
   //Stop progress sumps
   bool quiet;
   // just perform alignment and produce 
-  // an output directory with a PAM file. 
+  // an output directory with a RAD file. 
   bool just_align;
+  bool sketch_mode;
   //flag for deduplication
   bool noDedup;
   //flag for not performing external whitelisting

@@ -568,6 +568,7 @@ namespace alevin {
       aopt.jointLog = spdlog::create("alevinLog", std::begin(sinks), std::end(sinks));
 
       aopt.just_align = vm["justAlign"].as<bool>();
+      aopt.sketch_mode = vm["sketchMode"].as<bool>();
       aopt.quiet = vm["quiet"].as<bool>();
       aopt.noEM = vm["noem"].as<bool>();
       aopt.noDedup = vm["noDedup"].as<bool>();
@@ -594,8 +595,18 @@ namespace alevin {
 
       if (aopt.just_align) {
         aopt.jointLog->info("The --justAlign flag was passed to alevin. The "
-        "reads will be selectively aligned and the output written to a PAM file."
+        "reads will be selectively aligned and the output written to a RAD file."
         "Arguments passed that correspond to other processing steps will be ignored");
+        if (aopt.sketch_mode) {
+          aopt.jointLog->info("The --sketchMode flag was passed; the alignment will be run "
+          "in sketch mode.");
+          sopt.mismatchSeedSkip = 15;
+        }
+      } else {
+        if (aopt.sketch_mode) {
+          aopt.jointLog->info("The --sketchMode flag is not meaningful without the "
+          "--justAlign flag.  This flag will be ignored.");
+        }
       }
 
       if (aopt.umiEditDistance > 4 ) {

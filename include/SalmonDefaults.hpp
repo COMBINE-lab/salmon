@@ -152,6 +152,7 @@ namespace defaults {
   constexpr const bool noEM{false};
   constexpr const bool debug{true};
   constexpr const bool just_align{false};
+  constexpr const bool sketch_mode{false};
   constexpr const uint32_t trimRight{0};
   constexpr const uint32_t numBootstraps{0};
   constexpr const uint32_t numGibbsSamples{0};
