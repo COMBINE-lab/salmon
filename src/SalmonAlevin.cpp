@@ -481,13 +481,13 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     bool add_fw(uint32_t tid, int32_t ref_pos, int32_t read_pos, size_t num_occ) {
       bool added{false};
       if (ref_pos > last_ref_pos_fw && read_pos > last_read_pos_fw) {
-        if (last_read_pos_fw == -1 or ref_pos < last_ref_pos_fw) {
+        if (last_read_pos_fw == -1) {
           approx_pos_fw = ref_pos - read_pos;
         }
 
         last_ref_pos_fw = ref_pos;
         last_read_pos_fw = read_pos;
-        fw_score += num_occ;
+        fw_score += 1.0f / num_occ;
         ++fw_hits;
         added = true;
       } else {
@@ -504,13 +504,13 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     // the case
     bool add_rc(uint32_t tid, int32_t ref_pos, int32_t read_pos, size_t num_occ) {
       bool added{false};
-      if (ref_pos < last_ref_pos_rc) {
+      if (ref_pos < last_ref_pos_rc and read_pos > last_read_pos_rc) {
         if (last_read_pos_rc == -1 or ref_pos < last_ref_pos_rc) {
           approx_pos_rc = ref_pos - read_pos;
         }
         last_ref_pos_rc = ref_pos;
         last_read_pos_rc = read_pos;
-        rc_score += num_occ;
+        rc_score += 1.0f / num_occ;
         ++rc_hits;
         added = true;
       }
@@ -521,15 +521,15 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     // second element is score
     std::pair<bool, float> best_hit_direction() {
       if (fw_hits > 0 and rc_hits == 0) { 
-        float fs = static_cast<float>(fw_hits)/fw_score;
-        return std::make_pair(true, fs);
+        //float fs = static_cast<float>(fw_hits)/fw_score;
+        return std::make_pair(true, fw_score);
       } else if (fw_hits == 0 and rc_hits > 0) {
-        float rs = static_cast<float>(rc_hits)/rc_score;
-        return std::make_pair(false, rs);
+        //float rs = static_cast<float>(rc_hits)/rc_score;
+        return std::make_pair(false, rc_score);
       } else { // both fw_hits and rc_hits > 0
-        float fs = static_cast<float>(fw_hits)/fw_score;
-        float rs = static_cast<float>(rc_hits)/rc_score;
-        return (fs >= rs) ? std::make_pair(true, fs) : std::make_pair(false, rs);
+        //float fs = static_cast<float>(fw_hits)/fw_score;
+        //float rs = static_cast<float>(rc_hits)/rc_score;
+        return (fw_score >= rc_score) ? std::make_pair(true, fw_score) : std::make_pair(false, rc_score);
       }
     }
 
@@ -551,8 +551,8 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
     uint32_t fw_hits{0};
     uint32_t rc_hits{0};
-    uint64_t fw_score{0};
-    uint64_t rc_score{0}; 
+    float fw_score{0};
+    float rc_score{0}; 
   };
 
   // map from transcript id to hit info
@@ -685,7 +685,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                 uint32_t num_valid_hits{0};
                 uint64_t total_occs{0};
                 uint64_t largest_occ{0};
-
+                float perfect_score{0.0}; 
                 auto& raw_hits = memCollector.get_left_hits();
                 // a raw hit is a pair of read_pos and a projected hit
                 for (auto& raw_hit : raw_hits) {
@@ -698,6 +698,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                     ++num_valid_hits;
                     total_occs += num_occ;
                     largest_occ = (num_occ > largest_occ) ? num_occ : largest_occ;
+                    perfect_score += 1.0 / num_occ;
 
                     for (auto &pos_it : refs) {
                       const auto& ref_pos_ori = proj_hits.decodeHit(pos_it);
@@ -721,17 +722,20 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                   } // DONE : if (static_cast<uint64_t>(refs.size()) < salmonOpts.maxReadOccs)
                 } // DONE : for (auto& raw_hit : raw_hits)
 
-                float perfect_score = static_cast<float>(num_valid_hits) / total_occs;
+                //float perfect_score = static_cast<float>(num_valid_hits) / total_occs;
                 float acceptable_score = (num_valid_hits == 1) ? perfect_score : 
-                  static_cast<float>(num_valid_hits-1) / (total_occs-largest_occ);
+                  perfect_score - (1.0f / largest_occ);
                 float best_alt_score = -1.0;
                 int32_t signed_read_len = static_cast<int32_t>(readSubSeq.length());
 
                 bool saw_acceptable_score = false;
                 for (auto& kv : hit_map) {
                   auto simple_hit = kv.second.get_best_hit();
-                  if (simple_hit.score >= perfect_score){//num_hits >= num_valid_hits) {
-                    if (simple_hit.valid_pos(signed_read_len, transcripts[kv.first].RefLength, 10)) {
+                  if (simple_hit.score >= perfect_score){
+                    if (simple_hit.score > perfect_score + 0.001 ) {
+                      salmonOpts.jointLog->info("should not happen; score = {}, perfect = {}", simple_hit.score, perfect_score);
+                    }
+                    if (simple_hit.valid_pos(signed_read_len, transcripts[kv.first].RefLength, 2)) {
                       simple_hit.tid = kv.first;
                       accepted_hits.emplace_back(simple_hit);
                     }
@@ -740,7 +744,8 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                   }
                 }
 
-                if (accepted_hits.empty() and best_alt_score >= saw_acceptable_score) {
+                /*
+                if (accepted_hits.empty() and best_alt_score >= acceptable_score) {
                   for (auto& kv : hit_map) { 
                     auto simple_hit = kv.second.get_best_hit();
                     if (simple_hit.score >= best_alt_score) {
@@ -751,6 +756,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                     }
                   }
                 }
+                */
 
               } // DONE : if (rh)
 

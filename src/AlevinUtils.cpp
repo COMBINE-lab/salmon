@@ -600,7 +600,7 @@ namespace alevin {
         if (aopt.sketch_mode) {
           aopt.jointLog->info("The --sketchMode flag was passed; the alignment will be run "
           "in sketch mode.");
-          sopt.mismatchSeedSkip = 15;
+          sopt.mismatchSeedSkip = 7;
         }
       } else {
         if (aopt.sketch_mode) {
