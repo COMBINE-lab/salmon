@@ -462,7 +462,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
   bool writeQuasimappings = (qmLog != nullptr);
 
   struct SimpleHit {
-    bool is_fw{true};
+    bool is_fw{false};
     int32_t pos{-1};
     float score{0.0};
     uint32_t num_hits{0};
@@ -480,20 +480,20 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     // the case
     bool add_fw(uint32_t tid, int32_t ref_pos, int32_t read_pos, size_t num_occ) {
       bool added{false};
+      // don't double-count a k-mer that might occur twice on
+      // this target.
+      //if (last_read_pos_fw != -1 and read_pos == last_read_pos_fw) { return false; }
+
       if (ref_pos > last_ref_pos_fw && read_pos > last_read_pos_fw) {
         if (last_read_pos_fw == -1) {
           approx_pos_fw = ref_pos - read_pos;
         }
-
+        //if (last_ref_pos_fw > -1 and (ref_pos > last_ref_pos_fw + 15)) { return false; }
         last_ref_pos_fw = ref_pos;
         last_read_pos_fw = read_pos;
         fw_score += 1.0f / num_occ;
         ++fw_hits;
         added = true;
-      } else {
-        //std::cerr << "tid : " << tid << "\n\t";
-        //std::cerr << "prev ref pos was : " << last_ref_pos_fw << ", curr is : " << ref_pos << "\t";
-        //std::cerr << "prev read pos was : " << last_read_pos_fw << ", curr is : " << read_pos << "\n";
       }
       return added;
     }
@@ -504,15 +504,20 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     // the case
     bool add_rc(uint32_t tid, int32_t ref_pos, int32_t read_pos, size_t num_occ) {
       bool added{false};
+      // don't double-count a k-mer that might occur twice on
+      // this target.
+      // if (last_read_pos_rc != -1 and read_pos == last_read_pos_rc) { return false; }
       if (ref_pos < last_ref_pos_rc and read_pos > last_read_pos_rc) {
         if (last_read_pos_rc == -1 or ref_pos < last_ref_pos_rc) {
           approx_pos_rc = ref_pos - read_pos;
         }
+        //if (last_ref_pos_rc > -1 and ref_pos < last_ref_pos_rc - 15) { return false; }
         last_ref_pos_rc = ref_pos;
         last_read_pos_rc = read_pos;
         rc_score += 1.0f / num_occ;
         ++rc_hits;
         added = true;
+        
       }
       return added;
     }
@@ -520,17 +525,8 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     // true if forward, false if rc
     // second element is score
     std::pair<bool, float> best_hit_direction() {
-      if (fw_hits > 0 and rc_hits == 0) { 
-        //float fs = static_cast<float>(fw_hits)/fw_score;
-        return std::make_pair(true, fw_score);
-      } else if (fw_hits == 0 and rc_hits > 0) {
-        //float rs = static_cast<float>(rc_hits)/rc_score;
-        return std::make_pair(false, rc_score);
-      } else { // both fw_hits and rc_hits > 0
-        //float fs = static_cast<float>(fw_hits)/fw_score;
-        //float rs = static_cast<float>(rc_hits)/rc_score;
-        return (fw_score >= rc_score) ? std::make_pair(true, fw_score) : std::make_pair(false, rc_score);
-      }
+      //return (fw_score >= rc_score) ? std::make_pair(true, fw_score) : std::make_pair(false, rc_score);
+      return (fw_hits >= rc_hits) ? std::make_pair(true, fw_score) : std::make_pair(false, rc_score);
     }
 
     SimpleHit get_best_hit() {
@@ -551,8 +547,8 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
     uint32_t fw_hits{0};
     uint32_t rc_hits{0};
-    float fw_score{0};
-    float rc_score{0}; 
+    float fw_score{0.0};
+    float rc_score{0.0}; 
   };
 
   // map from transcript id to hit info
@@ -620,6 +616,8 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       hits.clear();
       jointHits.clear();
       memCollector.clear();
+      hit_map.clear(); 
+      accepted_hits.clear();
       //jointAlignments.clear();
       readSubSeq.clear();
       mapType = salmon::utils::MappingType::UNMAPPED;
@@ -678,8 +676,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                                           );
               }
 
-              hit_map.clear(); 
-              accepted_hits.clear();
               // if there were hits
               if (rh) {
                 uint32_t num_valid_hits{0};
@@ -704,20 +700,12 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                       const auto& ref_pos_ori = proj_hits.decodeHit(pos_it);
                       uint32_t tid = pos_it.transcript_id();
                       int32_t pos = static_cast<int32_t>(ref_pos_ori.pos);
-                      int32_t ori = ref_pos_ori.isFW;
+                      bool ori = ref_pos_ori.isFW;
                       if (ori) {
                         hit_map[tid].add_fw(tid, pos, static_cast<int32_t>(read_pos), num_occ);
                       } else {
                         hit_map[tid].add_rc(tid, pos, static_cast<int32_t>(read_pos), num_occ);
                       }
-
-                      //auto& refHits = trMemMap[std::make_pair(tid, ref_pos_ori.isFW)];
-                      //refHits.emplace_back(memItr, refPosOri.pos, refPosOri.isFW);
-                      //auto nh = refHits.size();
-                      // NOTE: not dealing with decoys right now; think about this later
-                      // maxNonDecoyHits = (tid < firstDecoyIndex) ? std::max(nh, maxNonDecoyHits) : maxNonDecoyHits;
-                      // mappings++;
-
                     } // DONE: for (auto &pos_it : refs)
                   } // DONE : if (static_cast<uint64_t>(refs.size()) < salmonOpts.maxReadOccs)
                 } // DONE : for (auto& raw_hit : raw_hits)
@@ -725,38 +713,47 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                 //float perfect_score = static_cast<float>(num_valid_hits) / total_occs;
                 float acceptable_score = (num_valid_hits == 1) ? perfect_score : 
                   perfect_score - (1.0f / largest_occ);
-                float best_alt_score = -1.0;
+                //float best_alt_score = -1.0;
+                uint32_t best_alt_hits = 0;
                 int32_t signed_read_len = static_cast<int32_t>(readSubSeq.length());
 
                 bool saw_acceptable_score = false;
                 for (auto& kv : hit_map) {
                   auto simple_hit = kv.second.get_best_hit();
-                  if (simple_hit.score >= perfect_score){
-                    if (simple_hit.score > perfect_score + 0.001 ) {
+                  if (simple_hit.num_hits >= num_valid_hits) { //} and simple_hit.num_hits > 3){
+                    /*if (simple_hit.score > perfect_score + 0.001 ) {
                       salmonOpts.jointLog->info("should not happen; score = {}, perfect = {}", simple_hit.score, perfect_score);
                     }
-                    if (simple_hit.valid_pos(signed_read_len, transcripts[kv.first].RefLength, 2)) {
+                    */
+                    //if (simple_hit.valid_pos(signed_read_len, transcripts[kv.first].RefLength, 10)) {
                       simple_hit.tid = kv.first;
                       accepted_hits.emplace_back(simple_hit);
-                    }
+                    //}
                   } else {
-                    best_alt_score = simple_hit.score > best_alt_score ? simple_hit.score : best_alt_score;
+                    //best_alt_score = simple_hit.score > best_alt_score ? simple_hit.score : best_alt_score;
+                    best_alt_hits = simple_hit.num_hits > best_alt_hits ? simple_hit.num_hits : best_alt_hits;
                   }
                 }
+                  /*
+                std::sort(accepted_hits.begin(), accepted_hits.end(),
+                  [](const SimpleHit& a, const SimpleHit& b) -> bool {
+                    return a.tid < b.tid;
+                  });
+                  */
 
-                /*
-                if (accepted_hits.empty() and best_alt_score >= acceptable_score) {
+                 /*
+                if (accepted_hits.empty() and (num_valid_hits > 1) and (best_alt_hits >= num_valid_hits - 1)) {
                   for (auto& kv : hit_map) { 
                     auto simple_hit = kv.second.get_best_hit();
-                    if (simple_hit.score >= best_alt_score) {
-                      if (simple_hit.valid_pos(signed_read_len, transcripts[kv.first].RefLength, 10)) {
+                    if (simple_hit.num_hits >= best_alt_hits) {
+                      //if (simple_hit.valid_pos(signed_read_len, transcripts[kv.first].RefLength, 10)) {
                         simple_hit.tid = kv.first;
                         accepted_hits.emplace_back(simple_hit);
-                      }
+                      //}
                     }
                   }
                 }
-                */
+                  */
 
               } // DONE : if (rh)
 
@@ -784,101 +781,93 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       // If the read mapped to > maxReadOccs places, discard it
       if (accepted_hits.size() > salmonOpts.maxReadOccs) {
         accepted_hits.clear();
-      } else {
+      } else if (!accepted_hits.empty()) {
         mapType = salmon::utils::MappingType::SINGLE_MAPPED;
       }
 
-        // NOTE: Think if we should put decoy mappings in the RAD file
-        if (mapType == salmon::utils::MappingType::SINGLE_MAPPED) {
-          // na
-          bw << static_cast<uint32_t>(accepted_hits.size()); 
-          // read length
-          // bw << static_cast<uint16_t>(readLenRight); 
+      // NOTE: Think if we should put decoy mappings in the RAD file
+      if (mapType == salmon::utils::MappingType::SINGLE_MAPPED) {
+        // num aln
+        bw << static_cast<uint32_t>(accepted_hits.size()); 
 
-          // bc
-          // if we can if the barcode into an integer 
-          if ( alevinOpts.protocol.barcodeLength <= 32 ) { 
-            alevin::types::AlevinCellBarcodeKmer bck;
-            bool ok = bck.fromChars(*barcode);
-            if (ok) {
-              //alevinOpts.jointLog->info("BARCODE : {} \t ENC : {} ", *barcode, bck.word(0));
-              if (alevinOpts.protocol.barcodeLength <= 16) { // can use 32-bit int
-                uint32_t shortbck = static_cast<uint32_t>(0x00000000FFFFFFFF & bck.word(0));
-                //alevinOpts.jointLog->info("shortbck : {} ", shortbck);
-                bw << shortbck;
-              } else { // must use 64-bit int
-                bw << bck.word(0);
-              }
+        // bc
+        // if we can fit the barcode into an integer 
+        if ( alevinOpts.protocol.barcodeLength <= 32 ) { 
+          alevin::types::AlevinCellBarcodeKmer bck;
+          bool ok = bck.fromChars(*barcode);
+          if (ok) {
+            if (alevinOpts.protocol.barcodeLength <= 16) { // can use 32-bit int
+              uint32_t shortbck = static_cast<uint32_t>(0x00000000FFFFFFFF & bck.word(0));
+              bw << shortbck;
+            } else { // must use 64-bit int
+              bw << bck.word(0);
             }
-          } else { // must use a string for the barcode
-            bw << *barcode;
           }
-
-          // umi
-          if ( alevinOpts.protocol.barcodeLength <= 16 ) { // if we can use 32-bit int 
-            uint64_t umiint = jointHitGroup.umi();
-            uint32_t shortumi = static_cast<uint32_t>(0x00000000FFFFFFFF & umiint);
-            bw << shortumi;
-          } else if ( alevinOpts.protocol.barcodeLength <= 32 ) { // if we can use 64-bit int
-            uint64_t umiint = jointHitGroup.umi();
-            bw << umiint;
-          } else { // must use string
-            bw << umi;
-          }
-
-
-          for (auto& aln : accepted_hits) {
-            uint32_t fw_mask = aln.is_fw ? 0x80000000 : 0x00000000;
-            //bw << is_fw;
-            bw << (aln.tid | fw_mask);
-            // position 
-            //bw << static_cast<uint32_t>((aln.pos < 0) ? 0 : aln.pos);
-          }
-          ++num_reads_in_chunk;
+        } else { // must use a string for the barcode
+          bw << *barcode;
         }
 
-
-        if (num_reads_in_chunk > 5000) {
-          ++num_chunks;
-          uint32_t num_bytes = bw.num_bytes();
-          bw.write_integer_at_offset(0, num_bytes);
-          bw.write_integer_at_offset(sizeof(num_bytes), num_reads_in_chunk);
-          fileMutex.lock();
-          rad_file << bw;
-          fileMutex.unlock();
-          bw.clear();
-          num_reads_in_chunk = 0;
-
-          // reserve space for headers of next chunk
-          bw << num_reads_in_chunk;
-          bw << num_reads_in_chunk;
+        // umi
+        if ( alevinOpts.protocol.barcodeLength <= 16 ) { // if we can use 32-bit int 
+          uint64_t umiint = jointHitGroup.umi();
+          uint32_t shortumi = static_cast<uint32_t>(0x00000000FFFFFFFF & umiint);
+          bw << shortumi;
+        } else if ( alevinOpts.protocol.barcodeLength <= 32 ) { // if we can use 64-bit int
+          uint64_t umiint = jointHitGroup.umi();
+          bw << umiint;
+        } else { // must use string
+          bw << umi;
         }
-        /*
-        if (writeQuasimappings) {
-          writeAlignmentsToStream(rp, formatter, jointAlignments, sstream, true, true, extraBAMtags);
-        }
-        */
 
-        validHits += accepted_hits.size();
-        localNumAssignedFragments += (accepted_hits.size() > 0);
-        locRead++;
-        ++numObservedFragments;
-        jointHitGroup.clearAlignments();
-
-        if (!quiet and numObservedFragments % 500000 == 0) {
-          iomutex.lock();
-          const char RESET_COLOR[] = "\x1b[0m";
-          char green[] = "\x1b[30m";
-          green[3] = '0' + static_cast<char>(fmt::GREEN);
-          char red[] = "\x1b[30m";
-          red[3] = '0' + static_cast<char>(fmt::RED);
-          fmt::print(
-              stderr, "\033[A\r\r{}processed{} {} Million {}fragments{}\n",
-              green, red, numObservedFragments / 1000000, green, RESET_COLOR);
-          fmt::print(stderr, "hits: {}, hits per frag:  {}", validHits,
-                     validHits / static_cast<float>(prevObservedFrags));
-          iomutex.unlock();
+        for (auto& aln : accepted_hits) {
+          uint32_t fw_mask = aln.is_fw ? 0x80000000 : 0x00000000;
+          bw << (aln.tid | fw_mask);
         }
+        ++num_reads_in_chunk;
+      } // if read was mapped
+
+
+      if (num_reads_in_chunk > 5000) {
+        ++num_chunks;
+        uint32_t num_bytes = bw.num_bytes();
+        bw.write_integer_at_offset(0, num_bytes);
+        bw.write_integer_at_offset(sizeof(num_bytes), num_reads_in_chunk);
+        fileMutex.lock();
+        rad_file << bw;
+        fileMutex.unlock();
+        bw.clear();
+        num_reads_in_chunk = 0;
+
+        // reserve space for headers of next chunk
+        bw << num_reads_in_chunk;
+        bw << num_reads_in_chunk;
+      }
+      /*
+      if (writeQuasimappings) {
+        writeAlignmentsToStream(rp, formatter, jointAlignments, sstream, true, true, extraBAMtags);
+      }
+      */
+
+      validHits += accepted_hits.size();
+      localNumAssignedFragments += (accepted_hits.size() > 0);
+      locRead++;
+      ++numObservedFragments;
+      jointHitGroup.clearAlignments();
+
+      if (!quiet and numObservedFragments % 500000 == 0) {
+        iomutex.lock();
+        const char RESET_COLOR[] = "\x1b[0m";
+        char green[] = "\x1b[30m";
+        green[3] = '0' + static_cast<char>(fmt::GREEN);
+        char red[] = "\x1b[30m";
+        red[3] = '0' + static_cast<char>(fmt::RED);
+        fmt::print(
+            stderr, "\033[A\r\r{}processed{} {} Million {}fragments{}\n",
+            green, red, numObservedFragments / 1000000, green, RESET_COLOR);
+        fmt::print(stderr, "hits: {}, hits per frag:  {}", validHits,
+                   validHits / static_cast<float>(prevObservedFrags));
+        iomutex.unlock();
+      }
 
     } // end for i < j->nb_filled
 
