@@ -380,6 +380,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                        AlnGroupVec<QuasiAlignment>& structureVec,
                        std::atomic<uint64_t>& numObservedFragments,
                        std::atomic<uint64_t>& numAssignedFragments,
+                       std::atomic<uint64_t>& numUniqueMappings,
                        std::atomic<uint64_t>& validHits, 
                        std::atomic<uint32_t>& smallSeqs,
                        std::atomic<uint32_t>& nSeqs,
@@ -426,6 +427,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
   size_t locRead{0};
   size_t rangeSize{0};
   uint64_t localNumAssignedFragments{0};
+  uint64_t localNumUniqueMappings{0};
 
   bool consistentHits = salmonOpts.consistentHits;
   bool quiet = salmonOpts.quiet;
@@ -474,17 +476,19 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
   };
 
   struct SketchHitInfo {
-    // since hits are collected by moving _forward_ in the
-    // read, if this is a fw hit, it should be moving 
-    // forward in the reference. Only add it if this is
-    // the case
+
+    // add a hit to the current target that occurs in the forward 
+    // orientation with respect to the target.
     bool add_fw(uint32_t tid, int32_t ref_pos, int32_t read_pos, size_t num_occ) {
       bool added{false};
-      // don't double-count a k-mer that might occur twice on
+      
+      // since hits are collected by moving _forward_ in the
+      // read, if this is a fw hit, it should be moving 
+      // forward in the reference. Only add it if this is
+      // the case.  This ensure that we don't 
+      // double-count a k-mer that might occur twice on
       // this target.
-      //if (last_read_pos_fw != -1 and read_pos == last_read_pos_fw) { return false; }
-
-      if (ref_pos > last_ref_pos_fw && read_pos > last_read_pos_fw) {
+      if (/*ref_pos > last_ref_pos_fw and */ read_pos > last_read_pos_fw) {
         if (last_read_pos_fw == -1) {
           approx_pos_fw = ref_pos - read_pos;
         }
@@ -498,16 +502,18 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       return added;
     }
 
-    // since hits are collected by moving _forward_ in the
-    // read, if this is an rc hit, it should be moving 
-    // backwards in the reference. Only add it if this is
-    // the case
+    // add a hit to the current target that occurs in the forward 
+    // orientation with respect to the target.
     bool add_rc(uint32_t tid, int32_t ref_pos, int32_t read_pos, size_t num_occ) {
+
       bool added{false};
-      // don't double-count a k-mer that might occur twice on
-      // this target.
-      // if (last_read_pos_rc != -1 and read_pos == last_read_pos_rc) { return false; }
-      if (ref_pos < last_ref_pos_rc and read_pos > last_read_pos_rc) {
+      // since hits are collected by moving _forward_ in the
+      // read, if this is an rc hit, it should be moving 
+      // backwards in the reference. Only add it if this is
+      // the case.
+      // This ensures that we don't double-count a k-mer that 
+      // might occur twice on this target.
+      if (/*ref_pos < last_ref_pos_rc and */ read_pos > last_read_pos_rc) {
         if (last_read_pos_rc == -1 or ref_pos < last_ref_pos_rc) {
           approx_pos_rc = ref_pos - read_pos;
         }
@@ -539,7 +545,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     int32_t last_read_pos_fw{-1};
     int32_t last_read_pos_rc{-1};
 
-    int32_t last_ref_pos_fw{-1};//std::numeric_limits<int32_t>::max()};
+    int32_t last_ref_pos_fw{-1};
     int32_t last_ref_pos_rc{std::numeric_limits<int32_t>::max()};
     
     int32_t approx_pos_fw{-1};
@@ -683,12 +689,23 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                 uint64_t largest_occ{0};
                 float perfect_score{0.0}; 
                 auto& raw_hits = memCollector.get_left_hits();
+                
+                // SANITY
+                decltype(raw_hits[0].first) prev_read_pos = -1;
+                
                 // a raw hit is a pair of read_pos and a projected hit
                 for (auto& raw_hit : raw_hits) {
                   auto& read_pos = raw_hit.first;
                   auto& proj_hits = raw_hit.second;
                   auto& refs = proj_hits.refRange;
                   uint64_t num_occ = static_cast<uint64_t>(refs.size());
+
+                  // SANITY
+                  if (read_pos <= prev_read_pos) {
+                    salmonOpts.jointLog->warn("read_pos : {}, prev_read_pos : {}", read_pos, prev_read_pos);
+                  }
+                  
+                  prev_read_pos = read_pos;
                   if (num_occ < salmonOpts.maxReadOccs) {
                     
                     ++num_valid_hits;
@@ -821,7 +838,8 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
         for (auto& aln : accepted_hits) {
           uint32_t fw_mask = aln.is_fw ? 0x80000000 : 0x00000000;
-          bw << (aln.tid | fw_mask);
+          uint32_t tid = static_cast<uint32_t>(qidx->getRefId(aln.tid));
+          bw << (tid | fw_mask);
         }
         ++num_reads_in_chunk;
       } // if read was mapped
@@ -850,6 +868,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
       validHits += accepted_hits.size();
       localNumAssignedFragments += (accepted_hits.size() > 0);
+      localNumUniqueMappings += (accepted_hits.size() == 1) ? 1 : 0;
       locRead++;
       ++numObservedFragments;
       jointHitGroup.clearAlignments();
@@ -899,6 +918,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                               maxZeroFrac);
   }
   numAssignedFragments += localNumAssignedFragments;
+  numUniqueMappings += localNumUniqueMappings;
   mstats.numDecoyFragments += numDecoyFrags;
   readExp.updateShortFrags(shortFragStats);
 }
@@ -1796,6 +1816,7 @@ void sc_align_read_library(ReadExperimentT& readExp,
   (void) burnedIn;
   std::vector<std::thread> threads;
   std::atomic<uint64_t> numValidHits{0};
+  std::atomic<uint64_t> numUniqueMappings{0};
   rl.checkValid();
   auto indexType = sidx->indexType();
   std::unique_ptr<paired_parser> pairedParserPtr{nullptr};
@@ -1828,7 +1849,7 @@ void sc_align_read_library(ReadExperimentT& readExp,
        if (alevinOpts.sketch_mode) {
          process_reads_sc_sketch(
              parserPtr, readExp, rl, structureVec[i], numObservedFragments,
-             numAssignedFragments, numValidHits, smallSeqs, nSeqs, index,
+             numAssignedFragments, numUniqueMappings, numValidHits, smallSeqs, nSeqs, index,
              transcripts, fragLengthDist, salmonOpts, num_chunks, rad_file,
              fileMutex, ioMutex, alevinOpts, mstats
          );
@@ -1858,6 +1879,10 @@ void sc_align_read_library(ReadExperimentT& readExp,
     }
 
     pairedParserPtr->stop();
+  
+    if (alevinOpts.sketch_mode) {
+      salmonOpts.jointLog->info("Number uniquely mapped : {}", numUniqueMappings.load());
+    }
 
     // DONE!
   }
@@ -2257,6 +2282,7 @@ void do_sc_align(ReadExperimentT& experiment,
 
   rad_file.close();
   jointLog->info("finished sc_align()");
+  jointLog->flush();
 }
                      
 /**
