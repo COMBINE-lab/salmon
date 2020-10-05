@@ -479,7 +479,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
     // add a hit to the current target that occurs in the forward 
     // orientation with respect to the target.
-    bool add_fw(uint32_t tid, int32_t ref_pos, int32_t read_pos, size_t num_occ) {
+    bool add_fw(int32_t ref_pos, int32_t read_pos, float score_inc) {
       bool added{false};
       
       // since hits are collected by moving _forward_ in the
@@ -488,14 +488,14 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       // the case.  This ensure that we don't 
       // double-count a k-mer that might occur twice on
       // this target.
-      if (/*ref_pos > last_ref_pos_fw and */ read_pos > last_read_pos_fw) {
+      if (ref_pos > last_ref_pos_fw and read_pos > last_read_pos_fw) {
         if (last_read_pos_fw == -1) {
           approx_pos_fw = ref_pos - read_pos;
         }
         //if (last_ref_pos_fw > -1 and (ref_pos > last_ref_pos_fw + 15)) { return false; }
         last_ref_pos_fw = ref_pos;
         last_read_pos_fw = read_pos;
-        fw_score += 1.0f / num_occ;
+        fw_score += score_inc;
         ++fw_hits;
         added = true;
       }
@@ -504,7 +504,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
     // add a hit to the current target that occurs in the forward 
     // orientation with respect to the target.
-    bool add_rc(uint32_t tid, int32_t ref_pos, int32_t read_pos, size_t num_occ) {
+    bool add_rc(int32_t ref_pos, int32_t read_pos, float score_inc) {
 
       bool added{false};
       // since hits are collected by moving _forward_ in the
@@ -513,14 +513,14 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       // the case.
       // This ensures that we don't double-count a k-mer that 
       // might occur twice on this target.
-      if (/*ref_pos < last_ref_pos_rc and */ read_pos > last_read_pos_rc) {
+      if (ref_pos < last_ref_pos_rc and read_pos > last_read_pos_rc) {
         if (last_read_pos_rc == -1 or ref_pos < last_ref_pos_rc) {
           approx_pos_rc = ref_pos - read_pos;
         }
         //if (last_ref_pos_rc > -1 and ref_pos < last_ref_pos_rc - 15) { return false; }
         last_ref_pos_rc = ref_pos;
         last_read_pos_rc = read_pos;
-        rc_score += 1.0f / num_occ;
+        rc_score += score_inc;
         ++rc_hits;
         added = true;
         
@@ -531,7 +531,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     // true if forward, false if rc
     // second element is score
     std::pair<bool, float> best_hit_direction() {
-      //return (fw_score >= rc_score) ? std::make_pair(true, fw_score) : std::make_pair(false, rc_score);
       return (fw_hits >= rc_hits) ? std::make_pair(true, fw_score) : std::make_pair(false, rc_score);
     }
 
@@ -711,17 +710,18 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                     ++num_valid_hits;
                     total_occs += num_occ;
                     largest_occ = (num_occ > largest_occ) ? num_occ : largest_occ;
-                    perfect_score += 1.0 / num_occ;
+                    float score_inc = 1.0 / num_occ;
+                    perfect_score += score_inc;
 
                     for (auto &pos_it : refs) {
                       const auto& ref_pos_ori = proj_hits.decodeHit(pos_it);
-                      uint32_t tid = pos_it.transcript_id();
+                      uint32_t tid = static_cast<uint32_t>(qidx->getRefId(pos_it.transcript_id()));
                       int32_t pos = static_cast<int32_t>(ref_pos_ori.pos);
                       bool ori = ref_pos_ori.isFW;
                       if (ori) {
-                        hit_map[tid].add_fw(tid, pos, static_cast<int32_t>(read_pos), num_occ);
+                        hit_map[tid].add_fw(pos, static_cast<int32_t>(read_pos), score_inc);
                       } else {
-                        hit_map[tid].add_rc(tid, pos, static_cast<int32_t>(read_pos), num_occ);
+                        hit_map[tid].add_rc(pos, static_cast<int32_t>(read_pos), score_inc);
                       }
                     } // DONE: for (auto &pos_it : refs)
                   } // DONE : if (static_cast<uint64_t>(refs.size()) < salmonOpts.maxReadOccs)
@@ -730,7 +730,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                 //float perfect_score = static_cast<float>(num_valid_hits) / total_occs;
                 float acceptable_score = (num_valid_hits == 1) ? perfect_score : 
                   perfect_score - (1.0f / largest_occ);
-                //float best_alt_score = -1.0;
                 uint32_t best_alt_hits = 0;
                 int32_t signed_read_len = static_cast<int32_t>(readSubSeq.length());
 
@@ -743,20 +742,14 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                     }
                     */
                     //if (simple_hit.valid_pos(signed_read_len, transcripts[kv.first].RefLength, 10)) {
-                      simple_hit.tid = kv.first;
-                      accepted_hits.emplace_back(simple_hit);
+                    simple_hit.tid = kv.first;
+                    accepted_hits.emplace_back(simple_hit);
                     //}
                   } else {
                     //best_alt_score = simple_hit.score > best_alt_score ? simple_hit.score : best_alt_score;
                     best_alt_hits = simple_hit.num_hits > best_alt_hits ? simple_hit.num_hits : best_alt_hits;
                   }
                 }
-                  /*
-                std::sort(accepted_hits.begin(), accepted_hits.end(),
-                  [](const SimpleHit& a, const SimpleHit& b) -> bool {
-                    return a.tid < b.tid;
-                  });
-                  */
 
                  /*
                 if (accepted_hits.empty() and (num_valid_hits > 1) and (best_alt_hits >= num_valid_hits - 1)) {
@@ -838,8 +831,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
         for (auto& aln : accepted_hits) {
           uint32_t fw_mask = aln.is_fw ? 0x80000000 : 0x00000000;
-          uint32_t tid = static_cast<uint32_t>(qidx->getRefId(aln.tid));
-          bw << (tid | fw_mask);
+          bw << (aln.tid | fw_mask);
         }
         ++num_reads_in_chunk;
       } // if read was mapped
@@ -1834,7 +1826,9 @@ void sc_align_read_library(ReadExperimentT& readExp,
     size_t numFiles = rl.mates1().size() + rl.mates2().size();
     uint32_t numParsingThreads{1};
     // HACK!
-    if(numThreads > 1){
+    // below ~6 threads, assume that parser won't do
+    // too much actual cpu work.
+    if(numThreads > 6){
       numThreads -= 1;
     }
     if (rl.mates1().size() > 1 and numThreads > 8) { numParsingThreads = 2; numThreads -= 1;}
