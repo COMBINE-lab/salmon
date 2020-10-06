@@ -389,7 +389,9 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                        SalmonOpts& salmonOpts,
                        std::atomic<uint64_t>& num_chunks,
                        std::ofstream& rad_file,
+                       std::ofstream& ubc_file, // unmapped barcode count
                        std::mutex& fileMutex,
+                       std::mutex& ubc_file_mutex, // mutex for barcode count
                        std::mutex& iomutex, 
                        AlevinOpts<ProtocolT>& alevinOpts,
                        MappingStatistics& mstats) {
@@ -555,6 +557,10 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     float fw_score{0.0};
     float rc_score{0.0}; 
   };
+
+  // map to recall the number of unmapped reads we see 
+  // for each barcode
+  phmap::flat_hash_map<uint64_t, uint32_t> unmapped_bc_map; 
 
   // map from transcript id to hit info
   phmap::flat_hash_map<uint32_t, SketchHitInfo> hit_map; 
@@ -795,6 +801,9 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         mapType = salmon::utils::MappingType::SINGLE_MAPPED;
       }
 
+      alevin::types::AlevinCellBarcodeKmer bck;
+      bool barcode_ok = bck.fromChars(*barcode);
+ 
       // NOTE: Think if we should put decoy mappings in the RAD file
       if (mapType == salmon::utils::MappingType::SINGLE_MAPPED) {
         // num aln
@@ -803,9 +812,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         // bc
         // if we can fit the barcode into an integer 
         if ( alevinOpts.protocol.barcodeLength <= 32 ) { 
-          alevin::types::AlevinCellBarcodeKmer bck;
-          bool ok = bck.fromChars(*barcode);
-          if (ok) {
+          if (barcode_ok) {
             if (alevinOpts.protocol.barcodeLength <= 16) { // can use 32-bit int
               uint32_t shortbck = static_cast<uint32_t>(0x00000000FFFFFFFF & bck.word(0));
               bw << shortbck;
@@ -834,7 +841,11 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
           bw << (aln.tid | fw_mask);
         }
         ++num_reads_in_chunk;
-      } // if read was mapped
+      } else { // if read was not mapped
+        if (barcode_ok) {
+          unmapped_bc_map[bck.word(0)] += 1;
+        }
+      }
 
 
       if (num_reads_in_chunk > 5000) {
@@ -905,6 +916,19 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     num_reads_in_chunk = 0;
   }
 
+  // unmapped barcode writer
+  { // make a scope and dump the unmapped barcode counts
+    BasicBinWriter ubcw;
+    for (auto& kv : unmapped_bc_map) {
+      ubcw << kv.first;
+      ubcw << kv.second;
+      ubc_file_mutex.lock();
+      ubc_file << ubcw;
+      ubc_file_mutex.unlock();
+      ubcw.clear();
+    }
+  }
+
   if (maxZeroFrac > 5.0) {
     salmonOpts.jointLog->info("Thread saw mini-batch with a maximum of {0:.2f}\% zero probability fragments",
                               maxZeroFrac);
@@ -931,7 +955,9 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                        SalmonOpts& salmonOpts,
                        std::atomic<uint64_t>& num_chunks,
                        std::ofstream& rad_file,
+                       std::ofstream& ubc_file, // unmapped barcode count
                        std::mutex& fileMutex,
+                       std::mutex& ubc_file_mutex, // mutex for barcode count
                        std::mutex& iomutex, 
                        AlevinOpts<ProtocolT>& alevinOpts,
                        MappingStatistics& mstats) {
@@ -1003,6 +1029,10 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
   fmt::MemoryWriter sstream;
   auto* qmLog = salmonOpts.qmLog.get();
   bool writeQuasimappings = (qmLog != nullptr);
+
+  // map to recall the number of unmapped reads we see 
+  // for each barcode
+  phmap::flat_hash_map<uint64_t, uint32_t> unmapped_bc_map; 
 
   //////////////////////
   // NOTE: validation mapping based new parameters
@@ -1221,6 +1251,9 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           }
         } //end-if validate mapping
 
+        alevin::types::AlevinCellBarcodeKmer bck;
+        bool barcode_ok = bck.fromChars(*barcode);
+
         // NOTE: Think if we should put decoy mappings in the RAD file
         if (mapType == salmon::utils::MappingType::SINGLE_MAPPED) {
           // na
@@ -1231,9 +1264,8 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           // bc
           // if we can if the barcode into an integer 
           if ( alevinOpts.protocol.barcodeLength <= 32 ) { 
-            alevin::types::AlevinCellBarcodeKmer bck;
-            bool ok = bck.fromChars(*barcode);
-            if (ok) {
+
+            if (barcode_ok) {
               //alevinOpts.jointLog->info("BARCODE : {} \t ENC : {} ", *barcode, bck.word(0));
               if (alevinOpts.protocol.barcodeLength <= 16) { // can use 32-bit int
                 uint32_t shortbck = static_cast<uint32_t>(0x00000000FFFFFFFF & bck.word(0));
@@ -1268,6 +1300,10 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
             //bw << static_cast<uint32_t>((aln.pos < 0) ? 0 : aln.pos);
           }
           ++num_reads_in_chunk;
+        } else {
+          if (barcode_ok) {
+            unmapped_bc_map[bck.word(0)] += 1;
+          }
         }
 
 
@@ -1336,6 +1372,20 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
     fileMutex.unlock();
     bw.clear();
     num_reads_in_chunk = 0;
+  }
+
+    
+  // unmapped barcode writer
+  { // make a scope and dump the unmapped barcode counts
+    BasicBinWriter ubcw;
+    for (auto& kv : unmapped_bc_map) {
+      ubcw << kv.first;
+      ubcw << kv.second;
+      ubc_file_mutex.lock();
+      ubc_file << ubcw;
+      ubc_file_mutex.unlock();
+      ubcw.clear();
+    }
   }
 
   if (maxZeroFrac > 5.0) {
@@ -1799,7 +1849,9 @@ void sc_align_read_library(ReadExperimentT& readExp,
                       SalmonOpts& salmonOpts,
                       std::atomic<uint64_t>& num_chunks,
                       std::ofstream& rad_file,
+                      std::ofstream& unmapped_bc_file,
                       std::mutex& fileMutex,
+                      std::mutex& unmapped_bc_mutex,
                       std::mutex& ioMutex, 
                       size_t numThreads, 
                       std::vector<AlnGroupVec<AlnT>>& structureVec,
@@ -1841,15 +1893,15 @@ void sc_align_read_library(ReadExperimentT& readExp,
          process_reads_sc_sketch(
              parserPtr, readExp, rl, structureVec[i], numObservedFragments,
              numAssignedFragments, numUniqueMappings, numValidHits, smallSeqs, nSeqs, index,
-             transcripts, fragLengthDist, salmonOpts, num_chunks, rad_file,
-             fileMutex, ioMutex, alevinOpts, mstats
+             transcripts, fragLengthDist, salmonOpts, num_chunks, rad_file, unmapped_bc_file,
+             fileMutex, unmapped_bc_mutex, ioMutex, alevinOpts, mstats
          );
        } else {
          process_reads_sc_align(
              parserPtr, readExp, rl, structureVec[i], numObservedFragments,
              numAssignedFragments, numValidHits, smallSeqs, nSeqs, index,
-             transcripts, fragLengthDist, salmonOpts, num_chunks, rad_file,
-             fileMutex, ioMutex, alevinOpts, mstats);
+             transcripts, fragLengthDist, salmonOpts, num_chunks, rad_file, unmapped_bc_file,
+             fileMutex, unmapped_bc_mutex, ioMutex, alevinOpts, mstats);
        }
      };
      threads.emplace_back(threadFun);
@@ -2071,17 +2123,28 @@ void do_sc_align(ReadExperimentT& experiment,
   uint32_t roundNum{0};
 
   std::mutex fileMutex;
+  std::mutex unmapped_bc_mutex;
   std::mutex ioMutex;
 
   // RAD file path 
   boost::filesystem::path rad_file_path = salmonOpts.outputDirectory / "map.rad";
+  boost::filesystem::path unmapped_bc_file_path = salmonOpts.outputDirectory / "unmapped_bc_count.bin";
 
   std::ofstream rad_file(rad_file_path.string());
+  std::ofstream unmapped_bc_file(unmapped_bc_file_path.string());
+
 
   if (!rad_file.good()) {
     alevinOpts.jointLog->error("Could not open {} for writing.", rad_file_path.string());
     throw std::runtime_error("error creating output file.");
   }
+
+  if (!unmapped_bc_file.good()) {
+    alevinOpts.jointLog->error("Could not open {} for writing.", unmapped_bc_file_path.string());
+    throw std::runtime_error("error creating output file.");
+  }
+
+
 
   BasicBinWriter bw;
   //  RADHeader
@@ -2197,7 +2260,9 @@ void do_sc_align(ReadExperimentT& experiment,
                              fragLengthDist, salmonOpts,
                              num_chunks,
                              rad_file,
+                             unmapped_bc_file,
                              fileMutex,
+                             unmapped_bc_mutex,
                              ioMutex, numQuantThreads, groupVec,
                              alevinOpts, mstats);
   };
