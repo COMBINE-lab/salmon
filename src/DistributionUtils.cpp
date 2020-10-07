@@ -83,7 +83,12 @@ DistSummary samplesFromLogPMF(FragmentLengthDistribution* fld,
   double sd = std::sqrt(var);
 
   // generate samples
-  std::random_device rd;
+  #if defined(__linux) && defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
+    std::random_device rd("/dev/urandom");
+  #else
+    std::random_device rd;
+  #endif  // defined(__GLIBCXX__) && __GLIBCXX__ >= 2020012
+
   std::mt19937 gen(rd());
   std::discrete_distribution<int32_t> dist(pmf.begin(), pmf.end());
 

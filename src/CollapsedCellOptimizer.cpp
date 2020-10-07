@@ -296,7 +296,12 @@ bool runGibbsSamples(size_t numGenes,
     nchains = 8;
   }
 
-  std::random_device rd;
+  #if defined(__linux) && defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
+    std::random_device rd("/dev/urandom");
+  #else
+    std::random_device rd;
+  #endif  // defined(__GLIBCXX__) && __GLIBCXX__ >= 2020012
+
   std::mt19937 gen(rd());
 
   std::vector<uint32_t> newChainIter{0};
@@ -459,7 +464,12 @@ bool runBootstraps(size_t numGenes,
   }
 
   // Multinomial Sampler
-  std::random_device rd;
+  #if defined(__linux) && defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
+    std::random_device rd("/dev/urandom");
+  #else
+    std::random_device rd;
+  #endif  // defined(__GLIBCXX__) && __GLIBCXX__ >= 2020012
+
   std::mt19937 gen(rd());
   std::discrete_distribution<uint64_t> csamp(eqCounts.begin(),
                                              eqCounts.end());

@@ -108,7 +108,13 @@ void sampleRoundNonCollapsedMultithreaded_(
   // reset txpCounts to zero for each transcript.
   typedef tbb::enumerable_thread_specific<pcg32_unique> GeneratorType;
   auto getGenerator = []() -> pcg32_unique {
-    return pcg32_unique(pcg_extras::seed_seq_from<std::random_device>());
+    // why this mess below?  see SalmonUtils.hpp : get_random_device() for more
+    // details.
+    #if defined(__linux) && defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
+      return pcg32_unique(pcg_extras::seed_seq_from<std::random_device>("/dev/urandom"));
+    #else
+      return pcg32_unique(pcg_extras::seed_seq_from<std::random_device>());
+    #endif  // defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
   };
   GeneratorType localGenerator(getGenerator);
 
@@ -159,8 +165,15 @@ void sampleRoundNonCollapsedMultithreaded_(
   class CombineableTxpCounts {
   public:
     CombineableTxpCounts(uint32_t numTxp) : txpCount(numTxp, 0) {
-      gen.reset(
+      // why this mess below?  see SalmonUtils.hpp : get_random_device() for more
+      // details.
+      #if defined(__linux) && defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
+        gen.reset(
+            new pcg32_unique(pcg_extras::seed_seq_from<std::random_device>("/dev/urandom")));
+      #else
+        gen.reset(
           new pcg32_unique(pcg_extras::seed_seq_from<std::random_device>()));
+      #endif  // defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
     }
     std::vector<int> txpCount;
     std::unique_ptr<pcg32_unique> gen{nullptr};

@@ -28,7 +28,15 @@ ALWAYS_INLINE void yieldSleep() {
 
 ALWAYS_INLINE void backoffExp(size_t& curMaxIters) {
   thread_local std::uniform_int_distribution<size_t> dist;
-  thread_local std::minstd_rand gen(std::random_device{}());
+
+  // see : https://github.com/coryan/google-cloud-cpp-common/blob/a6e7b6b362d72451d6dc1fec5bc7643693dbea96/google/cloud/internal/random.cc
+  #if defined(__linux) && defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
+    thread_local std::random_device rd("/dev/urandom");
+  #else
+    thread_local std::random_device rd;
+  #endif  // defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
+
+  thread_local std::minstd_rand gen(rd());
   const size_t spinIters =
       dist(gen, decltype(dist)::param_type{0, curMaxIters});
   curMaxIters = std::min(2 * curMaxIters, MAX_BACKOFF_ITERS);

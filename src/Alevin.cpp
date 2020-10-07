@@ -66,6 +66,7 @@
 #include "SalmonConfig.hpp"
 #include "SalmonDefaults.hpp"
 #include "SalmonOpts.hpp"
+#include "SalmonUtils.hpp"
 #include "ProgramOptionsGenerator.hpp"
 
 using paired_parser_qual = fastx_parser::FastxParser<fastx_parser::ReadQualPair>;
@@ -542,7 +543,12 @@ bool writeFastq(AlevinOpts<ProtocolT>& aopt,
   std::string barcode;
   std::string umi;
 
-  std::random_device rd;
+  #if defined(__linux) && defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
+    std::random_device rd("/dev/urandom");
+  #else
+    std::random_device rd;
+  #endif  // defined(__GLIBCXX__) && __GLIBCXX__ >= 2020012
+
   std::mt19937 mt(rd());
   std::uniform_real_distribution<double> dist(0.0, 1.0);
 

@@ -768,7 +768,11 @@ void processReads(
 
   uint64_t count_fwd = 0, count_bwd = 0;
   // Seed with a real random value, if available
-  std::random_device rd;
+  #if defined(__linux) && defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
+    std::random_device rd("/dev/urandom");
+  #else
+    std::random_device rd;
+  #endif  // defined(__GLIBCXX__) && __GLIBCXX__ >= 2020012
 
   // Create a random uniform distribution
   std::default_random_engine eng(rd());
@@ -1543,7 +1547,11 @@ void processReads(
 
    uint64_t count_fwd = 0, count_bwd = 0;
    // Seed with a real random value, if available
-   std::random_device rd;
+  #if defined(__linux) && defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
+    std::random_device rd("/dev/urandom");
+  #else
+    std::random_device rd;
+  #endif  // defined(__GLIBCXX__) && __GLIBCXX__ >= 2020012
 
    // Create a random uniform distribution
    std::default_random_engine eng(rd());

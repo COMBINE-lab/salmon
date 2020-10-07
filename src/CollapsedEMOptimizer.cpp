@@ -417,7 +417,12 @@ bool doBootstrap(
 
   auto& jointLog = sopt.jointLog;
 
-  std::random_device rd;
+  #if defined(__linux) && defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
+    std::random_device rd("/dev/urandom");
+  #else
+    std::random_device rd;
+  #endif  // defined(__GLIBCXX__) && __GLIBCXX__ >= 2020012
+
   std::mt19937 gen(rd());
   // MultinomialSampler msamp(rd);
   std::discrete_distribution<uint64_t> csamp(sampleWeights.begin(),

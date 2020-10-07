@@ -398,12 +398,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
   (void) numAssignedFragments;
   (void) fragLengthDist;
   uint64_t count_fwd = 0, count_bwd = 0;
-  // Seed with a real random value, if available
-  std::random_device rd;
-
-  // Create a random uniform distribution
-  std::default_random_engine eng(rd());
-
   uint64_t prevObservedFrags{1};
   uint64_t leftHitCount{0};
   uint64_t hitListCount{0};
@@ -964,12 +958,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
   (void) numAssignedFragments;
   (void) fragLengthDist;
   uint64_t count_fwd = 0, count_bwd = 0;
-  // Seed with a real random value, if available
-  std::random_device rd;
-
-  // Create a random uniform distribution
-  std::default_random_engine eng(rd());
-
   uint64_t prevObservedFrags{1};
   uint64_t leftHitCount{0};
   uint64_t hitListCount{0};
@@ -1419,12 +1407,6 @@ void processReadsQuasi(
                        MappingStatistics& mstats
                        /*,std::vector<uint64_t>& uniqueFLD*/) {
   uint64_t count_fwd = 0, count_bwd = 0;
-  // Seed with a real random value, if available
-  std::random_device rd;
-
-  // Create a random uniform distribution
-  std::default_random_engine eng(rd());
-
   uint64_t prevObservedFrags{1};
   uint64_t leftHitCount{0};
   uint64_t hitListCount{0};
