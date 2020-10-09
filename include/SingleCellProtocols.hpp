@@ -14,14 +14,16 @@ namespace alevin{
     static constexpr size_t num_tag_pieces{16};
     struct TagGeometry {
       uint32_t read_num{0};
-      chobo::static_vector<std::pair<uint32_t, uint32_t>, num_tag_pieces> substr_locs{};
+      chobo::static_vector<std::pair<size_t, size_t>, num_tag_pieces> substr_locs{};
       // chobo::static_vector<std::pair<uint32_t,uint8_t>, 16> bc_locs;
       // std::vector<std::pair<uint32_t, uint32_t>> substr_locs{};
-      uint32_t length{0};
-      uint32_t largest_index{0};
+      size_t length{0};
+      size_t largest_index{0};
+
+      inline bool unbounded() const { return length == std::string::npos; }
 
       bool extract(std::string& from, std::string&to) {
-        if (from.length() < largest_index) { return false; }
+        if (!unbounded() and (from.length() < largest_index)) { return false; }
         to.clear();
         for (auto& st_len : substr_locs) {
           to += from.substr(st_len.first, st_len.second);

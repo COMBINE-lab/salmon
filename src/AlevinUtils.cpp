@@ -497,7 +497,7 @@ namespace alevin {
 
     struct Desc {
       uint8_t read_num;
-      std::vector<std::pair<int,int>> locs;
+      std::vector<std::pair<size_t,size_t>> locs;
       friend std::ostream& operator<<(std::ostream& os, const Desc& de);
     };
     
@@ -513,11 +513,16 @@ namespace alevin {
     }
  
 
-    bool parse_geometry_desc(std::string& geo_string, peg::parser& parser, std::vector<Desc>& d, std::shared_ptr<spdlog::logger> log, alevin::protocols::TagGeometry& tg) {
+    bool parse_geometry_desc(std::string& geo_string, bool can_be_unbounded, peg::parser& parser, std::vector<Desc>& d, std::shared_ptr<spdlog::logger> log, alevin::protocols::TagGeometry& tg) {
       // the first element in the string must be 
       // the read number (currently, only 1 or 2 is )
       // acceptable.
-      
+
+      // currently, only the read geometry can be unbounded 
+      // (i.e. can stretch to std::string::npos).  If 
+      // can_be_unbounded is false, then reject any parsed
+      // geometry tag containing `end`.
+
       d.clear();
       if ( parser.parse(geo_string.c_str()) ) {
         if (d.size() > 1) {
@@ -529,22 +534,43 @@ namespace alevin {
 
         auto desc = d[0];
         tg.read_num = desc.read_num;
-        uint32_t tlen{0};
-        int largest_index{0};
+        // the length of the tag
+        size_t tlen{0};
+        // the largest index the tag reaches
+        size_t largest_index{0};
+
         for (auto& start_stop : desc.locs) {
-          int start = start_stop.first;
+          size_t start = start_stop.first;
           if (start <= 0) { log->error("tag string subscript must be strictly positive (tag geometry is 1-indexed)."); return false; }
-          int stop = start_stop.second;
-          if (stop < start) { log->error("the substring range in tag geometry must have stop >= start."); return false; }
- 
+          size_t stop = start_stop.second;
+          // make sure we don't contain `end` if we can't
+          if (!can_be_unbounded and stop == std::string::npos) {
+            log->error("only the geometry of the read can be unbounded (can contain 'end'), "
+                       "but it was specified for a cell barcode / umi.");
+            return false;
+          }
+
+          // does this piece reach to the end of the read
+          // i.e. is it a range of the form `X-end`?
+          bool reach_to_end = (stop == std::string::npos);
+
+          if (stop < start) { 
+            log->error("geometry contained a range {}-{}; cannot have stop < start.", start, stop);
+            return false; 
+          }
+
           // internally, we start indexing from 0
           start -= 1;
-          stop -= 1;
+          if (!reach_to_end) { stop -= 1; }
 
           largest_index = (stop > largest_index) ? stop : largest_index;
-          if (stop < start) { return false; }
-          int len = (stop - start) + 1;
-          tlen += len;
+
+          size_t len = (reach_to_end) ? std::string::npos : (stop - start) + 1;
+
+          // if the current piece is unbounded, or any piece so far
+          // has been unbounded, then the tag length is unbounded
+          tlen = (reach_to_end or (tlen == std::string::npos)) ? len : tlen + len;
+
           if (tg.substr_locs.size() >= alevin::protocols::num_tag_pieces) {
             log->error("Currently, alevin does not support the tag (barcode / umi) being "
                        "split into more than {} pieces.  If the current bound is a "
@@ -552,10 +578,10 @@ namespace alevin {
                        alevin::protocols::num_tag_pieces);
             return false;
           }
-          tg.substr_locs.push_back(std::make_pair(static_cast<uint32_t>(start), static_cast<uint32_t>(len)));
+          tg.substr_locs.push_back(std::make_pair(start, len));
         }
         tg.length = tlen;
-        tg.largest_index = static_cast<uint32_t>(largest_index);
+        tg.largest_index = largest_index;
         return true;
       } else {
         return false;
@@ -853,20 +879,47 @@ namespace alevin {
          Description <- ReadNumber'['NumberRangeList']'
          ReadNumber  <- [1,2]
          Number      <- [0-9]+
-         NumberRange <- Number '-' Number
+         End         <- 'end'
+         NumberRange <- (Number '-' Number) / (Number '-' End)
          NumberRangeList <- NumberRange (','NumberRange)*
         )");
-
+        
+        if (!(bool)parser) {
+          std::cerr << "invalid parser\n";
+          std::exit(1);
+        }
+        
         std::vector<Desc> d;
         
-        parser["ReadNumber"] = [&](const peg::SemanticValues& sv) { d.push_back({0,{}}); d.back().read_num = std::stoi(sv.token()); };
-        parser["Number"] = [&](const peg::SemanticValues& sv) { return std::stoi(sv.token()); };
-        parser["NumberRange"] = [&](const peg::SemanticValues& sv) { d.back().locs.push_back( std::make_pair(peg::any_cast<int>(sv[0]), peg::any_cast<int>(sv[1]) )); };
+        parser["ReadNumber"] = [&](const peg::SemanticValues& sv) { 
+          d.push_back({0,{}}); d.back().read_num = std::stoi(sv.token()); 
+        };
+        
+        parser["Number"] = [&](const peg::SemanticValues& sv) { 
+          return static_cast<size_t>(std::stoull(sv.token())); 
+        };
+
+        parser["NumberRange"] = [&](const peg::SemanticValues& sv) {
+          switch (sv.choice()) {
+          case 0:
+           {
+            d.back().locs.push_back(std::make_pair(
+                peg::any_cast<size_t>(sv[0]), peg::any_cast<size_t>(sv[1])));
+           }
+            break;
+          default:
+            {
+             d.back().locs.push_back(std::make_pair(
+               peg::any_cast<size_t>(sv[0]), std::string::npos));
+            }
+            break;
+          }
+        };
 
         aopt.protocol.end = BarcodeEnd::FIVE;
 
         alevin::protocols::TagGeometry bc_geo;
-        if ( parse_geometry_desc(bc_geo_string, parser, d, aopt.jointLog, bc_geo) ) {
+        if ( parse_geometry_desc(bc_geo_string, false, parser, d, aopt.jointLog, bc_geo) ) {
           aopt.protocol.set_bc_geo(bc_geo);
         } else {
           aopt.jointLog->error("Failed to parse `--bc-geometry` argument {}, please make sure it is correct.", bc_geo_string);
@@ -876,7 +929,7 @@ namespace alevin {
         //std::cerr << bc_geo << "\n\n";
 
         alevin::protocols::TagGeometry umi_geo;
-        if ( parse_geometry_desc(umi_geo_string, parser, d, aopt.jointLog, umi_geo) ) {
+        if ( parse_geometry_desc(umi_geo_string, false, parser, d, aopt.jointLog, umi_geo) ) {
           aopt.protocol.set_umi_geo(umi_geo);
         } else {
           aopt.jointLog->error("Failed to parse `--umi-geometry` argument {}, please make sure it is correct.", umi_geo_string);
