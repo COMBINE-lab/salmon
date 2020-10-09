@@ -1515,3 +1515,15 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                       std::vector<uint32_t>& umiCount,
                                       CFreqMapT& freqCounter,
                                       size_t numLowConfidentBarcode);
+
+
+template
+bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
+                                      spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                                      AlevinOpts<apt::CustomGeometry>& aopt,
+                                      GZipWriter& gzw,
+                                      std::vector<std::string>& trueBarcodes,
+                                      std::vector<uint32_t>& umiCount,
+                                      CFreqMapT& freqCounter,
+                                      size_t numLowConfidentBarcode);

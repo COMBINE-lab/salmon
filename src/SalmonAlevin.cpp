@@ -653,7 +653,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
           // corrBarcodeIndex = barcodeMap[barcodeIndex];
           // jointHitGroup.setBarcode(*barcodeIdx);
           aut::extractUMI(rp.first.seq, alevinOpts.protocol, umi);
-
+          //aopt.jointLog->info("BC : {}, UMI : {}". *barcode, umi);
           if (umiLength != umi.size()) {
             smallSeqs += 1;
           } else {
@@ -772,7 +772,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
             }
           }
         }
-      } else{
+      } else {
         salmonOpts.jointLog->error( "wrong barcode-end parameters.\n"
                                     "Please report this bug on Github");
         salmonOpts.jointLog->flush();
@@ -3006,8 +3006,23 @@ template
 int alevin_sc_align(AlevinOpts<apt::Custom>& aopt,
                     SalmonOpts& sopt,
                     boost::program_options::parsed_options& orderedOptions);
+template 
+int alevin_sc_align(AlevinOpts<apt::CustomGeometry>& aopt,
+                    SalmonOpts& sopt,
+                    boost::program_options::parsed_options& orderedOptions);
+
 template
 int alevinQuant(AlevinOpts<apt::Custom>& aopt,
+                SalmonOpts& sopt,
+                SoftMapT& barcodeMap,
+                TrueBcsT& trueBarcodes,
+                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                boost::program_options::parsed_options& orderedOptions,
+                CFreqMapT& freqCounter,
+                size_t numLowConfidentBarcode);
+template
+int alevinQuant(AlevinOpts<apt::CustomGeometry>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,

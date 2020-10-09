@@ -1,4 +1,5 @@
 #include "AlevinUtils.hpp"
+#include "peglib.h"
 
 namespace alevin {
   namespace utils {
@@ -90,6 +91,12 @@ namespace alevin {
       subseq = seq;
     }
     template <>
+    void getReadSequence(apt::CustomGeometry& protocol,
+                         std::string& seq,
+                         std::string& subseq){
+      subseq = seq;
+    }
+    template <>
     void getReadSequence(apt::Gemcode& protocol,
                          std::string& seq,
                          std::string& subseq){
@@ -149,6 +156,13 @@ namespace alevin {
         return false;
       }
       return true;
+    }
+    template <>
+    bool extractUMI<apt::CustomGeometry>(std::string& read,
+                                 apt::CustomGeometry& pt,
+                                 std::string& umi){
+      
+      return pt.umi_geo.extract(read, umi);
     }
     template <>
     bool extractUMI<apt::QuartzSeq2>(std::string& read,
@@ -221,6 +235,13 @@ namespace alevin {
       } else {
         return nonstd::nullopt;
       }
+    }
+    template <>
+    nonstd::optional<std::string> extractBarcode<apt::CustomGeometry>(std::string& read,
+                                     apt::CustomGeometry& pt){
+      std::string bc;
+      bool ok = pt.bc_geo.extract(read, bc);
+      return ok ? nonstd::optional<std::string>(read) : nonstd::nullopt;
     }
     template <>
     nonstd::optional<std::string> extractBarcode<apt::QuartzSeq2>(std::string& read,
@@ -466,6 +487,68 @@ namespace alevin {
       jointLog->info("Found all transcripts to gene mappings");
     }
 
+
+    struct Desc {
+      uint8_t read_num;
+      std::vector<std::pair<int,int>> locs;
+      friend std::ostream& operator<<(std::ostream& os, const Desc& de);
+    };
+    
+    std::ostream& operator<<(std::ostream& os, const Desc& de) {
+      os << "Geometry description :: [\n";
+      os << "\tRead Num : " << static_cast<int32_t>(de.read_num) << "\n\t[";
+      for (size_t i = 0; i < de.locs.size(); ++i) {
+        os << "  (" << de.locs[i].first << ", " << de.locs[i].second << ")";
+      }
+      os << "\t]\n";
+      os << "]\n";
+      return os;
+    }
+ 
+
+    bool parse_geometry_desc(std::string& geo_string, peg::parser& parser, std::vector<Desc>& d, std::shared_ptr<spdlog::logger> log, alevin::protocols::TagGeometry& tg) {
+      // the first element in the string must be 
+      // the read number (currently, only 1 or 2 is )
+      // acceptable.
+      
+      d.clear();
+      if ( parser.parse(geo_string.c_str()) ) {
+        if (d.size() > 1) {
+          //aopt.jointLog->error("Though supported in the syntax, the current implementation \n"
+          //                     "of custom tag geometry does not support having a tag \n"
+          //                     "split over more than one read.");    
+          return false;
+        }
+
+        auto desc = d[0];
+        tg.read_num = desc.read_num;
+        uint32_t tlen{0};
+        int largest_index{0};
+        for (auto& start_stop : desc.locs) {
+          int start = start_stop.first;
+          if (start <= 0) { log->error("tag string subscript must be strictly positive (tag geometry is 1-indexed)."); return false; }
+          int stop = start_stop.second;
+          if (stop < start) { log->error("the substring range in tag geometry must have stop >= start."); return false; }
+ 
+          // internally, we start indexing from 0
+          start -= 1;
+          stop -= 1;
+
+          largest_index = (stop > largest_index) ? stop : largest_index;
+          if (stop < start) { return false; }
+          int len = (stop - start) + 1;
+          tlen += len;
+          tg.substr_locs.push_back(std::make_pair(static_cast<uint32_t>(start), static_cast<uint32_t>(len)));
+        }
+        tg.length = tlen;
+        tg.largest_index = static_cast<uint32_t>(largest_index);
+        return true;
+      } else {
+        return false;
+      }
+      return false;
+    }
+
     template <typename ProtocolT>
     bool processAlevinOpts(AlevinOpts<ProtocolT>& aopt,
                            SalmonOpts& sopt, bool noTgMap,
@@ -659,6 +742,20 @@ namespace alevin {
         aopt.numThreads = vm["threads"].as<uint32_t>();
       }  // things which needs to be updated for salmonOpts
 
+      // handling of customized barcode and umi geometry 
+      bool have_custom_umi_geo = vm.count("umi-geometry");
+      bool have_custom_bc_geo = vm.count("bc-geometry");
+      // need both
+      bool have_any_custom_geo = have_custom_umi_geo or have_custom_bc_geo;
+      bool have_all_custom_geo = have_custom_umi_geo and have_custom_bc_geo;
+      if ( have_all_custom_geo and !have_all_custom_geo ) {
+        aopt.jointLog->error("If you are using either of the umi-geometry or \n"
+                             "the barcode-geometry options, then you have to provide both.\n"
+                             "Alternatively, you can use pre-defined single-cell protocol flags.\n"
+                             "Exiting Now.");
+        return false; 
+      }
+
       // validate customized options for custom protocol
       bool haveCustomEnd = vm.count("end");
       bool haveCustomBC= vm.count("barcodeLength");
@@ -666,6 +763,14 @@ namespace alevin {
 
       bool allCustom = (haveCustomEnd and haveCustomBC and haveCustomUMI);
       bool noCustom = !(haveCustomEnd or haveCustomBC or haveCustomUMI);
+
+      if (!noCustom and have_any_custom_geo) {
+        aopt.jointLog->warn("Note: the use of --end, --barcodeLength and --umiLength \n"
+                            "to describe the barcode and umi geometry incompatible \n"
+                            "with the new options `--barcode-geometry` and `--umi-geometry`.\n"
+                            "The former are deprecated, please adopt the new options instead\n.");  
+        return false;
+      }
 
       // These are all or nothing.  Either the user must provide all 3
       // or none of these options.
@@ -683,6 +788,10 @@ namespace alevin {
         uint32_t barcodeLength = vm["barcodeLength"].as<uint32_t>();
         uint32_t umiLength = vm["umiLength"].as<uint32_t>();
 
+        aopt.jointLog->warn("Note: the use of --end, --barcodeLength and --umiLength "
+                            "to describe the barcode and umi geometry is deprecated. "
+                            "Please start using the `--barcode-geometry` and `--umi-geometry` "
+                            "options instead.");  
         // validate that BC and UMI lengths are OK
         uint32_t maxBC{20};
         uint32_t maxUMI{20};
@@ -720,6 +829,61 @@ namespace alevin {
           aopt.jointLog->info("A custom protocol (END, BC length, UMI length) = ({}, {}, {}) "
                               "is being used.  Updating UMI k-mer length accordingly.",
                               barEnd, barcodeLength, umiLength);
+        }
+      } else if (have_all_custom_geo) {
+        std::string  bc_geo_string = vm["bc-geometry"].as<std::string>();
+        std::string  umi_geo_string = vm["umi-geometry"].as<std::string>();
+
+        peg::parser parser(R"(
+         DescriptionList <- Description (','Description)*
+         Description <- ReadNumber'['NumberRangeList']'
+         ReadNumber  <- [1,2]
+         Number      <- [0-9]+
+         NumberRange <- Number '-' Number
+         NumberRangeList <- NumberRange (','NumberRange)*
+        )");
+
+        std::vector<Desc> d;
+        
+        parser["ReadNumber"] = [&](const peg::SemanticValues& sv) { d.push_back({0,{}}); d.back().read_num = std::stoi(sv.token()); };
+        parser["Number"] = [&](const peg::SemanticValues& sv) { return std::stoi(sv.token()); };
+        parser["NumberRange"] = [&](const peg::SemanticValues& sv) { d.back().locs.push_back( std::make_pair(peg::any_cast<int>(sv[0]), peg::any_cast<int>(sv[1]) )); };
+
+        aopt.protocol.end = BarcodeEnd::FIVE;
+
+        alevin::protocols::TagGeometry bc_geo;
+        if ( parse_geometry_desc(bc_geo_string, parser, d, aopt.jointLog, bc_geo) ) {
+          aopt.protocol.set_bc_geo(bc_geo);
+        } else {
+          aopt.jointLog->error("Failed to parse `--bc-geometry` argument {}, please make sure it is correct.", bc_geo_string);
+        }
+        alevin::types::AlevinCellBarcodeKmer::k(bc_geo.length);
+        //std::cerr << "BC GEO\n---------\n";
+        //std::cerr << bc_geo << "\n\n";
+
+        alevin::protocols::TagGeometry umi_geo;
+        if ( parse_geometry_desc(umi_geo_string, parser, d, aopt.jointLog, umi_geo) ) {
+          aopt.protocol.set_umi_geo(umi_geo);
+        } else {
+          aopt.jointLog->error("Failed to parse `--umi-geometry` argument {}, please make sure it is correct.", umi_geo_string);
+        }
+        alevin::types::AlevinUMIKmer::k(umi_geo.length);
+
+        //std::cerr << "UMI GEO\n---------\n";
+        //std::cerr << umi_geo << "\n\n";
+        
+        // validate that BC and UMI lengths are OK
+        uint32_t maxBC{31};
+        uint32_t maxUMI{31};
+        if (bc_geo.length < 1 or bc_geo.length > maxBC) {
+          aopt.jointLog->error("Barcode length ({}) was not in the required length range [1, {}].\n"
+                               "Exiting now.", bc_geo.length, maxBC);
+          return false;
+        }
+        if (umi_geo.length < 1 or umi_geo.length > maxUMI) {
+          aopt.jointLog->error("UMI length ({}) was not in the required length range [1, {}].\n"
+                               "Exiting now.", umi_geo.length, maxUMI);
+          return false;
         }
       }
 
@@ -924,6 +1088,10 @@ namespace alevin {
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::Custom>& aopt,
+                           SalmonOpts& sopt, bool noTgMap,
+                           boost::program_options::variables_map& vm);
+    template
+    bool processAlevinOpts(AlevinOpts<apt::CustomGeometry>& aopt,
                            SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template

@@ -2,12 +2,32 @@
 #define __SINGLE_CELL_PROTOCOLS_HPP__
 
 #include <string>
+#include <ostream>
 
 #include "AlevinOpts.hpp"
 #include "AlevinTypes.hpp"
+#include "pufferfish/chobo/small_vector.hpp"
 
 namespace alevin{
   namespace protocols {
+
+    struct TagGeometry {
+      uint32_t read_num{0};
+      std::vector<std::pair<uint32_t, uint32_t>> substr_locs{};
+      uint32_t length{0};
+      uint32_t largest_index{0};
+
+      bool extract(std::string& from, std::string&to) {
+        if (from.length() < largest_index) { return false; }
+        to.clear();
+        for (auto& st_len : substr_locs) {
+          to += from.substr(st_len.first, st_len.second);
+        }
+        return true;
+      }
+    };
+
+    std::ostream& operator<<(std::ostream& os, const TagGeometry& tg);
 
     struct Rule{
       Rule(){}
@@ -21,9 +41,14 @@ namespace alevin{
         maxValue(maxValue_){
         alevin::types::AlevinUMIKmer::k(umiLength);
       }
+      // NOTE: these do nothing but satisfy 
+      // template requirements right now
+      void set_umi_geo(TagGeometry& g) { (void)g; };
+      void set_bc_geo(TagGeometry& g) { (void)g; };
       uint32_t barcodeLength, umiLength, maxValue;
       BarcodeEnd end;
     };
+
 
     struct DropSeq : Rule{
       //Drop-Seq starts from 5 end with 12 length
@@ -87,6 +112,25 @@ namespace alevin{
     struct Custom : Rule{
       Custom() : Rule(0,0,BarcodeEnd::FIVE,0){}
     };
+    
+
+    // for the new type of specification
+    struct CustomGeometry {
+      // vector of offset, length pairs
+      TagGeometry umi_geo;
+      TagGeometry bc_geo;
+      //chobo::static_vector<std::pair<uint32_t,uint8_t>, 16> umi_locs;
+      //chobo::static_vector<std::pair<uint32_t,uint8_t>, 16> bc_locs;
+
+      void set_umi_geo(TagGeometry& g) { umi_geo = g; umiLength = umi_geo.length; };
+      void set_bc_geo(TagGeometry& g) { bc_geo = g; barcodeLength = bc_geo.length; };
+
+      // These values do nothing in this class except
+      // maintain template compat ... fix this design later.
+      uint32_t barcodeLength, umiLength, maxValue;
+      BarcodeEnd end;
+    };
+
   }
 }
 

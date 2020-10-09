@@ -1013,9 +1013,12 @@ salmon-based processing of single-cell RNA-seq data.
     bool celseq = vm["celseq"].as<bool>();
     bool celseq2 = vm["celseq2"].as<bool>();
     bool quartzseq2 = vm["quartzseq2"].as<bool>();
-    bool custom = (vm.count("barcodeLength") and
+    bool custom_old =  vm.count("barcodeLength") and
                    vm.count("umiLength") and
-                   vm.count("end"));
+                   vm.count("end");
+    bool custom_new = (vm.count("bc-geometry") and 
+                   vm.count("umi-geometry"));
+    bool custom = custom_old or custom_new;
 
     uint8_t validate_num_protocols {0};
     if (dropseq) validate_num_protocols += 1;
@@ -1133,9 +1136,14 @@ salmon-based processing of single-cell RNA-seq data.
       initiatePipeline(aopt, sopt, orderedOptions,
                        vm, commentString, noTgMap,
                        barcodeFiles, readFiles);
-    }
-    else{
+    } else if (custom_old) {
       AlevinOpts<apt::Custom> aopt;
+      //aopt.jointLog->warn("Using Custom Setting for Alevin");
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString, noTgMap,
+                       barcodeFiles, readFiles);
+    } else if (custom_new) {
+      AlevinOpts<apt::CustomGeometry> aopt;
       //aopt.jointLog->warn("Using Custom Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
                        vm, commentString, noTgMap,
