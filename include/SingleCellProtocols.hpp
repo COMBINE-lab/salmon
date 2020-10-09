@@ -6,14 +6,17 @@
 
 #include "AlevinOpts.hpp"
 #include "AlevinTypes.hpp"
-#include "pufferfish/chobo/small_vector.hpp"
+#include "pufferfish/chobo/static_vector.hpp"
 
 namespace alevin{
   namespace protocols {
 
+    static constexpr size_t num_tag_pieces{16};
     struct TagGeometry {
       uint32_t read_num{0};
-      std::vector<std::pair<uint32_t, uint32_t>> substr_locs{};
+      chobo::static_vector<std::pair<uint32_t, uint32_t>, num_tag_pieces> substr_locs{};
+      // chobo::static_vector<std::pair<uint32_t,uint8_t>, 16> bc_locs;
+      // std::vector<std::pair<uint32_t, uint32_t>> substr_locs{};
       uint32_t length{0};
       uint32_t largest_index{0};
 
@@ -119,8 +122,6 @@ namespace alevin{
       // vector of offset, length pairs
       TagGeometry umi_geo;
       TagGeometry bc_geo;
-      //chobo::static_vector<std::pair<uint32_t,uint8_t>, 16> umi_locs;
-      //chobo::static_vector<std::pair<uint32_t,uint8_t>, 16> bc_locs;
 
       void set_umi_geo(TagGeometry& g) { umi_geo = g; umiLength = umi_geo.length; };
       void set_bc_geo(TagGeometry& g) { bc_geo = g; barcodeLength = bc_geo.length; };

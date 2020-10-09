@@ -521,9 +521,9 @@ namespace alevin {
       d.clear();
       if ( parser.parse(geo_string.c_str()) ) {
         if (d.size() > 1) {
-          //aopt.jointLog->error("Though supported in the syntax, the current implementation \n"
-          //                     "of custom tag geometry does not support having a tag \n"
-          //                     "split over more than one read.");    
+          log->error("Though supported in the syntax, the current implementation \n"
+                     "of custom tag geometry does not support having a tag \n"
+                     "split over more than one read.");    
           return false;
         }
 
@@ -545,6 +545,13 @@ namespace alevin {
           if (stop < start) { return false; }
           int len = (stop - start) + 1;
           tlen += len;
+          if (tg.substr_locs.size() >= alevin::protocols::num_tag_pieces) {
+            log->error("Currently, alevin does not support the tag (barcode / umi) being "
+                       "split into more than {} pieces.  If the current bound is a "
+                       "problem for your protocol, please reach out on GitHub.",
+                       alevin::protocols::num_tag_pieces);
+            return false;
+          }
           tg.substr_locs.push_back(std::make_pair(static_cast<uint32_t>(start), static_cast<uint32_t>(len)));
         }
         tg.length = tlen;
