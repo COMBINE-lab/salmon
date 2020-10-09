@@ -115,6 +115,7 @@ void densityCalculator(single_parser* parser,
 
   uint64_t usedNumBarcodesLocal{0};
   uint64_t totNumBarcodesLocal{0};
+  std::string extractedBarcode;
   while (parser->refill(rg)) {
     rangeSize = rg.size();
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
@@ -131,14 +132,14 @@ void densityCalculator(single_parser* parser,
       //if (aopt.protocol.end == bcEnd::THREE) {
       //  std::reverse(seq.begin(), seq.end());
       //}
-
-      nonstd::optional<std::string> extractedBarcode = aut::extractBarcode(seq, aopt.protocol);
-      bool seqOk = (extractedBarcode.has_value()) ? aut::sequenceCheck(*extractedBarcode) : false;
+      extractedBarcode.clear();
+      bool extraction_ok = aut::extractBarcode(seq, aopt.protocol, extractedBarcode);
+      bool seqOk = (extraction_ok) ? aut::sequenceCheck(extractedBarcode) : false;
       if (not seqOk){
-        bool recovered = aut::recoverBarcode(*extractedBarcode);
+        bool recovered = aut::recoverBarcode(extractedBarcode);
         if (not recovered) { continue; }
       }
-      freqCounter[*extractedBarcode] += 1;
+      freqCounter[extractedBarcode] += 1;
       ++usedNumBarcodesLocal;
     }//end-for
   }//end-while
@@ -561,15 +562,15 @@ bool writeFastq(AlevinOpts<ProtocolT>& aopt,
       rangeSize = rg.size();
       for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
         auto& rp = rg[i];
+        barcode.clear();
         if(aopt.protocol.end == bcEnd::FIVE){
           {
-            nonstd::optional<std::string> extractedSeq = aut::extractBarcode(rp.first.seq, aopt.protocol);
-            bool seqOk = (extractedSeq.has_value()) ? aut::sequenceCheck(*extractedSeq) : false;
+            bool extracted_barcode = aut::extractBarcode(rp.first.seq, aopt.protocol, barcode);
+            bool seqOk = (extracted_barcode) ? aut::sequenceCheck(barcode) : false;
             if (not seqOk){
-              bool recovered = aut::recoverBarcode(*extractedSeq);
+              bool recovered = aut::recoverBarcode(barcode);
               if (not recovered) { continue; }
             }
-            barcode = *extractedSeq;
           }
 
           {

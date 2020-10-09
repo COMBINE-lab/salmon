@@ -584,6 +584,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
   std::string readSubSeq;
   std::string umi;
+  std::string barcode;
   //////////////////////
 
   bool tryAlign{salmonOpts.validateMappings};
@@ -632,28 +633,26 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       size_t barcodeLength = alevinOpts.protocol.barcodeLength;
       size_t umiLength = alevinOpts.protocol.umiLength;
       umi.clear();
-      nonstd::optional<std::string> barcode;
+      barcode.clear();
       nonstd::optional<uint32_t> barcodeIdx;
       extraBAMtags.clear();
       bool seqOk;
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        barcode = aut::extractBarcode(rp.first.seq, alevinOpts.protocol);
-        seqOk = (barcode.has_value()) ?
-          aut::sequenceCheck(*barcode, Sequence::BARCODE) : false;
+        bool extracted_bc = aut::extractBarcode(rp.first.seq, alevinOpts.protocol, barcode);
+        seqOk = (extracted_bc) ?
+          aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
 
         if (not seqOk){
-          bool recovered = aut::recoverBarcode(*barcode);
+          bool recovered = aut::recoverBarcode(barcode);
           if (recovered) { seqOk = true; }
         }
 
         // If we have a valid barcode
         if (seqOk) {
-          // corrBarcodeIndex = barcodeMap[barcodeIndex];
-          // jointHitGroup.setBarcode(*barcodeIdx);
           aut::extractUMI(rp.first.seq, alevinOpts.protocol, umi);
-          //aopt.jointLog->info("BC : {}, UMI : {}". *barcode, umi);
+          //aopt.jointLog->info("BC : {}, UMI : {}". barcode, umi);
           if (umiLength != umi.size()) {
             smallSeqs += 1;
           } else {
@@ -796,7 +795,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       }
 
       alevin::types::AlevinCellBarcodeKmer bck;
-      bool barcode_ok = bck.fromChars(*barcode);
+      bool barcode_ok = bck.fromChars(barcode);
  
       // NOTE: Think if we should put decoy mappings in the RAD file
       if (mapType == salmon::utils::MappingType::SINGLE_MAPPED) {
@@ -815,7 +814,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
             }
           }
         } else { // must use a string for the barcode
-          bw << *barcode;
+          bw << barcode;
         }
 
         // umi
@@ -1046,6 +1045,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
   std::string readSubSeq;
   std::string umi;
+  std::string barcode;
   //////////////////////
 
   bool tryAlign{salmonOpts.validateMappings};
@@ -1092,26 +1092,24 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
       size_t barcodeLength = alevinOpts.protocol.barcodeLength;
       size_t umiLength = alevinOpts.protocol.umiLength;
       umi.clear();
-      nonstd::optional<std::string> barcode;
+      barcode.clear();
       nonstd::optional<uint32_t> barcodeIdx;
       extraBAMtags.clear();
       bool seqOk;
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        barcode = aut::extractBarcode(rp.first.seq, alevinOpts.protocol);
-        seqOk = (barcode.has_value()) ?
-          aut::sequenceCheck(*barcode, Sequence::BARCODE) : false;
+        bool extracted_barcode = aut::extractBarcode(rp.first.seq, alevinOpts.protocol, barcode);
+        seqOk = (extracted_barcode) ?
+          aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
 
         if (not seqOk){
-          bool recovered = aut::recoverBarcode(*barcode);
+          bool recovered = aut::recoverBarcode(barcode);
           if (recovered) { seqOk = true; }
         }
 
         // If we have a valid barcode
         if (seqOk) {
-          // corrBarcodeIndex = barcodeMap[barcodeIndex];
-          // jointHitGroup.setBarcode(*barcodeIdx);
           aut::extractUMI(rp.first.seq, alevinOpts.protocol, umi);
 
           if (umiLength != umi.size()) {
@@ -1240,7 +1238,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
         } //end-if validate mapping
 
         alevin::types::AlevinCellBarcodeKmer bck;
-        bool barcode_ok = bck.fromChars(*barcode);
+        bool barcode_ok = bck.fromChars(barcode);
 
         // NOTE: Think if we should put decoy mappings in the RAD file
         if (mapType == salmon::utils::MappingType::SINGLE_MAPPED) {
@@ -1254,7 +1252,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           if ( alevinOpts.protocol.barcodeLength <= 32 ) { 
 
             if (barcode_ok) {
-              //alevinOpts.jointLog->info("BARCODE : {} \t ENC : {} ", *barcode, bck.word(0));
+              //alevinOpts.jointLog->info("BARCODE : {} \t ENC : {} ", barcode, bck.word(0));
               if (alevinOpts.protocol.barcodeLength <= 16) { // can use 32-bit int
                 uint32_t shortbck = static_cast<uint32_t>(0x00000000FFFFFFFF & bck.word(0));
                 //alevinOpts.jointLog->info("shortbck : {} ", shortbck);
@@ -1264,7 +1262,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
               }
             }
           } else { // must use a string for the barcode
-            bw << *barcode;
+            bw << barcode;
           }
 
           // umi
@@ -1500,6 +1498,8 @@ void processReadsQuasi(
   msi.collect_decoys(writeQuasimappings);
 
   std::string readSubSeq;
+  std::string umi;
+  std::string barcode;
   //////////////////////
 
   bool tryAlign{salmonOpts.validateMappings};
@@ -1545,20 +1545,20 @@ void processReadsQuasi(
       // extracting barcodes
       size_t barcodeLength = alevinOpts.protocol.barcodeLength;
       size_t umiLength = alevinOpts.protocol.umiLength;
-      std::string umi;//, barcode;
-      nonstd::optional<std::string> barcode;
+      umi.clear();
+      barcode.clear();
       nonstd::optional<uint32_t> barcodeIdx;
       extraBAMtags.clear();
       bool seqOk;
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        barcode = aut::extractBarcode(rp.first.seq, alevinOpts.protocol);
-        seqOk = (barcode.has_value()) ?
-          aut::sequenceCheck(*barcode, Sequence::BARCODE) : false;
+        bool extracted_barcode = aut::extractBarcode(rp.first.seq, alevinOpts.protocol, barcode);
+        seqOk = (extracted_barcode) ?
+          aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
 
         if (not seqOk){
-          bool recovered = aut::recoverBarcode(*barcode);
+          bool recovered = aut::recoverBarcode(barcode);
           if (recovered) { seqOk = true; }
         }
 
@@ -1566,18 +1566,18 @@ void processReadsQuasi(
         if (seqOk and (not barcodeIdx)) {
           // If we get here, we have a sequence-valid barcode.
           // Check if it is in the trBcs map.
-          auto trIt = trBcs.find(*barcode);
+          auto trIt = trBcs.find(barcode);
 
           // If it is, use that index
           if(trIt != trBcs.end()){
             barcodeIdx = trIt->second;
           } else{
             // If it's not, see if it's in the barcode map
-            auto indIt = barcodeMap.find(*barcode);
+            auto indIt = barcodeMap.find(barcode);
             // If so grab the representative and get its index
             if (indIt != barcodeMap.end()){
               barcode = indIt->second.front().first;
-              auto trItLoc = trBcs.find(*barcode);
+              auto trItLoc = trBcs.find(barcode);
               if(trItLoc == trBcs.end()){
                 salmonOpts.jointLog->error("Wrong entry in barcode softmap.\n"
                                            "Please Report this on github");
@@ -1609,7 +1609,7 @@ void processReadsQuasi(
               jointHitGroup.setUMI(umiIdx.word(0));
 	      if (writeQuasimappings) {
 	      	extraBAMtags += "\tCB:Z:";
-	      	extraBAMtags += *barcode;
+	      	extraBAMtags += barcode;
 	      	extraBAMtags += "\tUR:Z:";
 	      	extraBAMtags += umi;
 	      }

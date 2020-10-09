@@ -88,7 +88,7 @@ namespace alevin{
                          std::string& subseq);
 
     template <typename ProtocolT>
-    nonstd::optional<std::string> extractBarcode(std::string& read, ProtocolT& pt);
+    bool extractBarcode(std::string& read, ProtocolT& pt, std::string& bc);
 
     template <typename OrderedOptionsT>
     bool writeCmdInfo(boost::filesystem::path cmdInfoPath,
