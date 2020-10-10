@@ -582,9 +582,9 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
   // writing output to SAM.
   msi.collect_decoys(writeQuasimappings);
 
-  std::string readSubSeq;
-  std::string umi;
-  std::string barcode;
+  std::string readBuffer;
+  std::string umi(alevinOpts.protocol.umiLength, 'N');
+  std::string barcode(alevinOpts.protocol.barcodeLength, 'N');
   //////////////////////
 
   bool tryAlign{salmonOpts.validateMappings};
@@ -625,22 +625,22 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       hit_map.clear(); 
       accepted_hits.clear();
       //jointAlignments.clear();
-      readSubSeq.clear();
+      //readSubSeq.clear();
       mapType = salmon::utils::MappingType::UNMAPPED;
 
       //////////////////////////////////////////////////////////////
       // extracting barcodes
       size_t barcodeLength = alevinOpts.protocol.barcodeLength;
       size_t umiLength = alevinOpts.protocol.umiLength;
-      umi.clear();
-      barcode.clear();
+      //umi.clear();
+      //barcode.clear();
       nonstd::optional<uint32_t> barcodeIdx;
       extraBAMtags.clear();
       bool seqOk;
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        bool extracted_bc = aut::extractBarcode(rp.first.seq, alevinOpts.protocol, barcode);
+        bool extracted_bc = aut::extractBarcode(rp.first.seq, rp.second.seq, alevinOpts.protocol, barcode);
         seqOk = (extracted_bc) ?
           aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
 
@@ -651,9 +651,9 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
         // If we have a valid barcode
         if (seqOk) {
-          aut::extractUMI(rp.first.seq, alevinOpts.protocol, umi);
+          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, alevinOpts.protocol, umi);
           //aopt.jointLog->info("BC : {}, UMI : {}". barcode, umi);
-          if (umiLength != umi.size()) {
+          if ( !umi_ok ) {
             smallSeqs += 1;
           } else {
             alevin::types::AlevinUMIKmer umiIdx;
@@ -662,23 +662,26 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
             if (isUmiIdxOk) {
               jointHitGroup.setUMI(umiIdx.word(0));
               bool rh = false;
-              auto seq_len = rp.second.seq.size();
+              std::string* readSubSeq = aut::getReadSequence(alevinOpts.protocol, rp.first.seq, rp.second.seq, readBuffer);
+              /*
+              auto seq_len = readSubSeq->size();
               if (alevinOpts.trimRight > 0) {
                 if (!tooShortRight) {
-                  readSubSeq = rp.second.seq.substr(0, seq_len - alevinOpts.trimRight);
                   rh = memCollector.get_raw_hits_sketch(readSubSeq, qc,
                                          true, // isLeft
                                          false // verbose
                   );
                 }
               } else {
-                aut::getReadSequence(alevinOpts.protocol, rp.second.seq, readSubSeq);
-                rh = tooShortRight ? false
-                                        : memCollector.get_raw_hits_sketch(readSubSeq, qc,
-                                                       true, // isLeft
-                                                       false // verbose
-                                          );
-              }
+              */
+              rh = tooShortRight
+                       ? false
+                       : memCollector.get_raw_hits_sketch(*readSubSeq,
+                                                          qc,
+                                                          true, // isLeft
+                                                          false // verbose
+                         );
+              //}
 
               // if there were hits
               if (rh) {
@@ -730,7 +733,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                 float acceptable_score = (num_valid_hits == 1) ? perfect_score : 
                   perfect_score - (1.0f / largest_occ);
                 uint32_t best_alt_hits = 0;
-                int32_t signed_read_len = static_cast<int32_t>(readSubSeq.length());
+                int32_t signed_read_len = static_cast<int32_t>(readSubSeq->length());
 
                 bool saw_acceptable_score = false;
                 for (auto& kv : hit_map) {
@@ -915,11 +918,11 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     for (auto& kv : unmapped_bc_map) {
       ubcw << kv.first;
       ubcw << kv.second;
-      ubc_file_mutex.lock();
-      ubc_file << ubcw;
-      ubc_file_mutex.unlock();
-      ubcw.clear();
     }
+    ubc_file_mutex.lock();
+    ubc_file << ubcw;
+    ubc_file_mutex.unlock();
+    ubcw.clear();
   }
 
   if (maxZeroFrac > 5.0) {
@@ -1043,9 +1046,10 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
   // writing output to SAM.
   msi.collect_decoys(writeQuasimappings);
 
-  std::string readSubSeq;
-  std::string umi;
-  std::string barcode;
+  std::string* readSubSeq{nullptr};
+  std::string readBuffer;
+  std::string umi(alevinOpts.protocol.umiLength, 'N');
+  std::string barcode(alevinOpts.protocol.barcodeLength, 'N');
   //////////////////////
 
   bool tryAlign{salmonOpts.validateMappings};
@@ -1084,22 +1088,22 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
       jointHits.clear();
       memCollector.clear();
       //jointAlignments.clear();
-      readSubSeq.clear();
+      readSubSeq = nullptr;//.clear();
       mapType = salmon::utils::MappingType::UNMAPPED;
 
       //////////////////////////////////////////////////////////////
       // extracting barcodes
       size_t barcodeLength = alevinOpts.protocol.barcodeLength;
       size_t umiLength = alevinOpts.protocol.umiLength;
-      umi.clear();
-      barcode.clear();
+      //umi.clear();
+      //barcode.clear();
       nonstd::optional<uint32_t> barcodeIdx;
       extraBAMtags.clear();
       bool seqOk;
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        bool extracted_barcode = aut::extractBarcode(rp.first.seq, alevinOpts.protocol, barcode);
+        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, alevinOpts.protocol, barcode);
         seqOk = (extracted_barcode) ?
           aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
 
@@ -1110,9 +1114,9 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
         // If we have a valid barcode
         if (seqOk) {
-          aut::extractUMI(rp.first.seq, alevinOpts.protocol, umi);
+          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, alevinOpts.protocol, umi);
 
-          if (umiLength != umi.size()) {
+          if ( !umi_ok ) {
             smallSeqs += 1;
           } else {
             alevin::types::AlevinUMIKmer umiIdx;
@@ -1120,7 +1124,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
             if (isUmiIdxOk) {
               jointHitGroup.setUMI(umiIdx.word(0));
-
+              /*
               auto seq_len = rp.second.seq.size();
               if (alevinOpts.trimRight > 0) {
                 if (!tooShortRight) {
@@ -1131,15 +1135,17 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                   );
                 }
               } else {
-                aut::getReadSequence(alevinOpts.protocol, rp.second.seq, readSubSeq);
-                auto rh = tooShortRight ? false
-                                        : memCollector(readSubSeq, qc,
-                                                       true, // isLeft
-                                                       false // verbose
-                                          );
-              }
+                */
+              readSubSeq = aut::getReadSequence(
+                  alevinOpts.protocol, rp.first.seq, rp.second.seq, readBuffer);
+              auto rh = tooShortRight ? false
+                                      : memCollector(*readSubSeq, qc,
+                                                     true, // isLeft
+                                                     false // verbose
+                                        );
+              // }
               memCollector.findChains(
-                  readSubSeq, hits, salmonOpts.fragLenDistMax,
+                  *readSubSeq, hits, salmonOpts.fragLenDistMax,
                   MateStatus::PAIRED_END_RIGHT,
                   useChainingHeuristic, // heuristic chaining
                   true,                 // isLeft
@@ -1147,7 +1153,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
               );
 
               pufferfish::util::joinReadsAndFilterSingle(
-                  hits, jointHits, readSubSeq.length(),
+                  hits, jointHits, readSubSeq->length(),
                   memCollector.getConsensusFraction());
             } else {
               nSeqs += 1;
@@ -1186,7 +1192,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           for (auto &&jointHit : jointHits) {
             // for alevin, currently, we need these to have a mate status of PAIRED_END_RIGHT
             jointHit.mateStatus = MateStatus::PAIRED_END_RIGHT;
-            auto hitScore = puffaligner.calculateAlignments(readSubSeq, jointHit, hctr, is_multimapping, false);
+            auto hitScore = puffaligner.calculateAlignments(*readSubSeq, jointHit, hctr, is_multimapping, false);
             bool validScore = (hitScore != invalidScore);
             numMappingsDropped += validScore ? 0 : 1;
             auto tid = qidx->getRefId(jointHit.tid);
@@ -1208,8 +1214,8 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           bool bestHitDecoy = msi.haveOnlyDecoyMappings();
           if (msi.bestScore > invalidScore and !bestHitDecoy) {
             salmon::mapping_utils::filterAndCollectAlignments(jointHits,
-                                                              readSubSeq.length(),
-                                                              readSubSeq.length(),
+                                                              readSubSeq->length(),
+                                                              readSubSeq->length(),
                                                               false, // true for single-end false otherwise
                                                               tryAlign,
                                                               hardFilter,
@@ -1225,8 +1231,8 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
             mapType = (bestHitDecoy) ? salmon::utils::MappingType::DECOY : salmon::utils::MappingType::UNMAPPED;
             if (bestHitDecoy) {
               salmon::mapping_utils::filterAndCollectAlignmentsDecoy(
-                  jointHits, readSubSeq.length(),
-                  readSubSeq.length(),
+                  jointHits, readSubSeq->length(),
+                  readSubSeq->length(),
                   false, // true for single-end false otherwise
                   tryAlign, hardFilter, salmonOpts.scoreExp,
                   salmonOpts.minAlnProb, msi,
@@ -1367,11 +1373,11 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
     for (auto& kv : unmapped_bc_map) {
       ubcw << kv.first;
       ubcw << kv.second;
-      ubc_file_mutex.lock();
-      ubc_file << ubcw;
-      ubc_file_mutex.unlock();
-      ubcw.clear();
     }
+    ubc_file_mutex.lock();
+    ubc_file << ubcw;
+    ubc_file_mutex.unlock();
+    ubcw.clear();
   }
 
   if (maxZeroFrac > 5.0) {
@@ -1497,9 +1503,10 @@ void processReadsQuasi(
   // writing output to SAM.
   msi.collect_decoys(writeQuasimappings);
 
-  std::string readSubSeq;
-  std::string umi;
-  std::string barcode;
+  std::string* readSubSeq{nullptr};
+  std::string readBuffer;
+  std::string umi(alevinOpts.protocol.umiLength, 'N');
+  std::string barcode(alevinOpts.protocol.barcodeLength, 'N');
   //////////////////////
 
   bool tryAlign{salmonOpts.validateMappings};
@@ -1538,22 +1545,23 @@ void processReadsQuasi(
       jointHits.clear();
       memCollector.clear();
       //jointAlignments.clear();
-      readSubSeq.clear();
+      //readSubSeq.clear();
+      readSubSeq = nullptr;
       mapType = salmon::utils::MappingType::UNMAPPED;
 
       //////////////////////////////////////////////////////////////
       // extracting barcodes
       size_t barcodeLength = alevinOpts.protocol.barcodeLength;
       size_t umiLength = alevinOpts.protocol.umiLength;
-      umi.clear();
-      barcode.clear();
+      //umi.clear();
+      //barcode.clear();
       nonstd::optional<uint32_t> barcodeIdx;
       extraBAMtags.clear();
       bool seqOk;
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        bool extracted_barcode = aut::extractBarcode(rp.first.seq, alevinOpts.protocol, barcode);
+        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, alevinOpts.protocol, barcode);
         seqOk = (extracted_barcode) ?
           aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
 
@@ -1597,9 +1605,9 @@ void processReadsQuasi(
         if (barcodeIdx) {
           //corrBarcodeIndex = barcodeMap[barcodeIndex];
           jointHitGroup.setBarcode(*barcodeIdx);
-          aut::extractUMI(rp.first.seq, alevinOpts.protocol, umi);
+          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, alevinOpts.protocol, umi);
 
-          if ( umiLength != umi.size() ) {
+          if ( !umi_ok ) {
             smallSeqs += 1;
           } else{
             alevin::types::AlevinUMIKmer umiIdx;
@@ -1614,6 +1622,7 @@ void processReadsQuasi(
 	      	extraBAMtags += umi;
 	      }
 
+              /*
               auto seq_len = rp.second.seq.size();
               if (alevinOpts.trimRight > 0) {
                 if ( !tooShortRight ) {
@@ -1627,13 +1636,15 @@ void processReadsQuasi(
                   //auto rh = hitCollector(readSubSeq, saSearcher, hcInfo);
                 }
               } else {
-                aut::getReadSequence(alevinOpts.protocol, rp.second.seq, readSubSeq);
-                auto rh = tooShortRight ? false : memCollector(readSubSeq, qc,
-                                       true, // isLeft
-                                       false // verbose
-                                       );
-              }
-              memCollector.findChains(readSubSeq, hits,
+              */
+              readSubSeq = aut::getReadSequence(alevinOpts.protocol, rp.first.seq, rp.second.seq, readBuffer);
+              auto rh = tooShortRight ? false
+                                      : memCollector(*readSubSeq, qc,
+                                                     true, // isLeft
+                                                     false // verbose
+                                        );
+              //}
+              memCollector.findChains(*readSubSeq, hits,
                                       salmonOpts.fragLenDistMax,
                                       MateStatus::PAIRED_END_RIGHT,
                                       useChainingHeuristic, // heuristic chaining
@@ -1642,7 +1653,7 @@ void processReadsQuasi(
                                       );
 
               pufferfish::util::joinReadsAndFilterSingle(hits, jointHits,
-                                                         readSubSeq.length(),
+                                                         readSubSeq->length(),
                                                          memCollector.getConsensusFraction());
             } else{
               nSeqs += 1;
@@ -1685,7 +1696,7 @@ void processReadsQuasi(
           for (auto &&jointHit : jointHits) {
             // for alevin, currently, we need these to have a mate status of PAIRED_END_RIGHT
             jointHit.mateStatus = MateStatus::PAIRED_END_RIGHT;
-            auto hitScore = puffaligner.calculateAlignments(readSubSeq, jointHit, hctr, is_multimapping, false);
+            auto hitScore = puffaligner.calculateAlignments(*readSubSeq, jointHit, hctr, is_multimapping, false);
             bool validScore = (hitScore != invalidScore);
             numMappingsDropped += validScore ? 0 : 1;
             auto tid = qidx->getRefId(jointHit.tid);
@@ -1707,8 +1718,8 @@ void processReadsQuasi(
           bool bestHitDecoy = msi.haveOnlyDecoyMappings();
           if (msi.bestScore > invalidScore and !bestHitDecoy) {
             salmon::mapping_utils::filterAndCollectAlignments(jointHits,
-                                                              readSubSeq.length(),
-                                                              readSubSeq.length(),
+                                                              readSubSeq->length(),
+                                                              readSubSeq->length(),
                                                               false, // true for single-end false otherwise
                                                               tryAlign,
                                                               hardFilter,
@@ -1724,8 +1735,8 @@ void processReadsQuasi(
             mapType = (bestHitDecoy) ? salmon::utils::MappingType::DECOY : salmon::utils::MappingType::UNMAPPED;
             if (bestHitDecoy) {
               salmon::mapping_utils::filterAndCollectAlignmentsDecoy(
-                  jointHits, readSubSeq.length(),
-                  readSubSeq.length(),
+                  jointHits, readSubSeq->length(),
+                  readSubSeq->length(),
                   false, // true for single-end false otherwise
                   tryAlign, hardFilter, salmonOpts.scoreExp,
                   salmonOpts.minAlnProb, msi,

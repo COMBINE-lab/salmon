@@ -13,23 +13,78 @@ namespace alevin{
 
     static constexpr size_t num_tag_pieces{16};
     struct TagGeometry {
-      uint32_t read_num{0};
-      chobo::static_vector<std::pair<size_t, size_t>, num_tag_pieces> substr_locs{};
-      // chobo::static_vector<std::pair<uint32_t,uint8_t>, 16> bc_locs;
-      // std::vector<std::pair<uint32_t, uint32_t>> substr_locs{};
-      size_t length{0};
-      size_t largest_index{0};
+      // uint32_t read_num{0};
+      // tuples are read_num, start_pos, length
+      chobo::static_vector<std::pair<uint32_t, size_t>, num_tag_pieces> substr_locs1{};
+      chobo::static_vector<std::pair<uint32_t, size_t>, num_tag_pieces> substr_locs2{};
+      // the total length of the tag on read 1 
+      size_t length1{0};
+      // the total length of the tag on read 2
+      size_t length2{0};
+      // the largest index on read 1
+      size_t largest_index1{0};
+      // the largest index on read 2
+      size_t largest_index2{0};
 
-      inline bool unbounded() const { return length == std::string::npos; }
+      inline bool unbounded1() const { return length1 == std::string::npos; }
+      inline bool unbounded2() const { return length2 == std::string::npos; }
 
-      bool extract(std::string& from, std::string&to) {
-        if (!unbounded() and (from.length() < largest_index)) { return false; }
-        to.clear();
-        for (auto& st_len : substr_locs) {
-          to += from.substr(st_len.first, st_len.second);
+      inline bool uses_r1() const { return !substr_locs1.empty(); }
+      inline bool uses_r2() const { return !substr_locs2.empty(); }
+
+      size_t length() const { return length1 + length2; }
+
+      // Given the geometry of the tag, fill in the tag from 
+      // read 1 (`from1`) and read 2 (`from2`), placing the constructed
+      // tag in `to`.
+      //
+      // *assumption*: `to` is large enough to hold the tag
+      // *returns*: true if the tag was written completely, and false otherwise
+      inline bool extract_tag(std::string& from1, std::string& from2, std::string&to) {
+        // if anything is too short, just ignore the whole thing
+        if (uses_r1() and (from1.length() < largest_index1)) { return false; }
+        if (uses_r2() and (from2.length() < largest_index2)) { return false; }
+
+        // will point to the next place to 
+        // begin filling the output string
+        auto fill_it = to.begin();
+        
+        // grab anything from read 1
+        auto f1b = from1.begin();
+        for (auto& st_len : substr_locs1) {
+          auto f1 = f1b + st_len.first;
+          fill_it = std::copy(f1, f1 + st_len.second, fill_it);
+        }
+        
+        // grab anything from read 2
+        auto f2b = from2.begin();
+        for (auto& st_len : substr_locs2) {
+          auto f2 = f2b + st_len.first;
+          fill_it = std::copy(f2, f2 + st_len.second, fill_it);
         }
         return true;
       }
+
+      inline bool extract_read(std::string& from1, std::string& from2, std::string&to) {
+        // if anything is too short, just ignore the whole thing
+        if (uses_r1() and !unbounded1() and (from1.length() < largest_index1)) { return false; }
+        if (uses_r2() and !unbounded2() and (from2.length() < largest_index2)) { return false; }
+        
+        // since the read extraction doesn't have a 
+        // fixed size, we'll append rather than 
+        // overwrite.
+        to.clear();
+        // grab anything from read 1
+        for (auto& st_len : substr_locs1) {
+          to.append(from1, st_len.first, st_len.second);
+        }
+        // grab anything from read 2
+        for (auto& st_len : substr_locs2) {
+          to.append(from2, st_len.first, st_len.second);
+        }
+        return true;
+      }
+
     };
 
     std::ostream& operator<<(std::ostream& os, const TagGeometry& tg);
@@ -50,6 +105,10 @@ namespace alevin{
       // template requirements right now
       void set_umi_geo(TagGeometry& g) { (void)g; };
       void set_bc_geo(TagGeometry& g) { (void)g; };
+      void set_read_geo(TagGeometry& g) { (void)g; };
+      uint32_t barcode_length() const { return barcodeLength; }
+      uint32_t umi_length() const { return umiLength; }
+
       uint32_t barcodeLength, umiLength, maxValue;
       BarcodeEnd end;
     };
@@ -124,9 +183,13 @@ namespace alevin{
       // vector of offset, length pairs
       TagGeometry umi_geo;
       TagGeometry bc_geo;
+      TagGeometry read_geo;
 
-      void set_umi_geo(TagGeometry& g) { umi_geo = g; umiLength = umi_geo.length; };
-      void set_bc_geo(TagGeometry& g) { bc_geo = g; barcodeLength = bc_geo.length; };
+      void set_umi_geo(TagGeometry& g) { umi_geo = g; umiLength = umi_geo.length1 + umi_geo.length2; }
+      void set_bc_geo(TagGeometry& g) { bc_geo = g; barcodeLength = bc_geo.length1 + bc_geo.length2; }
+      void set_read_geo(TagGeometry& g) { read_geo = g; }
+      uint32_t barcode_length() const { return barcodeLength; }
+      uint32_t umi_length() const { return umiLength; }
 
       // These values do nothing in this class except
       // maintain template compat ... fix this design later.

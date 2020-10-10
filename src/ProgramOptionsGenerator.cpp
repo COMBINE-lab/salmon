@@ -447,6 +447,9 @@ namespace salmon {
        "keepCBFraction", po::value<double>()->default_value(alevin::defaults::keepCBFraction),
        "fraction of CB to keep, value must be in range (0,1], use 1 to quantify all CB."
        )
+      ("read-geometry", po::value<std::string>(), 
+      "format string describing the geometry of the read"
+      )
       ("bc-geometry", po::value<std::string>(), 
       "format string describing the geometry of the cell barcode"
       )
