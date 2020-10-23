@@ -1109,7 +1109,7 @@ namespace alevin {
             allNflag = false;
           }
           if (found==std::string::npos){
-            aopt.jointLog->error("\nERROR: Wrong IUPAC charachter {} in {}\n"
+            aopt.jointLog->error("\nERROR: Wrong IUPAC character {} in {}\n"
                                  "\nExiting now: Please check "
                                  "https://www.bioinformatics.org/sms/iupac.html"
                                  "for more details about iupac.",
