@@ -130,6 +130,7 @@
 #include "pufferfish/ksw2pp/KSW2Aligner.hpp"
 #include "pufferfish/metro/metrohash64.h"
 #include "parallel_hashmap/phmap.h"
+#include "pufferfish/chobo/static_vector.hpp"
 #include "pufferfish/SelectiveAlignmentUtils.hpp"
 
 namespace alevin{
@@ -471,11 +472,13 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     }
   };
 
+  enum class HitDirection : uint8_t {FW, RC, BOTH};
+
   struct SketchHitInfo {
 
     // add a hit to the current target that occurs in the forward 
     // orientation with respect to the target.
-    bool add_fw(int32_t ref_pos, int32_t read_pos, float score_inc) {
+    bool add_fw(int32_t ref_pos, int32_t read_pos, int32_t max_stretch, float score_inc) {
       bool added{false};
       
       // since hits are collected by moving _forward_ in the
@@ -487,6 +490,8 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       if (ref_pos > last_ref_pos_fw and read_pos > last_read_pos_fw) {
         if (last_read_pos_fw == -1) {
           approx_pos_fw = ref_pos - read_pos;
+        } else {
+          if ((ref_pos - approx_pos_fw) > max_stretch) { return false; }
         }
         //if (last_ref_pos_fw > -1 and (ref_pos > last_ref_pos_fw + 15)) { return false; }
         last_ref_pos_fw = ref_pos;
@@ -500,7 +505,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
     // add a hit to the current target that occurs in the forward 
     // orientation with respect to the target.
-    bool add_rc(int32_t ref_pos, int32_t read_pos, float score_inc) {
+    bool add_rc(int32_t ref_pos, int32_t read_pos, int32_t max_stretch, float score_inc) {
 
       bool added{false};
       // since hits are collected by moving _forward_ in the
@@ -510,8 +515,11 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       // This ensures that we don't double-count a k-mer that 
       // might occur twice on this target.
       if (ref_pos < last_ref_pos_rc and read_pos > last_read_pos_rc) {
-        if (last_read_pos_rc == -1 or ref_pos < last_ref_pos_rc) {
-          approx_pos_rc = ref_pos - read_pos;
+        approx_pos_rc = ref_pos - read_pos;
+        if (last_read_pos_rc == -1) { 
+          approx_end_pos_rc = ref_pos - read_pos; 
+        } else {
+          if (approx_end_pos_rc - approx_pos_rc > max_stretch) { return false;}
         }
         //if (last_ref_pos_rc > -1 and ref_pos < last_ref_pos_rc - 15) { return false; }
         last_ref_pos_rc = ref_pos;
@@ -526,15 +534,25 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
     // true if forward, false if rc
     // second element is score
-    std::pair<bool, float> best_hit_direction() {
-      return (fw_hits >= rc_hits) ? std::make_pair(true, fw_score) : std::make_pair(false, rc_score);
+    inline HitDirection best_hit_direction() {
+      int32_t fw_minus_rc = static_cast<int32_t>(fw_hits) - static_cast<int32_t>(rc_hits);
+      return (fw_minus_rc > 0) ? HitDirection::FW : 
+             ((fw_minus_rc < 0) ? HitDirection::RC : HitDirection::BOTH);
     }
 
-    SimpleHit get_best_hit() {
-      auto best_direction_score = best_hit_direction();
-      return best_direction_score.first ? 
-        SimpleHit{best_direction_score.first, approx_pos_fw, best_direction_score.second, fw_hits, std::numeric_limits<uint32_t>::max()} : 
-        SimpleHit{best_direction_score.first, approx_pos_rc, best_direction_score.second, rc_hits, std::numeric_limits<uint32_t>::max()};
+    inline SimpleHit get_fw_hit() {
+      return SimpleHit{true, approx_pos_fw, fw_score, fw_hits, std::numeric_limits<uint32_t>::max()}; 
+    }
+
+    inline SimpleHit get_rc_hit() {
+      return SimpleHit{false, approx_pos_rc, rc_score, rc_hits, std::numeric_limits<uint32_t>::max()};
+    }
+
+    inline SimpleHit get_best_hit() {
+      auto best_direction = best_hit_direction();
+      return (best_direction != HitDirection::RC) ? 
+        SimpleHit{true, approx_pos_fw, fw_score, fw_hits, std::numeric_limits<uint32_t>::max()} : 
+        SimpleHit{false, approx_pos_rc, rc_score, rc_hits, std::numeric_limits<uint32_t>::max()};
     }
 
     int32_t last_read_pos_fw{-1};
@@ -545,6 +563,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     
     int32_t approx_pos_fw{-1};
     int32_t approx_pos_rc{-1};
+    int32_t approx_end_pos_rc{-1};
 
     uint32_t fw_hits{0};
     uint32_t rc_hits{0};
@@ -563,16 +582,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
   //////////////////////
   // NOTE: validation mapping based new parameters
   std::string rc1; rc1.reserve(300);
-  AlnCacheMap alnCache; alnCache.reserve(16);
-  /*
-  auto ap{selective_alignment::utils::AlignmentPolicy::DEFAULT};
-  if (mimicBT2) {
-    ap = selective_alignment::utils::AlignmentPolicy::BT2;
-  } else if (mimicStrictBT2) {
-    ap = selective_alignment::utils::AlignmentPolicy::BT2_STRICT;
-  }
-  */
-
+  
   size_t numMappingsDropped{0};
   size_t numDecoyFrags{0};
   const double decoyThreshold = salmonOpts.decoyThreshold;
@@ -663,17 +673,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
               jointHitGroup.setUMI(umiIdx.word(0));
               bool rh = false;
               std::string* readSubSeq = aut::getReadSequence(alevinOpts.protocol, rp.first.seq, rp.second.seq, readBuffer);
-              /*
-              auto seq_len = readSubSeq->size();
-              if (alevinOpts.trimRight > 0) {
-                if (!tooShortRight) {
-                  rh = memCollector.get_raw_hits_sketch(readSubSeq, qc,
-                                         true, // isLeft
-                                         false // verbose
-                  );
-                }
-              } else {
-              */
               rh = tooShortRight
                        ? false
                        : memCollector.get_raw_hits_sketch(*readSubSeq,
@@ -681,8 +680,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                                                           true, // isLeft
                                                           false // verbose
                          );
-              //}
-
               // if there were hits
               if (rh) {
                 uint32_t num_valid_hits{0};
@@ -693,7 +690,10 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                 
                 // SANITY
                 decltype(raw_hits[0].first) prev_read_pos = -1;
-                
+                // the maximum span the supporting k-mers of a 
+                // mapping position are allowed to have.
+                int32_t max_stretch = static_cast<int32_t>(readSubSeq->length() * 1.5);
+
                 // a raw hit is a pair of read_pos and a projected hit
                 for (auto& raw_hit : raw_hits) {
                   auto& read_pos = raw_hit.first;
@@ -721,9 +721,9 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                       int32_t pos = static_cast<int32_t>(ref_pos_ori.pos);
                       bool ori = ref_pos_ori.isFW;
                       if (ori) {
-                        hit_map[tid].add_fw(pos, static_cast<int32_t>(read_pos), score_inc);
+                        hit_map[tid].add_fw(pos, static_cast<int32_t>(read_pos), max_stretch, score_inc);
                       } else {
-                        hit_map[tid].add_rc(pos, static_cast<int32_t>(read_pos), score_inc);
+                        hit_map[tid].add_rc(pos, static_cast<int32_t>(read_pos), max_stretch, score_inc);
                       }
                     } // DONE: for (auto &pos_it : refs)
                   } // DONE : if (static_cast<uint64_t>(refs.size()) < salmonOpts.maxReadOccs)
@@ -737,16 +737,23 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
                 bool saw_acceptable_score = false;
                 for (auto& kv : hit_map) {
-                  auto simple_hit = kv.second.get_best_hit();
-                  if (simple_hit.num_hits >= num_valid_hits) { //} and simple_hit.num_hits > 3){
-                    /*if (simple_hit.score > perfect_score + 0.001 ) {
-                      salmonOpts.jointLog->info("should not happen; score = {}, perfect = {}", simple_hit.score, perfect_score);
-                    }
-                    */
-                    //if (simple_hit.valid_pos(signed_read_len, transcripts[kv.first].RefLength, 10)) {
+                  auto best_hit_dir = kv.second.best_hit_direction();
+                  // if the best direction is FW or BOTH, add the fw hit
+                  // otherwise add the RC.
+                  auto simple_hit = (best_hit_dir != HitDirection::RC) ? 
+                                    kv.second.get_fw_hit() : kv.second.get_rc_hit();
+
+                  if (simple_hit.num_hits >= num_valid_hits) { 
                     simple_hit.tid = kv.first;
                     accepted_hits.emplace_back(simple_hit);
-                    //}
+                    // if we had equally good hits in both directions
+                    // add the rc hit here (since we added the fw)
+                    // above if the best hit was either FW or BOTH
+                    if (best_hit_dir == HitDirection::BOTH) {
+                      auto second_hit = kv.second.get_rc_hit();
+                      second_hit.tid = kv.first;
+                      accepted_hits.emplace_back(second_hit);
+                    }
                   } else {
                     //best_alt_score = simple_hit.score > best_alt_score ? simple_hit.score : best_alt_score;
                     best_alt_hits = simple_hit.num_hits > best_alt_hits ? simple_hit.num_hits : best_alt_hits;
@@ -890,13 +897,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     } // end for i < j->nb_filled
 
     prevObservedFrags = numObservedFragments;
-    /*
-    AlnGroupVecRange<QuasiAlignment> hitLists = {structureVec.begin(), structureVec.begin()+rangeSize};
-    processMiniBatchSimple<QuasiAlignment>(
-                                     readExp, fmCalc, rl, salmonOpts, hitLists,
-                                     transcripts, clusterForest, fragLengthDist,
-                                     numAssignedFragments, initialRound, burnedIn, maxZeroFrac);
-                                     */
   }
 
   // If we have any unwritten records left to write

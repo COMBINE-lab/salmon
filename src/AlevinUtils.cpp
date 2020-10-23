@@ -778,6 +778,7 @@ namespace alevin {
       if (aopt.sketch_mode and !aopt.just_align) {
         aopt.jointLog->info("currently, --sketchMode implies --justAlign. Running in "
                             "alignment-only mode (will write a RAD output).");
+        aopt.just_align = true;
       }
 
       aopt.quiet = vm["quiet"].as<bool>();
@@ -1018,11 +1019,15 @@ namespace alevin {
         // parse the cellular barcode geometry
         alevin::protocols::TagGeometry bc_geo;
         if ( parse_geometry_desc(bc_geo_string, false, parser, d, aopt.jointLog, bc_geo) ) {
+          // if we are *not* in RAD mode, then the barcode cannot span beyond 
+          // read 1
           if ( (!aopt.just_align) and bc_geo.uses_r2() ) {
-            aopt.jointLog->error("Currently, barcodes spanning read1 and read2 "
+            aopt.jointLog->error("Currently, barcodes spanning read 1 and read 2 "
                                  "are supported in alignment/sketch mode only "
-                                 "(i.e. with the --justAlign flag).  Custom barcode "
-                                 "geometry without this mode must reside entirely on read1.");
+                                 "(i.e. with the --justAlign flag or the --sketchMode flag). "
+                                 "Custom barcode geometry without this mode must reside entirely on read1. "
+                                 "If you require custom barcode geometry spanning both reads, consider "
+                                 "using the alevin-fry pipeline.");
             return false;
           }
           aopt.protocol.set_bc_geo(bc_geo);
@@ -1035,12 +1040,16 @@ namespace alevin {
 
         // parse the UMI geometry
         alevin::protocols::TagGeometry umi_geo;
-        if ( parse_geometry_desc(umi_geo_string, false, parser, d, aopt.jointLog, umi_geo) ) {
+        if ( parse_geometry_desc(umi_geo_string, false, parser, d, aopt.jointLog, umi_geo) ) { 
+          // if we are *not* in RAD mode, then the UMI cannot span beyond 
+          // read 1
           if ( (!aopt.just_align) and bc_geo.uses_r2() ) {
-            aopt.jointLog->error("Currently, umis spanning read1 and read2 "
+            aopt.jointLog->error("Currently, umis spanning read 1 and read 2 "
                                  "are supported in alignment/sketch mode only "
-                                 "(i.e. with the --justAlign flag).  Custom umi "
-                                 "geometry without this mode must reside entirely on read1.");
+                                 "(i.e. with the --justAlign flag or the --sketchMode flag). "
+                                 "Custom umi geometry without this mode must reside entirely on read1. "
+                                 "If you require custom umi geometry spanning both reads, consider "
+                                 "using the alevin-fry pipeline.");
             return false;
           }
           aopt.protocol.set_umi_geo(umi_geo);
@@ -1061,6 +1070,7 @@ namespace alevin {
         // validate that BC and UMI lengths are OK
         uint32_t maxBC{31};
         uint32_t maxUMI{31};
+        // the barcode length must be in [1,31]
         if ((bc_geo.length() < 1) or (bc_geo.length() > maxBC)) {
           aopt.jointLog->error("Barcode length ({}) was not in the required length range [1, {}].\n"
                                "Exiting now.", bc_geo.length(), maxBC);
@@ -1069,6 +1079,7 @@ namespace alevin {
         // if it's OK, set the barcode kmer length
         alevin::types::AlevinCellBarcodeKmer::k( static_cast<uint16_t>(bc_geo.length()) );
 
+        // the UMI length must be in [1,31]
         if ((umi_geo.length() < 1) or (umi_geo.length() > maxUMI)) {
           aopt.jointLog->error("UMI length ({}) was not in the required length range [1, {}].\n"
                                "Exiting now.", umi_geo.length(), maxUMI);
