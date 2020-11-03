@@ -1005,7 +1005,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
     char red[] = "\x1b[30m";
     red[3] = '0' + static_cast<char>(fmt::RED);
 
-    double cellCount {static_cast<double>(barcode)};//numCells-jqueue.size_approx()};
+    double cellCount {static_cast<double>(barcode)};
     if (cellCount > totalCells) { cellCount = totalCells; }
     double percentCompletion {cellCount*100/numCells};
     if (not quiet){
