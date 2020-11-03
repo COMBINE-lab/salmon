@@ -205,13 +205,14 @@ Tutorial & Parsers
 We have compiled a step-by-step resource to help get started with aleivn. We have tutorials on how to get input, run and generate output using alevin's framework which can be found here at `Alevin Tutorials <https://combine-lab.github.io/alevin-tutorial/#blog>`_.
 The tutorial also covers the topic of integrating alevin with downstream analysis tools like Seurat and Monocle. If you are interested in parsing various output binary formats like `quants_mat.gz`, `quants_tier_mat.gz`, `cell_umigraph.gz` etc. of alevin in python, checkout our companion repo for `python parsing <https://github.com/k3yavi/vpolo/blob/master/vpolo/alevin/parser.py>`_. This repo is also available on pip and can be installed through `pip install vpolo`. We cover how to use this library on our alevin-tutorial website too.
 
-Alevin Log
+Alevin Logs
 ------------
 
-* total_reads -- Total number of total reads in the experiment observed by alevin.
-* reads_with_N -- Total number of reads with at least one nucelotide `N` in their cellular barcode sequence (and are not used for quantification).
-* noisy_cb_reads -- Total number of reads from noisy cellular barcodes (and are not used for quantification).
-* noisy_umi_reads -- Total number of reads with at least one nucelotide `N` in their UMI sequence (and are not used for quantification).
+Alevin generates `alevin_meta_info.json` file with the following json entries. Please note based on the command line flags provided during the time alevin was run, some of the below json entries may not be present.
+* total_reads -- Total number of reads in the experiment as observed by alevin.
+* reads_with_N -- Total number of reads with at least one nucleotide `N` in their cellular barcode sequence (and are not used for quantification).
+* noisy_cb_reads -- Total number of reads from noisy cellular barcodes (and are not used for quantification). A cellular barcode can be marked noisy based on many different conditions, for example all the barcodes below "knee" threshold or all the barcodes below provided threshold on `--expectCells` / `--forceCells`.
+* noisy_umi_reads -- Total number of reads with at least one nucleotide `N` in their UMI sequence (and are not used for quantification).
 * used_reads -- Total reads used for the quantification: total_reads - reads_with_N - noisy_cb_reads - noisy_umi_reads.
 * mapping_rate -- Fraction of reads mapping to the reference i.e. #mapped reads / total_reads.
 * reads_in_eqclasses - Total number of reads present in the bfh (cell level equivalence classes).
