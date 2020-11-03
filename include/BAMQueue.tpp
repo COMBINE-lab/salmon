@@ -153,7 +153,7 @@ BAMQueue<FragT>::~BAMQueue() {
     AlignmentGroup<FragT*>* grp;
     //while(!alnGroupPool_.empty()) { alnGroupPool_.pop(grp); delete grp; grp = nullptr; }
     while(alnGroupPool_.try_dequeue(grp)) { delete grp; grp = nullptr; }
-    fmt::print(stderr, "\nEmptied Alignemnt Group Pool. . ");
+    fmt::print(stderr, "\nEmptied Alignment Group Pool. . ");
     while(alnGroupQueue_.try_dequeue(grp)) { delete grp; grp = nullptr; }
     fmt::print(stderr, "\nEmptied Alignment Group Queue. . . ");
     fmt::print(stderr, "done\n");
@@ -337,7 +337,7 @@ inline AlignmentType getPairedAlignmentType_(bam_seq_t* aln) {
     if (!mateIsMapped and !readIsMapped) {
         return AlignmentType::UnmappedPair;
     }
-    std::cerr << "\n\n\nEncountered unknown alignemnt type; this should not happen!\n"
+    std::cerr << "\n\n\nEncountered unknown alignment type; this should not happen!\n"
               << "Please file a bug report on GitHub. Exiting.\n";
     std::exit(1);
 }
@@ -410,7 +410,7 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
                     break;
                     // === end if MappedDiscordantPair case
                 default:
-                    logger_->error("\n\n\nEncountered unknown alignemnt type; this should not happen!\n"
+                    logger_->error("\n\n\nEncountered unknown alignment type; this should not happen!\n"
                                    "Please file a bug report on GitHub. Exiting.\n");
                     std::exit(1);
                     break;
@@ -531,7 +531,7 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
                 }
                 break;
             default:
-                logger_->error("\n\n\nEncountered unknown alignemnt type; this should not happen!\n"
+                logger_->error("\n\n\nEncountered unknown alignment type; this should not happen!\n"
                                "Please file a bug report on GitHub. Exiting.\n");
                 std::exit(1);
                 break;

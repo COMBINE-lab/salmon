@@ -742,7 +742,7 @@ that the boost options parser that we use works, and the fact that
 ``--writeMappings`` has an implicit argument of ``stdout``, if you 
 provide an explicit argument to ``--writeMappings``, you must do so 
 with the syntax ``--writeMappings=<outfile>`` rather than the synatx 
-``--writeMappings <outfile>``.  This is a due to a limitation of the 
+``--writeMappings <outfile>``.  This is due to a limitation of the 
 parser in how the latter could be interpreted.
 
 .. note:: Compatible mappings

@@ -66,6 +66,7 @@
 #include "SalmonConfig.hpp"
 #include "SalmonDefaults.hpp"
 #include "SalmonOpts.hpp"
+#include "SalmonUtils.hpp"
 #include "ProgramOptionsGenerator.hpp"
 
 using paired_parser_qual = fastx_parser::FastxParser<fastx_parser::ReadQualPair>;
@@ -114,6 +115,7 @@ void densityCalculator(single_parser* parser,
 
   uint64_t usedNumBarcodesLocal{0};
   uint64_t totNumBarcodesLocal{0};
+  std::string extractedBarcode( aopt.protocol.barcodeLength, 'N' );
   while (parser->refill(rg)) {
     rangeSize = rg.size();
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
@@ -130,14 +132,17 @@ void densityCalculator(single_parser* parser,
       //if (aopt.protocol.end == bcEnd::THREE) {
       //  std::reverse(seq.begin(), seq.end());
       //}
+      //extractedBarcode.clear();
 
-      nonstd::optional<std::string> extractedBarcode = aut::extractBarcode(seq, aopt.protocol);
-      bool seqOk = (extractedBarcode.has_value()) ? aut::sequenceCheck(*extractedBarcode) : false;
+      // NOTE: This means custom barcode extraction can't be on
+      // on more than one read in this mode!  Come back and fix this later
+      bool extraction_ok = aut::extractBarcode(seq, seq, aopt.protocol, extractedBarcode);
+      bool seqOk = (extraction_ok) ? aut::sequenceCheck(extractedBarcode) : false;
       if (not seqOk){
-        bool recovered = aut::recoverBarcode(*extractedBarcode);
+        bool recovered = aut::recoverBarcode(extractedBarcode);
         if (not recovered) { continue; }
       }
-      freqCounter[*extractedBarcode] += 1;
+      freqCounter[extractedBarcode] += 1;
       ++usedNumBarcodesLocal;
     }//end-for
   }//end-while
@@ -539,10 +544,15 @@ bool writeFastq(AlevinOpts<ProtocolT>& aopt,
                 TrueBcsT& trueBarcodes){
   size_t rangeSize{0};
   uint32_t totNumBarcodes{0};
-  std::string barcode;
-  std::string umi;
+  std::string barcode( aopt.protocol.barcodeLength, 'N');
+  std::string umi( aopt.protocol.umiLength, 'N');
 
-  std::random_device rd;
+  #if defined(__linux) && defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
+    std::random_device rd("/dev/urandom");
+  #else
+    std::random_device rd;
+  #endif  // defined(__GLIBCXX__) && __GLIBCXX__ >= 2020012
+
   std::mt19937 mt(rd());
   std::uniform_real_distribution<double> dist(0.0, 1.0);
 
@@ -555,19 +565,19 @@ bool writeFastq(AlevinOpts<ProtocolT>& aopt,
       rangeSize = rg.size();
       for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
         auto& rp = rg[i];
+        // barcode.clear();
         if(aopt.protocol.end == bcEnd::FIVE){
           {
-            nonstd::optional<std::string> extractedSeq = aut::extractBarcode(rp.first.seq, aopt.protocol);
-            bool seqOk = (extractedSeq.has_value()) ? aut::sequenceCheck(*extractedSeq) : false;
+            bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, aopt.protocol, barcode);
+            bool seqOk = (extracted_barcode) ? aut::sequenceCheck(barcode) : false;
             if (not seqOk){
-              bool recovered = aut::recoverBarcode(*extractedSeq);
+              bool recovered = aut::recoverBarcode(barcode);
               if (not recovered) { continue; }
             }
-            barcode = *extractedSeq;
           }
 
           {
-            bool seqOk = aut::extractUMI(rp.first.seq, aopt.protocol, umi);
+            bool seqOk = aut::extractUMI(rp.first.seq, rp.second.seq, aopt.protocol, umi);
             if (not seqOk){
               std::cerr<<"Can't extract UMI";
               return false;
@@ -1007,9 +1017,12 @@ salmon-based processing of single-cell RNA-seq data.
     bool celseq = vm["celseq"].as<bool>();
     bool celseq2 = vm["celseq2"].as<bool>();
     bool quartzseq2 = vm["quartzseq2"].as<bool>();
-    bool custom = (vm.count("barcodeLength") and
+    bool custom_old =  vm.count("barcodeLength") and
                    vm.count("umiLength") and
-                   vm.count("end"));
+                   vm.count("end");
+    bool custom_new = (vm.count("bc-geometry") and 
+                   vm.count("umi-geometry"));
+    bool custom = custom_old or custom_new;
 
     uint8_t validate_num_protocols {0};
     if (dropseq) validate_num_protocols += 1;
@@ -1127,9 +1140,14 @@ salmon-based processing of single-cell RNA-seq data.
       initiatePipeline(aopt, sopt, orderedOptions,
                        vm, commentString, noTgMap,
                        barcodeFiles, readFiles);
-    }
-    else{
+    } else if (custom_old) {
       AlevinOpts<apt::Custom> aopt;
+      //aopt.jointLog->warn("Using Custom Setting for Alevin");
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString, noTgMap,
+                       barcodeFiles, readFiles);
+    } else if (custom_new) {
+      AlevinOpts<apt::CustomGeometry> aopt;
       //aopt.jointLog->warn("Using Custom Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
                        vm, commentString, noTgMap,

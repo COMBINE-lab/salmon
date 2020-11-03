@@ -232,7 +232,7 @@ namespace salmon {
        "[selective-alignment mode only] : Allow soft-clipping of reads that overhang the beginning or ends "
        "of the transcript.  In this case, the overhaning section of the read will simply be unaligned, and "
        "will not contribute or detract from the alignment score.  The default policy is to force an end-to-end "
-       "alignemnt of the entire read, so that overhanings will result in some deletion of nucleotides from the "
+       "alignment of the entire read, so that overhanings will result in some deletion of nucleotides from the "
        "read."
        )
       ("fullLengthAlignment", 
@@ -373,8 +373,12 @@ namespace salmon {
       ("help,h", "produce help message")
       ("output,o", po::value<std::string>()->required(), "Output quantification directory.")
       ("justAlign,j", po::bool_switch()->default_value(alevin::defaults::just_align),
-       "just selectively align the data and write the results to a PAM file.  Do not perform "
+       "just selectively align the data and write the results to a RAD file.  Do not perform "
        "the rest of the quantification procedure.")
+      ("sketchMode", po::bool_switch()->default_value(alevin::defaults::sketch_mode),
+       "perform sketching rather than selective alignment and write the results to a RAD file. "
+       "Requires the `--justAlign` flag. Do not perform the rest of the quantification procedure." 
+      )
       ("threads,p",
        po::value<uint32_t>(&(sopt.numThreads))->default_value(sopt.numThreads),
        "The number of threads to use concurrently.")
@@ -443,6 +447,15 @@ namespace salmon {
        "keepCBFraction", po::value<double>()->default_value(alevin::defaults::keepCBFraction),
        "fraction of CB to keep, value must be in range (0,1], use 1 to quantify all CB."
        )
+      ("read-geometry", po::value<std::string>(), 
+      "format string describing the geometry of the read"
+      )
+      ("bc-geometry", po::value<std::string>(), 
+      "format string describing the geometry of the cell barcode"
+      )
+      ("umi-geometry", po::value<std::string>(),
+      "format string describing the genometry of the umi"
+      )
       (
        "end",po::value<uint32_t>(),
        "Cell-Barcodes end (5 or 3) location in the read sequence from where barcode has to"
@@ -581,7 +594,7 @@ namespace salmon {
        po::bool_switch(&(sopt.alternativeInitMode))->default_value(salmon::defaults::alternativeInitMode),
        "[Experimental]: Use an alternative strategy (rather than simple "
        "interpolation between) the "
-       "online and uniform abundance estimates to initalize the EM / VBEM "
+       "online and uniform abundance estimates to initialize the EM / VBEM "
        "algorithm.")
       ("auxDir",
        po::value<std::string>(&(sopt.auxDir))->default_value(salmon::defaults::auxDir),
@@ -716,7 +729,7 @@ namespace salmon {
        "purpose "
        "of ignoring the auxiliary models for the first "
        "<numPreAuxModelSamples> observations is to avoid applying these "
-       "models before thier "
+       "models before their "
        "parameters have been learned sufficiently well.")
       ("useEM", po::bool_switch(&(sopt.useEM))->default_value(salmon::defaults::useEM),
        "Use the traditional EM algorithm for optimization in the batch passes.")

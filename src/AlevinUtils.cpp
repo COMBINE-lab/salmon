@@ -1,4 +1,5 @@
 #include "AlevinUtils.hpp"
+#include "peglib.h"
 
 namespace alevin {
   namespace utils {
@@ -41,219 +42,318 @@ namespace alevin {
 
 
     template <>
-    void getReadSequence(apt::CITESeq& protocol,
+    std::string* getReadSequence(apt::CITESeq& protocol,
                          std::string& seq,
+                         std::string& seq2,
                          std::string& subseq){
-      subseq = seq.substr(protocol.featureStart,
+      (void)seq;
+      subseq.clear();
+      subseq = seq2.substr(protocol.featureStart,
                           protocol.featureLength);
+      return &subseq;
     }
     template <>
-    void getReadSequence(apt::DropSeq& protocol,
+    std::string* getReadSequence(apt::DropSeq& protocol,
                          std::string& seq,
+                         std::string& seq2,
                          std::string& subseq){
-      subseq = seq;
+      (void)seq;
+      return &seq2;
     }
     template <>
-    void getReadSequence(apt::Chromium& protocol,
+    std::string* getReadSequence(apt::Chromium& protocol,
                          std::string& seq,
+                         std::string& seq2,
                          std::string& subseq){
-      subseq = seq;
+      (void)seq;
+      return &seq2;
     }
     template <>
-    void getReadSequence(apt::ChromiumV3& protocol,
+    std::string*  getReadSequence(apt::ChromiumV3& protocol,
                          std::string& seq,
+                         std::string& seq2,
                          std::string& subseq){
-      subseq = seq;
+      (void)seq;
+      return &seq2;
     }
     template <>
-    void getReadSequence(apt::CELSeq& protocol,
+    std::string*  getReadSequence(apt::CELSeq& protocol,
                          std::string& seq,
+                         std::string& seq2,
                          std::string& subseq){
-      subseq = seq;
+      (void)seq;
+      return &seq2;
     }
     template <>
-    void getReadSequence(apt::CELSeq2& protocol,
+    std::string*  getReadSequence(apt::CELSeq2& protocol,
                          std::string& seq,
+                         std::string& seq2,
                          std::string& subseq){
-      subseq = seq;
+      (void)seq;
+      return &seq2;
     }
     template <>
-    void getReadSequence(apt::QuartzSeq2& protocol,
+    std::string*  getReadSequence(apt::QuartzSeq2& protocol,
                          std::string& seq,
+                         std::string& seq2,
                          std::string& subseq){
-      subseq = seq;
+      (void)seq;
+      return &seq2;
     }
     template <>
-    void getReadSequence(apt::Custom& protocol,
+    std::string*  getReadSequence(apt::Custom& protocol,
                          std::string& seq,
+                         std::string& seq2,
                          std::string& subseq){
-      subseq = seq;
+      (void)seq;
+      return &seq2;
     }
     template <>
-    void getReadSequence(apt::Gemcode& protocol,
+    std::string*  getReadSequence(apt::CustomGeometry& protocol,
                          std::string& seq,
+                         std::string& seq2,
                          std::string& subseq){
-      subseq = seq;
+      bool ok = protocol.read_geo.extract_read(seq, seq2, subseq);
+      return &subseq;
+      //subseq = seq2;
     }
     template <>
-    void getReadSequence(apt::InDrop& protocol,
+    std::string*  getReadSequence(apt::Gemcode& protocol,
                          std::string& seq,
+                         std::string& seq2,
                          std::string& subseq){
-      subseq = seq;
+      (void)seq;
+      return &seq2;
     }
+    template <>
+    std::string*  getReadSequence(apt::InDrop& protocol,
+                         std::string& seq,
+                         std::string& seq2,
+                         std::string& subseq){
+      (void)seq;
+      return &seq2;
+    }
+    // end of read extraction
 
     template <>
     bool extractUMI<apt::DropSeq>(std::string& read,
+                                  std::string& read2,
                                   apt::DropSeq& pt,
                                   std::string& umi){
-      umi = read.substr(pt.barcodeLength, pt.umiLength);
-      return true;
+      (void)read2;
+      return (read.length() >= pt.barcodeLength + pt.umiLength) ?
+        (umi.assign(read, pt.barcodeLength, pt.umiLength), true) : false;
     }
     template <>
     bool extractUMI<apt::CITESeq>(std::string& read,
+                                  std::string& read2,
                                   apt::CITESeq& pt,
                                   std::string& umi){
-      umi = read.substr(pt.barcodeLength, pt.umiLength);
-      return true;
+      (void)read2;
+      return (read.length() >= pt.barcodeLength + pt.umiLength) ?
+        (umi.assign(read, pt.barcodeLength, pt.umiLength), true) : false;
     }
     template <>
     bool extractUMI<apt::Chromium>(std::string& read,
+                                   std::string& read2,
                                    apt::Chromium& pt,
                                    std::string& umi){
-      umi = read.substr(pt.barcodeLength, pt.umiLength);
-      return true;
+      (void)read2;
+      return (read.length() >= pt.barcodeLength + pt.umiLength) ?
+        (umi.assign(read, pt.barcodeLength, pt.umiLength), true) : false;
     }
     template <>
     bool extractUMI<apt::ChromiumV3>(std::string& read,
+                                     std::string& read2,
                                      apt::ChromiumV3& pt,
                                      std::string& umi){
-      umi = read.substr(pt.barcodeLength, pt.umiLength);
-      return true;
+      (void)read2;
+      return (read.length() >= pt.barcodeLength + pt.umiLength) ?
+        (umi.assign(read, pt.barcodeLength, pt.umiLength), true) : false;
     }
     template <>
     bool extractUMI<apt::Gemcode>(std::string& read,
+                                  std::string& read2,
                                    apt::Gemcode& pt,
                                    std::string& umi){
-      umi = read.substr(pt.barcodeLength, pt.umiLength);
-      return true;
+      (void)read2;
+      return (read.length() >= pt.barcodeLength + pt.umiLength) ?
+        (umi.assign(read, pt.barcodeLength, pt.umiLength), true) : false;
     }
     template <>
     bool extractUMI<apt::Custom>(std::string& read,
+                                 std::string& read2,
                                  apt::Custom& pt,
                                  std::string& umi){
+      (void)read2;
       if ( pt.end == BarcodeEnd::FIVE ) {
-        umi = read.substr(pt.barcodeLength, pt.umiLength);
+        umi.assign(read, pt.barcodeLength, pt.umiLength);
       } else if (pt.end == BarcodeEnd::THREE ) {
-        umi = read.substr(0, pt.umiLength);
+        umi.assign(read, 0, pt.umiLength);
       } else {
         return false;
       }
       return true;
     }
     template <>
+    bool extractUMI<apt::CustomGeometry>(std::string& read1,
+                                 std::string& read2,
+                                 apt::CustomGeometry& pt,
+                                 std::string& umi){
+      
+      return pt.umi_geo.extract_tag(read1, read2, umi);
+    }
+    template <>
     bool extractUMI<apt::QuartzSeq2>(std::string& read,
+                                     std::string& read2,
                                      apt::QuartzSeq2& pt,
                                      std::string& umi){
-      umi = read.substr(pt.barcodeLength, pt.umiLength);
+      (void)read2;
+      return (read.length() >= pt.barcodeLength + pt.umiLength) ?
+        (umi.assign(read, pt.barcodeLength, pt.umiLength), true) : false;
       return true;
     }
     template <>
     bool extractUMI<apt::CELSeq2>(std::string& read,
+                                  std::string& read2,
                                   apt::CELSeq2& pt,
                                   std::string& umi){
-      umi = read.substr(0, pt.umiLength);
-      return true;
+      (void)read2;
+      return (read.length() >= pt.umiLength) ?
+        (umi.assign(read, 0, pt.umiLength), true) : false;
     }
     template <>
     bool extractUMI<apt::CELSeq>(std::string& read,
+                                 std::string& read2,
                                  apt::CELSeq& pt,
                                  std::string& umi){
-      umi = read.substr(0, pt.umiLength);
+      (void)read2;
+      return (read.length() >= pt.umiLength) ?
+        (umi.assign(read, 0, pt.umiLength), true) : false;
       return true;
     }
     template <>
     bool extractUMI<apt::InDrop>(std::string& read,
+                                 std::string& read2,
                                  apt::InDrop& pt,
                                  std::string& umi){
+      (void)read;
+      (void)read2;
       std::cout<<"Incorrect call for umi extract";
       exit(1);
     }
 
     template <>
-    nonstd::optional<std::string> extractBarcode<apt::DropSeq>(std::string& read,
-                                      apt::DropSeq& pt){
+    bool extractBarcode<apt::DropSeq>(std::string& read,
+                                      std::string& read2,
+                                      apt::DropSeq& pt,
+                                      std::string& bc){
+      (void)read2;
       return (read.length() >= pt.barcodeLength) ?
-        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+        (bc.assign(read, 0, pt.barcodeLength), true) : false;
     }
     template <>
-    nonstd::optional<std::string> extractBarcode<apt::CITESeq>(std::string& read,
-                                                               apt::CITESeq& pt){
+    bool extractBarcode<apt::CITESeq>(std::string& read,
+                                      std::string& read2,
+                                                               apt::CITESeq& pt,
+                                                               std::string& bc){
+      (void)read2;
       return (read.length() >= pt.barcodeLength) ?
-        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+        (bc.assign(read, 0, pt.barcodeLength), true) : false;
     }
     template <>
-    nonstd::optional<std::string> extractBarcode<apt::ChromiumV3>(std::string& read,
-                                                                  apt::ChromiumV3& pt){
+    bool extractBarcode<apt::ChromiumV3>(std::string& read,
+                                         std::string& read2,
+                                                                  apt::ChromiumV3& pt,
+                                                                  std::string& bc){
+      (void)read2;
       return (read.length() >= pt.barcodeLength) ?
-        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+        (bc.assign(read,0, pt.barcodeLength), true) : false;
     }
     template <>
-    nonstd::optional<std::string> extractBarcode<apt::Chromium>(std::string& read,
-                                       apt::Chromium& pt){
+    bool extractBarcode<apt::Chromium>(std::string& read,
+                                       std::string& read2,
+                                       apt::Chromium& pt,
+                                       std::string& bc){
+      (void)read2;
       return (read.length() >= pt.barcodeLength) ?
-        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+        (bc.assign(read, 0, pt.barcodeLength), true) : false;
     }
     template <>
-    nonstd::optional<std::string> extractBarcode<apt::Gemcode>(std::string& read,
-                                       apt::Gemcode& pt){
+    bool extractBarcode<apt::Gemcode>(std::string& read,
+                                      std::string& read2,
+                                      apt::Gemcode& pt,
+                                      std::string& bc){
+      (void)read2;
       return (read.length() >= pt.barcodeLength) ?
-        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+        (bc.assign(read, 0, pt.barcodeLength), true) : false;
     }
     template <>
-    nonstd::optional<std::string> extractBarcode<apt::Custom>(std::string& read,
-                                     apt::Custom& pt){
+    bool extractBarcode<apt::Custom>(std::string& read,
+                                     std::string& read2,
+                                     apt::Custom& pt,
+                                     std::string& bc){
+      (void)read2;
       if (pt.end == BarcodeEnd::FIVE) {
         return (read.length() >= pt.barcodeLength) ?
-          nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+          (bc.assign(read, 0, pt.barcodeLength), true) : false;
       } else if (pt.end == BarcodeEnd::THREE) {
         return (read.length() >= (pt.umiLength + pt.barcodeLength)) ?
-          nonstd::optional<std::string>(read.substr(pt.umiLength, pt.barcodeLength)) : nonstd::nullopt;
+          (bc.assign(read, pt.umiLength, pt.barcodeLength), true) : false;
       } else {
-        return nonstd::nullopt;
+        return false; 
       }
     }
     template <>
-    nonstd::optional<std::string> extractBarcode<apt::QuartzSeq2>(std::string& read,
-                                                                  apt::QuartzSeq2& pt){
+    bool extractBarcode<apt::CustomGeometry>(std::string& read1,
+                                            std::string& read2,
+                                     apt::CustomGeometry& pt,
+                                     std::string& bc){
+      return pt.bc_geo.extract_tag(read1, read2, bc);
+    }
+    template <>
+    bool extractBarcode<apt::QuartzSeq2>(std::string& read,
+                                         std::string& read2,
+                                         apt::QuartzSeq2& pt,
+                                         std::string& bc){
+      (void)read2;
       return (read.length() >= pt.barcodeLength) ?
-        nonstd::optional<std::string>(read.substr(0, pt.barcodeLength)) : nonstd::nullopt;
+        (bc.assign(read, 0, pt.barcodeLength), true) : false;
     }
     template <>
-    nonstd::optional<std::string> extractBarcode<apt::CELSeq2>(std::string& read,
-                                                               apt::CELSeq2& pt){
+    bool extractBarcode<apt::CELSeq2>(std::string& read,
+                                      std::string& read2,
+                                                               apt::CELSeq2& pt,
+                                                               std::string& bc){
+      (void)read2;
       return (read.length() >= (pt.umiLength + pt.barcodeLength)) ?
-        nonstd::optional<std::string>(read.substr(pt.umiLength, pt.barcodeLength)) : nonstd::nullopt;
-
+        (bc.assign(read, pt.umiLength, pt.barcodeLength), true) : false;
     }
     template <>
-    nonstd::optional<std::string> extractBarcode<apt::CELSeq>(std::string& read,
-                                                              apt::CELSeq& pt){
+    bool extractBarcode<apt::CELSeq>(std::string& read,
+                                     std::string& read2,
+                                                              apt::CELSeq& pt,
+                                                              std::string& bc){
+      (void)read2;
       return (read.length() >= (pt.umiLength + pt.barcodeLength)) ?
-        nonstd::optional<std::string>(read.substr(pt.umiLength, pt.barcodeLength)) : nonstd::nullopt;
+        (bc.assign(read, pt.umiLength, pt.barcodeLength), true) : false;
     }
     template <>
-    nonstd::optional<std::string> extractBarcode<apt::InDrop>(std::string& read, apt::InDrop& pt){
+    bool extractBarcode<apt::InDrop>(std::string& read, 
+                                     std::string& read2, 
+                                     apt::InDrop& pt, std::string& bc){
+      (void)read2;
       std::string::size_type index = read.find(pt.w1);
       if (index == std::string::npos){
-        return nonstd::nullopt;
+        return false;
       }
-      auto bc = read.substr(0, index);
+      bc = read.substr(0, index);
       if(bc.size()<8 or bc.size()>12){
-        return nonstd::nullopt;
+        return false;
       }
       uint32_t offset = bc.size()+pt.w1.size();
       bc += read.substr(offset, offset+8);
-      return nonstd::optional<std::string>(bc);
+      return true;
     }
 
     void getIndelNeighbors(
@@ -466,6 +566,112 @@ namespace alevin {
       jointLog->info("Found all transcripts to gene mappings");
     }
 
+
+    struct Desc {
+      uint8_t read_num;
+      std::vector<std::pair<size_t,size_t>> locs;
+      friend std::ostream& operator<<(std::ostream& os, const Desc& de);
+    };
+    
+    std::ostream& operator<<(std::ostream& os, const Desc& de) {
+      os << "Geometry description :: [\n";
+      os << "\tRead Num : " << static_cast<int32_t>(de.read_num) << "\n\t[";
+      for (size_t i = 0; i < de.locs.size(); ++i) {
+        os << "  (" << de.locs[i].first << ", " << de.locs[i].second << ")";
+      }
+      os << "\t]\n";
+      os << "]\n";
+      return os;
+    }
+ 
+
+    bool parse_geometry_desc(std::string& geo_string, bool can_be_unbounded, peg::parser& parser, std::vector<Desc>& d, std::shared_ptr<spdlog::logger> log, alevin::protocols::TagGeometry& tg) {
+      // the first element in the string must be 
+      // the read number (currently, only 1 or 2 is )
+      // acceptable.
+
+      // currently, only the read geometry can be unbounded 
+      // (i.e. can stretch to std::string::npos).  If 
+      // can_be_unbounded is false, then reject any parsed
+      // geometry tag containing `end`.
+
+      d.clear();
+      if ( parser.parse(geo_string.c_str()) ) {
+        /*
+        if (d.size() > 1) {
+          log->error("Though supported in the syntax, the current implementation \n"
+                     "of custom tag geometry does not support having a tag \n"
+                     "split over more than one read.");    
+          return false;
+        }
+        */
+
+        //auto desc = d[0];
+        //tg.read_num = desc.read_num;
+        for (auto& desc : d) {
+          auto rn = desc.read_num;
+          auto& tg_length = (rn == 1) ? tg.length1 : tg.length2;
+          auto& tg_largest_index = (rn == 1) ? tg.largest_index1 : tg.largest_index2;
+          auto& tg_substr_locs = (rn ==1) ? tg.substr_locs1 : tg.substr_locs2;
+
+          // the length of the tag
+          size_t tlen{0};
+        
+          // the largest index the tag reaches
+          size_t largest_index{0};
+
+          for (auto& start_stop : desc.locs) {
+            size_t start = start_stop.first;
+            if (start <= 0) { log->error("tag string subscript must be strictly positive (tag geometry is 1-indexed)."); return false; }
+            size_t stop = start_stop.second;
+            // make sure we don't contain `end` if we can't
+            if (!can_be_unbounded and stop == std::string::npos) {
+              log->error("only the geometry of the read can be unbounded (can contain 'end'), "
+                         "but it was specified for a cell barcode / umi.");
+              return false;
+            }
+
+            // does this piece reach to the end of the read
+            // i.e. is it a range of the form `X-end`?
+            bool reach_to_end = (stop == std::string::npos);
+
+            if (stop < start) { 
+              log->error("geometry contained a range {}-{}; cannot have stop < start.", start, stop);
+              return false; 
+            }
+
+            // internally, we start indexing from 0
+            start -= 1;
+            if (!reach_to_end) { stop -= 1; }
+
+            largest_index = (stop > largest_index) ? stop : largest_index;
+
+            size_t len = (reach_to_end) ? std::string::npos : (stop - start) + 1;
+
+            // if the current piece is unbounded, or any piece so far
+            // has been unbounded, then the tag length is unbounded
+            tlen = (reach_to_end or (tlen == std::string::npos)) ? len : tlen + len;
+
+            if (tg_substr_locs.size() >= alevin::protocols::num_tag_pieces) {
+              log->error("Currently, alevin does not support the tag (barcode / umi) being "
+                         "split into more than {} pieces.  If the current bound is a "
+                         "problem for your protocol, please reach out on GitHub.",
+                         alevin::protocols::num_tag_pieces);
+              return false;
+            }
+            tg_substr_locs.push_back(std::make_pair(start, len));
+          }
+          tg_length = tlen;
+          tg_largest_index = largest_index;
+        } // for (auto& desc : d) 
+        return true;
+      } else {
+        log->error("parser failure!");
+        return false;
+      }
+      return false;
+    }
+
     template <typename ProtocolT>
     bool processAlevinOpts(AlevinOpts<ProtocolT>& aopt,
                            SalmonOpts& sopt, bool noTgMap,
@@ -568,6 +774,13 @@ namespace alevin {
       aopt.jointLog = spdlog::create("alevinLog", std::begin(sinks), std::end(sinks));
 
       aopt.just_align = vm["justAlign"].as<bool>();
+      aopt.sketch_mode = vm["sketchMode"].as<bool>();
+      if (aopt.sketch_mode and !aopt.just_align) {
+        aopt.jointLog->info("currently, --sketchMode implies --justAlign. Running in "
+                            "alignment-only mode (will write a RAD output).");
+        aopt.just_align = true;
+      }
+
       aopt.quiet = vm["quiet"].as<bool>();
       aopt.noEM = vm["noem"].as<bool>();
       aopt.noDedup = vm["noDedup"].as<bool>();
@@ -594,8 +807,18 @@ namespace alevin {
 
       if (aopt.just_align) {
         aopt.jointLog->info("The --justAlign flag was passed to alevin. The "
-        "reads will be selectively aligned and the output written to a PAM file."
+        "reads will be selectively aligned and the output written to a RAD file."
         "Arguments passed that correspond to other processing steps will be ignored");
+        if (aopt.sketch_mode) {
+          aopt.jointLog->info("The --sketchMode flag was passed; the alignment will be run "
+          "in sketch mode.");
+          sopt.mismatchSeedSkip = 7;
+        }
+      } else {
+        if (aopt.sketch_mode) {
+          aopt.jointLog->info("The --sketchMode flag is not meaningful without the "
+          "--justAlign flag.  This flag will be ignored.");
+        }
       }
 
       if (aopt.umiEditDistance > 4 ) {
@@ -648,6 +871,21 @@ namespace alevin {
         aopt.numThreads = vm["threads"].as<uint32_t>();
       }  // things which needs to be updated for salmonOpts
 
+      // handling of customized barcode and umi geometry 
+      bool have_custom_umi_geo = vm.count("umi-geometry");
+      bool have_custom_bc_geo = vm.count("bc-geometry");
+      bool have_custom_read_geo = vm.count("read-geometry");
+      // need both
+      bool have_any_custom_geo = have_custom_read_geo or have_custom_umi_geo or have_custom_bc_geo;
+      bool have_all_custom_geo = have_custom_read_geo and have_custom_umi_geo and have_custom_bc_geo;
+      if ( have_any_custom_geo and !have_all_custom_geo ) {
+        aopt.jointLog->error("If you are using either of the umi-geometry or \n"
+                             "the barcode-geometry options, then you have to provide both.\n"
+                             "Alternatively, you can use pre-defined single-cell protocol flags.\n"
+                             "Exiting Now.");
+        return false; 
+      }
+
       // validate customized options for custom protocol
       bool haveCustomEnd = vm.count("end");
       bool haveCustomBC= vm.count("barcodeLength");
@@ -655,6 +893,14 @@ namespace alevin {
 
       bool allCustom = (haveCustomEnd and haveCustomBC and haveCustomUMI);
       bool noCustom = !(haveCustomEnd or haveCustomBC or haveCustomUMI);
+
+      if (!noCustom and have_any_custom_geo) {
+        aopt.jointLog->warn("Note: the use of --end, --barcodeLength and --umiLength \n"
+                            "to describe the barcode and umi geometry incompatible \n"
+                            "with the new options `--barcode-geometry` and `--umi-geometry`.\n"
+                            "The former are deprecated, please adopt the new options instead\n.");  
+        return false;
+      }
 
       // These are all or nothing.  Either the user must provide all 3
       // or none of these options.
@@ -672,6 +918,10 @@ namespace alevin {
         uint32_t barcodeLength = vm["barcodeLength"].as<uint32_t>();
         uint32_t umiLength = vm["umiLength"].as<uint32_t>();
 
+        aopt.jointLog->warn("Note: the use of --end, --barcodeLength and --umiLength "
+                            "to describe the barcode and umi geometry is deprecated. "
+                            "Please start using the `--barcode-geometry` and `--umi-geometry` "
+                            "options instead.");  
         // validate that BC and UMI lengths are OK
         uint32_t maxBC{20};
         uint32_t maxUMI{20};
@@ -710,7 +960,135 @@ namespace alevin {
                               "is being used.  Updating UMI k-mer length accordingly.",
                               barEnd, barcodeLength, umiLength);
         }
-      }
+      } else if (have_all_custom_geo) {
+        std::string  bc_geo_string = vm["bc-geometry"].as<std::string>();
+        std::string  umi_geo_string = vm["umi-geometry"].as<std::string>();
+        std::string  read_geo_string = vm["read-geometry"].as<std::string>();
+
+        // This describes the parsing expression grammar that 
+        // we use for describing barcode geometry.
+        peg::parser parser(R"(
+         DescriptionList <- Description (','Description){0,1}
+         Description <- ReadNumber'['NumberRangeList']'
+         ReadNumber  <- [1,2]
+         Number      <- [0-9]+
+         End         <- 'end'
+         NumberRange <- (Number '-' Number) / (Number '-' End)
+         NumberRangeList <- NumberRange (','NumberRange)*
+        )");
+        
+        if (!(bool)parser) {
+          aopt.jointLog->error("Failed to instantiate the tag geometry parser.\n"
+                               "This should not happen. Please report this issue on GitHub.");
+          return false;
+        }
+
+        // The variable to hold the temporary parsing information
+        std::vector<Desc> d;
+        
+        parser["ReadNumber"] = [&](const peg::SemanticValues& sv) { 
+          d.push_back({0,{}}); d.back().read_num = std::stoi(sv.token()); 
+        };
+        
+        parser["Number"] = [&](const peg::SemanticValues& sv) { 
+          return static_cast<size_t>(std::stoull(sv.token())); 
+        };
+
+        parser["NumberRange"] = [&](const peg::SemanticValues& sv) {
+          switch (sv.choice()) {
+          case 0:
+           {
+            d.back().locs.push_back(std::make_pair(
+                peg::any_cast<size_t>(sv[0]), peg::any_cast<size_t>(sv[1])));
+           }
+            break;
+          default:
+            {
+             d.back().locs.push_back(std::make_pair(
+               peg::any_cast<size_t>(sv[0]), std::string::npos));
+            }
+            break;
+          }
+        };
+
+        // NOTE: this is just for backwards-compatibility.
+        // The barcode end is redundant with the new geometry
+        // specification.
+        aopt.protocol.end = BarcodeEnd::FIVE;
+
+        // parse the cellular barcode geometry
+        alevin::protocols::TagGeometry bc_geo;
+        if ( parse_geometry_desc(bc_geo_string, false, parser, d, aopt.jointLog, bc_geo) ) {
+          // if we are *not* in RAD mode, then the barcode cannot span beyond 
+          // read 1
+          if ( (!aopt.just_align) and bc_geo.uses_r2() ) {
+            aopt.jointLog->error("Currently, barcodes spanning read 1 and read 2 "
+                                 "are supported in alignment/sketch mode only "
+                                 "(i.e. with the --justAlign flag or the --sketchMode flag). "
+                                 "Custom barcode geometry without this mode must reside entirely on read1. "
+                                 "If you require custom barcode geometry spanning both reads, consider "
+                                 "using the alevin-fry pipeline.");
+            return false;
+          }
+          aopt.protocol.set_bc_geo(bc_geo);
+        } else {
+          aopt.jointLog->error("Failed to parse `--bc-geometry` argument {}, please make sure it is correct.", bc_geo_string);
+          return false;
+        }
+        //std::cerr << "BC GEO\n---------\n";
+        //std::cerr << bc_geo << "\n\n";
+
+        // parse the UMI geometry
+        alevin::protocols::TagGeometry umi_geo;
+        if ( parse_geometry_desc(umi_geo_string, false, parser, d, aopt.jointLog, umi_geo) ) { 
+          // if we are *not* in RAD mode, then the UMI cannot span beyond 
+          // read 1
+          if ( (!aopt.just_align) and bc_geo.uses_r2() ) {
+            aopt.jointLog->error("Currently, umis spanning read 1 and read 2 "
+                                 "are supported in alignment/sketch mode only "
+                                 "(i.e. with the --justAlign flag or the --sketchMode flag). "
+                                 "Custom umi geometry without this mode must reside entirely on read1. "
+                                 "If you require custom umi geometry spanning both reads, consider "
+                                 "using the alevin-fry pipeline.");
+            return false;
+          }
+          aopt.protocol.set_umi_geo(umi_geo);
+        } else {
+          aopt.jointLog->error("Failed to parse `--umi-geometry` argument {}, please make sure it is correct.", umi_geo_string);
+        }
+        //std::cerr << "UMI GEO\n---------\n";
+        //std::cerr << umi_geo << "\n\n";
+
+        // parse the read geometry
+        alevin::protocols::TagGeometry read_geo;
+        if ( parse_geometry_desc(read_geo_string, true, parser, d, aopt.jointLog, read_geo) ) {
+          aopt.protocol.set_read_geo(read_geo);
+        } else {
+          aopt.jointLog->error("Failed to parse `--read-geometry` argument {}, please make sure it is correct.", read_geo_string);
+        }
+
+        // validate that BC and UMI lengths are OK
+        uint32_t maxBC{31};
+        uint32_t maxUMI{31};
+        // the barcode length must be in [1,31]
+        if ((bc_geo.length() < 1) or (bc_geo.length() > maxBC)) {
+          aopt.jointLog->error("Barcode length ({}) was not in the required length range [1, {}].\n"
+                               "Exiting now.", bc_geo.length(), maxBC);
+          return false;
+        }
+        // if it's OK, set the barcode kmer length
+        alevin::types::AlevinCellBarcodeKmer::k( static_cast<uint16_t>(bc_geo.length()) );
+
+        // the UMI length must be in [1,31]
+        if ((umi_geo.length() < 1) or (umi_geo.length() > maxUMI)) {
+          aopt.jointLog->error("UMI length ({}) was not in the required length range [1, {}].\n"
+                               "Exiting now.", umi_geo.length(), maxUMI);
+          return false;
+        }
+        // if it's OK, set the umi kmer length
+        alevin::types::AlevinUMIKmer::k( static_cast<uint16_t>(umi_geo.length()) );
+
+      } // new custom barcode geometry
 
       //validate specified iupac
       if (aopt.iupac.size()>0){
@@ -731,7 +1109,7 @@ namespace alevin {
             allNflag = false;
           }
           if (found==std::string::npos){
-            aopt.jointLog->error("\nERROR: Wrong IUPAC charachter {} in {}\n"
+            aopt.jointLog->error("\nERROR: Wrong IUPAC character {} in {}\n"
                                  "\nExiting now: Please check "
                                  "https://www.bioinformatics.org/sms/iupac.html"
                                  "for more details about iupac.",
@@ -913,6 +1291,10 @@ namespace alevin {
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::Custom>& aopt,
+                           SalmonOpts& sopt, bool noTgMap,
+                           boost::program_options::variables_map& vm);
+    template
+    bool processAlevinOpts(AlevinOpts<apt::CustomGeometry>& aopt,
                            SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template

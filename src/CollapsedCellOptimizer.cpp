@@ -296,7 +296,12 @@ bool runGibbsSamples(size_t numGenes,
     nchains = 8;
   }
 
-  std::random_device rd;
+  #if defined(__linux) && defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
+    std::random_device rd("/dev/urandom");
+  #else
+    std::random_device rd;
+  #endif  // defined(__GLIBCXX__) && __GLIBCXX__ >= 2020012
+
   std::mt19937 gen(rd());
 
   std::vector<uint32_t> newChainIter{0};
@@ -459,7 +464,12 @@ bool runBootstraps(size_t numGenes,
   }
 
   // Multinomial Sampler
-  std::random_device rd;
+  #if defined(__linux) && defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
+    std::random_device rd("/dev/urandom");
+  #else
+    std::random_device rd;
+  #endif  // defined(__GLIBCXX__) && __GLIBCXX__ >= 2020012
+
   std::mt19937 gen(rd());
   std::discrete_distribution<uint64_t> csamp(eqCounts.begin(),
                                              eqCounts.end());
@@ -521,7 +531,7 @@ bool runBootstraps(size_t numGenes,
 
     if (alphaSum < minWeight) {
       jointlog->error("Total alpha weight was too small! "
-                      "Make sure you ran salmon correclty.");
+                      "Make sure you ran salmon correctly.");
       jointlog->flush();
       return false;
     }
@@ -1500,6 +1510,18 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                       spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                       spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                                       AlevinOpts<apt::Custom>& aopt,
+                                      GZipWriter& gzw,
+                                      std::vector<std::string>& trueBarcodes,
+                                      std::vector<uint32_t>& umiCount,
+                                      CFreqMapT& freqCounter,
+                                      size_t numLowConfidentBarcode);
+
+
+template
+bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
+                                      spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                                      AlevinOpts<apt::CustomGeometry>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount,

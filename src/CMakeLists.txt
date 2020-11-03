@@ -51,8 +51,9 @@ BAMUtils.cpp
 )
 
 set (ALEVIN_LIB_SRCS
-  edlib.cpp
-  AlevinUtils.cpp
+edlib.cpp
+SingleCellProtocols.cpp
+AlevinUtils.cpp
 )
 
 set (SALMON_LIB_SRCS

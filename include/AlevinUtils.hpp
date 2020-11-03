@@ -79,16 +79,18 @@ namespace alevin{
 
     template <typename ProtocolT>
     bool extractUMI(std::string& read,
+                    std::string& read2,
                     ProtocolT& pt,
                     std::string& umi);
 
     template <typename ProtocolT>
-    void getReadSequence(ProtocolT& pt,
+    std::string* getReadSequence(ProtocolT& pt,
                          std::string& seq,
+                         std::string& seq2,
                          std::string& subseq);
 
     template <typename ProtocolT>
-    nonstd::optional<std::string> extractBarcode(std::string& read, ProtocolT& pt);
+    bool extractBarcode(std::string& read, std::string& read2, ProtocolT& pt, std::string& bc);
 
     template <typename OrderedOptionsT>
     bool writeCmdInfo(boost::filesystem::path cmdInfoPath,
