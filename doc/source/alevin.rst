@@ -209,6 +209,7 @@ Alevin Logs
 ------------
 
 Alevin generates `alevin_meta_info.json` file with the following json entries. Please note based on the command line flags provided during the time alevin was run, some of the below json entries may not be present.
+
 * total_reads -- Total number of reads in the experiment as observed by alevin.
 * reads_with_N -- Total number of reads with at least one nucleotide `N` in their cellular barcode sequence (and are not used for quantification).
 * noisy_cb_reads -- Total number of reads from noisy cellular barcodes (and are not used for quantification). A cellular barcode can be marked noisy based on many different conditions, for example all the barcodes below "knee" threshold or all the barcodes below provided threshold on `--expectCells` / `--forceCells`.
