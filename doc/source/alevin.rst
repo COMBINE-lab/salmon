@@ -42,7 +42,7 @@ below, assume we have two replicates ``lib_A`` and ``lib_B``.  The left and righ
 ``lib_B`` are ``lib_B_cb.fq`` and ``lib_B_read.fq``, respectively.  The following are both valid
 ways to input these reads to alevin::
 
-  > salmon alevin -lISR -1 lib_A_cb.fq lib_B_cb.fq -2 lib_A_read.fq lib_B_read.fq 
+  > salmon alevin -l ISR -1 lib_A_cb.fq lib_B_cb.fq -2 lib_A_read.fq lib_B_read.fq 
 
 Similarly, both of these approaches can be adopted if the files are gzipped as well::
 
