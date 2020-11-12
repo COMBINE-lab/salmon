@@ -91,6 +91,7 @@ cp -r ${EXTERNAL_DIR}/pufferfish/include/compact_vector ${INSTALL_DIR}/include/p
 cp -r ${EXTERNAL_DIR}/pufferfish/include/metro ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/chobo ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/sparsepp ${INSTALL_DIR}/include/pufferfish
+cp -r ${EXTERNAL_DIR}/pufferfish/include/simde ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/tsl ${INSTALL_DIR}/include/pufferfish
 
 
