@@ -19,7 +19,7 @@ project(Salmon)
 
 # detect host architecture 
 if(NOT DEFINED USE_ARM)
-  if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "arm") 
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64.*|AARCH64.*|arm64.*|ARM64.*)")
     set(USE_ARM TRUE)
     # set char to be signed
     add_compile_options(-fsigned-char)
