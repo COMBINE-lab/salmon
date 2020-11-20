@@ -22,7 +22,7 @@ namespace defaults {
   // advanced
   constexpr const bool validateMappings{true};
   constexpr const bool disableSA{false};
-  constexpr const float consensusSlack{0.0};
+  constexpr const float consensusSlack{0.35};
   constexpr const double minScoreFraction{0.65};
   constexpr const double pre_merge_chain_sub_thresh{0.75};
   constexpr const double post_merge_chain_sub_thresh{0.9};

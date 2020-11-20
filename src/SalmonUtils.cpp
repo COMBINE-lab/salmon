@@ -1515,10 +1515,9 @@ std::string getCurrentTimeAsString() {
     // validateMappings
     bool consensusSlackExplicit = !vm["consensusSlack"].defaulted();
     if (!consensusSlackExplicit) {
-      sopt.consensusSlack = 0.35;
       sopt.jointLog->info(
-                          "Usage of --validateMappings implies a default consensus slack of 0.2. "
-                          "Setting consensusSlack to {}.", sopt.consensusSlack);
+                          "Setting consensusSlack to selective-alignment default of {}.", 
+                          sopt.consensusSlack);
     }
 
     bool pre_merge_chain_sub_thresh_explicit = !vm["preMergeChainSubThresh"].defaulted();
