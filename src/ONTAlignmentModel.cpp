@@ -7,6 +7,7 @@
 #include <boost/math/distributions/binomial.hpp>
 #include <boost/math/distributions/geometric.hpp>
 
+#include "dbg.hpp"
 #include "ONTAlignmentModel.hpp"
 #include "SalmonMath.hpp"
 #include "SalmonStringUtils.hpp"
@@ -86,7 +87,7 @@ double ONTAlignmentModel::logLikelihood(const UnpairedRead& hit, const UnpairedR
   if(clipAvg.sum > dmin && clipAvg.mass > dmin) {
     using        boost::math::geometric;
     const double  mean          = clipAvg.sum / clipAvg.mass;
-    geometric     clipDist(1.0 / mean);
+    geometric     clipDist(1.0 / (mean + 1.0));
     const int32_t rmean         = std::round(mean);
     const auto    clips         = counts.fclips();
     const double clipLikelihood =
