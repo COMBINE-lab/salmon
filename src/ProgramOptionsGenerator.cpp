@@ -372,10 +372,10 @@ namespace salmon {
       ("version,v", "print version string")
       ("help,h", "produce help message")
       ("output,o", po::value<std::string>()->required(), "Output quantification directory.")
-      ("justAlign,j", po::bool_switch()->default_value(alevin::defaults::just_align),
+      ("rad,justAlign,j", po::bool_switch()->default_value(alevin::defaults::just_align),
        "just selectively align the data and write the results to a RAD file.  Do not perform "
        "the rest of the quantification procedure.")
-      ("sketchMode", po::bool_switch()->default_value(alevin::defaults::sketch_mode),
+      ("sketch,sketchMode", po::bool_switch()->default_value(alevin::defaults::sketch_mode),
        "perform sketching rather than selective alignment and write the results to a RAD file. "
        "Requires the `--justAlign` flag. Do not perform the rest of the quantification procedure." 
       )
