@@ -773,10 +773,10 @@ namespace alevin {
       std::vector<spdlog::sink_ptr> sinks{consoleSink, fileSink};
       aopt.jointLog = spdlog::create("alevinLog", std::begin(sinks), std::end(sinks));
 
-      aopt.just_align = vm["justAlign"].as<bool>();
-      aopt.sketch_mode = vm["sketchMode"].as<bool>();
+      aopt.just_align = vm["rad"].as<bool>();
+      aopt.sketch_mode = vm["sketch"].as<bool>();
       if (aopt.sketch_mode and !aopt.just_align) {
-        aopt.jointLog->info("currently, --sketchMode implies --justAlign. Running in "
+        aopt.jointLog->info("currently, --sketch implies --rad. Running in "
                             "alignment-only mode (will write a RAD output).");
         aopt.just_align = true;
       }
@@ -806,18 +806,18 @@ namespace alevin {
       aopt.expectCells = vm["expectCells"].as<uint32_t>();
 
       if (aopt.just_align) {
-        aopt.jointLog->info("The --justAlign flag was passed to alevin. The "
+        aopt.jointLog->info("The --rad flag was passed to alevin. The "
         "reads will be selectively aligned and the output written to a RAD file."
         "Arguments passed that correspond to other processing steps will be ignored");
         if (aopt.sketch_mode) {
-          aopt.jointLog->info("The --sketchMode flag was passed; the alignment will be run "
+          aopt.jointLog->info("The --sketch flag was passed; the alignment will be run "
           "in sketch mode.");
           sopt.mismatchSeedSkip = 7;
         }
       } else {
         if (aopt.sketch_mode) {
-          aopt.jointLog->info("The --sketchMode flag is not meaningful without the "
-          "--justAlign flag.  This flag will be ignored.");
+          aopt.jointLog->info("The --sketch flag is not meaningful without the "
+          "--rad flag.  This flag will be ignored.");
         }
       }
 
@@ -1024,7 +1024,7 @@ namespace alevin {
           if ( (!aopt.just_align) and bc_geo.uses_r2() ) {
             aopt.jointLog->error("Currently, barcodes spanning read 1 and read 2 "
                                  "are supported in alignment/sketch mode only "
-                                 "(i.e. with the --justAlign flag or the --sketchMode flag). "
+                                 "(i.e. with the --rad flag or the --sketch flag). "
                                  "Custom barcode geometry without this mode must reside entirely on read1. "
                                  "If you require custom barcode geometry spanning both reads, consider "
                                  "using the alevin-fry pipeline.");
@@ -1046,7 +1046,7 @@ namespace alevin {
           if ( (!aopt.just_align) and bc_geo.uses_r2() ) {
             aopt.jointLog->error("Currently, umis spanning read 1 and read 2 "
                                  "are supported in alignment/sketch mode only "
-                                 "(i.e. with the --justAlign flag or the --sketchMode flag). "
+                                 "(i.e. with the --rad flag or the --sketch flag). "
                                  "Custom umi geometry without this mode must reside entirely on read1. "
                                  "If you require custom umi geometry spanning both reads, consider "
                                  "using the alevin-fry pipeline.");
