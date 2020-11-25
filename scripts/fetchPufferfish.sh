@@ -43,7 +43,7 @@ fi
 if [ -z "${hashcheck-}" ]; then
     echo "Couldn't find shasum command; can't verify contents of downloaded pufferfish";
 else
-    if [[ $SVER != sketch-mode ]]; then
+    if [[ $SVER != develop ]]; then
         echo "${EXPECTED_SHA256}  ${EXTERNAL_DIR}/pufferfish.zip" | ${hashcheck} -c - || { echo "pufferfish.zip did not match expected SHA1! Exiting."; exit 1; }
     else
         echo "not testing sha since pulling from develop"
