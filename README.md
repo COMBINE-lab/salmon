@@ -7,6 +7,8 @@
 
 **Try out alevin (salmon's single-cell processing module)!  Get started with the [tutorial](https://combine-lab.github.io/alevin-tutorial/#blog)**
 
+**Try out the new [alevin-fry](https://alevin-fry.readthedocs.io/en/latest/) framework for single-cell analysis!**
+
 **Help guide the development of Salmon, [take our survey](https://docs.google.com/forms/d/e/1FAIpQLSeWhBNE_fA_0uVHvbAlAulDmfmowv7rAYla879DZpqCARyRTQ/viewform)**
 
 ### Pre-computed decoy transcriptomes 
