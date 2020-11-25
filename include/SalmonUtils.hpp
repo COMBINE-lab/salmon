@@ -13,6 +13,7 @@ extern "C" {
 #include <boost/program_options.hpp>
 #include <iostream>
 #include <memory>
+#include <random>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -314,6 +315,8 @@ LibraryFormat hitType(int32_t end1Start, bool end1Fwd, uint32_t len1,
 LibraryFormat hitType(int32_t readStart, bool isForward);
 
 double compute_1_edit_threshold(int32_t l, const SalmonOpts& sopt);
+
+//std::random_device get_random_device();
 
 /**
  *  Cache the mappings provided in an efficient binary format

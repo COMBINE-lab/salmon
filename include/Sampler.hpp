@@ -84,7 +84,12 @@ void sampleMiniBatch(AlignmentLibraryT<FragT>& alnLib,
                      OutputQueue<FragT>& outputQueue) {
 
   // Seed with a real random value, if available
-  std::random_device rd;
+  #if defined(__linux) && defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
+    std::random_device rd("/dev/urandom");
+  #else
+    std::random_device rd;
+  #endif  // defined(__GLIBCXX__) && __GLIBCXX__ >= 2020012
+  
   auto log = spdlog::get("jointLog");
 
   // Create a random uniform distribution

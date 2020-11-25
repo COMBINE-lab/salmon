@@ -205,6 +205,30 @@ Tutorial & Parsers
 We have compiled a step-by-step resource to help get started with aleivn. We have tutorials on how to get input, run and generate output using alevin's framework which can be found here at `Alevin Tutorials <https://combine-lab.github.io/alevin-tutorial/#blog>`_.
 The tutorial also covers the topic of integrating alevin with downstream analysis tools like Seurat and Monocle. If you are interested in parsing various output binary formats like `quants_mat.gz`, `quants_tier_mat.gz`, `cell_umigraph.gz` etc. of alevin in python, checkout our companion repo for `python parsing <https://github.com/k3yavi/vpolo/blob/master/vpolo/alevin/parser.py>`_. This repo is also available on pip and can be installed through `pip install vpolo`. We cover how to use this library on our alevin-tutorial website too.
 
+Alevin Logs
+------------
+
+Alevin generates `alevin_meta_info.json` file with the following json entries. Please note based on the command line flags provided during the time alevin was run, some of the below json entries may not be present.
+
+* total_reads -- Total number of reads in the experiment as observed by alevin.
+* reads_with_N -- Total number of reads with at least one nucleotide `N` in their cellular barcode sequence (and are not used for quantification).
+* noisy_cb_reads -- Total number of reads from noisy cellular barcodes (and are not used for quantification). A cellular barcode can be marked noisy based on many different conditions, for example all the barcodes below "knee" threshold or all the barcodes below provided threshold on `--expectCells` / `--forceCells`.
+* noisy_umi_reads -- Total number of reads with at least one nucleotide `N` in their UMI sequence (and are not used for quantification).
+* used_reads -- Total reads used for the quantification: total_reads - reads_with_N - noisy_cb_reads - noisy_umi_reads.
+* mapping_rate -- Fraction of reads mapping to the reference i.e. #mapped reads / total_reads.
+* reads_in_eqclasses - Total number of reads present in the bfh (cell level equivalence classes).
+* total_cbs -- Total number of cellular barcodes observed by alevin in the experiment.
+* used_cbs -- Total number of cellular barcodes used by alevin for the quantification.
+* initial_whitelist -- Total number of whitelisted cellular barcodes by "knee" based thresholding.
+* low_conf_cbs -- Total number of low confidence cellular barcodes quantified for intelligent whitelisting.
+* num_features -- Total number of features used intelligent whitelisting of the cellular barcodes.
+* final_num_cbs -- Total number of cellular barcodes present in the output quant matrix.
+* deduplicated_umis -- Total number of UMIs present in the experiment post UMI deduplication across all cells.
+* mean_umis_per_cell -- Mean of the number of UMIs (post deduplication) present in each cell.
+* mean_genes_per_cell -- Mean of the number of genes expressed (>0 counts) in each cell.
+* no_read_mapping_cbs -- Total number of cellular barcodes with no reads mapped to them.
+* num_bootstraps -- Total number of bootstrap inferential replicates generated for each cell.
+
 Misc
 ----
 
@@ -232,9 +256,24 @@ BibTex
 |   publisher={BioMed Central}
 | }
 
+| @article{Srivastava2020,
+|   doi = {10.1093/bioinformatics/btaa450},
+|   url = {https://doi.org/10.1093/bioinformatics/btaa450},
+|   year = {2020},
+|   month = jul,
+|   publisher = {Oxford University Press ({OUP})},
+|   volume = {36},
+|   number = {Supplement{\_}1},
+|   pages = {i292--i299},
+|   author = {Avi Srivastava and Laraib Malik and Hirak Sarkar and Rob Patro},
+|   title = {A Bayesian framework for inter-cellular information sharing improves {dscRNA}-seq quantification},
+|   journal = {Bioinformatics}
+| }
+
 DOI
 ----
-https://doi.org/10.1186/s13059-019-1670-y
+* https://doi.org/10.1186/s13059-019-1670-y
+* https://doi.org/10.1093/bioinformatics/btaa450
 
 References
 ----------

@@ -51,8 +51,9 @@ BAMUtils.cpp
 )
 
 set (ALEVIN_LIB_SRCS
-  edlib.cpp
-  AlevinUtils.cpp
+edlib.cpp
+SingleCellProtocols.cpp
+AlevinUtils.cpp
 )
 
 set (SALMON_LIB_SRCS
@@ -142,6 +143,11 @@ HAVE_SSTREAM=1
 STX_NO_STD_STRING_VIEW=1
 span_FEATURE_MAKE_SPAN_TO_STD=14
 )
+
+if (USE_ARM)
+target_compile_definitions(salmon_core PUBLIC KSW_USE_ARM=1)
+endif()
+
 target_compile_options(salmon_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
 target_compile_options(salmon_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
 if(HAS_IPO AND (NOT NO_IPO))
@@ -158,6 +164,11 @@ HAVE_ANSI_TERM=1
 HAVE_SSTREAM=1
 span_FEATURE_MAKE_SPAN_TO_STD=14
 )
+
+if (USE_ARM)
+target_compile_definitions(alevin_core PUBLIC KSW_USE_ARM=1)
+endif()
+
 target_compile_options(alevin_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
 target_compile_options(alevin_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
 

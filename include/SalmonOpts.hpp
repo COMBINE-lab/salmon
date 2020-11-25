@@ -48,7 +48,7 @@ struct SalmonOpts {
                             // the optimization.
 
   bool allowOrphans; // Consider orphaned reads when performing lightweight
-                     // alignemnt.
+                     // alignment.
 
   std::string auxDir; // The directory where auxiliary files will be written.
 

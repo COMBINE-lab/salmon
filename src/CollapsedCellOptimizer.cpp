@@ -296,7 +296,12 @@ bool runGibbsSamples(size_t numGenes,
     nchains = 8;
   }
 
-  std::random_device rd;
+  #if defined(__linux) && defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
+    std::random_device rd("/dev/urandom");
+  #else
+    std::random_device rd;
+  #endif  // defined(__GLIBCXX__) && __GLIBCXX__ >= 2020012
+
   std::mt19937 gen(rd());
 
   std::vector<uint32_t> newChainIter{0};
@@ -459,7 +464,12 @@ bool runBootstraps(size_t numGenes,
   }
 
   // Multinomial Sampler
-  std::random_device rd;
+  #if defined(__linux) && defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
+    std::random_device rd("/dev/urandom");
+  #else
+    std::random_device rd;
+  #endif  // defined(__GLIBCXX__) && __GLIBCXX__ >= 2020012
+
   std::mt19937 gen(rd());
   std::discrete_distribution<uint64_t> csamp(eqCounts.begin(),
                                              eqCounts.end());
@@ -521,7 +531,7 @@ bool runBootstraps(size_t numGenes,
 
     if (alphaSum < minWeight) {
       jointlog->error("Total alpha weight was too small! "
-                      "Make sure you ran salmon correclty.");
+                      "Make sure you ran salmon correctly.");
       jointlog->flush();
       return false;
     }
@@ -1005,7 +1015,7 @@ void optimizeCell(std::vector<std::string>& trueBarcodes,
     char red[] = "\x1b[30m";
     red[3] = '0' + static_cast<char>(fmt::RED);
 
-    double cellCount {static_cast<double>(barcode)};//numCells-jqueue.size_approx()};
+    double cellCount {static_cast<double>(barcode)};
     if (cellCount > totalCells) { cellCount = totalCells; }
     double percentCompletion {cellCount*100/numCells};
     if (not quiet){
@@ -1355,7 +1365,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
   std::copy(geneNames.begin(), geneNames.end(), giterator);
   gFile.close();
 
-  if( not aopt.naiveEqclass and  not hasWhitelist and not usingHashMode){
+  if( not aopt.noWhitelist and  not aopt.naiveEqclass and  not hasWhitelist and not usingHashMode){
     aopt.jointLog->info("Clearing EqMap; Might take some time.");
     fullEqMap.clear();
 
@@ -1390,8 +1400,8 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
       aopt.jointLog->flush();
     }
   } //end-if whitelisting
-  else if ( usingHashMode and not hasWhitelist ) {
-    aopt.jointLog->warn("intelligent whitelisting is disabled in hash mode; skipping");
+  else if ( aopt.noWhitelist or ( usingHashMode and not hasWhitelist ) ) {
+    aopt.jointLog->warn("intelligent whitelisting is disabled ; skipping");
     aopt.jointLog->flush();
   }
 
@@ -1500,6 +1510,18 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
                                       spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                                       spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                                       AlevinOpts<apt::Custom>& aopt,
+                                      GZipWriter& gzw,
+                                      std::vector<std::string>& trueBarcodes,
+                                      std::vector<uint32_t>& umiCount,
+                                      CFreqMapT& freqCounter,
+                                      size_t numLowConfidentBarcode);
+
+
+template
+bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
+                                      spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                                      spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                                      AlevinOpts<apt::CustomGeometry>& aopt,
                                       GZipWriter& gzw,
                                       std::vector<std::string>& trueBarcodes,
                                       std::vector<uint32_t>& umiCount,

@@ -7,6 +7,8 @@ namespace alevin {
 namespace types {
 
   using AlevinUMIKmer = combinelib::kmers::Kmer<32,2>;
+  // Can only hold the barcode if it's <= 32 nucleotides
+  using AlevinCellBarcodeKmer = combinelib::kmers::Kmer<32,5>;
 
 }
 }

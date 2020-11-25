@@ -17,6 +17,21 @@ enable_testing()
 
 project(Salmon)
 
+# detect host architecture 
+if(NOT DEFINED USE_ARM)
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64.*|AARCH64.*|arm64.*|ARM64.*)")
+    message("Detected 64-bit ARM host. Setting USE_ARM to true.")
+    set(USE_ARM TRUE)
+    # set char to be signed
+    add_compile_options(-fsigned-char)
+    set(SCHAR_FLAG "-fsigned-char")
+  else()
+    message("Detected non-ARM host. Setting USE_ARM to false.")
+    set(USE_ARM FALSE)
+    set(SCHAR_FLAG "")
+  endif()
+endif()
+
 option(USE_SHARED_LIBS "Use shared instead of static libraries" OFF)
 
 # auto-populate version:
@@ -66,9 +81,8 @@ endif()
 message(STATUS "CMAKE_BUILD_TYPE = ${CMAKE_BUILD_TYPE}")
 
 ## Set the standard required compile flags
-# Nov 18th --- removed -DHAVE_CONFIG_H
 set(REMOVE_WARNING_FLAGS "-Wno-unused-function;-Wno-unused-local-typedefs")
-set(TGT_COMPILE_FLAGS "-ftree-vectorize;-funroll-loops;-fPIC;-fomit-frame-pointer;-O3;-DNDEBUG;-DSTX_NO_STD_STRING_VIEW;-D__STDC_FORMAT_MACROS")
+set(TGT_COMPILE_FLAGS "${SCHAR_FLAG};-ftree-vectorize;-funroll-loops;-fPIC;-fomit-frame-pointer;-O3;-DNDEBUG;-DSTX_NO_STD_STRING_VIEW;-D__STDC_FORMAT_MACROS")
 set(TGT_WARN_FLAGS "-Wall;-Wno-unknown-pragmas;-Wno-reorder;-Wno-unused-variable;-Wreturn-type;-Werror=return-type;${REMOVE_WARNING_FLAGS}")
 #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address")
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
@@ -212,7 +226,7 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
     set(WARNING_IGNORE_FLAGS "${WARNING_IGNORE_FLAGS} -Wno-unused-local-typedefs")
     set(BOOST_TOOLSET "${CC}")
     set(BOOST_CONFIGURE_TOOLSET "--with-toolset=gcc")
-    set(BCXX_FLAGS "${CXXSTDFLAG}")
+    set(BCXX_FLAGS "${CXXSTDFLAG} ${SCHAR_FLAG}")
     set(BOOST_EXTRA_FLAGS toolset=${CC} cxxflags=${BCXX_FLAGS})
 # Tentatively, we support clang now
 elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
@@ -225,7 +239,7 @@ elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
       list(APPEND TGT_COMPILE_FLAGS -stdlib=libc++)
       set(BOOST_TOOLSET "clang")
       set(BOOST_CONFIGURE_TOOLSET "--with-toolset=clang")
-      set(BCXX_FLAGS "-stdlib=libc++ -DBOOST_HAS_INT128")
+      set(BCXX_FLAGS "-stdlib=libc++ -DBOOST_HAS_INT128 ${SCHAR_FLAG}")
       set(BOOST_EXTRA_FLAGS toolset=clang cxxflags=${BCXX_FLAGS} linkflags="-stdlib=libc++")
     # Otherwise, use libstdc++ (and make it static)
     else()
@@ -641,7 +655,7 @@ if("${TBB_COMPILER}" STREQUAL "gcc")
   set(TBB_CXXFLAGS "${TBB_CXXFLAGS} -UDO_ITT_NOTIFY")
 endif()
 
-set(TBB_CXXFLAGS "${TBB_CXXFLAGS} ${CXXSTDFLAG}")
+set(TBB_CXXFLAGS "${TBB_CXXFLAGS} ${CXXSTDFLAG} ${SCHAR_FLAG}")
 
 externalproject_add(libtbb
   DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
@@ -796,7 +810,7 @@ if (NOT LIBSTADENIO_FOUND)
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/staden-io_lib
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ./configure --enable-shared=no --without-libcurl --prefix=<INSTALL_DIR> LDFLAGS=${LIBSTADEN_LDFLAGS} CFLAGS=${LIBSTADEN_CFLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
-    BUILD_COMMAND make ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS+=${STADEN_INC} CFLAGS+=${STADEN_LIB} LDFLAGS+=${EXTRA_CMAKE_LIBRARY_FLAGS} CFLAGS+=${EXTRA_CMAKE_INCLUDE_FLAGS} CFLAGS+=${LZFLAG}
+    BUILD_COMMAND make ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS+=${STADEN_INC} CFLAGS+=${STADEN_LIB} LDFLAGS+=${EXTRA_CMAKE_LIBRARY_FLAGS} CFLAGS+=${EXTRA_CMAKE_INCLUDE_FLAGS} CFLAGS+=${LZFLAG} CFLAGS+=${SCHAR_FLAG}
 
 
     BUILD_IN_SOURCE 1
@@ -834,9 +848,9 @@ else()
 endif()
 
 if(CONDA_BUILD)
-  set(JEMALLOC_FLAGS "CC=${CMAKE_C_COMPILER} CFLAGS=-fPIC CPPFLAGS=-fPIC")
+  set(JEMALLOC_FLAGS "CC=${CMAKE_C_COMPILER} CFLAGS=\\\"-fPIC ${SCHAR_FLAG}\\\" CPPFLAGS=\\\"-fPIC ${SCHAR_FLAG}\\\"")
 else()
-  set(JEMALLOC_FLAGS "CC=${CMAKE_C_COMPILER}")
+  set(JEMALLOC_FLAGS "CC=${CMAKE_C_COMPILER} CFLAGS=${SCHAR_FLAG} CPPFLAGS=${SCHAR_FLAG}")
 endif()
 
 if(NOT HAVE_FAST_MALLOC)
