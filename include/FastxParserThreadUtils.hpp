@@ -8,7 +8,6 @@
 #include <thread>
 #if defined(__SSE2__)
 #include "simde/x86/sse2.h"
-//#include <xmmintrin.h> // _mm_pause
 #endif
 
 // Most of this code is taken directly from
