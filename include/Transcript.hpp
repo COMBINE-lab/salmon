@@ -35,7 +35,7 @@ public:
   using Rank9bPointer = std::unique_ptr<rank9b>;
 
   Transcript()
-      : RefName(nullptr), RefLength(std::numeric_limits<uint32_t>::max()),
+      : RefName(), RefLength(std::numeric_limits<uint32_t>::max()),
         CompleteLength(std::numeric_limits<uint32_t>::max()),
         EffectiveLength(-1.0), id(std::numeric_limits<uint32_t>::max()),
         logPerBasePrior_(salmon::math::LOG_0), priorMass_(salmon::math::LOG_0),
