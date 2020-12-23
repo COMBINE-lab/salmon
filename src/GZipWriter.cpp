@@ -492,7 +492,6 @@ bool GZipWriter::writeMetaAlevin(const AlevinOpts<ProtocolT>& opts,
     oa(cereal::make_nvp("noisy_umi_reads", opts.noisyUmis));
     oa(cereal::make_nvp("used_reads", opts.totalUsedReads
                         - opts.readsThrown
-                        - opts.noisyUmis
                         - opts.noisyUmis));
     oa(cereal::make_nvp("mapping_rate", opts.mappingRate));
     oa(cereal::make_nvp("reads_in_eqclasses", opts.eqReads));
@@ -1796,6 +1795,10 @@ template
 bool GZipWriter::writeEquivCounts<SCExpT, apt::Custom>(
                                                        const AlevinOpts<apt::Custom>& aopts,
                                                        SCExpT& readExp);
+template
+bool GZipWriter::writeEquivCounts<SCExpT, apt::CustomGeometry>(
+                                                       const AlevinOpts<apt::CustomGeometry>& aopts,
+                                                       SCExpT& readExp);
 template bool
 GZipWriter::writeMetaAlevin<apt::DropSeq>(const AlevinOpts<apt::DropSeq>& opts,
                                           boost::filesystem::path aux_dir);
@@ -1825,6 +1828,10 @@ GZipWriter::writeMetaAlevin<apt::Custom>(const AlevinOpts<apt::Custom>& opts,
                                          boost::filesystem::path aux_dir);
 template bool
 GZipWriter::writeMetaAlevin<apt::Gemcode>(const AlevinOpts<apt::Gemcode>& opts,
+                                          boost::filesystem::path aux_dir);
+
+template bool
+GZipWriter::writeMetaAlevin<apt::CustomGeometry>(const AlevinOpts<apt::CustomGeometry>& opts,
                                           boost::filesystem::path aux_dir);
 
 

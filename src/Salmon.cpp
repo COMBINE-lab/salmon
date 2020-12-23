@@ -263,7 +263,7 @@ int main(int argc, char* argv[]) {
       return help(opts);
     } else {
       // If the command is quant; determine whether
-      // we're quantifying with raw sequences or alignemnts
+      // we're quantifying with raw sequences or alignments
       if (cmdMain->first == "quant") {
 
         if (subCommandArgc < 2) {

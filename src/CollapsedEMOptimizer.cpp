@@ -355,18 +355,18 @@ size_t markDegenerateClasses(
 
       errstream << "denom = 0, count = " << count << "\n";
       errstream << "class = { ";
-      for (auto e : txps) {
-        errstream << e << " ";
+      for (size_t tn = 0; tn < groupSize; ++tn) {
+        errstream << txps[tn] << " ";
       }
       errstream << "}\n";
       errstream << "alphas = { ";
-      for (auto e : txps) {
-        errstream << alphaIn[e] << " ";
+      for (size_t tn = 0; tn < groupSize; ++tn) {
+        errstream << alphaIn[txps[tn]] << " ";
       }
       errstream << "}\n";
       errstream << "weights = { ";
-      for (auto e : auxs) {
-        errstream << e << " ";
+      for (size_t tn = 0; tn < groupSize; ++tn) {
+        errstream << auxs[tn] << " ";
       }
       errstream << "}\n";
       errstream << "============================\n\n";
@@ -417,7 +417,12 @@ bool doBootstrap(
 
   auto& jointLog = sopt.jointLog;
 
-  std::random_device rd;
+  #if defined(__linux) && defined(__GLIBCXX__) && __GLIBCXX__ >= 20200128
+    std::random_device rd("/dev/urandom");
+  #else
+    std::random_device rd;
+  #endif  // defined(__GLIBCXX__) && __GLIBCXX__ >= 2020012
+
   std::mt19937 gen(rd());
   // MultinomialSampler msamp(rd);
   std::discrete_distribution<uint64_t> csamp(sampleWeights.begin(),
@@ -510,7 +515,7 @@ bool doBootstrap(
 
     if (alphaSum < ::minWeight) {
       jointLog->error("Total alpha weight was too small! "
-                      "Make sure you ran salmon correclty.");
+                      "Make sure you ran salmon correctly.");
       return false;
     }
 
@@ -803,7 +808,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
       alphas[i].store(alphasPrime[i].load());
       alphasPrime[i] = 1.0;
     }
-  } else { // otherwise, initalize with a linear combination of the true and
+  } else { // otherwise, initialize with a linear combination of the true and
            // uniform alphas
     for (size_t i = 0; i < alphas.size(); ++i) {
       auto uniAbund = (metaGenomeMode or altInitMode) ? alphasPrime[i].load()
@@ -980,7 +985,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   /* -- v0.8.x
   if (alphaSum < ::minWeight) {
     jointLog->error("Total alpha weight was too small! "
-                    "Make sure you ran salmon correclty.");
+                    "Make sure you ran salmon correctly.");
     return false;
   }
   */
@@ -1005,7 +1010,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
 
   if (alphaSum < ::minWeight) {
     jointLog->error("Total alpha weight was too small! "
-                    "Make sure you ran salmon correclty.");
+                    "Make sure you ran salmon correctly.");
     return false;
   }
 

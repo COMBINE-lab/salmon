@@ -77,7 +77,7 @@ set of alignments.
     main bottleneck is in parsing and decompressing the input BAM file.
     We make use of the `Staden IO <http://sourceforge.net/projects/staden/files/io_lib/>`_ 
     library for SAM/BAM/CRAM I/O (CRAM is, in theory, supported, but has not been
-    thorougly tested).  This means that multiple threads can be effectively used
+    thoroughly tested).  This means that multiple threads can be effectively used
     to aid in BAM decompression.  However, we find that throwing more than a 
     few threads at file decompression does not result in increased processing
     speed.  Thus, alignment-based Salmon will only ever allocate up to 4 threads
@@ -702,7 +702,7 @@ Passing the ``--writeUnmappedNames`` flag to Salmon will tell Salmon to
 write out the names of reads (or mates in paired-end reads) that do not
 map to the transcriptome.  When mapping paired-end reads, the entire
 fragment (both ends of the pair) are identified by the name of the first
-read (i.e. the read appearing in the ``_1`` file).  Each line of the umapped
+read (i.e. the read appearing in the ``_1`` file).  Each line of the unmapped
 reads file contains the name of the unmapped read followed by a simple flag
 that designates *how* the read failed to map completely.  For single-end
 reads, the only valid flag is ``u`` (unmapped).  However, for paired-end
@@ -742,7 +742,7 @@ that the boost options parser that we use works, and the fact that
 ``--writeMappings`` has an implicit argument of ``stdout``, if you 
 provide an explicit argument to ``--writeMappings``, you must do so 
 with the syntax ``--writeMappings=<outfile>`` rather than the synatx 
-``--writeMappings <outfile>``.  This is a due to a limitation of the 
+``--writeMappings <outfile>``.  This is due to a limitation of the 
 parser in how the latter could be interpreted.
 
 .. note:: Compatible mappings
@@ -758,7 +758,7 @@ What's this ``LIBTYPE``?
 
 Salmon, has the user provide a description of the type of sequencing
 library from which the reads come, and this contains information about
-e.g. the relative orientation of paired end reads.  As of version
+e.g. the relative orientation of paired-end reads.  As of version
 0.7.0, Salmon also has the ability to automatically infer (i.e. guess)
 the library type based on how the first few thousand reads map to the
 transcriptome.  To allow Salmon to automatically infer the library

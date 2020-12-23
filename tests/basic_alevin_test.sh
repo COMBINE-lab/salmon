@@ -4,7 +4,7 @@ OUT=$PWD
 
 tfile=$(mktemp /tmp/foo.XXXXXXXXX) 
 
-/usr/bin/time -o $tfile $ALVBIN alevin -lISR --chromium -1 ${BASEDIR}/data/10x/v2/mohu/100/all_bcs.fq -2 ${BASEDIR}/data/10x/v2/mohu/100/all_reads.fq -o $OUT/prediction -i ${BASEDIR}/data/mohu/salmon_index -p 20 --tgMap ${BASEDIR}/data/mohu/gtf/txp2gene.tsv --dumpMtx --no-version-check --dumpFeatures --dumpArborescence --writeMappings=$OUT/prediction/with_bug.sam #--whitelist ./alevin_test_data/alevin/quants_mat_rows.txt
+/usr/bin/time -o $tfile $ALVBIN alevin -lISR --chromium -1 ${BASEDIR}/data/10x/v2/mohu/100/all_bcs.fq.gz -2 ${BASEDIR}/data/10x/v2/mohu/100/all_reads.fq.gz -o $OUT/prediction -i ${BASEDIR}/data/mohu/salmon_index -p 20 --tgMap ${BASEDIR}/data/mohu/gtf/txp2gene.tsv --dumpMtx --no-version-check --dumpFeatures --dumpArborescence --writeMappings=$OUT/prediction/with_bug.sam #--whitelist ./alevin_test_data/alevin/quants_mat_rows.txt
 #--dumpBfh --whitelist /mnt/scratch5/avi/alevin/bin/salmon/tests/whitelist.txt
 #--dumpUmiGraph --numCellBootstraps 100  --dumpBfh --dumpBarcodeEq  --dumpMtx --expectCells 1001  --end 6 --umiLength 10 --barcodeLength 16
 

@@ -22,7 +22,7 @@ namespace defaults {
   // advanced
   constexpr const bool validateMappings{true};
   constexpr const bool disableSA{false};
-  constexpr const float consensusSlack{0.0};
+  constexpr const float consensusSlack{0.35};
   constexpr const double minScoreFraction{0.65};
   constexpr const double pre_merge_chain_sub_thresh{0.75};
   constexpr const double post_merge_chain_sub_thresh{0.9};
@@ -128,6 +128,7 @@ namespace alevin {
 namespace defaults {
   constexpr const bool naiveEqclass{false};
   constexpr const bool noDedup{false};
+  constexpr const bool noWhitelist{false};
   constexpr const bool txpLevel{false};
   constexpr const bool eqClassLevel{false};
   constexpr const bool isDropseq{false};
@@ -150,6 +151,8 @@ namespace defaults {
   constexpr const bool dumpMtx{false};
   constexpr const bool noEM{false};
   constexpr const bool debug{true};
+  constexpr const bool just_align{false};
+  constexpr const bool sketch_mode{false};
   constexpr const uint32_t trimRight{0};
   constexpr const uint32_t numBootstraps{0};
   constexpr const uint32_t numGibbsSamples{0};
