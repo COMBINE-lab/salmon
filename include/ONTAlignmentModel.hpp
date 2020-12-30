@@ -66,7 +66,9 @@ private:
 
   // Clip length model. Geometric distribution with parameter
   // p. Binned for read size.
-  std::vector<average> clipModel_;
+  // Separate models are considered for front and back clips
+  std::vector<average> frontClipModel_;
+  std::vector<average> backClipModel_;
 };
 
 #endif // ERROR_MODEL
