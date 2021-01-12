@@ -749,21 +749,6 @@ namespace alevin {
         }
       }
 
-      if (not noTgMap) {
-        if (vm.count("tgMap")){
-          aopt.geneMapFile = vm["tgMap"].as<std::string>();
-          if (!bfs::exists(aopt.geneMapFile)) {
-            fmt::print(stderr,"\nTranscript to Gene Map File {} does not exists\n Exiting Now",
-                       aopt.geneMapFile.string());
-            return false;
-          }
-        }
-        else{
-          fmt::print(stderr,"\nTranscript to Gene Map File not provided\n Exiting Now");
-          return false;
-        }
-      }
-
       //create logger
       spdlog::set_async_mode(131072);
       auto logPath = aopt.outputDirectory / "alevin.log";
@@ -779,6 +764,21 @@ namespace alevin {
         aopt.jointLog->info("currently, --sketch implies --rad. Running in "
                             "alignment-only mode (will write a RAD output).");
         aopt.just_align = true;
+      }
+
+      if (not noTgMap) {
+        // if there is a tgMap, then make sure that it exists
+        if (vm.count("tgMap")){
+          aopt.geneMapFile = vm["tgMap"].as<std::string>();
+          if (!bfs::exists(aopt.geneMapFile)) {
+            aopt.jointLog->critical("Transcript to Gene Map File {} does not exist. Exiting Now.", 
+                                aopt.geneMapFile.string());
+            return false;
+          }
+        } else if (!aopt.just_align) { // eliding a tgMap is only ok if we are running in alignment (alevin-fry) mode
+          aopt.jointLog->critical("Transcript to Gene Map File not provided. Exiting Now.");
+          return false;
+        }
       }
 
       aopt.quiet = vm["quiet"].as<bool>();
