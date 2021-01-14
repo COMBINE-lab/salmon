@@ -2704,7 +2704,7 @@ transcript abundance from RNA-seq reads
     bfs::path libCountFilePath = outputDirectory / "lib_format_counts.json";
     experiment.summarizeLibraryTypeCounts(libCountFilePath);
 
-    // Test writing out the fragment length distribution
+    // Write out the fragment length distribution
     if (!sopt.noFragLengthDist) {
       bfs::path distFileName = sopt.paramsDirectory / "flenDist.txt";
       {

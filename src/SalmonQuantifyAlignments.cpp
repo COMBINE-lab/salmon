@@ -1498,6 +1498,16 @@ bool processSample(AlignmentLibraryT<ReadT>& alnLib, size_t requiredObservations
       jointLog->info("done.");
     }
 
+  // If we have the fragment length distribution, then dump it here.
+  if (!sopt.noFragLengthDist) {
+    bfs::path distFileName = sopt.paramsDirectory / "flenDist.txt";
+    {
+      std::unique_ptr<std::FILE, int (*)(std::FILE*)> distOut(
+          std::fopen(distFileName.c_str(), "w"), std::fclose);
+      fmt::print(distOut.get(), "{}\n",
+                 alnLib.fragmentLengthDistribution()->toString());
+    }
+  }
 
   // If we are dumping the equivalence classes, then
   // do it here.
