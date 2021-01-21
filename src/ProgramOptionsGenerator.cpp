@@ -324,7 +324,7 @@ namespace salmon {
      "input salmon weighted equivalence class file.")
     ("targets,t", po::value<std::string>(),
      "FASTA format file containing target transcripts.")
-    ("ont", po::bool_switch(&(sopt.oxfordNanoporeModel))->default_value(false),
+      ("ont", po::bool_switch(&(sopt.oxfordNanoporeModel))->default_value(false)->notifier([&sopt](const bool& v) { if(v) sopt.noLengthCorrection = true; }),
      "use alignment model for Oxford Nanopore long reads");
 
     return alignin;

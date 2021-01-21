@@ -293,7 +293,8 @@ int main(int argc, char* argv[]) {
           if (strncmp(argv2[i], "-a", 2) == 0 or
               strncmp(argv2[i], "-e", 2) == 0 or
               strncmp(argv2[i], "--alignments", 12) == 0 or
-              strncmp(argv2[i], "--eqclasses", 11) == 0) {
+              strncmp(argv2[i], "--eqclasses", 11) == 0 or
+              strcmp(argv2[i], "--ont") == 0) {
             useSalmonAlign = true;
             break;
           }
