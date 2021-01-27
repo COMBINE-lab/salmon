@@ -431,7 +431,7 @@ a standard deviation given by ``--fldSD``).
 
 Since the empirical fragment length distribution cannot be estimated
 from the mappings of single-end reads, the ``--fldSD`` allows the user
-to set the expected standard deviation of the fragment lenth
+to set the expected standard deviation of the fragment length
 distribution of the sequencing library.  This value will affect the
 effective length correction, and hence the estimated effective lengths
 of the transcripts and the TPMs.  The value passed to ``--fldSD`` will
