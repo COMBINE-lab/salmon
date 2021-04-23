@@ -46,7 +46,7 @@ Documentation
 The documentation for Salmon is available on [ReadTheDocs](http://readthedocs.org), check it out [here](http://salmon.readthedocs.org).
 
 Salmon is, and will continue to be, [freely and actively supported on a best-effort basis](https://oceangenomics.com/about/#open).
-If you need industrial-grade technical support, please consider the options at [oceangenomics.com/support](http://oceangenomics.com/support).
+If you need industrial-grade technical support, please consider the options at [oceangenomics.com/contact](http://oceangenomics.com/contact).
 
 Chat live about Salmon
 ======================
