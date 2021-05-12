@@ -11,6 +11,7 @@ extern "C" {
 // Our includes
 #include "AlignmentGroup.hpp"
 #include "AlignmentModel.hpp"
+#include "ONTAlignmentModel.hpp"
 #include "BAMQueue.hpp"
 #include "BAMUtils.hpp"
 #include "ClusterForest.hpp"
@@ -50,7 +51,7 @@ template <typename T> class NullFragmentFilter;
  *  It is used to group them together and track information about them
  *  during the quantification procedure.
  */
-template <typename FragT, typename EQBuilderT> class AlignmentLibrary {
+template <typename FragT, typename EQBuilderT, typename AlignModelT> class AlignmentLibrary {
 
 public:
   AlignmentLibrary(std::vector<boost::filesystem::path>& alnFiles,
@@ -208,7 +209,7 @@ for (auto& txp : transcripts_) {
                                                  fragLenStd, fragLenKernelN,
                                                  fragLenKernelP, 1));
 
-    alnMod_.reset(new AlignmentModel(1.0, salmonOpts.numErrorBins));
+    alnMod_.reset(new AlignModelT(1.0, salmonOpts.numErrorBins));
     alnMod_->setLogger(salmonOpts.jointLog);
 
     if (libFmt.type == ReadType::SINGLE_END) {
@@ -290,7 +291,7 @@ for (auto& txp : transcripts_) {
                                                  fragLenStd, fragLenKernelN,
                                                  fragLenKernelP, 1));
 
-    alnMod_.reset(new AlignmentModel(1.0, salmonOpts.numErrorBins));
+    alnMod_.reset(new AlignModelT(1.0, salmonOpts.numErrorBins));
     alnMod_->setLogger(salmonOpts.jointLog);
     salmon::utils::markAuxiliaryTargets(salmonOpts, transcripts_);
   }
@@ -386,7 +387,7 @@ for (auto& txp : transcripts_) {
     return flDist_.get();
   }
 
-  inline AlignmentModel& alignmentModel() { return *alnMod_.get(); }
+  inline AlignModelT& alignmentModel() { return *alnMod_.get(); }
 
   // SequenceBiasModel& sequenceBiasModel() { return seqBiasModel_; }
 
@@ -642,7 +643,7 @@ private:
   /**
    * The emperical error model
    */
-  std::unique_ptr<AlignmentModel> alnMod_;
+  std::unique_ptr<AlignModelT> alnMod_;
 
   /** Keeps track of the number of passes that have been
    *  made through the alignment file.

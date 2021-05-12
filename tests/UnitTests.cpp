@@ -5,6 +5,7 @@
 #include "LibraryFormat.hpp"
 #include "SalmonUtils.hpp"
 #include "Transcript.hpp"
+#include "UtilityFunctions.hpp"
 
 bool verbose=false; // Apparently, we *need* this (OSX)
 #include "GCSampleTests.cpp"

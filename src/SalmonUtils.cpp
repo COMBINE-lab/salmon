@@ -3397,16 +3397,20 @@ std::random_device get_random_device() {
 // === Explicit instantiations
 using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 using BulkExpT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;
-template <typename FragT>
-using BulkAlignLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>>;
+template <typename FragT,typename AlignModelT>
+using BulkAlignLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>, AlignModelT>;
 
 // explicit instantiations for writing abundances ---
-template void salmon::utils::writeAbundances<BulkAlignLibT<ReadPair>>(
-    const SalmonOpts& opts, BulkAlignLibT<ReadPair>& alnLib,
+template void salmon::utils::writeAbundances<BulkAlignLibT<ReadPair,AlignmentModel>>(
+    const SalmonOpts& opts, BulkAlignLibT<ReadPair,AlignmentModel>& alnLib,
     boost::filesystem::path& fname, std::string headerComments);
 
-template void salmon::utils::writeAbundances<BulkAlignLibT<UnpairedRead>>(
-    const SalmonOpts& opts, BulkAlignLibT<UnpairedRead>& alnLib,
+template void salmon::utils::writeAbundances<BulkAlignLibT<UnpairedRead,AlignmentModel>>(
+    const SalmonOpts& opts, BulkAlignLibT<UnpairedRead,AlignmentModel>& alnLib,
+    boost::filesystem::path& fname, std::string headerComments);
+
+template void salmon::utils::writeAbundances<BulkAlignLibT<UnpairedRead,ONTAlignmentModel>>(
+    const SalmonOpts& opts, BulkAlignLibT<UnpairedRead,ONTAlignmentModel>& alnLib,
     boost::filesystem::path& fname, std::string headerComments);
 
 template void salmon::utils::writeAbundances<BulkExpT>(
@@ -3419,13 +3423,18 @@ template void salmon::utils::writeAbundances<SCExpT>(
 
 
 template void
-salmon::utils::writeAbundancesFromCollapsed<BulkAlignLibT<ReadPair>>(
-    const SalmonOpts& opts, BulkAlignLibT<ReadPair>& alnLib,
+salmon::utils::writeAbundancesFromCollapsed<BulkAlignLibT<ReadPair,AlignmentModel>>(
+    const SalmonOpts& opts, BulkAlignLibT<ReadPair,AlignmentModel>& alnLib,
     boost::filesystem::path& fname, std::string headerComments);
 
 template void
-salmon::utils::writeAbundancesFromCollapsed<BulkAlignLibT<UnpairedRead>>(
-    const SalmonOpts& opts, BulkAlignLibT<UnpairedRead>& alnLib,
+salmon::utils::writeAbundancesFromCollapsed<BulkAlignLibT<UnpairedRead,AlignmentModel>>(
+    const SalmonOpts& opts, BulkAlignLibT<UnpairedRead,AlignmentModel>& alnLib,
+    boost::filesystem::path& fname, std::string headerComments);
+
+template void
+salmon::utils::writeAbundancesFromCollapsed<BulkAlignLibT<UnpairedRead,ONTAlignmentModel>>(
+    const SalmonOpts& opts, BulkAlignLibT<UnpairedRead,ONTAlignmentModel>& alnLib,
     boost::filesystem::path& fname, std::string headerComments);
 
 template void salmon::utils::writeAbundancesFromCollapsed<BulkExpT>(
@@ -3443,10 +3452,12 @@ template void
 salmon::utils::normalizeAlphas<SCExpT>(const SalmonOpts& sopt,
                                                SCExpT& alnLib);
 
-template void salmon::utils::normalizeAlphas<BulkAlignLibT<UnpairedRead>>(
-    const SalmonOpts& sopt, BulkAlignLibT<UnpairedRead>& alnLib);
-template void salmon::utils::normalizeAlphas<BulkAlignLibT<ReadPair>>(
-    const SalmonOpts& sopt, BulkAlignLibT<ReadPair>& alnLib);
+template void salmon::utils::normalizeAlphas<BulkAlignLibT<UnpairedRead,AlignmentModel>>(
+    const SalmonOpts& sopt, BulkAlignLibT<UnpairedRead,AlignmentModel>& alnLib);
+template void salmon::utils::normalizeAlphas<BulkAlignLibT<UnpairedRead,ONTAlignmentModel>>(
+    const SalmonOpts& sopt, BulkAlignLibT<UnpairedRead,ONTAlignmentModel>& alnLib);
+template void salmon::utils::normalizeAlphas<BulkAlignLibT<ReadPair,AlignmentModel>>(
+    const SalmonOpts& sopt, BulkAlignLibT<ReadPair,AlignmentModel>& alnLib);
 
 // explicit instantiations for effective length updates ---
 template Eigen::VectorXd
@@ -3474,30 +3485,44 @@ salmon::utils::updateEffectiveLengths<std::vector<double>, SCExpT>(
                                                                            std::vector<double>& alphas, std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
-salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
-                                      BulkAlignLibT<ReadPair>>(
-    SalmonOpts& sopt, BulkAlignLibT<ReadPair>& readExp,
-    Eigen::VectorXd& effLensIn, std::vector<std::atomic<double>>& alphas,
-    std::vector<bool>& available, bool finalRound);
-
-template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<double>,
-                                      BulkAlignLibT<ReadPair>>(
-    SalmonOpts& sopt, BulkAlignLibT<ReadPair>& readExp,
+                                      BulkAlignLibT<ReadPair,AlignmentModel>>(
+    SalmonOpts& sopt, BulkAlignLibT<ReadPair,AlignmentModel>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<double>& alphas,
     std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
-                                      BulkAlignLibT<UnpairedRead>>(
-    SalmonOpts& sopt, BulkAlignLibT<UnpairedRead>& readExp,
+                                      BulkAlignLibT<UnpairedRead,AlignmentModel>>(
+    SalmonOpts& sopt, BulkAlignLibT<UnpairedRead,AlignmentModel>& readExp,
+    Eigen::VectorXd& effLensIn, std::vector<std::atomic<double>>& alphas,
+    std::vector<bool>& available, bool finalRound);
+
+template Eigen::VectorXd
+salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
+                                      BulkAlignLibT<ReadPair,AlignmentModel>>(
+    SalmonOpts& sopt, BulkAlignLibT<ReadPair,AlignmentModel>& readExp,
+    Eigen::VectorXd& effLensIn, std::vector<std::atomic<double>>& alphas,
+    std::vector<bool>& available, bool finalRound);
+
+template Eigen::VectorXd
+salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
+                                      BulkAlignLibT<UnpairedRead,ONTAlignmentModel>>(
+    SalmonOpts& sopt, BulkAlignLibT<UnpairedRead,ONTAlignmentModel>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<std::atomic<double>>& alphas,
     std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<double>,
-                                      BulkAlignLibT<UnpairedRead>>(
-    SalmonOpts& sopt, BulkAlignLibT<UnpairedRead>& readExp,
+                                      BulkAlignLibT<UnpairedRead,AlignmentModel>>(
+    SalmonOpts& sopt, BulkAlignLibT<UnpairedRead,AlignmentModel>& readExp,
+    Eigen::VectorXd& effLensIn, std::vector<double>& alphas,
+    std::vector<bool>& available, bool finalRound);
+
+template Eigen::VectorXd
+salmon::utils::updateEffectiveLengths<std::vector<double>,
+                                      BulkAlignLibT<UnpairedRead,ONTAlignmentModel>>(
+    SalmonOpts& sopt, BulkAlignLibT<UnpairedRead,ONTAlignmentModel>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<double>& alphas,
     std::vector<bool>& available, bool finalRound);
 

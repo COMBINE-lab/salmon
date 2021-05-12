@@ -135,7 +135,7 @@ struct ReadPair {
 
   inline char* getName() const { return bam_name(read1); }
 
-  inline uint32_t getNameLength() {
+  inline uint32_t getNameLength() const {
     uint32_t l = bam_name_len(read1);
     char* r = getName();
     if (l > 2 and r[l - 2] == '/') {
@@ -207,6 +207,8 @@ struct ReadPair {
       return bam_pos(read1) + bam_seq_len(read1);
     }
   }
+  inline bool isPrimary() const { return !(bam_flag(read1) & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY)); }
+  inline bool isSecondary() const { return (bam_flag(read1) & BAM_FSECONDARY) || (bam_flag(read2) & BAM_FSECONDARY); }
 
   inline ReadType fragType() const { return ReadType::PAIRED_END; }
   inline int32_t transcriptID() const { return bam_ref(read1); }

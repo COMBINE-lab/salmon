@@ -1,80 +1,52 @@
 #ifndef ALIGNMENT_MODEL
 #define ALIGNMENT_MODEL
 
-#include <atomic>
-#include <memory>
 #include <mutex>
 
-// logger includes
-#include "spdlog/spdlog.h"
-
+#include "AlignmentCommon.hpp"
 #include "AtomicMatrix.hpp"
 #include "tbb/concurrent_vector.h"
 
-extern "C" {
-#include "io_lib/os.h"
-#include "io_lib/scram.h"
-#undef max
-#undef min
-}
-
-struct UnpairedRead;
-struct ReadPair;
-class Transcript;
-
-class AlignmentModel {
+class AlignmentModel
+  : public AlignmentCommon
+{
 public:
   AlignmentModel(double alpha, uint32_t readBins = 4);
-  bool burnedIn();
-  void burnedIn(bool burnedIn);
 
   /**
-   *  For unpaired reads, update the error model to account
-   *  for errors we've observed in this read pair.
+   *  For unpaired reads, update the error model to account for errors
+   *  we've observed in this read pair. primaryAln contains the first
+   *  alignment in the alignment group.
    */
-  void update(const UnpairedRead&, Transcript& ref, double p, double mass);
+  void update(const UnpairedRead& aln, const UnpairedRead& primaryAln,
+              Transcript& ref, double p, double mass);
 
   /**
-   * Compute the log-likelihood of the observed unpaired alignment given the
-   * current error model.
+   * Compute the log-likelihood of the observed unpaired alignment
+   * given the current error model. primaryAln contains the first
+   * alignment in the alignment group.
    */
-  double logLikelihood(const UnpairedRead&, Transcript& ref);
+  double logLikelihood(const UnpairedRead&, const UnpairedRead& primaryAln, Transcript& ref);
+
+  // The primaryAln is ignored by the ReadPair overlaods (at least for now)
 
   /**
-   *  For paired-end reads, update the error model to account
-   *  for errors we've observed in this read pair.
+   *  For paired-end reads, update the error model to account for
+   *  errors we've observed in this read pair.
    */
-  void update(const ReadPair&, Transcript& ref, double p, double mass);
+  void update(const ReadPair& aln, const ReadPair& primaryAln,
+              Transcript& ref, double p, double mass);
 
   /**
    * Compute the log-likelihood of the observed paire-end alignment given the
    * current error model.
    */
-  double logLikelihood(const ReadPair&, Transcript& ref);
-
-  bool hasIndel(UnpairedRead& r);
-  bool hasIndel(ReadPair& r);
-
-  void setLogger(std::shared_ptr<spdlog::logger> logger);
-  bool hasLogger();
+  double logLikelihood(const ReadPair& aln, const ReadPair& primaryAln, Transcript& ref);
 
   void normalize();
 
 private:
-  enum AlignmentModelChar {
-    ALN_A = 0,
-    ALN_C = 1,
-    ALN_G = 2,
-    ALN_T = 3,
-    ALN_DASH = 4,
-    ALN_SOFT_CLIP = 5,
-    ALN_HARD_CLIP = 6,
-    ALN_PAD = 7,
-    ALN_REF_SKIP = 8
-  };
 
-  void setBasesFromCIGAROp_(enum cigar_op op, size_t& curRefBase,
-                            size_t& curReadBase);
   // std::stringstream& readStr, std::stringstream& matchStr,
   // std::stringstream& refstr);
 
@@ -93,11 +65,10 @@ private:
    * These functions, which work directly on bam_seq_t* types, drive the
    * update() and logLikelihood() methods above.
    */
-  void update(bam_seq_t* read, Transcript& ref, double p, double mass,
+  void update(bam_seq_t* read, bam_seq_t* primary, Transcript& ref, double p, double mass,
               std::vector<AtomicMatrix<double>>& mismatchProfile);
-  AlnModelProb logLikelihood(bam_seq_t* read, Transcript& ref,
+  AlnModelProb logLikelihood(bam_seq_t* read, bam_seq_t* primary, Transcript& ref,
                        std::vector<AtomicMatrix<double>>& mismatchProfile);
-  bool hasIndel(bam_seq_t* r);
 
   // NOTE: Do these need to be concurrent_vectors as before?
   // Store the mismatch probability tables for the left and right reads
@@ -107,8 +78,6 @@ private:
   bool isEnabled_;
   // size_t maxLen_;
   size_t readBins_;
-  std::atomic<bool> burnedIn_;
-  std::shared_ptr<spdlog::logger> logger_;
   // Maintain a mutex in case the error model wants to talk to the
   // console / log.
   std::mutex outputMutex_;

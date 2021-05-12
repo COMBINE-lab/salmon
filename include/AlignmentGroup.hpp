@@ -14,6 +14,7 @@ extern "C" {
 
 #include "ReadPair.hpp"
 #include "SalmonMath.hpp"
+#include "UtilityFunctions.hpp"
 #include <vector>
 
 struct EmptyCellInfo {};
@@ -50,8 +51,8 @@ public:
   }
 
   inline bool& isUniquelyMapped() { return isUniquelyMapped_; }
-  inline size_t numAlignments() { return alignments_.size(); }
-  inline size_t size() { return numAlignments(); }
+  inline size_t numAlignments() const { return alignments_.size(); }
+  inline size_t size() const { return numAlignments(); }
 
   template <typename Archive> void serialize(Archive& archive) {
     archive(alignments_);
