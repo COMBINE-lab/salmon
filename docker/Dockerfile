@@ -6,7 +6,7 @@ MAINTAINER salmon.maintainer@gmail.com
 
 ENV PACKAGES git gcc make g++ libboost-all-dev liblzma-dev libbz2-dev \
     ca-certificates zlib1g-dev libcurl4-openssl-dev curl unzip autoconf apt-transport-https ca-certificates gnupg software-properties-common wget
-ENV SALMON_VERSION 1.4.0
+ENV SALMON_VERSION 1.5.0
 
 # salmon binary will be installed in /home/salmon/bin/salmon
 

@@ -845,37 +845,41 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
   spp::sparse_hash_map<uint32_t, uint32_t> txpToGeneMap;
   spp::sparse_hash_map<std::string, uint32_t> geneIdxMap;
 
-  auto txpInfoFile = sopt.indexDirectory / "ctable.bin";
-  if(!boost::filesystem::exists(txpInfoFile)){
-    aopt.jointLog->error("Index Directory or the ctable.bin: {} doesn't exist.",
-                         txpInfoFile.string());
-    aopt.jointLog->flush();
-    exit(1);
+  // if we are running in alignment-only `align` or `justAlign` mode
+  // then we don't even need the txp-gene map.
+  if (!aopt.just_align) {
+    auto txpInfoFile = sopt.indexDirectory / "ctable.bin";
+    if (!boost::filesystem::exists(txpInfoFile)) {
+      aopt.jointLog->error(
+          "Index Directory or the ctable.bin: {} doesn't exist.",
+          txpInfoFile.string());
+      aopt.jointLog->flush();
+      exit(1);
+    }
+
+    auto txpLengthFile = sopt.indexDirectory / "reflengths.bin";
+    if (!boost::filesystem::exists(txpLengthFile)) {
+      aopt.jointLog->error(
+          "Index Directory or the reflengths.bin: {} doesn't exist.",
+          txpLengthFile.string());
+      aopt.jointLog->flush();
+      exit(1);
+    }
+
+    auto headerFile = sopt.indexDirectory / "info.json";
+    if (!boost::filesystem::exists(headerFile)) {
+      aopt.jointLog->error(
+          "Index Directory or the info.json: {} doesn't exist.",
+          headerFile.string());
+      aopt.jointLog->flush();
+      exit(1);
+    }
+
+    aut::getTxpToGeneMap(txpToGeneMap, geneIdxMap, aopt.geneMapFile.string(),
+                         txpInfoFile.string(), txpLengthFile.string(),
+                         headerFile.string(), aopt.jointLog, noTgMap);
   }
-
-  auto txpLengthFile = sopt.indexDirectory / "reflengths.bin";
-  if(!boost::filesystem::exists(txpLengthFile)){
-    aopt.jointLog->error("Index Directory or the reflengths.bin: {} doesn't exist.",
-                         txpLengthFile.string());
-    aopt.jointLog->flush();
-    exit(1);
-  }
-
-  auto headerFile = sopt.indexDirectory / "info.json";
-  if(!boost::filesystem::exists(headerFile)){
-    aopt.jointLog->error("Index Directory or the info.json: {} doesn't exist.",
-                         headerFile.string());
-    aopt.jointLog->flush();
-    exit(1);
-  }
-
-  aut::getTxpToGeneMap(txpToGeneMap, geneIdxMap,
-                       aopt.geneMapFile.string(),
-                       txpInfoFile.string(),
-                       txpLengthFile.string(),
-                       headerFile.string(),
-                       aopt.jointLog, noTgMap);
-
+  
   // If we're supposed to be quiet, set the global logger level to >= warn
   if (aopt.quiet) {
     spdlog::set_level(spdlog::level::warn); //Set global log level to warn

@@ -77,7 +77,7 @@ set of alignments.
     main bottleneck is in parsing and decompressing the input BAM file.
     We make use of the `Staden IO <http://sourceforge.net/projects/staden/files/io_lib/>`_ 
     library for SAM/BAM/CRAM I/O (CRAM is, in theory, supported, but has not been
-    thorougly tested).  This means that multiple threads can be effectively used
+    thoroughly tested).  This means that multiple threads can be effectively used
     to aid in BAM decompression.  However, we find that throwing more than a 
     few threads at file decompression does not result in increased processing
     speed.  Thus, alignment-based Salmon will only ever allocate up to 4 threads
@@ -415,7 +415,7 @@ with the prescribed or inferred library type.
 
 Since the empirical fragment length distribution cannot be estimated
 from the mappings of single-end reads, the ``--fldMean`` allows the
-user to set the expected mean fragment lenth of the sequencing
+user to set the expected mean fragment length of the sequencing
 library.  This value will affect the effective length correction, and
 hence the estimated effective lengths of the transcripts and the TPMs.
 The value passed to ``--fldMean`` will be used as the mean of the assumed
@@ -431,7 +431,7 @@ a standard deviation given by ``--fldSD``).
 
 Since the empirical fragment length distribution cannot be estimated
 from the mappings of single-end reads, the ``--fldSD`` allows the user
-to set the expected standard deviation of the fragment lenth
+to set the expected standard deviation of the fragment length
 distribution of the sequencing library.  This value will affect the
 effective length correction, and hence the estimated effective lengths
 of the transcripts and the TPMs.  The value passed to ``--fldSD`` will
@@ -702,9 +702,12 @@ Passing the ``--writeUnmappedNames`` flag to Salmon will tell Salmon to
 write out the names of reads (or mates in paired-end reads) that do not
 map to the transcriptome.  When mapping paired-end reads, the entire
 fragment (both ends of the pair) are identified by the name of the first
-read (i.e. the read appearing in the ``_1`` file).  Each line of the umapped
+read (i.e. the read appearing in the ``_1`` file).  Each line of the unmapped
 reads file contains the name of the unmapped read followed by a simple flag
-that designates *how* the read failed to map completely.  For single-end
+that designates *how* the read failed to map completely.  If fragmetns are 
+aligned against a decoy-aware index, then fragments that are confidently 
+assigned as decoys are written in this file followed by the ``d`` (decoy)
+flag.  Apart from the decoy flag, for single-end
 reads, the only valid flag is ``u`` (unmapped).  However, for paired-end
 reads, there are a number of different possibilities, outlined below:
 
@@ -758,7 +761,7 @@ What's this ``LIBTYPE``?
 
 Salmon, has the user provide a description of the type of sequencing
 library from which the reads come, and this contains information about
-e.g. the relative orientation of paired end reads.  As of version
+e.g. the relative orientation of paired-end reads.  As of version
 0.7.0, Salmon also has the ability to automatically infer (i.e. guess)
 the library type based on how the first few thousand reads map to the
 transcriptome.  To allow Salmon to automatically infer the library

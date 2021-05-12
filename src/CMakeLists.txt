@@ -45,6 +45,8 @@ ProgramOptionsGenerator.cpp
 set (SALMON_ALIGN_SRCS
 FASTAParser.cpp
 AlignmentModel.cpp
+ONTAlignmentModel.cpp
+AlignmentCommon.cpp
 FragmentLengthDistribution.cpp
 SalmonQuantifyAlignments.cpp
 BAMUtils.cpp
@@ -58,6 +60,7 @@ AlevinUtils.cpp
 
 set (SALMON_LIB_SRCS
 ${GAT_SOURCE_DIR}/src/jellyfish/mer_dna.cc
+backtrace.cc
 xxhash.c
 TranscriptGroup.cpp
 EffectiveLengthStats.cpp

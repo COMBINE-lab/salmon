@@ -35,7 +35,7 @@ public:
   using Rank9bPointer = std::unique_ptr<rank9b>;
 
   Transcript()
-      : RefName(nullptr), RefLength(std::numeric_limits<uint32_t>::max()),
+      : RefName(), RefLength(std::numeric_limits<uint32_t>::max()),
         CompleteLength(std::numeric_limits<uint32_t>::max()),
         EffectiveLength(-1.0), id(std::numeric_limits<uint32_t>::max()),
         logPerBasePrior_(salmon::math::LOG_0), priorMass_(salmon::math::LOG_0),
@@ -151,35 +151,50 @@ public:
     return salmon::stringtools::samCodeToChar[baseAt(idx, dir)];
   }
 
+  // inline uint8_t baseAt(size_t idx, salmon::stringtools::strand dir =
+  //                                       salmon::stringtools::strand::forward) {
+  //   using salmon::stringtools::strand;
+  //   using salmon::stringtools::encodedRevComp;
+  //   size_t byte = idx >> 1;
+  //   size_t nibble = idx & 0x1;
+
+  //   // NOTE 10.2
+  //   auto& sseq = SAMSequence_;
+  //   //if (byte >= sseq.size()) { std::cerr << "requested index " << byte << " for vector of size " << sseq.size() << " for reference " << RefName << std::endl; return 0;}
+
+
+  //   switch (dir) {
+  //   case strand::forward:
+  //     if (nibble) {
+  //       return sseq[byte] & 0x0F;
+  //     } else {
+  //       return ((sseq[byte] & 0xF0) >> 4) & 0x0F;
+  //     }
+  //     break;
+  //   case strand::reverse:
+  //     if (nibble) {
+  //       return encodedRevComp[sseq[byte] & 0x0F];
+  //     } else {
+  //       return encodedRevComp[((sseq[byte] & 0xF0) >> 4) & 0x0F];
+  //     }
+  //     break;
+  //   }
+
+  //   return std::numeric_limits<uint8_t>::max();
+  // }
+
   inline uint8_t baseAt(size_t idx, salmon::stringtools::strand dir =
                                         salmon::stringtools::strand::forward) {
     using salmon::stringtools::strand;
     using salmon::stringtools::encodedRevComp;
-    size_t byte = idx >> 1;
-    size_t nibble = idx & 0x1;
-
-    // NOTE 10.2
-    auto& sseq = SAMSequence_;
-    //if (byte >= sseq.size()) { std::cerr << "requested index " << byte << " for vector of size " << sseq.size() << " for reference " << RefName << std::endl; return 0;}
-
+    const size_t byte   = idx >> 1;
+    const size_t nibble = (!(idx & 0x1)) << 2; // amount of shift: 0 if lower bit is 1, 4 otherwise
+    const uint8_t base  = (SAMSequence_[byte] >> nibble) & 0x0F;
 
     switch (dir) {
-    case strand::forward:
-      if (nibble) {
-        return sseq[byte] & 0x0F;
-      } else {
-        return ((sseq[byte] & 0xF0) >> 4) & 0x0F;
-      }
-      break;
-    case strand::reverse:
-      if (nibble) {
-        return encodedRevComp[sseq[byte] & 0x0F];
-      } else {
-        return encodedRevComp[((sseq[byte] & 0xF0) >> 4) & 0x0F];
-      }
-      break;
+    case strand::forward: return base;
+    case strand::reverse: return encodedRevComp[base];
     }
-
     return std::numeric_limits<uint8_t>::max();
   }
 

@@ -367,9 +367,9 @@ std::vector<std::string> getLibTypeStrings(const ExpT& experiment) {
   return libStrings;
 }
 
-template <typename AlnT, typename EQBuilderT>
+template <typename AlnT, typename EQBuilderT, typename AlignModelT>
 std::vector<std::string>
-getLibTypeStrings(const AlignmentLibrary<AlnT, EQBuilderT>& experiment) {
+getLibTypeStrings(const AlignmentLibrary<AlnT, EQBuilderT, AlignModelT>& experiment) {
   std::vector<std::string> libStrings;
   libStrings.push_back(experiment.format().toString());
   return libStrings;
@@ -1669,8 +1669,8 @@ void GZipWriter::writeMtx(std::shared_ptr<spdlog::logger>& jointLog,
 
 using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 using BulkExpT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;
-template <typename FragT>
-using BulkAlignLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>>;
+template <typename FragT, typename AlignModelT>
+using BulkAlignLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>, AlignModelT>;
 
 template bool
 GZipWriter::writeBootstrap<double>(const std::vector<double>& abund,
@@ -1682,11 +1682,14 @@ template bool GZipWriter::writeBootstrap<int>(const std::vector<int>& abund,
 template bool GZipWriter::writeEquivCounts<BulkExpT>(const SalmonOpts& sopt,
                                              BulkExpT& readExp);
 
-template bool GZipWriter::writeEquivCounts<BulkAlignLibT<UnpairedRead>>(
-    const SalmonOpts& sopt, BulkAlignLibT<UnpairedRead>& readExp);
+template bool GZipWriter::writeEquivCounts<BulkAlignLibT<UnpairedRead,AlignmentModel>>(
+   const SalmonOpts& sopt, BulkAlignLibT<UnpairedRead,AlignmentModel>& readExp);
 
-template bool GZipWriter::writeEquivCounts<BulkAlignLibT<ReadPair>>(
-    const SalmonOpts& sopt, BulkAlignLibT<ReadPair>& readExp);
+template bool GZipWriter::writeEquivCounts<BulkAlignLibT<UnpairedRead,ONTAlignmentModel>>(
+   const SalmonOpts& sopt, BulkAlignLibT<UnpairedRead,ONTAlignmentModel>& readExp);
+
+template bool GZipWriter::writeEquivCounts<BulkAlignLibT<ReadPair,AlignmentModel>>(
+   const SalmonOpts& sopt, BulkAlignLibT<ReadPair,AlignmentModel>& readExp);
 
 template bool GZipWriter::writeBFH<SCExpT>(boost::filesystem::path& outDir,
                                            SCExpT& experiment, size_t umiLength,
@@ -1696,22 +1699,27 @@ template bool GZipWriter::writeAbundances<BulkExpT>(const SalmonOpts& sopt,
                                                     BulkExpT& readExp,
                                                     bool explicitSum);
 
-template bool GZipWriter::writeAbundances<BulkAlignLibT<UnpairedRead>>(const SalmonOpts& sopt,
-                                                                       BulkAlignLibT<UnpairedRead>& readExp,
-                                                                       bool explicitSum);
-template bool GZipWriter::writeAbundances<BulkAlignLibT<ReadPair>>(const SalmonOpts& sopt,
-                                                                   BulkAlignLibT<ReadPair>& readExp,
-                                                                   bool explicitSum);
+template bool GZipWriter::writeAbundances<BulkAlignLibT<UnpairedRead,AlignmentModel>>(const SalmonOpts& sopt,
+                                                                                      BulkAlignLibT<UnpairedRead,AlignmentModel>& readExp,
+                                                                                      bool explicitSum);
+template bool GZipWriter::writeAbundances<BulkAlignLibT<UnpairedRead,ONTAlignmentModel>>(const SalmonOpts& sopt,
+                                                                                         BulkAlignLibT<UnpairedRead,ONTAlignmentModel>& readExp,
+                                                                                         bool explicitSum);
+template bool GZipWriter::writeAbundances<BulkAlignLibT<ReadPair,AlignmentModel>>(const SalmonOpts& sopt,
+                                                                                  BulkAlignLibT<ReadPair,AlignmentModel>& readExp,
+                                                                                  bool explicitSum);
 
 template bool GZipWriter::writeEmptyAbundances<BulkExpT>(const SalmonOpts& sopt,
                                                  BulkExpT& readExp);
 template bool GZipWriter::writeEmptyAbundances<SCExpT>(const SalmonOpts& sopt,
                                                                SCExpT& readExp);
 
-template bool GZipWriter::writeEmptyAbundances<BulkAlignLibT<UnpairedRead>>(
-    const SalmonOpts& sopt, BulkAlignLibT<UnpairedRead>& readExp);
-template bool GZipWriter::writeEmptyAbundances<BulkAlignLibT<ReadPair>>(
-    const SalmonOpts& sopt, BulkAlignLibT<ReadPair>& readExp);
+template bool GZipWriter::writeEmptyAbundances<BulkAlignLibT<UnpairedRead,AlignmentModel>>(
+    const SalmonOpts& sopt, BulkAlignLibT<UnpairedRead,AlignmentModel>& readExp);
+template bool GZipWriter::writeEmptyAbundances<BulkAlignLibT<UnpairedRead,ONTAlignmentModel>>(
+    const SalmonOpts& sopt, BulkAlignLibT<UnpairedRead,ONTAlignmentModel>& readExp);
+template bool GZipWriter::writeEmptyAbundances<BulkAlignLibT<ReadPair,AlignmentModel>>(
+    const SalmonOpts& sopt, BulkAlignLibT<ReadPair,AlignmentModel>& readExp);
 
 template bool
 GZipWriter::writeMeta<BulkExpT>(const SalmonOpts& opts,
@@ -1723,11 +1731,14 @@ GZipWriter::writeMeta<SCExpT>(const SalmonOpts& opts,
                               const MappingStatistics& mstats);
 
 template bool
-GZipWriter::writeMeta<BulkAlignLibT<UnpairedRead>>(const SalmonOpts& opts, const BulkAlignLibT<UnpairedRead>& experiment,
+GZipWriter::writeMeta<BulkAlignLibT<UnpairedRead,AlignmentModel>>(const SalmonOpts& opts, const BulkAlignLibT<UnpairedRead,AlignmentModel>& experiment,
                                                    const MappingStatistics& mstats);
+template bool
+GZipWriter::writeMeta<BulkAlignLibT<UnpairedRead,ONTAlignmentModel>>(const SalmonOpts& opts, const BulkAlignLibT<UnpairedRead,ONTAlignmentModel>& experiment,
+                                                                     const MappingStatistics& mstats);
 
 template bool
-GZipWriter::writeMeta<BulkAlignLibT<ReadPair>>(const SalmonOpts& opts, const BulkAlignLibT<ReadPair>& experiment,
+GZipWriter::writeMeta<BulkAlignLibT<ReadPair,AlignmentModel>>(const SalmonOpts& opts, const BulkAlignLibT<ReadPair,AlignmentModel>& experiment,
                                                const MappingStatistics& mstats);
 
 template bool
@@ -1739,19 +1750,26 @@ GZipWriter::writeEmptyMeta<SCExpT>(const SalmonOpts& opts,
                                            const SCExpT& experiment,
                                            std::vector<std::string>& errors);
 
-template bool GZipWriter::writeEmptyMeta<BulkAlignLibT<UnpairedRead>>(
-    const SalmonOpts& opts, const BulkAlignLibT<UnpairedRead>& experiment,
+template bool GZipWriter::writeEmptyMeta<BulkAlignLibT<UnpairedRead,AlignmentModel>>(
+    const SalmonOpts& opts, const BulkAlignLibT<UnpairedRead,AlignmentModel>& experiment,
     std::vector<std::string>& errors);
 
-template bool GZipWriter::writeEmptyMeta<BulkAlignLibT<ReadPair>>(
-    const SalmonOpts& opts, const BulkAlignLibT<ReadPair>& experiment,
+template bool GZipWriter::writeEmptyMeta<BulkAlignLibT<UnpairedRead,ONTAlignmentModel>>(
+    const SalmonOpts& opts, const BulkAlignLibT<UnpairedRead,ONTAlignmentModel>& experiment,
+    std::vector<std::string>& errors);
+
+template bool GZipWriter::writeEmptyMeta<BulkAlignLibT<ReadPair,AlignmentModel>>(
+    const SalmonOpts& opts, const BulkAlignLibT<ReadPair,AlignmentModel>& experiment,
     std::vector<std::string>& errors);
 
 template std::vector<std::string>
-getLibTypeStrings(const BulkAlignLibT<UnpairedRead>& experiment);
+getLibTypeStrings(const BulkAlignLibT<UnpairedRead,AlignmentModel>& experiment);
 
 template std::vector<std::string>
-getLibTypeStrings(const BulkAlignLibT<ReadPair>& experiment);
+getLibTypeStrings(const BulkAlignLibT<UnpairedRead,ONTAlignmentModel>& experiment);
+
+template std::vector<std::string>
+getLibTypeStrings(const BulkAlignLibT<ReadPair,AlignmentModel>& experiment);
 
 namespace apt = alevin::protocols;
 

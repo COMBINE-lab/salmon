@@ -2608,6 +2608,32 @@ int alevin_sc_align(AlevinOpts<ProtocolT>& aopt,
     MappingStatistics mstats;
     ReadExperimentT experiment(readLibraries, indexDirectory, sopt);
 
+    // We currently do not support decoy sequence in the 
+    // --justAlign or --sketch modes, so check that the 
+    // index is free of decoys, otherwise complain and exit.
+    bool index_has_decoys = false;
+    auto* idx = experiment.getIndex();
+    // if this is a sparse index
+    if (idx->isSparse()) {
+      auto* pfi = idx->puffSparseIndex();
+      auto fdei = pfi->firstDecoyEncodedIndex();
+      index_has_decoys = (fdei != std::numeric_limits<decltype(fdei)>::max());
+    } else {
+      // otherwise this is a dense index
+      auto* pfi = idx->puffIndex();
+      auto fdei = pfi->firstDecoyEncodedIndex();
+      index_has_decoys = (fdei != std::numeric_limits<decltype(fdei)>::max());
+    }
+
+    if (index_has_decoys) {
+      jointLog->error("The provided index has decoy sequences.  However, decoy "
+                      "sequences are not currently supported in the \"rad\" or "
+                      "\"sketch\" modes.  Please provide an index without decoy "
+                      "sequence to continue.");
+      jointLog->flush();
+      return 1;
+    }
+
     // This will be the class in charge of maintaining our
     // rich equivalence classes
     experiment.equivalenceClassBuilder().setMaxResizeThreads(sopt.maxHashResizeThreads);

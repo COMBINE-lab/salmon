@@ -53,10 +53,10 @@ struct UnpairedRead {
 
   ~UnpairedRead() { staden::utils::bam_destroy(read); }
 
-  inline bam_seq_t* getRead1() { return read; }
-  inline bam_seq_t* getRead2() { return read; }
-  inline int32_t readLen() { return bam_seq_len(getRead1()); }
-  inline int32_t mateLen() { return bam_seq_len(getRead2()); }
+  inline bam_seq_t* getRead1() const { return read; }
+  inline bam_seq_t* getRead2() const { return read; }
+  inline int32_t readLen() const { return bam_seq_len(getRead1()); }
+  inline int32_t mateLen() const { return bam_seq_len(getRead2()); }
 
   inline LibraryFormat& libFormat() { return libFmt; }
   inline bool isPaired() const { return false; }
@@ -84,14 +84,16 @@ struct UnpairedRead {
   // return 0 on success, -1 on failure
   int writeToFile(scram_fd* fp) { return scram_put_seq(fp, read); }
 
-  inline char* getName() { return bam_name(read); }
+  inline char* getName() const { return bam_name(read); }
 
-  inline uint32_t getNameLength() { return bam_name_len(read); }
+  inline uint32_t getNameLength() const { return bam_name_len(read); }
 
   inline bool isRight() const { return bam_flag(read) & BAM_FREVERSE; }
   inline bool isLeft() const { return !isRight(); }
   inline int32_t left() const { return bam_pos(read); }
   inline int32_t right() const { return left() + bam_seq_len(read); }
+  inline bool isPrimary() const { return !(bam_flag(read) & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY)); }
+  inline bool isSecondary() const { return bam_flag(read) & BAM_FSECONDARY; }
   // will always be at least the length of a single read
   inline uint32_t fragLen() const { return 0; }
   // from the leftmost end of the 5' read to the rightmost
