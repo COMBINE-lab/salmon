@@ -704,7 +704,10 @@ map to the transcriptome.  When mapping paired-end reads, the entire
 fragment (both ends of the pair) are identified by the name of the first
 read (i.e. the read appearing in the ``_1`` file).  Each line of the unmapped
 reads file contains the name of the unmapped read followed by a simple flag
-that designates *how* the read failed to map completely.  For single-end
+that designates *how* the read failed to map completely.  If fragmetns are 
+aligned against a decoy-aware index, then fragments that are confidently 
+assigned as decoys are written in this file followed by the ``d`` (decoy)
+flag.  Apart from the decoy flag, for single-end
 reads, the only valid flag is ``u`` (unmapped).  However, for paired-end
 reads, there are a number of different possibilities, outlined below:
 

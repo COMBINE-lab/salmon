@@ -176,7 +176,7 @@ learned (or expected) fragment-GC distribution.
 Equivalence class file
 """"""""""""""""""""""
 
-If Salmon was run with the ``--dumpEq`` option, then a file called ``eq_classes.txt``
+If salmon was run with the ``--dumpEq`` option, then a file called ``eq_classes.txt``
 will exist in the auxiliary directory.  The format of that file is as follows:
 
 
@@ -206,6 +206,49 @@ class (the number of different transcripts to which fragments in this
 class map --- call this k). The line then contains the k transcript
 IDs. Finally, the line contains the count of fragments in this
 equivalence class (how many fragments mapped to these
-transcripts). The values in each such line are tab separated.
+transcripts). The values in each such line are tab separated. 
+**Note**: The indices for transcripts referenced in this file start 
+at 0. 
+
+If salmon was run with the ``--dumpEqWeights`` or ``-d`` option, then the ``eq_classes.txt``
+file will include a textual representation of the `range-factorized equivalence classes <https://academic.oup.com/bioinformatics/article/33/14/i142/3953977>`_  will 
+exist in the auxiliary directory.  The format of that file is specified as follows:
 
 
+::
+   
+   N (num transcripts)
+   M (num equiv classes)
+   tn_1
+   tn_2
+   ...
+   tn_N
+   eq_1_size t_11 t_12 ... p_11 p_12 ... count
+   eq_2_size t_21 t_22 ... p_21 p_22 ... count
+
+   
+That is, the file begins with a line that contains the number of
+transcripts (say N) then a line that contains the number of
+equivalence classes (say M). It is then followed by N lines that list
+the transcript names --- the order here is important, because the
+labels of the equivalence classes are given in terms of the ID's of
+the transcripts. The rank of a transcript in this list is the ID with
+which it will be labeled when it appears in the label of an
+equivalence class. Finally, the file contains M lines, each of which
+describes a range-factorized equivalence class of fragments. The first entry in this
+line is the number of transcripts in the label of this equivalence
+class (the number of different transcripts to which fragments in this
+class map --- call this k). The line then contains the k transcript
+IDs that *partially* define the label of this range-factorized equivalence class
+followed by k floating point values which correspond to the conditional probabilities 
+of drawing a fragment from each of these k transcripts within this range-factorized 
+equivalence class. Finally, the line contains the count of fragments in this
+equivalence class (how many fragments mapped to these
+transcripts with approximately this conditional probability distribution). 
+The values in each such line are tab separated.  
+**Note**: The indices for transcripts referenced in this file start at 0.
+**Note**: Unlike the *simple* equivalence classes, the same transcript set can 
+appear more than once in the set of range-factorized equivalence classes.  This is 
+because different sets of fragments can induce quite different conditional probability 
+distributions among these transcripts.  For more details on this representation, please 
+check the `paper describing range-factorized equivalence classes <https://academic.oup.com/bioinformatics/article/33/14/i142/3953977>`_.
