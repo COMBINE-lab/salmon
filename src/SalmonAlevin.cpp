@@ -3119,6 +3119,21 @@ int alevinQuant(AlevinOpts<apt::QuartzSeq2>& aopt,
                 size_t numLowConfidentBarcode);
 
 template 
+int alevin_sc_align(AlevinOpts<apt::SciSeq3>& aopt,
+                    SalmonOpts& sopt,
+                    boost::program_options::parsed_options& orderedOptions);
+template
+int alevinQuant(AlevinOpts<apt::SciSeq3>& aopt,
+                SalmonOpts& sopt,
+                SoftMapT& barcodeMap,
+                TrueBcsT& trueBarcodes,
+                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                boost::program_options::parsed_options& orderedOptions,
+                CFreqMapT& freqCounter,
+                size_t numLowConfidentBarcode);
+
+template 
 int alevin_sc_align(AlevinOpts<apt::Custom>& aopt,
                     SalmonOpts& sopt,
                     boost::program_options::parsed_options& orderedOptions);

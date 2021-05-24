@@ -124,7 +124,7 @@ namespace alevin{
     struct InDrop : Rule{
         //InDrop starts from 5end with variable
         //length barcodes so provide the full
-        // length of the barcod eincluding w1.
+        // length of the barcode including w1.
         // UMI length is 6
       InDrop(): Rule(42, 6, BarcodeEnd::FIVE, 22347776){}
 
@@ -176,7 +176,10 @@ namespace alevin{
     struct Custom : Rule{
       Custom() : Rule(0,0,BarcodeEnd::FIVE,0){}
     };
-    
+    struct SciSeq3 : Rule{
+      // Incorrect rule which considers 18 nucleotide barcode and 18 nucleotide UMI
+      SciSeq3() : Rule(18, 18, BarcodeEnd::FIVE, 1073741824){}
+    };
 
     // for the new type of specification
     struct CustomGeometry {

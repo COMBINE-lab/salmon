@@ -101,6 +101,14 @@ namespace alevin {
       return &seq2;
     }
     template <>
+    std::string*  getReadSequence(apt::SciSeq3& protocol,
+                         std::string& seq,
+                         std::string& seq2,
+                         std::string& subseq){
+      (void)seq;
+      return &seq2;
+    }
+    template <>
     std::string*  getReadSequence(apt::Custom& protocol,
                          std::string& seq,
                          std::string& seq2,
@@ -223,6 +231,15 @@ namespace alevin {
         (umi.assign(read, 0, pt.umiLength), true) : false;
     }
     template <>
+    bool extractUMI<apt::SciSeq3>(std::string& read,
+                                     std::string& read2,
+                                     apt::SciSeq3& pt,
+                                     std::string& umi){
+      (void)read2;
+      return (read.length() >= pt.barcodeLength + pt.umiLength) ?
+        (umi.assign(read, pt.barcodeLength, pt.umiLength), true) : false;
+    }
+    template <>
     bool extractUMI<apt::CELSeq>(std::string& read,
                                  std::string& read2,
                                  apt::CELSeq& pt,
@@ -287,6 +304,15 @@ namespace alevin {
       (void)read2;
       return (read.length() >= pt.barcodeLength) ?
         (bc.assign(read, 0, pt.barcodeLength), true) : false;
+    }
+    template <>
+    bool extractBarcode<apt::SciSeq3>(std::string& read,
+                                         std::string& read2,
+                                          apt::SciSeq3& pt,
+                                          std::string& bc){
+      (void)read2;
+      return (read.length() >= pt.barcodeLength) ?
+        (bc.assign(read,0, pt.barcodeLength), true) : false;
     }
     template <>
     bool extractBarcode<apt::Custom>(std::string& read,
@@ -1303,6 +1329,10 @@ namespace alevin {
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::CELSeq2>& aopt,
+                           SalmonOpts& sopt, bool noTgMap,
+                           boost::program_options::variables_map& vm);
+    template
+    bool processAlevinOpts(AlevinOpts<apt::SciSeq3>& aopt,
                            SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template

@@ -310,6 +310,10 @@ int salmonHashQuantify(AlevinOpts<apt::QuartzSeq2>& aopt,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 template
+int salmonHashQuantify(AlevinOpts<apt::SciSeq3>& aopt,
+                       bfs::path& outputDirectory,
+                       CFreqMapT& freqCounter);
+template
 int salmonHashQuantify(AlevinOpts<apt::Custom>& aopt,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);

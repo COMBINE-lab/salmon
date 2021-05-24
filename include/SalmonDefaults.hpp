@@ -140,6 +140,7 @@ namespace defaults {
   constexpr const bool isCELSeq{false};
   constexpr const bool isCELSeq2{false};
   constexpr const bool isQuartzSeq2{false};
+  constexpr const bool isSciSeq3{false};
   constexpr const bool noQuant{false};
   constexpr const bool dumpFQ{false};
   constexpr const bool dumpArborescences{false};
