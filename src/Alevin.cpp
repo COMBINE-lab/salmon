@@ -1039,7 +1039,7 @@ salmon-based processing of single-cell RNA-seq data.
     if (celseq) validate_num_protocols += 1;
     if (celseq2) validate_num_protocols += 1;
     if (quartzseq2) validate_num_protocols += 1;
-    // if (sciseq3) validate_num_protocols += 1;
+    if (sciseq3) validate_num_protocols += 1;
     if (custom and !noTgMap) validate_num_protocols += 1;
 
     if ( validate_num_protocols != 1 ) {
