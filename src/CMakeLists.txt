@@ -32,6 +32,7 @@ Alevin.cpp
 AlevinHash.cpp
 SalmonAlevin.cpp
 WhiteList.cpp
+SalmonServer.cpp
 ##
 SalmonQuantify.cpp
 FragmentLengthDistribution.cpp

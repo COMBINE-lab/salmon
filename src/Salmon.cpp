@@ -151,10 +151,14 @@ int salmonIndex(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& inde
 int salmonQuantify(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& index);
 int salmonAlignmentQuantify(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& index);
 int salmonAlignmentDualMode(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& index);
+int salmonServer(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& index); // Place holder
 // TODO : PF_INTEGRATION
 int salmonBarcoding(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& index);
 int salmonQuantMerge(int argc, const char* argv[],
                      std::unique_ptr<SalmonIndex>& index);
+
+int salmonServerServer(int& argc, const char** &argv, std::unique_ptr<SalmonIndex>& index); // Actual server subcmd handling
+int salmonServerClient(const std::string& subcommand, int argc, const char* argv[]);
 
 bool verbose = false;
 
@@ -245,7 +249,8 @@ int main(int argc, const char* argv[]) {
          {"quantmerge", salmonQuantMerge},
          // TODO : PF_INTEGRATION
          {"alevin", salmonBarcoding},
-         {"swim", salmonSwim}});
+         {"swim", salmonSwim},
+         {"server", salmonServer}});
 
     /*
     //string cmd = vm["command"].as<string>();
@@ -265,11 +270,34 @@ int main(int argc, const char* argv[]) {
     }
     const char** nargv = argv2.get();
 
+    { // Check if we are called with --server. If not, it returns -1 and
+      // processing continues normally. If yes, then a server is contacted to
+      // perform computation and an actual error code is returned.
+      int code = salmonServerClient(cmd, nargc, nargv);
+      if (code != -1)
+        return code;
+    }
+
+    bool inServer = false;
     while(true) {
       auto cmdMain = cmds.find(cmd);
       if (cmdMain == cmds.end()) {
         // help(subCommandArgc, argv2);
         return help(opts);
+      }
+      if(cmdMain->first == "server") {
+        if(inServer) {
+          std::cerr << "Can't run server subcommand from the client";
+        }
+        // server is special: it modifies its arguments and then loops around to
+        // process actual command sent by the client. (salmonServer doesn't really exists)
+        int code = salmonServerServer(nargc, nargv, preloadedIndex);
+        if(code ==- 1) {
+          cmd = nargv[1];
+          inServer = true;
+          continue;
+        }
+        return code;
       }
       return cmdMain->second(nargc, nargv, preloadedIndex);
     }
