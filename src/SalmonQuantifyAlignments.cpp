@@ -1573,7 +1573,7 @@ bool runSingleEndSample(std::vector<bfs::path>& alignmentFiles, bfs::path& trans
   return processSample<UnpairedRead>(alnLib, requiredObservations, sopt, sopt.outputDirectory);
 }
 
-int salmonAlignmentQuantify(int argc, const char* argv[]) {
+int salmonAlignmentQuantify(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& /* salmon_index */) {
   using std::cerr;
   using std::vector;
   using std::string;
