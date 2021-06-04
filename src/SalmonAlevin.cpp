@@ -515,9 +515,9 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       // This ensures that we don't double-count a k-mer that 
       // might occur twice on this target.
       if (ref_pos < last_ref_pos_rc and read_pos > last_read_pos_rc) {
-        approx_pos_rc = ref_pos - read_pos;
+        approx_pos_rc = ref_pos;
         if (last_read_pos_rc == -1) { 
-          approx_end_pos_rc = ref_pos - read_pos; 
+          approx_end_pos_rc = ref_pos + read_pos; 
         } else {
           if (approx_end_pos_rc - approx_pos_rc > max_stretch) { return false;}
         }
@@ -705,7 +705,9 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                 decltype(raw_hits[0].first) prev_read_pos = -1;
                 // the maximum span the supporting k-mers of a 
                 // mapping position are allowed to have.
-                int32_t max_stretch = static_cast<int32_t>(readSubSeq->length() * 1.1);
+                // NOTE this is still > read_length b/c the stretch is measured wrt the 
+                // START of the terminal k-mer.
+                int32_t max_stretch = static_cast<int32_t>(readSubSeq->length() * 1.0);
 
                 // a raw hit is a pair of read_pos and a projected hit
 
