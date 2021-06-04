@@ -705,7 +705,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                 decltype(raw_hits[0].first) prev_read_pos = -1;
                 // the maximum span the supporting k-mers of a 
                 // mapping position are allowed to have.
-                int32_t max_stretch = static_cast<int32_t>(readSubSeq->length() * 1.25);
+                int32_t max_stretch = static_cast<int32_t>(readSubSeq->length() * 1.1);
 
                 // a raw hit is a pair of read_pos and a projected hit
 
