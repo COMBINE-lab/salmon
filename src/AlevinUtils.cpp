@@ -236,8 +236,10 @@ namespace alevin {
                                      apt::SciSeq3& pt,
                                      std::string& umi){
       (void)read2;
-      return (read.length() >= pt.barcodeLength + pt.umiLength) ?
-        (umi.assign(read, pt.barcodeLength, pt.umiLength), true) : false;
+      std::size_t index = read.find(pt.anchorSeq);
+      return (read.length() >= pt.barcodeLength + pt.umiLength && 
+        index != std::string::npos) ?
+          (umi.assign(read, index + pt.anchorSeqLen, pt.umiLength), true) : false;
     }
     template <>
     bool extractUMI<apt::CELSeq>(std::string& read,
@@ -246,7 +248,7 @@ namespace alevin {
                                  std::string& umi){
       (void)read2;
       return (read.length() >= pt.umiLength) ?
-        (umi.assign(read, 0, pt.umiLength), true) : false;
+        (umi.assign(read, pt.barcodeLength, pt.umiLength), true) : false;
       return true;
     }
     template <>
@@ -311,8 +313,17 @@ namespace alevin {
                                           apt::SciSeq3& pt,
                                           std::string& bc){
       (void)read2;
-      return (read.length() >= pt.barcodeLength) ?
-        (bc.assign(read,0, pt.barcodeLength), true) : false;
+      std::string::size_type index = read.find(pt.anchorSeq);
+      if (index != std::string::npos && ( index == pt.maxHairpinIndexLen || index == pt.maxHairpinIndexLen -1) // only 2 possible values of index 
+         && read.length() >= pt.barcodeLength + pt.umiLength + pt.anchorSeqLen) {
+        if (index < pt.maxHairpinIndexLen) { // hairpin index can be 9 or 10 bp
+          bc = bc.substr(1,bc.length());
+        }
+        bc.assign(read.substr(0,index) + read.substr(index + pt.anchorSeqLen + pt.umiLength, pt.rtIdxLen));
+        return true;
+      } else {
+        return false;
+      }
     }
     template <>
     bool extractBarcode<apt::Custom>(std::string& read,
