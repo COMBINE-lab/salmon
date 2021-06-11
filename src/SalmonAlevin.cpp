@@ -149,6 +149,14 @@ namespace alevin{
 
   constexpr uint32_t miniBatchSize{5000};
 
+  // NOTE: Consider the implications of using uint32_t below.
+  // Currently, this should not limit the barcode length to <= 16 in 
+  // "fry" mode (either sla or sketch) since we never actually put the 
+  // barcode in the corresponding variable of the AlignmentGroup class.
+  // In traditional alevin, this should be referring to a barcode *index*
+  // rather than the sequence itself, so it should be OK so long as we have
+  // < std::numeric_limits<uint32_t>::max() distinct barcodes / reads. 
+  // However, that assumption should be tested more thoroughly.
   using CellBarcodeT = uint32_t;
   using UMIBarcodeT = uint64_t;
 
@@ -895,9 +903,9 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
         // bc
         // if we can fit the barcode into an integer 
-        if ( alevinOpts.protocol.barcodeLength <= 32 ) { 
+        if ( barcodeLength <= 32 ) { 
           if (barcode_ok) {
-            if (alevinOpts.protocol.barcodeLength <= 16) { // can use 32-bit int
+            if ( barcodeLength <= 16 ) { // can use 32-bit int
               uint32_t shortbck = static_cast<uint32_t>(0x00000000FFFFFFFF & bck.word(0));
               bw << shortbck;
             } else { // must use 64-bit int
@@ -909,11 +917,11 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         }
 
         // umi
-        if ( alevinOpts.protocol.barcodeLength <= 16 ) { // if we can use 32-bit int 
+        if ( umiLength <= 16 ) { // if we can use 32-bit int 
           uint64_t umiint = jointHitGroup.umi();
           uint32_t shortumi = static_cast<uint32_t>(0x00000000FFFFFFFF & umiint);
           bw << shortumi;
-        } else if ( alevinOpts.protocol.barcodeLength <= 32 ) { // if we can use 64-bit int
+        } else if ( umiLength <= 32 ) { // if we can use 64-bit int
           uint64_t umiint = jointHitGroup.umi();
           bw << umiint;
         } else { // must use string
@@ -1336,11 +1344,11 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
           // bc
           // if we can if the barcode into an integer 
-          if ( alevinOpts.protocol.barcodeLength <= 32 ) { 
+          if ( barcodeLength <= 32 ) { 
 
             if (barcode_ok) {
               //alevinOpts.jointLog->info("BARCODE : {} \t ENC : {} ", barcode, bck.word(0));
-              if (alevinOpts.protocol.barcodeLength <= 16) { // can use 32-bit int
+              if ( barcodeLength <= 16 ) { // can use 32-bit int
                 uint32_t shortbck = static_cast<uint32_t>(0x00000000FFFFFFFF & bck.word(0));
                 //alevinOpts.jointLog->info("shortbck : {} ", shortbck);
                 bw << shortbck;
@@ -1353,11 +1361,11 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           }
 
           // umi
-          if ( alevinOpts.protocol.barcodeLength <= 16 ) { // if we can use 32-bit int 
+          if ( umiLength <= 16 ) { // if we can use 32-bit int 
             uint64_t umiint = jointHitGroup.umi();
             uint32_t shortumi = static_cast<uint32_t>(0x00000000FFFFFFFF & umiint);
             bw << shortumi;
-          } else if ( alevinOpts.protocol.barcodeLength <= 32 ) { // if we can use 64-bit int
+          } else if ( umiLength <= 32 ) { // if we can use 64-bit int
             uint64_t umiint = jointHitGroup.umi();
             bw << umiint;
           } else { // must use string
