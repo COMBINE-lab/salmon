@@ -104,7 +104,7 @@ namespace alevin{
       // NOTE: these functions are duplicated 
       // with those in `CustomGeometry` below, and 
       // due to semantics have slightly different 
-      // implementations.  See if the design can be 
+      // implementations. See if the design can be 
       // unified later.
       void set_umi_geo(TagGeometry& g) { umiLength = g.length(); };
       void set_bc_geo(TagGeometry& g) { barcodeLength = g.length(); };
