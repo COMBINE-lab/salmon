@@ -103,8 +103,8 @@ namespace alevin{
       }
       // NOTE: these do nothing but satisfy 
       // template requirements right now
-      void set_umi_geo(TagGeometry& g) { (void)g; };
-      void set_bc_geo(TagGeometry& g) { (void)g; };
+      void set_umi_geo(TagGeometry& g) { umiLength = g.length1 + g.length2; };
+      void set_bc_geo(TagGeometry& g) { barcodeLength = g.length1 + g.length2; };
       void set_read_geo(TagGeometry& g) { (void)g; };
       uint32_t barcode_length() const { return barcodeLength; }
       uint32_t umi_length() const { return umiLength; }
