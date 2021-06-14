@@ -149,6 +149,14 @@ namespace alevin{
 
   constexpr uint32_t miniBatchSize{5000};
 
+  // NOTE: Consider the implications of using uint32_t below.
+  // Currently, this should not limit the barcode length to <= 16 in 
+  // "fry" mode (either sla or sketch) since we never actually put the 
+  // barcode in the corresponding variable of the AlignmentGroup class.
+  // In traditional alevin, this should be referring to a barcode *index*
+  // rather than the sequence itself, so it should be OK so long as we have
+  // < std::numeric_limits<uint32_t>::max() distinct barcodes / reads. 
+  // However, that assumption should be tested more thoroughly.
   using CellBarcodeT = uint32_t;
   using UMIBarcodeT = uint64_t;
 
@@ -499,7 +507,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         fw_score += score_inc;
         ++fw_hits;
         added = true;
-      }
+      }   
       return added;
     }
 
@@ -515,9 +523,9 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       // This ensures that we don't double-count a k-mer that 
       // might occur twice on this target.
       if (ref_pos < last_ref_pos_rc and read_pos > last_read_pos_rc) {
-        approx_pos_rc = ref_pos - read_pos;
+        approx_pos_rc = ref_pos;
         if (last_read_pos_rc == -1) { 
-          approx_end_pos_rc = ref_pos - read_pos; 
+          approx_end_pos_rc = ref_pos + read_pos; 
         } else {
           if (approx_end_pos_rc - approx_pos_rc > max_stretch) { return false;}
         }
@@ -553,6 +561,13 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       return (best_direction != HitDirection::RC) ? 
         SimpleHit{true, approx_pos_fw, fw_score, fw_hits, std::numeric_limits<uint32_t>::max()} : 
         SimpleHit{false, approx_pos_rc, rc_score, rc_hits, std::numeric_limits<uint32_t>::max()};
+    }
+
+    inline std::string to_string() {
+      std::stringstream ss;
+      ss << "fw_hits: " << fw_hits << ", fw_score : " << fw_score << ", fw_pos : " << approx_pos_fw
+         << " || rc_hits: " << rc_hits << ", rc_score: " << rc_score << ", rc_pos: " << approx_pos_rc;
+      return ss.str();
     }
 
     int32_t last_read_pos_fw{-1};
@@ -648,6 +663,12 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       extraBAMtags.clear();
       bool seqOk;
 
+      // keep track of the *least* freqeuntly 
+      // occurring hit in this fragment to consider 
+      // alternative processing of fragments where 
+      // all observed hits have high frequency.
+      uint64_t alt_max_occ = 0;
+
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
         bool extracted_bc = aut::extractBarcode(rp.first.seq, rp.second.seq, alevinOpts.protocol, barcode);
@@ -692,14 +713,26 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                 decltype(raw_hits[0].first) prev_read_pos = -1;
                 // the maximum span the supporting k-mers of a 
                 // mapping position are allowed to have.
-                int32_t max_stretch = static_cast<int32_t>(readSubSeq->length() * 1.5);
+                // NOTE this is still > read_length b/c the stretch is measured wrt the 
+                // START of the terminal k-mer.
+                int32_t max_stretch = static_cast<int32_t>(readSubSeq->length() * 1.0);
 
                 // a raw hit is a pair of read_pos and a projected hit
+
+                // the least frequent hit for this fragment.
+                uint64_t min_occ = std::numeric_limits<uint64_t>::max();
+
+                // this is false by default and will be set to true 
+                // if *every* collected hit for this fragment occurs 
+                // salmonOpts.maxReadOccs times or more.
+                bool had_alt_max_occ = false;
+
                 for (auto& raw_hit : raw_hits) {
                   auto& read_pos = raw_hit.first;
                   auto& proj_hits = raw_hit.second;
                   auto& refs = proj_hits.refRange;
                   uint64_t num_occ = static_cast<uint64_t>(refs.size());
+                  min_occ = std::min(min_occ, num_occ);
 
                   // SANITY
                   if (read_pos <= prev_read_pos) {
@@ -728,6 +761,61 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                     } // DONE: for (auto &pos_it : refs)
                   } // DONE : if (static_cast<uint64_t>(refs.size()) < salmonOpts.maxReadOccs)
                 } // DONE : for (auto& raw_hit : raw_hits)
+
+                // If our default threshold was too stringent, then set a more liberal 
+                // threshold and look up the k-mers that occur the least frequently.
+                // Specifically, if the min occuring hits have frequency < min_thresh_prime (2500 by default)
+                // times, then collect the min occuring hits to get the mapping.
+                // TODO: deal with code duplication below.
+                size_t max_allowed_occ = 2500;
+                if ((min_occ >= salmonOpts.maxReadOccs) and (min_occ < max_allowed_occ)) {
+                  prev_read_pos = -1;
+                  max_allowed_occ = min_occ;
+                  for (auto& raw_hit : raw_hits) {
+                    auto& read_pos = raw_hit.first;
+                    auto& proj_hits = raw_hit.second;
+                    auto& refs = proj_hits.refRange;
+                    uint64_t num_occ = static_cast<uint64_t>(refs.size());
+                    min_occ = std::min(min_occ, num_occ);
+                    had_alt_max_occ = true;
+
+                    // SANITY
+                    if (read_pos <= prev_read_pos) {
+                      salmonOpts.jointLog->warn(
+                          "read_pos : {}, prev_read_pos : {}", read_pos,
+                          prev_read_pos);
+                    }
+
+                    prev_read_pos = read_pos;
+                    if (num_occ <= max_allowed_occ) {
+
+                      ++num_valid_hits;
+                      total_occs += num_occ;
+                      largest_occ =
+                          (num_occ > largest_occ) ? num_occ : largest_occ;
+                      float score_inc = 1.0 / num_occ;
+                      perfect_score += score_inc;
+
+                      for (auto& pos_it : refs) {
+                        const auto& ref_pos_ori = proj_hits.decodeHit(pos_it);
+                        uint32_t tid = static_cast<uint32_t>(
+                            qidx->getRefId(pos_it.transcript_id()));
+                        int32_t pos = static_cast<int32_t>(ref_pos_ori.pos);
+                        bool ori = ref_pos_ori.isFW;
+                        if (ori) {
+                          hit_map[tid].add_fw(pos,
+                                              static_cast<int32_t>(read_pos),
+                                              max_stretch, score_inc);
+                        } else {
+                          hit_map[tid].add_rc(pos,
+                                              static_cast<int32_t>(read_pos),
+                                              max_stretch, score_inc);
+                        }
+                      } // DONE: for (auto &pos_it : refs)
+                    }   // DONE : if (static_cast<uint64_t>(refs.size()) <
+                        // salmonOpts.maxReadOccs)
+                  }     // DONE : for (auto& raw_hit : raw_hits)
+                }
 
                 //float perfect_score = static_cast<float>(num_valid_hits) / total_occs;
                 float acceptable_score = (num_valid_hits == 1) ? perfect_score : 
@@ -759,6 +847,8 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                     best_alt_hits = simple_hit.num_hits > best_alt_hits ? simple_hit.num_hits : best_alt_hits;
                   }
                 }
+
+                alt_max_occ = had_alt_max_occ ? accepted_hits.size() : salmonOpts.maxReadOccs;
 
                  /*
                 if (accepted_hits.empty() and (num_valid_hits > 1) and (best_alt_hits >= num_valid_hits - 1)) {
@@ -796,9 +886,8 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                                            std::max(readLenLeft, readLenRight));
       }
 
-
       // If the read mapped to > maxReadOccs places, discard it
-      if (accepted_hits.size() > salmonOpts.maxReadOccs) {
+      if (accepted_hits.size() > alt_max_occ ) { 
         accepted_hits.clear();
       } else if (!accepted_hits.empty()) {
         mapType = salmon::utils::MappingType::SINGLE_MAPPED;
@@ -814,9 +903,9 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
         // bc
         // if we can fit the barcode into an integer 
-        if ( alevinOpts.protocol.barcodeLength <= 32 ) { 
+        if ( barcodeLength <= 32 ) { 
           if (barcode_ok) {
-            if (alevinOpts.protocol.barcodeLength <= 16) { // can use 32-bit int
+            if ( barcodeLength <= 16 ) { // can use 32-bit int
               uint32_t shortbck = static_cast<uint32_t>(0x00000000FFFFFFFF & bck.word(0));
               bw << shortbck;
             } else { // must use 64-bit int
@@ -828,11 +917,11 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         }
 
         // umi
-        if ( alevinOpts.protocol.barcodeLength <= 16 ) { // if we can use 32-bit int 
+        if ( umiLength <= 16 ) { // if we can use 32-bit int 
           uint64_t umiint = jointHitGroup.umi();
           uint32_t shortumi = static_cast<uint32_t>(0x00000000FFFFFFFF & umiint);
           bw << shortumi;
-        } else if ( alevinOpts.protocol.barcodeLength <= 32 ) { // if we can use 64-bit int
+        } else if ( umiLength <= 32 ) { // if we can use 64-bit int
           uint64_t umiint = jointHitGroup.umi();
           bw << umiint;
         } else { // must use string
@@ -1255,11 +1344,11 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
           // bc
           // if we can if the barcode into an integer 
-          if ( alevinOpts.protocol.barcodeLength <= 32 ) { 
+          if ( barcodeLength <= 32 ) { 
 
             if (barcode_ok) {
               //alevinOpts.jointLog->info("BARCODE : {} \t ENC : {} ", barcode, bck.word(0));
-              if (alevinOpts.protocol.barcodeLength <= 16) { // can use 32-bit int
+              if ( barcodeLength <= 16 ) { // can use 32-bit int
                 uint32_t shortbck = static_cast<uint32_t>(0x00000000FFFFFFFF & bck.word(0));
                 //alevinOpts.jointLog->info("shortbck : {} ", shortbck);
                 bw << shortbck;
@@ -1272,11 +1361,11 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           }
 
           // umi
-          if ( alevinOpts.protocol.barcodeLength <= 16 ) { // if we can use 32-bit int 
+          if ( umiLength <= 16 ) { // if we can use 32-bit int 
             uint64_t umiint = jointHitGroup.umi();
             uint32_t shortumi = static_cast<uint32_t>(0x00000000FFFFFFFF & umiint);
             bw << shortumi;
-          } else if ( alevinOpts.protocol.barcodeLength <= 32 ) { // if we can use 64-bit int
+          } else if ( umiLength <= 32 ) { // if we can use 64-bit int
             uint64_t umiint = jointHitGroup.umi();
             bw << umiint;
           } else { // must use string
