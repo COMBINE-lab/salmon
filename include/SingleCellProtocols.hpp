@@ -177,12 +177,11 @@ namespace alevin{
       Custom() : Rule(0,0,BarcodeEnd::FIVE,0){}
     };
     struct SciSeq3 : Rule{
-      // Incorrect rule which considers 18 nucleotide barcode and 18 nucleotide UMI
       SciSeq3() : Rule(20, 8, BarcodeEnd::FIVE, 1073741824){}
       std::string anchorSeq = "CAGAGC";
       std::size_t anchorSeqLen = anchorSeq.length();
       u_int16_t const maxHairpinIndexLen = 10;
-      u_int16_t const rtIdxLen = 10;
+      u_int16_t const rtIdxLen = 10; // rev transcription index length
     };
 
     // for the new type of specification

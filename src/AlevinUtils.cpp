@@ -316,10 +316,12 @@ namespace alevin {
       std::string::size_type index = read.find(pt.anchorSeq);
       if (index != std::string::npos && ( index == pt.maxHairpinIndexLen || index == pt.maxHairpinIndexLen -1) // only 2 possible values of index 
          && read.length() >= pt.barcodeLength + pt.umiLength + pt.anchorSeqLen) {
+           std::string bcAssign = read.substr(0,index) + read.substr(index + pt.anchorSeqLen + pt.umiLength, pt.rtIdxLen);
         if (index < pt.maxHairpinIndexLen) { // hairpin index can be 9 or 10 bp
           bc = bc.substr(1,bc.length());
+           bcAssign += "A";
         }
-        bc.assign(read.substr(0,index) + read.substr(index + pt.anchorSeqLen + pt.umiLength, pt.rtIdxLen));
+        bc.assign(bcAssign);
         return true;
       } else {
         return false;
