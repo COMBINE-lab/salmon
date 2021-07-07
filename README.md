@@ -30,13 +30,11 @@ The documentation for Salmon is available on [ReadTheDocs](http://readthedocs.or
 Salmon is, and will continue to be, [freely and actively supported on a best-effort basis](https://oceangenomics.com/about/#open).
 If you need industrial-grade technical support, please consider the options at [oceangenomics.com/contact](http://oceangenomics.com/contact).
 
-### Pre-computed decoy transcriptomes 
+Decoy sequences in transcriptomes
+=================================
 
 tl;dr: fast is good but fast and accurate is better!
-Although the precomputed decoys (<=v.14.2) are still compatible with the latest major release (v1.5.1). We recommend updating your index using the full genome, as it can give significantly higher accuracy. For more information, please check our extensive benchmarking comparing different alignment methods and their performance on RNA-seq quantification in the latest revised preprint [manuscript](https://www.biorxiv.org/content/10.1101/657874v2).
-Please use the [tutorial](https://combine-lab.github.io/alevin-tutorial/2019/selective-alignment/) for a step-by-step guide on how to efficiently index the reference transcriptome and genome for accurate gentrome based RNA-seq quantification.
-
-Specifically, there are 3 possible ways in which the salmon index can be created:
+[Alignment and mapping methodology influence transcript abundance estimation](https://genomebiology.biomedcentral.com/articles/10.1186/s13059-020-02151-8), and accounting for the [accounting for fragments of unexpected origin can improve transcript quantification](https://www.biorxiv.org/content/10.1101/2021.01.17.426996v1).  To this end, salmon provides the ability to index both the transcriptome as well as decoy seuqence that can be considered during mapping and quantification.  The decoy sequence accounts for reads that might otherwise be (spuriously) attributed to some annotated transcript. This [tutorial](https://combine-lab.github.io/alevin-tutorial/2019/selective-alignment/) provides a step-by-step guide on how to efficiently index the reference transcriptome and genome to produce a decoy-aware index.  Specifically, there are 3 possible ways in which the salmon index can be created:
 
 * cDNA-only index : salmon_index - https://combine-lab.github.io/salmon/getting_started/. This method will result in the smallest index and require the least resources to build, but will be the most prone to possible spurious alignments.
 
@@ -44,7 +42,10 @@ Specifically, there are 3 possible ways in which the salmon index can be created
 
 * SAF genome index: salmon_sa_index - (the full genome is used as decoy) - The tutorial for creating such an index can be found [here](https://combine-lab.github.io/alevin-tutorial/2019/selective-alignment/).  This will result in the largest index, but likely does the best job in avoiding spurious alignments to annotated transcripts. 
 
-**Facing problems with Indexing ?, Check if anyone else already had this problem in the issues section or fill the index generation [request form](https://forms.gle/3baJc5SYrkSWb1z48)**
+**Facing problems with Indexing?**, Check if anyone else already had this problem in the issues section or fill the index generation [request form](https://forms.gle/3baJc5SYrkSWb1z48)
+
+### **NOTE**:
+If you are generating an index to be used for single-cell or single-nucleus quantification with [alevin-fry](https://github.com/COMBINE-lab/alevin-fry), then we recommend you consider building a spliced+intron (_splici_) reference.  This serves much of the purpose of a decoy-aware index when quantifying with alevin-fry, while also providing the capability to attribute splicing status to mapped fragments.  More details about the _splici_ reference and the Unspliced/Spliced/Ambiguous quantification mode it enables can be found [here](https://combine-lab.github.io/alevin-fry-tutorials/2021/improving-txome-specificity/).
 
 Chat live about Salmon
 ======================
