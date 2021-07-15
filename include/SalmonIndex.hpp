@@ -246,4 +246,9 @@ private:
   std::string decoyNameHash256_;
 };
 
+// Convenience function to load an index
+std::unique_ptr<SalmonIndex>
+checkLoadIndex(const boost::filesystem::path& indexDirectory,
+               std::shared_ptr<spdlog::logger>& logger);
+
 #endif //__SALMON_INDEX_HPP

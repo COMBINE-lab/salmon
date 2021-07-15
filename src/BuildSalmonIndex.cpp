@@ -43,7 +43,7 @@
 // http://stackoverflow.com/questions/108318/whats-the-simplest-way-to-test-whether-a-number-is-a-power-of-2-in-c
 bool isPowerOfTwo(uint32_t n) { return (n > 0 and (n & (n - 1)) == 0); }
 
-int salmonIndex(int argc, const char* argv[]) {
+int salmonIndex(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& /* salmonIndex */) {
 
   using std::string;
   namespace bfs = boost::filesystem;
@@ -255,4 +255,26 @@ Creates a salmon index.
     ret = 1;
   }
   return ret;
+}
+
+std::unique_ptr<SalmonIndex> checkLoadIndex(const boost::filesystem::path& indexDirectory, std::shared_ptr<spdlog::logger>& logger) {
+  // ==== Figure out the index type
+  boost::filesystem::path versionPath =
+    indexDirectory / "versionInfo.json";
+  SalmonIndexVersionInfo versionInfo;
+  versionInfo.load(versionPath);
+  if (versionInfo.indexVersion() == 0) {
+    fmt::MemoryWriter infostr;
+    infostr
+      << "Error: The index version file " << versionPath.string()
+      << " doesn't seem to exist.  Please try re-building the salmon "
+      "index.";
+    throw std::invalid_argument(infostr.str());
+  }
+  // Check index version compatibility here
+  auto indexType = versionInfo.indexType();
+  // ==== Figure out the index type
+  std::unique_ptr<SalmonIndex> res(new SalmonIndex(logger, indexType));
+  res->load(indexDirectory);
+  return res;
 }

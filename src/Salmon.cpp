@@ -46,8 +46,9 @@
 #include "GenomicFeature.hpp"
 #include "SalmonConfig.hpp"
 #include "VersionChecker.hpp"
+#include "SalmonIndex.hpp"
 
-int help(const std::vector<std::string>& /*opts*/) { 
+int help(const std::vector<std::string>& /*opts*/) {
   fmt::MemoryWriter helpMsg;
   helpMsg.write("salmon v{}\n\n", salmon::version);
   helpMsg.write(
@@ -90,10 +91,12 @@ int dualModeMessage() {
   return 0;
 }
 
+typedef std::function<int(int, const char*[], std::unique_ptr<SalmonIndex>& index)> SubCmdType;
+
 /**
  * Bonus!
  */
-int salmonSwim(int /*argc*/, const char* /*argv*/[]) {
+int salmonSwim(int /*argc*/, const char* /*argv*/[], std::unique_ptr<SalmonIndex>& /*index*/) {
 
   std::cout << R"(
     _____       __
@@ -144,17 +147,18 @@ bibtex:
 )";
 }
 
-int salmonIndex(int argc, const char* argv[]);
-int salmonQuantify(int argc, const char* argv[]);
-int salmonAlignmentQuantify(int argc, const char* argv[]);
+int salmonIndex(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& index);
+int salmonQuantify(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& index);
+int salmonAlignmentQuantify(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& index);
+int salmonAlignmentDualMode(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& index);
 // TODO : PF_INTEGRATION
-int salmonBarcoding(int argc, const char* argv[]);
-int salmonQuantMerge(int argc, const char* argv[]);
+int salmonBarcoding(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& index);
+int salmonQuantMerge(int argc, const char* argv[],
+                     std::unique_ptr<SalmonIndex>& index);
 
 bool verbose = false;
 
-int main(int argc, char* argv[]) {
-  show_backtrace();
+int main(int argc, const char* argv[]) {
   using std::string;
   namespace po = boost::program_options;
   std::setlocale(LC_ALL, "en_US.UTF-8");
@@ -235,9 +239,9 @@ int main(int argc, char* argv[]) {
       opts.insert(opts.begin(), "--help");
     }
 
-    std::unordered_map<string, std::function<int(int, const char* [])>> cmds(
+    std::unordered_map<string, SubCmdType> cmds(
         {{"index", salmonIndex},
-         {"quant", salmonQuantify},
+         {"quant", salmonAlignmentDualMode},
          {"quantmerge", salmonQuantMerge},
          // TODO : PF_INTEGRATION
          {"alevin", salmonBarcoding},
@@ -251,64 +255,24 @@ int main(int argc, char* argv[]) {
     std::copy_n( &argv[topLevelArgc], argc-topLevelArgc, &argv2[1] );
     */
 
-    int32_t subCommandArgc = opts.size() + 1;
-    std::unique_ptr<const char* []> argv2(new const char*[subCommandArgc]);
+    std::unique_ptr<SalmonIndex> preloadedIndex;
+
+    int32_t nargc = opts.size() + 1;
+    std::unique_ptr<const char* []> argv2(new const char*[nargc]);
     argv2[0] = argv[0];
-    for (int32_t i = 0; i < subCommandArgc - 1; ++i) {
+    for (int32_t i = 0; i < nargc - 1; ++i) {
       argv2[i + 1] = opts[i].c_str();
     }
+    const char** nargv = argv2.get();
 
-    auto cmdMain = cmds.find(cmd);
-    if (cmdMain == cmds.end()) {
-      // help(subCommandArgc, argv2);
-      return help(opts);
-    } else {
-      // If the command is quant; determine whether
-      // we're quantifying with raw sequences or alignments
-      if (cmdMain->first == "quant") {
-
-        if (subCommandArgc < 2) {
-          return dualModeMessage();
-        }
-        // detect mode-specific help request
-        if (strncmp(argv2[1], "--help-alignment", 16) == 0) {
-          std::vector<char> helpStr{'-', '-', 'h', 'e', 'l', 'p', '\0'};
-          const char* helpArgv[] = {argv[0], &helpStr[0]};
-          return salmonAlignmentQuantify(2, helpArgv);
-        } else if (strncmp(argv2[1], "--help-reads", 12) == 0) {
-          std::vector<char> helpStr{'-', '-', 'h', 'e', 'l', 'p', '\0'};
-          const char* helpArgv[] = {argv[0], &helpStr[0]};
-          return salmonQuantify(2, helpArgv);
-        }
-
-        // detect general help request
-        if (strncmp(argv2[1], "--help", 6) == 0 or
-            strncmp(argv2[1], "-h", 2) == 0) {
-          return dualModeMessage();
-        }
-
-        // otherwise, detect and dispatch the correct mode
-        bool useSalmonAlign{false};
-        for (int32_t i = 0; i < subCommandArgc; ++i) {
-          if (strncmp(argv2[i], "-a", 2) == 0 or
-              strncmp(argv2[i], "-e", 2) == 0 or
-              strncmp(argv2[i], "--alignments", 12) == 0 or
-              strncmp(argv2[i], "--eqclasses", 11) == 0 or
-              strcmp(argv2[i], "--ont") == 0) {
-            useSalmonAlign = true;
-            break;
-          }
-        }
-        if (useSalmonAlign) {
-          return salmonAlignmentQuantify(subCommandArgc, argv2.get());
-        } else {
-          return salmonQuantify(subCommandArgc, argv2.get());
-        }
-      } else {
-        return cmdMain->second(subCommandArgc, argv2.get());
+    while(true) {
+      auto cmdMain = cmds.find(cmd);
+      if (cmdMain == cmds.end()) {
+        // help(subCommandArgc, argv2);
+        return help(opts);
       }
+      return cmdMain->second(nargc, nargv, preloadedIndex);
     }
-
   } catch (po::error& e) {
     std::cerr << "Program Option Error (main) : [" << e.what()
               << "].\n Exiting.\n";
@@ -320,4 +284,42 @@ int main(int argc, char* argv[]) {
   }
 
   return 0;
+}
+
+int salmonAlignmentDualMode(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& index) {
+  // If the command is quant; determine whether
+  // we're quantifying with raw sequences or alignments
+  if (argc < 2) {
+    return dualModeMessage();
+  }
+  // detect mode-specific help request
+  if (strncmp(argv[1], "--help-alignment", 16) == 0) {
+    const char* helpArgv[] = {argv[0], "--help", nullptr};
+    return salmonAlignmentQuantify(2, helpArgv, index);
+  } else if (strncmp(argv[1], "--help-reads", 12) == 0) {
+    const char* helpArgv[] = {argv[0], "--help", nullptr};
+    return salmonQuantify(2, helpArgv, index);
+  }
+
+  // detect general help request
+  if (strncmp(argv[1], "--help", 6) == 0 or strncmp(argv[1], "-h", 2) == 0) {
+    return dualModeMessage();
+  }
+
+  // otherwise, detect and dispatch the correct mode
+  bool useSalmonAlign{false};
+  for (int i = 0; i < argc; ++i) {
+    if (strncmp(argv[i], "-a", 2) == 0 or
+        strncmp(argv[i], "-e", 2) == 0 or
+        strncmp(argv[i], "--alignments", 12) == 0 or
+        strncmp(argv[i], "--eqclasses", 11) == 0) {
+      useSalmonAlign = true;
+      break;
+    }
+  }
+  if (useSalmonAlign) {
+    return salmonAlignmentQuantify(argc, argv, index);
+  } else {
+    return salmonQuantify(argc, argv, index);
+  }
 }

@@ -25,6 +25,7 @@
 
 // Boost includes
 #include <boost/filesystem.hpp>
+#include <boost/filesystem/path.hpp>
 #include <boost/range/irange.hpp>
 
 // Cereal includes
@@ -48,10 +49,12 @@ class ReadExperiment {
 public:
   ReadExperiment(std::vector<ReadLibrary>& readLibraries,
                  // const boost::filesystem::path& transcriptFile,
-                 const boost::filesystem::path& indexDirectory,
+                 SalmonIndex* salmonIndex,
+                 // const boost::filesystem::path& indexDirectory,
                  SalmonOpts& sopt)
       : readLibraries_(readLibraries),
         // transcriptFile_(transcriptFile),
+        salmonIndex_(salmonIndex),
         transcripts_(std::vector<Transcript>()), totalAssignedFragments_(0),
         fragStartDists_(5), posBiasFW_(5), posBiasRC_(5), posBiasExpectFW_(5),
         posBiasExpectRC_(5), /*seqBiasModel_(1.0),*/ eqBuilder_(sopt.jointLog, sopt.maxHashResizeThreads),
@@ -115,24 +118,6 @@ public:
     }
     */
 
-    // ==== Figure out the index type
-    boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
-    SalmonIndexVersionInfo versionInfo;
-    versionInfo.load(versionPath);
-    if (versionInfo.indexVersion() == 0) {
-      fmt::MemoryWriter infostr;
-      infostr << "Error: The index version file " << versionPath.string()
-              << " doesn't seem to exist.  Please try re-building the salmon "
-                 "index.";
-      throw std::invalid_argument(infostr.str());
-    }
-    // Check index version compatibility here
-    auto indexType = versionInfo.indexType();
-    // ==== Figure out the index type
-
-    salmonIndex_.reset(new SalmonIndex(sopt.jointLog, indexType));
-    salmonIndex_->load(indexDirectory);
-
     // Now we'll have either an FMD-based index or a QUASI index
     // dispatch on the correct type.
     fmt::MemoryWriter infostr;
@@ -159,7 +144,7 @@ public:
     // Create the cluster forest for this set of transcripts
     clusters_.reset(new ClusterForest(transcripts_.size(), transcripts_));
   }
-
+  
   EQBuilderT& equivalenceClassBuilder() { return eqBuilder_; }
 
   std::string getIndexSeqHash256() const { return salmonIndex_->seqHash256(); }
@@ -262,7 +247,7 @@ public:
     }
   }
 
-  SalmonIndex* getIndex() { return salmonIndex_.get(); }
+  SalmonIndex* getIndex() { return salmonIndex_; }
 
   template <typename PuffIndexT>
   void loadTranscriptsFromPuff(PuffIndexT* idx_, const SalmonOpts& sopt) {
@@ -416,7 +401,7 @@ public:
     std::atomic<bool> burnedIn{
         totalAssignedFragments_ + numAssignedFragments_ >= sopt.numBurninFrags};
     for (auto& rl : readLibraries_) {
-      processReadLibrary(rl, salmonIndex_.get(), transcripts_, clusterForest(),
+      processReadLibrary(rl, salmonIndex_, transcripts_, clusterForest(),
                          *(fragLengthDist_.get()), numAssignedFragments_,
                          numThreads, burnedIn);
     }
@@ -806,7 +791,7 @@ private:
   /**
    * The index we've built on the set of transcripts.
    */
-  std::unique_ptr<SalmonIndex> salmonIndex_{nullptr};
+  SalmonIndex* salmonIndex_{nullptr};
   /**
    * The cluster forest maintains the dynamic relationship
    * defined by transcripts and reads --- if two transcripts
