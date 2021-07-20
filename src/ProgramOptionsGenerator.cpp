@@ -219,22 +219,31 @@ namespace salmon {
        )
       ("softclip", 
        po::bool_switch(&(sopt.softclip))->default_value(salmon::defaults::softclip),
-       "[selective-alignment mode only (experimental)] : Allos soft-clipping of reads during selective-alignment. If this "
+       "[selective-alignment mode only (experimental)] : Allows soft-clipping of reads during selective-alignment. If this "
        "option is provided, then regions at the beginning or end of the read can be withheld from alignment "
        "without any effect on the resulting score (i.e. neither adding nor removing from the score).  This "
        "will drastically reduce the penalty if there are mismatches at the beginning or end of the read "
-       "due to e.g. low-quality bases or adapters.  NOTE: Even with soft-clipping enabled, the read must still "
-       "achieve a score of at least minScoreFraction * maximum achievable score, where the maximum achievable "
-       "score is computed based on the full (un-clipped) read length."
+       "due to e.g. low-quality bases or adapters.  The default policy is to force an end-to-end alignment "
+       "of the entire read.  NOTE: Even with soft-clipping enabled, the read must still achieve a score of "
+       "at least minScoreFraction * maximum achievable score, where the maximum achievable score is computed "
+       "based on the un-clipped length (read length - soft-clipped length).  This will allow more extreme soft-clipping "
+       "when a larger maxSoftclipFraction is set."
       )
       ("softclipOverhangs", 
        po::bool_switch(&(sopt.softclipOverhangs))->default_value(salmon::defaults::softclipOverhangs),
-       "[selective-alignment mode only] : Allow soft-clipping of reads that overhang the beginning or ends "
-       "of the transcript.  In this case, the overhaning section of the read will simply be unaligned, and "
-       "will not contribute or detract from the alignment score.  The default policy is to force an end-to-end "
-       "alignment of the entire read, so that overhanings will result in some deletion of nucleotides from the "
-       "read."
-       )
+       "[selective-alignment mode only] : DEPRECATED. This flag has exactly the same effect as --softclip flag."
+      )
+      ("maxSoftclipFraction",
+       po::value<double>(&sopt.maxSoftclipFraction),
+       "[selective-alignment mode only] : The maximum soft-clipped fraction of the read length a mapping "
+       "is allowed to have --- should be in [0,0.8].\n"
+       "Salmon Default 0.2"
+      )
+      ("computeCIGAR", 
+      po::bool_switch(&(sopt.computeCIGAR))->default_value(salmon::defaults::computeCIGAR),
+      "[selective-alignment mode only] : Prints accurate CIGAR strings when an alignment output is requested. "
+      "Otherwise, the CIGAR strings in the alignment output may not be accurate/correct."
+      )
       ("fullLengthAlignment", 
        po::bool_switch(&(sopt.fullLengthAlignment))->default_value(salmon::defaults::fullLengthAlignment),
        "[selective-alignment mode only] : Perform selective alignment over the full length of the read, beginning "

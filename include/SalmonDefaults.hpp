@@ -25,6 +25,7 @@ namespace defaults {
   constexpr const bool disableSA{false};
   constexpr const float consensusSlack{0.35};
   constexpr const double minScoreFraction{0.65};
+  constexpr const double maxSoftclipFraction{0.2};
   constexpr const double pre_merge_chain_sub_thresh{0.75};
   constexpr const double post_merge_chain_sub_thresh{0.9};
   constexpr const double orphan_chain_sub_thresh{0.95};
@@ -42,6 +43,7 @@ namespace defaults {
   constexpr const bool mimicBT2{false};
   constexpr const bool softclip{false};
   constexpr const bool softclipOverhangs{false};
+  constexpr const bool computeCIGAR{false};
   constexpr const bool fullLengthAlignment{false};
   constexpr const bool allowDovetail{false};
   constexpr const bool recoverOrphans{false};

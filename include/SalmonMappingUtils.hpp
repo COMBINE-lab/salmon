@@ -155,13 +155,15 @@ initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& memCollector,
 
   // Initialize ksw aligner
   ksw2pp::KSW2Config config;
-  config.dropoff = -1;
+  // config.dropoff = -1;
   config.gapo = salmonOpts.gapOpenPenalty;
   config.gape = salmonOpts.gapExtendPenalty;
   config.bandwidth = salmonOpts.dpBandwidth;
   config.flag = 0;
   config.flag |= KSW_EZ_RIGHT;
-  config.flag |= KSW_EZ_SCORE_ONLY;
+  if (salmonOpts.computeCIGAR == false) {
+        config.flag |= KSW_EZ_SCORE_ONLY;
+  }
   int8_t a = static_cast<int8_t>(salmonOpts.matchScore);
   int8_t b = static_cast<int8_t>(salmonOpts.mismatchPenalty);
   ksw2pp::KSW2Aligner aligner2(static_cast<int8_t>(a), static_cast<int8_t>(b));
@@ -179,19 +181,20 @@ initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& memCollector,
   aconf.minScoreFraction = salmonOpts.minScoreFraction;
   aconf.mimicBT2 = salmonOpts.mimicBT2;
   aconf.mimicBT2Strict = salmonOpts.mimicStrictBT2;
-  aconf.allowOverhangSoftclip = salmonOpts.softclipOverhangs;
-  aconf.allowSoftclip = salmonOpts.softclip;
+  // aconf.allowOverhangSoftclip = salmonOpts.softclipOverhangs;
+  aconf.allowSoftclip  = salmonOpts.softclip || salmonOpts.softclipOverhangs; 
+  aconf.computeCIGAR = salmonOpts.computeCIGAR && (!salmonOpts.qmFileName.empty());
+  aconf.endBonus = 5;
+  aconf.end2end = !aconf.allowSoftclip;
+  aconf.maxSoftclipFraction = salmonOpts.maxSoftclipFraction;
   aconf.useAlignmentCache = !salmonOpts.disableAlignmentCache;
-  aconf.alignmentMode = pufferfish::util::PuffAlignmentMode::SCORE_ONLY;
+  // aconf.alignmentMode = pufferfish::util::PuffAlignmentMode::SCORE_ONLY;
 
-  // we actually care about the softclips in the cigar string
-  // if we are writing output and softclipping (or softclipping of overhangs) is
-  // enabled
-  if ((!salmonOpts.qmFileName.empty()) and
-      (salmonOpts.softclip or salmonOpts.softclipOverhangs)) {
-    aconf.alignmentMode =
-        pufferfish::util::PuffAlignmentMode::APPROXIMATE_CIGAR;
-  }
+  // we actually care about the softclips in the cigar string 
+  // if we are writing output and softclipping (or softclipping of overhangs) is enabled
+  // if ( (!salmonOpts.qmFileName.empty()) and (salmonOpts.softclip or salmonOpts.softclipOverhangs) ) {
+  //   aconf.alignmentMode = pufferfish::util::PuffAlignmentMode::APPROXIMATE_CIGAR;
+  // }
 
   mpol.noOrphans = !salmonOpts.allowOrphans;
   // TODO : PF_INTEGRATION

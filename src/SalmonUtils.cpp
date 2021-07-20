@@ -1482,6 +1482,20 @@ bool configure_parsing(size_t nfiles,             // input param
     sopt.mismatchPenalty = -sopt.mismatchPenalty;
   }
 
+  if (sopt.maxSoftclipFraction < 0) {
+    sopt.jointLog->warn(
+                        "You set the maximum soft-clip fraction to {}, but it cannot be negative. It is converted to 0.",
+                        sopt.maxSoftclipFraction);
+    sopt.maxSoftclipFraction = 0;
+  }
+
+  if (sopt.maxSoftclipFraction > 0.8) {
+    sopt.jointLog->warn(
+                        "You set the maximum soft-clip fraction to {}, but it cannot be greater than 0.8. It is converted to 0.8.",
+                        sopt.maxSoftclipFraction);
+    sopt.maxSoftclipFraction = 0.8;
+  }
+
   // Make sure that consensusSlack is not negative
   if (sopt.consensusSlack < 0 or sopt.consensusSlack >= 1.0) {
     sopt.jointLog->error("You set consensusSlack as {}, but it must in [0,1).", sopt.consensusSlack);
