@@ -2668,8 +2668,8 @@ int alevin_sc_align(AlevinOpts<ProtocolT>& aopt,
   using std::string;
   namespace bfs = boost::filesystem;
   namespace po = boost::program_options;
-  try{
-    //auto fileLog = sopt.fileLog;
+
+  try {
     auto jointLog = aopt.jointLog;
     auto indexDirectory = sopt.indexDirectory;
     auto outputDirectory = sopt.outputDirectory;
@@ -2749,6 +2749,11 @@ int alevin_sc_align(AlevinOpts<ProtocolT>& aopt,
 
     do_sc_align<QuasiAlignment>(experiment, sopt,
                                 mstats, sopt.numThreads, aopt);
+
+    // write meta-information about the run
+    GZipWriter gzw(outputDirectory, jointLog);
+    sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
+    gzw.writeMetaFryMode(sopt, experiment, mstats);
  } catch (po::error& e) {
     std::cerr << "Exception : [" << e.what() << "]. Exiting.\n";
     std::exit(1);
@@ -2762,7 +2767,6 @@ int alevin_sc_align(AlevinOpts<ProtocolT>& aopt,
               << " alevin --help\nExiting.\n";
     std::exit(1);
   }
-
   return 0;
 }
 
