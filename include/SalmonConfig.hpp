@@ -9,13 +9,13 @@
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
-    Sailfish is distributed in the hope that it will be useful,
+    Salmon is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
     GNU General Public License for more details.
 
     You should have received a copy of the GNU General Public License
-    along with Sailfish.  If not, see <http://www.gnu.org/licenses/>.
+    along with Salmon.  If not, see <http://www.gnu.org/licenses/>.
 <HEADER
 **/
 
@@ -27,8 +27,8 @@
 namespace salmon {
 constexpr char majorVersion[] = "1";
 constexpr char minorVersion[] = "5";
-constexpr char patchVersion[] = "1";
-constexpr char version[] = "1.5.1";
+constexpr char patchVersion[] = "2";
+constexpr char version[] = "1.5.2";
 constexpr uint32_t indexVersion = 5;
 constexpr char requiredQuasiIndexVersion[] = "p7";
 } // namespace salmon
