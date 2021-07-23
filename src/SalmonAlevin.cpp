@@ -2227,7 +2227,6 @@ void do_sc_align(ReadExperimentT& experiment,
   }
 
 
-
   BasicBinWriter bw;
   //  RADHeader
   RADHeader rh;
