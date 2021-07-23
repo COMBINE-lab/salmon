@@ -1020,7 +1020,6 @@ salmon-based processing of single-cell RNA-seq data.
     green[3] = '0' + static_cast<char>(fmt::GREEN);
     red[3] = '0' + static_cast<char>(fmt::RED);
 
-
     bool noTgMap {false};
     bool dropseq = vm["dropseq"].as<bool>();
     bool indrop = vm["indrop"].as<bool>();
