@@ -1482,6 +1482,13 @@ bool configure_parsing(size_t nfiles,             // input param
     sopt.mismatchPenalty = -sopt.mismatchPenalty;
   }
 
+  if (sopt.endBonus < 0) {
+    sopt.jointLog->warn(
+                        "You set the end bonus to {}, but it should not be negative.  It is converted to 0.",
+                        sopt.endBonus);
+    sopt.endBonus = 0;
+  }
+
   if (sopt.maxSoftclipFraction < 0) {
     sopt.jointLog->warn(
                         "You set the maximum soft-clip fraction to {}, but it cannot be negative. It is converted to 0.",

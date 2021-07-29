@@ -190,6 +190,10 @@ namespace salmon {
        po::value<int16_t>(&sopt.gapExtendPenalty)->default_value(salmon::defaults::gapExtendPenalty),
        "[selective-alignment mode only] : The value given to a gap extension in an alignment."
        )
+       ("eb",
+       po::value<int16_t>(&sopt.endBonus)->default_value(salmon::defaults::endBonus),
+       "[selective-alignment mode only] : The value given as an end bonus in an alignment."
+       )
       ("bandwidth",
        po::value<int32_t>(&sopt.dpBandwidth)->default_value(salmon::defaults::dpBandwidth),
        "[selective-alignment mode only] : The value used for the bandwidth passed to ksw2.  A smaller "
@@ -219,7 +223,7 @@ namespace salmon {
        )
       ("softclip", 
        po::bool_switch(&(sopt.softclip))->default_value(salmon::defaults::softclip),
-       "[selective-alignment mode only (experimental)] : Allows soft-clipping of reads during selective-alignment. If this "
+       "[selective-alignment mode only] : Allows soft-clipping of reads during selective-alignment. If this "
        "option is provided, then regions at the beginning or end of the read can be withheld from alignment "
        "without any effect on the resulting score (i.e. neither adding nor removing from the score).  This "
        "will drastically reduce the penalty if there are mismatches at the beginning or end of the read "
@@ -231,7 +235,7 @@ namespace salmon {
       )
       ("softclipOverhangs", 
        po::bool_switch(&(sopt.softclipOverhangs))->default_value(salmon::defaults::softclipOverhangs),
-       "[selective-alignment mode only] : DEPRECATED. This flag has exactly the same effect as --softclip flag."
+       "[*deprecated* selective-alignment mode only] : This flag has exactly the same effect as --softclip flag."
       )
       ("maxSoftclipFraction",
        po::value<double>(&sopt.maxSoftclipFraction),

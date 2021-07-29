@@ -184,7 +184,7 @@ initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& memCollector,
   // aconf.allowOverhangSoftclip = salmonOpts.softclipOverhangs;
   aconf.allowSoftclip  = salmonOpts.softclip || salmonOpts.softclipOverhangs; 
   aconf.computeCIGAR = salmonOpts.computeCIGAR && (!salmonOpts.qmFileName.empty());
-  aconf.endBonus = 5;
+  aconf.endBonus = salmonOpts.endBonus;
   aconf.end2end = !aconf.allowSoftclip;
   aconf.maxSoftclipFraction = salmonOpts.maxSoftclipFraction;
   aconf.useAlignmentCache = !salmonOpts.disableAlignmentCache;

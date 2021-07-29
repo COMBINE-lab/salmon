@@ -34,6 +34,7 @@ namespace defaults {
   constexpr const int16_t mismatchPenalty{-4};
   constexpr const int16_t gapOpenPenalty{6};
   constexpr const int16_t gapExtendPenalty{2};
+  constexpr const int16_t endBonus{5};
   constexpr const int32_t dpBandwidth{15};
   constexpr const uint32_t mismatchSeedSkip{3};
   constexpr const bool disableChainingHeuristic{false};
