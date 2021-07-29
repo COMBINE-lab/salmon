@@ -1168,10 +1168,8 @@ void processReads(
           size_t idx{0};
           bool is_multimapping = (jointHits.size() > 1);
 
-          for (auto&& jointHit : jointHits) {
-            auto hitScore = puffaligner.calculateAlignments(
-                rp.first.seq, rp.second.seq, jointHit, hctr, is_multimapping,
-                false);
+          for (auto &&jointHit : jointHits) {
+            auto hitScore = puffaligner.calculateAlignments(rp.first.seq, rp.second.seq, jointHit, hctr, is_multimapping, salmonOpts.jointLog, false);
             bool validScore = (hitScore != invalidScore);
             numMappingsDropped += validScore ? 0 : 1;
             auto tid = qidx->getRefId(jointHit.tid);
@@ -1841,9 +1839,8 @@ void processReads(
         size_t idx{0};
         bool is_multimapping = (jointHits.size() > 1);
 
-        for (auto&& jointHit : jointHits) {
-          auto hitScore = puffaligner.calculateAlignments(
-              rp.seq, jointHit, hctr, is_multimapping, false);
+         for (auto &&jointHit : jointHits) {
+          auto hitScore = puffaligner.calculateAlignments(rp.seq, jointHit, hctr, is_multimapping, salmonOpts.jointLog, false);
           bool validScore = (hitScore != invalidScore);
           numMappingsDropped += validScore ? 0 : 1;
           auto tid = qidx->getRefId(jointHit.tid);
