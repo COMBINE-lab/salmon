@@ -238,10 +238,9 @@ namespace salmon {
        "[*deprecated* selective-alignment mode only] : This flag has exactly the same effect as --softclip flag."
       )
       ("maxSoftclipFraction",
-       po::value<double>(&sopt.maxSoftclipFraction),
+       po::value<double>(&(sopt.maxSoftclipFraction))->default_value(salmon::defaults::maxSoftclipFraction),
        "[selective-alignment mode only] : The maximum soft-clipped fraction of the read length a mapping "
        "is allowed to have --- should be in [0,0.8].\n"
-       "Salmon Default 0.2"
       )
       ("computeCIGAR", 
       po::bool_switch(&(sopt.computeCIGAR))->default_value(salmon::defaults::computeCIGAR),
