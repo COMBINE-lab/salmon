@@ -180,6 +180,7 @@ namespace alevin{
       SciSeq3() : Rule(20, 8, BarcodeEnd::FIVE, 1073741824){}
       std::string anchorSeq = "CAGAGC";
       std::size_t anchorSeqLen = anchorSeq.length();
+      std::size_t anchorPos = 0;
       u_int16_t const maxHairpinIndexLen = 10;
       u_int16_t const rtIdxLen = 10; // rev transcription index length
     };

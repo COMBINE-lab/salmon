@@ -150,7 +150,7 @@ namespace alevin{
   constexpr uint32_t miniBatchSize{5000};
 
   using CellBarcodeT = uint32_t;
-  using UMIBarcodeT = uint64_t;
+  using UMIBarcodeT = uint32_t;
 
   template <typename AlnT> using AlevinAlnGroup = AlignmentGroup<AlnT, CellBarcodeT, UMIBarcodeT>;
   template <typename AlnT> using AlnGroupVec = std::vector<AlevinAlnGroup<AlnT>>;
@@ -663,7 +663,8 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        bool extracted_bc = aut::extractBarcode(rp.first.seq, rp.second.seq, alevinOpts.protocol, barcode);
+        auto localProtocol = alevinOpts.protocol;
+        bool extracted_bc = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
         seqOk = (extracted_bc) ?
           aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
 
@@ -674,8 +675,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
         // If we have a valid barcode
         if (seqOk) {
-          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, alevinOpts.protocol, umi);
-          //aopt.jointLog->info("BC : {}, UMI : {}". barcode, umi);
+          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, localProtocol, umi);
           if ( !umi_ok ) {
             smallSeqs += 1;
           } else {
@@ -907,11 +907,11 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         }
 
         // umi
-        if ( alevinOpts.protocol.barcodeLength <= 16 ) { // if we can use 32-bit int 
+        if ( alevinOpts.protocol.umiLength <= 16 ) { // if we can use 32-bit int 
           uint64_t umiint = jointHitGroup.umi();
           uint32_t shortumi = static_cast<uint32_t>(0x00000000FFFFFFFF & umiint);
           bw << shortumi;
-        } else if ( alevinOpts.protocol.barcodeLength <= 32 ) { // if we can use 64-bit int
+        } else if ( alevinOpts.protocol.umiLength <= 32 ) { // if we can use 64-bit int
           uint64_t umiint = jointHitGroup.umi();
           bw << umiint;
         } else { // must use string
@@ -1182,7 +1182,8 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, alevinOpts.protocol, barcode);
+        auto localProtocol = alevinOpts.protocol;
+        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
         seqOk = (extracted_barcode) ?
           aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
 
@@ -1193,8 +1194,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
         // If we have a valid barcode
         if (seqOk) {
-          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, alevinOpts.protocol, umi);
-
+          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, localProtocol, umi);
           if ( !umi_ok ) {
             smallSeqs += 1;
           } else {
@@ -1351,11 +1351,11 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           }
 
           // umi
-          if ( alevinOpts.protocol.barcodeLength <= 16 ) { // if we can use 32-bit int 
+          if ( alevinOpts.protocol.umiLength <= 16 ) { // if we can use 32-bit int 
             uint64_t umiint = jointHitGroup.umi();
             uint32_t shortumi = static_cast<uint32_t>(0x00000000FFFFFFFF & umiint);
             bw << shortumi;
-          } else if ( alevinOpts.protocol.barcodeLength <= 32 ) { // if we can use 64-bit int
+          } else if ( alevinOpts.protocol.umiLength <= 32 ) { // if we can use 64-bit int
             uint64_t umiint = jointHitGroup.umi();
             bw << umiint;
           } else { // must use string
@@ -1374,7 +1374,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
         } else {
           if (barcode_ok) {
             unmapped_bc_map[bck.word(0)] += 1;
-          }
+          } 
         }
 
 
@@ -1640,7 +1640,8 @@ void processReadsQuasi(
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, alevinOpts.protocol, barcode);
+        auto localProtocol = alevinOpts.protocol;
+        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
         seqOk = (extracted_barcode) ?
           aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
 
@@ -1684,7 +1685,7 @@ void processReadsQuasi(
         if (barcodeIdx) {
           //corrBarcodeIndex = barcodeMap[barcodeIndex];
           jointHitGroup.setBarcode(*barcodeIdx);
-          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, alevinOpts.protocol, umi);
+          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, localProtocol, umi);
 
           if ( !umi_ok ) {
             smallSeqs += 1;
