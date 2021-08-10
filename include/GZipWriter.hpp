@@ -41,6 +41,9 @@ public:
   template <typename ExpT>
   bool writeMeta(const SalmonOpts& opts, const ExpT& experiment, const MappingStatistics& mstats);
 
+  template <typename SCExpT>
+  bool writeMetaFryMode(const SalmonOpts& opts, const SCExpT& experiment, const MappingStatistics& mstats);
+
   template <typename ProtocolT>
   bool writeMetaAlevin(const AlevinOpts<ProtocolT>& opts,
                        boost::filesystem::path aux_dir);

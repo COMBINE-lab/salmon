@@ -149,6 +149,14 @@ namespace alevin{
 
   constexpr uint32_t miniBatchSize{5000};
 
+  // NOTE: Consider the implications of using uint32_t below.
+  // Currently, this should not limit the barcode length to <= 16 in 
+  // "fry" mode (either sla or sketch) since we never actually put the 
+  // barcode in the corresponding variable of the AlignmentGroup class.
+  // In traditional alevin, this should be referring to a barcode *index*
+  // rather than the sequence itself, so it should be OK so long as we have
+  // < std::numeric_limits<uint32_t>::max() distinct barcodes / reads. 
+  // However, that assumption should be tested more thoroughly.
   using CellBarcodeT = uint32_t;
   using UMIBarcodeT = uint32_t;
 
@@ -515,9 +523,9 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       // This ensures that we don't double-count a k-mer that 
       // might occur twice on this target.
       if (ref_pos < last_ref_pos_rc and read_pos > last_read_pos_rc) {
-        approx_pos_rc = ref_pos - read_pos;
+        approx_pos_rc = ref_pos;
         if (last_read_pos_rc == -1) { 
-          approx_end_pos_rc = ref_pos - read_pos; 
+          approx_end_pos_rc = ref_pos + read_pos; 
         } else {
           if (approx_end_pos_rc - approx_pos_rc > max_stretch) { return false;}
         }
@@ -705,7 +713,9 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                 decltype(raw_hits[0].first) prev_read_pos = -1;
                 // the maximum span the supporting k-mers of a 
                 // mapping position are allowed to have.
-                int32_t max_stretch = static_cast<int32_t>(readSubSeq->length() * 1.25);
+                // NOTE this is still > read_length b/c the stretch is measured wrt the 
+                // START of the terminal k-mer.
+                int32_t max_stretch = static_cast<int32_t>(readSubSeq->length() * 1.0);
 
                 // a raw hit is a pair of read_pos and a projected hit
 
@@ -893,9 +903,9 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
         // bc
         // if we can fit the barcode into an integer 
-        if ( alevinOpts.protocol.barcodeLength <= 32 ) { 
+        if ( barcodeLength <= 32 ) { 
           if (barcode_ok) {
-            if (alevinOpts.protocol.barcodeLength <= 16) { // can use 32-bit int
+            if ( barcodeLength <= 16 ) { // can use 32-bit int
               uint32_t shortbck = static_cast<uint32_t>(0x00000000FFFFFFFF & bck.word(0));
               bw << shortbck;
             } else { // must use 64-bit int
@@ -907,11 +917,11 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         }
 
         // umi
-        if ( alevinOpts.protocol.umiLength <= 16 ) { // if we can use 32-bit int 
+        if ( umiLength <= 16 ) { // if we can use 32-bit int 
           uint64_t umiint = jointHitGroup.umi();
           uint32_t shortumi = static_cast<uint32_t>(0x00000000FFFFFFFF & umiint);
           bw << shortumi;
-        } else if ( alevinOpts.protocol.umiLength <= 32 ) { // if we can use 64-bit int
+        } else if ( umiLength <= 32 ) { // if we can use 64-bit int
           uint64_t umiint = jointHitGroup.umi();
           bw << umiint;
         } else { // must use string
@@ -1334,11 +1344,11 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
           // bc
           // if we can if the barcode into an integer 
-          if ( alevinOpts.protocol.barcodeLength <= 32 ) { 
+          if ( barcodeLength <= 32 ) { 
 
             if (barcode_ok) {
               //alevinOpts.jointLog->info("BARCODE : {} \t ENC : {} ", barcode, bck.word(0));
-              if (alevinOpts.protocol.barcodeLength <= 16) { // can use 32-bit int
+              if ( barcodeLength <= 16 ) { // can use 32-bit int
                 uint32_t shortbck = static_cast<uint32_t>(0x00000000FFFFFFFF & bck.word(0));
                 //alevinOpts.jointLog->info("shortbck : {} ", shortbck);
                 bw << shortbck;
@@ -1351,11 +1361,11 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           }
 
           // umi
-          if ( alevinOpts.protocol.umiLength <= 16 ) { // if we can use 32-bit int 
+          if ( umiLength <= 16 ) { // if we can use 32-bit int 
             uint64_t umiint = jointHitGroup.umi();
             uint32_t shortumi = static_cast<uint32_t>(0x00000000FFFFFFFF & umiint);
             bw << shortumi;
-          } else if ( alevinOpts.protocol.umiLength <= 32 ) { // if we can use 64-bit int
+          } else if ( umiLength <= 32 ) { // if we can use 64-bit int
             uint64_t umiint = jointHitGroup.umi();
             bw << umiint;
           } else { // must use string
@@ -2659,8 +2669,8 @@ int alevin_sc_align(AlevinOpts<ProtocolT>& aopt,
   using std::string;
   namespace bfs = boost::filesystem;
   namespace po = boost::program_options;
-  try{
-    //auto fileLog = sopt.fileLog;
+
+  try {
     auto jointLog = aopt.jointLog;
     auto indexDirectory = sopt.indexDirectory;
     auto outputDirectory = sopt.outputDirectory;
@@ -2740,6 +2750,11 @@ int alevin_sc_align(AlevinOpts<ProtocolT>& aopt,
 
     do_sc_align<QuasiAlignment>(experiment, sopt,
                                 mstats, sopt.numThreads, aopt);
+
+    // write meta-information about the run
+    GZipWriter gzw(outputDirectory, jointLog);
+    sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
+    gzw.writeMetaFryMode(sopt, experiment, mstats);
  } catch (po::error& e) {
     std::cerr << "Exception : [" << e.what() << "]. Exiting.\n";
     std::exit(1);
@@ -2753,7 +2768,6 @@ int alevin_sc_align(AlevinOpts<ProtocolT>& aopt,
               << " alevin --help\nExiting.\n";
     std::exit(1);
   }
-
   return 0;
 }
 

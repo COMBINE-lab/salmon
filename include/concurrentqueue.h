@@ -5,7 +5,7 @@
 //    http://moodycamel.com/blog/2014/detailed-design-of-a-lock-free-queue
 
 // Simplified BSD license:
-// Copyright (c) 2013-2016, Cameron Desrochers.
+// Copyright (c) 2013-2020, Cameron Desrochers.
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without modification,
@@ -27,10 +27,11 @@
 // TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
 // EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+// Also dual-licensed under the Boost Software License (see LICENSE.md)
 
 #pragma once
 
-#if defined(__GNUC__)
+#if defined(__GNUC__) && !defined(__INTEL_COMPILER)
 // Disable -Wconversion warnings (spuriously triggered when Traits::size_t and
 // Traits::index_t are set to < 32 bits, causing integer promotion, causing warnings
 // upon assigning any computed values)
@@ -40,6 +41,13 @@
 #ifdef MCDBGQ_USE_RELACY
 #pragma GCC diagnostic ignored "-Wint-to-pointer-cast"
 #endif
+#endif
+
+#if defined(_MSC_VER) && (!defined(_HAS_CXX17) || !_HAS_CXX17)
+// VS2019 with /W4 warns about constant conditional expressions but unless /std=c++17 or higher
+// does not support `if constexpr`, so we have no choice but to simply disable the warning
+#pragma warning(push)
+#pragma warning(disable: 4127)  // conditional expression is constant
 #endif
 
 #if defined(__APPLE__)
@@ -96,7 +104,7 @@ namespace moodycamel { namespace details {
 	static const thread_id_t invalid_thread_id2 = 0xFFFFFFFFU;	// Not technically guaranteed to be invalid, but is never used in practice. Note that all Win32 thread IDs are presently multiples of 4.
 	static inline thread_id_t thread_id() { return static_cast<thread_id_t>(::GetCurrentThreadId()); }
 } }
-#elif defined(__arm__) || defined(_M_ARM) || defined(__aarch64__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
+#elif defined(__arm__) || defined(_M_ARM) || defined(__aarch64__) || (defined(__APPLE__) && TARGET_OS_IPHONE) || defined(MOODYCAMEL_NO_THREAD_LOCAL)
 namespace moodycamel { namespace details {
 	static_assert(sizeof(std::thread::id) == 4 || sizeof(std::thread::id) == 8, "std::thread::id is expected to be either 4 or 8 bytes");
 	
@@ -225,18 +233,43 @@ namespace moodycamel { namespace details {
 #endif
 #endif
 
+namespace moodycamel { namespace details {
 #ifndef MOODYCAMEL_ALIGNAS
-// VS2013 doesn't support alignas or alignof
+// VS2013 doesn't support alignas or alignof, and align() requires a constant literal
 #if defined(_MSC_VER) && _MSC_VER <= 1800
 #define MOODYCAMEL_ALIGNAS(alignment) __declspec(align(alignment))
 #define MOODYCAMEL_ALIGNOF(obj) __alignof(obj)
+#define MOODYCAMEL_ALIGNED_TYPE_LIKE(T, obj) typename details::Vs2013Aligned<std::alignment_of<obj>::value, T>::type
+	template<int Align, typename T> struct Vs2013Aligned { };  // default, unsupported alignment
+	template<typename T> struct Vs2013Aligned<1, T> { typedef __declspec(align(1)) T type; };
+	template<typename T> struct Vs2013Aligned<2, T> { typedef __declspec(align(2)) T type; };
+	template<typename T> struct Vs2013Aligned<4, T> { typedef __declspec(align(4)) T type; };
+	template<typename T> struct Vs2013Aligned<8, T> { typedef __declspec(align(8)) T type; };
+	template<typename T> struct Vs2013Aligned<16, T> { typedef __declspec(align(16)) T type; };
+	template<typename T> struct Vs2013Aligned<32, T> { typedef __declspec(align(32)) T type; };
+	template<typename T> struct Vs2013Aligned<64, T> { typedef __declspec(align(64)) T type; };
+	template<typename T> struct Vs2013Aligned<128, T> { typedef __declspec(align(128)) T type; };
+	template<typename T> struct Vs2013Aligned<256, T> { typedef __declspec(align(256)) T type; };
 #else
+	template<typename T> struct identity { typedef T type; };
 #define MOODYCAMEL_ALIGNAS(alignment) alignas(alignment)
 #define MOODYCAMEL_ALIGNOF(obj) alignof(obj)
+#define MOODYCAMEL_ALIGNED_TYPE_LIKE(T, obj) alignas(alignof(obj)) typename details::identity<T>::type
 #endif
 #endif
+} }
 
 
+// TSAN can false report races in lock-free code.  To enable TSAN to be used from projects that use this one,
+// we can apply per-function compile-time suppression.
+// See https://clang.llvm.org/docs/ThreadSanitizer.html#has-feature-thread-sanitizer
+#define MOODYCAMEL_NO_TSAN
+#if defined(__has_feature)
+ #if __has_feature(thread_sanitizer)
+  #undef MOODYCAMEL_NO_TSAN
+  #define MOODYCAMEL_NO_TSAN __attribute__((no_sanitize("thread")))
+ #endif // TSAN
+#endif // TSAN
 
 // Compiler-specific likely/unlikely hints
 namespace moodycamel { namespace details {
@@ -339,6 +372,12 @@ struct ConcurrentQueueDefaultTraits
 	// that this limit is enforced at the block level (for performance reasons), i.e.
 	// it's rounded up to the nearest block size.
 	static const size_t MAX_SUBQUEUE_SIZE = details::const_numeric_max<size_t>::value;
+
+	// The number of times to spin before sleeping when waiting on a semaphore.
+	// Recommended values are on the order of 1000-10000 unless the number of
+	// consumer threads exceeds the number of idle cores (in which case try 0-100).
+	// Only affects instances of the BlockingConcurrentQueue.
+	static const int MAX_SEMA_SPINS = 10000;
 	
 	
 #ifndef MCDBGQ_USE_RELACY
@@ -1608,7 +1647,7 @@ private:
 		
 	private:
 		static_assert(std::alignment_of<T>::value <= sizeof(T), "The queue does not support types with an alignment greater than their size at this time");
-		MOODYCAMEL_ALIGNAS(MOODYCAMEL_ALIGNOF(T)) char elements[sizeof(T) * BLOCK_SIZE];
+		MOODYCAMEL_ALIGNED_TYPE_LIKE(char[sizeof(T) * BLOCK_SIZE], T) elements;
 	public:
 		Block* next;
 		std::atomic<size_t> elementsCompletelyDequeued;
@@ -1649,7 +1688,7 @@ private:
 		{
 		}
 		
-		virtual ~ProducerBase() { };
+		virtual ~ProducerBase() { }
 		
 		template<typename U>
 		inline bool dequeue(U& element)
@@ -1858,7 +1897,7 @@ private:
 					++pr_blockIndexSlotsUsed;
 				}
 
-				if (!MOODYCAMEL_NOEXCEPT_CTOR(T, U, new ((T*)nullptr) T(std::forward<U>(element)))) {
+				MOODYCAMEL_CONSTEXPR_IF (!MOODYCAMEL_NOEXCEPT_CTOR(T, U, new (static_cast<T*>(nullptr)) T(std::forward<U>(element)))) {
 					// The constructor may throw. We want the element not to appear in the queue in
 					// that case (without corrupting the queue):
 					MOODYCAMEL_TRY {
@@ -1884,7 +1923,7 @@ private:
 				blockIndex.load(std::memory_order_relaxed)->front.store(pr_blockIndexFront, std::memory_order_release);
 				pr_blockIndexFront = (pr_blockIndexFront + 1) & (pr_blockIndexSize - 1);
 				
-				if (!MOODYCAMEL_NOEXCEPT_CTOR(T, U, new ((T*)nullptr) T(std::forward<U>(element)))) {
+				MOODYCAMEL_CONSTEXPR_IF (!MOODYCAMEL_NOEXCEPT_CTOR(T, U, new (static_cast<T*>(nullptr)) T(std::forward<U>(element)))) {
 					this->tailIndex.store(newTailIndex, std::memory_order_release);
 					return true;
 				}
@@ -1998,7 +2037,7 @@ private:
 		}
 		
 		template<AllocationMode allocMode, typename It>
-		bool enqueue_bulk(It itemFirst, size_t count)
+		bool MOODYCAMEL_NO_TSAN enqueue_bulk(It itemFirst, size_t count)
 		{
 			// First, we need to make sure we have enough room to enqueue all of the elements;
 			// this means pre-allocating blocks and putting them in the block index (but only if
@@ -2100,7 +2139,7 @@ private:
 					block = block->next;
 				}
 				
-				if (MOODYCAMEL_NOEXCEPT_CTOR(T, decltype(*itemFirst), new ((T*)nullptr) T(details::deref_noexcept(itemFirst)))) {
+				MOODYCAMEL_CONSTEXPR_IF (MOODYCAMEL_NOEXCEPT_CTOR(T, decltype(*itemFirst), new (static_cast<T*>(nullptr)) T(details::deref_noexcept(itemFirst)))) {
 					blockIndex.load(std::memory_order_relaxed)->front.store((pr_blockIndexFront - 1) & (pr_blockIndexSize - 1), std::memory_order_release);
 				}
 			}
@@ -2115,11 +2154,11 @@ private:
 				this->tailBlock = firstAllocatedBlock;
 			}
 			while (true) {
-				auto stopIndex = (currentTailIndex & ~static_cast<index_t>(BLOCK_SIZE - 1)) + static_cast<index_t>(BLOCK_SIZE);
+				index_t stopIndex = (currentTailIndex & ~static_cast<index_t>(BLOCK_SIZE - 1)) + static_cast<index_t>(BLOCK_SIZE);
 				if (details::circular_less_than<index_t>(newTailIndex, stopIndex)) {
 					stopIndex = newTailIndex;
 				}
-				if (MOODYCAMEL_NOEXCEPT_CTOR(T, decltype(*itemFirst), new ((T*)nullptr) T(details::deref_noexcept(itemFirst)))) {
+				MOODYCAMEL_CONSTEXPR_IF (MOODYCAMEL_NOEXCEPT_CTOR(T, decltype(*itemFirst), new (static_cast<T*>(nullptr)) T(details::deref_noexcept(itemFirst)))) {
 					while (currentTailIndex != stopIndex) {
 						new ((*this->tailBlock)[currentTailIndex++]) T(*itemFirst++);
 					}
@@ -2134,7 +2173,7 @@ private:
 							// may only define a (noexcept) move constructor, and so calls to the
 							// cctor will not compile, even if they are in an if branch that will never
 							// be executed
-							new ((*this->tailBlock)[currentTailIndex]) T(details::nomove_if<(bool)!MOODYCAMEL_NOEXCEPT_CTOR(T, decltype(*itemFirst), new ((T*)nullptr) T(details::deref_noexcept(itemFirst)))>::eval(*itemFirst));
+							new ((*this->tailBlock)[currentTailIndex]) T(details::nomove_if<!MOODYCAMEL_NOEXCEPT_CTOR(T, decltype(*itemFirst), new (static_cast<T*>(nullptr)) T(details::deref_noexcept(itemFirst)))>::eval(*itemFirst));
 							++currentTailIndex;
 							++itemFirst;
 						}
@@ -2181,8 +2220,9 @@ private:
 				this->tailBlock = this->tailBlock->next;
 			}
 			
-			if (!MOODYCAMEL_NOEXCEPT_CTOR(T, decltype(*itemFirst), new ((T*)nullptr) T(details::deref_noexcept(itemFirst))) && firstAllocatedBlock != nullptr) {
-				blockIndex.load(std::memory_order_relaxed)->front.store((pr_blockIndexFront - 1) & (pr_blockIndexSize - 1), std::memory_order_release);
+			MOODYCAMEL_CONSTEXPR_IF (!MOODYCAMEL_NOEXCEPT_CTOR(T, decltype(*itemFirst), new (static_cast<T*>(nullptr)) T(details::deref_noexcept(itemFirst)))) {
+				if (firstAllocatedBlock != nullptr)
+					blockIndex.load(std::memory_order_relaxed)->front.store((pr_blockIndexFront - 1) & (pr_blockIndexSize - 1), std::memory_order_release);
 			}
 			
 			this->tailIndex.store(newTailIndex, std::memory_order_release);
@@ -2199,7 +2239,7 @@ private:
 				desiredCount = desiredCount < max ? desiredCount : max;
 				std::atomic_thread_fence(std::memory_order_acquire);
 				
-				auto myDequeueCount = this->dequeueOptimisticCount.fetch_add(desiredCount, std::memory_order_relaxed);;
+				auto myDequeueCount = this->dequeueOptimisticCount.fetch_add(desiredCount, std::memory_order_relaxed);
 				
 				tail = this->tailIndex.load(std::memory_order_acquire);
 				auto actualCount = static_cast<size_t>(tail - (myDequeueCount - overcommit));
@@ -2226,7 +2266,7 @@ private:
 					auto index = firstIndex;
 					do {
 						auto firstIndexInBlock = index;
-						auto endIndex = (index & ~static_cast<index_t>(BLOCK_SIZE - 1)) + static_cast<index_t>(BLOCK_SIZE);
+						index_t endIndex = (index & ~static_cast<index_t>(BLOCK_SIZE - 1)) + static_cast<index_t>(BLOCK_SIZE);
 						endIndex = details::circular_less_than<index_t>(firstIndex + static_cast<index_t>(actualCount), endIndex) ? firstIndex + static_cast<index_t>(actualCount) : endIndex;
 						auto block = localBlockIndex->entries[indexIndex].block;
 						if (MOODYCAMEL_NOEXCEPT_ASSIGN(T, T&&, details::deref_noexcept(itemFirst) = std::move((*(*block)[index])))) {
@@ -2460,8 +2500,8 @@ private:
 				newBlock->owner = this;
 #endif
 				newBlock->ConcurrentQueue::Block::template reset_empty<implicit_context>();
-				
-				if (!MOODYCAMEL_NOEXCEPT_CTOR(T, U, new ((T*)nullptr) T(std::forward<U>(element)))) {
+
+				MOODYCAMEL_CONSTEXPR_IF (!MOODYCAMEL_NOEXCEPT_CTOR(T, U, new (static_cast<T*>(nullptr)) T(std::forward<U>(element)))) {
 					// May throw, try to insert now before we publish the fact that we have this new block
 					MOODYCAMEL_TRY {
 						new ((*newBlock)[currentTailIndex]) T(std::forward<U>(element));
@@ -2479,7 +2519,7 @@ private:
 				
 				this->tailBlock = newBlock;
 				
-				if (!MOODYCAMEL_NOEXCEPT_CTOR(T, U, new ((T*)nullptr) T(std::forward<U>(element)))) {
+				MOODYCAMEL_CONSTEXPR_IF (!MOODYCAMEL_NOEXCEPT_CTOR(T, U, new (static_cast<T*>(nullptr)) T(std::forward<U>(element)))) {
 					this->tailIndex.store(newTailIndex, std::memory_order_release);
 					return true;
 				}
@@ -2563,6 +2603,10 @@ private:
 			return false;
 		}
 		
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4706)  // assignment within conditional expression
+#endif
 		template<AllocationMode allocMode, typename It>
 		bool enqueue_bulk(It itemFirst, size_t count)
 		{
@@ -2598,6 +2642,7 @@ private:
 					auto head = this->headIndex.load(std::memory_order_relaxed);
 					assert(!details::circular_less_than<index_t>(currentTailIndex, head));
 					bool full = !details::circular_less_than<index_t>(head, currentTailIndex + BLOCK_SIZE) || (MAX_SUBQUEUE_SIZE != details::const_numeric_max<size_t>::value && (MAX_SUBQUEUE_SIZE == 0 || MAX_SUBQUEUE_SIZE - BLOCK_SIZE < currentTailIndex - head));
+
 					if (full || !(indexInserted = insert_block_index_entry<allocMode>(idxEntry, currentTailIndex)) || (newBlock = this->parent->ConcurrentQueue::template requisition_block<allocMode>()) == nullptr) {
 						// Index allocation or block allocation failed; revert any other allocations
 						// and index insertions done so far for this operation
@@ -2648,11 +2693,11 @@ private:
 				this->tailBlock = firstAllocatedBlock;
 			}
 			while (true) {
-				auto stopIndex = (currentTailIndex & ~static_cast<index_t>(BLOCK_SIZE - 1)) + static_cast<index_t>(BLOCK_SIZE);
+				index_t stopIndex = (currentTailIndex & ~static_cast<index_t>(BLOCK_SIZE - 1)) + static_cast<index_t>(BLOCK_SIZE);
 				if (details::circular_less_than<index_t>(newTailIndex, stopIndex)) {
 					stopIndex = newTailIndex;
 				}
-				if (MOODYCAMEL_NOEXCEPT_CTOR(T, decltype(*itemFirst), new ((T*)nullptr) T(details::deref_noexcept(itemFirst)))) {
+				MOODYCAMEL_CONSTEXPR_IF (MOODYCAMEL_NOEXCEPT_CTOR(T, decltype(*itemFirst), new (static_cast<T*>(nullptr)) T(details::deref_noexcept(itemFirst)))) {
 					while (currentTailIndex != stopIndex) {
 						new ((*this->tailBlock)[currentTailIndex++]) T(*itemFirst++);
 					}
@@ -2660,7 +2705,7 @@ private:
 				else {
 					MOODYCAMEL_TRY {
 						while (currentTailIndex != stopIndex) {
-							new ((*this->tailBlock)[currentTailIndex]) T(details::nomove_if<(bool)!MOODYCAMEL_NOEXCEPT_CTOR(T, decltype(*itemFirst), new ((T*)nullptr) T(details::deref_noexcept(itemFirst)))>::eval(*itemFirst));
+							new ((*this->tailBlock)[currentTailIndex]) T(details::nomove_if<!MOODYCAMEL_NOEXCEPT_CTOR(T, decltype(*itemFirst), new (static_cast<T*>(nullptr)) T(details::deref_noexcept(itemFirst)))>::eval(*itemFirst));
 							++currentTailIndex;
 							++itemFirst;
 						}
@@ -2712,6 +2757,9 @@ private:
 			this->tailIndex.store(newTailIndex, std::memory_order_release);
 			return true;
 		}
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 		
 		template<typename It>
 		size_t dequeue_bulk(It& itemFirst, size_t max)
@@ -2743,7 +2791,7 @@ private:
 					auto indexIndex = get_block_index_index_for_index(index, localBlockIndex);
 					do {
 						auto blockStartIndex = index;
-						auto endIndex = (index & ~static_cast<index_t>(BLOCK_SIZE - 1)) + static_cast<index_t>(BLOCK_SIZE);
+						index_t endIndex = (index & ~static_cast<index_t>(BLOCK_SIZE - 1)) + static_cast<index_t>(BLOCK_SIZE);
 						endIndex = details::circular_less_than<index_t>(firstIndex + static_cast<index_t>(actualCount), endIndex) ? firstIndex + static_cast<index_t>(actualCount) : endIndex;
 						
 						auto entry = localBlockIndex->index[indexIndex];
@@ -2841,7 +2889,7 @@ private:
 			if (localBlockIndex == nullptr) {
 				return false;  // this can happen if new_block_index failed in the constructor
 			}
-			auto newTail = (localBlockIndex->tail.load(std::memory_order_relaxed) + 1) & (localBlockIndex->capacity - 1);
+			size_t newTail = (localBlockIndex->tail.load(std::memory_order_relaxed) + 1) & (localBlockIndex->capacity - 1);
 			idxEntry = localBlockIndex->index[newTail];
 			if (idxEntry->key.load(std::memory_order_relaxed) == INVALID_BLOCK_BASE ||
 				idxEntry->value.load(std::memory_order_relaxed) == nullptr) {
@@ -3411,7 +3459,7 @@ private:
 					}
 					
 					auto newHash = new (raw) ImplicitProducerHash;
-					newHash->capacity = newCapacity;
+					newHash->capacity = static_cast<size_t>(newCapacity);
 					newHash->entries = reinterpret_cast<ImplicitProducerKVP*>(details::align_for<ImplicitProducerKVP>(raw + sizeof(ImplicitProducerHash)));
 					for (size_t i = 0; i != newCapacity; ++i) {
 						new (newHash->entries + i) ImplicitProducerKVP;
@@ -3525,23 +3573,26 @@ private:
 	template<typename TAlign>
 	static inline void* aligned_malloc(size_t size)
 	{
-		if (std::alignment_of<TAlign>::value <= std::alignment_of<details::max_align_t>::value)
+		MOODYCAMEL_CONSTEXPR_IF (std::alignment_of<TAlign>::value <= std::alignment_of<details::max_align_t>::value)
 			return (Traits::malloc)(size);
-		size_t alignment = std::alignment_of<TAlign>::value;
-		void* raw = (Traits::malloc)(size + alignment - 1 + sizeof(void*));
-		if (!raw)
-			return nullptr;
-		char* ptr = details::align_for<TAlign>(reinterpret_cast<char*>(raw) + sizeof(void*));
-		*(reinterpret_cast<void**>(ptr) - 1) = raw;
-		return ptr;
+		else {
+			size_t alignment = std::alignment_of<TAlign>::value;
+			void* raw = (Traits::malloc)(size + alignment - 1 + sizeof(void*));
+			if (!raw)
+				return nullptr;
+			char* ptr = details::align_for<TAlign>(reinterpret_cast<char*>(raw) + sizeof(void*));
+			*(reinterpret_cast<void**>(ptr) - 1) = raw;
+			return ptr;
+		}
 	}
 
 	template<typename TAlign>
 	static inline void aligned_free(void* ptr)
 	{
-		if (std::alignment_of<TAlign>::value <= std::alignment_of<details::max_align_t>::value)
+		MOODYCAMEL_CONSTEXPR_IF (std::alignment_of<TAlign>::value <= std::alignment_of<details::max_align_t>::value)
 			return (Traits::free)(ptr);
-		(Traits::free)(ptr ? *(reinterpret_cast<void**>(ptr) - 1) : nullptr);
+		else
+			(Traits::free)(ptr ? *(reinterpret_cast<void**>(ptr) - 1) : nullptr);
 	}
 
 	template<typename U>
@@ -3647,7 +3698,7 @@ ConsumerToken::ConsumerToken(ConcurrentQueue<T, Traits>& queue)
 	: itemsConsumedFromCurrent(0), currentProducer(nullptr), desiredProducer(nullptr)
 {
 	initialOffset = queue.nextExplicitConsumerId.fetch_add(1, std::memory_order_release);
-	lastKnownGlobalOffset = -1;
+	lastKnownGlobalOffset = static_cast<std::uint32_t>(-1);
 }
 
 template<typename T, typename Traits>
@@ -3655,7 +3706,7 @@ ConsumerToken::ConsumerToken(BlockingConcurrentQueue<T, Traits>& queue)
 	: itemsConsumedFromCurrent(0), currentProducer(nullptr), desiredProducer(nullptr)
 {
 	initialOffset = reinterpret_cast<ConcurrentQueue<T, Traits>*>(&queue)->nextExplicitConsumerId.fetch_add(1, std::memory_order_release);
-	lastKnownGlobalOffset = -1;
+	lastKnownGlobalOffset = static_cast<std::uint32_t>(-1);
 }
 
 template<typename T, typename Traits>
@@ -3682,6 +3733,10 @@ inline void swap(typename ConcurrentQueue<T, Traits>::ImplicitProducerKVP& a, ty
 
 }
 
-#if defined(__GNUC__)
+#if defined(_MSC_VER) && (!defined(_HAS_CXX17) || !_HAS_CXX17)
+#pragma warning(pop)
+#endif
+
+#if defined(__GNUC__) && !defined(__INTEL_COMPILER)
 #pragma GCC diagnostic pop
 #endif

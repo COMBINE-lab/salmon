@@ -890,14 +890,24 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
 
   if (aopt.just_align) {
     // if we are just aligning 
+
+    // write out the cmd_info.json to make sure we have that
+    boost::filesystem::path outputDirectory = vm["output"].as<std::string>();
+    bool isWriteOk = aut::writeCmdInfo(outputDirectory / "cmd_info.json", orderedOptions);
+    if(!isWriteOk){
+      fmt::print(stderr, "Writing cmd_info.json in output directory failed.\nExiting now.");
+      exit(1);
+    }
+
+    // do the actual mapping
     auto rc = alevin_sc_align(aopt, sopt, orderedOptions);
+
     if (rc == 0) {
       aopt.jointLog->info("sc-align successful.");
-      std::exit(0);
     } else {
       aopt.jointLog->error("sc-align exited with return code {}", rc);
-      std::exit(rc);
     }
+    std::exit(rc);
   }
 
   /*
@@ -946,7 +956,7 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
     // Write out information about the command / run
     bool isWriteOk = aut::writeCmdInfo(cmdInfoPath / "cmd_info.json", orderedOptions);
     if(!isWriteOk){
-      fmt::print(stderr, "writing in output directory failed\n Exiting Now");
+      fmt::print(stderr, "Writing cmd_info.json in output directory failed.\nExiting now.");
       exit(1);
     }
   }
@@ -1010,7 +1020,6 @@ salmon-based processing of single-cell RNA-seq data.
     green[3] = '0' + static_cast<char>(fmt::GREEN);
     red[3] = '0' + static_cast<char>(fmt::RED);
 
-
     bool noTgMap {false};
     bool dropseq = vm["dropseq"].as<bool>();
     bool indrop = vm["indrop"].as<bool>();
@@ -1040,7 +1049,7 @@ salmon-based processing of single-cell RNA-seq data.
     if (celseq2) validate_num_protocols += 1;
     if (quartzseq2) validate_num_protocols += 1;
     if (sciseq3) validate_num_protocols += 1;
-    if (custom and !noTgMap) validate_num_protocols += 1;
+    if (custom) validate_num_protocols += 1;
 
     if ( validate_num_protocols != 1 ) {
       fmt::print(stderr, "ERROR: Please specify one and only one scRNA protocol;");

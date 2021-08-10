@@ -891,6 +891,84 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
   return true;
 }
 
+/**
+ * Write the ``main'' metadata to file when executing in alevin-fry mode.  Currently this 
+ * writes a stripped down version of meta_info.json:
+ *   -- A json file with information about the run
+ */
+template <typename ExpT>
+bool GZipWriter::writeMetaFryMode(const SalmonOpts& opts, const ExpT& experiment, const MappingStatistics& mstats) {
+
+  namespace bfs = boost::filesystem;
+  using salmon::utils::DuplicateTargetStatus;
+
+  bfs::path auxDir = path_ / opts.auxDir;
+  bool auxSuccess = boost::filesystem::create_directories(auxDir);
+  auto numBootstraps = 0;
+  auto numSamples = 0;
+
+  bfs::path info = auxDir / "meta_info.json";
+  {
+    std::ofstream os(info.string());
+    cereal::JSONOutputArchive oa(os);
+
+    std::string sampType = "none";
+    auto& transcripts = experiment.transcripts();
+    oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
+    oa(cereal::make_nvp("samp_type", sampType));
+
+    std::string optType = "rad_mode";
+    oa(cereal::make_nvp("opt_type", optType));
+
+    std::vector<std::string> errors;
+    oa(cereal::make_nvp("quant_errors", errors));
+
+    auto libStrings = getLibTypeStrings(experiment);
+    oa(cereal::make_nvp("num_libraries", libStrings.size()));
+    oa(cereal::make_nvp("library_types", libStrings));
+
+    auto has_dups = experiment.index_retains_duplicates();
+    switch(has_dups) {
+      case DuplicateTargetStatus::RETAINED_DUPLICATES:
+        oa(cereal::make_nvp("keep_duplicates", true));
+        break;
+      case DuplicateTargetStatus::REMOVED_DUPLICATES:
+        oa(cereal::make_nvp("keep_duplicates", false));
+        break;
+      case DuplicateTargetStatus::UNKNOWN:
+      default:
+        break;
+    }
+
+    auto numValidTargets = transcripts.size();
+    auto numDecoys = experiment.getNumDecoys();
+    oa(cereal::make_nvp("num_valid_targets", numValidTargets));
+    oa(cereal::make_nvp("num_decoy_targets", numDecoys));
+    
+    oa(cereal::make_nvp("length_classes", experiment.getLengthQuantiles()));
+    oa(cereal::make_nvp("index_seq_hash", experiment.getIndexSeqHash256()));
+    oa(cereal::make_nvp("index_name_hash", experiment.getIndexNameHash256()));
+    oa(cereal::make_nvp("index_seq_hash512", experiment.getIndexSeqHash512()));
+    oa(cereal::make_nvp("index_name_hash512", experiment.getIndexNameHash512()));
+    oa(cereal::make_nvp("index_decoy_seq_hash", experiment.getIndexDecoySeqHash256()));
+    oa(cereal::make_nvp("index_decoy_name_hash", experiment.getIndexDecoyNameHash256()));
+    oa(cereal::make_nvp("num_bootstraps", numSamples));
+    oa(cereal::make_nvp("num_processed", experiment.numObservedFragments()));
+    oa(cereal::make_nvp("num_mapped", experiment.numMappedFragments()));
+    //oa(cereal::make_nvp("num_decoy_fragments", mstats.numDecoyFragments.load()));
+    //oa(cereal::make_nvp("num_dovetail_fragments", mstats.numDovetails.load()));
+    oa(cereal::make_nvp("num_fragments_filtered_vm", mstats.numFragmentsFiltered.load()));
+    oa(cereal::make_nvp("num_alignments_below_threshold_for_mapped_fragments_vm",
+                        mstats.numMappingsFiltered.load()));
+    //oa(cereal::make_nvp("percent_mapped",
+    //                    experiment.effectiveMappingRate() * 100.0));
+    oa(cereal::make_nvp("call", std::string("quant")));
+    oa(cereal::make_nvp("start_time", opts.runStartTime));
+    oa(cereal::make_nvp("end_time", opts.runStopTime));
+  }
+  return true;
+}
+
 bool GZipWriter::writeAbundances(
                                  std::vector<double>& alphas,
                                  std::vector<Transcript>& transcripts) {
@@ -1727,6 +1805,11 @@ GZipWriter::writeMeta<BulkExpT>(const SalmonOpts& opts,
                                 const MappingStatistics& mstats);
 template bool
 GZipWriter::writeMeta<SCExpT>(const SalmonOpts& opts,
+                              const SCExpT& experiment,
+                              const MappingStatistics& mstats);
+
+template bool
+GZipWriter::writeMetaFryMode<SCExpT>(const SalmonOpts& opts,
                               const SCExpT& experiment,
                               const MappingStatistics& mstats);
 

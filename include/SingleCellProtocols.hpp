@@ -101,10 +101,13 @@ namespace alevin{
         maxValue(maxValue_){
         alevin::types::AlevinUMIKmer::k(umiLength);
       }
-      // NOTE: these do nothing but satisfy 
-      // template requirements right now
-      void set_umi_geo(TagGeometry& g) { (void)g; };
-      void set_bc_geo(TagGeometry& g) { (void)g; };
+      // NOTE: these functions are duplicated 
+      // with those in `CustomGeometry` below, and 
+      // due to semantics have slightly different 
+      // implementations. See if the design can be 
+      // unified later.
+      void set_umi_geo(TagGeometry& g) { umiLength = g.length(); };
+      void set_bc_geo(TagGeometry& g) { barcodeLength = g.length(); };
       void set_read_geo(TagGeometry& g) { (void)g; };
       uint32_t barcode_length() const { return barcodeLength; }
       uint32_t umi_length() const { return umiLength; }
@@ -192,14 +195,15 @@ namespace alevin{
       TagGeometry bc_geo;
       TagGeometry read_geo;
 
-      void set_umi_geo(TagGeometry& g) { umi_geo = g; umiLength = umi_geo.length1 + umi_geo.length2; }
-      void set_bc_geo(TagGeometry& g) { bc_geo = g; barcodeLength = bc_geo.length1 + bc_geo.length2; }
+      void set_umi_geo(TagGeometry& g) { umi_geo = g; umiLength = umi_geo.length(); }
+      void set_bc_geo(TagGeometry& g) { bc_geo = g; barcodeLength = bc_geo.length(); }
       void set_read_geo(TagGeometry& g) { read_geo = g; }
       uint32_t barcode_length() const { return barcodeLength; }
       uint32_t umi_length() const { return umiLength; }
 
-      // These values do nothing in this class except
-      // maintain template compat ... fix this design later.
+      // These values are set only when `set_umi_geo` and 
+      // `set_bc_geo` are called.  See if this design can 
+      // be better integrated with `Rule` later.
       uint32_t barcodeLength, umiLength, maxValue;
       BarcodeEnd end;
     };
