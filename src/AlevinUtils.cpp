@@ -237,10 +237,10 @@ namespace alevin {
                                  std::string& read2,
                                  apt::InDrop& pt,
                                  std::string& umi){
-      (void)read;
       (void)read2;
-      std::cout<<"Incorrect call for umi extract";
-      exit(1);
+       return (read.length() >= pt.umiLength) ?
+        (umi.assign(read, pt.bc2EndPos, pt.bc2EndPos+6), true) : false;
+      return true;
     }
 
     template <>
@@ -343,17 +343,22 @@ namespace alevin {
                                      std::string& read2, 
                                      apt::InDrop& pt, std::string& bc){
       (void)read2;
-      std::string::size_type index = read.find(pt.w1);
-      if (index == std::string::npos){
+      if(read.length() >= (pt.w1Length + pt.barcodeLength + pt.umiLength)) {
+      pt.w1Pos = read.find(pt.w1);
+      if (pt.w1Pos == std::string::npos){
         return false;
       }
-      bc = read.substr(0, index);
+      bc = read.substr(0, pt.w1Pos);
       if(bc.size()<8 or bc.size()>12){
         return false;
       }
       uint32_t offset = bc.size()+pt.w1.size();
       bc += read.substr(offset, offset+8);
+      pt.bc2EndPos = offset+8;
       return true;
+      } else {
+        return false;
+      }
     }
 
     void getIndelNeighbors(

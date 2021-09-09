@@ -1080,8 +1080,6 @@ salmon-based processing of single-cell RNA-seq data.
                        barcodeFiles, readFiles);
     }
     else if(indrop){
-      std::cout<<"Indrop get neighbors removed, please use other protocols";
-      exit(1);
       if(vm.count("w1") != 0){
         std::string w1 = vm["w1"].as<std::string>();
         AlevinOpts<apt::InDrop> aopt;

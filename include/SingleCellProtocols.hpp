@@ -129,12 +129,16 @@ namespace alevin{
         //length barcodes so provide the full
         // length of the barcod eincluding w1.
         // UMI length is 6
-      InDrop(): Rule(42, 6, BarcodeEnd::FIVE, 22347776){}
+      InDrop(): Rule(19, 6, BarcodeEnd::FIVE, 22347776){}
 
       std::string w1;
+      std::size_t w1Length;
       void setW1(std::string& w1_){
         w1 = w1_;
+        w1Length = w1.length();
       }
+      std::size_t w1Pos = 0, bc2EndPos;
+
     };
 
     struct CITESeq : Rule{
