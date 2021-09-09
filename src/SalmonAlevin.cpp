@@ -671,7 +671,8 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        bool extracted_bc = aut::extractBarcode(rp.first.seq, rp.second.seq, alevinOpts.protocol, barcode);
+        auto localProtocol = alevinOpts.protocol;
+        bool extracted_bc = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
         seqOk = (extracted_bc) ?
           aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
 
@@ -682,7 +683,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
         // If we have a valid barcode
         if (seqOk) {
-          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, alevinOpts.protocol, umi);
+          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, localProtocol, umi);
           //aopt.jointLog->info("BC : {}, UMI : {}". barcode, umi);
           if ( !umi_ok ) {
             smallSeqs += 1;
@@ -1192,7 +1193,8 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, alevinOpts.protocol, barcode);
+        auto localProtocol = alevinOpts.protocol;
+        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
         seqOk = (extracted_barcode) ?
           aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
 
@@ -1203,7 +1205,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
         // If we have a valid barcode
         if (seqOk) {
-          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, alevinOpts.protocol, umi);
+          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, localProtocol, umi);
 
           if ( !umi_ok ) {
             smallSeqs += 1;
@@ -1650,7 +1652,8 @@ void processReadsQuasi(
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, alevinOpts.protocol, barcode);
+        auto localProtocol = alevinOpts.protocol;
+        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
         seqOk = (extracted_barcode) ?
           aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
 
@@ -1694,7 +1697,7 @@ void processReadsQuasi(
         if (barcodeIdx) {
           //corrBarcodeIndex = barcodeMap[barcodeIndex];
           jointHitGroup.setBarcode(*barcodeIdx);
-          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, alevinOpts.protocol, umi);
+          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, localProtocol, umi);
 
           if ( !umi_ok ) {
             smallSeqs += 1;
