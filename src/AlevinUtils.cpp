@@ -239,7 +239,7 @@ namespace alevin {
                                  std::string& umi){
       (void)read2;
        return (read.length() >= pt.umiLength) ?
-        (umi.assign(read, pt.bc2EndPos, pt.bc2EndPos+6), true) : false;
+        (umi.assign(read, pt.bc2EndPos, pt.umiLength), true) : false;
       return true;
     }
 
@@ -346,14 +346,23 @@ namespace alevin {
       if(read.length() >= (pt.w1Length + pt.barcodeLength + pt.umiLength)) {
       pt.w1Pos = read.find(pt.w1);
       if (pt.w1Pos == std::string::npos){
-        return false;
+        bool found = false;
+        for( int i = 8; i <= 11; i++){
+          if (hammingDistance(pt.w1, read.substr(i,pt.w1Length)) <= pt.maxHammingDist) {
+            pt.w1Pos = i;
+            found = true;
+            break;
+          }
+        }
+        if (!found) {return false;}
       }
       bc = read.substr(0, pt.w1Pos);
-      if(bc.size()<8 or bc.size()>12){
+      if(bc.size()<8 or bc.size()>11){
         return false;
       }
       uint32_t offset = bc.size()+pt.w1.size();
-      bc += read.substr(offset, offset+8);
+      bc += read.substr(offset, 8);
+      bc += std::string(pt.barcodeLength - bc.size(), 'A');
       pt.bc2EndPos = offset+8;
       return true;
       } else {
@@ -440,6 +449,16 @@ namespace alevin {
       }//end-i-for
       getIndelNeighbors(barcodeSeq,
                         neighbors);
+    }
+
+    unsigned int hammingDistance(const std::string s1, const std::string s2){
+      if(s1.size() != s2.size()){
+        throw std::invalid_argument("Strings have different lengths, can't compute hamming distance");
+      }
+
+      // compute dot product for all postisions, start with 0 and add if the values are not equal
+      return std::inner_product(s1.begin(),s1.end(),s2.begin(), 0, std::plus<unsigned int>(),
+        std::not2(std::equal_to<std::string::value_type>()));
     }
 
     void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,

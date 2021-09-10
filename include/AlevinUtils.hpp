@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <limits>
 #include <string>
+#include <numeric>
 
 #include "spdlog/spdlog.h"
 
@@ -71,6 +72,8 @@ namespace alevin{
 
     void readWhitelist(bfs::path& filePath,
                        TrueBcsT& trueBarcodes);
+
+    unsigned int hammingDistance(const std::string s1, const std::string s2);
 
     template <typename ProtocolT>
     bool processAlevinOpts(AlevinOpts<ProtocolT>& aopt,
