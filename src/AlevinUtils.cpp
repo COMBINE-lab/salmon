@@ -126,12 +126,12 @@ namespace alevin {
       return &seq2;
     }
     template <>
-    std::string*  getReadSequence(apt::InDrop& protocol,
+    std::string*  getReadSequence(apt::InDropV2& protocol,
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq){
-      (void)seq;
-      return &seq2;
+      (void)seq2;
+      return &seq;
     }
     // end of read extraction
 
@@ -233,13 +233,13 @@ namespace alevin {
       return true;
     }
     template <>
-    bool extractUMI<apt::InDrop>(std::string& read,
+    bool extractUMI<apt::InDropV2>(std::string& read,
                                  std::string& read2,
-                                 apt::InDrop& pt,
+                                 apt::InDropV2& pt,
                                  std::string& umi){
-      (void)read2;
-       return (read.length() >= pt.umiLength) ?
-        (umi.assign(read, pt.bc2EndPos, pt.umiLength), true) : false;
+      (void)read;
+       return (read2.length() >= pt.umiLength) ?
+        (umi.assign(read2, pt.bc2EndPos, pt.umiLength), true) : false;
       return true;
     }
 
@@ -339,16 +339,16 @@ namespace alevin {
         (bc.assign(read, pt.umiLength, pt.barcodeLength), true) : false;
     }
     template <>
-    bool extractBarcode<apt::InDrop>(std::string& read, 
+    bool extractBarcode<apt::InDropV2>(std::string& read, 
                                      std::string& read2, 
-                                     apt::InDrop& pt, std::string& bc){
-      (void)read2;
-      if(read.length() >= (pt.w1Length + pt.barcodeLength + pt.umiLength)) {
-      pt.w1Pos = read.find(pt.w1);
+                                     apt::InDropV2& pt, std::string& bc){
+      (void)read;
+      if(read2.length() >= (pt.w1Length + pt.barcodeLength + pt.umiLength)) {
+      pt.w1Pos = read2.find(pt.w1);
       if (pt.w1Pos == std::string::npos){
         bool found = false;
         for( int i = 8; i <= 11; i++){
-          if (hammingDistance(pt.w1, read.substr(i,pt.w1Length)) <= pt.maxHammingDist) {
+          if (hammingDistance(pt.w1, read2.substr(i,pt.w1Length)) <= pt.maxHammingDist) {
             pt.w1Pos = i;
             found = true;
             break;
@@ -356,12 +356,12 @@ namespace alevin {
         }
         if (!found) {return false;}
       }
-      bc = read.substr(0, pt.w1Pos);
+      bc = read2.substr(0, pt.w1Pos);
       if(bc.size()<8 or bc.size()>11){
         return false;
       }
       uint32_t offset = bc.size()+pt.w1.size();
-      bc += read.substr(offset, 8);
+      bc += read2.substr(offset, 8);
       bc += std::string(pt.barcodeLength - bc.size(), 'A');
       pt.bc2EndPos = offset+8;
       return true;
@@ -1298,7 +1298,7 @@ namespace alevin {
                            SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template
-    bool processAlevinOpts(AlevinOpts<apt::InDrop>& aopt,
+    bool processAlevinOpts(AlevinOpts<apt::InDropV2>& aopt,
                            SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template

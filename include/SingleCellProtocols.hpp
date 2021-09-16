@@ -124,12 +124,12 @@ namespace alevin{
       DropSeq(): Rule(12, 8, BarcodeEnd::FIVE, 16777216){}
     };
 
-    struct InDrop : Rule{
-        //InDrop starts from 5end with variable
-        //length barcodes so provide the full
-        // length of the barcod eincluding w1.
+    struct InDropV2 : Rule{
+        //InDropV2 starts from 5end with variable
+        //length barcodes that varies from 8 to 11 bp
+        // so provide the full length of the barcode 
         // UMI length is 6
-      InDrop(): Rule(19, 6, BarcodeEnd::FIVE, 22347776){}
+      InDropV2(): Rule(19, 6, BarcodeEnd::FIVE, 22347776){}
 
       std::string w1;
       std::size_t w1Length, maxHammingDist = 2;

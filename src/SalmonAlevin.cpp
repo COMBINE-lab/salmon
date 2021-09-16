@@ -3031,11 +3031,11 @@ int alevinQuant(AlevinOpts<apt::CITESeq>& aopt,
                 size_t numLowConfidentBarcode);
 
 template 
-int alevin_sc_align(AlevinOpts<apt::InDrop>& aopt,
+int alevin_sc_align(AlevinOpts<apt::InDropV2>& aopt,
                     SalmonOpts& sopt,
                     boost::program_options::parsed_options& orderedOptions);
 template
-int alevinQuant(AlevinOpts<apt::InDrop>& aopt,
+int alevinQuant(AlevinOpts<apt::InDropV2>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
