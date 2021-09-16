@@ -894,6 +894,7 @@ void initiatePipeline(AlevinOpts<ProtocolT>& aopt,
     // write out the cmd_info.json to make sure we have that
     boost::filesystem::path outputDirectory = vm["output"].as<std::string>();
     bool isWriteOk = aut::writeCmdInfo(outputDirectory / "cmd_info.json", orderedOptions);
+ 
     if(!isWriteOk){
       fmt::print(stderr, "Writing cmd_info.json in output directory failed.\nExiting now.");
       exit(1);
