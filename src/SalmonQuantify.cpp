@@ -27,6 +27,7 @@
 #include <functional>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <random>
@@ -2385,7 +2386,7 @@ void quantifyLibrary(ReadExperimentT& experiment,
   jointLog->info("finished quantifyLibrary()");
 }
 
-int salmonQuantify(int argc, const char* argv[]) {
+int salmonQuantify(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& salmonIndex) {
   using std::cerr;
   using std::vector;
   using std::string;
@@ -2489,13 +2490,12 @@ transcript abundance from RNA-seq reads
     }
     // ==== END: Library format processing ===
 
-    SalmonIndexVersionInfo versionInfo;
-    boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
-    versionInfo.load(versionPath);
-    auto idxType = versionInfo.indexType();
+    if(!salmonIndex) {
+      salmonIndex = checkLoadIndex(indexDirectory, sopt.jointLog);
+    }
 
     MappingStatistics mstats;
-    ReadExperimentT experiment(readLibraries, indexDirectory, sopt);
+    ReadExperimentT experiment(readLibraries, salmonIndex.get(), sopt);
 
     // This will be the class in charge of maintaining our
     // rich equivalence classes
