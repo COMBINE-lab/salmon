@@ -1029,6 +1029,7 @@ salmon-based processing of single-cell RNA-seq data.
     bool gemcode = vm["gemcode"].as<bool>();
     bool celseq = vm["celseq"].as<bool>();
     bool celseq2 = vm["celseq2"].as<bool>();
+    bool splitseqV2 = vm["splitseqV2"].as<bool>();
     bool quartzseq2 = vm["quartzseq2"].as<bool>();
     bool sciseq3 = vm["sciseq3"].as<bool>();
     bool custom_old =  vm.count("barcodeLength") and
@@ -1143,6 +1144,13 @@ salmon-based processing of single-cell RNA-seq data.
     else if(celseq2){
       AlevinOpts<apt::CELSeq2> aopt;
       //aopt.jointLog->warn("Using CEL-Seq2 Setting for Alevin");
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString, noTgMap,
+                       barcodeFiles, readFiles, salmonIndex);
+    }
+    else if(splitseqV2){
+      AlevinOpts<apt::SplitSeqV2> aopt;
+      //aopt.jointLog->warn("Using Split-SeqV2 Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
                        vm, commentString, noTgMap,
                        barcodeFiles, readFiles, salmonIndex);

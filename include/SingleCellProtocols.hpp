@@ -177,6 +177,10 @@ namespace alevin{
       CELSeq2(): Rule(6, 6, BarcodeEnd::FIVE, 4096){}
     };
 
+    struct SplitSeqV2 : Rule{
+        SplitSeqV2(): Rule(24, 10, BarcodeEnd::FIVE, 4294967295){}
+    };
+
     //dummy class
     struct Custom : Rule{
       Custom() : Rule(0,0,BarcodeEnd::FIVE,0){}

@@ -284,6 +284,10 @@ namespace alevin {
                                       std::vector<std::string>& trueBarcodes,
                                       bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
+    template bool performWhitelisting(AlevinOpts<alevin::protocols::SplitSeqV2>& aopt,
+                                      std::vector<std::string>& trueBarcodes,
+                                      bool useRibo, bool useMito,
+                                      size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::QuartzSeq2>& aopt,
                                       std::vector<std::string>& trueBarcodes,
                                       bool useRibo, bool useMito,
