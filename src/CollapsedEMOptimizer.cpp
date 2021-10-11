@@ -398,7 +398,7 @@ bool doBootstrap(
     std::atomic<uint32_t>& bsNum, SalmonOpts& sopt,
     std::vector<double>& priorAlphas,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
-    double relDiffTolerance, uint32_t maxIter) {
+    double relDiffTolerance, uint32_t maxIter, uint32_t single_count_class_offset, std::atomic<uint32_t>& sample_unique_class) {
 
   // An EM termination criterion, adopted from Bray et al. 2016
   uint32_t minIter = 50;
@@ -434,7 +434,11 @@ bool doBootstrap(
       sampCounts[sc] = 0;
     }
     for (size_t fn = 0; fn < totalNumFrags; ++fn) {
-      ++sampCounts[csamp(gen)];
+      auto class_number = csamp(gen);
+      if (class_number >= single_count_class_offset) {
+        sample_unique_class += 1;
+      }
+      ++sampCounts[class_number];
     }
     // Do a new bootstrap
     // msamp(sampCounts.begin(), totalNumFrags, numClasses,
@@ -659,6 +663,21 @@ bool CollapsedEMOptimizer::gatherBootstraps(
     }
   }
 
+  auto single_count_class_offset = txpGroups.size();
+  std::cerr<<"single_count_class_offset:"<<single_count_class_offset<<"\n";
+  for (size_t tid = 0; tid<transcripts.size(); ++tid) {
+    std::vector<uint32_t> txps;
+    txps.push_back(tid);
+    txpGroups.push_back(txps);
+    std::vector<double> auxs;
+    double weight = 1.0;
+    auxs.push_back(1.0);
+    txpGroupCombinedWeights.emplace_back(auxs.begin(), auxs.end());
+    uint64_t count = 1;
+    origCounts.push_back(count);
+    totalCount += count;
+  }
+  
   double floatCount = totalCount;
   std::vector<double> samplingWeights(txpGroups.size(), 0.0);
   for (size_t i = 0; i < origCounts.size(); ++i) {
@@ -670,6 +689,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
     numWorkerThreads = std::min(sopt.numThreads - 1, numBootstraps - 1);
   }
 
+  std::atomic<uint32_t> sample_unique_class{0};
   std::atomic<uint32_t> bsCounter{0};
   std::vector<std::thread> workerThreads;
   for (size_t tn = 0; tn < numWorkerThreads; ++tn) {
@@ -678,12 +698,18 @@ bool CollapsedEMOptimizer::gatherBootstraps(
         std::ref(transcripts), std::ref(effLens), std::ref(samplingWeights), std::ref(origCounts),
         totalCount, numMappedFrags, scale, std::ref(bsCounter), std::ref(sopt),
         std::ref(priorAlphas), std::ref(writeBootstrap), relDiffTolerance,
-        maxIter);
+        maxIter, single_count_class_offset, std::ref(sample_unique_class));
   }
 
   for (auto& t : workerThreads) {
     t.join();
   }
+  std::cerr<<"numMappedFrags:"<<numMappedFrags
+           <<"\nnumBootstraps:"<<numBootstraps
+           <<"\ntotal_sample_count:"<<numBootstraps*numMappedFrags
+           <<"\nsample_unique_class:" << sample_unique_class 
+           <<"\nunique_sample_rate:"<< double(sample_unique_class)/double(numBootstraps*numMappedFrags)
+           <<"\n";
   return true;
 }
 
