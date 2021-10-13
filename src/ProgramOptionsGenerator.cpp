@@ -761,6 +761,9 @@ namespace salmon {
        po::value<uint32_t>(&(sopt.numBootstraps))->default_value(salmon::defaults::numBootstraps),
        "Number of bootstrap samples to generate. Note: "
        "This is mutually exclusive with Gibbs sampling.")
+      ("fixBootstraps",
+       po::bool_switch(&(sopt.fixBootsraps))->default_value(salmon::defaults::fixBootsraps),
+       "Add one eq class for each possible transcript before generating the bootrap samples.")
       ("bootstrapReproject",
        po::bool_switch(&(sopt.bootstrapReproject))->default_value(salmon::defaults::noGammaDraw),
        "This switch will learn the parameter distribution from the bootstrapped counts for each sample, but "

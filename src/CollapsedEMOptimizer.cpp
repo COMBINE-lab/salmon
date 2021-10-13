@@ -398,7 +398,8 @@ bool doBootstrap(
     std::atomic<uint32_t>& bsNum, SalmonOpts& sopt,
     std::vector<double>& priorAlphas,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
-    double relDiffTolerance, uint32_t maxIter, uint32_t single_count_class_offset, std::atomic<uint32_t>& sample_unique_class) {
+    double relDiffTolerance, uint32_t maxIter,
+    uint32_t single_count_class_offset, std::atomic<uint32_t>& sampled_txps_total) {
 
   // An EM termination criterion, adopted from Bray et al. 2016
   uint32_t minIter = 50;
@@ -433,13 +434,19 @@ bool doBootstrap(
     for (size_t sc = 0; sc < sampCounts.size(); ++sc) {
       sampCounts[sc] = 0;
     }
+    std::vector<uint32_t> sampled_txps(transcripts.size(), 0);
     for (size_t fn = 0; fn < totalNumFrags; ++fn) {
       auto class_number = csamp(gen);
       if (class_number >= single_count_class_offset) {
-        sample_unique_class += 1;
+        sampled_txps[class_number - single_count_class_offset] = 1;
       }
       ++sampCounts[class_number];
     }
+    sampled_txps_total += std::accumulate(sampled_txps.begin(), sampled_txps.end(), 0);
+    /*for (size_t cid = 0; cid < txpGroupCombinedWeights.size(); ++cid) {
+      std::random_shuffle(txpGroupCombinedWeights[cid].begin(), txpGroupCombinedWeights[cid].end());
+    }*/
+
     // Do a new bootstrap
     // msamp(sampCounts.begin(), totalNumFrags, numClasses,
     // sampleWeights.begin());
@@ -634,6 +641,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
   std::vector<uint64_t> origCounts;
   uint64_t totalCount{0};
 
+  std::vector<bool> txps_presence(transcripts.size(), false);
   for (size_t cid = 0; cid < numClasses; ++cid) { 
     const auto& kv = eqVec[cid];
     uint64_t count = kv.second.count;
@@ -654,6 +662,9 @@ bool CollapsedEMOptimizer::gatherBootstraps(
         spdlog::drop_all();
         std::exit(1);
       }
+      for (auto tid : txps) {
+        txps_presence[tid] = true;
+      }
       
       txpGroups.push_back(txps);
       // Convert to non-atomic
@@ -664,18 +675,23 @@ bool CollapsedEMOptimizer::gatherBootstraps(
   }
 
   auto single_count_class_offset = txpGroups.size();
-  std::cerr<<"single_count_class_offset:"<<single_count_class_offset<<"\n";
-  for (size_t tid = 0; tid<transcripts.size(); ++tid) {
-    std::vector<uint32_t> txps;
-    txps.push_back(tid);
-    txpGroups.push_back(txps);
-    std::vector<double> auxs;
-    double weight = 1.0;
-    auxs.push_back(1.0);
-    txpGroupCombinedWeights.emplace_back(auxs.begin(), auxs.end());
-    uint64_t count = 1;
-    origCounts.push_back(count);
-    totalCount += count;
+  uint32_t new_class_count = 0;
+  if (sopt.fixBootsraps) {
+    for (size_t tid = 0; tid<transcripts.size(); ++tid) {
+      if (txps_presence[tid] > 0) {
+        new_class_count += 1;
+        std::vector<uint32_t> txps;
+        txps.push_back(tid);
+        txpGroups.push_back(txps);
+        std::vector<double> auxs;
+        double weight = 1.0;
+        auxs.push_back(1.0);
+        txpGroupCombinedWeights.emplace_back(auxs.begin(), auxs.end());
+        uint64_t count = 1;
+        origCounts.push_back(count);
+        totalCount += count;
+      }
+    }
   }
   
   double floatCount = totalCount;
@@ -689,7 +705,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
     numWorkerThreads = std::min(sopt.numThreads - 1, numBootstraps - 1);
   }
 
-  std::atomic<uint32_t> sample_unique_class{0};
+  std::atomic<uint32_t> sampled_txps_total{0};
   std::atomic<uint32_t> bsCounter{0};
   std::vector<std::thread> workerThreads;
   for (size_t tn = 0; tn < numWorkerThreads; ++tn) {
@@ -698,18 +714,24 @@ bool CollapsedEMOptimizer::gatherBootstraps(
         std::ref(transcripts), std::ref(effLens), std::ref(samplingWeights), std::ref(origCounts),
         totalCount, numMappedFrags, scale, std::ref(bsCounter), std::ref(sopt),
         std::ref(priorAlphas), std::ref(writeBootstrap), relDiffTolerance,
-        maxIter, single_count_class_offset, std::ref(sample_unique_class));
+        maxIter, single_count_class_offset, std::ref(sampled_txps_total));
   }
 
   for (auto& t : workerThreads) {
     t.join();
   }
-  std::cerr<<"numMappedFrags:"<<numMappedFrags
-           <<"\nnumBootstraps:"<<numBootstraps
-           <<"\ntotal_sample_count:"<<numBootstraps*numMappedFrags
-           <<"\nsample_unique_class:" << sample_unique_class 
-           <<"\nunique_sample_rate:"<< double(sample_unique_class)/double(numBootstraps*numMappedFrags)
-           <<"\n";
+
+  if (sopt.fixBootsraps) {
+    double nsampled_txps_rate = static_cast<double>(sampled_txps_total)/static_cast<double>(numBootstraps*new_class_count);
+    std::cerr<<"-------------------------------------\n"
+            <<"numExpTxps:"<<new_class_count
+            <<"\nnumBootstraps:"<<numBootstraps
+            <<"\nnumExpTxps * numBootstraps:"<<numBootstraps*new_class_count
+            <<"\nsampled_txps_total:" << sampled_txps_total
+            <<"\nsampled_txps_rate:"<< nsampled_txps_rate
+            <<"\n-------------------------------------\n";
+  }
+
   return true;
 }
 

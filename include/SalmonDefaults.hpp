@@ -79,6 +79,7 @@ namespace defaults {
   constexpr const bool bootstrapReproject{false};
   constexpr const uint32_t thinningFactor{16};
   constexpr const uint32_t numBootstraps{0};
+  constexpr const bool fixBootsraps{false};
   constexpr const bool quiet{false};
   constexpr const bool perTranscriptPrior{true};
   constexpr const bool perNucleotidePrior{false};
@@ -153,6 +154,7 @@ namespace defaults {
   constexpr const bool debug{true};
   constexpr const bool just_align{false};
   constexpr const bool sketch_mode{false};
+  constexpr const bool fixBootsraps{false};
   constexpr const uint32_t trimRight{0};
   constexpr const uint32_t numBootstraps{0};
   constexpr const uint32_t numGibbsSamples{0};
