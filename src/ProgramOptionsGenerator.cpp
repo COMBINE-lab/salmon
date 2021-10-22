@@ -522,6 +522,8 @@ namespace salmon {
       sopt.useErrorModel = !noErrorModel;
     };
 
+
+
     po::options_description alnspec("\n"
                                       "alignment-specific options");
     alnspec.add_options()
@@ -759,11 +761,11 @@ namespace salmon {
        "the sampler does not account for shot-noise, but only assignment ambiguity")
       ("numBootstraps",
        po::value<uint32_t>(&(sopt.numBootstraps))->default_value(salmon::defaults::numBootstraps),
-       "Number of bootstrap samples to generate. Note: "
-       "This is mutually exclusive with Gibbs sampling.")
-      ("fixBootstraps",
-       po::bool_switch(&(sopt.fixBootsraps))->default_value(salmon::defaults::fixBootsraps),
-       "Add one eq class for each possible transcript before generating the bootrap samples.")
+       "Number of bootstrap samples to generate. Note: This is mutually exclusive with Gibbs sampling."
+      )
+      ("augmentedBootstrapWeight",
+       po::value<double>(&(sopt.augmented_bootstrap_weight))->default_value(salmon::defaults::augmented_bootstrap_weight),
+       "The relative weight of augmented to observed samples to use when bootstrapping (0 implies the standard non-parametric bootstrap).")
       ("bootstrapReproject",
        po::bool_switch(&(sopt.bootstrapReproject))->default_value(salmon::defaults::noGammaDraw),
        "This switch will learn the parameter distribution from the bootstrapped counts for each sample, but "

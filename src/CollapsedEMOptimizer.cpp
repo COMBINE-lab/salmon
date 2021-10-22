@@ -641,7 +641,10 @@ bool CollapsedEMOptimizer::gatherBootstraps(
   std::vector<uint64_t> origCounts;
   uint64_t totalCount{0};
 
-  std::vector<bool> txps_presence(transcripts.size(), false);
+  // this is redundant with the already existing 
+  // activeTranscriptIDs
+  // std::vector<bool> txps_presence(transcripts.size(), false);
+
   for (size_t cid = 0; cid < numClasses; ++cid) { 
     const auto& kv = eqVec[cid];
     uint64_t count = kv.second.count;
@@ -662,9 +665,10 @@ bool CollapsedEMOptimizer::gatherBootstraps(
         spdlog::drop_all();
         std::exit(1);
       }
+      /*
       for (auto tid : txps) {
         txps_presence[tid] = true;
-      }
+      }*/
       
       txpGroups.push_back(txps);
       // Convert to non-atomic
@@ -676,28 +680,56 @@ bool CollapsedEMOptimizer::gatherBootstraps(
 
   auto single_count_class_offset = txpGroups.size();
   uint32_t new_class_count = 0;
-  if (sopt.fixBootsraps) {
-    for (size_t tid = 0; tid<transcripts.size(); ++tid) {
-      if (txps_presence[tid] > 0) {
-        new_class_count += 1;
-        std::vector<uint32_t> txps;
-        txps.push_back(tid);
-        txpGroups.push_back(txps);
-        std::vector<double> auxs;
-        double weight = 1.0;
-        auxs.push_back(1.0);
-        txpGroupCombinedWeights.emplace_back(auxs.begin(), auxs.end());
-        uint64_t count = 1;
-        origCounts.push_back(count);
-        totalCount += count;
-      }
-    }
-  }
-  
-  double floatCount = totalCount;
+
+  bool augment_bootstraps = (sopt.augmented_bootstrap_weight > 0.0);
   std::vector<double> samplingWeights(txpGroups.size(), 0.0);
-  for (size_t i = 0; i < origCounts.size(); ++i) {
-    samplingWeights[i] = origCounts[i] / floatCount;
+  
+  if (augment_bootstraps) {
+    
+    samplingWeights.resize(txpGroups.size() + activeTranscriptIDs.size(), 0.0);
+    uint64_t n = totalCount;
+
+    for (auto& tid : activeTranscriptIDs) {
+      new_class_count += 1;
+      txpGroups.push_back({tid});
+      std::vector<double> auxs;
+      double weight = 1.0;
+      auxs.push_back(1.0);
+      txpGroupCombinedWeights.emplace_back(auxs.begin(), auxs.end());
+      uint64_t count = 1;
+      origCounts.push_back(count);
+      totalCount += count;
+    }
+
+    double total_weight = 0.0;
+    // original observations
+    for (size_t i = 0; i < n; ++i) {
+      samplingWeights[i] = static_cast<double>(origCounts[i]);
+      total_weight += samplingWeights[i];
+    }
+    // augmented observations
+    for (size_t i = n; i < origCounts.size(); ++i) {
+      samplingWeights[i] = sopt.augmented_bootstrap_weight;
+      total_weight += samplingWeights[i];
+    }
+    double inv_total_weight = 1.0 / total_weight;
+    for (size_t i = 0; i < samplingWeights.size(); ++i) {
+      samplingWeights[i] *= inv_total_weight;
+    }
+    /*
+    // modify the sampling weights to obey what the user 
+    // requested.
+    uint64_t np = totalCount - n;
+    double gamma = (static_cast<double>(n) / static_cast<double>(totalCount)) +
+                   (sopt.augmented_bootstrap_weight * static_cast<double>(np) / static_cast<double>(totalCount));
+    double inv_gamma = 1.0 / gamma;
+    double y = y
+    */
+  } else {
+    double floatCount = totalCount;
+    for (size_t i = 0; i < origCounts.size(); ++i) {
+      samplingWeights[i] = origCounts[i] / floatCount;
+    }
   }
 
   size_t numWorkerThreads{1};
@@ -721,7 +753,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
     t.join();
   }
 
-  if (sopt.fixBootsraps) {
+  if (augment_bootstraps) {
     double nsampled_txps_rate = static_cast<double>(sampled_txps_total)/static_cast<double>(numBootstraps*new_class_count);
     std::cerr<<"-------------------------------------\n"
             <<"numExpTxps:"<<new_class_count

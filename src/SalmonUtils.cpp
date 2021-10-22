@@ -2131,6 +2131,17 @@ bool processQuantOptions(SalmonOpts& sopt,
         return false;
       }
     }
+    if (sopt.numBootstraps > 0) {
+      if ((sopt.augmented_bootstrap_weight < 0.0) or
+          (sopt.augmented_bootstrap_weight >= 1.0)) {
+        jointLog->critical(
+            "The augmented bootstrap weight (--augmentedBootstrapWeight) "
+            "must be in [0,1). The provided value was {}",
+            sopt.augmented_bootstrap_weight);
+        jointLog->flush();
+        return false;
+      }
+    }
 
     if (sopt.noFragLengthDist and !sopt.noEffectiveLengthCorrection) {
       jointLog->critical(
