@@ -707,11 +707,8 @@ bool CollapsedEMOptimizer::gatherBootstraps(
     double pw = sopt.augmented_bootstrap_weight;
     double rw = 1.0 - pw;
     double nnp = static_cast<double>(totalCount);
-    double gamma = (rw * static_cast<double>(n) / nnp) +
-                   ((pw * static_cast<double>(np)) / nnp);
-    double inv_gamma = 1.0 / gamma;
-    double y = (rw * inv_gamma) / nnp;
-    double z = (pw * inv_gamma) / nnp;
+    double y = (rw * nnp) / static_cast<double>(n);
+    double z = (pw * nnp) / static_cast<double>(np);
     
     double total_weight = 0.0;
     // original observations
@@ -721,10 +718,11 @@ bool CollapsedEMOptimizer::gatherBootstraps(
     }
     // augmented observations
     for (size_t i = n; i < origCounts.size(); ++i) {
-      samplingWeights[i] = z * sopt.augmented_bootstrap_weight;
+      samplingWeights[i] = z * static_cast<double>(origCounts[i]);
       total_weight += samplingWeights[i];
     }
     double inv_total_weight = 1.0 / total_weight;
+    sopt.jointLog->info("TOTAL WEIGHT = {}", total_weight);
     for (size_t i = 0; i < samplingWeights.size(); ++i) {
       samplingWeights[i] *= inv_total_weight;
     }
