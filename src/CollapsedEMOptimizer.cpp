@@ -710,19 +710,20 @@ bool CollapsedEMOptimizer::gatherBootstraps(
     double y = (rw * nnp) / static_cast<double>(n);
     double z = (pw * nnp) / static_cast<double>(np);
     
+    double inv_count = 1.0 / nnp;
     double total_weight = 0.0;
     // original observations
     for (size_t i = 0; i < n; ++i) {
-      samplingWeights[i] = y * static_cast<double>(origCounts[i]);
-      total_weight += y * samplingWeights[i];
+      samplingWeights[i] = y * static_cast<double>(origCounts[i]) * inv_count;
+      total_weight += samplingWeights[i];
     }
     // augmented observations
     for (size_t i = n; i < origCounts.size(); ++i) {
-      samplingWeights[i] = z * static_cast<double>(origCounts[i]);
-      total_weight += z * samplingWeights[i];
+      samplingWeights[i] = z * static_cast<double>(origCounts[i]) * inv_count;
+      total_weight += samplingWeights[i];
     }
     double inv_total_weight = 1.0 / total_weight;
-    sopt.jointLog->info("TOTAL WEIGHT = {}", total_weight);
+    sopt.jointLog->info("y = {}, z = {}, TOTAL WEIGHT = {}", y, z, total_weight);
     for (size_t i = 0; i < samplingWeights.size(); ++i) {
       samplingWeights[i] *= inv_total_weight;
     }
