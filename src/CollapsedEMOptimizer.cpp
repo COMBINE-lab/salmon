@@ -701,30 +701,33 @@ bool CollapsedEMOptimizer::gatherBootstraps(
       totalCount += count;
     }
 
+    // modify the sampling weights to obey what the user 
+    // requested.
+    uint64_t np = totalCount - n;
+    double pw = sopt.augmented_bootstrap_weight;
+    double rw = 1.0 - pw;
+    double nnp = static_cast<double>(totalCount);
+    double gamma = (rw * static_cast<double>(n) / nnp) +
+                   ((pw * static_cast<double>(np)) / nnp);
+    double inv_gamma = 1.0 / gamma;
+    double y = (rw * inv_gamma) / nnp;
+    double z = (pw * inv_gamma) / nnp;
+    
     double total_weight = 0.0;
     // original observations
     for (size_t i = 0; i < n; ++i) {
-      samplingWeights[i] = static_cast<double>(origCounts[i]);
+      samplingWeights[i] = y * static_cast<double>(origCounts[i]);
       total_weight += samplingWeights[i];
     }
     // augmented observations
     for (size_t i = n; i < origCounts.size(); ++i) {
-      samplingWeights[i] = sopt.augmented_bootstrap_weight;
+      samplingWeights[i] = z * sopt.augmented_bootstrap_weight;
       total_weight += samplingWeights[i];
     }
     double inv_total_weight = 1.0 / total_weight;
     for (size_t i = 0; i < samplingWeights.size(); ++i) {
       samplingWeights[i] *= inv_total_weight;
     }
-    /*
-    // modify the sampling weights to obey what the user 
-    // requested.
-    uint64_t np = totalCount - n;
-    double gamma = (static_cast<double>(n) / static_cast<double>(totalCount)) +
-                   (sopt.augmented_bootstrap_weight * static_cast<double>(np) / static_cast<double>(totalCount));
-    double inv_gamma = 1.0 / gamma;
-    double y = y
-    */
   } else {
     double floatCount = totalCount;
     for (size_t i = 0; i < origCounts.size(); ++i) {
@@ -753,6 +756,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
     t.join();
   }
 
+  /*
   if (augment_bootstraps) {
     double nsampled_txps_rate = static_cast<double>(sampled_txps_total)/static_cast<double>(numBootstraps*new_class_count);
     std::cerr<<"-------------------------------------\n"
@@ -763,6 +767,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
             <<"\nsampled_txps_rate:"<< nsampled_txps_rate
             <<"\n-------------------------------------\n";
   }
+  */
 
   return true;
 }
