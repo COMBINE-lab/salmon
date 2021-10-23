@@ -722,7 +722,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
       samplingWeights[i] = z * static_cast<double>(origCounts[i]) * inv_count;
       total_weight += samplingWeights[i];
     }
-    sopt.jointLog->info("N = {}, NP = {}, y = {}, z = {}, TOTAL WEIGHT = {}", n, np, y, z, total_weight);
+    // sopt.jointLog->info("N = {}, NP = {}, y = {}, z = {}, TOTAL WEIGHT = {}", n, np, y, z, total_weight);
   } else {
     double floatCount = totalCount;
     for (size_t i = 0; i < origCounts.size(); ++i) {
