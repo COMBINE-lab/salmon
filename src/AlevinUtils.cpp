@@ -247,7 +247,7 @@ namespace alevin {
                                  std::string& umi){
       (void)read2;
       return (read.length() >= pt.umiLength) ?
-        (umi.assign(read, pt.barcodeLength, pt.umiLength), true) : false;
+        (umi.assign(read, 0, pt.umiLength), true) : false;
       return true;
     }
     template <>
