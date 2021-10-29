@@ -28,6 +28,7 @@
 #include <functional>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <random>
@@ -2663,7 +2664,8 @@ void alevinOptimize( std::vector<std::string>& trueBarcodesVec,
 template <typename ProtocolT>
 int alevin_sc_align(AlevinOpts<ProtocolT>& aopt,
                     SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions){
+                    boost::program_options::parsed_options& orderedOptions,
+                    std::unique_ptr<SalmonIndex>& salmonIndex){
   using std::cerr;
   using std::vector;
   using std::string;
@@ -2690,13 +2692,12 @@ int alevin_sc_align(AlevinOpts<ProtocolT>& aopt,
     }
     // ==== END: Library format processing ===
 
-    SalmonIndexVersionInfo versionInfo;
-    boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
-    versionInfo.load(versionPath);
-    auto idxType = versionInfo.indexType();
+    if(!salmonIndex)
+      salmonIndex = checkLoadIndex(indexDirectory, sopt.jointLog);
+    auto idxType = salmonIndex->indexType();
 
     MappingStatistics mstats;
-    ReadExperimentT experiment(readLibraries, indexDirectory, sopt);
+    ReadExperimentT experiment(readLibraries, salmonIndex.get(), sopt);
 
     // We currently do not support decoy sequence in the 
     // --justAlign or --sketch modes, so check that the 
@@ -2779,7 +2780,8 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
                 spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                 spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter, size_t numLowConfidentBarcode){
+                CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+                std::unique_ptr<SalmonIndex>& salmonIndex){
   using std::cerr;
   using std::vector;
   using std::string;
@@ -2805,14 +2807,12 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
       std::exit(1);
     }
     // ==== END: Library format processing ===
-
-    SalmonIndexVersionInfo versionInfo;
-    boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
-    versionInfo.load(versionPath);
-    auto idxType = versionInfo.indexType();
+    if(!salmonIndex)
+      salmonIndex = checkLoadIndex(indexDirectory, sopt.jointLog);
+    auto idxType = salmonIndex->indexType();
 
     MappingStatistics mstats;
-    ReadExperimentT experiment(readLibraries, indexDirectory, sopt);
+    ReadExperimentT experiment(readLibraries, salmonIndex.get(), sopt);
     //experiment.computePolyAPositions();
 
     // This will be the class in charge of maintaining our
@@ -2997,146 +2997,130 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
 
 namespace apt = alevin::protocols;
 
-template 
-int alevin_sc_align(AlevinOpts<apt::DropSeq>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
+template
+int alevin_sc_align(AlevinOpts<apt::DropSeq>& aopt, SalmonOpts& sopt,
+                    boost::program_options::parsed_options& orderedOptions,
+                    std::unique_ptr<SalmonIndex>& salmonIndex);
+
+template int
+alevinQuant(AlevinOpts<apt::DropSeq>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
 
 template
-int alevinQuant(AlevinOpts<apt::DropSeq>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-                boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
+int alevin_sc_align(AlevinOpts<apt::CITESeq>& aopt, SalmonOpts& sopt,
+                    boost::program_options::parsed_options& orderedOptions,
+                    std::unique_ptr<SalmonIndex>& salmonIndex);
+template int
+alevinQuant(AlevinOpts<apt::CITESeq>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
 
-template 
-int alevin_sc_align(AlevinOpts<apt::CITESeq>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
-template
-int alevinQuant(AlevinOpts<apt::CITESeq>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+template int
+alevin_sc_align(AlevinOpts<apt::InDrop>& aopt, SalmonOpts& sopt,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+template int
+alevinQuant(AlevinOpts<apt::InDrop>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
 
-template 
-int alevin_sc_align(AlevinOpts<apt::InDrop>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
-template
-int alevinQuant(AlevinOpts<apt::InDrop>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+template int
+alevin_sc_align(AlevinOpts<apt::ChromiumV3>& aopt, SalmonOpts& sopt,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+template int
+alevinQuant(AlevinOpts<apt::ChromiumV3>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
 
-template 
-int alevin_sc_align(AlevinOpts<apt::ChromiumV3>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
-template
-int alevinQuant(AlevinOpts<apt::ChromiumV3>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+template int
+alevin_sc_align(AlevinOpts<apt::Chromium>& aopt, SalmonOpts& sopt,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+template int
+alevinQuant(AlevinOpts<apt::Chromium>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
 
-template 
-int alevin_sc_align(AlevinOpts<apt::Chromium>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
-template
-int alevinQuant(AlevinOpts<apt::Chromium>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+template int
+alevin_sc_align(AlevinOpts<apt::Gemcode>& aopt, SalmonOpts& sopt,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+template int
+alevinQuant(AlevinOpts<apt::Gemcode>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
 
-template 
-int alevin_sc_align(AlevinOpts<apt::Gemcode>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
-template
-int alevinQuant(AlevinOpts<apt::Gemcode>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+template int
+alevin_sc_align(AlevinOpts<apt::CELSeq>& aopt, SalmonOpts& sopt,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+template int
+alevinQuant(AlevinOpts<apt::CELSeq>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
 
-template 
-int alevin_sc_align(AlevinOpts<apt::CELSeq>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
-template
-int alevinQuant(AlevinOpts<apt::CELSeq>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+template int
+alevin_sc_align(AlevinOpts<apt::CELSeq2>& aopt, SalmonOpts& sopt,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
-                
-template 
-int alevin_sc_align(AlevinOpts<apt::CELSeq2>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
-template
-int alevinQuant(AlevinOpts<apt::CELSeq2>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-                boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+template int
+alevinQuant(AlevinOpts<apt::CELSeq2>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
 
-template 
-int alevin_sc_align(AlevinOpts<apt::QuartzSeq2>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
-template
-int alevinQuant(AlevinOpts<apt::QuartzSeq2>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+template int
+alevin_sc_align(AlevinOpts<apt::QuartzSeq2>& aopt, SalmonOpts& sopt,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+
+template int
+alevinQuant(AlevinOpts<apt::QuartzSeq2>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
 
 template 
 int alevin_sc_align(AlevinOpts<apt::SciSeq3>& aopt,
                     SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
+                    boost::program_options::parsed_options& orderedOptions,
+                    std::unique_ptr<SalmonIndex>& salmonIndex);
 template
 int alevinQuant(AlevinOpts<apt::SciSeq3>& aopt,
                 SalmonOpts& sopt,
@@ -3146,34 +3130,34 @@ int alevinQuant(AlevinOpts<apt::SciSeq3>& aopt,
                 spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
+                size_t numLowConfidentBarcode,
+                std::unique_ptr<SalmonIndex>& salmonIndex);
 
-template 
-int alevin_sc_align(AlevinOpts<apt::Custom>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
-template 
-int alevin_sc_align(AlevinOpts<apt::CustomGeometry>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
 
-template
-int alevinQuant(AlevinOpts<apt::Custom>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+template int
+alevin_sc_align(AlevinOpts<apt::Custom>& aopt, SalmonOpts& sopt,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
-template
-int alevinQuant(AlevinOpts<apt::CustomGeometry>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+
+template int
+alevinQuant(AlevinOpts<apt::Custom>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
+
+template int
+alevin_sc_align(AlevinOpts<apt::CustomGeometry>& aopt, SalmonOpts& sopt,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+
+template int
+alevinQuant(AlevinOpts<apt::CustomGeometry>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
