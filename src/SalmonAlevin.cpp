@@ -634,6 +634,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     	extraBAMtags.reserve(reserveSize);
     }
 
+    auto localProtocol = alevinOpts.protocol;
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
       auto& rp = rg[i];
       readLenLeft = rp.first.seq.length();
@@ -672,7 +673,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        auto localProtocol = alevinOpts.protocol;
         bool extracted_bc = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
         seqOk = (extracted_bc) ?
           aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
@@ -1163,6 +1163,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
     	extraBAMtags.reserve(reserveSize);
     }
 
+    auto localProtocol = alevinOpts.protocol;
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
       auto& rp = rg[i];
       readLenLeft = rp.first.seq.length();
@@ -1193,7 +1194,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        auto localProtocol = alevinOpts.protocol;
         bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
         seqOk = (extracted_barcode) ?
           aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
@@ -1620,6 +1620,7 @@ void processReadsQuasi(
     	extraBAMtags.reserve(reserveSize);
     }
 
+    auto localProtocol = alevinOpts.protocol;
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
       auto& rp = rg[i];
       readLenLeft = rp.first.seq.length();
@@ -1651,7 +1652,6 @@ void processReadsQuasi(
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        auto localProtocol = alevinOpts.protocol;
         bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
         seqOk = (extracted_barcode) ?
           aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
