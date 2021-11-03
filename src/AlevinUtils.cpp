@@ -317,8 +317,9 @@ namespace alevin {
          && read.length() >= pt.barcodeLength + pt.umiLength + pt.anchorSeqLen) {
            std::string bcAssign = read.substr(0,pt.anchorPos) + read.substr(pt.anchorPos + pt.anchorSeqLen + pt.umiLength, pt.rtIdxLen);
         if (pt.anchorPos < pt.maxHairpinIndexLen) { // hairpin index can be 9 or 10 bp
-          bc = bc.substr(1,bc.length());
-           bcAssign += "A";
+           bcAssign += "AC";
+        } else {
+          bcAssign += "A";
         }
         bc.assign(bcAssign);
         return true;

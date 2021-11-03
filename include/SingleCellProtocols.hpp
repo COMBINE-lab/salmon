@@ -180,7 +180,7 @@ namespace alevin{
       Custom() : Rule(0,0,BarcodeEnd::FIVE,0){}
     };
     struct SciSeq3 : Rule{
-      SciSeq3() : Rule(20, 8, BarcodeEnd::FIVE, 1073741824){}
+      SciSeq3() : Rule(21, 8, BarcodeEnd::FIVE, 1073741824){}
       std::string anchorSeq = "CAGAGC";
       std::size_t anchorSeqLen = anchorSeq.length();
       std::size_t anchorPos = 0;
