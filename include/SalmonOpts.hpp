@@ -271,7 +271,7 @@ struct SalmonOpts {
   bool disableChainingHeuristic;
   bool disableAlignmentCache;
   double minScoreFraction;
-  double maxSoftclipFraction;
+  std::vector<double> maxSoftclipFraction;
   double scoreExp;
   int16_t matchScore;
   int16_t mismatchPenalty;

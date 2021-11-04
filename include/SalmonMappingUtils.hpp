@@ -184,9 +184,11 @@ initMapperSettings(SalmonOpts& salmonOpts, MemCollector<IndexT>& memCollector,
   aconf.mimicBT2Strict = salmonOpts.mimicStrictBT2;
   aconf.allowSoftclip  = salmonOpts.softclip || salmonOpts.softclipOverhangs; 
   aconf.computeCIGAR = salmonOpts.computeCIGAR && (!salmonOpts.qmFileName.empty());
-  aconf.endBonus = salmonOpts.endBonus;
   aconf.end2end = !aconf.allowSoftclip;
-  aconf.maxSoftclipFraction = salmonOpts.maxSoftclipFraction;
+  aconf.maxSoftclipFractionGeneral = salmonOpts.maxSoftclipFraction[0];
+  // use the same fraction if only one fraction is given by the user
+  auto overhangFracIndex = (salmonOpts.maxSoftclipFraction.size() > 1) ? 1 : 0;
+  aconf.maxSoftclipFractionOverhang = salmonOpts.maxSoftclipFraction[overhangFracIndex];
   aconf.useAlignmentCache = !salmonOpts.disableAlignmentCache;
 
   mpol.noOrphans = !salmonOpts.allowOrphans;

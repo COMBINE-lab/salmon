@@ -1488,19 +1488,37 @@ bool configure_parsing(size_t nfiles,             // input param
                         sopt.endBonus);
     sopt.endBonus = 0;
   }
-
-  if (sopt.maxSoftclipFraction < 0) {
+  
+  if (sopt.maxSoftclipFraction.size() < 1) {
     sopt.jointLog->warn(
-                        "You set the maximum soft-clip fraction to {}, but it cannot be negative. It is converted to 0.",
-                        sopt.maxSoftclipFraction);
-    sopt.maxSoftclipFraction = 0;
+                        "maxSoftclipFraction is not set.  It is now set to the default value of {} for "
+                        "both general and overhanging cases.", 
+                        salmon::defaults::maxSoftclipFraction[0]);
+    sopt.maxSoftclipFraction.push_back(salmon::defaults::maxSoftclipFraction[0]);
   }
 
-  if (sopt.maxSoftclipFraction > 0.8) {
+  if (sopt.maxSoftclipFraction.size() > 2) {
     sopt.jointLog->warn(
-                        "You set the maximum soft-clip fraction to {}, but it cannot be greater than 0.8. It is converted to 0.8.",
-                        sopt.maxSoftclipFraction);
-    sopt.maxSoftclipFraction = 0.8;
+                        "You provided more than two maximum soft-clip fraction values. The first value is used "
+                        "for general soft-clipping and the second value is used for transcript overhanging situations. "
+                        "The rest of the values are ignored.");
+  }
+
+  size_t maxSCF = 2;
+  for (size_t i = 0; i < std::min(maxSCF, sopt.maxSoftclipFraction.size()); ++i) {
+    if (sopt.maxSoftclipFraction[i] < 0) {
+      sopt.jointLog->warn(
+                          "You set the maximum soft-clip fraction to {}, but it cannot be negative. It is converted to 0.",
+                          sopt.maxSoftclipFraction[i]);
+      sopt.maxSoftclipFraction[i] = 0;
+    }
+
+    if (sopt.maxSoftclipFraction[i] > 0.8) {
+      sopt.jointLog->warn(
+                          "You set the maximum soft-clip fraction to {}, but it cannot be greater than 0.8. It is converted to 0.8.",
+                          sopt.maxSoftclipFraction[i]);
+      sopt.maxSoftclipFraction[i] = 0.8;
+    }
   }
 
   // Make sure that consensusSlack is not negative
