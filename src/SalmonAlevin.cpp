@@ -159,7 +159,7 @@ namespace alevin{
   // < std::numeric_limits<uint32_t>::max() distinct barcodes / reads. 
   // However, that assumption should be tested more thoroughly.
   using CellBarcodeT = uint32_t;
-  using UMIBarcodeT = uint32_t;
+  using UMIBarcodeT = uint64_t;
 
   template <typename AlnT> using AlevinAlnGroup = AlignmentGroup<AlnT, CellBarcodeT, UMIBarcodeT>;
   template <typename AlnT> using AlnGroupVec = std::vector<AlevinAlnGroup<AlnT>>;
