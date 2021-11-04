@@ -634,6 +634,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     	extraBAMtags.reserve(reserveSize);
     }
 
+    auto localProtocol = alevinOpts.protocol;
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
       auto& rp = rg[i];
       readLenLeft = rp.first.seq.length();
@@ -672,7 +673,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        bool extracted_bc = aut::extractBarcode(rp.first.seq, rp.second.seq, alevinOpts.protocol, barcode);
+        bool extracted_bc = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
         seqOk = (extracted_bc) ?
           aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
 
@@ -683,8 +684,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
         // If we have a valid barcode
         if (seqOk) {
-          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, alevinOpts.protocol, umi);
-          //aopt.jointLog->info("BC : {}, UMI : {}". barcode, umi);
+          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, localProtocol, umi);
           if ( !umi_ok ) {
             smallSeqs += 1;
           } else {
@@ -1163,6 +1163,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
     	extraBAMtags.reserve(reserveSize);
     }
 
+    auto localProtocol = alevinOpts.protocol;
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
       auto& rp = rg[i];
       readLenLeft = rp.first.seq.length();
@@ -1193,7 +1194,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, alevinOpts.protocol, barcode);
+        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
         seqOk = (extracted_barcode) ?
           aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
 
@@ -1204,8 +1205,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
         // If we have a valid barcode
         if (seqOk) {
-          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, alevinOpts.protocol, umi);
-
+          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, localProtocol, umi);
           if ( !umi_ok ) {
             smallSeqs += 1;
           } else {
@@ -1385,7 +1385,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
         } else {
           if (barcode_ok) {
             unmapped_bc_map[bck.word(0)] += 1;
-          }
+          } 
         }
 
 
@@ -1620,6 +1620,7 @@ void processReadsQuasi(
     	extraBAMtags.reserve(reserveSize);
     }
 
+    auto localProtocol = alevinOpts.protocol;
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
       auto& rp = rg[i];
       readLenLeft = rp.first.seq.length();
@@ -1651,7 +1652,7 @@ void processReadsQuasi(
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, alevinOpts.protocol, barcode);
+        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
         seqOk = (extracted_barcode) ?
           aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
 
@@ -1695,7 +1696,7 @@ void processReadsQuasi(
         if (barcodeIdx) {
           //corrBarcodeIndex = barcodeMap[barcodeIndex];
           jointHitGroup.setBarcode(*barcodeIdx);
-          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, alevinOpts.protocol, umi);
+          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, localProtocol, umi);
 
           if ( !umi_ok ) {
             smallSeqs += 1;
@@ -3105,6 +3106,7 @@ template int
 alevin_sc_align(AlevinOpts<apt::QuartzSeq2>& aopt, SalmonOpts& sopt,
                 boost::program_options::parsed_options& orderedOptions,
                 std::unique_ptr<SalmonIndex>& salmonIndex);
+
 template int
 alevinQuant(AlevinOpts<apt::QuartzSeq2>& aopt, SalmonOpts& sopt,
             SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
@@ -3114,12 +3116,26 @@ alevinQuant(AlevinOpts<apt::QuartzSeq2>& aopt, SalmonOpts& sopt,
             CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
             std::unique_ptr<SalmonIndex>& salmonIndex);
 
+template 
+int alevin_sc_align(AlevinOpts<apt::SciSeq3>& aopt,
+                    SalmonOpts& sopt,
+                    boost::program_options::parsed_options& orderedOptions,
+                    std::unique_ptr<SalmonIndex>& salmonIndex);
+template
+int alevinQuant(AlevinOpts<apt::SciSeq3>& aopt,
+                SalmonOpts& sopt,
+                SoftMapT& barcodeMap,
+                TrueBcsT& trueBarcodes,
+                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+                boost::program_options::parsed_options& orderedOptions,
+                CFreqMapT& freqCounter,
+                size_t numLowConfidentBarcode,
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+
+
 template int
 alevin_sc_align(AlevinOpts<apt::Custom>& aopt, SalmonOpts& sopt,
-                boost::program_options::parsed_options& orderedOptions,
-                std::unique_ptr<SalmonIndex>& salmonIndex);
-template int
-alevin_sc_align(AlevinOpts<apt::CustomGeometry>& aopt, SalmonOpts& sopt,
                 boost::program_options::parsed_options& orderedOptions,
                 std::unique_ptr<SalmonIndex>& salmonIndex);
 
@@ -3131,6 +3147,12 @@ alevinQuant(AlevinOpts<apt::Custom>& aopt, SalmonOpts& sopt,
             boost::program_options::parsed_options& orderedOptions,
             CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
             std::unique_ptr<SalmonIndex>& salmonIndex);
+
+template int
+alevin_sc_align(AlevinOpts<apt::CustomGeometry>& aopt, SalmonOpts& sopt,
+                boost::program_options::parsed_options& orderedOptions,
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+
 template int
 alevinQuant(AlevinOpts<apt::CustomGeometry>& aopt, SalmonOpts& sopt,
             SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
