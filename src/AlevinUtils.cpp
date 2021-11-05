@@ -92,6 +92,7 @@ namespace alevin {
       (void)seq;
       return &seq2;
     }
+    template <>
     std::string*  getReadSequence(apt::SplitSeqV2& protocol,
                          std::string& seq,
                          std::string& seq2,
@@ -347,9 +348,11 @@ namespace alevin {
                                       std::string& read2,
                                       apt::SplitSeqV2& pt,
                                       std::string& bc){
-      (void)read2;
-      return (read.length() >= pt.barcodeLength) ?
-        (bc.assign(read, 0, pt.barcodeLength), true) : false;
+      (void)read;
+
+      return (read2.length() >= pt.barcodeLength) ?
+        (bc.assign(read2.substr(pt.bc1Pos, pt.bcLen) + read2.substr(pt.bc2Pos, pt.bcLen)
+        + read2.substr(pt.bc3Pos, pt.bcLen), 0, pt.barcodeLength), true) : false;
     }
     template <>
     bool extractBarcode<apt::Custom>(std::string& read,

@@ -179,6 +179,7 @@ namespace alevin{
 
     struct SplitSeqV2 : Rule{
         SplitSeqV2(): Rule(24, 10, BarcodeEnd::FIVE, 4294967295){}
+        std::size_t const bcLen = 8, bc1Pos = 78, bc2Pos = 48, bc3Pos = 10;
     };
 
     //dummy class
