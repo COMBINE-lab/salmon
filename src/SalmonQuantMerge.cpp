@@ -27,6 +27,7 @@
 // C++ string formatting library #include "spdlog/fmt/fmt.h"
 // logger includes
 #include "spdlog/spdlog.h"
+#include "SalmonIndex.hpp"
 
 enum class TargetColumn { LEN, ELEN, TPM, NREADS };
 
@@ -213,7 +214,7 @@ bool doMerge(QuantMergeOptions& qmOpts) {
   return true;
 }
 
-int salmonQuantMerge(int argc, const char* argv[]) {
+int salmonQuantMerge(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& /* salmonIndex */) {
   using std::cerr;
   using std::vector;
   using std::string;

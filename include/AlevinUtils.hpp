@@ -100,7 +100,7 @@ namespace alevin{
                       OrderedOptionsT& orderedOptions) {
       std::ofstream os(cmdInfoPath.string());
       cereal::JSONOutputArchive oa(os);
-      oa(cereal::make_nvp("salmon_version:", std::string(salmon::version)));
+      oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
       for (auto& opt : orderedOptions.options) {
         if (opt.value.size() == 1) {
           oa(cereal::make_nvp(opt.string_key, opt.value.front()));
