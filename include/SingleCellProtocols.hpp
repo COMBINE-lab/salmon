@@ -181,7 +181,14 @@ namespace alevin{
     struct Custom : Rule{
       Custom() : Rule(0,0,BarcodeEnd::FIVE,0){}
     };
-    
+    struct SciSeq3 : Rule{
+      SciSeq3() : Rule(21, 8, BarcodeEnd::FIVE, 1073741824){}
+      std::string anchorSeq = "CAGAGC";
+      std::size_t anchorSeqLen = anchorSeq.length();
+      std::size_t anchorPos = 0;
+      u_int16_t const maxHairpinIndexLen = 10;
+      u_int16_t const rtIdxLen = 10; // rev transcription index length
+    };
 
     // for the new type of specification
     struct CustomGeometry {
