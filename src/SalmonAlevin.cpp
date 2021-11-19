@@ -672,7 +672,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
         auto localProtocol = alevinOpts.protocol;
-        bool extracted_bc = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
+        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
         if (extracted_barcode) {
           seqOk =  aut::sequenceCheck(barcode, Sequence::BARCODE);
           if (not seqOk){
