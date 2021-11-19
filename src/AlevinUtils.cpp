@@ -238,7 +238,7 @@ namespace alevin {
                                  apt::InDropV2& pt,
                                  std::string& umi){
       (void)read;
-       return (read2.length() >= pt.umiLength) ?
+       return (read2.length() >= pt.w1Length + pt.barcodeLength + pt.umiLength) ?
         (umi.assign(read2, pt.bc2EndPos, pt.umiLength), true) : false;
       return true;
     }
@@ -356,14 +356,28 @@ namespace alevin {
         }
         if (!found) {return false;}
       }
-      bc = read2.substr(0, pt.w1Pos);
-      if(bc.size()<8 or bc.size()>11){
+      if(pt.w1Pos < 8 or pt.w1Pos > 11){
         return false;
       }
+      bc = read2.substr(0, pt.w1Pos);
       uint32_t offset = bc.size()+pt.w1.size();
-      bc += read2.substr(offset, 8);
-      bc += std::string(pt.barcodeLength - bc.size(), 'A');
-      pt.bc2EndPos = offset+8;
+      bc += read2.substr(offset, pt.bc2Len);
+      switch (pt.barcodeLength - bc.size())
+      {
+      case 1:
+        bc += "A";
+        break;
+      case 2:
+        bc += "AT";
+        break;
+      case 3:
+        bc += "AAG";
+        break;
+      case 4:
+        bc += "AAAC";
+        break;
+      }
+      pt.bc2EndPos = offset+pt.bc2Len;
       return true;
       } else {
         return false;
