@@ -294,7 +294,7 @@ int salmonHashQuantify(AlevinOpts<apt::CITESeq>& aopt,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 template
-int salmonHashQuantify(AlevinOpts<apt::InDrop>& aopt,
+int salmonHashQuantify(AlevinOpts<apt::InDropV2>& aopt,
                        bfs::path& outputDirectory,
                        CFreqMapT& freqCounter);
 template

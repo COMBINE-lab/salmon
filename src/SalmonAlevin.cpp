@@ -663,7 +663,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       //barcode.clear();
       nonstd::optional<uint32_t> barcodeIdx;
       extraBAMtags.clear();
-      bool seqOk;
+      bool seqOk = false;
 
       // keep track of the *least* freqeuntly 
       // occurring hit in this fragment to consider 
@@ -673,13 +673,13 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        bool extracted_bc = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
-        seqOk = (extracted_bc) ?
-          aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
-
-        if (not seqOk){
-          bool recovered = aut::recoverBarcode(barcode);
-          if (recovered) { seqOk = true; }
+        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
+        if (extracted_barcode) {
+          seqOk =  aut::sequenceCheck(barcode, Sequence::BARCODE);
+          if (not seqOk){
+            bool recovered = aut::recoverBarcode(barcode);
+            if (recovered) { seqOk = true; }
+          }
         }
 
         // If we have a valid barcode
@@ -1190,17 +1190,17 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
       //barcode.clear();
       nonstd::optional<uint32_t> barcodeIdx;
       extraBAMtags.clear();
-      bool seqOk;
+      bool seqOk = false;
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
         bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
-        seqOk = (extracted_barcode) ?
-          aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
-
-        if (not seqOk){
-          bool recovered = aut::recoverBarcode(barcode);
-          if (recovered) { seqOk = true; }
+        if (extracted_barcode) {
+          seqOk =  aut::sequenceCheck(barcode, Sequence::BARCODE);
+          if (not seqOk){
+            bool recovered = aut::recoverBarcode(barcode);
+            if (recovered) { seqOk = true; }
+          }
         }
 
         // If we have a valid barcode
@@ -1648,17 +1648,17 @@ void processReadsQuasi(
       //barcode.clear();
       nonstd::optional<uint32_t> barcodeIdx;
       extraBAMtags.clear();
-      bool seqOk;
+      bool seqOk = false;
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
         bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
-        seqOk = (extracted_barcode) ?
-          aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
-
-        if (not seqOk){
-          bool recovered = aut::recoverBarcode(barcode);
-          if (recovered) { seqOk = true; }
+        if (extracted_barcode) {
+          seqOk =  aut::sequenceCheck(barcode, Sequence::BARCODE);
+          if (not seqOk){
+            bool recovered = aut::recoverBarcode(barcode);
+            if (recovered) { seqOk = true; }
+          }
         }
 
         // If we have a barcode sequence, but not yet an index
@@ -3025,11 +3025,11 @@ alevinQuant(AlevinOpts<apt::CITESeq>& aopt, SalmonOpts& sopt,
             std::unique_ptr<SalmonIndex>& salmonIndex);
 
 template int
-alevin_sc_align(AlevinOpts<apt::InDrop>& aopt, SalmonOpts& sopt,
+alevin_sc_align(AlevinOpts<apt::InDropV2>& aopt, SalmonOpts& sopt,
                 boost::program_options::parsed_options& orderedOptions,
                 std::unique_ptr<SalmonIndex>& salmonIndex);
 template int
-alevinQuant(AlevinOpts<apt::InDrop>& aopt, SalmonOpts& sopt,
+alevinQuant(AlevinOpts<apt::InDropV2>& aopt, SalmonOpts& sopt,
             SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
             spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
             spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,

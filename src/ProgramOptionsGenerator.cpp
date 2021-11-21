@@ -335,8 +335,8 @@ namespace salmon {
                                        "alevin-developer Options");
     alevindevs.add_options()
       (
-       "indrop", po::bool_switch()->default_value(alevin::defaults::isInDrop),
-       "Use inDrop (not extensively tested) Single Cell protocol for the library. must specify w1 too.")
+       "indropV2", po::bool_switch()->default_value(alevin::defaults::isInDrop),
+       "Use inDropV2 Single Cell protocol for the library. Must specify w1 too.")
       (
        "w1", po::value<std::string>(),
        "Must be used in conjunction with inDrop;")

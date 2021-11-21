@@ -260,7 +260,7 @@ namespace alevin {
                                       std::vector<std::string>& trueBarcodes,
                                       bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
-    template bool performWhitelisting(AlevinOpts<alevin::protocols::InDrop>& aopt,
+    template bool performWhitelisting(AlevinOpts<alevin::protocols::InDropV2>& aopt,
                                       std::vector<std::string>& trueBarcodes,
                                       bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);

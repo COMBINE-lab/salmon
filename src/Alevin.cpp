@@ -1022,7 +1022,7 @@ salmon-based processing of single-cell RNA-seq data.
 
     bool noTgMap {false};
     bool dropseq = vm["dropseq"].as<bool>();
-    bool indrop = vm["indrop"].as<bool>();
+    bool indropV2 = vm["indropV2"].as<bool>();
     bool citeseq = vm["citeseq"].as<bool>();
     bool chromV3 = vm["chromiumV3"].as<bool>();
     bool chrom = vm["chromium"].as<bool>();
@@ -1040,7 +1040,7 @@ salmon-based processing of single-cell RNA-seq data.
 
     uint8_t validate_num_protocols {0};
     if (dropseq) validate_num_protocols += 1;
-    if (indrop) validate_num_protocols += 1;
+    if (indropV2) validate_num_protocols += 1;
     if (citeseq) { validate_num_protocols += 1; noTgMap = true;}
     if (chromV3) validate_num_protocols += 1;
     if (chrom) validate_num_protocols += 1;
@@ -1081,20 +1081,18 @@ salmon-based processing of single-cell RNA-seq data.
                        vm, commentString, noTgMap,
                        barcodeFiles, readFiles, salmonIndex);
     }
-    else if(indrop){
-      std::cout<<"Indrop get neighbors removed, please use other protocols";
-      exit(1);
+    else if(indropV2){
       if(vm.count("w1") != 0){
         std::string w1 = vm["w1"].as<std::string>();
-        AlevinOpts<apt::InDrop> aopt;
+        AlevinOpts<apt::InDropV2> aopt;
         aopt.protocol.setW1(w1);
-        //aopt.jointLog->warn("Using InDrop Setting for Alevin");
+        //aopt.jointLog->warn("Using InDropV2 Setting for Alevin");
         initiatePipeline(aopt, sopt, orderedOptions,
                          vm, commentString, noTgMap,
                          barcodeFiles, readFiles, salmonIndex);
       }
       else{
-        fmt::print(stderr, "ERROR: indrop needs w1 flag too.\n Exiting Now");
+        fmt::print(stderr, "ERROR: indropV2 needs w1 flag too.\n Exiting Now");
         exit(1);
       }
     }
@@ -1104,7 +1102,7 @@ salmon-based processing of single-cell RNA-seq data.
         aopt.protocol.setFeatureLength(vm["featureLength"].as<size_t>());
         aopt.protocol.setFeatureStart(vm["featureStart"].as<size_t>());
 
-        //aopt.jointLog->warn("Using InDrop Setting for Alevin");
+        //aopt.jointLog->warn("Using InDropV2 Setting for Alevin");
         initiatePipeline(aopt, sopt, orderedOptions,
                          vm, commentString, noTgMap,
                          barcodeFiles, readFiles, salmonIndex);
