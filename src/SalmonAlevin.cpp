@@ -673,12 +673,24 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
+        // If the barcode sequence could be extracted, then this is set to true,
+        // but the barcode sequence itself may still be invalid (e.g. contain `N` characters).
+        // However, if extracted_barcode is false here, there is no hope to even recover the
+        // barcode and we shouldn't attempt it.
         bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
+        // If we could pull out something where the barcode sequence should have been
+        // then continue to process it.
         if (extracted_barcode) {
+          // if the barcode consisted of valid nucleotides, then seqOk is true
+          // otherwise false
           seqOk =  aut::sequenceCheck(barcode, Sequence::BARCODE);
           if (not seqOk){
-            bool recovered = aut::recoverBarcode(barcode);
-            if (recovered) { seqOk = true; }
+            // If the barcode contained invalid nucleotides
+            // this attempts to replace the first one with an `A`.
+            // If this returns true, there was only one `N` and we
+            // replaced it; otherwise there was more than one `N`
+            // and the barcode sequence should be treated as invalid.
+            seqOk = aut::recoverBarcode(barcode);
           }
         }
 
@@ -1194,12 +1206,24 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
+        // If the barcode sequence could be extracted, then this is set to true,
+        // but the barcode sequence itself may still be invalid (e.g. contain `N` characters).
+        // However, if extracted_barcode is false here, there is no hope to even recover the
+        // barcode and we shouldn't attempt it.
         bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
+        // If we could pull out something where the barcode sequence should have been
+        // then continue to process it.
         if (extracted_barcode) {
+          // if the barcode consisted of valid nucleotides, then seqOk is true
+          // otherwise false
           seqOk =  aut::sequenceCheck(barcode, Sequence::BARCODE);
           if (not seqOk){
-            bool recovered = aut::recoverBarcode(barcode);
-            if (recovered) { seqOk = true; }
+            // If the barcode contained invalid nucleotides
+            // this attempts to replace the first one with an `A`.
+            // If this returns true, there was only one `N` and we
+            // replaced it; otherwise there was more than one `N`
+            // and the barcode sequence should be treated as invalid.
+            seqOk = aut::recoverBarcode(barcode);
           }
         }
 
@@ -1652,12 +1676,24 @@ void processReadsQuasi(
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
+        // If the barcode sequence could be extracted, then this is set to true,
+        // but the barcode sequence itself may still be invalid (e.g. contain `N` characters).
+        // However, if extracted_barcode is false here, there is no hope to even recover the
+        // barcode and we shouldn't attempt it.
         bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
+        // If we could pull out something where the barcode sequence should have been
+        // then continue to process it.
         if (extracted_barcode) {
+          // if the barcode consisted of valid nucleotides, then seqOk is true
+          // otherwise false
           seqOk =  aut::sequenceCheck(barcode, Sequence::BARCODE);
           if (not seqOk){
-            bool recovered = aut::recoverBarcode(barcode);
-            if (recovered) { seqOk = true; }
+            // If the barcode contained invalid nucleotides
+            // this attempts to replace the first one with an `A`.
+            // If this returns true, there was only one `N` and we
+            // replaced it; otherwise there was more than one `N`
+            // and the barcode sequence should be treated as invalid.
+            seqOk = aut::recoverBarcode(barcode);
           }
         }
 
