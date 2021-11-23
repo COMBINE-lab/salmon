@@ -1865,8 +1865,8 @@ bool GZipWriter::writeEquivCounts<SCExpT, apt::CITESeq>(
                                                         const AlevinOpts<apt::CITESeq>& aopts,
                                                         SCExpT& readExp);
 template
-bool GZipWriter::writeEquivCounts<SCExpT, apt::InDrop>(
-                                                       const AlevinOpts<apt::InDrop>& aopts,
+bool GZipWriter::writeEquivCounts<SCExpT, apt::InDropV2>(
+                                                       const AlevinOpts<apt::InDropV2>& aopts,
                                                        SCExpT& readExp);
 template
 bool GZipWriter::writeEquivCounts<SCExpT, apt::ChromiumV3>(
@@ -1893,6 +1893,10 @@ bool GZipWriter::writeEquivCounts<SCExpT, apt::QuartzSeq2>(
                                                         const AlevinOpts<apt::QuartzSeq2>& aopts,
                                                         SCExpT& readExp);
 template
+bool GZipWriter::writeEquivCounts<SCExpT, apt::SciSeq3>(
+                                                         const AlevinOpts<apt::SciSeq3>& aopts,
+                                                         SCExpT& readExp);
+template
 bool GZipWriter::writeEquivCounts<SCExpT, apt::Custom>(
                                                        const AlevinOpts<apt::Custom>& aopts,
                                                        SCExpT& readExp);
@@ -1907,7 +1911,7 @@ template bool
 GZipWriter::writeMetaAlevin<apt::CITESeq>(const AlevinOpts<apt::CITESeq>& opts,
                                           boost::filesystem::path aux_dir);
 template bool
-GZipWriter::writeMetaAlevin<apt::InDrop>(const AlevinOpts<apt::InDrop>& opts,
+GZipWriter::writeMetaAlevin<apt::InDropV2>(const AlevinOpts<apt::InDropV2>& opts,
                                          boost::filesystem::path aux_dir);
 template bool
 GZipWriter::writeMetaAlevin<apt::Chromium>(const AlevinOpts<apt::Chromium>& opts,
@@ -1924,6 +1928,9 @@ GZipWriter::writeMetaAlevin<apt::CELSeq2>(const AlevinOpts<apt::CELSeq2>& opts,
 template bool
 GZipWriter::writeMetaAlevin<apt::QuartzSeq2>(const AlevinOpts<apt::QuartzSeq2>& opts,
                                              boost::filesystem::path aux_dir);
+template bool
+GZipWriter::writeMetaAlevin<apt::SciSeq3>(const AlevinOpts<apt::SciSeq3>& opts,
+                                           boost::filesystem::path aux_dir);
 template bool
 GZipWriter::writeMetaAlevin<apt::Custom>(const AlevinOpts<apt::Custom>& opts,
                                          boost::filesystem::path aux_dir);

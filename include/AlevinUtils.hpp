@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <limits>
 #include <string>
+#include <numeric>
 
 #include "spdlog/spdlog.h"
 
@@ -72,6 +73,8 @@ namespace alevin{
     void readWhitelist(bfs::path& filePath,
                        TrueBcsT& trueBarcodes);
 
+    unsigned int hammingDistance(const std::string s1, const std::string s2);
+
     template <typename ProtocolT>
     bool processAlevinOpts(AlevinOpts<ProtocolT>& aopt,
                            SalmonOpts& sopt, bool noTgMap,
@@ -97,7 +100,7 @@ namespace alevin{
                       OrderedOptionsT& orderedOptions) {
       std::ofstream os(cmdInfoPath.string());
       cereal::JSONOutputArchive oa(os);
-      oa(cereal::make_nvp("salmon_version:", std::string(salmon::version)));
+      oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
       for (auto& opt : orderedOptions.options) {
         if (opt.value.size() == 1) {
           oa(cereal::make_nvp(opt.string_key, opt.value.front()));

@@ -335,8 +335,8 @@ namespace salmon {
                                        "alevin-developer Options");
     alevindevs.add_options()
       (
-       "indrop", po::bool_switch()->default_value(alevin::defaults::isInDrop),
-       "Use inDrop (not extensively tested) Single Cell protocol for the library. must specify w1 too.")
+       "indropV2", po::bool_switch()->default_value(alevin::defaults::isInDrop),
+       "Use inDropV2 Single Cell protocol for the library. Must specify w1 too.")
       (
        "w1", po::value<std::string>(),
        "Must be used in conjunction with inDrop;")
@@ -413,6 +413,9 @@ namespace salmon {
       (
        "quartzseq2", po::bool_switch()->default_value(alevin::defaults::isQuartzSeq2),
        "Use Quartz-Seq2 v3.2 Single Cell protocol for the library assumes 15 length barcode and 8 length UMI.")
+      (
+       "sciseq3", po::bool_switch()->default_value(alevin::defaults::isSciSeq3),
+       "Use sci-RNA-seq3 protocol for the library.")
       (
        "whitelist", po::value<std::string>(),
        "File containing white-list barcodes")

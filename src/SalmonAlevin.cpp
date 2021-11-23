@@ -28,6 +28,7 @@
 #include <functional>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <random>
@@ -633,6 +634,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     	extraBAMtags.reserve(reserveSize);
     }
 
+    auto localProtocol = alevinOpts.protocol;
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
       auto& rp = rg[i];
       readLenLeft = rp.first.seq.length();
@@ -661,7 +663,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       //barcode.clear();
       nonstd::optional<uint32_t> barcodeIdx;
       extraBAMtags.clear();
-      bool seqOk;
+      bool seqOk = false;
 
       // keep track of the *least* freqeuntly 
       // occurring hit in this fragment to consider 
@@ -671,19 +673,30 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        bool extracted_bc = aut::extractBarcode(rp.first.seq, rp.second.seq, alevinOpts.protocol, barcode);
-        seqOk = (extracted_bc) ?
-          aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
-
-        if (not seqOk){
-          bool recovered = aut::recoverBarcode(barcode);
-          if (recovered) { seqOk = true; }
+        // If the barcode sequence could be extracted, then this is set to true,
+        // but the barcode sequence itself may still be invalid (e.g. contain `N` characters).
+        // However, if extracted_barcode is false here, there is no hope to even recover the
+        // barcode and we shouldn't attempt it.
+        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
+        // If we could pull out something where the barcode sequence should have been
+        // then continue to process it.
+        if (extracted_barcode) {
+          // if the barcode consisted of valid nucleotides, then seqOk is true
+          // otherwise false
+          seqOk =  aut::sequenceCheck(barcode, Sequence::BARCODE);
+          if (not seqOk){
+            // If the barcode contained invalid nucleotides
+            // this attempts to replace the first one with an `A`.
+            // If this returns true, there was only one `N` and we
+            // replaced it; otherwise there was more than one `N`
+            // and the barcode sequence should be treated as invalid.
+            seqOk = aut::recoverBarcode(barcode);
+          }
         }
 
         // If we have a valid barcode
         if (seqOk) {
-          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, alevinOpts.protocol, umi);
-          //aopt.jointLog->info("BC : {}, UMI : {}". barcode, umi);
+          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, localProtocol, umi);
           if ( !umi_ok ) {
             smallSeqs += 1;
           } else {
@@ -1162,6 +1175,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
     	extraBAMtags.reserve(reserveSize);
     }
 
+    auto localProtocol = alevinOpts.protocol;
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
       auto& rp = rg[i];
       readLenLeft = rp.first.seq.length();
@@ -1188,23 +1202,34 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
       //barcode.clear();
       nonstd::optional<uint32_t> barcodeIdx;
       extraBAMtags.clear();
-      bool seqOk;
+      bool seqOk = false;
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, alevinOpts.protocol, barcode);
-        seqOk = (extracted_barcode) ?
-          aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
-
-        if (not seqOk){
-          bool recovered = aut::recoverBarcode(barcode);
-          if (recovered) { seqOk = true; }
+        // If the barcode sequence could be extracted, then this is set to true,
+        // but the barcode sequence itself may still be invalid (e.g. contain `N` characters).
+        // However, if extracted_barcode is false here, there is no hope to even recover the
+        // barcode and we shouldn't attempt it.
+        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
+        // If we could pull out something where the barcode sequence should have been
+        // then continue to process it.
+        if (extracted_barcode) {
+          // if the barcode consisted of valid nucleotides, then seqOk is true
+          // otherwise false
+          seqOk =  aut::sequenceCheck(barcode, Sequence::BARCODE);
+          if (not seqOk){
+            // If the barcode contained invalid nucleotides
+            // this attempts to replace the first one with an `A`.
+            // If this returns true, there was only one `N` and we
+            // replaced it; otherwise there was more than one `N`
+            // and the barcode sequence should be treated as invalid.
+            seqOk = aut::recoverBarcode(barcode);
+          }
         }
 
         // If we have a valid barcode
         if (seqOk) {
-          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, alevinOpts.protocol, umi);
-
+          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, localProtocol, umi);
           if ( !umi_ok ) {
             smallSeqs += 1;
           } else {
@@ -1384,7 +1409,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
         } else {
           if (barcode_ok) {
             unmapped_bc_map[bck.word(0)] += 1;
-          }
+          } 
         }
 
 
@@ -1619,6 +1644,7 @@ void processReadsQuasi(
     	extraBAMtags.reserve(reserveSize);
     }
 
+    auto localProtocol = alevinOpts.protocol;
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
       auto& rp = rg[i];
       readLenLeft = rp.first.seq.length();
@@ -1646,17 +1672,29 @@ void processReadsQuasi(
       //barcode.clear();
       nonstd::optional<uint32_t> barcodeIdx;
       extraBAMtags.clear();
-      bool seqOk;
+      bool seqOk = false;
 
       if (alevinOpts.protocol.end == bcEnd::FIVE ||
           alevinOpts.protocol.end == bcEnd::THREE){
-        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, alevinOpts.protocol, barcode);
-        seqOk = (extracted_barcode) ?
-          aut::sequenceCheck(barcode, Sequence::BARCODE) : false;
-
-        if (not seqOk){
-          bool recovered = aut::recoverBarcode(barcode);
-          if (recovered) { seqOk = true; }
+        // If the barcode sequence could be extracted, then this is set to true,
+        // but the barcode sequence itself may still be invalid (e.g. contain `N` characters).
+        // However, if extracted_barcode is false here, there is no hope to even recover the
+        // barcode and we shouldn't attempt it.
+        bool extracted_barcode = aut::extractBarcode(rp.first.seq, rp.second.seq, localProtocol, barcode);
+        // If we could pull out something where the barcode sequence should have been
+        // then continue to process it.
+        if (extracted_barcode) {
+          // if the barcode consisted of valid nucleotides, then seqOk is true
+          // otherwise false
+          seqOk =  aut::sequenceCheck(barcode, Sequence::BARCODE);
+          if (not seqOk){
+            // If the barcode contained invalid nucleotides
+            // this attempts to replace the first one with an `A`.
+            // If this returns true, there was only one `N` and we
+            // replaced it; otherwise there was more than one `N`
+            // and the barcode sequence should be treated as invalid.
+            seqOk = aut::recoverBarcode(barcode);
+          }
         }
 
         // If we have a barcode sequence, but not yet an index
@@ -1694,7 +1732,7 @@ void processReadsQuasi(
         if (barcodeIdx) {
           //corrBarcodeIndex = barcodeMap[barcodeIndex];
           jointHitGroup.setBarcode(*barcodeIdx);
-          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, alevinOpts.protocol, umi);
+          bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, localProtocol, umi);
 
           if ( !umi_ok ) {
             smallSeqs += 1;
@@ -2662,7 +2700,8 @@ void alevinOptimize( std::vector<std::string>& trueBarcodesVec,
 template <typename ProtocolT>
 int alevin_sc_align(AlevinOpts<ProtocolT>& aopt,
                     SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions){
+                    boost::program_options::parsed_options& orderedOptions,
+                    std::unique_ptr<SalmonIndex>& salmonIndex){
   using std::cerr;
   using std::vector;
   using std::string;
@@ -2689,13 +2728,12 @@ int alevin_sc_align(AlevinOpts<ProtocolT>& aopt,
     }
     // ==== END: Library format processing ===
 
-    SalmonIndexVersionInfo versionInfo;
-    boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
-    versionInfo.load(versionPath);
-    auto idxType = versionInfo.indexType();
+    if(!salmonIndex)
+      salmonIndex = checkLoadIndex(indexDirectory, sopt.jointLog);
+    auto idxType = salmonIndex->indexType();
 
     MappingStatistics mstats;
-    ReadExperimentT experiment(readLibraries, indexDirectory, sopt);
+    ReadExperimentT experiment(readLibraries, salmonIndex.get(), sopt);
 
     // We currently do not support decoy sequence in the 
     // --justAlign or --sketch modes, so check that the 
@@ -2778,7 +2816,8 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
                 spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                 spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter, size_t numLowConfidentBarcode){
+                CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+                std::unique_ptr<SalmonIndex>& salmonIndex){
   using std::cerr;
   using std::vector;
   using std::string;
@@ -2804,14 +2843,12 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
       std::exit(1);
     }
     // ==== END: Library format processing ===
-
-    SalmonIndexVersionInfo versionInfo;
-    boost::filesystem::path versionPath = indexDirectory / "versionInfo.json";
-    versionInfo.load(versionPath);
-    auto idxType = versionInfo.indexType();
+    if(!salmonIndex)
+      salmonIndex = checkLoadIndex(indexDirectory, sopt.jointLog);
+    auto idxType = salmonIndex->indexType();
 
     MappingStatistics mstats;
-    ReadExperimentT experiment(readLibraries, indexDirectory, sopt);
+    ReadExperimentT experiment(readLibraries, salmonIndex.get(), sopt);
     //experiment.computePolyAPositions();
 
     // This will be the class in charge of maintaining our
@@ -2996,28 +3033,132 @@ int alevinQuant(AlevinOpts<ProtocolT>& aopt,
 
 namespace apt = alevin::protocols;
 
-template 
-int alevin_sc_align(AlevinOpts<apt::DropSeq>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
+template
+int alevin_sc_align(AlevinOpts<apt::DropSeq>& aopt, SalmonOpts& sopt,
+                    boost::program_options::parsed_options& orderedOptions,
+                    std::unique_ptr<SalmonIndex>& salmonIndex);
+
+template int
+alevinQuant(AlevinOpts<apt::DropSeq>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
 
 template
-int alevinQuant(AlevinOpts<apt::DropSeq>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+int alevin_sc_align(AlevinOpts<apt::CITESeq>& aopt, SalmonOpts& sopt,
+                    boost::program_options::parsed_options& orderedOptions,
+                    std::unique_ptr<SalmonIndex>& salmonIndex);
+template int
+alevinQuant(AlevinOpts<apt::CITESeq>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
+
+template int
+alevin_sc_align(AlevinOpts<apt::InDropV2>& aopt, SalmonOpts& sopt,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+template int
+alevinQuant(AlevinOpts<apt::InDropV2>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
+
+template int
+alevin_sc_align(AlevinOpts<apt::ChromiumV3>& aopt, SalmonOpts& sopt,
+                boost::program_options::parsed_options& orderedOptions,
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+template int
+alevinQuant(AlevinOpts<apt::ChromiumV3>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
+
+template int
+alevin_sc_align(AlevinOpts<apt::Chromium>& aopt, SalmonOpts& sopt,
+                boost::program_options::parsed_options& orderedOptions,
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+template int
+alevinQuant(AlevinOpts<apt::Chromium>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
+
+template int
+alevin_sc_align(AlevinOpts<apt::Gemcode>& aopt, SalmonOpts& sopt,
+                boost::program_options::parsed_options& orderedOptions,
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+template int
+alevinQuant(AlevinOpts<apt::Gemcode>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
+
+template int
+alevin_sc_align(AlevinOpts<apt::CELSeq>& aopt, SalmonOpts& sopt,
+                boost::program_options::parsed_options& orderedOptions,
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+template int
+alevinQuant(AlevinOpts<apt::CELSeq>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
+
+template int
+alevin_sc_align(AlevinOpts<apt::CELSeq2>& aopt, SalmonOpts& sopt,
+                boost::program_options::parsed_options& orderedOptions,
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+template int
+alevinQuant(AlevinOpts<apt::CELSeq2>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
+
+template int
+alevin_sc_align(AlevinOpts<apt::QuartzSeq2>& aopt, SalmonOpts& sopt,
+                boost::program_options::parsed_options& orderedOptions,
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+
+template int
+alevinQuant(AlevinOpts<apt::QuartzSeq2>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
 
 template 
-int alevin_sc_align(AlevinOpts<apt::CITESeq>& aopt,
+int alevin_sc_align(AlevinOpts<apt::SciSeq3>& aopt,
                     SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
+                    boost::program_options::parsed_options& orderedOptions,
+                    std::unique_ptr<SalmonIndex>& salmonIndex);
 template
-int alevinQuant(AlevinOpts<apt::CITESeq>& aopt,
+int alevinQuant(AlevinOpts<apt::SciSeq3>& aopt,
                 SalmonOpts& sopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes,
@@ -3025,139 +3166,34 @@ int alevinQuant(AlevinOpts<apt::CITESeq>& aopt,
                 spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
                 boost::program_options::parsed_options& orderedOptions,
                 CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
+                size_t numLowConfidentBarcode,
+                std::unique_ptr<SalmonIndex>& salmonIndex);
 
-template 
-int alevin_sc_align(AlevinOpts<apt::InDrop>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
-template
-int alevinQuant(AlevinOpts<apt::InDrop>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-                boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
 
-template 
-int alevin_sc_align(AlevinOpts<apt::ChromiumV3>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
-template
-int alevinQuant(AlevinOpts<apt::ChromiumV3>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+template int
+alevin_sc_align(AlevinOpts<apt::Custom>& aopt, SalmonOpts& sopt,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
+                std::unique_ptr<SalmonIndex>& salmonIndex);
 
-template 
-int alevin_sc_align(AlevinOpts<apt::Chromium>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
-template
-int alevinQuant(AlevinOpts<apt::Chromium>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-                boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
+template int
+alevinQuant(AlevinOpts<apt::Custom>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
 
-template 
-int alevin_sc_align(AlevinOpts<apt::Gemcode>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
-template
-int alevinQuant(AlevinOpts<apt::Gemcode>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+template int
+alevin_sc_align(AlevinOpts<apt::CustomGeometry>& aopt, SalmonOpts& sopt,
                 boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
+                std::unique_ptr<SalmonIndex>& salmonIndex);
 
-template 
-int alevin_sc_align(AlevinOpts<apt::CELSeq>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
-template
-int alevinQuant(AlevinOpts<apt::CELSeq>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-                boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
-                
-template 
-int alevin_sc_align(AlevinOpts<apt::CELSeq2>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
-template
-int alevinQuant(AlevinOpts<apt::CELSeq2>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-                boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
-
-template 
-int alevin_sc_align(AlevinOpts<apt::QuartzSeq2>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
-template
-int alevinQuant(AlevinOpts<apt::QuartzSeq2>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-                boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
-
-template 
-int alevin_sc_align(AlevinOpts<apt::Custom>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
-template 
-int alevin_sc_align(AlevinOpts<apt::CustomGeometry>& aopt,
-                    SalmonOpts& sopt,
-                    boost::program_options::parsed_options& orderedOptions);
-
-template
-int alevinQuant(AlevinOpts<apt::Custom>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-                boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
-template
-int alevinQuant(AlevinOpts<apt::CustomGeometry>& aopt,
-                SalmonOpts& sopt,
-                SoftMapT& barcodeMap,
-                TrueBcsT& trueBarcodes,
-                spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
-                spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
-                boost::program_options::parsed_options& orderedOptions,
-                CFreqMapT& freqCounter,
-                size_t numLowConfidentBarcode);
+template int
+alevinQuant(AlevinOpts<apt::CustomGeometry>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
