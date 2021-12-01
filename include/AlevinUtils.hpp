@@ -128,6 +128,12 @@ namespace alevin{
     bool hasOneGene(const std::vector<uint32_t>& txps, uint32_t& geneId,
                     spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                     const size_t numGenes);
+
+  void modifyRegex(size_t readNumber, std::string seq, std::string* reg, unsigned int& nPat);
+  void modifyRegex(size_t readNumber, std::string seq, std::string* reg, unsigned int& nPat, unsigned int& bioPat);
+  void modifyRegex(size_t readNumber, std::string seq, std::string* reg, unsigned int& nPat, unsigned int& bioPat, std::size_t len);
+  void modifyRegex(size_t readNumber, std::string type, std::string* reg, std::vector<int> *b, std::vector<int> *u, unsigned int& nPat, std::size_t len);
+  void modifyRegex(size_t readNumber, std::string desc, std::string* reg, std::vector<int> *b, std::vector<int> *u, unsigned int& nPat);
   }
 }
 #endif // __ALEVIN_UTILS_HPP__

@@ -3,6 +3,7 @@
 
 #include <string>
 #include <ostream>
+#include <boost/regex.hpp>
 
 #include "AlevinOpts.hpp"
 #include "AlevinTypes.hpp"
@@ -220,7 +221,40 @@ namespace alevin{
       BarcodeEnd end;
     };
 
+    // Custome geometry specification using regex for extraction
+    struct CustomGeo {
+      // store regex for reads 1 and 2
+      std::string reg[2] = {"", ""};
+      // store positions of matches for bc and umi
+      std::vector<int> b[2], u[2];
+      // bioRead stores the read number for biological read and bioPat stores match pattern number on regex
+      unsigned int nPatterns = 1, bioRead, bioPat; // biological read would be contigous and on only 1 of the read
+      bool bioReadFound = false;
+      // store the matches for both reads
+      boost::smatch match[2];
+      // required
+      uint32_t barcodeLength, umiLength, maxValue;
+      BarcodeEnd end;
+
+      TagGeometry umi_geo;
+      TagGeometry bc_geo;
+      TagGeometry read_geo;
+
+      void set_umi_geo(TagGeometry& g) { umi_geo = g; umiLength = umi_geo.length(); }
+      void set_bc_geo(TagGeometry& g) { bc_geo = g; barcodeLength = bc_geo.length(); }
+      void set_read_geo(TagGeometry& g) { read_geo = g; }
+      uint32_t barcode_length() const { return barcodeLength; }
+      uint32_t umi_length() const { return umiLength; }
+    };
+
   }
+  struct ProtoInfo
+  {
+    size_t readNumber;
+    std::string type;
+    std::string desc;
+  };
+
 }
 
 #endif

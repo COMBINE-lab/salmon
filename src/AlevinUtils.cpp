@@ -142,6 +142,15 @@ namespace alevin {
       //subseq = seq2;
     }
     template <>
+    std::string*  getReadSequence(apt::CustomGeo& protocol,
+                         std::string& seq,
+                         std::string& seq2,
+                         std::string& subseq){
+      bool ok = protocol.read_geo.extract_read(seq, seq2, subseq);
+      return &subseq;
+      //subseq = seq2;
+    }
+    template <>
     std::string*  getReadSequence(apt::Gemcode& protocol,
                          std::string& seq,
                          std::string& seq2,
@@ -244,6 +253,14 @@ namespace alevin {
                                  std::string& umi){
       
       return pt.umi_geo.extract_tag(read1, read2, umi);
+    }
+    template <>
+    bool extractUMI<apt::CustomGeo>(std::string& read1,
+                                 std::string& read2,
+                                 apt::CustomGeo& pt,
+                                 std::string& umi){
+      
+      return false;
     }
     template <>
     bool extractUMI<apt::QuartzSeq2>(std::string& read,
@@ -403,6 +420,13 @@ namespace alevin {
     bool extractBarcode<apt::CustomGeometry>(std::string& read1,
                                             std::string& read2,
                                      apt::CustomGeometry& pt,
+                                     std::string& bc){
+      return pt.bc_geo.extract_tag(read1, read2, bc);
+    }
+    template <>
+    bool extractBarcode<apt::CustomGeo>(std::string& read1,
+                                            std::string& read2,
+                                     apt::CustomGeo& pt,
                                      std::string& bc){
       return pt.bc_geo.extract_tag(read1, read2, bc);
     }
@@ -568,6 +592,51 @@ namespace alevin {
       // compute dot product for all postisions, start with 0 and add if the values are not equal
       return std::inner_product(s1.begin(),s1.end(),s2.begin(), 0, std::plus<unsigned int>(),
         std::not2(std::equal_to<std::string::value_type>()));
+    }
+
+    void modifyRegex(size_t readNumber, std::string desc, std::string* reg, std::vector<int> *b, std::vector<int> *u, unsigned int& nPat){
+    if (desc == "b"){
+        reg[readNumber-1] += "([ATGC]{1,})";
+        b[readNumber-1].push_back(nPat);
+        nPat++;
+    } else if (desc == "u"){
+        reg[readNumber-1] += "([ATGC]{1,})";
+        u[readNumber-1].push_back(nPat);
+        nPat++;
+    }
+}
+
+    void modifyRegex(size_t readNumber, std::string type, std::string* reg, std::vector<int> *b, std::vector<int> *u, unsigned int& nPat, std::size_t len)
+    {
+        if (type == "b"){
+            reg[readNumber-1] += "([ATGC]{" + std::to_string(len) +"})";
+            b[readNumber-1].push_back(nPat);
+            nPat++;
+        } else if (type == "u"){
+            reg[readNumber-1] += "([ATGC]{" + std::to_string(len) +"})";
+            u[readNumber-1].push_back(nPat);
+            nPat++;
+        }
+    }
+
+    void modifyRegex(size_t readNumber, std::string seq, std::string* reg, unsigned int& nPat)
+    {
+        reg[readNumber -1] += "(" + seq + ")";
+        nPat++;
+    }
+
+    void modifyRegex(size_t readNumber, std::string* reg, unsigned int& nPat, unsigned int& bioPat)
+    {
+        reg[readNumber - 1] += "([ATGC]{1,})";
+        bioPat = nPat;
+        nPat++;
+    }
+
+    void modifyRegex(size_t readNumber, std::string* reg, unsigned int& nPat, unsigned int& bioPat, std::size_t len)
+    {
+        reg[readNumber-1] += "([ATGC]{" + std::to_string(len) +"})";
+        bioPat = nPat;
+        nPat++;
     }
 
     void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
@@ -1008,6 +1077,7 @@ namespace alevin {
       bool have_custom_umi_geo = vm.count("umi-geometry");
       bool have_custom_bc_geo = vm.count("bc-geometry");
       bool have_custom_read_geo = vm.count("read-geometry");
+      bool have_custom_geo = vm.count("custome-geo");
       // need both
       bool have_any_custom_geo = have_custom_read_geo or have_custom_umi_geo or have_custom_bc_geo;
       bool have_all_custom_geo = have_custom_read_geo and have_custom_umi_geo and have_custom_bc_geo;
@@ -1221,7 +1291,120 @@ namespace alevin {
         // if it's OK, set the umi kmer length
         alevin::types::AlevinUMIKmer::k( static_cast<uint16_t>(umi_geo.length()) );
 
-      } // new custom barcode geometry
+      } else if (have_custom_geo) { // regex based unified barcode geometry parsing
+
+      struct apt::CustomGeo customGeo;
+      struct ProtoInfo proto;
+      peg::parser parser(R"(
+        Specification <- ReadNumber1'{'Description{1,10}'}'ReadNumber2'{'Description{1,10}'}'
+        ReadNumber1 <- [1]
+        ReadNumber2 <- [2]
+        Description <- Type'['Position']' / Fixed'['Sequence']' / Type
+        Type <-  'b'i / 'u'i / 'r'i
+        Fixed <- 'f'i
+        Sequence <- [ATGC]+
+        Position <- (Number '-' Number) / (Number '-' End) / Length
+        Number <- [0-9]+
+        Length <- Number
+        End <- 'end'
+      )");
+
+
+    parser["Number"] = [](const peg::SemanticValues &sv)
+    {
+        auto val = static_cast<size_t>(std::stoull(sv.token()));
+        return val;
+    };
+
+
+    parser["ReadNumber1"] = [&](const peg::SemanticValues &sv)
+    {
+        auto val = std::stoi(sv.token());
+        proto.readNumber = val;
+    };
+
+    parser["ReadNumber2"] = [&](const peg::SemanticValues &sv)
+    {
+        auto val = std::stoi(sv.token());
+        proto.readNumber = val;
+        if(val == 2){ customGeo.nPatterns = 1;}
+    };
+
+    parser["Description"] = [&](const peg::SemanticValues &sv)
+    {
+        auto val = std::string(sv.token());
+        if (val == "b" || val == "u"){
+            modifyRegex(proto.readNumber, val, customGeo.reg, customGeo.b, customGeo.u, customGeo.nPatterns);
+        } else if (val == "r") {
+            modifyRegex(proto.readNumber, customGeo.reg, customGeo.nPatterns, customGeo.bioPat);
+        }
+    };
+
+    parser["Type"] = [&](const peg::SemanticValues &sv)
+    {
+        auto val = std::string(sv.token());
+        proto.type = val;
+        if(val == "r"){
+            if (!customGeo.bioReadFound){
+                customGeo.bioRead = proto.readNumber;
+                customGeo.bioReadFound = true;
+            } else {
+                std::cout << "Error message: only contigous biological read expected" << std::endl;
+            }
+        }
+    };
+
+    parser["Fixed"] = [&](const peg::SemanticValues &sv)
+    {
+        auto val = std::string(sv.token());
+        proto.type = val;
+    };
+
+    parser["Sequence"] = [&](const peg::SemanticValues &sv)
+    {
+        auto val = std::string(sv.token());
+        modifyRegex(proto.readNumber, val, customGeo.reg, customGeo.nPatterns);
+    };
+
+    parser["Position"] = [&](const peg::SemanticValues &sv)
+    {
+        switch (sv.choice())
+        {
+        case 0:
+        {
+            auto val = std::make_pair(
+                peg::any_cast<size_t>(sv[0]), peg::any_cast<size_t>(sv[1]));
+            if (proto.type == "b" || proto.type == "u") {
+                modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.b, customGeo.u, customGeo.nPatterns, val.second - val.first + 1);
+            } else {
+                modifyRegex(proto.readNumber, customGeo.reg, customGeo.nPatterns, customGeo.bioPat, val.second - val.first + 1);
+            }
+        }
+        break;
+        case 1:
+        {
+            if (proto.type == "b" || proto.type == "u"){
+                modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.b, customGeo.u, customGeo.nPatterns);
+            } else { // when it's r
+                modifyRegex(proto.readNumber, customGeo.reg,  customGeo.nPatterns, customGeo.bioPat);
+            }
+        }
+        break;
+        case 2:
+        {
+            auto val = peg::any_cast<size_t>(sv[0]);
+            if (proto.type == "b" || proto.type == "u"){
+                modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.b, customGeo.u, customGeo.nPatterns, val);
+            } else {
+                modifyRegex(proto.readNumber, customGeo.reg, customGeo.nPatterns, customGeo.bioPat, val);
+            }
+        }
+        break;
+        }
+    };
+
+      return 0;
+      }
 
       //validate specified iupac
       if (aopt.iupac.size()>0){
@@ -1428,6 +1611,10 @@ namespace alevin {
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::CustomGeometry>& aopt,
+                           SalmonOpts& sopt, bool noTgMap,
+                           boost::program_options::variables_map& vm);
+    template
+    bool processAlevinOpts(AlevinOpts<apt::CustomGeo>& aopt,
                            SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template

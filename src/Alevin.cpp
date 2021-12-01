@@ -1039,6 +1039,7 @@ salmon-based processing of single-cell RNA-seq data.
     bool custom_new = (vm.count("bc-geometry") and 
                    vm.count("umi-geometry"));
     bool custom = custom_old or custom_new;
+    bool custom_geo = vm.count("custom-geo");
 
     uint8_t validate_num_protocols {0};
     if (dropseq) validate_num_protocols += 1;
@@ -1054,6 +1055,7 @@ salmon-based processing of single-cell RNA-seq data.
     if (quartzseq2) validate_num_protocols += 1;
     if (sciseq3) validate_num_protocols += 1;
     if (custom) validate_num_protocols += 1;
+    if (custom_geo) validate_num_protocols += 1;
 
     if ( validate_num_protocols != 1 ) {
       fmt::print(stderr, "ERROR: Please specify one and only one scRNA protocol;");
@@ -1185,6 +1187,12 @@ salmon-based processing of single-cell RNA-seq data.
                        barcodeFiles, readFiles, salmonIndex);
     } else if (custom_new) {
       AlevinOpts<apt::CustomGeometry> aopt;
+      //aopt.jointLog->warn("Using Custom Setting for Alevin");
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString, noTgMap,
+                       barcodeFiles, readFiles, salmonIndex);
+    } else if (custom_geo) {
+      AlevinOpts<apt::CustomGeo> aopt;
       //aopt.jointLog->warn("Using Custom Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
                        vm, commentString, noTgMap,
