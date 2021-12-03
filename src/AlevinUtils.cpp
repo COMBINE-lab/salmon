@@ -93,6 +93,14 @@ namespace alevin {
       return &seq2;
     }
     template <>
+    std::string*  getReadSequence(apt::SplitSeqV1& protocol,
+                         std::string& seq,
+                         std::string& seq2,
+                         std::string& subseq){
+      (void)seq2; // fastq2 contains barcode and umi
+      return &seq;
+    }
+    template <>
     std::string*  getReadSequence(apt::SplitSeqV2& protocol,
                          std::string& seq,
                          std::string& seq2,
@@ -186,6 +194,15 @@ namespace alevin {
       (void)read2;
       return (read.length() >= pt.barcodeLength + pt.umiLength) ?
         (umi.assign(read, pt.barcodeLength, pt.umiLength), true) : false;
+    }
+    template <>
+    bool extractUMI<apt::SplitSeqV1>(std::string& read,
+                                     std::string& read2,
+                                     apt::SplitSeqV1& pt,
+                                     std::string& umi){
+      (void)read;
+      return (read2.length() >= pt.barcodeLength + pt.umiLength) ?
+        (umi.assign(read2, 0, pt.umiLength), true) : false;
     }
     template <>
     bool extractUMI<apt::SplitSeqV2>(std::string& read,
@@ -343,6 +360,18 @@ namespace alevin {
       } else {
         return false;
       }
+    }
+    template <>
+    bool extractBarcode<apt::SplitSeqV1>(std::string& read,
+                                      std::string& read2,
+                                      apt::SplitSeqV1& pt,
+                                      std::string& bc){
+      (void)read;
+
+      return (read2.length() >= pt.bc1Pos + pt.bcLen) ?
+        (bc.assign(read2.substr(pt.bc1Pos, pt.bcLen) + read2.substr(pt.bc2Pos, pt.bcLen)
+        + read2.substr(pt.bc3Pos, pt.bcLen), 0, pt.barcodeLength), true) : false;
+    }
     template <>
     bool extractBarcode<apt::SplitSeqV2>(std::string& read,
                                       std::string& read2,
@@ -350,7 +379,7 @@ namespace alevin {
                                       std::string& bc){
       (void)read;
 
-      return (read2.length() >= pt.barcodeLength) ?
+      return (read2.length() >= pt.bc1Pos + pt.bcLen) ?
         (bc.assign(read2.substr(pt.bc1Pos, pt.bcLen) + read2.substr(pt.bc2Pos, pt.bcLen)
         + read2.substr(pt.bc3Pos, pt.bcLen), 0, pt.barcodeLength), true) : false;
     }
@@ -1411,6 +1440,10 @@ namespace alevin {
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::SciSeq3>& aopt,
+                           SalmonOpts& sopt, bool noTgMap,
+                           boost::program_options::variables_map& vm);
+    template
+    bool processAlevinOpts(AlevinOpts<apt::SplitSeqV1>& aopt,
                            SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template

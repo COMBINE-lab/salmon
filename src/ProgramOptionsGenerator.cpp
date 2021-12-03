@@ -411,6 +411,9 @@ namespace salmon {
        "celseq2", po::bool_switch()->default_value(alevin::defaults::isCELSeq2),
        "Use CEL-Seq2 Single Cell protocol for the library.")
       (
+       "splitseqV1", po::bool_switch()->default_value(alevin::defaults::isSplitSeqV1),
+       "Use Split-SeqV1 Single Cell protocol for the library.")
+      (
        "splitseqV2", po::bool_switch()->default_value(alevin::defaults::isSplitSeqV2),
        "Use Split-SeqV2 Single Cell protocol for the library.")
       (
