@@ -368,7 +368,7 @@ namespace alevin {
                                       std::string& bc){
       (void)read;
 
-      return (read2.length() >= pt.bc1Pos + pt.bcLen) ?
+      return (read2.length() >= pt.bc3Pos + pt.bcLen) ?
         (bc.assign(read2.substr(pt.bc1Pos, pt.bcLen) + read2.substr(pt.bc2Pos, pt.bcLen)
         + read2.substr(pt.bc3Pos, pt.bcLen), 0, pt.barcodeLength), true) : false;
     }
@@ -379,7 +379,7 @@ namespace alevin {
                                       std::string& bc){
       (void)read;
 
-      return (read2.length() >= pt.bc1Pos + pt.bcLen) ?
+      return (read2.length() >= pt.bc3Pos + pt.bcLen) ?
         (bc.assign(read2.substr(pt.bc1Pos, pt.bcLen) + read2.substr(pt.bc2Pos, pt.bcLen)
         + read2.substr(pt.bc3Pos, pt.bcLen), 0, pt.barcodeLength), true) : false;
     }
