@@ -411,6 +411,12 @@ namespace salmon {
        "celseq2", po::bool_switch()->default_value(alevin::defaults::isCELSeq2),
        "Use CEL-Seq2 Single Cell protocol for the library.")
       (
+       "splitseqV1", po::bool_switch()->default_value(alevin::defaults::isSplitSeqV1),
+       "Use Split-SeqV1 Single Cell protocol for the library.")
+      (
+       "splitseqV2", po::bool_switch()->default_value(alevin::defaults::isSplitSeqV2),
+       "Use Split-SeqV2 Single Cell protocol for the library.")
+      (
        "quartzseq2", po::bool_switch()->default_value(alevin::defaults::isQuartzSeq2),
        "Use Quartz-Seq2 v3.2 Single Cell protocol for the library assumes 15 length barcode and 8 length UMI.")
       (

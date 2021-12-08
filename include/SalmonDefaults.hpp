@@ -139,6 +139,8 @@ namespace defaults {
   constexpr const bool isCITESeq{false};
   constexpr const bool isCELSeq{false};
   constexpr const bool isCELSeq2{false};
+  constexpr const bool isSplitSeqV1{false};
+  constexpr const bool isSplitSeqV2{false};
   constexpr const bool isQuartzSeq2{false};
   constexpr const bool isSciSeq3{false};
   constexpr const bool noQuant{false};
