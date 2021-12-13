@@ -322,6 +322,66 @@ void EMUpdate_(EQVecT& eqVec,
       });
 }
 
+template <typename EQVecT>
+void EMUpdate_augmented(EQVecT& eqVec,
+               std::vector<double>& priorAlphas,
+               const CollapsedEMOptimizer::VecType& alphaIn,
+               CollapsedEMOptimizer::VecType& alphaOut,
+               std::vector<uint32_t>& sampled_txps_counts,
+               std::vector<bool>& eqClass_augmentable) {
+
+  assert(alphaIn.size() == alphaOut.size());
+
+  tbb::parallel_for(
+      BlockedIndexRange(size_t(0), size_t(eqVec.size())),
+      [&eqVec, &priorAlphas, &alphaIn, &alphaOut,
+      &sampled_txps_counts, &eqClass_augmentable](const BlockedIndexRange& range) -> void {
+        for (auto eqID : boost::irange(range.begin(), range.end())) {
+          auto& kv = eqVec[eqID];
+
+          uint64_t count = kv.second.count;
+          // for each transcript in this class
+          const TranscriptGroup& tgroup = kv.first;
+          if (tgroup.valid) {
+            const std::vector<uint32_t>& txps = tgroup.txps;
+            const auto& auxs = kv.second.combinedWeights;
+
+            size_t groupSize = kv.second.weights.size(); // txps.size();
+            // If this is a single-transcript group,
+            // then it gets the full count.  Otherwise,
+            // update according to our VBEM rule.
+            if (BOOST_LIKELY(groupSize > 1)) {
+              double denom = 0.0;
+              for (size_t i = 0; i < groupSize; ++i) {
+                auto tid = txps[i];
+                auto aux = auxs[i];
+                double augmentedCount = eqClass_augmentable[i] ? 0 : static_cast<double>(sampled_txps_counts[tid]);
+                double v = (alphaIn[tid] - augmentedCount) * aux;
+                denom += v;
+              }
+
+              if (denom <= ::minEQClassWeight) {
+                // tgroup.setValid(false);
+              } else {
+                double invDenom = count / denom;
+                for (size_t i = 0; i < groupSize; ++i) {
+                  auto tid = txps[i];
+                  auto aux = auxs[i];
+                  double augmentedCount = eqClass_augmentable[i] ? 0 : static_cast<double>(sampled_txps_counts[tid]);
+                  double v = (alphaIn[tid] - augmentedCount) * aux;
+                  if (!std::isnan(v)) {
+                    salmon::utils::incLoop(alphaOut[tid], v * invDenom);
+                  }
+                }
+              }
+            } else {
+              salmon::utils::incLoop(alphaOut[txps.front()], count);
+            }
+          }
+        }
+      });
+}
+
 /*
  * Use the Variational Bayesian EM algorithm over equivalence
  * classes to estimate the latent variables (alphaOut)
@@ -703,7 +763,11 @@ bool doBootstrap(
           VBEMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, 
                     priorAlphas, alphas, alphasPrime, expTheta);
       } else {
-        EMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, 
+        if (sopt.eqClassBasedAugmentation)
+          EMUpdate_augmented(txpGroups, txpGroupCombinedWeights, sampCounts, 
+                alphas, alphasPrime, sampled_txps_counts, eqClass_augmentable);
+        else
+          EMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, 
                 alphas, alphasPrime);
       }
 
