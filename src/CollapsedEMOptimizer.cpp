@@ -193,8 +193,7 @@ void VBEMUpdate_augmented(std::vector<std::vector<uint32_t>>& txpGroupLabels,
   // double prior = priorAlpha;
 
   for (size_t i = 0; i < M; ++i) {
-    double augmentedCount = eqClass_augmentable[i] ? 0 : static_cast<double>(sampled_txps_counts[i]);
-    auto ap = alphaIn[i] + priorAlphas[i] - augmentedCount;
+    auto ap = alphaIn[i] + priorAlphas[i];
     if (ap > ::digammaMin) {
         expTheta[i] =
           std::exp(boost::math::digamma(ap) - logNorm);
@@ -218,8 +217,18 @@ void VBEMUpdate_augmented(std::vector<std::vector<uint32_t>>& txpGroupLabels,
       for (size_t i = 0; i < groupSize; ++i) {
         auto tid = txps[i];
         auto aux = auxs[i];
-        if (expTheta[tid] > 0.0) {
-          double v = expTheta[tid] * aux;
+        auto expTheta_i = expTheta[tid];
+        if (!eqClass_augmentable[eqID]){
+          auto ap = alphaIn[tid] + priorAlphas[tid] - static_cast<double>(sampled_txps_counts[tid]);
+          if (ap > ::digammaMin) {
+              expTheta_i =
+                std::exp(boost::math::digamma(ap) - logNorm);
+          } else {
+            expTheta_i = 0.0;
+          }          
+        }
+        if (expTheta_i > 0.0) {
+          double v = expTheta_i * aux;
           denom += v;
         }
       }
@@ -230,8 +239,18 @@ void VBEMUpdate_augmented(std::vector<std::vector<uint32_t>>& txpGroupLabels,
         for (size_t i = 0; i < groupSize; ++i) {
           auto tid = txps[i];
           auto aux = auxs[i];
-          if (expTheta[tid] > 0.0) {
-            double v = expTheta[tid] * aux;
+          auto expTheta_i = expTheta[tid];
+          if (!eqClass_augmentable[eqID]){
+            auto ap = alphaIn[tid] + priorAlphas[tid] - static_cast<double>(sampled_txps_counts[tid]);
+            if (ap > ::digammaMin) {
+                expTheta_i =
+                  std::exp(boost::math::digamma(ap) - logNorm);
+            } else {
+              expTheta_i = 0.0;
+            }          
+          }
+          if (expTheta_i > 0.0) {
+            double v = expTheta_i * aux;
             salmon::utils::incLoop(alphaOut[tid], v * invDenom);
           }
         }
@@ -412,15 +431,13 @@ void VBEMUpdate_augmented(EQVecT& eqVec,
   double logNorm = boost::math::digamma(alphaSum);
 
   tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(priorAlphas.size())),
-                    [logNorm, &priorAlphas, &alphaIn, &alphaOut, &eqClass_augmentable, &sampled_txps_counts,
+                    [logNorm, &priorAlphas, &alphaIn, &alphaOut,
                      &expTheta](const BlockedIndexRange& range) -> void {
 
                       // double prior = priorAlpha;
 
                       for (auto i : boost::irange(range.begin(), range.end())) {
-                        double augmentedCount = eqClass_augmentable[i] ? 0 : static_cast<double>(sampled_txps_counts[i]);
-
-                        auto ap = alphaIn[i].load() + priorAlphas[i] - augmentedCount;
+                        auto ap = alphaIn[i].load() + priorAlphas[i];
                         if (ap > ::digammaMin) {
                           expTheta[i] =
                               std::exp(boost::math::digamma(ap) - logNorm);
@@ -434,7 +451,7 @@ void VBEMUpdate_augmented(EQVecT& eqVec,
 
   tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(eqVec.size())),
-      [&eqVec, &alphaIn, &alphaOut, //&eqClass_augmentable, &sampled_txps_counts,
+      [&eqVec, &alphaIn, &alphaOut, &priorAlphas, &logNorm, &eqClass_augmentable, &sampled_txps_counts,
        &expTheta](const BlockedIndexRange& range) -> void {
         for (auto eqID : boost::irange(range.begin(), range.end())) {
           auto& kv = eqVec[eqID];
@@ -455,8 +472,18 @@ void VBEMUpdate_augmented(EQVecT& eqVec,
               for (size_t i = 0; i < groupSize; ++i) {
                 auto tid = txps[i];
                 auto aux = auxs[i];
-                if ( expTheta[tid] > 0.0) {
-                  double v = expTheta[tid] * aux;
+                auto expTheta_i = expTheta[tid];
+                if (!eqClass_augmentable[eqID]) {
+                  auto ap = alphaIn[tid].load() + priorAlphas[tid] - static_cast<double>(sampled_txps_counts[tid]);
+                  if (ap > ::digammaMin) {
+                    expTheta_i =
+                        std::exp(boost::math::digamma(ap) - logNorm);
+                  } else {
+                    expTheta_i = 0.0;
+                  }
+                }
+                if ( expTheta_i > 0.0) {
+                  double v = expTheta_i * aux;
                   denom += v;
                 }
               }
@@ -467,8 +494,18 @@ void VBEMUpdate_augmented(EQVecT& eqVec,
                 for (size_t i = 0; i < groupSize; ++i) {
                   auto tid = txps[i];
                   auto aux = auxs[i];
-                  if (expTheta[tid] > 0.0) {
-                    double v = expTheta[tid] * aux;
+                  auto expTheta_i = expTheta[tid];
+                  if (!eqClass_augmentable[eqID]) {
+                    auto ap = alphaIn[tid].load() + priorAlphas[tid] - static_cast<double>(sampled_txps_counts[tid]);
+                    if (ap > ::digammaMin) {
+                      expTheta_i =
+                          std::exp(boost::math::digamma(ap) - logNorm);
+                    } else {
+                      expTheta_i = 0.0;
+                    }
+                  }
+                  if (expTheta_i > 0.0) {
+                    double v = expTheta_i * aux;
                     salmon::utils::incLoop(alphaOut[tid], v * invDenom);
                   }
                 }
