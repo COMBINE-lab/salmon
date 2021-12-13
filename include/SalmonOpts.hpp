@@ -219,6 +219,7 @@ struct SalmonOpts {
   bool noGammaDraw;
   uint32_t numBootstraps;   // Number of bootstrap samples to draw
   double augmented_bootstrap_weight; // Relative weight of augmented observations
+  bool eqClassBasedAugmentation; // Relative weight of augmented observations
   uint32_t thinningFactor;  // Gibbs chain thinning factor
   bool bootstrapReproject{false}; // In bootstrapping, re-project the parameters
                                   // learned from the bootstrapped sample onto the

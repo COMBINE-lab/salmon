@@ -170,6 +170,79 @@ void VBEMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
   }
 }
 
+template <typename VecT>
+void VBEMUpdate_augmented(std::vector<std::vector<uint32_t>>& txpGroupLabels,
+                 std::vector<std::vector<double>>& txpGroupCombinedWeights,
+                 const std::vector<uint64_t>& txpGroupCounts,
+                 std::vector<double>& priorAlphas, 
+                 const VecT& alphaIn, VecT& alphaOut, VecT& expTheta,
+                 std::vector<uint32_t>& sampled_txps_counts,
+                 std::vector<bool>& eqClass_augmentable) {
+
+
+  assert(alphaIn.size() == alphaOut.size());
+  size_t M = alphaIn.size();
+  size_t numEQClasses = txpGroupLabels.size();
+  double alphaSum = {0.0};
+  for (size_t i = 0; i < M; ++i) {
+    alphaSum += alphaIn[i] + priorAlphas[i];
+  }
+
+  double logNorm = boost::math::digamma(alphaSum);
+
+  // double prior = priorAlpha;
+
+  for (size_t i = 0; i < M; ++i) {
+    double augmentedCount = eqClass_augmentable[i] ? 0 : static_cast<double>(sampled_txps_counts[i]);
+    auto ap = alphaIn[i] + priorAlphas[i] - augmentedCount;
+    if (ap > ::digammaMin) {
+        expTheta[i] =
+          std::exp(boost::math::digamma(ap) - logNorm);
+    } else {
+      expTheta[i] = 0.0;
+    }
+    alphaOut[i] = 0.0; // priorAlphas[i];
+  }
+
+  for (size_t eqID = 0; eqID < numEQClasses; ++eqID) {
+    uint64_t count = txpGroupCounts[eqID];
+    const std::vector<uint32_t>& txps = txpGroupLabels[eqID];
+    const auto& auxs = txpGroupCombinedWeights[eqID];
+
+    size_t groupSize = txpGroupCombinedWeights[eqID].size(); // txps.size();
+    // If this is a single-transcript group,
+    // then it gets the full count.  Otherwise,
+    // update according to our VBEM rule.
+    if (BOOST_LIKELY(groupSize > 1)) {
+      double denom = 0.0;
+      for (size_t i = 0; i < groupSize; ++i) {
+        auto tid = txps[i];
+        auto aux = auxs[i];
+        if (expTheta[tid] > 0.0) {
+          double v = expTheta[tid] * aux;
+          denom += v;
+        }
+      }
+      if (denom <= ::minEQClassWeight) {
+        // tgroup.setValid(false);
+      } else {
+        double invDenom = count / denom;
+        for (size_t i = 0; i < groupSize; ++i) {
+          auto tid = txps[i];
+          auto aux = auxs[i];
+          if (expTheta[tid] > 0.0) {
+            double v = expTheta[tid] * aux;
+            salmon::utils::incLoop(alphaOut[tid], v * invDenom);
+          }
+        }
+      }
+
+    } else {
+      salmon::utils::incLoop(alphaOut[txps.front()], count);
+    }
+  }
+}
+
 /*
  * Use the "standard" EM algorithm over equivalence
  * classes to estimate the latent variables (alphaOut)
@@ -320,6 +393,96 @@ void VBEMUpdate_(EQVecT& eqVec,
       });
 }
 
+template <typename EQVecT>
+void VBEMUpdate_augmented(EQVecT& eqVec,
+                 std::vector<double>& priorAlphas, 
+                 const CollapsedEMOptimizer::VecType& alphaIn,
+                 CollapsedEMOptimizer::VecType& alphaOut,
+                 CollapsedEMOptimizer::VecType& expTheta,
+                 std::vector<uint32_t>& sampled_txps_counts,
+                 std::vector<bool>& eqClass_augmentable) {
+
+  assert(alphaIn.size() == alphaOut.size());
+  size_t M = alphaIn.size();
+  double alphaSum = {0.0};
+  for (size_t i = 0; i < M; ++i) {
+    alphaSum += alphaIn[i] + priorAlphas[i];
+  }
+
+  double logNorm = boost::math::digamma(alphaSum);
+
+  tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(priorAlphas.size())),
+                    [logNorm, &priorAlphas, &alphaIn, &alphaOut, &eqClass_augmentable, &sampled_txps_counts,
+                     &expTheta](const BlockedIndexRange& range) -> void {
+
+                      // double prior = priorAlpha;
+
+                      for (auto i : boost::irange(range.begin(), range.end())) {
+                        double augmentedCount = eqClass_augmentable[i] ? 0 : static_cast<double>(sampled_txps_counts[i]);
+
+                        auto ap = alphaIn[i].load() + priorAlphas[i] - augmentedCount;
+                        if (ap > ::digammaMin) {
+                          expTheta[i] =
+                              std::exp(boost::math::digamma(ap) - logNorm);
+                        } else {
+                          expTheta[i] = 0.0;
+                        }
+                        // alphaOut[i] = prior * transcripts[i].RefLength;
+                        alphaOut[i] = 0.0;
+                      }
+                    });
+
+  tbb::parallel_for(
+      BlockedIndexRange(size_t(0), size_t(eqVec.size())),
+      [&eqVec, &alphaIn, &alphaOut, //&eqClass_augmentable, &sampled_txps_counts,
+       &expTheta](const BlockedIndexRange& range) -> void {
+        for (auto eqID : boost::irange(range.begin(), range.end())) {
+          auto& kv = eqVec[eqID];
+
+          uint64_t count = kv.second.count;
+          // for each transcript in this class
+          const TranscriptGroup& tgroup = kv.first;
+          if (tgroup.valid) {
+            const std::vector<uint32_t>& txps = tgroup.txps;
+            const auto& auxs = kv.second.combinedWeights;
+
+            size_t groupSize = kv.second.weights.size(); // txps.size();
+            // If this is a single-transcript group,
+            // then it gets the full count.  Otherwise,
+            // update according to our VBEM rule.
+            if (BOOST_LIKELY(groupSize > 1)) {
+              double denom = 0.0;
+              for (size_t i = 0; i < groupSize; ++i) {
+                auto tid = txps[i];
+                auto aux = auxs[i];
+                if ( expTheta[tid] > 0.0) {
+                  double v = expTheta[tid] * aux;
+                  denom += v;
+                }
+              }
+              if (denom <= ::minEQClassWeight) {
+                // tgroup.setValid(false);
+              } else {
+                double invDenom = count / denom;
+                for (size_t i = 0; i < groupSize; ++i) {
+                  auto tid = txps[i];
+                  auto aux = auxs[i];
+                  if (expTheta[tid] > 0.0) {
+                    double v = expTheta[tid] * aux;
+                    salmon::utils::incLoop(alphaOut[tid], v * invDenom);
+                  }
+                }
+              }
+
+            } else {
+              salmon::utils::incLoop(alphaOut[txps.front()], count);
+            }
+          }
+        }
+      });
+}
+
+
 template <typename VecT, typename EQVecT>
 size_t markDegenerateClasses(
     EQVecT& eqVec,
@@ -435,10 +598,12 @@ bool doBootstrap(
       sampCounts[sc] = 0;
     }
     std::vector<uint32_t> sampled_txps(transcripts.size(), 0);
+    std::vector<uint32_t> sampled_txps_counts(transcripts.size(), 0);
     for (size_t fn = 0; fn < totalNumFrags; ++fn) {
       auto class_number = csamp(gen);
       if (class_number >= single_count_class_offset) {
         sampled_txps[class_number - single_count_class_offset] = 1;
+        sampled_txps_counts[class_number - single_count_class_offset] += 1;
       }
       ++sampCounts[class_number];
     }
@@ -470,14 +635,39 @@ bool doBootstrap(
     double alphaCheckCutoff = 1e-2;
     double cutoff = minAlpha;
 
+    std::vector<bool> eqClass_augmentable(txpGroups.size(), true);
+    tbb::parallel_for(
+      BlockedIndexRange(size_t(0), size_t(txpGroups.size())),
+      [&txpGroups, &transcripts, &eqClass_augmentable](const BlockedIndexRange& range) -> void {
+        for (auto eqID : boost::irange(range.begin(), range.end())) {
+          const auto& txps = txpGroups[eqID];
+          // for each transcript in this class
+          // const TranscriptGroup& tgroup = kv.first;
+          // const std::vector<uint32_t>& txps = tgroup.txps;
+          size_t groupSize = txps.size();
+          for (size_t i = 0; i < groupSize; ++i) {
+            auto tid = txps[i];
+            if (transcripts[tid].uniqueCount() > 0) {
+              eqClass_augmentable[eqID] = false;
+              break;
+            }
+          }
+        }
+      }
+    );
+
     while (itNum < minIter or (itNum < maxIter and !converged)) {
 
       if (useVBEM) {
-        VBEMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, 
+        if (sopt.eqClassBasedAugmentation)
+          VBEMUpdate_augmented(txpGroups, txpGroupCombinedWeights, sampCounts, 
+                    priorAlphas, alphas, alphasPrime, expTheta, sampled_txps_counts, eqClass_augmentable);
+        else
+          VBEMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, 
                     priorAlphas, alphas, alphasPrime, expTheta);
       } else {
         EMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, 
-                  alphas, alphasPrime);
+                alphas, alphasPrime);
       }
 
       converged = true;
@@ -686,10 +876,12 @@ bool CollapsedEMOptimizer::gatherBootstraps(
   
   if (augment_bootstraps) {
     
-    samplingWeights.resize(txpGroups.size() + activeTranscriptIDs.size(), 0.0);
+    samplingWeights.resize(txpGroups.size() + activeTranscriptIDs.size(), 0.0); // transcripts.size(), 0.0);
     uint64_t n = totalCount;
 
     for (auto& tid : activeTranscriptIDs) {
+    //for (auto& txp : transcripts) {
+      //auto tid = txp.id;
       new_class_count += 1;
       txpGroups.push_back({tid});
       std::vector<double> auxs;

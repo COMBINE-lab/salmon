@@ -81,6 +81,7 @@ namespace defaults {
   constexpr const uint32_t numBootstraps{0};
   //constexpr const bool fixBootsraps{false};
   constexpr const double augmented_bootstrap_weight{0.0};
+  constexpr const bool eqClassBasedAugmentation{false};
   constexpr const bool quiet{false};
   constexpr const bool perTranscriptPrior{true};
   constexpr const bool perNucleotidePrior{false};

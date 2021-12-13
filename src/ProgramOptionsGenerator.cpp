@@ -763,6 +763,9 @@ namespace salmon {
        po::value<uint32_t>(&(sopt.numBootstraps))->default_value(salmon::defaults::numBootstraps),
        "Number of bootstrap samples to generate. Note: This is mutually exclusive with Gibbs sampling."
       )
+      ("eqClassBasedAugmentation",
+       po::bool_switch(&(sopt.eqClassBasedAugmentation))->default_value(salmon::defaults::eqClassBasedAugmentation),
+       "To enable the eq class based augmentation in the augmented data bootstraps")
       ("augmentedBootstrapWeight",
        po::value<double>(&(sopt.augmented_bootstrap_weight))->default_value(salmon::defaults::augmented_bootstrap_weight),
        "The relative weight of augmented to observed samples to use when bootstrapping (0 implies the standard non-parametric bootstrap).")
