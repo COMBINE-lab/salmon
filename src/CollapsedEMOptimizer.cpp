@@ -696,15 +696,18 @@ bool doBootstrap(
     }
     std::vector<uint32_t> sampled_txps(transcripts.size(), 0);
     std::vector<uint32_t> sampled_txps_counts(transcripts.size(), 0);
+    sampled_txps_total = 0;
     for (size_t fn = 0; fn < totalNumFrags; ++fn) {
       auto class_number = csamp(gen);
       if (class_number >= single_count_class_offset) {
-        sampled_txps[class_number - single_count_class_offset] = 1;
-        sampled_txps_counts[class_number - single_count_class_offset] += 1;
+        auto tid = txpGroups[class_number].front();
+        sampled_txps[tid] = 1;
+        sampled_txps_counts[tid] += 1;
+        sampled_txps_total += 1;
       }
       ++sampCounts[class_number];
     }
-    sampled_txps_total += std::accumulate(sampled_txps.begin(), sampled_txps.end(), 0);
+    //sampled_txps_total += std::accumulate(sampled_txps.begin(), sampled_txps.end(), 0);
     /*for (size_t cid = 0; cid < txpGroupCombinedWeights.size(); ++cid) {
       std::random_shuffle(txpGroupCombinedWeights[cid].begin(), txpGroupCombinedWeights[cid].end());
     }*/
@@ -763,7 +766,7 @@ bool doBootstrap(
           VBEMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, 
                     priorAlphas, alphas, alphasPrime, expTheta);
       } else {
-        if (sopt.eqClassBasedAugmentation)
+        if (sopt.eqClassBasedAugmentation and (itNum > 0))
           EMUpdate_augmented(txpGroups, txpGroupCombinedWeights, sampCounts, 
                 alphas, alphasPrime, sampled_txps_counts, eqClass_augmentable);
         else
