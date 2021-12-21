@@ -1,5 +1,15 @@
 #include "AlevinUtils.hpp"
 #include "peglib.h"
+#include <assert.h>
+// #include <boost/regex.hpp>
+
+// store regex for reads 1 and 2
+      std::string alevin::protocols::CustomGeo::reg[2];
+      // store positions of matches for bc and umi
+      std::vector<int> alevin::protocols::CustomGeo::b[2], alevin::protocols::CustomGeo::u[2];
+      // bioRead stores the read number for biological read and bioPat stores match pattern number on regex
+      unsigned int alevin::protocols::CustomGeo::nPatterns, alevin::protocols::CustomGeo::bioRead, alevin::protocols::CustomGeo::bioPat; // biological read would be contigous and on only 1 of the read
+      bool alevin::protocols::CustomGeo::bioReadFound;
 
 namespace alevin {
   namespace utils {
@@ -428,7 +438,23 @@ namespace alevin {
                                             std::string& read2,
                                      apt::CustomGeo& pt,
                                      std::string& bc){
-      return pt.bc_geo.extract_tag(read1, read2, bc);
+      std::cout << "extract barcode called"<<std::endl;
+      std::cout<< pt.reg[0] << std::endl;
+      std::string barcode="";
+      for(int r=0; r < 2; r++) {
+        boost::regex rgx(pt.reg[r]);
+        if(boost::regex_search(read1,pt.match[r],rgx)){
+          for(int i : pt.b[r]) {
+            barcode += pt.match[r][i];
+          }
+        } else {
+          return false;
+        }
+      }
+      bc = barcode;
+      std::cout << "UMI: "<< pt.match[0][3]<<std::endl;
+      std::cout << "BC: "<< barcode <<std::endl;
+      return true;
     }
     template <>
     bool extractBarcode<apt::QuartzSeq2>(std::string& read,
@@ -1077,7 +1103,7 @@ namespace alevin {
       bool have_custom_umi_geo = vm.count("umi-geometry");
       bool have_custom_bc_geo = vm.count("bc-geometry");
       bool have_custom_read_geo = vm.count("read-geometry");
-      bool have_custom_geo = vm.count("custome-geo");
+      bool have_custom_geo = vm.count("custom-geo");
       // need both
       bool have_any_custom_geo = have_custom_read_geo or have_custom_umi_geo or have_custom_bc_geo;
       bool have_all_custom_geo = have_custom_read_geo and have_custom_umi_geo and have_custom_bc_geo;
@@ -1294,6 +1320,10 @@ namespace alevin {
       } else if (have_custom_geo) { // regex based unified barcode geometry parsing
 
       struct apt::CustomGeo customGeo;
+      customGeo.reg[0] = "";
+      customGeo.reg[1] = "";
+      customGeo.nPatterns = 1;
+      customGeo.bioReadFound = false;
       struct ProtoInfo proto;
       peg::parser parser(R"(
         Specification <- ReadNumber1'{'Description{1,10}'}'ReadNumber2'{'Description{1,10}'}'
@@ -1403,7 +1433,17 @@ namespace alevin {
         }
     };
 
-      return 0;
+    // NOTE: this is just for backwards-compatibility.
+        // The barcode end is redundant with the new geometry
+        // specification.
+        aopt.protocol.end = BarcodeEnd::FIVE;
+        parser.enable_packrat_parsing();
+        std::string  geometry = vm["custom-geo"].as<std::string>();
+        auto val = parser.parse(geometry.c_str());
+        assert(val == true);
+        std::cout << "reg[0]: " << customGeo.reg[0] << std::endl;
+        std::cout << "reg[1]: " << customGeo.reg[1] << std::endl;
+
       }
 
       //validate specified iupac

@@ -224,12 +224,12 @@ namespace alevin{
     // Custome geometry specification using regex for extraction
     struct CustomGeo {
       // store regex for reads 1 and 2
-      std::string reg[2] = {"", ""};
+      static std::string reg[2];
       // store positions of matches for bc and umi
-      std::vector<int> b[2], u[2];
+      static std::vector<int> b[2], u[2];
       // bioRead stores the read number for biological read and bioPat stores match pattern number on regex
-      unsigned int nPatterns = 1, bioRead, bioPat; // biological read would be contigous and on only 1 of the read
-      bool bioReadFound = false;
+      static unsigned int nPatterns, bioRead, bioPat; // biological read would be contigous and on only 1 of the read
+      static bool bioReadFound;
       // store the matches for both reads
       boost::smatch match[2];
       // required
