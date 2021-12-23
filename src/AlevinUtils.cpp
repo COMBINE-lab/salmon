@@ -156,9 +156,11 @@ namespace alevin {
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq){
-      bool ok = protocol.read_geo.extract_read(seq, seq2, subseq);
-      return &subseq;
-      //subseq = seq2;
+      if(protocol.bioRead == 1) {
+        return &seq;
+      } else {
+        return &seq2;
+      }
     }
     template <>
     std::string*  getReadSequence(apt::Gemcode& protocol,
@@ -269,8 +271,15 @@ namespace alevin {
                                  std::string& read2,
                                  apt::CustomGeo& pt,
                                  std::string& umi){
-      
-      return false;
+      std::string um = "";
+      for(int r=0; r < 2; r++) {
+          for(int i : pt.u[r]) {
+            um += pt.match[r][i];
+        }
+      } 
+      umi = um;
+      std::cout << "UMI: "<< umi <<std::endl;
+      return true;
     }
     template <>
     bool extractUMI<apt::QuartzSeq2>(std::string& read,
@@ -438,8 +447,6 @@ namespace alevin {
                                             std::string& read2,
                                      apt::CustomGeo& pt,
                                      std::string& bc){
-      std::cout << "extract barcode called"<<std::endl;
-      std::cout<< pt.reg[0] << std::endl;
       std::string barcode="";
       for(int r=0; r < 2; r++) {
         boost::regex rgx(pt.reg[r]);
@@ -452,7 +459,6 @@ namespace alevin {
         }
       }
       bc = barcode;
-      std::cout << "UMI: "<< pt.match[0][3]<<std::endl;
       std::cout << "BC: "<< barcode <<std::endl;
       return true;
     }
