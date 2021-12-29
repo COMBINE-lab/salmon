@@ -200,12 +200,21 @@ Creates a salmon index.
     // Build a quasi-mapping index
     if (usePuff) {
       idxOpt.outdir = indexDirectory.string();
-      if (idxOpt.k == 0) {
+      uint32_t k = idxOpt.k;
+      if (k == 0) {
         jointLog->info(
             "You cannot have a k-mer length of 0 with the pufferfish index.");
         jointLog->info("Setting to the default value of 31.");
         idxOpt.k = 31;
+      } else if (k % 2 == 0) {
+        jointLog->critical("Error: k must be an odd value, you chose {}.", k);
+        return 1;
+      } else if (k > 31) {
+        jointLog->critical("Error: k must not be larger than 31, you chose {}.", k);
+        return 1;
       }
+      // if we reach here, k is OK, either by virtue
+      // of the value passed, or of us setting it to 31.
 
       // give the user a warning if they are not using any decoy file
       if (idxOpt.decoy_file.empty()) {
