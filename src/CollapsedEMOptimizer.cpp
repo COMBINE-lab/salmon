@@ -1,4 +1,5 @@
 #include <atomic>
+#include <algorithm>
 #include <unordered_map>
 #include <vector>
 #include <exception>
@@ -19,6 +20,7 @@
 
 #include "Eigen/Dense"
 #include "cuckoohash_map.hh"
+#include "xxhash.h"
 
 #include "AlignmentLibrary.hpp"
 #include "BootstrapWriter.hpp"
@@ -659,7 +661,12 @@ bool doBootstrap(
     std::vector<double>& priorAlphas,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     double relDiffTolerance, uint32_t maxIter,
-    uint32_t single_count_class_offset, std::atomic<uint32_t>& sampled_txps_total) {
+    uint32_t single_count_class_offset,
+    // transcripts that have an eq id collision with some other
+    // txp; useful in the augmented setting. This vector is
+    // sorted in ascending order.
+    std::vector<uint32_t>& eq_identical_txps,
+    std::atomic<uint32_t>& sampled_txps_total) {
 
   // An EM termination criterion, adopted from Bray et al. 2016
   uint32_t minIter = 50;
@@ -672,6 +679,8 @@ bool doBootstrap(
   CollapsedEMOptimizer::SerialVecType alphasPrime(transcripts.size(), 0.0);
   CollapsedEMOptimizer::SerialVecType expTheta(transcripts.size(), 0.0);
   std::vector<uint64_t> sampCounts(numClasses, 0);
+
+  bool do_data_augmented_bootstrap = (single_count_class_offset < txpGroups.size());
 
   uint32_t numBootstraps = sopt.numBootstraps;
   bool perTranscriptPrior{sopt.perTranscriptPrior};
@@ -735,12 +744,26 @@ bool doBootstrap(
     double alphaCheckCutoff = 1e-2;
     double cutoff = minAlpha;
 
-    std::vector<bool> eqClass_augmentable(txpGroups.size(), true);
+    // new strategy
+    std::vector<bool> eqClass_augmentable(txpGroups.size(), false);
+    // old strategy
+    //std::vector<bool> eqClass_augmentable(txpGroups.size(), true);
     tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(txpGroups.size())),
-      [&txpGroups, &transcripts, &eqClass_augmentable](const BlockedIndexRange& range) -> void {
+      [&txpGroups, &transcripts, &eq_identical_txps, &eqClass_augmentable](const BlockedIndexRange& range) -> void {
         for (auto eqID : boost::irange(range.begin(), range.end())) {
           const auto& txps = txpGroups[eqID];
+
+          size_t groupSize = txps.size();
+          for (size_t i = 0; i < groupSize; ++i) {
+            auto tid = txps[i];
+            if (std::binary_search(eq_identical_txps.begin(), eq_identical_txps.end(), tid)) {
+              eqClass_augmentable[eqID] = true;
+              break;
+            }
+          }
+          // original approach
+          /*
           // for each transcript in this class
           // const TranscriptGroup& tgroup = kv.first;
           // const std::vector<uint32_t>& txps = tgroup.txps;
@@ -752,6 +775,7 @@ bool doBootstrap(
               break;
             }
           }
+          */
         }
       }
     );
@@ -850,6 +874,62 @@ bool doBootstrap(
   }
   return true;
 }
+
+std::vector<uint32_t> get_eq_identical_txps(std::vector<Transcript>& transcripts,  std::vector<std::vector<uint32_t>>& txpGroups) {
+
+  // build a map from transcripts to the equivalence class IDs in which they appear.
+  std::vector<std::vector<uint32_t>> txp_to_eqid;
+  txp_to_eqid.resize(transcripts.size(), std::vector<uint32_t>());
+
+  std::cerr << "building txp to eqid map\n";
+  // here the idea is, for each transcript, we push back onto a vector its
+  // equiavlence class "signature"; the set of equivalence classes to which
+  // it belongs.
+  for (size_t i = 0; i < txpGroups.size(); ++i) {
+    auto& tg = txpGroups[i];
+    for (auto t : tg) {
+      txp_to_eqid[t].push_back(static_cast<uint32_t>(i));
+    }
+  }
+
+  struct EqIdVecHasher {
+    std::size_t operator()(const std::vector<uint32_t>& k) const {
+      size_t seed{0};
+      return XXH64(static_cast<void*>(const_cast<uint32_t*>(k.data())), k.size() * sizeof(uint32_t),
+                   seed);
+    }
+  };
+
+  std::cerr << "building eq_id_vec to txp map\n";
+  // map from the equivalence-class-id set to the transcripts having this eq-class signature
+  // here the idea is to use hashing to efficiently determing the set of transcripts with
+  // exactly the same equivalence class signature.
+  std::unordered_map<std::vector<uint32_t>, std::vector<uint32_t>, EqIdVecHasher> eq_id_to_txps;
+  for (size_t i = 0; i < txp_to_eqid.size(); ++i) {
+    auto& eqvec = txp_to_eqid[i];
+    if (!eqvec.empty()) {
+      eq_id_to_txps[eqvec].push_back(static_cast<uint32_t>(i));
+    }
+  }
+
+  std::vector<uint32_t> eq_sig_collision_txps;
+  std::cerr << "finding target transcripts\n";
+  for (auto kv = eq_id_to_txps.begin(); kv != eq_id_to_txps.end(); ++kv) {
+    auto& v = kv->second;
+    if (v.size() > 1) {
+      for (auto& t : v ) { eq_sig_collision_txps.push_back(t); }
+    }
+  }
+
+  std::sort(eq_sig_collision_txps.begin(), eq_sig_collision_txps.end());
+  eq_sig_collision_txps.erase(std::unique( eq_sig_collision_txps.begin(),
+                                           eq_sig_collision_txps.end() ), eq_sig_collision_txps.end() );
+
+  std::cerr << "There were " << eq_sig_collision_txps.size() << " signature colliding transcripts\n";
+  return eq_sig_collision_txps;
+
+}
+
 
 template <typename ExpT>
 bool CollapsedEMOptimizer::gatherBootstraps(
@@ -977,9 +1057,14 @@ bool CollapsedEMOptimizer::gatherBootstraps(
 
   bool augment_bootstraps = (sopt.augmented_bootstrap_weight > 0.0);
   std::vector<double> samplingWeights(txpGroups.size(), 0.0);
-  
+
+  std::vector<uint32_t> eq_identical_txps;
+
   if (augment_bootstraps) {
-    
+
+
+    eq_identical_txps = get_eq_identical_txps(transcripts, txpGroups);
+
     samplingWeights.resize(txpGroups.size() + activeTranscriptIDs.size(), 0.0); // transcripts.size(), 0.0);
     uint64_t n = totalCount;
 
@@ -1040,7 +1125,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
         std::ref(transcripts), std::ref(effLens), std::ref(samplingWeights), std::ref(origCounts),
         totalCount, numMappedFrags, scale, std::ref(bsCounter), std::ref(sopt),
         std::ref(priorAlphas), std::ref(writeBootstrap), relDiffTolerance,
-        maxIter, single_count_class_offset, std::ref(sampled_txps_total));
+        maxIter, single_count_class_offset, std::ref(eq_identical_txps), std::ref(sampled_txps_total));
   }
 
   for (auto& t : workerThreads) {
