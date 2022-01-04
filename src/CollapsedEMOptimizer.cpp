@@ -759,7 +759,7 @@ bool doBootstrap(
     while (itNum < minIter or (itNum < maxIter and !converged)) {
 
       if (useVBEM) {
-        if (sopt.eqClassBasedAugmentation)
+        if (sopt.eqClassBasedAugmentation and (itNum > 0))
           VBEMUpdate_augmented(txpGroups, txpGroupCombinedWeights, sampCounts, 
                     priorAlphas, alphas, alphasPrime, expTheta, sampled_txps_counts, eqClass_augmentable);
         else
