@@ -783,17 +783,17 @@ bool doBootstrap(
     while (itNum < minIter or (itNum < maxIter and !converged)) {
 
       if (useVBEM) {
-        if (sopt.eqClassBasedAugmentation and (itNum > 0))
+        /*if (sopt.eqClassBasedAugmentation and (itNum > 0))
           VBEMUpdate_augmented(txpGroups, txpGroupCombinedWeights, sampCounts, 
                     priorAlphas, alphas, alphasPrime, expTheta, sampled_txps_counts, eqClass_augmentable);
-        else
+        else*/
           VBEMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, 
                     priorAlphas, alphas, alphasPrime, expTheta);
       } else {
-        if (sopt.eqClassBasedAugmentation and (itNum > 0))
+        /*if (sopt.eqClassBasedAugmentation and (itNum > 0))
           EMUpdate_augmented(txpGroups, txpGroupCombinedWeights, sampCounts, 
                 alphas, alphasPrime, sampled_txps_counts, eqClass_augmentable);
-        else
+        else*/
           EMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, 
                 alphas, alphasPrime);
       }
@@ -1067,8 +1067,10 @@ bool CollapsedEMOptimizer::gatherBootstraps(
 
     samplingWeights.resize(txpGroups.size() + activeTranscriptIDs.size(), 0.0); // transcripts.size(), 0.0);
     uint64_t n = totalCount;
-
-    for (auto& tid : activeTranscriptIDs) {
+    std::cerr << "eq_identical_txps: " << eq_identical_txps.size() << 
+                 "activeTranscriptIDs: " << activeTranscriptIDs.size() << "\n";
+    for (auto& tid : eq_identical_txps) {
+    //for (auto& tid : activeTranscriptIDs) {
     //for (auto& txp : transcripts) {
       //auto tid = txp.id;
       new_class_count += 1;
