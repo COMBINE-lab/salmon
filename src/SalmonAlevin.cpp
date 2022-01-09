@@ -541,6 +541,10 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       return added;
     }
 
+    inline uint32_t max_hits_for_target() {
+      return std::max(fw_hits, rc_hits);
+    }
+
     // true if forward, false if rc
     // second element is score
     inline HitDirection best_hit_direction() {
@@ -721,7 +725,8 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                 uint64_t largest_occ{0};
                 float perfect_score{0.0}; 
                 auto& raw_hits = memCollector.get_left_hits();
-                
+
+
                 // SANITY
                 decltype(raw_hits[0].first) prev_read_pos = -1;
                 // the maximum span the supporting k-mers of a 
@@ -751,11 +756,11 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                   if (read_pos <= prev_read_pos) {
                     salmonOpts.jointLog->warn("read_pos : {}, prev_read_pos : {}", read_pos, prev_read_pos);
                   }
-                  
+
+                  bool still_have_valid_target = false;
                   prev_read_pos = read_pos;
                   if (num_occ < salmonOpts.maxReadOccs) {
                     
-                    ++num_valid_hits;
                     total_occs += num_occ;
                     largest_occ = (num_occ > largest_occ) ? num_occ : largest_occ;
                     float score_inc = 1.0 / num_occ;
@@ -766,18 +771,44 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                       uint32_t tid = static_cast<uint32_t>(qidx->getRefId(pos_it.transcript_id()));
                       int32_t pos = static_cast<int32_t>(ref_pos_ori.pos);
                       bool ori = ref_pos_ori.isFW;
-                      if (ori) {
-                        hit_map[tid].add_fw(pos, static_cast<int32_t>(read_pos), max_stretch, score_inc);
-                      } else {
-                        hit_map[tid].add_rc(pos, static_cast<int32_t>(read_pos), max_stretch, score_inc);
+                      auto& target = hit_map[tid];
+
+                      // why >= here instead of ==?
+                      // Because hits can happen on the same target in both the forward
+                      // and rc orientations, it is possible that we start the loop with
+                      // the target having num_valid_hits hits in a given orientation (o)
+                      // we see a new hit for this target in oriention o (now it has num_valid_hits + 1)
+                      // then we see a hit for this target in orientation rc(o).  We still want to
+                      // add / consider this hit, but max_hits_for_target() > num_valid_hits.
+                      // So, we must allow for that here.
+                      if (target.max_hits_for_target() >= num_valid_hits) {
+                        //if (target.max_hits_for_target() > num_valid_hits) { salmonOpts.jointLog->info("WTF : mhft {}, nvh {}", target.max_hits_for_target(), num_valid_hits); }
+                        if (ori) {
+                          target.add_fw(pos, static_cast<int32_t>(read_pos), max_stretch, score_inc);
+                        } else {
+                          target.add_rc(pos, static_cast<int32_t>(read_pos), max_stretch, score_inc);
+                        }
+
+                        still_have_valid_target |= (target.max_hits_for_target() >= num_valid_hits + 1);
                       }
+
                     } // DONE: for (auto &pos_it : refs)
+
+                    ++num_valid_hits;
+
+                    // if there are no targets reaching the valid hit threshold, then break early
+                    if (!still_have_valid_target) {
+                      break;
+                    }
+
+
+
                   } // DONE : if (static_cast<uint64_t>(refs.size()) < salmonOpts.maxReadOccs)
                 } // DONE : for (auto& raw_hit : raw_hits)
 
                 // If our default threshold was too stringent, then set a more liberal 
                 // threshold and look up the k-mers that occur the least frequently.
-                // Specifically, if the min occuring hits have frequency < min_thresh_prime (2500 by default)
+                // Specifically, if the min occuring hits have frequency < max_allowed_occ (2500 by default)
                 // times, then collect the min occuring hits to get the mapping.
                 // TODO: deal with code duplication below.
                 size_t max_allowed_occ = 2500;
@@ -799,10 +830,11 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                           prev_read_pos);
                     }
 
+                    bool still_have_valid_target = false;
+
                     prev_read_pos = read_pos;
                     if (num_occ <= max_allowed_occ) {
 
-                      ++num_valid_hits;
                       total_occs += num_occ;
                       largest_occ =
                           (num_occ > largest_occ) ? num_occ : largest_occ;
@@ -815,18 +847,37 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                             qidx->getRefId(pos_it.transcript_id()));
                         int32_t pos = static_cast<int32_t>(ref_pos_ori.pos);
                         bool ori = ref_pos_ori.isFW;
+                      auto& target = hit_map[tid];
+
+                      // why >= here instead of ==?
+                      // Because hits can happen on the same target in both the forward
+                      // and rc orientations, it is possible that we start the loop with
+                      // the target having num_valid_hits hits in a given orientation (o)
+                      // we see a new hit for this target in oriention o (now it has num_valid_hits + 1)
+                      // then we see a hit for this target in orientation rc(o).  We still want to
+                      // add / consider this hit, but max_hits_for_target() > num_valid_hits.
+                      // So, we must allow for that here.
+                      if (target.max_hits_for_target() >= num_valid_hits) {
                         if (ori) {
-                          hit_map[tid].add_fw(pos,
-                                              static_cast<int32_t>(read_pos),
-                                              max_stretch, score_inc);
+                          target.add_fw(pos, static_cast<int32_t>(read_pos), max_stretch, score_inc);
                         } else {
-                          hit_map[tid].add_rc(pos,
-                                              static_cast<int32_t>(read_pos),
-                                              max_stretch, score_inc);
+                          target.add_rc(pos, static_cast<int32_t>(read_pos), max_stretch, score_inc);
                         }
+
+                        still_have_valid_target |= (target.max_hits_for_target() >= num_valid_hits + 1);
+                      }
+
+
                       } // DONE: for (auto &pos_it : refs)
-                    }   // DONE : if (static_cast<uint64_t>(refs.size()) <
-                        // salmonOpts.maxReadOccs)
+
+                      ++num_valid_hits;
+                      // if there are no targets reaching the valid hit threshold, then break early
+                      if (!still_have_valid_target) {
+                        break;
+                      }
+
+                    }   // DONE : if (num_occ <= max_allowed_occ)
+
                   }     // DONE : for (auto& raw_hit : raw_hits)
                 }
 
@@ -876,7 +927,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                   }
                 }
                   */
-
               } // DONE : if (rh)
 
             } else {
