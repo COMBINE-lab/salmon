@@ -2,6 +2,7 @@
 #include <unordered_map>
 #include <vector>
 #include <exception>
+#include <cmath>
 
 #include "tbb/blocked_range.h"
 #include "tbb/parallel_for.h"
@@ -665,7 +666,12 @@ bool doBootstrap(
     std::vector<double>& priorAlphas,
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     double relDiffTolerance, uint32_t maxIter,
-    uint32_t single_count_class_offset, std::atomic<uint32_t>& sampled_txps_total) {
+    uint32_t single_count_class_offset,
+    // transcripts that have an eq id collision with some other
+    // txp; useful in the augmented setting. This vector is
+    // sorted in ascending order.
+    std::vector<uint32_t>& eq_identical_txps,
+    std::atomic<uint32_t>& sampled_txps_total) {
 
   // An EM termination criterion, adopted from Bray et al. 2016
   uint32_t minIter = 50;
@@ -719,24 +725,21 @@ bool doBootstrap(
       }
       ++sampCounts[class_number];
     }
-    double aug_total = totalNumFrags * sopt.augmented_bootstrap_weight;
+
+    size_t aug_total = static_cast<size_t>(std::ceil(totalNumFrags * sopt.augmented_bootstrap_weight));
     for (size_t fn = 0; fn < aug_total; ++fn) {
       auto class_number = csamp_aug(gen);
       if (class_number >= sampleWeights.size() - single_count_class_offset) {
         std::cerr<<"Should not happen2!\n";
         exit(0);
       }
-      ++sampCounts[single_count_class_offset + class_number];
+      auto global_eq_class_number = single_count_class_offset + class_number;
+      auto tid = txpGroups[global_eq_class_number].front();
+      sampled_txps_counts[tid] += 1;
+      ++sampCounts[global_eq_class_number];
     }
-    //sampled_txps_total += std::accumulate(sampled_txps.begin(), sampled_txps.end(), 0);
-    /*for (size_t cid = 0; cid < txpGroupCombinedWeights.size(); ++cid) {
-      std::random_shuffle(txpGroupCombinedWeights[cid].begin(), txpGroupCombinedWeights[cid].end());
-    }*/
 
     // Do a new bootstrap
-    // msamp(sampCounts.begin(), totalNumFrags, numClasses,
-    // sampleWeights.begin());
-
     double totalLen{0.0};
     for (size_t i = 0; i < transcripts.size(); ++i) {
       alphas[i] =
@@ -756,26 +759,45 @@ bool doBootstrap(
     double alphaCheckCutoff = 1e-2;
     double cutoff = minAlpha;
 
-    std::vector<bool> eqClass_augmentable(txpGroups.size(), true);
-    tbb::parallel_for(
-      BlockedIndexRange(size_t(0), size_t(txpGroups.size())),
-      [&txpGroups, &transcripts, &eqClass_augmentable](const BlockedIndexRange& range) -> void {
-        for (auto eqID : boost::irange(range.begin(), range.end())) {
-          const auto& txps = txpGroups[eqID];
-          // for each transcript in this class
-          // const TranscriptGroup& tgroup = kv.first;
-          // const std::vector<uint32_t>& txps = tgroup.txps;
-          size_t groupSize = txps.size();
-          for (size_t i = 0; i < groupSize; ++i) {
-            auto tid = txps[i];
-            if (transcripts[tid].uniqueCount() > 0) {
-              eqClass_augmentable[eqID] = false;
-              break;
-            }
-          }
+    std::vector<bool> eqClass_augmentable(txpGroups.size(), false);
+    for (size_t eqID = 0; eqID < txpGroups.size(); ++eqID) {
+      const auto& txps = txpGroups[eqID];
+
+      size_t groupSize = txps.size();
+      for (size_t i = 0; i < groupSize; ++i) {
+        auto tid = txps[i];
+        if (std::binary_search(eq_identical_txps.begin(), eq_identical_txps.end(), tid)) {
+          eqClass_augmentable[eqID] = true;
+          break;
         }
       }
-    );
+      // original approach
+      /*
+      // for each transcript in this class
+      // const TranscriptGroup& tgroup = kv.first;
+      // const std::vector<uint32_t>& txps = tgroup.txps;
+      size_t groupSize = txps.size();
+      for (size_t i = 0; i < groupSize; ++i) {
+      auto tid = txps[i];
+      if (transcripts[tid].uniqueCount() > 0) {
+      eqClass_augmentable[eqID] = false;
+      break;
+      }
+      }
+      */
+    }
+
+    size_t num_augmentable = 0;
+    for (auto a : eqClass_augmentable) {
+      num_augmentable += a;
+    }
+
+    auto augmented_class_count = txpGroups.size() - single_count_class_offset;
+    std::cerr << "augmented_class_count = " << augmented_class_count << "\n";
+    std::cerr << "num_augmentable = " << num_augmentable << "\n";
+    std::cerr << "single_count_class_offset = " << single_count_class_offset << "\n";
+    std::cerr << "num eq classes = " << txpGroups.size() << "\n";
+    std::cerr << (num_augmentable - augmented_class_count) << " out of " << single_count_class_offset << " equivalence classes were augmentable\n";
 
     while (itNum < minIter or (itNum < maxIter and !converged)) {
       if (useVBEM) {
@@ -786,8 +808,8 @@ bool doBootstrap(
           VBEMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, 
                     priorAlphas, alphas, alphasPrime, expTheta);
       } else {
-        if (sopt.eqClassBasedAugmentation ) { // and (itNum > 0)
-          EMUpdate_augmented(txpGroups, txpGroupCombinedWeights, sampCounts, 
+        if (sopt.eqClassBasedAugmentation and (itNum > 0)) {
+          EMUpdate_augmented(txpGroups, txpGroupCombinedWeights, sampCounts,
                 alphas, alphasPrime, sampled_txps_counts, eqClass_augmentable);
         } else {
           EMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, 
@@ -813,15 +835,10 @@ bool doBootstrap(
       ++itNum;
     }
 
-    /*for (size_t i = 0; i < transcripts.size(); ++i) {
-      //if (sampled_txps_counts[i] > 0 ) {
-        alphas[i] = std::max(0.0, alphas[i] - sampled_txps_counts[i]);
-      //}
-    }*/
-
-    for (size_t i = single_count_class_offset; i < txpGroups.size(); ++i) {
-      auto tid = txpGroups[i][0];
-      alphas[tid] = std::max(0.0, alphas[tid] - sampCounts[i]);
+    for (size_t i = 0; i < sampled_txps_counts.size(); ++i) { //single_count_class_offset; i < txpGroups.size(); ++i) {
+      double adjusted_count = alphas[i] - sampled_txps_counts[i];
+      if (adjusted_count < 0.0 ) { std::cerr << "adjusted count " << i << " = " << adjusted_count; }
+      alphas[i] = std::max(0.0, adjusted_count);
     }
     
 
@@ -882,6 +899,61 @@ bool doBootstrap(
     writeBootstrap(alphas);
   }
   return true;
+}
+
+std::vector<uint32_t> get_eq_identical_txps(std::vector<Transcript>& transcripts,  std::vector<std::vector<uint32_t>>& txpGroups) {
+
+  // build a map from transcripts to the equivalence class IDs in which they appear.
+  std::vector<std::vector<uint32_t>> txp_to_eqid;
+  txp_to_eqid.resize(transcripts.size(), std::vector<uint32_t>());
+
+  std::cerr << "building txp to eqid map\n";
+  // here the idea is, for each transcript, we push back onto a vector its
+  // equiavlence class "signature"; the set of equivalence classes to which
+  // it belongs.
+  for (size_t i = 0; i < txpGroups.size(); ++i) {
+    auto& tg = txpGroups[i];
+    for (auto t : tg) {
+      txp_to_eqid[t].push_back(static_cast<uint32_t>(i));
+    }
+  }
+
+  struct EqIdVecHasher {
+    std::size_t operator()(const std::vector<uint32_t>& k) const {
+      size_t seed{0};
+      return XXH64(static_cast<void*>(const_cast<uint32_t*>(k.data())), k.size() * sizeof(uint32_t),
+                   seed);
+    }
+  };
+
+  std::cerr << "building eq_id_vec to txp map\n";
+  // map from the equivalence-class-id set to the transcripts having this eq-class signature
+  // here the idea is to use hashing to efficiently determing the set of transcripts with
+  // exactly the same equivalence class signature.
+  std::unordered_map<std::vector<uint32_t>, std::vector<uint32_t>, EqIdVecHasher> eq_id_to_txps;
+  for (size_t i = 0; i < txp_to_eqid.size(); ++i) {
+    auto& eqvec = txp_to_eqid[i];
+    if (!eqvec.empty()) {
+      eq_id_to_txps[eqvec].push_back(static_cast<uint32_t>(i));
+    }
+  }
+
+  std::vector<uint32_t> eq_sig_collision_txps;
+  std::cerr << "finding target transcripts\n";
+  for (auto kv = eq_id_to_txps.begin(); kv != eq_id_to_txps.end(); ++kv) {
+    auto& v = kv->second;
+    if (v.size() > 1) {
+      for (auto& t : v ) { eq_sig_collision_txps.push_back(t); }
+    }
+  }
+
+  std::sort(eq_sig_collision_txps.begin(), eq_sig_collision_txps.end());
+  eq_sig_collision_txps.erase(std::unique( eq_sig_collision_txps.begin(),
+                                           eq_sig_collision_txps.end() ), eq_sig_collision_txps.end() );
+
+  std::cerr << "There were " << eq_sig_collision_txps.size() << " signature colliding transcripts\n";
+  return eq_sig_collision_txps;
+
 }
 
 template <typename ExpT>
@@ -1010,17 +1082,21 @@ bool CollapsedEMOptimizer::gatherBootstraps(
 
   bool augment_bootstraps = (sopt.augmented_bootstrap_weight > 0.0);
   std::vector<double> samplingWeights(txpGroups.size(), 0.0);
-  
+
+  std::vector<uint32_t> eq_identical_txps;
+
   if (augment_bootstraps) {
-    
+
+    // get a vector of transcripts that had an equivalence class
+    // signature collision with at least one other transcript
+    eq_identical_txps = get_eq_identical_txps(transcripts, txpGroups);
+
     samplingWeights.resize(txpGroups.size() + activeTranscriptIDs.size(), 0.0); // transcripts.size(), 0.0);
     uint64_t n = totalCount;
 
     double aug_count = (static_cast<double>(totalCount) * sopt.augmented_bootstrap_weight) / 
                       (static_cast<double>(activeTranscriptIDs.size()));
     for (auto& tid : activeTranscriptIDs) {
-    //for (auto& txp : transcripts) {
-      //auto tid = txp.id;
       new_class_count += 1;
       txpGroups.push_back({tid});
       std::vector<double> auxs;
@@ -1032,39 +1108,16 @@ bool CollapsedEMOptimizer::gatherBootstraps(
       // totalCount += count;
     }
   }
-  /*
-    // modify the sampling weights to obey what the user 
-    // requested.
-    uint64_t np = totalCount - n;
-    double pw = sopt.augmented_bootstrap_weight;
-    double rw = 1.0 - pw;
-    double nnp = static_cast<double>(totalCount);
-    double y = (rw * nnp) / static_cast<double>(n);
-    double z = (pw * nnp) / static_cast<double>(np);
-    
-    double inv_count = 1.0 / nnp;
-    double total_weight = 0.0;
-    // original observations
-    for (size_t i = 0; i < single_count_class_offset; ++i) {
-      samplingWeights[i] = y * static_cast<double>(origCounts[i]) * inv_count;
-      total_weight += samplingWeights[i];
-    }
-    // augmented observations
-    for (size_t i = single_count_class_offset; i < origCounts.size(); ++i) {
-      samplingWeights[i] = z * static_cast<double>(origCounts[i]) * inv_count;
-      total_weight += samplingWeights[i];
-    }
-    // sopt.jointLog->info("N = {}, NP = {}, y = {}, z = {}, TOTAL WEIGHT = {}", n, np, y, z, total_weight);
-  } else {
-  */
+
   double floatCount = totalCount;
+  // the original sampling distribution
   for (size_t i = 0; i < single_count_class_offset; ++i) {
     samplingWeights[i] = origCounts[i] / floatCount;
   }
+  // the augmented sampling distribution is unfiorm
   for (size_t i = single_count_class_offset; i < origCounts.size(); ++i) {
     samplingWeights[i] = 1;
   }
-  //}
 
   size_t numWorkerThreads{1};
   if (sopt.numThreads > 1 and numBootstraps > 1) {
@@ -1080,7 +1133,7 @@ bool CollapsedEMOptimizer::gatherBootstraps(
         std::ref(transcripts), std::ref(effLens), std::ref(samplingWeights), std::ref(origCounts),
         totalCount, numMappedFrags, scale, std::ref(bsCounter), std::ref(sopt),
         std::ref(priorAlphas), std::ref(writeBootstrap), relDiffTolerance,
-        maxIter, single_count_class_offset, std::ref(sampled_txps_total));
+        maxIter, single_count_class_offset, std::ref(eq_identical_txps), std::ref(sampled_txps_total));
   }
 
   for (auto& t : workerThreads) {
