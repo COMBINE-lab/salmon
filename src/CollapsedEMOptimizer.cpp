@@ -692,10 +692,14 @@ bool doBootstrap(
 
   std::mt19937 gen(rd());
   // MultinomialSampler msamp(rd);
-  std::discrete_distribution<uint64_t> csamp(sampleWeights.begin(),
+  std::discrete_distribution<uint64_t> csamp_orig(sampleWeights.begin(),
+                                             sampleWeights.begin() + single_count_class_offset);
+  std::discrete_distribution<uint64_t> csamp_aug(sampleWeights.begin() + single_count_class_offset,
                                              sampleWeights.end());
+
   while (bsNum++ < numBootstraps) {
-    csamp.reset();
+    csamp_orig.reset();
+    csamp_aug.reset();
 
     for (size_t sc = 0; sc < sampCounts.size(); ++sc) {
       sampCounts[sc] = 0;
@@ -704,19 +708,25 @@ bool doBootstrap(
     std::vector<uint32_t> sampled_txps_counts(transcripts.size(), 0);
     sampled_txps_total = 0;
     for (size_t fn = 0; fn < totalNumFrags; ++fn) {
-      auto class_number = csamp(gen);
+      auto class_number = csamp_orig(gen);
       if (class_number >= single_count_class_offset) {
-        // std::cerr<<"Should not happen!\n";
-        // exit(0);
-        auto tid = txpGroups[class_number].front();
-        sampled_txps[tid] = 1;
-        sampled_txps_counts[tid] += 1;
-        sampled_txps_total += 1;
+        std::cerr<<"Should not happen1!\n";
+        exit(0);
+        // auto tid = txpGroups[class_number].front();
+        // sampled_txps[tid] = 1;
+        // sampled_txps_counts[tid] += 1;
+        // sampled_txps_total += 1;
       }
       ++sampCounts[class_number];
     }
-    for (size_t i = single_count_class_offset; i < sampCounts.size(); i++) {
-      sampCounts[i] = origCounts[i];      
+    double aug_total = totalNumFrags * sopt.augmented_bootstrap_weight;
+    for (size_t fn = 0; fn < aug_total; ++fn) {
+      auto class_number = csamp_aug(gen);
+      if (class_number >= sampleWeights.size() - single_count_class_offset) {
+        std::cerr<<"Should not happen2!\n";
+        exit(0);
+      }
+      ++sampCounts[single_count_class_offset + class_number];
     }
     //sampled_txps_total += std::accumulate(sampled_txps.begin(), sampled_txps.end(), 0);
     /*for (size_t cid = 0; cid < txpGroupCombinedWeights.size(); ++cid) {
@@ -809,11 +819,9 @@ bool doBootstrap(
       //}
     }*/
 
-    double aug_count = origCounts[single_count_class_offset];
     for (size_t i = single_count_class_offset; i < txpGroups.size(); ++i) {
       auto tid = txpGroups[i][0];
       alphas[tid] = std::max(0.0, alphas[tid] - sampCounts[i]);
-      origCounts[i] = 0;
     }
     
 
@@ -827,9 +835,6 @@ bool doBootstrap(
         EMUpdate_(txpGroups, txpGroupCombinedWeights, origCounts, 
                   alphas, alphasPrime);
       }
-    }
-    for (size_t i = single_count_class_offset; i < txpGroups.size(); ++i) {
-      origCounts[i] = aug_count;
     }
 
     // Truncate tiny expression values
@@ -1053,8 +1058,11 @@ bool CollapsedEMOptimizer::gatherBootstraps(
   } else {
   */
   double floatCount = totalCount;
-  for (size_t i = 0; i < origCounts.size(); ++i) {
+  for (size_t i = 0; i < single_count_class_offset; ++i) {
     samplingWeights[i] = origCounts[i] / floatCount;
+  }
+  for (size_t i = single_count_class_offset; i < origCounts.size(); ++i) {
+    samplingWeights[i] = 1;
   }
   //}
 
