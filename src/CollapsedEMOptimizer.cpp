@@ -356,6 +356,12 @@ void EMUpdate_augmented(EQVecT& eqVec,
                 auto tid = txps[i];
                 auto aux = auxs[i];
                 double augmentedCount = eqClass_augmentable[i] ? 0 : static_cast<double>(sampled_txps_counts[tid]);
+                if (augmentedCount > 0) {
+                  std::cerr<< i << ":" << tid << "\t" 
+                    << eqClass_augmentable[i] << " " 
+                    << augmentedCount << " " 
+                    << alphaIn[tid] << "\n";
+                }
                 double v = (alphaIn[tid] - augmentedCount) * aux;
                 denom += v;
               }
@@ -700,12 +706,17 @@ bool doBootstrap(
     for (size_t fn = 0; fn < totalNumFrags; ++fn) {
       auto class_number = csamp(gen);
       if (class_number >= single_count_class_offset) {
+        // std::cerr<<"Should not happen!\n";
+        // exit(0);
         auto tid = txpGroups[class_number].front();
         sampled_txps[tid] = 1;
         sampled_txps_counts[tid] += 1;
         sampled_txps_total += 1;
       }
       ++sampCounts[class_number];
+    }
+    for (size_t i = single_count_class_offset; i < sampCounts.size(); i++) {
+      sampCounts[i] = origCounts[i];      
     }
     //sampled_txps_total += std::accumulate(sampled_txps.begin(), sampled_txps.end(), 0);
     /*for (size_t cid = 0; cid < txpGroupCombinedWeights.size(); ++cid) {
@@ -757,7 +768,6 @@ bool doBootstrap(
     );
 
     while (itNum < minIter or (itNum < maxIter and !converged)) {
-
       if (useVBEM) {
         if (sopt.eqClassBasedAugmentation)
           VBEMUpdate_augmented(txpGroups, txpGroupCombinedWeights, sampCounts, 
@@ -766,12 +776,13 @@ bool doBootstrap(
           VBEMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, 
                     priorAlphas, alphas, alphasPrime, expTheta);
       } else {
-        if (sopt.eqClassBasedAugmentation and (itNum > 0))
+        if (sopt.eqClassBasedAugmentation ) { // and (itNum > 0)
           EMUpdate_augmented(txpGroups, txpGroupCombinedWeights, sampCounts, 
                 alphas, alphasPrime, sampled_txps_counts, eqClass_augmentable);
-        else
+        } else {
           EMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, 
                 alphas, alphasPrime);
+        }
       }
 
       converged = true;
@@ -792,6 +803,20 @@ bool doBootstrap(
       ++itNum;
     }
 
+    /*for (size_t i = 0; i < transcripts.size(); ++i) {
+      //if (sampled_txps_counts[i] > 0 ) {
+        alphas[i] = std::max(0.0, alphas[i] - sampled_txps_counts[i]);
+      //}
+    }*/
+
+    double aug_count = origCounts[single_count_class_offset];
+    for (size_t i = single_count_class_offset; i < txpGroups.size(); ++i) {
+      auto tid = txpGroups[i][0];
+      alphas[tid] = std::max(0.0, alphas[tid] - sampCounts[i]);
+      origCounts[i] = 0;
+    }
+    
+
     // Consider the projection of the abundances onto the *original* equivalence class
     // counts
     if (sopt.bootstrapReproject) {
@@ -802,6 +827,9 @@ bool doBootstrap(
         EMUpdate_(txpGroups, txpGroupCombinedWeights, origCounts, 
                   alphas, alphasPrime);
       }
+    }
+    for (size_t i = single_count_class_offset; i < txpGroups.size(); ++i) {
+      origCounts[i] = aug_count;
     }
 
     // Truncate tiny expression values
@@ -983,6 +1011,8 @@ bool CollapsedEMOptimizer::gatherBootstraps(
     samplingWeights.resize(txpGroups.size() + activeTranscriptIDs.size(), 0.0); // transcripts.size(), 0.0);
     uint64_t n = totalCount;
 
+    double aug_count = (static_cast<double>(totalCount) * sopt.augmented_bootstrap_weight) / 
+                      (static_cast<double>(activeTranscriptIDs.size()));
     for (auto& tid : activeTranscriptIDs) {
     //for (auto& txp : transcripts) {
       //auto tid = txp.id;
@@ -992,11 +1022,12 @@ bool CollapsedEMOptimizer::gatherBootstraps(
       double weight = 1.0;
       auxs.push_back(1.0);
       txpGroupCombinedWeights.emplace_back(auxs.begin(), auxs.end());
-      uint64_t count = 1;
+      uint64_t count = aug_count;
       origCounts.push_back(count);
-      totalCount += count;
+      // totalCount += count;
     }
-
+  }
+  /*
     // modify the sampling weights to obey what the user 
     // requested.
     uint64_t np = totalCount - n;
@@ -1020,11 +1051,12 @@ bool CollapsedEMOptimizer::gatherBootstraps(
     }
     // sopt.jointLog->info("N = {}, NP = {}, y = {}, z = {}, TOTAL WEIGHT = {}", n, np, y, z, total_weight);
   } else {
-    double floatCount = totalCount;
-    for (size_t i = 0; i < origCounts.size(); ++i) {
-      samplingWeights[i] = origCounts[i] / floatCount;
-    }
+  */
+  double floatCount = totalCount;
+  for (size_t i = 0; i < origCounts.size(); ++i) {
+    samplingWeights[i] = origCounts[i] / floatCount;
   }
+  //}
 
   size_t numWorkerThreads{1};
   if (sopt.numThreads > 1 and numBootstraps > 1) {

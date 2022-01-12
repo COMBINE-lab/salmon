@@ -62,7 +62,6 @@ void EMUpdate_augmented(std::vector<std::vector<uint32_t>>& txpGroupLabels,
                std::vector<bool>& eqClass_augmentable) {
 
   assert(alphaIn.size() == alphaOut.size());
-
   size_t numEqClasses = txpGroupLabels.size();
   for (size_t eqID = 0; eqID < numEqClasses; ++eqID) {
     uint64_t count = txpGroupCounts[eqID];
@@ -92,6 +91,13 @@ void EMUpdate_augmented(std::vector<std::vector<uint32_t>>& txpGroupLabels,
           auto tid = txps[i];
           auto aux = auxs[i];
           double augmentedCount = eqClass_augmentable[i] ? 0 : static_cast<double>(sampled_txps_counts[tid]);
+          /*if (augmentedCount > 0 and augmentedCount == alphaIn[tid]) {
+            auto res = std::to_string(i) + ":" + std::to_string(tid) + "\t" 
+              + std::to_string(eqClass_augmentable[i]) + " " 
+              + std::to_string(augmentedCount) + " " 
+              + std::to_string(alphaIn[tid]) + "\n";
+            std::cerr<<res<<"\n";
+          }*/
           double v = (alphaIn[tid] - augmentedCount) * aux;
           if (!std::isnan(v)) {
             salmon::utils::incLoop(alphaOut[tid], v * invDenom);
