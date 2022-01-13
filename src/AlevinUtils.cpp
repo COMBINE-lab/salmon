@@ -11,6 +11,7 @@
       unsigned int alevin::protocols::CustomGeo::bioRead, alevin::protocols::CustomGeo::bioPat; // biological read would be contigous and on only 1 of the read
       uint32_t alevin::protocols::CustomGeo::minBcLen, alevin::protocols::CustomGeo::maxBcLen;
       uint32_t alevin::protocols::CustomGeo::minUmiLen, alevin::protocols::CustomGeo::maxUmiLen;
+      uint32_t alevin::protocols::CustomGeo::barcodeLength, alevin::protocols::CustomGeo::umiLength;
       bool alevin::protocols::CustomGeo::bioReadFound;
 
 namespace alevin {
@@ -278,7 +279,10 @@ namespace alevin {
           for(int i : pt.u[r]) {
             um += pt.match[r][i];
         }
-      } 
+      }
+      if(pt.minUmiLen < pt.maxUmiLen) {
+        addPadding(um, pt.maxUmiLen, pt.paddingBases, pt.padLen);
+      }
       umi = um;
       std::cout << "UMI: "<< umi <<std::endl;
       return true;
@@ -460,6 +464,9 @@ namespace alevin {
           return false;
         }
       }
+      if(pt.minBcLen < pt.maxBcLen) {
+        addPadding(barcode, pt.maxBcLen, pt.paddingBases, pt.padLen);
+      }
       bc = barcode;
       std::cout << "BC: "<< barcode <<std::endl;
       return true;
@@ -618,7 +625,7 @@ namespace alevin {
                         neighbors);
     }
 
-    unsigned int hammingDistance(const std::string s1, const std::string s2){
+    unsigned int hammingDistance(const std::string s1, const std::string s2) {
       if(s1.size() != s2.size()){
         throw std::invalid_argument("Strings have different lengths, can't compute hamming distance");
       }
@@ -626,6 +633,16 @@ namespace alevin {
       // compute dot product for all postisions, start with 0 and add if the values are not equal
       return std::inner_product(s1.begin(),s1.end(),s2.begin(), 0, std::plus<unsigned int>(),
         std::not2(std::equal_to<std::string::value_type>()));
+    }
+
+    void addPadding(std::string& seq, uint32_t max, std::string padBases, unsigned int padLen) {
+      int diff = max - seq.length() + 1; // add one base if the length is same to avoid erroneous collisions
+      int rep = diff / padLen;
+      int extra = diff % padLen;
+      for(int i = 0; i < rep; i++){
+          seq += padBases;
+      }
+      seq += padBases.substr(0,extra);
     }
 
     void modifyRegex(size_t readNumber, std::string type, std::string* reg, std::vector<int> *bu, unsigned int& nPat, std::size_t first, std::size_t second)
@@ -1466,16 +1483,27 @@ namespace alevin {
                                "Exiting now.", customGeo.maxBcLen, maxBC);
           return false;
         }
+        if (customGeo.maxBcLen == customGeo.minBcLen) {
+          customGeo.barcodeLength = customGeo.maxBcLen;
+        } else {
+          customGeo.barcodeLength = customGeo.maxBcLen + 1;
+        }
         // if it's OK, set the barcode kmer length
-        alevin::types::AlevinCellBarcodeKmer::k( static_cast<uint16_t>(customGeo.maxBcLen) );
+        alevin::types::AlevinCellBarcodeKmer::k( static_cast<uint16_t>(customGeo.barcodeLength) );
         // the UMI length must be in [1,31]
         if ((customGeo.minUmiLen < 1) or (customGeo.maxUmiLen > maxUMI)) {
           aopt.jointLog->error("UMI length ({}) was not in the required length range [1, {}].\n"
                                "Exiting now.", customGeo.maxUmiLen, maxUMI);
           return false;
         }
+        if (customGeo.maxUmiLen == customGeo.minUmiLen) {
+          customGeo.umiLength = customGeo.maxUmiLen;
+        } else {
+          customGeo.umiLength = customGeo.maxUmiLen + 1;
+        }
         // if it's OK, set the umi kmer length
-        alevin::types::AlevinUMIKmer::k( static_cast<uint16_t>(customGeo.maxUmiLen) );
+        alevin::types::AlevinUMIKmer::k( static_cast<uint16_t>(customGeo.umiLength) );
+
       }
 
       //validate specified iupac

@@ -228,12 +228,15 @@ namespace alevin{
       // store positions of matches for bc and umi
       static std::vector<int> b[2], u[2];
       // bioRead stores the read number for biological read and bioPat stores match pattern number on regex
-      static unsigned int nPatterns, bioRead, bioPat; // biological read would be contigous and on only 1 of the read
+      static unsigned int bioRead, bioPat; // biological read would be contigous and on only 1 of the read
+      static uint32_t minBcLen, maxBcLen, minUmiLen, maxUmiLen;
       static bool bioReadFound;
+      std::string paddingBases = "ACGT";
+      unsigned int padLen = paddingBases.length();
       // store the matches for both reads
       boost::smatch match[2];
       // required
-      uint32_t barcodeLength, umiLength, maxValue;
+      static uint32_t barcodeLength, umiLength;
       BarcodeEnd end;
 
       TagGeometry umi_geo;
@@ -258,3 +261,5 @@ namespace alevin{
 }
 
 #endif
+
+

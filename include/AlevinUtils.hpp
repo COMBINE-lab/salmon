@@ -74,6 +74,8 @@ namespace alevin{
                        TrueBcsT& trueBarcodes);
 
     unsigned int hammingDistance(const std::string s1, const std::string s2);
+    
+    void addPadding(std::string& seq, uint32_t max, std::string padBases, unsigned int padLen);
 
     template <typename ProtocolT>
     bool processAlevinOpts(AlevinOpts<ProtocolT>& aopt,
