@@ -9,8 +9,8 @@
       std::vector<int> alevin::protocols::CustomGeo::b[2], alevin::protocols::CustomGeo::u[2];
       // bioRead stores the read number for biological read and bioPat stores match pattern number on regex
       unsigned int alevin::protocols::CustomGeo::bioRead, alevin::protocols::CustomGeo::bioPat; // biological read would be contigous and on only 1 of the read
-      unsigned int alevin::protocols::CustomGeo::minBcLen, alevin::protocols::CustomGeo::maxBcLen;
-      unsigned int alevin::protocols::CustomGeo::minUmiLen, alevin::protocols::CustomGeo::maxUmiLen;
+      uint32_t alevin::protocols::CustomGeo::minBcLen, alevin::protocols::CustomGeo::maxBcLen;
+      uint32_t alevin::protocols::CustomGeo::minUmiLen, alevin::protocols::CustomGeo::maxUmiLen;
       bool alevin::protocols::CustomGeo::bioReadFound;
 
 namespace alevin {
@@ -1450,11 +1450,31 @@ namespace alevin {
         auto val = parser.parse(geometry.c_str());
         std::cout << "val: " << val << std::endl;
         if(val == 0) {
-          std::cerr << "Incorrect custom geometry specification" << std::endl; // aopt.jointLog->error didn't work, need to check
-          exit(1);
+          aopt.jointLog->error("Incorrect geometry spec: {} \n"
+                               "Exiting now", geometry);
+          return false;
         }
         std::cout << "reg[0]: " << customGeo.reg[0] << std::endl;
         std::cout << "reg[1]: " << customGeo.reg[1] << std::endl;
+
+        // validate that BC and UMI lengths are OK
+        uint32_t maxBC{31};
+        uint32_t maxUMI{31};
+        // the barcode length must be in [1,31]
+        if ((customGeo.minBcLen < 1) or (customGeo.maxBcLen > maxBC)) {
+          aopt.jointLog->error("Barcode length ({}) was not in the required length range [1, {}].\n"
+                               "Exiting now.", customGeo.maxBcLen, maxBC);
+          return false;
+        }
+        // if it's OK, set the barcode kmer length
+        alevin::types::AlevinCellBarcodeKmer::k( static_cast<uint16_t>(customGeo.maxBcLen) );
+        // the UMI length must be in [1,31]
+        if ((customGeo.minUmiLen < 1) or (customGeo.maxUmiLen > maxUMI)) {
+          aopt.jointLog->error("UMI length ({}) was not in the required length range [1, {}].\n"
+                               "Exiting now.", customGeo.maxUmiLen, maxUMI);
+          return false;
+        }
+        // if it's OK, set the umi kmer length
         alevin::types::AlevinUMIKmer::k( static_cast<uint16_t>(customGeo.maxUmiLen) );
       }
 

@@ -131,9 +131,8 @@ namespace alevin{
 
   void modifyRegex(size_t readNumber, std::string seq, std::string* reg, unsigned int& nPat);
   void modifyRegex(size_t readNumber, std::string seq, std::string* reg, unsigned int& nPat, unsigned int& bioPat);
-  void modifyRegex(size_t readNumber, std::string seq, std::string* reg, unsigned int& nPat, unsigned int& bioPat, std::size_t len);
-  void modifyRegex(size_t readNumber, std::string type, std::string* reg, std::vector<int> *b, std::vector<int> *u, unsigned int& nPat, std::size_t len);
-  void modifyRegex(size_t readNumber, std::string desc, std::string* reg, std::vector<int> *b, std::vector<int> *u, unsigned int& nPat);
+  void modifyRegex(size_t readNumber, std::string type, std::string* reg, std::vector<int> *bu, unsigned int& nPat, std::size_t len);
+  void modifyRegex(size_t readNumber, std::string type, std::string* reg, std::vector<int> *bu, unsigned int& nPat, std::size_t first, std::size_t second);
   }
 }
 #endif // __ALEVIN_UTILS_HPP__
