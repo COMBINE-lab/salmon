@@ -1,18 +1,6 @@
 #include "AlevinUtils.hpp"
 #include "peglib.h"
 #include <assert.h>
-// #include <boost/regex.hpp>
-
-// store regex for reads 1 and 2
-      std::string alevin::protocols::CustomGeo::reg[2];
-      // store positions of matches for bc and umi
-      std::vector<int> alevin::protocols::CustomGeo::b[2], alevin::protocols::CustomGeo::u[2];
-      // bioRead stores the read number for biological read and bioPat stores match pattern number on regex
-      unsigned int alevin::protocols::CustomGeo::bioRead, alevin::protocols::CustomGeo::bioPat; // biological read would be contigous and on only 1 of the read
-      uint32_t alevin::protocols::CustomGeo::minBcLen, alevin::protocols::CustomGeo::maxBcLen;
-      uint32_t alevin::protocols::CustomGeo::minUmiLen, alevin::protocols::CustomGeo::maxUmiLen;
-      uint32_t alevin::protocols::CustomGeo::barcodeLength, alevin::protocols::CustomGeo::umiLength;
-      bool alevin::protocols::CustomGeo::bioReadFound;
 
 namespace alevin {
   namespace utils {

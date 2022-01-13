@@ -1,6 +1,5 @@
 #include "SingleCellProtocols.hpp"
 
-
 namespace alevin{
   namespace protocols {
       
@@ -27,6 +26,18 @@ namespace alevin{
       os << "]\n";
       return os;
     }
+
+  // store regex for reads 1 and 2
+  extern std::string CustomGeo::reg[2];
+  // store positions of matches for bc and umi
+  extern std::vector<int> CustomGeo::b[2], CustomGeo::u[2];
+  // bioRead stores the read number for biological read and bioPat stores match pattern number on regex
+  extern unsigned int CustomGeo::bioRead, CustomGeo::bioPat; // biological read would be contigous and on only 1 of the read
+  extern uint32_t CustomGeo::minBcLen, CustomGeo::maxBcLen;
+  extern uint32_t CustomGeo::minUmiLen, CustomGeo::maxUmiLen;
+  extern uint32_t CustomGeo::barcodeLength, CustomGeo::umiLength;
+  // bool alevin::protocols::CustomGeo::bioReadFound;
+  extern bool CustomGeo::bioReadFound;
 
   }// protocols
 }//alevin
