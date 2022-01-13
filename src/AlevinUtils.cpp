@@ -155,15 +155,20 @@ namespace alevin {
       //subseq = seq2;
     }
     template <>
-    std::string*  getReadSequence(apt::CustomGeo& protocol,
+    std::string*  getReadSequence(apt::CustomGeo& pt,
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq){
-      if(protocol.bioRead == 1) {
-        return &seq;
+      int r = pt.bioRead - 1;
+      boost::regex rgx(pt.reg[r]);
+      subseq.clear();
+      std::string read = r == 0 ? seq : seq2;
+      if(boost::regex_search(read,pt.match[r],rgx)){
+        subseq.append(pt.match[r][pt.bioPat]);
       } else {
-        return &seq2;
+        return &subseq; // return empty if regex fails
       }
+      return &subseq; // return extracted if it passes
     }
     template <>
     std::string*  getReadSequence(apt::Gemcode& protocol,
