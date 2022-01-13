@@ -8,7 +8,9 @@
       // store positions of matches for bc and umi
       std::vector<int> alevin::protocols::CustomGeo::b[2], alevin::protocols::CustomGeo::u[2];
       // bioRead stores the read number for biological read and bioPat stores match pattern number on regex
-      unsigned int alevin::protocols::CustomGeo::nPatterns, alevin::protocols::CustomGeo::bioRead, alevin::protocols::CustomGeo::bioPat; // biological read would be contigous and on only 1 of the read
+      unsigned int alevin::protocols::CustomGeo::bioRead, alevin::protocols::CustomGeo::bioPat; // biological read would be contigous and on only 1 of the read
+      unsigned int alevin::protocols::CustomGeo::minBcLen, alevin::protocols::CustomGeo::maxBcLen;
+      unsigned int alevin::protocols::CustomGeo::minUmiLen, alevin::protocols::CustomGeo::maxUmiLen;
       bool alevin::protocols::CustomGeo::bioReadFound;
 
 namespace alevin {
@@ -626,49 +628,39 @@ namespace alevin {
         std::not2(std::equal_to<std::string::value_type>()));
     }
 
-    void modifyRegex(size_t readNumber, std::string desc, std::string* reg, std::vector<int> *b, std::vector<int> *u, unsigned int& nPat){
-    if (desc == "b"){
-        reg[readNumber-1] += "([ATGC]{1,})";
-        b[readNumber-1].push_back(nPat);
-        nPat++;
-    } else if (desc == "u"){
-        reg[readNumber-1] += "([ATGC]{1,})";
-        u[readNumber-1].push_back(nPat);
-        nPat++;
-    }
-}
-
-    void modifyRegex(size_t readNumber, std::string type, std::string* reg, std::vector<int> *b, std::vector<int> *u, unsigned int& nPat, std::size_t len)
+    void modifyRegex(size_t readNumber, std::string type, std::string* reg, std::vector<int> *bu, unsigned int& nPat, std::size_t first, std::size_t second)
     {
-        if (type == "b"){
-            reg[readNumber-1] += "([ATGC]{" + std::to_string(len) +"})";
-            b[readNumber-1].push_back(nPat);
-            nPat++;
-        } else if (type == "u"){
-            reg[readNumber-1] += "([ATGC]{" + std::to_string(len) +"})";
-            u[readNumber-1].push_back(nPat);
-            nPat++;
-        }
+      reg[readNumber-1] += "([ATGC]{" + std::to_string(first) + "," + std::to_string(second) +"})";
+      if (type == "b"){
+          bu[readNumber-1].push_back(nPat);
+      } else if (type == "u") {
+          bu[readNumber-1].push_back(nPat);
+      } // else if (type == "x") { } not needed to explicitly mention case 'x'
+      nPat++;
+    }
+
+    void modifyRegex(size_t readNumber, std::string type, std::string* reg, std::vector<int> *bu, unsigned int& nPat, std::size_t len)
+    {
+      reg[readNumber-1] += "([ATGC]{" + std::to_string(len) +"})";
+      if (type == "b"){
+        bu[readNumber-1].push_back(nPat);
+      } else if (type == "u"){
+        bu[readNumber-1].push_back(nPat);
+      }
+      nPat++;
     }
 
     void modifyRegex(size_t readNumber, std::string seq, std::string* reg, unsigned int& nPat)
     {
-        reg[readNumber -1] += "(" + seq + ")";
-        nPat++;
+      reg[readNumber -1] += "(" + seq + ")";
+      nPat++;
     }
 
     void modifyRegex(size_t readNumber, std::string* reg, unsigned int& nPat, unsigned int& bioPat)
     {
-        reg[readNumber - 1] += "([ATGC]{1,})";
-        bioPat = nPat;
-        nPat++;
-    }
-
-    void modifyRegex(size_t readNumber, std::string* reg, unsigned int& nPat, unsigned int& bioPat, std::size_t len)
-    {
-        reg[readNumber-1] += "([ATGC]{" + std::to_string(len) +"})";
-        bioPat = nPat;
-        nPat++;
+      reg[readNumber - 1] += "([ATGC]{1,})";
+      bioPat = nPat;
+      nPat++;
     }
 
     void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
@@ -1328,27 +1320,31 @@ namespace alevin {
       struct apt::CustomGeo customGeo;
       customGeo.reg[0] = "";
       customGeo.reg[1] = "";
-      customGeo.nPatterns = 1;
+      unsigned int nPatterns = 1;
+      customGeo.minBcLen = 0, customGeo.maxBcLen = 0, customGeo.minUmiLen = 0, customGeo.minUmiLen = 0;
       customGeo.bioReadFound = false;
       struct ProtoInfo proto;
       peg::parser parser(R"(
         Specification <- ReadNumber1'{'Description{1,10}'}'ReadNumber2'{'Description{1,10}'}'
         ReadNumber1 <- [1]
         ReadNumber2 <- [2]
-        Description <- Type'['Position']' / Fixed'['Sequence']' / Type
-        Type <-  'b'i / 'u'i / 'r'i
-        Fixed <- 'f'i
+        Description <- Type'['Lengths']' / Fixed'['Sequence']' / Read
+        Type <-  'b' / 'u' / 'x'
+        Fixed <- 'f'
+        Read <- 'r'
         Sequence <- [ATGC]+
-        Position <- (Number '-' Number) / (Number '-' End) / Length
-        Number <- [0-9]+
-        Length <- Number
-        End <- 'end'
+        Lengths <- (Length '-' Length) / Length
+        Length <- [0-9]+
       )");
 
 
-    parser["Number"] = [](const peg::SemanticValues &sv)
+    parser["Length"] = [](const peg::SemanticValues &sv)
     {
         auto val = static_cast<size_t>(std::stoull(sv.token()));
+        if(val<=0){
+          std::cerr << "Lengths should be > 0. Exiting." << std::endl;
+          exit(1);
+        };
         return val;
     };
 
@@ -1363,16 +1359,22 @@ namespace alevin {
     {
         auto val = std::stoi(sv.token());
         proto.readNumber = val;
-        if(val == 2){ customGeo.nPatterns = 1;}
+        nPatterns = 1;
     };
 
     parser["Description"] = [&](const peg::SemanticValues &sv)
     {
         auto val = std::string(sv.token());
-        if (val == "b" || val == "u"){
-            modifyRegex(proto.readNumber, val, customGeo.reg, customGeo.b, customGeo.u, customGeo.nPatterns);
-        } else if (val == "r") {
-            modifyRegex(proto.readNumber, customGeo.reg, customGeo.nPatterns, customGeo.bioPat);
+        if(val == "r") {
+            if (!customGeo.bioReadFound){
+                customGeo.bioRead = proto.readNumber;
+                customGeo.bioReadFound = true;
+            } else {
+              // aopt.jointLog->error("Only contigous biological read expected.\nExiting now.");
+              std::cerr << "Only contigous biological read expected.\nExiting now." << std::endl;
+              exit(1);
+            }
+            modifyRegex(proto.readNumber, customGeo.reg, nPatterns, customGeo.bioPat);
         }
     };
 
@@ -1380,14 +1382,6 @@ namespace alevin {
     {
         auto val = std::string(sv.token());
         proto.type = val;
-        if(val == "r"){
-            if (!customGeo.bioReadFound){
-                customGeo.bioRead = proto.readNumber;
-                customGeo.bioReadFound = true;
-            } else {
-                std::cout << "Error message: only contigous biological read expected" << std::endl;
-            }
-        }
     };
 
     parser["Fixed"] = [&](const peg::SemanticValues &sv)
@@ -1399,10 +1393,10 @@ namespace alevin {
     parser["Sequence"] = [&](const peg::SemanticValues &sv)
     {
         auto val = std::string(sv.token());
-        modifyRegex(proto.readNumber, val, customGeo.reg, customGeo.nPatterns);
+        modifyRegex(proto.readNumber, val, customGeo.reg, nPatterns);
     };
 
-    parser["Position"] = [&](const peg::SemanticValues &sv)
+    parser["Lengths"] = [&](const peg::SemanticValues &sv)
     {
         switch (sv.choice())
         {
@@ -1410,29 +1404,37 @@ namespace alevin {
         {
             auto val = std::make_pair(
                 peg::any_cast<size_t>(sv[0]), peg::any_cast<size_t>(sv[1]));
-            if (proto.type == "b" || proto.type == "u") {
-                modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.b, customGeo.u, customGeo.nPatterns, val.second - val.first + 1);
+            if(val.second <= val.first) {
+                //  aopt.jointLog->error("In length range [X-Y], Y should be > X.\nExiting now");
+                std::cerr << "In length range [X-Y], Y should be > X.\nExiting now" << std::endl;
+                exit(1);
+            }
+            if (proto.type == "b") {
+                customGeo.minBcLen += val.first;
+                customGeo.maxBcLen += val.second;
+                modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.b, nPatterns, val.first, val.second);
+            } else if (proto.type == "u") {
+                customGeo.minUmiLen += val.first;
+                customGeo.maxUmiLen += val.second;
+                modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.u, nPatterns, val.first, val.second);
             } else {
-                modifyRegex(proto.readNumber, customGeo.reg, customGeo.nPatterns, customGeo.bioPat, val.second - val.first + 1);
+                modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.u, nPatterns, val.first, val.second); // case 'x'
             }
         }
         break;
         case 1:
         {
-            if (proto.type == "b" || proto.type == "u"){
-                modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.b, customGeo.u, customGeo.nPatterns);
-            } else { // when it's r
-                modifyRegex(proto.readNumber, customGeo.reg,  customGeo.nPatterns, customGeo.bioPat);
-            }
-        }
-        break;
-        case 2:
-        {
             auto val = peg::any_cast<size_t>(sv[0]);
-            if (proto.type == "b" || proto.type == "u"){
-                modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.b, customGeo.u, customGeo.nPatterns, val);
+            if (proto.type == "b")  {
+                customGeo.minBcLen += val; // a fixed length bc increases the min length too, not updating can cause logical error when there are 2 pos of bcs
+                customGeo.maxBcLen += val;
+                modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.b, nPatterns, val);
+            } else if (proto.type == "u"){
+                customGeo.minUmiLen += val;
+                customGeo.maxUmiLen += val;
+                modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.u, nPatterns, val);
             } else {
-                modifyRegex(proto.readNumber, customGeo.reg, customGeo.nPatterns, customGeo.bioPat, val);
+                modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.u, nPatterns, val); // case 'x'
             }
         }
         break;
@@ -1446,10 +1448,14 @@ namespace alevin {
         parser.enable_packrat_parsing();
         std::string  geometry = vm["custom-geo"].as<std::string>();
         auto val = parser.parse(geometry.c_str());
-        assert(val == true);
+        std::cout << "val: " << val << std::endl;
+        if(val == 0) {
+          std::cerr << "Incorrect custom geometry specification" << std::endl; // aopt.jointLog->error didn't work, need to check
+          exit(1);
+        }
         std::cout << "reg[0]: " << customGeo.reg[0] << std::endl;
         std::cout << "reg[1]: " << customGeo.reg[1] << std::endl;
-
+        alevin::types::AlevinUMIKmer::k( static_cast<uint16_t>(customGeo.maxUmiLen) );
       }
 
       //validate specified iupac
