@@ -235,6 +235,8 @@ namespace alevin{
       unsigned int padLen = paddingBases.length();
       // store the matches for both reads
       boost::smatch match[2];
+      // store the success of regex search
+      bool rgx_search[2];
       // required
       static uint32_t barcodeLength, umiLength;
       BarcodeEnd end;

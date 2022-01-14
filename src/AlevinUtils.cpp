@@ -148,15 +148,11 @@ namespace alevin {
                          std::string& seq2,
                          std::string& subseq){
       int r = pt.bioRead - 1;
-      boost::regex rgx(pt.reg[r]);
       subseq.clear();
-      std::string read = r == 0 ? seq : seq2;
-      if(boost::regex_search(read,pt.match[r],rgx)){
+      if(pt.rgx_search[r]) {
         subseq.append(pt.match[r][pt.bioPat]);
-      } else {
-        return &subseq; // return empty if regex fails
       }
-      return &subseq; // return extracted if it passes
+      return &subseq; // return extracted if the rgx_search was success, empty otherwise
     }
     template <>
     std::string*  getReadSequence(apt::Gemcode& protocol,
@@ -269,15 +265,16 @@ namespace alevin {
                                  std::string& umi){
       std::string um = "";
       for(int r=0; r < 2; r++) {
-          for(int i : pt.u[r]) {
-            um += pt.match[r][i];
+        if(!pt.u[r].empty()) {
+            for(int i : pt.u[r]) {
+              um += pt.match[r][i];
+          }
         }
       }
       if(pt.minUmiLen < pt.maxUmiLen) {
         addPadding(um, pt.maxUmiLen, pt.paddingBases, pt.padLen);
       }
       umi = um;
-      std::cout << "UMI: "<< umi <<std::endl;
       return true;
     }
     template <>
@@ -449,19 +446,22 @@ namespace alevin {
       std::string barcode="";
       for(int r=0; r < 2; r++) {
         boost::regex rgx(pt.reg[r]);
-        if(boost::regex_search(read1,pt.match[r],rgx)){
-          for(int i : pt.b[r]) {
-            barcode += pt.match[r][i];
+        pt.rgx_search[r] = (r == 0) ? boost::regex_search(read1,pt.match[r],rgx) :
+          boost::regex_search(read2,pt.match[r],rgx); // using std::string instead of read1/2 results in blank umi. strange!
+        if(!pt.b[r].empty()) {
+          if(pt.rgx_search[r]){
+            for(int i : pt.b[r]) {
+              barcode += pt.match[r][i];
+            }
+          } else {
+            return false;
           }
-        } else {
-          return false;
         }
       }
       if(pt.minBcLen < pt.maxBcLen) {
         addPadding(barcode, pt.maxBcLen, pt.paddingBases, pt.padLen);
       }
       bc = barcode;
-      std::cout << "BC: "<< barcode <<std::endl;
       return true;
     }
     template <>
@@ -1458,14 +1458,13 @@ namespace alevin {
         parser.enable_packrat_parsing();
         std::string  geometry = vm["custom-geo"].as<std::string>();
         auto val = parser.parse(geometry.c_str());
-        std::cout << "val: " << val << std::endl;
         if(val == 0) {
           aopt.jointLog->error("Incorrect geometry spec: {} \n"
                                "Exiting now", geometry);
           return false;
         }
-        std::cout << "reg[0]: " << customGeo.reg[0] << std::endl;
-        std::cout << "reg[1]: " << customGeo.reg[1] << std::endl;
+        // std::cout << "reg[0]: " << customGeo.reg[0] << std::endl;
+        // std::cout << "reg[1]: " << customGeo.reg[1] << std::endl;
 
         // validate that BC and UMI lengths are OK
         uint32_t maxBC{31};
