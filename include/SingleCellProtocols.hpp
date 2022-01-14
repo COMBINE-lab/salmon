@@ -223,7 +223,7 @@ namespace alevin{
 
     // Custom geometry specification using regex for extraction
     struct CustomGeo {
-      // store regex for reads 1 and 2
+      // store regex string for reads 1 and 2
       static std::string reg[2];
       // store positions of matches for bc and umi
       static std::vector<int> b[2], u[2];
@@ -237,6 +237,8 @@ namespace alevin{
       boost::smatch match[2];
       // store the success of regex search
       bool rgx_search[2];
+      // store the regex
+      static boost::regex rgx[2];
       // required
       static uint32_t barcodeLength, umiLength;
       BarcodeEnd end;

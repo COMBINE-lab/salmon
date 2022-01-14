@@ -445,9 +445,8 @@ namespace alevin {
                                      std::string& bc){
       std::string barcode="";
       for(int r=0; r < 2; r++) {
-        boost::regex rgx(pt.reg[r]);
-        pt.rgx_search[r] = (r == 0) ? boost::regex_search(read1,pt.match[r],rgx) :
-          boost::regex_search(read2,pt.match[r],rgx); // using std::string instead of read1/2 results in blank umi. strange!
+        pt.rgx_search[r] = (r == 0) ? boost::regex_search(read1,pt.match[r],pt.rgx[r]) :
+          boost::regex_search(read2,pt.match[r],pt.rgx[r]); // using std::string instead of read1/2 results in blank umi. strange!
         if(!pt.b[r].empty()) { // if read r has barcode
           if(pt.rgx_search[r]){ // if rgx search was successful
             for(int i : pt.b[r]) {
@@ -1473,7 +1472,8 @@ namespace alevin {
         }
         // std::cout << "reg[0]: " << customGeo.reg[0] << std::endl;
         // std::cout << "reg[1]: " << customGeo.reg[1] << std::endl;
-
+        customGeo.rgx[0] = customGeo.reg[0];
+        customGeo.rgx[1] = customGeo.reg[1];
         // validate that BC and UMI lengths are OK
         uint32_t maxBC{31};
         uint32_t maxUMI{31};

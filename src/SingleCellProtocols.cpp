@@ -38,6 +38,6 @@ namespace alevin{
   extern uint32_t CustomGeo::barcodeLength, CustomGeo::umiLength;
   // bool alevin::protocols::CustomGeo::bioReadFound;
   extern bool CustomGeo::bioReadFound;
-
+  extern boost::regex CustomGeo::rgx[2];
   }// protocols
 }//alevin
