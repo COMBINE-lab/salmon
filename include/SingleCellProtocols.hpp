@@ -221,7 +221,7 @@ namespace alevin{
       BarcodeEnd end;
     };
 
-    // Custome geometry specification using regex for extraction
+    // Custom geometry specification using regex for extraction
     struct CustomGeo {
       // store regex for reads 1 and 2
       static std::string reg[2];

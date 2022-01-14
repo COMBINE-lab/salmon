@@ -265,9 +265,9 @@ namespace alevin {
                                  std::string& umi){
       std::string um = "";
       for(int r=0; r < 2; r++) {
-        if(!pt.u[r].empty()) {
+        if(!pt.u[r].empty()) { // if umi is present on read r
             for(int i : pt.u[r]) {
-              um += pt.match[r][i];
+              um += pt.match[r][i]; // concat all umi sequences
           }
         }
       }
@@ -448,10 +448,10 @@ namespace alevin {
         boost::regex rgx(pt.reg[r]);
         pt.rgx_search[r] = (r == 0) ? boost::regex_search(read1,pt.match[r],rgx) :
           boost::regex_search(read2,pt.match[r],rgx); // using std::string instead of read1/2 results in blank umi. strange!
-        if(!pt.b[r].empty()) {
-          if(pt.rgx_search[r]){
+        if(!pt.b[r].empty()) { // if read r has barcode
+          if(pt.rgx_search[r]){ // if rgx search was successful
             for(int i : pt.b[r]) {
-              barcode += pt.match[r][i];
+              barcode += pt.match[r][i]; // concat all barcode sequences
             }
           } else {
             return false;
@@ -1326,6 +1326,14 @@ namespace alevin {
         alevin::types::AlevinUMIKmer::k( static_cast<uint16_t>(umi_geo.length()) );
 
       } else if (have_custom_geo) { // regex based unified barcode geometry parsing
+      /* Custom Geometry (--custom-geo) should be used when:
+      * 1. Barcode or umi have variable lengths
+      * 2. There is known fixed sequence in the reads
+      * 3. There is some sequence to be excluded
+      *
+      * From the input peglib spec it creates a regex. Boost regex lib  is used to parse
+      * the reads.
+      */
 
       struct apt::CustomGeo customGeo;
       customGeo.reg[0] = "";
