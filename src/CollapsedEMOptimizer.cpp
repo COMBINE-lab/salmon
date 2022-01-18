@@ -356,7 +356,7 @@ void EMUpdate_augmented(EQVecT& eqVec,
               for (size_t i = 0; i < groupSize; ++i) {
                 auto tid = txps[i];
                 auto aux = auxs[i];
-                double augmentedCount = eqClass_augmentable[i] ? 0 : static_cast<double>(sampled_txps_counts[tid]);
+                double augmentedCount = eqClass_augmentable[eqID] ? 0 : static_cast<double>(sampled_txps_counts[tid]);
                 if (augmentedCount > 0) {
                   std::cerr<< i << ":" << tid << "\t" 
                     << eqClass_augmentable[i] << " " 
@@ -762,7 +762,10 @@ bool doBootstrap(
     std::vector<bool> eqClass_augmentable(txpGroups.size(), false);
     for (size_t eqID = 0; eqID < txpGroups.size(); ++eqID) {
       const auto& txps = txpGroups[eqID];
-
+      if (eqID >= single_count_class_offset) {
+        // eqClass_augmentable[eqID] = true;
+        continue;
+      }
       size_t groupSize = txps.size();
       for (size_t i = 0; i < groupSize; ++i) {
         auto tid = txps[i];
@@ -797,7 +800,8 @@ bool doBootstrap(
     std::cerr << "num_augmentable = " << num_augmentable << "\n";
     std::cerr << "single_count_class_offset = " << single_count_class_offset << "\n";
     std::cerr << "num eq classes = " << txpGroups.size() << "\n";
-    std::cerr << (num_augmentable - augmented_class_count) << " out of " << single_count_class_offset << " equivalence classes were augmentable\n";
+    std::cerr << (num_augmentable - augmented_class_count) << " out of " 
+              << single_count_class_offset << " equivalence classes were augmentable\n";
 
     while (itNum < minIter or (itNum < maxIter and !converged)) {
       if (useVBEM) {
@@ -840,7 +844,6 @@ bool doBootstrap(
       if (adjusted_count < 0.0 ) { std::cerr << "adjusted count " << i << " = " << adjusted_count; }
       alphas[i] = std::max(0.0, adjusted_count);
     }
-    
 
     // Consider the projection of the abundances onto the *original* equivalence class
     // counts
