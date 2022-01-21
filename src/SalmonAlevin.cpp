@@ -1989,10 +1989,12 @@ void sc_align_read_library(ReadExperimentT& readExp,
 
     size_t numFiles = rl.mates1().size() + rl.mates2().size();
     uint32_t numParsingThreads{1};
-    // HACK!
-    // if we have more than 1 set of input files and the thread count is 
-    // greater than 8, then dedicate a second thread to parsing.
-    if (rl.mates1().size() > 1 and numThreads > 8) { numParsingThreads = 2; numThreads -= 1;}
+    // Currently just a heuristic, a better way to do this would be
+    // to have a joint thread-pool where threads could move between
+    // being parsers and consumers.
+    bool _did_modify = salmon::utils::configure_parsing(rl.mates1().size(), numThreads, numParsingThreads);
+    //if (rl.mates1().size() > 1 and numThreads > 8) { numParsingThreads = 2; numThreads -= 1;}
+
     pairedParserPtr.reset(new paired_parser(rl.mates1(), rl.mates2(), numThreads, numParsingThreads, miniBatchSize));
     pairedParserPtr->start();
 

@@ -14,9 +14,6 @@
 #include <vector>
 #include <zlib.h>
 
-// STEP 1: declare the type of file handler and the read() function
-KSEQ_INIT(gzFile, gzread)
-
 namespace fastx_parser {
 template <typename T>
 FastxParser<T>::FastxParser(std::vector<std::string> files,
@@ -132,23 +129,8 @@ template <typename T> FastxParser<T>::~FastxParser() {
     return ret;
   }
 
-inline void copyRecord(kseq_t* seq, ReadSeq* s) {
-  // Copy over the sequence and read name
-  s->seq.assign(seq->seq.s, seq->seq.l);
-  s->name.assign(seq->name.s, seq->name.l);
-}
-
-inline void copyRecord(kseq_t* seq, ReadQual* s) {
-    // Copy over the sequence and read name 
-    // and quality
-    s->seq.assign(seq->seq.s, seq->seq.l);
-    s->name.assign(seq->name.s, seq->name.l);
-    s->qual.assign(seq->qual.s, seq->qual.l);
-}
-
-
 template <typename T>
-int parseReads(
+int parse_reads(
     std::vector<std::string>& inputStreams, std::atomic<uint32_t>& numParsing,
     moodycamel::ConsumerToken* cCont, moodycamel::ProducerToken* pRead,
     moodycamel::ConcurrentQueue<uint32_t>& workQueue,
@@ -156,13 +138,14 @@ int parseReads(
         seqContainerQueue_,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& readQueue_) {
 
+  using namespace klibpp;
   using fastx_parser::thread_utils::MIN_BACKOFF_ITERS;
   auto curMaxDelay = MIN_BACKOFF_ITERS;
-  kseq_t* seq;
   T* s;
+
   uint32_t fn{0};
   while (workQueue.try_dequeue(fn)) {
-    auto file = inputStreams[fn];
+    auto& file = inputStreams[fn];
     std::unique_ptr<ReadChunk<T>> local;
     while (!seqContainerQueue_.try_dequeue(*cCont, local)) {
       fastx_parser::thread_utils::backoffOrYield(curMaxDelay);
@@ -171,19 +154,16 @@ int parseReads(
     }
     size_t numObtained{local->size()};
     // open the file and init the parser
-    auto fp = gzopen(file.c_str(), "r");
+    gzFile fp = gzopen(file.c_str(), "r");
 
     // The number of reads we have in the local vector
     size_t numWaiting{0};
 
-    seq = kseq_init(fp);
-    int ksv = kseq_read(seq);
+    auto seq = make_kstream(fp, gzread, mode::in);
 
-    while (ksv >= 0) {
-      s = &((*local)[numWaiting++]);
-
-      copyRecord(seq, s);
-
+    s = &((*local)[numWaiting]);
+    while ( seq >> *s ) { //ksv >= 0
+      numWaiting++;
       // If we've filled the local vector, then dump to the concurrent queue
       if (numWaiting == numObtained) {
         curMaxDelay = MIN_BACKOFF_ITERS;
@@ -199,15 +179,18 @@ int parseReads(
         }
         numObtained = local->size();
       }
-      ksv = kseq_read(seq);
+      s = &((*local)[numWaiting]);
     }
 
-    if (ksv == -3) {
+    // if we had an error in the stream
+    if (seq.err()) {
       --numParsing;
       return -3;
-    } else if (ksv < -1) {
+    } else if (seq.tqs()) {
+      // if we had a quality string of the wrong length
+      // tqs == truncated quality string
       --numParsing;
-      return ksv;
+      return -2;
     }
 
     // If we hit the end of the file and have any reads in our local buffer
@@ -226,7 +209,6 @@ int parseReads(
       }
     }
     // destroy the parser and close the file
-    kseq_destroy(seq);
     gzclose(fp);
   }
 
@@ -235,7 +217,7 @@ int parseReads(
 }
 
 template <typename T>
-int parseReadPair(
+int parse_read_pairs(
     std::vector<std::string>& inputStreams,
     std::vector<std::string>& inputStreams2, std::atomic<uint32_t>& numParsing,
     moodycamel::ConsumerToken* cCont, moodycamel::ProducerToken* pRead,
@@ -244,10 +226,9 @@ int parseReadPair(
         seqContainerQueue_,
     moodycamel::ConcurrentQueue<std::unique_ptr<ReadChunk<T>>>& readQueue_) {
 
+  using namespace klibpp;
   using fastx_parser::thread_utils::MIN_BACKOFF_ITERS;
   size_t curMaxDelay = MIN_BACKOFF_ITERS;
-  kseq_t* seq;
-  kseq_t* seq2;
   T* s;
 
   uint32_t fn{0};
@@ -263,24 +244,20 @@ int parseReadPair(
       // std::cerr << "couldn't dequeue read chunk\n";
     }
     size_t numObtained{local->size()};
+
     // open the file and init the parser
-    auto fp = gzopen(file.c_str(), "r");
-    auto fp2 = gzopen(file2.c_str(), "r");
+    gzFile fp = gzopen(file.c_str(), "r");
+    gzFile fp2 = gzopen(file2.c_str(), "r");
 
     // The number of reads we have in the local vector
     size_t numWaiting{0};
 
-    seq = kseq_init(fp);
-    seq2 = kseq_init(fp2);
+    auto seq = make_kstream(fp, gzread, mode::in);
+    auto seq2 = make_kstream(fp2, gzread, mode::in);
 
-    int ksv = kseq_read(seq);
-    int ksv2 = kseq_read(seq2);
-    while (ksv >= 0 and ksv2 >= 0) {
-
-      s = &((*local)[numWaiting++]);
-      copyRecord(seq, &s->first);
-      copyRecord(seq2, &s->second);
-
+    s = &((*local)[numWaiting]);
+    while ( (seq >> s->first) and (seq2 >> s->second) ) {//ksv >= 0 and ksv2 >= 0) {
+      numWaiting++;
       // If we've filled the local vector, then dump to the concurrent queue
       if (numWaiting == numObtained) {
         curMaxDelay = MIN_BACKOFF_ITERS;
@@ -296,16 +273,18 @@ int parseReadPair(
         }
         numObtained = local->size();
       }
-      ksv = kseq_read(seq);
-      ksv2 = kseq_read(seq2);
+      s = &((*local)[numWaiting]);
     }
 
-    if (ksv == -3 or ksv2 == -3) {
+    // if we had an error in the stream
+    if (seq.err() or seq2.err()) {
       --numParsing;
       return -3;
-    } else if (ksv < -1 or ksv2 < -1) {
+    } else if (seq.tqs() or seq2.tqs()) {
+      // if we had a quality string of the wrong length
+      // tqs == truncated quality string
       --numParsing;
-      return std::min(ksv, ksv2);
+      return -2;
     }
 
     // If we hit the end of the file and have any reads in our local buffer
@@ -324,9 +303,7 @@ int parseReadPair(
       }
     }
     // destroy the parser and close the file
-    kseq_destroy(seq);
     gzclose(fp);
-    kseq_destroy(seq2);
     gzclose(fp2);
   }
 
@@ -342,7 +319,7 @@ template <> bool FastxParser<ReadSeq>::start() {
     for (size_t i = 0; i < numParsers_; ++i) {
       ++numParsing_;
       parsingThreads_.emplace_back(new std::thread([this, i]() {
-        this->threadResults_[i] = parseReads(this->inputStreams_, this->numParsing_,
+        this->threadResults_[i] = parse_reads(this->inputStreams_, this->numParsing_,
                    this->consumeContainers_[i].get(),
                    this->produceReads_[i].get(), this->workQueue_,
                    this->seqContainerQueue_, this->readQueue_);
@@ -377,30 +354,10 @@ template <> bool FastxParser<ReadPair>::start() {
     for (size_t i = 0; i < numParsers_; ++i) {
       ++numParsing_;
       parsingThreads_.emplace_back(new std::thread([this, i]() {
-            this->threadResults_[i] = parseReadPair(this->inputStreams_, this->inputStreams2_,
+            this->threadResults_[i] = parse_read_pairs(this->inputStreams_, this->inputStreams2_,
                       this->numParsing_, this->consumeContainers_[i].get(),
                       this->produceReads_[i].get(), this->workQueue_,
                       this->seqContainerQueue_, this->readQueue_);
-      }));
-    }
-    return true;
-  } else {
-    return false;
-  }
-}
-
-template <> bool FastxParser<ReadQual>::start() {
-    if (numParsing_ == 0) {
-    isActive_ = true;
-    threadResults_.resize(numParsers_);
-    std::fill(threadResults_.begin(), threadResults_.end(), 0);
-    for (size_t i = 0; i < numParsers_; ++i) {
-      ++numParsing_;
-      parsingThreads_.emplace_back(new std::thread([this, i]() {
-        this->threadResults_[i] = parseReads(this->inputStreams_, this->numParsing_,
-                   this->consumeContainers_[i].get(),
-                   this->produceReads_[i].get(), this->workQueue_,
-                   this->seqContainerQueue_, this->readQueue_);
       }));
     }
     return true;
@@ -432,7 +389,7 @@ template <> bool FastxParser<ReadQualPair>::start() {
     for (size_t i = 0; i < numParsers_; ++i) {
       ++numParsing_;
       parsingThreads_.emplace_back(new std::thread([this, i]() {
-            this->threadResults_[i] = parseReadPair(this->inputStreams_, this->inputStreams2_,
+            this->threadResults_[i] = parse_read_pairs(this->inputStreams_, this->inputStreams2_,
                       this->numParsing_, this->consumeContainers_[i].get(),
                       this->produceReads_[i].get(), this->workQueue_,
                       this->seqContainerQueue_, this->readQueue_);
@@ -467,6 +424,6 @@ template <typename T> void FastxParser<T>::finishedWithGroup(ReadGroup<T>& s) {
 
 template class FastxParser<ReadSeq>;
 template class FastxParser<ReadPair>;
-template class FastxParser<ReadQual>;
+//template class FastxParser<ReadQual>;
 template class FastxParser<ReadQualPair>;
 }
