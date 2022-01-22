@@ -6,7 +6,7 @@
 
 #include "AlevinOpts.hpp"
 #include "AlevinTypes.hpp"
-#include "pufferfish/chobo/static_vector.hpp"
+#include "pufferfish/itlib/static_vector.hpp"
 
 namespace alevin{
   namespace protocols {
@@ -15,8 +15,8 @@ namespace alevin{
     struct TagGeometry {
       // uint32_t read_num{0};
       // tuples are read_num, start_pos, length
-      chobo::static_vector<std::pair<uint32_t, size_t>, num_tag_pieces> substr_locs1{};
-      chobo::static_vector<std::pair<uint32_t, size_t>, num_tag_pieces> substr_locs2{};
+      itlib::static_vector<std::pair<uint32_t, size_t>, num_tag_pieces> substr_locs1{};
+      itlib::static_vector<std::pair<uint32_t, size_t>, num_tag_pieces> substr_locs2{};
       // the total length of the tag on read 1 
       size_t length1{0};
       // the total length of the tag on read 2

@@ -131,7 +131,7 @@
 #include "pufferfish/ksw2pp/KSW2Aligner.hpp"
 #include "pufferfish/metro/metrohash64.h"
 #include "parallel_hashmap/phmap.h"
-#include "pufferfish/chobo/static_vector.hpp"
+#include "pufferfish/itlib/static_vector.hpp"
 #include "pufferfish/SelectiveAlignmentUtils.hpp"
 
 namespace alevin{
@@ -717,7 +717,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
             if (isUmiIdxOk) {
               jointHitGroup.setUMI(umiIdx.word(0));
               bool rh = false;
-              std::string* readSubSeq = aut::getReadSequence(alevinOpts.protocol, rp.first.seq, rp.second.seq, readBuffer);
+              std::string* readSubSeq = aut::getReadSequence(localProtocol, rp.first.seq, rp.second.seq, readBuffer);
               rh = tooShortRight
                        ? false
                        : memCollector.get_raw_hits_sketch(*readSubSeq,
@@ -1242,8 +1242,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                 }
               } else {
                 */
-              readSubSeq = aut::getReadSequence(
-                  alevinOpts.protocol, rp.first.seq, rp.second.seq, readBuffer);
+              readSubSeq = aut::getReadSequence(localProtocol, rp.first.seq, rp.second.seq, readBuffer);
               auto rh = tooShortRight ? false
                                       : memCollector(*readSubSeq, qc,
                                                      true, // isLeft
@@ -1756,7 +1755,7 @@ void processReadsQuasi(
                 }
               } else {
               */
-              readSubSeq = aut::getReadSequence(alevinOpts.protocol, rp.first.seq, rp.second.seq, readBuffer);
+              readSubSeq = aut::getReadSequence(localProtocol, rp.first.seq, rp.second.seq, readBuffer);
               auto rh = tooShortRight ? false
                                       : memCollector(*readSubSeq, qc,
                                                      true, // isLeft

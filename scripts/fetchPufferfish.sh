@@ -89,7 +89,7 @@ cp -r ${EXTERNAL_DIR}/pufferfish/include/libdivide ${INSTALL_DIR}/include/puffer
 cp -r ${EXTERNAL_DIR}/pufferfish/include/ksw2pp ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/compact_vector ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/metro ${INSTALL_DIR}/include/pufferfish
-cp -r ${EXTERNAL_DIR}/pufferfish/include/chobo ${INSTALL_DIR}/include/pufferfish
+cp -r ${EXTERNAL_DIR}/pufferfish/include/itlib ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/sparsepp ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/simde ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/tsl ${INSTALL_DIR}/include/pufferfish
@@ -116,7 +116,7 @@ cp ${EXTERNAL_DIR}/pufferfish/src/rank9b.cpp ${INSTALL_DIR}/src/pufferfish
 #cp -r ${EXTERNAL_DIR}/RapMap/include/*.hpp ${INSTALL_DIR}/include/rapmap
 #cp -r ${EXTERNAL_DIR}/RapMap/include/sparsepp ${INSTALL_DIR}/include/rapmap
 #cp -r ${EXTERNAL_DIR}/RapMap/include/digestpp ${INSTALL_DIR}/include/rapmap
-#cp -r ${EXTERNAL_DIR}/RapMap/include/chobo ${INSTALL_DIR}/include/rapmap
+#cp -r ${EXTERNAL_DIR}/RapMap/include/itlib ${INSTALL_DIR}/include/rapmap
 #cp -r ${EXTERNAL_DIR}/RapMap/include/metro ${INSTALL_DIR}/include/rapmap
 #cp -r ${EXTERNAL_DIR}/RapMap/include/ksw2pp ${INSTALL_DIR}/include/rapmap
 #cp -r ${EXTERNAL_DIR}/RapMap/include/tsl ${INSTALL_DIR}/include/rapmap
