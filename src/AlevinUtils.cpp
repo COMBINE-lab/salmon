@@ -617,17 +617,17 @@ namespace alevin {
                         neighbors);
     }
 
-    unsigned int hammingDistance(const std::string s1, const std::string s2) {
+    uint32_t hammingDistance(const std::string s1, const std::string s2) {
       if(s1.size() != s2.size()){
         throw std::invalid_argument("Strings have different lengths, can't compute hamming distance");
       }
 
       // compute dot product for all postisions, start with 0 and add if the values are not equal
-      return std::inner_product(s1.begin(),s1.end(),s2.begin(), 0, std::plus<unsigned int>(),
+      return std::inner_product(s1.begin(),s1.end(),s2.begin(), 0, std::plus<uint32_t>(),
         std::not2(std::equal_to<std::string::value_type>()));
     }
 
-    void addPadding(std::string& seq, uint32_t max, std::string padBases, unsigned int padLen) {
+    void addPadding(std::string& seq, uint32_t max, std::string padBases, uint32_t padLen) {
       int diff = max - seq.length() + 1; // add one base if the length is same to avoid erroneous collisions
       int rep = diff / padLen;
       int extra = diff % padLen;
@@ -637,7 +637,7 @@ namespace alevin {
       seq += padBases.substr(0,extra);
     }
 
-    void modifyRegex(size_t readNumber, std::string type, std::string* reg, std::vector<int> *bu, unsigned int& nPat, std::size_t first, std::size_t second)
+    void modifyRegex(size_t readNumber, std::string type, std::string* reg, std::vector<int> *bu, uint32_t& nPat, std::size_t first, std::size_t second)
     {
       reg[readNumber-1] += "([ATGC]{" + std::to_string(first) + "," + std::to_string(second) +"})";
       if (type == "b"){
@@ -648,7 +648,7 @@ namespace alevin {
       nPat++;
     }
 
-    void modifyRegex(size_t readNumber, std::string type, std::string* reg, std::vector<int> *bu, unsigned int& nPat, std::size_t len)
+    void modifyRegex(size_t readNumber, std::string type, std::string* reg, std::vector<int> *bu, uint32_t& nPat, std::size_t len)
     {
       reg[readNumber-1] += "([ATGC]{" + std::to_string(len) +"})";
       if (type == "b"){
@@ -659,13 +659,13 @@ namespace alevin {
       nPat++;
     }
 
-    void modifyRegex(size_t readNumber, std::string seq, std::string* reg, unsigned int& nPat)
+    void modifyRegex(size_t readNumber, std::string seq, std::string* reg, uint32_t& nPat)
     {
       reg[readNumber -1] += "(" + seq + ")";
       nPat++;
     }
 
-    void modifyRegex(size_t readNumber, std::string* reg, unsigned int& nPat, unsigned int& bioPat)
+    void modifyRegex(size_t readNumber, std::string* reg, uint32_t& nPat, uint32_t& bioPat)
     {
       reg[readNumber - 1] += "([ATGC]{1,})";
       bioPat = nPat;
@@ -1335,9 +1335,7 @@ namespace alevin {
       */
 
       struct apt::CustomGeo customGeo;
-      customGeo.reg[0] = "";
-      customGeo.reg[1] = "";
-      unsigned int nPatterns = 1;
+      uint32_t nPatterns = 1;
       customGeo.minBcLen = 0, customGeo.maxBcLen = 0, customGeo.minUmiLen = 0, customGeo.minUmiLen = 0;
       customGeo.bioReadFound = false;
       struct ProtoInfo proto;

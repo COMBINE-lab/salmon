@@ -226,13 +226,13 @@ namespace alevin{
       // store regex string for reads 1 and 2
       static std::string reg[2];
       // store positions of matches for bc and umi
-      static std::vector<int> b[2], u[2];
+      static itlib::small_vector<uint32_t> b[2], u[2];
       // bioRead stores the read number for biological read and bioPat stores match pattern number on regex
-      static unsigned int bioRead, bioPat; // biological read would be contigous and on only 1 of the read
+      static uint32_t bioRead, bioPat; // biological read would be contigous and on only 1 of the read
       static uint32_t minBcLen, maxBcLen, minUmiLen, maxUmiLen;
       static bool bioReadFound;
-      std::string paddingBases = "ACGT";
-      unsigned int padLen = paddingBases.length();
+      constexpr static std::string paddingBases = "ACGT";
+      constexpr static uint32_t padLen = paddingBases.length();
       // store the matches for both reads
       boost::smatch match[2];
       // store the success of regex search
