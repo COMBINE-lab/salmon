@@ -73,7 +73,7 @@ namespace alevin{
     void readWhitelist(bfs::path& filePath,
                        TrueBcsT& trueBarcodes);
 
-    unsigned int hammingDistance(const std::string s1, const std::string s2);
+    uint32_t hammingDistance(const std::string& s1, const std::string& s2);
     
     void addPadding(std::string& seq, uint32_t max, const char padBases[], uint32_t padLen);
 

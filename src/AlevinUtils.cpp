@@ -263,18 +263,18 @@ namespace alevin {
                                  std::string& read2,
                                  apt::CustomGeo& pt,
                                  std::string& umi){
-      std::string um = "";
+      pt.um = "";
       for(int r=0; r < 2; r++) {
         if(!pt.u[r].empty()) { // if umi is present on read r
             for(int i : pt.u[r]) {
-              um += pt.match[r][i]; // concat all umi sequences
+              pt.um += pt.match[r][i]; // concat all umi sequences
           }
         }
       }
       if(pt.minUmiLen < pt.maxUmiLen) {
-        addPadding(um, pt.maxUmiLen, pt.paddingBases, pt.padLen);
+        addPadding(pt.um, pt.maxUmiLen, pt.paddingBases, pt.padLen);
       }
-      umi = um;
+      umi = pt.um;
       return true;
     }
     template <>
@@ -443,14 +443,14 @@ namespace alevin {
                                             std::string& read2,
                                      apt::CustomGeo& pt,
                                      std::string& bc){
-      std::string barcode="";
+      pt.barcode="";
       for(int r=0; r < 2; r++) {
         pt.rgx_search[r] = (r == 0) ? boost::regex_search(read1,pt.match[r],pt.rgx[r]) :
           boost::regex_search(read2,pt.match[r],pt.rgx[r]); // using std::string instead of read1/2 results in blank umi. strange!
         if(!pt.b[r].empty()) { // if read r has barcode
           if(pt.rgx_search[r]){ // if rgx search was successful
             for(int i : pt.b[r]) {
-              barcode += pt.match[r][i]; // concat all barcode sequences
+              pt.barcode += pt.match[r][i]; // concat all barcode sequences
             }
           } else {
             return false;
@@ -458,9 +458,9 @@ namespace alevin {
         }
       }
       if(pt.minBcLen < pt.maxBcLen) {
-        addPadding(barcode, pt.maxBcLen, pt.paddingBases, pt.padLen);
+        addPadding(pt.barcode, pt.maxBcLen, pt.paddingBases, pt.padLen);
       }
-      bc = barcode;
+      bc = pt.barcode;
       return true;
     }
     template <>
@@ -617,7 +617,7 @@ namespace alevin {
                         neighbors);
     }
 
-    uint32_t hammingDistance(const std::string s1, const std::string s2) {
+    uint32_t hammingDistance(const std::string& s1, const std::string& s2) {
       if(s1.size() != s2.size()){
         throw std::invalid_argument("Strings have different lengths, can't compute hamming distance");
       }

@@ -234,7 +234,6 @@ namespace alevin{
       static uint32_t minBcLen, maxBcLen, minUmiLen, maxUmiLen;
       static bool bioReadFound;
       static constexpr const char paddingBases[4] = {'A', 'C', 'G', 'T'};
-      // static std::string paddingBases = "ACGT";
       static constexpr uint32_t padLen = 4;
       // store the matches for both reads
       boost::smatch match[2];
@@ -242,6 +241,8 @@ namespace alevin{
       bool rgx_search[2];
       // store the regex
       static boost::regex rgx[2];
+      // string for extract barcode and umi
+      std::string barcode, um;
       // required
       static uint32_t barcodeLength, umiLength;
       BarcodeEnd end;
