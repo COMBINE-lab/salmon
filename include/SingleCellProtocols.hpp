@@ -259,10 +259,20 @@ namespace alevin{
     };
 
   }
+
+  // CustomGeo type of read part
+  enum class customReadpartType : char { 
+    bc = 'b',
+    umi = 'u',
+    fixed = 'f',
+    exclude = 'x'
+  };
+
+  // Store the readNumber and type info for CustomGeo
   struct ProtoInfo
   {
     size_t readNumber;
-    char type;
+    customReadpartType type;
   };
 
 }

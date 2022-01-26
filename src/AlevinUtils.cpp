@@ -639,23 +639,23 @@ namespace alevin {
       }
     }
 
-    void modifyRegex(size_t readNumber, char type, std::string* reg, itlib::small_vector<uint32_t, 4, 5> *bu, uint32_t& nPat, std::size_t first, std::size_t second)
+    void modifyRegex(size_t readNumber, customReadpartType type, std::string* reg, itlib::small_vector<uint32_t, 4, 5> *bu, uint32_t& nPat, std::size_t first, std::size_t second)
     {
       reg[readNumber-1] += "([ATGC]{" + std::to_string(first) + "," + std::to_string(second) +"})";
-      if (type == 'b'){
+      if (type == customReadpartType::bc){
           bu[readNumber-1].push_back(nPat);
-      } else if (type == 'u') {
+      } else if (type == customReadpartType::umi) {
           bu[readNumber-1].push_back(nPat);
       } // else if (type == 'x') { } not needed to explicitly mention case 'x'
       nPat++;
     }
 
-    void modifyRegex(size_t readNumber, char type, std::string* reg, itlib::small_vector<uint32_t, 4, 5> *bu, uint32_t& nPat, std::size_t len)
+    void modifyRegex(size_t readNumber, customReadpartType type, std::string* reg, itlib::small_vector<uint32_t, 4, 5> *bu, uint32_t& nPat, std::size_t len)
     {
       reg[readNumber-1] += "([ATGC]{" + std::to_string(len) +"})";
-      if (type == 'b'){
+      if (type == customReadpartType::bc){
         bu[readNumber-1].push_back(nPat);
-      } else if (type == 'u'){
+      } else if (type == customReadpartType::umi){
         bu[readNumber-1].push_back(nPat);
       }
       nPat++;
@@ -1398,13 +1398,13 @@ namespace alevin {
     parser["Type"] = [&](const peg::SemanticValues &sv)
     {
         auto val = std::string(sv.token())[0];
-        proto.type = val;
+        proto.type = static_cast<customReadpartType>(val);
     };
 
     parser["Fixed"] = [&](const peg::SemanticValues &sv)
     {
         auto val = std::string(sv.token())[0];
-        proto.type = val;
+        proto.type = static_cast<customReadpartType>(val);
     };
 
     parser["Sequence"] = [&](const peg::SemanticValues &sv)
@@ -1426,11 +1426,11 @@ namespace alevin {
                 std::cerr << "In length range [X-Y], Y should be > X.\nExiting now" << std::endl;
                 exit(1);
             }
-            if (proto.type == 'b') {
+            if (proto.type == customReadpartType::bc) {
                 customGeo.minBcLen += val.first;
                 customGeo.maxBcLen += val.second;
                 modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.b, nPatterns, val.first, val.second);
-            } else if (proto.type == 'u') {
+            } else if (proto.type == customReadpartType::umi) {
                 customGeo.minUmiLen += val.first;
                 customGeo.maxUmiLen += val.second;
                 modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.u, nPatterns, val.first, val.second);
@@ -1442,11 +1442,11 @@ namespace alevin {
         case 1:
         {
             auto val = peg::any_cast<size_t>(sv[0]);
-            if (proto.type == 'b')  {
+            if (proto.type == customReadpartType::bc)  {
                 customGeo.minBcLen += val; // a fixed length bc increases the min length too, not updating can cause logical error when there are 2 pos of bcs
                 customGeo.maxBcLen += val;
                 modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.b, nPatterns, val);
-            } else if (proto.type == 'u'){
+            } else if (proto.type == customReadpartType::umi){
                 customGeo.minUmiLen += val;
                 customGeo.maxUmiLen += val;
                 modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.u, nPatterns, val);

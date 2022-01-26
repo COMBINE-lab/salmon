@@ -133,8 +133,8 @@ namespace alevin{
 
   void modifyRegex(size_t readNumber, std::string seq, std::string* reg, uint32_t& nPat);
   void modifyRegex(size_t readNumber, std::string seq, std::string* reg, uint32_t& nPat, uint32_t& bioPat);
-  void modifyRegex(size_t readNumber, char type, std::string* reg, itlib::small_vector<uint32_t, 4, 5> *bu, uint32_t& nPat, std::size_t len);
-  void modifyRegex(size_t readNumber, char type, std::string* reg, itlib::small_vector<uint32_t, 4, 5> *bu, uint32_t& nPat, std::size_t first, std::size_t second);
+  void modifyRegex(size_t readNumber, customReadpartType type, std::string* reg, itlib::small_vector<uint32_t, 4, 5> *bu, uint32_t& nPat, std::size_t len);
+  void modifyRegex(size_t readNumber, customReadpartType type, std::string* reg, itlib::small_vector<uint32_t, 4, 5> *bu, uint32_t& nPat, std::size_t first, std::size_t second);
   }
 }
 #endif // __ALEVIN_UTILS_HPP__
