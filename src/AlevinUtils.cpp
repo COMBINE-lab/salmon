@@ -627,33 +627,35 @@ namespace alevin {
         std::not2(std::equal_to<std::string::value_type>()));
     }
 
-    void addPadding(std::string& seq, uint32_t max, std::string padBases, uint32_t padLen) {
+    void addPadding(std::string& seq, uint32_t max, const char padBases[], uint32_t padLen) {
       int diff = max - seq.length() + 1; // add one base if the length is same to avoid erroneous collisions
       int rep = diff / padLen;
       int extra = diff % padLen;
       for(int i = 0; i < rep; i++){
           seq += padBases;
       }
-      seq += padBases.substr(0,extra);
+      for(int i = 0; i < extra; i++){
+          seq += padBases[i];
+      }
     }
 
-    void modifyRegex(size_t readNumber, std::string type, std::string* reg, std::vector<int> *bu, uint32_t& nPat, std::size_t first, std::size_t second)
+    void modifyRegex(size_t readNumber, char type, std::string* reg, itlib::small_vector<uint32_t, 4, 5> *bu, uint32_t& nPat, std::size_t first, std::size_t second)
     {
       reg[readNumber-1] += "([ATGC]{" + std::to_string(first) + "," + std::to_string(second) +"})";
-      if (type == "b"){
+      if (type == 'b'){
           bu[readNumber-1].push_back(nPat);
-      } else if (type == "u") {
+      } else if (type == 'u') {
           bu[readNumber-1].push_back(nPat);
-      } // else if (type == "x") { } not needed to explicitly mention case 'x'
+      } // else if (type == 'x') { } not needed to explicitly mention case 'x'
       nPat++;
     }
 
-    void modifyRegex(size_t readNumber, std::string type, std::string* reg, std::vector<int> *bu, uint32_t& nPat, std::size_t len)
+    void modifyRegex(size_t readNumber, char type, std::string* reg, itlib::small_vector<uint32_t, 4, 5> *bu, uint32_t& nPat, std::size_t len)
     {
       reg[readNumber-1] += "([ATGC]{" + std::to_string(len) +"})";
-      if (type == "b"){
+      if (type == 'b'){
         bu[readNumber-1].push_back(nPat);
-      } else if (type == "u"){
+      } else if (type == 'u'){
         bu[readNumber-1].push_back(nPat);
       }
       nPat++;
@@ -1395,13 +1397,13 @@ namespace alevin {
 
     parser["Type"] = [&](const peg::SemanticValues &sv)
     {
-        auto val = std::string(sv.token());
+        auto val = std::string(sv.token())[0];
         proto.type = val;
     };
 
     parser["Fixed"] = [&](const peg::SemanticValues &sv)
     {
-        auto val = std::string(sv.token());
+        auto val = std::string(sv.token())[0];
         proto.type = val;
     };
 
@@ -1424,11 +1426,11 @@ namespace alevin {
                 std::cerr << "In length range [X-Y], Y should be > X.\nExiting now" << std::endl;
                 exit(1);
             }
-            if (proto.type == "b") {
+            if (proto.type == 'b') {
                 customGeo.minBcLen += val.first;
                 customGeo.maxBcLen += val.second;
                 modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.b, nPatterns, val.first, val.second);
-            } else if (proto.type == "u") {
+            } else if (proto.type == 'u') {
                 customGeo.minUmiLen += val.first;
                 customGeo.maxUmiLen += val.second;
                 modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.u, nPatterns, val.first, val.second);
@@ -1440,11 +1442,11 @@ namespace alevin {
         case 1:
         {
             auto val = peg::any_cast<size_t>(sv[0]);
-            if (proto.type == "b")  {
+            if (proto.type == 'b')  {
                 customGeo.minBcLen += val; // a fixed length bc increases the min length too, not updating can cause logical error when there are 2 pos of bcs
                 customGeo.maxBcLen += val;
                 modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.b, nPatterns, val);
-            } else if (proto.type == "u"){
+            } else if (proto.type == 'u'){
                 customGeo.minUmiLen += val;
                 customGeo.maxUmiLen += val;
                 modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.u, nPatterns, val);

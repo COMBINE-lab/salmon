@@ -8,6 +8,8 @@
 #include "AlevinOpts.hpp"
 #include "AlevinTypes.hpp"
 #include "pufferfish/itlib/static_vector.hpp"
+#include "pufferfish/itlib/small_vector.hpp"
+
 
 namespace alevin{
   namespace protocols {
@@ -226,13 +228,14 @@ namespace alevin{
       // store regex string for reads 1 and 2
       static std::string reg[2];
       // store positions of matches for bc and umi
-      static itlib::small_vector<uint32_t> b[2], u[2];
+      static itlib::small_vector<uint32_t, 4, 5> b[2], u[2];
       // bioRead stores the read number for biological read and bioPat stores match pattern number on regex
       static uint32_t bioRead, bioPat; // biological read would be contigous and on only 1 of the read
       static uint32_t minBcLen, maxBcLen, minUmiLen, maxUmiLen;
       static bool bioReadFound;
-      constexpr static std::string paddingBases = "ACGT";
-      constexpr static uint32_t padLen = paddingBases.length();
+      static constexpr const char paddingBases[4] = {'A', 'C', 'G', 'T'};
+      // static std::string paddingBases = "ACGT";
+      static constexpr uint32_t padLen = 4;
       // store the matches for both reads
       boost::smatch match[2];
       // store the success of regex search
@@ -258,8 +261,7 @@ namespace alevin{
   struct ProtoInfo
   {
     size_t readNumber;
-    std::string type;
-    std::string desc;
+    char type;
   };
 
 }
