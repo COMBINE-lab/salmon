@@ -227,7 +227,7 @@ namespace alevin{
     struct CustomGeo {
       // store regex string for reads 1 and 2
       static std::string reg[2];
-      // store positions of matches for bc and umi
+      // store group numbers for bc and umi in regex string groups
       static itlib::small_vector<uint32_t, 4, 5> b[2], u[2];
       // bioRead stores the read number for biological read and bioPat stores match pattern number on regex
       static uint32_t bioRead, bioPat; // biological read would be contigous and on only 1 of the read
