@@ -629,12 +629,11 @@ namespace alevin {
 
     void addPadding(std::string& seq, uint32_t max, const char padBases[], uint32_t padLen) {
       int diff = max - seq.length() + 1; // add one base if the length is same to avoid erroneous collisions
-      int rep = diff / padLen;
-      int extra = diff % padLen;
-      for(int i = 0; i < rep; i++){
-          seq += padBases;
-      }
-      for(int i = 0; i < extra; i++){
+      for(int i = 0; i < diff; i++){
+          if(i >= padLen){
+            i -= padLen;
+            diff -= padLen;
+            }
           seq += padBases[i];
       }
     }
