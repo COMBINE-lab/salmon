@@ -798,6 +798,7 @@ bool doBootstrap(
     auto augmented_class_count = txpGroups.size() - single_count_class_offset;
     std::cerr << "augmented_class_count = " << augmented_class_count << "\n";
     std::cerr << "num_augmentable = " << num_augmentable << "\n";
+    std::cerr << "eq identical txps = " << eq_identical_txps.size() << "\n";
     std::cerr << "single_count_class_offset = " << single_count_class_offset << "\n";
     std::cerr << "num eq classes = " << txpGroups.size() << "\n";
     std::cerr << (num_augmentable - augmented_class_count) << " out of " 
@@ -837,6 +838,15 @@ bool doBootstrap(
       }
 
       ++itNum;
+    }
+
+    std::vector<bool> augmented_tids(transcripts.size(), false);
+    for (auto eqID : eqClass_augmentable) {
+      if (eqClass_augmentable[eqID]) {
+        for (auto tid: txpGroups[eqID])
+          if (sampled_txps_counts[tid] > 0)
+            augmented_tids[tid] = true;
+      }
     }
 
     for (size_t i = 0; i < sampled_txps_counts.size(); ++i) { //single_count_class_offset; i < txpGroups.size(); ++i) {
@@ -904,7 +914,9 @@ bool doBootstrap(
   return true;
 }
 
-std::vector<uint32_t> get_eq_identical_txps(std::vector<Transcript>& transcripts,  std::vector<std::vector<uint32_t>>& txpGroups) {
+std::vector<uint32_t> get_eq_identical_txps(std::vector<Transcript>& transcripts,
+                                            std::vector<std::vector<uint32_t>>& txpGroups,
+                                            std::vector<uint32_t>& aug_collision_txps) {
 
   // build a map from transcripts to the equivalence class IDs in which they appear.
   std::vector<std::vector<uint32_t>> txp_to_eqid;
@@ -942,11 +954,17 @@ std::vector<uint32_t> get_eq_identical_txps(std::vector<Transcript>& transcripts
   }
 
   std::vector<uint32_t> eq_sig_collision_txps;
+
   std::cerr << "finding target transcripts\n";
   for (auto kv = eq_id_to_txps.begin(); kv != eq_id_to_txps.end(); ++kv) {
     auto& v = kv->second;
     if (v.size() > 1) {
       for (auto& t : v ) { eq_sig_collision_txps.push_back(t); }
+      auto& eq_ids = txp_to_eqid[v[0]];
+      for (auto& eq: eq_ids) {
+        auto& tg = txpGroups[eq];
+        for (auto& tid: tg) { aug_collision_txps.push_back(tid); }
+      }
     }
   }
 
@@ -954,9 +972,13 @@ std::vector<uint32_t> get_eq_identical_txps(std::vector<Transcript>& transcripts
   eq_sig_collision_txps.erase(std::unique( eq_sig_collision_txps.begin(),
                                            eq_sig_collision_txps.end() ), eq_sig_collision_txps.end() );
 
-  std::cerr << "There were " << eq_sig_collision_txps.size() << " signature colliding transcripts\n";
-  return eq_sig_collision_txps;
+  std::sort(aug_collision_txps.begin(), aug_collision_txps.end());
+  aug_collision_txps.erase(std::unique( aug_collision_txps.begin(),
+                                        aug_collision_txps.end() ), aug_collision_txps.end() );
 
+  std::cerr << "There were " << eq_sig_collision_txps.size() << " signature colliding transcripts\n";
+  std::cerr << "There were " << aug_collision_txps.size() << " transcripts in the corresponding eq classes\n";
+  return eq_sig_collision_txps;
 }
 
 template <typename ExpT>
@@ -1087,19 +1109,21 @@ bool CollapsedEMOptimizer::gatherBootstraps(
   std::vector<double> samplingWeights(txpGroups.size(), 0.0);
 
   std::vector<uint32_t> eq_identical_txps;
+  std::vector<uint32_t> aug_collision_txps;
 
   if (augment_bootstraps) {
 
     // get a vector of transcripts that had an equivalence class
     // signature collision with at least one other transcript
-    eq_identical_txps = get_eq_identical_txps(transcripts, txpGroups);
+    eq_identical_txps = get_eq_identical_txps(transcripts, txpGroups, aug_collision_txps);
 
     samplingWeights.resize(txpGroups.size() + activeTranscriptIDs.size(), 0.0); // transcripts.size(), 0.0);
     uint64_t n = totalCount;
 
     double aug_count = (static_cast<double>(totalCount) * sopt.augmented_bootstrap_weight) / 
                       (static_cast<double>(activeTranscriptIDs.size()));
-    for (auto& tid : activeTranscriptIDs) {
+    // for (auto& tid : activeTranscriptIDs) {
+    for (auto& tid : aug_collision_txps) {
       new_class_count += 1;
       txpGroups.push_back({tid});
       std::vector<double> auxs;
@@ -1142,6 +1166,13 @@ bool CollapsedEMOptimizer::gatherBootstraps(
   for (auto& t : workerThreads) {
     t.join();
   }
+
+  /*std::ofstream outfile;
+  outfile.open("/mnt/scratch3/mohsen/boost-boots/noor_data/active.list");
+  for (auto &tid: aug_collision_txps) {
+    outfile << transcripts[tid].RefName << "\n";
+  }
+  outfile.close();*/
 
   /*
   if (augment_bootstraps) {
