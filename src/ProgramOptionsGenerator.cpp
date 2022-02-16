@@ -411,6 +411,12 @@ namespace salmon {
        "celseq2", po::bool_switch()->default_value(alevin::defaults::isCELSeq2),
        "Use CEL-Seq2 Single Cell protocol for the library.")
       (
+       "splitseqV1", po::bool_switch()->default_value(alevin::defaults::isSplitSeqV1),
+       "Use Split-SeqV1 Single Cell protocol for the library.")
+      (
+       "splitseqV2", po::bool_switch()->default_value(alevin::defaults::isSplitSeqV2),
+       "Use Split-SeqV2 Single Cell protocol for the library.")
+      (
        "quartzseq2", po::bool_switch()->default_value(alevin::defaults::isQuartzSeq2),
        "Use Quartz-Seq2 v3.2 Single Cell protocol for the library assumes 15 length barcode and 8 length UMI.")
       (
@@ -669,6 +675,12 @@ namespace salmon {
        po::value<uint32_t>(&(sopt.maxReadOccs))->default_value(salmon::defaults::maxReadOccs),
        "Reads \"mapping\" to more than this many places won't be "
        "considered.")
+      ("maxRecoverReadOcc",
+       po::value<uint32_t>(&(sopt.maxRecoverReadOccs))->default_value(salmon::defaults::maxRecoverReadOccs),
+       "Relevant for alevin with \'--sketch\' mode only: if a read has valid seed matches, but no read has matches "
+       "leading to fewer than \"maxReadOcc\" mappings, then try to recover mappings for this read as long as there are "
+       "fewer than \"maxRecoverReadOcc\" mappings."
+       )
       ("noLengthCorrection",
        po::bool_switch(&(sopt.noLengthCorrection))->default_value(salmon::defaults::noLengthCorrection),
        "[experimental] : Entirely disables length correction when "

@@ -1373,6 +1373,21 @@ std::string getCurrentTimeAsString() {
   return str;
 }
 
+// encodes the heuristic for guessing how threads should
+// be allocated based on the available reads
+// returns true if input was modified and false otherwise.
+bool configure_parsing(size_t nfiles,             // input param
+                       size_t& worker_threads,    // input/output param
+                       uint32_t& parse_threads     // input/output param
+) {
+  bool modified = false;
+  if (nfiles > 1 and worker_threads >= 8) { parse_threads = 2; worker_threads -= 1;}
+  // if still more
+  // if (nfiles > 2 and worker_threads >= 16) { parse_threads = 3; worker_threads -= 1;}
+  return modified;
+}
+
+
   bool validateOptionsAlignment_(
                                  SalmonOpts& sopt,
                                  boost::program_options::variables_map& vm

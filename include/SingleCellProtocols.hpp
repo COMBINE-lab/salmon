@@ -6,7 +6,7 @@
 
 #include "AlevinOpts.hpp"
 #include "AlevinTypes.hpp"
-#include "pufferfish/chobo/static_vector.hpp"
+#include "pufferfish/itlib/static_vector.hpp"
 
 namespace alevin{
   namespace protocols {
@@ -15,8 +15,8 @@ namespace alevin{
     struct TagGeometry {
       // uint32_t read_num{0};
       // tuples are read_num, start_pos, length
-      chobo::static_vector<std::pair<uint32_t, size_t>, num_tag_pieces> substr_locs1{};
-      chobo::static_vector<std::pair<uint32_t, size_t>, num_tag_pieces> substr_locs2{};
+      itlib::static_vector<std::pair<uint32_t, size_t>, num_tag_pieces> substr_locs1{};
+      itlib::static_vector<std::pair<uint32_t, size_t>, num_tag_pieces> substr_locs2{};
       // the total length of the tag on read 1 
       size_t length1{0};
       // the total length of the tag on read 2
@@ -175,6 +175,16 @@ namespace alevin{
       // WEHI SCORE's CEL-Seq2 starts from 5' end with a 8 bp barcode
       // and a 6 bp UMI.
       CELSeq2(): Rule(6, 6, BarcodeEnd::FIVE, 4096){}
+    };
+
+    struct SplitSeqV2 : Rule{
+        SplitSeqV2(): Rule(24, 10, BarcodeEnd::FIVE, 4294967295){}
+        std::size_t const bcLen = 8, bc1Pos = 10, bc2Pos = 48, bc3Pos = 78;
+    };
+
+    struct SplitSeqV1 : Rule{
+        SplitSeqV1(): Rule(24, 10, BarcodeEnd::FIVE, 4294967295){}
+        std::size_t const bcLen = 8, bc1Pos = 10, bc2Pos = 48, bc3Pos = 86;
     };
 
     //dummy class

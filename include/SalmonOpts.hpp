@@ -146,6 +146,10 @@ struct SalmonOpts {
 
   uint32_t maxReadOccs; // Discard reads  mapping to more than this many places.
 
+  uint32_t maxRecoverReadOccs; // If a read had hits but maps to > maxReadOccs loci, then
+                               // try to recover mappings up to this many loci (currently only
+                               // affects behavior in alevin --sketch mode).
+
   uint32_t maxExpectedReadLen; // Maximum expected length of an observed read.
 
   // hidden / for extreme control

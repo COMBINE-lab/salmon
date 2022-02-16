@@ -187,12 +187,8 @@ Single-cell protocol specific notes
 In cases where single-cell protocol supports variable length cellbarcodes, alevin adds nucleotide padding to make the lengths uniform.
 Furthermore, the padding scheme ensures that there are no collisions added in the process. The padding scheme is as follows:
 
-1. sci-RNA-seq3: The barcode is composed of 9-10 bp hairpin adaptor and 10 bp reverse transcription index making it 19-20 bp long. If 
-the bacode is 20 bp long, alevin adds `A` and it adds `AC` if it is 19 bp long. Thus, the length of barcode in the output is 21 bp. 
-2. inDropV2: 8-11 bp barcode1 along with 8 bp barcode2 makes up the barcode. For barcode lengths of 16, 17, 18, and 19 bp, alevin adds
-`AAAC`, `AAG`, `AT`, and `A` respectively. Thus, the length of barcode in the output is 20 bp. Furthermore, the position of barcode1 is
-dependent on finding exact match of sequence `w1`. If exact match is not found, a search for `w1` is performed allowing a maximum hamming
- distance 2 b/w `w1` and read2 substring of w1 length within the required bounds; the first match is returned.  
+1. sci-RNA-seq3: The barcode is composed of 9-10 bp hairpin adaptor and 10 bp reverse transcription index making it 19-20 bp long. If the bacode is 20 bp long, alevin adds *A* and it adds *AC* if it is 19 bp long. Thus, the length of barcode in the output is 21 bp.
+2. inDropV2: 8-11 bp barcode1 along with 8 bp barcode2 makes up the barcode. For barcode lengths of 16, 17, 18, and 19 bp, alevin adds *AAAC*, *AAG*, *AT*, and *A* respectively. Thus, the length of barcode in the output is 20 bp. Furthermore, the position of barcode1 is dependent on finding exact match of sequence ``w1``. If exact match is not found, a search for ``w1`` is performed allowing a maximum hamming distance 2 b/w ``w1`` and read2 substring of w1 length within the required bounds; the first match is returned.   
 
 Output
 ------

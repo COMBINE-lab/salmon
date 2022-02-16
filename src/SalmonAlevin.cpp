@@ -131,7 +131,7 @@
 #include "pufferfish/ksw2pp/KSW2Aligner.hpp"
 #include "pufferfish/metro/metrohash64.h"
 #include "parallel_hashmap/phmap.h"
-#include "pufferfish/chobo/static_vector.hpp"
+#include "pufferfish/itlib/static_vector.hpp"
 #include "pufferfish/SelectiveAlignmentUtils.hpp"
 
 namespace alevin{
@@ -541,6 +541,10 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       return added;
     }
 
+    inline uint32_t max_hits_for_target() {
+      return std::max(fw_hits, rc_hits);
+    }
+
     // true if forward, false if rc
     // second element is score
     inline HitDirection best_hit_direction() {
@@ -598,7 +602,14 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
   //////////////////////
   // NOTE: validation mapping based new parameters
   std::string rc1; rc1.reserve(300);
-  
+
+
+  // check the frequency and decide here if we should
+  // be attempting recovery of highly-multimapping reads
+  const size_t max_occ_default = salmonOpts.maxReadOccs;
+  const size_t max_occ_recover = salmonOpts.maxRecoverReadOccs;
+  const bool attempt_occ_recover = (max_occ_recover > max_occ_default);
+
   size_t numMappingsDropped{0};
   size_t numDecoyFrags{0};
   const double decoyThreshold = salmonOpts.decoyThreshold;
@@ -706,7 +717,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
             if (isUmiIdxOk) {
               jointHitGroup.setUMI(umiIdx.word(0));
               bool rh = false;
-              std::string* readSubSeq = aut::getReadSequence(alevinOpts.protocol, rp.first.seq, rp.second.seq, readBuffer);
+              std::string* readSubSeq = aut::getReadSequence(localProtocol, rp.first.seq, rp.second.seq, readBuffer);
               rh = tooShortRight
                        ? false
                        : memCollector.get_raw_hits_sketch(*readSubSeq,
@@ -719,14 +730,13 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                 uint32_t num_valid_hits{0};
                 uint64_t total_occs{0};
                 uint64_t largest_occ{0};
-                float perfect_score{0.0}; 
                 auto& raw_hits = memCollector.get_left_hits();
-                
+
                 // SANITY
                 decltype(raw_hits[0].first) prev_read_pos = -1;
-                // the maximum span the supporting k-mers of a 
+                // the maximum span the supporting k-mers of a
                 // mapping position are allowed to have.
-                // NOTE this is still > read_length b/c the stretch is measured wrt the 
+                // NOTE this is still > read_length b/c the stretch is measured wrt the
                 // START of the terminal k-mer.
                 int32_t max_stretch = static_cast<int32_t>(readSubSeq->length() * 1.0);
 
@@ -735,55 +745,17 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                 // the least frequent hit for this fragment.
                 uint64_t min_occ = std::numeric_limits<uint64_t>::max();
 
-                // this is false by default and will be set to true 
-                // if *every* collected hit for this fragment occurs 
+                // this is false by default and will be set to true
+                // if *every* collected hit for this fragment occurs
                 // salmonOpts.maxReadOccs times or more.
                 bool had_alt_max_occ = false;
 
-                for (auto& raw_hit : raw_hits) {
-                  auto& read_pos = raw_hit.first;
-                  auto& proj_hits = raw_hit.second;
-                  auto& refs = proj_hits.refRange;
-                  uint64_t num_occ = static_cast<uint64_t>(refs.size());
-                  min_occ = std::min(min_occ, num_occ);
-
-                  // SANITY
-                  if (read_pos <= prev_read_pos) {
-                    salmonOpts.jointLog->warn("read_pos : {}, prev_read_pos : {}", read_pos, prev_read_pos);
-                  }
-                  
-                  prev_read_pos = read_pos;
-                  if (num_occ < salmonOpts.maxReadOccs) {
-                    
-                    ++num_valid_hits;
-                    total_occs += num_occ;
-                    largest_occ = (num_occ > largest_occ) ? num_occ : largest_occ;
-                    float score_inc = 1.0 / num_occ;
-                    perfect_score += score_inc;
-
-                    for (auto &pos_it : refs) {
-                      const auto& ref_pos_ori = proj_hits.decodeHit(pos_it);
-                      uint32_t tid = static_cast<uint32_t>(qidx->getRefId(pos_it.transcript_id()));
-                      int32_t pos = static_cast<int32_t>(ref_pos_ori.pos);
-                      bool ori = ref_pos_ori.isFW;
-                      if (ori) {
-                        hit_map[tid].add_fw(pos, static_cast<int32_t>(read_pos), max_stretch, score_inc);
-                      } else {
-                        hit_map[tid].add_rc(pos, static_cast<int32_t>(read_pos), max_stretch, score_inc);
-                      }
-                    } // DONE: for (auto &pos_it : refs)
-                  } // DONE : if (static_cast<uint64_t>(refs.size()) < salmonOpts.maxReadOccs)
-                } // DONE : for (auto& raw_hit : raw_hits)
-
-                // If our default threshold was too stringent, then set a more liberal 
-                // threshold and look up the k-mers that occur the least frequently.
-                // Specifically, if the min occuring hits have frequency < min_thresh_prime (2500 by default)
-                // times, then collect the min occuring hits to get the mapping.
-                // TODO: deal with code duplication below.
-                size_t max_allowed_occ = 2500;
-                if ((min_occ >= salmonOpts.maxReadOccs) and (min_occ < max_allowed_occ)) {
-                  prev_read_pos = -1;
-                  max_allowed_occ = min_occ;
+                auto collect_mappings_from_hits = [&max_stretch, &min_occ, &hit_map,
+                                                   &salmonOpts, &num_valid_hits, &total_occs,
+                                                   &largest_occ, &qidx](
+                  auto& raw_hits, auto& prev_read_pos,
+                  auto& max_allowed_occ, auto& had_alt_max_occ
+                ) -> bool {
                   for (auto& raw_hit : raw_hits) {
                     auto& read_pos = raw_hit.first;
                     auto& proj_hits = raw_hit.second;
@@ -792,51 +764,69 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                     min_occ = std::min(min_occ, num_occ);
                     had_alt_max_occ = true;
 
-                    // SANITY
-                    if (read_pos <= prev_read_pos) {
-                      salmonOpts.jointLog->warn(
-                          "read_pos : {}, prev_read_pos : {}", read_pos,
-                          prev_read_pos);
-                    }
-
+                    bool still_have_valid_target = false;
                     prev_read_pos = read_pos;
                     if (num_occ <= max_allowed_occ) {
 
-                      ++num_valid_hits;
                       total_occs += num_occ;
-                      largest_occ =
-                          (num_occ > largest_occ) ? num_occ : largest_occ;
-                      float score_inc = 1.0 / num_occ;
-                      perfect_score += score_inc;
+                      largest_occ = (num_occ > largest_occ) ? num_occ : largest_occ;
+                      float score_inc = 1.0;
 
-                      for (auto& pos_it : refs) {
+                      for (auto &pos_it : refs) {
                         const auto& ref_pos_ori = proj_hits.decodeHit(pos_it);
-                        uint32_t tid = static_cast<uint32_t>(
-                            qidx->getRefId(pos_it.transcript_id()));
+                        uint32_t tid = static_cast<uint32_t>(qidx->getRefId(pos_it.transcript_id()));
                         int32_t pos = static_cast<int32_t>(ref_pos_ori.pos);
                         bool ori = ref_pos_ori.isFW;
-                        if (ori) {
-                          hit_map[tid].add_fw(pos,
-                                              static_cast<int32_t>(read_pos),
-                                              max_stretch, score_inc);
-                        } else {
-                          hit_map[tid].add_rc(pos,
-                                              static_cast<int32_t>(read_pos),
-                                              max_stretch, score_inc);
+                        auto& target = hit_map[tid];
+
+                        // Why >= here instead of == ?
+                        // Because hits can happen on the same target in both the forward
+                        // and rc orientations, it is possible that we start the loop with
+                        // the target having num_valid_hits hits in a given orientation (o)
+                        // we see a new hit for this target in oriention o (now it has num_valid_hits + 1)
+                        // then we see a hit for this target in orientation rc(o).  We still want to
+                        // add / consider this hit, but max_hits_for_target() > num_valid_hits.
+                        // So, we must allow for that here.
+                        if (target.max_hits_for_target() >= num_valid_hits) {
+                          if (ori) {
+                            target.add_fw(pos, static_cast<int32_t>(read_pos), max_stretch, score_inc);
+                          } else {
+                            target.add_rc(pos, static_cast<int32_t>(read_pos), max_stretch, score_inc);
+                          }
+
+                          still_have_valid_target |= (target.max_hits_for_target() >= num_valid_hits + 1);
                         }
+
                       } // DONE: for (auto &pos_it : refs)
-                    }   // DONE : if (static_cast<uint64_t>(refs.size()) <
-                        // salmonOpts.maxReadOccs)
-                  }     // DONE : for (auto& raw_hit : raw_hits)
+
+                      ++num_valid_hits;
+
+                      // if there are no targets reaching the valid hit threshold, then break early
+                      if (!still_have_valid_target) { return true; }
+
+                    } // DONE : if (num_occ <= max_allowed_occ)
+                  } // DONE : for (auto& raw_hit : raw_hits)
+
+                  return false;
+                };
+
+                bool _discard = false;
+                auto mao_first_pass = max_occ_default - 1;
+                bool early_stop = collect_mappings_from_hits(raw_hits, prev_read_pos, mao_first_pass, _discard);
+
+                // If our default threshold was too stringent, then fallback to a more liberal
+                // threshold and look up the k-mers that occur the least frequently.
+                // Specifically, if the min occuring hits have frequency < max_occ_recover (2500 by default)
+                // times, then collect the min occuring hits to get the mapping.
+                if (attempt_occ_recover and (min_occ >= max_occ_default) and (min_occ < max_occ_recover)) {
+                  prev_read_pos = -1;
+                  uint64_t max_allowed_occ = min_occ;
+                  early_stop = collect_mappings_from_hits(raw_hits, prev_read_pos, max_allowed_occ, had_alt_max_occ);
                 }
 
-                //float perfect_score = static_cast<float>(num_valid_hits) / total_occs;
-                float acceptable_score = (num_valid_hits == 1) ? perfect_score : 
-                  perfect_score - (1.0f / largest_occ);
                 uint32_t best_alt_hits = 0;
                 int32_t signed_read_len = static_cast<int32_t>(readSubSeq->length());
 
-                bool saw_acceptable_score = false;
                 for (auto& kv : hit_map) {
                   auto best_hit_dir = kv.second.best_hit_direction();
                   // if the best direction is FW or BOTH, add the fw hit
@@ -863,7 +853,10 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
                 alt_max_occ = had_alt_max_occ ? accepted_hits.size() : salmonOpts.maxReadOccs;
 
-                 /*
+                /*
+                 * This rule; if enabled, allows through mappings missing a single hit, if there
+                 * was no mapping with all hits. NOTE: this won't work with the current early-exit
+                 * optimization however.
                 if (accepted_hits.empty() and (num_valid_hits > 1) and (best_alt_hits >= num_valid_hits - 1)) {
                   for (auto& kv : hit_map) { 
                     auto simple_hit = kv.second.get_best_hit();
@@ -875,8 +868,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                     }
                   }
                 }
-                  */
-
+                */
               } // DONE : if (rh)
 
             } else {
@@ -1250,8 +1242,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                 }
               } else {
                 */
-              readSubSeq = aut::getReadSequence(
-                  alevinOpts.protocol, rp.first.seq, rp.second.seq, readBuffer);
+              readSubSeq = aut::getReadSequence(localProtocol, rp.first.seq, rp.second.seq, readBuffer);
               auto rh = tooShortRight ? false
                                       : memCollector(*readSubSeq, qc,
                                                      true, // isLeft
@@ -1764,7 +1755,7 @@ void processReadsQuasi(
                 }
               } else {
               */
-              readSubSeq = aut::getReadSequence(alevinOpts.protocol, rp.first.seq, rp.second.seq, readBuffer);
+              readSubSeq = aut::getReadSequence(localProtocol, rp.first.seq, rp.second.seq, readBuffer);
               auto rh = tooShortRight ? false
                                       : memCollector(*readSubSeq, qc,
                                                      true, // isLeft
@@ -1997,10 +1988,12 @@ void sc_align_read_library(ReadExperimentT& readExp,
 
     size_t numFiles = rl.mates1().size() + rl.mates2().size();
     uint32_t numParsingThreads{1};
-    // HACK!
-    // if we have more than 1 set of input files and the thread count is 
-    // greater than 8, then dedicate a second thread to parsing.
-    if (rl.mates1().size() > 1 and numThreads > 8) { numParsingThreads = 2; numThreads -= 1;}
+    // Currently just a heuristic, a better way to do this would be
+    // to have a joint thread-pool where threads could move between
+    // being parsers and consumers.
+    bool _did_modify = salmon::utils::configure_parsing(rl.mates1().size(), numThreads, numParsingThreads);
+    //if (rl.mates1().size() > 1 and numThreads > 8) { numParsingThreads = 2; numThreads -= 1;}
+
     pairedParserPtr.reset(new paired_parser(rl.mates1(), rl.mates2(), numThreads, numParsingThreads, miniBatchSize));
     pairedParserPtr->start();
 
@@ -3131,6 +3124,32 @@ alevin_sc_align(AlevinOpts<apt::CELSeq2>& aopt, SalmonOpts& sopt,
                 std::unique_ptr<SalmonIndex>& salmonIndex);
 template int
 alevinQuant(AlevinOpts<apt::CELSeq2>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
+
+template int
+alevin_sc_align(AlevinOpts<apt::SplitSeqV1>& aopt, SalmonOpts& sopt,
+                boost::program_options::parsed_options& orderedOptions,
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+template int
+alevinQuant(AlevinOpts<apt::SplitSeqV1>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
+
+template int
+alevin_sc_align(AlevinOpts<apt::SplitSeqV2>& aopt, SalmonOpts& sopt,
+                boost::program_options::parsed_options& orderedOptions,
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+template int
+alevinQuant(AlevinOpts<apt::SplitSeqV2>& aopt, SalmonOpts& sopt,
             SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
             spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
             spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
