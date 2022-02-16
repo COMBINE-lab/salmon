@@ -4,6 +4,7 @@ set -eu -o pipefail
 exists()
 {
   command -v "$1" >/dev/null 2>&1
+
 }
 
 CURR_DIR=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
@@ -22,11 +23,11 @@ if [ -d ${INSTALL_DIR}/src/pufferfish ] ; then
     rm -fr ${INSTALL_DIR}/src/pufferfish
 fi
 
-#SVER=salmon-v1.6.0
-SVER=develop
+SVER=salmon-v1.7.0
+#SVER=develop
 #SVER=sketch-mode
 
-EXPECTED_SHA256=f71b3c08f254200fcdc2eb8fe3dcca8a8e9489e79ef5952a4958d8b9979831dc
+EXPECTED_SHA256=5894fabbf6829a3d4a627135edc8326e931eb07fc792bfff3a0714e8fee8bb8b
 
 mkdir -p ${EXTERNAL_DIR}
 curl -k -L https://github.com/COMBINE-lab/pufferfish/archive/${SVER}.zip -o ${EXTERNAL_DIR}/pufferfish.zip
@@ -40,9 +41,11 @@ else
 	unset hashcheck
 fi
 
+
 if [ -z "${hashcheck-}" ]; then
     echo "Couldn't find shasum command; can't verify contents of downloaded pufferfish";
 else
+
     if [[ $SVER != develop ]]; then
         echo "${EXPECTED_SHA256}  ${EXTERNAL_DIR}/pufferfish.zip" | ${hashcheck} -c - || { echo "pufferfish.zip did not match expected SHA1! Exiting."; exit 1; }
     else
@@ -83,8 +86,10 @@ cp ${EXTERNAL_DIR}/pufferfish/include/MemChainer.hpp ${INSTALL_DIR}/include/puff
 cp ${EXTERNAL_DIR}/pufferfish/include/CommonTypes.hpp ${INSTALL_DIR}/include/pufferfish
 cp ${EXTERNAL_DIR}/pufferfish/include/SAMWriter.hpp ${INSTALL_DIR}/include/pufferfish
 cp ${EXTERNAL_DIR}/pufferfish/include/PufferfishConfig.hpp ${INSTALL_DIR}/include/pufferfish
+
 cp ${EXTERNAL_DIR}/pufferfish/include/BulkChunk.hpp ${INSTALL_DIR}/include/pufferfish
 cp ${EXTERNAL_DIR}/pufferfish/include/BinWriter.hpp ${INSTALL_DIR}/include/pufferfish
+
 cp -r ${EXTERNAL_DIR}/pufferfish/include/libdivide ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/ksw2pp ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/compact_vector ${INSTALL_DIR}/include/pufferfish
@@ -116,6 +121,7 @@ cp ${EXTERNAL_DIR}/pufferfish/src/rank9b.cpp ${INSTALL_DIR}/src/pufferfish
 #cp -r ${EXTERNAL_DIR}/RapMap/include/*.hpp ${INSTALL_DIR}/include/rapmap
 #cp -r ${EXTERNAL_DIR}/RapMap/include/sparsepp ${INSTALL_DIR}/include/rapmap
 #cp -r ${EXTERNAL_DIR}/RapMap/include/digestpp ${INSTALL_DIR}/include/rapmap
+
 #cp -r ${EXTERNAL_DIR}/RapMap/include/itlib ${INSTALL_DIR}/include/rapmap
 #cp -r ${EXTERNAL_DIR}/RapMap/include/metro ${INSTALL_DIR}/include/rapmap
 #cp -r ${EXTERNAL_DIR}/RapMap/include/ksw2pp ${INSTALL_DIR}/include/rapmap
@@ -127,4 +133,5 @@ cp ${EXTERNAL_DIR}/pufferfish/src/rank9b.cpp ${INSTALL_DIR}/src/pufferfish
 #rm ${INSTALL_DIR}/include/rapmap/FastxParser.hpp
 #rm ${INSTALL_DIR}/include/rapmap/concurrentqueue.h
 #rm ${INSTALL_DIR}/include/rapmap/FastxParserThreadUtils.hpp
+
 #rm ${INSTALL_DIR}/src/rapmap/FastxParser.cpp
