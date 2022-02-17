@@ -82,7 +82,11 @@ if (_tbb_include_dir)
 endif()
 unset(_tbb_include_dir CACHE)
 
+list(LENGTH TBB_IMPORTED_TARGETS TBB_IT_LEN)
+
+if (TBB_IT_LEN GREATER 0) 
 list(REMOVE_DUPLICATES TBB_IMPORTED_TARGETS)
+endif()
 
 find_package_handle_standard_args(TBB
                                   REQUIRED_VARS TBB_IMPORTED_TARGETS
