@@ -11,8 +11,9 @@
 #include <vector>
 
 #include "json.hpp"
-#include "tbb/combinable.h"
-#include "tbb/parallel_for.h"
+#include "oneapi/tbb/combinable.h"
+#include "oneapi/tbb/parallel_for.h"
+#include "oneapi/tbb/task_arena.h"
 
 #include "AlignmentLibrary.hpp"
 #include "DistributionUtils.hpp"
@@ -2380,12 +2381,13 @@ void markAuxiliaryTargets(SalmonOpts& sopt, std::vector<Transcript>& transcripts
  */
 template <typename AbundanceVecT, typename ReadExpT>
 Eigen::VectorXd
-updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
+updateEffectiveLengths(oneapi::tbb::task_arena& arena,
+                       SalmonOpts& sopt, ReadExpT& readExp,
                        Eigen::VectorXd& effLensIn, AbundanceVecT& alphas,
                        std::vector<bool>& available, bool writeBias) {
 
   using std::vector;
-  using BlockedIndexRange = tbb::blocked_range<size_t>;
+  using BlockedIndexRange = oneapi::tbb::blocked_range<size_t>;
   using salmon::math::EPSILON;
   using salmon::math::LOG_EPSILON;
 
@@ -2653,10 +2655,11 @@ int contextSize = outsideContext + insideContext;
     return CombineableBiasParams(K, sopt.numConditionalGCBins,
                                  sopt.numFragGCBins);
   };
-  tbb::combinable<CombineableBiasParams> expectedDist(getBiasParams);
+  oneapi::tbb::combinable<CombineableBiasParams> expectedDist(getBiasParams);
   std::atomic<size_t> numBackgroundTranscripts{0};
 
-  tbb::parallel_for(
+  arena.execute([&]{
+  oneapi::tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(transcripts.size())),
       [&](const BlockedIndexRange& range) -> void {
 
@@ -2826,6 +2829,7 @@ int contextSize = outsideContext + insideContext;
 
       } // end tbb for function
   );
+  });
 
   size_t bgCutoff =
       std::min(static_cast<size_t>(150),
@@ -2906,7 +2910,8 @@ int contextSize = outsideContext + insideContext;
   /**
    * Compute the effective lengths of each transcript (in parallel)
    */
-  tbb::parallel_for(
+  arena.execute([&]{
+  oneapi::tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(transcripts.size())),
       [&](const BlockedIndexRange& range) -> void {
 
@@ -3147,6 +3152,7 @@ int contextSize = outsideContext + insideContext;
         }
       } // end parallel_for lambda
   );
+  });
 
   sopt.jointLog->info("processed bias for 100.0% of the transcripts");
   return effLensOut;
@@ -3478,6 +3484,7 @@ template void salmon::utils::normalizeAlphas<BulkAlignLibT<ReadPair,AlignmentMod
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
                                       BulkExpT>(
+    oneapi::tbb::task_arena& arena,
     SalmonOpts& sopt, BulkExpT& readExp, Eigen::VectorXd& effLensIn,
     std::vector<std::atomic<double>>& alphas, std::vector<bool>& available,
     bool finalRound);
@@ -3485,23 +3492,27 @@ salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
                                       SCExpT>(
-                                                      SalmonOpts& sopt, SCExpT& readExp, Eigen::VectorXd& effLensIn,
-                                                      std::vector<std::atomic<double>>& alphas, std::vector<bool>& available,
-                                                      bool finalRound);
+    oneapi::tbb::task_arena& arena,
+    SalmonOpts& sopt, SCExpT& readExp, Eigen::VectorXd& effLensIn,
+    std::vector<std::atomic<double>>& alphas, std::vector<bool>& available,
+    bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<double>, BulkExpT>(
+    oneapi::tbb::task_arena& arena,
     SalmonOpts& sopt, BulkExpT& readExp, Eigen::VectorXd& effLensIn,
     std::vector<double>& alphas, std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<double>, SCExpT>(
-                                                                           SalmonOpts& sopt, SCExpT& readExp, Eigen::VectorXd& effLensIn,
-                                                                           std::vector<double>& alphas, std::vector<bool>& available, bool finalRound);
+  oneapi::tbb::task_arena& arena,
+  SalmonOpts& sopt, SCExpT& readExp, Eigen::VectorXd& effLensIn,
+  std::vector<double>& alphas, std::vector<bool>& available, bool finalRound);
 
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<double>,
                                       BulkAlignLibT<ReadPair,AlignmentModel>>(
+    oneapi::tbb::task_arena& arena,
     SalmonOpts& sopt, BulkAlignLibT<ReadPair,AlignmentModel>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<double>& alphas,
     std::vector<bool>& available, bool finalRound);
@@ -3509,6 +3520,7 @@ salmon::utils::updateEffectiveLengths<std::vector<double>,
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
                                       BulkAlignLibT<UnpairedRead,AlignmentModel>>(
+    oneapi::tbb::task_arena& arena,
     SalmonOpts& sopt, BulkAlignLibT<UnpairedRead,AlignmentModel>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<std::atomic<double>>& alphas,
     std::vector<bool>& available, bool finalRound);
@@ -3516,6 +3528,7 @@ salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
                                       BulkAlignLibT<ReadPair,AlignmentModel>>(
+    oneapi::tbb::task_arena& arena,                                    
     SalmonOpts& sopt, BulkAlignLibT<ReadPair,AlignmentModel>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<std::atomic<double>>& alphas,
     std::vector<bool>& available, bool finalRound);
@@ -3523,6 +3536,7 @@ salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
                                       BulkAlignLibT<UnpairedRead,ONTAlignmentModel>>(
+    oneapi::tbb::task_arena& arena,                                    
     SalmonOpts& sopt, BulkAlignLibT<UnpairedRead,ONTAlignmentModel>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<std::atomic<double>>& alphas,
     std::vector<bool>& available, bool finalRound);
@@ -3530,6 +3544,7 @@ salmon::utils::updateEffectiveLengths<std::vector<std::atomic<double>>,
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<double>,
                                       BulkAlignLibT<UnpairedRead,AlignmentModel>>(
+    oneapi::tbb::task_arena& arena,                                    
     SalmonOpts& sopt, BulkAlignLibT<UnpairedRead,AlignmentModel>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<double>& alphas,
     std::vector<bool>& available, bool finalRound);
@@ -3537,6 +3552,7 @@ salmon::utils::updateEffectiveLengths<std::vector<double>,
 template Eigen::VectorXd
 salmon::utils::updateEffectiveLengths<std::vector<double>,
                                       BulkAlignLibT<UnpairedRead,ONTAlignmentModel>>(
+    oneapi::tbb::task_arena& arena,                                    
     SalmonOpts& sopt, BulkAlignLibT<UnpairedRead,ONTAlignmentModel>& readExp,
     Eigen::VectorXd& effLensIn, std::vector<double>& alphas,
     std::vector<bool>& available, bool finalRound);
@@ -3591,7 +3607,7 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
                                        AbundanceVecT& alphas, bool writeBias) {
 
   using std::vector;
-  using BlockedIndexRange = tbb::blocked_range<size_t>;
+  using BlockedIndexRange = oneapi::tbb::blocked_range<size_t>;
 
   double minAlpha = 1e-8;
   uint32_t gcSamp{sopt.pdfSampFactor};
@@ -3732,11 +3748,11 @@ Eigen::VectorXd updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
   auto getBiasParams = [K]() -> CombineableBiasParams {
     return CombineableBiasParams(K);
   };
-  tbb::combinable<CombineableBiasParams> expectedDist(getBiasParams);
+  oneapi::tbb::combinable<CombineableBiasParams> expectedDist(getBiasParams);
   std::atomic<size_t> numBackgroundTranscripts{0};
   std::atomic<size_t> numExpressedTranscripts{0};
 
-  tbb::parallel_for(
+  oneapi::tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(transcripts.size())),
       [&](const BlockedIndexRange& range) -> void {
 
@@ -4010,7 +4026,7 @@ txp.uniqueUpdateFraction() < 0.90) {
 
   std::mutex updateMutex;
   // Compute the effective lengths of each transcript (in parallel)
-  tbb::parallel_for(
+  oneapi::tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(transcripts.size())),
       [&](const BlockedIndexRange& range) -> void {
 

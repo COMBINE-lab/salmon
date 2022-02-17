@@ -21,7 +21,7 @@ extern "C" {
 #include <unordered_set>
 #include <vector>
 
-#include <tbb/concurrent_queue.h>
+#include <oneapi/tbb/concurrent_queue.h>
 
 #include <boost/filesystem.hpp>
 #include <boost/math/distributions/normal.hpp>
@@ -78,7 +78,7 @@ constexpr uint32_t miniBatchSize{1000};
 template <typename FragT> using AlignmentBatch = std::vector<FragT>;
 
 template <typename FragT>
-using MiniBatchQueue = tbb::concurrent_queue<MiniBatchInfo<FragT>*>;
+using MiniBatchQueue = oneapi::tbb::concurrent_queue<MiniBatchInfo<FragT>*>;
 
 using PriorAbundanceVector = std::vector<double>;
 using PosteriorAbundanceVector = std::vector<double>;

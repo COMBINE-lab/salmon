@@ -26,9 +26,9 @@
 #include <boost/program_options/parsers.hpp>
 #include <boost/range/irange.hpp>
 
-#include "tbb/parallel_for.h"
-#include "tbb/parallel_for_each.h"
-#include "tbb/parallel_sort.h"
+#include "oneapi/tbb/parallel_for.h"
+#include "oneapi/tbb/parallel_for_each.h"
+#include "oneapi/tbb/parallel_sort.h"
 
 #include "GenomicFeature.hpp"
 #include "SalmonIndex.hpp"

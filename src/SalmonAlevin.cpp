@@ -62,15 +62,15 @@
 #include <boost/thread/thread.hpp>
 
 // TBB Includes
-#include "tbb/blocked_range.h"
-#include "tbb/concurrent_queue.h"
-#include "tbb/concurrent_unordered_map.h"
-#include "tbb/concurrent_unordered_set.h"
-#include "tbb/concurrent_vector.h"
-#include "tbb/parallel_for.h"
-#include "tbb/parallel_for_each.h"
-#include "tbb/parallel_reduce.h"
-#include "tbb/partitioner.h"
+#include "oneapi/tbb/blocked_range.h"
+#include "oneapi/tbb/concurrent_queue.h"
+#include "oneapi/tbb/concurrent_unordered_map.h"
+#include "oneapi/tbb/concurrent_unordered_set.h"
+#include "oneapi/tbb/concurrent_vector.h"
+#include "oneapi/tbb/parallel_for.h"
+#include "oneapi/tbb/parallel_for_each.h"
+#include "oneapi/tbb/parallel_reduce.h"
+#include "oneapi/tbb/partitioner.h"
 
 // logger includes
 #include "spdlog/spdlog.h"
@@ -173,7 +173,7 @@ namespace alevin{
   using AlnGroupQueue = moodycamel::ConcurrentQueue<AlevinAlnGroup<AlnT>*>;
 #else
   template <typename AlnT>
-  using AlnGroupQueue = tbb::concurrent_queue<AlevinAlnGroup<AlnT>*>;
+  using AlnGroupQueue = oneapi::tbb::concurrent_queue<AlevinAlnGroup<AlnT>*>;
 #endif
 
   //#include "LightweightAlignmentDefs.hpp"
@@ -185,7 +185,7 @@ using namespace alevin;
 /* ALEVIN DECLERATIONS*/
 using bcEnd = BarcodeEnd;
 namespace aut = alevin::utils;
-using BlockedIndexRange = tbb::blocked_range<size_t>;
+using BlockedIndexRange = oneapi::tbb::blocked_range<size_t>;
 using ReadExperimentT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 /////// REDUNDANT CODE END//
 

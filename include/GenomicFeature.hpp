@@ -29,7 +29,7 @@
 #include <fstream>
 #include <thread>
 
-#include "tbb/concurrent_queue.h"
+#include "oneapi/tbb/concurrent_queue.h"
 
 struct TranscriptGeneID {
   std::string transcript_id;
@@ -161,7 +161,7 @@ readGTFFile(const std::string& fname) {
   bool done = false;
   std::vector<std::thread> threads;
 
-  tbb::concurrent_queue<StringPtr> queue;
+  oneapi::tbb::concurrent_queue<StringPtr> queue;
   // boost::lockfree::queue<StringPtr> queue(5000);
   threads.push_back(std::thread([&ifile, &queue, &done]() {
     StringPtr line = new std::string();
@@ -177,7 +177,7 @@ readGTFFile(const std::string& fname) {
 
   size_t nreader = 10;
   std::atomic<size_t> tctr(nreader);
-  tbb::concurrent_queue<GenomicFeature<StaticAttributes>*> outQueue;
+  oneapi::tbb::concurrent_queue<GenomicFeature<StaticAttributes>*> outQueue;
   // boost::lockfree::queue<GenomicFeature<StaticAttributes>*> outQueue(5000);
 
   for (size_t i = 0; i < nreader; ++i) {

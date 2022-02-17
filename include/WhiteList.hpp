@@ -16,8 +16,8 @@
 //#include "RapMapUtils.hpp"
 #include "SingleCellProtocols.hpp"
 
-#include "tbb/parallel_for.h"
-#include "tbb/blocked_range.h"
+#include "oneapi/tbb/parallel_for.h"
+#include "oneapi/tbb/blocked_range.h"
 
 #include <boost/range/irange.hpp>
 #include <boost/iostreams/device/file.hpp>
@@ -27,7 +27,7 @@
 namespace alevin {
   namespace whitelist {
 
-    using BlockedIndexRange = tbb::blocked_range<size_t>;
+    using BlockedIndexRange = oneapi::tbb::blocked_range<size_t>;
     using DoubleMatrixT = std::vector<std::vector<double>> ;
     using DoubleVectorT = std::vector<double> ;
 

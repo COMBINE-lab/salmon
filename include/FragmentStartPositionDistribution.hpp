@@ -9,7 +9,7 @@
 #ifndef FRAGMENT_START_POSITION_DISTRIBUTION
 #define FRAGMENT_START_POSITION_DISTRIBUTION
 
-// #include "tbb/atomic.h"
+// #include "oneapi/tbb/atomic.h"
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -36,7 +36,7 @@ class FragmentStartPositionDistribution {
    * A private double that stores the (logged) sum of the product of observed
    * lengths and masses for quick mean calculations.
    */
-  //tbb::atomic<double> sum_;
+  //oneapi::tbb::atomic<double> sum_;
   /**
    * The number of bins we consider within each transcript.
    */

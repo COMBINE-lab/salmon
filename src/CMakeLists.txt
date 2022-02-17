@@ -1,3 +1,7 @@
+if(${TBB_FOUND})
+  get_target_property(TBB_INCLUDE_DIRS TBB::tbb INTERFACE_INCLUDE_DIRECTORIES)
+endif()
+
 include_directories(
 ${GAT_SOURCE_DIR}/include
 ${GAT_SOURCE_DIR}/include/eigen3
@@ -188,6 +192,9 @@ endif()
 
 add_executable(unitTests ${UNIT_TESTS_SRCS})
 
+target_compile_options(unitTests PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
+target_compile_options(unitTests PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
+
 #add_executable(salmon-read ${SALMON_READ_SRCS})
 #set_target_properties(salmon-read PROPERTIES COMPILE_FLAGS "${CMAKE_CXX_FLAGS} -DHAVE_LIBPTHREAD -D_PBGZF_USE -fopenmp"
 #    LINK_FLAGS "-DHAVE_LIBPTHREAD -D_PBGZF_USE -fopenmp")
@@ -202,7 +209,7 @@ add_executable(unitTests ${UNIT_TESTS_SRCS})
 #  message ("Setting libdivsufsort64 = ${SUFFARRAY_LIB64}") 
 #endif()
 
-
+if (${TBB_TARGET_EXISTED})
 # Link the executable
 target_link_libraries(salmon
     Threads::Threads
@@ -229,18 +236,22 @@ target_link_libraries(salmon
     alevin_core
     ${ASAN_LIB}
     ${FAST_MALLOC_LIB}
-    ${TBB_LIBRARIES}
+    #${TBB_LIBRARIES}
+    TBB::tbb
+    TBB::tbbmalloc
     ${LIBRT}
     ${CMAKE_DL_LIBS}
     #ubsan
 )
+endif()
 
 # Link the executable
+if (${TBB_TARGET_EXISTED})
 target_link_libraries(unitTests
     Threads::Threads
 ## PUFF_INTEGRATION
-    alevin_core
     salmon_core
+    alevin_core
     gff
     ${STADEN_LIBRARIES} 
     ${Boost_LIBRARIES}
@@ -250,7 +261,9 @@ target_link_libraries(unitTests
     m
     ${LIBLZMA_LIBRARIES}
     ${BZIP2_LIBRARIES}
-    ${TBB_LIBRARIES}
+    #${TBB_LIBRARIES}
+    TBB::tbb
+    TBB::tbbmalloc
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
     ${ASAN_LIB}
@@ -258,6 +271,7 @@ target_link_libraries(unitTests
     ${CMAKE_DL_LIBS}
     #ubsan
 )
+endif()
 
 if(NOT Iconv_IS_BUILT_IN)
   target_link_libraries(unitTests Iconv::Iconv)
@@ -265,6 +279,8 @@ if(NOT Iconv_IS_BUILT_IN)
 endif()
 
 add_dependencies(salmon unitTests)
+add_dependencies(unitTests salmon_core)
+add_dependencies(unitTests alevin_core)
 
 ##
 # External dependencies of salmon_core and salmon
@@ -276,19 +292,17 @@ if (${FETCHED_JEMALLOC})
 endif()
 
 if (${FETCHED_BOOST})
-## PUFF_INTEGRATION
-#   add_dependencies(alevin_core libboost)
    add_dependencies(alevin_core libboost)
    add_dependencies(salmon_core libboost)
    add_dependencies(salmon libboost)
 endif()
 
 if (${FETCHED_TBB})
-   add_dependencies(alevin_core libtbb)
-   add_dependencies(salmon_core libtbb)
-## PUFF_INTEGRATION
-#   add_dependencies(alevin_core libtbb)
-   add_dependencies(salmon libtbb)
+   message("Fetched oneTBB, so libtbb_rescan must be a dependency for targets")
+   add_dependencies(alevin_core libtbb_rescan)
+   add_dependencies(salmon_core libtbb_rescan)
+   add_dependencies(unitTests libtbb_rescan)
+   add_dependencies(salmon libtbb_rescan)
 endif()
 
 if (${FETCHED_CEREAL})

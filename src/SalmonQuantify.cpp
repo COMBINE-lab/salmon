@@ -61,15 +61,15 @@
 #include "core/range.hpp"
 
 // TBB Includes
-#include "tbb/blocked_range.h"
-#include "tbb/concurrent_queue.h"
-#include "tbb/concurrent_unordered_map.h"
-#include "tbb/concurrent_unordered_set.h"
-#include "tbb/concurrent_vector.h"
-#include "tbb/parallel_for.h"
-#include "tbb/parallel_for_each.h"
-#include "tbb/parallel_reduce.h"
-#include "tbb/partitioner.h"
+#include "oneapi/tbb/blocked_range.h"
+#include "oneapi/tbb/concurrent_queue.h"
+#include "oneapi/tbb/concurrent_unordered_map.h"
+#include "oneapi/tbb/concurrent_unordered_set.h"
+#include "oneapi/tbb/concurrent_vector.h"
+#include "oneapi/tbb/parallel_for.h"
+#include "oneapi/tbb/parallel_for_each.h"
+#include "oneapi/tbb/parallel_reduce.h"
+#include "oneapi/tbb/partitioner.h"
 
 // logger includes
 #include "spdlog/spdlog.h"
@@ -152,7 +152,7 @@ template <typename AlnT>
 using AlnGroupQueue = moodycamel::ConcurrentQueue<AlignmentGroup<AlnT>*>;
 #else
 template <typename AlnT>
-using AlnGroupQueue = tbb::concurrent_queue<AlignmentGroup<AlnT>*>;
+using AlnGroupQueue = oneapi::tbb::concurrent_queue<AlignmentGroup<AlnT>*>;
 #endif
 
 //#include "LightweightAlignmentDefs.hpp"
