@@ -649,7 +649,7 @@ set(TBB_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
 if("${TBB_COMPILER}" STREQUAL "gcc")
   ## Don't know why it's a problem yet, but if we're using
   ## GCC, get rid of the DO_ITT_NOTIFY flag
-  set(TBB_CXXFLAGS "${TBB_CXXFLAGS} -UDO_ITT_NOTIFY")
+  # set(TBB_CXXFLAGS "${TBB_CXXFLAGS} -UDO_ITT_NOTIFY")
 endif()
 
 set(TBB_CXXFLAGS "${TBB_CXXFLAGS} ${CXXSTDFLAG} ${SCHAR_FLAG}")
