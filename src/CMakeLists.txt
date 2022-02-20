@@ -386,16 +386,15 @@ set(INSTALL_INCLUDE_DIR include )
 
 if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
 #set(TBB_SOURCE_DIR $<TARGET_FILE:TBB::tbb>)
-add_custom_target(genexdebug COMMAND ${CMAKE_COMMAND} -E echo "$<TARGET_LINKER_FILE:TBB::tbb>")
-#message("[salmon::install] : for installation will copy TBB shared libraries from ${genexdebug}")
-#install(DIRECTORY
-#  $<TARGET_FILE_DIR:TBB::tbb>
-#  DESTINATION ${INSTALL_LIB_DIR}
-#  FILES_MATCHING PATTERN "libtbb*.${SHARED_LIB_EXTENSION}*"
-#)
-file(GLOB TBB_INSTALL_LIB_FILES "$<TARGET_FILE_DIR:TBB::tbb>/libtbb*.${SHARED_LIB_EXTENSION}*")
+#add_custom_target(genexdebug COMMAND ${CMAKE_COMMAND} -E echo "$<TARGET_LINKER_FILE:TBB::tbb>")
+get_target_property(TBB_LIB_INSTALL_NAME TBB::tbb IMPORTED_LOCATION_RELEASE)
+get_filename_component(TBB_LIB_INSTALL_DIR ${TBB_LIB_INSTALL_NAME} DIRECTORY)
+message("TBB_LIB_INSTALL_DIR = ${TBB_LIB_INSTALL_DIR}")
+file(GLOB TBB_FILES ${TBB_LIB_INSTALL_DIR}/libtbb*.${SHARED_LIB_EXTENSION}*)
+message("TBBGLOBS = ${TBB_FILES}")
+
 install(FILES 
-  ${TBB_INSTALL_LIB_FILES}
+  ${TBB_FILES}
   DESTINATION ${INSTALL_LIB_DIR}
 ) 
 #install(FILES 
