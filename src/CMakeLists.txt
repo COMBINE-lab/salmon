@@ -388,8 +388,10 @@ if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
 #set(TBB_SOURCE_DIR $<TARGET_FILE:TBB::tbb>)
 #add_custom_target(genexdebug COMMAND ${CMAKE_COMMAND} -E echo "$<TARGET_FILE_DIR:TBB::tbb>")
 #message("[salmon::install] : for installation will copy TBB shared libraries from ${genexdebug}")
-install(TARGETS TBB
-  LIBRARY DESTINATION lib
+install(DIRECTORY
+  $<TARGET_FILE_DIR:TBB::tbb>
+  DESTINATION ${INSTALL_LIB_DIR}
+  FILES_MATCHING PATTERN "libtbb*.${SHARED_LIB_EXTENSION}*"
 )
 #install(DIRECTORY
 #       ${TBB_SOURCE_DIR}
