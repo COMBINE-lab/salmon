@@ -386,6 +386,7 @@ set(INSTALL_INCLUDE_DIR include )
 
 if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
 get_target_property(TBB_SOURCE_DIR TBB::tbb SOURCE_DIR)
+message("[salmon::install] : for installation will copy TBB shared libraries from ${TBB_SOURCE_DIR}")
 install(DIRECTORY
        ${TBB_SOURCE_DIR}
        DESTINATION ${INSTALL_LIB_DIR}
