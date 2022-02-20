@@ -610,17 +610,10 @@ if (NOT CEREAL_FOUND)
 endif()
 
 ## Try and find TBB first
-find_package(TBB 2019.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy)
-## Try and find TBB first
 find_package(TBB 2021.4
   HINTS ${TBB_ROOT_SEARCH}
   COMPONENTS tbb tbbmalloc tbbmalloc_proxy)
 
-## NOTE: we actually require at least 2019 U4 or greater
-## since we are using tbb::global_control.  However, they 
-## seem not to have tagged minor version numbers in their 
-## source.  Check before release if we can bump to the 2020
-## version (requires having tbb 2020 for OSX).
 if (${TBB_FOUND})
   if (${TBB_VERSION} VERSION_GREATER_EQUAL 2021.4)
   message("FOUND SUITABLE TBB VERSION : ${TBB_VERSION}")
@@ -669,26 +662,23 @@ tar -xzvf v2021.5.tar.gz
 SOURCE_DIR ${TBB_SOURCE_DIR}
 INSTALL_DIR ${TBB_INSTALL_DIR}
 PATCH_COMMAND "${TBB_PATCH_STEP}"
-CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR> -DTBB_TEST=OFF -DTBB_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
+CMAKE_ARGS -DCMAKE_CXX_FLAGS=${TBB_CXXFLAGS} -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR> -DTBB_TEST=OFF -DTBB_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD}
 BUILD_IN_SOURCE TRUE
 )
 
 set(RECONFIG_FLAGS ${RECONFIG_FLAGS} -DTBB_WILL_RECONFIGURE=FALSE -DTBB_RECONFIGURE=TRUE)
-externalproject_add_step(libtbb reconfigure
-  COMMAND ${CMAKE_COMMAND} ${CMAKE_CURRENT_SOURCE_DIR} ${RECONFIG_FLAGS}
-  DEPENDEES install
+ExternalProject_Add_Step(libtbb reconfigure
+COMMAND ${CMAKE_COMMAND} ${CMAKE_CURRENT_SOURCE_DIR} ${RECONFIG_FLAGS}
+DEPENDEES install 
 )
-
 set(FETCHED_TBB TRUE)
-add_custom_target(libtbb_rescan ${CMAKE_COMMAND} ${CMAKE_SOURCE_DIR} DEPENDS libtbb_rescan)
-set(${TBB_ROOT_SEARCH} ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
+set(TBB_ROOT_SEARCH ${CMAKE_SOURCE_DIR}/external/install)    
 
   if(${FETCHED_BOOST})
     add_dependencies(libtbb libboost)
   endif()
-else()
-  add_custom_target(libtbb_rescan)
-endif()
+
+endif() # end of fetch tbb
 
 ##
 # If we're fetching tbb, we need to have dummy paths for these variables
@@ -704,6 +694,7 @@ if(TBB_WILL_RECONFIGURE)
     #set(TBB_LIBRARIES tbb tbbmalloc)
     set(TBB_LIBRARIES ${TBB_INSTALL_DIR}/lib/libtbb.${SHARED_LIB_EXTENSION}
     			${TBB_INSTALL_DIR}/lib/libtbbmalloc.${SHARED_LIB_EXTENSION}
+          ${TBB_INSTALL_DIR}/lib/libtbbmalloc_proxy.${SHARED_LIB_EXTENSION}
 	   )
     message("TBB_INCLUDE_DIRS = ${TBB_INCLUDE_DIRS}")
     message("TBB_LIBRARY_DIRS = ${TBB_LIBRARY_DIRS}")
@@ -738,7 +729,7 @@ if(TBB_RECONFIGURE)
   message("[in TBB_RECONFIGURE] TBB_LIBRARIES = ${TBB_LIBRARIES}")
 endif()
 
-message("TBB_LIBRARIES = ${TBB_LIBRARIES}")
+#message("TBB_LIBRARIES = ${TBB_LIBRARIES}")
 #message("TBB_FOUND        ${TBB_FOUND}       ")
 #message("TBB_INSTALL_DIR  ${TBB_INSTALL_DIR}")
 #message("TBB_INCLUDE_DIRS ${TBB_INCLUDE_DIRS}")

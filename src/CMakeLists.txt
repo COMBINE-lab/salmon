@@ -209,7 +209,14 @@ target_compile_options(unitTests PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS
 #  message ("Setting libdivsufsort64 = ${SUFFARRAY_LIB64}") 
 #endif()
 
-if (${TBB_TARGET_EXISTED})
+add_dependencies(salmon puffer)
+add_dependencies(salmon twopaco)
+add_dependencies(salmon graphdump)
+add_dependencies(salmon ntcard)
+add_dependencies(salmon ksw2pp)
+add_dependencies(salmon salmon_core)
+add_dependencies(salmon alevin_core)
+if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
 # Link the executable
 target_link_libraries(salmon
     Threads::Threads
@@ -223,30 +230,32 @@ target_link_libraries(salmon
     ${ICU_LIBS}
     ${STADEN_LIBRARIES} ${CURL_LIBRARIES}
     ${ZLIB_LIBRARY}
-    #${SUFFARRAY_LIB}
-    #${SUFFARRAY_LIB64}
-    #${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
     m
     ${LIBLZMA_LIBRARIES}
     ${BZIP2_LIBRARIES}
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
     ksw2pp
-## PUFF_INTEGRATION    
     alevin_core
     ${ASAN_LIB}
     ${FAST_MALLOC_LIB}
-    #${TBB_LIBRARIES}
     TBB::tbb
     TBB::tbbmalloc
     ${LIBRT}
     ${CMAKE_DL_LIBS}
-    #ubsan
 )
 endif()
 
-# Link the executable
-if (${TBB_TARGET_EXISTED})
+# dependencies for unitTests
+add_dependencies(salmon salmon_core)
+add_dependencies(salmon alevin_core)
+#add_dependencies(salmon puffer)
+#add_dependencies(salmon twopaco)
+#add_dependencies(salmon graphdump)
+#add_dependencies(salmon ntcard)
+#add_dependencies(salmon ksw2pp)
+
+if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
 target_link_libraries(unitTests
     Threads::Threads
 ## PUFF_INTEGRATION
@@ -298,11 +307,11 @@ if (${FETCHED_BOOST})
 endif()
 
 if (${FETCHED_TBB})
-   message("Fetched oneTBB, so libtbb_rescan must be a dependency for targets")
-   add_dependencies(alevin_core libtbb_rescan)
-   add_dependencies(salmon_core libtbb_rescan)
-   add_dependencies(unitTests libtbb_rescan)
-   add_dependencies(salmon libtbb_rescan)
+   message("Fetched oneTBB, so libtbb must be a dependency for targets")
+   add_dependencies(alevin_core libtbb)
+   add_dependencies(salmon_core libtbb)
+   add_dependencies(unitTests libtbb)
+   add_dependencies(salmon libtbb)
 endif()
 
 if (${FETCHED_CEREAL})
