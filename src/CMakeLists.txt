@@ -385,14 +385,17 @@ set(INSTALL_BIN_DIR bin )
 set(INSTALL_INCLUDE_DIR include )
 
 if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
-get_target_property(TBB_SOURCE_DIR TBB::tbb SOURCE_DIR)
-message("[salmon::install] : for installation will copy TBB shared libraries from ${TBB_SOURCE_DIR}")
-install(DIRECTORY
-       ${TBB_SOURCE_DIR}
-       DESTINATION ${INSTALL_LIB_DIR}
-	     FILES_MATCHING PATTERN "libtbb*.${SHARED_LIB_EXTENSION}*"
+#set(TBB_SOURCE_DIR $<TARGET_FILE:TBB::tbb>)
+#add_custom_target(genexdebug COMMAND ${CMAKE_COMMAND} -E echo "$<TARGET_FILE_DIR:TBB::tbb>")
+#message("[salmon::install] : for installation will copy TBB shared libraries from ${genexdebug}")
+install(TARGETS TBB
+  LIBRARY DESTINATION lib
 )
-
+#install(DIRECTORY
+#       ${TBB_SOURCE_DIR}
+#       DESTINATION ${INSTALL_LIB_DIR}
+#	     FILES_MATCHING PATTERN "libtbb*.${SHARED_LIB_EXTENSION}*"
+#)
 endif()
 
 #install(DIRECTORY
