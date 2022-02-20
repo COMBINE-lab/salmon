@@ -384,11 +384,17 @@ set(INSTALL_LIB_DIR lib )
 set(INSTALL_BIN_DIR bin )
 set(INSTALL_INCLUDE_DIR include )
 
-install(DIRECTORY
-        ${GAT_SOURCE_DIR}/external/install/lib/
-        DESTINATION ${INSTALL_LIB_DIR}
-	    FILES_MATCHING PATTERN "libtbb*.${SHARED_LIB_EXTENSION}*"
-    )
+install(TARGETS TBB::tbb TBB::tbbmalloc 
+RUNTIME DESTINATION bin
+LIBRARY DESTINATION lib
+ARCHIVE DESTINATION lib
+)
+
+#install(DIRECTORY
+#        ${GAT_SOURCE_DIR}/external/install/lib/
+#        DESTINATION ${INSTALL_LIB_DIR}
+#	    FILES_MATCHING PATTERN "libtbb*.${SHARED_LIB_EXTENSION}*"
+#    )
 
 # install(FILES ${Boost_LIBRARIES}
 # 	           DESTINATION ${INSTALL_LIB_DIR})
