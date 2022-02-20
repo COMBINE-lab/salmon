@@ -384,11 +384,13 @@ set(INSTALL_LIB_DIR lib )
 set(INSTALL_BIN_DIR bin )
 set(INSTALL_INCLUDE_DIR include )
 
+if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
 install(TARGETS TBB::tbb TBB::tbbmalloc 
 RUNTIME DESTINATION bin
 LIBRARY DESTINATION lib
 ARCHIVE DESTINATION lib
 )
+endif()
 
 #install(DIRECTORY
 #        ${GAT_SOURCE_DIR}/external/install/lib/
