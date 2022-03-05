@@ -24,7 +24,7 @@ if [ -d ${INSTALL_DIR}/src/pufferfish ] ; then
 fi
 
 #SVER=salmon-v1.7.0
-SVER=onetbb
+SVER=develop
 #SVER=sketch-mode
 
 EXPECTED_SHA256=5894fabbf6829a3d4a627135edc8326e931eb07fc792bfff3a0714e8fee8bb8b

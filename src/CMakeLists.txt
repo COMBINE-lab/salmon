@@ -97,10 +97,17 @@ if(HAS_IPO AND (NOT NO_IPO))
   set_property(TARGET ksw2pp PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
-set ( UNIT_TESTS_SRCS
+set (UNIT_TESTS_ENTRY_SRCS
     ${GAT_SOURCE_DIR}/tests/UnitTests.cpp
-    FragmentLengthDistribution.cpp
-    ${GAT_SOURCE_DIR}/external/install/src/pufferfish/rank9b.cpp
+    ${GAT_SOURCE_DIR}/tests/catch.hpp
+)
+
+set (UNIT_TESTS_INDIVIDUAL_SRCS
+  ${GAT_SOURCE_DIR}/src/FragmentLengthDistribution.cpp
+  ${GAT_SOURCE_DIR}/external/install/src/pufferfish/rank9b.cpp
+  ${GAT_SOURCE_DIR}/tests/GCSampleTests.cpp
+  ${GAT_SOURCE_DIR}/tests/LibraryTypeTests.cpp
+  # ${GAT_SOURCE_DIR}/tests/KmerHistTests.cpp
 )
 
 
@@ -190,8 +197,9 @@ if(HAS_IPO AND (NOT NO_IPO))
   set_property(TARGET salmon PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
-add_executable(unitTests ${UNIT_TESTS_SRCS})
+add_library(UnitTestsMain STATIC ${UNIT_TESTS_ENTRY_SRCS} ${GAT_SOURCE_DIR}/tests/catch.hpp)
 
+add_executable(unitTests ${UNIT_TESTS_INDIVIDUAL_SRCS} ${GAT_SOURCE_DIR}/tests/catch.hpp)
 target_compile_options(unitTests PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
 target_compile_options(unitTests PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
 
@@ -219,7 +227,7 @@ add_dependencies(salmon alevin_core)
 if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
 # Link the executable
 target_link_libraries(salmon
-    Threads::Threads
+    Threads::Threads 
     puffer 
     salmon_core
     twopaco
@@ -249,6 +257,7 @@ endif()
 # dependencies for unitTests
 add_dependencies(salmon salmon_core)
 add_dependencies(salmon alevin_core)
+add_dependencies(unitTests UnitTestsMain)
 #add_dependencies(salmon puffer)
 #add_dependencies(salmon twopaco)
 #add_dependencies(salmon graphdump)
@@ -256,12 +265,14 @@ add_dependencies(salmon alevin_core)
 #add_dependencies(salmon ksw2pp)
 
 if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
+
 target_link_libraries(unitTests
     Threads::Threads
 ## PUFF_INTEGRATION
     salmon_core
     alevin_core
     gff
+    UnitTestsMain
     ${STADEN_LIBRARIES} 
     ${Boost_LIBRARIES}
     ${ICU_LIBS}
