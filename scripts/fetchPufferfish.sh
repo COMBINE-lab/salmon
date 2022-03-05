@@ -23,8 +23,8 @@ if [ -d ${INSTALL_DIR}/src/pufferfish ] ; then
     rm -fr ${INSTALL_DIR}/src/pufferfish
 fi
 
-SVER=salmon-v1.7.0
-#SVER=develop
+#SVER=salmon-v1.7.0
+SVER=onetbb
 #SVER=sketch-mode
 
 EXPECTED_SHA256=5894fabbf6829a3d4a627135edc8326e931eb07fc792bfff3a0714e8fee8bb8b
@@ -46,7 +46,7 @@ if [ -z "${hashcheck-}" ]; then
     echo "Couldn't find shasum command; can't verify contents of downloaded pufferfish";
 else
 
-    if [[ $SVER != develop ]]; then
+    if [[ $SVER != develop && $SVER != onetbb ]]; then
         echo "${EXPECTED_SHA256}  ${EXTERNAL_DIR}/pufferfish.zip" | ${hashcheck} -c - || { echo "pufferfish.zip did not match expected SHA1! Exiting."; exit 1; }
     else
         echo "not testing sha since pulling from develop"

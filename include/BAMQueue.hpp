@@ -23,7 +23,7 @@
 #include "spdlog/spdlog.h"
 #include <boost/filesystem.hpp>
 #include <boost/timer/timer.hpp>
-#include <tbb/concurrent_queue.h>
+#include <oneapi/tbb/concurrent_queue.h>
 
 extern "C" {
 #include "io_lib/os.h"
@@ -75,10 +75,10 @@ public:
 
   void reset();
 
-  tbb::concurrent_queue<FragT*>& getFragmentQueue();
+  oneapi::tbb::concurrent_queue<FragT*>& getFragmentQueue();
   // moodycamel::ConcurrentQueue<FragT*>& getFragmentQueue();
 
-  // tbb::concurrent_bounded_queue<AlignmentGroup<FragT*>*>&
+  // oneapi::tbb::concurrent_bounded_queue<AlignmentGroup<FragT*>*>&
   // getAlignmentGroupQueue();
   moodycamel::ConcurrentQueue<AlignmentGroup<FragT*>*>&
   getAlignmentGroupQueue();
@@ -114,13 +114,13 @@ private:
   size_t numUnaligned_;
   size_t numMappedReads_;
   size_t numUniquelyMappedReads_;
-  tbb::concurrent_queue<FragT*> fragmentQueue_;
+  oneapi::tbb::concurrent_queue<FragT*> fragmentQueue_;
   // moodycamel::ConcurrentQueue<FragT*> fragmentQueue_;
 
-  // tbb::concurrent_bounded_queue<AlignmentGroup<FragT*>*> alnGroupPool_;
+  // oneapi::tbb::concurrent_bounded_queue<AlignmentGroup<FragT*>*> alnGroupPool_;
   moodycamel::ConcurrentQueue<AlignmentGroup<FragT*>*> alnGroupPool_;
 
-  // tbb::concurrent_bounded_queue<AlignmentGroup<FragT*>*> alnGroupQueue_;
+  // oneapi::tbb::concurrent_bounded_queue<AlignmentGroup<FragT*>*> alnGroupQueue_;
   moodycamel::ReaderWriterQueue<AlignmentGroup<FragT*>*> alnGroupQueue_;
 
   /*

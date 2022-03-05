@@ -4,11 +4,11 @@
 #include "ReadPair.hpp"
 #include "UnpairedRead.hpp"
 #include <iostream>
-#include <tbb/concurrent_queue.h>
+#include <oneapi/tbb/concurrent_queue.h>
 
 template <typename FragT> class OutputUnmappedFilter {
 public:
-  OutputUnmappedFilter(tbb::concurrent_bounded_queue<FragT*>* outQueue)
+  OutputUnmappedFilter(oneapi::tbb::concurrent_bounded_queue<FragT*>* outQueue)
       : outQueue_(outQueue), qlen_(0) {
     memset(&qname_[0], 0, 255);
   }
@@ -37,7 +37,7 @@ public:
   }
 
 private:
-  tbb::concurrent_bounded_queue<FragT*>* outQueue_ = nullptr;
+  oneapi::tbb::concurrent_bounded_queue<FragT*>* outQueue_ = nullptr;
   char qname_[255];
   uint32_t qlen_;
 };

@@ -62,15 +62,15 @@
 #include <boost/thread/thread.hpp>
 
 // TBB Includes
-#include "tbb/blocked_range.h"
-#include "tbb/concurrent_queue.h"
-#include "tbb/concurrent_unordered_map.h"
-#include "tbb/concurrent_unordered_set.h"
-#include "tbb/concurrent_vector.h"
-#include "tbb/parallel_for.h"
-#include "tbb/parallel_for_each.h"
-#include "tbb/parallel_reduce.h"
-#include "tbb/partitioner.h"
+#include "oneapi/tbb/blocked_range.h"
+#include "oneapi/tbb/concurrent_queue.h"
+#include "oneapi/tbb/concurrent_unordered_map.h"
+#include "oneapi/tbb/concurrent_unordered_set.h"
+#include "oneapi/tbb/concurrent_vector.h"
+#include "oneapi/tbb/parallel_for.h"
+#include "oneapi/tbb/parallel_for_each.h"
+#include "oneapi/tbb/parallel_reduce.h"
+#include "oneapi/tbb/partitioner.h"
 
 // logger includes
 #include "spdlog/spdlog.h"
@@ -173,7 +173,7 @@ namespace alevin{
   using AlnGroupQueue = moodycamel::ConcurrentQueue<AlevinAlnGroup<AlnT>*>;
 #else
   template <typename AlnT>
-  using AlnGroupQueue = tbb::concurrent_queue<AlevinAlnGroup<AlnT>*>;
+  using AlnGroupQueue = oneapi::tbb::concurrent_queue<AlevinAlnGroup<AlnT>*>;
 #endif
 
   //#include "LightweightAlignmentDefs.hpp"
@@ -185,7 +185,7 @@ using namespace alevin;
 /* ALEVIN DECLERATIONS*/
 using bcEnd = BarcodeEnd;
 namespace aut = alevin::utils;
-using BlockedIndexRange = tbb::blocked_range<size_t>;
+using BlockedIndexRange = oneapi::tbb::blocked_range<size_t>;
 using ReadExperimentT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 /////// REDUNDANT CODE END//
 
@@ -430,6 +430,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
   bw << num_reads_in_chunk;
 
   size_t minK = qidx->k();
+  int32_t signed_k = static_cast<int32_t>(minK);
   size_t locRead{0};
   size_t rangeSize{0};
   uint64_t localNumAssignedFragments{0};
@@ -484,10 +485,11 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
   enum class HitDirection : uint8_t {FW, RC, BOTH};
 
   struct SketchHitInfo {
-
     // add a hit to the current target that occurs in the forward 
     // orientation with respect to the target.
-    bool add_fw(int32_t ref_pos, int32_t read_pos, int32_t max_stretch, float score_inc) {
+    bool add_fw(int32_t ref_pos, int32_t read_pos, int32_t rl, int32_t k, int32_t max_stretch, float score_inc) {
+      (void)rl;
+      (void)k;
       bool added{false};
       
       // since hits are collected by moving _forward_ in the
@@ -514,7 +516,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
     // add a hit to the current target that occurs in the forward 
     // orientation with respect to the target.
-    bool add_rc(int32_t ref_pos, int32_t read_pos, int32_t max_stretch, float score_inc) {
+    bool add_rc(int32_t ref_pos, int32_t read_pos, int32_t rl, int32_t k, int32_t max_stretch, float score_inc) {
 
       bool added{false};
       // since hits are collected by moving _forward_ in the
@@ -524,7 +526,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       // This ensures that we don't double-count a k-mer that 
       // might occur twice on this target.
       if (ref_pos < last_ref_pos_rc and read_pos > last_read_pos_rc) {
-        approx_pos_rc = ref_pos;
+        approx_pos_rc = (ref_pos - (rl - (read_pos + k)));
         if (last_read_pos_rc == -1) { 
           approx_end_pos_rc = ref_pos + read_pos; 
         } else {
@@ -738,7 +740,8 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                 // mapping position are allowed to have.
                 // NOTE this is still > read_length b/c the stretch is measured wrt the
                 // START of the terminal k-mer.
-                int32_t max_stretch = static_cast<int32_t>(readSubSeq->length() * 1.0);
+                int32_t signed_rl = static_cast<int32_t>(readSubSeq->length());
+                int32_t max_stretch = static_cast<int32_t>(signed_rl * 1.0);
 
                 // a raw hit is a pair of read_pos and a projected hit
 
@@ -752,7 +755,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
                 auto collect_mappings_from_hits = [&max_stretch, &min_occ, &hit_map,
                                                    &salmonOpts, &num_valid_hits, &total_occs,
-                                                   &largest_occ, &qidx](
+                                                   &largest_occ, &qidx, signed_rl, signed_k](
                   auto& raw_hits, auto& prev_read_pos,
                   auto& max_allowed_occ, auto& had_alt_max_occ
                 ) -> bool {
@@ -789,9 +792,11 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                         // So, we must allow for that here.
                         if (target.max_hits_for_target() >= num_valid_hits) {
                           if (ori) {
-                            target.add_fw(pos, static_cast<int32_t>(read_pos), max_stretch, score_inc);
+                            target.add_fw(pos, static_cast<int32_t>(read_pos), 
+                                          signed_rl, signed_k, max_stretch, score_inc);
                           } else {
-                            target.add_rc(pos, static_cast<int32_t>(read_pos), max_stretch, score_inc);
+                            target.add_rc(pos, static_cast<int32_t>(read_pos), 
+                                          signed_rl, signed_k, max_stretch, score_inc);
                           }
 
                           still_have_valid_target |= (target.max_hits_for_target() >= num_valid_hits + 1);

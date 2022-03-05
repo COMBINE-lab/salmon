@@ -1,3 +1,7 @@
+if(${TBB_FOUND})
+  get_target_property(TBB_INCLUDE_DIRS TBB::tbb INTERFACE_INCLUDE_DIRECTORIES)
+endif()
+
 include_directories(
 ${GAT_SOURCE_DIR}/include
 ${GAT_SOURCE_DIR}/include/eigen3
@@ -188,6 +192,9 @@ endif()
 
 add_executable(unitTests ${UNIT_TESTS_SRCS})
 
+target_compile_options(unitTests PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
+target_compile_options(unitTests PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
+
 #add_executable(salmon-read ${SALMON_READ_SRCS})
 #set_target_properties(salmon-read PROPERTIES COMPILE_FLAGS "${CMAKE_CXX_FLAGS} -DHAVE_LIBPTHREAD -D_PBGZF_USE -fopenmp"
 #    LINK_FLAGS "-DHAVE_LIBPTHREAD -D_PBGZF_USE -fopenmp")
@@ -202,7 +209,14 @@ add_executable(unitTests ${UNIT_TESTS_SRCS})
 #  message ("Setting libdivsufsort64 = ${SUFFARRAY_LIB64}") 
 #endif()
 
-
+add_dependencies(salmon puffer)
+add_dependencies(salmon twopaco)
+add_dependencies(salmon graphdump)
+add_dependencies(salmon ntcard)
+add_dependencies(salmon ksw2pp)
+add_dependencies(salmon salmon_core)
+add_dependencies(salmon alevin_core)
+if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
 # Link the executable
 target_link_libraries(salmon
     Threads::Threads
@@ -216,31 +230,37 @@ target_link_libraries(salmon
     ${ICU_LIBS}
     ${STADEN_LIBRARIES} ${CURL_LIBRARIES}
     ${ZLIB_LIBRARY}
-    #${SUFFARRAY_LIB}
-    #${SUFFARRAY_LIB64}
-    #${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
     m
     ${LIBLZMA_LIBRARIES}
     ${BZIP2_LIBRARIES}
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
     ksw2pp
-## PUFF_INTEGRATION    
     alevin_core
     ${ASAN_LIB}
     ${FAST_MALLOC_LIB}
-    ${TBB_LIBRARIES}
+    TBB::tbb
+    TBB::tbbmalloc
     ${LIBRT}
     ${CMAKE_DL_LIBS}
-    #ubsan
 )
+endif()
 
-# Link the executable
+# dependencies for unitTests
+add_dependencies(salmon salmon_core)
+add_dependencies(salmon alevin_core)
+#add_dependencies(salmon puffer)
+#add_dependencies(salmon twopaco)
+#add_dependencies(salmon graphdump)
+#add_dependencies(salmon ntcard)
+#add_dependencies(salmon ksw2pp)
+
+if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
 target_link_libraries(unitTests
     Threads::Threads
 ## PUFF_INTEGRATION
-    alevin_core
     salmon_core
+    alevin_core
     gff
     ${STADEN_LIBRARIES} 
     ${Boost_LIBRARIES}
@@ -250,7 +270,9 @@ target_link_libraries(unitTests
     m
     ${LIBLZMA_LIBRARIES}
     ${BZIP2_LIBRARIES}
-    ${TBB_LIBRARIES}
+    #${TBB_LIBRARIES}
+    TBB::tbb
+    TBB::tbbmalloc
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
     ${ASAN_LIB}
@@ -258,6 +280,7 @@ target_link_libraries(unitTests
     ${CMAKE_DL_LIBS}
     #ubsan
 )
+endif()
 
 if(NOT Iconv_IS_BUILT_IN)
   target_link_libraries(unitTests Iconv::Iconv)
@@ -265,6 +288,8 @@ if(NOT Iconv_IS_BUILT_IN)
 endif()
 
 add_dependencies(salmon unitTests)
+add_dependencies(unitTests salmon_core)
+add_dependencies(unitTests alevin_core)
 
 ##
 # External dependencies of salmon_core and salmon
@@ -276,18 +301,16 @@ if (${FETCHED_JEMALLOC})
 endif()
 
 if (${FETCHED_BOOST})
-## PUFF_INTEGRATION
-#   add_dependencies(alevin_core libboost)
    add_dependencies(alevin_core libboost)
    add_dependencies(salmon_core libboost)
    add_dependencies(salmon libboost)
 endif()
 
 if (${FETCHED_TBB})
+   message("Fetched oneTBB, so libtbb must be a dependency for targets")
    add_dependencies(alevin_core libtbb)
    add_dependencies(salmon_core libtbb)
-## PUFF_INTEGRATION
-#   add_dependencies(alevin_core libtbb)
+   add_dependencies(unitTests libtbb)
    add_dependencies(salmon libtbb)
 endif()
 
@@ -361,11 +384,35 @@ set(INSTALL_LIB_DIR lib )
 set(INSTALL_BIN_DIR bin )
 set(INSTALL_INCLUDE_DIR include )
 
-install(DIRECTORY
-        ${GAT_SOURCE_DIR}/external/install/lib/
-        DESTINATION ${INSTALL_LIB_DIR}
-	    FILES_MATCHING PATTERN "libtbb*.${SHARED_LIB_EXTENSION}*"
-    )
+if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
+#set(TBB_SOURCE_DIR $<TARGET_FILE:TBB::tbb>)
+#add_custom_target(genexdebug COMMAND ${CMAKE_COMMAND} -E echo "$<TARGET_LINKER_FILE:TBB::tbb>")
+get_target_property(TBB_LIB_INSTALL_NAME TBB::tbb IMPORTED_LOCATION_RELEASE)
+get_filename_component(TBB_LIB_INSTALL_DIR ${TBB_LIB_INSTALL_NAME} DIRECTORY)
+message("TBB_LIB_INSTALL_DIR = ${TBB_LIB_INSTALL_DIR}")
+file(GLOB TBB_FILES ${TBB_LIB_INSTALL_DIR}/libtbb*.${SHARED_LIB_EXTENSION}*)
+message("TBBGLOBS = ${TBB_FILES}")
+
+install(FILES 
+  ${TBB_FILES}
+  DESTINATION ${INSTALL_LIB_DIR}
+) 
+#install(FILES 
+#  $<TARGET_FILE:TBB::tbbmalloc>
+#  DESTINATION ${INSTALL_LIB_DIR}
+#)
+#install(DIRECTORY
+#       ${TBB_SOURCE_DIR}
+#       DESTINATION ${INSTALL_LIB_DIR}
+#	     FILES_MATCHING PATTERN "libtbb*.${SHARED_LIB_EXTENSION}*"
+#)
+endif()
+
+#install(DIRECTORY
+#        ${GAT_SOURCE_DIR}/external/install/lib/
+#        DESTINATION ${INSTALL_LIB_DIR}
+#	    FILES_MATCHING PATTERN "libtbb*.${SHARED_LIB_EXTENSION}*"
+#    )
 
 # install(FILES ${Boost_LIBRARIES}
 # 	           DESTINATION ${INSTALL_LIB_DIR})

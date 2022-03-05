@@ -1,7 +1,10 @@
 #!/bin/bash
-source /hbb_exe/activate
+source /hbb_shlib/activate
 
 set -e
+
+export CFLAGS="-g -O2 -I/hbb_shlib/include"
+export CXXFLAGS="-g -O2 -I/hbb_shlib/include"
 
 CPATH=`pwd`
 echo "[Drone build] current path : ${CPATH}"

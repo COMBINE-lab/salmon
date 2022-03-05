@@ -22,9 +22,9 @@ public:
   double logForgettingMass;
 
   template <typename FragT>
-  void release(tbb::concurrent_queue<FragT*>& fragmentQueue,
+  void release(oneapi::tbb::concurrent_queue<FragT*>& fragmentQueue,
                moodycamel::ConcurrentQueue<AlnGroupT*>& alignmentGroupQueue) {
-    // tbb::concurrent_bounded_queue<AlnGroupT*>& alignmentGroupQueue){
+    // oneapi::tbb::concurrent_bounded_queue<AlnGroupT*>& alignmentGroupQueue){
     size_t ng{0};
     for (auto& alnGroup : *alignments) {
       // fragmentQueue.enqueue_bulk(alnGroup->alignments().begin(),
@@ -51,8 +51,8 @@ public:
 /*
 template <>
 void MiniBatchInfo<AlignmentGroup<ReadPair>>::release(
-        tbb::concurrent_bounded_queue<ReadPair*>& alignmentStructureQueue,
-        tbb::concurrent_bounded_queue<AlignmentGroup<ReadPair>*>&
+        oneapi::tbb::concurrent_bounded_queue<ReadPair*>& alignmentStructureQueue,
+        oneapi::tbb::concurrent_bounded_queue<AlignmentGroup<ReadPair>*>&
 alignmentGroupQueue) { size_t ng{0}; for (auto& alnGroup : *alignments) { for
 (auto& aln : alnGroup->alignments()) {
 
