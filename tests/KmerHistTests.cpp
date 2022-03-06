@@ -1,3 +1,4 @@
+#include "catch.hpp"
 #include "UtilityFunctions.hpp"
 
 // from http://stackoverflow.com/questions/2380962/generate-all-combinations-of-arbitrary-alphabet-up-to-arbitrary-length

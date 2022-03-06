@@ -5,6 +5,8 @@ set -e
 
 CPATH=`pwd`
 echo "[Drone test] current path : ${CPATH}"
+SD=`ls -la ${CPATH}`
+echo "[subdirs] : ${SD}"
 echo "[Drone test] making quant test directory"
 
 export PATH=/root/miniconda2/bin:$PATH

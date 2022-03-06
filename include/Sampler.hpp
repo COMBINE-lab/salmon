@@ -25,7 +25,7 @@ extern "C" {
 #include <unordered_set>
 #include <vector>
 
-#include <tbb/concurrent_queue.h>
+#include <oneapi/tbb/concurrent_queue.h>
 
 #include <boost/config.hpp>
 #include <boost/filesystem.hpp>
@@ -64,10 +64,10 @@ using salmon::math::logSub;
 template <typename FragT> using AlignmentBatch = std::vector<FragT>;
 
 template <typename FragT>
-using MiniBatchQueue = tbb::concurrent_queue<MiniBatchInfo<FragT>*>;
+using MiniBatchQueue = oneapi::tbb::concurrent_queue<MiniBatchInfo<FragT>*>;
 
 template <typename FragT>
-using OutputQueue = tbb::concurrent_bounded_queue<FragT*>;
+using OutputQueue = oneapi::tbb::concurrent_bounded_queue<FragT*>;
 
 template <typename FragT, typename AlignModelT>
 using AlignmentLibraryT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>, AlignModelT>;

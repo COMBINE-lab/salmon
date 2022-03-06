@@ -391,12 +391,12 @@ for (auto& txp : transcripts_) {
 
   // SequenceBiasModel& sequenceBiasModel() { return seqBiasModel_; }
 
-  //    inline tbb::concurrent_queue<FragT*>& fragmentQueue() {
-  inline tbb::concurrent_queue<FragT*>& fragmentQueue() {
+  //    inline oneapi::tbb::concurrent_queue<FragT*>& fragmentQueue() {
+  inline oneapi::tbb::concurrent_queue<FragT*>& fragmentQueue() {
     return bq->getFragmentQueue();
   }
 
-  //    inline tbb::concurrent_bounded_queue<AlignmentGroup<FragT*>*>&
+  //    inline oneapi::tbb::concurrent_bounded_queue<AlignmentGroup<FragT*>*>&
   //    alignmentGroupQueue() {
   inline moodycamel::ConcurrentQueue<AlignmentGroup<FragT*>*>&
   alignmentGroupQueue() {

@@ -1,4 +1,12 @@
+#include "catch.hpp"
 #include <random>
+#include <unordered_map>
+#include <iostream>
+#include "LibraryFormat.hpp"
+#include "SalmonUtils.hpp"
+#include "Transcript.hpp"
+#include "UtilityFunctions.hpp"
+
 
 std::string generateRandomSequence(size_t length, std::uniform_int_distribution<>& dis, std::mt19937& gen) {
   char nucs[] =  {'A', 'C', 'G', 'T'};
@@ -44,6 +52,7 @@ SCENARIO("GC sampling works properly") {
 
       THEN("Sampled is the same as unsampled : ") {
         for (size_t tn = 0; tn < 1000; ++tn) {
+
           auto l = txpsSampled[tn].RefLength;
           for (size_t i = 0; i < l; ++i) {
             REQUIRE(txpsSampled[tn].gcAt(i) == txpsUnSampled[tn].gcAt(i));

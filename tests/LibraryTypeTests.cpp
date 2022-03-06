@@ -1,3 +1,13 @@
+#include "catch.hpp"
+#include <random>
+#include <unordered_map>
+#include <iostream>
+#include "LibraryFormat.hpp"
+#include "SalmonUtils.hpp"
+#include "Transcript.hpp"
+#include "UtilityFunctions.hpp"
+
+
 SCENARIO("Library types are encoded/decoded properly") {
 
     GIVEN("A collection of library formats") {

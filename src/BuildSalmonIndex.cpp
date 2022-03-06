@@ -26,9 +26,9 @@
 #include <boost/program_options/parsers.hpp>
 #include <boost/range/irange.hpp>
 
-#include "tbb/parallel_for.h"
-#include "tbb/parallel_for_each.h"
-#include "tbb/parallel_sort.h"
+#include "oneapi/tbb/parallel_for.h"
+#include "oneapi/tbb/parallel_for_each.h"
+#include "oneapi/tbb/parallel_sort.h"
 
 #include "GenomicFeature.hpp"
 #include "SalmonIndex.hpp"
@@ -114,6 +114,8 @@ int salmonIndex(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& /* s
       "Treat these sequences ids from the reference as the decoys that may "
       "have sequence homologous to some known transcript. for example in "
       "case of the genome, provide a list of chromosome name --- one per line")
+    ("no-clip,n", po::bool_switch(&idxOpt.noclip_polya)->default_value(false),
+      "Don't clip poly-A tails from the ends of target sequences")
     ("type",
       po::value<string>(&indexTypeStr)->default_value("puff")->required(),
       "The type of index to build; the only option is \"puff\" in this version "
