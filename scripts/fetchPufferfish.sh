@@ -27,7 +27,7 @@ SVER=salmon-v1.8.0
 #SVER=develop
 #SVER=sketch-mode
 
-EXPECTED_SHA256=0332a9657c3a39287e6af23a5461c3f35dad8ee750aedb189e42189876fc5127
+EXPECTED_SHA256=9c415bf431629929153625b354d8bc96828da2a236e99b5d1e6624311b3e0ad5
 
 mkdir -p ${EXTERNAL_DIR}
 curl -k -L https://github.com/COMBINE-lab/pufferfish/archive/${SVER}.zip -o ${EXTERNAL_DIR}/pufferfish.zip
