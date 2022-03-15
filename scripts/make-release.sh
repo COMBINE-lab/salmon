@@ -60,6 +60,8 @@ rm ${DIR}/../RELEASES/${betaname}/lib/libpthread*.so.*
 # now make the tarball
 echo -e "Making the tarball\n"
 cd ${DIR}/../RELEASES
+chmod -R go+r ${betaname}
+chmod ugo+x ${betaname}/{bin,lib,bin/salmon}
 tar czvf ${betaname}.tar.gz ${betaname}
 
 echo -e "Done making release!"
