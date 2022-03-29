@@ -356,14 +356,14 @@ void EMUpdate_augmented(EQVecT& eqVec,
               for (size_t i = 0; i < groupSize; ++i) {
                 auto tid = txps[i];
                 auto aux = auxs[i];
-                double augmentedCount = eqClass_augmentable[eqID] ? 0 : static_cast<double>(sampled_txps_counts[tid]);
-                if (augmentedCount > 0) {
+                // double augmentedCount = eqClass_augmentable[eqID] ? 0 : static_cast<double>(sampled_txps_counts[tid]);
+                /*if (augmentedCount > 0) {
                   std::cerr<< i << ":" << tid << "\t" 
                     << eqClass_augmentable[i] << " " 
                     << augmentedCount << " " 
                     << alphaIn[tid] << "\n";
-                }
-                double v = (alphaIn[tid] - augmentedCount) * aux;
+                }*/
+                double v = alphaIn[tid] * aux;
                 denom += v;
               }
 
@@ -374,8 +374,8 @@ void EMUpdate_augmented(EQVecT& eqVec,
                 for (size_t i = 0; i < groupSize; ++i) {
                   auto tid = txps[i];
                   auto aux = auxs[i];
-                  double augmentedCount = eqClass_augmentable[i] ? 0 : static_cast<double>(sampled_txps_counts[tid]);
-                  double v = (alphaIn[tid] - augmentedCount) * aux;
+                  // double augmentedCount = eqClass_augmentable[i] ? 0 : static_cast<double>(sampled_txps_counts[tid]);
+                  double v = alphaIn[tid] * aux;
                   if (!std::isnan(v)) {
                     salmon::utils::incLoop(alphaOut[tid], v * invDenom);
                   }
@@ -760,7 +760,7 @@ bool doBootstrap(
     double cutoff = minAlpha;
 
     std::vector<bool> eqClass_augmentable(txpGroups.size(), false);
-    for (size_t eqID = 0; eqID < txpGroups.size(); ++eqID) {
+    /* for (size_t eqID = 0; eqID < txpGroups.size(); ++eqID) {
       const auto& txps = txpGroups[eqID];
       if (eqID >= single_count_class_offset) {
         // eqClass_augmentable[eqID] = true;
@@ -788,7 +788,7 @@ bool doBootstrap(
       }
       }
       */
-    }
+    //}
 
     size_t num_augmentable = 0;
     for (auto a : eqClass_augmentable) {
@@ -1123,14 +1123,15 @@ bool CollapsedEMOptimizer::gatherBootstraps(
     double aug_count = (static_cast<double>(totalCount) * sopt.augmented_bootstrap_weight) / 
                       (static_cast<double>(activeTranscriptIDs.size()));
     // for (auto& tid : activeTranscriptIDs) {
-    for (auto& tid : aug_collision_txps) {
+    // for (auto& tid : aug_collision_txps) {
+    for (auto& tid : eq_identical_txps) {
       new_class_count += 1;
       txpGroups.push_back({tid});
       std::vector<double> auxs;
       double weight = 1.0;
       auxs.push_back(1.0);
       txpGroupCombinedWeights.emplace_back(auxs.begin(), auxs.end());
-      uint64_t count = aug_count;
+      uint64_t count = 1; // aug_count;
       origCounts.push_back(count);
       // totalCount += count;
     }
