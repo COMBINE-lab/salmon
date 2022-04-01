@@ -32,7 +32,7 @@ see below.
    genomic locus that is sequence-similar to an annotated transcriptome. The
    selective-alignment algorithm, the use of a decoy-aware transcriptome, and
    the influence of running salmon with different mapping and alignment
-   strategies is covered in detail in the paper `Alignment and mapping methodology influence transcript abundance estimation <https://www.biorxiv.org/content/10.1101/657874v1>`_.
+   strategies is covered in detail in the paper `Alignment and mapping methodology influence transcript abundance estimation <https://genomebiology.biomedcentral.com/articles/10.1186/s13059-020-02151-8>`_.
 
    The use of selective alignment implies the use of range factorization, as mapping
    scores become very meaningful with this option. Selective alignment can
@@ -275,27 +275,6 @@ Description of important options
 Salmon exposes a number of useful optional command-line parameters to the user.
 The particularly important ones are explained here, but you can always run
 ``salmon quant -h`` to see them all.
-
-"""""""""""""""""""""""""""""""
-``--validateMappings``
-"""""""""""""""""""""""""""""""
-
-Enables selective alignment of the sequencing reads when mapping them to the transcriptome.
-This can improve both the sensitivity and specificity of mapping and, as a result, can
-improve quantification accuracy.  When used in conjunction with the ``-z`` / ``--writeMappings``
-flag, the alignment records in the resulting SAM file will also be augmented with their alignment
-scores.
-
-If you pass the ``--validateMappings`` flag to salmon, in addition to using a
-more sensitive and accurate mapping algorithm, it will run an extension
-alignment dynamic program on the potential mappings it produces. The alignment
-procedure used to validate these mappings makes use of the highly-efficient and
-SIMD-parallelized ksw2 [#ksw2]_ library. Moreover, salmon makes use of an
-intelligent alignment cache to avoid re-computing alignment scores against
-redundant transcript sequences (e.g. when a read maps to the same exon in
-multiple different transcripts). The exact parameters used for scoring
-alignments, and the cutoff used for which mappings should be reported at all,
-are controllable by parameters described below.
 
 """"""""""""""""""""""""
 ``--mimicBT2``
