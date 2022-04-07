@@ -263,6 +263,62 @@ void VBEMUpdate_augmented(std::vector<std::vector<uint32_t>>& txpGroupLabels,
   }
 }
 
+template <typename VecT>
+void EMUpdate_forAugmented(std::vector<std::vector<uint32_t>>& txpGroupLabels,
+               std::vector<std::vector<double>>& txpGroupCombinedWeights,
+               const std::vector<uint64_t>& txpGroupCounts,
+               // std::unordered_set<uint32_t>& augmented_tids,
+               std::vector<bool>& augmented_tids,
+               std::vector<bool>& augmented_eqIDs,
+               const VecT& alphaIn,
+               VecT& alphaOut) {
+
+  assert(alphaIn.size() == alphaOut.size());
+
+  size_t numEqClasses = txpGroupLabels.size();
+  for (size_t eqID = 0; eqID < numEqClasses; ++eqID) {
+    if (!augmented_eqIDs[eqID]) {
+      continue;
+    }
+ 
+    uint64_t count = txpGroupCounts[eqID];
+    // for each transcript in this class
+    const std::vector<uint32_t>& txps = txpGroupLabels[eqID];
+    const auto& auxs = txpGroupCombinedWeights[eqID];
+
+    double denom = 0.0;
+    size_t groupSize = txpGroupCombinedWeights[eqID].size(); // txps.size();
+    // If this is a single-transcript group,
+    // then it gets the full count.  Otherwise,
+    // update according to our VBEM rule.
+    if (BOOST_LIKELY(groupSize > 1)) {
+      for (size_t i = 0; i < groupSize; ++i) {
+        auto tid = txps[i];
+        auto aux = auxs[i];
+        double v = alphaIn[tid] * aux;
+        denom += v;
+      }
+
+      if (denom <=  std::numeric_limits<double>::denorm_min()) {
+        // tgroup.setValid(false);
+      } else {
+        double invDenom = count / denom;
+        for (size_t i = 0; i < groupSize; ++i) {
+          auto tid = txps[i];
+          auto aux = auxs[i];
+          double v = alphaIn[tid] * aux;
+          if (!std::isnan(v) && augmented_tids[tid]) {
+            salmon::utils::incLoop(alphaOut[tid], v * invDenom);
+          }
+        }
+      }
+    } else {
+      salmon::utils::incLoop(alphaOut[txps.front()], count);
+    }
+  }
+}
+
+
 /*
  * Use the "standard" EM algorithm over equivalence
  * classes to estimate the latent variables (alphaOut)
@@ -703,6 +759,21 @@ bool doBootstrap(
   std::discrete_distribution<uint64_t> csamp_aug(sampleWeights.begin() + single_count_class_offset,
                                              sampleWeights.end());
 
+  std::vector<bool> augmented_tids(transcripts.size(), false);
+  std::vector<bool> augmented_eqIDs(txpGroups.size(), false);
+
+  for (size_t eqID = 0; eqID < single_count_class_offset; ++eqID) {
+    const auto& txps = txpGroups[eqID];
+    size_t groupSize = txps.size();
+    for (size_t i = 0; i < groupSize; ++i) {
+      auto tid = txps[i];
+      if (std::binary_search(eq_identical_txps.begin(), eq_identical_txps.end(), tid)) {
+        augmented_eqIDs[eqID] = true;
+        augmented_tids[tid] = true;
+      }
+    }
+  }
+
   while (bsNum++ < numBootstraps) {
     csamp_orig.reset();
     csamp_aug.reset();
@@ -726,7 +797,7 @@ bool doBootstrap(
       ++sampCounts[class_number];
     }
 
-    size_t aug_total = static_cast<size_t>(std::ceil(totalNumFrags * sopt.augmented_bootstrap_weight));
+    /* size_t aug_total = static_cast<size_t>(std::ceil(totalNumFrags * sopt.augmented_bootstrap_weight));
     for (size_t fn = 0; fn < aug_total; ++fn) {
       auto class_number = csamp_aug(gen);
       if (class_number >= sampleWeights.size() - single_count_class_offset) {
@@ -737,7 +808,7 @@ bool doBootstrap(
       auto tid = txpGroups[global_eq_class_number].front();
       sampled_txps_counts[tid] += 1;
       ++sampCounts[global_eq_class_number];
-    }
+    } */
 
     // Do a new bootstrap
     double totalLen{0.0};
@@ -821,6 +892,49 @@ bool doBootstrap(
                 alphas, alphasPrime);
         }
       }
+
+      converged = true;
+      maxRelDiff = -std::numeric_limits<double>::max();
+      for (size_t i = 0; i < transcripts.size(); ++i) {
+        if (alphasPrime[i] > alphaCheckCutoff) {
+          double relDiff =
+              std::abs(alphas[i] - alphasPrime[i]) / alphasPrime[i];
+          maxRelDiff = (relDiff > maxRelDiff) ? relDiff : maxRelDiff;
+          if (relDiff > relDiffTolerance) {
+            converged = false;
+          }
+        }
+        alphas[i] = alphasPrime[i];
+        alphasPrime[i] = 0.0;
+      }
+
+      ++itNum;
+    }
+
+    // Perform augmentation for augmentable transcripts
+    size_t aug_total = static_cast<size_t>(std::ceil(totalNumFrags * sopt.augmented_bootstrap_weight));
+    for (size_t fn = 0; fn < aug_total; ++fn) {
+      auto class_number = csamp_aug(gen);
+      if (class_number >= sampleWeights.size() - single_count_class_offset) {
+        std::cerr<<"Should not happen2!\n";
+        exit(0);
+      }
+      auto global_eq_class_number = single_count_class_offset + class_number;
+      auto tid = txpGroups[global_eq_class_number].front();
+      sampled_txps_counts[tid] += 1;
+      ++sampCounts[global_eq_class_number];
+    }
+
+    // EM2 after augmentation with augmented transcripts only being able to change
+    while (itNum < minIter or (itNum < maxIter and !converged)) {
+      for (size_t tid = 0; tid < alphas.size(); tid++) {
+        if (!augmented_tids[tid]) {
+          alphasPrime[tid] = alphas[tid];
+        }
+      }
+
+      EMUpdate_forAugmented(txpGroups, txpGroupCombinedWeights, sampCounts, 
+            augmented_tids, augmented_eqIDs, alphas, alphasPrime);
 
       converged = true;
       maxRelDiff = -std::numeric_limits<double>::max();
@@ -1579,3 +1693,12 @@ CollapsedEMOptimizer::gatherBootstraps<BulkAlnLibT<ReadPair,AlignmentModel>>(
     std::function<bool(const std::vector<double>&)>& writeBootstrap,
     double relDiffTolerance, uint32_t maxIter);
 // Unused / old
+
+template
+void EMUpdate_forAugmented<std::vector<std::atomic<double>>>(std::vector<std::vector<uint32_t>>& txpGroupLabels,
+                                                 std::vector<std::vector<double>>& txpGroupCombinedWeights,
+                                                 const std::vector<uint64_t>& txpGroupCounts,
+                                                 std::vector<bool>& augmented_tids,
+                                                 std::vector<bool>& augmented_eqIDs,
+                                                 const std::vector<std::atomic<double>>& alphaIn,
+                                                 std::vector<std::atomic<double>>& alphaOut);
