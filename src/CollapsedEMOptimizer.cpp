@@ -762,7 +762,11 @@ bool doBootstrap(
   std::vector<bool> augmented_tids(transcripts.size(), false);
   std::vector<bool> augmented_eqIDs(txpGroups.size(), false);
 
-  for (size_t eqID = 0; eqID < single_count_class_offset; ++eqID) {
+  for (size_t eqID = 0; eqID < txpGroups.size(); ++eqID) {
+    if (eqID >= single_count_class_offset) {
+      augmented_eqIDs[eqID] = true;
+      continue;
+    }
     const auto& txps = txpGroups[eqID];
     size_t groupSize = txps.size();
     for (size_t i = 0; i < groupSize; ++i) {
@@ -965,7 +969,7 @@ bool doBootstrap(
 
     for (size_t i = 0; i < sampled_txps_counts.size(); ++i) { //single_count_class_offset; i < txpGroups.size(); ++i) {
       double adjusted_count = alphas[i] - sampled_txps_counts[i];
-      if (adjusted_count < 0.0 ) { std::cerr << "adjusted count " << i << " = " << adjusted_count; }
+      // if (adjusted_count < 0.0 ) { std::cerr << "adjusted count " << i << " = " << adjusted_count; }
       alphas[i] = std::max(0.0, adjusted_count);
     }
 
