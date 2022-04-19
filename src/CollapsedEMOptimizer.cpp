@@ -266,7 +266,7 @@ void VBEMUpdate_augmented(std::vector<std::vector<uint32_t>>& txpGroupLabels,
 template <typename VecT>
 void EMUpdate_forAugmented(std::vector<std::vector<uint32_t>>& txpGroupLabels,
                std::vector<std::vector<double>>& txpGroupCombinedWeights,
-               const std::vector<uint64_t>& txpGroupCounts,
+               const std::vector<double>& txpGroupCounts,
                // std::unordered_set<uint32_t>& augmented_tids,
                std::vector<bool>& augmented_tids,
                std::vector<bool>& augmented_eqIDs,
@@ -937,7 +937,7 @@ bool doBootstrap(
       auto global_eq_class_number = single_count_class_offset + class_number;
       auto tid = txpGroups[global_eq_class_number].front();
       sampled_txps_counts[tid] += 1;
-      ++sampCounts[global_eq_class_number];
+      ++newCounts[global_eq_class_number];
     }
     // Create new set of eq classes with augmentable txps
     size_t numEqClasses = txpGroups.size();
@@ -989,7 +989,7 @@ bool doBootstrap(
 
     // EM2 after augmentation with augmented transcripts only being able to change
     while (itNum < minIter or (itNum < maxIter and !converged)) {
-      EMUpdate_forAugmented(txpGroups, txpGroupCombinedWeights, sampCounts, 
+      EMUpdate_forAugmented(txpGroups, txpGroupCombinedWeights, newCounts, 
             augmented_tids, augmented_eqIDs, alphas, alphasPrime);
 
       converged = true;
@@ -1755,7 +1755,7 @@ CollapsedEMOptimizer::gatherBootstraps<BulkAlnLibT<ReadPair,AlignmentModel>>(
 template
 void EMUpdate_forAugmented<std::vector<std::atomic<double>>>(std::vector<std::vector<uint32_t>>& txpGroupLabels,
                                                  std::vector<std::vector<double>>& txpGroupCombinedWeights,
-                                                 const std::vector<uint64_t>& txpGroupCounts,
+                                                 const std::vector<double>& txpGroupCounts,
                                                  std::vector<bool>& augmented_tids,
                                                  std::vector<bool>& augmented_eqIDs,
                                                  const std::vector<std::atomic<double>>& alphaIn,
