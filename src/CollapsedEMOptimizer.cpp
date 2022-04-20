@@ -281,7 +281,7 @@ void EMUpdate_forAugmented(std::vector<std::vector<uint32_t>>& txpGroupLabels,
       continue;
     }
  
-    uint64_t count = txpGroupCounts[eqID];
+    double count = txpGroupCounts[eqID];
     // for each transcript in this class
     const std::vector<uint32_t>& txps = txpGroupLabels[eqID];
     const auto& auxs = txpGroupCombinedWeights[eqID];
@@ -787,39 +787,18 @@ bool doBootstrap(
     csamp_orig.reset();
     csamp_aug.reset();
 
-    for (size_t sc = 0; sc < sampCounts.size(); ++sc) {
-      sampCounts[sc] = 0;
-    }
+    std::fill(sampCounts.begin(), sampCounts.end(), 0);
     std::vector<uint32_t> sampled_txps(transcripts.size(), 0);
     std::vector<uint32_t> sampled_txps_counts(transcripts.size(), 0);
+    
+    // draw the bootstrap counts from the set of 
+    // "original" (observed) equivalence classes
     sampled_txps_total = 0;
     for (size_t fn = 0; fn < totalNumFrags; ++fn) {
       auto class_number = csamp_orig(gen);
-      /*if (class_number >= single_count_class_offset) {
-        std::cerr<<"Should not happen1!\n";
-        exit(0);
-        // auto tid = txpGroups[class_number].front();
-        // sampled_txps[tid] = 1;
-        // sampled_txps_counts[tid] += 1;
-        // sampled_txps_total += 1;
-      }*/
       ++sampCounts[class_number];
     }
 
-    /* size_t aug_total = static_cast<size_t>(std::ceil(totalNumFrags * sopt.augmented_bootstrap_weight));
-    for (size_t fn = 0; fn < aug_total; ++fn) {
-      auto class_number = csamp_aug(gen);
-      if (class_number >= sampleWeights.size() - single_count_class_offset) {
-        std::cerr<<"Should not happen2!\n";
-        exit(0);
-      }
-      auto global_eq_class_number = single_count_class_offset + class_number;
-      auto tid = txpGroups[global_eq_class_number].front();
-      sampled_txps_counts[tid] += 1;
-      ++sampCounts[global_eq_class_number];
-    } */
-
-    // Do a new bootstrap
     double totalLen{0.0};
     for (size_t i = 0; i < transcripts.size(); ++i) {
       alphas[i] =
@@ -831,53 +810,13 @@ bool doBootstrap(
     double maxRelDiff = -std::numeric_limits<double>::max();
     size_t itNum = 0;
 
-    // If we use VBEM, we'll need the prior parameters
-    // double priorAlpha = 1.00;
-
     // EM termination criteria, adopted from Bray et al. 2016
     double minAlpha = 1e-8;
     double alphaCheckCutoff = 1e-2;
     double cutoff = minAlpha;
 
-    /*std::vector<bool> eqClass_augmentable(txpGroups.size(), false);
-    for (size_t eqID = 0; eqID < txpGroups.size(); ++eqID) {
-      const auto& txps = txpGroups[eqID];
-      if (eqID >= single_count_class_offset) {
-        // eqClass_augmentable[eqID] = true;
-        continue;
-      }
-      size_t groupSize = txps.size();
-      for (size_t i = 0; i < groupSize; ++i) {
-        auto tid = txps[i];
-        if (std::binary_search(eq_identical_txps.begin(), eq_identical_txps.end(), tid)) {
-          eqClass_augmentable[eqID] = true;
-          break;
-        }
-      }
-      // original approach
-      /*
-      // for each transcript in this class
-      // const TranscriptGroup& tgroup = kv.first;
-      // const std::vector<uint32_t>& txps = tgroup.txps;
-      size_t groupSize = txps.size();
-      for (size_t i = 0; i < groupSize; ++i) {
-      auto tid = txps[i];
-      if (transcripts[tid].uniqueCount() > 0) {
-      eqClass_augmentable[eqID] = false;
-      break;
-      }
-      }
-      */
-    //}
-
-    size_t num_augmentable = 0;
-    for (auto a : augmented_eqIDs) {      
-      num_augmentable += a;
-    }
-    size_t num_augmentable_txps = 0;
-    for (auto a : augmented_tids) {      
-      num_augmentable_txps += a;
-    }
+    size_t num_augmentable = augmented_eqIDs.size();
+    size_t num_augmentable_txps = augmented_tids.size();
 
     auto augmented_class_count = txpGroups.size() - single_count_class_offset;
     num_augmentable -= augmented_class_count;
@@ -890,22 +829,15 @@ bool doBootstrap(
     std::cerr << (num_augmentable) << " out of " 
               << single_count_class_offset << " equivalence classes were augmentable\n";
 
+    // perform the initial bootstrapping, without any augmented
+    // data.
     while (itNum < minIter or (itNum < maxIter and !converged)) {
       if (useVBEM) {
-        if (sopt.eqClassBasedAugmentation)
-          VBEMUpdate_augmented(txpGroups, txpGroupCombinedWeights, sampCounts, 
-                    priorAlphas, alphas, alphasPrime, expTheta, sampled_txps_counts, augmented_eqIDs);
-        else
-          VBEMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, 
+        VBEMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, 
                     priorAlphas, alphas, alphasPrime, expTheta);
       } else {
-        if (false and sopt.eqClassBasedAugmentation and (itNum > 0)) {
-          EMUpdate_augmented(txpGroups, txpGroupCombinedWeights, sampCounts,
-                alphas, alphasPrime, sampled_txps_counts, augmented_eqIDs);
-        } else {
-          EMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, 
-                alphas, alphasPrime);
-        }
+        EMUpdate_(txpGroups, txpGroupCombinedWeights, sampCounts, 
+                  alphas, alphasPrime);
       }
 
       converged = true;
@@ -925,6 +857,63 @@ bool doBootstrap(
 
       ++itNum;
     }
+    
+    // remember the initial abundances 
+    std::vector<double> non_augmented_alphas = alphas;
+
+    // clear out newCounts and sampled_txps
+    std::fill(newCounts.begin(), newCounts.end(), 0.0);
+    std::fill(sampled_txps_counts.begin(), sampled_txps_counts.end(), 0.0);
+
+    // Create new set of eq classes with augmentable txps
+    size_t numEqClasses = txpGroups.size();
+    for (size_t eqID = 0; eqID < numEqClasses; ++eqID) {
+      if (!augmented_eqIDs[eqID]) {
+        continue;
+      }
+      size_t groupSize = txpGroupCombinedWeights[eqID].size();
+      const std::vector<uint32_t>& txps = txpGroups[eqID];
+      const auto& auxs = txpGroupCombinedWeights[eqID];
+      uint64_t count = sampCounts[eqID];
+
+      // if this isn't an augmented class, then skip it.
+      if (!augmented_eqIDs[eqID]) { continue; }
+
+      if (BOOST_LIKELY(groupSize > 1)) {
+        double new_count = 0;
+        double denom = 0.0;
+        for (size_t i = 0; i < groupSize; ++i) {
+          auto tid = txps[i];
+          auto aux = auxs[i];
+          double v = alphas[tid] * aux;
+          denom += v;
+        }
+
+        if (denom <=  std::numeric_limits<double>::denorm_min()) {
+          
+        } else {
+          double invDenom = count / denom;
+          for (size_t i = 0; i < groupSize; ++i) {
+            auto tid = txps[i];
+            // if this is an augmented transcript
+            // get it's mass from this class.
+            if (augmented_tids[tid]) {
+              auto aux = auxs[i];
+              double v = alphas[tid] * aux;
+              salmon::utils::incLoop(alphasPrime[tid], v * invDenom);
+              salmon::utils::incLoop(new_count, v * invDenom);          
+            }
+          }
+          newCounts[eqID] = new_count;
+        }      
+      } else {
+        auto tid = txps.front();
+        if (augmented_tids[tid]) {
+          salmon::utils::incLoop(alphasPrime[tid], count);
+          newCounts[eqID] = static_cast<double>(count);
+        }
+      }
+    }
 
     // Perform augmentation for augmentable transcripts
     size_t aug_total = static_cast<size_t>(std::ceil(totalNumFrags * sopt.augmented_bootstrap_weight));
@@ -937,57 +926,19 @@ bool doBootstrap(
       auto global_eq_class_number = single_count_class_offset + class_number;
       auto tid = txpGroups[global_eq_class_number].front();
       sampled_txps_counts[tid] += 1;
-      ++newCounts[global_eq_class_number];
-    }
-    // Create new set of eq classes with augmentable txps
-    size_t numEqClasses = txpGroups.size();
-    for (size_t eqID = 0; eqID < numEqClasses; ++eqID) {
-      if (!augmented_eqIDs[eqID]) {
-        continue;
-      }
-      size_t groupSize = txpGroupCombinedWeights[eqID].size();
-      const std::vector<uint32_t>& txps = txpGroups[eqID];
-      const auto& auxs = txpGroupCombinedWeights[eqID];
-      uint64_t count = sampCounts[eqID];
-      if (BOOST_LIKELY(groupSize > 1)) {
-        double new_count = 0;
-        double denom = 0.0;
-
-        for (size_t i = 0; i < groupSize; ++i) {
-          auto tid = txps[i];
-          auto aux = auxs[i];
-          double v = alphas[tid] * aux;
-          denom += v;
-        }
-        if (denom <=  std::numeric_limits<double>::denorm_min()) {
-          
-        } else {
-          double invDenom = count / denom;
-          for (size_t i = 0; i < groupSize; ++i) {
-            auto tid = txps[i];
-            auto aux = auxs[i];
-            double v = alphas[tid] * aux;
-            if (augmented_tids[tid]) {
-              salmon::utils::incLoop(alphasPrime[tid], v * invDenom);
-              salmon::utils::incLoop(new_count, v * invDenom);          
-            }
-          }
-          newCounts[eqID] = new_count;
-        }      
-      } else {
-        salmon::utils::incLoop(alphasPrime[txps.front()], count);
-        newCounts[eqID] = static_cast<double>(count);
-      }
+      newCounts[global_eq_class_number] += 1.0;
     }
 
+    // only augmented transcripts get updated.
     for (size_t tid = 0; tid < alphas.size(); tid++) {
       if (augmented_tids[tid]) {
         alphas[tid] = alphasPrime[tid];
         alphasPrime[tid] = 0;
-      }
+      } 
     }
 
     // EM2 after augmentation with augmented transcripts only being able to change
+    itNum = 0;
     while (itNum < minIter or (itNum < maxIter and !converged)) {
       EMUpdate_forAugmented(txpGroups, txpGroupCombinedWeights, newCounts, 
             augmented_tids, augmented_eqIDs, alphas, alphasPrime);
@@ -1004,9 +955,9 @@ bool doBootstrap(
               converged = false;
             }
           }
-          alphas[i] = alphasPrime[i];
-          alphasPrime[i] = 0.0;
         }
+        alphas[i] = alphasPrime[i];
+        alphasPrime[i] = 0.0;
       }
 
       ++itNum;
@@ -1021,9 +972,15 @@ bool doBootstrap(
       }
     }*/
 
-    for (size_t i = 0; i < sampled_txps_counts.size(); ++i) { //single_count_class_offset; i < txpGroups.size(); ++i) {
+    for (size_t i = 0; i < alphas.size(); ++i) { 
+      if (!augmented_tids[i]) { // not augmented copy over old alpha
+        alphas[i] = non_augmented_alphas[i];
+      }
+    }
+
+    // subtract off augmented weight
+    for (size_t i = 0; i < sampled_txps_counts.size(); ++i) { 
       double adjusted_count = alphas[i] - sampled_txps_counts[i];
-      // if (adjusted_count < 0.0 ) { std::cerr << "adjusted count " << i << " = " << adjusted_count; }
       alphas[i] = std::max(0.0, adjusted_count);
     }
 
