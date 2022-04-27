@@ -1,7 +1,7 @@
 # image: COMBINE-lab/salmon
 # This dockerfile is based on the one created by
 # Titus Brown (available at https://github.com/ctb/2015-docker-building/blob/master/salmon/Dockerfile)
-FROM ubuntu:18.04
+FROM ubuntu:18.04 as base
 MAINTAINER salmon.maintainer@gmail.com
 
 ENV PACKAGES git gcc make g++ libboost-all-dev liblzma-dev libbz2-dev \
@@ -36,7 +36,7 @@ RUN curl -k -L https://github.com/COMBINE-lab/salmon/archive/v${SALMON_VERSION}.
     cd salmon-${SALMON_VERSION} && \
     mkdir build && \
     cd build && \
-    cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local && make && make install
+    cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local/salmon && make && make install
 
 # For dev version
 #RUN git clone https://github.com/COMBINE-lab/salmon.git && \
@@ -46,6 +46,11 @@ RUN curl -k -L https://github.com/COMBINE-lab/salmon/archive/v${SALMON_VERSION}.
 #    cd build && \
 #    cmake .. -DCMAKE_INSTALL_PREFIX=/usr/local && make && make install
 
+FROM ubuntu:18.04
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libhwloc5 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=base /usr/local/salmon/ /usr/local/
 ENV PATH /home/salmon-${SALMON_VERSION}/bin:${PATH}
 ENV LD_LIBRARY_PATH "/usr/local/lib:${LD_LIBRARY_PATH}"
 
