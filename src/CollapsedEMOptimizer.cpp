@@ -1088,12 +1088,33 @@ std::vector<uint32_t> get_eq_identical_txps(std::vector<Transcript>& transcripts
   for (auto kv = eq_id_to_txps.begin(); kv != eq_id_to_txps.end(); ++kv) {
     auto& v = kv->second;
     if (v.size() > 1) {
-      for (auto& t : v ) { eq_sig_collision_txps.push_back(t); }
-      auto& eq_ids = txp_to_eqid[v[0]];
+      double min_elen = std::numeric_limits<double>::infinity();
+      double tot_reads = 0;
+      for (auto& tid : v ) {
+        tot_reads += transcripts[tid].projectedCounts;
+        if (min_elen > transcripts[tid].EffectiveLength) {
+          min_elen = transcripts[tid].EffectiveLength;
+        }
+      }
+      for (auto& t : v ) {
+        double lambda = tot_reads/transcripts[t].EffectiveLength;
+        double diff_len = transcripts[t].EffectiveLength - min_elen;
+        if (diff_len < 0) {
+          std::cerr<<"Something bad happened! " << min_elen << " " << transcripts[t].EffectiveLength << "\n";
+          exit(0);
+        }
+        double prob_lws = std::exp(-lambda*diff_len);
+        if (tot_reads > 10)
+          std::cerr<< "min_len: " << min_elen << " tot_reads: " << tot_reads << " elen: " << transcripts[t].EffectiveLength << "\t lws: " << prob_lws << "\n";
+        eq_sig_collision_txps.push_back(t); 
+      }
+      if (tot_reads > 10)
+        std::cerr<<"Done with a colliding group!\n";
+      /*auto& eq_ids = txp_to_eqid[v[0]];
       for (auto& eq: eq_ids) {
         auto& tg = txpGroups[eq];
         for (auto& tid: tg) { aug_collision_txps.push_back(tid); }
-      }
+      }*/
     }
   }
 
