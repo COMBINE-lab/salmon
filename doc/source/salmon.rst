@@ -243,7 +243,7 @@ mode, and a description of each, run ``salmon quant --help-alignment``.
 .. note:: Genomic vs. Transcriptomic alignments
 
     Salmon expects that the alignment files provided are with respect to the
-    transcripts given in the corresponding fasta file.  That is, Salmon expects
+    transcripts given in the corresponding FASTA file.  That is, Salmon expects
     that the reads have been aligned directly to the transcriptome (like RSEM,
     eXpress, etc.) rather than to the genome (as does, e.g. Cufflinks).  If you
     have reads that have already been aligned to the genome, there are
