@@ -27,7 +27,7 @@ fi
 SVER=develop
 #SVER=sketch-mode
 
-EXPECTED_SHA256=2180da8163cf8f134d5c6b3d3bd6c18d3501be3526d49417e18b4e38acedd77c
+EXPECTED_SHA256=9c415bf431629929153625b354d8bc96828da2a236e99b5d1e6624311b3e0ad5
 
 mkdir -p ${EXTERNAL_DIR}
 curl -k -L https://github.com/COMBINE-lab/pufferfish/archive/${SVER}.zip -o ${EXTERNAL_DIR}/pufferfish.zip
