@@ -2223,7 +2223,7 @@ void processReadLibrary(
  * Selectively align the reads and write a PAM file out.
  */
 template <typename AlnT, typename ProtocolT>
-void do_sc_align(ReadExperimentT& experiment,
+bool do_sc_align(ReadExperimentT& experiment,
                  SalmonOpts& salmonOpts,
                  MappingStatistics& mstats,
                  uint32_t numQuantThreads,
@@ -2455,8 +2455,24 @@ void do_sc_align(ReadExperimentT& experiment,
   rad_file.write(reinterpret_cast<char*>(&nc), sizeof(nc));
 
   rad_file.close();
+
+  // we want to check if the RAD file stream was written to properly
+  // while we likely would have caught this earlier, it is possible the 
+  // badbit may not be set until the stream actually flushes (perhaps even 
+  // at close), so we check here one final time that the status of the 
+  // stream is as expected.
+  // see : https://stackoverflow.com/questions/28342660/error-handling-in-stdofstream-while-writing-data
+  if ( !rad_file ) {
+    jointLog->critical("The RAD file stream had an invalid status after close; so some operation(s) may"
+                       "have failed!\nA common cause for this is lack of output disk space.\n"
+                       "Consequently, the output may be corrupted.");
+    jointLog->flush();
+    return false;
+  }
+
   jointLog->info("finished sc_align()");
   jointLog->flush();
+  return true;
 }
                      
 /**
@@ -2783,13 +2799,18 @@ int alevin_sc_align(AlevinOpts<ProtocolT>& aopt,
       alevin::types::AlevinCellBarcodeKmer::k(aopt.protocol.barcodeLength);
     }
 
-    do_sc_align<QuasiAlignment>(experiment, sopt,
-                                mstats, sopt.numThreads, aopt);
+    bool mapping_ok = do_sc_align<QuasiAlignment>(experiment, sopt,
+                                                  mstats, sopt.numThreads, aopt);
 
     // write meta-information about the run
     GZipWriter gzw(outputDirectory, jointLog);
     sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
     gzw.writeMetaFryMode(sopt, experiment, mstats);
+
+    if ( !mapping_ok ) {
+      std::cerr << "Error : There was an error during mapping; please check the log for further details.\n";
+      std::exit(1);
+    }
  } catch (po::error& e) {
     std::cerr << "Exception : [" << e.what() << "]. Exiting.\n";
     std::exit(1);
