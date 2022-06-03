@@ -1424,7 +1424,7 @@ void processReads(
       if (writeUnmapped and
           mapType != salmon::utils::MappingType::PAIRED_MAPPED) {
         // If we have no mappings --- then there's nothing to do
-        // unless we're outputting names for un-mapped reads
+        // unless we're outputting names for un-mapped / decoy-mapped reads 
         unmappedNames << rp.first.name << ' ' << salmon::utils::str(mapType)
                       << '\n';
       }
@@ -1854,8 +1854,9 @@ void processReads(
 
        if (writeUnmapped and mapType != salmon::utils::MappingType::SINGLE_MAPPED) {
          // If we have no mappings --- then there's nothing to do
-         // unless we're outputting names for un-mapped reads
-         unmappedNames << rp.name << " u\n";
+         // unless we're outputting names for un-mapped / decoy mapped reads
+         unmappedNames << rp.name << ' ' << salmon::utils::str(mapType)
+                       << '\n';
        }
 
        validHits += jointAlignments.size();
