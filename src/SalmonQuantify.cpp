@@ -2385,6 +2385,15 @@ void quantifyLibrary(ReadExperimentT& experiment,
   jointLog->info("Mapping rate = {}\%\n",
                  experiment.effectiveMappingRate() * 100.0);
   jointLog->info("finished quantifyLibrary()");
+
+  // clean up loggers
+  {
+    if (salmonOpts.writeUnmappedNames) {
+      spdlog::logger* unmappedLogger = salmonOpts.unmappedLog.get();
+      unmappedLogger->flush();
+    }
+  }
+
 }
 
 int salmonQuantify(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& salmonIndex) {
@@ -2547,6 +2556,12 @@ transcript abundance from RNA-seq reads
       std::vector<std::string> errors{"insufficient_assigned_fragments"};
       sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
       gzw.writeEmptyMeta(sopt, experiment, errors);
+      sopt.jointLog->flush();
+      if (sopt.writeUnmappedNames) {
+        spdlog::logger* unmappedLogger = sopt.unmappedLog.get();
+        unmappedLogger->flush();
+      }
+      spdlog::drop_all();
       std::exit(1);
     }
 
@@ -2755,6 +2770,10 @@ transcript abundance from RNA-seq reads
     // Write meta-information about the run
     gzw.writeMeta(sopt, experiment, mstats);
 
+    // at this point we can (and should) drop all loggers to force them to 
+    // flush.
+    spdlog::drop_all();
+    
   } catch (po::error& e) {
     std::cerr << "(mapping-based mode) Exception : [" << e.what() << "].\n";
     std::cerr << "Please be sure you are passing correct options, and that you are running in the intended mode.\n";
