@@ -10,9 +10,7 @@
 #include <thread>
 #include <vector>
 
-extern "C" {
-#include "kseq.h"
-}
+#include "kseq++.hpp"
 
 #include "concurrentqueue.h"
 
@@ -59,27 +57,24 @@ typename _Unique_if<T>::_Known_bound make_unique(Args&&...) = delete;
 #endif //__FASTX_PARSER_PRECXX14_MAKE_UNIQUE__
 
 namespace fastx_parser {
-struct ReadSeq {
-    std::string seq;
-    std::string name;
-    ~ReadSeq() {}
-};
 
-struct ReadQual {
-  std::string seq;
-  std::string name;
-  std::string qual;
-  ~ReadQual() {}
-};
+using ReadSeq = klibpp::KSeq;
+using ReadQual = klibpp::KSeq;
 
+// The ReadPair and ReadQualPair are obviously
+// redundant. But, having them as separate types
+// here would allow us to say something at compile
+// time about if we expect to be able to look
+// at qualities etc.  Think more about if we
+// really want to keep both of these.
 struct ReadPair {
-  ReadSeq first;
-  ReadSeq second;
+  klibpp::KSeq first;
+  klibpp::KSeq second;
 };
 
 struct ReadQualPair {
-  ReadQual first;
-  ReadQual second;
+  klibpp::KSeq first;
+  klibpp::KSeq second;
 };
 
 template <typename T> class ReadChunk {

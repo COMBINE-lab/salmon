@@ -1,3 +1,7 @@
+if(${TBB_FOUND})
+  get_target_property(TBB_INCLUDE_DIRS TBB::tbb INTERFACE_INCLUDE_DIRECTORIES)
+endif()
+
 include_directories(
 ${GAT_SOURCE_DIR}/include
 ${GAT_SOURCE_DIR}/include/eigen3
@@ -94,10 +98,17 @@ if(HAS_IPO AND (NOT NO_IPO))
   set_property(TARGET ksw2pp PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
-set ( UNIT_TESTS_SRCS
+set (UNIT_TESTS_ENTRY_SRCS
     ${GAT_SOURCE_DIR}/tests/UnitTests.cpp
-    FragmentLengthDistribution.cpp
-    ${GAT_SOURCE_DIR}/external/install/src/pufferfish/rank9b.cpp
+    ${GAT_SOURCE_DIR}/tests/catch.hpp
+)
+
+set (UNIT_TESTS_INDIVIDUAL_SRCS
+  ${GAT_SOURCE_DIR}/src/FragmentLengthDistribution.cpp
+  ${GAT_SOURCE_DIR}/external/install/src/pufferfish/rank9b.cpp
+  ${GAT_SOURCE_DIR}/tests/GCSampleTests.cpp
+  ${GAT_SOURCE_DIR}/tests/LibraryTypeTests.cpp
+  # ${GAT_SOURCE_DIR}/tests/KmerHistTests.cpp
 )
 
 
@@ -187,7 +198,11 @@ if(HAS_IPO AND (NOT NO_IPO))
   set_property(TARGET salmon PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
-add_executable(unitTests ${UNIT_TESTS_SRCS})
+add_library(UnitTestsMain STATIC ${UNIT_TESTS_ENTRY_SRCS} ${GAT_SOURCE_DIR}/tests/catch.hpp)
+
+add_executable(unitTests ${UNIT_TESTS_INDIVIDUAL_SRCS} ${GAT_SOURCE_DIR}/tests/catch.hpp)
+target_compile_options(unitTests PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
+target_compile_options(unitTests PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
 
 #add_executable(salmon-read ${SALMON_READ_SRCS})
 #set_target_properties(salmon-read PROPERTIES COMPILE_FLAGS "${CMAKE_CXX_FLAGS} -DHAVE_LIBPTHREAD -D_PBGZF_USE -fopenmp"
@@ -203,10 +218,17 @@ add_executable(unitTests ${UNIT_TESTS_SRCS})
 #  message ("Setting libdivsufsort64 = ${SUFFARRAY_LIB64}") 
 #endif()
 
-
+add_dependencies(salmon puffer)
+add_dependencies(salmon twopaco)
+add_dependencies(salmon graphdump)
+add_dependencies(salmon ntcard)
+add_dependencies(salmon ksw2pp)
+add_dependencies(salmon salmon_core)
+add_dependencies(salmon alevin_core)
+if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
 # Link the executable
 target_link_libraries(salmon
-    Threads::Threads
+    Threads::Threads 
     puffer 
     salmon_core
     twopaco
@@ -217,32 +239,41 @@ target_link_libraries(salmon
     ${ICU_LIBS}
     ${STADEN_LIBRARIES} ${CURL_LIBRARIES}
     ${ZLIB_LIBRARY}
-    #${SUFFARRAY_LIB}
-    #${SUFFARRAY_LIB64}
-    #${GAT_SOURCE_DIR}/external/install/lib/libbwa.a
     m
     ${LIBLZMA_LIBRARIES}
     ${BZIP2_LIBRARIES}
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
     ksw2pp
-## PUFF_INTEGRATION    
     alevin_core
     ${ASAN_LIB}
     ${FAST_MALLOC_LIB}
-    ${TBB_LIBRARIES}
+    TBB::tbb
+    TBB::tbbmalloc
     ${LIBRT}
     ${CMAKE_DL_LIBS}
-    #ubsan
 )
+endif()
 
-# Link the executable
+# dependencies for unitTests
+add_dependencies(salmon salmon_core)
+add_dependencies(salmon alevin_core)
+add_dependencies(unitTests UnitTestsMain)
+#add_dependencies(salmon puffer)
+#add_dependencies(salmon twopaco)
+#add_dependencies(salmon graphdump)
+#add_dependencies(salmon ntcard)
+#add_dependencies(salmon ksw2pp)
+
+if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
+
 target_link_libraries(unitTests
     Threads::Threads
 ## PUFF_INTEGRATION
-    alevin_core
     salmon_core
+    alevin_core
     gff
+    UnitTestsMain
     ${STADEN_LIBRARIES} 
     ${Boost_LIBRARIES}
     ${ICU_LIBS}
@@ -251,7 +282,9 @@ target_link_libraries(unitTests
     m
     ${LIBLZMA_LIBRARIES}
     ${BZIP2_LIBRARIES}
-    ${TBB_LIBRARIES}
+    #${TBB_LIBRARIES}
+    TBB::tbb
+    TBB::tbbmalloc
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
     ${ASAN_LIB}
@@ -259,6 +292,7 @@ target_link_libraries(unitTests
     ${CMAKE_DL_LIBS}
     #ubsan
 )
+endif()
 
 if(NOT Iconv_IS_BUILT_IN)
   target_link_libraries(unitTests Iconv::Iconv)
@@ -266,6 +300,8 @@ if(NOT Iconv_IS_BUILT_IN)
 endif()
 
 add_dependencies(salmon unitTests)
+add_dependencies(unitTests salmon_core)
+add_dependencies(unitTests alevin_core)
 
 ##
 # External dependencies of salmon_core and salmon
@@ -277,18 +313,16 @@ if (${FETCHED_JEMALLOC})
 endif()
 
 if (${FETCHED_BOOST})
-## PUFF_INTEGRATION
-#   add_dependencies(alevin_core libboost)
    add_dependencies(alevin_core libboost)
    add_dependencies(salmon_core libboost)
    add_dependencies(salmon libboost)
 endif()
 
 if (${FETCHED_TBB})
+   message("Fetched oneTBB, so libtbb must be a dependency for targets")
    add_dependencies(alevin_core libtbb)
    add_dependencies(salmon_core libtbb)
-## PUFF_INTEGRATION
-#   add_dependencies(alevin_core libtbb)
+   add_dependencies(unitTests libtbb)
    add_dependencies(salmon libtbb)
 endif()
 
@@ -362,11 +396,35 @@ set(INSTALL_LIB_DIR lib )
 set(INSTALL_BIN_DIR bin )
 set(INSTALL_INCLUDE_DIR include )
 
-install(DIRECTORY
-        ${GAT_SOURCE_DIR}/external/install/lib/
-        DESTINATION ${INSTALL_LIB_DIR}
-	    FILES_MATCHING PATTERN "libtbb*.${SHARED_LIB_EXTENSION}*"
-    )
+if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
+#set(TBB_SOURCE_DIR $<TARGET_FILE:TBB::tbb>)
+#add_custom_target(genexdebug COMMAND ${CMAKE_COMMAND} -E echo "$<TARGET_LINKER_FILE:TBB::tbb>")
+get_target_property(TBB_LIB_INSTALL_NAME TBB::tbb IMPORTED_LOCATION_RELEASE)
+get_filename_component(TBB_LIB_INSTALL_DIR ${TBB_LIB_INSTALL_NAME} DIRECTORY)
+message("TBB_LIB_INSTALL_DIR = ${TBB_LIB_INSTALL_DIR}")
+file(GLOB TBB_FILES ${TBB_LIB_INSTALL_DIR}/libtbb*.${SHARED_LIB_EXTENSION}*)
+message("TBBGLOBS = ${TBB_FILES}")
+
+install(FILES 
+  ${TBB_FILES}
+  DESTINATION ${INSTALL_LIB_DIR}
+) 
+#install(FILES 
+#  $<TARGET_FILE:TBB::tbbmalloc>
+#  DESTINATION ${INSTALL_LIB_DIR}
+#)
+#install(DIRECTORY
+#       ${TBB_SOURCE_DIR}
+#       DESTINATION ${INSTALL_LIB_DIR}
+#	     FILES_MATCHING PATTERN "libtbb*.${SHARED_LIB_EXTENSION}*"
+#)
+endif()
+
+#install(DIRECTORY
+#        ${GAT_SOURCE_DIR}/external/install/lib/
+#        DESTINATION ${INSTALL_LIB_DIR}
+#	    FILES_MATCHING PATTERN "libtbb*.${SHARED_LIB_EXTENSION}*"
+#    )
 
 # install(FILES ${Boost_LIBRARIES}
 # 	           DESTINATION ${INSTALL_LIB_DIR})

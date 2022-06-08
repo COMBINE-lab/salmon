@@ -21,6 +21,8 @@ extern "C" {
 
 #include <Eigen/Dense>
 
+#include "oneapi/tbb/task_arena.h"
+
 #include "cereal/archives/json.hpp"
 #include "spdlog/fmt/fmt.h"
 
@@ -151,7 +153,7 @@ Eigen::VectorXd updateEffectiveLengths(
 
 template <typename AbundanceVecT, typename ReadExpT>
 Eigen::VectorXd
-updateEffectiveLengths(SalmonOpts& sopt, ReadExpT& readExp,
+updateEffectiveLengths(oneapi::tbb::task_arena& arena, SalmonOpts& sopt, ReadExpT& readExp,
                        Eigen::VectorXd& effLensIn, AbundanceVecT& alphas,
                        std::vector<bool>& available, bool finalRound = false);
 
@@ -188,6 +190,14 @@ inline void incLoop(std::atomic<double>& val, double inc) {
 }
 
 std::string getCurrentTimeAsString();
+
+// encodes the heuristic for guessing how threads should
+// be allocated based on the available reads
+// returns true if input was modified and false otherwise.
+bool configure_parsing(size_t nfiles,            // input param
+                       size_t& worker_threads,   // input/output param
+                       uint32_t& parse_threads    // input/output param
+);
 
 bool validateOptionsAlignment_(SalmonOpts& sopt);
 bool validateOptionsMapping_(SalmonOpts& sopt);

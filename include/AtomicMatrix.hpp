@@ -1,7 +1,7 @@
 #ifndef ATOMIC_MATRIX
 #define ATOMIC_MATRIX
 
-#include "tbb/concurrent_vector.h"
+#include "oneapi/tbb/concurrent_vector.h"
 
 #include "SalmonMath.hpp"
 #include "SalmonUtils.hpp"

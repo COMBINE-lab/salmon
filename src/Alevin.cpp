@@ -1022,14 +1022,17 @@ salmon-based processing of single-cell RNA-seq data.
 
     bool noTgMap {false};
     bool dropseq = vm["dropseq"].as<bool>();
-    bool indrop = vm["indrop"].as<bool>();
+    bool indropV2 = vm["indropV2"].as<bool>();
     bool citeseq = vm["citeseq"].as<bool>();
     bool chromV3 = vm["chromiumV3"].as<bool>();
     bool chrom = vm["chromium"].as<bool>();
     bool gemcode = vm["gemcode"].as<bool>();
     bool celseq = vm["celseq"].as<bool>();
     bool celseq2 = vm["celseq2"].as<bool>();
+    bool splitseqV1 = vm["splitseqV1"].as<bool>();
+    bool splitseqV2 = vm["splitseqV2"].as<bool>();
     bool quartzseq2 = vm["quartzseq2"].as<bool>();
+    bool sciseq3 = vm["sciseq3"].as<bool>();
     bool custom_old =  vm.count("barcodeLength") and
                    vm.count("umiLength") and
                    vm.count("end");
@@ -1039,14 +1042,17 @@ salmon-based processing of single-cell RNA-seq data.
 
     uint8_t validate_num_protocols {0};
     if (dropseq) validate_num_protocols += 1;
-    if (indrop) validate_num_protocols += 1;
+    if (indropV2) validate_num_protocols += 1;
     if (citeseq) { validate_num_protocols += 1; noTgMap = true;}
     if (chromV3) validate_num_protocols += 1;
     if (chrom) validate_num_protocols += 1;
     if (gemcode) validate_num_protocols += 1;
     if (celseq) validate_num_protocols += 1;
     if (celseq2) validate_num_protocols += 1;
+    if (splitseqV1) validate_num_protocols += 1;
+    if (splitseqV2) validate_num_protocols += 1;
     if (quartzseq2) validate_num_protocols += 1;
+    if (sciseq3) validate_num_protocols += 1;
     if (custom) validate_num_protocols += 1;
 
     if ( validate_num_protocols != 1 ) {
@@ -1079,20 +1085,18 @@ salmon-based processing of single-cell RNA-seq data.
                        vm, commentString, noTgMap,
                        barcodeFiles, readFiles, salmonIndex);
     }
-    else if(indrop){
-      std::cout<<"Indrop get neighbors removed, please use other protocols";
-      exit(1);
+    else if(indropV2){
       if(vm.count("w1") != 0){
         std::string w1 = vm["w1"].as<std::string>();
-        AlevinOpts<apt::InDrop> aopt;
+        AlevinOpts<apt::InDropV2> aopt;
         aopt.protocol.setW1(w1);
-        //aopt.jointLog->warn("Using InDrop Setting for Alevin");
+        //aopt.jointLog->warn("Using InDropV2 Setting for Alevin");
         initiatePipeline(aopt, sopt, orderedOptions,
                          vm, commentString, noTgMap,
                          barcodeFiles, readFiles, salmonIndex);
       }
       else{
-        fmt::print(stderr, "ERROR: indrop needs w1 flag too.\n Exiting Now");
+        fmt::print(stderr, "ERROR: indropV2 needs w1 flag too.\n Exiting Now");
         exit(1);
       }
     }
@@ -1102,7 +1106,7 @@ salmon-based processing of single-cell RNA-seq data.
         aopt.protocol.setFeatureLength(vm["featureLength"].as<size_t>());
         aopt.protocol.setFeatureStart(vm["featureStart"].as<size_t>());
 
-        //aopt.jointLog->warn("Using InDrop Setting for Alevin");
+        //aopt.jointLog->warn("Using InDropV2 Setting for Alevin");
         initiatePipeline(aopt, sopt, orderedOptions,
                          vm, commentString, noTgMap,
                          barcodeFiles, readFiles, salmonIndex);
@@ -1147,9 +1151,29 @@ salmon-based processing of single-cell RNA-seq data.
                        vm, commentString, noTgMap,
                        barcodeFiles, readFiles, salmonIndex);
     }
+    else if(splitseqV1){
+      AlevinOpts<apt::SplitSeqV1> aopt;
+      //aopt.jointLog->warn("Using Split-SeqV2 Setting for Alevin");
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString, noTgMap,
+                       barcodeFiles, readFiles, salmonIndex);
+    }
+    else if(splitseqV2){
+      AlevinOpts<apt::SplitSeqV2> aopt;
+      //aopt.jointLog->warn("Using Split-SeqV2 Setting for Alevin");
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString, noTgMap,
+                       barcodeFiles, readFiles, salmonIndex);
+    }
     else if(quartzseq2){
       AlevinOpts<apt::QuartzSeq2> aopt;
       //aopt.jointLog->warn("Using Quartz-Seq2 Setting for Alevin");
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString, noTgMap,
+                       barcodeFiles, readFiles, salmonIndex);
+    } else if(sciseq3){
+      AlevinOpts<apt::SciSeq3> aopt;
+      //aopt.jointLog->warn("Using Sci-Seq3 Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
                        vm, commentString, noTgMap,
                        barcodeFiles, readFiles, salmonIndex);

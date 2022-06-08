@@ -10,8 +10,8 @@ alignments (in the form of a SAM/BAM file) to the transcripts rather than the
 raw reads.
 
 The **mapping**-based mode of Salmon runs in two phases; indexing and
-quantification. The indexing step is independent of the reads, and only need to
-be run one for a particular set of reference transcripts. The quantification
+quantification. The indexing step is independent of the reads, and only needs to
+be run once for a particular set of reference transcripts. The quantification
 step, obviously, is specific to the set of RNA-seq reads and is thus run more
 frequently. For a more complete description of all available options in Salmon,
 see below.
@@ -24,7 +24,7 @@ see below.
    salmon. When salmon is run with selective alignment, it adopts a
    considerably more sensitive scheme that we have developed for finding the
    potential mapping loci of a read, and score potential mapping loci using
-   the chaining algorithm introdcued in minimap2 [#minimap2]_. It scores and
+   the chaining algorithm introduced in minimap2 [#minimap2]_. It scores and
    validates these mappings using the score-only, SIMD, dynamic programming
    algorithm of ksw2 [#ksw2]_. Finally, we recommend using selective
    alignment with a *decoy-aware* transcriptome, to mitigate potential
@@ -32,7 +32,7 @@ see below.
    genomic locus that is sequence-similar to an annotated transcriptome. The
    selective-alignment algorithm, the use of a decoy-aware transcriptome, and
    the influence of running salmon with different mapping and alignment
-   strategies is covered in detail in the paper `Alignment and mapping methodology influence transcript abundance estimation <https://www.biorxiv.org/content/10.1101/657874v1>`_.
+   strategies is covered in detail in the paper `Alignment and mapping methodology influence transcript abundance estimation <https://genomebiology.biomedcentral.com/articles/10.1186/s13059-020-02151-8>`_.
 
    The use of selective alignment implies the use of range factorization, as mapping
    scores become very meaningful with this option. Selective alignment can
@@ -90,7 +90,7 @@ set of alignments.
 
     For quasi-mapping-based Salmon, the story is somewhat different.
     Generally, performance continues to improve as more threads are made
-    available.  This is because the determiniation of the potential mapping
+    available.  This is because the determination of the potential mapping
     locations of each read is, generally, the slowest step in
     quasi-mapping-based quantification.  Since this process is
     trivially parallelizable (and well-parallelized within Salmon), more
@@ -140,9 +140,9 @@ This will build the mapping-based index, using an auxiliary k-mer hash
 over k-mers of length 31.  While the mapping algorithms will make used of arbitrarily 
 long matches between the query and reference, the `k` size selected here will 
 act as the *minimum* acceptable length for a valid match.  Thus, a smaller 
-value of `k` may slightly improve sensitivty.  We find that a `k` of 31 seems
+value of `k` may slightly improve sensitivity.  We find that a `k` of 31 seems
 to work well for reads of 75bp or longer, but you might consider a smaller 
-`k` if you plan to deal with shorter reads. Also, a shoter value of `k` may
+`k` if you plan to deal with shorter reads. Also, a shorter value of `k` may
 improve sensitivity even more when using selective alignment (enabled via the `--validateMappings` flag).  So,
 if you are seeing a smaller mapping rate than you might expect, consider building
 the index with a slightly smaller `k`.  
@@ -243,7 +243,7 @@ mode, and a description of each, run ``salmon quant --help-alignment``.
 .. note:: Genomic vs. Transcriptomic alignments
 
     Salmon expects that the alignment files provided are with respect to the
-    transcripts given in the corresponding fasta file.  That is, Salmon expects
+    transcripts given in the corresponding FASTA file.  That is, Salmon expects
     that the reads have been aligned directly to the transcriptome (like RSEM,
     eXpress, etc.) rather than to the genome (as does, e.g. Cufflinks).  If you
     have reads that have already been aligned to the genome, there are
@@ -275,27 +275,6 @@ Description of important options
 Salmon exposes a number of useful optional command-line parameters to the user.
 The particularly important ones are explained here, but you can always run
 ``salmon quant -h`` to see them all.
-
-"""""""""""""""""""""""""""""""
-``--validateMappings``
-"""""""""""""""""""""""""""""""
-
-Enables selective alignment of the sequencing reads when mapping them to the transcriptome.
-This can improve both the sensitivity and specificity of mapping and, as a result, can
-improve quantification accuracy.  When used in conjunction with the ``-z`` / ``--writeMappings``
-flag, the alignment records in the resulting SAM file will also be augmented with their alignment
-scores.
-
-If you pass the ``--validateMappings`` flag to salmon, in addition to using a
-more sensitive and accurate mapping algorithm, it will run an extension
-alignment dynamic program on the potential mappings it produces. The alignment
-procedure used to validate these mappings makes use of the highly-efficient and
-SIMD-parallelized ksw2 [#ksw2]_ library. Moreover, salmon makes use of an
-intelligent alignment cache to avoid re-computing alignment scores against
-redundant transcript sequences (e.g. when a read maps to the same exon in
-multiple different transcripts). The exact parameters used for scoring
-alignments, and the cutoff used for which mappings should be reported at all,
-are controllable by parameters described below.
 
 """"""""""""""""""""""""
 ``--mimicBT2``
@@ -436,7 +415,7 @@ distribution of the sequencing library.  This value will affect the
 effective length correction, and hence the estimated effective lengths
 of the transcripts and the TPMs.  The value passed to ``--fldSD`` will
 be used as the standard deviation of the assumed fragment length
-distribution (which is modeled as a truncated Gaussan with a mean
+distribution (which is modeled as a truncated Gaussian with a mean
 given by ``--fldMean``).
 
 
@@ -550,7 +529,7 @@ have a prior count of 1 fragment, while a transcript of length 50000 will have
 a prior count of 0.5 fragments, etc.  This behavior can be modified in two
 ways.  First, the prior itself can be modified via Salmon's ``--vbPrior``
 option.  The argument to this option is the value you wish to place as the
-*per-nucleotide* prior.  Additonally, you can modify the behavior to use
+*per-nucleotide* prior.  Additionally, you can modify the behavior to use
 a *per-transcript* rather than a *per-nucleotide* prior by passing the flag
 ``--perTranscriptPrior`` to Salmon.  In this case, whatever value is set
 by ``--vbPrior`` will be used as the transcript-level prior, so that the
@@ -580,7 +559,7 @@ bootstraps allows us to assess technical variance in the main abundance estimate
 we produce.  Such estimates can be useful for downstream (e.g. differential
 expression) tools that can make use of such uncertainty estimates.  This option
 takes a positive integer that dictates the number of bootstrap samples to compute.
-The more samples computed, the better the estimates of varaiance, but the
+The more samples computed, the better the estimates of variance, but the
 more computation (and time) required.
 
 """""""""""""""""""""""""""""""
@@ -685,7 +664,7 @@ the length of the transcriptome --- though each evaluation itself is
 efficient and the process is highly parallelized.
 
 It is possible to speed this process up by a multiplicative factor by
-considering only every *i*:sup:`th` fragment length, and interploating
+considering only every *i*:sup:`th` fragment length, and interpolating
 the intermediate results.  The ``--biasSpeedSamp`` option allows the
 user to set this sampling factor.  Larger values speed up effective
 length correction, but may decrease the fidelity of bias modeling.
@@ -704,7 +683,7 @@ map to the transcriptome.  When mapping paired-end reads, the entire
 fragment (both ends of the pair) are identified by the name of the first
 read (i.e. the read appearing in the ``_1`` file).  Each line of the unmapped
 reads file contains the name of the unmapped read followed by a simple flag
-that designates *how* the read failed to map completely.  If fragmetns are 
+that designates *how* the read failed to map completely.  If fragments are 
 aligned against a decoy-aware index, then fragments that are confidently 
 assigned as decoys are written in this file followed by the ``d`` (decoy)
 flag.  Apart from the decoy flag, for single-end
@@ -715,7 +694,7 @@ reads, there are a number of different possibilities, outlined below:
    
    u   = The entire pair was unmapped. No mappings were found for either the left or right read.
    m1  = Left orphan (mappings were found for the left (i.e. first) read, but not the right).
-   m2  = Right orphan (mappinds were found for the right read, but not the left).
+   m2  = Right orphan (mappings were found for the right read, but not the left).
    m12 = Left and right orphans. Both the left and right read mapped, but never to the same transcript. 
 
 By reading through the file of unmapped reads and selecting the appropriate

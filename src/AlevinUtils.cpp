@@ -93,7 +93,31 @@ namespace alevin {
       return &seq2;
     }
     template <>
+    std::string*  getReadSequence(apt::SplitSeqV1& protocol,
+                         std::string& seq,
+                         std::string& seq2,
+                         std::string& subseq){
+      (void)seq2; // fastq2 contains barcode and umi
+      return &seq;
+    }
+    template <>
+    std::string*  getReadSequence(apt::SplitSeqV2& protocol,
+                         std::string& seq,
+                         std::string& seq2,
+                         std::string& subseq){
+      (void)seq2; // fastq2 contains barcode and umi
+      return &seq;
+    }
+    template <>
     std::string*  getReadSequence(apt::QuartzSeq2& protocol,
+                         std::string& seq,
+                         std::string& seq2,
+                         std::string& subseq){
+      (void)seq;
+      return &seq2;
+    }
+    template <>
+    std::string*  getReadSequence(apt::SciSeq3& protocol,
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq){
@@ -126,12 +150,12 @@ namespace alevin {
       return &seq2;
     }
     template <>
-    std::string*  getReadSequence(apt::InDrop& protocol,
+    std::string*  getReadSequence(apt::InDropV2& protocol,
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq){
-      (void)seq;
-      return &seq2;
+      (void)seq2;
+      return &seq;
     }
     // end of read extraction
 
@@ -170,6 +194,24 @@ namespace alevin {
       (void)read2;
       return (read.length() >= pt.barcodeLength + pt.umiLength) ?
         (umi.assign(read, pt.barcodeLength, pt.umiLength), true) : false;
+    }
+    template <>
+    bool extractUMI<apt::SplitSeqV1>(std::string& read,
+                                     std::string& read2,
+                                     apt::SplitSeqV1& pt,
+                                     std::string& umi){
+      (void)read;
+      return (read2.length() >= pt.barcodeLength + pt.umiLength) ?
+        (umi.assign(read2, 0, pt.umiLength), true) : false;
+    }
+    template <>
+    bool extractUMI<apt::SplitSeqV2>(std::string& read,
+                                     std::string& read2,
+                                     apt::SplitSeqV2& pt,
+                                     std::string& umi){
+      (void)read;
+      return (read2.length() >= pt.barcodeLength + pt.umiLength) ?
+        (umi.assign(read2, 0, pt.umiLength), true) : false;
     }
     template <>
     bool extractUMI<apt::Gemcode>(std::string& read,
@@ -223,6 +265,16 @@ namespace alevin {
         (umi.assign(read, 0, pt.umiLength), true) : false;
     }
     template <>
+    bool extractUMI<apt::SciSeq3>(std::string& read,
+                                     std::string& read2,
+                                     apt::SciSeq3& pt,
+                                     std::string& umi){
+      (void)read2;
+      return (read.length() >= pt.barcodeLength + pt.umiLength && 
+        pt.anchorPos != std::string::npos) ? // for the rare case if barcode has one N and thus gets recovered
+          (umi.assign(read, pt.anchorPos + pt.anchorSeqLen, pt.umiLength), true) : false;
+    }
+    template <>
     bool extractUMI<apt::CELSeq>(std::string& read,
                                  std::string& read2,
                                  apt::CELSeq& pt,
@@ -233,14 +285,14 @@ namespace alevin {
       return true;
     }
     template <>
-    bool extractUMI<apt::InDrop>(std::string& read,
+    bool extractUMI<apt::InDropV2>(std::string& read,
                                  std::string& read2,
-                                 apt::InDrop& pt,
+                                 apt::InDropV2& pt,
                                  std::string& umi){
       (void)read;
-      (void)read2;
-      std::cout<<"Incorrect call for umi extract";
-      exit(1);
+       return (read2.length() >= pt.w1Length + pt.barcodeLength + pt.umiLength) ?
+        (umi.assign(read2, pt.bc2EndPos, pt.umiLength), true) : false;
+      return true;
     }
 
     template <>
@@ -255,8 +307,8 @@ namespace alevin {
     template <>
     bool extractBarcode<apt::CITESeq>(std::string& read,
                                       std::string& read2,
-                                                               apt::CITESeq& pt,
-                                                               std::string& bc){
+                                      apt::CITESeq& pt,
+                                      std::string& bc){
       (void)read2;
       return (read.length() >= pt.barcodeLength) ?
         (bc.assign(read, 0, pt.barcodeLength), true) : false;
@@ -264,8 +316,8 @@ namespace alevin {
     template <>
     bool extractBarcode<apt::ChromiumV3>(std::string& read,
                                          std::string& read2,
-                                                                  apt::ChromiumV3& pt,
-                                                                  std::string& bc){
+                                         apt::ChromiumV3& pt,
+                                         std::string& bc){
       (void)read2;
       return (read.length() >= pt.barcodeLength) ?
         (bc.assign(read,0, pt.barcodeLength), true) : false;
@@ -287,6 +339,49 @@ namespace alevin {
       (void)read2;
       return (read.length() >= pt.barcodeLength) ?
         (bc.assign(read, 0, pt.barcodeLength), true) : false;
+    }
+    template <>
+    bool extractBarcode<apt::SciSeq3>(std::string& read,
+                                         std::string& read2,
+                                          apt::SciSeq3& pt,
+                                          std::string& bc){
+      (void)read2;
+      pt.anchorPos = read.find(pt.anchorSeq);
+      if (pt.anchorPos != std::string::npos && ( pt.anchorPos == pt.maxHairpinIndexLen || pt.anchorPos == pt.maxHairpinIndexLen -1) // only 2 possible values of pt.anchorPos
+         && read.length() >= pt.barcodeLength + pt.umiLength + pt.anchorSeqLen) {
+           std::string bcAssign = read.substr(0,pt.anchorPos) + read.substr(pt.anchorPos + pt.anchorSeqLen + pt.umiLength, pt.rtIdxLen);
+        if (pt.anchorPos < pt.maxHairpinIndexLen) { // hairpin index can be 9 or 10 bp
+           bcAssign += "AC";
+        } else {
+          bcAssign += "A";
+        }
+        bc.assign(bcAssign);
+        return true;
+      } else {
+        return false;
+      }
+    }
+    template <>
+    bool extractBarcode<apt::SplitSeqV1>(std::string& read,
+                                      std::string& read2,
+                                      apt::SplitSeqV1& pt,
+                                      std::string& bc){
+      (void)read;
+
+      return (read2.length() >= pt.bc3Pos + pt.bcLen) ?
+        (bc.assign(read2.substr(pt.bc1Pos, pt.bcLen) + read2.substr(pt.bc2Pos, pt.bcLen)
+        + read2.substr(pt.bc3Pos, pt.bcLen), 0, pt.barcodeLength), true) : false;
+    }
+    template <>
+    bool extractBarcode<apt::SplitSeqV2>(std::string& read,
+                                      std::string& read2,
+                                      apt::SplitSeqV2& pt,
+                                      std::string& bc){
+      (void)read;
+
+      return (read2.length() >= pt.bc3Pos + pt.bcLen) ?
+        (bc.assign(read2.substr(pt.bc1Pos, pt.bcLen) + read2.substr(pt.bc2Pos, pt.bcLen)
+        + read2.substr(pt.bc3Pos, pt.bcLen), 0, pt.barcodeLength), true) : false;
     }
     template <>
     bool extractBarcode<apt::Custom>(std::string& read,
@@ -339,21 +434,49 @@ namespace alevin {
         (bc.assign(read, pt.umiLength, pt.barcodeLength), true) : false;
     }
     template <>
-    bool extractBarcode<apt::InDrop>(std::string& read, 
+    bool extractBarcode<apt::InDropV2>(std::string& read, 
                                      std::string& read2, 
-                                     apt::InDrop& pt, std::string& bc){
-      (void)read2;
-      std::string::size_type index = read.find(pt.w1);
-      if (index == std::string::npos){
+                                     apt::InDropV2& pt, std::string& bc){
+      (void)read;
+      if(read2.length() >= (pt.w1Length + pt.barcodeLength + pt.umiLength)) {
+      pt.w1Pos = read2.find(pt.w1);
+      if (pt.w1Pos == std::string::npos){
+        bool found = false;
+        for( int i = 8; i <= 11; i++){
+          if (hammingDistance(pt.w1, read2.substr(i,pt.w1Length)) <= pt.maxHammingDist) {
+            pt.w1Pos = i;
+            found = true;
+            break;
+          }
+        }
+        if (!found) {return false;}
+      }
+      if(pt.w1Pos < 8 or pt.w1Pos > 11){
         return false;
       }
-      bc = read.substr(0, index);
-      if(bc.size()<8 or bc.size()>12){
-        return false;
-      }
+      bc = read2.substr(0, pt.w1Pos);
       uint32_t offset = bc.size()+pt.w1.size();
-      bc += read.substr(offset, offset+8);
+      bc += read2.substr(offset, pt.bc2Len);
+      switch (pt.barcodeLength - bc.size())
+      {
+      case 1:
+        bc += "A";
+        break;
+      case 2:
+        bc += "AT";
+        break;
+      case 3:
+        bc += "AAG";
+        break;
+      case 4:
+        bc += "AAAC";
+        break;
+      }
+      pt.bc2EndPos = offset+pt.bc2Len;
       return true;
+      } else {
+        return false;
+      }
     }
 
     void getIndelNeighbors(
@@ -435,6 +558,16 @@ namespace alevin {
       }//end-i-for
       getIndelNeighbors(barcodeSeq,
                         neighbors);
+    }
+
+    unsigned int hammingDistance(const std::string s1, const std::string s2){
+      if(s1.size() != s2.size()){
+        throw std::invalid_argument("Strings have different lengths, can't compute hamming distance");
+      }
+
+      // compute dot product for all postisions, start with 0 and add if the values are not equal
+      return std::inner_product(s1.begin(),s1.end(),s2.begin(), 0, std::plus<unsigned int>(),
+        std::not2(std::equal_to<std::string::value_type>()));
     }
 
     void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
@@ -1274,7 +1407,7 @@ namespace alevin {
                            SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template
-    bool processAlevinOpts(AlevinOpts<apt::InDrop>& aopt,
+    bool processAlevinOpts(AlevinOpts<apt::InDropV2>& aopt,
                            SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template
@@ -1303,6 +1436,18 @@ namespace alevin {
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::CELSeq2>& aopt,
+                           SalmonOpts& sopt, bool noTgMap,
+                           boost::program_options::variables_map& vm);
+    template
+    bool processAlevinOpts(AlevinOpts<apt::SciSeq3>& aopt,
+                           SalmonOpts& sopt, bool noTgMap,
+                           boost::program_options::variables_map& vm);
+    template
+    bool processAlevinOpts(AlevinOpts<apt::SplitSeqV1>& aopt,
+                           SalmonOpts& sopt, bool noTgMap,
+                           boost::program_options::variables_map& vm);
+    template
+    bool processAlevinOpts(AlevinOpts<apt::SplitSeqV2>& aopt,
                            SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template

@@ -5,7 +5,7 @@
 
 #include "AlignmentCommon.hpp"
 #include "AtomicMatrix.hpp"
-#include "tbb/concurrent_vector.h"
+#include "oneapi/tbb/concurrent_vector.h"
 
 class AlignmentModel
   : public AlignmentCommon

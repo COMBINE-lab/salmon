@@ -56,10 +56,13 @@ rm ${DIR}/../RELEASES/${betaname}/lib/libc.so.6
 rm ${DIR}/../RELEASES/${betaname}/lib/ld-linux-x86-64.so.2
 rm ${DIR}/../RELEASES/${betaname}/lib/libdl.so.2
 rm ${DIR}/../RELEASES/${betaname}/lib/libpthread*.so.*
+rm ${DIR}/../RELEASES/${betaname}/lib/libm.so.6
 
 # now make the tarball
 echo -e "Making the tarball\n"
 cd ${DIR}/../RELEASES
+chmod -R go+r ${betaname}
+chmod ugo+x ${betaname}/{bin,lib,bin/salmon}
 tar czvf ${betaname}.tar.gz ${betaname}
 
 echo -e "Done making release!"

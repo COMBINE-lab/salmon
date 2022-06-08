@@ -6,7 +6,7 @@
 
 #include "AlevinOpts.hpp"
 #include "AlevinTypes.hpp"
-#include "pufferfish/chobo/static_vector.hpp"
+#include "pufferfish/itlib/static_vector.hpp"
 
 namespace alevin{
   namespace protocols {
@@ -15,8 +15,8 @@ namespace alevin{
     struct TagGeometry {
       // uint32_t read_num{0};
       // tuples are read_num, start_pos, length
-      chobo::static_vector<std::pair<uint32_t, size_t>, num_tag_pieces> substr_locs1{};
-      chobo::static_vector<std::pair<uint32_t, size_t>, num_tag_pieces> substr_locs2{};
+      itlib::static_vector<std::pair<uint32_t, size_t>, num_tag_pieces> substr_locs1{};
+      itlib::static_vector<std::pair<uint32_t, size_t>, num_tag_pieces> substr_locs2{};
       // the total length of the tag on read 1 
       size_t length1{0};
       // the total length of the tag on read 2
@@ -124,17 +124,19 @@ namespace alevin{
       DropSeq(): Rule(12, 8, BarcodeEnd::FIVE, 16777216){}
     };
 
-    struct InDrop : Rule{
-        //InDrop starts from 5end with variable
-        //length barcodes so provide the full
-        // length of the barcod eincluding w1.
-        // UMI length is 6
-      InDrop(): Rule(42, 6, BarcodeEnd::FIVE, 22347776){}
+    struct InDropV2 : Rule{
+        //InDropV2 starts from 5end with variable
+        //length barcodes where barcode1 varies from 8 to 11 bp
+        // followed by w1 sequence, 8 bp barcode2 and 6bp UMI
+      InDropV2(): Rule(20, 6, BarcodeEnd::FIVE, 22347776){}
 
       std::string w1;
+      std::size_t w1Length, maxHammingDist = 2, bc2Len = 8;
       void setW1(std::string& w1_){
         w1 = w1_;
+        w1Length = w1.length();
       }
+      std::size_t w1Pos = 0, bc2EndPos;
     };
 
     struct CITESeq : Rule{
@@ -175,11 +177,28 @@ namespace alevin{
       CELSeq2(): Rule(6, 6, BarcodeEnd::FIVE, 4096){}
     };
 
+    struct SplitSeqV2 : Rule{
+        SplitSeqV2(): Rule(24, 10, BarcodeEnd::FIVE, 4294967295){}
+        std::size_t const bcLen = 8, bc1Pos = 10, bc2Pos = 48, bc3Pos = 78;
+    };
+
+    struct SplitSeqV1 : Rule{
+        SplitSeqV1(): Rule(24, 10, BarcodeEnd::FIVE, 4294967295){}
+        std::size_t const bcLen = 8, bc1Pos = 10, bc2Pos = 48, bc3Pos = 86;
+    };
+
     //dummy class
     struct Custom : Rule{
       Custom() : Rule(0,0,BarcodeEnd::FIVE,0){}
     };
-    
+    struct SciSeq3 : Rule{
+      SciSeq3() : Rule(21, 8, BarcodeEnd::FIVE, 1073741824){}
+      std::string anchorSeq = "CAGAGC";
+      std::size_t anchorSeqLen = anchorSeq.length();
+      std::size_t anchorPos = 0;
+      u_int16_t const maxHairpinIndexLen = 10;
+      u_int16_t const rtIdxLen = 10; // rev transcription index length
+    };
 
     // for the new type of specification
     struct CustomGeometry {

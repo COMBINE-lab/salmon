@@ -56,7 +56,7 @@
 #include "pufferfish/ksw2pp/KSW2Aligner.hpp"
 #include "pufferfish/metro/metrohash64.h"
 #include "pufferfish/SelectiveAlignmentUtils.hpp"
-#include "pufferfish/chobo/small_vector.hpp"
+#include "pufferfish/itlib/small_vector.hpp"
 #include "parallel_hashmap/phmap.h"
 
 namespace salmon {
@@ -122,7 +122,7 @@ namespace salmon {
       int32_t secondBestScore;
       int32_t bestDecoyScore;
       double decoyThresh;
-      chobo::small_vector<std::pair<int32_t, int32_t>> best_decoy_hits;
+      itlib::small_vector<std::pair<int32_t, int32_t>> best_decoy_hits;
       bool collect_decoy_info_;
       std::vector<int32_t> scores_;
       phmap::flat_hash_map<uint32_t, std::pair<int32_t, int32_t>> bestScorePerTranscript_;

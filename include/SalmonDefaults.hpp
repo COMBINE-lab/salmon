@@ -61,6 +61,7 @@ namespace defaults {
   constexpr const uint32_t maxSMEMOccs{200};
   constexpr const bool initUniform{false};
   constexpr const uint32_t maxReadOccs{200};
+  constexpr const uint32_t maxRecoverReadOccs{2500};
   constexpr const uint32_t maxOccsPerHit{1000};
   constexpr const bool noLengthCorrection{false};
   constexpr const bool noEffectiveLengthCorrection{false};
@@ -139,7 +140,10 @@ namespace defaults {
   constexpr const bool isCITESeq{false};
   constexpr const bool isCELSeq{false};
   constexpr const bool isCELSeq2{false};
+  constexpr const bool isSplitSeqV1{false};
+  constexpr const bool isSplitSeqV2{false};
   constexpr const bool isQuartzSeq2{false};
+  constexpr const bool isSciSeq3{false};
   constexpr const bool noQuant{false};
   constexpr const bool dumpFQ{false};
   constexpr const bool dumpArborescences{false};

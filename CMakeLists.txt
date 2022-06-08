@@ -428,9 +428,9 @@ endif()
 ##
 # Set the latest version and look for what we need
 ##
-set(Boost_ADDITIONAL_VERSIONS "1.59.0" "1.60.0" "1.61.0" "1.62.0" "1.63.0" "1.64.0" "1.65.0" "1.66.0" "1.67.0" "1.68.0" "1.69.0" "1.70.0" "1.71.0")
+set(Boost_ADDITIONAL_VERSIONS "1.59.0" "1.60.0" "1.61.0" "1.62.0" "1.63.0" "1.64.0" "1.65.0" "1.66.0" "1.67.0" "1.68.0" "1.69.0" "1.70.0" "1.71.0" "1.72.0" "1.73.0" "1.74.0"  "1.75.0" "1.76.0" "1.77.0" "1.78.0")
 if (NOT BOOST_RECONFIGURE)
-find_package(Boost 1.59.0 COMPONENTS iostreams filesystem system timer chrono program_options)
+find_package(Boost 1.59.0 COMPONENTS iostreams system filesystem timer chrono program_options)
 message("BOOST_INCLUDEDIR = ${BOOST_INCLUDEDIR}")
 message("BOOST_LIBRARYDIR = ${BOOST_LIBRARYDIR}")
 message("Boost_FOUND = ${Boost_FOUND}")
@@ -459,7 +459,7 @@ if(BOOST_RECONFIGURE)
   set(CMAKE_PREFIX_PATH ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
   set(Boost_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
   set(Boost_LIBRARY_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib)
-  find_package(Boost 1.59.0 COMPONENTS iostreams filesystem system timer chrono program_options locale REQUIRED)
+  find_package(Boost 1.59.0 COMPONENTS iostreams system filesystem timer chrono program_options locale REQUIRED)
   set(FETCH_BOOST FALSE)
 endif()
 
@@ -610,15 +610,12 @@ if (NOT CEREAL_FOUND)
 endif()
 
 ## Try and find TBB first
-find_package(TBB 2019.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy)
+find_package(TBB 2021.4
+  HINTS ${TBB_ROOT_SEARCH}
+  COMPONENTS tbb tbbmalloc tbbmalloc_proxy)
 
-## NOTE: we actually require at least 2019 U4 or greater
-## since we are using tbb::global_control.  However, they 
-## seem not to have tagged minor version numbers in their 
-## source.  Check before release if we can bump to the 2020
-## version (requires having tbb 2020 for OSX).
 if (${TBB_FOUND})
-  if (${TBB_VERSION} VERSION_GREATER_EQUAL 2019.0)
+  if (${TBB_VERSION} VERSION_GREATER_EQUAL 2021.4)
   message("FOUND SUITABLE TBB VERSION : ${TBB_VERSION}")
   set(TBB_TARGET_EXISTED TRUE)
   else()
@@ -646,42 +643,42 @@ endif()
 message("Build system will fetch and build Intel Threading Building Blocks")
 message("==================================================================")
 # These are useful for the custom install step we'll do later
-set(TBB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/oneTBB-2020.2)
+set(TBB_SOURCE_DIR ${GAT_SOURCE_DIR}/external/oneTBB-2021.5.0)
 set(TBB_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
 
 if("${TBB_COMPILER}" STREQUAL "gcc")
   ## Don't know why it's a problem yet, but if we're using
   ## GCC, get rid of the DO_ITT_NOTIFY flag
-  set(TBB_CXXFLAGS "${TBB_CXXFLAGS} -UDO_ITT_NOTIFY")
+  # set(TBB_CXXFLAGS "${TBB_CXXFLAGS} -UDO_ITT_NOTIFY")
 endif()
 
 set(TBB_CXXFLAGS "${TBB_CXXFLAGS} ${CXXSTDFLAG} ${SCHAR_FLAG}")
 
-externalproject_add(libtbb
-  DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-  DOWNLOAD_COMMAND curl -k -L https://github.com/oneapi-src/oneTBB/archive/v2020.2.tar.gz  -o tbb-2020_U2.tgz &&
-    ${SHASUM} 4804320e1e6cbe3a5421997b52199e3c1a3829b2ecb6489641da4b8e32faf500 tbb-2020_U2.tgz &&
-    tar -xzvf tbb-2020_U2.tgz
-  SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/oneTBB-2020.2
-  INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-  PATCH_COMMAND "${TBB_PATCH_STEP}"
-  CONFIGURE_COMMAND ""
-  BUILD_COMMAND make ${QUIET_MAKE} CXXFLAGS=${TBB_CXXFLAGS} lambdas=1 compiler=${TBB_COMPILER} cfg=release tbb_build_prefix=LIBS
-  INSTALL_COMMAND sh -c "mkdir -p ${TBB_INSTALL_DIR}/include && mkdir -p ${TBB_INSTALL_DIR}/lib && cp ${TBB_SOURCE_DIR}/build/LIBS_release/*.${SHARED_LIB_EXTENSION}* ${TBB_INSTALL_DIR}/lib && cp -r ${TBB_SOURCE_DIR}/include/* ${TBB_INSTALL_DIR}/include"
-  BUILD_IN_SOURCE 1
+ExternalProject_Add(libtbb
+DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+DOWNLOAD_COMMAND curl -k -L https://github.com/oneapi-src/oneTBB/archive/refs/tags/v2021.5.0.tar.gz -o v2021.5.tar.gz &&
+${SHASUM} e5b57537c741400cf6134b428fc1689a649d7d38d9bb9c1b6d64f092ea28178a v2021.5.tar.gz &&
+tar -xzvf v2021.5.tar.gz
+SOURCE_DIR ${TBB_SOURCE_DIR}
+INSTALL_DIR ${TBB_INSTALL_DIR}
+PATCH_COMMAND "${TBB_PATCH_STEP}"
+CMAKE_ARGS -DCMAKE_CXX_FLAGS=${TBB_CXXFLAGS} -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR> -DTBB_TEST=OFF -DTBB_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD}
+BUILD_IN_SOURCE TRUE
 )
 
 set(RECONFIG_FLAGS ${RECONFIG_FLAGS} -DTBB_WILL_RECONFIGURE=FALSE -DTBB_RECONFIGURE=TRUE)
-externalproject_add_step(libtbb reconfigure
-  COMMAND ${CMAKE_COMMAND} ${CMAKE_CURRENT_SOURCE_DIR} ${RECONFIG_FLAGS}
-  DEPENDEES install
+ExternalProject_Add_Step(libtbb reconfigure
+COMMAND ${CMAKE_COMMAND} ${CMAKE_CURRENT_SOURCE_DIR} ${RECONFIG_FLAGS}
+DEPENDEES install 
 )
-
 set(FETCHED_TBB TRUE)
-if(${FETCHED_BOOST})
-  add_dependencies(libtbb libboost)
-endif()
-endif()
+set(TBB_ROOT_SEARCH ${CMAKE_SOURCE_DIR}/external/install)    
+
+  if(${FETCHED_BOOST})
+    add_dependencies(libtbb libboost)
+  endif()
+
+endif() # end of fetch tbb
 
 ##
 # If we're fetching tbb, we need to have dummy paths for these variables
@@ -697,6 +694,7 @@ if(TBB_WILL_RECONFIGURE)
     #set(TBB_LIBRARIES tbb tbbmalloc)
     set(TBB_LIBRARIES ${TBB_INSTALL_DIR}/lib/libtbb.${SHARED_LIB_EXTENSION}
     			${TBB_INSTALL_DIR}/lib/libtbbmalloc.${SHARED_LIB_EXTENSION}
+          ${TBB_INSTALL_DIR}/lib/libtbbmalloc_proxy.${SHARED_LIB_EXTENSION}
 	   )
     message("TBB_INCLUDE_DIRS = ${TBB_INCLUDE_DIRS}")
     message("TBB_LIBRARY_DIRS = ${TBB_LIBRARY_DIRS}")
@@ -725,11 +723,13 @@ if(TBB_RECONFIGURE)
   set(TBB_LIBRARY ${TBB_INSTALL_DIR}/lib)
   set(TBB_LIB_DIR ${TBB_INSTALL_DIR}/lib)
   message("TBB_INSTALL_DIR = ${TBB_INSTALL_DIR}")
-  find_package(TBB 2018.0 COMPONENTS tbb tbbmalloc tbbmalloc_proxy)
+  find_package(TBB 2021.4
+  HINTS ${TBB_ROOT_SEARCH}
+  COMPONENTS tbb tbbmalloc tbbmalloc_proxy)
   message("[in TBB_RECONFIGURE] TBB_LIBRARIES = ${TBB_LIBRARIES}")
 endif()
 
-message("TBB_LIBRARIES = ${TBB_LIBRARIES}")
+#message("TBB_LIBRARIES = ${TBB_LIBRARIES}")
 #message("TBB_FOUND        ${TBB_FOUND}       ")
 #message("TBB_INSTALL_DIR  ${TBB_INSTALL_DIR}")
 #message("TBB_INCLUDE_DIRS ${TBB_INCLUDE_DIRS}")
@@ -754,14 +754,7 @@ if(NOT libgff_FOUND)
     DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/libgff/archive/v2.0.0.tar.gz -o libgff.tgz &&
       ${SHASUM} 7656b19459a7ca7d2fd0fcec4f2e0fd0deec1b4f39c703a114e8f4c22d82a99c libgff.tgz &&
       tar -xzvf libgff.tgz
-    ##
-    #URL https://github.com/COMBINE-lab/libgff/archive/v1.1.tar.gz
-    #DOWNLOAD_NAME libff.tgz
-    #URL_HASH SHA1=37b3147d78391d1fabbe6a0df313fbf516abbc6f
-    #TLS_VERIFY FALSE
-    ##
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-2.0.0
-    #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-2.0.0/build
     CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER} -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} 

@@ -5,15 +5,14 @@
 #include <unordered_map>
 #include <vector>
 
-#include "tbb/blocked_range.h"
-#include "tbb/combinable.h"
-#include "tbb/enumerable_thread_specific.h"
-#include "tbb/parallel_for.h"
-#include "tbb/parallel_for_each.h"
-#include "tbb/parallel_reduce.h"
-#include "tbb/partitioner.h"
-// <-- deprecated in TBB --> #include "tbb/task_scheduler_init.h"
-#include "tbb/global_control.h"
+#include "oneapi/tbb/task_arena.h"
+#include "oneapi/tbb/blocked_range.h"
+#include "oneapi/tbb/combinable.h"
+#include "oneapi/tbb/enumerable_thread_specific.h"
+#include "oneapi/tbb/parallel_for.h"
+#include "oneapi/tbb/parallel_for_each.h"
+#include "oneapi/tbb/parallel_reduce.h"
+#include "oneapi/tbb/partitioner.h"
 
 //#include "fastapprox.h"
 #include <boost/filesystem.hpp>
@@ -40,7 +39,7 @@
 #include "UnpairedRead.hpp"
 #include "ezETAProgressBar.hpp"
 
-using BlockedIndexRange = tbb::blocked_range<size_t>;
+using BlockedIndexRange = oneapi::tbb::blocked_range<size_t>;
 
 // intelligently chosen value adopted from
 // https://github.com/pachterlab/kallisto/blob/master/src/EMAlgorithm.h#L18
@@ -92,6 +91,7 @@ divide_work(Iterator begin, Iterator end, std::size_t n) {
  **/
 template <typename EQVecT>
 void sampleRoundNonCollapsedMultithreaded_(
+    oneapi::tbb::task_arena& arena,
     EQVecT& eqVec,
     /*std::vector<bool>& active,*/ std::vector<uint32_t>& activeList,
     /*std::vector<uint64_t>& countMap,*/ std::vector<double>& probMap,
@@ -106,7 +106,7 @@ void sampleRoundNonCollapsedMultithreaded_(
 
   // Sample the transcript fractions \mu from a gamma distribution, and
   // reset txpCounts to zero for each transcript.
-  typedef tbb::enumerable_thread_specific<pcg32_unique> GeneratorType;
+  typedef oneapi::tbb::enumerable_thread_specific<pcg32_unique> GeneratorType;
   auto getGenerator = []() -> pcg32_unique {
     // why this mess below?  see SalmonUtils.hpp : get_random_device() for more
     // details.
@@ -121,41 +121,44 @@ void sampleRoundNonCollapsedMultithreaded_(
   // Compute the mu to be used in the equiv class resampling
   // If we are doing a gamma draw (including shot-noise)
   if (noGammaDraw) {
-   tbb::parallel_for(
-      BlockedIndexRange(
-          size_t(0), size_t(activeList.size())), // 1024 is grainsize, use only
-                                                 // with simple_partitioner
-      [&, beta](const BlockedIndexRange& range) -> void {
-        for (auto activeIdx : boost::irange(range.begin(), range.end())) {
-          auto i = activeList[activeIdx];
-          double ci = static_cast<double>(txpCount[i] + priorAlphas[i]);
-          muGlobal[i] = ci / effLens(i);
-          txpCount[i] = 0.0;
-        }
-      });
-   
-  } else {
-   tbb::parallel_for(
-      BlockedIndexRange(
-          size_t(0), size_t(activeList.size())), // 1024 is grainsize, use only
-                                                 // with simple_partitioner
-      [&, beta](const BlockedIndexRange& range) -> void {
-        GeneratorType::reference gen = localGenerator.local();
-        for (auto activeIdx : boost::irange(range.begin(), range.end())) {
-          auto i = activeList[activeIdx];
-          double ci = static_cast<double>(txpCount[i] + priorAlphas[i]);
-          std::gamma_distribution<double> d(ci, 1.0 / (beta + effLens(i)));
-          muGlobal[i] = d(gen);
-          txpCount[i] = 0.0;
-          /** DEBUG
-          if (std::isnan(muGlobal[i]) or std::isinf(muGlobal[i])) {
-            std::cerr << "txpCount = " << txpCount[i] << ", prior = " <<
-          priorAlphas[i] << ", alpha = " << ci << ", beta = " << (1.0 / (beta +
-          effLens(i))) << ", mu = " << muGlobal[i] << "\n"; std::exit(1);
+    arena.execute([&]{
+      oneapi::tbb::parallel_for(
+        BlockedIndexRange(
+            size_t(0), size_t(activeList.size())), // 1024 is grainsize, use only
+                                                  // with simple_partitioner
+        [&, beta](const BlockedIndexRange& range) -> void {
+          for (auto activeIdx : boost::irange(range.begin(), range.end())) {
+            auto i = activeList[activeIdx];
+            double ci = static_cast<double>(txpCount[i] + priorAlphas[i]);
+            muGlobal[i] = ci / effLens(i);
+            txpCount[i] = 0.0;
           }
-          **/
-        }
       });
+    });
+  } else {
+     arena.execute([&]{
+      oneapi::tbb::parallel_for(
+        BlockedIndexRange(
+            size_t(0), size_t(activeList.size())), // 1024 is grainsize, use only
+                                                  // with simple_partitioner
+        [&, beta](const BlockedIndexRange& range) -> void {
+          GeneratorType::reference gen = localGenerator.local();
+          for (auto activeIdx : boost::irange(range.begin(), range.end())) {
+            auto i = activeList[activeIdx];
+            double ci = static_cast<double>(txpCount[i] + priorAlphas[i]);
+            std::gamma_distribution<double> d(ci, 1.0 / (beta + effLens(i)));
+            muGlobal[i] = d(gen);
+            txpCount[i] = 0.0;
+            /** DEBUG
+            if (std::isnan(muGlobal[i]) or std::isinf(muGlobal[i])) {
+              std::cerr << "txpCount = " << txpCount[i] << ", prior = " <<
+            priorAlphas[i] << ", alpha = " << ci << ", beta = " << (1.0 / (beta +
+            effLens(i))) << ", mu = " << muGlobal[i] << "\n"; std::exit(1);
+            }
+            **/
+          }
+        });
+     });
   }
 
   /**
@@ -178,11 +181,12 @@ void sampleRoundNonCollapsedMultithreaded_(
     std::vector<int> txpCount;
     std::unique_ptr<pcg32_unique> gen{nullptr};
   };
-  tbb::combinable<CombineableTxpCounts> combineableCounts(txpCount.size());
+  oneapi::tbb::combinable<CombineableTxpCounts> combineableCounts(txpCount.size());
 
   std::mutex writeMut;
   // resample within each equivalence class
-  tbb::parallel_for(
+  arena.execute([&]{
+    oneapi::tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(eqVec.size())),
       [&](const BlockedIndexRange& range) -> void {
 
@@ -268,6 +272,7 @@ void sampleRoundNonCollapsedMultithreaded_(
           } // valid group
         }   // loop over all eq classes
       });
+    });
 
   auto combineCounts = [&txpCount](const CombineableTxpCounts& p) -> void {
     for (size_t i = 0; i < txpCount.size(); ++i) {
@@ -323,8 +328,7 @@ bool CollapsedGibbsSampler::sample(
   namespace bfs = boost::filesystem;
   auto& jointLog = sopt.jointLog;
   
-  // <-- deprecated in TBB --> tbb::task_scheduler_init tbbScheduler(sopt.numThreads);
-  tbb::global_control c(tbb::global_control::max_allowed_parallelism, sopt.numThreads);
+  oneapi::tbb::task_arena arena(sopt.numThreads);
 
   std::vector<Transcript>& transcripts = readExp.transcripts();
 
@@ -470,6 +474,7 @@ bool CollapsedGibbsSampler::sample(
     // Thin the chain by a factor of (numInternalRounds)
     for (size_t i = 0; i < numInternalRounds; ++i) {
       sampleRoundNonCollapsedMultithreaded_(
+          arena,
           eqVec,      // encodes equivalence classes
           /*active,     // the set of active transcripts*/
           activeList, // the list of active transcript ids
@@ -782,7 +787,7 @@ bool CollapsedGibbsSampler::sampleMultipleChains(ExpT& readExp,
 
     namespace bfs = boost::filesystem;
     auto& jointLog = sopt.jointLog;
-    tbb::task_scheduler_init tbbScheduler(sopt.numThreads);
+    oneapi::tbb::task_scheduler_init tbbScheduler(sopt.numThreads);
     std::vector<Transcript>& transcripts = readExp.transcripts();
 
     // Fill in the effective length vector
@@ -814,7 +819,7 @@ readExp.numMappedFragments();
         effLens(i) = txp.EffectiveLength;
     }
 
-    tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(numSamples)),
+    oneapi::tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(numSamples)),
                  [&eqVec, &transcripts, &alphasIn, &priorAlphas, &effLens,
                   &allSamples, &writeBootstrap, useScaledCounts,
 numInternalRounds,
@@ -971,7 +976,7 @@ maxIter);
     std::vector<DistStats> ds(numTranscripts);
 
     // get posterior means
-    tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(numTranscripts)),
+    oneapi::tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(numTranscripts)),
                 [&allSamples, &transcripts, &ds, numMappedFragments,
                  numSamples]( const BlockedIndexRange& range) -> void {
 

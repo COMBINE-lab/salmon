@@ -26,9 +26,9 @@
 #include <boost/program_options/parsers.hpp>
 #include <boost/range/irange.hpp>
 
-#include "tbb/parallel_for.h"
-#include "tbb/parallel_for_each.h"
-#include "tbb/parallel_sort.h"
+#include "oneapi/tbb/parallel_for.h"
+#include "oneapi/tbb/parallel_for_each.h"
+#include "oneapi/tbb/parallel_sort.h"
 
 #include "GenomicFeature.hpp"
 #include "SalmonIndex.hpp"
@@ -114,6 +114,8 @@ int salmonIndex(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& /* s
       "Treat these sequences ids from the reference as the decoys that may "
       "have sequence homologous to some known transcript. for example in "
       "case of the genome, provide a list of chromosome name --- one per line")
+    ("no-clip,n", po::bool_switch(&idxOpt.noclip_polya)->default_value(false),
+      "Don't clip poly-A tails from the ends of target sequences")
     ("type",
       po::value<string>(&indexTypeStr)->default_value("puff")->required(),
       "The type of index to build; the only option is \"puff\" in this version "
@@ -200,12 +202,21 @@ Creates a salmon index.
     // Build a quasi-mapping index
     if (usePuff) {
       idxOpt.outdir = indexDirectory.string();
-      if (idxOpt.k == 0) {
+      uint32_t k = idxOpt.k;
+      if (k == 0) {
         jointLog->info(
             "You cannot have a k-mer length of 0 with the pufferfish index.");
         jointLog->info("Setting to the default value of 31.");
         idxOpt.k = 31;
+      } else if (k % 2 == 0) {
+        jointLog->critical("Error: k must be an odd value, you chose {}.", k);
+        return 1;
+      } else if (k > 31) {
+        jointLog->critical("Error: k must not be larger than 31, you chose {}.", k);
+        return 1;
       }
+      // if we reach here, k is OK, either by virtue
+      // of the value passed, or of us setting it to 31.
 
       // give the user a warning if they are not using any decoy file
       if (idxOpt.decoy_file.empty()) {

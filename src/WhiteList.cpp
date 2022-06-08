@@ -1,5 +1,5 @@
 #include "WhiteList.hpp"
-#include "tbb/task_scheduler_init.h"
+//#include "tbb/task_scheduler_init.h"
 #include <cassert>
 #include <sstream>
 
@@ -260,7 +260,7 @@ namespace alevin {
                                       std::vector<std::string>& trueBarcodes,
                                       bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
-    template bool performWhitelisting(AlevinOpts<alevin::protocols::InDrop>& aopt,
+    template bool performWhitelisting(AlevinOpts<alevin::protocols::InDropV2>& aopt,
                                       std::vector<std::string>& trueBarcodes,
                                       bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
@@ -284,7 +284,19 @@ namespace alevin {
                                       std::vector<std::string>& trueBarcodes,
                                       bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
+    template bool performWhitelisting(AlevinOpts<alevin::protocols::SplitSeqV1>& aopt,
+                                      std::vector<std::string>& trueBarcodes,
+                                      bool useRibo, bool useMito,
+                                      size_t numLowConfidentBarcode);
+    template bool performWhitelisting(AlevinOpts<alevin::protocols::SplitSeqV2>& aopt,
+                                      std::vector<std::string>& trueBarcodes,
+                                      bool useRibo, bool useMito,
+                                      size_t numLowConfidentBarcode);
     template bool performWhitelisting(AlevinOpts<alevin::protocols::QuartzSeq2>& aopt,
+                                      std::vector<std::string>& trueBarcodes,
+                                      bool useRibo, bool useMito,
+                                      size_t numLowConfidentBarcode);
+    template bool performWhitelisting(AlevinOpts<alevin::protocols::SciSeq3>& aopt,
                                       std::vector<std::string>& trueBarcodes,
                                       bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);

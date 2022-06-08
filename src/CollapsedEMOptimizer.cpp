@@ -3,13 +3,12 @@
 #include <vector>
 #include <exception>
 
-#include "tbb/blocked_range.h"
-#include "tbb/parallel_for.h"
-#include "tbb/parallel_for_each.h"
-#include "tbb/parallel_reduce.h"
-#include "tbb/partitioner.h"
-// <-- deprecated in TBB --> #include "tbb/task_scheduler_init.h"
-#include "tbb/global_control.h"
+#include "oneapi/tbb/task_arena.h"
+#include "oneapi/tbb/blocked_range.h"
+#include "oneapi/tbb/parallel_for.h"
+#include "oneapi/tbb/parallel_for_each.h"
+#include "oneapi/tbb/parallel_reduce.h"
+#include "oneapi/tbb/partitioner.h"
 
 //#include "fastapprox.h"
 #include <boost/math/special_functions/digamma.hpp>
@@ -32,7 +31,7 @@
 #include "UnpairedRead.hpp"
 #include "EMUtils.hpp"
 
-using BlockedIndexRange = tbb::blocked_range<size_t>;
+using BlockedIndexRange = oneapi::tbb::blocked_range<size_t>;
 
 // intelligently chosen value originally adopted from
 // https://github.com/pachterlab/kallisto/blob/master/src/EMAlgorithm.h#L18
@@ -176,14 +175,16 @@ void VBEMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,
  * given the current estimates (alphaIn).
  */
 template <typename EQVecT>
-void EMUpdate_(EQVecT& eqVec,
+void EMUpdate_(oneapi::tbb::task_arena& arena,
+               EQVecT& eqVec,
                std::vector<double>& priorAlphas,
                const CollapsedEMOptimizer::VecType& alphaIn,
                CollapsedEMOptimizer::VecType& alphaOut) {
 
   assert(alphaIn.size() == alphaOut.size());
 
-  tbb::parallel_for(
+  arena.execute([&]{
+  oneapi::tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(eqVec.size())),
       [&eqVec, &priorAlphas, &alphaIn, &alphaOut](const BlockedIndexRange& range) -> void {
         for (auto eqID : boost::irange(range.begin(), range.end())) {
@@ -228,6 +229,7 @@ void EMUpdate_(EQVecT& eqVec,
           }
         }
       });
+  });
 }
 
 /*
@@ -236,7 +238,8 @@ void EMUpdate_(EQVecT& eqVec,
  * given the current estimates (alphaIn).
  */
 template <typename EQVecT>
-void VBEMUpdate_(EQVecT& eqVec,
+void VBEMUpdate_(oneapi::tbb::task_arena& arena,
+                 EQVecT& eqVec,
                  std::vector<double>& priorAlphas, 
                  const CollapsedEMOptimizer::VecType& alphaIn,
                  CollapsedEMOptimizer::VecType& alphaOut,
@@ -251,7 +254,8 @@ void VBEMUpdate_(EQVecT& eqVec,
 
   double logNorm = boost::math::digamma(alphaSum);
 
-  tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(priorAlphas.size())),
+  arena.execute([&]{
+  oneapi::tbb::parallel_for(BlockedIndexRange(size_t(0), size_t(priorAlphas.size())),
                     [logNorm, &priorAlphas, &alphaIn, &alphaOut,
                      &expTheta](const BlockedIndexRange& range) -> void {
 
@@ -269,8 +273,10 @@ void VBEMUpdate_(EQVecT& eqVec,
                         alphaOut[i] = 0.0;
                       }
                     });
+  });
 
-  tbb::parallel_for(
+  arena.execute([&]{
+  oneapi::tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(eqVec.size())),
       [&eqVec, &alphaIn, &alphaOut,
        &expTheta](const BlockedIndexRange& range) -> void {
@@ -318,6 +324,7 @@ void VBEMUpdate_(EQVecT& eqVec,
           }
         }
       });
+  });
 }
 
 template <typename VecT, typename EQVecT>
@@ -689,9 +696,12 @@ bool CollapsedEMOptimizer::gatherBootstraps(
 
 template <typename EQVecT>
 void updateEqClassWeights(
+    oneapi::tbb::task_arena& arena,
     EQVecT& eqVec,
     Eigen::VectorXd& effLens) {
-  tbb::parallel_for(
+  
+  arena.execute([&]{
+  oneapi::tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(eqVec.size())),
       [&eqVec, &effLens](const BlockedIndexRange& range) -> void {
         // For each index in the equivalence class vector
@@ -721,14 +731,15 @@ void updateEqClassWeights(
           }
         }
       });
+  });
 }
 
 template <typename ExpT>
 bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
                                     double relDiffTolerance, uint32_t maxIter) {
 
-  // <-- deprecated in TBB --> tbb::task_scheduler_init tbbScheduler(sopt.numThreads);
-  tbb::global_control c(tbb::global_control::max_allowed_parallelism, sopt.numThreads);
+  oneapi::tbb::task_arena arena(sopt.numThreads);
+
   std::vector<Transcript>& transcripts = readExp.transcripts();
   std::vector<bool> available(transcripts.size(), false);
 
@@ -824,7 +835,8 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   // the weights with the effective length terms (here, the *inverse* of
   // the effective length).  Otherwise, multiply the existing weight terms
   // by the effective length term.
-  tbb::parallel_for(
+  arena.execute([&]{
+  oneapi::tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(eqVec.size())),
       [&eqVec, &effLens, noRichEq, &sopt](const BlockedIndexRange& range) -> void {
         // For each index in the equivalence class vector
@@ -866,6 +878,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
           }
         }
       });
+  });
 
   auto numRemoved =
       markDegenerateClasses(eqVec, alphas, available, sopt.jointLog);
@@ -898,7 +911,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
       jointLog->info(
           "iteration {:n}, adjusting effective lengths to account for biases",
           itNum);
-      effLens = salmon::utils::updateEffectiveLengths(sopt, readExp, effLens,
+      effLens = salmon::utils::updateEffectiveLengths(arena, sopt, readExp, effLens,
                                                       alphas, available, true);
       // if we're doing the VB optimization, update the priors
       if (useVBEM) {
@@ -912,7 +925,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
           jointLog->warn("Transcript {} had length {}", i, effLens(i));
         }
       }
-      updateEqClassWeights(eqVec, effLens);
+      updateEqClassWeights(arena, eqVec, effLens);
       needBias = false;
 
       if ( sopt.eqClassMode ) {
@@ -923,7 +936,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
     }
 
     if (useVBEM) {
-      VBEMUpdate_(eqVec, priorAlphas, alphas,
+      VBEMUpdate_(arena, eqVec, priorAlphas, alphas,
                   alphasPrime, expTheta);
     } else {
       /*
@@ -934,7 +947,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
       }
       */
 
-      EMUpdate_(eqVec, priorAlphas, alphas, alphasPrime);
+      EMUpdate_(arena, eqVec, priorAlphas, alphas, alphasPrime);
     }
 
     converged = true;

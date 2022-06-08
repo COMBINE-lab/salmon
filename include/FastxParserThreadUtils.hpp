@@ -6,8 +6,13 @@
 #include <pthread.h>
 #include <random>
 #include <thread>
+
 #if defined(__SSE2__)
-#include "simde/x86/sse2.h"
+ #if defined(HAVE_SIMDE)
+  #include "simde/x86/sse2.h"
+ #else
+  #include <emmintrin.h>
+ #endif
 #endif
 
 // Most of this code is taken directly from
@@ -23,7 +28,11 @@ static const size_t MAX_BACKOFF_ITERS = 1024;
 
 ALWAYS_INLINE static void cpuRelax() {
 #if defined(__SSE2__)  // AMD and Intel
-  simde_mm_pause();
+  #if defined(HAVE_SIMDE)
+    simde_mm_pause();
+  #else
+    _mm_pause();
+  #endif
 #elif defined(__i386__) || defined(__x86_64__)
   asm volatile("pause");
 #elif defined(__aarch64__)

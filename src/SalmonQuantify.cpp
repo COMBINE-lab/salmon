@@ -61,15 +61,15 @@
 #include "core/range.hpp"
 
 // TBB Includes
-#include "tbb/blocked_range.h"
-#include "tbb/concurrent_queue.h"
-#include "tbb/concurrent_unordered_map.h"
-#include "tbb/concurrent_unordered_set.h"
-#include "tbb/concurrent_vector.h"
-#include "tbb/parallel_for.h"
-#include "tbb/parallel_for_each.h"
-#include "tbb/parallel_reduce.h"
-#include "tbb/partitioner.h"
+#include "oneapi/tbb/blocked_range.h"
+#include "oneapi/tbb/concurrent_queue.h"
+#include "oneapi/tbb/concurrent_unordered_map.h"
+#include "oneapi/tbb/concurrent_unordered_set.h"
+#include "oneapi/tbb/concurrent_vector.h"
+#include "oneapi/tbb/parallel_for.h"
+#include "oneapi/tbb/parallel_for_each.h"
+#include "oneapi/tbb/parallel_reduce.h"
+#include "oneapi/tbb/partitioner.h"
 
 // logger includes
 #include "spdlog/spdlog.h"
@@ -152,7 +152,7 @@ template <typename AlnT>
 using AlnGroupQueue = moodycamel::ConcurrentQueue<AlignmentGroup<AlnT>*>;
 #else
 template <typename AlnT>
-using AlnGroupQueue = tbb::concurrent_queue<AlignmentGroup<AlnT>*>;
+using AlnGroupQueue = oneapi::tbb::concurrent_queue<AlignmentGroup<AlnT>*>;
 #endif
 
 //#include "LightweightAlignmentDefs.hpp"
@@ -1424,7 +1424,7 @@ void processReads(
       if (writeUnmapped and
           mapType != salmon::utils::MappingType::PAIRED_MAPPED) {
         // If we have no mappings --- then there's nothing to do
-        // unless we're outputting names for un-mapped reads
+        // unless we're outputting names for un-mapped / decoy-mapped reads 
         unmappedNames << rp.first.name << ' ' << salmon::utils::str(mapType)
                       << '\n';
       }
@@ -1854,8 +1854,9 @@ void processReads(
 
        if (writeUnmapped and mapType != salmon::utils::MappingType::SINGLE_MAPPED) {
          // If we have no mappings --- then there's nothing to do
-         // unless we're outputting names for un-mapped reads
-         unmappedNames << rp.name << " u\n";
+         // unless we're outputting names for un-mapped / decoy mapped reads
+         unmappedNames << rp.name << ' ' << salmon::utils::str(mapType)
+                       << '\n';
        }
 
        validHits += jointAlignments.size();
@@ -2384,6 +2385,15 @@ void quantifyLibrary(ReadExperimentT& experiment,
   jointLog->info("Mapping rate = {}\%\n",
                  experiment.effectiveMappingRate() * 100.0);
   jointLog->info("finished quantifyLibrary()");
+
+  // clean up loggers
+  {
+    if (salmonOpts.writeUnmappedNames) {
+      spdlog::logger* unmappedLogger = salmonOpts.unmappedLog.get();
+      unmappedLogger->flush();
+    }
+  }
+
 }
 
 int salmonQuantify(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& salmonIndex) {
@@ -2546,6 +2556,12 @@ transcript abundance from RNA-seq reads
       std::vector<std::string> errors{"insufficient_assigned_fragments"};
       sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
       gzw.writeEmptyMeta(sopt, experiment, errors);
+      sopt.jointLog->flush();
+      if (sopt.writeUnmappedNames) {
+        spdlog::logger* unmappedLogger = sopt.unmappedLog.get();
+        unmappedLogger->flush();
+      }
+      spdlog::drop_all();
       std::exit(1);
     }
 
@@ -2754,6 +2770,10 @@ transcript abundance from RNA-seq reads
     // Write meta-information about the run
     gzw.writeMeta(sopt, experiment, mstats);
 
+    // at this point we can (and should) drop all loggers to force them to 
+    // flush.
+    spdlog::drop_all();
+    
   } catch (po::error& e) {
     std::cerr << "(mapping-based mode) Exception : [" << e.what() << "].\n";
     std::cerr << "Please be sure you are passing correct options, and that you are running in the intended mode.\n";
