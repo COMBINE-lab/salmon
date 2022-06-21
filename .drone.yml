@@ -5,7 +5,7 @@
     - echo "Starting build"
     - ./.drone/build.sh
   test_indexing:
-   image: hbb:salmon_build_new
+   image: combinelab/hbb_salmon_build:latest
    commands:
     - echo "[Testing quant]"
     - ./.drone/test_quant.sh 
@@ -13,7 +13,7 @@
     - /mnt/scratch6/avi/data:/mnt/data
     - /mnt/scratch6/salmon_ci:/mnt/ci_res
   copy_build:
-    image: hbb:salmon_build_new
+    image: combinelab/hbb_salmon_build:latest
     commands:
      - echo "[Packaging binary]"
      - ./.drone/copy_build.sh
