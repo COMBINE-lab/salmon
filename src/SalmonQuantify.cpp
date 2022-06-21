@@ -997,7 +997,6 @@ void processReads(
       }
       */
 
-
       bool haveOrphans = false;
       MergeResult mergeRes{MergeResult::HAD_NONE};
       // Consider a read as too short if both ends are too short
