@@ -455,6 +455,9 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
   std::vector<pufferfish::util::MemCluster> recoveredHits;
   std::vector<pufferfish::util::JointMems> jointHits;
   PairedAlignmentFormatter<IndexT*> formatter(qidx);
+  if (salmonOpts.writeQualities) {
+    salmonOpts.jointLog->warn("The --writeQualities flag has no effect when writing results to a RAD file.");
+  }
   pufferfish::util::QueryCache qc;
 
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
@@ -965,11 +968,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         bw << num_reads_in_chunk;
         bw << num_reads_in_chunk;
       }
-      /*
-      if (writeQuasimappings) {
-        writeAlignmentsToStream(rp, formatter, jointAlignments, sstream, true, true, extraBAMtags);
-      }
-      */
 
       validHits += accepted_hits.size();
       localNumAssignedFragments += (accepted_hits.size() > 0);
@@ -1104,6 +1102,9 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
   std::vector<pufferfish::util::MemCluster> recoveredHits;
   std::vector<pufferfish::util::JointMems> jointHits;
   PairedAlignmentFormatter<IndexT*> formatter(qidx);
+  if (salmonOpts.writeQualities) {
+    salmonOpts.jointLog->warn("The --writeQualities flag has no effect when writing results to a RAD file.");
+  }
   pufferfish::util::QueryCache qc;
 
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
@@ -1424,11 +1425,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           bw << num_reads_in_chunk;
           bw << num_reads_in_chunk;
         }
-        /*
-        if (writeQuasimappings) {
-          writeAlignmentsToStream(rp, formatter, jointAlignments, sstream, true, true, extraBAMtags);
-        }
-        */
 
         validHits += jointAlignments.size();
         localNumAssignedFragments += (jointAlignments.size() > 0);
@@ -1575,6 +1571,11 @@ void processReadsQuasi(
   std::vector<pufferfish::util::MemCluster> recoveredHits;
   std::vector<pufferfish::util::JointMems> jointHits;
   PairedAlignmentFormatter<IndexT*> formatter(qidx);
+  if (salmonOpts.writeQualities) {
+    formatter.enable_qualities();
+  } else {
+    formatter.disable_qualities();
+  } 
   pufferfish::util::QueryCache qc;
 
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;

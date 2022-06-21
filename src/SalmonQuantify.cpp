@@ -841,6 +841,11 @@ void processReads(
   std::vector<pufferfish::util::MemCluster> recoveredHits;
   std::vector<pufferfish::util::JointMems> jointHits;
   PairedAlignmentFormatter<IndexT*> formatter(qidx);
+  if (salmonOpts.writeQualities) {
+    formatter.enable_qualities();
+  } else {
+    formatter.disable_qualities();
+  }
   pufferfish::util::QueryCache qc;
 
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
@@ -1605,6 +1610,11 @@ void processReads(
   std::vector<pufferfish::util::MemCluster> recoveredHits;
   std::vector<pufferfish::util::JointMems> jointHits;
   PairedAlignmentFormatter<IndexT*> formatter(qidx);
+  if (salmonOpts.writeQualities) {
+    formatter.enable_qualities();
+  } else {
+    formatter.disable_qualities();
+  }
   pufferfish::util::QueryCache qc;
 
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
