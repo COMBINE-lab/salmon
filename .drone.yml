@@ -1,6 +1,6 @@
  pipeline:
   setup:
-   image: hbb:salmon_build_new
+   image: combinelab/hbb_salmon_build:latest
    commands:
     - echo "Starting build"
     - ./.drone/build.sh
