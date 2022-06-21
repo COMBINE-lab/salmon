@@ -1937,7 +1937,6 @@ void processReads(
    mstats.numFragmentsFiltered += numFragsDropped;
    mstats.numDecoyFragments += numDecoyFrags;
 }
-
 /// DONE QUASI
 
 
