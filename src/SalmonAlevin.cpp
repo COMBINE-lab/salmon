@@ -1571,9 +1571,19 @@ void processReadsQuasi(
   std::vector<pufferfish::util::MemCluster> recoveredHits;
   std::vector<pufferfish::util::JointMems> jointHits;
   PairedAlignmentFormatter<IndexT*> formatter(qidx);
+
+  // Says if we should check that quality values exist
+  // in the case the user requested to `--writeQualities`,
+  // because they may have accidentially passed in a FASTA
+  // file.
+  bool check_qualities = true;
   if (salmonOpts.writeQualities) {
     formatter.enable_qualities();
   } else {
+    // we don't have to worry about
+    // checking qualities because 
+    // we aren't writing them.
+    check_qualities = false;
     formatter.disable_qualities();
   } 
   pufferfish::util::QueryCache qc;
@@ -1590,6 +1600,9 @@ void processReadsQuasi(
   fmt::MemoryWriter sstream;
   auto* qmLog = salmonOpts.qmLog.get();
   bool writeQuasimappings = (qmLog != nullptr);
+  // if we aren't writing output at all, don't bother
+  // checking for quality scores either.
+  if (!writeQuasimappings) { check_qualities = false; }
 
   //////////////////////
   // NOTE: validation mapping based new parameters
@@ -1639,6 +1652,25 @@ void processReadsQuasi(
     if(writeQuasimappings) {
     	size_t reserveSize { alevinOpts.protocol.barcodeLength + alevinOpts.protocol.umiLength + 12};
     	extraBAMtags.reserve(reserveSize);
+    }
+
+    // if we need to disable writing quality values 
+    // because the user passed in a FASTA file, do that
+    // check here.
+    if (check_qualities and (rangeSize > 0)) {
+      auto& rp = rg[0];
+      // a valid FASTQ record can't have an 
+      // empty quality string, so then we will
+      // treat this as a FASTA.
+      if (rp.first.qual.empty() or rp.second.qual.empty()) { 
+        formatter.disable_qualities();
+        salmonOpts.jointLog->warn("The flag --writeQualities was provided,\n"
+        "but read records (e.g. {}/{}) appear not to have quality strings!\n"
+        "The input is being interpreted as a FASTA file, and the writing\n"
+        "of quality scores is being disabled.\n", rp.first.name, rp.second.name);
+      }
+      // we won't bother to perform this check more than once.
+      check_qualities = false;
     }
 
     auto localProtocol = alevinOpts.protocol;
@@ -2457,8 +2489,8 @@ bool do_sc_align(ReadExperimentT& experiment,
 
   rad_file.close();
 
-  // we want to check if the RAD file stream was written to properly
-  // while we likely would have caught this earlier, it is possible the 
+  // We want to check if the RAD file stream was written to properly.
+  // While we likely would have caught this earlier, it is possible the 
   // badbit may not be set until the stream actually flushes (perhaps even 
   // at close), so we check here one final time that the status of the 
   // stream is as expected.

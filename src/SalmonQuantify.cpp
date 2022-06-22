@@ -853,9 +853,19 @@ void processReads(
   std::vector<pufferfish::util::MemCluster> recoveredHits;
   std::vector<pufferfish::util::JointMems> jointHits;
   PairedAlignmentFormatter<IndexT*> formatter(qidx);
+
+  // Says if we should check that quality values exist
+  // in the case the user requested to `--writeQualities`,
+  // because they may have accidentially passed in a FASTA
+  // file.
+  bool check_qualities = true;
   if (salmonOpts.writeQualities) {
     formatter.enable_qualities();
   } else {
+    // we don't have to worry about
+    // checking qualities because 
+    // we aren't writing them.
+    check_qualities = false;
     formatter.disable_qualities();
   }
   pufferfish::util::QueryCache qc;
@@ -876,6 +886,9 @@ void processReads(
   fmt::MemoryWriter sstream;
   auto* qmLog = salmonOpts.qmLog.get();
   bool writeQuasimappings = (qmLog != nullptr);
+  // if we aren't writing output at all, don't bother
+  // checking for quality scores either.
+  if (!writeQuasimappings) { check_qualities = false; }
 
   /*
   auto ap{selective_alignment::utils::AlignmentPolicy::DEFAULT};
@@ -912,6 +925,25 @@ void processReads(
     }
 
     LibraryFormat expectedLibraryFormat = rl.format();
+
+    // if we need to disable writing quality values 
+    // because the user passed in a FASTA file, do that
+    // check here.
+    if (check_qualities and (rangeSize > 0)) {
+      auto& rp = rg[0];
+      // a valid FASTQ record can't have an 
+      // empty quality string, so then we will
+      // treat this as a FASTA.
+      if (rp.first.qual.empty() or rp.second.qual.empty()) { 
+        formatter.disable_qualities();
+        salmonOpts.jointLog->warn("The flag --writeQualities was provided,\n"
+        "but read records (e.g. {}/{}) appear not to have quality strings!\n"
+        "The input is being interpreted as a FASTA file, and the writing\n"
+        "of quality scores is being disabled.\n", rp.first.name, rp.second.name);
+      }
+      // we won't bother to perform this check more than once.
+      check_qualities = false;
+    }
 
     bool tryAlign{salmonOpts.validateMappings};
     for (size_t i = 0; i < rangeSize; ++i) { // For all the reads in this batch
@@ -1649,9 +1681,19 @@ void processReads(
   std::vector<pufferfish::util::MemCluster> recoveredHits;
   std::vector<pufferfish::util::JointMems> jointHits;
   PairedAlignmentFormatter<IndexT*> formatter(qidx);
+
+  // Says if we should check that quality values exist
+  // in the case the user requested to `--writeQualities`,
+  // because they may have accidentially passed in a FASTA
+  // file.
+  bool check_qualities = true;
   if (salmonOpts.writeQualities) {
     formatter.enable_qualities();
   } else {
+    // we don't have to worry about
+    // checking qualities because 
+    // we aren't writing them.
+    check_qualities = false;
     formatter.disable_qualities();
   }
   pufferfish::util::QueryCache qc;
@@ -1671,6 +1713,9 @@ void processReads(
   fmt::MemoryWriter sstream;
   auto* qmLog = salmonOpts.qmLog.get();
   bool writeQuasimappings = (qmLog != nullptr);
+  // if we aren't writing output at all, don't bother
+  // checking for quality scores either.
+  if (!writeQuasimappings) { check_qualities = false; }
 
   std::string rc1;
   rc1.reserve(300);
@@ -1703,6 +1748,25 @@ void processReads(
     }
 
     LibraryFormat expectedLibraryFormat = rl.format();
+
+    // if we need to disable writing quality values 
+    // because the user passed in a FASTA file, do that
+    // check here.
+    if (check_qualities and (rangeSize > 0)) {
+      auto& rp = rg[0];
+      // a valid FASTQ record can't have an 
+      // empty quality string, so then we will
+      // treat this as a FASTA.
+      if (rp.qual.empty()) { 
+        formatter.disable_qualities();
+        salmonOpts.jointLog->warn("The flag --writeQualities was provided,\n"
+        "but read records (e.g. {}) appear not to have quality strings!\n"
+        "The input is being interpreted as a FASTA file, and the writing\n"
+        "of quality scores is being disabled.\n", rp.name);
+      }
+      // we won't bother to perform this check more than once.
+      check_qualities = false;
+    }
 
     bool tryAlign{salmonOpts.validateMappings};
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
