@@ -202,6 +202,7 @@ struct SalmonOpts {
 
   uint32_t eelCountCutoff{50};
   // For writing quasi-mappings
+  bool writeQualities;
   std::string qmFileName;
   std::ofstream qmFile;
   std::unique_ptr<std::ostream> qmStream{nullptr};

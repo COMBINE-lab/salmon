@@ -455,6 +455,9 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
   std::vector<pufferfish::util::MemCluster> recoveredHits;
   std::vector<pufferfish::util::JointMems> jointHits;
   PairedAlignmentFormatter<IndexT*> formatter(qidx);
+  if (salmonOpts.writeQualities) {
+    salmonOpts.jointLog->warn("The --writeQualities flag has no effect when writing results to a RAD file.");
+  }
   pufferfish::util::QueryCache qc;
 
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
@@ -965,11 +968,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         bw << num_reads_in_chunk;
         bw << num_reads_in_chunk;
       }
-      /*
-      if (writeQuasimappings) {
-        writeAlignmentsToStream(rp, formatter, jointAlignments, sstream, true, true, extraBAMtags);
-      }
-      */
 
       validHits += accepted_hits.size();
       localNumAssignedFragments += (accepted_hits.size() > 0);
@@ -1104,6 +1102,9 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
   std::vector<pufferfish::util::MemCluster> recoveredHits;
   std::vector<pufferfish::util::JointMems> jointHits;
   PairedAlignmentFormatter<IndexT*> formatter(qidx);
+  if (salmonOpts.writeQualities) {
+    salmonOpts.jointLog->warn("The --writeQualities flag has no effect when writing results to a RAD file.");
+  }
   pufferfish::util::QueryCache qc;
 
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
@@ -1424,11 +1425,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           bw << num_reads_in_chunk;
           bw << num_reads_in_chunk;
         }
-        /*
-        if (writeQuasimappings) {
-          writeAlignmentsToStream(rp, formatter, jointAlignments, sstream, true, true, extraBAMtags);
-        }
-        */
 
         validHits += jointAlignments.size();
         localNumAssignedFragments += (jointAlignments.size() > 0);
@@ -1575,6 +1571,21 @@ void processReadsQuasi(
   std::vector<pufferfish::util::MemCluster> recoveredHits;
   std::vector<pufferfish::util::JointMems> jointHits;
   PairedAlignmentFormatter<IndexT*> formatter(qidx);
+
+  // Says if we should check that quality values exist
+  // in the case the user requested to `--writeQualities`,
+  // because they may have accidentially passed in a FASTA
+  // file.
+  bool check_qualities = true;
+  if (salmonOpts.writeQualities) {
+    formatter.enable_qualities();
+  } else {
+    // we don't have to worry about
+    // checking qualities because 
+    // we aren't writing them.
+    check_qualities = false;
+    formatter.disable_qualities();
+  } 
   pufferfish::util::QueryCache qc;
 
   bool mimicStrictBT2 = salmonOpts.mimicStrictBT2;
@@ -1589,6 +1600,9 @@ void processReadsQuasi(
   fmt::MemoryWriter sstream;
   auto* qmLog = salmonOpts.qmLog.get();
   bool writeQuasimappings = (qmLog != nullptr);
+  // if we aren't writing output at all, don't bother
+  // checking for quality scores either.
+  if (!writeQuasimappings) { check_qualities = false; }
 
   //////////////////////
   // NOTE: validation mapping based new parameters
@@ -1638,6 +1652,25 @@ void processReadsQuasi(
     if(writeQuasimappings) {
     	size_t reserveSize { alevinOpts.protocol.barcodeLength + alevinOpts.protocol.umiLength + 12};
     	extraBAMtags.reserve(reserveSize);
+    }
+
+    // if we need to disable writing quality values 
+    // because the user passed in a FASTA file, do that
+    // check here.
+    if (check_qualities and (rangeSize > 0)) {
+      auto& rp = rg[0];
+      // a valid FASTQ record can't have an 
+      // empty quality string, so then we will
+      // treat this as a FASTA.
+      if (rp.first.qual.empty() or rp.second.qual.empty()) { 
+        formatter.disable_qualities();
+        salmonOpts.jointLog->warn("The flag --writeQualities was provided,\n"
+        "but read records (e.g. {}/{}) appear not to have quality strings!\n"
+        "The input is being interpreted as a FASTA file, and the writing\n"
+        "of quality scores is being disabled.\n", rp.first.name, rp.second.name);
+      }
+      // we won't bother to perform this check more than once.
+      check_qualities = false;
     }
 
     auto localProtocol = alevinOpts.protocol;
@@ -2223,7 +2256,7 @@ void processReadLibrary(
  * Selectively align the reads and write a PAM file out.
  */
 template <typename AlnT, typename ProtocolT>
-void do_sc_align(ReadExperimentT& experiment,
+bool do_sc_align(ReadExperimentT& experiment,
                  SalmonOpts& salmonOpts,
                  MappingStatistics& mstats,
                  uint32_t numQuantThreads,
@@ -2455,8 +2488,24 @@ void do_sc_align(ReadExperimentT& experiment,
   rad_file.write(reinterpret_cast<char*>(&nc), sizeof(nc));
 
   rad_file.close();
+
+  // We want to check if the RAD file stream was written to properly.
+  // While we likely would have caught this earlier, it is possible the 
+  // badbit may not be set until the stream actually flushes (perhaps even 
+  // at close), so we check here one final time that the status of the 
+  // stream is as expected.
+  // see : https://stackoverflow.com/questions/28342660/error-handling-in-stdofstream-while-writing-data
+  if ( !rad_file ) {
+    jointLog->critical("The RAD file stream had an invalid status after close; so some operation(s) may"
+                       "have failed!\nA common cause for this is lack of output disk space.\n"
+                       "Consequently, the output may be corrupted.");
+    jointLog->flush();
+    return false;
+  }
+
   jointLog->info("finished sc_align()");
   jointLog->flush();
+  return true;
 }
                      
 /**
@@ -2783,13 +2832,18 @@ int alevin_sc_align(AlevinOpts<ProtocolT>& aopt,
       alevin::types::AlevinCellBarcodeKmer::k(aopt.protocol.barcodeLength);
     }
 
-    do_sc_align<QuasiAlignment>(experiment, sopt,
-                                mstats, sopt.numThreads, aopt);
+    bool mapping_ok = do_sc_align<QuasiAlignment>(experiment, sopt,
+                                                  mstats, sopt.numThreads, aopt);
 
     // write meta-information about the run
     GZipWriter gzw(outputDirectory, jointLog);
     sopt.runStopTime = salmon::utils::getCurrentTimeAsString();
     gzw.writeMetaFryMode(sopt, experiment, mstats);
+
+    if ( !mapping_ok ) {
+      std::cerr << "Error : There was an error during mapping; please check the log for further details.\n";
+      std::exit(1);
+    }
  } catch (po::error& e) {
     std::cerr << "Exception : [" << e.what() << "]. Exiting.\n";
     std::exit(1);

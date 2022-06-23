@@ -14,6 +14,7 @@ namespace defaults {
   constexpr const bool posBiasCorrect{false};
   constexpr const uint32_t numThreads{8};
   constexpr const double incompatPrior{0.0};
+  constexpr const bool writeQualities{false};
   constexpr const char quasiMappingDefaultFile[] = "";
   constexpr const char quasiMappingImplicitFile[] = "-";
   constexpr const bool metaMode{false};

@@ -269,6 +269,11 @@ namespace salmon {
        "format.  By default, output will be directed to "
        "stdout, but an alternative file name can be "
        "provided instead.")
+      ("writeQualities", po::bool_switch(&(sopt.writeQualities))->default_value(salmon::defaults::writeQualities),
+      "This flag only has meaning if mappings are being written (with --writeMappings/-z). "
+      "If this flag is provided, then the output SAM file will contain quality strings as well as "
+      "read sequences. Note that this can greatly increase the size of the output file."
+      )
       ("hitFilterPolicy",
        po::value<string>(&sopt.hitFilterPolicyStr)->default_value(salmon::defaults::hitFilterPolicyStr),
        "[selective-alignment mode only] : Determines the policy by which hits are filtered in selective alignment.  Filtering hits after "
