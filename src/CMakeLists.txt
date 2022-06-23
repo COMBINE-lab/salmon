@@ -99,7 +99,6 @@ endif()
 
 set (UNIT_TESTS_ENTRY_SRCS
     ${GAT_SOURCE_DIR}/tests/UnitTests.cpp
-    ${GAT_SOURCE_DIR}/tests/catch.hpp
 )
 
 set (UNIT_TESTS_INDIVIDUAL_SRCS
@@ -107,7 +106,6 @@ set (UNIT_TESTS_INDIVIDUAL_SRCS
   ${GAT_SOURCE_DIR}/external/install/src/pufferfish/rank9b.cpp
   ${GAT_SOURCE_DIR}/tests/GCSampleTests.cpp
   ${GAT_SOURCE_DIR}/tests/LibraryTypeTests.cpp
-  # ${GAT_SOURCE_DIR}/tests/KmerHistTests.cpp
 )
 
 
@@ -197,7 +195,9 @@ if(HAS_IPO AND (NOT NO_IPO))
   set_property(TARGET salmon PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
-add_library(UnitTestsMain STATIC ${UNIT_TESTS_ENTRY_SRCS} ${GAT_SOURCE_DIR}/tests/catch.hpp)
+add_library(UnitTestsMain STATIC ${UNIT_TESTS_ENTRY_SRCS})
+target_compile_options(UnitTestsMain PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
+target_compile_options(UnitTestsMain PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
 
 add_executable(unitTests ${UNIT_TESTS_INDIVIDUAL_SRCS} ${GAT_SOURCE_DIR}/tests/catch.hpp)
 target_compile_options(unitTests PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
