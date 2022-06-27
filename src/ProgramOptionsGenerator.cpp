@@ -399,6 +399,9 @@ namespace salmon {
        "chromium", po::bool_switch()->default_value(alevin::defaults::isChromium),
        "Use 10x chromium v2 Single Cell protocol for the library.")
       (
+       "chromium5V2", po::bool_switch()->default_value(alevin::defaults::isChromium5V2),
+       "Use 10x chromium 5' v2 Single Cell protocol for the library.")
+      (
        "gemcode", po::bool_switch()->default_value(alevin::defaults::isGemcode),
        "Use 10x gemcode v1 Single Cell protocol for the library.")
       (
@@ -470,16 +473,20 @@ namespace salmon {
       (
        "end",po::value<uint32_t>(),
        "Cell-Barcodes end (5 or 3) location in the read sequence from where barcode has to"
-       " be extracted. (end, umiLength, barcodeLength)"
-       " should all be provided if using this option")
+       " be extracted. (end, umiLength, barcodeLength," 
+       " fivePrimeLibrary) should all be provided if using this option")
       (
        "umiLength",po::value<uint32_t>(),
-       "umi length Parameter for unknown protocol. (end, umiLength, barcodeLength)"
-       " should all be provided if using this option")
+       "umi length Parameter for unknown protocol. (end, umiLength, barcodeLength," 
+       " fivePrimeLibrary) should all be provided if using this option")
       (
        "barcodeLength",po::value<uint32_t>(),
-       "barcode length Parameter for unknown protocol. (end, umiLength, barcodeLength)"
-       " should all be provided if using this option")
+       "barcode length Parameter for unknown protocol. (end, umiLength, barcodeLength," 
+       " fivePrimeLibrary) should all be provided if using this option")
+      (
+       "fivePrimeLibrary",po::bool_switch()->default_value(alevin::defaults::isFivePrimeLibrary),
+       "the unknown protocol uses a five prime library. (end, umiLength, barcodeLength," 
+       " fivePrimeLibrary) should all be provided if using this option")
       (
        "noem",po::bool_switch()->default_value(alevin::defaults::noEM),
        "do not run em")

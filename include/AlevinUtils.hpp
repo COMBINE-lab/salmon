@@ -54,6 +54,11 @@ namespace alevin{
 
     constexpr uint32_t uint32_max = std::numeric_limits<uint32_t>::max();
 
+    struct ReadSeqs {
+      std::string* seq1{nullptr}; // valid alignable part of read 1
+      std::string* seq2{nullptr}; // valid alignable part of read 2
+    };
+
     void getIndelNeighbors(
                            const std::string& barcodeSeq,
                            std::unordered_set<uint32_t>& neighbors);
@@ -87,7 +92,7 @@ namespace alevin{
                     std::string& umi);
 
     template <typename ProtocolT>
-    std::string* getReadSequence(ProtocolT& pt,
+    struct ReadSeqs* getReadSequence(ProtocolT& pt,
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq);

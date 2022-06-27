@@ -648,6 +648,8 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     }
 
     auto localProtocol = alevinOpts.protocol;
+    auto readsToUse = alevinOpts.protocol.get_reads_to_use();
+
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
       auto& rp = rg[i];
       readLenLeft = rp.first.seq.length();
@@ -719,14 +721,37 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
             if (isUmiIdxOk) {
               jointHitGroup.setUMI(umiIdx.word(0));
               bool rh = false;
-              std::string* readSubSeq = aut::getReadSequence(localProtocol, rp.first.seq, rp.second.seq, readBuffer);
-              rh = tooShortRight
-                       ? false
-                       : memCollector.get_raw_hits_sketch(*readSubSeq,
-                                                          qc,
-                                                          true, // isLeft
-                                                          false // verbose
-                         );
+              struct ReadSeqs* readSubSeq = aut::getReadSequence(localProtocol, rp.first.seq, rp.second.seq, readBuffer);
+              
+              if (readsToUse == ReadsToUse::USE_BOTH) {
+                // map1 = get_raw_hits_sketch(seq1)
+                // map2 = get_raw_hits_sketch(seq2)
+                // if both map correctly:
+                // if only one maps:
+                // if they map to different transcripts:
+                // if they map in the wrong order:
+                // if neither map:
+
+              } else { 
+                if (readsToUse == ReadsToUse::USE_FIRST) {
+                  rh = tooShortRight //tooShortLeft?
+                        ? false
+                        : memCollector.get_raw_hits_sketch(readSubSeq->seq1,
+                                                            qc,
+                                                            true, // isLeft
+                                                            false // verbose
+                          );
+                }
+                else if (readsToUse == ReadsToUse::USE_SECOND) {
+                  rh = tooShortRight
+                        ? false
+                        : memCollector.get_raw_hits_sketch(readSubSeq->seq2,
+                                                            qc,
+                                                            false, // isLeft
+                                                            false // verbose
+                          );
+                }
+              }
               // if there were hits
               if (rh) {
                 uint32_t num_valid_hits{0};

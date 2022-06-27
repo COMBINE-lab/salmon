@@ -135,6 +135,7 @@ namespace defaults {
   constexpr const bool isDropseq{false};
   constexpr const bool isChromium{false};
   constexpr const bool isChromiumV3{false};
+  constexpr const bool isChromium5V2{false};
   constexpr const bool isInDrop{false};
   constexpr const bool isGemcode{false};
   constexpr const bool isCITESeq{false};
@@ -144,6 +145,7 @@ namespace defaults {
   constexpr const bool isSplitSeqV2{false};
   constexpr const bool isQuartzSeq2{false};
   constexpr const bool isSciSeq3{false};
+  constexpr const bool isFivePrimeLibrary{false};
   constexpr const bool noQuant{false};
   constexpr const bool dumpFQ{false};
   constexpr const bool dumpArborescences{false};

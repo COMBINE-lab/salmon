@@ -94,11 +94,13 @@ namespace alevin{
       Rule(uint32_t barcodeLength_,
            uint32_t umiLength_,
            BarcodeEnd end_,
-           uint32_t maxValue_):
+           uint32_t maxValue_,
+           ReadsToUse readsToUse_):
         barcodeLength(barcodeLength_),
         umiLength(umiLength_),
         end(end_),
-        maxValue(maxValue_){
+        maxValue(maxValue_),
+        readsToUse(readsToUse_) {
         alevin::types::AlevinUMIKmer::k(umiLength);
       }
       // NOTE: these functions are duplicated 
@@ -111,9 +113,11 @@ namespace alevin{
       void set_read_geo(TagGeometry& g) { (void)g; };
       uint32_t barcode_length() const { return barcodeLength; }
       uint32_t umi_length() const { return umiLength; }
+      ReadsToUse get_reads_to_use() const { return readsToUse; }
 
       uint32_t barcodeLength, umiLength, maxValue;
       BarcodeEnd end;
+      ReadsToUse readsToUse;
     };
 
 
@@ -121,14 +125,14 @@ namespace alevin{
       //Drop-Seq starts from 5 end with 12 length
       //barcode and 8 length umi & iupac can be
       //changed
-      DropSeq(): Rule(12, 8, BarcodeEnd::FIVE, 16777216){}
+      DropSeq(): Rule(12, 8, BarcodeEnd::FIVE, 16777216, ReadsToUse::USE_SECOND){}
     };
 
     struct InDropV2 : Rule{
         //InDropV2 starts from 5end with variable
         //length barcodes where barcode1 varies from 8 to 11 bp
         // followed by w1 sequence, 8 bp barcode2 and 6bp UMI
-      InDropV2(): Rule(20, 6, BarcodeEnd::FIVE, 22347776){}
+      InDropV2(): Rule(20, 6, BarcodeEnd::FIVE, 22347776, ReadsToUse::USE_FIRST){}
 
       std::string w1;
       std::size_t w1Length, maxHammingDist = 2, bc2Len = 8;
@@ -140,7 +144,7 @@ namespace alevin{
     };
 
     struct CITESeq : Rule{
-      CITESeq(): Rule(16, 10, BarcodeEnd::FIVE, 4294967295){
+      CITESeq(): Rule(16, 10, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_SECOND){
         featureLength = 15;
         featureStart = 10;
       }
@@ -150,49 +154,54 @@ namespace alevin{
       void setFeatureStart(size_t startIdx) { featureStart = startIdx; }
     };
 
+    struct Chromium5V2 : Rule{
+      // fix barcodeLength and umiLength
+      Chromium5V2(): Rule(16, 12, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_BOTH){}
+    };
+
     struct ChromiumV3 : Rule{
-      ChromiumV3(): Rule(16, 12, BarcodeEnd::FIVE, 4294967295){}
+      ChromiumV3(): Rule(16, 12, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_SECOND){}
     };
 
     struct Chromium : Rule{
-      Chromium(): Rule(16, 10, BarcodeEnd::FIVE, 4294967295){}
+      Chromium(): Rule(16, 10, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_SECOND){}
     };
 
     struct Gemcode : Rule{
-      Gemcode(): Rule(14, 10, BarcodeEnd::FIVE, 268435456){}
+      Gemcode(): Rule(14, 10, BarcodeEnd::FIVE, 268435456, ReadsToUse::USE_SECOND){}
     };
 
     struct QuartzSeq2 : Rule{
-      QuartzSeq2(): Rule(15, 8, BarcodeEnd::FIVE, 1073741824){}
+      QuartzSeq2(): Rule(15, 8, BarcodeEnd::FIVE, 1073741824, ReadsToUse::USE_SECOND){}
     };
 
     struct CELSeq : Rule{
       // WEHI SCORE's CEL-Seq2 starts from 5' end with a 8 bp barcode
       // and a 6 bp UMI.
-      CELSeq(): Rule(8, 6, BarcodeEnd::FIVE, 65536){}
+      CELSeq(): Rule(8, 6, BarcodeEnd::FIVE, 65536, ReadsToUse::USE_SECOND){}
     };
     struct CELSeq2 : Rule{
       // WEHI SCORE's CEL-Seq2 starts from 5' end with a 8 bp barcode
       // and a 6 bp UMI.
-      CELSeq2(): Rule(6, 6, BarcodeEnd::FIVE, 4096){}
+      CELSeq2(): Rule(6, 6, BarcodeEnd::FIVE, 4096, ReadsToUse::USE_SECOND){}
     };
 
     struct SplitSeqV2 : Rule{
-        SplitSeqV2(): Rule(24, 10, BarcodeEnd::FIVE, 4294967295){}
+        SplitSeqV2(): Rule(24, 10, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_SECOND){}
         std::size_t const bcLen = 8, bc1Pos = 10, bc2Pos = 48, bc3Pos = 78;
     };
 
     struct SplitSeqV1 : Rule{
-        SplitSeqV1(): Rule(24, 10, BarcodeEnd::FIVE, 4294967295){}
+        SplitSeqV1(): Rule(24, 10, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_SECOND){}
         std::size_t const bcLen = 8, bc1Pos = 10, bc2Pos = 48, bc3Pos = 86;
     };
 
     //dummy class
     struct Custom : Rule{
-      Custom() : Rule(0,0,BarcodeEnd::FIVE,0){}
+      Custom() : Rule(0,0,BarcodeEnd::FIVE,0, ReadsToUse::USE_SECOND){}
     };
     struct SciSeq3 : Rule{
-      SciSeq3() : Rule(21, 8, BarcodeEnd::FIVE, 1073741824){}
+      SciSeq3() : Rule(21, 8, BarcodeEnd::FIVE, 1073741824, ReadsToUse::USE_SECOND){}
       std::string anchorSeq = "CAGAGC";
       std::size_t anchorSeqLen = anchorSeq.length();
       std::size_t anchorPos = 0;
@@ -212,12 +221,14 @@ namespace alevin{
       void set_read_geo(TagGeometry& g) { read_geo = g; }
       uint32_t barcode_length() const { return barcodeLength; }
       uint32_t umi_length() const { return umiLength; }
+      ReadsToUse get_reads_to_use() const { return readsToUse; }
 
       // These values are set only when `set_umi_geo` and 
       // `set_bc_geo` are called.  See if this design can 
       // be better integrated with `Rule` later.
       uint32_t barcodeLength, umiLength, maxValue;
       BarcodeEnd end;
+      ReadsToUse readsToUse = (alevin::defaults::isFivePrimeLibrary) ? ReadsToUse::USE_BOTH : ReadsToUse::USE_SECOND;
     };
 
   }
