@@ -476,7 +476,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     float score{0.0};
     uint32_t num_hits{0};
     uint32_t tid{std::numeric_limits<uint32_t>::max()};
-    uint32_t rid{std::numeric_limits<uint32_t>::max()}; // read id
+    uint32_t rid{std::numeric_limits<uint32_t>::max()}; // read pair ID
     bool valid_pos(int32_t read_len, uint32_t txp_len, int32_t max_over) {
       int32_t signed_txp_len = static_cast<int32_t>(txp_len);
       return (pos > -max_over) and ((pos + read_len) < (signed_txp_len + max_over));
@@ -540,9 +540,12 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
   }
   */
 
+  // merge accepted hit lists from left read and right read of a read pair
+  // use for 5' libraries where both reads contain biological information
+  // fills in accepted_hits
   bool merge_accepted_hits(&accepted_hits_left, &accepted_hits_right, &accepted_hits) {
       // 3. There are no hits in either left or right
-        // ---> nothing gets added to accepted hits
+        // ---> nothing gets added to accepted_hits
 
     for (auto& simple_hit_left : accepted_hits_left) {
 
@@ -584,10 +587,10 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                   accepted_hits.emplace_back(simple_hit_left);
                   accepted_hits.emplace_back(simple_hit_right);
             }
-          
+            // 4. There are no common transcripts
+              // ---> nothing is added to accepted_hits
         }
 
-        
       }
 
       // 2. accepted_hits_right is empty
@@ -613,9 +616,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         accepted_hits.emplace_back(simple_hit_right);
       }
     }
-
-    // 4. There are no common transcripts
-            // ---> hit_map becomes empty
+    return true;
   }
 
   struct SketchHitInfo {
@@ -794,10 +795,10 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     auto localProtocol = alevinOpts.protocol;
     auto readsToUse = alevinOpts.protocol.get_reads_to_use();
 
-    uint32_t rid = 0;
+    uint32_t rid = 0; // read pair ID
 
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
-      rid++;
+      rid++; // increase by 1 for every new read pair
       auto& rp = rg[i];
       readLenLeft = rp.first.seq.length();
       readLenRight= rp.second.seq.length();
@@ -880,7 +881,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                 // 3' libraries ignore left read, 5' libraries use left read
 
                 if (readsToUse == ReadsToUse::USE_BOTH) {
-                  // 5' libraries
+                  // 5' library
 
                   if (read_count == 0) {
                     rh = tooShortRight
@@ -904,7 +905,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                 
 
                 } else { 
-                  // 3' libraries
+                  // 3' library
 
                   read_num++; // skip second read, because only one contains biological information
                   if (readsToUse == ReadsToUse::USE_FIRST) {
@@ -953,13 +954,11 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                   // salmonOpts.maxReadOccs times or more.
                   bool had_alt_max_occ = false;
 
-                  auto collect_mappings_from_hits = [&max_stretch, &min_occ, &hit_map_left, 
-                                                    &hit_map_right,&salmonOpts, &num_valid_hits, 
-                                                    &total_occs, &largest_occ, &qidx, signed_rl, 
-                                                    signed_k](
+                  auto collect_mappings_from_hits = [&max_stretch, &min_occ, &hit_map,
+                                                     &salmonOpts, &num_valid_hits, &total_occs, 
+                                                     &largest_occ, &qidx, signed_rl, signed_k](
                     auto& raw_hits, auto& prev_read_pos,
-                    auto& max_allowed_occ, auto& had_alt_max_occ,
-                    auto& read_num
+                    auto& max_allowed_occ, auto& had_alt_max_occ
                   ) -> bool {
                     for (auto& raw_hit : raw_hits) {
                       auto& read_pos = raw_hit.first;
@@ -1020,7 +1019,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
                   bool _discard = false;
                   auto mao_first_pass = max_occ_default - 1;
-                  bool early_stop = collect_mappings_from_hits(raw_hits, prev_read_pos, mao_first_pass, _discard, read_num);
+                  bool early_stop = collect_mappings_from_hits(raw_hits, prev_read_pos, mao_first_pass, _discard);
 
                   // If our default threshold was too stringent, then fallback to a more liberal
                   // threshold and look up the k-mers that occur the least frequently.
@@ -1029,7 +1028,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                   if (attempt_occ_recover and (min_occ >= max_occ_default) and (min_occ < max_occ_recover)) {
                     prev_read_pos = -1;
                     uint64_t max_allowed_occ = min_occ;
-                    early_stop = collect_mappings_from_hits(raw_hits, prev_read_pos, max_allowed_occ, had_alt_max_occ, read_num);
+                    early_stop = collect_mappings_from_hits(raw_hits, prev_read_pos, max_allowed_occ, had_alt_max_occ);
                   }
 
                   uint32_t best_alt_hits = 0;
@@ -1095,7 +1094,15 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                     }
                   } // DONE: for (auto& kv : hit_map)
 
-                  alt_max_occ = had_alt_max_occ ? accepted_hits.size() : salmonOpts.maxReadOccs;
+                  if (readsToUse == ReadsToUse::USE_BOTH) {
+                    if (read_num == 0) { // left read
+                      alt_max_occ = had_alt_max_occ ? accepted_hits_left.size() : salmonOpts.maxReadOccs;
+                    } else { // right read
+                      alt_max_occ = had_alt_max_occ ? accepted_hits_right.size() : salmonOpts.maxReadOccs;
+                    }
+                  } else {
+                    alt_max_occ = had_alt_max_occ ? accepted_hits.size() : salmonOpts.maxReadOccs;
+                  }
 
                   /*
                   * This rule; if enabled, allows through mappings missing a single hit, if there
