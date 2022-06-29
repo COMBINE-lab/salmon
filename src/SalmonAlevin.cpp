@@ -476,6 +476,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     float score{0.0};
     uint32_t num_hits{0};
     uint32_t tid{std::numeric_limits<uint32_t>::max()};
+    uint32_t rid{std::numeric_limits<uint32_t>::max()}; // read id
     bool valid_pos(int32_t read_len, uint32_t txp_len, int32_t max_over) {
       int32_t signed_txp_len = static_cast<int32_t>(txp_len);
       return (pos > -max_over) and ((pos + read_len) < (signed_txp_len + max_over));
@@ -483,6 +484,139 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
   };
 
   enum class HitDirection : uint8_t {FW, RC, BOTH};
+
+  /*
+  bool merge_hit_maps(&hit_map_left, &hit_map_right, &hit_map, &reads_to_use) {
+    // hit maps are for all of the hits of a single read pair
+    // so hit_map_left contains all of the hits from read 1
+    // and hit_map_right contains all of the hits from read 2
+    if (reads_to_use == ReadsToUse::BOTH) {
+      for (auto& kv_left : hit_map_left) {
+        for (auto& kv_right : hit_map_right) {
+          auto tid_left = kv_left.first;
+          auto hit_left = kv_left.second;
+          auto best_hit_dir_left = hit_left.best_hit_direction();
+          auto hit_pos_left = hit_left.approx_pos_fw;
+          auto hit_read_pos_left = 
+
+          auto tid_right = kv_right.first;
+          auto hit_right = kv_right.second;
+          auto best_hit_dir_right = hit_right.best_hit_direction();
+          auto hit_pos_right = hit_right.approx_pos_fw;
+
+          if (hit_pos_right > hit_pos_left) {
+            auto pos_difference = hit_pos_right - hit_pos_left;
+          } else {
+            auto pos_difference = hit_pos_left - hit_pos_right;
+          }
+          
+          uint32_t spacing_max = 1000;
+
+        // Possible Outcomes:
+        // 1. There is one or more transcripts that they both hit
+          // hit_map_left should face FW or BOTH and hit_map_right should face RC or BOTH
+          // should be <1000 from each other in position
+            // ---> add this hit to hit_map
+          if (tid_left == tid_right and (best_hit_dir_left == HitDirection::FW or best_hit_dir_left == HitDirection::BOTH)
+              and (best_hit_dir_right == HitDirection::RC or best_hit_dir_left == HitDirection::BOTH)
+              and pos_difference <= spacing_max) {
+                hit_map[tid_left].add_fw(int32_t ref_pos, int32_t read_pos, int32_t rl, int32_t k, int32_t max_stretch, float score_inc);
+                hit_map[tid_left].add_rc(int32_t ref_pos, int32_t read_pos, int32_t rl, int32_t k, int32_t max_stretch, float score_inc);
+          }
+        // 2. hit_map_left or hit_map_right is empty
+          // ---> non-empty hit map becomes hit_map
+        // 3. Both hit_map_left and hit_map_right are empty
+          // ---> hit_map becomes empty
+        // 4. There are no common transcripts
+          // ---> hit_map becomes empty
+        }
+      }
+      
+
+    } else {
+      hit_map = hit_map_left;
+    }
+    return true;
+  }
+  */
+
+  bool merge_accepted_hits(&accepted_hits_left, &accepted_hits_right, &accepted_hits) {
+      // 3. There are no hits in either left or right
+        // ---> nothing gets added to accepted hits
+
+    for (auto& simple_hit_left : accepted_hits_left) {
+
+      bool is_fw_left = simple_hit_left.is_fw;
+      int32_t pos_left = simple_hit_left.pos;
+      // float score_left = simple_hit_left.score;
+      uint32_t num_hits_left = simple_hit_left.num_hits;
+      uint32_t tid_left = simple_hit_left.tid;
+      uint32_t rid_left = simple_hit_left.rid;
+
+      bool found_rid = false;
+
+      for (auto& simple_hit_right : accepted_hits_right) {
+        
+        bool is_fw_right = simple_hit_right.is_fw;
+        int32_t pos_right = simple_hit_right.pos;
+        // float score_right = simple_hit_right.score;
+        uint32_t num_hits_right = simple_hit_right.num_hits;
+        uint32_t tid_right = simple_hit_right.tid;
+        uint32_t rid_right = simple_hit_right.rid;
+
+        if (rid_left == rid_right) { // if the hits are from the same read pair
+          found_rid = true;
+          // calculate difference in position
+          if (pos_right > pos_left) {
+            auto pos_diff = pos_right - pos_left;
+          } else {
+            auto pos_diff = pos_left - pos_right;
+          }
+          uint32_t pos_spacing_max = 1000;
+
+          // Possible Outcomes:
+          // 1. There is one or more transcripts that they both hit
+            // hit_map_left should face FW or BOTH and hit_map_right should face RC or BOTH
+            // should be <1000 from each other in position
+              // ---> add this hit to hit_map
+            if (tid_left == tid_right and (is_fw_left and !is_fw_right) // or (!is_fw_left and is_fw_right))
+                and pos_diff <= pos_spacing_max) {
+                  accepted_hits.emplace_back(simple_hit_left);
+                  accepted_hits.emplace_back(simple_hit_right);
+            }
+          
+        }
+
+        
+      }
+
+      // 2. accepted_hits_right is empty
+            // ---> accepted_hits_left becomes accepted_hits
+      if (!found_rid) {
+        accepted_hits.emplace_back(simple_hit_left);
+      }
+
+    }
+
+    // check for hits in right list that don't exist in left list
+    for (auto& simple_hit_right : accepted_hits_right) {
+      uint32_t rid_right = simple_hit_right.rid;
+      bool found_rid = false;
+      for (auto& simple_hit_left : accepted_hits_left) {
+        uint32_t rid_left = simple_hit_left.rid;
+        if (rid_right == rid_left) { found_rid = true; }
+      }
+
+      // 2. accepted_hits_left is empty
+            // ---> accepted_hits_right becomes accepted_hits
+      if (!found_rid) {
+        accepted_hits.emplace_back(simple_hit_right);
+      }
+    }
+
+    // 4. There are no common transcripts
+            // ---> hit_map becomes empty
+  }
 
   struct SketchHitInfo {
     // add a hit to the current target that occurs in the forward 
@@ -556,18 +690,22 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     }
 
     inline SimpleHit get_fw_hit() {
-      return SimpleHit{true, approx_pos_fw, fw_score, fw_hits, std::numeric_limits<uint32_t>::max()}; 
+      return SimpleHit{true, approx_pos_fw, fw_score, fw_hits, std::numeric_limits<uint32_t>::max(),
+                       std::numeric_limits<uint32_t>::max()}; 
     }
 
     inline SimpleHit get_rc_hit() {
-      return SimpleHit{false, approx_pos_rc, rc_score, rc_hits, std::numeric_limits<uint32_t>::max()};
+      return SimpleHit{false, approx_pos_rc, rc_score, rc_hits, std::numeric_limits<uint32_t>::max(),
+                       std::numeric_limits<uint32_t>::max()};
     }
 
     inline SimpleHit get_best_hit() {
       auto best_direction = best_hit_direction();
       return (best_direction != HitDirection::RC) ? 
-        SimpleHit{true, approx_pos_fw, fw_score, fw_hits, std::numeric_limits<uint32_t>::max()} : 
-        SimpleHit{false, approx_pos_rc, rc_score, rc_hits, std::numeric_limits<uint32_t>::max()};
+        SimpleHit{true, approx_pos_fw, fw_score, fw_hits, std::numeric_limits<uint32_t>::max(), 
+                  std::numeric_limits<uint32_t>::max()} : 
+        SimpleHit{false, approx_pos_rc, rc_score, rc_hits, std::numeric_limits<uint32_t>::max(),
+                  std::numeric_limits<uint32_t>::max()};
     }
 
     inline std::string to_string() {
@@ -591,14 +729,20 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     uint32_t rc_hits{0};
     float fw_score{0.0};
     float rc_score{0.0}; 
+
   };
 
   // map to recall the number of unmapped reads we see 
   // for each barcode
   phmap::flat_hash_map<uint64_t, uint32_t> unmapped_bc_map; 
 
-  // map from transcript id to hit info
+  // maps from transcript id to hit info
+  // phmap::flat_hash_map<uint32_t, SketchHitInfo> hit_map_left; 
+  // phmap::flat_hash_map<uint32_t, SketchHitInfo> hit_map_right; 
   phmap::flat_hash_map<uint32_t, SketchHitInfo> hit_map; 
+
+  std::vector<SimpleHit> accepted_hits_left;
+  std::vector<SimpleHit> accepted_hits_right;
   std::vector<SimpleHit> accepted_hits;
 
   //////////////////////
@@ -650,7 +794,10 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     auto localProtocol = alevinOpts.protocol;
     auto readsToUse = alevinOpts.protocol.get_reads_to_use();
 
+    uint32_t rid = 0;
+
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
+      rid++;
       auto& rp = rg[i];
       readLenLeft = rp.first.seq.length();
       readLenRight= rp.second.seq.length();
@@ -664,7 +811,11 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       hits.clear();
       jointHits.clear();
       memCollector.clear();
+      // hit_map_left.clear();
+      // hit_map_right.clear();
       hit_map.clear(); 
+      accepted_hits_left.clear();
+      accepted_hits_right.clear();
       accepted_hits.clear();
       //jointAlignments.clear();
       //readSubSeq.clear();
@@ -721,185 +872,260 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
             if (isUmiIdxOk) {
               jointHitGroup.setUMI(umiIdx.word(0));
               bool rh = false;
+              int32_t signed_rl; // signed read length
               struct ReadSeqs* readSubSeq = aut::getReadSequence(localProtocol, rp.first.seq, rp.second.seq, readBuffer);
-              
-              if (readsToUse == ReadsToUse::USE_BOTH) {
-                // map1 = get_raw_hits_sketch(seq1)
-                // map2 = get_raw_hits_sketch(seq2)
-                // if both map correctly:
-                // if only one maps:
-                // if they map to different transcripts:
-                // if they map in the wrong order:
-                // if neither map:
 
-              } else { 
-                if (readsToUse == ReadsToUse::USE_FIRST) {
-                  rh = tooShortRight //tooShortLeft?
+              for (uint32_t read_num = 0; read_num < 2; read_num++) {
+                // run twice, once for left read and once for right read
+                // 3' libraries ignore left read, 5' libraries use left read
+
+                if (readsToUse == ReadsToUse::USE_BOTH) {
+                  // 5' libraries
+
+                  if (read_count == 0) {
+                    rh = tooShortRight
                         ? false
                         : memCollector.get_raw_hits_sketch(readSubSeq->seq1,
                                                             qc,
                                                             true, // isLeft
                                                             false // verbose
                           );
-                }
-                else if (readsToUse == ReadsToUse::USE_SECOND) {
-                  rh = tooShortRight
+                    signed_rl = static_cast<int32_t>(readSubSeq->seq1->length());
+                  } else {
+                    rh = tooShortRight
                         ? false
                         : memCollector.get_raw_hits_sketch(readSubSeq->seq2,
                                                             qc,
-                                                            false, // isLeft
+                                                            true, // isLeft
                                                             false // verbose
                           );
+                    signed_rl = static_cast<int32_t>(readSubSeq->seq2->length());
+                  }
+                
+
+                } else { 
+                  // 3' libraries
+
+                  read_num++; // skip second read, because only one contains biological information
+                  if (readsToUse == ReadsToUse::USE_FIRST) {
+                    rh = tooShortRight
+                          ? false
+                          : memCollector.get_raw_hits_sketch(readSubSeq->seq1,
+                                                              qc,
+                                                              true, // isLeft
+                                                              false // verbose
+                            );
+                    signed_rl = static_cast<int32_t>(readSubSeq->seq1->length());
+                  }
+                  else if (readsToUse == ReadsToUse::USE_SECOND) {
+                    rh = tooShortRight
+                          ? false
+                          : memCollector.get_raw_hits_sketch(readSubSeq->seq2,
+                                                              qc,
+                                                              true, // isLeft
+                                                              false // verbose
+                            );
+                    signed_rl = static_cast<int32_t>(readSubSeq->seq2->length());
+                  }
                 }
-              }
-              // if there were hits
-              if (rh) {
-                uint32_t num_valid_hits{0};
-                uint64_t total_occs{0};
-                uint64_t largest_occ{0};
-                auto& raw_hits = memCollector.get_left_hits();
+                // if there were hits
+                if (rh) {
+                  uint32_t num_valid_hits{0};
+                  uint64_t total_occs{0};
+                  uint64_t largest_occ{0};
+                  auto& raw_hits = memCollector.get_left_hits();
 
-                // SANITY
-                decltype(raw_hits[0].first) prev_read_pos = -1;
-                // the maximum span the supporting k-mers of a
-                // mapping position are allowed to have.
-                // NOTE this is still > read_length b/c the stretch is measured wrt the
-                // START of the terminal k-mer.
-                int32_t signed_rl = static_cast<int32_t>(readSubSeq->length());
-                int32_t max_stretch = static_cast<int32_t>(signed_rl * 1.0);
+                  // SANITY
+                  decltype(raw_hits[0].first) prev_read_pos = -1;
+                  // the maximum span the supporting k-mers of a
+                  // mapping position are allowed to have.
+                  // NOTE this is still > read_length b/c the stretch is measured wrt the
+                  // START of the terminal k-mer.
+                  int32_t max_stretch = static_cast<int32_t>(signed_rl * 1.0);
 
-                // a raw hit is a pair of read_pos and a projected hit
+                  // a raw hit is a pair of read_pos and a projected hit
 
-                // the least frequent hit for this fragment.
-                uint64_t min_occ = std::numeric_limits<uint64_t>::max();
+                  // the least frequent hit for this fragment.
+                  uint64_t min_occ = std::numeric_limits<uint64_t>::max();
 
-                // this is false by default and will be set to true
-                // if *every* collected hit for this fragment occurs
-                // salmonOpts.maxReadOccs times or more.
-                bool had_alt_max_occ = false;
+                  // this is false by default and will be set to true
+                  // if *every* collected hit for this fragment occurs
+                  // salmonOpts.maxReadOccs times or more.
+                  bool had_alt_max_occ = false;
 
-                auto collect_mappings_from_hits = [&max_stretch, &min_occ, &hit_map,
-                                                   &salmonOpts, &num_valid_hits, &total_occs,
-                                                   &largest_occ, &qidx, signed_rl, signed_k](
-                  auto& raw_hits, auto& prev_read_pos,
-                  auto& max_allowed_occ, auto& had_alt_max_occ
-                ) -> bool {
-                  for (auto& raw_hit : raw_hits) {
-                    auto& read_pos = raw_hit.first;
-                    auto& proj_hits = raw_hit.second;
-                    auto& refs = proj_hits.refRange;
-                    uint64_t num_occ = static_cast<uint64_t>(refs.size());
-                    min_occ = std::min(min_occ, num_occ);
-                    had_alt_max_occ = true;
+                  auto collect_mappings_from_hits = [&max_stretch, &min_occ, &hit_map_left, 
+                                                    &hit_map_right,&salmonOpts, &num_valid_hits, 
+                                                    &total_occs, &largest_occ, &qidx, signed_rl, 
+                                                    signed_k](
+                    auto& raw_hits, auto& prev_read_pos,
+                    auto& max_allowed_occ, auto& had_alt_max_occ,
+                    auto& read_num
+                  ) -> bool {
+                    for (auto& raw_hit : raw_hits) {
+                      auto& read_pos = raw_hit.first;
+                      auto& proj_hits = raw_hit.second;
+                      auto& refs = proj_hits.refRange;
+                      uint64_t num_occ = static_cast<uint64_t>(refs.size());
+                      min_occ = std::min(min_occ, num_occ);
+                      had_alt_max_occ = true;
+                      // auto& hit_map = (read_num == 0) ? hit_map_left : hit_map_right;
 
-                    bool still_have_valid_target = false;
-                    prev_read_pos = read_pos;
-                    if (num_occ <= max_allowed_occ) {
+                      bool still_have_valid_target = false;
+                      prev_read_pos = read_pos;
+                      if (num_occ <= max_allowed_occ) {
 
-                      total_occs += num_occ;
-                      largest_occ = (num_occ > largest_occ) ? num_occ : largest_occ;
-                      float score_inc = 1.0;
+                        total_occs += num_occ;
+                        largest_occ = (num_occ > largest_occ) ? num_occ : largest_occ;
+                        float score_inc = 1.0;
 
-                      for (auto &pos_it : refs) {
-                        const auto& ref_pos_ori = proj_hits.decodeHit(pos_it);
-                        uint32_t tid = static_cast<uint32_t>(qidx->getRefId(pos_it.transcript_id()));
-                        int32_t pos = static_cast<int32_t>(ref_pos_ori.pos);
-                        bool ori = ref_pos_ori.isFW;
-                        auto& target = hit_map[tid];
+                        for (auto &pos_it : refs) {
+                          const auto& ref_pos_ori = proj_hits.decodeHit(pos_it);
+                          uint32_t tid = static_cast<uint32_t>(qidx->getRefId(pos_it.transcript_id()));
+                          int32_t pos = static_cast<int32_t>(ref_pos_ori.pos);
+                          bool ori = ref_pos_ori.isFW;
+                          auto& target = hit_map[tid];
 
-                        // Why >= here instead of == ?
-                        // Because hits can happen on the same target in both the forward
-                        // and rc orientations, it is possible that we start the loop with
-                        // the target having num_valid_hits hits in a given orientation (o)
-                        // we see a new hit for this target in oriention o (now it has num_valid_hits + 1)
-                        // then we see a hit for this target in orientation rc(o).  We still want to
-                        // add / consider this hit, but max_hits_for_target() > num_valid_hits.
-                        // So, we must allow for that here.
-                        if (target.max_hits_for_target() >= num_valid_hits) {
-                          if (ori) {
-                            target.add_fw(pos, static_cast<int32_t>(read_pos), 
-                                          signed_rl, signed_k, max_stretch, score_inc);
-                          } else {
-                            target.add_rc(pos, static_cast<int32_t>(read_pos), 
-                                          signed_rl, signed_k, max_stretch, score_inc);
+                          // Why >= here instead of == ?
+                          // Because hits can happen on the same target in both the forward
+                          // and rc orientations, it is possible that we start the loop with
+                          // the target having num_valid_hits hits in a given orientation (o)
+                          // we see a new hit for this target in oriention o (now it has num_valid_hits + 1)
+                          // then we see a hit for this target in orientation rc(o).  We still want to
+                          // add / consider this hit, but max_hits_for_target() > num_valid_hits.
+                          // So, we must allow for that here.
+                          if (target.max_hits_for_target() >= num_valid_hits) {
+                            if (ori) {
+                              target.add_fw(pos, static_cast<int32_t>(read_pos), 
+                                            signed_rl, signed_k, max_stretch, score_inc);
+                            } else {
+                              target.add_rc(pos, static_cast<int32_t>(read_pos), 
+                                            signed_rl, signed_k, max_stretch, score_inc);
+                            }
+
+                            still_have_valid_target |= (target.max_hits_for_target() >= num_valid_hits + 1);
                           }
 
-                          still_have_valid_target |= (target.max_hits_for_target() >= num_valid_hits + 1);
+                        } // DONE: for (auto &pos_it : refs)
+
+                        ++num_valid_hits;
+
+                        // if there are no targets reaching the valid hit threshold, then break early
+                        if (!still_have_valid_target) { return true; }
+
+                      } // DONE : if (num_occ <= max_allowed_occ)
+                    } // DONE : for (auto& raw_hit : raw_hits)
+
+                    return false;
+                  };
+
+                  bool _discard = false;
+                  auto mao_first_pass = max_occ_default - 1;
+                  bool early_stop = collect_mappings_from_hits(raw_hits, prev_read_pos, mao_first_pass, _discard, read_num);
+
+                  // If our default threshold was too stringent, then fallback to a more liberal
+                  // threshold and look up the k-mers that occur the least frequently.
+                  // Specifically, if the min occuring hits have frequency < max_occ_recover (2500 by default)
+                  // times, then collect the min occuring hits to get the mapping.
+                  if (attempt_occ_recover and (min_occ >= max_occ_default) and (min_occ < max_occ_recover)) {
+                    prev_read_pos = -1;
+                    uint64_t max_allowed_occ = min_occ;
+                    early_stop = collect_mappings_from_hits(raw_hits, prev_read_pos, max_allowed_occ, had_alt_max_occ, read_num);
+                  }
+
+                  uint32_t best_alt_hits = 0;
+
+                  // if using both reads and on read one, not yet ready to merge
+                  // continue to next iteration of loop so that hit_map_right can be filled
+                  // if (readsToUse == ReadsToUse::USE_BOTH and read_num == 0) { continue; }
+
+                  // call function to merge hit_map_left and hit_map_right
+                  // if using 3' library: only need hit_map_left completed
+                  // if using 5' library: need hit_map_left and hit_map_right completed
+                  /* if !(merge_hit_maps(&hit_map_left, &hit_map_right, &hit_map, &reads_to_use)) {
+                    salmonOpts.jointLog->error( "Hit maps for left and right reads were not able to merge.\n"
+                                    "Please report this bug on Github");
+                    salmonOpts.jointLog->flush();
+                    spdlog::drop_all();
+                    std::exit(1);
+                  } */
+                  // hit_map should now be ready
+
+                  // don't want to do this until left and right reads are merged
+                  // so, merge into hit_map
+                  for (auto& kv : hit_map) {
+                    auto best_hit_dir = kv.second.best_hit_direction();
+                    // if the best direction is FW or BOTH, add the fw hit
+                    // otherwise add the RC.
+                    auto simple_hit = (best_hit_dir != HitDirection::RC) ? 
+                                      kv.second.get_fw_hit() : kv.second.get_rc_hit();
+
+                    if (simple_hit.num_hits >= num_valid_hits) { 
+                      simple_hit.tid = kv.first;
+                      simple_hit.rid = rid;
+                      if (readsToUse == ReadsToUse::USE_BOTH) {
+                        if (read_num == 0) { // left read
+                          accepted_hits_left.emplace_back(simple_hit);
+                        } else { // right read
+                          accepted_hits_right.emplace_back(simple_hit);
                         }
-
-                      } // DONE: for (auto &pos_it : refs)
-
-                      ++num_valid_hits;
-
-                      // if there are no targets reaching the valid hit threshold, then break early
-                      if (!still_have_valid_target) { return true; }
-
-                    } // DONE : if (num_occ <= max_allowed_occ)
-                  } // DONE : for (auto& raw_hit : raw_hits)
-
-                  return false;
-                };
-
-                bool _discard = false;
-                auto mao_first_pass = max_occ_default - 1;
-                bool early_stop = collect_mappings_from_hits(raw_hits, prev_read_pos, mao_first_pass, _discard);
-
-                // If our default threshold was too stringent, then fallback to a more liberal
-                // threshold and look up the k-mers that occur the least frequently.
-                // Specifically, if the min occuring hits have frequency < max_occ_recover (2500 by default)
-                // times, then collect the min occuring hits to get the mapping.
-                if (attempt_occ_recover and (min_occ >= max_occ_default) and (min_occ < max_occ_recover)) {
-                  prev_read_pos = -1;
-                  uint64_t max_allowed_occ = min_occ;
-                  early_stop = collect_mappings_from_hits(raw_hits, prev_read_pos, max_allowed_occ, had_alt_max_occ);
-                }
-
-                uint32_t best_alt_hits = 0;
-                int32_t signed_read_len = static_cast<int32_t>(readSubSeq->length());
-
-                for (auto& kv : hit_map) {
-                  auto best_hit_dir = kv.second.best_hit_direction();
-                  // if the best direction is FW or BOTH, add the fw hit
-                  // otherwise add the RC.
-                  auto simple_hit = (best_hit_dir != HitDirection::RC) ? 
-                                    kv.second.get_fw_hit() : kv.second.get_rc_hit();
-
-                  if (simple_hit.num_hits >= num_valid_hits) { 
-                    simple_hit.tid = kv.first;
-                    accepted_hits.emplace_back(simple_hit);
-                    // if we had equally good hits in both directions
-                    // add the rc hit here (since we added the fw)
-                    // above if the best hit was either FW or BOTH
-                    if (best_hit_dir == HitDirection::BOTH) {
-                      auto second_hit = kv.second.get_rc_hit();
-                      second_hit.tid = kv.first;
-                      accepted_hits.emplace_back(second_hit);
-                    }
-                  } else {
-                    //best_alt_score = simple_hit.score > best_alt_score ? simple_hit.score : best_alt_score;
-                    best_alt_hits = simple_hit.num_hits > best_alt_hits ? simple_hit.num_hits : best_alt_hits;
-                  }
-                }
-
-                alt_max_occ = had_alt_max_occ ? accepted_hits.size() : salmonOpts.maxReadOccs;
-
-                /*
-                 * This rule; if enabled, allows through mappings missing a single hit, if there
-                 * was no mapping with all hits. NOTE: this won't work with the current early-exit
-                 * optimization however.
-                if (accepted_hits.empty() and (num_valid_hits > 1) and (best_alt_hits >= num_valid_hits - 1)) {
-                  for (auto& kv : hit_map) { 
-                    auto simple_hit = kv.second.get_best_hit();
-                    if (simple_hit.num_hits >= best_alt_hits) {
-                      //if (simple_hit.valid_pos(signed_read_len, transcripts[kv.first].RefLength, 10)) {
-                        simple_hit.tid = kv.first;
+                      } else {
                         accepted_hits.emplace_back(simple_hit);
-                      //}
+                      }
+                      
+                      // if we had equally good hits in both directions
+                      // add the rc hit here (since we added the fw)
+                      // above if the best hit was either FW or BOTH
+                      if (best_hit_dir == HitDirection::BOTH) {
+                        auto second_hit = kv.second.get_rc_hit();
+                        second_hit.tid = kv.first;
+                        second_hit.rid = rid;
+                        if (readsToUse == ReadsToUse::USE_BOTH) {
+                          if (read_num == 0) { // left read
+                            accepted_hits_left.emplace_back(second_hit);
+                          } else { // right read
+                            accepted_hits_right.emplace_back(second_hit);
+                          }
+                        } else {
+                          accepted_hits.emplace_back(second_hit);
+                        }
+                      }
+                    } else {
+                      //best_alt_score = simple_hit.score > best_alt_score ? simple_hit.score : best_alt_score;
+                      best_alt_hits = simple_hit.num_hits > best_alt_hits ? simple_hit.num_hits : best_alt_hits;
+                    }
+                  } // DONE: for (auto& kv : hit_map)
+
+                  alt_max_occ = had_alt_max_occ ? accepted_hits.size() : salmonOpts.maxReadOccs;
+
+                  /*
+                  * This rule; if enabled, allows through mappings missing a single hit, if there
+                  * was no mapping with all hits. NOTE: this won't work with the current early-exit
+                  * optimization however.
+                  if (accepted_hits.empty() and (num_valid_hits > 1) and (best_alt_hits >= num_valid_hits - 1)) {
+                    for (auto& kv : hit_map) { 
+                      auto simple_hit = kv.second.get_best_hit();
+                      if (simple_hit.num_hits >= best_alt_hits) {
+                        //if (simple_hit.valid_pos(signed_read_len, transcripts[kv.first].RefLength, 10)) {
+                          simple_hit.tid = kv.first;
+                          accepted_hits.emplace_back(simple_hit);
+                        //}
+                      }
                     }
                   }
+                  */
+                } // DONE : if (rh)
+
+                // merge accepted hit lists for when using both reads
+                if (readsToUse == ReadsToUse::USE_BOTH and read_num == 1) {
+                  if (!merge_accepted_hits(accepted_hits_left, accepted_hits_right, accepted_hits)) {
+                    salmonOpts.jointLog->error( "Accepted hit lists for left and right reads were not able to merge.\n"
+                                "This should not happen. Please report this bug on Github");
+                    salmonOpts.jointLog->flush();
+                    spdlog::drop_all();
+                    std::exit(1);
+                  }
                 }
-                */
-              } // DONE : if (rh)
+              } // DONE: for (int read_count = 0; read_count < 2; read_count++) 
 
             } else {
               nSeqs += 1;

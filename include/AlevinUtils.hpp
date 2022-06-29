@@ -100,6 +100,12 @@ namespace alevin{
     template <typename ProtocolT>
     bool extractBarcode(std::string& read, std::string& read2, ProtocolT& pt, std::string& bc);
 
+    // return true if successful
+    // seq refers to the read seq that also contains umi and barcode
+    // for 5' library support
+    template <typename ProtocolT>
+    bool extractRead(std::string& seq, ProtocolT& pt, std::string& read);
+
     template <typename OrderedOptionsT>
     bool writeCmdInfo(boost::filesystem::path cmdInfoPath,
                       OrderedOptionsT& orderedOptions) {
