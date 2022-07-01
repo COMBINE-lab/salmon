@@ -476,7 +476,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     float score{0.0};
     uint32_t num_hits{0};
     uint32_t tid{std::numeric_limits<uint32_t>::max()};
-    uint32_t rid{std::numeric_limits<uint32_t>::max()}; // read pair ID
+    // uint32_t rid{std::numeric_limits<uint32_t>::max()}; // read pair ID
     bool valid_pos(int32_t read_len, uint32_t txp_len, int32_t max_over) {
       int32_t signed_txp_len = static_cast<int32_t>(txp_len);
       return (pos > -max_over) and ((pos + read_len) < (signed_txp_len + max_over));
@@ -485,67 +485,33 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
   enum class HitDirection : uint8_t {FW, RC, BOTH};
 
-  /*
-  bool merge_hit_maps(&hit_map_left, &hit_map_right, &hit_map, &reads_to_use) {
-    // hit maps are for all of the hits of a single read pair
-    // so hit_map_left contains all of the hits from read 1
-    // and hit_map_right contains all of the hits from read 2
-    if (reads_to_use == ReadsToUse::BOTH) {
-      for (auto& kv_left : hit_map_left) {
-        for (auto& kv_right : hit_map_right) {
-          auto tid_left = kv_left.first;
-          auto hit_left = kv_left.second;
-          auto best_hit_dir_left = hit_left.best_hit_direction();
-          auto hit_pos_left = hit_left.approx_pos_fw;
-          auto hit_read_pos_left = 
-
-          auto tid_right = kv_right.first;
-          auto hit_right = kv_right.second;
-          auto best_hit_dir_right = hit_right.best_hit_direction();
-          auto hit_pos_right = hit_right.approx_pos_fw;
-
-          if (hit_pos_right > hit_pos_left) {
-            auto pos_difference = hit_pos_right - hit_pos_left;
-          } else {
-            auto pos_difference = hit_pos_left - hit_pos_right;
-          }
-          
-          uint32_t spacing_max = 1000;
-
-        // Possible Outcomes:
-        // 1. There is one or more transcripts that they both hit
-          // hit_map_left should face FW or BOTH and hit_map_right should face RC or BOTH
-          // should be <1000 from each other in position
-            // ---> add this hit to hit_map
-          if (tid_left == tid_right and (best_hit_dir_left == HitDirection::FW or best_hit_dir_left == HitDirection::BOTH)
-              and (best_hit_dir_right == HitDirection::RC or best_hit_dir_left == HitDirection::BOTH)
-              and pos_difference <= spacing_max) {
-                hit_map[tid_left].add_fw(int32_t ref_pos, int32_t read_pos, int32_t rl, int32_t k, int32_t max_stretch, float score_inc);
-                hit_map[tid_left].add_rc(int32_t ref_pos, int32_t read_pos, int32_t rl, int32_t k, int32_t max_stretch, float score_inc);
-          }
-        // 2. hit_map_left or hit_map_right is empty
-          // ---> non-empty hit map becomes hit_map
-        // 3. Both hit_map_left and hit_map_right are empty
-          // ---> hit_map becomes empty
-        // 4. There are no common transcripts
-          // ---> hit_map becomes empty
-        }
-      }
-      
-
-    } else {
-      hit_map = hit_map_left;
-    }
-    return true;
-  }
-  */
-
   // merge accepted hit lists from left read and right read of a read pair
   // use for 5' libraries where both reads contain biological information
   // fills in accepted_hits
   bool merge_accepted_hits(&accepted_hits_left, &accepted_hits_right, &accepted_hits) {
-      // 3. There are no hits in either left or right
-        // ---> nothing gets added to accepted_hits
+
+    // if accepted_hits_left and accepted_hits_right is empty
+    // ---> nothing gets added to accepted_hits
+    if (accepted_hits_left.size() == 0 and accepted_hits_right.size() == 0) {
+      return true;
+    }
+    // if accepted_hits_right is empty
+    // ---> accepted_hits_left becomes accepted_hits
+    else if (accepted_hits_right.size() == 0) {
+      for (auto& simple_hit_left : accepted_hits_left) {
+        accepted_hits.emplace_back(simple_hit_left);
+      }
+      return true;
+    }
+
+    // if accepted_hits_left is empty
+    // ---> accepted_hits_right becomes accepted_hits
+    else if (accepted_hits_left.size() == 0) {
+      for (auto& simple_hit_right : accepted_hits_right) {
+        accepted_hits.emplace_back(simple_hit_right);
+      }
+      return true;
+    }
 
     for (auto& simple_hit_left : accepted_hits_left) {
 
@@ -554,9 +520,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       // float score_left = simple_hit_left.score;
       uint32_t num_hits_left = simple_hit_left.num_hits;
       uint32_t tid_left = simple_hit_left.tid;
-      uint32_t rid_left = simple_hit_left.rid;
-
-      bool found_rid = false;
 
       for (auto& simple_hit_right : accepted_hits_right) {
         
@@ -565,55 +528,26 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         // float score_right = simple_hit_right.score;
         uint32_t num_hits_right = simple_hit_right.num_hits;
         uint32_t tid_right = simple_hit_right.tid;
-        uint32_t rid_right = simple_hit_right.rid;
 
-        if (rid_left == rid_right) { // if the hits are from the same read pair
-          found_rid = true;
-          // calculate difference in position
-          if (pos_right > pos_left) {
-            auto pos_diff = pos_right - pos_left;
-          } else {
-            auto pos_diff = pos_left - pos_right;
-          }
-          uint32_t pos_spacing_max = 1000;
-
-          // Possible Outcomes:
-          // 1. There is one or more transcripts that they both hit
-            // hit_map_left should face FW or BOTH and hit_map_right should face RC or BOTH
-            // should be <1000 from each other in position
-              // ---> add this hit to hit_map
-            if (tid_left == tid_right and (is_fw_left and !is_fw_right) // or (!is_fw_left and is_fw_right))
-                and pos_diff <= pos_spacing_max) {
-                  accepted_hits.emplace_back(simple_hit_left);
-                  accepted_hits.emplace_back(simple_hit_right);
-            }
-            // 4. There are no common transcripts
-              // ---> nothing is added to accepted_hits
+        // calculate difference in position
+        if (pos_right > pos_left) {
+          auto pos_diff = pos_right - pos_left;
+        } else {
+          auto pos_diff = pos_left - pos_right;
         }
+        uint32_t pos_spacing_max = 1000;
 
-      }
-
-      // 2. accepted_hits_right is empty
-            // ---> accepted_hits_left becomes accepted_hits
-      if (!found_rid) {
-        accepted_hits.emplace_back(simple_hit_left);
-      }
-
-    }
-
-    // check for hits in right list that don't exist in left list
-    for (auto& simple_hit_right : accepted_hits_right) {
-      uint32_t rid_right = simple_hit_right.rid;
-      bool found_rid = false;
-      for (auto& simple_hit_left : accepted_hits_left) {
-        uint32_t rid_left = simple_hit_left.rid;
-        if (rid_right == rid_left) { found_rid = true; }
-      }
-
-      // 2. accepted_hits_left is empty
-            // ---> accepted_hits_right becomes accepted_hits
-      if (!found_rid) {
-        accepted_hits.emplace_back(simple_hit_right);
+        // if there is one or more transcripts that they both hit
+        // left hit should face FW or BOTH and right hit should face RC or BOTH
+        // should be <1000 from each other in position
+          // ---> add this hit to accepted_hits
+        if (tid_left == tid_right and (is_fw_left and !is_fw_right) // or (!is_fw_left and is_fw_right))
+            and pos_diff <= pos_spacing_max) {
+              accepted_hits.emplace_back(simple_hit_left);
+              accepted_hits.emplace_back(simple_hit_right);
+        }
+        // If there are no common transcripts
+        // ---> nothing is added to accepted_hits
       }
     }
     return true;
@@ -691,22 +625,18 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     }
 
     inline SimpleHit get_fw_hit() {
-      return SimpleHit{true, approx_pos_fw, fw_score, fw_hits, std::numeric_limits<uint32_t>::max(),
-                       std::numeric_limits<uint32_t>::max()}; 
+      return SimpleHit{true, approx_pos_fw, fw_score, fw_hits, std::numeric_limits<uint32_t>::max()}; 
     }
 
     inline SimpleHit get_rc_hit() {
-      return SimpleHit{false, approx_pos_rc, rc_score, rc_hits, std::numeric_limits<uint32_t>::max(),
-                       std::numeric_limits<uint32_t>::max()};
+      return SimpleHit{false, approx_pos_rc, rc_score, rc_hits, std::numeric_limits<uint32_t>::max()};
     }
 
     inline SimpleHit get_best_hit() {
       auto best_direction = best_hit_direction();
       return (best_direction != HitDirection::RC) ? 
-        SimpleHit{true, approx_pos_fw, fw_score, fw_hits, std::numeric_limits<uint32_t>::max(), 
-                  std::numeric_limits<uint32_t>::max()} : 
-        SimpleHit{false, approx_pos_rc, rc_score, rc_hits, std::numeric_limits<uint32_t>::max(),
-                  std::numeric_limits<uint32_t>::max()};
+        SimpleHit{true, approx_pos_fw, fw_score, fw_hits, std::numeric_limits<uint32_t>::max()} : 
+        SimpleHit{false, approx_pos_rc, rc_score, rc_hits, std::numeric_limits<uint32_t>::max()};
     }
 
     inline std::string to_string() {
@@ -736,10 +666,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
   // map to recall the number of unmapped reads we see 
   // for each barcode
   phmap::flat_hash_map<uint64_t, uint32_t> unmapped_bc_map; 
-
-  // maps from transcript id to hit info
-  // phmap::flat_hash_map<uint32_t, SketchHitInfo> hit_map_left; 
-  // phmap::flat_hash_map<uint32_t, SketchHitInfo> hit_map_right; 
   phmap::flat_hash_map<uint32_t, SketchHitInfo> hit_map; 
 
   std::vector<SimpleHit> accepted_hits_left;
@@ -773,6 +699,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
   bool tryAlign{salmonOpts.validateMappings};
   auto rg = parser->getReadGroup();
+
   while (parser->refill(rg)) {
     rangeSize = rg.size();
 
@@ -795,10 +722,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     auto localProtocol = alevinOpts.protocol;
     auto readsToUse = alevinOpts.protocol.get_reads_to_use();
 
-    uint32_t rid = 0; // read pair ID
-
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
-      rid++; // increase by 1 for every new read pair
       auto& rp = rg[i];
       readLenLeft = rp.first.seq.length();
       readLenRight= rp.second.seq.length();
@@ -812,8 +736,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       hits.clear();
       jointHits.clear();
       memCollector.clear();
-      // hit_map_left.clear();
-      // hit_map_right.clear();
       hit_map.clear(); 
       accepted_hits_left.clear();
       accepted_hits_right.clear();
@@ -967,7 +889,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                       uint64_t num_occ = static_cast<uint64_t>(refs.size());
                       min_occ = std::min(min_occ, num_occ);
                       had_alt_max_occ = true;
-                      // auto& hit_map = (read_num == 0) ? hit_map_left : hit_map_right;
 
                       bool still_have_valid_target = false;
                       prev_read_pos = read_pos;
@@ -1033,24 +954,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
                   uint32_t best_alt_hits = 0;
 
-                  // if using both reads and on read one, not yet ready to merge
-                  // continue to next iteration of loop so that hit_map_right can be filled
-                  // if (readsToUse == ReadsToUse::USE_BOTH and read_num == 0) { continue; }
-
-                  // call function to merge hit_map_left and hit_map_right
-                  // if using 3' library: only need hit_map_left completed
-                  // if using 5' library: need hit_map_left and hit_map_right completed
-                  /* if !(merge_hit_maps(&hit_map_left, &hit_map_right, &hit_map, &reads_to_use)) {
-                    salmonOpts.jointLog->error( "Hit maps for left and right reads were not able to merge.\n"
-                                    "Please report this bug on Github");
-                    salmonOpts.jointLog->flush();
-                    spdlog::drop_all();
-                    std::exit(1);
-                  } */
-                  // hit_map should now be ready
-
-                  // don't want to do this until left and right reads are merged
-                  // so, merge into hit_map
                   for (auto& kv : hit_map) {
                     auto best_hit_dir = kv.second.best_hit_direction();
                     // if the best direction is FW or BOTH, add the fw hit
@@ -1060,7 +963,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
                     if (simple_hit.num_hits >= num_valid_hits) { 
                       simple_hit.tid = kv.first;
-                      simple_hit.rid = rid;
                       if (readsToUse == ReadsToUse::USE_BOTH) {
                         if (read_num == 0) { // left read
                           accepted_hits_left.emplace_back(simple_hit);
@@ -1077,7 +979,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                       if (best_hit_dir == HitDirection::BOTH) {
                         auto second_hit = kv.second.get_rc_hit();
                         second_hit.tid = kv.first;
-                        second_hit.rid = rid;
                         if (readsToUse == ReadsToUse::USE_BOTH) {
                           if (read_num == 0) { // left read
                             accepted_hits_left.emplace_back(second_hit);
@@ -1122,16 +1023,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                   */
                 } // DONE : if (rh)
 
-                // merge accepted hit lists for when using both reads
-                if (readsToUse == ReadsToUse::USE_BOTH and read_num == 1) {
-                  if (!merge_accepted_hits(accepted_hits_left, accepted_hits_right, accepted_hits)) {
-                    salmonOpts.jointLog->error( "Accepted hit lists for left and right reads were not able to merge.\n"
-                                "This should not happen. Please report this bug on Github");
-                    salmonOpts.jointLog->flush();
-                    spdlog::drop_all();
-                    std::exit(1);
-                  }
-                }
               } // DONE: for (int read_count = 0; read_count < 2; read_count++) 
 
             } else {
@@ -1146,6 +1037,19 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         spdlog::drop_all();
         std::exit(1);
       }
+
+      // merge accepted hit lists for when using 5' library
+      if (readsToUse == ReadsToUse::USE_BOTH) {
+        if (!merge_accepted_hits(accepted_hits_left, accepted_hits_right, accepted_hits)) {
+          // right now this function always returns true, so this would never happen
+          salmonOpts.jointLog->error( "Accepted hit lists for left and right reads were not able to merge.\n"
+                      "This should not happen. Please report this bug on Github");
+          salmonOpts.jointLog->flush();
+          spdlog::drop_all();
+          std::exit(1);
+        }
+      }
+
       //////////////////////////////////////////////////////////////
       // Consider a read as too short if the ``non-barcode'' end is too short
       if (tooShortRight) {
@@ -1251,7 +1155,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         iomutex.unlock();
       }
 
-    } // end for i < j->nb_filled
+    } // DONE: for (size_t i = 0; i < rangeSize; ++i)
 
     prevObservedFrags = numObservedFragments;
   }
