@@ -101,10 +101,11 @@ namespace alevin{
     bool extractBarcode(std::string& read, std::string& read2, ProtocolT& pt, std::string& bc);
 
     // return true if successful
-    // seq refers to the read seq that also contains umi and barcode
+    // the input read contains a barcode, a umi, and a biological sequence
+    // extract the biological sequence from read into seq
     // for 5' library support
     template <typename ProtocolT>
-    bool extractRead(std::string& seq, ProtocolT& pt, std::string& read);
+    bool extractSeq(std::string& read, ProtocolT& pt, std::string& seq);
 
     template <typename OrderedOptionsT>
     bool writeCmdInfo(boost::filesystem::path cmdInfoPath,

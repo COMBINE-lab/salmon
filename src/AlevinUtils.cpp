@@ -51,8 +51,6 @@ namespace alevin {
       subseq = seq2.substr(protocol.featureStart,
                           protocol.featureLength);
       struct ReadSeqs* readSeqs;
-      // just putting subseq in seq2 for now
-      // normally a ptr to subseq is returned and used
       readSeqs->seq2 = subseq;
       return readSeqs;
     }
@@ -93,10 +91,9 @@ namespace alevin {
                          std::string& subseq){
       (void)seq;
       struct ReadSeqs* readSeqs;
-      // 6/9/2022 z
-      // should readSeqs->seq1 point to all of seq
-      // or just a subset of seq?
-      readSeqs->seq1 = seq;
+      std::string& seq1;
+      bool ok = extractSeq(seq, protocol, seq1);
+      readSeqs->seq1 = seq1;
       readSeqs->seq2 = seq2;
       return readSeqs;
     }
@@ -157,8 +154,12 @@ namespace alevin {
                          std::string& subseq){
       bool ok = protocol.read_geo.extract_read(seq, seq2, subseq);
       struct ReadSeqs* readSeqs;
-      // just assigning it to seq2 for now..
       readSeqs->seq2 = subseq;
+      if (alevin::defaults::isFivePrimeLibrary) {
+        std::string& seq1;
+        bool ok2 = extractSeq(seq, protocol, seq1);
+        readSeqs->seq1 = seq1;
+      }
       return readSeqs;
     }
     template <>
@@ -520,6 +521,21 @@ namespace alevin {
         return false;
       }
     }
+
+    template <>
+    bool extractSeq<apt::Chromium5V2>(std::string& read, apt::Chromium5V2& pt, std::string& seq) {
+      // the biological sequence comes after the umi in the read
+      return (read.length() > pt.barcodeLength + pt.umiLength) ?
+        (seq.assign(read, pt.umiLength+pt.barcodeLength, read.length()), true) : false;
+    }
+
+    template <>
+    bool extractSeq<apt::CustomGeometry>(std::string& read, apt::CustomGeometry& pt, std::string& seq) {
+      // the biological sequence comes after the umi in the read
+      return (read.length() > pt.barcodeLength + pt.umiLength) ?
+        (seq.assign(read, pt.umiLength+pt.barcodeLength, read.length()), true) : false;
+    }
+
 
     void getIndelNeighbors(
                            const std::string& barcodeSeq,

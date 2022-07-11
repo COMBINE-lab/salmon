@@ -15,6 +15,7 @@ enum class BarcodeEnd { FIVE = 5, THREE = 3 };
 enum class Sequence { BARCODE, UMI };
 // refers to which reads to use for mapping; use both for 5' libraries
 enum class ReadsToUse { USE_BOTH, USE_FIRST, USE_SECOND };
+enum class PairingStatus { UNPAIRED_LEFT, UNPAIRED_RIGHT, PAIRED_FR, PAIRED_RF };
 
 template <class protocolT>
 struct AlevinOpts {
