@@ -602,6 +602,8 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
           } else { // curr on new transcript
             seen_first = true;
             pos_first = hit.pos;
+            score_first = hit.score;
+            hits_first = hit.hits;
             is_fw_first = hit.is_fw;
             tid_first = hit.tid;
           }
@@ -1301,90 +1303,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
   salmon::utils::ShortFragStats shortFragStats;
   double maxZeroFrac{0.0};
 
-  // merge joint alignment lists from left read and right read of a read pair
-  // use for 5' libraries where both reads contain biological information
-  // fills in jointAlignments
-  bool merge_joint_alignments(auto& jointAlignmentsLeft, auto& jointAlignmentsRight, auto& jointHitGroupLeft, 
-                              auto& jointHitGroupRight, auto& jointAlignments) {
-
-    // if jointAlignmentsLeft and jointAlignmentsRight is empty
-    // ---> nothing gets added to jointAlignments
-    if (jointAlignmentsLeft.size() == 0 and jointAlignmentsRight.size() == 0) {
-      return true;
-    }
-    // if jointAlignmentsRight is empty
-    // ---> jointAlignmentsLeft becomes jointAlignments
-    else if (jointAlignmentsRight.size() == 0) {
-      for (auto& alignment_left : jointAlignmentsLeft) {
-        jointAlignments.emplace_back(alignment_left);
-      }
-      return true;
-    }
-
-    // if jointAlignmentsLeft is empty
-    // ---> jointAlignmentsRight becomes jointAlignments
-    else if (jointAlignmentsLeft.size() == 0) {
-      for (auto& alignment_right : jointAlignmentsRight) {
-        jointAlignments.emplace_back(alignment_right);
-      }
-      return true;
-    }
-
-    for (auto& alignment_left : jointAlignmentsLeft) {
-
-      uint32_t tid_left = alignment_left.tid;
-      int32_t pos_left = alignment_left.pos;
-      // what is a mate
-      // int32_t mate_pos_left = alignment_left.matePos;
-      bool is_fwd_left = alignment_left.fwd;
-      // bool mate_is_fw_left = alignment_left.mateIsFwd;
-      // uint32_t frag_len_left = alignment_left.fragLen;
-      // uint32_t read_len_left = alignment_left.readLen;
-      // uint32_t mate_len_left = alignment_left.mateLen;
-      // bool is_paired_left = alignment_left.isPaired;
-
-      for (auto& alignment_right : jointAlignmentsRight) {
-        
-        uint32_t tid_right = alignment_right.tid;
-        int32_t pos_right = alignment_right.pos;
-        // int32_t mate_pos_right = alignment_right.matePos;
-        bool is_fwd_right = alignment_right.fwd;
-        // bool mate_is_fw_right = alignment_right.mateIsFwd;
-        // uint32_t frag_len_right = alignment_right.fragLen;
-        // uint32_t read_len_right = alignment_right.readLen;
-        // uint32_t mate_len_right = alignment_right.mateLen;
-        // bool is_paired_right = alignment_right.isPaired;
-
-        // calculate difference in position
-        if (pos_right > pos_left) {
-          auto pos_diff = pos_right - pos_left;
-        } else {
-          auto pos_diff = pos_left - pos_right;
-        }
-        uint32_t pos_spacing_max = 1000;
-        
-        // if there is one or more transcripts that they both hit
-        if (tid_left == tid_right) {
-
-          // left hit should face FW or BOTH and right hit should face RC or BOTH
-          if (is_fw_left and !is_fw_right) { // or (!is_fw_left and is_fw_right))
-
-            // should be <1000 from each other in position
-            // ---> add this hit to accepted_hits
-            if (pos_diff <= pos_spacing_max) {
-              jointAlignments.emplace_back(alignment_left);
-              jointAlignments.emplace_back(alignment_right);
-            }
-        
-          }
-        }
-        // If there are no common transcripts
-        // ---> nothing is added to jointAlignments
-      }
-    }
-    return true;
-  }
-
   // Write unmapped reads
   fmt::MemoryWriter unmappedNames;
   bool writeUnmapped = salmonOpts.writeUnmappedNames;
@@ -1420,12 +1338,8 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
   bool initOK = salmon::mapping_utils::initMapperSettings(salmonOpts, memCollector, aligner, aconf, mpol);
   PuffAligner puffaligner(qidx->refseq_, qidx->refAccumLengths_, qidx->k(), aconf, aligner);
 
-  // pufferfish::util::CachedVectorMap<size_t, std::vector<pufferfish::util::MemCluster>, std::hash<size_t>> hits_left;
-  // pufferfish::util::CachedVectorMap<size_t, std::vector<pufferfish::util::MemCluster>, std::hash<size_t>> hits_right;
   pufferfish::util::CachedVectorMap<size_t, std::vector<pufferfish::util::MemCluster>, std::hash<size_t>> hits;
   std::vector<pufferfish::util::MemCluster> recoveredHits;
-  // std::vector<pufferfish::util::JointMems> jointHitsLeft;
-  // std::vector<pufferfish::util::JointMems> jointHitsRight;
   std::vector<pufferfish::util::JointMems> jointHits;
   PairedAlignmentFormatter<IndexT*> formatter(qidx);
   pufferfish::util::QueryCache qc;
@@ -1625,7 +1539,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                     signed_rl = readSubSeq->seq2.length();
                     memCollector.findChains(
                         readSubSeq->seq2, hits, salmonOpts.fragLenDistMax,
-                        MateStatus::PAIRED_END_RIGHT,
+                        MateStatus::PAIRED_END_LEFT,
                         useChainingHeuristic, // heuristic chaining
                         true,                 // isLeft
                         false                 // verbose
@@ -1633,6 +1547,11 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                   }
                   
                 }
+
+                // maybe just gather up hits1 and hits2 and merge them together here
+                // and then that will become jointHits
+                // that might make us lose information though
+                // still need to do checks for valid pairs
 
                 pufferfish::util::joinReadsAndFilterSingle(
                         hits, jointHits, signed_rl,
@@ -1772,7 +1691,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                                                                     false, // true for single-end false otherwise
                                                                     tryAlign, hardFilter, salmonOpts.scoreExp,
                                                                     salmonOpts.minAlnProb, msi,
-                                                                    jointAlignmentsLeft);
+                                                                    jointAlignments);
                           } else { // right read
                             salmon::mapping_utils::filterAndCollectAlignmentsDecoy(
                                                                     jointHits, signed_rl,
@@ -1780,7 +1699,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                                                                     false, // true for single-end false otherwise
                                                                     tryAlign, hardFilter, salmonOpts.scoreExp,
                                                                     salmonOpts.minAlnProb, msi,
-                                                                    jointAlignmentsRight);
+                                                                    jointAlignments);
                           }
                         } else { // readsToUse != ReadsToUse::USE_BOTH
                           salmon::mapping_utils::filterAndCollectAlignmentsDecoy(
@@ -1793,8 +1712,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                         }
                         
                     } else {
-                      jointHitGroupLeft.clearAlignments();
-                      jointHitGroupRight.clearAlignments();
                       jointHitGroup.clearAlignments();
                     }
                   }
