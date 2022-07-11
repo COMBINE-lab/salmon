@@ -1175,9 +1175,30 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         }
 
         // PairingStatus { UNPAIRED_LEFT, UNPAIRED_RIGHT, PAIRED_FR, PAIRED_RF };
+        bool use_fw_mask;
         for (auto& aln : accepted_hits) {
-          uint32_t fw_mask = (aln.pairing_status == PairingStatus::UNPAIRED_LEFT
-                              or aln.pairing_status == PairingStatus::PAIRED_FR) ? 0x80000000 : 0x00000000;
+          if (readsToUse == ReadsToUse::USE_BOTH) { // 5' library
+            if (aln.pairing_status == PairingStatus::UNPAIRED_LEFT) {
+              // if only the left read mapped, check for its ori
+              use_fw_mask = aln.is_fw;
+            } else if (aln.pairing_status == PairingStatus::UNPAIRED_RIGHT) {
+              // if only the right read mapped, use the assumed left read ori
+              use_fw_mask = !aln.is_fw;
+            } else {
+              // if both reads mapped, use fw mask if left read if forward
+              // false if (aln.pairing_status == PairingStatus::PAIRED_RF)
+              use_fw_mask = (aln.pairing_status == PairingStatus::PAIRED_FR);
+            }
+          } else { // 3' library
+            if (aln.pairing_status == PairingStatus::UNPAIRED_LEFT) {
+              // if only the left read mapped, check for its ori
+              use_fw_mask = aln.is_fw;
+            } else if (aln.pairing_status == PairingStatus::UNPAIRED_RIGHT) {
+              // if only the right read mapped, use the assumed left read ori
+              use_fw_mask = !aln.is_fw;
+            }
+          }
+          uint32_t fw_mask = use_fw_mask ? 0x80000000 : 0x00000000;
           bw << (aln.tid | fw_mask);
         }
         ++num_reads_in_chunk;
@@ -1839,7 +1860,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
       // jointAlignments contains alignments as if they were single mapped
       // jointHitGroup needs to be sorted and filtered
-      std::sort(jointHitGroup.begin(), jointHitGroup.end(), [](QuasiAlignment hit1, QuasiAlignment hit2)) {
+      std::sort(jointHitGroup.begin(), jointHitGroup.end(), [](QuasiAlignment hit1, QuasiAlignment hit2) {
         if (hit1.tid != hit2.tid) {
           if (hit1.tid < hit2.tid) return true;
           else return false;
@@ -1847,13 +1868,13 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           if (hit1.fw) return true;
           else return false;
         }
-      }
+      });
 
       // filter jointHitGroup to contain only valid maps
       if (!left_empty and !right_empty) { // actually had hits from both reads
         if (!filter_joint_hit_group(jointHitGroup)) {
           // right now this function always returns true, so this would never happen
-          salmonOpts.jointLog->error( "jointHitList was unable to be filtered.\n"
+          salmonOpts.jointLog->error( "jointHitGroup was unable to be filtered.\n"
                       "This should not happen. Please report this bug on Github");
           salmonOpts.jointLog->flush();
           spdlog::drop_all();
@@ -1902,6 +1923,9 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
         }
 
 
+        // todo: use PairingStatus to choose how to mask
+        // for a pair, status of read1 should be used
+        // for singles, status of read1 (or what it should be) should be used
         for (auto& aln : jointAlignments) {
           uint32_t fw_mask = aln.fwd ? 0x80000000 : 0x00000000;
           //bw << is_fw;
