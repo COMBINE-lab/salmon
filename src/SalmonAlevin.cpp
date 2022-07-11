@@ -1324,8 +1324,8 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
   salmon::utils::ShortFragStats shortFragStats;
   double maxZeroFrac{0.0};
 
-  // filter jointHitGroup to remove invalid hit pairs
-  bool filter_joint_hit_group(auto& jointHitGroup) {
+  // filter jointAlignments to remove invalid hit pairs
+  bool filter_joint_alignments(auto& jointAlignments) {
 
     bool seen_first = false;
     int32_t pos_first;
@@ -1338,11 +1338,11 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
     // todo: do this in a better way
     uint32_t half_seq_length = pos_spacing_max/2;
     QuasiAlignment prev_hit;
-    QuasiAlignment hit = jointHitGroup.begin();
+    QuasiAlignment hit = jointAlignments.begin();
     int32_t i = 0;
 
-    // walk through jointHitGroup to find invalid hit pairs
-    while (i < jointHitGroup.size()) {
+    // walk through jointAlignments to find invalid hit pairs
+    while (i < jointAlignments.size()) {
       if not (seen) { // have not seen a hit on this transcript yet
         seen_first = true;
         pos_first = hit.pos;
@@ -1372,8 +1372,8 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                 or (pos_first > half_seq_length or pos_second > half_seq_length)) {
 
                   // invalid hits; remove
-                  jointHitGroup.remove(hit);
-                  jointHitGroup.remove(hit);
+                  jointAlignments.remove(hit);
+                  jointAlignments.remove(hit);
                   i -= 2;
                   prev_hit = hit;
             } else {
@@ -1859,8 +1859,8 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
       }
 
       // jointAlignments contains alignments as if they were single mapped
-      // jointHitGroup needs to be sorted and filtered
-      std::sort(jointHitGroup.begin(), jointHitGroup.end(), [](QuasiAlignment hit1, QuasiAlignment hit2) {
+      // jointAlignments needs to be sorted and filtered
+      std::sort(jointAlignments.begin(), jointAlignments.end(), [](QuasiAlignment hit1, QuasiAlignment hit2) {
         if (hit1.tid != hit2.tid) {
           if (hit1.tid < hit2.tid) return true;
           else return false;
@@ -1870,11 +1870,11 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
         }
       });
 
-      // filter jointHitGroup to contain only valid maps
+      // filter jointAlignments to contain only valid maps
       if (!left_empty and !right_empty) { // actually had hits from both reads
-        if (!filter_joint_hit_group(jointHitGroup)) {
+        if (!filter_joint_alignments(jointAlignments)) {
           // right now this function always returns true, so this would never happen
-          salmonOpts.jointLog->error( "jointHitGroup was unable to be filtered.\n"
+          salmonOpts.jointLog->error( "jointAlignments was unable to be filtered.\n"
                       "This should not happen. Please report this bug on Github");
           salmonOpts.jointLog->flush();
           spdlog::drop_all();
