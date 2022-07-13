@@ -85,6 +85,19 @@ namespace alevin {
       return readSeqs;
     }
     template <>
+    struct ReadSeqs*  getReadSequence(apt::Chromium5V1& protocol,
+                         std::string& seq,
+                         std::string& seq2,
+                         std::string& subseq){
+      (void)seq;
+      struct ReadSeqs* readSeqs;
+      std::string& seq1;
+      bool ok = extractSeq(seq, protocol, seq1);
+      readSeqs->seq1 = seq1;
+      readSeqs->seq2 = seq2;
+      return readSeqs;
+    }
+    template <>
     struct ReadSeqs*  getReadSequence(apt::Chromium5V2& protocol,
                          std::string& seq,
                          std::string& seq2,
@@ -215,6 +228,15 @@ namespace alevin {
     bool extractUMI<apt::ChromiumV3>(std::string& read,
                                      std::string& read2,
                                      apt::ChromiumV3& pt,
+                                     std::string& umi){
+      (void)read2;
+      return (read.length() >= pt.barcodeLength + pt.umiLength) ?
+        (umi.assign(read, pt.barcodeLength, pt.umiLength), true) : false;
+    }
+    template <>
+    bool extractUMI<apt::Chromium5V1>(std::string& read,
+                                     std::string& read2,
+                                     apt::Chromium5V1& pt,
                                      std::string& umi){
       (void)read2;
       return (read.length() >= pt.barcodeLength + pt.umiLength) ?
@@ -364,6 +386,15 @@ namespace alevin {
       (void)read2;
       return (read.length() >= pt.barcodeLength) ?
         (bc.assign(read, 0, pt.barcodeLength), true) : false;
+    }
+    template <>
+    bool extractBarcode<apt::Chromium5V1>(std::string& read,
+                                          std::string& read2,
+                                          apt::Chromium5V1& pt,
+                                          std::string& bc){
+      (void)read2;
+      return (read.length() >= pt.barcodeLength) ?
+        (bc.assign(read,0, pt.barcodeLength), true) : false;
     }
     template <>
     bool extractBarcode<apt::Chromium5V2>(std::string& read,

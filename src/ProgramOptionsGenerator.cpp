@@ -394,12 +394,15 @@ namespace salmon {
        "Use DropSeq Single Cell protocol for the library")
       (
        "chromiumV3", po::bool_switch()->default_value(alevin::defaults::isChromiumV3),
-       "Use 10x chromium v3 Single Cell protocol for the library.")
+       "Use 10x chromium 3' v3 Single Cell protocol for the library.")
       (
        "chromium", po::bool_switch()->default_value(alevin::defaults::isChromium),
-       "Use 10x chromium v2 Single Cell protocol for the library.")
+       "Use 10x chromium 3' v2 Single Cell protocol for the library.")
       (
-       "chromium5V2", po::bool_switch()->default_value(alevin::defaults::isChromium5V2),
+       "chromium5V1", po::bool_switch()->default_value(alevin::defaults::isChromium5V1),
+       "Use 10x chromium 5' v1 Single Cell protocol for the library.")
+      (
+      "chromium5V2", po::bool_switch()->default_value(alevin::defaults::isChromium5V2),
        "Use 10x chromium 5' v2 Single Cell protocol for the library.")
       (
        "gemcode", po::bool_switch()->default_value(alevin::defaults::isGemcode),

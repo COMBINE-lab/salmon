@@ -154,9 +154,13 @@ namespace alevin{
       void setFeatureStart(size_t startIdx) { featureStart = startIdx; }
     };
 
+    struct Chromium5V1 : Rule{
+      // 16, 10 ??
+      Chromium5V1(): Rule(16, 10, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_BOTH){}
+    };
+    
     struct Chromium5V2 : Rule{
-      // fix barcodeLength and umiLength
-      Chromium5V2(): Rule(16, 12, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_BOTH){}
+      Chromium5V2(): Rule(16, 10, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_BOTH){}
     };
 
     struct ChromiumV3 : Rule{
