@@ -1947,11 +1947,31 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
         }
 
 
-        // todo: use PairingStatus to choose how to mask
+        // todo: use PairingStatus to choose how to mask rather than isPaired
         // for a pair, status of read1 should be used
         // for singles, status of read1 (or what it should be) should be used
+
+        bool use_fw_mask;
         for (auto& aln : jointAlignments) {
-          uint32_t fw_mask = aln.fwd ? 0x80000000 : 0x00000000;
+          if (readsToUse == ReadsToUse::USE_BOTH) { // 5' library
+            if (aln.isPaired == true) {
+              // if it is a paired hit, use ori of left read
+              use_fw_mask = aln.fw;
+            } else { // !isPaired 
+              // if (is_left)
+              // if only the left read mapped, use the left read ori
+              // else (is_right)
+              // if only the right read mapped, use the assumed left read ori
+              use_fw_mask = aln.fw;
+            }
+          } else { // 3' library
+            // if (is_left)
+            // if only the left read mapped, use the left read ori
+            // else (is_right)
+            // if only the right read mapped, use the assumed left read ori
+            use_fw_mask = aln.fw;
+          }
+          uint32_t fw_mask = use_fw_mask ? 0x80000000 : 0x00000000;
           //bw << is_fw;
           bw << (aln.tid | fw_mask);
           // position 
