@@ -576,13 +576,10 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
           auto pos_diff = abs(pos_right - pos_left);
 
           // left hit should be in a different ori than right hit
-            if (is_fw_first != is_fw_second) { 
-
-              // should be <1000 from each other in position
-              if (pos_diff <= pos_spacing_max) {
-
-                // leftmost one should be fw:
-                if (pos_first < half_seq_length and pos_second < half_seq_length) {
+          // should be <1000 from each other in position
+          // leftmost one should be fw
+            if ((is_fw_first != is_fw_second) or (pos_diff <= pos_spacing_max)
+                or (pos_first < half_seq_length and pos_second < half_seq_length)) {
 
                   if (is_fw_first) {
                     SimpleHit hit_new = get_fr_hit(true, pos_first, score_first, hits_first, 
@@ -593,11 +590,8 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                     SimpleHit hit_new = get_rf_hit(true, pos_second, score_second, hits_second, 
                                           tid_second, PairingStatus::PAIRED_RF);
                     accepted_hits.emplace_back(hit_new);
+
                   }
-                  
-                }
-              }
-                
             }    
           } else { // curr on new transcript
             seen_first = true;
@@ -1326,14 +1320,21 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
   // filter jointAlignments to remove invalid hit pairs
   bool filter_joint_alignments(auto& jointAlignments) {
+    // requires: jointAlignments is already sorted
 
     bool seen_first = false;
     int32_t pos_first;
     bool is_fw_first;
     uint32_t tid_first;
+    uint32_t is_paired_first;
+    uint32_t read_len_first;
+    uint32_t frag_len_first;
+    std::string cigar_first;
+
     int32_t pos_second;
     bool is_fw_second;
     uint32_t tid_second;
+    uint32_t read_len_second;
     uint32_t pos_spacing_max = 1000;
     // todo: do this in a better way
     uint32_t half_seq_length = pos_spacing_max/2;
@@ -1348,18 +1349,21 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
         pos_first = hit.pos;
         score_first = hit.score;
         hits_first = hit.hits;
-        is_fw_first = hit.is_fw;
+        is_fw_first = hit.fw;
         tid_first = hit.tid;
+        read_len_first = hit.readLen;
+        frag_len_first = hit.fragLen;
+        cigar_first = hit.cigar;
         prev_hit = hit;
-        i++;
+        ++i;
       } else {
         pos_second = hit.pos;
         score_second = hit.score;
         hits_second = hit.hits;
-        is_fw_second = hit.is_fw;
+        is_fw_second = hit.fw;
         tid_second = hit.tid;
 
-        if (tid_first == tid_second) { // prev and curr on same transcript
+        if (tid_first == tid_second) { // prev hit and curr hit on same transcript
           seen_first = false;
 
           // calculate difference in position
@@ -1371,26 +1375,44 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
             if ((is_fw_first == is_fw_second) or (pos_diff <= pos_spacing_max)
                 or (pos_first > half_seq_length or pos_second > half_seq_length)) {
 
-                  // invalid hits; remove
+                  // hits are invalid; remove
+                  jointAlignments.remove(prev_hit);
                   jointAlignments.remove(hit);
-                  jointAlignments.remove(hit);
-                  i -= 2;
-                  prev_hit = hit;
+                  i = i - 1; // move left by one because two were removed 
+                             // and then you want to move forwards by one
             } else {
-               prev_hit = hit;
-               i++;
+              // hits are valid; remove and replace with new paired hit
+              jointAlignments.remove(prev_hit);
+              jointAlignments.remove(hit);
+              /*
+              QuasiAlignment(uint32_t tidIn, int32_t posIn,
+                           bool fwdIn, uint32_t readLenIn, std::string cigarIn, //NOTE can we make it uint32?
+                           uint32_t fragLenIn = 0,
+                           bool isPairedIn = false) :
+              */
+              
+              hit_new = QuasiAlignment(tid_first, pos_first, is_fwd_first, read_len_first, 
+                                       cigar_first, frag_len_first, true); //isPaired = true
+              jointAlignments.insert(i-1, hit_new); // insert where hit 1 was (we are currently on hit 2)
+
+               prev_hit = hit_new;
+               // i does not change because net one was removed
+
             }
 
                  
-          } else { // curr on new transcript
+          } else { // curr hit on different transcript than prev hit
             seen_first = true;
             pos_first = hit.pos;
             score_first = hit.score;
             hits_first = hit.hits;
             is_fw_first = hit.is_fw;
             tid_first = hit.tid;
+            read_len_first = hit.readLen;
+            frag_len_first = hit.fragLen;
+            cigar_first = hit.cigar;
             prev_hit = hit;
-            i++;
+            ++i;
           }
       }
     }
@@ -1590,8 +1612,8 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                 // run twice, once for left read and once for right read
                 // 3' libraries ignore left read, 5' libraries use left read
 
-                // mate is just other read
-                // mateStatus is just whatever the other read has
+                // the mate is just the other read
+                // the mateStatus is the status of the mate
 
                 if (readsToUse == ReadsToUse::USE_BOTH) {
                   // 5' library
@@ -1655,7 +1677,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                   }
                   
                 }
-              }
+              } // DONE: for (uint32_t read_num = 0; read_num < 2; read_num++)
 
               // gather up hits1 and hits2 and merge them together here
               // and then that will become jointHits
@@ -1664,8 +1686,8 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
               bool left_empty = false;
               bool right_empty = false;
               if (readsToUse == ReadsToUse::USE_BOTH) {
-                left_empty = (jointHitsLeft.size() > 0) ? false : true;
-                right_empty = (jointHitsRight.size() > 0) ? false : true;
+                if (jointHitsLeft.size() > 0) left_empty = true;
+                if (jointHitsRight.size() > 0) right_empty = true;
                 for (auto& jointHit : jointHitsLeft) {
                   jointHits.emplace_back(jointHit);
                 }
@@ -1698,7 +1720,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
                   // for 5', PAIRED_END_LEFT and PAIRED_END_RIGHT are used
 
-                  if (readsToUse == ReadsToUse::USE_BOTH) {
+                  if (readsToUse == ReadsToUse::USE_BOTH) { // 5' library
                     if (read_num == 0) { // left read
                       jointHit.mateStatus = MateStatus::PAIRED_END_LEFT;
                       auto hitScore = puffaligner.calculateAlignments(readSubSeq->seq1, jointHit, hctr, is_multimapping, false);
@@ -1707,7 +1729,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                       auto hitScore = puffaligner.calculateAlignments(readSubSeq->seq2, jointHit, hctr, is_multimapping, false); 
                     }
 
-                  } else {
+                  } else { // 3' library
                     if (readsToUse == ReadsToUse::USE_FIRST) { // left read contains biological information
                       jointHit.mateStatus = MateStatus::PAIRED_END_LEFT;
                       auto hitScore = puffaligner.calculateAlignments(readSubSeq->seq1, jointHit, hctr, is_multimapping, false);
@@ -1750,6 +1772,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                 if (msi.bestScore > invalidScore and !bestHitDecoy) {
 
                   // jointHits should contain hits from both reads
+                  // condense this later into one function call
                   
                   if (readsToUse == ReadsToUse::USE_BOTH) {
                     if (read_num == 0) { // left read
@@ -1860,6 +1883,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
       // jointAlignments contains alignments as if they were single mapped
       // jointAlignments needs to be sorted and filtered
+      // use lambda compare function to sort
       std::sort(jointAlignments.begin(), jointAlignments.end(), [](QuasiAlignment hit1, QuasiAlignment hit2) {
         if (hit1.tid != hit2.tid) {
           if (hit1.tid < hit2.tid) return true;

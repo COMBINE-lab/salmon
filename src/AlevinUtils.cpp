@@ -92,7 +92,7 @@ namespace alevin {
       (void)seq;
       struct ReadSeqs* readSeqs;
       std::string& seq1;
-      bool ok = extractSeq(seq, protocol, seq1);
+      bool ok = extractSequence(seq, protocol, seq1);
       readSeqs->seq1 = seq1;
       readSeqs->seq2 = seq2;
       return readSeqs;
@@ -105,7 +105,7 @@ namespace alevin {
       (void)seq;
       struct ReadSeqs* readSeqs;
       std::string& seq1;
-      bool ok = extractSeq(seq, protocol, seq1);
+      bool ok = extractSequence(seq, protocol, seq1);
       readSeqs->seq1 = seq1;
       readSeqs->seq2 = seq2;
       return readSeqs;
@@ -170,7 +170,7 @@ namespace alevin {
       readSeqs->seq2 = subseq;
       if (alevin::defaults::isFivePrimeLibrary) {
         std::string& seq1;
-        bool ok2 = extractSeq(seq, protocol, seq1);
+        bool ok2 = extractSequence(seq, protocol, seq1);
         readSeqs->seq1 = seq1;
       }
       return readSeqs;
@@ -554,14 +554,21 @@ namespace alevin {
     }
 
     template <>
-    bool extractSeq<apt::Chromium5V2>(std::string& read, apt::Chromium5V2& pt, std::string& seq) {
+    bool extractSequence<apt::Chromium5V1>(std::string& read, apt::Chromium5V1& pt, std::string& seq) {
+      // the biological sequence comes after the umi in the read
+      return (read.length() > pt.barcodeLength + pt.umiLength) ?
+        (seq.assign(read, pt.umiLength+pt.barcodeLength, read.length()), true) : false;
+    }
+    
+    template <>
+    bool extractSequence<apt::Chromium5V2>(std::string& read, apt::Chromium5V2& pt, std::string& seq) {
       // the biological sequence comes after the umi in the read
       return (read.length() > pt.barcodeLength + pt.umiLength) ?
         (seq.assign(read, pt.umiLength+pt.barcodeLength, read.length()), true) : false;
     }
 
     template <>
-    bool extractSeq<apt::CustomGeometry>(std::string& read, apt::CustomGeometry& pt, std::string& seq) {
+    bool extractSequence<apt::CustomGeometry>(std::string& read, apt::CustomGeometry& pt, std::string& seq) {
       // the biological sequence comes after the umi in the read
       return (read.length() > pt.barcodeLength + pt.umiLength) ?
         (seq.assign(read, pt.umiLength+pt.barcodeLength, read.length()), true) : false;

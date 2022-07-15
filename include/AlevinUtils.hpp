@@ -105,7 +105,7 @@ namespace alevin{
     // extract the biological sequence from read into seq
     // for 5' library support
     template <typename ProtocolT>
-    bool extractSeq(std::string& read, ProtocolT& pt, std::string& seq);
+    bool extractSequence(std::string& read, ProtocolT& pt, std::string& seq);
 
     template <typename OrderedOptionsT>
     bool writeCmdInfo(boost::filesystem::path cmdInfoPath,
