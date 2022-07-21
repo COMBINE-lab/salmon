@@ -385,6 +385,7 @@ void processMiniBatchSimple(ReadExperimentT& readExp, ForgettingMassCalculator& 
 /**
  * Perform sketch mapping of sc reads and produce output file.
  **/
+
 template <typename IndexT, typename ProtocolT>
 void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
                        AlnGroupVec<QuasiAlignment>& structureVec,
@@ -407,6 +408,8 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                        MappingStatistics& mstats) {
   (void) numAssignedFragments;
   (void) fragLengthDist;
+  (void) transcripts;
+  (void) rl;
   uint64_t count_fwd = 0, count_bwd = 0;
   uint64_t prevObservedFrags{1};
   uint64_t leftHitCount{0};
@@ -484,129 +487,27 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       return (pos > -max_over) and ((pos + read_len) < (signed_txp_len + max_over));
     }
 
-    bool operator<(SimpleHit hit1, SimpleHit hit2) {
-      if (hit1.tid != hit2.tid) {
-        if (hit1.tid < hit2.tid) { // smaller tid < larger tid
+    bool operator<(SimpleHit hit2) {
+      if (tid != hit2.tid) {
+        if (tid < hit2.tid) { // smaller tid < larger tid
           return true;
         } else {
           return false;
         }
       } else { // hit1 and hit2 are on the same transcript
-        if (hit1.is_fw) { // fw < rc
+        if (is_fw) { // fw < rc
           return true;
         } else {
           return false;
         }
       }
-    }
+    };
   };
 
   enum class HitDirection : uint8_t {FW, RC, BOTH};
 
-  // merge accepted hit lists from left read and right read of a read pair
-  // use for 5' libraries where both reads contain biological information
-  // fills in accepted_hits
-  bool merge_accepted_hits(auto& accepted_hits_left, auto& accepted_hits_right, auto& accepted_hits) {
-
-    // if accepted_hits_left and accepted_hits_right is empty
-    // nothing gets added to accepted_hits
-    if (accepted_hits_left.size() == 0 and accepted_hits_right.size() == 0) {
-      return true;
-    }
-    // if accepted_hits_right is empty
-    // accepted_hits_left becomes accepted_hits
-    else if (accepted_hits_right.size() == 0) {
-      for (auto& simple_hit_left : accepted_hits_left) {
-        accepted_hits.emplace_back(simple_hit_left);
-      }
-      return true;
-    }
-
-    // if accepted_hits_left is empty
-    // accepted_hits_right becomes accepted_hits
-    else if (accepted_hits_left.size() == 0) {
-      for (auto& simple_hit_right : accepted_hits_right) {
-        accepted_hits.emplace_back(simple_hit_right);
-      }
-      return true;
-    }
-
-    // else, find hit pairs to the same transcript
-
-    // sort lists based on tid and then ori
-    std::sort(accepted_hits_left.begin(), accepted_hits_left.end());
-    std::sort(accepted_hits_right.begin(), accepted_hits_right.end());
-
-    // merge them together into a sorted list
-    accepted_hits.set_intersection(accepted_hits_left.begin(), accepted_hits_left.end(),
-                                   accepted_hits_right.begin(), accepted_hits_right.end(),
-                                   accepted_hits.begin());
-    
-    bool seen_first = false;
-    int32_t pos_first;
-    bool is_fw_first;
-    uint32_t tid_first;
-    int32_t pos_second;
-    bool is_fw_second;
-    uint32_t tid_second;
-    uint32_t pos_spacing_max = 1000;
-    // todo: do this in a better way
-    uint32_t half_seq_length = pos_spacing_max/2;
-
-    // walk through accepted_hits to find valid hit pairs
-    for (auto& hit : accepted_hits) {
-      if not (seen) { // have not seen a hit on this transcript yet
-        seen_first = true;
-        pos_first = hit.pos;
-        score_first = hit.score;
-        hits_first = hit.hits;
-        is_fw_first = hit.is_fw;
-        tid_first = hit.tid;
-      } else {
-        pos_second = hit.pos;
-        score_second = hit.score;
-        hits_second = hit.hits;
-        is_fw_second = hit.is_fw;
-        tid_second = hit.tid;
-
-        if (tid_first == tid_second) { // prev and curr on same transcript
-          seen_first = false;
-
-          // calculate difference in position
-          auto pos_diff = abs(pos_right - pos_left);
-
-          // left hit should be in a different ori than right hit
-          // should be <1000 from each other in position
-          // leftmost one should be fw
-            if ((is_fw_first != is_fw_second) or (pos_diff <= pos_spacing_max)
-                or (pos_first < half_seq_length and pos_second < half_seq_length)) {
-
-                  if (is_fw_first) {
-                    SimpleHit hit_new = get_fr_hit(true, pos_first, score_first, hits_first, 
-                                          tid_first, PairingStatus::PAIRED_FR);
-                    accepted_hits.emplace_back(hit_new);
-
-                  } else {
-                    SimpleHit hit_new = get_rf_hit(true, pos_second, score_second, hits_second, 
-                                          tid_second, PairingStatus::PAIRED_RF);
-                    accepted_hits.emplace_back(hit_new);
-
-                  }
-            }    
-          } else { // curr on new transcript
-            seen_first = true;
-            pos_first = hit.pos;
-            score_first = hit.score;
-            hits_first = hit.hits;
-            is_fw_first = hit.is_fw;
-            tid_first = hit.tid;
-          }
-      }
-    }
-    return true;
-  }
-
   struct SketchHitInfo {
+
     // add a hit to the current target that occurs in the forward 
     // orientation with respect to the target.
     bool add_fw(int32_t ref_pos, int32_t read_pos, int32_t rl, int32_t k, int32_t max_stretch, float score_inc) {
@@ -687,14 +588,14 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                        PairingStatus::UNPAIRED_RIGHT};
     }
 
-    inline SimpleHit get_fr_hit() {
-      return SimpleHit{true, approx_pos_fw, fw_score, fw_hits, std::numeric_limits<uint32_t>::max(),
-                       PairingStatus::PAIRED_FR};
+    // const to ensure _sketchHitInfo is not modified
+    inline SimpleHit get_fr_hit(int32_t pos, float score, uint32_t num_hits, uint32_t tid) const {
+      return SimpleHit{true, pos, score, num_hits, tid, PairingStatus::PAIRED_FR};
     }
 
-    inline SimpleHit get_rf_hit() {
-      return SimpleHit{false, approx_pos_rc, rc_score, rc_hits, std::numeric_limits<uint32_t>::max(),
-                       PairingStatus::PAIRED_RF};
+    // const to ensure _sketchHitInfo is not modified
+    inline SimpleHit get_rf_hit(int32_t pos, float score, uint32_t num_hits, uint32_t tid) const {
+      return SimpleHit{false, pos, score, num_hits, tid, PairingStatus::PAIRED_RF};
     }
 
     inline SimpleHit get_best_hit() {
@@ -728,6 +629,126 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     float fw_score{0.0};
     float rc_score{0.0}; 
 
+  };
+
+  SketchHitInfo _sketchHitInfo;
+
+  // merge accepted hit lists from left read and right read of a read pair
+  // use for 5' libraries where both reads contain biological information
+  // fills in accepted_hits
+
+  auto merge_accepted_hits = [_sketchHitInfo] (std::vector<SimpleHit>& accepted_hits_left, 
+                          std::vector<SimpleHit>& accepted_hits_right, 
+                          std::vector<SimpleHit>& accepted_hits) -> bool {
+
+    // if accepted_hits_left and accepted_hits_right is empty
+    // nothing gets added to accepted_hits
+    if (accepted_hits_left.size() == 0 and accepted_hits_right.size() == 0) {
+      return true;
+    }
+    // if accepted_hits_right is empty
+    // accepted_hits_left becomes accepted_hits
+    else if (accepted_hits_right.size() == 0) {
+      for (auto& simple_hit_left : accepted_hits_left) {
+        accepted_hits.emplace_back(simple_hit_left);
+      }
+      return true;
+    }
+
+    // if accepted_hits_left is empty
+    // accepted_hits_right becomes accepted_hits
+    else if (accepted_hits_left.size() == 0) {
+      for (auto& simple_hit_right : accepted_hits_right) {
+        accepted_hits.emplace_back(simple_hit_right);
+      }
+      return true;
+    }
+
+    // else, find hit pairs to the same transcript
+
+    // sort lists based on tid and then ori
+    std::sort(accepted_hits_left.begin(), accepted_hits_left.end());
+    std::sort(accepted_hits_right.begin(), accepted_hits_right.end());
+
+    // merge them together into a sorted list
+
+    std::set_intersection(accepted_hits_left.begin(), accepted_hits_left.end(),
+                          accepted_hits_right.begin(), accepted_hits_right.end(),
+                          accepted_hits.begin(), [] (SimpleHit hit1, SimpleHit hit2) {
+                            return (hit1.tid == hit2.tid);
+                          });
+    
+    bool first = true;
+    int32_t pos_first;
+    bool is_fw_first;
+    uint32_t tid_first;
+    float score_first;
+    uint32_t hits_first;
+
+    int32_t pos_second;
+    bool is_fw_second;
+    uint32_t tid_second;
+    float score_second;
+    uint32_t hits_second;
+    int32_t pos_spacing_max = 1000;
+    // todo: do this in a better way
+    int32_t half_seq_length = pos_spacing_max/2;
+
+    // walk through accepted_hits to find valid hit pairs
+    for (auto& hit : accepted_hits) {
+      if (first) { // looking at first read in the pair
+        pos_first = hit.pos;
+        is_fw_first = hit.is_fw;
+        hits_first = hit.num_hits;
+        score_first = hit.score;
+        tid_first = hit.tid;
+
+        first = false;
+      } else { // looking at second read in the pair
+        pos_second = hit.pos;
+        is_fw_second = hit.is_fw;
+        tid_second = hit.tid;
+        score_second = hit.score;
+        hits_second = hit.num_hits;
+
+        // this should always be true now
+        if (tid_first == tid_second) { // prev and curr on same transcript
+          first = false;
+
+          // calculate difference in position
+          int32_t pos_diff = abs(pos_first - pos_second);
+
+          // left hit should be in a different ori than right hit
+          // should be <1000 from each other in position
+          // leftmost one should be fw
+          if ((is_fw_first != is_fw_second) or (pos_diff <= pos_spacing_max)
+              or (pos_first < half_seq_length and pos_second < half_seq_length)) {
+
+                SimpleHit hit_new;
+                // not the segfault
+                if (is_fw_first) {
+                  hit_new = _sketchHitInfo.get_fr_hit(pos_first, score_first, hits_first, tid_first);
+                  accepted_hits.emplace_back(hit_new);
+
+                } else {
+                  hit_new = _sketchHitInfo.get_rf_hit(pos_second, score_second, hits_second, 
+                                                                tid_second);
+                  accepted_hits.emplace_back(hit_new);
+
+                }
+            } 
+        }   
+          // } else { // curr on new transcript
+          //   seen_first = true;
+          //   pos_first = hit.pos;
+          //   hits_first = hit.num_hits;
+          //   score_first = hit.score;
+          //   is_fw_first = hit.is_fw;
+          //   tid_first = hit.tid;
+          // }
+      }
+    }
+    return true;
   };
 
   // map to recall the number of unmapped reads we see 
@@ -778,7 +799,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       std::exit(1);
     }
 
-    LibraryFormat expectedLibraryFormat = rl.format();
+    // LibraryFormat expectedLibraryFormat = rl.format();
 
     std::string extraBAMtags;
     if(writeQuasimappings) {
@@ -787,12 +808,13 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     }
 
     auto localProtocol = alevinOpts.protocol;
-    auto readsToUse = alevinOpts.protocol.get_reads_to_use();
+    ReadsToUse readsToUse = localProtocol.get_reads_to_use();
 
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
       auto& rp = rg[i];
       readLenLeft = rp.first.seq.length();
       readLenRight= rp.second.seq.length();
+      alevin::utils::ReadSeqs readSubSeq;
 
       bool tooShortRight = (readLenRight < (minK+alevinOpts.trimRight));
       //localUpperBoundHits = 0;
@@ -859,7 +881,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
               jointHitGroup.setUMI(umiIdx.word(0));
               bool rh = false;
               int32_t signed_rl; // signed read length
-              struct ReadSeqs* readSubSeq = aut::getReadSequence(localProtocol, rp.first.seq, rp.second.seq, readBuffer);
+              readSubSeq = aut::getReadSequence(localProtocol, rp.first.seq, rp.second.seq, readBuffer);
 
               for (uint32_t read_num = 0; read_num < 2; read_num++) {
                 // run twice, once for left read and once for right read
@@ -868,24 +890,24 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                 if (readsToUse == ReadsToUse::USE_BOTH) {
                   // 5' library
 
-                  if (read_count == 0) {
+                  if (read_num == 0) {
                     rh = tooShortRight
                         ? false
-                        : memCollector.get_raw_hits_sketch(readSubSeq->seq1,
+                        : memCollector.get_raw_hits_sketch(readSubSeq.seq1,
                                                             qc,
                                                             true, // isLeft
                                                             false // verbose
                           );
-                    signed_rl = static_cast<int32_t>(readSubSeq->seq1.length());
+                    signed_rl = static_cast<int32_t>(readSubSeq.seq1.length());
                   } else {
                     rh = tooShortRight
                         ? false
-                        : memCollector.get_raw_hits_sketch(readSubSeq->seq2,
+                        : memCollector.get_raw_hits_sketch(readSubSeq.seq2,
                                                             qc,
                                                             true, // isLeft
                                                             false // verbose
                           );
-                    signed_rl = static_cast<int32_t>(readSubSeq->seq2.length());
+                    signed_rl = static_cast<int32_t>(readSubSeq.seq2.length());
                   }
                 
 
@@ -896,22 +918,22 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                   if (readsToUse == ReadsToUse::USE_FIRST) {
                     rh = tooShortRight
                           ? false
-                          : memCollector.get_raw_hits_sketch(readSubSeq->seq1,
+                          : memCollector.get_raw_hits_sketch(readSubSeq.seq1,
                                                               qc,
                                                               true, // isLeft
                                                               false // verbose
                             );
-                    signed_rl = static_cast<int32_t>(readSubSeq->seq1.length());
+                    signed_rl = static_cast<int32_t>(readSubSeq.seq1.length());
                   }
                   else if (readsToUse == ReadsToUse::USE_SECOND) {
                     rh = tooShortRight
                           ? false
-                          : memCollector.get_raw_hits_sketch(readSubSeq->seq2,
+                          : memCollector.get_raw_hits_sketch(readSubSeq.seq2,
                                                               qc,
                                                               true, // isLeft
                                                               false // verbose
                             );
-                    signed_rl = static_cast<int32_t>(readSubSeq->seq2.length());
+                    signed_rl = static_cast<int32_t>(readSubSeq.seq2.length());
                   }
                 }
                 // if there were hits
@@ -941,7 +963,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
                   auto collect_mappings_from_hits = [&max_stretch, &min_occ, &hit_map,
                                                      &salmonOpts, &num_valid_hits, &total_occs, 
-                                                     &largest_occ, &qidx, signed_rl, signed_k](
+                                                     &largest_occ, &qidx, signed_rl, signed_k] (
                     auto& raw_hits, auto& prev_read_pos,
                     auto& max_allowed_occ, auto& had_alt_max_occ
                   ) -> bool {
@@ -1005,6 +1027,11 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                   auto mao_first_pass = max_occ_default - 1;
                   bool early_stop = collect_mappings_from_hits(raw_hits, prev_read_pos, mao_first_pass, _discard);
 
+                  if (early_stop) {
+                    salmonOpts.jointLog->error( "collect_mappings_from_hits stopped early.");
+                    salmonOpts.jointLog->flush();
+                  }
+
                   // If our default threshold was too stringent, then fallback to a more liberal
                   // threshold and look up the k-mers that occur the least frequently.
                   // Specifically, if the min occuring hits have frequency < max_occ_recover (2500 by default)
@@ -1013,6 +1040,11 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                     prev_read_pos = -1;
                     uint64_t max_allowed_occ = min_occ;
                     early_stop = collect_mappings_from_hits(raw_hits, prev_read_pos, max_allowed_occ, had_alt_max_occ);
+
+                    if (early_stop) {
+                      salmonOpts.jointLog->error( "collect_mappings_from_hits stopped early.");
+                      salmonOpts.jointLog->flush();
+                  }
                   }
 
                   uint32_t best_alt_hits = 0;
@@ -1068,25 +1100,25 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                     alt_max_occ = had_alt_max_occ ? accepted_hits.size() : salmonOpts.maxReadOccs;
                   }
 
-                  /*
-                  * This rule; if enabled, allows through mappings missing a single hit, if there
-                  * was no mapping with all hits. NOTE: this won't work with the current early-exit
-                  * optimization however.
-                  if (accepted_hits.empty() and (num_valid_hits > 1) and (best_alt_hits >= num_valid_hits - 1)) {
-                    for (auto& kv : hit_map) { 
-                      auto simple_hit = kv.second.get_best_hit();
-                      if (simple_hit.num_hits >= best_alt_hits) {
-                        //if (simple_hit.valid_pos(signed_read_len, transcripts[kv.first].RefLength, 10)) {
-                          simple_hit.tid = kv.first;
-                          accepted_hits.emplace_back(simple_hit);
-                        //}
-                      }
-                    }
-                  }
-                  */
+                  
+                  // This rule; if enabled, allows through mappings missing a single hit, if there
+                  // was no mapping with all hits. NOTE: this won't work with the current early-exit
+                  // optimization however.
+                  // if (accepted_hits.empty() and (num_valid_hits > 1) and (best_alt_hits >= num_valid_hits - 1)) {
+                  //   for (auto& kv : hit_map) { 
+                  //     auto simple_hit = kv.second.get_best_hit();
+                  //     if (simple_hit.num_hits >= best_alt_hits) {
+                  //       //if (simple_hit.valid_pos(signed_read_len, transcripts[kv.first].RefLength, 10)) {
+                  //         simple_hit.tid = kv.first;
+                  //         accepted_hits.emplace_back(simple_hit);
+                  //       //}
+                  //     }
+                  //   }
+                  // }
+                
                 } // DONE : if (rh)
 
-              } // DONE: for (int read_count = 0; read_count < 2; read_count++) 
+              } // DONE: for (int read_num = 0; read_num < 2; read_num++) 
 
             } else {
               nSeqs += 1;
@@ -1100,7 +1132,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         spdlog::drop_all();
         std::exit(1);
       }
-
+      
       // merge accepted hit lists for when using 5' library
       if (readsToUse == ReadsToUse::USE_BOTH) {
         if (!merge_accepted_hits(accepted_hits_left, accepted_hits_right, accepted_hits)) {
@@ -1171,6 +1203,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         // PairingStatus { UNPAIRED_LEFT, UNPAIRED_RIGHT, PAIRED_FR, PAIRED_RF };
         bool use_fw_mask;
         for (auto& aln : accepted_hits) {
+          use_fw_mask = aln.is_fw;
           if (readsToUse == ReadsToUse::USE_BOTH) { // 5' library
             if (aln.pairing_status == PairingStatus::UNPAIRED_LEFT) {
               // if only the left read mapped, check for its ori
@@ -1218,11 +1251,10 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         bw << num_reads_in_chunk;
         bw << num_reads_in_chunk;
       }
-      /*
+      
       if (writeQuasimappings) {
         writeAlignmentsToStream(rp, formatter, jointAlignments, sstream, true, true, extraBAMtags);
       }
-      */
 
       validHits += accepted_hits.size();
       localNumAssignedFragments += (accepted_hits.size() > 0);
@@ -1290,6 +1322,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 /**
  * Perform selective alignment of sc reads and produce output file.
  **/
+
 template <typename IndexT, typename ProtocolT>
 void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
                        AlnGroupVec<QuasiAlignment>& structureVec,
@@ -1311,6 +1344,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                        MappingStatistics& mstats) {
   (void) numAssignedFragments;
   (void) fragLengthDist;
+
   uint64_t count_fwd = 0, count_bwd = 0;
   uint64_t prevObservedFrags{1};
   uint64_t leftHitCount{0};
@@ -1319,12 +1353,14 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
   double maxZeroFrac{0.0};
 
   // filter jointAlignments to remove invalid hit pairs
-  bool filter_joint_alignments(auto& jointAlignments) {
+  auto filter_joint_alignments = [] (std::vector<QuasiAlignment>& jointAlignments) -> bool {
     // requires: jointAlignments is already sorted
 
-    bool seen_first = false;
+    if (jointAlignments.size() == 0) return true;
+
     int32_t pos_first;
     bool is_fw_first;
+    // float score_first;
     uint32_t tid_first;
     uint32_t is_paired_first;
     uint32_t read_len_first;
@@ -1334,90 +1370,66 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
     int32_t pos_second;
     bool is_fw_second;
     uint32_t tid_second;
+    // float score_second;
     uint32_t read_len_second;
-    uint32_t pos_spacing_max = 1000;
+
+    int32_t pos_spacing_max = 1000;
     // todo: do this in a better way
-    uint32_t half_seq_length = pos_spacing_max/2;
-    QuasiAlignment prev_hit;
-    QuasiAlignment hit = jointAlignments.begin();
-    int32_t i = 0;
+    int32_t half_seq_length = pos_spacing_max/2;
+    QuasiAlignment hit2;
+    QuasiAlignment hit1;
+    QuasiAlignment hit_new;
+    auto start = jointAlignments.begin();
 
+    size_t i = 0;
     // walk through jointAlignments to find invalid hit pairs
-    while (i < jointAlignments.size()) {
-      if not (seen) { // have not seen a hit on this transcript yet
-        seen_first = true;
-        pos_first = hit.pos;
-        score_first = hit.score;
-        hits_first = hit.hits;
-        is_fw_first = hit.fw;
-        tid_first = hit.tid;
-        read_len_first = hit.readLen;
-        frag_len_first = hit.fragLen;
-        cigar_first = hit.cigar;
-        prev_hit = hit;
-        ++i;
-      } else {
-        pos_second = hit.pos;
-        score_second = hit.score;
-        hits_second = hit.hits;
-        is_fw_second = hit.fw;
-        tid_second = hit.tid;
+    while (i < jointAlignments.size() - 1) { // i cannot be last index
+      hit1 = jointAlignments[i];
+      hit2 = jointAlignments[i+1];
 
-        if (tid_first == tid_second) { // prev hit and curr hit on same transcript
-          seen_first = false;
+      pos_first = hit1.pos;
+      is_fw_first = hit1.fwd;
+      tid_first = hit1.tid;
+      read_len_first = hit1.readLen;
+      frag_len_first = hit1.fragLen;
+      cigar_first = hit1.cigar;
 
-          // calculate difference in position
-          auto pos_diff = abs(pos_right - pos_left);
+      pos_second = hit2.pos;
+      is_fw_second = hit2.fwd;
+      tid_second = hit2.tid;
 
-          // left hit should be in a different ori than right hit
-          // should be <1000 from each other in position
-          // leftmost one should be fw
-            if ((is_fw_first == is_fw_second) or (pos_diff <= pos_spacing_max)
-                or (pos_first > half_seq_length or pos_second > half_seq_length)) {
+      if (tid_first == tid_second) { 
+        // calculate difference in position
+        int32_t pos_diff = abs(pos_first - pos_second);
 
-                  // hits are invalid; remove
-                  jointAlignments.remove(prev_hit);
-                  jointAlignments.remove(hit);
-                  i = i - 1; // move left by one because two were removed 
-                             // and then you want to move forwards by one
-            } else {
-              // hits are valid; remove and replace with new paired hit
-              jointAlignments.remove(prev_hit);
-              jointAlignments.remove(hit);
-              /*
-              QuasiAlignment(uint32_t tidIn, int32_t posIn,
-                           bool fwdIn, uint32_t readLenIn, std::string cigarIn, //NOTE can we make it uint32?
-                           uint32_t fragLenIn = 0,
-                           bool isPairedIn = false) :
-              */
-              
-              hit_new = QuasiAlignment(tid_first, pos_first, is_fwd_first, read_len_first, 
-                                       cigar_first, frag_len_first, true); //isPaired = true
-              jointAlignments.insert(i-1, hit_new); // insert where hit 1 was (we are currently on hit 2)
+        // left hit should be in a different ori than right hit
+        // should be <1000 from each other in position
+        // leftmost one should be fw
+        if ((is_fw_first == is_fw_second) or (pos_diff > pos_spacing_max)
+            or (pos_first > half_seq_length or pos_second > half_seq_length)) {
 
-               prev_hit = hit_new;
-               // i does not change because net one was removed
+              // hits are invalid; remove
+              jointAlignments.erase(start + i); // remove hit1
+              jointAlignments.erase(start + i); // remove hit2
+              // don't update i in this case
 
-            }
+        } else {
+          // hits are valid; remove and replace with new paired hit
+          jointAlignments.erase(start + i); // remove hit1
+          jointAlignments.erase(start + i); // remove hit2
+          
+          hit_new = QuasiAlignment(tid_first, pos_first, is_fw_first, read_len_first, 
+                                    cigar_first, frag_len_first, true); //isPaired = true
+          jointAlignments.insert(start + i, hit_new); // insert where hit 1 was (we are currently on hit 2)
 
-                 
-          } else { // curr hit on different transcript than prev hit
-            seen_first = true;
-            pos_first = hit.pos;
-            score_first = hit.score;
-            hits_first = hit.hits;
-            is_fw_first = hit.is_fw;
-            tid_first = hit.tid;
-            read_len_first = hit.readLen;
-            frag_len_first = hit.fragLen;
-            cigar_first = hit.cigar;
-            prev_hit = hit;
-            ++i;
-          }
+          i++; // move on to next alignment
+        }
+      } else { //tid1 != tid2
+        i++; // move on to next alignment
       }
     }
     return true;
-  }
+  };
 
   // Write unmapped reads
   fmt::MemoryWriter unmappedNames;
@@ -1483,14 +1495,16 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
   // NOTE: validation mapping based new parameters
   std::string rc1; rc1.reserve(300);
   AlnCacheMap alnCache; alnCache.reserve(16);
-  /*
-  auto ap{selective_alignment::utils::AlignmentPolicy::DEFAULT};
-  if (mimicBT2) {
-    ap = selective_alignment::utils::AlignmentPolicy::BT2;
-  } else if (mimicStrictBT2) {
-    ap = selective_alignment::utils::AlignmentPolicy::BT2_STRICT;
-  }
-  */
+  
+  // ?? selective_alignment::utils::AlignmentPolicy undeclared
+
+  // auto ap{selective_alignment::utils::AlignmentPolicy::DEFAULT};
+  // if (mimicBT2) {
+  //   ap = selective_alignment::utils::AlignmentPolicy::BT2;
+  // } else if (mimicStrictBT2) {
+  //   ap = selective_alignment::utils::AlignmentPolicy::BT2_STRICT;
+  // }
+  
 
   size_t numMappingsDropped{0};
   size_t numDecoyFrags{0};
@@ -1501,7 +1515,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
   // writing output to SAM.
   msi.collect_decoys(writeQuasimappings);
 
-  struct ReadSeqs* readSubSeq{nullptr};
+  alevin::utils::ReadSeqs readSubSeq;
   std::string readBuffer;
   std::string umi(alevinOpts.protocol.umiLength, 'N');
   std::string barcode(alevinOpts.protocol.barcodeLength, 'N');
@@ -1541,11 +1555,16 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
       auto& jointAlignments = jointHitGroup.alignments();
 
       hits.clear();
+      jointHitsLeft.clear();
+      jointHitsRight.clear();
       jointHits.clear();
       memCollector.clear();
       //jointAlignments.clear();
-      readSubSeq = nullptr;//.clear();
+      // readSubSeq = nullptr;//.clear();
       mapType = salmon::utils::MappingType::UNMAPPED;
+      uint32_t read_num;
+      bool left_empty = false; // is jointHitsLeft is empty
+      bool right_empty = false; // is jointHitsRight is empty
 
       //////////////////////////////////////////////////////////////
       // extracting barcodes
@@ -1586,29 +1605,30 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, localProtocol, umi);
           if ( !umi_ok ) {
             smallSeqs += 1;
+            nSeqs += 1;
           } else {
             alevin::types::AlevinUMIKmer umiIdx;
             bool isUmiIdxOk = umiIdx.fromChars(umi);
 
             if (isUmiIdxOk) {
               jointHitGroup.setUMI(umiIdx.word(0));
-              /*
+              
               auto seq_len = rp.second.seq.size();
-              if (alevinOpts.trimRight > 0) {
-                if (!tooShortRight) {
-                  readSubSeq = rp.second.seq.substr(0, seq_len - alevinOpts.trimRight);
-                  auto rh = memCollector(readSubSeq, qc,
-                                         true, // isLeft
-                                         false // verbose
-                  );
-                }
-              } else { }
-                */
+              // if (alevinOpts.trimRight > 0) {
+              //   if (!tooShortRight) {
+              //     readSubSeq = rp.second.seq.substr(0, seq_len - alevinOpts.trimRight);
+              //     auto rh = memCollector(readSubSeq, qc,
+              //                            true, // isLeft
+              //                            false // verbose
+              //     );
+              //   }
+              // } else { }
+                
               bool rh = false;
               readSubSeq = aut::getReadSequence(localProtocol, rp.first.seq, rp.second.seq, readBuffer);
               
               int32_t signed_rl; // signed read length
-              for (uint32_t read_num = 0; read_num < 2; read_num++) {
+              for (read_num = 0; read_num < 2; read_num++) {
                 // run twice, once for left read and once for right read
                 // 3' libraries ignore left read, 5' libraries use left read
 
@@ -1618,9 +1638,9 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                 if (readsToUse == ReadsToUse::USE_BOTH) {
                   // 5' library
                   if (read_num == 0) { // left read
-                    signed_rl = readSubSeq->seq1.length();
+                    signed_rl = readSubSeq.seq1.length();
                     memCollector.findChains(
-                        readSubSeq->seq1, hits, salmonOpts.fragLenDistMax,
+                        readSubSeq.seq1, hits, salmonOpts.fragLenDistMax,
                         MateStatus::PAIRED_END_RIGHT,
                         useChainingHeuristic, // heuristic chaining
                         true,                 // isLeft
@@ -1631,9 +1651,9 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                         memCollector.getConsensusFraction());
 
                   } else { // right read
-                    signed_rl = readSubSeq->seq2.length();
+                    signed_rl = readSubSeq.seq2.length();
                     memCollector.findChains(
-                        readSubSeq->seq2, hits, salmonOpts.fragLenDistMax,
+                        readSubSeq.seq2, hits, salmonOpts.fragLenDistMax,
                         MateStatus::PAIRED_END_LEFT,
                         useChainingHeuristic, // heuristic chaining
                         true,                 // isLeft
@@ -1649,9 +1669,9 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                   // 3' library
                   if (readsToUse == ReadsToUse::USE_FIRST) { 
                     // biological info is on read 1
-                    signed_rl = readSubSeq->seq1.length();
+                    signed_rl = readSubSeq.seq1.length();
                     memCollector.findChains(
-                        readSubSeq->seq1, hits, salmonOpts.fragLenDistMax,
+                        readSubSeq.seq1, hits, salmonOpts.fragLenDistMax,
                         MateStatus::PAIRED_END_RIGHT,
                         useChainingHeuristic, // heuristic chaining
                         true,                 // isLeft
@@ -1663,9 +1683,9 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
                   } else { 
                     // biological info is on read 2
-                    signed_rl = readSubSeq->seq2.length();
+                    signed_rl = readSubSeq.seq2.length();
                     memCollector.findChains(
-                        readSubSeq->seq2, hits, salmonOpts.fragLenDistMax,
+                        readSubSeq.seq2, hits, salmonOpts.fragLenDistMax,
                         MateStatus::PAIRED_END_LEFT,
                         useChainingHeuristic, // heuristic chaining
                         true,                 // isLeft
@@ -1683,8 +1703,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
               // and then that will become jointHits
               // still need to do checks for valid pairs later
 
-              bool left_empty = false;
-              bool right_empty = false;
               if (readsToUse == ReadsToUse::USE_BOTH) {
                 if (jointHitsLeft.size() > 0) left_empty = true;
                 if (jointHitsRight.size() > 0) right_empty = true;
@@ -1694,8 +1712,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                 for (auto& jointHit : jointHitsRight) {
                   jointHits.emplace_back(jointHit);
                 }
-                jointHitsLeft.clear();
-                jointHitsRight.clear();
               }
               
 
@@ -1714,6 +1730,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
                 size_t idx{0};
                 bool is_multimapping = (jointHits.size() > 1);
+                int32_t hitScore;
 
                 for (auto &&jointHit : jointHits) {
                   // for alevin 3', we need these to have a mate status of PAIRED_END_RIGHT
@@ -1723,19 +1740,19 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                   if (readsToUse == ReadsToUse::USE_BOTH) { // 5' library
                     if (read_num == 0) { // left read
                       jointHit.mateStatus = MateStatus::PAIRED_END_LEFT;
-                      auto hitScore = puffaligner.calculateAlignments(readSubSeq->seq1, jointHit, hctr, is_multimapping, false);
+                      hitScore = puffaligner.calculateAlignments(readSubSeq.seq1, jointHit, hctr, is_multimapping, false);
                     } else { // right read
                       jointHit.mateStatus = MateStatus::PAIRED_END_RIGHT;
-                      auto hitScore = puffaligner.calculateAlignments(readSubSeq->seq2, jointHit, hctr, is_multimapping, false); 
+                      hitScore = puffaligner.calculateAlignments(readSubSeq.seq2, jointHit, hctr, is_multimapping, false); 
                     }
 
                   } else { // 3' library
                     if (readsToUse == ReadsToUse::USE_FIRST) { // left read contains biological information
                       jointHit.mateStatus = MateStatus::PAIRED_END_LEFT;
-                      auto hitScore = puffaligner.calculateAlignments(readSubSeq->seq1, jointHit, hctr, is_multimapping, false);
+                      hitScore = puffaligner.calculateAlignments(readSubSeq.seq1, jointHit, hctr, is_multimapping, false);
                     } else { // right read contains biological information
                       jointHit.mateStatus = MateStatus::PAIRED_END_RIGHT;
-                      auto hitScore = puffaligner.calculateAlignments(readSubSeq->seq2, jointHit, hctr, is_multimapping, false); 
+                      hitScore = puffaligner.calculateAlignments(readSubSeq.seq2, jointHit, hctr, is_multimapping, false); 
                     }
                     
                   }
@@ -1746,18 +1763,18 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                   numMappingsDropped += validScore ? 0 : 1;
                   auto tid = qidx->getRefId(jointHit.tid);
                   
-
+                  bool isCompat;
                   // NOTE: Here, we know that the read arising from the transcriptome is the "right"
                   // read (read 2) sometimes and the "left" read (read 1) other times.
                   // We interpret compatibility depending on which read is used.
                   if ((readsToUse == ReadsToUse::USE_BOTH and read_num == 1) or readsToUse == ReadsToUse::USE_SECOND) {
                     // 5' right read or 3' right read
                     // sense and anti-sense = forward and rc
-                    bool isCompat = (expectedLibraryFormat.strandedness == ReadStrandedness::U) or 
+                    isCompat = (expectedLibraryFormat.strandedness == ReadStrandedness::U) or 
                                   (jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::AS)) or
                                   (!jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::SA));
                   } else { // 5' left read or 3' left read
-                    bool isCompat = (expectedLibraryFormat.strandedness == ReadStrandedness::U) or 
+                    isCompat = (expectedLibraryFormat.strandedness == ReadStrandedness::U) or 
                                   (jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::SA)) or
                                   (!jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::AS));
                   }
@@ -1859,10 +1876,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                   }
                 }
               } //end-if validate mapping
-
             }
-          } else {
-            nSeqs += 1;
           }
         }
       } else{
@@ -1889,7 +1903,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           if (hit1.tid < hit2.tid) return true;
           else return false;
         } else {
-          if (hit1.fw) return true;
+          if (hit1.fwd) return true;
           else return false;
         }
       });
@@ -1956,20 +1970,20 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           if (readsToUse == ReadsToUse::USE_BOTH) { // 5' library
             if (aln.isPaired == true) {
               // if it is a paired hit, use ori of left read
-              use_fw_mask = aln.fw;
+              use_fw_mask = aln.fwd;
             } else { // !isPaired 
               // if (is_left)
               // if only the left read mapped, use the left read ori
               // else (is_right)
               // if only the right read mapped, use the assumed left read ori
-              use_fw_mask = aln.fw;
+              use_fw_mask = aln.fwd;
             }
           } else { // 3' library
             // if (is_left)
             // if only the left read mapped, use the left read ori
             // else (is_right)
             // if only the right read mapped, use the assumed left read ori
-            use_fw_mask = aln.fw;
+            use_fw_mask = aln.fwd;
           }
           uint32_t fw_mask = use_fw_mask ? 0x80000000 : 0x00000000;
           //bw << is_fw;
@@ -2000,11 +2014,11 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
         bw << num_reads_in_chunk;
         bw << num_reads_in_chunk;
       }
-      /*
+      
       if (writeQuasimappings) {
         writeAlignmentsToStream(rp, formatter, jointAlignments, sstream, true, true, extraBAMtags);
       }
-      */
+      
 
       validHits += jointAlignments.size();
       localNumAssignedFragments += (jointAlignments.size() > 0);
@@ -2030,13 +2044,13 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
     } // end for i < j->nb_filled
 
     prevObservedFrags = numObservedFragments;
-    /*
-    AlnGroupVecRange<QuasiAlignment> hitLists = {structureVec.begin(), structureVec.begin()+rangeSize};
-    processMiniBatchSimple<QuasiAlignment>(
-                                     readExp, fmCalc, rl, salmonOpts, hitLists,
-                                     transcripts, clusterForest, fragLengthDist,
-                                     numAssignedFragments, initialRound, burnedIn, maxZeroFrac);
-                                     */
+    
+    // AlnGroupVecRange<QuasiAlignment> hitLists = {structureVec.begin(), structureVec.begin()+rangeSize};
+    // processMiniBatchSimple<QuasiAlignment>(
+    //                                  readExp, fmCalc, rl, salmonOpts, hitLists,
+    //                                  transcripts, clusterForest, fragLengthDist,
+    //                                  numAssignedFragments, initialRound, burnedIn, maxZeroFrac);
+                                     
   }
 
   // If we have any unwritten records left to write
@@ -2052,7 +2066,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
     num_reads_in_chunk = 0;
   }
 
-    
   // unmapped barcode writer
   { // make a scope and dump the unmapped barcode counts
     BasicBinWriter ubcw;
@@ -2078,8 +2091,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
 /// START QUASI
 template <typename IndexT, typename ProtocolT>
-void processReadsQuasi(
-                       paired_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
+void processReadsQuasi(paired_parser* parser, ReadExperimentT& readExp, ReadLibrary& rl,
                        AlnGroupVec<QuasiAlignment>& structureVec,
                        std::atomic<uint64_t>& numObservedFragments,
                        std::atomic<uint64_t>& numAssignedFragments,
@@ -2094,8 +2106,8 @@ void processReadsQuasi(
                        AlevinOpts<ProtocolT>& alevinOpts,
                        SoftMapT& barcodeMap,
                        spp::sparse_hash_map<std::string, uint32_t>& trBcs,
-                       MappingStatistics& mstats
-                       /*,std::vector<uint64_t>& uniqueFLD*/) {
+                       MappingStatistics& mstats) { 
+                       // , std::vector<uint64_t>& uniqueFLD
   uint64_t count_fwd = 0, count_bwd = 0;
   uint64_t prevObservedFrags{1};
   uint64_t leftHitCount{0};
@@ -2171,14 +2183,14 @@ void processReadsQuasi(
   std::string rc1; rc1.reserve(300);
   AlnCacheMap alnCache; alnCache.reserve(16);
 
-  /*
-  auto ap{selective_alignment::utils::AlignmentPolicy::DEFAULT};
-  if (mimicBT2) {
-    ap = selective_alignment::utils::AlignmentPolicy::BT2;
-  } else if (mimicStrictBT2) {
-    ap = selective_alignment::utils::AlignmentPolicy::BT2_STRICT;
-  }
-  */
+  
+  // auto ap{selective_alignment::utils::AlignmentPolicy::DEFAULT};
+  // if (mimicBT2) {
+  //   ap = selective_alignment::utils::AlignmentPolicy::BT2;
+  // } else if (mimicStrictBT2) {
+  //   ap = selective_alignment::utils::AlignmentPolicy::BT2_STRICT;
+  // }
+  
 
   size_t numMappingsDropped{0};
   size_t numDecoyFrags{0};
@@ -2189,7 +2201,7 @@ void processReadsQuasi(
   // writing output to SAM.
   msi.collect_decoys(writeQuasimappings);
 
-  std::string* readSubSeq{nullptr};
+  alevin::utils::ReadSeqs readSubSeq;
   std::string readBuffer;
   std::string umi(alevinOpts.protocol.umiLength, 'N');
   std::string barcode(alevinOpts.protocol.barcodeLength, 'N');
@@ -2228,12 +2240,13 @@ void processReadsQuasi(
       jointHitGroup.clearAlignments();
       auto& jointAlignments= jointHitGroup.alignments();
 
+      std::string subseq{nullptr};
+
       hits.clear();
       jointHits.clear();
       memCollector.clear();
       //jointAlignments.clear();
       //readSubSeq.clear();
-      readSubSeq = nullptr;
       mapType = salmon::utils::MappingType::UNMAPPED;
 
       //////////////////////////////////////////////////////////////
@@ -2321,29 +2334,39 @@ void processReadsQuasi(
 	      	extraBAMtags += umi;
 	      }
 
-              /*
-              auto seq_len = rp.second.seq.size();
-              if (alevinOpts.trimRight > 0) {
-                if ( !tooShortRight ) {
-                  //std::string sub_seq = rp.second.seq.substr(0, seq_len-alevinOpts.trimRight);
-                  //auto rh = hitCollector(sub_seq, saSearcher, hcInfo);
-                  readSubSeq = rp.second.seq.substr(0, seq_len-alevinOpts.trimRight);
-                  auto rh = memCollector(readSubSeq, qc,
-                                         true, // isLeft
-                                         false // verbose
-                                         );
-                  //auto rh = hitCollector(readSubSeq, saSearcher, hcInfo);
-                }
-              } else {
-              */
+              
+              // auto seq_len = rp.second.seq.size();
+              // if (alevinOpts.trimRight > 0) {
+              //   if ( !tooShortRight ) {
+              //     //std::string sub_seq = rp.second.seq.substr(0, seq_len-alevinOpts.trimRight);
+              //     //auto rh = hitCollector(sub_seq, saSearcher, hcInfo);
+              //     readSubSeq = rp.second.seq.substr(0, seq_len-alevinOpts.trimRight);
+              //     auto rh = memCollector(readSubSeq, qc,
+              //                            true, // isLeft
+              //                            false // verbose
+              //                            );
+              //     //auto rh = hitCollector(readSubSeq, saSearcher, hcInfo);
+              //   }
+              // } else {
+              
               readSubSeq = aut::getReadSequence(localProtocol, rp.first.seq, rp.second.seq, readBuffer);
+              ReadsToUse readsToUse = localProtocol.get_reads_to_use();
+
+              // todo: use both reads for USE_BOTH
+              if (readsToUse == ReadsToUse::USE_BOTH) {
+                subseq = readSubSeq.seq2;
+              } else if (readsToUse == ReadsToUse::USE_FIRST) {
+                subseq = readSubSeq.seq1;
+              } else { // readsToUse == ReadsToUse::USE_SECOND
+                subseq = readSubSeq.seq2;
+              }
               auto rh = tooShortRight ? false
-                                      : memCollector(*readSubSeq, qc,
+                                      : memCollector(subseq, qc,
                                                      true, // isLeft
                                                      false // verbose
                                         );
               //}
-              memCollector.findChains(*readSubSeq, hits,
+              memCollector.findChains(subseq, hits,
                                       salmonOpts.fragLenDistMax,
                                       MateStatus::PAIRED_END_RIGHT,
                                       useChainingHeuristic, // heuristic chaining
@@ -2352,7 +2375,7 @@ void processReadsQuasi(
                                       );
 
               pufferfish::util::joinReadsAndFilterSingle(hits, jointHits,
-                                                         readSubSeq->length(),
+                                                         subseq.length(),
                                                          memCollector.getConsensusFraction());
             } else{
               nSeqs += 1;
@@ -2395,7 +2418,7 @@ void processReadsQuasi(
           for (auto &&jointHit : jointHits) {
             // for alevin, currently, we need these to have a mate status of PAIRED_END_RIGHT
             jointHit.mateStatus = MateStatus::PAIRED_END_RIGHT;
-            auto hitScore = puffaligner.calculateAlignments(*readSubSeq, jointHit, hctr, is_multimapping, false);
+            auto hitScore = puffaligner.calculateAlignments(subseq, jointHit, hctr, is_multimapping, false);
             bool validScore = (hitScore != invalidScore);
             numMappingsDropped += validScore ? 0 : 1;
             auto tid = qidx->getRefId(jointHit.tid);
@@ -2417,8 +2440,8 @@ void processReadsQuasi(
           bool bestHitDecoy = msi.haveOnlyDecoyMappings();
           if (msi.bestScore > invalidScore and !bestHitDecoy) {
             salmon::mapping_utils::filterAndCollectAlignments(jointHits,
-                                                              readSubSeq->length(),
-                                                              readSubSeq->length(),
+                                                              subseq.length(),
+                                                              subseq.length(),
                                                               false, // true for single-end false otherwise
                                                               tryAlign,
                                                               hardFilter,
@@ -2434,8 +2457,8 @@ void processReadsQuasi(
             mapType = (bestHitDecoy) ? salmon::utils::MappingType::DECOY : salmon::utils::MappingType::UNMAPPED;
             if (bestHitDecoy) {
               salmon::mapping_utils::filterAndCollectAlignmentsDecoy(
-                  jointHits, readSubSeq->length(),
-                  readSubSeq->length(),
+                  jointHits, subseq.length(),
+                  subseq.length(),
                   false, // true for single-end false otherwise
                   tryAlign, hardFilter, salmonOpts.scoreExp,
                   salmonOpts.minAlnProb, msi,
@@ -2625,7 +2648,6 @@ void sc_align_read_library(ReadExperimentT& readExp,
   }
 }
 
-
 template <typename AlnT, typename ProtocolT>
 void processReadLibrary(
                         ReadExperimentT& readExp, 
@@ -2660,8 +2682,8 @@ void processReadLibrary(
 
   std::unique_ptr<paired_parser> pairedParserPtr{nullptr};
 
-  /** sequence-specific and GC-fragment bias vectors --- each thread gets it's
-   * own **/
+  // sequence-specific and GC-fragment bias vectors --- each thread gets it's
+  // own
   std::vector<BiasParams> observedBiasParams(numThreads,
                                              BiasParams(salmonOpts.numConditionalGCBins, salmonOpts.numFragGCBins, false));
 
@@ -2685,10 +2707,9 @@ void processReadLibrary(
     pairedParserPtr.reset(new paired_parser(rl.mates1(), rl.mates2(), numThreads, numParsingThreads, miniBatchSize));
     pairedParserPtr->start();
 
-    /*
-    std::vector<std::vector<uint64_t>> uniqueFLDs(numThreads);
-    for (size_t i = 0; i < numThreads; ++i) { uniqueFLDs[i] = std::vector<uint64_t>(100000, 0); }
-    */
+    // std::vector<std::vector<uint64_t>> uniqueFLDs(numThreads);
+    // for (size_t i = 0; i < numThreads; ++i) { uniqueFLDs[i] = std::vector<uint64_t>(100000, 0); }
+    
     auto processFunctor = [&](size_t i, auto* parserPtr, auto* index) {
      if(salmonOpts.qmFileName != "" and i == 0) {
        writeSAMHeader(*index, salmonOpts.qmLog);
@@ -2727,7 +2748,7 @@ void processReadLibrary(
     readExp.dropDecoyTranscripts();
 
     //+++++++++++++++++++++++++++++++++++++++
-    /** GC-fragment bias **/
+    // GC-fragment bias 
     // Set the global distribution based on the sum of local
     // distributions.
     double gcFracFwd{0.0};
@@ -2747,9 +2768,8 @@ void processReadLibrary(
       fw.combineCounts(fwloc);
       rc.combineCounts(rcloc);
 
-      /**
-       * positional biases
-       **/
+      // positional biases
+      
       auto& posBiasesFW = readExp.posBias(salmon::utils::Direction::FORWARD);
       auto& posBiasesRC =
         readExp.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
@@ -2757,12 +2777,12 @@ void processReadLibrary(
         posBiasesFW[i].combine(gcp.posBiasFW[i]);
         posBiasesRC[i].combine(gcp.posBiasRC[i]);
       }
-      /*
-        for (size_t i = 0; i < fwloc.counts.size(); ++i) {
-        fw.counts[i] += fwloc.counts[i];
-        rc.counts[i] += rcloc.counts[i];
-        }
-      */
+     
+        // for (size_t i = 0; i < fwloc.counts.size(); ++i) {
+        // fw.counts[i] += fwloc.counts[i];
+        // rc.counts[i] += rcloc.counts[i];
+        // }
+     
 
       globalMass = salmon::math::logAdd(globalMass, gcp.massFwd);
       globalMass = salmon::math::logAdd(globalMass, gcp.massRC);
@@ -2788,7 +2808,7 @@ void processReadLibrary(
       }
     }
 
-    /** END GC-fragment bias **/
+    // END GC-fragment bias
 
     //+++++++++++++++++++++++++++++++++++++++
 
@@ -2798,6 +2818,7 @@ void processReadLibrary(
 /**
  * Selectively align the reads and write a PAM file out.
  */
+
 template <typename AlnT, typename ProtocolT>
 bool do_sc_align(ReadExperimentT& experiment,
                  SalmonOpts& salmonOpts,

@@ -6,6 +6,7 @@
 
 #include "AlevinOpts.hpp"
 #include "AlevinTypes.hpp"
+#include "SalmonDefaults.hpp"
 #include "pufferfish/itlib/static_vector.hpp"
 
 namespace alevin{

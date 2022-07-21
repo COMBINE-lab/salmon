@@ -40,9 +40,30 @@ namespace alevin {
 
     std::vector<std::string> nts{"A", "T", "C", "G"};
 
+    template <>
+    bool extractSequence<apt::Chromium5V1>(std::string& read, apt::Chromium5V1& pt, std::string& seq) {
+      // the biological sequence comes after the umi in the read
+      return (read.length() > pt.barcodeLength + pt.umiLength) ?
+        (seq.assign(read, pt.umiLength+pt.barcodeLength, read.length()), true) : false;
+    }
+    
+    template <>
+    bool extractSequence<apt::Chromium5V2>(std::string& read, apt::Chromium5V2& pt, std::string& seq) {
+      // the biological sequence comes after the umi in the read
+      return (read.length() > pt.barcodeLength + pt.umiLength) ?
+        (seq.assign(read, pt.umiLength+pt.barcodeLength, read.length()), true) : false;
+    }
 
     template <>
-    struct ReadSeqs* getReadSequence(apt::CITESeq& protocol,
+    bool extractSequence<apt::CustomGeometry>(std::string& read, apt::CustomGeometry& pt, std::string& seq) {
+      // the biological sequence comes after the umi in the read
+      return (read.length() > pt.barcodeLength + pt.umiLength) ?
+        (seq.assign(read, pt.umiLength+pt.barcodeLength, read.length()), true) : false;
+    }
+
+
+    template <>
+    struct ReadSeqs getReadSequence(apt::CITESeq& protocol,
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq){
@@ -50,149 +71,149 @@ namespace alevin {
       subseq.clear();
       subseq = seq2.substr(protocol.featureStart,
                           protocol.featureLength);
-      struct ReadSeqs* readSeqs;
-      readSeqs->seq2 = subseq;
+      struct ReadSeqs readSeqs;
+      readSeqs.seq2 = subseq;
       return readSeqs;
     }
     template <>
-    struct ReadSeqs* getReadSequence(apt::DropSeq& protocol,
+    struct ReadSeqs getReadSequence(apt::DropSeq& protocol,
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq){
       (void)seq;
-      struct ReadSeqs* readSeqs;
-      readSeqs->seq2 = seq2;
+      struct ReadSeqs readSeqs;
+      readSeqs.seq2 = seq2;
       return readSeqs;
     }
     template <>
-    struct ReadSeqs* getReadSequence(apt::Chromium& protocol,
+    struct ReadSeqs getReadSequence(apt::Chromium& protocol,
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq){
       (void)seq;
-      struct ReadSeqs* readSeqs;
-      readSeqs->seq2 = seq2;
+      struct ReadSeqs readSeqs;
+      readSeqs.seq2 = seq2;
       return readSeqs;
     }
     template <>
-    struct ReadSeqs*  getReadSequence(apt::ChromiumV3& protocol,
+    struct ReadSeqs  getReadSequence(apt::ChromiumV3& protocol,
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq){
       (void)seq;
-      struct ReadSeqs* readSeqs;
-      readSeqs->seq2 = seq2;
+      struct ReadSeqs readSeqs;
+      readSeqs.seq2 = seq2;
       return readSeqs;
     }
     template <>
-    struct ReadSeqs*  getReadSequence(apt::Chromium5V1& protocol,
+    struct ReadSeqs  getReadSequence(apt::Chromium5V1& protocol,
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq){
       (void)seq;
-      struct ReadSeqs* readSeqs;
-      std::string& seq1;
+      struct ReadSeqs readSeqs;
+      std::string seq1 = seq; // make wanted seq1 to be set to something
       bool ok = extractSequence(seq, protocol, seq1);
-      readSeqs->seq1 = seq1;
-      readSeqs->seq2 = seq2;
+      readSeqs.seq1 = seq1;
+      readSeqs.seq2 = seq2;
       return readSeqs;
     }
     template <>
-    struct ReadSeqs*  getReadSequence(apt::Chromium5V2& protocol,
+    struct ReadSeqs  getReadSequence(apt::Chromium5V2& protocol,
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq){
       (void)seq;
-      struct ReadSeqs* readSeqs;
-      std::string& seq1;
+      struct ReadSeqs readSeqs;
+      std::string seq1 = seq;
       bool ok = extractSequence(seq, protocol, seq1);
-      readSeqs->seq1 = seq1;
-      readSeqs->seq2 = seq2;
+      readSeqs.seq1 = seq1;
+      readSeqs.seq2 = seq2;
       return readSeqs;
     }
     template <>
-    struct ReadSeqs*  getReadSequence(apt::CELSeq& protocol,
+    struct ReadSeqs  getReadSequence(apt::CELSeq& protocol,
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq){
       (void)seq;
-      struct ReadSeqs* readSeqs;
-      readSeqs->seq2 = seq2;
+      struct ReadSeqs readSeqs;
+      readSeqs.seq2 = seq2;
       return readSeqs;
     }
     template <>
-    struct ReadSeqs*  getReadSequence(apt::CELSeq2& protocol,
+    struct ReadSeqs  getReadSequence(apt::CELSeq2& protocol,
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq){
       (void)seq;
-      struct ReadSeqs* readSeqs;
-      readSeqs->seq2 = seq2;
+      struct ReadSeqs readSeqs;
+      readSeqs.seq2 = seq2;
       return readSeqs;
     }
     template <>
-    struct ReadSeqs*  getReadSequence(apt::QuartzSeq2& protocol,
+    struct ReadSeqs  getReadSequence(apt::QuartzSeq2& protocol,
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq){
       (void)seq;
-      struct ReadSeqs* readSeqs;
-      readSeqs->seq2 = seq2;
+      struct ReadSeqs readSeqs;
+      readSeqs.seq2 = seq2;
       return readSeqs;
     }
     template <>
-    struct ReadSeqs*  getReadSequence(apt::SciSeq3& protocol,
+    struct ReadSeqs  getReadSequence(apt::SciSeq3& protocol,
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq){
       (void)seq;
-      struct ReadSeqs* readSeqs;
-      readSeqs->seq2 = seq2;
+      struct ReadSeqs readSeqs;
+      readSeqs.seq2 = seq2;
       return readSeqs;
     }
     template <>
-    struct ReadSeqs*  getReadSequence(apt::Custom& protocol,
+    struct ReadSeqs  getReadSequence(apt::Custom& protocol,
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq){
       (void)seq;
-      struct ReadSeqs* readSeqs;
-      readSeqs->seq2 = seq2;
+      struct ReadSeqs readSeqs;
+      readSeqs.seq2 = seq2;
       return readSeqs;
     }
     template <>
-    struct ReadSeqs*  getReadSequence(apt::CustomGeometry& protocol,
+    struct ReadSeqs  getReadSequence(apt::CustomGeometry& protocol,
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq){
       bool ok = protocol.read_geo.extract_read(seq, seq2, subseq);
-      struct ReadSeqs* readSeqs;
-      readSeqs->seq2 = subseq;
+      struct ReadSeqs readSeqs;
+      readSeqs.seq2 = subseq;
       if (alevin::defaults::isFivePrimeLibrary) {
-        std::string& seq1;
+        std::string seq1 = seq;
         bool ok2 = extractSequence(seq, protocol, seq1);
-        readSeqs->seq1 = seq1;
+        readSeqs.seq1 = seq1;
       }
       return readSeqs;
     }
     template <>
-    struct ReadSeqs*  getReadSequence(apt::Gemcode& protocol,
+    struct ReadSeqs  getReadSequence(apt::Gemcode& protocol,
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq){
       (void)seq;
-      struct ReadSeqs* readSeqs;
-      readSeqs->seq2 = seq2;
+      struct ReadSeqs readSeqs;
+      readSeqs.seq2 = seq2;
       return readSeqs;
     }
     template <>
-    struct ReadSeqs*  getReadSequence(apt::InDropV2& protocol,
+    struct ReadSeqs  getReadSequence(apt::InDropV2& protocol,
                          std::string& seq,
                          std::string& seq2,
                          std::string& subseq){
       (void)seq2;
-      struct ReadSeqs* readSeqs;
-      readSeqs->seq1 = seq;
+      struct ReadSeqs readSeqs;
+      readSeqs.seq1 = seq;
       return readSeqs;
     }
     // end of read extraction
@@ -551,27 +572,6 @@ namespace alevin {
       } else {
         return false;
       }
-    }
-
-    template <>
-    bool extractSequence<apt::Chromium5V1>(std::string& read, apt::Chromium5V1& pt, std::string& seq) {
-      // the biological sequence comes after the umi in the read
-      return (read.length() > pt.barcodeLength + pt.umiLength) ?
-        (seq.assign(read, pt.umiLength+pt.barcodeLength, read.length()), true) : false;
-    }
-    
-    template <>
-    bool extractSequence<apt::Chromium5V2>(std::string& read, apt::Chromium5V2& pt, std::string& seq) {
-      // the biological sequence comes after the umi in the read
-      return (read.length() > pt.barcodeLength + pt.umiLength) ?
-        (seq.assign(read, pt.umiLength+pt.barcodeLength, read.length()), true) : false;
-    }
-
-    template <>
-    bool extractSequence<apt::CustomGeometry>(std::string& read, apt::CustomGeometry& pt, std::string& seq) {
-      // the biological sequence comes after the umi in the read
-      return (read.length() > pt.barcodeLength + pt.umiLength) ?
-        (seq.assign(read, pt.umiLength+pt.barcodeLength, read.length()), true) : false;
     }
 
 
