@@ -670,84 +670,68 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     std::sort(accepted_hits_left.begin(), accepted_hits_left.end());
     std::sort(accepted_hits_right.begin(), accepted_hits_right.end());
 
-    // merge them together into a sorted list
+    std::vector<SimpleHit> temp;
 
+    // find the set intersection (valid hit pairs)
     std::set_intersection(accepted_hits_left.begin(), accepted_hits_left.end(),
                           accepted_hits_right.begin(), accepted_hits_right.end(),
-                          accepted_hits.begin(), [] (SimpleHit hit1, SimpleHit hit2) {
-                            return (hit1.tid == hit2.tid);
+                          temp.begin(), [] (SimpleHit hit1, SimpleHit hit2) {
+                            pos_first = hit1.pos;
+                            is_fw_first = hit1.is_fw;
+                            hits_first = hit1.num_hits;
+                            score_first = hit1.score;
+                            tid_first = hit1.tid;
+
+                            pos_second = hit2.pos;
+                            is_fw_second = hit2.is_fw;
+                            tid_second = hit2.tid;
+                            score_second = hit2.score;
+                            hits_second = hit2.num_hits;
+
+                            int32_t pos_spacing_max = 1000;
+                            // todo: do this in a better way
+                            // fw read1 should not be to the right of rc read2 
+                            int32_t half_seq_length = pos_spacing_max/2;
+                            int32_t pos_diff = abs(pos_first - pos_second); // difference in position of reads
+
+                            return ((hit1.tid == hit2.tid) and (is_fw_first != is_fw_second) 
+                            and (pos_diff <= pos_spacing_max) and (pos_first < half_seq_length) 
+                            and (pos_second < half_seq_length));
                           });
-    
-    bool first = true;
-    int32_t pos_first;
-    bool is_fw_first;
-    uint32_t tid_first;
-    float score_first;
-    uint32_t hits_first;
 
-    int32_t pos_second;
-    bool is_fw_second;
-    uint32_t tid_second;
-    float score_second;
-    uint32_t hits_second;
-    int32_t pos_spacing_max = 1000;
-    // todo: do this in a better way
-    int32_t half_seq_length = pos_spacing_max/2;
+    // everything should be sorted just fine now but
+    // each pair should be made into a new singular hit with new PairingStatus
+    size_t i = 0;
 
-    // walk through accepted_hits to find valid hit pairs
-    for (auto& hit : accepted_hits) {
-      if (first) { // looking at first read in the pair
-        pos_first = hit.pos;
-        is_fw_first = hit.is_fw;
-        hits_first = hit.num_hits;
-        score_first = hit.score;
-        tid_first = hit.tid;
+    while (i < temp.size() - 1) {
+      hit1 = temp[i];
+      hit2 = temp[i + 1];
 
-        first = false;
-      } else { // looking at second read in the pair
-        pos_second = hit.pos;
-        is_fw_second = hit.is_fw;
-        tid_second = hit.tid;
-        score_second = hit.score;
-        hits_second = hit.num_hits;
+      pos_first = hit1.pos;
+      is_fw_first = hit1.is_fw;
+      hits_first = hit1.num_hits;
+      score_first = hit1.score;
+      tid_first = hit1.tid;
 
-        // this should always be true now
-        if (tid_first == tid_second) { // prev and curr on same transcript
-          first = false;
+      pos_second = hit2.pos;
+      is_fw_second = hit2.is_fw;
+      tid_second = hit2.tid;
+      score_second = hit2.score;
+      hits_second = hit2.num_hits;
 
-          // calculate difference in position
-          int32_t pos_diff = abs(pos_first - pos_second);
-
-          // left hit should be in a different ori than right hit
-          // should be <1000 from each other in position
-          // leftmost one should be fw
-          if ((is_fw_first != is_fw_second) or (pos_diff <= pos_spacing_max)
-              or (pos_first < half_seq_length and pos_second < half_seq_length)) {
-
-                SimpleHit hit_new;
-                // not the segfault
-                if (is_fw_first) {
-                  hit_new = _sketchHitInfo.get_fr_hit(pos_first, score_first, hits_first, tid_first);
-                  accepted_hits.emplace_back(hit_new);
-
-                } else {
-                  hit_new = _sketchHitInfo.get_rf_hit(pos_second, score_second, hits_second, 
-                                                                tid_second);
-                  accepted_hits.emplace_back(hit_new);
-
-                }
-            } 
-        }   
-          // } else { // curr on new transcript
-          //   seen_first = true;
-          //   pos_first = hit.pos;
-          //   hits_first = hit.num_hits;
-          //   score_first = hit.score;
-          //   is_fw_first = hit.is_fw;
-          //   tid_first = hit.tid;
-          // }
+      SimpleHit hit_new;
+      if (is_fw_first) {
+        hit_new = _sketchHitInfo.get_fr_hit(pos_first, score_first, hits_first, tid_first);
+        accepted_hits.emplace_back(hit_new);
+      } else {
+        hit_new = _sketchHitInfo.get_rf_hit(pos_second, score_second, hits_second, 
+                                                      tid_second);
+        accepted_hits.emplace_back(hit_new);
       }
+
+      i += 2;
     }
+
     return true;
   };
 
@@ -1353,6 +1337,7 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
   double maxZeroFrac{0.0};
 
   // filter jointAlignments to remove invalid hit pairs
+  // efficiency of O(N^2) :( -----> find better way 
   auto filter_joint_alignments = [] (std::vector<QuasiAlignment>& jointAlignments) -> bool {
     // requires: jointAlignments is already sorted
 
@@ -1411,8 +1396,8 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
               // hits are invalid; remove
               jointAlignments.erase(start + i); // remove hit1
               jointAlignments.erase(start + i); // remove hit2
+              
               // don't update i in this case
-
         } else {
           // hits are valid; remove and replace with new paired hit
           jointAlignments.erase(start + i); // remove hit1
