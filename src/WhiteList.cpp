@@ -248,7 +248,7 @@ namespace alevin {
           }
         }
         predictionStream.close();
-      }//end-if dumpfeatures
+      } //end-if dumpfeatures
 
       return true;
     }

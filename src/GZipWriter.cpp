@@ -1937,10 +1937,10 @@ GZipWriter::writeMetaAlevin<apt::ChromiumV3>(const AlevinOpts<apt::ChromiumV3>& 
                                              boost::filesystem::path aux_dir);
 template bool
 GZipWriter::writeMetaAlevin<apt::Chromium5V1>(const AlevinOpts<apt::Chromium5V1>& opts,
-                                             boost::filesystem::path aux_dir);
+                                              boost::filesystem::path aux_dir);
 template bool
 GZipWriter::writeMetaAlevin<apt::Chromium5V2>(const AlevinOpts<apt::Chromium5V2>& opts,
-                                             boost::filesystem::path aux_dir);
+                                              boost::filesystem::path aux_dir);
 template bool
 GZipWriter::writeMetaAlevin<apt::CELSeq>(const AlevinOpts<apt::CELSeq>& opts,
                                          boost::filesystem::path aux_dir);

@@ -272,7 +272,6 @@ int salmonHashQuantify(AlevinOpts<ProtocolT>& aopt,
   return 0;
 }
 
-
 template
 int salmonHashQuantify(AlevinOpts<apt::Chromium>& aopt,
                        bfs::path& outputDirectory,

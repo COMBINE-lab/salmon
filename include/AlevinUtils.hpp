@@ -93,9 +93,9 @@ namespace alevin{
 
     template <typename ProtocolT>
     struct ReadSeqs getReadSequence(ProtocolT& pt,
-                         std::string& seq,
-                         std::string& seq2,
-                         std::string& subseq);
+                                    std::string& seq,
+                                    std::string& seq2,
+                                    std::string& subseq);
 
     template <typename ProtocolT>
     bool extractBarcode(std::string& read, std::string& read2, ProtocolT& pt, std::string& bc);

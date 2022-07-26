@@ -431,7 +431,6 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
     lowRegionNumBarcodes = fractionTrueBarcodes;
   }
 
-
   // ignoring all the frequencies having same frequency as cutoff
   // to imitate stable sort
   aopt.kneeCutoff = topxBarcodes;

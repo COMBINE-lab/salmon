@@ -160,11 +160,12 @@ namespace alevin{
 
     // v1.1
     struct Chromium5V1 : Rule{
+      //read1 has seq length of 26 bp
       Chromium5V1(): Rule(16, 10, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_BOTH){}
     };
     
     struct Chromium5V2 : Rule{
-      //read1 has seq length 26 bp
+      //read1 has seq length of 26 bp
       Chromium5V2(): Rule(16, 10, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_BOTH){}
     };
 

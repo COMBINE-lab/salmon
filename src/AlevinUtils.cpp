@@ -113,11 +113,11 @@ namespace alevin {
                          std::string& subseq){
       (void)seq;
       struct ReadSeqs readSeqs;
-      if (alevin::defaults::isFivePrimeLibrary) {
+      // if (alevin::defaults::isFivePrimeLibrary) {
         std::string seq1 = seq; // make wanted seq1 to be set to something
         bool ok = extractSequence(seq, protocol, seq1);
         readSeqs.seq1 = seq1;
-      }
+      // }
       readSeqs.seq2 = seq2;
       return readSeqs;
     }

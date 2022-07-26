@@ -1270,7 +1270,7 @@ bool CollapsedCellOptimizer::optimize(EqMapT& fullEqMap,
     } else { //end-else not initUniform
       priorAlphas = std::vector<std::vector<double>> (numCells, std::vector<double>(numGenes, 1e-2) );
     }
-  }//end-if useVBEM
+  } //end-if useVBEM
 
   std::vector<std::thread> workerThreads;
   for (size_t tn = 0; tn < numWorkerThreads; ++tn) {
