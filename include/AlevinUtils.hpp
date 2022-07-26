@@ -55,8 +55,8 @@ namespace alevin{
     constexpr uint32_t uint32_max = std::numeric_limits<uint32_t>::max();
 
     struct ReadSeqs {
-      std::string seq1{nullptr}; // valid alignable part of read 1
-      std::string seq2{nullptr}; // valid alignable part of read 2
+      std::string seq1; // valid alignable part of read 1
+      std::string seq2; // valid alignable part of read 2
     };
 
     void getIndelNeighbors(

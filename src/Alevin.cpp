@@ -1026,6 +1026,8 @@ salmon-based processing of single-cell RNA-seq data.
     bool citeseq = vm["citeseq"].as<bool>();
     bool chromV3 = vm["chromiumV3"].as<bool>();
     bool chrom = vm["chromium"].as<bool>();
+    bool chrom5V1 = vm["chromium5V1"].as<bool>();
+    bool chrom5V2 = vm["chromium5V2"].as<bool>();
     bool gemcode = vm["gemcode"].as<bool>();
     bool celseq = vm["celseq"].as<bool>();
     bool celseq2 = vm["celseq2"].as<bool>();
@@ -1046,6 +1048,8 @@ salmon-based processing of single-cell RNA-seq data.
     if (citeseq) { validate_num_protocols += 1; noTgMap = true;}
     if (chromV3) validate_num_protocols += 1;
     if (chrom) validate_num_protocols += 1;
+    if (chrom5V1) validate_num_protocols += 1;
+    if (chrom5V2) validate_num_protocols += 1;
     if (gemcode) validate_num_protocols += 1;
     if (celseq) validate_num_protocols += 1;
     if (celseq2) validate_num_protocols += 1;
@@ -1126,6 +1130,20 @@ salmon-based processing of single-cell RNA-seq data.
     else if(chrom){
       AlevinOpts<apt::Chromium> aopt;
       //aopt.jointLog->warn("Using 10x v2 Setting for Alevin");
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString, noTgMap,
+                       barcodeFiles, readFiles, salmonIndex);
+    }
+    else if(chrom5V1){
+      AlevinOpts<apt::Chromium5V1> aopt;
+      //aopt.jointLog->warn("Using 10x 5' v1.1 Setting for Alevin");
+      initiatePipeline(aopt, sopt, orderedOptions,
+                       vm, commentString, noTgMap,
+                       barcodeFiles, readFiles, salmonIndex);
+    }
+    else if(chrom5V2){
+      AlevinOpts<apt::Chromium5V2> aopt;
+      //aopt.jointLog->warn("Using 10x 5' v2 Setting for Alevin");
       initiatePipeline(aopt, sopt, orderedOptions,
                        vm, commentString, noTgMap,
                        barcodeFiles, readFiles, salmonIndex);

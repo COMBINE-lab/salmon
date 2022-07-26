@@ -588,13 +588,11 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                        PairingStatus::UNPAIRED_RIGHT};
     }
 
-    // const to ensure _sketchHitInfo is not modified
-    inline SimpleHit get_fr_hit(int32_t pos, float score, uint32_t num_hits, uint32_t tid) const {
+    inline SimpleHit get_fr_hit(int32_t pos, float score, uint32_t num_hits, uint32_t tid) {
       return SimpleHit{true, pos, score, num_hits, tid, PairingStatus::PAIRED_FR};
     }
 
-    // const to ensure _sketchHitInfo is not modified
-    inline SimpleHit get_rf_hit(int32_t pos, float score, uint32_t num_hits, uint32_t tid) const {
+    inline SimpleHit get_rf_hit(int32_t pos, float score, uint32_t num_hits, uint32_t tid) {
       return SimpleHit{false, pos, score, num_hits, tid, PairingStatus::PAIRED_RF};
     }
 
@@ -631,13 +629,11 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
   };
 
-  SketchHitInfo _sketchHitInfo;
-
   // merge accepted hit lists from left read and right read of a read pair
   // use for 5' libraries where both reads contain biological information
   // fills in accepted_hits
 
-  auto merge_accepted_hits = [_sketchHitInfo] (std::vector<SimpleHit>& accepted_hits_left, 
+  auto merge_accepted_hits = [] (std::vector<SimpleHit>& accepted_hits_left, 
                           std::vector<SimpleHit>& accepted_hits_right, 
                           std::vector<SimpleHit>& accepted_hits) -> bool {
 
@@ -649,18 +645,18 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     // if accepted_hits_right is empty
     // accepted_hits_left becomes accepted_hits
     else if (accepted_hits_right.size() == 0) {
-      for (auto& simple_hit_left : accepted_hits_left) {
-        accepted_hits.emplace_back(simple_hit_left);
-      }
+      // for (auto& hit : accepted_hits_left) {
+      //   accepted_hits.emplace_back(hit);
+      // }
       return true;
     }
 
     // if accepted_hits_left is empty
     // accepted_hits_right becomes accepted_hits
     else if (accepted_hits_left.size() == 0) {
-      for (auto& simple_hit_right : accepted_hits_right) {
-        accepted_hits.emplace_back(simple_hit_right);
-      }
+      // for (auto& hit : accepted_hits_right) {
+      //   accepted_hits.emplace_back(hit);
+      // }
       return true;
     }
 
@@ -670,68 +666,35 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     std::sort(accepted_hits_left.begin(), accepted_hits_left.end());
     std::sort(accepted_hits_right.begin(), accepted_hits_right.end());
 
-    std::vector<SimpleHit> temp;
-
+    // std::vector<SimpleHit> temp;
+    // temp.clear();
     // find the set intersection (valid hit pairs)
     std::set_intersection(accepted_hits_left.begin(), accepted_hits_left.end(),
                           accepted_hits_right.begin(), accepted_hits_right.end(),
-                          temp.begin(), [] (SimpleHit hit1, SimpleHit hit2) {
-                            pos_first = hit1.pos;
-                            is_fw_first = hit1.is_fw;
-                            hits_first = hit1.num_hits;
-                            score_first = hit1.score;
-                            tid_first = hit1.tid;
+                          std::back_inserter(accepted_hits), [] (SimpleHit hit1, SimpleHit hit2) {
 
-                            pos_second = hit2.pos;
-                            is_fw_second = hit2.is_fw;
-                            tid_second = hit2.tid;
-                            score_second = hit2.score;
-                            hits_second = hit2.num_hits;
+                          int32_t pos_spacing_max = 1000;
+                          // todo: do this in a better way
+                          // fw read1 should not be to the right of rc read2 
+                          // int32_t half_seq_length = pos_spacing_max/2;
+                          int32_t pos_diff = abs(hit1.pos - hit2.pos); // difference in position of reads
 
-                            int32_t pos_spacing_max = 1000;
-                            // todo: do this in a better way
-                            // fw read1 should not be to the right of rc read2 
-                            int32_t half_seq_length = pos_spacing_max/2;
-                            int32_t pos_diff = abs(pos_first - pos_second); // difference in position of reads
+                          bool is_hit_pair = ((hit1.tid == hit2.tid) and (hit1.is_fw != hit2.is_fw)
+                          and (pos_diff <= pos_spacing_max)); // and (hit1.pos < half_seq_length) 
+                          // and (hit2.pos < half_seq_length));
 
-                            return ((hit1.tid == hit2.tid) and (is_fw_first != is_fw_second) 
-                            and (pos_diff <= pos_spacing_max) and (pos_first < half_seq_length) 
-                            and (pos_second < half_seq_length));
+                          if (is_hit_pair) {
+                            if (hit1.is_fw) {
+                              hit1 = SimpleHit{true, hit1.pos, hit1.score, hit1.num_hits, 
+                              hit1.tid, PairingStatus::PAIRED_FR};
+                            } else {
+                              hit1 = SimpleHit{false, hit1.pos, hit1.score, hit1.num_hits, 
+                              hit1.tid, PairingStatus::PAIRED_RF};
+                            }
+                          }
+
+                          return is_hit_pair;
                           });
-
-    // everything should be sorted just fine now but
-    // each pair should be made into a new singular hit with new PairingStatus
-    size_t i = 0;
-
-    while (i < temp.size() - 1) {
-      hit1 = temp[i];
-      hit2 = temp[i + 1];
-
-      pos_first = hit1.pos;
-      is_fw_first = hit1.is_fw;
-      hits_first = hit1.num_hits;
-      score_first = hit1.score;
-      tid_first = hit1.tid;
-
-      pos_second = hit2.pos;
-      is_fw_second = hit2.is_fw;
-      tid_second = hit2.tid;
-      score_second = hit2.score;
-      hits_second = hit2.num_hits;
-
-      SimpleHit hit_new;
-      if (is_fw_first) {
-        hit_new = _sketchHitInfo.get_fr_hit(pos_first, score_first, hits_first, tid_first);
-        accepted_hits.emplace_back(hit_new);
-      } else {
-        hit_new = _sketchHitInfo.get_rf_hit(pos_second, score_second, hits_second, 
-                                                      tid_second);
-        accepted_hits.emplace_back(hit_new);
-      }
-
-      i += 2;
-    }
-
     return true;
   };
 
@@ -805,11 +768,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
       auto& jointHitGroup = structureVec[i];
       jointHitGroup.clearAlignments();
       auto& jointAlignments= jointHitGroup.alignments();
-
-      hits.clear();
-      jointHits.clear();
-      memCollector.clear();
-      hit_map.clear(); 
+ 
       accepted_hits_left.clear();
       accepted_hits_right.clear();
       accepted_hits.clear();
@@ -866,18 +825,32 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
               bool rh = false;
               int32_t signed_rl; // signed read length
               readSubSeq = aut::getReadSequence(localProtocol, rp.first.seq, rp.second.seq, readBuffer);
+              // salmonOpts.jointLog->error("seq1: ");
+              // salmonOpts.jointLog->error(readSubSeq.seq1);
+              // salmonOpts.jointLog->flush();
+              // salmonOpts.jointLog->error("seq2: ");
+              // salmonOpts.jointLog->error(readSubSeq.seq2);
+              // salmonOpts.jointLog->flush();
+
+              // salmonOpts.jointLog->error(readsToUse == ReadsToUse::USE_BOTH);
+              // salmonOpts.jointLog->flush();
+
+              //isFivePrimeLibrary (and other flags) don't turn on
 
               for (uint32_t read_num = 0; read_num < 2; read_num++) {
                 // run twice, once for left read and once for right read
                 // 3' libraries ignore left read, 5' libraries use left read
 
+                hits.clear();
+                jointHits.clear();
+                memCollector.clear();
+                hit_map.clear();
+
                 if (readsToUse == ReadsToUse::USE_BOTH) {
                   // 5' library
 
                   if (read_num == 0) {
-                    rh = tooShortRight
-                        ? false
-                        : memCollector.get_raw_hits_sketch(readSubSeq.seq1,
+                    rh = memCollector.get_raw_hits_sketch(readSubSeq.seq1,
                                                             qc,
                                                             true, // isLeft
                                                             false // verbose
@@ -900,9 +873,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
                   read_num++; // skip second read, because only one contains biological information
                   if (readsToUse == ReadsToUse::USE_FIRST) {
-                    rh = tooShortRight
-                          ? false
-                          : memCollector.get_raw_hits_sketch(readSubSeq.seq1,
+                    rh = memCollector.get_raw_hits_sketch(readSubSeq.seq1,
                                                               qc,
                                                               true, // isLeft
                                                               false // verbose
@@ -1009,12 +980,10 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
                   bool _discard = false;
                   auto mao_first_pass = max_occ_default - 1;
-                  bool early_stop = collect_mappings_from_hits(raw_hits, prev_read_pos, mao_first_pass, _discard);
+                  // early_stop = true if collect_mappings_from_hits = true
+                  collect_mappings_from_hits(raw_hits, prev_read_pos, mao_first_pass, _discard);
 
-                  if (early_stop) {
-                    salmonOpts.jointLog->error( "collect_mappings_from_hits stopped early.");
-                    salmonOpts.jointLog->flush();
-                  }
+                  
 
                   // If our default threshold was too stringent, then fallback to a more liberal
                   // threshold and look up the k-mers that occur the least frequently.
@@ -1023,12 +992,9 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                   if (attempt_occ_recover and (min_occ >= max_occ_default) and (min_occ < max_occ_recover)) {
                     prev_read_pos = -1;
                     uint64_t max_allowed_occ = min_occ;
-                    early_stop = collect_mappings_from_hits(raw_hits, prev_read_pos, max_allowed_occ, had_alt_max_occ);
+                    // early_stop = true if collect_mappings_from_hits = true
+                    collect_mappings_from_hits(raw_hits, prev_read_pos, max_allowed_occ, had_alt_max_occ);
 
-                    if (early_stop) {
-                      salmonOpts.jointLog->error( "collect_mappings_from_hits stopped early.");
-                      salmonOpts.jointLog->flush();
-                  }
                   }
 
                   uint32_t best_alt_hits = 0;
@@ -1116,6 +1082,11 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         spdlog::drop_all();
         std::exit(1);
       }
+
+      // bool both_have_hits{false};
+      // if ((accepted_hits_left.size() > 0) and (accepted_hits_right.size() > 0)) {
+      //   both_have_hits = true;
+      // }
       
       // merge accepted hit lists for when using 5' library
       if (readsToUse == ReadsToUse::USE_BOTH) {
@@ -1128,6 +1099,13 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
           std::exit(1);
         }
       }
+      // if (both_have_hits) { 
+        
+      // salmonOpts.jointLog->error(accepted_hits_left.size() > 0 and accepted_hits_right.size() > 0);
+      // salmonOpts.jointLog->flush();
+      // }
+
+      
 
       //////////////////////////////////////////////////////////////
       // Consider a read as too short if the ``non-barcode'' end is too short
@@ -1337,82 +1315,115 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
   double maxZeroFrac{0.0};
 
   // filter jointAlignments to remove invalid hit pairs
-  // efficiency of O(N^2) :( -----> find better way 
-  auto filter_joint_alignments = [] (std::vector<QuasiAlignment>& jointAlignments) -> bool {
-    // requires: jointAlignments is already sorted
+  auto merge_joint_alignments = [] (std::vector<QuasiAlignment>& jointAlignmentsLeft,
+                                    std::vector<QuasiAlignment>& jointAlignmentsRight,
+                                    std::vector<QuasiAlignment>& jointAlignments) -> bool {
 
-    if (jointAlignments.size() == 0) return true;
-
-    int32_t pos_first;
-    bool is_fw_first;
-    // float score_first;
-    uint32_t tid_first;
-    uint32_t is_paired_first;
-    uint32_t read_len_first;
-    uint32_t frag_len_first;
-    std::string cigar_first;
-
-    int32_t pos_second;
-    bool is_fw_second;
-    uint32_t tid_second;
-    // float score_second;
-    uint32_t read_len_second;
-
-    int32_t pos_spacing_max = 1000;
-    // todo: do this in a better way
-    int32_t half_seq_length = pos_spacing_max/2;
-    QuasiAlignment hit2;
-    QuasiAlignment hit1;
-    QuasiAlignment hit_new;
-    auto start = jointAlignments.begin();
-
-    size_t i = 0;
-    // walk through jointAlignments to find invalid hit pairs
-    while (i < jointAlignments.size() - 1) { // i cannot be last index
-      hit1 = jointAlignments[i];
-      hit2 = jointAlignments[i+1];
-
-      pos_first = hit1.pos;
-      is_fw_first = hit1.fwd;
-      tid_first = hit1.tid;
-      read_len_first = hit1.readLen;
-      frag_len_first = hit1.fragLen;
-      cigar_first = hit1.cigar;
-
-      pos_second = hit2.pos;
-      is_fw_second = hit2.fwd;
-      tid_second = hit2.tid;
-
-      if (tid_first == tid_second) { 
-        // calculate difference in position
-        int32_t pos_diff = abs(pos_first - pos_second);
-
-        // left hit should be in a different ori than right hit
-        // should be <1000 from each other in position
-        // leftmost one should be fw
-        if ((is_fw_first == is_fw_second) or (pos_diff > pos_spacing_max)
-            or (pos_first > half_seq_length or pos_second > half_seq_length)) {
-
-              // hits are invalid; remove
-              jointAlignments.erase(start + i); // remove hit1
-              jointAlignments.erase(start + i); // remove hit2
-              
-              // don't update i in this case
-        } else {
-          // hits are valid; remove and replace with new paired hit
-          jointAlignments.erase(start + i); // remove hit1
-          jointAlignments.erase(start + i); // remove hit2
-          
-          hit_new = QuasiAlignment(tid_first, pos_first, is_fw_first, read_len_first, 
-                                    cigar_first, frag_len_first, true); //isPaired = true
-          jointAlignments.insert(start + i, hit_new); // insert where hit 1 was (we are currently on hit 2)
-
-          i++; // move on to next alignment
-        }
-      } else { //tid1 != tid2
-        i++; // move on to next alignment
-      }
+    // if accepted_hits_left and accepted_hits_right is empty
+    // nothing gets added to accepted_hits
+    if (jointAlignmentsLeft.size() == 0 and jointAlignmentsRight.size() == 0) {
+      return true;
     }
+    // if accepted_hits_right is empty
+    // accepted_hits_left becomes accepted_hits
+    else if (jointAlignmentsRight.size() == 0) {
+      // for (auto& hit : jointAlignmentsLeft) {
+      //   jointAlignments.emplace_back(hit);
+      // }
+      return true;
+    }
+
+    // if accepted_hits_left is empty
+    // accepted_hits_right becomes accepted_hits
+    else if (jointAlignmentsLeft.size() == 0) {
+      // for (auto& hit : jointAlignmentsRight) {
+      //   jointAlignments.emplace_back(hit);
+      // }
+      return true;
+    }
+
+    // compare function for sort
+    auto cmp_quasi = [] (QuasiAlignment hit1, QuasiAlignment hit2) -> bool {
+      if (hit1.tid != hit2.tid) {
+        if (hit1.tid < hit2.tid) return true;
+        else return false;
+      } else {
+        if (hit1.fwd) return true;
+        else return false;
+      }
+    };
+
+    // jointAlignments contains alignments as if they were single mapped
+    // jointAlignments needs to be sorted and filtered
+    // use lambda compare function to sort
+    std::sort(jointAlignmentsLeft.begin(), jointAlignmentsLeft.end(), cmp_quasi);
+    std::sort(jointAlignmentsRight.begin(), jointAlignmentsRight.end(), cmp_quasi);
+
+    std::set_intersection(jointAlignmentsLeft.begin(), jointAlignmentsLeft.end(),
+                          jointAlignmentsRight.begin(), jointAlignmentsRight.end(),
+                          std::back_inserter(jointAlignments), [] 
+                          (QuasiAlignment hit1, QuasiAlignment hit2) {
+
+                          int32_t pos_spacing_max = 1000;
+                          // todo: do this in a better way
+                          // fw read1 should not be to the right of rc read2 
+                          int32_t half_seq_length = pos_spacing_max/2;
+                          int32_t pos_diff = abs(hit1.pos - hit2.pos); // difference in position of reads
+
+                          bool is_hit_pair = ((hit1.tid == hit2.tid) and (hit1.fwd != hit2.fwd)
+                          and (pos_diff <= pos_spacing_max) and (hit1.pos < half_seq_length) 
+                          and (hit2.pos < half_seq_length));
+
+                          if (is_hit_pair) {
+                            if (hit1.fwd) {
+                              hit1 = QuasiAlignment(hit1.tid, hit1.pos, hit1.fwd, hit1.readLen, 
+                                                    hit1.cigar, hit1.fragLen, true); //isPaired = true
+                            } else {
+                              hit1 =  QuasiAlignment(hit2.tid, hit2.pos, hit2.fwd, hit2.readLen, 
+                                                     hit2.cigar, hit2.fragLen, true); //isPaired = true
+                            }
+                          }
+
+                          return is_hit_pair;
+                          });
+
+    // std::vector<QuasiAlignment> temp;
+    // int32_t pos_spacing_max = 1000;
+    // // todo: do this in a better way
+    // int32_t half_seq_length = pos_spacing_max/2;
+    // size_t i = 0;
+
+    // size_t jointAlignmentsSize = jointAlignments.size();
+    // while (i < jointAlignmentsSize - 1) {
+    //   QuasiAlignment hit1 = jointAlignments[i];
+    //   QuasiAlignment hit2 = jointAlignments[i + 1];
+    //   QuasiAlignment hit_new;
+    //   int32_t pos_diff = abs(hit1.pos - hit2.pos);
+
+    //   if ((hit1.tid == hit2.tid) and (hit1.fwd != hit2.fwd) and (pos_diff < pos_spacing_max)
+    //       and (hit1.pos < half_seq_length) and (hit2.pos < half_seq_length)) {
+    //     if (hit1.fwd) {
+    //       hit_new = QuasiAlignment(hit1.tid, hit1.pos, hit1.fwd, hit1.readLen, 
+    //                               hit1.cigar, hit1.fragLen, true); //isPaired = true
+    //       temp.emplace_back(hit_new);
+    //     } else {
+    //       hit_new = QuasiAlignment(hit2.tid, hit2.pos, hit2.fwd, hit2.readLen, 
+    //                               hit2.cigar, hit2.fragLen, true); //isPaired = true
+    //       temp.emplace_back(hit_new);
+    //     }
+    //     i += 2;
+    //   } else {
+    //     i += 1;
+    //   }
+    // }
+    // jointAlignments.clear();
+    // size_t tempSize = temp.size();
+    // while (tempSize > 0) {
+    //   QuasiAlignment hit = temp[tempSize-1];
+    //   temp.pop_back();
+    //   jointAlignments.emplace_back(hit);
+    //   tempSize--;
+    // }
     return true;
   };
 
@@ -1453,8 +1464,8 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
   pufferfish::util::CachedVectorMap<size_t, std::vector<pufferfish::util::MemCluster>, std::hash<size_t>> hits;
   std::vector<pufferfish::util::MemCluster> recoveredHits;
-  std::vector<pufferfish::util::JointMems> jointHitsLeft;
-  std::vector<pufferfish::util::JointMems> jointHitsRight;
+  // std::vector<pufferfish::util::JointMems> jointHitsLeft;
+  // std::vector<pufferfish::util::JointMems> jointHitsRight;
   std::vector<pufferfish::util::JointMems> jointHits;
   PairedAlignmentFormatter<IndexT*> formatter(qidx);
   pufferfish::util::QueryCache qc;
@@ -1535,21 +1546,18 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
       bool tooShortRight = (readLenRight < (minK+alevinOpts.trimRight));
       //localUpperBoundHits = 0;
-      auto& jointHitGroup = structureVec[i]; // auto = QuasiAlignment (FragT)
+      auto& jointHitGroup = structureVec[i]; 
       jointHitGroup.clearAlignments();
       auto& jointAlignments = jointHitGroup.alignments();
+      std::vector<QuasiAlignment> jointAlignmentsLeft;
+      std::vector<QuasiAlignment> jointAlignmentsRight;
 
-      hits.clear();
-      jointHitsLeft.clear();
-      jointHitsRight.clear();
-      jointHits.clear();
-      memCollector.clear();
       //jointAlignments.clear();
       // readSubSeq = nullptr;//.clear();
       mapType = salmon::utils::MappingType::UNMAPPED;
       uint32_t read_num;
-      bool left_empty = false; // is jointHitsLeft is empty
-      bool right_empty = false; // is jointHitsRight is empty
+      // bool left_empty = false; // is jointHitsLeft is empty
+      // bool right_empty = false; // is jointHitsRight is empty
 
       //////////////////////////////////////////////////////////////
       // extracting barcodes
@@ -1590,7 +1598,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           bool umi_ok = aut::extractUMI(rp.first.seq, rp.second.seq, localProtocol, umi);
           if ( !umi_ok ) {
             smallSeqs += 1;
-            nSeqs += 1;
           } else {
             alevin::types::AlevinUMIKmer umiIdx;
             bool isUmiIdxOk = umiIdx.fromChars(umi);
@@ -1617,35 +1624,49 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                 // run twice, once for left read and once for right read
                 // 3' libraries ignore left read, 5' libraries use left read
 
-                // the mate is just the other read
-                // the mateStatus is the status of the mate
+                jointHits.clear();
+                hits.clear();
+                memCollector.clear();
+                jointAlignmentsLeft.clear();
+                jointAlignmentsRight.clear();
+                
 
                 if (readsToUse == ReadsToUse::USE_BOTH) {
                   // 5' library
                   if (read_num == 0) { // left read
                     signed_rl = readSubSeq.seq1.length();
+                    auto rh = tooShortRight ? false
+                                      : memCollector(readSubSeq.seq1, qc,
+                                                     true, // isLeft
+                                                     false // verbose
+                                        );
                     memCollector.findChains(
                         readSubSeq.seq1, hits, salmonOpts.fragLenDistMax,
-                        MateStatus::PAIRED_END_RIGHT,
-                        useChainingHeuristic, // heuristic chaining
-                        true,                 // isLeft
-                        false                 // verbose
-                    );
-                    pufferfish::util::joinReadsAndFilterSingle(
-                        hits, jointHitsLeft, signed_rl,
-                        memCollector.getConsensusFraction());
-
-                  } else { // right read
-                    signed_rl = readSubSeq.seq2.length();
-                    memCollector.findChains(
-                        readSubSeq.seq2, hits, salmonOpts.fragLenDistMax,
                         MateStatus::PAIRED_END_LEFT,
                         useChainingHeuristic, // heuristic chaining
                         true,                 // isLeft
                         false                 // verbose
                     );
                     pufferfish::util::joinReadsAndFilterSingle(
-                        hits, jointHitsRight, signed_rl,
+                        hits, jointHits, signed_rl,
+                        memCollector.getConsensusFraction());
+
+                  } else { // right read
+                    signed_rl = readSubSeq.seq2.length();
+                    auto rh = tooShortRight ? false
+                                      : memCollector(readSubSeq.seq2, qc,
+                                                     true, // isLeft
+                                                     false // verbose
+                                        );
+                    memCollector.findChains(
+                        readSubSeq.seq2, hits, salmonOpts.fragLenDistMax,
+                        MateStatus::PAIRED_END_RIGHT,
+                        useChainingHeuristic, // heuristic chaining
+                        true,                 // isLeft
+                        false                 // verbose
+                    );
+                    pufferfish::util::joinReadsAndFilterSingle(
+                        hits, jointHits, signed_rl,
                         memCollector.getConsensusFraction());
                   }
 
@@ -1655,9 +1676,14 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                   if (readsToUse == ReadsToUse::USE_FIRST) { 
                     // biological info is on read 1
                     signed_rl = readSubSeq.seq1.length();
+                    auto rh = tooShortRight ? false
+                                      : memCollector(readSubSeq.seq1, qc,
+                                                     true, // isLeft
+                                                     false // verbose
+                                        );
                     memCollector.findChains(
                         readSubSeq.seq1, hits, salmonOpts.fragLenDistMax,
-                        MateStatus::PAIRED_END_RIGHT,
+                        MateStatus::PAIRED_END_LEFT,
                         useChainingHeuristic, // heuristic chaining
                         true,                 // isLeft
                         false                 // verbose
@@ -1669,198 +1695,229 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                   } else { 
                     // biological info is on read 2
                     signed_rl = readSubSeq.seq2.length();
+                    auto rh = tooShortRight ? false
+                                      : memCollector(readSubSeq.seq2, qc,
+                                                     true, // isLeft
+                                                     false // verbose
+                                        );
                     memCollector.findChains(
                         readSubSeq.seq2, hits, salmonOpts.fragLenDistMax,
-                        MateStatus::PAIRED_END_LEFT,
+                        MateStatus::PAIRED_END_RIGHT, // i swapped this
                         useChainingHeuristic, // heuristic chaining
                         true,                 // isLeft
                         false                 // verbose
                     );
+                    
                     pufferfish::util::joinReadsAndFilterSingle(
                         hits, jointHits, signed_rl,
                         memCollector.getConsensusFraction());
                   }
                   
                 }
-              } // DONE: for (uint32_t read_num = 0; read_num < 2; read_num++)
-
-              // gather up hits1 and hits2 and merge them together here
-              // and then that will become jointHits
-              // still need to do checks for valid pairs later
-
-              if (readsToUse == ReadsToUse::USE_BOTH) {
-                if (jointHitsLeft.size() > 0) left_empty = true;
-                if (jointHitsRight.size() > 0) right_empty = true;
-                for (auto& jointHit : jointHitsLeft) {
-                  jointHits.emplace_back(jointHit);
-                }
-                for (auto& jointHit : jointHitsRight) {
-                  jointHits.emplace_back(jointHit);
-                }
-              }
               
 
-              // jointHits is the initial mappings from chaining
-              // don't have alignment scores, just candidate positions
+                // gather up hits1 and hits2 and merge them together here
+                // and then that will become jointHits
+                // still need to do checks for valid pairs later
 
-              // If the read mapped to > maxReadOccs places, discard it
-              if (jointHits.size() > salmonOpts.maxReadOccs) {
-                jointHitGroup.clearAlignments();
-              }
+                // if (readsToUse == ReadsToUse::USE_BOTH) {
+                //   if (jointHitsLeft.size() == 0) left_empty = true;
+                //   if (jointHitsRight.size() == 0) right_empty = true;
+                //   for (auto& jointHit : jointHitsLeft) {
+                //     jointHits.emplace_back(jointHit);
+                //   }
+                //   for (auto& jointHit : jointHitsRight) {
+                //     jointHits.emplace_back(jointHit);
+                //   }
+                // }
+                
 
-              if (!jointHits.empty()) {
-                puffaligner.clear();
-                puffaligner.getScoreStatus().reset();
-                msi.clear(jointHits.size());
+                // jointHits is the initial mappings from chaining
+                // don't have alignment scores, just candidate positions
 
-                size_t idx{0};
-                bool is_multimapping = (jointHits.size() > 1);
-                int32_t hitScore;
-
-                for (auto &&jointHit : jointHits) {
-                  // for alevin 3', we need these to have a mate status of PAIRED_END_RIGHT
-
-                  // for 5', PAIRED_END_LEFT and PAIRED_END_RIGHT are used
-
-                  if (readsToUse == ReadsToUse::USE_BOTH) { // 5' library
-                    if (read_num == 0) { // left read
-                      jointHit.mateStatus = MateStatus::PAIRED_END_LEFT;
-                      hitScore = puffaligner.calculateAlignments(readSubSeq.seq1, jointHit, hctr, is_multimapping, false);
-                    } else { // right read
-                      jointHit.mateStatus = MateStatus::PAIRED_END_RIGHT;
-                      hitScore = puffaligner.calculateAlignments(readSubSeq.seq2, jointHit, hctr, is_multimapping, false); 
-                    }
-
-                  } else { // 3' library
-                    if (readsToUse == ReadsToUse::USE_FIRST) { // left read contains biological information
-                      jointHit.mateStatus = MateStatus::PAIRED_END_LEFT;
-                      hitScore = puffaligner.calculateAlignments(readSubSeq.seq1, jointHit, hctr, is_multimapping, false);
-                    } else { // right read contains biological information
-                      jointHit.mateStatus = MateStatus::PAIRED_END_RIGHT;
-                      hitScore = puffaligner.calculateAlignments(readSubSeq.seq2, jointHit, hctr, is_multimapping, false); 
-                    }
-                    
-                  }
-
-                  // if we had pair of reads, consider criteria too
-                  
-                  bool validScore = (hitScore != invalidScore);
-                  numMappingsDropped += validScore ? 0 : 1;
-                  auto tid = qidx->getRefId(jointHit.tid);
-                  
-                  bool isCompat;
-                  // NOTE: Here, we know that the read arising from the transcriptome is the "right"
-                  // read (read 2) sometimes and the "left" read (read 1) other times.
-                  // We interpret compatibility depending on which read is used.
-                  if ((readsToUse == ReadsToUse::USE_BOTH and read_num == 1) or readsToUse == ReadsToUse::USE_SECOND) {
-                    // 5' right read or 3' right read
-                    // sense and anti-sense = forward and rc
-                    isCompat = (expectedLibraryFormat.strandedness == ReadStrandedness::U) or 
-                                  (jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::AS)) or
-                                  (!jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::SA));
-                  } else { // 5' left read or 3' left read
-                    isCompat = (expectedLibraryFormat.strandedness == ReadStrandedness::U) or 
-                                  (jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::SA)) or
-                                  (!jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::AS));
-                  }
-  
-
-                  salmon::mapping_utils::updateRefMappings(tid, hitScore, isCompat, idx, transcripts, invalidScore, 
-                                                            msi);
-                  ++idx;
-                }
-
-                bool bestHitDecoy = msi.haveOnlyDecoyMappings();
-                if (msi.bestScore > invalidScore and !bestHitDecoy) {
-
-                  // jointHits should contain hits from both reads
-                  // condense this later into one function call
-                  
+                // If the read mapped to > maxReadOccs places, discard it
+                if (jointHits.size() > salmonOpts.maxReadOccs) {
                   if (readsToUse == ReadsToUse::USE_BOTH) {
-                    if (read_num == 0) { // left read
-                      salmon::mapping_utils::filterAndCollectAlignments(jointHits,
-                                                                  signed_rl,
-                                                                  signed_rl,
-                                                                  false, // true for single-end false otherwise
-                                                                  tryAlign,
-                                                                  hardFilter, // throw away suboptimal things
-                                                                  salmonOpts.scoreExp, // how we determine score of aln
-                                                                  salmonOpts.minAlnProb,
-                                                                  msi,
-                                                                  jointAlignments); // filtered alignments
-                      // update map type
-                      if (!jointAlignments.empty()) {
-                          mapType = salmon::utils::MappingType::SINGLE_MAPPED;
-                      }
-                    } else { // right read
-                      salmon::mapping_utils::filterAndCollectAlignments(jointHits,
-                                                                  signed_rl,
-                                                                  signed_rl,
-                                                                  false, // true for single-end false otherwise
-                                                                  tryAlign,
-                                                                  hardFilter,
-                                                                  salmonOpts.scoreExp,
-                                                                  salmonOpts.minAlnProb,
-                                                                  msi,
-                                                                  jointAlignments);
-                      if (!jointAlignments.empty()) {
-                          mapType = salmon::utils::MappingType::SINGLE_MAPPED;
-                      }
+                    if (read_num == 0) {
+                      jointAlignmentsLeft.clear();
+                    } else {
+                      jointAlignmentsRight.clear();
                     }
-
-                  } else { // readsToUse != ReadsToUse::USE_BOTH
-                    salmon::mapping_utils::filterAndCollectAlignments(jointHits,
-                                                                  signed_rl,
-                                                                  signed_rl,
-                                                                  false, // true for single-end false otherwise
-                                                                  tryAlign,
-                                                                  hardFilter,
-                                                                  salmonOpts.scoreExp,
-                                                                  salmonOpts.minAlnProb,
-                                                                  msi,
-                                                                  jointAlignments);
-                    if (!jointAlignments.empty()) {
-                        mapType = salmon::utils::MappingType::SINGLE_MAPPED;
-                    }
-                  }
-                  
-                } else {
-                  numDecoyFrags += bestHitDecoy ? 1 : 0;
-                  mapType = (bestHitDecoy) ? salmon::utils::MappingType::DECOY : salmon::utils::MappingType::UNMAPPED;
-                  if (bestHitDecoy) {
-                    if (readsToUse == ReadsToUse::USE_BOTH) {
-                      if (read_num == 0) { // left read
-                        salmon::mapping_utils::filterAndCollectAlignmentsDecoy(
-                                                                jointHits, signed_rl,
-                                                                signed_rl,
-                                                                false, // true for single-end false otherwise
-                                                                tryAlign, hardFilter, salmonOpts.scoreExp,
-                                                                salmonOpts.minAlnProb, msi,
-                                                                jointAlignments);
-                      } else { // right read
-                        salmon::mapping_utils::filterAndCollectAlignmentsDecoy(
-                                                                jointHits, signed_rl,
-                                                                signed_rl,
-                                                                false, // true for single-end false otherwise
-                                                                tryAlign, hardFilter, salmonOpts.scoreExp,
-                                                                salmonOpts.minAlnProb, msi,
-                                                                jointAlignments);
-                      }
-                    } else { // readsToUse != ReadsToUse::USE_BOTH
-                      salmon::mapping_utils::filterAndCollectAlignmentsDecoy(
-                                                                jointHits, signed_rl,
-                                                                signed_rl,
-                                                                false, // true for single-end false otherwise
-                                                                tryAlign, hardFilter, salmonOpts.scoreExp,
-                                                                salmonOpts.minAlnProb, msi,
-                                                                jointAlignments);
-                    }
-                        
-                  } else { // !bestHitDecoy
+                  } else {
                     jointHitGroup.clearAlignments();
                   }
+                  jointHits.clear();
                 }
-              } //end-if validate mapping
+
+                // salmonOpts.jointLog->error("made it to calculateAlignments");
+                // salmonOpts.jointLog->flush();
+                    
+
+                if (!jointHits.empty()) {
+                  puffaligner.clear();
+                  puffaligner.getScoreStatus().reset();
+                  msi.clear(jointHits.size());
+
+                  size_t idx{0};
+                  bool is_multimapping = (jointHits.size() > 1);
+                  int32_t hitScore;
+
+                  // salmonOpts.jointLog->error(jointHits.size());
+                  // salmonOpts.jointLog->flush();
+
+                  for (auto &&jointHit : jointHits) {
+                    // for alevin 3', we need these to have a mate status of PAIRED_END_RIGHT
+
+                    // for 5', PAIRED_END_LEFT and PAIRED_END_RIGHT are used
+
+                    if (readsToUse == ReadsToUse::USE_BOTH) { // 5' library
+                      if (read_num == 0) { // left read
+                        jointHit.mateStatus = MateStatus::PAIRED_END_LEFT;
+                        hitScore = puffaligner.calculateAlignments(readSubSeq.seq1, jointHit, hctr, is_multimapping, false);
+                      } else { // right read
+                        jointHit.mateStatus = MateStatus::PAIRED_END_RIGHT;
+                        hitScore = puffaligner.calculateAlignments(readSubSeq.seq2, jointHit, hctr, is_multimapping, false); 
+                      }
+
+                    } else { // 3' library
+                      if (readsToUse == ReadsToUse::USE_FIRST) { // left read contains biological information
+                        jointHit.mateStatus = MateStatus::PAIRED_END_LEFT;
+                        hitScore = puffaligner.calculateAlignments(readSubSeq.seq1, jointHit, hctr, is_multimapping, false);
+                      } else { // right read contains biological information
+                        jointHit.mateStatus = MateStatus::PAIRED_END_RIGHT;
+                        hitScore = puffaligner.calculateAlignments(readSubSeq.seq2, jointHit, hctr, is_multimapping, false); 
+                      }
+                      
+                    }
+
+                    // does calculateAlignments only allow one hit per transcript?
+                    // if so, need to modify algorithm for filter_joint_alignments
+
+                    // if we had pair of reads, consider criteria too
+                    
+                    bool validScore = (hitScore != invalidScore);
+                    numMappingsDropped += validScore ? 0 : 1;
+                    auto tid = qidx->getRefId(jointHit.tid);
+                    
+                    bool isCompat;
+                    // NOTE: Here, we know that the read arising from the transcriptome is the "right"
+                    // read (read 2) sometimes and the "left" read (read 1) other times.
+                    // We interpret compatibility depending on which read is used.
+                    if ((readsToUse == ReadsToUse::USE_BOTH and read_num == 1) or readsToUse == ReadsToUse::USE_SECOND) {
+                      // 5' right read or 3' right read
+                      // sense and anti-sense = forward and rc
+                      isCompat = (expectedLibraryFormat.strandedness == ReadStrandedness::U) or 
+                                    (jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::AS)) or
+                                    (!jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::SA));
+                    } else { // 5' left read or 3' left read
+                      isCompat = (expectedLibraryFormat.strandedness == ReadStrandedness::U) or 
+                                    (jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::SA)) or
+                                    (!jointHit.orphanClust()->isFw and (expectedLibraryFormat.strandedness == ReadStrandedness::AS));
+                    }
+    
+
+                    salmon::mapping_utils::updateRefMappings(tid, hitScore, isCompat, idx, transcripts, invalidScore, 
+                                                              msi);
+                    ++idx;
+                  }
+
+                  // salmonOpts.jointLog->error("made it to filterAndCollect");
+                  // salmonOpts.jointLog->flush();
+                    
+
+                  bool bestHitDecoy = msi.haveOnlyDecoyMappings();
+                  if (msi.bestScore > invalidScore and !bestHitDecoy) {
+
+                    if (readsToUse == ReadsToUse::USE_BOTH) {
+                      if (read_num == 0) { // left read
+                        salmon::mapping_utils::filterAndCollectAlignments(jointHits,
+                                                                    signed_rl,
+                                                                    signed_rl,
+                                                                    false, // true for single-end false otherwise
+                                                                    tryAlign,
+                                                                    hardFilter, // throw away suboptimal alignments
+                                                                    salmonOpts.scoreExp, // how we determine score of aln
+                                                                    salmonOpts.minAlnProb,
+                                                                    msi,
+                                                                    jointAlignmentsLeft); // filtered alignments
+                        // update map type
+                        if (!jointAlignmentsLeft.empty()) {
+                            mapType = salmon::utils::MappingType::SINGLE_MAPPED;
+                        }
+                      } else { // right read
+                        salmon::mapping_utils::filterAndCollectAlignments(jointHits,
+                                                                    signed_rl,
+                                                                    signed_rl,
+                                                                    false, // true for single-end false otherwise
+                                                                    tryAlign,
+                                                                    hardFilter,
+                                                                    salmonOpts.scoreExp,
+                                                                    salmonOpts.minAlnProb,
+                                                                    msi,
+                                                                    jointAlignmentsRight);
+                        if (!jointAlignmentsRight.empty()) {
+                            mapType = salmon::utils::MappingType::SINGLE_MAPPED;
+                        }
+                      }
+
+                    } else { // readsToUse != ReadsToUse::USE_BOTH
+                      salmon::mapping_utils::filterAndCollectAlignments(jointHits,
+                                                                    signed_rl,
+                                                                    signed_rl,
+                                                                    false, // true for single-end false otherwise
+                                                                    tryAlign,
+                                                                    hardFilter,
+                                                                    salmonOpts.scoreExp,
+                                                                    salmonOpts.minAlnProb,
+                                                                    msi,
+                                                                    jointAlignments);
+                      if (!jointAlignments.empty()) {
+                          mapType = salmon::utils::MappingType::SINGLE_MAPPED;
+                      }
+                    }
+                    
+                  } else {
+                    numDecoyFrags += bestHitDecoy ? 1 : 0;
+                    mapType = (bestHitDecoy) ? salmon::utils::MappingType::DECOY : salmon::utils::MappingType::UNMAPPED;
+                    if (bestHitDecoy) {
+                      if (readsToUse == ReadsToUse::USE_BOTH) {
+                        if (read_num == 0) { // left read
+                          salmon::mapping_utils::filterAndCollectAlignmentsDecoy(
+                                                                  jointHits, signed_rl,
+                                                                  signed_rl,
+                                                                  false, // true for single-end false otherwise
+                                                                  tryAlign, hardFilter, salmonOpts.scoreExp,
+                                                                  salmonOpts.minAlnProb, msi,
+                                                                  jointAlignmentsLeft);
+                        } else { // right read
+                          salmon::mapping_utils::filterAndCollectAlignmentsDecoy(
+                                                                  jointHits, signed_rl,
+                                                                  signed_rl,
+                                                                  false, // true for single-end false otherwise
+                                                                  tryAlign, hardFilter, salmonOpts.scoreExp,
+                                                                  salmonOpts.minAlnProb, msi,
+                                                                  jointAlignmentsRight);
+                        }
+                      } else { // readsToUse != ReadsToUse::USE_BOTH
+                        salmon::mapping_utils::filterAndCollectAlignmentsDecoy(
+                                                                  jointHits, signed_rl,
+                                                                  signed_rl,
+                                                                  false, // true for single-end false otherwise
+                                                                  tryAlign, hardFilter, salmonOpts.scoreExp,
+                                                                  salmonOpts.minAlnProb, msi,
+                                                                  jointAlignments);
+                      }
+                        
+                    } else { // !bestHitDecoy
+                      jointHitGroup.clearAlignments();
+                      jointAlignmentsLeft.clear();
+                      jointAlignmentsRight.clear();
+                    }
+                  }
+                } //end-if validate mapping
+              } // DONE: for (uint32_t read_num = 0; read_num < 2; read_num++)
+            } else {
+              nSeqs += 1;
             }
           }
         }
@@ -1880,22 +1937,13 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                                           std::max(readLenLeft, readLenRight));
       }
 
-      // jointAlignments contains alignments as if they were single mapped
-      // jointAlignments needs to be sorted and filtered
-      // use lambda compare function to sort
-      std::sort(jointAlignments.begin(), jointAlignments.end(), [](QuasiAlignment hit1, QuasiAlignment hit2) {
-        if (hit1.tid != hit2.tid) {
-          if (hit1.tid < hit2.tid) return true;
-          else return false;
-        } else {
-          if (hit1.fwd) return true;
-          else return false;
-        }
-      });
+      // salmonOpts.jointLog->error("made it to filter_joint_alignments");
+      // salmonOpts.jointLog->flush();
+                  
 
       // filter jointAlignments to contain only valid maps
-      if (!left_empty and !right_empty) { // actually had hits from both reads
-        if (!filter_joint_alignments(jointAlignments)) {
+      if (readsToUse == ReadsToUse::USE_BOTH) { //and !left_empty and !right_empty) { // actually had hits from both reads
+        if (!merge_joint_alignments(jointAlignmentsLeft, jointAlignmentsRight, jointAlignments)) {
           // right now this function always returns true, so this would never happen
           salmonOpts.jointLog->error( "jointAlignments was unable to be filtered.\n"
                       "This should not happen. Please report this bug on Github");
@@ -1904,6 +1952,11 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           std::exit(1);
         }
       }
+
+      // if (jointAlignments.size() > 0) {
+      //   salmonOpts.jointLog->error(jointAlignments.size());
+      //   salmonOpts.jointLog->flush();
+      // }
 
       alevin::types::AlevinCellBarcodeKmer bck;
       bool barcode_ok = bck.fromChars(barcode);
@@ -3693,6 +3746,32 @@ alevin_sc_align(AlevinOpts<apt::Chromium>& aopt, SalmonOpts& sopt,
                 std::unique_ptr<SalmonIndex>& salmonIndex);
 template int
 alevinQuant(AlevinOpts<apt::Chromium>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
+
+template int
+alevin_sc_align(AlevinOpts<apt::Chromium5V1>& aopt, SalmonOpts& sopt,
+                boost::program_options::parsed_options& orderedOptions,
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+template int
+alevinQuant(AlevinOpts<apt::Chromium5V1>& aopt, SalmonOpts& sopt,
+            SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
+            spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
+            spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,
+            boost::program_options::parsed_options& orderedOptions,
+            CFreqMapT& freqCounter, size_t numLowConfidentBarcode,
+            std::unique_ptr<SalmonIndex>& salmonIndex);
+
+template int
+alevin_sc_align(AlevinOpts<apt::Chromium5V2>& aopt, SalmonOpts& sopt,
+                boost::program_options::parsed_options& orderedOptions,
+                std::unique_ptr<SalmonIndex>& salmonIndex);
+template int
+alevinQuant(AlevinOpts<apt::Chromium5V2>& aopt, SalmonOpts& sopt,
             SoftMapT& barcodeMap, TrueBcsT& trueBarcodes,
             spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
             spp::sparse_hash_map<std::string, uint32_t>& geneIdxMap,

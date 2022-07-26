@@ -1,5 +1,6 @@
 #include "AlevinUtils.hpp"
 #include "peglib.h"
+#include "SalmonDefaults.hpp"
 
 namespace alevin {
   namespace utils {
@@ -112,9 +113,11 @@ namespace alevin {
                          std::string& subseq){
       (void)seq;
       struct ReadSeqs readSeqs;
-      std::string seq1 = seq; // make wanted seq1 to be set to something
-      bool ok = extractSequence(seq, protocol, seq1);
-      readSeqs.seq1 = seq1;
+      if (alevin::defaults::isFivePrimeLibrary) {
+        std::string seq1 = seq; // make wanted seq1 to be set to something
+        bool ok = extractSequence(seq, protocol, seq1);
+        readSeqs.seq1 = seq1;
+      }
       readSeqs.seq2 = seq2;
       return readSeqs;
     }
@@ -125,9 +128,11 @@ namespace alevin {
                          std::string& subseq){
       (void)seq;
       struct ReadSeqs readSeqs;
-      std::string seq1 = seq;
-      bool ok = extractSequence(seq, protocol, seq1);
-      readSeqs.seq1 = seq1;
+      //if (alevin::defaults::isFivePrimeLibrary) {
+        std::string seq1 = seq; // make wanted seq1 to be set to something
+        bool ok = extractSequence(seq, protocol, seq1);
+        readSeqs.seq1 = seq1;
+     // }
       readSeqs.seq2 = seq2;
       return readSeqs;
     }
@@ -149,6 +154,26 @@ namespace alevin {
       (void)seq;
       struct ReadSeqs readSeqs;
       readSeqs.seq2 = seq2;
+      return readSeqs;
+    }
+    template <>
+    struct ReadSeqs  getReadSequence(apt::SplitSeqV1& protocol,
+                         std::string& seq,
+                         std::string& seq2,
+                         std::string& subseq){
+      (void)seq2; // fastq2 contains barcode and umi
+      struct ReadSeqs readSeqs;
+      readSeqs.seq1 = seq;
+      return readSeqs;
+    }
+    template <>
+    struct ReadSeqs  getReadSequence(apt::SplitSeqV2& protocol,
+                         std::string& seq,
+                         std::string& seq2,
+                         std::string& subseq){
+      (void)seq2; // fastq2 contains barcode and umi
+      struct ReadSeqs readSeqs;
+      readSeqs.seq1 = seq;
       return readSeqs;
     }
     template <>
@@ -1512,6 +1537,14 @@ namespace alevin {
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::Chromium>& aopt,
+                           SalmonOpts& sopt, bool noTgMap,
+                           boost::program_options::variables_map& vm);
+    template
+    bool processAlevinOpts(AlevinOpts<apt::Chromium5V1>& aopt,
+                           SalmonOpts& sopt, bool noTgMap,
+                           boost::program_options::variables_map& vm);
+    template
+    bool processAlevinOpts(AlevinOpts<apt::Chromium5V2>& aopt,
                            SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template

@@ -114,13 +114,16 @@ namespace alevin{
       void set_read_geo(TagGeometry& g) { (void)g; };
       uint32_t barcode_length() const { return barcodeLength; }
       uint32_t umi_length() const { return umiLength; }
-      ReadsToUse get_reads_to_use() const { return readsToUse; }
+      ReadsToUse get_reads_to_use() const { 
+        // if (readsToUse == ReadsToUse::USE_BOTH and !alevin::defaults::isFivePrimeLibrary) {
+        //   return ReadsToUse::USE_SECOND;
+        // }
+        return readsToUse; }
 
       uint32_t barcodeLength, umiLength, maxValue;
       BarcodeEnd end;
       ReadsToUse readsToUse;
     };
-
 
     struct DropSeq : Rule{
       //Drop-Seq starts from 5 end with 12 length
@@ -161,6 +164,7 @@ namespace alevin{
     };
     
     struct Chromium5V2 : Rule{
+      //read1 has seq length 26 bp
       Chromium5V2(): Rule(16, 10, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_BOTH){}
     };
 
@@ -192,12 +196,12 @@ namespace alevin{
     };
 
     struct SplitSeqV2 : Rule{
-        SplitSeqV2(): Rule(24, 10, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_SECOND){}
+        SplitSeqV2(): Rule(24, 10, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_FIRST){}
         std::size_t const bcLen = 8, bc1Pos = 10, bc2Pos = 48, bc3Pos = 78;
     };
 
     struct SplitSeqV1 : Rule{
-        SplitSeqV1(): Rule(24, 10, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_SECOND){}
+        SplitSeqV1(): Rule(24, 10, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_FIRST){}
         std::size_t const bcLen = 8, bc1Pos = 10, bc2Pos = 48, bc3Pos = 86;
     };
 
@@ -226,14 +230,18 @@ namespace alevin{
       void set_read_geo(TagGeometry& g) { read_geo = g; }
       uint32_t barcode_length() const { return barcodeLength; }
       uint32_t umi_length() const { return umiLength; }
-      ReadsToUse get_reads_to_use() const { return readsToUse; }
+      ReadsToUse get_reads_to_use() const { 
+        if (readsToUse == ReadsToUse::USE_BOTH and !alevin::defaults::isFivePrimeLibrary) {
+          return ReadsToUse::USE_SECOND;
+        }
+        return readsToUse; }
 
       // These values are set only when `set_umi_geo` and 
       // `set_bc_geo` are called.  See if this design can 
       // be better integrated with `Rule` later.
       uint32_t barcodeLength, umiLength, maxValue;
       BarcodeEnd end;
-      ReadsToUse readsToUse = (alevin::defaults::isFivePrimeLibrary) ? ReadsToUse::USE_BOTH : ReadsToUse::USE_SECOND;
+      ReadsToUse readsToUse;
     };
 
   }
