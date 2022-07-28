@@ -99,6 +99,8 @@ struct AlevinOpts {
   uint32_t forceCells;
   // define a close upper bound on expected number of cells
   uint32_t expectCells;
+  // if the protocol uses 5' library
+  bool isFivePrime;
 
   // Related to the logger
   std::shared_ptr<spdlog::logger> jointLog{nullptr};

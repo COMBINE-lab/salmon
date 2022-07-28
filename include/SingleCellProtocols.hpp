@@ -114,11 +114,7 @@ namespace alevin{
       void set_read_geo(TagGeometry& g) { (void)g; };
       uint32_t barcode_length() const { return barcodeLength; }
       uint32_t umi_length() const { return umiLength; }
-      ReadsToUse get_reads_to_use() const { 
-        // if (readsToUse == ReadsToUse::USE_BOTH and !alevin::defaults::isFivePrimeLibrary) {
-        //   return ReadsToUse::USE_SECOND;
-        // }
-        return readsToUse; }
+      ReadsToUse get_reads_to_use() const { return readsToUse; }
 
       uint32_t barcodeLength, umiLength, maxValue;
       BarcodeEnd end;
@@ -231,11 +227,7 @@ namespace alevin{
       void set_read_geo(TagGeometry& g) { read_geo = g; }
       uint32_t barcode_length() const { return barcodeLength; }
       uint32_t umi_length() const { return umiLength; }
-      ReadsToUse get_reads_to_use() const { 
-        if (readsToUse == ReadsToUse::USE_BOTH and !alevin::defaults::isFivePrimeLibrary) {
-          return ReadsToUse::USE_SECOND;
-        }
-        return readsToUse; }
+      ReadsToUse get_reads_to_use() const { return readsToUse; }
 
       // These values are set only when `set_umi_geo` and 
       // `set_bc_geo` are called.  See if this design can 

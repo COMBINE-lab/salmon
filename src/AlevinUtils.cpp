@@ -113,11 +113,11 @@ namespace alevin {
                          std::string& subseq){
       (void)seq;
       struct ReadSeqs readSeqs;
-      // if (alevin::defaults::isFivePrimeLibrary) {
-        std::string seq1 = seq; // make wanted seq1 to be set to something
+      if (protocol.get_reads_to_use() == ReadsToUse::USE_BOTH) {
+        std::string seq1 = seq; // stays the same if extractSequence fails
         bool ok = extractSequence(seq, protocol, seq1);
         readSeqs.seq1 = seq1;
-      // }
+       }
       readSeqs.seq2 = seq2;
       return readSeqs;
     }
@@ -128,11 +128,11 @@ namespace alevin {
                          std::string& subseq){
       (void)seq;
       struct ReadSeqs readSeqs;
-      //if (alevin::defaults::isFivePrimeLibrary) {
-        std::string seq1 = seq; // make wanted seq1 to be set to something
+      if (protocol.get_reads_to_use() == ReadsToUse::USE_BOTH) {
+        std::string seq1 = seq; // stays the same if extractSequence fails
         bool ok = extractSequence(seq, protocol, seq1);
         readSeqs.seq1 = seq1;
-     // }
+      }
       readSeqs.seq2 = seq2;
       return readSeqs;
     }
@@ -214,7 +214,7 @@ namespace alevin {
       bool ok = protocol.read_geo.extract_read(seq, seq2, subseq);
       struct ReadSeqs readSeqs;
       readSeqs.seq2 = subseq;
-      if (alevin::defaults::isFivePrimeLibrary) {
+      if (protocol.get_reads_to_use() == ReadsToUse::USE_BOTH) {
         std::string seq1 = seq;
         bool ok2 = extractSequence(seq, protocol, seq1);
         readSeqs.seq1 = seq1;
@@ -1058,6 +1058,13 @@ namespace alevin {
       aopt.umiEditDistance = vm["umiEditDistance"].as<uint32_t>();
       aopt.forceCells = vm["forceCells"].as<uint32_t>();
       aopt.expectCells = vm["expectCells"].as<uint32_t>();
+      aopt.isFivePrime = vm["fivePrime"].as<bool>();
+
+      if (aopt.isFivePrime) {
+        aopt.protocol.readsToUse = ReadsToUse::USE_BOTH;
+      } else {
+        aopt.protocol.readsToUse = ReadsToUse::USE_SECOND;
+      }
 
       if (aopt.just_align) {
         aopt.jointLog->info("The --rad flag was passed to alevin. The "

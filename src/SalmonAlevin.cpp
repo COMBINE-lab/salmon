@@ -825,15 +825,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
               bool rh = false;
               int32_t signed_rl; // signed read length
               readSubSeq = aut::getReadSequence(localProtocol, rp.first.seq, rp.second.seq, readBuffer);
-              // salmonOpts.jointLog->error("seq1: ");
-              // salmonOpts.jointLog->error(readSubSeq.seq1);
-              // salmonOpts.jointLog->flush();
-              // salmonOpts.jointLog->error("seq2: ");
-              // salmonOpts.jointLog->error(readSubSeq.seq2);
-              // salmonOpts.jointLog->flush();
-
-              // salmonOpts.jointLog->error(readsToUse == ReadsToUse::USE_BOTH);
-              // salmonOpts.jointLog->flush();
 
               //isFivePrimeLibrary (and other flags) don't turn on
 
@@ -980,7 +971,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
                   bool _discard = false;
                   auto mao_first_pass = max_occ_default - 1;
-                  // early_stop = true if collect_mappings_from_hits = true
+                  // early stop if collect_mappings_from_hits = true
                   collect_mappings_from_hits(raw_hits, prev_read_pos, mao_first_pass, _discard);
 
                   
@@ -992,7 +983,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                   if (attempt_occ_recover and (min_occ >= max_occ_default) and (min_occ < max_occ_recover)) {
                     prev_read_pos = -1;
                     uint64_t max_allowed_occ = min_occ;
-                    // early_stop = true if collect_mappings_from_hits = true
+                    // early stop if collect_mappings_from_hits = true
                     collect_mappings_from_hits(raw_hits, prev_read_pos, max_allowed_occ, had_alt_max_occ);
 
                   }
@@ -1371,8 +1362,8 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                           int32_t pos_diff = abs(hit1.pos - hit2.pos); // difference in position of reads
 
                           bool is_hit_pair = ((hit1.tid == hit2.tid) and (hit1.fwd != hit2.fwd)
-                          and (pos_diff <= pos_spacing_max) and (hit1.pos < half_seq_length) 
-                          and (hit2.pos < half_seq_length));
+                          and (pos_diff <= pos_spacing_max)); // and (hit1.pos < half_seq_length) 
+                          // and (hit2.pos < half_seq_length));
 
                           if (is_hit_pair) {
                             if (hit1.fwd) {
@@ -1551,6 +1542,8 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
       auto& jointAlignments = jointHitGroup.alignments();
       std::vector<QuasiAlignment> jointAlignmentsLeft;
       std::vector<QuasiAlignment> jointAlignmentsRight;
+      jointAlignmentsLeft.clear();
+      jointAlignmentsRight.clear();
 
       //jointAlignments.clear();
       // readSubSeq = nullptr;//.clear();
@@ -1627,8 +1620,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                 jointHits.clear();
                 hits.clear();
                 memCollector.clear();
-                jointAlignmentsLeft.clear();
-                jointAlignmentsRight.clear();
                 
 
                 if (readsToUse == ReadsToUse::USE_BOTH) {
