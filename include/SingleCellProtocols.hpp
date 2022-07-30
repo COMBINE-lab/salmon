@@ -157,12 +157,18 @@ namespace alevin{
     // v1.1
     struct Chromium5V1 : Rule{
       //read1 has seq length of 26 bp
-      Chromium5V1(): Rule(16, 10, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_BOTH){}
+      Chromium5V1(): Rule(16, 10, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_BOTH){
+        seq1Length = 13;
+      }
+      uint32_t seq1Length;
     };
     
     struct Chromium5V2 : Rule{
       //read1 has seq length of 26 bp
-      Chromium5V2(): Rule(16, 10, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_BOTH){}
+      Chromium5V2(): Rule(16, 10, BarcodeEnd::FIVE, 4294967295, ReadsToUse::USE_BOTH){
+        seq1Length = 13;
+      }
+      uint32_t seq1Length;
     };
 
     struct ChromiumV3 : Rule{
@@ -232,7 +238,8 @@ namespace alevin{
       // These values are set only when `set_umi_geo` and 
       // `set_bc_geo` are called.  See if this design can 
       // be better integrated with `Rule` later.
-      uint32_t barcodeLength, umiLength, maxValue;
+      // need to create command line flag for seq1Length for custom geometry
+      uint32_t barcodeLength, umiLength, seq1Length, maxValue;
       BarcodeEnd end;
       ReadsToUse readsToUse;
     };

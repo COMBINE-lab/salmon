@@ -44,22 +44,28 @@ namespace alevin {
     template <>
     bool extractSequence<apt::Chromium5V1>(std::string& read, apt::Chromium5V1& pt, std::string& seq) {
       // the biological sequence comes after the umi in the read
-      return (read.length() > pt.barcodeLength + pt.umiLength) ?
-        (seq.assign(read, pt.umiLength+pt.barcodeLength, read.length()), true) : false;
+        uint32_t start = pt.umiLength+pt.barcodeLength;
+        uint32_t len = read.length() - start;
+        return (read.length() > pt.barcodeLength + pt.umiLength) ?
+        (seq.assign(read, start, len), true) : false;
     }
     
     template <>
     bool extractSequence<apt::Chromium5V2>(std::string& read, apt::Chromium5V2& pt, std::string& seq) {
       // the biological sequence comes after the umi in the read
+      uint32_t start = pt.umiLength+pt.barcodeLength;
+      uint32_t len = read.length() - start;
       return (read.length() > pt.barcodeLength + pt.umiLength) ?
-        (seq.assign(read, pt.umiLength+pt.barcodeLength, read.length()), true) : false;
+        (seq.assign(read, start, len), true) : false;
     }
 
     template <>
     bool extractSequence<apt::CustomGeometry>(std::string& read, apt::CustomGeometry& pt, std::string& seq) {
       // the biological sequence comes after the umi in the read
+      uint32_t start = pt.umiLength+pt.barcodeLength;
+      uint32_t len = read.length() - start;
       return (read.length() > pt.barcodeLength + pt.umiLength) ?
-        (seq.assign(read, pt.umiLength+pt.barcodeLength, read.length()), true) : false;
+        (seq.assign(read, start, len), true) : false;
     }
 
 
@@ -128,7 +134,7 @@ namespace alevin {
                          std::string& subseq){
       (void)seq;
       struct ReadSeqs readSeqs;
-      if (protocol.get_reads_to_use() == ReadsToUse::USE_BOTH) {
+      if (protocol.readsToUse == ReadsToUse::USE_BOTH) {
         std::string seq1 = seq; // stays the same if extractSequence fails
         bool ok = extractSequence(seq, protocol, seq1);
         readSeqs.seq1 = seq1;

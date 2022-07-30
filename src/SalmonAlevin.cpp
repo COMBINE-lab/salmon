@@ -479,7 +479,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     float score{0.0};
     uint32_t num_hits{0};
     uint32_t tid{std::numeric_limits<uint32_t>::max()};
-    // unpaired_left, unpaired_right, paired_fr, paired_rf
+    // UNPAIRED_LEFT, UNPAIRED_RIGHT, PAIRED_FR, PAIRED_RF
     PairingStatus pairing_status{PairingStatus::UNPAIRED_RIGHT};
 
     bool valid_pos(int32_t read_len, uint32_t txp_len, int32_t max_over) {
@@ -488,7 +488,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     }
 
     bool operator<(SimpleHit hit2) {
-      if (tid != hit2.tid) {
+      if (tid != hit2.tid) { // hit1 and hit2 are on different transcripts
         if (tid < hit2.tid) { // smaller tid < larger tid
           return true;
         } else {
@@ -632,7 +632,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
   // merge accepted hit lists from left read and right read of a read pair
   // use for 5' libraries where both reads contain biological information
   // fills in accepted_hits
-
   auto merge_accepted_hits = [] (std::vector<SimpleHit>& accepted_hits_left, 
                           std::vector<SimpleHit>& accepted_hits_right, 
                           std::vector<SimpleHit>& accepted_hits) -> bool {
@@ -645,18 +644,18 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     // if accepted_hits_right is empty
     // accepted_hits_left becomes accepted_hits
     else if (accepted_hits_right.size() == 0) {
-      // for (auto& hit : accepted_hits_left) {
-      //   accepted_hits.emplace_back(hit);
-      // }
+      for (auto& hit : accepted_hits_left) {
+        accepted_hits.emplace_back(hit);
+      }
       return true;
     }
 
     // if accepted_hits_left is empty
     // accepted_hits_right becomes accepted_hits
     else if (accepted_hits_left.size() == 0) {
-      // for (auto& hit : accepted_hits_right) {
-      //   accepted_hits.emplace_back(hit);
-      // }
+      for (auto& hit : accepted_hits_right) {
+        accepted_hits.emplace_back(hit);
+      }
       return true;
     }
 
@@ -665,9 +664,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
     // sort lists based on tid and then ori
     std::sort(accepted_hits_left.begin(), accepted_hits_left.end());
     std::sort(accepted_hits_right.begin(), accepted_hits_right.end());
-
-    // std::vector<SimpleHit> temp;
-    // temp.clear();
     // find the set intersection (valid hit pairs)
     std::set_intersection(accepted_hits_left.begin(), accepted_hits_left.end(),
                           accepted_hits_right.begin(), accepted_hits_right.end(),
@@ -825,8 +821,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
               bool rh = false;
               int32_t signed_rl; // signed read length
               readSubSeq = aut::getReadSequence(localProtocol, rp.first.seq, rp.second.seq, readBuffer);
-
-              //isFivePrimeLibrary (and other flags) don't turn on
 
               for (uint32_t read_num = 0; read_num < 2; read_num++) {
                 // run twice, once for left read and once for right read
@@ -1073,30 +1067,12 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         spdlog::drop_all();
         std::exit(1);
       }
-
-      // bool both_have_hits{false};
-      // if ((accepted_hits_left.size() > 0) and (accepted_hits_right.size() > 0)) {
-      //   both_have_hits = true;
-      // }
       
       // merge accepted hit lists for when using 5' library
       if (readsToUse == ReadsToUse::USE_BOTH) {
-        if (!merge_accepted_hits(accepted_hits_left, accepted_hits_right, accepted_hits)) {
-          // right now this function always returns true, so this would never happen
-          salmonOpts.jointLog->error( "Accepted hit lists for left and right reads were not able to merge.\n"
-                      "This should not happen. Please report this bug on Github");
-          salmonOpts.jointLog->flush();
-          spdlog::drop_all();
-          std::exit(1);
-        }
+        merge_accepted_hits(accepted_hits_left, accepted_hits_right, accepted_hits);
       }
-      // if (both_have_hits) { 
-        
-      // salmonOpts.jointLog->error(accepted_hits_left.size() > 0 and accepted_hits_right.size() > 0);
-      // salmonOpts.jointLog->flush();
-      // }
-
-      
+  
 
       //////////////////////////////////////////////////////////////
       // Consider a read as too short if the ``non-barcode'' end is too short
@@ -1305,51 +1281,51 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
   salmon::utils::ShortFragStats shortFragStats;
   double maxZeroFrac{0.0};
 
-  // filter jointAlignments to remove invalid hit pairs
+  // merge joint alignment lists from left read and right read of a read pair
+  // use for 5' libraries where both reads contain biological information
+  // fills in jointAlignments
   auto merge_joint_alignments = [] (std::vector<QuasiAlignment>& jointAlignmentsLeft,
                                     std::vector<QuasiAlignment>& jointAlignmentsRight,
                                     std::vector<QuasiAlignment>& jointAlignments) -> bool {
 
-    // if accepted_hits_left and accepted_hits_right is empty
-    // nothing gets added to accepted_hits
+    // if jointAlignmentsLeft and jointAlignmentsRight is empty
+    // nothing gets added to jointAlignments
     if (jointAlignmentsLeft.size() == 0 and jointAlignmentsRight.size() == 0) {
       return true;
     }
-    // if accepted_hits_right is empty
-    // accepted_hits_left becomes accepted_hits
+    // if jointAlignmentsRight is empty
+    // jointAlignmentsLeft becomes jointAlignments
     else if (jointAlignmentsRight.size() == 0) {
-      // for (auto& hit : jointAlignmentsLeft) {
-      //   jointAlignments.emplace_back(hit);
-      // }
+      for (auto& hit : jointAlignmentsLeft) {
+        jointAlignments.emplace_back(hit);
+      }
       return true;
     }
 
-    // if accepted_hits_left is empty
-    // accepted_hits_right becomes accepted_hits
+    // if jointAlignmentsLeft is empty
+    // jointAlignmentsRight becomes jointAlignments
     else if (jointAlignmentsLeft.size() == 0) {
-      // for (auto& hit : jointAlignmentsRight) {
-      //   jointAlignments.emplace_back(hit);
-      // }
+      for (auto& hit : jointAlignmentsRight) {
+        jointAlignments.emplace_back(hit);
+      }
       return true;
     }
 
-    // compare function for sort
+    // compare function for sort ( < operator )
     auto cmp_quasi = [] (QuasiAlignment hit1, QuasiAlignment hit2) -> bool {
-      if (hit1.tid != hit2.tid) {
-        if (hit1.tid < hit2.tid) return true;
+      if (hit1.tid != hit2.tid) { // hit1 and hit2 on different transcripts
+        if (hit1.tid < hit2.tid) return true; // smaller tid < larger tid
         else return false;
-      } else {
-        if (hit1.fwd) return true;
+      } else { // hit1 and hit2 on same transcript
+        if (hit1.fwd) return true; //  fw < rc
         else return false;
       }
     };
 
-    // jointAlignments contains alignments as if they were single mapped
-    // jointAlignments needs to be sorted and filtered
-    // use lambda compare function to sort
     std::sort(jointAlignmentsLeft.begin(), jointAlignmentsLeft.end(), cmp_quasi);
     std::sort(jointAlignmentsRight.begin(), jointAlignmentsRight.end(), cmp_quasi);
 
+    // inserts new paired hits into jointAlignments
     std::set_intersection(jointAlignmentsLeft.begin(), jointAlignmentsLeft.end(),
                           jointAlignmentsRight.begin(), jointAlignmentsRight.end(),
                           std::back_inserter(jointAlignments), [] 
@@ -1378,43 +1354,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                           return is_hit_pair;
                           });
 
-    // std::vector<QuasiAlignment> temp;
-    // int32_t pos_spacing_max = 1000;
-    // // todo: do this in a better way
-    // int32_t half_seq_length = pos_spacing_max/2;
-    // size_t i = 0;
-
-    // size_t jointAlignmentsSize = jointAlignments.size();
-    // while (i < jointAlignmentsSize - 1) {
-    //   QuasiAlignment hit1 = jointAlignments[i];
-    //   QuasiAlignment hit2 = jointAlignments[i + 1];
-    //   QuasiAlignment hit_new;
-    //   int32_t pos_diff = abs(hit1.pos - hit2.pos);
-
-    //   if ((hit1.tid == hit2.tid) and (hit1.fwd != hit2.fwd) and (pos_diff < pos_spacing_max)
-    //       and (hit1.pos < half_seq_length) and (hit2.pos < half_seq_length)) {
-    //     if (hit1.fwd) {
-    //       hit_new = QuasiAlignment(hit1.tid, hit1.pos, hit1.fwd, hit1.readLen, 
-    //                               hit1.cigar, hit1.fragLen, true); //isPaired = true
-    //       temp.emplace_back(hit_new);
-    //     } else {
-    //       hit_new = QuasiAlignment(hit2.tid, hit2.pos, hit2.fwd, hit2.readLen, 
-    //                               hit2.cigar, hit2.fragLen, true); //isPaired = true
-    //       temp.emplace_back(hit_new);
-    //     }
-    //     i += 2;
-    //   } else {
-    //     i += 1;
-    //   }
-    // }
-    // jointAlignments.clear();
-    // size_t tempSize = temp.size();
-    // while (tempSize > 0) {
-    //   QuasiAlignment hit = temp[tempSize-1];
-    //   temp.pop_back();
-    //   jointAlignments.emplace_back(hit);
-    //   tempSize--;
-    // }
     return true;
   };
 
@@ -1549,8 +1488,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
       // readSubSeq = nullptr;//.clear();
       mapType = salmon::utils::MappingType::UNMAPPED;
       uint32_t read_num;
-      // bool left_empty = false; // is jointHitsLeft is empty
-      // bool right_empty = false; // is jointHitsRight is empty
 
       //////////////////////////////////////////////////////////////
       // extracting barcodes
@@ -1705,26 +1642,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                   }
                   
                 }
-              
-
-                // gather up hits1 and hits2 and merge them together here
-                // and then that will become jointHits
-                // still need to do checks for valid pairs later
-
-                // if (readsToUse == ReadsToUse::USE_BOTH) {
-                //   if (jointHitsLeft.size() == 0) left_empty = true;
-                //   if (jointHitsRight.size() == 0) right_empty = true;
-                //   for (auto& jointHit : jointHitsLeft) {
-                //     jointHits.emplace_back(jointHit);
-                //   }
-                //   for (auto& jointHit : jointHitsRight) {
-                //     jointHits.emplace_back(jointHit);
-                //   }
-                // }
-                
-
-                // jointHits is the initial mappings from chaining
-                // don't have alignment scores, just candidate positions
 
                 // If the read mapped to > maxReadOccs places, discard it
                 if (jointHits.size() > salmonOpts.maxReadOccs) {
@@ -1739,9 +1656,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                   }
                   jointHits.clear();
                 }
-
-                // salmonOpts.jointLog->error("made it to calculateAlignments");
-                // salmonOpts.jointLog->flush();
                     
 
                 if (!jointHits.empty()) {
@@ -1752,9 +1666,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                   size_t idx{0};
                   bool is_multimapping = (jointHits.size() > 1);
                   int32_t hitScore;
-
-                  // salmonOpts.jointLog->error(jointHits.size());
-                  // salmonOpts.jointLog->flush();
 
                   for (auto &&jointHit : jointHits) {
                     // for alevin 3', we need these to have a mate status of PAIRED_END_RIGHT
@@ -1780,11 +1691,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                       }
                       
                     }
-
-                    // does calculateAlignments only allow one hit per transcript?
-                    // if so, need to modify algorithm for filter_joint_alignments
-
-                    // if we had pair of reads, consider criteria too
                     
                     bool validScore = (hitScore != invalidScore);
                     numMappingsDropped += validScore ? 0 : 1;
@@ -1811,9 +1717,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                                                               msi);
                     ++idx;
                   }
-
-                  // salmonOpts.jointLog->error("made it to filterAndCollect");
-                  // salmonOpts.jointLog->flush();
                     
 
                   bool bestHitDecoy = msi.haveOnlyDecoyMappings();
@@ -1927,27 +1830,10 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
         shortFragStats.shortest = std::min(shortFragStats.shortest,
                                           std::max(readLenLeft, readLenRight));
       }
-
-      // salmonOpts.jointLog->error("made it to filter_joint_alignments");
-      // salmonOpts.jointLog->flush();
-                  
-
-      // filter jointAlignments to contain only valid maps
-      if (readsToUse == ReadsToUse::USE_BOTH) { //and !left_empty and !right_empty) { // actually had hits from both reads
-        if (!merge_joint_alignments(jointAlignmentsLeft, jointAlignmentsRight, jointAlignments)) {
-          // right now this function always returns true, so this would never happen
-          salmonOpts.jointLog->error( "jointAlignments was unable to be filtered.\n"
-                      "This should not happen. Please report this bug on Github");
-          salmonOpts.jointLog->flush();
-          spdlog::drop_all();
-          std::exit(1);
-        }
+     
+      if (readsToUse == ReadsToUse::USE_BOTH) { 
+        merge_joint_alignments(jointAlignmentsLeft, jointAlignmentsRight, jointAlignments);
       }
-
-      // if (jointAlignments.size() > 0) {
-      //   salmonOpts.jointLog->error(jointAlignments.size());
-      //   salmonOpts.jointLog->flush();
-      // }
 
       alevin::types::AlevinCellBarcodeKmer bck;
       bool barcode_ok = bck.fromChars(barcode);
