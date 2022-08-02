@@ -681,10 +681,10 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
                           if (is_hit_pair) {
                             if (hit1.is_fw) {
-                              hit1 = SimpleHit{true, hit1.pos, hit1.score, hit1.num_hits, 
+                              hit1 = SimpleHit{hit1.is_fw, hit1.pos, hit1.score, hit1.num_hits, 
                               hit1.tid, PairingStatus::PAIRED_FR};
                             } else {
-                              hit1 = SimpleHit{false, hit1.pos, hit1.score, hit1.num_hits, 
+                              hit1 = SimpleHit{hit1.is_fw, hit1.pos, hit1.score, hit1.num_hits, 
                               hit1.tid, PairingStatus::PAIRED_RF};
                             }
                           }
@@ -1132,7 +1132,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         // PairingStatus { UNPAIRED_LEFT, UNPAIRED_RIGHT, PAIRED_FR, PAIRED_RF };
         bool use_fw_mask;
         for (auto& aln : accepted_hits) {
-          use_fw_mask = aln.is_fw;
           if (readsToUse == ReadsToUse::USE_BOTH) { // 5' library
             if (aln.pairing_status == PairingStatus::UNPAIRED_LEFT) {
               // if only the left read mapped, check for its ori
@@ -1346,8 +1345,8 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                               hit1 = QuasiAlignment(hit1.tid, hit1.pos, hit1.fwd, hit1.readLen, 
                                                     hit1.cigar, hit1.fragLen, true); //isPaired = true
                             } else {
-                              hit1 =  QuasiAlignment(hit2.tid, hit2.pos, hit2.fwd, hit2.readLen, 
-                                                     hit2.cigar, hit2.fragLen, true); //isPaired = true
+                              hit1 =  QuasiAlignment(hit1.tid, hit1.pos, hit1.fwd, hit1.readLen, 
+                                                     hit1.cigar, hit1.fragLen, true); //isPaired = true
                             }
                           }
 
@@ -1803,9 +1802,15 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                       }
                         
                     } else { // !bestHitDecoy
-                      jointHitGroup.clearAlignments();
-                      jointAlignmentsLeft.clear();
-                      jointAlignmentsRight.clear();
+                      if (readsToUse == ReadsToUse::USE_BOTH) {
+                        if (read_num == 0) {
+                          jointAlignmentsLeft.clear();
+                        } else {
+                          jointAlignmentsRight.clear();
+                        }
+                      } else {
+                        jointHitGroup.clearAlignments();
+                      }
                     }
                   }
                 } //end-if validate mapping
