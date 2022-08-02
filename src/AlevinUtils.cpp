@@ -220,7 +220,7 @@ namespace alevin {
       bool ok = protocol.read_geo.extract_read(seq, seq2, subseq);
       struct ReadSeqs readSeqs;
       readSeqs.seq2 = subseq;
-      if (protocol.get_reads_to_use() == ReadsToUse::USE_BOTH) {
+      if (protocol.readsToUse == ReadsToUse::USE_BOTH) {
         std::string seq1 = seq;
         bool ok2 = extractSequence(seq, protocol, seq1);
         readSeqs.seq1 = seq1;
