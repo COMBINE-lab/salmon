@@ -578,14 +578,20 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
              ((fw_minus_rc < 0) ? HitDirection::RC : HitDirection::BOTH);
     }
 
-    inline SimpleHit get_fw_hit() {
+    inline SimpleHit get_fw_hit(uint32_t read_num) {
+      PairingStatus pairing_status;
+      if (read_num == 0) pairing_status = PairingStatus::UNPAIRED_LEFT;
+      else pairing_status = PairingStatus::UNPAIRED_RIGHT;
       return SimpleHit{true, approx_pos_fw, fw_score, fw_hits, std::numeric_limits<uint32_t>::max(),
-                       PairingStatus::UNPAIRED_LEFT}; 
+                       pairing_status};
     }
 
-    inline SimpleHit get_rc_hit() {
+    inline SimpleHit get_rc_hit(uint32_t read_num) {
+      PairingStatus pairing_status;
+      if (read_num == 0) pairing_status = PairingStatus::UNPAIRED_LEFT;
+      else pairing_status = PairingStatus::UNPAIRED_RIGHT;
       return SimpleHit{false, approx_pos_rc, rc_score, rc_hits, std::numeric_limits<uint32_t>::max(),
-                       PairingStatus::UNPAIRED_RIGHT};
+                       pairing_status};
     }
 
     inline SimpleHit get_fr_hit(int32_t pos, float score, uint32_t num_hits, uint32_t tid) {
@@ -670,22 +676,20 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                           std::back_inserter(accepted_hits), [] (SimpleHit hit1, SimpleHit hit2) {
 
                           int32_t pos_spacing_max = 1000;
-                          // todo: do this in a better way
-                          // fw read1 should not be to the right of rc read2 
-                          // int32_t half_seq_length = pos_spacing_max/2;
                           int32_t pos_diff = abs(hit1.pos - hit2.pos); // difference in position of reads
 
                           bool is_hit_pair = ((hit1.tid == hit2.tid) and (hit1.is_fw != hit2.is_fw)
-                          and (pos_diff <= pos_spacing_max)); // and (hit1.pos < half_seq_length) 
-                          // and (hit2.pos < half_seq_length));
+                          and (pos_diff <= pos_spacing_max) and ((hit1.is_fw and hit1.pos < hit2.pos)
+                          or (!hit1.is_fw and hit2.pos < hit1.pos)));
+                          // fw read should be to the left of rc read
 
                           if (is_hit_pair) {
-                            if (hit1.is_fw) {
-                              hit1 = SimpleHit{hit1.is_fw, hit1.pos, hit1.score, hit1.num_hits, 
-                              hit1.tid, PairingStatus::PAIRED_FR};
+                            if (hit2.is_fw) {
+                              hit1 = SimpleHit{hit2.is_fw, hit2.pos, hit2.score, hit2.num_hits, 
+                              hit2.tid, PairingStatus::PAIRED_RF};
                             } else {
-                              hit1 = SimpleHit{hit1.is_fw, hit1.pos, hit1.score, hit1.num_hits, 
-                              hit1.tid, PairingStatus::PAIRED_RF};
+                              hit1 = SimpleHit{hit2.is_fw, hit2.pos, hit2.score, hit2.num_hits, 
+                              hit2.tid, PairingStatus::PAIRED_FR};
                             }
                           }
 
@@ -989,7 +993,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                     // if the best direction is FW or BOTH, add the fw hit
                     // otherwise add the RC.
                     auto simple_hit = (best_hit_dir != HitDirection::RC) ? 
-                                      kv.second.get_fw_hit() : kv.second.get_rc_hit();
+                                      kv.second.get_fw_hit(read_num) : kv.second.get_rc_hit(read_num);
 
                     if (simple_hit.num_hits >= num_valid_hits) { 
                       simple_hit.tid = kv.first;
@@ -1007,7 +1011,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                       // add the rc hit here (since we added the fw)
                       // above if the best hit was either FW or BOTH
                       if (best_hit_dir == HitDirection::BOTH) {
-                        auto second_hit = kv.second.get_rc_hit();
+                        auto second_hit = kv.second.get_rc_hit(read_num);
                         second_hit.tid = kv.first;
                         if (readsToUse == ReadsToUse::USE_BOTH) {
                           if (read_num == 0) { // left read
@@ -1132,25 +1136,26 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
         // PairingStatus { UNPAIRED_LEFT, UNPAIRED_RIGHT, PAIRED_FR, PAIRED_RF };
         bool use_fw_mask;
         for (auto& aln : accepted_hits) {
+          use_fw_mask = aln.is_fw;
           if (readsToUse == ReadsToUse::USE_BOTH) { // 5' library
             if (aln.pairing_status == PairingStatus::UNPAIRED_LEFT) {
-              // if only the left read mapped, check for its ori
-              use_fw_mask = aln.is_fw;
-            } else if (aln.pairing_status == PairingStatus::UNPAIRED_RIGHT) {
-              // if only the right read mapped, use the assumed left read ori
+              // if only the left read mapped, use the assumed right read ori
               use_fw_mask = !aln.is_fw;
+            } else if (aln.pairing_status == PairingStatus::UNPAIRED_RIGHT) {
+              // if only the right read mapped, use its ori
+              use_fw_mask = aln.is_fw;
             } else {
-              // if both reads mapped, use fw mask if left read if forward
-              // false if (aln.pairing_status == PairingStatus::PAIRED_RF)
-              use_fw_mask = (aln.pairing_status == PairingStatus::PAIRED_FR);
+              // if both reads mapped, use ori of right read
+              // false if (aln.pairing_status == PairingStatus::PAIRED_FR)
+              use_fw_mask = (aln.pairing_status == PairingStatus::PAIRED_RF);
             }
           } else { // 3' library
             if (aln.pairing_status == PairingStatus::UNPAIRED_LEFT) {
-              // if only the left read mapped, check for its ori
-              use_fw_mask = aln.is_fw;
-            } else if (aln.pairing_status == PairingStatus::UNPAIRED_RIGHT) {
-              // if only the right read mapped, use the assumed left read ori
+              // if only the left read mapped, use the assumed right read ori
               use_fw_mask = !aln.is_fw;
+            } else if (aln.pairing_status == PairingStatus::UNPAIRED_RIGHT) {
+              // if only the right read mapped, use its ori
+              use_fw_mask = aln.is_fw;
             }
           }
           uint32_t fw_mask = use_fw_mask ? 0x80000000 : 0x00000000;
@@ -1296,7 +1301,10 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
     // jointAlignmentsLeft becomes jointAlignments
     else if (jointAlignmentsRight.size() == 0) {
       for (auto& hit : jointAlignmentsLeft) {
-        jointAlignments.emplace_back(hit);
+        // for orphans from left read, record assumed ori of right read
+        QuasiAlignment new_hit = QuasiAlignment(hit.tid, hit.pos, !hit.fwd, hit.readLen, 
+                                 hit.cigar, hit.fragLen, false); //isPaired = false
+        jointAlignments.emplace_back(new_hit);
       }
       return true;
     }
@@ -1305,7 +1313,10 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
     // jointAlignmentsRight becomes jointAlignments
     else if (jointAlignmentsLeft.size() == 0) {
       for (auto& hit : jointAlignmentsRight) {
-        jointAlignments.emplace_back(hit);
+        // for orphans from right read, record ori
+        QuasiAlignment new_hit = QuasiAlignment(hit.tid, hit.pos, hit.fwd, hit.readLen, 
+                                 hit.cigar, hit.fragLen, false); //isPaired = false
+        jointAlignments.emplace_back(new_hit);
       }
       return true;
     }
@@ -1331,23 +1342,16 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
                           (QuasiAlignment hit1, QuasiAlignment hit2) {
 
                           int32_t pos_spacing_max = 1000;
-                          // todo: do this in a better way
-                          // fw read1 should not be to the right of rc read2 
-                          int32_t half_seq_length = pos_spacing_max/2;
                           int32_t pos_diff = abs(hit1.pos - hit2.pos); // difference in position of reads
 
                           bool is_hit_pair = ((hit1.tid == hit2.tid) and (hit1.fwd != hit2.fwd)
-                          and (pos_diff <= pos_spacing_max)); // and (hit1.pos < half_seq_length) 
-                          // and (hit2.pos < half_seq_length));
+                          and (pos_diff <= pos_spacing_max) and ((hit1.fwd and hit1.pos < hit2.pos)
+                          or (!hit1.fwd and hit2.pos < hit1.pos)));
+                          // fw read should have a smaller pos than rc read
 
                           if (is_hit_pair) {
-                            if (hit1.fwd) {
-                              hit1 = QuasiAlignment(hit1.tid, hit1.pos, hit1.fwd, hit1.readLen, 
-                                                    hit1.cigar, hit1.fragLen, true); //isPaired = true
-                            } else {
-                              hit1 =  QuasiAlignment(hit1.tid, hit1.pos, hit1.fwd, hit1.readLen, 
-                                                     hit1.cigar, hit1.fragLen, true); //isPaired = true
-                            }
+                              hit1 = QuasiAlignment(hit2.tid, hit2.pos, hit2.fwd, hit2.readLen, 
+                                                    hit2.cigar, hit2.fragLen, true); //isPaired = true
                           }
 
                           return is_hit_pair;
@@ -1880,31 +1884,18 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
           bw << umi;
         }
 
-
-        // todo: use PairingStatus to choose how to mask rather than isPaired
-        // for a pair, status of read1 should be used
-        // for singles, status of read1 (or what it should be) should be used
-
         bool use_fw_mask;
         for (auto& aln : jointAlignments) {
-          if (readsToUse == ReadsToUse::USE_BOTH) { // 5' library
-            if (aln.isPaired == true) {
-              // if it is a paired hit, use ori of left read
-              use_fw_mask = aln.fwd;
-            } else { // !isPaired 
-              // if (is_left)
-              // if only the left read mapped, use the left read ori
-              // else (is_right)
-              // if only the right read mapped, use the assumed left read ori
-              use_fw_mask = aln.fwd;
-            }
-          } else { // 3' library
-            // if (is_left)
-            // if only the left read mapped, use the left read ori
-            // else (is_right)
-            // if only the right read mapped, use the assumed left read ori
+            // for 5' library:
+            // if it is a paired hit, use ori of right read
+            // if only the right read mapped, use its ori
+            // if only the left read mapped, use the assumed ori of right read
+            // these cases are all handled in merge_joint_alignments
+
+            // for 3' library:
+            // hit can only be from right read, use its ori
+            // this is the default behavior 
             use_fw_mask = aln.fwd;
-          }
           uint32_t fw_mask = use_fw_mask ? 0x80000000 : 0x00000000;
           //bw << is_fw;
           bw << (aln.tid | fw_mask);
