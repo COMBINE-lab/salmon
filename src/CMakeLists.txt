@@ -141,7 +141,6 @@ else()
   set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
 endif()
 
-
 set (TGT_RELEASE_FLAGS "${TGT_COMPILE_FLAGS};${TGT_WARN_FLAGS}")
 set (TGT_DEBUG_FLAGS "-g;${TGT_COMPILE_FLAGS};${TGT_WARN_FLAGS}")
 
@@ -155,6 +154,8 @@ HAVE_SSTREAM=1
 STX_NO_STD_STRING_VIEW=1
 span_FEATURE_MAKE_SPAN_TO_STD=14
 )
+target_include_directories(salmon_core PUBLIC ${COMPACT_VECTOR_INCLUDE_PATH})
+
 
 if (USE_ARM)
 target_compile_definitions(salmon_core PUBLIC KSW_USE_ARM=1)
@@ -176,6 +177,7 @@ HAVE_ANSI_TERM=1
 HAVE_SSTREAM=1
 span_FEATURE_MAKE_SPAN_TO_STD=14
 )
+target_include_directories(alevin_core PUBLIC ${COMPACT_VECTOR_INCLUDE_PATH})
 
 if (USE_ARM)
 target_compile_definitions(alevin_core PUBLIC KSW_USE_ARM=1)
@@ -190,6 +192,7 @@ endif()
 
 # Build the salmon executable
 add_executable(salmon ${SALMON_MAIN_SRCS} ${SALMON_ALIGN_SRCS})
+target_include_directories(salmon PUBLIC ${COMPACT_VECTOR_INCLUDE_PATH})
 
 if(HAS_IPO AND (NOT NO_IPO))
   set_property(TARGET salmon PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
@@ -202,6 +205,7 @@ target_compile_options(UnitTestsMain PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_F
 add_executable(unitTests ${UNIT_TESTS_INDIVIDUAL_SRCS} ${GAT_SOURCE_DIR}/tests/catch.hpp)
 target_compile_options(unitTests PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
 target_compile_options(unitTests PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
+target_include_directories(unitTests PUBLIC ${COMPACT_VECTOR_INCLUDE_PATH})
 
 #add_executable(salmon-read ${SALMON_READ_SRCS})
 #set_target_properties(salmon-read PROPERTIES COMPILE_FLAGS "${CMAKE_CXX_FLAGS} -DHAVE_LIBPTHREAD -D_PBGZF_USE -fopenmp"

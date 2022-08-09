@@ -14,8 +14,7 @@
 #include <limits>
 #include <memory>
 
-//#include "rapmap/bit_array.h"
-#include "pufferfish/compact_vector/compact_vector.hpp"
+#include "compact_vector/compact_vector.hpp"
 #include "pufferfish/rank9b.hpp"
 
 class Transcript {
