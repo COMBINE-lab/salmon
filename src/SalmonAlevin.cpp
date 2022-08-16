@@ -684,6 +684,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
                           // fw read should be to the left of rc read
 
                           if (is_hit_pair) {
+                            // we always want to record the info from read 2
                             if (hit2.is_fw) {
                               hit1 = SimpleHit{hit2.is_fw, hit2.pos, hit2.score, hit2.num_hits, 
                               hit2.tid, PairingStatus::PAIRED_RF};
@@ -1095,11 +1096,7 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
 
       alevin::types::AlevinCellBarcodeKmer bck;
       bool barcode_ok = bck.fromChars(barcode);
- 
 
-      // how to change this code for 5' library support?
-      // just record ori for read1
-      // if only read2 mapped, return opposite ori for read2
 
       // NOTE: Think if we should put decoy mappings in the RAD file
       if (mapType == salmon::utils::MappingType::SINGLE_MAPPED) {
@@ -1133,7 +1130,6 @@ void process_reads_sc_sketch(paired_parser* parser, ReadExperimentT& readExp, Re
           bw << umi;
         }
 
-        // PairingStatus { UNPAIRED_LEFT, UNPAIRED_RIGHT, PAIRED_FR, PAIRED_RF };
         bool use_fw_mask;
         for (auto& aln : accepted_hits) {
           use_fw_mask = aln.is_fw;
@@ -1487,8 +1483,6 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
       jointAlignmentsLeft.clear();
       jointAlignmentsRight.clear();
 
-      //jointAlignments.clear();
-      // readSubSeq = nullptr;//.clear();
       mapType = salmon::utils::MappingType::UNMAPPED;
       uint32_t read_num;
 
@@ -1886,16 +1880,16 @@ void process_reads_sc_align(paired_parser* parser, ReadExperimentT& readExp, Rea
 
         bool use_fw_mask;
         for (auto& aln : jointAlignments) {
-            // for 5' library:
-            // if it is a paired hit, use ori of right read
-            // if only the right read mapped, use its ori
-            // if only the left read mapped, use the assumed ori of right read
-            // these cases are all handled in merge_joint_alignments
+          // for 5' library:
+          // if it is a paired hit, use ori of right read
+          // if only the right read mapped, use its ori
+          // if only the left read mapped, use the assumed ori of right read
+          // these cases are all handled in merge_joint_alignments
 
-            // for 3' library:
-            // hit can only be from right read, use its ori
-            // this is the default behavior 
-            use_fw_mask = aln.fwd;
+          // for 3' library:
+          // hit can only be from usable read, use its ori
+          // this is the default behavior 
+          use_fw_mask = aln.fwd;
           uint32_t fw_mask = use_fw_mask ? 0x80000000 : 0x00000000;
           //bw << is_fw;
           bw << (aln.tid | fw_mask);
