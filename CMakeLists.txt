@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.12)
+cmake_minimum_required(VERSION 3.15)
 
 if(DEFINED ENV{CC})
   set(CC $ENV{CC})
@@ -906,10 +906,19 @@ set(CPACK_SOURCE_IGNORE_FILES
 
 message("CPACK_SOURCE_IGNORE_FILES = ${CPACK_SOURCE_IGNORE_FILES}")
 
+# we will use this property later
+define_property(TARGET PROPERTY COMPACT_VECTOR_DIR INHERITED 
+   BRIEF_DOCS "the path to the directory containing the compact_vector include tree"
+   FULL_DOCS "the path to the directory containing the compact_vector include tree")
+
 # Recurse into pufferfish source directory 
 # and build the library 
 set(BUILD_PUFF_FOR_SALMON TRUE)
 add_subdirectory(external/pufferfish)
+
+# make sure we know the path to compact_vector
+get_property(COMPACT_VECTOR_INCLUDE_PATH TARGET graphdump PROPERTY COMPACT_VECTOR_DIR)
+message("fetched path for compact_vector as [${COMPACT_VECTOR_INCLUDE_PATH}]")
 
 # and then the main salmon source directory
 add_subdirectory(src)
