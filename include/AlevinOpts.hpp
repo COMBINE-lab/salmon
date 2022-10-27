@@ -86,11 +86,11 @@ struct AlevinOpts {
   // initialize EM with uniform prior
   bool initUniform;
   //number of cells
-  uint32_t numCells;
+  uint64_t numCells;
   // minimum number of CB to use for low confidence region
-  uint32_t lowRegionMinNumBarcodes;
+  uint64_t lowRegionMinNumBarcodes;
   // maximum number of barcodes to use
-  uint32_t maxNumBarcodes;
+  uint64_t maxNumBarcodes;
   // number of bootstraps to perform
   uint32_t numBootstraps;
   // number of gibbs samples to perform
@@ -119,27 +119,27 @@ struct AlevinOpts {
   boost::filesystem::path bfhFile;
 
   //meta-info related tags
-  uint32_t totalReads;
-  uint32_t totalUsedReads;
-  uint32_t readsThrown;
+  uint64_t totalReads;
+  uint64_t totalUsedReads;
+  uint64_t readsThrown;
 
-  uint32_t totalCBs;
-  uint32_t totalUsedCBs;
+  uint64_t totalCBs;
+  uint64_t totalUsedCBs;
 
-  uint32_t kneeCutoff;
-  uint32_t intelligentCutoff;
-  uint32_t totalLowConfidenceCBs;
-  uint32_t numFeatures;
-  uint32_t numNoMapCB;
+  uint64_t kneeCutoff;
+  uint64_t intelligentCutoff;
+  uint64_t totalLowConfidenceCBs;
+  uint64_t numFeatures;
+  uint64_t numNoMapCB;
 
-  uint32_t eqReads;
-  uint32_t noisyUmis;
+  uint64_t eqReads;
+  uint64_t noisyUmis;
   double mappingRate;
   double keepCBFraction;
   double vbemNorm;
 
-  uint32_t totalDedupUMIs;
-  uint32_t totalExpGenes;
+  uint64_t totalDedupUMIs;
+  uint64_t totalExpGenes;
 };
 
 #endif // ALEVIN_OPTS_HPP
