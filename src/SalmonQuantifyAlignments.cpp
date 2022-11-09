@@ -20,6 +20,7 @@ extern "C" {
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <cmath>
 
 #include <oneapi/tbb/concurrent_queue.h>
 
@@ -245,6 +246,7 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
   auto alignerType = alnLib.getAlignerType();
 
   bool haveASTag{false};
+  bool havepbTag{false};
   bool firstTagCheck{true};
 
   // If we are dealing with RapMap or Pufferfish mappings, then we
@@ -277,6 +279,23 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
         score = LOG_1;
       }
       firstTagCheck = false;
+      return score;
+    };
+
+    //getting the long read length distribution value
+    auto getLongFragProb =
+    [&havepbTag](FragT* aln) -> double {
+      if (!havepbTag) {
+        char* tp = bam_aux_find(aln->getRead1(), "pb");
+        havepbTag = (tp != NULL);
+      }
+      double score{LOG_0};
+      if (havepbTag) {
+        uint8_t* tl = reinterpret_cast<uint8_t*>(bam_aux_find(aln->getRead1(), "pb"));
+        auto score = (tl != NULL) ? bam_aux_i(tl) : LOG_1;
+      } else {
+        score = LOG_1;
+      }
       return score;
     };
 
@@ -462,8 +481,17 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
         }
 
         // TESTING
+        //obtaining the log of the fragment length distribution for long reads
         if (noFragLenFactor) {
-          logFragProb = LOG_1;
+          //float probability value
+          if(havepbTag)
+          {
+            double Fragprob1 = getLongFragProb(aln);
+            logFragProb = salmon::math::log(Fragprob1);
+          }else
+          {
+            logFragProb = LOG_1;
+          }
         }
 
         if (autoDetect) {
