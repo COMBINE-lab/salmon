@@ -14,7 +14,10 @@ execute_process(COMMAND ${SALMON_QUASI_INDEX_CMD}
                 )
 
 if (SALMON_QUASI_INDEX_RESULT)
-    message(FATAL_ERROR "Error running ${SALMON_QUASI_INDEX_COMMAND}")
+    message(FATAL_ERROR
+            "While running: ${SALMON_QUASI_INDEX_CMD}\n"
+            "error: ${SALMON_QUASI_INDEX_RESULT}"
+            )
 endif()
 
 set(SALMON_QUANT_COMMAND ${CMAKE_BINARY_DIR}/salmon quant -i sample_salmon_quasi_index -l IU -1 reads_1.fastq -2 reads_2.fastq -o sample_salmon_quasi_quant)
@@ -23,7 +26,10 @@ execute_process(COMMAND ${SALMON_QUANT_COMMAND}
                 RESULT_VARIABLE SALMON_QUASI_QUANT_RESULT
                 )
 if (SALMON_QUASI_QUANT_RESULT)
-    message(FATAL_ERROR "Error running ${SALMON_QUASI_QUANT_RESULT}")
+    message(FATAL_ERROR
+            "While running: ${SALMON_QUANT_COMMAND}\n"
+            "error: ${SALMON_QUASI_QUANT_RESULT}"
+            )
 endif()
 
 if (EXISTS ${TOPLEVEL_DIR}/sample_data/sample_salmon_quasi_quant/quant.sf)
