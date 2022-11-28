@@ -285,14 +285,14 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
     //getting the long read length distribution value
     auto getLongFragProb =
     [&havepbTag](FragT* aln) -> double {
-      if (!havepbTag) {
-        char* tp = bam_aux_find(aln->getRead1(), "pb");
-        havepbTag = (tp != NULL);
-      }
+
+      char* tp = bam_aux_find(aln->getRead1(), "pb");
+      havepbTag = (tp != NULL);
       double score{LOG_0};
       if (havepbTag) {
         uint8_t* tl = reinterpret_cast<uint8_t*>(bam_aux_find(aln->getRead1(), "pb"));
-        auto score = (tl != NULL) ? bam_aux_i(tl) : LOG_1;
+        auto score = (tl != NULL) ? bam_aux_f(tl) : LOG_1;
+        std::cout<<"\n score: "<<score;
       } else {
         score = LOG_1;
       }
@@ -566,10 +566,25 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
         // of The fragment length probabilty The mapping score (under error
         // model) probability The fragment compatibility probability
 
+        //Testing for considering KM probability for long reads
+        auto LongFragprob1 = getLongFragProb(aln);
+        //std::cout<<"\n havepbTag: "<<havepbTag;
+        //std::cout<<"\n LongFragprob1: "<<LongFragprob1;
+        double LongFragProb = 0.0;
+        if(havepbTag)
+        {
+          LongFragProb = LongFragprob1 > 0.0 ? std::log(LongFragprob1) : salmon::math::LOG_EPSILON;
+          //std::cout<<"\n LongFragprob1: "<<LongFragprob1;
+          //std::cout<<"\n LongFragProb: "<<LongFragProb<<"\n";
+        }else
+        {
+          LongFragProb = LOG_1;
+        }
+
         // The auxProb does *not* account for the start position
         // probability!
-        double auxProb = logFragProb + errLike + logAlignCompatProb;
-
+        double auxProb = logFragProb + errLike + logAlignCompatProb + LongFragProb;
+        //std::cout<<"\n auxProb: "<<auxProb<<"\n";
         // The overall mass of this transcript, which is used to
         // account for this transcript's relaive abundance
         double transcriptLogCount = transcript.mass(initialRound);
