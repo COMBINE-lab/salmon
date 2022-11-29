@@ -284,17 +284,21 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
 
     //getting the long read length distribution value
     auto getLongFragProb =
-    [&havepbTag](FragT* aln) -> double {
+    [&havepbTag](FragT* aln) -> float {
 
       char* tp = bam_aux_find(aln->getRead1(), "pb");
       havepbTag = (tp != NULL);
-      double score{LOG_0};
+      float score;
       if (havepbTag) {
         uint8_t* tl = reinterpret_cast<uint8_t*>(bam_aux_find(aln->getRead1(), "pb"));
-        auto score = (tl != NULL) ? bam_aux_f(tl) : LOG_1;
-        std::cout<<"\n score: "<<score;
+        score = (tl != NULL) ? bam_aux_f(tl) : 1.0;
+        if(score > 1)
+        {
+          std::cout <<"\n the score value is greater than 1";
+        }
+        //std::cout<<"\n score: "<< score;
       } else {
-        score = LOG_1;
+        score = 1.0;
       }
       return score;
     };
