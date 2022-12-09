@@ -348,7 +348,7 @@ namespace alevin {
       (void)read2;
       pt.anchorPos = read.find(pt.anchorSeq);
       if (pt.anchorPos != std::string::npos && ( pt.anchorPos == pt.maxHairpinIndexLen || pt.anchorPos == pt.maxHairpinIndexLen -1) // only 2 possible values of pt.anchorPos
-         && read.length() >= pt.barcodeLength + pt.umiLength + pt.anchorSeqLen) {
+         && read.length() >= pt.barcodeLength + pt.umiLength + pt.anchorSeqLen -2) { // Subtract 2 to counter artificial increase in barcode length
            std::string bcAssign = read.substr(0,pt.anchorPos) + read.substr(pt.anchorPos + pt.anchorSeqLen + pt.umiLength, pt.rtIdxLen);
         if (pt.anchorPos < pt.maxHairpinIndexLen) { // hairpin index can be 9 or 10 bp
            bcAssign += "AC";
