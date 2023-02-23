@@ -10,7 +10,10 @@ find_path(STADEN_INCLUDE_DIR io_lib
 	HINTS ${STADEN_ROOT} ENV STADEN_ROOT
   PATH_SUFFIXES include)
 
-find_library(STADEN_LIBRARY NAMES staden-read libstaden-read
+find_library(STADEN_LIBRARY NAMES staden-read libstaden-read 
+  HINTS ${STADEN_ROOT} ENV STADEN_ROOT PATH_SUFFIXES lib lib64)
+
+find_library(HTSCODEC_LIBRARY NAMES htscodecs libhtscodecs
   HINTS ${STADEN_ROOT} ENV STADEN_ROOT PATH_SUFFIXES lib lib64)
 
 if(STADEN_INCLUDE_DIR)
@@ -30,7 +33,7 @@ find_package_handle_standard_args(libstadenio DEFAULT_MSG
 
 if (LIBSTADENIO_FOUND)
   message(STATUS "Staden IOLib found (include: ${STADEN_INCLUDE_DIR})")
-  set(STADEN_LIBRARIES ${STADEN_LIBRARY})
+  set(STADEN_LIBRARIES "${STADEN_LIBRARY};${HTSCODEC_LIBRARY}")
 endif()
 
 mark_as_advanced(STADEN_INCLUDE_DIR STADEN_LIBRARY)

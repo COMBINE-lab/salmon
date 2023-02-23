@@ -229,6 +229,7 @@ add_dependencies(salmon ksw2pp)
 add_dependencies(salmon salmon_core)
 add_dependencies(salmon alevin_core)
 if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
+
 # Link the executable
 target_link_libraries(salmon
     Threads::Threads 
@@ -240,7 +241,7 @@ target_link_libraries(salmon
     gff
     ${Boost_LIBRARIES}
     ${ICU_LIBS}
-    ${STADEN_LIBRARIES} ${CURL_LIBRARIES}
+    ${CURL_LIBRARIES}
     ${ZLIB_LIBRARY}
     m
     ${LIBLZMA_LIBRARIES}
@@ -253,6 +254,7 @@ target_link_libraries(salmon
     ${FAST_MALLOC_LIB}
     TBB::tbb
     TBB::tbbmalloc
+    ${STADEN_LIBRARIES} 
     ${LIBRT}
     ${CMAKE_DL_LIBS}
 )
@@ -273,12 +275,13 @@ if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
 target_link_libraries(unitTests
     Threads::Threads
 ## PUFF_INTEGRATION
+    ${Boost_LIBRARIES}
     salmon_core
     alevin_core
     gff
     UnitTestsMain
-    ${STADEN_LIBRARIES} 
     ${Boost_LIBRARIES}
+    ${STADEN_LIBRARIES} 
     ${ICU_LIBS}
     ${CURL_LIBRARIES}
     ${ZLIB_LIBRARY}
