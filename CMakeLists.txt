@@ -786,7 +786,7 @@ find_package(CURL)
 if (FETCH_STADEN)
   set(LIBSTADEN_FOUND FALSE)
 else ()
-  find_package(libstadenio)
+  find_package(libstadenio 1.14.15)
 endif()
 
 if (NOT LIBSTADENIO_FOUND)
