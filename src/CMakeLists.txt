@@ -244,6 +244,7 @@ target_link_libraries(salmon
     ${CURL_LIBRARIES}
     ${ZLIB_LIBRARY}
     m
+    ${STADEN_LIBRARIES} 
     ${LIBLZMA_LIBRARIES}
     ${BZIP2_LIBRARIES}
     ${LIBSALMON_LINKER_FLAGS}
@@ -254,7 +255,6 @@ target_link_libraries(salmon
     ${FAST_MALLOC_LIB}
     TBB::tbb
     TBB::tbbmalloc
-    ${STADEN_LIBRARIES} 
     ${LIBRT}
     ${CMAKE_DL_LIBS}
 )

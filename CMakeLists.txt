@@ -814,7 +814,7 @@ if (NOT LIBSTADENIO_FOUND)
   endif()
 
   set(FETCHED_STADEN TRUE)
-  set(STADEN_LIBRARIES "${GAT_SOURCE_DIR}/external/install/lib/libhtscodecs.a;${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a")
+  set(STADEN_LIBRARIES "${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a;${GAT_SOURCE_DIR}/external/install/lib/libhtscodecs.a")
 endif()
 
 if (ASAN_BUILD)
