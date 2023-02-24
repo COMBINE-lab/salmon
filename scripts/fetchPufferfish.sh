@@ -23,11 +23,11 @@ if [ -d ${INSTALL_DIR}/src/pufferfish ] ; then
     rm -fr ${INSTALL_DIR}/src/pufferfish
 fi
 
-SVER=salmon-v1.9.0
+SVER=salmon-v1.10.0
 #SVER=develop
 #SVER=sketch-mode
 
-EXPECTED_SHA256=2a862daeff95a19c9b188bc26a5d02fc0ecc5b9c9ae5523a67c9d14e62551c5d
+EXPECTED_SHA256=c961b9c252856b53c6538d22103b711c924ea1e649516de81efb85870aa8b143
 
 mkdir -p ${EXTERNAL_DIR}
 curl -k -L https://github.com/COMBINE-lab/pufferfish/archive/${SVER}.zip -o ${EXTERNAL_DIR}/pufferfish.zip
@@ -92,7 +92,8 @@ cp ${EXTERNAL_DIR}/pufferfish/include/BinWriter.hpp ${INSTALL_DIR}/include/puffe
 
 cp -r ${EXTERNAL_DIR}/pufferfish/include/libdivide ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/ksw2pp ${INSTALL_DIR}/include/pufferfish
-cp -r ${EXTERNAL_DIR}/pufferfish/include/compact_vector ${INSTALL_DIR}/include/pufferfish
+# this is now automatically tracked and inherited via twopaco (on which libpuffer depends)
+# cp -r ${EXTERNAL_DIR}/pufferfish/include/compact_vector ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/metro ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/itlib ${INSTALL_DIR}/include/pufferfish
 cp -r ${EXTERNAL_DIR}/pufferfish/include/sparsepp ${INSTALL_DIR}/include/pufferfish

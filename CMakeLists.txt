@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.12)
+cmake_minimum_required(VERSION 3.15)
 
 if(DEFINED ENV{CC})
   set(CC $ENV{CC})
@@ -662,7 +662,7 @@ tar -xzvf v2021.5.tar.gz
 SOURCE_DIR ${TBB_SOURCE_DIR}
 INSTALL_DIR ${TBB_INSTALL_DIR}
 PATCH_COMMAND "${TBB_PATCH_STEP}"
-CMAKE_ARGS -DCMAKE_CXX_FLAGS=${TBB_CXXFLAGS} -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR> -DTBB_TEST=OFF -DTBB_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD}
+CMAKE_ARGS -DCMAKE_CXX_FLAGS=${TBB_CXXFLAGS} -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR> -DTBB_TEST=OFF -DTBB_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD} -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER} -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
 BUILD_IN_SOURCE TRUE
 )
 
@@ -786,7 +786,7 @@ find_package(CURL)
 if (FETCH_STADEN)
   set(LIBSTADEN_FOUND FALSE)
 else ()
-  find_package(libstadenio)
+  find_package(libstadenio 1.14.15)
 endif()
 
 if (NOT LIBSTADENIO_FOUND)
@@ -794,12 +794,12 @@ if (NOT LIBSTADENIO_FOUND)
   message("==================================================================")
   externalproject_add(libstadenio
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/staden-io_lib/archive/v1.14.8.1.tar.gz -o staden-io_lib-v1.14.8.tar.gz &&
-      ${SHASUM} f6f30eefa478cfb708f3109a35fb6ffa0e24951d9d971985df2cef5919dd0bc3 staden-io_lib-v1.14.8.tar.gz &&
-      mkdir -p staden-io_lib-1.14.8 &&
-      tar -xzf staden-io_lib-v1.14.8.tar.gz --strip-components=1 -C staden-io_lib-1.14.8 &&
+    DOWNLOAD_COMMAND curl -k -L https://github.com/jkbonfield/io_lib/releases/download/io_lib-1-14-15/io_lib-1.14.15.tar.gz -o staden-io_lib-v1.14.15.tar.gz &&
+      ${SHASUM} 20814c4365e1e2fe6630fb11d0df370dec4c5688af3871de7f1cb0129671401e staden-io_lib-v1.14.15.tar.gz &&
+      mkdir -p staden-io_lib-1.14.15 &&
+      tar -xzf staden-io_lib-v1.14.15.tar.gz --strip-components=1 -C staden-io_lib-1.14.15 &&
       rm -fr staden-io_lib &&
-      mv -f staden-io_lib-1.14.8 staden-io_lib
+      mv -f staden-io_lib-1.14.15 staden-io_lib
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/staden-io_lib
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ./configure --enable-shared=no --without-libcurl --prefix=<INSTALL_DIR> LDFLAGS=${LIBSTADEN_LDFLAGS} CFLAGS=${LIBSTADEN_CFLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
@@ -814,7 +814,7 @@ if (NOT LIBSTADENIO_FOUND)
   endif()
 
   set(FETCHED_STADEN TRUE)
-  set(STADEN_LIBRARIES "${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a")
+  set(STADEN_LIBRARIES "${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a;${GAT_SOURCE_DIR}/external/install/lib/libhtscodecs.a")
 endif()
 
 if (ASAN_BUILD)
@@ -906,10 +906,19 @@ set(CPACK_SOURCE_IGNORE_FILES
 
 message("CPACK_SOURCE_IGNORE_FILES = ${CPACK_SOURCE_IGNORE_FILES}")
 
+# we will use this property later
+define_property(TARGET PROPERTY COMPACT_VECTOR_DIR INHERITED 
+   BRIEF_DOCS "the path to the directory containing the compact_vector include tree"
+   FULL_DOCS "the path to the directory containing the compact_vector include tree")
+
 # Recurse into pufferfish source directory 
 # and build the library 
 set(BUILD_PUFF_FOR_SALMON TRUE)
 add_subdirectory(external/pufferfish)
+
+# make sure we know the path to compact_vector
+get_property(COMPACT_VECTOR_INCLUDE_PATH TARGET graphdump PROPERTY COMPACT_VECTOR_DIR)
+message("fetched path for compact_vector as [${COMPACT_VECTOR_INCLUDE_PATH}]")
 
 # and then the main salmon source directory
 add_subdirectory(src)

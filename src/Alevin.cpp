@@ -164,10 +164,10 @@ std::vector<size_t> sort_indexes(const std::vector<T> &v) {
 
 // reference from https://github.com/scipy/scipy/blob/master/scipy/stats/kde.py
 // and https://github.com/CGATOxford/UMI-tools/blob/master/umi_tools/umi_methods.py#L193
-bool gaussianKDE(const std::vector<uint32_t>& freqCounter,
+bool gaussianKDE(const std::vector<uint64_t>& freqCounter,
                  const std::vector<size_t>& sortedIdx,
                  double& invCovariance, double& normFactor,
-                 uint32_t expect_cells, uint32_t& predicted_cells){
+                 uint64_t expect_cells, uint64_t& predicted_cells){
   double covariance{0.0}, mean{0.0}, bw_method {0.01}, threshold = 0.001*freqCounter[sortedIdx[0]];
   std::vector<double> logDataset;
   size_t numElem, xSpace {10000};
@@ -218,7 +218,7 @@ bool gaussianKDE(const std::vector<uint32_t>& freqCounter,
   }
 
   //calculating the argrelextrema
-  std::vector<uint32_t> local_mins;
+  std::vector<uint64_t> local_mins;
   for (size_t i=1; i<xSpace-1; i++){
     if (density[i-1] > density[i] and density[i] < density[i+1]){
       local_mins.emplace_back(i);
@@ -247,26 +247,26 @@ bool gaussianKDE(const std::vector<uint32_t>& freqCounter,
   return false;
 }
 
-uint32_t getLeftBoundary(std::vector<size_t>& sortedIdx,
-                         uint32_t topxBarcodes,
-                         const std::vector<uint32_t>& freqCounter){
+uint64_t getLeftBoundary(std::vector<size_t>& sortedIdx,
+                         uint64_t topxBarcodes,
+                         const std::vector<uint64_t>& freqCounter){
   // iterate in reverse order since sortedIdx is sorted in decreasing
   // order
   double cumCount{0.0};
   std::vector<double> freqs(topxBarcodes);
-  for(uint32_t i = 0; i < topxBarcodes; i++){
+  for(uint64_t i = 0; i < topxBarcodes; i++){
     size_t ind = sortedIdx[topxBarcodes-i-1];
     cumCount += freqCounter[ind];
     freqs[i] = std::log(cumCount);
   }
 
-  std::vector<uint32_t> X(topxBarcodes);
+  std::vector<uint64_t> X(topxBarcodes);
   std::iota(X.begin(), X.end(), 0);
 
   bool isUp;
-  uint32_t x;
+  uint64_t x;
   double y, slope, leftExtreme{freqs[0]};
-  for(uint32_t j=0; j<topxBarcodes; j++){
+  for(uint64_t j=0; j<topxBarcodes; j++){
     x = X[j];
     y = freqs[j];
 
@@ -279,7 +279,7 @@ uint32_t getLeftBoundary(std::vector<size_t>& sortedIdx,
     slope = y/x;
     // fill in the values for fitted line
     std::transform(X.begin()+nextBcIdx, X.end(), Y.begin(),
-                   [slope](uint32_t i) {return i*slope;} );
+                   [slope](uint64_t i) {return i*slope;} );
 
     isUp = false;
     double curveY, lineY;
@@ -294,9 +294,9 @@ uint32_t getLeftBoundary(std::vector<size_t>& sortedIdx,
 
     if(isUp == false){
       // ignoring all the frequencies having same frequency as cutoff
-      uint32_t cutoff = topxBarcodes-j;
-      uint32_t cutoffFrequency = freqCounter[sortedIdx[cutoff]];
-      uint32_t nearestLeftFrequency = cutoffFrequency;
+      uint64_t cutoff = topxBarcodes-j;
+      uint64_t cutoffFrequency = freqCounter[sortedIdx[cutoff]];
+      uint64_t nearestLeftFrequency = cutoffFrequency;
       while(nearestLeftFrequency == cutoffFrequency){
         nearestLeftFrequency = freqCounter[sortedIdx[--cutoff]];
       }
@@ -310,13 +310,13 @@ uint32_t getLeftBoundary(std::vector<size_t>& sortedIdx,
 
 void dumpFeatures(std::string& frequencyFileName,
                   std::vector<size_t>& sortedIdx,
-                  const std::vector<uint32_t>& freqCounter,
+                  const std::vector<uint64_t>& freqCounter,
                   std::unordered_map<uint32_t, nonstd::basic_string_view<char>>& colMap
                   ){
   std::ofstream freqFile;
   freqFile.open(frequencyFileName);
   for (auto i:sortedIdx){
-    uint32_t count = freqCounter[i];
+    uint64_t count = freqCounter[i];
     if (count == 0){
       break;
     }
@@ -330,7 +330,7 @@ void dumpFeatures(std::string& frequencyFileName,
   Knee calculation and sample true set of barcodes
  */
 template <typename ProtocolT>
-void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
+void sampleTrueBarcodes(const std::vector<uint64_t>& freqCounter,
                         TrueBcsT& trueBarcodes, size_t& lowRegionNumBarcodes,
                         std::unordered_map<uint32_t, nonstd::basic_string_view<char>> colMap,
                         AlevinOpts<ProtocolT>& aopt){
@@ -338,7 +338,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
   size_t maxNumBarcodes { aopt.maxNumBarcodes }, lowRegionMaxNumBarcodes { 1000 };
   size_t lowRegionMinNumBarcodes { aopt.lowRegionMinNumBarcodes };
   double lowConfidenceFraction { 0.5 };
-  uint32_t topxBarcodes = std::min(maxNumBarcodes, freqCounter.size());
+  uint64_t topxBarcodes = std::min(maxNumBarcodes, freqCounter.size());
   uint64_t history { 0 };
 
   if (aopt.forceCells > 0) {
@@ -358,13 +358,13 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
     // Expect Cells algorithm is taken from
     // https://github.com/10XGenomics/cellranger/blob/e5396c6c444acec6af84caa7d3655dd33a162852/lib/python/cellranger/stats.py#L138
 
-    constexpr uint32_t MAX_FILTERED_CELLS = 2;
+    constexpr uint64_t MAX_FILTERED_CELLS = 2;
     constexpr double UPPER_CELL_QUANTILE = 0.01;
     constexpr double FRACTION_MAX_FREQUENCY = 0.1;
 
-    uint32_t baselineBcs = std::max(1, static_cast<int32_t>( aopt.expectCells*UPPER_CELL_QUANTILE ));
+    uint64_t baselineBcs = std::max(static_cast<uint64_t>(1), static_cast<uint64_t>( aopt.expectCells*UPPER_CELL_QUANTILE ));
     double cutoffFrequency = std::max(1.0, freqCounter[sortedIdx[baselineBcs]] * FRACTION_MAX_FREQUENCY);
-    uint32_t maxNumCells = std::min(static_cast<uint32_t>(freqCounter.size()), aopt.expectCells * MAX_FILTERED_CELLS);
+    uint64_t maxNumCells = std::min(static_cast<uint64_t>(freqCounter.size()), aopt.expectCells * MAX_FILTERED_CELLS);
 
     topxBarcodes = maxNumCells;
     for(size_t i=baselineBcs; i<maxNumCells; i++){
@@ -395,7 +395,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
                           green, topxBarcodes, RESET_COLOR);
 
       double invCovariance {0.0}, normFactor{0.0};
-      uint32_t gaussThreshold;
+      uint64_t gaussThreshold;
       bool isGaussOk = gaussianKDE(freqCounter, sortedIdx,
                                    invCovariance, normFactor,
                                    topxBarcodes, gaussThreshold);
@@ -421,7 +421,7 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
     }
   }//end-left-knee finding case
 
-  uint32_t fractionTrueBarcodes = static_cast<int>(lowConfidenceFraction * topxBarcodes);
+  uint64_t fractionTrueBarcodes = static_cast<uint64_t>(lowConfidenceFraction * topxBarcodes);
 
   if (fractionTrueBarcodes < lowRegionMinNumBarcodes){
     lowRegionNumBarcodes = lowRegionMinNumBarcodes;
@@ -442,8 +442,8 @@ void sampleTrueBarcodes(const std::vector<uint32_t>& freqCounter,
   }
   topxBarcodes += lowRegionNumBarcodes;
 
-  uint32_t cutoffFrequency = freqCounter[sortedIdx[ topxBarcodes ]];
-  uint32_t nearestLeftFrequency = cutoffFrequency;
+  uint64_t cutoffFrequency = freqCounter[sortedIdx[ topxBarcodes ]];
+  uint64_t nearestLeftFrequency = cutoffFrequency;
   while(nearestLeftFrequency == cutoffFrequency && lowRegionNumBarcodes != 0){
     nearestLeftFrequency = freqCounter[sortedIdx[--topxBarcodes]];
     if (lowRegionNumBarcodes > lowRegionMinNumBarcodes)  { lowRegionNumBarcodes--; }
@@ -484,7 +484,7 @@ void indexBarcodes(AlevinOpts<ProtocolT>& aopt,
                    SoftMapT& barcodeSoftMap){
   std::unordered_set<std::string> neighbors;
   std::unordered_map<std::string, std::vector<std::string>> ZMatrix;
-  uint32_t wrngWhiteListCount{0};
+  uint64_t wrngWhiteListCount{0};
   for (const auto trueBarcode: trueBarcodes){
     neighbors.clear();
     //find all neighbors to this true barcode
@@ -493,7 +493,7 @@ void indexBarcodes(AlevinOpts<ProtocolT>& aopt,
                        neighbors);
 
     for(const auto& neighbor : neighbors){
-      uint32_t freq{0};
+      uint64_t freq{0};
       auto indexIt = freqCounter.find(neighbor);
       bool indexOk = indexIt != freqCounter.end();
       //bool indexOk = freqCounter.find(neighbor, freq);
@@ -542,7 +542,7 @@ bool writeFastq(AlevinOpts<ProtocolT>& aopt,
                 SoftMapT& barcodeMap,
                 TrueBcsT& trueBarcodes){
   size_t rangeSize{0};
-  uint32_t totNumBarcodes{0};
+  uint64_t totNumBarcodes{0};
   std::string barcode( aopt.protocol.barcodeLength, 'N');
   std::string umi( aopt.protocol.umiLength, 'N');
 
@@ -717,7 +717,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
     if (aopt.dumpfeatures) {
       aopt.jointLog->info("Sorting and dumping raw barcodes");
       auto frequencyFileName = (aopt.outputDirectory / "raw_cb_frequency.txt").string();
-      std::vector<uint32_t> collapsedfrequency;
+      std::vector<uint64_t> collapsedfrequency;
       std::unordered_map<uint32_t, nonstd::basic_string_view<char>> collapMap;
       size_t ind{0};
       for(auto fqIt = freqCounter.begin(); fqIt != freqCounter.end(); ++fqIt){
@@ -731,7 +731,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
     }
   }
   else {
-    std::vector<uint32_t> collapsedfrequency;
+    std::vector<uint64_t> collapsedfrequency;
     std::unordered_map<uint32_t, nonstd::basic_string_view<char>> collapMap;
     size_t ind{0};
     for(auto fqIt = freqCounter.begin(); fqIt != freqCounter.end(); ++fqIt){
@@ -741,7 +741,7 @@ void processBarcodes(std::vector<std::string>& barcodeFiles,
     }
 
     if (aopt.keepCBFraction != 0.0) {
-      aopt.forceCells = std::min(static_cast<uint32_t>(aopt.keepCBFraction * freqCounter.size()),
+      aopt.forceCells = std::min(static_cast<uint64_t>(aopt.keepCBFraction * freqCounter.size()),
                                  aopt.maxNumBarcodes);
       aopt.jointLog->info("Forcing to use {} cells", aopt.forceCells);
       aopt.jointLog->flush();
