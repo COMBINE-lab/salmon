@@ -269,8 +269,8 @@ mode, and a description of each, run ``salmon quant --help-alignment``.
     header sections must be identical).
 
 
-Description of important options
---------------------------------
+Description of some important options
+-------------------------------------
 
 Salmon exposes a number of useful optional command-line parameters to the user.
 The particularly important ones are explained here, but you can always run
@@ -295,6 +295,20 @@ selective alignment to mimic alignment using Bowtie2 (with the flags suggested
 by RSEM), but using the default scoring scheme and allowing both mismatches and
 indels in alignments. These setting essentially disallow indels in the resulting
 alignments.
+
+""""""""""""""""""""""""""""""
+``--meta``
+""""""""""""""""""""""""""""""
+
+As with the flags described above, this is a "meta-flag" that simply enables some options
+that may make more sense when quantifying metagenomic data.  Specifically, the ``--meta``
+flag sets the following options: 
+
+* The abundance optimization is initialized from the uniform distribution (compared to the default of using a weighted combination of the uniform intialization and the abundances learned during the online optimization)
+
+* Rich equivalence classes are disabled. Using rich equivalence classes with metagenomic data should not be particularly problematic, but since they have been developed and tested most in the context of bulk RNA-seq quantification, they are currently disabled under this flag.
+
+* The EM algorithm is used for abundance optimization instead of the default VBEM optimization.  Neither is universally better than the other, but the parameters for the VBEM (e.g. the prior size and type) are set based on typical bulk RNA-seq transcriptome samples, and so may be less appropriate in the metagenomic context. Hence the ``--meta`` flags opts for the basic EM algorithm instead.
 
 """"""""""""""""""""""""""""""
 ``--recoverOrphans``
