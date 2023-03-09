@@ -224,10 +224,10 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
     endif()
 
     set(WARNING_IGNORE_FLAGS "${WARNING_IGNORE_FLAGS} -Wno-unused-local-typedefs")
-    set(BOOST_TOOLSET "${CC}")
+    set(BOOST_TOOLSET "gcc")
     set(BOOST_CONFIGURE_TOOLSET "--with-toolset=gcc")
     set(BCXX_FLAGS "${CXXSTDFLAG} ${SCHAR_FLAG}")
-    set(BOOST_EXTRA_FLAGS toolset=${CC} cxxflags=${BCXX_FLAGS})
+    set(BOOST_EXTRA_FLAGS toolset=gcc cxxflags=${BCXX_FLAGS})
 # Tentatively, we support clang now
 elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
     set(CLANG TRUE)
