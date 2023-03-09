@@ -789,6 +789,7 @@ else ()
   find_package(libstadenio)
 endif()
 
+## TODO: Update to new staden
 if (NOT LIBSTADENIO_FOUND)
   message("Build system will compile Staden IOLib")
   message("==================================================================")
