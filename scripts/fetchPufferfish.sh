@@ -23,8 +23,8 @@ if [ -d ${INSTALL_DIR}/src/pufferfish ] ; then
     rm -fr ${INSTALL_DIR}/src/pufferfish
 fi
 
-SVER=salmon-v1.10.0
-#SVER=develop
+#SVER=salmon-v1.10.0
+SVER=develop
 #SVER=sketch-mode
 
 EXPECTED_SHA256=c961b9c252856b53c6538d22103b711c924ea1e649516de81efb85870aa8b143

@@ -224,10 +224,10 @@ if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
     endif()
 
     set(WARNING_IGNORE_FLAGS "${WARNING_IGNORE_FLAGS} -Wno-unused-local-typedefs")
-    set(BOOST_TOOLSET "${CC}")
+    set(BOOST_TOOLSET "gcc")
     set(BOOST_CONFIGURE_TOOLSET "--with-toolset=gcc")
     set(BCXX_FLAGS "${CXXSTDFLAG} ${SCHAR_FLAG}")
-    set(BOOST_EXTRA_FLAGS toolset=${CC} cxxflags=${BCXX_FLAGS})
+    set(BOOST_EXTRA_FLAGS toolset=gcc cxxflags=${BCXX_FLAGS})
 # Tentatively, we support clang now
 elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
     set(CLANG TRUE)
@@ -580,22 +580,21 @@ set(EXTERNAL_LIBRARY_PATH $CMAKE_CURRENT_SOURCE_DIR/lib)
 #  set(SUFFARRAY_INCLUDE_DIRS ${SUFFARRAY_INCLUDE_DIR})
 #endif()
 
-
-find_package(Cereal)
+find_package(cereal "1.3.2")
 if (NOT CEREAL_FOUND)
-  message("Build system will fetch and build the Cereal serialization library")
+  message("Build system will fetch and build the cereal serialization library")
   message("==================================================================")
   include(ExternalProject)
   externalproject_add(libcereal
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/USCiLab/cereal/archive/v1.3.0.tar.gz -o cereal-v1.3.0.tar.gz &&
-      ${SHASUM} 329ea3e3130b026c03a4acc50e168e7daff4e6e661bc6a7dfec0d77b570851d5 cereal-v1.3.0.tar.gz &&
-      tar -xzvf cereal-v1.3.0.tar.gz
+    DOWNLOAD_COMMAND curl -k -L https://github.com/USCiLab/cereal/archive/refs/tags/v1.3.2.tar.gz -o cereal-v1.3.2.tar.gz &&
+      ${SHASUM} 16a7ad9b31ba5880dac55d62b5d6f243c3ebc8d46a3514149e56b5e7ea81f85f cereal-v1.3.2.tar.gz &&
+      tar -xzvf cereal-v1.3.2.tar.gz
 
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.3.0
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.3.2
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
-    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.3.0/build
+    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.3.2/build
     CONFIGURE_COMMAND ""
     BUILD_COMMAND ""
     INSTALL_COMMAND sh -c "mkdir -p <INSTALL_DIR>/include && cp -r <SOURCE_DIR>/include/cereal <INSTALL_DIR>/include"
