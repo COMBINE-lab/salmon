@@ -291,11 +291,18 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
       float score;
       if (havepbTag) {
         uint8_t* tl = reinterpret_cast<uint8_t*>(bam_aux_find(aln->getRead1(), "pb"));
-        score = (tl != NULL) ? bam_aux_f(tl) : 1.0;
-        if(score > 1)
+        tl[0] = 'i';
+        union
         {
-          std::cout <<"\n the score value is greater than 1";
-        }
+          float f;
+          int32_t i;
+        } src;
+        src.i = bam_aux_i(tl);
+        score = (tl != NULL) ? src.f : 1.0;
+        //if(score > 1)
+        //{
+        //  std::cout <<"\n the score value is greater than 1";
+        //}
         //std::cout<<"\n score: "<< score;
       } else {
         score = 1.0;
