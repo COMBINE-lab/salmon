@@ -1,0 +1,10 @@
+@SQ	SN:xx	LN:30
+@SQ	SN:yy	LN:20
+a1	67	xx	1	1	4M	=	6	20	AAAA	*
+a1	227	xx	6	1	4M	=	12	-20	AAAA	*
+a1	2291	xx	12	1	4M	=	17	-20	TTTT	*
+a1	147	xx	17	1	4M	=	1	-20	TTTT	*
+a1	323	yy	1	1	4M	=	6	20	AAAA	*
+a1	483	yy	6	1	4M	=	12	-20	AAAA	*
+a1	2547	yy	12	1	4M	=	17	-20	TTTT	*
+a1	403	yy	17	1	4M	=	1	-20	TTTT	*

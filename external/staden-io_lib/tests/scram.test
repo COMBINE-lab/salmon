@@ -1,0 +1,93 @@
+#!/bin/sh
+
+$srcdir/generate_data.pl || exit 1
+
+scramble="${VALGRIND} $top_builddir/progs/scramble ${SCRAMBLE_ARGS}"
+compare_sam=$srcdir/compare_sam.pl
+
+#valgrind="valgrind --leak-check=full"
+#scramble="$valgrind $scramble"
+
+case $# in
+    0) files=`/bin/ls $srcdir/data/*.{sam,bam} | egrep -v '[._](full|\.sub|java)\.'`
+       ;;
+    *) files=${@+"$@"}
+       ;;
+esac
+
+for i in $files
+do
+    ref=`echo $i | sed 's/#.*/.fa/'`
+    root=`echo $i | sed 's/\.[sb]am$//;s:.*/::'`
+    echo "=== testing $i ==="
+
+
+    # Create BAM from SAM or SAM from BAM
+    if [ ${i//.bam} == $i ]
+    then
+	echo "$scramble $i $outdir/$root.bam"
+	$scramble $i $outdir/$root.bam || exit 1
+	cmp_sam=$srcdir/data/$root.sam
+	in_bam=$outdir/$root.bam
+    else
+	echo "$scramble $i $outdir/$root.sam"
+	$scramble $i $outdir/$root.sam || exit 1
+	cmp_sam=$outdir/$root.sam
+	in_bam=$i
+    fi
+
+    # Create CRAM
+    echo "$scramble -r $ref $in_bam $outdir/$root.full.cram"
+    $scramble -r $ref $in_bam $outdir/$root.full.cram || exit 1
+
+    # Test conversion back to SAM 
+    echo "$scramble $in_bam > $outdir/tmp.sam"
+    $scramble $in_bam > $outdir/tmp.sam || exit 1
+    $compare_sam $cmp_sam $outdir/tmp.sam || exit 1
+
+    echo "$scramble $outdir/$root.full.cram > $outdir/$root.full.sam"
+    $scramble $outdir/$root.full.cram > $outdir/$root.full.sam || exit 1
+    $compare_sam --nomd --unknownrg $cmp_sam $outdir/$root.full.sam || exit 1
+
+    echo "$scramble -O bam $outdir/$root.full.cram > $outdir/$root.full.bam"
+    $scramble -O bam $outdir/$root.full.cram > $outdir/$root.full.bam || exit 1
+    echo "$scramble $outdir/$root.full.bam $outdir/tmp.sam"
+    $scramble $outdir/$root.full.bam $outdir/tmp.sam || exit 1
+    sed '/^@PG.*scramble\.3.*/d;s/^\(@PG.*scramble.*\) -O bam/\1/' $outdir/tmp.sam > $outdir/$root.full.bam.sam
+    rm $outdir/tmp.sam
+    echo "$compare_sam --nopg $outdir/$root.full.sam $outdir/$root.full.bam.sam"
+    $compare_sam --nopg $outdir/$root.full.sam $outdir/$root.full.bam.sam || exit 1
+
+
+    # Try again with embedded ref; skip for unsorted sams
+    case "$root" in
+    *"unsorted") #skip
+        ;;
+    *) 
+        echo "$scramble -e -r $ref $in_bam $outdir/$root.full.cram"
+        $scramble -e -r $ref $in_bam $outdir/$root.full.cram || exit 1
+        
+        echo "$scramble $outdir/$root.full.cram > $outdir/$root.full.sam"
+        $scramble $outdir/$root.full.cram > $outdir/tmp.sam || exit 1
+	sed '/^@PG.*scramble\.3.*/d;s/^\(@PG.*scramble.*\) -e /\1 /' $outdir/tmp.sam > $outdir/$root.full.bam.sam
+        $compare_sam --nomd --unknownrg $cmp_sam $outdir/$root.full.sam || exit 1
+        echo "$compare_sam --nopg $outdir/$root.full.sam $outdir/$root.full.bam.sam"
+        $compare_sam --nopg $outdir/$root.full.sam $outdir/$root.full.bam.sam || exit 1
+	;;
+    esac
+
+
+    # And again with no ref.
+    echo "$scramble -x -r $ref $in_bam $outdir/$root.full.cram"
+    $scramble -x -r $ref $in_bam $outdir/$root.full.cram || exit 1
+
+    echo "$scramble $outdir/$root.full.cram > $outdir/$root.full.sam"
+    $scramble $outdir/$root.full.cram > $outdir/tmp.sam || exit 1
+    sed '/^@PG.*scramble\.3.*/d;s/^\(@PG.*scramble.*\) -x /\1 /' $outdir/tmp.sam > $outdir/$root.full.bam.sam
+    $compare_sam --nomd --unknownrg $cmp_sam $outdir/$root.full.sam || exit 1
+    # need compare against original here as ce#5b.sam as "*" in seq.
+    echo "$compare_sam --unknownrg $cmp_sam $outdir/$root.full.bam.sam"
+    $compare_sam --noqual --unknownrg $cmp_sam $outdir/$root.full.bam.sam || exit 1
+
+    echo ""
+done

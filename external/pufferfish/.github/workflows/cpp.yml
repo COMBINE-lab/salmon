@@ -1,0 +1,31 @@
+name: C/C++ CI
+
+on: [push]
+
+jobs:
+  build:
+    name: ${{ matrix.config.name }}
+    runs-on: ${{ matrix.config.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+            - {
+                name : "ubuntu-latest",
+                os : ubuntu-latest,
+                build_type: "Release", cc: "gcc", cxx: "g++"
+            }
+            - {
+              name : "macOS Latest Clang",
+              os : macos-latest,
+              build_type: "Release", cc: "clang", cxx: "clang++" 
+            }
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: configure
+      run: mkdir build && cd build && cmake -DCMAKE_C_COMPILER=${{ matrix.config.cc }} -DCMAKE_CXX_COMPILER=${{ matrix.config.cxx }} -DCMAKE_BUILD_TYPE=${{ matrix.config.build_type }} ..
+    - name: build
+      run: cmake --build build
+    - name: test
+      run: cd build && ./src/pufferfish help

@@ -1,0 +1,4 @@
+/home/zzare/salmon/build/src/CMakeFiles/_CMakeLTOTest-C/bin/CMakeFiles/foo.dir
+/home/zzare/salmon/build/src/CMakeFiles/_CMakeLTOTest-C/bin/CMakeFiles/boo.dir
+/home/zzare/salmon/build/src/CMakeFiles/_CMakeLTOTest-C/bin/CMakeFiles/edit_cache.dir
+/home/zzare/salmon/build/src/CMakeFiles/_CMakeLTOTest-C/bin/CMakeFiles/rebuild_cache.dir

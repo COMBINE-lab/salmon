@@ -1,0 +1,20 @@
+#!/bin/sh
+
+# Tests scramble compatibility with a simple cramtools.jar cram file.
+# Minimal, but potentially useful compatibility test.
+
+scramble="${VALGRIND} $top_builddir/progs/scramble ${SCRAMBLE_ARGS}"
+compare_sam=$srcdir/compare_sam.pl
+
+for i in `/bin/ls $srcdir/data/*_java.cram`
+do
+    echo "=== testing $i ==="
+    ref=`echo $i | sed 's/#.*/.fa/'`
+    root=`echo $i | sed 's/\.cram$//;s:.*/::'`
+    echo root=$root
+    echo "$scramble -r $ref $i $outdir/$root.scramble.sam"
+    $scramble -r $ref $i $outdir/$root.scramble.sam || exit 1
+
+    echo $compare_sam $srcdir/data/${root}.sam $outdir/$root.scramble.sam
+    $compare_sam $srcdir/data/${root}.sam $outdir/$root.scramble.sam || exit 1
+done

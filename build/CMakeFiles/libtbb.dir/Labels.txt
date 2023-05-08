@@ -1,0 +1,14 @@
+# Target labels
+ libtbb
+# Source files and their labels
+/home/zzare/salmon/build/CMakeFiles/libtbb
+/home/zzare/salmon/build/CMakeFiles/libtbb.rule
+/home/zzare/salmon/build/CMakeFiles/libtbb-complete.rule
+/home/zzare/salmon/build/libtbb-prefix/src/libtbb-stamp/libtbb-build.rule
+/home/zzare/salmon/build/libtbb-prefix/src/libtbb-stamp/libtbb-configure.rule
+/home/zzare/salmon/build/libtbb-prefix/src/libtbb-stamp/libtbb-download.rule
+/home/zzare/salmon/build/libtbb-prefix/src/libtbb-stamp/libtbb-install.rule
+/home/zzare/salmon/build/libtbb-prefix/src/libtbb-stamp/libtbb-mkdir.rule
+/home/zzare/salmon/build/libtbb-prefix/src/libtbb-stamp/libtbb-patch.rule
+/home/zzare/salmon/build/libtbb-prefix/src/libtbb-stamp/libtbb-reconfigure.rule
+/home/zzare/salmon/build/libtbb-prefix/src/libtbb-stamp/libtbb-update.rule

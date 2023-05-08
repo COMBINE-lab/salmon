@@ -1,0 +1,43 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/zzare/salmon/build/CMakeFiles/libstadenio"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/CMakeFiles/libstadenio.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/CMakeFiles/libstadenio-complete.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libstadenio-prefix/src/libstadenio-stamp/libstadenio-build.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libstadenio-prefix/src/libstadenio-stamp/libstadenio-configure.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libstadenio-prefix/src/libstadenio-stamp/libstadenio-download.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libstadenio-prefix/src/libstadenio-stamp/libstadenio-install.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libstadenio-prefix/src/libstadenio-stamp/libstadenio-mkdir.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libstadenio-prefix/src/libstadenio-stamp/libstadenio-patch.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libstadenio-prefix/src/libstadenio-stamp/libstadenio-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"libstadenio"
+		],
+		"name" : "libstadenio"
+	}
+}

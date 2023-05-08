@@ -1,0 +1,1 @@
+/usr/bin/g++  -O3 -Wall -D_FILE_OFFSET_BITS=64 CMakeFiles/TestGFFParse.dir/src/TestGFFParse.cpp.o -o TestGFFParse  libgff.a 

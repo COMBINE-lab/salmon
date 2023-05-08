@@ -1,0 +1,4 @@
+/home/zzare/salmon/build/external/pufferfish/src/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/foo.dir
+/home/zzare/salmon/build/external/pufferfish/src/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/boo.dir
+/home/zzare/salmon/build/external/pufferfish/src/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/edit_cache.dir
+/home/zzare/salmon/build/external/pufferfish/src/CMakeFiles/_CMakeLTOTest-CXX/bin/CMakeFiles/rebuild_cache.dir

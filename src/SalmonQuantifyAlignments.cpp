@@ -298,14 +298,14 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
           int32_t i;
         } src;
         src.i = bam_aux_i(tl);
-        score = (tl != NULL) ? src.f : 1.0;
+        score = (tl != NULL) ? src.f : LOG_1;
         //if(score > 1)
         //{
         //  std::cout <<"\n the score value is greater than 1";
         //}
         //std::cout<<"\n score: "<< score;
       } else {
-        score = 1.0;
+        score = LOG_1;
       }
       return score;
     };
@@ -494,15 +494,7 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
         // TESTING
         //obtaining the log of the fragment length distribution for long reads
         if (noFragLenFactor) {
-          //float probability value
-          if(havepbTag)
-          {
-            double Fragprob1 = getLongFragProb(aln);
-            logFragProb = salmon::math::log(Fragprob1);
-          }else
-          {
-            logFragProb = LOG_1;
-          }
+          logFragProb = LOG_1;
         }
 
         if (autoDetect) {
@@ -578,19 +570,8 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
         // model) probability The fragment compatibility probability
 
         //Testing for considering KM probability for long reads
-        auto LongFragprob1 = getLongFragProb(aln);
-        //std::cout<<"\n havepbTag: "<<havepbTag;
-        //std::cout<<"\n LongFragprob1: "<<LongFragprob1;
-        double LongFragProb = 0.0;
-        if(havepbTag)
-        {
-          LongFragProb = LongFragprob1 > 0.0 ? std::log(LongFragprob1) : salmon::math::LOG_EPSILON;
-          //std::cout<<"\n LongFragprob1: "<<LongFragprob1;
-          //std::cout<<"\n LongFragProb: "<<LongFragProb<<"\n";
-        }else
-        {
-          LongFragProb = LOG_1;
-        }
+        auto LongFragProb = getLongFragProb(aln);
+        //LongFragProb = LongFragprob1 > 0.0 ? std::log(LongFragprob1) : salmon::math::LOG_EPSILON;
 
         // The auxProb does *not* account for the start position
         // probability!

@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/zzare/salmon/build/CMakeFiles/libgff"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/CMakeFiles/libgff.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/CMakeFiles/libgff-complete.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libgff-prefix/src/libgff-stamp/libgff-build.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libgff-prefix/src/libgff-stamp/libgff-configure.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libgff-prefix/src/libgff-stamp/libgff-download.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libgff-prefix/src/libgff-stamp/libgff-install.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libgff-prefix/src/libgff-stamp/libgff-makedir.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libgff-prefix/src/libgff-stamp/libgff-mkdir.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libgff-prefix/src/libgff-stamp/libgff-patch.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libgff-prefix/src/libgff-stamp/libgff-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"libgff"
+		],
+		"name" : "libgff"
+	}
+}

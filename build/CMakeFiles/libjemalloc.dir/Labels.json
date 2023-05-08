@@ -1,0 +1,43 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/zzare/salmon/build/CMakeFiles/libjemalloc"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/CMakeFiles/libjemalloc.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/CMakeFiles/libjemalloc-complete.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libjemalloc-prefix/src/libjemalloc-stamp/libjemalloc-build.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libjemalloc-prefix/src/libjemalloc-stamp/libjemalloc-configure.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libjemalloc-prefix/src/libjemalloc-stamp/libjemalloc-download.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libjemalloc-prefix/src/libjemalloc-stamp/libjemalloc-install.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libjemalloc-prefix/src/libjemalloc-stamp/libjemalloc-mkdir.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libjemalloc-prefix/src/libjemalloc-stamp/libjemalloc-patch.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libjemalloc-prefix/src/libjemalloc-stamp/libjemalloc-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"libjemalloc"
+		],
+		"name" : "libjemalloc"
+	}
+}

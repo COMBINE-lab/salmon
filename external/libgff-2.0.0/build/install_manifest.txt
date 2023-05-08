@@ -1,0 +1,14 @@
+/home/zzare/salmon/external/install/lib/libgff/cmake/libgffConfig.cmake
+/home/zzare/salmon/external/install/lib/libgff/cmake/libgffConfigVersion.cmake
+/home/zzare/salmon/external/install/lib/libgff.a
+/home/zzare/salmon/external/install/include/GStr.h
+/home/zzare/salmon/external/install/include/gdna.h
+/home/zzare/salmon/external/install/include/GList.hh
+/home/zzare/salmon/external/install/include/GBase.h
+/home/zzare/salmon/external/install/include/GVec.hh
+/home/zzare/salmon/external/install/include/codons.h
+/home/zzare/salmon/external/install/include/GFaSeqGet.h
+/home/zzare/salmon/external/install/include/GFastaIndex.h
+/home/zzare/salmon/external/install/include/GArgs.h
+/home/zzare/salmon/external/install/include/GHash.hh
+/home/zzare/salmon/external/install/include/gff.h

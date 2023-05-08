@@ -1,0 +1,9 @@
+# This is a generated file and its contents are an internal implementation detail.
+# The download step will be re-executed if anything in this file changes.
+# No other meaning or use of this file is supported.
+
+method=custom
+command=curl;-k;-L;https://github.com/COMBINE-lab/staden-io_lib/archive/v1.14.8.1.tar.gz;-o;staden-io_lib-v1.14.8.tar.gz;&&;/home/zzare/salmon/scripts/check_shasum.sh;f6f30eefa478cfb708f3109a35fb6ffa0e24951d9d971985df2cef5919dd0bc3;staden-io_lib-v1.14.8.tar.gz;&&;mkdir;-p;staden-io_lib-1.14.8;&&;tar;-xzf;staden-io_lib-v1.14.8.tar.gz;--strip-components=1;-C;staden-io_lib-1.14.8;&&;rm;-fr;staden-io_lib;&&;mv;-f;staden-io_lib-1.14.8;staden-io_lib
+source_dir=/home/zzare/salmon/external/staden-io_lib
+work_dir=/home/zzare/salmon/external
+

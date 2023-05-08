@@ -1,0 +1,1 @@
+cmd='/home/linuxbrew/.linuxbrew/Cellar/cmake/3.25.1/bin/cmake;-DCMAKE_CXX_FLAGS= -std=c++14 ;-DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>;-DTBB_TEST=OFF;-DTBB_EXAMPLES=OFF;-DCMAKE_BUILD_TYPE=Release;-DCMAKE_CXX_STANDARD=14;-GUnix Makefiles;<SOURCE_DIR><SOURCE_SUBDIR>'

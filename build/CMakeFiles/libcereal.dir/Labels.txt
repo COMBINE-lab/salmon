@@ -1,0 +1,14 @@
+# Target labels
+ libcereal
+# Source files and their labels
+/home/zzare/salmon/build/CMakeFiles/libcereal
+/home/zzare/salmon/build/CMakeFiles/libcereal.rule
+/home/zzare/salmon/build/CMakeFiles/libcereal-complete.rule
+/home/zzare/salmon/build/libcereal-prefix/src/libcereal-stamp/libcereal-build.rule
+/home/zzare/salmon/build/libcereal-prefix/src/libcereal-stamp/libcereal-configure.rule
+/home/zzare/salmon/build/libcereal-prefix/src/libcereal-stamp/libcereal-download.rule
+/home/zzare/salmon/build/libcereal-prefix/src/libcereal-stamp/libcereal-install.rule
+/home/zzare/salmon/build/libcereal-prefix/src/libcereal-stamp/libcereal-makedir.rule
+/home/zzare/salmon/build/libcereal-prefix/src/libcereal-stamp/libcereal-mkdir.rule
+/home/zzare/salmon/build/libcereal-prefix/src/libcereal-stamp/libcereal-patch.rule
+/home/zzare/salmon/build/libcereal-prefix/src/libcereal-stamp/libcereal-update.rule

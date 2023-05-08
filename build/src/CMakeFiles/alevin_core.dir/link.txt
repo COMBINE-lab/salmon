@@ -1,0 +1,2 @@
+/usr/bin/ar qc libalevin_core.a CMakeFiles/alevin_core.dir/edlib.cpp.o CMakeFiles/alevin_core.dir/SingleCellProtocols.cpp.o CMakeFiles/alevin_core.dir/AlevinUtils.cpp.o
+/usr/bin/ranlib libalevin_core.a

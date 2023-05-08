@@ -1,0 +1,1 @@
+cmd='sh;-c;CC=/usr/bin/gcc CFLAGS= CPPFLAGS= ./autogen.sh --disable-debug --enable-static --prefix=<INSTALL_DIR>'

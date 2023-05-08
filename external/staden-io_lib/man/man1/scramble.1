@@ -1,0 +1,154 @@
+.TH scramble 1 "March 19 2013" "" "Staden io_lib"
+
+.SH "NAME"
+
+.PP
+.BR scramble
+\- Converts between the SAM, BAM and CRAM file formats.
+
+.SH "SYNOPSIS"
+.PP
+\fBscramble\fR  [\fIoptions\fR] [\fIinput_file\fR [\fIoutput_file\fR]]
+
+.SH "DESCRIPTION"
+.PP
+\fBscramble\fR converts between various next-gen sequencing alignment
+file formats, including SAM, BAM and CRAM. It can either act as a pipe
+reading stdin and writing to stdout, or on named files.
+
+When operating as a pipe the input type defaults to SAM or BAM,
+requiring the \fB-I cram\fR option to indicate input is in CRAM format
+is appropriate. The output defaults to BAM, but can be adjusted by
+using the \fB-O\fR \fIformat\fR option. When given filenames the file
+type is automatically chosen based on the filename suffix.
+
+.SH "OPTIONS"
+.PP
+.TP
+\fB-I\fR \fIformat\fR
+Selects the input format, where \fIformat\fR is one of sam, bam or
+cram.  Use this when reading via a pipe to avoid input bytes being
+consumed when attempting to detect if the input is in SAM or BAM format.
+
+.TP
+\fB-O\fR \fIformat\fR
+Selects the output format, where \fIformat\fR is one of sam, bam or cram.
+
+.TP
+\fB-1\fR to \fB-9\fR
+Sets the compression level from 1 (low compression, fast) to 9 (high
+compression, slow) when writing in BAM or CRAM format. This is only
+used during writing.
+
+.TP
+\fB-0\fR or \fB-u\fR
+Writes uncompressed data. In BAM this still uses BGZF containers, but
+with no internal compression. In CRAM it stores blocks in RAW format
+instead. The option has no effect on SAM output.
+
+.TP
+\fB-j\fR
+CRAM encoding only.  Add bzip2 to the list of compression codes
+potentially used during CRAM creation.
+
+.TP
+\fB-Z\fR
+CRAM encoding only.  Add lzma to the list of compression codes
+potentially used during CRAM creation.  Given the slow compression
+speed of lzma, this may only be used where it gives a significant
+advantage over zlib or bzip2, but with higher compression levels (-7)
+this weighting is ignored as LZMA decompression speed is acceptable,
+albeit still slower than zlib.
+
+.TP
+\fB-m\fR
+CRAM decoding only. Generate MD:Z: and NM:I: auxiliary fields based on
+the reference-based compression.
+
+.TP
+\fB-M\fR
+CRAM encoding only.  Forcibly pack sequences from multiple references
+into the same slice.  Normally CRAM will start a new slice when
+changing from one reference to another, but will still automatically
+switch to multi-reference slices if the number of sequences per slice
+becomes too small.
+
+.TP
+\fB-R\fR \fIrange\fR
+Currently for CRAM input only, but SAM/BAM support is pending. This
+indicates a reference sequence name and optionally a start and end
+location within that reference, using the syntax \fIref_name\fR or
+\fIref_name\fR:\fIstart\fR-\fIend\fR. For efficient operation the CRAM
+file needs a .crai format index (built using the \fBcram_index\fR
+program).
+
+.TP
+\fB-r\fR \fIref.fa\fR
+CRAM encoding only.  Use this to specify the reference fasta file.
+Note that if the input SAM or BAM file a \fIfile:\fR or local file
+system based URI specified in the @SQ headers then this option may
+not be necessary.
+
+.TP
+\fB-s\fR \fInumber\fR
+CRAM encoding only.  Specifies the number of sequecnes per slice.
+Defaults to 10000.
+
+.TP
+\fB-S\fR \fInumber\fR
+CRAM encoding only.   Specifies the number of slices per container.
+Defaults to 1.
+
+.TP
+\fB-t\fR
+BAM and CRAM only.  Specifies the number of compression or
+decompression threads, adaptively shared between both encoding and
+decoding.  Defaults to 1 (no threading).
+
+.TP
+\fB-V\fR \fIversion_string\fR
+CRAM encoding only.  Sets the CRAM file format version. Supported values are
+"2.0", "2.1" and "3.0".
+
+.TP
+\fB-e\fR
+CRAM encoding only. Embed snippets of the reference sequence in every slice.
+This means the files can be decoded without needing to specify the
+reference fasta file.
+
+.TP
+\fB-x\fR
+CRAM encoding only.  Omit reference based compression and instead
+store details of every base verbatim.
+
+.TP
+\fB-B\fR
+Experimental, encoding only.  When storing quality values, bin into 8
+discrete values (plus 0), as typically used by modern Illumina
+instruments.  (Note that the bins may not be precisely the same ranges.)
+
+.TP
+\fB-!\fR
+CRAM v3.0 and above decoding only. Do not check CRCs.  This option
+should only be used when attempting to recover from a data corruption.
+
+.SH "EXAMPLES"
+.PP
+To convert a BAM file from stdin to CRAM on stdout, using reference MT.fa.
+.PP
+.nf
+    \fIsome_command\fR | scramble -I bam -O cram -r MT.fa | \fIsome_command\fR
+.fi
+
+.PP
+The default CRAM output format is version 3.0, so no version needs to
+be specified when converting from 2.1 to 3.0.  To perform the reverse
+use:
+.PP
+.nf
+    scramble -V 2.1 in.cram out.cram
+.fi
+
+.SH "AUTHOR"
+.PP
+James Bonfield, Wellcome Trust Sanger Institute

@@ -1,0 +1,6 @@
+libstaden_read_la-binning.lo: binning.c /usr/include/stdc-predef.h \
+ ../io_lib/binning.h
+
+/usr/include/stdc-predef.h:
+
+../io_lib/binning.h:

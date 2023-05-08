@@ -1,0 +1,9 @@
+# This is a generated file and its contents are an internal implementation detail.
+# The download step will be re-executed if anything in this file changes.
+# No other meaning or use of this file is supported.
+
+method=custom
+command=curl;-k;-L;https://github.com/oneapi-src/oneTBB/archive/refs/tags/v2021.5.0.tar.gz;-o;v2021.5.tar.gz;&&;/home/zzare/salmon/scripts/check_shasum.sh;e5b57537c741400cf6134b428fc1689a649d7d38d9bb9c1b6d64f092ea28178a;v2021.5.tar.gz;&&;tar;-xzvf;v2021.5.tar.gz
+source_dir=/home/zzare/salmon/external/oneTBB-2021.5.0
+work_dir=/home/zzare/salmon/external
+

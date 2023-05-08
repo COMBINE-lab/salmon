@@ -1,0 +1,9 @@
+# This is a generated file and its contents are an internal implementation detail.
+# The download step will be re-executed if anything in this file changes.
+# No other meaning or use of this file is supported.
+
+method=custom
+command=curl;-k;-L;https://github.com/COMBINE-lab/libgff/archive/v2.0.0.tar.gz;-o;libgff.tgz;&&;/home/zzare/salmon/scripts/check_shasum.sh;7656b19459a7ca7d2fd0fcec4f2e0fd0deec1b4f39c703a114e8f4c22d82a99c;libgff.tgz;&&;tar;-xzvf;libgff.tgz
+source_dir=/home/zzare/salmon/external/libgff-2.0.0
+work_dir=/home/zzare/salmon/external
+

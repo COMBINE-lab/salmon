@@ -1,0 +1,2 @@
+/usr/bin/ar qc libntcard.a CMakeFiles/ntcard.dir/Common/SignalHandler.cpp.o CMakeFiles/ntcard.dir/Common/Fcontrol.cpp.o CMakeFiles/ntcard.dir/nthll.cpp.o
+/usr/bin/ranlib libntcard.a

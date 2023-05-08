@@ -1,0 +1,13 @@
+# Target labels
+ libstadenio
+# Source files and their labels
+/home/zzare/salmon/build/CMakeFiles/libstadenio
+/home/zzare/salmon/build/CMakeFiles/libstadenio.rule
+/home/zzare/salmon/build/CMakeFiles/libstadenio-complete.rule
+/home/zzare/salmon/build/libstadenio-prefix/src/libstadenio-stamp/libstadenio-build.rule
+/home/zzare/salmon/build/libstadenio-prefix/src/libstadenio-stamp/libstadenio-configure.rule
+/home/zzare/salmon/build/libstadenio-prefix/src/libstadenio-stamp/libstadenio-download.rule
+/home/zzare/salmon/build/libstadenio-prefix/src/libstadenio-stamp/libstadenio-install.rule
+/home/zzare/salmon/build/libstadenio-prefix/src/libstadenio-stamp/libstadenio-mkdir.rule
+/home/zzare/salmon/build/libstadenio-prefix/src/libstadenio-stamp/libstadenio-patch.rule
+/home/zzare/salmon/build/libstadenio-prefix/src/libstadenio-stamp/libstadenio-update.rule

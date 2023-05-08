@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/zzare/salmon/build/CMakeFiles/libcereal"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/CMakeFiles/libcereal.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/CMakeFiles/libcereal-complete.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libcereal-prefix/src/libcereal-stamp/libcereal-build.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libcereal-prefix/src/libcereal-stamp/libcereal-configure.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libcereal-prefix/src/libcereal-stamp/libcereal-download.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libcereal-prefix/src/libcereal-stamp/libcereal-install.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libcereal-prefix/src/libcereal-stamp/libcereal-makedir.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libcereal-prefix/src/libcereal-stamp/libcereal-mkdir.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libcereal-prefix/src/libcereal-stamp/libcereal-patch.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libcereal-prefix/src/libcereal-stamp/libcereal-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"libcereal"
+		],
+		"name" : "libcereal"
+	}
+}

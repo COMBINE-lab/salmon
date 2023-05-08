@@ -1,0 +1,2 @@
+/usr/bin/ar qc libgraphdump.a CMakeFiles/graphdump.dir/graphdump.cpp.o CMakeFiles/graphdump.dir/__/common/dnachar.cpp.o CMakeFiles/graphdump.dir/__/common/streamfastaparser.cpp.o
+/usr/bin/ranlib libgraphdump.a

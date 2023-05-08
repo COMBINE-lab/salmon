@@ -1,0 +1,14 @@
+# Target labels
+ libgff
+# Source files and their labels
+/home/zzare/salmon/build/CMakeFiles/libgff
+/home/zzare/salmon/build/CMakeFiles/libgff.rule
+/home/zzare/salmon/build/CMakeFiles/libgff-complete.rule
+/home/zzare/salmon/build/libgff-prefix/src/libgff-stamp/libgff-build.rule
+/home/zzare/salmon/build/libgff-prefix/src/libgff-stamp/libgff-configure.rule
+/home/zzare/salmon/build/libgff-prefix/src/libgff-stamp/libgff-download.rule
+/home/zzare/salmon/build/libgff-prefix/src/libgff-stamp/libgff-install.rule
+/home/zzare/salmon/build/libgff-prefix/src/libgff-stamp/libgff-makedir.rule
+/home/zzare/salmon/build/libgff-prefix/src/libgff-stamp/libgff-mkdir.rule
+/home/zzare/salmon/build/libgff-prefix/src/libgff-stamp/libgff-patch.rule
+/home/zzare/salmon/build/libgff-prefix/src/libgff-stamp/libgff-update.rule

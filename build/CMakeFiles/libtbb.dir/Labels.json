@@ -1,0 +1,46 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/zzare/salmon/build/CMakeFiles/libtbb"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/CMakeFiles/libtbb.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/CMakeFiles/libtbb-complete.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libtbb-prefix/src/libtbb-stamp/libtbb-build.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libtbb-prefix/src/libtbb-stamp/libtbb-configure.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libtbb-prefix/src/libtbb-stamp/libtbb-download.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libtbb-prefix/src/libtbb-stamp/libtbb-install.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libtbb-prefix/src/libtbb-stamp/libtbb-mkdir.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libtbb-prefix/src/libtbb-stamp/libtbb-patch.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libtbb-prefix/src/libtbb-stamp/libtbb-reconfigure.rule"
+		},
+		{
+			"file" : "/home/zzare/salmon/build/libtbb-prefix/src/libtbb-stamp/libtbb-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"libtbb"
+		],
+		"name" : "libtbb"
+	}
+}

@@ -1,0 +1,9 @@
+# This is a generated file and its contents are an internal implementation detail.
+# The download step will be re-executed if anything in this file changes.
+# No other meaning or use of this file is supported.
+
+method=custom
+command=curl;-k;-L;https://github.com/USCiLab/cereal/archive/v1.3.0.tar.gz;-o;cereal-v1.3.0.tar.gz;&&;/home/zzare/salmon/scripts/check_shasum.sh;329ea3e3130b026c03a4acc50e168e7daff4e6e661bc6a7dfec0d77b570851d5;cereal-v1.3.0.tar.gz;&&;tar;-xzvf;cereal-v1.3.0.tar.gz
+source_dir=/home/zzare/salmon/external/cereal-1.3.0
+work_dir=/home/zzare/salmon/external
+

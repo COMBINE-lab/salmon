@@ -1,0 +1,13 @@
+ pipeline:
+  setup:
+   image: hbb:salmon_build_new
+   commands:
+    - echo "Starting build"
+    - ./.drone/build.sh
+  copy_build:
+    image: hbb:salmon_build
+    commands:
+     - echo "[Packaging binary]"
+     - ./.drone/copy_build.sh
+    volumes:
+     - /mnt/scratch6/pufferfish_ci:/mnt/ci_res
