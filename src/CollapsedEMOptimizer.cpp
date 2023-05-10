@@ -1205,31 +1205,6 @@ std::vector<uint32_t> get_eq_identical_txps(std::vector<Transcript>& transcripts
         }
         double prob_lws = std::exp(-lambda*diff_len);
 
-        if (transcripts[t].RefName == "ENST00000258349.8") {
-          std::cerr<<transcripts[t].RefName<< " ";
-          std::cerr<< "min_len: " << min_elen << " tot_reads: " << tot_reads << " elen: " << transcripts[t].EffectiveLength << "\t lws: " << prob_lws << "\n";
-        }
-        if (transcripts[t].RefName == "ENST00000367696.6") {
-          std::cerr<<transcripts[t].RefName<< " ";
-          std::cerr<< "min_len: " << min_elen << " tot_reads: " << tot_reads << " elen: " << transcripts[t].EffectiveLength << "\t lws: " << prob_lws << "\n";
-        }
-        if (transcripts[t].RefName == "ENST00000367694.2") {
-          std::cerr<<transcripts[t].RefName<< " ";
-          std::cerr<< "min_len: " << min_elen << " tot_reads: " << tot_reads << " elen: " << transcripts[t].EffectiveLength << "\t lws: " << prob_lws << "\n";
-        }
-        if (transcripts[t].RefName == "ENST00000479099.2") {
-          std::cerr<<transcripts[t].RefName<< " ";
-          std::cerr<< "min_len: " << min_elen << " tot_reads: " << tot_reads << " elen: " << transcripts[t].EffectiveLength << "\t lws: " << prob_lws << "\n";
-        }
-        if (transcripts[t].RefName == "ENST00000531594.1") {
-          std::cerr<<transcripts[t].RefName<< " ";
-          std::cerr<< "min_len: " << min_elen << " tot_reads: " << tot_reads << " elen: " << transcripts[t].EffectiveLength << "\t lws: " << prob_lws << "\n";
-        }
-        if (transcripts[t].RefName == "ENST00000484867.1") {
-          std::cerr<<transcripts[t].RefName<< " ";
-          std::cerr<< "min_len: " << min_elen << " tot_reads: " << tot_reads << " elen: " << transcripts[t].EffectiveLength << "\t lws: " << prob_lws << "\n";
-        }
-
         // eq_sig_collision_txps.push_back(t);
         prob_lws_sum += prob_lws;
         all_prob_lws_tmps.push_back(prob_lws);
@@ -1295,7 +1270,31 @@ std::vector<uint32_t> get_eq_identical_txps(std::vector<Transcript>& transcripts
   /*std::sort(aug_collision_txps.begin(), aug_collision_txps.end());
   aug_collision_txps.erase(std::unique( aug_collision_txps.begin(),
                                         aug_collision_txps.end() ), aug_collision_txps.end() );*/
-
+  
+//if (transcripts[t].RefName == "ENST00000258349.8") {
+//  std::cerr<<transcripts[t].RefName<< " ";
+//  std::cerr<< "min_len: " << min_elen << " tot_reads: " << tot_reads << " elen: " << transcripts[t].EffectiveLength << "\t lws: " << prob_lws << "\n";
+//}
+//if (transcripts[t].RefName == "ENST00000367696.6") {
+//  std::cerr<<transcripts[t].RefName<< " ";
+//  std::cerr<< "min_len: " << min_elen << " tot_reads: " << tot_reads << " elen: " << transcripts[t].EffectiveLength << "\t lws: " << prob_lws << "\n";
+//}
+//if (transcripts[t].RefName == "ENST00000367694.2") {
+//  std::cerr<<transcripts[t].RefName<< " ";
+//  std::cerr<< "min_len: " << min_elen << " tot_reads: " << tot_reads << " elen: " << transcripts[t].EffectiveLength << "\t lws: " << prob_lws << "\n";
+//}
+//if (transcripts[t].RefName == "ENST00000479099.2") {
+//  std::cerr<<transcripts[t].RefName<< " ";
+//  std::cerr<< "min_len: " << min_elen << " tot_reads: " << tot_reads << " elen: " << transcripts[t].EffectiveLength << "\t lws: " << prob_lws << "\n";
+//}
+//if (transcripts[t].RefName == "ENST00000531594.1") {
+//  std::cerr<<transcripts[t].RefName<< " ";
+//  std::cerr<< "min_len: " << min_elen << " tot_reads: " << tot_reads << " elen: " << transcripts[t].EffectiveLength << "\t lws: " << prob_lws << "\n";
+//}
+//if (transcripts[t].RefName == "ENST00000484867.1") {
+//  std::cerr<<transcripts[t].RefName<< " ";
+//  std::cerr<< "min_len: " << min_elen << " tot_reads: " << tot_reads << " elen: " << transcripts[t].EffectiveLength << "\t lws: " << prob_lws << "\n";
+//}
   std::cerr << "There were " << eq_sig_collision_txps.size() << " signature colliding transcripts\n";
   // std::cerr << "There were " << aug_collision_txps.size() << " transcripts in the corresponding eq classes\n";
   return eq_sig_collision_txps;
