@@ -10,7 +10,7 @@
 
 #include "AlignmentCommon.hpp"
 
-// #include "AtomicMatrix.hpp"
+#include "AtomicMatrix.hpp"
 // #include "tbb/concurrent_vector.h"
 
 
@@ -22,7 +22,7 @@ public:
   static const uint32_t binLen = 100; // XXX: That should be a parameter
 
   ONTAlignmentModel(double alpha, uint32_t readBins = 4);
-  ~ONTAlignmentModel() { }
+  ~ONTAlignmentModel() {   }
 
   /**
    *  For unpaired reads, update the error model to account for errors
@@ -31,14 +31,20 @@ public:
    */
   void update(const UnpairedRead& aln, const UnpairedRead& primaryAln,
               Transcript& ref, double p, double mass);
-
+  //uint32_t getStateIndex(size_t numIndels, size_t numMisMatch, bool homopolymer );
   /**
    * Compute the log-likelihood of the observed unpaired alignment
    * given the current error model. primaryAln contains the first
    * alignment in the alignment group.
    */
   double logLikelihood(const UnpairedRead& aln, const UnpairedRead& primaryAln, Transcript& ref);
-
+  //added for new ONT model
+   struct AlnModelProb {
+    double fg{salmon::math::LOG_1};
+    double bg{salmon::math::LOG_1};
+  };
+  AlnModelProb logLikelihood(bam_seq_t* read, bam_seq_t* primary, Transcript& ref,
+                       std::vector<AtomicMatrix<double>>& mismatchProfile);
   void normalize();
 
   void printModel(std::ostream&);
@@ -69,6 +75,12 @@ private:
   // Separate models are considered for front and back clips
   std::vector<average> frontClipModel_;
   std::vector<average> backClipModel_;
+  
+  void update(bam_seq_t* read, bam_seq_t* primary, Transcript& ref, double p, double mass,
+            std::vector<AtomicMatrix<double>>& mismatchProfile);
+
+  //Transtion probabilitys for Markov Model
+  std::vector<AtomicMatrix<double>> transitionProbs_;
 };
 
 #endif // ERROR_MODEL
