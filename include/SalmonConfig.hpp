@@ -22,13 +22,14 @@
 #ifndef SALMON_CONFIG_HPP
 #define SALMON_CONFIG_HPP
 
+#include <cstdint>
 #include <string>
 
 namespace salmon {
 constexpr char majorVersion[] = "1";
 constexpr char minorVersion[] = "10";
-constexpr char patchVersion[] = "1";
-constexpr char version[] = "1.10.1";
+constexpr char patchVersion[] = "2";
+constexpr char version[] = "1.10.2";
 constexpr uint32_t indexVersion = 5;
 constexpr char requiredQuasiIndexVersion[] = "p7";
 } // namespace salmon

@@ -642,7 +642,7 @@ endif()
 message("Build system will fetch and build Intel Threading Building Blocks")
 message("==================================================================")
 # These are useful for the custom install step we'll do later
-set(TBB_SOURCE_DIR ${GAT_SOURCE_DIR}/external/oneTBB-2021.5.0)
+set(TBB_SOURCE_DIR ${GAT_SOURCE_DIR}/external/oneTBB-2021.9.0)
 set(TBB_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
 
 if("${TBB_COMPILER}" STREQUAL "gcc")
@@ -655,9 +655,9 @@ set(TBB_CXXFLAGS "${TBB_CXXFLAGS} ${CXXSTDFLAG} ${SCHAR_FLAG}")
 
 ExternalProject_Add(libtbb
 DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-DOWNLOAD_COMMAND curl -k -L https://github.com/oneapi-src/oneTBB/archive/refs/tags/v2021.5.0.tar.gz -o v2021.5.tar.gz &&
-${SHASUM} e5b57537c741400cf6134b428fc1689a649d7d38d9bb9c1b6d64f092ea28178a v2021.5.tar.gz &&
-tar -xzvf v2021.5.tar.gz
+DOWNLOAD_COMMAND curl -k -L  https://github.com/oneapi-src/oneTBB/archive/refs/tags/v2021.9.0.tar.gz -o v2021.9.tar.gz &&
+${SHASUM} 1ce48f34dada7837f510735ff1172f6e2c261b09460e3bf773b49791d247d24e v2021.9.tar.gz &&
+tar -xzvf v2021.9.tar.gz
 SOURCE_DIR ${TBB_SOURCE_DIR}
 INSTALL_DIR ${TBB_INSTALL_DIR}
 PATCH_COMMAND "${TBB_PATCH_STEP}"
