@@ -3,6 +3,7 @@
 
 #include <sstream>
 #include <stdexcept>
+#include <cstdint>
 
 class InsufficientAssignedFragments : public std::runtime_error {
 public:

@@ -22,6 +22,7 @@
 #ifndef SALMON_CONFIG_HPP
 #define SALMON_CONFIG_HPP
 
+#include <cstdint>
 #include <string>
 
 namespace salmon {

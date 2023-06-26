@@ -1,6 +1,7 @@
 #ifndef EFFECTIVE_LENGTH_STATS_HPP
 #define EFFECTIVE_LENGTH_STATS_HPP
 
+#include <cstdint>
 #include "Eigen/Dense"
 
 /**
