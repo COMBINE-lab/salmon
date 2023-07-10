@@ -15,8 +15,8 @@
 #include "UnpairedRead.hpp"
 
 //Calculate number of states based on kmerLength (should probably be moved to the header file)
-static const uint32_t kmerLength = 6;
-static const uint32_t stepSize = 6;
+static const uint32_t kmerLength = 50;
+static const uint32_t stepSize = 50;
 static const uint32_t numMismatchStates = kmerLength + 1;
 constexpr static uint32_t getStateIndexNoHomopolymer(size_t numIndels, size_t numMisMatch) {
     return numMismatchStates * numIndels + numMisMatch;
@@ -55,8 +55,6 @@ ONTAlignmentModel::ONTAlignmentModel(double alpha, uint32_t readBins)
 struct Column
 {uint8_t ref_base;
 uint8_t read_base;
-//size_t num_mismatch;
-//size_t num_indel;
 };
 
 bool is_homopolymer(Column chunk[]){
@@ -208,9 +206,6 @@ std::vector<AtomicMatrix<double>>& transitionProbs){
   Column chunk[kmerLength];
   for (uint32_t cigarIdx = 0; cigarIdx < cigarLen; ++cigarIdx) {
 
-    /*if (chunk_idx == 0){
-      logger_->warn("new alignment start");
-    }*/
     uint32_t opLen = cigar[cigarIdx] >> BAM_CIGAR_SHIFT;
     enum cigar_op op =
         static_cast<enum cigar_op>(cigar[cigarIdx] & BAM_CIGAR_MASK);
@@ -235,7 +230,6 @@ std::vector<AtomicMatrix<double>>& transitionProbs){
                   static_cast<enum cigar_op>(cigar[j] & BAM_CIGAR_MASK);
               cigarStream << opLen << opToChr(op);
             }
-            //logger_->warn("(in logLikelihood()) CIGAR = {}", cigarStream.str());
           }
           return {logLike, bgLogLike};
         }
@@ -266,26 +260,11 @@ std::vector<AtomicMatrix<double>>& transitionProbs){
       
       chunk[chunk_idx].ref_base = curRefBase;
       chunk[chunk_idx].read_base = curReadBase;
-      //logger_ -> warn("ref base {}, read base {}, seq_i {}", curRefBase, curReadBase, bam_seqi(qseq, readIdx));
-      //chunk[chunk_idx].num_mismatch = chunk_idx <= 0 ? 0 : chunk[chunk_idx-1].num_mismatch;
-      //chunk[chunk_idx].num_indel = chunk_idx <= 0 ? 0 : chunk[chunk_idx-1].num_indel;
-       //Match/mismatch case
-
-       //logger_->warn("chunk index: {}, curRefBase: {} curReadBase: {}",chunk_idx, curRefBase, curReadBase);
-     /*if (BAM_CONSUME_SEQ(op) && BAM_CONSUME_REF(op)) {
-        if(curRefBase != curReadBase){
-          chunk[chunk_idx].num_mismatch += 1;
-        }
-        }
-      //Indel case
-      else {
-        chunk[chunk_idx].num_indel += 1;
-      }*/ 
+      
       chunk_idx ++;
       if (chunk_idx >= kmerLength)
         {
           chunk_idx = kmerLength-stepSize;
-          //logger_-> warn("Likelihood Chunk: {},  num_indel: {}, num mismatch: {}, is homopolymer: {} ",chunkString(chunk),  numIndels(chunk), numMismatch(chunk), is_homopolymer(chunk));
           curStateIdx = processChunk(chunk);
         }
       double tp = transitionProbs[readPosBin](prevStateIdx, curStateIdx);
@@ -403,6 +382,7 @@ double ONTAlignmentModel::logLikelihood(const UnpairedRead& hit, const UnpairedR
   }
 //logger_->warn("( errorllh: {} frontClipllh: {} backClipllh: {}  ",errorllh, frontClipllh,backClipllh );
   return errorllh + frontClipllh + backClipllh;
+  //return errorllh;
 }
 
 void ONTAlignmentModel::update(
