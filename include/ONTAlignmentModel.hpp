@@ -20,7 +20,7 @@ class ONTAlignmentModel
 public:
   static const uint32_t maxReadLen = 50000; // XXX: That should be a paramater. Read longer than that are binned together
   static const uint32_t binLen = 100; // XXX: That should be a parameter
-
+  
   ONTAlignmentModel(double alpha, uint32_t readBins = 4);
   ~ONTAlignmentModel() {   }
 
@@ -75,11 +75,15 @@ private:
   // Separate models are considered for front and back clips
   std::vector<average> frontClipModel_;
   std::vector<average> backClipModel_;
+
+  //Transcript front and back clip models
+    average transcriptFrontModel_;
+    average transcriptBackModel_;
   
   void update(bam_seq_t* read, bam_seq_t* primary, Transcript& ref, double p, double mass,
             std::vector<AtomicMatrix<double>>& mismatchProfile);
 
-  //Transtion probabilitys for Markov Model
+  //Transtion probabilities for Markov Model
   std::vector<AtomicMatrix<double>> transitionProbs_;
 };
 

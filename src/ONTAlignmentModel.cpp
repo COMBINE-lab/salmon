@@ -42,6 +42,8 @@ ONTAlignmentModel::ONTAlignmentModel(double alpha, uint32_t readBins)
     , transitionProbs_(readBins)
     , frontClipModel_(maxReadLen / binLen + 1)
     , backClipModel_(maxReadLen / binLen + 1)
+    , transcriptFrontModel_()
+    , transcriptBackModel_()
 { 
   for (size_t i = 0; i < readBins; ++i) {
     transitionProbs_[i] = std::move(AtomicMatrix<double>(
@@ -380,8 +382,68 @@ double ONTAlignmentModel::logLikelihood(const UnpairedRead& hit, const UnpairedR
       logger_->warn("read {} (length {}) has no trained clipping model",
                     bam_name(hit.read), cigarRLen);
   }
+
+  //Transcript clipping model -- Considers soft clips to be "not aligned"/not cover that part of the transcript
+   double transcriptFrontllh = LOG_1, transcriptBackllh = LOG_1;
+auto transcriptIdx = bam_pos(hit.read);
+  auto readAlnStart = transcriptIdx;
+  if (transcriptIdx<0){
+    transcriptIdx = 0;
+   }
+   size_t transcriptLen = ref.RefLength;
+
+
+  int32_t numTranscriptFrontExcluded = static_cast<int32_t>(transcriptIdx );
+  //auto alignmentEndIdx = transcriptIdx + counts.fclips() + alignLen - counts.hclips(); 
+  if(transcriptIdx < 0){
+    transcriptIdx = 0;
+  }
+    auto alignmentEndIdx = readAlnStart + alignLen; 
+
+  int32_t numTranscriptBackExcluded  = static_cast<int32_t>(transcriptLen - alignmentEndIdx);
+  //Update transcript front clip model
+  if (numTranscriptFrontExcluded + alignLen + numTranscriptBackExcluded !=  transcriptLen){
+    logger_->warn("in loglikelihood, number of bases of read seems inconsistent, transcript length: {}, transcript bases excluded at front: {} , transcript bases aligned: {}, transcript bases excluded at back: {}", 
+  transcriptLen, numTranscriptFrontExcluded, alignLen,  numTranscriptBackExcluded);
+  }
+  
+  if(transcriptFrontModel_.sum > dmin && transcriptFrontModel_.mass > dmin) {
+    using        boost::math::geometric;
+    const double  mean          = transcriptFrontModel_.sum / transcriptFrontModel_.mass;
+    geometric     clipDist(1.0 / (mean + 1.0));
+    const int32_t rmean         = std::round(mean);
+    const auto    clips         = numTranscriptFrontExcluded;
+    const double clipLikelihood =
+      clips <= rmean
+      ? 1.0
+      : (1.0 - cdf(clipDist, clips)) / (1.0 - cdf(clipDist, rmean));
+     transcriptFrontllh = clipLikelihood < llMin ? LOG_0 : std::log(clipLikelihood);
+  } else {
+    if(logger_)
+      logger_->warn("read {} (length {}) has no trained transcript front clipping model",
+                    bam_name(hit.read), cigarRLen);
+  }
+
+  if(transcriptBackModel_.sum > dmin && transcriptBackModel_.mass > dmin) {
+    using        boost::math::geometric;
+    const double  mean          = transcriptBackModel_.sum / transcriptBackModel_.mass;
+    geometric     clipDist(1.0 / (mean + 1.0));
+    const int32_t rmean         = std::round(mean);
+    const auto    clips         = numTranscriptBackExcluded;
+    const double clipLikelihood =
+      clips <= rmean
+      ? 1.0
+      : (1.0 - cdf(clipDist, clips)) / (1.0 - cdf(clipDist, rmean));
+     transcriptBackllh = clipLikelihood < llMin ? LOG_0 : std::log(clipLikelihood);
+  } else {
+    if(logger_)
+      logger_->warn("read {} (length {}) has no trained transcript back clipping model",
+                    bam_name(hit.read), cigarRLen);
+  }
+
 //logger_->warn("( errorllh: {} frontClipllh: {} backClipllh: {}  ",errorllh, frontClipllh,backClipllh );
-  return errorllh + frontClipllh + backClipllh;
+  return errorllh + frontClipllh + backClipllh + transcriptFrontllh + transcriptBackllh;
+  //return errorllh + transcriptFrontllh + transcriptBackllh;
   //return errorllh;
 }
 
@@ -601,6 +663,43 @@ void ONTAlignmentModel::update(const UnpairedRead& hit, const UnpairedRead& prim
     auto& bin = backClipModel_[binIndex];
     salmon::utils::incLoop(bin.mass, newMass);
     salmon::utils::incLoop(bin.sum, (binIndex + 1) * binLen * newMass * clipRateBack);
+  }
+
+  auto transcriptIdx = bam_pos(hit.read);
+  auto readAlnStart = transcriptIdx;
+  if (transcriptIdx<0){
+    transcriptIdx = 0;
+   }
+   size_t transcriptLen = ref.RefLength;
+
+
+  int32_t numTranscriptFrontExcluded = static_cast<int32_t>(transcriptIdx );
+  //auto alignmentEndIdx = transcriptIdx + counts.fclips() + alignLen - counts.hclips(); 
+  if(transcriptIdx < 0){
+    transcriptIdx = 0;
+  }
+    auto alignmentEndIdx = readAlnStart + alignLen; 
+
+  int32_t numTranscriptBackExcluded  = static_cast<int32_t>(transcriptLen - alignmentEndIdx);
+  //const double backExcludeRate = numTranscriptBackExcluded / transcriptLen;
+  //const double frontExcludeRate = numTranscriptFrontExcluded / transcriptLen;
+
+  //Update transcript front clip model
+  if (numTranscriptFrontExcluded + alignLen + numTranscriptBackExcluded !=  transcriptLen){
+    logger_->warn("in update, number of bases of read seems inconsistent, transcript length: {}, transcript bases excluded at front: {} , transcript bases aligned: {}, transcript bases excluded at back: {}", 
+  transcriptLen, numTranscriptFrontExcluded, alignLen,  numTranscriptBackExcluded);
+  }
+  
+  {
+    salmon::utils::incLoop(transcriptFrontModel_.mass, newMass);
+    salmon::utils::incLoop(transcriptFrontModel_.sum, newMass * numTranscriptFrontExcluded);
+
+  }
+  //Update transcript back clip model
+
+  {
+    salmon::utils::incLoop(transcriptBackModel_.mass, newMass);
+    salmon::utils::incLoop(transcriptBackModel_.sum, newMass * numTranscriptBackExcluded);
   }
 }
 
