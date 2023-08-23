@@ -14,25 +14,32 @@
 #include "Transcript.hpp"
 #include "UnpairedRead.hpp"
 
-//Calculate number of states based on kmerLength (should probably be moved to the header file)
-static const uint32_t kmerLength = 50;
-static const uint32_t stepSize = 50;
-static const uint32_t numMismatchStates = kmerLength + 1;
-constexpr static uint32_t getStateIndexNoHomopolymer(size_t numIndels, size_t numMisMatch) {
-    return numMismatchStates * numIndels + numMisMatch;
-}
 
-uint32_t numStatesNoHomo = getStateIndexNoHomopolymer(kmerLength, 0)+1; 
+
+/**
+ * GetStateIndex to get the index of the state for a kmer based on the number of indels and mismatches it contains, 
+ * as well as whether it is a homopolymer (all mismatches and one nucleotide)
+ * Some states will be impossible (ex: k-1 indels and k-1 mismatches would be impossible in a kmer), 
+ * so their probabilities will remain at zero, and we can ignore them, but we leave them in the state ordering for convenience/clarity.
+*/
+static const uint32_t numMismatchStates = ONTAlignmentModel::kmerLength + 1;
+  constexpr static uint32_t getStateIndexNoHomopolymer(size_t numIndels, size_t numMisMatch) {
+      return numMismatchStates * numIndels + numMisMatch;
+  }
+
+uint32_t numStatesNoHomo = getStateIndexNoHomopolymer(ONTAlignmentModel::kmerLength, 0)+1; 
 
 uint32_t getStateIndex(size_t numIndels, size_t numMisMatch, bool homopolymer ) {
-     if (homopolymer){
-      return getStateIndexNoHomopolymer(numIndels,numMisMatch) + numStatesNoHomo;
-     }
-     return getStateIndexNoHomopolymer(numIndels,numMisMatch);
-    }
-uint32_t startStateIdx = getStateIndex(kmerLength, 0, true) + 1;
-uint32_t endStateIdx = getStateIndex(kmerLength, 0, true) + 2;
-uint32_t numStatesTotal = getStateIndex(kmerLength, 0, true) + 3;
+      if (homopolymer){
+        return getStateIndexNoHomopolymer(numIndels,numMisMatch) + numStatesNoHomo;
+      }
+      return getStateIndexNoHomopolymer(numIndels,numMisMatch);
+  }
+//The last two states in order are: the start state and the end state 
+uint32_t startStateIdx = getStateIndex(ONTAlignmentModel::kmerLength, 0, true) + 1;
+uint32_t endStateIdx = getStateIndex(ONTAlignmentModel::kmerLength, 0, true) + 2;
+uint32_t numStatesTotal = getStateIndex(ONTAlignmentModel::kmerLength, 0, true) + 3;
+
 
 
 ONTAlignmentModel::ONTAlignmentModel(double alpha, uint32_t readBins)
@@ -40,10 +47,6 @@ ONTAlignmentModel::ONTAlignmentModel(double alpha, uint32_t readBins)
     , readBins_(readBins)
     , printed(false)
     , transitionProbs_(readBins)
-    , frontClipModel_(maxReadLen / binLen + 1)
-    , backClipModel_(maxReadLen / binLen + 1)
-    , transcriptFrontModel_()
-    , transcriptBackModel_()
 { 
   for (size_t i = 0; i < readBins; ++i) {
     transitionProbs_[i] = std::move(AtomicMatrix<double>(
@@ -52,17 +55,17 @@ ONTAlignmentModel::ONTAlignmentModel(double alpha, uint32_t readBins)
 
 }
 
-
-
+//The Column struct represents one column of the alignment
 struct Column
 {uint8_t ref_base;
 uint8_t read_base;
 };
 
+//is_homopolymer determines if a set of columns contains only one nucleotide in either column + indels
 bool is_homopolymer(Column chunk[]){
   size_t counts[4] = {0};
   size_t numGaps = 0;
-  for (size_t i = 0; i < kmerLength; i++) {
+  for (size_t i = 0; i < ONTAlignmentModel::kmerLength; i++) {
     size_t symbol = chunk[i].ref_base;
     if (symbol <= 3){
      counts[symbol]+=1;
@@ -72,18 +75,21 @@ bool is_homopolymer(Column chunk[]){
     }
   }
   for (size_t i = 0; i < 4; i++){
-    if (counts[i] >= kmerLength - 1){
-      return true;
+    if (counts[i] >= ONTAlignmentModel::kmerLength - 1){
+      return true; 
     }
   }
   return false;
 }
-//Should return the state index based on the kmer and move the end bases to the middle
+
+
+//processChunk both returns the state in the markov model corresponding to a kmer of the alignment, 
+//and updates the chunk so the section of the kmer that overlaps with the next kmer is filled in.
 uint32_t processChunk(Column chunk[]){
   size_t numIndels = 0;
   size_t numMismatch = 0;
 
-  for  (size_t i = 0; i < kmerLength; i++){
+  for  (size_t i = 0; i < ONTAlignmentModel::kmerLength; i++){
     if (chunk[i].ref_base >3 ||chunk[i].read_base>3 ){
       numIndels ++; 
     }
@@ -93,18 +99,19 @@ uint32_t processChunk(Column chunk[]){
   }
   uint32_t stateIdx = getStateIndex(numIndels, numMismatch, is_homopolymer(chunk));
 
-  for (size_t i = 0; i < kmerLength-stepSize; i++){
-   chunk[i].ref_base = chunk[i+stepSize].ref_base;
-   chunk[i].read_base = chunk[i+stepSize].read_base;
+  for (size_t i = 0; i < ONTAlignmentModel::kmerLength-ONTAlignmentModel::stepSize; i++){
+   chunk[i].ref_base = chunk[i+ONTAlignmentModel::stepSize].ref_base;
+   chunk[i].read_base = chunk[i+ONTAlignmentModel::stepSize].read_base;
   }
   return stateIdx;
 }
-//Testing functions (numIndels and numMismatch)
+//Testing functions (numIndels and numMismatch) useful to check the correct stateIndex is being calculated
+//The bases 0-3 are nucleotides, anything else is considered to be an indel consistent with the definition of AlignmentModelChar in AlignmentCommon.hpp
 uint32_t numIndels(Column chunk[]){
   size_t numIndels = 0;
   size_t numMismatch = 0;
 
-  for  (size_t i = 0; i < kmerLength; i++){
+  for  (size_t i = 0; i < ONTAlignmentModel::kmerLength; i++){
     if (chunk[i].ref_base >3 ||chunk[i].read_base>3 ){
       numIndels ++; 
     }
@@ -118,7 +125,7 @@ uint32_t numMismatch(Column chunk[]){
   size_t numIndels = 0;
   size_t numMismatch = 0;
 
-  for  (size_t i = 0; i < kmerLength; i++){
+  for  (size_t i = 0; i < ONTAlignmentModel::kmerLength; i++){
     if (chunk[i].ref_base >3 ||chunk[i].read_base>3 ){
       numIndels ++; 
     }
@@ -129,27 +136,9 @@ uint32_t numMismatch(Column chunk[]){
   return numMismatch;
 }
 
-std::string chunkString(Column chunk[]){
-  using namespace salmon::stringtools;
-  std::string ref_string = "";
-  std::string read_string = "";
-  
-  for (size_t i = 0;i < kmerLength; i++ ){
-    if(chunk[i].ref_base > 3){
-      ref_string = ref_string +  "-";
-    }
-    else{
-      ref_string = ref_string + twoBitToChar[chunk[i].ref_base];
-    }
-    if(chunk[i].read_base > 3){
-      read_string = read_string +  "-";
-    }
-    else{
-      read_string =  read_string + twoBitToChar[chunk[i].read_base];
-    }
-  }
- return ("Ref: " + ref_string + " Read: " + read_string );
-}
+
+
+
 
 ONTAlignmentModel::AlnModelProb ONTAlignmentModel::logLikelihood( bam_seq_t* read, bam_seq_t* primary, Transcript& ref,
 std::vector<AtomicMatrix<double>>& transitionProbs){
@@ -175,7 +164,6 @@ std::vector<AtomicMatrix<double>>& transitionProbs){
     return {salmon::math::LOG_0, salmon::math::LOG_1};
   }
 
-  // std::stringstream readStream, matchStream, refStream;
 
   uint32_t* cigar = bam_cigar(read);
   uint32_t cigarLen = bam_cigar_len(read);
@@ -264,9 +252,12 @@ std::vector<AtomicMatrix<double>>& transitionProbs){
       chunk[chunk_idx].read_base = curReadBase;
       
       chunk_idx ++;
+      //When we get to the end of our kmer, get the state index in the markov model  
       if (chunk_idx >= kmerLength)
         {
+          //Update the index in the next kmer
           chunk_idx = kmerLength-stepSize;
+          //Shift overlapping section into first section of kmer, and get state index
           curStateIdx = processChunk(chunk);
         }
       double tp = transitionProbs[readPosBin](prevStateIdx, curStateIdx);
@@ -282,12 +273,11 @@ std::vector<AtomicMatrix<double>>& transitionProbs){
         advanceInReference = true;
       }
     }
-    //Add the transition probability for ending (was here)
   }
-  //double tp = transitionProbs[readPosBin](curStateIdx, endStateIdx);
-  //logLike += tp;
-  //bgLogLike += transitionProbs[readPosBin](0, 0);
-  //logger_->warn("( logLike: {} bgLogLike: {}",logLike, bgLogLike);
+  //Add transition probability for ending the transcript after this state.
+  double tp = transitionProbs[readPosBin](curStateIdx, endStateIdx);
+  logLike += tp;
+  bgLogLike += transitionProbs[readPosBin](0, 0);
 
   return {logLike, bgLogLike};
 }
@@ -304,26 +294,7 @@ double ONTAlignmentModel::logLikelihood(const UnpairedRead& hit, const UnpairedR
   if(bam_aux_find(hit.read, "SA"))
     return LOG_0;
 
-  ErrorCount counts;
-  if(!computeErrorCount(hit.read, primary.read, ref, counts, "logLikelihood")) {
-    if(logger_)
-      logger_->warn("in logLikelihood() error parsing CIGAR string");
-    return LOG_1;
-  }
-
-  const uint32_t cigarRLen = alnLen(hit, primary); // Read length minus hard clips
-  if(counts.sclips() >= cigarRLen)
-    return LOG_0; // Empty alignment!
-
-  const uint32_t alignLen  = cigarRLen - counts.clips(); // Length of aligned part (no soft clip)
-  const double   errorRate = (double)counts.ims() / alignLen;
-  const int32_t  errorBin  = std::min(alignLen / binLen, (uint32_t)errorModel_.size() - 1);
-  const int32_t  frontClipBin   = std::min(cigarRLen / binLen, (uint32_t)frontClipModel_.size() - 1);
-  const int32_t  backClipBin    = std::min(cigarRLen / binLen, (uint32_t)backClipModel_.size() - 1);
-  const auto&    frontClipAvg   = frontClipModel_[frontClipBin];
-  const auto&    backClipAvg    = backClipModel_[backClipBin];
-
-  double errorllh = LOG_1, frontClipllh = LOG_1, backClipllh = LOG_1; // Error and clip Log Likelihood (front and back)
+  double errorllh = LOG_1; // Error and clip Log Likelihood (front and back)
 
   //Use transition probs to determine error log likelihood
   double logLike = salmon::math::LOG_1;
@@ -344,107 +315,8 @@ double ONTAlignmentModel::logLikelihood(const UnpairedRead& hit, const UnpairedR
 
   errorllh = logLike - bg;
 
-  // Likelihood to have so many bases soft clipped based on the
-  // average error rate. Don't penalize for having fewer clipped bases
-  // than average, only if more.
-  // front clips:
-  if(frontClipAvg.sum > dmin && frontClipAvg.mass > dmin) {
-    using        boost::math::geometric;
-    const double  mean          = frontClipAvg.sum / frontClipAvg.mass;
-    geometric     clipDist(1.0 / (mean + 1.0));
-    const int32_t rmean         = std::round(mean);
-    const auto    clips         = counts.fclips();
-    const double clipLikelihood =
-      clips <= rmean
-      ? 1.0
-      : (1.0 - cdf(clipDist, clips)) / (1.0 - cdf(clipDist, rmean));
-    frontClipllh = clipLikelihood < llMin ? LOG_0 : std::log(clipLikelihood);
-  } else {
-    if(logger_)
-      logger_->warn("read {} (length {}) has no trained clipping model",
-                    bam_name(hit.read), cigarRLen);
-  }
+  return errorllh;
 
-  // back clips:
-  if(backClipAvg.sum > dmin && backClipAvg.mass > dmin) {
-    using        boost::math::geometric;
-    const double  mean          = backClipAvg.sum / backClipAvg.mass;
-    geometric     clipDist(1.0 / (mean + 1.0));
-    const int32_t rmean         = std::round(mean);
-    const auto    clips         = counts.bclips();
-    const double clipLikelihood =
-      clips <= rmean
-      ? 1.0
-      : (1.0 - cdf(clipDist, clips)) / (1.0 - cdf(clipDist, rmean));
-    backClipllh = clipLikelihood < llMin ? LOG_0 : std::log(clipLikelihood);
-  } else {
-    if(logger_)
-      logger_->warn("read {} (length {}) has no trained clipping model",
-                    bam_name(hit.read), cigarRLen);
-  }
-
-  //Transcript clipping model -- Considers soft clips to be "not aligned"/not cover that part of the transcript
-   double transcriptFrontllh = LOG_1, transcriptBackllh = LOG_1;
-auto transcriptIdx = bam_pos(hit.read);
-  auto readAlnStart = transcriptIdx;
-  if (transcriptIdx<0){
-    transcriptIdx = 0;
-   }
-   size_t transcriptLen = ref.RefLength;
-
-
-  int32_t numTranscriptFrontExcluded = static_cast<int32_t>(transcriptIdx );
-  //auto alignmentEndIdx = transcriptIdx + counts.fclips() + alignLen - counts.hclips(); 
-  if(transcriptIdx < 0){
-    transcriptIdx = 0;
-  }
-    auto alignmentEndIdx = readAlnStart + alignLen; 
-
-  int32_t numTranscriptBackExcluded  = static_cast<int32_t>(transcriptLen - alignmentEndIdx);
-  //Update transcript front clip model
-  if (numTranscriptFrontExcluded + alignLen + numTranscriptBackExcluded !=  transcriptLen){
-    logger_->warn("in loglikelihood, number of bases of read seems inconsistent, transcript length: {}, transcript bases excluded at front: {} , transcript bases aligned: {}, transcript bases excluded at back: {}", 
-  transcriptLen, numTranscriptFrontExcluded, alignLen,  numTranscriptBackExcluded);
-  }
-  
-  if(transcriptFrontModel_.sum > dmin && transcriptFrontModel_.mass > dmin) {
-    using        boost::math::geometric;
-    const double  mean          = transcriptFrontModel_.sum / transcriptFrontModel_.mass;
-    geometric     clipDist(1.0 / (mean + 1.0));
-    const int32_t rmean         = std::round(mean);
-    const auto    clips         = numTranscriptFrontExcluded;
-    const double clipLikelihood =
-      clips <= rmean
-      ? 1.0
-      : (1.0 - cdf(clipDist, clips)) / (1.0 - cdf(clipDist, rmean));
-     transcriptFrontllh = clipLikelihood < llMin ? LOG_0 : std::log(clipLikelihood);
-  } else {
-    if(logger_)
-      logger_->warn("read {} (length {}) has no trained transcript front clipping model",
-                    bam_name(hit.read), cigarRLen);
-  }
-
-  if(transcriptBackModel_.sum > dmin && transcriptBackModel_.mass > dmin) {
-    using        boost::math::geometric;
-    const double  mean          = transcriptBackModel_.sum / transcriptBackModel_.mass;
-    geometric     clipDist(1.0 / (mean + 1.0));
-    const int32_t rmean         = std::round(mean);
-    const auto    clips         = numTranscriptBackExcluded;
-    const double clipLikelihood =
-      clips <= rmean
-      ? 1.0
-      : (1.0 - cdf(clipDist, clips)) / (1.0 - cdf(clipDist, rmean));
-     transcriptBackllh = clipLikelihood < llMin ? LOG_0 : std::log(clipLikelihood);
-  } else {
-    if(logger_)
-      logger_->warn("read {} (length {}) has no trained transcript back clipping model",
-                    bam_name(hit.read), cigarRLen);
-  }
-
-//logger_->warn("( errorllh: {} frontClipllh: {} backClipllh: {}  ",errorllh, frontClipllh,backClipllh );
-  return errorllh + frontClipllh + backClipllh + transcriptFrontllh + transcriptBackllh;
-  //return errorllh + transcriptFrontllh + transcriptBackllh;
-  //return errorllh;
 }
 
 void ONTAlignmentModel::update(
@@ -501,9 +373,6 @@ void ONTAlignmentModel::update(
   Column chunk[chunk_size];
 
   for (uint32_t cigarIdx = 0; cigarIdx < cigarLen; ++cigarIdx) {
-    /*if (chunk_idx == 0){
-      logger_->warn("new alignment start");
-    }*/ 
     uint32_t opLen = cigar[cigarIdx] >> BAM_CIGAR_SHIFT;
     enum cigar_op op =
         static_cast<enum cigar_op>(cigar[cigarIdx] & BAM_CIGAR_MASK);
@@ -528,7 +397,6 @@ void ONTAlignmentModel::update(
                   static_cast<enum cigar_op>(cigar[j] & BAM_CIGAR_MASK);
               cigarStream << opLen << opToChr(op);
             }
-            //logger_->warn("(in update()) CIGAR = {}", cigarStream.str());
           }
           return;
         }
@@ -557,30 +425,14 @@ void ONTAlignmentModel::update(
       setBasesFromCIGAROp_(
           op, curRefBase, curReadBase); //, readStream, matchStream, refStream);
       
-     // logger_->warn("chunk index: {}, curRefBase: {} curReadBase: {}",chunk_idx, curRefBase, curReadBase);
 
       chunk[chunk_idx].ref_base = curRefBase;
       chunk[chunk_idx].read_base = curReadBase;
      
-      //chunk[chunk_idx].num_mismatch = chunk_idx == 0 ? 0 : chunk[chunk_idx-1].num_mismatch;
-      //chunk[chunk_idx].num_indel = chunk_idx == 0 ? 0 : chunk[chunk_idx-1].num_indel;
-       //Match/mismatch case
-      /*if (BAM_CONSUME_SEQ(op) && BAM_CONSUME_REF(op)) {
-        if(curRefBase != curReadBase){
-          chunk[chunk_idx].num_mismatch += 1;
-        }
-        }
-      //Indel case
-      else {
-        chunk[chunk_idx].num_indel += 1;
-      }*/
       chunk_idx ++;
       if (chunk_idx >= kmerLength)
-        {
-             
-        //logger_-> warn("Update Chunk: {},  num_indel: {}, num mismatch: {}, homopolymer: {} ",chunkString(chunk),  numIndels(chunk), numMismatch(chunk), is_homopolymer(chunk));
+        {             
           curStateIdx = processChunk(chunk);
-          //logger_->warn("Log Likelihood Current State Index: ",curStateIdx, "out of: ",  numStatesTotal);
           chunk_idx = kmerLength-stepSize;
         }
       
@@ -602,13 +454,8 @@ void ONTAlignmentModel::update(
   return ;
   }
 
-// Update the probability model. The reads are binned based on their
-// length (the length after soft clipping). For each bin, we assume a
-// Binomial distribution B(p,n) (where n is the length of the read).
-//
-// The probability p in each bin is estimated as the empirical mean of
-// the number of errors in the reads (all reads counted the same at
-// this point: indels and mutations).
+// Update the Markov model. The reads are binned based on their
+// length (the length after soft clipping).
 void ONTAlignmentModel::update(const UnpairedRead& hit, const UnpairedRead& primary,
                                Transcript& ref, double p, double mass) {
     //logger_->warn("in update()");
@@ -623,84 +470,12 @@ void ONTAlignmentModel::update(const UnpairedRead& hit, const UnpairedRead& prim
   if(bam_aux_find(hit.read, "SA")) // Chimeric alignment. Ignore
     return;
 
-  ErrorCount counts;
-  if(!computeErrorCount(hit.read, primary.read, ref, counts, "update")) {
-    if(logger_)
-      logger_->warn("in update() error parsing CIGAR string");
-    return;
-  }
-
-  // Update error model
-  // Not taking p and mass into account. What's up with those?
-  const int32_t readLen   = alnLen(hit, primary);
-  const int32_t alignLen  = readLen - counts.sclips();
-  const double  errorRate = (double)counts.ims() / alignLen;
-  const double  clipRateFront  = (double)counts.fclips() / (readLen + counts.hclips());
-  const double  clipRateBack   = (double)counts.bclips() / (readLen + counts.hclips());
-  if(errorRate > 1.0 || clipRateFront > 1.0 || clipRateBack > 1.0) { // Should not happen
-    if (logger_) {
-      logger_->warn("(in update()) CIGAR string for read [{}] "
-                    "seems inconsistent. It implied an error rate "
-                    "greater than 1: {} {} {}",
-                    bam_name(hit.read), errorRate, clipRateFront, clipRateBack);
-    }
-    return;
-  }
 
   const double newMass = mass;
   { update(hit.read, primary.read, ref, p, mass, transitionProbs_);
   }
 
-  // Update front clip model
-  { int32_t binIndex = std::min(readLen / binLen, (uint32_t)frontClipModel_.size() - 1);
-    auto& bin = frontClipModel_[binIndex];
-    salmon::utils::incLoop(bin.mass, newMass);
-    salmon::utils::incLoop(bin.sum, (binIndex + 1) * binLen * newMass * clipRateFront);
-  }
 
-  // Update back clip model
-  { int32_t binIndex = std::min(readLen / binLen, (uint32_t)backClipModel_.size() - 1);
-    auto& bin = backClipModel_[binIndex];
-    salmon::utils::incLoop(bin.mass, newMass);
-    salmon::utils::incLoop(bin.sum, (binIndex + 1) * binLen * newMass * clipRateBack);
-  }
-
-  auto transcriptIdx = bam_pos(hit.read);
-  auto readAlnStart = transcriptIdx;
-  if (transcriptIdx<0){
-    transcriptIdx = 0;
-   }
-   size_t transcriptLen = ref.RefLength;
-
-
-  int32_t numTranscriptFrontExcluded = static_cast<int32_t>(transcriptIdx );
-  //auto alignmentEndIdx = transcriptIdx + counts.fclips() + alignLen - counts.hclips(); 
-  if(transcriptIdx < 0){
-    transcriptIdx = 0;
-  }
-    auto alignmentEndIdx = readAlnStart + alignLen; 
-
-  int32_t numTranscriptBackExcluded  = static_cast<int32_t>(transcriptLen - alignmentEndIdx);
-  //const double backExcludeRate = numTranscriptBackExcluded / transcriptLen;
-  //const double frontExcludeRate = numTranscriptFrontExcluded / transcriptLen;
-
-  //Update transcript front clip model
-  if (numTranscriptFrontExcluded + alignLen + numTranscriptBackExcluded !=  transcriptLen){
-    logger_->warn("in update, number of bases of read seems inconsistent, transcript length: {}, transcript bases excluded at front: {} , transcript bases aligned: {}, transcript bases excluded at back: {}", 
-  transcriptLen, numTranscriptFrontExcluded, alignLen,  numTranscriptBackExcluded);
-  }
-  
-  {
-    salmon::utils::incLoop(transcriptFrontModel_.mass, newMass);
-    salmon::utils::incLoop(transcriptFrontModel_.sum, newMass * numTranscriptFrontExcluded);
-
-  }
-  //Update transcript back clip model
-
-  {
-    salmon::utils::incLoop(transcriptBackModel_.mass, newMass);
-    salmon::utils::incLoop(transcriptBackModel_.sum, newMass * numTranscriptBackExcluded);
-  }
 }
 
 void ONTAlignmentModel::printModel(std::ostream& os) {

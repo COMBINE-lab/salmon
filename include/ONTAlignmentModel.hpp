@@ -21,6 +21,15 @@ public:
   static const uint32_t maxReadLen = 50000; // XXX: That should be a paramater. Read longer than that are binned together
   static const uint32_t binLen = 100; // XXX: That should be a parameter
   
+   /**
+    * kmerLength specifies the length of the kmers that each state represents in the Markov Model
+    * stepSize specifies how far we move the kmer window when looking at state transition 
+    * (ie stepSize = kmerLength means no overlap of kmers,stepSize = kmerLength-1 would mean kmers that overlap by 1 etc. ) 
+    * We must have 0 < stepSize <= kmerLength.
+    */
+  static const uint32_t kmerLength = 50;
+  static const uint32_t stepSize = 50;
+ 
   ONTAlignmentModel(double alpha, uint32_t readBins = 4);
   ~ONTAlignmentModel() {   }
 
@@ -31,7 +40,6 @@ public:
    */
   void update(const UnpairedRead& aln, const UnpairedRead& primaryAln,
               Transcript& ref, double p, double mass);
-  //uint32_t getStateIndex(size_t numIndels, size_t numMisMatch, bool homopolymer );
   /**
    * Compute the log-likelihood of the observed unpaired alignment
    * given the current error model. primaryAln contains the first
@@ -66,24 +74,11 @@ private:
     std::atomic<double> sum;
     average() : mass(0.0), sum(0.0) { }
   };
-  // Error model. Probability parameter p of the binomial distribution
-  // B(p,n) for each read in a bin (based on length n).
-  std::vector<average> errorModel_;
-
-  // Clip length model. Geometric distribution with parameter
-  // p. Binned for read size.
-  // Separate models are considered for front and back clips
-  std::vector<average> frontClipModel_;
-  std::vector<average> backClipModel_;
-
-  //Transcript front and back clip models
-    average transcriptFrontModel_;
-    average transcriptBackModel_;
   
   void update(bam_seq_t* read, bam_seq_t* primary, Transcript& ref, double p, double mass,
             std::vector<AtomicMatrix<double>>& mismatchProfile);
 
-  //Transtion probabilities for Markov Model
+  //Transtion probabilities for the mismatch/indel error Markov Model
   std::vector<AtomicMatrix<double>> transitionProbs_;
 };
 
