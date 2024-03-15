@@ -793,12 +793,17 @@ if (NOT LIBSTADENIO_FOUND)
   message("==================================================================")
   externalproject_add(libstadenio
     DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/jkbonfield/io_lib/releases/download/io_lib-1-14-15/io_lib-1.14.15.tar.gz -o staden-io_lib-v1.14.15.tar.gz &&
-      ${SHASUM} 20814c4365e1e2fe6630fb11d0df370dec4c5688af3871de7f1cb0129671401e staden-io_lib-v1.14.15.tar.gz &&
-      mkdir -p staden-io_lib-1.14.15 &&
-      tar -xzf staden-io_lib-v1.14.15.tar.gz --strip-components=1 -C staden-io_lib-1.14.15 &&
+    DOWNLOAD_COMMAND curl -k -L https://github.com/jkbonfield/io_lib/releases/download/io_lib-1-15-0/io_lib-1.15.0.tar.gz -o staden-io_lib-v1.15.0.tar.gz &&
+      ${SHASUM} ad343dac7c77086db1b54585c5887b26eda6430d1639d111dd3304c3b749494f staden-io_lib-v1.15.0.tar.gz &&
+      mkdir -p staden-io_lib-1.15.0 &&
+      tar -xzf staden-io_lib-v1.15.0.tar.gz --strip-components=1 -C staden-io_lib-1.15.0 &&
       rm -fr staden-io_lib &&
-      mv -f staden-io_lib-1.14.15 staden-io_lib
+      mv -f staden-io_lib-1.15.0 staden-io_lib &&
+      curl -k -L https://github.com/samtools/htscodecs/releases/download/v1.6.0/htscodecs-1.6.0.tar.gz -o htscodecs-1.6.0.tar.gz &&
+      mkdir -p htscodecs-1.6.0 &&
+      tar -xzf htscodecs-1.6.0.tar.gz --strip-components=1 -C htscodecs-1.6.0 &&
+      rm -fr staden-io_lib/htscodecs &&
+      mv -f htscodecs-1.6.0 staden-io_lib/htscodecs
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/staden-io_lib
     INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
     CONFIGURE_COMMAND ./configure --enable-shared=no --without-libcurl --prefix=<INSTALL_DIR> LDFLAGS=${LIBSTADEN_LDFLAGS} CFLAGS=${LIBSTADEN_CFLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
