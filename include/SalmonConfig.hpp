@@ -1,10 +1,10 @@
 /**
 >HEADER
-    Copyright (c) 2014-2022 Rob Patro rob@cs.umd.edu
+    Copyright (c) 2014-2024 Rob Patro rob@cs.umd.edu
 
     This file is part of Salmon.
 
-    Sailfish is free software: you can redistribute it and/or modify
+    Salmon is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
@@ -28,8 +28,8 @@
 namespace salmon {
 constexpr char majorVersion[] = "1";
 constexpr char minorVersion[] = "10";
-constexpr char patchVersion[] = "2";
-constexpr char version[] = "1.10.2";
+constexpr char patchVersion[] = "3";
+constexpr char version[] = "1.10.3";
 constexpr uint32_t indexVersion = 5;
 constexpr char requiredQuasiIndexVersion[] = "p7";
 } // namespace salmon
