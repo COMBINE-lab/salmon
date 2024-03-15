@@ -428,7 +428,7 @@ endif()
 ##
 # Set the latest version and look for what we need
 ##
-set(Boost_ADDITIONAL_VERSIONS "1.59.0" "1.60.0" "1.61.0" "1.62.0" "1.63.0" "1.64.0" "1.65.0" "1.66.0" "1.67.0" "1.68.0" "1.69.0" "1.70.0" "1.71.0" "1.72.0" "1.73.0" "1.74.0"  "1.75.0" "1.76.0" "1.77.0" "1.78.0")
+set(Boost_ADDITIONAL_VERSIONS "1.59.0" "1.60.0" "1.61.0" "1.62.0" "1.63.0" "1.64.0" "1.65.0" "1.66.0" "1.67.0" "1.68.0" "1.69.0" "1.70.0" "1.71.0" "1.72.0" "1.73.0" "1.74.0"  "1.75.0" "1.76.0" "1.77.0" "1.78.0" "1.79.0" "1.80.0" "1.81.0" "1.82.0" "1.83.0" "1.84.0")
 if (NOT BOOST_RECONFIGURE)
 find_package(Boost 1.59.0 COMPONENTS iostreams system filesystem timer chrono program_options)
 message("BOOST_INCLUDEDIR = ${BOOST_INCLUDEDIR}")
@@ -548,38 +548,6 @@ message("BOOST LIBRARIES = ${Boost_LIBRARIES}")
 
 set(EXTERNAL_LIBRARY_PATH $CMAKE_CURRENT_SOURCE_DIR/lib)
 
-#find_package(libdivsufsort)
-#if(NOT LIBDIVSUFSORT_FOUND)
-#  message("Build system will build libdivsufsort")
-#  message("==================================================================")
-#  include(ExternalProject)
-#  externalproject_add(libdivsufsort
-#    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-#    URL ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort.zip
-#    # Note: This zip comes from the fetched rapmap.zip, whose SHA we check
-#    # so we souldn't need to check this one separately.
-#    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master
-#    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-#    #UPDATE_COMMAND sh -c "mkdir -p <SOURCE_DIR>/build"
-#    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libdivsufsort-master/build
-#    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DBUILD_DIVSUFSORT64=TRUE -DUSE_OPENMP=TRUE -DBUILD_SHARED_LIBS=FALSE
-#  )
-#  externalproject_add_step(libdivsufsort makedir
-#    COMMAND mkdir -p <SOURCE_DIR>/build
-#    COMMENT "Make build directory"
-#    DEPENDEES download
-#    DEPENDERS configure)
-#
-#  set(SUFFARRAY_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
-#  set(FETCHED_LIBDIVSUFSORT TRUE)
-#else()
-#  message("SUFFARRAY_LIB = ${SUFFARRAY_LIBRARY}")
-#  set(SUFFARRAY_LIB ${SUFFARRAY_LIBRARY})
-#  message("SUFFARRAY_LIB64 = ${SUFFARRAY_LIBRARY64}")
-#  set(SUFFARRAY_LIB64 ${SUFFARRAY_LIBRARY64})
-#  set(SUFFARRAY_INCLUDE_DIRS ${SUFFARRAY_INCLUDE_DIR})
-#endif()
-
 find_package(cereal "1.3.2")
 if (NOT CEREAL_FOUND)
   message("Build system will fetch and build the cereal serialization library")
@@ -642,7 +610,7 @@ endif()
 message("Build system will fetch and build Intel Threading Building Blocks")
 message("==================================================================")
 # These are useful for the custom install step we'll do later
-set(TBB_SOURCE_DIR ${GAT_SOURCE_DIR}/external/oneTBB-2021.9.0)
+set(TBB_SOURCE_DIR ${GAT_SOURCE_DIR}/external/oneTBB-2021.11.0)
 set(TBB_INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
 
 if("${TBB_COMPILER}" STREQUAL "gcc")
@@ -653,11 +621,13 @@ endif()
 
 set(TBB_CXXFLAGS "${TBB_CXXFLAGS} ${CXXSTDFLAG} ${SCHAR_FLAG}")
 
+
+
 ExternalProject_Add(libtbb
 DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-DOWNLOAD_COMMAND curl -k -L  https://github.com/oneapi-src/oneTBB/archive/refs/tags/v2021.9.0.tar.gz -o v2021.9.tar.gz &&
-${SHASUM} 1ce48f34dada7837f510735ff1172f6e2c261b09460e3bf773b49791d247d24e v2021.9.tar.gz &&
-tar -xzvf v2021.9.tar.gz
+DOWNLOAD_COMMAND curl -k -L https://github.com/oneapi-src/oneTBB/archive/refs/tags/v2021.11.0.tar.gz -o v2021.11.0.tar.gz &&
+${SHASUM} 782ce0cab62df9ea125cdea253a50534862b563f1d85d4cda7ad4e77550ac363 v2021.11.0.tar.gz &&
+tar -xzvf v2021.11.0.tar.gz
 SOURCE_DIR ${TBB_SOURCE_DIR}
 INSTALL_DIR ${TBB_INSTALL_DIR}
 PATCH_COMMAND "${TBB_PATCH_STEP}"
