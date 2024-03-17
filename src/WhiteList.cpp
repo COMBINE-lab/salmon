@@ -308,5 +308,9 @@ namespace alevin {
                                       std::vector<std::string>& trueBarcodes,
                                       bool useRibo, bool useMito,
                                       size_t numLowConfidentBarcode);
+    template bool performWhitelisting(AlevinOpts<alevin::protocols::CustomGeo>& aopt,
+                                      std::vector<std::string>& trueBarcodes,
+                                      bool useRibo, bool useMito,
+                                      size_t numLowConfidentBarcode);
   }
 }

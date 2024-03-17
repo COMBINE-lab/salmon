@@ -1,5 +1,6 @@
 #include "AlevinUtils.hpp"
 #include "peglib.h"
+#include <assert.h>
 
 namespace alevin {
   namespace utils {
@@ -142,6 +143,18 @@ namespace alevin {
       //subseq = seq2;
     }
     template <>
+    std::string*  getReadSequence(apt::CustomGeo& pt,
+                         std::string& seq,
+                         std::string& seq2,
+                         std::string& subseq){
+      int r = pt.bioRead - 1;
+      subseq.clear();
+      if(pt.rgx_search[r]) {
+        subseq.append(pt.match[r][pt.bioPat]);
+      }
+      return &subseq; // return extracted if the rgx_search was success, empty otherwise
+    }
+    template <>
     std::string*  getReadSequence(apt::Gemcode& protocol,
                          std::string& seq,
                          std::string& seq2,
@@ -244,6 +257,25 @@ namespace alevin {
                                  std::string& umi){
       
       return pt.umi_geo.extract_tag(read1, read2, umi);
+    }
+    template <>
+    bool extractUMI<apt::CustomGeo>(std::string& read1,
+                                 std::string& read2,
+                                 apt::CustomGeo& pt,
+                                 std::string& umi){
+      pt.um = "";
+      for(int r=0; r < 2; r++) {
+        if(!pt.u[r].empty()) { // if umi is present on read r
+            for(int i : pt.u[r]) {
+              pt.um += pt.match[r][i]; // concat all umi sequences
+          }
+        }
+      }
+      if(pt.minUmiLen < pt.maxUmiLen) {
+        addPadding(pt.um, pt.maxUmiLen, pt.paddingBases, pt.padLen);
+      }
+      umi = pt.um;
+      return true;
     }
     template <>
     bool extractUMI<apt::QuartzSeq2>(std::string& read,
@@ -407,6 +439,31 @@ namespace alevin {
       return pt.bc_geo.extract_tag(read1, read2, bc);
     }
     template <>
+    bool extractBarcode<apt::CustomGeo>(std::string& read1,
+                                            std::string& read2,
+                                     apt::CustomGeo& pt,
+                                     std::string& bc){
+      pt.barcode="";
+      for(int r=0; r < 2; r++) {
+        pt.rgx_search[r] = (r == 0) ? boost::regex_search(read1,pt.match[r],pt.rgx[r]) :
+          boost::regex_search(read2,pt.match[r],pt.rgx[r]); // using std::string instead of read1/2 results in blank umi. strange!
+        if(!pt.b[r].empty()) { // if read r has barcode
+          if(pt.rgx_search[r]){ // if rgx search was successful
+            for(int i : pt.b[r]) {
+              pt.barcode += pt.match[r][i]; // concat all barcode sequences
+            }
+          } else {
+            return false;
+          }
+        }
+      }
+      if(pt.minBcLen < pt.maxBcLen) {
+        addPadding(pt.barcode, pt.maxBcLen, pt.paddingBases, pt.padLen);
+      }
+      bc = pt.barcode;
+      return true;
+    }
+    template <>
     bool extractBarcode<apt::QuartzSeq2>(std::string& read,
                                          std::string& read2,
                                          apt::QuartzSeq2& pt,
@@ -560,14 +617,60 @@ namespace alevin {
                         neighbors);
     }
 
-    unsigned int hammingDistance(const std::string s1, const std::string s2){
+    uint32_t hammingDistance(const std::string& s1, const std::string& s2) {
       if(s1.size() != s2.size()){
         throw std::invalid_argument("Strings have different lengths, can't compute hamming distance");
       }
 
       // compute dot product for all postisions, start with 0 and add if the values are not equal
-      return std::inner_product(s1.begin(),s1.end(),s2.begin(), 0, std::plus<unsigned int>(),
+      return std::inner_product(s1.begin(),s1.end(),s2.begin(), 0, std::plus<uint32_t>(),
         std::not2(std::equal_to<std::string::value_type>()));
+    }
+
+    void addPadding(std::string& seq, uint32_t max, const char padBases[], uint32_t padLen) {
+      int diff = max - seq.length() + 1; // add one base if the length is same to avoid erroneous collisions
+      for(int i = 0; i < diff; i++){
+          if(i >= padLen){
+            i -= padLen;
+            diff -= padLen;
+            }
+          seq += padBases[i];
+      }
+    }
+
+    void modifyRegex(size_t readNumber, customReadpartType type, std::string* reg, itlib::small_vector<uint32_t, 4, 5> *bu, uint32_t& nPat, std::size_t first, std::size_t second)
+    {
+      reg[readNumber-1] += "([ATGC]{" + std::to_string(first) + "," + std::to_string(second) +"})";
+      if (type == customReadpartType::bc){
+          bu[readNumber-1].push_back(nPat);
+      } else if (type == customReadpartType::umi) {
+          bu[readNumber-1].push_back(nPat);
+      } // else if (type == 'x') { } not needed to explicitly mention case 'x'
+      nPat++;
+    }
+
+    void modifyRegex(size_t readNumber, customReadpartType type, std::string* reg, itlib::small_vector<uint32_t, 4, 5> *bu, uint32_t& nPat, std::size_t len)
+    {
+      reg[readNumber-1] += "([ATGC]{" + std::to_string(len) +"})";
+      if (type == customReadpartType::bc){
+        bu[readNumber-1].push_back(nPat);
+      } else if (type == customReadpartType::umi){
+        bu[readNumber-1].push_back(nPat);
+      }
+      nPat++;
+    }
+
+    void modifyRegex(size_t readNumber, std::string seq, std::string* reg, uint32_t& nPat)
+    {
+      reg[readNumber -1] += "(" + seq + ")";
+      nPat++;
+    }
+
+    void modifyRegex(size_t readNumber, std::string* reg, uint32_t& nPat, uint32_t& bioPat)
+    {
+      reg[readNumber - 1] += "([ATGC]{1,})";
+      bioPat = nPat;
+      nPat++;
     }
 
     void getTxpToGeneMap(spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
@@ -1008,6 +1111,7 @@ namespace alevin {
       bool have_custom_umi_geo = vm.count("umi-geometry");
       bool have_custom_bc_geo = vm.count("bc-geometry");
       bool have_custom_read_geo = vm.count("read-geometry");
+      bool have_custom_geo = vm.count("custom-geo");
       // need both
       bool have_any_custom_geo = have_custom_read_geo or have_custom_umi_geo or have_custom_bc_geo;
       bool have_all_custom_geo = have_custom_read_geo and have_custom_umi_geo and have_custom_bc_geo;
@@ -1221,7 +1325,185 @@ namespace alevin {
         // if it's OK, set the umi kmer length
         alevin::types::AlevinUMIKmer::k( static_cast<uint16_t>(umi_geo.length()) );
 
-      } // new custom barcode geometry
+      } else if (have_custom_geo) { // regex based unified barcode geometry parsing
+      /* Custom Geometry (--custom-geo) should be used when:
+      * 1. Barcode or umi have variable lengths
+      * 2. There is known fixed sequence in the reads
+      * 3. There is some sequence to be excluded
+      *
+      * From the input peglib spec it creates a regex. Boost regex lib  is used to parse
+      * the reads.
+      */
+
+      struct apt::CustomGeo customGeo;
+      uint32_t nPatterns = 1;
+      customGeo.minBcLen = 0, customGeo.maxBcLen = 0, customGeo.minUmiLen = 0, customGeo.minUmiLen = 0;
+      customGeo.bioReadFound = false;
+      struct ProtoInfo proto;
+      peg::parser parser(R"(
+        Specification <- ReadNumber1'{'Description{1,10}'}'ReadNumber2'{'Description{1,10}'}'
+        ReadNumber1 <- [1]
+        ReadNumber2 <- [2]
+        Description <- Type'['Lengths']' / Fixed'['Sequence']' / Read
+        Type <-  'b' / 'u' / 'x'
+        Fixed <- 'f'
+        Read <- 'r'
+        Sequence <- [ATGC]+
+        Lengths <- (Length '-' Length) / Length
+        Length <- [0-9]+
+      )");
+
+
+    parser["Length"] = [](const peg::SemanticValues &sv)
+    {
+        auto val = static_cast<size_t>(std::stoull(sv.token()));
+        if(val<=0){
+          std::cerr << "Lengths should be > 0. Exiting." << std::endl;
+          exit(1);
+        };
+        return val;
+    };
+
+
+    parser["ReadNumber1"] = [&](const peg::SemanticValues &sv)
+    {
+        auto val = std::stoi(sv.token());
+        proto.readNumber = val;
+    };
+
+    parser["ReadNumber2"] = [&](const peg::SemanticValues &sv)
+    {
+        auto val = std::stoi(sv.token());
+        proto.readNumber = val;
+        nPatterns = 1;
+    };
+
+    parser["Description"] = [&](const peg::SemanticValues &sv)
+    {
+        auto val = std::string(sv.token());
+        if(val == "r") {
+            if (!customGeo.bioReadFound){
+                customGeo.bioRead = proto.readNumber;
+                customGeo.bioReadFound = true;
+            } else {
+              // aopt.jointLog->error("Only contigous biological read expected.\nExiting now.");
+              std::cerr << "Only contigous biological read expected.\nExiting now." << std::endl;
+              exit(1);
+            }
+            modifyRegex(proto.readNumber, customGeo.reg, nPatterns, customGeo.bioPat);
+        }
+    };
+
+    parser["Type"] = [&](const peg::SemanticValues &sv)
+    {
+        auto val = std::string(sv.token())[0];
+        proto.type = static_cast<customReadpartType>(val);
+    };
+
+    parser["Fixed"] = [&](const peg::SemanticValues &sv)
+    {
+        auto val = std::string(sv.token())[0];
+        proto.type = static_cast<customReadpartType>(val);
+    };
+
+    parser["Sequence"] = [&](const peg::SemanticValues &sv)
+    {
+        auto val = std::string(sv.token());
+        modifyRegex(proto.readNumber, val, customGeo.reg, nPatterns);
+    };
+
+    parser["Lengths"] = [&](const peg::SemanticValues &sv)
+    {
+        switch (sv.choice())
+        {
+        case 0:
+        {
+            auto val = std::make_pair(
+                peg::any_cast<size_t>(sv[0]), peg::any_cast<size_t>(sv[1]));
+            if(val.second <= val.first) {
+                //  aopt.jointLog->error("In length range [X-Y], Y should be > X.\nExiting now");
+                std::cerr << "In length range [X-Y], Y should be > X.\nExiting now" << std::endl;
+                exit(1);
+            }
+            if (proto.type == customReadpartType::bc) {
+                customGeo.minBcLen += val.first;
+                customGeo.maxBcLen += val.second;
+                modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.b, nPatterns, val.first, val.second);
+            } else if (proto.type == customReadpartType::umi) {
+                customGeo.minUmiLen += val.first;
+                customGeo.maxUmiLen += val.second;
+                modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.u, nPatterns, val.first, val.second);
+            } else {
+                modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.u, nPatterns, val.first, val.second); // case 'x'
+            }
+        }
+        break;
+        case 1:
+        {
+            auto val = peg::any_cast<size_t>(sv[0]);
+            if (proto.type == customReadpartType::bc)  {
+                customGeo.minBcLen += val; // a fixed length bc increases the min length too, not updating can cause logical error when there are 2 pos of bcs
+                customGeo.maxBcLen += val;
+                modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.b, nPatterns, val);
+            } else if (proto.type == customReadpartType::umi){
+                customGeo.minUmiLen += val;
+                customGeo.maxUmiLen += val;
+                modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.u, nPatterns, val);
+            } else {
+                modifyRegex(proto.readNumber, proto.type, customGeo.reg, customGeo.u, nPatterns, val); // case 'x'
+            }
+        }
+        break;
+        }
+    };
+
+    // NOTE: this is just for backwards-compatibility.
+        // The barcode end is redundant with the new geometry
+        // specification.
+        aopt.protocol.end = BarcodeEnd::FIVE;
+        parser.enable_packrat_parsing();
+        std::string  geometry = vm["custom-geo"].as<std::string>();
+        auto val = parser.parse(geometry.c_str());
+        if(val == 0) {
+          aopt.jointLog->error("Incorrect geometry spec: {} \n"
+                               "Exiting now", geometry);
+          return false;
+        }
+        // std::cout << "reg[0]: " << customGeo.reg[0] << std::endl;
+        // std::cout << "reg[1]: " << customGeo.reg[1] << std::endl;
+        customGeo.rgx[0] = customGeo.reg[0];
+        customGeo.rgx[1] = customGeo.reg[1];
+        // validate that BC and UMI lengths are OK
+        uint32_t maxBC{31};
+        uint32_t maxUMI{31};
+        // the barcode length must be in [1,31]
+        if ((customGeo.minBcLen < 1) or (customGeo.maxBcLen > maxBC)) {
+          aopt.jointLog->error("Barcode length ({}) was not in the required length range [1, {}].\n"
+                               "Exiting now.", customGeo.maxBcLen, maxBC);
+          return false;
+        }
+        if (customGeo.maxBcLen == customGeo.minBcLen) {
+          customGeo.barcodeLength = customGeo.maxBcLen;
+        } else {
+          customGeo.barcodeLength = customGeo.maxBcLen + 1;
+        }
+        // if it's OK, set the barcode kmer length
+        alevin::types::AlevinCellBarcodeKmer::k( static_cast<uint16_t>(customGeo.barcodeLength) );
+        // the UMI length must be in [1,31]
+        if ((customGeo.minUmiLen < 1) or (customGeo.maxUmiLen > maxUMI)) {
+          aopt.jointLog->error("UMI length ({}) was not in the required length range [1, {}].\n"
+                               "Exiting now.", customGeo.maxUmiLen, maxUMI);
+          return false;
+        }
+        if (customGeo.maxUmiLen == customGeo.minUmiLen) {
+          customGeo.umiLength = customGeo.maxUmiLen;
+        } else {
+          customGeo.umiLength = customGeo.maxUmiLen + 1;
+        }
+        // if it's OK, set the umi kmer length
+        alevin::types::AlevinUMIKmer::k( static_cast<uint16_t>(customGeo.umiLength) );
+
+      }
 
       //validate specified iupac
       if (aopt.iupac.size()>0){
@@ -1428,6 +1710,10 @@ namespace alevin {
                            boost::program_options::variables_map& vm);
     template
     bool processAlevinOpts(AlevinOpts<apt::CustomGeometry>& aopt,
+                           SalmonOpts& sopt, bool noTgMap,
+                           boost::program_options::variables_map& vm);
+    template
+    bool processAlevinOpts(AlevinOpts<apt::CustomGeo>& aopt,
                            SalmonOpts& sopt, bool noTgMap,
                            boost::program_options::variables_map& vm);
     template

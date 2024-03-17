@@ -73,7 +73,9 @@ namespace alevin{
     void readWhitelist(bfs::path& filePath,
                        TrueBcsT& trueBarcodes);
 
-    unsigned int hammingDistance(const std::string s1, const std::string s2);
+    uint32_t hammingDistance(const std::string& s1, const std::string& s2);
+    
+    void addPadding(std::string& seq, uint32_t max, const char padBases[], uint32_t padLen);
 
     template <typename ProtocolT>
     bool processAlevinOpts(AlevinOpts<ProtocolT>& aopt,
@@ -128,6 +130,11 @@ namespace alevin{
     bool hasOneGene(const std::vector<uint32_t>& txps, uint32_t& geneId,
                     spp::sparse_hash_map<uint32_t, uint32_t>& txpToGeneMap,
                     const size_t numGenes);
+
+  void modifyRegex(size_t readNumber, std::string seq, std::string* reg, uint32_t& nPat);
+  void modifyRegex(size_t readNumber, std::string seq, std::string* reg, uint32_t& nPat, uint32_t& bioPat);
+  void modifyRegex(size_t readNumber, customReadpartType type, std::string* reg, itlib::small_vector<uint32_t, 4, 5> *bu, uint32_t& nPat, std::size_t len);
+  void modifyRegex(size_t readNumber, customReadpartType type, std::string* reg, itlib::small_vector<uint32_t, 4, 5> *bu, uint32_t& nPat, std::size_t first, std::size_t second);
   }
 }
 #endif // __ALEVIN_UTILS_HPP__

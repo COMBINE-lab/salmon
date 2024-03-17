@@ -472,6 +472,9 @@ namespace salmon {
       ("umi-geometry", po::value<std::string>(),
       "format string describing the genometry of the umi"
       )
+      ("custom-geo", po::value<std::string>(),
+      "unified custom geometry"
+      )
       (
        "end",po::value<uint32_t>(),
        "Cell-Barcodes end (5 or 3) location in the read sequence from where barcode has to"

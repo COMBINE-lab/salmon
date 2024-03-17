@@ -1912,6 +1912,10 @@ template
 bool GZipWriter::writeEquivCounts<SCExpT, apt::CustomGeometry>(
                                                        const AlevinOpts<apt::CustomGeometry>& aopts,
                                                        SCExpT& readExp);
+template
+bool GZipWriter::writeEquivCounts<SCExpT, apt::CustomGeo>(
+                                                       const AlevinOpts<apt::CustomGeo>& aopts,
+                                                       SCExpT& readExp);
 template bool
 GZipWriter::writeMetaAlevin<apt::DropSeq>(const AlevinOpts<apt::DropSeq>& opts,
                                           boost::filesystem::path aux_dir);
@@ -1954,6 +1958,10 @@ GZipWriter::writeMetaAlevin<apt::Gemcode>(const AlevinOpts<apt::Gemcode>& opts,
 
 template bool
 GZipWriter::writeMetaAlevin<apt::CustomGeometry>(const AlevinOpts<apt::CustomGeometry>& opts,
+                                          boost::filesystem::path aux_dir);
+
+template bool
+GZipWriter::writeMetaAlevin<apt::CustomGeo>(const AlevinOpts<apt::CustomGeo>& opts,
                                           boost::filesystem::path aux_dir);
 
 

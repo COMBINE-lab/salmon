@@ -3,10 +3,13 @@
 
 #include <string>
 #include <ostream>
+#include <boost/regex.hpp>
 
 #include "AlevinOpts.hpp"
 #include "AlevinTypes.hpp"
 #include "pufferfish/itlib/static_vector.hpp"
+#include "pufferfish/itlib/small_vector.hpp"
+
 
 namespace alevin{
   namespace protocols {
@@ -220,7 +223,60 @@ namespace alevin{
       BarcodeEnd end;
     };
 
+    // Custom geometry specification using regex for extraction
+    struct CustomGeo {
+      // store regex string for reads 1 and 2
+      static std::string reg[2];
+      // store group numbers for bc and umi in regex string groups
+      static itlib::small_vector<uint32_t, 4, 5> b[2], u[2];
+      // bioRead stores the read number for biological read and bioPat stores match pattern number on regex
+      static uint32_t bioRead, bioPat; // biological read would be contigous and on only 1 of the read
+      static uint32_t minBcLen, maxBcLen, minUmiLen, maxUmiLen;
+      static bool bioReadFound;
+      static constexpr const char paddingBases[4] = {'A', 'C', 'G', 'T'};
+      static constexpr uint32_t padLen = 4;
+      // store the matches for both reads
+      boost::smatch match[2];
+      // store the success of regex search
+      bool rgx_search[2];
+      // store the regex
+      static boost::regex rgx[2];
+      // string for extract barcode and umi
+      std::string barcode, um;
+      // required
+      static uint32_t barcodeLength, umiLength;
+      BarcodeEnd end;
+
+      TagGeometry umi_geo;
+      TagGeometry bc_geo;
+      TagGeometry read_geo;
+
+      void set_umi_geo(TagGeometry& g) { umi_geo = g; umiLength = umi_geo.length(); }
+      void set_bc_geo(TagGeometry& g) { bc_geo = g; barcodeLength = bc_geo.length(); }
+      void set_read_geo(TagGeometry& g) { read_geo = g; }
+      uint32_t barcode_length() const { return barcodeLength; }
+      uint32_t umi_length() const { return umiLength; }
+    };
+
   }
+
+  // CustomGeo type of read part
+  enum class customReadpartType : char { 
+    bc = 'b',
+    umi = 'u',
+    fixed = 'f',
+    exclude = 'x'
+  };
+
+  // Store the readNumber and type info for CustomGeo
+  struct ProtoInfo
+  {
+    size_t readNumber;
+    customReadpartType type;
+  };
+
 }
 
 #endif
+
+

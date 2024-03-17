@@ -430,7 +430,7 @@ endif()
 ##
 set(Boost_ADDITIONAL_VERSIONS "1.59.0" "1.60.0" "1.61.0" "1.62.0" "1.63.0" "1.64.0" "1.65.0" "1.66.0" "1.67.0" "1.68.0" "1.69.0" "1.70.0" "1.71.0" "1.72.0" "1.73.0" "1.74.0"  "1.75.0" "1.76.0" "1.77.0" "1.78.0" "1.79.0" "1.80.0" "1.81.0" "1.82.0" "1.83.0" "1.84.0")
 if (NOT BOOST_RECONFIGURE)
-find_package(Boost 1.59.0 COMPONENTS iostreams system filesystem timer chrono program_options)
+find_package(Boost 1.59.0 COMPONENTS iostreams filesystem system timer chrono program_options regex)
 message("BOOST_INCLUDEDIR = ${BOOST_INCLUDEDIR}")
 message("BOOST_LIBRARYDIR = ${BOOST_LIBRARYDIR}")
 message("Boost_FOUND = ${Boost_FOUND}")
@@ -459,7 +459,7 @@ if(BOOST_RECONFIGURE)
   set(CMAKE_PREFIX_PATH ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
   set(Boost_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
   set(Boost_LIBRARY_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib)
-  find_package(Boost 1.59.0 COMPONENTS iostreams system filesystem timer chrono program_options locale REQUIRED)
+  find_package(Boost 1.59.0 COMPONENTS iostreams filesystem system timer chrono program_options locale regex REQUIRED)
   set(FETCH_BOOST FALSE)
 endif()
 
@@ -484,7 +484,7 @@ elseif(FETCH_BOOST)
   ## Let the rest of the build process know we're going to be fetching boost
   set(BOOST_LIB_SUBSET --with-iostreams --with-atomic --with-chrono --with-container --with-date_time --with-exception
     --with-filesystem --with-graph --with-graph_parallel --with-math
-    --with-program_options --with-system  --with-locale
+    --with-program_options --with-system  --with-locale --with-regex
     --with-timer)
   set(BOOST_WILL_RECONFIGURE TRUE)
   set(FETCH_BOOST FALSE)
