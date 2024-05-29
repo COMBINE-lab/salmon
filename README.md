@@ -13,7 +13,7 @@
 What is Salmon?
 ===============
 
-Salmon is a **wicked**-fast program to produce a highly-accurate, transcript-level quantification estimates from 
+Salmon is a **wicked**-fast program to produce highly-accurate, transcript-level quantification estimates from 
 RNA-seq data.  Salmon achieves its accuracy and speed via a number of different innovations, including the 
 use of *selective-alignment* (accurate but fast-to-compute proxies for traditional read alignments), and 
 massively-parallel stochastic collapsed variational inference.  The result is a versatile tool that fits nicely
@@ -39,7 +39,7 @@ tl;dr: fast is good but fast and accurate is better!
 
 * cDNA-only index : salmon_index - https://combine-lab.github.io/salmon/getting_started/. This method will result in the smallest index and require the least resources to build, but will be the most prone to possible spurious alignments.
 
-* SA mashmap index: salmon_partial_sa_index - (regions of genome that have high sequence similarity to the transcriptome) - Details can be found in [this README](https://github.com/COMBINE-lab/SalmonTools/blob/master/README.md) and using [this script](https://raw.githubusercontent.com/COMBINE-lab/SalmonTools/master/scripts/generateDecoyTranscriptome.sh). While running mashmap can require considerable resources, the resulting decoy files are fairly small.  This will result in an index bigger than the cDNA-only index, but still mucch smaller than the full genome index below.  It will confer many, though not all, of the benefits of using the entire genome as a decoy sequence.
+* SA mashmap index: salmon_partial_sa_index - (regions of genome that have high sequence similarity to the transcriptome) - Details can be found in [this README](https://github.com/COMBINE-lab/SalmonTools/blob/master/README.md) and using [this script](https://raw.githubusercontent.com/COMBINE-lab/SalmonTools/master/scripts/generateDecoyTranscriptome.sh). While running mashmap can require considerable resources, the resulting decoy files are fairly small.  This will result in an index bigger than the cDNA-only index, but still much smaller than the full genome index below.  It will confer many, though not all, of the benefits of using the entire genome as a decoy sequence.
 
 * SAF genome index: salmon_sa_index - (the full genome is used as decoy) - The tutorial for creating such an index can be found [here](https://combine-lab.github.io/alevin-tutorial/2019/selective-alignment/).  This will result in the largest index, but likely does the best job in avoiding spurious alignments to annotated transcripts. 
 
