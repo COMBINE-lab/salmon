@@ -259,6 +259,9 @@ else()
   message(FATAL_ERROR "Your C++ compiler does not support C++14.")
 endif()
 
+
+list(APPEND TGT_COMPILE_FLAGS -DBOOST_MATH_PROMOTE_DOUBLE_POLICY=false)
+
 if(DO_QUIET_MAKE)
   set(QUIET_MAKE "--silent")
 else()
