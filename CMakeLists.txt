@@ -234,7 +234,7 @@ elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
     # If we have libc++, then try and use it
     include(CheckCXXCompilerFlag)
     check_cxx_compiler_flag(-stdlib=libc++ HAVE_LIBCPP)
-    if(HAVE_LIBCPP)
+    if(HAVE_LIBCPP AND APPLE)
       message("It appears that you're compiling with clang and that libc++ is available, so I'll use that")
       list(APPEND TGT_COMPILE_FLAGS -stdlib=libc++)
       set(BOOST_TOOLSET "clang")
