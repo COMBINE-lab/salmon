@@ -1,4 +1,4 @@
-#include "LibraryFormat.hpp"
+#include "salmon/internal/model/LibraryFormat.hpp"
 
 LibraryFormat::LibraryFormat(ReadType type_in, ReadOrientation orientation_in,
                              ReadStrandedness strandedness_in)

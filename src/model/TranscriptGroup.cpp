@@ -2,7 +2,7 @@
 #include <vector>
 
 #include "SalmonMath.hpp"
-#include "TranscriptGroup.hpp"
+#include "salmon/internal/model/TranscriptGroup.hpp"
 #include "xxhash.h"
 
 TranscriptGroup::TranscriptGroup() : hash(0) {}

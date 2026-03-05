@@ -6,7 +6,7 @@
  * Rob Patro; 2014, 2015
  */
 
-#include "FragmentStartPositionDistribution.hpp"
+#include "salmon/internal/model/FragmentStartPositionDistribution.hpp"
 #include "SalmonMath.hpp"
 #include <boost/assign.hpp>
 #include <boost/math/distributions/binomial.hpp>

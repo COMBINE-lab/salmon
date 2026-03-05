@@ -7,7 +7,7 @@
  *  Modified 2014, 2015, 2016, 2017 by Rob Patro.
  */
 
-#include "FragmentLengthDistribution.hpp"
+#include "salmon/internal/model/FragmentLengthDistribution.hpp"
 #include "SalmonMath.hpp"
 #include "SalmonUtils.hpp"
 #include <boost/assign.hpp>

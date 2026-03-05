@@ -1,4 +1,4 @@
-#include "SBModel.hpp"
+#include "salmon/internal/model/SBModel.hpp"
 #include "jellyfish/mer_dna.hpp"
 #include <sstream>
 #include <utility>

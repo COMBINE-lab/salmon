@@ -1,4 +1,4 @@
-#include "SimplePosBias.hpp"
+#include "salmon/internal/model/SimplePosBias.hpp"
 #include "SalmonMath.hpp"
 #include <algorithm>
 #include <cassert>
