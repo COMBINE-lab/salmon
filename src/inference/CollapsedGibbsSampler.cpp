@@ -29,7 +29,7 @@
 
 #include "AlignmentLibrary.hpp"
 #include "BootstrapWriter.hpp"
-#include "CollapsedGibbsSampler.hpp"
+#include "salmon/internal/inference/CollapsedGibbsSampler.hpp"
 #include "MultinomialSampler.hpp"
 #include "ReadExperiment.hpp"
 #include "ReadPair.hpp"

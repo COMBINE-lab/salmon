@@ -1,4 +1,4 @@
-#include "EMUtils.hpp"
+#include "salmon/internal/inference/EMUtils.hpp"
 #include "SalmonUtils.hpp"
 
 /**

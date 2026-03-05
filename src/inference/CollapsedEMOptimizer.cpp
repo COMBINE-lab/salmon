@@ -21,7 +21,7 @@
 
 #include "AlignmentLibrary.hpp"
 #include "BootstrapWriter.hpp"
-#include "CollapsedEMOptimizer.hpp"
+#include "salmon/internal/inference/CollapsedEMOptimizer.hpp"
 #include "MultinomialSampler.hpp"
 #include "ReadExperiment.hpp"
 #include "ReadPair.hpp"
@@ -29,7 +29,7 @@
 #include "Transcript.hpp"
 #include "TranscriptGroup.hpp"
 #include "UnpairedRead.hpp"
-#include "EMUtils.hpp"
+#include "salmon/internal/inference/EMUtils.hpp"
 
 using BlockedIndexRange = oneapi::tbb::blocked_range<size_t>;
 
