@@ -8,7 +8,7 @@
 
 #include "AlignmentLibrary.hpp"
 #include "DistributionUtils.hpp"
-#include "GZipWriter.hpp"
+#include "salmon/internal/output/GZipWriter.hpp"
 #include "ReadExperiment.hpp"
 #include "ReadPair.hpp"
 #include "SalmonOpts.hpp"

@@ -8,7 +8,7 @@
 #include <boost/math/distributions/geometric.hpp>
 
 #include "dbg.hpp"
-#include "ONTAlignmentModel.hpp"
+#include "salmon/internal/alignment/ONTAlignmentModel.hpp"
 #include "SalmonMath.hpp"
 #include "SalmonStringUtils.hpp"
 #include "Transcript.hpp"

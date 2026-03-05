@@ -5,7 +5,7 @@
 
 #include <boost/config.hpp> // for BOOST_LIKELY/BOOST_UNLIKELY
 
-#include "AlignmentModel.hpp"
+#include "salmon/internal/alignment/AlignmentModel.hpp"
 #include "ReadPair.hpp"
 #include "SalmonMath.hpp"
 #include "SalmonStringUtils.hpp"

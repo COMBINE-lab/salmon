@@ -1,4 +1,4 @@
-#include "AlignmentCommon.hpp"
+#include "salmon/internal/alignment/AlignmentCommon.hpp"
 
 #include "ReadPair.hpp"
 #include "Transcript.hpp"

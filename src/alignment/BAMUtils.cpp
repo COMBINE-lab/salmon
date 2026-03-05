@@ -1,4 +1,4 @@
-#include "BAMUtils.hpp"
+#include "salmon/internal/alignment/BAMUtils.hpp"
 #include <unordered_map>
 #include <string>
 #include <functional>
