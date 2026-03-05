@@ -2,25 +2,6 @@ if(${TBB_FOUND})
   get_target_property(TBB_INCLUDE_DIRS TBB::tbb INTERFACE_INCLUDE_DIRECTORIES)
 endif()
 
-include_directories(
-${GAT_SOURCE_DIR}/include
-${GAT_SOURCE_DIR}/include/eigen3
-${GAT_SOURCE_DIR}/external
-${GAT_SOURCE_DIR}/external/cereal/include
-${GAT_SOURCE_DIR}/external/install/include
-${SALMON_ZLIB_INCLUDE_DIRS}
-${HTSLIB_INCLUDE_DIR}
-${TBB_INCLUDE_DIRS}
-${Boost_INCLUDE_DIRS}
-${GAT_SOURCE_DIR}/external/install/include
-${GAT_SOURCE_DIR}/external/install/include/pufferfish
-${GAT_SOURCE_DIR}/external/install/include/pufferfish/digestpp
-${LIB_GFF_INCLUDE_DIR}
-#${GAT_SOURCE_DIR}/external/install/include/rapmap
-#${GAT_SOURCE_DIR}/external/install/include/rapmap/digestpp
-${ICU_INC_DIRS}
-)
-
 set (SALMON_ENTRY_SRCS
 cli/Salmon.cpp
 )
@@ -115,17 +96,6 @@ if(SALMON_ENABLE_TESTS)
   )
 endif()
 
-
-link_directories(
-${GAT_SOURCE_DIR}/lib
-${GAT_SOURCE_DIR}/external/install/lib
-${Boost_LIBRARY_DIRS}
-${TBB_LIBRARY_DIRS}
-${LAPACK_LIBRARY_DIR}
-${BLAS_LIBRARY_DIR}
-${LIB_GFF_LIBRARY_DIR}
-)
-
 message("TBB_LIBRARIES = ${TBB_LIBRARIES}")
 
 # Set the RPATH
@@ -151,21 +121,53 @@ endif()
 set (TGT_RELEASE_FLAGS "${TGT_COMPILE_FLAGS};${TGT_WARN_FLAGS}")
 set (TGT_DEBUG_FLAGS "-g;${TGT_COMPILE_FLAGS};${TGT_WARN_FLAGS}")
 
+add_library(salmon_project_options INTERFACE)
+target_compile_features(salmon_project_options INTERFACE cxx_std_17)
+target_compile_definitions(salmon_project_options INTERFACE
+  RAPMAP_SALMON_SUPPORT=1
+  PUFFERFISH_SALMON_SUPPORT=1
+  HAVE_ANSI_TERM=1
+  HAVE_SSTREAM=1
+  STX_NO_STD_STRING_VIEW=1
+  span_FEATURE_MAKE_SPAN_TO_STD=14
+)
+target_compile_options(salmon_project_options INTERFACE
+  "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>"
+  "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>"
+)
+target_include_directories(salmon_project_options INTERFACE
+  ${GAT_SOURCE_DIR}/include
+  ${GAT_SOURCE_DIR}/include/eigen3
+  ${GAT_SOURCE_DIR}/external
+  ${GAT_SOURCE_DIR}/external/cereal/include
+  ${GAT_SOURCE_DIR}/external/install/include
+  ${SALMON_ZLIB_INCLUDE_DIRS}
+  ${HTSLIB_INCLUDE_DIR}
+  ${TBB_INCLUDE_DIRS}
+  ${Boost_INCLUDE_DIRS}
+  ${GAT_SOURCE_DIR}/external/install/include/pufferfish
+  ${GAT_SOURCE_DIR}/external/install/include/pufferfish/digestpp
+  ${LIB_GFF_INCLUDE_DIR}
+  ${ICU_INC_DIRS}
+  ${COMPACT_VECTOR_INCLUDE_PATH}
+)
+
+add_library(salmon_common_link_deps INTERFACE)
+target_link_directories(salmon_common_link_deps INTERFACE
+  ${GAT_SOURCE_DIR}/lib
+  ${GAT_SOURCE_DIR}/external/install/lib
+  ${Boost_LIBRARY_DIRS}
+  ${TBB_LIBRARY_DIRS}
+  ${LAPACK_LIBRARY_DIR}
+  ${BLAS_LIBRARY_DIR}
+  ${LIB_GFF_LIBRARY_DIR}
+)
+
 function(salmon_configure_target target_name)
-  target_compile_definitions(${target_name} PUBLIC
-    RAPMAP_SALMON_SUPPORT=1
-    PUFFERFISH_SALMON_SUPPORT=1
-    HAVE_ANSI_TERM=1
-    HAVE_SSTREAM=1
-    STX_NO_STD_STRING_VIEW=1
-    span_FEATURE_MAKE_SPAN_TO_STD=14
-  )
-  target_include_directories(${target_name} PUBLIC ${COMPACT_VECTOR_INCLUDE_PATH})
+  target_link_libraries(${target_name} salmon_project_options)
   if (USE_ARM)
     target_compile_definitions(${target_name} PUBLIC KSW_USE_ARM=1)
   endif()
-  target_compile_options(${target_name} PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
-  target_compile_options(${target_name} PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
   if(HAS_IPO AND (NOT NO_IPO))
     set_property(TARGET ${target_name} PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
   endif()
@@ -201,10 +203,9 @@ endforeach()
 # Keep salmon_core as the stable archive target while its internals are split
 # into module libraries.
 target_link_libraries(salmon_core
-  PUBLIC
-    salmon_io
-    salmon_model
-    salmon_util
+  salmon_io
+  salmon_model
+  salmon_util
 )
 
 # Build the salmon executable
@@ -247,14 +248,8 @@ add_dependencies(salmon graphdump)
 add_dependencies(salmon ntcard)
 add_dependencies(salmon ksw2pp)
 if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
-
-# Link the executable
-target_link_libraries(salmon
-    Threads::Threads 
-    puffer 
-    twopaco
-    graphdump
-    ntcard
+target_link_libraries(salmon_common_link_deps INTERFACE
+    Threads::Threads
     gff
     ${Boost_LIBRARIES}
     ${ICU_LIBS}
@@ -274,6 +269,15 @@ target_link_libraries(salmon
     ${LIBRT}
     ${CMAKE_DL_LIBS}
 )
+
+# Link the executable
+target_link_libraries(salmon
+    salmon_common_link_deps
+    puffer 
+    twopaco
+    graphdump
+    ntcard
+)
 endif()
 
 add_dependencies(salmon salmon_core)
@@ -289,29 +293,9 @@ endif()
 if(SALMON_ENABLE_TESTS AND (TBB_RECONFIGURE OR TBB_TARGET_EXISTED))
 
 target_link_libraries(unitTests
-    Threads::Threads
-## PUFF_INTEGRATION
-    ${Boost_LIBRARIES}
+    salmon_common_link_deps
     salmon_core
-    gff
     UnitTestsMain
-    ${Boost_LIBRARIES}
-    ${HTSLIB_LIBRARIES}
-    ${ICU_LIBS}
-    ${CURL_LIBRARIES}
-    ${SALMON_ZLIB_LIBRARIES}
-    m
-    ${LIBLZMA_LIBRARIES}
-    ${BZIP2_LIBRARIES}
-    #${TBB_LIBRARIES}
-    TBB::tbb
-    TBB::tbbmalloc
-    ${LIBSALMON_LINKER_FLAGS}
-    ${NON_APPLECLANG_LIBS}
-    ${ASAN_LIB}
-    ${LIBRT}
-    ${CMAKE_DL_LIBS}
-    #ubsan
 )
 endif()
 
