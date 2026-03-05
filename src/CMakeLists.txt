@@ -153,8 +153,7 @@ target_include_directories(salmon_project_options INTERFACE
 )
 
 add_library(salmon_common_link_deps INTERFACE)
-target_link_directories(salmon_common_link_deps INTERFACE
-  ${GAT_SOURCE_DIR}/lib
+set(SALMON_COMMON_LINK_DIRS
   ${GAT_SOURCE_DIR}/external/install/lib
   ${Boost_LIBRARY_DIRS}
   ${TBB_LIBRARY_DIRS}
@@ -162,6 +161,17 @@ target_link_directories(salmon_common_link_deps INTERFACE
   ${BLAS_LIBRARY_DIR}
   ${LIB_GFF_LIBRARY_DIR}
 )
+set(SALMON_EXISTING_LINK_DIRS "")
+foreach(salmon_link_dir IN LISTS SALMON_COMMON_LINK_DIRS)
+  if(salmon_link_dir AND EXISTS "${salmon_link_dir}")
+    list(APPEND SALMON_EXISTING_LINK_DIRS "${salmon_link_dir}")
+  endif()
+endforeach()
+if(SALMON_EXISTING_LINK_DIRS)
+  target_link_directories(salmon_common_link_deps INTERFACE
+    ${SALMON_EXISTING_LINK_DIRS}
+  )
+endif()
 
 function(salmon_configure_target target_name)
   target_link_libraries(${target_name} salmon_project_options)
