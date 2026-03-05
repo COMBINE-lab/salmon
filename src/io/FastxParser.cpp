@@ -1,4 +1,4 @@
-#include "FastxParser.hpp"
+#include "salmon/internal/io/FastxParser.hpp"
 #include "FastxParserThreadUtils.hpp"
 
 #include "fcntl.h"

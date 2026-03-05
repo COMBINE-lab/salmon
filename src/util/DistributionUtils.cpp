@@ -1,4 +1,4 @@
-#include "DistributionUtils.hpp"
+#include "salmon/internal/util/DistributionUtils.hpp"
 #include "FragmentLengthDistribution.hpp"
 #include "Transcript.hpp"
 

@@ -1,7 +1,7 @@
 #include <vector>
 #include <iostream>
 
-#include "ProgramOptionsGenerator.hpp"
+#include "salmon/internal/cli/ProgramOptionsGenerator.hpp"
 #include "SalmonDefaults.hpp"
 
 namespace salmon {

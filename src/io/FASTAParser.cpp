@@ -4,10 +4,10 @@
 #include <unistd.h>
 #include <unordered_map>
 
-#include "FastxParser.hpp"
+#include "salmon/internal/io/FastxParser.hpp"
 #include "jellyfish/mer_dna.hpp"
 
-#include "FASTAParser.hpp"
+#include "salmon/internal/io/FASTAParser.hpp"
 #include "SalmonOpts.hpp"
 #include "SalmonStringUtils.hpp"
 #include "Transcript.hpp"

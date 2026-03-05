@@ -1,4 +1,4 @@
-#include "SalmonExceptions.hpp"
+#include "salmon/internal/util/SalmonExceptions.hpp"
 
 InsufficientAssignedFragments::InsufficientAssignedFragments(
     uint64_t numAssigned, uint64_t numRequired) noexcept
