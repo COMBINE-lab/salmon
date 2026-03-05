@@ -25,7 +25,7 @@
 #include "SalmonOpts.hpp"
 
 #include "GenomicFeature.hpp"
-#include "LibraryFormat.hpp"
+#include "salmon/internal/model/LibraryFormat.hpp"
 #include "pufferfish/Util.hpp"
 #include "ReadLibrary.hpp"
 #include "SalmonConfig.hpp"

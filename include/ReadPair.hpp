@@ -1,12 +1,12 @@
 #ifndef READ_PAIR
 #define READ_PAIR
 
-#include "LibraryFormat.hpp"
+#include "salmon/internal/model/LibraryFormat.hpp"
 //#include "RapMapUtils.hpp"
 #include "pufferfish/Util.hpp"
 #include "SalmonMath.hpp"
 #include "SalmonUtils.hpp"
-#include "StadenUtils.hpp"
+#include "salmon/internal/io/StadenUtils.hpp"
 
 #include "spdlog/fmt/fmt.h"
 

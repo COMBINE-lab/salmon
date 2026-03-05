@@ -10,7 +10,7 @@
 #include "dbg.hpp"
 #include "salmon/internal/alignment/ONTAlignmentModel.hpp"
 #include "SalmonMath.hpp"
-#include "SalmonStringUtils.hpp"
+#include "salmon/internal/util/SalmonStringUtils.hpp"
 #include "Transcript.hpp"
 #include "UnpairedRead.hpp"
 

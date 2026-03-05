@@ -7,14 +7,14 @@
 #include "cereal/archives/json.hpp"
 
 #include "AlignmentLibrary.hpp"
-#include "DistributionUtils.hpp"
+#include "salmon/internal/util/DistributionUtils.hpp"
 #include "salmon/internal/output/GZipWriter.hpp"
 #include "ReadExperiment.hpp"
 #include "ReadPair.hpp"
 #include "SalmonOpts.hpp"
 #include "SalmonUtils.hpp"
 #include "UnpairedRead.hpp"
-#include "TranscriptGroup.hpp"
+#include "salmon/internal/model/TranscriptGroup.hpp"
 #include "zstr.hpp"
 
 GZipWriter::GZipWriter(const boost::filesystem::path path,

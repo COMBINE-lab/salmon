@@ -3,11 +3,11 @@
 
 #include "salmon/internal/io/AlignmentIO.hpp"
 
-#include "LibraryFormat.hpp"
+#include "salmon/internal/model/LibraryFormat.hpp"
 //#include "RapMapUtils.hpp"
 #include "pufferfish/Util.hpp"
 #include "SalmonMath.hpp"
-#include "StadenUtils.hpp"
+#include "salmon/internal/io/StadenUtils.hpp"
 
 struct UnpairedRead {
   bam_seq_t* read = nullptr;

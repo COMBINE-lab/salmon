@@ -7,7 +7,7 @@
 
 #include <boost/filesystem.hpp>
 
-#include "LibraryFormat.hpp"
+#include "salmon/internal/model/LibraryFormat.hpp"
 #include "LibraryTypeDetector.hpp"
 
 /**

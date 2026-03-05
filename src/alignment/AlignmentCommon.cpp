@@ -3,7 +3,7 @@
 #include "ReadPair.hpp"
 #include "Transcript.hpp"
 #include "UnpairedRead.hpp"
-#include "SalmonStringUtils.hpp"
+#include "salmon/internal/util/SalmonStringUtils.hpp"
 
 bool AlignmentCommon::hasIndel(ReadPair& hit) {
   if (!hit.isPaired())

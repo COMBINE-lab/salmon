@@ -12,7 +12,7 @@
 #include "nonstd/optional.hpp"
 
 #include "SalmonUtils.hpp"
-#include "TranscriptGroup.hpp"
+#include "salmon/internal/model/TranscriptGroup.hpp"
 #include "concurrentqueue.h"
 #include "cuckoohash_map.hh"
 #include "pufferfish/sparsepp/spp.h"

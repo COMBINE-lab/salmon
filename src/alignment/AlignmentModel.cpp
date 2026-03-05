@@ -8,7 +8,7 @@
 #include "salmon/internal/alignment/AlignmentModel.hpp"
 #include "ReadPair.hpp"
 #include "SalmonMath.hpp"
-#include "SalmonStringUtils.hpp"
+#include "salmon/internal/util/SalmonStringUtils.hpp"
 #include "Transcript.hpp"
 #include "UnpairedRead.hpp"
 

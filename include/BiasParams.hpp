@@ -1,12 +1,12 @@
 #ifndef __BIAS_PARAMS__
 #define __BIAS_PARAMS__
 
-#include "DistributionUtils.hpp"
+#include "salmon/internal/util/DistributionUtils.hpp"
 #include "GCFragModel.hpp"
 #include "ReadKmerDist.hpp"
-#include "SBModel.hpp"
+#include "salmon/internal/model/SBModel.hpp"
 #include "SalmonMath.hpp"
-#include "SimplePosBias.hpp"
+#include "salmon/internal/model/SimplePosBias.hpp"
 #include <vector>
 
 struct BiasParams {

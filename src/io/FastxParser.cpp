@@ -1,5 +1,5 @@
 #include "salmon/internal/io/FastxParser.hpp"
-#include "FastxParserThreadUtils.hpp"
+#include "salmon/internal/io/FastxParserThreadUtils.hpp"
 
 #include "fcntl.h"
 #include "unistd.h"

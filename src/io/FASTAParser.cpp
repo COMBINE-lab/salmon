@@ -9,7 +9,7 @@
 
 #include "salmon/internal/io/FASTAParser.hpp"
 #include "SalmonOpts.hpp"
-#include "SalmonStringUtils.hpp"
+#include "salmon/internal/util/SalmonStringUtils.hpp"
 #include "Transcript.hpp"
 
 FASTAParser::FASTAParser(const std::string& fname) : fname_(fname) {}

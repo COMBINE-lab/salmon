@@ -1,7 +1,7 @@
 #ifndef __GC_FRAG_MODEL__
 #define __GC_FRAG_MODEL__
 
-#include "DistributionUtils.hpp"
+#include "salmon/internal/util/DistributionUtils.hpp"
 #include "Eigen/Dense"
 #include "SalmonMath.hpp"
 

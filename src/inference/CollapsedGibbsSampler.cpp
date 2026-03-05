@@ -35,7 +35,7 @@
 #include "ReadPair.hpp"
 #include "SalmonMath.hpp"
 #include "Transcript.hpp"
-#include "TranscriptGroup.hpp"
+#include "salmon/internal/model/TranscriptGroup.hpp"
 #include "UnpairedRead.hpp"
 #include "ezETAProgressBar.hpp"
 

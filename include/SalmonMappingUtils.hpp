@@ -39,7 +39,7 @@
 #include "core/range.hpp"
 
 #include "AlignmentGroup.hpp"
-#include "ProgramOptionsGenerator.hpp"
+#include "salmon/internal/cli/ProgramOptionsGenerator.hpp"
 #include "ReadExperiment.hpp"
 #include "SalmonDefaults.hpp"
 #include "SalmonMath.hpp"

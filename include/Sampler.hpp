@@ -31,12 +31,12 @@
 #include <boost/timer/timer.hpp>
 
 #include "AlignmentLibrary.hpp"
-#include "AlignmentModel.hpp"
+#include "salmon/internal/alignment/AlignmentModel.hpp"
 #include "BAMQueue.hpp"
 #include "ClusterForest.hpp"
-#include "FASTAParser.hpp"
-#include "FragmentLengthDistribution.hpp"
-#include "LibraryFormat.hpp"
+#include "salmon/internal/io/FASTAParser.hpp"
+#include "salmon/internal/model/FragmentLengthDistribution.hpp"
+#include "salmon/internal/model/LibraryFormat.hpp"
 #include "MiniBatchInfo.hpp"
 #include "OutputUnmappedFilter.hpp"
 #include "ReadPair.hpp"

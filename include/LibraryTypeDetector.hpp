@@ -6,7 +6,7 @@
 #include "spdlog/sinks/ostream_sink.h"
 #include "spdlog/spdlog.h"
 
-#include "LibraryFormat.hpp"
+#include "salmon/internal/model/LibraryFormat.hpp"
 
 #include <atomic>
 #include <mutex>

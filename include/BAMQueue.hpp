@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "AlignmentGroup.hpp"
-#include "LibraryFormat.hpp"
+#include "salmon/internal/model/LibraryFormat.hpp"
 #include "ReadPair.hpp"
 #include "SalmonMath.hpp"
 #include "UnpairedRead.hpp"

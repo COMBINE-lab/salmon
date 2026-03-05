@@ -1,4 +1,4 @@
-#include "VersionChecker.hpp"
+#include "salmon/internal/cli/VersionChecker.hpp"
 #include "SalmonConfig.hpp"
 #include "httplib.hpp"
 

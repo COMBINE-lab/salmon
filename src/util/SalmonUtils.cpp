@@ -16,18 +16,18 @@
 #include "oneapi/tbb/task_arena.h"
 
 #include "AlignmentLibrary.hpp"
-#include "DistributionUtils.hpp"
+#include "salmon/internal/util/DistributionUtils.hpp"
 #include "GCFragModel.hpp"
 #include "KmerContext.hpp"
-#include "LibraryFormat.hpp"
+#include "salmon/internal/model/LibraryFormat.hpp"
 #include "ReadExperiment.hpp"
 #include "ReadPair.hpp"
-#include "SBModel.hpp"
+#include "salmon/internal/model/SBModel.hpp"
 #include "SalmonMath.hpp"
 #include "SalmonUtils.hpp"
 #include "TryableSpinLock.hpp"
 #include "UnpairedRead.hpp"
-#include "TranscriptGroup.hpp"
+#include "salmon/internal/model/TranscriptGroup.hpp"
 #include "Transcript.hpp"
 
 #include "spdlog/fmt/fmt.h"
@@ -37,14 +37,14 @@
 
 #include "gff.h"
 
-#include "FastxParser.hpp"
+#include "salmon/internal/io/FastxParser.hpp"
 //#include "jellyfish/mer_dna.hpp"
 
 #include "GenomicFeature.hpp"
-#include "SGSmooth.hpp"
+#include "salmon/internal/model/SGSmooth.hpp"
 #include "TranscriptGeneMap.hpp"
 
-#include "StadenUtils.hpp"
+#include "salmon/internal/io/StadenUtils.hpp"
 #include "SalmonDefaults.hpp"
 
 #include "pufferfish/Util.hpp"

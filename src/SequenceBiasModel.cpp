@@ -3,7 +3,7 @@
 
 #include <boost/config.hpp> // for BOOST_LIKELY/BOOST_UNLIKELY
 
-#include "LibraryFormat.hpp"
+#include "salmon/internal/model/LibraryFormat.hpp"
 #include "SequenceBiasModel.hpp"
 #include "Transcript.hpp"
 #include "spdlog/fmt/fmt.h"

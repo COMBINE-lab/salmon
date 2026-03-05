@@ -1,4 +1,4 @@
-#include "StadenUtils.hpp"
+#include "salmon/internal/io/StadenUtils.hpp"
 
 #include <cstdlib>
 #include <cstring>

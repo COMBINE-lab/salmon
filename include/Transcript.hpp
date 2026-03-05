@@ -1,10 +1,10 @@
 #ifndef TRANSCRIPT
 #define TRANSCRIPT
 
-#include "FragmentLengthDistribution.hpp"
+#include "salmon/internal/model/FragmentLengthDistribution.hpp"
 #include "GCFragModel.hpp"
 #include "SalmonMath.hpp"
-#include "SalmonStringUtils.hpp"
+#include "salmon/internal/util/SalmonStringUtils.hpp"
 #include "SalmonUtils.hpp"
 #include "SequenceBiasModel.hpp"
 #include "stx/string_view.hpp"
