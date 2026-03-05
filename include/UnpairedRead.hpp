@@ -1,16 +1,7 @@
 #ifndef UNPAIRED_READ
 #define UNPAIRED_READ
 
-extern "C" {
-#ifdef HAVE_CONFIG_H
-#undef HAVE_CONFIG_H
-#endif
-
-#include "io_lib/os.h"
-#include "io_lib/scram.h"
-
-//#define HAVE_CONFIG_H
-}
+#include "salmon/internal/io/AlignmentIO.hpp"
 
 #include "LibraryFormat.hpp"
 //#include "RapMapUtils.hpp"

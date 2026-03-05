@@ -25,12 +25,7 @@
 #include <boost/timer/timer.hpp>
 #include <oneapi/tbb/concurrent_queue.h>
 
-extern "C" {
-#include "io_lib/os.h"
-#include "io_lib/scram.h"
-#undef max
-#undef min
-}
+#include "salmon/internal/io/AlignmentIO.hpp"
 
 /**
  * Simple structure holding info about the alignment file.

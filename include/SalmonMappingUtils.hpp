@@ -38,7 +38,6 @@
 // Future C++ convenience classes
 #include "core/range.hpp"
 
-#include "AlevinOpts.hpp"
 #include "AlignmentGroup.hpp"
 #include "ProgramOptionsGenerator.hpp"
 #include "ReadExperiment.hpp"
@@ -63,6 +62,13 @@ namespace salmon {
 namespace mapping_utils {
 
 using MateStatus = pufferfish::util::MateStatus;
+enum class PairingStatus : uint8_t {
+  UNPAIRED_LEFT,
+  UNPAIRED_RIGHT,
+  PAIRED_FR,
+  PAIRED_RF
+};
+
 constexpr const int32_t invalid_score_ = std::numeric_limits<int32_t>::min();
 constexpr const int32_t invalid_index_ = std::numeric_limits<int32_t>::min();
 constexpr const size_t static_vec_size = 32;

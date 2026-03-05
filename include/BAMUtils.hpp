@@ -1,12 +1,7 @@
 #ifndef __SALMON_BAM_UTILS__
 #define __SALMON_BAM_UTILS__
 
-extern "C" {
-#include "io_lib/os.h"
-#include "io_lib/scram.h"
-#undef max
-#undef min
-}
+#include "salmon/internal/io/AlignmentIO.hpp"
 
 #include <unordered_map>
 #include <string>

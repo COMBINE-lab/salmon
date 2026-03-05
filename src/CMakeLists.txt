@@ -8,7 +8,8 @@ ${GAT_SOURCE_DIR}/include/eigen3
 ${GAT_SOURCE_DIR}/external
 ${GAT_SOURCE_DIR}/external/cereal/include
 ${GAT_SOURCE_DIR}/external/install/include
-${ZLIB_INCLUDE_DIR}
+${SALMON_ZLIB_INCLUDE_DIRS}
+${HTSLIB_INCLUDE_DIR}
 ${TBB_INCLUDE_DIRS}
 ${Boost_INCLUDE_DIRS}
 ${GAT_SOURCE_DIR}/external/install/include
@@ -23,20 +24,10 @@ ${ICU_INC_DIRS}
 set ( SALMON_MAIN_SRCS
 EMUtils.cpp
 CollapsedEMOptimizer.cpp
-## PUFF_INTEGRATION
-CollapsedCellOptimizer.cpp
-##
 CollapsedGibbsSampler.cpp
 Salmon.cpp
+commands/AlevinRemoved.cpp
 BuildSalmonIndex.cpp
-Graph.cpp
-## PUFF_INTEGRATION
-DedupUMI.cpp
-Alevin.cpp
-AlevinHash.cpp
-SalmonAlevin.cpp
-WhiteList.cpp
-##
 SalmonQuantify.cpp
 FragmentLengthDistribution.cpp
 FragmentStartPositionDistribution.cpp
@@ -56,16 +47,11 @@ SalmonQuantifyAlignments.cpp
 BAMUtils.cpp
 )
 
-set (ALEVIN_LIB_SRCS
-edlib.cpp
-SingleCellProtocols.cpp
-AlevinUtils.cpp
-)
-
 set (SALMON_LIB_SRCS
 ${GAT_SOURCE_DIR}/src/jellyfish/mer_dna.cc
 backtrace.cc
 xxhash.c
+edlib.cpp
 TranscriptGroup.cpp
 EffectiveLengthStats.cpp
 LibraryFormat.cpp
@@ -97,16 +83,18 @@ if(HAS_IPO AND (NOT NO_IPO))
   set_property(TARGET ksw2pp PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
-set (UNIT_TESTS_ENTRY_SRCS
-    ${GAT_SOURCE_DIR}/tests/UnitTests.cpp
-)
+if(SALMON_ENABLE_TESTS)
+  set (UNIT_TESTS_ENTRY_SRCS
+      ${GAT_SOURCE_DIR}/tests/UnitTests.cpp
+  )
 
-set (UNIT_TESTS_INDIVIDUAL_SRCS
-  ${GAT_SOURCE_DIR}/src/FragmentLengthDistribution.cpp
-  ${GAT_SOURCE_DIR}/external/install/src/pufferfish/rank9b.cpp
-  ${GAT_SOURCE_DIR}/tests/GCSampleTests.cpp
-  ${GAT_SOURCE_DIR}/tests/LibraryTypeTests.cpp
-)
+  set (UNIT_TESTS_INDIVIDUAL_SRCS
+    ${GAT_SOURCE_DIR}/src/FragmentLengthDistribution.cpp
+    ${GAT_SOURCE_DIR}/external/install/src/pufferfish/rank9b.cpp
+    ${GAT_SOURCE_DIR}/tests/GCSampleTests.cpp
+    ${GAT_SOURCE_DIR}/tests/LibraryTypeTests.cpp
+  )
+endif()
 
 
 link_directories(
@@ -167,29 +155,6 @@ if(HAS_IPO AND (NOT NO_IPO))
   set_property(TARGET salmon_core PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
-# Build the Alevin library
-# PUFF_INTEGRATION
-add_library(alevin_core STATIC ${ALEVIN_LIB_SRCS})
-target_compile_definitions(alevin_core PUBLIC
-RAPMAP_SALMON_SUPPORT=1
-PUFFERFISH_SALMON_SUPPORT=1
-HAVE_ANSI_TERM=1
-HAVE_SSTREAM=1
-span_FEATURE_MAKE_SPAN_TO_STD=14
-)
-target_include_directories(alevin_core PUBLIC ${COMPACT_VECTOR_INCLUDE_PATH})
-
-if (USE_ARM)
-target_compile_definitions(alevin_core PUBLIC KSW_USE_ARM=1)
-endif()
-
-target_compile_options(alevin_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
-target_compile_options(alevin_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
-
-if(HAS_IPO AND (NOT NO_IPO))
-  set_property(TARGET alevin_core PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
-endif()
-
 # Build the salmon executable
 add_executable(salmon ${SALMON_MAIN_SRCS} ${SALMON_ALIGN_SRCS})
 target_include_directories(salmon PUBLIC ${COMPACT_VECTOR_INCLUDE_PATH})
@@ -198,14 +163,16 @@ if(HAS_IPO AND (NOT NO_IPO))
   set_property(TARGET salmon PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
-add_library(UnitTestsMain STATIC ${UNIT_TESTS_ENTRY_SRCS})
-target_compile_options(UnitTestsMain PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
-target_compile_options(UnitTestsMain PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
+if(SALMON_ENABLE_TESTS)
+  add_library(UnitTestsMain STATIC ${UNIT_TESTS_ENTRY_SRCS})
+  target_compile_options(UnitTestsMain PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
+  target_compile_options(UnitTestsMain PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
 
-add_executable(unitTests ${UNIT_TESTS_INDIVIDUAL_SRCS} ${GAT_SOURCE_DIR}/tests/catch.hpp)
-target_compile_options(unitTests PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
-target_compile_options(unitTests PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
-target_include_directories(unitTests PUBLIC ${COMPACT_VECTOR_INCLUDE_PATH})
+  add_executable(unitTests ${UNIT_TESTS_INDIVIDUAL_SRCS} ${GAT_SOURCE_DIR}/tests/catch.hpp)
+  target_compile_options(unitTests PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
+  target_compile_options(unitTests PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
+  target_include_directories(unitTests PUBLIC ${COMPACT_VECTOR_INCLUDE_PATH})
+endif()
 
 #add_executable(salmon-read ${SALMON_READ_SRCS})
 #set_target_properties(salmon-read PROPERTIES COMPILE_FLAGS "${CMAKE_CXX_FLAGS} -DHAVE_LIBPTHREAD -D_PBGZF_USE -fopenmp"
@@ -227,7 +194,6 @@ add_dependencies(salmon graphdump)
 add_dependencies(salmon ntcard)
 add_dependencies(salmon ksw2pp)
 add_dependencies(salmon salmon_core)
-add_dependencies(salmon alevin_core)
 if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
 
 # Link the executable
@@ -242,15 +208,14 @@ target_link_libraries(salmon
     ${Boost_LIBRARIES}
     ${ICU_LIBS}
     ${CURL_LIBRARIES}
-    ${ZLIB_LIBRARY}
+    ${SALMON_ZLIB_LIBRARIES}
     m
-    ${STADEN_LIBRARIES} 
+    ${HTSLIB_LIBRARIES}
     ${LIBLZMA_LIBRARIES}
     ${BZIP2_LIBRARIES}
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
     ksw2pp
-    alevin_core
     ${ASAN_LIB}
     ${FAST_MALLOC_LIB}
     TBB::tbb
@@ -260,31 +225,30 @@ target_link_libraries(salmon
 )
 endif()
 
-# dependencies for unitTests
 add_dependencies(salmon salmon_core)
-add_dependencies(salmon alevin_core)
-add_dependencies(unitTests UnitTestsMain)
+if(SALMON_ENABLE_TESTS)
+  add_dependencies(unitTests UnitTestsMain)
+endif()
 #add_dependencies(salmon puffer)
 #add_dependencies(salmon twopaco)
 #add_dependencies(salmon graphdump)
 #add_dependencies(salmon ntcard)
 #add_dependencies(salmon ksw2pp)
 
-if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
+if(SALMON_ENABLE_TESTS AND (TBB_RECONFIGURE OR TBB_TARGET_EXISTED))
 
 target_link_libraries(unitTests
     Threads::Threads
 ## PUFF_INTEGRATION
     ${Boost_LIBRARIES}
     salmon_core
-    alevin_core
     gff
     UnitTestsMain
     ${Boost_LIBRARIES}
-    ${STADEN_LIBRARIES} 
+    ${HTSLIB_LIBRARIES}
     ${ICU_LIBS}
     ${CURL_LIBRARIES}
-    ${ZLIB_LIBRARY}
+    ${SALMON_ZLIB_LIBRARIES}
     m
     ${LIBLZMA_LIBRARIES}
     ${BZIP2_LIBRARIES}
@@ -301,56 +265,58 @@ target_link_libraries(unitTests
 endif()
 
 if(NOT Iconv_IS_BUILT_IN)
-  target_link_libraries(unitTests Iconv::Iconv)
+  if(SALMON_ENABLE_TESTS)
+    target_link_libraries(unitTests Iconv::Iconv)
+  endif()
   target_link_libraries(salmon Iconv::Iconv)
 endif()
 
-add_dependencies(salmon unitTests)
-add_dependencies(unitTests salmon_core)
-add_dependencies(unitTests alevin_core)
+if(SALMON_ENABLE_TESTS)
+  add_dependencies(salmon unitTests)
+  add_dependencies(unitTests salmon_core)
+endif()
 
 ##
 # External dependencies of salmon_core and salmon
 ##
-if (${FETCHED_JEMALLOC})
-   add_dependencies(alevin_core libjemalloc)
-   add_dependencies(salmon_core libjemalloc)
-   add_dependencies(salmon libjemalloc)
+if (${FETCHED_MIMALLOC})
+   add_dependencies(salmon_core libmimalloc)
+   add_dependencies(salmon libmimalloc)
 endif()
 
 if (${FETCHED_BOOST})
-   add_dependencies(alevin_core libboost)
    add_dependencies(salmon_core libboost)
    add_dependencies(salmon libboost)
 endif()
 
 if (${FETCHED_TBB})
    message("Fetched oneTBB, so libtbb must be a dependency for targets")
-   add_dependencies(alevin_core libtbb)
    add_dependencies(salmon_core libtbb)
-   add_dependencies(unitTests libtbb)
+   if(SALMON_ENABLE_TESTS)
+     add_dependencies(unitTests libtbb)
+   endif()
    add_dependencies(salmon libtbb)
 endif()
 
 if (${FETCHED_CEREAL})
-  add_dependencies(alevin_core libcereal)
   add_dependencies(salmon_core libcereal)
   add_dependencies(salmon libcereal)
 endif()
 
-if (${FETCHED_STADEN})
-## PUFF_INTEGRATION
-#  add_dependencies(alevin_core libstadenio)
-  add_dependencies(alevin_core libstadenio)
-  add_dependencies(salmon_core libstadenio)
-  add_dependencies(salmon libstadenio)
+if (${FETCHED_HTSLIB})
+  add_dependencies(salmon_core libhtslib)
+  add_dependencies(salmon libhtslib)
+endif()
+
+if (${FETCHED_ZLIBNG})
+  add_dependencies(salmon_core libzlibng)
+  add_dependencies(salmon libzlibng)
 endif()
 
 #add_dependencies(salmon_core libbwa)
 #add_dependencies(salmon libbwa)
 
 if (${FETCHED_GFF})
-  add_dependencies(alevin_core libgff)
   add_dependencies(salmon_core libgff)
   add_dependencies(salmon libgff)
 endif()
@@ -441,10 +407,12 @@ install(TARGETS salmon salmon_core
                 ARCHIVE DESTINATION lib
         )
 
-add_custom_command(TARGET unitTests POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:unitTests> ${GAT_SOURCE_DIR}/tests/$<TARGET_FILE_NAME:unitTests>
-    COMMENT "Copying unitTests"
-)
+if(SALMON_ENABLE_TESTS)
+  add_custom_command(TARGET unitTests POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:unitTests> ${GAT_SOURCE_DIR}/tests/$<TARGET_FILE_NAME:unitTests>
+      COMMENT "Copying unitTests"
+  )
+endif()
 
 set(POST_INSTALL_SCRIPT ${GAT_SOURCE_DIR}/cmake/PostInstall.cmake)
 

@@ -4,6 +4,7 @@
 #include <functional>
 #include <algorithm>
 #include <cctype>
+#include <sstream>
 
 namespace salmon {
   namespace bam_utils {
@@ -42,31 +43,46 @@ namespace salmon {
         };
 
       AlignerDetails aligner = AlignerDetails::UNKNOWN;
+      if (header == nullptr || header->raw == nullptr) {
+        return aligner;
+      }
 
-      char pgtag[] = {'P', 'G'};
-      char pntag[] = {'P', 'N'};
-      char idtag[] = {'I', 'D'};
-      char vntag[] = {'V', 'N'};
-      char cltag[] = {'C', 'L'};
+      const char* headerText = sam_hdr_str(header->raw);
+      if (headerText == nullptr) {
+        return aligner;
+      }
 
-      auto pginfo = sam_hdr_find(header, pgtag, NULL, NULL);
-      if (pginfo) {
-        auto pntagval = sam_hdr_find_key(header, pginfo, pntag, NULL);
-        if (pntagval) {
-          std::string progname(pntagval->str+3, pntagval->len-3);
-          std::transform(progname.begin(), progname.end(), progname.begin(), [](unsigned char c) { return std::tolower(c); });
-          if (alignerNameToType.find(progname) != alignerNameToType.end()) {
-            aligner = alignerNameToType[progname];
+      std::istringstream lines(headerText);
+      std::string line;
+      while (std::getline(lines, line)) {
+        if (line.rfind("@PG\t", 0) != 0) {
+          continue;
+        }
+
+        std::string progname;
+        std::string commandLine;
+        std::istringstream fields(line);
+        std::string field;
+        while (std::getline(fields, field, '\t')) {
+          if (field.rfind("PN:", 0) == 0) {
+            progname = field.substr(3);
+          } else if (field.rfind("CL:", 0) == 0) {
+            commandLine = field.substr(3);
           }
         }
-        auto cltagval = sam_hdr_find_key(header, pginfo, cltag, NULL);
-        if (cltagval) {
-          std::string clstring(cltagval->str+3, cltagval->len-3);
-          // if the aligner is bowtie2, check there is a `--local` flag
-          if (aligner == AlignerDetails::BOWTIE2) {
-            auto lpos = clstring.find("--local");
-            if (lpos != clstring.npos) { aligner = AlignerDetails::BOWTIE2_LOCAL; }
-          }
+
+        std::transform(progname.begin(), progname.end(), progname.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        auto alignerIt = alignerNameToType.find(progname);
+        if (alignerIt != alignerNameToType.end()) {
+          aligner = alignerIt->second;
+        }
+        if (aligner == AlignerDetails::BOWTIE2 &&
+            commandLine.find("--local") != commandLine.npos) {
+          aligner = AlignerDetails::BOWTIE2_LOCAL;
+        }
+        if (aligner != AlignerDetails::UNKNOWN) {
+          break;
         }
       }
 
@@ -75,4 +91,3 @@ namespace salmon {
 
   }
 }
-

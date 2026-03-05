@@ -806,10 +806,8 @@ extractReadLibraries(boost::program_options::parsed_options& orderedOptions) {
 
   std::vector<ReadLibrary> libs;
 
-  // @Avi : Allow this temporarily for now, since there is some use to hijack
-  // this behavior in Alevin.  However, we should figure out a proper parsing
-  // strategy for that rather than abusing single & PE library types.  Once we
-  // fix that, we should uncomment the below.
+  // Allow this temporarily for now, but the mixed-library parsing strategy
+  // should eventually be cleaned up instead of relying on this fallback.
   /*
   if (sawPairedLibrary and sawUnpairedLibrary) {
     log->warn("It seems you have specified both paired-end and unpaired read "
@@ -1427,8 +1425,7 @@ bool configure_parsing(size_t nfiles,             // input param
     sopt.validateMappings = true;
   }
 
-  // If not in alevin mode, inform the user about validateMappings
-  if (!sopt.alevinMode and !sopt.validateMappings) {
+  if (!sopt.validateMappings) {
     sopt.jointLog->warn("\n\n"
                         "NOTE: It appears you are running salmon without the `--validateMappings` option.\n"
                         "Mapping validation can generally improve both the sensitivity and specificity of mapping,\n"
@@ -1540,9 +1537,9 @@ bool configure_parsing(size_t nfiles,             // input param
     bool post_merge_chain_sub_thresh_explicit = !vm["postMergeChainSubThresh"].defaulted();
     bool orphan_chain_sub_thresh_explicit = !vm["orphanChainSubThresh"].defaulted();
 
-    // for a single-end library (or effectively so by being single-cell), we set 
+    // for a single-end library we set
     // pre_merge_chain_sub_thresh to 1.0 by default
-    if ( is_se_library or sopt.alevinMode ) {
+    if (is_se_library) {
 
       // The default of preMergeChainSubThresh for single-end libraries is 1.0, so set that here
       if (!pre_merge_chain_sub_thresh_explicit) {
@@ -1552,12 +1549,12 @@ bool configure_parsing(size_t nfiles,             // input param
       // for single-end libraries, postMergeChainSubThresh and orphanChainSubThresh are meaningless 
       if (post_merge_chain_sub_thresh_explicit) {
         sopt.jointLog->warn("The postMergeChainSubThresh is not meaningful for single-end "
-        "(or effectively single-end — e.g. tagged-end single-cell) libraries.  Setting this value "
+        "libraries.  Setting this value "
         "to 1.0 and ignoring");
       }
       if (orphan_chain_sub_thresh_explicit) {
         sopt.jointLog->warn("The orphanChainSubThresh is not meaningful for single-end "
-        "(or effectively single-end — e.g. tagged-end single-cell) libraries.  Setting this value "
+        "libraries.  Setting this value "
         "to 1.0 and ignoring");
       }
       sopt.post_merge_chain_sub_thresh = 1.0;

@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> `salmon alevin` has been removed from this modernization branch.
+> For single-cell analysis, use [alevin-fry](https://alevin-fry.readthedocs.io/en/latest/).
+> If you need the legacy `alevin` workflow, use the last Salmon release before this bulk-only refactor.
+
 <img alt="salmon logo" src="https://github.com/COMBINE-lab/salmon/raw/master/doc/salmon_logo.png" width="600">
 
 [![Documentation Status](https://readthedocs.org/projects/salmon/badge/?version=latest)](http://salmon.readthedocs.org/en/latest)

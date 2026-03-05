@@ -1,12 +1,7 @@
 #ifndef __SAMPLER__HPP__
 #define __SAMPLER__HPP__
 
-extern "C" {
-#include "io_lib/os.h"
-#include "io_lib/scram.h"
-#undef max
-#undef min
-}
+#include "salmon/internal/io/AlignmentIO.hpp"
 
 // for cpp-format
 #include "spdlog/fmt/fmt.h"

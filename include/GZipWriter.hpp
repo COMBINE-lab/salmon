@@ -13,8 +13,6 @@
 #include "ReadExperiment.hpp"
 #include "SalmonOpts.hpp"
 #include "SalmonSpinLock.hpp"
-#include "AlevinOpts.hpp"
-#include "Graph.hpp"
 #include "MappingStatistics.hpp"
 
 class GZipWriter {
@@ -29,24 +27,11 @@ public:
   template <typename ExpT>
   bool writeEquivCounts(const SalmonOpts& opts, ExpT& experiment);
 
-  template <typename ExpT, typename ProtocolT>
-  bool writeEquivCounts(const AlevinOpts<ProtocolT>& aopts,
-                        ExpT& experiment);
-
-  template <typename ExpT>
-  bool writeBFH(boost::filesystem::path& outDir,
-                ExpT& experiment, size_t umiLength,
-                std::vector<std::string>& bcSeqVec);
-
   template <typename ExpT>
   bool writeMeta(const SalmonOpts& opts, const ExpT& experiment, const MappingStatistics& mstats);
 
   template <typename SCExpT>
   bool writeMetaFryMode(const SalmonOpts& opts, const SCExpT& experiment, const MappingStatistics& mstats);
-
-  template <typename ProtocolT>
-  bool writeMetaAlevin(const AlevinOpts<ProtocolT>& opts,
-                       boost::filesystem::path aux_dir);
 
   template <typename ExpT>
   bool writeEmptyMeta(const SalmonOpts& opts, const ExpT& experiment,
@@ -65,42 +50,17 @@ public:
                        std::vector<uint8_t>& tiers,
                        bool dumpUmiGraph);
 
-  bool writeSparseAbundances(std::string& bcName,
-                             std::string& features,
-                             std::string& arboData,
-                             uint8_t featureCode,
-                             std::vector<double>& alphas,
-                             std::vector<uint8_t>& tiers,
-                             bool dumpArboFragCounts,
-                             bool dumpUmiGraph);
-
   bool writeBootstraps(std::string& bcName,
                        std::vector<double>& alphas,
                        std::vector<double>& variance,
                        bool useAllBootstraps,
                        std::vector<std::vector<double>>& sampleEstimates);
 
-  bool writeSparseBootstraps(std::string& bcName,
-                             std::vector<double>& alphas,
-                             std::vector<double>& variance,
-                             bool useAllBootstraps,
-                             std::vector<std::vector<double>>& sampleEstimates);
-
   template <typename ExpT>
   bool writeEmptyAbundances(const SalmonOpts& sopt, ExpT& readExp);
 
   template <typename T>
   bool writeBootstrap(const std::vector<T>& abund, bool quiet = false);
-
-  bool writeCellEQVec(size_t barcode, const std::vector<uint32_t>& offsets,
-                      const std::vector<uint32_t>& counts, bool quiet = true);
-
-  bool writeDedupCellEQVec(size_t barcode, 
-                           const std::vector<std::vector<uint32_t>>& labels,
-                           const std::vector<uint32_t>& counts,
-                           bool quiet = true);
-
-  bool writeUmiGraph(alevin::graph::Graph& g, std::string& trueBarcodeStr);
 
   bool setSamplingPath(const SalmonOpts& sopt);
 

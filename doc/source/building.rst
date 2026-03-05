@@ -20,8 +20,8 @@ from DockerHub using:
 Requirements for Building from Source
 -------------------------------------
 
-* A C++11 conformant compiler (currently tested with GCC>=4.7 and Clang>=3.4)
-* CMake_. Salmon uses the CMake build system to check, fetch and install
+* A C++17 conformant compiler
+* CMake_ 3.24 or newer. Salmon uses the CMake build system to check, fetch and install
   dependencies, and to compile and install Salmon. CMake is available for all
   major platforms (though Salmon is currently unsupported on Windows.)
   
@@ -34,12 +34,19 @@ After downloading the Salmon source distribution and unpacking it, change into t
 
     > cd salmon
 
-Then, create and out-of-source build directory and change into it:
+Salmon now provides ``CMakePresets.json`` presets for common workflows:
+
+* ``dev`` for local development
+* ``release`` for optimized builds
+* ``asan`` for AddressSanitizer builds
+* ``ci-system-deps`` for package-first CI
+* ``ci-fetch-fallback`` for pinned fallback dependency builds
+
+The preferred configure flow is:
 
 ::
 
-    > mkdir build
-    > cd build
+    > cmake --preset dev
 
 
 Salmon makes extensive use of Boost_.  We recommend installing the most
@@ -71,11 +78,29 @@ where it is as well. The flags for CMake are as follows:
   it will be installed locally in the top-level directory (i.e. the directory
   directly above "build").
 
-There are a number of other libraries upon which Salmon depends, but CMake 
-should fetch these for you automatically.
+Salmon prefers system packages for its dependencies and can fall back to pinned
+source builds when ``SALMON_FETCH_MISSING_DEPS=ON``.  The required backend
+dependencies are:
 
-Setting the appropriate flags, you can then run the CMake configure step as
-follows:
+* ``zlib-ng`` in compatibility mode for zlib functionality
+* ``htslib`` for SAM/BAM/CRAM I/O
+* ``mimalloc`` as the preferred allocator when ASan is disabled
+
+The repository now provides ``CMakePresets.json`` presets for common workflows.
+For example, a development configure can be created with:
+
+::
+
+    > cmake --preset dev
+
+and a release configure can be created with:
+
+::
+
+    > cmake --preset release
+
+If you prefer to pass flags manually, you can still run the CMake configure
+step as follows:
 
 ::
                                   

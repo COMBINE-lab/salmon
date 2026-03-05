@@ -1,14 +1,7 @@
 #ifndef STADEN_UTILS
 #define STADEN_UTILS
 
-extern "C" {
-#include "io_lib/os.h"
-#include "io_lib/scram.h"
-#undef max
-#undef min
-}
-
-#include <cstdlib>
+#include "salmon/internal/io/AlignmentIO.hpp"
 
 namespace staden {
 namespace utils {

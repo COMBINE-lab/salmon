@@ -13,7 +13,6 @@ Contents:
    
    building.rst
    salmon.rst
-   alevin.rst
    file_formats.rst
    library_type.rst
 
@@ -23,4 +22,3 @@ Indices and tables
 * :ref:`genindex`
 * :ref:`modindex`
 * :ref:`search`
-

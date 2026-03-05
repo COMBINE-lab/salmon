@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.15)
+cmake_minimum_required(VERSION 3.24)
 
 if(DEFINED ENV{CC})
   set(CC $ENV{CC})
@@ -13,9 +13,22 @@ if(${CC} MATCHES ^gcc-)
 endif()
 message("CC version: ${CC_VERSION}")
 
-enable_testing()
-
 project(Salmon)
+
+option(SALMON_ENABLE_TESTS "Build Salmon tests" ON)
+option(SALMON_ENABLE_BENCHMARKS "Enable benchmark targets" OFF)
+option(SALMON_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+option(SALMON_ENABLE_LTO "Enable link-time optimization when supported" ON)
+option(SALMON_ENABLE_ASAN "Enable address sanitizer instrumentation" OFF)
+option(SALMON_USE_SYSTEM_DEPS "Prefer system-installed dependencies" ON)
+option(SALMON_FETCH_MISSING_DEPS "Fetch pinned dependencies when missing" ON)
+set(SALMON_USE_ZLIB_NG "REQUIRED" CACHE STRING "zlib backend policy")
+set(SALMON_USE_MIMALLOC "AUTO" CACHE STRING "allocator policy")
+set(SALMON_USE_HTSLIB "REQUIRED" CACHE STRING "alignment I/O backend policy")
+
+if(SALMON_ENABLE_TESTS)
+  enable_testing()
+endif()
 
 # detect host architecture 
 if(NOT DEFINED USE_ARM)
@@ -84,12 +97,19 @@ message(STATUS "CMAKE_BUILD_TYPE = ${CMAKE_BUILD_TYPE}")
 set(REMOVE_WARNING_FLAGS "-Wno-unused-function;-Wno-unused-local-typedefs")
 set(TGT_COMPILE_FLAGS "${SCHAR_FLAG};-ftree-vectorize;-funroll-loops;-fPIC;-fomit-frame-pointer;-O3;-DNDEBUG;-DSTX_NO_STD_STRING_VIEW;-D__STDC_FORMAT_MACROS")
 set(TGT_WARN_FLAGS "-Wall;-Wno-unknown-pragmas;-Wno-reorder;-Wno-unused-variable;-Wreturn-type;-Werror=return-type;${REMOVE_WARNING_FLAGS}")
+if(SALMON_WARNINGS_AS_ERRORS)
+  list(APPEND TGT_WARN_FLAGS "-Werror")
+endif()
 #set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address")
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
 
 ###
 # Sanitizers BEGIN
 ###
+if (SALMON_ENABLE_ASAN)
+  set(ASAN_BUILD ON)
+endif()
+
 if (ASAN_BUILD)
   list(APPEND TGT_COMPILE_FLAGS "-fsanitize=address")
 #list(APPEND TGT_COMPILE_FLAGS "-fsanitize=undefined")
@@ -118,16 +138,20 @@ endif()
 
 include(CheckIPOSupported)
 
+if(NOT SALMON_ENABLE_LTO AND NOT DEFINED NO_IPO)
+  set(NO_IPO TRUE)
+endif()
+
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 
 set(ICU_LIBS "")
 set(ICU_INC_DIRS "")
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CXXSTDFLAG "-std=c++14")
+set(CXXSTDFLAG "-std=c++17")
 set(GCCVERSION "5.2")
 
 if(CONDA_BUILD)
@@ -295,7 +319,7 @@ set(GAT_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 ###
 try_compile(HAVE_INT128_NUMERIC_LIMITS ${CMAKE_BINARY_DIR} 
             SOURCES ${GAT_SOURCE_DIR}/tests/compile_tests/int128_numeric_limits.cpp
-            CXX_STANDARD 14
+            CXX_STANDARD 17
             CXX_STANDARD_REQUIRED ON 
             )
 if(HAVE_INT128_NUMERIC_LIMITS)
@@ -342,9 +366,45 @@ set(Boost_USE_MULTITHREADED ON)
 #set(Boost_USE_STATIC_RUNTIME OFF)
 set(Boost_USE_DEBUG_RUNTIME OFF)
 
-find_package(ZLIB)
-if(NOT ZLIB_FOUND)
-  message(FATAL_ERROR "zlib must be installed before configuration & building can proceed")
+set(SALMON_ZLIB_INCLUDE_DIRS "")
+set(SALMON_ZLIB_LIBRARIES "")
+find_package(ZLIBNG QUIET)
+if(ZLIBNG_FOUND)
+  message(STATUS "Found zlib-ng compatibility backend: ${ZLIBNG_LIBRARY}")
+  set(SALMON_ZLIB_INCLUDE_DIRS ${ZLIBNG_INCLUDE_DIR})
+  set(SALMON_ZLIB_LIBRARIES ZLIBNG::ZLIBNG)
+  set(ZLIB_INCLUDE_DIR ${ZLIBNG_INCLUDE_DIR})
+  set(ZLIB_LIBRARY ZLIBNG::ZLIBNG)
+elseif(SALMON_FETCH_MISSING_DEPS)
+  message(STATUS "zlib-ng not found; fetching pinned zlib-ng release in compatibility mode")
+  externalproject_add(libzlibng
+    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+    DOWNLOAD_COMMAND curl -k -L https://github.com/zlib-ng/zlib-ng/archive/refs/tags/2.2.5.tar.gz -o zlib-ng-2.2.5.tar.gz &&
+      ${SHASUM} 5b3b022489f3ced82384f06db1e13ba148cbce38c7941e424d6cb414416acd18 zlib-ng-2.2.5.tar.gz &&
+      tar -xzvf zlib-ng-2.2.5.tar.gz
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/zlib-ng-2.2.5
+    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
+    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/zlib-ng-2.2.5/build
+    CMAKE_ARGS
+      -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR>
+      -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+      -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+      -DZLIB_COMPAT=ON
+      -DZLIB_ENABLE_TESTS=OFF
+      -DBUILD_SHARED_LIBS=OFF
+  )
+  externalproject_add_step(libzlibng makedir
+    COMMAND mkdir -p <BINARY_DIR>
+    COMMENT "Make zlib-ng build directory"
+    DEPENDEES download
+    DEPENDERS configure)
+  set(FETCHED_ZLIBNG TRUE)
+  set(SALMON_ZLIB_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
+  set(SALMON_ZLIB_LIBRARIES ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib/libz.a)
+  set(ZLIB_INCLUDE_DIR ${SALMON_ZLIB_INCLUDE_DIRS})
+  set(ZLIB_LIBRARY ${SALMON_ZLIB_LIBRARIES})
+else()
+  message(FATAL_ERROR "zlib-ng is required. Install a zlib-ng compatibility package or enable SALMON_FETCH_MISSING_DEPS.")
 endif()
 
 if("${CMAKE_INCLUDE_PATH}" STREQUAL "")
@@ -585,6 +645,7 @@ if (${TBB_FOUND})
   if (${TBB_VERSION} VERSION_GREATER_EQUAL 2021.4)
   message("FOUND SUITABLE TBB VERSION : ${TBB_VERSION}")
   set(TBB_TARGET_EXISTED TRUE)
+  get_target_property(TBB_INCLUDE_DIRS TBB::tbb INTERFACE_INCLUDE_DIRECTORIES)
   else()
     set(TBB_TARGET_EXISTED FALSE)
   endif()
@@ -737,114 +798,89 @@ if(NOT libgff_FOUND)
   set(LIB_GFF_PATH ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
 endif()
 
-# Because of the way that Apple has changed SIP
-# in el capitan, some headers may be in a new location
-if(APPLE)
-  set(STADEN_INC "-I/usr/local/include")
-  set(STADEN_LIB "-L/usr/local/lib")
-endif()
-
-if(CONDA_BUILD)
-  set(LZFLAG "-lz")
-else()
-  set(LZFLAG "")
-endif()
-
 find_package(CURL)
-
-if (FETCH_STADEN)
-  set(LIBSTADEN_FOUND FALSE)
-else ()
-  find_package(libstadenio 1.15.0)
-endif()
-
-if (NOT LIBSTADENIO_FOUND)
-  message("Build system will compile Staden IOLib")
-  message("==================================================================")
-  externalproject_add(libstadenio
-    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/jkbonfield/io_lib/releases/download/io_lib-1-15-0/io_lib-1.15.0.tar.gz -o staden-io_lib-v1.15.0.tar.gz &&
-      ${SHASUM} ad343dac7c77086db1b54585c5887b26eda6430d1639d111dd3304c3b749494f staden-io_lib-v1.15.0.tar.gz &&
-      mkdir -p staden-io_lib-1.15.0 &&
-      tar -xzf staden-io_lib-v1.15.0.tar.gz --strip-components=1 -C staden-io_lib-1.15.0 &&
-      rm -fr staden-io_lib &&
-      mv -f staden-io_lib-1.15.0 staden-io_lib &&
-      curl -k -L https://github.com/samtools/htscodecs/releases/download/v1.6.0/htscodecs-1.6.0.tar.gz -o htscodecs-1.6.0.tar.gz &&
-      mkdir -p htscodecs-1.6.0 &&
-      tar -xzf htscodecs-1.6.0.tar.gz --strip-components=1 -C htscodecs-1.6.0 &&
-      rm -fr staden-io_lib/htscodecs &&
-      mv -f htscodecs-1.6.0 staden-io_lib/htscodecs
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/staden-io_lib
-    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    CONFIGURE_COMMAND ./configure --enable-shared=no --without-libcurl --prefix=<INSTALL_DIR> LDFLAGS=${LIBSTADEN_LDFLAGS} CFLAGS=${LIBSTADEN_CFLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
-    BUILD_COMMAND make ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS+=${STADEN_INC} CFLAGS+=${STADEN_LIB} LDFLAGS+=${EXTRA_CMAKE_LIBRARY_FLAGS} CFLAGS+=${EXTRA_CMAKE_INCLUDE_FLAGS} CFLAGS+=${LZFLAG} CFLAGS+=${SCHAR_FLAG}
-    BUILD_IN_SOURCE 1
-    INSTALL_COMMAND make install
-  )
-  if(NOT LIBLZMA_FOUND)
-  	ExternalProject_Add_StepDependencies(libstadenio build liblzma)
+find_package(HTSlib QUIET)
+if(HTSlib_FOUND)
+  message(STATUS "Found htslib: ${HTSLIB_LIBRARY}")
+  set(HTSLIB_INCLUDE_DIR ${HTSLIB_INCLUDE_DIR})
+  set(HTSLIB_LIBRARIES HTSlib::HTSlib)
+  find_library(LIBDEFLATE_LIBRARY NAMES deflate libdeflate)
+  if(LIBDEFLATE_LIBRARY)
+    list(APPEND HTSLIB_LIBRARIES ${LIBDEFLATE_LIBRARY})
   endif()
-
-  set(FETCHED_STADEN TRUE)
-  set(STADEN_LIBRARIES "${GAT_SOURCE_DIR}/external/install/lib/libstaden-read.a;${GAT_SOURCE_DIR}/external/install/lib/libhtscodecs.a")
+elseif(SALMON_FETCH_MISSING_DEPS)
+  message(STATUS "htslib not found; fetching pinned htslib release")
+  externalproject_add(libhtslib
+    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+    DOWNLOAD_COMMAND curl -k -L https://github.com/samtools/htslib/releases/download/1.22/htslib-1.22.tar.bz2 -o htslib-1.22.tar.bz2 &&
+      ${SHASUM} 6250c1df297db477516e60ac8df45ed75a652d1f25b0f37f12f5b17269eafde9 htslib-1.22.tar.bz2 &&
+      tar -xjf htslib-1.22.tar.bz2
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/htslib-1.22
+    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
+    BUILD_IN_SOURCE TRUE
+    CONFIGURE_COMMAND ./configure --prefix=<INSTALL_DIR> --disable-libcurl CPPFLAGS=-I${CMAKE_CURRENT_SOURCE_DIR}/external/install/include LDFLAGS=-L${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib CC=${CMAKE_C_COMPILER}
+    BUILD_COMMAND make ${QUIET_MAKE}
+    INSTALL_COMMAND make ${QUIET_MAKE} install
+  )
+  if(FETCHED_ZLIBNG)
+    add_dependencies(libhtslib libzlibng)
+  endif()
+  if(FETCHED_LIBBZ2)
+    add_dependencies(libhtslib libbz2)
+  endif()
+  if(FETCHED_LIBLZMA)
+    add_dependencies(libhtslib liblzma)
+  endif()
+  set(FETCHED_HTSLIB TRUE)
+  set(HTSLIB_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
+  set(HTSLIB_LIBRARIES ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib/libhts.a)
+else()
+  message(FATAL_ERROR "htslib is required. Install htslib or enable SALMON_FETCH_MISSING_DEPS.")
 endif()
 
-if (ASAN_BUILD)
+if(ASAN_BUILD OR SALMON_USE_MIMALLOC STREQUAL "OFF")
   set(FAST_MALLOC_LIB "")
   set(HAVE_FAST_MALLOC TRUE)
 else()
   set(FAST_MALLOC_LIB "")
   set(HAVE_FAST_MALLOC FALSE)
-
-  # See if we have Jemalloc
-  find_package(Jemalloc)
-  if(Jemalloc_FOUND)
-    ##
-    # Don't be so stringent about the version yet
-    ##
-    #if (NOT (${JEMALLOC_VERSION} VERSION_LESS 5.2.1))
-      message("Found Jemalloc library --- using this memory allocator")
-      set(FAST_MALLOC_LIB ${JEMALLOC_LIBRARIES})
-      set(HAVE_FAST_MALLOC TRUE)
-    #else()
-    #  message("Fond Jemalloc version ${JEMALLOC_VERSION}, but require >= 5.2.1. Downloading newer version")
-    #endif()
+  find_package(Mimalloc QUIET)
+  if(Mimalloc_FOUND)
+    message(STATUS "Found mimalloc: ${MIMALLOC_LIBRARY}")
+    set(FAST_MALLOC_LIB Mimalloc::Mimalloc)
+    set(HAVE_FAST_MALLOC TRUE)
   endif()
 endif()
 
-if(CONDA_BUILD)
-  set(JEMALLOC_FLAGS "CC=${CMAKE_C_COMPILER} CFLAGS=\\\"-fPIC ${SCHAR_FLAG}\\\" CPPFLAGS=\\\"-fPIC ${SCHAR_FLAG}\\\"")
-else()
-  set(JEMALLOC_FLAGS "CC=${CMAKE_C_COMPILER} CFLAGS=${SCHAR_FLAG} CPPFLAGS=${SCHAR_FLAG}")
-endif()
-
-if(NOT HAVE_FAST_MALLOC)
-  message("Build system will fetch and use JEMalloc")
-  message("==================================================================")
-  externalproject_add(libjemalloc
-      DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-      DOWNLOAD_COMMAND curl -k -L https://github.com/jemalloc/jemalloc/archive/5.2.1.tar.gz -o jemalloc-5.2.1.tar.gz &&
-        ${SHASUM} ed51b0b37098af4ca6ed31c22324635263f8ad6471889e0592a9c0dba9136aea jemalloc-5.2.1.tar.gz &&
-        tar -xzf jemalloc-5.2.1.tar.gz
-
-      SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/jemalloc-5.2.1
-      BUILD_IN_SOURCE TRUE
-      INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-      CONFIGURE_COMMAND sh -c "${JEMALLOC_FLAGS} ./autogen.sh --disable-debug ${MALLOC_STATIC_BUILD_FLAG} --prefix=<INSTALL_DIR>"
-      #CONFIGURE_COMMAND sh -c "${JEMALLOC_FLAGS} ./autogen.sh ${MALLOC_STATIC_BUILD_FLAG} --prefix=<INSTALL_DIR>"
-      INSTALL_COMMAND cp -r lib <INSTALL_DIR>/ && cp -r include <INSTALL_DIR>/
-      )
-
-  set(FAST_MALLOC_LIB ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib/libjemalloc.a)
+if(NOT HAVE_FAST_MALLOC AND SALMON_FETCH_MISSING_DEPS)
+  message(STATUS "mimalloc not found; fetching pinned mimalloc release")
+  externalproject_add(libmimalloc
+    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
+    DOWNLOAD_COMMAND curl -k -L https://github.com/microsoft/mimalloc/archive/refs/tags/v2.2.4.tar.gz -o mimalloc-v2.2.4.tar.gz &&
+      ${SHASUM} 754a98de5e2912fddbeaf24830f982b4540992f1bab4a0a8796ee118e0752bda mimalloc-v2.2.4.tar.gz &&
+      tar -xzvf mimalloc-v2.2.4.tar.gz
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/mimalloc-2.2.4
+    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
+    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/mimalloc-2.2.4/build
+    CMAKE_ARGS
+      -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR>
+      -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+      -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+      -DMI_BUILD_SHARED=OFF
+      -DMI_BUILD_TESTS=OFF
+  )
+  externalproject_add_step(libmimalloc makedir
+    COMMAND mkdir -p <BINARY_DIR>
+    COMMENT "Make mimalloc build directory"
+    DEPENDEES download
+    DEPENDERS configure)
+  set(FETCHED_MIMALLOC TRUE)
+  set(FAST_MALLOC_LIB
+      ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib/mimalloc-2.2/mimalloc.o
+      ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib/mimalloc-2.2/libmimalloc.a)
   set(HAVE_FAST_MALLOC TRUE)
-  set(FETCHED_JEMALLOC TRUE)
-  if(FETCHED_LIBBZ2)
-    add_dependencies(libjemalloc libbz2)
-  endif()
-
-  if(FETCHED_LIBLZMA)
-    add_dependencies(libjemalloc liblzma)
-  endif()
+elseif(NOT HAVE_FAST_MALLOC AND SALMON_USE_MIMALLOC STREQUAL "REQUIRED")
+  message(FATAL_ERROR "mimalloc is required but was not found. Install mimalloc or enable SALMON_FETCH_MISSING_DEPS.")
 endif()
 
 ###

@@ -15,8 +15,6 @@ public:
 
   po::options_description getMappingSpecificOptions(SalmonOpts& sopt);
   po::options_description getAlignmentSpecificOptions(SalmonOpts& sopt);
-  po::options_description getAlevinBasicOptions(SalmonOpts& sopt);
-  po::options_description getAlevinDevsOptions();
   po::options_description getAdvancedOptions(int32_t& numBiasSamples, SalmonOpts& sopt);
   po::options_description getHiddenOptions(SalmonOpts& sopt);
   po::options_description getTestingOptions(SalmonOpts& sopt);

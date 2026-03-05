@@ -22,8 +22,7 @@ bool AlignmentCommon::hasIndel(bam_seq_t* read)  {
 
   for (uint32_t cigarIdx = 0; cigarIdx < cigarLen; ++cigarIdx) {
     uint32_t opLen = cigar[cigarIdx] >> BAM_CIGAR_SHIFT;
-    enum cigar_op op =
-        static_cast<enum cigar_op>(cigar[cigarIdx] & BAM_CIGAR_MASK);
+    cigar_op op = static_cast<cigar_op>(cigar[cigarIdx] & BAM_CIGAR_MASK);
 
     switch (op) {
     case BAM_CINS:
@@ -37,7 +36,7 @@ bool AlignmentCommon::hasIndel(bam_seq_t* read)  {
   return false;
 }
 
-void AlignmentCommon::setBasesFromCIGAROp_(enum cigar_op op,
+void AlignmentCommon::setBasesFromCIGAROp_(cigar_op op,
                                            size_t& curRefBase,
                                            size_t& curReadBase) {
   switch (op) {
@@ -79,7 +78,7 @@ void AlignmentCommon::setBasesFromCIGAROp_(enum cigar_op op,
   }
 }
 
-char AlignmentCommon::opToChr(enum cigar_op op) {
+char AlignmentCommon::opToChr(cigar_op op) {
   switch (op) {
   case BAM_UNKNOWN:
     std::cerr << "ENCOUNTERED UNKNOWN SYMBOL IN CIGAR STRING!\n";
@@ -159,8 +158,7 @@ bool AlignmentCommon::computeErrorCount(bam_seq_t* read, bam_seq_t* primary, Tra
   // operations do not consuming reference sequence.
   for (uint32_t cigarIdx = 0; cigarIdx < cigarLen && readIdx <= readLen && uTranscriptIdx <= transcriptLen; ++cigarIdx) {
     uint32_t opLen = cigar[cigarIdx] >> BAM_CIGAR_SHIFT;
-    enum cigar_op op =
-      static_cast<enum cigar_op>(cigar[cigarIdx] & BAM_CIGAR_MASK);
+    cigar_op op = static_cast<cigar_op>(cigar[cigarIdx] & BAM_CIGAR_MASK);
 
     // Only "matching" (meaning match or mismatch need to look at each
     // base of query and reference sequences. Otherwise, advance block by block
@@ -242,8 +240,7 @@ bool AlignmentCommon::computeErrorCount(bam_seq_t* read, bam_seq_t* primary, Tra
       std::stringstream cigarStream;
       for (size_t j = 0; j < cigarLen; ++j) {
         uint32_t opLen = cigar[j] >> BAM_CIGAR_SHIFT;
-        enum cigar_op op =
-          static_cast<enum cigar_op>(cigar[j] & BAM_CIGAR_MASK);
+        cigar_op op = static_cast<cigar_op>(cigar[j] & BAM_CIGAR_MASK);
         cigarStream << opLen << opToChr(op);
       }
       logger_->warn("in {} CIGAR [{}] string for read [{}] "

@@ -59,7 +59,7 @@ int help(const std::vector<std::string>& /*opts*/) {
   helpMsg.write("Commands:\n");
   helpMsg.write("     index      : create a salmon index\n");
   helpMsg.write("     quant      : quantify a sample\n");
-  helpMsg.write("     alevin     : single cell analysis\n");
+  helpMsg.write("     alevin     : removed; use alevin-fry for single-cell analysis\n");
   helpMsg.write("     swim       : perform super-secret operation\n");
   helpMsg.write("     quantmerge : merge multiple quantifications into a single file\n");
 
@@ -219,8 +219,10 @@ int main(int argc, const char* argv[]) {
     std::transform(no_version_env.begin(), no_version_env.end(), no_version_env.begin(), 
                    [](unsigned char c){ return std::toupper(c); } // correct
                   );
+    std::string requested_cmd = vm.count("command") ? vm["command"].as<std::string>() : "";
     bool skip_version_check = vm.count("no-version-check") or (no_version_env == "1") 
-                              or (no_version_env == "TRUE") or (no_version_env == "T");
+                              or (no_version_env == "TRUE") or (no_version_env == "T")
+                              or (requested_cmd == "alevin");
 
     if (!skip_version_check) {
       std::string versionMessage = getVersionMessage();
@@ -229,7 +231,7 @@ int main(int argc, const char* argv[]) {
 
     // po::notify(vm);
 
-    std::string cmd = vm["command"].as<std::string>();
+    std::string cmd = requested_cmd;
     std::vector<std::string> opts =
         po::collect_unrecognized(parsed.options, po::include_positional);
     opts.erase(opts.begin());

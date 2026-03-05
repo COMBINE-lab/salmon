@@ -1,12 +1,7 @@
 #ifndef ALIGNMENT_GROUP
 #define ALIGNMENT_GROUP
 
-extern "C" {
-#include "io_lib/os.h"
-#include "io_lib/scram.h"
-#undef max
-#undef min
-}
+#include "salmon/internal/io/AlignmentIO.hpp"
 
 // Cereal includes
 #include "cereal/archives/binary.hpp"

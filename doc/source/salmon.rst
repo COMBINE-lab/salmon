@@ -75,9 +75,8 @@ set of alignments.
     The number of threads that Salmon can effectively make use of depends 
     upon the mode in which it is being run.  In alignment-based mode, the
     main bottleneck is in parsing and decompressing the input BAM file.
-    We make use of the `Staden IO <http://sourceforge.net/projects/staden/files/io_lib/>`_ 
-    library for SAM/BAM/CRAM I/O (CRAM is, in theory, supported, but has not been
-    thoroughly tested).  This means that multiple threads can be effectively used
+    Salmon uses `htslib <https://github.com/samtools/htslib>`_
+    for SAM/BAM/CRAM I/O.  This means that multiple threads can be effectively used
     to aid in BAM decompression.  However, we find that throwing more than a 
     few threads at file decompression does not result in increased processing
     speed.  Thus, alignment-based Salmon will only ever allocate up to 4 threads

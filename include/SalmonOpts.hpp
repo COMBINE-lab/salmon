@@ -41,7 +41,6 @@ struct SalmonOpts {
 
   SalmonQuantMode quantMode; // How quantification is done
 
-  bool alevinMode{false}; // are we running in alevin mode
   bool eqClassMode{salmon::defaults::eqClassMode}; // are we running in eqclass mode
 
   bool alternativeInitMode; // Weigh unique reads more heavily when initialzing

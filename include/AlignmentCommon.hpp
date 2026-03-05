@@ -9,12 +9,7 @@
 // logger includes
 #include "spdlog/spdlog.h"
 
-extern "C" {
-#include "io_lib/os.h"
-#include "io_lib/scram.h"
-#undef max
-#undef min
-}
+#include "salmon/internal/io/AlignmentIO.hpp"
 
 struct UnpairedRead;
 struct ReadPair;
@@ -52,8 +47,8 @@ protected:
   };
 
   static bool hasIndel(bam_seq_t* read);
-  static void setBasesFromCIGAROp_(enum cigar_op op, size_t& curRefBase, size_t& curReadBase);
-  static char opToChr(enum cigar_op op);
+  static void setBasesFromCIGAROp_(cigar_op op, size_t& curRefBase, size_t& curReadBase);
+  static char opToChr(cigar_op op);
 
   template<typename T>
   static int32_t alnLen(const T& aln, const T& primary) {

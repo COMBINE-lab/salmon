@@ -146,8 +146,7 @@ AlignmentModel::AlnModelProb AlignmentModel::logLikelihood(
 
   for (uint32_t cigarIdx = 0; cigarIdx < cigarLen; ++cigarIdx) {
     uint32_t opLen = cigar[cigarIdx] >> BAM_CIGAR_SHIFT;
-    enum cigar_op op =
-        static_cast<enum cigar_op>(cigar[cigarIdx] & BAM_CIGAR_MASK);
+    cigar_op op = static_cast<cigar_op>(cigar[cigarIdx] & BAM_CIGAR_MASK);
     size_t curReadBase = (BAM_CONSUME_SEQ(op)) ? samToTwoBit[bam_seqi(qseq, readIdx)] : 0;
     size_t curRefBase = (BAM_CONSUME_REF(op)) ? samToTwoBit[ref.baseAt(uTranscriptIdx, readStrand)] : 0;
     advanceInRead = false;
@@ -165,8 +164,7 @@ AlignmentModel::AlnModelProb AlignmentModel::logLikelihood(
             std::stringstream cigarStream;
             for (size_t j = 0; j < cigarLen; ++j) {
               uint32_t opLen = cigar[j] >> BAM_CIGAR_SHIFT;
-              enum cigar_op op =
-                  static_cast<enum cigar_op>(cigar[j] & BAM_CIGAR_MASK);
+              cigar_op op = static_cast<cigar_op>(cigar[j] & BAM_CIGAR_MASK);
               cigarStream << opLen << opToChr(op);
             }
             logger_->warn("(in logLikelihood()) CIGAR = {}", cigarStream.str());
@@ -352,8 +350,7 @@ void AlignmentModel::update(
 
     for (uint32_t cigarIdx = 0; cigarIdx < cigarLen; ++cigarIdx) {
       uint32_t opLen = cigar[cigarIdx] >> BAM_CIGAR_SHIFT;
-      enum cigar_op op =
-          static_cast<enum cigar_op>(cigar[cigarIdx] & BAM_CIGAR_MASK);
+      cigar_op op = static_cast<cigar_op>(cigar[cigarIdx] & BAM_CIGAR_MASK);
 
       size_t curReadBase = (BAM_CONSUME_SEQ(op)) ? samToTwoBit[bam_seqi(qseq, readIdx)] : 0;
       size_t curRefBase = (BAM_CONSUME_REF(op)) ? samToTwoBit[ref.baseAt(uTranscriptIdx, readStrand)] : 0;
@@ -371,8 +368,7 @@ void AlignmentModel::update(
               std::stringstream cigarStream;
               for (size_t j = 0; j < cigarLen; ++j) {
                 uint32_t opLen = cigar[j] >> BAM_CIGAR_SHIFT;
-                enum cigar_op op =
-                    static_cast<enum cigar_op>(cigar[j] & BAM_CIGAR_MASK);
+                cigar_op op = static_cast<cigar_op>(cigar[j] & BAM_CIGAR_MASK);
                 cigarStream << opLen << opToChr(op);
               }
               logger_->warn("CIGAR = {}", cigarStream.str());

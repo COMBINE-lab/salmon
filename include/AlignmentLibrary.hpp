@@ -1,12 +1,7 @@
 #ifndef ALIGNMENT_LIBRARY_HPP
 #define ALIGNMENT_LIBRARY_HPP
 
-extern "C" {
-#include "io_lib/os.h"
-#include "io_lib/scram.h"
-#undef max
-#undef min
-}
+#include "salmon/internal/io/AlignmentIO.hpp"
 
 // Our includes
 #include "AlignmentGroup.hpp"

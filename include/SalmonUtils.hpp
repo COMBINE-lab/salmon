@@ -1,12 +1,7 @@
 #ifndef __SALMON_UTILS_HPP__
 #define __SALMON_UTILS_HPP__
 
-extern "C" {
-#include "io_lib/os.h"
-#include "io_lib/scram.h"
-#undef min
-#undef max
-}
+#include "salmon/internal/io/AlignmentIO.hpp"
 
 #include <algorithm>
 #include <boost/filesystem.hpp>

@@ -1,8 +1,5 @@
 
-extern "C" {
-#include "io_lib/os.h"
-#include "io_lib/scram.h"
-}
+#include "salmon/internal/io/AlignmentIO.hpp"
 
 // for cpp-format
 #include "spdlog/fmt/fmt.h"
@@ -261,15 +258,15 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
   auto getAlignerAssignedScore =
     [&haveASTag, &firstTagCheck, alignerType](FragT* aln) -> double {
       if (firstTagCheck and !haveASTag) {
-        char* tp = bam_aux_find(aln->getRead1(), "AS");
+        uint8_t* tp = bam_aux_find(aln->getRead1(), "AS");
         haveASTag = (tp != NULL);
       }
       double score{LOG_0};
       if (haveASTag and (alignerType == salmon::bam_utils::AlignerDetails::BOWTIE2)) {
-        uint8_t* tl = reinterpret_cast<uint8_t*>(bam_aux_find(aln->getRead1(), "AS"));
+        uint8_t* tl = bam_aux_find(aln->getRead1(), "AS");
         auto locScore = (tl != NULL) ? bam_aux_i(tl) : LOG_1;
         if (aln->isPaired()) {
-          uint8_t* tr = reinterpret_cast<uint8_t*>(bam_aux_find(aln->getRead2(), "AS"));
+          uint8_t* tr = bam_aux_find(aln->getRead2(), "AS");
           locScore += (tr != NULL) ? bam_aux_i(tr) : LOG_1;
         }
         score = locScore;
