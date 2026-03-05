@@ -21,17 +21,31 @@ ${LIB_GFF_INCLUDE_DIR}
 ${ICU_INC_DIRS}
 )
 
-set (SALMON_CLI_SRCS
+set (SALMON_ENTRY_SRCS
 cli/Salmon.cpp
+)
+
+set (SALMON_CLI_SRCS
 cli/VersionChecker.cpp
+cli/ProgramOptionsGenerator.cpp
 commands/AlevinRemoved.cpp
 commands/SalmonQuantMerge.cpp
 index/BuildSalmonIndex.cpp
-ProgramOptionsGenerator.cpp
 )
 
 set (SALMON_OUTPUT_SRCS
 output/GZipWriter.cpp
+)
+
+set (SALMON_MODEL_SRCS
+model/FragmentLengthDistribution.cpp
+model/FragmentStartPositionDistribution.cpp
+model/EffectiveLengthStats.cpp
+model/TranscriptGroup.cpp
+model/LibraryFormat.cpp
+model/SBModel.cpp
+model/SimplePosBias.cpp
+model/SGSmooth.cpp
 )
 
 set (SALMON_ALIGNMENT_SRCS
@@ -42,46 +56,35 @@ alignment/SalmonQuantifyAlignments.cpp
 alignment/BAMUtils.cpp
 )
 
-set (SALMON_MAIN_SRCS
-EMUtils.cpp
-CollapsedEMOptimizer.cpp
-CollapsedGibbsSampler.cpp
-${SALMON_CLI_SRCS}
-SalmonQuantify.cpp
-FragmentLengthDistribution.cpp
-FragmentStartPositionDistribution.cpp
-# SequenceBiasModel.cpp
-${SALMON_OUTPUT_SRCS}
+set (SALMON_INFERENCE_SRCS
+inference/EMUtils.cpp
+inference/CollapsedEMOptimizer.cpp
+inference/CollapsedGibbsSampler.cpp
 )
 
-set (SALMON_ALIGN_SRCS
-FASTAParser.cpp
-${SALMON_ALIGNMENT_SRCS}
-FragmentLengthDistribution.cpp
+set (SALMON_QUANT_SRCS
+quant/SalmonQuantify.cpp
 )
 
 set (SALMON_IO_SRCS
+io/FASTAParser.cpp
 io/StadenUtils.cpp
+io/FastxParser.cpp
 )
 
-set (SALMON_LIB_SRCS
+set (SALMON_UTIL_SRCS
+util/SalmonUtils.cpp
+util/DistributionUtils.cpp
+util/SalmonExceptions.cpp
+util/SalmonStringUtils.cpp
+)
+
+set (SALMON_SUPPORT_SRCS
 ${GAT_SOURCE_DIR}/src/jellyfish/mer_dna.cc
 backtrace.cc
 xxhash.c
 edlib.cpp
-TranscriptGroup.cpp
-EffectiveLengthStats.cpp
-LibraryFormat.cpp
 GenomicFeature.cpp
-SBModel.cpp
-FastxParser.cpp
-${SALMON_IO_SRCS}
-SalmonUtils.cpp
-DistributionUtils.cpp
-SalmonExceptions.cpp
-SalmonStringUtils.cpp
-SimplePosBias.cpp
-SGSmooth.cpp
 ${GAT_SOURCE_DIR}/external/install/src/pufferfish/metro/metrohash64.cpp
 )
 
@@ -105,7 +108,7 @@ if(SALMON_ENABLE_TESTS)
   )
 
   set (UNIT_TESTS_INDIVIDUAL_SRCS
-    ${GAT_SOURCE_DIR}/src/FragmentLengthDistribution.cpp
+    ${GAT_SOURCE_DIR}/src/model/FragmentLengthDistribution.cpp
     ${GAT_SOURCE_DIR}/external/install/src/pufferfish/rank9b.cpp
     ${GAT_SOURCE_DIR}/tests/GCSampleTests.cpp
     ${GAT_SOURCE_DIR}/tests/LibraryTypeTests.cpp
@@ -148,46 +151,80 @@ endif()
 set (TGT_RELEASE_FLAGS "${TGT_COMPILE_FLAGS};${TGT_WARN_FLAGS}")
 set (TGT_DEBUG_FLAGS "-g;${TGT_COMPILE_FLAGS};${TGT_WARN_FLAGS}")
 
-# Build the Salmon library
-add_library(salmon_core STATIC ${SALMON_LIB_SRCS} )
-target_compile_definitions(salmon_core PUBLIC
-RAPMAP_SALMON_SUPPORT=1
-PUFFERFISH_SALMON_SUPPORT=1
-HAVE_ANSI_TERM=1
-HAVE_SSTREAM=1
-STX_NO_STD_STRING_VIEW=1
-span_FEATURE_MAKE_SPAN_TO_STD=14
+function(salmon_configure_target target_name)
+  target_compile_definitions(${target_name} PUBLIC
+    RAPMAP_SALMON_SUPPORT=1
+    PUFFERFISH_SALMON_SUPPORT=1
+    HAVE_ANSI_TERM=1
+    HAVE_SSTREAM=1
+    STX_NO_STD_STRING_VIEW=1
+    span_FEATURE_MAKE_SPAN_TO_STD=14
+  )
+  target_include_directories(${target_name} PUBLIC ${COMPACT_VECTOR_INCLUDE_PATH})
+  if (USE_ARM)
+    target_compile_definitions(${target_name} PUBLIC KSW_USE_ARM=1)
+  endif()
+  target_compile_options(${target_name} PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
+  target_compile_options(${target_name} PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
+  if(HAS_IPO AND (NOT NO_IPO))
+    set_property(TARGET ${target_name} PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
+  endif()
+endfunction()
+
+add_library(salmon_io STATIC ${SALMON_IO_SRCS})
+add_library(salmon_model STATIC ${SALMON_MODEL_SRCS})
+add_library(salmon_util STATIC ${SALMON_UTIL_SRCS})
+add_library(salmon_output STATIC ${SALMON_OUTPUT_SRCS})
+add_library(salmon_alignment STATIC ${SALMON_ALIGNMENT_SRCS})
+add_library(salmon_inference STATIC ${SALMON_INFERENCE_SRCS})
+add_library(salmon_cli STATIC ${SALMON_CLI_SRCS})
+add_library(salmon_quant STATIC ${SALMON_QUANT_SRCS})
+add_library(salmon_core STATIC ${SALMON_SUPPORT_SRCS})
+add_library(salmon_support ALIAS salmon_core)
+
+set(SALMON_MODULE_TARGETS
+  salmon_io
+  salmon_model
+  salmon_util
+  salmon_output
+  salmon_alignment
+  salmon_inference
+  salmon_cli
+  salmon_quant
+  salmon_core
 )
-target_include_directories(salmon_core PUBLIC ${COMPACT_VECTOR_INCLUDE_PATH})
 
+foreach(salmon_module_target IN LISTS SALMON_MODULE_TARGETS)
+  salmon_configure_target(${salmon_module_target})
+endforeach()
 
-if (USE_ARM)
-target_compile_definitions(salmon_core PUBLIC KSW_USE_ARM=1)
-endif()
-
-target_compile_options(salmon_core PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
-target_compile_options(salmon_core PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
-if(HAS_IPO AND (NOT NO_IPO))
-  set_property(TARGET salmon_core PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
-endif()
+# Keep salmon_core as the stable archive target while its internals are split
+# into module libraries.
+target_link_libraries(salmon_core
+  PUBLIC
+    salmon_io
+    salmon_model
+    salmon_util
+)
 
 # Build the salmon executable
-add_executable(salmon ${SALMON_MAIN_SRCS} ${SALMON_ALIGN_SRCS})
-target_include_directories(salmon PUBLIC ${COMPACT_VECTOR_INCLUDE_PATH})
-
-if(HAS_IPO AND (NOT NO_IPO))
-  set_property(TARGET salmon PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
-endif()
+add_executable(salmon ${SALMON_ENTRY_SRCS})
+salmon_configure_target(salmon)
+target_link_libraries(salmon
+  salmon_cli
+  salmon_quant
+  salmon_inference
+  salmon_alignment
+  salmon_output
+  salmon_core
+)
 
 if(SALMON_ENABLE_TESTS)
   add_library(UnitTestsMain STATIC ${UNIT_TESTS_ENTRY_SRCS})
-  target_compile_options(UnitTestsMain PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
-  target_compile_options(UnitTestsMain PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
+  salmon_configure_target(UnitTestsMain)
 
   add_executable(unitTests ${UNIT_TESTS_INDIVIDUAL_SRCS} ${GAT_SOURCE_DIR}/tests/catch.hpp)
-  target_compile_options(unitTests PUBLIC "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>")
-  target_compile_options(unitTests PUBLIC "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>")
-  target_include_directories(unitTests PUBLIC ${COMPACT_VECTOR_INCLUDE_PATH})
+  salmon_configure_target(unitTests)
 endif()
 
 #add_executable(salmon-read ${SALMON_READ_SRCS})
@@ -209,14 +246,12 @@ add_dependencies(salmon twopaco)
 add_dependencies(salmon graphdump)
 add_dependencies(salmon ntcard)
 add_dependencies(salmon ksw2pp)
-add_dependencies(salmon salmon_core)
 if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
 
 # Link the executable
 target_link_libraries(salmon
     Threads::Threads 
     puffer 
-    salmon_core
     twopaco
     graphdump
     ntcard
@@ -295,46 +330,58 @@ endif()
 ##
 # External dependencies of salmon_core and salmon
 ##
+set(SALMON_EXTERNAL_DEP_TARGETS
+  salmon_io
+  salmon_model
+  salmon_util
+  salmon_output
+  salmon_alignment
+  salmon_inference
+  salmon_cli
+  salmon_quant
+  salmon_core
+  salmon
+)
+if(SALMON_ENABLE_TESTS)
+  list(APPEND SALMON_EXTERNAL_DEP_TARGETS UnitTestsMain unitTests)
+endif()
+
+function(salmon_add_external_dependency dependency_target)
+  foreach(salmon_external_target IN LISTS SALMON_EXTERNAL_DEP_TARGETS)
+    add_dependencies(${salmon_external_target} ${dependency_target})
+  endforeach()
+endfunction()
+
 if (${FETCHED_MIMALLOC})
-   add_dependencies(salmon_core libmimalloc)
-   add_dependencies(salmon libmimalloc)
+   salmon_add_external_dependency(libmimalloc)
 endif()
 
 if (${FETCHED_BOOST})
-   add_dependencies(salmon_core libboost)
-   add_dependencies(salmon libboost)
+   salmon_add_external_dependency(libboost)
 endif()
 
 if (${FETCHED_TBB})
    message("Fetched oneTBB, so libtbb must be a dependency for targets")
-   add_dependencies(salmon_core libtbb)
-   if(SALMON_ENABLE_TESTS)
-     add_dependencies(unitTests libtbb)
-   endif()
-   add_dependencies(salmon libtbb)
+   salmon_add_external_dependency(libtbb)
 endif()
 
 if (${FETCHED_CEREAL})
-  add_dependencies(salmon_core libcereal)
-  add_dependencies(salmon libcereal)
+  salmon_add_external_dependency(libcereal)
 endif()
 
 if (${FETCHED_HTSLIB})
-  add_dependencies(salmon_core libhtslib)
-  add_dependencies(salmon libhtslib)
+  salmon_add_external_dependency(libhtslib)
 endif()
 
 if (${FETCHED_ZLIBNG})
-  add_dependencies(salmon_core libzlibng)
-  add_dependencies(salmon libzlibng)
+  salmon_add_external_dependency(libzlibng)
 endif()
 
 #add_dependencies(salmon_core libbwa)
 #add_dependencies(salmon libbwa)
 
 if (${FETCHED_GFF})
-  add_dependencies(salmon_core libgff)
-  add_dependencies(salmon libgff)
+  salmon_add_external_dependency(libgff)
 endif()
 
 ### No need for this, I think
