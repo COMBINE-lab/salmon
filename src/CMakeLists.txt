@@ -21,30 +21,47 @@ ${LIB_GFF_INCLUDE_DIR}
 ${ICU_INC_DIRS}
 )
 
-set ( SALMON_MAIN_SRCS
+set (SALMON_CLI_SRCS
+cli/Salmon.cpp
+cli/VersionChecker.cpp
+commands/AlevinRemoved.cpp
+commands/SalmonQuantMerge.cpp
+index/BuildSalmonIndex.cpp
+ProgramOptionsGenerator.cpp
+)
+
+set (SALMON_OUTPUT_SRCS
+output/GZipWriter.cpp
+)
+
+set (SALMON_ALIGNMENT_SRCS
+alignment/AlignmentModel.cpp
+alignment/ONTAlignmentModel.cpp
+alignment/AlignmentCommon.cpp
+alignment/SalmonQuantifyAlignments.cpp
+alignment/BAMUtils.cpp
+)
+
+set (SALMON_MAIN_SRCS
 EMUtils.cpp
 CollapsedEMOptimizer.cpp
 CollapsedGibbsSampler.cpp
-Salmon.cpp
-commands/AlevinRemoved.cpp
-BuildSalmonIndex.cpp
+${SALMON_CLI_SRCS}
 SalmonQuantify.cpp
 FragmentLengthDistribution.cpp
 FragmentStartPositionDistribution.cpp
 # SequenceBiasModel.cpp
-GZipWriter.cpp
-SalmonQuantMerge.cpp
-ProgramOptionsGenerator.cpp
+${SALMON_OUTPUT_SRCS}
 )
 
 set (SALMON_ALIGN_SRCS
 FASTAParser.cpp
-AlignmentModel.cpp
-ONTAlignmentModel.cpp
-AlignmentCommon.cpp
+${SALMON_ALIGNMENT_SRCS}
 FragmentLengthDistribution.cpp
-SalmonQuantifyAlignments.cpp
-BAMUtils.cpp
+)
+
+set (SALMON_IO_SRCS
+io/StadenUtils.cpp
 )
 
 set (SALMON_LIB_SRCS
@@ -56,10 +73,9 @@ TranscriptGroup.cpp
 EffectiveLengthStats.cpp
 LibraryFormat.cpp
 GenomicFeature.cpp
-VersionChecker.cpp
 SBModel.cpp
 FastxParser.cpp
-StadenUtils.cpp
+${SALMON_IO_SRCS}
 SalmonUtils.cpp
 DistributionUtils.cpp
 SalmonExceptions.cpp
