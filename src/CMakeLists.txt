@@ -222,126 +222,88 @@ function(salmon_attach_eigen_headers target_name)
   )
 endfunction()
 
-add_library(salmon_io STATIC ${SALMON_IO_SRCS})
-add_library(salmon_model STATIC ${SALMON_MODEL_SRCS})
-add_library(salmon_util STATIC ${SALMON_UTIL_SRCS})
-add_library(salmon_output STATIC ${SALMON_OUTPUT_SRCS})
-add_library(salmon_alignment STATIC ${SALMON_ALIGNMENT_SRCS})
-add_library(salmon_inference STATIC ${SALMON_INFERENCE_SRCS})
-add_library(salmon_cli STATIC ${SALMON_CLI_SRCS})
-add_library(salmon_indexing STATIC ${SALMON_INDEXING_SRCS})
-add_library(salmon_options STATIC ${SALMON_OPTIONS_SRCS})
-add_library(salmon_quant STATIC ${SALMON_QUANT_SRCS})
-add_library(salmon_core STATIC ${SALMON_SUPPORT_SRCS})
+function(salmon_add_module_library target_name)
+  set(options USE_EIGEN)
+  set(one_value_args)
+  set(multi_value_args SOURCES LINK_LIBS)
+  cmake_parse_arguments(SALMON_MODULE "${options}" "${one_value_args}" "${multi_value_args}" ${ARGN})
+
+  add_library(${target_name} STATIC ${SALMON_MODULE_SOURCES})
+  salmon_configure_target(${target_name})
+  salmon_attach_external_headers(${target_name})
+  if(SALMON_MODULE_USE_EIGEN)
+    salmon_attach_eigen_headers(${target_name})
+  endif()
+  if(SALMON_MODULE_LINK_LIBS)
+    target_link_libraries(${target_name}
+      PRIVATE
+        ${SALMON_MODULE_LINK_LIBS}
+    )
+  endif()
+endfunction()
+
+salmon_add_module_library(salmon_io
+  USE_EIGEN
+  SOURCES ${SALMON_IO_SRCS}
+  LINK_LIBS salmon_util
+)
+
+salmon_add_module_library(salmon_model
+  USE_EIGEN
+  SOURCES ${SALMON_MODEL_SRCS}
+  LINK_LIBS salmon_util
+)
+
+salmon_add_module_library(salmon_util
+  USE_EIGEN
+  SOURCES ${SALMON_UTIL_SRCS}
+)
+
+salmon_add_module_library(salmon_output
+  USE_EIGEN
+  SOURCES ${SALMON_OUTPUT_SRCS}
+  LINK_LIBS salmon_util salmon_model
+)
+
+salmon_add_module_library(salmon_alignment
+  USE_EIGEN
+  SOURCES ${SALMON_ALIGNMENT_SRCS}
+  LINK_LIBS salmon_io salmon_model salmon_util salmon_output salmon_inference salmon_options
+)
+
+salmon_add_module_library(salmon_inference
+  USE_EIGEN
+  SOURCES ${SALMON_INFERENCE_SRCS}
+  LINK_LIBS salmon_model salmon_util
+)
+
+salmon_add_module_library(salmon_cli
+  USE_EIGEN
+  SOURCES ${SALMON_CLI_SRCS}
+)
+
+salmon_add_module_library(salmon_indexing
+  USE_EIGEN
+  SOURCES ${SALMON_INDEXING_SRCS}
+  LINK_LIBS salmon_util
+)
+
+salmon_add_module_library(salmon_options
+  SOURCES ${SALMON_OPTIONS_SRCS}
+)
+
+salmon_add_module_library(salmon_quant
+  USE_EIGEN
+  SOURCES ${SALMON_QUANT_SRCS}
+  LINK_LIBS salmon_io salmon_model salmon_util salmon_output salmon_inference salmon_options
+)
+
+salmon_add_module_library(salmon_core
+  SOURCES ${SALMON_SUPPORT_SRCS}
+  LINK_LIBS salmon_io salmon_model salmon_util
+)
+
 add_library(salmon_support ALIAS salmon_core)
-
-set(SALMON_MODULE_TARGETS
-  salmon_io
-  salmon_model
-  salmon_util
-  salmon_output
-  salmon_alignment
-  salmon_inference
-  salmon_cli
-  salmon_indexing
-  salmon_options
-  salmon_quant
-  salmon_core
-)
-
-foreach(salmon_module_target IN LISTS SALMON_MODULE_TARGETS)
-  salmon_configure_target(${salmon_module_target})
-endforeach()
-
-set(SALMON_EXTERNAL_HEADER_TARGETS
-  salmon_io
-  salmon_model
-  salmon_util
-  salmon_output
-  salmon_alignment
-  salmon_inference
-  salmon_cli
-  salmon_indexing
-  salmon_options
-  salmon_quant
-  salmon_core
-)
-
-set(SALMON_EIGEN_HEADER_TARGETS
-  salmon_io
-  salmon_model
-  salmon_util
-  salmon_output
-  salmon_alignment
-  salmon_inference
-  salmon_cli
-  salmon_indexing
-  salmon_quant
-)
-
-foreach(salmon_external_header_target IN LISTS SALMON_EXTERNAL_HEADER_TARGETS)
-  salmon_attach_external_headers(${salmon_external_header_target})
-endforeach()
-
-foreach(salmon_eigen_header_target IN LISTS SALMON_EIGEN_HEADER_TARGETS)
-  salmon_attach_eigen_headers(${salmon_eigen_header_target})
-endforeach()
-
-target_link_libraries(salmon_model
-  PRIVATE
-    salmon_util
-)
-
-target_link_libraries(salmon_io
-  PRIVATE
-    salmon_util
-)
-
-target_link_libraries(salmon_output
-  PRIVATE
-    salmon_util
-    salmon_model
-)
-
-target_link_libraries(salmon_inference
-  PRIVATE
-    salmon_model
-    salmon_util
-)
-
-target_link_libraries(salmon_alignment
-  PRIVATE
-    salmon_io
-    salmon_model
-    salmon_util
-    salmon_output
-    salmon_inference
-    salmon_options
-)
-
-target_link_libraries(salmon_indexing
-  PRIVATE
-    salmon_util
-)
-
-target_link_libraries(salmon_quant
-  PRIVATE
-    salmon_io
-    salmon_model
-    salmon_util
-    salmon_output
-    salmon_inference
-    salmon_options
-)
-
-# Keep salmon_core as the stable archive target while its internals are split
-# into module libraries.
-target_link_libraries(salmon_core
-  PRIVATE
-    salmon_io
-    salmon_model
-    salmon_util
-)
 
 # Build the salmon executable
 add_executable(salmon ${SALMON_ENTRY_SRCS})
@@ -365,6 +327,10 @@ if(SALMON_ENABLE_TESTS)
   salmon_configure_target(unitTests)
   salmon_attach_external_headers(unitTests)
   salmon_attach_eigen_headers(unitTests)
+  add_custom_command(TARGET unitTests POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:unitTests> ${GAT_SOURCE_DIR}/tests/$<TARGET_FILE_NAME:unitTests>
+      COMMENT "Copying unitTests"
+  )
 endif()
 
 #add_executable(salmon-read ${SALMON_READ_SRCS})
