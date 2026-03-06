@@ -26,7 +26,7 @@
 #include "salmon/internal/quant/ReadExperiment.hpp"
 #include "ReadPair.hpp"
 #include "SalmonMath.hpp"
-#include "Transcript.hpp"
+#include "salmon/internal/model/Transcript.hpp"
 #include "salmon/internal/model/TranscriptGroup.hpp"
 #include "UnpairedRead.hpp"
 #include "salmon/internal/inference/EMUtils.hpp"

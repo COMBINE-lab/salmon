@@ -4,7 +4,7 @@
 #include <boost/pending/disjoint_sets.hpp>
 
 #include "SalmonSpinLock.hpp"
-#include "Transcript.hpp"
+#include "salmon/internal/model/Transcript.hpp"
 #include "TranscriptCluster.hpp"
 
 #include <mutex>

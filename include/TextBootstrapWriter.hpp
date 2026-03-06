@@ -8,7 +8,7 @@
 
 #include "BootstrapWriter.hpp"
 #include "SalmonSpinLock.hpp"
-#include "Transcript.hpp"
+#include "salmon/internal/model/Transcript.hpp"
 #include "spdlog/spdlog.h"
 
 class TextBootstrapWriter : public BootstrapWriter {

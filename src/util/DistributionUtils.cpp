@@ -1,6 +1,6 @@
 #include "salmon/internal/util/DistributionUtils.hpp"
 #include "salmon/internal/model/FragmentLengthDistribution.hpp"
-#include "Transcript.hpp"
+#include "salmon/internal/model/Transcript.hpp"
 
 #include <random>
 

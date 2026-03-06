@@ -9,7 +9,7 @@
 #include "ReadPair.hpp"
 #include "SalmonMath.hpp"
 #include "salmon/internal/util/SalmonStringUtils.hpp"
-#include "Transcript.hpp"
+#include "salmon/internal/model/Transcript.hpp"
 #include "UnpairedRead.hpp"
 
 AlignmentModel::AlignmentModel(double alpha, uint32_t readBins)

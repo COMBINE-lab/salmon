@@ -28,7 +28,7 @@
 #include "TryableSpinLock.hpp"
 #include "UnpairedRead.hpp"
 #include "salmon/internal/model/TranscriptGroup.hpp"
-#include "Transcript.hpp"
+#include "salmon/internal/model/Transcript.hpp"
 
 #include "spdlog/fmt/fmt.h"
 #include "spdlog/fmt/ostr.h"

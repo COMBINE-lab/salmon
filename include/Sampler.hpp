@@ -44,7 +44,7 @@
 #include "SalmonMath.hpp"
 #include "SalmonOpts.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
-#include "Transcript.hpp"
+#include "salmon/internal/model/Transcript.hpp"
 #include "TranscriptCluster.hpp"
 
 namespace salmon {

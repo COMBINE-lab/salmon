@@ -4,7 +4,7 @@
 #include <iostream>
 #include "LibraryFormat.hpp"
 #include "SalmonUtils.hpp"
-#include "Transcript.hpp"
+#include "salmon/internal/model/Transcript.hpp"
 #include "salmon/internal/util/UtilityFunctions.hpp"
 
 
@@ -181,4 +181,3 @@ SCENARIO("Single-end library types have proper compatibility") {
         }
     }
 }
-

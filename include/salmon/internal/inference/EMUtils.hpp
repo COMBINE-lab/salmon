@@ -3,7 +3,7 @@
 
 #include <vector>
 #include <atomic>
-#include "Transcript.hpp"
+#include "salmon/internal/model/Transcript.hpp"
 
 template <typename VecT>
 void EMUpdate_(std::vector<std::vector<uint32_t>>& txpGroupLabels,

@@ -17,7 +17,7 @@
 // #include "SequenceBiasModel.hpp"
 #include "salmon/internal/model/SimplePosBias.hpp"
 #include "SpinLock.hpp" // RapMap's with try_lock
-#include "Transcript.hpp"
+#include "salmon/internal/model/Transcript.hpp"
 #include "salmon/internal/util/UtilityFunctions.hpp"
 
 // Logger includes

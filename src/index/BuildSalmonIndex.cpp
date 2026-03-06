@@ -33,7 +33,7 @@
 #include "GenomicFeature.hpp"
 #include "salmon/internal/index/SalmonIndex.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
-#include "Transcript.hpp"
+#include "salmon/internal/model/Transcript.hpp"
 #include "pufferfish/ProgOpts.hpp"
 #include "spdlog/fmt/fmt.h"
 #include "spdlog/fmt/ostr.h"

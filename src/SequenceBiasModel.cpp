@@ -5,7 +5,7 @@
 
 #include "salmon/internal/model/LibraryFormat.hpp"
 #include "salmon/internal/model/SequenceBiasModel.hpp"
-#include "Transcript.hpp"
+#include "salmon/internal/model/Transcript.hpp"
 #include "spdlog/fmt/fmt.h"
 #include "spdlog/fmt/ostr.h"
 

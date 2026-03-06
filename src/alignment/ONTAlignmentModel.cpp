@@ -11,7 +11,7 @@
 #include "salmon/internal/alignment/ONTAlignmentModel.hpp"
 #include "SalmonMath.hpp"
 #include "salmon/internal/util/SalmonStringUtils.hpp"
-#include "Transcript.hpp"
+#include "salmon/internal/model/Transcript.hpp"
 #include "UnpairedRead.hpp"
 
 ONTAlignmentModel::ONTAlignmentModel(double alpha, uint32_t readBins)

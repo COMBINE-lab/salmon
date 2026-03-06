@@ -145,6 +145,10 @@ target_compile_options(salmon_project_options INTERFACE
 add_library(salmon_repo_headers INTERFACE)
 target_include_directories(salmon_repo_headers INTERFACE
   ${GAT_SOURCE_DIR}/include
+)
+
+add_library(salmon_eigen_headers INTERFACE)
+target_include_directories(salmon_eigen_headers INTERFACE
   ${GAT_SOURCE_DIR}/include/eigen3
 )
 
@@ -194,8 +198,6 @@ function(salmon_configure_target target_name)
     PRIVATE
       salmon_project_options
       salmon_repo_headers
-      salmon_vendor_headers
-      salmon_system_headers
   )
   if (USE_ARM)
     target_compile_definitions(${target_name} PUBLIC KSW_USE_ARM=1)
@@ -203,6 +205,21 @@ function(salmon_configure_target target_name)
   if(HAS_IPO AND (NOT NO_IPO))
     set_property(TARGET ${target_name} PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
   endif()
+endfunction()
+
+function(salmon_attach_external_headers target_name)
+  target_link_libraries(${target_name}
+    PRIVATE
+      salmon_vendor_headers
+      salmon_system_headers
+  )
+endfunction()
+
+function(salmon_attach_eigen_headers target_name)
+  target_link_libraries(${target_name}
+    PRIVATE
+      salmon_eigen_headers
+  )
 endfunction()
 
 add_library(salmon_io STATIC ${SALMON_IO_SRCS})
@@ -234,6 +251,40 @@ set(SALMON_MODULE_TARGETS
 
 foreach(salmon_module_target IN LISTS SALMON_MODULE_TARGETS)
   salmon_configure_target(${salmon_module_target})
+endforeach()
+
+set(SALMON_EXTERNAL_HEADER_TARGETS
+  salmon_io
+  salmon_model
+  salmon_util
+  salmon_output
+  salmon_alignment
+  salmon_inference
+  salmon_cli
+  salmon_indexing
+  salmon_options
+  salmon_quant
+  salmon_core
+)
+
+set(SALMON_EIGEN_HEADER_TARGETS
+  salmon_io
+  salmon_model
+  salmon_util
+  salmon_output
+  salmon_alignment
+  salmon_inference
+  salmon_cli
+  salmon_indexing
+  salmon_quant
+)
+
+foreach(salmon_external_header_target IN LISTS SALMON_EXTERNAL_HEADER_TARGETS)
+  salmon_attach_external_headers(${salmon_external_header_target})
+endforeach()
+
+foreach(salmon_eigen_header_target IN LISTS SALMON_EIGEN_HEADER_TARGETS)
+  salmon_attach_eigen_headers(${salmon_eigen_header_target})
 endforeach()
 
 target_link_libraries(salmon_model
@@ -295,6 +346,8 @@ target_link_libraries(salmon_core
 # Build the salmon executable
 add_executable(salmon ${SALMON_ENTRY_SRCS})
 salmon_configure_target(salmon)
+salmon_attach_external_headers(salmon)
+salmon_attach_eigen_headers(salmon)
 target_link_libraries(salmon
   PRIVATE
     salmon_cli
@@ -310,6 +363,8 @@ if(SALMON_ENABLE_TESTS)
 
   add_executable(unitTests ${UNIT_TESTS_INDIVIDUAL_SRCS} ${GAT_SOURCE_DIR}/tests/catch.hpp)
   salmon_configure_target(unitTests)
+  salmon_attach_external_headers(unitTests)
+  salmon_attach_eigen_headers(unitTests)
 endif()
 
 #add_executable(salmon-read ${SALMON_READ_SRCS})

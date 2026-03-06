@@ -24,7 +24,7 @@
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/SimplePosBias.hpp"
 #include "SpinLock.hpp" // From pufferfish, with try_lock
-#include "Transcript.hpp"
+#include "salmon/internal/model/Transcript.hpp"
 #include "concurrentqueue.h"
 #include "parallel_hashmap/phmap.h"
 
