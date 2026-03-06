@@ -158,7 +158,6 @@ add_library(salmon_vendor_headers INTERFACE)
 target_include_directories(salmon_vendor_headers INTERFACE
   ${GAT_SOURCE_DIR}/external
   ${GAT_SOURCE_DIR}/external/cereal/include
-  ${GAT_SOURCE_DIR}/external/install/include
   ${SALMON_PUFFERFISH_SOURCE_DIR}/include
   ${COMPACT_VECTOR_INCLUDE_PATH}
 )
@@ -313,6 +312,13 @@ add_executable(salmon ${SALMON_ENTRY_SRCS})
 salmon_configure_target(salmon)
 salmon_attach_external_headers(salmon)
 salmon_attach_eigen_headers(salmon)
+if(FAST_MALLOC_OBJECT)
+  # Prefer mimalloc's static override object on the final executable link line.
+  target_link_options(salmon PRIVATE "${FAST_MALLOC_OBJECT}")
+  if(TARGET mimalloc-obj-target)
+    add_dependencies(salmon mimalloc-obj-target)
+  endif()
+endif()
 target_link_libraries(salmon
   PRIVATE
     salmon_cli
@@ -368,7 +374,6 @@ target_link_libraries(salmon_common_link_deps INTERFACE
     ${ASAN_LIB}
     ${FAST_MALLOC_LIB}
     TBB::tbb
-    TBB::tbbmalloc
     ${LIBRT}
     ${CMAKE_DL_LIBS}
 )
@@ -462,15 +467,11 @@ endif()
 #        add_custom_command(TARGET salmon
 #            POST_BUILD
 #            COMMAND install_name_tool -change libtbb.dylib @rpath/libtbb.dylib ${GAT_SOURCE_DIR}/build/src/salmon
-#            COMMAND install_name_tool -change libtbbmalloc.dylib @rpath/libtbbmalloc.dylib ${GAT_SOURCE_DIR}/build/src/salmon
-#            COMMAND install_name_tool -change libtbbmalloc_proxy.dylib @rpath/libtbbmalloc_proxy.dylib ${GAT_SOURCE_DIR}/build/src/salmon
 #            COMMAND install_name_tool -add_rpath  ${GAT_SOURCE_DIR}/external/install/lib ${GAT_SOURCE_DIR}/build/src/salmon
 #            )
 #        add_custom_command(TARGET unitTests
 #            POST_BUILD
 #            COMMAND install_name_tool -change libtbb.dylib @rpath/libtbb.dylib ${GAT_SOURCE_DIR}/build/src/unitTests
-#            COMMAND install_name_tool -change libtbbmalloc.dylib @rpath/libtbbmalloc.dylib ${GAT_SOURCE_DIR}/build/src/unitTests
-#            COMMAND install_name_tool -change libtbbmalloc_proxy.dylib @rpath/libtbbmalloc_proxy.dylib ${GAT_SOURCE_DIR}/build/src/unitTests
 #            COMMAND install_name_tool -add_rpath  ${GAT_SOURCE_DIR}/external/install/lib ${GAT_SOURCE_DIR}/build/src/unitTests
 #            )
 #    endif()
@@ -509,13 +510,9 @@ file(GLOB TBB_FILES ${TBB_LIB_INSTALL_DIR}/libtbb*.${SHARED_LIB_EXTENSION}*)
 message("TBBGLOBS = ${TBB_FILES}")
 
 install(FILES 
-  ${TBB_FILES}
+  ${TBB_LIB_INSTALL_NAME}
   DESTINATION ${INSTALL_LIB_DIR}
 ) 
-#install(FILES 
-#  $<TARGET_FILE:TBB::tbbmalloc>
-#  DESTINATION ${INSTALL_LIB_DIR}
-#)
 #install(DIRECTORY
 #       ${TBB_SOURCE_DIR}
 #       DESTINATION ${INSTALL_LIB_DIR}
