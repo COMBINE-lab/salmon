@@ -12,7 +12,7 @@
 #include "ReadExperiment.hpp"
 #include "ReadPair.hpp"
 #include "SalmonOpts.hpp"
-#include "SalmonUtils.hpp"
+#include "salmon/internal/util/SalmonUtils.hpp"
 #include "UnpairedRead.hpp"
 #include "salmon/internal/model/TranscriptGroup.hpp"
 #include "zstr.hpp"

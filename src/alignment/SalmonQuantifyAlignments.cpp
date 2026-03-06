@@ -28,7 +28,7 @@
 #include <boost/timer/timer.hpp>
 
 #include "AlignmentLibrary.hpp"
-#include "BAMQueue.hpp"
+#include "salmon/internal/alignment/BAMQueue.hpp"
 #include "salmon/internal/alignment/BAMUtils.hpp"
 #include "ClusterForest.hpp"
 #include "salmon/internal/io/FASTAParser.hpp"
@@ -53,7 +53,7 @@
 #include "ReadPair.hpp"
 #include "SalmonConfig.hpp"
 #include "SalmonOpts.hpp"
-#include "SalmonUtils.hpp"
+#include "salmon/internal/util/SalmonUtils.hpp"
 #include "Sampler.hpp"
 #include "TextBootstrapWriter.hpp"
 #include "TranscriptCluster.hpp"

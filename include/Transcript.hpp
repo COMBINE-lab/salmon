@@ -5,7 +5,7 @@
 #include "GCFragModel.hpp"
 #include "SalmonMath.hpp"
 #include "salmon/internal/util/SalmonStringUtils.hpp"
-#include "SalmonUtils.hpp"
+#include "salmon/internal/util/SalmonUtils.hpp"
 #include "SequenceBiasModel.hpp"
 #include "stx/string_view.hpp"
 #include "IOUtils.hpp"

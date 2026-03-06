@@ -1,7 +1,7 @@
 #ifndef __KMER_CONTEXT_HPP__
 #define __KMER_CONTEXT_HPP__
 
-#include "SalmonUtils.hpp"
+#include "salmon/internal/util/SalmonUtils.hpp"
 #include "UtilityFunctions.hpp"
 #include <iostream>
 #include <limits>

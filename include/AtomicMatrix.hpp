@@ -4,7 +4,7 @@
 #include "oneapi/tbb/concurrent_vector.h"
 
 #include "SalmonMath.hpp"
-#include "SalmonUtils.hpp"
+#include "salmon/internal/util/SalmonUtils.hpp"
 
 #include <vector>
 

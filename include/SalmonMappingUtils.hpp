@@ -44,7 +44,7 @@
 #include "SalmonDefaults.hpp"
 #include "SalmonMath.hpp"
 #include "SalmonOpts.hpp"
-#include "SalmonUtils.hpp"
+#include "salmon/internal/util/SalmonUtils.hpp"
 #include "Transcript.hpp"
 
 #include "parallel_hashmap/phmap.h"

@@ -1,7 +1,7 @@
 #ifndef READ_KMER_DIST_HPP
 #define READ_KMER_DIST_HPP
 
-#include "SalmonUtils.hpp"
+#include "salmon/internal/util/SalmonUtils.hpp"
 #include "UtilityFunctions.hpp"
 #include <algorithm>
 #include <cstdint>

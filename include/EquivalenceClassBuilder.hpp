@@ -11,7 +11,7 @@
 #include "spdlog/spdlog.h"
 #include "nonstd/optional.hpp"
 
-#include "SalmonUtils.hpp"
+#include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/TranscriptGroup.hpp"
 #include "concurrentqueue.h"
 #include "cuckoohash_map.hh"

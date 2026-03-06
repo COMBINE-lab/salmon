@@ -92,7 +92,7 @@
 #include "SalmonIndex.hpp"
 #include "SalmonMappingUtils.hpp"
 #include "SalmonMath.hpp"
-#include "SalmonUtils.hpp"
+#include "salmon/internal/util/SalmonUtils.hpp"
 #include "Transcript.hpp"
 
 #include "AlignmentGroup.hpp"

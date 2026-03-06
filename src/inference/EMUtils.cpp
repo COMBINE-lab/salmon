@@ -1,5 +1,5 @@
 #include "salmon/internal/inference/EMUtils.hpp"
-#include "SalmonUtils.hpp"
+#include "salmon/internal/util/SalmonUtils.hpp"
 
 /**
  * Single-threaded EM-update routine for use in bootstrapping

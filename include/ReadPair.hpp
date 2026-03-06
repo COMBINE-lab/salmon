@@ -5,7 +5,7 @@
 //#include "RapMapUtils.hpp"
 #include "pufferfish/Util.hpp"
 #include "SalmonMath.hpp"
-#include "SalmonUtils.hpp"
+#include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/io/StadenUtils.hpp"
 
 #include "spdlog/fmt/fmt.h"

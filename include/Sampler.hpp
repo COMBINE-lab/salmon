@@ -32,7 +32,7 @@
 
 #include "AlignmentLibrary.hpp"
 #include "salmon/internal/alignment/AlignmentModel.hpp"
-#include "BAMQueue.hpp"
+#include "salmon/internal/alignment/BAMQueue.hpp"
 #include "ClusterForest.hpp"
 #include "salmon/internal/io/FASTAParser.hpp"
 #include "salmon/internal/model/FragmentLengthDistribution.hpp"
@@ -43,7 +43,7 @@
 #include "SalmonConfig.hpp"
 #include "SalmonMath.hpp"
 #include "SalmonOpts.hpp"
-#include "SalmonUtils.hpp"
+#include "salmon/internal/util/SalmonUtils.hpp"
 #include "Transcript.hpp"
 #include "TranscriptCluster.hpp"
 

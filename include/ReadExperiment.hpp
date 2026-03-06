@@ -13,7 +13,7 @@
 #include "salmon/internal/model/SBModel.hpp"
 #include "SalmonIndex.hpp"
 #include "SalmonOpts.hpp"
-#include "SalmonUtils.hpp"
+#include "salmon/internal/util/SalmonUtils.hpp"
 // #include "SequenceBiasModel.hpp"
 #include "salmon/internal/model/SimplePosBias.hpp"
 #include "SpinLock.hpp" // RapMap's with try_lock

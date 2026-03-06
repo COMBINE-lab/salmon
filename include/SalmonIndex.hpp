@@ -15,7 +15,7 @@
 #include "pufferfish/PufferfishIndex.hpp"
 #include "pufferfish/PufferfishSparseIndex.hpp"
 
-#include "SalmonUtils.hpp"
+#include "salmon/internal/util/SalmonUtils.hpp"
 #include "SalmonConfig.hpp"
 #include "SalmonIndexVersionInfo.hpp"
 

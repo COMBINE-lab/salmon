@@ -24,7 +24,7 @@
 #include "ReadPair.hpp"
 #include "salmon/internal/model/SBModel.hpp"
 #include "SalmonMath.hpp"
-#include "SalmonUtils.hpp"
+#include "salmon/internal/util/SalmonUtils.hpp"
 #include "TryableSpinLock.hpp"
 #include "UnpairedRead.hpp"
 #include "salmon/internal/model/TranscriptGroup.hpp"

@@ -7,7 +7,7 @@
 #include "AlignmentGroup.hpp"
 #include "salmon/internal/alignment/AlignmentModel.hpp"
 #include "salmon/internal/alignment/ONTAlignmentModel.hpp"
-#include "BAMQueue.hpp"
+#include "salmon/internal/alignment/BAMQueue.hpp"
 #include "salmon/internal/alignment/BAMUtils.hpp"
 #include "ClusterForest.hpp"
 #include "salmon/internal/util/DistributionUtils.hpp"
@@ -21,7 +21,7 @@
 #include "ReadKmerDist.hpp"
 #include "salmon/internal/model/SBModel.hpp"
 #include "SalmonOpts.hpp"
-#include "SalmonUtils.hpp"
+#include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/SimplePosBias.hpp"
 #include "SpinLock.hpp" // From pufferfish, with try_lock
 #include "Transcript.hpp"
