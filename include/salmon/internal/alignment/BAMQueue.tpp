@@ -606,7 +606,6 @@ size_t BAMQueue<FragT>::numUniquelyMappedFragments(){
 template <typename FragT>
 template <typename FilterT>
 void BAMQueue<FragT>::fillQueue_(FilterT filt, bool onlyProcessAmbiguousAlignments) {
-    size_t n{0};
     size_t numFragAlloc{0};
     AlignmentGroup<FragT*>* alngroup;
     //alnGroupPool_.pop(alngroup);
@@ -696,7 +695,6 @@ void BAMQueue<FragT>::fillQueue_(FilterT filt, bool onlyProcessAmbiguousAlignmen
                         "on the heap to saturate the pool.  No new fragments will be allocated\n\n", numFragAlloc);
           notified = true;
        }
-       ++n;
     }
 
     // If we popped a fragment structure off the queue, but didn't add it 
@@ -837,5 +835,3 @@ void BAMQueue<FragT>::fillQueue_(FilterT filt, bool onlyProcessAmbiguousAlignmen
             ++propPaired;
         }
         */
-
-

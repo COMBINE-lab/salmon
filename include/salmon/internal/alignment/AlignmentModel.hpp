@@ -4,7 +4,7 @@
 #include <mutex>
 
 #include "salmon/internal/alignment/AlignmentCommon.hpp"
-#include "AtomicMatrix.hpp"
+#include "salmon/internal/util/AtomicMatrix.hpp"
 #include "oneapi/tbb/concurrent_vector.h"
 
 class AlignmentModel

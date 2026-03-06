@@ -126,7 +126,7 @@ void sampleRoundNonCollapsedMultithreaded_(
         BlockedIndexRange(
             size_t(0), size_t(activeList.size())), // 1024 is grainsize, use only
                                                   // with simple_partitioner
-        [&, beta](const BlockedIndexRange& range) -> void {
+        [&](const BlockedIndexRange& range) -> void {
           for (auto activeIdx : boost::irange(range.begin(), range.end())) {
             auto i = activeList[activeIdx];
             double ci = static_cast<double>(txpCount[i] + priorAlphas[i]);
@@ -214,12 +214,10 @@ void sampleRoundNonCollapsedMultithreaded_(
             // sample!
             if (BOOST_LIKELY(groupSize > 1)) {
               // For each transcript in the group
-              double muSum = 0.0;
               for (size_t i = 0; i < groupSize; ++i) {
                 auto tid = txps[i];
                 size_t gi = offset + i;
                 probMap[gi] = (1000.0 * muGlobal[tid]) * weights[i];
-                muSum += probMap[gi];
                 denom += probMap[gi];
               }
 
@@ -233,12 +231,10 @@ void sampleRoundNonCollapsedMultithreaded_(
                 }
 
                 denom = 0.0;
-                muSum = 0.0;
                 for (size_t i = 0; i < groupSize; ++i) {
                   auto tid = txps[i];
                   size_t gi = offset + i;
                   probMap[gi] = 1.0 / effLens(tid);
-                  muSum += probMap[gi];
                   denom += probMap[gi];
                 }
 
@@ -250,7 +246,6 @@ void sampleRoundNonCollapsedMultithreaded_(
                     probMap[gi] = 1.0;
                   }
                   denom = groupSize;
-                  muSum = groupSize;
                 }
               }
 
@@ -499,14 +494,11 @@ bool CollapsedGibbsSampler::sample(
         denom += mu[tn] * effLens[tn];
       }
       double scale = numMappedFragments / denom;
-      double asum = {0.0};
-
       // A read cutoff for a txp to be present, adopted from Bray et al. 2016
       double minAlpha = 1e-8;
       for (size_t tn = 0; tn < numTranscripts; ++tn) {
         alphas[tn] = (mu[tn] * effLens[tn]) * scale;
         alphas[tn] = (alphas[tn] > minAlpha) ? alphas[tn] : 0.0;
-        asum += alphas[tn];
       }
     }
     writeBootstrap(alphas);

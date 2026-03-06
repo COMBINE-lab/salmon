@@ -4,7 +4,7 @@
 #include "salmon/internal/io/AlignmentIO.hpp"
 
 // Our includes
-#include "AlignmentGroup.hpp"
+#include "salmon/internal/alignment/AlignmentGroup.hpp"
 #include "salmon/internal/alignment/AlignmentModel.hpp"
 #include "salmon/internal/alignment/ONTAlignmentModel.hpp"
 #include "salmon/internal/alignment/BAMQueue.hpp"
@@ -18,7 +18,7 @@
 #include "GCFragModel.hpp"
 #include "salmon/internal/model/LibraryFormat.hpp"
 #include "LibraryTypeDetector.hpp"
-#include "ReadKmerDist.hpp"
+#include "salmon/internal/model/ReadKmerDist.hpp"
 #include "salmon/internal/model/SBModel.hpp"
 #include "SalmonOpts.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"

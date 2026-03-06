@@ -95,12 +95,12 @@
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "Transcript.hpp"
 
-#include "AlignmentGroup.hpp"
+#include "salmon/internal/alignment/AlignmentGroup.hpp"
 #include "BiasParams.hpp"
 #include "salmon/internal/inference/CollapsedEMOptimizer.hpp"
 #include "salmon/internal/inference/CollapsedGibbsSampler.hpp"
 #include "EquivalenceClassBuilder.hpp"
-#include "ForgettingMassCalculator.hpp"
+#include "salmon/internal/quant/ForgettingMassCalculator.hpp"
 #include "salmon/internal/model/FragmentLengthDistribution.hpp"
 #include "salmon/internal/output/GZipWriter.hpp"
 
@@ -546,10 +546,8 @@ void processMiniBatch(
       }
 
       // EQCLASS
-      double auxProbSum{0.0};
       for (auto& p : auxProbs) {
         p = std::exp(p - auxDenom);
-        auxProbSum += p;
       }
 
       auto eqSize = txpIDs.size();
@@ -821,10 +819,8 @@ void processReads(
   uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
   size_t minK = qidx->k();
 
-  size_t locRead{0};
   // uint64_t localUpperBoundHits{0};
   size_t rangeSize{0};
-  uint64_t localNumAssignedFragments{0};
   bool consistentHits = salmonOpts.consistentHits;
   bool quiet = salmonOpts.quiet;
 
@@ -1503,8 +1499,6 @@ void processReads(
       }
 
       validHits += jointAlignments.size();
-      localNumAssignedFragments += (jointAlignments.size() > 0);
-      locRead++;
       ++numObservedFragments;
       if (!quiet and numObservedFragments % 500000 == 0) {
         iomutex.lock();
@@ -1654,7 +1648,6 @@ void processReads(
   uint64_t firstTimestepOfRound = fmCalc.getCurrentTimestep();
   size_t minK = qidx->k();
 
-  size_t locRead{0};
   // uint64_t localUpperBoundHits{0};
   size_t rangeSize{0};
 
@@ -1970,7 +1963,6 @@ void processReads(
       }
 
       validHits += jointAlignments.size();
-      locRead++;
       ++numObservedFragments;
       if (!quiet and numObservedFragments % 500000 == 0) {
         iomutex.lock();

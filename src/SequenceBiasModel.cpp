@@ -4,7 +4,7 @@
 #include <boost/config.hpp> // for BOOST_LIKELY/BOOST_UNLIKELY
 
 #include "salmon/internal/model/LibraryFormat.hpp"
-#include "SequenceBiasModel.hpp"
+#include "salmon/internal/model/SequenceBiasModel.hpp"
 #include "Transcript.hpp"
 #include "spdlog/fmt/fmt.h"
 #include "spdlog/fmt/ostr.h"

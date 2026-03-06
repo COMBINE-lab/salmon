@@ -263,17 +263,12 @@ elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
       list(APPEND TGT_COMPILE_FLAGS -stdlib=libc++)
       set(BOOST_TOOLSET "clang")
       set(BOOST_CONFIGURE_TOOLSET "--with-toolset=clang")
-      set(BCXX_FLAGS "-stdlib=libc++ -DBOOST_HAS_INT128 ${SCHAR_FLAG}")
+      set(BCXX_FLAGS "-stdlib=libc++ ${SCHAR_FLAG}")
       set(BOOST_EXTRA_FLAGS toolset=clang cxxflags=${BCXX_FLAGS} linkflags="-stdlib=libc++")
     # Otherwise, use libstdc++ (and make it static)
     else()
       list(APPEND TGT_COMPILE_FLAGS -static-libstdc++)
     endif()
-    # There's currently a bug with clang-3.4 & Boost 1.55 -- this hack fixes it
-    # but we should do something better (does this break things if CPU doesn't
-    # have 128-bit support)?
-    list(APPEND TGT_COMPILE_FLAGS -DBOOST_HAS_INT128)
-
     if(APPLE)
       set(NON_APPLECLANG_LIBS "")
     else()

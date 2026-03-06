@@ -186,7 +186,7 @@ void EMUpdate_(oneapi::tbb::task_arena& arena,
   arena.execute([&]{
   oneapi::tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(eqVec.size())),
-      [&eqVec, &priorAlphas, &alphaIn, &alphaOut](const BlockedIndexRange& range) -> void {
+      [&eqVec, &alphaIn, &alphaOut](const BlockedIndexRange& range) -> void {
         for (auto eqID : boost::irange(range.begin(), range.end())) {
           auto& kv = eqVec[eqID];
 
@@ -278,8 +278,7 @@ void VBEMUpdate_(oneapi::tbb::task_arena& arena,
   arena.execute([&]{
   oneapi::tbb::parallel_for(
       BlockedIndexRange(size_t(0), size_t(eqVec.size())),
-      [&eqVec, &alphaIn, &alphaOut,
-       &expTheta](const BlockedIndexRange& range) -> void {
+      [&eqVec, &alphaOut, &expTheta](const BlockedIndexRange& range) -> void {
         for (auto eqID : boost::irange(range.begin(), range.end())) {
           auto& kv = eqVec[eqID];
 
@@ -447,11 +446,9 @@ bool doBootstrap(
     // msamp(sampCounts.begin(), totalNumFrags, numClasses,
     // sampleWeights.begin());
 
-    double totalLen{0.0};
     for (size_t i = 0; i < transcripts.size(); ++i) {
       alphas[i] =
           transcripts[i].getActive() ? uniformTxpWeight * totalNumFrags : 0.0;
-      totalLen += effLens(i);
     }
 
     bool converged{false};
@@ -600,8 +597,6 @@ bool CollapsedEMOptimizer::gatherBootstraps(
   jointLog->info("Optimizing over {:n} equivalence classes", eqVec.size());
 
   double totalNumFrags{static_cast<double>(numMappedFrags)};
-  double totalLen{0.0};
-
   if (activeTranscriptIDs.size() == 0) {
     jointLog->error("It seems that no transcripts are expressed; something is "
                     "likely wrong!");
@@ -615,7 +610,6 @@ bool CollapsedEMOptimizer::gatherBootstraps(
     effLens(i) = (sopt.noEffectiveLengthCorrection)
                      ? transcripts[i].RefLength
                      : transcripts[i].EffectiveLength;
-    totalLen += effLens(i);
   }
 
   // If we use VBEM, we'll need the prior parameters
@@ -773,8 +767,6 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
 
   auto& fragStartDists = readExp.fragmentStartPositionDistributions();
   double totalNumFrags{static_cast<double>(readExp.numMappedFragments())};
-  double totalLen{0.0};
-
   // If effective length correction isn't turned off, then use effective
   // lengths rather than reference lengths.
   bool useEffectiveLengths = !sopt.noEffectiveLengthCorrection;
@@ -798,7 +790,6 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
     auto wi = (sopt.initUniform) ? 100.0 : (uniqueCount * 1e-3 * effLens(i));
     alphasPrime[i] = wi;
     ++numActive;
-    totalLen += effLens(i);
   }
 
   // If we use VBEM, we'll need the prior parameters

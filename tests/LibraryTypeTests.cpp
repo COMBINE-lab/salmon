@@ -5,7 +5,7 @@
 #include "LibraryFormat.hpp"
 #include "SalmonUtils.hpp"
 #include "Transcript.hpp"
-#include "UtilityFunctions.hpp"
+#include "salmon/internal/util/UtilityFunctions.hpp"
 
 
 SCENARIO("Library types are encoded/decoded properly") {
@@ -181,5 +181,4 @@ SCENARIO("Single-end library types have proper compatibility") {
         }
     }
 }
-
 

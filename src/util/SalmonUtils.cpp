@@ -18,7 +18,7 @@
 #include "salmon/internal/alignment/AlignmentLibrary.hpp"
 #include "salmon/internal/util/DistributionUtils.hpp"
 #include "GCFragModel.hpp"
-#include "KmerContext.hpp"
+#include "salmon/internal/util/KmerContext.hpp"
 #include "salmon/internal/model/LibraryFormat.hpp"
 #include "salmon/internal/quant/ReadExperiment.hpp"
 #include "ReadPair.hpp"
@@ -42,7 +42,7 @@
 
 #include "GenomicFeature.hpp"
 #include "salmon/internal/model/SGSmooth.hpp"
-#include "TranscriptGeneMap.hpp"
+#include "salmon/internal/util/TranscriptGeneMap.hpp"
 
 #include "salmon/internal/io/StadenUtils.hpp"
 #include "SalmonDefaults.hpp"
@@ -372,7 +372,6 @@ void writeAbundances(const SalmonOpts& sopt, ExpLib& alnLib,
       static_cast<double>(alnLib.upperBoundHits()) / numMappedFragments;
 
   auto clusters = alnLib.clusterForest().getClusters();
-  size_t clusterID = 0;
   for (auto cptr : clusters) {
 
     // double logClusterMass = cptr->logMass();
@@ -393,9 +392,7 @@ void writeAbundances(const SalmonOpts& sopt, ExpLib& alnLib,
       ++clusterSize;
     }
 
-    if (logClusterMass == LOG_0) {
-      // std::cerr << "Warning: cluster " << clusterID << " has 0 mass!\n";
-    }
+    if (logClusterMass == LOG_0) {}
 
     for (auto transcriptID : members) {
       Transcript& t = refs[transcriptID];
@@ -420,7 +417,6 @@ void writeAbundances(const SalmonOpts& sopt, ExpLib& alnLib,
     if (clusterSize > 1 and requiresProjection) {
       cptr->projectToPolytope(refs);
     }
-    ++clusterID;
   }
 
   auto& transcripts_ = refs;
@@ -469,7 +465,6 @@ void normalizeAlphas(const SalmonOpts& sopt, AlnLibT& alnLib) {
   const double logNumFragments =
       std::log(static_cast<double>(numMappedFragments));
   auto clusters = alnLib.clusterForest().getClusters();
-  size_t clusterID = 0;
   for (auto cptr : clusters) {
 
     // double logClusterMass = cptr->logMass();
@@ -490,9 +485,7 @@ void normalizeAlphas(const SalmonOpts& sopt, AlnLibT& alnLib) {
       ++clusterSize;
     }
 
-    if (logClusterMass == LOG_0) {
-      // std::cerr << "Warning: cluster " << clusterID << " has 0 mass!\n";
-    }
+    if (logClusterMass == LOG_0) {}
 
     for (auto transcriptID : members) {
       Transcript& t = refs[transcriptID];
@@ -515,7 +508,6 @@ void normalizeAlphas(const SalmonOpts& sopt, AlnLibT& alnLib) {
     if (clusterSize > 1 and requiresProjection) {
       cptr->projectToPolytope(refs);
     }
-    ++clusterID;
   }
 
   auto& transcripts_ = refs;
@@ -3204,7 +3196,7 @@ void aggregateEstimatesToGeneLevel(TranscriptGeneMap& tgm,
                          "returning transcript as it's own gene",
                          er.target);
           }
-          geneExps[gn].push_back(move(er));
+          geneExps[gn].push_back(std::move(er));
         } else { // treat the header line as a comment
           comments.push_back(l);
           headerLine = false;

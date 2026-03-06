@@ -38,7 +38,7 @@
 // Future C++ convenience classes
 #include "core/range.hpp"
 
-#include "AlignmentGroup.hpp"
+#include "salmon/internal/alignment/AlignmentGroup.hpp"
 #include "salmon/internal/cli/ProgramOptionsGenerator.hpp"
 #include "salmon/internal/quant/ReadExperiment.hpp"
 #include "SalmonDefaults.hpp"
@@ -301,7 +301,7 @@ inline void filterAndCollectAlignments(
   // the bestScore
   perm.erase(std::remove_if(
                  perm.begin(), perm.end(),
-                 [&scores, hardFilter, &msi, decoyThreshold, invalidScore](
+                 [&scores, hardFilter, &msi, decoyThreshold](
                      const std::pair<int32_t, int32_t>& idxtid) -> bool {
                    return !hardFilter ? scores[idxtid.first] < decoyThreshold
                                       : scores[idxtid.first] < msi.bestScore;

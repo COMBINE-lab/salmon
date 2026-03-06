@@ -6,7 +6,7 @@
 #include "SalmonMath.hpp"
 #include "salmon/internal/util/SalmonStringUtils.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
-#include "SequenceBiasModel.hpp"
+#include "salmon/internal/model/SequenceBiasModel.hpp"
 #include "stx/string_view.hpp"
 #include "IOUtils.hpp"
 #include <atomic>

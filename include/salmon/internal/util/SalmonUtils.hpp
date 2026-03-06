@@ -29,7 +29,7 @@
 #include "pufferfish/Util.hpp"
 #include "ReadLibrary.hpp"
 #include "SalmonConfig.hpp"
-#include "TranscriptGeneMap.hpp"
+#include "salmon/internal/util/TranscriptGeneMap.hpp"
 
 template <typename EqBuilderT> class ReadExperiment;
 class LibraryFormat;

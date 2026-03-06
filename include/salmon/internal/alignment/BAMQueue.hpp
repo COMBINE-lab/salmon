@@ -13,7 +13,7 @@
 #include <thread>
 #include <vector>
 
-#include "AlignmentGroup.hpp"
+#include "salmon/internal/alignment/AlignmentGroup.hpp"
 #include "salmon/internal/model/LibraryFormat.hpp"
 #include "ReadPair.hpp"
 #include "SalmonMath.hpp"

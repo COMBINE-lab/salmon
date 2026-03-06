@@ -74,7 +74,9 @@ float_mat::float_mat(const size_t rows, const size_t cols, const double defval)
   if ((rows < 1) || (cols < 1)) {
     char buffer[1024];
 
-    sprintf(buffer, "cannot build matrix with %d rows and %d columns\n", sizedRows, sizedCols);
+    std::snprintf(buffer, sizeof(buffer),
+                  "cannot build matrix with %d rows and %d columns\n",
+                  sizedRows, sizedCols);
     // sgs_error(buffer);
   }
 }

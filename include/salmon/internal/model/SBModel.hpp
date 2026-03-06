@@ -3,7 +3,7 @@
 
 #include <boost/iostreams/filtering_stream.hpp>
 
-#include "UtilityFunctions.hpp"
+#include "salmon/internal/util/UtilityFunctions.hpp"
 //#include "jellyfish/mer_dna.hpp"
 //#include "rapmap/Kmer.hpp"
 #include "pufferfish/Kmer.hpp"

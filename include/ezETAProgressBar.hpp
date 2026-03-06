@@ -127,7 +127,7 @@ public:
 
     endTime = system_clock::now();
     char pctstr[5];
-    sprintf(pctstr, "%3d%%", (int)(100 * Pct));
+    std::snprintf(pctstr, sizeof(pctstr), "%3d%%", (int)(100 * Pct));
 
     // Compute how many tics we can display.
     int nticsMax = (width - 27);

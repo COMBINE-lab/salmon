@@ -3,7 +3,7 @@
 
 #include "salmon/internal/util/DistributionUtils.hpp"
 #include "GCFragModel.hpp"
-#include "ReadKmerDist.hpp"
+#include "salmon/internal/model/ReadKmerDist.hpp"
 #include "salmon/internal/model/SBModel.hpp"
 #include "SalmonMath.hpp"
 #include "salmon/internal/model/SimplePosBias.hpp"

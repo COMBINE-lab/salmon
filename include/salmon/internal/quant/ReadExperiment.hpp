@@ -8,7 +8,7 @@
 #include "salmon/internal/model/FragmentLengthDistribution.hpp"
 #include "salmon/internal/model/FragmentStartPositionDistribution.hpp"
 #include "GCFragModel.hpp"
-#include "ReadKmerDist.hpp"
+#include "salmon/internal/model/ReadKmerDist.hpp"
 #include "ReadLibrary.hpp"
 #include "salmon/internal/model/SBModel.hpp"
 #include "salmon/internal/index/SalmonIndex.hpp"
@@ -18,7 +18,7 @@
 #include "salmon/internal/model/SimplePosBias.hpp"
 #include "SpinLock.hpp" // RapMap's with try_lock
 #include "Transcript.hpp"
-#include "UtilityFunctions.hpp"
+#include "salmon/internal/util/UtilityFunctions.hpp"
 
 // Logger includes
 #include "spdlog/spdlog.h"

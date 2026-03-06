@@ -37,7 +37,7 @@
 #include "salmon/internal/io/FASTAParser.hpp"
 #include "salmon/internal/model/FragmentLengthDistribution.hpp"
 #include "salmon/internal/model/LibraryFormat.hpp"
-#include "MiniBatchInfo.hpp"
+#include "salmon/internal/alignment/MiniBatchInfo.hpp"
 #include "OutputUnmappedFilter.hpp"
 #include "ReadPair.hpp"
 #include "SalmonConfig.hpp"

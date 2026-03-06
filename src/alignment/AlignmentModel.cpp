@@ -17,10 +17,10 @@ AlignmentModel::AlignmentModel(double alpha, uint32_t readBins)
       isEnabled_(true), readBins_(readBins) {
 
   for (size_t i = 0; i < readBins; ++i) {
-    transitionProbsLeft_[i] = std::move(AtomicMatrix<double>(
-        numAlignmentStates(), numAlignmentStates(), alpha));
-    transitionProbsRight_[i] = std::move(AtomicMatrix<double>(
-        numAlignmentStates(), numAlignmentStates(), alpha));
+    transitionProbsLeft_[i] =
+        AtomicMatrix<double>(numAlignmentStates(), numAlignmentStates(), alpha);
+    transitionProbsRight_[i] =
+        AtomicMatrix<double>(numAlignmentStates(), numAlignmentStates(), alpha);
   }
 }
 
