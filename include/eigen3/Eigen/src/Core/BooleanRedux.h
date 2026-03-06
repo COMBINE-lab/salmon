@@ -14,58 +14,58 @@ namespace Eigen {
 
 namespace internal {
 
-template<typename Derived, int UnrollCount>
+template<typename Derived, int UnrollCount, int InnerSize>
 struct all_unroller
 {
-  typedef typename Derived::ExpressionTraits Traits;
   enum {
-    col = (UnrollCount-1) / Traits::RowsAtCompileTime,
-    row = (UnrollCount-1) % Traits::RowsAtCompileTime
+    IsRowMajor = (int(Derived::Flags) & int(RowMajor)),
+    i = (UnrollCount-1) / InnerSize,
+    j = (UnrollCount-1) % InnerSize
   };
 
-  static inline bool run(const Derived &mat)
+  EIGEN_DEVICE_FUNC static inline bool run(const Derived &mat)
   {
-    return all_unroller<Derived, UnrollCount-1>::run(mat) && mat.coeff(row, col);
+    return all_unroller<Derived, UnrollCount-1, InnerSize>::run(mat) && mat.coeff(IsRowMajor ? i : j, IsRowMajor ? j : i);
   }
 };
 
-template<typename Derived>
-struct all_unroller<Derived, 0>
+template<typename Derived, int InnerSize>
+struct all_unroller<Derived, 0, InnerSize>
 {
-  static inline bool run(const Derived &/*mat*/) { return true; }
+  EIGEN_DEVICE_FUNC static inline bool run(const Derived &/*mat*/) { return true; }
 };
 
-template<typename Derived>
-struct all_unroller<Derived, Dynamic>
+template<typename Derived, int InnerSize>
+struct all_unroller<Derived, Dynamic, InnerSize>
 {
-  static inline bool run(const Derived &) { return false; }
+  EIGEN_DEVICE_FUNC static inline bool run(const Derived &) { return false; }
 };
 
-template<typename Derived, int UnrollCount>
+template<typename Derived, int UnrollCount, int InnerSize>
 struct any_unroller
 {
-  typedef typename Derived::ExpressionTraits Traits;
   enum {
-    col = (UnrollCount-1) / Traits::RowsAtCompileTime,
-    row = (UnrollCount-1) % Traits::RowsAtCompileTime
+    IsRowMajor = (int(Derived::Flags) & int(RowMajor)),
+    i = (UnrollCount-1) / InnerSize,
+    j = (UnrollCount-1) % InnerSize
   };
-  
-  static inline bool run(const Derived &mat)
+
+  EIGEN_DEVICE_FUNC static inline bool run(const Derived &mat)
   {
-    return any_unroller<Derived, UnrollCount-1>::run(mat) || mat.coeff(row, col);
+    return any_unroller<Derived, UnrollCount-1, InnerSize>::run(mat) || mat.coeff(IsRowMajor ? i : j, IsRowMajor ? j : i);
   }
 };
 
-template<typename Derived>
-struct any_unroller<Derived, 0>
+template<typename Derived, int InnerSize>
+struct any_unroller<Derived, 0, InnerSize>
 {
-  static inline bool run(const Derived & /*mat*/) { return false; }
+  EIGEN_DEVICE_FUNC static inline bool run(const Derived & /*mat*/) { return false; }
 };
 
-template<typename Derived>
-struct any_unroller<Derived, Dynamic>
+template<typename Derived, int InnerSize>
+struct any_unroller<Derived, Dynamic, InnerSize>
 {
-  static inline bool run(const Derived &) { return false; }
+  EIGEN_DEVICE_FUNC static inline bool run(const Derived &) { return false; }
 };
 
 } // end namespace internal
@@ -78,21 +78,21 @@ struct any_unroller<Derived, Dynamic>
   * \sa any(), Cwise::operator<()
   */
 template<typename Derived>
-inline bool DenseBase<Derived>::all() const
+EIGEN_DEVICE_FUNC inline bool DenseBase<Derived>::all() const
 {
   typedef internal::evaluator<Derived> Evaluator;
   enum {
     unroll = SizeAtCompileTime != Dynamic
-          && SizeAtCompileTime * (Evaluator::CoeffReadCost + NumTraits<Scalar>::AddCost) <= EIGEN_UNROLLING_LIMIT
+          && SizeAtCompileTime * (int(Evaluator::CoeffReadCost) + int(NumTraits<Scalar>::AddCost)) <= EIGEN_UNROLLING_LIMIT
   };
   Evaluator evaluator(derived());
   if(unroll)
-    return internal::all_unroller<Evaluator, unroll ? int(SizeAtCompileTime) : Dynamic>::run(evaluator);
+    return internal::all_unroller<Evaluator, unroll ? int(SizeAtCompileTime) : Dynamic, InnerSizeAtCompileTime>::run(evaluator);
   else
   {
-    for(Index j = 0; j < cols(); ++j)
-      for(Index i = 0; i < rows(); ++i)
-        if (!evaluator.coeff(i, j)) return false;
+    for(Index i = 0; i < derived().outerSize(); ++i)
+      for(Index j = 0; j < derived().innerSize(); ++j)
+        if (!evaluator.coeff(IsRowMajor ? i : j, IsRowMajor ? j : i)) return false;
     return true;
   }
 }
@@ -102,21 +102,21 @@ inline bool DenseBase<Derived>::all() const
   * \sa all()
   */
 template<typename Derived>
-inline bool DenseBase<Derived>::any() const
+EIGEN_DEVICE_FUNC inline bool DenseBase<Derived>::any() const
 {
   typedef internal::evaluator<Derived> Evaluator;
   enum {
     unroll = SizeAtCompileTime != Dynamic
-          && SizeAtCompileTime * (Evaluator::CoeffReadCost + NumTraits<Scalar>::AddCost) <= EIGEN_UNROLLING_LIMIT
+          && SizeAtCompileTime * (int(Evaluator::CoeffReadCost) + int(NumTraits<Scalar>::AddCost)) <= EIGEN_UNROLLING_LIMIT
   };
   Evaluator evaluator(derived());
   if(unroll)
-    return internal::any_unroller<Evaluator, unroll ? int(SizeAtCompileTime) : Dynamic>::run(evaluator);
+    return internal::any_unroller<Evaluator, unroll ? int(SizeAtCompileTime) : Dynamic, InnerSizeAtCompileTime>::run(evaluator);
   else
   {
-    for(Index j = 0; j < cols(); ++j)
-      for(Index i = 0; i < rows(); ++i)
-        if (evaluator.coeff(i, j)) return true;
+    for(Index i = 0; i < derived().outerSize(); ++i)
+      for(Index j = 0; j < derived().innerSize(); ++j)
+        if (evaluator.coeff(IsRowMajor ? i : j, IsRowMajor ? j : i)) return true;
     return false;
   }
 }
@@ -126,7 +126,7 @@ inline bool DenseBase<Derived>::any() const
   * \sa all(), any()
   */
 template<typename Derived>
-inline Eigen::Index DenseBase<Derived>::count() const
+EIGEN_DEVICE_FUNC inline Eigen::Index DenseBase<Derived>::count() const
 {
   return derived().template cast<bool>().template cast<Index>().sum();
 }
@@ -158,7 +158,7 @@ inline bool DenseBase<Derived>::allFinite() const
   return !((derived()-derived()).hasNaN());
 #endif
 }
-    
+
 } // end namespace Eigen
 
 #endif // EIGEN_ALLANDANY_H

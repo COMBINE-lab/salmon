@@ -87,7 +87,7 @@ struct umeyama_transform_matrix_type
 * \f{align*}
 *   T = \begin{bmatrix} c\mathbf{R} & \mathbf{t} \\ \mathbf{0} & 1 \end{bmatrix}
 * \f}
-* minimizing the resudiual above. This transformation is always returned as an 
+* minimizing the residual above. This transformation is always returned as an 
 * Eigen::Matrix.
 */
 template <typename Derived, typename OtherDerived>
@@ -136,8 +136,10 @@ umeyama(const MatrixBase<Derived>& src, const MatrixBase<OtherDerived>& dst, boo
   // Eq. (39)
   VectorType S = VectorType::Ones(m);
 
-  if  ( svd.matrixU().determinant() * svd.matrixV().determinant() < 0 )
-    S(m-1) = -1;
+  if  ( svd.matrixU().determinant() * svd.matrixV().determinant() < 0 ) {
+    Index tmp = m - 1;  
+    S(tmp) = -1;
+  }
 
   // Eq. (40) and (43)
   Rt.block(0,0,m,m).noalias() = svd.matrixU() * S.asDiagonal() * svd.matrixV().transpose();

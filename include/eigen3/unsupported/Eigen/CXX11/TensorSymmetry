@@ -10,13 +10,13 @@
 #ifndef EIGEN_CXX11_TENSORSYMMETRY_MODULE
 #define EIGEN_CXX11_TENSORSYMMETRY_MODULE
 
-#include <unsupported/Eigen/CXX11/Tensor>
+#include "Tensor"
 
-#include <Eigen/src/Core/util/DisableStupidWarnings.h>
+#include "../../../Eigen/src/Core/util/DisableStupidWarnings.h"
 
 #include "src/util/CXX11Meta.h"
 
-/** \defgroup CXX11_TensorSymmetry_Module Tensor Symmetry Module
+/** \defgroup TensorSymmetry_Module Tensor Symmetry Module
   *
   * This module provides a classes that allow for the definition of
   * symmetries w.r.t. tensor indices.
@@ -33,7 +33,7 @@
 #include "src/TensorSymmetry/StaticSymmetry.h"
 #include "src/TensorSymmetry/DynamicSymmetry.h"
 
-#include <Eigen/src/Core/util/ReenableStupidWarnings.h>
+#include "../../../Eigen/src/Core/util/ReenableStupidWarnings.h"
 
 #endif // EIGEN_CXX11_TENSORSYMMETRY_MODULE
 

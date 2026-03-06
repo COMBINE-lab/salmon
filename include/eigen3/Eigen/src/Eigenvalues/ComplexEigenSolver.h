@@ -214,7 +214,7 @@ template<typename _MatrixType> class ComplexEigenSolver
 
     /** \brief Reports whether previous computation was successful.
       *
-      * \returns \c Success if computation was succesful, \c NoConvergence otherwise.
+      * \returns \c Success if computation was successful, \c NoConvergence otherwise.
       */
     ComputationInfo info() const
     {
@@ -316,9 +316,8 @@ void ComplexEigenSolver<MatrixType>::doComputeEigenvectors(RealScalar matrixnorm
   // Compute V as V = U X; now A = U T U^* = U X D X^(-1) U^* = V D V^(-1)
   m_eivec.noalias() = m_schur.matrixU() * m_matX;
   // .. and normalize the eigenvectors
-  for(Index k=0 ; k<n ; k++)
-  {
-    m_eivec.col(k).normalize();
+  for (Index k = 0; k < n; k++) {
+    m_eivec.col(k).stableNormalize();
   }
 }
 

@@ -12,21 +12,6 @@
 
 namespace Eigen {
 
-/** \class TensorExpr
-  * \ingroup CXX11_Tensor_Module
-  *
-  * \brief Tensor expression classes.
-  *
-  * The TensorCwiseNullaryOp class applies a nullary operators to an expression.
-  * This is typically used to generate constants.
-  *
-  * The TensorCwiseUnaryOp class represents an expression where a unary operator
-  * (e.g. cwiseSqrt) is applied to an expression.
-  *
-  * The TensorCwiseBinaryOp class represents an expression where a binary
-  * operator (e.g. addition) is applied to a lhs and a rhs expression.
-  *
-  */
 namespace internal {
 template<typename NullaryOp, typename XprType>
 struct traits<TensorCwiseNullaryOp<NullaryOp, XprType> >
@@ -38,7 +23,7 @@ struct traits<TensorCwiseNullaryOp<NullaryOp, XprType> >
   typedef typename remove_reference<XprTypeNested>::type _XprTypeNested;
   static const int NumDimensions = XprTraits::NumDimensions;
   static const int Layout = XprTraits::Layout;
-
+  typedef typename XprTraits::PointerType PointerType;
   enum {
     Flags = 0
   };
@@ -46,11 +31,16 @@ struct traits<TensorCwiseNullaryOp<NullaryOp, XprType> >
 
 }  // end namespace internal
 
-
-
-template<typename NullaryOp, typename XprType>
-class TensorCwiseNullaryOp : public TensorBase<TensorCwiseNullaryOp<NullaryOp, XprType>, ReadOnlyAccessors>
-{
+/**
+ * \ingroup CXX11_Tensor_Module
+ *
+ * \brief Tensor nullary expression.
+ *
+ * The TensorCwiseNullaryOp class applies a nullary operators to an expression.
+ * This is typically used to generate constants.
+ */
+template <typename NullaryOp, typename XprType>
+class TensorCwiseNullaryOp : public TensorBase<TensorCwiseNullaryOp<NullaryOp, XprType>, ReadOnlyAccessors> {
   public:
     typedef typename Eigen::internal::traits<TensorCwiseNullaryOp>::Scalar Scalar;
     typedef typename Eigen::NumTraits<Scalar>::Real RealScalar;
@@ -89,6 +79,10 @@ struct traits<TensorCwiseUnaryOp<UnaryOp, XprType> >
   typedef typename remove_reference<XprTypeNested>::type _XprTypeNested;
   static const int NumDimensions = XprTraits::NumDimensions;
   static const int Layout = XprTraits::Layout;
+  typedef typename TypeConversion<Scalar, 
+                                  typename XprTraits::PointerType
+                                  >::type 
+                                  PointerType;
 };
 
 template<typename UnaryOp, typename XprType>
@@ -105,11 +99,16 @@ struct nested<TensorCwiseUnaryOp<UnaryOp, XprType>, 1, typename eval<TensorCwise
 
 }  // end namespace internal
 
-
-
-template<typename UnaryOp, typename XprType>
-class TensorCwiseUnaryOp : public TensorBase<TensorCwiseUnaryOp<UnaryOp, XprType>, ReadOnlyAccessors>
-{
+/**
+ * \ingroup CXX11_Tensor_Module
+ *
+ * \brief Tensor unary expression.
+ *
+ * The TensorCwiseUnaryOp class represents an expression where a unary operator
+ * (e.g. cwiseSqrt) is applied to an expression.
+ */
+template <typename UnaryOp, typename XprType>
+class TensorCwiseUnaryOp : public TensorBase<TensorCwiseUnaryOp<UnaryOp, XprType>, ReadOnlyAccessors> {
   public:
     // TODO(phli): Add InputScalar, InputPacket.  Check references to
     // current Scalar/Packet to see if the intent is Input or Output.
@@ -161,7 +160,12 @@ struct traits<TensorCwiseBinaryOp<BinaryOp, LhsXprType, RhsXprType> >
   typedef typename remove_reference<RhsNested>::type _RhsNested;
   static const int NumDimensions = XprTraits::NumDimensions;
   static const int Layout = XprTraits::Layout;
-
+  typedef typename TypeConversion<Scalar,
+                                  typename conditional<Pointer_type_promotion<typename LhsXprType::Scalar, Scalar>::val,
+                                                      typename traits<LhsXprType>::PointerType,
+                                                      typename traits<RhsXprType>::PointerType>::type
+                                  >::type 
+                                  PointerType;
   enum {
     Flags = 0
   };
@@ -181,12 +185,18 @@ struct nested<TensorCwiseBinaryOp<BinaryOp, LhsXprType, RhsXprType>, 1, typename
 
 }  // end namespace internal
 
-
-
-template<typename BinaryOp, typename LhsXprType, typename RhsXprType>
-class TensorCwiseBinaryOp : public TensorBase<TensorCwiseBinaryOp<BinaryOp, LhsXprType, RhsXprType>, ReadOnlyAccessors>
-{
-  public:
+/**
+ * \ingroup CXX11_Tensor_Module
+ *
+ * \brief Tensor binary expression.
+ *
+ * The TensorCwiseBinaryOp class represents an expression where a binary
+ * operator (e.g. addition) is applied to a lhs and a rhs expression.
+ */
+template <typename BinaryOp, typename LhsXprType, typename RhsXprType>
+class TensorCwiseBinaryOp
+    : public TensorBase<TensorCwiseBinaryOp<BinaryOp, LhsXprType, RhsXprType>, ReadOnlyAccessors> {
+ public:
     // TODO(phli): Add Lhs/RhsScalar, Lhs/RhsPacket.  Check references to
     // current Scalar/Packet to see if the intent is Inputs or Output.
     typedef typename Eigen::internal::traits<TensorCwiseBinaryOp>::Scalar Scalar;
@@ -238,7 +248,12 @@ struct traits<TensorCwiseTernaryOp<TernaryOp, Arg1XprType, Arg2XprType, Arg3XprT
   typedef typename remove_reference<Arg3Nested>::type _Arg3Nested;
   static const int NumDimensions = XprTraits::NumDimensions;
   static const int Layout = XprTraits::Layout;
-
+  typedef typename TypeConversion<Scalar,
+                                  typename conditional<Pointer_type_promotion<typename Arg2XprType::Scalar, Scalar>::val,
+                                                      typename traits<Arg2XprType>::PointerType,
+                                                      typename traits<Arg3XprType>::PointerType>::type
+                                  >::type 
+                                  PointerType;
   enum {
     Flags = 0
   };
@@ -314,6 +329,9 @@ struct traits<TensorSelectOp<IfXprType, ThenXprType, ElseXprType> >
   typedef typename ElseXprType::Nested ElseNested;
   static const int NumDimensions = XprTraits::NumDimensions;
   static const int Layout = XprTraits::Layout;
+  typedef typename conditional<Pointer_type_promotion<typename ThenXprType::Scalar, Scalar>::val,
+                               typename traits<ThenXprType>::PointerType,
+                               typename traits<ElseXprType>::PointerType>::type PointerType;
 };
 
 template<typename IfXprType, typename ThenXprType, typename ElseXprType>

@@ -281,7 +281,7 @@ class SparseVector
     }
 
     /** Swaps the values of \c *this and \a other.
-      * Overloaded for performance: this version performs a \em shallow swap by swaping pointers and attributes only.
+      * Overloaded for performance: this version performs a \em shallow swap by swapping pointers and attributes only.
       * \sa SparseMatrixBase::swap()
       */
     inline void swap(SparseVector& other)
@@ -329,6 +329,7 @@ class SparseVector
     }
     #endif
 
+#ifndef EIGEN_NO_IO
     friend std::ostream & operator << (std::ostream & s, const SparseVector& m)
     {
       for (Index i=0; i<m.nonZeros(); ++i)
@@ -336,6 +337,7 @@ class SparseVector
       s << std::endl;
       return s;
     }
+#endif
 
     /** Destructor */
     inline ~SparseVector() {}

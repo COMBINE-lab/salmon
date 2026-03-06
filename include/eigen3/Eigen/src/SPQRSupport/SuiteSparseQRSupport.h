@@ -74,13 +74,35 @@ class SPQR : public SparseSolverBase<SPQR<_MatrixType> >
     };
   public:
     SPQR() 
-      : m_ordering(SPQR_ORDERING_DEFAULT), m_allow_tol(SPQR_DEFAULT_TOL), m_tolerance (NumTraits<Scalar>::epsilon()), m_useDefaultThreshold(true)
+      : m_analysisIsOk(false),
+        m_factorizationIsOk(false),
+        m_isRUpToDate(false),
+        m_ordering(SPQR_ORDERING_DEFAULT),
+        m_allow_tol(SPQR_DEFAULT_TOL),
+        m_tolerance (NumTraits<Scalar>::epsilon()),
+        m_cR(0),
+        m_E(0),
+        m_H(0),
+        m_HPinv(0),
+        m_HTau(0),
+        m_useDefaultThreshold(true)
     { 
       cholmod_l_start(&m_cc);
     }
     
     explicit SPQR(const _MatrixType& matrix)
-    : m_ordering(SPQR_ORDERING_DEFAULT), m_allow_tol(SPQR_DEFAULT_TOL), m_tolerance (NumTraits<Scalar>::epsilon()), m_useDefaultThreshold(true)
+      : m_analysisIsOk(false),
+        m_factorizationIsOk(false),
+        m_isRUpToDate(false),
+        m_ordering(SPQR_ORDERING_DEFAULT),
+        m_allow_tol(SPQR_DEFAULT_TOL),
+        m_tolerance (NumTraits<Scalar>::epsilon()),
+        m_cR(0),
+        m_E(0),
+        m_H(0),
+        m_HPinv(0),
+        m_HTau(0),
+        m_useDefaultThreshold(true)
     {
       cholmod_l_start(&m_cc);
       compute(matrix);
@@ -220,7 +242,7 @@ class SPQR : public SparseSolverBase<SPQR<_MatrixType> >
     
     /** \brief Reports whether previous computation was successful.
       *
-      * \returns \c Success if computation was succesful,
+      * \returns \c Success if computation was successful,
       *          \c NumericalIssue if the sparse QR can not be computed
       */
     ComputationInfo info() const
@@ -236,12 +258,12 @@ class SPQR : public SparseSolverBase<SPQR<_MatrixType> >
     int m_ordering; // Ordering method to use, see SPQR's manual
     int m_allow_tol; // Allow to use some tolerance during numerical factorization.
     RealScalar m_tolerance; // treat columns with 2-norm below this tolerance as zero
-    mutable cholmod_sparse *m_cR; // The sparse R factor in cholmod format
+    mutable cholmod_sparse *m_cR = nullptr; // The sparse R factor in cholmod format
     mutable MatrixType m_R; // The sparse matrix R in Eigen format
-    mutable StorageIndex *m_E; // The permutation applied to columns
-    mutable cholmod_sparse *m_H;  //The householder vectors
-    mutable StorageIndex *m_HPinv; // The row permutation of H
-    mutable cholmod_dense *m_HTau; // The Householder coefficients
+    mutable StorageIndex *m_E = nullptr; // The permutation applied to columns
+    mutable cholmod_sparse *m_H = nullptr;  //The householder vectors
+    mutable StorageIndex *m_HPinv = nullptr; // The row permutation of H
+    mutable cholmod_dense *m_HTau = nullptr; // The Householder coefficients
     mutable Index m_rank; // The rank of the matrix
     mutable cholmod_common m_cc; // Workspace and parameters
     bool m_useDefaultThreshold;     // Use default threshold

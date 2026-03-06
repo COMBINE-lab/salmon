@@ -12,20 +12,18 @@
 
 namespace Eigen {
 
-/** \class TensorFixedSize
-  * \ingroup CXX11_Tensor_Module
-  *
-  * \brief The fixed sized version of the tensor class.
-  *
-  * The fixed sized equivalent of
-  * Eigen::Tensor<float, 3> t(3, 5, 7);
-  * is
-  * Eigen::TensorFixedSize<float, Size<3,5,7>> t;
-  */
-
-template<typename Scalar_, typename Dimensions_, int Options_, typename IndexType>
-class TensorFixedSize : public TensorBase<TensorFixedSize<Scalar_, Dimensions_, Options_, IndexType> >
-{
+/**
+ * \ingroup CXX11_Tensor_Module
+ *
+ * \brief The fixed sized version of the tensor class.
+ *
+ * The fixed sized equivalent of
+ * Eigen::Tensor<float, 3> t(3, 5, 7);
+ * is
+ * Eigen::TensorFixedSize<float, Sizes<3,5,7>> t;
+ */
+template <typename Scalar_, typename Dimensions_, int Options_, typename IndexType>
+class TensorFixedSize : public TensorBase<TensorFixedSize<Scalar_, Dimensions_, Options_, IndexType> > {
   public:
     typedef TensorFixedSize<Scalar_, Dimensions_, Options_, IndexType> Self;
     typedef TensorBase<TensorFixedSize<Scalar_, Dimensions_, Options_, IndexType> > Base;
@@ -40,10 +38,17 @@ class TensorFixedSize : public TensorBase<TensorFixedSize<Scalar_, Dimensions_, 
 
     enum {
       IsAligned = bool(EIGEN_MAX_ALIGN_BYTES>0),
+      PacketAccess = (internal::packet_traits<Scalar>::size > 1),
+      BlockAccess = false,
+      PreferBlockAccess = false,
       Layout = Options_ & RowMajor ? RowMajor : ColMajor,
       CoordAccess = true,
       RawAccess = true
     };
+
+  //===- Tensor block evaluation strategy (see TensorBlock.h) -------------===//
+  typedef internal::TensorBlockNotImplemented TensorBlock;
+  //===--------------------------------------------------------------------===//
 
   typedef Dimensions_ Dimensions;
   static const std::size_t NumIndices = Dimensions::count;
@@ -54,7 +59,7 @@ class TensorFixedSize : public TensorBase<TensorFixedSize<Scalar_, Dimensions_, 
   public:
     EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Index                    rank()                   const { return NumIndices; }
     EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Index                    dimension(std::size_t n) const { return m_storage.dimensions()[n]; }
-    EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Dimensions&        dimensions()             const { return m_storage.dimensions(); }
+    EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Dimensions         dimensions()             const { return m_storage.dimensions(); }
     EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Index                    size()                   const { return m_storage.size(); }
     EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE Scalar                   *data()                        { return m_storage.data(); }
     EIGEN_DEVICE_FUNC EIGEN_STRONG_INLINE const Scalar             *data()                  const { return m_storage.data(); }
@@ -333,27 +338,10 @@ class TensorFixedSize : public TensorBase<TensorFixedSize<Scalar_, Dimensions_, 
       internal::TensorExecutor<const Assign, DefaultDevice>::run(assign, DefaultDevice());
     }
 
-    EIGEN_DEVICE_FUNC
-    EIGEN_STRONG_INLINE TensorFixedSize& operator=(const TensorFixedSize& other)
-    {
-      // FIXME: check that the dimensions of other match the dimensions of *this.
-      // Unfortunately this isn't possible yet when the rhs is an expression.
-      typedef TensorAssignOp<Self, const TensorFixedSize> Assign;
-      Assign assign(*this, other);
-      internal::TensorExecutor<const Assign, DefaultDevice>::run(assign, DefaultDevice());
-      return *this;
-    }
-    template<typename OtherDerived>
-    EIGEN_DEVICE_FUNC
-    EIGEN_STRONG_INLINE TensorFixedSize& operator=(const OtherDerived& other)
-    {
-      // FIXME: check that the dimensions of other match the dimensions of *this.
-      // Unfortunately this isn't possible yet when the rhs is an expression.
-      typedef TensorAssignOp<Self, const OtherDerived> Assign;
-      Assign assign(*this, other);
-      internal::TensorExecutor<const Assign, DefaultDevice>::run(assign, DefaultDevice());
-      return *this;
-    }
+    // FIXME: check that the dimensions of other match the dimensions of *this.
+    // Unfortunately this isn't possible yet when the rhs is an expression.
+    EIGEN_TENSOR_INHERIT_ASSIGNMENT_EQUAL_OPERATOR(TensorFixedSize)
+
 
   protected:
     EIGEN_DEVICE_FUNC
