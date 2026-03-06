@@ -83,7 +83,7 @@
 
 // salmon includes
 #include "salmon/internal/quant/ClusterForest.hpp"
-#include "salmon/internal/io/FastxParser.hpp"
+#include "salmon/internal/io/FastxReader.hpp"
 #include "salmon/internal/util/IOUtils.hpp"
 #include "salmon/internal/model/LibraryFormat.hpp"
 #include "salmon/internal/quant/ReadLibrary.hpp"
@@ -133,8 +133,8 @@ using QuasiAlignment = pufferfish::util::QuasiAlignment;
 using MergeResult = pufferfish::util::MergeResult;
 /****** QUASI MAPPING DECLARATIONS  *******/
 
-using paired_parser = fastx_parser::FastxParser<fastx_parser::ReadPair>;
-using single_parser = fastx_parser::FastxParser<fastx_parser::ReadSeq>;
+using paired_parser = salmon::io::fastx::FastxReader<salmon::io::fastx::ReadPair>;
+using single_parser = salmon::io::fastx::FastxReader<salmon::io::fastx::ReadSeq>;
 
 using TranscriptID = uint32_t;
 using TranscriptIDVector = std::vector<TranscriptID>;
@@ -931,12 +931,12 @@ void processReads(
       // a valid FASTQ record can't have an 
       // empty quality string, so then we will
       // treat this as a FASTA.
-      if (rp.first.qual.empty() or rp.second.qual.empty()) { 
+      if (rp.first().qual.empty() or rp.second().qual.empty()) { 
         formatter.disable_qualities();
         salmonOpts.jointLog->warn("The flag --writeQualities was provided,\n"
         "but read records (e.g. {}/{}) appear not to have quality strings!\n"
         "The input is being interpreted as a FASTA file, and the writing\n"
-        "of quality scores is being disabled.\n", rp.first.name, rp.second.name);
+        "of quality scores is being disabled.\n", rp.first().name, rp.second().name);
       }
       // we won't bother to perform this check more than once.
       check_qualities = false;
@@ -946,8 +946,8 @@ void processReads(
     for (size_t i = 0; i < rangeSize; ++i) { // For all the reads in this batch
       auto& rp = rg[i];
 
-      readLen = static_cast<uint32_t>(rp.first.seq.length());
-      mateLen = static_cast<uint32_t>(rp.second.seq.length());
+      readLen = static_cast<uint32_t>(rp.first().seq.length());
+      mateLen = static_cast<uint32_t>(rp.second().seq.length());
       totLen = readLen + mateLen;
 
       // -- start resetting local variables
@@ -970,28 +970,28 @@ void processReads(
       mapType = salmon::utils::MappingType::UNMAPPED;
       // -- done resetting local varaibles
 
-      readLenLeft = rp.first.seq.length();
-      readLenRight = rp.second.seq.length();
+      readLenLeft = rp.first().seq.length();
+      readLenRight = rp.second().seq.length();
       bool tooShortLeft = (readLenLeft < minK);
       bool tooShortRight = (readLenRight < minK);
 
       bool lh = tooShortLeft ? false
-                             : memCollector(rp.first.seq, qc,
+                             : memCollector(rp.first().seq, qc,
                                             true, // isLeft
                                             false // verbose
                                );
       bool rh = tooShortRight ? false
-                              : memCollector(rp.second.seq, qc,
+                              : memCollector(rp.second().seq, qc,
                                              false, // isLeft
                                              false  // verbose
                                 );
-      memCollector.findChains(rp.first.seq, leftHits, salmonOpts.fragLenDistMax,
+      memCollector.findChains(rp.first().seq, leftHits, salmonOpts.fragLenDistMax,
                               MateStatus::PAIRED_END_LEFT,
                               useChainingHeuristic, // heuristic chaining
                               true,                 // isLeft
                               false                 // verbose
       );
-      memCollector.findChains(rp.second.seq, rightHits,
+      memCollector.findChains(rp.second().seq, rightHits,
                               salmonOpts.fragLenDistMax,
                               MateStatus::PAIRED_END_RIGHT,
                               useChainingHeuristic, // heuristic chaining
@@ -1068,7 +1068,7 @@ void processReads(
         if (mergeStatusOR and salmonOpts.recoverOrphans and !tooManyHits) {
           // TODO NOTE : do futher testing
           bool recoveredAny = selective_alignment::utils::recoverOrphans(
-              rp.first.seq, rp.second.seq, recoveredHits, jointHits,
+              rp.first().seq, rp.second().seq, recoveredHits, jointHits,
               puffaligner, false);
           numOrphansRescued += recoveredAny ? 1 : 0;
           // if we recovered a mate, then we have no orphans.
@@ -1112,7 +1112,7 @@ void processReads(
         // 1) there are *no* hits or
         // 2) there are hits for *both* the left and right reads, but not to the
         // same txp
-        salmonOpts.jointLog->info("{} :: {} ", rp.first.name, rp.second.name);
+        salmonOpts.jointLog->info("{} :: {} ", rp.first().name, rp.second().name);
         if (haveOrphans and
             mergeRes == pufferfish::util::MergeResult::HAD_EMPTY_INTERSECTION) {
           auto it = jointHits.begin();
@@ -1167,7 +1167,7 @@ void processReads(
 
           for (auto&& jointHit : jointHits) {
             auto hitScore = puffaligner.calculateAlignments(
-                rp.first.seq, rp.second.seq, jointHit, hctr, is_multimapping,
+                rp.first().seq, rp.second().seq, jointHit, hctr, is_multimapping,
                 false);
             bool validScore = (hitScore != invalidScore);
             numMappingsDropped += validScore ? 0 : 1;
@@ -1350,7 +1350,8 @@ void processReads(
         }
 
         if (writeQuasimappings) {
-          writeAlignmentsToStream(rp, formatter, jointAlignments, sstream,
+          auto compatRp = salmon::io::fastx::toCompatReadPair(rp);
+          writeAlignmentsToStream(compatRp, formatter, jointAlignments, sstream,
                                   true, // write orphans
                                   true  // transcript ID's already decoded
                                         // (taking care of short refs)
@@ -1495,7 +1496,7 @@ void processReads(
           mapType != salmon::utils::MappingType::PAIRED_MAPPED) {
         // If we have no mappings --- then there's nothing to do
         // unless we're outputting names for un-mapped / decoy-mapped reads
-        unmappedNames << rp.first.name << ' ' << salmon::utils::str(mapType)
+        unmappedNames << rp.first().name << ' ' << salmon::utils::str(mapType)
                       << '\n';
       }
 
@@ -1752,12 +1753,12 @@ void processReads(
       // a valid FASTQ record can't have an 
       // empty quality string, so then we will
       // treat this as a FASTA.
-      if (rp.qual.empty()) { 
+      if (rp.first().qual.empty()) { 
         formatter.disable_qualities();
         salmonOpts.jointLog->warn("The flag --writeQualities was provided,\n"
         "but read records (e.g. {}) appear not to have quality strings!\n"
         "The input is being interpreted as a FASTA file, and the writing\n"
-        "of quality scores is being disabled.\n", rp.name);
+        "of quality scores is being disabled.\n", rp.first().name);
       }
       // we won't bother to perform this check more than once.
       check_qualities = false;
@@ -1766,7 +1767,7 @@ void processReads(
     bool tryAlign{salmonOpts.validateMappings};
     for (size_t i = 0; i < rangeSize; ++i) { // For all the read in this batch
       auto& rp = rg[i];
-      readLen = rp.seq.length();
+      readLen = rp.first().seq.length();
       tooShort = (readLen < minK);
       auto& jointHitGroup = structureVec[i];
       jointHitGroup.clearAlignments();
@@ -1780,12 +1781,12 @@ void processReads(
       tooManyHits = false;
 
       bool lh = tooShort ? false
-                         : memCollector(rp.seq, qc,
+                         : memCollector(rp.first().seq, qc,
                                         true, // isLeft
                                         false // verbose
                            );
 
-      memCollector.findChains(rp.seq, hits, salmonOpts.fragLenDistMax,
+      memCollector.findChains(rp.first().seq, hits, salmonOpts.fragLenDistMax,
                               MateStatus::SINGLE_END,
                               useChainingHeuristic, // heuristic chaining
                               true,                 // isLeft
@@ -1838,7 +1839,7 @@ void processReads(
 
         for (auto&& jointHit : jointHits) {
           auto hitScore = puffaligner.calculateAlignments(
-              rp.seq, jointHit, hctr, is_multimapping, false);
+              rp.first().seq, jointHit, hctr, is_multimapping, false);
           bool validScore = (hitScore != invalidScore);
           numMappingsDropped += validScore ? 0 : 1;
           auto tid = qidx->getRefId(jointHit.tid);
@@ -1886,7 +1887,8 @@ void processReads(
       }
 
       if (writeQuasimappings) {
-        writeAlignmentsToStreamSingle(rp, formatter, jointAlignments, sstream,
+        auto compatRp = salmon::io::fastx::toCompatReadSeq(rp);
+        writeAlignmentsToStreamSingle(compatRp, formatter, jointAlignments, sstream,
                                       false, true);
       }
 
@@ -1961,7 +1963,7 @@ void processReads(
           mapType != salmon::utils::MappingType::SINGLE_MAPPED) {
         // If we have no mappings --- then there's nothing to do
         // unless we're outputting names for un-mapped / decoy mapped reads
-        unmappedNames << rp.name << ' ' << salmon::utils::str(mapType) << '\n';
+        unmappedNames << rp.first().name << ' ' << salmon::utils::str(mapType) << '\n';
       }
 
       validHits += jointAlignments.size();

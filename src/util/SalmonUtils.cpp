@@ -41,7 +41,7 @@
 
 #include "gff.h"
 
-#include "salmon/internal/io/FastxParser.hpp"
+#include "salmon/internal/io/FastxReader.hpp"
 //#include "jellyfish/mer_dna.hpp"
 
 #include "GenomicFeature.hpp"
@@ -1261,7 +1261,7 @@ TranscriptGeneMap readTranscriptToGeneMap(std::ifstream& ifile) {
 TranscriptGeneMap
 transcriptToGeneMapFromFasta(const std::string& transcriptsFile) {
   using std::vector;
-  using sequence_parser = fastx_parser::FastxParser<fastx_parser::ReadSeq>;
+  using sequence_parser = salmon::io::fastx::FastxReader<salmon::io::fastx::ReadSeq>;
   namespace bfs = boost::filesystem;
 
   NameVector transcriptNames;
@@ -1278,7 +1278,7 @@ transcriptToGeneMapFromFasta(const std::string& transcriptsFile) {
   while (parser.refill(rg)) {
     for (auto& read : rg) {
       // The transcript name
-      std::string fullHeader(read.name);
+      std::string fullHeader(read.first().name);
       std::string header = fullHeader.substr(0, fullHeader.find(' '));
       transcriptNames.emplace_back(header);
     }

@@ -51,6 +51,7 @@
 #include "MemChainer.hpp"
 #include "MemCollector.hpp"
 #include "PuffAligner.hpp"
+#include "FastxParser.hpp"
 #include "SAMWriter.hpp"
 #include "SelectiveAlignmentUtils.hpp"
 #include "Util.hpp"

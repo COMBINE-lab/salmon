@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <unordered_map>
 
-#include "salmon/internal/io/FastxParser.hpp"
+#include "salmon/internal/io/FastxReader.hpp"
 #include "jellyfish/mer_dna.hpp"
 
 #include "salmon/internal/io/FASTAParser.hpp"
@@ -16,7 +16,7 @@ FASTAParser::FASTAParser(const std::string& fname) : fname_(fname) {}
 
 void FASTAParser::populateTargets(std::vector<Transcript>& refs,
                                   SalmonOpts& sopt) {
-  using single_parser = fastx_parser::FastxParser<fastx_parser::ReadSeq>;
+  using single_parser = salmon::io::fastx::FastxReader<salmon::io::fastx::ReadSeq>;
 
   using std::string;
   using std::unordered_map;
@@ -53,7 +53,8 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs,
   auto rg = parser.getReadGroup();
   while (parser.refill(rg)) {
     for (auto& read : rg) {
-      std::string& header = read.name;
+      auto& seqRead = read.first();
+      std::string& header = seqRead.name;
       std::string name = header.substr(0, header.find_first_of(sepStr));
 
       if (fastaNames.find(name) != fastaNames.end()){
@@ -73,7 +74,7 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs,
                             name);
       } else {
 
-        std::string& seq = read.seq;
+        std::string& seq = seqRead.seq;
         size_t readLen = seq.length();
 
         refs[it->second].setSAMSequenceOwned(

@@ -55,8 +55,10 @@ quant/SalmonQuantify.cpp
 set (SALMON_IO_SRCS
 io/FASTAParser.cpp
 io/StadenUtils.cpp
-io/FastxParser.cpp
+${SALMON_FQFEEDER_SOURCE_DIR}/src/FastxParser.cpp
 )
+set_source_files_properties(${SALMON_FQFEEDER_SOURCE_DIR}/src/FastxParser.cpp
+  PROPERTIES COMPILE_DEFINITIONS "fastx_parser=salmon_fqfeeder")
 
 set (SALMON_UTIL_SRCS
 util/SalmonUtils.cpp
@@ -149,6 +151,11 @@ target_include_directories(salmon_pufferfish_preferred_headers INTERFACE
   ${SALMON_PUFFERFISH_SOURCE_DIR}/include
 )
 
+add_library(salmon_fqfeeder_headers INTERFACE)
+target_include_directories(salmon_fqfeeder_headers INTERFACE
+  ${SALMON_FQFEEDER_SOURCE_DIR}
+)
+
 add_library(salmon_eigen_headers INTERFACE)
 target_include_directories(salmon_eigen_headers INTERFACE
   ${GAT_SOURCE_DIR}/include/eigen3
@@ -199,6 +206,7 @@ function(salmon_configure_target target_name)
     PRIVATE
       salmon_project_options
       salmon_pufferfish_preferred_headers
+      salmon_fqfeeder_headers
       salmon_repo_headers
   )
   if (USE_ARM)
@@ -248,6 +256,9 @@ salmon_add_module_library(salmon_io
   USE_EIGEN
   SOURCES ${SALMON_IO_SRCS}
   LINK_LIBS salmon_util
+)
+target_include_directories(salmon_io BEFORE PRIVATE
+  ${SALMON_FQFEEDER_SOURCE_DIR}/include
 )
 
 salmon_add_module_library(salmon_model

@@ -12,6 +12,15 @@ set(SALMON_PUFFERFISH_GIT_TAG
 set(SALMON_PUFFERFISH_SOURCE_DIR
     ""
     CACHE PATH "Optional local pufferfish source checkout to use instead of fetching")
+set(SALMON_FQFEEDER_GIT_REPOSITORY
+    "https://github.com/rob-p/FQFeeder.git"
+    CACHE STRING "Git repository used when fetching FQFeeder")
+set(SALMON_FQFEEDER_GIT_TAG
+    "08eeed92a50902d670e5c064b4e3015ebb8bd1cc"
+    CACHE STRING "Immutable git commit used when fetching FQFeeder")
+set(SALMON_FQFEEDER_SOURCE_DIR
+    ""
+    CACHE PATH "Optional local FQFeeder source checkout to use instead of fetching")
 
 if(DEFINED CUSTOM_BOOST_PATH)
   set(CMAKE_INCLUDE_PATH ${CUSTOM_BOOST_PATH} ${CMAKE_INCLUDE_PATH})
@@ -379,6 +388,32 @@ FetchContent_MakeAvailable(salmon_pufferfish)
 set(FETCHED_PUFFERFISH TRUE CACHE BOOL "Has pufferfish been fetched?" FORCE)
 set(SALMON_PUFFERFISH_SOURCE_DIR "${salmon_pufferfish_SOURCE_DIR}" CACHE INTERNAL "" FORCE)
 set(SALMON_PUFFERFISH_BINARY_DIR "${salmon_pufferfish_BINARY_DIR}" CACHE INTERNAL "" FORCE)
+
+if(SALMON_FQFEEDER_SOURCE_DIR)
+  FetchContent_Declare(salmon_fqfeeder
+    SOURCE_DIR "${SALMON_FQFEEDER_SOURCE_DIR}"
+  )
+else()
+  FetchContent_Declare(salmon_fqfeeder
+    GIT_REPOSITORY ${SALMON_FQFEEDER_GIT_REPOSITORY}
+    GIT_TAG ${SALMON_FQFEEDER_GIT_TAG}
+    GIT_SHALLOW FALSE
+  )
+endif()
+FetchContent_GetProperties(salmon_fqfeeder)
+if(NOT salmon_fqfeeder_POPULATED)
+  FetchContent_Populate(salmon_fqfeeder)
+endif()
+set(SALMON_FQFEEDER_SOURCE_DIR "${salmon_fqfeeder_SOURCE_DIR}" CACHE INTERNAL "" FORCE)
+set(_salmon_fqfeeder_fastx_header "${salmon_fqfeeder_SOURCE_DIR}/include/FastxParser.hpp")
+if(EXISTS "${_salmon_fqfeeder_fastx_header}")
+  file(READ "${_salmon_fqfeeder_fastx_header}" _salmon_fqfeeder_fastx_text)
+  string(REPLACE "#include \"concurrentqueue.h\"" "#include <concurrentqueue.h>"
+         _salmon_fqfeeder_fastx_text "${_salmon_fqfeeder_fastx_text}")
+  string(REPLACE "#include \"kseq++.hpp\"" "#include <kseq++.hpp>"
+         _salmon_fqfeeder_fastx_text "${_salmon_fqfeeder_fastx_text}")
+  file(WRITE "${_salmon_fqfeeder_fastx_header}" "${_salmon_fqfeeder_fastx_text}")
+endif()
 
 find_package(libgff 2.0.1 HINTS ${LIB_GFF_PATH} ${GFF_ROOT})
 if(libgff_FOUND)
