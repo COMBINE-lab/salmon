@@ -16,7 +16,7 @@ FASTAParser::FASTAParser(const std::string& fname) : fname_(fname) {}
 
 void FASTAParser::populateTargets(std::vector<Transcript>& refs,
                                   SalmonOpts& sopt) {
-  using single_parser = salmon::io::fastx::FastxReader<salmon::io::fastx::ReadSeq>;
+  using single_parser = salmon::io::fastx::FastxParser<salmon::io::fastx::ReadSeq>;
 
   using std::string;
   using std::unordered_map;
@@ -37,7 +37,12 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs,
   size_t maxReadGroup{1000}; // Number of files to read simultaneously
   size_t concurrentFile{1};  // Number of reads in each "job"
 
-  single_parser parser(readFiles, 1, 1, maxReadGroup);
+  salmon::io::fastx::ParserConfig parserConfig{};
+  parserConfig.numConsumers = 1;
+  parserConfig.numParsers = 1;
+  parserConfig.chunkSize = maxReadGroup;
+  parserConfig.parallelParsing = false;
+  single_parser parser(parserConfig, readFiles);
   parser.start();
 
   constexpr char bases[] = {'A', 'C', 'G', 'T'};

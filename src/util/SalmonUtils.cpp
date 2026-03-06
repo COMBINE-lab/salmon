@@ -1261,7 +1261,7 @@ TranscriptGeneMap readTranscriptToGeneMap(std::ifstream& ifile) {
 TranscriptGeneMap
 transcriptToGeneMapFromFasta(const std::string& transcriptsFile) {
   using std::vector;
-  using sequence_parser = salmon::io::fastx::FastxReader<salmon::io::fastx::ReadSeq>;
+  using sequence_parser = salmon::io::fastx::FastxParser<salmon::io::fastx::ReadSeq>;
   namespace bfs = boost::filesystem;
 
   NameVector transcriptNames;
@@ -1270,7 +1270,12 @@ transcriptToGeneMapFromFasta(const std::string& transcriptsFile) {
   vector<bfs::path> paths{transcriptsFile};
   size_t maxReadGroupSize{100};
   std::vector<std::string> readFiles{transcriptsFile};
-  sequence_parser parser(readFiles, 1, 1, maxReadGroupSize);
+  salmon::io::fastx::ParserConfig parserConfig{};
+  parserConfig.numConsumers = 1;
+  parserConfig.numParsers = 1;
+  parserConfig.chunkSize = maxReadGroupSize;
+  parserConfig.parallelParsing = false;
+  sequence_parser parser(parserConfig, readFiles);
   parser.start();
 
   // while there are transcripts left to process

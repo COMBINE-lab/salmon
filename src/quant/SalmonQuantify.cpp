@@ -133,8 +133,8 @@ using QuasiAlignment = pufferfish::util::QuasiAlignment;
 using MergeResult = pufferfish::util::MergeResult;
 /****** QUASI MAPPING DECLARATIONS  *******/
 
-using paired_parser = salmon::io::fastx::FastxReader<salmon::io::fastx::ReadPair>;
-using single_parser = salmon::io::fastx::FastxReader<salmon::io::fastx::ReadSeq>;
+using paired_parser = salmon::io::fastx::FastxParser<salmon::io::fastx::ReadPair>;
+using single_parser = salmon::io::fastx::FastxParser<salmon::io::fastx::ReadSeq>;
 
 using TranscriptID = uint32_t;
 using TranscriptIDVector = std::vector<TranscriptID>;
@@ -2130,9 +2130,12 @@ void processReadLibrary(
     if (rl.mates1().size() > 1 and numThreads > 8) {
       numParsingThreads = 2;
     }
-    pairedParserPtr.reset(new paired_parser(rl.mates1(), rl.mates2(),
-                                            numThreads, numParsingThreads,
-                                            miniBatchSize));
+    salmon::io::fastx::ParserConfig parserConfig{};
+    parserConfig.numConsumers = numThreads;
+    parserConfig.numParsers = numParsingThreads;
+    parserConfig.chunkSize = miniBatchSize;
+    parserConfig.parallelParsing = false;
+    pairedParserPtr.reset(new paired_parser(parserConfig, rl.mates1(), rl.mates2()));
     pairedParserPtr->start();
   } else if (isSingleEnd) {
     uint32_t numParsingThreads{1};
@@ -2140,8 +2143,12 @@ void processReadLibrary(
     if (rl.unmated().size() > 1 and numThreads > 8) {
       numParsingThreads = 2;
     }
-    singleParserPtr.reset(new single_parser(rl.unmated(), numThreads,
-                                            numParsingThreads, miniBatchSize));
+    salmon::io::fastx::ParserConfig parserConfig{};
+    parserConfig.numConsumers = numThreads;
+    parserConfig.numParsers = numParsingThreads;
+    parserConfig.chunkSize = miniBatchSize;
+    parserConfig.parallelParsing = false;
+    singleParserPtr.reset(new single_parser(parserConfig, rl.unmated()));
     singleParserPtr->start();
     fragLengthDist.cacheCMF();
   }
