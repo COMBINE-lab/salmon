@@ -168,6 +168,7 @@ target_include_directories(salmon_system_headers SYSTEM INTERFACE
   ${HTSLIB_INCLUDE_DIR}
   ${TBB_INCLUDE_DIRS}
   ${Boost_INCLUDE_DIRS}
+  ${CEREAL_INCLUDE_DIRS}
   ${LIB_GFF_INCLUDE_DIR}
   ${ICU_INC_DIRS}
 )
@@ -445,10 +446,6 @@ function(salmon_add_external_dependency dependency_target)
   endforeach()
 endfunction()
 
-if (${FETCHED_MIMALLOC})
-   salmon_add_external_dependency(libmimalloc)
-endif()
-
 if (${FETCHED_BOOST})
    salmon_add_external_dependency(libboost)
 endif()
@@ -458,23 +455,8 @@ if (${FETCHED_TBB})
    salmon_add_external_dependency(libtbb)
 endif()
 
-if (${FETCHED_CEREAL})
-  salmon_add_external_dependency(libcereal)
-endif()
-
 if (${FETCHED_HTSLIB})
   salmon_add_external_dependency(libhtslib)
-endif()
-
-if (${FETCHED_ZLIBNG})
-  salmon_add_external_dependency(libzlibng)
-endif()
-
-#add_dependencies(salmon_core libbwa)
-#add_dependencies(salmon libbwa)
-
-if (${FETCHED_GFF})
-  salmon_add_external_dependency(libgff)
 endif()
 
 ### No need for this, I think

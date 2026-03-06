@@ -1,6 +1,7 @@
 include_guard(GLOBAL)
 
 include(ExternalProject)
+include(FetchContent)
 
 if(NOT FETCHED_PUFFERFISH)
   execute_process(
@@ -31,6 +32,16 @@ endif()
 set(Boost_USE_MULTITHREADED ON)
 set(Boost_USE_DEBUG_RUNTIME OFF)
 
+function(salmon_pick_existing_target out_var)
+  foreach(candidate IN LISTS ARGN)
+    if(TARGET "${candidate}")
+      set(${out_var} "${candidate}" PARENT_SCOPE)
+      return()
+    endif()
+  endforeach()
+  set(${out_var} "" PARENT_SCOPE)
+endfunction()
+
 set(SALMON_ZLIB_INCLUDE_DIRS "")
 set(SALMON_ZLIB_LIBRARIES "")
 find_package(ZLIBNG QUIET)
@@ -42,32 +53,39 @@ if(ZLIBNG_FOUND)
   set(ZLIB_LIBRARY ZLIBNG::ZLIBNG)
 elseif(SALMON_FETCH_MISSING_DEPS)
   message(STATUS "zlib-ng not found; fetching pinned zlib-ng release in compatibility mode")
-  externalproject_add(libzlibng
-    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/zlib-ng/zlib-ng/archive/refs/tags/2.2.5.tar.gz -o zlib-ng-2.2.5.tar.gz &&
-      ${SHASUM} 5b3b022489f3ced82384f06db1e13ba148cbce38c7941e424d6cb414416acd18 zlib-ng-2.2.5.tar.gz &&
-      tar -xzvf zlib-ng-2.2.5.tar.gz
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/zlib-ng-2.2.5
-    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/zlib-ng-2.2.5/build
-    CMAKE_ARGS
-      -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR>
-      -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
-      -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
-      -DZLIB_COMPAT=ON
-      -DZLIB_ENABLE_TESTS=OFF
-      -DBUILD_SHARED_LIBS=OFF
+  set(ZLIB_COMPAT ON CACHE BOOL "" FORCE)
+  set(ZLIB_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+  set(WITH_GTEST OFF CACHE BOOL "" FORCE)
+  set(WITH_FUZZERS OFF CACHE BOOL "" FORCE)
+  set(WITH_BENCHMARKS OFF CACHE BOOL "" FORCE)
+  set(WITH_BENCHMARK_APPS OFF CACHE BOOL "" FORCE)
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(salmon_zlibng
+    URL https://github.com/zlib-ng/zlib-ng/archive/refs/tags/2.2.5.tar.gz
+    URL_HASH SHA256=5b3b022489f3ced82384f06db1e13ba148cbce38c7941e424d6cb414416acd18
   )
-  externalproject_add_step(libzlibng makedir
-    COMMAND mkdir -p <BINARY_DIR>
-    COMMENT "Make zlib-ng build directory"
-    DEPENDEES download
-    DEPENDERS configure)
+  FetchContent_MakeAvailable(salmon_zlibng)
+  salmon_pick_existing_target(SALMON_ZLIB_TARGET
+    zlib
+    zlibstatic
+    ZLIB::ZLIB
+    ZLIBNG::ZLIBNG)
+  if(NOT SALMON_ZLIB_TARGET)
+    message(FATAL_ERROR "Fetched zlib-ng did not expose an expected CMake target.")
+  endif()
   set(FETCHED_ZLIBNG TRUE)
-  set(SALMON_ZLIB_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
-  set(SALMON_ZLIB_LIBRARIES ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib/libz.a)
+  set(SALMON_ZLIB_INCLUDE_DIRS
+      ${salmon_zlibng_SOURCE_DIR}
+      ${salmon_zlibng_BINARY_DIR})
+  set(SALMON_ZLIB_LIBRARIES ${SALMON_ZLIB_TARGET})
   set(ZLIB_INCLUDE_DIR ${SALMON_ZLIB_INCLUDE_DIRS})
-  set(ZLIB_LIBRARY ${SALMON_ZLIB_LIBRARIES})
+  set(ZLIB_LIBRARY ${SALMON_ZLIB_TARGET})
+  if(NOT TARGET salmon_stage_zlibng)
+    add_custom_target(salmon_stage_zlibng
+      COMMAND ${CMAKE_COMMAND} --install ${salmon_zlibng_BINARY_DIR} --prefix ${CMAKE_CURRENT_SOURCE_DIR}/external/install
+      COMMENT "Staging zlib-ng for external dependency consumers")
+    add_dependencies(salmon_stage_zlibng ${SALMON_ZLIB_TARGET})
+  endif()
 else()
   message(FATAL_ERROR "zlib-ng is required. Install a zlib-ng compatibility package or enable SALMON_FETCH_MISSING_DEPS.")
 endif()
@@ -233,27 +251,26 @@ message(STATUS "BOOST LIBRARIES = ${Boost_LIBRARIES}")
 
 set(EXTERNAL_LIBRARY_PATH $CMAKE_CURRENT_SOURCE_DIR/lib)
 
-find_package(cereal "1.3.2")
+find_package(cereal "1.3.2" QUIET)
 if(NOT CEREAL_FOUND)
   message(STATUS "Build system will fetch and build the cereal serialization library")
-  externalproject_add(libcereal
-    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/USCiLab/cereal/archive/refs/tags/v1.3.2.tar.gz -o cereal-v1.3.2.tar.gz &&
-      ${SHASUM} 16a7ad9b31ba5880dac55d62b5d6f243c3ebc8d46a3514149e56b5e7ea81f85f cereal-v1.3.2.tar.gz &&
-      tar -xzvf cereal-v1.3.2.tar.gz
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.3.2
-    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/cereal-1.3.2/build
-    CONFIGURE_COMMAND ""
-    BUILD_COMMAND ""
-    INSTALL_COMMAND sh -c "mkdir -p <INSTALL_DIR>/include && cp -r <SOURCE_DIR>/include/cereal <INSTALL_DIR>/include"
+  set(BUILD_DOC OFF CACHE BOOL "" FORCE)
+  set(BUILD_SANDBOX OFF CACHE BOOL "" FORCE)
+  set(SKIP_PERFORMANCE_COMPARISON ON CACHE BOOL "" FORCE)
+  set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(CEREAL_INSTALL OFF CACHE BOOL "" FORCE)
+  set(JUST_INSTALL_CEREAL ON CACHE BOOL "" FORCE)
+  FetchContent_Declare(salmon_cereal
+    URL https://github.com/USCiLab/cereal/archive/refs/tags/v1.3.2.tar.gz
+    URL_HASH SHA256=16a7ad9b31ba5880dac55d62b5d6f243c3ebc8d46a3514149e56b5e7ea81f85f
   )
-  externalproject_add_step(libcereal makedir
-    COMMAND mkdir -p <SOURCE_DIR>/build
-    COMMENT "Make build directory"
-    DEPENDEES download
-    DEPENDERS configure)
+  FetchContent_MakeAvailable(salmon_cereal)
+  set(CEREAL_INCLUDE_DIRS ${salmon_cereal_SOURCE_DIR}/include)
   set(FETCHED_CEREAL TRUE)
+elseif(CEREAL_INCLUDE_DIRS AND NOT TARGET cereal::cereal)
+  add_library(cereal INTERFACE)
+  target_include_directories(cereal INTERFACE ${CEREAL_INCLUDE_DIRS})
+  add_library(cereal::cereal ALIAS cereal)
 endif()
 
 find_package(TBB 2021.4
@@ -351,6 +368,18 @@ endif()
 
 find_package(libgff 2.0.0 HINTS ${LIB_GFF_PATH} ${GFF_ROOT})
 if(libgff_FOUND)
+  if(GFF_INCLUDE_DIR)
+    set(LIB_GFF_INCLUDE_DIR ${GFF_INCLUDE_DIR})
+  endif()
+  if(GFF_LIBRARY)
+    get_filename_component(LIB_GFF_LIBRARY_DIR ${GFF_LIBRARY} DIRECTORY)
+    if(NOT TARGET gff)
+      add_library(gff UNKNOWN IMPORTED)
+      set_target_properties(gff PROPERTIES
+        IMPORTED_LOCATION "${GFF_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${LIB_GFF_INCLUDE_DIR}")
+    endif()
+  endif()
   message(STATUS "libgff ver. ${LIB_GFF_VERSION} found.")
   message(STATUS "    include: ${LIB_GFF_INCLUDE_DIR}")
   message(STATUS "    lib    : ${LIB_GFF_LIBRARY_DIR}")
@@ -358,23 +387,15 @@ endif()
 
 if(NOT libgff_FOUND)
   message(STATUS "Build system will compile libgff")
-  externalproject_add(libgff
-    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/COMBINE-lab/libgff/archive/v2.0.0.tar.gz -o libgff.tgz &&
-      ${SHASUM} 7656b19459a7ca7d2fd0fcec4f2e0fd0deec1b4f39c703a114e8f4c22d82a99c libgff.tgz &&
-      tar -xzvf libgff.tgz
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-2.0.0
-    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/libgff-2.0.0/build
-    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR> -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER} -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
+  FetchContent_Declare(salmon_libgff
+    URL https://github.com/COMBINE-lab/libgff/archive/v2.0.0.tar.gz
+    URL_HASH SHA256=7656b19459a7ca7d2fd0fcec4f2e0fd0deec1b4f39c703a114e8f4c22d82a99c
   )
-  externalproject_add_step(libgff makedir
-    COMMAND mkdir -p <SOURCE_DIR>/build
-    COMMENT "Make build directory"
-    DEPENDEES download
-    DEPENDERS configure)
+  FetchContent_MakeAvailable(salmon_libgff)
   set(FETCHED_GFF TRUE)
-  set(LIB_GFF_PATH ${CMAKE_CURRENT_SOURCE_DIR}/external/install)
+  set(LIB_GFF_PATH ${salmon_libgff_SOURCE_DIR})
+  set(LIB_GFF_INCLUDE_DIR ${salmon_libgff_SOURCE_DIR}/include)
+  set(LIB_GFF_LIBRARY_DIR ${salmon_libgff_BINARY_DIR})
 endif()
 
 find_package(CURL)
@@ -402,7 +423,7 @@ elseif(SALMON_FETCH_MISSING_DEPS)
     INSTALL_COMMAND make ${QUIET_MAKE} install
   )
   if(FETCHED_ZLIBNG)
-    add_dependencies(libhtslib libzlibng)
+    add_dependencies(libhtslib salmon_stage_zlibng)
   endif()
   if(FETCHED_LIBBZ2)
     add_dependencies(libhtslib libbz2)
@@ -412,7 +433,13 @@ elseif(SALMON_FETCH_MISSING_DEPS)
   endif()
   set(FETCHED_HTSLIB TRUE)
   set(HTSLIB_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install/include)
-  set(HTSLIB_LIBRARIES ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib/libhts.a)
+  if(NOT TARGET HTSlib::HTSlib)
+    add_library(HTSlib::HTSlib UNKNOWN IMPORTED)
+    set_target_properties(HTSlib::HTSlib PROPERTIES
+      IMPORTED_LOCATION "${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib/libhts.a"
+      INTERFACE_INCLUDE_DIRECTORIES "${HTSLIB_INCLUDE_DIR}")
+  endif()
+  set(HTSLIB_LIBRARIES HTSlib::HTSlib)
 else()
   message(FATAL_ERROR "htslib is required. Install htslib or enable SALMON_FETCH_MISSING_DEPS.")
 endif()
@@ -433,30 +460,22 @@ endif()
 
 if(NOT HAVE_FAST_MALLOC AND SALMON_FETCH_MISSING_DEPS)
   message(STATUS "mimalloc not found; fetching pinned mimalloc release")
-  externalproject_add(libmimalloc
-    DOWNLOAD_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external
-    DOWNLOAD_COMMAND curl -k -L https://github.com/microsoft/mimalloc/archive/refs/tags/v2.2.4.tar.gz -o mimalloc-v2.2.4.tar.gz &&
-      ${SHASUM} 754a98de5e2912fddbeaf24830f982b4540992f1bab4a0a8796ee118e0752bda mimalloc-v2.2.4.tar.gz &&
-      tar -xzvf mimalloc-v2.2.4.tar.gz
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/mimalloc-2.2.4
-    INSTALL_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/install
-    BINARY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/external/mimalloc-2.2.4/build
-    CMAKE_ARGS
-      -DCMAKE_INSTALL_PREFIX:PATH=<INSTALL_DIR>
-      -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
-      -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
-      -DMI_BUILD_SHARED=OFF
-      -DMI_BUILD_TESTS=OFF
+  set(MI_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+  set(MI_BUILD_STATIC ON CACHE BOOL "" FORCE)
+  set(MI_BUILD_OBJECT ON CACHE BOOL "" FORCE)
+  set(MI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  set(MI_OVERRIDE ON CACHE BOOL "" FORCE)
+  FetchContent_Declare(salmon_mimalloc
+    URL https://github.com/microsoft/mimalloc/archive/refs/tags/v2.2.4.tar.gz
+    URL_HASH SHA256=754a98de5e2912fddbeaf24830f982b4540992f1bab4a0a8796ee118e0752bda
   )
-  externalproject_add_step(libmimalloc makedir
-    COMMAND mkdir -p <BINARY_DIR>
-    COMMENT "Make mimalloc build directory"
-    DEPENDEES download
-    DEPENDERS configure)
+  FetchContent_MakeAvailable(salmon_mimalloc)
   set(FETCHED_MIMALLOC TRUE)
-  set(FAST_MALLOC_LIB
-      ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib/mimalloc-2.2/mimalloc.o
-      ${CMAKE_CURRENT_SOURCE_DIR}/external/install/lib/mimalloc-2.2/libmimalloc.a)
+  if(TARGET mimalloc-obj AND TARGET mimalloc-static)
+    set(FAST_MALLOC_LIB mimalloc-obj mimalloc-static)
+  elseif(TARGET mimalloc-static)
+    set(FAST_MALLOC_LIB mimalloc-static)
+  endif()
   set(HAVE_FAST_MALLOC TRUE)
 elseif(NOT HAVE_FAST_MALLOC AND SALMON_USE_MIMALLOC STREQUAL "REQUIRED")
   message(FATAL_ERROR "mimalloc is required but was not found. Install mimalloc or enable SALMON_FETCH_MISSING_DEPS.")
