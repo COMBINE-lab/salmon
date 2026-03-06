@@ -1,8 +1,8 @@
 #ifndef __FORGETTING_MASS_CALCULATOR__
 #define __FORGETTING_MASS_CALCULATOR__
 
-#include "SalmonMath.hpp"
-#include "SalmonSpinLock.hpp"
+#include "salmon/internal/util/SalmonMath.hpp"
+#include "salmon/internal/util/SalmonSpinLock.hpp"
 #include <spdlog/spdlog.h>
 
 class ForgettingMassCalculator {

@@ -8,7 +8,7 @@
 #include "cereal/types/vector.hpp"
 
 #include "salmon/internal/alignment/ReadPair.hpp"
-#include "SalmonMath.hpp"
+#include "salmon/internal/util/SalmonMath.hpp"
 #include "salmon/internal/util/UtilityFunctions.hpp"
 #include <vector>
 

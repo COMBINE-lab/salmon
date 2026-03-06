@@ -6,7 +6,7 @@
 #include "salmon/internal/model/LibraryFormat.hpp"
 //#include "RapMapUtils.hpp"
 #include "Util.hpp"
-#include "SalmonMath.hpp"
+#include "salmon/internal/util/SalmonMath.hpp"
 #include "salmon/internal/io/StadenUtils.hpp"
 
 struct UnpairedRead {

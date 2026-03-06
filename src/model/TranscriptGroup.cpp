@@ -1,7 +1,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "SalmonMath.hpp"
+#include "salmon/internal/util/SalmonMath.hpp"
 #include "salmon/internal/model/TranscriptGroup.hpp"
 #include "xxhash.h"
 

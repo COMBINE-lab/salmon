@@ -1,5 +1,5 @@
 #include "salmon/internal/model/EffectiveLengthStats.hpp"
-#include "SalmonMath.hpp"
+#include "salmon/internal/util/SalmonMath.hpp"
 
 EffectiveLengthStats::EffectiveLengthStats(size_t numTxps)
     : numTxps_(numTxps), lengths_(numTxps), weights_(numTxps),

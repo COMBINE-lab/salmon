@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "salmon/internal/output/BootstrapWriter.hpp"
-#include "SalmonSpinLock.hpp"
+#include "salmon/internal/util/SalmonSpinLock.hpp"
 #include "salmon/internal/model/Transcript.hpp"
 #include <spdlog/spdlog.h>
 

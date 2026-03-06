@@ -92,7 +92,7 @@
 #include "salmon/internal/util/SalmonExceptions.hpp"
 #include "salmon/internal/index/SalmonIndex.hpp"
 #include "salmon/internal/quant/SalmonMappingUtils.hpp"
-#include "SalmonMath.hpp"
+#include "salmon/internal/util/SalmonMath.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/Transcript.hpp"
 

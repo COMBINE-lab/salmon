@@ -9,7 +9,7 @@
 #include <boost/dynamic_bitset.hpp>
 #include <boost/pending/disjoint_sets.hpp>
 
-#include "SalmonMath.hpp"
+#include "salmon/internal/util/SalmonMath.hpp"
 
 class ClusterForest;
 

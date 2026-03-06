@@ -21,7 +21,7 @@
 #include "cereal/archives/json.hpp"
 #include <spdlog/fmt/fmt.h>
 
-#include "SalmonMath.hpp"
+#include "salmon/internal/util/SalmonMath.hpp"
 #include "SalmonOpts.hpp"
 
 #include "GenomicFeature.hpp"

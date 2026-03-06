@@ -8,7 +8,7 @@
  */
 
 #include "salmon/internal/model/FragmentLengthDistribution.hpp"
-#include "SalmonMath.hpp"
+#include "salmon/internal/util/SalmonMath.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include <boost/assign.hpp>
 #include <boost/math/distributions/binomial.hpp>

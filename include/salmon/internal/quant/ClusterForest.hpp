@@ -3,7 +3,7 @@
 
 #include <boost/pending/disjoint_sets.hpp>
 
-#include "SalmonSpinLock.hpp"
+#include "salmon/internal/util/SalmonSpinLock.hpp"
 #include "salmon/internal/model/Transcript.hpp"
 #include "TranscriptCluster.hpp"
 

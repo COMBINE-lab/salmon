@@ -26,7 +26,7 @@
 #include "salmon/internal/inference/MultinomialSampler.hpp"
 #include "salmon/internal/quant/ReadExperiment.hpp"
 #include "salmon/internal/alignment/ReadPair.hpp"
-#include "SalmonMath.hpp"
+#include "salmon/internal/util/SalmonMath.hpp"
 #include "salmon/internal/model/Transcript.hpp"
 #include "salmon/internal/model/TranscriptGroup.hpp"
 #include "salmon/internal/alignment/UnpairedRead.hpp"

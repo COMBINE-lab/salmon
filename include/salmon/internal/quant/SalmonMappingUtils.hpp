@@ -42,7 +42,7 @@
 #include "salmon/internal/cli/ProgramOptionsGenerator.hpp"
 #include "salmon/internal/quant/ReadExperiment.hpp"
 #include "SalmonDefaults.hpp"
-#include "SalmonMath.hpp"
+#include "salmon/internal/util/SalmonMath.hpp"
 #include "SalmonOpts.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/Transcript.hpp"

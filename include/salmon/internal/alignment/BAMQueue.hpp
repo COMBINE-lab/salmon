@@ -16,7 +16,7 @@
 #include "salmon/internal/alignment/AlignmentGroup.hpp"
 #include "salmon/internal/model/LibraryFormat.hpp"
 #include "salmon/internal/alignment/ReadPair.hpp"
-#include "SalmonMath.hpp"
+#include "salmon/internal/util/SalmonMath.hpp"
 #include "salmon/internal/alignment/UnpairedRead.hpp"
 #include <concurrentqueue.h>
 #include "readerwriterqueue.h"

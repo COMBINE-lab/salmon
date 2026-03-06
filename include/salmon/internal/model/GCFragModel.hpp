@@ -3,7 +3,7 @@
 
 #include "salmon/internal/util/DistributionUtils.hpp"
 #include "Eigen/Dense"
-#include "SalmonMath.hpp"
+#include "salmon/internal/util/SalmonMath.hpp"
 
 #include <boost/iostreams/filtering_stream.hpp>
 

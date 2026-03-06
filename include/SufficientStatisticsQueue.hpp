@@ -8,7 +8,7 @@
 
 #include "btree_map.h"
 
-#include "SalmonMath.hpp"
+#include "salmon/internal/util/SalmonMath.hpp"
 
 class SufficientStatisticsQueue {
 

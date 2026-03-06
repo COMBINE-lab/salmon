@@ -3,7 +3,7 @@
 
 #include "oneapi/tbb/concurrent_vector.h"
 
-#include "SalmonMath.hpp"
+#include "salmon/internal/util/SalmonMath.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 
 #include <vector>

@@ -7,7 +7,7 @@
  */
 
 #include "salmon/internal/model/FragmentStartPositionDistribution.hpp"
-#include "SalmonMath.hpp"
+#include "salmon/internal/util/SalmonMath.hpp"
 #include <boost/assign.hpp>
 #include <boost/math/distributions/binomial.hpp>
 #include <boost/math/distributions/normal.hpp>

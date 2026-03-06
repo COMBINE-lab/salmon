@@ -41,7 +41,7 @@
 #include "salmon/internal/output/OutputUnmappedFilter.hpp"
 #include "salmon/internal/alignment/ReadPair.hpp"
 #include "SalmonConfig.hpp"
-#include "SalmonMath.hpp"
+#include "salmon/internal/util/SalmonMath.hpp"
 #include "SalmonOpts.hpp"
 #include "salmon/internal/util/FmtCompat.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"

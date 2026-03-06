@@ -3,7 +3,7 @@
 
 #include "salmon/internal/model/FragmentLengthDistribution.hpp"
 #include "salmon/internal/model/GCFragModel.hpp"
-#include "SalmonMath.hpp"
+#include "salmon/internal/util/SalmonMath.hpp"
 #include "salmon/internal/util/SalmonStringUtils.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/SequenceBiasModel.hpp"

@@ -5,7 +5,7 @@
 #include "salmon/internal/model/GCFragModel.hpp"
 #include "salmon/internal/model/ReadKmerDist.hpp"
 #include "salmon/internal/model/SBModel.hpp"
-#include "SalmonMath.hpp"
+#include "salmon/internal/util/SalmonMath.hpp"
 #include "salmon/internal/model/SimplePosBias.hpp"
 #include <vector>
 
