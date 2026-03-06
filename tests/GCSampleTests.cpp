@@ -3,7 +3,7 @@
 #include <unordered_map>
 #include <iostream>
 #include "LibraryFormat.hpp"
-#include "SalmonUtils.hpp"
+#include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/Transcript.hpp"
 #include "salmon/internal/util/UtilityFunctions.hpp"
 
