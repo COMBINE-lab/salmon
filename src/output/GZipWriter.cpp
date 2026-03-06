@@ -10,10 +10,10 @@
 #include "salmon/internal/util/DistributionUtils.hpp"
 #include "salmon/internal/output/GZipWriter.hpp"
 #include "salmon/internal/quant/ReadExperiment.hpp"
-#include "ReadPair.hpp"
+#include "salmon/internal/alignment/ReadPair.hpp"
 #include "SalmonOpts.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
-#include "UnpairedRead.hpp"
+#include "salmon/internal/alignment/UnpairedRead.hpp"
 #include "salmon/internal/model/TranscriptGroup.hpp"
 #include "zstr.hpp"
 

@@ -2,7 +2,7 @@
 #define __BIAS_PARAMS__
 
 #include "salmon/internal/util/DistributionUtils.hpp"
-#include "GCFragModel.hpp"
+#include "salmon/internal/model/GCFragModel.hpp"
 #include "salmon/internal/model/ReadKmerDist.hpp"
 #include "salmon/internal/model/SBModel.hpp"
 #include "SalmonMath.hpp"

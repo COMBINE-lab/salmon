@@ -2,7 +2,7 @@
 #define TRANSCRIPT
 
 #include "salmon/internal/model/FragmentLengthDistribution.hpp"
-#include "GCFragModel.hpp"
+#include "salmon/internal/model/GCFragModel.hpp"
 #include "SalmonMath.hpp"
 #include "salmon/internal/util/SalmonStringUtils.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"

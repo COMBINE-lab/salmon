@@ -3,8 +3,8 @@
 
 #include "salmon/internal/alignment/AlignmentGroup.hpp"
 #include "salmon/internal/model/LibraryFormat.hpp"
-#include "ReadPair.hpp"
-#include "UnpairedRead.hpp"
+#include "salmon/internal/alignment/ReadPair.hpp"
+#include "salmon/internal/alignment/UnpairedRead.hpp"
 #include "concurrentqueue.h"
 #include <vector>
 

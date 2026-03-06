@@ -1,8 +1,8 @@
 #include "salmon/internal/alignment/AlignmentCommon.hpp"
 
-#include "ReadPair.hpp"
+#include "salmon/internal/alignment/ReadPair.hpp"
 #include "salmon/internal/model/Transcript.hpp"
-#include "UnpairedRead.hpp"
+#include "salmon/internal/alignment/UnpairedRead.hpp"
 #include "salmon/internal/util/SalmonStringUtils.hpp"
 
 bool AlignmentCommon::hasIndel(ReadPair& hit) {

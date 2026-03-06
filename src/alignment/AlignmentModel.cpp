@@ -6,11 +6,11 @@
 #include <boost/config.hpp> // for BOOST_LIKELY/BOOST_UNLIKELY
 
 #include "salmon/internal/alignment/AlignmentModel.hpp"
-#include "ReadPair.hpp"
+#include "salmon/internal/alignment/ReadPair.hpp"
 #include "SalmonMath.hpp"
 #include "salmon/internal/util/SalmonStringUtils.hpp"
 #include "salmon/internal/model/Transcript.hpp"
-#include "UnpairedRead.hpp"
+#include "salmon/internal/alignment/UnpairedRead.hpp"
 
 AlignmentModel::AlignmentModel(double alpha, uint32_t readBins)
     : transitionProbsLeft_(readBins), transitionProbsRight_(readBins),

@@ -2,14 +2,14 @@
 #define EXPERIMENT_HPP
 
 // Our includes
-#include "ClusterForest.hpp"
+#include "salmon/internal/quant/ClusterForest.hpp"
 #include "salmon/internal/util/DistributionUtils.hpp"
 #include "EquivalenceClassBuilder.hpp"
 #include "salmon/internal/model/FragmentLengthDistribution.hpp"
 #include "salmon/internal/model/FragmentStartPositionDistribution.hpp"
-#include "GCFragModel.hpp"
+#include "salmon/internal/model/GCFragModel.hpp"
 #include "salmon/internal/model/ReadKmerDist.hpp"
-#include "ReadLibrary.hpp"
+#include "salmon/internal/quant/ReadLibrary.hpp"
 #include "salmon/internal/model/SBModel.hpp"
 #include "salmon/internal/index/SalmonIndex.hpp"
 #include "SalmonOpts.hpp"

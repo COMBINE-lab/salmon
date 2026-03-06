@@ -30,7 +30,7 @@
 #include "salmon/internal/alignment/AlignmentLibrary.hpp"
 #include "salmon/internal/alignment/BAMQueue.hpp"
 #include "salmon/internal/alignment/BAMUtils.hpp"
-#include "ClusterForest.hpp"
+#include "salmon/internal/quant/ClusterForest.hpp"
 #include "salmon/internal/io/FASTAParser.hpp"
 #include "salmon/internal/model/LibraryFormat.hpp"
 #include "salmon/internal/alignment/MiniBatchInfo.hpp"
@@ -50,12 +50,12 @@
 #include "salmon/internal/model/FragmentLengthDistribution.hpp"
 #include "salmon/internal/output/GZipWriter.hpp"
 #include "NullFragmentFilter.hpp"
-#include "ReadPair.hpp"
+#include "salmon/internal/alignment/ReadPair.hpp"
 #include "SalmonConfig.hpp"
 #include "SalmonOpts.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
-#include "Sampler.hpp"
-#include "TextBootstrapWriter.hpp"
+#include "salmon/internal/alignment/Sampler.hpp"
+#include "salmon/internal/output/TextBootstrapWriter.hpp"
 #include "TranscriptCluster.hpp"
 #include "spdlog/spdlog.h"
 #include "pufferfish/Util.hpp"
@@ -397,7 +397,6 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
       }
 
       //double maxLogAlnScore{LOG_0};
-      int sidx{0};
       for(size_t alnIndex = 0; alnIndex < alignments.size(); ++alnIndex) {
         auto& aln = alignments[alnIndex];
         auto transcriptID = aln->transcriptID();
@@ -515,7 +514,6 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
           errLike = -salmonOpts.scoreExp * (bestAS - alnScore);
         } else if (useAuxParams and salmonOpts.useErrorModel) {
           errLike = alnMod.logLikelihood(*aln, *alnPrimary, transcript);
-          ++sidx;
         }
 
         // Allow for a non-uniform fragment start position distribution
@@ -571,10 +569,8 @@ void processMiniBatch(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
       }
 
       // EQCLASS
-      double auxProbSum{0.0};
       for (auto& p : auxProbs) {
         p = std::exp(p - auxDenom);
-        auxProbSum += p;
       }
 
       if (txpIDs.size() > 0) {

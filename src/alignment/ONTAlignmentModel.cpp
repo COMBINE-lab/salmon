@@ -12,7 +12,7 @@
 #include "SalmonMath.hpp"
 #include "salmon/internal/util/SalmonStringUtils.hpp"
 #include "salmon/internal/model/Transcript.hpp"
-#include "UnpairedRead.hpp"
+#include "salmon/internal/alignment/UnpairedRead.hpp"
 
 ONTAlignmentModel::ONTAlignmentModel(double alpha, uint32_t readBins)
     : isEnabled_(true)

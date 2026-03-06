@@ -81,11 +81,11 @@
 #include "concurrentqueue.h"
 
 // salmon includes
-#include "ClusterForest.hpp"
+#include "salmon/internal/quant/ClusterForest.hpp"
 #include "salmon/internal/io/FastxParser.hpp"
 #include "IOUtils.hpp"
 #include "salmon/internal/model/LibraryFormat.hpp"
-#include "ReadLibrary.hpp"
+#include "salmon/internal/quant/ReadLibrary.hpp"
 #include "SalmonConfig.hpp"
 #include "SalmonDefaults.hpp"
 #include "salmon/internal/util/SalmonExceptions.hpp"

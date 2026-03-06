@@ -20,15 +20,15 @@
 #include "cuckoohash_map.hh"
 
 #include "salmon/internal/alignment/AlignmentLibrary.hpp"
-#include "BootstrapWriter.hpp"
+#include "salmon/internal/output/BootstrapWriter.hpp"
 #include "salmon/internal/inference/CollapsedEMOptimizer.hpp"
 #include "MultinomialSampler.hpp"
 #include "salmon/internal/quant/ReadExperiment.hpp"
-#include "ReadPair.hpp"
+#include "salmon/internal/alignment/ReadPair.hpp"
 #include "SalmonMath.hpp"
 #include "salmon/internal/model/Transcript.hpp"
 #include "salmon/internal/model/TranscriptGroup.hpp"
-#include "UnpairedRead.hpp"
+#include "salmon/internal/alignment/UnpairedRead.hpp"
 #include "salmon/internal/inference/EMUtils.hpp"
 
 using BlockedIndexRange = oneapi::tbb::blocked_range<size_t>;

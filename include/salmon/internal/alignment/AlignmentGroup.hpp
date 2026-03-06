@@ -7,7 +7,7 @@
 #include "cereal/archives/binary.hpp"
 #include "cereal/types/vector.hpp"
 
-#include "ReadPair.hpp"
+#include "salmon/internal/alignment/ReadPair.hpp"
 #include "SalmonMath.hpp"
 #include "salmon/internal/util/UtilityFunctions.hpp"
 #include <vector>
