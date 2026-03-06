@@ -8,10 +8,16 @@ cli/Salmon.cpp
 
 set (SALMON_CLI_SRCS
 cli/VersionChecker.cpp
-cli/ProgramOptionsGenerator.cpp
 commands/AlevinRemoved.cpp
 commands/SalmonQuantMerge.cpp
+)
+
+set (SALMON_INDEXING_SRCS
 index/BuildSalmonIndex.cpp
+)
+
+set (SALMON_OPTIONS_SRCS
+cli/ProgramOptionsGenerator.cpp
 )
 
 set (SALMON_OUTPUT_SRCS
@@ -135,21 +141,31 @@ target_compile_options(salmon_project_options INTERFACE
   "$<$<CONFIG:DEBUG>:${TGT_DEBUG_FLAGS}>"
   "$<$<CONFIG:RELEASE>:${TGT_RELEASE_FLAGS}>"
 )
-target_include_directories(salmon_project_options INTERFACE
+
+add_library(salmon_repo_headers INTERFACE)
+target_include_directories(salmon_repo_headers INTERFACE
   ${GAT_SOURCE_DIR}/include
   ${GAT_SOURCE_DIR}/include/eigen3
+)
+
+add_library(salmon_vendor_headers INTERFACE)
+target_include_directories(salmon_vendor_headers INTERFACE
   ${GAT_SOURCE_DIR}/external
   ${GAT_SOURCE_DIR}/external/cereal/include
   ${GAT_SOURCE_DIR}/external/install/include
+  ${GAT_SOURCE_DIR}/external/install/include/pufferfish
+  ${GAT_SOURCE_DIR}/external/install/include/pufferfish/digestpp
+  ${COMPACT_VECTOR_INCLUDE_PATH}
+)
+
+add_library(salmon_system_headers INTERFACE)
+target_include_directories(salmon_system_headers SYSTEM INTERFACE
   ${SALMON_ZLIB_INCLUDE_DIRS}
   ${HTSLIB_INCLUDE_DIR}
   ${TBB_INCLUDE_DIRS}
   ${Boost_INCLUDE_DIRS}
-  ${GAT_SOURCE_DIR}/external/install/include/pufferfish
-  ${GAT_SOURCE_DIR}/external/install/include/pufferfish/digestpp
   ${LIB_GFF_INCLUDE_DIR}
   ${ICU_INC_DIRS}
-  ${COMPACT_VECTOR_INCLUDE_PATH}
 )
 
 add_library(salmon_common_link_deps INTERFACE)
@@ -174,7 +190,13 @@ if(SALMON_EXISTING_LINK_DIRS)
 endif()
 
 function(salmon_configure_target target_name)
-  target_link_libraries(${target_name} salmon_project_options)
+  target_link_libraries(${target_name}
+    PRIVATE
+      salmon_project_options
+      salmon_repo_headers
+      salmon_vendor_headers
+      salmon_system_headers
+  )
   if (USE_ARM)
     target_compile_definitions(${target_name} PUBLIC KSW_USE_ARM=1)
   endif()
@@ -190,6 +212,8 @@ add_library(salmon_output STATIC ${SALMON_OUTPUT_SRCS})
 add_library(salmon_alignment STATIC ${SALMON_ALIGNMENT_SRCS})
 add_library(salmon_inference STATIC ${SALMON_INFERENCE_SRCS})
 add_library(salmon_cli STATIC ${SALMON_CLI_SRCS})
+add_library(salmon_indexing STATIC ${SALMON_INDEXING_SRCS})
+add_library(salmon_options STATIC ${SALMON_OPTIONS_SRCS})
 add_library(salmon_quant STATIC ${SALMON_QUANT_SRCS})
 add_library(salmon_core STATIC ${SALMON_SUPPORT_SRCS})
 add_library(salmon_support ALIAS salmon_core)
@@ -202,6 +226,8 @@ set(SALMON_MODULE_TARGETS
   salmon_alignment
   salmon_inference
   salmon_cli
+  salmon_indexing
+  salmon_options
   salmon_quant
   salmon_core
 )
@@ -210,24 +236,72 @@ foreach(salmon_module_target IN LISTS SALMON_MODULE_TARGETS)
   salmon_configure_target(${salmon_module_target})
 endforeach()
 
+target_link_libraries(salmon_model
+  PRIVATE
+    salmon_util
+)
+
+target_link_libraries(salmon_io
+  PRIVATE
+    salmon_util
+)
+
+target_link_libraries(salmon_output
+  PRIVATE
+    salmon_util
+    salmon_model
+)
+
+target_link_libraries(salmon_inference
+  PRIVATE
+    salmon_model
+    salmon_util
+)
+
+target_link_libraries(salmon_alignment
+  PRIVATE
+    salmon_io
+    salmon_model
+    salmon_util
+    salmon_output
+    salmon_inference
+    salmon_options
+)
+
+target_link_libraries(salmon_indexing
+  PRIVATE
+    salmon_util
+)
+
+target_link_libraries(salmon_quant
+  PRIVATE
+    salmon_io
+    salmon_model
+    salmon_util
+    salmon_output
+    salmon_inference
+    salmon_options
+)
+
 # Keep salmon_core as the stable archive target while its internals are split
 # into module libraries.
 target_link_libraries(salmon_core
-  salmon_io
-  salmon_model
-  salmon_util
+  PRIVATE
+    salmon_io
+    salmon_model
+    salmon_util
 )
 
 # Build the salmon executable
 add_executable(salmon ${SALMON_ENTRY_SRCS})
 salmon_configure_target(salmon)
 target_link_libraries(salmon
-  salmon_cli
-  salmon_quant
-  salmon_inference
-  salmon_alignment
-  salmon_output
-  salmon_core
+  PRIVATE
+    salmon_cli
+    salmon_indexing
+    salmon_quant
+    salmon_alignment
+    salmon_core
 )
 
 if(SALMON_ENABLE_TESTS)
@@ -282,11 +356,12 @@ target_link_libraries(salmon_common_link_deps INTERFACE
 
 # Link the executable
 target_link_libraries(salmon
-    salmon_common_link_deps
-    puffer 
-    twopaco
-    graphdump
-    ntcard
+    PRIVATE
+      salmon_common_link_deps
+      puffer 
+      twopaco
+      graphdump
+      ntcard
 )
 endif()
 
@@ -303,17 +378,18 @@ endif()
 if(SALMON_ENABLE_TESTS AND (TBB_RECONFIGURE OR TBB_TARGET_EXISTED))
 
 target_link_libraries(unitTests
-    salmon_common_link_deps
-    salmon_core
-    UnitTestsMain
+    PRIVATE
+      salmon_common_link_deps
+      salmon_core
+      UnitTestsMain
 )
 endif()
 
 if(NOT Iconv_IS_BUILT_IN)
   if(SALMON_ENABLE_TESTS)
-    target_link_libraries(unitTests Iconv::Iconv)
+    target_link_libraries(unitTests PRIVATE Iconv::Iconv)
   endif()
-  target_link_libraries(salmon Iconv::Iconv)
+  target_link_libraries(salmon PRIVATE Iconv::Iconv)
 endif()
 
 if(SALMON_ENABLE_TESTS)
@@ -332,6 +408,8 @@ set(SALMON_EXTERNAL_DEP_TARGETS
   salmon_alignment
   salmon_inference
   salmon_cli
+  salmon_indexing
+  salmon_options
   salmon_quant
   salmon_core
   salmon
