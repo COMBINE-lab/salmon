@@ -2,7 +2,7 @@
 #include "salmon/internal/io/AlignmentIO.hpp"
 
 // for cpp-format
-#include "spdlog/fmt/fmt.h"
+#include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
 #include <atomic>
@@ -57,8 +57,8 @@
 #include "salmon/internal/alignment/Sampler.hpp"
 #include "salmon/internal/output/TextBootstrapWriter.hpp"
 #include "TranscriptCluster.hpp"
-#include "spdlog/spdlog.h"
-#include "pufferfish/Util.hpp"
+#include <spdlog/spdlog.h>
+#include "Util.hpp"
 
 std::mutex dieMutex;
 

@@ -42,9 +42,6 @@ define_property(TARGET PROPERTY COMPACT_VECTOR_DIR INHERITED
   BRIEF_DOCS "the path to the directory containing the compact_vector include tree"
   FULL_DOCS "the path to the directory containing the compact_vector include tree")
 
-set(BUILD_PUFF_FOR_SALMON TRUE)
-add_subdirectory(external/pufferfish)
-
 get_property(COMPACT_VECTOR_INCLUDE_PATH TARGET graphdump PROPERTY COMPACT_VECTOR_DIR)
 message(STATUS "fetched path for compact_vector as [${COMPACT_VECTOR_INCLUDE_PATH}]")
 

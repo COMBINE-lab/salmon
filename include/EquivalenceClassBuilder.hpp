@@ -8,14 +8,14 @@
 #include <vector>
 
 // Logger includes
-#include "spdlog/spdlog.h"
+#include <spdlog/spdlog.h>
 #include "nonstd/optional.hpp"
 
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/TranscriptGroup.hpp"
-#include "concurrentqueue.h"
+#include <concurrentqueue.h>
 #include "cuckoohash_map.hh"
-#include "pufferfish/sparsepp/spp.h"
+#include "sparsepp/spp.h"
 
 struct EmptyBarcodeMapType {};
 using SparseBarcodeMapType = spp::sparse_hash_map<uint32_t, spp::sparse_hash_map<uint64_t, uint32_t>>;

@@ -19,14 +19,14 @@
 #include "oneapi/tbb/task_arena.h"
 
 #include "cereal/archives/json.hpp"
-#include "spdlog/fmt/fmt.h"
+#include <spdlog/fmt/fmt.h>
 
 #include "SalmonMath.hpp"
 #include "SalmonOpts.hpp"
 
 #include "GenomicFeature.hpp"
 #include "salmon/internal/model/LibraryFormat.hpp"
-#include "pufferfish/Util.hpp"
+#include "Util.hpp"
 #include "salmon/internal/quant/ReadLibrary.hpp"
 #include "SalmonConfig.hpp"
 #include "salmon/internal/util/TranscriptGeneMap.hpp"

@@ -5,7 +5,7 @@
 #include "salmon/internal/model/LibraryFormat.hpp"
 #include "salmon/internal/alignment/ReadPair.hpp"
 #include "salmon/internal/alignment/UnpairedRead.hpp"
-#include "concurrentqueue.h"
+#include <concurrentqueue.h>
 #include <vector>
 
 template <typename AlnGroupT> class MiniBatchInfo {

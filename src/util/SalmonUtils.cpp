@@ -30,10 +30,10 @@
 #include "salmon/internal/model/TranscriptGroup.hpp"
 #include "salmon/internal/model/Transcript.hpp"
 
-#include "spdlog/fmt/fmt.h"
-#include "spdlog/fmt/ostr.h"
-#include "spdlog/sinks/ostream_sink.h"
-#include "spdlog/spdlog.h"
+#include <spdlog/fmt/fmt.h>
+#include <spdlog/fmt/ostr.h>
+#include <spdlog/sinks/ostream_sink.h>
+#include <spdlog/spdlog.h>
 
 #include "gff.h"
 
@@ -47,7 +47,7 @@
 #include "salmon/internal/io/StadenUtils.hpp"
 #include "SalmonDefaults.hpp"
 
-#include "pufferfish/Util.hpp"
+#include "Util.hpp"
 
 #include "zstr.hpp"
 

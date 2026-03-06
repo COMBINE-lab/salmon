@@ -4,7 +4,7 @@
 #include <memory>
 #include <mutex>
 
-#include "spdlog/spdlog.h"
+#include <spdlog/spdlog.h>
 
 #include <boost/iostreams/device/file.hpp>
 #include <boost/iostreams/filter/gzip.hpp>

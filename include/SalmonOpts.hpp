@@ -4,13 +4,13 @@
 #include <boost/filesystem.hpp>
 
 // Logger includes
-#include "spdlog/spdlog.h"
+#include <spdlog/spdlog.h>
 
 #include <fstream>
 #include <memory> // for shared_ptr
 #include <ostream>
 
-#include "pufferfish/Util.hpp"
+#include "Util.hpp"
 #include "SalmonDefaults.hpp"
 
 enum class SalmonQuantMode { MAP = 1, ALIGN = 2 };

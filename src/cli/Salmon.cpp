@@ -41,7 +41,7 @@
 #include <boost/range/irange.hpp>
 
 // C++ string formatting library
-#include "spdlog/fmt/fmt.h"
+#include <spdlog/fmt/fmt.h>
 
 #include "GenomicFeature.hpp"
 #include "SalmonConfig.hpp"

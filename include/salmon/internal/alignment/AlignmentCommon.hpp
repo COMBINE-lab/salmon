@@ -7,7 +7,7 @@
 
 
 // logger includes
-#include "spdlog/spdlog.h"
+#include <spdlog/spdlog.h>
 
 #include "salmon/internal/io/AlignmentIO.hpp"
 

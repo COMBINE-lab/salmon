@@ -4,7 +4,7 @@
 #include "SalmonConfig.hpp"
 #include "boost/filesystem.hpp"
 #include "cereal/archives/json.hpp"
-#include "spdlog/fmt/fmt.h"
+#include <spdlog/fmt/fmt.h>
 #include "json.hpp"
 
 enum class SalmonIndexType : uint8_t { FMD=0, QUASI=1, PUFF=2 };

@@ -38,7 +38,7 @@
 #include <vector>
 
 // C++ string formatting library
-#include "spdlog/fmt/fmt.h"
+#include <spdlog/fmt/fmt.h>
 
 // C Includes for BWA
 #include <cctype>
@@ -72,13 +72,13 @@
 #include "oneapi/tbb/partitioner.h"
 
 // logger includes
-#include "spdlog/spdlog.h"
+#include <spdlog/spdlog.h>
 
 // Cereal includes
 #include "cereal/archives/binary.hpp"
 #include "cereal/types/vector.hpp"
 
-#include "concurrentqueue.h"
+#include <concurrentqueue.h>
 
 // salmon includes
 #include "salmon/internal/quant/ClusterForest.hpp"
@@ -117,14 +117,14 @@
 #include "edlib.h"
 #include "tsl/hopscotch_map.h"
 
-#include "pufferfish/MemChainer.hpp"
-#include "pufferfish/MemCollector.hpp"
-#include "pufferfish/PuffAligner.hpp"
-#include "pufferfish/SAMWriter.hpp"
-#include "pufferfish/SelectiveAlignmentUtils.hpp"
-#include "pufferfish/Util.hpp"
-#include "pufferfish/ksw2pp/KSW2Aligner.hpp"
-#include "pufferfish/metro/metrohash64.h"
+#include "MemChainer.hpp"
+#include "MemCollector.hpp"
+#include "PuffAligner.hpp"
+#include "SAMWriter.hpp"
+#include "SelectiveAlignmentUtils.hpp"
+#include "Util.hpp"
+#include "ksw2pp/KSW2Aligner.hpp"
+#include "metro/metrohash64.h"
 
 /****** QUASI MAPPING DECLARATIONS *********/
 using MateStatus = pufferfish::util::MateStatus;

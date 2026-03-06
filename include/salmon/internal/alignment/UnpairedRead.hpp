@@ -5,7 +5,7 @@
 
 #include "salmon/internal/model/LibraryFormat.hpp"
 //#include "RapMapUtils.hpp"
-#include "pufferfish/Util.hpp"
+#include "Util.hpp"
 #include "SalmonMath.hpp"
 #include "salmon/internal/io/StadenUtils.hpp"
 

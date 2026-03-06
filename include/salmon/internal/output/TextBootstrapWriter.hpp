@@ -9,7 +9,7 @@
 #include "salmon/internal/output/BootstrapWriter.hpp"
 #include "SalmonSpinLock.hpp"
 #include "salmon/internal/model/Transcript.hpp"
-#include "spdlog/spdlog.h"
+#include <spdlog/spdlog.h>
 
 class TextBootstrapWriter : public BootstrapWriter {
 public:

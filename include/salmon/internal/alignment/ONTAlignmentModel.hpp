@@ -6,7 +6,7 @@
 #include <mutex>
 
 // logger includes
-#include "spdlog/spdlog.h"
+#include <spdlog/spdlog.h>
 
 #include "salmon/internal/alignment/AlignmentCommon.hpp"
 

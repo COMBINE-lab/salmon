@@ -8,12 +8,12 @@
 
 #include "cereal/archives/json.hpp"
 #include "cereal/types/vector.hpp"
-#include "spdlog/spdlog.h"
+#include <spdlog/spdlog.h>
 #include "json.hpp"
 
-#include "pufferfish/ProgOpts.hpp"
-#include "pufferfish/PufferfishIndex.hpp"
-#include "pufferfish/PufferfishSparseIndex.hpp"
+#include "ProgOpts.hpp"
+#include "PufferfishIndex.hpp"
+#include "PufferfishSparseIndex.hpp"
 
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "SalmonConfig.hpp"

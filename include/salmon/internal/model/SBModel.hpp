@@ -6,7 +6,7 @@
 #include "salmon/internal/util/UtilityFunctions.hpp"
 //#include "jellyfish/mer_dna.hpp"
 //#include "rapmap/Kmer.hpp"
-#include "pufferfish/Kmer.hpp"
+#include "Kmer.hpp"
 #include <Eigen/Dense>
 #include <cmath>
 

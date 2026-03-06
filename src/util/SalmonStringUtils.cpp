@@ -1,4 +1,4 @@
-#include "pufferfish/ProgOpts.hpp"
+#include "ProgOpts.hpp"
 #include "salmon/internal/util/SalmonStringUtils.hpp"
 #include <cmath>
 #include <cstdint>

@@ -29,7 +29,6 @@ model/FragmentLengthDistribution.cpp
 model/FragmentStartPositionDistribution.cpp
 model/EffectiveLengthStats.cpp
 model/TranscriptGroup.cpp
-model/LibraryFormat.cpp
 model/SBModel.cpp
 model/SimplePosBias.cpp
 model/SGSmooth.cpp
@@ -72,7 +71,6 @@ backtrace.cc
 xxhash.c
 edlib.cpp
 GenomicFeature.cpp
-${GAT_SOURCE_DIR}/external/install/src/pufferfish/metro/metrohash64.cpp
 )
 
 # check if we know how to do IPO
@@ -96,7 +94,6 @@ if(SALMON_ENABLE_TESTS)
 
   set (UNIT_TESTS_INDIVIDUAL_SRCS
     ${GAT_SOURCE_DIR}/src/model/FragmentLengthDistribution.cpp
-    ${GAT_SOURCE_DIR}/external/install/src/pufferfish/rank9b.cpp
     ${GAT_SOURCE_DIR}/tests/GCSampleTests.cpp
     ${GAT_SOURCE_DIR}/tests/LibraryTypeTests.cpp
   )
@@ -147,6 +144,11 @@ target_include_directories(salmon_repo_headers INTERFACE
   ${GAT_SOURCE_DIR}/include
 )
 
+add_library(salmon_pufferfish_preferred_headers INTERFACE)
+target_include_directories(salmon_pufferfish_preferred_headers INTERFACE
+  ${SALMON_PUFFERFISH_SOURCE_DIR}/include
+)
+
 add_library(salmon_eigen_headers INTERFACE)
 target_include_directories(salmon_eigen_headers INTERFACE
   ${GAT_SOURCE_DIR}/include/eigen3
@@ -157,8 +159,7 @@ target_include_directories(salmon_vendor_headers INTERFACE
   ${GAT_SOURCE_DIR}/external
   ${GAT_SOURCE_DIR}/external/cereal/include
   ${GAT_SOURCE_DIR}/external/install/include
-  ${GAT_SOURCE_DIR}/external/install/include/pufferfish
-  ${GAT_SOURCE_DIR}/external/install/include/pufferfish/digestpp
+  ${SALMON_PUFFERFISH_SOURCE_DIR}/include
   ${COMPACT_VECTOR_INCLUDE_PATH}
 )
 
@@ -198,6 +199,7 @@ function(salmon_configure_target target_name)
   target_link_libraries(${target_name}
     PRIVATE
       salmon_project_options
+      salmon_pufferfish_preferred_headers
       salmon_repo_headers
   )
   if (USE_ARM)
@@ -348,11 +350,6 @@ endif()
 #  message ("Setting libdivsufsort64 = ${SUFFARRAY_LIB64}") 
 #endif()
 
-add_dependencies(salmon puffer)
-add_dependencies(salmon twopaco)
-add_dependencies(salmon graphdump)
-add_dependencies(salmon ntcard)
-add_dependencies(salmon ksw2pp)
 if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
 target_link_libraries(salmon_common_link_deps INTERFACE
     Threads::Threads
@@ -367,7 +364,7 @@ target_link_libraries(salmon_common_link_deps INTERFACE
     ${BZIP2_LIBRARIES}
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
-    ksw2pp
+    pufferfish::puffer
     ${ASAN_LIB}
     ${FAST_MALLOC_LIB}
     TBB::tbb
@@ -380,10 +377,6 @@ target_link_libraries(salmon_common_link_deps INTERFACE
 target_link_libraries(salmon
     PRIVATE
       salmon_common_link_deps
-      puffer 
-      twopaco
-      graphdump
-      ntcard
 )
 endif()
 

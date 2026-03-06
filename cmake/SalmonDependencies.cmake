@@ -3,18 +3,33 @@ include_guard(GLOBAL)
 include(ExternalProject)
 include(FetchContent)
 
-if(NOT FETCHED_PUFFERFISH)
-  execute_process(
-    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/scripts/fetchPufferfish.sh"
-    RESULT_VARIABLE FETCH_PF_SCRIPT_RET
+set(SALMON_PUFFERFISH_GIT_REPOSITORY
+    "https://github.com/COMBINE-lab/pufferfish.git"
+    CACHE STRING "Git repository used when fetching pufferfish")
+set(SALMON_PUFFERFISH_GIT_TAG
+    "1b05f6f553f6ace0cd03a536984080b92add53ed"
+    CACHE STRING "Immutable git commit used when fetching pufferfish")
+set(SALMON_PUFFERFISH_SOURCE_DIR
+    ""
+    CACHE PATH "Optional local pufferfish source checkout to use instead of fetching")
+
+set(PUFFERFISH_EMBEDDED ON CACHE BOOL "" FORCE)
+set(BUILD_PUFF_FOR_SALMON ON CACHE BOOL "" FORCE)
+if(SALMON_PUFFERFISH_SOURCE_DIR)
+  FetchContent_Declare(salmon_pufferfish
+    SOURCE_DIR "${SALMON_PUFFERFISH_SOURCE_DIR}"
   )
-  message(STATUS "fetch PUFFERFISH exit code ${FETCH_PF_SCRIPT_RET}")
-  if(NOT (FETCH_PF_SCRIPT_RET EQUAL 0))
-    message(FATAL_ERROR
-            "Could not fetch pufferfish source [fetchPufferfish.sh returned exit code ${FETCH_PF_SCRIPT_RET}].")
-  endif()
-  set(FETCHED_PUFFERFISH TRUE CACHE BOOL "Has pufferfish been fetched?" FORCE)
+else()
+  FetchContent_Declare(salmon_pufferfish
+    GIT_REPOSITORY ${SALMON_PUFFERFISH_GIT_REPOSITORY}
+    GIT_TAG ${SALMON_PUFFERFISH_GIT_TAG}
+    GIT_SHALLOW FALSE
+  )
 endif()
+FetchContent_MakeAvailable(salmon_pufferfish)
+set(FETCHED_PUFFERFISH TRUE CACHE BOOL "Has pufferfish been fetched?" FORCE)
+set(SALMON_PUFFERFISH_SOURCE_DIR "${salmon_pufferfish_SOURCE_DIR}" CACHE INTERNAL "" FORCE)
+set(SALMON_PUFFERFISH_BINARY_DIR "${salmon_pufferfish_BINARY_DIR}" CACHE INTERNAL "" FORCE)
 
 if(DEFINED CUSTOM_BOOST_PATH)
   set(CMAKE_INCLUDE_PATH ${CUSTOM_BOOST_PATH} ${CMAKE_INCLUDE_PATH})

@@ -3,7 +3,7 @@
 
 #include "SalmonMath.hpp"
 #include "SalmonSpinLock.hpp"
-#include "spdlog/spdlog.h"
+#include <spdlog/spdlog.h>
 
 class ForgettingMassCalculator {
 public:

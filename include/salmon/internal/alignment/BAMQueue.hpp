@@ -18,9 +18,9 @@
 #include "salmon/internal/alignment/ReadPair.hpp"
 #include "SalmonMath.hpp"
 #include "salmon/internal/alignment/UnpairedRead.hpp"
-#include "concurrentqueue.h"
+#include <concurrentqueue.h>
 #include "readerwriterqueue.h"
-#include "spdlog/spdlog.h"
+#include <spdlog/spdlog.h>
 #include <boost/filesystem.hpp>
 #include <boost/timer/timer.hpp>
 #include <oneapi/tbb/concurrent_queue.h>

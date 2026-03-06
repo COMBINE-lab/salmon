@@ -12,7 +12,7 @@
 
 #include "kseq++.hpp"
 
-#include "concurrentqueue.h"
+#include <concurrentqueue.h>
 
 #ifndef __FASTX_PARSER_PRECXX14_MAKE_UNIQUE__
 #define __FASTX_PARSER_PRECXX14_MAKE_UNIQUE__

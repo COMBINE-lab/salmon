@@ -22,7 +22,7 @@
 #include "pcg_random.hpp"
 
 // C++ string formatting library
-#include "spdlog/fmt/fmt.h"
+#include <spdlog/fmt/fmt.h>
 
 #include "Eigen/Dense"
 #include "cuckoohash_map.hh"

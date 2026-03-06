@@ -32,8 +32,8 @@
 #include <vector>
 
 // C++ string formatting library
-#include "spdlog/fmt/fmt.h"
-#include "spdlog/spdlog.h"
+#include <spdlog/fmt/fmt.h>
+#include <spdlog/spdlog.h>
 
 // Future C++ convenience classes
 #include "core/range.hpp"
@@ -48,15 +48,15 @@
 #include "salmon/internal/model/Transcript.hpp"
 
 #include "parallel_hashmap/phmap.h"
-#include "pufferfish/MemChainer.hpp"
-#include "pufferfish/MemCollector.hpp"
-#include "pufferfish/PuffAligner.hpp"
-#include "pufferfish/SAMWriter.hpp"
-#include "pufferfish/SelectiveAlignmentUtils.hpp"
-#include "pufferfish/Util.hpp"
-#include "pufferfish/itlib/small_vector.hpp"
-#include "pufferfish/ksw2pp/KSW2Aligner.hpp"
-#include "pufferfish/metro/metrohash64.h"
+#include "MemChainer.hpp"
+#include "MemCollector.hpp"
+#include "PuffAligner.hpp"
+#include "SAMWriter.hpp"
+#include "SelectiveAlignmentUtils.hpp"
+#include "Util.hpp"
+#include "itlib/small_vector.hpp"
+#include "ksw2pp/KSW2Aligner.hpp"
+#include "metro/metrohash64.h"
 
 namespace salmon {
 namespace mapping_utils {

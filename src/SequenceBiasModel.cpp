@@ -6,8 +6,8 @@
 #include "salmon/internal/model/LibraryFormat.hpp"
 #include "salmon/internal/model/SequenceBiasModel.hpp"
 #include "salmon/internal/model/Transcript.hpp"
-#include "spdlog/fmt/fmt.h"
-#include "spdlog/fmt/ostr.h"
+#include <spdlog/fmt/fmt.h>
+#include <spdlog/fmt/ostr.h>
 
 SequenceBiasModel::SequenceBiasModel(double alpha, uint32_t windowSize)
     : // Let's try a 0th order model first

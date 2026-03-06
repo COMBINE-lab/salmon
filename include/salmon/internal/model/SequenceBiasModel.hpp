@@ -6,7 +6,7 @@
 #include <mutex>
 
 // logger includes
-#include "spdlog/spdlog.h"
+#include <spdlog/spdlog.h>
 
 #include "salmon/internal/util/AtomicMatrix.hpp"
 #include "oneapi/tbb/concurrent_vector.h"

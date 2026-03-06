@@ -34,10 +34,10 @@
 #include "salmon/internal/index/SalmonIndex.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/Transcript.hpp"
-#include "pufferfish/ProgOpts.hpp"
-#include "spdlog/fmt/fmt.h"
-#include "spdlog/fmt/ostr.h"
-#include "spdlog/spdlog.h"
+#include "ProgOpts.hpp"
+#include <spdlog/fmt/fmt.h>
+#include <spdlog/fmt/ostr.h>
+#include <spdlog/spdlog.h>
 
 // Cool way to do this from
 // http://stackoverflow.com/questions/108318/whats-the-simplest-way-to-test-whether-a-number-is-a-power-of-2-in-c

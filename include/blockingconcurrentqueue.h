@@ -6,7 +6,7 @@
 
 #pragma once
 
-#include "concurrentqueue.h"
+#include <concurrentqueue.h>
 #include "lightweightsemaphore.h"
 
 #include <type_traits>

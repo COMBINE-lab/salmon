@@ -21,7 +21,7 @@
 #include "salmon/internal/util/UtilityFunctions.hpp"
 
 // Logger includes
-#include "spdlog/spdlog.h"
+#include <spdlog/spdlog.h>
 
 // Boost includes
 #include <boost/filesystem.hpp>

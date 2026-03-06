@@ -1,10 +1,10 @@
 #ifndef __LIBRARY_TYPE_DETECTOR__
 #define __LIBRARY_TYPE_DETECTOR__
 
-#include "spdlog/fmt/fmt.h"
-#include "spdlog/fmt/ostr.h"
-#include "spdlog/sinks/ostream_sink.h"
-#include "spdlog/spdlog.h"
+#include <spdlog/fmt/fmt.h>
+#include <spdlog/fmt/ostr.h>
+#include <spdlog/sinks/ostream_sink.h>
+#include <spdlog/spdlog.h>
 
 #include "salmon/internal/model/LibraryFormat.hpp"
 

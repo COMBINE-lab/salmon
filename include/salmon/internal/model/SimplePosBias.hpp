@@ -1,7 +1,7 @@
 #ifndef SIMPLE_POS_BIAS_HPP
 #define SIMPLE_POS_BIAS_HPP
 
-#include "spdlog/spdlog.h"
+#include <spdlog/spdlog.h>
 #include "spline.h"
 #include <array>
 #include <boost/iostreams/filtering_stream.hpp>

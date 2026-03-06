@@ -4,8 +4,8 @@
 #include "salmon/internal/io/AlignmentIO.hpp"
 
 // for cpp-format
-#include "spdlog/fmt/fmt.h"
-#include "spdlog/spdlog.h"
+#include <spdlog/fmt/fmt.h>
+#include <spdlog/spdlog.h>
 
 #include <atomic>
 #include <condition_variable>

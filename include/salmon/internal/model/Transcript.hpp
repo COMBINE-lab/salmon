@@ -15,7 +15,7 @@
 #include <memory>
 
 #include "compact_vector/compact_vector.hpp"
-#include "pufferfish/rank9b.hpp"
+#include "rank9b.hpp"
 
 class Transcript {
   static constexpr const uint32_t adapterBindingLength{5};

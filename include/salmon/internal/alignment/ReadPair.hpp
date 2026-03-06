@@ -3,12 +3,12 @@
 
 #include "salmon/internal/model/LibraryFormat.hpp"
 //#include "RapMapUtils.hpp"
-#include "pufferfish/Util.hpp"
+#include "Util.hpp"
 #include "SalmonMath.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/io/StadenUtils.hpp"
 
-#include "spdlog/fmt/fmt.h"
+#include <spdlog/fmt/fmt.h>
 
 struct ReadPair {
   bam_seq_t* read1 = nullptr;
