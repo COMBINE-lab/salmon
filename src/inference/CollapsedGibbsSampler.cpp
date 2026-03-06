@@ -27,11 +27,11 @@
 #include "Eigen/Dense"
 #include "cuckoohash_map.hh"
 
-#include "AlignmentLibrary.hpp"
+#include "salmon/internal/alignment/AlignmentLibrary.hpp"
 #include "BootstrapWriter.hpp"
 #include "salmon/internal/inference/CollapsedGibbsSampler.hpp"
 #include "MultinomialSampler.hpp"
-#include "ReadExperiment.hpp"
+#include "salmon/internal/quant/ReadExperiment.hpp"
 #include "ReadPair.hpp"
 #include "SalmonMath.hpp"
 #include "Transcript.hpp"

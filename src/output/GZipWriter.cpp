@@ -6,10 +6,10 @@
 #include "parallel_hashmap/phmap.h"
 #include "cereal/archives/json.hpp"
 
-#include "AlignmentLibrary.hpp"
+#include "salmon/internal/alignment/AlignmentLibrary.hpp"
 #include "salmon/internal/util/DistributionUtils.hpp"
 #include "salmon/internal/output/GZipWriter.hpp"
-#include "ReadExperiment.hpp"
+#include "salmon/internal/quant/ReadExperiment.hpp"
 #include "ReadPair.hpp"
 #include "SalmonOpts.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"

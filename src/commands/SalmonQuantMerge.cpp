@@ -27,7 +27,7 @@
 // C++ string formatting library #include "spdlog/fmt/fmt.h"
 // logger includes
 #include "spdlog/spdlog.h"
-#include "SalmonIndex.hpp"
+#include "salmon/internal/index/SalmonIndex.hpp"
 
 enum class TargetColumn { LEN, ELEN, TPM, NREADS };
 

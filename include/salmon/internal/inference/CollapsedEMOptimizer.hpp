@@ -5,7 +5,7 @@
 #include <functional>
 #include <unordered_map>
 
-#include "ReadExperiment.hpp"
+#include "salmon/internal/quant/ReadExperiment.hpp"
 #include "SalmonOpts.hpp"
 
 #include "Eigen/Dense"

@@ -1,7 +1,7 @@
 #include <iostream>
 #include <memory>
 
-#include "SalmonIndex.hpp"
+#include "salmon/internal/index/SalmonIndex.hpp"
 
 int salmonBarcoding(int /*argc*/, const char* /*argv*/[],
                     std::unique_ptr<SalmonIndex>& /*index*/) {

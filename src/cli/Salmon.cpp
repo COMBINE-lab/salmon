@@ -46,7 +46,7 @@
 #include "GenomicFeature.hpp"
 #include "SalmonConfig.hpp"
 #include "salmon/internal/cli/VersionChecker.hpp"
-#include "SalmonIndex.hpp"
+#include "salmon/internal/index/SalmonIndex.hpp"
 
 int help(const std::vector<std::string>& /*opts*/) {
   fmt::MemoryWriter helpMsg;

@@ -10,7 +10,7 @@
 #include <boost/iostreams/filter/gzip.hpp>
 #include <boost/iostreams/filtering_stream.hpp>
 
-#include "ReadExperiment.hpp"
+#include "salmon/internal/quant/ReadExperiment.hpp"
 #include "SalmonOpts.hpp"
 #include "SalmonSpinLock.hpp"
 #include "MappingStatistics.hpp"

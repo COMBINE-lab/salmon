@@ -27,7 +27,7 @@
 #include <boost/program_options.hpp>
 #include <boost/timer/timer.hpp>
 
-#include "AlignmentLibrary.hpp"
+#include "salmon/internal/alignment/AlignmentLibrary.hpp"
 #include "salmon/internal/alignment/BAMQueue.hpp"
 #include "salmon/internal/alignment/BAMUtils.hpp"
 #include "ClusterForest.hpp"

@@ -31,7 +31,7 @@
 #include "oneapi/tbb/parallel_sort.h"
 
 #include "GenomicFeature.hpp"
-#include "SalmonIndex.hpp"
+#include "salmon/internal/index/SalmonIndex.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "Transcript.hpp"
 #include "pufferfish/ProgOpts.hpp"
