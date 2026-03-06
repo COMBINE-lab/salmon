@@ -7,29 +7,11 @@ set(SALMON_PUFFERFISH_GIT_REPOSITORY
     "https://github.com/COMBINE-lab/pufferfish.git"
     CACHE STRING "Git repository used when fetching pufferfish")
 set(SALMON_PUFFERFISH_GIT_TAG
-    "1b05f6f553f6ace0cd03a536984080b92add53ed"
+    "1b15f5c6ac7cea73d30dea9664daaa0907044f34"
     CACHE STRING "Immutable git commit used when fetching pufferfish")
 set(SALMON_PUFFERFISH_SOURCE_DIR
     ""
     CACHE PATH "Optional local pufferfish source checkout to use instead of fetching")
-
-set(PUFFERFISH_EMBEDDED ON CACHE BOOL "" FORCE)
-set(BUILD_PUFF_FOR_SALMON ON CACHE BOOL "" FORCE)
-if(SALMON_PUFFERFISH_SOURCE_DIR)
-  FetchContent_Declare(salmon_pufferfish
-    SOURCE_DIR "${SALMON_PUFFERFISH_SOURCE_DIR}"
-  )
-else()
-  FetchContent_Declare(salmon_pufferfish
-    GIT_REPOSITORY ${SALMON_PUFFERFISH_GIT_REPOSITORY}
-    GIT_TAG ${SALMON_PUFFERFISH_GIT_TAG}
-    GIT_SHALLOW FALSE
-  )
-endif()
-FetchContent_MakeAvailable(salmon_pufferfish)
-set(FETCHED_PUFFERFISH TRUE CACHE BOOL "Has pufferfish been fetched?" FORCE)
-set(SALMON_PUFFERFISH_SOURCE_DIR "${salmon_pufferfish_SOURCE_DIR}" CACHE INTERNAL "" FORCE)
-set(SALMON_PUFFERFISH_BINARY_DIR "${salmon_pufferfish_BINARY_DIR}" CACHE INTERNAL "" FORCE)
 
 if(DEFINED CUSTOM_BOOST_PATH)
   set(CMAKE_INCLUDE_PATH ${CUSTOM_BOOST_PATH} ${CMAKE_INCLUDE_PATH})
@@ -381,6 +363,24 @@ if(TBB_RECONFIGURE)
   message(STATUS "[in TBB_RECONFIGURE] TBB_LIBRARIES = ${TBB_LIBRARIES}")
 endif()
 
+set(PUFFERFISH_EMBEDDED ON CACHE BOOL "" FORCE)
+set(BUILD_PUFF_FOR_SALMON ON CACHE BOOL "" FORCE)
+if(SALMON_PUFFERFISH_SOURCE_DIR)
+  FetchContent_Declare(salmon_pufferfish
+    SOURCE_DIR "${SALMON_PUFFERFISH_SOURCE_DIR}"
+  )
+else()
+  FetchContent_Declare(salmon_pufferfish
+    GIT_REPOSITORY ${SALMON_PUFFERFISH_GIT_REPOSITORY}
+    GIT_TAG ${SALMON_PUFFERFISH_GIT_TAG}
+    GIT_SHALLOW FALSE
+  )
+endif()
+FetchContent_MakeAvailable(salmon_pufferfish)
+set(FETCHED_PUFFERFISH TRUE CACHE BOOL "Has pufferfish been fetched?" FORCE)
+set(SALMON_PUFFERFISH_SOURCE_DIR "${salmon_pufferfish_SOURCE_DIR}" CACHE INTERNAL "" FORCE)
+set(SALMON_PUFFERFISH_BINARY_DIR "${salmon_pufferfish_BINARY_DIR}" CACHE INTERNAL "" FORCE)
+
 find_package(libgff 2.0.0 HINTS ${LIB_GFF_PATH} ${GFF_ROOT})
 if(libgff_FOUND)
   if(GFF_INCLUDE_DIR)
@@ -459,7 +459,13 @@ else()
   message(FATAL_ERROR "htslib is required. Install htslib or enable SALMON_FETCH_MISSING_DEPS.")
 endif()
 
-if(ASAN_BUILD OR SALMON_USE_MIMALLOC STREQUAL "OFF")
+if(APPLE AND SALMON_USE_MIMALLOC STREQUAL "REQUIRED")
+  message(FATAL_ERROR "mimalloc override is not yet stable on macOS in this build; use SALMON_USE_MIMALLOC=OFF.")
+elseif(APPLE AND SALMON_USE_MIMALLOC STREQUAL "AUTO")
+  message(STATUS "Disabling mimalloc in AUTO mode on macOS until the override path is stabilized")
+  set(FAST_MALLOC_LIB "")
+  set(HAVE_FAST_MALLOC TRUE)
+elseif(ASAN_BUILD OR SALMON_USE_MIMALLOC STREQUAL "OFF")
   set(FAST_MALLOC_LIB "")
   set(HAVE_FAST_MALLOC TRUE)
 else()
@@ -477,7 +483,7 @@ if(NOT HAVE_FAST_MALLOC AND SALMON_FETCH_MISSING_DEPS)
   message(STATUS "mimalloc not found; fetching pinned mimalloc release")
   set(MI_BUILD_SHARED OFF CACHE BOOL "" FORCE)
   set(MI_BUILD_STATIC ON CACHE BOOL "" FORCE)
-  set(MI_BUILD_OBJECT ON CACHE BOOL "" FORCE)
+  set(MI_BUILD_OBJECT OFF CACHE BOOL "" FORCE)
   set(MI_BUILD_TESTS OFF CACHE BOOL "" FORCE)
   set(MI_OVERRIDE ON CACHE BOOL "" FORCE)
   FetchContent_Declare(salmon_mimalloc
@@ -486,9 +492,7 @@ if(NOT HAVE_FAST_MALLOC AND SALMON_FETCH_MISSING_DEPS)
   )
   FetchContent_MakeAvailable(salmon_mimalloc)
   set(FETCHED_MIMALLOC TRUE)
-  if(TARGET mimalloc-obj AND TARGET mimalloc-static)
-    set(FAST_MALLOC_LIB mimalloc-obj mimalloc-static)
-  elseif(TARGET mimalloc-static)
+  if(TARGET mimalloc-static)
     set(FAST_MALLOC_LIB mimalloc-static)
   endif()
   set(HAVE_FAST_MALLOC TRUE)

@@ -24,6 +24,7 @@
 #include "salmon/internal/alignment/ReadPair.hpp"
 #include "salmon/internal/model/SBModel.hpp"
 #include "SalmonMath.hpp"
+#include "salmon/internal/util/FmtCompat.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "TryableSpinLock.hpp"
 #include "salmon/internal/alignment/UnpairedRead.hpp"
@@ -32,7 +33,10 @@
 
 #include <spdlog/fmt/fmt.h>
 #include <spdlog/fmt/ostr.h>
+#include <spdlog/async.h>
+#include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/ostream_sink.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 
 #include "gff.h"
@@ -271,7 +275,8 @@ bool compatibleHit(const LibraryFormat expected, const LibraryFormat observed) {
     // SHOULD NOT GET HERE
     fmt::print(stderr,
                "WARNING: PE compatibility function called with SE read!\n");
-    fmt::print(stderr, "expected: {}, observed: {}\n", expected, observed);
+    std::cerr << "expected: " << expected << ", observed: " << observed
+              << '\n';
     return false;
   }
 
@@ -1780,7 +1785,7 @@ bool createDirectoryVerbose_(boost::filesystem::path& dirPath) {
                  "and is not a directory.\n"
                  "Please either remove this file or choose another "
                  "auxiliary directory.\n",
-                 ioutils::SET_RED, ioutils::RESET_COLOR, dirPath);
+                 ioutils::SET_RED, ioutils::RESET_COLOR, dirPath.string());
       return false;
     }
   } else { // If the path doesn't exist, then create it
@@ -1788,7 +1793,7 @@ bool createDirectoryVerbose_(boost::filesystem::path& dirPath) {
       fmt::print(stderr,
                  "{}ERROR{}: Could not create the directory [{}]. "
                  "Please check that doing so is valid.",
-                 ioutils::SET_RED, ioutils::RESET_COLOR, dirPath);
+                 ioutils::SET_RED, ioutils::RESET_COLOR, dirPath.string());
       return false;
     }
   }
@@ -1921,20 +1926,28 @@ bool processQuantOptions(SalmonOpts& sopt,
     }
   }
 
-  spdlog::set_async_mode(max_q_size);
+  spdlog::init_thread_pool(max_q_size, 1);
   auto fileSink =
-    std::make_shared<spdlog::sinks::simple_file_sink_mt>(logPath.string(), true);
+    std::make_shared<spdlog::sinks::basic_file_sink_mt>(logPath.string(), true);
   // auto rawConsoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
   // auto consoleSink =
   //    std::make_shared<spdlog::sinks::ansicolor_sink>(rawConsoleSink);
   auto consoleSink =
-      std::make_shared<spdlog::sinks::ansicolor_stderr_sink_mt>();
+      std::make_shared<spdlog::sinks::stderr_color_sink_mt>();
   consoleSink->set_color(spdlog::level::warn, consoleSink->magenta);
-  auto consoleLog = spdlog::create("stderrLog", {consoleSink});
-  auto fileLog = spdlog::create("fileLog", {fileSink});
+  auto consoleLog = std::make_shared<spdlog::async_logger>(
+      "stderrLog", consoleSink, spdlog::thread_pool(),
+      spdlog::async_overflow_policy::block);
+  spdlog::register_or_replace(consoleLog);
+  auto fileLog = std::make_shared<spdlog::async_logger>(
+      "fileLog", fileSink, spdlog::thread_pool(),
+      spdlog::async_overflow_policy::block);
+  spdlog::register_or_replace(fileLog);
   std::vector<spdlog::sink_ptr> sinks{consoleSink, fileSink};
-  auto jointLog =
-      spdlog::create("jointLog", std::begin(sinks), std::end(sinks));
+  auto jointLog = std::make_shared<spdlog::async_logger>(
+      "jointLog", std::begin(sinks), std::end(sinks), spdlog::thread_pool(),
+      spdlog::async_overflow_policy::block);
+  spdlog::register_or_replace(jointLog);
 
   // If we're being quiet, then only emit errors.
   if (sopt.quiet) {
@@ -2342,7 +2355,8 @@ void markAuxiliaryTargets(SalmonOpts& sopt, std::vector<Transcript>& transcripts
   // write down the aux target ids in the output directory
   bfs::path auxDir = sopt.outputDirectory / sopt.auxDir;
   if (!bfs::exists(auxDir)) {
-    log->warn("The salmon aux directory {} did not exist.  Cannot write aux_target_ids.json!", auxDir);
+    log->warn("The salmon aux directory {} did not exist.  Cannot write aux_target_ids.json!",
+              auxDir.string());
   }
   bfs::path auxIDFilePath = sopt.outputDirectory / sopt.auxDir / "aux_target_ids.json";
   std::ofstream auxIDFile(auxIDFilePath.string());

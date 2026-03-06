@@ -26,6 +26,8 @@
 #include <memory>
 // C++ string formatting library #include "spdlog/fmt/fmt.h"
 // logger includes
+#include <spdlog/async.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 #include "salmon/internal/index/SalmonIndex.hpp"
 
@@ -271,11 +273,14 @@ a single file.
 
     po::notify(vm);
     size_t max_q_size = 131072;
-    spdlog::set_async_mode(max_q_size);
+    spdlog::init_thread_pool(max_q_size, 1);
 
     auto consoleSink =
-        std::make_shared<spdlog::sinks::ansicolor_stdout_sink_mt>();
-    auto consoleLog = spdlog::create("mergeLog", {consoleSink});
+        std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+    auto consoleLog = std::make_shared<spdlog::async_logger>(
+        "mergeLog", consoleSink, spdlog::thread_pool(),
+        spdlog::async_overflow_policy::block);
+    spdlog::register_or_replace(consoleLog);
     qmOpts.log = consoleLog;
 
     validateOptions(vm, qmOpts, consoleLog);

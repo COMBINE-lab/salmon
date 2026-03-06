@@ -43,6 +43,7 @@
 #include "SalmonConfig.hpp"
 #include "SalmonMath.hpp"
 #include "SalmonOpts.hpp"
+#include "salmon/internal/util/FmtCompat.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/Transcript.hpp"
 #include "TranscriptCluster.hpp"
@@ -481,10 +482,8 @@ bool sampleLibrary(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
     }
     if (numProc % 1000000 == 0) {
       const char RESET_COLOR[] = "\x1b[0m";
-      char green[] = "\x1b[30m";
-      green[3] = '0' + static_cast<char>(fmt::GREEN);
-      char red[] = "\x1b[30m";
-      red[3] = '0' + static_cast<char>(fmt::RED);
+      const char green[] = "\x1b[32m";
+      const char red[] = "\x1b[31m";
       fmt::print(stderr, "\r\r{}processed{} {} {}reads{}", green, red, numProc,
                  green, RESET_COLOR);
     }

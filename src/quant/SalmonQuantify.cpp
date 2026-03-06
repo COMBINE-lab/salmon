@@ -38,6 +38,7 @@
 #include <vector>
 
 // C++ string formatting library
+#include "salmon/internal/util/FmtCompat.hpp"
 #include <spdlog/fmt/fmt.h>
 
 // C Includes for BWA
@@ -879,7 +880,7 @@ void processReads(
   pufferfish::util::HitCounters hctr;
   salmon::utils::MappingType mapType{salmon::utils::MappingType::UNMAPPED};
 
-  fmt::MemoryWriter sstream;
+  std::ostringstream sstream;
   auto* qmLog = salmonOpts.qmLog.get();
   bool writeQuasimappings = (qmLog != nullptr);
   // if we aren't writing output at all, don't bother
@@ -1502,19 +1503,19 @@ void processReads(
       ++numObservedFragments;
       if (!quiet and numObservedFragments % 500000 == 0) {
         iomutex.lock();
+        const auto observedFragments = numObservedFragments.load();
+        const auto observedHits = validHits.load();
         const char RESET_COLOR[] = "\x1b[0m";
-        char green[] = "\x1b[30m";
-        green[3] = '0' + static_cast<char>(fmt::GREEN);
-        char red[] = "\x1b[30m";
-        red[3] = '0' + static_cast<char>(fmt::RED);
+        const char green[] = "\x1b[32m";
+        const char red[] = "\x1b[31m";
         if (initialRound) {
           fmt::print(stderr, "\033[A\r\r{}processed{} {:n} {}fragments{}\n",
-                     green, red, numObservedFragments, green, RESET_COLOR);
-          fmt::print(stderr, "hits: {:n}, hits per frag:  {}", validHits,
-                     validHits / static_cast<float>(prevObservedFrags));
+                     green, red, observedFragments, green, RESET_COLOR);
+          fmt::print(stderr, "hits: {:n}, hits per frag:  {}", observedHits,
+                     observedHits / static_cast<float>(prevObservedFrags));
         } else {
           fmt::print(stderr, "\r\r{}processed{} {:n} {}fragments{}", green, red,
-                     numObservedFragments, green, RESET_COLOR);
+                     observedFragments, green, RESET_COLOR);
         }
         iomutex.unlock();
       }
@@ -1538,6 +1539,7 @@ void processReads(
         outStr.pop_back();
         qmLog->info(std::move(outStr));
       }
+      sstream.str("");
       sstream.clear();
     }
 
@@ -1551,7 +1553,7 @@ void processReads(
       orphanLinks.clear();
     }
 
-    prevObservedFrags = numObservedFragments;
+    prevObservedFrags = numObservedFragments.load();
     AlnGroupVecRange<QuasiAlignment> hitLists = {
         structureVec.begin(), structureVec.begin() + rangeSize};
 
@@ -1703,7 +1705,7 @@ void processReads(
   pufferfish::util::HitCounters hctr;
   salmon::utils::MappingType mapType{salmon::utils::MappingType::UNMAPPED};
 
-  fmt::MemoryWriter sstream;
+  std::ostringstream sstream;
   auto* qmLog = salmonOpts.qmLog.get();
   bool writeQuasimappings = (qmLog != nullptr);
   // if we aren't writing output at all, don't bother
@@ -1966,19 +1968,19 @@ void processReads(
       ++numObservedFragments;
       if (!quiet and numObservedFragments % 500000 == 0) {
         iomutex.lock();
+        const auto observedFragments = numObservedFragments.load();
+        const auto observedHits = validHits.load();
         const char RESET_COLOR[] = "\x1b[0m";
-        char green[] = "\x1b[30m";
-        green[3] = '0' + static_cast<char>(fmt::GREEN);
-        char red[] = "\x1b[30m";
-        red[3] = '0' + static_cast<char>(fmt::RED);
+        const char green[] = "\x1b[32m";
+        const char red[] = "\x1b[31m";
         if (initialRound) {
           fmt::print(stderr, "\033[A\r\r{}processed{} {:n} {}fragments{}\n",
-                     green, red, numObservedFragments, green, RESET_COLOR);
-          fmt::print(stderr, "hits: {:n}; hits per frag:  {}", validHits,
-                     validHits / static_cast<float>(prevObservedFrags));
+                     green, red, observedFragments, green, RESET_COLOR);
+          fmt::print(stderr, "hits: {:n}; hits per frag:  {}", observedHits,
+                     observedHits / static_cast<float>(prevObservedFrags));
         } else {
           fmt::print(stderr, "\r\r{}processed{} {:n} {}fragments{}", green, red,
-                     numObservedFragments, green, RESET_COLOR);
+                     observedFragments, green, RESET_COLOR);
         }
         iomutex.unlock();
       }
@@ -2002,10 +2004,11 @@ void processReads(
         outStr.pop_back();
         qmLog->info(std::move(outStr));
       }
+      sstream.str("");
       sstream.clear();
     }
 
-    prevObservedFrags = numObservedFragments;
+    prevObservedFrags = numObservedFragments.load();
     AlnGroupVecRange<QuasiAlignment> hitLists = {
         structureVec.begin(), structureVec.begin() + rangeSize};
     /*boost::make_iterator_range(
@@ -2340,7 +2343,7 @@ void quantifyLibrary(ReadExperimentT& experiment, SalmonOpts& salmonOpts,
             "was some other problem. Please make sure, e.g., that you have not "
             "run out of disk space.\n"
             "==========================\n\n",
-            experiment.readFilesAsString(), numObservedFragments,
+            experiment.readFilesAsString(), numObservedFragments.load(),
             numRequiredFragments);
         jointLog->warn(errmsg);
         break;
@@ -2407,8 +2410,8 @@ void quantifyLibrary(ReadExperimentT& experiment, SalmonOpts& salmonOpts,
         "\nAt end of round {}\n"
         "==================\n"
         "Observed {} total fragments ({} in most recent round)\n",
-        roundNum - 1, numObservedFragments,
-        numObservedFragments - numPrevObservedFragments);
+        roundNum - 1, numObservedFragments.load(),
+        numObservedFragments.load() - numPrevObservedFragments);
   }
   if (!salmonOpts.quiet) {
     fmt::print(stderr, "\n\n\n\n");
@@ -2473,7 +2476,7 @@ void quantifyLibrary(ReadExperimentT& experiment, SalmonOpts& salmonOpts,
                    "fragments was set to {}.\n"
                    "The effective lengths have been computed using the "
                    "observed mappings.\n",
-                   totalAssignedFragments, salmonOpts.numBurninFrags);
+                   totalAssignedFragments.load(), salmonOpts.numBurninFrags);
   }
 
   if (numObservedFragments <= prevNumObservedFragments) {

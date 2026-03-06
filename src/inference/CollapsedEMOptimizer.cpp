@@ -20,6 +20,7 @@
 #include "cuckoohash_map.hh"
 
 #include "salmon/internal/alignment/AlignmentLibrary.hpp"
+#include "salmon/internal/util/FmtCompat.hpp"
 #include "salmon/internal/output/BootstrapWriter.hpp"
 #include "salmon/internal/inference/CollapsedEMOptimizer.hpp"
 #include "salmon/internal/inference/MultinomialSampler.hpp"

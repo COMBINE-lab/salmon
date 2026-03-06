@@ -47,21 +47,21 @@
 #include "SalmonConfig.hpp"
 #include "salmon/internal/cli/VersionChecker.hpp"
 #include "salmon/internal/index/SalmonIndex.hpp"
+#include "salmon/internal/util/FmtCompat.hpp"
 
 int help(const std::vector<std::string>& /*opts*/) {
   fmt::MemoryWriter helpMsg;
-  helpMsg.write("salmon v{}\n\n", salmon::version);
-  helpMsg.write(
-      "Usage:  salmon -h|--help or \n"
-      "        salmon -v|--version or \n"
-      "        salmon -c|--cite or \n"
-      "        salmon [--no-version-check] <COMMAND> [-h | options]\n\n");
-  helpMsg.write("Commands:\n");
-  helpMsg.write("     index      : create a salmon index\n");
-  helpMsg.write("     quant      : quantify a sample\n");
-  helpMsg.write("     alevin     : removed; use alevin-fry for single-cell analysis\n");
-  helpMsg.write("     swim       : perform super-secret operation\n");
-  helpMsg.write("     quantmerge : merge multiple quantifications into a single file\n");
+  helpMsg << "salmon v" << salmon::version << "\n\n";
+  helpMsg << "Usage:  salmon -h|--help or \n"
+             "        salmon -v|--version or \n"
+             "        salmon -c|--cite or \n"
+             "        salmon [--no-version-check] <COMMAND> [-h | options]\n\n";
+  helpMsg << "Commands:\n";
+  helpMsg << "     index      : create a salmon index\n";
+  helpMsg << "     quant      : quantify a sample\n";
+  helpMsg << "     alevin     : removed; use alevin-fry for single-cell analysis\n";
+  helpMsg << "     swim       : perform super-secret operation\n";
+  helpMsg << "     quantmerge : merge multiple quantifications into a single file\n";
 
   std::cout << helpMsg.str();
   return 0;

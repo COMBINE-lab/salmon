@@ -14,6 +14,7 @@
 #include "salmon/internal/index/SalmonIndex.hpp"
 #include "SalmonOpts.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
+#include "salmon/internal/util/FmtCompat.hpp"
 // #include "SequenceBiasModel.hpp"
 #include "salmon/internal/model/SimplePosBias.hpp"
 #include "SpinLock.hpp" // RapMap's with try_lock

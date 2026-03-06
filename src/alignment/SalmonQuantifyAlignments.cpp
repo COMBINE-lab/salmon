@@ -35,6 +35,7 @@
 #include "salmon/internal/model/LibraryFormat.hpp"
 #include "salmon/internal/alignment/MiniBatchInfo.hpp"
 #include "salmon/internal/util/SalmonExceptions.hpp"
+#include "salmon/internal/util/FmtCompat.hpp"
 #include "SalmonMath.hpp"
 #include "salmon/internal/model/Transcript.hpp"
 #include "salmon/internal/cli/ProgramOptionsGenerator.hpp"

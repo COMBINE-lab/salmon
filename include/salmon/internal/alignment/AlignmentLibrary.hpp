@@ -157,7 +157,7 @@ public:
     FASTAParser fp(transcriptFile.string());
 
     fmt::print(stderr, "Populating targets from aln = {}, fasta = {} . . .",
-               alnFiles.front(), transcriptFile_);
+               alnFiles.front().string(), transcriptFile_.string());
     fp.populateTargets(transcripts_, salmonOpts);
     /*
 for (auto& txp : transcripts_) {

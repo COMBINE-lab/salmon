@@ -32,11 +32,14 @@
 
 #include "GenomicFeature.hpp"
 #include "salmon/internal/index/SalmonIndex.hpp"
+#include "salmon/internal/util/FmtCompat.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/Transcript.hpp"
 #include "ProgOpts.hpp"
 #include <spdlog/fmt/fmt.h>
 #include <spdlog/fmt/ostr.h>
+#include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/stdout_sinks.h>
 #include <spdlog/spdlog.h>
 
 // Cool way to do this from
@@ -140,23 +143,17 @@ Creates a salmon index.
     po::notify(vm);
 
     if (indexTypeStr == "fmd") {
-      fmt::MemoryWriter errWriter;
-      errWriter
-          << "Error: FMD indexing is not supported in this version of salmon.";
-      throw(std::logic_error(errWriter.str()));
+      throw std::logic_error(
+          "Error: FMD indexing is not supported in this version of salmon.");
     }
     if (indexTypeStr == "quasi") {
-      fmt::MemoryWriter errWriter;
-      errWriter << "Error: RapMap-based indexing is not supported in this "
-                   "version of salmon.";
-      throw(std::logic_error(errWriter.str()));
+      throw std::logic_error(
+          "Error: RapMap-based indexing is not supported in this version of salmon.");
     }
     if (indexTypeStr != "puff") {
-      fmt::MemoryWriter errWriter;
-      errWriter
-          << "Error: If explicitly provided, the index type must be \"puff\"."
-          << "You passed [" << indexTypeStr << "], but this is not supported.";
-      throw(std::logic_error(errWriter.str()));
+      throw std::logic_error(
+          "Error: If explicitly provided, the index type must be \"puff\". "
+          "You passed [" + indexTypeStr + "], but this is not supported.");
     }
 
     bool usePuff = (indexTypeStr == "puff");
@@ -185,18 +182,14 @@ Creates a salmon index.
     }
 
     bfs::path logPath = indexDirectory / "pre_indexing.log";
-    size_t max_q_size = 2097152;
-    // spdlog::set_async_mode(max_q_size);
-
-    auto fileSink = std::make_shared<spdlog::sinks::simple_file_sink_mt>(
+    auto fileSink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
         logPath.string(), true);
     auto consoleSink = std::make_shared<spdlog::sinks::stderr_sink_mt>();
-    auto consoleLog = spdlog::create("consoleLog", {consoleSink});
-    auto fileLog = spdlog::create("fLog", {fileSink});
-    auto jointLog = spdlog::create("jLog", {fileSink, consoleSink});
+    spdlog::sinks_init_list sinks{fileSink, consoleSink};
+    auto jointLog = std::make_shared<spdlog::logger>("jLog", sinks);
+    spdlog::register_or_replace(jointLog);
 
     idxOpt.rfile = {transcriptFile};
-    fmt::MemoryWriter infostr;
 
     std::unique_ptr<SalmonIndex> sidx = nullptr;
     // Build a quasi-mapping index

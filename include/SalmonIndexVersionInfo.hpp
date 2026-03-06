@@ -4,6 +4,7 @@
 #include "SalmonConfig.hpp"
 #include "boost/filesystem.hpp"
 #include "cereal/archives/json.hpp"
+#include "salmon/internal/util/FmtCompat.hpp"
 #include <spdlog/fmt/fmt.h>
 #include "json.hpp"
 

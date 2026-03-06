@@ -1,5 +1,6 @@
 #include "salmon/internal/alignment/BAMQueue.hpp"
 #include "salmon/internal/util/IOUtils.hpp"
+#include "salmon/internal/util/FmtCompat.hpp"
 #include <boost/config.hpp> // for BOOST_LIKELY/BOOST_UNLIKELY
 #include <chrono>
 
@@ -44,7 +45,7 @@ BAMQueue<FragT>::BAMQueue(std::vector<boost::filesystem::path>& fnames, LibraryF
                     logger_->error("file [{}] appears to be empty "
                         "(i.e. it has size 0).  This is likely an error. "
                         "Please re-run salmon with a corrected input file.\n\n", 
-                        fname);
+                        fname.string());
                     std::exit(1);
                }
             }
@@ -76,7 +77,7 @@ void BAMQueue<FragT>::reset() {
   fmt::print(stderr, "Resetting BAMQueue from file(s) [ ");
   parsingThread_->join();
   for (auto& file : files_) {
-      fmt::print(stderr, "{} ", file.fileName);
+      fmt::print(stderr, "{} ", file.fileName.string());
       // make sure that all of the current files are closed
       if (file.fp != nullptr) {
           scram_close(file.fp);
@@ -120,7 +121,7 @@ BAMQueue<FragT>::~BAMQueue() {
     fmt::print(stderr, "\nJoined parsing thread . . . ");
   
     for (auto& file : files_) {
-        fmt::print(stderr, "{} ", file.fileName);
+        fmt::print(stderr, "{} ", file.fileName.string());
         // make sure that all of the current files are closed
         if (file.fp != nullptr) {
             scram_close(file.fp);
