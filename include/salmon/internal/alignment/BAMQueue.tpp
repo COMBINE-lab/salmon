@@ -1,5 +1,5 @@
 #include "salmon/internal/alignment/BAMQueue.hpp"
-#include "IOUtils.hpp"
+#include "salmon/internal/util/IOUtils.hpp"
 #include <boost/config.hpp> // for BOOST_LIKELY/BOOST_UNLIKELY
 #include <chrono>
 

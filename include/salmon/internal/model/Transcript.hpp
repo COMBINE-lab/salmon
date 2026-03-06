@@ -8,7 +8,7 @@
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/SequenceBiasModel.hpp"
 #include "stx/string_view.hpp"
-#include "IOUtils.hpp"
+#include "salmon/internal/util/IOUtils.hpp"
 #include <atomic>
 #include <cmath>
 #include <limits>

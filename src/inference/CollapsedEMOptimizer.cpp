@@ -22,7 +22,7 @@
 #include "salmon/internal/alignment/AlignmentLibrary.hpp"
 #include "salmon/internal/output/BootstrapWriter.hpp"
 #include "salmon/internal/inference/CollapsedEMOptimizer.hpp"
-#include "MultinomialSampler.hpp"
+#include "salmon/internal/inference/MultinomialSampler.hpp"
 #include "salmon/internal/quant/ReadExperiment.hpp"
 #include "salmon/internal/alignment/ReadPair.hpp"
 #include "SalmonMath.hpp"

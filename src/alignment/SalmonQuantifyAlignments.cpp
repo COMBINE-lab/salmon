@@ -49,7 +49,7 @@
 #include "salmon/internal/quant/ForgettingMassCalculator.hpp"
 #include "salmon/internal/model/FragmentLengthDistribution.hpp"
 #include "salmon/internal/output/GZipWriter.hpp"
-#include "NullFragmentFilter.hpp"
+#include "salmon/internal/alignment/NullFragmentFilter.hpp"
 #include "salmon/internal/alignment/ReadPair.hpp"
 #include "SalmonConfig.hpp"
 #include "SalmonOpts.hpp"

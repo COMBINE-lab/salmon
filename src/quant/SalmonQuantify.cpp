@@ -83,7 +83,7 @@
 // salmon includes
 #include "salmon/internal/quant/ClusterForest.hpp"
 #include "salmon/internal/io/FastxParser.hpp"
-#include "IOUtils.hpp"
+#include "salmon/internal/util/IOUtils.hpp"
 #include "salmon/internal/model/LibraryFormat.hpp"
 #include "salmon/internal/quant/ReadLibrary.hpp"
 #include "SalmonConfig.hpp"

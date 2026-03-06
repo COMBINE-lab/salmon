@@ -13,7 +13,7 @@
 #include "salmon/internal/quant/ReadExperiment.hpp"
 #include "SalmonOpts.hpp"
 #include "SalmonSpinLock.hpp"
-#include "MappingStatistics.hpp"
+#include "salmon/internal/output/MappingStatistics.hpp"
 
 class GZipWriter {
 public:
