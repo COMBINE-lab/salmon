@@ -109,7 +109,7 @@ void ReadExperiment<EQBuilderT>::loadTranscriptsFromPuff(
   auto log = sopt.jointLog.get();
   numDecoys_ = 0;
 
-  log->info("Index contained {:n} targets", numRecords);
+  log->info("Index contained {} targets", numRecords);
   transcripts_.reserve(numRecords);
   std::vector<uint32_t> lengths;
   lengths.reserve(numRecords);
@@ -141,7 +141,7 @@ void ReadExperiment<EQBuilderT>::loadTranscriptsFromPuff(
       int64_t refAccPos = tid > 0 ? refAccumLengths[tid - 1] : 0;
       int64_t refTotalLength = refAccumLengths[tid] - refAccPos;
       if (len != refTotalLength) {
-        log->warn("len : {:n}, but txp.RefLength : {:n} :: refTotalLength : {:n}",
+        log->warn("len : {}, but txp.RefLength : {} :: refTotalLength : {}",
                   len, txp.RefLength, refTotalLength);
       }
       char* tseq =
@@ -156,10 +156,10 @@ void ReadExperiment<EQBuilderT>::loadTranscriptsFromPuff(
       lengths.push_back(txp.RefLength);
     }
   }
-  sopt.jointLog->info("Number of decoys : {:n}", numDecoys_);
+  sopt.jointLog->info("Number of decoys : {}", numDecoys_);
   auto firstDecoyIndex = idx_->firstDecoyIndex();
   if (firstDecoyIndex < numRecords) {
-    sopt.jointLog->info("First decoy index : {:n} ", firstDecoyIndex);
+    sopt.jointLog->info("First decoy index : {} ", firstDecoyIndex);
   }
   setTranscriptLengthClasses_(lengths, state_.posBiasFW.size());
 }
@@ -172,7 +172,7 @@ void ReadExperiment<EQBuilderT>::loadTranscriptsFromQuasi(
   auto log = sopt.jointLog.get();
   numDecoys_ = 0;
 
-  log->info("Index contained {:n} targets", numRecords);
+  log->info("Index contained {} targets", numRecords);
   transcripts_.reserve(numRecords);
   std::vector<uint32_t> lengths;
   lengths.reserve(numRecords);
@@ -309,14 +309,14 @@ void ReadExperiment<EQBuilderT>::summarizeLibraryTypeCounts(
                   "If this is a paired-end library, are you sure the reads are properly paired? "
                   "check the file: "
                << opath.string() << " for details\n";
-        log->warn(errstr.str());
+        log->warn("{}", errstr.str());
         errstr.clear();
       } else if (std::abs(ratio - 0.5) > 0.01) {
         errstr << "NOTE: Read Lib [" << rl.readFilesAsString() << "] :\n";
         errstr << "\nDetected a *potential* strand bias > 1\% in an "
                   "unstranded protocol "
                << "check the file: " << opath.string() << " for details\n";
-        log->warn(errstr.str());
+        log->warn("{}", errstr.str());
         errstr.clear();
       }
     } else {
@@ -339,7 +339,7 @@ void ReadExperiment<EQBuilderT>::summarizeLibraryTypeCounts(
              << "disagreed with the provided library type; "
              << "check the file: " << opath.string() << " for details\n";
 
-      log->warn(errstr.str());
+      log->warn("{}", errstr.str());
       errstr.clear();
     }
 

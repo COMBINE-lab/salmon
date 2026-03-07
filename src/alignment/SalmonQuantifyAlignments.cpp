@@ -1228,7 +1228,7 @@ bool processSample(AlignmentLibraryT<ReadT, AlignModelT>& alnLib, size_t require
     }
     burnedIn = quantifyLibrary<ReadT>(alnLib, requiredObservations, sopt);
   } catch (const InsufficientAssignedFragments& iaf) {
-    jointLog->warn(iaf.what());
+    jointLog->warn("{}", iaf.what());
     GZipWriter gzw(outputDirectory, jointLog);
     gzw.writeEmptyAbundances(sopt, alnLib);
     // Write meta-information about the run
@@ -1462,7 +1462,7 @@ struct EqClassInfo {
     std::stringstream errfmt;
     errfmt << "Found total " << eqclasses.size() << " eqclasses and "
            << tnames.size() << " transcripts";
-    jointLog->info(errfmt.str());
+    jointLog->info("{}", errfmt.str());
     jointLog->flush();
 
     if ( tefflens.size() == 0 ) {
@@ -1475,7 +1475,7 @@ struct EqClassInfo {
       std::stringstream errfmt;
       errfmt << "Number of effective lens: " << tefflens.size()
              << " is not equal to number of transcripts: " << tnames.size();
-      jointLog->error(errfmt.str());
+      jointLog->error("{}", errfmt.str());
       jointLog->flush();
       exit(1);
     }

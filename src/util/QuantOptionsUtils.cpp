@@ -529,7 +529,7 @@ bool processQuantOptions(SalmonOpts& sopt,
     conflicting_options(vm, "mimicStrictBT2", "noSA");
     conflicting_options(vm, "hardFilter", "noSA");
   } catch (std::logic_error& e) {
-    jointLog->critical(e.what());
+    jointLog->critical("{}", e.what());
     jointLog->flush();
     return false;
   }
@@ -547,7 +547,7 @@ bool processQuantOptions(SalmonOpts& sopt,
   try {
     conflicting_options(vm, "useVBOpt", "useEM");
   } catch (std::logic_error& e) {
-    jointLog->critical(e.what());
+    jointLog->critical("{}", e.what());
     jointLog->flush();
     return false;
   }
@@ -558,7 +558,7 @@ bool processQuantOptions(SalmonOpts& sopt,
   try {
     conflicting_options(vm, "perNucleotidePrior", "perTranscriptPrior");
   } catch (std::logic_error& e) {
-    jointLog->critical(e.what());
+    jointLog->critical("{}", e.what());
     jointLog->flush();
     return false;
   }
@@ -579,7 +579,7 @@ bool processQuantOptions(SalmonOpts& sopt,
   try {
     conflicting_options(vm, "alignments", "eqclasses");
   } catch (std::logic_error& e) {
-    jointLog->critical(e.what());
+    jointLog->critical("{}", e.what());
     jointLog->flush();
     return false;
   }
@@ -587,7 +587,7 @@ bool processQuantOptions(SalmonOpts& sopt,
   try {
     option_dependency(vm, "alignments", "targets");
   } catch (std::logic_error& e) {
-    jointLog->critical(e.what());
+    jointLog->critical("{}", e.what());
     jointLog->flush();
     return false;
   }

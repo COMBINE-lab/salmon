@@ -1156,7 +1156,7 @@ void markAuxiliaryTargets(SalmonOpts& sopt, std::vector<Transcript>& transcripts
   std::string tname;
   while (auxFile >> tname) { auxTargetNames.insert(tname); }
   auxFile.close();
-  log->info("Parsed {:n} auxiliary targets from {}", auxTargetNames.size(), auxTargetFile);
+  log->info("Parsed {} auxiliary targets from {}", auxTargetNames.size(), auxTargetFile);
 
   size_t tid = 0;
   std::vector<size_t> auxIDs;
@@ -1169,7 +1169,7 @@ void markAuxiliaryTargets(SalmonOpts& sopt, std::vector<Transcript>& transcripts
   size_t numAuxFound = auxIDs.size();
 
   if (numAuxFound != auxTargetNames.size()) {
-    log->warn("While {:n} auxiliary target names were found in {}, only {:n} were actually found "
+    log->warn("While {} auxiliary target names were found in {}, only {} were actually found "
               "among tanscripts in the index.  Please make sure that the names in {} match the "
               "transcript names in the index as expected.", auxTargetNames.size(), auxTargetFile, 
               numAuxFound, auxTargetFile);

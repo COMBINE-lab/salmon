@@ -153,9 +153,9 @@ public:
       totalCount += kv.second.count;
     }
 
-    logger_->info("Computed {:n} rich equivalence classes "
+    logger_->info("Computed {} rich equivalence classes "
                   "for further processing", countMap_.size());
-    logger_->info("Counted {:n} total reads in the equivalence classes ",
+    logger_->info("Counted {} total reads in the equivalence classes ",
                   totalCount);
     return true;
   }
@@ -170,10 +170,10 @@ public:
       countVec_.push_back(kv);
     }
 
-    logger_->info("Computed {:n} rich equivalence classes "
+    logger_->info("Computed {} rich equivalence classes "
                   "for further processing",
                   countVec_.size());
-    logger_->info("Counted {:n} total reads in the equivalence classes ",
+    logger_->info("Counted {} total reads in the equivalence classes ",
                   totalCount);
     return true;
   }

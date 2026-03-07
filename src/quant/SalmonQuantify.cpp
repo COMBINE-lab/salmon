@@ -1515,12 +1515,12 @@ void processReads(
         const char green[] = "\x1b[32m";
         const char red[] = "\x1b[31m";
         if (initialRound) {
-          fmt::print(stderr, "\033[A\r\r{}processed{} {:n} {}fragments{}\n",
+          fmt::print(stderr, "\033[A\r\r{}processed{} {}fragments{}\n",
                      green, red, observedFragments, green, RESET_COLOR);
-          fmt::print(stderr, "hits: {:n}, hits per frag:  {}", observedHits,
+          fmt::print(stderr, "hits: {}, hits per frag:  {}", observedHits,
                      observedHits / static_cast<float>(prevObservedFrags));
         } else {
-          fmt::print(stderr, "\r\r{}processed{} {:n} {}fragments{}", green, red,
+          fmt::print(stderr, "\r\r{}processed{} {}fragments{}", green, red,
                      observedFragments, green, RESET_COLOR);
         }
         iomutex.unlock();
@@ -1533,7 +1533,7 @@ void processReads(
       // Get rid of last newline
       if (!outStr.empty()) {
         outStr.pop_back();
-        unmappedLogger->info(std::move(outStr));
+        unmappedLogger->info("{}", std::move(outStr));
       }
       unmappedNames.clear();
     }
@@ -1543,7 +1543,7 @@ void processReads(
       // Get rid of last newline
       if (!outStr.empty()) {
         outStr.pop_back();
-        qmLog->info(std::move(outStr));
+        qmLog->info("{}", std::move(outStr));
       }
       sstream.str("");
       sstream.clear();
@@ -1554,7 +1554,7 @@ void processReads(
       // Get rid of last newline
       if (!outStr.empty()) {
         outStr.pop_back();
-        orphanLinkLogger->info(std::move(outStr));
+        orphanLinkLogger->info("{}", std::move(outStr));
       }
       orphanLinks.clear();
     }
@@ -1981,12 +1981,12 @@ void processReads(
         const char green[] = "\x1b[32m";
         const char red[] = "\x1b[31m";
         if (initialRound) {
-          fmt::print(stderr, "\033[A\r\r{}processed{} {:n} {}fragments{}\n",
+          fmt::print(stderr, "\033[A\r\r{}processed{} {}fragments{}\n",
                      green, red, observedFragments, green, RESET_COLOR);
-          fmt::print(stderr, "hits: {:n}; hits per frag:  {}", observedHits,
+          fmt::print(stderr, "hits: {}; hits per frag:  {}", observedHits,
                      observedHits / static_cast<float>(prevObservedFrags));
         } else {
-          fmt::print(stderr, "\r\r{}processed{} {:n} {}fragments{}", green, red,
+          fmt::print(stderr, "\r\r{}processed{} {}fragments{}", green, red,
                      observedFragments, green, RESET_COLOR);
         }
         iomutex.unlock();
@@ -1999,7 +1999,7 @@ void processReads(
       // Get rid of last newline
       if (!outStr.empty()) {
         outStr.pop_back();
-        unmappedLogger->info(std::move(outStr));
+        unmappedLogger->info("{}", std::move(outStr));
       }
       unmappedNames.clear();
     }
@@ -2009,7 +2009,7 @@ void processReads(
       // Get rid of last newline
       if (!outStr.empty()) {
         outStr.pop_back();
-        qmLog->info(std::move(outStr));
+        qmLog->info("{}", std::move(outStr));
       }
       sstream.str("");
       sstream.clear();
@@ -2298,7 +2298,7 @@ void quantifyLibrary(ReadExperimentT& experiment, SalmonOpts& salmonOpts,
             "==========================\n\n",
             experiment.readFilesAsString(), numObservedFragments.load(),
             numRequiredFragments);
-        jointLog->warn(errmsg);
+        jointLog->warn("{}", errmsg);
         break;
       }
 
@@ -2398,24 +2398,24 @@ void quantifyLibrary(ReadExperimentT& experiment, SalmonOpts& salmonOpts,
 
   if (salmonOpts.recoverOrphans) {
     salmonOpts.jointLog->info(
-        "Number of orphans recovered using orphan rescue : {:n}",
+        "Number of orphans recovered using orphan rescue : {}",
         mstats.numOrphansRescued.load());
   }
   if (salmonOpts.validateMappings) {
     salmonOpts.jointLog->info(
-        "Number of mappings discarded because of alignment score : {:n}",
+        "Number of mappings discarded because of alignment score : {}",
         mstats.numMappingsFiltered.load());
     salmonOpts.jointLog->info("Number of fragments entirely discarded because "
-                              "of alignment score : {:n}",
+                              "of alignment score : {}",
                               mstats.numFragmentsFiltered.load());
     salmonOpts.jointLog->info("Number of fragments discarded because they are "
-                              "best-mapped to decoys : {:n}",
+                              "best-mapped to decoys : {}",
                               mstats.numDecoyFragments.load());
   }
   if (!salmonOpts.allowDovetail) {
     salmonOpts.jointLog->info(
         "Number of fragments discarded because they have only dovetail "
-        "(discordant) mappings to valid targets : {:n}",
+        "(discordant) mappings to valid targets : {}",
         mstats.numDovetails.load());
   }
 
@@ -2595,7 +2595,7 @@ transcript abundance from RNA-seq reads
                                             sopt.numThreads);
           });
     } catch (const InsufficientAssignedFragments& iaf) {
-      sopt.jointLog->warn(iaf.what());
+      sopt.jointLog->warn("{}", iaf.what());
       salmon::utils::writeCmdInfo(sopt, pipelineCtx.orderedOptions);
       GZipWriter gzw(outputDirectory, jointLog);
       gzw.writeEmptyAbundances(sopt, experiment);

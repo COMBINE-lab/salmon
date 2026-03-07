@@ -379,7 +379,7 @@ size_t markDegenerateClasses(
         errstream << "}\n";
         errstream << "============================\n\n";
 
-        jointLog->info(errstream.str());
+        jointLog->info("{}", errstream.str());
       }
       ++numDropped;
       kv.first.setValid(false);
@@ -594,8 +594,8 @@ bool CollapsedEMOptimizer::gatherBootstraps(
 
   auto jointLog = sopt.jointLog;
 
-  jointLog->info("Will draw {:n} bootstrap samples", numBootstraps);
-  jointLog->info("Optimizing over {:n} equivalence classes", eqVec.size());
+  jointLog->info("Will draw {} bootstrap samples", numBootstraps);
+  jointLog->info("Optimizing over {} equivalence classes", eqVec.size());
 
   double totalNumFrags{static_cast<double>(numMappedFrags)};
   if (activeTranscriptIDs.size() == 0) {
@@ -901,7 +901,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
     if (needBias and (itNum > targetIt or converged)) {
 
       jointLog->info(
-          "iteration {:n}, adjusting effective lengths to account for biases",
+          "iteration {}, adjusting effective lengths to account for biases",
           itNum);
       effLens = salmon::utils::updateEffectiveLengths(arena, sopt, readExp, effLens,
                                                       alphas, available, true);
@@ -981,7 +981,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
     */
 
     if (itNum % 100 == 0) {
-      jointLog->info("iteration = {:n} | max rel diff. = {}", itNum, maxRelDiff);
+      jointLog->info("iteration = {} | max rel diff. = {}", itNum, maxRelDiff);
     }
 
     ++itNum;
@@ -999,7 +999,7 @@ bool CollapsedEMOptimizer::optimize(ExpT& readExp, SalmonOpts& sopt,
   sopt.gcBiasCorrect = gcBiasCorrect;
   sopt.biasCorrect = seqBiasCorrect;
 
-  jointLog->info("iteration = {:n} | max rel diff. = {}", itNum, maxRelDiff);
+  jointLog->info("iteration = {} | max rel diff. = {}", itNum, maxRelDiff);
 
   double alphaSum = 0.0;
   if (useVBEM and !perTranscriptPrior) {

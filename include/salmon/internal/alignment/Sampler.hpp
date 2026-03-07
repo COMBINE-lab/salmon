@@ -349,7 +349,7 @@ bool sampleLibrary(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
   msgStr << "Sampling alignments; outputting results to "
          << sampleFilePath.string() << "\n";
 
-  log->info(msgStr.str());
+  log->info("{}", msgStr.str());
 
   auto& refs = alnLib.transcripts();
   size_t numTranscripts = refs.size();
@@ -419,7 +419,7 @@ bool sampleLibrary(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
           errstr << ioutils::SET_RED << "ERROR: " << ioutils::RESET_COLOR
                  << "Couldn't open output bam file " << sampleFilePath.string()
                  << ". Exiting\n";
-          log->warn(errstr.str());
+          log->warn("{}", errstr.str());
           std::exit(-1);
         }
 
@@ -437,7 +437,7 @@ bool sampleLibrary(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
                        << "file. Please check that the file can "
                        << "be created properly and that the disk "
                        << "is not full.  Exiting.\n";
-                log->warn(errstr.str());
+                log->warn("{}", errstr.str());
                 std::exit(-1);
               }
               // Eventually, as we do in BAMQueue, we should

@@ -123,7 +123,7 @@ bool stageDispatchByLibraryType(
   default:
     std::stringstream errfmt;
     errfmt << "Cannot quantify library of unknown format " << libFmt;
-    jointLog->error(errfmt.str());
+    jointLog->error("{}", errfmt.str());
     jointLog->flush();
     std::exit(1);
   }
