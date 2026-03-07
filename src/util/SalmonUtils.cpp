@@ -80,7 +80,7 @@ std::string str(const MappingType& mt) {
   return "E";
 }
 
-bool headersAreConsistent(SAM_hdr* h1, SAM_hdr* h2) {
+bool headersAreConsistent(AlignmentHeader* h1, AlignmentHeader* h2) {
 
   bool consistent{true};
   // Both files must contain the same number of targets
@@ -101,7 +101,7 @@ bool headersAreConsistent(SAM_hdr* h1, SAM_hdr* h2) {
   return consistent;
 }
 
-bool headersAreConsistent(std::vector<SAM_hdr*>&& headers) {
+bool headersAreConsistent(std::vector<AlignmentHeader*>&& headers) {
   if (headers.size() == 1) {
     return true;
   }

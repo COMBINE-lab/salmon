@@ -410,10 +410,10 @@ bool sampleLibrary(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
   std::thread outputThread(
       [&consumedAllInput, &alnLib, &outQueue, &log, sampleFilePath]() -> void {
 
-        scram_fd* bf = scram_open(sampleFilePath.c_str(), "wb");
-        scram_set_option(bf, CRAM_OPT_NTHREADS, 3);
-        scram_set_header(bf, alnLib.header());
-        scram_write_header(bf);
+        AlignmentFileHandle* bf = openAlignmentFile(sampleFilePath.c_str(), "wb");
+        setAlignmentThreads(bf, 3);
+        setAlignmentHeader(bf, alnLib.header());
+        writeAlignmentHeader(bf);
         if (bf == nullptr) {
           fmt::MemoryWriter errstr;
           errstr << ioutils::SET_RED << "ERROR: " << ioutils::RESET_COLOR
@@ -450,7 +450,7 @@ bool sampleLibrary(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
           }
         }
 
-        scram_close(bf); // will delete the header itself
+        closeAlignmentFile(bf); // will delete the header itself
       });
 
   BAMQueue<FragT>& bq = alnLib.getAlignmentGroupQueue();

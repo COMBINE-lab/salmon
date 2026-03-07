@@ -84,14 +84,7 @@ GenomicFeature.cpp
 # check if we know how to do IPO
 check_ipo_supported(RESULT HAS_IPO)
 
-if (DEFINED NO_IPO)
-  message("NO_IPO = ${NO_IPO}")
-else()
-  message("NO_IPO = FALSE")
-  set(NO_IPO FALSE)
-endif()
-
-if(HAS_IPO AND (NOT NO_IPO))
+if(HAS_IPO AND SALMON_ENABLE_LTO)
   set_property(TARGET ksw2pp PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
 endif()
 
@@ -215,7 +208,7 @@ function(salmon_configure_target target_name)
   if (USE_ARM)
     target_compile_definitions(${target_name} PUBLIC KSW_USE_ARM=1)
   endif()
-  if(HAS_IPO AND (NOT NO_IPO))
+  if(HAS_IPO AND SALMON_ENABLE_LTO)
     set_property(TARGET ${target_name} PROPERTY INTERPROCEDURAL_OPTIMIZATION True)
   endif()
 endfunction()

@@ -124,10 +124,10 @@ struct ReadPair {
   /**
    * returns 0 on success, -1 on failure.
    */
-  int writeToFile(scram_fd* fp) {
-    int r1 = scram_put_seq(fp, read1);
+  int writeToFile(AlignmentFileHandle* fp) {
+    int r1 = writeAlignmentRecord(fp, read1);
     if (r1 == 0 and isPaired()) {
-      return scram_put_seq(fp, read2);
+      return writeAlignmentRecord(fp, read2);
     } else {
       return r1;
     }

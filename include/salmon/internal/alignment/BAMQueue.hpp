@@ -33,8 +33,8 @@
 struct AlignmentFile {
   boost::filesystem::path fileName;
   std::string readMode;
-  scram_fd* fp;
-  SAM_hdr* header;
+  AlignmentFileHandle* fp;
+  AlignmentHeader* header;
   uint32_t numParseThreads;
 };
 
@@ -52,10 +52,10 @@ public:
   ~BAMQueue();
   void forceEndParsing();
 
-  SAM_hdr* header();
-  SAM_hdr* safeHeader();
+  AlignmentHeader* header();
+  AlignmentHeader* safeHeader();
 
-  std::vector<SAM_hdr*> headers();
+  std::vector<AlignmentHeader*> headers();
 
   template <typename FilterT>
   void start(FilterT filt, bool onlyProcessAmbiguousAlignments = false);
@@ -101,8 +101,8 @@ private:
   LibraryFormat libFmt_;
 
   std::vector<AlignmentFile>::iterator currFile_;
-  scram_fd* fp_ = nullptr;
-  SAM_hdr* hdr_ = nullptr;
+  AlignmentFileHandle* fp_ = nullptr;
+  AlignmentHeader* hdr_ = nullptr;
 
   // htsFile* fp_ = nullptr;
   size_t totalAlignments_;

@@ -93,7 +93,7 @@ public:
 
   // inline t_pool* threadPool() { return threadPool_.get(); }
 
-  inline SAM_hdr* header() { return bq->header(); }
+  inline AlignmentHeader* header() { return bq->header(); }
 
   inline std::vector<FragmentStartPositionDistribution>&
   fragmentStartPositionDistributions() {

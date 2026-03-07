@@ -214,9 +214,9 @@ enum class OrphanStatus : uint8_t {
   Paired = 2
 };
 
-bool headersAreConsistent(SAM_hdr* h1, SAM_hdr* h2);
+bool headersAreConsistent(AlignmentHeader* h1, AlignmentHeader* h2);
 
-bool headersAreConsistent(std::vector<SAM_hdr*>&& headers);
+bool headersAreConsistent(std::vector<AlignmentHeader*>&& headers);
 
 inline void reverseComplement(const char* s, int32_t l, std::string& o) {
   if (static_cast<decltype(o.size())>(l) > o.size()) {

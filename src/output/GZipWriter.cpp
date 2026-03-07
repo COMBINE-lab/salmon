@@ -25,83 +25,11 @@ GZipWriter::~GZipWriter() {
   if (bsStream_) {
     bsStream_->reset();
   }
-  if (cellEQStream_){
-    cellEQStream_->reset();
-  }
-  if (cellDedupEQStream_){
-    cellDedupEQStream_->reset();
-  }
-  if (umiGraphStream_){
-    umiGraphStream_->reset();
-  }
-  if (countMatrixStream_) {
-    countMatrixStream_->reset();
-  }
-  if (tierMatrixStream_) {
-    tierMatrixStream_->reset();
-  }
-  if (meanMatrixStream_) {
-    meanMatrixStream_->reset();
-  }
-  if (varMatrixStream_) {
-    varMatrixStream_->reset();
-  }
-  if (arboMatrixStream_) {
-    arboMatrixStream_->reset();
-  }
-  if (fullBootstrapMatrixStream_) {
-    fullBootstrapMatrixStream_->reset();
-  }
-  if (bcBootNameStream_) {
-    bcBootNameStream_.reset();
-  }
-  if (bcFeaturesStream_) {
-    bcFeaturesStream_.reset();
-  }
-  if (bcNameStream_) {
-    bcNameStream_.reset();
-  }
 }
 
 void GZipWriter::close_all_streams(){
   if (bsStream_) {
     bsStream_->reset();
-  }
-  if (cellEQStream_){
-    cellEQStream_->reset();
-  }
-  if (cellDedupEQStream_){
-    cellDedupEQStream_->reset();
-  }
-  if (umiGraphStream_){
-    umiGraphStream_->reset();
-  }
-  if (countMatrixStream_) {
-    countMatrixStream_->reset();
-  }
-  if (tierMatrixStream_) {
-    tierMatrixStream_->reset();
-  }
-  if (meanMatrixStream_) {
-    meanMatrixStream_->reset();
-  }
-  if (varMatrixStream_) {
-    varMatrixStream_->reset();
-  }
-  if (arboMatrixStream_) {
-    arboMatrixStream_->reset();
-  }
-  if (fullBootstrapMatrixStream_) {
-    fullBootstrapMatrixStream_->reset();
-  }
-  if (bcBootNameStream_) {
-    bcBootNameStream_->close();
-  }
-  if (bcFeaturesStream_) {
-    bcFeaturesStream_->close();
-  }
-  if (bcNameStream_) {
-    bcNameStream_->close();
   }
 }
 
@@ -727,84 +655,6 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
   return true;
 }
 
-/**
- * Write the ``main'' metadata to file when executing in alevin-fry mode.  Currently this 
- * writes a stripped down version of meta_info.json:
- *   -- A json file with information about the run
- */
-template <typename ExpT>
-bool GZipWriter::writeMetaFryMode(const SalmonOpts& opts, const ExpT& experiment, const MappingStatistics& mstats) {
-
-  namespace bfs = boost::filesystem;
-  using salmon::utils::DuplicateTargetStatus;
-
-  bfs::path auxDir = path_ / opts.auxDir;
-  bool auxSuccess = boost::filesystem::create_directories(auxDir);
-  auto numBootstraps = 0;
-  auto numSamples = 0;
-
-  bfs::path info = auxDir / "meta_info.json";
-  {
-    std::ofstream os(info.string());
-    cereal::JSONOutputArchive oa(os);
-
-    std::string sampType = "none";
-    auto& transcripts = experiment.transcripts();
-    oa(cereal::make_nvp("salmon_version", std::string(salmon::version)));
-    oa(cereal::make_nvp("samp_type", sampType));
-
-    std::string optType = "rad_mode";
-    oa(cereal::make_nvp("opt_type", optType));
-
-    std::vector<std::string> errors;
-    oa(cereal::make_nvp("quant_errors", errors));
-
-    auto libStrings = getLibTypeStrings(experiment);
-    oa(cereal::make_nvp("num_libraries", libStrings.size()));
-    oa(cereal::make_nvp("library_types", libStrings));
-
-    auto has_dups = experiment.index_retains_duplicates();
-    switch(has_dups) {
-      case DuplicateTargetStatus::RETAINED_DUPLICATES:
-        oa(cereal::make_nvp("keep_duplicates", true));
-        break;
-      case DuplicateTargetStatus::REMOVED_DUPLICATES:
-        oa(cereal::make_nvp("keep_duplicates", false));
-        break;
-      case DuplicateTargetStatus::UNKNOWN:
-      default:
-        break;
-    }
-
-    auto numValidTargets = transcripts.size();
-    auto numDecoys = experiment.getNumDecoys();
-    oa(cereal::make_nvp("num_valid_targets", numValidTargets));
-    oa(cereal::make_nvp("num_decoy_targets", numDecoys));
-    
-    oa(cereal::make_nvp("length_classes", experiment.getLengthQuantiles()));
-    oa(cereal::make_nvp("index_seq_hash", experiment.getIndexSeqHash256()));
-    oa(cereal::make_nvp("index_name_hash", experiment.getIndexNameHash256()));
-    oa(cereal::make_nvp("index_seq_hash512", experiment.getIndexSeqHash512()));
-    oa(cereal::make_nvp("index_name_hash512", experiment.getIndexNameHash512()));
-    oa(cereal::make_nvp("index_decoy_seq_hash", experiment.getIndexDecoySeqHash256()));
-    oa(cereal::make_nvp("index_decoy_name_hash", experiment.getIndexDecoyNameHash256()));
-    oa(cereal::make_nvp("num_bootstraps", numSamples));
-    oa(cereal::make_nvp("num_processed", experiment.numObservedFragments()));
-    oa(cereal::make_nvp("num_mapped", experiment.numMappedFragments()));
-    //oa(cereal::make_nvp("num_decoy_fragments", mstats.numDecoyFragments.load()));
-    //oa(cereal::make_nvp("num_dovetail_fragments", mstats.numDovetails.load()));
-    oa(cereal::make_nvp("num_fragments_filtered_vm", mstats.numFragmentsFiltered.load()));
-    oa(cereal::make_nvp("num_alignments_below_threshold_for_mapped_fragments_vm",
-                        mstats.numMappingsFiltered.load()));
-    //oa(cereal::make_nvp("percent_mapped",
-    //                    experiment.effectiveMappingRate() * 100.0));
-    oa(cereal::make_nvp("call", std::string("quant")));
-    oa(cereal::make_nvp("start_time", opts.runStartTime));
-    oa(cereal::make_nvp("end_time", opts.runStopTime));
-  }
-  return true;
-}
-
 bool GZipWriter::writeAbundances(
                                  std::vector<double>& alphas,
                                  std::vector<Transcript>& transcripts) {
@@ -824,143 +674,6 @@ bool GZipWriter::writeAbundances(
   }
   return true;
 }
-
-bool GZipWriter::writeBootstraps(std::string& bcName,
-                                 std::vector<double>& alphas,
-                                 std::vector<double>& variance,
-                                 bool useAllBootstraps,
-                                 std::vector<std::vector<double>>& sampleEstimates){
-#if defined __APPLE__
-  spin_lock::scoped_lock sl(writeMutex_);
-#else
-  std::lock_guard<std::mutex> lock(writeMutex_);
-#endif
-  namespace bfs = boost::filesystem;
-  if (!meanMatrixStream_) {
-    meanMatrixStream_.reset(new boost::iostreams::filtering_ostream);
-    meanMatrixStream_->push(boost::iostreams::gzip_compressor(6));
-    auto meanMatFilename = path_ / "alevin" / "quants_mean_mat.gz";
-    meanMatrixStream_->push(boost::iostreams::file_sink(meanMatFilename.string(),
-                                                         std::ios_base::out | std::ios_base::binary));
-
-    varMatrixStream_.reset(new boost::iostreams::filtering_ostream);
-    varMatrixStream_->push(boost::iostreams::gzip_compressor(6));
-    auto varMatFilename = path_ / "alevin" / "quants_var_mat.gz";
-    varMatrixStream_->push(boost::iostreams::file_sink(varMatFilename.string(),
-                                                       std::ios_base::out | std::ios_base::binary));
-
-    auto bcBootNameFilename = path_ / "alevin" / "quants_boot_rows.txt";
-    bcBootNameStream_.reset(new std::ofstream);
-    bcBootNameStream_->open(bcBootNameFilename.string());
-  }
-
-  if (useAllBootstraps and !fullBootstrapMatrixStream_) {
-    auto fullBootstrapsFilename = path_ / "alevin" / "quants_boot_mat.gz";
-    fullBootstrapMatrixStream_.reset(new boost::iostreams::filtering_ostream);
-    fullBootstrapMatrixStream_->push(boost::iostreams::gzip_compressor(6));
-    fullBootstrapMatrixStream_->push(boost::iostreams::file_sink(fullBootstrapsFilename.string(),
-                                                      std::ios_base::out | std::ios_base::binary));
-  }
-
-  boost::iostreams::filtering_ostream& countfile = *meanMatrixStream_;
-  boost::iostreams::filtering_ostream& varfile = *varMatrixStream_;
-  std::ofstream& namefile = *bcBootNameStream_;
-
-  size_t num = alphas.size();
-  if (alphas.size() != variance.size()){
-    std::cerr<<"ERROR: Quants matrix and varicance matrix size differs"<<std::flush;
-    exit(74);
-  }
-  size_t elSize = sizeof(typename std::vector<double>::value_type);
-  countfile.write(reinterpret_cast<char*>(alphas.data()),
-                  elSize * num);
-  varfile.write(reinterpret_cast<char*>(variance.data()),
-                  elSize * num);
-
-  if (useAllBootstraps){
-    boost::iostreams::filtering_ostream& fullBootsfile = *fullBootstrapMatrixStream_;
-    for(auto& sample: sampleEstimates){
-      fullBootsfile.write(reinterpret_cast<char*>(sample.data()),
-                          elSize * num);
-    }
-  }
-
-  namefile << std::endl;
-  namefile.write(bcName.c_str(), bcName.size());
-  return true;
-}
-
-bool GZipWriter::writeAbundances(std::string& bcName,
-                                 std::string& features,
-                                 uint8_t featureCode,
-                                 std::vector<double>& alphas,
-                                 std::vector<uint8_t>& tiers,
-                                 bool dumpUmiGraph){
-#if defined __APPLE__
-  spin_lock::scoped_lock sl(writeMutex_);
-#else
-  std::lock_guard<std::mutex> lock(writeMutex_);
-#endif
-  namespace bfs = boost::filesystem;
-  if (!countMatrixStream_) {
-    countMatrixStream_.reset(new boost::iostreams::filtering_ostream);
-    countMatrixStream_->push(boost::iostreams::gzip_compressor(6));
-    auto countMatFilename = path_ / "alevin" / "quants_mat.gz";
-    countMatrixStream_->push(boost::iostreams::file_sink(countMatFilename.string(),
-                                                         std::ios_base::out | std::ios_base::binary));
-
-    tierMatrixStream_.reset(new boost::iostreams::filtering_ostream);
-    tierMatrixStream_->push(boost::iostreams::gzip_compressor(6));
-    auto tierMatFilename = path_ / "alevin" / "quants_tier_mat.gz";
-    tierMatrixStream_->push(boost::iostreams::file_sink(tierMatFilename.string(),
-                                                        std::ios_base::out | std::ios_base::binary));
-  }
-
-  if (!bcNameStream_) {
-    auto bcNameFilename = path_ / "alevin" / "quants_mat_rows.txt";
-    bcNameStream_.reset(new std::ofstream);
-    bcNameStream_->open(bcNameFilename.string());
-
-    auto bcFeaturesFilename = path_ / "alevin" / "featureDump.txt";
-    bcFeaturesStream_.reset(new std::ofstream);
-    bcFeaturesStream_->open(bcFeaturesFilename.string());
-
-    std::string header = "CB\tCorrectedReads\tMappedReads\tDeduplicatedReads"
-      "\tMappingRate\tDedupRate\tMeanByMax\tNumGenesExpressed\tNumGenesOverMean";
-    if (featureCode == 3) {
-      header += "\tmRnaFraction\trRnaFraction";
-    } else if (featureCode == 1) {
-      header += "\tmRnaFraction";
-    } else if (featureCode == 2) {
-      header += "\trRnaFraction";
-    } else if (dumpUmiGraph) {
-      header += "\tArborescenceCount";
-    } header += "\n";
-    bcFeaturesStream_->write(header.c_str(), header.size());
-  }
-
-  boost::iostreams::filtering_ostream& countfile = *countMatrixStream_;
-  boost::iostreams::filtering_ostream& tierfile = *tierMatrixStream_;
-  std::ofstream& namefile = *bcNameStream_;
-  std::ofstream& featuresfile = *bcFeaturesStream_;
-
-  size_t num = alphas.size();
-  size_t elSize = sizeof(typename std::vector<double>::value_type);
-  size_t trSize = sizeof(typename std::vector<uint8_t>::value_type);
-  countfile.write(reinterpret_cast<char*>(alphas.data()),
-                  elSize * num);
-  tierfile.write(reinterpret_cast<char*>(tiers.data()),
-                  trSize * num);
-
-  namefile.write(bcName.c_str(), bcName.size());
-  namefile << std::endl;
-
-  featuresfile.write(features.c_str(), features.size());
-  featuresfile << std::endl;
-
-  return true;
-}
-
 
 template <typename ExpT>
 bool GZipWriter::writeEmptyAbundances(const SalmonOpts& sopt, ExpT& readExp) {
@@ -1091,111 +804,6 @@ bool GZipWriter::writeBootstrap(const std::vector<T>& abund, bool quiet) {
   return true;
 }
 
-void GZipWriter::writeMtx(std::shared_ptr<spdlog::logger>& jointLog, 
-              boost::filesystem::path& outputDirectory, 
-              size_t numGenes, size_t numCells, size_t totalExpGeneCounts) {
-    jointLog->info("Starting dumping cell v gene counts in mtx format");
-    boost::filesystem::path qFilePath = outputDirectory / "quants_mat.mtx.gz";
-
-    boost::iostreams::filtering_ostream qFile;
-    qFile.push(boost::iostreams::gzip_compressor(6));
-    qFile.push(boost::iostreams::file_sink(qFilePath.string(),
-                                           std::ios_base::out | std::ios_base::binary));
-
-    // mtx header
-    qFile << "%%MatrixMarket\tmatrix\tcoordinate\treal\tgeneral" << std::endl
-          << numCells << "\t" << numGenes << "\t" << totalExpGeneCounts << std::endl;
-
-    {
-
-      auto popcount = [](uint8_t n) {
-        size_t count {0};
-        while (n) {
-          n &= n-1;
-          ++count;
-        }
-        return count;
-      };
-
-      uint32_t zerod_cells {0};
-      size_t numFlags = std::ceil(numGenes/8.0);
-      std::vector<uint8_t> alphasFlag (numFlags, 0);
-      size_t flagSize = sizeof(decltype(alphasFlag)::value_type);
-
-      std::vector<float> alphasSparse;
-      alphasSparse.reserve(numFlags/2);
-      size_t elSize = sizeof(decltype(alphasSparse)::value_type);
-
-      auto countMatFilename = outputDirectory / "quants_mat.gz";
-      if(not boost::filesystem::exists(countMatFilename)){
-        jointLog->error("Can't import Binary file quants.mat.gz, it doesn't exist");
-        jointLog->flush();
-        exit(84);
-      }
-
-      boost::iostreams::filtering_istream countMatrixStream;
-      countMatrixStream.push(boost::iostreams::gzip_decompressor());
-      countMatrixStream.push(boost::iostreams::file_source(countMatFilename.string(),
-                                                           std::ios_base::in | std::ios_base::binary));
-
-      for (size_t cellCount=0; cellCount<numCells; cellCount++){
-        countMatrixStream.read(reinterpret_cast<char*>(alphasFlag.data()), flagSize * numFlags);
-
-        size_t numExpGenes {0};
-        std::vector<size_t> indices;
-        for (size_t j=0; j<alphasFlag.size(); j++) {
-          uint8_t flag = alphasFlag[j];
-          size_t numNonZeros = popcount(flag);
-          numExpGenes += numNonZeros;
-
-          for (size_t i=0; i<8; i++){
-            if (flag & (128 >> i)) {
-              indices.emplace_back( i+(8*j) );
-            }
-          }
-        }
-
-        if (indices.size() != numExpGenes) {
-          jointLog->error("binary format reading error {}: {}: {}",
-                           indices.size(), numExpGenes);
-          jointLog->flush();
-          exit(84);
-        }
-
-
-        alphasSparse.clear();
-        alphasSparse.resize(numExpGenes);
-        countMatrixStream.read(reinterpret_cast<char*>(alphasSparse.data()), elSize * numExpGenes);
-
-        float readCount {0.0};
-        readCount += std::accumulate(alphasSparse.begin(), alphasSparse.end(), 0.0);
-        if (readCount > 1000000) {
-          jointLog->warn("A cell has more 1M count, Possible error");
-          jointLog->flush();
-        }
-
-        for(size_t i=0; i<numExpGenes; i++) {
-          qFile << std::fixed
-                << cellCount + 1 << "\t"
-                << indices[i] + 1 << "\t"
-                << alphasSparse[i] <<  std::endl;
-        }
-
-        if (readCount == 0.0){
-          zerod_cells += 1;
-        }
-      } // end-for each cell
-
-      if (zerod_cells > 0) {
-        jointLog->warn("Found {} cells with 0 counts", zerod_cells);
-      }
-    }
-
-    boost::iostreams::close(qFile);
-    jointLog->info("Finished dumping counts into mtx");
-}
-
-using SCExpT = ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 using BulkExpT = ReadExperiment<EquivalenceClassBuilder<TGValue>>;
 template <typename FragT, typename AlignModelT>
 using BulkAlignLibT = AlignmentLibrary<FragT, EquivalenceClassBuilder<TGValue>, AlignModelT>;
@@ -1235,8 +843,6 @@ template bool GZipWriter::writeAbundances<BulkAlignLibT<ReadPair,AlignmentModel>
 
 template bool GZipWriter::writeEmptyAbundances<BulkExpT>(const SalmonOpts& sopt,
                                                  BulkExpT& readExp);
-template bool GZipWriter::writeEmptyAbundances<SCExpT>(const SalmonOpts& sopt,
-                                                               SCExpT& readExp);
 
 template bool GZipWriter::writeEmptyAbundances<BulkAlignLibT<UnpairedRead,AlignmentModel>>(
     const SalmonOpts& sopt, BulkAlignLibT<UnpairedRead,AlignmentModel>& readExp);
@@ -1249,15 +855,6 @@ template bool
 GZipWriter::writeMeta<BulkExpT>(const SalmonOpts& opts,
                                 const BulkExpT& experiment,
                                 const MappingStatistics& mstats);
-template bool
-GZipWriter::writeMeta<SCExpT>(const SalmonOpts& opts,
-                              const SCExpT& experiment,
-                              const MappingStatistics& mstats);
-
-template bool
-GZipWriter::writeMetaFryMode<SCExpT>(const SalmonOpts& opts,
-                              const SCExpT& experiment,
-                              const MappingStatistics& mstats);
 
 template bool
 GZipWriter::writeMeta<BulkAlignLibT<UnpairedRead,AlignmentModel>>(const SalmonOpts& opts, const BulkAlignLibT<UnpairedRead,AlignmentModel>& experiment,
@@ -1273,10 +870,6 @@ GZipWriter::writeMeta<BulkAlignLibT<ReadPair,AlignmentModel>>(const SalmonOpts& 
 template bool
 GZipWriter::writeEmptyMeta<BulkExpT>(const SalmonOpts& opts,
                                            const BulkExpT& experiment,
-                                           std::vector<std::string>& errors);
-template bool
-GZipWriter::writeEmptyMeta<SCExpT>(const SalmonOpts& opts,
-                                           const SCExpT& experiment,
                                            std::vector<std::string>& errors);
 
 template bool GZipWriter::writeEmptyMeta<BulkAlignLibT<UnpairedRead,AlignmentModel>>(

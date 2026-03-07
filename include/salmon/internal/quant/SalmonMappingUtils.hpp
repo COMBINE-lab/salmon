@@ -46,12 +46,16 @@
 #include "salmon/internal/config/SalmonOpts.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/Transcript.hpp"
+#include "salmon/internal/io/FastxReader.hpp"
 
 #include "parallel_hashmap/phmap.h"
 #include "MemChainer.hpp"
 #include "MemCollector.hpp"
 #include "PuffAligner.hpp"
-#include "FastxParser.hpp"
+namespace fastx_parser {
+using ReadPair = salmon::io::fastx::CompatReadPair;
+using ReadSeq = salmon::io::fastx::CompatReadSeq;
+}
 #include "SAMWriter.hpp"
 #include "SelectiveAlignmentUtils.hpp"
 #include "Util.hpp"

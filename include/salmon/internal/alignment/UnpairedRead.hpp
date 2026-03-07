@@ -73,7 +73,7 @@ struct UnpairedRead {
   inline bool fwd() const { return !bam_strand(read); }
   inline bool isInward() const { return false; }
   // return 0 on success, -1 on failure
-  int writeToFile(scram_fd* fp) { return scram_put_seq(fp, read); }
+  int writeToFile(AlignmentFileHandle* fp) { return writeAlignmentRecord(fp, read); }
 
   inline char* getName() const { return bam_name(read); }
 

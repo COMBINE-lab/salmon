@@ -22,7 +22,7 @@ namespace salmon {
       };
 
     std::string to_string(AlignerDetails a);
-    AlignerDetails inferAlignerFromHeader(SAM_hdr* header);
+    AlignerDetails inferAlignerFromHeader(AlignmentHeader* header);
   }
 }
 

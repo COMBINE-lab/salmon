@@ -31,7 +31,7 @@ namespace salmon {
       }
     }
 
-    AlignerDetails inferAlignerFromHeader(SAM_hdr* header) {
+    AlignerDetails inferAlignerFromHeader(AlignmentHeader* header) {
       std::unordered_map<std::string, AlignerDetails> alignerNameToType = 
         {
          {"bowtie2", AlignerDetails::BOWTIE2},

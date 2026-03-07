@@ -24,15 +24,15 @@ char* dupCString(const char* str) {
 
 char* dupCString(const std::string& str) { return dupCString(str.c_str()); }
 
-void appendTag(salmon::io::SAM_hdr_ref& ref, const std::string& token) {
-  auto* tag = new SAM_hdr_tag;
+void appendTag(salmon::io::AlignmentHeaderRef& ref, const std::string& token) {
+  auto* tag = new AlignmentHeaderTag;
   tag->str = dupCString(token);
   tag->len = static_cast<int>(token.size());
   tag->next = ref.tag;
   ref.tag = tag;
 }
 
-void populateReferenceTags(SAM_hdr* header) {
+void populateReferenceTags(AlignmentHeader* header) {
   if (header == nullptr || header->raw == nullptr) {
     return;
   }
@@ -95,16 +95,16 @@ void populateReferenceTags(SAM_hdr* header) {
 
 namespace salmon::io {
 
-SAM_hdr* wrap_header(sam_hdr_t* raw) {
+AlignmentHeader* wrapHeader(sam_hdr_t* raw) {
   if (raw == nullptr) {
     return nullptr;
   }
 
-  auto* header = new SAM_hdr;
+  auto* header = new AlignmentHeader;
   header->raw = raw;
   header->nref = raw->n_targets;
   if (header->nref > 0) {
-    header->ref = new SAM_hdr_ref[header->nref];
+    header->ref = new AlignmentHeaderRef[header->nref];
     for (int32_t i = 0; i < header->nref; ++i) {
       header->ref[i].name = dupCString(raw->target_name[i]);
       header->ref[i].len = raw->target_len[i];
@@ -115,7 +115,7 @@ SAM_hdr* wrap_header(sam_hdr_t* raw) {
   return header;
 }
 
-void destroy_header(SAM_hdr* header) {
+void destroyHeader(AlignmentHeader* header) {
   if (header == nullptr) {
     return;
   }
@@ -142,13 +142,13 @@ void destroy_header(SAM_hdr* header) {
 
 } // namespace salmon::io
 
-scram_fd* scram_open(const char* path, const char* mode) {
+AlignmentFileHandle* openAlignmentFile(const char* path, const char* mode) {
   auto* raw = sam_open(path, mode);
   if (raw == nullptr) {
     return nullptr;
   }
 
-  auto* file = new scram_fd;
+  auto* file = new AlignmentFileHandle;
   file->raw = raw;
 
   if (mode != nullptr && mode[0] == 'r') {
@@ -158,13 +158,13 @@ scram_fd* scram_open(const char* path, const char* mode) {
       delete file;
       return nullptr;
     }
-    file->header = salmon::io::wrap_header(rawHeader);
+    file->header = salmon::io::wrapHeader(rawHeader);
   }
 
   return file;
 }
 
-int scram_close(scram_fd* file) {
+int closeAlignmentFile(AlignmentFileHandle* file) {
   if (file == nullptr) {
     return 0;
   }
@@ -175,48 +175,4 @@ int scram_close(scram_fd* file) {
   }
   delete file;
   return rc;
-}
-
-SAM_hdr* scram_get_header(scram_fd* file) {
-  return (file == nullptr) ? nullptr : file->header;
-}
-
-int scram_set_option(scram_fd* file, int option, int value) {
-  if (file == nullptr || file->raw == nullptr) {
-    return -1;
-  }
-  if (option == CRAM_OPT_NTHREADS) {
-    return hts_set_threads(file->raw, value);
-  }
-  return 0;
-}
-
-int scram_get_seq(scram_fd* file, bam_seq_t** read) {
-  if (file == nullptr || file->raw == nullptr || file->header == nullptr) {
-    return -1;
-  }
-  if (*read == nullptr) {
-    *read = bam_init1();
-  }
-  return sam_read1(file->raw, file->header->raw, *read);
-}
-
-int scram_put_seq(scram_fd* file, bam_seq_t* read) {
-  if (file == nullptr || file->raw == nullptr || file->header == nullptr) {
-    return -1;
-  }
-  return (sam_write1(file->raw, file->header->raw, read) >= 0) ? 0 : -1;
-}
-
-void scram_set_header(scram_fd* file, SAM_hdr* header) {
-  if (file != nullptr) {
-    file->header = header;
-  }
-}
-
-int scram_write_header(scram_fd* file) {
-  if (file == nullptr || file->raw == nullptr || file->header == nullptr) {
-    return -1;
-  }
-  return sam_hdr_write(file->raw, file->header->raw);
 }

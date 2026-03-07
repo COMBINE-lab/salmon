@@ -31,7 +31,7 @@ bool peekBAMIsPaired(const boost::filesystem::path& file) {
     readMode = "rb";
   }
 
-  auto* fp = scram_open(file.c_str(), readMode.c_str());
+  auto* fp = openAlignmentFile(file.c_str(), readMode.c_str());
 
   // If we couldn't open the file, then report this and exit.
   if (fp == NULL) {
@@ -44,7 +44,7 @@ bool peekBAMIsPaired(const boost::filesystem::path& file) {
   bam_seq_t* read = nullptr;
   read = salmon::io::bam_init();
 
-  bool didRead = (scram_get_seq(fp, &read) >= 0);
+  bool didRead = (readAlignmentRecord(fp, &read) >= 0);
   bool isPaired{false};
 
   if (didRead) {
@@ -58,7 +58,7 @@ bool peekBAMIsPaired(const boost::filesystem::path& file) {
     return false;
   }
 
-  scram_close(fp);
+  closeAlignmentFile(fp);
   salmon::io::bam_destroy(read);
   return isPaired;
 }

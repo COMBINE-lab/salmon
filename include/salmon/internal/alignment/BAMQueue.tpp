@@ -53,18 +53,18 @@ BAMQueue<FragT>::BAMQueue(std::vector<boost::filesystem::path>& fnames, LibraryF
             if (fname.extension() == ".bam") {
                 readMode_ = "rb";
             }
-            auto* fp = scram_open(fname.c_str(), readMode_.c_str());
+            auto* fp = openAlignmentFile(fname.c_str(), readMode_.c_str());
             // If this is the first file, then we'll be parsing it soon.
             // set the number of parse threads.
             if (firstFile) {
-                scram_set_option(fp, CRAM_OPT_NTHREADS, numParseThreads);
+                setAlignmentThreads(fp, numParseThreads);
             }
-            auto* header = scram_get_header(fp);
-            sam_hdr_incr_ref(header);
+            auto* header = getAlignmentHeader(fp);
+            alignmentHeaderIncrRef(header);
             // If this isn't the first file, then close it.
             // We'll open it again when we need it.
             if (!firstFile) {
-                scram_close(fp);
+                closeAlignmentFile(fp);
                 fp = nullptr;
             }
             files_.push_back({fname, readMode_, fp, header, numParseThreads});
@@ -80,7 +80,7 @@ void BAMQueue<FragT>::reset() {
       fmt::print(stderr, "{} ", file.fileName.string());
       // make sure that all of the current files are closed
       if (file.fp != nullptr) {
-          scram_close(file.fp);
+          closeAlignmentFile(file.fp);
           // but make sure we still have a reference to the header!
           if (file.header == nullptr or file.header->ref_count <= 0) {
               fmt::MemoryWriter errstr;
@@ -94,7 +94,7 @@ void BAMQueue<FragT>::reset() {
 
   // re-open the first file
   auto& file = files_.front();
-  file.fp = scram_open(file.fileName.c_str(), file.readMode.c_str());
+  file.fp = openAlignmentFile(file.fileName.c_str(), file.readMode.c_str());
 
   // If we couldn't open the file, then report this and exit.
   if (file.fp == NULL) {
@@ -103,7 +103,7 @@ void BAMQueue<FragT>::reset() {
     logger_->warn(errstr.str());
     std::exit(1);
   }
-  scram_set_option(file.fp, CRAM_OPT_NTHREADS, file.numParseThreads);
+  setAlignmentThreads(file.fp, file.numParseThreads);
 
   fmt::print(stderr, "] . . . done\n");
   totalAlignments_ = 0;
@@ -124,7 +124,7 @@ BAMQueue<FragT>::~BAMQueue() {
         fmt::print(stderr, "{} ", file.fileName.string());
         // make sure that all of the current files are closed
         if (file.fp != nullptr) {
-            scram_close(file.fp);
+            closeAlignmentFile(file.fp);
             file.fp = nullptr;
        }
        // free the remaining reference to the header
@@ -135,7 +135,7 @@ BAMQueue<FragT>::~BAMQueue() {
             logger_->warn(errstr.str());
             std::exit(1);
         } else {
-            sam_hdr_decr_ref(file.header); 
+            alignmentHeaderDecrRef(file.header);
             file.header = nullptr;
         }
     }
@@ -210,11 +210,11 @@ template <typename FragT>
 void BAMQueue<FragT>::forceEndParsing() { doneParsing_ = true; }
 
 template <typename FragT>
-SAM_hdr* BAMQueue<FragT>::header() { return files_.front().header; } 
+AlignmentHeader* BAMQueue<FragT>::header() { return files_.front().header; }
 
 template <typename FragT>
-std::vector<SAM_hdr*> BAMQueue<FragT>::headers() { 
-    std::vector<SAM_hdr*> hs;
+std::vector<AlignmentHeader*> BAMQueue<FragT>::headers() {
+    std::vector<AlignmentHeader*> hs;
     for (auto& file : files_) {
         hs.push_back(file.header);
     }
@@ -363,7 +363,7 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
     // Until we get a valid pair of reads
     while (!haveValidPair) {
         // Consume a single read
-        didRead1 = (scram_get_seq(fp_, &rpair.read1) >= 0);
+        didRead1 = (readAlignmentRecord(fp_, &rpair.read1) >= 0);
         AlignmentType alnType;
         // If we were able to obtain a read, determine what type
         // of alignment it came from.
@@ -418,10 +418,10 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
             }
             // If this was not a properly mapped orphan read, then grab the next
             // read.
-            didRead1 = (scram_get_seq(fp_, &rpair.read1) >= 0);
+            didRead1 = (readAlignmentRecord(fp_, &rpair.read1) >= 0);
         }
 
-        didRead2 = (scram_get_seq(fp_, &rpair.read2) >=0);
+        didRead2 = (readAlignmentRecord(fp_, &rpair.read2) >= 0);
 
         // If we didn't get a read, then we've exhausted this file. 
         // NOTE: I'm not sure about the *or* condition here. In some cases, we
@@ -429,14 +429,14 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
         // anyway. Figure out what the right thing is to do here.
         if (!didRead1 or !didRead2) { 
             // close the current file
-            scram_close(currFile_->fp);
+            closeAlignmentFile(currFile_->fp);
             currFile_->fp = nullptr;
             // increment the file iterator
             currFile_++;
             // If this is the last file, then we're done
             if (currFile_ == files_.end()) { return false; }
             // Otherwise, start parsing the next file.
-            fp_ = scram_open(currFile_->fileName.c_str(), currFile_->readMode.c_str());
+            fp_ = openAlignmentFile(currFile_->fileName.c_str(), currFile_->readMode.c_str());
             hdr_ = currFile_->header;
             continue;
         }
@@ -549,17 +549,17 @@ inline bool BAMQueue<FragT>::getFrag_(UnpairedRead& sread, FilterT filt) {
     bool haveValidRead{false};
 
     while (!haveValidRead) {
-        bool didRead = (scram_get_seq(fp_, &sread.read) >= 0);
+        bool didRead = (readAlignmentRecord(fp_, &sread.read) >= 0);
         // If we didn't get a read, then we've exhausted this file
         if (!didRead) { 
             // close the current file
-            scram_close(currFile_->fp);
+            closeAlignmentFile(currFile_->fp);
             currFile_->fp = nullptr;
             currFile_++;
             // If this is the last file, then we're done
             if (currFile_ == files_.end()) { return false; }
             // Otherwise, start parsing the next file.
-            fp_ = scram_open(currFile_->fileName.c_str(), currFile_->readMode.c_str());
+            fp_ = openAlignmentFile(currFile_->fileName.c_str(), currFile_->readMode.c_str());
             hdr_ = currFile_->header;
             continue;
         }

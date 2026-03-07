@@ -120,8 +120,8 @@ if(NOT LIBLZMA_FOUND)
     INSTALL_DIR ${SALMON_DEPS_INSTALL_PREFIX}
     BUILD_IN_SOURCE TRUE
     CONFIGURE_COMMAND ./configure --prefix=<INSTALL_DIR> CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS=${EXTRA_CMAKE_INCLUDE_FLAGS} CPPFLAGS=${EXTRA_CMAKE_INCLUDE_FLAGS} LDFLAGS=${EXTRA_CMAKE_LIBRARY_FLAGS}
-    BUILD_COMMAND make ${QUIET_MAKE}
-    INSTALL_COMMAND make ${QUIET_MAKE} install
+    BUILD_COMMAND make
+    INSTALL_COMMAND make install
   )
   set(LIBLZMA_LIBRARIES ${SALMON_DEPS_INSTALL_PREFIX}/lib/liblzma.a)
   set(FETCHED_LIBLZMA TRUE)
@@ -140,8 +140,8 @@ if(NOT BZIP2_FOUND)
     INSTALL_DIR ${SALMON_DEPS_INSTALL_PREFIX}
     BUILD_IN_SOURCE TRUE
     CONFIGURE_COMMAND ""
-    BUILD_COMMAND make ${QUIET_MAKE} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
-    INSTALL_COMMAND make ${QUIET_MAKE} install PREFIX=<INSTALL_DIR>
+    BUILD_COMMAND make CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
+    INSTALL_COMMAND make install PREFIX=<INSTALL_DIR>
   )
   set(BZIP2_LIBRARIES ${SALMON_DEPS_INSTALL_PREFIX}/lib/libbz2.a)
   set(FETCHED_LIBBZ2 TRUE)
@@ -149,17 +149,9 @@ else()
   message(STATUS "Found libbz2 library: ${BZIP2_LIBRARIES}")
 endif()
 
-if(FETCH_BOOST OR BOOST_RECONFIGURE OR BOOST_WILL_RECONFIGURE)
-  message(FATAL_ERROR
-    "Legacy Boost knobs (FETCH_BOOST / BOOST_RECONFIGURE / BOOST_WILL_RECONFIGURE) are no longer supported. "
-    "Install Boost through your package manager and reconfigure.")
-endif()
-
 find_package(Boost 1.59.0 REQUIRED COMPONENTS iostreams system filesystem timer chrono program_options)
 message(STATUS "Boost include dirs: ${Boost_INCLUDE_DIRS}")
 message(STATUS "Boost libraries: ${Boost_LIBRARIES}")
-
-set(EXTERNAL_LIBRARY_PATH $CMAKE_CURRENT_SOURCE_DIR/lib)
 
 find_package(cereal "1.3.2" QUIET)
 if(NOT CEREAL_FOUND)
@@ -183,17 +175,10 @@ elseif(CEREAL_INCLUDE_DIRS AND NOT TARGET cereal::cereal)
   add_library(cereal::cereal ALIAS cereal)
 endif()
 
-if(TBB_RECONFIGURE OR TBB_WILL_RECONFIGURE)
-  message(FATAL_ERROR
-    "Legacy TBB knobs (TBB_RECONFIGURE / TBB_WILL_RECONFIGURE) are no longer supported. "
-    "Install oneTBB through your package manager and reconfigure.")
-endif()
-
 find_package(TBB 2021.4 REQUIRED COMPONENTS tbb)
 if(TBB_VERSION VERSION_LESS 2021.4)
   message(FATAL_ERROR "Found TBB version ${TBB_VERSION}, but Salmon requires >= 2021.4.")
 endif()
-set(TBB_TARGET_EXISTED TRUE)
 get_target_property(TBB_INCLUDE_DIRS TBB::tbb INTERFACE_INCLUDE_DIRECTORIES)
 message(STATUS "Found suitable TBB version: ${TBB_VERSION}")
 
@@ -297,8 +282,8 @@ elseif(SALMON_FETCH_MISSING_DEPS)
     INSTALL_DIR ${SALMON_DEPS_INSTALL_PREFIX}
     BUILD_IN_SOURCE TRUE
     CONFIGURE_COMMAND ./configure --prefix=<INSTALL_DIR> --disable-libcurl CPPFLAGS=${_salmon_htslib_cppflags} LDFLAGS=${_salmon_htslib_ldflags} CC=${CMAKE_C_COMPILER}
-    BUILD_COMMAND make ${QUIET_MAKE}
-    INSTALL_COMMAND make ${QUIET_MAKE} install
+    BUILD_COMMAND make
+    INSTALL_COMMAND make install
   )
   if(FETCHED_ZLIBNG AND TARGET ${SALMON_ZLIB_TARGET})
     add_dependencies(libhtslib ${SALMON_ZLIB_TARGET})

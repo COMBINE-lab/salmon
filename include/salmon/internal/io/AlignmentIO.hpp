@@ -13,40 +13,40 @@ extern "C" {
 
 namespace salmon::io {
 
-struct SAM_hdr_tag {
+struct AlignmentHeaderTag {
   char* str{nullptr};
   int len{0};
-  SAM_hdr_tag* next{nullptr};
+  AlignmentHeaderTag* next{nullptr};
 };
 
-struct SAM_hdr_ref {
+struct AlignmentHeaderRef {
   char* name{nullptr};
   uint32_t len{0};
-  SAM_hdr_tag* tag{nullptr};
+  AlignmentHeaderTag* tag{nullptr};
 };
 
-struct SAM_hdr {
+struct AlignmentHeader {
   sam_hdr_t* raw{nullptr};
   int32_t nref{0};
-  SAM_hdr_ref* ref{nullptr};
+  AlignmentHeaderRef* ref{nullptr};
   int32_t ref_count{1};
 };
 
-struct scram_fd {
+struct AlignmentFileHandle {
   samFile* raw{nullptr};
-  SAM_hdr* header{nullptr};
+  AlignmentHeader* header{nullptr};
 };
 
-SAM_hdr* wrap_header(sam_hdr_t* raw);
-void destroy_header(SAM_hdr* header);
+AlignmentHeader* wrapHeader(sam_hdr_t* raw);
+void destroyHeader(AlignmentHeader* header);
 
 } // namespace salmon::io
 
 using bam_seq_t = bam1_t;
-using scram_fd = salmon::io::scram_fd;
-using SAM_hdr = salmon::io::SAM_hdr;
-using SAM_hdr_ref = salmon::io::SAM_hdr_ref;
-using SAM_hdr_tag = salmon::io::SAM_hdr_tag;
+using AlignmentFileHandle = salmon::io::AlignmentFileHandle;
+using AlignmentHeader = salmon::io::AlignmentHeader;
+using AlignmentHeaderRef = salmon::io::AlignmentHeaderRef;
+using AlignmentHeaderTag = salmon::io::AlignmentHeaderTag;
 using cigar_op = int;
 
 #ifndef BAM_CONSUME_SEQ
@@ -101,28 +101,62 @@ inline uint8_t* bam_aux_find(bam_seq_t* record, const char tag[2]) {
 }
 inline int32_t bam_aux_i(uint8_t* tag_value) { return bam_aux2i(tag_value); }
 
-scram_fd* scram_open(const char* path, const char* mode);
-int scram_close(scram_fd* file);
-SAM_hdr* scram_get_header(scram_fd* file);
-int scram_set_option(scram_fd* file, int option, int value);
-int scram_get_seq(scram_fd* file, bam_seq_t** read);
-int scram_put_seq(scram_fd* file, bam_seq_t* read);
-void scram_set_header(scram_fd* file, SAM_hdr* header);
-int scram_write_header(scram_fd* file);
+AlignmentFileHandle* openAlignmentFile(const char* path, const char* mode);
+int closeAlignmentFile(AlignmentFileHandle* file);
+inline AlignmentHeader* getAlignmentHeader(AlignmentFileHandle* file) {
+  return (file == nullptr) ? nullptr : file->header;
+}
 
-inline void sam_hdr_incr_ref(SAM_hdr* header) {
+inline int setAlignmentThreads(AlignmentFileHandle* file, int threads) {
+  if (file == nullptr || file->raw == nullptr) {
+    return -1;
+  }
+  return hts_set_threads(file->raw, threads);
+}
+
+inline int readAlignmentRecord(AlignmentFileHandle* file, bam_seq_t** read) {
+  if (file == nullptr || file->raw == nullptr || file->header == nullptr) {
+    return -1;
+  }
+  if (*read == nullptr) {
+    *read = bam_init1();
+  }
+  return sam_read1(file->raw, file->header->raw, *read);
+}
+
+inline int writeAlignmentRecord(AlignmentFileHandle* file, bam_seq_t* read) {
+  if (file == nullptr || file->raw == nullptr || file->header == nullptr) {
+    return -1;
+  }
+  return (sam_write1(file->raw, file->header->raw, read) >= 0) ? 0 : -1;
+}
+
+inline void setAlignmentHeader(AlignmentFileHandle* file, AlignmentHeader* header) {
+  if (file != nullptr) {
+    file->header = header;
+  }
+}
+
+inline int writeAlignmentHeader(AlignmentFileHandle* file) {
+  if (file == nullptr || file->raw == nullptr || file->header == nullptr) {
+    return -1;
+  }
+  return sam_hdr_write(file->raw, file->header->raw);
+}
+
+inline void alignmentHeaderIncrRef(AlignmentHeader* header) {
   if (header != nullptr) {
     ++header->ref_count;
   }
 }
 
-inline void sam_hdr_decr_ref(SAM_hdr* header) {
+inline void alignmentHeaderDecrRef(AlignmentHeader* header) {
   if (header == nullptr) {
     return;
   }
   --header->ref_count;
   if (header->ref_count <= 0) {
-    salmon::io::destroy_header(header);
+    salmon::io::destroyHeader(header);
   }
 }
 

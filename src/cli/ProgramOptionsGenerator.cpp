@@ -492,9 +492,9 @@ namespace salmon {
        "considered.")
       ("maxRecoverReadOcc",
        po::value<uint32_t>(&(sopt.maxRecoverReadOccs))->default_value(salmon::defaults::maxRecoverReadOccs),
-       "Relevant for alevin with \'--sketch\' mode only: if a read has valid seed matches, but no read has matches "
-       "leading to fewer than \"maxReadOcc\" mappings, then try to recover mappings for this read as long as there are "
-       "fewer than \"maxRecoverReadOcc\" mappings."
+       "If a read has valid seed matches but all candidate mappings exceed "
+       "\"maxReadOcc\", attempt recovery while candidate mappings remain fewer "
+       "than \"maxRecoverReadOcc\"."
        )
       ("noLengthCorrection",
        po::bool_switch(&(sopt.noLengthCorrection))->default_value(salmon::defaults::noLengthCorrection),

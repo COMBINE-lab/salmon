@@ -46,13 +46,13 @@ AlignmentLibrary<FragT, EQBuilderT, AlignModelT>::AlignmentLibrary(
   }
   std::cerr << "done\n";
 
-  SAM_hdr* header = bq->header();
+  AlignmentHeader* header = bq->header();
   aligner_ = salmon::bam_utils::inferAlignerFromHeader(header);
 
   phmap::flat_hash_set<std::string> decoys;
   if (aligner_ == salmon::bam_utils::AlignerDetails::PUFFERFISH) {
     for (decltype(header->nref) i = 0; i < header->nref; ++i) {
-      SAM_hdr_tag* tag;
+      AlignmentHeaderTag* tag;
       for (tag = header->ref[i].tag; tag; tag = tag->next) {
         if ((tag->len == 4) and (std::strncmp(tag->str, "DS:D", 4) == 0)) {
           decoys.insert(header->ref[i].name);
