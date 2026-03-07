@@ -5,7 +5,7 @@
 
 #include <boost/program_options.hpp>
 
-#include "SalmonOpts.hpp"
+#include "salmon/internal/config/SalmonOpts.hpp"
 
 namespace salmon::utils {
 

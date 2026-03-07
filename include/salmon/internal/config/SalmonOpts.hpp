@@ -11,7 +11,7 @@
 #include <ostream>
 
 #include "Util.hpp"
-#include "SalmonDefaults.hpp"
+#include "salmon/internal/config/SalmonDefaults.hpp"
 
 enum class SalmonQuantMode { MAP = 1, ALIGN = 2 };
 

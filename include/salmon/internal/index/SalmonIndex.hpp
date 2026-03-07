@@ -9,7 +9,7 @@
 #include "cereal/archives/json.hpp"
 #include "cereal/types/vector.hpp"
 #include <spdlog/spdlog.h>
-#include "json.hpp"
+#include "salmon/vendor/json.hpp"
 
 #include "ProgOpts.hpp"
 #include "PufferfishIndex.hpp"
@@ -17,8 +17,8 @@
 
 #include "salmon/internal/util/FmtCompat.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
-#include "SalmonConfig.hpp"
-#include "SalmonIndexVersionInfo.hpp"
+#include "salmon/internal/config/SalmonConfig.hpp"
+#include "salmon/internal/index/SalmonIndexVersionInfo.hpp"
 
 // declaration of quasi index function
 int pufferfishIndex(pufferfish::IndexOptions& indexOpts);

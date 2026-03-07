@@ -8,7 +8,7 @@
 #include "jellyfish/mer_dna.hpp"
 
 #include "salmon/internal/io/FASTAParser.hpp"
-#include "SalmonOpts.hpp"
+#include "salmon/internal/config/SalmonOpts.hpp"
 #include "salmon/internal/util/SalmonStringUtils.hpp"
 #include "salmon/internal/model/Transcript.hpp"
 

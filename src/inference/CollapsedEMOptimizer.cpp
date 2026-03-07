@@ -17,7 +17,7 @@
 #include <spdlog/fmt/fmt.h>
 
 #include "Eigen/Dense"
-#include "cuckoohash_map.hh"
+#include "salmon/vendor/cuckoohash_map.hh"
 
 #include "salmon/internal/alignment/AlignmentLibrary.hpp"
 #include "salmon/internal/util/FmtCompat.hpp"

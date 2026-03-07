@@ -119,7 +119,7 @@ static void* XXH_memcpy(void* dest, const void* src, size_t size) {
 }
 
 #define XXH_STATIC_LINKING_ONLY
-#include "xxhash.h"
+#include "salmon/vendor/xxhash.h"
 
 /* *************************************
  *  Compiler Specific Options

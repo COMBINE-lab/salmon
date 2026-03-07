@@ -15,7 +15,7 @@
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 
-#include "SalmonDefaults.hpp"
+#include "salmon/internal/config/SalmonDefaults.hpp"
 #include "salmon/internal/util/IOUtils.hpp"
 #include "salmon/internal/util/SalmonMath.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"

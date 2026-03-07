@@ -15,7 +15,7 @@ extern "C" {
 //#include "clasp.h"
 }
 
-#include "FragmentList.hpp"
+#include "salmon/internal/io/FragmentList.hpp"
 
 #define SOP ((unsigned char)(0 << 0))
 #define LIN ((unsigned char)(1 << 0))

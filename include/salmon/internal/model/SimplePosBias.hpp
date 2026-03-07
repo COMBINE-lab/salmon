@@ -2,7 +2,7 @@
 #define SIMPLE_POS_BIAS_HPP
 
 #include <spdlog/spdlog.h>
-#include "spline.h"
+#include "salmon/vendor/spline.h"
 #include <array>
 #include <boost/iostreams/filtering_stream.hpp>
 #include <vector>

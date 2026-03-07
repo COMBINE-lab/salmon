@@ -11,11 +11,11 @@
 #include "salmon/internal/output/GZipWriter.hpp"
 #include "salmon/internal/quant/ReadExperiment.hpp"
 #include "salmon/internal/alignment/ReadPair.hpp"
-#include "SalmonOpts.hpp"
+#include "salmon/internal/config/SalmonOpts.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/alignment/UnpairedRead.hpp"
 #include "salmon/internal/model/TranscriptGroup.hpp"
-#include "zstr.hpp"
+#include "salmon/internal/output/zstr.hpp"
 
 GZipWriter::GZipWriter(const boost::filesystem::path path,
                        std::shared_ptr<spdlog::logger> logger)

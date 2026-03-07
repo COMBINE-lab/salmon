@@ -30,7 +30,7 @@
 #include "oneapi/tbb/parallel_for_each.h"
 #include "oneapi/tbb/parallel_sort.h"
 
-#include "GenomicFeature.hpp"
+#include "salmon/internal/model/GenomicFeature.hpp"
 #include "salmon/internal/index/SalmonIndex.hpp"
 #include "salmon/internal/util/FmtCompat.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"

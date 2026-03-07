@@ -7,7 +7,7 @@
 #include <boost/filesystem.hpp>
 
 #include "salmon/internal/model/Transcript.hpp"
-#include "EquivalenceClassBuilder.hpp"
+#include "salmon/internal/quant/EquivalenceClassBuilder.hpp"
 #include "salmon/internal/output/GZipWriter.hpp"
 #include "salmon/internal/output/MappingStatistics.hpp"
 #include "salmon/internal/quant/QuantPipelineContext.hpp"

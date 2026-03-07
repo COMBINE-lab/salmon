@@ -4,7 +4,7 @@
 // Our includes
 #include "salmon/internal/quant/ClusterForest.hpp"
 #include "salmon/internal/util/DistributionUtils.hpp"
-#include "EquivalenceClassBuilder.hpp"
+#include "salmon/internal/quant/EquivalenceClassBuilder.hpp"
 #include "salmon/internal/model/FragmentLengthDistribution.hpp"
 #include "salmon/internal/model/FragmentStartPositionDistribution.hpp"
 #include "salmon/internal/model/GCFragModel.hpp"
@@ -13,7 +13,7 @@
 #include "salmon/internal/quant/BiasLibraryState.hpp"
 #include "salmon/internal/model/SBModel.hpp"
 #include "salmon/internal/index/SalmonIndex.hpp"
-#include "SalmonOpts.hpp"
+#include "salmon/internal/config/SalmonOpts.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/util/FmtCompat.hpp"
 // #include "salmon/internal/model/SequenceBiasModel.hpp"

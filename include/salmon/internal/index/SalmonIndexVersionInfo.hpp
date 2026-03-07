@@ -1,12 +1,12 @@
 #ifndef __SALMON_INDEX_VERSION_INFO_HPP__
 #define __SALMON_INDEX_VERSION_INFO_HPP__
 
-#include "SalmonConfig.hpp"
+#include "salmon/internal/config/SalmonConfig.hpp"
 #include "boost/filesystem.hpp"
 #include "cereal/archives/json.hpp"
 #include "salmon/internal/util/FmtCompat.hpp"
 #include <spdlog/fmt/fmt.h>
-#include "json.hpp"
+#include "salmon/vendor/json.hpp"
 
 enum class SalmonIndexType : uint8_t { FMD=0, QUASI=1, PUFF=2 };
 

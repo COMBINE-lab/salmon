@@ -19,7 +19,7 @@
 <HEADER
 **/
 
-#include "GenomicFeature.hpp"
+#include "salmon/internal/model/GenomicFeature.hpp"
 #include <atomic>
 #include <boost/thread/thread.hpp>
 #include <fstream>

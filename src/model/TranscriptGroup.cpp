@@ -3,7 +3,7 @@
 
 #include "salmon/internal/util/SalmonMath.hpp"
 #include "salmon/internal/model/TranscriptGroup.hpp"
-#include "xxhash.h"
+#include "salmon/vendor/xxhash.h"
 
 TranscriptGroup::TranscriptGroup() : hash(0) {}
 

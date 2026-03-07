@@ -7,7 +7,7 @@
 #include <boost/math/distributions/binomial.hpp>
 #include <boost/math/distributions/geometric.hpp>
 
-#include "dbg.hpp"
+#include "salmon/vendor/dbg.hpp"
 #include "salmon/internal/alignment/ONTAlignmentModel.hpp"
 #include "salmon/internal/util/SalmonMath.hpp"
 #include "salmon/internal/util/SalmonStringUtils.hpp"

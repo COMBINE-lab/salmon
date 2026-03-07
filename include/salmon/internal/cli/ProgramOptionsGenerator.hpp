@@ -2,7 +2,7 @@
 #define PROGRAM_OPTIONS_GENERATOR_HPP
 
 #include <boost/program_options.hpp>
-#include "SalmonOpts.hpp"
+#include "salmon/internal/config/SalmonOpts.hpp"
 
 namespace salmon {
 namespace po = boost::program_options;

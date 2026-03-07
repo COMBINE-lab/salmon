@@ -5,6 +5,7 @@ if(POLICY CMP0167)
 endif()
 
 project(Salmon LANGUAGES C CXX)
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 set(GAT_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 list(APPEND CMAKE_MODULE_PATH "${GAT_SOURCE_DIR}/cmake/Modules")
@@ -46,6 +47,13 @@ get_property(COMPACT_VECTOR_INCLUDE_PATH TARGET graphdump PROPERTY COMPACT_VECTO
 message(STATUS "fetched path for compact_vector as [${COMPACT_VECTOR_INCLUDE_PATH}]")
 
 add_subdirectory(src)
+
+add_custom_target(include_policy_check
+  COMMAND ${CMAKE_COMMAND} -E env
+          PYTHONPATH=
+          ${Python3_EXECUTABLE} ${GAT_SOURCE_DIR}/scripts/check_include_policy.py
+  WORKING_DIRECTORY ${GAT_SOURCE_DIR}
+  COMMENT "Checking include policy (forbidden top-level vendor + legacy internal headers)")
 
 include(CPack)
 

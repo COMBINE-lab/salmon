@@ -22,13 +22,13 @@
 #include <spdlog/fmt/fmt.h>
 
 #include "salmon/internal/util/SalmonMath.hpp"
-#include "SalmonOpts.hpp"
+#include "salmon/internal/config/SalmonOpts.hpp"
 
-#include "GenomicFeature.hpp"
+#include "salmon/internal/model/GenomicFeature.hpp"
 #include "salmon/internal/model/LibraryFormat.hpp"
 #include "Util.hpp"
 #include "salmon/internal/quant/ReadLibrary.hpp"
-#include "SalmonConfig.hpp"
+#include "salmon/internal/config/SalmonConfig.hpp"
 #include "salmon/internal/util/TranscriptGeneMap.hpp"
 
 template <typename EqBuilderT> class ReadExperiment;

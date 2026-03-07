@@ -41,9 +41,9 @@
 #include "salmon/internal/alignment/AlignmentGroup.hpp"
 #include "salmon/internal/cli/ProgramOptionsGenerator.hpp"
 #include "salmon/internal/quant/ReadExperiment.hpp"
-#include "SalmonDefaults.hpp"
+#include "salmon/internal/config/SalmonDefaults.hpp"
 #include "salmon/internal/util/SalmonMath.hpp"
-#include "SalmonOpts.hpp"
+#include "salmon/internal/config/SalmonOpts.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/Transcript.hpp"
 

@@ -1,6 +1,6 @@
 #include "salmon/internal/cli/VersionChecker.hpp"
-#include "SalmonConfig.hpp"
-#include "httplib.hpp"
+#include "salmon/internal/config/SalmonConfig.hpp"
+#include "salmon/vendor/httplib.hpp"
 
 std::string getVersionMessage() {
   std::stringstream ss;

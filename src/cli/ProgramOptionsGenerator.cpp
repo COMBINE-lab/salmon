@@ -2,7 +2,7 @@
 #include <iostream>
 
 #include "salmon/internal/cli/ProgramOptionsGenerator.hpp"
-#include "SalmonDefaults.hpp"
+#include "salmon/internal/config/SalmonDefaults.hpp"
 
 namespace salmon {
 

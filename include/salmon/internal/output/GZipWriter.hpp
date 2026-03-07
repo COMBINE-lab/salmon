@@ -11,7 +11,7 @@
 #include <boost/iostreams/filtering_stream.hpp>
 
 #include "salmon/internal/quant/ReadExperiment.hpp"
-#include "SalmonOpts.hpp"
+#include "salmon/internal/config/SalmonOpts.hpp"
 #include "salmon/internal/util/SalmonSpinLock.hpp"
 #include "salmon/internal/output/MappingStatistics.hpp"
 

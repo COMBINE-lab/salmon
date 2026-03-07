@@ -5,7 +5,7 @@
 
 #include <cstdint>
 #include <vector>
-#include "xxhash.h"
+#include "salmon/vendor/xxhash.h"
 
 class TranscriptGroup {
 public:

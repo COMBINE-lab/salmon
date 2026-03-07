@@ -18,8 +18,8 @@
 #include "salmon/internal/alignment/ReadPair.hpp"
 #include "salmon/internal/util/SalmonMath.hpp"
 #include "salmon/internal/alignment/UnpairedRead.hpp"
-#include <concurrentqueue.h>
-#include "readerwriterqueue.h"
+#include "salmon/vendor/concurrentqueue.h"
+#include "salmon/vendor/readerwriterqueue.h"
 #include <spdlog/spdlog.h>
 #include <boost/filesystem.hpp>
 #include <boost/timer/timer.hpp>

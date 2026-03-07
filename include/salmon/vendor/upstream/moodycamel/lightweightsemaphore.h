@@ -24,8 +24,16 @@ extern "C" {
 }
 #elif defined(__MACH__)
 #include <mach/mach.h>
+#elif defined(__MVS__)
+#include <zos-semaphore.h>
 #elif defined(__unix__)
 #include <semaphore.h>
+
+#if defined(__GLIBC_PREREQ) && defined(_GNU_SOURCE)
+#if __GLIBC_PREREQ(2,30)
+#define MOODYCAMEL_LIGHTWEIGHTSEMAPHORE_MONOTONIC
+#endif
+#endif
 #endif
 
 namespace moodycamel
@@ -139,7 +147,7 @@ public:
 	{
 		mach_timespec_t ts;
 		ts.tv_sec = static_cast<unsigned int>(timeout_usecs / 1000000);
-		ts.tv_nsec = (timeout_usecs % 1000000) * 1000;
+		ts.tv_nsec = static_cast<int>((timeout_usecs % 1000000) * 1000);
 
 		// added in OSX 10.10: https://developer.apple.com/library/prerelease/mac/documentation/General/Reference/APIDiffsMacOSX10_10SeedDiff/modules/Darwin.html
 		kern_return_t rc = semaphore_timedwait(m_sema, ts);
@@ -159,9 +167,9 @@ public:
 		}
 	}
 };
-#elif defined(__unix__)
+#elif defined(__unix__) || defined(__MVS__)
 //---------------------------------------------------------
-// Semaphore (POSIX, Linux)
+// Semaphore (POSIX, Linux, zOS)
 //---------------------------------------------------------
 class Semaphore
 {
@@ -175,7 +183,7 @@ public:
 	Semaphore(int initialCount = 0)
 	{
 		assert(initialCount >= 0);
-		int rc = sem_init(&m_sema, 0, initialCount);
+		int rc = sem_init(&m_sema, 0, static_cast<unsigned int>(initialCount));
 		assert(rc == 0);
 		(void)rc;
 	}
@@ -209,7 +217,11 @@ public:
 		struct timespec ts;
 		const int usecs_in_1_sec = 1000000;
 		const int nsecs_in_1_sec = 1000000000;
+#ifdef MOODYCAMEL_LIGHTWEIGHTSEMAPHORE_MONOTONIC
+		clock_gettime(CLOCK_MONOTONIC, &ts);
+#else
 		clock_gettime(CLOCK_REALTIME, &ts);
+#endif
 		ts.tv_sec += (time_t)(usecs / usecs_in_1_sec);
 		ts.tv_nsec += (long)(usecs % usecs_in_1_sec) * 1000;
 		// sem_timedwait bombs if you have more than 1e9 in tv_nsec
@@ -221,7 +233,11 @@ public:
 
 		int rc;
 		do {
+#ifdef MOODYCAMEL_LIGHTWEIGHTSEMAPHORE_MONOTONIC
+			rc = sem_clockwait(&m_sema, CLOCK_MONOTONIC, &ts);
+#else
 			rc = sem_timedwait(&m_sema, &ts);
+#endif
 		} while (rc == -1 && errno == EINTR);
 		return rc == 0;
 	}
@@ -257,14 +273,12 @@ public:
 private:
 	std::atomic<ssize_t> m_count;
 	details::Semaphore m_sema;
+	int m_maxSpins;
 
 	bool waitWithPartialSpinning(std::int64_t timeout_usecs = -1)
 	{
 		ssize_t oldCount;
-		// Is there a better way to set the initial spin count?
-		// If we lower it to 1000, testBenaphore becomes 15x slower on my Core i7-5930K Windows PC,
-		// as threads start hitting the kernel semaphore.
-		int spin = 10000;
+		int spin = m_maxSpins;
 		while (--spin >= 0)
 		{
 			oldCount = m_count.load(std::memory_order_relaxed);
@@ -276,8 +290,11 @@ private:
 		if (oldCount > 0)
 			return true;
 		if (timeout_usecs < 0)
-			return m_sema.wait();
-		if (m_sema.timed_wait((std::uint64_t)timeout_usecs))
+		{
+			if (m_sema.wait())
+				return true;
+		}
+		if (timeout_usecs > 0 && m_sema.timed_wait((std::uint64_t)timeout_usecs))
 			return true;
 		// At this point, we've timed out waiting for the semaphore, but the
 		// count is still decremented indicating we may still be waiting on
@@ -298,7 +315,7 @@ private:
 	{
 		assert(max > 0);
 		ssize_t oldCount;
-		int spin = 10000;
+		int spin = m_maxSpins;
 		while (--spin >= 0)
 		{
 			oldCount = m_count.load(std::memory_order_relaxed);
@@ -313,12 +330,7 @@ private:
 		oldCount = m_count.fetch_sub(1, std::memory_order_acquire);
 		if (oldCount <= 0)
 		{
-			if (timeout_usecs < 0)
-			{
-				if (!m_sema.wait())
-					return 0;
-			}
-			else if (!m_sema.timed_wait((std::uint64_t)timeout_usecs))
+			if ((timeout_usecs == 0) || (timeout_usecs < 0 && !m_sema.wait()) || (timeout_usecs > 0 && !m_sema.timed_wait((std::uint64_t)timeout_usecs)))
 			{
 				while (true)
 				{
@@ -336,9 +348,10 @@ private:
 	}
 
 public:
-	LightweightSemaphore(ssize_t initialCount = 0) : m_count(initialCount)
+	LightweightSemaphore(ssize_t initialCount = 0, int maxSpins = 10000) : m_count(initialCount), m_maxSpins(maxSpins)
 	{
 		assert(initialCount >= 0);
+		assert(maxSpins >= 0);
 	}
 
 	bool tryWait()
@@ -404,10 +417,10 @@ public:
 		}
 	}
 	
-	ssize_t availableApprox() const
+	std::size_t availableApprox() const
 	{
 		ssize_t count = m_count.load(std::memory_order_relaxed);
-		return count > 0 ? count : 0;
+		return count > 0 ? static_cast<std::size_t>(count) : 0;
 	}
 };
 

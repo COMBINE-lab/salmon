@@ -18,7 +18,7 @@
     along with salmon.  If not, see <http://www.gnu.org/licenses/>.
 <HEADER
 **/
-#include <backtrace.hpp>
+#include "salmon/internal/util/backtrace.hpp"
 #include <boost/thread/thread.hpp>
 
 #include <cstdint>
@@ -43,8 +43,8 @@
 // C++ string formatting library
 #include <spdlog/fmt/fmt.h>
 
-#include "GenomicFeature.hpp"
-#include "SalmonConfig.hpp"
+#include "salmon/internal/model/GenomicFeature.hpp"
+#include "salmon/internal/config/SalmonConfig.hpp"
 #include "salmon/internal/cli/VersionChecker.hpp"
 #include "salmon/internal/index/SalmonIndex.hpp"
 #include "salmon/internal/util/FmtCompat.hpp"

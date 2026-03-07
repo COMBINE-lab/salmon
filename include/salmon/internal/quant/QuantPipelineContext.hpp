@@ -9,7 +9,7 @@
 
 #include <spdlog/spdlog.h>
 
-#include "SalmonOpts.hpp"
+#include "salmon/internal/config/SalmonOpts.hpp"
 
 namespace salmon::pipeline {
 

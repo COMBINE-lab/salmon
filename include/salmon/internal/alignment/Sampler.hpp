@@ -40,13 +40,13 @@
 #include "salmon/internal/alignment/MiniBatchInfo.hpp"
 #include "salmon/internal/output/OutputUnmappedFilter.hpp"
 #include "salmon/internal/alignment/ReadPair.hpp"
-#include "SalmonConfig.hpp"
+#include "salmon/internal/config/SalmonConfig.hpp"
 #include "salmon/internal/util/SalmonMath.hpp"
-#include "SalmonOpts.hpp"
+#include "salmon/internal/config/SalmonOpts.hpp"
 #include "salmon/internal/util/FmtCompat.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/Transcript.hpp"
-#include "TranscriptCluster.hpp"
+#include "salmon/internal/quant/TranscriptCluster.hpp"
 
 namespace salmon {
 namespace sampler {

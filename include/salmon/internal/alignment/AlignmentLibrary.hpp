@@ -12,7 +12,7 @@
 #include "salmon/internal/alignment/NullFragmentFilter.hpp"
 #include "salmon/internal/quant/ClusterForest.hpp"
 #include "salmon/internal/util/DistributionUtils.hpp"
-#include "EquivalenceClassBuilder.hpp"
+#include "salmon/internal/quant/EquivalenceClassBuilder.hpp"
 #include "salmon/internal/io/FASTAParser.hpp"
 #include "salmon/internal/model/FragmentLengthDistribution.hpp"
 #include "salmon/internal/model/FragmentStartPositionDistribution.hpp"
@@ -22,14 +22,14 @@
 #include "salmon/internal/model/ReadKmerDist.hpp"
 #include "salmon/internal/model/SBModel.hpp"
 #include "salmon/internal/quant/BiasLibraryState.hpp"
-#include "SalmonOpts.hpp"
+#include "salmon/internal/config/SalmonOpts.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/SimplePosBias.hpp"
 #include "SpinLock.hpp" // From pufferfish, with try_lock
 #include "salmon/internal/model/Transcript.hpp"
 #include "salmon/internal/alignment/ReadPair.hpp"
 #include "salmon/internal/alignment/UnpairedRead.hpp"
-#include <concurrentqueue.h>
+#include "salmon/vendor/concurrentqueue.h"
 #include "parallel_hashmap/phmap.h"
 
 // Boost includes

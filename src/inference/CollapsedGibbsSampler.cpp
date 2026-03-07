@@ -19,13 +19,13 @@
 #include <boost/math/distributions/gamma.hpp>
 #include <boost/math/special_functions/digamma.hpp>
 // PCG Random number generator
-#include "pcg_random.hpp"
+#include "salmon/vendor/pcg_random.hpp"
 
 // C++ string formatting library
 #include <spdlog/fmt/fmt.h>
 
 #include "Eigen/Dense"
-#include "cuckoohash_map.hh"
+#include "salmon/vendor/cuckoohash_map.hh"
 
 #include "salmon/internal/alignment/AlignmentLibrary.hpp"
 #include "salmon/internal/output/BootstrapWriter.hpp"
@@ -37,7 +37,7 @@
 #include "salmon/internal/model/Transcript.hpp"
 #include "salmon/internal/model/TranscriptGroup.hpp"
 #include "salmon/internal/alignment/UnpairedRead.hpp"
-#include "ezETAProgressBar.hpp"
+#include "salmon/vendor/ezETAProgressBar.hpp"
 
 using BlockedIndexRange = oneapi::tbb::blocked_range<size_t>;
 

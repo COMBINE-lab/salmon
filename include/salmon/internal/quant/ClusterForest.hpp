@@ -5,7 +5,7 @@
 
 #include "salmon/internal/util/SalmonSpinLock.hpp"
 #include "salmon/internal/model/Transcript.hpp"
-#include "TranscriptCluster.hpp"
+#include "salmon/internal/quant/TranscriptCluster.hpp"
 
 #include <mutex>
 #include <unordered_set>

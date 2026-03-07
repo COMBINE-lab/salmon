@@ -13,8 +13,8 @@
 
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/TranscriptGroup.hpp"
-#include <concurrentqueue.h>
-#include "cuckoohash_map.hh"
+#include "salmon/vendor/concurrentqueue.h"
+#include "salmon/vendor/cuckoohash_map.hh"
 #include "sparsepp/spp.h"
 
 struct EmptyBarcodeMapType {};

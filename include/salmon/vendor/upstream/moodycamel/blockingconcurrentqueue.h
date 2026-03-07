@@ -1,12 +1,13 @@
 // Provides an efficient blocking version of moodycamel::ConcurrentQueue.
-// ©2015-2016 Cameron Desrochers. Distributed under the terms of the simplified
+// ©2015-2020 Cameron Desrochers. Distributed under the terms of the simplified
 // BSD license, available at the top of concurrentqueue.h.
+// Also dual-licensed under the Boost Software License (see LICENSE.md)
 // Uses Jeff Preshing's semaphore implementation (under the terms of its
-// separate zlib license, embedded below).
+// separate zlib license, see lightweightsemaphore.h).
 
 #pragma once
 
-#include <concurrentqueue.h>
+#include "concurrentqueue.h"
 #include "lightweightsemaphore.h"
 
 #include <type_traits>
@@ -55,7 +56,7 @@ public:
 	// includes making the memory effects of construction visible, possibly with a
 	// memory barrier).
 	explicit BlockingConcurrentQueue(size_t capacity = 6 * BLOCK_SIZE)
-		: inner(capacity), sema(create<LightweightSemaphore>(), &BlockingConcurrentQueue::template destroy<LightweightSemaphore>)
+		: inner(capacity), sema(create<LightweightSemaphore, ssize_t, int>(0, (int)Traits::MAX_SEMA_SPINS), &BlockingConcurrentQueue::template destroy<LightweightSemaphore>)
 	{
 		assert(reinterpret_cast<ConcurrentQueue*>((BlockingConcurrentQueue*)1) == &((BlockingConcurrentQueue*)1)->inner && "BlockingConcurrentQueue must have ConcurrentQueue as its first member");
 		if (!sema) {
@@ -64,7 +65,7 @@ public:
 	}
 	
 	BlockingConcurrentQueue(size_t minCapacity, size_t maxExplicitProducers, size_t maxImplicitProducers)
-		: inner(minCapacity, maxExplicitProducers, maxImplicitProducers), sema(create<LightweightSemaphore>(), &BlockingConcurrentQueue::template destroy<LightweightSemaphore>)
+		: inner(minCapacity, maxExplicitProducers, maxImplicitProducers), sema(create<LightweightSemaphore, ssize_t, int>(0, (int)Traits::MAX_SEMA_SPINS), &BlockingConcurrentQueue::template destroy<LightweightSemaphore>)
 	{
 		assert(reinterpret_cast<ConcurrentQueue*>((BlockingConcurrentQueue*)1) == &((BlockingConcurrentQueue*)1)->inner && "BlockingConcurrentQueue must have ConcurrentQueue as its first member");
 		if (!sema) {
@@ -543,25 +544,18 @@ public:
 	// Returns true if the underlying atomic variables used by
 	// the queue are lock-free (they should be on most platforms).
 	// Thread-safe.
-	static bool is_lock_free()
+	static constexpr bool is_lock_free()
 	{
 		return ConcurrentQueue::is_lock_free();
 	}
 	
 
 private:
-	template<typename U>
-	static inline U* create()
+	template<typename U, typename A1, typename A2>
+	static inline U* create(A1&& a1, A2&& a2)
 	{
-		auto p = (Traits::malloc)(sizeof(U));
-		return p != nullptr ? new (p) U : nullptr;
-	}
-	
-	template<typename U, typename A1>
-	static inline U* create(A1&& a1)
-	{
-		auto p = (Traits::malloc)(sizeof(U));
-		return p != nullptr ? new (p) U(std::forward<A1>(a1)) : nullptr;
+		void* p = (Traits::malloc)(sizeof(U));
+		return p != nullptr ? new (p) U(std::forward<A1>(a1), std::forward<A2>(a2)) : nullptr;
 	}
 	
 	template<typename U>

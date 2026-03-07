@@ -9,7 +9,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "json.hpp"
+#include "salmon/vendor/json.hpp"
 #include "oneapi/tbb/combinable.h"
 #include "oneapi/tbb/parallel_for.h"
 #include "oneapi/tbb/task_arena.h"
@@ -43,16 +43,16 @@
 #include "salmon/internal/io/FastxReader.hpp"
 //#include "jellyfish/mer_dna.hpp"
 
-#include "GenomicFeature.hpp"
+#include "salmon/internal/model/GenomicFeature.hpp"
 #include "salmon/internal/model/SGSmooth.hpp"
 #include "salmon/internal/util/TranscriptGeneMap.hpp"
 
 #include "salmon/internal/io/AlignmentIO.hpp"
-#include "SalmonDefaults.hpp"
+#include "salmon/internal/config/SalmonDefaults.hpp"
 
 #include "Util.hpp"
 
-#include "zstr.hpp"
+#include "salmon/internal/output/zstr.hpp"
 
 namespace salmon {
 namespace utils {

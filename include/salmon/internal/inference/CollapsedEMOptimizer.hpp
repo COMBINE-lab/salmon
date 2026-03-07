@@ -6,10 +6,10 @@
 #include <unordered_map>
 
 #include "salmon/internal/quant/ReadExperiment.hpp"
-#include "SalmonOpts.hpp"
+#include "salmon/internal/config/SalmonOpts.hpp"
 
 #include "Eigen/Dense"
-#include "cuckoohash_map.hh"
+#include "salmon/vendor/cuckoohash_map.hh"
 
 class BootstrapWriter;
 

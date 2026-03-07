@@ -79,7 +79,7 @@
 #include "cereal/archives/binary.hpp"
 #include "cereal/types/vector.hpp"
 
-#include <concurrentqueue.h>
+#include "salmon/vendor/concurrentqueue.h"
 
 // salmon includes
 #include "salmon/internal/quant/ClusterForest.hpp"
@@ -90,8 +90,8 @@
 #include "salmon/internal/quant/pipeline/WorkerRuntimeContext.hpp"
 #include "salmon/internal/quant/ReadLibrary.hpp"
 #include "salmon/internal/quant/QuantPipelineContext.hpp"
-#include "SalmonConfig.hpp"
-#include "SalmonDefaults.hpp"
+#include "salmon/internal/config/SalmonConfig.hpp"
+#include "salmon/internal/config/SalmonDefaults.hpp"
 #include "salmon/internal/util/SalmonExceptions.hpp"
 #include "salmon/internal/index/SalmonIndex.hpp"
 #include "salmon/internal/quant/SalmonMappingUtils.hpp"
@@ -105,7 +105,7 @@
 #include "salmon/internal/quant/BiasParams.hpp"
 #include "salmon/internal/inference/CollapsedEMOptimizer.hpp"
 #include "salmon/internal/inference/CollapsedGibbsSampler.hpp"
-#include "EquivalenceClassBuilder.hpp"
+#include "salmon/internal/quant/EquivalenceClassBuilder.hpp"
 #include "salmon/internal/quant/ForgettingMassCalculator.hpp"
 #include "salmon/internal/model/FragmentLengthDistribution.hpp"
 #include "salmon/internal/output/GZipWriter.hpp"
@@ -118,9 +118,9 @@
 //#include "SACollector.hpp"
 //#include "SASearcher.hpp"
 //#include "HitManager.hpp"
-#include "SalmonOpts.hpp"
+#include "salmon/internal/config/SalmonOpts.hpp"
 //#include "SingleAlignmentFormatter.hpp"
-#include "edlib.h"
+#include "salmon/vendor/edlib.h"
 #include "tsl/hopscotch_map.h"
 
 #include "MemChainer.hpp"
