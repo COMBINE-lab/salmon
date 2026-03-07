@@ -10,6 +10,7 @@
 #include "salmon/internal/model/GCFragModel.hpp"
 #include "salmon/internal/model/ReadKmerDist.hpp"
 #include "salmon/internal/quant/ReadLibrary.hpp"
+#include "salmon/internal/quant/BiasLibraryState.hpp"
 #include "salmon/internal/model/SBModel.hpp"
 #include "salmon/internal/index/SalmonIndex.hpp"
 #include "SalmonOpts.hpp"
@@ -52,99 +53,7 @@ public:
                  // const boost::filesystem::path& transcriptFile,
                  SalmonIndex* salmonIndex,
                  // const boost::filesystem::path& indexDirectory,
-                 SalmonOpts& sopt)
-      : readLibraries_(readLibraries),
-        // transcriptFile_(transcriptFile),
-        salmonIndex_(salmonIndex),
-        transcripts_(std::vector<Transcript>()), totalAssignedFragments_(0),
-        fragStartDists_(5), posBiasFW_(5), posBiasRC_(5), posBiasExpectFW_(5),
-        posBiasExpectRC_(5), /*seqBiasModel_(1.0),*/ eqBuilder_(sopt.jointLog, sopt.maxHashResizeThreads),
-        expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0),
-        expectedGC_(sopt.numConditionalGCBins, sopt.numFragGCBins,
-                    distribution_utils::DistributionSpace::LOG),
-        observedGC_(sopt.numConditionalGCBins, sopt.numFragGCBins,
-                    distribution_utils::DistributionSpace::LOG) {
-    namespace bfs = boost::filesystem;
-
-    // Make sure the read libraries are valid.
-    for (auto& rl : readLibraries_) {
-      rl.checkValid();
-    }
-
-    size_t maxFragLen = sopt.fragLenDistMax;
-    double meanFragLen = sopt.fragLenDistPriorMean;
-    double fragLenStd = sopt.fragLenDistPriorSD;
-    size_t fragLenKernelN = 4;
-    double fragLenKernelP = 0.5;
-    fragLengthDist_.reset(
-        new FragmentLengthDistribution(1.0, maxFragLen, meanFragLen, fragLenStd,
-                                       fragLenKernelN, fragLenKernelP, 1));
-
-    if (readLibraries_.front().getFormat().type == ReadType::SINGLE_END) {
-      // Convert the PMF to non-log scale
-      std::vector<double> logPMF;
-      size_t minVal;
-      size_t maxVal;
-      fragLengthDist_->dumpPMF(logPMF, minVal, maxVal);
-      double sum = salmon::math::LOG_0;
-      for (auto v : logPMF) {
-        sum = salmon::math::logAdd(sum, v);
-      }
-      for (auto& v : logPMF) {
-        v -= sum;
-      }
-
-      // Create the non-logged distribution.
-      // Here, we multiply by 100 to discourage small
-      // numbers in the correctionFactorsfromCounts call
-      // below.
-      std::vector<double> pmf(maxVal + 1, 0.0);
-      for (size_t i = minVal; i < maxVal; ++i) {
-        pmf[i] = 100.0 * std::exp(logPMF[i - minVal]);
-      }
-
-      using distribution_utils::DistributionSpace;
-      // We compute the factors in linear space (since we've de-logged the pmf)
-      conditionalMeans_ = distribution_utils::correctionFactorsFromMass(
-          pmf, DistributionSpace::LINEAR);
-    }
-
-    // Make sure the transcript file exists.
-    /*
-    if (!bfs::exists(transcriptFile_)) {
-        std::stringstream ss;
-        ss << "The provided transcript file: " << transcriptFile_ <<
-            " does not exist!\n";
-        throw std::invalid_argument(ss.str());
-    }
-    */
-
-    // Now we'll have either an FMD-based index or a QUASI index
-    // dispatch on the correct type.
-    fmt::MemoryWriter infostr;
-
-    switch (salmonIndex_->indexType()) {
-    case SalmonIndexType::QUASI:
-      infostr << "Error: This version of salmon does not support a RapMap-based index.";
-      throw std::invalid_argument(infostr.str());
-      break;
-    case SalmonIndexType::FMD:
-      infostr << "Error: This version of salmon does not support the FMD index mode.";
-      throw std::invalid_argument(infostr.str());
-      break;
-    case SalmonIndexType::PUFF:
-      if (salmonIndex_->isSparse()){
-        loadTranscriptsFromPuff(salmonIndex_->puffSparseIndex(), sopt);
-      } else {
-        loadTranscriptsFromPuff(salmonIndex_->puffIndex(), sopt);
-      }
-    }
-
-    salmon::utils::markAuxiliaryTargets(sopt, transcripts_);
-
-    // Create the cluster forest for this set of transcripts
-    clusters_.reset(new ClusterForest(transcripts_.size(), transcripts_));
-  }
+                 SalmonOpts& sopt);
   
   EQBuilderT& equivalenceClassBuilder() { return eqBuilder_; }
 
@@ -158,57 +67,9 @@ public:
   std::vector<Transcript>& transcripts() { return transcripts_; }
   const std::vector<Transcript>& transcripts() const { return transcripts_; }
 
-  const std::vector<double>& condMeans() const { return conditionalMeans_; }
+  const std::vector<double>& condMeans() const { return state_.conditionalMeans; }
 
-  void updateTranscriptLengthsAtomic(std::atomic<bool>& done) {
-    if (sl_.try_lock()) {
-      if (!done) {
-        auto fld = fragLengthDist_.get();
-        // Convert the PMF to non-log scale
-        std::vector<double> logPMF;
-        size_t minVal;
-        size_t maxVal;
-        fld->dumpPMF(logPMF, minVal, maxVal);
-        double sum = salmon::math::LOG_0;
-        for (auto v : logPMF) {
-          sum = salmon::math::logAdd(sum, v);
-        }
-        for (auto& v : logPMF) {
-          v -= sum;
-        }
-
-        // Create the non-logged distribution.
-        // Here, we multiply by 100 to discourage small
-        // numbers in the correctionFactorsfromCounts call
-        // below.
-        std::vector<double> pmf(maxVal + 1, 0.0);
-        for (size_t i = minVal; i < maxVal; ++i) {
-          pmf[i] = 100.0 * std::exp(logPMF[i - minVal]);
-        }
-
-        using distribution_utils::DistributionSpace;
-        // We compute the factors in linear space (since we've de-logged the
-        // pmf)
-        auto correctionFactors = distribution_utils::correctionFactorsFromMass(
-            pmf, DistributionSpace::LINEAR);
-        // Since we'll continue treating effective lengths in log space,
-        // populate them as such
-        distribution_utils::computeSmoothedEffectiveLengths(
-            pmf.size(), transcripts_, correctionFactors,
-            DistributionSpace::LOG);
-
-        /*
-        // Update the effective length of *every* transcript
-        for( auto& t : transcripts_ ) {
-            t.updateEffectiveLength(logPMF, logFLDMean, minVal, maxVal);
-        }
-        */
-        // then declare that we are done
-        done = true;
-      }
-      sl_.unlock();
-    }
-  }
+  void updateTranscriptLengthsAtomic(std::atomic<bool>& done);
 
   uint64_t numAssignedFragments() { return numAssignedFragments_; }
   uint64_t numMappedFragments() const { return numAssignedFragments_; }
@@ -251,143 +112,10 @@ public:
   SalmonIndex* getIndex() { return salmonIndex_; }
 
   template <typename PuffIndexT>
-  void loadTranscriptsFromPuff(PuffIndexT* idx_, const SalmonOpts& sopt) {
-    // Get the list of reference names
-    const auto& refNames = idx_->getFullRefNames();
-    const auto& refLengths = idx_->getFullRefLengths();
-    const auto& completeRefLengths = idx_->getFullRefLengthsComplete();
-
-    size_t numRecords = refNames.size();
-    auto log = sopt.jointLog.get();
-    numDecoys_ = 0;
-
-    log->info("Index contained {:n} targets", numRecords);
-    transcripts_.reserve(numRecords);
-    std::vector<uint32_t> lengths;
-    lengths.reserve(numRecords);
-    size_t numIndexedRefs = idx_->getIndexedRefCount();
-    auto k = idx_->k();
-    int64_t numShort{0};
-    double alpha = 0.005;
-    auto& allRefSeq = idx_->refseq_;
-    auto& refAccumLengths = idx_->refAccumLengths_;
-    for (auto i : boost::irange(size_t(0), numRecords)) {
-      uint32_t id = i;
-      bool isShort = refLengths[i] <= k;
-      bool isDecoy = idx_->isDecoy(i - numShort);
-
-      if (isDecoy and !sopt.validateMappings) {
-        log->warn("The index contains decoy targets, but these should not be used in the "
-                  "absence of selective-alignment (--validateMappings, --mimicBT2 or --mimicStrictBT2). "
-                  "Skipping loading of decoys.");
-        break;
-      }
-
-      const char* name = refNames[i].c_str();
-      uint32_t len = refLengths[i];
-      // copy over the length, then we're done.
-      transcripts_.emplace_back(id, name, len, alpha);
-      auto& txp = transcripts_.back();
-      txp.setCompleteLength(completeRefLengths[i]);
-
-      // TODO : PF_INTEGRATION
-      // We won't every have the sequence for a decoy
-      // NOTE : The below is a huge hack right now.  Since we have
-      // the whole reference sequence in 2-bit in the index, there is
-      // really no reason to convert to ASCII and keep a duplicate
-      // copy around.
-      if (!isDecoy and !isShort and (sopt.biasCorrect or sopt.gcBiasCorrect)) {
-        auto tid = i - numShort;
-        int64_t refAccPos = tid > 0 ? refAccumLengths[tid - 1] : 0;
-        int64_t refTotalLength = refAccumLengths[tid] - refAccPos;
-        if (len != refTotalLength) {
-          log->warn("len : {:n}, but txp.RefLength : {:n} :: refTotalLength : {:n}", len, txp.RefLength, refTotalLength);
-        }
-        char* tseq = pufferfish::util::getRefSeqOwned(allRefSeq, refAccPos, refTotalLength);
-        txp.setSequenceOwned(tseq, sopt.gcBiasCorrect, sopt.reduceGCMemory);
-      }
-      txp.setDecoy(isDecoy);
-      numShort += isShort ? 1 : 0;
-      if (isDecoy) { 
-        ++numDecoys_; 
-      } else { // only use this reference for length class computation if not a decoy
-        lengths.push_back(txp.RefLength);
-      }
-    }
-    sopt.jointLog->info("Number of decoys : {:n}", numDecoys_);
-    auto firstDecoyIndex = idx_->firstDecoyIndex();
-    if (firstDecoyIndex < numRecords) {
-      sopt.jointLog->info("First decoy index : {:n} ", firstDecoyIndex);
-    }
-    //std::exit(1);
-    // ====== Done loading the transcripts from file
-    setTranscriptLengthClasses_(lengths, posBiasFW_.size());
-  }
+  void loadTranscriptsFromPuff(PuffIndexT* idx_, const SalmonOpts& sopt);
 
   template <typename QuasiIndexT>
-  void loadTranscriptsFromQuasi(QuasiIndexT* idx_, const SalmonOpts& sopt) {
-    size_t numRecords = idx_->txpNames.size();
-    auto log = sopt.jointLog.get();
-    numDecoys_ = 0;
-
-    log->info("Index contained {:n} targets", numRecords);
-    transcripts_.reserve(numRecords);
-    std::vector<uint32_t> lengths;
-    lengths.reserve(numRecords);
-    double alpha = 0.005;
-    for (auto i : boost::irange(size_t(0), numRecords)) {
-      uint32_t id = i;
-      bool isDecoy = idx_->isDecoy(i);
-
-      if (isDecoy and !sopt.validateMappings) {
-        log->warn("The index contains decoy targets, but these should not be used in the "
-                  "absence of selective-alignment (--validateMappings, --mimicBT2 or --mimicStrictBT2). "
-                  "Skipping loading of decoys.");
-        break;
-      }
-
-      const char* name = idx_->txpNames[i].c_str();
-      uint32_t len = idx_->txpLens[i];
-      // copy over the length, then we're done.
-      transcripts_.emplace_back(id, name, len, alpha);
-      auto& txp = transcripts_.back();
-      txp.setCompleteLength(idx_->txpCompleteLens[i]);
-      // The transcript sequence
-      // auto txpSeq = idx_->seq.substr(idx_->txpOffsets[i], len);
-      // Set the transcript sequence
-      txp.setSequenceBorrowed(idx_->seq.c_str() + idx_->txpOffsets[i],
-                              sopt.gcBiasCorrect, sopt.reduceGCMemory);
-      txp.setDecoy(isDecoy);
-      if (isDecoy) { ++numDecoys_; }
-
-      lengths.push_back(txp.RefLength);
-      /*
-      // Length classes taken from
-      //
-      https://github.com/cole-trapnell-lab/cufflinks/blob/master/src/biascorrection.cpp
-      // ======
-      // Roberts, Adam, et al.
-      // "Improving RNA-Seq expression estimates by correcting for fragment
-      bias."
-      // Genome Biol 12.3 (2011): R22.
-      // ======
-      // perhaps, define these in a more data-driven way
-      if (txp.RefLength <= 791) {
-      txp.lengthClassIndex(0);
-      } else if (txp.RefLength <= 1265) {
-      txp.lengthClassIndex(1);
-      } else if (txp.RefLength <= 1707) {
-      txp.lengthClassIndex(2);
-      } else if (txp.RefLength <= 2433) {
-      txp.lengthClassIndex(3);
-      } else {
-      txp.lengthClassIndex(4);
-      }
-      */
-    }
-    // ====== Done loading the transcripts from file
-    setTranscriptLengthClasses_(lengths, posBiasFW_.size());
-  }
+  void loadTranscriptsFromQuasi(QuasiIndexT* idx_, const SalmonOpts& sopt);
 
   void dropDecoyTranscripts() {
     if (numDecoys_ > 0) {
@@ -401,7 +129,7 @@ public:
                     CallbackT& processReadLibrary) {
     std::atomic<bool> burnedIn{
         totalAssignedFragments_ + numAssignedFragments_ >= sopt.numBurninFrags};
-    for (auto& rl : readLibraries_) {
+    for (auto& rl : state_.library) {
       processReadLibrary(rl, salmonIndex_, transcripts_, clusterForest(),
                          *(fragLengthDist_.get()), numAssignedFragments_,
                          numThreads, burnedIn);
@@ -415,19 +143,7 @@ public:
 
   ClusterForest& clusterForest() { return *clusters_.get(); }
 
-  std::string readFilesAsString() {
-    std::stringstream sstr;
-    size_t ln{0};
-    size_t numReadLibraries{readLibraries_.size()};
-
-    for (auto& rl : readLibraries_) {
-      sstr << rl.readFilesAsString();
-      if (ln++ < numReadLibraries) {
-        sstr << "; ";
-      }
-    }
-    return sstr.str();
-  }
+  std::string readFilesAsString();
 
   uint64_t numAssignedFragsInFirstPass() {
     return numAssignedFragsInFirstPass_;
@@ -443,7 +159,7 @@ public:
 
   std::vector<FragmentStartPositionDistribution>&
   fragmentStartPositionDistributions() {
-    return fragStartDists_;
+    return state_.fragmentStartDists;
   }
 
   void computePolyAPositions() {
@@ -468,7 +184,7 @@ public:
 
   bool reset() {
     namespace bfs = boost::filesystem;
-    for (auto& rl : readLibraries_) {
+    for (auto& rl : state_.library) {
       if (!rl.isRegularFile()) {
         return false;
       }
@@ -486,239 +202,90 @@ public:
     return true;
   }
 
-  void summarizeLibraryTypeCounts(boost::filesystem::path& opath) {
-    LibraryFormat fmt1(ReadType::SINGLE_END, ReadOrientation::NONE,
-                       ReadStrandedness::U);
-    LibraryFormat fmt2(ReadType::SINGLE_END, ReadOrientation::NONE,
-                       ReadStrandedness::U);
+  void summarizeLibraryTypeCounts(boost::filesystem::path& opath);
 
-    std::ofstream os(opath.string());
-    cereal::JSONOutputArchive oa(os);
-
-    // std::ofstream ofile(opath.string());
-
-    fmt::MemoryWriter errstr;
-
-    auto log = spdlog::get("jointLog");
-
-    uint64_t numFmt1{0};
-    uint64_t numFmt2{0};
-    uint64_t numAgree{0};
-    uint64_t numDisagree{0};
-    uint64_t numDisagreeUnstranded{0};
-    uint64_t numDisagreeStranded{0};
-
-    for (auto& rl : readLibraries_) {
-      auto fmt = rl.format();
-      auto& counts = rl.libTypeCounts();
-
-      oa(cereal::make_nvp("read_files", rl.readFilesAsString()));
-      std::string expectedFormat = rl.format().toString();
-      oa(cereal::make_nvp("expected_format", expectedFormat));
-
-      double compatFragmentRatio =
-          rl.numCompat() / static_cast<double>(numAssignedFragments_);
-      oa(cereal::make_nvp("compatible_fragment_ratio", compatFragmentRatio));
-      oa(cereal::make_nvp("num_compatible_fragments", rl.numCompat()));
-      oa(cereal::make_nvp("num_assigned_fragments",
-                          numAssignedFragments_.load()));
-
-      std::vector<ReadStrandedness> strands;
-      // How we should define sense and antisense 
-      switch (fmt.orientation) {
-      case ReadOrientation::SAME:
-      case ReadOrientation::NONE:
-        strands.push_back(ReadStrandedness::S);
-        strands.push_back(ReadStrandedness::A);
-        break;
-      case ReadOrientation::AWAY:
-      case ReadOrientation::TOWARD:
-        strands.push_back(ReadStrandedness::SA);
-        strands.push_back(ReadStrandedness::AS);
-        break;
-      }
-
-      // fmt1 is :
-      // reads that arise from sense, or 
-      // fragments whose first read arises from sense
-      fmt1.type = fmt.type;
-      fmt1.orientation = fmt.orientation;
-      fmt1.strandedness = strands[0];
-      // fmt 2 is :
-      // reads that arise from antisense, or
-      // fragments whose first read arises from antisense
-      fmt2.type = fmt.type;
-      fmt2.orientation = fmt.orientation;
-      fmt2.strandedness = strands[1];
-
-      numFmt1 = 0;
-      numFmt2 = 0;
-
-      for (size_t i = 0; i < counts.size(); ++i) {
-        // This counts agree or disagree when the 
-        // provided or detected library type is *not*
-        // unstranded
-        if (i == fmt.formatID()) {
-          numAgree = counts[i];
-        } else {
-          numDisagreeStranded += counts[i];
-        }
-
-        // Regardless of if the provided or detected
-        // library type is unstranded, count the 
-        // sense and antisense compatible reads
-        if (i == fmt1.formatID()) {
-          numFmt1 = counts[i];
-        } else if (i == fmt2.formatID()) {
-          numFmt2 = counts[i];
-        } else {
-          // collect this number for if
-          // we have an unstranded library type
-          numDisagreeUnstranded += counts[i];
-        }
-      }
-
-      double ratio = 0.0;
-
-      // If the provided or detected library type is *unstranded*
-      if (fmt.strandedness == ReadStrandedness::U) {
-        // overwrite numAgree, since that was computed for 
-        // a stranded library 
-        numAgree = numFmt1 + numFmt2;
-        numDisagree = numDisagreeUnstranded;
-        ratio = numAgree > 0 ? (static_cast<double>(numFmt1) / (numFmt1 + numFmt2)) : 0.0;
-
-        if (numAgree == 0) {
-          errstr << "NOTE: Read Lib [" << rl.readFilesAsString() << "] :\n";
-          errstr << "\nFound no concordant and consistent mappings. "
-                    "If this is a paired-end library, are you sure the reads are properly paired? "
-                    "check the file: " << opath.string() << " for details\n";
-          log->warn(errstr.str());
-          errstr.clear();
-        } else if (std::abs(ratio - 0.5) > 0.01) {
-          // check that we have a similar number of mappings in both
-          // directions and then aggregate the forward and
-          // reverse counts.
-          errstr << "NOTE: Read Lib [" << rl.readFilesAsString() << "] :\n";
-          errstr << "\nDetected a *potential* strand bias > 1\% in an "
-                    "unstranded protocol "
-                 << "check the file: " << opath.string() << " for details\n";
-
-          log->warn(errstr.str());
-          errstr.clear();
-        }
-      } else {
-        // If the provided or detected library type is *stranded*
-        numDisagree = numDisagreeStranded;
-        ratio = numAgree > 0 ? (static_cast<double>(numFmt1) / (numFmt1 + numFmt2)) : 0.0;
-      } // end else
-
-      oa(cereal::make_nvp("num_frags_with_concordant_consistent_mappings", numAgree));
-      oa(cereal::make_nvp("num_frags_with_inconsistent_or_orphan_mappings", numDisagree));
-      oa(cereal::make_nvp("strand_mapping_bias", ratio));
-
-      double disagreeRatio = 1.0 - compatFragmentRatio;
-      if (disagreeRatio > 0.05) {
-        errstr << "NOTE: Read Lib [" << rl.readFilesAsString() << "] :\n";
-        errstr << "\nGreater than 5\% of the fragments "
-               << "disagreed with the provided library type; "
-               << "check the file: " << opath.string() << " for details\n";
-
-        log->warn(errstr.str());
-        errstr.clear();
-      }
-
-      for (size_t i = 0; i < counts.size(); ++i) {
-        std::string desc = LibraryFormat::formatFromID(i).toString();
-        if (!desc.empty()) {
-          oa(cereal::make_nvp(desc, counts[i].load()));
-        }
-      }
-    }
-  }
-
-  std::vector<ReadLibrary>& readLibraries() { return readLibraries_; }
+  std::vector<ReadLibrary>& readLibraries() { return state_.library; }
   const std::vector<ReadLibrary>& readLibraries() const {
-    return readLibraries_;
+    return state_.library;
   }
   FragmentLengthDistribution* fragmentLengthDistribution() const {
     return fragLengthDist_.get();
   }
 
-  void setGCFracForward(double fracForward) { gcFracFwd_ = fracForward; }
+  void setGCFracForward(double fracForward) { state_.gcFracFwd = fracForward; }
 
-  double gcFracFwd() const { return gcFracFwd_; }
-  double gcFracRC() const { return 1.0 - gcFracFwd_; }
+  double gcFracFwd() const { return state_.gcFracFwd; }
+  double gcFracRC() const { return 1.0 - state_.gcFracFwd; }
 
-  std::vector<double>& expectedSeqBias() { return expectedBias_; }
+  std::vector<double>& expectedSeqBias() { return state_.expectedSeqBias; }
 
-  const std::vector<double>& expectedSeqBias() const { return expectedBias_; }
+  const std::vector<double>& expectedSeqBias() const { return state_.expectedSeqBias; }
 
   void setExpectedGCBias(const GCFragModel& expectedBiasIn) {
-    expectedGC_ = expectedBiasIn;
+    state_.expectedGC = expectedBiasIn;
   }
 
-  GCFragModel& expectedGCBias() { return expectedGC_; }
+  GCFragModel& expectedGCBias() { return state_.expectedGC; }
 
-  const GCFragModel& expectedGCBias() const { return expectedGC_; }
+  const GCFragModel& expectedGCBias() const { return state_.expectedGC; }
 
-  const GCFragModel& observedGC() const { return observedGC_; }
+  const GCFragModel& observedGC() const { return state_.observedGC; }
 
-  GCFragModel& observedGC() { return observedGC_; }
+  GCFragModel& observedGC() { return state_.observedGC; }
 
   std::vector<SimplePosBias>& posBias(salmon::utils::Direction dir) {
-    return (dir == salmon::utils::Direction::FORWARD) ? posBiasFW_ : posBiasRC_;
+    return (dir == salmon::utils::Direction::FORWARD) ? state_.posBiasFW : state_.posBiasRC;
   }
   const std::vector<SimplePosBias>&
   posBias(salmon::utils::Direction dir) const {
-    return (dir == salmon::utils::Direction::FORWARD) ? posBiasFW_ : posBiasRC_;
+    return (dir == salmon::utils::Direction::FORWARD) ? state_.posBiasFW : state_.posBiasRC;
   }
 
   std::vector<SimplePosBias>& posBiasExpected(salmon::utils::Direction dir) {
-    return (dir == salmon::utils::Direction::FORWARD) ? posBiasExpectFW_
-                                                      : posBiasExpectRC_;
+    return (dir == salmon::utils::Direction::FORWARD) ? state_.posBiasExpectFW
+                                                      : state_.posBiasExpectRC;
   }
   const std::vector<SimplePosBias>&
   posBiasExpected(salmon::utils::Direction dir) const {
-    return (dir == salmon::utils::Direction::FORWARD) ? posBiasExpectFW_
-                                                      : posBiasExpectRC_;
+    return (dir == salmon::utils::Direction::FORWARD) ? state_.posBiasExpectFW
+                                                      : state_.posBiasExpectRC;
   }
 
   ReadKmerDist<6, std::atomic<uint32_t>>&
   readBias(salmon::utils::Direction dir) {
-    return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0]
-                                                      : readBias_[1];
+    return (dir == salmon::utils::Direction::FORWARD) ? state_.readBias[0]
+                                                      : state_.readBias[1];
   }
   const ReadKmerDist<6, std::atomic<uint32_t>>&
   readBias(salmon::utils::Direction dir) const {
-    return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0]
-                                                      : readBias_[1];
+    return (dir == salmon::utils::Direction::FORWARD) ? state_.readBias[0]
+                                                      : state_.readBias[1];
   }
 
   SBModel& readBiasModelObserved(salmon::utils::Direction dir) {
     return (dir == salmon::utils::Direction::FORWARD)
-               ? readBiasModelObserved_[0]
-               : readBiasModelObserved_[1];
+               ? state_.readBiasModelObserved[0]
+               : state_.readBiasModelObserved[1];
   }
   const SBModel& readBiasModelObserved(salmon::utils::Direction dir) const {
     return (dir == salmon::utils::Direction::FORWARD)
-               ? readBiasModelObserved_[0]
-               : readBiasModelObserved_[1];
+               ? state_.readBiasModelObserved[0]
+               : state_.readBiasModelObserved[1];
   }
 
   SBModel& readBiasModelExpected(salmon::utils::Direction dir) {
     return (dir == salmon::utils::Direction::FORWARD)
-               ? readBiasModelExpected_[0]
-               : readBiasModelExpected_[1];
+               ? state_.readBiasModelExpected[0]
+               : state_.readBiasModelExpected[1];
   }
   const SBModel& readBiasModelExpected(salmon::utils::Direction dir) const {
     return (dir == salmon::utils::Direction::FORWARD)
-               ? readBiasModelExpected_[0]
-               : readBiasModelExpected_[1];
+               ? state_.readBiasModelExpected[0]
+               : state_.readBiasModelExpected[1];
   }
   void setReadBiasModelExpected(SBModel&& model, salmon::utils::Direction dir) {
     size_t idx = (dir == salmon::utils::Direction::FORWARD) ? 0 : 1;
-    readBiasModelExpected_[idx] = std::move(model);
+    state_.readBiasModelExpected[idx] = std::move(model);
   }
 
   const std::vector<uint32_t>& getLengthQuantiles() const {
@@ -735,51 +302,14 @@ public:
 
 private:
   void setTranscriptLengthClasses_(std::vector<uint32_t>& lengths,
-                                   size_t nbins) {
-    auto n = lengths.size();
-    if (n > nbins) {
-      lengthQuantiles_.clear();
-      lengthQuantiles_.reserve(nbins);
-
-      size_t step = lengths.size() / nbins;
-      size_t cumStep = 0;
-      for (size_t i = 0; i < nbins; ++i) {
-        cumStep += step;
-        size_t ind = std::min(cumStep, n - 1);
-        std::nth_element(lengths.begin(), lengths.begin() + ind, lengths.end());
-        // Find the proper quantile
-        lengthQuantiles_.push_back(*(lengths.begin() + ind));
-      }
-    } else {
-      lengthQuantiles_.clear();
-      lengthQuantiles_.reserve(n);
-      std::sort(lengths.begin(), lengths.end());
-      for (auto l : lengths) {
-        lengthQuantiles_.push_back(l);
-      }
-      posBiasFW_.resize(n);
-      posBiasRC_.resize(n);
-      posBiasExpectFW_.resize(n);
-      posBiasExpectRC_.resize(n);
-    }
-
-    auto qb = lengthQuantiles_.begin();
-    auto qe = lengthQuantiles_.end();
-    auto maxQuant = std::distance(qb, qe) - 1;
-    for (auto& t : transcripts_) {
-      auto ind = std::min(
-          maxQuant, std::distance(qb, std::upper_bound(qb, qe, t.RefLength)));
-      // the index is the smallest quantile longer than this length
-      t.lengthClassIndex(ind);
-    }
-  }
+                                   size_t nbins);
 
   /**
    * The file from which the alignments will be read.
    * This can be a SAM or BAM file, and can be a regular
    * file or a fifo.
    */
-  std::vector<ReadLibrary> readLibraries_;
+  salmon::quant::BiasLibraryState<std::vector<ReadLibrary>> state_;
   /**
    * The file from which the transcripts are read.
    * This is expected to be a FASTA format file.
@@ -800,12 +330,6 @@ private:
    * in the same cluster.
    */
   std::unique_ptr<ClusterForest> clusters_;
-  /**
-   *
-   *
-   */
-  std::vector<FragmentStartPositionDistribution> fragStartDists_;
-
   // SequenceBiasModel seqBiasModel_;
 
   /** Keeps track of the number of passes that have been
@@ -824,30 +348,14 @@ private:
   std::unique_ptr<FragmentLengthDistribution> fragLengthDist_;
   EQBuilderT eqBuilder_;
 
-  /** Positional bias things**/
   std::vector<uint32_t> lengthQuantiles_;
-  std::vector<SimplePosBias> posBiasFW_;
-  std::vector<SimplePosBias> posBiasRC_;
-  std::vector<SimplePosBias> posBiasExpectFW_;
-  std::vector<SimplePosBias> posBiasExpectRC_;
-
-  /** GC-fragment bias things **/
-  // One bin for each percentage GC content
-  double gcFracFwd_{-1.0};
-  GCFragModel observedGC_;
-  GCFragModel expectedGC_;
-
-  /** Sequence specific bias things **/
-  // Since multiple threads can touch this dist, we
-  // need atomic counters.
-  std::array<ReadKmerDist<6, std::atomic<uint32_t>>, 2> readBias_;
-  std::array<SBModel, 2> readBiasModelObserved_;
-  std::array<SBModel, 2> readBiasModelExpected_;
-  // std::array<std::vector<double>, 2> expectedBias_;
-  std::vector<double> expectedBias_;
-  std::vector<double> conditionalMeans_;
 
   uint64_t numDecoys_{0};
 };
+
+#include "salmon/internal/quant/ReadExperiment.inl"
+
+extern template class ReadExperiment<EquivalenceClassBuilder<TGValue>>;
+extern template class ReadExperiment<EquivalenceClassBuilder<SCTGValue>>;
 
 #endif // EXPERIMENT_HPP

@@ -39,6 +39,7 @@ alignment/AlignmentModel.cpp
 alignment/ONTAlignmentModel.cpp
 alignment/AlignmentCommon.cpp
 alignment/SalmonQuantifyAlignments.cpp
+alignment/pipeline/AlignmentPipelineStages.cpp
 alignment/BAMUtils.cpp
 )
 
@@ -50,21 +51,26 @@ inference/CollapsedGibbsSampler.cpp
 
 set (SALMON_QUANT_SRCS
 quant/SalmonQuantify.cpp
+quant/pipeline/MappingPipelineStages.cpp
 )
 
 set (SALMON_IO_SRCS
 io/FASTAParser.cpp
-io/StadenUtils.cpp
+io/AlignmentIO.cpp
 ${SALMON_FQFEEDER_SOURCE_DIR}/src/FastxParser.cpp
 )
 set_source_files_properties(${SALMON_FQFEEDER_SOURCE_DIR}/src/FastxParser.cpp
   PROPERTIES COMPILE_DEFINITIONS "fastx_parser=salmon_fqfeeder")
 
 set (SALMON_UTIL_SRCS
+util/InputFileUtils.cpp
+util/LibraryTypeUtils.cpp
+util/QuantOptionsUtils.cpp
 util/SalmonUtils.cpp
 util/DistributionUtils.cpp
 util/SalmonExceptions.cpp
 util/SalmonStringUtils.cpp
+util/TemplateInstantiations.cpp
 )
 
 set (SALMON_SUPPORT_SRCS
@@ -101,11 +107,9 @@ if(SALMON_ENABLE_TESTS)
   )
 endif()
 
-message("TBB_LIBRARIES = ${TBB_LIBRARIES}")
-
 # Set the RPATH
 if (NOT APPLE)
-    set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib:$ORIGIN/../../lib:$ORIGIN/:$ORIGIN/../../external/install/lib")
+    set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib:$ORIGIN/../../lib:$ORIGIN/")
     set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 else()
   # use, i.e. do not skip the full RPATH for the build tree
@@ -182,7 +186,6 @@ target_include_directories(salmon_system_headers SYSTEM INTERFACE
 
 add_library(salmon_common_link_deps INTERFACE)
 set(SALMON_COMMON_LINK_DIRS
-  ${GAT_SOURCE_DIR}/external/install/lib
   ${Boost_LIBRARY_DIRS}
   ${TBB_LIBRARY_DIRS}
   ${LAPACK_LIBRARY_DIR}
@@ -367,7 +370,6 @@ endif()
 #  message ("Setting libdivsufsort64 = ${SUFFARRAY_LIB64}") 
 #endif()
 
-if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
 target_link_libraries(salmon_common_link_deps INTERFACE
     Threads::Threads
     gff
@@ -394,7 +396,6 @@ target_link_libraries(salmon
     PRIVATE
       salmon_common_link_deps
 )
-endif()
 
 add_dependencies(salmon salmon_core)
 if(SALMON_ENABLE_TESTS)
@@ -406,8 +407,7 @@ endif()
 #add_dependencies(salmon ntcard)
 #add_dependencies(salmon ksw2pp)
 
-if(SALMON_ENABLE_TESTS AND (TBB_RECONFIGURE OR TBB_TARGET_EXISTED))
-
+if(SALMON_ENABLE_TESTS)
 target_link_libraries(unitTests
     PRIVATE
       salmon_common_link_deps
@@ -459,11 +459,6 @@ if (${FETCHED_BOOST})
    salmon_add_external_dependency(libboost)
 endif()
 
-if (${FETCHED_TBB})
-   message("Fetched oneTBB, so libtbb must be a dependency for targets")
-   salmon_add_external_dependency(libtbb)
-endif()
-
 if (${FETCHED_HTSLIB})
   salmon_add_external_dependency(libhtslib)
 endif()
@@ -511,10 +506,14 @@ set(INSTALL_LIB_DIR lib )
 set(INSTALL_BIN_DIR bin )
 set(INSTALL_INCLUDE_DIR include )
 
-if(TBB_RECONFIGURE OR TBB_TARGET_EXISTED)
+if(TARGET TBB::tbb)
 #set(TBB_SOURCE_DIR $<TARGET_FILE:TBB::tbb>)
 #add_custom_target(genexdebug COMMAND ${CMAKE_COMMAND} -E echo "$<TARGET_LINKER_FILE:TBB::tbb>")
 get_target_property(TBB_LIB_INSTALL_NAME TBB::tbb IMPORTED_LOCATION_RELEASE)
+if(NOT TBB_LIB_INSTALL_NAME)
+  get_target_property(TBB_LIB_INSTALL_NAME TBB::tbb IMPORTED_LOCATION)
+endif()
+if(TBB_LIB_INSTALL_NAME)
 get_filename_component(TBB_LIB_INSTALL_DIR ${TBB_LIB_INSTALL_NAME} DIRECTORY)
 message("TBB_LIB_INSTALL_DIR = ${TBB_LIB_INSTALL_DIR}")
 file(GLOB TBB_FILES ${TBB_LIB_INSTALL_DIR}/libtbb*.${SHARED_LIB_EXTENSION}*)
@@ -524,6 +523,7 @@ install(FILES
   ${TBB_LIB_INSTALL_NAME}
   DESTINATION ${INSTALL_LIB_DIR}
 ) 
+endif()
 #install(DIRECTORY
 #       ${TBB_SOURCE_DIR}
 #       DESTINATION ${INSTALL_LIB_DIR}

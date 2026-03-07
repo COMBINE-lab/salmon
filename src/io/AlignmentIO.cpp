@@ -1,4 +1,4 @@
-#include "salmon/internal/io/StadenUtils.hpp"
+#include "salmon/internal/io/AlignmentIO.hpp"
 
 #include <cstdlib>
 #include <cstring>
@@ -141,23 +141,6 @@ void destroy_header(SAM_hdr* header) {
 }
 
 } // namespace salmon::io
-
-namespace staden {
-namespace utils {
-
-bam_seq_t* bam_init() {
-  return bam_init1();
-}
-
-void bam_destroy(bam_seq_t* b) {
-  if (b == 0) {
-    return;
-  }
-  bam_destroy1(b);
-}
-
-} // namespace utils
-} // namespace staden
 
 scram_fd* scram_open(const char* path, const char* mode) {
   auto* raw = sam_open(path, mode);

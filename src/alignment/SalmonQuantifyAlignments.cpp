@@ -30,15 +30,18 @@
 #include "salmon/internal/alignment/AlignmentLibrary.hpp"
 #include "salmon/internal/alignment/BAMQueue.hpp"
 #include "salmon/internal/alignment/BAMUtils.hpp"
+#include "salmon/internal/alignment/pipeline/AlignmentPipelineStages.hpp"
 #include "salmon/internal/quant/ClusterForest.hpp"
 #include "salmon/internal/io/FASTAParser.hpp"
 #include "salmon/internal/model/LibraryFormat.hpp"
 #include "salmon/internal/alignment/MiniBatchInfo.hpp"
+#include "salmon/internal/quant/pipeline/WorkerRuntimeContext.hpp"
 #include "salmon/internal/util/SalmonExceptions.hpp"
 #include "salmon/internal/util/FmtCompat.hpp"
 #include "salmon/internal/util/SalmonMath.hpp"
 #include "salmon/internal/model/Transcript.hpp"
 #include "salmon/internal/cli/ProgramOptionsGenerator.hpp"
+#include "salmon/internal/quant/QuantPipelineContext.hpp"
 
 #include "SalmonDefaults.hpp"
 #include "salmon/internal/alignment/AlignmentModel.hpp"
@@ -54,6 +57,9 @@
 #include "salmon/internal/alignment/ReadPair.hpp"
 #include "SalmonConfig.hpp"
 #include "SalmonOpts.hpp"
+#include "salmon/internal/util/InputFileUtils.hpp"
+#include "salmon/internal/util/LibraryTypeUtils.hpp"
+#include "salmon/internal/util/QuantOptionsUtils.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/alignment/Sampler.hpp"
 #include "salmon/internal/output/TextBootstrapWriter.hpp"
@@ -1023,11 +1029,10 @@ bool quantifyLibrary(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
       firstTimestepOfRound -= 1;
     }
 
-    /** sequence-specific and GC-fragment bias vectors --- each thread gets it's
-     * own **/
-    std::vector<BiasParams> observedBiasParams(
-        currentQuantThreads, BiasParams(salmonOpts.numConditionalGCBins,
-                                        salmonOpts.numFragGCBins, false));
+    salmon::pipeline::WorkerRuntimeContext workerRuntime{
+        static_cast<uint32_t>(currentQuantThreads),
+        salmonOpts.numConditionalGCBins,
+        salmonOpts.numFragGCBins};
 
     for (uint32_t i = 0; i < currentQuantThreads; ++i) {
       workers.emplace_back(
@@ -1035,7 +1040,8 @@ bool quantifyLibrary(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
           firstTimestepOfRound, std::ref(*workQueuePtr), processedCachePtr,
           std::ref(workAvailable), std::ref(cvmutex), std::ref(doneParsing),
           std::ref(activeBatches), std::ref(salmonOpts),
-          std::ref(observedBiasParams[i]), std::ref(burnedIn), initialRound,
+          std::ref(workerRuntime.observedBias[i]), std::ref(burnedIn),
+          initialRound,
           std::ref(totalProcessedReads));
     }
 
@@ -1139,60 +1145,7 @@ bool quantifyLibrary(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
      * Aggregate thread-local bias parameters
      *
      **/
-    // Set the global distribution based on the sum of local
-    // distributions.
-    double gcFracFwd{0.0};
-    double globalMass{salmon::math::LOG_0};
-    double globalFwdMass{salmon::math::LOG_0};
-    auto& globalGCMass = alnLib.observedGC();
-    for (auto& gcp : observedBiasParams) {
-      auto& gcm = gcp.observedGCMass;
-      globalGCMass.combineCounts(gcm);
-
-      auto& fw =
-          alnLib.readBiasModelObserved(salmon::utils::Direction::FORWARD);
-      auto& rc = alnLib.readBiasModelObserved(
-          salmon::utils::Direction::REVERSE_COMPLEMENT);
-
-      auto& fwloc = gcp.seqBiasModelFW;
-      auto& rcloc = gcp.seqBiasModelRC;
-      fw.combineCounts(fwloc);
-      rc.combineCounts(rcloc);
-
-      /**
-       * positional biases
-       **/
-      auto& posBiasesFW = alnLib.posBias(salmon::utils::Direction::FORWARD);
-      auto& posBiasesRC =
-        alnLib.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
-      for (size_t i = 0; i < posBiasesFW.size(); ++i) {
-        posBiasesFW[i].combine(gcp.posBiasFW[i]);
-        posBiasesRC[i].combine(gcp.posBiasRC[i]);
-      }
-
-      globalMass = salmon::math::logAdd(globalMass, gcp.massFwd);
-      globalMass = salmon::math::logAdd(globalMass, gcp.massRC);
-      globalFwdMass = salmon::math::logAdd(globalFwdMass, gcp.massFwd);
-    }
-    globalGCMass.normalize();
-
-    if (globalMass != salmon::math::LOG_0) {
-      if (globalFwdMass != salmon::math::LOG_0) {
-        gcFracFwd = std::exp(globalFwdMass - globalMass);
-      }
-      alnLib.setGCFracForward(gcFracFwd);
-    }
-
-    // finalize the positional biases
-    if (salmonOpts.posBiasCorrect) {
-      auto& posBiasesFW = alnLib.posBias(salmon::utils::Direction::FORWARD);
-      auto& posBiasesRC =
-        alnLib.posBias(salmon::utils::Direction::REVERSE_COMPLEMENT);
-      for (size_t i = 0; i < posBiasesFW.size(); ++i) {
-        posBiasesFW[i].finalize();
-        posBiasesRC[i].finalize();
-      }
-    }
+    workerRuntime.mergeObservedBias(alnLib, salmonOpts.posBiasCorrect);
     /** END: aggregate thread-local bias parameters **/
 
     fmt::print(
@@ -1599,6 +1552,8 @@ int salmonAlignmentQuantify(int argc, const char* argv[], std::unique_ptr<Salmon
   try {
     auto orderedOptions =
         po::command_line_parser(argc, argv).options(all).run();
+    salmon::pipeline::QuantPipelineContext pipelineCtx{
+        sopt, vm, orderedOptions, numBiasSamples};
 
     po::store(orderedOptions, vm);
 
@@ -1661,15 +1616,13 @@ transcript abundance from RNA-seq reads
       }
       commentStream << " }\n";
     }
-    std::string commentString = commentStream.str();
+    pipelineCtx.commandComment = commentStream.str();
     if (!sopt.quiet) {
-      fmt::print(stderr, "{}", commentString);
+      fmt::print(stderr, "{}", pipelineCtx.commandComment);
     }
 
-    sopt.alnMode = true;
-    sopt.quantMode = SalmonQuantMode::ALIGN;
     bool optionsOK =
-      salmon::utils::processQuantOptions(sopt, vm, numBiasSamples);
+        salmon::pipeline::stages::stageProcessAlignmentOptions(pipelineCtx);
     if (!optionsOK) {
       if (sopt.jointLog) {
         sopt.jointLog->flush();
@@ -1678,37 +1631,15 @@ transcript abundance from RNA-seq reads
       std::exit(1);
     }
 
-    auto fileLog = sopt.fileLog;
-    auto jointLog = sopt.jointLog;
-    auto indexDirectory = sopt.indexDirectory;
-    auto outputDirectory = sopt.outputDirectory;
+    auto fileLog = pipelineCtx.fileLog;
+    auto jointLog = pipelineCtx.jointLog;
+    auto indexDirectory = pipelineCtx.indexDirectory;
+    auto outputDirectory = pipelineCtx.outputDirectory;
 
     // ==== Library format processing ===
-    vector<bfs::path> alignmentFiles;
-
-    if ( hasAlignments ) {
-      for (auto& alignmentFileName : alignmentFileNames) {
-        bfs::path alignmentFile(alignmentFileName);
-        if (!bfs::exists(alignmentFile)) {
-          std::stringstream ss;
-          ss << "The provided alignment file: " << alignmentFile
-             << " does not exist!\n";
-          throw std::invalid_argument(ss.str());
-        } else {
-          alignmentFiles.push_back(alignmentFile);
-        }
-      }
-    } else {
-      bfs::path alignmentFile(eqclassesFileName);
-      if (!bfs::exists(alignmentFile)) {
-        std::stringstream ss;
-        ss << "The provided eqclasses file: " << alignmentFile
-           << " does not exist!\n";
-        throw std::invalid_argument(ss.str());
-      } else {
-        alignmentFiles.push_back(alignmentFile);
-      }
-    }
+    vector<bfs::path> alignmentFiles =
+        salmon::pipeline::stages::stageCollectAlignmentInputs(
+            alignmentFileNames, eqclassesFileName, hasAlignments, hasEqclasses);
 
     // Just so we have the variable around
     LibraryFormat libFmt(ReadType::PAIRED_END, ReadOrientation::TOWARD,
@@ -1769,75 +1700,38 @@ transcript abundance from RNA-seq reads
     jointLog->info("numQuantThreads = {}", numQuantThreads);
 
     // Write out information about the command / run
-    salmon::utils::writeCmdInfo(sopt, orderedOptions);
+    salmon::utils::writeCmdInfo(sopt, pipelineCtx.orderedOptions);
 
-    bool success{false};
+    bool success = salmon::pipeline::stages::stageDispatchByLibraryType(
+        pipelineCtx, libFmt, hasEqclasses,
+        [&]() {
+          EqClassInfo eqinfo(jointLog, alignmentFiles[0]);
+          return runSingleEndEqClasses(alignmentFiles, libFmt, sopt, eqinfo);
+        },
+        [&]() {
+          return runSingleEndSample<AlignmentModel>(
+              alignmentFiles, transcriptFile, libFmt, sopt, autoDetectFmt,
+              requiredObservations);
+        },
+        [&]() {
+          return runSingleEndSample<ONTAlignmentModel>(
+              alignmentFiles, transcriptFile, libFmt, sopt, autoDetectFmt,
+              requiredObservations);
+        },
+        [&]() {
+          AlignmentLibraryT<ReadPair, AlignmentModel> alnLib(
+              alignmentFiles, transcriptFile, libFmt, sopt);
+          if (autoDetectFmt) {
+            alnLib.enableAutodetect();
+          }
+          return processSample<ReadPair>(alnLib, requiredObservations, sopt,
+                                         sopt.outputDirectory);
+        });
 
-    switch (libFmt.type) {
-    case ReadType::SINGLE_END: {
-      // We can only do fragment GC bias correction, for the time being, with
-      // paired-end reads
-      if (sopt.gcBiasCorrect) {
-        jointLog->warn(
-            "Fragment GC bias correction is currently *experimental* "
-            "in single-end libraries.  Please use this option "
-            "with caution.");
-        // sopt.gcBiasCorrect = false;
-      }
-
-      if ( hasEqclasses ) {
-        EqClassInfo eqinfo(jointLog, alignmentFiles[0]);
-        success = runSingleEndEqClasses(alignmentFiles, libFmt, sopt, eqinfo);
-      } else {
-        if(!sopt.oxfordNanoporeModel) {
-          success = runSingleEndSample<AlignmentModel>(alignmentFiles, transcriptFile, libFmt, sopt, autoDetectFmt, requiredObservations);
-        } else {
-          success = runSingleEndSample<ONTAlignmentModel>(alignmentFiles, transcriptFile, libFmt, sopt, autoDetectFmt, requiredObservations);
-        }
-      }
-    } break;
-    case ReadType::PAIRED_END: {
-      if (hasEqclasses) {
-        jointLog->error(" Cannot quantify eqclasses in mode \n"
-                        " Please report this on github");
-        std::exit(1);
-      }
-      AlignmentLibraryT<ReadPair, AlignmentModel> alnLib(alignmentFiles, transcriptFile, libFmt, sopt);
-      if (autoDetectFmt) {
-        alnLib.enableAutodetect();
-      }
-      success = processSample<ReadPair>(alnLib, requiredObservations, sopt, sopt.outputDirectory);
-    } break;
-    default:
-      std::stringstream errfmt;
-      errfmt << "Cannot quantify library of unknown format " << libFmt;
-      jointLog->error(errfmt.str());
-      jointLog->flush();
-      std::exit(1);
-    }
-
-    // Make sure the quantification was successful.
-    if (!success) {
-      jointLog->error(
-          "Quantification was un-successful.  Please check the log "
-          "for information about why quantification failed. If this "
-          "problem persists, please report this issue on GitHub.");
-      return 1;
-    }
-
-    bfs::path estFilePath = outputDirectory / "quant.sf";
-
-    /** If the user requested gene-level abundances, then compute those now **/
-    if (vm.count("geneMap")) {
-      try {
-        salmon::utils::generateGeneLevelEstimates(sopt.geneMapPath,
-                                                  outputDirectory);
-      } catch (std::exception& e) {
-        fmt::print(stderr,
-                   "Error: [{}] when trying to compute gene-level "
-                   "estimates. The gene-level file(s) may not exist",
-                   e.what());
-      }
+    int finalizeStatus = salmon::pipeline::stages::stageFinalizeAlignmentOutputs(
+        pipelineCtx, success, outputDirectory);
+    if (finalizeStatus != 0) {
+      return finalizeStatus;
     }
 
   } catch (po::error& e) {

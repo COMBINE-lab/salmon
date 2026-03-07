@@ -10,6 +10,9 @@ option(SALMON_FETCH_MISSING_DEPS "Fetch pinned dependencies when missing" ON)
 set(SALMON_USE_ZLIB_NG "REQUIRED" CACHE STRING "zlib backend policy")
 set(SALMON_USE_MIMALLOC "AUTO" CACHE STRING "allocator policy")
 set(SALMON_USE_HTSLIB "REQUIRED" CACHE STRING "alignment I/O backend policy")
+set(SALMON_MIMALLOC_OVERRIDE "ON" CACHE STRING "mimalloc override mode for fetched builds (ON/OFF)")
+set(SALMON_MIMALLOC_OSX_ZONE "ON" CACHE STRING "mimalloc macOS zone override for fetched builds (ON/OFF)")
+set(SALMON_MIMALLOC_OSX_INTERPOSE "ON" CACHE STRING "mimalloc macOS interpose override for fetched builds (ON/OFF)")
 
 if(SALMON_ENABLE_TESTS)
   enable_testing()
@@ -56,7 +59,9 @@ endif()
 
 if(ASAN_BUILD)
   list(APPEND TGT_COMPILE_FLAGS "-fsanitize=address")
-  set(ASAN_LIB "asan")
+  # AppleClang links the ASan runtime via -fsanitize=address; explicit -lasan
+  # breaks because there is no libasan.dylib in the SDK toolchain.
+  set(ASAN_LIB "")
 else()
   set(ASAN_LIB "")
 endif()

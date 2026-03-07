@@ -7,7 +7,7 @@
 //#include "RapMapUtils.hpp"
 #include "Util.hpp"
 #include "salmon/internal/util/SalmonMath.hpp"
-#include "salmon/internal/io/StadenUtils.hpp"
+#include "salmon/internal/io/AlignmentIO.hpp"
 
 struct UnpairedRead {
   bam_seq_t* read = nullptr;
@@ -16,7 +16,7 @@ struct UnpairedRead {
                        ReadStrandedness::U};
 
   UnpairedRead()
-      : read(staden::utils::bam_init()), logProb(salmon::math::LOG_0) {}
+      : read(salmon::io::bam_init()), logProb(salmon::math::LOG_0) {}
 
   UnpairedRead(bam_seq_t* r, double lp, LibraryFormat lf)
       : read(r), logProb(lp), libFmt(lf) {}
@@ -42,7 +42,7 @@ struct UnpairedRead {
     return new UnpairedRead(bam_dup(read), logProb, libFmt);
   }
 
-  ~UnpairedRead() { staden::utils::bam_destroy(read); }
+  ~UnpairedRead() { salmon::io::bam_destroy(read); }
 
   inline bam_seq_t* getRead1() const { return read; }
   inline bam_seq_t* getRead2() const { return read; }

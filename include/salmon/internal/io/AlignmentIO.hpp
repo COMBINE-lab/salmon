@@ -67,6 +67,17 @@ using cigar_op = int;
 
 constexpr int BAM_UNKNOWN = -1;
 inline bam_seq_t* bam_dup(bam_seq_t* record) { return bam_dup1(record); }
+namespace salmon::io {
+inline bam_seq_t* bam_init() { return bam_init1(); }
+inline void bam_destroy(bam_seq_t* record) {
+  if (record != nullptr) {
+    bam_destroy1(record);
+  }
+}
+} // namespace salmon::io
+
+inline bam_seq_t* bam_init() { return salmon::io::bam_init(); }
+inline void bam_destroy(bam_seq_t* record) { salmon::io::bam_destroy(record); }
 inline char* bam_name(bam_seq_t* record) { return bam_get_qname(record); }
 inline uint32_t bam_name_len(bam_seq_t* record) {
   return static_cast<uint32_t>(std::strlen(bam_get_qname(record)));

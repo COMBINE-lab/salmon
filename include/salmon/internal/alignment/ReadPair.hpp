@@ -6,7 +6,7 @@
 #include "Util.hpp"
 #include "salmon/internal/util/SalmonMath.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
-#include "salmon/internal/io/StadenUtils.hpp"
+#include "salmon/internal/io/AlignmentIO.hpp"
 
 #include <spdlog/fmt/fmt.h>
 
@@ -19,7 +19,7 @@ struct ReadPair {
                        ReadStrandedness::U};
 
   ReadPair()
-      : read1(staden::utils::bam_init()), read2(staden::utils::bam_init()),
+      : read1(salmon::io::bam_init()), read2(salmon::io::bam_init()),
         orphanStatus(salmon::utils::OrphanStatus::Paired),
         logProb(salmon::math::LOG_0) {}
 
@@ -54,8 +54,8 @@ struct ReadPair {
   }
 
   ~ReadPair() {
-    staden::utils::bam_destroy(read1);
-    staden::utils::bam_destroy(read2);
+    salmon::io::bam_destroy(read1);
+    salmon::io::bam_destroy(read2);
   }
 
   inline bam_seq_t* getRead1() { return read1; }

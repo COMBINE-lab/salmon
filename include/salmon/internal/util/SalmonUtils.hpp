@@ -92,19 +92,6 @@ uint32_t transcript(uint64_t enc);
 // offset --- lower 32-bits
 uint32_t offset(uint64_t enc);
 
-LibraryFormat parseLibraryFormatStringNew(std::string& fmt);
-
-std::vector<ReadLibrary>
-extractReadLibraries(boost::program_options::parsed_options& orderedOptions);
-
-LibraryFormat parseLibraryFormatString(std::string& fmt);
-
-bool peekBAMIsPaired(const boost::filesystem::path& fname);
-
-size_t numberOfReadsInFastaFile(const std::string& fname);
-
-bool readKmerOrder(const std::string& fname, std::vector<uint64_t>& kmers);
-
 template <template <typename> class S, typename T>
 bool overlap(const S<T>& a, const S<T>& b);
 
@@ -193,16 +180,6 @@ bool configure_parsing(size_t nfiles,            // input param
                        size_t& worker_threads,   // input/output param
                        uint32_t& parse_threads    // input/output param
 );
-
-bool validateOptionsAlignment_(SalmonOpts& sopt);
-bool validateOptionsMapping_(SalmonOpts& sopt);
-
-bool createAuxMapLoggers_(SalmonOpts& sopt,
-                          boost::program_options::variables_map& vm);
-
-bool processQuantOptions(SalmonOpts& sopt,
-                         boost::program_options::variables_map& vm,
-                         int32_t numBiasSamples);
 
 template <typename OrderedOptionsT>
 bool writeCmdInfo(SalmonOpts& sopt, OrderedOptionsT& orderedOptions) {

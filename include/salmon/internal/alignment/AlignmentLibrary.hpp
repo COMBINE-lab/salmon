@@ -9,6 +9,7 @@
 #include "salmon/internal/alignment/ONTAlignmentModel.hpp"
 #include "salmon/internal/alignment/BAMQueue.hpp"
 #include "salmon/internal/alignment/BAMUtils.hpp"
+#include "salmon/internal/alignment/NullFragmentFilter.hpp"
 #include "salmon/internal/quant/ClusterForest.hpp"
 #include "salmon/internal/util/DistributionUtils.hpp"
 #include "EquivalenceClassBuilder.hpp"
@@ -20,11 +21,14 @@
 #include "salmon/internal/model/LibraryTypeDetector.hpp"
 #include "salmon/internal/model/ReadKmerDist.hpp"
 #include "salmon/internal/model/SBModel.hpp"
+#include "salmon/internal/quant/BiasLibraryState.hpp"
 #include "SalmonOpts.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/SimplePosBias.hpp"
 #include "SpinLock.hpp" // From pufferfish, with try_lock
 #include "salmon/internal/model/Transcript.hpp"
+#include "salmon/internal/alignment/ReadPair.hpp"
+#include "salmon/internal/alignment/UnpairedRead.hpp"
 #include <concurrentqueue.h>
 #include "parallel_hashmap/phmap.h"
 
@@ -51,245 +55,12 @@ template <typename FragT, typename EQBuilderT, typename AlignModelT> class Align
 public:
   AlignmentLibrary(std::vector<boost::filesystem::path>& alnFiles,
                    const boost::filesystem::path& transcriptFile,
-                   LibraryFormat libFmt, SalmonOpts& salmonOpts)
-      : alignmentFiles_(alnFiles), transcriptFile_(transcriptFile),
-        libFmt_(libFmt), transcripts_(std::vector<Transcript>()),
-        fragStartDists_(5), posBiasFW_(5), posBiasRC_(5), posBiasExpectFW_(5),
-        posBiasExpectRC_(5), /*seqBiasModel_(1.0),*/
-        eqBuilder_(salmonOpts.jointLog, salmonOpts.maxHashResizeThreads), quantificationPasses_(0),
-        expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0),
-        expectedGC_(salmonOpts.numConditionalGCBins, salmonOpts.numFragGCBins,
-                    distribution_utils::DistributionSpace::LOG),
-        observedGC_(salmonOpts.numConditionalGCBins, salmonOpts.numFragGCBins,
-                    distribution_utils::DistributionSpace::LOG) {
-    namespace bfs = boost::filesystem;
-
-    // Make sure the alignment file exists.
-    for (auto& alignmentFile : alignmentFiles_) {
-      if (!bfs::exists(alignmentFile)) {
-        std::stringstream ss;
-        ss << "The provided alignment file: " << alignmentFile
-           << " does not exist!\n";
-        throw std::invalid_argument(ss.str());
-      }
-    }
-
-    // Make sure the transcript file exists.
-    if (!bfs::exists(transcriptFile_)) {
-      std::stringstream ss;
-      ss << "The provided transcript file: " << transcriptFile_
-         << " does not exist!\n";
-      throw std::invalid_argument(ss.str());
-    }
-
-    // The alignment file existed, so create the alignment queue
-    size_t numParseThreads = salmonOpts.numParseThreads;
-    std::cerr << "parseThreads = " << numParseThreads << "\n";
-    bq = std::unique_ptr<BAMQueue<FragT>>(
-        new BAMQueue<FragT>(alnFiles, libFmt_, numParseThreads,
-                            salmonOpts.mappingCacheMemoryLimit));
-
-    std::cerr << "Checking that provided alignment files have consistent "
-                 "headers . . . ";
-    if (!salmon::utils::headersAreConsistent(bq->headers())) {
-      std::stringstream ss;
-      ss << "\nThe multiple alignment files provided had inconsistent "
-            "headers.\n";
-      ss << "Currently, we require that if multiple SAM/BAM files are "
-            "provided,\n";
-      ss << "they must have identical @SQ records.\n";
-      throw std::invalid_argument(ss.str());
-    }
-    std::cerr << "done\n";
-
-    SAM_hdr* header = bq->header();
-
-    // Figure out aligner information from the header if we can
-    aligner_ = salmon::bam_utils::inferAlignerFromHeader(header);
-
-    // in this case check for decoys and make a list of their names
-    phmap::flat_hash_set<std::string> decoys;
-    if (aligner_ == salmon::bam_utils::AlignerDetails::PUFFERFISH) {
-     // for each reference
-     for (decltype(header->nref) i = 0; i < header->nref; ++i) {
-       // for each tag 
-       SAM_hdr_tag *tag;
-	     for (tag = header->ref[i].tag; tag; tag = tag->next) {
-         // if this tag marks it as a decoy
-         if ((tag->len == 4) and (std::strncmp(tag->str, "DS:D", 4) == 0)) {
-           decoys.insert(header->ref[i].name);
-           break;
-         } // end if decoy tag
-
-       } // end for each tag
-      } // end for each referecne
-    }
-    
-    if (!decoys.empty()) {
-        bq->forceEndParsing();
-        bq.reset();
-        salmonOpts.jointLog->error(
-        "Salmon is being run in alignment-mode with a SAM/BAM file that contains decoy\n"
-        "sequences (marked as such during salmon indexing). This SAM/BAM file had {}\n"
-        "such sequences tagged in the header. Since alignments to decoys are not\n"
-        "intended for decoy-level quantification, this functionality is not currently\n"
-        "supported.  If you wish to run salmon with this SAM/BAM file, please \n"
-        "filter out / remove decoy transcripts (those tagged with `DS:D`) from the \n"
-        "header, and all SAM/BAM records that represent alignments to decoys \n"
-        "(those tagged with `XT:A:D`). If you believe you are receiving this message\n"
-        "in error, please report this issue on GitHub.", decoys.size());
-        salmonOpts.jointLog->flush();
-        std::stringstream ss;
-        ss << "\nCannot quantify from SAM/BAM file containing decoy transcripts or alignment records!\n";
-        throw std::runtime_error(ss.str());
-    }
-
-    // The transcript file existed, so load up the transcripts
-    double alpha = 0.005;
-    // we know how many we will have, so reserve the space for 
-    // them.
-    transcripts_.reserve(header->nref);
-    for (decltype(header->nref) i = 0; i < header->nref; ++i) {
-      transcripts_.emplace_back(i, header->ref[i].name, header->ref[i].len,
-                                alpha);
-    }
-
-    FASTAParser fp(transcriptFile.string());
-
-    fmt::print(stderr, "Populating targets from aln = {}, fasta = {} . . .",
-               alnFiles.front().string(), transcriptFile_.string());
-    fp.populateTargets(transcripts_, salmonOpts);
-    /*
-for (auto& txp : transcripts_) {
-    // Length classes taken from
-    // ======
-    // Roberts, Adam, et al.
-    // "Improving RNA-Seq expression estimates by correcting for fragment bias."
-    // Genome Biol 12.3 (2011): R22.
-    // ======
-    // perhaps, define these in a more data-driven way
-    if (txp.RefLength <= 1334) {
-        txp.lengthClassIndex(0);
-    } else if (txp.RefLength <= 2104) {
-        txp.lengthClassIndex(0);
-    } else if (txp.RefLength <= 2988) {
-        txp.lengthClassIndex(0);
-    } else if (txp.RefLength <= 4389) {
-        txp.lengthClassIndex(0);
-    } else {
-        txp.lengthClassIndex(0);
-    }
-}
-*/
-
-    std::vector<uint32_t> lengths;
-    lengths.reserve(transcripts_.size());
-    for (auto& txp : transcripts_) {
-      lengths.push_back(txp.RefLength);
-    }
-    setTranscriptLengthClasses_(lengths, posBiasFW_.size());
-
-    fmt::print(stderr, "done\n");
-
-    // Create the cluster forest for this set of transcripts
-    clusters_.reset(new ClusterForest(transcripts_.size(), transcripts_));
-
-    // Initialize the fragment length distribution
-    size_t maxFragLen = salmonOpts.fragLenDistMax;
-    double meanFragLen = salmonOpts.fragLenDistPriorMean;
-    double fragLenStd = salmonOpts.fragLenDistPriorSD;
-    size_t fragLenKernelN = 4;
-    double fragLenKernelP = 0.5;
-    flDist_.reset(new FragmentLengthDistribution(1.0, maxFragLen, meanFragLen,
-                                                 fragLenStd, fragLenKernelN,
-                                                 fragLenKernelP, 1));
-
-    alnMod_.reset(new AlignModelT(1.0, salmonOpts.numErrorBins));
-    alnMod_->setLogger(salmonOpts.jointLog);
-
-    if (libFmt.type == ReadType::SINGLE_END) {
-      // Convert the PMF to non-log scale
-      std::vector<double> logPMF;
-      size_t minVal;
-      size_t maxVal;
-      flDist_->dumpPMF(logPMF, minVal, maxVal);
-      double sum = salmon::math::LOG_0;
-      for (auto v : logPMF) {
-        sum = salmon::math::logAdd(sum, v);
-      }
-      for (auto& v : logPMF) {
-        v -= sum;
-      }
-
-      // Create the non-logged distribution.
-      // Here, we multiply by 100 to discourage small
-      // numbers in the correctionFactorsfromCounts call
-      // below.
-      std::vector<double> pmf(maxVal + 1, 0.0);
-      for (size_t i = minVal; i < maxVal; ++i) {
-        pmf[i] = 100.0 * std::exp(logPMF[i - minVal]);
-      }
-
-      using distribution_utils::DistributionSpace;
-      // We compute the factors in linear space (since we've de-logged the pmf)
-      conditionalMeans_ = distribution_utils::correctionFactorsFromMass(
-          pmf, DistributionSpace::LINEAR);
-    }
-
-    salmon::utils::markAuxiliaryTargets(salmonOpts, transcripts_);
-
-    // Start parsing the alignments
-    NullFragmentFilter<FragT>* nff = nullptr;
-    bool onlyProcessAmbiguousAlignments = false;
-    bq->start(nff, onlyProcessAmbiguousAlignments);
-  }
+                   LibraryFormat libFmt, SalmonOpts& salmonOpts);
 
   AlignmentLibrary(std::vector<boost::filesystem::path>& alnFiles,
                    LibraryFormat libFmt, SalmonOpts& salmonOpts,
                    bool /*eqClassMode_*/, std::vector<std::string>& tnames,
-                   std::vector<double>& tefflens)
-      : alignmentFiles_(alnFiles),
-        libFmt_(libFmt), transcripts_(std::vector<Transcript>()),
-        fragStartDists_(5), posBiasFW_(5), posBiasRC_(5), posBiasExpectFW_(5),
-        posBiasExpectRC_(5), /*seqBiasModel_(1.0),*/
-        eqBuilder_(salmonOpts.jointLog, salmonOpts.maxHashResizeThreads), quantificationPasses_(0),
-        expectedBias_(constExprPow(4, readBias_[0].getK()), 1.0),
-        expectedGC_(salmonOpts.numConditionalGCBins, salmonOpts.numFragGCBins,
-                    distribution_utils::DistributionSpace::LOG),
-        observedGC_(salmonOpts.numConditionalGCBins, salmonOpts.numFragGCBins,
-                    distribution_utils::DistributionSpace::LOG) {
-    namespace bfs = boost::filesystem;
-
-    // Make sure the alignment file exists.
-    for (auto& alignmentFile : alignmentFiles_) {
-      if (!bfs::exists(alignmentFile)) {
-        std::stringstream ss;
-        ss << "The provided eqClass file: " << alignmentFile
-           << " does not exist!\n";
-        throw std::invalid_argument(ss.str());
-      }
-    }
-
-    // The transcript file existed, so load up the transcripts
-    double alpha = 0.005;
-    for (size_t i = 0; i < tnames.size(); ++i) {
-      transcripts_.emplace_back(i, tnames[i].c_str(), tefflens[i], true, alpha);
-    }
-
-    // Initialize the fragment length distribution
-    size_t maxFragLen = salmonOpts.fragLenDistMax;
-    double meanFragLen = salmonOpts.fragLenDistPriorMean;
-    double fragLenStd = salmonOpts.fragLenDistPriorSD;
-    size_t fragLenKernelN = 4;
-    double fragLenKernelP = 0.5;
-    flDist_.reset(new FragmentLengthDistribution(1.0, maxFragLen, meanFragLen,
-                                                 fragLenStd, fragLenKernelN,
-                                                 fragLenKernelP, 1));
-
-    alnMod_.reset(new AlignModelT(1.0, salmonOpts.numErrorBins));
-    alnMod_->setLogger(salmonOpts.jointLog);
-    salmon::utils::markAuxiliaryTargets(salmonOpts, transcripts_);
-  }
+                   std::vector<double>& tefflens);
 
   EQBuilderT& equivalenceClassBuilder() { return eqBuilder_; }
 
@@ -304,68 +75,19 @@ for (auto& txp : transcripts_) {
    * Return true if this read library is for paired-end reads and false
    * otherwise.
    */
-  bool isPairedEnd() { return (libFmt_.type == ReadType::PAIRED_END); }
+  bool isPairedEnd() { return (state_.library.type == ReadType::PAIRED_END); }
 
   salmon::bam_utils::AlignerDetails getAlignerType() const { return aligner_; }
 
   // TODO: Make same as mapping-based
-  void updateTranscriptLengthsAtomic(std::atomic<bool>& done) {
-    if (sl_.try_lock()) {
-      if (!done) {
+  void updateTranscriptLengthsAtomic(std::atomic<bool>& done);
 
-        auto fld = flDist_.get();
-        // Convert the PMF to non-log scale
-        std::vector<double> logPMF;
-        size_t minVal;
-        size_t maxVal;
-        fld->dumpPMF(logPMF, minVal, maxVal);
-        double sum = salmon::math::LOG_0;
-        for (auto v : logPMF) {
-          sum = salmon::math::logAdd(sum, v);
-        }
-        for (auto& v : logPMF) {
-          v -= sum;
-        }
-
-        // Create the non-logged distribution.
-        // Here, we multiply by 100 to discourage small
-        // numbers in the correctionFactorsfromCounts call
-        // below.
-        std::vector<double> pmf(maxVal + 1, 0.0);
-        for (size_t i = minVal; i < maxVal; ++i) {
-          pmf[i] = 100.0 * std::exp(logPMF[i - minVal]);
-        }
-
-        using distribution_utils::DistributionSpace;
-        // We compute the factors in linear space (since we've de-logged the
-        // pmf)
-        auto correctionFactors = distribution_utils::correctionFactorsFromMass(
-            pmf, DistributionSpace::LINEAR);
-        // Since we'll continue treating effective lengths in log space,
-        // populate them as such
-        distribution_utils::computeSmoothedEffectiveLengths(
-            pmf.size(), transcripts_, correctionFactors,
-            DistributionSpace::LOG);
-
-        /*
-                // Update the effective length of *every* transcript
-                for( auto& t : transcripts_ ) {
-                    t.updateEffectiveLength(logPMF, logFLDMean, minVal, maxVal);
-                }
-        */
-        // then declare that we are done
-        done = true;
-      }
-      sl_.unlock();
-    }
-  }
-
-  const std::vector<double>& condMeans() const { return conditionalMeans_; }
+  const std::vector<double>& condMeans() const { return state_.conditionalMeans; }
 
   std::vector<Transcript>& transcripts() { return transcripts_; }
   const std::vector<Transcript>& transcripts() const { return transcripts_; }
 
-  inline bool getAlignmentGroup(AlignmentGroup<FragT>*& ag) {
+  inline bool getAlignmentGroup(AlignmentGroup<FragT*>*& ag) {
     return bq->getAlignmentGroup(ag);
   }
 
@@ -375,7 +97,7 @@ for (auto& txp : transcripts_) {
 
   inline std::vector<FragmentStartPositionDistribution>&
   fragmentStartPositionDistributions() {
-    return fragStartDists_;
+    return state_.fragmentStartDists;
   }
 
   inline FragmentLengthDistribution* fragmentLengthDistribution() const {
@@ -436,102 +158,102 @@ for (auto& txp : transcripts_) {
     return true;
   }
 
-  inline LibraryFormat format() { return libFmt_; }
-  inline const LibraryFormat format() const { return libFmt_; }
+  inline LibraryFormat format() { return state_.library; }
+  inline const LibraryFormat format() const { return state_.library; }
 
   /**
    * If this is set, attempt to automatically detect this library's type
    */
   void enableAutodetect() {
     // if auto detection is not already enabled, and we're enabling it
-    if (!detector_) {
-      detector_.reset(new LibraryTypeDetector(libFmt_.type));
+    if (!state_.detector) {
+      state_.detector.reset(new LibraryTypeDetector(state_.library.type));
     }
   }
 
-  bool autoDetect() const { return (detector_.get() != nullptr); }
+  bool autoDetect() const { return (state_.detector.get() != nullptr); }
 
-  LibraryTypeDetector* getDetector() { return detector_.get(); }
+  LibraryTypeDetector* getDetector() { return state_.detector.get(); }
 
-  LibraryFormat& getFormat() { return libFmt_; }
-  const LibraryFormat& getFormat() const { return libFmt_; }
+  LibraryFormat& getFormat() { return state_.library; }
+  const LibraryFormat& getFormat() const { return state_.library; }
 
-  void setGCFracForward(double fracForward) { gcFracFwd_ = fracForward; }
+  void setGCFracForward(double fracForward) { state_.gcFracFwd = fracForward; }
 
-  double gcFracFwd() const { return gcFracFwd_; }
-  double gcFracRC() const { return 1.0 - gcFracFwd_; }
+  double gcFracFwd() const { return state_.gcFracFwd; }
+  double gcFracRC() const { return 1.0 - state_.gcFracFwd; }
 
-  std::vector<double>& expectedSeqBias() { return expectedBias_; }
+  std::vector<double>& expectedSeqBias() { return state_.expectedSeqBias; }
 
-  const std::vector<double>& expectedSeqBias() const { return expectedBias_; }
+  const std::vector<double>& expectedSeqBias() const { return state_.expectedSeqBias; }
 
   void setExpectedGCBias(const GCFragModel& expectedBiasIn) {
-    expectedGC_ = expectedBiasIn;
+    state_.expectedGC = expectedBiasIn;
   }
 
-  GCFragModel& expectedGCBias() { return expectedGC_; }
+  GCFragModel& expectedGCBias() { return state_.expectedGC; }
 
-  const GCFragModel& expectedGCBias() const { return expectedGC_; }
+  const GCFragModel& expectedGCBias() const { return state_.expectedGC; }
 
-  const GCFragModel& observedGC() const { return observedGC_; }
+  const GCFragModel& observedGC() const { return state_.observedGC; }
 
-  GCFragModel& observedGC() { return observedGC_; }
+  GCFragModel& observedGC() { return state_.observedGC; }
 
   std::vector<SimplePosBias>& posBias(salmon::utils::Direction dir) {
-    return (dir == salmon::utils::Direction::FORWARD) ? posBiasFW_ : posBiasRC_;
+    return (dir == salmon::utils::Direction::FORWARD) ? state_.posBiasFW : state_.posBiasRC;
   }
   const std::vector<SimplePosBias>&
   posBias(salmon::utils::Direction dir) const {
-    return (dir == salmon::utils::Direction::FORWARD) ? posBiasFW_ : posBiasRC_;
+    return (dir == salmon::utils::Direction::FORWARD) ? state_.posBiasFW : state_.posBiasRC;
   }
 
   std::vector<SimplePosBias>& posBiasExpected(salmon::utils::Direction dir) {
-    return (dir == salmon::utils::Direction::FORWARD) ? posBiasExpectFW_
-                                                      : posBiasExpectRC_;
+    return (dir == salmon::utils::Direction::FORWARD) ? state_.posBiasExpectFW
+                                                      : state_.posBiasExpectRC;
   }
 
   const std::vector<SimplePosBias>&
   posBiasExpected(salmon::utils::Direction dir) const {
-    return (dir == salmon::utils::Direction::FORWARD) ? posBiasExpectFW_
-                                                      : posBiasExpectRC_;
+    return (dir == salmon::utils::Direction::FORWARD) ? state_.posBiasExpectFW
+                                                      : state_.posBiasExpectRC;
   }
 
   ReadKmerDist<6, std::atomic<uint32_t>>&
   readBias(salmon::utils::Direction dir) {
-    return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0]
-                                                      : readBias_[1];
+    return (dir == salmon::utils::Direction::FORWARD) ? state_.readBias[0]
+                                                      : state_.readBias[1];
   }
   const ReadKmerDist<6, std::atomic<uint32_t>>&
   readBias(salmon::utils::Direction dir) const {
-    return (dir == salmon::utils::Direction::FORWARD) ? readBias_[0]
-                                                      : readBias_[1];
+    return (dir == salmon::utils::Direction::FORWARD) ? state_.readBias[0]
+                                                      : state_.readBias[1];
   }
 
   SBModel& readBiasModelObserved(salmon::utils::Direction dir) {
     return (dir == salmon::utils::Direction::FORWARD)
-               ? readBiasModelObserved_[0]
-               : readBiasModelObserved_[1];
+               ? state_.readBiasModelObserved[0]
+               : state_.readBiasModelObserved[1];
   }
   const SBModel& readBiasModelObserved(salmon::utils::Direction dir) const {
     return (dir == salmon::utils::Direction::FORWARD)
-               ? readBiasModelObserved_[0]
-               : readBiasModelObserved_[1];
+               ? state_.readBiasModelObserved[0]
+               : state_.readBiasModelObserved[1];
   }
 
   SBModel& readBiasModelExpected(salmon::utils::Direction dir) {
     return (dir == salmon::utils::Direction::FORWARD)
-               ? readBiasModelExpected_[0]
-               : readBiasModelExpected_[1];
+               ? state_.readBiasModelExpected[0]
+               : state_.readBiasModelExpected[1];
   }
   const SBModel& readBiasModelExpected(salmon::utils::Direction dir) const {
     return (dir == salmon::utils::Direction::FORWARD)
-               ? readBiasModelExpected_[0]
-               : readBiasModelExpected_[1];
+               ? state_.readBiasModelExpected[0]
+               : state_.readBiasModelExpected[1];
   }
 
   void setReadBiasModelExpected(SBModel&& model, salmon::utils::Direction dir) {
     size_t idx = (dir == salmon::utils::Direction::FORWARD) ? 0 : 1;
-    readBiasModelExpected_[idx] = std::move(model);
+    state_.readBiasModelExpected[idx] = std::move(model);
   }
 
   const std::vector<uint32_t>& getLengthQuantiles() const {
@@ -549,44 +271,7 @@ for (auto& txp : transcripts_) {
 private:
 
   void setTranscriptLengthClasses_(std::vector<uint32_t>& lengths,
-                                   size_t nbins) {
-    auto n = lengths.size();
-    if (n > nbins) {
-      lengthQuantiles_.clear();
-      lengthQuantiles_.reserve(nbins);
-
-      size_t step = lengths.size() / nbins;
-      size_t cumStep = 0;
-      for (size_t i = 0; i < nbins; ++i) {
-        cumStep += step;
-        size_t ind = std::min(cumStep, n - 1);
-        std::nth_element(lengths.begin(), lengths.begin() + ind, lengths.end());
-        // Find the proper quantile
-        lengthQuantiles_.push_back(*(lengths.begin() + ind));
-      }
-    } else {
-      lengthQuantiles_.clear();
-      lengthQuantiles_.reserve(n);
-      std::sort(lengths.begin(), lengths.end());
-      for (auto l : lengths) {
-        lengthQuantiles_.push_back(l);
-      }
-      posBiasFW_.resize(n);
-      posBiasRC_.resize(n);
-      posBiasExpectFW_.resize(n);
-      posBiasExpectRC_.resize(n);
-    }
-
-    auto qb = lengthQuantiles_.begin();
-    auto qe = lengthQuantiles_.end();
-    auto maxQuant = std::distance(qb, qe) - 1;
-    for (auto& t : transcripts_) {
-      auto ind = std::min(
-          maxQuant, std::distance(qb, std::upper_bound(qb, qe, t.RefLength)));
-      // the index is the smallest quantile longer than this length
-      t.lengthClassIndex(ind);
-    }
-  }
+                                   size_t nbins);
 
   /**
    * The file from which the alignments will be read.
@@ -599,11 +284,7 @@ private:
    * This is expected to be a FASTA format file.
    */
   boost::filesystem::path transcriptFile_;
-  /**
-   * Describes the expected format of the sequencing
-   * fragment library.
-   */
-  LibraryFormat libFmt_;
+  salmon::quant::BiasLibraryState<LibraryFormat> state_;
   /**
    * The targets (transcripts) to be quantified.
    */
@@ -626,11 +307,6 @@ private:
   std::unique_ptr<ClusterForest> clusters_;
 
   /**
-   * The emperical fragment start position distribution
-   */
-  std::vector<FragmentStartPositionDistribution> fragStartDists_;
-
-  /**
    * The emperical fragment length distribution.
    *
    */
@@ -647,32 +323,16 @@ private:
   SpinLock sl_;
   EQBuilderT eqBuilder_;
 
-  /** Positional bias things**/
   std::vector<uint32_t> lengthQuantiles_;
-  std::vector<SimplePosBias> posBiasFW_;
-  std::vector<SimplePosBias> posBiasRC_;
-  std::vector<SimplePosBias> posBiasExpectFW_;
-  std::vector<SimplePosBias> posBiasExpectRC_;
-
-  /** GC-fragment bias things **/
-  // One bin for each percentage GC content
-  double gcFracFwd_;
-  GCFragModel observedGC_;
-  GCFragModel expectedGC_;
-
-  // Since multiple threads can touch this dist, we
-  // need atomic counters.
-  std::array<ReadKmerDist<6, std::atomic<uint32_t>>, 2> readBias_;
-  std::array<SBModel, 2> readBiasModelObserved_;
-  std::array<SBModel, 2> readBiasModelExpected_;
-
-  // ReadKmerDist<6, std::atomic<uint32_t>> readBias_;
-  std::vector<double> expectedBias_;
-  std::unique_ptr<LibraryTypeDetector> detector_{nullptr};
-  std::vector<double> conditionalMeans_;
 
   salmon::bam_utils::AlignerDetails aligner_{salmon::bam_utils::AlignerDetails::UNKNOWN};
   uint64_t numDecoys_{0};
 };
+
+#include "salmon/internal/alignment/AlignmentLibrary.inl"
+
+extern template class AlignmentLibrary<ReadPair, EquivalenceClassBuilder<TGValue>, AlignmentModel>;
+extern template class AlignmentLibrary<UnpairedRead, EquivalenceClassBuilder<TGValue>, AlignmentModel>;
+extern template class AlignmentLibrary<UnpairedRead, EquivalenceClassBuilder<TGValue>, ONTAlignmentModel>;
 
 #endif // ALIGNMENT_LIBRARY_HPP
