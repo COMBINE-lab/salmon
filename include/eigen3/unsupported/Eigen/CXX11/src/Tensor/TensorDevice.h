@@ -10,6 +10,9 @@
 #ifndef EIGEN_CXX11_TENSOR_TENSOR_DEVICE_H
 #define EIGEN_CXX11_TENSOR_TENSOR_DEVICE_H
 
+// IWYU pragma: private
+#include "./InternalHeaderCheck.h"
+
 namespace Eigen {
 
 /**
@@ -25,44 +28,45 @@ namespace Eigen {
  */
 template <typename ExpressionType, typename DeviceType>
 class TensorDevice {
-  public:
-    TensorDevice(const DeviceType& device, ExpressionType& expression) : m_device(device), m_expression(expression) {}
+ public:
+  TensorDevice(const DeviceType& device, ExpressionType& expression) : m_device(device), m_expression(expression) {}
 
-    EIGEN_DEFAULT_COPY_CONSTRUCTOR(TensorDevice)
+  EIGEN_DEFAULT_COPY_CONSTRUCTOR(TensorDevice)
 
-    template<typename OtherDerived>
-    EIGEN_STRONG_INLINE TensorDevice& operator=(const OtherDerived& other) {
-      typedef TensorAssignOp<ExpressionType, const OtherDerived> Assign;
-      Assign assign(m_expression, other);
-      internal::TensorExecutor<const Assign, DeviceType>::run(assign, m_device);
-      return *this;
-    }
+  template <typename OtherDerived>
+  EIGEN_STRONG_INLINE TensorDevice& operator=(const OtherDerived& other) {
+    typedef TensorAssignOp<ExpressionType, const OtherDerived> Assign;
+    Assign assign(m_expression, other);
+    internal::TensorExecutor<const Assign, DeviceType>::run(assign, m_device);
+    return *this;
+  }
 
-    template<typename OtherDerived>
-    EIGEN_STRONG_INLINE TensorDevice& operator+=(const OtherDerived& other) {
-      typedef typename OtherDerived::Scalar Scalar;
-      typedef TensorCwiseBinaryOp<internal::scalar_sum_op<Scalar>, const ExpressionType, const OtherDerived> Sum;
-      Sum sum(m_expression, other);
-      typedef TensorAssignOp<ExpressionType, const Sum> Assign;
-      Assign assign(m_expression, sum);
-      internal::TensorExecutor<const Assign, DeviceType>::run(assign, m_device);
-      return *this;
-    }
+  template <typename OtherDerived>
+  EIGEN_STRONG_INLINE TensorDevice& operator+=(const OtherDerived& other) {
+    typedef typename OtherDerived::Scalar Scalar;
+    typedef TensorCwiseBinaryOp<internal::scalar_sum_op<Scalar>, const ExpressionType, const OtherDerived> Sum;
+    Sum sum(m_expression, other);
+    typedef TensorAssignOp<ExpressionType, const Sum> Assign;
+    Assign assign(m_expression, sum);
+    internal::TensorExecutor<const Assign, DeviceType>::run(assign, m_device);
+    return *this;
+  }
 
-    template<typename OtherDerived>
-    EIGEN_STRONG_INLINE TensorDevice& operator-=(const OtherDerived& other) {
-      typedef typename OtherDerived::Scalar Scalar;
-      typedef TensorCwiseBinaryOp<internal::scalar_difference_op<Scalar>, const ExpressionType, const OtherDerived> Difference;
-      Difference difference(m_expression, other);
-      typedef TensorAssignOp<ExpressionType, const Difference> Assign;
-      Assign assign(m_expression, difference);
-      internal::TensorExecutor<const Assign, DeviceType>::run(assign, m_device);
-      return *this;
-    }
+  template <typename OtherDerived>
+  EIGEN_STRONG_INLINE TensorDevice& operator-=(const OtherDerived& other) {
+    typedef typename OtherDerived::Scalar Scalar;
+    typedef TensorCwiseBinaryOp<internal::scalar_difference_op<Scalar>, const ExpressionType, const OtherDerived>
+        Difference;
+    Difference difference(m_expression, other);
+    typedef TensorAssignOp<ExpressionType, const Difference> Assign;
+    Assign assign(m_expression, difference);
+    internal::TensorExecutor<const Assign, DeviceType>::run(assign, m_device);
+    return *this;
+  }
 
-  protected:
-    const DeviceType& m_device;
-    ExpressionType& m_expression;
+ protected:
+  const DeviceType& m_device;
+  ExpressionType& m_expression;
 };
 
 /** \class TensorAsyncDevice
@@ -82,8 +86,7 @@ class TensorDevice {
 template <typename ExpressionType, typename DeviceType, typename DoneCallback>
 class TensorAsyncDevice {
  public:
-  TensorAsyncDevice(const DeviceType& device, ExpressionType& expression,
-                    DoneCallback done)
+  TensorAsyncDevice(const DeviceType& device, ExpressionType& expression, DoneCallback done)
       : m_device(device), m_expression(expression), m_done(std::move(done)) {}
 
   template <typename OtherDerived>
@@ -104,13 +107,11 @@ class TensorAsyncDevice {
   DoneCallback m_done;
 };
 
-
 #ifdef EIGEN_USE_THREADS
 template <typename ExpressionType, typename DoneCallback>
 class TensorAsyncDevice<ExpressionType, ThreadPoolDevice, DoneCallback> {
  public:
-  TensorAsyncDevice(const ThreadPoolDevice& device, ExpressionType& expression,
-                    DoneCallback done)
+  TensorAsyncDevice(const ThreadPoolDevice& device, ExpressionType& expression, DoneCallback done)
       : m_device(device), m_expression(expression), m_done(std::move(done)) {}
 
   template <typename OtherDerived>
@@ -132,6 +133,6 @@ class TensorAsyncDevice<ExpressionType, ThreadPoolDevice, DoneCallback> {
 };
 #endif
 
-} // end namespace Eigen
+}  // end namespace Eigen
 
-#endif // EIGEN_CXX11_TENSOR_TENSOR_DEVICE_H
+#endif  // EIGEN_CXX11_TENSOR_TENSOR_DEVICE_H
