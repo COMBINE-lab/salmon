@@ -37,7 +37,7 @@ void FASTAParser::populateTargets(std::vector<Transcript>& refs,
   size_t maxReadGroup{1000}; // Number of files to read simultaneously
   size_t concurrentFile{1};  // Number of reads in each "job"
 
-  salmon::io::fastx::ParserConfig parserConfig{};
+  salmon_fqfeeder::ParserConfig parserConfig{};
   parserConfig.numConsumers = 1;
   parserConfig.numParsers = 1;
   parserConfig.chunkSize = maxReadGroup;

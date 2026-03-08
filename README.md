@@ -1,7 +1,10 @@
 > [!IMPORTANT]
 > `salmon alevin` has been removed from this modernization branch.
 > For single-cell analysis, use [alevin-fry](https://alevin-fry.readthedocs.io/en/latest/).
-> If you need the legacy `alevin` workflow, use the last Salmon release before this bulk-only refactor.
+> If you need the legacy `alevin` workflow, use Salmon `v1.10.2` (the last pre-removal release in this line):
+> - release tag: [v1.10.2](https://github.com/COMBINE-lab/salmon/releases/tag/v1.10.2)
+> - legacy docs: [salmon docs v1.10.2](https://salmon.readthedocs.io/en/v1.10.2/)
+> - source checkout: `git checkout v1.10.2`
 
 <img alt="salmon logo" src="https://github.com/COMBINE-lab/salmon/raw/master/doc/salmon_logo.png" width="600">
 
@@ -11,6 +14,17 @@
 
 
 **Try out the new [alevin-fry](https://alevin-fry.readthedocs.io/en/latest/) framework for single-cell analysis; tutorials can be found [here](https://combine-lab.github.io/alevin-fry-tutorials/)!**
+
+Legacy single-cell breadcrumb
+=============================
+
+The historical `salmon alevin` implementation is intentionally removed from this
+bulk-only refactor line. Users who require that historical workflow should use
+Salmon `v1.10.2` and its corresponding documentation:
+
+* [Salmon v1.10.2 release](https://github.com/COMBINE-lab/salmon/releases/tag/v1.10.2)
+* [Salmon v1.10.2 docs](https://salmon.readthedocs.io/en/v1.10.2/)
+* [alevin-fry docs](https://alevin-fry.readthedocs.io/en/latest/) for current single-cell workflows
 
 **Help guide the development of Salmon, [take our survey](https://docs.google.com/forms/d/e/1FAIpQLSeWhBNE_fA_0uVHvbAlAulDmfmowv7rAYla879DZpqCARyRTQ/viewform)**
 

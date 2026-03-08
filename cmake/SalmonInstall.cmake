@@ -24,5 +24,31 @@ install(
   ")
 
 include(InstallRequiredSystemLibraries)
-add_test(NAME unit_tests COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/UnitTests.cmake)
-add_test(NAME salmon_read_test_quasi COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/TestSalmonQuasi.cmake)
+add_test(
+  NAME unit_tests
+  COMMAND ${CMAKE_COMMAND}
+          -DTOPLEVEL_DIR=${GAT_SOURCE_DIR}
+          -DUNIT_TEST_EXECUTABLE=$<TARGET_FILE:unitTests>
+          -P ${GAT_SOURCE_DIR}/cmake/UnitTests.cmake)
+add_test(
+  NAME salmon_read_test_quasi
+  COMMAND ${CMAKE_COMMAND}
+          -DTOPLEVEL_DIR=${GAT_SOURCE_DIR}
+          -DSALMON_EXECUTABLE=$<TARGET_FILE:salmon>
+          -P ${GAT_SOURCE_DIR}/cmake/TestSalmonQuasi.cmake)
+add_test(
+  NAME salmon_alevin_stub
+  COMMAND ${CMAKE_COMMAND}
+          -DSALMON_EXECUTABLE=$<TARGET_FILE:salmon>
+          -P ${GAT_SOURCE_DIR}/cmake/TestAlevinStub.cmake)
+
+if(SALMON_ENABLE_BENCHMARKS)
+  add_test(
+    NAME salmon_benchmark_smoke
+    COMMAND ${CMAKE_COMMAND}
+            -DTOPLEVEL_DIR=${GAT_SOURCE_DIR}
+            -DSALMON_EXECUTABLE=$<TARGET_FILE:salmon>
+            -DPYTHON_EXECUTABLE=${Python3_EXECUTABLE}
+            -DBENCHMARK_OUTPUT=${CMAKE_BINARY_DIR}/benchmark-smoke.json
+            -P ${GAT_SOURCE_DIR}/cmake/TestBenchmarkSmoke.cmake)
+endif()

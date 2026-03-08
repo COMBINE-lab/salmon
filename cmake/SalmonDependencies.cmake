@@ -482,3 +482,27 @@ unset(_SALMON_PREV_REQUIRED_INCLUDES)
 if(NOT SALMON_JSON_OK)
   message(FATAL_ERROR "Active nlohmann/json headers do not satisfy required minimum version (>=3.11).")
 endif()
+
+# Enforce Eigen floor for numerical stability/performance features used in
+# Salmon and pufferfish.
+unset(SALMON_EIGEN_OK CACHE)
+set(_SALMON_PREV_REQUIRED_INCLUDES "${CMAKE_REQUIRED_INCLUDES}")
+set(CMAKE_REQUIRED_INCLUDES
+    "${GAT_SOURCE_DIR}/include/eigen3;${SALMON_PUFFERFISH_SOURCE_DIR}/include")
+check_cxx_source_compiles(
+  "
+  #include <Eigen/Core>
+  #if !defined(EIGEN_WORLD_VERSION) || !defined(EIGEN_MAJOR_VERSION) || !defined(EIGEN_MINOR_VERSION)
+  #error Eigen version macros missing
+  #endif
+  #if (EIGEN_WORLD_VERSION < 3) || ((EIGEN_WORLD_VERSION == 3) && (EIGEN_MAJOR_VERSION < 4))
+  #error Eigen too old
+  #endif
+  int main() { return 0; }
+  "
+  SALMON_EIGEN_OK)
+set(CMAKE_REQUIRED_INCLUDES "${_SALMON_PREV_REQUIRED_INCLUDES}")
+unset(_SALMON_PREV_REQUIRED_INCLUDES)
+if(NOT SALMON_EIGEN_OK)
+  message(FATAL_ERROR "Active Eigen headers do not satisfy required minimum version (>=3.4).")
+endif()

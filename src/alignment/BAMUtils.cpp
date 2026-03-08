@@ -43,11 +43,7 @@ namespace salmon {
         };
 
       AlignerDetails aligner = AlignerDetails::UNKNOWN;
-      if (header == nullptr || header->raw == nullptr) {
-        return aligner;
-      }
-
-      const char* headerText = sam_hdr_str(header->raw);
+      const char* headerText = salmon::io::alignmentHeaderText(header);
       if (headerText == nullptr) {
         return aligner;
       }

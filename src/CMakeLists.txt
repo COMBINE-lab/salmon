@@ -32,6 +32,7 @@ model/TranscriptGroup.cpp
 model/SBModel.cpp
 model/SimplePosBias.cpp
 model/SGSmooth.cpp
+model/SequenceBiasModel.cpp
 )
 
 set (SALMON_ALIGNMENT_SRCS
@@ -78,7 +79,7 @@ ${GAT_SOURCE_DIR}/src/jellyfish/mer_dna.cc
 backtrace.cc
 xxhash.c
 edlib.cpp
-GenomicFeature.cpp
+model/GenomicFeature.cpp
 )
 
 # check if we know how to do IPO
@@ -147,7 +148,7 @@ target_include_directories(salmon_pufferfish_preferred_headers INTERFACE
 
 add_library(salmon_fqfeeder_headers INTERFACE)
 target_include_directories(salmon_fqfeeder_headers INTERFACE
-  ${SALMON_FQFEEDER_SOURCE_DIR}
+  ${SALMON_FQFEEDER_SOURCE_DIR}/include
 )
 
 add_library(salmon_eigen_headers INTERFACE)
@@ -198,8 +199,8 @@ function(salmon_configure_target target_name)
   target_link_libraries(${target_name}
     PRIVATE
       salmon_project_options
-      salmon_pufferfish_preferred_headers
       salmon_fqfeeder_headers
+      salmon_pufferfish_preferred_headers
       salmon_repo_headers
   )
   if (USE_ARM)

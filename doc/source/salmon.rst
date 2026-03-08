@@ -1,6 +1,16 @@
 Salmon
 ===============
 
+.. important::
+
+   This branch of Salmon is bulk-only. The ``salmon alevin`` implementation has
+   been removed.
+
+   - For current single-cell analysis, use `alevin-fry <https://alevin-fry.readthedocs.io/en/latest/>`_.
+   - For the historical ``salmon alevin`` workflow, use Salmon ``v1.10.2``:
+     `release <https://github.com/COMBINE-lab/salmon/releases/tag/v1.10.2>`_,
+     `docs <https://salmon.readthedocs.io/en/v1.10.2/>`_.
+
 Salmon is a tool for **wicked-fast** transcript quantification from RNA-seq
 data.  It requires a set of target transcripts (either from a reference or
 *de-novo* assembly) to quantify.  All you need to run Salmon is a FASTA file

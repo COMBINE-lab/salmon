@@ -15,8 +15,8 @@ include("${GAT_SOURCE_DIR}/cmake/SalmonProjectOptions.cmake")
 include("${GAT_SOURCE_DIR}/cmake/SalmonDependencies.cmake")
 
 set(CPACK_SOURCE_IGNORE_FILES
-  "/src/PCA.cpp"
-  "/src/PCAUtils.cpp"
+  "/src/util/PCA.cpp"
+  "/src/util/PCAUtils.cpp"
   "/build/"
   "/scripts/AggregateToGeneLevel.py"
   "/scripts/ExpressionTools.py"
@@ -54,6 +54,19 @@ add_custom_target(include_policy_check
           ${Python3_EXECUTABLE} ${GAT_SOURCE_DIR}/scripts/check_include_policy.py
   WORKING_DIRECTORY ${GAT_SOURCE_DIR}
   COMMENT "Checking include policy (forbidden top-level vendor + legacy internal headers)")
+
+add_custom_target(refactor_policy_check
+  COMMAND ${CMAKE_COMMAND} -E env
+          PYTHONPATH=
+          ${Python3_EXECUTABLE} ${GAT_SOURCE_DIR}/scripts/check_refactor_policy.py
+  WORKING_DIRECTORY ${GAT_SOURCE_DIR}
+  COMMENT "Checking refactor policy (legacy knobs + forbidden raw symbols)")
+
+if(SALMON_ENABLE_BENCHMARKS)
+  add_custom_target(benchmark_smoke
+    COMMAND ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR} -R salmon_benchmark_smoke --output-on-failure
+    COMMENT "Running Salmon smoke benchmark test")
+endif()
 
 include(CPack)
 

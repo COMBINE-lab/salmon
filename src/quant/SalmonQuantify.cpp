@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <exception>
 #include <functional>
+#include <iomanip>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -1515,14 +1516,16 @@ void processReads(
         const char green[] = "\x1b[32m";
         const char red[] = "\x1b[31m";
         (void)initialRound;
-        fmt::print(stderr,
-                   "\r\x1b[2K{}processed{} {} fragments{}\n"
-                   "\x1b[2Khits: {}, hits per frag:  {:.6g}\x1b[1A\r",
-                   green, red,
-                   salmon::fmtcompat::group_digits(observedFragments),
-                   green, RESET_COLOR,
-                   salmon::fmtcompat::group_digits(observedHits),
-                   observedHits / static_cast<double>(prevObservedFrags));
+        std::ostringstream progressStream;
+        progressStream << "\r\x1b[2K" << green << "processed" << red << " "
+                       << salmon::fmtcompat::group_digits(observedFragments)
+                       << " fragments" << RESET_COLOR << '\n'
+                       << "\x1b[2Khits: "
+                       << salmon::fmtcompat::group_digits(observedHits)
+                       << ", hits per frag:  " << std::setprecision(6)
+                       << (observedHits / static_cast<double>(prevObservedFrags))
+                       << "\x1b[1A\r";
+        fmt::print(stderr, "{}", progressStream.str());
         iomutex.unlock();
       }
 
@@ -1981,14 +1984,16 @@ void processReads(
         const char green[] = "\x1b[32m";
         const char red[] = "\x1b[31m";
         (void)initialRound;
-        fmt::print(stderr,
-                   "\r\x1b[2K{}processed{} {} fragments{}\n"
-                   "\x1b[2Khits: {}, hits per frag:  {:.6g}\x1b[1A\r",
-                   green, red,
-                   salmon::fmtcompat::group_digits(observedFragments),
-                   green, RESET_COLOR,
-                   salmon::fmtcompat::group_digits(observedHits),
-                   observedHits / static_cast<double>(prevObservedFrags));
+        std::ostringstream progressStream;
+        progressStream << "\r\x1b[2K" << green << "processed" << red << " "
+                       << salmon::fmtcompat::group_digits(observedFragments)
+                       << " fragments" << RESET_COLOR << '\n'
+                       << "\x1b[2Khits: "
+                       << salmon::fmtcompat::group_digits(observedHits)
+                       << ", hits per frag:  " << std::setprecision(6)
+                       << (observedHits / static_cast<double>(prevObservedFrags))
+                       << "\x1b[1A\r";
+        fmt::print(stderr, "{}", progressStream.str());
         iomutex.unlock();
       }
 
@@ -2134,7 +2139,7 @@ void processReadLibrary(
     if (rl.mates1().size() > 1 and numThreads > 8) {
       numParsingThreads = 2;
     }
-    salmon::io::fastx::ParserConfig parserConfig{};
+    salmon_fqfeeder::ParserConfig parserConfig{};
     parserConfig.numConsumers = numThreads;
     parserConfig.numParsers = numParsingThreads;
     parserConfig.chunkSize = miniBatchSize;
@@ -2147,7 +2152,7 @@ void processReadLibrary(
     if (rl.unmated().size() > 1 and numThreads > 8) {
       numParsingThreads = 2;
     }
-    salmon::io::fastx::ParserConfig parserConfig{};
+    salmon_fqfeeder::ParserConfig parserConfig{};
     parserConfig.numConsumers = numThreads;
     parserConfig.numParsers = numParsingThreads;
     parserConfig.chunkSize = miniBatchSize;

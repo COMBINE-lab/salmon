@@ -900,7 +900,7 @@ transcriptToGeneMapFromFasta(const std::string& transcriptsFile) {
   vector<bfs::path> paths{transcriptsFile};
   size_t maxReadGroupSize{100};
   std::vector<std::string> readFiles{transcriptsFile};
-  salmon::io::fastx::ParserConfig parserConfig{};
+  salmon_fqfeeder::ParserConfig parserConfig{};
   parserConfig.numConsumers = 1;
   parserConfig.numParsers = 1;
   parserConfig.chunkSize = maxReadGroupSize;

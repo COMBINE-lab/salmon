@@ -7,7 +7,13 @@ if (TAR_RESULT)
     message(FATAL_ERROR "Error untarring sample_data.tgz")
 endif()
 
-set(SALMON_QUASI_INDEX_CMD ${CMAKE_BINARY_DIR}/salmon index -t transcripts.fasta -i sample_salmon_quasi_index)
+if(DEFINED SALMON_EXECUTABLE)
+    set(SALMON_EXE ${SALMON_EXECUTABLE})
+else()
+    set(SALMON_EXE ${CMAKE_BINARY_DIR}/salmon)
+endif()
+
+set(SALMON_QUASI_INDEX_CMD ${SALMON_EXE} index -t transcripts.fasta -i sample_salmon_quasi_index)
 execute_process(COMMAND ${SALMON_QUASI_INDEX_CMD}
                 WORKING_DIRECTORY ${TOPLEVEL_DIR}/sample_data
                 RESULT_VARIABLE SALMON_QUASI_INDEX_RESULT
@@ -20,7 +26,7 @@ if (SALMON_QUASI_INDEX_RESULT)
             )
 endif()
 
-set(SALMON_QUANT_COMMAND ${CMAKE_BINARY_DIR}/salmon quant -i sample_salmon_quasi_index -l IU -1 reads_1.fastq -2 reads_2.fastq -o sample_salmon_quasi_quant)
+set(SALMON_QUANT_COMMAND ${SALMON_EXE} quant -i sample_salmon_quasi_index -l IU -1 reads_1.fastq -2 reads_2.fastq -o sample_salmon_quasi_quant)
 execute_process(COMMAND ${SALMON_QUANT_COMMAND}
 	            WORKING_DIRECTORY ${TOPLEVEL_DIR}/sample_data
                 RESULT_VARIABLE SALMON_QUASI_QUANT_RESULT
