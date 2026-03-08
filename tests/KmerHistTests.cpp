@@ -1,4 +1,4 @@
-#include "catch.hpp"
+#include <catch2/catch_all.hpp>
 #include "salmon/internal/util/UtilityFunctions.hpp"
 
 // from http://stackoverflow.com/questions/2380962/generate-all-combinations-of-arbitrary-alphabet-up-to-arbitrary-length
@@ -134,4 +134,3 @@ SCENARIO("The next k-mer index function works correctly") {
     }
 
 }
-

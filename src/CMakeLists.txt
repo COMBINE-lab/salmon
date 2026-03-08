@@ -89,11 +89,8 @@ if(HAS_IPO AND SALMON_ENABLE_LTO)
 endif()
 
 if(SALMON_ENABLE_TESTS)
-  set (UNIT_TESTS_ENTRY_SRCS
-      ${GAT_SOURCE_DIR}/tests/UnitTests.cpp
-  )
-
   set (UNIT_TESTS_INDIVIDUAL_SRCS
+    ${GAT_SOURCE_DIR}/tests/UnitTests.cpp
     ${GAT_SOURCE_DIR}/src/model/FragmentLengthDistribution.cpp
     ${GAT_SOURCE_DIR}/tests/GCSampleTests.cpp
     ${GAT_SOURCE_DIR}/tests/LibraryTypeTests.cpp
@@ -336,10 +333,7 @@ target_link_libraries(salmon
 )
 
 if(SALMON_ENABLE_TESTS)
-  add_library(UnitTestsMain STATIC ${UNIT_TESTS_ENTRY_SRCS})
-  salmon_configure_target(UnitTestsMain)
-
-  add_executable(unitTests ${UNIT_TESTS_INDIVIDUAL_SRCS} ${GAT_SOURCE_DIR}/tests/catch.hpp)
+  add_executable(unitTests ${UNIT_TESTS_INDIVIDUAL_SRCS})
   salmon_configure_target(unitTests)
   salmon_attach_external_headers(unitTests)
   salmon_attach_eigen_headers(unitTests)
@@ -348,20 +342,6 @@ if(SALMON_ENABLE_TESTS)
       COMMENT "Copying unitTests"
   )
 endif()
-
-#add_executable(salmon-read ${SALMON_READ_SRCS})
-#set_target_properties(salmon-read PROPERTIES COMPILE_FLAGS "${CMAKE_CXX_FLAGS} -DHAVE_LIBPTHREAD -D_PBGZF_USE -fopenmp"
-#    LINK_FLAGS "-DHAVE_LIBPTHREAD -D_PBGZF_USE -fopenmp")
-
-#set_target_properties(salmon_core salmon PROPERTIES LINK_SEARCH_END_STATIC TRUE)
-
-# our suffix array construction libraries
-#if(NOT LIBDIVSUFSORT_FOUND)
-#  set (SUFFARRAY_LIB ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort.a)
-#  set (SUFFARRAY_LIB64 ${GAT_SOURCE_DIR}/external/install/lib/libdivsufsort64.a)
-#  message ("Setting libdivsufsort = ${SUFFARRAY_LIB}") 
-#  message ("Setting libdivsufsort64 = ${SUFFARRAY_LIB64}") 
-#endif()
 
 target_link_libraries(salmon_common_link_deps INTERFACE
     Threads::Threads
@@ -391,21 +371,13 @@ target_link_libraries(salmon
 )
 
 add_dependencies(salmon salmon_core)
-if(SALMON_ENABLE_TESTS)
-  add_dependencies(unitTests UnitTestsMain)
-endif()
-#add_dependencies(salmon puffer)
-#add_dependencies(salmon twopaco)
-#add_dependencies(salmon graphdump)
-#add_dependencies(salmon ntcard)
-#add_dependencies(salmon ksw2pp)
 
 if(SALMON_ENABLE_TESTS)
 target_link_libraries(unitTests
     PRIVATE
+      ${SALMON_CATCH2_TARGET}
       salmon_common_link_deps
       salmon_core
-      UnitTestsMain
 )
 endif()
 
@@ -439,7 +411,7 @@ set(SALMON_EXTERNAL_DEP_TARGETS
   salmon
 )
 if(SALMON_ENABLE_TESTS)
-  list(APPEND SALMON_EXTERNAL_DEP_TARGETS UnitTestsMain unitTests)
+  list(APPEND SALMON_EXTERNAL_DEP_TARGETS unitTests)
 endif()
 
 function(salmon_add_external_dependency dependency_target)
@@ -448,46 +420,9 @@ function(salmon_add_external_dependency dependency_target)
   endforeach()
 endfunction()
 
-if (${FETCHED_BOOST})
-   salmon_add_external_dependency(libboost)
-endif()
-
 if (${FETCHED_HTSLIB})
   salmon_add_external_dependency(libhtslib)
 endif()
-
-### No need for this, I think
-##  This ensures that the salmon executable should work with or without `make install`
-###
-## Grumble grumble . . . OSX
-#if (APPLE)
-#    # only attempt install_name_tool for tbb if we installed it
-#    if (${TBB_LIBRARY_DIRS} MATCHES ${GAT_SOURCE_DIR}/external/install/lib)
-#        add_custom_command(TARGET salmon
-#            POST_BUILD
-#            COMMAND install_name_tool -change libtbb.dylib @rpath/libtbb.dylib ${GAT_SOURCE_DIR}/build/src/salmon
-#            COMMAND install_name_tool -add_rpath  ${GAT_SOURCE_DIR}/external/install/lib ${GAT_SOURCE_DIR}/build/src/salmon
-#            )
-#        add_custom_command(TARGET unitTests
-#            POST_BUILD
-#            COMMAND install_name_tool -change libtbb.dylib @rpath/libtbb.dylib ${GAT_SOURCE_DIR}/build/src/unitTests
-#            COMMAND install_name_tool -add_rpath  ${GAT_SOURCE_DIR}/external/install/lib ${GAT_SOURCE_DIR}/build/src/unitTests
-#            )
-#    endif()
-#else()
-#    # related to complete static linking --- on hold    
-#    set (BOOST_THREAD_LIBRARY)
-#endif()
-
-#if (APPLE)
-#	add_custom_command(TARGET salmon
-#		POST_BUILD
-#		COMMAND install_name_tool -add_rpath ${GAT_SOURCE_DIR}/external/install/lib salmon
-#	COMMAND install_name_tool -add_rpath @executable_path/../lib salmon
-#		)
-#endif()
-
-##### ======================================
 
 IF(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
   SET(CMAKE_INSTALL_PREFIX
@@ -517,34 +452,13 @@ install(FILES
   DESTINATION ${INSTALL_LIB_DIR}
 ) 
 endif()
-#install(DIRECTORY
-#       ${TBB_SOURCE_DIR}
-#       DESTINATION ${INSTALL_LIB_DIR}
-#	     FILES_MATCHING PATTERN "libtbb*.${SHARED_LIB_EXTENSION}*"
-#)
 endif()
-
-#install(DIRECTORY
-#        ${GAT_SOURCE_DIR}/external/install/lib/
-#        DESTINATION ${INSTALL_LIB_DIR}
-#	    FILES_MATCHING PATTERN "libtbb*.${SHARED_LIB_EXTENSION}*"
-#    )
-
-# install(FILES ${Boost_LIBRARIES}
-# 	           DESTINATION ${INSTALL_LIB_DIR})
 
 install(TARGETS salmon salmon_core
                 RUNTIME DESTINATION bin
                 LIBRARY DESTINATION lib
                 ARCHIVE DESTINATION lib
         )
-
-if(SALMON_ENABLE_TESTS)
-  add_custom_command(TARGET unitTests POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:unitTests> ${GAT_SOURCE_DIR}/tests/$<TARGET_FILE_NAME:unitTests>
-      COMMENT "Copying unitTests"
-  )
-endif()
 
 set(POST_INSTALL_SCRIPT ${GAT_SOURCE_DIR}/cmake/PostInstall.cmake)
 
@@ -559,8 +473,3 @@ install(
 )
 
 include(InstallRequiredSystemLibraries)
-add_test( NAME unit_tests COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/UnitTests.cmake )
-add_test( NAME salmon_read_test_quasi COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/TestSalmonQuasi.cmake )
-
-# Remove this test since we are removing support for the FMD index. 
-# add_test( NAME salmon_read_test_fmd COMMAND ${CMAKE_COMMAND} -DTOPLEVEL_DIR=${GAT_SOURCE_DIR} -P ${GAT_SOURCE_DIR}/cmake/TestSalmonFMD.cmake )

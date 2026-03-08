@@ -2,6 +2,7 @@ include_guard(GLOBAL)
 
 include(ExternalProject)
 include(FetchContent)
+include(CheckCXXSourceCompiles)
 
 set(SALMON_DEPS_INSTALL_PREFIX
     "${CMAKE_BINARY_DIR}/_deps/local"
@@ -52,7 +53,9 @@ endfunction()
 
 set(SALMON_ZLIB_INCLUDE_DIRS "")
 set(SALMON_ZLIB_LIBRARIES "")
-find_package(ZLIBNG QUIET)
+if(SALMON_USE_SYSTEM_DEPS)
+  find_package(ZLIBNG QUIET)
+endif()
 if(ZLIBNG_FOUND)
   message(STATUS "Found zlib-ng compatibility backend: ${ZLIBNG_LIBRARY}")
   set(SALMON_ZLIB_INCLUDE_DIRS ${ZLIBNG_INCLUDE_DIR})
@@ -111,40 +114,48 @@ endif()
 
 find_package(LibLZMA)
 if(NOT LIBLZMA_FOUND)
-  message(STATUS "Will attempt to fetch and build liblzma")
-  externalproject_add(liblzma
-    PREFIX ${CMAKE_BINARY_DIR}/_deps/liblzma
-    URL https://tukaani.org/xz/xz-5.2.2.tar.gz
-    URL_HASH SHA256=73df4d5d34f0468bd57d09f2d8af363e95ed6cc3a4a86129d2f2c366259902a2
-    SOURCE_SUBDIR .
-    INSTALL_DIR ${SALMON_DEPS_INSTALL_PREFIX}
-    BUILD_IN_SOURCE TRUE
-    CONFIGURE_COMMAND ./configure --prefix=<INSTALL_DIR> CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS=${EXTRA_CMAKE_INCLUDE_FLAGS} CPPFLAGS=${EXTRA_CMAKE_INCLUDE_FLAGS} LDFLAGS=${EXTRA_CMAKE_LIBRARY_FLAGS}
-    BUILD_COMMAND make
-    INSTALL_COMMAND make install
-  )
-  set(LIBLZMA_LIBRARIES ${SALMON_DEPS_INSTALL_PREFIX}/lib/liblzma.a)
-  set(FETCHED_LIBLZMA TRUE)
+  if(SALMON_FETCH_MISSING_DEPS)
+    message(STATUS "Will attempt to fetch and build liblzma")
+    externalproject_add(liblzma
+      PREFIX ${CMAKE_BINARY_DIR}/_deps/liblzma
+      URL https://tukaani.org/xz/xz-5.2.2.tar.gz
+      URL_HASH SHA256=73df4d5d34f0468bd57d09f2d8af363e95ed6cc3a4a86129d2f2c366259902a2
+      SOURCE_SUBDIR .
+      INSTALL_DIR ${SALMON_DEPS_INSTALL_PREFIX}
+      BUILD_IN_SOURCE TRUE
+      CONFIGURE_COMMAND ./configure --prefix=<INSTALL_DIR> CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} CFLAGS=${EXTRA_CMAKE_INCLUDE_FLAGS} CPPFLAGS=${EXTRA_CMAKE_INCLUDE_FLAGS} LDFLAGS=${EXTRA_CMAKE_LIBRARY_FLAGS}
+      BUILD_COMMAND make
+      INSTALL_COMMAND make install
+    )
+    set(LIBLZMA_LIBRARIES ${SALMON_DEPS_INSTALL_PREFIX}/lib/liblzma.a)
+    set(FETCHED_LIBLZMA TRUE)
+  else()
+    message(FATAL_ERROR "liblzma is required by htslib but was not found. Install liblzma or enable SALMON_FETCH_MISSING_DEPS.")
+  endif()
 else()
   message(STATUS "Found liblzma library: ${LIBLZMA_LIBRARIES}")
 endif()
 
 find_package(BZip2)
 if(NOT BZIP2_FOUND)
-  message(STATUS "Will attempt to fetch and build libbz2")
-  externalproject_add(libbz2
-    PREFIX ${CMAKE_BINARY_DIR}/_deps/libbz2
-    URL https://sourceware.org/pub/bzip2/bzip2-1.0.6.tar.gz
-    URL_HASH SHA256=a2848f34fcd5d6cf47def00461fcb528a0484d8edef8208d6d2e2909dc61d9cd
-    SOURCE_SUBDIR .
-    INSTALL_DIR ${SALMON_DEPS_INSTALL_PREFIX}
-    BUILD_IN_SOURCE TRUE
-    CONFIGURE_COMMAND ""
-    BUILD_COMMAND make CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
-    INSTALL_COMMAND make install PREFIX=<INSTALL_DIR>
-  )
-  set(BZIP2_LIBRARIES ${SALMON_DEPS_INSTALL_PREFIX}/lib/libbz2.a)
-  set(FETCHED_LIBBZ2 TRUE)
+  if(SALMON_FETCH_MISSING_DEPS)
+    message(STATUS "Will attempt to fetch and build libbz2")
+    externalproject_add(libbz2
+      PREFIX ${CMAKE_BINARY_DIR}/_deps/libbz2
+      URL https://sourceware.org/pub/bzip2/bzip2-1.0.6.tar.gz
+      URL_HASH SHA256=a2848f34fcd5d6cf47def00461fcb528a0484d8edef8208d6d2e2909dc61d9cd
+      SOURCE_SUBDIR .
+      INSTALL_DIR ${SALMON_DEPS_INSTALL_PREFIX}
+      BUILD_IN_SOURCE TRUE
+      CONFIGURE_COMMAND ""
+      BUILD_COMMAND make CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
+      INSTALL_COMMAND make install PREFIX=<INSTALL_DIR>
+    )
+    set(BZIP2_LIBRARIES ${SALMON_DEPS_INSTALL_PREFIX}/lib/libbz2.a)
+    set(FETCHED_LIBBZ2 TRUE)
+  else()
+    message(FATAL_ERROR "bzip2 is required by htslib but was not found. Install bzip2 or enable SALMON_FETCH_MISSING_DEPS.")
+  endif()
 else()
   message(STATUS "Found libbz2 library: ${BZIP2_LIBRARIES}")
 endif()
@@ -153,7 +164,9 @@ find_package(Boost 1.59.0 REQUIRED COMPONENTS iostreams system filesystem timer 
 message(STATUS "Boost include dirs: ${Boost_INCLUDE_DIRS}")
 message(STATUS "Boost libraries: ${Boost_LIBRARIES}")
 
-find_package(cereal "1.3.2" QUIET)
+if(SALMON_USE_SYSTEM_DEPS)
+  find_package(cereal "1.3.2" QUIET)
+endif()
 if(NOT CEREAL_FOUND)
   message(STATUS "Build system will fetch and build the cereal serialization library")
   set(BUILD_DOC OFF CACHE BOOL "" FORCE)
@@ -173,6 +186,34 @@ elseif(CEREAL_INCLUDE_DIRS AND NOT TARGET cereal::cereal)
   add_library(cereal INTERFACE)
   target_include_directories(cereal INTERFACE ${CEREAL_INCLUDE_DIRS})
   add_library(cereal::cereal ALIAS cereal)
+endif()
+
+if(SALMON_ENABLE_TESTS)
+  if(SALMON_USE_SYSTEM_DEPS)
+    find_package(Catch2 3 QUIET CONFIG)
+  endif()
+  if(NOT Catch2_FOUND)
+    if(SALMON_FETCH_MISSING_DEPS)
+      message(STATUS "Catch2 not found; fetching pinned Catch2 release")
+      set(CATCH_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+      set(CATCH_INSTALL_DOCS OFF CACHE BOOL "" FORCE)
+      set(CATCH_INSTALL_EXTRAS OFF CACHE BOOL "" FORCE)
+      FetchContent_Declare(salmon_catch2
+        GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+        GIT_TAG v3.12.0
+        GIT_SHALLOW FALSE
+      )
+      FetchContent_MakeAvailable(salmon_catch2)
+    else()
+      message(FATAL_ERROR "Catch2 >= 3 is required for tests. Install Catch2 or enable SALMON_FETCH_MISSING_DEPS.")
+    endif()
+  endif()
+
+  if(TARGET Catch2::Catch2WithMain)
+    set(SALMON_CATCH2_TARGET Catch2::Catch2WithMain CACHE INTERNAL "" FORCE)
+  else()
+    message(FATAL_ERROR "Catch2::Catch2WithMain target was not found after dependency resolution.")
+  endif()
 endif()
 
 find_package(TBB 2021.4 REQUIRED COMPONENTS tbb)
@@ -224,7 +265,9 @@ if(NOT salmon_fqfeeder_POPULATED)
 endif()
 set(SALMON_FQFEEDER_SOURCE_DIR "${salmon_fqfeeder_SOURCE_DIR}" CACHE INTERNAL "" FORCE)
 
-find_package(libgff 2.0.1 HINTS ${LIB_GFF_PATH} ${GFF_ROOT})
+if(SALMON_USE_SYSTEM_DEPS)
+  find_package(libgff 2.0.1 HINTS ${LIB_GFF_PATH} ${GFF_ROOT})
+endif()
 if(libgff_FOUND)
   if(GFF_INCLUDE_DIR)
     set(LIB_GFF_INCLUDE_DIR ${GFF_INCLUDE_DIR})
@@ -257,7 +300,9 @@ if(NOT libgff_FOUND)
 endif()
 
 find_package(CURL)
-find_package(HTSlib QUIET)
+if(SALMON_USE_SYSTEM_DEPS)
+  find_package(HTSlib QUIET)
+endif()
 if(HTSlib_FOUND)
   message(STATUS "Found htslib: ${HTSLIB_LIBRARY}")
   set(HTSLIB_INCLUDE_DIR ${HTSLIB_INCLUDE_DIR})
@@ -281,7 +326,7 @@ elseif(SALMON_FETCH_MISSING_DEPS)
     SOURCE_SUBDIR .
     INSTALL_DIR ${SALMON_DEPS_INSTALL_PREFIX}
     BUILD_IN_SOURCE TRUE
-    CONFIGURE_COMMAND ./configure --prefix=<INSTALL_DIR> --disable-libcurl CPPFLAGS=${_salmon_htslib_cppflags} LDFLAGS=${_salmon_htslib_ldflags} CC=${CMAKE_C_COMPILER}
+    CONFIGURE_COMMAND ./configure --prefix=<INSTALL_DIR> --disable-libcurl --disable-ref-cache CPPFLAGS=${_salmon_htslib_cppflags} LDFLAGS=${_salmon_htslib_ldflags} CC=${CMAKE_C_COMPILER}
     BUILD_COMMAND make
     INSTALL_COMMAND make install
   )
@@ -315,7 +360,9 @@ else()
   set(FAST_MALLOC_LIB "")
   set(FAST_MALLOC_OBJECT "")
   set(HAVE_FAST_MALLOC FALSE)
-  find_package(Mimalloc QUIET)
+  if(SALMON_USE_SYSTEM_DEPS)
+    find_package(Mimalloc QUIET)
+  endif()
   if(Mimalloc_FOUND)
     message(STATUS "Found mimalloc: ${MIMALLOC_LIBRARY}")
     set(FAST_MALLOC_LIB Mimalloc::Mimalloc)
@@ -370,4 +417,72 @@ if(NOT HAVE_FAST_MALLOC AND SALMON_FETCH_MISSING_DEPS)
   set(HAVE_FAST_MALLOC TRUE)
 elseif(NOT HAVE_FAST_MALLOC AND SALMON_USE_MIMALLOC STREQUAL "REQUIRED")
   message(FATAL_ERROR "mimalloc is required but was not found. Install mimalloc or enable SALMON_FETCH_MISSING_DEPS.")
+endif()
+
+# Enforce a modern spdlog/fmt floor for runtime-format safety and consistent
+# behavior across Salmon and embedded pufferfish headers.
+unset(SALMON_SPDLOG_FMT_OK CACHE)
+set(_SALMON_PREV_REQUIRED_INCLUDES "${CMAKE_REQUIRED_INCLUDES}")
+set(CMAKE_REQUIRED_INCLUDES
+    "${SALMON_PUFFERFISH_SOURCE_DIR}/include;${GAT_SOURCE_DIR}/include")
+check_cxx_source_compiles(
+  "
+  #include <spdlog/version.h>
+  #include <spdlog/fmt/fmt.h>
+  #if !defined(SPDLOG_VERSION) || (SPDLOG_VERSION < 11700)
+  #error spdlog too old
+  #endif
+  #if !defined(FMT_VERSION) || (FMT_VERSION < 120000)
+  #error fmt too old
+  #endif
+  int main() { return 0; }
+  "
+  SALMON_SPDLOG_FMT_OK)
+set(CMAKE_REQUIRED_INCLUDES "${_SALMON_PREV_REQUIRED_INCLUDES}")
+unset(_SALMON_PREV_REQUIRED_INCLUDES)
+if(NOT SALMON_SPDLOG_FMT_OK)
+  message(FATAL_ERROR "Active spdlog/fmt headers do not satisfy required minimum versions (spdlog>=1.17, fmt>=12).")
+endif()
+
+# Keep phmap aligned across Salmon and pufferfish and enforce a modern floor.
+unset(SALMON_PHMAP_OK CACHE)
+set(_SALMON_PREV_REQUIRED_INCLUDES "${CMAKE_REQUIRED_INCLUDES}")
+set(CMAKE_REQUIRED_INCLUDES
+    "${SALMON_PUFFERFISH_SOURCE_DIR}/include;${GAT_SOURCE_DIR}/include")
+check_cxx_source_compiles(
+  "
+  #include <parallel_hashmap/phmap_config.h>
+  #if !defined(PHMAP_VERSION_MAJOR) || (PHMAP_VERSION_MAJOR < 2)
+  #error phmap too old
+  #endif
+  int main() { return 0; }
+  "
+  SALMON_PHMAP_OK)
+set(CMAKE_REQUIRED_INCLUDES "${_SALMON_PREV_REQUIRED_INCLUDES}")
+unset(_SALMON_PREV_REQUIRED_INCLUDES)
+if(NOT SALMON_PHMAP_OK)
+  message(FATAL_ERROR "Active parallel_hashmap headers do not satisfy required minimum version (major>=2).")
+endif()
+
+# Enforce minimum nlohmann/json version for serialized metadata compatibility.
+unset(SALMON_JSON_OK CACHE)
+set(_SALMON_PREV_REQUIRED_INCLUDES "${CMAKE_REQUIRED_INCLUDES}")
+set(CMAKE_REQUIRED_INCLUDES
+    "${SALMON_PUFFERFISH_SOURCE_DIR}/include;${GAT_SOURCE_DIR}/include")
+check_cxx_source_compiles(
+  "
+  #include <salmon/vendor/json.hpp>
+  #if !defined(NLOHMANN_JSON_VERSION_MAJOR) || !defined(NLOHMANN_JSON_VERSION_MINOR)
+  #error nlohmann/json version macros missing
+  #endif
+  #if (NLOHMANN_JSON_VERSION_MAJOR < 3) || ((NLOHMANN_JSON_VERSION_MAJOR == 3) && (NLOHMANN_JSON_VERSION_MINOR < 11))
+  #error nlohmann/json too old
+  #endif
+  int main() { return 0; }
+  "
+  SALMON_JSON_OK)
+set(CMAKE_REQUIRED_INCLUDES "${_SALMON_PREV_REQUIRED_INCLUDES}")
+unset(_SALMON_PREV_REQUIRED_INCLUDES)
+if(NOT SALMON_JSON_OK)
+  message(FATAL_ERROR "Active nlohmann/json headers do not satisfy required minimum version (>=3.11).")
 endif()
