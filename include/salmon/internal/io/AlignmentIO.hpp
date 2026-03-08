@@ -39,6 +39,7 @@ struct AlignmentFileHandle {
 
 AlignmentHeader* wrapHeader(sam_hdr_t* raw);
 void destroyHeader(AlignmentHeader* header);
+const char* alignmentHeaderText(const AlignmentHeader* header);
 
 } // namespace salmon::io
 
@@ -107,29 +108,11 @@ inline AlignmentHeader* getAlignmentHeader(AlignmentFileHandle* file) {
   return (file == nullptr) ? nullptr : file->header;
 }
 
-inline int setAlignmentThreads(AlignmentFileHandle* file, int threads) {
-  if (file == nullptr || file->raw == nullptr) {
-    return -1;
-  }
-  return hts_set_threads(file->raw, threads);
-}
+int setAlignmentThreads(AlignmentFileHandle* file, int threads);
 
-inline int readAlignmentRecord(AlignmentFileHandle* file, bam_seq_t** read) {
-  if (file == nullptr || file->raw == nullptr || file->header == nullptr) {
-    return -1;
-  }
-  if (*read == nullptr) {
-    *read = bam_init1();
-  }
-  return sam_read1(file->raw, file->header->raw, *read);
-}
+int readAlignmentRecord(AlignmentFileHandle* file, bam_seq_t** read);
 
-inline int writeAlignmentRecord(AlignmentFileHandle* file, bam_seq_t* read) {
-  if (file == nullptr || file->raw == nullptr || file->header == nullptr) {
-    return -1;
-  }
-  return (sam_write1(file->raw, file->header->raw, read) >= 0) ? 0 : -1;
-}
+int writeAlignmentRecord(AlignmentFileHandle* file, bam_seq_t* read);
 
 inline void setAlignmentHeader(AlignmentFileHandle* file, AlignmentHeader* header) {
   if (file != nullptr) {
@@ -137,12 +120,7 @@ inline void setAlignmentHeader(AlignmentFileHandle* file, AlignmentHeader* heade
   }
 }
 
-inline int writeAlignmentHeader(AlignmentFileHandle* file) {
-  if (file == nullptr || file->raw == nullptr || file->header == nullptr) {
-    return -1;
-  }
-  return sam_hdr_write(file->raw, file->header->raw);
-}
+int writeAlignmentHeader(AlignmentFileHandle* file);
 
 inline void alignmentHeaderIncrRef(AlignmentHeader* header) {
   if (header != nullptr) {
