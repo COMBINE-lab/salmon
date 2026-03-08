@@ -1355,8 +1355,8 @@ void processReads(
         }
 
         if (writeQuasimappings) {
-          auto compatRp = salmon::io::fastx::toCompatReadPair(rp);
-          writeAlignmentsToStream(compatRp, formatter, jointAlignments, sstream,
+          auto rpView = salmon::io::fastx::toReadPairView(rp);
+          writeAlignmentsToStream(rpView, formatter, jointAlignments, sstream,
                                   true, // write orphans
                                   true  // transcript ID's already decoded
                                         // (taking care of short refs)
@@ -1514,15 +1514,15 @@ void processReads(
         const char RESET_COLOR[] = "\x1b[0m";
         const char green[] = "\x1b[32m";
         const char red[] = "\x1b[31m";
-        if (initialRound) {
-          fmt::print(stderr, "\033[A\r\r{}processed{} {}fragments{}\n",
-                     green, red, observedFragments, green, RESET_COLOR);
-          fmt::print(stderr, "hits: {}, hits per frag:  {}", observedHits,
-                     observedHits / static_cast<float>(prevObservedFrags));
-        } else {
-          fmt::print(stderr, "\r\r{}processed{} {}fragments{}", green, red,
-                     observedFragments, green, RESET_COLOR);
-        }
+        (void)initialRound;
+        fmt::print(stderr,
+                   "\r\x1b[2K{}processed{} {} fragments{}\n"
+                   "\x1b[2Khits: {}, hits per frag:  {:.6g}\x1b[1A\r",
+                   green, red,
+                   salmon::fmtcompat::group_digits(observedFragments),
+                   green, RESET_COLOR,
+                   salmon::fmtcompat::group_digits(observedHits),
+                   observedHits / static_cast<double>(prevObservedFrags));
         iomutex.unlock();
       }
 
@@ -1892,8 +1892,8 @@ void processReads(
       }
 
       if (writeQuasimappings) {
-        auto compatRp = salmon::io::fastx::toCompatReadSeq(rp);
-        writeAlignmentsToStreamSingle(compatRp, formatter, jointAlignments, sstream,
+        auto& rsView = salmon::io::fastx::toReadSeqView(rp);
+        writeAlignmentsToStreamSingle(rsView, formatter, jointAlignments, sstream,
                                       false, true);
       }
 
@@ -1980,15 +1980,15 @@ void processReads(
         const char RESET_COLOR[] = "\x1b[0m";
         const char green[] = "\x1b[32m";
         const char red[] = "\x1b[31m";
-        if (initialRound) {
-          fmt::print(stderr, "\033[A\r\r{}processed{} {}fragments{}\n",
-                     green, red, observedFragments, green, RESET_COLOR);
-          fmt::print(stderr, "hits: {}; hits per frag:  {}", observedHits,
-                     observedHits / static_cast<float>(prevObservedFrags));
-        } else {
-          fmt::print(stderr, "\r\r{}processed{} {}fragments{}", green, red,
-                     observedFragments, green, RESET_COLOR);
-        }
+        (void)initialRound;
+        fmt::print(stderr,
+                   "\r\x1b[2K{}processed{} {} fragments{}\n"
+                   "\x1b[2Khits: {}, hits per frag:  {:.6g}\x1b[1A\r",
+                   green, red,
+                   salmon::fmtcompat::group_digits(observedFragments),
+                   green, RESET_COLOR,
+                   salmon::fmtcompat::group_digits(observedHits),
+                   observedHits / static_cast<double>(prevObservedFrags));
         iomutex.unlock();
       }
 
@@ -2404,19 +2404,21 @@ void quantifyLibrary(ReadExperimentT& experiment, SalmonOpts& salmonOpts,
   if (salmonOpts.validateMappings) {
     salmonOpts.jointLog->info(
         "Number of mappings discarded because of alignment score : {}",
-        mstats.numMappingsFiltered.load());
+        salmon::fmtcompat::group_digits(mstats.numMappingsFiltered.load()));
     salmonOpts.jointLog->info("Number of fragments entirely discarded because "
                               "of alignment score : {}",
-                              mstats.numFragmentsFiltered.load());
+                              salmon::fmtcompat::group_digits(
+                                  mstats.numFragmentsFiltered.load()));
     salmonOpts.jointLog->info("Number of fragments discarded because they are "
                               "best-mapped to decoys : {}",
-                              mstats.numDecoyFragments.load());
+                              salmon::fmtcompat::group_digits(
+                                  mstats.numDecoyFragments.load()));
   }
   if (!salmonOpts.allowDovetail) {
     salmonOpts.jointLog->info(
         "Number of fragments discarded because they have only dovetail "
         "(discordant) mappings to valid targets : {}",
-        mstats.numDovetails.load());
+        salmon::fmtcompat::group_digits(mstats.numDovetails.load()));
   }
 
   // If we didn't achieve burnin, then at least compute effective
@@ -2449,7 +2451,7 @@ void quantifyLibrary(ReadExperimentT& experiment, SalmonOpts& salmonOpts,
     experiment.setEffectiveMappingRate(mappingRate);
   }
 
-  jointLog->info("Mapping rate = {}\%\n",
+  jointLog->info("Mapping rate = {:.4f}%",
                  experiment.effectiveMappingRate() * 100.0);
   jointLog->info("finished quantifyLibrary()");
 

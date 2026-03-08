@@ -3,6 +3,7 @@
 
 #include <sstream>
 #include <string>
+#include <type_traits>
 
 namespace fmt {
 
@@ -35,5 +36,29 @@ private:
 };
 
 } // namespace fmt
+
+namespace salmon::fmtcompat {
+
+template <typename Int,
+          typename = std::enable_if_t<std::is_integral_v<Int>>>
+inline std::string group_digits(Int value) {
+  using UnsignedInt = std::make_unsigned_t<Int>;
+  const bool negative = std::is_signed_v<Int> && (value < 0);
+  const UnsignedInt magnitude = negative
+                                    ? static_cast<UnsignedInt>(-(value + 1)) + 1
+                                    : static_cast<UnsignedInt>(value);
+
+  std::string raw = std::to_string(magnitude);
+  for (std::ptrdiff_t i = static_cast<std::ptrdiff_t>(raw.size()) - 3; i > 0; i -= 3) {
+    raw.insert(static_cast<std::size_t>(i), ",");
+  }
+
+  if (negative) {
+    raw.insert(raw.begin(), '-');
+  }
+  return raw;
+}
+
+} // namespace salmon::fmtcompat
 
 #endif

@@ -1077,11 +1077,12 @@ bool quantifyLibrary(AlignmentLibraryT<FragT, AlignModelT>& alnLib,
         }
 
         if ((numProc % 1000000 == 0) or !alignmentGroupsRemain) {
-          fmt::print(stderr, "\r\r{}processed{} {} {}reads in current round{}",
-                     ioutils::SET_GREEN, ioutils::SET_RED, numProc,
+          fmt::print(stderr, "\r\r{}processed{} {} reads in current round{}",
+                     ioutils::SET_GREEN, ioutils::SET_RED,
+                     salmon::fmtcompat::group_digits(numProc),
                      ioutils::SET_GREEN, ioutils::RESET_COLOR);
-          fileLog->info("quantification processed {} fragments so far\n",
-                        numProc);
+          fileLog->info("quantification processed {} fragments so far",
+                        salmon::fmtcompat::group_digits(numProc));
         }
 
         ++numProc;

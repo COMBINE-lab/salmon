@@ -11,6 +11,7 @@
 #include <spdlog/spdlog.h>
 #include "nonstd/optional.hpp"
 
+#include "salmon/internal/util/FmtCompat.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/TranscriptGroup.hpp"
 #include "salmon/vendor/concurrentqueue.h"
@@ -154,9 +155,10 @@ public:
     }
 
     logger_->info("Computed {} rich equivalence classes "
-                  "for further processing", countMap_.size());
+                  "for further processing",
+                  salmon::fmtcompat::group_digits(countMap_.size()));
     logger_->info("Counted {} total reads in the equivalence classes ",
-                  totalCount);
+                  salmon::fmtcompat::group_digits(totalCount));
     return true;
   }
 
@@ -172,9 +174,9 @@ public:
 
     logger_->info("Computed {} rich equivalence classes "
                   "for further processing",
-                  countVec_.size());
+                  salmon::fmtcompat::group_digits(countVec_.size()));
     logger_->info("Counted {} total reads in the equivalence classes ",
-                  totalCount);
+                  salmon::fmtcompat::group_digits(totalCount));
     return true;
   }
 
