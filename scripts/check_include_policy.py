@@ -15,10 +15,15 @@ SCAN_DIRS = [
     REPO_ROOT / "include" / "salmon" / "internal",
 ]
 
-# Top-level vendor headers that should no longer be included directly.
-# Shared provider headers (concurrentqueue/edlib/kseq/xxhash) are intentionally
-# excluded for now because they are coordinated with pufferfish.
+# Top-level vendor/provider headers that should no longer be included directly.
+# Implementation code must include salmon/vendor/* wrappers so provider
+# ownership and update policy are centralized.
 FORBIDDEN_TOPLEVEL_VENDOR_HEADERS = {
+    "concurrentqueue.h",
+    "edlib.h",
+    "kseq++.hpp",
+    "kseq.h",
+    "xxhash.h",
     "atomicops.h",
     "blockingconcurrentqueue.h",
     "bucket_container.hh",
