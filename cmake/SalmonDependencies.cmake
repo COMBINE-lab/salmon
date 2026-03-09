@@ -260,12 +260,43 @@ if(SALMON_ENABLE_TESTS)
   endif()
 endif()
 
-find_package(TBB 2021.4 REQUIRED COMPONENTS tbb)
-if(TBB_VERSION VERSION_LESS 2021.4)
-  message(FATAL_ERROR "Found TBB version ${TBB_VERSION}, but Salmon requires >= 2021.4.")
+set(FETCHED_TBB FALSE)
+if(SALMON_USE_SYSTEM_DEPS)
+  # Prefer package config mode to avoid brittle module-mode discovery.
+  find_package(TBB 2021.4 QUIET CONFIG COMPONENTS tbb)
+  if(NOT TBB_FOUND)
+    find_package(TBB 2021.4 QUIET COMPONENTS tbb)
+  endif()
 endif()
-get_target_property(TBB_INCLUDE_DIRS TBB::tbb INTERFACE_INCLUDE_DIRECTORIES)
-message(STATUS "Found suitable TBB version: ${TBB_VERSION}")
+
+if(TBB_FOUND AND TARGET TBB::tbb)
+  if(TBB_VERSION VERSION_LESS 2021.4)
+    message(FATAL_ERROR "Found TBB version ${TBB_VERSION}, but Salmon requires >= 2021.4.")
+  endif()
+  get_target_property(TBB_INCLUDE_DIRS TBB::tbb INTERFACE_INCLUDE_DIRECTORIES)
+  message(STATUS "Found suitable TBB version: ${TBB_VERSION}")
+elseif(SALMON_FETCH_MISSING_DEPS)
+  message(STATUS "TBB >= 2021.4 not found; fetching pinned oneTBB release")
+  set(TBB_TEST OFF CACHE BOOL "" FORCE)
+  set(TBB_STRICT OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(salmon_tbb
+    GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
+    GIT_TAG v2021.13.0
+    GIT_SHALLOW FALSE
+  )
+  FetchContent_MakeAvailable(salmon_tbb)
+  if(TARGET tbb AND NOT TARGET TBB::tbb)
+    add_library(TBB::tbb ALIAS tbb)
+  endif()
+  if(NOT TARGET TBB::tbb)
+    message(FATAL_ERROR "Fetched oneTBB but TBB::tbb target is unavailable.")
+  endif()
+  set(FETCHED_TBB TRUE)
+  get_target_property(TBB_INCLUDE_DIRS TBB::tbb INTERFACE_INCLUDE_DIRECTORIES)
+  message(STATUS "Using fetched oneTBB target")
+else()
+  message(FATAL_ERROR "TBB >= 2021.4 is required. Install oneTBB or enable SALMON_FETCH_MISSING_DEPS.")
+endif()
 
 
 set(PUFFERFISH_EMBEDDED ON CACHE BOOL "" FORCE)
