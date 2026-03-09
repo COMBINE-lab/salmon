@@ -366,12 +366,17 @@ target_link_libraries(salmon_common_link_deps INTERFACE
 )
 
 # GNU ld with static archives can fail to resolve some intra-/inter-archive
-# symbols in a single pass for fetched fallback dependencies. Repeat critical
-# static libs on Linux toolchains to force a second resolution pass.
+# symbols in a single pass for fetched fallback dependencies. Group critical
+# archives on Linux so the linker rescans them until symbols resolve.
 if(UNIX AND NOT APPLE)
-  target_link_libraries(salmon_common_link_deps INTERFACE
+  set(_salmon_rescan_libs
     gff
     ${Boost_LIBRARIES}
+    ${HTSLIB_LIBRARIES}
+    pufferfish::puffer
+  )
+  target_link_libraries(salmon_common_link_deps INTERFACE
+    "$<LINK_GROUP:RESCAN,${_salmon_rescan_libs}>"
   )
 endif()
 
