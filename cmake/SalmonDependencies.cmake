@@ -298,6 +298,18 @@ else()
   message(FATAL_ERROR "TBB >= 2021.4 is required. Install oneTBB or enable SALMON_FETCH_MISSING_DEPS.")
 endif()
 
+# Compatibility shim for pufferfish/twopaco CMake that still references a
+# legacy "libtbb" target in add_dependencies().
+if(NOT TARGET libtbb)
+  add_custom_target(libtbb)
+endif()
+if(TARGET tbb)
+  get_target_property(_salmon_tbb_imported tbb IMPORTED)
+  if(NOT _salmon_tbb_imported)
+    add_dependencies(libtbb tbb)
+  endif()
+endif()
+
 
 set(PUFFERFISH_EMBEDDED ON CACHE BOOL "" FORCE)
 set(BUILD_PUFF_FOR_SALMON ON CACHE BOOL "" FORCE)
