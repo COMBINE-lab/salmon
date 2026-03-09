@@ -366,8 +366,7 @@ target_link_libraries(salmon_common_link_deps INTERFACE
 )
 
 # GNU ld with static archives can fail to resolve some intra-/inter-archive
-# symbols in a single pass for fetched fallback dependencies. Group critical
-# archives on Linux so the linker rescans them until symbols resolve.
+# symbols in a single pass for fetched fallback dependencies.
 if(UNIX AND NOT APPLE)
   set(_salmon_rescan_libs
     gff
@@ -375,9 +374,21 @@ if(UNIX AND NOT APPLE)
     ${HTSLIB_LIBRARIES}
     pufferfish::puffer
   )
+
+  # Prefer CMake's native link-group abstraction when supported.
   target_link_libraries(salmon_common_link_deps INTERFACE
     "$<LINK_GROUP:RESCAN,${_salmon_rescan_libs}>"
   )
+
+  # Fallback for toolchains/CMake variants where LINK_GROUP does not materialize
+  # in the final link command: inject explicit GNU ld group markers.
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_link_libraries(salmon_common_link_deps INTERFACE
+      -Wl,--start-group
+      ${_salmon_rescan_libs}
+      -Wl,--end-group
+    )
+  endif()
 endif()
 
 # Link the executable
