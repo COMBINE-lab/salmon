@@ -365,6 +365,16 @@ target_link_libraries(salmon_common_link_deps INTERFACE
     ${CMAKE_DL_LIBS}
 )
 
+# GNU ld with static archives can fail to resolve some intra-/inter-archive
+# symbols in a single pass for fetched fallback dependencies. Repeat critical
+# static libs on Linux toolchains to force a second resolution pass.
+if(UNIX AND NOT APPLE)
+  target_link_libraries(salmon_common_link_deps INTERFACE
+    gff
+    ${Boost_LIBRARIES}
+  )
+endif()
+
 # Link the executable
 target_link_libraries(salmon
     PRIVATE
