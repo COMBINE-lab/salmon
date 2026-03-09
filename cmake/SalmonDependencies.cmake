@@ -401,8 +401,8 @@ elseif(SALMON_FETCH_MISSING_DEPS)
   set(_salmon_htslib_ldflags "-L${_salmon_zlib_link_dir}")
   externalproject_add(libhtslib
     PREFIX ${CMAKE_BINARY_DIR}/_deps/libhtslib
-    URL https://github.com/samtools/htslib/releases/download/1.22/htslib-1.22.tar.bz2
-    URL_HASH SHA256=6250c1df297db477516e60ac8df45ed75a652d1f25b0f37f12f5b17269eafde9
+    URL https://github.com/samtools/htslib/releases/download/1.23/htslib-1.23.tar.bz2
+    URL_HASH SHA256=63927199ef9cea03096345b95d96cb600ae10385248b2ef670b0496c2ab7e4cd
     SOURCE_SUBDIR .
     INSTALL_DIR ${SALMON_DEPS_INSTALL_PREFIX}
     BUILD_IN_SOURCE TRUE
