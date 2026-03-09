@@ -438,6 +438,10 @@ if (${FETCHED_HTSLIB})
   salmon_add_external_dependency(libhtslib)
 endif()
 
+if (${FETCHED_BOOST})
+  salmon_add_external_dependency(libboost)
+endif()
+
 IF(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
   SET(CMAKE_INSTALL_PREFIX
     "${GAT_SOURCE_DIR}" CACHE PATH "Default install prefix" FORCE

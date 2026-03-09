@@ -40,11 +40,27 @@ if(DEFINED CUSTOM_BOOST_PATH)
   list(PREPEND CMAKE_PREFIX_PATH "${CUSTOM_BOOST_PATH}")
 endif()
 
-if(USE_SHARED_LIBS)
-  set(Boost_USE_STATIC_LIBS OFF)
-else()
-  set(Boost_USE_STATIC_LIBS ON)
+if(DEFINED USE_SHARED_LIBS)
+  message(DEPRECATION "USE_SHARED_LIBS is deprecated; use SALMON_BOOST_USE_STATIC_LIBS instead.")
 endif()
+
+if(NOT DEFINED SALMON_BOOST_USE_STATIC_LIBS)
+  if(DEFINED USE_SHARED_LIBS)
+    if(USE_SHARED_LIBS)
+      set(_salmon_boost_static_default OFF)
+    else()
+      set(_salmon_boost_static_default ON)
+    endif()
+  else()
+    # Prefer static Boost by default.
+    set(_salmon_boost_static_default ON)
+  endif()
+  set(SALMON_BOOST_USE_STATIC_LIBS
+      ${_salmon_boost_static_default}
+      CACHE BOOL "Prefer static Boost component libraries")
+endif()
+set(Boost_USE_STATIC_LIBS ${SALMON_BOOST_USE_STATIC_LIBS})
+set(FETCHED_BOOST FALSE)
 
 set(Boost_USE_MULTITHREADED ON)
 set(Boost_USE_DEBUG_RUNTIME OFF)
@@ -156,9 +172,41 @@ else()
   message(STATUS "Found libbz2 library: ${BZIP2_LIBRARIES}")
 endif()
 
-find_package(Boost 1.59.0 REQUIRED COMPONENTS system filesystem timer chrono program_options)
-message(STATUS "Boost include dirs: ${Boost_INCLUDE_DIRS}")
-message(STATUS "Boost libraries: ${Boost_LIBRARIES}")
+set(_salmon_boost_components system filesystem timer chrono program_options)
+if(SALMON_USE_SYSTEM_DEPS)
+  find_package(Boost 1.59.0 QUIET COMPONENTS ${_salmon_boost_components})
+endif()
+if(Boost_FOUND)
+  message(STATUS "Boost include dirs: ${Boost_INCLUDE_DIRS}")
+  message(STATUS "Boost libraries: ${Boost_LIBRARIES}")
+elseif(SALMON_FETCH_MISSING_DEPS)
+  message(STATUS "Static Boost components not found; fetching pinned Boost release")
+  set(_salmon_boost_prefix "${SALMON_DEPS_INSTALL_PREFIX}")
+  set(_salmon_boost_url "https://archives.boost.io/release/1.84.0/source/boost_1_84_0.tar.bz2")
+  set(_salmon_boost_libs "system,filesystem,timer,chrono,program_options,atomic")
+  externalproject_add(libboost
+    PREFIX ${CMAKE_BINARY_DIR}/_deps/libboost
+    URL ${_salmon_boost_url}
+    SOURCE_SUBDIR .
+    INSTALL_DIR ${_salmon_boost_prefix}
+    BUILD_IN_SOURCE TRUE
+    CONFIGURE_COMMAND ./bootstrap.sh --prefix=<INSTALL_DIR> --with-libraries=${_salmon_boost_libs}
+    BUILD_COMMAND ./b2 install --prefix=<INSTALL_DIR> --layout=system link=static threading=multi runtime-link=shared variant=release cxxstd=17
+    INSTALL_COMMAND ""
+  )
+  set(FETCHED_BOOST TRUE)
+  set(Boost_INCLUDE_DIRS "${_salmon_boost_prefix}/include")
+  set(Boost_LIBRARIES
+      "${_salmon_boost_prefix}/lib/libboost_system.a"
+      "${_salmon_boost_prefix}/lib/libboost_filesystem.a"
+      "${_salmon_boost_prefix}/lib/libboost_timer.a"
+      "${_salmon_boost_prefix}/lib/libboost_chrono.a"
+      "${_salmon_boost_prefix}/lib/libboost_program_options.a"
+      "${_salmon_boost_prefix}/lib/libboost_atomic.a")
+  message(STATUS "Using fetched static Boost from ${_salmon_boost_prefix}")
+else()
+  message(FATAL_ERROR "Boost (static=${SALMON_BOOST_USE_STATIC_LIBS}) is required. Install static Boost components or enable SALMON_FETCH_MISSING_DEPS.")
+endif()
 
 if(SALMON_USE_SYSTEM_DEPS)
   find_package(cereal "1.3.2" QUIET)
