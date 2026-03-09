@@ -401,7 +401,7 @@ elseif(SALMON_FETCH_MISSING_DEPS)
     SOURCE_SUBDIR .
     INSTALL_DIR ${SALMON_DEPS_INSTALL_PREFIX}
     BUILD_IN_SOURCE TRUE
-    CONFIGURE_COMMAND ./configure --prefix=<INSTALL_DIR> --disable-libcurl --disable-ref-cache CPPFLAGS=${_salmon_htslib_cppflags} LDFLAGS=${_salmon_htslib_ldflags} CC=${CMAKE_C_COMPILER}
+    CONFIGURE_COMMAND ./configure --prefix=<INSTALL_DIR> --disable-libcurl --disable-ref-cache --disable-shared --enable-static CPPFLAGS=${_salmon_htslib_cppflags} LDFLAGS=${_salmon_htslib_ldflags} CC=${CMAKE_C_COMPILER}
     BUILD_COMMAND make
     INSTALL_COMMAND make install
   )
