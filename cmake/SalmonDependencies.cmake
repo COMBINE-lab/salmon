@@ -12,7 +12,7 @@ set(SALMON_PUFFERFISH_GIT_REPOSITORY
     "https://github.com/COMBINE-lab/pufferfish.git"
     CACHE STRING "Git repository used when fetching pufferfish")
 set(SALMON_PUFFERFISH_GIT_TAG
-    "1e44f03357384b4b2da13e6a46a433744fcac4da"
+    "c5007eb02c22e4c783d778f3370dcd33ecb0df25"
     CACHE STRING "Immutable git commit used when fetching pufferfish")
 set(SALMON_PUFFERFISH_SOURCE_DIR
     ""
@@ -296,18 +296,6 @@ elseif(SALMON_FETCH_MISSING_DEPS)
   message(STATUS "Using fetched oneTBB target")
 else()
   message(FATAL_ERROR "TBB >= 2021.4 is required. Install oneTBB or enable SALMON_FETCH_MISSING_DEPS.")
-endif()
-
-# Compatibility shim for pufferfish/twopaco CMake that still references a
-# legacy "libtbb" target in add_dependencies().
-if(NOT TARGET libtbb)
-  add_custom_target(libtbb)
-endif()
-if(TARGET tbb)
-  get_target_property(_salmon_tbb_imported tbb IMPORTED)
-  if(NOT _salmon_tbb_imported)
-    add_dependencies(libtbb tbb)
-  endif()
 endif()
 
 
