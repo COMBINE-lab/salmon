@@ -13,7 +13,6 @@
 
 #include "ProgOpts.hpp"
 #include "PufferfishIndex.hpp"
-#include "PufferfishSparseIndex.hpp"
 
 #include "salmon/internal/util/FmtCompat.hpp"
 #include "salmon/internal/util/SalmonUtils.hpp"
@@ -85,12 +84,10 @@ public:
   }
 
   bool loaded() const { return loaded_; }
-  bool isSparse() const { return sparse_; }
   bool is64BitQuasi() const { return largeQuasi_; }
   bool isPerfectHashQuasi() const { return perfectHashQuasi_; }
 
   PufferfishIndex* puffIndex() { return pfi_.get(); }
-  PufferfishSparseIndex* puffSparseIndex() { return pfi_sparse_.get(); }
 
   SalmonIndexType indexType() { return versionInfo_.indexType(); }
 
@@ -200,15 +197,8 @@ private:
 
       // Is the quasi-index using a perfect hash
       // perfectHashQuasi_ = h.perfectHash();
-      sparse_ = (sampling_type_ == "sparse");
-
-      if (sparse_) {
-        logger_->info("Loading sparse pufferfish index.");
-        pfi_sparse_.reset(new PufferfishSparseIndex(indexStr));
-      } else {
-        logger_->info("Loading dense pufferfish index.");
-        pfi_.reset(new PufferfishIndex(indexStr));
-      }
+      logger_->info("Loading pufferfish index.");
+      pfi_.reset(new PufferfishIndex(indexStr));
     }
     logger_->info("done");
     return true;
@@ -234,9 +224,7 @@ private:
   bool perfectHashQuasi_{false};
 
   salmon::utils::DuplicateTargetStatus keep_duplicates_{salmon::utils::DuplicateTargetStatus::UNKNOWN};
-  bool sparse_{false};
   std::unique_ptr<PufferfishIndex> pfi_{nullptr};
-  std::unique_ptr<PufferfishSparseIndex> pfi_sparse_{nullptr};
 
   std::shared_ptr<spdlog::logger> logger_;
   std::string seqHash256_;

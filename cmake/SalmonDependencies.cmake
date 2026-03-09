@@ -12,7 +12,7 @@ set(SALMON_PUFFERFISH_GIT_REPOSITORY
     "https://github.com/COMBINE-lab/pufferfish.git"
     CACHE STRING "Git repository used when fetching pufferfish")
 set(SALMON_PUFFERFISH_GIT_TAG
-    "940cfc648d4ad7ab94237a8c3d5b8c99a852e30f"
+    "cd84b05126ac54836773772077bc2687b5c34f55"
     CACHE STRING "Immutable git commit used when fetching pufferfish")
 set(SALMON_PUFFERFISH_SOURCE_DIR
     ""
@@ -329,6 +329,7 @@ else()
     GIT_REPOSITORY ${SALMON_PUFFERFISH_GIT_REPOSITORY}
     GIT_TAG ${SALMON_PUFFERFISH_GIT_TAG}
     GIT_SHALLOW FALSE
+    GIT_SUBMODULES_RECURSE TRUE
   )
 endif()
 FetchContent_MakeAvailable(salmon_pufferfish)

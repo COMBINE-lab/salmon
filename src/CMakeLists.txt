@@ -77,7 +77,6 @@ util/TemplateInstantiations.cpp
 set (SALMON_SUPPORT_SRCS
 ${GAT_SOURCE_DIR}/src/jellyfish/mer_dna.cc
 backtrace.cc
-xxhash.c
 edlib.cpp
 model/GenomicFeature.cpp
 )
@@ -144,6 +143,16 @@ target_include_directories(salmon_repo_headers INTERFACE
 add_library(salmon_pufferfish_preferred_headers INTERFACE)
 target_include_directories(salmon_pufferfish_preferred_headers INTERFACE
   ${SALMON_PUFFERFISH_SOURCE_DIR}/include
+  # ContigTable.hpp includes elias_fano.hpp and essentials.hpp from SSHash's bits library
+  ${SALMON_PUFFERFISH_SOURCE_DIR}/external/sshash/external/pthash/external/bits/include
+  ${SALMON_PUFFERFISH_SOURCE_DIR}/external/sshash/external/pthash/external/bits/external/essentials/include
+  # PufferfishIndex.hpp includes dictionary_types.hpp and streaming_query.hpp from SSHash
+  ${SALMON_PUFFERFISH_SOURCE_DIR}/external/sshash/include
+  ${SALMON_PUFFERFISH_SOURCE_DIR}/external/sshash
+  ${SALMON_PUFFERFISH_SOURCE_DIR}/external/sshash/external/pthash/include
+  ${SALMON_PUFFERFISH_SOURCE_DIR}/external/sshash/external/pthash/external/fastmod
+  ${SALMON_PUFFERFISH_SOURCE_DIR}/external/sshash/external/pthash/external/mm_file/include
+  ${SALMON_PUFFERFISH_SOURCE_DIR}/external/sshash/external/pthash/external/xxHash
 )
 
 add_library(salmon_fqfeeder_headers INTERFACE)
@@ -368,7 +377,7 @@ endif()
 # Some pufferfish static dependencies are not always propagated to downstream
 # consumers under all toolchain/static-link combinations.
 set(_salmon_puffer_aux_libs)
-foreach(_puff_aux IN ITEMS ksw2pp twopaco graphdump ntcard)
+foreach(_puff_aux IN ITEMS ksw2pp twopaco graphdump ntcard sshash_static)
   if(TARGET ${_puff_aux})
     list(APPEND _salmon_puffer_aux_libs ${_puff_aux})
   endif()

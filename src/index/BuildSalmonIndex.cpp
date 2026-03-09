@@ -109,10 +109,6 @@ int salmonIndex(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& /* s
       "it will be created if need be and be removed prior to indexing completion. "
       "The default value will cause a (temporary) subdirectory of the salmon index "
       "directory to be used for this purpose.")
-    ("sparse", po::bool_switch(&idxOpt.isSparse)->default_value(false),
-      "Build the index using a sparse sampling of k-mer positions "
-      "This will require less memory (especially during quantification), but "
-      "will take longer to construct and can slow down mapping / alignment")
     ("decoys,d", po::value<string>(&idxOpt.decoy_file),
       "Treat these sequences ids from the reference as the decoys that may "
       "have sequence homologous to some known transcript. for example in "

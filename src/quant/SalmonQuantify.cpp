@@ -2457,22 +2457,13 @@ void processReadLibrary(
     throw std::invalid_argument(infostr.str());
   } break;
   case SalmonIndexType::PUFF: {
-    bool isSparse = sidx->isSparse();
     for (size_t i = 0; i < numThreads; ++i) {
       // NOTE: we *must* capture i by value here, b/c it can (sometimes, does)
       // change value before the lambda below is evaluated --- crazy!
-      if (isSparse) {
-        if (isPairedEnd) {
-          processFunctor(i, pairedParserPtr.get(), sidx->puffSparseIndex());
-        } else if (isSingleEnd) {
-          processFunctor(i, singleParserPtr.get(), sidx->puffSparseIndex());
-        }
-      } else { // dense index
-        if (isPairedEnd) {
-          processFunctor(i, pairedParserPtr.get(), sidx->puffIndex());
-        } else if (isSingleEnd) {
-          processFunctor(i, singleParserPtr.get(), sidx->puffIndex());
-        }
+      if (isPairedEnd) {
+        processFunctor(i, pairedParserPtr.get(), sidx->puffIndex());
+      } else if (isSingleEnd) {
+        processFunctor(i, singleParserPtr.get(), sidx->puffIndex());
       }
     }
   } break;

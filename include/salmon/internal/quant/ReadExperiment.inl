@@ -52,11 +52,7 @@ ReadExperiment<EQBuilderT>::ReadExperiment(
     infostr << "Error: This version of salmon does not support the FMD index mode.";
     throw std::invalid_argument(infostr.str());
   case SalmonIndexType::PUFF:
-    if (salmonIndex_->isSparse()) {
-      loadTranscriptsFromPuff(salmonIndex_->puffSparseIndex(), sopt);
-    } else {
-      loadTranscriptsFromPuff(salmonIndex_->puffIndex(), sopt);
-    }
+    loadTranscriptsFromPuff(salmonIndex_->puffIndex(), sopt);
   }
 
   salmon::utils::markAuxiliaryTargets(sopt, transcripts_);
