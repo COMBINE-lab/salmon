@@ -258,6 +258,11 @@ struct SalmonOpts {
   uint32_t numThreads;
   uint32_t numQuantThreads;
   uint32_t numParseThreads;
+  uint32_t readBatchSize{0};
+  bool adaptiveReadBatch{false};
+  uint32_t progressUpdateMs{500};
+  bool disableLiveProgress{false};
+  bool emitJoinDedupStats{false};
 
   // Related to alignment verification
   bool validateMappings;

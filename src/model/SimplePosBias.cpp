@@ -82,7 +82,7 @@ void SimplePosBias::finalize() {
 
 // Seralize this model.
 bool SimplePosBias::writeBinary(
-    boost::iostreams::filtering_ostream& out) const {
+    std::ostream& out) const {
   auto* mutThis = const_cast<SimplePosBias*>(this);
   // We shouldn't write out a non-finalized model
   if (!mutThis->isFinalized_) {

@@ -655,7 +655,22 @@ namespace salmon {
        "that must be observed before "
        "the inference procedure will terminate.")
       ("maxHashResizeThreads", po::value<uint32_t>(&(sopt.maxHashResizeThreads))->default_value(salmon::defaults::maxHashResizeThreads),
-       "Maximum number of threads to allow cuckoo hash map to use when / if it resizes");
+       "Maximum number of threads to allow cuckoo hash map to use when / if it resizes")
+      ("readBatchSize", po::value<uint32_t>(&(sopt.readBatchSize))->default_value(0),
+       "Read chunk size consumed by quant workers. 0 keeps the legacy fixed size.")
+      ("adaptiveReadBatch",
+       po::bool_switch(&(sopt.adaptiveReadBatch))->default_value(false),
+       "Enable adaptive read chunk sizing for parser->worker handoff in mapping mode.")
+      ("progressUpdateMs",
+       po::value<uint32_t>(&(sopt.progressUpdateMs))->default_value(500),
+       "Interval in milliseconds between live quant progress updates.")
+      ("disableLiveProgress",
+       po::bool_switch(&(sopt.disableLiveProgress))->default_value(false),
+       "Disable live progress rendering during quant.")
+      ("emitJoinDedupStats",
+       po::bool_switch(&(sopt.emitJoinDedupStats))
+           ->default_value(salmon::defaults::emitJoinDedupStats),
+       "Emit exact join-candidate deduplication telemetry.");
     return hidden;
   }
 

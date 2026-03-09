@@ -47,6 +47,7 @@
 #include "salmon/internal/util/SalmonUtils.hpp"
 #include "salmon/internal/model/Transcript.hpp"
 #include "salmon/internal/io/FastxReader.hpp"
+#include "salmon/vendor/unordered_dense.hpp"
 
 #include "parallel_hashmap/phmap.h"
 #include "MemChainer.hpp"
@@ -144,7 +145,7 @@ public:
   itlib::small_vector<std::pair<int32_t, int32_t>> best_decoy_hits;
   bool collect_decoy_info_;
   std::vector<int32_t> scores_;
-  phmap::flat_hash_map<uint32_t, std::pair<int32_t, int32_t>>
+  ankerl::unordered_dense::map<uint32_t, std::pair<int32_t, int32_t>>
       bestScorePerTranscript_;
   std::vector<std::pair<int32_t, int32_t>> perm_;
 };
@@ -304,29 +305,32 @@ inline void filterAndCollectAlignments(
   // If we are doing soft-filtering (default), we remove those not exceeding the
   // bestDecoyScore If we are doing hard-filtering, we remove those less than
   // the bestScore
-  perm.erase(std::remove_if(
-                 perm.begin(), perm.end(),
-                 [&scores, hardFilter, &msi, decoyThreshold](
-                     const std::pair<int32_t, int32_t>& idxtid) -> bool {
-                   return !hardFilter ? scores[idxtid.first] < decoyThreshold
-                                      : scores[idxtid.first] < msi.bestScore;
-                   // return !hardFilter ?  scores[idxtid.first] < filterScore :
-                   // scores[idxtid.first] < bestScore;
-                 }),
-             perm.end());
+  std::vector<std::pair<int32_t, int32_t>> keptPerm;
+  keptPerm.reserve(perm.size());
+  const int32_t scoreThreshold = hardFilter ? msi.bestScore : decoyThreshold;
+  for (auto const& idxtid : perm) {
+    if (scores[idxtid.first] >= scoreThreshold) {
+      keptPerm.emplace_back(idxtid);
+    }
+  }
 
-  // Unlike RapMap, pufferfish doesn't guarantee the hits computed above are in
-  // order by transcript, so we find the permutation of indices that puts things
-  // in transcript order.
-  std::sort(perm.begin(), perm.end(),
-            [](const std::pair<int32_t, int32_t>& p1,
-               const std::pair<int32_t, int32_t>& p2) {
-              return p1.second < p2.second;
-            });
+  // Unlike RapMap, pufferfish doesn't guarantee hits are in transcript order.
+  if (keptPerm.size() > 1 &&
+      !std::is_sorted(keptPerm.begin(), keptPerm.end(),
+                      [](const std::pair<int32_t, int32_t>& p1,
+                         const std::pair<int32_t, int32_t>& p2) {
+                        return p1.second < p2.second;
+                      })) {
+    std::sort(keptPerm.begin(), keptPerm.end(),
+              [](const std::pair<int32_t, int32_t>& p1,
+                 const std::pair<int32_t, int32_t>& p2) {
+                return p1.second < p2.second;
+              });
+  }
 
   // moving our alinged / score jointMEMs over to QuasiAlignment objects
   double bestScoreD = static_cast<double>(msi.bestScore);
-  for (auto& idxTxp : perm) {
+  for (auto& idxTxp : keptPerm) {
     int32_t ctr = idxTxp.first;
     int32_t tid = idxTxp.second;
     auto& jointHit = jointHits[ctr];

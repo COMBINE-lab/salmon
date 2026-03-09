@@ -23,13 +23,13 @@ GZipWriter::GZipWriter(const boost::filesystem::path path,
 
 GZipWriter::~GZipWriter() {
   if (bsStream_) {
-    bsStream_->reset();
+    bsStream_.reset();
   }
 }
 
 void GZipWriter::close_all_streams(){
   if (bsStream_) {
-    bsStream_->reset();
+    bsStream_.reset();
   }
 }
 
@@ -42,19 +42,15 @@ bool writeVectorToFile(boost::filesystem::path path,
                        const std::vector<T>& vec) {
 
   {
-    bool binary = std::is_same<T, std::string>::value;
     auto flags = std::ios_base::out | std::ios_base::binary;
-
-    boost::iostreams::filtering_ostream out;
-    out.push(boost::iostreams::gzip_compressor(6));
-    out.push(boost::iostreams::file_sink(path.string(), flags));
+    zstr::ofstream out(path.string(), flags, 6);
 
     size_t num = vec.size();
     size_t elemSize = sizeof(typename std::vector<T>::value_type);
     // We have to get rid of constness below, but this should be OK
     out.write(reinterpret_cast<char*>(const_cast<T*>(vec.data())),
               num * elemSize);
-    out.reset();
+    out.flush();
   }
   return true;
 }
@@ -310,12 +306,8 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
     bsPath_ = auxDir / "bootstrap";
     bool bsSuccess = boost::filesystem::create_directories(bsPath_);
     {
-
-      boost::iostreams::filtering_ostream nameOut;
-      nameOut.push(boost::iostreams::gzip_compressor(6));
       auto bsFilename = bsPath_ / "names.tsv.gz";
-      nameOut.push(
-          boost::iostreams::file_sink(bsFilename.string(), std::ios_base::out));
+      zstr::ofstream nameOut(bsFilename.string(), std::ios_base::out, 6);
 
       auto& transcripts = experiment.transcripts();
       size_t numTxps = transcripts.size();
@@ -330,7 +322,7 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
         }
       }
       nameOut << '\n';
-      nameOut.reset();
+      nameOut.flush();
     }
   }
 
@@ -363,46 +355,42 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
     {
       bfs::path obs5Path = auxDir / "obs5_seq.gz";
       auto flags = std::ios_base::out | std::ios_base::binary;
-      boost::iostreams::filtering_ostream out;
-      out.push(boost::iostreams::gzip_compressor(6));
-      out.push(boost::iostreams::file_sink(obs5Path.string(), flags));
+      zstr::ofstream out(obs5Path.string(), flags, 6);
       auto& obs5 =
           experiment.readBiasModelObserved(salmon::utils::Direction::FORWARD);
       obs5.writeBinary(out);
+      out.flush();
     }
     // 3' observed
     {
       bfs::path obs3Path = auxDir / "obs3_seq.gz";
       auto flags = std::ios_base::out | std::ios_base::binary;
-      boost::iostreams::filtering_ostream out;
-      out.push(boost::iostreams::gzip_compressor(6));
-      out.push(boost::iostreams::file_sink(obs3Path.string(), flags));
+      zstr::ofstream out(obs3Path.string(), flags, 6);
       auto& obs3 = experiment.readBiasModelObserved(
           salmon::utils::Direction::REVERSE_COMPLEMENT);
       obs3.writeBinary(out);
+      out.flush();
     }
 
     // 5' expected
     {
       bfs::path exp5Path = auxDir / "exp5_seq.gz";
       auto flags = std::ios_base::out | std::ios_base::binary;
-      boost::iostreams::filtering_ostream out;
-      out.push(boost::iostreams::gzip_compressor(6));
-      out.push(boost::iostreams::file_sink(exp5Path.string(), flags));
+      zstr::ofstream out(exp5Path.string(), flags, 6);
       auto& exp5 =
           experiment.readBiasModelExpected(salmon::utils::Direction::FORWARD);
       exp5.writeBinary(out);
+      out.flush();
     }
     // 3' expected
     {
       bfs::path exp3Path = auxDir / "exp3_seq.gz";
       auto flags = std::ios_base::out | std::ios_base::binary;
-      boost::iostreams::filtering_ostream out;
-      out.push(boost::iostreams::gzip_compressor(6));
-      out.push(boost::iostreams::file_sink(exp3Path.string(), flags));
+      zstr::ofstream out(exp3Path.string(), flags, 6);
       auto& exp3 = experiment.readBiasModelExpected(
           salmon::utils::Direction::REVERSE_COMPLEMENT);
       exp3.writeBinary(out);
+      out.flush();
     }
   }
 
@@ -411,21 +399,19 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
     {
       bfs::path obsGCPath = auxDir / "obs_gc.gz";
       auto flags = std::ios_base::out | std::ios_base::binary;
-      boost::iostreams::filtering_ostream out;
-      out.push(boost::iostreams::gzip_compressor(6));
-      out.push(boost::iostreams::file_sink(obsGCPath.string(), flags));
+      zstr::ofstream out(obsGCPath.string(), flags, 6);
       auto& obsgc = experiment.observedGC();
       obsgc.writeBinary(out);
+      out.flush();
     }
     // GC expected
     {
       bfs::path expGCPath = auxDir / "exp_gc.gz";
       auto flags = std::ios_base::out | std::ios_base::binary;
-      boost::iostreams::filtering_ostream out;
-      out.push(boost::iostreams::gzip_compressor(6));
-      out.push(boost::iostreams::file_sink(expGCPath.string(), flags));
+      zstr::ofstream out(expGCPath.string(), flags, 6);
       auto& expgc = experiment.expectedGCBias();
       expgc.writeBinary(out);
+      out.flush();
     }
   }
 
@@ -439,9 +425,7 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
         [&lenBounds, this](bfs::path fpath,
                            const std::vector<SimplePosBias>& model) -> bool {
       auto flags = std::ios_base::out | std::ios_base::binary;
-      boost::iostreams::filtering_ostream out;
-      out.push(boost::iostreams::gzip_compressor(6));
-      out.push(boost::iostreams::file_sink(fpath.string(), flags));
+      zstr::ofstream out(fpath.string(), flags, 6);
       // Write out the number of different models
       uint32_t numModels = static_cast<uint32_t>(lenBounds.size());
       out.write(reinterpret_cast<char*>(&numModels), sizeof(numModels));
@@ -459,6 +443,7 @@ bool GZipWriter::writeMeta(const SalmonOpts& opts, const ExpT& experiment, const
               fpath.string());
         }
       }
+      out.flush();
       return true;
     };
 
@@ -785,14 +770,12 @@ bool GZipWriter::writeBootstrap(const std::vector<T>& abund, bool quiet) {
   std::lock_guard<std::mutex> lock(writeMutex_);
 #endif
   if (!bsStream_) {
-    bsStream_.reset(new boost::iostreams::filtering_ostream);
-    bsStream_->push(boost::iostreams::gzip_compressor(6));
     auto bsFilename = bsPath_ / "bootstraps.gz";
-    bsStream_->push(boost::iostreams::file_sink(
-        bsFilename.string(), std::ios_base::out | std::ios_base::binary));
+    bsStream_ = std::make_unique<zstr::ofstream>(
+        bsFilename.string(), std::ios_base::out | std::ios_base::binary, 6);
   }
 
-  boost::iostreams::filtering_ostream& ofile = *bsStream_;
+  std::ostream& ofile = *bsStream_;
   size_t num = abund.size();
   size_t elSize = sizeof(typename std::vector<T>::value_type);
   ofile.write(reinterpret_cast<char*>(const_cast<T*>(abund.data())),

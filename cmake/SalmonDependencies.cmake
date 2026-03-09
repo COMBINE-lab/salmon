@@ -156,7 +156,7 @@ else()
   message(STATUS "Found libbz2 library: ${BZIP2_LIBRARIES}")
 endif()
 
-find_package(Boost 1.59.0 REQUIRED COMPONENTS iostreams system filesystem timer chrono program_options)
+find_package(Boost 1.59.0 REQUIRED COMPONENTS system filesystem timer chrono program_options)
 message(STATUS "Boost include dirs: ${Boost_INCLUDE_DIRS}")
 message(STATUS "Boost libraries: ${Boost_LIBRARIES}")
 

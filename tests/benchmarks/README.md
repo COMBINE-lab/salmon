@@ -30,3 +30,11 @@ Smoke harness:
 - Run through CTest via `salmon_benchmark_smoke` or the `benchmark_smoke`
   target.
 - JSON output defaults to `build/.../benchmark-smoke.json`.
+
+Fixed-duration quant window harness:
+
+- `tests/benchmarks/quant_window.py` runs `salmon quant` for a bounded time window
+  and reports the last observed `processed ... fragments` count and fragments/sec.
+- Useful for quick A/B hot-path checks during iterative optimization.
+- Example:
+  `python3 tests/benchmarks/quant_window.py --salmon ./build/codex-check/src/salmon --index /path/to/index --mates1 /path/to/read1.fq.gz --mates2 /path/to/read2.fq.gz --out-dir /tmp/quant-window --seconds 30 --threads 8`.

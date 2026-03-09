@@ -5,8 +5,6 @@
 #include "Eigen/Dense"
 #include "salmon/internal/util/SalmonMath.hpp"
 
-#include <boost/iostreams/filtering_stream.hpp>
-
 #include <iostream>
 #include <vector>
 
@@ -62,7 +60,7 @@ public:
     modelTotals_.resize(condBins_, 0.0);
   }
 
-  bool writeBinary(boost::iostreams::filtering_ostream& out) const {
+  bool writeBinary(std::ostream& out) const {
     auto* mutThis = const_cast<GCFragModel*>(this);
     int32_t dtype =
         (dspace_ == distribution_utils::DistributionSpace::LINEAR) ? 0 : 1;

@@ -394,6 +394,19 @@ if(SALMON_ENABLE_TESTS)
   add_dependencies(unitTests salmon_core)
 endif()
 
+if(APPLE)
+  find_program(SALMON_OTOOL_EXECUTABLE otool)
+  if(SALMON_OTOOL_EXECUTABLE)
+    add_custom_command(TARGET salmon POST_BUILD
+      COMMAND ${CMAKE_COMMAND}
+              -DSALMON_BIN=$<TARGET_FILE:salmon>
+              -DSALMON_OTOOL=${SALMON_OTOOL_EXECUTABLE}
+              -P ${GAT_SOURCE_DIR}/cmake/CheckNoSystemZlib.cmake
+      COMMENT "Verifying salmon does not link against /usr/lib/libz.1.dylib"
+      VERBATIM)
+  endif()
+endif()
+
 ##
 # External dependencies of salmon_core and salmon
 ##

@@ -6,10 +6,6 @@
 
 #include <spdlog/spdlog.h>
 
-#include <boost/iostreams/device/file.hpp>
-#include <boost/iostreams/filter/gzip.hpp>
-#include <boost/iostreams/filtering_stream.hpp>
-
 #include "salmon/internal/quant/ReadExperiment.hpp"
 #include "salmon/internal/config/SalmonOpts.hpp"
 #include "salmon/internal/util/SalmonSpinLock.hpp"
@@ -52,7 +48,7 @@ private:
   boost::filesystem::path path_;
   boost::filesystem::path bsPath_;
   std::shared_ptr<spdlog::logger> logger_;
-  std::unique_ptr<boost::iostreams::filtering_ostream> bsStream_{nullptr};
+  std::unique_ptr<std::ostream> bsStream_{nullptr};
 // only one writer thread at a time
 #if defined __APPLE__
   spin_lock writeMutex_;

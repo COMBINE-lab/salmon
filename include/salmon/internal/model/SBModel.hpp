@@ -1,14 +1,13 @@
 #ifndef __SB_MODEL_HPP__
 #define __SB_MODEL_HPP__
 
-#include <boost/iostreams/filtering_stream.hpp>
-
 #include "salmon/internal/util/UtilityFunctions.hpp"
 //#include "jellyfish/mer_dna.hpp"
 //#include "rapmap/Kmer.hpp"
 #include "Kmer.hpp"
 #include <Eigen/Dense>
 #include <cmath>
+#include <iosfwd>
 
 //using Mer = jellyfish::mer_dna_ns::mer_base_static<uint64_t, 4>;
 using SBMer = combinelib::kmers::Kmer<32,4>;
@@ -22,7 +21,7 @@ public:
   SBModel& operator=(const SBModel&) = default;
   SBModel& operator=(SBModel&&) = default;
 
-  bool writeBinary(boost::iostreams::filtering_ostream& out) const;
+  bool writeBinary(std::ostream& out) const;
 
   inline int32_t contextBefore(bool rc) {
     return rc ? _contextRight : _contextLeft;

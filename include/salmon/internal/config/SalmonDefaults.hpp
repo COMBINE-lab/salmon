@@ -113,6 +113,7 @@ namespace defaults {
   constexpr const bool rankEqClasses{false};
   constexpr const bool dontExtrapolateCounts{false};
   constexpr const bool disableAlignmentCache{false};
+  constexpr const bool emitJoinDedupStats{false};
 
   // alignment-based mode
   //constexpr const bool useErrorModel{true};

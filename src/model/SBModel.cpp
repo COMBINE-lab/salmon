@@ -74,7 +74,7 @@ SBModel::SBModel() : _trained(false) {
   _probs.array() += _prior_prob;
 }
 
-bool SBModel::writeBinary(boost::iostreams::filtering_ostream& out) const {
+bool SBModel::writeBinary(std::ostream& out) const {
   auto* mutThis = const_cast<SBModel*>(this);
   out.write(reinterpret_cast<char*>(&(mutThis->_contextLength)),
             sizeof(int32_t));

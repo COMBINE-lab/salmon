@@ -4,8 +4,8 @@
 #include <spdlog/spdlog.h>
 #include "salmon/vendor/spline.h"
 #include <array>
-#include <boost/iostreams/filtering_stream.hpp>
 #include <vector>
+#include <iosfwd>
 
 class SimplePosBias {
 public:
@@ -31,7 +31,7 @@ public:
   void finalize();
 
   // Seralize this model.
-  bool writeBinary(boost::iostreams::filtering_ostream& out) const;
+  bool writeBinary(std::ostream& out) const;
 
 private:
   int32_t numBins_;
