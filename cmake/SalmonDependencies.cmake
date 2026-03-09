@@ -311,7 +311,7 @@ else()
   message(FATAL_ERROR "TBB >= 2021.4 is required. Install oneTBB or enable SALMON_FETCH_MISSING_DEPS.")
 endif()
 
-if(TARGET TBB::tbbmalloc)
+if(TARGET TBB::tbbmalloc AND UNIX AND NOT APPLE)
   set(SALMON_TBB_MALLOC_LIB TBB::tbbmalloc CACHE INTERNAL "" FORCE)
 else()
   set(SALMON_TBB_MALLOC_LIB "" CACHE INTERNAL "" FORCE)
