@@ -475,6 +475,21 @@ if(APPLE)
   endif()
 endif()
 
+if(UNIX)
+  set(_salmon_enforce_static_tbb OFF)
+  if(FETCHED_TBB AND NOT APPLE)
+    set(_salmon_enforce_static_tbb ON)
+  endif()
+  add_custom_command(TARGET salmon POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+            -DSALMON_BIN=$<TARGET_FILE:salmon>
+            -DSALMON_OTOOL=${SALMON_OTOOL_EXECUTABLE}
+            -DSALMON_ENFORCE_STATIC_TBB=${_salmon_enforce_static_tbb}
+            -P ${GAT_SOURCE_DIR}/cmake/CheckTBBLinkage.cmake
+    COMMENT "Auditing TBB linkage mode for salmon"
+    VERBATIM)
+endif()
+
 ##
 # External dependencies of salmon_core and salmon
 ##
