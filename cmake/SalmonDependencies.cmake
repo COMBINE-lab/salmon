@@ -94,13 +94,17 @@ elseif(SALMON_FETCH_MISSING_DEPS)
   set(WITH_FUZZERS OFF CACHE BOOL "" FORCE)
   set(WITH_BENCHMARKS OFF CACHE BOOL "" FORCE)
   set(WITH_BENCHMARK_APPS OFF CACHE BOOL "" FORCE)
-  set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-  set(CMAKE_POSITION_INDEPENDENT_CODE ON CACHE BOOL "" FORCE)
+  set(_salmon_prev_build_shared_libs "${BUILD_SHARED_LIBS}")
+  set(_salmon_prev_pic "${CMAKE_POSITION_INDEPENDENT_CODE}")
+  set(BUILD_SHARED_LIBS OFF)
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
   FetchContent_Declare(salmon_zlibng
     URL https://github.com/zlib-ng/zlib-ng/archive/refs/tags/2.2.5.tar.gz
     URL_HASH SHA256=5b3b022489f3ced82384f06db1e13ba148cbce38c7941e424d6cb414416acd18
   )
   FetchContent_MakeAvailable(salmon_zlibng)
+  set(BUILD_SHARED_LIBS "${_salmon_prev_build_shared_libs}")
+  set(CMAKE_POSITION_INDEPENDENT_CODE "${_salmon_prev_pic}")
   salmon_pick_existing_target(SALMON_ZLIB_TARGET
     zlib
     zlibstatic
@@ -402,7 +406,7 @@ elseif(SALMON_FETCH_MISSING_DEPS)
     SOURCE_SUBDIR .
     INSTALL_DIR ${SALMON_DEPS_INSTALL_PREFIX}
     BUILD_IN_SOURCE TRUE
-    CONFIGURE_COMMAND ./configure --prefix=<INSTALL_DIR> --disable-libcurl --disable-ref-cache --disable-shared --enable-static CPPFLAGS=${_salmon_htslib_cppflags} LDFLAGS=${_salmon_htslib_ldflags} CC=${CMAKE_C_COMPILER}
+    CONFIGURE_COMMAND ./configure --prefix=<INSTALL_DIR> --disable-libcurl --disable-ref-cache CPPFLAGS=${_salmon_htslib_cppflags} LDFLAGS=${_salmon_htslib_ldflags} CC=${CMAKE_C_COMPILER}
     BUILD_COMMAND make lib-static
     INSTALL_COMMAND make install
   )
