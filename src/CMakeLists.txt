@@ -324,22 +324,35 @@ if(FAST_MALLOC_OBJECT)
     add_dependencies(salmon mimalloc-obj-target)
   endif()
 endif()
-target_link_libraries(salmon
-  PRIVATE
-    salmon_cli
-    salmon_indexing
-    salmon_quant
-    salmon_alignment
-    salmon_core
-    # Be explicit for static-link toolchains where transitive module deps from
-    # intermediate static libraries are not reliably pulled in.
-    salmon_io
-    salmon_model
-    salmon_util
-    salmon_output
-    salmon_inference
-    salmon_options
+set(_salmon_module_libs
+  salmon_cli
+  salmon_indexing
+  salmon_quant
+  salmon_alignment
+  salmon_core
+  # Be explicit for static-link toolchains where transitive module deps from
+  # intermediate static libraries are not reliably pulled in.
+  salmon_io
+  salmon_model
+  salmon_util
+  salmon_output
+  salmon_inference
+  salmon_options
 )
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND UNIX AND NOT APPLE)
+  target_link_libraries(salmon
+    PRIVATE
+      -Wl,--start-group
+      ${_salmon_module_libs}
+      -Wl,--end-group
+  )
+else()
+  target_link_libraries(salmon
+    PRIVATE
+      ${_salmon_module_libs}
+  )
+endif()
 
 if(SALMON_ENABLE_TESTS)
   add_executable(unitTests ${UNIT_TESTS_INDIVIDUAL_SRCS})
@@ -379,6 +392,7 @@ target_link_libraries(salmon_common_link_deps INTERFACE
     ${ASAN_LIB}
     ${FAST_MALLOC_LIB}
     TBB::tbb
+    ${SALMON_TBB_MALLOC_LIB}
     ${LIBRT}
     ${CMAKE_DL_LIBS}
 )
