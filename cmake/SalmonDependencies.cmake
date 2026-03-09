@@ -12,7 +12,7 @@ set(SALMON_PUFFERFISH_GIT_REPOSITORY
     "https://github.com/COMBINE-lab/pufferfish.git"
     CACHE STRING "Git repository used when fetching pufferfish")
 set(SALMON_PUFFERFISH_GIT_TAG
-    "1e44f03195f81f6e013efe6f42169bd2ee936474"
+    "1e44f03357384b4b2da13e6a46a433744fcac4da"
     CACHE STRING "Immutable git commit used when fetching pufferfish")
 set(SALMON_PUFFERFISH_SOURCE_DIR
     ""
@@ -281,7 +281,7 @@ elseif(SALMON_FETCH_MISSING_DEPS)
   set(TBB_STRICT OFF CACHE BOOL "" FORCE)
   FetchContent_Declare(salmon_tbb
     GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
-    GIT_TAG v2021.13.0
+    GIT_TAG v2022.3.0
     GIT_SHALLOW FALSE
   )
   FetchContent_MakeAvailable(salmon_tbb)
