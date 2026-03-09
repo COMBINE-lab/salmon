@@ -12,7 +12,7 @@ set(SALMON_PUFFERFISH_GIT_REPOSITORY
     "https://github.com/COMBINE-lab/pufferfish.git"
     CACHE STRING "Git repository used when fetching pufferfish")
 set(SALMON_PUFFERFISH_GIT_TAG
-    "c5007eb02c22e4c783d778f3370dcd33ecb0df25"
+    "940cfc648d4ad7ab94237a8c3d5b8c99a852e30f"
     CACHE STRING "Immutable git commit used when fetching pufferfish")
 set(SALMON_PUFFERFISH_SOURCE_DIR
     ""
