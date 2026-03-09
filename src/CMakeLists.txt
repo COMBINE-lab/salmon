@@ -331,6 +331,14 @@ target_link_libraries(salmon
     salmon_quant
     salmon_alignment
     salmon_core
+    # Be explicit for static-link toolchains where transitive module deps from
+    # intermediate static libraries are not reliably pulled in.
+    salmon_io
+    salmon_model
+    salmon_util
+    salmon_output
+    salmon_inference
+    salmon_options
 )
 
 if(SALMON_ENABLE_TESTS)
@@ -343,6 +351,15 @@ if(SALMON_ENABLE_TESTS)
       COMMENT "Copying unitTests"
   )
 endif()
+
+# Some pufferfish static dependencies are not always propagated to downstream
+# consumers under all toolchain/static-link combinations.
+set(_salmon_puffer_aux_libs)
+foreach(_puff_aux IN ITEMS ksw2pp twopaco graphdump ntcard)
+  if(TARGET ${_puff_aux})
+    list(APPEND _salmon_puffer_aux_libs ${_puff_aux})
+  endif()
+endforeach()
 
 target_link_libraries(salmon_common_link_deps INTERFACE
     Threads::Threads
@@ -358,6 +375,7 @@ target_link_libraries(salmon_common_link_deps INTERFACE
     ${LIBSALMON_LINKER_FLAGS}
     ${NON_APPLECLANG_LIBS}
     pufferfish::puffer
+    ${_salmon_puffer_aux_libs}
     ${ASAN_LIB}
     ${FAST_MALLOC_LIB}
     TBB::tbb
@@ -373,6 +391,7 @@ if(UNIX AND NOT APPLE)
     ${Boost_LIBRARIES}
     ${HTSLIB_LIBRARIES}
     pufferfish::puffer
+    ${_salmon_puffer_aux_libs}
   )
 
   # Prefer CMake's native link-group abstraction when supported.

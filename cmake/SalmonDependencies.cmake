@@ -431,6 +431,12 @@ elseif(SALMON_FETCH_MISSING_DEPS)
       INTERFACE_INCLUDE_DIRECTORIES "${HTSLIB_INCLUDE_DIR}")
   endif()
   set(HTSLIB_LIBRARIES HTSlib::HTSlib)
+  # Fetched static htslib may still detect/use system libdeflate; link it
+  # explicitly when present to avoid unresolved symbols at final link.
+  find_library(LIBDEFLATE_LIBRARY NAMES deflate libdeflate)
+  if(LIBDEFLATE_LIBRARY)
+    list(APPEND HTSLIB_LIBRARIES ${LIBDEFLATE_LIBRARY})
+  endif()
 else()
   message(FATAL_ERROR "htslib is required. Install htslib or enable SALMON_FETCH_MISSING_DEPS.")
 endif()
