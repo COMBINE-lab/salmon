@@ -285,7 +285,9 @@ elseif(SALMON_FETCH_MISSING_DEPS)
   set(TBB_TEST OFF CACHE BOOL "" FORCE)
   set(TBB_STRICT OFF CACHE BOOL "" FORCE)
   set(_salmon_prev_build_shared_libs_tbb "${BUILD_SHARED_LIBS}")
-  set(BUILD_SHARED_LIBS ON)
+  # Prefer static oneTBB fallback so salmon remains runnable without external
+  # libtbb runtime path setup in build/install trees.
+  set(BUILD_SHARED_LIBS OFF)
   FetchContent_Declare(salmon_tbb
     GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
     GIT_TAG v2022.3.0
