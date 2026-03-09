@@ -202,11 +202,11 @@ elseif(SALMON_FETCH_MISSING_DEPS)
   set(FETCHED_BOOST TRUE)
   set(Boost_INCLUDE_DIRS "${_salmon_boost_prefix}/include")
   set(Boost_LIBRARIES
-      "${_salmon_boost_prefix}/lib/libboost_system.a"
       "${_salmon_boost_prefix}/lib/libboost_filesystem.a"
       "${_salmon_boost_prefix}/lib/libboost_timer.a"
-      "${_salmon_boost_prefix}/lib/libboost_chrono.a"
       "${_salmon_boost_prefix}/lib/libboost_program_options.a"
+      "${_salmon_boost_prefix}/lib/libboost_chrono.a"
+      "${_salmon_boost_prefix}/lib/libboost_system.a"
       "${_salmon_boost_prefix}/lib/libboost_atomic.a")
   message(STATUS "Using fetched static Boost from ${_salmon_boost_prefix}")
 else()
@@ -284,12 +284,15 @@ elseif(SALMON_FETCH_MISSING_DEPS)
   message(STATUS "TBB >= 2021.4 not found; fetching pinned oneTBB release")
   set(TBB_TEST OFF CACHE BOOL "" FORCE)
   set(TBB_STRICT OFF CACHE BOOL "" FORCE)
+  set(_salmon_prev_build_shared_libs_tbb "${BUILD_SHARED_LIBS}")
+  set(BUILD_SHARED_LIBS ON)
   FetchContent_Declare(salmon_tbb
     GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
     GIT_TAG v2022.3.0
     GIT_SHALLOW FALSE
   )
   FetchContent_MakeAvailable(salmon_tbb)
+  set(BUILD_SHARED_LIBS "${_salmon_prev_build_shared_libs_tbb}")
   if(TARGET tbb AND NOT TARGET TBB::tbb)
     add_library(TBB::tbb ALIAS tbb)
   endif()
