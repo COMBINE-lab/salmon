@@ -41,18 +41,23 @@ jobs:
     needs: precheck
     if: ${{ needs.precheck.outputs.run_ci == 'true' }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-22.04
             target_id: linux-x86_64
+            build_parallel: 2
           - os: ubuntu-24.04-arm
             target_id: linux-aarch64
-          - os: macos-13
+            build_parallel: 2
+          - os: macos-15-intel
             target_id: macos-x86_64
+            build_parallel: 3
           - os: macos-14
             target_id: macos-arm64
+            build_parallel: 3
     steps:
       - uses: actions/checkout@v4
 
@@ -79,7 +84,7 @@ jobs:
             -DSALMON_BOOST_USE_STATIC_LIBS=ON
 
       - name: Build
-        run: cmake --build build-ci --target salmon unitTests --parallel
+        run: cmake --build build-ci --target salmon unitTests --parallel ${{ matrix.build_parallel }}
 
       - name: Run Unit Tests
         run: ./build-ci/src/unitTests

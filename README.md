@@ -32,7 +32,7 @@ Salmon `v1.10.2` and its corresponding documentation:
 What is Salmon?
 ===============
 
-Salmon is a **wicked**-fast program to produce a highly-accurate, transcript-level quantification estimates from 
+`Salmon` is a **wicked**-fast program to produce a highly-accurate, transcript-level quantification estimates from 
 RNA-seq data.  Salmon achieves its accuracy and speed via a number of different innovations, including the 
 use of *selective-alignment* (accurate but fast-to-compute proxies for traditional read alignments), and 
 massively-parallel stochastic collapsed variational inference.  The result is a versatile tool that fits nicely
