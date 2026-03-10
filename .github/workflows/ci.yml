@@ -116,7 +116,7 @@ jobs:
         run: |
           ./build-ci/src/salmon quant \
             -l A \
-            -i build-ci/sample_index \
+            -t sample_data/transcripts.fasta \
             -a sample_data/sample_alignments.bam \
             -o build-ci/sample_quant_alignment
 
