@@ -45,7 +45,7 @@ The current version number of the master branch of `salmon` can be found [**here
 Documentation
 ==============
 
-The documentation for Salmon is available on [ReadTheDocs](http://readthedocs.org), check it out [here](http://salmon.readthedocs.org).
+The documentation for `salmon` is available on [ReadTheDocs](http://readthedocs.org), check it out [here](http://salmon.readthedocs.org).
 
 Salmon is, and will continue to be, [freely and actively supported on a best-effort basis](https://oceangenomics.com/about/#open).
 If you need industrial-grade technical support, please consider the options at [oceangenomics.com/contact](http://oceangenomics.com/contact).
