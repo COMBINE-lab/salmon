@@ -10,4 +10,4 @@ on _develop_.  Before you make a PR, please check that:
 
  * Your PR describes the purpose of your commit. Is it fixing a bug, adding functionality, etc.?
  * Commit messages have been made using [*conventional commits*](https://www.conventionalcommits.org/en/v1.0.0/) — please format all of your commit messages as such.
- * Any non-obvious code is documented (we don't yet have formal documentation guidelines yet, so use common sense)
+ * Any non-obvious code is documented (we don't yet have formal documentation guidelines yet, so use common sense).
