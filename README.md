@@ -40,7 +40,7 @@ into many different pipelines.  For example, you can choose to make use of our *
 
 Give `salmon` a try!  You can find the latest binary releases [here](https://github.com/COMBINE-lab/salmon/releases).
 
-The current version number of the master branch of Salmon can be found [**here**](http://combine-lab.github.io/salmon/version_info/latest)
+The current version number of the master branch of `salmon` can be found [**here**](http://combine-lab.github.io/salmon/version_info/latest)
 
 Documentation
 ==============
