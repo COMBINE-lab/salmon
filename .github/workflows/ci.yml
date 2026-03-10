@@ -1,0 +1,171 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - "**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  precheck:
+    runs-on: ubuntu-latest
+    outputs:
+      run_ci: ${{ steps.decide.outputs.run_ci }}
+      release_tag: ${{ steps.decide.outputs.release_tag }}
+    steps:
+      - id: decide
+        shell: bash
+        run: |
+          set -euo pipefail
+          msg="$(jq -r '.head_commit.message // ""' "$GITHUB_EVENT_PATH")"
+          ref="${GITHUB_REF#refs/heads/}"
+          run_ci=false
+          release_tag=""
+
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            run_ci=true
+          fi
+          if [[ "$ref" == "main" ]]; then
+            run_ci=true
+          fi
+          if [[ "$msg" == *"[run-ci]"* ]]; then
+            run_ci=true
+          fi
+          if [[ "$msg" =~ \[release[[:space:]]+v?([0-9]+\.[0-9]+\.[0-9]+)\] ]]; then
+            release_tag="v${BASH_REMATCH[1]}"
+            run_ci=true
+          fi
+
+          {
+            echo "run_ci=$run_ci"
+            echo "release_tag=$release_tag"
+          } >> "$GITHUB_OUTPUT"
+
+  build-test:
+    needs: precheck
+    if: ${{ needs.precheck.outputs.run_ci == 'true' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target_id: linux-x86_64
+          - os: ubuntu-24.04-arm
+            target_id: linux-aarch64
+          - os: macos-13
+            target_id: macos-x86_64
+          - os: macos-14
+            target_id: macos-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux Build Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            git \
+            curl \
+            libbz2-dev \
+            liblzma-dev
+
+      - name: Configure
+        run: |
+          cmake -S . -B build-ci \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSALMON_ENABLE_TESTS=ON \
+            -DSALMON_USE_SYSTEM_DEPS=OFF \
+            -DSALMON_FETCH_MISSING_DEPS=ON \
+            -DSALMON_BOOST_USE_STATIC_LIBS=ON
+
+      - name: Build
+        run: cmake --build build-ci --target salmon unitTests --parallel
+
+      - name: Run Unit Tests
+        run: ./build-ci/src/unitTests
+
+      - name: CLI Smoke
+        run: ./build-ci/src/salmon -h
+
+      - name: Sample Data Smoke (Mapping)
+        run: |
+          ./build-ci/src/salmon index \
+            -t sample_data/transcripts.fasta \
+            -i build-ci/sample_index
+          ./build-ci/src/salmon quant \
+            -l A \
+            -i build-ci/sample_index \
+            -1 sample_data/reads_1.fastq \
+            -2 sample_data/reads_2.fastq \
+            -o build-ci/sample_quant_mapping
+
+      - name: Sample Data Smoke (Alignment)
+        run: |
+          ./build-ci/src/salmon quant \
+            -l A \
+            -i build-ci/sample_index \
+            -a sample_data/sample_alignments.bam \
+            -o build-ci/sample_quant_alignment
+
+      - name: Package Binary Artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg_dir="release/salmon-${{ matrix.target_id }}"
+          mkdir -p "$pkg_dir/bin"
+          cp build-ci/src/salmon "$pkg_dir/bin/"
+          cp LICENSE "$pkg_dir/"
+          cp README.md "$pkg_dir/"
+          tar -C release -czf "salmon-${{ matrix.target_id }}.tar.gz" "salmon-${{ matrix.target_id }}"
+
+      - name: Upload Binary Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: salmon-${{ matrix.target_id }}
+          path: salmon-${{ matrix.target_id }}.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs:
+      - precheck
+      - build-test
+    if: ${{ github.ref == 'refs/heads/main' && needs.precheck.outputs.release_tag != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create and Push Tag
+        env:
+          RELEASE_TAG: ${{ needs.precheck.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          git fetch --tags
+          if git rev-parse -q --verify "refs/tags/${RELEASE_TAG}" >/dev/null; then
+            echo "Tag ${RELEASE_TAG} already exists"
+          else
+            git tag -a "${RELEASE_TAG}" "${GITHUB_SHA}" -m "Release ${RELEASE_TAG}"
+            git push origin "${RELEASE_TAG}"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.precheck.outputs.release_tag }}
+          generate_release_notes: true
+          files: release-assets/*.tar.gz
