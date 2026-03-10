@@ -38,7 +38,7 @@ use of *selective-alignment* (accurate but fast-to-compute proxies for tradition
 massively-parallel stochastic collapsed variational inference.  The result is a versatile tool that fits nicely
 into many different pipelines.  For example, you can choose to make use of our *selective-alignment* algorithm by providing Salmon with raw sequencing reads, or, if it is more convenient, you can provide Salmon with regular alignments (e.g. an **unsorted** BAM file with alignments to the transcriptome produced with your favorite aligner), and it will use the same **wicked**-fast, state-of-the-art inference algorithm to estimate transcript-level abundances for your experiment.
 
-Give salmon a try!  You can find the latest binary releases [here](https://github.com/COMBINE-lab/salmon/releases).
+Give `salmon` a try!  You can find the latest binary releases [here](https://github.com/COMBINE-lab/salmon/releases).
 
 The current version number of the master branch of Salmon can be found [**here**](http://combine-lab.github.io/salmon/version_info/latest)
 
