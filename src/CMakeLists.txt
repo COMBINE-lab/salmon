@@ -339,14 +339,9 @@ set(_salmon_module_libs
   salmon_quant
   salmon_alignment
   salmon_core
-  # Be explicit for static-link toolchains where transitive module deps from
-  # intermediate static libraries are not reliably pulled in.
+  # Keep FASTAParser symbols available even when static-link transitive
+  # propagation differs across toolchains.
   salmon_io
-  salmon_model
-  salmon_util
-  salmon_output
-  salmon_inference
-  salmon_options
 )
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND UNIX AND NOT APPLE)
