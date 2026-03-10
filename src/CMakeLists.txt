@@ -334,14 +334,17 @@ if(FAST_MALLOC_OBJECT)
   endif()
 endif()
 set(_salmon_module_libs
+  salmon_options
+  salmon_util
+  salmon_model
+  salmon_io
+  salmon_output
+  salmon_inference
   salmon_cli
   salmon_indexing
   salmon_quant
   salmon_alignment
   salmon_core
-  # Keep FASTAParser symbols available even when static-link transitive
-  # propagation differs across toolchains.
-  salmon_io
 )
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND UNIX AND NOT APPLE)
