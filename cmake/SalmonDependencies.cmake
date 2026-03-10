@@ -12,7 +12,7 @@ set(SALMON_PUFFERFISH_GIT_REPOSITORY
     "https://github.com/COMBINE-lab/pufferfish.git"
     CACHE STRING "Git repository used when fetching pufferfish")
 set(SALMON_PUFFERFISH_GIT_TAG
-    "77f0c0be3d996fbedd9788876b983875438111d5"
+    "08399ea6e27cfaaa338c981498f85846ec4cad24"
     CACHE STRING "Immutable git commit used when fetching pufferfish")
 set(SALMON_PUFFERFISH_SOURCE_DIR
     ""
@@ -21,8 +21,8 @@ set(SALMON_FQFEEDER_GIT_REPOSITORY
     "https://github.com/rob-p/FQFeeder.git"
     CACHE STRING "Git repository used when fetching FQFeeder")
 set(SALMON_FQFEEDER_GIT_TAG
-    "08eeed92a50902d670e5c064b4e3015ebb8bd1cc"
-    CACHE STRING "Immutable git commit used when fetching FQFeeder")
+    "f5b08d19c57abe455f3582b32502a6dc58ce5f40"
+    CACHE STRING "Immutable git commit used when fetching FQFeeder (semi-working-generic-arity)")
 set(SALMON_FQFEEDER_SOURCE_DIR
     ""
     CACHE PATH "Optional local FQFeeder source checkout to use instead of fetching")
@@ -398,7 +398,17 @@ if(NOT libgff_FOUND)
   set(LIB_GFF_LIBRARY_DIR ${salmon_libgff_BINARY_DIR})
 endif()
 
-find_package(CURL)
+find_package(CURL QUIET)
+if(CURL_FOUND)
+  if(TARGET CURL::libcurl)
+    set(SALMON_CURL_LIBRARIES CURL::libcurl CACHE INTERNAL "" FORCE)
+  else()
+    set(SALMON_CURL_LIBRARIES ${CURL_LIBRARIES} CACHE INTERNAL "" FORCE)
+  endif()
+else()
+  message(STATUS "libcurl not found; remote URL features will be disabled")
+  set(SALMON_CURL_LIBRARIES "" CACHE INTERNAL "" FORCE)
+endif()
 if(SALMON_USE_SYSTEM_DEPS)
   find_package(HTSlib QUIET)
 endif()

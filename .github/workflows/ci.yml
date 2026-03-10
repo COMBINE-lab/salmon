@@ -65,6 +65,7 @@ jobs:
             cmake \
             git \
             curl \
+            libcurl4-openssl-dev \
             libbz2-dev \
             liblzma-dev
 
@@ -85,6 +86,14 @@ jobs:
 
       - name: CLI Smoke
         run: ./build-ci/src/salmon -h
+
+      - name: Prepare Sample Data
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -d sample_data ]]; then
+            tar -xzf sample_data.tgz
+          fi
 
       - name: Sample Data Smoke (Mapping)
         run: |

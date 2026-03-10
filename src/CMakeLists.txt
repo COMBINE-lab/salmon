@@ -383,7 +383,7 @@ target_link_libraries(salmon_common_link_deps INTERFACE
     gff
     ${Boost_LIBRARIES}
     ${ICU_LIBS}
-    ${CURL_LIBRARIES}
+    ${SALMON_CURL_LIBRARIES}
     ${SALMON_ZLIB_LIBRARIES}
     m
     ${HTSLIB_LIBRARIES}
