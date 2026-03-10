@@ -2,9 +2,9 @@
 
 HERE="$( cd "$(dirname "$0")" ; pwd -P )"
 
-major_v=`${HERE}/../build/src/salmon -v | cut -d ' ' -f 2 | cut -d '.' -f 1`
-minor_v=`${HERE}/../build/src/salmon -v | cut -d ' ' -f 2 | cut -d '.' -f 2`
-patch_v=`${HERE}/../build/src/salmon -v | cut -d ' ' -f 2 | cut -d '.' -f 3`
+major_v=`${HERE}/../build/using-sshash/src/salmon -v | cut -d ' ' -f 2 | cut -d '.' -f 1`
+minor_v=`${HERE}/../build/using-sshash/src/salmon -v | cut -d ' ' -f 2 | cut -d '.' -f 2`
+patch_v=`${HERE}/../build/using-sshash/src/salmon -v | cut -d ' ' -f 2 | cut -d '.' -f 3`
 
 echo "VERSION : ${major_v}.${minor_v}.${patch_v}"
 
