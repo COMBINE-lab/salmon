@@ -12,7 +12,7 @@ set(SALMON_PUFFERFISH_GIT_REPOSITORY
     "https://github.com/COMBINE-lab/pufferfish.git"
     CACHE STRING "Git repository used when fetching pufferfish")
 set(SALMON_PUFFERFISH_GIT_TAG
-    "08399ea6e27cfaaa338c981498f85846ec4cad24"
+    "51c0f1db3b4cb6bdcded3cd1a8da0bf0bab931a5"
     CACHE STRING "Immutable git commit used when fetching pufferfish")
 set(SALMON_PUFFERFISH_SOURCE_DIR
     ""
@@ -21,7 +21,7 @@ set(SALMON_FQFEEDER_GIT_REPOSITORY
     "https://github.com/rob-p/FQFeeder.git"
     CACHE STRING "Git repository used when fetching FQFeeder")
 set(SALMON_FQFEEDER_GIT_TAG
-    "f5b08d19c57abe455f3582b32502a6dc58ce5f40"
+    "f5b08d1002351c192b69048ac9f6cf4c7c116265"
     CACHE STRING "Immutable git commit used when fetching FQFeeder (semi-working-generic-arity)")
 set(SALMON_FQFEEDER_SOURCE_DIR
     ""
