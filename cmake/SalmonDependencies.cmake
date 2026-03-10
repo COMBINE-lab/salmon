@@ -12,7 +12,7 @@ set(SALMON_PUFFERFISH_GIT_REPOSITORY
     "https://github.com/COMBINE-lab/pufferfish.git"
     CACHE STRING "Git repository used when fetching pufferfish")
 set(SALMON_PUFFERFISH_GIT_TAG
-    "0b6ded265fdc85586b3536f6ca2eed3b5bf4b71b"
+    "77f0c0be3d996fbedd9788876b983875438111d5"
     CACHE STRING "Immutable git commit used when fetching pufferfish")
 set(SALMON_PUFFERFISH_SOURCE_DIR
     ""
@@ -388,6 +388,10 @@ if(NOT libgff_FOUND)
     URL_HASH SHA256=96d2bda64aaf9cf7b6c1a42205e408b0ef2a353ba42dad560db215e7ec105e2e
   )
   FetchContent_MakeAvailable(salmon_libgff)
+  # Suppress -Wclass-memaccess from libgff's GVec.hh using memset on non-trivial types
+  if(TARGET gff AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(gff PRIVATE -Wno-class-memaccess)
+  endif()
   set(FETCHED_GFF TRUE)
   set(LIB_GFF_PATH ${salmon_libgff_SOURCE_DIR})
   set(LIB_GFF_INCLUDE_DIR ${salmon_libgff_SOURCE_DIR}/include)

@@ -50,7 +50,7 @@ double ONTAlignmentModel::logLikelihood(const UnpairedRead& hit, const UnpairedR
   }
 
   const uint32_t cigarRLen = alnLen(hit, primary); // Read length minus hard clips
-  if(counts.sclips() >= cigarRLen)
+  if(static_cast<uint32_t>(counts.sclips()) >= cigarRLen)
     return LOG_0; // Empty alignment!
 
   const uint32_t alignLen  = cigarRLen - counts.clips(); // Length of aligned part (no soft clip)
