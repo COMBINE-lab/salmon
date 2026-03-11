@@ -35,6 +35,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Configure Git Identity
+        if: ${{ steps.tag.outputs.should_release == 'true' }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
       - name: Download CI Artifacts
         if: ${{ steps.tag.outputs.should_release == 'true' }}
         uses: actions/download-artifact@v4
