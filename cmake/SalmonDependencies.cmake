@@ -388,6 +388,17 @@ if(NOT libgff_FOUND)
     URL_HASH SHA256=96d2bda64aaf9cf7b6c1a42205e408b0ef2a353ba42dad560db215e7ec105e2e
   )
   FetchContent_MakeAvailable(salmon_libgff)
+  # libgff's upstream install() rule hardcodes installation from
+  # ${CMAKE_BINARY_DIR}/libgff.a. Ensure the fetched target writes there.
+  if(TARGET gff)
+    set_target_properties(gff PROPERTIES
+      ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+    foreach(_salmon_cfg Debug Release RelWithDebInfo MinSizeRel)
+      string(TOUPPER "${_salmon_cfg}" _salmon_cfg_upper)
+      set_target_properties(gff PROPERTIES
+        "ARCHIVE_OUTPUT_DIRECTORY_${_salmon_cfg_upper}" "${CMAKE_BINARY_DIR}")
+    endforeach()
+  endif()
   # Suppress -Wclass-memaccess from libgff's GVec.hh using memset on non-trivial types
   if(TARGET gff AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(gff PRIVATE -Wno-class-memaccess)
@@ -395,7 +406,7 @@ if(NOT libgff_FOUND)
   set(FETCHED_GFF TRUE)
   set(LIB_GFF_PATH ${salmon_libgff_SOURCE_DIR})
   set(LIB_GFF_INCLUDE_DIR ${salmon_libgff_SOURCE_DIR}/include)
-  set(LIB_GFF_LIBRARY_DIR ${salmon_libgff_BINARY_DIR})
+  set(LIB_GFF_LIBRARY_DIR ${CMAKE_BINARY_DIR})
 endif()
 
 find_package(CURL QUIET)
