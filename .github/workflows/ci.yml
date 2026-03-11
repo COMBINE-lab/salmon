@@ -26,7 +26,7 @@ jobs:
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
             run_ci=true
           fi
-          if [[ "$ref" == "main" ]]; then
+          if [[ "$ref" == "master" ]]; then
             run_ci=true
           fi
           if [[ "$msg" == *"[run-ci]"* ]]; then
