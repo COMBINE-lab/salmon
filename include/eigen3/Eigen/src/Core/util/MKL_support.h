@@ -34,41 +34,49 @@
 #define EIGEN_MKL_SUPPORT_H
 
 #ifdef EIGEN_USE_MKL_ALL
-  #ifndef EIGEN_USE_BLAS
-    #define EIGEN_USE_BLAS
-  #endif
-  #ifndef EIGEN_USE_LAPACKE
-    #define EIGEN_USE_LAPACKE
-  #endif
-  #ifndef EIGEN_USE_MKL_VML
-    #define EIGEN_USE_MKL_VML
-  #endif
+#ifndef EIGEN_USE_BLAS
+#define EIGEN_USE_BLAS
+#endif
+#ifndef EIGEN_USE_LAPACKE
+#define EIGEN_USE_LAPACKE
+#endif
+#ifndef EIGEN_USE_MKL_VML
+#define EIGEN_USE_MKL_VML
+#endif
 #endif
 
 #ifdef EIGEN_USE_LAPACKE_STRICT
-  #define EIGEN_USE_LAPACKE
+#define EIGEN_USE_LAPACKE
 #endif
 
-#if defined(EIGEN_USE_MKL_VML)
-  #define EIGEN_USE_MKL
+#if defined(EIGEN_USE_MKL_VML) && !defined(EIGEN_USE_MKL)
+#define EIGEN_USE_MKL
 #endif
 
 #if defined EIGEN_USE_MKL
-#   include <mkl.h> 
+#if (!defined MKL_DIRECT_CALL) && (!defined EIGEN_MKL_NO_DIRECT_CALL)
+#define MKL_DIRECT_CALL
+#define MKL_DIRECT_CALL_JUST_SET
+#endif
+#include <mkl.h>
 /*Check IMKL version for compatibility: < 10.3 is not usable with Eigen*/
-#   ifndef INTEL_MKL_VERSION
-#       undef EIGEN_USE_MKL /* INTEL_MKL_VERSION is not even defined on older versions */
-#   elif INTEL_MKL_VERSION < 100305    /* the intel-mkl-103-release-notes say this was when the lapacke.h interface was added*/
-#       undef EIGEN_USE_MKL
-#   endif
-#   ifndef EIGEN_USE_MKL
-    /*If the MKL version is too old, undef everything*/
-#       undef   EIGEN_USE_MKL_ALL
-#       undef   EIGEN_USE_LAPACKE
-#       undef   EIGEN_USE_MKL_VML
-#       undef   EIGEN_USE_LAPACKE_STRICT
-#       undef   EIGEN_USE_LAPACKE
-#   endif
+#ifndef INTEL_MKL_VERSION
+#undef EIGEN_USE_MKL /* INTEL_MKL_VERSION is not even defined on older versions */
+#elif INTEL_MKL_VERSION < \
+    100305 /* the intel-mkl-103-release-notes say this was when the lapacke.h interface was added*/
+#undef EIGEN_USE_MKL
+#endif
+#ifndef EIGEN_USE_MKL
+/*If the MKL version is too old, undef everything*/
+#undef EIGEN_USE_MKL_ALL
+#undef EIGEN_USE_LAPACKE
+#undef EIGEN_USE_MKL_VML
+#undef EIGEN_USE_LAPACKE_STRICT
+#undef EIGEN_USE_LAPACKE
+#ifdef MKL_DIRECT_CALL_JUST_SET
+#undef MKL_DIRECT_CALL
+#endif
+#endif
 #endif
 
 #if defined EIGEN_USE_MKL
@@ -108,10 +116,17 @@
 #endif
 #endif
 
+#if defined(EIGEN_USE_BLAS) && !defined(EIGEN_USE_MKL)
+#include "../../misc/blas.h"
+#endif
+
+// IWYU pragma: private
+#include "../InternalHeaderCheck.h"
+
 namespace Eigen {
 
 typedef std::complex<double> dcomplex;
-typedef std::complex<float>  scomplex;
+typedef std::complex<float> scomplex;
 
 #if defined(EIGEN_USE_MKL)
 typedef MKL_INT BlasIndex;
@@ -119,10 +134,6 @@ typedef MKL_INT BlasIndex;
 typedef int BlasIndex;
 #endif
 
-} // end namespace Eigen
+}  // end namespace Eigen
 
-#if defined(EIGEN_USE_BLAS)
-#include "../../misc/blas.h"
-#endif
-
-#endif // EIGEN_MKL_SUPPORT_H
+#endif  // EIGEN_MKL_SUPPORT_H

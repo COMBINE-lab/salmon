@@ -22,7 +22,7 @@ if (TBB_FOUND)
 endif()
 
 if (NOT TBB_FIND_COMPONENTS)
-    set(TBB_FIND_COMPONENTS tbb tbbmalloc)
+    set(TBB_FIND_COMPONENTS tbb)
     foreach (_tbb_component ${TBB_FIND_COMPONENTS})
         set(TBB_FIND_REQUIRED_${_tbb_component} 1)
     endforeach()

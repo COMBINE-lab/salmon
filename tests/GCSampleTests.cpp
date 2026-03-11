@@ -1,11 +1,11 @@
-#include "catch.hpp"
+#include <catch2/catch_all.hpp>
 #include <random>
 #include <unordered_map>
 #include <iostream>
-#include "LibraryFormat.hpp"
-#include "SalmonUtils.hpp"
-#include "Transcript.hpp"
-#include "UtilityFunctions.hpp"
+#include "salmon/internal/model/LibraryFormat.hpp"
+#include "salmon/internal/util/SalmonUtils.hpp"
+#include "salmon/internal/model/Transcript.hpp"
+#include "salmon/internal/util/UtilityFunctions.hpp"
 
 
 std::string generateRandomSequence(size_t length, std::uniform_int_distribution<>& dis, std::mt19937& gen) {

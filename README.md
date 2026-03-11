@@ -1,3 +1,11 @@
+> [!IMPORTANT]
+> `salmon alevin` has been removed from this modernization branch.
+> For single-cell analysis, use [alevin-fry](https://alevin-fry.readthedocs.io/en/latest/).
+> If you need the legacy `alevin` workflow, use Salmon `v1.10.2` (the last pre-removal release in this line):
+> - release tag: [v1.10.2](https://github.com/COMBINE-lab/salmon/releases/tag/v1.10.2)
+> - legacy docs: [salmon docs v1.10.2](https://salmon.readthedocs.io/en/v1.10.2/)
+> - source checkout: `git checkout v1.10.2`
+
 <img alt="salmon logo" src="https://github.com/COMBINE-lab/salmon/raw/master/doc/salmon_logo.png" width="600">
 
 [![Documentation Status](https://readthedocs.org/projects/salmon/badge/?version=latest)](http://salmon.readthedocs.org/en/latest)
@@ -7,26 +15,37 @@
 
 **Try out the new [alevin-fry](https://alevin-fry.readthedocs.io/en/latest/) framework for single-cell analysis; tutorials can be found [here](https://combine-lab.github.io/alevin-fry-tutorials/)!**
 
+Legacy single-cell breadcrumb
+=============================
+
+The historical `salmon alevin` implementation is intentionally removed from this
+bulk-only refactor line. Users who require that historical workflow should use
+Salmon `v1.10.2` and its corresponding documentation:
+
+* [Salmon v1.10.2 release](https://github.com/COMBINE-lab/salmon/releases/tag/v1.10.2)
+* [Salmon v1.10.2 docs](https://salmon.readthedocs.io/en/v1.10.2/)
+* [alevin-fry docs](https://alevin-fry.readthedocs.io/en/latest/) for current single-cell workflows
+
 **Help guide the development of Salmon, [take our survey](https://docs.google.com/forms/d/e/1FAIpQLSeWhBNE_fA_0uVHvbAlAulDmfmowv7rAYla879DZpqCARyRTQ/viewform)**
 
 
 What is Salmon?
 ===============
 
-Salmon is a **wicked**-fast program to produce a highly-accurate, transcript-level quantification estimates from 
-RNA-seq data.  Salmon achieves its accuracy and speed via a number of different innovations, including the 
+`Salmon` is a **wicked**-fast program to produce a highly-accurate, transcript-level quantification estimates from 
+RNA-seq data.  `Salmon` achieves its accuracy and speed via a number of different innovations, including the 
 use of *selective-alignment* (accurate but fast-to-compute proxies for traditional read alignments), and 
 massively-parallel stochastic collapsed variational inference.  The result is a versatile tool that fits nicely
 into many different pipelines.  For example, you can choose to make use of our *selective-alignment* algorithm by providing Salmon with raw sequencing reads, or, if it is more convenient, you can provide Salmon with regular alignments (e.g. an **unsorted** BAM file with alignments to the transcriptome produced with your favorite aligner), and it will use the same **wicked**-fast, state-of-the-art inference algorithm to estimate transcript-level abundances for your experiment.
 
-Give salmon a try!  You can find the latest binary releases [here](https://github.com/COMBINE-lab/salmon/releases).
+Give `salmon` a try!  You can find the latest binary releases [here](https://github.com/COMBINE-lab/salmon/releases).
 
-The current version number of the master branch of Salmon can be found [**here**](http://combine-lab.github.io/salmon/version_info/latest)
+The current version number of the master branch of `salmon` can be found [**here**](http://combine-lab.github.io/salmon/version_info/latest)
 
 Documentation
 ==============
 
-The documentation for Salmon is available on [ReadTheDocs](http://readthedocs.org), check it out [here](http://salmon.readthedocs.org).
+The documentation for `salmon` is available on [ReadTheDocs](http://readthedocs.org), check it out [here](http://salmon.readthedocs.org).
 
 Salmon is, and will continue to be, [freely and actively supported on a best-effort basis](https://oceangenomics.com/about/#open).
 If you need industrial-grade technical support, please consider the options at [oceangenomics.com/contact](http://oceangenomics.com/contact).

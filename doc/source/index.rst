@@ -13,9 +13,9 @@ Contents:
    
    building.rst
    salmon.rst
-   alevin.rst
    file_formats.rst
    library_type.rst
+   license.rst
 
 Indices and tables
 ==================
@@ -23,4 +23,3 @@ Indices and tables
 * :ref:`genindex`
 * :ref:`modindex`
 * :ref:`search`
-

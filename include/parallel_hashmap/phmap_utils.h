@@ -57,7 +57,6 @@ struct phmap_mix<4>
     inline size_t operator()(size_t a) const
     {
         static constexpr uint64_t kmul = 0xcc9e2d51UL;
-        // static constexpr uint64_t kmul = 0x3B9ACB93UL; // [greg] my own random prime
         uint64_t l = a * kmul;
         return static_cast<size_t>(l ^ (l >> 32));
     }
@@ -71,7 +70,6 @@ struct phmap_mix<4>
         inline size_t operator()(size_t a) const
         {
             static constexpr uint64_t k = 0xde5fb9d2630458e9ULL;
-            // static constexpr uint64_t k = 0x7C9D0BF0567102A5ULL; // [greg] my own random prime
             uint64_t h;
             uint64_t l = umul128(a, k, &h);
             return static_cast<size_t>(h + l);
@@ -164,16 +162,7 @@ struct Hash
         return _hash<T>(val);
     }
 };
-
-template <class T>
-struct Hash<T *>
-{
-    inline size_t operator()(const T *val) const noexcept
-    {
-        return static_cast<size_t>(reinterpret_cast<const uintptr_t>(val)); 
-    }
-};
-
+ 
 template<class ArgumentType, class ResultType>
 struct phmap_unary_function
 {
@@ -286,6 +275,13 @@ struct Hash<double> : public phmap_unary_function<double, size_t>
 
 #endif
 
+#if defined(_MSC_VER)
+#   define PHMAP_HASH_ROTL32(x, r) _rotl(x,r)
+#else
+#   define PHMAP_HASH_ROTL32(x, r) (x << r) | (x >> (32 - r))
+#endif
+
+
 template <class H, int sz> struct Combiner
 {
     H operator()(H seed, size_t value);
@@ -293,17 +289,49 @@ template <class H, int sz> struct Combiner
 
 template <class H> struct Combiner<H, 4>
 {
-    H operator()(H seed, size_t value)
+    H operator()(H h1, size_t k1)
     {
-        return seed ^ (value + 0x9e3779b9 + (seed << 6) + (seed >> 2));
+        // Copyright 2005-2014 Daniel James.
+        // Distributed under the Boost Software License, Version 1.0. (See accompanying
+        // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
+        
+        const uint32_t c1 = 0xcc9e2d51;
+        const uint32_t c2 = 0x1b873593;
+
+        k1 *= c1;
+        k1 = PHMAP_HASH_ROTL32(k1,15);
+        k1 *= c2;
+
+        h1 ^= k1;
+        h1 = PHMAP_HASH_ROTL32(h1,13);
+        h1 = h1*5+0xe6546b64;
+
+        return h1;
     }
 };
 
 template <class H> struct Combiner<H, 8>
 {
-    H operator()(H seed, size_t value)
+    H operator()(H h, size_t k)
     {
-        return seed ^ (value + size_t(0xc6a4a7935bd1e995) + (seed << 6) + (seed >> 2));
+        // Copyright 2005-2014 Daniel James.
+        // Distributed under the Boost Software License, Version 1.0. (See accompanying
+        // file LICENSE_1_0.txt or copy at http://www.boost.org/LICENSE_1_0.txt)
+        const uint64_t m = (uint64_t(0xc6a4a793) << 32) + 0x5bd1e995;
+        const int r = 47;
+
+        k *= m;
+        k ^= k >> r;
+        k *= m;
+
+        h ^= k;
+        h *= m;
+
+        // Completely arbitrary number, to prevent 0's
+        // from hashing to 0.
+        h += 0xe6546b64;
+
+        return h;
     }
 };
 
@@ -347,21 +375,22 @@ struct Hash<std::pair<T1, T2>> {
 template<class... T> 
 struct Hash<std::tuple<T...>> {
     size_t operator()(std::tuple<T...> const& t) const noexcept {
-        return _hash_helper(t);
+        size_t seed = 0;
+        return _hash_helper(seed, t);
     }
 
 private:
-    template<size_t I = 0, class ...P>
-        typename std::enable_if<I == sizeof...(P), size_t>::type
-        _hash_helper(const std::tuple<P...> &) const noexcept { return 0; }
+    template<size_t I = 0, class TUP>
+    typename std::enable_if<I == std::tuple_size<TUP>::value, size_t>::type
+    _hash_helper(size_t seed, const TUP &) const noexcept { return seed; }
 
-    template<size_t I = 0, class ...P>
-    typename std::enable_if<I < sizeof...(P), size_t>::type
-    _hash_helper(const std::tuple<P...> &t) const noexcept {
+    template<size_t I = 0, class TUP>
+    typename std::enable_if<I < std::tuple_size<TUP>::value, size_t>::type
+    _hash_helper(size_t seed, const TUP &t) const noexcept {
         const auto &el = std::get<I>(t);
         using el_type = typename std::remove_cv<typename std::remove_reference<decltype(el)>::type>::type;
-        return Combiner<size_t, sizeof(size_t)>()(
-            phmap::Hash<el_type>()(el),  _hash_helper<I + 1>(t));
+        seed = Combiner<size_t, sizeof(size_t)>()(seed, phmap::Hash<el_type>()(el));
+        return _hash_helper<I + 1>(seed, t);
     }
 };
 

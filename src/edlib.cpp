@@ -1,7 +1,7 @@
 //Rob's code from here
 //https://github.com/COMBINE-lab/RapMap/blob/selective-alignment/src/edlib.cpp
 
-#include "edlib.h"
+#include "salmon/vendor/edlib.h"
 
 #include <stdint.h>
 #include <cstdlib>

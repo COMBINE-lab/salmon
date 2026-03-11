@@ -1,5 +1,5 @@
-#include "catch.hpp"
-#include "UtilityFunctions.hpp"
+#include <catch2/catch_all.hpp>
+#include "salmon/internal/util/UtilityFunctions.hpp"
 
 // from http://stackoverflow.com/questions/2380962/generate-all-combinations-of-arbitrary-alphabet-up-to-arbitrary-length
 std::vector<std::string> getAllWords(int length) {
@@ -134,5 +134,3 @@ SCENARIO("The next k-mer index function works correctly") {
     }
 
 }
-
-
