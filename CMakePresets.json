@@ -1,0 +1,69 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_CXX_STANDARD": "17",
+        "SALMON_ENABLE_TESTS": "ON",
+        "SALMON_ENABLE_BENCHMARKS": "OFF",
+        "SALMON_WARNINGS_AS_ERRORS": "OFF",
+        "SALMON_ENABLE_LTO": "ON",
+        "SALMON_ENABLE_ASAN": "OFF",
+        "SALMON_USE_SYSTEM_DEPS": "ON",
+        "SALMON_FETCH_MISSING_DEPS": "ON",
+        "SALMON_USE_ZLIB_NG": "REQUIRED",
+        "SALMON_USE_MIMALLOC": "AUTO",
+        "SALMON_USE_HTSLIB": "REQUIRED"
+      }
+    },
+    {
+      "name": "dev",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "NO_IPO": "TRUE"
+      }
+    },
+    {
+      "name": "release",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "asan",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SALMON_ENABLE_ASAN": "ON",
+        "NO_IPO": "TRUE"
+      }
+    },
+    {
+      "name": "ci-system-deps",
+      "inherits": "release",
+      "cacheVariables": {
+        "SALMON_USE_SYSTEM_DEPS": "ON",
+        "SALMON_FETCH_MISSING_DEPS": "OFF"
+      }
+    },
+    {
+      "name": "ci-fetch-fallback",
+      "inherits": "release",
+      "cacheVariables": {
+        "SALMON_USE_SYSTEM_DEPS": "ON",
+        "SALMON_FETCH_MISSING_DEPS": "ON"
+      }
+    }
+  ]
+}

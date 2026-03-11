@@ -1,0 +1,181 @@
+include_guard(GLOBAL)
+
+option(SALMON_ENABLE_TESTS "Build Salmon tests" ON)
+option(SALMON_ENABLE_BENCHMARKS "Enable benchmark targets" OFF)
+option(SALMON_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+option(SALMON_ENABLE_LTO "Enable link-time optimization when supported" ON)
+option(SALMON_ENABLE_ASAN "Enable address sanitizer instrumentation" OFF)
+option(SALMON_USE_SYSTEM_DEPS "Prefer system-installed dependencies" ON)
+option(SALMON_FETCH_MISSING_DEPS "Fetch pinned dependencies when missing" ON)
+set(SALMON_USE_ZLIB_NG "REQUIRED" CACHE STRING "zlib backend policy")
+set(SALMON_USE_MIMALLOC "AUTO" CACHE STRING "allocator policy")
+set(SALMON_USE_HTSLIB "REQUIRED" CACHE STRING "alignment I/O backend policy")
+set(SALMON_MIMALLOC_OVERRIDE "ON" CACHE STRING "mimalloc override mode for fetched builds (ON/OFF)")
+set(SALMON_MIMALLOC_OSX_ZONE "ON" CACHE STRING "mimalloc macOS zone override for fetched builds (ON/OFF)")
+set(SALMON_MIMALLOC_OSX_INTERPOSE "ON" CACHE STRING "mimalloc macOS interpose override for fetched builds (ON/OFF)")
+
+if(SALMON_ENABLE_TESTS)
+  enable_testing()
+endif()
+
+if(NOT DEFINED USE_ARM)
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64.*|AARCH64.*|arm64.*|ARM64.*)")
+    message(STATUS "Detected 64-bit ARM host")
+    set(USE_ARM TRUE)
+    add_compile_options(-fsigned-char)
+    set(SCHAR_FLAG "-fsigned-char")
+  else()
+    message(STATUS "Detected non-ARM host")
+    set(USE_ARM FALSE)
+    set(SCHAR_FLAG "")
+  endif()
+endif()
+
+option(USE_SHARED_LIBS "Use shared instead of static libraries" OFF)
+
+set(default_build_type "Release")
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  message(STATUS "Setting build type to '${default_build_type}' as none was specified.")
+  set(CMAKE_BUILD_TYPE "${default_build_type}" CACHE STRING "Choose the type of build." FORCE)
+endif()
+message(STATUS "CMAKE_BUILD_TYPE = ${CMAKE_BUILD_TYPE}")
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+set(REMOVE_WARNING_FLAGS "-Wno-unused-function;-Wno-unused-local-typedefs")
+set(TGT_COMPILE_FLAGS
+    "${SCHAR_FLAG};-ftree-vectorize;-funroll-loops;-fPIC;-fomit-frame-pointer;-O3;-DNDEBUG;-DSTX_NO_STD_STRING_VIEW;-D__STDC_FORMAT_MACROS")
+set(TGT_WARN_FLAGS
+    "-Wall;-Wno-unknown-pragmas;-Wno-reorder;-Wno-unused-variable;-Wreturn-type;-Werror=return-type;${REMOVE_WARNING_FLAGS}")
+if(SALMON_WARNINGS_AS_ERRORS)
+  list(APPEND TGT_WARN_FLAGS "-Werror")
+endif()
+
+if(SALMON_ENABLE_ASAN)
+  set(ASAN_BUILD ON)
+endif()
+
+if(ASAN_BUILD)
+  list(APPEND TGT_COMPILE_FLAGS "-fsanitize=address")
+  # AppleClang links the ASan runtime via -fsanitize=address; explicit -lasan
+  # breaks because there is no libasan.dylib in the SDK toolchain.
+  set(ASAN_LIB "")
+else()
+  set(ASAN_LIB "")
+endif()
+
+if(APPLE)
+  set(WARNING_IGNORE_FLAGS "-Wno-deprecated-register")
+  list(APPEND TGT_WARN_FLAGS -Wno-deprecated-register)
+else()
+  set(WARNING_IGNORE_FLAGS "")
+endif()
+
+if(NOT USE_SHARED_LIBS)
+  set(CMAKE_FIND_LIBRARY_SUFFIXES .a ${CMAKE_FIND_LIBRARY_SUFFIXES})
+  set(MALLOC_STATIC_BUILD_FLAG "--enable-static")
+endif()
+
+include(CheckIPOSupported)
+
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
+
+set(ICU_LIBS "")
+set(ICU_INC_DIRS "")
+
+set(CXXSTDFLAG "-std=c++17")
+set(GCCVERSION "5.2")
+set(BOOST_CXX_FLAGS "${WARNING_IGNORE_FLAGS} ${CXXSTDFLAG}")
+
+if(APPLE)
+  list(APPEND TGT_COMPILE_FLAGS "-undefined dynamic_lookup;-Wno-unused-command-line-argument")
+  set(SHARED_LIB_EXTENSION "dylib")
+else()
+  set(SHARED_LIB_EXTENSION "so")
+  set(LIBSALMON_LINKER_FLAGS "")
+endif()
+
+set(BOOST_EXTRA_FLAGS "--layout=tagged")
+set(NON_APPLECLANG_LIBS gomp)
+
+if(UNIX AND NOT APPLE)
+  set(LIBRT rt)
+endif()
+
+set(PTHREAD_LIB)
+set(SHASUM "${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_shasum.sh")
+
+if("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
+  execute_process(COMMAND ${CMAKE_CXX_COMPILER} -dumpversion OUTPUT_VARIABLE GCC_VERSION)
+  if(APPLE AND NOT (GCC_VERSION VERSION_GREATER ${GCCVERSION} OR GCC_VERSION VERSION_EQUAL ${GCCVERSION}))
+    message(FATAL_ERROR "When building under OSX, ${PROJECT_NAME} requires either clang or g++ >= ${GCCVERSION}")
+  elseif(NOT (GCC_VERSION VERSION_GREATER ${GCCVERSION} OR GCC_VERSION VERSION_EQUAL ${GCCVERSION}))
+    message(FATAL_ERROR "${PROJECT_NAME} requires g++ ${GCCVERSION} or greater.")
+  endif()
+
+  if(GCC_VERSION VERSION_GREATER_EQUAL "7.1")
+    list(APPEND TGT_WARN_FLAGS "-Wno-int-in-bool-context")
+  endif()
+
+  if(GCC_VERSION VERSION_GREATER_EQUAL "9.1")
+    list(APPEND TGT_WARN_FLAGS "-Wno-deprecated-copy")
+  endif()
+
+  set(GCC TRUE)
+  set(CC_VERSION "${CMAKE_CXX_COMPILER_VERSION}")
+
+  set(PTHREAD_LIB "pthread")
+  if(NOT APPLE)
+    list(APPEND TGT_COMPILE_FLAGS -static-libstdc++)
+  endif()
+
+  set(WARNING_IGNORE_FLAGS "${WARNING_IGNORE_FLAGS} -Wno-unused-local-typedefs")
+  set(BOOST_TOOLSET "gcc")
+  set(BOOST_CONFIGURE_TOOLSET "--with-toolset=gcc")
+  set(BCXX_FLAGS "${CXXSTDFLAG} ${SCHAR_FLAG}")
+  set(BOOST_EXTRA_FLAGS toolset=gcc cxxflags=${BCXX_FLAGS})
+elseif("${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang")
+  set(CLANG TRUE)
+  include(CheckCXXCompilerFlag)
+  check_cxx_compiler_flag(-stdlib=libc++ HAVE_LIBCPP)
+  if(HAVE_LIBCPP)
+    message(STATUS "Compiling with clang and libc++")
+    list(APPEND TGT_COMPILE_FLAGS -stdlib=libc++)
+    set(BOOST_TOOLSET "clang")
+    set(BOOST_CONFIGURE_TOOLSET "--with-toolset=clang")
+    set(BCXX_FLAGS "-stdlib=libc++ ${SCHAR_FLAG}")
+    set(BOOST_EXTRA_FLAGS toolset=clang cxxflags=${BCXX_FLAGS} linkflags="-stdlib=libc++")
+  else()
+    list(APPEND TGT_COMPILE_FLAGS -static-libstdc++)
+  endif()
+  if(APPLE)
+    set(NON_APPLECLANG_LIBS "")
+  else()
+    set(PTHREAD_LIB "pthread")
+  endif()
+else()
+  message(FATAL_ERROR "Your C++ compiler does not support C++17.")
+endif()
+
+if(CMAKE_BUILD_TYPE MATCHES Debug)
+  message(STATUS "Making Debug build")
+elseif(CMAKE_BUILD_TYPE MATCHES Release)
+  message(STATUS "Making Release build")
+else()
+  message(STATUS "Making default build type")
+endif()
+
+try_compile(HAVE_INT128_NUMERIC_LIMITS
+            ${CMAKE_BINARY_DIR}
+            SOURCES ${GAT_SOURCE_DIR}/tests/compile_tests/int128_numeric_limits.cpp
+            CXX_STANDARD 17
+            CXX_STANDARD_REQUIRED ON)
+if(HAVE_INT128_NUMERIC_LIMITS)
+  message(STATUS "Setting -DHAVE_NUMERIC_LIMITS128")
+  list(APPEND TGT_COMPILE_FLAGS "-DHAVE_NUMERIC_LIMITS128")
+else()
+  message(STATUS "Not setting -DHAVE_NUMERIC_LIMITS128")
+endif()

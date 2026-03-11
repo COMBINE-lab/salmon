@@ -1,5 +1,2 @@
-#######
-#
-###### Custom themes (no version specifiers) ######
+sphinx>=7.0,<9
 furo
-
