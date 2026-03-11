@@ -15,6 +15,7 @@ Contents:
    salmon.rst
    file_formats.rst
    library_type.rst
+   license.rst
 
 Indices and tables
 ==================
