@@ -6,6 +6,13 @@
 > - legacy docs: [salmon docs v1.10.2](https://salmon.readthedocs.io/en/v1.10.2/)
 > - source checkout: `git checkout v1.10.2`
 
+> [!IMPORTANT]
+> `salmon` v1.11.0 is a substantial refactor, and also changes the backend underlying index to 
+> use the excellent [SSHash](https://github.com/jermp/sshash) index. The functionality and output
+> of `salmon` should remain backward compatible, but any indexes built with versions < `1.11.0` 
+> must be rebuilt.
+
+
 <img alt="salmon logo" src="https://github.com/COMBINE-lab/salmon/raw/master/doc/salmon_logo.png" width="600">
 
 [![Documentation Status](https://readthedocs.org/projects/salmon/badge/?version=latest)](http://salmon.readthedocs.org/en/latest)
