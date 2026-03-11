@@ -75,6 +75,10 @@ int salmonIndex(int argc, const char* argv[], std::unique_ptr<SalmonIndex>& /* s
     ("kmerLen,k",
       po::value<uint32_t>(&idxOpt.k)->default_value(31)->required(),
       "The size of k-mers that should be used for the quasi index.")
+    ("minimizerLen,m",
+      po::value<uint32_t>(&idxOpt.m)->default_value(0),
+      "The minimizer length used by SSHash. If not provided (or 0), it is "
+      "automatically set to min(20, max(4, k-4)). Must be less than k.")
     ("index,i", po::value<string>()->required(), "salmon index.")
     ("gencode", po::bool_switch(&gencodeRef)->default_value(false),
       "This flag will expect the input transcript fasta to be in GENCODE "
