@@ -5,9 +5,11 @@
 //! positional) and the alignment error model are added in later phases.
 
 pub mod fld;
+pub mod gcbias;
 pub mod libdetect;
 pub mod seqbias;
 
 pub use fld::FragmentLengthDistribution;
+pub use gcbias::{gc_ratio, GcFragModel};
 pub use libdetect::LibraryTypeDetector;
 pub use seqbias::{build_expected, corrected_effective_length, SBModel};
