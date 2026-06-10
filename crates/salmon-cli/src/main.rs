@@ -113,6 +113,9 @@ struct QuantArgs {
     /// Enable sequence-specific bias correction.
     #[arg(long = "seqBias")]
     seq_bias: bool,
+    /// Enable fragment-GC bias correction.
+    #[arg(long = "gcBias")]
+    gc_bias: bool,
     /// Minimum alignment score as a fraction of the perfect score.
     #[arg(long = "minScoreFraction", default_value_t = 0.65)]
     min_score_fraction: f32,
@@ -193,6 +196,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.incompat_prior = args.incompat_prior;
     opts.dump_eq = args.dump_eq;
     opts.seq_bias = args.seq_bias;
+    opts.gc_bias = args.gc_bias;
     opts.map_config.align.min_score_fraction = args.min_score_fraction;
     opts.map_config.align.full_length_alignment = args.full_length_alignment;
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems);

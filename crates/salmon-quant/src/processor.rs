@@ -23,7 +23,7 @@ use salmon_map::{
     ScoredMapping,
 };
 use salmon_model::seqbias::{SBModel, CONTEXT_LEFT, CONTEXT_LENGTH, CONTEXT_RIGHT};
-use salmon_model::{FragmentLengthDistribution, LibraryTypeDetector};
+use salmon_model::{gc_desc, FragmentLengthDistribution, GcFragModel, LibraryTypeDetector};
 
 /// Shared, thread-safe state (all `Copy` references).
 #[derive(Clone, Copy)]
@@ -49,6 +49,12 @@ pub(crate) struct Shared<'a> {
     pub collect_seqbias: bool,
     /// shared observed (fw, rc) sequence-bias models to merge per-thread results into
     pub seqbias_obs: Option<&'a Mutex<(SBModel, SBModel)>>,
+    /// collect observed fragment-GC contexts (`--gcBias`)
+    pub collect_gcbias: bool,
+    /// per-transcript cumulative G+C prefix sums (for `gcDesc`), when GC-correcting
+    pub gc_prefix: Option<&'a [Vec<u32>]>,
+    /// shared observed fragment-GC model to merge per-thread results into
+    pub gcbias_obs: Option<&'a Mutex<GcFragModel>>,
     pub num_processed: &'a AtomicU64,
     pub num_mapped: &'a AtomicU64,
 }
@@ -59,6 +65,8 @@ pub(crate) struct QuantProcessor<'a> {
     pub hs: Option<HitSearcher<'a>>,
     /// per-thread observed (fw, rc) sequence-bias models (when collecting)
     pub seqbias: Option<(SBModel, SBModel)>,
+    /// per-thread observed fragment-GC model (when collecting)
+    pub gcbias: Option<GcFragModel>,
 }
 
 impl<'a> QuantProcessor<'a> {
@@ -66,10 +74,12 @@ impl<'a> QuantProcessor<'a> {
         let seqbias = shared
             .collect_seqbias
             .then(|| (SBModel::new(), SBModel::new()));
+        let gcbias = shared.collect_gcbias.then(GcFragModel::default_model);
         Self {
             shared,
             hs: None,
             seqbias,
+            gcbias,
         }
     }
 }
@@ -120,8 +130,43 @@ fn collect_context(salmon: &SalmonIndex, m: &ScoredMapping, obs: &mut (SBModel, 
     }
 }
 
+/// Collect the observed fragment-GC contexts for one fragment's compatible
+/// paired mappings, each weighted by its normalized (posterior) weight. Mirrors
+/// salmon's per-alignment `observedGCMass.inc(gcDesc(start, stop), logProb)` for
+/// `PAIRED_END` fragments (`start = min(pos, matePos)`, `stop = start + fragLen − 1`).
+fn collect_gc(
+    sh: &Shared,
+    compat: &[(&ScoredMapping, f64)],
+    wsum: f64,
+    gc: &mut GcFragModel,
+) {
+    let Some(prefixes) = sh.gc_prefix else { return };
+    if wsum <= 0.0 {
+        return;
+    }
+    for (m, w) in compat {
+        if m.status != MateStatus::PairedEndPaired || m.fragment_len <= 0 {
+            continue;
+        }
+        let start = m.ref_pos;
+        let stop = m.ref_pos + m.fragment_len - 1;
+        let ref_len = prefixes[m.tid as usize].len() as i32;
+        if start < 0 || stop >= ref_len {
+            continue;
+        }
+        if let Some((ff, cf)) = gc_desc(&prefixes[m.tid as usize], ref_len, start, stop) {
+            gc.inc(ff, cf, w / wsum);
+        }
+    }
+}
+
 /// Record one fragment's weighted mappings into the shared accumulators.
-fn record(sh: &Shared, maps: &[ScoredMapping], seqbias: Option<&mut (SBModel, SBModel)>) {
+fn record(
+    sh: &Shared,
+    maps: &[ScoredMapping],
+    seqbias: Option<&mut (SBModel, SBModel)>,
+    gcbias: Option<&mut GcFragModel>,
+) {
     sh.num_processed.fetch_add(1, Ordering::Relaxed);
     if maps.is_empty() {
         return;
@@ -142,24 +187,32 @@ fn record(sh: &Shared, maps: &[ScoredMapping], seqbias: Option<&mut (SBModel, SB
     }
 
     // Strand-compatibility filtering against an explicit expected format.
-    let mut pairs: Vec<(u32, f64)> = maps
+    let compat: Vec<(&ScoredMapping, f64)> = maps
         .iter()
         .filter_map(|m| match sh.expected_format {
             Some(exp) => {
                 if is_compatible(exp, m.format, m.is_fw, m.status) {
-                    Some((m.tid, m.weight))
+                    Some((m, m.weight))
                 } else if sh.ignore_incompat {
                     None
                 } else {
-                    Some((m.tid, m.weight * sh.incompat_prior))
+                    Some((m, m.weight * sh.incompat_prior))
                 }
             }
-            None => Some((m.tid, m.weight)),
+            None => Some((m, m.weight)),
         })
         .collect();
-    if pairs.is_empty() {
+    if compat.is_empty() {
         return; // no compatible mapping -> fragment is unassigned
     }
+
+    // Collect observed fragment-GC contexts (posterior-weighted) for `--gcBias`.
+    if let Some(gc) = gcbias {
+        let wsum: f64 = compat.iter().map(|(_, w)| *w).sum();
+        collect_gc(sh, &compat, wsum, gc);
+    }
+
+    let mut pairs: Vec<(u32, f64)> = compat.iter().map(|(m, w)| (m.tid, *w)).collect();
 
     // Observe a fragment length from the best concordant compatible pair.
     let best_concordant = maps
@@ -209,12 +262,17 @@ fn record(sh: &Shared, maps: &[ScoredMapping], seqbias: Option<&mut (SBModel, SB
     sh.eq.add_group(group, weights, 1);
 }
 
-/// Merge this thread's observed sequence-bias models into the shared models.
-fn merge_seqbias(proc: &QuantProcessor) {
+/// Merge this thread's observed bias models (sequence and GC) into the shared
+/// accumulators.
+fn merge_bias(proc: &QuantProcessor) {
     if let (Some(local), Some(shared_mtx)) = (proc.seqbias.as_ref(), proc.shared.seqbias_obs) {
         let mut g = shared_mtx.lock().unwrap();
         g.0.combine_counts(&local.0);
         g.1.combine_counts(&local.1);
+    }
+    if let (Some(local), Some(shared_mtx)) = (proc.gcbias.as_ref(), proc.shared.gcbias_obs) {
+        let mut g = shared_mtx.lock().unwrap();
+        g.combine_counts(local);
     }
 }
 
@@ -223,7 +281,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         &mut self,
         pairs: impl Iterator<Item = (RefRecord<'r>, RefRecord<'r>)>,
     ) -> paraseq::Result<()> {
-        let QuantProcessor { shared, hs, seqbias } = self;
+        let QuantProcessor { shared, hs, seqbias, gcbias } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
         if hs.is_none() {
@@ -238,13 +296,13 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             } else {
                 map_read_pair(idx, hs, sh.salmon, s1.as_ref(), s2.as_ref(), sh.map_cfg)
             };
-            record(&sh, &maps, seqbias.as_mut());
+            record(&sh, &maps, seqbias.as_mut(), gcbias.as_mut());
         }
         Ok(())
     }
 
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
-        merge_seqbias(self);
+        merge_bias(self);
         Ok(())
     }
 }
@@ -254,7 +312,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         &mut self,
         records: impl Iterator<Item = RefRecord<'r>>,
     ) -> paraseq::Result<()> {
-        let QuantProcessor { shared, hs, seqbias } = self;
+        let QuantProcessor { shared, hs, seqbias, gcbias } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
         if hs.is_none() {
@@ -268,13 +326,13 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             } else {
                 map_single_read(idx, hs, sh.salmon, s.as_ref(), sh.map_cfg)
             };
-            record(&sh, &maps, seqbias.as_mut());
+            record(&sh, &maps, seqbias.as_mut(), gcbias.as_mut());
         }
         Ok(())
     }
 
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
-        merge_seqbias(self);
+        merge_bias(self);
         Ok(())
     }
 }

@@ -17,8 +17,9 @@
 
 /// salmon's default number of conditioning (context) bins (`numConditionalGCBins`).
 pub const DEFAULT_COND_BINS: usize = 3;
-/// salmon's default number of fragment-GC bins for accumulation.
-pub const DEFAULT_GC_BINS: usize = 101;
+/// salmon's default number of fragment-GC bins for accumulation
+/// (`salmon::defaults::numFragGCBins`).
+pub const DEFAULT_GC_BINS: usize = 25;
 /// salmon's `ratio()` clamp (`gcBias = gcCounts.ratio(transcriptGCDist, 1000.0)`).
 pub const GC_MAX_RATIO: f64 = 1000.0;
 /// salmon's per-row normalization prior.
@@ -132,6 +133,262 @@ pub fn gc_ratio(observed: &mut GcFragModel, expected: &mut GcFragModel, max_rati
     out
 }
 
+// ===========================================================================
+// Fragment-GC content (salmon's `Transcript::GCCount_` / `gcFrac` / `gcDesc`)
+// ===========================================================================
+
+use crate::seqbias::{
+    conditional_cdf, log_bias, revcomp_bytes, SBModel, CONTEXT_LEFT, CONTEXT_LENGTH, MIN_ALPHA,
+    MIN_CDF_MASS,
+};
+
+/// salmon's fragment-length sampling stride for the GC convolution
+/// (`pdfSampFactor` = `biasSpeedSamp`, default 5).
+pub const GC_SAMP_STRIDE: usize = 5;
+
+/// `gcDesc` context-window geometry (salmon `Transcript::gcDesc`):
+/// `outsideContext = 3`, `insideContext = 2`.
+const OUTSIDE_5P: i32 = 4; // outsideContext + 1
+const OUTSIDE_3P: i32 = 3; // outsideContext
+const INSIDE_5P: i32 = 1; // insideContext - 1
+const INSIDE_3P: i32 = 2; // insideContext
+
+/// Round half-to-even, matching C++ `std::lrint` under the default rounding mode.
+#[inline]
+fn lrint(x: f64) -> i32 {
+    x.round_ties_even() as i32
+}
+
+/// Cumulative G+C counts (salmon's `Transcript::GCCount_`): `prefix[p]` is the
+/// number of `G`/`C` bases in `seq[0..=p]`.
+pub fn gc_prefix(seq: &[u8]) -> Vec<u32> {
+    let mut prefix = Vec::with_capacity(seq.len());
+    let mut acc = 0u32;
+    for &b in seq {
+        if matches!(b, b'G' | b'g' | b'C' | b'c') {
+            acc += 1;
+        }
+        prefix.push(acc);
+    }
+    prefix
+}
+
+/// GC count in the closed interval `[a, b]` from a cumulative-count prefix.
+#[inline]
+fn gc_in(prefix: &[u32], a: i32, b: i32) -> i64 {
+    let lo = if a > 0 { prefix[(a - 1) as usize] as i64 } else { 0 };
+    prefix[b as usize] as i64 - lo
+}
+
+/// Fragment GC fraction (0–100) over the closed interval `[s, e]`
+/// (salmon's `Transcript::gcFrac`): `round(100·GC[s,e] / (e−s+1))`.
+#[inline]
+pub fn gc_frac(prefix: &[u32], s: i32, e: i32) -> i32 {
+    lrint(100.0 * gc_in(prefix, s, e) as f64 / (e - s + 1) as f64)
+}
+
+/// Fragment GC descriptor `(fragFrac, contextFrac)` for the closed fragment
+/// `[s, e]` (salmon's `Transcript::gcDesc`). The context fraction is the GC
+/// content over a 5-base 5' window `[s−3, s+1]` and a 5-base 3' window
+/// `[e−1, e+3]` (edge-clamped). Returns `None` when the context window is empty
+/// (matching salmon's `valid = false`).
+#[inline]
+pub fn gc_desc(prefix: &[u32], ref_len: i32, s: i32, e: i32) -> Option<(i32, i32)> {
+    let last = ref_len - 1;
+    let cs = if s > 0 { prefix[(s - 1) as usize] as i64 } else { 0 };
+    let ce = prefix[e as usize] as i64;
+
+    let fs = s - OUTSIDE_5P;
+    let fe = s + INSIDE_5P;
+    let ts = e - INSIDE_3P;
+    let te = e + OUTSIDE_3P;
+
+    let fp_left = fs >= 0;
+    let fp_right = fe <= last;
+    let tp_left = ts >= 0;
+    let tp_right = te <= last;
+
+    let fps = if fp_left { prefix[fs as usize] as i64 } else { 0 };
+    let fpe = if fp_right { prefix[fe as usize] as i64 } else { ce };
+    let tps = if tp_left { prefix[ts as usize] as i64 } else { 0 };
+    let tpe = if tp_right { prefix[te as usize] as i64 } else { ce };
+
+    let fs_c = fs.max(0);
+    let fe_c = fe.min(last);
+    let ts_c = ts.max(0);
+    let te_c = te.min(last);
+    let fp_context_size = if !fp_left { fe_c + 1 } else { fe_c - fs_c };
+    let tp_context_size = if !tp_left { te_c + 1 } else { te_c - ts_c };
+    let context_size = (fp_context_size + tp_context_size) as f64;
+    if context_size == 0.0 {
+        return None;
+    }
+
+    let frag_frac = lrint(100.0 * (ce - cs) as f64 / (e - s + 1) as f64);
+    let context_frac = lrint(100.0 * ((fpe - fps) + (tpe - tps)) as f64 / context_size);
+    Some((frag_frac, context_frac))
+}
+
+/// Build the *expected* fragment-GC model (salmon's `transcriptGCDist`): slide
+/// every fragment `[fragStart, fragStart+fl−1]` over each expressed transcript,
+/// weighting each by `(alpha/effLen)·(conditionalCDF(fl) − prevMass)` — the same
+/// abundance-density × conditional-FLD weighting used for the expected
+/// sequence-bias model. `k` is the leading offset salmon excludes from the
+/// fragment-start loop (`9` with `--seqBias`, `1` otherwise); `stride` subsamples
+/// fragment lengths ([`GC_SAMP_STRIDE`]).
+#[allow(clippy::too_many_arguments)]
+pub fn build_expected_gc<'a, FS, FP>(
+    num_refs: usize,
+    seq_of: FS,
+    prefix_of: FP,
+    alphas: &[f64],
+    eff_lens: &[f64],
+    cdf: &[f64],
+    fld_low: usize,
+    fld_high: usize,
+    cond_bins: usize,
+    gc_bins: usize,
+    k: usize,
+    stride: usize,
+) -> GcFragModel
+where
+    FS: Fn(usize) -> &'a [u8],
+    FP: Fn(usize) -> &'a [u32],
+{
+    let stride = stride.max(1) as i32;
+    let mut model = GcFragModel::new(cond_bins, gc_bins);
+    for tid in 0..num_refs {
+        if alphas[tid] < MIN_ALPHA || eff_lens[tid] <= 0.0 {
+            continue;
+        }
+        let seq = seq_of(tid);
+        let ref_len = seq.len();
+        if ref_len <= k {
+            continue;
+        }
+        let cdf_max_arg = (cdf.len() - 1).min(ref_len);
+        let cdf_max_val = cdf[cdf_max_arg];
+        if cdf_max_val < MIN_CDF_MASS {
+            continue;
+        }
+        let prefix = prefix_of(tid);
+        let weight = alphas[tid] / eff_lens[tid];
+        let cond = |x: i32| conditional_cdf(cdf, cdf_max_arg, cdf_max_val, x);
+        let sp = if fld_low > 0 { fld_low as i32 - 1 } else { 0 };
+        for frag_start in 0..(ref_len - k) {
+            let mut prev = cond(sp);
+            let mut fl = fld_low as i32;
+            while fl <= fld_high as i32 {
+                let frag_end = frag_start as i32 + fl - 1;
+                if (frag_end as usize) < ref_len {
+                    if let Some((ff, cf)) = gc_desc(prefix, ref_len as i32, frag_start as i32, frag_end)
+                    {
+                        model.inc(ff, cf, weight * (cond(fl) - prev));
+                    }
+                    prev = cond(fl);
+                } else {
+                    break;
+                }
+                fl += stride;
+            }
+        }
+    }
+    model
+}
+
+/// Bias-corrected effective length including fragment-GC bias (and, when
+/// `seq_models` is provided, sequence-specific bias too). Mirrors salmon's
+/// combined `updateEffectiveLengths` convolution: per-position 5'/3' sequence
+/// factors are multiplied by the per-fragment `gcBias.get({fragFrac, contextFrac})`
+/// ratio, convolved with the conditional FLD, and floored at the lower barrier.
+///
+/// `gc_bias` is the normalized observed/expected ratio model ([`gc_ratio`]).
+/// `seq_models` is `(obs_fw, exp_fw, obs_rc, exp_rc)` when `--seqBias` is also on.
+#[allow(clippy::too_many_arguments)]
+pub fn gc_corrected_effective_length(
+    seq: &[u8],
+    prefix: &[u32],
+    cdf: &[f64],
+    fld_low: usize,
+    fld_high: usize,
+    gc_bias: &GcFragModel,
+    seq_models: Option<(&SBModel, &SBModel, &SBModel, &SBModel)>,
+    elen: f64,
+    stride: usize,
+) -> f64 {
+    let k = if seq_models.is_some() { CONTEXT_LENGTH } else { 1 };
+    let ref_len = seq.len();
+    let unprocessed = (ref_len as i32 - elen as i32).max(0);
+    let cdf_max_arg = (cdf.len() - 1).min(ref_len);
+    let cdf_max_val = cdf[cdf_max_arg];
+    if ref_len < k || unprocessed <= 0 || cdf_max_val < MIN_CDF_MASS {
+        return elen;
+    }
+    let cond = |x: i32| conditional_cdf(cdf, cdf_max_arg, cdf_max_val, x);
+
+    // Per-position sequence-bias factors (1.0 when not seq-correcting).
+    let mut fw = vec![1.0f64; ref_len];
+    let mut rc = vec![1.0f64; ref_len];
+    if let Some((obs_fw, exp_fw, obs_rc, exp_rc)) = seq_models {
+        let cu = CONTEXT_LEFT;
+        let rc_seq = revcomp_bytes(seq);
+        for frag_start in 0..(ref_len - CONTEXT_LENGTH) {
+            let read_start = frag_start + cu;
+            if read_start < ref_len {
+                fw[read_start] =
+                    log_bias(obs_fw, exp_fw, &seq[frag_start..frag_start + CONTEXT_LENGTH], false)
+                        .exp();
+                rc[read_start] = log_bias(
+                    obs_rc,
+                    exp_rc,
+                    &rc_seq[frag_start..frag_start + CONTEXT_LENGTH],
+                    false,
+                )
+                .exp();
+            }
+        }
+        rc.reverse();
+    }
+
+    // Convolve seq×gc fragment factors with the conditional FLD.
+    let stride = stride.max(1) as i32;
+    let max_len = (ref_len as i32).min(fld_high as i32 + 1);
+    let mut fl = fld_low as i32;
+    let mut done = fl >= max_len;
+    let sp = if fl > 0 { fl - 1 } else { 0 };
+    let mut prev_mass = cond(sp);
+    let mut eff = 0.0f64;
+    while !done {
+        if fl >= max_len {
+            done = true;
+            fl = max_len - 1;
+        }
+        let fl_weight = cond(fl) - prev_mass;
+        prev_mass = cond(fl);
+        let mut mass = 0.0f64;
+        let mut kstart = 0i32;
+        while kstart < ref_len as i32 - fl {
+            let frag_start = kstart;
+            let frag_end = kstart + fl - 1;
+            if (frag_end as usize) < ref_len {
+                let mut frag_factor = fw[frag_start as usize] * rc[frag_end as usize];
+                if let Some((ff, cf)) = gc_desc(prefix, ref_len as i32, frag_start, frag_end) {
+                    frag_factor *= gc_bias.get(ff, cf);
+                }
+                mass += frag_factor;
+            } else {
+                break;
+            }
+            kstart += 1;
+        }
+        eff += fl_weight * mass;
+        fl += stride;
+    }
+
+    let offset = (unprocessed as f64).max(1.0);
+    eff.max(elen.min(offset))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,6 +433,51 @@ mod tests {
         for gc in 0..=100 {
             assert!((r.get(gc, 0) - 1.0).abs() < 1e-9, "gc {gc}: {}", r.get(gc, 0));
         }
+    }
+
+    #[test]
+    fn gc_frac_basic() {
+        // 10-base sequence, 5 G/C -> 50%
+        let seq = b"ACGTACGTAC"; // A C G T A C G T A C : GC at 1,2,5,6,9 = 5
+        let p = gc_prefix(seq);
+        assert_eq!(gc_frac(&p, 0, 9), 50);
+        // all-GC window
+        let seq2 = b"GGGGCCCC";
+        let p2 = gc_prefix(seq2);
+        assert_eq!(gc_frac(&p2, 0, 7), 100);
+        // single base
+        assert_eq!(gc_frac(&p, 2, 2), 100); // 'G'
+        assert_eq!(gc_frac(&p, 0, 0), 0); // 'A'
+    }
+
+    #[test]
+    fn gc_desc_matches_frag_and_context() {
+        // 40-base sequence; check an interior fragment
+        let seq: Vec<u8> = b"ACGT".iter().cycle().take(40).copied().collect();
+        let p = gc_prefix(&seq);
+        let (ff, cf) = gc_desc(&p, 40, 10, 29).unwrap();
+        // ACGT repeat is exactly 50% GC everywhere
+        assert_eq!(ff, 50, "fragFrac");
+        assert!((0..=100).contains(&cf), "contextFrac in range: {cf}");
+        // fragFrac must equal gc_frac over the same interval
+        assert_eq!(ff, gc_frac(&p, 10, 29));
+    }
+
+    #[test]
+    fn gc_desc_context_window_geometry() {
+        // Make the 5' context window [s-3, s+1] all GC and the rest AT, so the
+        // contextFrac is dominated by the GC island near the fragment ends.
+        let mut seq = vec![b'A'; 60];
+        for i in 17..=21 {
+            seq[i] = b'G'; // 5' window for s=20 is [17,21]
+        }
+        for i in 39..=43 {
+            seq[i] = b'C'; // 3' window for e=40 is [39,43]
+        }
+        let p = gc_prefix(&seq);
+        let (_ff, cf) = gc_desc(&p, 60, 20, 40).unwrap();
+        // both 5-base context windows are fully G/C -> 100%
+        assert_eq!(cf, 100, "contextFrac");
     }
 
     #[test]

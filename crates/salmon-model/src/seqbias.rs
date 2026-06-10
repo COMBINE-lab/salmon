@@ -171,7 +171,7 @@ impl SBModel {
 }
 
 /// Reverse-complement a DNA byte slice (ACGT; other bases map to `A`).
-fn revcomp_bytes(seq: &[u8]) -> Vec<u8> {
+pub(crate) fn revcomp_bytes(seq: &[u8]) -> Vec<u8> {
     seq.iter()
         .rev()
         .map(|&b| match b {
@@ -186,9 +186,9 @@ fn revcomp_bytes(seq: &[u8]) -> Vec<u8> {
 
 /// Minimum transcript abundance to contribute to / be corrected by the bias
 /// background (salmon's `minAlpha`).
-const MIN_ALPHA: f64 = 1e-8;
+pub(crate) const MIN_ALPHA: f64 = 1e-8;
 /// Minimum reliable CDF mass for a transcript (salmon's `minCDFMass`).
-const MIN_CDF_MASS: f64 = 1e-10;
+pub(crate) const MIN_CDF_MASS: f64 = 1e-10;
 /// Fragment-length sampling stride in the effective-length convolution
 /// (salmon's `pdfSampFactor` = `biasSpeedSamp` default).
 pub const FLD_SAMP_STRIDE: usize = 5;
@@ -221,7 +221,7 @@ pub fn fld_cdf_and_bounds(pmf_lin: &[f64]) -> (Vec<f64>, usize, usize) {
 /// `cdfMaxArg = min(cdf.len()-1, refLen)` normalizes the FLD to the fragment
 /// lengths that fit in this transcript.
 #[inline]
-fn conditional_cdf(cdf: &[f64], cdf_max_arg: usize, cdf_max_val: f64, x: i32) -> f64 {
+pub(crate) fn conditional_cdf(cdf: &[f64], cdf_max_arg: usize, cdf_max_val: f64, x: i32) -> f64 {
     if x > cdf_max_arg as i32 {
         1.0
     } else if x <= 0 {

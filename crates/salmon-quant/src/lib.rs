@@ -64,6 +64,8 @@ pub struct QuantOptions {
     pub dump_eq: bool,
     /// enable sequence-specific bias correction (`--seqBias`)
     pub seq_bias: bool,
+    /// enable fragment-GC bias correction (`--gcBias`)
+    pub gc_bias: bool,
 }
 
 impl QuantOptions {
@@ -84,6 +86,7 @@ impl QuantOptions {
             incompat_prior: 0.0,
             dump_eq: false,
             seq_bias: false,
+            gc_bias: false,
         }
     }
 
@@ -154,6 +157,17 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         .seq_bias
         .then(|| std::sync::Mutex::new((SBModel::new(), SBModel::new())));
 
+    // For `--gcBias`: per-transcript cumulative G+C prefix sums (salmon's
+    // `Transcript::GCCount_`) and the shared observed fragment-GC model.
+    let gc_prefix: Option<Vec<Vec<u32>>> = opts.gc_bias.then(|| {
+        (0..num_refs)
+            .map(|tid| salmon_model::gc_prefix(salmon.ref_seq(tid as u32)))
+            .collect()
+    });
+    let gcbias_obs = opts
+        .gc_bias
+        .then(|| std::sync::Mutex::new(salmon_model::GcFragModel::default_model()));
+
     // ---- parallel mapping pass (borrows the accumulators) -------------------
     {
         let shared = Shared {
@@ -170,6 +184,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             ignore_incompat,
             collect_seqbias: opts.seq_bias,
             seqbias_obs: seqbias_obs.as_ref(),
+            collect_gcbias: opts.gc_bias,
+            gc_prefix: gc_prefix.as_deref(),
+            gcbias_obs: gcbias_obs.as_ref(),
             num_processed: &num_processed,
             num_mapped: &num_mapped,
         };
@@ -219,46 +236,95 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     }
     let mut em = optimize(&collapsed, num_refs, &opts.em);
 
-    // ---- sequence-bias correction: re-estimate effective lengths -----------
-    // Build expected models from the initial abundance estimate, recompute
-    // bias-corrected effective lengths, then re-run inference.
-    if let Some(obs_mtx) = seqbias_obs {
+    // ---- bias correction: re-estimate effective lengths --------------------
+    // Build the expected (background) bias models from the initial abundance
+    // estimate, recompute bias-corrected effective lengths, then re-run
+    // inference. Handles `--seqBias`, `--gcBias`, or both combined.
+    if opts.seq_bias || opts.gc_bias {
         use rayon::prelude::*;
-        let (mut obs_fw, mut obs_rc) = obs_mtx.into_inner().unwrap();
-        obs_fw.normalize();
-        obs_rc.normalize();
         let pmf_lin: Vec<f64> = log_pmf.iter().map(|lp| lp.exp()).collect();
         let (fld_cdf, fld_low, fld_high) = salmon_model::seqbias::fld_cdf_and_bounds(&pmf_lin);
-        let (exp_fw, exp_rc) = salmon_model::build_expected(
-            num_refs,
-            |t| salmon.ref_seq(t as u32),
-            &em.alphas,
-            &eff_lengths,
-            &fld_cdf,
-        );
 
-        // Both forward and RC observed models are populated by read orientation
-        // (forward reads' 5' contexts -> fw, reverse reads' 5' contexts -> rc),
-        // so both sides of the correction are informative for single- and
-        // paired-end data alike.
+        // Sequence-bias observed + expected models.
+        let seq = seqbias_obs.map(|m| {
+            let (mut obs_fw, mut obs_rc) = m.into_inner().unwrap();
+            obs_fw.normalize();
+            obs_rc.normalize();
+            let (exp_fw, exp_rc) = salmon_model::build_expected(
+                num_refs,
+                |t| salmon.ref_seq(t as u32),
+                &em.alphas,
+                &eff_lengths,
+                &fld_cdf,
+            );
+            (obs_fw, obs_rc, exp_fw, exp_rc)
+        });
+
+        // Fragment-GC observed + expected models -> clamped ratio model.
+        let prefixes = gc_prefix.as_ref();
+        let gc_ratio_model = gcbias_obs.map(|m| {
+            let mut obs = m.into_inner().unwrap();
+            // K excludes the leading context only when seq-correcting too.
+            let k = if opts.seq_bias {
+                salmon_model::seqbias::CONTEXT_LENGTH
+            } else {
+                1
+            };
+            let mut exp = salmon_model::build_expected_gc(
+                num_refs,
+                |t| salmon.ref_seq(t as u32),
+                |t| prefixes.unwrap()[t].as_slice(),
+                &em.alphas,
+                &eff_lengths,
+                &fld_cdf,
+                fld_low,
+                fld_high,
+                salmon_model::gcbias::DEFAULT_COND_BINS,
+                salmon_model::gcbias::DEFAULT_GC_BINS,
+                k,
+                salmon_model::GC_SAMP_STRIDE,
+            );
+            salmon_model::gc_ratio(&mut obs, &mut exp, salmon_model::gcbias::GC_MAX_RATIO)
+        });
+
         let corrected: Vec<f64> = (0..num_refs)
             .into_par_iter()
             .map(|tid| {
                 if em.alphas[tid] < 1e-8 {
-                    eff_lengths[tid]
-                } else {
-                    salmon_model::corrected_effective_length(
-                        salmon.ref_seq(tid as u32),
+                    return eff_lengths[tid];
+                }
+                let s = salmon.ref_seq(tid as u32);
+                match (&gc_ratio_model, &seq) {
+                    // GC bias (optionally combined with sequence bias).
+                    (Some(gc), seq_opt) => salmon_model::gc_corrected_effective_length(
+                        s,
+                        prefixes.unwrap()[tid].as_slice(),
                         &fld_cdf,
                         fld_low,
                         fld_high,
-                        &obs_fw,
-                        &exp_fw,
-                        &obs_rc,
-                        &exp_rc,
+                        gc,
+                        seq_opt
+                            .as_ref()
+                            .map(|(of, or, ef, er)| (of, ef, or, er)),
                         eff_lengths[tid],
-                        salmon_model::seqbias::FLD_SAMP_STRIDE,
-                    )
+                        salmon_model::GC_SAMP_STRIDE,
+                    ),
+                    // Sequence bias only.
+                    (None, Some((obs_fw, obs_rc, exp_fw, exp_rc))) => {
+                        salmon_model::corrected_effective_length(
+                            s,
+                            &fld_cdf,
+                            fld_low,
+                            fld_high,
+                            obs_fw,
+                            exp_fw,
+                            obs_rc,
+                            exp_rc,
+                            eff_lengths[tid],
+                            salmon_model::seqbias::FLD_SAMP_STRIDE,
+                        )
+                    }
+                    (None, None) => eff_lengths[tid],
                 }
             })
             .collect();
