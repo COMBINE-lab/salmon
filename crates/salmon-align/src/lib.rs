@@ -180,6 +180,24 @@ struct FragRecord {
     ops: Vec<(AlnOp, usize)>,
     score: i32,
     frag_len: i32,
+    /// reverse-strand alignment (BAM `0x10` flag)
+    is_reverse: bool,
+    /// reference span (Σ ref-consuming CIGAR op lengths); the read's 3' end on
+    /// the reference is `pos + ref_span − 1`
+    ref_span: usize,
+}
+
+impl FragRecord {
+    /// The read's 5' reference position: its leftmost if forward, its rightmost
+    /// if reverse-complemented (salmon's `startPos`).
+    #[inline]
+    fn five_prime(&self) -> usize {
+        if self.is_reverse {
+            self.pos + self.ref_span.saturating_sub(1)
+        } else {
+            self.pos
+        }
+    }
 }
 
 /// Map a noodles CIGAR op kind to our `AlnOp`.
@@ -241,16 +259,18 @@ where
         } else {
             Vec::new()
         };
-        let ops: Vec<(AlnOp, usize)> = if need_seq {
-            record
-                .cigar()
-                .iter()
-                .filter_map(|r| r.ok())
-                .map(|op| (kind_to_op(op.kind()), op.len()))
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let ops: Vec<(AlnOp, usize)> = record
+            .cigar()
+            .iter()
+            .filter_map(|r| r.ok())
+            .map(|op| (kind_to_op(op.kind()), op.len()))
+            .collect();
+        let ref_span: usize = ops
+            .iter()
+            .filter(|(o, _)| matches!(o, AlnOp::Match | AlnOp::SeqMatch | AlnOp::SeqMismatch | AlnOp::Del | AlnOp::RefSkip))
+            .map(|(_, l)| l)
+            .sum();
+        let ops = if need_seq { ops } else { Vec::new() };
         let score = record
             .data()
             .get(&Tag::ALIGNMENT_SCORE)
@@ -258,7 +278,17 @@ where
             .and_then(|v| value_as_i32(&v))
             .unwrap_or(0);
         let frag_len = record.template_length().abs();
-        group.push(FragRecord { tid: tid as u32, pos, read_2bit, ops, score, frag_len });
+        let is_reverse = record.flags().is_reverse_complemented();
+        group.push(FragRecord {
+            tid: tid as u32,
+            pos,
+            read_2bit,
+            ops,
+            score,
+            frag_len,
+            is_reverse,
+            ref_span,
+        });
     }
     if have_group {
         f(&group);
@@ -455,20 +485,50 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
                 }
                 let (fs, fe, proper) = geom[ti];
                 let rl = refseq.len();
-                // sequence bias: 5' context (fwd) at frag start, 3' (rc) at frag end
-                if let Some(obs) = seq_obs.as_mut() {
-                    let s5 = fs as i32 - CONTEXT_LEFT as i32;
-                    if s5 >= 0 && (s5 as usize + CONTEXT_LENGTH) <= rl {
-                        obs.0.add_context(&refseq[s5 as usize..s5 as usize + CONTEXT_LENGTH], false, p);
+
+                // Per-read 5' positions, by each read's *actual* strand (salmon's
+                // logic): the forward read's 5' feeds the FW model, the reverse
+                // read's 5' (its rightmost ref coordinate, RC'd) feeds the RC
+                // model. For a concordant pair only the inward case (fwPos < rcPos)
+                // is collected. This is correct for any library orientation, not
+                // just FR.
+                let (mut fwd_five, mut rev_five): (Option<usize>, Option<usize>) = (None, None);
+                if idxs.len() == 1 {
+                    let r = &recs[idxs[0]];
+                    if r.is_reverse {
+                        rev_five = Some(r.five_prime());
+                    } else {
+                        fwd_five = Some(r.five_prime());
                     }
-                    if proper {
-                        let s3 = fe as i32 - CONTEXT_RIGHT as i32;
-                        if s3 >= 0 && (s3 as usize + CONTEXT_LENGTH) <= rl {
-                            obs.1.add_context(&refseq[s3 as usize..s3 as usize + CONTEXT_LENGTH], true, p);
+                } else {
+                    let fwd = idxs.iter().map(|&i| &recs[i]).find(|r| !r.is_reverse);
+                    let rev = idxs.iter().map(|&i| &recs[i]).find(|r| r.is_reverse);
+                    if let (Some(fr), Some(rr)) = (fwd, rev) {
+                        let (fp, rp) = (fr.five_prime(), rr.five_prime());
+                        if fp < rp {
+                            fwd_five = Some(fp);
+                            rev_five = Some(rp);
                         }
                     }
                 }
-                // fragment-GC bias (paired fragments only)
+
+                // sequence bias: forward 5' -> FW model (window [5'-3, 5'+6));
+                // reverse 5' -> RC model (window [5'-5, 5'+4), reverse-complemented).
+                if let Some(obs) = seq_obs.as_mut() {
+                    if let Some(five) = fwd_five {
+                        let s = five as i32 - CONTEXT_LEFT as i32;
+                        if s >= 0 && (s as usize + CONTEXT_LENGTH) <= rl {
+                            obs.0.add_context(&refseq[s as usize..s as usize + CONTEXT_LENGTH], false, p);
+                        }
+                    }
+                    if let Some(five) = rev_five {
+                        let s = five as i32 - CONTEXT_RIGHT as i32;
+                        if s >= 0 && (s as usize + CONTEXT_LENGTH) <= rl {
+                            obs.1.add_context(&refseq[s as usize..s as usize + CONTEXT_LENGTH], true, p);
+                        }
+                    }
+                }
+                // fragment-GC bias is span-based (orientation-independent).
                 if let (Some(gc), true) = (gc_obs.as_mut(), proper && fe < rl) {
                     if let Some((ff, cf)) =
                         salmon_model::gc_desc(&gc_prefix[*tid as usize], rl as i32, fs as i32, fe as i32)
@@ -476,12 +536,14 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
                         gc.inc(ff, cf, p);
                     }
                 }
-                // positional bias
+                // positional bias: forward 5' -> fwd model, reverse 5' -> RC model.
                 if let Some(pos) = pos_obs.as_mut() {
                     let lc = length_class.as_ref().unwrap()[*tid as usize];
-                    pos.0[lc].add_mass(fs as i32, rl as i32, p.ln());
-                    if proper {
-                        pos.1[lc].add_mass(fe as i32, rl as i32, p.ln());
+                    if let Some(five) = fwd_five {
+                        pos.0[lc].add_mass(five as i32, rl as i32, p.ln());
+                    }
+                    if let Some(five) = rev_five {
+                        pos.1[lc].add_mass(five as i32, rl as i32, p.ln());
                     }
                 }
             }
