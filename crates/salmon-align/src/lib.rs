@@ -13,15 +13,19 @@
 //! ([`salmon_infer`]) to `quant.sf`. Mirrors salmon's `quant -a` mode (the
 //! position-binned alignment error model is a later refinement).
 
+mod error_model;
+
 use std::collections::HashMap;
-use std::io::Write;
-use std::path::PathBuf;
+use std::io::{BufRead, Write};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use noodles_bam as bam;
+use noodles_sam::alignment::record::cigar::op::Kind;
 use noodles_sam::alignment::record::data::field::{Tag, Value};
 use serde::Serialize;
 
+use error_model::{AlignmentModel, AlnOp};
 use salmon_eqclass::{range_factorize_bins, EquivalenceClassBuilder, TranscriptGroup};
 use salmon_infer::{optimize, EmOptions};
 use salmon_model::FragmentLengthDistribution;
@@ -43,6 +47,10 @@ pub struct AlignQuantOptions {
     pub range_factorization_bins: u32,
     /// soft-weight decay applied to alignment-score differences
     pub score_exp: f64,
+    /// transcriptome FASTA (`-t`); required to train the alignment error model
+    pub transcripts: Option<PathBuf>,
+    /// disable the alignment error model (salmon's `--noErrorModel`)
+    pub no_error_model: bool,
 }
 
 impl AlignQuantOptions {
@@ -54,6 +62,8 @@ impl AlignQuantOptions {
             em: EmOptions::default(),
             range_factorization_bins: 4,
             score_exp: 1.0,
+            transcripts: None,
+            no_error_model: false,
         }
     }
 }
@@ -85,11 +95,165 @@ fn value_as_i32(v: &Value) -> Option<i32> {
     }
 }
 
-/// Per-transcript accumulator for the current fragment.
-#[derive(Default, Clone, Copy)]
-struct TidAccum {
+/// Group a fragment's records by transcript id (ids sorted ascending; each id's
+/// record indices sorted by reference position, so index 0 is the left mate).
+fn group_by_tid(recs: &[FragRecord]) -> Vec<(u32, Vec<usize>)> {
+    let mut m: HashMap<u32, Vec<usize>> = HashMap::new();
+    for (i, r) in recs.iter().enumerate() {
+        m.entry(r.tid).or_default().push(i);
+    }
+    let mut v: Vec<(u32, Vec<usize>)> = m.into_iter().collect();
+    v.sort_by_key(|(t, _)| *t);
+    for (_, idxs) in &mut v {
+        idxs.sort_by_key(|&i| recs[i].pos);
+    }
+    v
+}
+
+/// 2-bit encode a base (`A=0, C=1, G=2, T=3`; anything else → `0`).
+#[inline]
+fn base_2bit(b: u8) -> u8 {
+    match b {
+        b'A' | b'a' => 0,
+        b'C' | b'c' => 1,
+        b'G' | b'g' => 2,
+        b'T' | b't' => 3,
+        _ => 0,
+    }
+}
+
+/// Load a (optionally gzip'd) transcriptome FASTA and return 2-bit-encoded
+/// sequences aligned to the BAM's reference order (`names`); a name absent from
+/// the FASTA yields an empty sequence (its error-model contributions are skipped).
+fn load_ref_2bit(path: &Path, names: &[String]) -> Result<Vec<Vec<u8>>> {
+    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let mut magic = [0u8; 2];
+    let is_gz = {
+        use std::io::Read;
+        let mut f = std::fs::File::open(path)?;
+        f.read_exact(&mut magic).is_ok() && magic == [0x1f, 0x8b]
+    };
+    let reader: Box<dyn BufRead> = if is_gz {
+        Box::new(std::io::BufReader::new(flate2::read::MultiGzDecoder::new(file)))
+    } else {
+        Box::new(std::io::BufReader::new(file))
+    };
+
+    let mut by_name: HashMap<String, Vec<u8>> = HashMap::new();
+    let mut cur_name: Option<String> = None;
+    let mut cur_seq: Vec<u8> = Vec::new();
+    for line in reader.lines() {
+        let line = line?;
+        if let Some(stripped) = line.strip_prefix('>') {
+            if let Some(n) = cur_name.take() {
+                by_name.insert(n, std::mem::take(&mut cur_seq));
+            }
+            cur_name = Some(stripped.split_whitespace().next().unwrap_or("").to_string());
+        } else if cur_name.is_some() {
+            cur_seq.extend(line.trim_end().bytes().map(base_2bit));
+        }
+    }
+    if let Some(n) = cur_name.take() {
+        by_name.insert(n, cur_seq);
+    }
+    Ok(names
+        .iter()
+        .map(|n| by_name.remove(n).unwrap_or_default())
+        .collect())
+}
+
+/// One alignment record needed by the error model / weighting.
+struct FragRecord {
+    tid: u32,
+    pos: usize,
+    read_2bit: Vec<u8>,
+    ops: Vec<(AlnOp, usize)>,
     score: i32,
     frag_len: i32,
+}
+
+/// Map a noodles CIGAR op kind to our `AlnOp`.
+fn kind_to_op(k: Kind) -> AlnOp {
+    match k {
+        Kind::Match => AlnOp::Match,
+        Kind::SequenceMatch => AlnOp::SeqMatch,
+        Kind::SequenceMismatch => AlnOp::SeqMismatch,
+        Kind::Insertion => AlnOp::Ins,
+        Kind::Deletion => AlnOp::Del,
+        Kind::Skip => AlnOp::RefSkip,
+        Kind::SoftClip => AlnOp::SoftClip,
+        Kind::HardClip => AlnOp::HardClip,
+        Kind::Pad => AlnOp::Pad,
+    }
+}
+
+/// Stream a BAM, grouping consecutive mapped records that share a read name into
+/// fragments, and invoke `f` once per fragment. (Used twice: train the error
+/// model, then build equivalence classes — avoids holding the whole BAM in memory.)
+fn for_each_fragment<F>(bam_path: &Path, need_seq: bool, mut f: F) -> Result<()>
+where
+    F: FnMut(&[FragRecord]),
+{
+    let mut reader = bam::io::Reader::new(
+        std::fs::File::open(bam_path).with_context(|| format!("opening {}", bam_path.display()))?,
+    );
+    let _header = reader.read_header().context("reading BAM header")?;
+
+    let mut cur_name: Vec<u8> = Vec::new();
+    let mut have_group = false;
+    let mut group: Vec<FragRecord> = Vec::new();
+
+    for result in reader.records() {
+        let record = result.context("reading BAM record")?;
+        if record.flags().is_unmapped() {
+            continue;
+        }
+        let Some(name) = record.name() else { continue };
+        let name_bytes: &[u8] = name.as_ref();
+        if !have_group {
+            cur_name = name_bytes.to_vec();
+            have_group = true;
+        } else if name_bytes != cur_name.as_slice() {
+            f(&group);
+            group.clear();
+            cur_name.clear();
+            cur_name.extend_from_slice(name_bytes);
+        }
+
+        let Some(Ok(tid)) = record.reference_sequence_id() else { continue };
+        let pos = record
+            .alignment_start()
+            .and_then(|r| r.ok())
+            .map(|p| p.get() - 1)
+            .unwrap_or(0);
+        let read_2bit = if need_seq {
+            record.sequence().iter().map(base_2bit).collect()
+        } else {
+            Vec::new()
+        };
+        let ops: Vec<(AlnOp, usize)> = if need_seq {
+            record
+                .cigar()
+                .iter()
+                .filter_map(|r| r.ok())
+                .map(|op| (kind_to_op(op.kind()), op.len()))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let score = record
+            .data()
+            .get(&Tag::ALIGNMENT_SCORE)
+            .and_then(|r| r.ok())
+            .and_then(|v| value_as_i32(&v))
+            .unwrap_or(0);
+        let frag_len = record.template_length().abs();
+        group.push(FragRecord { tid: tid as u32, pos, read_2bit, ops, score, frag_len });
+    }
+    if have_group {
+        f(&group);
+    }
+    Ok(())
 }
 
 /// Run alignment-based quantification end-to-end.
@@ -115,39 +279,96 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
 
     let eq_builder = EquivalenceClassBuilder::new();
     let mut fld = FragmentLengthDistribution::new(1.0, 1000, 250.0, 25.0, 4, 0.5, 1);
+
+    // The alignment error model needs the transcriptome (salmon requires `-t`).
+    let use_error_model = opts.transcripts.is_some() && !opts.no_error_model;
+    let ref_2bit: Vec<Vec<u8>> = if use_error_model {
+        load_ref_2bit(opts.transcripts.as_ref().unwrap(), &names)?
+    } else {
+        Vec::new()
+    };
+    let mut model = use_error_model.then(|| AlignmentModel::new(1.0, 4));
+
+    // ---- pass 1: train the error model (uniform per-fragment posterior) -----
+    // salmon trains the model online weighted by the evolving posterior; here we
+    // train once with a per-fragment-uniform posterior (each fragment contributes
+    // total weight 1), which yields essentially the same converged error profile
+    // since it is dominated by confidently/uniquely assigned reads.
+    if let Some(model) = model.as_mut() {
+        for_each_fragment(&opts.bam, true, |recs| {
+            if recs.is_empty() {
+                return;
+            }
+            let by_tid = group_by_tid(recs);
+            let lw = (1.0 / by_tid.len() as f64).ln();
+            for (tid, idxs) in &by_tid {
+                let refseq = &ref_2bit[*tid as usize];
+                if refseq.is_empty() {
+                    continue;
+                }
+                for (rank, &i) in idxs.iter().enumerate() {
+                    let r = &recs[i];
+                    // left mate = the alignment with the smaller reference position
+                    model.update(&r.read_2bit, refseq, r.pos, &r.ops, rank == 0, lw);
+                }
+            }
+        })?;
+    }
+
+    // ---- pass 2: build the (weighted) equivalence classes -------------------
     let mut num_processed = 0u64;
     let mut num_mapped = 0u64;
-
-    // Group consecutive records by read name; accumulate per-transcript scores.
-    let mut cur_name: Vec<u8> = Vec::new();
-    let mut have_group = false;
-    let mut accum: HashMap<u32, TidAccum> = HashMap::new();
-
-    let mut flush = |accum: &mut HashMap<u32, TidAccum>,
-                     fld: &FragmentLengthDistribution,
-                     num_processed: &mut u64,
-                     num_mapped: &mut u64| {
-        *num_processed += 1;
-        if accum.is_empty() {
+    for_each_fragment(&opts.bam, use_error_model, |recs| {
+        num_processed += 1;
+        if recs.is_empty() {
             return;
         }
-        *num_mapped += 1;
-
-        // best per-transcript score and a representative fragment length
-        let best = accum.values().map(|a| a.score).max().unwrap_or(0);
-        let frag_len = accum.values().map(|a| a.frag_len).max().unwrap_or(0);
+        num_mapped += 1;
+        let by_tid = group_by_tid(recs);
+        let frag_len = recs.iter().map(|r| r.frag_len).max().unwrap_or(0);
         if frag_len > 0 {
             fld.add_val(frag_len as usize, 0.0);
         }
 
-        let mut entries: Vec<(u32, f64)> = accum
-            .iter()
-            .map(|(&tid, a)| (tid, (-opts.score_exp * (best - a.score) as f64).exp()))
-            .collect();
-        entries.sort_by_key(|e| e.0);
-        let wsum: f64 = entries.iter().map(|e| e.1).sum();
-        let tids: Vec<u32> = entries.iter().map(|e| e.0).collect();
-        let mut weights: Vec<f64> = entries.iter().map(|e| e.1).collect();
+        let mut tids: Vec<u32> = Vec::with_capacity(by_tid.len());
+        let mut logw: Vec<f64> = Vec::with_capacity(by_tid.len());
+        match model.as_ref() {
+            // error model: conditional log-weight = Σ_mates (fg − bg)
+            Some(model) => {
+                for (tid, idxs) in &by_tid {
+                    let refseq = &ref_2bit[*tid as usize];
+                    let mut ll = 0.0;
+                    for (rank, &i) in idxs.iter().enumerate() {
+                        let r = &recs[i];
+                        if !refseq.is_empty() {
+                            let (fg, bg) =
+                                model.log_likelihood(&r.read_2bit, refseq, r.pos, &r.ops, rank == 0);
+                            ll += fg - bg;
+                        }
+                    }
+                    tids.push(*tid);
+                    logw.push(ll);
+                }
+            }
+            // AS fallback (no transcriptome / error model disabled)
+            None => {
+                let best = by_tid
+                    .iter()
+                    .map(|(_, idxs)| idxs.iter().map(|&i| recs[i].score).sum::<i32>())
+                    .max()
+                    .unwrap_or(0);
+                for (tid, idxs) in &by_tid {
+                    let as_sum: i32 = idxs.iter().map(|&i| recs[i].score).sum();
+                    tids.push(*tid);
+                    logw.push(-opts.score_exp * (best - as_sum) as f64);
+                }
+            }
+        }
+
+        // softmax → per-fragment conditional probabilities (sum to 1)
+        let maxlw = logw.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let mut weights: Vec<f64> = logw.iter().map(|&l| (l - maxlw).exp()).collect();
+        let wsum: f64 = weights.iter().sum();
         if wsum > 0.0 {
             for w in &mut weights {
                 *w /= wsum;
@@ -160,46 +381,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             TranscriptGroup::from_sorted(tids)
         };
         eq_builder.add_group(group, weights, 1);
-        accum.clear();
-    };
-
-    for result in reader.records() {
-        let record = result.context("reading BAM record")?;
-        if record.flags().is_unmapped() {
-            continue;
-        }
-        let Some(name) = record.name() else { continue };
-        let name_bytes: &[u8] = name.as_ref();
-
-        if !have_group {
-            cur_name = name_bytes.to_vec();
-            have_group = true;
-        } else if name_bytes != cur_name.as_slice() {
-            flush(&mut accum, &fld, &mut num_processed, &mut num_mapped);
-            cur_name.clear();
-            cur_name.extend_from_slice(name_bytes);
-        }
-
-        let Some(Ok(tid)) = record.reference_sequence_id() else {
-            continue;
-        };
-        let score = record
-            .data()
-            .get(&Tag::ALIGNMENT_SCORE)
-            .and_then(|r| r.ok())
-            .and_then(|v| value_as_i32(&v))
-            .unwrap_or(0);
-        let frag_len = record.template_length().abs();
-
-        let e = accum.entry(tid as u32).or_default();
-        e.score += score;
-        if frag_len > e.frag_len {
-            e.frag_len = frag_len;
-        }
-    }
-    if have_group {
-        flush(&mut accum, &fld, &mut num_processed, &mut num_mapped);
-    }
+    })?;
 
     // ---- effective lengths, EM, TPM (shared logic with reads mode) ----------
     // Base effective length = `refLen − E[L | L ≤ refLen]` (salmon's

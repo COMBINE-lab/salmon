@@ -77,6 +77,12 @@ struct QuantArgs {
     /// Alignment-based mode: a BAM of reads aligned to the transcriptome.
     #[arg(short = 'a', long = "alignments")]
     alignments: Option<PathBuf>,
+    /// Transcriptome FASTA (alignment mode `-a`): enables the alignment error model.
+    #[arg(short = 't', long = "targets")]
+    targets: Option<PathBuf>,
+    /// Disable the alignment error model (alignment mode).
+    #[arg(long = "noErrorModel")]
+    no_error_model: bool,
     /// Library type (e.g. IU, ISR, A for auto).
     #[arg(short = 'l', long = "libType", default_value = "A")]
     lib_type: String,
@@ -195,6 +201,8 @@ fn run_quant(args: QuantArgs) -> Result<()> {
         opts.lib_type = args.lib_type;
         opts.em.use_vbem = !args.use_em;
         opts.range_factorization_bins = args.range_factorization_bins;
+        opts.transcripts = args.targets;
+        opts.no_error_model = args.no_error_model;
         let res = quantify_alignments(&opts).context("alignment-based quantification failed")?;
         let pct = if res.num_processed > 0 {
             100.0 * res.num_mapped as f64 / res.num_processed as f64
