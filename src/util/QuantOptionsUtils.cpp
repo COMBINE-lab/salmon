@@ -387,8 +387,14 @@ bool createAuxMapLoggers_(SalmonOpts& sopt,
     }
     sopt.qmStream.reset(new std::ostream(qmBuf));
 
+    // force_flush = true: flush the underlying ostream after every logged
+    // batch. Without it, mapping records written via qmLog->info() only reach
+    // disk when the ofstream buffer overflows, so the final (partial) buffer is
+    // lost if the stream is never explicitly closed/flushed on the active quant
+    // path. That silently drops the trailing records, and *all* records for
+    // small inputs (the large @SQ header overflows the buffer and masks it).
     auto outputSink = std::make_shared<spdlog::sinks::ostream_sink_mt>(
-        *(sopt.qmStream.get()));
+        *(sopt.qmStream.get()), true);
     sopt.qmLog = std::make_shared<spdlog::logger>("qmStream", outputSink);
     sopt.qmLog->set_pattern("%v");
   }
