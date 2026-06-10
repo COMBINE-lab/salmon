@@ -329,6 +329,28 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                 length_quantiles.as_ref().unwrap(),
                 k,
             );
+            // Debug: dump finalized pos models for parity comparison with salmon.
+            if std::env::var("SALMON_DEBUG_POS").is_ok() {
+                use std::io::Write;
+                let mut f = std::fs::File::create(
+                    opts.output_dir.join("rust_pos_models.txt"),
+                )
+                .unwrap();
+                for (name, models) in [
+                    ("obs5", &obs_fw),
+                    ("obs3", &obs_rc),
+                    ("exp5", &exp_fw),
+                    ("exp3", &exp_rc),
+                ] {
+                    for (lc, m) in models.iter().enumerate() {
+                        write!(f, "{name} {lc}").unwrap();
+                        for v in m.masses() {
+                            write!(f, " {v:.6}").unwrap();
+                        }
+                        writeln!(f).unwrap();
+                    }
+                }
+            }
             (obs_fw, obs_rc, exp_fw, exp_rc)
         });
 

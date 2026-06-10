@@ -131,6 +131,12 @@ impl SimplePosBias {
         self.finalized = true;
     }
 
+    /// The (normalized, post-[`finalize`](Self::finalize)) bin masses — the same
+    /// values salmon's `writeBinary` emits to `aux_info/*_pos.gz`.
+    pub fn masses(&self) -> &[f64] {
+        &self.masses
+    }
+
     /// Project the spline weights onto `out.len()` transcript positions:
     /// `out[p] = max(0.001, spline(p / len))` (salmon's `projectWeights`).
     pub fn project_weights(&self, out: &mut [f64]) {
