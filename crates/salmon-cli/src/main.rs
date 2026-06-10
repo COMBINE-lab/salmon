@@ -128,6 +128,12 @@ struct QuantArgs {
     /// Gibbs thinning factor.
     #[arg(long = "thinningFactor", default_value_t = 16)]
     thinning_factor: u32,
+    /// (Long reads) Oxford Nanopore model — not supported; use oarfish instead.
+    #[arg(long = "ont")]
+    ont: bool,
+    /// (Long reads) disable length correction — not supported; use oarfish instead.
+    #[arg(long = "noLengthCorrection")]
+    no_length_correction: bool,
     /// Minimum alignment score as a fraction of the perfect score.
     #[arg(long = "minScoreFraction", default_value_t = 0.65)]
     min_score_fraction: f32,
@@ -165,7 +171,25 @@ fn run_index(args: IndexArgs) -> Result<()> {
     Ok(())
 }
 
+/// Long-read (`--ont` / `--noLengthCorrection`) quantification is intentionally
+/// not supported: for long reads, oarfish is the recommended tool. Print a
+/// pointer and exit rather than silently producing length-corrected estimates
+/// that are inappropriate for long reads.
+fn long_read_redirect() -> ! {
+    eprintln!(
+        "salmon (Rust): long-read quantification (--ont / --noLengthCorrection) is not supported.\n\
+         For long-read (Oxford Nanopore / PacBio) transcript quantification, please use oarfish,\n\
+         our dedicated long-read quantification tool:\n\
+         \n    https://github.com/COMBINE-lab/oarfish\n\n\
+         oarfish models long-read alignments directly and is the recommended choice for this data."
+    );
+    std::process::exit(2);
+}
+
 fn run_quant(args: QuantArgs) -> Result<()> {
+    if args.ont || args.no_length_correction {
+        long_read_redirect();
+    }
     // Alignment-based mode: quantify directly from a BAM.
     if let Some(bam) = args.alignments {
         let mut opts = AlignQuantOptions::new(bam, args.output);
