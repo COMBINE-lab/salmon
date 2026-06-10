@@ -16,9 +16,11 @@
 
 use salmon_eqclass::CollapsedEqClasses;
 
+mod online;
 mod packed;
 pub mod uncertainty;
 
+pub use online::OnlineInference;
 pub use packed::PackedEqClasses;
 pub use uncertainty::{ambiguity_counts, bootstrap, gibbs_sample, GibbsOptions};
 

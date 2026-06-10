@@ -22,6 +22,7 @@ use salmon_map::{
     map_read_pair, map_read_pair_sketch, map_single_read, map_single_read_sketch, MapConfig,
     ScoredMapping,
 };
+use salmon_infer::OnlineInference;
 use salmon_model::seqbias::{SBModel, CONTEXT_LEFT, CONTEXT_LENGTH, CONTEXT_RIGHT};
 use salmon_model::{
     gc_desc, FragmentLengthDistribution, GcFragModel, LibraryTypeDetector, SimplePosBias,
@@ -64,6 +65,9 @@ pub(crate) struct Shared<'a> {
     pub length_class: Option<&'a [usize]>,
     /// shared observed (5', 3') positional-bias models (per length class) to merge into
     pub posbias_obs: Option<&'a Mutex<(Vec<SimplePosBias>, Vec<SimplePosBias>)>>,
+    /// online (dual-phase) inference state; when present, observed bias models
+    /// are collected with abundance-aware posteriors instead of score-only weights
+    pub online: Option<&'a OnlineInference>,
     pub num_processed: &'a AtomicU64,
     pub num_mapped: &'a AtomicU64,
 }
@@ -109,29 +113,26 @@ impl Clone for QuantProcessor<'_> {
     }
 }
 
-/// Collect the orientation-aware 5'/3' sequence-bias contexts for one
-/// representative mapping. A forward read's 5' context feeds the forward model;
-/// a reverse read's 5' context (reverse-complemented) feeds the RC model. For a
-/// paired fragment the opposite end feeds the other model.
-fn collect_context(salmon: &SalmonIndex, m: &ScoredMapping, obs: &mut (SBModel, SBModel)) {
+/// Collect the orientation-aware 5'/3' sequence-bias contexts for one mapping,
+/// weighted by `weight` (the fragment-transcript posterior). A forward read's 5'
+/// context feeds the forward model; a reverse read's 5' context
+/// (reverse-complemented) feeds the RC model. For a paired fragment the opposite
+/// end feeds the other model.
+fn collect_context(salmon: &SalmonIndex, m: &ScoredMapping, weight: f64, obs: &mut (SBModel, SBModel)) {
     let seq = salmon.ref_seq(m.tid);
     let n = seq.len() as i32;
     let (cl, cr, k) = (CONTEXT_LEFT as i32, CONTEXT_RIGHT as i32, CONTEXT_LENGTH as i32);
 
-    // Forward-strand 5' context window starts CONTEXT_LEFT before the position;
-    // a reverse-strand context window is the reverse-complement around it.
     let mut add_fwd = |obs: &mut SBModel, five_prime: i32| {
         let s = five_prime - cl;
         if s >= 0 && s + k <= n {
-            obs.add_context(&seq[s as usize..(s + k) as usize], false, 1.0);
+            obs.add_context(&seq[s as usize..(s + k) as usize], false, weight);
         }
     };
     let mut add_rev = |obs: &mut SBModel, five_prime: i32| {
-        // window centered so the 5' (rightmost) base sits CONTEXT_LEFT from the
-        // RC window's start; reverse-complement on insertion.
         let s = five_prime - cr;
         if s >= 0 && s + k <= n {
-            obs.add_context(&seq[s as usize..(s + k) as usize], true, 1.0);
+            obs.add_context(&seq[s as usize..(s + k) as usize], true, weight);
         }
     };
 
@@ -148,21 +149,13 @@ fn collect_context(salmon: &SalmonIndex, m: &ScoredMapping, obs: &mut (SBModel, 
     }
 }
 
-/// Collect the observed fragment-GC contexts for one fragment's compatible
-/// paired mappings, each weighted by its normalized (posterior) weight. Mirrors
-/// salmon's per-alignment `observedGCMass.inc(gcDesc(start, stop), logProb)` for
-/// `PAIRED_END` fragments (`start = min(pos, matePos)`, `stop = start + fragLen − 1`).
-fn collect_gc(
-    sh: &Shared,
-    compat: &[(&ScoredMapping, f64)],
-    wsum: f64,
-    gc: &mut GcFragModel,
-) {
+/// Collect observed fragment-GC contexts for one fragment's compatible paired
+/// mappings, each weighted by `bias_w[i]` (the abundance-aware posterior under
+/// online inference, else the normalized aux weight). Mirrors salmon's
+/// per-alignment `observedGCMass.inc(gcDesc(start, stop), logProb)`.
+fn collect_gc(sh: &Shared, compat: &[(&ScoredMapping, f64)], bias_w: &[f64], gc: &mut GcFragModel) {
     let Some(prefixes) = sh.gc_prefix else { return };
-    if wsum <= 0.0 {
-        return;
-    }
-    for (m, w) in compat {
+    for (i, (m, _)) in compat.iter().enumerate() {
         if m.status != MateStatus::PairedEndPaired || m.fragment_len <= 0 {
             continue;
         }
@@ -173,30 +166,28 @@ fn collect_gc(
             continue;
         }
         if let Some((ff, cf)) = gc_desc(&prefixes[m.tid as usize], ref_len, start, stop) {
-            gc.inc(ff, cf, w / wsum);
+            gc.inc(ff, cf, bias_w[i]);
         }
     }
 }
 
-/// Collect observed positional-bias mass for one fragment's compatible mappings.
-/// Each contributing mate's leftmost reference position is added (posterior-
-/// weighted, log space) to its strand's model for the transcript's length class,
-/// mirroring salmon's `observedPosBias{Fwd,RC}[lengthClass].addMass(pos, refLen,
-/// logProb)`.
+/// Collect observed positional-bias mass for one fragment's compatible mappings,
+/// each weighted by `bias_w[i]` (log space). Mirrors salmon's
+/// `observedPosBias{Fwd,RC}[lengthClass].addMass(pos, refLen, logProb)`.
 fn collect_pos(
     sh: &Shared,
     compat: &[(&ScoredMapping, f64)],
-    wsum: f64,
+    bias_w: &[f64],
     pos: &mut (Vec<SimplePosBias>, Vec<SimplePosBias>),
 ) {
     let Some(length_class) = sh.length_class else { return };
-    if wsum <= 0.0 {
-        return;
-    }
-    for (m, w) in compat {
+    for (i, (m, _)) in compat.iter().enumerate() {
+        if bias_w[i] <= 0.0 {
+            continue;
+        }
         let lc = length_class[m.tid as usize];
         let ref_len = sh.salmon.ref_len(m.tid as usize) as i32;
-        let mass = (w / wsum).ln();
+        let mass = bias_w[i].ln();
         if m.fw_pos >= 0 {
             pos.0[lc].add_mass(m.fw_pos, ref_len, mass);
         }
@@ -207,9 +198,12 @@ fn collect_pos(
 }
 
 /// Record one fragment's weighted mappings into the shared accumulators.
+/// `log_fm` is the current minibatch's forgetting mass (used only when online
+/// inference is active).
 fn record(
     sh: &Shared,
     maps: &[ScoredMapping],
+    log_fm: f64,
     seqbias: Option<&mut (SBModel, SBModel)>,
     gcbias: Option<&mut GcFragModel>,
     posbias: Option<&mut (Vec<SimplePosBias>, Vec<SimplePosBias>)>,
@@ -253,14 +247,47 @@ fn record(
         return; // no compatible mapping -> fragment is unassigned
     }
 
-    // Collect observed fragment-GC / positional contexts (posterior-weighted).
-    if gcbias.is_some() || posbias.is_some() {
-        let wsum: f64 = compat.iter().map(|(_, w)| *w).sum();
+    // Per-fragment bias-collection weights. With online (dual-phase) inference
+    // these are abundance-aware posteriors `softmax(mass_t + log w_t)`, which
+    // also advances the online masses by `logForgettingMass + log(posterior)`;
+    // without it they fall back to the normalized aux (score) weights.
+    let collecting = seqbias.is_some() || gcbias.is_some() || posbias.is_some();
+    let bias_w: Vec<f64> = if collecting {
+        if let Some(online) = sh.online {
+            // aux weight = score weight / refLen (salmon's startPosProb = -log(refLen)
+            // length normalization; pre-burn-in salmon uses the raw reference length).
+            let mm: Vec<(u32, f64)> = compat
+                .iter()
+                .map(|(m, w)| {
+                    let rl = sh.salmon.ref_len(m.tid as usize).max(1) as f64;
+                    (m.tid, *w / rl)
+                })
+                .collect();
+            online.assign_fragment(&mm, log_fm)
+        } else {
+            let wsum: f64 = compat.iter().map(|(_, w)| *w).sum();
+            compat
+                .iter()
+                .map(|(_, w)| if wsum > 0.0 { *w / wsum } else { 0.0 })
+                .collect()
+        }
+    } else {
+        Vec::new()
+    };
+    // After burn-in salmon freezes model collection (still advances masses).
+    let collect_now = collecting && sh.online.is_none_or(|o| o.collecting());
+
+    if collect_now {
+        if let Some(obs) = seqbias {
+            for (i, (m, _)) in compat.iter().enumerate() {
+                collect_context(sh.salmon, m, bias_w[i], obs);
+            }
+        }
         if let Some(gc) = gcbias {
-            collect_gc(sh, &compat, wsum, gc);
+            collect_gc(sh, &compat, &bias_w, gc);
         }
         if let Some(pos) = posbias {
-            collect_pos(sh, &compat, wsum, pos);
+            collect_pos(sh, &compat, &bias_w, pos);
         }
     }
 
@@ -279,16 +306,6 @@ fn record(
         .max_by(|a, b| a.weight.total_cmp(&b.weight));
     if let Some(best) = best_concordant {
         sh.fld.add_val(best.fragment_len as usize, 0.0);
-    }
-
-    // Collect the observed sequence-bias context from a representative mapping.
-    if let Some(obs) = seqbias {
-        let rep = best_concordant.or_else(|| {
-            maps.iter().max_by(|a, b| a.weight.total_cmp(&b.weight))
-        });
-        if let Some(m) = rep {
-            collect_context(sh.salmon, m, obs);
-        }
     }
 
     // Build the equivalence class: sorted, de-duplicated transcript ids + weights.
@@ -349,6 +366,8 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             *hs = Some(HitSearcher::new(idx));
         }
         let hs = hs.as_mut().unwrap();
+        // one forgetting-mass timestep per minibatch (online inference)
+        let log_fm = sh.online.map_or(0.0, |o| o.next_log_fm());
         for (r1, r2) in pairs {
             let s1 = r1.seq();
             let s2 = r2.seq();
@@ -357,7 +376,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             } else {
                 map_read_pair(idx, hs, sh.salmon, s1.as_ref(), s2.as_ref(), sh.map_cfg)
             };
-            record(&sh, &maps, seqbias.as_mut(), gcbias.as_mut(), posbias.as_mut());
+            record(&sh, &maps, log_fm, seqbias.as_mut(), gcbias.as_mut(), posbias.as_mut());
         }
         Ok(())
     }
@@ -380,6 +399,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             *hs = Some(HitSearcher::new(idx));
         }
         let hs = hs.as_mut().unwrap();
+        let log_fm = sh.online.map_or(0.0, |o| o.next_log_fm());
         for rec in records {
             let s = rec.seq();
             let maps = if sh.sketch {
@@ -387,7 +407,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             } else {
                 map_single_read(idx, hs, sh.salmon, s.as_ref(), sh.map_cfg)
             };
-            record(&sh, &maps, seqbias.as_mut(), gcbias.as_mut(), posbias.as_mut());
+            record(&sh, &maps, log_fm, seqbias.as_mut(), gcbias.as_mut(), posbias.as_mut());
         }
         Ok(())
     }

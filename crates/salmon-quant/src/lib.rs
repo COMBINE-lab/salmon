@@ -205,6 +205,16 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         std::sync::Mutex::new((mk(), mk()))
     });
 
+    // Online (dual-phase) inference: when any bias model is collected, develop
+    // running per-transcript abundances during the mapping pass so the observed
+    // bias models are weighted by abundance-aware posteriors (salmon's online
+    // phase), not score-only weights. The offline EM still gives the final
+    // point estimate.
+    let online = (opts.seq_bias || opts.gc_bias || opts.pos_bias).then(|| {
+        let ref_lens: Vec<u64> = (0..num_refs).map(|t| salmon.ref_len(t)).collect();
+        salmon_infer::OnlineInference::new(&ref_lens, 0.05, 0.65, 5_000_000)
+    });
+
     // ---- parallel mapping pass (borrows the accumulators) -------------------
     {
         let shared = Shared {
@@ -227,6 +237,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             collect_posbias: opts.pos_bias,
             length_class: length_class.as_deref(),
             posbias_obs: posbias_obs.as_ref(),
+            online: online.as_ref(),
             num_processed: &num_processed,
             num_mapped: &num_mapped,
         };
