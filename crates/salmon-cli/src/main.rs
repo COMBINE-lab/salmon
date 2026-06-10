@@ -39,6 +39,9 @@ struct DebugMapArgs {
     /// Single-end FASTQ (plain text).
     #[arg(short = 'r', long = "reads", required = true)]
     reads: PathBuf,
+    /// Seed with extended uni-MEMs instead of sparse fixed-k k-mer anchors.
+    #[arg(long = "uniMEMs")]
+    unimems: bool,
 }
 
 #[derive(Args)]
@@ -113,6 +116,9 @@ struct QuantArgs {
     /// Score the full read with one DP instead of PuffAligner-style inter-MEM-gap scoring.
     #[arg(long = "fullLengthAlignment")]
     full_length_alignment: bool,
+    /// Seed with extended uni-MEMs instead of sparse fixed-k k-mer anchors.
+    #[arg(long = "uniMEMs")]
+    unimems: bool,
 }
 
 fn run_index(args: IndexArgs) -> Result<()> {
@@ -171,6 +177,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.seq_bias = args.seq_bias;
     opts.map_config.align.min_score_fraction = args.min_score_fraction;
     opts.map_config.align.full_length_alignment = args.full_length_alignment;
+    opts.map_config.use_unimems = args.unimems;
 
     let res = quantify(&opts).context("quantification failed")?;
     let pct = if res.num_processed > 0 {
@@ -210,7 +217,10 @@ fn run_debug_map(args: DebugMapArgs) -> Result<()> {
 
     let idx = SalmonIndex::load(&args.index).context("loading index")?;
     let mut hs = HitSearcher::new(idx.inner());
-    let cfg = MapConfig::default();
+    let cfg = MapConfig {
+        use_unimems: args.unimems,
+        ..MapConfig::default()
+    };
 
     let f = std::fs::File::open(&args.reads).context("opening reads")?;
     let mut lines = std::io::BufReader::new(f).lines();

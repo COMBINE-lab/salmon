@@ -51,6 +51,7 @@ well-supported transcripts is near-identical.
 | `minScoreFraction` value too low | sweep 0.65 → 0.80 | gap persists (84.5% at 0.80) ✗ |
 | repetitive reads (too-many-loci) | eq-class sizes of rescued reads | 15,381 unique vs 2,875 multi ✗ |
 | **alignment-scoring engine** (block-aligner vs ksw2) | implemented ksw2rs `extz2` with salmon's exact config (band 15, gapo 6/gape 2, `KSW_EZ_RIGHT\|KSW_EZ_SCORE_ONLY`) and re-ran | **no change** (85.6% vs 86.0%) ✗ |
+| **seed representation** (sparse fixed-`k` anchors vs compacted uni-MEMs) | implemented true uni-MEM extension (extend each k-mer hit to a maximal exact match, collapse colinear seeds) behind `--uniMEMs` and re-ran | **no change** (85.55% both; NumReads r = 0.99999999, 24 reads differ) ✗ |
 
 ## What it actually is: a seeding/placement difference
 
@@ -107,6 +108,21 @@ In other words the Rust port doesn't align more cleverly; it **keeps both
 orientations' chains alive through to scoring** and decodes hit orientation
 exactly, instead of committing to one region-merged placement and pruning by
 consensus fraction before any alignment runs.
+
+### Ruled out: the seed representation itself
+
+A natural worry is that the difference is an artifact of seeding on *sparse
+fixed-`k` k-mer anchors* (what piscem's skipping streaming query emits) rather
+than the *compacted uni-MEMs* pufferfish/salmon chain. We tested this directly:
+the `--uniMEMs` path (module `salmon-map::extend`) extends every k-mer hit to a
+maximal exact match against the reference and collapses colinear seeds, exactly
+reproducing uni-MEM granularity, then chains those. On the full yeast set the
+result is **indistinguishable** from the sparse path — 85.55% mapped both ways
+(vs. salmon's 83.48%), `NumReads` Pearson **r = 0.99999999**, only 45 of 6,612
+transcripts differ at all and by 24 reads total. So the ~2–3% extra reads are
+**not** a seed-granularity artifact; they persist identically under true
+uni-MEM seeding, confirming the difference lives in candidate
+selection/orientation decoding, not seed representation.
 
 ## Concrete example
 

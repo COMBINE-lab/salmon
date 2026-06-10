@@ -13,6 +13,7 @@ use salmon_core::{LibraryFormat, MateStatus, ReadOrientation, ReadStrandedness, 
 
 use crate::align::{align_chain, align_in_window, revcomp, AlignConfig};
 use crate::collect::{best_per_target, collect_read_mems, MappingCandidate, MemCollectorConfig};
+use crate::extend::collect_read_unimems;
 use crate::pair::{join_reads_and_filter, PairingConfig};
 use crate::score::{finalize_mappings, RawMapping, ScoreConfig, ScoredMapping};
 use salmon_core::RefProvider;
@@ -26,6 +27,26 @@ pub struct MapConfig {
     pub score: ScoreConfig,
     /// attempt to rescue an unmapped mate near its mapped partner
     pub recover_orphans: bool,
+    /// seed with extended uni-MEMs ([`crate::extend`]) instead of sparse fixed-`k`
+    /// k-mer anchors. Additive/experimental — see `extend` module docs.
+    pub use_unimems: bool,
+}
+
+/// Collect mapping candidates for one read, using either the sparse-k-mer path
+/// or the extended uni-MEM path per [`MapConfig::use_unimems`].
+fn collect_candidates<'idx, R: RefProvider>(
+    index: &'idx ReferenceIndex,
+    hs: &mut HitSearcher<'idx>,
+    refs: &R,
+    read: &[u8],
+    is_left: bool,
+    cfg: &MapConfig,
+) -> Vec<MappingCandidate> {
+    if cfg.use_unimems {
+        collect_read_unimems(index, hs, refs, read, is_left, &cfg.collect)
+    } else {
+        collect_read_mems(index, hs, read, is_left, &cfg.collect)
+    }
 }
 
 /// Map a single-end read to weighted equivalence-class members.
@@ -36,7 +57,7 @@ pub fn map_single_read<'idx, R: RefProvider>(
     read: &[u8],
     cfg: &MapConfig,
 ) -> Vec<ScoredMapping> {
-    let cands = best_per_target(collect_read_mems(index, hs, read, true, &cfg.collect));
+    let cands = best_per_target(collect_candidates(index, hs, refs, read, true, cfg));
     let mut raw = Vec::with_capacity(cands.len());
     for c in cands {
         if let Some(aln) = align_chain(read, refs.ref_seq(c.tid), &c.chain, &cfg.align) {
@@ -82,8 +103,8 @@ pub fn map_read_pair<'idx, R: RefProvider>(
     r2: &[u8],
     cfg: &MapConfig,
 ) -> Vec<ScoredMapping> {
-    let left = best_per_target(collect_read_mems(index, hs, r1, true, &cfg.collect));
-    let right = best_per_target(collect_read_mems(index, hs, r2, true, &cfg.collect));
+    let left = best_per_target(collect_candidates(index, hs, refs, r1, true, cfg));
+    let right = best_per_target(collect_candidates(index, hs, refs, r2, true, cfg));
     let joints = join_reads_and_filter(left, right, &cfg.pair);
 
     let mut raw = Vec::new();
@@ -156,7 +177,7 @@ pub fn debug_best_mapping<'idx, R: RefProvider>(
     read: &[u8],
     cfg: &MapConfig,
 ) -> Option<DebugMapping> {
-    let cands = best_per_target(collect_read_mems(index, hs, read, true, &cfg.collect));
+    let cands = best_per_target(collect_candidates(index, hs, refs, read, true, cfg));
     let best = cands
         .iter()
         .max_by_key(|c| c.chain.covered_read_bases())?;

@@ -19,6 +19,7 @@
 pub mod align;
 pub mod chain;
 pub mod collect;
+pub mod extend;
 pub mod mapper;
 pub mod mem;
 pub mod pair;
@@ -31,6 +32,7 @@ pub use collect::{
     best_per_target, candidates_from_raw_hits, collect_read_mems, MappingCandidate,
     MemCollectorConfig,
 };
+pub use extend::{candidates_from_raw_hits_unimems, collect_read_unimems, extend_mem};
 pub use mapper::{debug_best_mapping, map_read_pair, map_single_read, DebugMapping, MapConfig};
 pub use align::AlignBackend;
 pub use mem::Mem;
