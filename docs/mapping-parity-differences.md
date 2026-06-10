@@ -132,28 +132,71 @@ for the unitig-end case, discards seeds it should keep. It costs real, verifiabl
 mappings of perfect unique reads. The whole-dataset impact is large: on the full
 1.09M-read yeast set, `--mismatchSeedSkip 1` raises salmon from **913,271
 (83.48%) to 929,891 (85.00%)** — recovering **16,620 reads, ≈74% of the entire
-22,579-read gap** to the Rust port (935,850 / 85.55%). The remaining ~6k reads
-are smaller seeding/placement differences. The Rust port is unaffected because
-its uni-MEM extension runs against the **reference** (bridging unitig junctions
-into one anchor) and its skipping streaming query re-probes after a skip, so a
-junction never silently drops the downstream seed.
+22,579-read gap** to the Rust port (935,850 / 85.55%). The remaining ~26%
+(~5,959 reads) is a *separate*, alignment-scoring effect documented in the next
+section. The Rust port is unaffected by `mismatchSeedSkip` because its skipping
+streaming query re-probes after a skip, so a junction never silently drops the
+downstream seed.
+
+### The other ~26%: salmon over-penalizes error-containing flanks
+
+After fixing seeding with `--mismatchSeedSkip 1`, salmon still leaves ~5,959
+reads unmapped that the Rust port maps. These are a *different* phenomenon —
+not seeding, but **alignment scoring at the acceptance boundary**.
+
+Profile of the residual (characterized via `debug-map` on a 40k sample of
+salmon's `mismatchSeedSkip 1` unmapped set; the rust-mapped fraction
+extrapolates to ~5,668, matching the gap): the typical read has a **single
+clean 31-mer seed** (exact-seed coverage `= 31/51 ≈ 0.61`) followed by an
+error-containing remainder, and a median rust alignment `score_frac = 0.941`
+(exactly `(51−1)·2 − 4 = 96/102`, i.e. **one mismatch**).
+
+Sweeping salmon's own `minScoreFraction` shows salmon scores these reads far
+*below* their true edit distance. Concrete case, read `ERR458493.850`: its only
+valid 31-mer is **unique** (forces placement at `YGR043C_mRNA@421`), and the
+read has exactly **one** real mismatch (true score 96/102 = 0.94, which is what
+the Rust port assigns). Yet salmon accepts it only at `--minScoreFraction ≤
+0.20` — i.e. salmon's selective alignment scores this 1-mismatch read at ~0.20.
+Across the six spot-checked residual reads, salmon's effective score is 0.20–0.40
+while the true/rust score is 0.67–0.94.
+
+`--softclip` confirms the culprit is the **flank**: with soft-clipping enabled,
+all six residual reads jump from "needs msf ≤ 0.20–0.40" to mapping at msf 0.60.
+So salmon's selective alignment is assigning a large penalty to the
+error-containing flank that hangs off a single short anchor (rather than finding
+the cheap 1-mismatch alignment), dragging the score below `minScoreFraction =
+0.65`. The Rust port's anchored ksw2 flank-extension finds the correct,
+low-penalty flank alignment, so it scores these reads at their true edit
+distance and keeps them. (The precise PuffAligner flank-alignment behavior that
+produces the low score would need salmon-side instrumentation to pin exactly;
+the boundary and the soft-clip result localize it to flank scoring.)
 
 ### Ruled out: the seed representation itself
 
-A natural worry is that the difference is an artifact of seeding on *sparse
-fixed-`k` k-mer anchors* (what piscem's skipping streaming query emits) rather
-than longer extended seeds. We tested this directly: the `--uniMEMs` path
-(module `salmon-map::extend`) extends every k-mer hit to a maximal exact match
-and collapses colinear seeds, then chains those. (Caveat on naming: that path
-extends against the **reference**, so it produces *reference MEMs* that cross
-unitig boundaries, **not** unitig-constrained uni-MEMs in the pufferfish sense —
-see "A note on uni-MEMs vs. reference MEMs" below.) On the full yeast set the
-result is **indistinguishable** from the sparse path — 85.55% mapped both ways
-(vs. salmon's 83.48%), `NumReads` Pearson **r = 0.99999999**, only 45 of 6,612
-transcripts differ at all and by 24 reads total. So the ~2–3% extra reads are
-**not** a seed-granularity artifact on our side; they persist identically under
-extended-MEM seeding, confirming the difference lives in candidate
-selection/orientation decoding, not seed representation.
+A natural worry is that the difference is an artifact of the *seed
+representation* — sparse fixed-`k` k-mer anchors (what piscem's skipping
+streaming query emits) versus the extended seeds pufferfish chains. We tested
+all three representations directly (module `salmon-map::extend`, selected by
+[`SeedMode`]):
+
+| seed mode | what it does | yeast mapped | vs sparse |
+| --- | --- | --- | --- |
+| `Sparse` (default) | fixed-`k` anchors, one per unitig transition | 935,850 (85.55%) | — |
+| `RefMem` (`--refMEMs`) | extend each seed against the **reference** (crosses unitig junctions) | 935,848 (85.55%) | r = 0.99999999, 24 reads |
+| `UniMem` (`--uniMEMs`) | extend clamped to the seed's **unitig** (true pufferfish uni-MEMs) | 935,846 (85.55%) | r = 0.99999995, 54 reads |
+
+All three are **indistinguishable** (within 4 reads of each other, vs. salmon's
+83.48%). Crucially, this includes a faithful reproduction of pufferfish's
+*unitig-constrained* uni-MEMs — the exact seed objects salmon chains. So the
+~2–3% extra reads are **not** a seed-representation artifact; they persist
+identically whether we seed with sparse k-mers, reference MEMs, or true
+uni-MEMs. The difference is therefore in **seed collection**, not seed
+representation: pufferfish's `mismatchSeedSkip` heuristic drops seeds after a
+unitig-boundary termination (above), whereas piscem's streaming query re-probes
+across the boundary and collects the seeds on both sides, which the chainer then
+stitches together.
+
+[`SeedMode`]: ../crates/salmon-map/src/mapper.rs
 
 ### A note on uni-MEMs vs. reference MEMs
 

@@ -39,8 +39,11 @@ struct DebugMapArgs {
     /// Single-end FASTQ (plain text).
     #[arg(short = 'r', long = "reads", required = true)]
     reads: PathBuf,
-    /// Seed with extended uni-MEMs instead of sparse fixed-k k-mer anchors.
-    #[arg(long = "uniMEMs")]
+    /// Seed with reference-extended MEMs (cross unitig boundaries).
+    #[arg(long = "refMEMs", conflicts_with = "unimems")]
+    refmems: bool,
+    /// Seed with true unitig-constrained uni-MEMs (pufferfish-style).
+    #[arg(long = "uniMEMs", conflicts_with = "refmems")]
     unimems: bool,
 }
 
@@ -116,9 +119,24 @@ struct QuantArgs {
     /// Score the full read with one DP instead of PuffAligner-style inter-MEM-gap scoring.
     #[arg(long = "fullLengthAlignment")]
     full_length_alignment: bool,
-    /// Seed with extended uni-MEMs instead of sparse fixed-k k-mer anchors.
-    #[arg(long = "uniMEMs")]
+    /// Seed with reference-extended MEMs (cross unitig boundaries).
+    #[arg(long = "refMEMs", conflicts_with = "unimems")]
+    refmems: bool,
+    /// Seed with true unitig-constrained uni-MEMs (pufferfish-style).
+    #[arg(long = "uniMEMs", conflicts_with = "refmems")]
     unimems: bool,
+}
+
+/// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
+/// enforces they are mutually exclusive).
+fn seed_mode(unimems: bool, refmems: bool) -> salmon_map::SeedMode {
+    if unimems {
+        salmon_map::SeedMode::UniMem
+    } else if refmems {
+        salmon_map::SeedMode::RefMem
+    } else {
+        salmon_map::SeedMode::Sparse
+    }
 }
 
 fn run_index(args: IndexArgs) -> Result<()> {
@@ -177,7 +195,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.seq_bias = args.seq_bias;
     opts.map_config.align.min_score_fraction = args.min_score_fraction;
     opts.map_config.align.full_length_alignment = args.full_length_alignment;
-    opts.map_config.use_unimems = args.unimems;
+    opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems);
 
     let res = quantify(&opts).context("quantification failed")?;
     let pct = if res.num_processed > 0 {
@@ -218,7 +236,7 @@ fn run_debug_map(args: DebugMapArgs) -> Result<()> {
     let idx = SalmonIndex::load(&args.index).context("loading index")?;
     let mut hs = HitSearcher::new(idx.inner());
     let cfg = MapConfig {
-        use_unimems: args.unimems,
+        seed_mode: seed_mode(args.unimems, args.refmems),
         ..MapConfig::default()
     };
 

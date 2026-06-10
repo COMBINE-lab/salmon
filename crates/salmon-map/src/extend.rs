@@ -1,23 +1,29 @@
-//! Uni-MEM extraction: extend sparse k-mer anchors into maximal exact matches.
+//! MEM extraction: extend sparse k-mer anchors into longer exact matches.
 //!
 //! The default [`collect`](crate::collect) path chains the *sparse, fixed-length*
 //! k-mer anchors that piscem's skipping streaming query emits — one length-`k`
-//! anchor per unitig transition. pufferfish/salmon instead seed with **uni-MEMs**:
-//! each shared k-mer is extended along the unitig (here, against the reference)
-//! into a maximal exact match before chaining, and colinear k-mers that belong to
-//! the same exact stretch collapse into a single anchor.
+//! anchor per unitig transition. This module offers two *additive* alternatives
+//! that extend each seed before chaining (selected by
+//! [`SeedMode`](crate::mapper::SeedMode)):
 //!
-//! This module implements that uni-MEM seeding as an *additive* alternative to
-//! the sparse-k-mer path (selected by [`MapConfig::use_unimems`]). It exists to
-//! answer an experimental question: does the compacted-uni-MEM vs. sparse-k-mer
-//! seed representation account for the read-placement differences vs. C++ salmon?
-//! The extension is exact (no mismatches), in the same query frame the chainer
-//! uses — the forward read for forward groups, its reverse complement for reverse
-//! groups — so the produced anchors drop straight into [`chain_mems`].
+//! - **Reference MEMs** ([`candidates_from_raw_hits_unimems`]): each seed is
+//!   extended against the **reference transcript** until a base mismatch or a
+//!   read/reference boundary. These cross unitig junctions freely — a
+//!   junction-straddling match becomes a *single* anchor.
+//! - **True uni-MEMs** ([`candidates_from_raw_hits_true_unimems`]): extension is
+//!   clamped to the seed's **unitig** (`[base_pos, base_pos + contig_len)`),
+//!   faithfully reproducing pufferfish's `expandHitEfficient` (which stops at
+//!   `CONTIG_END`). A junction-straddling match becomes *one uni-MEM per unitig*,
+//!   which the chainer then stitches together.
 //!
-//! [`MapConfig::use_unimems`]: crate::mapper::MapConfig::use_unimems
+//! Both extend in the chainer's query frame (forward read for forward groups,
+//! reverse complement for reverse groups) and collapse colinear seeds that
+//! resolve to the same anchor, so the result drops straight into [`chain_mems`].
+//! The experiment these support: does the seed representation (sparse vs. ref
+//! MEM vs. unitig-constrained uni-MEM) account for read-placement differences
+//! vs. C++ salmon? (It does not — see `docs/mapping-parity-differences.md`.)
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use piscem_rs::index::contig_table::EntryEncoding;
 use piscem_rs::index::reference_index::ReferenceIndex;
@@ -41,19 +47,33 @@ fn base_eq(a: u8, b: u8) -> bool {
     ua == b.to_ascii_uppercase() && ua != b'N'
 }
 
-/// Extend a seed anchor to a maximal exact match against `query`/`ref_seq`.
+/// Extend a seed anchor to a maximal exact match against the **whole
+/// reference** (a *reference MEM*): the match grows until a base mismatch or a
+/// read/reference boundary, crossing unitig boundaries freely.
 ///
-/// Both are in the query frame: the caller passes the forward read (forward
-/// group) or its reverse complement (reverse group), and `m`'s coordinates are
-/// already expressed in that frame. The match grows left and right while bases
-/// agree and stay in bounds; the result is the uni-MEM containing the seed.
-pub fn extend_mem(query: &[u8], ref_seq: &[u8], mut m: Mem) -> Mem {
+/// `query`/`ref_seq` are in the query frame: the caller passes the forward read
+/// (forward group) or its reverse complement (reverse group), and `m`'s
+/// coordinates are already expressed in that frame.
+pub fn extend_mem(query: &[u8], ref_seq: &[u8], m: Mem) -> Mem {
+    extend_mem_within(query, ref_seq, m, 0, ref_seq.len() as i32)
+}
+
+/// Extend a seed anchor to a maximal exact match whose reference span is
+/// constrained to `[ref_lo, ref_hi)`.
+///
+/// With `ref_lo = 0`, `ref_hi = ref_seq.len()` this is an unconstrained
+/// reference MEM ([`extend_mem`]). Passing the seed's **unitig** reference span
+/// (`[base_pos, base_pos + contig_len)`) instead yields a true
+/// **uni-MEM**: an exact match that cannot extend past the unitig boundary,
+/// exactly as pufferfish's `expandHitEfficient` (which stops at `CONTIG_END`).
+pub fn extend_mem_within(query: &[u8], ref_seq: &[u8], mut m: Mem, ref_lo: i32, ref_hi: i32) -> Mem {
     let qlen = query.len() as i32;
     let reflen = ref_seq.len() as i32;
+    let hi = ref_hi.min(reflen);
 
-    // Extend left along the shared diagonal.
+    // Extend left along the shared diagonal, not past the unitig start.
     while m.read_start > 0
-        && m.ref_start > 0
+        && m.ref_start > ref_lo
         && base_eq(
             query[(m.read_start - 1) as usize],
             ref_seq[(m.ref_start - 1) as usize],
@@ -64,9 +84,9 @@ pub fn extend_mem(query: &[u8], ref_seq: &[u8], mut m: Mem) -> Mem {
         m.len += 1;
     }
 
-    // Extend right along the shared diagonal.
+    // Extend right along the shared diagonal, not past the unitig end.
     while m.read_end() < qlen
-        && m.ref_end() < reflen
+        && m.ref_end() < hi
         && base_eq(query[m.read_end() as usize], ref_seq[m.ref_end() as usize])
     {
         m.len += 1;
@@ -118,11 +138,11 @@ pub fn candidates_from_raw_hits_unimems<R: RefProvider>(
     candidates
 }
 
-/// Collect uni-MEM mapping candidates for one read against a loaded index.
+/// Collect reference-MEM mapping candidates for one read against a loaded index.
 ///
 /// Drop-in alternative to [`crate::collect::collect_read_mems`] that seeds with
-/// extended uni-MEMs instead of sparse fixed-`k` anchors. Needs the reference
-/// sequences (`refs`) to extend against.
+/// reference-extended MEMs instead of sparse fixed-`k` anchors. Needs the
+/// reference sequences (`refs`) to extend against.
 pub fn collect_read_unimems<'idx, R: RefProvider>(
     index: &'idx ReferenceIndex,
     hs: &mut HitSearcher<'idx>,
@@ -143,6 +163,120 @@ pub fn collect_read_unimems<'idx, R: RefProvider>(
         hs.get_raw_hits_sketch::<K>(read, &mut query, cfg.skipping, is_left);
         let raw = if is_left { hs.left_hits() } else { hs.right_hits() };
         candidates_from_raw_hits_unimems(raw, &encoding, refs, read, k as i32, cfg)
+    })
+}
+
+/// A projected seed that also carries the reference span of the **unitig** it
+/// came from, so extension can be clamped to the unitig (true uni-MEM).
+struct SeedWithContig {
+    mem: Mem,
+    /// reference-forward start of the unitig
+    u_lo: i32,
+    /// reference-forward end (exclusive) of the unitig
+    u_hi: i32,
+}
+
+/// Project raw k-mer hits, keeping each seed's **unitig reference span**.
+///
+/// Like [`project_raw_hits`] but records, per seed, the reference-forward
+/// `[base_pos, base_pos + contig_len)` window of the unitig the k-mer landed on
+/// (`base_pos = EntryEncoding::pos`, contiguous in the reference regardless of
+/// the contig's orientation). That window is what bounds a true uni-MEM.
+fn project_raw_hits_with_contig(
+    raw_hits: &[(i32, ProjectedHits<'_>)],
+    encoding: &EntryEncoding,
+    read_len: i32,
+    k: i32,
+    max_hit_occ: usize,
+) -> HashMap<(u32, bool), Vec<SeedWithContig>> {
+    let mut groups: HashMap<(u32, bool), Vec<SeedWithContig>> = HashMap::new();
+    for (read_pos, phit) in raw_hits {
+        if phit.num_hits() > max_hit_occ {
+            continue;
+        }
+        let contig_len = phit.contig_len() as i32;
+        for entry in phit.ref_range().iter() {
+            let tid = encoding.transcript_id(entry);
+            let base_pos = encoding.pos(entry) as i32;
+            let rp = phit.decode_hit(entry, encoding);
+            let read_start = if rp.is_fw {
+                *read_pos
+            } else {
+                read_len - (*read_pos + k)
+            };
+            groups.entry((tid, rp.is_fw)).or_default().push(SeedWithContig {
+                mem: Mem::new(read_start, rp.pos as i32, k),
+                u_lo: base_pos,
+                u_hi: base_pos + contig_len,
+            });
+        }
+    }
+    groups
+}
+
+/// Project then extend each seed into a **true uni-MEM** (extension clamped to
+/// the seed's unitig), dedup, and chain. Mirrors pufferfish's unitig-constrained
+/// uni-MEM seeding: a junction-straddling match yields one uni-MEM per unitig,
+/// which the chainer then stitches together. Contrast with
+/// [`candidates_from_raw_hits_unimems`], whose reference MEMs bridge the
+/// junction into a single anchor.
+pub fn candidates_from_raw_hits_true_unimems<R: RefProvider>(
+    raw_hits: &[(i32, ProjectedHits<'_>)],
+    encoding: &EntryEncoding,
+    refs: &R,
+    read: &[u8],
+    k: i32,
+    cfg: &MemCollectorConfig,
+) -> Vec<MappingCandidate> {
+    let read_len = read.len() as i32;
+    let groups = project_raw_hits_with_contig(raw_hits, encoding, read_len, k, cfg.max_hit_occ);
+    let rc = revcomp(read);
+    let mut chain_cfg = cfg.chain.clone();
+    chain_cfg.seed_len = k;
+
+    let mut candidates = Vec::new();
+    for ((tid, is_fw), seeds) in groups {
+        let ref_seq = refs.ref_seq(tid);
+        let query: &[u8] = if is_fw { read } else { &rc };
+
+        let mut seen = HashSet::new();
+        let mut unimems = Vec::with_capacity(seeds.len());
+        for s in seeds {
+            let e = extend_mem_within(query, ref_seq, s.mem, s.u_lo, s.u_hi);
+            if seen.insert((e.read_start, e.ref_start, e.len)) {
+                unimems.push(e);
+            }
+        }
+
+        for chain in chain_mems(&unimems, is_fw, &chain_cfg) {
+            candidates.push(MappingCandidate { tid, is_fw, chain });
+        }
+    }
+    candidates
+}
+
+/// Collect true uni-MEM mapping candidates (unitig-constrained extension) for
+/// one read against a loaded index. See [`candidates_from_raw_hits_true_unimems`].
+pub fn collect_read_true_unimems<'idx, R: RefProvider>(
+    index: &'idx ReferenceIndex,
+    hs: &mut HitSearcher<'idx>,
+    refs: &R,
+    read: &[u8],
+    is_left: bool,
+    cfg: &MemCollectorConfig,
+) -> Vec<MappingCandidate> {
+    let k = index.k();
+    let read_len = read.len() as i32;
+    if read_len < k as i32 {
+        return Vec::new();
+    }
+    let encoding = index.encoding();
+
+    dispatch_on_k!(k, K => {
+        let mut query = PiscemStreamingQuery::<K>::new(index.dict());
+        hs.get_raw_hits_sketch::<K>(read, &mut query, cfg.skipping, is_left);
+        let raw = if is_left { hs.left_hits() } else { hs.right_hits() };
+        candidates_from_raw_hits_true_unimems(raw, &encoding, refs, read, k as i32, cfg)
     })
 }
 
@@ -189,6 +323,23 @@ mod tests {
         assert_eq!(e.read_start, 0);
         assert_eq!(e.ref_start, 50);
         assert_eq!(e.len, 80, "seed should extend to the full 80 bp match");
+    }
+
+    #[test]
+    fn uni_mem_extension_stops_at_unitig_boundary() {
+        // read == ref[50..130] (80 bp exact). A seed at read 0 / ref 50:
+        // - reference MEM extends to the full 80 bp.
+        // - uni-MEM clamped to a unitig spanning ref [50..100) stops at ref 100,
+        //   i.e. 50 bp covered (read [0..50)).
+        let reference = gen_seq(300, 7);
+        let read = reference[50..130].to_vec();
+        let seed = Mem::new(0, 50, 31);
+        let ref_mem = extend_mem(&read, &reference, seed);
+        assert_eq!(ref_mem.len, 80, "reference MEM crosses freely");
+        let uni = extend_mem_within(&read, &reference, seed, 50, 100);
+        assert_eq!(uni.ref_start, 50);
+        assert_eq!(uni.ref_end(), 100, "uni-MEM must stop at the unitig end");
+        assert_eq!(uni.len, 50);
     }
 
     #[test]

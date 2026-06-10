@@ -32,8 +32,13 @@ pub use collect::{
     best_per_target, candidates_from_raw_hits, collect_read_mems, MappingCandidate,
     MemCollectorConfig,
 };
-pub use extend::{candidates_from_raw_hits_unimems, collect_read_unimems, extend_mem};
-pub use mapper::{debug_best_mapping, map_read_pair, map_single_read, DebugMapping, MapConfig};
+pub use extend::{
+    candidates_from_raw_hits_true_unimems, candidates_from_raw_hits_unimems,
+    collect_read_true_unimems, collect_read_unimems, extend_mem, extend_mem_within,
+};
+pub use mapper::{
+    debug_best_mapping, map_read_pair, map_single_read, DebugMapping, MapConfig, SeedMode,
+};
 pub use align::AlignBackend;
 pub use mem::Mem;
 pub use pair::{join_reads_and_filter, JointMapping, PairingConfig};

@@ -13,7 +13,22 @@ use salmon_core::{LibraryFormat, MateStatus, ReadOrientation, ReadStrandedness, 
 
 use crate::align::{align_chain, align_in_window, revcomp, AlignConfig};
 use crate::collect::{best_per_target, collect_read_mems, MappingCandidate, MemCollectorConfig};
-use crate::extend::collect_read_unimems;
+use crate::extend::{collect_read_true_unimems, collect_read_unimems};
+
+/// How a read's seeds are turned into chaining anchors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SeedMode {
+    /// Sparse fixed-`k` k-mer anchors straight from piscem's skipping query
+    /// (one length-`k` anchor per unitig transition). The default.
+    #[default]
+    Sparse,
+    /// Reference MEMs: each seed extended against the reference transcript,
+    /// crossing unitig boundaries ([`crate::extend::collect_read_unimems`]).
+    RefMem,
+    /// True uni-MEMs: extension clamped to each seed's unitig, reproducing
+    /// pufferfish's `expandHitEfficient` ([`crate::extend::collect_read_true_unimems`]).
+    UniMem,
+}
 use crate::pair::{join_reads_and_filter, PairingConfig};
 use crate::score::{finalize_mappings, RawMapping, ScoreConfig, ScoredMapping};
 use salmon_core::RefProvider;
@@ -27,9 +42,9 @@ pub struct MapConfig {
     pub score: ScoreConfig,
     /// attempt to rescue an unmapped mate near its mapped partner
     pub recover_orphans: bool,
-    /// seed with extended uni-MEMs ([`crate::extend`]) instead of sparse fixed-`k`
-    /// k-mer anchors. Additive/experimental — see `extend` module docs.
-    pub use_unimems: bool,
+    /// how seeds are extended into chaining anchors (additive/experimental;
+    /// see the [`extend`](crate::extend) module docs).
+    pub seed_mode: SeedMode,
 }
 
 /// Collect mapping candidates for one read, using either the sparse-k-mer path
@@ -42,10 +57,10 @@ fn collect_candidates<'idx, R: RefProvider>(
     is_left: bool,
     cfg: &MapConfig,
 ) -> Vec<MappingCandidate> {
-    if cfg.use_unimems {
-        collect_read_unimems(index, hs, refs, read, is_left, &cfg.collect)
-    } else {
-        collect_read_mems(index, hs, read, is_left, &cfg.collect)
+    match cfg.seed_mode {
+        SeedMode::Sparse => collect_read_mems(index, hs, read, is_left, &cfg.collect),
+        SeedMode::RefMem => collect_read_unimems(index, hs, refs, read, is_left, &cfg.collect),
+        SeedMode::UniMem => collect_read_true_unimems(index, hs, refs, read, is_left, &cfg.collect),
     }
 }
 
