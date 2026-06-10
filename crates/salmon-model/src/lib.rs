@@ -4,15 +4,22 @@
 //! library-type detection ([`libdetect`]). Bias models (sequence-specific, GC,
 //! positional) and the alignment error model are added in later phases.
 
+pub mod bias;
 pub mod fld;
 pub mod gcbias;
 pub mod libdetect;
+pub mod posbias;
 pub mod seqbias;
+pub mod spline;
 
+pub use bias::{build_expected_pos, corrected_effective_length_full, BiasInputs};
 pub use fld::{smoothed_effective_length, FragmentLengthDistribution};
 pub use gcbias::{
     build_expected_gc, gc_corrected_effective_length, gc_desc, gc_prefix, gc_ratio, GcFragModel,
     GC_SAMP_STRIDE,
 };
 pub use libdetect::LibraryTypeDetector;
+pub use posbias::{
+    compute_length_quantiles, length_class_index, SimplePosBias, NUM_LENGTH_CLASSES, NUM_POS_BINS,
+};
 pub use seqbias::{build_expected, corrected_effective_length, SBModel};

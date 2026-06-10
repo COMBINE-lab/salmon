@@ -50,6 +50,8 @@ pub fn map_single_read_sketch<'idx>(
                 fragment_len: 0,
                 weight: 1.0,
                 ref_pos: 0,
+                fw_pos: -1,
+                rc_pos: -1,
                 format: None,
             })
             .collect::<Vec<_>>()
@@ -87,6 +89,8 @@ pub fn map_read_pair_sketch<'idx>(
                         fragment_len: 0,
                         weight: 1.0,
                         ref_pos: 0,
+                        fw_pos: -1,
+                        rc_pos: -1,
                         format: None,
                     })
                 })

@@ -97,6 +97,10 @@ pub fn map_single_read<'idx, R: RefProvider>(
                     } else {
                         c.chain.ref_end()
                     },
+                    // positional bias: the read's leftmost reference coordinate,
+                    // attributed to its own strand (salmon's SINGLE_END case).
+                    fw_pos: if c.is_fw { c.chain.ref_start() } else { -1 },
+                    rc_pos: if c.is_fw { -1 } else { c.chain.ref_start() },
                     format: Some(LibraryFormat::new(
                         ReadType::SingleEnd,
                         ReadOrientation::None,
@@ -133,6 +137,18 @@ pub fn map_read_pair<'idx, R: RefProvider>(
                 let ar = align_chain(r2, refseq, &r.chain, &cfg.align);
                 if let (Some(al), Some(ar)) = (al, ar) {
                     if al.valid && ar.valid {
+                        // positional bias (salmon's PAIRED_END_PAIRED case): only
+                        // opposite-strand pairs contribute; the forward mate's
+                        // leftmost goes to the fwd model, the reverse mate's to RC.
+                        let (fw_pos, rc_pos) = if l.is_fw != r.is_fw {
+                            if l.is_fw {
+                                (l.chain.ref_start(), r.chain.ref_start())
+                            } else {
+                                (r.chain.ref_start(), l.chain.ref_start())
+                            }
+                        } else {
+                            (-1, -1)
+                        };
                         raw.push(RawMapping {
                             tid: j.tid,
                             is_fw: l.is_fw,
@@ -141,6 +157,8 @@ pub fn map_read_pair<'idx, R: RefProvider>(
                             fragment_len: j.fragment_len,
                             is_decoy: refs.is_decoy(j.tid),
                             ref_pos: l.chain.ref_start().min(r.chain.ref_start()),
+                            fw_pos,
+                            rc_pos,
                             format: Some(j.format),
                         });
                     }
@@ -245,6 +263,10 @@ fn push_orphan_or_recovered<R: RefProvider>(
                 fragment_len: frag_len,
                 is_decoy,
                 ref_pos: anchor.chain.ref_start(),
+                // orientation not re-derived for recovered pairs; attribute the
+                // anchor's position to its own strand for positional bias.
+                fw_pos: if anchor.is_fw { anchor.chain.ref_start() } else { -1 },
+                rc_pos: if anchor.is_fw { -1 } else { anchor.chain.ref_start() },
                 format: None, // recovered pair: orientation not re-derived
             });
             return;
@@ -264,6 +286,9 @@ fn push_orphan_or_recovered<R: RefProvider>(
         fragment_len: 0,
         is_decoy,
         ref_pos: anchor.chain.ref_start(),
+        // orphan: leftmost coordinate attributed to its own strand.
+        fw_pos: if anchor.is_fw { anchor.chain.ref_start() } else { -1 },
+        rc_pos: if anchor.is_fw { -1 } else { anchor.chain.ref_start() },
         format: None, // orphans are not sampled for library-type detection
     });
 }

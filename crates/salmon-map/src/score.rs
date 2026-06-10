@@ -22,6 +22,12 @@ pub struct RawMapping {
     pub is_decoy: bool,
     /// leftmost fragment position on the reference (for sequence-bias context)
     pub ref_pos: i32,
+    /// leftmost reference position of the forward-strand mate/read (for
+    /// positional bias); `-1` if there is no forward-strand contributor
+    pub fw_pos: i32,
+    /// leftmost reference position of the reverse-strand mate/read (for
+    /// positional bias); `-1` if there is no reverse-strand contributor
+    pub rc_pos: i32,
     /// observed library format of this mapping (for auto-detection); `None`
     /// for orphans and pseudoalignment hits
     pub format: Option<LibraryFormat>,
@@ -39,6 +45,12 @@ pub struct ScoredMapping {
     pub weight: f64,
     /// leftmost fragment position on the reference (for sequence-bias context)
     pub ref_pos: i32,
+    /// leftmost reference position of the forward-strand mate/read (positional
+    /// bias); `-1` if none
+    pub fw_pos: i32,
+    /// leftmost reference position of the reverse-strand mate/read (positional
+    /// bias); `-1` if none
+    pub rc_pos: i32,
     /// observed library format (for auto-detection), if determinable
     pub format: Option<LibraryFormat>,
 }
@@ -137,6 +149,8 @@ pub fn finalize_mappings(raw: Vec<RawMapping>, cfg: &ScoreConfig) -> Vec<ScoredM
                 fragment_len: m.fragment_len,
                 weight,
                 ref_pos: m.ref_pos,
+                fw_pos: m.fw_pos,
+                rc_pos: m.rc_pos,
                 format: m.format,
             })
         })
@@ -158,6 +172,8 @@ mod tests {
             fragment_len: 0,
             is_decoy,
             ref_pos: 0,
+            fw_pos: 0,
+            rc_pos: -1,
             format: None,
         }
     }

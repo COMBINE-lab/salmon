@@ -66,6 +66,8 @@ pub struct QuantOptions {
     pub seq_bias: bool,
     /// enable fragment-GC bias correction (`--gcBias`)
     pub gc_bias: bool,
+    /// enable positional bias correction (`--posBias`)
+    pub pos_bias: bool,
 }
 
 impl QuantOptions {
@@ -87,6 +89,7 @@ impl QuantOptions {
             dump_eq: false,
             seq_bias: false,
             gc_bias: false,
+            pos_bias: false,
         }
     }
 
@@ -168,6 +171,26 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         .gc_bias
         .then(|| std::sync::Mutex::new(salmon_model::GcFragModel::default_model()));
 
+    // For `--posBias`: transcript length-class quantiles + per-transcript class,
+    // and the shared observed (5', 3') positional-bias models per length class.
+    let length_quantiles: Option<Vec<u32>> = opts.pos_bias.then(|| {
+        let lens: Vec<u32> = (0..num_refs).map(|t| salmon.ref_len(t) as u32).collect();
+        salmon_model::compute_length_quantiles(&lens, salmon_model::NUM_LENGTH_CLASSES)
+    });
+    let length_class: Option<Vec<usize>> = length_quantiles.as_ref().map(|q| {
+        (0..num_refs)
+            .map(|t| salmon_model::length_class_index(q, salmon.ref_len(t) as u32))
+            .collect()
+    });
+    let posbias_obs = opts.pos_bias.then(|| {
+        let mk = || {
+            (0..salmon_model::NUM_LENGTH_CLASSES)
+                .map(|_| salmon_model::SimplePosBias::default())
+                .collect::<Vec<_>>()
+        };
+        std::sync::Mutex::new((mk(), mk()))
+    });
+
     // ---- parallel mapping pass (borrows the accumulators) -------------------
     {
         let shared = Shared {
@@ -187,6 +210,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             collect_gcbias: opts.gc_bias,
             gc_prefix: gc_prefix.as_deref(),
             gcbias_obs: gcbias_obs.as_ref(),
+            collect_posbias: opts.pos_bias,
+            length_class: length_class.as_deref(),
+            posbias_obs: posbias_obs.as_ref(),
             num_processed: &num_processed,
             num_mapped: &num_mapped,
         };
@@ -239,11 +265,18 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // ---- bias correction: re-estimate effective lengths --------------------
     // Build the expected (background) bias models from the initial abundance
     // estimate, recompute bias-corrected effective lengths, then re-run
-    // inference. Handles `--seqBias`, `--gcBias`, or both combined.
-    if opts.seq_bias || opts.gc_bias {
+    // inference. Composes `--seqBias`, `--gcBias`, and `--posBias` in any
+    // combination via the unified convolution (salmon's updateEffectiveLengths).
+    if opts.seq_bias || opts.gc_bias || opts.pos_bias {
         use rayon::prelude::*;
         let pmf_lin: Vec<f64> = log_pmf.iter().map(|lp| lp.exp()).collect();
         let (fld_cdf, fld_low, fld_high) = salmon_model::seqbias::fld_cdf_and_bounds(&pmf_lin);
+        // K excludes the leading sequence context only when seq-correcting.
+        let k = if opts.seq_bias {
+            salmon_model::seqbias::CONTEXT_LENGTH
+        } else {
+            1
+        };
 
         // Sequence-bias observed + expected models.
         let seq = seqbias_obs.map(|m| {
@@ -264,12 +297,6 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         let prefixes = gc_prefix.as_ref();
         let gc_ratio_model = gcbias_obs.map(|m| {
             let mut obs = m.into_inner().unwrap();
-            // K excludes the leading context only when seq-correcting too.
-            let k = if opts.seq_bias {
-                salmon_model::seqbias::CONTEXT_LENGTH
-            } else {
-                1
-            };
             let mut exp = salmon_model::build_expected_gc(
                 num_refs,
                 |t| salmon.ref_seq(t as u32),
@@ -287,6 +314,24 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             salmon_model::gc_ratio(&mut obs, &mut exp, salmon_model::gcbias::GC_MAX_RATIO)
         });
 
+        // Positional-bias observed (finalized) + expected (5'/3' per length class).
+        let pos_models = posbias_obs.map(|m| {
+            let (mut obs_fw, mut obs_rc) = m.into_inner().unwrap();
+            for x in obs_fw.iter_mut().chain(obs_rc.iter_mut()) {
+                x.finalize();
+            }
+            let (exp_fw, exp_rc) = salmon_model::build_expected_pos(
+                num_refs,
+                |t| salmon.ref_len(t) as usize,
+                &em.alphas,
+                &eff_lengths,
+                &fld_cdf,
+                length_quantiles.as_ref().unwrap(),
+                k,
+            );
+            (obs_fw, obs_rc, exp_fw, exp_rc)
+        });
+
         let corrected: Vec<f64> = (0..num_refs)
             .into_par_iter()
             .map(|tid| {
@@ -294,38 +339,37 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                     return eff_lengths[tid];
                 }
                 let s = salmon.ref_seq(tid as u32);
-                match (&gc_ratio_model, &seq) {
-                    // GC bias (optionally combined with sequence bias).
-                    (Some(gc), seq_opt) => salmon_model::gc_corrected_effective_length(
-                        s,
-                        prefixes.unwrap()[tid].as_slice(),
-                        &fld_cdf,
-                        fld_low,
-                        fld_high,
-                        gc,
-                        seq_opt
-                            .as_ref()
-                            .map(|(of, or, ef, er)| (of, ef, or, er)),
-                        eff_lengths[tid],
-                        salmon_model::GC_SAMP_STRIDE,
-                    ),
-                    // Sequence bias only.
-                    (None, Some((obs_fw, obs_rc, exp_fw, exp_rc))) => {
-                        salmon_model::corrected_effective_length(
-                            s,
-                            &fld_cdf,
-                            fld_low,
-                            fld_high,
-                            obs_fw,
-                            exp_fw,
-                            obs_rc,
-                            exp_rc,
-                            eff_lengths[tid],
-                            salmon_model::seqbias::FLD_SAMP_STRIDE,
-                        )
-                    }
-                    (None, None) => eff_lengths[tid],
-                }
+                let ref_len = s.len();
+                // Per-position 5'/3' positional-bias factors (obs/exp projected).
+                let pos_vecs: Option<(Vec<f64>, Vec<f64>)> =
+                    pos_models.as_ref().map(|(ofw, orc, efw, erc)| {
+                        let lc = length_class.as_ref().unwrap()[tid];
+                        let (mut o5, mut e5) = (vec![0.0; ref_len], vec![0.0; ref_len]);
+                        let (mut o3, mut e3) = (vec![0.0; ref_len], vec![0.0; ref_len]);
+                        ofw[lc].project_weights(&mut o5);
+                        efw[lc].project_weights(&mut e5);
+                        orc[lc].project_weights(&mut o3);
+                        erc[lc].project_weights(&mut e3);
+                        let pf: Vec<f64> = o5.iter().zip(&e5).map(|(o, e)| o / e).collect();
+                        let pr: Vec<f64> = o3.iter().zip(&e3).map(|(o, e)| o / e).collect();
+                        (pf, pr)
+                    });
+                let bias = salmon_model::BiasInputs {
+                    seq: seq.as_ref().map(|(of, or, ef, er)| (of, ef, or, er)),
+                    gc: gc_ratio_model
+                        .as_ref()
+                        .map(|g| (g, prefixes.unwrap()[tid].as_slice())),
+                    pos: pos_vecs.as_ref().map(|(pf, pr)| (pf.as_slice(), pr.as_slice())),
+                };
+                salmon_model::corrected_effective_length_full(
+                    s,
+                    &fld_cdf,
+                    fld_low,
+                    fld_high,
+                    &bias,
+                    eff_lengths[tid],
+                    salmon_model::GC_SAMP_STRIDE,
+                )
             })
             .collect();
         eff_lengths = corrected;

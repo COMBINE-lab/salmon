@@ -23,7 +23,10 @@ use salmon_map::{
     ScoredMapping,
 };
 use salmon_model::seqbias::{SBModel, CONTEXT_LEFT, CONTEXT_LENGTH, CONTEXT_RIGHT};
-use salmon_model::{gc_desc, FragmentLengthDistribution, GcFragModel, LibraryTypeDetector};
+use salmon_model::{
+    gc_desc, FragmentLengthDistribution, GcFragModel, LibraryTypeDetector, SimplePosBias,
+    NUM_LENGTH_CLASSES,
+};
 
 /// Shared, thread-safe state (all `Copy` references).
 #[derive(Clone, Copy)]
@@ -55,6 +58,12 @@ pub(crate) struct Shared<'a> {
     pub gc_prefix: Option<&'a [Vec<u32>]>,
     /// shared observed fragment-GC model to merge per-thread results into
     pub gcbias_obs: Option<&'a Mutex<GcFragModel>>,
+    /// collect observed positional bias (`--posBias`)
+    pub collect_posbias: bool,
+    /// per-transcript length-class index (for positional bias), when pos-correcting
+    pub length_class: Option<&'a [usize]>,
+    /// shared observed (5', 3') positional-bias models (per length class) to merge into
+    pub posbias_obs: Option<&'a Mutex<(Vec<SimplePosBias>, Vec<SimplePosBias>)>>,
     pub num_processed: &'a AtomicU64,
     pub num_mapped: &'a AtomicU64,
 }
@@ -67,6 +76,8 @@ pub(crate) struct QuantProcessor<'a> {
     pub seqbias: Option<(SBModel, SBModel)>,
     /// per-thread observed fragment-GC model (when collecting)
     pub gcbias: Option<GcFragModel>,
+    /// per-thread observed (5', 3') positional-bias models, per length class
+    pub posbias: Option<(Vec<SimplePosBias>, Vec<SimplePosBias>)>,
 }
 
 impl<'a> QuantProcessor<'a> {
@@ -75,11 +86,18 @@ impl<'a> QuantProcessor<'a> {
             .collect_seqbias
             .then(|| (SBModel::new(), SBModel::new()));
         let gcbias = shared.collect_gcbias.then(GcFragModel::default_model);
+        let posbias = shared.collect_posbias.then(|| {
+            (
+                (0..NUM_LENGTH_CLASSES).map(|_| SimplePosBias::default()).collect(),
+                (0..NUM_LENGTH_CLASSES).map(|_| SimplePosBias::default()).collect(),
+            )
+        });
         Self {
             shared,
             hs: None,
             seqbias,
             gcbias,
+            posbias,
         }
     }
 }
@@ -160,12 +178,41 @@ fn collect_gc(
     }
 }
 
+/// Collect observed positional-bias mass for one fragment's compatible mappings.
+/// Each contributing mate's leftmost reference position is added (posterior-
+/// weighted, log space) to its strand's model for the transcript's length class,
+/// mirroring salmon's `observedPosBias{Fwd,RC}[lengthClass].addMass(pos, refLen,
+/// logProb)`.
+fn collect_pos(
+    sh: &Shared,
+    compat: &[(&ScoredMapping, f64)],
+    wsum: f64,
+    pos: &mut (Vec<SimplePosBias>, Vec<SimplePosBias>),
+) {
+    let Some(length_class) = sh.length_class else { return };
+    if wsum <= 0.0 {
+        return;
+    }
+    for (m, w) in compat {
+        let lc = length_class[m.tid as usize];
+        let ref_len = sh.salmon.ref_len(m.tid as usize) as i32;
+        let mass = (w / wsum).ln();
+        if m.fw_pos >= 0 {
+            pos.0[lc].add_mass(m.fw_pos, ref_len, mass);
+        }
+        if m.rc_pos >= 0 {
+            pos.1[lc].add_mass(m.rc_pos, ref_len, mass);
+        }
+    }
+}
+
 /// Record one fragment's weighted mappings into the shared accumulators.
 fn record(
     sh: &Shared,
     maps: &[ScoredMapping],
     seqbias: Option<&mut (SBModel, SBModel)>,
     gcbias: Option<&mut GcFragModel>,
+    posbias: Option<&mut (Vec<SimplePosBias>, Vec<SimplePosBias>)>,
 ) {
     sh.num_processed.fetch_add(1, Ordering::Relaxed);
     if maps.is_empty() {
@@ -206,10 +253,15 @@ fn record(
         return; // no compatible mapping -> fragment is unassigned
     }
 
-    // Collect observed fragment-GC contexts (posterior-weighted) for `--gcBias`.
-    if let Some(gc) = gcbias {
+    // Collect observed fragment-GC / positional contexts (posterior-weighted).
+    if gcbias.is_some() || posbias.is_some() {
         let wsum: f64 = compat.iter().map(|(_, w)| *w).sum();
-        collect_gc(sh, &compat, wsum, gc);
+        if let Some(gc) = gcbias {
+            collect_gc(sh, &compat, wsum, gc);
+        }
+        if let Some(pos) = posbias {
+            collect_pos(sh, &compat, wsum, pos);
+        }
     }
 
     let mut pairs: Vec<(u32, f64)> = compat.iter().map(|(m, w)| (m.tid, *w)).collect();
@@ -274,6 +326,15 @@ fn merge_bias(proc: &QuantProcessor) {
         let mut g = shared_mtx.lock().unwrap();
         g.combine_counts(local);
     }
+    if let (Some(local), Some(shared_mtx)) = (proc.posbias.as_ref(), proc.shared.posbias_obs) {
+        let mut g = shared_mtx.lock().unwrap();
+        for (a, b) in g.0.iter_mut().zip(&local.0) {
+            a.combine(b);
+        }
+        for (a, b) in g.1.iter_mut().zip(&local.1) {
+            a.combine(b);
+        }
+    }
 }
 
 impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
@@ -281,7 +342,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         &mut self,
         pairs: impl Iterator<Item = (RefRecord<'r>, RefRecord<'r>)>,
     ) -> paraseq::Result<()> {
-        let QuantProcessor { shared, hs, seqbias, gcbias } = self;
+        let QuantProcessor { shared, hs, seqbias, gcbias, posbias } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
         if hs.is_none() {
@@ -296,7 +357,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             } else {
                 map_read_pair(idx, hs, sh.salmon, s1.as_ref(), s2.as_ref(), sh.map_cfg)
             };
-            record(&sh, &maps, seqbias.as_mut(), gcbias.as_mut());
+            record(&sh, &maps, seqbias.as_mut(), gcbias.as_mut(), posbias.as_mut());
         }
         Ok(())
     }
@@ -312,7 +373,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         &mut self,
         records: impl Iterator<Item = RefRecord<'r>>,
     ) -> paraseq::Result<()> {
-        let QuantProcessor { shared, hs, seqbias, gcbias } = self;
+        let QuantProcessor { shared, hs, seqbias, gcbias, posbias } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
         if hs.is_none() {
@@ -326,7 +387,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             } else {
                 map_single_read(idx, hs, sh.salmon, s.as_ref(), sh.map_cfg)
             };
-            record(&sh, &maps, seqbias.as_mut(), gcbias.as_mut());
+            record(&sh, &maps, seqbias.as_mut(), gcbias.as_mut(), posbias.as_mut());
         }
         Ok(())
     }
