@@ -147,6 +147,38 @@ const char* alignmentHeaderText(const AlignmentHeader* header) {
   return sam_hdr_str(header->raw);
 }
 
+bool alignmentIsCoordinateSorted(const AlignmentHeader* header) {
+  if (header == nullptr || header->raw == nullptr) {
+    return false;
+  }
+  // Read the @HD SO/GO tags once (header-only; zero per-record cost).
+  //
+  // SO:coordinate orders records by position, scattering a read's alignments.
+  // However, a file can be coordinate-sorted and *then* re-grouped by read name
+  // (e.g. `samtools collate`, which sets `GO:query`), or run through several
+  // samtools steps that leave a stale `SO:coordinate` behind. The signal that the
+  // file is actually usable is that records are grouped by query name -- GO:query.
+  // So only treat the input as unusable when it is coordinate-sorted AND not
+  // query-grouped. (queryname-sorted files report SO:queryname, not coordinate,
+  // and are accepted by the SO check below.)
+  kstring_t so = {0, 0, nullptr};
+  bool soCoord = (sam_hdr_find_tag_hd(header->raw, "SO", &so) == 0 &&
+                  so.s != nullptr && std::strcmp(so.s, "coordinate") == 0);
+  if (so.s != nullptr) {
+    std::free(so.s);
+  }
+  if (!soCoord) {
+    return false;
+  }
+  kstring_t go = {0, 0, nullptr};
+  bool goQuery = (sam_hdr_find_tag_hd(header->raw, "GO", &go) == 0 &&
+                  go.s != nullptr && std::strcmp(go.s, "query") == 0);
+  if (go.s != nullptr) {
+    std::free(go.s);
+  }
+  return !goQuery; // reject only if coordinate-sorted and NOT grouped by query name
+}
+
 } // namespace salmon::io
 
 AlignmentFileHandle* openAlignmentFile(const char* path, const char* mode) {

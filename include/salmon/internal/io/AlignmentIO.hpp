@@ -40,6 +40,10 @@ struct AlignmentFileHandle {
 AlignmentHeader* wrapHeader(sam_hdr_t* raw);
 void destroyHeader(AlignmentHeader* header);
 const char* alignmentHeaderText(const AlignmentHeader* header);
+// True iff the @HD header line declares SO:coordinate. Read once at startup;
+// has no per-record cost. Used to reject coordinate-sorted input, whose
+// records are not grouped by read name (mates/alignments are scattered).
+bool alignmentIsCoordinateSorted(const AlignmentHeader* header);
 
 } // namespace salmon::io
 
@@ -87,6 +91,7 @@ inline int32_t bam_seq_len(bam_seq_t* record) { return record->core.l_qseq; }
 inline int32_t bam_pos(bam_seq_t* record) { return record->core.pos; }
 inline int32_t bam_ref(bam_seq_t* record) { return record->core.tid; }
 inline int32_t bam_mate_ref(bam_seq_t* record) { return record->core.mtid; }
+inline int32_t bam_mate_pos(bam_seq_t* record) { return record->core.mpos; }
 inline uint16_t bam_flag(bam_seq_t* record) { return record->core.flag; }
 inline void bam_set_flag(bam_seq_t* record, uint16_t flag) {
   record->core.flag |= flag;

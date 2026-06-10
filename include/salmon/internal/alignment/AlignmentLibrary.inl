@@ -47,6 +47,29 @@ AlignmentLibrary<FragT, EQBuilderT, AlignModelT>::AlignmentLibrary(
   std::cerr << "done\n";
 
   AlignmentHeader* header = bq->header();
+
+  // Reject coordinate-sorted input up front (checked once via the @HD SO tag, so
+  // there is no per-record cost). Alignment-mode quantification requires that all
+  // records of a read / read pair are adjacent (the file is grouped/collated by
+  // read name); a coordinate-sorted file scatters them and cannot be quantified.
+  if (salmon::io::alignmentIsCoordinateSorted(header)) {
+    bq->forceEndParsing();
+    bq.reset();
+    salmonOpts.jointLog->error(
+        "The input SAM/BAM file appears to be COORDINATE-sorted (its @HD line declares\n"
+        "SO:coordinate). salmon's alignment-based mode requires that all alignment records\n"
+        "of a given read (or read pair) are adjacent in the file -- i.e. the file is grouped\n"
+        "/collated by read name, which is how aligners emit records by default. A\n"
+        "coordinate-sorted file interleaves records from different reads and cannot be\n"
+        "quantified. Please re-collate by read name (e.g. `samtools collate` or\n"
+        "`samtools sort -n`) and re-run salmon.");
+    salmonOpts.jointLog->flush();
+    std::stringstream ss;
+    ss << "\nCannot quantify from a coordinate-sorted SAM/BAM file; "
+          "please collate/sort it by read name first.\n";
+    throw std::runtime_error(ss.str());
+  }
+
   aligner_ = salmon::bam_utils::inferAlignerFromHeader(header);
 
   phmap::flat_hash_set<std::string> decoys;

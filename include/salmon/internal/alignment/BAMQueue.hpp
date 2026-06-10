@@ -92,6 +92,37 @@ private:
   template <typename FilterT>
   inline bool getFrag_(UnpairedRead& sread, FilterT filt);
 
+  // ---- mate-interleaving read-ahead buffer (paired-end) ------------------
+  // Some aligners (e.g. `bowtie2 -k/-a`) emit, within a name-collated fragment,
+  // *all* read-1 records followed by *all* read-2 records rather than
+  // interleaving each reported pair's two mates. The paired-end getFrag_ relies
+  // on mates being adjacent in the stream, so without help it would pair
+  // read1-with-read1. These helpers buffer one whole name group and reorder it
+  // so each reported pair's mates (matched by RNEXT/PNEXT, disambiguated by HI)
+  // are adjacent — a no-op when the input is already interleaved.
+
+  /** Read the next raw record from the input, transparently advancing across
+   *  input files; returns false only when all files are exhausted. */
+  bool rawNextRecord_(bam_seq_t** dest);
+  /** Buffer the next whole name-collated group and reorder it so mates are
+   *  adjacent. Leaves `groupCount_ == 0` at end of input. */
+  void fillGroupBuffer_();
+  /** Serve the next record of the (mate-interleaved) group buffer, refilling
+   *  as needed; returns false at end of input. */
+  bool bufferedNextRecord_(bam_seq_t** dest);
+  /** Discard buffered state (between parsing passes). */
+  void resetGroupBuffer_();
+
+  // owned, reusable record allocations for the current group
+  std::vector<bam_seq_t*> recPool_;
+  // serve order into recPool_ (a permutation of [0, groupCount_) with mates adjacent)
+  std::vector<size_t> groupOrder_;
+  size_t groupCount_{0}; // valid records in recPool_ for the current group
+  size_t groupPos_{0};   // next index into groupOrder_ to serve
+  bam_seq_t* carryRec_{nullptr}; // one-record look-ahead (first record of next group)
+  bool haveCarry_{false};
+  std::vector<char> groupUsed_; // scratch: which records have been paired
+
 public:
   bool verbose = false;
 

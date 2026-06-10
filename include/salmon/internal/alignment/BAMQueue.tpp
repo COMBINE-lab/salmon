@@ -157,6 +157,11 @@ BAMQueue<FragT>::~BAMQueue() {
     fmt::print(stderr, "\nEmptied Alignment Group Pool. . ");
     while(alnGroupQueue_.try_dequeue(grp)) { delete grp; grp = nullptr; }
     fmt::print(stderr, "\nEmptied Alignment Group Queue. . . ");
+
+    // Free the mate-interleaving buffer allocations.
+    for (auto* r : recPool_) { salmon::io::bam_destroy(r); }
+    recPool_.clear();
+    if (carryRec_ != nullptr) { salmon::io::bam_destroy(carryRec_); carryRec_ = nullptr; }
     fmt::print(stderr, "done\n");
 }
 
@@ -353,6 +358,126 @@ inline uint32_t getPairedNameLen(bam_seq_t* read) {
 }
 
 template <typename FragT>
+bool BAMQueue<FragT>::rawNextRecord_(bam_seq_t** dest) {
+    // Once every file is exhausted, `currFile_ == files_.end()` and `fp_` is a
+    // closed handle; never touch it again (avoids a use-after-free if we are
+    // called once more after the final record).
+    while (currFile_ != files_.end()) {
+        if (readAlignmentRecord(fp_, dest) >= 0) { return true; }
+        // EOF on the current file --- advance to the next one (if any).
+        closeAlignmentFile(currFile_->fp);
+        currFile_->fp = nullptr;
+        ++currFile_;
+        if (currFile_ == files_.end()) { return false; }
+        fp_ = openAlignmentFile(currFile_->fileName.c_str(), currFile_->readMode.c_str());
+        hdr_ = currFile_->header;
+    }
+    return false;
+}
+
+template <typename FragT>
+void BAMQueue<FragT>::fillGroupBuffer_() {
+    groupCount_ = 0;
+    groupPos_ = 0;
+    groupOrder_.clear();
+
+    if (carryRec_ == nullptr) { carryRec_ = bam_init(); }
+    if (recPool_.empty()) { recPool_.push_back(bam_init()); }
+
+    // Seed the group with the carried first record, or read it fresh.
+    if (haveCarry_) {
+        { auto* _c = bam_copy1(recPool_[0], carryRec_); (void)_c; }
+        haveCarry_ = false;
+    } else if (!rawNextRecord_(&recPool_[0])) {
+        return; // end of all input
+    }
+    groupCount_ = 1;
+
+    // Use the *canonical* read name (a trailing "/1" / "/2" stripped, as
+    // getPairedNameLen does) so a BAM that carries mate suffixes still groups the
+    // two mates of a fragment together rather than splitting them.
+    const uint32_t groupNameLen = getPairedNameLen(recPool_[0]);
+    const char* groupName = bam_name(recPool_[0]); // stable: recPool_[0] is untouched below
+
+    // Accumulate the remaining records of this name-collated group, stashing the
+    // first record of the *next* group in carryRec_ for the subsequent call.
+    while (true) {
+        if (!rawNextRecord_(&carryRec_)) { haveCarry_ = false; break; }
+        uint32_t len = getPairedNameLen(carryRec_);
+        if (len == groupNameLen and memcmp(bam_name(carryRec_), groupName, len) == 0) {
+            if (groupCount_ == recPool_.size()) { recPool_.push_back(bam_init()); }
+            { auto* _c = bam_copy1(recPool_[groupCount_], carryRec_); (void)_c; }
+            ++groupCount_;
+        } else {
+            haveCarry_ = true; // belongs to the next group
+            break;
+        }
+    }
+
+    // ---- reorder so each *reported* pair's mates are adjacent ----------------
+    // Pair a read-1 record with the read-2 record that reciprocally references it
+    // via RNEXT/PNEXT (disambiguated by the HI tag when present). Unpaired records
+    // (orphans, or anything we cannot match) keep their original relative order, so
+    // an already-interleaved input is reproduced exactly.
+    auto hiOf = [](bam_seq_t* r) -> long {
+        uint8_t* t = bam_aux_find(r, "HI");
+        return (t == nullptr) ? -1L : static_cast<long>(bam_aux_i(t));
+    };
+    groupUsed_.assign(groupCount_, 0);
+    groupOrder_.reserve(groupCount_);
+    for (size_t i = 0; i < groupCount_; ++i) {
+        if (groupUsed_[i]) { continue; }
+        bam_seq_t* a = recPool_[i];
+        // start only from a read-1 whose mate is mapped on a recorded target
+        if (!(bam_flag(a) & BAM_FREAD1) or (bam_flag(a) & BAM_FMUNMAP)) { continue; }
+        int32_t amt = bam_mate_ref(a);
+        int32_t amp = bam_mate_pos(a);
+        long ahi = hiOf(a);
+        size_t best = groupCount_;
+        for (size_t j = 0; j < groupCount_; ++j) {
+            if (groupUsed_[j] or j == i) { continue; }
+            bam_seq_t* b = recPool_[j];
+            if (!(bam_flag(b) & BAM_FREAD2)) { continue; }
+            // reciprocal coordinate match
+            if (bam_ref(b) == amt and bam_pos(b) == amp and
+                bam_mate_ref(b) == bam_ref(a) and bam_mate_pos(b) == bam_pos(a)) {
+                long bhi = hiOf(b);
+                if (ahi < 0 or bhi < 0 or ahi == bhi) { best = j; break; } // HI agrees
+                if (best == groupCount_) { best = j; }                     // coord-only fallback
+            }
+        }
+        if (best < groupCount_) {
+            groupUsed_[i] = 1;
+            groupUsed_[best] = 1;
+            groupOrder_.push_back(i);
+            groupOrder_.push_back(best);
+        }
+    }
+    for (size_t i = 0; i < groupCount_; ++i) {
+        if (!groupUsed_[i]) { groupOrder_.push_back(i); }
+    }
+}
+
+template <typename FragT>
+bool BAMQueue<FragT>::bufferedNextRecord_(bam_seq_t** dest) {
+    if (groupPos_ >= groupOrder_.size()) {
+        fillGroupBuffer_();
+        if (groupCount_ == 0) { return false; } // end of all input
+    }
+    size_t idx = groupOrder_[groupPos_++];
+    { auto* _c = bam_copy1(*dest, recPool_[idx]); (void)_c; }
+    return true;
+}
+
+template <typename FragT>
+void BAMQueue<FragT>::resetGroupBuffer_() {
+    groupCount_ = 0;
+    groupPos_ = 0;
+    groupOrder_.clear();
+    haveCarry_ = false;
+}
+
+template <typename FragT>
 template <typename FilterT>
 inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
     bool haveValidPair{false};
@@ -362,8 +487,8 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
 
     // Until we get a valid pair of reads
     while (!haveValidPair) {
-        // Consume a single read
-        didRead1 = (readAlignmentRecord(fp_, &rpair.read1) >= 0);
+        // Consume a single read (records arrive mate-interleaved via the group buffer)
+        didRead1 = bufferedNextRecord_(&rpair.read1);
         AlignmentType alnType;
         // If we were able to obtain a read, determine what type
         // of alignment it came from.
@@ -373,7 +498,7 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
             // unmapped pair, then go get the other read.
             if ( (alnType == AlignmentType::MappedConcordantPair)
                     or (alnType == AlignmentType::UnmappedPair)) { break; }
-            
+
             bool isFwd{false};
             uint32_t startPos;
 
@@ -387,7 +512,7 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
                     // === end of UnmappedOrphan case
                 case AlignmentType::MappedOrphan:
                     isFwd = !(bam_strand(rpair.read1));
-                    startPos = bam_pos(rpair.read1); 
+                    startPos = bam_pos(rpair.read1);
                     rpair.libFmt = salmon::utils::hitType(startPos, isFwd);
                     rpair.orphanStatus = (bam_flag(rpair.read1) & BAM_FREAD1) ?
                         salmon::utils::OrphanStatus::LeftOrphan :
@@ -418,28 +543,15 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
             }
             // If this was not a properly mapped orphan read, then grab the next
             // read.
-            didRead1 = (readAlignmentRecord(fp_, &rpair.read1) >= 0);
+            didRead1 = bufferedNextRecord_(&rpair.read1);
         }
 
-        didRead2 = (readAlignmentRecord(fp_, &rpair.read2) >= 0);
+        // The mate of a concordant read1 is the next buffered record (the buffer
+        // guarantees mates are adjacent). Only fetch it if read1 was valid.
+        didRead2 = didRead1 ? bufferedNextRecord_(&rpair.read2) : false;
 
-        // If we didn't get a read, then we've exhausted this file. 
-        // NOTE: I'm not sure about the *or* condition here. In some cases, we
-        // may be discarding a single read, but it won't be properly paired
-        // anyway. Figure out what the right thing is to do here.
-        if (!didRead1 or !didRead2) { 
-            // close the current file
-            closeAlignmentFile(currFile_->fp);
-            currFile_->fp = nullptr;
-            // increment the file iterator
-            currFile_++;
-            // If this is the last file, then we're done
-            if (currFile_ == files_.end()) { return false; }
-            // Otherwise, start parsing the next file.
-            fp_ = openAlignmentFile(currFile_->fileName.c_str(), currFile_->readMode.c_str());
-            hdr_ = currFile_->header;
-            continue;
-        }
+        // If either read could not be obtained, we've exhausted all input.
+        if (!didRead1 or !didRead2) { return false; }
 
         // If we expected a paired read, but didn't find one
         // then flip out and quit!
@@ -472,31 +584,73 @@ inline bool BAMQueue<FragT>::getFrag_(ReadPair& rpair, FilterT filt) {
             char* qname2 = bam_name(rpair.read2);
             sameName = (memcmp(qname1, qname2, nameLen) == 0);
         }
+        // Backstop (RSEM-style, FATAL): for a record salmon treats as a *concordant
+        // pair*, the two records we paired must be complementary mates (one read1, one
+        // read2). If they are the *same* mate, the input had a non-interleaved layout
+        // that the mate-interleaving buffer could not repair (e.g. records grouped
+        // read1.../read2... with no usable RNEXT/PNEXT). Continuing would silently
+        // mis-pair read1-with-read1 and corrupt the results, so we abort. This is gated
+        // on MappedConcordantPair so it can NEVER fire for legitimately-orphaned
+        // alignments (mate unmapped or on a different reference) — those are classified
+        // MappedOrphan and returned earlier — nor for unmapped pairs. There is no
+        // false-positive risk: well-formed mate fields always pair, so reaching here
+        // means the file is systematically unpairable (the layout is a per-file
+        // property, not a per-record fluke), hence a hard error rather than a warning.
+        bool sameMate = (alnType == AlignmentType::MappedConcordantPair) and
+                        (((bam_flag(rpair.read1) & BAM_FREAD1) != 0) ==
+                         ((bam_flag(rpair.read2) & BAM_FREAD1) != 0));
+        if (BOOST_UNLIKELY(sameMate)) {
+            fmt::MemoryWriter errmsg;
+            errmsg << "\n\n"
+                   << ioutils::SET_RED << "ERROR: " << ioutils::RESET_COLOR
+                   << "While forming a concordant pair for read [" << bam_name(rpair.read1)
+                   << "], the two records that should be its mates are the same mate (both read"
+                   << ((bam_flag(rpair.read1) & BAM_FREAD1) ? "1" : "2") << "). "
+                   << "This means the alignments are not interleaved and could not be paired by "
+                   << "their mate-position fields (RNEXT/PNEXT). salmon requires that, within each "
+                   << "read-name-collated fragment, each reported pair's two mates are adjacent or "
+                   << "carry valid mate fields. Please re-process the alignments (e.g. "
+                   << "`samtools collate` on a file with mate fields set, or have the aligner emit "
+                   << "each pair's mates adjacently) and re-run salmon. Exiting.\n\n";
+            logger_->error("{}", errmsg.str());
+            std::exit(-1);
+        }
+
         // If we've gotten this far, then the read should be a pair (same name)
         // and should either be concordantly aligned (proper pair) or both unaligned.
         if (BOOST_UNLIKELY(
-                    !sameName or ((bam_flag(rpair.read1) & BAM_FPROPER_PAIR) != (bam_flag(rpair.read2) & BAM_FPROPER_PAIR)))) {
-            
-            fmt::MemoryWriter errmsg;
-            errmsg << "\n\n\n";
-            errmsg << "WARNING: Detected suspicious pair --- \n";
-            if (!sameName) {
-                errmsg << "\tThe names are different:\n";
-                errmsg << "\tread1 : " << bam_name(rpair.read1) << "\n";
-                errmsg << "\tread2 : " << bam_name(rpair.read2) << "\n";
+                    !sameName or
+                    ((bam_flag(rpair.read1) & BAM_FPROPER_PAIR) != (bam_flag(rpair.read2) & BAM_FPROPER_PAIR)))) {
+
+            // Cap these warnings so a pervasively-broken file does not flood the log.
+            static std::atomic<size_t> nPairWarns{0};
+            constexpr size_t kMaxPairWarns = 10;
+            size_t w = nPairWarns.fetch_add(1);
+            if (w < kMaxPairWarns) {
+                fmt::MemoryWriter errmsg;
+                errmsg << "\n\n\n";
+                errmsg << "WARNING: Detected suspicious pair --- \n";
+                if (!sameName) {
+                    errmsg << "\tThe names are different:\n";
+                    errmsg << "\tread1 : " << bam_name(rpair.read1) << "\n";
+                    errmsg << "\tread2 : " << bam_name(rpair.read2) << "\n";
+                }
+                if((bam_flag(rpair.read1) & BAM_FPROPER_PAIR) != (bam_flag(rpair.read2) & BAM_FPROPER_PAIR)) {
+                    errmsg << "\tThe proper-pair statuses are inconsistent:\n";
+                    errmsg << "read1 [" << bam_name(rpair.read1) << "] : "
+                        << (!(bam_flag(rpair.read1) & BAM_FPROPER_PAIR) ? "no " : "") << "proper-pair; "
+                        << ((bam_flag(rpair.read1) & BAM_FUNMAP) ? "not " : "") << "mapped; mate"
+                        << ((bam_flag(rpair.read1) & BAM_FMUNMAP) ? "not " : "") << "mapped\n\n";
+                    errmsg << "read2 : [" << bam_name(rpair.read1) << "] : "
+                        << (!(bam_flag(rpair.read2) & BAM_FPROPER_PAIR) ? "no " : "") << "proper-pair; "
+                        << ((bam_flag(rpair.read2) & BAM_FUNMAP) ? "not " : "") << "mapped; mate"
+                        << ((bam_flag(rpair.read2) & BAM_FMUNMAP) ? "not " : "") << "mapped\n\n";
+                }
+                logger_->warn("{}", errmsg.str());
+                if (w + 1 == kMaxPairWarns) {
+                    logger_->warn("Suppressing further 'suspicious pair' warnings.");
+                }
             }
-            if((bam_flag(rpair.read1) & BAM_FPROPER_PAIR) != (bam_flag(rpair.read2) & BAM_FPROPER_PAIR)) {
-                errmsg << "\tThe proper-pair statuses are inconsistent:\n";
-                errmsg << "read1 [" << bam_name(rpair.read1) << "] : " 
-                    << (!(bam_flag(rpair.read1) & BAM_FPROPER_PAIR) ? "no " : "") << "proper-pair; "
-                    << ((bam_flag(rpair.read1) & BAM_FUNMAP) ? "not " : "") << "mapped; mate"
-                    << ((bam_flag(rpair.read1) & BAM_FMUNMAP) ? "not " : "") << "mapped\n\n";
-                errmsg << "read2 : [" << bam_name(rpair.read1) << "] : " 
-                    << (!(bam_flag(rpair.read2) & BAM_FPROPER_PAIR) ? "no " : "") << "proper-pair; "
-                    << ((bam_flag(rpair.read2) & BAM_FUNMAP) ? "not " : "") << "mapped; mate"
-                    << ((bam_flag(rpair.read2) & BAM_FMUNMAP) ? "not " : "") << "mapped\n\n";
-            }
-            logger_->warn("{}", errmsg.str());
         }
 
 
@@ -616,6 +770,8 @@ void BAMQueue<FragT>::fillQueue_(FilterT filt, bool onlyProcessAmbiguousAlignmen
     currFile_ = files_.begin();
     fp_ = currFile_->fp;
     hdr_ = currFile_->header;
+    // Start each parsing pass with an empty mate-interleaving buffer.
+    resetGroupBuffer_();
 
     FragT* f;
     if (!fragmentQueue_.try_pop(f)) {
