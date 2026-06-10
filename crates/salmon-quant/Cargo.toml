@@ -1,0 +1,31 @@
+[package]
+name = "salmon-quant"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Reads-mode quantification driver for the salmon Rust port (FASTQ -> mapping -> EM -> quant.sf)."
+
+[dependencies]
+salmon-core = { path = "../salmon-core" }
+salmon-index = { path = "../salmon-index" }
+salmon-map = { path = "../salmon-map" }
+salmon-model = { path = "../salmon-model" }
+salmon-eqclass = { path = "../salmon-eqclass" }
+salmon-infer = { path = "../salmon-infer" }
+piscem-rs = { workspace = true }
+paraseq = "0.4"
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+flate2 = { workspace = true }
+rayon = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints.rust]
+unsafe_code = "warn"

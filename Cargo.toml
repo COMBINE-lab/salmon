@@ -1,0 +1,75 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/salmon-core",
+    "crates/salmon-eqclass",
+    "crates/salmon-infer",
+    "crates/salmon-model",
+    "crates/salmon-index",
+    "crates/salmon-map",
+    "crates/salmon-quant",
+    "crates/salmon-cli",
+    "crates/salmon-align",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/COMBINE-lab/salmon"
+authors = ["Rob Patro and the COMBINE-lab"]
+
+# Shared dependency versions. Member crates opt in with `dep = { workspace = true }`.
+[workspace.dependencies]
+# error handling
+thiserror = "2"
+anyhow = "1"
+# serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# parallelism
+rayon = "1"
+crossbeam = "0.8"
+crossbeam-channel = "0.5"
+# concurrent map for equivalence classes
+scc = "2"
+# numerics
+nalgebra = "0.33"
+ndarray = "0.16"
+statrs = "0.18"
+# rng (PCG, matching salmon's pcg usage)
+rand = "0.8"
+rand_pcg = "0.3"
+rand_distr = "0.4"
+# hashing
+xxhash-rust = { version = "0.8", features = ["xxh3", "xxh64"] }
+# compression
+flate2 = "1"
+zstd = "0.13"
+# logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# cli
+clap = { version = "4", features = ["derive"] }
+# hashing of reference sequences/names for index provenance
+sha2 = "0.10"
+# local checkouts during development; swap to published crates.io versions at release.
+# (block-aligner is added directly in salmon-map with target-specific SIMD features.)
+cf1-rs = { path = "../cf1-rs" }
+piscem-rs = { path = "../piscem-rs" }
+
+# dev / test helpers
+tempfile = "3"
+
+# io / parsing (wired in later phases)
+# paraseq, noodles-* added per-crate as phases land
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+[profile.bench]
+lto = "thin"

@@ -1,0 +1,16 @@
+[package]
+name = "salmon-model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Statistical models for the salmon Rust port: fragment-length distribution and library-type detection."
+
+[dependencies]
+salmon-core = { path = "../salmon-core" }
+statrs = { workspace = true }
+
+[lints.rust]
+unsafe_code = "warn"

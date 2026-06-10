@@ -1,0 +1,25 @@
+[package]
+name = "salmon-index"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Index construction and loading for the salmon Rust port (wraps cf1-rs + piscem-rs)."
+
+[dependencies]
+salmon-core = { path = "../salmon-core" }
+cf1-rs = { workspace = true }
+piscem-rs = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+needletail = "0.6"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints.rust]
+unsafe_code = "warn"

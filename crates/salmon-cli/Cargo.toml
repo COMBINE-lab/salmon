@@ -1,0 +1,27 @@
+[package]
+name = "salmon-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Command-line interface for the salmon Rust port."
+
+[[bin]]
+name = "salmon"
+path = "src/main.rs"
+
+[dependencies]
+salmon-index = { path = "../salmon-index" }
+salmon-quant = { path = "../salmon-quant" }
+salmon-align = { path = "../salmon-align" }
+salmon-map = { path = "../salmon-map" }
+piscem-rs = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[lints.rust]
+unsafe_code = "warn"

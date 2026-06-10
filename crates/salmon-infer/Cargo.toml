@@ -1,0 +1,17 @@
+[package]
+name = "salmon-infer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Collapsed EM / VBEM abundance estimation over equivalence classes for the salmon Rust port."
+
+[dependencies]
+salmon-core = { path = "../salmon-core" }
+salmon-eqclass = { path = "../salmon-eqclass" }
+statrs = { workspace = true }
+
+[lints.rust]
+unsafe_code = "warn"

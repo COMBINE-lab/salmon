@@ -1,0 +1,31 @@
+[package]
+name = "salmon-map"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Selective-alignment mapping for the salmon Rust port: MEM collection, chaining, and alignment validation."
+
+[dependencies]
+salmon-core = { path = "../salmon-core" }
+piscem-rs = { workspace = true }
+sshash-lib = "0.6"
+# ksw2 (parity alignment backend). Local checkout during development.
+ksw2rs = { path = "../../../ksw2rs" }
+
+# Alignment validation. block-aligner needs an arch-specific SIMD feature.
+# Local fork checkout during development; swap to a crates.io version at release.
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+block-aligner = { path = "../../../block-aligner", features = ["simd_avx2"] }
+
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+block-aligner = { path = "../../../block-aligner", features = ["simd_neon"] }
+
+[dev-dependencies]
+salmon-index = { path = "../salmon-index" }
+tempfile = { workspace = true }
+
+[lints.rust]
+unsafe_code = "warn"

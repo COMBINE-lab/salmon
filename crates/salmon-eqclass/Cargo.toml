@@ -1,0 +1,17 @@
+[package]
+name = "salmon-eqclass"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Equivalence-class data structures and concurrent builder for the salmon Rust port."
+
+[dependencies]
+salmon-core = { path = "../salmon-core" }
+scc = { workspace = true }
+xxhash-rust = { workspace = true }
+
+[lints.rust]
+unsafe_code = "warn"

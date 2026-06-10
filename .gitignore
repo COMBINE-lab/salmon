@@ -29,3 +29,10 @@
 
 # Emacs save files
 *~
+
+# Rust build artifacts
+/target
+Cargo.lock
+
+# Unpacked sample data (the tarball sample_data.tgz is tracked instead)
+/sample_data/
