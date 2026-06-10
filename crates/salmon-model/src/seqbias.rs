@@ -184,35 +184,97 @@ fn revcomp_bytes(seq: &[u8]) -> Vec<u8> {
         .collect()
 }
 
+/// Minimum transcript abundance to contribute to / be corrected by the bias
+/// background (salmon's `minAlpha`).
+const MIN_ALPHA: f64 = 1e-8;
+/// Minimum reliable CDF mass for a transcript (salmon's `minCDFMass`).
+const MIN_CDF_MASS: f64 = 1e-10;
+/// Fragment-length sampling stride in the effective-length convolution
+/// (salmon's `pdfSampFactor` = `biasSpeedSamp` default).
+pub const FLD_SAMP_STRIDE: usize = 5;
+
+/// Linear cumulative fragment-length distribution plus the `[low, high]`
+/// fragment-length quantile bounds (0.5% / 99.5%), mirroring the `cdf`,
+/// `fldLow`, `fldHigh` salmon computes in `updateEffectiveLengths`.
+pub fn fld_cdf_and_bounds(pmf_lin: &[f64]) -> (Vec<f64>, usize, usize) {
+    let mut cdf = vec![0.0f64; pmf_lin.len()];
+    let mut acc = 0.0;
+    let (mut lo, mut hi) = (0usize, 1usize);
+    let (mut lb, mut ub) = (false, false);
+    for i in 0..pmf_lin.len() {
+        acc += pmf_lin[i];
+        cdf[i] = acc;
+        if !lb && acc >= 0.005 {
+            lb = true;
+            lo = i;
+        }
+        if !ub && acc >= 0.995 {
+            ub = true;
+            hi = i;
+        }
+    }
+    (cdf, lo, hi)
+}
+
+/// Per-transcript conditional fragment-length CDF: salmon's
+/// `conditionalCDF(x) = (x > cdfMaxArg) ? 1.0 : cdf[x] / cdfMaxVal`, where
+/// `cdfMaxArg = min(cdf.len()-1, refLen)` normalizes the FLD to the fragment
+/// lengths that fit in this transcript.
+#[inline]
+fn conditional_cdf(cdf: &[f64], cdf_max_arg: usize, cdf_max_val: f64, x: i32) -> f64 {
+    if x > cdf_max_arg as i32 {
+        1.0
+    } else if x <= 0 {
+        cdf[0] / cdf_max_val
+    } else {
+        cdf[x as usize] / cdf_max_val
+    }
+}
+
 /// Build the expected forward/RC sequence-bias models by sliding the context
-/// window over each transcript, weighting each context by the transcript's
-/// abundance density (`alpha / effLen`). Mirrors salmon's expected-model
-/// construction (abundance-weighted background over the transcriptome).
+/// window over each expressed transcript. Each context is weighted by the
+/// transcript's abundance density (`alpha / effLen`) times the conditional FLD
+/// mass that can start there (`conditionalCDF(maxFragLen)`), matching salmon's
+/// expected-model construction in `updateEffectiveLengths`.
 pub fn build_expected<'a, F>(
     num_refs: usize,
     seq_of: F,
     alphas: &[f64],
     eff_lens: &[f64],
+    cdf: &[f64],
 ) -> (SBModel, SBModel)
 where
     F: Fn(usize) -> &'a [u8],
 {
-    const MIN_ALPHA: f64 = 1e-8;
+    let k = CONTEXT_LENGTH;
+    let cu = CONTEXT_LEFT as i32;
     let mut exp_fw = SBModel::new();
     let mut exp_rc = SBModel::new();
     for tid in 0..num_refs {
         if alphas[tid] < MIN_ALPHA || eff_lens[tid] <= 0.0 {
             continue;
         }
-        let weight = alphas[tid] / eff_lens[tid];
         let seq = seq_of(tid);
-        if seq.len() < CONTEXT_LENGTH {
+        let ref_len = seq.len();
+        if ref_len < k {
             continue;
         }
+        let cdf_max_arg = (cdf.len() - 1).min(ref_len);
+        let cdf_max_val = cdf[cdf_max_arg];
+        if cdf_max_val < MIN_CDF_MASS {
+            continue;
+        }
+        let weight = alphas[tid] / eff_lens[tid];
         let rc = revcomp_bytes(seq);
-        for p in 0..=(seq.len() - CONTEXT_LENGTH) {
-            exp_fw.add_context(&seq[p..p + CONTEXT_LENGTH], false, weight);
-            exp_rc.add_context(&rc[p..p + CONTEXT_LENGTH], false, weight);
+        // fragStartPos in 0..(refLen - K) (salmon's loop bound)
+        for frag_start in 0..(ref_len - k) {
+            let max_frag_len = ref_len as i32 - (frag_start as i32 + cu);
+            if max_frag_len >= 0 && (max_frag_len as usize) < ref_len {
+                let cdensity = conditional_cdf(cdf, cdf_max_arg, cdf_max_val, max_frag_len);
+                let w = weight * cdensity;
+                exp_fw.add_context(&seq[frag_start..frag_start + k], false, w);
+                exp_rc.add_context(&rc[frag_start..frag_start + k], false, w);
+            }
         }
     }
     exp_fw.normalize();
@@ -220,62 +282,93 @@ where
     (exp_fw, exp_rc)
 }
 
-/// Bias-corrected effective length of one transcript.
+/// Bias-corrected effective length of one transcript, matching salmon's
+/// `updateEffectiveLengths` (`src/util/SalmonUtils.cpp`).
 ///
-/// `fld_pmf[l]` is the (linear) fragment-length probability. `obs_*`/`exp_*`
-/// are the normalized observed/expected forward and RC models. Computes the
-/// per-position sequence-bias factors and convolves them with the FLD:
-/// `effLen = Σ_l fldPmf(l) · Σ_p fwFactor[p] · rcFactor[p+l-1]`. With no bias
-/// (obs == exp) every factor is 1 and this reduces to the standard effective
-/// length `Σ_l fldPmf(l)·(refLen - l)`. `fl_stride` subsamples fragment
-/// lengths for speed (salmon's `pdfSampFactor`; use 1 for exact).
+/// `cdf` is the linear cumulative FLD; `fld_low`/`fld_high` the 0.5%/99.5%
+/// fragment-length quantiles (from [`fld_cdf_and_bounds`]). `elen` is the
+/// transcript's *unbiased* effective length (used for the lower barrier and the
+/// `unprocessedLen` guard). `stride` subsamples fragment lengths
+/// ([`FLD_SAMP_STRIDE`] matches salmon).
+///
+/// Per-position 5'/3' bias factors `exp(obsLog − expLog)` are placed at the
+/// fragment *read-start* (`fragStart + contextBefore`), the 3' factors reversed
+/// to forward fragment-end coordinates, then convolved with the conditional FLD:
+/// `effLen = Σ_l flWeight(l) · Σ_s fw[s]·rc[s+l−1]`. The result is floored at
+/// `min(elen, max(1, unprocessedLen))` (salmon's lower "barrier"; there is no
+/// upper cap, so a strongly-biased transcript's effLen can exceed its length).
 #[allow(clippy::too_many_arguments)]
 pub fn corrected_effective_length(
     seq: &[u8],
-    fld_pmf: &[f64],
+    cdf: &[f64],
+    fld_low: usize,
+    fld_high: usize,
     obs_fw: &SBModel,
     exp_fw: &SBModel,
     obs_rc: &SBModel,
     exp_rc: &SBModel,
-    fl_stride: usize,
+    elen: f64,
+    stride: usize,
 ) -> f64 {
-    let ref_len = seq.len();
-    if ref_len < CONTEXT_LENGTH {
-        return ref_len.max(1) as f64;
-    }
     let k = CONTEXT_LENGTH;
-    let rc_seq = revcomp_bytes(seq);
+    let cu = CONTEXT_LEFT; // contextBefore(false)
+    let ref_len = seq.len();
+    let unprocessed = (ref_len as i32 - elen as i32).max(0);
+    let cdf_max_arg = (cdf.len() - 1).min(ref_len);
+    let cdf_max_val = cdf[cdf_max_arg];
+    if ref_len < k || unprocessed <= 0 || cdf_max_val < MIN_CDF_MASS {
+        return elen;
+    }
+    let cond = |x: i32| conditional_cdf(cdf, cdf_max_arg, cdf_max_val, x);
 
-    // per-position 5' and 3' bias factors
+    // Per-position 5' and 3' sequence-bias factors, placed at the read-start.
+    let rc_seq = revcomp_bytes(seq);
     let mut fw = vec![1.0f64; ref_len];
     let mut rc = vec![1.0f64; ref_len];
-    for p in 0..=(ref_len - k) {
-        fw[p] = log_bias(obs_fw, exp_fw, &seq[p..p + k], false).exp();
-        rc[p] = log_bias(obs_rc, exp_rc, &rc_seq[p..p + k], false).exp();
+    for frag_start in 0..(ref_len - k) {
+        let read_start = frag_start + cu;
+        if read_start < ref_len {
+            fw[read_start] = log_bias(obs_fw, exp_fw, &seq[frag_start..frag_start + k], false).exp();
+            rc[read_start] =
+                log_bias(obs_rc, exp_rc, &rc_seq[frag_start..frag_start + k], false).exp();
+        }
     }
     rc.reverse(); // align RC factors with forward fragment-end coordinates
 
-    let stride = fl_stride.max(1);
-    let max_fl = fld_pmf.len().min(ref_len);
+    // Convolve the bias factors with the conditional FLD over [fld_low, fld_high].
+    let stride = stride.max(1) as i32;
+    let max_len = (ref_len as i32).min(fld_high as i32 + 1);
+    let mut fl = fld_low as i32;
+    let mut done = fl >= max_len;
+    let sp = if fl > 0 { fl - 1 } else { 0 };
+    let mut prev_mass = cond(sp);
     let mut eff = 0.0f64;
-    let mut fl = 1usize;
-    while fl < max_fl {
-        let w = fld_pmf[fl];
-        if w > 0.0 {
-            let mut mass = 0.0;
-            for frag_start in 0..(ref_len - fl) {
-                mass += fw[frag_start] * rc[frag_start + fl - 1];
-            }
-            // account for the stride (each sampled length represents `stride`)
-            eff += w * mass * stride as f64;
+    while !done {
+        if fl >= max_len {
+            done = true;
+            fl = max_len - 1;
         }
+        let fl_weight = cond(fl) - prev_mass;
+        prev_mass = cond(fl);
+        let mut mass = 0.0f64;
+        let mut kstart = 0i32;
+        while kstart < ref_len as i32 - fl {
+            let frag_start = kstart as usize;
+            let frag_end = (kstart + fl - 1) as usize;
+            if frag_end < ref_len {
+                mass += fw[frag_start] * rc[frag_end];
+            } else {
+                break;
+            }
+            kstart += 1;
+        }
+        eff += fl_weight * mass;
         fl += stride;
     }
-    if eff.is_finite() && eff >= 1.0 {
-        eff
-    } else {
-        ref_len as f64
-    }
+
+    // Lower barrier (salmon default; no upper cap).
+    let offset = (unprocessed as f64).max(1.0);
+    eff.max(elen.min(offset))
 }
 
 /// Log bias of `observed` relative to `expected` for a context:
@@ -366,8 +459,9 @@ mod tests {
 
         let mut pmf = vec![0.0; 200];
         pmf[100] = 1.0;
-        let eff = corrected_effective_length(&seq, &pmf, &obs, &exp, &obs, &exp, 1);
-        // standard effLen at point-mass 100 on a 400nt transcript = 400 - 100 = 300
+        let (cdf, lo, hi) = fld_cdf_and_bounds(&pmf);
+        // unbiased effLen at point-mass 100 on a 400nt transcript = 400 - 100 = 300
+        let eff = corrected_effective_length(&seq, &cdf, lo, hi, &obs, &exp, &obs, &exp, 300.0, 1);
         assert!((eff - 300.0).abs() < 1e-6, "got {eff}");
     }
 

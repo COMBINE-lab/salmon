@@ -222,9 +222,16 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         let (mut obs_fw, mut obs_rc) = obs_mtx.into_inner().unwrap();
         obs_fw.normalize();
         obs_rc.normalize();
-        let (exp_fw, exp_rc) =
-            salmon_model::build_expected(num_refs, |t| salmon.ref_seq(t as u32), &em.alphas, &eff_lengths);
         let pmf_lin: Vec<f64> = log_pmf.iter().map(|lp| lp.exp()).collect();
+        let (fld_cdf, fld_low, fld_high) = salmon_model::seqbias::fld_cdf_and_bounds(&pmf_lin);
+        let (exp_fw, exp_rc) = salmon_model::build_expected(
+            num_refs,
+            |t| salmon.ref_seq(t as u32),
+            &em.alphas,
+            &eff_lengths,
+            &fld_cdf,
+        );
+
         // Both forward and RC observed models are populated by read orientation
         // (forward reads' 5' contexts -> fw, reverse reads' 5' contexts -> rc),
         // so both sides of the correction are informative for single- and
@@ -237,12 +244,15 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                 } else {
                     salmon_model::corrected_effective_length(
                         salmon.ref_seq(tid as u32),
-                        &pmf_lin,
+                        &fld_cdf,
+                        fld_low,
+                        fld_high,
                         &obs_fw,
                         &exp_fw,
                         &obs_rc,
                         &exp_rc,
-                        1,
+                        eff_lengths[tid],
+                        salmon_model::seqbias::FLD_SAMP_STRIDE,
                     )
                 }
             })
