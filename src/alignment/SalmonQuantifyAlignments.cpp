@@ -1572,6 +1572,13 @@ transcript abundance from RNA-seq reads
 
     po::notify(vm);
 
+    // numBiasSamples is only applied to the bound local by po::notify(); the
+    // pipeline context captured it by value (0) before parsing, so re-sync the
+    // parsed value here (mirrors the same fix in the mapping-based quant
+    // command). Without this, sopt.numBiasSamples is set to 0, no observed
+    // sequence-bias samples are collected, and --seqBias degenerates.
+    pipelineCtx.numBiasSamples = numBiasSamples;
+
     if (sopt.numThreads < 2) {
       fmt::print(stderr, "salmon requires at least 2 threads --- "
                          "setting # of threads = 2\n");
