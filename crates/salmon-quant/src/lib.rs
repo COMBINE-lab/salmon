@@ -68,6 +68,12 @@ pub struct QuantOptions {
     pub gc_bias: bool,
     /// enable positional bias correction (`--posBias`)
     pub pos_bias: bool,
+    /// number of bootstrap replicates (`--numBootstraps`); 0 = off
+    pub num_bootstraps: u32,
+    /// number of Gibbs posterior samples (`--numGibbsSamples`); 0 = off
+    pub num_gibbs_samples: u32,
+    /// Gibbs thinning factor (`--thinningFactor`, salmon default 16)
+    pub thinning_factor: u32,
 }
 
 impl QuantOptions {
@@ -90,6 +96,9 @@ impl QuantOptions {
             seq_bias: false,
             gc_bias: false,
             pos_bias: false,
+            num_bootstraps: 0,
+            num_gibbs_samples: 0,
+            thinning_factor: 16,
         }
     }
 
@@ -114,6 +123,11 @@ pub struct QuantResult {
     /// the library type used: the detected format when `-l A`, else the
     /// user-specified one
     pub library_type: String,
+    /// posterior samples (bootstrap or Gibbs), one abundance vector each; empty
+    /// when neither was requested
+    pub bootstraps: Vec<Vec<f64>>,
+    /// per-transcript (unique, ambiguous) fragment counts for `ambig_info.tsv`
+    pub ambig: (Vec<u32>, Vec<u32>),
 }
 
 /// Run quantification end-to-end, writing outputs and returning the results.
@@ -400,6 +414,40 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     }
     let counts = em.alphas;
 
+    // ---- posterior uncertainty (bootstrap / Gibbs) + ambiguity --------------
+    // The packed CSR layout (piscem-infer style) makes these parallel-friendly.
+    let packed = salmon_infer::PackedEqClasses::from_collapsed(&collapsed, num_refs);
+    let ambig = salmon_infer::ambiguity_counts(&packed);
+    let num_mapped_frags = num_mapped.load(Ordering::Relaxed);
+    let bootstraps: Vec<Vec<f64>> = if opts.num_bootstraps > 0 {
+        salmon_infer::bootstrap(
+            &packed,
+            &opts.em,
+            opts.num_bootstraps,
+            num_mapped_frags,
+            true, // useScaledCounts (selective-alignment, no orphan-only quasi)
+            0x5A13_0000,
+        )
+    } else if opts.num_gibbs_samples > 0 {
+        // Gibbs prior follows the main optimizer (salmon): with VBEM and a
+        // per-transcript prior it is `max(1.0, vbPrior)`; with plain EM it is
+        // 1e-3 per transcript. The rust VBEM uses a constant per-transcript prior.
+        let prior = if opts.em.use_vbem {
+            opts.em.vb_prior.max(1.0)
+        } else {
+            1e-3
+        };
+        let gopts = salmon_infer::GibbsOptions {
+            num_samples: opts.num_gibbs_samples,
+            thinning: opts.thinning_factor,
+            prior,
+            per_transcript_prior: true,
+        };
+        salmon_infer::gibbs_sample(&packed, &eff_lengths, &counts, &gopts, num_mapped_frags, 0x6217_0000)
+    } else {
+        Vec::new()
+    };
+
     // ---- TPM ----------------------------------------------------------------
     let rates: Vec<f64> = (0..num_refs)
         .map(|i| if eff_lengths[i] > 0.0 { counts[i] / eff_lengths[i] } else { 0.0 })
@@ -421,6 +469,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         num_eq_classes,
         frag_len_mean: fld.mean(),
         library_type,
+        bootstraps,
+        ambig,
     };
 
     write_outputs(opts, &result)?;

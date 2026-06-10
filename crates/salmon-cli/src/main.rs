@@ -119,6 +119,15 @@ struct QuantArgs {
     /// Enable positional bias correction.
     #[arg(long = "posBias")]
     pos_bias: bool,
+    /// Number of bootstrap replicates for posterior uncertainty.
+    #[arg(long = "numBootstraps", default_value_t = 0)]
+    num_bootstraps: u32,
+    /// Number of Gibbs posterior samples (mutually exclusive with bootstraps).
+    #[arg(long = "numGibbsSamples", default_value_t = 0)]
+    num_gibbs_samples: u32,
+    /// Gibbs thinning factor.
+    #[arg(long = "thinningFactor", default_value_t = 16)]
+    thinning_factor: u32,
     /// Minimum alignment score as a fraction of the perfect score.
     #[arg(long = "minScoreFraction", default_value_t = 0.65)]
     min_score_fraction: f32,
@@ -201,6 +210,9 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.seq_bias = args.seq_bias;
     opts.gc_bias = args.gc_bias;
     opts.pos_bias = args.pos_bias;
+    opts.num_bootstraps = args.num_bootstraps;
+    opts.num_gibbs_samples = args.num_gibbs_samples;
+    opts.thinning_factor = args.thinning_factor;
     opts.map_config.align.min_score_fraction = args.min_score_fraction;
     opts.map_config.align.full_length_alignment = args.full_length_alignment;
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems);

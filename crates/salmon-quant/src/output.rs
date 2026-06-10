@@ -22,6 +22,54 @@ pub fn write_outputs(opts: &QuantOptions, res: &QuantResult) -> Result<()> {
     write_cmd_info(&dir.join("cmd_info.json"), opts)?;
     write_lib_counts(&dir.join("lib_format_counts.json"), opts, res)?;
     write_meta_info(&dir.join("aux_info").join("meta_info.json"), opts, res)?;
+    write_ambig_info(&dir.join("aux_info").join("ambig_info.tsv"), res)?;
+    if !res.bootstraps.is_empty() {
+        write_bootstraps(&dir.join("aux_info").join("bootstrap"), res)?;
+    }
+    Ok(())
+}
+
+/// `aux_info/ambig_info.tsv`: `UniqueCount\tAmbigCount` per transcript (id order).
+fn write_ambig_info(path: &Path, res: &QuantResult) -> Result<()> {
+    let (uniq, ambig) = &res.ambig;
+    let mut w = std::io::BufWriter::new(
+        std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?,
+    );
+    writeln!(w, "UniqueCount\tAmbigCount")?;
+    for i in 0..uniq.len() {
+        writeln!(w, "{}\t{}", uniq[i], ambig[i])?;
+    }
+    Ok(())
+}
+
+/// `aux_info/bootstrap/{names.tsv.gz, bootstraps.gz}`: salmon's posterior-sample
+/// layout — `names.tsv.gz` lists the transcript names (tab-separated, id order),
+/// `bootstraps.gz` is the gzip of raw little-endian `f64`s with each sample's
+/// `num_txps` values written contiguously (tximport reads it directly).
+fn write_bootstraps(dir: &Path, res: &QuantResult) -> Result<()> {
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+
+    let f = std::fs::File::create(dir.join("names.tsv.gz"))?;
+    let mut enc = GzEncoder::new(f, Compression::new(6));
+    for (i, name) in res.names.iter().enumerate() {
+        if i > 0 {
+            enc.write_all(b"\t")?;
+        }
+        enc.write_all(name.as_bytes())?;
+    }
+    enc.write_all(b"\n")?;
+    enc.finish()?;
+
+    let f = std::fs::File::create(dir.join("bootstraps.gz"))?;
+    let mut enc = GzEncoder::new(f, Compression::new(6));
+    for sample in &res.bootstraps {
+        for v in sample {
+            enc.write_all(&v.to_le_bytes())?;
+        }
+    }
+    enc.finish()?;
     Ok(())
 }
 
@@ -127,6 +175,7 @@ struct MetaInfo {
     num_mapped: u64,
     percent_mapped: f64,
     num_decoy_fragments: u64,
+    num_bootstraps: u32,
     call: String,
 }
 
@@ -136,9 +185,16 @@ fn write_meta_info(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
     } else {
         0.0
     };
+    let samp_type = if opts.num_bootstraps > 0 {
+        "bootstrap"
+    } else if opts.num_gibbs_samples > 0 {
+        "gibbs"
+    } else {
+        "none"
+    };
     let meta = MetaInfo {
         salmon_version: SALMON_VERSION.to_string(),
-        samp_type: "none".to_string(),
+        samp_type: samp_type.to_string(),
         opt_type: if opts.em.use_vbem { "vb" } else { "em" }.to_string(),
         num_libraries: 1,
         library_types: vec![res.library_type.clone()],
@@ -155,6 +211,7 @@ fn write_meta_info(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
         num_mapped: res.num_mapped,
         percent_mapped,
         num_decoy_fragments: 0,
+        num_bootstraps: res.bootstraps.len() as u32,
         call: "quant".to_string(),
     };
     write_json(path, &meta)

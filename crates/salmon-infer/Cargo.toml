@@ -12,6 +12,10 @@ description = "Collapsed EM / VBEM abundance estimation over equivalence classes
 salmon-core = { path = "../salmon-core" }
 salmon-eqclass = { path = "../salmon-eqclass" }
 statrs = { workspace = true }
+rayon = { workspace = true }
+rand = { workspace = true }
+rand_pcg = { workspace = true }
+rand_distr = { workspace = true }
 
 [lints.rust]
 unsafe_code = "warn"
