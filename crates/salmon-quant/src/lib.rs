@@ -238,6 +238,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             length_class: length_class.as_deref(),
             posbias_obs: posbias_obs.as_ref(),
             online: online.as_ref(),
+            paired_lib: opts.is_paired(),
             num_processed: &num_processed,
             num_mapped: &num_mapped,
         };

@@ -120,23 +120,32 @@ impl OnlineInference {
         self.num_assigned.load(Ordering::Relaxed) < self.burnin_frags
     }
 
-    /// Process one fragment's compatible `(tid, aux_weight)` mappings (aux weight
-    /// is the abundance-*independent* factor — alignment score × compatibility).
-    /// Returns the abundance-aware posterior over the same transcripts (aligned
-    /// to the input order) and updates the online masses by
-    /// `logForgettingMass + log(posterior)`. `log_fm` is the batch's forgetting
-    /// mass. The returned posteriors are the correct weights for bias collection.
+    /// Fragments assigned so far (salmon's `numAssignedFragments`); the caller
+    /// uses this against `numPreBurninFrags` to decide whether to fold the
+    /// fragment-length / auxiliary terms into the per-fragment probability.
+    #[inline]
+    pub fn num_assigned(&self) -> u64 {
+        self.num_assigned.load(Ordering::Relaxed)
+    }
+
+    /// Process one fragment's compatible `(tid, log_aux)` mappings, where
+    /// `log_aux` is the abundance-*independent* log auxiliary probability
+    /// (`logFragCov + startPosProb + logFragProb` — alignment score, length
+    /// normalization, and fragment-length probability). Returns the
+    /// abundance-aware posterior over the same transcripts (aligned to input
+    /// order) and updates the online masses by `logForgettingMass + log(posterior)`.
+    /// `log_fm` is the batch's forgetting mass. The posteriors are the correct
+    /// weights for bias collection.
     pub fn assign_fragment(&self, maps: &[(u32, f64)], log_fm: f64) -> Vec<f64> {
         let n = maps.len();
         if n == 0 {
             return Vec::new();
         }
-        // unnormalized log-posterior = mass(t) + log(aux_weight)
+        // unnormalized log-posterior = mass(t) + log_aux
         let mut unnorm = Vec::with_capacity(n);
         let mut denom = f64::NEG_INFINITY;
-        for &(tid, w) in maps {
-            let lw = if w > 0.0 { w.ln() } else { f64::NEG_INFINITY };
-            let u = self.mass_log(tid as usize) + lw;
+        for &(tid, log_aux) in maps {
+            let u = self.mass_log(tid as usize) + log_aux;
             unnorm.push(u);
             denom = log_add(denom, u);
         }

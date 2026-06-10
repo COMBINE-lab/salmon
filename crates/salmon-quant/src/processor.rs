@@ -68,6 +68,8 @@ pub(crate) struct Shared<'a> {
     /// online (dual-phase) inference state; when present, observed bias models
     /// are collected with abundance-aware posteriors instead of score-only weights
     pub online: Option<&'a OnlineInference>,
+    /// whether the library is paired (for the online orphan penalty)
+    pub paired_lib: bool,
     pub num_processed: &'a AtomicU64,
     pub num_mapped: &'a AtomicU64,
 }
@@ -112,6 +114,13 @@ impl Clone for QuantProcessor<'_> {
         QuantProcessor::new(self.shared)
     }
 }
+
+/// salmon's `LOG_EPSILON = log(0.375e-10)` — the small log-probability assigned
+/// to implausible placements (out-of-range fragment lengths, unexpected orphans).
+const LOG_EPSILON: f64 = -23.998_158_637_57; // (0.375e-10f64).ln()
+/// salmon's `numPreBurninFrags`: fold the fragment-length term into the online
+/// posterior only after this many fragments have been assigned.
+const NUM_PRE_BURNIN: u64 = 5000;
 
 /// Collect the orientation-aware 5'/3' sequence-bias contexts for one mapping,
 /// weighted by `weight` (the fragment-transcript posterior). A forward read's 5'
@@ -254,13 +263,45 @@ fn record(
     let collecting = seqbias.is_some() || gcbias.is_some() || posbias.is_some();
     let bias_w: Vec<f64> = if collecting {
         if let Some(online) = sh.online {
-            // aux weight = score weight / refLen (salmon's startPosProb = -log(refLen)
-            // length normalization; pre-burn-in salmon uses the raw reference length).
+            // Per-mapping log auxiliary probability (salmon's
+            // `auxProb + startPosProb`, abundance-independent):
+            //   logFragCov  = ln(score weight)
+            //   startPosProb = proper pair -> -ln(refLen - flen + 1) (flen<=refLen,
+            //                  else LOG_EPSILON); otherwise -ln(refLen)
+            //   logFragProb  = proper pair (after pre-burn-in) -> live FLD pmf(flen);
+            //                  unexpected orphan in a paired library -> LOG_EPSILON.
+            // The FLD term discriminates isoforms/paralogs whose implied insert
+            // size differs (e.g. alternative splicing), which the length norm alone
+            // cannot capture.
+            let use_aux = online.num_assigned() >= NUM_PRE_BURNIN;
             let mm: Vec<(u32, f64)> = compat
                 .iter()
                 .map(|(m, w)| {
                     let rl = sh.salmon.ref_len(m.tid as usize).max(1) as f64;
-                    (m.tid, *w / rl)
+                    let proper = m.status == MateStatus::PairedEndPaired && m.fragment_len > 0;
+                    let flen = m.fragment_len as f64;
+                    let start_pos_prob = if proper {
+                        if flen <= rl {
+                            -((rl - flen + 1.0).ln())
+                        } else {
+                            LOG_EPSILON
+                        }
+                    } else {
+                        -(rl.ln())
+                    };
+                    let log_frag_prob = if proper {
+                        if use_aux {
+                            sh.fld.pmf(m.fragment_len as usize)
+                        } else {
+                            0.0
+                        }
+                    } else if sh.paired_lib {
+                        LOG_EPSILON // unexpected orphan
+                    } else {
+                        0.0
+                    };
+                    let log_cov = if *w > 0.0 { w.ln() } else { f64::NEG_INFINITY };
+                    (m.tid, log_cov + start_pos_prob + log_frag_prob)
                 })
                 .collect();
             online.assign_fragment(&mm, log_fm)
