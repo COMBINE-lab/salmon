@@ -235,6 +235,55 @@ impl FragmentLengthDistribution {
         debug_assert!(self.have_cache, "call cache() before log_pmf()");
         &self.cached_pmf
     }
+
+    /// Cumulative conditional means `E[L | L ≤ i]` over `[0, max_val]`, i.e.
+    /// salmon's `correctionFactorsFromMass` (`DistributionUtils.cpp`):
+    /// `cm[i] = (Σ_{l≤i} l·pmf[l]) / (Σ_{l≤i} pmf[l])`.
+    ///
+    /// These are the per-length correction factors `computeSmoothedEffectiveLengths`
+    /// subtracts from the reference length to get the base effective length. The
+    /// ratio is invariant to the PMF normalization, so the cached (normalized) PMF
+    /// gives the same values as salmon's `100·exp(logPMF)` mass. Requires
+    /// [`cache`](Self::cache).
+    pub fn conditional_means(&self) -> Vec<f64> {
+        debug_assert!(self.have_cache, "call cache() before conditional_means()");
+        let n = self.cached_pmf.len();
+        let mut cms = vec![0.0f64; n];
+        let mut vals = 0.0; // Σ l·pmf[l]
+        let mut mult = 0.0; // Σ pmf[l]
+        for i in 0..n {
+            let p = self.cached_pmf[i].exp();
+            vals += (i as f64) * p;
+            mult += p;
+            cms[i] = if mult > 0.0 { vals / mult } else { 0.0 };
+        }
+        cms
+    }
+}
+
+/// salmon's base effective length (`computeSmoothedEffectiveLengths`):
+/// `effLen = refLen − E[L | L ≤ refLen]`, clamped back to `refLen` if it would
+/// fall below 1. `cond_means` is [`FragmentLengthDistribution::conditional_means`].
+///
+/// This replaces the truncated-PMF `Σ pmf(l)·(refLen−l+1)` estimate (which falls
+/// back to the raw `refLen` for any transcript shorter than the FLD mean), matching
+/// salmon's behaviour exactly.
+pub fn smoothed_effective_length(cond_means: &[f64], ref_len: usize) -> f64 {
+    if cond_means.is_empty() {
+        return ref_len as f64;
+    }
+    let max_len = cond_means.len();
+    let cf = if ref_len >= max_len {
+        cond_means[max_len - 1]
+    } else {
+        cond_means[ref_len]
+    };
+    let eff = ref_len as f64 - cf;
+    if eff < 1.0 {
+        ref_len as f64
+    } else {
+        eff
+    }
 }
 
 #[cfg(test)]
@@ -270,6 +319,28 @@ mod tests {
         let p400 = fld.pmf(400);
         let p250 = fld.pmf(250);
         assert!(p400 > p250, "p(400)={p400} not > p(250)={p250}");
+    }
+
+    #[test]
+    fn smoothed_efflen_shrinks_short_transcripts() {
+        // Gaussian prior mean 250: a transcript far shorter than the mean should
+        // get a heavily shrunk effective length (NOT the raw refLen the old
+        // truncated-PMF estimate fell back to).
+        let mut fld = FragmentLengthDistribution::new(1000.0, 1000, 250.0, 25.0, 4, 0.5, 1);
+        fld.cache();
+        let cm = fld.conditional_means();
+        // conditional means are non-decreasing
+        for w in cm.windows(2) {
+            assert!(w[1] >= w[0] - 1e-9, "cond means not monotonic: {} < {}", w[1], w[0]);
+        }
+        let short = smoothed_effective_length(&cm, 201);
+        assert!(short < 201.0 && short > 1.0, "short effLen {short} not shrunk");
+        // a long transcript keeps most of its length
+        let long = smoothed_effective_length(&cm, 5000);
+        assert!(long > 4000.0, "long effLen {long} shrunk too much");
+        // below the 1.0 barrier the raw length is returned
+        let tiny = smoothed_effective_length(&cm, 2);
+        assert_eq!(tiny, 2.0, "tiny transcript should fall back to refLen");
     }
 
     #[test]

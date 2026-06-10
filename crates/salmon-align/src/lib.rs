@@ -22,7 +22,6 @@ use noodles_bam as bam;
 use noodles_sam::alignment::record::data::field::{Tag, Value};
 use serde::Serialize;
 
-use salmon_core::Transcript;
 use salmon_eqclass::{range_factorize_bins, EquivalenceClassBuilder, TranscriptGroup};
 use salmon_infer::{optimize, EmOptions};
 use salmon_model::FragmentLengthDistribution;
@@ -203,12 +202,14 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     }
 
     // ---- effective lengths, EM, TPM (shared logic with reads mode) ----------
+    // Base effective length = `refLen − E[L | L ≤ refLen]` (salmon's
+    // `computeSmoothedEffectiveLengths`); see the reads-mode driver for the
+    // rationale over the truncated-PMF estimate.
     fld.cache();
-    let log_pmf = fld.log_pmf();
+    let cond_means = fld.conditional_means();
     let mut eff_lengths = vec![0f64; num_refs];
     for (tid, len) in lengths.iter().enumerate() {
-        let t = Transcript::new(tid as u32, &names[tid], *len);
-        eff_lengths[tid] = t.compute_log_effective_length(log_pmf, 0).exp();
+        eff_lengths[tid] = salmon_model::smoothed_effective_length(&cond_means, *len as usize);
     }
 
     let mut collapsed = eq_builder.finish();

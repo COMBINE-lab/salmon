@@ -22,7 +22,7 @@ use flate2::read::MultiGzDecoder;
 use piscem_rs::io::fastx::{reader_with_batch_size, Collection, CollectionType};
 use piscem_rs::mapping::hit_searcher::SkippingStrategy;
 
-use salmon_core::{LibraryFormat, ReadType, Transcript};
+use salmon_core::{LibraryFormat, ReadType};
 use salmon_eqclass::EquivalenceClassBuilder;
 use salmon_index::SalmonIndex;
 use salmon_infer::{optimize, EmOptions};
@@ -195,12 +195,17 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     };
 
     // ---- effective lengths from the (now frozen) FLD ------------------------
+    // salmon's base effective length is `refLen − E[L | L ≤ refLen]`
+    // (`computeSmoothedEffectiveLengths` via `correctionFactorsFromMass`), NOT the
+    // truncated-PMF `Σ pmf(l)·(refLen−l+1)` estimate, which falls back to the raw
+    // reference length for any transcript shorter than the FLD mean.
     fld.cache();
     let log_pmf = fld.log_pmf();
+    let cond_means = fld.conditional_means();
     let mut eff_lengths = vec![0f64; num_refs];
     for tid in 0..num_refs {
-        let t = Transcript::new(tid as u32, salmon.ref_name(tid), salmon.ref_len(tid) as u32);
-        eff_lengths[tid] = t.compute_log_effective_length(log_pmf, 0).exp();
+        eff_lengths[tid] =
+            salmon_model::smoothed_effective_length(&cond_means, salmon.ref_len(tid) as usize);
     }
 
     // ---- inference ----------------------------------------------------------
