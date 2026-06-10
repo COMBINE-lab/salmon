@@ -111,41 +111,121 @@ fn value_as_i32(v: &Value) -> Option<i32> {
     }
 }
 
-/// Group a fragment's records by transcript id (ids sorted ascending; each id's
-/// record indices sorted by reference position, so index 0 is the left mate).
-fn group_by_tid(recs: &[FragRecord]) -> Vec<(u32, Vec<usize>)> {
-    let mut m: HashMap<u32, Vec<usize>> = HashMap::new();
-    for (i, r) in recs.iter().enumerate() {
-        m.entry(r.tid).or_default().push(i);
+/// One placement of the fragment on a single transcript: the record indices the
+/// *aligner* reported together — a proper pair (two mates that point at each
+/// other) or a single orphan record. Indices are sorted by reference position
+/// (so index 0 is the left mate).
+struct Placement {
+    tid: u32,
+    idxs: Vec<usize>,
+}
+
+/// Resolve a fragment's records into the placements the aligner actually
+/// intended, rather than cross-producting every read1 with every read2 on a
+/// transcript.
+///
+/// A permissive aligner (e.g. `bowtie2 -k`) reports many alignment records per
+/// fragment; the two mates of one reported pair are linked by their mate fields
+/// — each record's `RNEXT`/`PNEXT` points at the other's `(tid, pos)` — and, when
+/// present, share a hit index (`HI`). Pairing by transcript co-occurrence instead
+/// fabricates concordant pairs the aligner never reported, which keeps a fragment
+/// artificially orientation-compatible and defeats salmon's dropping of
+/// protocol-inconsistent fragments. Here we pair a read1 record with the read2
+/// record that reciprocally references it (and matches its `HI` when both carry
+/// one); records left unpaired — including all records of a single-end library —
+/// become orphan placements.
+fn pair_records(recs: &[FragRecord]) -> Vec<Placement> {
+    let n = recs.len();
+    let mut used = vec![false; n];
+    let mut placements: Vec<Placement> = Vec::with_capacity(n);
+
+    for i in 0..n {
+        if used[i] || !recs[i].is_read1 {
+            continue;
+        }
+        let r1 = &recs[i];
+        // Only mates aligned to the *same* transcript form a single-transcript
+        // pair placement; a mate on another transcript leaves r1 an orphan.
+        let (Some(mtid), Some(mpos)) = (r1.mate_tid, r1.mate_pos) else { continue };
+        if mtid != r1.tid {
+            continue;
+        }
+        let mut mate: Option<usize> = None;
+        for j in 0..n {
+            if used[j] || recs[j].is_read1 {
+                continue;
+            }
+            let r2 = &recs[j];
+            if r2.tid != mtid
+                || r2.pos != mpos
+                || r2.mate_tid != Some(r1.tid)
+                || r2.mate_pos != Some(r1.pos)
+            {
+                continue;
+            }
+            // A reciprocal coordinate match; prefer one whose HI agrees.
+            let hi_ok = matches!((r1.hi, r2.hi), (Some(a), Some(b)) if a == b)
+                || r1.hi.is_none()
+                || r2.hi.is_none();
+            if hi_ok {
+                mate = Some(j);
+                break;
+            }
+            if mate.is_none() {
+                mate = Some(j);
+            }
+        }
+        if let Some(j) = mate {
+            used[i] = true;
+            used[j] = true;
+            let mut idxs = vec![i, j];
+            idxs.sort_by_key(|&k| recs[k].pos);
+            placements.push(Placement { tid: r1.tid, idxs });
+        }
     }
-    let mut v: Vec<(u32, Vec<usize>)> = m.into_iter().collect();
-    v.sort_by_key(|(t, _)| *t);
-    for (_, idxs) in &mut v {
-        idxs.sort_by_key(|&i| recs[i].pos);
+    for i in 0..n {
+        if !used[i] {
+            placements.push(Placement { tid: recs[i].tid, idxs: vec![i] });
+        }
     }
-    v
+    placements
+}
+
+/// `log(Σ exp(xs))`, numerically stable. `xs` is non-empty.
+fn logsumexp(xs: &[f64]) -> f64 {
+    let m = xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    if m == f64::NEG_INFINITY {
+        return f64::NEG_INFINITY;
+    }
+    m + xs.iter().map(|&x| (x - m).exp()).sum::<f64>().ln()
 }
 
 /// Derive the observed library format, the single-read forward flag, and the
-/// mate status for one transcript's alignment record(s) (`recs[idxs]`), mirroring
-/// the reads-path `observed_format`: orientation from the mates' 5' ends, with
-/// strandedness keyed on read 1.
+/// mate status for one reported pair / orphan (`recs[idxs]`), mirroring salmon's
+/// `hitType` (`src/util/SalmonUtils.cpp`).
+///
+/// salmon classifies orientation from the **leftmost** reference coordinate
+/// (`bam_pos`) of each mate — *not* their 5' ends: a forward/reverse pair is
+/// inward (TOWARD) iff the forward mate starts at or before the reverse mate, and
+/// outward (AWAY) otherwise. For a dovetailed/overlapping short fragment where the
+/// reverse mate's leftmost precedes the forward mate's, salmon therefore reports
+/// the pair as outward and (under a strict library type) drops it as a
+/// zero-probability fragment. We match that convention exactly. Strandedness is
+/// keyed on which mate is forward (read 1 forward → SA, read 2 forward → AS).
 fn frag_format(recs: &[FragRecord], idxs: &[usize]) -> (Option<LibraryFormat>, bool, MateStatus) {
     if idxs.len() >= 2 {
         let r1 = idxs.iter().map(|&i| &recs[i]).find(|r| r.is_read1).unwrap_or(&recs[idxs[0]]);
         let r2 = idxs.iter().map(|&i| &recs[i]).find(|r| !r.is_read1).unwrap_or(&recs[idxs[1]]);
-        let (l_fw, r_fw) = (!r1.is_reverse, !r2.is_reverse);
-        let (orientation, strandedness) = if l_fw != r_fw {
-            let (fw, rc) = if l_fw { (r1, r2) } else { (r2, r1) };
-            let fw_5p = fw.pos as i64; // forward read 5' = its leftmost
-            let rc_5p = (rc.pos + rc.ref_span.saturating_sub(1)) as i64; // reverse read 5' = its rightmost
-            let orientation = if fw_5p <= rc_5p { ReadOrientation::Toward } else { ReadOrientation::Away };
-            let strandedness = if l_fw { ReadStrandedness::SA } else { ReadStrandedness::AS };
+        let (r1_fw, r2_fw) = (!r1.is_reverse, !r2.is_reverse);
+        let (orientation, strandedness) = if r1_fw != r2_fw {
+            let (fw, rc) = if r1_fw { (r1, r2) } else { (r2, r1) };
+            let orientation = if fw.pos <= rc.pos { ReadOrientation::Toward } else { ReadOrientation::Away };
+            let strandedness = if r1_fw { ReadStrandedness::SA } else { ReadStrandedness::AS };
             (orientation, strandedness)
         } else {
-            (ReadOrientation::Same, if l_fw { ReadStrandedness::S } else { ReadStrandedness::A })
+            (ReadOrientation::Same, if r1_fw { ReadStrandedness::S } else { ReadStrandedness::A })
         };
-        (Some(LibraryFormat::new(ReadType::PairedEnd, orientation, strandedness)), l_fw, MateStatus::PairedEndPaired)
+        (Some(LibraryFormat::new(ReadType::PairedEnd, orientation, strandedness)), r1_fw, MateStatus::PairedEndPaired)
     } else {
         let r = &recs[idxs[0]];
         let status = if r.is_read1 { MateStatus::PairedEndLeft } else { MateStatus::PairedEndRight };
@@ -221,6 +301,13 @@ struct FragRecord {
     /// reference span (Σ ref-consuming CIGAR op lengths); the read's 3' end on
     /// the reference is `pos + ref_span − 1`
     ref_span: usize,
+    /// mate's transcript id (`RNEXT`), if the mate is mapped
+    mate_tid: Option<u32>,
+    /// mate's 0-based alignment start (`PNEXT`), if the mate is mapped
+    mate_pos: Option<usize>,
+    /// hit index (`HI` tag): the aligner's pairing id, used to disambiguate which
+    /// mate records form one reported alignment when several share coordinates
+    hi: Option<i32>,
 }
 
 impl FragRecord {
@@ -233,6 +320,19 @@ impl FragRecord {
         } else {
             self.pos
         }
+    }
+}
+
+/// The canonical read name: a trailing `/1` or `/2` mate suffix stripped (as
+/// salmon's `getPairedNameLen` does), so the two mates of a fragment group
+/// together even when the aligner kept the suffix in the QNAME.
+#[inline]
+fn canonical_name(name: &[u8]) -> &[u8] {
+    let l = name.len();
+    if l > 2 && name[l - 2] == b'/' {
+        &name[..l - 2]
+    } else {
+        name
     }
 }
 
@@ -274,14 +374,15 @@ where
         }
         let Some(name) = record.name() else { continue };
         let name_bytes: &[u8] = name.as_ref();
+        let cname = canonical_name(name_bytes);
         if !have_group {
-            cur_name = name_bytes.to_vec();
+            cur_name = cname.to_vec();
             have_group = true;
-        } else if name_bytes != cur_name.as_slice() {
+        } else if cname != cur_name.as_slice() {
             f(&group);
             group.clear();
             cur_name.clear();
-            cur_name.extend_from_slice(name_bytes);
+            cur_name.extend_from_slice(cname);
         }
 
         let Some(Ok(tid)) = record.reference_sequence_id() else { continue };
@@ -317,6 +418,21 @@ where
         let flags = record.flags();
         let is_reverse = flags.is_reverse_complemented();
         let is_read1 = flags.is_first_segment();
+        // Mate linkage as the aligner recorded it (RNEXT/PNEXT); a mate that is
+        // unmapped or absent leaves these `None`, making the record an orphan.
+        let mate_tid = (!flags.is_mate_unmapped())
+            .then(|| record.mate_reference_sequence_id().and_then(|r| r.ok()))
+            .flatten()
+            .map(|t| t as u32);
+        let mate_pos = record
+            .mate_alignment_start()
+            .and_then(|r| r.ok())
+            .map(|p| p.get() - 1);
+        let hi = record
+            .data()
+            .get(&Tag::HIT_INDEX)
+            .and_then(|r| r.ok())
+            .and_then(|v| value_as_i32(&v));
         group.push(FragRecord {
             tid: tid as u32,
             pos,
@@ -327,6 +443,9 @@ where
             is_reverse,
             is_read1,
             ref_span,
+            mate_tid,
+            mate_pos,
+            hi,
         });
     }
     if have_group {
@@ -335,12 +454,49 @@ where
     Ok(())
 }
 
+/// Is the input coordinate-sorted and *not* grouped by read name?
+///
+/// Read once from the `@HD` header (no per-record cost). `SO:coordinate` orders
+/// records by position, scattering a read's alignments — unusable here. But a file
+/// can be coordinate-sorted and then re-grouped by name (`samtools collate`, which
+/// sets `GO:query`), or carry a stale `SO:coordinate` after several samtools steps;
+/// the reliable signal that records are usably grouped is `GO:query`. So we only
+/// reject when coordinate-sorted AND not query-grouped. (Query-name *sorted* files
+/// report `SO:queryname`, not coordinate, and pass.)
+fn coordinate_sorted_unusable(header: &noodles_sam::Header) -> bool {
+    let Some(hd) = header.header() else { return false };
+    let mut so_coord = false;
+    let mut go_query = false;
+    // `SO`/`GO` are non-standard tags in this noodles version → read from other_fields.
+    for (tag, value) in hd.other_fields() {
+        let t: &[u8; 2] = tag.as_ref();
+        let v: &[u8] = value.as_ref();
+        if t == b"SO" {
+            so_coord = v == &b"coordinate"[..];
+        } else if t == b"GO" {
+            go_query = v == &b"query"[..];
+        }
+    }
+    so_coord && !go_query
+}
+
 /// Run alignment-based quantification end-to-end.
 pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult> {
     let mut reader = bam::io::Reader::new(
         std::fs::File::open(&opts.bam).with_context(|| format!("opening {}", opts.bam.display()))?,
     );
     let header = reader.read_header().context("reading BAM header")?;
+
+    // Reject coordinate-sorted input up front (header-only check, no per-record cost):
+    // alignment-mode requires all records of a read/pair to be adjacent (grouped by
+    // read name), which a coordinate-sorted file violates.
+    anyhow::ensure!(
+        !coordinate_sorted_unusable(&header),
+        "the input BAM/SAM appears to be coordinate-sorted (@HD SO:coordinate) and is not \
+         grouped by read name (GO:query). Alignment-mode quantification requires that all \
+         alignment records of a read (or read pair) are adjacent in the file. Please collate \
+         it by read name first, e.g. `samtools collate` or `samtools sort -n`."
+    );
 
     // References (transcripts) in @SQ order define the transcript ids.
     let names: Vec<String> = header
@@ -440,30 +596,32 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         }
         frag_count += 1;
 
-        let by_tid = group_by_tid(recs);
-        let n = by_tid.len();
+        // Pair records into the placements the aligner reported (proper pairs +
+        // orphans), NOT a cross-product of every read1/read2 on a transcript.
+        let placements = pair_records(recs);
         let frag_len = recs.iter().map(|r| r.frag_len).max().unwrap_or(0);
         if frag_len > 0 {
             fld.add_val(frag_len as usize, 0.0);
         }
         let use_aux = online.as_ref().is_none_or(|o| o.num_assigned() >= 5000);
 
-        // Per-tid: alignment conditional log-weight (eq-class) + online log-aux.
-        let mut tids: Vec<u32> = Vec::with_capacity(n);
-        let mut eq_log: Vec<f64> = Vec::with_capacity(n);
-        let mut online_log: Vec<f64> = Vec::with_capacity(n);
-        // geometry for bias (per tid): (frag_start, frag_end, proper)
-        let mut geom: Vec<(usize, usize, bool)> = Vec::with_capacity(n);
-        // by_tid indices of the surviving (compatible) transcripts, aligned to
-        // the tids/eq_log/online_log/geom vectors above.
-        let mut surv: Vec<usize> = Vec::with_capacity(n);
-        let best_as = by_tid
+        // Per surviving placement (one reported alignment): conditional log-weight
+        // (eq-class) + online log-aux + fragment geometry. A placement that fails
+        // the orientation-compatibility filter is dropped here.
+        let mut sp_tid: Vec<u32> = Vec::with_capacity(placements.len());
+        let mut sp_eq: Vec<f64> = Vec::with_capacity(placements.len());
+        let mut sp_online: Vec<f64> = Vec::with_capacity(placements.len());
+        let mut sp_geom: Vec<(usize, usize, bool)> = Vec::with_capacity(placements.len());
+        let mut sp_pl: Vec<usize> = Vec::with_capacity(placements.len());
+        let best_as = placements
             .iter()
-            .map(|(_, idxs)| idxs.iter().map(|&i| recs[i].score).sum::<i32>())
+            .map(|p| p.idxs.iter().map(|&i| recs[i].score).sum::<i32>())
             .max()
             .unwrap_or(0);
-        for (bti, (tid, idxs)) in by_tid.iter().enumerate() {
-            let refseq = ref_bytes.get(*tid as usize).map(|v| v.as_slice()).unwrap_or(&[]);
+        for (pi, pl) in placements.iter().enumerate() {
+            let tid = pl.tid;
+            let idxs = &pl.idxs;
+            let refseq = ref_bytes.get(tid as usize).map(|v| v.as_slice()).unwrap_or(&[]);
             // conditional log-weight: error model Σ(fg-bg), else AS-based
             let basis = if let Some(m) = model.as_ref() {
                 if refseq.is_empty() {
@@ -482,7 +640,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
                 -opts.score_exp * (best_as - as_sum) as f64
             };
             // fragment geometry + length-normalized online aux (start-pos + FLD)
-            let rl = lengths[*tid as usize] as i32;
+            let rl = lengths[tid as usize] as i32;
             let flen = idxs.iter().map(|&i| recs[i].frag_len).max().unwrap_or(0);
             let proper = idxs.len() >= 2 && flen > 0;
             let frag_start = recs[idxs[0]].pos;
@@ -514,22 +672,39 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
                 let (obs, is_fw, status) = frag_format(recs, idxs);
                 if !is_compatible(exp, obs, is_fw, status) {
                     if ignore_incompat {
-                        continue; // this alignment contributes nothing
+                        continue; // this placement contributes nothing
                     }
                     aux += opts.incompat_prior.ln();
                 }
             }
-            tids.push(*tid);
-            eq_log.push(aux);
-            online_log.push(aux + start_pos);
-            geom.push((frag_start, frag_end, proper));
-            surv.push(bti);
+            sp_tid.push(tid);
+            sp_eq.push(aux);
+            sp_online.push(aux + start_pos);
+            sp_geom.push((frag_start, frag_end, proper));
+            sp_pl.push(pi);
         }
-        // a fragment whose every alignment was incompatible is a zero-probability
-        // fragment: it is not assigned and contributes to no equivalence class.
-        if tids.is_empty() {
+        // a fragment whose every reported alignment was incompatible is a
+        // zero-probability fragment: it is not assigned and joins no eq-class.
+        if sp_tid.is_empty() {
             return;
         }
+
+        // Aggregate surviving placements by distinct transcript id (sorted): a
+        // transcript that the fragment hits in several reported placements appears
+        // once in the eq-class, its weight the logsumexp over those placements.
+        let mut agg: std::collections::BTreeMap<u32, Vec<usize>> = std::collections::BTreeMap::new();
+        for (k, &t) in sp_tid.iter().enumerate() {
+            agg.entry(t).or_default().push(k);
+        }
+        let tids: Vec<u32> = agg.keys().cloned().collect();
+        let eq_log: Vec<f64> = agg
+            .values()
+            .map(|ks| logsumexp(&ks.iter().map(|&k| sp_eq[k]).collect::<Vec<_>>()))
+            .collect();
+        let online_log: Vec<f64> = agg
+            .values()
+            .map(|ks| logsumexp(&ks.iter().map(|&k| sp_online[k]).collect::<Vec<_>>()))
+            .collect();
 
         // eq-class weights = softmax(eq_log)
         let maxe = eq_log.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
@@ -541,7 +716,8 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             }
         }
 
-        // abundance-aware posteriors (online) drive model/bias training
+        // abundance-aware posteriors (online), per distinct transcript, drive
+        // model/bias training
         let post: Vec<f64> = match online.as_ref() {
             Some(o) => {
                 let maps: Vec<(u32, f64)> = tids.iter().cloned().zip(online_log.iter().cloned()).collect();
@@ -550,30 +726,38 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             None => weights.clone(),
         };
 
-        // train the error model + collect bias models, weighted by posteriors
+        // train the error model + collect bias models, weighted by posteriors;
+        // a transcript's posterior is split across its placements by their
+        // within-transcript online softmax weight.
         let collecting = online.as_ref().is_none_or(|o| o.collecting());
         if collecting {
-            for (ti, &bti) in surv.iter().enumerate() {
-                let (tid, idxs) = &by_tid[bti];
-                let p = post[ti];
-                if p <= 0.0 {
+            for (ti, (tid, ks)) in agg.iter().enumerate() {
+                let p_tid = post[ti];
+                if p_tid <= 0.0 {
                     continue;
                 }
+                let online_log_tid = online_log[ti];
                 let refseq = ref_bytes.get(*tid as usize).map(|v| v.as_slice()).unwrap_or(&[]);
-                if let Some(m) = model.as_mut() {
-                    if !refseq.is_empty() {
-                        let lw = log_fm + p.ln();
-                        for (rank, &i) in idxs.iter().enumerate() {
-                            let r = &recs[i];
-                            m.update(&r.read_2bit, refseq, r.pos, &r.ops, rank == 0, lw);
+                for &k in ks {
+                    let p = p_tid * (sp_online[k] - online_log_tid).exp();
+                    if p <= 0.0 {
+                        continue;
+                    }
+                    let idxs = &placements[sp_pl[k]].idxs;
+                    if let Some(m) = model.as_mut() {
+                        if !refseq.is_empty() {
+                            let lw = log_fm + p.ln();
+                            for (rank, &i) in idxs.iter().enumerate() {
+                                let r = &recs[i];
+                                m.update(&r.read_2bit, refseq, r.pos, &r.ops, rank == 0, lw);
+                            }
                         }
                     }
-                }
-                if refseq.is_empty() {
-                    continue;
-                }
-                let (fs, fe, proper) = geom[ti];
-                let rl = refseq.len();
+                    if refseq.is_empty() {
+                        continue;
+                    }
+                    let (fs, fe, proper) = sp_geom[k];
+                    let rl = refseq.len();
 
                 // Per-read 5' positions, by each read's *actual* strand (salmon's
                 // logic): the forward read's 5' feeds the FW model, the reverse
@@ -634,6 +818,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
                     if let Some(five) = rev_five {
                         pos.1[lc].add_mass(five as i32, rl as i32, p.ln());
                     }
+                }
                 }
             }
         }
