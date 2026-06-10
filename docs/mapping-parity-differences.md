@@ -1,267 +1,135 @@
-# Mapping/quantification differences vs. C++ salmon
+# Mapping parity vs. C++ salmon — an orientation bug the Rust port uncovered
 
-This note documents a deliberate, validated behavioral difference between the
-Rust port and C++ salmon (1.11.4) at the read-mapping boundary, the evidence
-behind it, and why we keep the Rust behavior.
+This note records a real mapping-sensitivity difference we found between the
+Rust port and C++ salmon on real short-read data, the investigation that traced
+it, and its resolution. **The difference turned out to be a genuine bug in C++
+salmon (pufferfish's SSHash k-mer lookup), now fixed upstream.** With the fix,
+C++ salmon and the Rust port agree.
 
 ## TL;DR
 
-On confidently-mapped reads the two tools are essentially identical
-(`NumReads` linear Pearson **r = 0.99891**, `EffectiveLength` **r = 0.99964**;
-on the clean simulated `sample_data`, counts **r = 0.99998**). The only
-material difference is that **the Rust port maps ~2–3% more reads** than salmon
-on real short-read data. We investigated those reads exhaustively and found
-that **~99% of them have an *exact*, full-length match (forward or
-reverse-complement) in the transcriptome** — they are genuine matches that
-salmon's selective-alignment heuristic fails to place. The Rust port is
-therefore *more correct* on these reads; we keep its behavior and document the
-difference here.
+On clean/simulated data the two tools always agreed (both map 100% of
+`sample_data`, counts Pearson **r = 0.99998**). On **real short reads** the Rust
+port mapped ~2% more reads than C++ salmon. That extra ~2% was not a Rust
+"sensitivity choice" — it exposed a **k-mer-orientation bug** in pufferfish's
+SSHash streaming lookup that caused C++ salmon to mis-place and discard a class
+of reads. After fixing pufferfish (commit `5dce7f4`, salmon pin bumped), C++
+salmon maps the same reads: **83.48% → 85.55%**, matching the Rust port to
+within 1 read, with no change on clean data. The Rust port (built on
+piscem-rs, which derives orientation correctly) was right all along.
 
 ## Dataset
 
 - Reads: `ERR458493` (Gierliński/Schurch *S. cerevisiae* benchmark),
   1,093,957 single-end 51 bp reads.
 - Reference: Ensembl R64-1-1 cDNA, 6,612 transcripts.
-- Tools: C++ salmon 1.11.4 (`--keepDuplicates`, `-l U`) vs. this port (`-l U`),
-  both selective-alignment / mapping mode, no bias correction.
+- Tools: C++ salmon 1.11.4 vs. this Rust port, both selective-alignment mode,
+  `-l U`, no bias correction.
 
 ## What we observed
 
 | metric | value |
 | --- | --- |
-| salmon mapping rate | 83.48% (913,271 reads) |
-| Rust mapping rate | 86.05% (941,403 reads) |
-| reads salmon leaves unmapped that Rust maps | 28,480 |
-| `NumReads` linear Pearson (rust vs salmon) | 0.99891 |
-| `EffectiveLength` Pearson | 0.99964 |
-| TPM **log** Pearson | 0.915 |
+| C++ salmon mapping rate (1.11.4, before fix) | 83.48% (913,271 reads) |
+| Rust port mapping rate | 85.55% (935,850 reads) |
+| C++ salmon mapping rate (after pufferfish fix) | **85.55% (935,851 reads)** |
+| `NumReads` Pearson (rust vs salmon, confidently mapped) | 0.9989 |
+| `EffectiveLength` Pearson | 0.9996 |
 
-The low *log*-TPM number is an artifact of log-space over-weighting the
-low-count tail; per-abundance-bin Pearson is 0.96–0.98, and the linear
-`NumReads`/`EffectiveLength` correlations show the quantification of
-well-supported transcripts is near-identical.
+The well-supported transcripts always quantified near-identically; the only
+material difference was the ~22,600 reads salmon dropped that the Rust port
+mapped. Spot-checking showed those reads were genuine exact / near-exact matches
+to a transcript — not spurious Rust mappings.
 
-## Ruling out the usual suspects
+## The investigation (including the false starts)
 
-| hypothesis | test | result |
-| --- | --- | --- |
-| duplicate transcripts | rebuild salmon index `--keepDuplicates` | unchanged (0.918 → 0.915) ✗ |
-| `N` bases (we map `N`→`A`) | only 0.17% of reads have `N`; N-free subset | gap unchanged ✗ |
-| effective length | compare `EffectiveLength` columns | identical (r = 0.9996) ✗ |
-| `minScoreFraction` value too low | sweep 0.65 → 0.80 | gap persists (84.5% at 0.80) ✗ |
-| repetitive reads (too-many-loci) | eq-class sizes of rescued reads | 15,381 unique vs 2,875 multi ✗ |
-| **alignment-scoring engine** (block-aligner vs ksw2) | implemented ksw2rs `extz2` with salmon's exact config (band 15, gapo 6/gape 2, `KSW_EZ_RIGHT\|KSW_EZ_SCORE_ONLY`) and re-ran | **no change** (85.6% vs 86.0%) ✗ |
-| **seed representation** (sparse fixed-`k` anchors vs extended MEMs) | implemented reference-MEM extension (extend each k-mer hit to a maximal exact match, collapse colinear seeds) behind `--uniMEMs` and re-ran | **no change** (85.55% both; NumReads r = 0.99999999, 24 reads differ) ✗ |
+We were honest about two wrong turns before landing on the cause; they're worth
+recording because each taught us something and the tooling we built to rule them
+out is what finally cracked it.
 
-## What it actually is: a seeding/placement difference
+1. **`mismatchSeedSkip` (partial symptom, not the cause).** Lowering
+   pufferfish's `mismatchSeedSkip` from 3 to 1 recovered most of the gap
+   (83.48% → 85.00%). This *looked* like a seeding-skip bug, but it was really
+   just collecting **more** seeds per read, which diluted the real (orientation)
+   error — reads with several seeds were never affected because their
+   correctly-oriented seeds dominated chain selection.
 
-We extracted salmon's 180,686 unmapped reads (`--writeUnmappedNames`) and ran
-them through the Rust mapper:
+2. **Flank scoring (a misdiagnosis).** A synthetic length sweep suggested salmon
+   under-scored long read flanks; we even prototyped a change to the flank
+   alignment cutoff. It was net-neutral-to-negative and didn't fix the target
+   reads — because the reads weren't being mis-*scored*, they were being
+   mis-*placed*.
 
-- The Rust port maps **28,480** of them.
-- Of the high-confidence subset (Rust alignment score ≥ 0.95·perfect, 8,925
-  reads), a random sample of 400 was checked directly against the transcriptome
-  string: **397/400 (99%) have an exact full-length match** (forward or RC),
-  and only 1/400 is low-complexity.
-- salmon *did* find candidate locations for these reads (it re-maps exactly
-  40,535 of its unmapped at `minScoreFraction 0.05`, matching its reported
-  `num_fragments_filtered_vm = 40,535`) but its best chosen placement scored
-  below threshold, so it discarded them.
+3. **The tool that cracked it: `writeMappings`.** salmon's `--writeMappings`
+   (`-z`) was silently dropping SAM records (an unrelated flush bug we fixed —
+   see below), so we couldn't see *where* salmon was placing these reads. With
+   that fixed, the ground-truth placement was immediate: salmon was aligning the
+   read on the **reverse strand at the wrong locus** (e.g. read `ERR458493.850`:
+   salmon `REV YGR043C:402`, score 24/102; truth/Rust `FWD YGR043C:421`,
+   score 96/102). A direct seed-landscape check confirmed the read's *only*
+   31-mer seed was a unique **forward** hit — so the reverse placement had no
+   seed support and was simply mis-oriented.
 
-Because these reads have **exact full-length MEMs**, they would score a perfect
-102/102 under *any* alignment method — full-read DP, ksw2, or PuffAligner's
-inter-MEM-gap-only scoring alike. So the difference is **not** the alignment
-score and **not** full-vs-anchored scoring. It is that salmon's
-selective-alignment **seeding** fails to collect enough of the read for these
-short reads, so the correct placement is never assembled or scored. The next
-section pins the exact mechanism.
+We also ruled out the **seed representation** itself: re-running the Rust mapper
+with sparse fixed-`k` anchors, reference-extended MEMs, and true
+unitig-constrained uni-MEMs gave identical results (85.55%, `NumReads`
+r ≥ 0.99999995) — so granularity was never the issue.
 
-### Root cause in C++ salmon: the `mismatchSeedSkip` seeding heuristic
+## Root cause (C++ salmon / pufferfish)
 
-We traced the canonical example (`ERR458493.21`) all the way into pufferfish's
-`MemCollector` and isolated the exact cause. It is **not** alignment scoring,
-**not** the consensus *slack* (sub-optimal-chain) filter, and **not** an
-orientation/decoding issue. It is pufferfish's `mismatchSeedSkip` seed-skipping
-optimization interacting with a unitig junction and the consensus *coverage*
-requirement.
+pufferfish computes, per k-mer hit, whether the read k-mer lies forward on the
+unitig (`hitFW`). Two lookup styles exist:
 
-**Evidence chain (all reproducible against C++ salmon 1.11.4):**
+- **Non-streaming** lookups query the *canonical* k-mer word
+  (`dict_.lookup(mer.getCanonicalWord())`); the returned orientation is
+  canonical-relative and is converted to the query frame with
+  `hitFW = (orientation == forward) == fwIsCanonical`.
+- The **streaming** lookup queries the *raw query k-mer string*
+  (`sq.lookup(kmer_str)`); its orientation is already query-relative, so the
+  correct value is just `hitFW = (orientation == forward)`.
 
-1. `ERR458493.21` is a 51 bp read whose **21 forward 31-mers are each unique**
-   in the whole transcriptome (every one occurs exactly once, all in
-   `YMR216C_mRNA`, zero reverse-complement occurrences). It is a perfect,
-   unambiguous, full-length match — the easiest possible read.
-2. C++ salmon reports it **unmapped**, and *still* unmapped at
-   `--minScoreFraction 0.05`. So salmon never produces a candidate at all; the
-   read never reaches the alignment/scoring stage.
-3. **Length sweep** of exact substrings of `YMR216C` starting at the same
-   position: lengths 31–38, 40–44 and **52–70 map**, but **39 and 45–51 are
-   unmapped**. Same locus, same k-mers — the failure is *read-length specific*,
-   which rules out the index and repetitiveness.
-4. **Knob isolation** on the read: `--mismatchSeedSkip 1` makes it map;
-   `--consensusSlack 0.99` and `--fullLengthAlignment` do **not**. With
-   `--mismatchSeedSkip 1` the entire failing length band maps (40/40).
-   The default is `mismatchSeedSkip = 3` (`SalmonDefaults.hpp:37`).
+The streaming `getRefPos` overload mistakenly reused the canonical-relative
+formula (`… == fwIsCanonical`). For a **non-canonical** query k-mer this flips
+`hitFW`, tagging the seed reverse. The aligner then aligns the read's reverse
+complement at the wrong position, scores it below threshold, and drops it. A
+read survives only if it has *other* seeds whose correct orientation wins chain
+selection — so the bug was invisible except for reads whose support reduced to a
+**single non-canonical k-mer** (common for short reads with one error near an
+end).
 
-**Why this happens (`MemCollector::operator()` + `expandHitEfficient`).** The
-read straddles a **unitig junction**: the first k-mer extends (via
-`expandHitEfficient`) into a uni-MEM that terminates at the unitig boundary
-(`CONTIG_END`), covering only the first segment of the read. After a
-non-mismatch termination the collector leaves the cursor ~`k`−1 bases *before*
-the junction; the next k-mers legitimately **span the junction** and therefore
-miss the index. pufferfish's miss-handling is the `mismatchSeedSkip` heuristic,
-which *assumes a run of misses means the read is passing over a sequencing
-error* (its own comment: "the next k k-mers will still likely overlap that
-error") and so advances `mismatchSeedSkip` bases at a time until it is `k` bases
-past the miss. But here the misses are caused by a **unitig boundary, not an
-error** — the bases just past the junction are perfect sequence. For unfavorable
-read lengths the skip-by-3 stepping overshoots the single good seed on the
-second unitig, so the read's second segment is never seeded. Only the
-first-segment match survives, and the resulting under-seeded candidate is
-filtered out by salmon's downstream thresholds (the read is reported unmapped
-even at `--minScoreFraction 0.05`, so it never produces an acceptable mapping).
-Setting `--mismatchSeedSkip 1` (query every k-mer) re-seeds the second segment
-and the read maps perfectly. (Note: salmon's `consensusFraction = 0.65` is a
-*relative* filter — `chainCoverage < consensusFraction * maxChainScore`,
-`MemChainer.cpp:469` — not an absolute coverage gate, so it does not by itself
-explain the miss; the cause is upstream, in seed collection.)
+This was introduced with the **SSHash index refactor (salmon ≥ 1.11.0)**;
+pre-1.11 (BooPHF) pufferfish derives orientation via `isEquivalent` and is not
+affected. The Rust port is unaffected because piscem-rs derives k-mer
+orientation directly from the query.
 
-**This is a genuine sensitivity bug, not just a tuning choice.** The heuristic
-conflates two distinct uni-MEM termination causes (mismatch vs. unitig end) and,
-for the unitig-end case, discards seeds it should keep. It costs real, verifiable
-mappings of perfect unique reads. The whole-dataset impact is large: on the full
-1.09M-read yeast set, `--mismatchSeedSkip 1` raises salmon from **913,271
-(83.48%) to 929,891 (85.00%)** — recovering **16,620 reads, ≈74% of the entire
-22,579-read gap** to the Rust port (935,850 / 85.55%). The remaining ~26%
-(~5,959 reads) is a *separate*, alignment-scoring effect documented in the next
-section. The Rust port is unaffected by `mismatchSeedSkip` because its skipping
-streaming query re-probes after a skip, so a junction never silently drops the
-downstream seed.
+## Fix
 
-### The other ~26%: salmon over-penalizes error-containing flanks
+pufferfish `5dce7f4` (branch `codex/for-salmon`): in the streaming overload,
+`hitFW = (res.kmer_orientation == sshash::constants::forward_orientation)` —
+i.e. drop the `== fwIsCanonical` correction (a no-op for canonical k-mers, a
+fix for non-canonical ones). salmon's pufferfish pin is bumped to this commit.
+A standalone release note is in `docs/release-note-orientation-fix.md`.
 
-After fixing seeding with `--mismatchSeedSkip 1`, salmon still leaves ~5,959
-reads unmapped that the Rust port maps. These are a *different* phenomenon —
-not seeding, but **alignment scoring at the acceptance boundary**.
+Validation: yeast 83.48% → 85.55% (matches the Rust port within 1 read);
+`sample_data` 100% unchanged; `NumReads` correlation on confidently-mapped
+transcripts unchanged.
 
-Profile of the residual (characterized via `debug-map` on a 40k sample of
-salmon's `mismatchSeedSkip 1` unmapped set; the rust-mapped fraction
-extrapolates to ~5,668, matching the gap): the typical read has a **single
-clean 31-mer seed** (exact-seed coverage `= 31/51 ≈ 0.61`) followed by an
-error-containing remainder, and a median rust alignment `score_frac = 0.941`
-(exactly `(51−1)·2 − 4 = 96/102`, i.e. **one mismatch**).
+## Related fix in this tree: `writeMappings` record loss
 
-Sweeping salmon's own `minScoreFraction` shows salmon scores these reads far
-*below* their true edit distance. Concrete case, read `ERR458493.850`: its only
-valid 31-mer is **unique** (forces placement at `YGR043C_mRNA@421`), and the
-read has exactly **one** real mismatch (true score 96/102 = 0.94, which is what
-the Rust port assigns). Yet salmon accepts it only at `--minScoreFraction ≤
-0.20` — i.e. salmon's selective alignment scores this 1-mismatch read at ~0.20.
-Across the six spot-checked residual reads, salmon's effective score is 0.20–0.40
-while the true/rust score is 0.67–0.94.
-
-`--softclip` confirms the culprit is the **flank**: with soft-clipping enabled,
-all six residual reads jump from "needs msf ≤ 0.20–0.40" to mapping at msf 0.60.
-So salmon's selective alignment is assigning a large penalty to the
-error-containing flank that hangs off a single short anchor (rather than finding
-the cheap 1-mismatch alignment), dragging the score below `minScoreFraction =
-0.65`. The Rust port's anchored ksw2 flank-extension finds the correct,
-low-penalty flank alignment, so it scores these reads at their true edit
-distance and keeps them. (The precise PuffAligner flank-alignment behavior that
-produces the low score would need salmon-side instrumentation to pin exactly;
-the boundary and the soft-clip result localize it to flank scoring.)
-
-### Ruled out: the seed representation itself
-
-A natural worry is that the difference is an artifact of the *seed
-representation* — sparse fixed-`k` k-mer anchors (what piscem's skipping
-streaming query emits) versus the extended seeds pufferfish chains. We tested
-all three representations directly (module `salmon-map::extend`, selected by
-[`SeedMode`]):
-
-| seed mode | what it does | yeast mapped | vs sparse |
-| --- | --- | --- | --- |
-| `Sparse` (default) | fixed-`k` anchors, one per unitig transition | 935,850 (85.55%) | — |
-| `RefMem` (`--refMEMs`) | extend each seed against the **reference** (crosses unitig junctions) | 935,848 (85.55%) | r = 0.99999999, 24 reads |
-| `UniMem` (`--uniMEMs`) | extend clamped to the seed's **unitig** (true pufferfish uni-MEMs) | 935,846 (85.55%) | r = 0.99999995, 54 reads |
-
-All three are **indistinguishable** (within 4 reads of each other, vs. salmon's
-83.48%). Crucially, this includes a faithful reproduction of pufferfish's
-*unitig-constrained* uni-MEMs — the exact seed objects salmon chains. So the
-~2–3% extra reads are **not** a seed-representation artifact; they persist
-identically whether we seed with sparse k-mers, reference MEMs, or true
-uni-MEMs. The difference is therefore in **seed collection**, not seed
-representation: pufferfish's `mismatchSeedSkip` heuristic drops seeds after a
-unitig-boundary termination (above), whereas piscem's streaming query re-probes
-across the boundary and collects the seeds on both sides, which the chainer then
-stitches together.
-
-[`SeedMode`]: ../crates/salmon-map/src/mapper.rs
-
-### A note on uni-MEMs vs. reference MEMs
-
-The `--uniMEMs` flag is a **misnomer** and will be renamed. A *uni-MEM* in the
-pufferfish sense is an exact match constrained to lie within a **single unitig**
-of the compacted de Bruijn graph — `expandHitEfficient` stops at the unitig
-boundary (`CONTIG_END`). Our `salmon-map::extend::extend_mem` instead extends the
-seed against the **reference transcript** sequence, so it does not stop at unitig
-boundaries; it yields the maximal read↔reference exact match, which can *span*
-several unitigs. These are **reference MEMs**, not uni-MEMs.
-
-This distinction is not academic — it is exactly why the Rust port sidesteps the
-`mismatchSeedSkip` bug above. pufferfish's unitig-constrained uni-MEMs split a
-junction-straddling match into two pieces and rely on the seed-skip heuristic to
-re-seed across the junction (where it fails); our reference MEMs bridge the
-junction into a single anchor, so there is nothing to re-seed. Producing true
-unitig-constrained uni-MEMs would require clamping extension to the contig bounds
-available on each hit (`ProjectedHits::contig_pos`/`contig_len`), which
-`project_raw_hits` currently discards. We have no need to do so for correctness,
-but it would be the way to faithfully replicate pufferfish's seeding if desired.
-
-## Concrete example
-
-```
-read  ERR458493.21
-seq   TTTATGTCAAGCAAATATCGAAGCAGTTACTGCTTGGTCTTGATTACATGC   (51 bp, 44 distinct 4-mers; high complexity)
-```
-
-This read has an **exact forward match** in `YMR216C_mRNA` at position 802
-(verified by direct substring search of the transcriptome, independent of
-either mapper). The Rust port aligns it there with a perfect score and assigns
-it to `YMR216C`. C++ salmon reports it as **unmapped**.
-
-(A second pattern, ~8.6% of the disputed reads, places the read on a *different*
-transcript than salmon; in the spot-checked cases the Rust placement is again a
-perfect/near-perfect exact match while salmon's chosen placement scores poorly.)
-
-## Why the Rust behavior is correct
-
-A read with an exact, full-length match to a transcript unambiguously
-originates from (a copy of) that transcript and should be counted toward it.
-Discarding it undercounts the transcript. The Rust port recovers these reads;
-salmon's heuristic does not. We therefore treat the Rust behavior as the more
-correct one and retain it, rather than reproducing salmon's miss.
-
-## Caveats and scope
-
-- This is most visible in the **short-read regime** (51 bp with k = 31 leaves
-  only 21 k-mers; real sequencing errors then break enough k-mers to stress
-  salmon's seeding/placement). On clean/longer reads the tools agree closely
-  (`sample_data`: 100% mapped by both, counts r = 0.99998).
-- The port currently maps ~2–3% more reads; this is a *sensitivity* gain on
-  genuine exact matches, not spurious mapping (99% verified exact).
-- PuffAligner's inter-MEM-gap-only scoring (scoring only alignment gaps and
-  reusing exact-MEM scores, with a thread-local sequence cache to avoid
-  duplicate DPs) is now **implemented and is the default** (`anchored_align_score`
-  in `salmon-map`); it is a **performance** optimization and does **not** change
-  these mapping decisions (full exact MEMs score identically under it), so it is
-  orthogonal to this correctness difference. We confirmed this empirically: on
-  the yeast set anchored scoring maps 85.55% vs. 85.62% for full-read DP. Full-read
-  DP remains available behind `--fullLengthAlignment` for cases where the global
-  optimum is desired.
+`--writeMappings`/`-z` wrapped the SAM output stream in an `ostream_sink_mt`
+with `force_flush = false`; mapping records (written per batch) only reached
+disk when the `ofstream` buffer overflowed, so the trailing buffer was lost when
+the stream wasn't explicitly closed on the active quant path. For small inputs
+this dropped **all** records (the large `@SQ` header overflowed the buffer and
+masked it). Fixed by enabling `force_flush` on the sink
+(`src/util/QuantOptionsUtils.cpp`). This fix is what made the placement
+diagnosis above possible.
 
 ## Reproduction
 
-See `salmon-cli debug-map -i <index> -r <reads>` (per-read placement, seed
-coverage, and alignment score) and the commands in the project memory
-(`salmon-cpp-parity`).
+Minimal: a 51 bp read equal to a transcript window with a single mismatch just
+past the first 31 bp leaves exactly one error-free k-mer; if that k-mer is
+non-canonical, pre-fix salmon places the read reverse at the wrong locus
+(score 24/102) and post-fix places it forward at the correct locus (96/102).
+`salmon-cli debug-map -i <index> -r <reads>` (Rust) reports per-read placement,
+seed coverage, and alignment score for cross-checking.
