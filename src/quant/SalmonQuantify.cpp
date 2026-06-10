@@ -898,8 +898,15 @@ void processMiniBatch(
           case MateStatus::PAIRED_END_PAIRED: {
             // TODO: Handle the non opposite strand case
             if (aln.fwd != aln.mateIsFwd) {
-              int32_t posFW = aln.fwd ? aln.pos : aln.matePos;
-              int32_t posRC = aln.fwd ? aln.matePos : aln.pos;
+              // The 5' positional model is indexed by the fragment 5' START and
+              // the 3' model by the fragment 3' END, matching how the expected
+              // pos5/pos3 models are built (sweeping fragStartPos as start / end).
+              // NOTE: posRC is the fragment 3' END (fragStart + fragLen - 1), not
+              // the reverse mate's leftmost (which is 3'end - readLen) — fixing a
+              // coordinate mismatch between the observed and expected 3' models.
+              int32_t fragStart = std::min(aln.pos, aln.matePos);
+              int32_t posFW = fragStart;
+              int32_t posRC = fragStart + aln.fragLen - 1;
               posFW = posFW < 0 ? 0 : posFW;
               posFW = posFW >= static_cast<int32_t>(transcript.RefLength)
                           ? static_cast<int32_t>(transcript.RefLength) - 1

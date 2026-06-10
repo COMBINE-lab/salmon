@@ -1826,11 +1826,26 @@ int contextSize = outsideContext + insideContext;
               p3O.projectWeights(posFactorsObs3);
               p5E.projectWeights(posFactorsExp5);
               p3E.projectWeights(posFactorsExp3);
+              // Additive (Laplace) smoothing of the positional factor toward 1:
+              // factor = (obs + c) / (exp + c), c = 0.1 * mean(expected density).
+              // This replaces the old hard 0.001 floor (projectWeights), whose
+              // near-zero tail divisor amplified tiny observed-model differences;
+              // where the expected density vanishes the factor now shrinks to 1
+              // (no positional bias), the correct uninformative default.
+              double meanExp5 = 0.0, meanExp3 = 0.0;
+              for (int32_t p = 0; p < refLen; ++p) {
+                meanExp5 += posFactorsExp5[p];
+                meanExp3 += posFactorsExp3[p];
+              }
+              meanExp5 /= std::max(1, refLen);
+              meanExp3 /= std::max(1, refLen);
+              double c5 = std::max(0.1 * meanExp5, 1e-12);
+              double c3 = std::max(0.1 * meanExp3, 1e-12);
               for (int32_t fragStart = 0; fragStart < refLen - K; ++fragStart) {
                 posFactorsFW[fragStart] =
-                    posFactorsObs5[fragStart] / posFactorsExp5[fragStart];
+                    (posFactorsObs5[fragStart] + c5) / (posFactorsExp5[fragStart] + c5);
                 posFactorsRC[fragStart] =
-                    posFactorsObs3[fragStart] / posFactorsExp3[fragStart];
+                    (posFactorsObs3[fragStart] + c3) / (posFactorsExp3[fragStart] + c3);
               }
             }
 
@@ -2907,11 +2922,26 @@ txp.uniqueUpdateFraction() < 0.90) {
               p3O.projectWeights(posFactorsObs3);
               p5E.projectWeights(posFactorsExp5);
               p3E.projectWeights(posFactorsExp3);
+              // Additive (Laplace) smoothing of the positional factor toward 1:
+              // factor = (obs + c) / (exp + c), c = 0.1 * mean(expected density).
+              // This replaces the old hard 0.001 floor (projectWeights), whose
+              // near-zero tail divisor amplified tiny observed-model differences;
+              // where the expected density vanishes the factor now shrinks to 1
+              // (no positional bias), the correct uninformative default.
+              double meanExp5 = 0.0, meanExp3 = 0.0;
+              for (int32_t p = 0; p < refLen; ++p) {
+                meanExp5 += posFactorsExp5[p];
+                meanExp3 += posFactorsExp3[p];
+              }
+              meanExp5 /= std::max(1, refLen);
+              meanExp3 /= std::max(1, refLen);
+              double c5 = std::max(0.1 * meanExp5, 1e-12);
+              double c3 = std::max(0.1 * meanExp3, 1e-12);
               for (int32_t fragStart = 0; fragStart < refLen - K; ++fragStart) {
                 posFactorsFW[fragStart] =
-                    posFactorsObs5[fragStart] / posFactorsExp5[fragStart];
+                    (posFactorsObs5[fragStart] + c5) / (posFactorsExp5[fragStart] + c5);
                 posFactorsRC[fragStart] =
-                    posFactorsObs3[fragStart] / posFactorsExp3[fragStart];
+                    (posFactorsObs3[fragStart] + c3) / (posFactorsExp3[fragStart] + c3);
               }
             }
 

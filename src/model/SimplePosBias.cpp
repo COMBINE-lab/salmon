@@ -33,7 +33,12 @@ void SimplePosBias::projectWeights(std::vector<double>& out) {
   for (size_t p = 0; p < len; ++p) {
     // The fractional sampling factor position p would have
     double fracP = static_cast<double>(p) / len;
-    out[p] = std::max(0.001, s_(fracP));
+    // Clamp only negative spline overshoot, NOT at a hard 0.001 floor: the floor
+    // turned the near-zero tails of the expected density into an artificially
+    // small divisor in the obs/exp positional ratio, amplifying tiny model
+    // differences. The ratio is instead additively smoothed toward 1 where it is
+    // formed (updateEffectiveLengths).
+    out[p] = std::max(0.0, s_(fracP));
   }
 }
 
