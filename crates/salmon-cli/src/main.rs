@@ -131,7 +131,7 @@ struct QuantArgs {
     /// (Long reads) Oxford Nanopore model — not supported; use oarfish instead.
     #[arg(long = "ont")]
     ont: bool,
-    /// (Long reads) disable length correction — not supported; use oarfish instead.
+    /// Disable effective-length correction (use raw reference length).
     #[arg(long = "noLengthCorrection")]
     no_length_correction: bool,
     /// Minimum alignment score as a fraction of the perfect score.
@@ -171,13 +171,12 @@ fn run_index(args: IndexArgs) -> Result<()> {
     Ok(())
 }
 
-/// Long-read (`--ont` / `--noLengthCorrection`) quantification is intentionally
-/// not supported: for long reads, oarfish is the recommended tool. Print a
-/// pointer and exit rather than silently producing length-corrected estimates
-/// that are inappropriate for long reads.
+/// Long-read (`--ont`) quantification is intentionally not supported: for long
+/// reads, oarfish is the recommended tool. Print a pointer and exit rather than
+/// silently producing estimates that are inappropriate for long reads.
 fn long_read_redirect() -> ! {
     eprintln!(
-        "salmon (Rust): long-read quantification (--ont / --noLengthCorrection) is not supported.\n\
+        "salmon (Rust): long-read quantification (--ont) is not supported.\n\
          For long-read (Oxford Nanopore / PacBio) transcript quantification, please use oarfish,\n\
          our dedicated long-read quantification tool:\n\
          \n    https://github.com/COMBINE-lab/oarfish\n\n\
@@ -187,7 +186,7 @@ fn long_read_redirect() -> ! {
 }
 
 fn run_quant(args: QuantArgs) -> Result<()> {
-    if args.ont || args.no_length_correction {
+    if args.ont {
         long_read_redirect();
     }
     // Alignment-based mode: quantify directly from a BAM.
@@ -237,6 +236,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.num_bootstraps = args.num_bootstraps;
     opts.num_gibbs_samples = args.num_gibbs_samples;
     opts.thinning_factor = args.thinning_factor;
+    opts.no_length_correction = args.no_length_correction;
     opts.map_config.align.min_score_fraction = args.min_score_fraction;
     opts.map_config.align.full_length_alignment = args.full_length_alignment;
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems);

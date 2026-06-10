@@ -74,6 +74,9 @@ pub struct QuantOptions {
     pub num_gibbs_samples: u32,
     /// Gibbs thinning factor (`--thinningFactor`, salmon default 16)
     pub thinning_factor: u32,
+    /// disable effective-length correction; use the raw reference length
+    /// (`--noLengthCorrection`)
+    pub no_length_correction: bool,
 }
 
 impl QuantOptions {
@@ -99,6 +102,7 @@ impl QuantOptions {
             num_bootstraps: 0,
             num_gibbs_samples: 0,
             thinning_factor: 16,
+            no_length_correction: false,
         }
     }
 
@@ -273,8 +277,11 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let cond_means = fld.conditional_means();
     let mut eff_lengths = vec![0f64; num_refs];
     for tid in 0..num_refs {
-        eff_lengths[tid] =
-            salmon_model::smoothed_effective_length(&cond_means, salmon.ref_len(tid) as usize);
+        eff_lengths[tid] = if opts.no_length_correction {
+            salmon.ref_len(tid) as f64
+        } else {
+            salmon_model::smoothed_effective_length(&cond_means, salmon.ref_len(tid) as usize)
+        };
     }
 
     // ---- inference ----------------------------------------------------------
@@ -293,7 +300,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // estimate, recompute bias-corrected effective lengths, then re-run
     // inference. Composes `--seqBias`, `--gcBias`, and `--posBias` in any
     // combination via the unified convolution (salmon's updateEffectiveLengths).
-    if opts.seq_bias || opts.gc_bias || opts.pos_bias {
+    if (opts.seq_bias || opts.gc_bias || opts.pos_bias) && !opts.no_length_correction {
         use rayon::prelude::*;
         let pmf_lin: Vec<f64> = log_pmf.iter().map(|lp| lp.exp()).collect();
         let (fld_cdf, fld_low, fld_high) = salmon_model::seqbias::fld_cdf_and_bounds(&pmf_lin);
@@ -398,8 +405,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                         efw[lc].project_weights(&mut e5);
                         orc[lc].project_weights(&mut o3);
                         erc[lc].project_weights(&mut e3);
-                        let pf: Vec<f64> = o5.iter().zip(&e5).map(|(o, e)| o / e).collect();
-                        let pr: Vec<f64> = o3.iter().zip(&e3).map(|(o, e)| o / e).collect();
+                        // additively-smoothed obs/exp (no hard floor; neutral tails)
+                        let pf = salmon_model::positional_factor(&o5, &e5);
+                        let pr = salmon_model::positional_factor(&o3, &e3);
                         (pf, pr)
                     });
                 let bias = salmon_model::BiasInputs {

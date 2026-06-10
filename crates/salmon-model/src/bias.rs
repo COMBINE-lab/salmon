@@ -17,6 +17,31 @@ use crate::seqbias::{
 /// salmon's `EPSILON` (mass cutoff for adding positional expected mass).
 const EPSILON: f64 = 0.375e-10;
 
+/// Additive (Laplace) smoothing fraction for the positional-bias factor: the
+/// smoothing constant is `POS_SMOOTH_FRAC · mean(expected density)`.
+const POS_SMOOTH_FRAC: f64 = 0.1;
+
+/// Per-position positional-bias factors `obs/exp`, additively smoothed toward 1.
+///
+/// Instead of dividing two projected densities that the old `0.001` floor drove
+/// to a tiny, noisy denominator in the tails (amplifying small model
+/// differences), we add a smoothing constant `c = POS_SMOOTH_FRAC·mean(exp)` to
+/// both: `factor = (obs + c) / (exp + c)`. Where the expected density is
+/// substantial the ratio is preserved; where it vanishes (uninformative tails)
+/// the factor shrinks to 1 (no bias), which is the correct default.
+pub fn positional_factor(obs: &[f64], exp: &[f64]) -> Vec<f64> {
+    let n = exp.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let mean_exp: f64 = exp.iter().sum::<f64>() / n as f64;
+    let c = (POS_SMOOTH_FRAC * mean_exp).max(f64::MIN_POSITIVE);
+    obs.iter()
+        .zip(exp)
+        .map(|(&o, &e)| (o + c) / (e + c))
+        .collect()
+}
+
 /// The enabled bias terms for one transcript's effective-length correction.
 #[derive(Clone, Copy, Default)]
 pub struct BiasInputs<'a> {

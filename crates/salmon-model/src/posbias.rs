@@ -138,7 +138,12 @@ impl SimplePosBias {
     }
 
     /// Project the spline weights onto `out.len()` transcript positions:
-    /// `out[p] = max(0.001, spline(p / len))` (salmon's `projectWeights`).
+    /// `out[p] = max(0.0, spline(p / len))`. We clamp only negatives (cubic
+    /// overshoot), NOT at a hard `0.001` floor: the floor turned the near-zero
+    /// tails of the expected density into an artificially small divisor in the
+    /// observed/expected ratio, amplifying tiny model differences. The ratio is
+    /// instead additively smoothed toward 1 at the division site (see
+    /// `bias::positional_factor`).
     pub fn project_weights(&self, out: &mut [f64]) {
         let spline = self
             .spline
@@ -147,7 +152,7 @@ impl SimplePosBias {
         let len = out.len();
         for (p, o) in out.iter_mut().enumerate() {
             let frac_p = p as f64 / len as f64;
-            *o = spline.eval(frac_p).max(0.001);
+            *o = spline.eval(frac_p).max(0.0);
         }
     }
 }

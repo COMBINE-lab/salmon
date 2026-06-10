@@ -138,14 +138,16 @@ pub fn map_read_pair<'idx, R: RefProvider>(
                 if let (Some(al), Some(ar)) = (al, ar) {
                     if al.valid && ar.valid {
                         // positional bias (salmon's PAIRED_END_PAIRED case): only
-                        // opposite-strand pairs contribute; the forward mate's
-                        // leftmost goes to the fwd model, the reverse mate's to RC.
+                        // opposite-strand pairs contribute. The 5' model is indexed
+                        // by the fragment 5' START and the 3' model by the fragment
+                        // 3' END, matching how the expected pos5/pos3 models are
+                        // built (by fragStartPos as start / as end). NOTE: this uses
+                        // the fragment 3' end, not the reverse mate's leftmost (which
+                        // is 3'end - readLen) — fixing a coordinate mismatch between
+                        // the observed and expected 3' positional models.
+                        let frag_start = l.chain.ref_start().min(r.chain.ref_start());
                         let (fw_pos, rc_pos) = if l.is_fw != r.is_fw {
-                            if l.is_fw {
-                                (l.chain.ref_start(), r.chain.ref_start())
-                            } else {
-                                (r.chain.ref_start(), l.chain.ref_start())
-                            }
+                            (frag_start, frag_start + j.fragment_len - 1)
                         } else {
                             (-1, -1)
                         };
