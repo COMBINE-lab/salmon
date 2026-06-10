@@ -26,6 +26,9 @@ use noodles_sam::alignment::record::data::field::{Tag, Value};
 use serde::Serialize;
 
 use error_model::{AlignmentModel, AlnOp};
+use salmon_core::{
+    is_compatible, LibraryFormat, MateStatus, ReadOrientation, ReadStrandedness, ReadType,
+};
 use salmon_eqclass::{range_factorize_bins, EquivalenceClassBuilder, TranscriptGroup};
 use salmon_infer::{optimize, EmOptions};
 use salmon_model::FragmentLengthDistribution;
@@ -57,6 +60,9 @@ pub struct AlignQuantOptions {
     pub gc_bias: bool,
     /// enable positional bias correction (`--posBias`)
     pub pos_bias: bool,
+    /// weight multiplier for orientation-incompatible alignments; `0` drops them
+    /// (salmon's default `ignoreIncompat` behavior)
+    pub incompat_prior: f64,
 }
 
 impl AlignQuantOptions {
@@ -73,6 +79,7 @@ impl AlignQuantOptions {
             seq_bias: false,
             gc_bias: false,
             pos_bias: false,
+            incompat_prior: 0.0,
         }
     }
 }
@@ -117,6 +124,33 @@ fn group_by_tid(recs: &[FragRecord]) -> Vec<(u32, Vec<usize>)> {
         idxs.sort_by_key(|&i| recs[i].pos);
     }
     v
+}
+
+/// Derive the observed library format, the single-read forward flag, and the
+/// mate status for one transcript's alignment record(s) (`recs[idxs]`), mirroring
+/// the reads-path `observed_format`: orientation from the mates' 5' ends, with
+/// strandedness keyed on read 1.
+fn frag_format(recs: &[FragRecord], idxs: &[usize]) -> (Option<LibraryFormat>, bool, MateStatus) {
+    if idxs.len() >= 2 {
+        let r1 = idxs.iter().map(|&i| &recs[i]).find(|r| r.is_read1).unwrap_or(&recs[idxs[0]]);
+        let r2 = idxs.iter().map(|&i| &recs[i]).find(|r| !r.is_read1).unwrap_or(&recs[idxs[1]]);
+        let (l_fw, r_fw) = (!r1.is_reverse, !r2.is_reverse);
+        let (orientation, strandedness) = if l_fw != r_fw {
+            let (fw, rc) = if l_fw { (r1, r2) } else { (r2, r1) };
+            let fw_5p = fw.pos as i64; // forward read 5' = its leftmost
+            let rc_5p = (rc.pos + rc.ref_span.saturating_sub(1)) as i64; // reverse read 5' = its rightmost
+            let orientation = if fw_5p <= rc_5p { ReadOrientation::Toward } else { ReadOrientation::Away };
+            let strandedness = if l_fw { ReadStrandedness::SA } else { ReadStrandedness::AS };
+            (orientation, strandedness)
+        } else {
+            (ReadOrientation::Same, if l_fw { ReadStrandedness::S } else { ReadStrandedness::A })
+        };
+        (Some(LibraryFormat::new(ReadType::PairedEnd, orientation, strandedness)), l_fw, MateStatus::PairedEndPaired)
+    } else {
+        let r = &recs[idxs[0]];
+        let status = if r.is_read1 { MateStatus::PairedEndLeft } else { MateStatus::PairedEndRight };
+        (None, !r.is_reverse, status)
+    }
 }
 
 /// 2-bit encode a base (`A=0, C=1, G=2, T=3`; anything else → `0`).
@@ -182,6 +216,8 @@ struct FragRecord {
     frag_len: i32,
     /// reverse-strand alignment (BAM `0x10` flag)
     is_reverse: bool,
+    /// first mate of the pair (BAM `0x40` flag)
+    is_read1: bool,
     /// reference span (Σ ref-consuming CIGAR op lengths); the read's 3' end on
     /// the reference is `pos + ref_span − 1`
     ref_span: usize,
@@ -278,7 +314,9 @@ where
             .and_then(|v| value_as_i32(&v))
             .unwrap_or(0);
         let frag_len = record.template_length().abs();
-        let is_reverse = record.flags().is_reverse_complemented();
+        let flags = record.flags();
+        let is_reverse = flags.is_reverse_complemented();
+        let is_read1 = flags.is_first_segment();
         group.push(FragRecord {
             tid: tid as u32,
             pos,
@@ -287,6 +325,7 @@ where
             score,
             frag_len,
             is_reverse,
+            is_read1,
             ref_span,
         });
     }
@@ -374,6 +413,15 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // A paired library expects two mates; a single mate to a transcript is then an
     // "unexpected orphan" and is fragment-length-penalized. (Single-end libs aren't.)
     let paired_lib = !matches!(opts.lib_type.as_str(), "U" | "SF" | "SR" | "S");
+    // Orientation-compatibility filtering (salmon): drop alignments whose
+    // orientation is incompatible with the expected library type (and drop a
+    // fragment entirely if all its alignments are incompatible — these become
+    // zero-probability fragments). Skipped under auto (`A`) library type.
+    let expected_format = match opts.lib_type.as_str() {
+        "A" => None,
+        s => LibraryFormat::parse(s).ok(),
+    };
+    let ignore_incompat = opts.incompat_prior <= 0.0;
     let mut num_processed = 0u64;
     let mut num_mapped = 0u64;
     let mut frag_count = 0u64;
@@ -406,12 +454,15 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         let mut online_log: Vec<f64> = Vec::with_capacity(n);
         // geometry for bias (per tid): (frag_start, frag_end, proper)
         let mut geom: Vec<(usize, usize, bool)> = Vec::with_capacity(n);
+        // by_tid indices of the surviving (compatible) transcripts, aligned to
+        // the tids/eq_log/online_log/geom vectors above.
+        let mut surv: Vec<usize> = Vec::with_capacity(n);
         let best_as = by_tid
             .iter()
             .map(|(_, idxs)| idxs.iter().map(|&i| recs[i].score).sum::<i32>())
             .max()
             .unwrap_or(0);
-        for (tid, idxs) in &by_tid {
+        for (bti, (tid, idxs)) in by_tid.iter().enumerate() {
             let refseq = ref_bytes.get(*tid as usize).map(|v| v.as_slice()).unwrap_or(&[]);
             // conditional log-weight: error model Σ(fg-bg), else AS-based
             let basis = if let Some(m) = model.as_ref() {
@@ -455,11 +506,29 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             } else {
                 0.0
             };
-            let aux = basis + log_frag_prob; // (+ compat = LOG_1 for unstranded)
+            let mut aux = basis + log_frag_prob;
+            // orientation compatibility (salmon's logAlignCompatProb): drop the
+            // alignment if incompatible and we're ignoring incompatible fragments,
+            // else down-weight it by the incompatibility prior.
+            if let Some(exp) = expected_format {
+                let (obs, is_fw, status) = frag_format(recs, idxs);
+                if !is_compatible(exp, obs, is_fw, status) {
+                    if ignore_incompat {
+                        continue; // this alignment contributes nothing
+                    }
+                    aux += opts.incompat_prior.ln();
+                }
+            }
             tids.push(*tid);
             eq_log.push(aux);
             online_log.push(aux + start_pos);
             geom.push((frag_start, frag_end, proper));
+            surv.push(bti);
+        }
+        // a fragment whose every alignment was incompatible is a zero-probability
+        // fragment: it is not assigned and contributes to no equivalence class.
+        if tids.is_empty() {
+            return;
         }
 
         // eq-class weights = softmax(eq_log)
@@ -484,7 +553,8 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         // train the error model + collect bias models, weighted by posteriors
         let collecting = online.as_ref().is_none_or(|o| o.collecting());
         if collecting {
-            for (ti, (tid, idxs)) in by_tid.iter().enumerate() {
+            for (ti, &bti) in surv.iter().enumerate() {
+                let (tid, idxs) = &by_tid[bti];
                 let p = post[ti];
                 if p <= 0.0 {
                     continue;
