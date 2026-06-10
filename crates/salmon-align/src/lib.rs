@@ -613,16 +613,16 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         let mut sp_online: Vec<f64> = Vec::with_capacity(placements.len());
         let mut sp_geom: Vec<(usize, usize, bool)> = Vec::with_capacity(placements.len());
         let mut sp_pl: Vec<usize> = Vec::with_capacity(placements.len());
-        let best_as = placements
-            .iter()
-            .map(|p| p.idxs.iter().map(|&i| recs[i].score).sum::<i32>())
-            .max()
-            .unwrap_or(0);
         for (pi, pl) in placements.iter().enumerate() {
             let tid = pl.tid;
             let idxs = &pl.idxs;
             let refseq = ref_bytes.get(tid as usize).map(|v| v.as_slice()).unwrap_or(&[]);
-            // conditional log-weight: error model Σ(fg-bg), else AS-based
+            // Conditional log-weight basis = salmon's `errLike`. With the error model
+            // it is Σ(fg−bg) over the mate(s). Without the error model salmon leaves
+            // errLike = LOG_1 for CIGAR-bearing aligners (it only uses the alignment
+            // score for its own CIGAR-less aligners, pufferfish/rapmap, via
+            // `useASWithoutCIGAR`). To match, a disabled error model yields a uniform
+            // (0.0) basis rather than an AS-derived one.
             let basis = if let Some(m) = model.as_ref() {
                 if refseq.is_empty() {
                     0.0
@@ -636,8 +636,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
                     ll
                 }
             } else {
-                let as_sum: i32 = idxs.iter().map(|&i| recs[i].score).sum();
-                -opts.score_exp * (best_as - as_sum) as f64
+                0.0
             };
             // fragment geometry + length-normalized online aux (start-pos + FLD)
             let rl = lengths[tid as usize] as i32;
