@@ -369,6 +369,11 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
 
     // ---- single online pass: train error model + collect bias + eq-classes ---
     const MINIBATCH: u64 = 1000;
+    // salmon's LOG_EPSILON = log(0.375e-10): the orphan / implausible-length penalty.
+    const LOG_EPSILON: f64 = -23.998_158_637_57;
+    // A paired library expects two mates; a single mate to a transcript is then an
+    // "unexpected orphan" and is fragment-length-penalized. (Single-end libs aren't.)
+    let paired_lib = !matches!(opts.lib_type.as_str(), "U" | "SF" | "SR" | "S");
     let mut num_processed = 0u64;
     let mut num_mapped = 0u64;
     let mut frag_count = 0u64;
@@ -436,10 +441,24 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             } else {
                 -((rl.max(1) as f64).ln())
             };
-            let fld_term = if proper && use_aux { fld.pmf(flen as usize) } else { 0.0 };
+            // Fragment-length probability (salmon's logFragProb): the FLD pmf for
+            // a proper pair, or LOG_EPSILON for an unexpected orphan in a paired
+            // library. This is part of the eq-class conditional weight (salmon's
+            // auxProb = logFragProb + errLike + compat), NOT just the abundance
+            // posterior — it down-weights placements whose implied insert size is
+            // implausible (critical for permissive aligners that report many
+            // discordant/wrong-length multimappers).
+            let log_frag_prob = if proper {
+                if use_aux { fld.pmf(flen as usize) } else { 0.0 }
+            } else if paired_lib {
+                LOG_EPSILON
+            } else {
+                0.0
+            };
+            let aux = basis + log_frag_prob; // (+ compat = LOG_1 for unstranded)
             tids.push(*tid);
-            eq_log.push(basis);
-            online_log.push(basis + start_pos + fld_term);
+            eq_log.push(aux);
+            online_log.push(aux + start_pos);
             geom.push((frag_start, frag_end, proper));
         }
 
