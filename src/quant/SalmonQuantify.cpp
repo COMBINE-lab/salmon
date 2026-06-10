@@ -2833,16 +2833,6 @@ transcript abundance from RNA-seq reads
 
     po::notify(vm);
 
-    // The `numBiasSamples` option's value (and its default) is only applied to
-    // the bound local variable by po::notify() above. The pipeline context was
-    // constructed before parsing and captured `numBiasSamples` by value (0), so
-    // re-sync the parsed value here. Without this, processQuantOptions() stores
-    // 0 into sopt.numBiasSamples, the bias-sampling gate
-    // (`numBiasSamples > 0`) never fires, the observed sequence-bias model
-    // stays at its uniform prior, and --seqBias becomes a degenerate
-    // (1 / expected) correction instead of using the observed read bias.
-    pipelineCtx.numBiasSamples = numBiasSamples;
-
     // If we're supposed to be quiet, set the global logger level to >= warn
     if (sopt.quiet) {
       spdlog::set_level(spdlog::level::warn); // Set global log level to info
