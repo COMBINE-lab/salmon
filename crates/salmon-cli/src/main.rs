@@ -203,6 +203,9 @@ fn run_quant(args: QuantArgs) -> Result<()> {
         opts.range_factorization_bins = args.range_factorization_bins;
         opts.transcripts = args.targets;
         opts.no_error_model = args.no_error_model;
+        opts.seq_bias = args.seq_bias;
+        opts.gc_bias = args.gc_bias;
+        opts.pos_bias = args.pos_bias;
         let res = quantify_alignments(&opts).context("alignment-based quantification failed")?;
         let pct = if res.num_processed > 0 {
             100.0 * res.num_mapped as f64 / res.num_processed as f64

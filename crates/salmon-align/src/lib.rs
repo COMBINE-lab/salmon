@@ -51,6 +51,12 @@ pub struct AlignQuantOptions {
     pub transcripts: Option<PathBuf>,
     /// disable the alignment error model (salmon's `--noErrorModel`)
     pub no_error_model: bool,
+    /// enable sequence-specific bias correction (`--seqBias`)
+    pub seq_bias: bool,
+    /// enable fragment-GC bias correction (`--gcBias`)
+    pub gc_bias: bool,
+    /// enable positional bias correction (`--posBias`)
+    pub pos_bias: bool,
 }
 
 impl AlignQuantOptions {
@@ -64,6 +70,9 @@ impl AlignQuantOptions {
             score_exp: 1.0,
             transcripts: None,
             no_error_model: false,
+            seq_bias: false,
+            gc_bias: false,
+            pos_bias: false,
         }
     }
 }
@@ -122,10 +131,11 @@ fn base_2bit(b: u8) -> u8 {
     }
 }
 
-/// Load a (optionally gzip'd) transcriptome FASTA and return 2-bit-encoded
+/// Load a (optionally gzip'd) transcriptome FASTA and return the (ASCII) base
 /// sequences aligned to the BAM's reference order (`names`); a name absent from
-/// the FASTA yields an empty sequence (its error-model contributions are skipped).
-fn load_ref_2bit(path: &Path, names: &[String]) -> Result<Vec<Vec<u8>>> {
+/// the FASTA yields an empty sequence (its model contributions are skipped). The
+/// same bytes feed both the error model (2-bit on the fly) and the bias models.
+fn load_ref_bytes(path: &Path, names: &[String]) -> Result<Vec<Vec<u8>>> {
     let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
     let mut magic = [0u8; 2];
     let is_gz = {
@@ -150,7 +160,7 @@ fn load_ref_2bit(path: &Path, names: &[String]) -> Result<Vec<Vec<u8>>> {
             }
             cur_name = Some(stripped.split_whitespace().next().unwrap_or("").to_string());
         } else if cur_name.is_some() {
-            cur_seq.extend(line.trim_end().bytes().map(base_2bit));
+            cur_seq.extend(line.trim_end().bytes());
         }
     }
     if let Some(n) = cur_name.take() {
@@ -280,100 +290,203 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     let eq_builder = EquivalenceClassBuilder::new();
     let mut fld = FragmentLengthDistribution::new(1.0, 1000, 250.0, 25.0, 4, 0.5, 1);
 
-    // The alignment error model needs the transcriptome (salmon requires `-t`).
+    // The error model and bias models need the transcriptome (salmon requires `-t`).
     let use_error_model = opts.transcripts.is_some() && !opts.no_error_model;
-    let ref_2bit: Vec<Vec<u8>> = if use_error_model {
-        load_ref_2bit(opts.transcripts.as_ref().unwrap(), &names)?
+    let bias_on = opts.seq_bias || opts.gc_bias || opts.pos_bias;
+    anyhow::ensure!(
+        !bias_on || opts.transcripts.is_some(),
+        "--seqBias/--gcBias/--posBias in alignment mode require -t/--targets (the transcriptome FASTA)"
+    );
+    let ref_bytes: Vec<Vec<u8>> = if use_error_model || bias_on {
+        load_ref_bytes(opts.transcripts.as_ref().unwrap(), &names)?
     } else {
         Vec::new()
     };
+
     let mut model = use_error_model.then(|| AlignmentModel::new(1.0, 4));
+    // Online (dual-phase) abundances: develop running estimates so the error
+    // model and bias models are trained/collected with abundance-aware posteriors
+    // in a single streaming pass (salmon's online phase), rather than two passes.
+    let ref_lens_u64: Vec<u64> = lengths.iter().map(|&l| l as u64).collect();
+    let online = (use_error_model || bias_on)
+        .then(|| salmon_infer::OnlineInference::new(&ref_lens_u64, 0.05, 0.65, 5_000_000));
 
-    // ---- pass 1: train the error model (uniform per-fragment posterior) -----
-    // salmon trains the model online weighted by the evolving posterior; here we
-    // train once with a per-fragment-uniform posterior (each fragment contributes
-    // total weight 1), which yields essentially the same converged error profile
-    // since it is dominated by confidently/uniquely assigned reads.
-    if let Some(model) = model.as_mut() {
-        for_each_fragment(&opts.bam, true, |recs| {
-            if recs.is_empty() {
-                return;
-            }
-            let by_tid = group_by_tid(recs);
-            let lw = (1.0 / by_tid.len() as f64).ln();
-            for (tid, idxs) in &by_tid {
-                let refseq = &ref_2bit[*tid as usize];
-                if refseq.is_empty() {
-                    continue;
-                }
-                for (rank, &i) in idxs.iter().enumerate() {
-                    let r = &recs[i];
-                    // left mate = the alignment with the smaller reference position
-                    model.update(&r.read_2bit, refseq, r.pos, &r.ops, rank == 0, lw);
-                }
-            }
-        })?;
-    }
+    // Observed bias accumulators (single-threaded → owned).
+    use salmon_model::seqbias::{CONTEXT_LEFT, CONTEXT_LENGTH, CONTEXT_RIGHT};
+    let mut seq_obs = opts
+        .seq_bias
+        .then(|| (salmon_model::SBModel::new(), salmon_model::SBModel::new()));
+    let mut gc_obs = opts.gc_bias.then(salmon_model::GcFragModel::default_model);
+    let gc_prefix: Vec<Vec<u32>> = if opts.gc_bias {
+        ref_bytes.iter().map(|s| salmon_model::gc_prefix(s)).collect()
+    } else {
+        Vec::new()
+    };
+    let length_quantiles: Option<Vec<u32>> = opts.pos_bias.then(|| {
+        salmon_model::compute_length_quantiles(&lengths, salmon_model::NUM_LENGTH_CLASSES)
+    });
+    let length_class: Option<Vec<usize>> = length_quantiles.as_ref().map(|q| {
+        lengths.iter().map(|&l| salmon_model::length_class_index(q, l)).collect()
+    });
+    let mut pos_obs = opts.pos_bias.then(|| {
+        let mk = || {
+            (0..salmon_model::NUM_LENGTH_CLASSES)
+                .map(|_| salmon_model::SimplePosBias::default())
+                .collect::<Vec<_>>()
+        };
+        (mk(), mk())
+    });
 
-    // ---- pass 2: build the (weighted) equivalence classes -------------------
+    // ---- single online pass: train error model + collect bias + eq-classes ---
+    const MINIBATCH: u64 = 1000;
     let mut num_processed = 0u64;
     let mut num_mapped = 0u64;
-    for_each_fragment(&opts.bam, use_error_model, |recs| {
+    let mut frag_count = 0u64;
+    let mut log_fm = 0.0;
+    for_each_fragment(&opts.bam, use_error_model || bias_on, |recs| {
         num_processed += 1;
         if recs.is_empty() {
             return;
         }
         num_mapped += 1;
+        // one forgetting-mass timestep per minibatch of fragments
+        if let Some(o) = online.as_ref() {
+            if frag_count % MINIBATCH == 0 {
+                log_fm = o.next_log_fm();
+            }
+        }
+        frag_count += 1;
+
         let by_tid = group_by_tid(recs);
+        let n = by_tid.len();
         let frag_len = recs.iter().map(|r| r.frag_len).max().unwrap_or(0);
         if frag_len > 0 {
             fld.add_val(frag_len as usize, 0.0);
         }
+        let use_aux = online.as_ref().is_none_or(|o| o.num_assigned() >= 5000);
 
-        let mut tids: Vec<u32> = Vec::with_capacity(by_tid.len());
-        let mut logw: Vec<f64> = Vec::with_capacity(by_tid.len());
-        match model.as_ref() {
-            // error model: conditional log-weight = Σ_mates (fg − bg)
-            Some(model) => {
-                for (tid, idxs) in &by_tid {
-                    let refseq = &ref_2bit[*tid as usize];
+        // Per-tid: alignment conditional log-weight (eq-class) + online log-aux.
+        let mut tids: Vec<u32> = Vec::with_capacity(n);
+        let mut eq_log: Vec<f64> = Vec::with_capacity(n);
+        let mut online_log: Vec<f64> = Vec::with_capacity(n);
+        // geometry for bias (per tid): (frag_start, frag_end, proper)
+        let mut geom: Vec<(usize, usize, bool)> = Vec::with_capacity(n);
+        let best_as = by_tid
+            .iter()
+            .map(|(_, idxs)| idxs.iter().map(|&i| recs[i].score).sum::<i32>())
+            .max()
+            .unwrap_or(0);
+        for (tid, idxs) in &by_tid {
+            let refseq = ref_bytes.get(*tid as usize).map(|v| v.as_slice()).unwrap_or(&[]);
+            // conditional log-weight: error model Σ(fg-bg), else AS-based
+            let basis = if let Some(m) = model.as_ref() {
+                if refseq.is_empty() {
+                    0.0
+                } else {
                     let mut ll = 0.0;
                     for (rank, &i) in idxs.iter().enumerate() {
                         let r = &recs[i];
-                        if !refseq.is_empty() {
-                            let (fg, bg) =
-                                model.log_likelihood(&r.read_2bit, refseq, r.pos, &r.ops, rank == 0);
-                            ll += fg - bg;
-                        }
+                        let (fg, bg) = m.log_likelihood(&r.read_2bit, refseq, r.pos, &r.ops, rank == 0);
+                        ll += fg - bg;
                     }
-                    tids.push(*tid);
-                    logw.push(ll);
+                    ll
                 }
-            }
-            // AS fallback (no transcriptome / error model disabled)
-            None => {
-                let best = by_tid
-                    .iter()
-                    .map(|(_, idxs)| idxs.iter().map(|&i| recs[i].score).sum::<i32>())
-                    .max()
-                    .unwrap_or(0);
-                for (tid, idxs) in &by_tid {
-                    let as_sum: i32 = idxs.iter().map(|&i| recs[i].score).sum();
-                    tids.push(*tid);
-                    logw.push(-opts.score_exp * (best - as_sum) as f64);
-                }
-            }
+            } else {
+                let as_sum: i32 = idxs.iter().map(|&i| recs[i].score).sum();
+                -opts.score_exp * (best_as - as_sum) as f64
+            };
+            // fragment geometry + length-normalized online aux (start-pos + FLD)
+            let rl = lengths[*tid as usize] as i32;
+            let flen = idxs.iter().map(|&i| recs[i].frag_len).max().unwrap_or(0);
+            let proper = idxs.len() >= 2 && flen > 0;
+            let frag_start = recs[idxs[0]].pos;
+            let frag_end = frag_start + (flen.max(1) as usize) - 1;
+            let start_pos = if proper && flen <= rl {
+                -(((rl - flen + 1) as f64).ln())
+            } else {
+                -((rl.max(1) as f64).ln())
+            };
+            let fld_term = if proper && use_aux { fld.pmf(flen as usize) } else { 0.0 };
+            tids.push(*tid);
+            eq_log.push(basis);
+            online_log.push(basis + start_pos + fld_term);
+            geom.push((frag_start, frag_end, proper));
         }
 
-        // softmax → per-fragment conditional probabilities (sum to 1)
-        let maxlw = logw.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        let mut weights: Vec<f64> = logw.iter().map(|&l| (l - maxlw).exp()).collect();
+        // eq-class weights = softmax(eq_log)
+        let maxe = eq_log.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let mut weights: Vec<f64> = eq_log.iter().map(|&l| (l - maxe).exp()).collect();
         let wsum: f64 = weights.iter().sum();
         if wsum > 0.0 {
             for w in &mut weights {
                 *w /= wsum;
             }
         }
+
+        // abundance-aware posteriors (online) drive model/bias training
+        let post: Vec<f64> = match online.as_ref() {
+            Some(o) => {
+                let maps: Vec<(u32, f64)> = tids.iter().cloned().zip(online_log.iter().cloned()).collect();
+                o.assign_fragment(&maps, log_fm)
+            }
+            None => weights.clone(),
+        };
+
+        // train the error model + collect bias models, weighted by posteriors
+        let collecting = online.as_ref().is_none_or(|o| o.collecting());
+        if collecting {
+            for (ti, (tid, idxs)) in by_tid.iter().enumerate() {
+                let p = post[ti];
+                if p <= 0.0 {
+                    continue;
+                }
+                let refseq = ref_bytes.get(*tid as usize).map(|v| v.as_slice()).unwrap_or(&[]);
+                if let Some(m) = model.as_mut() {
+                    if !refseq.is_empty() {
+                        let lw = log_fm + p.ln();
+                        for (rank, &i) in idxs.iter().enumerate() {
+                            let r = &recs[i];
+                            m.update(&r.read_2bit, refseq, r.pos, &r.ops, rank == 0, lw);
+                        }
+                    }
+                }
+                if refseq.is_empty() {
+                    continue;
+                }
+                let (fs, fe, proper) = geom[ti];
+                let rl = refseq.len();
+                // sequence bias: 5' context (fwd) at frag start, 3' (rc) at frag end
+                if let Some(obs) = seq_obs.as_mut() {
+                    let s5 = fs as i32 - CONTEXT_LEFT as i32;
+                    if s5 >= 0 && (s5 as usize + CONTEXT_LENGTH) <= rl {
+                        obs.0.add_context(&refseq[s5 as usize..s5 as usize + CONTEXT_LENGTH], false, p);
+                    }
+                    if proper {
+                        let s3 = fe as i32 - CONTEXT_RIGHT as i32;
+                        if s3 >= 0 && (s3 as usize + CONTEXT_LENGTH) <= rl {
+                            obs.1.add_context(&refseq[s3 as usize..s3 as usize + CONTEXT_LENGTH], true, p);
+                        }
+                    }
+                }
+                // fragment-GC bias (paired fragments only)
+                if let (Some(gc), true) = (gc_obs.as_mut(), proper && fe < rl) {
+                    if let Some((ff, cf)) =
+                        salmon_model::gc_desc(&gc_prefix[*tid as usize], rl as i32, fs as i32, fe as i32)
+                    {
+                        gc.inc(ff, cf, p);
+                    }
+                }
+                // positional bias
+                if let Some(pos) = pos_obs.as_mut() {
+                    let lc = length_class.as_ref().unwrap()[*tid as usize];
+                    pos.0[lc].add_mass(fs as i32, rl as i32, p.ln());
+                    if proper {
+                        pos.1[lc].add_mass(fe as i32, rl as i32, p.ln());
+                    }
+                }
+            }
+        }
+
         let group = if opts.range_factorization_bins > 0 {
             let bins = range_factorize_bins(&weights, opts.range_factorization_bins);
             TranscriptGroup::with_bins(tids, bins)
@@ -383,10 +496,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         eq_builder.add_group(group, weights, 1);
     })?;
 
-    // ---- effective lengths, EM, TPM (shared logic with reads mode) ----------
-    // Base effective length = `refLen − E[L | L ≤ refLen]` (salmon's
-    // `computeSmoothedEffectiveLengths`); see the reads-mode driver for the
-    // rationale over the truncated-PMF estimate.
+    // ---- base effective lengths --------------------------------------------
     fld.cache();
     let cond_means = fld.conditional_means();
     let mut eff_lengths = vec![0f64; num_refs];
@@ -397,7 +507,94 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     let mut collapsed = eq_builder.finish();
     collapsed.update_eff_lengths(&eff_lengths);
     let num_eq_classes = collapsed.len();
-    let counts = optimize(&collapsed, num_refs, &opts.em).alphas;
+    let mut em = optimize(&collapsed, num_refs, &opts.em);
+
+    // ---- bias-corrected effective lengths (shared with reads mode) ----------
+    if bias_on {
+        let log_pmf = fld.log_pmf();
+        let pmf_lin: Vec<f64> = log_pmf.iter().map(|lp| lp.exp()).collect();
+        let (fld_cdf, fld_low, fld_high) = salmon_model::seqbias::fld_cdf_and_bounds(&pmf_lin);
+        let k = if opts.seq_bias { CONTEXT_LENGTH } else { 1 };
+        let refseq_of = |t: usize| ref_bytes[t].as_slice();
+
+        let seq = seq_obs.map(|(mut of, mut or)| {
+            of.normalize();
+            or.normalize();
+            let (ef, er) =
+                salmon_model::build_expected(num_refs, refseq_of, &em.alphas, &eff_lengths, &fld_cdf);
+            (of, or, ef, er)
+        });
+        let gc_ratio_model = gc_obs.map(|mut obs| {
+            let mut exp = salmon_model::build_expected_gc(
+                num_refs,
+                refseq_of,
+                |t| gc_prefix[t].as_slice(),
+                &em.alphas,
+                &eff_lengths,
+                &fld_cdf,
+                fld_low,
+                fld_high,
+                salmon_model::gcbias::DEFAULT_COND_BINS,
+                salmon_model::gcbias::DEFAULT_GC_BINS,
+                k,
+                salmon_model::GC_SAMP_STRIDE,
+            );
+            salmon_model::gc_ratio(&mut obs, &mut exp, salmon_model::gcbias::GC_MAX_RATIO)
+        });
+        let pos_models = pos_obs.map(|(mut of, mut or)| {
+            for x in of.iter_mut().chain(or.iter_mut()) {
+                x.finalize();
+            }
+            let (ef, er) = salmon_model::build_expected_pos(
+                num_refs,
+                |t| lengths[t] as usize,
+                &em.alphas,
+                &eff_lengths,
+                &fld_cdf,
+                length_quantiles.as_ref().unwrap(),
+                k,
+            );
+            (of, or, ef, er)
+        });
+
+        for tid in 0..num_refs {
+            if em.alphas[tid] < 1e-8 {
+                continue;
+            }
+            let s = ref_bytes[tid].as_slice();
+            let pos_vecs: Option<(Vec<f64>, Vec<f64>)> = pos_models.as_ref().map(|(ofw, orc, efw, erc)| {
+                let lc = length_class.as_ref().unwrap()[tid];
+                let rl = s.len();
+                let (mut o5, mut e5) = (vec![0.0; rl], vec![0.0; rl]);
+                let (mut o3, mut e3) = (vec![0.0; rl], vec![0.0; rl]);
+                ofw[lc].project_weights(&mut o5);
+                efw[lc].project_weights(&mut e5);
+                orc[lc].project_weights(&mut o3);
+                erc[lc].project_weights(&mut e3);
+                (
+                    salmon_model::positional_factor(&o5, &e5),
+                    salmon_model::positional_factor(&o3, &e3),
+                )
+            });
+            let bias = salmon_model::BiasInputs {
+                seq: seq.as_ref().map(|(of, or, ef, er)| (of, ef, or, er)),
+                gc: gc_ratio_model.as_ref().map(|g| (g, gc_prefix[tid].as_slice())),
+                pos: pos_vecs.as_ref().map(|(pf, pr)| (pf.as_slice(), pr.as_slice())),
+            };
+            eff_lengths[tid] = salmon_model::corrected_effective_length_full(
+                s,
+                &fld_cdf,
+                fld_low,
+                fld_high,
+                &bias,
+                eff_lengths[tid],
+                salmon_model::GC_SAMP_STRIDE,
+            );
+        }
+        collapsed.update_eff_lengths(&eff_lengths);
+        em = optimize(&collapsed, num_refs, &opts.em);
+    }
+    let counts = em.alphas;
 
     let rates: Vec<f64> = (0..num_refs)
         .map(|i| if eff_lengths[i] > 0.0 { counts[i] / eff_lengths[i] } else { 0.0 })

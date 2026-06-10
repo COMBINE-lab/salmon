@@ -23,6 +23,18 @@ const NUM_STATES: usize = 9;
 const NUM_ALN_STATES: usize = 82;
 const START_STATE: usize = 81;
 
+/// 2-bit encode a reference base (`A=0,C=1,G=2,T=3`; else 0).
+#[inline]
+fn ref_2bit(b: u8) -> usize {
+    match b {
+        b'A' | b'a' => 0,
+        b'C' | b'c' => 1,
+        b'G' | b'g' => 2,
+        b'T' | b't' => 3,
+        _ => 0,
+    }
+}
+
 /// A CIGAR operation (the subset salmon distinguishes).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AlnOp {
@@ -129,17 +141,17 @@ impl AlignmentModel {
     /// Walk an alignment's CIGAR producing the `(read_pos_bin, prev, cur)`
     /// transitions, invoking `f(bin, prev, cur)` for each. `read_2bit` is the
     /// read's 2-bit bases (reference-forward orientation, as stored in the BAM);
-    /// `ref_2bit` the transcript's 2-bit bases; `pos` the 0-based alignment start.
+    /// `ref_bytes` the transcript's ASCII bases; `pos` the 0-based alignment start.
     fn walk<F: FnMut(usize, usize, usize)>(
         &self,
         read_2bit: &[u8],
-        ref_2bit: &[u8],
+        ref_bytes: &[u8],
         pos: usize,
         ops: &[(AlnOp, usize)],
         mut f: F,
     ) {
         let read_len = read_2bit.len();
-        if read_len == 0 || ref_2bit.is_empty() {
+        if read_len == 0 || ref_bytes.is_empty() {
             return;
         }
         let inv_len = self.read_bins as f64 / read_len as f64;
@@ -151,11 +163,11 @@ impl AlignmentModel {
                 if op.consume_seq() && read_idx >= read_len {
                     return; // inconsistent CIGAR
                 }
-                if op.consume_ref() && ref_idx >= ref_2bit.len() {
+                if op.consume_ref() && ref_idx >= ref_bytes.len() {
                     return;
                 }
                 let mut cur_read = if op.consume_seq() { read_2bit[read_idx] as usize } else { 0 };
-                let mut cur_ref = if op.consume_ref() { ref_2bit[ref_idx] as usize } else { 0 };
+                let mut cur_ref = if op.consume_ref() { ref_2bit(ref_bytes[ref_idx]) } else { 0 };
                 op.set_bases(&mut cur_ref, &mut cur_read);
                 let bin = ((read_idx as f64 * inv_len) as usize).min(self.read_bins - 1);
                 let cur = cur_ref * NUM_STATES + cur_read;
@@ -176,7 +188,7 @@ impl AlignmentModel {
     pub fn update(
         &mut self,
         read_2bit: &[u8],
-        ref_2bit: &[u8],
+        ref_bytes: &[u8],
         pos: usize,
         ops: &[(AlnOp, usize)],
         is_left: bool,
@@ -184,7 +196,7 @@ impl AlignmentModel {
     ) {
         // Collect transitions first (immutable walk), then apply (mutable).
         let mut trans: Vec<(usize, usize, usize)> = Vec::new();
-        self.walk(read_2bit, ref_2bit, pos, ops, |bin, prev, cur| {
+        self.walk(read_2bit, ref_bytes, pos, ops, |bin, prev, cur| {
             trans.push((bin, prev, cur));
         });
         let mats = if is_left { &mut self.left } else { &mut self.right };
@@ -198,7 +210,7 @@ impl AlignmentModel {
     pub fn log_likelihood(
         &self,
         read_2bit: &[u8],
-        ref_2bit: &[u8],
+        ref_bytes: &[u8],
         pos: usize,
         ops: &[(AlnOp, usize)],
         is_left: bool,
@@ -206,7 +218,7 @@ impl AlignmentModel {
         let mats = if is_left { &self.left } else { &self.right };
         let mut fg = 0.0; // LOG_1
         let mut bg = 0.0;
-        self.walk(read_2bit, ref_2bit, pos, ops, |bin, prev, cur| {
+        self.walk(read_2bit, ref_bytes, pos, ops, |bin, prev, cur| {
             fg += mats[bin].get(prev, cur);
             bg += mats[bin].get(0, 0);
         });
@@ -221,7 +233,7 @@ mod tests {
     // A perfect 5-base match: A C G T A against the same reference.
     fn perfect() -> (Vec<u8>, Vec<u8>, Vec<(AlnOp, usize)>) {
         let read = vec![0u8, 1, 2, 3, 0];
-        let refs = vec![0u8, 1, 2, 3, 0];
+        let refs = b"ACGTA".to_vec();
         (read, refs, vec![(AlnOp::Match, 5)])
     }
 
