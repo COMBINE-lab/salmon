@@ -24,6 +24,15 @@ pub struct PairingConfig {
     pub allow_orphans: bool,
     /// permit dovetailed pairs (mates extending past each other)
     pub allow_dovetail: bool,
+    /// Orphan chain sub-optimality threshold (salmon's `orphanChainSubThresh`,
+    /// default there 0.95): when `> 0`, keep an orphan mapping only if its chain
+    /// read-coverage is `>= orphan_chain_sub_thresh * (best orphan chain coverage)`.
+    /// salmon uses this to trust the highest-chain-coverage orphan candidate and
+    /// prune the rest *before* alignment (a speed heuristic that can drop a
+    /// lower-coverage but better-aligning paralog). We default to **0.0 (off)** so
+    /// every orphan candidate is aligned — slightly more sensitive than salmon on
+    /// divergent gene-family reads. Raise toward 0.95 to mirror salmon exactly.
+    pub orphan_chain_sub_thresh: f32,
 }
 
 impl Default for PairingConfig {
@@ -32,6 +41,7 @@ impl Default for PairingConfig {
             max_fragment_len: 1000,
             allow_orphans: true,
             allow_dovetail: false,
+            orphan_chain_sub_thresh: 0.0,
         }
     }
 }
@@ -176,13 +186,28 @@ pub fn join_reads_and_filter(
 
     // Orphans for references that did not yield a concordant pair.
     if cfg.allow_orphans {
+        // Optional orphan chain sub-optimality prune (salmon's orphanChainSubThresh;
+        // off by default — see PairingConfig). When enabled, only orphan candidates
+        // whose chain coverage is within `thresh` of the best orphan chain survive.
+        let cutoff = if cfg.orphan_chain_sub_thresh > 0.0 {
+            let best = left
+                .iter()
+                .chain(right.iter())
+                .filter(|c| !paired_tids.contains(&c.tid))
+                .map(|c| c.chain.covered_read_bases())
+                .max()
+                .unwrap_or(0);
+            (cfg.orphan_chain_sub_thresh * best as f32).ceil() as i32
+        } else {
+            0
+        };
         for c in &left {
-            if !paired_tids.contains(&c.tid) {
+            if !paired_tids.contains(&c.tid) && c.chain.covered_read_bases() >= cutoff {
                 joints.push(orphan(c.clone(), MateStatus::PairedEndLeft));
             }
         }
         for c in &right {
-            if !paired_tids.contains(&c.tid) {
+            if !paired_tids.contains(&c.tid) && c.chain.covered_read_bases() >= cutoff {
                 joints.push(orphan(c.clone(), MateStatus::PairedEndRight));
             }
         }

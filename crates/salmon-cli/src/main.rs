@@ -195,6 +195,11 @@ struct QuantArgs {
     /// Minimum alignment score as a fraction of the perfect score.
     #[arg(long = "minScoreFraction", default_value_t = 0.65)]
     min_score_fraction: f32,
+    /// Orphan chain sub-optimality threshold (salmon's `orphanChainSubThresh`).
+    /// `0.0` (default) aligns every orphan candidate (more sensitive than salmon's
+    /// 0.95, which prunes low-chain-coverage orphans before alignment).
+    #[arg(long = "orphanChainSubThresh", default_value_t = 0.0)]
+    orphan_chain_sub_thresh: f32,
     /// Score the full read with one DP instead of PuffAligner-style inter-MEM-gap scoring.
     #[arg(long = "fullLengthAlignment")]
     full_length_alignment: bool,
@@ -352,6 +357,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.thinning_factor = args.thinning_factor;
     opts.no_length_correction = args.no_length_correction;
     opts.map_config.align.min_score_fraction = args.min_score_fraction;
+    opts.map_config.pair.orphan_chain_sub_thresh = args.orphan_chain_sub_thresh;
     opts.map_config.align.full_length_alignment = args.full_length_alignment;
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems);
 
