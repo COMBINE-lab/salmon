@@ -26,6 +26,7 @@ pub fn write_outputs(opts: &QuantOptions, res: &QuantResult) -> Result<()> {
     write_ambig_info(&dir.join("aux_info").join("ambig_info.tsv"), res)?;
     write_flen_dist(&dir.join("libParams").join("flenDist.txt"), res)?;
     write_quant_log(&dir.join("logs").join("salmon_quant.log"), opts, res)?;
+    write_fld_dump(&dir.join("aux_info").join("fld.gz"), res)?;
     if !res.bootstraps.is_empty() {
         write_bootstraps(&dir.join("aux_info").join("bootstrap"), res)?;
     }
@@ -47,6 +48,26 @@ fn write_flen_dist(path: &Path, res: &QuantResult) -> Result<()> {
     }
     s.push('\n');
     std::fs::write(path, s).with_context(|| format!("writing {}", path.display()))?;
+    Ok(())
+}
+
+/// `aux_info/fld.gz`: the fragment-length distribution as a per-length sample
+/// histogram. salmon draws 10,000 samples from the log-PMF and gzip-writes the
+/// resulting `i32` per-length counts (raw little-endian). We write the
+/// deterministic expected histogram `round(10000 * pmf[len])` — same type and
+/// layout (gzip of `i32` LE), content matching salmon's up to sampling noise.
+fn write_fld_dump(path: &Path, res: &QuantResult) -> Result<()> {
+    use std::io::Write as _;
+    const N_SAMPLES: f64 = 10000.0;
+    let mut bytes = Vec::with_capacity(res.frag_len_dist.len() * 4);
+    for &p in &res.frag_len_dist {
+        let count = (p * N_SAMPLES).round() as i32;
+        bytes.extend_from_slice(&count.to_le_bytes());
+    }
+    let f = std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
+    let mut enc = flate2::write::GzEncoder::new(f, flate2::Compression::new(6));
+    enc.write_all(&bytes).context("writing fld.gz")?;
+    enc.finish().context("finishing fld.gz")?;
     Ok(())
 }
 
