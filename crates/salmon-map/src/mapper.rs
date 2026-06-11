@@ -238,6 +238,18 @@ pub fn map_read_pair<'idx, R: RefProvider>(
                             r2_fw: r.is_fw,
                             r1_score: al.score,
                         });
+                    } else if al.valid {
+                        // The concordant pair was rejected because the *other* mate's
+                        // alignment fell below threshold (or the pairing was an
+                        // invalid orientation). Rescue the valid mate as an orphan —
+                        // salmon emits an `m1`/`m2` orphan here rather than dropping
+                        // the whole fragment. Forming the (failed) pair had otherwise
+                        // suppressed this mate's orphan in `join_reads_and_filter`.
+                        raw.push(orphan_raw(j.tid, l, al.score, true, refs.is_decoy(j.tid)));
+                        below += 1;
+                    } else if ar.valid {
+                        raw.push(orphan_raw(j.tid, r, ar.score, false, refs.is_decoy(j.tid)));
+                        below += 1;
                     } else {
                         below += 1;
                     }
@@ -269,6 +281,39 @@ pub fn map_read_pair<'idx, R: RefProvider>(
 #[inline]
 fn index_seq<R: RefProvider>(refs: &R, tid: u32) -> &[u8] {
     refs.ref_seq(tid)
+}
+
+/// Build an orphan [`RawMapping`] for a single mate's validated chain (used when
+/// a concordant pair is rejected but one mate aligns well — the salmon `m1`/`m2`
+/// orphan-rescue). `is_left` selects read1 vs read2.
+fn orphan_raw(
+    tid: u32,
+    c: &MappingCandidate,
+    score: i32,
+    is_left: bool,
+    is_decoy: bool,
+) -> RawMapping {
+    let start = c.chain.ref_start();
+    RawMapping {
+        tid,
+        is_fw: c.is_fw,
+        status: if is_left {
+            MateStatus::PairedEndLeft
+        } else {
+            MateStatus::PairedEndRight
+        },
+        score,
+        fragment_len: 0,
+        is_decoy,
+        ref_pos: start,
+        fw_pos: if c.is_fw { start } else { -1 },
+        rc_pos: if c.is_fw { -1 } else { start },
+        format: None,
+        r1_pos: if is_left { start } else { -1 },
+        r2_pos: if is_left { -1 } else { start },
+        r2_fw: false,
+        r1_score: score,
+    }
 }
 
 /// Diagnostic detail for the best mapping of a single read.
