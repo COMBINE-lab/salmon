@@ -84,10 +84,16 @@ pub fn corrected_effective_length_full(
     }
     let cond = |x: i32| conditional_cdf(cdf, cdf_max_arg, cdf_max_val, x);
 
-    // Per-position sequence-bias factors (1.0 when not seq-correcting).
-    let mut fw = vec![1.0f64; ref_len];
-    let mut rc = vec![1.0f64; ref_len];
+    // Per-position sequence-bias factors. Only built (and applied in the inner
+    // loop) when `--seqBias` is on; otherwise the factors are all 1.0, so we
+    // skip both the per-transcript allocation and the per-fragment multiply
+    // entirely (the common `--gcBias`-only case).
+    let have_seq = bias.seq.is_some();
+    let mut fw: Vec<f64> = Vec::new();
+    let mut rc: Vec<f64> = Vec::new();
     if let Some((obs_fw, exp_fw, obs_rc, exp_rc)) = bias.seq {
+        fw = vec![1.0f64; ref_len];
+        rc = vec![1.0f64; ref_len];
         let cu = CONTEXT_LEFT;
         let rc_seq = revcomp_bytes(seq);
         for frag_start in 0..(ref_len - CONTEXT_LENGTH) {
@@ -137,7 +143,11 @@ pub fn corrected_effective_length_full(
             let frag_start = kstart;
             let frag_end = kstart + fl - 1;
             if (frag_end as usize) < ref_len {
-                let mut frag_factor = fw[frag_start as usize] * rc[frag_end as usize];
+                let mut frag_factor = if have_seq {
+                    fw[frag_start as usize] * rc[frag_end as usize]
+                } else {
+                    1.0
+                };
                 if let Some(gc) = gc_model {
                     if let Some((ff, cf)) = gc_desc(gc_prefix, ref_len as i32, frag_start, frag_end)
                     {
