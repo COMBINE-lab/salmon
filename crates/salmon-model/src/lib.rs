@@ -5,6 +5,7 @@
 //! positional) and the alignment error model are added in later phases.
 
 pub mod bias;
+pub mod dumps;
 pub mod fld;
 pub mod gcbias;
 pub mod libdetect;

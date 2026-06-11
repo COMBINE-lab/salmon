@@ -27,6 +27,7 @@ use salmon_eqclass::EquivalenceClassBuilder;
 use salmon_index::SalmonIndex;
 use salmon_infer::{optimize, EmOptions};
 use salmon_map::MapConfig;
+use salmon_model::dumps::BiasDump;
 use salmon_model::{FragmentLengthDistribution, LibraryTypeDetector, SBModel};
 
 use processor::{QuantProcessor, Shared};
@@ -151,24 +152,6 @@ pub struct QuantResult {
     /// observed/expected bias-model tables for the aux dumps; each component is
     /// empty unless the corresponding `--seqBias`/`--gcBias`/`--posBias` ran
     pub bias_dump: BiasDump,
-}
-
-/// Flattened observed/expected bias-model tables captured for the `aux_info`
-/// dump files. Each group is empty when its bias correction was not enabled.
-/// Seq tables are the [`SBModel`] transition tables; GC the `cond×gc` matrices;
-/// pos the per-length-class [`salmon_model::SimplePosBias`] bin masses.
-#[derive(Debug, Clone, Default)]
-pub struct BiasDump {
-    pub obs5_seq: Vec<f64>,
-    pub obs3_seq: Vec<f64>,
-    pub exp5_seq: Vec<f64>,
-    pub exp3_seq: Vec<f64>,
-    pub obs_gc: Vec<f64>,
-    pub exp_gc: Vec<f64>,
-    pub obs5_pos: Vec<Vec<f64>>,
-    pub obs3_pos: Vec<Vec<f64>>,
-    pub exp5_pos: Vec<Vec<f64>>,
-    pub exp3_pos: Vec<Vec<f64>>,
 }
 
 /// Run quantification end-to-end, writing outputs and returning the results.

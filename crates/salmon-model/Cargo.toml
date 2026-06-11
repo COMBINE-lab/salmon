@@ -11,6 +11,7 @@ description = "Statistical models for the salmon Rust port: fragment-length dist
 [dependencies]
 salmon-core = { path = "../salmon-core" }
 statrs = { workspace = true }
+flate2 = { workspace = true }
 
 [lints.rust]
 unsafe_code = "warn"

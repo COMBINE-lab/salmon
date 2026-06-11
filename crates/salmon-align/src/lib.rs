@@ -96,6 +96,18 @@ pub struct AlignQuantResult {
     pub num_mapped: u64,
     pub num_eq_classes: usize,
     pub frag_len_mean: f64,
+    pub frag_len_sd: f64,
+    pub length_classes: Vec<u32>,
+    pub frag_len_dist: Vec<f64>,
+    pub start_time: String,
+    pub bias_dump: salmon_model::dumps::BiasDump,
+    /// per-transcript (unique, ambiguous) fragment counts for `ambig_info.tsv`
+    pub ambig: (Vec<u32>, Vec<u32>),
+}
+
+/// Current local time as an asctime-style string, matching salmon's timestamps.
+fn asctime_now() -> String {
+    jiff::Zoned::now().strftime("%a %b %e %H:%M:%S %Y").to_string()
 }
 
 /// Extract an integer tag value (e.g. `AS`) as `i32`.
@@ -482,6 +494,7 @@ fn coordinate_sorted_unusable(header: &noodles_sam::Header) -> bool {
 
 /// Run alignment-based quantification end-to-end.
 pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult> {
+    let start_time = asctime_now();
     let mut reader = bam::io::Reader::new(
         std::fs::File::open(&opts.bam).with_context(|| format!("opening {}", opts.bam.display()))?,
     );
@@ -845,6 +858,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     let mut em = optimize(&collapsed, num_refs, &opts.em);
 
     // ---- bias-corrected effective lengths (shared with reads mode) ----------
+    let mut bias_dump = salmon_model::dumps::BiasDump::default();
     if bias_on {
         let log_pmf = fld.log_pmf();
         let pmf_lin: Vec<f64> = log_pmf.iter().map(|lp| lp.exp()).collect();
@@ -859,7 +873,13 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
                 salmon_model::build_expected(num_refs, refseq_of, &em.alphas, &eff_lengths, &fld_cdf);
             (of, or, ef, er)
         });
-        let gc_ratio_model = gc_obs.map(|mut obs| {
+        if let Some((of, or, ef, er)) = seq.as_ref() {
+            bias_dump.obs5_seq = of.dump().to_vec();
+            bias_dump.obs3_seq = or.dump().to_vec();
+            bias_dump.exp5_seq = ef.dump().to_vec();
+            bias_dump.exp3_seq = er.dump().to_vec();
+        }
+        let gc_ratio_model = if let Some(mut obs) = gc_obs {
             let mut exp = salmon_model::build_expected_gc(
                 num_refs,
                 refseq_of,
@@ -874,8 +894,14 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
                 k,
                 salmon_model::GC_SAMP_STRIDE,
             );
-            salmon_model::gc_ratio(&mut obs, &mut exp, salmon_model::gcbias::GC_MAX_RATIO)
-        });
+            obs.normalize();
+            exp.normalize();
+            bias_dump.obs_gc = obs.dump().to_vec();
+            bias_dump.exp_gc = exp.dump().to_vec();
+            Some(salmon_model::gc_ratio(&mut obs, &mut exp, salmon_model::gcbias::GC_MAX_RATIO))
+        } else {
+            None
+        };
         let pos_models = pos_obs.map(|(mut of, mut or)| {
             for x in of.iter_mut().chain(or.iter_mut()) {
                 x.finalize();
@@ -891,6 +917,13 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             );
             (of, or, ef, er)
         });
+        if let Some((ofw, orc, efw, erc)) = pos_models.as_ref() {
+            let masses = |v: &[salmon_model::SimplePosBias]| v.iter().map(|m| m.masses().to_vec()).collect();
+            bias_dump.obs5_pos = masses(ofw);
+            bias_dump.obs3_pos = masses(orc);
+            bias_dump.exp5_pos = masses(efw);
+            bias_dump.exp3_pos = masses(erc);
+        }
 
         for tid in 0..num_refs {
             if em.alphas[tid] < 1e-8 {
@@ -940,6 +973,11 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         .map(|r| if rate_sum > 0.0 { r / rate_sum * 1e6 } else { 0.0 })
         .collect();
 
+    let length_classes =
+        salmon_model::compute_length_quantiles(&lengths, salmon_model::NUM_LENGTH_CLASSES);
+    let ambig = salmon_infer::ambiguity_counts(&salmon_infer::PackedEqClasses::from_collapsed(
+        &collapsed, num_refs,
+    ));
     let result = AlignQuantResult {
         names,
         lengths,
@@ -950,6 +988,12 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         num_mapped,
         num_eq_classes,
         frag_len_mean: fld.mean(),
+        frag_len_sd: fld.sd(),
+        length_classes,
+        frag_len_dist: fld.log_pmf().iter().map(|lp| lp.exp()).collect(),
+        start_time,
+        bias_dump,
+        ambig,
     };
     write_outputs(opts, &result)?;
     Ok(result)
@@ -971,41 +1015,163 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
     }
     w.flush()?;
 
-    // aux_info/meta_info.json
+    // aux_info/meta_info.json — full field set, matching salmon's alignment mode
+    // (no index hashes since there is no index; no keep_duplicates).
     #[derive(Serialize)]
     struct MetaInfo {
         salmon_version: String,
-        mapping_type: String,
+        samp_type: String,
+        opt_type: String,
+        quant_errors: Vec<String>,
+        num_libraries: usize,
         library_types: Vec<String>,
+        frag_dist_length: usize,
+        frag_length_mean: f64,
+        frag_length_sd: f64,
+        seq_bias_correct: bool,
+        gc_bias_correct: bool,
+        num_bias_bins: usize,
+        mapping_type: String,
+        // index hashes are empty in alignment mode (no salmon index)
+        index_seq_hash: String,
+        index_name_hash: String,
+        index_seq_hash512: String,
+        index_name_hash512: String,
+        index_decoy_seq_hash: String,
+        index_decoy_name_hash: String,
         num_valid_targets: usize,
+        num_decoy_targets: usize,
         num_eq_classes: usize,
+        serialized_eq_classes: bool,
+        eq_class_properties: Vec<String>,
+        length_classes: Vec<u32>,
         num_processed: u64,
         num_mapped: u64,
+        num_dovetail_fragments: u64,
+        num_fragments_filtered_vm: u64,
+        num_alignments_below_threshold_for_mapped_fragments_vm: u64,
         percent_mapped: f64,
-        frag_length_mean: f64,
+        num_decoy_fragments: u64,
+        num_bootstraps: u32,
         call: String,
+        start_time: String,
+        end_time: String,
     }
     let pct = if res.num_processed > 0 {
         100.0 * res.num_mapped as f64 / res.num_processed as f64
     } else {
         0.0
     };
+    let eq_class_properties = if opts.range_factorization_bins > 0 {
+        vec!["range_factorized".to_string(), "gzipped".to_string()]
+    } else {
+        vec!["gzipped".to_string()]
+    };
     let meta = MetaInfo {
         salmon_version: SALMON_VERSION.to_string(),
-        mapping_type: "alignment".to_string(),
+        samp_type: "none".to_string(),
+        opt_type: if opts.em.use_vbem { "vb" } else { "em" }.to_string(),
+        quant_errors: vec![],
+        num_libraries: 1,
         library_types: vec![opts.lib_type.clone()],
+        frag_dist_length: res.frag_len_dist.len(),
+        frag_length_mean: res.frag_len_mean,
+        frag_length_sd: res.frag_len_sd,
+        seq_bias_correct: opts.seq_bias,
+        gc_bias_correct: opts.gc_bias,
+        num_bias_bins: 0,
+        mapping_type: "alignment".to_string(),
+        index_seq_hash: String::new(),
+        index_name_hash: String::new(),
+        index_seq_hash512: String::new(),
+        index_name_hash512: String::new(),
+        index_decoy_seq_hash: String::new(),
+        index_decoy_name_hash: String::new(),
         num_valid_targets: res.names.len(),
+        num_decoy_targets: 0,
         num_eq_classes: res.num_eq_classes,
+        serialized_eq_classes: false,
+        eq_class_properties,
+        length_classes: res.length_classes.clone(),
         num_processed: res.num_processed,
         num_mapped: res.num_mapped,
+        num_dovetail_fragments: 0,
+        num_fragments_filtered_vm: 0,
+        num_alignments_below_threshold_for_mapped_fragments_vm: 0,
         percent_mapped: pct,
-        frag_length_mean: res.frag_len_mean,
-        call: "quant-alignment".to_string(),
+        num_decoy_fragments: 0,
+        num_bootstraps: 0,
+        call: "quant".to_string(),
+        start_time: res.start_time.clone(),
+        end_time: asctime_now(),
     };
     std::fs::write(
         dir.join("aux_info").join("meta_info.json"),
         serde_json::to_string_pretty(&meta)?,
     )?;
+
+    // libParams/flenDist.txt, logs/salmon_quant.log, and the aux dumps (shared).
+    std::fs::create_dir_all(dir.join("libParams")).context("creating libParams")?;
+    salmon_model::dumps::write_flen_dist(&dir.join("libParams").join("flenDist.txt"), &res.frag_len_dist)
+        .context("writing flenDist.txt")?;
+    salmon_model::dumps::write_fld_dump(&dir.join("aux_info").join("fld.gz"), &res.frag_len_dist)
+        .context("writing fld.gz")?;
+    salmon_model::dumps::write_aux_bias_dumps(&dir.join("aux_info"), &res.bias_dump)
+        .context("writing aux bias dumps")?;
+    std::fs::create_dir_all(dir.join("logs")).context("creating logs")?;
+    let log = format!(
+        "salmon (rust port, alignment mode) v{SALMON_VERSION}\nstart: {}\nend:   {}\n\
+         library type: {}\nobserved fragments: {}\nmapped fragments:   {}\nmapping rate: {pct:.4}%\n\
+         number of equivalence classes: {}\nfragment length mean (sd): {:.2} ({:.2})\n",
+        res.start_time,
+        asctime_now(),
+        opts.lib_type,
+        res.num_processed,
+        res.num_mapped,
+        res.num_eq_classes,
+        res.frag_len_mean,
+        res.frag_len_sd,
+    );
+    std::fs::write(dir.join("logs").join("salmon_quant.log"), log).context("writing salmon_quant.log")?;
+
+    // aux_info/ambig_info.tsv
+    {
+        let (uniq, ambig) = &res.ambig;
+        let mut w = std::io::BufWriter::new(std::fs::File::create(
+            dir.join("aux_info").join("ambig_info.tsv"),
+        )?);
+        writeln!(w, "UniqueCount\tAmbigCount")?;
+        for i in 0..uniq.len() {
+            writeln!(w, "{}\t{}", uniq[i], ambig[i])?;
+        }
+        w.flush()?;
+    }
+
+    // cmd_info.json — the invocation record.
+    #[derive(Serialize)]
+    struct CmdInfo {
+        salmon_version: String,
+        alignments: String,
+        targets: String,
+        #[serde(rename = "libType")]
+        lib_type: String,
+        output: String,
+        #[serde(rename = "auxDir")]
+        aux_dir: String,
+    }
+    let cmd = CmdInfo {
+        salmon_version: SALMON_VERSION.to_string(),
+        alignments: opts.bam.display().to_string(),
+        targets: opts
+            .transcripts
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
+        lib_type: opts.lib_type.clone(),
+        output: opts.output_dir.display().to_string(),
+        aux_dir: "aux_info".to_string(),
+    };
+    std::fs::write(dir.join("cmd_info.json"), serde_json::to_string_pretty(&cmd)?)?;
     Ok(())
 }
 
