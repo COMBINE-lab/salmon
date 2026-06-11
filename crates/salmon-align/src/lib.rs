@@ -75,6 +75,9 @@ pub struct AlignQuantOptions {
     /// initialize the EM uniformly instead of with the online-estimate-blended
     /// warm start (`--initUniform`)
     pub init_uniform: bool,
+    /// significant digits for the EffectiveLength and NumReads columns of
+    /// `quant.sf` (`--sigDigits`, salmon default 3)
+    pub sig_digits: u32,
 }
 
 impl AlignQuantOptions {
@@ -97,6 +100,7 @@ impl AlignQuantOptions {
             fld_max: 1000,
             forgetting_factor: 0.65,
             init_uniform: false,
+            sig_digits: 3,
         }
     }
 }
@@ -1355,14 +1359,15 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
     let dir = &opts.output_dir;
     std::fs::create_dir_all(dir.join("aux_info")).context("creating output dirs")?;
 
-    // quant.sf
+    // quant.sf (EffectiveLength + NumReads at --sigDigits decimals; TPM at 6)
+    let sd = opts.sig_digits as usize;
     let mut w = std::io::BufWriter::new(std::fs::File::create(dir.join("quant.sf"))?);
     writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
     for i in 0..res.names.len() {
         writeln!(
             w,
-            "{}\t{}\t{:.3}\t{:.6}\t{:.3}",
-            res.names[i], res.lengths[i], res.eff_lengths[i], res.tpm[i], res.counts[i]
+            "{}\t{}\t{:.*}\t{:.6}\t{:.*}",
+            res.names[i], res.lengths[i], sd, res.eff_lengths[i], res.tpm[i], sd, res.counts[i]
         )?;
     }
     w.flush()?;

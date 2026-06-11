@@ -93,6 +93,9 @@ pub struct QuantOptions {
     pub fld_max: usize,
     /// online-phase forgetting factor (`--forgettingFactor`, salmon default 0.65)
     pub forgetting_factor: f64,
+    /// significant digits for the EffectiveLength and NumReads columns of
+    /// `quant.sf` (`--sigDigits`, salmon default 3)
+    pub sig_digits: u32,
 }
 
 impl QuantOptions {
@@ -126,6 +129,7 @@ impl QuantOptions {
             fld_sd: 25.0,
             fld_max: 1000,
             forgetting_factor: 0.65,
+            sig_digits: 3,
         }
     }
 

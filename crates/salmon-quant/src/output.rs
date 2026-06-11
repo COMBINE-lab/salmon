@@ -19,7 +19,7 @@ pub fn write_outputs(opts: &QuantOptions, res: &QuantResult) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     std::fs::create_dir_all(dir.join("aux_info")).context("creating aux_info")?;
 
-    write_quant_sf(&dir.join("quant.sf"), res)?;
+    write_quant_sf(&dir.join("quant.sf"), res, opts.sig_digits as usize)?;
     write_cmd_info(&dir.join("cmd_info.json"), opts)?;
     write_lib_counts(&dir.join("lib_format_counts.json"), opts, res)?;
     write_meta_info(&dir.join("aux_info").join("meta_info.json"), opts, res)?;
@@ -115,19 +115,27 @@ fn write_bootstraps(dir: &Path, res: &QuantResult) -> Result<()> {
 }
 
 /// `quant.sf`: `Name  Length  EffectiveLength  TPM  NumReads`.
-fn write_quant_sf(path: &Path, res: &QuantResult) -> Result<()> {
+fn write_quant_sf(path: &Path, res: &QuantResult, sig_digits: usize) -> Result<()> {
     let mut w = std::io::BufWriter::new(
         std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?,
     );
     writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
     // Decoy references (indices >= first_decoy_index) are never quantified and
     // are excluded from quant.sf, matching salmon.
+    // salmon writes EffectiveLength and NumReads with `--sigDigits` decimals
+    // (default 3) and TPM with the fixed `{:f}` (6-decimal) format.
     let n = res.first_decoy_index.unwrap_or(res.names.len());
     for i in 0..n {
         writeln!(
             w,
-            "{}\t{}\t{:.3}\t{:.6}\t{:.3}",
-            res.names[i], res.lengths[i], res.eff_lengths[i], res.tpm[i], res.counts[i]
+            "{}\t{}\t{:.*}\t{:.6}\t{:.*}",
+            res.names[i],
+            res.lengths[i],
+            sig_digits,
+            res.eff_lengths[i],
+            res.tpm[i],
+            sig_digits,
+            res.counts[i]
         )?;
     }
     w.flush()?;

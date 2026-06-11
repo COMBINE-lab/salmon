@@ -261,6 +261,9 @@ struct QuantArgs {
     /// Interpret --vbPrior as a per-nucleotide prior (scaled by effective length).
     #[arg(long = "perNucleotidePrior", conflicts_with = "per_transcript_prior")]
     per_nucleotide_prior: bool,
+    /// Significant digits for the EffectiveLength and NumReads columns of quant.sf.
+    #[arg(long = "sigDigits", default_value_t = 3)]
+    sig_digits: u32,
 }
 
 /// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
@@ -363,6 +366,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
         opts.incompat_prior = args.incompat_prior;
         opts.em.vb_prior = args.vb_prior;
         opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
+        opts.sig_digits = args.sig_digits;
         opts.fld_mean = args.fld_mean;
         opts.fld_sd = args.fld_sd;
         opts.fld_max = args.fld_max;
@@ -431,6 +435,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     // inference + fragment-length-distribution knobs
     opts.em.vb_prior = args.vb_prior;
     opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
+    opts.sig_digits = args.sig_digits;
     opts.fld_mean = args.fld_mean;
     opts.fld_sd = args.fld_sd;
     opts.fld_max = args.fld_max;
