@@ -133,17 +133,24 @@ pub(crate) fn run_em_counts(
     let prior_alphas = vec![opts.vb_prior; num_txps];
     let mut exp_theta = vec![0.0f64; num_txps];
     let mut scratch: Vec<f64> = Vec::with_capacity(64);
+    // Shared atomic accumulator reused across all parallel M-steps (allocated once
+    // here rather than per-task per-iteration).
+    let acc: Vec<salmon_core::atomic::AtomicF64> = if parallel {
+        (0..num_txps).map(|_| salmon_core::atomic::AtomicF64::new(0.0)).collect()
+    } else {
+        Vec::new()
+    };
 
     let mut converged = false;
     let mut it = 0u32;
     while it < opts.max_iter {
         match (opts.use_vbem, parallel) {
-            (false, true) => packed::em_step_par(p, counts, &alphas, &mut alphas_prime),
+            (false, true) => packed::em_step_par(p, counts, &alphas, &mut alphas_prime, &acc),
             (false, false) => {
                 packed::em_step_seq(p, counts, &alphas, &mut alphas_prime, &mut scratch)
             }
             (true, true) => packed::vbem_step_par(
-                p, counts, &prior_alphas, &alphas, &mut alphas_prime, &mut exp_theta,
+                p, counts, &prior_alphas, &alphas, &mut alphas_prime, &mut exp_theta, &acc,
             ),
             (true, false) => packed::vbem_step_seq(
                 p, counts, &prior_alphas, &alphas, &mut alphas_prime, &mut exp_theta,

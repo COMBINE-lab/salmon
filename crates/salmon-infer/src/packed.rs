@@ -13,6 +13,7 @@
 //! is the class's fragment count (overridable per run so bootstrap can resample).
 
 use rayon::prelude::*;
+use salmon_core::atomic::AtomicF64;
 use salmon_eqclass::CollapsedEqClasses;
 use statrs::function::gamma::digamma;
 
@@ -135,48 +136,38 @@ pub(crate) fn em_step_par(
     counts: &[u64],
     alpha_in: &[f64],
     alpha_out: &mut [f64],
+    acc: &[AtomicF64],
 ) {
-    let num_txps = p.num_txps;
-    let acc = (0..p.num_classes())
-        .into_par_iter()
-        .fold(
-            || (vec![0.0f64; num_txps], Vec::<f64>::with_capacity(64)),
-            |(mut acc, mut scratch), ci| {
-                let count = counts[ci] as f64;
-                let (tids, ws) = p.class(ci);
-                if tids.len() > 1 {
-                    scratch.clear();
-                    let mut denom = 0.0;
-                    for (&tid, &w) in tids.iter().zip(ws) {
-                        let v = alpha_in[tid as usize] * w;
-                        scratch.push(v);
-                        denom += v;
+    // Accumulate into a single shared atomic array reused across iterations,
+    // rather than allocating + reducing a dense `num_txps` buffer per rayon task
+    // (which, on a large transcriptome, dominated runtime in alloc/zeroing).
+    for a in acc.iter() {
+        a.store(0.0);
+    }
+    (0..p.num_classes()).into_par_iter().for_each(|ci| {
+        let count = counts[ci] as f64;
+        let (tids, ws) = p.class(ci);
+        if tids.len() > 1 {
+            let mut denom = 0.0;
+            for (&tid, &w) in tids.iter().zip(ws) {
+                denom += alpha_in[tid as usize] * w;
+            }
+            if denom > MIN_EQ_CLASS_WEIGHT {
+                let inv = count / denom;
+                for (&tid, &w) in tids.iter().zip(ws) {
+                    let v = alpha_in[tid as usize] * w;
+                    if !v.is_nan() {
+                        acc[tid as usize].add_assign(v * inv);
                     }
-                    if denom > MIN_EQ_CLASS_WEIGHT {
-                        let inv = count / denom;
-                        for (&tid, &v) in tids.iter().zip(scratch.iter()) {
-                            if !v.is_nan() {
-                                acc[tid as usize] += v * inv;
-                            }
-                        }
-                    }
-                } else {
-                    acc[tids[0] as usize] += count;
                 }
-                (acc, scratch)
-            },
-        )
-        .map(|(acc, _)| acc)
-        .reduce(
-            || vec![0.0f64; num_txps],
-            |mut a, b| {
-                for (x, y) in a.iter_mut().zip(b) {
-                    *x += y;
-                }
-                a
-            },
-        );
-    alpha_out.copy_from_slice(&acc);
+            }
+        } else {
+            acc[tids[0] as usize].add_assign(count);
+        }
+    });
+    for (o, a) in alpha_out.iter_mut().zip(acc.iter()) {
+        *o = a.load();
+    }
 }
 
 /// `exp_theta[i] = exp(digamma(alpha_in[i]+prior_i) - digamma(Σ_j alpha_in[j]+prior_j))`,
@@ -240,48 +231,37 @@ pub(crate) fn vbem_step_par(
     alpha_in: &[f64],
     alpha_out: &mut [f64],
     exp_theta: &mut [f64],
+    acc: &[AtomicF64],
 ) {
     fill_exp_theta(alpha_in, prior_alphas, exp_theta);
-    let num_txps = p.num_txps;
-    let acc = (0..p.num_classes())
-        .into_par_iter()
-        .fold(
-            || (vec![0.0f64; num_txps], Vec::<f64>::with_capacity(64)),
-            |(mut acc, mut scratch), ci| {
-                let count = counts[ci] as f64;
-                let (tids, ws) = p.class(ci);
-                if tids.len() > 1 {
-                    scratch.clear();
-                    let mut denom = 0.0;
-                    for (&tid, &w) in tids.iter().zip(ws) {
-                        let et = exp_theta[tid as usize];
-                        let v = if et > 0.0 { et * w } else { 0.0 };
-                        scratch.push(v);
-                        denom += v;
-                    }
-                    if denom > MIN_EQ_CLASS_WEIGHT {
-                        let inv = count / denom;
-                        for (&tid, &v) in tids.iter().zip(scratch.iter()) {
-                            if v > 0.0 {
-                                acc[tid as usize] += v * inv;
-                            }
-                        }
-                    }
-                } else {
-                    acc[tids[0] as usize] += count;
+    for a in acc.iter() {
+        a.store(0.0);
+    }
+    (0..p.num_classes()).into_par_iter().for_each(|ci| {
+        let count = counts[ci] as f64;
+        let (tids, ws) = p.class(ci);
+        if tids.len() > 1 {
+            let mut denom = 0.0;
+            for (&tid, &w) in tids.iter().zip(ws) {
+                let et = exp_theta[tid as usize];
+                if et > 0.0 {
+                    denom += et * w;
                 }
-                (acc, scratch)
-            },
-        )
-        .map(|(acc, _)| acc)
-        .reduce(
-            || vec![0.0f64; num_txps],
-            |mut a, b| {
-                for (x, y) in a.iter_mut().zip(b) {
-                    *x += y;
+            }
+            if denom > MIN_EQ_CLASS_WEIGHT {
+                let inv = count / denom;
+                for (&tid, &w) in tids.iter().zip(ws) {
+                    let et = exp_theta[tid as usize];
+                    if et > 0.0 {
+                        acc[tid as usize].add_assign(et * w * inv);
+                    }
                 }
-                a
-            },
-        );
-    alpha_out.copy_from_slice(&acc);
+            }
+        } else {
+            acc[tids[0] as usize].add_assign(count);
+        }
+    });
+    for (o, a) in alpha_out.iter_mut().zip(acc.iter()) {
+        *o = a.load();
+    }
 }

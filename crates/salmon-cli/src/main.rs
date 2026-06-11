@@ -11,6 +11,11 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 
+// mimalloc as the global allocator: the quant hot path is highly multithreaded
+// and allocation-heavy, where mimalloc markedly outperforms the system allocator.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use salmon_align::{quantify_alignments, AlignQuantOptions};
 use salmon_index::{build as build_index, IndexBuildOptions};
 use salmon_quant::{quantify, QuantOptions};
@@ -261,6 +266,14 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     if args.ont {
         long_read_redirect();
     }
+    // Bound the global rayon pool (used by the EM and bias passes) to the
+    // requested thread count; otherwise it spans every core regardless of -p.
+    let nthreads = if args.threads == 0 {
+        std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
+    } else {
+        args.threads
+    };
+    let _ = rayon::ThreadPoolBuilder::new().num_threads(nthreads).build_global();
     let out_dir = args.output.clone();
     let gene_map = args.gene_map.clone();
     // Alignment-based mode: quantify directly from a BAM.
