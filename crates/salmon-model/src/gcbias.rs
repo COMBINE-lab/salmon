@@ -258,29 +258,36 @@ pub fn build_expected_gc<'a, FS, FP>(
     stride: usize,
 ) -> GcFragModel
 where
-    FS: Fn(usize) -> &'a [u8],
-    FP: Fn(usize) -> &'a [u32],
+    FS: Fn(usize) -> &'a [u8] + Sync,
+    FP: Fn(usize) -> &'a [u32] + Sync,
 {
     let stride = stride.max(1) as i32;
-    let mut model = GcFragModel::new(cond_bins, gc_bins);
-    for tid in 0..num_refs {
+    // The expected-GC distribution is a sum of independent per-transcript
+    // contributions, each an O(refLen · fldRange/stride) double loop — billions
+    // of `gc_desc` calls in total. salmon parallelizes this over transcripts;
+    // do the same with rayon (per-thread `GcFragModel` partials, reduced via
+    // `combine_counts`). `seq_of`/`prefix_of` must be `Sync` to share across
+    // threads (they are: closures over `&[Vec<_>]`).
+    use rayon::prelude::*;
+    let per_tid = |tid: usize| -> Option<GcFragModel> {
         if alphas[tid] < MIN_ALPHA || eff_lens[tid] <= 0.0 {
-            continue;
+            return None;
         }
         let seq = seq_of(tid);
         let ref_len = seq.len();
         if ref_len <= k {
-            continue;
+            return None;
         }
         let cdf_max_arg = (cdf.len() - 1).min(ref_len);
         let cdf_max_val = cdf[cdf_max_arg];
         if cdf_max_val < MIN_CDF_MASS {
-            continue;
+            return None;
         }
         let prefix = prefix_of(tid);
         let weight = alphas[tid] / eff_lens[tid];
         let cond = |x: i32| conditional_cdf(cdf, cdf_max_arg, cdf_max_val, x);
         let sp = if fld_low > 0 { fld_low as i32 - 1 } else { 0 };
+        let mut model = GcFragModel::new(cond_bins, gc_bins);
         for frag_start in 0..(ref_len - k) {
             let mut prev = cond(sp);
             let mut fl = fld_low as i32;
@@ -298,8 +305,26 @@ where
                 fl += stride;
             }
         }
-    }
-    model
+        Some(model)
+    };
+    (0..num_refs)
+        .into_par_iter()
+        .fold(
+            || GcFragModel::new(cond_bins, gc_bins),
+            |mut acc, tid| {
+                if let Some(m) = per_tid(tid) {
+                    acc.combine_counts(&m);
+                }
+                acc
+            },
+        )
+        .reduce(
+            || GcFragModel::new(cond_bins, gc_bins),
+            |mut a, b| {
+                a.combine_counts(&b);
+                a
+            },
+        )
 }
 
 /// Bias-corrected effective length including fragment-GC bias (and, when
