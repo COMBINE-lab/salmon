@@ -209,6 +209,45 @@ struct QuantArgs {
     /// Seed with true unitig-constrained uni-MEMs (pufferfish-style).
     #[arg(long = "uniMEMs", conflicts_with = "refmems")]
     unimems: bool,
+    /// Match score for selective alignment (reads mode).
+    #[arg(long = "ma", default_value_t = 2)]
+    ma: i32,
+    /// Mismatch penalty for selective alignment (reads mode).
+    #[arg(long = "mp", default_value_t = 4)]
+    mp: i32,
+    /// Gap-open penalty for selective alignment (reads mode).
+    #[arg(long = "go", default_value_t = 6)]
+    go: i32,
+    /// Gap-extend penalty for selective alignment (reads mode).
+    #[arg(long = "ge", default_value_t = 2)]
+    ge: i32,
+    /// Consensus slack: a target is kept only if its best chain score is at least
+    /// `(1 - slack)` of the max chain score for that mate (salmon default 0.35;
+    /// `1.0` keeps every target).
+    #[arg(long = "consensusSlack", default_value_t = 0.35)]
+    consensus_slack: f32,
+    /// Skip k-mers whose unitig occurs in more than this many references
+    /// (repetitive-hit guard; salmon's `maxOccsPerHit`).
+    #[arg(long = "maxOccsPerHit", default_value_t = 1000)]
+    max_occs_per_hit: usize,
+    /// VBEM per-feature Dirichlet prior weight.
+    #[arg(long = "vbPrior", default_value_t = 1e-2)]
+    vb_prior: f64,
+    /// Mean of the fragment-length distribution prior.
+    #[arg(long = "fldMean", default_value_t = 250.0)]
+    fld_mean: f64,
+    /// Standard deviation of the fragment-length distribution prior.
+    #[arg(long = "fldSD", default_value_t = 25.0)]
+    fld_sd: f64,
+    /// Maximum fragment length tracked by the fragment-length distribution.
+    #[arg(long = "fldMax", default_value_t = 1000)]
+    fld_max: usize,
+    /// Online-phase forgetting factor in (0.5, 1.0].
+    #[arg(short = 'f', long = "forgettingFactor", default_value_t = 0.65)]
+    forgetting_factor: f64,
+    /// Initialize the optimizer uniformly instead of from the online estimates.
+    #[arg(long = "initUniform")]
+    init_uniform: bool,
 }
 
 /// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
@@ -308,6 +347,12 @@ fn run_quant(args: QuantArgs) -> Result<()> {
         opts.gc_bias = args.gc_bias;
         opts.pos_bias = args.pos_bias;
         opts.incompat_prior = args.incompat_prior;
+        opts.em.vb_prior = args.vb_prior;
+        opts.fld_mean = args.fld_mean;
+        opts.fld_sd = args.fld_sd;
+        opts.fld_max = args.fld_max;
+        opts.forgetting_factor = args.forgetting_factor;
+        opts.init_uniform = args.init_uniform;
         let res = quantify_alignments(&opts).context("alignment-based quantification failed")?;
         let pct = if res.num_processed > 0 {
             100.0 * res.num_mapped as f64 / res.num_processed as f64
@@ -360,6 +405,20 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.map_config.pair.orphan_chain_sub_thresh = args.orphan_chain_sub_thresh;
     opts.map_config.align.full_length_alignment = args.full_length_alignment;
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems);
+    // alignment scoring (selective alignment)
+    opts.map_config.align.match_score = args.ma as i8;
+    opts.map_config.align.mismatch_pen = args.mp as i8;
+    opts.map_config.align.gap_open_pen = args.go as i8;
+    opts.map_config.align.gap_extend_pen = args.ge as i8;
+    // chaining consensus + repetitive-hit guard
+    opts.map_config.collect.consensus_fraction = 1.0 - args.consensus_slack;
+    opts.map_config.collect.max_hit_occ = args.max_occs_per_hit;
+    // inference + fragment-length-distribution knobs
+    opts.em.vb_prior = args.vb_prior;
+    opts.fld_mean = args.fld_mean;
+    opts.fld_sd = args.fld_sd;
+    opts.fld_max = args.fld_max;
+    opts.forgetting_factor = args.forgetting_factor;
 
     let res = quantify(&opts).context("quantification failed")?;
     let pct = if res.num_processed > 0 {

@@ -86,6 +86,13 @@ pub struct QuantOptions {
     /// disable effective-length correction; use the raw reference length
     /// (`--noLengthCorrection`)
     pub no_length_correction: bool,
+    /// fragment-length distribution prior mean, SD, and max tracked length
+    /// (`--fldMean` / `--fldSD` / `--fldMax`)
+    pub fld_mean: f64,
+    pub fld_sd: f64,
+    pub fld_max: usize,
+    /// online-phase forgetting factor (`--forgettingFactor`, salmon default 0.65)
+    pub forgetting_factor: f64,
 }
 
 impl QuantOptions {
@@ -115,6 +122,10 @@ impl QuantOptions {
             num_gibbs_samples: 0,
             thinning_factor: 16,
             no_length_correction: false,
+            fld_mean: 250.0,
+            fld_sd: 25.0,
+            fld_max: 1000,
+            forgetting_factor: 0.65,
         }
     }
 
@@ -189,7 +200,8 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let eq_builder = EquivalenceClassBuilder::new();
     // Gaussian-prior fragment length distribution (mean 250, sd 25); empirical
     // observations from concordant pairs refine it.
-    let mut fld = FragmentLengthDistribution::new(1.0, 1000, 250.0, 25.0, 4, 0.5, 1);
+    let mut fld =
+        FragmentLengthDistribution::new(1.0, opts.fld_max, opts.fld_mean, opts.fld_sd, 4, 0.5, 1);
     let num_processed = AtomicU64::new(0);
     let num_mapped = AtomicU64::new(0);
     let num_decoy = AtomicU64::new(0);
@@ -277,7 +289,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // point estimate.
     let online = (opts.seq_bias || opts.gc_bias || opts.pos_bias).then(|| {
         let ref_lens: Vec<u64> = (0..num_refs).map(|t| salmon.ref_len(t)).collect();
-        salmon_infer::OnlineInference::new(&ref_lens, 0.05, 0.65, 5_000_000)
+        salmon_infer::OnlineInference::new(&ref_lens, 0.05, opts.forgetting_factor, 5_000_000)
     });
 
     // ---- parallel mapping pass (borrows the accumulators) -------------------

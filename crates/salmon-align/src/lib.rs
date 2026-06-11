@@ -65,6 +65,16 @@ pub struct AlignQuantOptions {
     /// weight multiplier for orientation-incompatible alignments; `0` drops them
     /// (salmon's default `ignoreIncompat` behavior)
     pub incompat_prior: f64,
+    /// fragment-length distribution prior mean, SD, and max tracked length
+    /// (`--fldMean` / `--fldSD` / `--fldMax`)
+    pub fld_mean: f64,
+    pub fld_sd: f64,
+    pub fld_max: usize,
+    /// online-phase forgetting factor (`--forgettingFactor`, salmon default 0.65)
+    pub forgetting_factor: f64,
+    /// initialize the EM uniformly instead of with the online-estimate-blended
+    /// warm start (`--initUniform`)
+    pub init_uniform: bool,
 }
 
 impl AlignQuantOptions {
@@ -82,6 +92,11 @@ impl AlignQuantOptions {
             gc_bias: false,
             pos_bias: false,
             incompat_prior: 0.0,
+            fld_mean: 250.0,
+            fld_sd: 25.0,
+            fld_max: 1000,
+            forgetting_factor: 0.65,
+            init_uniform: false,
         }
     }
 }
@@ -1055,7 +1070,8 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     anyhow::ensure!(num_refs > 0, "BAM header has no reference sequences");
 
     let eq_builder = EquivalenceClassBuilder::new();
-    let mut fld = FragmentLengthDistribution::new(1.0, 1000, 250.0, 25.0, 4, 0.5, 1);
+    let mut fld =
+        FragmentLengthDistribution::new(1.0, opts.fld_max, opts.fld_mean, opts.fld_sd, 4, 0.5, 1);
 
     // The error model and bias models need the transcriptome (salmon requires `-t`).
     let use_error_model = opts.transcripts.is_some() && !opts.no_error_model;
@@ -1075,7 +1091,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // in a single streaming pass (salmon's online phase), rather than two passes.
     let ref_lens_u64: Vec<u64> = lengths.iter().map(|&l| l as u64).collect();
     let online = (use_error_model || bias_on)
-        .then(|| salmon_infer::OnlineInference::new(&ref_lens_u64, 0.05, 0.65, 5_000_000));
+        .then(|| salmon_infer::OnlineInference::new(&ref_lens_u64, 0.05, opts.forgetting_factor, 5_000_000));
 
     // Per-transcript inputs the bias collection needs (the observed bias models
     // themselves are accumulated per-worker inside the pass).
@@ -1185,7 +1201,13 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             .map(|&p| p * frac_observed + uniform_prior * (1.0 - frac_observed))
             .collect()
     });
-    let mut em = optimize_with_init(&collapsed, num_refs, &opts.em, init_alphas.as_deref());
+    // `--initUniform` forces the plain uniform EM start; otherwise warm-start
+    // from the online-estimate-blended init.
+    let mut em = if opts.init_uniform {
+        optimize(&collapsed, num_refs, &opts.em)
+    } else {
+        optimize_with_init(&collapsed, num_refs, &opts.em, init_alphas.as_deref())
+    };
 
     // ---- bias-corrected effective lengths (shared with reads mode) ----------
     let mut bias_dump = salmon_model::dumps::BiasDump::default();
