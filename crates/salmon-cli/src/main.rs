@@ -264,6 +264,9 @@ struct QuantArgs {
     /// Significant digits for the EffectiveLength and NumReads columns of quant.sf.
     #[arg(long = "sigDigits", default_value_t = 3)]
     sig_digits: u32,
+    /// Discard a read/fragment that maps to more than this many places (reads mode).
+    #[arg(short = 'w', long = "maxReadOcc", default_value_t = 200)]
+    max_read_occ: usize,
 }
 
 /// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
@@ -436,6 +439,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.em.vb_prior = args.vb_prior;
     opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
     opts.sig_digits = args.sig_digits;
+    opts.max_read_occ = args.max_read_occ;
     opts.fld_mean = args.fld_mean;
     opts.fld_sd = args.fld_sd;
     opts.fld_max = args.fld_max;

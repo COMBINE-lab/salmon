@@ -96,6 +96,9 @@ pub struct QuantOptions {
     /// significant digits for the EffectiveLength and NumReads columns of
     /// `quant.sf` (`--sigDigits`, salmon default 3)
     pub sig_digits: u32,
+    /// discard a fragment that maps to more than this many places (salmon's
+    /// `--maxReadOcc`, default 200)
+    pub max_read_occ: usize,
 }
 
 impl QuantOptions {
@@ -130,6 +133,7 @@ impl QuantOptions {
             fld_max: 1000,
             forgetting_factor: 0.65,
             sig_digits: 3,
+            max_read_occ: 200,
         }
     }
 
@@ -305,6 +309,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             detector: detector.as_ref(),
             map_cfg: &opts.map_config,
             sketch: opts.sketch,
+            max_read_occ: opts.max_read_occ,
             skip: SkippingStrategy::Permissive,
             range_factorization_bins: opts.range_factorization_bins,
             expected_format,

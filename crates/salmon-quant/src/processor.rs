@@ -39,6 +39,8 @@ pub(crate) struct Shared<'a> {
     pub detector: Option<&'a LibraryTypeDetector>,
     pub map_cfg: &'a MapConfig,
     pub sketch: bool,
+    /// discard a fragment mapping to more than this many places (`--maxReadOcc`)
+    pub max_read_occ: usize,
     pub skip: SkippingStrategy,
     /// range-factorization bins (0 = disabled)
     pub range_factorization_bins: u32,
@@ -465,11 +467,16 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         for (r1, r2) in pairs {
             let s1 = r1.seq();
             let s2 = r2.seq();
-            let maps = if sh.sketch {
+            let mut maps = if sh.sketch {
                 map_read_pair_sketch(idx, hs, s1.as_ref(), s2.as_ref(), sh.skip)
             } else {
                 map_read_pair(idx, hs, sh.salmon, s1.as_ref(), s2.as_ref(), sh.map_cfg)
             };
+            // A fragment mapping to too many places is discarded (salmon's
+            // tooManyHits / maxReadOccs): treat as unmapped everywhere below.
+            if maps.len() > sh.max_read_occ {
+                maps.clear();
+            }
             if maps.is_empty() && sh.unmapped_names.is_some() {
                 unmapped.push(format!("{} u", read_name(r1.id())));
             }
@@ -515,11 +522,14 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         let log_fm = sh.online.map_or(0.0, |o| o.next_log_fm());
         for rec in records {
             let s = rec.seq();
-            let maps = if sh.sketch {
+            let mut maps = if sh.sketch {
                 map_single_read_sketch(idx, hs, s.as_ref(), sh.skip)
             } else {
                 map_single_read(idx, hs, sh.salmon, s.as_ref(), sh.map_cfg)
             };
+            if maps.len() > sh.max_read_occ {
+                maps.clear();
+            }
             if maps.is_empty() && sh.unmapped_names.is_some() {
                 unmapped.push(format!("{} u", read_name(rec.id())));
             }
