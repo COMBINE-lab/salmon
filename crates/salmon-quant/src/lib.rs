@@ -124,6 +124,14 @@ pub struct QuantResult {
     pub num_mapped: u64,
     pub num_eq_classes: usize,
     pub frag_len_mean: f64,
+    /// standard deviation of the observed fragment-length distribution
+    pub frag_len_sd: f64,
+    /// transcript length-class boundaries (salmon's `length_classes`)
+    pub length_classes: Vec<u32>,
+    /// normalized fragment-length PMF over lengths `0..=max` (for `flenDist.txt`)
+    pub frag_len_dist: Vec<f64>,
+    /// quant start timestamp (asctime-style), captured when the run began
+    pub start_time: String,
     /// the library type used: the detected format when `-l A`, else the
     /// user-specified one
     pub library_type: String,
@@ -136,6 +144,7 @@ pub struct QuantResult {
 
 /// Run quantification end-to-end, writing outputs and returning the results.
 pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
+    let start_time = asctime_now();
     let salmon = SalmonIndex::load(&opts.index_dir)
         .with_context(|| format!("loading index {}", opts.index_dir.display()))?;
     let num_refs = salmon.num_refs();
@@ -488,6 +497,13 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         num_mapped: num_mapped.load(Ordering::Relaxed),
         num_eq_classes,
         frag_len_mean: fld.mean(),
+        frag_len_sd: fld.sd(),
+        length_classes: salmon_model::compute_length_quantiles(
+            &(0..num_refs).map(|i| salmon.ref_len(i) as u32).collect::<Vec<_>>(),
+            salmon_model::NUM_LENGTH_CLASSES,
+        ),
+        frag_len_dist: fld.log_pmf().iter().map(|lp| lp.exp()).collect(),
+        start_time,
         library_type,
         bootstraps,
         ambig,
@@ -495,6 +511,12 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
 
     write_outputs(opts, &result)?;
     Ok(result)
+}
+
+/// Current local time as an asctime-style string (`Wed Jun 10 20:34:58 2026`),
+/// matching salmon's `start_time`/`end_time` format.
+pub(crate) fn asctime_now() -> String {
+    jiff::Zoned::now().strftime("%a %b %e %H:%M:%S %Y").to_string()
 }
 
 /// Write the naive equivalence classes (collapsing any range-factorized

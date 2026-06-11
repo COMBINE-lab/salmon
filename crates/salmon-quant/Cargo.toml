@@ -23,6 +23,7 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 flate2 = { workspace = true }
 rayon = { workspace = true }
+jiff = "0.2"
 
 [dev-dependencies]
 tempfile = { workspace = true }

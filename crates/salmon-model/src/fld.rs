@@ -200,6 +200,25 @@ impl FragmentLengthDistribution {
         (self.sum.load() - self.tot_mass.load()).exp()
     }
 
+    /// Standard deviation of the observed length distribution, computed from the
+    /// cached normalized PMF (call after [`cache`](Self::cache)).
+    pub fn sd(&self) -> f64 {
+        let lp = self.log_pmf();
+        if lp.is_empty() {
+            return 0.0;
+        }
+        let mut mean = 0.0;
+        for (l, &p) in lp.iter().enumerate() {
+            mean += (l as f64) * p.exp();
+        }
+        let mut var = 0.0;
+        for (l, &p) in lp.iter().enumerate() {
+            let d = l as f64 - mean;
+            var += d * d * p.exp();
+        }
+        var.max(0.0).sqrt()
+    }
+
     /// Freeze the distribution and precompute normalized PMF/CMF for fast,
     /// allocation-free lookup. Call once after updates have stopped.
     pub fn cache(&mut self) {
