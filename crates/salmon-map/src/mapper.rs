@@ -268,6 +268,14 @@ pub fn map_read_pair<'idx, R: RefProvider>(
             MateStatus::SingleEnd => {}
         }
     }
+    // Orphans are a *fallback*: if this fragment has any concordant (proper-pair)
+    // mapping, discard all orphan mappings. A lone mate matching a paralog is weak
+    // evidence and would spuriously enlarge the equivalence class / leak count mass
+    // to the wrong transcript; the concordant mappings are the trustworthy signal.
+    // Orphans are kept only when the fragment has *no* concordant mapping at all.
+    if raw.iter().any(|m| matches!(m.status, MateStatus::PairedEndPaired)) {
+        raw.retain(|m| matches!(m.status, MateStatus::PairedEndPaired));
+    }
     let (maps, decoy_dominated, below_final) = finalize_mappings_counted(raw, &cfg.score);
     set_last_map_stats(MapStats {
         had_candidates,

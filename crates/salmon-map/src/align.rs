@@ -85,6 +85,16 @@ pub fn perfect_score(read_len: usize, cfg: &AlignConfig) -> i32 {
     read_len as i32 * cfg.match_score as i32
 }
 
+/// Minimum alignment score for a read of `read_len` to be accepted, matching
+/// salmon/pufferfish's `minAcceptedScore = floor(minScoreFraction · matchScore ·
+/// readLen)` with acceptance `score > minAcceptedScore` (strict). Using `floor`
+/// + strict `>` (rather than `score (f32) >= frac·perfect`) avoids an off-by-one
+/// at read lengths where `frac·matchScore·len` is an integer.
+#[inline]
+pub fn min_accepted_score(read_len: usize, cfg: &AlignConfig) -> i32 {
+    (cfg.min_score_fraction as f64 * cfg.match_score as f64 * read_len as f64).floor() as i32
+}
+
 /// Validate a mapping candidate by banded alignment of the read against the
 /// reference window implied by the chain.
 ///
@@ -126,8 +136,7 @@ pub fn align_chain(
         anchored_align_score(&query, ref_seq, &chain.mems, cfg)
     };
 
-    let perfect = perfect_score(query.len(), cfg);
-    let valid = (score as f32) >= cfg.min_score_fraction * (perfect as f32);
+    let valid = score > min_accepted_score(query.len(), cfg);
 
     Some(Alignment {
         score,
@@ -481,10 +490,9 @@ pub fn align_in_window(query: &[u8], window: &[u8], cfg: &AlignConfig) -> Option
             end_col = j;
         }
     }
-    let perfect = perfect_score(n, cfg);
     Some(WindowAlignment {
         score: best,
-        valid: (best as f32) >= cfg.min_score_fraction * (perfect as f32),
+        valid: best > min_accepted_score(n, cfg),
         end_col,
     })
 }
