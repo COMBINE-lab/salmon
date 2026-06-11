@@ -20,7 +20,17 @@ BAMQueue<FragT>::BAMQueue(std::vector<boost::filesystem::path>& fnames, LibraryF
 
         logger_ = spdlog::get("jointLog");
 
-        uint32_t localCacheSize = std::max(uint32_t{2000000}, cacheSize);
+        // Pre-allocated object pool buffering in-flight fragments between the
+        // parser and the worker threads. It only needs to be deep enough to
+        // keep the workers fed -- the fragment queue also grows on demand when
+        // empty (see getFrag_), and the alignment-group pool just applies
+        // backpressure. It is NOT the mass-banking cache. The previous floor of
+        // 2,000,000 pre-created FragT *and* AlignmentGroup objects cost ~15-20
+        // GB on permissive inputs (e.g. bowtie2 -k 200), where each
+        // AlignmentGroup's vector grows to hundreds of entries and never
+        // shrinks. Scale to the parser thread count with a modest cap instead.
+        uint32_t localCacheSize =
+            std::min(cacheSize, std::max(uint32_t{50000}, numParseThreads * 20000u));
         uint32_t capacity{localCacheSize};
         for (size_t i = 0; i < capacity; ++i) {
             // avoid r-value ref until we figure out what's
