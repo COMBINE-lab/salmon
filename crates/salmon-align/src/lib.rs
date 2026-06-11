@@ -549,7 +549,7 @@ where
     // the shared model. Small = fresher shared model (closer to salmon's live
     // per-transition training, better parity) but more atomic contention on the
     // hot match cell; 1 = per-fragment.
-    const FLUSH_INTERVAL: usize = 16;
+    const FLUSH_INTERVAL: usize = 64;
 
     // Shared atomic error model: read concurrently for `basis`, updated by the
     // workers flushing their per-thread deltas into it between minibatches.
