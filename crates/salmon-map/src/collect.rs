@@ -21,7 +21,7 @@
 //! anchors increase colinearly with the reference coordinate. The resulting
 //! chains are stamped with `is_fw = false` so a later stage can map them back.
 
-use std::collections::HashMap;
+use ahash::{AHashMap, AHashSet};
 
 use piscem_rs::index::contig_table::EntryEncoding;
 use piscem_rs::index::reference_index::ReferenceIndex;
@@ -43,6 +43,13 @@ pub struct MemCollectorConfig {
     pub max_hit_occ: usize,
     /// chaining parameters (its `seed_len` is overridden with the index `k`)
     pub chain: ChainConfig,
+    /// Consensus fraction: a per-mate target is only kept (and later aligned) if
+    /// its best chain score is at least `consensus_fraction * maxChainScore`
+    /// across that mate's targets. This is pufferfish's pre-alignment pruning
+    /// (`consensusFraction`, salmon `1 - consensusSlack`, default 0.65) — it
+    /// avoids running an SW alignment for every weakly-seeded transcript. `0.0`
+    /// disables the filter (keep every target).
+    pub consensus_fraction: f32,
 }
 
 impl Default for MemCollectorConfig {
@@ -51,6 +58,7 @@ impl Default for MemCollectorConfig {
             skipping: SkippingStrategy::Permissive,
             max_hit_occ: 1000,
             chain: ChainConfig::default(),
+            consensus_fraction: 0.65,
         }
     }
 }
@@ -77,8 +85,8 @@ pub fn project_raw_hits(
     read_len: i32,
     k: i32,
     max_hit_occ: usize,
-) -> HashMap<(u32, bool), Vec<Mem>> {
-    let mut groups: HashMap<(u32, bool), Vec<Mem>> = HashMap::new();
+) -> AHashMap<(u32, bool), Vec<Mem>> {
+    let mut groups: AHashMap<(u32, bool), Vec<Mem>> = AHashMap::new();
     for (read_pos, phit) in raw_hits {
         if phit.num_hits() > max_hit_occ {
             continue;
@@ -100,8 +108,22 @@ pub fn project_raw_hits(
     groups
 }
 
+thread_local! {
+    /// Reused per-thread scratch for [`candidates_from_raw_hits`]: a flat
+    /// `(tid, is_fw, mem)` buffer (sorted to group by target/orientation, instead
+    /// of a fresh per-read `HashMap` of per-group `Vec`s) and a per-group `Mem`
+    /// buffer handed to the chainer. Eliminates the mapper's per-read map+vec
+    /// allocations.
+    static PROJ_SCRATCH: std::cell::RefCell<(Vec<(u32, bool, Mem)>, Vec<Mem>)> =
+        std::cell::RefCell::new((Vec::new(), Vec::new()));
+}
+
 /// Project then chain raw hits into mapping candidates. Pure; testable with
-/// hand-built hits.
+/// hand-built hits. Groups anchors by `(tid, is_fw)` via a sort over reused
+/// scratch (cheaper than a per-read hash map for the small anchor counts of a
+/// single read) and chains each group. Candidate order differs from a hash-map
+/// grouping, but every downstream consumer (`best_per_target`, pairing,
+/// `finalize_mappings`) keys/dedups by `tid`, so results are unchanged.
 pub fn candidates_from_raw_hits(
     raw_hits: &[(i32, ProjectedHits<'_>)],
     encoding: &EntryEncoding,
@@ -109,17 +131,44 @@ pub fn candidates_from_raw_hits(
     k: i32,
     cfg: &MemCollectorConfig,
 ) -> Vec<MappingCandidate> {
-    let groups = project_raw_hits(raw_hits, encoding, read_len, k, cfg.max_hit_occ);
     let mut chain_cfg = cfg.chain.clone();
     chain_cfg.seed_len = k;
 
-    let mut candidates = Vec::new();
-    for ((tid, is_fw), mems) in groups {
-        for chain in chain_mems(&mems, is_fw, &chain_cfg) {
-            candidates.push(MappingCandidate { tid, is_fw, chain });
+    PROJ_SCRATCH.with(|cell| {
+        let (flat, group) = &mut *cell.borrow_mut();
+        flat.clear();
+        for (read_pos, phit) in raw_hits {
+            if phit.num_hits() > cfg.max_hit_occ {
+                continue;
+            }
+            for entry in phit.ref_range().iter() {
+                let tid = encoding.transcript_id(entry);
+                let rp = phit.decode_hit(entry, encoding);
+                let read_start = if rp.is_fw { *read_pos } else { read_len - (*read_pos + k) };
+                flat.push((tid, rp.is_fw, Mem::new(read_start, rp.pos as i32, k)));
+            }
         }
-    }
-    candidates
+        // Group by (tid, is_fw) via a sort (stable relative anchor order within a
+        // group is irrelevant — the chainer re-sorts anchors itself).
+        flat.sort_unstable_by_key(|&(tid, fw, _)| (tid, fw));
+
+        let mut candidates = Vec::new();
+        let mut i = 0;
+        while i < flat.len() {
+            let (tid, is_fw, _) = flat[i];
+            group.clear();
+            let mut j = i;
+            while j < flat.len() && flat[j].0 == tid && flat[j].1 == is_fw {
+                group.push(flat[j].2);
+                j += 1;
+            }
+            for chain in chain_mems(group, is_fw, &chain_cfg) {
+                candidates.push(MappingCandidate { tid, is_fw, chain });
+            }
+            i = j;
+        }
+        candidates
+    })
 }
 
 /// Collect mapping candidates for one read against a loaded index.
@@ -153,14 +202,31 @@ pub fn collect_read_mems<'idx>(
 /// discarding weaker chains to the same target/orientation. Convenience for
 /// callers that want one alignment seed per target.
 pub fn best_per_target(mut candidates: Vec<MappingCandidate>) -> Vec<MappingCandidate> {
-    // Highest coverage first, so the first seen per key is the best.
-    candidates.sort_by(|a, b| {
-        b.chain
-            .covered_read_bases()
-            .cmp(&a.chain.covered_read_bases())
-    });
-    let mut seen = std::collections::HashSet::new();
+    // Highest coverage first, so the first seen per key is the best. Coverage is
+    // cached on the chain, so this is a plain field read per comparison.
+    candidates.sort_by(|a, b| b.chain.covered_read_bases().cmp(&a.chain.covered_read_bases()));
+    let mut seen = AHashSet::new();
     candidates.retain(|c| seen.insert((c.tid, c.is_fw)));
+    candidates
+}
+
+/// Drop candidate targets whose chain score is below `fraction * maxChainScore`
+/// across `candidates` — pufferfish's consensus-fraction pruning, applied
+/// per-mate before the (expensive) SW alignment step. `fraction <= 0` keeps all.
+/// Mirrors `MemClusterer::findOptChain`'s `bestScore < maxChainScore * cf` gate.
+pub fn consensus_filter(mut candidates: Vec<MappingCandidate>, fraction: f32) -> Vec<MappingCandidate> {
+    if fraction <= 0.0 || candidates.len() <= 1 {
+        return candidates;
+    }
+    let max_score = candidates
+        .iter()
+        .map(|c| c.chain.score)
+        .fold(f32::MIN, f32::max);
+    if max_score <= 0.0 {
+        return candidates;
+    }
+    let cutoff = max_score * fraction;
+    candidates.retain(|c| c.chain.score >= cutoff);
     candidates
 }
 

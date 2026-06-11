@@ -7,7 +7,7 @@
 //! equivalence class. This mirrors salmon's `MappingScoreInfo` /
 //! `filterAndCollectAlignments`.
 
-use std::collections::HashMap;
+use ahash::AHashMap;
 
 use salmon_core::{LibraryFormat, MateStatus};
 
@@ -31,6 +31,15 @@ pub struct RawMapping {
     /// observed library format of this mapping (for auto-detection); `None`
     /// for orphans and pseudoalignment hits
     pub format: Option<LibraryFormat>,
+    /// SAM output (`--writeMappings`): leftmost reference position of read1 and
+    /// read2 (`-1` if that mate is absent), and read2's strand. read1's strand is
+    /// `is_fw`. Spoofed-CIGAR SAM needs per-mate positions, which `ref_pos`
+    /// (a single fragment-leftmost) does not preserve.
+    pub r1_pos: i32,
+    pub r2_pos: i32,
+    pub r2_fw: bool,
+    /// read1's alignment score (for the SAM `AS` tag); read2's is `score - r1_score`.
+    pub r1_score: i32,
 }
 
 /// A surviving mapping with its equivalence-class weight.
@@ -53,6 +62,12 @@ pub struct ScoredMapping {
     pub rc_pos: i32,
     /// observed library format (for auto-detection), if determinable
     pub format: Option<LibraryFormat>,
+    /// SAM output: per-mate leftmost positions (`-1` if absent) and read2 strand.
+    pub r1_pos: i32,
+    pub r2_pos: i32,
+    pub r2_fw: bool,
+    /// read1's alignment score (SAM `AS`); read2's is `score - r1_score`.
+    pub r1_score: i32,
 }
 
 /// Filtering / weighting parameters (salmon `--scoreExp`, `--minAlnProb`,
@@ -85,12 +100,22 @@ impl Default for ScoreConfig {
 /// equivalence-class members (sorted by `tid`), or empty if the read is
 /// unmapped or decoy-dominated.
 pub fn finalize_mappings(raw: Vec<RawMapping>, cfg: &ScoreConfig) -> Vec<ScoredMapping> {
+    finalize_mappings_counted(raw, cfg).0
+}
+
+/// Like [`finalize_mappings`] but also reports `(decoy_dominated, num_below_thresh)`:
+/// whether the fragment was dropped because its best placement was a decoy, and
+/// how many surviving non-decoy alignments were filtered for weight `< min_aln_prob`.
+pub fn finalize_mappings_counted(
+    raw: Vec<RawMapping>,
+    cfg: &ScoreConfig,
+) -> (Vec<ScoredMapping>, bool, u32) {
     if raw.is_empty() {
-        return Vec::new();
+        return (Vec::new(), false, 0);
     }
 
     // One mapping per transcript: keep the highest score.
-    let mut best_per_tid: HashMap<u32, RawMapping> = HashMap::new();
+    let mut best_per_tid: AHashMap<u32, RawMapping> = AHashMap::new();
     for m in raw {
         best_per_tid
             .entry(m.tid)
@@ -107,9 +132,10 @@ pub fn finalize_mappings(raw: Vec<RawMapping>, cfg: &ScoreConfig) -> Vec<ScoredM
         .filter(|m| !m.is_decoy)
         .map(|m| m.score)
         .max();
+    let had_decoy = best_per_tid.values().any(|m| m.is_decoy);
     let Some(best_valid) = best_valid else {
-        // only decoy mappings -> unmapped to the transcriptome
-        return Vec::new();
+        // only decoy mappings -> dropped, dominated by a decoy
+        return (Vec::new(), true, 0);
     };
     let best_decoy = best_per_tid
         .values()
@@ -121,10 +147,12 @@ pub fn finalize_mappings(raw: Vec<RawMapping>, cfg: &ScoreConfig) -> Vec<ScoredM
     // drop the read when its best transcript score falls below the decoy bar.
     if let Some(bd) = best_decoy {
         if (best_valid as f64) < cfg.decoy_thresh * (bd as f64) {
-            return Vec::new();
+            return (Vec::new(), true, 0);
         }
     }
+    let _ = had_decoy;
 
+    let mut num_below = 0u32;
     let mut out: Vec<ScoredMapping> = best_per_tid
         .into_values()
         .filter(|m| !m.is_decoy)
@@ -133,12 +161,14 @@ pub fn finalize_mappings(raw: Vec<RawMapping>, cfg: &ScoreConfig) -> Vec<ScoredM
                 if m.score == best_valid {
                     1.0
                 } else {
+                    num_below += 1;
                     return None;
                 }
             } else {
                 (-cfg.score_exp * (best_valid - m.score) as f64).exp()
             };
             if weight < cfg.min_aln_prob {
+                num_below += 1;
                 return None;
             }
             Some(ScoredMapping {
@@ -152,11 +182,15 @@ pub fn finalize_mappings(raw: Vec<RawMapping>, cfg: &ScoreConfig) -> Vec<ScoredM
                 fw_pos: m.fw_pos,
                 rc_pos: m.rc_pos,
                 format: m.format,
+                r1_pos: m.r1_pos,
+                r2_pos: m.r2_pos,
+                r2_fw: m.r2_fw,
+                r1_score: m.r1_score,
             })
         })
         .collect();
     out.sort_by_key(|m| m.tid);
-    out
+    (out, false, num_below)
 }
 
 #[cfg(test)]
@@ -175,6 +209,10 @@ mod tests {
             fw_pos: 0,
             rc_pos: -1,
             format: None,
+            r1_pos: 0,
+            r2_pos: -1,
+            r2_fw: false,
+            r1_score: score,
         }
     }
 

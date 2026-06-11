@@ -26,5 +26,9 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+[features]
+# Diagnostic: build with the system allocator instead of mimalloc.
+sysalloc = []
+
 [lints.rust]
 unsafe_code = "warn"

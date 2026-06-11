@@ -13,6 +13,7 @@ use clap::{Args, Parser, Subcommand};
 
 // mimalloc as the global allocator: the quant hot path is highly multithreaded
 // and allocation-heavy, where mimalloc markedly outperforms the system allocator.
+#[cfg(not(feature = "sysalloc"))]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -96,6 +97,14 @@ struct IndexArgs {
     /// Keep the intermediate compacted-dBG files.
     #[arg(long = "keepIntermediate")]
     keep_intermediate: bool,
+    /// Retain exact-duplicate transcript sequences instead of collapsing them
+    /// (salmon collapses duplicates by default).
+    #[arg(long = "keepDuplicates")]
+    keep_duplicates: bool,
+    /// File of decoy sequence names (one per line). The named records (which must
+    /// appear last in the FASTA) are indexed but flagged as decoys.
+    #[arg(short = 'd', long = "decoys")]
+    decoys: Option<PathBuf>,
 }
 
 #[derive(Args)]
@@ -155,6 +164,10 @@ struct QuantArgs {
     /// Write the names of unmapped fragments to aux_info/unmapped_names.txt.
     #[arg(long = "writeUnmappedNames")]
     write_unmapped_names: bool,
+    /// Write per-mapping SAM records to this file (spoofed CIGAR, like salmon's
+    /// standard `--writeMappings`).
+    #[arg(short = 'z', long = "writeMappings")]
+    write_mappings: Option<PathBuf>,
     /// Enable sequence-specific bias correction.
     #[arg(long = "seqBias")]
     seq_bias: bool,
@@ -211,6 +224,8 @@ fn run_index(args: IndexArgs) -> Result<()> {
     opts.m = args.minimizer_len;
     opts.threads = args.threads;
     opts.keep_intermediate = args.keep_intermediate;
+    opts.keep_duplicates = args.keep_duplicates;
+    opts.decoys = args.decoys;
     let info = build_index(&opts).context("index build failed")?;
     println!("indexed {} references (k={}, m={})", info.num_refs, info.k, info.m);
     Ok(())
@@ -328,6 +343,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.dump_eq = args.dump_eq;
     opts.dump_eq_weights = args.dump_eq_weights;
     opts.write_unmapped_names = args.write_unmapped_names;
+    opts.write_mappings = args.write_mappings;
     opts.seq_bias = args.seq_bias;
     opts.gc_bias = args.gc_bias;
     opts.pos_bias = args.pos_bias;

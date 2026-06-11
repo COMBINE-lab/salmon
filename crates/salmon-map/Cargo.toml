@@ -12,6 +12,7 @@ description = "Selective-alignment mapping for the salmon Rust port: MEM collect
 salmon-core = { path = "../salmon-core" }
 piscem-rs = { workspace = true }
 sshash-lib = "0.6"
+ahash = { workspace = true }
 # ksw2 (the alignment backend): a native-Rust ksw_extz2_sse port with runtime
 # SIMD dispatch (AVX2/SSE4.1/NEON + scalar fallback) — one portable binary.
 # Local checkout during development; swap to a crates.io version at release.

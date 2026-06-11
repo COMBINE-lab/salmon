@@ -13,7 +13,6 @@
 //! is the class's fragment count (overridable per run so bootstrap can resample).
 
 use rayon::prelude::*;
-use salmon_core::atomic::AtomicF64;
 use salmon_eqclass::CollapsedEqClasses;
 use statrs::function::gamma::digamma;
 
@@ -128,46 +127,60 @@ pub(crate) fn em_step_seq(
     }
 }
 
-/// Parallel EM M-step (rayon fold/reduce over classes into per-thread
-/// accumulators). Equivalent to [`em_step_seq`] but uses all cores; the
-/// reduction is a deterministic sum tree.
+/// Reduce per-shard dense accumulators into `alpha_out` (one writer per `tid`,
+/// no contention). Parallelized over transcripts.
+fn reduce_shards(shards: &[Vec<f64>], alpha_out: &mut [f64]) {
+    alpha_out.par_iter_mut().enumerate().for_each(|(tid, out)| {
+        let mut s = 0.0;
+        for buf in shards {
+            s += buf[tid];
+        }
+        *out = s;
+    });
+}
+
+/// Parallel EM M-step. Each shard owns a private dense `num_txps` buffer and
+/// processes a contiguous slice of the classes with plain (non-atomic) adds;
+/// the shards are then summed into `alpha_out`. This avoids both the per-task
+/// allocation of a naive fold/reduce and the cross-thread CAS contention of a
+/// single shared `AtomicF64` array (which, on hot transcripts, dominated the
+/// M-step). The buffers are allocated once in [`run_em_counts`] and reused.
 pub(crate) fn em_step_par(
     p: &PackedEqClasses,
     counts: &[u64],
     alpha_in: &[f64],
     alpha_out: &mut [f64],
-    acc: &[AtomicF64],
+    shards: &mut [Vec<f64>],
 ) {
-    // Accumulate into a single shared atomic array reused across iterations,
-    // rather than allocating + reducing a dense `num_txps` buffer per rayon task
-    // (which, on a large transcriptome, dominated runtime in alloc/zeroing).
-    for a in acc.iter() {
-        a.store(0.0);
-    }
-    (0..p.num_classes()).into_par_iter().for_each(|ci| {
-        let count = counts[ci] as f64;
-        let (tids, ws) = p.class(ci);
-        if tids.len() > 1 {
-            let mut denom = 0.0;
-            for (&tid, &w) in tids.iter().zip(ws) {
-                denom += alpha_in[tid as usize] * w;
-            }
-            if denom > MIN_EQ_CLASS_WEIGHT {
-                let inv = count / denom;
+    let nclasses = p.num_classes();
+    let chunk = nclasses.div_ceil(shards.len().max(1));
+    shards.par_iter_mut().enumerate().for_each(|(s, buf)| {
+        buf.iter_mut().for_each(|x| *x = 0.0);
+        let start = s * chunk;
+        let end = ((s + 1) * chunk).min(nclasses);
+        for ci in start..end {
+            let count = counts[ci] as f64;
+            let (tids, ws) = p.class(ci);
+            if tids.len() > 1 {
+                let mut denom = 0.0;
                 for (&tid, &w) in tids.iter().zip(ws) {
-                    let v = alpha_in[tid as usize] * w;
-                    if !v.is_nan() {
-                        acc[tid as usize].add_assign(v * inv);
+                    denom += alpha_in[tid as usize] * w;
+                }
+                if denom > MIN_EQ_CLASS_WEIGHT {
+                    let inv = count / denom;
+                    for (&tid, &w) in tids.iter().zip(ws) {
+                        let v = alpha_in[tid as usize] * w;
+                        if !v.is_nan() {
+                            buf[tid as usize] += v * inv;
+                        }
                     }
                 }
+            } else {
+                buf[tids[0] as usize] += count;
             }
-        } else {
-            acc[tids[0] as usize].add_assign(count);
         }
     });
-    for (o, a) in alpha_out.iter_mut().zip(acc.iter()) {
-        *o = a.load();
-    }
+    reduce_shards(shards, alpha_out);
 }
 
 /// `exp_theta[i] = exp(digamma(alpha_in[i]+prior_i) - digamma(Σ_j alpha_in[j]+prior_j))`,
@@ -223,7 +236,7 @@ pub(crate) fn vbem_step_seq(
     }
 }
 
-/// Parallel VBEM M-step.
+/// Parallel VBEM M-step. Sharded private buffers + reduce (see [`em_step_par`]).
 pub(crate) fn vbem_step_par(
     p: &PackedEqClasses,
     counts: &[u64],
@@ -231,37 +244,40 @@ pub(crate) fn vbem_step_par(
     alpha_in: &[f64],
     alpha_out: &mut [f64],
     exp_theta: &mut [f64],
-    acc: &[AtomicF64],
+    shards: &mut [Vec<f64>],
 ) {
     fill_exp_theta(alpha_in, prior_alphas, exp_theta);
-    for a in acc.iter() {
-        a.store(0.0);
-    }
-    (0..p.num_classes()).into_par_iter().for_each(|ci| {
-        let count = counts[ci] as f64;
-        let (tids, ws) = p.class(ci);
-        if tids.len() > 1 {
-            let mut denom = 0.0;
-            for (&tid, &w) in tids.iter().zip(ws) {
-                let et = exp_theta[tid as usize];
-                if et > 0.0 {
-                    denom += et * w;
-                }
-            }
-            if denom > MIN_EQ_CLASS_WEIGHT {
-                let inv = count / denom;
+    let nclasses = p.num_classes();
+    let chunk = nclasses.div_ceil(shards.len().max(1));
+    let exp_theta: &[f64] = exp_theta;
+    shards.par_iter_mut().enumerate().for_each(|(s, buf)| {
+        buf.iter_mut().for_each(|x| *x = 0.0);
+        let start = s * chunk;
+        let end = ((s + 1) * chunk).min(nclasses);
+        for ci in start..end {
+            let count = counts[ci] as f64;
+            let (tids, ws) = p.class(ci);
+            if tids.len() > 1 {
+                let mut denom = 0.0;
                 for (&tid, &w) in tids.iter().zip(ws) {
                     let et = exp_theta[tid as usize];
                     if et > 0.0 {
-                        acc[tid as usize].add_assign(et * w * inv);
+                        denom += et * w;
                     }
                 }
+                if denom > MIN_EQ_CLASS_WEIGHT {
+                    let inv = count / denom;
+                    for (&tid, &w) in tids.iter().zip(ws) {
+                        let et = exp_theta[tid as usize];
+                        if et > 0.0 {
+                            buf[tid as usize] += et * w * inv;
+                        }
+                    }
+                }
+            } else {
+                buf[tids[0] as usize] += count;
             }
-        } else {
-            acc[tids[0] as usize].add_assign(count);
         }
     });
-    for (o, a) in alpha_out.iter_mut().zip(acc.iter()) {
-        *o = a.load();
-    }
+    reduce_shards(shards, alpha_out);
 }

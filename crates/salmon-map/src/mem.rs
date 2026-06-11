@@ -56,8 +56,10 @@ impl Mem {
 }
 
 /// Union length of read intervals covered by a set of MEMs (given by index into
-/// `mems`). Used to compute a chain's read coverage for the consensus-fraction
-/// filter. Overlapping anchors are counted once.
+/// `mems`). Overlapping anchors are counted once. (Chains now cache their own
+/// coverage at construction via [`crate::chain::MemChain::new`]; this generic
+/// index-addressed form is retained for tests.)
+#[cfg(test)]
 pub(crate) fn covered_read_bases(mems: &[Mem], indices: &[usize]) -> i32 {
     if indices.is_empty() {
         return 0;

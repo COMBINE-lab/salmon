@@ -69,6 +69,13 @@ pub struct IndexBuildOptions {
     pub build_ec_table: bool,
     /// keep the intermediate cDBG `.cf_*` files instead of deleting them
     pub keep_intermediate: bool,
+    /// retain exact-duplicate transcript sequences instead of collapsing them
+    /// (salmon's `--keepDuplicates`; default `false` = remove duplicates).
+    pub keep_duplicates: bool,
+    /// optional file of decoy sequence names (one per line; salmon's `--decoys`).
+    /// Records whose name is in this set are indexed but flagged as decoys; they
+    /// must appear contiguously at the end of the FASTA input.
+    pub decoys: Option<PathBuf>,
 }
 
 impl IndexBuildOptions {
@@ -84,6 +91,8 @@ impl IndexBuildOptions {
             canonical: true,
             build_ec_table: true,
             keep_intermediate: false,
+            keep_duplicates: false,
+            decoys: None,
         }
     }
 }
@@ -96,6 +105,12 @@ pub struct IndexInfo {
     pub canonical: bool,
     pub has_ec_table: bool,
     pub num_refs: usize,
+    /// Index of the first decoy reference: references `[first_decoy_index, num_refs)`
+    /// are decoys (genome/contamination sequences indexed for selective-alignment
+    /// but never quantified). `None` (or absent) means no decoys. salmon requires
+    /// all decoy records to appear contiguously at the end of the FASTA.
+    #[serde(default)]
+    pub first_decoy_index: Option<usize>,
     /// salmon version that produced the index
     pub salmon_version: String,
     /// SHA-256/512 of the reference sequences and names, computed to byte-match
@@ -126,15 +141,21 @@ pub struct IndexInfo {
 ///   hashed for every record whose (printable) sequence is non-empty;
 /// - decoy hashers receive nothing here (decoys are not yet supported), so the
 ///   decoy digests are the SHA of the empty string, matching salmon's no-decoy case.
-fn compute_ref_hashes(transcripts: &[PathBuf]) -> Result<RefHashes> {
+fn compute_ref_hashes(
+    transcripts: &[PathBuf],
+    decoy_names: &ahash::AHashSet<Vec<u8>>,
+) -> Result<RefHashes> {
     use sha2::{Digest, Sha256, Sha512};
     let mut seq256 = Sha256::new();
     let mut name256 = Sha256::new();
     let mut seq512 = Sha512::new();
     let mut name512 = Sha512::new();
-    // No decoy support yet: these stay empty → SHA of "" (matches salmon).
-    let decoy256 = Sha256::new();
-    let decoy_name256 = Sha256::new();
+    // Decoy sequences/names are routed to their own hashers (salmon's
+    // `update_seq_hash(isDecoy,..)` / `update_name_hash`); with no decoys these
+    // stay empty → SHA of "" (matches salmon's no-decoy case). Only the SHA-256
+    // decoy digests are recorded by salmon, so we only need those.
+    let mut decoy_seq256 = Sha256::new();
+    let mut decoy_name256 = Sha256::new();
 
     for path in transcripts {
         let mut reader = needletail::parse_fastx_file(path)
@@ -148,18 +169,27 @@ fn compute_ref_hashes(transcripts: &[PathBuf]) -> Result<RefHashes> {
                 .copied()
                 .filter(|&b| (0x20..=0x7e).contains(&b))
                 .collect();
-            seq256.update(&seq);
-            seq512.update(&seq);
+            // Header up to the first ' ' or '\t'.
+            let id = rec.id();
+            let end = id
+                .iter()
+                .position(|&b| b == b' ' || b == b'\t')
+                .unwrap_or(id.len());
+            let name = &id[..end];
+            let is_decoy = decoy_names.contains(name);
+            if is_decoy {
+                decoy_seq256.update(&seq);
+            } else {
+                seq256.update(&seq);
+                seq512.update(&seq);
+            }
             if !seq.is_empty() {
-                // Header up to the first ' ' or '\t'.
-                let id = rec.id();
-                let end = id
-                    .iter()
-                    .position(|&b| b == b' ' || b == b'\t')
-                    .unwrap_or(id.len());
-                let name = &id[..end];
-                name256.update(name);
-                name512.update(name);
+                if is_decoy {
+                    decoy_name256.update(name);
+                } else {
+                    name256.update(name);
+                    name512.update(name);
+                }
             }
         }
     }
@@ -175,7 +205,7 @@ fn compute_ref_hashes(transcripts: &[PathBuf]) -> Result<RefHashes> {
         name_hash: hex(&name256.finalize()),
         seq_hash512: hex(&seq512.finalize()),
         name_hash512: hex(&name512.finalize()),
-        decoy_seq_hash: hex(&decoy256.finalize()),
+        decoy_seq_hash: hex(&decoy_seq256.finalize()),
         decoy_name_hash: hex(&decoy_name256.finalize()),
     })
 }
@@ -195,7 +225,24 @@ struct RefHashes {
 /// same: cf1-rs/packed-seq cannot index `N`/ambiguous bases. The reference seq/
 /// name HASHES are computed on the *original* input (matching salmon, which
 /// hashes before replacement). Returns the number of bases replaced.
-fn preprocess_fasta(inputs: &[PathBuf], out_path: &Path) -> Result<u64> {
+/// Outcome of [`preprocess_fasta`]: how many bases were randomized and which
+/// transcripts were dropped as exact-sequence duplicates.
+struct PreprocessResult {
+    /// non-ACGT bases replaced with pseudo-random ACGT
+    replaced: u64,
+    /// `(retained_name, duplicate_name)` pairs in discovery order; the duplicate
+    /// was *not* written to the cleaned FASTA (so it is absent from the index).
+    duplicate_clusters: Vec<(Vec<u8>, Vec<u8>)>,
+    /// retained-reference index of the first decoy, or `None` if no decoys.
+    first_decoy_index: Option<usize>,
+}
+
+fn preprocess_fasta(
+    inputs: &[PathBuf],
+    out_path: &Path,
+    keep_duplicates: bool,
+    decoy_names: &ahash::AHashSet<Vec<u8>>,
+) -> Result<PreprocessResult> {
     use std::io::Write as _;
     const B: [u8; 4] = *b"ACGT";
     let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
@@ -203,15 +250,68 @@ fn preprocess_fasta(inputs: &[PathBuf], out_path: &Path) -> Result<u64> {
         std::fs::File::create(out_path).with_context(|| format!("creating {}", out_path.display()))?,
     );
     let mut replaced = 0u64;
+    let mut duplicate_clusters: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    // Number of references actually written so far (= next retained ref id).
+    let mut retained = 0usize;
+    let mut first_decoy_index: Option<usize> = None;
+    let mut saw_decoy = false;
+    // Exact original (pure-ACGT) sequence -> name of the first transcript that
+    // carried it. salmon collapses transcripts whose *processed* sequences match;
+    // because it randomizes non-ACGT bases with a position-advancing RNG, two
+    // identical sequences that contain any non-ACGT base never compare equal and
+    // so are never collapsed — we mirror that by only deduplicating pure-ACGT
+    // sequences (keyed on the exact original bytes, matching salmon's pre-process
+    // XXH64 over the unmodified sequence). Only populated when removing dups.
+    let mut seen: ahash::AHashMap<Vec<u8>, Vec<u8>> = ahash::AHashMap::new();
     for path in inputs {
         let mut reader = needletail::parse_fastx_file(path)
             .with_context(|| format!("opening {}", path.display()))?;
         while let Some(rec) = reader.next() {
             let rec = rec.context("reading FASTA record")?;
+            // Processed name: header up to the first space/tab (salmon's sepStr).
+            let id = rec.id();
+            let end = id
+                .iter()
+                .position(|&b| b == b' ' || b == b'\t')
+                .unwrap_or(id.len());
+            let name = &id[..end];
+            let orig = rec.seq();
+            let is_decoy = decoy_names.contains(name);
+            // salmon requires every decoy record to appear, contiguously, at the
+            // end of the input — reject a real transcript after any decoy.
+            if is_decoy {
+                saw_decoy = true;
+            } else if saw_decoy {
+                anyhow::bail!(
+                    "non-decoy reference {:?} appears after a decoy; decoy records must be \
+                     contiguous at the end of the FASTA input",
+                    String::from_utf8_lossy(name)
+                );
+            }
+
+            if !keep_duplicates {
+                let pure_acgt = orig
+                    .iter()
+                    .all(|&b| matches!(b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't'));
+                if pure_acgt {
+                    if let Some(retained_name) = seen.get(orig.as_ref()) {
+                        // Exact duplicate of an earlier reference: record the
+                        // cluster and drop it from the index entirely.
+                        duplicate_clusters.push((retained_name.clone(), name.to_vec()));
+                        continue;
+                    }
+                    seen.insert(orig.to_vec(), name.to_vec());
+                }
+            }
+
+            if is_decoy && first_decoy_index.is_none() {
+                first_decoy_index = Some(retained);
+            }
+
             out.write_all(b">")?;
-            out.write_all(rec.id())?;
+            out.write_all(name)?;
             out.write_all(b"\n")?;
-            let mut seq = rec.seq().into_owned();
+            let mut seq = orig.into_owned();
             for b in seq.iter_mut() {
                 if !matches!(*b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
                     x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -221,10 +321,59 @@ fn preprocess_fasta(inputs: &[PathBuf], out_path: &Path) -> Result<u64> {
             }
             out.write_all(&seq)?;
             out.write_all(b"\n")?;
+            retained += 1;
         }
     }
     out.flush()?;
-    Ok(replaced)
+    Ok(PreprocessResult {
+        replaced,
+        duplicate_clusters,
+        first_decoy_index,
+    })
+}
+
+/// Read a decoy-names file (one name per line; blank lines ignored) into a set,
+/// matching how `name` is extracted in [`preprocess_fasta`] (no `>` prefix).
+fn read_decoy_names(path: &Path) -> Result<ahash::AHashSet<Vec<u8>>> {
+    let bytes = std::fs::read(path).with_context(|| format!("reading decoys file {}", path.display()))?;
+    let mut set = ahash::AHashSet::new();
+    for line in bytes.split(|&b| b == b'\n') {
+        // trim trailing CR and surrounding whitespace
+        let line: &[u8] = {
+            let mut s = line;
+            while let [rest @ .., last] = s {
+                if matches!(last, b'\r' | b' ' | b'\t') { s = rest; } else { break; }
+            }
+            while let [first, rest @ ..] = s {
+                if matches!(first, b' ' | b'\t') { s = rest; } else { break; }
+            }
+            s
+        };
+        if !line.is_empty() {
+            set.insert(line.to_vec());
+        }
+    }
+    Ok(set)
+}
+
+/// Write salmon's `duplicate_clusters.tsv` (`RetainedRef<TAB>DuplicateRef`, one
+/// line per collapsed duplicate). Always written (salmon emits it even with a
+/// header and no rows) so downstream tools find the expected file.
+fn write_duplicate_clusters(dir: &Path, clusters: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
+    use std::io::Write as _;
+    let path = dir.join("duplicate_clusters.tsv");
+    let mut f = std::io::BufWriter::new(
+        std::fs::File::create(&path).with_context(|| format!("creating {}", path.display()))?,
+    );
+    f.write_all(b"RetainedRef\tDuplicateRef\n")?;
+    for (retained, dup) in clusters {
+        f.write_all(retained)?;
+        f.write_all(b"\t")?;
+        f.write_all(dup)?;
+        f.write_all(b"\n")?;
+    }
+    f.flush()?;
+    Ok(())
 }
 
 /// Build a salmon index from a transcriptome FASTA into `opts.output_dir`.
@@ -240,14 +389,31 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     let cdbg_prefix = opts.output_dir.join(CDBG_PREFIX);
     let index_prefix = opts.output_dir.join(INDEX_PREFIX);
 
+    // Decoy names (genome/contamination sequences indexed but never quantified).
+    let decoy_names = match &opts.decoys {
+        Some(p) => read_decoy_names(p)?,
+        None => ahash::AHashSet::new(),
+    };
+
     // Replace non-ACGT bases up front (cf1-rs/packed-seq can't index N); the
     // cleaned FASTA feeds the cDBG build and the refseq store, while the hashes
     // below use the original input.
     let cleaned = opts.output_dir.join("cleaned_refs.fa");
-    let n_replaced = preprocess_fasta(&opts.transcripts, &cleaned)
-        .context("preprocessing reference FASTA (non-ACGT replacement)")?;
-    if n_replaced > 0 {
-        info!("replaced {n_replaced} non-ACGT base(s) with random bases");
+    let pre = preprocess_fasta(&opts.transcripts, &cleaned, opts.keep_duplicates, &decoy_names)
+        .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")?;
+    if pre.replaced > 0 {
+        info!("replaced {} non-ACGT base(s) with random bases", pre.replaced);
+    }
+    if !opts.keep_duplicates {
+        if !pre.duplicate_clusters.is_empty() {
+            info!(
+                "removed {} transcripts that were exact sequence duplicates \
+                 (use --keepDuplicates to retain them)",
+                pre.duplicate_clusters.len()
+            );
+        }
+        write_duplicate_clusters(&opts.output_dir, &pre.duplicate_clusters)
+            .context("writing duplicate_clusters.tsv")?;
     }
 
     // Stage 1: compacted de Bruijn graph / reference tiling.
@@ -284,13 +450,18 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     let idx = ReferenceIndex::load(&index_prefix, opts.build_ec_table, false)
         .context("loading freshly built index")?;
     // Reference seq/name hashes (salmon-FixFasta-compatible), over the input FASTA.
-    let h = compute_ref_hashes(&opts.transcripts).context("hashing reference sequences/names")?;
+    let h = compute_ref_hashes(&opts.transcripts, &decoy_names)
+        .context("hashing reference sequences/names")?;
+    if let Some(fdi) = pre.first_decoy_index {
+        info!("{} decoy reference(s) (first decoy index {fdi})", idx.num_refs() - fdi);
+    }
     let info = IndexInfo {
         k: opts.k,
         m,
         canonical: opts.canonical,
         has_ec_table: idx.has_ec_table(),
         num_refs: idx.num_refs(),
+        first_decoy_index: pre.first_decoy_index,
         salmon_version: env!("CARGO_PKG_VERSION").to_string(),
         seq_hash: h.seq_hash,
         name_hash: h.name_hash,
@@ -469,7 +640,12 @@ impl salmon_core::RefProvider for SalmonIndex {
     fn ref_seq(&self, tid: u32) -> &[u8] {
         self.ref_seq(tid)
     }
-    // TODO: decoy tracking (info.json) — for now no references are decoys.
+    fn is_decoy(&self, tid: u32) -> bool {
+        // References at or beyond `first_decoy_index` are decoys.
+        self.info
+            .first_decoy_index
+            .is_some_and(|fdi| (tid as usize) >= fdi)
+    }
 }
 
 fn read_info(dir: &Path) -> Result<IndexInfo> {

@@ -134,6 +134,45 @@ impl Hash for TranscriptGroup {
     }
 }
 
+/// A passthrough `Hasher` for keys that already carry a precomputed, well-mixed
+/// hash. [`TranscriptGroup::hash`] writes a single `u64` (its xxh3 digest), so
+/// running it through the default SipHash again is pure overhead — profiling on
+/// human-scale data showed SipHash (`DefaultHasher::write`) eating ~9% of the
+/// quant runtime. This hasher simply returns the `u64` that was written.
+#[derive(Default, Clone, Copy)]
+pub struct IdentityHasher(u64);
+
+impl Hasher for IdentityHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.0 = i;
+    }
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        // Fallback for any non-`u64` writes (none on the hot path): fold the
+        // bytes in so distinct inputs still differ.
+        for &b in bytes {
+            self.0 = self.0.rotate_left(8) ^ u64::from(b);
+        }
+    }
+}
+
+/// `BuildHasher` producing [`IdentityHasher`]s.
+#[derive(Default, Clone, Copy)]
+pub struct IdentityBuildHasher;
+
+impl std::hash::BuildHasher for IdentityBuildHasher {
+    type Hasher = IdentityHasher;
+    #[inline]
+    fn build_hasher(&self) -> IdentityHasher {
+        IdentityHasher(0)
+    }
+}
+
 /// The aggregated value for an equivalence class.
 #[derive(Debug, Clone)]
 pub struct TGValue {
@@ -171,7 +210,7 @@ impl TGValue {
 /// Worker threads call [`add_group`](Self::add_group) with `&self` while
 /// mapping reads; insertion is lock-free per bucket.
 pub struct EquivalenceClassBuilder {
-    map: scc::HashMap<TranscriptGroup, TGValue>,
+    map: dashmap::DashMap<TranscriptGroup, TGValue, IdentityBuildHasher>,
 }
 
 impl Default for EquivalenceClassBuilder {
@@ -183,7 +222,7 @@ impl Default for EquivalenceClassBuilder {
 impl EquivalenceClassBuilder {
     pub fn new() -> Self {
         Self {
-            map: scc::HashMap::new(),
+            map: dashmap::DashMap::with_hasher(IdentityBuildHasher),
         }
     }
 
@@ -209,7 +248,7 @@ impl EquivalenceClassBuilder {
     /// sorted by their transcript label for determinism.
     pub fn finish(self) -> CollapsedEqClasses {
         let mut classes: Vec<(TranscriptGroup, TGValue)> = Vec::with_capacity(self.map.len());
-        self.map.scan(|k, v| classes.push((k.clone(), v.clone())));
+        self.map.iter().for_each(|e| classes.push((e.key().clone(), e.value().clone())));
         classes.sort_by(|a, b| a.0.txps.cmp(&b.0.txps));
         let total_count = classes.iter().map(|(_, v)| v.count).sum();
         CollapsedEqClasses {

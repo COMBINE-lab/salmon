@@ -9,7 +9,7 @@
 //! References that yield no concordant pair fall back to orphan mappings when
 //! orphans are allowed. Mirrors pufferfish/salmon's `joinReadsAndFilter`.
 
-use std::collections::HashMap;
+use ahash::{AHashMap, AHashSet};
 
 use salmon_core::{LibraryFormat, MateStatus, ReadOrientation, ReadStrandedness, ReadType};
 
@@ -108,8 +108,8 @@ fn is_dovetailed(l: &MappingCandidate, r: &MappingCandidate, orientation: ReadOr
     fw.chain.ref_start() > rc.chain.ref_start() || fw.chain.ref_end() > rc.chain.ref_end()
 }
 
-fn group_by_tid(cands: &[MappingCandidate]) -> HashMap<u32, Vec<usize>> {
-    let mut m: HashMap<u32, Vec<usize>> = HashMap::new();
+fn group_by_tid(cands: &[MappingCandidate]) -> AHashMap<u32, Vec<usize>> {
+    let mut m: AHashMap<u32, Vec<usize>> = AHashMap::new();
     for (i, c) in cands.iter().enumerate() {
         m.entry(c.tid).or_default().push(i);
     }
@@ -130,7 +130,7 @@ pub fn join_reads_and_filter(
     let right_by_tid = group_by_tid(&right);
 
     let mut joints = Vec::new();
-    let mut paired_tids = std::collections::HashSet::new();
+    let mut paired_tids = AHashSet::new();
 
     // Concordant pairs.
     for (&tid, lidx) in &left_by_tid {
@@ -229,11 +229,7 @@ mod tests {
         MappingCandidate {
             tid,
             is_fw,
-            chain: MemChain {
-                mems: vec![Mem::new(0, start, len)],
-                score: len as f32,
-                is_fw,
-            },
+            chain: MemChain::new(vec![Mem::new(0, start, len)], len as f32, is_fw),
         }
     }
 

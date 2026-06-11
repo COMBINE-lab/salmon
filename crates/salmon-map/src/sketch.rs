@@ -53,6 +53,10 @@ pub fn map_single_read_sketch<'idx>(
                 fw_pos: -1,
                 rc_pos: -1,
                 format: None,
+                r1_pos: -1,
+                r2_pos: -1,
+                r2_fw: false,
+                r1_score: h.score as i32,
             })
             .collect::<Vec<_>>()
     })
@@ -92,6 +96,10 @@ pub fn map_read_pair_sketch<'idx>(
                         fw_pos: -1,
                         rc_pos: -1,
                         format: None,
+                        r1_pos: -1,
+                        r2_pos: -1,
+                        r2_fw: false,
+                        r1_score: m.score,
                     })
                 })
                 .collect()

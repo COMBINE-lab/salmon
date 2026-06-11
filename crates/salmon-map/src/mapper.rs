@@ -12,7 +12,9 @@ use piscem_rs::mapping::hit_searcher::HitSearcher;
 use salmon_core::{LibraryFormat, MateStatus, ReadOrientation, ReadStrandedness, ReadType};
 
 use crate::align::{align_chain, align_in_window, revcomp, AlignConfig};
-use crate::collect::{best_per_target, collect_read_mems, MappingCandidate, MemCollectorConfig};
+use crate::collect::{
+    best_per_target, collect_read_mems, consensus_filter, MappingCandidate, MemCollectorConfig,
+};
 use crate::extend::{collect_read_true_unimems, collect_read_unimems};
 
 /// How a read's seeds are turned into chaining anchors.
@@ -30,7 +32,7 @@ pub enum SeedMode {
     UniMem,
 }
 use crate::pair::{join_reads_and_filter, PairingConfig};
-use crate::score::{finalize_mappings, RawMapping, ScoreConfig, ScoredMapping};
+use crate::score::{finalize_mappings_counted, RawMapping, ScoreConfig, ScoredMapping};
 use salmon_core::RefProvider;
 
 /// Full mapper configuration.
@@ -45,6 +47,42 @@ pub struct MapConfig {
     /// how seeds are extended into chaining anchors (additive/experimental;
     /// see the [`extend`](crate::extend) module docs).
     pub seed_mode: SeedMode,
+}
+
+/// Per-fragment selective-alignment statistics for the meta_info counters,
+/// stashed in a per-thread slot by [`map_read_pair`]/[`map_single_read`] and
+/// read by the caller via [`take_last_map_stats`]. (A thread-local avoids
+/// threading an out-parameter through every mapping entry point and its tests.)
+#[derive(Default, Clone, Copy)]
+pub struct MapStats {
+    /// the fragment produced at least one chained candidate placement
+    pub had_candidates: bool,
+    /// dropped because its best placement was a decoy
+    pub decoy_dominated: bool,
+    /// mates dovetailed (each extends past the other's start)
+    pub dovetail: bool,
+    /// candidate alignments rejected for scoring below the acceptance threshold
+    pub alns_below_threshold: u32,
+}
+
+thread_local! {
+    static LAST_MAP_STATS: std::cell::Cell<MapStats> = const { std::cell::Cell::new(MapStats {
+        had_candidates: false,
+        decoy_dominated: false,
+        dovetail: false,
+        alns_below_threshold: 0,
+    }) };
+}
+
+#[inline]
+fn set_last_map_stats(s: MapStats) {
+    LAST_MAP_STATS.with(|c| c.set(s));
+}
+
+/// Take (and reset) the [`MapStats`] of the most recent `map_*` call on this thread.
+#[inline]
+pub fn take_last_map_stats() -> MapStats {
+    LAST_MAP_STATS.with(|c| c.take())
 }
 
 /// Collect mapping candidates for one read, using either the sparse-k-mer path
@@ -72,7 +110,12 @@ pub fn map_single_read<'idx, R: RefProvider>(
     read: &[u8],
     cfg: &MapConfig,
 ) -> Vec<ScoredMapping> {
-    let cands = best_per_target(collect_candidates(index, hs, refs, read, true, cfg));
+    let cands = consensus_filter(
+        best_per_target(collect_candidates(index, hs, refs, read, true, cfg)),
+        cfg.collect.consensus_fraction,
+    );
+    let had_candidates = !cands.is_empty();
+    let mut below = 0u32;
     let mut raw = Vec::with_capacity(cands.len());
     for c in cands {
         if let Some(aln) = align_chain(read, refs.ref_seq(c.tid), &c.chain, &cfg.align) {
@@ -106,11 +149,26 @@ pub fn map_single_read<'idx, R: RefProvider>(
                         ReadOrientation::None,
                         strand,
                     )),
+                    r1_pos: c.chain.ref_start(),
+                    r2_pos: -1,
+                    r2_fw: false,
+                    r1_score: aln.score,
                 });
+            } else {
+                below += 1;
             }
+        } else {
+            below += 1;
         }
     }
-    finalize_mappings(raw, &cfg.score)
+    let (maps, decoy_dominated, below_final) = finalize_mappings_counted(raw, &cfg.score);
+    set_last_map_stats(MapStats {
+        had_candidates,
+        decoy_dominated,
+        dovetail: false,
+        alns_below_threshold: below + below_final,
+    });
+    maps
 }
 
 /// Map a read pair to weighted equivalence-class members.
@@ -122,16 +180,29 @@ pub fn map_read_pair<'idx, R: RefProvider>(
     r2: &[u8],
     cfg: &MapConfig,
 ) -> Vec<ScoredMapping> {
-    let left = best_per_target(collect_candidates(index, hs, refs, r1, true, cfg));
-    let right = best_per_target(collect_candidates(index, hs, refs, r2, true, cfg));
+    let cf = cfg.collect.consensus_fraction;
+    let left = consensus_filter(best_per_target(collect_candidates(index, hs, refs, r1, true, cfg)), cf);
+    let right = consensus_filter(best_per_target(collect_candidates(index, hs, refs, r2, true, cfg)), cf);
     let joints = join_reads_and_filter(left, right, &cfg.pair);
 
+    let had_candidates = !joints.is_empty();
+    let mut below = 0u32;
+    let mut dovetail = false;
     let mut raw = Vec::new();
     for j in joints {
         match j.status {
             MateStatus::PairedEndPaired => {
                 let l = j.left.as_ref().unwrap();
                 let r = j.right.as_ref().unwrap();
+                // Dovetail: opposite-strand mates where the downstream (reverse)
+                // mate actually starts upstream of the forward mate — they extend
+                // past each other's start (salmon's `num_dovetail_fragments`).
+                if l.is_fw != r.is_fw {
+                    let (fw, rc) = if l.is_fw { (l, r) } else { (r, l) };
+                    if rc.chain.ref_start() < fw.chain.ref_start() {
+                        dovetail = true;
+                    }
+                }
                 let refseq = refs.ref_seq(j.tid);
                 let al = align_chain(r1, refseq, &l.chain, &cfg.align);
                 let ar = align_chain(r2, refseq, &r.chain, &cfg.align);
@@ -162,8 +233,16 @@ pub fn map_read_pair<'idx, R: RefProvider>(
                             fw_pos,
                             rc_pos,
                             format: Some(j.format),
+                            r1_pos: l.chain.ref_start(),
+                            r2_pos: r.chain.ref_start(),
+                            r2_fw: r.is_fw,
+                            r1_score: al.score,
                         });
+                    } else {
+                        below += 1;
                     }
+                } else {
+                    below += 1;
                 }
             }
             MateStatus::PairedEndLeft => {
@@ -177,7 +256,14 @@ pub fn map_read_pair<'idx, R: RefProvider>(
             MateStatus::SingleEnd => {}
         }
     }
-    finalize_mappings(raw, &cfg.score)
+    let (maps, decoy_dominated, below_final) = finalize_mappings_counted(raw, &cfg.score);
+    set_last_map_stats(MapStats {
+        had_candidates,
+        decoy_dominated,
+        dovetail,
+        alns_below_threshold: below + below_final,
+    });
+    maps
 }
 
 #[inline]
@@ -212,7 +298,10 @@ pub fn debug_best_mapping<'idx, R: RefProvider>(
     read: &[u8],
     cfg: &MapConfig,
 ) -> Option<DebugMapping> {
-    let cands = best_per_target(collect_candidates(index, hs, refs, read, true, cfg));
+    let cands = consensus_filter(
+        best_per_target(collect_candidates(index, hs, refs, read, true, cfg)),
+        cfg.collect.consensus_fraction,
+    );
     let best = cands
         .iter()
         .max_by_key(|c| c.chain.covered_read_bases())?;
@@ -270,6 +359,19 @@ fn push_orphan_or_recovered<R: RefProvider>(
                 fw_pos: if anchor.is_fw { anchor.chain.ref_start() } else { -1 },
                 rc_pos: if anchor.is_fw { -1 } else { anchor.chain.ref_start() },
                 format: None, // recovered pair: orientation not re-derived
+                // SAM: the partner's leftmost is estimated from the fragment length.
+                r1_pos: if anchor_is_left {
+                    anchor.chain.ref_start()
+                } else {
+                    (anchor.chain.ref_start() + frag_len - partner_read.len() as i32).max(0)
+                },
+                r2_pos: if anchor_is_left {
+                    (anchor.chain.ref_start() + frag_len - partner_read.len() as i32).max(0)
+                } else {
+                    anchor.chain.ref_start()
+                },
+                r2_fw: !anchor.is_fw,
+                r1_score: if anchor_is_left { anchor_aln.score } else { partner_score },
             });
             return;
         }
@@ -292,6 +394,10 @@ fn push_orphan_or_recovered<R: RefProvider>(
         fw_pos: if anchor.is_fw { anchor.chain.ref_start() } else { -1 },
         rc_pos: if anchor.is_fw { -1 } else { anchor.chain.ref_start() },
         format: None, // orphans are not sampled for library-type detection
+        r1_pos: if anchor_is_left { anchor.chain.ref_start() } else { -1 },
+        r2_pos: if anchor_is_left { -1 } else { anchor.chain.ref_start() },
+        r2_fw: false,
+        r1_score: anchor_aln.score,
     });
 }
 

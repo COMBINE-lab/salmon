@@ -11,7 +11,7 @@ use serde::Serialize;
 
 use crate::{QuantOptions, QuantResult};
 
-const SALMON_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const SALMON_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Write the standard salmon output set into `opts.output_dir`.
 pub fn write_outputs(opts: &QuantOptions, res: &QuantResult) -> Result<()> {
@@ -120,7 +120,10 @@ fn write_quant_sf(path: &Path, res: &QuantResult) -> Result<()> {
         std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?,
     );
     writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
-    for i in 0..res.names.len() {
+    // Decoy references (indices >= first_decoy_index) are never quantified and
+    // are excluded from quant.sf, matching salmon.
+    let n = res.first_decoy_index.unwrap_or(res.names.len());
+    for i in 0..n {
         writeln!(
             w,
             "{}\t{}\t{:.3}\t{:.6}\t{:.3}",
@@ -270,28 +273,29 @@ fn write_meta_info(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
         gc_bias_correct: opts.gc_bias,
         num_bias_bins: 0,
         mapping_type: if opts.sketch { "pseudo" } else { "mapping" }.to_string(),
-        // TODO(parity): thread keep_duplicates from the index info.
-        keep_duplicates: false,
+        keep_duplicates: res.keep_duplicates,
         index_seq_hash: res.index_seq_hash.clone(),
         index_name_hash: res.index_name_hash.clone(),
         index_seq_hash512: res.index_seq_hash512.clone(),
         index_name_hash512: res.index_name_hash512.clone(),
         index_decoy_seq_hash: res.index_decoy_seq_hash.clone(),
         index_decoy_name_hash: res.index_decoy_name_hash.clone(),
-        num_valid_targets: res.names.len(),
-        num_decoy_targets: 0,
+        num_valid_targets: res.first_decoy_index.unwrap_or(res.names.len()),
+        num_decoy_targets: res
+            .first_decoy_index
+            .map_or(0, |fdi| res.names.len().saturating_sub(fdi)),
         num_eq_classes: res.num_eq_classes,
         serialized_eq_classes: opts.dump_eq || opts.dump_eq_weights,
         eq_class_properties,
         length_classes: res.length_classes.clone(),
         num_processed: res.num_processed,
         num_mapped: res.num_mapped,
-        // TODO(parity): track these selective-alignment counters in the mapper.
-        num_dovetail_fragments: 0,
-        num_fragments_filtered_vm: 0,
-        num_alignments_below_threshold_for_mapped_fragments_vm: 0,
+        num_dovetail_fragments: res.num_dovetail_fragments,
+        num_fragments_filtered_vm: res.num_fragments_filtered_vm,
+        num_alignments_below_threshold_for_mapped_fragments_vm: res
+            .num_alignments_below_threshold_for_mapped_fragments_vm,
         percent_mapped,
-        num_decoy_fragments: 0,
+        num_decoy_fragments: res.num_decoy_fragments,
         num_bootstraps: res.bootstraps.len() as u32,
         call: "quant".to_string(),
         start_time: res.start_time.clone(),

@@ -22,7 +22,7 @@ fn batch(read_len: usize, ncases: usize, nmis: usize) -> Vec<(Vec<u8>, Vec<u8>, 
             let p = (x >> 33) as usize % read_len;
             read[p] = match read[p] { b'A'=>b'C', b'C'=>b'G', b'G'=>b'T', _=>b'A' };
         }
-        let chain = MemChain { mems: vec![Mem::new(0, 0, 25), Mem::new((read_len/2) as i32, (read_len/2) as i32, 20)], score: 45.0, is_fw: true };
+        let chain = MemChain::new(vec![Mem::new(0, 0, 25), Mem::new((read_len/2) as i32, (read_len/2) as i32, 20)], 45.0, true);
         v.push((read, refseq, chain));
     }
     v

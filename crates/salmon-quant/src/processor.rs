@@ -72,8 +72,18 @@ pub(crate) struct Shared<'a> {
     pub paired_lib: bool,
     pub num_processed: &'a AtomicU64,
     pub num_mapped: &'a AtomicU64,
+    /// selective-alignment meta counters (salmon's `aux_info/meta_info.json`):
+    /// decoy-dominated fragments, dovetail fragments, fragments that had
+    /// candidates but no surviving mapping, and (for mapped fragments) candidate
+    /// alignments dropped below the score threshold.
+    pub num_decoy: &'a AtomicU64,
+    pub num_dovetail: &'a AtomicU64,
+    pub num_frags_filtered_vm: &'a AtomicU64,
+    pub num_below_threshold_vm: &'a AtomicU64,
     /// when set, collect the names of unmapped fragments (`--writeUnmappedNames`)
     pub unmapped_names: Option<&'a Mutex<Vec<String>>>,
+    /// when set, write per-mapping SAM records (`--writeMappings`)
+    pub sam: Option<&'a crate::sam::SamWriter>,
 }
 
 /// Per-thread mapping processor.
@@ -88,6 +98,8 @@ pub(crate) struct QuantProcessor<'a> {
     pub posbias: Option<(Vec<SimplePosBias>, Vec<SimplePosBias>)>,
     /// per-thread collected unmapped-fragment names (merged in on_thread_complete)
     pub unmapped: Vec<String>,
+    /// per-thread SAM record buffer (flushed to the shared writer per batch)
+    pub sam_buf: String,
 }
 
 impl<'a> QuantProcessor<'a> {
@@ -109,6 +121,7 @@ impl<'a> QuantProcessor<'a> {
             gcbias,
             posbias,
             unmapped: Vec::new(),
+            sam_buf: String::new(),
         }
     }
 }
@@ -377,6 +390,25 @@ fn record(
     sh.eq.add_group(group, weights, 1);
 }
 
+/// Fold the most recent fragment's selective-alignment [`MapStats`] into the
+/// shared meta counters. Call once per mapped/attempted fragment on the SA path.
+fn accumulate_vm_stats(sh: &Shared, maps_empty: bool) {
+    let s = salmon_map::take_last_map_stats();
+    if maps_empty {
+        if s.decoy_dominated {
+            sh.num_decoy.fetch_add(1, Ordering::Relaxed);
+        } else if s.had_candidates {
+            sh.num_frags_filtered_vm.fetch_add(1, Ordering::Relaxed);
+        }
+    } else if s.alns_below_threshold > 0 {
+        sh.num_below_threshold_vm
+            .fetch_add(s.alns_below_threshold as u64, Ordering::Relaxed);
+    }
+    if s.dovetail {
+        sh.num_dovetail.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// Merge this thread's observed bias models (sequence and GC) into the shared
 /// accumulators.
 /// The read name written to unmapped_names.txt: the id up to the first
@@ -421,7 +453,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         &mut self,
         pairs: impl Iterator<Item = (RefRecord<'r>, RefRecord<'r>)>,
     ) -> paraseq::Result<()> {
-        let QuantProcessor { shared, hs, seqbias, gcbias, posbias, unmapped } = self;
+        let QuantProcessor { shared, hs, seqbias, gcbias, posbias, unmapped, sam_buf } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
         if hs.is_none() {
@@ -441,14 +473,29 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             if maps.is_empty() && sh.unmapped_names.is_some() {
                 unmapped.push(format!("{} u", read_name(r1.id())));
             }
+            if !sh.sketch {
+                accumulate_vm_stats(&sh, maps.is_empty());
+            }
+            if sh.sam.is_some() && !maps.is_empty() {
+                crate::sam::write_fragment(
+                    sam_buf, sh.salmon, r1.id(), s1.as_ref(),
+                    Some((r2.id(), s2.as_ref())), &maps,
+                );
+            }
             record(&sh, &maps, log_fm, seqbias.as_mut(), gcbias.as_mut(), posbias.as_mut());
         }
+        Ok(())
+    }
+
+    fn on_batch_complete(&mut self) -> paraseq::Result<()> {
+        flush_sam(self);
         Ok(())
     }
 
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
         merge_bias(self);
         merge_unmapped(self);
+        flush_sam(self);
         Ok(())
     }
 }
@@ -458,7 +505,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         &mut self,
         records: impl Iterator<Item = RefRecord<'r>>,
     ) -> paraseq::Result<()> {
-        let QuantProcessor { shared, hs, seqbias, gcbias, posbias, unmapped } = self;
+        let QuantProcessor { shared, hs, seqbias, gcbias, posbias, unmapped, sam_buf } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
         if hs.is_none() {
@@ -476,14 +523,38 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             if maps.is_empty() && sh.unmapped_names.is_some() {
                 unmapped.push(format!("{} u", read_name(rec.id())));
             }
+            if !sh.sketch {
+                accumulate_vm_stats(&sh, maps.is_empty());
+            }
+            if sh.sam.is_some() && !maps.is_empty() {
+                crate::sam::write_fragment(
+                    sam_buf, sh.salmon, rec.id(), s.as_ref(), None, &maps,
+                );
+            }
             record(&sh, &maps, log_fm, seqbias.as_mut(), gcbias.as_mut(), posbias.as_mut());
         }
+        Ok(())
+    }
+
+    fn on_batch_complete(&mut self) -> paraseq::Result<()> {
+        flush_sam(self);
         Ok(())
     }
 
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
         merge_bias(self);
         merge_unmapped(self);
+        flush_sam(self);
         Ok(())
+    }
+}
+
+/// Flush this thread's accumulated SAM buffer to the shared writer (under lock).
+fn flush_sam(proc: &mut QuantProcessor) {
+    if let Some(sw) = proc.shared.sam {
+        if !proc.sam_buf.is_empty() {
+            let _ = sw.write_block(&proc.sam_buf);
+            proc.sam_buf.clear();
+        }
     }
 }

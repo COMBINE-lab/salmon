@@ -25,7 +25,7 @@
 //! against `sample_data` in a later phase; the tunables here map onto salmon's
 //! `consensusSlack` / `pre`/`postMergeChainSubThresh` options.
 
-use crate::mem::{covered_read_bases, Mem};
+use crate::mem::Mem;
 
 /// Tuning parameters for [`chain_mems`].
 #[derive(Debug, Clone)]
@@ -57,15 +57,27 @@ impl Default for ChainConfig {
 /// A colinear chain of MEMs on a single reference / orientation.
 #[derive(Debug, Clone)]
 pub struct MemChain {
-    /// the anchors in the chain, in colinear order
+    /// the anchors in the chain, in colinear (read- and ref-increasing) order
     pub mems: Vec<Mem>,
     /// DP score of the chain
     pub score: f32,
     /// orientation of the underlying mapping (stamped by the caller)
     pub is_fw: bool,
+    /// merged read-base coverage, computed once at construction. The consensus
+    /// filter and `best_per_target` sort on this; computing it lazily (with a
+    /// per-call alloc + sort) inside a sort comparator was a measurable hot spot.
+    covered: i32,
 }
 
 impl MemChain {
+    /// Build a chain from colinearly-ordered anchors, caching the read-coverage.
+    /// `mems` must be in increasing read-start order (as produced by
+    /// [`chain_mems`]); single-anchor chains trivially satisfy this.
+    pub fn new(mems: Vec<Mem>, score: f32, is_fw: bool) -> Self {
+        let covered = merged_read_coverage(&mems);
+        Self { mems, score, is_fw, covered }
+    }
+
     /// First matched read position in the chain.
     pub fn read_start(&self) -> i32 {
         self.mems.first().map(|m| m.read_start).unwrap_or(0)
@@ -86,12 +98,36 @@ impl MemChain {
         self.mems.iter().map(|m| m.ref_end()).max().unwrap_or(0)
     }
 
-    /// Number of read bases covered (overlapping anchors counted once). This is
-    /// the quantity compared against the read length for the consensus filter.
+    /// Number of read bases covered (overlapping anchors counted once), cached
+    /// at construction. Compared against the read length for the consensus filter.
+    #[inline]
     pub fn covered_read_bases(&self) -> i32 {
-        let idx: Vec<usize> = (0..self.mems.len()).collect();
-        covered_read_bases(&self.mems, &idx)
+        self.covered
     }
+}
+
+/// Merged read-base coverage of read-start-ordered anchors, without allocating
+/// (overlaps counted once). Assumes `mems` is sorted by `read_start`.
+#[inline]
+fn merged_read_coverage(mems: &[Mem]) -> i32 {
+    if mems.is_empty() {
+        return 0;
+    }
+    let mut covered = 0;
+    let mut cur_start = mems[0].read_start;
+    let mut cur_end = mems[0].read_end();
+    for m in &mems[1..] {
+        let (s, e) = (m.read_start, m.read_end());
+        if s > cur_end {
+            covered += cur_end - cur_start;
+            cur_start = s;
+            cur_end = e;
+        } else if e > cur_end {
+            cur_end = e;
+        }
+    }
+    covered += cur_end - cur_start;
+    covered
 }
 
 /// minimap2-style gap cost: 0 when the read and reference gaps match, otherwise
@@ -105,6 +141,27 @@ fn gap_cost(gap: i32, seed_len: i32) -> f32 {
     }
 }
 
+/// Reusable per-thread scratch for [`chain_mems`]. The chaining DP allocates a
+/// handful of `n`-sized buffers per (tid, orientation) group; with many groups
+/// per read this dominated the mapper's allocator traffic. We keep one set of
+/// buffers per thread and clear/reuse them (only the returned chains and their
+/// `Mem` vectors — which escape — are freshly allocated).
+#[derive(Default)]
+struct ChainScratch {
+    order: Vec<usize>,
+    sorted: Vec<Mem>,
+    f: Vec<f32>,
+    p: Vec<usize>,
+    peaks: Vec<usize>,
+    used: Vec<bool>,
+    chain_idx: Vec<usize>,
+}
+
+thread_local! {
+    static CHAIN_SCRATCH: std::cell::RefCell<ChainScratch> =
+        std::cell::RefCell::new(ChainScratch::default());
+}
+
 /// Find colinear chains among `mems` (all on one reference / orientation).
 ///
 /// Returns chains sorted by descending score, filtered to those within
@@ -115,86 +172,109 @@ pub fn chain_mems(mems: &[Mem], is_fw: bool, cfg: &ChainConfig) -> Vec<MemChain>
         return Vec::new();
     }
 
-    // Sort anchors colinearly; keep an index permutation so we can report the
-    // original Mem values.
-    let mut order: Vec<usize> = (0..mems.len()).collect();
-    order.sort_by(|&a, &b| {
-        (mems[a].ref_start, mems[a].read_start).cmp(&(mems[b].ref_start, mems[b].read_start))
-    });
-    let sorted: Vec<Mem> = order.iter().map(|&i| mems[i]).collect();
-    let n = sorted.len();
+    CHAIN_SCRATCH.with(|cell| {
+        // Split-borrow each scratch field independently.
+        let ChainScratch {
+            order,
+            sorted,
+            f,
+            p,
+            peaks,
+            used,
+            chain_idx,
+        } = &mut *cell.borrow_mut();
 
-    let mut f = vec![0f32; n]; // best score ending at i
-    let mut p = vec![usize::MAX; n]; // predecessor (MAX = none)
-
-    for i in 0..n {
-        f[i] = sorted[i].len as f32;
-        let lb = if cfg.max_lookback == 0 {
-            0
-        } else {
-            i.saturating_sub(cfg.max_lookback)
-        };
-        for j in (lb..i).rev() {
-            let dr = sorted[i].ref_start - sorted[j].ref_start;
-            let dq = sorted[i].read_start - sorted[j].read_start;
-            // strictly colinear and increasing on both axes
-            if dr <= 0 || dq <= 0 {
-                continue;
-            }
-            if dr > cfg.max_gap || dq > cfg.max_gap {
-                continue;
-            }
-            let gap = (dr - dq).abs();
-            // newly matched bases contributed by anchor i
-            let gain = dq.min(dr).min(sorted[i].len) as f32;
-            let sc = f[j] + gain - gap_cost(gap, cfg.seed_len);
-            if sc > f[i] {
-                f[i] = sc;
-                p[i] = j;
-            }
-        }
-    }
-
-    // Recover chains: repeatedly take the highest-scoring unused peak and
-    // backtrack until reaching an unused-chain boundary.
-    let mut peaks: Vec<usize> = (0..n).collect();
-    peaks.sort_by(|&a, &b| f[b].total_cmp(&f[a]));
-    let mut used = vec![false; n];
-    let mut chains: Vec<MemChain> = Vec::new();
-
-    for &peak in &peaks {
-        if used[peak] {
-            continue;
-        }
-        let score = f[peak];
-        let mut idx = peak;
-        let mut chain_idx = Vec::new();
-        loop {
-            if used[idx] {
-                break;
-            }
-            used[idx] = true;
-            chain_idx.push(idx);
-            if p[idx] == usize::MAX {
-                break;
-            }
-            idx = p[idx];
-        }
-        chain_idx.reverse(); // now in colinear order
-        let chain_mems: Vec<Mem> = chain_idx.iter().map(|&k| sorted[k]).collect();
-        chains.push(MemChain {
-            mems: chain_mems,
-            score,
-            is_fw,
+        let n = mems.len();
+        // Sort anchors colinearly; keep an index permutation so we can report the
+        // original Mem values.
+        order.clear();
+        order.extend(0..n);
+        order.sort_by(|&a, &b| {
+            (mems[a].ref_start, mems[a].read_start).cmp(&(mems[b].ref_start, mems[b].read_start))
         });
-    }
+        sorted.clear();
+        sorted.extend(order.iter().map(|&i| mems[i]));
 
-    // Filter by sub-optimality threshold and sort by descending score.
-    let best = chains.iter().map(|c| c.score).fold(f32::MIN, f32::max);
-    let cutoff = best * cfg.chain_subopt_thresh;
-    chains.retain(|c| c.score >= cutoff);
-    chains.sort_by(|a, b| b.score.total_cmp(&a.score));
-    chains
+        f.clear();
+        f.resize(n, 0.0); // best score ending at i
+        p.clear();
+        p.resize(n, usize::MAX); // predecessor (MAX = none)
+
+        for i in 0..n {
+            f[i] = sorted[i].len as f32;
+            let lb = if cfg.max_lookback == 0 {
+                0
+            } else {
+                i.saturating_sub(cfg.max_lookback)
+            };
+            for j in (lb..i).rev() {
+                let dr = sorted[i].ref_start - sorted[j].ref_start;
+                // Anchors are sorted by ref_start, so as `j` decreases `dr` only
+                // grows: once the reference gap exceeds the bandwidth, every
+                // earlier predecessor is also out of range — break, don't continue
+                // (pufferfish's `if (rdiff > ...) break;`, turning the predecessor
+                // scan from O(n) into O(window)). Loss-less.
+                if dr > cfg.max_gap {
+                    break;
+                }
+                let dq = sorted[i].read_start - sorted[j].read_start;
+                // strictly colinear and increasing on both axes
+                if dr <= 0 || dq <= 0 {
+                    continue;
+                }
+                if dq > cfg.max_gap {
+                    continue;
+                }
+                let gap = (dr - dq).abs();
+                // newly matched bases contributed by anchor i
+                let gain = dq.min(dr).min(sorted[i].len) as f32;
+                let sc = f[j] + gain - gap_cost(gap, cfg.seed_len);
+                if sc > f[i] {
+                    f[i] = sc;
+                    p[i] = j;
+                }
+            }
+        }
+
+        // Recover chains: repeatedly take the highest-scoring unused peak and
+        // backtrack until reaching an unused-chain boundary.
+        peaks.clear();
+        peaks.extend(0..n);
+        peaks.sort_by(|&a, &b| f[b].total_cmp(&f[a]));
+        used.clear();
+        used.resize(n, false);
+        let mut chains: Vec<MemChain> = Vec::new();
+
+        for &peak in peaks.iter() {
+            if used[peak] {
+                continue;
+            }
+            let score = f[peak];
+            let mut idx = peak;
+            chain_idx.clear();
+            loop {
+                if used[idx] {
+                    break;
+                }
+                used[idx] = true;
+                chain_idx.push(idx);
+                if p[idx] == usize::MAX {
+                    break;
+                }
+                idx = p[idx];
+            }
+            chain_idx.reverse(); // now in colinear order
+            let cm: Vec<Mem> = chain_idx.iter().map(|&k| sorted[k]).collect();
+            chains.push(MemChain::new(cm, score, is_fw));
+        }
+
+        // Filter by sub-optimality threshold and sort by descending score.
+        let best = chains.iter().map(|c| c.score).fold(f32::MIN, f32::max);
+        let cutoff = best * cfg.chain_subopt_thresh;
+        chains.retain(|c| c.score >= cutoff);
+        chains.sort_by(|a, b| b.score.total_cmp(&a.score));
+        chains
+    })
 }
 
 #[cfg(test)]

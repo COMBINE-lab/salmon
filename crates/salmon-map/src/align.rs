@@ -139,9 +139,33 @@ pub fn align_chain(
 thread_local! {
     /// Per-thread cache of gap/flank DP scores, keyed by the exact (query, ref)
     /// substring pair — salmon's alignment cache, to avoid re-running identical
-    /// DPs (common for shared gaps/flanks across reads).
-    static GAP_CACHE: std::cell::RefCell<std::collections::HashMap<(Box<[u8]>, Box<[u8]>), i32>> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// DPs (common for shared gaps/flanks across the candidate placements of one
+    /// read). salmon scopes this cache per read; we instead bound it by size
+    /// (see [`GAP_CACHE_CAP`]) so it cannot grow without limit over a whole run
+    /// — an unbounded thread-local here cost tens of GB on a 36M-read library.
+    static GAP_CACHE: std::cell::RefCell<ahash::AHashMap<(Box<[u8]>, Box<[u8]>), i32>> =
+        std::cell::RefCell::new(ahash::AHashMap::new());
+}
+
+/// Maximum number of cached (query, ref) DP scores per thread. The cache exists
+/// to dedup identical inter-MEM gap / flank alignments across one read's
+/// candidate targets, where the working set is tiny; cross-read reuse is rare
+/// (flanks are read-specific). When the cap is hit we clear the whole cache,
+/// keeping peak memory at a few MB per thread instead of unbounded growth.
+const GAP_CACHE_CAP: usize = 32_768;
+
+/// Insert into the gap/flank cache, clearing it first if it has reached the cap.
+#[inline]
+fn gap_cache_insert(
+    c: &std::cell::RefCell<ahash::AHashMap<(Box<[u8]>, Box<[u8]>), i32>>,
+    key: (Box<[u8]>, Box<[u8]>),
+    score: i32,
+) {
+    let mut m = c.borrow_mut();
+    if m.len() >= GAP_CACHE_CAP {
+        m.clear();
+    }
+    m.insert(key, score);
 }
 
 /// PuffAligner-style score: each MEM contributes an exact-match score and only
@@ -212,7 +236,7 @@ fn dna5_mat(cfg: &AlignConfig) -> [i8; 25] {
 /// Global DP score of an inter-MEM gap (both substrings fully consumed). The
 /// band is widened to guarantee the alignment can reach the corner.
 fn ksw2_gap_global(qg: &[u8], tg: &[u8], cfg: &AlignConfig) -> i32 {
-    use ksw2rs::{extz2, Extz, Extz2Input, KSW_EZ_RIGHT, KSW_NEG_INF};
+    use ksw2rs::{extz2, Extz, Extz2Input, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
     if qg.is_empty() {
         return -(cfg.gap_open_pen as i32 + tg.len() as i32 * cfg.gap_extend_pen as i32);
     }
@@ -235,7 +259,9 @@ fn ksw2_gap_global(qg: &[u8], tg: &[u8], cfg: &AlignConfig) -> i32 {
         w,
         zdrop: -1,
         end_bonus: 0,
-        flag: KSW_EZ_RIGHT,
+        // Mapping only needs the score, not the CIGAR — score-only mode skips the
+        // O(qlen·tlen) traceback-matrix fill and backtrack pass.
+        flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY,
     };
     let mut ez = Extz::default();
     ez.reset();
@@ -254,7 +280,7 @@ fn ksw2_gap_global(qg: &[u8], tg: &[u8], cfg: &AlignConfig) -> i32 {
 /// 5' flank (`anchor_right`) the sequences are reversed so the anchor is on the
 /// left, matching ksw2's left-anchored extension.
 fn ksw2_flank_extend(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: bool) -> i32 {
-    use ksw2rs::{extz2, Extz, Extz2Input, KSW_EZ_RIGHT, KSW_NEG_INF};
+    use ksw2rs::{extz2, Extz, Extz2Input, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY, KSW_NEG_INF};
     if qf.is_empty() {
         return 0;
     }
@@ -280,7 +306,8 @@ fn ksw2_flank_extend(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: bool
         w: cfg.bandwidth.max(qf.len() as i32),
         zdrop: -1,
         end_bonus: 0,
-        flag: KSW_EZ_RIGHT,
+        // Score-only: we read `mqe`/`max`, never the CIGAR (see ksw2_gap_global).
+        flag: KSW_EZ_RIGHT | KSW_EZ_SCORE_ONLY,
     };
     let mut ez = Extz::default();
     ez.reset();
@@ -306,7 +333,7 @@ fn cached_gap_score(qg: &[u8], tg: &[u8], cfg: &AlignConfig) -> i32 {
             return s;
         }
         let s = ksw2_gap_global(qg, tg, cfg);
-        c.borrow_mut().insert(key, s);
+        gap_cache_insert(c, key, s);
         s
     })
 }
@@ -324,7 +351,7 @@ fn cached_flank_score(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: boo
             return s;
         }
         let s = ksw2_flank_extend(qf, tf, cfg, anchor_right);
-        c.borrow_mut().insert(key, s);
+        gap_cache_insert(c, key, s);
         s
     })
 }
@@ -482,11 +509,7 @@ mod tests {
 
     /// A forward chain whose single MEM places read offset 0 at ref `r0`.
     fn fw_chain(r0: i32, len: i32) -> MemChain {
-        MemChain {
-            mems: vec![Mem::new(0, r0, len)],
-            score: len as f32,
-            is_fw: true,
-        }
+        MemChain::new(vec![Mem::new(0, r0, len)], len as f32, true)
     }
 
     #[test]
@@ -522,11 +545,7 @@ mod tests {
         // read exactly matches ref[100..160]; two MEMs with an exact gap between.
         let reference = gen_seq(400, 73);
         let read = reference[100..160].to_vec();
-        let chain = MemChain {
-            mems: vec![Mem::new(0, 100, 25), Mem::new(30, 130, 30)],
-            score: 55.0,
-            is_fw: true,
-        };
+        let chain = MemChain::new(vec![Mem::new(0, 100, 25), Mem::new(30, 130, 30)], 55.0, true);
         let cfg = AlignConfig::default();
         let a = align_chain(&read, &reference, &chain, &cfg).unwrap();
         assert_eq!(a.score, perfect_score(read.len(), &cfg), "got {}", a.score);
@@ -555,11 +574,7 @@ mod tests {
         let reference = gen_seq(300, 13);
         let window = &reference[50..130];
         let rc_read = revcomp(window); // the read is the RC of the ref window
-        let chain = MemChain {
-            mems: vec![Mem::new(0, 50, 31)],
-            score: 31.0,
-            is_fw: false,
-        };
+        let chain = MemChain::new(vec![Mem::new(0, 50, 31)], 31.0, false);
         let cfg = AlignConfig::default();
         let aln = align_chain(&rc_read, &reference, &chain, &cfg).unwrap();
         // wrapper revcomps the read back to the forward window -> perfect match

@@ -12,6 +12,7 @@
 
 mod output;
 mod processor;
+mod sam;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -67,6 +68,9 @@ pub struct QuantOptions {
     pub dump_eq_weights: bool,
     /// write `aux_info/unmapped_names.txt` (names of unmapped fragments + status)
     pub write_unmapped_names: bool,
+    /// write per-mapping SAM records to this path (`--writeMappings`); spoofed
+    /// CIGAR (`<readLen>M` + end soft-clips), matching salmon's standard output
+    pub write_mappings: Option<PathBuf>,
     /// enable sequence-specific bias correction (`--seqBias`)
     pub seq_bias: bool,
     /// enable fragment-GC bias correction (`--gcBias`)
@@ -103,6 +107,7 @@ impl QuantOptions {
             dump_eq: false,
             dump_eq_weights: false,
             write_unmapped_names: false,
+            write_mappings: None,
             seq_bias: false,
             gc_bias: false,
             pos_bias: false,
@@ -130,6 +135,20 @@ pub struct QuantResult {
     pub num_processed: u64,
     pub num_mapped: u64,
     pub num_eq_classes: usize,
+    /// index of the first decoy reference (`None` if the index has no decoys);
+    /// references at/after this are excluded from `quant.sf` and counted as decoys
+    pub first_decoy_index: Option<usize>,
+    /// whether the index collapsed duplicate sequences (for meta_info)
+    pub keep_duplicates: bool,
+    /// fragments dropped because their best alignment was to a decoy
+    pub num_decoy_fragments: u64,
+    /// fragments whose mates dovetail (overlap past each other)
+    pub num_dovetail_fragments: u64,
+    /// fragments that had candidate mappings but none survived validation/filtering
+    pub num_fragments_filtered_vm: u64,
+    /// per-fragment candidate alignments dropped for scoring below threshold,
+    /// summed over fragments that nonetheless mapped
+    pub num_alignments_below_threshold_for_mapped_fragments_vm: u64,
     pub frag_len_mean: f64,
     /// standard deviation of the observed fragment-length distribution
     pub frag_len_sd: f64,
@@ -173,9 +192,21 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let mut fld = FragmentLengthDistribution::new(1.0, 1000, 250.0, 25.0, 4, 0.5, 1);
     let num_processed = AtomicU64::new(0);
     let num_mapped = AtomicU64::new(0);
+    let num_decoy = AtomicU64::new(0);
+    let num_dovetail = AtomicU64::new(0);
+    let num_frags_filtered_vm = AtomicU64::new(0);
+    let num_below_threshold_vm = AtomicU64::new(0);
     // collector for `--writeUnmappedNames` (names of unmapped fragments)
     let unmapped_collector: Option<std::sync::Mutex<Vec<String>>> =
         opts.write_unmapped_names.then(|| std::sync::Mutex::new(Vec::new()));
+    // SAM sink for `--writeMappings` (header written here).
+    let sam_writer: Option<sam::SamWriter> = match &opts.write_mappings {
+        Some(path) => {
+            let cmd = format!("salmon quant -i {}", opts.index_dir.display());
+            Some(sam::SamWriter::create(path, &salmon, &cmd).context("opening SAM output")?)
+        }
+        None => None,
+    };
     let nthreads = if opts.num_threads == 0 {
         std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
     } else {
@@ -275,7 +306,12 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             paired_lib: opts.is_paired(),
             num_processed: &num_processed,
             num_mapped: &num_mapped,
+            num_decoy: &num_decoy,
+            num_dovetail: &num_dovetail,
+            num_frags_filtered_vm: &num_frags_filtered_vm,
+            num_below_threshold_vm: &num_below_threshold_vm,
             unmapped_names: unmapped_collector.as_ref(),
+            sam: sam_writer.as_ref(),
         };
         let mut proc = QuantProcessor::new(shared);
         if opts.is_paired() {
@@ -283,6 +319,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         } else {
             run_single(&opts.unmated, &mut proc, nthreads)?;
         }
+    }
+    if let Some(sw) = &sam_writer {
+        sw.flush().context("flushing SAM output")?;
     }
 
     // Write aux_info/unmapped_names.txt ("<name> <status>" per line; the port maps
@@ -557,6 +596,13 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         num_processed: num_processed.load(Ordering::Relaxed),
         num_mapped: num_mapped.load(Ordering::Relaxed),
         num_eq_classes,
+        first_decoy_index: salmon.info().first_decoy_index,
+        keep_duplicates: false,
+        num_decoy_fragments: num_decoy.load(Ordering::Relaxed),
+        num_dovetail_fragments: num_dovetail.load(Ordering::Relaxed),
+        num_fragments_filtered_vm: num_frags_filtered_vm.load(Ordering::Relaxed),
+        num_alignments_below_threshold_for_mapped_fragments_vm: num_below_threshold_vm
+            .load(Ordering::Relaxed),
         frag_len_mean: fld.mean(),
         frag_len_sd: fld.sd(),
         length_classes: salmon_model::compute_length_quantiles(

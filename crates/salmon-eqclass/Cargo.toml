@@ -11,6 +11,7 @@ description = "Equivalence-class data structures and concurrent builder for the 
 [dependencies]
 salmon-core = { path = "../salmon-core" }
 scc = { workspace = true }
+dashmap = { workspace = true }
 xxhash-rust = { workspace = true }
 
 [lints.rust]
