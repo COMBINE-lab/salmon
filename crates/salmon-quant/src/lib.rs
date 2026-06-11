@@ -148,6 +148,27 @@ pub struct QuantResult {
     pub bootstraps: Vec<Vec<f64>>,
     /// per-transcript (unique, ambiguous) fragment counts for `ambig_info.tsv`
     pub ambig: (Vec<u32>, Vec<u32>),
+    /// observed/expected bias-model tables for the aux dumps; each component is
+    /// empty unless the corresponding `--seqBias`/`--gcBias`/`--posBias` ran
+    pub bias_dump: BiasDump,
+}
+
+/// Flattened observed/expected bias-model tables captured for the `aux_info`
+/// dump files. Each group is empty when its bias correction was not enabled.
+/// Seq tables are the [`SBModel`] transition tables; GC the `cond×gc` matrices;
+/// pos the per-length-class [`salmon_model::SimplePosBias`] bin masses.
+#[derive(Debug, Clone, Default)]
+pub struct BiasDump {
+    pub obs5_seq: Vec<f64>,
+    pub obs3_seq: Vec<f64>,
+    pub exp5_seq: Vec<f64>,
+    pub exp3_seq: Vec<f64>,
+    pub obs_gc: Vec<f64>,
+    pub exp_gc: Vec<f64>,
+    pub obs5_pos: Vec<Vec<f64>>,
+    pub obs3_pos: Vec<Vec<f64>>,
+    pub exp5_pos: Vec<Vec<f64>>,
+    pub exp3_pos: Vec<Vec<f64>>,
 }
 
 /// Run quantification end-to-end, writing outputs and returning the results.
@@ -317,6 +338,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // estimate, recompute bias-corrected effective lengths, then re-run
     // inference. Composes `--seqBias`, `--gcBias`, and `--posBias` in any
     // combination via the unified convolution (salmon's updateEffectiveLengths).
+    let mut bias_dump = BiasDump::default();
     if (opts.seq_bias || opts.gc_bias || opts.pos_bias) && !opts.no_length_correction {
         use rayon::prelude::*;
         let pmf_lin: Vec<f64> = log_pmf.iter().map(|lp| lp.exp()).collect();
@@ -342,10 +364,16 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             );
             (obs_fw, obs_rc, exp_fw, exp_rc)
         });
+        if let Some((ofw, orc, efw, erc)) = seq.as_ref() {
+            bias_dump.obs5_seq = ofw.dump().to_vec();
+            bias_dump.obs3_seq = orc.dump().to_vec();
+            bias_dump.exp5_seq = efw.dump().to_vec();
+            bias_dump.exp3_seq = erc.dump().to_vec();
+        }
 
         // Fragment-GC observed + expected models -> clamped ratio model.
         let prefixes = gc_prefix.as_ref();
-        let gc_ratio_model = gcbias_obs.map(|m| {
+        let gc_ratio_model = if let Some(m) = gcbias_obs {
             let mut obs = m.into_inner().unwrap();
             let mut exp = salmon_model::build_expected_gc(
                 num_refs,
@@ -361,8 +389,16 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                 k,
                 salmon_model::GC_SAMP_STRIDE,
             );
-            salmon_model::gc_ratio(&mut obs, &mut exp, salmon_model::gcbias::GC_MAX_RATIO)
-        });
+            // Capture the (normalized) observed/expected GC tables for the dumps
+            // before gc_ratio consumes them (normalize is idempotent).
+            obs.normalize();
+            exp.normalize();
+            bias_dump.obs_gc = obs.dump().to_vec();
+            bias_dump.exp_gc = exp.dump().to_vec();
+            Some(salmon_model::gc_ratio(&mut obs, &mut exp, salmon_model::gcbias::GC_MAX_RATIO))
+        } else {
+            None
+        };
 
         // Positional-bias observed (finalized) + expected (5'/3' per length class).
         let pos_models = posbias_obs.map(|m| {
@@ -403,6 +439,13 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             }
             (obs_fw, obs_rc, exp_fw, exp_rc)
         });
+        if let Some((ofw, orc, efw, erc)) = pos_models.as_ref() {
+            let masses = |v: &[salmon_model::SimplePosBias]| v.iter().map(|m| m.masses().to_vec()).collect();
+            bias_dump.obs5_pos = masses(ofw);
+            bias_dump.obs3_pos = masses(orc);
+            bias_dump.exp5_pos = masses(efw);
+            bias_dump.exp3_pos = masses(erc);
+        }
 
         let corrected: Vec<f64> = (0..num_refs)
             .into_par_iter()
@@ -521,6 +564,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         library_type,
         bootstraps,
         ambig,
+        bias_dump,
     };
 
     write_outputs(opts, &result)?;

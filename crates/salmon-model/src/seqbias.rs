@@ -105,6 +105,13 @@ impl SBModel {
         ((mer >> self.shifts[pos]) & self.masks[pos]) as usize
     }
 
+    /// The flattened transition table (`probs[pos * ROWS + idx]`), for dumping to
+    /// the aux bias files. Linear counts before [`normalize`](Self::normalize),
+    /// conditional log-probabilities after.
+    pub fn dump(&self) -> &[f64] {
+        &self.probs
+    }
+
     /// Accumulate one observed context with the given weight.
     pub fn add_context(&mut self, context: &[u8], rev_comp: bool, weight: f64) {
         debug_assert!(!self.trained, "cannot add to a normalized model");

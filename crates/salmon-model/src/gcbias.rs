@@ -74,6 +74,12 @@ impl GcFragModel {
         ctx * self.gc_bins + gc
     }
 
+    /// The flattened `cond_bins × gc_bins` table (`counts[ctx * gc_bins + gc]`,
+    /// row-major), for dumping to the aux bias files.
+    pub fn dump(&self) -> &[f64] {
+        &self.counts
+    }
+
     /// Accumulate `weight` for a fragment with the given GC and context fractions.
     pub fn inc(&mut self, gc_frac: i32, ctx_frac: i32, weight: f64) {
         debug_assert!(!self.normalized, "cannot inc a normalized model");

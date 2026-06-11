@@ -27,6 +27,7 @@ pub fn write_outputs(opts: &QuantOptions, res: &QuantResult) -> Result<()> {
     write_flen_dist(&dir.join("libParams").join("flenDist.txt"), res)?;
     write_quant_log(&dir.join("logs").join("salmon_quant.log"), opts, res)?;
     write_fld_dump(&dir.join("aux_info").join("fld.gz"), res)?;
+    write_aux_bias_dumps(&dir.join("aux_info"), res)?;
     if !res.bootstraps.is_empty() {
         write_bootstraps(&dir.join("aux_info").join("bootstrap"), res)?;
     }
@@ -57,17 +58,88 @@ fn write_flen_dist(path: &Path, res: &QuantResult) -> Result<()> {
 /// deterministic expected histogram `round(10000 * pmf[len])` — same type and
 /// layout (gzip of `i32` LE), content matching salmon's up to sampling noise.
 fn write_fld_dump(path: &Path, res: &QuantResult) -> Result<()> {
-    use std::io::Write as _;
     const N_SAMPLES: f64 = 10000.0;
     let mut bytes = Vec::with_capacity(res.frag_len_dist.len() * 4);
     for &p in &res.frag_len_dist {
         let count = (p * N_SAMPLES).round() as i32;
         bytes.extend_from_slice(&count.to_le_bytes());
     }
+    gz_write(path, &bytes)
+}
+
+/// gzip a raw byte buffer to `path` (level 6, matching salmon's aux dumps).
+fn gz_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write as _;
     let f = std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
     let mut enc = flate2::write::GzEncoder::new(f, flate2::Compression::new(6));
-    enc.write_all(&bytes).context("writing fld.gz")?;
-    enc.finish().context("finishing fld.gz")?;
+    enc.write_all(bytes).with_context(|| format!("writing {}", path.display()))?;
+    enc.finish().with_context(|| format!("finishing {}", path.display()))?;
+    Ok(())
+}
+
+/// gzip of a raw little-endian `f64` array.
+fn write_f64_gz(path: &Path, vals: &[f64]) -> Result<()> {
+    let mut b = Vec::with_capacity(vals.len() * 8);
+    for v in vals {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    gz_write(path, &b)
+}
+
+/// gzip of a raw little-endian `i32` array.
+fn write_i32_gz(path: &Path, vals: &[i32]) -> Result<()> {
+    let mut b = Vec::with_capacity(vals.len() * 4);
+    for v in vals {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    gz_write(path, &b)
+}
+
+/// gzip of a per-length-class positional model: header `[u32 num_models][u32
+/// bins_per_model]` then the models' bin masses as `f64` LE, row-major.
+fn write_pos_gz(path: &Path, models: &[Vec<f64>]) -> Result<()> {
+    let bins = models.first().map(|m| m.len()).unwrap_or(0) as u32;
+    let mut b = Vec::new();
+    b.extend_from_slice(&(models.len() as u32).to_le_bytes());
+    b.extend_from_slice(&bins.to_le_bytes());
+    for m in models {
+        for v in m {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    gz_write(path, &b)
+}
+
+/// Aux bias-model dumps. The Rust port computes the SBModel (seq), GC, and
+/// positional models, so those observed/expected tables are dumped (documented
+/// Rust format: gzip of raw little-endian arrays; pos files carry a small header)
+/// whenever the corresponding correction ran. salmon also always writes
+/// `observed_bias`/`observed_bias_3p`/`expected_bias` from its *legacy
+/// simple-count* read-bias model, which this port does not implement — those are
+/// written as documented stubs purely for file-presence.
+fn write_aux_bias_dumps(aux: &Path, res: &QuantResult) -> Result<()> {
+    // Legacy simple-count seq-bias model (not implemented here): documented stubs.
+    write_i32_gz(&aux.join("observed_bias.gz"), &[0])?;
+    write_i32_gz(&aux.join("observed_bias_3p.gz"), &[0])?;
+    write_f64_gz(&aux.join("expected_bias.gz"), &[1.0])?;
+
+    let d = &res.bias_dump;
+    if !d.obs5_seq.is_empty() {
+        write_f64_gz(&aux.join("obs5_seq.gz"), &d.obs5_seq)?;
+        write_f64_gz(&aux.join("obs3_seq.gz"), &d.obs3_seq)?;
+        write_f64_gz(&aux.join("exp5_seq.gz"), &d.exp5_seq)?;
+        write_f64_gz(&aux.join("exp3_seq.gz"), &d.exp3_seq)?;
+    }
+    if !d.obs_gc.is_empty() {
+        write_f64_gz(&aux.join("obs_gc.gz"), &d.obs_gc)?;
+        write_f64_gz(&aux.join("exp_gc.gz"), &d.exp_gc)?;
+    }
+    if !d.obs5_pos.is_empty() {
+        write_pos_gz(&aux.join("obs5_pos.gz"), &d.obs5_pos)?;
+        write_pos_gz(&aux.join("obs3_pos.gz"), &d.obs3_pos)?;
+        write_pos_gz(&aux.join("exp5_pos.gz"), &d.exp5_pos)?;
+        write_pos_gz(&aux.join("exp3_pos.gz"), &d.exp3_pos)?;
+    }
     Ok(())
 }
 
