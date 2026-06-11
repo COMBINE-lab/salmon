@@ -27,7 +27,7 @@ use noodles_sam::alignment::record::data::field::{Tag, Value};
 use noodles_sam::Header;
 use serde::Serialize;
 
-use error_model::{AlignmentModel, AlnOp};
+use error_model::{AlignmentModel, AlnOp, SharedAlignmentModel};
 use salmon_core::{
     is_compatible, LibraryFormat, MateStatus, ReadOrientation, ReadStrandedness, ReadType,
 };
@@ -507,11 +507,11 @@ struct PassCfg<'a> {
     nthreads: usize,
 }
 
-/// Mutable global accumulators developed over the pass: the error model (merged
-/// from per-thread deltas between minibatches), the observed bias models, and
-/// the processed/mapped fragment counts.
+/// Outputs of the online pass: the observed bias models (merged from the
+/// per-worker accumulators) and the processed/mapped fragment counts. The error
+/// model is developed in a shared atomic structure internal to the pass and is
+/// not needed afterward.
 struct PassAccum {
-    model: Option<AlignmentModel>,
     seq_obs: Option<(salmon_model::SBModel, salmon_model::SBModel)>,
     gc_obs: Option<salmon_model::GcFragModel>,
     pos_obs: Option<(Vec<salmon_model::SimplePosBias>, Vec<salmon_model::SimplePosBias>)>,
@@ -519,19 +519,20 @@ struct PassAccum {
     num_mapped: u64,
 }
 
-/// The online pass over an alignment record stream.
+/// The online pass over an alignment record stream, structured as a persistent
+/// producer/worker pool (mirroring salmon's parse-threads → queue →
+/// quant-threads model).
 ///
-/// A dedicated reader thread does only the cheap work — deserialize each record
-/// and group consecutive mapped records by read name into raw fragment groups —
-/// and hands minibatches of groups to the worker pool over a small bounded
-/// channel. The workers do the expensive per-record `record_to_frag`
-/// (2-bit encoding, CIGAR/op extraction, tag parsing, allocation) *and* the
-/// per-fragment likelihood/weighting in a single rayon region, so all that work
-/// is parallelized rather than serialized on the reader. Measured serial reader
-/// floor (decode + deserialize + grouping) is only ~5% of the pass, so this
-/// keeps the workers fed. Each minibatch's per-thread error-model and bias
-/// deltas are merged into the globals between batches (salmon's minibatch
-/// staleness), preserving the online semantics.
+/// One reader thread does only the cheap work — deserialize each record and
+/// group consecutive mapped records by read name into raw fragment groups — and
+/// pushes minibatches onto a bounded work queue (measured serial floor for this
+/// is ~5% of the pass). `nthreads` persistent worker threads pull minibatches
+/// continuously (no per-batch barrier; the MPMC queue load-balances), and each
+/// does the expensive `record_to_frag` (2-bit encoding, CIGAR/op extraction,
+/// tag parsing, allocation) *and* the per-fragment weighting. Workers read the
+/// shared atomic error model for `basis` and flush their own model delta into it
+/// after each minibatch; bias accumulators are per-worker and merged once at the
+/// end (they are only read after the pass).
 fn run_online_pass<R, I>(
     records: I,
     header: &Header,
@@ -542,16 +543,28 @@ where
     R: sam::alignment::Record + Send + Sync,
     I: Iterator<Item = std::io::Result<R>> + Send,
 {
-    use rayon::prelude::*;
-    use std::sync::mpsc::sync_channel;
+    use crossbeam_channel::bounded;
 
-    let init = || Local::new(cfg.use_error_model, cfg.seq_bias, cfg.gc_bias, cfg.pos_bias);
+    // Fragments a worker processes between flushing its error-model delta into
+    // the shared model. Small = fresher shared model (closer to salmon's live
+    // per-transition training, better parity) but more atomic contention on the
+    // hot match cell; 1 = per-fragment.
+    const FLUSH_INTERVAL: usize = 16;
+
+    // Shared atomic error model: read concurrently for `basis`, updated by the
+    // workers flushing their per-thread deltas into it between minibatches.
+    let shared_model = cfg.use_error_model.then(|| SharedAlignmentModel::new(1.0, 4));
+    let shared_model_ref = shared_model.as_ref();
+    let minibatch = cfg.minibatch;
+    let need_seq = cfg.need_seq;
+    // Each batch carries its forgetting-mass step, assigned by the reader in
+    // batch order (so the online schedule is tied to the minibatch index, as in
+    // salmon, rather than to nondeterministic worker-pull order).
+    let (tx, rx) = bounded::<(f64, Vec<Vec<R>>)>(2 * cfg.nthreads + 1);
+    let online_reader = cfg.online;
 
     std::thread::scope(|scope| -> Result<()> {
-        let (tx, rx) = sync_channel::<Vec<Vec<R>>>(2);
-        let minibatch = cfg.minibatch;
-
-        // Reader thread: deserialize + group raw records by name (cheap), batch.
+        // Reader/parser thread.
         let reader = scope.spawn(move || -> Result<()> {
             let mut cur_name: Vec<u8> = Vec::new();
             let mut have = false;
@@ -571,8 +584,9 @@ where
                     batch.push(std::mem::take(&mut group));
                     cur_name = cname;
                     if batch.len() >= minibatch {
-                        if tx.send(std::mem::take(&mut batch)).is_err() {
-                            return Ok(()); // consumer gone
+                        let fm = online_reader.map(|o| o.next_log_fm()).unwrap_or(0.0);
+                        if tx.send((fm, std::mem::take(&mut batch))).is_err() {
+                            return Ok(()); // all workers gone
                         }
                         batch = Vec::with_capacity(minibatch);
                     }
@@ -583,76 +597,95 @@ where
                 batch.push(group);
             }
             if !batch.is_empty() {
-                let _ = tx.send(batch);
+                let fm = online_reader.map(|o| o.next_log_fm()).unwrap_or(0.0);
+                let _ = tx.send((fm, batch));
             }
             Ok(())
         });
 
-        let need_seq = cfg.need_seq;
-        while let Ok(raw_batch) = rx.recv() {
-            let local = {
-                let ctx = FragCtx {
-                    model: acc.model.as_ref(),
-                    online: cfg.online,
-                    fld: cfg.fld,
-                    eq_builder: cfg.eq_builder,
-                    ref_bytes: cfg.ref_bytes,
-                    lengths: cfg.lengths,
-                    gc_prefix: cfg.gc_prefix,
-                    length_class: cfg.length_class,
-                    expected_format: cfg.expected_format,
-                    ignore_incompat: cfg.ignore_incompat,
-                    incompat_prior: cfg.incompat_prior,
-                    paired_lib: cfg.paired_lib,
-                    range_factorization_bins: cfg.range_factorization_bins,
-                    log_fm: cfg.online.map(|o| o.next_log_fm()).unwrap_or(0.0),
-                };
-                let chunk = raw_batch.len().div_ceil(cfg.nthreads).max(1);
-                raw_batch
-                    .par_chunks(chunk)
-                    .map(|groups| {
-                        let mut acc_local = init();
-                        let mut frags: Vec<FragRecord> = Vec::new();
-                        for raw_group in groups {
-                            frags.clear();
-                            for r in raw_group {
-                                if let Some((_, f)) = record_to_frag(r, header, need_seq) {
-                                    frags.push(f);
-                                }
+        // Persistent worker pool: each pulls minibatches until the queue closes.
+        let mut workers = Vec::with_capacity(cfg.nthreads);
+        for _ in 0..cfg.nthreads {
+            let rx = rx.clone();
+            workers.push(scope.spawn(move || -> (Local, u64) {
+                let mut local =
+                    Local::new(cfg.use_error_model, cfg.seq_bias, cfg.gc_bias, cfg.pos_bias);
+                let mut count = 0u64;
+                let mut frags: Vec<FragRecord> = Vec::new();
+                while let Ok((log_fm, raw_batch)) = rx.recv() {
+                    let ctx = FragCtx {
+                        model: shared_model_ref,
+                        online: cfg.online,
+                        fld: cfg.fld,
+                        eq_builder: cfg.eq_builder,
+                        ref_bytes: cfg.ref_bytes,
+                        lengths: cfg.lengths,
+                        gc_prefix: cfg.gc_prefix,
+                        length_class: cfg.length_class,
+                        expected_format: cfg.expected_format,
+                        ignore_incompat: cfg.ignore_incompat,
+                        incompat_prior: cfg.incompat_prior,
+                        paired_lib: cfg.paired_lib,
+                        range_factorization_bins: cfg.range_factorization_bins,
+                        log_fm,
+                    };
+                    let mut since_flush = 0usize;
+                    for raw_group in &raw_batch {
+                        frags.clear();
+                        for r in raw_group {
+                            if let Some((_, f)) = record_to_frag(r, header, need_seq) {
+                                frags.push(f);
                             }
-                            process_fragment(&frags, &ctx, &mut acc_local);
                         }
-                        acc_local
-                    })
-                    .reduce(&init, Local::merge)
-            };
-            // Merge the batch's per-thread deltas into the globals.
-            if let (Some(g), Some(d)) = (acc.model.as_mut(), local.model) {
-                g.combine(&d);
-            }
-            if let (Some(g), Some(d)) = (acc.seq_obs.as_mut(), local.seq_obs) {
-                g.0.combine_counts(&d.0);
-                g.1.combine_counts(&d.1);
-            }
-            if let (Some(g), Some(d)) = (acc.gc_obs.as_mut(), local.gc_obs) {
-                g.combine_counts(&d);
-            }
-            if let (Some(g), Some(d)) = (acc.pos_obs.as_mut(), local.pos_obs) {
-                for (a, b) in g.0.iter_mut().zip(&d.0) {
-                    a.combine(b);
+                        process_fragment(&frags, &ctx, &mut local);
+                        // Publish the error-model delta into the shared model
+                        // every FLUSH_INTERVAL fragments so other workers' `basis`
+                        // sees fresh-enough training. The update granularity is
+                        // what governs parity with salmon's live per-transition
+                        // model: ~per-fragment freshness recovers it, while the
+                        // batched flush keeps hot-cell atomic contention low.
+                        since_flush += 1;
+                        if since_flush >= FLUSH_INTERVAL {
+                            if let (Some(sm), Some(d)) = (shared_model_ref, local.model.as_mut()) {
+                                sm.flush_from(d);
+                                d.clear();
+                            }
+                            since_flush = 0;
+                        }
+                    }
+                    if since_flush > 0 {
+                        if let (Some(sm), Some(d)) = (shared_model_ref, local.model.as_mut()) {
+                            sm.flush_from(d);
+                            d.clear();
+                        }
+                    }
+                    count += raw_batch.len() as u64;
                 }
-                for (a, b) in g.1.iter_mut().zip(&d.1) {
-                    a.combine(b);
-                }
-            }
-            let n = raw_batch.len() as u64;
-            acc.num_processed += n;
-            acc.num_mapped += n;
+                (local, count)
+            }));
         }
+        drop(rx); // workers hold their own clones; lets the queue disconnect
 
         reader
             .join()
-            .map_err(|_| anyhow::anyhow!("alignment reader thread panicked"))?
+            .map_err(|_| anyhow::anyhow!("alignment reader thread panicked"))??;
+
+        // Merge the per-worker bias accumulators + counts.
+        let mut merged = Local::new(cfg.use_error_model, cfg.seq_bias, cfg.gc_bias, cfg.pos_bias);
+        let mut total = 0u64;
+        for w in workers {
+            let (local, count) = w
+                .join()
+                .map_err(|_| anyhow::anyhow!("alignment worker thread panicked"))?;
+            merged = merged.merge(local);
+            total += count;
+        }
+        acc.seq_obs = merged.seq_obs;
+        acc.gc_obs = merged.gc_obs;
+        acc.pos_obs = merged.pos_obs;
+        acc.num_processed = total;
+        acc.num_mapped = total;
+        Ok(())
     })
 }
 
@@ -683,8 +716,9 @@ fn stream_online_pass(bam_path: &Path, cfg: &PassCfg, acc: &mut PassAccum) -> Re
 /// minibatch of fragments can be processed in parallel against the model and
 /// abundance state as of the *previous* batch (salmon's minibatch staleness).
 struct FragCtx<'a> {
-    /// global error model, read-only during the batch (merged between batches)
-    model: Option<&'a AlignmentModel>,
+    /// shared error model, read concurrently for `basis` (workers flush their
+    /// own deltas into it between minibatches)
+    model: Option<&'a SharedAlignmentModel>,
     online: Option<&'a salmon_infer::OnlineInference>,
     fld: &'a FragmentLengthDistribution,
     eq_builder: &'a EquivalenceClassBuilder,
@@ -1036,7 +1070,6 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         Vec::new()
     };
 
-    let model = use_error_model.then(|| AlignmentModel::new(1.0, 4));
     // Online (dual-phase) abundances: develop running estimates so the error
     // model and bias models are trained/collected with abundance-aware posteriors
     // in a single streaming pass (salmon's online phase), rather than two passes.
@@ -1044,13 +1077,9 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     let online = (use_error_model || bias_on)
         .then(|| salmon_infer::OnlineInference::new(&ref_lens_u64, 0.05, 0.65, 5_000_000));
 
-    // Observed bias accumulators (global; per-thread deltas merge in between
-    // minibatches via [`Local`]).
+    // Per-transcript inputs the bias collection needs (the observed bias models
+    // themselves are accumulated per-worker inside the pass).
     use salmon_model::seqbias::CONTEXT_LENGTH;
-    let seq_obs = opts
-        .seq_bias
-        .then(|| (salmon_model::SBModel::new(), salmon_model::SBModel::new()));
-    let gc_obs = opts.gc_bias.then(salmon_model::GcFragModel::default_model);
     let gc_prefix: Vec<Vec<u32>> = if opts.gc_bias {
         ref_bytes.iter().map(|s| salmon_model::gc_prefix(s)).collect()
     } else {
@@ -1061,14 +1090,6 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     });
     let length_class: Option<Vec<usize>> = length_quantiles.as_ref().map(|q| {
         lengths.iter().map(|&l| salmon_model::length_class_index(q, l)).collect()
-    });
-    let pos_obs = opts.pos_bias.then(|| {
-        let mk = || {
-            (0..salmon_model::NUM_LENGTH_CLASSES)
-                .map(|_| salmon_model::SimplePosBias::default())
-                .collect::<Vec<_>>()
-        };
-        (mk(), mk())
     });
 
     // ---- online pass (reader/worker pipeline) ------------------------------
@@ -1118,10 +1139,9 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             nthreads,
         };
         let mut acc = PassAccum {
-            model,
-            seq_obs,
-            gc_obs,
-            pos_obs,
+            seq_obs: None,
+            gc_obs: None,
+            pos_obs: None,
             num_processed: 0,
             num_mapped: 0,
         };
