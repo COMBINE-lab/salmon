@@ -73,7 +73,7 @@ pub fn bootstrap(
         .map(|bs| {
             let mut rng = Pcg64Mcg::seed_from_u64(seed ^ (bs as u64).wrapping_mul(0x9E3779B97F4A7C15));
             let resampled = multinomial(total, &sample_weights, &mut rng);
-            let (mut alphas, _, _) = run_em_counts(p, &resampled, opts, false, 50);
+            let (mut alphas, _, _) = run_em_counts(p, &resampled, opts, false, 50, None);
             // truncate tiny values
             for a in &mut alphas {
                 if *a < opts.min_alpha {

@@ -32,7 +32,7 @@ use salmon_core::{
     is_compatible, LibraryFormat, MateStatus, ReadOrientation, ReadStrandedness, ReadType,
 };
 use salmon_eqclass::{range_factorize_bins, EquivalenceClassBuilder, TranscriptGroup};
-use salmon_infer::{optimize, EmOptions};
+use salmon_infer::{optimize, optimize_with_init, EmOptions};
 use salmon_model::FragmentLengthDistribution;
 
 const SALMON_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -545,10 +545,21 @@ where
         let header = reader.read_header().context("reading SAM header")?;
         run_batches(reader.records(), &header, need_seq, batch_size, f)
     } else {
-        let mut reader = bam::io::Reader::new(
-            std::fs::File::open(bam_path)
-                .with_context(|| format!("opening {}", bam_path.display()))?,
-        );
+        // Decompress BGZF on a small pool of worker threads. Record *parsing*
+        // still happens on the single reader thread, but BGZF inflate of a
+        // permissive (-k) BAM (tens of GB / ~100M records) is otherwise the
+        // serial floor that starves the per-fragment workers; parallelizing it
+        // keeps the reader ahead of the compute pool. salmon uses several parse
+        // threads for the same reason.
+        let file = std::fs::File::open(bam_path)
+            .with_context(|| format!("opening {}", bam_path.display()))?;
+        let workers = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .clamp(1, 4);
+        let workers = std::num::NonZeroUsize::new(workers).unwrap();
+        let decoder = noodles_bgzf::io::MultithreadedReader::with_worker_count(workers, file);
+        let mut reader = bam::io::Reader::from(decoder);
         let header = reader.read_header().context("reading BAM header")?;
         run_batches(reader.records(), &header, need_seq, batch_size, f)
     }
@@ -1065,7 +1076,32 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     let mut collapsed = eq_builder.finish();
     collapsed.update_eff_lengths(&eff_lengths);
     let num_eq_classes = collapsed.len();
-    let mut em = optimize(&collapsed, num_refs, &opts.em);
+
+    // Count-blended EM initialization (salmon's `CollapsedEMOptimizer::optimize`):
+    // seed abundances with a linear combination of the online-phase abundance
+    // estimates (`projectedCounts`) and the uniform distribution, weighted by the
+    // fraction of the burn-in target observed. A warm start near the solution
+    // cuts the number of EM iterations to convergence.
+    let init_alphas: Option<Vec<f64>> = online.as_ref().map(|o| {
+        let masses: Vec<f64> = (0..num_refs).map(|t| o.mass_log(t).exp()).collect();
+        let mass_sum: f64 = masses.iter().sum();
+        let total_reads = num_mapped as f64;
+        // online estimates scaled to a proper count distribution (sum = reads)
+        let projected: Vec<f64> = if mass_sum > 0.0 {
+            masses.iter().map(|&m| m / mass_sum * total_reads).collect()
+        } else {
+            vec![0.0; num_refs]
+        };
+        let uniform_prior = if num_refs > 0 { total_reads / num_refs as f64 } else { 0.0 };
+        // salmon's numRequiredFragments default (the online-phase target)
+        const NUM_REQUIRED_FRAGMENTS: f64 = 50_000_000.0;
+        let frac_observed = (total_reads / NUM_REQUIRED_FRAGMENTS).min(0.999);
+        projected
+            .iter()
+            .map(|&p| p * frac_observed + uniform_prior * (1.0 - frac_observed))
+            .collect()
+    });
+    let mut em = optimize_with_init(&collapsed, num_refs, &opts.em, init_alphas.as_deref());
 
     // ---- bias-corrected effective lengths (shared with reads mode) ----------
     let mut bias_dump = salmon_model::dumps::BiasDump::default();

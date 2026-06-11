@@ -15,6 +15,7 @@ salmon-infer = { path = "../salmon-infer" }
 salmon-model = { path = "../salmon-model" }
 noodles-bam = "0.90"
 noodles-sam = "0.85"
+noodles-bgzf = "0.47"
 rayon = { workspace = true }
 flate2 = { workspace = true }
 jiff = "0.2"

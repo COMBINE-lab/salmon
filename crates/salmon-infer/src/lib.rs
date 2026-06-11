@@ -94,13 +94,40 @@ pub fn optimize(eq: &CollapsedEqClasses, num_txps: usize, opts: &EmOptions) -> E
     optimize_packed(&packed, opts, true)
 }
 
+/// As [`optimize`], but warm-starts the abundances from `init_alphas` (per
+/// transcript id) when its length matches `num_txps` — used to seed the EM with
+/// salmon's count-blended initialization (online estimates blended with uniform),
+/// which reduces the iteration count to convergence.
+pub fn optimize_with_init(
+    eq: &CollapsedEqClasses,
+    num_txps: usize,
+    opts: &EmOptions,
+    init_alphas: Option<&[f64]>,
+) -> EmResult {
+    let packed = PackedEqClasses::from_collapsed(eq, num_txps);
+    optimize_packed_with_init(&packed, opts, true, init_alphas)
+}
+
 /// Core convergence loop over a [`PackedEqClasses`]. `parallel` selects the
 /// rayon M-step (for the single main run) vs. the sequential one (used by
 /// bootstrap, which parallelizes across replicates instead). The per-class
 /// `counts` are the packed structure's own (bootstrap passes resampled counts
 /// through [`run_em_counts`]).
 pub fn optimize_packed(p: &PackedEqClasses, opts: &EmOptions, parallel: bool) -> EmResult {
-    let (mut alphas, iters, converged) = run_em_counts(p, &p.counts, opts, parallel, opts.min_iter);
+    optimize_packed_with_init(p, opts, parallel, None)
+}
+
+/// As [`optimize_packed`], but seeds the abundances from `init_alphas` (a warm
+/// start, e.g. salmon's online-estimate-blended-with-uniform initialization)
+/// when supplied; otherwise starts uniform.
+pub fn optimize_packed_with_init(
+    p: &PackedEqClasses,
+    opts: &EmOptions,
+    parallel: bool,
+    init_alphas: Option<&[f64]>,
+) -> EmResult {
+    let (mut alphas, iters, converged) =
+        run_em_counts(p, &p.counts, opts, parallel, opts.min_iter, init_alphas);
     // truncate negligible abundances (matches salmon's cutoff)
     for a in &mut alphas {
         if *a < opts.min_alpha {
@@ -124,11 +151,18 @@ pub(crate) fn run_em_counts(
     opts: &EmOptions,
     parallel: bool,
     min_iter: u32,
+    init_alphas: Option<&[f64]>,
 ) -> (Vec<f64>, u32, bool) {
     let num_txps = p.num_txps;
     let total: u64 = counts.iter().sum();
     let init = if num_txps > 0 { total as f64 / num_txps as f64 } else { 0.0 };
-    let mut alphas = vec![init; num_txps];
+    // Warm start from a supplied initialization (e.g. the online-phase abundance
+    // estimates blended with uniform, matching salmon's count-blended init) when
+    // its length matches; otherwise start uniform over the total fragment count.
+    let mut alphas = match init_alphas {
+        Some(a) if a.len() == num_txps => a.to_vec(),
+        _ => vec![init; num_txps],
+    };
     let mut alphas_prime = vec![0.0f64; num_txps];
     let prior_alphas = vec![opts.vb_prior; num_txps];
     let mut exp_theta = vec![0.0f64; num_txps];
