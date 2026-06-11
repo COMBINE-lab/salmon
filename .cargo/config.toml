@@ -1,6 +1,0 @@
-# block-aligner's `ensure_simd` guard requires a real SIMD target-feature in
-# optimized builds. Enable AVX2 for x86_64 so release builds work and the
-# SIMD aligner runs at full speed. (Adjust/remove for portable distribution
-# builds, where runtime feature detection or a baseline target is preferred.)
-[target.x86_64-unknown-linux-gnu]
-rustflags = ["-C", "target-feature=+avx2"]

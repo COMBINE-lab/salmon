@@ -17,6 +17,16 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 needletail = "0.6"
+# cf1-rs -> simd-minimizers -> packed-seq -> ensure_simd guards against building
+# its `wide`/portable-simd minimizer code without an AVX2 (x86) / NEON target,
+# which would otherwise force a compile-time `target-feature=+avx2` on the whole
+# binary. Enabling its `scalar` feature (which feature-unifies across the graph)
+# lets the index builder use the portable 128-bit SSE2 fallback instead, so we
+# can ship a single executable that requires no AVX2. This affects only
+# `salmon index` (build-time minimizer throughput); the quant hot path computes
+# minimizers via piscem-rs and validates alignments via ksw2rs's runtime SIMD
+# dispatch, both at full speed regardless of this flag.
+ensure_simd = { version = "0.1.0", features = ["scalar"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

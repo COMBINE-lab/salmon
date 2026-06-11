@@ -8,7 +8,7 @@
 //! - [`mem`] — MEM anchor type and coverage helpers.
 //! - [`chain`] — colinear MEM chaining DP (the mapping-candidate core).
 //! - [`collect`] — MEM collection over piscem k-mer hits + per-target chaining.
-//! - [`align`] — block-aligner validation of a chain against a reference window.
+//! - [`align`] — ksw2 validation of a chain against a reference window.
 //! - [`pair`] — paired-end `joinReadsAndFilter`.
 //! - [`score`] — per-transcript dedup, decoy filtering, and eq-class weighting.
 //! - [`mapper`] — the assembled selective-alignment mapper (single & paired,
@@ -39,7 +39,6 @@ pub use extend::{
 pub use mapper::{
     debug_best_mapping, map_read_pair, map_single_read, DebugMapping, MapConfig, SeedMode,
 };
-pub use align::AlignBackend;
 pub use mem::Mem;
 pub use pair::{join_reads_and_filter, JointMapping, PairingConfig};
 pub use salmon_core::RefProvider;

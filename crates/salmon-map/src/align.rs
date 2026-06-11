@@ -4,31 +4,18 @@
 //! validates each candidate by aligning the read against the reference window
 //! the chain implies, and keeps the candidate only if the alignment score
 //! clears `minScoreFraction * perfectScore`. This mirrors salmon's
-//! `PuffAligner::calculateAlignments`, but uses [`block_aligner`] (a SIMD
-//! banded aligner) in place of ksw2/edlib.
+//! `PuffAligner::calculateAlignments`, scored with [`ksw2rs`] (a Rust port of
+//! `ksw_extz2_sse` with runtime-dispatched SIMD kernels), matching C++ salmon's
+//! banded scoring.
 //!
 //! The wrapper takes the reference sequence bytes as input so it has no
 //! dependency on where those bytes are stored; the full mapper supplies them.
 //!
 //! ## Scoring
-//! salmon's affine scoring is given as positive magnitudes (`--ma/--mp/--go/--ge`).
-//! block-aligner's [`Gaps`] charges `open` for a length-1 gap and `extend` per
-//! additional base, while ksw2 charges `gapo + gape * len`. To match ksw2 we
-//! set `open = -(gap_open + gap_extend)` and `extend = -gap_extend`.
-
-use block_aligner::scan_block::{Block, PaddedBytes};
-use block_aligner::scores::{Gaps, NucMatrix};
+//! salmon's affine scoring is given as positive magnitudes (`--ma/--mp/--go/--ge`);
+//! ksw2 charges `gapo + gape * len` per gap, which we pass through directly.
 
 use crate::chain::MemChain;
-
-/// Which pairwise aligner backs the validation step.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AlignBackend {
-    /// SIMD block aligner (fast; wide adaptive band)
-    BlockAligner,
-    /// ksw2 (`ksw_extz2_sse` port) — banded, matches C++ salmon's scoring
-    Ksw2,
-}
 
 /// Affine-gap scoring and validation thresholds (salmon `--ma/--mp/--go/--ge`,
 /// `--minScoreFraction`). Penalties are positive magnitudes.
@@ -43,10 +30,8 @@ pub struct AlignConfig {
     /// extra reference bases beyond the read length to include in the window,
     /// giving the aligner room for net deletions in the read
     pub indel_margin: usize,
-    /// ksw2 DP bandwidth (salmon's `dpBandwidth`); also bounds block-aligner
+    /// ksw2 DP bandwidth (salmon's `dpBandwidth`)
     pub bandwidth: i32,
-    /// alignment backend
-    pub backend: AlignBackend,
     /// score the full read with one DP (`true`) vs. PuffAligner-style scoring
     /// of only the inter-MEM gaps and flanks, treating MEMs as exact matches
     /// (`false`, salmon's default = faster). Salmon's `--fullLengthAlignment`.
@@ -63,23 +48,8 @@ impl Default for AlignConfig {
             min_score_fraction: 0.65,
             indel_margin: 32,
             bandwidth: 15,
-            // ksw2 by default: matches C++ salmon's banded scoring (parity).
-            backend: AlignBackend::Ksw2,
             // anchored (inter-MEM-gap) scoring by default, matching salmon.
             full_length_alignment: false,
-        }
-    }
-}
-
-impl AlignConfig {
-    fn matrix(&self) -> NucMatrix {
-        NucMatrix::new_simple(self.match_score, -self.mismatch_pen)
-    }
-
-    fn gaps(&self) -> Gaps {
-        Gaps {
-            open: -(self.gap_open_pen as i16 + self.gap_extend_pen as i16) as i8,
-            extend: -self.gap_extend_pen,
         }
     }
 }
@@ -150,10 +120,7 @@ pub fn align_chain(
             return None;
         }
         let rwin = &ref_seq[win_start as usize..win_end as usize];
-        match cfg.backend {
-            AlignBackend::BlockAligner => block_align_score(&query, rwin, cfg),
-            AlignBackend::Ksw2 => ksw2_align_score(&query, rwin, cfg),
-        }
+        ksw2_align_score(&query, rwin, cfg)
     } else {
         // PuffAligner-style: exact-MEM segments + DP of inter-MEM gaps/flanks.
         anchored_align_score(&query, ref_seq, &chain.mems, cfg)
@@ -362,18 +329,6 @@ fn cached_flank_score(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: boo
     })
 }
 
-/// Block-aligner score: semi-global (read fully aligned, reference end free).
-fn block_align_score(query: &[u8], rwin: &[u8], cfg: &AlignConfig) -> i32 {
-    let bsize = (query.len() + 1).next_power_of_two().clamp(32, 1 << 14);
-    let matrix = cfg.matrix();
-    let gaps = cfg.gaps();
-    let q = PaddedBytes::from_bytes::<NucMatrix>(query, bsize);
-    let r = PaddedBytes::from_bytes::<NucMatrix>(rwin, bsize);
-    let mut block = Block::<false, false, false, false, true>::new(query.len(), rwin.len(), bsize);
-    block.align(&q, &r, &matrix, gaps, bsize..=bsize, 0);
-    block.res().score
-}
-
 /// 2-bit/DNA5 encode (A=0,C=1,G=2,T=3,N/other=4) for ksw2.
 fn dna5_encode(seq: &[u8]) -> Vec<u8> {
     seq.iter()
@@ -440,26 +395,70 @@ pub struct WindowAlignment {
 /// Align `query` as a substring of `window` (free reference gaps at both ends),
 /// used for orphan recovery where the mate's position within a fragment-length
 /// window is unknown. The query must align in full; the reference may overhang
-/// on either side for free. Returns `None` if no window/query.
+/// on either side for free, and the best reference end column is reported.
+///
+/// This is a "fitting" affine-gap alignment (global on the query, free ends on
+/// the reference). It's a plain scalar DP — orphan recovery is opt-in
+/// (`recover_orphans`, off by default) and infrequent, so it is not on the hot
+/// path; keeping it scalar avoids any SIMD/platform dependency here. Returns
+/// `None` if either sequence is empty.
 pub fn align_in_window(query: &[u8], window: &[u8], cfg: &AlignConfig) -> Option<WindowAlignment> {
     if query.is_empty() || window.is_empty() {
         return None;
     }
-    let bsize = (query.len() + 1).next_power_of_two().clamp(32, 1 << 14);
-    let matrix = cfg.matrix();
-    let gaps = cfg.gaps();
-    let q = PaddedBytes::from_bytes::<NucMatrix>(query, bsize);
-    let r = PaddedBytes::from_bytes::<NucMatrix>(window, bsize);
-    // FREE_QUERY_START_GAPS + FREE_QUERY_END_GAPS: the read is a substring of
-    // the window. res() reports the best end column on the reference.
-    let mut block = Block::<false, false, false, true, true>::new(query.len(), window.len(), bsize);
-    block.align(&q, &r, &matrix, gaps, bsize..=bsize, 0);
-    let res = block.res();
-    let perfect = perfect_score(query.len(), cfg);
+    let n = query.len();
+    let m = window.len();
+    let ma = cfg.match_score as i32;
+    let mp = cfg.mismatch_pen as i32;
+    let go = cfg.gap_open_pen as i32;
+    let ge = cfg.gap_extend_pen as i32;
+    const NEG: i32 = i32::MIN / 4;
+
+    // Rolling DP rows over reference columns 0..=m.
+    //  h[j]  = best score with query[0..i] consumed, alignment ending at ref col j
+    //  ix[j] = best such score ending in a gap that consumed a query base (no ref)
+    // Free reference start: row i=0 is 0 for every column, so the read may begin
+    // opposite any reference position at no cost.
+    let mut h_prev = vec![0i32; m + 1];
+    let mut ix_prev = vec![NEG; m + 1];
+    let mut h_cur = vec![0i32; m + 1];
+    let mut ix_cur = vec![NEG; m + 1];
+
+    for i in 1..=n {
+        // Column 0: the read cannot be placed entirely left of the window.
+        h_cur[0] = NEG;
+        ix_cur[0] = NEG;
+        let mut iy = NEG; // gap consuming a reference base (deletion in the read)
+        let qi = query[i - 1];
+        for j in 1..=m {
+            let s = if qi == window[j - 1] { ma } else { -mp };
+            let diag = h_prev[j - 1].saturating_add(s);
+            ix_cur[j] = (h_prev[j].saturating_sub(go))
+                .max(ix_prev[j].saturating_sub(ge))
+                .max(NEG);
+            iy = (h_cur[j - 1].saturating_sub(go))
+                .max(iy.saturating_sub(ge))
+                .max(NEG);
+            h_cur[j] = diag.max(ix_cur[j]).max(iy).max(NEG);
+        }
+        std::mem::swap(&mut h_prev, &mut h_cur);
+        std::mem::swap(&mut ix_prev, &mut ix_cur);
+    }
+
+    // Query fully consumed; reference free to end anywhere → best over all columns.
+    let mut best = NEG;
+    let mut end_col = 0usize;
+    for j in 1..=m {
+        if h_prev[j] > best {
+            best = h_prev[j];
+            end_col = j;
+        }
+    }
+    let perfect = perfect_score(n, cfg);
     Some(WindowAlignment {
-        score: res.score,
-        valid: (res.score as f32) >= cfg.min_score_fraction * (perfect as f32),
-        end_col: res.reference_idx,
+        score: best,
+        valid: (best as f32) >= cfg.min_score_fraction * (perfect as f32),
+        end_col,
     })
 }
 
@@ -575,6 +574,42 @@ mod tests {
         let cfg = AlignConfig::default();
         let aln = align_chain(&foreign, &reference, &fw_chain(50, 31), &cfg).unwrap();
         assert!(!aln.valid, "unrelated read should not validate (score {})", aln.score);
+    }
+
+    #[test]
+    fn fitting_window_places_read_in_middle() {
+        // Read exactly matches window[40..120]; free ref-start must find it and
+        // report the read's end column (120) with a perfect score.
+        let window = gen_seq(200, 91);
+        let read = window[40..120].to_vec();
+        let cfg = AlignConfig::default();
+        let a = align_in_window(&read, &window, &cfg).unwrap();
+        assert_eq!(a.score, perfect_score(read.len(), &cfg), "score {}", a.score);
+        assert!(a.valid);
+        assert_eq!(a.end_col, 120, "end_col {}", a.end_col);
+    }
+
+    #[test]
+    fn fitting_window_one_mismatch() {
+        let window = gen_seq(200, 92);
+        let mut read = window[40..120].to_vec();
+        let mid = read.len() / 2;
+        read[mid] = if read[mid] == b'A' { b'C' } else { b'A' };
+        let cfg = AlignConfig::default();
+        let a = align_in_window(&read, &window, &cfg).unwrap();
+        let expected = (read.len() as i32 - 1) * cfg.match_score as i32 - cfg.mismatch_pen as i32;
+        assert_eq!(a.score, expected, "score {}", a.score);
+        assert!(a.valid);
+        assert_eq!(a.end_col, 120);
+    }
+
+    #[test]
+    fn fitting_window_rejects_unrelated() {
+        let window = gen_seq(200, 93);
+        let foreign = gen_seq(80, 54321);
+        let cfg = AlignConfig::default();
+        let a = align_in_window(&foreign, &window, &cfg).unwrap();
+        assert!(!a.valid, "unrelated read should not validate (score {})", a.score);
     }
 
     #[test]
