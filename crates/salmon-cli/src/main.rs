@@ -267,6 +267,12 @@ struct QuantArgs {
     /// Discard a read/fragment that maps to more than this many places (reads mode).
     #[arg(short = 'w', long = "maxReadOcc", default_value_t = 200)]
     max_read_occ: usize,
+    /// Allow dovetailed mappings (mates extending past each other) as concordant.
+    #[arg(long = "allowDovetail")]
+    allow_dovetail: bool,
+    /// ksw2 DP bandwidth for selective alignment (reads mode).
+    #[arg(long = "bandwidth", default_value_t = 15)]
+    bandwidth: i32,
 }
 
 /// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
@@ -426,6 +432,8 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.map_config.align.min_score_fraction = args.min_score_fraction;
     opts.map_config.pair.orphan_chain_sub_thresh = args.orphan_chain_sub_thresh;
     opts.map_config.align.full_length_alignment = args.full_length_alignment;
+    opts.map_config.align.bandwidth = args.bandwidth;
+    opts.map_config.pair.allow_dovetail = args.allow_dovetail;
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems);
     // alignment scoring (selective alignment)
     opts.map_config.align.match_score = args.ma as i8;
