@@ -72,6 +72,8 @@ pub(crate) struct Shared<'a> {
     pub paired_lib: bool,
     pub num_processed: &'a AtomicU64,
     pub num_mapped: &'a AtomicU64,
+    /// when set, collect the names of unmapped fragments (`--writeUnmappedNames`)
+    pub unmapped_names: Option<&'a Mutex<Vec<String>>>,
 }
 
 /// Per-thread mapping processor.
@@ -84,6 +86,8 @@ pub(crate) struct QuantProcessor<'a> {
     pub gcbias: Option<GcFragModel>,
     /// per-thread observed (5', 3') positional-bias models, per length class
     pub posbias: Option<(Vec<SimplePosBias>, Vec<SimplePosBias>)>,
+    /// per-thread collected unmapped-fragment names (merged in on_thread_complete)
+    pub unmapped: Vec<String>,
 }
 
 impl<'a> QuantProcessor<'a> {
@@ -104,6 +108,7 @@ impl<'a> QuantProcessor<'a> {
             seqbias,
             gcbias,
             posbias,
+            unmapped: Vec::new(),
         }
     }
 }
@@ -374,6 +379,22 @@ fn record(
 
 /// Merge this thread's observed bias models (sequence and GC) into the shared
 /// accumulators.
+/// The read name written to unmapped_names.txt: the id up to the first
+/// whitespace (the conventional fragment name), lossily decoded.
+fn read_name(id: &[u8]) -> String {
+    let end = id.iter().position(|b| b.is_ascii_whitespace()).unwrap_or(id.len());
+    String::from_utf8_lossy(&id[..end]).into_owned()
+}
+
+/// Merge this thread's collected unmapped-fragment names into the shared list.
+fn merge_unmapped(proc: &mut QuantProcessor) {
+    if let Some(shared) = proc.shared.unmapped_names {
+        if !proc.unmapped.is_empty() {
+            shared.lock().unwrap().append(&mut proc.unmapped);
+        }
+    }
+}
+
 fn merge_bias(proc: &QuantProcessor) {
     if let (Some(local), Some(shared_mtx)) = (proc.seqbias.as_ref(), proc.shared.seqbias_obs) {
         let mut g = shared_mtx.lock().unwrap();
@@ -400,7 +421,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         &mut self,
         pairs: impl Iterator<Item = (RefRecord<'r>, RefRecord<'r>)>,
     ) -> paraseq::Result<()> {
-        let QuantProcessor { shared, hs, seqbias, gcbias, posbias } = self;
+        let QuantProcessor { shared, hs, seqbias, gcbias, posbias, unmapped } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
         if hs.is_none() {
@@ -417,6 +438,9 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             } else {
                 map_read_pair(idx, hs, sh.salmon, s1.as_ref(), s2.as_ref(), sh.map_cfg)
             };
+            if maps.is_empty() && sh.unmapped_names.is_some() {
+                unmapped.push(format!("{} u", read_name(r1.id())));
+            }
             record(&sh, &maps, log_fm, seqbias.as_mut(), gcbias.as_mut(), posbias.as_mut());
         }
         Ok(())
@@ -424,6 +448,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
 
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
         merge_bias(self);
+        merge_unmapped(self);
         Ok(())
     }
 }
@@ -433,7 +458,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         &mut self,
         records: impl Iterator<Item = RefRecord<'r>>,
     ) -> paraseq::Result<()> {
-        let QuantProcessor { shared, hs, seqbias, gcbias, posbias } = self;
+        let QuantProcessor { shared, hs, seqbias, gcbias, posbias, unmapped } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
         if hs.is_none() {
@@ -448,6 +473,9 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             } else {
                 map_single_read(idx, hs, sh.salmon, s.as_ref(), sh.map_cfg)
             };
+            if maps.is_empty() && sh.unmapped_names.is_some() {
+                unmapped.push(format!("{} u", read_name(rec.id())));
+            }
             record(&sh, &maps, log_fm, seqbias.as_mut(), gcbias.as_mut(), posbias.as_mut());
         }
         Ok(())
@@ -455,6 +483,7 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
 
     fn on_thread_complete(&mut self) -> paraseq::Result<()> {
         merge_bias(self);
+        merge_unmapped(self);
         Ok(())
     }
 }

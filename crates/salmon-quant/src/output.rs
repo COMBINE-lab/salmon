@@ -281,7 +281,7 @@ fn write_meta_info(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resul
         num_valid_targets: res.names.len(),
         num_decoy_targets: 0,
         num_eq_classes: res.num_eq_classes,
-        serialized_eq_classes: false,
+        serialized_eq_classes: opts.dump_eq || opts.dump_eq_weights,
         eq_class_properties,
         length_classes: res.length_classes.clone(),
         num_processed: res.num_processed,

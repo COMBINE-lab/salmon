@@ -141,9 +141,15 @@ struct QuantArgs {
     /// Prior weight for strand-incompatible mappings (0 drops them).
     #[arg(long = "incompatPrior", default_value_t = 0.0)]
     incompat_prior: f64,
-    /// Dump naive equivalence classes to aux_info/eq_classes.txt.
+    /// Dump equivalence classes to aux_info/eq_classes.txt.gz (salmon format).
     #[arg(long = "dumpEq")]
     dump_eq: bool,
+    /// Like --dumpEq, but also write per-transcript weights in each class.
+    #[arg(long = "dumpEqWeights")]
+    dump_eq_weights: bool,
+    /// Write the names of unmapped fragments to aux_info/unmapped_names.txt.
+    #[arg(long = "writeUnmappedNames")]
+    write_unmapped_names: bool,
     /// Enable sequence-specific bias correction.
     #[arg(long = "seqBias")]
     seq_bias: bool,
@@ -307,6 +313,8 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.range_factorization_bins = args.range_factorization_bins;
     opts.incompat_prior = args.incompat_prior;
     opts.dump_eq = args.dump_eq;
+    opts.dump_eq_weights = args.dump_eq_weights;
+    opts.write_unmapped_names = args.write_unmapped_names;
     opts.seq_bias = args.seq_bias;
     opts.gc_bias = args.gc_bias;
     opts.pos_bias = args.pos_bias;

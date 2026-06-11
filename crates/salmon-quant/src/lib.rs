@@ -61,8 +61,12 @@ pub struct QuantOptions {
     pub range_factorization_bins: u32,
     /// prior weight for strand-incompatible mappings; `0` drops them (salmon default)
     pub incompat_prior: f64,
-    /// write `aux_info/eq_classes.txt` (naive transcript-set classes)
+    /// write `aux_info/eq_classes.txt.gz` (salmon format: transcript list + index
+    /// classes). `dump_eq_weights` additionally writes per-transcript weights.
     pub dump_eq: bool,
+    pub dump_eq_weights: bool,
+    /// write `aux_info/unmapped_names.txt` (names of unmapped fragments + status)
+    pub write_unmapped_names: bool,
     /// enable sequence-specific bias correction (`--seqBias`)
     pub seq_bias: bool,
     /// enable fragment-GC bias correction (`--gcBias`)
@@ -97,6 +101,8 @@ impl QuantOptions {
             range_factorization_bins: 4,
             incompat_prior: 0.0,
             dump_eq: false,
+            dump_eq_weights: false,
+            write_unmapped_names: false,
             seq_bias: false,
             gc_bias: false,
             pos_bias: false,
@@ -167,6 +173,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let mut fld = FragmentLengthDistribution::new(1.0, 1000, 250.0, 25.0, 4, 0.5, 1);
     let num_processed = AtomicU64::new(0);
     let num_mapped = AtomicU64::new(0);
+    // collector for `--writeUnmappedNames` (names of unmapped fragments)
+    let unmapped_collector: Option<std::sync::Mutex<Vec<String>>> =
+        opts.write_unmapped_names.then(|| std::sync::Mutex::new(Vec::new()));
     let nthreads = if opts.num_threads == 0 {
         std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
     } else {
@@ -266,6 +275,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             paired_lib: opts.is_paired(),
             num_processed: &num_processed,
             num_mapped: &num_mapped,
+            unmapped_names: unmapped_collector.as_ref(),
         };
         let mut proc = QuantProcessor::new(shared);
         if opts.is_paired() {
@@ -273,6 +283,23 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         } else {
             run_single(&opts.unmated, &mut proc, nthreads)?;
         }
+    }
+
+    // Write aux_info/unmapped_names.txt ("<name> <status>" per line; the port maps
+    // unmapped fragments as "u" — orphan/decoy sub-codes await mapper-reason
+    // reporting, tracked with the *_vm counters).
+    if let Some(collector) = &unmapped_collector {
+        use std::io::Write as _;
+        let names = collector.lock().unwrap();
+        std::fs::create_dir_all(opts.output_dir.join("aux_info")).context("creating aux_info")?;
+        let mut w = std::io::BufWriter::new(
+            std::fs::File::create(opts.output_dir.join("aux_info").join("unmapped_names.txt"))
+                .context("creating unmapped_names.txt")?,
+        );
+        for line in names.iter() {
+            writeln!(w, "{line}")?;
+        }
+        w.flush()?;
     }
 
     // Resolve the library type: the detected format (when auto), else the
@@ -310,9 +337,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     collapsed.update_eff_lengths(&eff_lengths);
     let num_eq_classes = collapsed.len();
 
-    if opts.dump_eq {
-        dump_eq_classes(&opts.output_dir, &salmon, &collapsed)
-            .context("writing eq_classes.txt")?;
+    if opts.dump_eq || opts.dump_eq_weights {
+        dump_eq_classes(&opts.output_dir, &salmon, &collapsed, opts.dump_eq_weights)
+            .context("writing eq_classes.txt.gz")?;
     }
     let mut em = optimize(&collapsed, num_refs, &opts.em);
 
@@ -562,36 +589,61 @@ pub(crate) fn asctime_now() -> String {
 
 /// Write the naive equivalence classes (collapsing any range-factorized
 /// sub-classes back to their transcript set) for comparison/diagnostics.
+/// Write `aux_info/eq_classes.txt.gz` in salmon's format: the transcript count,
+/// the equivalence-class count, all transcript names (one per line, the index
+/// order the classes reference), then one line per class. Without `with_weights`
+/// classes are collapsed by transcript set (`groupSize`, tids…, summed count),
+/// matching salmon's `--dumpEq`; with `with_weights` each class is emitted as-is
+/// with its per-transcript combined weights before the count (`--dumpEqWeights`).
 fn dump_eq_classes(
     dir: &Path,
     salmon: &SalmonIndex,
     collapsed: &salmon_eqclass::CollapsedEqClasses,
+    with_weights: bool,
 ) -> Result<()> {
     use std::collections::BTreeMap;
-    // Accumulate count and summed combined-weights per transcript set, so the
-    // dump shows the average per-fragment conditional probability per transcript.
-    let mut naive: BTreeMap<Vec<u32>, (u64, Vec<f64>)> = BTreeMap::new();
-    for (group, value) in &collapsed.classes {
-        let entry = naive
-            .entry(group.txps.clone())
-            .or_insert_with(|| (0, vec![0.0; group.txps.len()]));
-        entry.0 += value.count;
-        for (i, w) in value.combined_weights.iter().enumerate() {
-            entry.1[i] += w * value.count as f64;
+    use std::io::Write as _;
+    let num_txps = salmon.num_refs();
+    std::fs::create_dir_all(dir.join("aux_info"))?;
+    let f = std::fs::File::create(dir.join("aux_info").join("eq_classes.txt.gz"))?;
+    let mut w = flate2::write::GzEncoder::new(f, flate2::Compression::new(6));
+
+    if with_weights {
+        writeln!(w, "{num_txps}")?;
+        writeln!(w, "{}", collapsed.classes.len())?;
+        for t in 0..num_txps {
+            writeln!(w, "{}", salmon.ref_name(t))?;
+        }
+        for (group, value) in &collapsed.classes {
+            write!(w, "{}", group.txps.len())?;
+            for &tid in &group.txps {
+                write!(w, "\t{tid}")?;
+            }
+            for wt in &value.combined_weights {
+                write!(w, "\t{wt}")?;
+            }
+            writeln!(w, "\t{}", value.count)?;
+        }
+    } else {
+        // Collapse range-factorized sub-classes that share a transcript set.
+        let mut merged: BTreeMap<&Vec<u32>, u64> = BTreeMap::new();
+        for (group, value) in &collapsed.classes {
+            *merged.entry(&group.txps).or_insert(0) += value.count;
+        }
+        writeln!(w, "{num_txps}")?;
+        writeln!(w, "{}", merged.len())?;
+        for t in 0..num_txps {
+            writeln!(w, "{}", salmon.ref_name(t))?;
+        }
+        for (txps, count) in &merged {
+            write!(w, "{}", txps.len())?;
+            for &tid in *txps {
+                write!(w, "\t{tid}")?;
+            }
+            writeln!(w, "\t{count}")?;
         }
     }
-    std::fs::create_dir_all(dir.join("aux_info"))?;
-    let mut w = std::io::BufWriter::new(std::fs::File::create(dir.join("aux_info").join("eq_classes.txt"))?);
-    use std::io::Write as _;
-    for (txps, (count, wsum)) in &naive {
-        let names: Vec<&str> = txps.iter().map(|&t| salmon.ref_name(t as usize)).collect();
-        let avg: Vec<String> = wsum
-            .iter()
-            .map(|s| format!("{:.4}", s / *count as f64))
-            .collect();
-        writeln!(w, "{}\t{}\t{}\t{}", txps.len(), names.join(","), avg.join(","), count)?;
-    }
-    w.flush()?;
+    w.finish()?;
     Ok(())
 }
 
