@@ -39,6 +39,10 @@ pub struct EmOptions {
     pub use_vbem: bool,
     /// per-transcript Dirichlet prior (VBEM only)
     pub vb_prior: f64,
+    /// interpret `vb_prior` as a per-nucleotide prior (`vb_prior * effLen`)
+    /// instead of a flat per-transcript prior (salmon's `--perNucleotidePrior`;
+    /// salmon's default is the per-transcript interpretation).
+    pub per_nucleotide_prior: bool,
 }
 
 impl Default for EmOptions {
@@ -51,6 +55,7 @@ impl Default for EmOptions {
             min_alpha: 1e-8,
             use_vbem: false,
             vb_prior: 1e-2,
+            per_nucleotide_prior: false,
         }
     }
 }
@@ -89,9 +94,14 @@ fn max_rel_diff(alpha_in: &[f64], alpha_out: &[f64], cutoff: f64) -> f64 {
 /// `num_txps` is the total transcript count (output length). Abundances are
 /// initialized uniformly over the total fragment count. Internally builds a
 /// flat CSR [`PackedEqClasses`] and uses rayon-parallel M-steps.
-pub fn optimize(eq: &CollapsedEqClasses, num_txps: usize, opts: &EmOptions) -> EmResult {
+pub fn optimize(
+    eq: &CollapsedEqClasses,
+    num_txps: usize,
+    opts: &EmOptions,
+    eff_lens: Option<&[f64]>,
+) -> EmResult {
     let packed = PackedEqClasses::from_collapsed(eq, num_txps);
-    optimize_packed(&packed, opts, true)
+    optimize_packed_with_init(&packed, opts, true, None, eff_lens)
 }
 
 /// As [`optimize`], but warm-starts the abundances from `init_alphas` (per
@@ -103,9 +113,10 @@ pub fn optimize_with_init(
     num_txps: usize,
     opts: &EmOptions,
     init_alphas: Option<&[f64]>,
+    eff_lens: Option<&[f64]>,
 ) -> EmResult {
     let packed = PackedEqClasses::from_collapsed(eq, num_txps);
-    optimize_packed_with_init(&packed, opts, true, init_alphas)
+    optimize_packed_with_init(&packed, opts, true, init_alphas, eff_lens)
 }
 
 /// Core convergence loop over a [`PackedEqClasses`]. `parallel` selects the
@@ -114,7 +125,7 @@ pub fn optimize_with_init(
 /// `counts` are the packed structure's own (bootstrap passes resampled counts
 /// through [`run_em_counts`]).
 pub fn optimize_packed(p: &PackedEqClasses, opts: &EmOptions, parallel: bool) -> EmResult {
-    optimize_packed_with_init(p, opts, parallel, None)
+    optimize_packed_with_init(p, opts, parallel, None, None)
 }
 
 /// As [`optimize_packed`], but seeds the abundances from `init_alphas` (a warm
@@ -125,9 +136,10 @@ pub fn optimize_packed_with_init(
     opts: &EmOptions,
     parallel: bool,
     init_alphas: Option<&[f64]>,
+    eff_lens: Option<&[f64]>,
 ) -> EmResult {
     let (mut alphas, iters, converged) =
-        run_em_counts(p, &p.counts, opts, parallel, opts.min_iter, init_alphas);
+        run_em_counts(p, &p.counts, opts, parallel, opts.min_iter, init_alphas, eff_lens);
     // truncate negligible abundances (matches salmon's cutoff)
     for a in &mut alphas {
         if *a < opts.min_alpha {
@@ -152,6 +164,7 @@ pub(crate) fn run_em_counts(
     parallel: bool,
     min_iter: u32,
     init_alphas: Option<&[f64]>,
+    eff_lens: Option<&[f64]>,
 ) -> (Vec<f64>, u32, bool) {
     let num_txps = p.num_txps;
     let total: u64 = counts.iter().sum();
@@ -164,7 +177,14 @@ pub(crate) fn run_em_counts(
         _ => vec![init; num_txps],
     };
     let mut alphas_prime = vec![0.0f64; num_txps];
-    let prior_alphas = vec![opts.vb_prior; num_txps];
+    // VBEM prior: flat per-transcript `vb_prior` (salmon's default), or — under
+    // `--perNucleotidePrior` — `vb_prior * effLen` per transcript.
+    let prior_alphas = match (opts.per_nucleotide_prior, eff_lens) {
+        (true, Some(el)) if el.len() == num_txps => {
+            el.iter().map(|&l| opts.vb_prior * l.max(1.0)).collect()
+        }
+        _ => vec![opts.vb_prior; num_txps],
+    };
     let mut exp_theta = vec![0.0f64; num_txps];
     let mut scratch: Vec<f64> = Vec::with_capacity(64);
     // Per-shard dense accumulators reused across all parallel M-steps (allocated

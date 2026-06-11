@@ -255,6 +255,12 @@ struct QuantArgs {
     /// Initialize the optimizer uniformly instead of from the online estimates.
     #[arg(long = "initUniform")]
     init_uniform: bool,
+    /// Interpret --vbPrior as a per-transcript prior (salmon's default).
+    #[arg(long = "perTranscriptPrior")]
+    per_transcript_prior: bool,
+    /// Interpret --vbPrior as a per-nucleotide prior (scaled by effective length).
+    #[arg(long = "perNucleotidePrior", conflicts_with = "per_transcript_prior")]
+    per_nucleotide_prior: bool,
 }
 
 /// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
@@ -356,6 +362,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
         opts.pos_bias = args.pos_bias;
         opts.incompat_prior = args.incompat_prior;
         opts.em.vb_prior = args.vb_prior;
+        opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
         opts.fld_mean = args.fld_mean;
         opts.fld_sd = args.fld_sd;
         opts.fld_max = args.fld_max;
@@ -423,6 +430,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.map_config.collect.max_hit_occ = args.max_occs_per_hit;
     // inference + fragment-length-distribution knobs
     opts.em.vb_prior = args.vb_prior;
+    opts.em.per_nucleotide_prior = args.per_nucleotide_prior;
     opts.fld_mean = args.fld_mean;
     opts.fld_sd = args.fld_sd;
     opts.fld_max = args.fld_max;

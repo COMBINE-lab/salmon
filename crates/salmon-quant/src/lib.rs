@@ -392,7 +392,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         dump_eq_classes(&opts.output_dir, &salmon, &collapsed, opts.dump_eq_weights)
             .context("writing eq_classes.txt.gz")?;
     }
-    let mut em = optimize(&collapsed, num_refs, &opts.em);
+    let mut em = optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths));
 
     // ---- bias correction: re-estimate effective lengths --------------------
     // Build the expected (background) bias models from the initial abundance
@@ -551,7 +551,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             .collect();
         eff_lengths = corrected;
         collapsed.update_eff_lengths(&eff_lengths);
-        em = optimize(&collapsed, num_refs, &opts.em);
+        em = optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths));
     }
     let counts = em.alphas;
 

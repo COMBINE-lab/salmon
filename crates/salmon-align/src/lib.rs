@@ -1204,9 +1204,9 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // `--initUniform` forces the plain uniform EM start; otherwise warm-start
     // from the online-estimate-blended init.
     let mut em = if opts.init_uniform {
-        optimize(&collapsed, num_refs, &opts.em)
+        optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths))
     } else {
-        optimize_with_init(&collapsed, num_refs, &opts.em, init_alphas.as_deref())
+        optimize_with_init(&collapsed, num_refs, &opts.em, init_alphas.as_deref(), Some(&eff_lengths))
     };
 
     // ---- bias-corrected effective lengths (shared with reads mode) ----------
@@ -1312,7 +1312,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             );
         }
         collapsed.update_eff_lengths(&eff_lengths);
-        em = optimize(&collapsed, num_refs, &opts.em);
+        em = optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths));
     }
     let counts = em.alphas;
 
