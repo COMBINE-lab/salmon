@@ -189,6 +189,44 @@ struct RefHashes {
     decoy_name_hash: String,
 }
 
+/// Stream the input FASTA(s) replacing any base that is not A/C/G/T (case-
+/// insensitive) with a pseudo-random ACGT base, writing one cleaned FASTA to
+/// `out_path` (record order and headers preserved). salmon's `FixFasta` does the
+/// same: cf1-rs/packed-seq cannot index `N`/ambiguous bases. The reference seq/
+/// name HASHES are computed on the *original* input (matching salmon, which
+/// hashes before replacement). Returns the number of bases replaced.
+fn preprocess_fasta(inputs: &[PathBuf], out_path: &Path) -> Result<u64> {
+    use std::io::Write as _;
+    const B: [u8; 4] = *b"ACGT";
+    let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut out = std::io::BufWriter::new(
+        std::fs::File::create(out_path).with_context(|| format!("creating {}", out_path.display()))?,
+    );
+    let mut replaced = 0u64;
+    for path in inputs {
+        let mut reader = needletail::parse_fastx_file(path)
+            .with_context(|| format!("opening {}", path.display()))?;
+        while let Some(rec) = reader.next() {
+            let rec = rec.context("reading FASTA record")?;
+            out.write_all(b">")?;
+            out.write_all(rec.id())?;
+            out.write_all(b"\n")?;
+            let mut seq = rec.seq().into_owned();
+            for b in seq.iter_mut() {
+                if !matches!(*b, b'A' | b'C' | b'G' | b'T' | b'a' | b'c' | b'g' | b't') {
+                    x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    *b = B[((x >> 33) & 3) as usize];
+                    replaced += 1;
+                }
+            }
+            out.write_all(&seq)?;
+            out.write_all(b"\n")?;
+        }
+    }
+    out.flush()?;
+    Ok(replaced)
+}
+
 /// Build a salmon index from a transcriptome FASTA into `opts.output_dir`.
 pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     anyhow::ensure!(!opts.transcripts.is_empty(), "no transcript files provided");
@@ -202,10 +240,20 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     let cdbg_prefix = opts.output_dir.join(CDBG_PREFIX);
     let index_prefix = opts.output_dir.join(INDEX_PREFIX);
 
+    // Replace non-ACGT bases up front (cf1-rs/packed-seq can't index N); the
+    // cleaned FASTA feeds the cDBG build and the refseq store, while the hashes
+    // below use the original input.
+    let cleaned = opts.output_dir.join("cleaned_refs.fa");
+    let n_replaced = preprocess_fasta(&opts.transcripts, &cleaned)
+        .context("preprocessing reference FASTA (non-ACGT replacement)")?;
+    if n_replaced > 0 {
+        info!("replaced {n_replaced} non-ACGT base(s) with random bases");
+    }
+
     // Stage 1: compacted de Bruijn graph / reference tiling.
     info!("building compacted dBG (k={}, threads={})", opts.k, threads);
     let cf = cf_build()
-        .input(CfInput::Files(opts.transcripts.clone()))
+        .input(CfInput::Files(vec![cleaned.clone()]))
         .output_prefix(cdbg_prefix.clone())
         .k(opts.k)
         .threads(threads)
@@ -253,13 +301,14 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     };
     write_info(&opts.output_dir, &info)?;
 
-    // Persist the reference sequences (piscem does not retain them) so the
-    // selective-alignment step can fetch reference windows.
-    write_refseq_store(&opts.output_dir, &opts.transcripts, &idx)
+    // Persist the (cleaned) reference sequences (piscem does not retain them) so
+    // the selective-alignment step fetches windows matching the indexed k-mers.
+    write_refseq_store(&opts.output_dir, std::slice::from_ref(&cleaned), &idx)
         .context("writing reference sequence store")?;
 
     if !opts.keep_intermediate {
         remove_cdbg_intermediates(&cdbg_prefix);
+        let _ = std::fs::remove_file(&cleaned);
     }
 
     info!("index built: {} references", info.num_refs);
