@@ -132,6 +132,14 @@ pub struct QuantResult {
     pub frag_len_dist: Vec<f64>,
     /// quant start timestamp (asctime-style), captured when the run began
     pub start_time: String,
+    /// salmon-compatible index seq/name SHA-256/512 hashes (from the index's
+    /// info.json), echoed into meta_info.json for downstream provenance tools
+    pub index_seq_hash: String,
+    pub index_name_hash: String,
+    pub index_seq_hash512: String,
+    pub index_name_hash512: String,
+    pub index_decoy_seq_hash: String,
+    pub index_decoy_name_hash: String,
     /// the library type used: the detected format when `-l A`, else the
     /// user-specified one
     pub library_type: String,
@@ -504,6 +512,12 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         ),
         frag_len_dist: fld.log_pmf().iter().map(|lp| lp.exp()).collect(),
         start_time,
+        index_seq_hash: salmon.info().seq_hash.clone(),
+        index_name_hash: salmon.info().name_hash.clone(),
+        index_seq_hash512: salmon.info().seq_hash512.clone(),
+        index_name_hash512: salmon.info().name_hash512.clone(),
+        index_decoy_seq_hash: salmon.info().decoy_seq_hash.clone(),
+        index_decoy_name_hash: salmon.info().decoy_name_hash.clone(),
         library_type,
         bootstraps,
         ambig,

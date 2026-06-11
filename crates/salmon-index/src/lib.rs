@@ -98,6 +98,95 @@ pub struct IndexInfo {
     pub num_refs: usize,
     /// salmon version that produced the index
     pub salmon_version: String,
+    /// SHA-256/512 of the reference sequences and names, computed to byte-match
+    /// salmon's pufferfish `FixFasta` hashes (so downstream provenance tools
+    /// recognize a Rust-built index as equivalent for the same FASTA). Empty for
+    /// indexes built before these were recorded (`#[serde(default)]`).
+    #[serde(default)]
+    pub seq_hash: String,
+    #[serde(default)]
+    pub name_hash: String,
+    #[serde(default)]
+    pub seq_hash512: String,
+    #[serde(default)]
+    pub name_hash512: String,
+    #[serde(default)]
+    pub decoy_seq_hash: String,
+    #[serde(default)]
+    pub decoy_name_hash: String,
+}
+
+/// Compute the reference sequence/name SHA-256 and SHA-512 hashes exactly as
+/// salmon's pufferfish `FixFasta` does, so the values byte-match a salmon index
+/// built from the same FASTA(s):
+/// - sequences are hashed in FASTA order, with non-printable bytes removed but
+///   **before** uppercasing / non-ACGT replacement / poly-A clipping (i.e. the
+///   original-case printable sequence), for every record;
+/// - names are the header up to the first space or tab (salmon's `sepStr=" \t"`),
+///   hashed for every record whose (printable) sequence is non-empty;
+/// - decoy hashers receive nothing here (decoys are not yet supported), so the
+///   decoy digests are the SHA of the empty string, matching salmon's no-decoy case.
+fn compute_ref_hashes(transcripts: &[PathBuf]) -> Result<RefHashes> {
+    use sha2::{Digest, Sha256, Sha512};
+    let mut seq256 = Sha256::new();
+    let mut name256 = Sha256::new();
+    let mut seq512 = Sha512::new();
+    let mut name512 = Sha512::new();
+    // No decoy support yet: these stay empty → SHA of "" (matches salmon).
+    let decoy256 = Sha256::new();
+    let decoy_name256 = Sha256::new();
+
+    for path in transcripts {
+        let mut reader = needletail::parse_fastx_file(path)
+            .with_context(|| format!("opening {} for hashing", path.display()))?;
+        while let Some(rec) = reader.next() {
+            let rec = rec.context("reading FASTA record for hashing")?;
+            // Keep only C-`isprint` bytes (0x20..=0x7e); preserve original case.
+            let seq: Vec<u8> = rec
+                .seq()
+                .iter()
+                .copied()
+                .filter(|&b| (0x20..=0x7e).contains(&b))
+                .collect();
+            seq256.update(&seq);
+            seq512.update(&seq);
+            if !seq.is_empty() {
+                // Header up to the first ' ' or '\t'.
+                let id = rec.id();
+                let end = id
+                    .iter()
+                    .position(|&b| b == b' ' || b == b'\t')
+                    .unwrap_or(id.len());
+                let name = &id[..end];
+                name256.update(name);
+                name512.update(name);
+            }
+        }
+    }
+    let hex = |bytes: &[u8]| -> String {
+        let mut s = String::with_capacity(bytes.len() * 2);
+        for b in bytes {
+            s.push_str(&format!("{b:02x}"));
+        }
+        s
+    };
+    Ok(RefHashes {
+        seq_hash: hex(&seq256.finalize()),
+        name_hash: hex(&name256.finalize()),
+        seq_hash512: hex(&seq512.finalize()),
+        name_hash512: hex(&name512.finalize()),
+        decoy_seq_hash: hex(&decoy256.finalize()),
+        decoy_name_hash: hex(&decoy_name256.finalize()),
+    })
+}
+
+struct RefHashes {
+    seq_hash: String,
+    name_hash: String,
+    seq_hash512: String,
+    name_hash512: String,
+    decoy_seq_hash: String,
+    decoy_name_hash: String,
 }
 
 /// Build a salmon index from a transcriptome FASTA into `opts.output_dir`.
@@ -146,6 +235,8 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     // Load once to capture reference count and confirm the index is usable.
     let idx = ReferenceIndex::load(&index_prefix, opts.build_ec_table, false)
         .context("loading freshly built index")?;
+    // Reference seq/name hashes (salmon-FixFasta-compatible), over the input FASTA.
+    let h = compute_ref_hashes(&opts.transcripts).context("hashing reference sequences/names")?;
     let info = IndexInfo {
         k: opts.k,
         m,
@@ -153,6 +244,12 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
         has_ec_table: idx.has_ec_table(),
         num_refs: idx.num_refs(),
         salmon_version: env!("CARGO_PKG_VERSION").to_string(),
+        seq_hash: h.seq_hash,
+        name_hash: h.name_hash,
+        seq_hash512: h.seq_hash512,
+        name_hash512: h.name_hash512,
+        decoy_seq_hash: h.decoy_seq_hash,
+        decoy_name_hash: h.decoy_name_hash,
     };
     write_info(&opts.output_dir, &info)?;
 
