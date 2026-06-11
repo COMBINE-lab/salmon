@@ -28,8 +28,32 @@ enum Command {
     Index(IndexArgs),
     /// Quantify transcript abundances from FASTQ reads.
     Quant(QuantArgs),
+    /// Merge a column across multiple samples' quant files into a matrix.
+    Quantmerge(QuantMergeArgs),
     /// Diagnostic: per-read best-mapping detail (placement, seed coverage, score).
     DebugMap(DebugMapArgs),
+}
+
+#[derive(Args)]
+struct QuantMergeArgs {
+    /// Quantification directories (one per sample).
+    #[arg(long = "quants", num_args = 1.., required = true)]
+    quants: Vec<PathBuf>,
+    /// Optional sample names (default: the directory basenames).
+    #[arg(long = "names", num_args = 1..)]
+    names: Vec<String>,
+    /// Column to merge: {len, elen, tpm, numreads}.
+    #[arg(short = 'c', long = "column", default_value = "TPM")]
+    column: String,
+    /// Merge gene-level quant.genes.sf instead of transcript-level quant.sf.
+    #[arg(long = "genes")]
+    genes: bool,
+    /// Value written for targets missing from a sample.
+    #[arg(long = "missing", default_value = "NA")]
+    missing: String,
+    /// Output matrix file.
+    #[arg(short = 'o', long = "output", required = true)]
+    output: PathBuf,
 }
 
 #[derive(Args)]
@@ -323,8 +347,51 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Index(args) => run_index(args),
         Command::Quant(args) => run_quant(args),
+        Command::Quantmerge(args) => run_quantmerge(args),
         Command::DebugMap(args) => run_debug_map(args),
     }
+}
+
+fn run_quantmerge(args: QuantMergeArgs) -> Result<()> {
+    use salmon_core::quantmerge::{merge_quants, MergeColumn};
+    let column = MergeColumn::parse(&args.column).with_context(|| {
+        format!(
+            "unrecognized --column '{}'; expected one of {{len, elen, tpm, numreads}}",
+            args.column
+        )
+    })?;
+    // sample names default to the directory basenames
+    let names: Vec<String> = if args.names.is_empty() {
+        args.quants
+            .iter()
+            .map(|d| d.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default())
+            .collect()
+    } else {
+        anyhow::ensure!(
+            args.names.len() == args.quants.len(),
+            "--names ({}) must match the number of --quants ({})",
+            args.names.len(),
+            args.quants.len()
+        );
+        args.names.clone()
+    };
+    let quant_file = if args.genes { "quant.genes.sf" } else { "quant.sf" };
+    let quant_paths: Vec<PathBuf> = args.quants.iter().map(|d| d.join(quant_file)).collect();
+    for p in &quant_paths {
+        anyhow::ensure!(p.is_file(), "sample quant file not found: {}", p.display());
+    }
+    let n_missing = merge_quants(&quant_paths, &names, column, &args.missing, &args.output)
+        .context("merging quant files")?;
+    if n_missing > 0 {
+        eprintln!("warning: {n_missing} missing entries written as \"{}\"", args.missing);
+    }
+    println!(
+        "merged {} samples ({}) -> {}",
+        quant_paths.len(),
+        args.column,
+        args.output.display()
+    );
+    Ok(())
 }
 
 fn run_debug_map(args: DebugMapArgs) -> Result<()> {
