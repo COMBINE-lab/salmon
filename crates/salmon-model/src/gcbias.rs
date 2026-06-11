@@ -159,10 +159,32 @@ const OUTSIDE_3P: i32 = 3; // outsideContext
 const INSIDE_5P: i32 = 1; // insideContext - 1
 const INSIDE_3P: i32 = 2; // insideContext
 
-/// Round half-to-even, matching C++ `std::lrint` under the default rounding mode.
+/// Round to nearest (ties to even), matching C++ `std::lrint` under the default
+/// rounding mode.
+///
+/// On x86-64 this is a single `cvtsd2si` instruction (which rounds per the
+/// current — default round-to-nearest-even — MXCSR mode), identical to salmon's
+/// `std::lrint`. The portable `f64::round_ties_even() as i32` lowers to a libm
+/// `roundeven` *function call* on this baseline build; since this is called
+/// ~2× per `gc_desc` over tens of billions of fragment evaluations under
+/// `--gcBias`, that call was the dominant per-iteration cost (≈4× the GC-bias
+/// runtime vs C++). Other architectures keep the portable path.
 #[inline]
 fn lrint(x: f64) -> i32 {
-    x.round_ties_even() as i32
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: SSE2 is part of the x86-64 baseline, so `_mm_set_sd` /
+        // `_mm_cvtsd_si32` are always available. `cvtsd2si` matches `std::lrint`
+        // (round-to-nearest-even); our arguments are small (0–100), no overflow.
+        #[allow(unsafe_code)]
+        unsafe {
+            core::arch::x86_64::_mm_cvtsd_si32(core::arch::x86_64::_mm_set_sd(x))
+        }
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        x.round_ties_even() as i32
+    }
 }
 
 /// Cumulative G+C counts (salmon's `Transcript::GCCount_`): `prefix[p]` is the
