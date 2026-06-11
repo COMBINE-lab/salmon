@@ -107,11 +107,31 @@ impl TransMatrix {
             rowsums: vec![(NUM_ALN_STATES as f64 * alpha).ln(); NUM_ALN_STATES],
         }
     }
+    /// A zero-mass (`-inf` everywhere) delta matrix: a per-thread accumulator
+    /// whose increments are later `log_add`-folded into an alpha-seeded global
+    /// (so the pseudocount baseline is counted exactly once, in the global).
+    fn empty() -> Self {
+        Self {
+            storage: vec![f64::NEG_INFINITY; NUM_ALN_STATES * NUM_ALN_STATES],
+            rowsums: vec![f64::NEG_INFINITY; NUM_ALN_STATES],
+        }
+    }
     #[inline]
     fn increment(&mut self, prev: usize, cur: usize, amt: f64) {
         let k = prev * NUM_ALN_STATES + cur;
         self.storage[k] = log_add(self.storage[k], amt);
         self.rowsums[prev] = log_add(self.rowsums[prev], amt);
+    }
+    /// Fold another matrix's masses into this one element-wise (`log_add`).
+    /// Combining an alpha-seeded global with `empty()`-seeded per-thread deltas
+    /// reconstructs `alpha + Σ deltas` exactly.
+    fn combine(&mut self, other: &TransMatrix) {
+        for (s, o) in self.storage.iter_mut().zip(&other.storage) {
+            *s = log_add(*s, *o);
+        }
+        for (s, o) in self.rowsums.iter_mut().zip(&other.rowsums) {
+            *s = log_add(*s, *o);
+        }
     }
     /// Normalized log transition probability `P(cur | prev)`.
     #[inline]
@@ -135,6 +155,27 @@ impl AlignmentModel {
             left: (0..read_bins).map(|_| TransMatrix::new(alpha)).collect(),
             right: (0..read_bins).map(|_| TransMatrix::new(alpha)).collect(),
             read_bins,
+        }
+    }
+
+    /// A zero-mass per-thread delta accumulator with the same shape. Its updates
+    /// are merged into an alpha-seeded global via [`AlignmentModel::combine`].
+    pub fn empty(read_bins: usize) -> Self {
+        Self {
+            left: (0..read_bins).map(|_| TransMatrix::empty()).collect(),
+            right: (0..read_bins).map(|_| TransMatrix::empty()).collect(),
+            read_bins,
+        }
+    }
+
+    /// Fold another model's masses into this one (element-wise `log_add` over
+    /// every position bin and mate). Used to merge per-thread deltas.
+    pub fn combine(&mut self, other: &AlignmentModel) {
+        for (s, o) in self.left.iter_mut().zip(&other.left) {
+            s.combine(o);
+        }
+        for (s, o) in self.right.iter_mut().zip(&other.right) {
+            s.combine(o);
         }
     }
 

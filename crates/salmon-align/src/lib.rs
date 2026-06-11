@@ -21,8 +21,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use noodles_bam as bam;
+use noodles_sam as sam;
 use noodles_sam::alignment::record::cigar::op::Kind;
 use noodles_sam::alignment::record::data::field::{Tag, Value};
+use noodles_sam::Header;
 use serde::Serialize;
 
 use error_model::{AlignmentModel, AlnOp};
@@ -304,6 +306,10 @@ struct FragRecord {
     pos: usize,
     read_2bit: Vec<u8>,
     ops: Vec<(AlnOp, usize)>,
+    /// aligner `AS` tag; parsed for completeness but not used for weighting —
+    /// the error model's `errLike` drives the conditional weight, matching
+    /// salmon's behavior for CIGAR-bearing aligners (see [`salmon-align-as-weighting`]).
+    #[allow(dead_code)]
     score: i32,
     frag_len: i32,
     /// reverse-strand alignment (BAM `0x10` flag)
@@ -363,89 +369,104 @@ fn kind_to_op(k: Kind) -> AlnOp {
     }
 }
 
-/// Stream a BAM, grouping consecutive mapped records that share a read name into
-/// fragments, and invoke `f` once per fragment. (Used twice: train the error
-/// model, then build equivalence classes — avoids holding the whole BAM in memory.)
-fn for_each_fragment<F>(bam_path: &Path, need_seq: bool, mut f: F) -> Result<()>
-where
-    F: FnMut(&[FragRecord]),
-{
-    let mut reader = bam::io::Reader::new(
-        std::fs::File::open(bam_path).with_context(|| format!("opening {}", bam_path.display()))?,
-    );
-    let _header = reader.read_header().context("reading BAM header")?;
+/// Does this path name a SAM file (plain or gzipped) rather than a BAM?
+fn is_sam_path(p: &Path) -> bool {
+    let s = p.to_string_lossy().to_ascii_lowercase();
+    s.ends_with(".sam") || s.ends_with(".sam.gz")
+}
 
-    let mut cur_name: Vec<u8> = Vec::new();
-    let mut have_group = false;
-    let mut group: Vec<FragRecord> = Vec::new();
+/// Open a SAM file (transparently gunzipping `.sam.gz`) as a noodles reader over
+/// a boxed `BufRead`, so plain and gzipped inputs share one concrete type.
+fn open_sam_reader(path: &Path) -> Result<sam::io::Reader<Box<dyn BufRead>>> {
+    let file =
+        std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let lower = path.to_string_lossy().to_ascii_lowercase();
+    let inner: Box<dyn BufRead> = if lower.ends_with(".gz") {
+        Box::new(std::io::BufReader::new(flate2::read::MultiGzDecoder::new(file)))
+    } else {
+        Box::new(std::io::BufReader::new(file))
+    };
+    Ok(sam::io::Reader::new(inner))
+}
 
-    for result in reader.records() {
-        let record = result.context("reading BAM record")?;
-        if record.flags().is_unmapped() {
-            continue;
-        }
-        let Some(name) = record.name() else { continue };
-        let name_bytes: &[u8] = name.as_ref();
-        let cname = canonical_name(name_bytes);
-        if !have_group {
-            cur_name = cname.to_vec();
-            have_group = true;
-        } else if cname != cur_name.as_slice() {
-            f(&group);
-            group.clear();
-            cur_name.clear();
-            cur_name.extend_from_slice(cname);
-        }
+/// Read just the header from a SAM/BAM input (chosen by extension).
+fn read_alignment_header(path: &Path) -> Result<Header> {
+    if is_sam_path(path) {
+        open_sam_reader(path)?.read_header().context("reading SAM header")
+    } else {
+        let mut reader = bam::io::Reader::new(
+            std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?,
+        );
+        reader.read_header().context("reading BAM header")
+    }
+}
 
-        let Some(Ok(tid)) = record.reference_sequence_id() else { continue };
-        let pos = record
-            .alignment_start()
-            .and_then(|r| r.ok())
-            .map(|p| p.get() - 1)
-            .unwrap_or(0);
-        let read_2bit = if need_seq {
-            record.sequence().iter().map(base_2bit).collect()
-        } else {
-            Vec::new()
-        };
-        let ops: Vec<(AlnOp, usize)> = record
-            .cigar()
-            .iter()
-            .filter_map(|r| r.ok())
-            .map(|op| (kind_to_op(op.kind()), op.len()))
-            .collect();
-        let ref_span: usize = ops
-            .iter()
-            .filter(|(o, _)| matches!(o, AlnOp::Match | AlnOp::SeqMatch | AlnOp::SeqMismatch | AlnOp::Del | AlnOp::RefSkip))
-            .map(|(_, l)| l)
-            .sum();
-        let ops = if need_seq { ops } else { Vec::new() };
-        let score = record
-            .data()
-            .get(&Tag::ALIGNMENT_SCORE)
-            .and_then(|r| r.ok())
-            .and_then(|v| value_as_i32(&v))
-            .unwrap_or(0);
-        let frag_len = record.template_length().abs();
-        let flags = record.flags();
-        let is_reverse = flags.is_reverse_complemented();
-        let is_read1 = flags.is_first_segment();
-        // Mate linkage as the aligner recorded it (RNEXT/PNEXT); a mate that is
-        // unmapped or absent leaves these `None`, making the record an orphan.
-        let mate_tid = (!flags.is_mate_unmapped())
-            .then(|| record.mate_reference_sequence_id().and_then(|r| r.ok()))
-            .flatten()
-            .map(|t| t as u32);
-        let mate_pos = record
-            .mate_alignment_start()
-            .and_then(|r| r.ok())
-            .map(|p| p.get() - 1);
-        let hi = record
-            .data()
-            .get(&Tag::HIT_INDEX)
-            .and_then(|r| r.ok())
-            .and_then(|v| value_as_i32(&v));
-        group.push(FragRecord {
+/// Convert one mapped alignment record into a `FragRecord`, returning its
+/// canonical read name alongside. `None` skips the record (unmapped / unnamed /
+/// no reference). Works over any noodles `alignment::Record`, so the same logic
+/// serves BAM and SAM input.
+fn record_to_frag<R: sam::alignment::Record>(
+    record: &R,
+    header: &Header,
+    need_seq: bool,
+) -> Option<(Vec<u8>, FragRecord)> {
+    let flags = record.flags().ok()?;
+    if flags.is_unmapped() {
+        return None;
+    }
+    let name = record.name()?;
+    let cname = canonical_name(name.as_ref()).to_vec();
+
+    let tid = record.reference_sequence_id(header)?.ok()?;
+    let pos = record
+        .alignment_start()
+        .and_then(|r| r.ok())
+        .map(|p| p.get() - 1)
+        .unwrap_or(0);
+    let read_2bit = if need_seq {
+        record.sequence().iter().map(base_2bit).collect()
+    } else {
+        Vec::new()
+    };
+    let ops: Vec<(AlnOp, usize)> = record
+        .cigar()
+        .iter()
+        .filter_map(|r| r.ok())
+        .map(|op| (kind_to_op(op.kind()), op.len()))
+        .collect();
+    let ref_span: usize = ops
+        .iter()
+        .filter(|(o, _)| matches!(o, AlnOp::Match | AlnOp::SeqMatch | AlnOp::SeqMismatch | AlnOp::Del | AlnOp::RefSkip))
+        .map(|(_, l)| l)
+        .sum();
+    let ops = if need_seq { ops } else { Vec::new() };
+    let score = record
+        .data()
+        .get(&Tag::ALIGNMENT_SCORE)
+        .and_then(|r| r.ok())
+        .and_then(|v| value_as_i32(&v))
+        .unwrap_or(0);
+    let frag_len = record.template_length().map(|t| t.abs()).unwrap_or(0);
+    let is_reverse = flags.is_reverse_complemented();
+    let is_read1 = flags.is_first_segment();
+    // Mate linkage as the aligner recorded it (RNEXT/PNEXT); a mate that is
+    // unmapped or absent leaves these `None`, making the record an orphan.
+    let mate_tid = (!flags.is_mate_unmapped())
+        .then(|| record.mate_reference_sequence_id(header).and_then(|r| r.ok()))
+        .flatten()
+        .map(|t| t as u32);
+    let mate_pos = record
+        .mate_alignment_start()
+        .and_then(|r| r.ok())
+        .map(|p| p.get() - 1);
+    let hi = record
+        .data()
+        .get(&Tag::HIT_INDEX)
+        .and_then(|r| r.ok())
+        .and_then(|v| value_as_i32(&v));
+    Some((
+        cname,
+        FragRecord {
             tid: tid as u32,
             pos,
             read_2bit,
@@ -458,12 +479,364 @@ where
             mate_tid,
             mate_pos,
             hi,
-        });
+        },
+    ))
+}
+
+/// Group consecutive mapped records sharing a read name into fragments,
+/// accumulate the (owned) fragment groups into batches of `batch_size`, and
+/// invoke `f` once per batch. Generic over the record type so BAM and SAM
+/// streams flow through identical grouping logic. Batching lets the caller
+/// process each batch's fragments in parallel (mirroring salmon's minibatch
+/// online phase) while reading the file serially.
+fn run_batches<R, I, F>(
+    records: I,
+    header: &Header,
+    need_seq: bool,
+    batch_size: usize,
+    mut f: F,
+) -> Result<()>
+where
+    R: sam::alignment::Record,
+    I: Iterator<Item = std::io::Result<R>>,
+    F: FnMut(&mut Vec<Vec<FragRecord>>),
+{
+    let mut cur_name: Vec<u8> = Vec::new();
+    let mut have_group = false;
+    let mut group: Vec<FragRecord> = Vec::new();
+    let mut batch: Vec<Vec<FragRecord>> = Vec::with_capacity(batch_size);
+
+    for result in records {
+        let record = result.context("reading alignment record")?;
+        let Some((cname, frag)) = record_to_frag(&record, header, need_seq) else {
+            continue;
+        };
+        if !have_group {
+            cur_name = cname;
+            have_group = true;
+        } else if cname != cur_name {
+            batch.push(std::mem::take(&mut group));
+            cur_name = cname;
+            if batch.len() >= batch_size {
+                f(&mut batch);
+                batch.clear();
+            }
+        }
+        group.push(frag);
     }
-    if have_group {
-        f(&group);
+    if have_group && !group.is_empty() {
+        batch.push(group);
+    }
+    if !batch.is_empty() {
+        f(&mut batch);
     }
     Ok(())
+}
+
+/// Stream a SAM/BAM (chosen by extension) as batches of fragment groups (see
+/// [`run_batches`]). Avoids holding the whole file in memory while still
+/// exposing parallelism within each batch.
+fn for_each_batch<F>(bam_path: &Path, need_seq: bool, batch_size: usize, f: F) -> Result<()>
+where
+    F: FnMut(&mut Vec<Vec<FragRecord>>),
+{
+    if is_sam_path(bam_path) {
+        let mut reader = open_sam_reader(bam_path)?;
+        let header = reader.read_header().context("reading SAM header")?;
+        run_batches(reader.records(), &header, need_seq, batch_size, f)
+    } else {
+        let mut reader = bam::io::Reader::new(
+            std::fs::File::open(bam_path)
+                .with_context(|| format!("opening {}", bam_path.display()))?,
+        );
+        let header = reader.read_header().context("reading BAM header")?;
+        run_batches(reader.records(), &header, need_seq, batch_size, f)
+    }
+}
+
+/// Read-only shared state for processing one fragment. Held by `&` so a whole
+/// minibatch of fragments can be processed in parallel against the model and
+/// abundance state as of the *previous* batch (salmon's minibatch staleness).
+struct FragCtx<'a> {
+    /// global error model, read-only during the batch (merged between batches)
+    model: Option<&'a AlignmentModel>,
+    online: Option<&'a salmon_infer::OnlineInference>,
+    fld: &'a FragmentLengthDistribution,
+    eq_builder: &'a EquivalenceClassBuilder,
+    ref_bytes: &'a [Vec<u8>],
+    lengths: &'a [u32],
+    gc_prefix: &'a [Vec<u32>],
+    length_class: Option<&'a [usize]>,
+    expected_format: Option<LibraryFormat>,
+    ignore_incompat: bool,
+    incompat_prior: f64,
+    paired_lib: bool,
+    range_factorization_bins: u32,
+    /// this batch's forgetting mass (online phase)
+    log_fm: f64,
+}
+
+/// Per-thread accumulators for the error model and bias models. Each worker
+/// folds its fragments into a `Local` (the error-model matrices seeded empty so
+/// the pseudocount lives only in the global); the per-batch reduction merges
+/// these and the result is folded into the globals between minibatches.
+struct Local {
+    model: Option<AlignmentModel>,
+    seq_obs: Option<(salmon_model::SBModel, salmon_model::SBModel)>,
+    gc_obs: Option<salmon_model::GcFragModel>,
+    pos_obs: Option<(Vec<salmon_model::SimplePosBias>, Vec<salmon_model::SimplePosBias>)>,
+}
+
+impl Local {
+    fn new(error_model: bool, seq_bias: bool, gc_bias: bool, pos_bias: bool) -> Self {
+        let mk = || {
+            (0..salmon_model::NUM_LENGTH_CLASSES)
+                .map(|_| salmon_model::SimplePosBias::default())
+                .collect::<Vec<_>>()
+        };
+        Self {
+            model: error_model.then(|| AlignmentModel::empty(4)),
+            seq_obs: seq_bias.then(|| (salmon_model::SBModel::new(), salmon_model::SBModel::new())),
+            gc_obs: gc_bias.then(salmon_model::GcFragModel::default_model),
+            pos_obs: pos_bias.then(|| (mk(), mk())),
+        }
+    }
+
+    fn merge(mut self, other: Self) -> Self {
+        if let (Some(a), Some(b)) = (self.model.as_mut(), other.model.as_ref()) {
+            a.combine(b);
+        }
+        if let (Some(a), Some(b)) = (self.seq_obs.as_mut(), other.seq_obs.as_ref()) {
+            a.0.combine_counts(&b.0);
+            a.1.combine_counts(&b.1);
+        }
+        if let (Some(a), Some(b)) = (self.gc_obs.as_mut(), other.gc_obs.as_ref()) {
+            a.combine_counts(b);
+        }
+        if let (Some(a), Some(b)) = (self.pos_obs.as_mut(), other.pos_obs.as_ref()) {
+            for (x, y) in a.0.iter_mut().zip(&b.0) {
+                x.combine(y);
+            }
+            for (x, y) in a.1.iter_mut().zip(&b.1) {
+                x.combine(y);
+            }
+        }
+        self
+    }
+}
+
+/// Process one fragment (a group of records sharing a read name): pair its
+/// records into reported placements, compute each placement's conditional
+/// log-weight, build the equivalence class, develop online abundances, and
+/// (during burn-in) accumulate the error-model and bias deltas into `local`.
+/// Pure with respect to shared state except for the concurrency-safe sinks
+/// (`fld`, `online`, `eq_builder`), so it is safe to run in parallel.
+fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) {
+    use salmon_model::seqbias::{CONTEXT_LEFT, CONTEXT_LENGTH, CONTEXT_RIGHT};
+    // salmon's LOG_EPSILON = log(0.375e-10): the orphan / implausible-length penalty.
+    const LOG_EPSILON: f64 = -23.998_158_637_57;
+
+    // Pair records into the placements the aligner reported (proper pairs +
+    // orphans), NOT a cross-product of every read1/read2 on a transcript.
+    let placements = pair_records(recs);
+    let frag_len = recs.iter().map(|r| r.frag_len).max().unwrap_or(0);
+    if frag_len > 0 {
+        ctx.fld.add_val(frag_len as usize, 0.0);
+    }
+    let use_aux = ctx.online.is_none_or(|o| o.num_assigned() >= 5000);
+
+    // Per surviving placement (one reported alignment): conditional log-weight
+    // (eq-class) + online log-aux + fragment geometry.
+    let mut sp_tid: Vec<u32> = Vec::with_capacity(placements.len());
+    let mut sp_eq: Vec<f64> = Vec::with_capacity(placements.len());
+    let mut sp_online: Vec<f64> = Vec::with_capacity(placements.len());
+    let mut sp_geom: Vec<(usize, usize, bool)> = Vec::with_capacity(placements.len());
+    let mut sp_pl: Vec<usize> = Vec::with_capacity(placements.len());
+    for (pi, pl) in placements.iter().enumerate() {
+        let tid = pl.tid;
+        let idxs = &pl.idxs;
+        let refseq = ctx.ref_bytes.get(tid as usize).map(|v| v.as_slice()).unwrap_or(&[]);
+        // Conditional log-weight basis = salmon's `errLike` (Σ(fg−bg) over the
+        // mate(s) under the error model; uniform 0.0 when it is disabled).
+        let basis = if let Some(m) = ctx.model {
+            if refseq.is_empty() {
+                0.0
+            } else {
+                let mut ll = 0.0;
+                for (rank, &i) in idxs.iter().enumerate() {
+                    let r = &recs[i];
+                    let (fg, bg) = m.log_likelihood(&r.read_2bit, refseq, r.pos, &r.ops, rank == 0);
+                    ll += fg - bg;
+                }
+                ll
+            }
+        } else {
+            0.0
+        };
+        let rl = ctx.lengths[tid as usize] as i32;
+        let flen = idxs.iter().map(|&i| recs[i].frag_len).max().unwrap_or(0);
+        let proper = idxs.len() >= 2 && flen > 0;
+        let frag_start = recs[idxs[0]].pos;
+        let frag_end = frag_start + (flen.max(1) as usize) - 1;
+        let start_pos = if proper && flen <= rl {
+            -(((rl - flen + 1) as f64).ln())
+        } else {
+            -((rl.max(1) as f64).ln())
+        };
+        let log_frag_prob = if proper {
+            if use_aux { ctx.fld.pmf(flen as usize) } else { 0.0 }
+        } else if ctx.paired_lib {
+            LOG_EPSILON
+        } else {
+            0.0
+        };
+        let mut aux = basis + log_frag_prob;
+        if let Some(exp) = ctx.expected_format {
+            let (obs, is_fw, status) = frag_format(recs, idxs);
+            if !is_compatible(exp, obs, is_fw, status) {
+                if ctx.ignore_incompat {
+                    continue; // this placement contributes nothing
+                }
+                aux += ctx.incompat_prior.ln();
+            }
+        }
+        sp_tid.push(tid);
+        sp_eq.push(aux);
+        sp_online.push(aux + start_pos);
+        sp_geom.push((frag_start, frag_end, proper));
+        sp_pl.push(pi);
+    }
+    // a fragment whose every reported alignment was incompatible is a
+    // zero-probability fragment: it is not assigned and joins no eq-class.
+    if sp_tid.is_empty() {
+        return;
+    }
+
+    // Aggregate surviving placements by distinct transcript id (sorted).
+    let mut agg: std::collections::BTreeMap<u32, Vec<usize>> = std::collections::BTreeMap::new();
+    for (k, &t) in sp_tid.iter().enumerate() {
+        agg.entry(t).or_default().push(k);
+    }
+    let tids: Vec<u32> = agg.keys().cloned().collect();
+    let eq_log: Vec<f64> = agg
+        .values()
+        .map(|ks| logsumexp(&ks.iter().map(|&k| sp_eq[k]).collect::<Vec<_>>()))
+        .collect();
+    let online_log: Vec<f64> = agg
+        .values()
+        .map(|ks| logsumexp(&ks.iter().map(|&k| sp_online[k]).collect::<Vec<_>>()))
+        .collect();
+
+    // eq-class weights = softmax(eq_log)
+    let maxe = eq_log.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let mut weights: Vec<f64> = eq_log.iter().map(|&l| (l - maxe).exp()).collect();
+    let wsum: f64 = weights.iter().sum();
+    if wsum > 0.0 {
+        for w in &mut weights {
+            *w /= wsum;
+        }
+    }
+
+    // abundance-aware posteriors (online), per distinct transcript
+    let post: Vec<f64> = match ctx.online {
+        Some(o) => {
+            let maps: Vec<(u32, f64)> = tids.iter().cloned().zip(online_log.iter().cloned()).collect();
+            o.assign_fragment(&maps, ctx.log_fm)
+        }
+        None => weights.clone(),
+    };
+
+    // train the error model + collect bias models, weighted by posteriors
+    let collecting = ctx.online.is_none_or(|o| o.collecting());
+    if collecting {
+        for (ti, (tid, ks)) in agg.iter().enumerate() {
+            let p_tid = post[ti];
+            if p_tid <= 0.0 {
+                continue;
+            }
+            let online_log_tid = online_log[ti];
+            let refseq = ctx.ref_bytes.get(*tid as usize).map(|v| v.as_slice()).unwrap_or(&[]);
+            for &k in ks {
+                let p = p_tid * (sp_online[k] - online_log_tid).exp();
+                if p <= 0.0 {
+                    continue;
+                }
+                let idxs = &placements[sp_pl[k]].idxs;
+                if let Some(m) = local.model.as_mut() {
+                    if !refseq.is_empty() {
+                        let lw = ctx.log_fm + p.ln();
+                        for (rank, &i) in idxs.iter().enumerate() {
+                            let r = &recs[i];
+                            m.update(&r.read_2bit, refseq, r.pos, &r.ops, rank == 0, lw);
+                        }
+                    }
+                }
+                if refseq.is_empty() {
+                    continue;
+                }
+                let (fs, fe, proper) = sp_geom[k];
+                let rl = refseq.len();
+                // Per-read 5' positions, by each read's actual strand.
+                let (mut fwd_five, mut rev_five): (Option<usize>, Option<usize>) = (None, None);
+                if idxs.len() == 1 {
+                    let r = &recs[idxs[0]];
+                    if r.is_reverse {
+                        rev_five = Some(r.five_prime());
+                    } else {
+                        fwd_five = Some(r.five_prime());
+                    }
+                } else {
+                    let fwd = idxs.iter().map(|&i| &recs[i]).find(|r| !r.is_reverse);
+                    let rev = idxs.iter().map(|&i| &recs[i]).find(|r| r.is_reverse);
+                    if let (Some(fr), Some(rr)) = (fwd, rev) {
+                        let (fp, rp) = (fr.five_prime(), rr.five_prime());
+                        if fp < rp {
+                            fwd_five = Some(fp);
+                            rev_five = Some(rp);
+                        }
+                    }
+                }
+                if let Some(obs) = local.seq_obs.as_mut() {
+                    if let Some(five) = fwd_five {
+                        let s = five as i32 - CONTEXT_LEFT as i32;
+                        if s >= 0 && (s as usize + CONTEXT_LENGTH) <= rl {
+                            obs.0.add_context(&refseq[s as usize..s as usize + CONTEXT_LENGTH], false, p);
+                        }
+                    }
+                    if let Some(five) = rev_five {
+                        let s = five as i32 - CONTEXT_RIGHT as i32;
+                        if s >= 0 && (s as usize + CONTEXT_LENGTH) <= rl {
+                            obs.1.add_context(&refseq[s as usize..s as usize + CONTEXT_LENGTH], true, p);
+                        }
+                    }
+                }
+                if let (Some(gc), true) = (local.gc_obs.as_mut(), proper && fe < rl) {
+                    if let Some((ff, cf)) =
+                        salmon_model::gc_desc(&ctx.gc_prefix[*tid as usize], rl as i32, fs as i32, fe as i32)
+                    {
+                        gc.inc(ff, cf, p);
+                    }
+                }
+                if let Some(pos) = local.pos_obs.as_mut() {
+                    let lc = ctx.length_class.unwrap()[*tid as usize];
+                    if let Some(five) = fwd_five {
+                        pos.0[lc].add_mass(five as i32, rl as i32, p.ln());
+                    }
+                    if let Some(five) = rev_five {
+                        pos.1[lc].add_mass(five as i32, rl as i32, p.ln());
+                    }
+                }
+            }
+        }
+    }
+
+    let group = if ctx.range_factorization_bins > 0 {
+        let bins = range_factorize_bins(&weights, ctx.range_factorization_bins);
+        TranscriptGroup::with_bins(tids, bins)
+    } else {
+        TranscriptGroup::from_sorted(tids)
+    };
+    ctx.eq_builder.add_group(group, weights, 1);
 }
 
 /// Is the input coordinate-sorted and *not* grouped by read name?
@@ -495,10 +868,7 @@ fn coordinate_sorted_unusable(header: &noodles_sam::Header) -> bool {
 /// Run alignment-based quantification end-to-end.
 pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult> {
     let start_time = asctime_now();
-    let mut reader = bam::io::Reader::new(
-        std::fs::File::open(&opts.bam).with_context(|| format!("opening {}", opts.bam.display()))?,
-    );
-    let header = reader.read_header().context("reading BAM header")?;
+    let header = read_alignment_header(&opts.bam)?;
 
     // Reject coordinate-sorted input up front (header-only check, no per-record cost):
     // alignment-mode requires all records of a read/pair to be adjacent (grouped by
@@ -549,8 +919,9 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     let online = (use_error_model || bias_on)
         .then(|| salmon_infer::OnlineInference::new(&ref_lens_u64, 0.05, 0.65, 5_000_000));
 
-    // Observed bias accumulators (single-threaded → owned).
-    use salmon_model::seqbias::{CONTEXT_LEFT, CONTEXT_LENGTH, CONTEXT_RIGHT};
+    // Observed bias accumulators (global; per-thread deltas merge in between
+    // minibatches via [`Local`]).
+    use salmon_model::seqbias::CONTEXT_LENGTH;
     let mut seq_obs = opts
         .seq_bias
         .then(|| (salmon_model::SBModel::new(), salmon_model::SBModel::new()));
@@ -575,17 +946,21 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
         (mk(), mk())
     });
 
-    // ---- single online pass: train error model + collect bias + eq-classes ---
-    const MINIBATCH: u64 = 1000;
-    // salmon's LOG_EPSILON = log(0.375e-10): the orphan / implausible-length penalty.
-    const LOG_EPSILON: f64 = -23.998_158_637_57;
-    // A paired library expects two mates; a single mate to a transcript is then an
-    // "unexpected orphan" and is fragment-length-penalized. (Single-end libs aren't.)
+    // ---- online pass (parallel minibatches) --------------------------------
+    // Each minibatch of fragments is processed in parallel against the error
+    // model and online abundances as of the *previous* batch (salmon's
+    // minibatch staleness); per-thread error-model and bias deltas are merged
+    // into the globals between batches. The file is read serially (cheap — only
+    // ~8% of runtime) while the per-fragment likelihood/weighting work (the hot
+    // path) runs across all cores.
+    const MINIBATCH: usize = 1000;
+    // A paired library expects two mates; a single mate to a transcript is then
+    // an "unexpected orphan" and is fragment-length-penalized. (Single-end libs
+    // aren't.)
     let paired_lib = !matches!(opts.lib_type.as_str(), "U" | "SF" | "SR" | "S");
     // Orientation-compatibility filtering (salmon): drop alignments whose
-    // orientation is incompatible with the expected library type (and drop a
-    // fragment entirely if all its alignments are incompatible — these become
-    // zero-probability fragments). Skipped under auto (`A`) library type.
+    // orientation is incompatible with the expected library type. Skipped under
+    // auto (`A`) library type.
     let expected_format = match opts.lib_type.as_str() {
         "A" => None,
         s => LibraryFormat::parse(s).ok(),
@@ -593,255 +968,90 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     let ignore_incompat = opts.incompat_prior <= 0.0;
     let mut num_processed = 0u64;
     let mut num_mapped = 0u64;
-    let mut frag_count = 0u64;
-    let mut log_fm = 0.0;
-    for_each_fragment(&opts.bam, use_error_model || bias_on, |recs| {
-        num_processed += 1;
-        if recs.is_empty() {
-            return;
-        }
-        num_mapped += 1;
-        // one forgetting-mass timestep per minibatch of fragments
-        if let Some(o) = online.as_ref() {
-            if frag_count % MINIBATCH == 0 {
-                log_fm = o.next_log_fm();
-            }
-        }
-        frag_count += 1;
 
-        // Pair records into the placements the aligner reported (proper pairs +
-        // orphans), NOT a cross-product of every read1/read2 on a transcript.
-        let placements = pair_records(recs);
-        let frag_len = recs.iter().map(|r| r.frag_len).max().unwrap_or(0);
-        if frag_len > 0 {
-            fld.add_val(frag_len as usize, 0.0);
-        }
-        let use_aux = online.as_ref().is_none_or(|o| o.num_assigned() >= 5000);
+    use rayon::prelude::*;
+    use std::sync::mpsc::sync_channel;
+    let init = || Local::new(use_error_model, opts.seq_bias, opts.gc_bias, opts.pos_bias);
+    let nthreads = rayon::current_num_threads().max(1);
+    let need_seq = use_error_model || bias_on;
 
-        // Per surviving placement (one reported alignment): conditional log-weight
-        // (eq-class) + online log-aux + fragment geometry. A placement that fails
-        // the orientation-compatibility filter is dropped here.
-        let mut sp_tid: Vec<u32> = Vec::with_capacity(placements.len());
-        let mut sp_eq: Vec<f64> = Vec::with_capacity(placements.len());
-        let mut sp_online: Vec<f64> = Vec::with_capacity(placements.len());
-        let mut sp_geom: Vec<(usize, usize, bool)> = Vec::with_capacity(placements.len());
-        let mut sp_pl: Vec<usize> = Vec::with_capacity(placements.len());
-        for (pi, pl) in placements.iter().enumerate() {
-            let tid = pl.tid;
-            let idxs = &pl.idxs;
-            let refseq = ref_bytes.get(tid as usize).map(|v| v.as_slice()).unwrap_or(&[]);
-            // Conditional log-weight basis = salmon's `errLike`. With the error model
-            // it is Σ(fg−bg) over the mate(s). Without the error model salmon leaves
-            // errLike = LOG_1 for CIGAR-bearing aligners (it only uses the alignment
-            // score for its own CIGAR-less aligners, pufferfish/rapmap, via
-            // `useASWithoutCIGAR`). To match, a disabled error model yields a uniform
-            // (0.0) basis rather than an AS-derived one.
-            let basis = if let Some(m) = model.as_ref() {
-                if refseq.is_empty() {
-                    0.0
-                } else {
-                    let mut ll = 0.0;
-                    for (rank, &i) in idxs.iter().enumerate() {
-                        let r = &recs[i];
-                        let (fg, bg) = m.log_likelihood(&r.read_2bit, refseq, r.pos, &r.ops, rank == 0);
-                        ll += fg - bg;
-                    }
-                    ll
-                }
-            } else {
-                0.0
+    // Overlap file reading with compute: a dedicated reader thread parses the
+    // next minibatch (serial BGZF/record decode) while the worker pool processes
+    // the current one, so cores aren't idle during I/O. A small bounded channel
+    // applies backpressure (bounding in-flight memory). The model/bias merge
+    // stays on this thread, between batches, preserving the online semantics.
+    std::thread::scope(|scope| -> Result<()> {
+        let (tx, rx) = sync_channel::<Vec<Vec<FragRecord>>>(2);
+        let bam = opts.bam.as_path();
+        let reader = scope.spawn(move || -> Result<()> {
+            for_each_batch(bam, need_seq, MINIBATCH, |batch| {
+                // a dropped receiver (consumer errored) just ends the stream
+                let _ = tx.send(std::mem::take(batch));
+            })
+        });
+
+        while let Ok(batch) = rx.recv() {
+            // Process this minibatch in parallel. Each worker folds a contiguous
+            // chunk into its own `Local` (bounding the number of accumulators to
+            // the thread count), reading the model/abundances read-only; the
+            // chunks are then reduced into one `Local`.
+            let local = {
+                let ctx = FragCtx {
+                    model: model.as_ref(),
+                    online: online.as_ref(),
+                    fld: &fld,
+                    eq_builder: &eq_builder,
+                    ref_bytes: &ref_bytes,
+                    lengths: &lengths,
+                    gc_prefix: &gc_prefix,
+                    length_class: length_class.as_deref(),
+                    expected_format,
+                    ignore_incompat,
+                    incompat_prior: opts.incompat_prior,
+                    paired_lib,
+                    range_factorization_bins: opts.range_factorization_bins,
+                    log_fm: online.as_ref().map(|o| o.next_log_fm()).unwrap_or(0.0),
+                };
+                let chunk = batch.len().div_ceil(nthreads).max(1);
+                batch
+                    .par_chunks(chunk)
+                    .map(|chunk| {
+                        let mut acc = init();
+                        for recs in chunk {
+                            process_fragment(recs, &ctx, &mut acc);
+                        }
+                        acc
+                    })
+                    .reduce(&init, Local::merge)
             };
-            // fragment geometry + length-normalized online aux (start-pos + FLD)
-            let rl = lengths[tid as usize] as i32;
-            let flen = idxs.iter().map(|&i| recs[i].frag_len).max().unwrap_or(0);
-            let proper = idxs.len() >= 2 && flen > 0;
-            let frag_start = recs[idxs[0]].pos;
-            let frag_end = frag_start + (flen.max(1) as usize) - 1;
-            let start_pos = if proper && flen <= rl {
-                -(((rl - flen + 1) as f64).ln())
-            } else {
-                -((rl.max(1) as f64).ln())
-            };
-            // Fragment-length probability (salmon's logFragProb): the FLD pmf for
-            // a proper pair, or LOG_EPSILON for an unexpected orphan in a paired
-            // library. This is part of the eq-class conditional weight (salmon's
-            // auxProb = logFragProb + errLike + compat), NOT just the abundance
-            // posterior — it down-weights placements whose implied insert size is
-            // implausible (critical for permissive aligners that report many
-            // discordant/wrong-length multimappers).
-            let log_frag_prob = if proper {
-                if use_aux { fld.pmf(flen as usize) } else { 0.0 }
-            } else if paired_lib {
-                LOG_EPSILON
-            } else {
-                0.0
-            };
-            let mut aux = basis + log_frag_prob;
-            // orientation compatibility (salmon's logAlignCompatProb): drop the
-            // alignment if incompatible and we're ignoring incompatible fragments,
-            // else down-weight it by the incompatibility prior.
-            if let Some(exp) = expected_format {
-                let (obs, is_fw, status) = frag_format(recs, idxs);
-                if !is_compatible(exp, obs, is_fw, status) {
-                    if ignore_incompat {
-                        continue; // this placement contributes nothing
-                    }
-                    aux += opts.incompat_prior.ln();
+            // Merge the batch's per-thread deltas into the globals (serial,
+            // between batches — so the next batch sees the updated model/bias).
+            if let (Some(g), Some(d)) = (model.as_mut(), local.model) {
+                g.combine(&d);
+            }
+            if let (Some(g), Some(d)) = (seq_obs.as_mut(), local.seq_obs) {
+                g.0.combine_counts(&d.0);
+                g.1.combine_counts(&d.1);
+            }
+            if let (Some(g), Some(d)) = (gc_obs.as_mut(), local.gc_obs) {
+                g.combine_counts(&d);
+            }
+            if let (Some(g), Some(d)) = (pos_obs.as_mut(), local.pos_obs) {
+                for (a, b) in g.0.iter_mut().zip(&d.0) {
+                    a.combine(b);
+                }
+                for (a, b) in g.1.iter_mut().zip(&d.1) {
+                    a.combine(b);
                 }
             }
-            sp_tid.push(tid);
-            sp_eq.push(aux);
-            sp_online.push(aux + start_pos);
-            sp_geom.push((frag_start, frag_end, proper));
-            sp_pl.push(pi);
-        }
-        // a fragment whose every reported alignment was incompatible is a
-        // zero-probability fragment: it is not assigned and joins no eq-class.
-        if sp_tid.is_empty() {
-            return;
+            let n = batch.len() as u64;
+            num_processed += n;
+            num_mapped += n;
         }
 
-        // Aggregate surviving placements by distinct transcript id (sorted): a
-        // transcript that the fragment hits in several reported placements appears
-        // once in the eq-class, its weight the logsumexp over those placements.
-        let mut agg: std::collections::BTreeMap<u32, Vec<usize>> = std::collections::BTreeMap::new();
-        for (k, &t) in sp_tid.iter().enumerate() {
-            agg.entry(t).or_default().push(k);
-        }
-        let tids: Vec<u32> = agg.keys().cloned().collect();
-        let eq_log: Vec<f64> = agg
-            .values()
-            .map(|ks| logsumexp(&ks.iter().map(|&k| sp_eq[k]).collect::<Vec<_>>()))
-            .collect();
-        let online_log: Vec<f64> = agg
-            .values()
-            .map(|ks| logsumexp(&ks.iter().map(|&k| sp_online[k]).collect::<Vec<_>>()))
-            .collect();
-
-        // eq-class weights = softmax(eq_log)
-        let maxe = eq_log.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        let mut weights: Vec<f64> = eq_log.iter().map(|&l| (l - maxe).exp()).collect();
-        let wsum: f64 = weights.iter().sum();
-        if wsum > 0.0 {
-            for w in &mut weights {
-                *w /= wsum;
-            }
-        }
-
-        // abundance-aware posteriors (online), per distinct transcript, drive
-        // model/bias training
-        let post: Vec<f64> = match online.as_ref() {
-            Some(o) => {
-                let maps: Vec<(u32, f64)> = tids.iter().cloned().zip(online_log.iter().cloned()).collect();
-                o.assign_fragment(&maps, log_fm)
-            }
-            None => weights.clone(),
-        };
-
-        // train the error model + collect bias models, weighted by posteriors;
-        // a transcript's posterior is split across its placements by their
-        // within-transcript online softmax weight.
-        let collecting = online.as_ref().is_none_or(|o| o.collecting());
-        if collecting {
-            for (ti, (tid, ks)) in agg.iter().enumerate() {
-                let p_tid = post[ti];
-                if p_tid <= 0.0 {
-                    continue;
-                }
-                let online_log_tid = online_log[ti];
-                let refseq = ref_bytes.get(*tid as usize).map(|v| v.as_slice()).unwrap_or(&[]);
-                for &k in ks {
-                    let p = p_tid * (sp_online[k] - online_log_tid).exp();
-                    if p <= 0.0 {
-                        continue;
-                    }
-                    let idxs = &placements[sp_pl[k]].idxs;
-                    if let Some(m) = model.as_mut() {
-                        if !refseq.is_empty() {
-                            let lw = log_fm + p.ln();
-                            for (rank, &i) in idxs.iter().enumerate() {
-                                let r = &recs[i];
-                                m.update(&r.read_2bit, refseq, r.pos, &r.ops, rank == 0, lw);
-                            }
-                        }
-                    }
-                    if refseq.is_empty() {
-                        continue;
-                    }
-                    let (fs, fe, proper) = sp_geom[k];
-                    let rl = refseq.len();
-
-                // Per-read 5' positions, by each read's *actual* strand (salmon's
-                // logic): the forward read's 5' feeds the FW model, the reverse
-                // read's 5' (its rightmost ref coordinate, RC'd) feeds the RC
-                // model. For a concordant pair only the inward case (fwPos < rcPos)
-                // is collected. This is correct for any library orientation, not
-                // just FR.
-                let (mut fwd_five, mut rev_five): (Option<usize>, Option<usize>) = (None, None);
-                if idxs.len() == 1 {
-                    let r = &recs[idxs[0]];
-                    if r.is_reverse {
-                        rev_five = Some(r.five_prime());
-                    } else {
-                        fwd_five = Some(r.five_prime());
-                    }
-                } else {
-                    let fwd = idxs.iter().map(|&i| &recs[i]).find(|r| !r.is_reverse);
-                    let rev = idxs.iter().map(|&i| &recs[i]).find(|r| r.is_reverse);
-                    if let (Some(fr), Some(rr)) = (fwd, rev) {
-                        let (fp, rp) = (fr.five_prime(), rr.five_prime());
-                        if fp < rp {
-                            fwd_five = Some(fp);
-                            rev_five = Some(rp);
-                        }
-                    }
-                }
-
-                // sequence bias: forward 5' -> FW model (window [5'-3, 5'+6));
-                // reverse 5' -> RC model (window [5'-5, 5'+4), reverse-complemented).
-                if let Some(obs) = seq_obs.as_mut() {
-                    if let Some(five) = fwd_five {
-                        let s = five as i32 - CONTEXT_LEFT as i32;
-                        if s >= 0 && (s as usize + CONTEXT_LENGTH) <= rl {
-                            obs.0.add_context(&refseq[s as usize..s as usize + CONTEXT_LENGTH], false, p);
-                        }
-                    }
-                    if let Some(five) = rev_five {
-                        let s = five as i32 - CONTEXT_RIGHT as i32;
-                        if s >= 0 && (s as usize + CONTEXT_LENGTH) <= rl {
-                            obs.1.add_context(&refseq[s as usize..s as usize + CONTEXT_LENGTH], true, p);
-                        }
-                    }
-                }
-                // fragment-GC bias is span-based (orientation-independent).
-                if let (Some(gc), true) = (gc_obs.as_mut(), proper && fe < rl) {
-                    if let Some((ff, cf)) =
-                        salmon_model::gc_desc(&gc_prefix[*tid as usize], rl as i32, fs as i32, fe as i32)
-                    {
-                        gc.inc(ff, cf, p);
-                    }
-                }
-                // positional bias: forward 5' -> fwd model, reverse 5' -> RC model.
-                if let Some(pos) = pos_obs.as_mut() {
-                    let lc = length_class.as_ref().unwrap()[*tid as usize];
-                    if let Some(five) = fwd_five {
-                        pos.0[lc].add_mass(five as i32, rl as i32, p.ln());
-                    }
-                    if let Some(five) = rev_five {
-                        pos.1[lc].add_mass(five as i32, rl as i32, p.ln());
-                    }
-                }
-                }
-            }
-        }
-
-        let group = if opts.range_factorization_bins > 0 {
-            let bins = range_factorize_bins(&weights, opts.range_factorization_bins);
-            TranscriptGroup::with_bins(tids, bins)
-        } else {
-            TranscriptGroup::from_sorted(tids)
-        };
-        eq_builder.add_group(group, weights, 1);
+        reader
+            .join()
+            .map_err(|_| anyhow::anyhow!("alignment reader thread panicked"))?
     })?;
 
     // ---- base effective lengths --------------------------------------------
