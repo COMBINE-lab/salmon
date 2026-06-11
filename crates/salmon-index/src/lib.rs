@@ -76,6 +76,10 @@ pub struct IndexBuildOptions {
     /// Records whose name is in this set are indexed but flagged as decoys; they
     /// must appear contiguously at the end of the FASTA input.
     pub decoys: Option<PathBuf>,
+    /// GENCODE-style headers: additionally truncate each transcript name at the
+    /// first `|` (salmon's `--gencode`), so e.g. `ENST...|ENSG...|...` becomes
+    /// `ENST...`. Applied consistently to the index names and the seq/name hashes.
+    pub gencode: bool,
 }
 
 impl IndexBuildOptions {
@@ -93,6 +97,7 @@ impl IndexBuildOptions {
             keep_intermediate: false,
             keep_duplicates: false,
             decoys: None,
+            gencode: false,
         }
     }
 }
@@ -144,6 +149,7 @@ pub struct IndexInfo {
 fn compute_ref_hashes(
     transcripts: &[PathBuf],
     decoy_names: &ahash::AHashSet<Vec<u8>>,
+    gencode: bool,
 ) -> Result<RefHashes> {
     use sha2::{Digest, Sha256, Sha512};
     let mut seq256 = Sha256::new();
@@ -169,13 +175,9 @@ fn compute_ref_hashes(
                 .copied()
                 .filter(|&b| (0x20..=0x7e).contains(&b))
                 .collect();
-            // Header up to the first ' ' or '\t'.
+            // Header up to the first ' '/'\t' (and first '|' under --gencode).
             let id = rec.id();
-            let end = id
-                .iter()
-                .position(|&b| b == b' ' || b == b'\t')
-                .unwrap_or(id.len());
-            let name = &id[..end];
+            let name = processed_name(id, gencode);
             let is_decoy = decoy_names.contains(name);
             if is_decoy {
                 decoy_seq256.update(&seq);
@@ -242,6 +244,7 @@ fn preprocess_fasta(
     out_path: &Path,
     keep_duplicates: bool,
     decoy_names: &ahash::AHashSet<Vec<u8>>,
+    gencode: bool,
 ) -> Result<PreprocessResult> {
     use std::io::Write as _;
     const B: [u8; 4] = *b"ACGT";
@@ -268,13 +271,10 @@ fn preprocess_fasta(
             .with_context(|| format!("opening {}", path.display()))?;
         while let Some(rec) = reader.next() {
             let rec = rec.context("reading FASTA record")?;
-            // Processed name: header up to the first space/tab (salmon's sepStr).
+            // Processed name: header up to the first space/tab (salmon's sepStr),
+            // and the first `|` too under `--gencode`.
             let id = rec.id();
-            let end = id
-                .iter()
-                .position(|&b| b == b' ' || b == b'\t')
-                .unwrap_or(id.len());
-            let name = &id[..end];
+            let name = processed_name(id, gencode);
             let orig = rec.seq();
             let is_decoy = decoy_names.contains(name);
             // salmon requires every decoy record to appear, contiguously, at the
@@ -399,7 +399,7 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     // cleaned FASTA feeds the cDBG build and the refseq store, while the hashes
     // below use the original input.
     let cleaned = opts.output_dir.join("cleaned_refs.fa");
-    let pre = preprocess_fasta(&opts.transcripts, &cleaned, opts.keep_duplicates, &decoy_names)
+    let pre = preprocess_fasta(&opts.transcripts, &cleaned, opts.keep_duplicates, &decoy_names, opts.gencode)
         .context("preprocessing reference FASTA (non-ACGT replacement, dedup)")?;
     if pre.replaced > 0 {
         info!("replaced {} non-ACGT base(s) with random bases", pre.replaced);
@@ -450,7 +450,7 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
     let idx = ReferenceIndex::load(&index_prefix, opts.build_ec_table, false)
         .context("loading freshly built index")?;
     // Reference seq/name hashes (salmon-FixFasta-compatible), over the input FASTA.
-    let h = compute_ref_hashes(&opts.transcripts, &decoy_names)
+    let h = compute_ref_hashes(&opts.transcripts, &decoy_names, opts.gencode)
         .context("hashing reference sequences/names")?;
     if let Some(fdi) = pre.first_decoy_index {
         info!("{} decoy reference(s) (first decoy index {fdi})", idx.num_refs() - fdi);
@@ -501,6 +501,25 @@ fn header_name(id: &[u8]) -> &[u8] {
         .position(|b| b.is_ascii_whitespace())
         .unwrap_or(id.len());
     &id[..end]
+}
+
+/// The processed reference name: the header up to the first space/tab (salmon's
+/// `sepStr`), and — when `gencode` is set — additionally truncated at the first
+/// `|` (so GENCODE `ENST...|ENSG...|...` headers reduce to `ENST...`). Used for
+/// the cleaned-FASTA headers (→ index names), decoy matching, and the name hash,
+/// so all three stay consistent.
+fn processed_name(id: &[u8], gencode: bool) -> &[u8] {
+    let end = id
+        .iter()
+        .position(|&b| b == b' ' || b == b'\t')
+        .unwrap_or(id.len());
+    let name = &id[..end];
+    if gencode {
+        let pe = name.iter().position(|&b| b == b'|').unwrap_or(name.len());
+        &name[..pe]
+    } else {
+        name
+    }
 }
 
 /// Read all transcript FASTA(s) and write the reference sequences concatenated

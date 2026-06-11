@@ -26,6 +26,9 @@ use salmon_quant::{quantify, QuantOptions};
 struct Cli {
     #[command(subcommand)]
     command: Command,
+    /// Reduce logging to warnings and errors only.
+    #[arg(short = 'q', long = "quiet", global = true)]
+    quiet: bool,
 }
 
 #[derive(Subcommand)]
@@ -101,6 +104,10 @@ struct IndexArgs {
     /// (salmon collapses duplicates by default).
     #[arg(long = "keepDuplicates")]
     keep_duplicates: bool,
+    /// GENCODE-format references: truncate each transcript name at the first `|`
+    /// (e.g. `ENST...|ENSG...|...` -> `ENST...`).
+    #[arg(long = "gencode")]
+    gencode: bool,
     /// File of decoy sequence names (one per line). The named records (which must
     /// appear last in the FASTA) are indexed but flagged as decoys.
     #[arg(short = 'd', long = "decoys")]
@@ -270,6 +277,7 @@ fn run_index(args: IndexArgs) -> Result<()> {
     opts.keep_intermediate = args.keep_intermediate;
     opts.keep_duplicates = args.keep_duplicates;
     opts.decoys = args.decoys;
+    opts.gencode = args.gencode;
     let info = build_index(&opts).context("index build failed")?;
     println!("indexed {} references (k={}, m={})", info.num_refs, info.k, info.m);
     Ok(())
@@ -437,15 +445,17 @@ fn run_quant(args: QuantArgs) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    let cli = Cli::parse();
+    // RUST_LOG (if set) wins; otherwise `info`, or `warn` under --quiet.
+    let default_level = if cli.quiet { "warn" } else { "info" };
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_level)),
         )
         .with_writer(std::io::stderr)
         .init();
 
-    let cli = Cli::parse();
     match cli.command {
         Command::Index(args) => run_index(args),
         Command::Quant(args) => run_quant(args),
