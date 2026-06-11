@@ -13,6 +13,7 @@ name = "salmon"
 path = "src/main.rs"
 
 [dependencies]
+salmon-core = { path = "../salmon-core" }
 salmon-index = { path = "../salmon-index" }
 salmon-quant = { path = "../salmon-quant" }
 salmon-align = { path = "../salmon-align" }

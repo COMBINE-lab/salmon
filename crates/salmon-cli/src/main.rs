@@ -98,6 +98,10 @@ struct QuantArgs {
     /// Output directory.
     #[arg(short = 'o', long = "output", required = true)]
     output: PathBuf,
+    /// Transcript-to-gene map (GTF/GFF, or a 2-column TSV); also writes
+    /// gene-level estimates to `quant.genes.sf`.
+    #[arg(short = 'g', long = "geneMap", value_name = "FILE")]
+    gene_map: Option<PathBuf>,
     /// Worker threads (0 = all cores).
     #[arg(short = 'p', long = "threads", default_value_t = 0)]
     threads: usize,
@@ -191,10 +195,44 @@ fn long_read_redirect() -> ! {
     std::process::exit(2);
 }
 
+/// Aggregate transcript estimates to gene level and write `quant.genes.sf`.
+fn write_gene_level(
+    out_dir: &std::path::Path,
+    gene_map: &std::path::Path,
+    names: &[String],
+    lengths: &[u32],
+    eff_lengths: &[f64],
+    tpm: &[f64],
+    counts: &[f64],
+) -> Result<()> {
+    let map = salmon_core::genemap::read_transcript_gene_map(gene_map)
+        .with_context(|| format!("reading gene map {}", gene_map.display()))?;
+    let unmapped = salmon_core::genemap::write_gene_quant(
+        &out_dir.join("quant.genes.sf"),
+        names,
+        lengths,
+        eff_lengths,
+        tpm,
+        counts,
+        &map,
+    )
+    .context("writing quant.genes.sf")?;
+    let n_genes = map.values().collect::<std::collections::HashSet<_>>().len();
+    if unmapped > 0 {
+        eprintln!(
+            "warning: {unmapped} transcript(s) had no entry in the gene map and were omitted from quant.genes.sf"
+        );
+    }
+    println!("wrote gene-level estimates for {n_genes} genes to quant.genes.sf");
+    Ok(())
+}
+
 fn run_quant(args: QuantArgs) -> Result<()> {
     if args.ont {
         long_read_redirect();
     }
+    let out_dir = args.output.clone();
+    let gene_map = args.gene_map.clone();
     // Alignment-based mode: quantify directly from a BAM.
     if let Some(bam) = args.alignments {
         let mut opts = AlignQuantOptions::new(bam, args.output);
@@ -217,6 +255,9 @@ fn run_quant(args: QuantArgs) -> Result<()> {
             "processed {} fragments, mapped {} ({:.2}%), {} equivalence classes",
             res.num_processed, res.num_mapped, pct, res.num_eq_classes
         );
+        if let Some(gm) = &gene_map {
+            write_gene_level(&out_dir, gm, &res.names, &res.lengths, &res.eff_lengths, &res.tpm, &res.counts)?;
+        }
         return Ok(());
     }
 
@@ -263,6 +304,9 @@ fn run_quant(args: QuantArgs) -> Result<()> {
         "processed {} fragments, mapped {} ({:.2}%), {} equivalence classes",
         res.num_processed, res.num_mapped, pct, res.num_eq_classes
     );
+    if let Some(gm) = &gene_map {
+        write_gene_level(&out_dir, gm, &res.names, &res.lengths, &res.eff_lengths, &res.tpm, &res.counts)?;
+    }
     Ok(())
 }
 
