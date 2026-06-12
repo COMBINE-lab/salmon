@@ -990,7 +990,7 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) {
                 }
                 if let (Some(gc), true) = (local.gc_obs.as_mut(), proper && fe < rl) {
                     if let Some((ff, cf)) =
-                        salmon_model::gc_desc(&ctx.gc_prefix[*tid as usize], rl as i32, fs as i32, fe as i32)
+                        salmon_model::gc_desc(&ctx.gc_prefix[*tid as usize], fs as i32, fe as i32)
                     {
                         gc.inc(ff, cf, p);
                     }

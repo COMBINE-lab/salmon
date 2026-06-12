@@ -194,7 +194,7 @@ fn collect_gc(sh: &Shared, compat: &[(&ScoredMapping, f64)], bias_w: &[f64], gc:
         if start < 0 || stop >= ref_len {
             continue;
         }
-        if let Some((ff, cf)) = gc_desc(&prefixes[m.tid as usize], ref_len, start, stop) {
+        if let Some((ff, cf)) = gc_desc(&prefixes[m.tid as usize], start, stop) {
             gc.inc(ff, cf, bias_w[i]);
         }
     }

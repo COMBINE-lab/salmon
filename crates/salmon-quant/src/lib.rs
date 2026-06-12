@@ -26,7 +26,7 @@ use piscem_rs::mapping::hit_searcher::SkippingStrategy;
 use salmon_core::{LibraryFormat, ReadType};
 use salmon_eqclass::EquivalenceClassBuilder;
 use salmon_index::SalmonIndex;
-use salmon_infer::{optimize, EmOptions};
+use salmon_infer::{optimize, optimize_with_init, EmOptions};
 use salmon_map::MapConfig;
 use salmon_model::dumps::BiasDump;
 use salmon_model::{FragmentLengthDistribution, LibraryTypeDetector, SBModel};
@@ -34,6 +34,11 @@ use salmon_model::{FragmentLengthDistribution, LibraryTypeDetector, SBModel};
 use processor::{QuantProcessor, Shared};
 
 pub use output::write_outputs;
+
+/// EM burn-in length before the in-loop bias correction, matching salmon's
+/// `targetIt` (the abundance estimate after this many iterations is what weights
+/// the expected bias models; see the bias-correction block in [`run`]).
+const BIAS_PRELIM_ITERS: u32 = 11;
 
 /// Options for a reads-mode quantification run.
 #[derive(Debug, Clone)]
@@ -401,7 +406,28 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         dump_eq_classes(&opts.output_dir, &salmon, &collapsed, opts.dump_eq_weights)
             .context("writing eq_classes.txt.gz")?;
     }
-    let mut em = optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths));
+    let bias_on =
+        (opts.seq_bias || opts.gc_bias || opts.pos_bias) && !opts.no_length_correction;
+    // salmon runs a *single* offline EM: after a short burn-in (`targetIt = 10`
+    // iterations) it corrects effective lengths in place using that early
+    // abundance estimate to weight the expected bias models, then continues the
+    // same alpha vector to convergence. We mirror that: when bias-correcting,
+    // run EM only `BIAS_PRELIM_ITERS` iterations here to weight the expected
+    // models, then warm-start the single full convergence after correction
+    // (below). Without bias, this is the final EM and runs to convergence.
+    // Avoids a wasteful second full convergence (~20s on the 36M PE set).
+    let mut em = if bias_on {
+        let mut pre = opts.em.clone();
+        pre.min_iter = BIAS_PRELIM_ITERS;
+        pre.max_iter = BIAS_PRELIM_ITERS;
+        // No min-alpha truncation: these alphas continue into the warm-started
+        // EM, and a zeroed alpha can never recover under the multiplicative
+        // update (salmon keeps one continuous, untruncated vector).
+        pre.min_alpha = 0.0;
+        optimize(&collapsed, num_refs, &pre, Some(&eff_lengths))
+    } else {
+        optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths))
+    };
 
     // ---- bias correction: re-estimate effective lengths --------------------
     // Build the expected (background) bias models from the initial abundance
@@ -409,7 +435,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // inference. Composes `--seqBias`, `--gcBias`, and `--posBias` in any
     // combination via the unified convolution (salmon's updateEffectiveLengths).
     let mut bias_dump = BiasDump::default();
-    if (opts.seq_bias || opts.gc_bias || opts.pos_bias) && !opts.no_length_correction {
+    if bias_on {
         use rayon::prelude::*;
         let pmf_lin: Vec<f64> = log_pmf.iter().map(|lp| lp.exp()).collect();
         let (fld_cdf, fld_low, fld_high) = salmon_model::seqbias::fld_cdf_and_bounds(&pmf_lin);
@@ -560,7 +586,10 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             .collect();
         eff_lengths = corrected;
         collapsed.update_eff_lengths(&eff_lengths);
-        em = optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths));
+        // Warm-start the single full convergence from the burn-in alphas, as
+        // salmon continues the same vector after its in-loop correction.
+        let warm = std::mem::take(&mut em.alphas);
+        em = optimize_with_init(&collapsed, num_refs, &opts.em, Some(&warm), Some(&eff_lengths));
     }
     let counts = em.alphas;
 

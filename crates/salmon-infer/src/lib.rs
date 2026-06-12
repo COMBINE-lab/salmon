@@ -252,7 +252,7 @@ mod tests {
     fn unique_classes_recover_exact_counts() {
         // Two transcripts, only unique evidence: EM must return those counts.
         let eq = build(&[(vec![0], 30), (vec![1], 70)], 2);
-        let res = optimize(&eq, 2, &EmOptions::default());
+        let res = optimize(&eq, 2, &EmOptions::default(), None);
         assert!((res.alphas[0] - 30.0).abs() < 1e-6);
         assert!((res.alphas[1] - 70.0).abs() < 1e-6);
     }
@@ -264,7 +264,7 @@ mod tests {
         // current abundances; with equal eff lengths the stable split tracks
         // the unique ratio, so totals converge to 0.1*200=20 and 0.9*200=180.
         let eq = build(&[(vec![0], 10), (vec![1], 90), (vec![0, 1], 100)], 2);
-        let res = optimize(&eq, 2, &EmOptions::default());
+        let res = optimize(&eq, 2, &EmOptions::default(), None);
         let total = res.alphas[0] + res.alphas[1];
         assert!((total - 200.0).abs() < 1e-6, "total={total}");
         assert!((res.alphas[0] - 20.0).abs() < 1e-2, "a0={}", res.alphas[0]);
@@ -274,7 +274,7 @@ mod tests {
     #[test]
     fn conserves_total_count() {
         let eq = build(&[(vec![0, 1, 2], 50), (vec![1, 2], 30), (vec![2], 20)], 3);
-        let res = optimize(&eq, 3, &EmOptions::default());
+        let res = optimize(&eq, 3, &EmOptions::default(), None);
         let total: f64 = res.alphas.iter().sum();
         assert!((total - 100.0).abs() < 1e-6, "total={total}");
     }
@@ -286,7 +286,7 @@ mod tests {
             use_vbem: true,
             ..Default::default()
         };
-        let res = optimize(&eq, 2, &opts);
+        let res = optimize(&eq, 2, &opts, None);
         let total: f64 = res.alphas.iter().sum();
         // VBEM with a tiny prior stays very close to the EM total.
         assert!((total - 200.0).abs() < 1.0, "total={total}");
@@ -301,7 +301,7 @@ mod tests {
         b.add_group(TranscriptGroup::new(vec![0, 1]), vec![1.0, 1.0], 100);
         let mut eq = b.finish();
         eq.update_eff_lengths(&[300.0, 100.0]);
-        let res = optimize(&eq, 2, &EmOptions::default());
+        let res = optimize(&eq, 2, &EmOptions::default(), None);
         assert!(res.alphas[1] > res.alphas[0], "{:?}", res.alphas);
     }
 }

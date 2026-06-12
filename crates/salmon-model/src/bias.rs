@@ -7,7 +7,7 @@
 //! posFW[fragStart]·posRC[fragEnd]`, summed over fragment starts and convolved
 //! with the conditional fragment-length distribution.
 
-use crate::gcbias::{gc_desc, GcFragModel};
+use crate::gcbias::{GcContext, GcFragModel};
 use crate::posbias::{length_class_index, SimplePosBias, NUM_LENGTH_CLASSES};
 use crate::seqbias::{
     conditional_cdf, log_bias, revcomp_bytes, SBModel, CONTEXT_LEFT, CONTEXT_LENGTH, MIN_ALPHA,
@@ -118,6 +118,10 @@ pub fn corrected_effective_length_full(
         Some((m, p)) => (Some(m), p),
         None => (None, &[][..]),
     };
+    // Precompute the per-position 5'/3' context-GC arrays once per transcript
+    // (salmon's `populateContextCounts`) so the inner convolution does cheap
+    // array lookups instead of re-deriving the context geometry per fragment.
+    let gc_ctx = gc_model.map(|_| GcContext::build(gc_prefix));
     let (pos_fw, pos_rc) = match bias.pos {
         Some((a, b)) => (Some(a), Some(b)),
         None => (None, None),
@@ -138,29 +142,30 @@ pub fn corrected_effective_length_full(
         let fl_weight = cond(fl) - prev_mass;
         prev_mass = cond(fl);
         let mut mass = 0.0f64;
+        // Hoist the bound: for kstart in [0, kmax) we have
+        // frag_end = kstart+fl-1 <= ref_len-2 < ref_len, so the old per-iteration
+        // `frag_end < ref_len` guard is always true and is dropped (it kept
+        // `ref_len` live in the inner loop, forcing a spill/reload — the single
+        // hottest source line in `perf annotate`).
+        let kmax = ref_len as i32 - fl;
         let mut kstart = 0i32;
-        while kstart < ref_len as i32 - fl {
+        while kstart < kmax {
             let frag_start = kstart;
             let frag_end = kstart + fl - 1;
-            if (frag_end as usize) < ref_len {
-                let mut frag_factor = if have_seq {
-                    fw[frag_start as usize] * rc[frag_end as usize]
-                } else {
-                    1.0
-                };
-                if let Some(gc) = gc_model {
-                    if let Some((ff, cf)) = gc_desc(gc_prefix, ref_len as i32, frag_start, frag_end)
-                    {
-                        frag_factor *= gc.get(ff, cf);
-                    }
-                }
-                if let (Some(pf), Some(pr)) = (pos_fw, pos_rc) {
-                    frag_factor *= pf[frag_start as usize] * pr[frag_end as usize];
-                }
-                mass += frag_factor;
+            let mut frag_factor = if have_seq {
+                fw[frag_start as usize] * rc[frag_end as usize]
             } else {
-                break;
+                1.0
+            };
+            if let (Some(gc), Some(ctx)) = (gc_model, gc_ctx.as_ref()) {
+                if let Some((ff, cf)) = ctx.desc(gc_prefix, frag_start, frag_end) {
+                    frag_factor *= gc.get(ff, cf);
+                }
             }
+            if let (Some(pf), Some(pr)) = (pos_fw, pos_rc) {
+                frag_factor *= pf[frag_start as usize] * pr[frag_end as usize];
+            }
+            mass += frag_factor;
             kstart += 1;
         }
         eff += fl_weight * mass;
