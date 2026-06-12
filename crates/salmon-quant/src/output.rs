@@ -19,7 +19,11 @@ pub fn write_outputs(opts: &QuantOptions, res: &QuantResult) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     std::fs::create_dir_all(dir.join("aux_info")).context("creating aux_info")?;
 
-    write_quant_sf(&dir.join("quant.sf"), res, opts.sig_digits as usize)?;
+    // Under `--skipQuant` there are no abundances, so (like salmon) no quant.sf;
+    // the eq-classes, metadata, and library counts are still written.
+    if !opts.skip_quant {
+        write_quant_sf(&dir.join("quant.sf"), res, opts.sig_digits as usize)?;
+    }
     write_cmd_info(&dir.join("cmd_info.json"), opts)?;
     write_lib_counts(&dir.join("lib_format_counts.json"), opts, res)?;
     write_meta_info(&dir.join("aux_info").join("meta_info.json"), opts, res)?;

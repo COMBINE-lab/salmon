@@ -373,6 +373,15 @@ struct QuantArgs {
     /// ~2x leaner than the dense representation with identical results.
     #[arg(long = "reduceGCMemory")]
     reduce_gc_memory: bool,
+    /// Skip transcript quantification (EM + Gibbs/bootstrap) and quant.sf, while
+    /// still mapping, building equivalence classes (use with --dumpEq), detecting
+    /// library type, and writing metadata. (salmon's --skipQuant)
+    #[arg(long = "skipQuant")]
+    skip_quant: bool,
+    /// [not yet implemented] quantify from a previously-written equivalence-class
+    /// file instead of mapping/alignments (an input mode, not the --dumpEq output).
+    #[arg(long = "eqclasses")]
+    eqclasses: Option<PathBuf>,
 }
 
 /// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
@@ -469,6 +478,9 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     if args.reduce_gc_memory {
         tracing::warn!("--reduceGCMemory is a no-op: the rank-bitvector GC representation it selects is now used by default (faster and ~2x leaner, identical results).");
     }
+    if args.eqclasses.is_some() {
+        tracing::warn!("--eqclasses (quantify from a precomputed equivalence-class file) is not yet implemented and is ignored; mapping/alignment input is used instead.");
+    }
     // Bound the global rayon pool (used by the EM and bias passes) to the
     // requested thread count; otherwise it spans every core regardless of -p.
     let nthreads = if args.threads == 0 {
@@ -506,6 +518,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
         opts.discard_orphans = args.discard_orphans;
         opts.gc_bins = args.num_gc_bins;
         opts.cond_gc_bins = args.conditional_gc_bins;
+        opts.skip_quant = args.skip_quant;
         // --scoreExp is selective-alignment-mode only (it scales the
         // best-minus-score soft weight); alignment mode has no such term.
         let res = quantify_alignments(&opts).context("alignment-based quantification failed")?;
@@ -581,6 +594,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.no_bias_length_threshold = args.no_bias_length_threshold;
     opts.gc_bins = args.num_gc_bins;
     opts.cond_gc_bins = args.conditional_gc_bins;
+    opts.skip_quant = args.skip_quant;
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems);
     // alignment scoring (selective alignment)
     opts.map_config.align.match_score = args.ma as i8;

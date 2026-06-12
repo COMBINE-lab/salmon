@@ -120,6 +120,10 @@ pub struct QuantOptions {
     /// number of conditioning (context) bins in the GC bias model (salmon's
     /// `--conditionalGCBins`, default 3)
     pub cond_gc_bins: usize,
+    /// skip the abundance estimation (EM + Gibbs/bootstrap) and `quant.sf`,
+    /// emitting only equivalence classes, library type, and metadata
+    /// (salmon's `--skipQuant`)
+    pub skip_quant: bool,
 }
 
 impl QuantOptions {
@@ -160,6 +164,7 @@ impl QuantOptions {
             no_bias_length_threshold: false,
             gc_bins: salmon_model::gcbias::DEFAULT_GC_BINS,
             cond_gc_bins: salmon_model::gcbias::DEFAULT_COND_BINS,
+            skip_quant: false,
         }
     }
 
@@ -443,7 +448,12 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // models, then warm-start the single full convergence after correction
     // (below). Without bias, this is the final EM and runs to convergence.
     // Avoids a wasteful second full convergence (~20s on the 36M PE set).
-    let mut em = if bias_on {
+    let mut em = if opts.skip_quant {
+        // `--skipQuant`: emit equivalence classes + library type + metadata but
+        // skip the optimizer (and Gibbs/bootstrap below, and quant.sf). Leave
+        // abundances at zero.
+        salmon_infer::EmResult { alphas: vec![0.0; num_refs], iters: 0, converged: true }
+    } else if bias_on {
         let mut pre = opts.em.clone();
         pre.min_iter = BIAS_PRELIM_ITERS;
         pre.max_iter = BIAS_PRELIM_ITERS;
@@ -462,7 +472,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     // inference. Composes `--seqBias`, `--gcBias`, and `--posBias` in any
     // combination via the unified convolution (salmon's updateEffectiveLengths).
     let mut bias_dump = BiasDump::default();
-    if bias_on {
+    if bias_on && !opts.skip_quant {
         use rayon::prelude::*;
         let pmf_lin: Vec<f64> = log_pmf.iter().map(|lp| lp.exp()).collect();
         let (fld_cdf, fld_low, fld_high) = salmon_model::seqbias::fld_cdf_and_bounds(&pmf_lin);
@@ -624,7 +634,9 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
     let packed = salmon_infer::PackedEqClasses::from_collapsed(&collapsed, num_refs);
     let ambig = salmon_infer::ambiguity_counts(&packed);
     let num_mapped_frags = num_mapped.load(Ordering::Relaxed);
-    let bootstraps: Vec<Vec<f64>> = if opts.num_bootstraps > 0 {
+    let bootstraps: Vec<Vec<f64>> = if opts.skip_quant {
+        Vec::new()
+    } else if opts.num_bootstraps > 0 {
         salmon_infer::bootstrap(
             &packed,
             &opts.em,

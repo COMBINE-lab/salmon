@@ -96,6 +96,9 @@ pub struct AlignQuantOptions {
     /// GC bias model bin counts (`--numGCBins` × `--conditionalGCBins`, 25×3)
     pub gc_bins: usize,
     pub cond_gc_bins: usize,
+    /// skip abundance estimation + `quant.sf`, emitting only eq-classes,
+    /// library type, and metadata (salmon's `--skipQuant`)
+    pub skip_quant: bool,
 }
 
 impl AlignQuantOptions {
@@ -126,6 +129,7 @@ impl AlignQuantOptions {
             no_bias_length_threshold: false,
             gc_bins: salmon_model::gcbias::DEFAULT_GC_BINS,
             cond_gc_bins: salmon_model::gcbias::DEFAULT_COND_BINS,
+            skip_quant: false,
         }
     }
 }
@@ -1275,7 +1279,11 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     });
     // `--initUniform` forces the plain uniform EM start; otherwise warm-start
     // from the online-estimate-blended init.
-    let mut em = if opts.init_uniform {
+    let mut em = if opts.skip_quant {
+        // `--skipQuant`: emit eq-classes + library type + metadata, skip the
+        // optimizer and quant.sf. Abundances left at zero.
+        salmon_infer::EmResult { alphas: vec![0.0; num_refs], iters: 0, converged: true }
+    } else if opts.init_uniform {
         optimize(&collapsed, num_refs, &opts.em, Some(&eff_lengths))
     } else {
         optimize_with_init(&collapsed, num_refs, &opts.em, init_alphas.as_deref(), Some(&eff_lengths))
@@ -1283,7 +1291,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
 
     // ---- bias-corrected effective lengths (shared with reads mode) ----------
     let mut bias_dump = salmon_model::dumps::BiasDump::default();
-    if bias_on {
+    if bias_on && !opts.skip_quant {
         let log_pmf = fld.log_pmf();
         let pmf_lin: Vec<f64> = log_pmf.iter().map(|lp| lp.exp()).collect();
         let (fld_cdf, fld_low, fld_high) = salmon_model::seqbias::fld_cdf_and_bounds(&pmf_lin);
@@ -1428,18 +1436,21 @@ fn write_outputs(opts: &AlignQuantOptions, res: &AlignQuantResult) -> Result<()>
     let dir = &opts.output_dir;
     std::fs::create_dir_all(dir.join("aux_info")).context("creating output dirs")?;
 
-    // quant.sf (EffectiveLength + NumReads at --sigDigits decimals; TPM at 6)
-    let sd = opts.sig_digits as usize;
-    let mut w = std::io::BufWriter::new(std::fs::File::create(dir.join("quant.sf"))?);
-    writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
-    for i in 0..res.names.len() {
-        writeln!(
-            w,
-            "{}\t{}\t{:.*}\t{:.6}\t{:.*}",
-            res.names[i], res.lengths[i], sd, res.eff_lengths[i], res.tpm[i], sd, res.counts[i]
-        )?;
+    // quant.sf (EffectiveLength + NumReads at --sigDigits decimals; TPM at 6).
+    // Skipped under --skipQuant (no abundances), like salmon.
+    if !opts.skip_quant {
+        let sd = opts.sig_digits as usize;
+        let mut w = std::io::BufWriter::new(std::fs::File::create(dir.join("quant.sf"))?);
+        writeln!(w, "Name\tLength\tEffectiveLength\tTPM\tNumReads")?;
+        for i in 0..res.names.len() {
+            writeln!(
+                w,
+                "{}\t{}\t{:.*}\t{:.6}\t{:.*}",
+                res.names[i], res.lengths[i], sd, res.eff_lengths[i], res.tpm[i], sd, res.counts[i]
+            )?;
+        }
+        w.flush()?;
     }
-    w.flush()?;
 
     // aux_info/meta_info.json — full field set, matching salmon's alignment mode
     // (no index hashes since there is no index; no keep_duplicates).
