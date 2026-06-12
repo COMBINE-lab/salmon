@@ -124,6 +124,10 @@ pub struct QuantOptions {
     /// emitting only equivalence classes, library type, and metadata
     /// (salmon's `--skipQuant`)
     pub skip_quant: bool,
+    /// fragments processed before the auxiliary (FLD) model is folded into the
+    /// online posterior (salmon's `--numPreAuxModelSamples`; salmon's default is
+    /// 1,000,000, this port's prior hardcoded value is 5,000)
+    pub num_pre_aux_model_samples: u64,
 }
 
 impl QuantOptions {
@@ -165,6 +169,7 @@ impl QuantOptions {
             gc_bins: salmon_model::gcbias::DEFAULT_GC_BINS,
             cond_gc_bins: salmon_model::gcbias::DEFAULT_COND_BINS,
             skip_quant: false,
+            num_pre_aux_model_samples: processor::NUM_PRE_BURNIN,
         }
     }
 
@@ -345,6 +350,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             map_cfg: &opts.map_config,
             sketch: opts.sketch,
             max_read_occ: opts.max_read_occ,
+            pre_burnin: opts.num_pre_aux_model_samples,
             skip: SkippingStrategy::Permissive,
             range_factorization_bins: opts.range_factorization_bins,
             expected_format,

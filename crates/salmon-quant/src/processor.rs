@@ -39,6 +39,9 @@ pub(crate) struct Shared<'a> {
     pub detector: Option<&'a LibraryTypeDetector>,
     pub map_cfg: &'a MapConfig,
     pub sketch: bool,
+    /// fragments processed without the auxiliary (FLD) model before it is folded
+    /// into the online posterior (salmon's `--numPreAuxModelSamples`)
+    pub pre_burnin: u64,
     /// discard a fragment mapping to more than this many places (`--maxReadOcc`)
     pub max_read_occ: usize,
     pub skip: SkippingStrategy,
@@ -145,7 +148,7 @@ impl Clone for QuantProcessor<'_> {
 const LOG_EPSILON: f64 = -23.998_158_637_57; // (0.375e-10f64).ln()
 /// salmon's `numPreBurninFrags`: fold the fragment-length term into the online
 /// posterior only after this many fragments have been assigned.
-const NUM_PRE_BURNIN: u64 = 5000;
+pub(crate) const NUM_PRE_BURNIN: u64 = 5000;
 
 /// Collect the orientation-aware 5'/3' sequence-bias contexts for one mapping,
 /// weighted by `weight` (the fragment-transcript posterior). A forward read's 5'
@@ -299,7 +302,7 @@ fn record(
             // The FLD term discriminates isoforms/paralogs whose implied insert
             // size differs (e.g. alternative splicing), which the length norm alone
             // cannot capture.
-            let use_aux = online.num_assigned() >= NUM_PRE_BURNIN;
+            let use_aux = online.num_assigned() >= sh.pre_burnin;
             let mm: Vec<(u32, f64)> = compat
                 .iter()
                 .map(|(m, w)| {

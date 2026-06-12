@@ -99,6 +99,9 @@ pub struct AlignQuantOptions {
     /// skip abundance estimation + `quant.sf`, emitting only eq-classes,
     /// library type, and metadata (salmon's `--skipQuant`)
     pub skip_quant: bool,
+    /// fragments processed before the FLD aux model is applied
+    /// (salmon's `--numPreAuxModelSamples`; prior hardcoded value 5,000)
+    pub num_pre_aux_model_samples: u64,
 }
 
 impl AlignQuantOptions {
@@ -130,6 +133,7 @@ impl AlignQuantOptions {
             gc_bins: salmon_model::gcbias::DEFAULT_GC_BINS,
             cond_gc_bins: salmon_model::gcbias::DEFAULT_COND_BINS,
             skip_quant: false,
+            num_pre_aux_model_samples: 5_000,
         }
     }
 }
@@ -547,6 +551,8 @@ struct PassCfg<'a> {
     paired_lib: bool,
     /// drop single-mate (orphan) placements in a paired library (`--discardOrphans`)
     discard_orphans: bool,
+    /// fragments processed before the FLD aux model is applied (`--numPreAuxModelSamples`)
+    pre_burnin: u64,
     range_factorization_bins: u32,
     use_error_model: bool,
     /// number of read-position bins in the alignment error model
@@ -683,6 +689,7 @@ where
                         incompat_prior: cfg.incompat_prior,
                         paired_lib: cfg.paired_lib,
                         discard_orphans: cfg.discard_orphans,
+                        pre_burnin: cfg.pre_burnin,
                         range_factorization_bins: cfg.range_factorization_bins,
                         log_fm,
                     };
@@ -789,6 +796,8 @@ struct FragCtx<'a> {
     paired_lib: bool,
     /// drop single-mate (orphan) placements in a paired library (`--discardOrphans`)
     discard_orphans: bool,
+    /// fragments processed before the FLD aux model is applied (`--numPreAuxModelSamples`)
+    pre_burnin: u64,
     range_factorization_bins: u32,
     /// this batch's forgetting mass (online phase)
     log_fm: f64,
@@ -870,7 +879,7 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) {
     if frag_len > 0 {
         ctx.fld.add_val(frag_len as usize, 0.0);
     }
-    let use_aux = ctx.online.is_none_or(|o| o.num_assigned() >= 5000);
+    let use_aux = ctx.online.is_none_or(|o| o.num_assigned() >= ctx.pre_burnin);
 
     // Per surviving placement (one reported alignment): conditional log-weight
     // (eq-class) + online log-aux + fragment geometry.
@@ -1218,6 +1227,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             incompat_prior: opts.incompat_prior,
             paired_lib,
             discard_orphans: opts.discard_orphans,
+            pre_burnin: opts.num_pre_aux_model_samples,
             range_factorization_bins: opts.range_factorization_bins,
             use_error_model,
             error_bins: opts.num_error_bins,

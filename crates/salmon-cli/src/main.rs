@@ -382,6 +382,11 @@ struct QuantArgs {
     /// file instead of mapping/alignments (an input mode, not the --dumpEq output).
     #[arg(long = "eqclasses")]
     eqclasses: Option<PathBuf>,
+    /// Fragments processed before the auxiliary (fragment-length) model is
+    /// applied during online inference. (salmon's --numPreAuxModelSamples;
+    /// salmon's default is 1000000, this port's is 5000.)
+    #[arg(long = "numPreAuxModelSamples", default_value_t = 5000)]
+    num_pre_aux_model_samples: u64,
     /// [accepted; not yet implemented] disable fragment-length-distribution
     /// concordance in the per-fragment probability.
     #[arg(long = "noFragLengthDist")]
@@ -569,6 +574,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
         opts.gc_bins = args.num_gc_bins;
         opts.cond_gc_bins = args.conditional_gc_bins;
         opts.skip_quant = args.skip_quant;
+        opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples;
         // --scoreExp is selective-alignment-mode only (it scales the
         // best-minus-score soft weight); alignment mode has no such term.
         let res = quantify_alignments(&opts).context("alignment-based quantification failed")?;
@@ -645,6 +651,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.gc_bins = args.num_gc_bins;
     opts.cond_gc_bins = args.conditional_gc_bins;
     opts.skip_quant = args.skip_quant;
+    opts.num_pre_aux_model_samples = args.num_pre_aux_model_samples;
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems);
     // alignment scoring (selective alignment)
     opts.map_config.align.match_score = args.ma as i8;

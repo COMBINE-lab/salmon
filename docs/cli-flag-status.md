@@ -66,7 +66,7 @@ misbehaves.
 | `--noBiasLengthThreshold` | ✅ | |
 | `--reduceGCMemory` | 🟰 | The rank-bitvector GC representation it selects is now the default (faster + ~2× leaner, identical results). |
 | `--numBiasSamples` | ⛔ | No separate seq-bias sample cap (collected within the aux window). |
-| `--numPreAuxModelSamples` | ⛔ | No separate pre-aux burn-in window. |
+| `--numPreAuxModelSamples` | ✅ | Pre-aux burn-in window (port default 5000; salmon 1,000,000). |
 | `--noFragLengthDist`, `--noSingleFragProb` | ⚠️ | FLD-in-fragment-probability toggles (experimental upstream); accepted, not yet implemented. |
 
 ## `salmon quant` — mapping / selective alignment (reads mode)
