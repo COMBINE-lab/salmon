@@ -44,4 +44,4 @@ pub use mem::Mem;
 pub use pair::{join_reads_and_filter, JointMapping, PairingConfig};
 pub use salmon_core::RefProvider;
 pub use score::{finalize_mappings, RawMapping, ScoreConfig, ScoredMapping};
-pub use sketch::{map_read_pair_sketch, map_single_read_sketch};
+pub use sketch::{map_read_pair_sketch, map_single_read_sketch, SketchScratch};

@@ -106,6 +106,8 @@ pub(crate) struct Shared<'a> {
 pub(crate) struct QuantProcessor<'a> {
     pub shared: Shared<'a>,
     pub hs: Option<HitSearcher<'a>>,
+    /// per-thread reusable sketch caches (avoids per-read MappingCache allocs)
+    pub sketch_scratch: Option<salmon_map::SketchScratch>,
     /// per-thread observed (fw, rc) sequence-bias models (when collecting)
     pub seqbias: Option<(SBModel, SBModel)>,
     /// per-thread observed fragment-GC model (when collecting)
@@ -135,6 +137,7 @@ impl<'a> QuantProcessor<'a> {
         Self {
             shared,
             hs: None,
+            sketch_scratch: None,
             seqbias,
             gcbias,
             posbias,
@@ -482,20 +485,23 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         &mut self,
         pairs: impl Iterator<Item = (RefRecord<'r>, RefRecord<'r>)>,
     ) -> paraseq::Result<()> {
-        let QuantProcessor { shared, hs, seqbias, gcbias, posbias, unmapped, sam_buf } = self;
+        let QuantProcessor { shared, hs, sketch_scratch, seqbias, gcbias, posbias, unmapped, sam_buf } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
         if hs.is_none() {
             *hs = Some(HitSearcher::new(idx));
         }
         let hs = hs.as_mut().unwrap();
+        if sh.sketch && sketch_scratch.is_none() {
+            *sketch_scratch = Some(salmon_map::SketchScratch::new(idx.k()));
+        }
         // one forgetting-mass timestep per minibatch (online inference)
         let log_fm = sh.online.map_or(0.0, |o| o.next_log_fm());
         for (r1, r2) in pairs {
             let s1 = r1.seq();
             let s2 = r2.seq();
             let mut maps = if sh.sketch {
-                map_read_pair_sketch(idx, hs, s1.as_ref(), s2.as_ref(), sh.sketch_strict_orphan, sh.skip, sh.map_cfg.collect.max_hit_occ, sh.max_read_occ)
+                map_read_pair_sketch(idx, hs, sketch_scratch.as_mut().unwrap(), s1.as_ref(), s2.as_ref(), sh.sketch_strict_orphan, sh.skip, sh.map_cfg.collect.max_hit_occ, sh.max_read_occ)
             } else {
                 map_read_pair(idx, hs, sh.salmon, s1.as_ref(), s2.as_ref(), sh.map_cfg)
             };
@@ -539,18 +545,21 @@ impl<'a, 'r> ParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
         &mut self,
         records: impl Iterator<Item = RefRecord<'r>>,
     ) -> paraseq::Result<()> {
-        let QuantProcessor { shared, hs, seqbias, gcbias, posbias, unmapped, sam_buf } = self;
+        let QuantProcessor { shared, hs, sketch_scratch, seqbias, gcbias, posbias, unmapped, sam_buf } = self;
         let sh = *shared;
         let idx = sh.salmon.inner();
         if hs.is_none() {
             *hs = Some(HitSearcher::new(idx));
         }
         let hs = hs.as_mut().unwrap();
+        if sh.sketch && sketch_scratch.is_none() {
+            *sketch_scratch = Some(salmon_map::SketchScratch::new(idx.k()));
+        }
         let log_fm = sh.online.map_or(0.0, |o| o.next_log_fm());
         for rec in records {
             let s = rec.seq();
             let mut maps = if sh.sketch {
-                map_single_read_sketch(idx, hs, s.as_ref(), sh.skip, sh.map_cfg.collect.max_hit_occ, sh.max_read_occ)
+                map_single_read_sketch(idx, hs, sketch_scratch.as_mut().unwrap(), s.as_ref(), sh.skip, sh.map_cfg.collect.max_hit_occ, sh.max_read_occ)
             } else {
                 map_single_read(idx, hs, sh.salmon, s.as_ref(), sh.map_cfg)
             };

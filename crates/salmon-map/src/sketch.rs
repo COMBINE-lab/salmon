@@ -21,10 +21,35 @@ use sshash_lib::dispatch_on_k;
 
 use crate::score::ScoredMapping;
 
+/// Reusable per-thread scratch for the sketch path: the three `MappingCache`s
+/// that `map_read` (left/right mate) and `merge_se_mappings` (merge output)
+/// fill. Each `MappingCache::new` allocates an `AHashMap` (capacity 256) plus a
+/// `Vec`; building three on every read pair is pure churn (~120 ns/pair).
+/// `map_read` and `merge_se_mappings` `clear()` their caches internally, so
+/// holding one `SketchScratch` per worker thread and reusing it across reads is
+/// safe and removes those allocations from the hot loop — mirroring piscem's own
+/// per-thread `CommonThreadState`.
+pub struct SketchScratch {
+    left: MappingCache<SketchHitInfoSimple>,
+    right: MappingCache<SketchHitInfoSimple>,
+    out: MappingCache<SketchHitInfoSimple>,
+}
+
+impl SketchScratch {
+    pub fn new(k: usize) -> Self {
+        Self {
+            left: MappingCache::new(k),
+            right: MappingCache::new(k),
+            out: MappingCache::new(k),
+        }
+    }
+}
+
 /// Pseudoalign a single read; returns one uniform-weight member per hit transcript.
 pub fn map_single_read_sketch<'idx>(
     index: &'idx ReferenceIndex,
     hs: &mut HitSearcher<'idx>,
+    scratch: &mut SketchScratch,
     read: &[u8],
     strat: SkippingStrategy,
     max_hit_occ: usize,
@@ -36,7 +61,7 @@ pub fn map_single_read_sketch<'idx>(
     }
     dispatch_on_k!(k, K => {
         let mut query = PiscemStreamingQuery::<K>::new(index.dict());
-        let mut cache = MappingCache::<SketchHitInfoSimple>::new(k);
+        let cache = &mut scratch.left;
         // Honor the same repetitive-hit and multimapping caps as selective
         // alignment (--maxOccsPerHit / --maxReadOcc) rather than piscem's
         // built-in defaults (256 / 2500), so both modes filter consistently.
@@ -44,7 +69,7 @@ pub fn map_single_read_sketch<'idx>(
         cache.max_read_occ = max_read_occ;
         let mut poison = PoisonState::new(index.poison_table());
         map_read::<K, SketchHitInfoSimple, _, _>(
-            read, &mut cache, hs, &mut query, index, &mut poison, strat,
+            read, cache, hs, &mut query, index, &mut poison, strat,
         );
         cache
             .accepted_hits
@@ -92,6 +117,7 @@ pub fn map_single_read_sketch<'idx>(
 pub fn map_read_pair_sketch<'idx>(
     index: &'idx ReferenceIndex,
     hs: &mut HitSearcher<'idx>,
+    scratch: &mut SketchScratch,
     r1: &[u8],
     r2: &[u8],
     strict_orphan: bool,
@@ -103,28 +129,26 @@ pub fn map_read_pair_sketch<'idx>(
     if r1.len() < k && r2.len() < k {
         return Vec::new();
     }
+    let SketchScratch { left, right, out } = scratch;
     dispatch_on_k!(k, K => {
-        let mut left = MappingCache::<SketchHitInfoSimple>::new(k);
-        let mut right = MappingCache::<SketchHitInfoSimple>::new(k);
-        let mut out = MappingCache::<SketchHitInfoSimple>::new(k);
-        for c in [&mut left, &mut right, &mut out] {
+        for c in [&mut *left, &mut *right, &mut *out] {
             c.max_hit_occ = max_hit_occ;
             c.max_read_occ = max_read_occ;
         }
         let mut poison = PoisonState::new(index.poison_table());
         if r1.len() >= k {
             let mut q = PiscemStreamingQuery::<K>::new(index.dict());
-            map_read::<K, SketchHitInfoSimple, _, _>(r1, &mut left, hs, &mut q, index, &mut poison, strat);
+            map_read::<K, SketchHitInfoSimple, _, _>(r1, left, hs, &mut q, index, &mut poison, strat);
         }
         if r2.len() >= k {
             let mut q = PiscemStreamingQuery::<K>::new(index.dict());
-            map_read::<K, SketchHitInfoSimple, _, _>(r2, &mut right, hs, &mut q, index, &mut poison, strat);
+            map_read::<K, SketchHitInfoSimple, _, _>(r2, right, hs, &mut q, index, &mut poison, strat);
         }
         // Accepted-target counts captured before the merge consumes the caches,
         // for the relaxed (empty-eq-class) orphan rule below.
         let nl = left.accepted_hits.len();
         let nr = right.accepted_hits.len();
-        merge_se_mappings(&mut left, &mut right, r1.len() as i32, r2.len() as i32, &mut out);
+        merge_se_mappings(left, right, r1.len() as i32, r2.len() as i32, out);
 
         // Relaxed orphan rule (default): the merge left the pair unmapped but
         // exactly one mate has an accepted target → emit it as an orphan even

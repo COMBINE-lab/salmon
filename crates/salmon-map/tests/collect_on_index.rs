@@ -264,16 +264,17 @@ fn pseudoalignment_only_mode() {
     let transcript = gen_seq(600, 0x5EED);
     let (idx, _tmp) = build_index_for(&transcript);
     let mut hs = HitSearcher::new(idx.inner());
+    let mut scratch = salmon_map::SketchScratch::new(idx.inner().k());
 
     // single-end sketch
     let read = &transcript[100..200];
-    let s = map_single_read_sketch(idx.inner(), &mut hs, read, SkippingStrategy::Permissive, 256, 2500);
+    let s = map_single_read_sketch(idx.inner(), &mut hs, &mut scratch, read, SkippingStrategy::Permissive, 256, 2500);
     assert!(s.iter().any(|m| m.tid == 0), "sketch single: {s:?}");
 
     // paired sketch -> intersection on tid 0
     let r1 = transcript[50..130].to_vec();
     let r2 = revcomp(&transcript[350..430]);
-    let sp = map_read_pair_sketch(idx.inner(), &mut hs, &r1, &r2, false, SkippingStrategy::Permissive, 256, 2500);
+    let sp = map_read_pair_sketch(idx.inner(), &mut hs, &mut scratch, &r1, &r2, false, SkippingStrategy::Permissive, 256, 2500);
     assert!(sp.iter().any(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired), "sketch pair: {sp:?}");
 }
 
