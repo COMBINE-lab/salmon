@@ -36,6 +36,13 @@ pub struct AlignConfig {
     /// of only the inter-MEM gaps and flanks, treating MEMs as exact matches
     /// (`false`, salmon's default = faster). Salmon's `--fullLengthAlignment`.
     pub full_length_alignment: bool,
+    /// allow soft-clipping read ends in flank extension (salmon's `--softclip`):
+    /// a read flank takes `max(mqe, mte, 0)` instead of requiring full
+    /// consumption (`mqe`). Implies [`softclip_overhangs`].
+    pub softclip: bool,
+    /// allow soft-clipping only read bases that overhang a transcript end
+    /// (salmon's `--softclipOverhangs`): a read flank takes `max(mqe, mte)`.
+    pub softclip_overhangs: bool,
 }
 
 impl Default for AlignConfig {
@@ -50,6 +57,8 @@ impl Default for AlignConfig {
             bandwidth: 15,
             // anchored (inter-MEM-gap) scoring by default, matching salmon.
             full_length_alignment: false,
+            softclip: false,
+            softclip_overhangs: false,
         }
     }
 }
@@ -321,8 +330,21 @@ fn ksw2_flank_extend(qf: &[u8], tf: &[u8], cfg: &AlignConfig, anchor_right: bool
     let mut ez = Extz::default();
     ez.reset();
     extz2(&input, &mut ez);
-    // read flank fully consumed, reference free to overhang -> mqe
-    if ez.mqe > KSW_NEG_INF {
+    // Soft-clip semantics mirror PuffAligner's flank `part_score` (mqe = read
+    // flank fully consumed, reference free to overhang; mte = reference fully
+    // consumed, read free to overhang the transcript end):
+    //   none      -> mqe              (full read flank must align)
+    //   overhangs  -> max(mqe, mte)    (clip only bases past a transcript end)
+    //   full       -> max(mqe, mte, 0) (clip read ends freely; never negative)
+    // `--softclip` implies `--softclipOverhangs`. `ez.max` is the fallback when
+    // neither extension is valid (e.g. band-clipped), matching the prior guard.
+    if cfg.softclip {
+        let s = ez.mqe.max(ez.mte);
+        if s > KSW_NEG_INF { s.max(0) } else { (ez.max as i32).max(0) }
+    } else if cfg.softclip_overhangs {
+        let s = ez.mqe.max(ez.mte);
+        if s > KSW_NEG_INF { s } else { ez.max as i32 }
+    } else if ez.mqe > KSW_NEG_INF {
         ez.mqe
     } else {
         ez.max as i32
@@ -501,6 +523,27 @@ pub fn align_in_window(query: &[u8], window: &[u8], cfg: &AlignConfig) -> Option
 mod tests {
     use super::*;
     use crate::mem::Mem;
+
+    #[test]
+    fn flank_softclip_recovers_read_overhang() {
+        // Read flank (10 b) matches the reference flank (5 b) then overhangs the
+        // end. Without soft-clipping the full read must align (mqe); with overhang
+        // / full soft-clipping the 5 matched bases score (mte) and the overhang is
+        // clipped, so the score is no worse and reflects the matched prefix.
+        let qf = b"ACGTACGTAC";
+        let tf = b"ACGTA";
+        let none = AlignConfig::default();
+        let overhang = AlignConfig { softclip_overhangs: true, ..AlignConfig::default() };
+        let full = AlignConfig { softclip: true, ..AlignConfig::default() };
+        let s_none = ksw2_flank_extend(qf, tf, &none, false);
+        let s_oh = ksw2_flank_extend(qf, tf, &overhang, false);
+        let s_full = ksw2_flank_extend(qf, tf, &full, false);
+        // overhang recovers the 5 matched bases (mte = 5 * match_score = 10)
+        assert_eq!(s_oh, 10, "overhang flank should score the matched prefix");
+        assert!(s_oh >= s_none, "overhang {s_oh} >= none {s_none}");
+        assert!(s_full >= 0, "full soft-clip never negative: {s_full}");
+        assert!(s_full >= s_oh, "full {s_full} >= overhang {s_oh}");
+    }
 
     fn gen_seq(n: usize, seed: u64) -> Vec<u8> {
         const B: [u8; 4] = *b"ACGT";

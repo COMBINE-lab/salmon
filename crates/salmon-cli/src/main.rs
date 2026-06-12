@@ -301,6 +301,14 @@ struct QuantArgs {
     /// only the best-scoring mapping(s), each with equal weight.
     #[arg(long = "hardFilter")]
     hard_filter: bool,
+    /// Allow soft-clipping of read ends during selective alignment: unaligned
+    /// read-end bases are clipped rather than penalized. (salmon's --softclip)
+    #[arg(long = "softclip")]
+    softclip: bool,
+    /// Allow soft-clipping only of read bases that overhang a transcript end
+    /// (a restricted form of --softclip). (salmon's --softclipOverhangs)
+    #[arg(long = "softclipOverhangs")]
+    softclip_overhangs: bool,
     /// Per-target pre-merge chain sub-optimality threshold: keep chains scoring
     /// `>= best_chain_score * thresh` (selective-alignment mode). Range [0,1].
     /// Rust default 0.8 (salmon's default is 0.75).
@@ -517,6 +525,8 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.map_config.align.full_length_alignment = args.full_length_alignment;
     opts.map_config.align.bandwidth = args.bandwidth;
     opts.map_config.pair.allow_dovetail = args.allow_dovetail;
+    opts.map_config.align.softclip = args.softclip;
+    opts.map_config.align.softclip_overhangs = args.softclip_overhangs;
     // mapping policy (Tier 2): all default to the prior hardcoded behavior
     opts.map_config.recover_orphans = args.recover_orphans;
     if args.discard_orphans_quasi {
