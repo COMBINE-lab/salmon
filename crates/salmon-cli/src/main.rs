@@ -104,6 +104,10 @@ struct IndexArgs {
     /// instead of deleting it after the index is built.
     #[arg(long = "keepFixedFasta")]
     keep_fixed_fasta: bool,
+    /// [accepted for salmon compatibility; no effect] TwoPaCo bloom-filter size —
+    /// the Rust index builder (cf1-rs) does not expose this knob.
+    #[arg(long = "filterSize")]
+    filter_size: Option<usize>,
     /// Retain exact-duplicate transcript sequences instead of collapsing them
     /// (salmon collapses duplicates by default).
     #[arg(long = "keepDuplicates")]
@@ -328,6 +332,14 @@ struct QuantArgs {
     /// (alignment mode). Reads mode uses --discardOrphansQuasi.
     #[arg(long = "discardOrphans")]
     discard_orphans: bool,
+    /// [accepted for salmon compatibility; no effect] alignment-mode mapping
+    /// cache size — the Rust align path streams with bounded buffers.
+    #[arg(long = "mappingCacheMemoryLimit")]
+    mapping_cache_memory_limit: Option<usize>,
+    /// [accepted for salmon compatibility; no effect] the Rust chainer uses a
+    /// loss-less ref-distance early-break, not salmon's numRounds heuristic.
+    #[arg(long = "disableChainingHeuristic")]
+    disable_chaining_heuristic: bool,
 }
 
 /// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
@@ -343,6 +355,9 @@ fn seed_mode(unimems: bool, refmems: bool) -> salmon_map::SeedMode {
 }
 
 fn run_index(args: IndexArgs) -> Result<()> {
+    if args.filter_size.is_some() {
+        tracing::warn!("--filterSize is accepted for salmon compatibility but has no effect: the Rust index builder (cf1-rs) does not expose the cDBG bloom-filter size.");
+    }
     let mut opts = IndexBuildOptions::new(args.transcripts, args.index);
     opts.k = args.kmer_len;
     opts.m = args.minimizer_len;
@@ -406,6 +421,13 @@ fn write_gene_level(
 fn run_quant(args: QuantArgs) -> Result<()> {
     if args.ont {
         long_read_redirect();
+    }
+    // Accepted-for-compatibility flags that have no effect in the Rust port.
+    if args.mapping_cache_memory_limit.is_some() {
+        tracing::warn!("--mappingCacheMemoryLimit is accepted for salmon compatibility but has no effect: the Rust alignment path streams with bounded buffers (no mass-banking cache).");
+    }
+    if args.disable_chaining_heuristic {
+        tracing::warn!("--disableChainingHeuristic is accepted for salmon compatibility but has no effect: the Rust chainer uses a loss-less ref-distance early-break, not salmon's numRounds heuristic.");
     }
     // Bound the global rayon pool (used by the EM and bias passes) to the
     // requested thread count; otherwise it spans every core regardless of -p.
