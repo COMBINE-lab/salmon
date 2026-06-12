@@ -273,6 +273,26 @@ struct QuantArgs {
     /// ksw2 DP bandwidth for selective alignment (reads mode).
     #[arg(long = "bandwidth", default_value_t = 15)]
     bandwidth: i32,
+    /// Attempt to recover the mate of an orphaned read near its mapped partner
+    /// (selective-alignment mode). Off by default.
+    #[arg(long = "recoverOrphans")]
+    recover_orphans: bool,
+    /// Discard orphan mappings in selective-alignment (reads) mode: only
+    /// concordantly-paired fragments are kept.
+    #[arg(long = "discardOrphansQuasi")]
+    discard_orphans_quasi: bool,
+    /// An alignment to an annotated transcript is invalid if its score is
+    /// `< decoyThreshold * bestDecoyScore` (selective-alignment mode).
+    #[arg(long = "decoyThreshold", default_value_t = 1.0)]
+    decoy_threshold: f64,
+    /// Drop any mapping whose alignment probability
+    /// `exp(-scoreExp * (best - score))` is below this (selective-alignment mode).
+    #[arg(long = "minAlnProb", default_value_t = 1e-5)]
+    min_aln_prob: f64,
+    /// Instead of soft-weighting multimapping locations by alignment score, keep
+    /// only the best-scoring mapping(s), each with equal weight.
+    #[arg(long = "hardFilter")]
+    hard_filter: bool,
 }
 
 /// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
@@ -434,6 +454,14 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.map_config.align.full_length_alignment = args.full_length_alignment;
     opts.map_config.align.bandwidth = args.bandwidth;
     opts.map_config.pair.allow_dovetail = args.allow_dovetail;
+    // mapping policy (Tier 2): all default to the prior hardcoded behavior
+    opts.map_config.recover_orphans = args.recover_orphans;
+    if args.discard_orphans_quasi {
+        opts.map_config.pair.allow_orphans = false;
+    }
+    opts.map_config.score.decoy_thresh = args.decoy_threshold;
+    opts.map_config.score.min_aln_prob = args.min_aln_prob;
+    opts.map_config.score.hard_filter = args.hard_filter;
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems);
     // alignment scoring (selective alignment)
     opts.map_config.align.match_score = args.ma as i8;
