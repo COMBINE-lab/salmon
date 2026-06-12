@@ -72,21 +72,29 @@ pub fn map_single_read_sketch<'idx>(
 /// Pseudoalign a read pair using the intersection rule.
 ///
 /// Uses piscem's bulk pair-merge ([`merge_se_mappings`]) rather than a plain
-/// per-transcript intersection, so the pairing matches piscem/salmon (and
-/// kallisto) semantics:
+/// per-transcript intersection, so the pairing matches piscem/salmon semantics:
 /// - both mates accepted → concordant pairs only (opposite orientation +
 ///   in-range fragment length), via `merge_lists`; an empty merge is *unmapped*,
 ///   not orphaned;
-/// - exactly one mate accepted **and the other had no matching k-mers** → that
-///   mate is emitted as an orphan (C++/kallisto `check_kmers_orphans` rule —
-///   `MappingCache::has_matching_kmers`);
-/// - one mate accepted but the other *did* have matching k-mers (just no
-///   accepted target) → unmapped (the mates conflict).
+/// - exactly one mate has an accepted target → that mate is emitted as an
+///   orphan.
+///
+/// Orphan gate (`strict_orphan`):
+/// - `false` (default): orphan whenever the *other* mate has no accepted target,
+///   regardless of whether it had matching k-mers. This is closer to selective
+///   alignment (which recovers orphans) and improves agreement with SA mode —
+///   a read whose mate's k-mers fail consensus (e.g. an isolated repeat-element
+///   k-mer) is effectively unmappable, so the confident mate should still count.
+/// - `true`: only orphan when the other mate had **no matching k-mers at all**
+///   (piscem's `check_kmers_orphans` / `MappingCache::has_matching_kmers` rule).
+///   More conservative; mates that have k-mers but no consensus target leave the
+///   pair unmapped. Selected by `--sketchStrictOrphans`.
 pub fn map_read_pair_sketch<'idx>(
     index: &'idx ReferenceIndex,
     hs: &mut HitSearcher<'idx>,
     r1: &[u8],
     r2: &[u8],
+    strict_orphan: bool,
     strat: SkippingStrategy,
     max_hit_occ: usize,
     max_read_occ: usize,
@@ -112,13 +120,37 @@ pub fn map_read_pair_sketch<'idx>(
             let mut q = PiscemStreamingQuery::<K>::new(index.dict());
             map_read::<K, SketchHitInfoSimple, _, _>(r2, &mut right, hs, &mut q, index, &mut poison, strat);
         }
+        // Accepted-target counts captured before the merge consumes the caches,
+        // for the relaxed (empty-eq-class) orphan rule below.
+        let nl = left.accepted_hits.len();
+        let nr = right.accepted_hits.len();
         merge_se_mappings(&mut left, &mut right, r1.len() as i32, r2.len() as i32, &mut out);
 
-        let status = match out.map_type {
-            MappingType::MappedPair => Some(MateStatus::PairedEndPaired),
-            MappingType::MappedFirstOrphan => Some(MateStatus::PairedEndLeft),
-            MappingType::MappedSecondOrphan => Some(MateStatus::PairedEndRight),
-            _ => None,
+        // Relaxed orphan rule (default): the merge left the pair unmapped but
+        // exactly one mate has an accepted target → emit it as an orphan even
+        // though the other mate had matching k-mers. `--sketchStrictOrphans`
+        // disables this, restoring piscem's no-matching-k-mers gate.
+        let orphan_ec = !strict_orphan
+            && out.map_type == MappingType::Unmapped
+            && (nl == 0) != (nr == 0);
+
+        let status = if orphan_ec {
+            // exactly one mate has accepted hits -> emit it as an orphan,
+            // overriding the `had_matching_kmers` gate.
+            if nl > 0 {
+                std::mem::swap(&mut left.accepted_hits, &mut out.accepted_hits);
+                Some(MateStatus::PairedEndLeft)
+            } else {
+                std::mem::swap(&mut right.accepted_hits, &mut out.accepted_hits);
+                Some(MateStatus::PairedEndRight)
+            }
+        } else {
+            match out.map_type {
+                MappingType::MappedPair => Some(MateStatus::PairedEndPaired),
+                MappingType::MappedFirstOrphan => Some(MateStatus::PairedEndLeft),
+                MappingType::MappedSecondOrphan => Some(MateStatus::PairedEndRight),
+                _ => None,
+            }
         };
         match status {
             None => Vec::new(),
@@ -130,7 +162,10 @@ pub fn map_read_pair_sketch<'idx>(
                     is_fw: h.is_fw,
                     status,
                     score: h.score as i32,
-                    fragment_len: 0,
+                    // For concordant pairs `merge_lists` stored the template
+                    // length in `fragment_length`; feed it through so the FLD
+                    // is actually learned from the data (orphans report 0).
+                    fragment_len: h.frag_len(),
                     weight: 1.0,
                     ref_pos: 0,
                     fw_pos: -1,

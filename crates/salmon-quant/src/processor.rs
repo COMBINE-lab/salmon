@@ -39,6 +39,10 @@ pub(crate) struct Shared<'a> {
     pub detector: Option<&'a LibraryTypeDetector>,
     pub map_cfg: &'a MapConfig,
     pub sketch: bool,
+    /// sketch mode: only orphan a pair when the other mate had no matching
+    /// k-mers (strict), instead of the default empty-accepted-target rule
+    /// (`--sketchStrictOrphans`)
+    pub sketch_strict_orphan: bool,
     /// fragments processed without the auxiliary (FLD) model before it is folded
     /// into the online posterior (salmon's `--numPreAuxModelSamples`)
     pub pre_burnin: u64,
@@ -80,6 +84,10 @@ pub(crate) struct Shared<'a> {
     pub paired_lib: bool,
     pub num_processed: &'a AtomicU64,
     pub num_mapped: &'a AtomicU64,
+    /// mapped fragments whose representative mapping is an orphan (only one mate
+    /// of a paired-end fragment mapped); feeds `lib_format_counts.json`'s
+    /// `num_frags_with_inconsistent_or_orphan_mappings`.
+    pub num_orphan: &'a AtomicU64,
     /// selective-alignment meta counters (salmon's `aux_info/meta_info.json`):
     /// decoy-dominated fragments, dovetail fragments, fragments that had
     /// candidates but no surviving mapping, and (for mapped fragments) candidate
@@ -251,6 +259,16 @@ fn record(
         return;
     }
     sh.num_mapped.fetch_add(1, Ordering::Relaxed);
+
+    // Classify the fragment as orphan when its representative mapping has only
+    // one mate of a pair placed (PairedEndLeft / PairedEndRight). Single-end
+    // libraries never count as orphan here.
+    if matches!(
+        maps[0].status,
+        MateStatus::PairedEndLeft | MateStatus::PairedEndRight
+    ) {
+        sh.num_orphan.fetch_add(1, Ordering::Relaxed);
+    }
 
     // Sample the observed library format for auto-detection (auto mode only).
     if let Some(det) = sh.detector {
@@ -477,7 +495,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             let s1 = r1.seq();
             let s2 = r2.seq();
             let mut maps = if sh.sketch {
-                map_read_pair_sketch(idx, hs, s1.as_ref(), s2.as_ref(), sh.skip, sh.map_cfg.collect.max_hit_occ, sh.max_read_occ)
+                map_read_pair_sketch(idx, hs, s1.as_ref(), s2.as_ref(), sh.sketch_strict_orphan, sh.skip, sh.map_cfg.collect.max_hit_occ, sh.max_read_occ)
             } else {
                 map_read_pair(idx, hs, sh.salmon, s1.as_ref(), s2.as_ref(), sh.map_cfg)
             };

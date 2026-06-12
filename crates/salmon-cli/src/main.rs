@@ -165,6 +165,11 @@ struct QuantArgs {
     /// Use the alignment-free pseudoalignment path.
     #[arg(long = "sketch")]
     sketch: bool,
+    /// Sketch mode: only emit an orphan when the mate had no matching k-mers at
+    /// all (strict). Default orphans whenever the mate has no consistent target,
+    /// which tracks selective alignment more closely.
+    #[arg(long = "sketchStrictOrphans")]
+    sketch_strict_orphans: bool,
     /// Use the standard EM optimizer instead of VBEM.
     #[arg(long = "useEM")]
     use_em: bool,
@@ -611,6 +616,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.lib_type = args.lib_type;
     opts.num_threads = args.threads;
     opts.sketch = args.sketch;
+    opts.sketch_strict_orphan = args.sketch_strict_orphans;
     opts.em.use_vbem = !args.use_em;
     opts.range_factorization_bins = args.range_factorization_bins;
     opts.incompat_prior = args.incompat_prior;

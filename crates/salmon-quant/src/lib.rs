@@ -59,6 +59,10 @@ pub struct QuantOptions {
     pub num_threads: usize,
     /// use the alignment-free pseudoalignment path
     pub sketch: bool,
+    /// sketch mode: restrict orphan emission to pairs whose other mate had no
+    /// matching k-mers at all (`--sketchStrictOrphans`); default false uses the
+    /// relaxed empty-accepted-target rule
+    pub sketch_strict_orphan: bool,
     /// selective-alignment mapping configuration
     pub map_config: MapConfig,
     /// EM/VBEM inference options
@@ -142,6 +146,7 @@ impl QuantOptions {
             lib_type: "A".to_string(),
             num_threads: 0,
             sketch: false,
+            sketch_strict_orphan: false,
             map_config: MapConfig::default(),
             em: EmOptions::default(),
             range_factorization_bins: 4,
@@ -189,6 +194,8 @@ pub struct QuantResult {
     pub counts: Vec<f64>,
     pub num_processed: u64,
     pub num_mapped: u64,
+    /// mapped fragments placed as orphans (only one mate of a pair mapped)
+    pub num_orphan: u64,
     pub num_eq_classes: usize,
     /// index of the first decoy reference (`None` if the index has no decoys);
     /// references at/after this are excluded from `quant.sf` and counted as decoys
@@ -248,6 +255,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         FragmentLengthDistribution::new(1.0, opts.fld_max, opts.fld_mean, opts.fld_sd, 4, 0.5, 1);
     let num_processed = AtomicU64::new(0);
     let num_mapped = AtomicU64::new(0);
+    let num_orphan = AtomicU64::new(0);
     let num_decoy = AtomicU64::new(0);
     let num_dovetail = AtomicU64::new(0);
     let num_frags_filtered_vm = AtomicU64::new(0);
@@ -349,6 +357,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             detector: detector.as_ref(),
             map_cfg: &opts.map_config,
             sketch: opts.sketch,
+            sketch_strict_orphan: opts.sketch_strict_orphan,
             max_read_occ: opts.max_read_occ,
             pre_burnin: opts.num_pre_aux_model_samples,
             skip: SkippingStrategy::Permissive,
@@ -370,6 +379,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             paired_lib: opts.is_paired(),
             num_processed: &num_processed,
             num_mapped: &num_mapped,
+            num_orphan: &num_orphan,
             num_decoy: &num_decoy,
             num_dovetail: &num_dovetail,
             num_frags_filtered_vm: &num_frags_filtered_vm,
@@ -689,6 +699,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         counts,
         num_processed: num_processed.load(Ordering::Relaxed),
         num_mapped: num_mapped.load(Ordering::Relaxed),
+        num_orphan: num_orphan.load(Ordering::Relaxed),
         num_eq_classes,
         first_decoy_index: salmon.info().first_decoy_index,
         keep_duplicates: false,

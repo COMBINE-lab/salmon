@@ -204,8 +204,8 @@ fn write_lib_counts(path: &Path, opts: &QuantOptions, res: &QuantResult) -> Resu
         compatible_fragment_ratio: 1.0,
         num_compatible_fragments: res.num_mapped,
         num_assigned_fragments: res.num_mapped,
-        num_frags_with_concordant_consistent_mappings: res.num_mapped,
-        num_frags_with_inconsistent_or_orphan_mappings: 0,
+        num_frags_with_concordant_consistent_mappings: res.num_mapped - res.num_orphan,
+        num_frags_with_inconsistent_or_orphan_mappings: res.num_orphan,
         strand_mapping_bias: 0.0,
     };
     write_json(path, &counts)
