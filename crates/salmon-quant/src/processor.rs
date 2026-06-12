@@ -501,7 +501,7 @@ impl<'a, 'r> PairedParallelProcessor<RefRecord<'r>> for QuantProcessor<'a> {
             let s1 = r1.seq();
             let s2 = r2.seq();
             let mut maps = if sh.sketch {
-                map_read_pair_sketch(idx, hs, sketch_scratch.as_mut().unwrap(), s1.as_ref(), s2.as_ref(), sh.sketch_strict_orphan, sh.skip, sh.map_cfg.collect.max_hit_occ, sh.max_read_occ)
+                map_read_pair_sketch(idx, hs, sketch_scratch.as_mut().unwrap(), s1.as_ref(), s2.as_ref(), sh.sketch_strict_orphan, sh.map_cfg.pair.allow_dovetail, sh.skip, sh.map_cfg.collect.max_hit_occ, sh.max_read_occ)
             } else {
                 map_read_pair(idx, hs, sh.salmon, s1.as_ref(), s2.as_ref(), sh.map_cfg)
             };

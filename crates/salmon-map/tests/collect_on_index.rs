@@ -274,7 +274,7 @@ fn pseudoalignment_only_mode() {
     // paired sketch -> intersection on tid 0
     let r1 = transcript[50..130].to_vec();
     let r2 = revcomp(&transcript[350..430]);
-    let sp = map_read_pair_sketch(idx.inner(), &mut hs, &mut scratch, &r1, &r2, false, SkippingStrategy::Permissive, 256, 2500);
+    let sp = map_read_pair_sketch(idx.inner(), &mut hs, &mut scratch, &r1, &r2, false, false, SkippingStrategy::Permissive, 256, 2500);
     assert!(sp.iter().any(|m| m.tid == 0 && m.status == MateStatus::PairedEndPaired), "sketch pair: {sp:?}");
 }
 

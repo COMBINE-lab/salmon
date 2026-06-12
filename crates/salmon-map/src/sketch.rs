@@ -121,6 +121,7 @@ pub fn map_read_pair_sketch<'idx>(
     r1: &[u8],
     r2: &[u8],
     strict_orphan: bool,
+    allow_dovetail: bool,
     strat: SkippingStrategy,
     max_hit_occ: usize,
     max_read_occ: usize,
@@ -129,11 +130,24 @@ pub fn map_read_pair_sketch<'idx>(
     if r1.len() < k && r2.len() < k {
         return Vec::new();
     }
+    // Fragment-length lower bound for the pair merge. Default -32 (piscem's
+    // small-dovetail tolerance). With `--allowDovetail`, admit genuine dovetails
+    // (insert < read length): the k-mer-anchor frag_len ≈ insert − read_len, so
+    // a true dovetail bottoms out at -read_len; we use that as the floor, which
+    // recovers overlapping short fragments without admitting the large-negative
+    // multimapping artifacts.
+    let min_frag_len = if allow_dovetail {
+        -(r1.len().max(r2.len()) as i32)
+    } else {
+        -32
+    };
     let SketchScratch { left, right, out } = scratch;
     dispatch_on_k!(k, K => {
         for c in [&mut *left, &mut *right, &mut *out] {
             c.max_hit_occ = max_hit_occ;
             c.max_read_occ = max_read_occ;
+            // merge_se_mappings reads the dovetail floor from cache_left.min_frag_len
+            c.min_frag_len = min_frag_len;
         }
         let mut poison = PoisonState::new(index.poison_table());
         if r1.len() >= k {
