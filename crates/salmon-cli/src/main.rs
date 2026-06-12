@@ -368,9 +368,10 @@ struct QuantArgs {
     /// k-mer miss during seeding — lives in the piscem-rs seed-walk; not yet tunable.
     #[arg(long = "mismatchSeedSkip")]
     mismatch_seed_skip: Option<u32>,
-    /// [accepted for salmon compatibility; no effect] selects a lower-memory GC
-    /// representation; the Rust port always uses the dense cumulative-GC array,
-    /// which yields identical results.
+    /// Use a lower-memory GC representation: one rank bitvector over the
+    /// concatenated references (~1 bit/base) instead of dense per-transcript
+    /// cumulative-count arrays (4 bytes/base). Results are identical.
+    /// (salmon's --reduceGCMemory)
     #[arg(long = "reduceGCMemory")]
     reduce_gc_memory: bool,
 }
@@ -466,9 +467,6 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     if args.mismatch_seed_skip.is_some() {
         tracing::warn!("--mismatchSeedSkip is accepted for salmon compatibility but is not yet implemented: the post-miss seed skip lives in the piscem-rs k-mer seed walk, which does not yet expose it.");
     }
-    if args.reduce_gc_memory {
-        tracing::warn!("--reduceGCMemory is accepted for salmon compatibility but has no effect: the Rust port always uses the dense cumulative-GC representation, which yields identical results.");
-    }
     // Bound the global rayon pool (used by the EM and bias passes) to the
     // requested thread count; otherwise it spans every core regardless of -p.
     let nthreads = if args.threads == 0 {
@@ -506,6 +504,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
         opts.discard_orphans = args.discard_orphans;
         opts.gc_bins = args.num_gc_bins;
         opts.cond_gc_bins = args.conditional_gc_bins;
+        opts.reduce_gc_memory = args.reduce_gc_memory;
         // --scoreExp is selective-alignment-mode only (it scales the
         // best-minus-score soft weight); alignment mode has no such term.
         let res = quantify_alignments(&opts).context("alignment-based quantification failed")?;
@@ -581,6 +580,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
     opts.no_bias_length_threshold = args.no_bias_length_threshold;
     opts.gc_bins = args.num_gc_bins;
     opts.cond_gc_bins = args.conditional_gc_bins;
+    opts.reduce_gc_memory = args.reduce_gc_memory;
     opts.map_config.seed_mode = seed_mode(args.unimems, args.refmems);
     // alignment scoring (selective alignment)
     opts.map_config.align.match_score = args.ma as i8;

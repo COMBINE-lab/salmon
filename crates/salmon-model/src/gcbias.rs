@@ -231,20 +231,112 @@ pub fn gc_frac(prefix: &[u32], s: i32, e: i32) -> i32 {
     lrint(100.0 * gc_in(prefix, s, e) as f64 / (e - s + 1) as f64)
 }
 
+/// A rank-enabled bitvector over the *concatenated* reference sequence marking
+/// G/C positions (salmon's `--reduceGCMemory` representation). Replaces the
+/// per-transcript dense cumulative-GC arrays (`Vec<Vec<u32>>`, 4 bytes/base) with
+/// one bitvector (~1 bit/base + 25% rank overhead) — GC in any interval is a
+/// difference of two O(1) ranks. Build once over the whole transcriptome.
+pub struct GcRank {
+    rank: sux::rank_sel::Rank9,
+}
+
+impl GcRank {
+    /// Build the rank bitvector from the concatenated reference bytes
+    /// (`seq[i]` is G/C ⇒ bit `i` set).
+    pub fn new(concat: &[u8]) -> GcRank {
+        use sux::traits::bit_vec_ops::BitVecOpsMut;
+        let mut bv = sux::bits::BitVec::new(concat.len());
+        for (i, &b) in concat.iter().enumerate() {
+            if matches!(b, b'G' | b'g' | b'C' | b'c') {
+                bv.set(i, true);
+            }
+        }
+        GcRank { rank: sux::rank_sel::Rank9::new(bv) }
+    }
+
+    /// A cumulative-GC view of the transcript occupying `concat[off..off+len]`.
+    #[inline]
+    pub fn view(&self, off: usize, len: usize) -> GcView<'_> {
+        use sux::traits::Rank;
+        GcView::Rank { rank: &self.rank, off, base: self.rank.rank(off), len }
+    }
+}
+
+/// A per-transcript cumulative-GC accessor: either the dense prefix array
+/// (default) or a window of the shared [`GcRank`] (`--reduceGCMemory`). Both
+/// return the *same* cumulative counts, so results are identical; `cum(p)` is
+/// the number of G/C bases in transcript-local `[0, p]`.
+#[derive(Clone, Copy)]
+pub enum GcView<'a> {
+    Dense(&'a [u32]),
+    Rank {
+        rank: &'a sux::rank_sel::Rank9,
+        off: usize,
+        /// `rank(off)` — precomputed so `cum` is a single rank query.
+        base: usize,
+        len: usize,
+    },
+}
+
+impl GcView<'_> {
+    /// Cumulative G/C count in transcript-local `[0, p]` (inclusive).
+    #[inline]
+    pub fn cum(&self, p: i32) -> i64 {
+        match self {
+            GcView::Dense(prefix) => prefix[p as usize] as i64,
+            GcView::Rank { rank, off, base, .. } => {
+                use sux::traits::Rank;
+                (rank.rank(off + p as usize + 1) - base) as i64
+            }
+        }
+    }
+
+    /// Transcript length in bases.
+    #[inline]
+    pub fn ref_len(&self) -> usize {
+        match self {
+            GcView::Dense(prefix) => prefix.len(),
+            GcView::Rank { len, .. } => *len,
+        }
+    }
+}
+
+/// A whole-transcriptome source of per-transcript [`GcView`]s: either dense
+/// per-transcript prefixes (default) or one shared [`GcRank`] window per
+/// transcript (`--reduceGCMemory`). Lets callers stay representation-agnostic.
+#[derive(Clone, Copy)]
+pub enum GcStore<'a> {
+    Dense(&'a [Vec<u32>]),
+    Rank { rank: &'a GcRank, offsets: &'a [u64] },
+}
+
+impl<'a> GcStore<'a> {
+    /// The cumulative-GC view for transcript `tid`. The view borrows the
+    /// underlying data (lifetime `'a`), not `self`, so it outlives a temporary
+    /// `GcStore`.
+    #[inline]
+    pub fn view(&self, tid: usize) -> GcView<'a> {
+        match *self {
+            GcStore::Dense(prefixes) => GcView::Dense(&prefixes[tid]),
+            GcStore::Rank { rank, offsets } => {
+                let off = offsets[tid] as usize;
+                let len = (offsets[tid + 1] - offsets[tid]) as usize;
+                rank.view(off, len)
+            }
+        }
+    }
+}
+
 /// Fragment GC descriptor `(fragFrac, contextFrac)` for the closed fragment
 /// `[s, e]` (salmon's `Transcript::gcDesc`). The context fraction is the GC
 /// content over a 5-base 5' window `[s−3, s+1]` and a 5-base 3' window
 /// `[e−1, e+3]` (edge-clamped). Returns `None` when the context window is empty
 /// (matching salmon's `valid = false`).
 #[inline]
-pub fn gc_desc(prefix: &[u32], s: i32, e: i32) -> Option<(i32, i32)> {
-    // `prefix.len() == ref_len` by construction (one cumulative-count entry per
-    // base), so deriving `last` here is identical to the old `ref_len` argument
-    // but keeps the transcript length out of the caller's hot inner loop (it was
-    // being spilled/reloaded every iteration).
-    let last = prefix.len() as i32 - 1;
-    let cs = if s > 0 { prefix[(s - 1) as usize] as i64 } else { 0 };
-    let ce = prefix[e as usize] as i64;
+pub fn gc_desc(v: &GcView, s: i32, e: i32) -> Option<(i32, i32)> {
+    let last = v.ref_len() as i32 - 1;
+    let cs = if s > 0 { v.cum(s - 1) } else { 0 };
+    let ce = v.cum(e);
 
     let fs = s - OUTSIDE_5P;
     let fe = s + INSIDE_5P;
@@ -256,10 +348,10 @@ pub fn gc_desc(prefix: &[u32], s: i32, e: i32) -> Option<(i32, i32)> {
     let tp_left = ts >= 0;
     let tp_right = te <= last;
 
-    let fps = if fp_left { prefix[fs as usize] as i64 } else { 0 };
-    let fpe = if fp_right { prefix[fe as usize] as i64 } else { ce };
-    let tps = if tp_left { prefix[ts as usize] as i64 } else { 0 };
-    let tpe = if tp_right { prefix[te as usize] as i64 } else { ce };
+    let fps = if fp_left { v.cum(fs) } else { 0 };
+    let fpe = if fp_right { v.cum(fe) } else { ce };
+    let tps = if tp_left { v.cum(ts) } else { 0 };
+    let tpe = if tp_right { v.cum(te) } else { ce };
 
     let fs_c = fs.max(0);
     let fe_c = fe.min(last);
@@ -288,6 +380,7 @@ pub fn gc_desc(prefix: &[u32], s: i32, e: i32) -> Option<(i32, i32)> {
 /// fragment the convolution actually visits (`fragStart + INSIDE_5P <= last`,
 /// i.e. `fp_right` always holds — guaranteed since `fragStart <= ref_len-2`).
 pub struct GcContext {
+    cum: Vec<u32>,      // cumulative G/C count in [0, p], indexed by position
     fp_count: Vec<i64>, // 5' window GC count, indexed by fragStart
     fp_wlen: Vec<i32>,  // 5' window length, indexed by fragStart
     tp_count: Vec<i64>, // 3' window GC count, indexed by fragEnd
@@ -295,12 +388,17 @@ pub struct GcContext {
 }
 
 impl GcContext {
-    /// Precompute the per-position 5'/3' context arrays from a cumulative-GC
-    /// prefix. Each entry replicates exactly the corresponding sub-expression of
-    /// [`gc_desc`] (same edge-clamping, same `fp_right`/`tp_right` handling).
-    pub fn build(prefix: &[u32]) -> GcContext {
-        let n = prefix.len();
+    /// Precompute the per-position 5'/3' context arrays (and a transient copy of
+    /// the cumulative-GC counts) from any [`GcView`]. Each entry replicates
+    /// exactly the corresponding sub-expression of [`gc_desc`] (same
+    /// edge-clamping, same `fp_right`/`tp_right` handling). Materializing `cum`
+    /// here keeps the hot inner loop ([`GcContext::desc`]) free of any rank
+    /// queries or dense lookups beyond cached arrays.
+    pub fn build(v: &GcView) -> GcContext {
+        let n = v.ref_len();
         let last = n as i32 - 1;
+        let cum: Vec<u32> = (0..n).map(|p| v.cum(p as i32) as u32).collect();
+        let at = |i: i32| cum[i as usize] as i64;
         let mut fp_count = vec![0i64; n];
         let mut fp_wlen = vec![0i32; n];
         let mut tp_count = vec![0i64; n];
@@ -312,42 +410,42 @@ impl GcContext {
             let te = pos + OUTSIDE_3P;
             let tp_left = ts >= 0;
             let tp_right = te <= last;
-            let tps = if tp_left { prefix[ts as usize] as i64 } else { 0 };
-            // `tpe = ce = prefix[e]` when the 3' window runs off the end.
-            let tpe = if tp_right { prefix[te as usize] as i64 } else { prefix[p] as i64 };
+            let tps = if tp_left { at(ts) } else { 0 };
+            // `tpe = ce = cum[e]` when the 3' window runs off the end.
+            let tpe = if tp_right { at(te) } else { at(pos) };
             let ts_c = ts.max(0);
             let te_c = te.min(last);
             tp_count[p] = tpe - tps;
             tp_wlen[p] = if !tp_left { te_c + 1 } else { te_c - ts_c };
 
             // 5' window for a fragment *starting* at `pos`. Within the
-            // convolution `fp_right` always holds; the `prefix[p]` fallback is a
+            // convolution `fp_right` always holds; the `cum[p]` fallback is a
             // placeholder for the never-visited `pos == last` slot.
             let fs = pos - OUTSIDE_5P;
             let fe = pos + INSIDE_5P;
             let fp_left = fs >= 0;
             let fp_right = fe <= last;
-            let fps = if fp_left { prefix[fs as usize] as i64 } else { 0 };
-            let fpe = if fp_right { prefix[fe as usize] as i64 } else { prefix[p] as i64 };
+            let fps = if fp_left { at(fs) } else { 0 };
+            let fpe = if fp_right { at(fe) } else { at(pos) };
             let fs_c = fs.max(0);
             let fe_c = fe.min(last);
             fp_count[p] = fpe - fps;
             fp_wlen[p] = if !fp_left { fe_c + 1 } else { fe_c - fs_c };
         }
-        GcContext { fp_count, fp_wlen, tp_count, tp_wlen }
+        GcContext { cum, fp_count, fp_wlen, tp_count, tp_wlen }
     }
 
     /// GC descriptor `(fragFrac, contextFrac)` for the closed fragment `[s, e]`,
     /// bit-identical to [`gc_desc`] but using the cached context arrays. `s` and
     /// `e` must lie in `0..ref_len` with `s + INSIDE_5P <= ref_len - 1`.
     #[inline]
-    pub fn desc(&self, prefix: &[u32], s: i32, e: i32) -> Option<(i32, i32)> {
+    pub fn desc(&self, s: i32, e: i32) -> Option<(i32, i32)> {
         let context_size = (self.fp_wlen[s as usize] + self.tp_wlen[e as usize]) as f64;
         if context_size == 0.0 {
             return None;
         }
-        let cs = if s > 0 { prefix[(s - 1) as usize] as i64 } else { 0 };
-        let ce = prefix[e as usize] as i64;
+        let cs = if s > 0 { self.cum[(s - 1) as usize] as i64 } else { 0 };
+        let ce = self.cum[e as usize] as i64;
         let count = (self.fp_count[s as usize] + self.tp_count[e as usize]) as f64;
         let frag_frac = lrint(100.0 * (ce - cs) as f64 / (e - s + 1) as f64);
         let context_frac = lrint(100.0 * count / context_size);
@@ -366,7 +464,7 @@ impl GcContext {
 pub fn build_expected_gc<'a, FS, FP>(
     num_refs: usize,
     seq_of: FS,
-    prefix_of: FP,
+    view_of: FP,
     alphas: &[f64],
     eff_lens: &[f64],
     cdf: &[f64],
@@ -379,7 +477,7 @@ pub fn build_expected_gc<'a, FS, FP>(
 ) -> GcFragModel
 where
     FS: Fn(usize) -> &'a [u8] + Sync,
-    FP: Fn(usize) -> &'a [u32] + Sync,
+    FP: Fn(usize) -> GcView<'a> + Sync,
 {
     let stride = stride.max(1) as i32;
     // The expected-GC distribution is a sum of independent per-transcript
@@ -403,8 +501,8 @@ where
         if cdf_max_val < MIN_CDF_MASS {
             return None;
         }
-        let prefix = prefix_of(tid);
-        let ctx = GcContext::build(prefix);
+        let view = view_of(tid);
+        let ctx = GcContext::build(&view);
         let weight = alphas[tid] / eff_lens[tid];
         let cond = |x: i32| conditional_cdf(cdf, cdf_max_arg, cdf_max_val, x);
         let sp = if fld_low > 0 { fld_low as i32 - 1 } else { 0 };
@@ -415,7 +513,7 @@ where
             while fl <= fld_high as i32 {
                 let frag_end = frag_start as i32 + fl - 1;
                 if (frag_end as usize) < ref_len {
-                    if let Some((ff, cf)) = ctx.desc(prefix, frag_start as i32, frag_end) {
+                    if let Some((ff, cf)) = ctx.desc(frag_start as i32, frag_end) {
                         model.inc(ff, cf, weight * (cond(fl) - prev));
                     }
                     prev = cond(fl);
@@ -502,7 +600,7 @@ pub fn gc_corrected_effective_length(
     }
 
     // Convolve seq×gc fragment factors with the conditional FLD.
-    let ctx = GcContext::build(prefix);
+    let ctx = GcContext::build(&GcView::Dense(prefix));
     let stride = stride.max(1) as i32;
     let max_len = (ref_len as i32).min(fld_high as i32 + 1);
     let mut fl = fld_low as i32;
@@ -528,7 +626,7 @@ pub fn gc_corrected_effective_length(
             let frag_start = kstart;
             let frag_end = kstart + fl - 1;
             let mut frag_factor = fw[frag_start as usize] * rc[frag_end as usize];
-            if let Some((ff, cf)) = ctx.desc(prefix, frag_start, frag_end) {
+            if let Some((ff, cf)) = ctx.desc(frag_start, frag_end) {
                 frag_factor *= gc_bias.get(ff, cf);
             }
             mass += frag_factor;
@@ -608,7 +706,7 @@ mod tests {
         // 40-base sequence; check an interior fragment
         let seq: Vec<u8> = b"ACGT".iter().cycle().take(40).copied().collect();
         let p = gc_prefix(&seq);
-        let (ff, cf) = gc_desc(&p, 10, 29).unwrap();
+        let (ff, cf) = gc_desc(&GcView::Dense(&p), 10, 29).unwrap();
         // ACGT repeat is exactly 50% GC everywhere
         assert_eq!(ff, 50, "fragFrac");
         assert!((0..=100).contains(&cf), "contextFrac in range: {cf}");
@@ -640,17 +738,42 @@ mod tests {
         let bases = [b'A', b'C', b'G', b'T', b'C', b'G', b'A', b'T', b'G', b'C'];
         let seq: Vec<u8> = (0..200).map(|i| bases[(i * 7 + 3) % bases.len()]).collect();
         let p = gc_prefix(&seq);
-        let ctx = GcContext::build(&p);
+        let v = GcView::Dense(&p);
+        let ctx = GcContext::build(&v);
         let n = seq.len() as i32;
         for fl in 1..=120 {
             let kmax = n - fl;
             for s in 0..kmax {
                 let e = s + fl - 1;
                 assert_eq!(
-                    ctx.desc(&p, s, e),
-                    gc_desc(&p, s, e),
+                    ctx.desc(s, e),
+                    gc_desc(&v, s, e),
                     "mismatch at fl={fl}, s={s}, e={e}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn gc_rank_view_matches_dense() {
+        // The rank-bitvector view must return identical cumulative GC (and hence
+        // identical gc_desc) to the dense prefix, for an offset window of a
+        // concatenated buffer.
+        let bases = [b'A', b'C', b'G', b'T', b'G', b'C', b'A', b'T'];
+        let pad: Vec<u8> = (0..37).map(|i| bases[(i * 3) % bases.len()]).collect();
+        let seq: Vec<u8> = (0..150).map(|i| bases[(i * 5 + 1) % bases.len()]).collect();
+        // concat = [pad | seq], so the transcript sits at offset pad.len().
+        let mut concat = pad.clone();
+        concat.extend_from_slice(&seq);
+        let p = gc_prefix(&seq);
+        let rank = GcRank::new(&concat);
+        let dense = GcView::Dense(&p);
+        let rview = rank.view(pad.len(), seq.len());
+        for fl in 1..=100 {
+            let n = seq.len() as i32;
+            for s in 0..(n - fl) {
+                let e = s + fl - 1;
+                assert_eq!(gc_desc(&dense, s, e), gc_desc(&rview, s, e), "fl={fl} s={s}");
             }
         }
     }
@@ -667,7 +790,7 @@ mod tests {
             seq[i] = b'C'; // 3' window for e=40 is [39,43]
         }
         let p = gc_prefix(&seq);
-        let (_ff, cf) = gc_desc(&p, 20, 40).unwrap();
+        let (_ff, cf) = gc_desc(&GcView::Dense(&p), 20, 40).unwrap();
         // both 5-base context windows are fully G/C -> 100%
         assert_eq!(cf, 100, "contextFrac");
     }

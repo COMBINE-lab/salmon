@@ -60,8 +60,8 @@ pub(crate) struct Shared<'a> {
     /// GC bias model bin counts (`--conditionalGCBins` × `--numGCBins`)
     pub cond_gc_bins: usize,
     pub gc_bins: usize,
-    /// per-transcript cumulative G+C prefix sums (for `gcDesc`), when GC-correcting
-    pub gc_prefix: Option<&'a [Vec<u32>]>,
+    /// per-transcript cumulative-GC source (dense or rank), when GC-correcting
+    pub gc_store: Option<salmon_model::GcStore<'a>>,
     /// shared observed fragment-GC model to merge per-thread results into
     pub gcbias_obs: Option<&'a Mutex<GcFragModel>>,
     /// collect observed positional bias (`--posBias`)
@@ -188,18 +188,19 @@ fn collect_context(salmon: &SalmonIndex, m: &ScoredMapping, weight: f64, obs: &m
 /// online inference, else the normalized aux weight). Mirrors salmon's
 /// per-alignment `observedGCMass.inc(gcDesc(start, stop), logProb)`.
 fn collect_gc(sh: &Shared, compat: &[(&ScoredMapping, f64)], bias_w: &[f64], gc: &mut GcFragModel) {
-    let Some(prefixes) = sh.gc_prefix else { return };
+    let Some(store) = sh.gc_store else { return };
     for (i, (m, _)) in compat.iter().enumerate() {
         if m.status != MateStatus::PairedEndPaired || m.fragment_len <= 0 {
             continue;
         }
         let start = m.ref_pos;
         let stop = m.ref_pos + m.fragment_len - 1;
-        let ref_len = prefixes[m.tid as usize].len() as i32;
+        let view = store.view(m.tid as usize);
+        let ref_len = view.ref_len() as i32;
         if start < 0 || stop >= ref_len {
             continue;
         }
-        if let Some((ff, cf)) = gc_desc(&prefixes[m.tid as usize], start, stop) {
+        if let Some((ff, cf)) = gc_desc(&view, start, stop) {
             gc.inc(ff, cf, bias_w[i]);
         }
     }

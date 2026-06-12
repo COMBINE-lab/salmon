@@ -19,7 +19,7 @@ pub use bias::{
 pub use fld::{smoothed_effective_length, FragmentLengthDistribution};
 pub use gcbias::{
     build_expected_gc, gc_corrected_effective_length, gc_desc, gc_prefix, gc_ratio, GcFragModel,
-    GC_SAMP_STRIDE,
+    GcRank, GcStore, GcView, GC_SAMP_STRIDE,
 };
 pub use libdetect::LibraryTypeDetector;
 pub use posbias::{

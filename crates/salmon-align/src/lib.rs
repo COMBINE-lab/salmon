@@ -96,6 +96,9 @@ pub struct AlignQuantOptions {
     /// GC bias model bin counts (`--numGCBins` × `--conditionalGCBins`, 25×3)
     pub gc_bins: usize,
     pub cond_gc_bins: usize,
+    /// use the reduced-memory GC rank bitvector instead of dense prefixes
+    /// (`--reduceGCMemory`; identical results)
+    pub reduce_gc_memory: bool,
 }
 
 impl AlignQuantOptions {
@@ -126,6 +129,7 @@ impl AlignQuantOptions {
             no_bias_length_threshold: false,
             gc_bins: salmon_model::gcbias::DEFAULT_GC_BINS,
             cond_gc_bins: salmon_model::gcbias::DEFAULT_COND_BINS,
+            reduce_gc_memory: false,
         }
     }
 }
@@ -535,7 +539,7 @@ struct PassCfg<'a> {
     eq_builder: &'a EquivalenceClassBuilder,
     ref_bytes: &'a [Vec<u8>],
     lengths: &'a [u32],
-    gc_prefix: &'a [Vec<u32>],
+    gc_store: salmon_model::GcStore<'a>,
     length_class: Option<&'a [usize]>,
     expected_format: Option<LibraryFormat>,
     ignore_incompat: bool,
@@ -672,7 +676,7 @@ where
                         eq_builder: cfg.eq_builder,
                         ref_bytes: cfg.ref_bytes,
                         lengths: cfg.lengths,
-                        gc_prefix: cfg.gc_prefix,
+                        gc_store: cfg.gc_store,
                         length_class: cfg.length_class,
                         expected_format: cfg.expected_format,
                         ignore_incompat: cfg.ignore_incompat,
@@ -777,7 +781,7 @@ struct FragCtx<'a> {
     eq_builder: &'a EquivalenceClassBuilder,
     ref_bytes: &'a [Vec<u8>],
     lengths: &'a [u32],
-    gc_prefix: &'a [Vec<u32>],
+    gc_store: salmon_model::GcStore<'a>,
     length_class: Option<&'a [usize]>,
     expected_format: Option<LibraryFormat>,
     ignore_incompat: bool,
@@ -1039,9 +1043,8 @@ fn process_fragment(recs: &[FragRecord], ctx: &FragCtx, local: &mut Local) {
                     }
                 }
                 if let (Some(gc), true) = (local.gc_obs.as_mut(), proper && fe < rl) {
-                    if let Some((ff, cf)) =
-                        salmon_model::gc_desc(&ctx.gc_prefix[*tid as usize], fs as i32, fe as i32)
-                    {
+                    let view = ctx.gc_store.view(*tid as usize);
+                    if let Some((ff, cf)) = salmon_model::gc_desc(&view, fs as i32, fe as i32) {
                         gc.inc(ff, cf, p);
                     }
                 }
@@ -1150,10 +1153,30 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
     // Per-transcript inputs the bias collection needs (the observed bias models
     // themselves are accumulated per-worker inside the pass).
     use salmon_model::seqbias::CONTEXT_LENGTH;
-    let gc_prefix: Vec<Vec<u32>> = if opts.gc_bias {
+    // GC cumulative-count backing: dense per-transcript prefixes by default, or a
+    // single rank bitvector over the concatenated references (`--reduceGCMemory`,
+    // identical results). `gc_store` presents either uniformly as `GcView`s.
+    let use_rank_gc = opts.gc_bias && opts.reduce_gc_memory;
+    let gc_dense: Vec<Vec<u32>> = if opts.gc_bias && !use_rank_gc {
         ref_bytes.iter().map(|s| salmon_model::gc_prefix(s)).collect()
     } else {
         Vec::new()
+    };
+    let (gc_rank, gc_offsets): (Option<salmon_model::GcRank>, Vec<u64>) = if use_rank_gc {
+        let mut concat: Vec<u8> = Vec::new();
+        let mut offs: Vec<u64> = Vec::with_capacity(ref_bytes.len() + 1);
+        offs.push(0);
+        for s in &ref_bytes {
+            concat.extend_from_slice(s);
+            offs.push(concat.len() as u64);
+        }
+        (Some(salmon_model::GcRank::new(&concat)), offs)
+    } else {
+        (None, Vec::new())
+    };
+    let gc_store = match &gc_rank {
+        Some(r) => salmon_model::GcStore::Rank { rank: r, offsets: &gc_offsets },
+        None => salmon_model::GcStore::Dense(&gc_dense),
     };
     let length_quantiles: Option<Vec<u32>> = opts.pos_bias.then(|| {
         salmon_model::compute_length_quantiles(&lengths, salmon_model::NUM_LENGTH_CLASSES)
@@ -1193,7 +1216,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             eq_builder: &eq_builder,
             ref_bytes: &ref_bytes,
             lengths: &lengths,
-            gc_prefix: &gc_prefix,
+            gc_store,
             length_class: length_class.as_deref(),
             expected_format,
             ignore_incompat,
@@ -1293,7 +1316,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             let mut exp = salmon_model::build_expected_gc(
                 num_refs,
                 refseq_of,
-                |t| gc_prefix[t].as_slice(),
+                |t| gc_store.view(t),
                 &em.alphas,
                 &eff_lengths,
                 &fld_cdf,
@@ -1356,7 +1379,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             });
             let bias = salmon_model::BiasInputs {
                 seq: seq.as_ref().map(|(of, or, ef, er)| (of, ef, or, er)),
-                gc: gc_ratio_model.as_ref().map(|g| (g, gc_prefix[tid].as_slice())),
+                gc: gc_ratio_model.as_ref().map(|g| (g, gc_store.view(tid))),
                 pos: pos_vecs.as_ref().map(|(pf, pr)| (pf.as_slice(), pr.as_slice())),
             };
             eff_lengths[tid] = salmon_model::corrected_effective_length_full(

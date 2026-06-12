@@ -13,6 +13,7 @@ salmon-core = { path = "../salmon-core" }
 statrs = { workspace = true }
 flate2 = { workspace = true }
 rayon = { workspace = true }
+sux = "0.14.0"
 
 [lints.rust]
 unsafe_code = "warn"

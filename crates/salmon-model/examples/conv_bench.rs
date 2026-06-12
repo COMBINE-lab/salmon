@@ -82,7 +82,7 @@ fn main() {
             let elen = (ref_len - 200.0).max(1.0); // ensure unprocessed > 0
             let bias = BiasInputs {
                 seq: None,
-                gc: Some((&gc_model, prefix.as_slice())),
+                gc: Some((&gc_model, salmon_model::GcView::Dense(prefix.as_slice()))),
                 pos: None,
             };
             acc += corrected_effective_length_full(

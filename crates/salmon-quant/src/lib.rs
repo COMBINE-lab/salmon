@@ -120,6 +120,10 @@ pub struct QuantOptions {
     /// number of conditioning (context) bins in the GC bias model (salmon's
     /// `--conditionalGCBins`, default 3)
     pub cond_gc_bins: usize,
+    /// use the reduced-memory GC representation — one rank bitvector over the
+    /// concatenated references instead of dense per-transcript prefixes
+    /// (salmon's `--reduceGCMemory`); results are identical
+    pub reduce_gc_memory: bool,
 }
 
 impl QuantOptions {
@@ -160,6 +164,7 @@ impl QuantOptions {
             no_bias_length_threshold: false,
             gc_bins: salmon_model::gcbias::DEFAULT_GC_BINS,
             cond_gc_bins: salmon_model::gcbias::DEFAULT_COND_BINS,
+            reduce_gc_memory: false,
         }
     }
 
@@ -285,12 +290,23 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         .seq_bias
         .then(|| std::sync::Mutex::new((SBModel::new(), SBModel::new())));
 
-    // For `--gcBias`: per-transcript cumulative G+C prefix sums (salmon's
-    // `Transcript::GCCount_`) and the shared observed fragment-GC model.
-    let gc_prefix: Option<Vec<Vec<u32>>> = opts.gc_bias.then(|| {
+    // For `--gcBias`: per-transcript cumulative G+C counts. Default = dense
+    // prefix sums (salmon's `Transcript::GCCount_`, 4 bytes/base); with
+    // `--reduceGCMemory`, a single rank bitvector over the concatenated
+    // references (~1 bit/base) that yields identical counts. `gc_store` presents
+    // either uniformly as per-transcript [`GcView`]s.
+    let use_rank_gc = opts.gc_bias && opts.reduce_gc_memory;
+    let gc_dense: Option<Vec<Vec<u32>>> = (opts.gc_bias && !use_rank_gc).then(|| {
         (0..num_refs)
             .map(|tid| salmon_model::gc_prefix(salmon.ref_seq(tid as u32)))
             .collect()
+    });
+    let gc_rank: Option<salmon_model::GcRank> =
+        use_rank_gc.then(|| salmon_model::GcRank::new(salmon.refseq_concat()));
+    let gc_store: Option<salmon_model::GcStore> = opts.gc_bias.then(|| match (&gc_dense, &gc_rank) {
+        (Some(d), _) => salmon_model::GcStore::Dense(d),
+        (_, Some(r)) => salmon_model::GcStore::Rank { rank: r, offsets: salmon.ref_offsets() },
+        _ => unreachable!("gc_bias implies one representation"),
     });
     let gcbias_obs = opts.gc_bias.then(|| {
         std::sync::Mutex::new(salmon_model::GcFragModel::new(opts.cond_gc_bins, opts.gc_bins))
@@ -346,7 +362,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
             collect_gcbias: opts.gc_bias,
             cond_gc_bins: opts.cond_gc_bins,
             gc_bins: opts.gc_bins,
-            gc_prefix: gc_prefix.as_deref(),
+            gc_store,
             gcbias_obs: gcbias_obs.as_ref(),
             collect_posbias: opts.pos_bias,
             length_class: length_class.as_deref(),
@@ -491,13 +507,13 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
         }
 
         // Fragment-GC observed + expected models -> clamped ratio model.
-        let prefixes = gc_prefix.as_ref();
+        let store = gc_store;
         let gc_ratio_model = if let Some(m) = gcbias_obs {
             let mut obs = m.into_inner().unwrap();
             let mut exp = salmon_model::build_expected_gc(
                 num_refs,
                 |t| salmon.ref_seq(t as u32),
-                |t| prefixes.unwrap()[t].as_slice(),
+                |t| store.unwrap().view(t),
                 &em.alphas,
                 &eff_lengths,
                 &fld_cdf,
@@ -591,9 +607,7 @@ pub fn quantify(opts: &QuantOptions) -> Result<QuantResult> {
                     });
                 let bias = salmon_model::BiasInputs {
                     seq: seq.as_ref().map(|(of, or, ef, er)| (of, ef, or, er)),
-                    gc: gc_ratio_model
-                        .as_ref()
-                        .map(|g| (g, prefixes.unwrap()[tid].as_slice())),
+                    gc: gc_ratio_model.as_ref().map(|g| (g, store.unwrap().view(tid))),
                     pos: pos_vecs.as_ref().map(|(pf, pr)| (pf.as_slice(), pr.as_slice())),
                 };
                 salmon_model::corrected_effective_length_full(

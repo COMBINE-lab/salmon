@@ -7,7 +7,7 @@
 //! posFW[fragStart]·posRC[fragEnd]`, summed over fragment starts and convolved
 //! with the conditional fragment-length distribution.
 
-use crate::gcbias::{GcContext, GcFragModel};
+use crate::gcbias::{GcContext, GcFragModel, GcView};
 use crate::posbias::{length_class_index, SimplePosBias, NUM_LENGTH_CLASSES};
 use crate::seqbias::{
     conditional_cdf, log_bias, revcomp_bytes, SBModel, CONTEXT_LEFT, CONTEXT_LENGTH, MIN_ALPHA,
@@ -47,8 +47,8 @@ pub fn positional_factor(obs: &[f64], exp: &[f64]) -> Vec<f64> {
 pub struct BiasInputs<'a> {
     /// `(obs_fw, exp_fw, obs_rc, exp_rc)` sequence-bias models (`--seqBias`)
     pub seq: Option<(&'a SBModel, &'a SBModel, &'a SBModel, &'a SBModel)>,
-    /// GC ratio model + this transcript's cumulative G+C prefix (`--gcBias`)
-    pub gc: Option<(&'a GcFragModel, &'a [u32])>,
+    /// GC ratio model + this transcript's cumulative-GC view (`--gcBias`)
+    pub gc: Option<(&'a GcFragModel, GcView<'a>)>,
     /// per-position 5'/3' positional-bias factors (`--posBias`), transcript-length sized
     pub pos: Option<(&'a [f64], &'a [f64])>,
 }
@@ -119,14 +119,11 @@ pub fn corrected_effective_length_full(
         rc.reverse();
     }
 
-    let (gc_model, gc_prefix) = match bias.gc {
-        Some((m, p)) => (Some(m), p),
-        None => (None, &[][..]),
-    };
+    let gc_model = bias.gc.map(|(m, _)| m);
     // Precompute the per-position 5'/3' context-GC arrays once per transcript
     // (salmon's `populateContextCounts`) so the inner convolution does cheap
     // array lookups instead of re-deriving the context geometry per fragment.
-    let gc_ctx = gc_model.map(|_| GcContext::build(gc_prefix));
+    let gc_ctx = bias.gc.map(|(_, view)| GcContext::build(&view));
     let (pos_fw, pos_rc) = match bias.pos {
         Some((a, b)) => (Some(a), Some(b)),
         None => (None, None),
@@ -161,7 +158,7 @@ pub fn corrected_effective_length_full(
                 let mut kstart = 0i32;
                 while kstart < kmax {
                     let frag_end = kstart + fl - 1;
-                    if let Some((ff, cf)) = ctx.desc(gc_prefix, kstart, frag_end) {
+                    if let Some((ff, cf)) = ctx.desc(kstart, frag_end) {
                         mass += gc.get(ff, cf);
                     } else {
                         mass += 1.0;
@@ -180,7 +177,7 @@ pub fn corrected_effective_length_full(
                         1.0
                     };
                     if let (Some(gc), Some(ctx)) = (gc_model, gc_ctx.as_ref()) {
-                        if let Some((ff, cf)) = ctx.desc(gc_prefix, frag_start, frag_end) {
+                        if let Some((ff, cf)) = ctx.desc(frag_start, frag_end) {
                             frag_factor *= gc.get(ff, cf);
                         }
                     }

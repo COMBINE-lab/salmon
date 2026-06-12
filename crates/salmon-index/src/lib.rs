@@ -633,6 +633,19 @@ impl SalmonIndex {
         &self.refseq[s..e]
     }
 
+    /// The concatenated forward-strand reference sequences (all transcripts).
+    /// Indexed by [`ref_offsets`](Self::ref_offsets); used to build the
+    /// reduced-memory GC rank bitvector.
+    pub fn refseq_concat(&self) -> &[u8] {
+        &self.refseq
+    }
+
+    /// Cumulative offsets into [`refseq_concat`](Self::refseq_concat)
+    /// (`num_refs + 1` entries; transcript `tid` spans `[off[tid], off[tid+1])`).
+    pub fn ref_offsets(&self) -> &[u64] {
+        &self.ref_offsets
+    }
+
     /// k-mer length of the index.
     pub fn k(&self) -> usize {
         self.inner.k()
