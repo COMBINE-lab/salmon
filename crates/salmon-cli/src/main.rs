@@ -100,6 +100,10 @@ struct IndexArgs {
     /// Keep the intermediate compacted-dBG files.
     #[arg(long = "keepIntermediate")]
     keep_intermediate: bool,
+    /// Keep the post-cleaning ("fixed") reference FASTA (non-ACGT bases replaced)
+    /// instead of deleting it after the index is built.
+    #[arg(long = "keepFixedFasta")]
+    keep_fixed_fasta: bool,
     /// Retain exact-duplicate transcript sequences instead of collapsing them
     /// (salmon collapses duplicates by default).
     #[arg(long = "keepDuplicates")]
@@ -316,6 +320,10 @@ struct QuantArgs {
     /// effective length (increases precision, reduces robustness). Experimental.
     #[arg(long = "noBiasLengthThreshold")]
     no_bias_length_threshold: bool,
+    /// Number of read-position bins in the alignment error model
+    /// (alignment mode only). (salmon's --numErrorBins)
+    #[arg(long = "numErrorBins", default_value_t = 4)]
+    num_error_bins: usize,
 }
 
 /// Resolve the `--uniMEMs` / `--refMEMs` flags into a seeding mode (clap
@@ -336,6 +344,7 @@ fn run_index(args: IndexArgs) -> Result<()> {
     opts.m = args.minimizer_len;
     opts.threads = args.threads;
     opts.keep_intermediate = args.keep_intermediate;
+    opts.keep_fixed_fasta = args.keep_fixed_fasta;
     opts.keep_duplicates = args.keep_duplicates;
     opts.decoys = args.decoys;
     opts.gencode = args.gencode;
@@ -427,6 +436,7 @@ fn run_quant(args: QuantArgs) -> Result<()> {
         opts.bias_speed_samp = args.bias_speed_samp;
         opts.num_aux_model_samples = args.num_aux_model_samples;
         opts.no_bias_length_threshold = args.no_bias_length_threshold;
+        opts.num_error_bins = args.num_error_bins;
         let res = quantify_alignments(&opts).context("alignment-based quantification failed")?;
         let pct = if res.num_processed > 0 {
             100.0 * res.num_mapped as f64 / res.num_processed as f64

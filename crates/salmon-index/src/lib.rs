@@ -69,6 +69,10 @@ pub struct IndexBuildOptions {
     pub build_ec_table: bool,
     /// keep the intermediate cDBG `.cf_*` files instead of deleting them
     pub keep_intermediate: bool,
+    /// keep the post-cleaning ("fixed") reference FASTA — the copy with non-ACGT
+    /// bases replaced — instead of deleting it (salmon's `--keepFixedFasta`).
+    /// Implied by `keep_intermediate`.
+    pub keep_fixed_fasta: bool,
     /// retain exact-duplicate transcript sequences instead of collapsing them
     /// (salmon's `--keepDuplicates`; default `false` = remove duplicates).
     pub keep_duplicates: bool,
@@ -95,6 +99,7 @@ impl IndexBuildOptions {
             canonical: true,
             build_ec_table: true,
             keep_intermediate: false,
+            keep_fixed_fasta: false,
             keep_duplicates: false,
             decoys: None,
             gencode: false,
@@ -479,7 +484,9 @@ pub fn build(opts: &IndexBuildOptions) -> Result<IndexInfo> {
 
     if !opts.keep_intermediate {
         remove_cdbg_intermediates(&cdbg_prefix);
-        let _ = std::fs::remove_file(&cleaned);
+        if !opts.keep_fixed_fasta {
+            let _ = std::fs::remove_file(&cleaned);
+        }
     }
 
     info!("index built: {} references", info.num_refs);

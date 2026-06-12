@@ -78,6 +78,9 @@ pub struct AlignQuantOptions {
     /// significant digits for the EffectiveLength and NumReads columns of
     /// `quant.sf` (`--sigDigits`, salmon default 3)
     pub sig_digits: u32,
+    /// number of read-position bins in the alignment error model
+    /// (`--numErrorBins`, salmon default 4)
+    pub num_error_bins: usize,
     /// fragment-length sampling stride for the GC bias convolution
     /// (`--biasSpeedSamp`, default 5)
     pub bias_speed_samp: usize,
@@ -110,6 +113,7 @@ impl AlignQuantOptions {
             forgetting_factor: 0.65,
             init_uniform: false,
             sig_digits: 3,
+            num_error_bins: 4,
             bias_speed_samp: 5,
             num_aux_model_samples: 5_000_000,
             no_bias_length_threshold: false,
@@ -530,6 +534,9 @@ struct PassCfg<'a> {
     paired_lib: bool,
     range_factorization_bins: u32,
     use_error_model: bool,
+    /// number of read-position bins in the alignment error model
+    /// (salmon's `--numErrorBins`)
+    error_bins: usize,
     seq_bias: bool,
     gc_bias: bool,
     pos_bias: bool,
@@ -584,7 +591,7 @@ where
 
     // Shared atomic error model: read concurrently for `basis`, updated by the
     // workers flushing their per-thread deltas into it between minibatches.
-    let shared_model = cfg.use_error_model.then(|| SharedAlignmentModel::new(1.0, 4));
+    let shared_model = cfg.use_error_model.then(|| SharedAlignmentModel::new(1.0, cfg.error_bins));
     let shared_model_ref = shared_model.as_ref();
     let minibatch = cfg.minibatch;
     let need_seq = cfg.need_seq;
@@ -640,7 +647,7 @@ where
             let rx = rx.clone();
             workers.push(scope.spawn(move || -> (Local, u64) {
                 let mut local =
-                    Local::new(cfg.use_error_model, cfg.seq_bias, cfg.gc_bias, cfg.pos_bias);
+                    Local::new(cfg.use_error_model, cfg.error_bins, cfg.seq_bias, cfg.gc_bias, cfg.pos_bias);
                 let mut count = 0u64;
                 let mut frags: Vec<FragRecord> = Vec::new();
                 while let Ok((log_fm, raw_batch)) = rx.recv() {
@@ -702,7 +709,7 @@ where
             .map_err(|_| anyhow::anyhow!("alignment reader thread panicked"))??;
 
         // Merge the per-worker bias accumulators + counts.
-        let mut merged = Local::new(cfg.use_error_model, cfg.seq_bias, cfg.gc_bias, cfg.pos_bias);
+        let mut merged = Local::new(cfg.use_error_model, cfg.error_bins, cfg.seq_bias, cfg.gc_bias, cfg.pos_bias);
         let mut total = 0u64;
         for w in workers {
             let (local, count) = w
@@ -778,14 +785,14 @@ struct Local {
 }
 
 impl Local {
-    fn new(error_model: bool, seq_bias: bool, gc_bias: bool, pos_bias: bool) -> Self {
+    fn new(error_model: bool, error_bins: usize, seq_bias: bool, gc_bias: bool, pos_bias: bool) -> Self {
         let mk = || {
             (0..salmon_model::NUM_LENGTH_CLASSES)
                 .map(|_| salmon_model::SimplePosBias::default())
                 .collect::<Vec<_>>()
         };
         Self {
-            model: error_model.then(|| AlignmentModel::empty(4)),
+            model: error_model.then(|| AlignmentModel::empty(error_bins)),
             seq_obs: seq_bias.then(|| (salmon_model::SBModel::new(), salmon_model::SBModel::new())),
             gc_obs: gc_bias.then(salmon_model::GcFragModel::default_model),
             pos_obs: pos_bias.then(|| (mk(), mk())),
@@ -1163,6 +1170,7 @@ pub fn quantify_alignments(opts: &AlignQuantOptions) -> Result<AlignQuantResult>
             paired_lib,
             range_factorization_bins: opts.range_factorization_bins,
             use_error_model,
+            error_bins: opts.num_error_bins,
             seq_bias: opts.seq_bias,
             gc_bias: opts.gc_bias,
             pos_bias: opts.pos_bias,
